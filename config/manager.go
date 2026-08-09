@@ -932,6 +932,17 @@ func (cm *Manager) syncFromKV(ctx context.Context) error {
 		return fmt.Errorf("list KV keys: %w", err)
 	}
 
+	// Existing version arbitration selected KV. Services are whole-entry
+	// desired next-boot state, so current services.* keys replace the file map
+	// instead of overlaying it. Other top-level sections retain their existing
+	// synchronization behavior below.
+	if err := cm.config.Mutate(func(current *Config) error {
+		current.Services = make(types.ServiceConfigs)
+		return nil
+	}); err != nil {
+		return fmt.Errorf("reset services before KV sync: %w", err)
+	}
+
 	// Process each key
 	for _, key := range keys {
 		// Skip property-level keys (3+ parts)

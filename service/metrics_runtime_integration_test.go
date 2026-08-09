@@ -24,123 +24,6 @@ func (s *MetricsRuntimeSuite) SetupTest() {
 	s.kvHelper = NewKVTestHelper(s.T(), s.natsClient)
 }
 
-func (s *MetricsRuntimeSuite) TestMetrics_ImplementsRuntimeConfigurable() {
-	// Create metrics service with initial config
-	config := json.RawMessage(`{
-		"enabled": true,
-		"port": 9090,
-		"path": "/metrics"
-	}`)
-
-	deps := &Dependencies{
-		Logger:          slog.Default(),
-		MetricsRegistry: nil, // Metrics doesn't need its own registry
-	}
-
-	svc, err := NewMetrics(config, deps)
-	s.Require().NoError(err)
-	s.Require().NotNil(svc)
-
-	// Verify it implements RuntimeConfigurable
-	metrics, ok := svc.(*Metrics)
-	s.Require().True(ok, "Service should be *Metrics type")
-
-	var _ RuntimeConfigurable = metrics
-	s.T().Log("✓ Metrics implements RuntimeConfigurable")
-}
-
-func (s *MetricsRuntimeSuite) TestMetrics_GetRuntimeConfig() {
-	// Setup metrics with known config
-	config := json.RawMessage(`{
-		"enabled": true,
-		"port": 9090,
-		"path": "/metrics",
-		"custom_field": "test_value"
-	}`)
-
-	svc, err := NewMetrics(config, &Dependencies{
-		Logger: slog.Default(),
-	})
-	s.Require().NoError(err)
-
-	metrics := svc.(*Metrics)
-
-	// Test GetRuntimeConfig returns full JSON structure
-	runtime := metrics.GetRuntimeConfig()
-	s.Assert().NotNil(runtime)
-
-	// Verify all fields present (custom_field won't be in runtime config as it's not part of the service)
-	s.Assert().Equal(true, runtime["enabled"])
-	s.Assert().Equal(9090, runtime["port"]) // Internal representation stays as int
-	s.Assert().Equal("/metrics", runtime["path"])
-}
-
-func (s *MetricsRuntimeSuite) TestMetrics_ValidateConfigUpdate() {
-	svc, err := NewMetrics(json.RawMessage(`{"enabled": true, "port": 9090}`),
-		&Dependencies{Logger: slog.Default()})
-	s.Require().NoError(err)
-
-	metrics := svc.(*Metrics)
-
-	s.Run("valid config update", func() {
-		validConfig := map[string]any{
-			"enabled": false, // Can toggle at runtime
-		}
-		err := metrics.ValidateConfigUpdate(validConfig)
-		s.Assert().NoError(err)
-	})
-
-	s.Run("port change requires restart", func() {
-		invalidConfig := map[string]any{
-			"enabled": true,
-			"port":    9999, // Different port not allowed at runtime
-		}
-		err := metrics.ValidateConfigUpdate(invalidConfig)
-		s.Assert().Error(err)
-		s.Assert().Contains(err.Error(), "restart")
-	})
-
-	s.Run("path change requires restart", func() {
-		invalidConfig := map[string]any{
-			"enabled": true,
-			"path":    "/new-metrics", // Path change not allowed at runtime
-		}
-		err := metrics.ValidateConfigUpdate(invalidConfig)
-		s.Assert().Error(err)
-		s.Assert().Contains(err.Error(), "restart")
-	})
-
-	s.Run("invalid enabled type", func() {
-		invalidConfig := map[string]any{
-			"enabled": "true", // Should be bool, not string
-		}
-		err := metrics.ValidateConfigUpdate(invalidConfig)
-		s.Assert().Error(err)
-		s.Assert().Contains(err.Error(), "boolean")
-	})
-}
-
-func (s *MetricsRuntimeSuite) TestMetrics_ApplyConfigUpdate() {
-	svc, err := NewMetrics(json.RawMessage(`{"enabled": true, "port": 9090}`),
-		&Dependencies{Logger: slog.Default()})
-	s.Require().NoError(err)
-
-	metrics := svc.(*Metrics)
-
-	// Apply valid config change (only enabled is supported at runtime)
-	newConfig := map[string]any{
-		"enabled": false,
-	}
-
-	err = metrics.ApplyConfigUpdate(newConfig)
-	s.Assert().NoError(err)
-
-	// Note: The enabled state is managed by Manager,
-	// so GetRuntimeConfig still shows the service's current state
-	runtime := metrics.GetRuntimeConfig()
-	s.Assert().NotNil(runtime)
-}
-
 func (s *MetricsRuntimeSuite) TestMetrics_KVIntegration_JSONOnly() {
 	// This tests the full KV integration with JSON-only format
 
@@ -220,12 +103,10 @@ func (s *MetricsRuntimeSuite) TestMetrics_DefaultConfiguration() {
 	s.Require().NoError(err)
 
 	metrics := svc.(*Metrics)
-	runtime := metrics.GetRuntimeConfig()
 
-	// Verify defaults from MetricsConfig.UnmarshalJSON
-	s.Assert().Equal(true, runtime["enabled"])
-	s.Assert().Equal(9090, runtime["port"])
-	s.Assert().Equal("/metrics", runtime["path"])
+	// Verify constructor defaults.
+	s.Assert().Equal(9090, metrics.config.Port)
+	s.Assert().Equal("/metrics", metrics.config.Path)
 }
 
 func (s *MetricsRuntimeSuite) TestMetrics_ConfigValidation() {
@@ -248,6 +129,14 @@ func (s *MetricsRuntimeSuite) TestMetrics_ConfigValidation() {
 		})
 		s.Assert().Error(err)
 		s.Assert().Contains(err.Error(), "invalid port")
+	})
+
+	s.Run("retired enabled field", func() {
+		config := json.RawMessage(`{"enabled": true}`)
+
+		_, err := NewMetrics(config, &Dependencies{Logger: slog.Default()})
+		s.Assert().Error(err)
+		s.Assert().Contains(err.Error(), "unknown field")
 	})
 
 	s.Run("empty path gets default", func() {

@@ -14,13 +14,13 @@ func TestFlowGraphPatterns(t *testing.T) {
 		graph := NewFlowGraph()
 
 		// Test nil component
-		err := graph.AddComponentNode("test", nil)
+		err := addTestComponentNode(graph, "test", nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "component cannot be nil")
 
 		// Test empty name
 		mockComp := createPatternTestComponent("mock", []component.Port{}, []component.Port{})
-		err = graph.AddComponentNode("", mockComp)
+		err = addTestComponentNode(graph, "", mockComp)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "component name cannot be empty")
 	})
@@ -47,8 +47,8 @@ func TestFlowGraphPatterns(t *testing.T) {
 		client := createPatternTestComponent("api-client", []component.Port{}, clientPorts)
 		server := createPatternTestComponent("api-server", serverPorts, []component.Port{})
 
-		require.NoError(t, graph.AddComponentNode("api-client", client))
-		require.NoError(t, graph.AddComponentNode("api-server", server))
+		require.NoError(t, addTestComponentNode(graph, "api-client", client))
+		require.NoError(t, addTestComponentNode(graph, "api-server", server))
 
 		// Connect by patterns
 		err := graph.ConnectComponentsByPatterns()
@@ -99,9 +99,9 @@ func TestFlowGraphPatterns(t *testing.T) {
 		writer2 := createPatternTestComponent("writer2", []component.Port{}, writer2Ports)
 		watcher := createPatternTestComponent("watcher", watcherPorts, []component.Port{})
 
-		require.NoError(t, graph.AddComponentNode("writer1", writer1))
-		require.NoError(t, graph.AddComponentNode("writer2", writer2))
-		require.NoError(t, graph.AddComponentNode("watcher", watcher))
+		require.NoError(t, addTestComponentNode(graph, "writer1", writer1))
+		require.NoError(t, addTestComponentNode(graph, "writer2", writer2))
+		require.NoError(t, addTestComponentNode(graph, "watcher", watcher))
 
 		// Connect by patterns - should get warning about multiple writers
 		err := graph.ConnectComponentsByPatterns()
@@ -141,8 +141,8 @@ func TestFlowGraphPatterns(t *testing.T) {
 		server1 := createPatternTestComponent("server1", server1Ports, []component.Port{})
 		server2 := createPatternTestComponent("server2", server2Ports, []component.Port{})
 
-		require.NoError(t, graph.AddComponentNode("server1", server1))
-		require.NoError(t, graph.AddComponentNode("server2", server2))
+		require.NoError(t, addTestComponentNode(graph, "server1", server1))
+		require.NoError(t, addTestComponentNode(graph, "server2", server2))
 
 		// Connect by patterns - should detect conflict
 		err := graph.ConnectComponentsByPatterns()
@@ -167,8 +167,8 @@ func TestFlowGraphPatterns(t *testing.T) {
 		reader := createPatternTestComponent("reader", []component.Port{{
 			Name: "states", Direction: component.DirectionInput, Config: component.KVReadPort{Bucket: "ENTITY_STATES"},
 		}}, nil)
-		require.NoError(t, graph.AddComponentNode("writer", writer))
-		require.NoError(t, graph.AddComponentNode("reader", reader))
+		require.NoError(t, addTestComponentNode(graph, "writer", writer))
+		require.NoError(t, addTestComponentNode(graph, "reader", reader))
 		require.NoError(t, graph.ConnectComponentsByPatterns())
 		edges := graph.GetEdges()
 		require.Len(t, edges, 1)
@@ -185,8 +185,8 @@ func TestFlowGraphPatterns(t *testing.T) {
 		second := createPatternTestComponent("second", []component.Port{{
 			Name: "file", Direction: component.DirectionInput, Config: component.FilePort{Path: "/shared/events.jsonl"},
 		}}, nil)
-		require.NoError(t, graph.AddComponentNode("first", first))
-		require.NoError(t, graph.AddComponentNode("second", second))
+		require.NoError(t, addTestComponentNode(graph, "first", first))
+		require.NoError(t, addTestComponentNode(graph, "second", second))
 		require.NoError(t, graph.ConnectComponentsByPatterns())
 	})
 
@@ -212,8 +212,8 @@ func TestFlowGraphPatterns(t *testing.T) {
 		pub := createPatternTestComponent("publisher", []component.Port{}, pubPorts)
 		sub := createPatternTestComponent("subscriber", subPorts, []component.Port{})
 
-		require.NoError(t, graph.AddComponentNode("publisher", pub))
-		require.NoError(t, graph.AddComponentNode("subscriber", sub))
+		require.NoError(t, addTestComponentNode(graph, "publisher", pub))
+		require.NoError(t, addTestComponentNode(graph, "subscriber", sub))
 
 		// Connect by patterns
 		err := graph.ConnectComponentsByPatterns()
@@ -264,8 +264,8 @@ func TestFlowGraphPatterns(t *testing.T) {
 		writer := createPatternTestComponent("graph-processor", []component.Port{}, writerPorts)
 		watcher := createPatternTestComponent("rule-processor", watcherPorts, []component.Port{})
 
-		require.NoError(t, graph.AddComponentNode("graph-processor", writer))
-		require.NoError(t, graph.AddComponentNode("rule-processor", watcher))
+		require.NoError(t, addTestComponentNode(graph, "graph-processor", writer))
+		require.NoError(t, addTestComponentNode(graph, "rule-processor", watcher))
 
 		// Connect by patterns - should work without warnings
 		err := graph.ConnectComponentsByPatterns()
@@ -349,8 +349,8 @@ func TestFlowGraphPatterns(t *testing.T) {
 		pub := createPatternTestComponent("udp-input", []component.Port{}, pubPorts)
 		sub := createPatternTestComponent("robotics-processor", subPorts, []component.Port{})
 
-		require.NoError(t, graph.AddComponentNode("udp-input", pub))
-		require.NoError(t, graph.AddComponentNode("robotics-processor", sub))
+		require.NoError(t, addTestComponentNode(graph, "udp-input", pub))
+		require.NoError(t, addTestComponentNode(graph, "robotics-processor", sub))
 
 		// Connect by patterns
 		err := graph.ConnectComponentsByPatterns()

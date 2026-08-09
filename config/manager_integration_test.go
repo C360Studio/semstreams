@@ -85,11 +85,8 @@ func (s *ManagerIntegrationSuite) TestJSONOnlyUpdates() {
 	}
 
 	// 1. Write JSON service config - should work
-	metricsConfig := types.ServiceConfig{
-		Name:    "metrics",
-		Enabled: true,
-		Config:  json.RawMessage(`{"port": 9090, "path": "/metrics"}`),
-	}
+	metricsConfig := types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"port": 9090, "path": "/metrics"}`)}
+
 	configJSON, _ := json.Marshal(metricsConfig)
 	_, err := s.kvStore.Put(s.ctx, "services.metrics", configJSON)
 	s.Require().NoError(err)
@@ -105,7 +102,6 @@ func (s *ManagerIntegrationSuite) TestJSONOnlyUpdates() {
 		svcConfig := cfg.Services["metrics"]
 		s.T().Logf("Service config: %+v", svcConfig)
 		s.T().Logf("Raw config: %s", string(svcConfig.Config))
-		s.Equal("metrics", svcConfig.Name)
 		s.True(svcConfig.Enabled)
 	case <-time.After(500 * time.Millisecond):
 		s.Fail("No config update received")
@@ -170,11 +166,8 @@ func (s *ManagerIntegrationSuite) TestChannelSubscriptions() {
 	}
 
 	// Update a service
-	config := types.ServiceConfig{
-		Name:    "discovery",
-		Enabled: true,
-		Config:  json.RawMessage(`{"interval": 30}`),
-	}
+	config := types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"interval": 30}`)}
+
 	configJSON, _ := json.Marshal(config)
 	_, err := s.kvStore.Put(s.ctx, "services.discovery", configJSON)
 	s.Require().NoError(err)
@@ -218,11 +211,8 @@ func (s *ManagerIntegrationSuite) TestConcurrentKVUpdates() {
 
 	for _, svcName := range services {
 		go func(name string) {
-			config := types.ServiceConfig{
-				Name:    name,
-				Enabled: true,
-				Config:  json.RawMessage(`{"test": true}`),
-			}
+			config := types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"test": true}`)}
+
 			configJSON, _ := json.Marshal(config)
 			_, err := s.kvStore.Put(s.ctx, "services."+name, configJSON)
 			s.NoError(err)
@@ -273,11 +263,8 @@ func (s *ManagerIntegrationSuite) TestCompleteFlow_KVToService() {
 	}
 
 	// 2. Write service config to KV
-	metricsConfig := types.ServiceConfig{
-		Name:    "metrics",
-		Enabled: true,
-		Config:  json.RawMessage(`{"port": 9090, "path": "/metrics"}`),
-	}
+	metricsConfig := types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"port": 9090, "path": "/metrics"}`)}
+
 	configJSON, _ := json.Marshal(metricsConfig)
 	_, err := s.kvStore.Put(s.ctx, "services.metrics", configJSON)
 	s.Require().NoError(err)
@@ -290,7 +277,6 @@ func (s *ManagerIntegrationSuite) TestCompleteFlow_KVToService() {
 		cfg := currentConfig.Get()
 
 		s.NotNil(cfg.Services["metrics"])
-		s.Equal("metrics", cfg.Services["metrics"].Name)
 		s.True(cfg.Services["metrics"].Enabled)
 
 		// 5. Verify the raw config is preserved correctly
@@ -325,11 +311,8 @@ func (s *ManagerIntegrationSuite) TestKVStore_OptimisticLocking() {
 	// Test that KVStore's CAS operations prevent lost updates
 
 	// Create initial config
-	config := types.ServiceConfig{
-		Name:    "test-service",
-		Enabled: true,
-		Config:  json.RawMessage(`{"version": 1}`),
-	}
+	config := types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"version": 1}`)}
+
 	configJSON, _ := json.Marshal(config)
 	rev1, err := s.kvStore.Put(s.ctx, "services.test", configJSON)
 	s.Require().NoError(err)
@@ -472,6 +455,108 @@ func TestManagerIntegrationSuite(t *testing.T) {
 		t.Skip("Skipping integration tests in short mode")
 	}
 	suite.Run(t, new(ManagerIntegrationSuite))
+}
+
+func TestConfigManagerStartupVersionArbitration(t *testing.T) {
+	tests := []struct {
+		name        string
+		fileVersion string
+		kvVersion   string
+		wantSource  string
+	}{
+		{name: "newer file pushes file state", fileVersion: "2.0.0", kvVersion: "1.0.0", wantSource: "file"},
+		{name: "older file selects KV", fileVersion: "1.0.0", kvVersion: "2.0.0", wantSource: "kv"},
+		{name: "equal version content edit does not apply", fileVersion: "1.0.0", kvVersion: "1.0.0", wantSource: "kv"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tc := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			fileConfig := &Config{
+				Version: tt.fileVersion,
+				Platform: PlatformConfig{
+					Org: "c360", ID: "arbitration-test", Type: "test",
+				},
+				Services: types.ServiceConfigs{
+					"common": {Enabled: true, Config: json.RawMessage(`{"source":"file"}`)},
+				},
+				Components: make(ComponentConfigs),
+			}
+			manager, err := NewConfigManager(fileConfig, tc.Client, nil)
+			require.NoError(t, err)
+
+			putConfigValue(t, ctx, manager, "version", tt.kvVersion)
+			putConfigValue(t, ctx, manager, "services.common", types.ServiceConfig{
+				Enabled: true,
+				Config:  json.RawMessage(`{"source":"kv"}`),
+			})
+
+			require.NoError(t, manager.Start(ctx))
+			defer manager.Stop(5 * time.Second)
+
+			got := manager.GetConfig().Get().Services["common"]
+			var inner map[string]string
+			require.NoError(t, json.Unmarshal(got.Config, &inner))
+			require.Equal(t, tt.wantSource, inner["source"])
+
+			entry, err := manager.kv.Get(ctx, "services.common")
+			require.NoError(t, err)
+			var stored types.ServiceConfig
+			require.NoError(t, json.Unmarshal(entry.Value(), &stored))
+			require.NoError(t, json.Unmarshal(stored.Config, &inner))
+			require.Equal(t, tt.wantSource, inner["source"])
+		})
+	}
+}
+
+func TestConfigManagerKVSelectionReplacesOnlyServices(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fileConfig := &Config{
+		Version: "1.0.0",
+		Platform: PlatformConfig{
+			Org: "c360", ID: "services-replacement-test", Type: "test",
+		},
+		Services: types.ServiceConfigs{
+			"file-only": {Enabled: true, Config: json.RawMessage(`{}`)},
+		},
+		Components: ComponentConfigs{
+			"file-component": {Type: "input", Name: "file-component", Enabled: true},
+		},
+	}
+	manager, err := NewConfigManager(fileConfig, tc.Client, nil)
+	require.NoError(t, err)
+
+	putConfigValue(t, ctx, manager, "version", "1.0.0")
+	putConfigValue(t, ctx, manager, "services.kv-only", types.ServiceConfig{
+		Enabled: true,
+		Config:  json.RawMessage(`{}`),
+	})
+	putConfigValue(t, ctx, manager, "components.kv-component", types.ComponentConfig{
+		Type: "output", Name: "kv-component", Enabled: true,
+	})
+
+	require.NoError(t, manager.Start(ctx))
+	defer manager.Stop(5 * time.Second)
+
+	got := manager.GetConfig().Get()
+	require.NotContains(t, got.Services, "file-only")
+	require.Contains(t, got.Services, "kv-only")
+	require.Contains(t, got.Components, "file-component")
+	require.Contains(t, got.Components, "kv-component")
+}
+
+func putConfigValue(t *testing.T, ctx context.Context, manager *Manager, key string, value any) {
+	t.Helper()
+	data, err := json.Marshal(value)
+	require.NoError(t, err)
+	_, err = manager.kvStore.Put(ctx, key, data)
+	require.NoError(t, err)
 }
 
 // TestConfigManager_RefusesForeignPlatformIdentity is a regression test for

@@ -212,7 +212,7 @@ func run() error {
 	// component services so StopAll stops it after their event publishers. Lifecycle
 	// terminal mutations remain coordinator/component work through declared ports.
 	// Start can abort boot on a genuine consumer-start failure; stream absence skips.
-	manager.RegisterInstance("milestone", service.NewMilestoneService(
+	if err := manager.RegisterInstance("milestone", service.NewMilestoneService(
 		agentrun.NewMilestoneSubscriber(
 			svcDeps.LifecycleManager,
 			agentrun.NewNATSLoopTripleReader(natsClient),
@@ -223,9 +223,12 @@ func run() error {
 		natsClient,
 		agentrun.StartConfig{StreamName: agentrun.AgentStreamName},
 		logger,
-	))
+	)); err != nil {
+		return fmt.Errorf("register milestone service: %w", err)
+	}
 
-	if err := configureAndCreateServices(cfg, manager, svcDeps); err != nil {
+	effectiveConfig := configManager.GetConfig().Get()
+	if err := configureAndCreateServices(effectiveConfig, manager, svcDeps); err != nil {
 		return err
 	}
 
@@ -639,33 +642,8 @@ func setupRegistriesAndManager(cfg *config.Config) (*component.Registry, *servic
 	}
 
 	manager := service.NewServiceManager(serviceRegistry)
-	ensureServiceManagerConfig(cfg)
 
 	return componentRegistry, manager, nil
-}
-
-func ensureServiceManagerConfig(cfg *config.Config) {
-	if cfg.Services == nil {
-		cfg.Services = make(types.ServiceConfigs)
-	}
-
-	if _, exists := cfg.Services["service-manager"]; !exists {
-		defaultConfig := map[string]any{
-			"http_port":  8080,
-			"swagger_ui": true,
-			"server_info": map[string]string{
-				"title":       "SemStreams E2E API",
-				"description": "E2E test application",
-				"version":     Version,
-			},
-		}
-		defaultConfigJSON, _ := json.Marshal(defaultConfig)
-		cfg.Services["service-manager"] = types.ServiceConfig{
-			Name:    "service-manager",
-			Enabled: true,
-			Config:  defaultConfigJSON,
-		}
-	}
 }
 
 func createServiceDependencies(
@@ -695,41 +673,6 @@ func configureAndCreateServices(
 	if err := manager.ConfigureFromServices(cfg.Services, svcDeps); err != nil {
 		return fmt.Errorf("configure service manager: %w", err)
 	}
-
-	slog.Debug("Creating services from config", "count", len(cfg.Services))
-	for name, svcConfig := range cfg.Services {
-		if name == "service-manager" {
-			continue
-		}
-
-		if err := createServiceIfEnabled(manager, name, svcConfig, svcDeps); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func createServiceIfEnabled(
-	manager *service.Manager,
-	name string,
-	svcConfig types.ServiceConfig,
-	svcDeps *service.Dependencies,
-) error {
-	if !svcConfig.Enabled {
-		return nil
-	}
-
-	if !manager.HasConstructor(name) {
-		slog.Warn("Service configured but not registered", "key", name)
-		return nil
-	}
-
-	if _, err := manager.CreateService(name, svcConfig.Config, svcDeps); err != nil {
-		return fmt.Errorf("create service %s: %w", name, err)
-	}
-
-	slog.Info("Created service", "name", name)
 	return nil
 }
 

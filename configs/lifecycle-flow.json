@@ -1,5 +1,5 @@
 {
-  "version": "1.1.0",
+  "version": "1.1.1",
   "platform": {
     "org": "c360",
     "id": "semstreams-lifecycle",
@@ -14,7 +14,6 @@
   },
   "services": {
     "service-manager": {
-      "name": "service-manager",
       "enabled": true,
       "config": {
         "http_port": 8080,
@@ -27,31 +26,23 @@
       }
     },
     "component-manager": {
-      "name": "component-manager",
       "enabled": true,
       "config": {}
     },
     "metrics": {
-      "name": "metrics",
       "enabled": true,
       "config": {
         "port": 9090,
-        "path": "/metrics",
-        "include_go_metrics": false
+        "path": "/metrics"
       }
     },
     "message-logger": {
-      "name": "message-logger",
       "enabled": true,
       "config": {
-        "buffer_size": 1000,
-        "monitor_subjects": ["mission.*", "raw.mission.*"],
-        "enable_kv_query": true,
-        "log_level": "INFO"
+        "monitor_subjects": ["mission.*", "raw.mission.*"]
       }
     },
     "log-forwarder": {
-      "name": "log-forwarder",
       "enabled": true,
       "config": {
         "min_level": "INFO"
@@ -110,11 +101,8 @@
           "inputs": [
             {
               "config": {
-                "kind": "jetstream",
-                "stream_name": "RAW",
-                "subjects": [
-                  "raw.mission.command"
-                ]
+                "kind": "nats",
+                "subject": "raw.mission.command"
               },
               "name": "command_in"
             }
@@ -125,10 +113,8 @@
                 "interface": {
                   "type": "mission.command.v1"
                 },
-                "kind": "jetstream",
-                "subjects": [
-                  "mission.processed.entity"
-                ]
+                "kind": "nats",
+                "subject": "mission.processed.entity"
               },
               "name": "command_out"
             }

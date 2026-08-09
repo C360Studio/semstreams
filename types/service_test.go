@@ -2,83 +2,43 @@ package types_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
-	pkgerrs "github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/types"
 )
 
 func TestServiceConfigValidate(t *testing.T) {
 	tests := []struct {
-		name        string
-		config      types.ServiceConfig
-		expectError bool
-		errorType   string
+		name   string
+		config types.ServiceConfig
 	}{
 		{
 			name: "valid service with config",
 			config: types.ServiceConfig{
-				Name:    "flow",
 				Enabled: true,
 				Config:  json.RawMessage(`{"max_flows": 100}`),
 			},
-			expectError: false,
 		},
 		{
 			name: "valid service without config",
 			config: types.ServiceConfig{
-				Name:    "discovery",
 				Enabled: true,
 				Config:  nil,
 			},
-			expectError: false,
 		},
 		{
 			name: "valid disabled service",
 			config: types.ServiceConfig{
-				Name:    "health",
 				Enabled: false,
 			},
-			expectError: false,
-		},
-		{
-			name: "empty name",
-			config: types.ServiceConfig{
-				Name:    "",
-				Enabled: true,
-			},
-			expectError: true,
-			errorType:   "invalid",
-		},
-		{
-			name: "whitespace only name",
-			config: types.ServiceConfig{
-				Name:    "   ",
-				Enabled: true,
-			},
-			expectError: false, // Validation doesn't trim whitespace
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.config.Validate()
-
-			if tt.expectError {
-				if err == nil {
-					t.Fatalf("expected error but got nil")
-				}
-
-				// Verify error classification
-				if tt.errorType == "invalid" {
-					if !pkgerrs.IsInvalid(err) {
-						t.Errorf("expected Invalid error classification, got: %v", err)
-					}
-				}
-			} else {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
+			if err := tt.config.Validate(); err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
 		})
 	}
@@ -86,7 +46,6 @@ func TestServiceConfigValidate(t *testing.T) {
 
 func TestServiceConfig_JSONRoundTrip(t *testing.T) {
 	original := types.ServiceConfig{
-		Name:    "flow",
 		Enabled: true,
 		Config:  json.RawMessage(`{"max_flows":100,"timeout":"30s"}`),
 	}
@@ -104,14 +63,19 @@ func TestServiceConfig_JSONRoundTrip(t *testing.T) {
 	}
 
 	// Verify fields
-	if decoded.Name != original.Name {
-		t.Errorf("Name: got %v, want %v", decoded.Name, original.Name)
-	}
 	if decoded.Enabled != original.Enabled {
 		t.Errorf("Enabled: got %v, want %v", decoded.Enabled, original.Enabled)
 	}
 	if string(decoded.Config) != string(original.Config) {
 		t.Errorf("Config: got %v, want %v", string(decoded.Config), string(original.Config))
+	}
+}
+
+func TestServiceConfigRejectsRetiredName(t *testing.T) {
+	var decoded types.ServiceConfig
+	err := json.Unmarshal([]byte(`{"name":"metrics","enabled":true,"config":{}}`), &decoded)
+	if err == nil || !strings.Contains(err.Error(), "unknown field \"name\"") {
+		t.Fatalf("retired name error = %v", err)
 	}
 }
 

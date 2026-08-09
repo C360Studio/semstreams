@@ -146,6 +146,10 @@
 //	        {
 //	          "name": "ws_data",
 //	          "config": {"kind":"nats","subject":"federated.data"}
+//	        },
+//	        {
+//	          "name": "ws_control",
+//	          "config": {"kind":"nats","subject":"federated.control"}
 //	        }
 //	      ]
 //	    }
@@ -174,6 +178,10 @@
 //	        {
 //	          "name": "ws_data",
 //	          "config": {"kind":"nats","subject":"federated.data"}
+//	        },
+//	        {
+//	          "name": "ws_control",
+//	          "config": {"kind":"nats","subject":"federated.control"}
 //	        }
 //	      ]
 //	    }

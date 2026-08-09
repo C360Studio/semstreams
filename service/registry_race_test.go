@@ -214,9 +214,9 @@ func TestServiceManager_StopAllCleanup(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// Create and start service using manager
-		ctx := context.Background()
-		err = manager.StartService(ctx, name, json.RawMessage(`{}`), &Dependencies{})
+		service, createErr := manager.CreateService(name, json.RawMessage(`{}`), &Dependencies{})
+		require.NoError(t, createErr)
+		err = service.Start(context.Background())
 		require.NoError(t, err)
 	}
 
@@ -271,9 +271,9 @@ func TestServiceManager_ReverseOrderShutdown(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// Create and start service using manager
-		ctx := context.Background()
-		err = manager.StartService(ctx, serviceName, json.RawMessage(`{}`), &Dependencies{})
+		service, createErr := manager.CreateService(serviceName, json.RawMessage(`{}`), &Dependencies{})
+		require.NoError(t, createErr)
+		err = service.Start(context.Background())
 		require.NoError(t, err)
 	}
 
@@ -349,39 +349,6 @@ func TestServiceManager_ConcurrentStartStop(t *testing.T) {
 	// Verify cleanup
 	allServices := manager.GetAllServices()
 	assert.Empty(t, allServices, "Expected manager to be empty after stop")
-}
-
-// TestServiceManager_RemoveService tests service removal
-func TestServiceManager_RemoveService(t *testing.T) {
-	registry := NewServiceRegistry()
-	manager := NewServiceManager(registry)
-
-	// Register and create service
-	err := registry.Register("test-service", func(_ json.RawMessage, _ *Dependencies) (Service, error) {
-		return newMockService("test-service"), nil
-	})
-	require.NoError(t, err)
-
-	// Create and start service using manager
-	ctx := context.Background()
-	err = manager.StartService(ctx, "test-service", json.RawMessage(`{}`), &Dependencies{})
-	require.NoError(t, err)
-
-	// Verify service exists
-	service, exists := manager.GetService("test-service")
-	assert.True(t, exists, "Expected service to exist")
-	require.NotNil(t, service)
-
-	// Stop service before removing
-	err = manager.StopService("test-service", 5*time.Second)
-	require.NoError(t, err)
-
-	// Remove service
-	manager.RemoveService("test-service")
-
-	// Verify service is removed
-	_, exists = manager.GetService("test-service")
-	assert.False(t, exists, "Expected service to be removed")
 }
 
 // TestServiceManager_ErrorHandling tests error scenarios

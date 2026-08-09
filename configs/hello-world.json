@@ -1,5 +1,5 @@
 {
-  "version": "1.1.0",
+  "version": "1.1.1",
   "platform": {
     "org": "demo",
     "id": "hello-world",
@@ -14,7 +14,6 @@
   },
   "services": {
     "service-manager": {
-      "name": "service-manager",
       "enabled": true,
       "config": {
         "http_port": 8080,
@@ -27,31 +26,23 @@
       }
     },
     "component-manager": {
-      "name": "component-manager",
       "enabled": true,
       "config": {}
     },
     "metrics": {
-      "name": "metrics",
       "enabled": true,
       "config": {
         "port": 9090,
-        "path": "/metrics",
-        "include_go_metrics": false
+        "path": "/metrics"
       }
     },
     "message-logger": {
-      "name": "message-logger",
       "enabled": true,
       "config": {
-        "buffer_size": 1000,
-        "monitor_subjects": ["*"],
-        "enable_kv_query": true,
-        "log_level": "INFO"
+        "monitor_subjects": ["*"]
       }
     },
     "log-forwarder": {
-      "name": "log-forwarder",
       "enabled": true,
       "config": {
         "min_level": "INFO"
@@ -216,6 +207,13 @@
                 "kind": "kv-write"
               },
               "name": "incoming_index"
+            },
+            {
+              "config": {
+                "bucket": "ALIAS_INDEX",
+                "kind": "kv-write"
+              },
+              "name": "alias_index"
             },
             {
               "config": {

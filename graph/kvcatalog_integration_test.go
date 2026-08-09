@@ -10,6 +10,7 @@ import (
 
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -98,11 +99,11 @@ func TestIntegration_OpenCatalogReader_DelegatesOnlyReadCapabilities(t *testing.
 
 	lister, err := reader.ListKeys(ctx)
 	require.NoError(t, err)
-	require.NoError(t, lister.Stop())
+	requireKeyListerStopped(t, lister)
 
 	filtered, err := reader.ListKeysFiltered(ctx, "acme.ops.>")
 	require.NoError(t, err)
-	require.NoError(t, filtered.Stop())
+	requireKeyListerStopped(t, filtered)
 
 	watcher, err := reader.Watch(ctx, "acme.ops.>")
 	require.NoError(t, err)
@@ -115,4 +116,18 @@ func TestIntegration_OpenCatalogReader_DelegatesOnlyReadCapabilities(t *testing.
 	status, err := reader.Status(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, BucketEntityStates, status.Bucket())
+}
+
+func requireKeyListerStopped(t *testing.T, lister jetstream.KeyLister) {
+	t.Helper()
+	// nats.go's KeyLister goroutine also defers watcher.Stop after initial
+	// enumeration. A concurrent explicit Stop can therefore observe that its
+	// legacy subscription or ephemeral consumer was already closed/deleted;
+	// both outcomes mean cleanup won.
+	err := lister.Stop()
+	if err != nil &&
+		!errors.Is(err, nats.ErrConsumerNotFound) &&
+		!errors.Is(err, nats.ErrBadSubscription) {
+		t.Fatalf("stop key lister: %v", err)
+	}
 }

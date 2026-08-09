@@ -47,10 +47,8 @@ func (c MetricsConfig) Validate() error {
 func NewMetrics(rawConfig json.RawMessage, deps *Dependencies) (Service, error) {
 	// Parse config - handle empty or invalid JSON properly
 	var cfg MetricsConfig
-	if len(rawConfig) > 0 {
-		if err := json.Unmarshal(rawConfig, &cfg); err != nil {
-			return nil, fmt.Errorf("parse metrics config: %w", err)
-		}
+	if err := decodeStrictServiceJSON(rawConfig, &cfg); err != nil {
+		return nil, fmt.Errorf("parse metrics config: %w", err)
 	}
 
 	// Apply defaults - clear and visible in constructor
@@ -200,14 +198,6 @@ func (m *Metrics) URL() string {
 // This implements the Configurable interface for UI discovery.
 func (m *Metrics) ConfigSchema() ConfigSchema {
 	return NewConfigSchema(map[string]PropertySchema{
-		"enabled": {
-			PropertySchema: component.PropertySchema{
-				Type:        "bool",
-				Description: "Enable or disable the metrics service",
-				Default:     true,
-			},
-			Runtime: false, // Requires restart to enable/disable
-		},
 		"port": {
 			PropertySchema: component.PropertySchema{
 				Type:        "int",
@@ -216,7 +206,6 @@ func (m *Metrics) ConfigSchema() ConfigSchema {
 				Minimum:     intPtr(1024),
 				Maximum:     intPtr(65535),
 			},
-			Runtime:  false, // Port change requires restart
 			Category: "network",
 		},
 		"path": {
@@ -225,57 +214,9 @@ func (m *Metrics) ConfigSchema() ConfigSchema {
 				Description: "URL path for the metrics endpoint",
 				Default:     "/metrics",
 			},
-			Runtime:  false, // Path change requires restart
 			Category: "network",
 		},
 	}, []string{}) // No required fields - all have defaults
-}
-
-// ValidateConfigUpdate validates runtime configuration changes
-func (m *Metrics) ValidateConfigUpdate(changes map[string]any) error {
-	// Note: Port and path changes require restart, so we don't allow them at runtime
-	for key := range changes {
-		switch key {
-		case "enabled":
-			// Enabled can be changed at runtime
-			if _, ok := changes[key].(bool); !ok {
-				return fmt.Errorf("enabled must be a boolean")
-			}
-		default:
-			return fmt.Errorf("runtime update of '%s' is not supported (requires restart)", key)
-		}
-	}
-	return nil
-}
-
-// ApplyConfigUpdate applies validated runtime configuration changes
-func (m *Metrics) ApplyConfigUpdate(changes map[string]any) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Note: Currently no runtime-modifiable properties for metrics
-	// Port and path changes require restart
-	// This is here for future extensibility
-
-	if enabled, ok := changes["enabled"].(bool); ok {
-		// The enabled state is managed by Manager
-		// This is just for tracking
-		m.logger.Debug("Metrics enabled state changed", "enabled", enabled)
-	}
-
-	return nil
-}
-
-// GetRuntimeConfig returns current runtime configuration
-func (m *Metrics) GetRuntimeConfig() map[string]any {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	return map[string]any{
-		"enabled": true, // Metrics service is running if this method is called
-		"port":    m.config.Port,
-		"path":    m.config.Path,
-	}
 }
 
 // Helper function to create int pointer

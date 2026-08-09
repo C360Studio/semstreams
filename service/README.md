@@ -51,8 +51,7 @@ func Register(registry *service.Registry) error {
 // Constructor following service pattern
 func NewMyService(rawConfig json.RawMessage, deps *Dependencies) (Service, error) {
     cfg := &MyServiceConfig{
-        Enabled: true,  // default values
-        Port:    8080,
+        Port: 8080, // service-specific default
     }
     
     // Parse raw JSON configuration
@@ -133,32 +132,8 @@ func (s *MyService) OpenAPISpec() *OpenAPISpec {
     }
 }
 
-// Service with runtime configuration support
-func (s *MyService) GetRuntimeConfig() map[string]any {
-    return map[string]any{
-        "enabled": s.config.Enabled,
-        "port":    s.config.Port,
-    }
-}
-
-func (s *MyService) ValidateConfigUpdate(newConfig map[string]any) error {
-    // Validate proposed configuration changes
-    if port, ok := newConfig["port"].(float64); ok {
-        if port != float64(s.config.Port) {
-            return fmt.Errorf("port changes require service restart")
-        }
-    }
-    return nil
-}
-
-func (s *MyService) ApplyConfigUpdate(newConfig map[string]any) error {
-    // Apply runtime configuration changes
-    if enabled, ok := newConfig["enabled"].(bool); ok {
-        s.config.Enabled = enabled
-        s.logger.Info("Updated enabled setting", "enabled", enabled)
-    }
-    return nil
-}
+// Service configuration is restart-only. The containing services map owns
+// identity and outer enabled; MyServiceConfig contains only inner settings.
 ```
 
 ### ComponentManager HTTP APIs
@@ -592,17 +567,9 @@ type HTTPHandler interface {
 
 Optional interface for services that want to expose HTTP endpoints. Manager automatically registers handlers and aggregates OpenAPI documentation.
 
-#### `RuntimeConfigurable`
-
-```go
-type RuntimeConfigurable interface {
-    GetRuntimeConfig() map[string]any
-    ValidateConfigUpdate(newConfig map[string]any) error
-    ApplyConfigUpdate(newConfig map[string]any) error
-}
-```
-
-Optional interface for services that support runtime configuration changes without restart.
+Service configuration is restart-only. KV updates change desired next-boot
+state; `GET /services` reports whether those changes require restart. Component
+runtime reconfiguration remains a separate ComponentManager concern.
 
 ## Architecture
 
@@ -653,15 +620,23 @@ Optional interface for services that support runtime configuration changes witho
 ```json
 {
   "services": {
-    "http_port": 8080,
-    "swagger_ui": true,
+    "service-manager": {
+      "enabled": true,
+      "config": {
+        "http_port": 8080,
+        "swagger_ui": true
+      }
+    },
     "component-manager": {
-      "enabled": true
+      "enabled": true,
+      "config": {}
     },
     "metrics": {
       "enabled": true,
-      "port": 9090,
-      "path": "/metrics"
+      "config": {
+        "port": 9090,
+        "path": "/metrics"
+      }
     }
   }
 }
@@ -673,16 +648,22 @@ Optional interface for services that support runtime configuration changes witho
 {
   "services": {
     "discovery": {
-      "enabled": false
+      "enabled": false,
+      "config": {}
     },
     "message-logger": {
       "enabled": false,
-      "max_messages": 1000
+      "config": {
+        "max_entries": 1000
+      }
     },
     "service-manager": {
-      "read_timeout": "10s",
-      "write_timeout": "10s",
-      "shutdown_timeout": "30s"
+      "enabled": true,
+      "config": {
+        "read_timeout": "10s",
+        "write_timeout": "10s",
+        "shutdown_timeout": "30s"
+      }
     }
   }
 }
@@ -803,13 +784,11 @@ type MonitoringService struct {
 }
 
 type MonitoringConfig struct {
-    Enabled  bool          `json:"enabled"`
     Interval time.Duration `json:"interval"`
 }
 
 func NewMonitoringService(rawConfig json.RawMessage, deps *service.Dependencies) (service.Service, error) {
     cfg := &MonitoringConfig{
-        Enabled:  true,
         Interval: 30 * time.Second,
     }
     
@@ -827,11 +806,6 @@ func NewMonitoringService(rawConfig json.RawMessage, deps *service.Dependencies)
 }
 
 func (m *MonitoringService) Start(ctx context.Context) error {
-    if !m.config.Enabled {
-        m.logger.Info("Monitoring service disabled")
-        return nil
-    }
-    
     m.ticker = time.NewTicker(m.config.Interval)
     go m.monitoringLoop(ctx)
     
@@ -850,7 +824,7 @@ func (m *MonitoringService) Stop(timeout time.Duration) error {
 }
 
 func (m *MonitoringService) IsHealthy() bool {
-    return m.config.Enabled && m.ticker != nil
+    return m.ticker != nil
 }
 
 func (m *MonitoringService) GetStatus() service.ServiceStatus {
@@ -858,7 +832,6 @@ func (m *MonitoringService) GetStatus() service.ServiceStatus {
         Name:    "monitoring",
         Healthy: m.IsHealthy(),
         Details: map[string]any{
-            "enabled":  m.config.Enabled,
             "interval": m.config.Interval.String(),
             "platform": m.platform.Platform,
         },
@@ -966,19 +939,14 @@ func main() {
     
     // Services are registered via RegisterAll()
     // Create services from configuration
-    serviceConfigs := map[string]json.RawMessage{
-        "monitoring": json.RawMessage(`{"enabled": true, "interval": "10s"}`),
-        "metrics":    json.RawMessage(`{"enabled": true, "port": 9090}`),
+    serviceConfigs := types.ServiceConfigs{
+        "monitoring": {Enabled: true, Config: json.RawMessage(`{"interval":"10s"}`)},
+        "metrics":    {Enabled: true, Config: json.RawMessage(`{"port":9090}`)},
     }
     
-    // Create all configured services
-    for name, config := range serviceConfigs {
-        svc, err := manager.CreateService(name, config, deps)
-        if err != nil {
-            log.Printf("Failed to create service %s: %v", name, err)
-            continue
-        }
-        log.Printf("Created service: %s", name)
+    // Resolve and construct the complete pre-start composition.
+    if err := manager.ConfigureFromServices(serviceConfigs, deps); err != nil {
+        log.Fatalf("Failed to configure services: %v", err)
     }
     
     // Start all services

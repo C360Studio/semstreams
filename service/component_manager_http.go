@@ -14,6 +14,8 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/health"
+	"github.com/c360studio/semstreams/internal/componentadmission"
+	"github.com/c360studio/semstreams/types"
 )
 
 func init() {
@@ -435,7 +437,6 @@ func (cm *ComponentManager) handleComponentTypeByID(w http.ResponseWriter, r *ht
 		http.Error(w, "Invalid component type", http.StatusBadRequest)
 		return
 	}
-
 	// Get all registered factories from the component registry
 	factories := cm.registry.ListFactories()
 
@@ -612,6 +613,8 @@ func (cm *ComponentManager) handlePutComponentConfig(w http.ResponseWriter, r *h
 		http.Error(w, "Invalid component name", http.StatusBadRequest)
 		return
 	}
+	unlock := cm.lockInstanceOperation(componentName)
+	defer unlock()
 
 	// Check if component exists, and capture the factory name from the component's
 	// effective config under the same lock (gh#522: the single source of truth, not
@@ -620,8 +623,10 @@ func (cm *ComponentManager) handlePutComponentConfig(w http.ResponseWriter, r *h
 	cm.mu.RLock()
 	comp, exists := cm.components[componentName]
 	var componentType string
+	var effectiveConfig types.ComponentConfig
 	if exists {
 		componentType = comp.Config.Name // Factory name
+		effectiveConfig = cloneComponentConfig(comp.Config)
 	}
 	cm.mu.RUnlock()
 
@@ -666,6 +671,34 @@ func (cm *ComponentManager) handlePutComponentConfig(w http.ResponseWriter, r *h
 		}
 	}
 
+	// Prove declaration neutrality against a separately constructed candidate
+	// before invoking either live-mutation contract or changing retained config.
+	proposedConfig := effectiveConfig
+	proposedConfig.Config = append(json.RawMessage(nil), req.Config...)
+	proof, err := cm.registry.ValidateDeclarationUpdate(
+		componentadmission.Access{}, componentName, proposedConfig, cm.buildComponentDependencies(),
+	)
+	if err != nil {
+		var declarationChange *component.DeclarationChangeRequiresReplacementError
+		if errors.As(err, &declarationChange) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"code":  declarationChange.Code,
+				"error": declarationChange.Error(),
+			})
+			return
+		}
+		cm.logger.Error("Failed to validate component declaration update",
+			"component_name", componentName, "error", err)
+		http.Error(w, fmt.Sprintf("Failed to validate declaration: %v", err), http.StatusBadRequest)
+		return
+	}
+	if err := cm.registry.ConfirmDeclarationUpdate(componentadmission.Access{}, proof); err != nil {
+		http.Error(w, fmt.Sprintf("Component changed during declaration validation: %v", err), http.StatusConflict)
+		return
+	}
+
 	// Configuration passed schema validation. Apply it to the running component
 	// via whichever runtime-reconfig contract it implements, learning whether it
 	// was applied live (gh#455). Apply BEFORE persisting so a component's own
@@ -689,6 +722,10 @@ func (cm *ComponentManager) handlePutComponentConfig(w http.ResponseWriter, r *h
 		http.Error(w, fmt.Sprintf("Failed to apply config: %v", err), http.StatusInternalServerError)
 		return
 	}
+	if err := cm.registry.ConfirmDeclarationUpdate(componentadmission.Access{}, proof); err != nil {
+		http.Error(w, fmt.Sprintf("Component changed during config apply: %v", err), http.StatusConflict)
+		return
+	}
 
 	// Update the ComponentManager's in-memory view of the config, only after a
 	// successful apply or an explicit no-hook accept, so the GET-config read stays
@@ -704,8 +741,12 @@ func (cm *ComponentManager) handlePutComponentConfig(w http.ResponseWriter, r *h
 	// GET returns the live-applied body, and a later KV re-push of the same config
 	// is a no-op rather than a spurious restart.
 	cm.mu.Lock()
-	if mc, ok := cm.components[componentName]; ok {
-		mc.Config.Config = req.Config
+	if mc, ok := cm.components[componentName]; ok && mc == comp {
+		mc.Config.Config = append(json.RawMessage(nil), req.Config...)
+	} else {
+		cm.mu.Unlock()
+		http.Error(w, "Component changed during config commit", http.StatusConflict)
+		return
 	}
 	cm.mu.Unlock()
 
@@ -736,12 +777,9 @@ func (cm *ComponentManager) handlePutComponentConfig(w http.ResponseWriter, r *h
 //     component implementing it (e.g. processor/rule) is reachable via the
 //     ComponentManager HTTP API (gh#455).
 //
-// It type-asserts the reconfig METHOD PAIR, NOT the full
-// service.RuntimeConfigurable interface: RuntimeConfigurable embeds
-// Configurable.ConfigSchema() service.ConfigSchema, but a component's
-// ConfigSchema() returns component.ConfigSchema — so a full-interface assert
-// would silently miss every component. The narrow anonymous interface matches
-// exactly the methods this bridge calls.
+// It type-asserts the reconfig method pair rather than a broader service
+// contract because a component's ConfigSchema returns component.ConfigSchema.
+// The narrow anonymous interface matches exactly the methods this bridge calls.
 //
 // A component implementing neither contract returns (false, nil); the caller
 // reports applied:false. On the method-pair path, ValidateConfigUpdate runs

@@ -75,11 +75,7 @@ func (s *ServiceSuite) TestService_CreationSuite() {
 			Type: "vessel",
 		},
 		Services: types.ServiceConfigs{
-			"test": types.ServiceConfig{
-				Name:    "test",
-				Enabled: true,
-				Config:  json.RawMessage(`{"default_timeout": "30s", "health_interval": "10s"}`),
-			},
+			"test": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"default_timeout": "30s", "health_interval": "10s"}`)},
 		},
 	}
 
@@ -104,11 +100,7 @@ func (s *ServiceSuite) TestService_LifecycleSuite() {
 			Type: "vessel",
 		},
 		Services: types.ServiceConfigs{
-			"test": types.ServiceConfig{
-				Name:    "test",
-				Enabled: true,
-				Config:  json.RawMessage(`{"default_timeout": "100ms", "health_interval": "50ms"}`),
-			},
+			"test": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"default_timeout": "100ms", "health_interval": "50ms"}`)},
 		},
 	}
 

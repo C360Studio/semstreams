@@ -5,6 +5,9 @@ This note coordinates the pre-v1 cutover to the graph read/write foundation esta
 compatibility plan. SemStreams ships no aliases, deprecated APIs, dual subjects, ownership adapter, or legacy todo
 decoder.
 
+For the later strict port, declaration-generation, service-composition, and stream-planning breaks, see the
+[port and declaration-generation cutover](./37-port-and-declaration-generation-cutover.md).
+
 The ten named downstream repositories are a holdout set for feature/API parity. Their current implementation choices do
 not constrain the foundation or block the SemStreams tag. A finding means the repository must migrate after the tag; it
 does not reopen the SemStreams design.
@@ -37,6 +40,7 @@ does not reopen the SemStreams design.
 - Replace rule action `replace_owned` with `reconcile_predicates` plus its local projection contract/group selector.
 - Replace value-only reads of `graph.ingest.query.entity` with `graph.ExactEntityReader` or the admitted exact GraphQL
   result when a following mutation needs a revision.
+- Replace `OpenCatalogBucket` with `OpenCatalogReader` for readers or `EnsureCatalogBucket` for declared bucket owners.
 - Treat `entity_not_found`, `revision_mismatch`, and `commit_unknown` as different outcomes. A component may choose a
   later retry policy, but must not reinterpret ambiguity as success.
 - If consuming `write_todos`, use exported `TodoReader`/`TodoState`. The graph representation is one rule-opaque

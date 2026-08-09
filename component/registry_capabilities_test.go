@@ -1,6 +1,11 @@
 package component
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+
+	"github.com/c360studio/semstreams/natsclient"
+)
 
 func TestPortsToCapabilitiesUsesResolvedFacts(t *testing.T) {
 	t.Parallel()
@@ -26,7 +31,11 @@ func TestPortsToCapabilitiesUsesResolvedFacts(t *testing.T) {
 		},
 	}
 
-	got, err := NewRegistry().portsToCapabilities(ports)
+	resolved, facts, err := cloneAndProjectPorts(ports)
+	if err != nil {
+		t.Fatalf("cloneAndProjectPorts() error = %v", err)
+	}
+	got, err := portsToCapabilities(resolved, facts)
 	if err != nil {
 		t.Fatalf("portsToCapabilities() error = %v", err)
 	}
@@ -48,12 +57,47 @@ func TestPortsToCapabilitiesUsesResolvedFacts(t *testing.T) {
 func TestPortsToCapabilitiesRejectsInvalidPort(t *testing.T) {
 	t.Parallel()
 
-	_, err := NewRegistry().portsToCapabilities([]Port{{
+	_, _, err := cloneAndProjectPorts([]Port{{
 		Name:      "broken",
 		Direction: DirectionInput,
 		Config:    NATSPort{},
 	}})
 	if err == nil {
 		t.Fatal("portsToCapabilities() error = nil, want invalid port error")
+	}
+}
+
+func TestCapabilityPreparationUsesRetainedGenerationWithoutPortReread(t *testing.T) {
+	registry := NewRegistry()
+	component := &generationTestComponent{outputs: []Port{generationTestPort("events.original")}}
+	requireNoError(t, registry.RegisterWithConfig(RegistrationConfig{
+		Name: "source-factory", Type: "processor", Version: "v1",
+		Factory: func(json.RawMessage, Dependencies) (Discoverable, error) { return component, nil },
+	}))
+	_, err := registry.CreateComponent(
+		"source", generationTestConfig("source-factory", `{}`), generationTestDeps())
+	requireNoError(t, err)
+	if component.inputCalls != 1 || component.outputCalls != 1 {
+		t.Fatalf("admission port calls = input %d output %d, want one each", component.inputCalls, component.outputCalls)
+	}
+
+	component.outputs[0] = generationTestPort("events.mutated")
+	registry.natsClient = &natsclient.Client{}
+	registry.nodeID = "node-a"
+	generation, ok := registry.generation("source")
+	if !ok {
+		t.Fatal("admitted generation missing")
+	}
+	publication, err := registry.prepareCapabilityPublication(generation)
+	requireNoError(t, err)
+	if component.inputCalls != 1 || component.outputCalls != 1 {
+		t.Fatalf("capability preparation reread component ports: input %d output %d", component.inputCalls, component.outputCalls)
+	}
+	var announcement CapabilityAnnouncement
+	if err := json.Unmarshal(publication.data, &announcement); err != nil {
+		t.Fatalf("unmarshal prepared capability: %v", err)
+	}
+	if got := announcement.OutputPorts[0].Subject; got != "events.original" {
+		t.Fatalf("prepared capability subject = %q, want retained events.original", got)
 	}
 }

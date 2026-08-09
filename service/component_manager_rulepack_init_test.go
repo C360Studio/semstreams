@@ -83,7 +83,6 @@ func newRulePackColdBootManager(
 		natsClient:       new(natsclient.Client),
 		componentConfigs: configs,
 		components:       make(map[string]*component.ManagedComponent),
-		resources:        make(map[string][]string),
 	}, &probes, &ruleFactoryCalls
 }
 

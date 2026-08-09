@@ -11,13 +11,17 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/config"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -77,6 +81,24 @@ type bothContractsComponent struct {
 	applyCalls  int
 }
 
+type declarationConfigComponent struct {
+	baseDiscoverable
+	subject     string
+	updateCalls int
+}
+
+func (c *declarationConfigComponent) OutputPorts() []component.Port {
+	return []component.Port{{
+		Name: "events", Direction: component.DirectionOutput,
+		Config: component.NATSPort{Subject: c.subject},
+	}}
+}
+
+func (c *declarationConfigComponent) UpdateConfig(context.Context, json.RawMessage) error {
+	c.updateCalls++
+	return nil
+}
+
 func (c *bothContractsComponent) UpdateConfig(_ context.Context, _ json.RawMessage) error {
 	c.updateCalls++
 	return nil
@@ -89,6 +111,41 @@ func (c *bothContractsComponent) ApplyConfigUpdate(_ map[string]any) error {
 
 // noHookComponent implements no runtime-reconfig contract.
 type noHookComponent struct{ baseDiscoverable }
+
+type blockingUpdateComponent struct {
+	baseDiscoverable
+	applyEntered chan struct{}
+	releaseApply chan struct{}
+	applyCalls   int
+}
+
+func (c *blockingUpdateComponent) UpdateConfig(context.Context, json.RawMessage) error {
+	c.applyCalls++
+	close(c.applyEntered)
+	<-c.releaseApply
+	return nil
+}
+
+type lifecycleGenerationProbe struct {
+	baseDiscoverable
+	initializeCalls int
+	startCalls      int
+	stopCalls       int
+	stopErr         error
+}
+
+func (c *lifecycleGenerationProbe) Initialize() error {
+	c.initializeCalls++
+	return nil
+}
+func (c *lifecycleGenerationProbe) Start(context.Context) error {
+	c.startCalls++
+	return nil
+}
+func (c *lifecycleGenerationProbe) Stop(time.Duration) error {
+	c.stopCalls++
+	return c.stopErr
+}
 
 // --- applyRuntimeConfig unit tests (the bridge core) ---
 
@@ -162,6 +219,14 @@ func TestApplyRuntimeConfig_ValidationRejectionWrapsSentinelAndSkipsApply(t *tes
 // schema-validation step is skipped and the reconfig path is exercised directly.
 func newReconfigTestCM(name string, comp component.Discoverable, storedConfig json.RawMessage) *ComponentManager {
 	effectiveConfig := types.ComponentConfig{Type: "processor", Name: name, Enabled: true, Config: storedConfig}
+	registry := component.NewRegistry()
+	requireNoErrorForReconfigSetup(registry.RegisterWithConfig(component.RegistrationConfig{
+		Name: name, Type: "processor",
+		Factory: func(json.RawMessage, component.Dependencies) (component.Discoverable, error) { return comp, nil },
+	}))
+	client := new(natsclient.Client)
+	requireNoErrorForReconfigSetupValue(registry.CreateComponent(
+		name, effectiveConfig, component.Dependencies{NATSClient: client}))
 	cm := &ComponentManager{
 		BaseService: NewBaseServiceWithOptions("component-manager", nil),
 		// Mirror production: the managed component retains its effective config
@@ -170,9 +235,20 @@ func newReconfigTestCM(name string, comp component.Discoverable, storedConfig js
 			name: {Component: comp, State: component.StateStarted, Config: effectiveConfig},
 		},
 		componentConfigs: config.ComponentConfigs{name: effectiveConfig},
-		registry:         component.NewRegistry(),
+		registry:         registry,
+		natsClient:       client,
 	}
 	return cm
+}
+
+func requireNoErrorForReconfigSetup(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+
+func requireNoErrorForReconfigSetupValue(_ component.Discoverable, err error) {
+	requireNoErrorForReconfigSetup(err)
 }
 
 func putConfig(cm *ComponentManager, name string, body string) *httptest.ResponseRecorder {
@@ -187,6 +263,23 @@ func getConfig(cm *ComponentManager, name string) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	cm.handleGetComponentConfig(w, req)
 	return w
+}
+
+func TestHandlePutComponentConfigMissingNamesUseBoundedOperationStripes(t *testing.T) {
+	cm := &ComponentManager{}
+	seenStripes := make(map[uint64]struct{})
+	for index := 0; index < 2048; index++ {
+		name := fmt.Sprintf("missing-%d", index)
+		response := putConfig(cm, name, `{"config":{}}`)
+		require.Equal(t, http.StatusNotFound, response.Code)
+		seenStripes[componentOperationStripe(name)] = struct{}{}
+	}
+	if got := len(cm.instanceOps); got != componentOperationStripeCount {
+		t.Fatalf("operation stripe count = %d, want fixed bound %d", got, componentOperationStripeCount)
+	}
+	assert.LessOrEqual(t, len(seenStripes), componentOperationStripeCount)
+	assert.Equal(t, componentOperationStripe("same-name"), componentOperationStripe("same-name"),
+		"the same identity must always select the same sequencing stripe")
 }
 
 // TestHandleGetComponentConfig_ReflectsEffectiveConfigNotStaleBaseline is the
@@ -219,6 +312,7 @@ func TestHandleGetComponentConfig_ReflectsEffectiveConfigNotStaleBaseline(t *tes
 func TestHandlePutComponentConfig_MethodPairAppliesAndReportsApplied(t *testing.T) {
 	comp := &reconfigPairComponent{baseDiscoverable: baseDiscoverable{name: "rule-processor"}}
 	cm := newReconfigTestCM("rule-processor", comp, json.RawMessage(`{"old":true}`))
+	before := cm.registry.Component("rule-processor")
 
 	w := putConfig(cm, "rule-processor", `{"config":{"enable_graph_integration":false}}`)
 
@@ -233,6 +327,8 @@ func TestHandlePutComponentConfig_MethodPairAppliesAndReportsApplied(t *testing.
 	effective := cm.components["rule-processor"].Config.Config
 	cm.mu.Unlock()
 	assert.JSONEq(t, `{"enable_graph_integration":false}`, string(effective))
+	assert.Same(t, before, cm.registry.Component("rule-processor"),
+		"declaration-neutral live update must retain its admitted component")
 }
 
 func TestHandlePutComponentConfig_NoHookReportsNotApplied(t *testing.T) {
@@ -248,6 +344,249 @@ func TestHandlePutComponentConfig_NoHookReportsNotApplied(t *testing.T) {
 	// Must NOT promise a restart-time apply — this endpoint does not persist
 	// durably (gh#388), so a restart would revert the change (gh#455 review HIGH).
 	assert.NotContains(t, resp, "restart_required", "must not promise a restart-time apply the endpoint can't keep")
+}
+
+func TestHandlePutComponentConfig_DeclarationChangeRefusesBeforeMutation(t *testing.T) {
+	registry := component.NewRegistry()
+	live := &declarationConfigComponent{
+		baseDiscoverable: baseDiscoverable{name: "declared"}, subject: "events.old",
+	}
+	require.NoError(t, registry.RegisterWithConfig(component.RegistrationConfig{
+		Name: "declared", Type: "processor",
+		Factory: func(raw json.RawMessage, _ component.Dependencies) (component.Discoverable, error) {
+			var cfg struct {
+				Subject string `json:"subject"`
+			}
+			if err := json.Unmarshal(raw, &cfg); err != nil {
+				return nil, err
+			}
+			if cfg.Subject == "events.old" {
+				return live, nil
+			}
+			return &declarationConfigComponent{
+				baseDiscoverable: baseDiscoverable{name: "declared"}, subject: cfg.Subject,
+			}, nil
+		},
+	}))
+	client := new(natsclient.Client)
+	stored := json.RawMessage(`{"subject":"events.old"}`)
+	effective := types.ComponentConfig{
+		Name: "declared", Type: types.ComponentTypeProcessor, Enabled: true, Config: stored,
+	}
+	_, err := registry.CreateComponent(
+		"declared", effective, component.Dependencies{NATSClient: client})
+	require.NoError(t, err)
+	cm := &ComponentManager{
+		BaseService: NewBaseServiceWithOptions("component-manager", nil),
+		registry:    registry,
+		natsClient:  client,
+		components: map[string]*component.ManagedComponent{
+			"declared": {Component: live, State: component.StateStarted, Config: effective},
+		},
+	}
+
+	w := putConfig(cm, "declared", `{"config":{"subject":"events.new"}}`)
+	require.Equal(t, http.StatusConflict, w.Code)
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, "declaration_change_requires_replacement", response["code"])
+	assert.Zero(t, live.updateCalls, "live component mutated before declaration refusal")
+	assert.JSONEq(t, `{"subject":"events.old"}`, string(cm.components["declared"].Config.Config))
+	assert.Same(t, live, registry.Component("declared"))
+}
+
+func TestHandlePutComponentConfigSerializesProofApplyAndCommitWithReplacement(t *testing.T) {
+	registry := component.NewRegistry()
+	proofEntered := make(chan struct{})
+	releaseProof := make(chan struct{})
+	replacementFactoryEntered := make(chan struct{})
+	live := &blockingUpdateComponent{
+		baseDiscoverable: baseDiscoverable{name: "sequenced"},
+		applyEntered:     make(chan struct{}),
+		releaseApply:     make(chan struct{}),
+	}
+	replacement := &noHookComponent{baseDiscoverable{name: "sequenced"}}
+	require.NoError(t, registry.RegisterWithConfig(component.RegistrationConfig{
+		Name: "sequenced", Type: "processor",
+		Factory: func(raw json.RawMessage, _ component.Dependencies) (component.Discoverable, error) {
+			var cfg struct {
+				Mode string `json:"mode"`
+			}
+			if err := json.Unmarshal(raw, &cfg); err != nil {
+				return nil, err
+			}
+			switch cfg.Mode {
+			case "initial":
+				return live, nil
+			case "put":
+				close(proofEntered)
+				<-releaseProof
+				return &noHookComponent{baseDiscoverable{name: "sequenced"}}, nil
+			case "replacement":
+				close(replacementFactoryEntered)
+				return replacement, nil
+			default:
+				return nil, errors.New("unknown mode")
+			}
+		},
+	}))
+	client := new(natsclient.Client)
+	initialCfg := types.ComponentConfig{
+		Name: "sequenced", Type: types.ComponentTypeProcessor, Enabled: true,
+		Config: json.RawMessage(`{"mode":"initial"}`),
+	}
+	_, err := registry.CreateComponent(
+		"sequenced", initialCfg, component.Dependencies{NATSClient: client})
+	require.NoError(t, err)
+	cm := &ComponentManager{
+		BaseService: NewBaseServiceWithOptions("component-manager", nil),
+		registry:    registry, natsClient: client,
+		components: map[string]*component.ManagedComponent{
+			"sequenced": {Component: live, State: component.StateStarted, Config: initialCfg},
+		},
+	}
+
+	putDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		putDone <- putConfig(cm, "sequenced", `{"config":{"mode":"put"}}`)
+	}()
+	<-proofEntered
+	operationMu := &cm.instanceOps[componentOperationStripe("sequenced")]
+	assert.False(t, operationMu.TryLock(), "PUT must hold the instance operation lock during declaration proof")
+
+	replaceStarted := make(chan struct{})
+	replaceDone := make(chan error, 1)
+	stale := cm.components["sequenced"]
+	replacementCfg := initialCfg
+	replacementCfg.Config = json.RawMessage(`{"mode":"replacement"}`)
+	go func() {
+		close(replaceStarted)
+		replaceDone <- cm.recreateComponentWithNewConfig(context.Background(), "sequenced", replacementCfg, stale)
+	}()
+	<-replaceStarted
+	close(releaseProof)
+	<-live.applyEntered
+	assert.False(t, operationMu.TryLock(), "PUT must retain sequencing through live mutation and config commit")
+	select {
+	case <-replacementFactoryEntered:
+		t.Fatal("replacement factory ran before live PUT committed retained config")
+	default:
+	}
+	close(live.releaseApply)
+	response := <-putDone
+	require.Equal(t, http.StatusOK, response.Code)
+	<-replacementFactoryEntered
+	require.NoError(t, <-replaceDone)
+	assert.Equal(t, 1, live.applyCalls)
+	assert.Same(t, replacement, cm.components["sequenced"].Component)
+	assert.JSONEq(t, `{"mode":"replacement"}`, string(cm.components["sequenced"].Config.Config))
+}
+
+func TestRecreateUsesAuthoritativeComponentAfterWaitingOnInstanceSequence(t *testing.T) {
+	cm, old, middle, final, oldManaged, configs := newStaleGenerationTestManager(t)
+	require.NoError(t, cm.recreateComponentWithNewConfig(
+		context.Background(), "sequenced", configs["middle"], oldManaged))
+	require.NoError(t, cm.recreateComponentWithNewConfig(
+		context.Background(), "sequenced", configs["final"], oldManaged))
+	assert.Equal(t, 1, old.stopCalls)
+	assert.Equal(t, 1, middle.stopCalls, "second replacement must retire the current generation, not stale old pointer")
+	assert.Equal(t, 0, final.stopCalls)
+	assert.Same(t, final, cm.registry.Component("sequenced"))
+}
+
+func TestRemovalUsesAuthoritativeComponentAfterWaitingOnInstanceSequence(t *testing.T) {
+	cm, old, middle, _, oldManaged, configs := newStaleGenerationTestManager(t)
+	require.NoError(t, cm.recreateComponentWithNewConfig(
+		context.Background(), "sequenced", configs["middle"], oldManaged))
+	require.NoError(t, cm.stopAndRemoveComponent(context.Background(), "sequenced", oldManaged))
+	assert.Equal(t, 1, old.stopCalls)
+	assert.Equal(t, 1, middle.stopCalls, "removal must stop the current generation, not stale old pointer")
+	assert.Nil(t, cm.registry.Component("sequenced"))
+	assert.NotContains(t, cm.components, "sequenced")
+}
+
+func TestReplacementOldStopFailureAbortsCandidateAndRetainsOldGenerationDegraded(t *testing.T) {
+	cm, old, replacement, _, oldManaged, configs := newStaleGenerationTestManager(t)
+	stopErr := errors.New("old generation still draining")
+	old.stopErr = stopErr
+	cm.started.Store(true)
+
+	err := cm.restartComponentWithNewConfig(
+		context.Background(), "sequenced", configs["middle"], oldManaged)
+	var retirementErr *replacementRetirementError
+	require.ErrorAs(t, err, &retirementErr)
+	require.ErrorIs(t, err, stopErr)
+	assert.Equal(t, "replacement_aborted_old_retirement_failed", restartFailureAction(err))
+	assert.Equal(t, 0, replacement.startCalls, "replacement candidate must not Start while old retirement is unresolved")
+	assert.Equal(t, 1, replacement.stopCalls, "aborted initialized candidate must be cleaned up")
+	assert.Same(t, old, cm.registry.Component("sequenced"))
+	managed := cm.components["sequenced"]
+	assert.Same(t, old, managed.Component)
+	assert.Equal(t, component.StateFailed, managed.State)
+	assert.ErrorIs(t, managed.LastError, stopErr)
+}
+
+func TestRemovalStopFailureLeavesComponentAndRegistryAdmitted(t *testing.T) {
+	cm, old, _, _, oldManaged, _ := newStaleGenerationTestManager(t)
+	stopErr := errors.New("component still owns listener")
+	old.stopErr = stopErr
+
+	err := cm.stopAndRemoveComponent(context.Background(), "sequenced", oldManaged)
+	require.ErrorIs(t, err, stopErr)
+	assert.Same(t, old, cm.registry.Component("sequenced"))
+	managed := cm.components["sequenced"]
+	assert.Same(t, oldManaged, managed)
+	assert.Equal(t, component.StateFailed, managed.State)
+	assert.ErrorIs(t, managed.LastError, stopErr)
+}
+
+func newStaleGenerationTestManager(t *testing.T) (
+	*ComponentManager,
+	*lifecycleGenerationProbe,
+	*lifecycleGenerationProbe,
+	*lifecycleGenerationProbe,
+	*component.ManagedComponent,
+	map[string]types.ComponentConfig,
+) {
+	t.Helper()
+	registry := component.NewRegistry()
+	probes := map[string]*lifecycleGenerationProbe{
+		"old":    {baseDiscoverable: baseDiscoverable{name: "sequenced"}},
+		"middle": {baseDiscoverable: baseDiscoverable{name: "sequenced"}},
+		"final":  {baseDiscoverable: baseDiscoverable{name: "sequenced"}},
+	}
+	require.NoError(t, registry.RegisterWithConfig(component.RegistrationConfig{
+		Name: "sequenced", Type: "processor",
+		Factory: func(raw json.RawMessage, _ component.Dependencies) (component.Discoverable, error) {
+			var cfg struct {
+				ID string `json:"id"`
+			}
+			if err := json.Unmarshal(raw, &cfg); err != nil {
+				return nil, err
+			}
+			return probes[cfg.ID], nil
+		},
+	}))
+	configs := make(map[string]types.ComponentConfig, len(probes))
+	for id := range probes {
+		configs[id] = types.ComponentConfig{
+			Name: "sequenced", Type: types.ComponentTypeProcessor, Enabled: true,
+			Config: json.RawMessage(fmt.Sprintf(`{"id":%q}`, id)),
+		}
+	}
+	client := new(natsclient.Client)
+	_, err := registry.CreateComponent(
+		"sequenced", configs["old"], component.Dependencies{NATSClient: client})
+	require.NoError(t, err)
+	oldManaged := &component.ManagedComponent{
+		Component: probes["old"], State: component.StateStarted, Config: configs["old"],
+	}
+	cm := &ComponentManager{
+		BaseService: NewBaseServiceWithOptions("component-manager", nil),
+		registry:    registry, natsClient: client,
+		components: map[string]*component.ManagedComponent{"sequenced": oldManaged},
+	}
+	return cm, probes["old"], probes["middle"], probes["final"], oldManaged, configs
 }
 
 // TestHandlePutComponentConfig_RefreshesGuardBaseline locks the gh#520 finding-#1

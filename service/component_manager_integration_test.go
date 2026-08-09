@@ -260,13 +260,11 @@ func TestServiceManagerMandatoryService(t *testing.T) {
 			InstanceID:  "test-001",
 			Environment: "test",
 		},
+		// Do NOT include component-manager in config. Explicitly opt out of the
+		// default-on optional metrics service so this fixture's registry can
+		// intentionally contain only the mandatory component-manager constructor.
 		Services: types.ServiceConfigs{
-			// Do NOT include component-manager in config
-			"metrics": types.ServiceConfig{
-				Name:    "metrics",
-				Enabled: true,
-				Config:  json.RawMessage(`{"port": 9090}`),
-			},
+			"metrics": {Enabled: false},
 		},
 	}, testClient.Client, slog.Default())
 	require.NoError(t, err)

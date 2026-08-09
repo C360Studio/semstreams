@@ -347,8 +347,9 @@ func (ml *MessageLogger) handleGetSubjects(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Get current subjects
-	subjects := ml.config.MonitorSubjects
+	// Return the actual race-safe resolved subscription set. Overlap handling
+	// is exposed alongside this set by the statistics endpoint.
+	subjects, _ := ml.subjectInspection()
 
 	// Return JSON response
 	w.Header().Set("Content-Type", "application/json")

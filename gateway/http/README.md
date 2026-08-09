@@ -468,5 +468,3 @@ task integration:start
 
 - [Gateway Package](../README.md) - Gateway interface and types
 - [EMBEDDING_ARCHITECTURE.md](../../docs/EMBEDDING_ARCHITECTURE.md) - Semantic search architecture
-- [configs/HTTP_GATEWAY_USAGE.md](../../configs/HTTP_GATEWAY_USAGE.md) - Usage guide with curl examples
-- [configs/http-gateway-semantic-search.json](../../configs/http-gateway-semantic-search.json) - Example configuration

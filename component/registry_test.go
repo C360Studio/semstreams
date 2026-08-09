@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"log/slog"
 	"testing"
+
+	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/types"
 )
 
 // TestListFactories_PreservesSchemaAndName verifies that ListFactories copies
@@ -30,7 +33,7 @@ func TestListFactories_PreservesSchemaAndName(t *testing.T) {
 
 	// Mock factory function
 	mockFactory := func(_ json.RawMessage, _ Dependencies) (Discoverable, error) {
-		return nil, nil
+		return &SimpleMockComponent{name: "my-instance", config: map[string]any{"type": "processor"}}, nil
 	}
 
 	reg := &Registration{
@@ -107,7 +110,7 @@ func TestRegisterWithConfig_DependenciesRoundTrip(t *testing.T) {
 	registry := NewRegistry()
 
 	mockFactory := func(_ json.RawMessage, _ Dependencies) (Discoverable, error) {
-		return nil, nil
+		return &SimpleMockComponent{name: "my-instance", config: map[string]any{"type": "processor"}}, nil
 	}
 
 	err := registry.RegisterWithConfig(RegistrationConfig{
@@ -134,11 +137,12 @@ func TestRegisterWithConfig_DependenciesRoundTrip(t *testing.T) {
 		t.Errorf("Registration.Dependencies: got %v, want [%q]", reg.Dependencies, DepModelRegistry)
 	}
 
-	// Simulate an instance being tracked by the registry (mirrors what
-	// CreateComponent does internally via instanceFactories).
-	registry.mu.Lock()
-	registry.instanceFactories["my-instance"] = "reg-with-deps"
-	registry.mu.Unlock()
+	_, err = registry.CreateComponent("my-instance", types.ComponentConfig{
+		Name: "reg-with-deps", Type: types.ComponentTypeProcessor, Enabled: true, Config: json.RawMessage(`{}`),
+	}, Dependencies{NATSClient: new(natsclient.Client)})
+	if err != nil {
+		t.Fatalf("CreateComponent: %v", err)
+	}
 
 	deps := registry.InstanceDependencies("my-instance")
 	if len(deps) != 1 || deps[0] != DepModelRegistry {

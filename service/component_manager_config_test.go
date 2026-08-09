@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -409,9 +410,11 @@ func TestComponentManagerConfigResilience(t *testing.T) {
 	defer testClient.Terminate()
 
 	// Register a factory that can fail
-	failOnCreate := false
+	var failOnCreate atomic.Bool
+	var factoryAttempts atomic.Uint64
 	testFactory := func(config json.RawMessage, _ component.Dependencies) (component.Discoverable, error) {
-		if failOnCreate {
+		factoryAttempts.Add(1)
+		if failOnCreate.Load() {
 			return nil, assert.AnError
 		}
 		return &TestMockComponent{
@@ -475,13 +478,12 @@ func TestComponentManagerConfigResilience(t *testing.T) {
 	require.NoError(t, err)
 	defer cm.Stop(5 * time.Second)
 
-	// Give the config watcher time to start
-	time.Sleep(500 * time.Millisecond)
 	t.Logf("ComponentManager started with config watching enabled")
 
 	t.Run("Component creation failure doesn't crash system", func(t *testing.T) {
 		// Make factory fail
-		failOnCreate = true
+		failOnCreate.Store(true)
+		failedAttemptBaseline := factoryAttempts.Load()
 
 		// Try to add component that will fail
 		failConfig := &config.Config{
@@ -510,7 +512,11 @@ func TestComponentManagerConfigResilience(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		time.Sleep(500 * time.Millisecond)
+		require.Eventually(t, func() bool {
+			_, present := cm.ListComponents()["fail-component"]
+			return factoryAttempts.Load() > failedAttemptBaseline && !present
+		}, 5*time.Second, 20*time.Millisecond,
+			"factory failure should be observed without admitting the component")
 
 		// System should still be operational
 		components := cm.ListComponents()
@@ -520,7 +526,8 @@ func TestComponentManagerConfigResilience(t *testing.T) {
 		assert.NotContains(t, components, "fail-component", "Failed component should not be in list")
 
 		// Now fix the factory and retry
-		failOnCreate = false
+		failOnCreate.Store(false)
+		successAttemptBaseline := factoryAttempts.Load()
 
 		// Push same config again via KV store
 		for name, compConfig := range failConfig.Components {
@@ -530,11 +537,10 @@ func TestComponentManagerConfigResilience(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		time.Sleep(500 * time.Millisecond)
-
-		// Component should now be created
-		components = cm.ListComponents()
-		assert.Contains(t, components, "fail-component", "Component should be created after retry")
+		require.Eventually(t, func() bool {
+			_, present := cm.ListComponents()["fail-component"]
+			return factoryAttempts.Load() > successAttemptBaseline && present
+		}, 5*time.Second, 20*time.Millisecond, "component should be created after retry")
 	})
 }
 

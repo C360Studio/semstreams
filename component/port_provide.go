@@ -7,13 +7,9 @@ import "fmt"
 // flowgraph marker for store ownership and complements the StoreProvider
 // interface the ComponentManager reads to populate the shared StoreRegistry.
 //
-// Non-exclusive by design. Duplicate-ownership detection lives at
-// registry-population time (storeregistry.Register errors when two live
-// components claim the same instance), NOT via port-conflict exclusivity:
-// the ComponentManager clears cm.resources only on RemoveComponent, not on the
-// reconfig/reconcile-stop paths, so an exclusive port would make a restarted
-// owner collide with its own stale entry and silently fall back to old config
-// (ADR-063 B1). Keeping this non-exclusive avoids that landmine.
+// Non-exclusive by design. Duplicate live Store ownership is owner-local
+// runtime state and remains enforced by storeregistry.Register; it is not a
+// declaration-derived exclusive-resource claim.
 type StoreProvidePort struct {
 	Instance string `json:"instance"` // StorageInstance name this component owns
 }
