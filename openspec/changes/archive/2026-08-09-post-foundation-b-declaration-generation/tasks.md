@@ -1,7 +1,7 @@
 # Tasks — Post-Foundation-B declaration generation
 
-Implementation is active. Slices A, B, C, and D are complete and independently approved. Slice E verification is
-complete through E.9; E.10 remains unchecked for merged-tree closeout and archive.
+Implementation and merged-tree verification are complete. Slices A through E are independently approved; E.10 closed
+against merged `main` before archive.
 
 Each slice receives independent SemStreams review before the next starts. Later slices MUST NOT reopen
 owner-accepted rulings absent implementation evidence of an internal contradiction.
@@ -243,7 +243,7 @@ subjects, ran the exact D.5/D.6 searches, and confirmed no exported or runtime s
 - [x] E.9 Publish the owner-approved communicate-only downstream migration notice after framework gates. Do not perform
   an exhaustive parity audit or implement downstream migrations here; downstream teams own tag adoption, compilation,
   explicit migration fixes, flow validation, and product E2E.
-- [ ] E.10 Re-run all negative searches on merged tree and archive only when task truth/evidence complete.
+- [x] E.10 Re-run all negative searches on merged tree and archive only when task truth/evidence complete.
 
 Slice E.1-E.7 evidence baseline: clean `13157ff0633655de593771bda61ed925b40442c8`. Docker commands required
 sandbox escalation for environment permission; this was not a code failure.
@@ -294,12 +294,20 @@ guidance for the deleted `AddComponentNode` API with the supported root-owned `C
 A final medium finding about callback/test ordering was corrected and independently confirmed closed. Final
 `semstreams-reviewer` disposition: `APPROVE`.
 
-Focused post-review verification passed under race for the new integration regression and for `./service` plus
-`./component/flowgraph`; focused vet, `git diff --check`, and strict OpenSpec validation (37/37) also pass. E.10 remains
-excluded until merged-tree negative searches and archive readiness are due. The final fixed tree also passed
+Focused pre-merge review verification passed under race for the new integration regression and for `./service` plus
+`./component/flowgraph`; focused vet, `git diff --check`, and strict OpenSpec validation (37/37) also passed. At that
+pre-merge checkpoint, E.10 was intentionally excluded until merged-tree negative searches and archive readiness were
+due. The final fixed tree also passed
 `task lint`, `task build`, `go test -race ./...`, and `task test:integration`, with `natsclient` longest at 97.474s.
 It also passed `task schema:generate` with no `schemas/` or `specs/` drift, `go test ./test/contract/...`, and
 `task e2e:core` 3/3. No commit or push is part of this evidence update.
+
+E.10 merged-tree evidence: PR #915 merged as `8e6ce734126e51debd1e8f203aa7a753001fc164`. On a clean branch rooted at
+that `origin/main`, the exact D.5 production searches and D.6 production scope search returned zero matches for all ten
+classes: identity-free admission; ComponentManager parallel resource tracking or port re-reads; dynamic service
+mutation; `ServiceConfig.Name`; retired inner service knobs; compatibility shims; durable declaration stores; Registry
+group/cohort/readiness fields; speculative restart outcomes; and forbidden stream-planning status, scheduler, dynamic
+mux, hierarchy, research, or retention scope. Task truth was complete before invoking `openspec archive`.
 
 ## Slice C owner-ruling conformance
 
