@@ -11,6 +11,12 @@ of an internal contradiction and a new owner ruling.
 - [x] P.3 Validate every target-state delta strictly before production implementation begins.
 - [x] P.4 Obtain independent review of the promoted OpenSpec change.
 
+### Slice E promotion review evidence (2026-08-10)
+
+- Independent review approved the Slice E promotion after task truth was corrected, archive language was bounded to
+  research projection/result truth, and the exported `graph.QueryResponse.RequestID` break was added to adopter and
+  downstream migration guidance.
+
 ## A. Gateway surface and error truth
 
 - [x] A.1 Add failing conformance tests for exactly nineteen introspected root fields, the exact fourteen graph-query
@@ -105,21 +111,32 @@ of an internal contradiction and a new owner ruling.
 - Slice D changes only the optional-summary consumer serving view. It does not close #609's producer cold-start
   remainder, #608/#829 producer and content-quality work, or #710's future measurement-gated retention design.
 
-## E. Embedded decoding, result truth, and fusion preservation
+## E. Bounded embedded decoding and truthful query outcomes
 
-- [ ] E.1 Migrate every admitted research and fusion adapter to exactly one `graph.UnwrapQueryResponse` pass before
-  operation decoding; accept equivalent bare and enveloped production fixtures.
-- [ ] E.2 Preserve full entities, entity digests, community summaries, synthesized answer, and degradation metadata;
-  do not collapse a successful representation into count-only or invented empty success.
-- [ ] E.3 Populate a non-empty canonical terminal strategy on every successful global-search outcome, including empty
-  and fallback success; report the strategy that produced the returned result.
-- [ ] E.4 Preserve `pkg/fusion/fusionnats.Client`, `New(requester, timeout)`, optional Close, lazy graph-index
-  readiness, downstream role, and exactly six operations.
-- [ ] E.5 Exercise all six fusion operations plus readiness with real producer shapes; decode entity as
-  `graph.ExactEntity`, preserving revision, ordering, similarity, missing reasons, and relationship direction.
-- [ ] E.6 Keep libraries free of component ports; the actual embedding component owns six required outputs and its
-  `GRAPH_STATUS` KV-read declaration.
-- [ ] E.7 Run focused race/integration and semantic/research E2E gates and obtain independent review.
+- [ ] E.1 Add failing focused tests showing: full-entity-only searchGraph success becomes zero research candidates;
+  fusion Entity rejects the real ExactEntity shape; successful global-search strategies are blank; and temporal/spatial
+  `id` rows become zero IDs.
+- [ ] E.2 Pass each success through `graph.UnwrapQueryResponse` exactly once at the research-classify,
+  research-execute, and fusionnats request/reply boundaries. Prove current bare and equivalent standard-enveloped
+  fixtures agree without changing producer declarations.
+- [ ] E.3 Project validated full entities into the existing research Candidate contract only when digests are absent.
+  Preserve order, limit, digest behavior, and degradation. Do not widen CandidateSet or Evidence.
+- [ ] E.4 Decode fusion Entity replies as `graph.ExactEntity`; validate matching entity and nonzero revision, then
+  project only ID and triples into the existing `fusion.Entity`. Preserve the six-method interface, six request-subject
+  mapping, constructor, lazy readiness, ordering, similarity, missing reasons, and relationship direction.
+- [ ] E.5 Decode temporal and spatial result IDs from canonical `id`; populate the existing terminal strategy on every
+  successful global-search path, including empty and fallthrough success.
+- [ ] E.6 Delete the unreachable private `similaritySearch` wrapper decoder and tests. Delete the unused
+  `QueryResponse.RequestID`, discriminator key, and request-ID envelope fixtures. Add no alias or compatibility path.
+- [ ] E.7 Remove every claim that a nonexistent embedding/fusion-host component owns six fusion outputs or readiness.
+  Make no Slice E component, configuration, Registry-count, schema, service, bucket, stream, or readiness change.
+- [ ] E.8 Extend the existing research-graph E2E to read `research.classify.candidate-count` from the seeded loop's
+  production classify result and fail unless it is a parsed integer greater than zero. In the existing
+  `test-http-gateway` stage, add `strategy` to the controlled `globalSearch("robot warehouse", level:0)`
+  selection/response, require exactly `graphrag`, and make every earlier marshal/request/transport/status/read/parse/
+  GraphQL failure return a hard error so the assertion cannot false-green. Run `task e2e:research-graph`,
+  `task e2e:statistical`, focused package tests under race, the focused real-NATS fusion integration test, and
+  independent SemStreams review; add no stage or tier.
 
 ## F. Complexity deletion
 
@@ -142,10 +159,11 @@ of an internal contradiction and a new owner ruling.
 - [ ] G.1 Confirm the graph-index predicate correction documents the shipped raw nine-token `PREDICATE_INDEX`, absent
   `PREDICATE_CATALOG`, NAME hashing, and INCOMING-only reversible predicate hex without runtime index change.
 - [ ] G.2 On archive, update the current `graph-query` Purpose to name the admitted operation family, versioned port
-  contract, stable responders, generation-safe optional-view caches, success decoding, and representation
-  preservation, while explicitly excluding a public subject catalog and general embedded client.
+  contract, stable responders, generation-safe optional-view caches, success decoding, bounded research projection,
+  and truthful query outcomes, while explicitly excluding a public subject catalog and general embedded client.
 - [ ] G.3 Publish one downstream migration notice covering removed GraphQL fields/spellings, deleted Go/tool surfaces,
-  `graph.query/v1` port declarations, and retryable `localSearch`; perform no downstream implementation or audit.
+  deleted `graph.QueryResponse.RequestID`, `graph.query/v1` port declarations, and retryable `localSearch`; perform no
+  downstream implementation or audit.
 - [ ] G.4 Produce a fourteen-row ruling-conformance table mapping every ruling to final `file:line` evidence or an
   owner-approved deviation; no sentence-only conformance claim is sufficient.
 - [ ] G.5 Run the correction-propagation sweep over every change artifact, task, migration note, schema, fixture, and

@@ -132,49 +132,93 @@ metric contract, configuration, or infrastructure.
 - **THEN** the view classifies the key as poison and graph-query uses the statistical summary
 - **AND** unrelated valid enhanced summaries remain readable
 
-### Requirement: Framework-owned embedded consumers decode one success envelope and preserve representations
+### Requirement: Slice E research adapters decode one success envelope
 
-Every framework-owned embedded graph-query consumer SHALL invoke `graph.UnwrapQueryResponse` exactly once before
-decoding its operation payload. Equivalent valid bare and enveloped successes SHALL decode to the same typed result.
-An envelope-shaped inner payload SHALL not lose a second layer.
+The research-classify `searchGraph` adapter and research-execute graph-query adapter SHALL pass each successful
+request/reply body through `graph.UnwrapQueryResponse` exactly once at the adapter request boundary before decoding the
+operation payload. This is consumer-side tolerance only; current producer payload and envelope declarations SHALL
+remain unchanged.
 
-Each consumer SHALL preserve every successful representation its operation admits: full entities, entity digests,
-community summaries, synthesized answer, and degradation metadata. It SHALL NOT turn a non-empty successful
-representation into count-only text or invented empty success. Errors remain errors.
+An envelope-shaped inner payload SHALL lose no second layer. Classified and transport errors SHALL remain errors.
 
-#### Scenario: adapter accepts both current success forms
+#### Scenario: current bare and equivalent enveloped replies agree
 
-- **GIVEN** equivalent valid bare and enveloped producer-shape fixtures
-- **WHEN** an admitted adapter decodes each
-- **THEN** both yield the same typed result
-- **AND** an envelope-shaped inner payload loses no second layer
+- **GIVEN** a current production payload represented bare and inside one valid `graph.QueryResponse`
+- **WHEN** either research adapter decodes it
+- **THEN** both forms produce the same typed projection
+- **AND** exactly one envelope is removed
 
-#### Scenario: full entities need no digest fallback
+### Requirement: Full-entity search success remains non-empty through research classification
 
-- **GIVEN** a successful search result containing full entities but no digests
-- **WHEN** a framework adapter projects the result
-- **THEN** the full entities remain available to its caller
-- **AND** the adapter does not replace them with only a result count
+A successful `searchGraph` reply containing validated full entities and no entity digests SHALL project those entities
+to the existing `research.Candidate` contract in response order and under the existing caller limit. The projection
+SHALL carry only facts supported by the entity and existing Candidate fields. It SHALL NOT invent labels, relevance,
+snippets, or other unavailable values.
 
-### Requirement: Every successful global search reports its terminal strategy
+Digest-bearing behavior SHALL remain unchanged. CandidateSet and Evidence SHALL NOT gain fields merely to retain
+representations for which they have no current receiver.
 
-Every successful `GlobalSearchResponse` SHALL carry a non-empty canonical `strategy`, including empty success. A
-fallback SHALL report the strategy that produced the returned result, not the abandoned initial choice. Errors SHALL
-remain errors rather than acquiring an invented strategy-bearing empty success.
+#### Scenario: full entities do not become zero candidates
 
-#### Scenario: classifier choice falls through
+- **GIVEN** a successful response with non-empty full entities and no digests
+- **WHEN** research classify projects candidates
+- **THEN** every retained valid entity contributes one candidate
+- **AND** the result is not replaced by an empty candidate set or count-only claim
 
-- **GIVEN** an initial strategy cannot produce a result
-- **WHEN** a lower-tier fallback succeeds
-- **THEN** `strategy` names the fallback
-- **AND** it is neither blank nor the abandoned choice
+### Requirement: Successful global search reports the terminal strategy
 
-#### Scenario: empty success remains truthful
+Every successful `GlobalSearchResponse`, including empty success, SHALL carry a non-empty strategy naming the handler
+that produced the returned result. An entity, path, temporal, or spatial route that falls through to GraphRAG SHALL
+report `graphrag`; a successful searchGraph semantic fallback SHALL report `semantic_fallback`. Errors SHALL remain
+errors.
 
-- **GIVEN** the terminal strategy executes successfully and finds no result
-- **WHEN** graph-query returns the successful empty response
-- **THEN** `strategy` names that terminal strategy
-- **AND** emptiness is not represented by a blank strategy
+#### Scenario: classifier route falls through
+
+- **GIVEN** the initially selected route cannot produce a result
+- **WHEN** GraphRAG returns the successful result
+- **THEN** strategy is `graphrag`
+- **AND** it is not the abandoned route
+
+#### Scenario: empty success names its executor
+
+- **GIVEN** a strategy executes successfully and finds no results
+- **WHEN** graph-query returns the empty success
+- **THEN** strategy identifies that strategy
+- **AND** it is not blank
+
+### Requirement: Temporal and spatial composition consumes canonical result IDs
+
+Graph-query temporal and spatial global-search strategies SHALL read entity IDs from the producers' existing `id`
+field. They SHALL NOT require an `entity_id` alias or change either producer's wire response.
+
+#### Scenario: specialized index result hydrates its entity
+
+- **GIVEN** a valid non-empty temporal or spatial producer response using `id`
+- **WHEN** the corresponding global-search strategy consumes it
+- **THEN** the ID is retained for entity hydration
+- **AND** the response is not interpreted as an empty match set
+
+### Requirement: The standard query success envelope has no phantom correlation field
+
+`graph.QueryResponse` SHALL contain only `data` and `timestamp`. `graph.UnwrapQueryResponse` SHALL use that closed key
+set. Query success correlation SHALL NOT expose an unused `RequestID`; mutation request correlation is unchanged.
+
+#### Scenario: envelope discriminator follows the real envelope
+
+- **WHEN** the exported query success type and discriminator keys are inspected
+- **THEN** neither contains `RequestID` or `request_id`
+- **AND** data-plus-timestamp envelopes still unwrap exactly once
+
+### Requirement: SearchGraph fallback accepts only its reachable semantic reply
+
+The private searchGraph semantic fallback SHALL decode the raw graph-embedding NATS search response. It SHALL NOT
+retain a `similaritySearch` GraphQL wrapper decoder or compatibility test.
+
+#### Scenario: removed gateway spelling has no private decoder
+
+- **WHEN** gateway and graph-query production code are searched
+- **THEN** `similaritySearch` is absent
+- **AND** raw semantic fallback remains covered
 
 ### Requirement: Embedded graph access uses operation-specific adapters, not a general client
 

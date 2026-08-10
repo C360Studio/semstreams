@@ -26,10 +26,13 @@ research orchestration, or readiness.
   `similaritySearch` gateway spelling with no alias.
 - Preserve existing classified error class and non-empty code in GraphQL error extensions without changing status or
   inventing authority.
-- Standardize framework-owned embedded consumers on one `graph.UnwrapQueryResponse` pass and preserve every admitted
-  successful representation.
+- Use one `graph.UnwrapQueryResponse` pass at the research-classify, research-execute, and fusion request/reply
+  boundaries. Preserve full-entity-only research classification through the existing Candidate contract without
+  widening receiver-less projections.
 - Require every successful global-search response to report its actual terminal strategy.
 - Preserve `pkg/fusion/fusionnats.Client`, its constructor, six operations, lazy readiness, and downstream role.
+- **BREAKING** Delete the unreachable private `similaritySearch` wrapper and the unused query-success `RequestID`
+  field without compatibility.
 - **BREAKING** Delete only the unused mixed direct-KV `graph/query.Client` cohort.
 - **BREAKING** Delete the unadmitted agentic `search_graph` and `summarize_graph` wrappers completely.
 - Correct stale graph-index predicate-layout text to the already-shipped raw canonical representation; runtime index
@@ -46,8 +49,8 @@ research orchestration, or readiness.
 
 - `component-discovery`: Adds the exact versioned graph-query provider/consumer port topology.
 - `graph-query`: Adds the admitted operation family, stable responder, generation-safe partition cache, shared
-  serving-view summary reader, canonical success decoding and representation preservation, terminal strategy, and
-  embedded-client boundary.
+  serving-view summary reader, bounded research success decoding, truthful terminal strategy and specialized-index ID
+  projection, stale query compatibility deletion, and the embedded-client boundary.
 - `agentic-tools`: Removes two unadmitted query wrappers and their complete exported/configuration surfaces.
 - `fusion`: Preserves the operation-specific NATS adapter while converging reply decoding on production shapes.
 - `graph-index`: Corrects stale predicate representation text only.
@@ -55,9 +58,10 @@ research orchestration, or readiness.
 ## Impact
 
 The implementation touches graph-query lifecycle and handlers, graph-gateway routing/error projection, research and
-fusion adapters, component declarations and shipped configurations, agentic tool registrations, tests, generated
-schemas, and adopter documentation. The sixteen existing graph-query subjects and producer success payloads remain
-wire-stable except that successful global search fills its existing `strategy` field truthfully.
+fusion adapters, component declarations and shipped configurations outside Slice E, agentic tool registrations, tests,
+generated schemas, and adopter documentation. Slice E adds no component, configuration, Registry, or readiness change.
+The sixteen existing graph-query subjects and producer success payloads remain wire-stable except that successful
+global search fills its existing `strategy` field truthfully.
 
 Remote applications use the admitted GraphQL fields. Embedded framework consumers use named operation-specific
 adapters over declared request/reply ports. Downstream projects receive the break list and own their dependency bump,

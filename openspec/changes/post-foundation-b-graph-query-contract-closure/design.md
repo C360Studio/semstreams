@@ -2,7 +2,9 @@
 
 **Status:** Owner-approved target state. The original inventory and design review passed before the owner approved all
 fourteen rulings on 2026-08-09. The reduced Slice D reassessment passed independent planning review, and its
-implementation passed independent `semstreams-reviewer` review on 2026-08-10.
+implementation passed independent `semstreams-reviewer` review on 2026-08-10. The bounded Slice E reassessment passed
+independent pre-owner design review, and the owner approved all eight Slice E rulings on 2026-08-10; implementation
+remains pending.
 
 **Promoted from:** `docs/proposals/post-foundation-b-graph-query-contract-closure-roadmap.md`, SHA-256
 `ff23db51ce7bf6e3d45da09a1706bf70ee548ae5e6aa2b12201ceeae64c4f343`.
@@ -16,6 +18,18 @@ implementation passed independent `semstreams-reviewer` review on 2026-08-10.
 SHA-256 `6a28a0fe9349218baf07bf6d4d79bd89c6bc4ad483fa937e575974d30f499a6b`. The 2026-08-10 owner ruling supersedes only
 the original optional-summary generation-supervisor mechanism. Its capture-time status remains in the hash-pinned
 artifact; the completed planning and implementation review status is recorded here and in `tasks.md`.
+
+**Accepted Slice E inventory:**
+`docs/proposals/post-foundation-b-slice-e-embedded-decoding-result-truth-inventory.md`, SHA-256
+`2033480aa58b9cb8906d4efd08e57d5e19fa71f0050c2cd98cd873c2f67bcf5e`.
+
+**Reviewed Slice E design:**
+`docs/proposals/post-foundation-b-slice-e-bounded-embedded-decoding-design.md`, SHA-256
+`49e838133a2eb785f66314bf4a625b8e6f4888783f51a5d7ee6e3ea72292cc42`. The hash-pinned artifact retains its
+capture-time draft status. Independent design review passed, and the owner approved its eight rulings on 2026-08-10.
+The approved Slice E target below supersedes only the broader embedded-decoder, receiver-less representation,
+fusion-host port, private `similaritySearch`, phantom query `RequestID`, and Slice E gate claims in the original
+roadmap.
 
 This roadmap is re-derived from the accepted inventory. It does not resume superseded GS sequencing or the rejected
 `Ports() PortConfig` shape.
@@ -63,6 +77,7 @@ The bounded problem is query-contract drift, not missing authority or a missing 
 | Embedded framework service | Consumer-local subject and decoder | Reply drift accepted silently | Named adapter plus canonical envelope decoder |
 | Agentic tool extension | Two unused shared wrappers have undeclared query dependencies; local overrides cannot repair captured ports | Discovery/execution/port truth can disagree | Delete those wrappers; preserve unrelated local names |
 | Aggregate-client caller | Direct KV, watcher/cache/readiness/poison | Adds unused process-lifetime state | Delete unused exported aggregate surface |
+| External Go importer of `graph.QueryResponse` | May read or set the unused `RequestID` field, including in a keyed struct literal | Field selection or keyed literal fails compilation after the clean break | Remove `RequestID` use; query-success envelopes contain only data and timestamp; compiler and migration notice identify the break |
 | Readiness/config author | Producer keys and consumer folding | Clustering has no key | Observe actual query cache locally unless evidence requires producer status |
 | Component/port author | Versioned family, exact consumers, tool-conditioned outputs | Registry rejects undeclared/mismatched use; excluded tools claim no dependency | Add only `graph.query/v1`; no config knob, service, bucket, or stream |
 
@@ -156,9 +171,9 @@ either deleted key become invalid and fail existing closed-set validation until 
 agent-facing graph search owns a distinct tool/component contract; this slice does not add arbitrary dependency ports,
 executor metadata, or a model-facing discovery redesign.
 
-Libraries and E2E harnesses do not implement `component.Discoverable` and synthesize no Registry ports.
-`pkg/fusion/fusionnats.Client` owns adapter behavior, while a component embedding it owns six required outputs
-(`byName`, `prefix`, `semantic`, `entity`, `batch`, `relationships`) plus a `GRAPH_STATUS` KV-read declaration.
+Libraries and E2E harnesses do not implement `component.Discoverable` and synthesize no Registry ports. Slice E adds no
+port or configuration requirement for `pkg/fusion/fusionnats.Client` because no current in-repo component constructs
+it. Research classify and execute retain their already-admitted exact graph-query outputs.
 
 The frozen scope contains eleven graph-query, eight graph-gateway, two research-classify, two research-execute, and
 nine agentic-tools instances. None of the nine agentic allowlists admits either query-dependent tool. Raw config gains
@@ -281,34 +296,45 @@ classified failures retain GraphQL HTTP 200; transport timeout/unavailability re
 `writeGraphQLError` receives the error value rather than only rendered text so `errors.As` can observe existing machine
 authority.
 
-### One reply-envelope rule for embedded consumers
+### Bounded embedded decoding and truthful query outcomes
 
-Every admitted embedded adapter invokes `graph.UnwrapQueryResponse` exactly once before operation payload decoding.
-Existing bare and enveloped successes remain accepted; producers are not forced into a new envelope.
+Slice E owns only the research classify adapter, research execute adapter, `fusionnats.Client`, and the graph-query
+outcome defects proven by the accepted Slice E inventory. It does not normalize every reply interpreter in the
+repository.
 
-Research classify/execute and fusion migrate together. Request/result projection may remain local; envelope detection
-may not. Each adapter exposes only its named operation. The two unadmitted agentic search/summary wrappers are deleted,
-not migrated. Private components may compose narrow interfaces, but SemStreams adds no replacement aggregate client.
+Each of the three in-slice request/reply adapter boundaries removes at most one recognized `graph.QueryResponse`
+envelope through `graph.UnwrapQueryResponse` before decoding the operation payload. Current producer envelope
+declarations remain unchanged. Bare and equivalent standard-enveloped fixtures prove consumer tolerance; they do not
+authorize producers to switch formats. `fusionnats.Status` remains a `GRAPH_STATUS` KV read and is outside this rule.
 
-Named embedded adapters declare their operation through the component port contract and use NATS request/reply as the
-transport. Raw KV and free-standing subject literals are not fallback application APIs. Remote callers use admitted
-GraphQL operations. No MCP surface is added.
+Research classify retains its existing `CandidateSet` contract. Digest-bearing responses retain current behavior.
+When a successful `searchGraph` reply contains full entities but no digests, the adapter validates the entities and
+projects them, in response order and under the existing limit, into candidates. It carries only facts supported by the
+entity and existing Candidate fields. Research execute retains its current Evidence projection. This slice does not
+widen `Candidate`, `CandidateSet`, `Evidence`, `fusion.Entity`, or `RetrievalClient` to receive facts they do not
+currently model.
 
-### Query outcomes report what happened
+Graph-query decodes temporal and spatial result IDs using the producers' canonical `id` spelling. Every successful
+global-search response reports the terminal strategy that returned it, including empty success and fallthrough. An
+entity, path, temporal, or spatial route that falls through reports `graphrag`; successful searchGraph semantic
+fallback reports `semantic_fallback`. No new strategy type or exported enum is introduced.
 
-Every successful `GlobalSearchResponse` carries a non-empty canonical `strategy` naming the terminal strategy that
-produced the response, including fallback and empty success. Existing vocabulary is retained. Errors remain errors;
-adapters do not invent empty successes.
+The unsupported private GraphQL `similaritySearch` fallback shape is deleted; `searchGraph` fallback accepts only the
+actual raw graph-embedding response. The unused `QueryResponse.RequestID` field and discriminator key are deleted.
+Mutation correlation remains unchanged. No alias, compatibility path, producer envelope change, or new public client
+is added.
 
-Search consumers preserve every successful representation they claim:
+The existing research-graph E2E reads the production classify result stamped on its seeded loop entity and requires
+`research.classify.candidate-count` to parse as an integer greater than zero. Focused adapter fixtures, not pipeline
+completion, prove the full-entity-only representation path.
 
-- full `Entities`;
-- `EntityDigests`;
-- `CommunitySummaries`;
-- synthesized `Answer`; and
-- degradation metadata.
-
-Research adapters test full-entity-only, digest-only, summary-only, empty, bare, enveloped, and degraded fixtures.
+The existing `test-http-gateway` stage provides the live strategy proof through its controlled
+`globalSearch("robot warehouse", level:0)` request. It selects and decodes `strategy`, requires exactly `graphrag`, and
+hard-fails every earlier marshal, request construction, transport, non-200 status, body-read, JSON-decode, and
+GraphQL-error branch so the assertion cannot false-green. This intentionally turns the existing gateway smoke probe
+into a contract gate in both variants where it already runs. It adds no stage, tier, hit-count minimum, answer-quality,
+latency, semantic-model, or other unrelated requirement. Focused graph-query table tests prove all other direct,
+empty, and fallthrough strategy branches; the separate `executeTestGraphRAGGlobal` path is not the proof seam.
 
 ### Retire only the provisional mixed direct-KV aggregate client
 
@@ -322,10 +348,12 @@ or compatibility period.
 
 `fusionnats.Client` remains the admitted NATS implementation of `fusion.RetrievalClient`, with existing
 `New(requester, timeout)`, optional Close, lazy GRAPH_STATUS graph-index readiness, downstream role, and six operations:
-byName, prefix, semantic, entity, batch, relationships. Every reply passes through `graph.UnwrapQueryResponse` once.
-Producer-shape fixtures preserve rank/order, similarity presence, ExactEntity validation, batch missing reasons/order,
-relationship direction, and raw readiness. The old entity fixture expecting bare EntityState becomes production
-`graph.ExactEntity`. A library claims no component ports; its embedding component owns declarations.
+byName, prefix, semantic, entity, batch, relationships. Every request/reply success passes through
+`graph.UnwrapQueryResponse` once; Status remains KV state. Entity decodes `graph.ExactEntity`, validates a matching
+valid entity and nonzero revision, then projects only ID and triples into the existing `fusion.Entity`. Producer-shape
+fixtures preserve rank/order, similarity presence, batch missing reasons/order, relationship direction, and raw
+readiness. The old entity fixture expecting bare EntityState becomes production `graph.ExactEntity`. The library claims
+no component ports, and Slice E invents no component or configuration owner for it.
 
 ### Correct touched current specs
 
@@ -419,31 +447,28 @@ fallback without changing partition readiness or query degradation.
 - **THEN** the supervisor stops that unpublished view before retry
 - **AND** no ticker, watcher, view pointer, or second concurrent view remains
 
-### Add `graph-query` success decoding and representation preservation
+### Add bounded `graph-query` success decoding
 
-Every framework-owned embedded consumer SHALL remove at most one recognized `graph.QueryResponse` envelope via
-`graph.UnwrapQueryResponse`, then decode its operation payload. It SHALL preserve all successful representations the
-operation contract admits: full entities, entity digests, community summaries, synthesized answer, and degradation
-metadata. It SHALL not turn a non-empty successful representation into count-only text or an invented empty success.
+The research-classify `searchGraph` adapter and research-execute graph-query adapter SHALL remove at most one
+recognized `graph.QueryResponse` envelope through `graph.UnwrapQueryResponse` before operation decoding. Current
+producer envelope declarations remain unchanged. An envelope-shaped inner payload SHALL lose no second layer.
 
-#### Scenario: adapter accepts both current success forms
+When digests are absent and validated full entities are present, research classify SHALL project those entities into
+the existing `research.Candidate` contract in response order and under the caller limit. It SHALL invent no unavailable
+label, relevance, or snippet. Digest behavior and the narrow CandidateSet/Evidence contracts remain unchanged.
 
-- **GIVEN** equivalent valid bare and enveloped fixtures
-- **WHEN** the adapter decodes each
-- **THEN** both yield the same typed result
-- **AND** an envelope-shaped inner payload loses no second layer
+#### Scenario: full entities do not become zero candidates
 
-#### Scenario: full entities need no digest fallback
-
-- **GIVEN** a successful search result containing full entities but no digests
-- **WHEN** a framework adapter projects the result
-- **THEN** the full entities remain available to its caller
-- **AND** the adapter does not replace them with only a result count
+- **GIVEN** a successful response with non-empty full entities and no digests
+- **WHEN** research classify projects candidates
+- **THEN** every retained valid entity contributes one candidate
+- **AND** the result is not replaced by an empty candidate set or count-only claim
 
 ### Add `graph-query` terminal-strategy requirement
 
 Every successful global-search result SHALL carry the non-empty canonical terminal strategy, including empty success.
-Fallback SHALL report the strategy that produced the returned result, not the abandoned initial choice.
+Fallback SHALL report the strategy that produced the returned result, not the abandoned initial choice. Temporal and
+spatial composition SHALL read the producers' existing `id` field.
 
 #### Scenario: classifier choice falls through
 
@@ -452,17 +477,27 @@ Fallback SHALL report the strategy that produced the returned result, not the ab
 - **THEN** `strategy` names the fallback
 - **AND** it is neither blank nor the abandoned choice
 
-### Add `graph-query` fusion adapter preservation
+### Remove stale private query compatibility surfaces
+
+The standard `graph.QueryResponse` success envelope SHALL contain only `data` and `timestamp`; the unused exported
+`RequestID` and its discriminator key are removed without compatibility. The private searchGraph fallback SHALL decode
+only the reachable raw graph-embedding reply; the stale `similaritySearch` GraphQL wrapper decoder is removed.
+
+### Add `fusion` adapter preservation
 
 `pkg/fusion/fusionnats.Client` SHALL remain the NATS implementation of `fusion.RetrievalClient`, preserving its
-constructor and six-operation surface. It SHALL decode each success through `graph.UnwrapQueryResponse` once and SHALL
-validate entity replies as `graph.ExactEntity`. The embedding component, not the library, owns port declarations.
+constructor, optional Close, lazy graph-index readiness, and six-method surface. Its six request subjects remain a
+separate transport mapping. It SHALL decode each request/reply success through `graph.UnwrapQueryResponse` once; Status
+remains KV state. Entity SHALL validate `graph.ExactEntity`, including matching ID and nonzero revision, then project
+only ID and triples into the existing `fusion.Entity`. The library owns no component ports, and Slice E creates no
+component or configuration owner.
 
 #### Scenario: fusion entity uses the producer representation
 
 - **GIVEN** the graph-query entity producer returns a bare or enveloped `graph.ExactEntity`
 - **WHEN** `fusionnats.Client` reads it
-- **THEN** the adapter preserves the exact entity and revision
+- **THEN** the adapter validates the exact entity and revision
+- **AND** projects only its ID and triples into the existing fusion entity
 - **AND** no fixture relies on the obsolete bare `EntityState` shape
 
 ### Seed `gateway-query-routing`
@@ -601,20 +636,23 @@ first-ticker delay is separate, and Slice D does not close it.
 | `SkipBuiltins` caller naming a deleted key | Remove the key | Existing validation fails; no no-op compatibility value | Boot error/break notice |
 | Importer of any deleted executor symbol | Remove it or own a distinct downstream tool/component | Compilation fails; full surface is deleted | Compiler/break notice |
 | Aggregate client importer | Replace with GraphQL or named adapter | Compilation fails; no shim | Compiler/migration notice |
+| External Go importer reading or setting `graph.QueryResponse.RequestID` | Remove the field access or keyed struct-literal entry; use only `Data` and `Timestamp` for query success | Compilation fails at field selection or keyed literal; there is no compatibility field | Compiler, reviewed query-success spec, and downstream migration notice |
 | Direct external NATS caller | No wire change in this program | Existing wire continues, but copied literal gains no separate API promise | Migration notice |
 | Readiness/config author | None | No clustering key/config introduced | Existing docs |
 | Component/port author | Declare `graph.query/v1` on graph-query ports and use named outputs | Old/missing interface or consumer declarations fail Registry validation | Port contract, generated schema, break notice |
 
 Migration notice draft:
 
-> Query contract closure removes the unserved GraphQL `capabilities` field and exported `graph/query.Client`. No
-> aliases or deprecated wrappers are provided. The 16 existing request/reply subjects and 14 remaining GraphQL
-> operations are unchanged. `localSearch` always responds and reports `index_not_ready` while the optional community
-> view is unavailable or synchronizing. Remote applications use GraphQL; embedded framework services use the named
-> port-declared adapter for their operation. The unadmitted agentic `search_graph` and `summarize_graph` wrappers are
-> removed completely, including shared registrations, builtin skip keys, and exported executor symbols; GraphQL and
-> graph-query operations remain. Remove stale config/skip entries or own a distinct downstream tool. Downstream teams
-> own compilation, migration, flow validation, and E2E.
+> Query contract closure removes the unserved GraphQL `capabilities` field and exported `graph/query.Client`. It also
+> removes the unused exported `graph.QueryResponse.RequestID` field: external Go code that selects it or names it in a
+> keyed struct literal must delete that use and treat query-success envelopes as `Data` plus `Timestamp`. No aliases,
+> compatibility fields, or deprecated wrappers are provided. The 16 existing request/reply subjects and 14 remaining
+> GraphQL operations are unchanged. `localSearch` always responds and reports `index_not_ready` while the optional
+> community view is unavailable or synchronizing. Remote applications use GraphQL; embedded framework services use
+> the named port-declared adapter for their operation. The unadmitted agentic `search_graph` and `summarize_graph`
+> wrappers are removed completely, including shared registrations, builtin skip keys, and exported executor symbols;
+> GraphQL and graph-query operations remain. Remove stale config/skip entries or own a distinct downstream tool.
+> Downstream teams own compilation, migration, flow validation, and E2E.
 
 ## Verification
 
@@ -653,14 +691,23 @@ Migration notice draft:
   `class=transient`, and the stable code.
 - Assert plain errors expose no class/code, uncoded classified errors expose class only, and this slice exports no
   classified-error detail.
-- Feed bare and enveloped production-shape fixtures through gateway, research, and fusion consumers.
-- Exercise all six fusion operations plus readiness; preserve the existing constructor and use `graph.ExactEntity` for
-  entity replies.
+- Feed bare and enveloped production-shape fixtures through the research classify, research execute, and fusion
+  request/reply boundaries, with exactly one unwrap. Preserve current producer declarations.
+- Exercise all six fusion request subjects plus readiness; preserve the constructor and six-method interface, validate
+  `graph.ExactEntity`, and project only ID/triples into the existing fusion entity.
 - Prove only the provisional `graph/query.Client` cohort is removed; fusion, exact reader, projection, and local adapters
   remain.
-- Exercise every global-search terminal/fallback and require truthful strategy, including empty success.
-- Feed full-entity, digest, summary, answer, empty, and degraded fixtures to research consumers and prove no
-  admitted representation collapses to count-only output.
+- Exercise every global-search direct, empty, and fallthrough branch and require its truthful terminal strategy.
+- Prove focused bare and enveloped full-entity-only research-classify fixtures produce ordered candidates when digests
+  are absent, without widening CandidateSet or Evidence.
+- Require the existing research-graph E2E to parse `research.classify.candidate-count` from the seeded production
+  classify result and fail unless it is greater than zero.
+- Make the existing statistical `test-http-gateway` stage select/decode `strategy` from its controlled
+  `globalSearch("robot warehouse", level:0)` request and require exactly `graphrag`. Query marshal, request
+  construction, transport, non-200 status, body read, JSON decode, GraphQL errors, missing strategy, and wrong strategy
+  are hard failures rather than warnings followed by nil.
+- Prove production code contains neither the private `similaritySearch` wrapper nor query-success `RequestID`, and that
+  Slice E adds no fusion-host component, port, configuration, Registry count, or readiness declaration.
 - Prove the sixteen producer subjects and payload shapes remain unchanged.
 
 Concurrent tests use explicit synchronization, never sleeps.
@@ -673,7 +720,8 @@ Concurrent tests use explicit synchronization, never sleeps.
 - `task lint`;
 - schema generation plus clean generated diff;
 - contract tests and strict OpenSpec validation; and
-- breaking tiers: semantic, agentic, and research where migrated adapters are exercised.
+- breaking tiers relevant to each slice. Slice E uses the strengthened existing research-graph and statistical tiers;
+  it adds no stage or tier and does not require semantic E2E.
 
 Long runs actively poll authoritative state and abort when provably wedged.
 
@@ -721,7 +769,7 @@ Implementation stops for owner ruling if:
     research consumers.
 25. The slice changes `MergePortConfig` globally or invents additive dependency-port/executor metadata.
 
-## Owner rulings requested
+## Owner rulings
 
 1. Adopt bounded query closure (Option 3), not measurement-only patches or broad graph convergence.
 2. Replace the community bucket-presence watcher with the generation supervisor and generation-validated reads.
@@ -738,7 +786,8 @@ Implementation stops for owner ruling if:
    readiness, or degradation coupling.
 7. Seed `gateway-error-projection` and copy existing classified class/non-empty code into GraphQL extensions without
    creating new classification authority.
-8. Give libraries no component ports; the component embedding fusion owns its six outputs and readiness declaration.
+8. Give libraries no component ports. Slice E assigns no fusion port or configuration ownership because no current
+   in-repo component constructs `fusionnats.Client`.
 9. Remove only the provisional mixed direct-KV `graph/query.Client` cohort, including its client-only config, caches,
    watchers, readiness/poison state, methods, path/cache types, and examples.
 10. Preserve `pkg/fusion/fusionnats.Client`, its constructor, six operations, lazy readiness behavior, and downstream
@@ -750,3 +799,20 @@ Implementation stops for owner ruling if:
 13. Correct stale graph-index hash/catalog text to the current raw `PREDICATE_INDEX` contract without runtime change.
 14. Make a clean break: no shims/deprecation/dual paths, and communicate downstream breaks without auditing or fixing
     downstream projects.
+
+The owner approved the original fourteen rulings on 2026-08-09, with the later Slice D and Slice E reassessments
+superseding only the mechanisms explicitly identified in the provenance section. On 2026-08-10 the owner approved the
+following eight Slice E rulings:
+
+1. Adopt bounded Slice E closure rather than defect-only patches or broad decoder closure.
+2. Use exactly one `graph.UnwrapQueryResponse` pass at the research-classify, research-execute, and fusionnats
+   request/reply boundaries only.
+3. Validate `ExactEntity.KVRevision` without adding it to `fusion.Entity`.
+4. Remove the nonexistent fusion-host component/port requirement.
+5. Keep receiver-less research projections unchanged.
+6. Delete the private `similaritySearch` wrapper without compatibility.
+7. Delete the exported but unused query `RequestID` without compatibility.
+8. Gate Slice E with focused race/real-NATS tests plus strengthened existing research-graph and statistical
+   `test-http-gateway` E2E assertions: nonzero production classify candidate count and exact live strategy `graphrag`
+   with every pre-assertion gateway failure hard. Exhaustive representation/strategy branches stay in focused tests;
+   add no stage, tier, or semantic E2E requirement.
