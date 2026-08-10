@@ -210,7 +210,7 @@ func TestEntityLookupStrategyDoesNotFallThroughAfterAuthoritativePoison(t *testi
 	comp := newComponentForHandlerTest(t, mock)
 	classification := &query.ClassificationResult{Options: map[string]any{"path_start_node": validID}}
 
-	got, handled, err := comp.handleStrategyEntityLookup(context.Background(), classification, "widget", time.Now())
+	got, handled, err := comp.handleStrategyEntityLookup(context.Background(), classification, "widget", &GlobalSearchRequest{}, time.Now())
 	require.Error(t, err)
 	assert.True(t, graph.IsStateContractError(err))
 	assert.Nil(t, got)
@@ -586,7 +586,7 @@ func TestHandleStrategyTemporal_HandlerErrorSurfaces(t *testing.T) {
 	}}
 	req := &GlobalSearchRequest{Query: "events in the last hour"}
 
-	resp, err := comp.handleStrategyTemporal(context.Background(), cr, req, time.Unix(0, 0), 0)
+	resp, err := comp.handleStrategyTemporal(context.Background(), cr, req, time.Unix(0, 0))
 
 	require.Error(t, err, "a graph-temporal handler error must surface, not decode as an empty result set")
 	require.Nil(t, resp)
@@ -611,7 +611,7 @@ func TestHandleStrategySpatial_HandlerErrorSurfaces(t *testing.T) {
 	}}
 	req := &GlobalSearchRequest{Query: "sensors near the GCS"}
 
-	resp, err := comp.handleStrategySpatial(context.Background(), cr, req, time.Unix(0, 0), 0)
+	resp, err := comp.handleStrategySpatial(context.Background(), cr, req, time.Unix(0, 0))
 
 	require.Error(t, err, "a graph-spatial handler error must surface, not decode as an empty result set")
 	require.Nil(t, resp)

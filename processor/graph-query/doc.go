@@ -18,7 +18,7 @@
 //	┌──────────────────────────────────────────────────────────────────────────┐
 //	│                       graph-query Component                              │
 //	├──────────────────────────────────────────────────────────────────────────┤
-//	│  StaticRouter    │  PathSearcher   │  CommunityCache  │  GraphRAG       │
+//	│  StaticRouter    │  PathSearcher   │  community cache │  GraphRAG       │
 //	│  (query routing) │  (BFS traversal)│  (KV watcher)    │  (search)       │
 //	└──────────────────────────────────────────────────────────────────────────┘
 //	           ↓                ↓                  ↓                 ↓
@@ -101,10 +101,14 @@
 //
 // # Graceful Degradation
 //
-// The component uses resource.Watcher for optional dependencies:
+// The component keeps every responder installed and supervises the optional
+// COMMUNITY_INDEX serving projection for its lifetime:
 //
-//   - If COMMUNITY_INDEX bucket unavailable at startup, PathRAG works but GraphRAG is disabled
-//   - When bucket becomes available later, GraphRAG is enabled automatically
+//   - Fresh watch maps publish only after initial enumeration completes
+//   - Every watch exit unpublishes the exact generation; unexpected loss retries must-exist open
+//   - Local/community-only reads return transient index_not_ready without a generation
+//   - Independent lower-tier global/searchGraph results preserve their data and
+//     report community_cache_not_ready when requested enrichment is unavailable
 //
 // # Configuration
 //
@@ -112,8 +116,6 @@
 //
 //	QueryTimeout:     5s     # Timeout for inter-component requests
 //	MaxDepth:         10     # Maximum BFS traversal depth
-//	StartupAttempts:  10     # Attempts to find optional buckets at startup
-//	StartupInterval:  500ms  # Interval between startup attempts
 //	RecheckInterval:  5s     # Interval for rechecking missing buckets
 //
 // # PathRAG Algorithm

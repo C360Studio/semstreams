@@ -341,6 +341,49 @@ func TestGateway_TransformVariables_SearchGraph(t *testing.T) {
 	assert.Equal(t, expected, payload)
 }
 
+func TestGateway_TransformVariables_ForwardsSummarizeThreshold(t *testing.T) {
+	comp := createTestGateway(t)
+	vars := map[string]any{
+		"query":              "wide search",
+		"summarizeThreshold": float64(17),
+	}
+	payload := comp.transformVariablesToNATSPayload(vars, "graph.query.globalSearch")
+	assert.Equal(t, float64(17), payload["summarize_threshold"])
+}
+
+func TestGateway_GlobalSearchProjectsCommunityCacheNotReady(t *testing.T) {
+	mock := newMockNATSRequester()
+	mock.requestFunc = func(_ context.Context, subject string, _ []byte, _ time.Duration) ([]byte, error) {
+		require.Equal(t, "graph.query.globalSearch", subject)
+		return []byte(`{"entities":[{"id":"acme.ops.test.system.widget.001"}],"count":1,"degraded":true,"degraded_reason":"community_cache_not_ready"}`), nil
+	}
+	component := createTestGatewayWithMock(t, mock)
+	require.NoError(t, component.Initialize())
+	require.NoError(t, component.Start(context.Background()))
+	defer component.Stop(5 * time.Second)
+
+	body := []byte(`{"query":"query { globalSearch(query: \"widget\") { count degraded degraded_reason } }"}`)
+	request := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	component.handleGraphQL(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Data struct {
+			GlobalSearch globalSearchProjection `json:"globalSearch"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Data.GlobalSearch.Degraded)
+	require.Equal(t, "community_cache_not_ready", response.Data.GlobalSearch.DegradedReason)
+}
+
+type globalSearchProjection struct {
+	Degraded       bool   `json:"degraded"`
+	DegradedReason string `json:"degraded_reason"`
+}
+
 // ====================================================================================
 // Request Forwarding Tests
 // ====================================================================================

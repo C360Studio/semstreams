@@ -124,14 +124,16 @@ func TestSelectDigestEntities(t *testing.T) {
 func TestFindCommunitiesForEntities_StampsEachSummaryWithItsOwnLevel(t *testing.T) {
 	const collidingID = "acme.ops.robotics.gcs.drone.001"
 
-	cache := NewCommunityCache(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	cache := newCommunityCache(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	generation := newCommunityGeneration(1)
+	cache.publish(generation)
 	put := func(level int, members []string) {
 		t.Helper()
 		b, err := json.Marshal(&clustering.Community{ID: collidingID, Level: level, Members: members})
 		if err != nil {
 			t.Fatal(err)
 		}
-		cache.handleUpdate(fmt.Sprintf("%d.%s", level, collidingID), b)
+		generation.applyUpdate(fmt.Sprintf("%d.%s", level, collidingID), b, cache.logger)
 	}
 	put(0, []string{"e1"})
 	put(1, []string{"e1", "e2"})
@@ -141,7 +143,8 @@ func TestFindCommunitiesForEntities_StampsEachSummaryWithItsOwnLevel(t *testing.
 		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	got := c.findCommunitiesForEntities([]string{"e1"})
+	ctx, _ := c.withCommunityRequestLease(context.Background())
+	got := c.findCommunitiesForEntities(ctx, []string{"e1"})
 	if len(got) != 2 {
 		t.Fatalf("got %d summaries, want 2 (one per level sharing the ID)", len(got))
 	}
@@ -174,7 +177,9 @@ func TestFindCommunitiesForEntities_StampsEachSummaryWithItsOwnLevel(t *testing.
 func TestEnrichCommunitySummaries_CollidingIDsKeepTheirOwnRepEntities(t *testing.T) {
 	const collidingID = "acme.ops.robotics.gcs.drone.001"
 
-	cache := NewCommunityCache(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	cache := newCommunityCache(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	generation := newCommunityGeneration(1)
+	cache.publish(generation)
 	put := func(level int, members, reps []string) {
 		t.Helper()
 		b, err := json.Marshal(&clustering.Community{
@@ -183,7 +188,7 @@ func TestEnrichCommunitySummaries_CollidingIDsKeepTheirOwnRepEntities(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
-		cache.handleUpdate(fmt.Sprintf("%d.%s", level, collidingID), b)
+		generation.applyUpdate(fmt.Sprintf("%d.%s", level, collidingID), b, cache.logger)
 	}
 
 	// Same ID at two levels, deliberately distinct membership AND rep entities.
@@ -205,7 +210,8 @@ func TestEnrichCommunitySummaries_CollidingIDsKeepTheirOwnRepEntities(t *testing
 
 	// nil scores → pure PageRank RepEntities selection (this test asserts each
 	// summary keeps its own community's reps; relevance steering is orthogonal).
-	got, err := c.enrichCommunitySummaries(context.Background(), summaries, nil)
+	ctx, _ := c.withCommunityRequestLease(context.Background())
+	got, err := c.enrichCommunitySummaries(ctx, summaries, nil)
 	if err != nil {
 		t.Fatalf("enrichCommunitySummaries: %v", err)
 	}
@@ -254,7 +260,9 @@ func TestEnrichCommunitySummaries_CollidingIDsKeepTheirOwnRepEntities(t *testing
 func TestEnrichCommunitySummaries_ScoresSteerRepDigests(t *testing.T) {
 	const commID = "acme.ops.robotics.gcs.drone.001"
 
-	cache := NewCommunityCache(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	cache := newCommunityCache(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	generation := newCommunityGeneration(1)
+	cache.publish(generation)
 	b, err := json.Marshal(&clustering.Community{
 		ID:          commID,
 		Level:       0,
@@ -264,18 +272,19 @@ func TestEnrichCommunitySummaries_ScoresSteerRepDigests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cache.handleUpdate("0."+commID, b)
+	generation.applyUpdate("0."+commID, b, cache.logger)
 
 	c := &Component{
 		communityCache: cache,
 		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
+	ctx, _ := c.withCommunityRequestLease(context.Background())
 
 	// With scores steering m-c highest, the first digest must be the
 	// query-relevant member m-c — NOT the PageRank rep m-a — proving the scores
 	// map reached selectDigestEntities through enrichCommunitySummaries.
 	scored, err := c.enrichCommunitySummaries(
-		context.Background(),
+		ctx,
 		[]CommunitySummary{{CommunityID: commID, Level: 0}},
 		map[string]float64{"m-c": 0.9, "m-b": 0.5},
 	)
@@ -295,7 +304,7 @@ func TestEnrichCommunitySummaries_ScoresSteerRepDigests(t *testing.T) {
 
 	// Control: nil scores → pure PageRank selection → the sole digest is m-a.
 	nilScored, err := c.enrichCommunitySummaries(
-		context.Background(),
+		ctx,
 		[]CommunitySummary{{CommunityID: commID, Level: 0}},
 		nil,
 	)

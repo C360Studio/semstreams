@@ -4,6 +4,7 @@ package graphquery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"sort"
 	"strconv"
@@ -14,25 +15,12 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// CommunityCache maintains an in-memory cache of communities from COMMUNITY_INDEX KV.
+// communityCache maintains an in-memory cache of communities from COMMUNITY_INDEX KV.
 // It watches the KV bucket for changes and updates the cache in real-time.
 // This is a consumer-owned cache - graph-query owns and manages its own view of community data.
-type CommunityCache struct {
-	mu sync.RWMutex
-
-	// communities maps level → community ID → Community.
-	//
-	// Keyed by (level, ID) because that is the storage identity: COMMUNITY_INDEX
-	// keys are "{level}.{community_id}" (graph/clustering/storage.go). Cross-level
-	// ID collisions are structural, not incidental — an LPA community ID IS its
-	// seed entity ID, and detectHierarchicalLevel re-runs LPA over the same entity
-	// set at every level, so levels 0/1/2 draw IDs from one pool. A bare-ID map
-	// lets a level-1 write shadow the level-0 record and lets a level-0 delete
-	// evict a level-1 one.
-	communities map[int]map[string]*clustering.Community
-
-	// entityCommunity maps entityID → level → communityID for fast LocalSearch lookups
-	entityCommunity map[string]map[int]string
+type communityCache struct {
+	mu     sync.RWMutex
+	active *communityGeneration
 
 	// summaries maps the COMMUNITY_SUMMARIES KV key ({level}.{membership_hash}) to
 	// its LLM summary record. It is populated by a SECOND watcher on the
@@ -44,63 +32,188 @@ type CommunityCache struct {
 
 	// Lifecycle
 	logger         *slog.Logger
-	ready          bool
-	watcher        jetstream.KeyWatcher
 	summaryWatcher jetstream.KeyWatcher
+	onPublished    func(uint64)
+	onApplied      func(uint64, string)
+	onUnpublished  func(uint64)
 }
 
-// NewCommunityCache creates a new community cache.
-func NewCommunityCache(logger *slog.Logger) *CommunityCache {
-	return &CommunityCache{
+// communityGeneration is one fully independent COMMUNITY_INDEX projection.
+// Its maps are never copied into a later generation.
+type communityGeneration struct {
+	id uint64
+	mu sync.RWMutex
+
+	// Keyed by (level, ID), matching COMMUNITY_INDEX storage identity.
+	communities     map[int]map[string]*clustering.Community
+	entityCommunity map[string]map[int]string
+}
+
+// communityLease is private package state carried by one community-backed
+// request. It identifies both the generation number and exact map owner.
+type communityLease struct {
+	cache      *communityCache
+	generation *communityGeneration
+}
+
+type communityWatchReader interface {
+	WatchAll(context.Context, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error)
+}
+
+func newCommunityGeneration(id uint64) *communityGeneration {
+	return &communityGeneration{
+		id:              id,
 		communities:     make(map[int]map[string]*clustering.Community),
 		entityCommunity: make(map[string]map[int]string),
-		summaries:       make(map[string]*clustering.CommunitySummaryRecord),
-		logger:          logger,
 	}
 }
 
-// WatchAndSync starts watching the COMMUNITY_INDEX KV bucket and syncs changes to the cache.
-// This method blocks until the context is cancelled.
-func (c *CommunityCache) WatchAndSync(ctx context.Context, bucket jetstream.KeyValue) error {
-	watcher, err := bucket.WatchAll(ctx)
+func newCommunityCache(logger *slog.Logger) *communityCache {
+	return &communityCache{
+		summaries: make(map[string]*clustering.CommunitySummaryRecord),
+		logger:    logger,
+	}
+}
+
+// watchGeneration stages a fresh projection, publishes it only at the initial
+// enumeration sentinel, and unpublishes exactly it on unexpected watch loss.
+func (c *communityCache) watchGeneration(ctx context.Context, reader communityWatchReader, generation *communityGeneration) error {
+	watcher, err := reader.WatchAll(ctx)
 	if err != nil {
 		return err
 	}
-	c.watcher = watcher
+	defer watcher.Stop()
 
-	c.logger.Info("community cache watcher started")
+	c.logger.Info("community cache generation watcher started", "generation", generation.id)
+	published := false
+	defer func() {
+		if published {
+			c.unpublish(generation)
+		}
+	}()
 
 	for {
 		select {
 		case <-ctx.Done():
-			c.logger.Info("community cache watcher stopping", "reason", "context cancelled")
-			watcher.Stop()
+			c.logger.Info("community cache generation watcher stopping",
+				"generation", generation.id, "reason", "context cancelled")
 			return ctx.Err()
 
-		case entry := <-watcher.Updates():
+		case entry, ok := <-watcher.Updates():
+			if !ok {
+				return errors.New("community index watch closed")
+			}
 			if entry == nil {
-				// nil entry indicates initial state enumeration complete
-				c.mu.Lock()
-				c.ready = true
-				total := c.totalCommunitiesLocked()
-				c.mu.Unlock()
-				c.logger.Info("community cache initial sync complete",
-					"communities", total)
+				if !published {
+					c.publish(generation)
+					published = true
+					c.logger.Info("community cache generation published",
+						"generation", generation.id,
+						"communities", generation.totalCommunities())
+				}
 				continue
 			}
 
 			if entry.Operation() == jetstream.KeyValueDelete {
-				c.handleDelete(entry.Key())
+				if !published || c.isCurrent(generation) {
+					generation.applyDelete(entry.Key())
+					c.notifyApplied(generation.id, entry.Key())
+				}
 				continue
 			}
 
-			c.handleUpdate(entry.Key(), entry.Value())
+			if !published || c.isCurrent(generation) {
+				generation.applyUpdate(entry.Key(), entry.Value(), c.logger)
+				c.notifyApplied(generation.id, entry.Key())
+			}
 		}
 	}
 }
 
-// handleUpdate processes a community create/update from KV watch.
-func (c *CommunityCache) handleUpdate(key string, data []byte) {
+func (c *communityCache) notifyApplied(generation uint64, key string) {
+	c.mu.RLock()
+	onApplied := c.onApplied
+	c.mu.RUnlock()
+	if onApplied != nil {
+		onApplied(generation, key)
+	}
+}
+
+func (c *communityCache) publish(generation *communityGeneration) {
+	c.mu.Lock()
+	c.active = generation
+	onPublished := c.onPublished
+	c.mu.Unlock()
+	if onPublished != nil {
+		onPublished(generation.id)
+	}
+}
+
+func (c *communityCache) unpublish(generation *communityGeneration) bool {
+	c.mu.Lock()
+	if c.active != generation {
+		c.mu.Unlock()
+		return false
+	}
+	c.active = nil
+	onUnpublished := c.onUnpublished
+	c.mu.Unlock()
+	if onUnpublished != nil {
+		onUnpublished(generation.id)
+	}
+	return true
+}
+
+func (c *communityCache) isCurrent(generation *communityGeneration) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.active == generation
+}
+
+// acquire returns one lease over the currently published generation.
+func (c *communityCache) acquire() *communityLease {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.active == nil {
+		return nil
+	}
+	return &communityLease{cache: c, generation: c.active}
+}
+
+// valid proves the exact generation remains published.
+func (l *communityLease) valid() bool {
+	return l != nil && l.cache != nil && l.cache.isCurrent(l.generation)
+}
+
+// completeSuccess linearizes exact-generation validation with successful
+// completion accounting. While record runs, unpublish/replacement is excluded by
+// the cache read lock; when this returns true, the response completed against the
+// exact generation at that single observable point.
+func (l *communityLease) completeSuccess(record func()) bool {
+	if l == nil || l.cache == nil || l.generation == nil {
+		return false
+	}
+	l.cache.mu.RLock()
+	defer l.cache.mu.RUnlock()
+	if l.cache.active != l.generation {
+		return false
+	}
+	record()
+	return true
+}
+
+func (l *communityLease) generationID() uint64 {
+	if l == nil || l.generation == nil {
+		return 0
+	}
+	return l.generation.id
+}
+
+func (g *communityGeneration) applyUpdate(key string, data []byte, loggers ...*slog.Logger) {
+	logger := slog.Default()
+	if len(loggers) > 0 && loggers[0] != nil {
+		logger = loggers[0]
+	}
 	// The KV key is the authority for level, on both the update and the delete
 	// path — handleDelete only ever has the key, so keying updates off the payload
 	// instead would make the two paths disagree and leak entries.
@@ -113,7 +226,7 @@ func (c *CommunityCache) handleUpdate(key string, data []byte) {
 
 	var community clustering.Community
 	if err := json.Unmarshal(data, &community); err != nil {
-		c.logger.Warn("failed to unmarshal community",
+		logger.Warn("failed to unmarshal community",
 			"key", key,
 			"error", err)
 		return
@@ -122,7 +235,7 @@ func (c *CommunityCache) handleUpdate(key string, data []byte) {
 	if community.ID != communityID || community.Level != level {
 		// Normalize to the key. The record is reachable only under its key, so the
 		// key must win or a later delete for that key would miss this entry.
-		c.logger.Warn("community payload disagrees with its KV key — normalizing to the key",
+		logger.Warn("community payload disagrees with its KV key — normalizing to the key",
 			"key", key,
 			"payload_id", community.ID,
 			"payload_level", community.Level)
@@ -130,44 +243,43 @@ func (c *CommunityCache) handleUpdate(key string, data []byte) {
 		community.Level = level
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	g.mu.Lock()
+	defer g.mu.Unlock()
 
 	// Remove old membership mappings if this (level, ID) existed.
-	if old, exists := c.communities[level][communityID]; exists {
-		c.removeMembershipMappings(level, old)
+	if old, exists := g.communities[level][communityID]; exists {
+		g.removeMembershipMappings(level, old)
 	}
 
-	if c.communities[level] == nil {
-		c.communities[level] = make(map[string]*clustering.Community)
+	if g.communities[level] == nil {
+		g.communities[level] = make(map[string]*clustering.Community)
 	}
-	c.communities[level][communityID] = &community
+	g.communities[level][communityID] = &community
 
 	// Update entity→community mappings
 	for _, entityID := range community.Members {
-		if c.entityCommunity[entityID] == nil {
-			c.entityCommunity[entityID] = make(map[int]string)
+		if g.entityCommunity[entityID] == nil {
+			g.entityCommunity[entityID] = make(map[int]string)
 		}
-		c.entityCommunity[entityID][level] = communityID
+		g.entityCommunity[entityID][level] = communityID
 	}
 
-	c.logger.Debug("community cache updated",
+	logger.Debug("community cache updated",
 		"id", communityID,
 		"level", level,
 		"members", len(community.Members))
 }
 
-// handleDelete processes a community deletion from KV watch.
-func (c *CommunityCache) handleDelete(key string) {
+func (g *communityGeneration) applyDelete(key string) {
 	level, communityID, ok := parseCommunityKey(key)
 	if !ok {
 		return // Not a community key (e.g., entity mapping key)
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	g.mu.Lock()
+	defer g.mu.Unlock()
 
-	byID, exists := c.communities[level]
+	byID, exists := g.communities[level]
 	if !exists {
 		return
 	}
@@ -178,26 +290,24 @@ func (c *CommunityCache) handleDelete(key string) {
 
 	// Scoped to the level named by the DELETED KEY, never the level of whatever
 	// record a bare-ID lookup happened to find.
-	c.removeMembershipMappings(level, community)
+	g.removeMembershipMappings(level, community)
 
 	delete(byID, communityID)
 	if len(byID) == 0 {
-		delete(c.communities, level)
+		delete(g.communities, level)
 	}
-
-	c.logger.Debug("community cache deleted", "id", communityID, "level", level)
 }
 
-// WatchSummaries starts watching the COMMUNITY_SUMMARIES KV bucket and syncs LLM
-// summary records into the cache. It runs as a SECOND watcher alongside
-// WatchAndSync and blocks until the context is cancelled.
+// watchSummaries starts watching the COMMUNITY_SUMMARIES KV bucket and syncs LLM
+// summary records into the cache. It runs as a second watcher alongside the
+// private community generation watch and blocks until the context is cancelled.
 //
-// It deliberately does NOT participate in readiness (IsReady): cache readiness is
-// gated on the PARTITION bucket only (ADR-087). A summary miss is a graceful
+// It deliberately does not publish or revoke community generations: generation
+// availability is gated on the partition bucket only (ADR-087). A summary miss is a graceful
 // statistical fallback, not an unready state, so GraphRAG availability is
 // decoupled from the LLM summary pipeline — an empty COMMUNITY_SUMMARIES bucket
 // completes its (empty) initial sync immediately without blocking anything.
-func (c *CommunityCache) WatchSummaries(ctx context.Context, bucket jetstream.KeyValue) error {
+func (c *communityCache) watchSummaries(ctx context.Context, bucket jetstream.KeyValue) error {
 	watcher, err := bucket.WatchAll(ctx)
 	if err != nil {
 		return err
@@ -234,7 +344,7 @@ func (c *CommunityCache) WatchSummaries(ctx context.Context, bucket jetstream.Ke
 // handleSummaryUpdate processes a summary create/update from the summary watch.
 // The map is keyed by the raw KV key ({level}.{membership_hash}), which is exactly
 // what SummaryFor reconstructs, so no key parsing is needed here.
-func (c *CommunityCache) handleSummaryUpdate(key string, data []byte) {
+func (c *communityCache) handleSummaryUpdate(key string, data []byte) {
 	var rec clustering.CommunitySummaryRecord
 	if err := json.Unmarshal(data, &rec); err != nil {
 		c.logger.Warn("failed to unmarshal community summary", "key", key, "error", err)
@@ -247,14 +357,14 @@ func (c *CommunityCache) handleSummaryUpdate(key string, data []byte) {
 }
 
 // handleSummaryDelete removes a summary record from the cache.
-func (c *CommunityCache) handleSummaryDelete(key string) {
+func (c *communityCache) handleSummaryDelete(key string) {
 	c.mu.Lock()
 	delete(c.summaries, key)
 	c.mu.Unlock()
 }
 
 // summaryCount returns the number of cached summary records.
-func (c *CommunityCache) summaryCount() int {
+func (c *communityCache) summaryCount() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return len(c.summaries)
@@ -265,7 +375,7 @@ func (c *CommunityCache) summaryCount() int {
 // membership. A miss (no record, a failed record, or an empty summary) returns
 // ("", false) so the caller degrades to the statistical floor — the join never
 // yields an empty summary that masquerades as an answer.
-func (c *CommunityCache) SummaryFor(comm *clustering.Community) (string, bool) {
+func (c *communityCache) summaryFor(comm *clustering.Community) (string, bool) {
 	if comm == nil || len(comm.Members) == 0 {
 		return "", false
 	}
@@ -302,12 +412,12 @@ func parseCommunityKey(key string) (level int, communityID string, ok bool) {
 // The level is passed explicitly rather than read off the community so callers cannot
 // silently strip the wrong level's mappings.
 // Must be called with mu held.
-func (c *CommunityCache) removeMembershipMappings(level int, community *clustering.Community) {
+func (g *communityGeneration) removeMembershipMappings(level int, community *clustering.Community) {
 	for _, entityID := range community.Members {
-		if levels, exists := c.entityCommunity[entityID]; exists {
+		if levels, exists := g.entityCommunity[entityID]; exists {
 			delete(levels, level)
 			if len(levels) == 0 {
-				delete(c.entityCommunity, entityID)
+				delete(g.entityCommunity, entityID)
 			}
 		}
 	}
@@ -315,33 +425,37 @@ func (c *CommunityCache) removeMembershipMappings(level int, community *clusteri
 
 // totalCommunitiesLocked counts communities across all levels.
 // Must be called with mu held.
-func (c *CommunityCache) totalCommunitiesLocked() int {
+func (g *communityGeneration) totalCommunitiesLocked() int {
 	total := 0
-	for _, byID := range c.communities {
+	for _, byID := range g.communities {
 		total += len(byID)
 	}
 	return total
 }
 
-// GetCommunity retrieves a community by level and ID.
-//
-// The level is required: community IDs are only unique WITHIN a level, so an
-// ID-only lookup would return an arbitrary level's record. Callers hold the level
-// on CommunitySummary.Level, which is populated from the same record.
-// Returns nil if not found.
-func (c *CommunityCache) GetCommunity(level int, id string) *clustering.Community {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.communities[level][id]
+func (g *communityGeneration) totalCommunities() int {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.totalCommunitiesLocked()
 }
 
-// GetEntityCommunity retrieves the community containing an entity at a specific level.
-// Returns nil if the entity is not in any community at that level.
-func (c *CommunityCache) GetEntityCommunity(entityID string, level int) *clustering.Community {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+func (l *communityLease) getCommunity(level int, id string) *clustering.Community {
+	if l == nil || l.generation == nil {
+		return nil
+	}
+	l.generation.mu.RLock()
+	defer l.generation.mu.RUnlock()
+	return l.generation.communities[level][id]
+}
 
-	levels, exists := c.entityCommunity[entityID]
+func (l *communityLease) getEntityCommunity(entityID string, level int) *clustering.Community {
+	if l == nil || l.generation == nil {
+		return nil
+	}
+	l.generation.mu.RLock()
+	defer l.generation.mu.RUnlock()
+
+	levels, exists := l.generation.entityCommunity[entityID]
 	if !exists {
 		return nil
 	}
@@ -352,23 +466,17 @@ func (c *CommunityCache) GetEntityCommunity(entityID string, level int) *cluster
 	}
 
 	// Resolve within the same level — an entity mapping is level-scoped.
-	return c.communities[level][communityID]
+	return l.generation.communities[level][communityID]
 }
 
-// GetCommunitiesByLevel retrieves all communities at a specific level, ordered by
-// community ID.
-//
-// Built from the authoritative map rather than a maintained byLevel index: the
-// derived index is what went stale when a delete rebuilt it from an already-shadowed
-// map. The order is sorted because downstream ranking (scoreCommunitySummaries) uses
-// an unstable sort with no tie-break, so an unordered input reorders equal-scoring
-// communities between identical queries.
-// Returns empty slice if no communities exist at that level.
-func (c *CommunityCache) GetCommunitiesByLevel(level int) []*clustering.Community {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+func (l *communityLease) getCommunitiesByLevel(level int) []*clustering.Community {
+	if l == nil || l.generation == nil {
+		return nil
+	}
+	l.generation.mu.RLock()
+	defer l.generation.mu.RUnlock()
 
-	byID := c.communities[level]
+	byID := l.generation.communities[level]
 	result := make([]*clustering.Community, 0, len(byID))
 	for _, comm := range byID {
 		result = append(result, comm)
@@ -377,16 +485,15 @@ func (c *CommunityCache) GetCommunitiesByLevel(level int) []*clustering.Communit
 	return result
 }
 
-// GetAllCommunities retrieves all communities across every level, ordered by
-// (level, community ID). A community ID that exists at more than one level yields
-// one entry per level.
-// Returns empty slice if no communities exist.
-func (c *CommunityCache) GetAllCommunities() []*clustering.Community {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+func (l *communityLease) getAllCommunities() []*clustering.Community {
+	if l == nil || l.generation == nil {
+		return nil
+	}
+	l.generation.mu.RLock()
+	defer l.generation.mu.RUnlock()
 
-	result := make([]*clustering.Community, 0, c.totalCommunitiesLocked())
-	for _, byID := range c.communities {
+	result := make([]*clustering.Community, 0, l.generation.totalCommunitiesLocked())
+	for _, byID := range l.generation.communities {
 		for _, comm := range byID {
 			result = append(result, comm)
 		}
@@ -400,44 +507,34 @@ func (c *CommunityCache) GetAllCommunities() []*clustering.Community {
 	return result
 }
 
-// IsReady returns true if the initial sync from KV is complete.
-func (c *CommunityCache) IsReady() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.ready
-}
+func (l *communityLease) stats() communityStats {
+	if l == nil || l.generation == nil {
+		return communityStats{ByLevel: map[int]int{}}
+	}
+	l.generation.mu.RLock()
+	defer l.generation.mu.RUnlock()
 
-// Stats returns cache statistics.
-func (c *CommunityCache) Stats() CommunityStats {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	levelCounts := make(map[int]int, len(c.communities))
-	for level, byID := range c.communities {
+	levelCounts := make(map[int]int, len(l.generation.communities))
+	for level, byID := range l.generation.communities {
 		levelCounts[level] = len(byID)
 	}
 
-	return CommunityStats{
-		TotalCommunities: c.totalCommunitiesLocked(),
-		TotalEntities:    len(c.entityCommunity),
+	return communityStats{
+		TotalCommunities: l.generation.totalCommunitiesLocked(),
+		TotalEntities:    len(l.generation.entityCommunity),
 		ByLevel:          levelCounts,
-		Ready:            c.ready,
+		Ready:            l.valid(),
 	}
 }
 
-// CommunityStats provides cache statistics.
-type CommunityStats struct {
+type communityStats struct {
 	TotalCommunities int         `json:"total_communities"`
 	TotalEntities    int         `json:"total_entities"`
 	ByLevel          map[int]int `json:"by_level"`
 	Ready            bool        `json:"ready"`
 }
 
-// Stop stops both watchers if running.
-func (c *CommunityCache) Stop() {
-	if c.watcher != nil {
-		c.watcher.Stop()
-	}
+func (c *communityCache) stop() {
 	if c.summaryWatcher != nil {
 		c.summaryWatcher.Stop()
 	}

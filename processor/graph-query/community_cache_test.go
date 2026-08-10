@@ -27,17 +27,33 @@ const (
 // shape or they stop exercising the level-derivation the cache depends on.
 func communityKVKey(level int, id string) string { return fmt.Sprintf("%d.%s", level, id) }
 
-func newTestCache() *CommunityCache {
-	return NewCommunityCache(slog.New(slog.NewTextHandler(io.Discard, nil)))
+func newTestCache() *communityCache {
+	return newCommunityCache(slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
-// put drives the watch-update path with the exact bytes SaveCommunity writes:
-// json.Marshal of the Community under key {level}.{id}.
-func put(t *testing.T, c *CommunityCache, comm *clustering.Community) {
+func testGeneration(c *communityCache) *communityGeneration {
+	if lease := c.acquire(); lease != nil {
+		return lease.generation
+	}
+	generation := newCommunityGeneration(1)
+	c.publish(generation)
+	return generation
+}
+
+func testLease(t *testing.T, c *communityCache) *communityLease {
+	t.Helper()
+	lease := c.acquire()
+	require.NotNil(t, lease)
+	return lease
+}
+
+// put applies the exact key/value bytes SaveCommunity writes to an explicitly
+// published test generation. Production publication remains sentinel-gated.
+func put(t *testing.T, c *communityCache, comm *clustering.Community) {
 	t.Helper()
 	data, err := json.Marshal(comm)
 	require.NoError(t, err)
-	c.handleUpdate(communityKVKey(comm.Level, comm.ID), data)
+	testGeneration(c).applyUpdate(communityKVKey(comm.Level, comm.ID), data, c.logger)
 }
 
 // TestCommunityCache_CrossLevelCollision_LateDeleteKeepsLevelZero replays a real
@@ -55,18 +71,18 @@ func TestCommunityCache_CrossLevelCollision_LateDeleteKeepsLevelZero(t *testing.
 	// Level-0 pass: two communities.
 	put(t, c, &clustering.Community{ID: entDrone1, Level: 0, Members: []string{entDrone1, entDrone2}})
 	put(t, c, &clustering.Community{ID: entDrone3, Level: 0, Members: []string{entDrone3}})
-	require.Len(t, c.GetCommunitiesByLevel(0), 2, "precondition: both level-0 communities cached")
+	require.Len(t, testLease(t, c).getCommunitiesByLevel(0), 2, "precondition: both level-0 communities cached")
 
 	// Level-1 pass: LPA re-seeds from the same entity pool, so entDrone1 is a
 	// community ID at level 1 as well.
 	put(t, c, &clustering.Community{ID: entDrone1, Level: 1, Members: []string{entDrone1, entDrone2, entDrone3}})
-	assert.Len(t, c.GetCommunitiesByLevel(0), 2,
+	assert.Len(t, testLease(t, c).getCommunitiesByLevel(0), 2,
 		"a level-1 write must not evict a level-0 community that happens to share its ID")
 
 	// Prune of the previous partition lands last.
-	c.handleDelete(communityKVKey(0, entDrone3))
+	testGeneration(c).applyDelete(communityKVKey(0, entDrone3))
 
-	level0 := c.GetCommunitiesByLevel(0)
+	level0 := testLease(t, c).getCommunitiesByLevel(0)
 	require.Len(t, level0, 1,
 		"level-0 index must still hold the surviving level-0 community after a late delete")
 	assert.Equal(t, entDrone1, level0[0].ID)
@@ -74,7 +90,7 @@ func TestCommunityCache_CrossLevelCollision_LateDeleteKeepsLevelZero(t *testing.
 	assert.ElementsMatch(t, []string{entDrone1, entDrone2}, level0[0].Members,
 		"the level-0 record must be returned, not the level-1 record with the same ID")
 
-	level1 := c.GetCommunitiesByLevel(1)
+	level1 := testLease(t, c).getCommunitiesByLevel(1)
 	require.Len(t, level1, 1, "the level-1 community is untouched by a level-0 delete")
 	assert.Len(t, level1[0].Members, 3)
 }
@@ -88,17 +104,17 @@ func TestCommunityCache_DeleteIsLevelScoped(t *testing.T) {
 	put(t, c, &clustering.Community{ID: entDrone1, Level: 0, Members: []string{entDrone1, entDrone2}})
 	put(t, c, &clustering.Community{ID: entDrone1, Level: 1, Members: []string{entDrone1, entDrone2, entDrone3}})
 
-	c.handleDelete(communityKVKey(0, entDrone1))
+	testGeneration(c).applyDelete(communityKVKey(0, entDrone1))
 
-	assert.Empty(t, c.GetCommunitiesByLevel(0), "the level-0 record was the delete target")
+	assert.Empty(t, testLease(t, c).getCommunitiesByLevel(0), "the level-0 record was the delete target")
 
-	level1 := c.GetCommunitiesByLevel(1)
+	level1 := testLease(t, c).getCommunitiesByLevel(1)
 	require.Len(t, level1, 1, "deleting the level-0 key must leave the level-1 community resolvable")
 	assert.Len(t, level1[0].Members, 3)
 
 	// Entity mappings are level-scoped; a level-0 delete strips only level-0 mappings.
-	assert.Nil(t, c.GetEntityCommunity(entDrone1, 0), "level-0 mapping removed with its community")
-	l1 := c.GetEntityCommunity(entDrone1, 1)
+	assert.Nil(t, testLease(t, c).getEntityCommunity(entDrone1, 0), "level-0 mapping removed with its community")
+	l1 := testLease(t, c).getEntityCommunity(entDrone1, 1)
 	require.NotNil(t, l1, "level-1 mapping must survive a level-0 delete")
 	assert.Equal(t, 1, l1.Level)
 }
@@ -115,18 +131,18 @@ func TestCommunityCache_DeleteOfHigherLevelKeySparesLevelZero(t *testing.T) {
 	put(t, c, &clustering.Community{ID: entDrone1, Level: 0, Members: []string{entDrone1, entDrone2}})
 	put(t, c, &clustering.Community{ID: entDrone1, Level: 1, Members: []string{entDrone1, entDrone2, entDrone3}})
 
-	c.handleDelete(communityKVKey(1, entDrone1))
+	testGeneration(c).applyDelete(communityKVKey(1, entDrone1))
 
-	level0 := c.GetCommunitiesByLevel(0)
+	level0 := testLease(t, c).getCommunitiesByLevel(0)
 	require.Len(t, level0, 1, "deleting the level-1 key must leave the level-0 community intact")
 	assert.Equal(t, []string{entDrone1, entDrone2}, level0[0].Members)
-	assert.Empty(t, c.GetCommunitiesByLevel(1), "the level-1 record was the delete target")
+	assert.Empty(t, testLease(t, c).getCommunitiesByLevel(1), "the level-1 record was the delete target")
 
-	l0 := c.GetEntityCommunity(entDrone1, 0)
+	l0 := testLease(t, c).getEntityCommunity(entDrone1, 0)
 	require.NotNil(t, l0, "level-0 mapping must survive a level-1 delete")
 	assert.Equal(t, 0, l0.Level)
-	assert.Nil(t, c.GetEntityCommunity(entDrone1, 1), "level-1 mapping removed with its community")
-	assert.Nil(t, c.GetEntityCommunity(entDrone3, 1), "entDrone3 was only a level-1 member")
+	assert.Nil(t, testLease(t, c).getEntityCommunity(entDrone1, 1), "level-1 mapping removed with its community")
+	assert.Nil(t, testLease(t, c).getEntityCommunity(entDrone3, 1), "entDrone3 was only a level-1 member")
 }
 
 // TestCommunityCache_KeyWinsOverPayloadLevel pins which side is authoritative when a
@@ -139,20 +155,20 @@ func TestCommunityCache_KeyWinsOverPayloadLevel(t *testing.T) {
 	// Written to "0.{id}" but claiming Level 2.
 	data, err := json.Marshal(&clustering.Community{ID: entDrone1, Level: 2, Members: []string{entDrone1}})
 	require.NoError(t, err)
-	c.handleUpdate(communityKVKey(0, entDrone1), data)
+	testGeneration(c).applyUpdate(communityKVKey(0, entDrone1), data, c.logger)
 
-	require.Len(t, c.GetCommunitiesByLevel(0), 1, "indexed under the key's level")
-	assert.Empty(t, c.GetCommunitiesByLevel(2), "not indexed under the payload's level")
-	got := c.GetCommunity(0, entDrone1)
+	require.Len(t, testLease(t, c).getCommunitiesByLevel(0), 1, "indexed under the key's level")
+	assert.Empty(t, testLease(t, c).getCommunitiesByLevel(2), "not indexed under the payload's level")
+	got := testLease(t, c).getCommunity(0, entDrone1)
 	require.NotNil(t, got)
 	assert.Equal(t, 0, got.Level,
 		"the record must report the level it is filed under, or callers cannot re-resolve it")
-	assert.NotNil(t, c.GetEntityCommunity(entDrone1, 0))
+	assert.NotNil(t, testLease(t, c).getEntityCommunity(entDrone1, 0))
 
 	// And it remains deletable under the key it arrived on.
-	c.handleDelete(communityKVKey(0, entDrone1))
-	assert.Empty(t, c.GetAllCommunities())
-	assert.Nil(t, c.GetEntityCommunity(entDrone1, 0))
+	testGeneration(c).applyDelete(communityKVKey(0, entDrone1))
+	assert.Empty(t, testLease(t, c).getAllCommunities())
+	assert.Nil(t, testLease(t, c).getEntityCommunity(entDrone1, 0))
 }
 
 // TestCommunityCache_RejectsUnparseableKeys keeps non-community keys out of the
@@ -168,15 +184,15 @@ func TestCommunityCache_RejectsUnparseableKeys(t *testing.T) {
 	// Assert BEFORE the deletes: an update+delete pair per key would clean up after
 	// itself and hide an accepted key.
 	for _, key := range keys {
-		c.handleUpdate(key, data)
+		testGeneration(c).applyUpdate(key, data, c.logger)
 	}
-	assert.Empty(t, c.GetAllCommunities(), "no unparseable key may enter the index")
-	assert.Equal(t, 0, c.Stats().TotalEntities)
+	assert.Empty(t, testLease(t, c).getAllCommunities(), "no unparseable key may enter the index")
+	assert.Equal(t, 0, testLease(t, c).stats().TotalEntities)
 
 	for _, key := range keys {
-		c.handleDelete(key)
+		testGeneration(c).applyDelete(key)
 	}
-	assert.Empty(t, c.GetAllCommunities())
+	assert.Empty(t, testLease(t, c).getAllCommunities())
 }
 
 // TestCommunityCache_LookupsAreLevelQualified proves the read surfaces resolve the
@@ -197,28 +213,28 @@ func TestCommunityCache_LookupsAreLevelQualified(t *testing.T) {
 		RepEntities: []string{entDrone3},
 	})
 
-	l0 := c.GetCommunity(0, entDrone1)
+	l0 := testLease(t, c).getCommunity(0, entDrone1)
 	require.NotNil(t, l0)
 	assert.Equal(t, 0, l0.Level)
 	assert.Len(t, l0.Members, 1)
 	assert.Equal(t, []string{entDrone1}, l0.RepEntities)
 
-	l2 := c.GetCommunity(2, entDrone1)
+	l2 := testLease(t, c).getCommunity(2, entDrone1)
 	require.NotNil(t, l2)
 	assert.Equal(t, 2, l2.Level)
 	assert.Len(t, l2.Members, 3)
 	assert.Equal(t, []string{entDrone3}, l2.RepEntities)
 
-	assert.Nil(t, c.GetCommunity(1, entDrone1), "no level-1 record was written")
+	assert.Nil(t, testLease(t, c).getCommunity(1, entDrone1), "no level-1 record was written")
 
 	// GetEntityCommunity resolves within the requested level.
-	e0 := c.GetEntityCommunity(entDrone1, 0)
+	e0 := testLease(t, c).getEntityCommunity(entDrone1, 0)
 	require.NotNil(t, e0)
 	assert.Len(t, e0.Members, 1)
-	e2 := c.GetEntityCommunity(entDrone1, 2)
+	e2 := testLease(t, c).getEntityCommunity(entDrone1, 2)
 	require.NotNil(t, e2)
 	assert.Len(t, e2.Members, 3)
-	assert.Nil(t, c.GetEntityCommunity(entDrone2, 0), "entDrone2 is only a level-2 member")
+	assert.Nil(t, testLease(t, c).getEntityCommunity(entDrone2, 0), "entDrone2 is only a level-2 member")
 }
 
 // TestCommunityCache_StatsCountCollidingIDsSeparately keeps the operator-facing
@@ -230,12 +246,12 @@ func TestCommunityCache_StatsCountCollidingIDsSeparately(t *testing.T) {
 	put(t, c, &clustering.Community{ID: entDrone2, Level: 0, Members: []string{entDrone2}})
 	put(t, c, &clustering.Community{ID: entDrone1, Level: 1, Members: []string{entDrone1, entDrone2}})
 
-	stats := c.Stats()
+	stats := testLease(t, c).stats()
 	assert.Equal(t, 3, stats.TotalCommunities)
 	assert.Equal(t, map[int]int{0: 2, 1: 1}, stats.ByLevel)
 	assert.Equal(t, 2, stats.TotalEntities)
 
-	all := c.GetAllCommunities()
+	all := testLease(t, c).getAllCommunities()
 	assert.Len(t, all, 3, "GetAllCommunities must not collapse cross-level ID collisions")
 
 	// The (level, ID) ordering is load-bearing, not cosmetic. findCommunitiesForEntities
@@ -265,11 +281,11 @@ func TestCommunityCache_UpdateReplacesSameLevelRecord(t *testing.T) {
 	put(t, c, &clustering.Community{ID: entDrone1, Level: 0, Members: []string{entDrone1, entDrone2}})
 	put(t, c, &clustering.Community{ID: entDrone1, Level: 0, Members: []string{entDrone1}})
 
-	level0 := c.GetCommunitiesByLevel(0)
+	level0 := testLease(t, c).getCommunitiesByLevel(0)
 	require.Len(t, level0, 1)
 	assert.Equal(t, []string{entDrone1}, level0[0].Members)
-	assert.Nil(t, c.GetEntityCommunity(entDrone2, 0), "a dropped member must stop resolving")
-	assert.Equal(t, 1, c.Stats().TotalEntities)
+	assert.Nil(t, testLease(t, c).getEntityCommunity(entDrone2, 0), "a dropped member must stop resolving")
+	assert.Equal(t, 1, testLease(t, c).stats().TotalEntities)
 }
 
 // TestCommunityCache_IgnoresEntityMappingKeys keeps the entity.{level}.{id} keys —
@@ -277,11 +293,11 @@ func TestCommunityCache_UpdateReplacesSameLevelRecord(t *testing.T) {
 func TestCommunityCache_IgnoresEntityMappingKeys(t *testing.T) {
 	c := newTestCache()
 
-	c.handleUpdate("entity.0."+entDrone1, []byte(entDrone1))
-	c.handleDelete("entity.0." + entDrone1)
+	testGeneration(c).applyUpdate("entity.0."+entDrone1, []byte(entDrone1), c.logger)
+	testGeneration(c).applyDelete("entity.0." + entDrone1)
 
-	assert.Empty(t, c.GetAllCommunities())
-	assert.Equal(t, 0, c.Stats().TotalCommunities)
+	assert.Empty(t, testLease(t, c).getAllCommunities())
+	assert.Equal(t, 0, testLease(t, c).stats().TotalCommunities)
 }
 
 // TestCommunityCache_GetCommunitiesByLevelIsDeterministic pins stable ordering.
@@ -297,7 +313,7 @@ func TestCommunityCache_GetCommunitiesByLevelIsDeterministic(t *testing.T) {
 	want := []string{entDrone1, entDrone2, entDrone3}
 	for i := 0; i < 20; i++ {
 		got := make([]string, 0, 3)
-		for _, comm := range c.GetCommunitiesByLevel(0) {
+		for _, comm := range testLease(t, c).getCommunitiesByLevel(0) {
 			got = append(got, comm.ID)
 		}
 		require.Equal(t, want, got, "GetCommunitiesByLevel must return a stable order")

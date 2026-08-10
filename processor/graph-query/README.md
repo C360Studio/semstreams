@@ -33,7 +33,7 @@ flowchart TD
     PathSearcher -->|Fetch Entities| GI
     PathSearcher -->|Fetch Relationships| GX
 
-    GraphRAG -->|Community Lookup| Cache[CommunityCache<br/>KV Watcher]
+    GraphRAG -->|Community Lookup| Cache[Private community cache<br/>generation watcher]
     GraphRAG -->|Load Entities| GI
     GraphRAG -->|Semantic Search| GE
 
@@ -73,6 +73,8 @@ Tiered search strategy with automatic fallback:
 - Neural embedding-based similarity via graph-embedding component
 - Returns entities ranked by semantic relevance
 - Automatic community attribution
+- `searchGraph` direct semantic fallback inherits summary, answer, source, and
+  `summarize_threshold` intent while preserving semantic IDs, digests, and scores
 
 **Tier 2: Text-Based Fallback**
 
@@ -101,17 +103,11 @@ Fixed query-type-to-subject mappings for all graph operations:
   "config": {
     "ports": {
       "inputs": [
-        {"name":"query_entity","config":{"kind":"nats-request","subject":"graph.query.entity"}},
-        {"name":"query_relationships","config":{"kind":"nats-request","subject":"graph.query.relationships"}},
-        {"name":"query_path_search","config":{"kind":"nats-request","subject":"graph.query.pathSearch"}},
-        {"name":"local_search","config":{"kind":"nats-request","subject":"graph.query.localSearch"}},
-        {"name":"global_search","config":{"kind":"nats-request","subject":"graph.query.globalSearch"}}
+        {"name":"graph_queries","required":true,"config":{"kind":"nats-request","subject":"graph.query.*","interface":{"type":"graph.query","version":"v1"}}}
       ]
     },
     "query_timeout": "5s",
     "max_depth": 10,
-    "startup_attempts": 10,
-    "startup_interval": "500ms",
     "recheck_interval": "5s"
   }
 }
@@ -124,8 +120,6 @@ Fixed query-type-to-subject mappings for all graph operations:
 | `ports` | `PortConfig` | Required | Input port definitions for query subscriptions |
 | `query_timeout` | `time.Duration` | `5s` | Timeout for inter-component NATS requests |
 | `max_depth` | `int` | `10` | Maximum BFS traversal depth for PathRAG |
-| `startup_attempts` | `int` | `10` | Bucket availability check attempts at startup |
-| `startup_interval` | `time.Duration` | `500ms` | Interval between startup availability checks |
 | `recheck_interval` | `time.Duration` | `5s` | Interval for rechecking missing buckets after startup |
 
 ## Query Types
@@ -327,29 +321,22 @@ Cross-community search with tiered strategy:
 
 ## Graceful Degradation
 
-The component uses resource watchers to handle missing optional dependencies:
+The component keeps all query responders installed and supervises a private
+`COMMUNITY_INDEX` projection generation:
 
-1. **Startup Phase**: Attempts to connect to COMMUNITY_INDEX bucket (10 attempts over 5 seconds by default)
-2. **Degraded Mode**: If bucket unavailable, PathRAG and static routing work, GraphRAG disabled
-3. **Recovery**: Background checking continues at `recheck_interval`
-4. **Restoration**: When bucket becomes available, GraphRAG is automatically enabled
+1. Each attempt opens the existing bucket through the must-exist catalog reader and starts a fresh `WatchAll`.
+2. Updates remain private until the initial-enumeration sentinel publishes the complete generation, including empty.
+3. Every watcher exit immediately makes that generation unusable. Unexpected loss retries at `recheck_interval`;
+   orderly component cancellation revokes the generation without loss/retry classification.
+4. `localSearch` and community-only search return transient `index_not_ready` without a usable generation.
+5. `globalSearch` and `searchGraph` preserve independent lower-tier results and report
+   `degraded_reason=community_cache_not_ready` only when requested community enrichment is unavailable.
 
 ## Input Ports
 
 | Port Name | Type | Subject | Purpose |
 |-----------|------|---------|---------|
-| `query_entity` | nats-request | `graph.query.entity` | Entity lookup by ID |
-| `query_entity_by_alias` | nats-request | `graph.query.entityByAlias` | Entity resolution by alias |
-| `query_relationships` | nats-request | `graph.query.relationships` | Relationship queries |
-| `query_path_search` | nats-request | `graph.query.pathSearch` | PathRAG traversal |
-| `query_hierarchy_stats` | nats-request | `graph.query.hierarchyStats` | Hierarchy statistics |
-| `query_prefix` | nats-request | `graph.query.prefix` | Prefix-based entity lookup |
-| `query_spatial` | nats-request | `graph.query.spatial` | Spatial bounding box queries |
-| `query_temporal` | nats-request | `graph.query.temporal` | Temporal range queries |
-| `query_semantic` | nats-request | `graph.query.semantic` | Neural semantic search |
-| `query_similar` | nats-request | `graph.query.similar` | Similar entity search |
-| `local_search` | nats-request | `graph.query.localSearch` | Community-scoped search |
-| `global_search` | nats-request | `graph.query.globalSearch` | Cross-community NL search |
+| `graph_queries` | nats-request | `graph.query.*` (`graph.query/v1`) | Required family for all sixteen admitted query operations |
 
 ## Output Ports
 

@@ -1240,6 +1240,9 @@ func (c *Component) transformGlobalSearchVars(variables map[string]interface{}) 
 	if maxCommunities, ok := variables["maxCommunities"]; ok {
 		payload["max_communities"] = maxCommunities
 	}
+	if summarizeThreshold, ok := variables["summarizeThreshold"]; ok {
+		payload["summarize_threshold"] = summarizeThreshold
+	}
 	if includeSummaries, ok := variables["includeSummaries"]; ok {
 		payload["include_summaries"] = includeSummaries
 	}

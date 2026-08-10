@@ -977,11 +977,6 @@
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
     },
     {
-      "key": "integration-time-sleep|processor/graph-query/component_integration_test.go|TestIntegration_GraphRAGBucketRecovery|time.Sleep(200 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
       "key": "integration-time-sleep|processor/json_filter/json_filter_integration_test.go|TestIntegration_ContainsOperator|time.Sleep(100 * time.Millisecond)|1",
       "kind": "migration-debt",
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"

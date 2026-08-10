@@ -23,6 +23,7 @@ import (
 
 // GraphRAG search constants
 const (
+	communityCacheNotReadyReason = "community_cache_not_ready"
 	// DefaultMaxCommunities is the default number of communities to search in GlobalSearch
 	DefaultMaxCommunities = 5
 
@@ -60,6 +61,65 @@ const (
 	// MaxAnswerClusters limits the number of communities included in answer synthesis
 	MaxAnswerClusters = 5
 )
+
+type communityRequestLease struct {
+	lease     *communityLease
+	requested bool
+	required  bool
+}
+
+type communityRequestLeaseKey struct{}
+
+func (c *Component) withCommunityRequestLease(ctx context.Context) (context.Context, *communityRequestLease) {
+	if existing, ok := ctx.Value(communityRequestLeaseKey{}).(*communityRequestLease); ok {
+		return ctx, existing
+	}
+	state := &communityRequestLease{}
+	if c.communityCache != nil {
+		state.lease = c.communityCache.acquire()
+	}
+	return context.WithValue(ctx, communityRequestLeaseKey{}, state), state
+}
+
+func communityRequestFrom(ctx context.Context) *communityRequestLease {
+	state, _ := ctx.Value(communityRequestLeaseKey{}).(*communityRequestLease)
+	return state
+}
+
+func requestCommunityEnrichment(ctx context.Context) *communityLease {
+	state := communityRequestFrom(ctx)
+	if state == nil {
+		return nil
+	}
+	state.requested = true
+	if state.lease == nil || !state.lease.valid() {
+		return nil
+	}
+	return state.lease
+}
+
+func validCommunityLease(ctx context.Context) *communityLease {
+	state := communityRequestFrom(ctx)
+	if state == nil || state.lease == nil || !state.lease.valid() {
+		return nil
+	}
+	return state.lease
+}
+
+func requireCommunityGeneration(ctx context.Context) *communityLease {
+	state := communityRequestFrom(ctx)
+	if state == nil {
+		return nil
+	}
+	state.requested = true
+	state.required = true
+	return validCommunityLease(ctx)
+}
+
+func indexNotReadyError() error {
+	return errs.ClassifiedCode(errs.ErrorTransient, gtypes.ErrorCodeIndexNotReady,
+		errors.New("community index is not ready"))
+}
 
 // LocalSearchRequest is the request format for local search
 type LocalSearchRequest struct {
@@ -100,14 +160,14 @@ type GlobalSearchRequest struct {
 	Query                string `json:"query"`
 	Level                int    `json:"level"`
 	MaxCommunities       int    `json:"max_communities"`
-	SummarizeThreshold   *int   `json:"summarize_threshold,omitempty"`   // Auto-summarize when results exceed this (default: 50, -1=disabled)
+	SummarizeThreshold   *int   `json:"summarize_threshold,omitempty"`   // Auto-summarize when results exceed this (default: 50, non-positive=disabled)
 	IncludeSummaries     *bool  `json:"include_summaries,omitempty"`     // Include community summaries (default: true)
 	IncludeRelationships bool   `json:"include_relationships,omitempty"` // Include relationships between entities (default: false)
 	IncludeSources       bool   `json:"include_sources,omitempty"`       // Include source attribution (default: false)
 }
 
 // getSummarizeThreshold returns the summarize threshold. Defaults to DefaultSummarizeThreshold.
-// A negative value disables auto-summarization.
+// A non-positive value disables auto-summarization.
 func (r *GlobalSearchRequest) getSummarizeThreshold() int {
 	if r.SummarizeThreshold == nil {
 		return DefaultSummarizeThreshold
@@ -138,15 +198,14 @@ type GlobalSearchResponse struct {
 	DurationMs         int64                 `json:"duration_ms"`
 	Answer             string                `json:"answer,omitempty"`
 	AnswerModel        string                `json:"answer_model,omitempty"`
-	// Degraded is true when an LLM-configured answer synthesizer fell
-	// back to template synthesis. See LocalSearchResponse.Degraded for
-	// the contract. The agent / human consumer should surface this
-	// flag — Answer + Entities + CommunitySummaries are still useful,
-	// but the rich LLM synthesis the operator paid for didn't
-	// materialize (likely due to LLM timeout or error under load).
+	// Degraded is true when optional enrichment could not complete. This covers
+	// answer synthesis fallback and a community generation that was unavailable
+	// or lost before the response was finalized. Entity-backed results remain
+	// useful; generation-bound community fields are omitted after generation loss.
 	Degraded bool `json:"degraded,omitempty"`
 	// DegradedReason classifies why synthesis was degraded.
-	// "answer_synthesis_timeout" | "answer_synthesis_error" | "".
+	// "answer_synthesis_timeout" | "answer_synthesis_error" |
+	// "community_cache_not_ready" | "".
 	DegradedReason string `json:"degraded_reason,omitempty"`
 	// EntitiesTruncated is true when the candidate entity corpus collected from
 	// the selected communities exceeded MaxTotalEntitiesInSearch and was capped
@@ -215,6 +274,7 @@ func extractEntityInstance(entityID string) string {
 // handleLocalSearch handles local search requests via NATS request/reply
 func (c *Component) handleLocalSearch(ctx context.Context, data []byte) ([]byte, error) {
 	startTime := time.Now()
+	ctx, requestLease := c.withCommunityRequestLease(ctx)
 
 	// Parse request
 	var req LocalSearchRequest
@@ -231,9 +291,10 @@ func (c *Component) handleLocalSearch(ctx context.Context, data []byte) ([]byte,
 	}
 
 	// Check if community cache is available
-	if c.communityCache == nil || !c.communityCache.IsReady() {
-		return nil, errs.ClassifiedCode(errs.ErrorTransient, gtypes.ErrorCodeIndexNotReady,
-			errors.New("community index is not ready"))
+	if requestLease.lease == nil || !requestLease.lease.valid() {
+		err := indexNotReadyError()
+		c.recordError(err)
+		return nil, err
 	}
 
 	// Tiered community lookup with fallback
@@ -260,8 +321,7 @@ func (c *Component) handleLocalSearch(ctx context.Context, data []byte) ([]byte,
 					DurationMs:    time.Since(startTime).Milliseconds(),
 					EntityDigests: buildEntityDigestsFromEntities(matchedEntities),
 				}
-				c.recordSuccess(len(data), 0)
-				return json.Marshal(response)
+				return c.finishLocalSearch(data, response, requestLease)
 			}
 		}
 		return nil, errs.WrapInvalid(errors.New("entity not in a community at level"), "GraphQuery", "handleLocalSearch", "find community")
@@ -309,15 +369,33 @@ func (c *Component) handleLocalSearch(ctx context.Context, data []byte) ([]byte,
 		Degraded:         synth.Degraded,
 		DegradedReason:   synth.Reason,
 	}
+	return c.finishLocalSearch(data, response, requestLease)
+}
 
-	c.recordSuccess(len(data), 0)
-	return json.Marshal(response)
+// finishLocalSearch performs every fallible response operation before atomically
+// linearizing exact-generation validation with successful completion accounting.
+func (c *Component) finishLocalSearch(request []byte, response LocalSearchResponse, state *communityRequestLease) ([]byte, error) {
+	result, err := json.Marshal(response)
+	if err != nil {
+		return nil, errs.Wrap(err, "GraphQuery", "finishLocalSearch", "marshal response")
+	}
+	if c.localSearchBeforeFinalize != nil {
+		c.localSearchBeforeFinalize()
+	}
+	if state == nil || state.lease == nil || !state.lease.completeSuccess(func() {
+		c.recordSuccess(len(request), len(result))
+	}) {
+		err := indexNotReadyError()
+		c.recordError(err)
+		return nil, err
+	}
+	return result, nil
 }
 
 // tryPathIntentSearch checks a classification result for path intent and routes to PathRAG.
 // Returns (result, true, nil) if handled, (nil, false, nil) when another tier
 // may run, or the fatal graph-state error that must stop all fallback.
-func (c *Component) tryPathIntentSearch(ctx context.Context, cr *query.ClassificationResult, queryText string, startTime time.Time, requestSize int) ([]byte, bool, error) {
+func (c *Component) tryPathIntentSearch(ctx context.Context, cr *query.ClassificationResult, req *GlobalSearchRequest, startTime time.Time) ([]byte, bool, error) {
 	if cr == nil {
 		return nil, false, nil
 	}
@@ -333,7 +411,7 @@ func (c *Component) tryPathIntentSearch(ctx context.Context, cr *query.Classific
 	}
 
 	c.logger.Debug("path intent detected in NL query",
-		"query", queryText,
+		"query", req.Query,
 		"start_node", pathStartNode)
 
 	// Resolve partial entity ID to full ID
@@ -369,10 +447,18 @@ func (c *Component) tryPathIntentSearch(ctx context.Context, cr *query.Classific
 				Count:      len(pathResult.Entities),
 				DurationMs: time.Since(startTime).Milliseconds(),
 			}
-			if err := c.enrichGlobalResponse(ctx, &response, queryText, pathEntityIDs, nil); err != nil {
-				return nil, false, err
+			if req.shouldIncludeSummaries() {
+				if err := c.enrichGlobalResponse(ctx, &response, req.Query, pathEntityIDs, nil); err != nil {
+					return nil, false, err
+				}
 			}
-			c.recordSuccess(requestSize, 0)
+			if req.IncludeRelationships {
+				response.Relationships = c.extractRelationships(ctx, pathResult.Entities)
+			}
+			if req.IncludeSources {
+				requestCommunityEnrichment(ctx)
+				response.Sources = c.buildSources(ctx, pathResult.Entities, nil, c.findCommunitiesForEntities(ctx, pathEntityIDs))
+			}
 			marshaledResult, _ := json.Marshal(response)
 			return marshaledResult, true, nil
 		}
@@ -586,6 +672,51 @@ func (c *Component) resolveStrategy(cr *query.ClassificationResult) string {
 // to the appropriate strategy handler. Handlers that find no results fall
 // through to the default graphrag path.
 func (c *Component) handleGlobalSearch(ctx context.Context, data []byte) ([]byte, error) {
+	ctx, state := c.withCommunityRequestLease(ctx)
+	result, err := c.handleGlobalSearchWithLease(ctx, data)
+	if err != nil {
+		c.recordIndexNotReadyCompletionError(err)
+		return nil, err
+	}
+	if c.globalSearchBeforeFinalize != nil {
+		c.globalSearchBeforeFinalize()
+	}
+	return c.completeGlobalCommunityResult(data, result, state)
+}
+
+func (c *Component) recordIndexNotReadyCompletionError(err error) {
+	var classified *errs.ClassifiedError
+	if errors.As(err, &classified) && classified.Code == gtypes.ErrorCodeIndexNotReady {
+		c.recordError(err)
+	}
+}
+
+func (c *Component) completeGlobalCommunityResult(request, result []byte, state *communityRequestLease) ([]byte, error) {
+	if state == nil || !state.requested {
+		c.recordSuccess(len(request), len(result))
+		return result, nil
+	}
+	if state.lease != nil && state.lease.completeSuccess(func() {
+		c.recordSuccess(len(request), len(result))
+	}) {
+		return result, nil
+	}
+	if state.required {
+		err := indexNotReadyError()
+		c.recordError(err)
+		return nil, err
+	}
+
+	final, err := c.stripUnavailableCommunityEnrichment(result)
+	if err != nil {
+		c.recordError(err)
+		return nil, err
+	}
+	c.recordSuccess(len(request), len(final))
+	return final, nil
+}
+
+func (c *Component) handleGlobalSearchWithLease(ctx context.Context, data []byte) ([]byte, error) {
 	startTime := time.Now()
 
 	// Parse request.
@@ -625,7 +756,7 @@ func (c *Component) handleGlobalSearch(ctx context.Context, data []byte) ([]byte
 
 	switch strategy {
 	case "entity_lookup":
-		result, handled, err := c.handleStrategyEntityLookup(ctx, classResult, searchQuery, startTime)
+		result, handled, err := c.handleStrategyEntityLookup(ctx, classResult, searchQuery, &req, startTime)
 		if err != nil {
 			return nil, err
 		}
@@ -636,7 +767,7 @@ func (c *Component) handleGlobalSearch(ctx context.Context, data []byte) ([]byte
 		// (single-word queries, no path_start_node, fewer than 2 dots) —
 		// fall through to graphrag so the semantic tier gets a chance.
 	case "pathrag":
-		result, handled, err := c.tryPathIntentSearch(ctx, classResult, req.Query, startTime, len(data))
+		result, handled, err := c.tryPathIntentSearch(ctx, classResult, &req, startTime)
 		if err != nil {
 			return nil, err
 		}
@@ -645,21 +776,40 @@ func (c *Component) handleGlobalSearch(ctx context.Context, data []byte) ([]byte
 		}
 		// Path search found no results — fall through to graphrag.
 	case "semantic":
-		return c.handleStrategySemantic(ctx, searchQuery, typeFilters, &req, startTime, len(data))
+		return c.handleStrategySemantic(ctx, searchQuery, typeFilters, &req, startTime)
 	case "temporal":
-		return c.handleStrategyTemporal(ctx, classResult, &req, startTime, len(data))
+		return c.handleStrategyTemporal(ctx, classResult, &req, startTime)
 	case "spatial":
-		return c.handleStrategySpatial(ctx, classResult, &req, startTime, len(data))
+		return c.handleStrategySpatial(ctx, classResult, &req, startTime)
 	}
 
 	// Default: graphrag (semantic → text-based community search).
-	return c.handleStrategyGraphRAG(ctx, searchQuery, typeFilters, &req, startTime, len(data))
+	return c.handleStrategyGraphRAG(ctx, searchQuery, typeFilters, &req, startTime)
+}
+
+func (c *Component) stripUnavailableCommunityEnrichment(data []byte) ([]byte, error) {
+	var response GlobalSearchResponse
+	if err := json.Unmarshal(data, &response); err != nil {
+		return nil, errs.Wrap(err, "GraphQuery", "stripUnavailableCommunityEnrichment", "decode response")
+	}
+	response.CommunitySummaries = nil
+	response.Answer = ""
+	response.AnswerModel = ""
+	for i := range response.Sources {
+		response.Sources[i].CommunityID = ""
+	}
+	response.Degraded = true
+	response.DegradedReason = communityCacheNotReadyReason
+	if c.promMetrics != nil {
+		c.promMetrics.recordGlobalSearchDegraded(communityCacheNotReadyReason)
+	}
+	return json.Marshal(response)
 }
 
 // handleStrategyGraphRAG is the default search path: try semantic search first,
 // then fall back to text-based community scoring. This is a pure extraction of
 // the former Tier 1 + Tier 2 blocks from handleGlobalSearch.
-func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery string, typeFilters []string, req *GlobalSearchRequest, startTime time.Time, requestSize int) ([]byte, error) {
+func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery string, typeFilters []string, req *GlobalSearchRequest, startTime time.Time) ([]byte, error) {
 	// Tier 1: Try semantic search first (via graph-embedding).
 	// Semantic search works independently of the community cache.
 	semanticHits, err := c.searchEntitiesSemantic(ctx, searchQuery, 100)
@@ -701,8 +851,14 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 				"remaining", len(entityIDs))
 		}
 
-		// Find communities containing these entities (may be empty without cache).
-		communityMatches := c.findCommunitiesForEntities(entityIDs)
+		threshold := req.getSummarizeThreshold()
+		autoSummarize := threshold > 0 && len(entityIDs) > threshold
+		needsCommunity := req.shouldIncludeSummaries() || req.IncludeSources || autoSummarize
+		var communityMatches []CommunitySummary
+		if needsCommunity {
+			requestCommunityEnrichment(ctx)
+			communityMatches = c.findCommunitiesForEntities(ctx, entityIDs)
+		}
 
 		// Limit to requested number of communities.
 		if len(communityMatches) > req.MaxCommunities {
@@ -711,8 +867,7 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 
 		// Auto-summarize: when results exceed threshold, return summaries + IDs
 		// instead of loading full entity triples (which can be 100MB+ for broad queries).
-		threshold := req.getSummarizeThreshold()
-		if threshold > 0 && len(entityIDs) > threshold {
+		if autoSummarize {
 			c.logger.Debug("auto-summarizing broad search results",
 				"query", req.Query,
 				"hits", len(entityIDs),
@@ -753,7 +908,9 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 				DegradedReason:     synth.Reason,
 				DurationMs:         time.Since(startTime).Milliseconds(),
 			}
-			c.recordSuccess(requestSize, 0)
+			if req.IncludeSources {
+				response.Sources = c.buildSourcesForEntityIDs(ctx, entityIDs, semanticHits, communityMatches)
+			}
 			return json.Marshal(response)
 		}
 
@@ -786,10 +943,9 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 				response.Relationships = c.extractRelationships(ctx, entities)
 			}
 			if req.IncludeSources {
-				response.Sources = c.buildSources(entities, semanticHits, communityMatches)
+				response.Sources = c.buildSources(ctx, entities, semanticHits, communityMatches)
 			}
 			c.recordGlobalSearchOutcome("graphrag", &response, "")
-			c.recordSuccess(requestSize, 0)
 			return json.Marshal(response)
 		}
 	} else if err != nil {
@@ -798,14 +954,14 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 	}
 
 	// Tier 2: Fall back to text-based community scoring.
-	return c.graphRAGTier2Fallback(ctx, req, startTime, requestSize, err)
+	return c.graphRAGTier2Fallback(ctx, req, startTime, err)
 }
 
 // graphRAGTier2Fallback handles the graphrag fall-through when tier-1 semantic
 // search is empty or errored. Records the tier transition Prometheus signal
-// and either returns an empty response (community cache unavailable) or
+// and either reports the required community generation as unavailable or
 // delegates to the text-based community search.
-func (c *Component) graphRAGTier2Fallback(ctx context.Context, req *GlobalSearchRequest, startTime time.Time, requestSize int, semanticErr error) ([]byte, error) {
+func (c *Component) graphRAGTier2Fallback(ctx context.Context, req *GlobalSearchRequest, startTime time.Time, semanticErr error) ([]byte, error) {
 	tierReason := "empty_hits"
 	if semanticErr != nil {
 		tierReason = "err"
@@ -813,24 +969,12 @@ func (c *Component) graphRAGTier2Fallback(ctx context.Context, req *GlobalSearch
 	if c.promMetrics != nil {
 		c.promMetrics.recordGlobalSearchTierTransition("semantic", "community_text", tierReason)
 	}
-	// Return an empty result instead of an error when the community cache
-	// is unavailable — callers should not receive a hard error just because
-	// clustering hasn't run yet.
-	if c.communityCache == nil {
-		c.logger.Debug("community cache not available, returning empty result",
-			"query", req.Query)
-		response := GlobalSearchResponse{
-			Entities:   []*gtypes.EntityState{},
-			Count:      0,
-			DurationMs: time.Since(startTime).Milliseconds(),
-		}
-		if req.shouldIncludeSummaries() {
-			response.CommunitySummaries = []CommunitySummary{}
-		}
-		c.recordGlobalSearchOutcome("graphrag", &response, "no_community_cache")
-		return json.Marshal(response)
+	// Community-text search requires a published generation. Its absence is a
+	// transient readiness error so the caller can retry or choose another path.
+	if requireCommunityGeneration(ctx) == nil {
+		return nil, indexNotReadyError()
 	}
-	return c.globalSearchTextBased(ctx, *req, startTime, requestSize)
+	return c.globalSearchTextBased(ctx, *req, startTime)
 }
 
 // handleStrategyEntityLookup resolves a named entity and returns it directly.
@@ -847,7 +991,7 @@ func (c *Component) graphRAGTier2Fallback(ctx context.Context, req *GlobalSearch
 // "temperature" hit this dead-end every time. The known-answer e2e
 // surface caught it; the user-acknowledged "single-word search doesn't
 // work" was the same root cause.
-func (c *Component) handleStrategyEntityLookup(ctx context.Context, cr *query.ClassificationResult, searchQuery string, startTime time.Time) ([]byte, bool, error) {
+func (c *Component) handleStrategyEntityLookup(ctx context.Context, cr *query.ClassificationResult, searchQuery string, req *GlobalSearchRequest, startTime time.Time) ([]byte, bool, error) {
 	// Prefer path_start_node extracted by the classifier; fall back to the
 	// (possibly refined) query text when it looks like a partial entity ID.
 	ref := ""
@@ -886,11 +1030,19 @@ func (c *Component) handleStrategyEntityLookup(ctx context.Context, cr *query.Cl
 		Count:      len(entities),
 		DurationMs: time.Since(startTime).Milliseconds(),
 	}
-	if err := c.enrichGlobalResponse(ctx, &response, searchQuery, []string{fullID}, nil); err != nil {
-		return nil, false, err
+	if req.shouldIncludeSummaries() {
+		if err := c.enrichGlobalResponse(ctx, &response, searchQuery, []string{fullID}, nil); err != nil {
+			return nil, false, err
+		}
+	}
+	if req.IncludeRelationships {
+		response.Relationships = c.extractRelationships(ctx, entities)
+	}
+	if req.IncludeSources {
+		requestCommunityEnrichment(ctx)
+		response.Sources = c.buildSources(ctx, entities, nil, c.findCommunitiesForEntities(ctx, []string{fullID}))
 	}
 
-	c.recordSuccess(0, 0)
 	out, err := json.Marshal(response)
 	if err != nil {
 		c.logger.Debug("entity_lookup: marshal failed, falling through",
@@ -905,7 +1057,7 @@ func (c *Component) handleStrategyEntityLookup(ctx context.Context, cr *query.Cl
 // Uses a higher relevance threshold (0.5) than the graphrag path (0.3) because
 // queries routed here explicitly request semantic similarity ("find similar to X"),
 // so only genuinely similar entities should be returned.
-func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery string, typeFilters []string, _ *GlobalSearchRequest, startTime time.Time, requestSize int) ([]byte, error) {
+func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery string, typeFilters []string, req *GlobalSearchRequest, startTime time.Time) ([]byte, error) {
 	semanticHits, err := c.searchEntitiesSemantic(ctx, searchQuery, 100)
 	if err != nil {
 		c.logger.Debug("semantic strategy: search unavailable",
@@ -999,8 +1151,17 @@ func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery stri
 	// `filtered` hit set, so a type-filtered-out hit cannot leak into
 	// representative selection via a shared community.
 	scores := relevanceScoresFor(entityIDs, filtered)
-	if err := c.enrichGlobalResponse(ctx, &response, searchQuery, entityIDs, scores); err != nil {
-		return nil, err
+	if req.shouldIncludeSummaries() {
+		if err := c.enrichGlobalResponse(ctx, &response, searchQuery, entityIDs, scores); err != nil {
+			return nil, err
+		}
+	}
+	if req.IncludeRelationships {
+		response.Relationships = c.extractRelationships(ctx, entities)
+	}
+	if req.IncludeSources {
+		requestCommunityEnrichment(ctx)
+		response.Sources = c.buildSources(ctx, entities, filtered, c.findCommunitiesForEntities(ctx, entityIDs))
 	}
 
 	if c.promMetrics != nil {
@@ -1016,25 +1177,24 @@ func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery stri
 		}
 	}
 
-	c.recordSuccess(requestSize, 0)
 	return json.Marshal(response)
 }
 
 // handleStrategyTemporal delegates to the graph-temporal component via NATS.
 // It extracts the time range from the classification result and forwards the
 // bounded range query, then loads the matched entities.
-func (c *Component) handleStrategyTemporal(ctx context.Context, cr *query.ClassificationResult, req *GlobalSearchRequest, startTime time.Time, requestSize int) ([]byte, error) {
+func (c *Component) handleStrategyTemporal(ctx context.Context, cr *query.ClassificationResult, req *GlobalSearchRequest, startTime time.Time) ([]byte, error) {
 	timeRange, _ := cr.Options["time_range"].(*query.TimeRange)
 	if timeRange == nil {
 		c.logger.Debug("temporal strategy: no time range in classification, falling back to graphrag",
 			"query", req.Query)
-		return c.handleStrategyGraphRAG(ctx, req.Query, nil, req, startTime, requestSize)
+		return c.handleStrategyGraphRAG(ctx, req.Query, nil, req, startTime)
 	}
 
 	subject := c.router.Route("temporal")
 	if subject == "" {
 		c.logger.Debug("temporal route unavailable, falling back to graphrag")
-		return c.handleStrategyGraphRAG(ctx, req.Query, nil, req, startTime, requestSize)
+		return c.handleStrategyGraphRAG(ctx, req.Query, nil, req, startTime)
 	}
 
 	reqData, err := json.Marshal(map[string]any{
@@ -1071,29 +1231,37 @@ func (c *Component) handleStrategyTemporal(ctx context.Context, cr *query.Classi
 		Count:      len(entities),
 		DurationMs: time.Since(startTime).Milliseconds(),
 	}
-	if err := c.enrichGlobalResponse(ctx, &response, req.Query, entityIDs, nil); err != nil {
-		return nil, err
+	if req.shouldIncludeSummaries() {
+		if err := c.enrichGlobalResponse(ctx, &response, req.Query, entityIDs, nil); err != nil {
+			return nil, err
+		}
+	}
+	if req.IncludeRelationships {
+		response.Relationships = c.extractRelationships(ctx, entities)
+	}
+	if req.IncludeSources {
+		requestCommunityEnrichment(ctx)
+		response.Sources = c.buildSources(ctx, entities, nil, c.findCommunitiesForEntities(ctx, entityIDs))
 	}
 
-	c.recordSuccess(requestSize, 0)
 	return json.Marshal(response)
 }
 
 // handleStrategySpatial delegates to the graph-spatial component via NATS.
 // It extracts geographic bounds from the classification result and issues a
 // bounding-box query, then loads the matched entities.
-func (c *Component) handleStrategySpatial(ctx context.Context, cr *query.ClassificationResult, req *GlobalSearchRequest, startTime time.Time, requestSize int) ([]byte, error) {
+func (c *Component) handleStrategySpatial(ctx context.Context, cr *query.ClassificationResult, req *GlobalSearchRequest, startTime time.Time) ([]byte, error) {
 	bounds, _ := cr.Options["geo_bounds"].(*query.SpatialBounds)
 	if bounds == nil {
 		c.logger.Debug("spatial strategy: no geo bounds in classification, falling back to graphrag",
 			"query", req.Query)
-		return c.handleStrategyGraphRAG(ctx, req.Query, nil, req, startTime, requestSize)
+		return c.handleStrategyGraphRAG(ctx, req.Query, nil, req, startTime)
 	}
 
 	subject := c.router.Route("spatial")
 	if subject == "" {
 		c.logger.Debug("spatial route unavailable, falling back to graphrag")
-		return c.handleStrategyGraphRAG(ctx, req.Query, nil, req, startTime, requestSize)
+		return c.handleStrategyGraphRAG(ctx, req.Query, nil, req, startTime)
 	}
 
 	reqData, err := json.Marshal(map[string]any{
@@ -1132,11 +1300,19 @@ func (c *Component) handleStrategySpatial(ctx context.Context, cr *query.Classif
 		Count:      len(entities),
 		DurationMs: time.Since(startTime).Milliseconds(),
 	}
-	if err := c.enrichGlobalResponse(ctx, &response, req.Query, entityIDs, nil); err != nil {
-		return nil, err
+	if req.shouldIncludeSummaries() {
+		if err := c.enrichGlobalResponse(ctx, &response, req.Query, entityIDs, nil); err != nil {
+			return nil, err
+		}
+	}
+	if req.IncludeRelationships {
+		response.Relationships = c.extractRelationships(ctx, entities)
+	}
+	if req.IncludeSources {
+		requestCommunityEnrichment(ctx)
+		response.Sources = c.buildSources(ctx, entities, nil, c.findCommunitiesForEntities(ctx, entityIDs))
 	}
 
-	c.recordSuccess(requestSize, 0)
 	return json.Marshal(response)
 }
 
@@ -1184,10 +1360,14 @@ func sortAndCapEntityIDs(idSet map[string]bool, limit int) (ids []string, trunca
 
 // globalSearchTextBased performs text-based global search using community summaries.
 // This is the fallback when semantic search is unavailable.
-func (c *Component) globalSearchTextBased(ctx context.Context, req GlobalSearchRequest, startTime time.Time, requestSize int) ([]byte, error) {
+func (c *Component) globalSearchTextBased(ctx context.Context, req GlobalSearchRequest, startTime time.Time) ([]byte, error) {
+	lease := requireCommunityGeneration(ctx)
+	if lease == nil {
+		return nil, indexNotReadyError()
+	}
 	// Get all communities at the specified level from cache
-	communities := c.communityCache.GetCommunitiesByLevel(req.Level)
-	stats := c.communityCache.Stats()
+	communities := lease.getCommunitiesByLevel(req.Level)
+	stats := lease.stats()
 	c.logger.Debug("globalSearchTextBased: cache fetch",
 		"req_level", req.Level,
 		"communities_at_level", len(communities),
@@ -1297,11 +1477,10 @@ func (c *Component) globalSearchTextBased(ctx context.Context, req GlobalSearchR
 
 	// Conditionally build sources (opt-in, no semantic hits in text-based search)
 	if req.IncludeSources {
-		response.Sources = c.buildSources(matchedEntities, nil, summaries)
+		response.Sources = c.buildSources(ctx, matchedEntities, nil, summaries)
 	}
 
 	c.recordGlobalSearchOutcome("graphrag", &response, "relevance_filter")
-	c.recordSuccess(requestSize, 0)
 	return json.Marshal(response)
 }
 
@@ -1472,8 +1651,9 @@ type SemanticHit struct {
 
 // findCommunitiesForEntities returns communities that contain the given entities,
 // sorted by the number of matching entities (most relevant first).
-func (c *Component) findCommunitiesForEntities(entityIDs []string) []CommunitySummary {
-	if c.communityCache == nil {
+func (c *Component) findCommunitiesForEntities(ctx context.Context, entityIDs []string) []CommunitySummary {
+	lease := validCommunityLease(ctx)
+	if lease == nil {
 		return nil
 	}
 
@@ -1483,7 +1663,7 @@ func (c *Component) findCommunitiesForEntities(entityIDs []string) []CommunitySu
 	}
 
 	var summaries []CommunitySummary
-	communities := c.communityCache.GetAllCommunities()
+	communities := lease.getAllCommunities()
 
 	for _, comm := range communities {
 		matchCount := 0
@@ -1786,7 +1966,8 @@ func buildEntityDigestsFromEntities(entities []*gtypes.EntityState) []EntityDige
 // (collectDigestTags — Lever B) come from a single pass, without a second
 // label-only round-trip.
 func (c *Component) enrichCommunitySummaries(ctx context.Context, summaries []CommunitySummary, semanticScores map[string]float64) ([]CommunitySummary, error) {
-	if c.communityCache == nil || len(summaries) == 0 {
+	lease := requestCommunityEnrichment(ctx)
+	if lease == nil || len(summaries) == 0 {
 		return summaries, nil
 	}
 
@@ -1803,7 +1984,7 @@ func (c *Component) enrichCommunitySummaries(ctx context.Context, summaries []Co
 	for i := range summaries {
 		// Level-qualified: community IDs are only unique within a level, and
 		// Level here came off the same cache record as CommunityID.
-		comm := c.communityCache.GetCommunity(summaries[i].Level, summaries[i].CommunityID)
+		comm := lease.getCommunity(summaries[i].Level, summaries[i].CommunityID)
 		if comm == nil {
 			continue
 		}
@@ -1940,10 +2121,17 @@ func (c *Component) enrichGlobalResponse(ctx context.Context, resp *GlobalSearch
 	if len(entityIDs) == 0 {
 		return nil
 	}
-	communityMatches := c.findCommunitiesForEntities(entityIDs)
+	requestCommunityEnrichment(ctx)
+	communityMatches := c.findCommunitiesForEntities(ctx, entityIDs)
 	if len(communityMatches) == 0 {
 		return nil
 	}
+	return c.enrichGlobalResponseFromCommunities(ctx, resp, queryText, communityMatches, semanticScores)
+}
+
+// enrichGlobalResponseFromCommunities is the shared summary/answer producer for
+// normal global search and SearchGraph's direct semantic fallback.
+func (c *Component) enrichGlobalResponseFromCommunities(ctx context.Context, resp *GlobalSearchResponse, queryText string, communityMatches []CommunitySummary, semanticScores map[string]float64) error {
 	enriched, err := c.enrichCommunitySummaries(ctx, communityMatches, semanticScores)
 	if err != nil {
 		return err
@@ -2015,8 +2203,12 @@ func synthesizeAnswer(summaries []CommunitySummary, totalEntities int) string {
 // Tier 2: Query storage directly via NATS (handles cache sync delays)
 // Returns nil if entity is not in a community at the requested level.
 func (c *Component) findCommunityWithFallback(ctx context.Context, entityID string, requestedLevel int) *clustering.Community {
+	lease := validCommunityLease(ctx)
+	if lease == nil {
+		return nil
+	}
 	// Tier 1: Try requested level from cache
-	community := c.communityCache.GetEntityCommunity(entityID, requestedLevel)
+	community := lease.getEntityCommunity(entityID, requestedLevel)
 	if community != nil {
 		if c.promMetrics != nil {
 			c.promMetrics.recordCacheHit()
@@ -2196,7 +2388,7 @@ func (c *Component) resolveCommunitySummary(comm *clustering.Community) string {
 		return ""
 	}
 	if c.communityCache != nil {
-		if summary, ok := c.communityCache.SummaryFor(comm); ok {
+		if summary, ok := c.communityCache.summaryFor(comm); ok {
 			return summary
 		}
 	}
@@ -2298,7 +2490,18 @@ func (c *Component) extractRelationships(_ context.Context, entities []*gtypes.E
 
 // buildSources builds source attribution for search results.
 // Maps entities to their communities and assigns relevance scores.
-func (c *Component) buildSources(entities []*gtypes.EntityState, semanticHits []SemanticHit, communitySummaries []CommunitySummary) []Source {
+func (c *Component) buildSources(ctx context.Context, entities []*gtypes.EntityState, semanticHits []SemanticHit, communitySummaries []CommunitySummary) []Source {
+	entityIDs := make([]string, 0, len(entities))
+	for _, entity := range entities {
+		entityIDs = append(entityIDs, entity.ID)
+	}
+	return c.buildSourcesForEntityIDs(ctx, entityIDs, semanticHits, communitySummaries)
+}
+
+// buildSourcesForEntityIDs preserves attribution for lower-tier results that do
+// not load full EntityState rows, such as broad auto-summary and searchGraph's
+// direct semantic fallback. Community decoration is optional and generation-bound.
+func (c *Component) buildSourcesForEntityIDs(ctx context.Context, entityIDs []string, semanticHits []SemanticHit, communitySummaries []CommunitySummary) []Source {
 	// Build semantic score lookup
 	semanticScores := make(map[string]float64)
 	for _, hit := range semanticHits {
@@ -2310,8 +2513,8 @@ func (c *Component) buildSources(entities []*gtypes.EntityState, semanticHits []
 	for _, cs := range communitySummaries {
 		// We don't have member lists in CommunitySummary, so skip community mapping
 		// unless we can access it from cache
-		if c.communityCache != nil {
-			community := c.communityCache.GetCommunity(cs.Level, cs.CommunityID)
+		if lease := validCommunityLease(ctx); lease != nil {
+			community := lease.getCommunity(cs.Level, cs.CommunityID)
 			if community != nil {
 				for _, member := range community.Members {
 					entityToCommunity[member] = cs.CommunityID
@@ -2320,17 +2523,17 @@ func (c *Component) buildSources(entities []*gtypes.EntityState, semanticHits []
 		}
 	}
 
-	sources := make([]Source, 0, len(entities))
-	for i, entity := range entities {
+	sources := make([]Source, 0, len(entityIDs))
+	for i, entityID := range entityIDs {
 		// Calculate relevance: use semantic score if available, otherwise position-based
-		relevance := 1.0 - (float64(i) / float64(len(entities)+1))
-		if score, ok := semanticScores[entity.ID]; ok {
+		relevance := 1.0 - (float64(i) / float64(len(entityIDs)+1))
+		if score, ok := semanticScores[entityID]; ok {
 			relevance = score
 		}
 
 		sources = append(sources, Source{
-			EntityID:    entity.ID,
-			CommunityID: entityToCommunity[entity.ID],
+			EntityID:    entityID,
+			CommunityID: entityToCommunity[entityID],
 			Relevance:   relevance,
 		})
 	}

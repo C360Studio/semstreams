@@ -240,8 +240,6 @@ func TestGraphQueryProviderPortIsOneVersionedRequiredFamily(t *testing.T) {
 func TestGraphQueryStartRegistersStableLocalSearchResponder(t *testing.T) {
 	mockClient := newMockNATSClient()
 	comp := createTestComponentWithMockClient(t, mockClient)
-	comp.config.StartupAttempts = 1
-	comp.config.StartupInterval = time.Millisecond
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
 	t.Cleanup(func() { require.NoError(t, comp.Stop(time.Second)) })
@@ -924,11 +922,7 @@ func createTestComponentWithMockClient(t *testing.T, mockClient *mockNATSClient)
 	config := DefaultConfig()
 	config.ApplyDefaults()
 
-	// Use fast startup settings for tests - 1 attempt with minimal delay
-	// This prevents 5s+ waits per Start() when testing without real NATS
-	config.StartupAttempts = 1
-	config.StartupInterval = time.Millisecond
-	config.RecheckInterval = time.Hour // Disable background recheck in tests
+	config.RecheckInterval = time.Hour // Disable background recheck in tests.
 	inputs := make([]component.Port, len(config.Ports.Inputs))
 	for index, definition := range config.Ports.Inputs {
 		port, err := definition.Resolve(component.DirectionInput)
@@ -1311,7 +1305,7 @@ func TestBuildSources_SemanticScores(t *testing.T) {
 		{EntityID: "test.fixture.graph.query.entity.002", Score: 0.85},
 	}
 
-	sources := comp.buildSources(entities, semanticHits, nil)
+	sources := comp.buildSources(context.Background(), entities, semanticHits, nil)
 
 	assert.Equal(t, 2, len(sources))
 
@@ -1335,7 +1329,7 @@ func TestBuildSources_PositionBased(t *testing.T) {
 	}
 
 	// No semantic hits - should fall back to position-based scoring
-	sources := comp.buildSources(entities, nil, nil)
+	sources := comp.buildSources(context.Background(), entities, nil, nil)
 
 	assert.Equal(t, 3, len(sources))
 

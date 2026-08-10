@@ -145,7 +145,7 @@ func getMetrics(registry *metric.MetricsRegistry) *queryMetrics {
 				Namespace: "semstreams",
 				Subsystem: "graph_query",
 				Name:      "global_search_degraded_total",
-				Help:      "Global search responses returned with Degraded=true, by reason (answer_synthesis_timeout|answer_synthesis_cancelled|answer_synthesis_error). Closes beta.45's flag-without-counter gap.",
+				Help:      "Global search responses returned with Degraded=true, by reason (answer_synthesis_timeout|answer_synthesis_cancelled|answer_synthesis_error|community_cache_not_ready).",
 			}, []string{"reason"}),
 
 			classifierGarbage: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -269,8 +269,8 @@ func (m *queryMetrics) recordGlobalSearchHitsDropped(stage string, n int) {
 }
 
 // recordGlobalSearchDegraded records a globalSearch response returned with Degraded=true.
-// Reasons match SynthesisOutcome.DegradedReason classes from beta.45 (answer_synthesis_timeout,
-// _cancelled, _error). Closes the flag-without-counter gap.
+// Reasons are the bounded answer-synthesis classes plus community_cache_not_ready
+// when requested community enrichment cannot be served from one valid generation.
 func (m *queryMetrics) recordGlobalSearchDegraded(reason string) {
 	m.globalSearchDegraded.WithLabelValues(reason).Inc()
 }

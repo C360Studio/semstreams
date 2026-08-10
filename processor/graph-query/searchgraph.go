@@ -4,7 +4,9 @@ package graphquery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
+	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -51,13 +53,32 @@ const (
 // Callers can drive UI/persona behavior off Strategy or simply read
 // the entity_digests as usual.
 func (c *Component) handleSearchGraph(ctx context.Context, data []byte) ([]byte, error) {
+	ctx, state := c.withCommunityRequestLease(ctx)
+	result, err := c.handleSearchGraphWithLease(ctx, data, state)
+	if err != nil {
+		c.recordIndexNotReadyCompletionError(err)
+		return nil, err
+	}
+	if c.searchGraphBeforeFinalize != nil {
+		c.searchGraphBeforeFinalize()
+	}
+	return c.completeGlobalCommunityResult(data, result, state)
+}
+
+func (c *Component) handleSearchGraphWithLease(ctx context.Context, data []byte, state *communityRequestLease) ([]byte, error) {
+	var communityRequiredErr error
 	// 1) Always try globalSearch first. It owns query classification
 	// and strategy routing; we don't second-guess.
-	globalResp, err := c.handleGlobalSearch(ctx, data)
+	globalResp, err := c.handleGlobalSearchWithLease(ctx, data)
 	if err != nil {
-		// Hard transport / parse errors propagate. The fallback is
-		// for empty-but-successful responses, not for failures.
-		return nil, err
+		var classified *errs.ClassifiedError
+		if !errors.As(err, &classified) || classified.Code != gtypes.ErrorCodeIndexNotReady {
+			// Hard transport / parse errors propagate. The fallback is
+			// for empty-but-successful responses, not for failures.
+			return nil, err
+		}
+		communityRequiredErr = err
+		globalResp, _ = json.Marshal(GlobalSearchResponse{Entities: []*gtypes.EntityState{}})
 	}
 
 	if !searchGraphResponseEmpty(globalResp) {
@@ -84,9 +105,12 @@ func (c *Component) handleSearchGraph(ctx context.Context, data []byte) ([]byte,
 		return globalResp, nil
 	}
 
-	semanticResp, semanticErr := c.handleQuerySemantic(ctx, semanticPayload)
+	semanticResp, semanticErr := c.querySemantic(ctx, semanticPayload)
 	if semanticErr != nil {
 		c.recordError(semanticErr)
+		if communityRequiredErr != nil {
+			return nil, communityRequiredErr
+		}
 		return globalResp, nil
 	}
 
@@ -99,7 +123,54 @@ func (c *Component) handleSearchGraph(ctx context.Context, data []byte) ([]byte,
 	if out == nil || len(out.EntityDigests) == 0 {
 		// Fallback found nothing either — return the original empty
 		// globalSearch payload so the caller has uniform structure.
+		if communityRequiredErr != nil {
+			return nil, communityRequiredErr
+		}
 		return globalResp, nil
+	}
+
+	if origReq.MaxCommunities <= 0 {
+		origReq.MaxCommunities = DefaultMaxCommunities
+	}
+	entityIDs := make([]string, 0, len(out.EntityDigests))
+	semanticHits := make([]SemanticHit, 0, len(out.EntityDigests))
+	semanticScores := make(map[string]float64, len(out.EntityDigests))
+	for _, digest := range out.EntityDigests {
+		entityIDs = append(entityIDs, digest.ID)
+		semanticHits = append(semanticHits, SemanticHit{EntityID: digest.ID, Score: digest.Relevance})
+		semanticScores[digest.ID] = digest.Relevance
+	}
+
+	threshold := origReq.getSummarizeThreshold()
+	autoSummarize := threshold > 0 && len(out.EntityDigests) > threshold
+	includeSummaries := origReq.shouldIncludeSummaries() || autoSummarize
+	state.requested = includeSummaries || origReq.IncludeSources
+	state.required = false
+
+	var communities []CommunitySummary
+	if state.requested {
+		requestCommunityEnrichment(ctx)
+		communities = c.findCommunitiesForEntities(ctx, entityIDs)
+		if len(communities) > origReq.MaxCommunities {
+			communities = communities[:origReq.MaxCommunities]
+		}
+	}
+	if includeSummaries && len(communities) > 0 {
+		fallbackReason := out.DegradedReason
+		if err := c.enrichGlobalResponseFromCommunities(ctx, out, origReq.Query, communities, semanticScores); err != nil {
+			return nil, err
+		}
+		if !out.Degraded {
+			out.Degraded = true
+			out.DegradedReason = fallbackReason
+		}
+	}
+	if autoSummarize {
+		out.Summarized = true
+		out.EntityIDs = append([]string(nil), entityIDs...)
+	}
+	if origReq.IncludeSources {
+		out.Sources = c.buildSourcesForEntityIDs(ctx, entityIDs, semanticHits, communities)
 	}
 
 	respBytes, err := json.Marshal(out)
@@ -182,9 +253,9 @@ type semanticRawEnvelope struct {
 //   - Raw NATS:        {"query":"...","results":[...]}         — what
 //     in-process handleQuerySemantic returns.
 //
-// The Answer field is intentionally omitted: the fallback is a
-// last-resort discovery surface, not a synthesis path. Downstream
-// callers that want narrative output answer-synthesize on their own.
+// This adapter intentionally emits only the semantic floor. handleSearchGraph
+// then applies the original request's summary, answer, source, and auto-summary
+// intent through the same enrichment producer used by globalSearch.
 func adaptSemanticToGlobalSearchResponse(data []byte) *GlobalSearchResponse {
 	// Try the GraphQL-wrapped shape first (what external callers send
 	// in via gateway-mounted searchGraph composition).

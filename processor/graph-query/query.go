@@ -58,9 +58,9 @@ var graphQueryOperations = []queryOperationSpec{
 	{operation: "temporal", suffix: "temporal", requestType: "{startTime:string,endTime:string,limit:int}", successType: "[]graphindextemporal.TemporalResult", envelope: queryEnvelopeBare, graphQLField: "temporalSearch", consumers: []string{"graph-gateway", "research-graph-execute"}, availability: "optional index errors remain classified", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleQueryTemporal }},
 	{operation: "semantic", suffix: "semantic", requestType: "graphembedding.SearchRequest", successType: "graphembedding.SearchResponse", envelope: queryEnvelopeBare, graphQLField: "semanticSearch", consumers: []string{"graph-gateway", "fusionnats"}, availability: "optional embedding errors remain classified", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleQuerySemantic }},
 	{operation: "similar", suffix: "similar", requestType: "graphembedding.SimilarRequest", successType: "graphembedding.SimilarResponse", envelope: queryEnvelopeBare, graphQLField: "findSimilar", consumers: []string{"graph-gateway"}, availability: "optional embedding errors remain classified", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleQuerySimilar }},
-	{operation: "globalSearch", suffix: "globalSearch", requestType: "graphquery.GlobalSearchRequest", successType: "graphquery.GlobalSearchResponse", envelope: queryEnvelopeBare, graphQLField: "globalSearch", consumers: []string{"graph-gateway"}, availability: "lower tiers may serve; unavailable community data can return unmarked empty success", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleGlobalSearch }},
+	{operation: "globalSearch", suffix: "globalSearch", requestType: "graphquery.GlobalSearchRequest", successType: "graphquery.GlobalSearchResponse", envelope: queryEnvelopeBare, graphQLField: "globalSearch", consumers: []string{"graph-gateway"}, availability: "community-only tier returns transient index_not_ready; lower tiers preserve results with community_cache_not_ready degradation", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleGlobalSearch }},
 	{operation: "summary", suffix: "summary", requestType: "graph.SummaryRequest", successType: "graph.SummaryData", envelope: queryEnvelopeStandard, graphQLField: "graphSummary", consumers: []string{"graph-gateway", "agentic-tools (unadmitted)"}, availability: "required backing responders remain classified", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleQueryGraphSummary }},
-	{operation: "searchGraph", suffix: "searchGraph", requestType: "graphquery.GlobalSearchRequest", successType: "graphquery.GlobalSearchResponse", envelope: queryEnvelopeBare, graphQLField: "searchGraph", consumers: []string{"graph-gateway", "research-graph-classify", "research-graph-execute", "agentic-tools (unadmitted)"}, availability: "empty global search attempts semantic fallback and can remain unmarked empty success", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleSearchGraph }},
+	{operation: "searchGraph", suffix: "searchGraph", requestType: "graphquery.GlobalSearchRequest", successType: "graphquery.GlobalSearchResponse", envelope: queryEnvelopeBare, graphQLField: "searchGraph", consumers: []string{"graph-gateway", "research-graph-classify", "research-graph-execute", "agentic-tools (unadmitted)"}, availability: "semantic fallback preserves its strategy and reports requested unavailable community enrichment", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleSearchGraph }},
 	{operation: "byName", suffix: "byName", requestType: "{name:string,limit:int}", successType: "graph.NameData", envelope: queryEnvelopeStandard, consumers: []string{"fusionnats"}, availability: "name-index errors remain classified", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleQueryByName }},
 	{operation: "localSearch", suffix: "localSearch", requestType: "graphquery.LocalSearchRequest", successType: "graphquery.LocalSearchResponse", envelope: queryEnvelopeBare, graphQLField: "localSearch", consumers: []string{"graph-gateway"}, availability: "transient index_not_ready until community cache usable", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleLocalSearch }},
 }
@@ -665,6 +665,19 @@ func (c *Component) handleQueryByName(ctx context.Context, data []byte) ([]byte,
 
 // handleQuerySemantic handles semantic search requests (passthrough to graph-embedding)
 func (c *Component) handleQuerySemantic(ctx context.Context, data []byte) ([]byte, error) {
+	response, err := c.querySemantic(ctx, data)
+	if err != nil {
+		c.recordError(err)
+		return nil, err
+	}
+	c.recordSuccess(len(data), len(response))
+	return response, nil
+}
+
+// querySemantic performs the semantic transport without recording a top-level
+// operation completion. Composite handlers such as SearchGraph account once at
+// their own outer boundary.
+func (c *Component) querySemantic(ctx context.Context, data []byte) ([]byte, error) {
 	// Route to semantic query
 	subject := c.router.Route("semantic")
 	if subject == "" {
@@ -673,11 +686,8 @@ func (c *Component) handleQuerySemantic(ctx context.Context, data []byte) ([]byt
 	// ADR-060: propagate the downstream classified error UNWRAPPED (see handleQueryEntity).
 	response, err := c.natsClient.RequestClassified(ctx, subject, data, c.config.QueryTimeout)
 	if err != nil {
-		c.recordError(err)
 		return nil, err
 	}
-
-	c.recordSuccess(len(data), len(response))
 	return response, nil
 }
 

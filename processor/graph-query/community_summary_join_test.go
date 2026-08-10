@@ -12,7 +12,7 @@ import (
 
 // putSummary drives the summary-watch update path with the exact bytes the worker
 // writes: json.Marshal of a CommunitySummaryRecord under key {level}.{hash}.
-func putSummary(t *testing.T, c *CommunityCache, rec *clustering.CommunitySummaryRecord) {
+func putSummary(t *testing.T, c *communityCache, rec *clustering.CommunitySummaryRecord) {
 	t.Helper()
 	data, err := json.Marshal(rec)
 	require.NoError(t, err)
@@ -42,7 +42,7 @@ func TestCommunityCache_SummaryFor_EnhancedHit(t *testing.T) {
 		GeneratedAt:    time.Now(),
 	})
 
-	got, ok := c.SummaryFor(comm)
+	got, ok := c.summaryFor(comm)
 	require.True(t, ok)
 	assert.Equal(t, "an autonomous drone fleet coordinating a survey", got)
 }
@@ -57,7 +57,7 @@ func TestCommunityCache_SummaryFor_MissAndFailedAndEmpty(t *testing.T) {
 
 	t.Run("no record", func(t *testing.T) {
 		c := newTestCache()
-		_, ok := c.SummaryFor(comm)
+		_, ok := c.summaryFor(comm)
 		assert.False(t, ok)
 	})
 
@@ -66,7 +66,7 @@ func TestCommunityCache_SummaryFor_MissAndFailedAndEmpty(t *testing.T) {
 		putSummary(t, c, &clustering.CommunitySummaryRecord{
 			MembershipHash: hash, Level: comm.Level, Status: clustering.SummaryStatusFailed, GeneratedAt: time.Now(),
 		})
-		_, ok := c.SummaryFor(comm)
+		_, ok := c.summaryFor(comm)
 		assert.False(t, ok, "an llm-failed record is not a usable summary")
 	})
 
@@ -75,7 +75,7 @@ func TestCommunityCache_SummaryFor_MissAndFailedAndEmpty(t *testing.T) {
 		putSummary(t, c, &clustering.CommunitySummaryRecord{
 			MembershipHash: hash, Level: comm.Level, LLMSummary: "", Status: clustering.SummaryStatusEnhanced, GeneratedAt: time.Now(),
 		})
-		_, ok := c.SummaryFor(comm)
+		_, ok := c.summaryFor(comm)
 		assert.False(t, ok, "an empty enhanced summary must not join")
 	})
 
@@ -88,7 +88,7 @@ func TestCommunityCache_SummaryFor_MissAndFailedAndEmpty(t *testing.T) {
 			Status:         clustering.SummaryStatusEnhanced,
 			GeneratedAt:    time.Now(),
 		})
-		_, ok := c.SummaryFor(comm)
+		_, ok := c.summaryFor(comm)
 		assert.False(t, ok, "a summary for a different membership must not join")
 	})
 }
@@ -132,7 +132,7 @@ func TestCommunityCache_ReadinessIsPartitionOnly(t *testing.T) {
 	t.Parallel()
 
 	c := newTestCache()
-	assert.False(t, c.IsReady(), "a fresh cache is not ready")
+	assert.Nil(t, c.acquire(), "a fresh cache is not ready")
 
 	// Feeding summary records must NOT flip readiness.
 	putSummary(t, c, &clustering.CommunitySummaryRecord{
@@ -142,12 +142,10 @@ func TestCommunityCache_ReadinessIsPartitionOnly(t *testing.T) {
 		Status:         clustering.SummaryStatusEnhanced,
 		GeneratedAt:    time.Now(),
 	})
-	assert.False(t, c.IsReady(), "summary updates must not drive readiness")
+	assert.Nil(t, c.acquire(), "summary updates must not drive readiness")
 
 	// Partition initial sync completing makes the cache ready even with the summary
 	// store contributing nothing to that decision.
-	c.mu.Lock()
-	c.ready = true // mirrors WatchAndSync's nil-entry branch (partition initial sync complete)
-	c.mu.Unlock()
-	assert.True(t, c.IsReady(), "an empty/partial summary store never blocks partition-gated readiness")
+	c.publish(newCommunityGeneration(1)) // mirrors the partition watch sentinel publication
+	assert.NotNil(t, c.acquire(), "an empty/partial summary store never blocks partition-gated readiness")
 }
