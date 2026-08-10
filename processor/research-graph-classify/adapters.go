@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic/research"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/query"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
@@ -37,7 +38,9 @@ func (a *classifierChainAdapter) ClassifyQuery(ctx context.Context, topic string
 // server-side fallback fired so PR 3's router can downgrade
 // confidence.
 type searchGraphRetriever struct {
-	client  *natsclient.Client
+	client interface {
+		RequestClassified(context.Context, string, []byte, time.Duration) ([]byte, error)
+	}
 	subject string
 	timeout time.Duration
 }
@@ -66,6 +69,7 @@ type searchGraphRequest struct {
 // execute_subqueries consumes the same shape).
 type searchGraphResponse struct {
 	Strategy           string                `json:"strategy,omitempty"`
+	Entities           []*graph.EntityState  `json:"entities,omitempty"`
 	Count              int                   `json:"count"`
 	EntityDigests      []searchEntityDigest  `json:"entity_digests,omitempty"`
 	CommunitySummaries []searchCommunityItem `json:"community_summaries,omitempty"`
@@ -140,28 +144,50 @@ func (r *searchGraphRetriever) FetchCandidates(ctx context.Context, topic string
 	if err != nil {
 		return CandidateSet{}, fmt.Errorf("search_graph: %w", err)
 	}
+	respData, _ = graph.UnwrapQueryResponse(respData)
 
 	var resp searchGraphResponse
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return CandidateSet{}, fmt.Errorf("decode search response: %w", err)
 	}
 
-	cands := make([]research.Candidate, 0, len(resp.EntityDigests))
-	for i, d := range resp.EntityDigests {
-		if i >= limit {
-			break
+	cands := make([]research.Candidate, 0, len(resp.EntityDigests)+len(resp.Entities))
+	if len(resp.EntityDigests) > 0 {
+		for i, d := range resp.EntityDigests {
+			if i >= limit {
+				break
+			}
+			if strings.TrimSpace(d.ID) == "" {
+				continue
+			}
+			cands = append(cands, research.Candidate{
+				EntityID:  d.ID,
+				Label:     d.Label,
+				Type:      d.Type,
+				Relevance: d.Relevance,
+				Tier:      "0",
+				Source:    "search_graph",
+			})
 		}
-		if strings.TrimSpace(d.ID) == "" {
-			continue
+	} else if len(resp.Entities) > 0 {
+		if err := graph.ValidateDecodedEntityStatePointers(resp.Entities); err != nil {
+			return CandidateSet{}, fmt.Errorf("validate search response entities: %w", err)
 		}
-		cands = append(cands, research.Candidate{
-			EntityID:  d.ID,
-			Label:     d.Label,
-			Type:      d.Type,
-			Relevance: d.Relevance,
-			Tier:      "0",
-			Source:    "search_graph",
-		})
+		for i, entity := range resp.Entities {
+			if i >= limit {
+				break
+			}
+			entityID, err := message.ParseEntityID(entity.ID)
+			if err != nil {
+				return CandidateSet{}, fmt.Errorf("parse validated search entity ID %q: %w", entity.ID, err)
+			}
+			cands = append(cands, research.Candidate{
+				EntityID: entity.ID,
+				Type:     entityID.Type,
+				Tier:     "0",
+				Source:   "search_graph",
+			})
+		}
 	}
 	return CandidateSet{
 		Candidates:     cands,

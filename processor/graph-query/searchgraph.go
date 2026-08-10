@@ -206,23 +206,10 @@ func searchGraphResponseEmpty(data []byte) bool {
 	return true
 }
 
-// semanticHit is the per-result row from the graph-embedding
-// similaritySearch envelope. Kept local because the envelope is
-// internal to the embedding contract; lifting it would entangle
-// packages.
+// semanticHit is the per-result row from graph-embedding's raw NATS response.
 type semanticHit struct {
 	EntityID   string  `json:"entity_id"`
 	Similarity float64 `json:"similarity"`
-}
-
-// semanticEnvelope is the response shape the GraphQL gateway returns
-// for the `similaritySearch` resolver — results nested under the
-// resolver field name. This is what external GraphQL clients (e.g.
-// semspec's tools/workflow/graph.go:semanticSearchFallback) parse.
-type semanticEnvelope struct {
-	SimilaritySearch struct {
-		Results []semanticHit `json:"results"`
-	} `json:"similaritySearch"`
 }
 
 // semanticRawEnvelope is the response shape graph-embedding's
@@ -246,35 +233,16 @@ type semanticRawEnvelope struct {
 // is unparseable or empty (callers fall back to the original empty
 // globalSearch payload).
 //
-// Tolerates BOTH wire shapes:
-//
-//   - GraphQL-wrapped: {"similaritySearch":{"results":[...]}} — what
-//     gateway-facing callers see.
-//   - Raw NATS:        {"query":"...","results":[...]}         — what
-//     in-process handleQuerySemantic returns.
-//
 // This adapter intentionally emits only the semantic floor. handleSearchGraph
 // then applies the original request's summary, answer, source, and auto-summary
 // intent through the same enrichment producer used by globalSearch.
 func adaptSemanticToGlobalSearchResponse(data []byte) *GlobalSearchResponse {
-	// Try the GraphQL-wrapped shape first (what external callers send
-	// in via gateway-mounted searchGraph composition).
-	var hits []semanticHit
-	var env semanticEnvelope
-	if err := json.Unmarshal(data, &env); err == nil && len(env.SimilaritySearch.Results) > 0 {
-		hits = env.SimilaritySearch.Results
+	var raw semanticRawEnvelope
+	if err := json.Unmarshal(data, &raw); err != nil || len(raw.Results) == 0 {
+		return nil
 	}
-	// Fallback to the raw NATS shape (what in-process handleQuerySemantic
-	// returns, which is the actual path searchGraph takes today).
-	if len(hits) == 0 {
-		var raw semanticRawEnvelope
-		if err := json.Unmarshal(data, &raw); err != nil || len(raw.Results) == 0 {
-			return nil
-		}
-		hits = raw.Results
-	}
-	digests := make([]EntityDigest, 0, len(hits))
-	for _, hit := range hits {
+	digests := make([]EntityDigest, 0, len(raw.Results))
+	for _, hit := range raw.Results {
 		if hit.EntityID == "" {
 			continue
 		}

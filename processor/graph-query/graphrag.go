@@ -443,6 +443,7 @@ func (c *Component) tryPathIntentSearch(ctx context.Context, cr *query.Classific
 				pathEntityIDs[i] = e.ID
 			}
 			response := GlobalSearchResponse{
+				Strategy:   "pathrag",
 				Entities:   pathResult.Entities,
 				Count:      len(pathResult.Entities),
 				DurationMs: time.Since(startTime).Milliseconds(),
@@ -472,6 +473,7 @@ func (c *Component) tryPathIntentSearch(ctx context.Context, cr *query.Classific
 		c.logger.Debug("structural tier: cannot resolve entity ID, returning empty result",
 			"partial", pathStartNode)
 		response := GlobalSearchResponse{
+			Strategy:   "pathrag",
 			Entities:   []*gtypes.EntityState{},
 			Count:      0,
 			DurationMs: time.Since(startTime).Milliseconds(),
@@ -897,6 +899,7 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 
 			synth := c.synthesizeQueryAnswer(ctx, searchQuery, enriched, len(entityIDs))
 			response := GlobalSearchResponse{
+				Strategy:           "graphrag",
 				Summarized:         true,
 				EntityIDs:          entityIDs,
 				EntityDigests:      buildEntityDigests(entityIDs, semanticScores, labels),
@@ -925,6 +928,7 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 			// Fall through to text-based search.
 		} else {
 			response := GlobalSearchResponse{
+				Strategy:   "graphrag",
 				Entities:   entities,
 				Count:      len(entities),
 				DurationMs: time.Since(startTime).Milliseconds(),
@@ -1026,6 +1030,7 @@ func (c *Component) handleStrategyEntityLookup(ctx context.Context, cr *query.Cl
 	}
 
 	response := GlobalSearchResponse{
+		Strategy:   "entity_lookup",
 		Entities:   entities,
 		Count:      len(entities),
 		DurationMs: time.Since(startTime).Milliseconds(),
@@ -1069,6 +1074,7 @@ func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery stri
 		}
 		// Graceful degradation: return empty rather than hard error.
 		return json.Marshal(GlobalSearchResponse{
+			Strategy:   "semantic",
 			Entities:   []*gtypes.EntityState{},
 			Count:      0,
 			DurationMs: time.Since(startTime).Milliseconds(),
@@ -1139,6 +1145,7 @@ func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery stri
 	}
 
 	response := GlobalSearchResponse{
+		Strategy:   "semantic",
 		Entities:   entities,
 		Count:      len(entities),
 		DurationMs: time.Since(startTime).Milliseconds(),
@@ -1227,6 +1234,7 @@ func (c *Component) handleStrategyTemporal(ctx context.Context, cr *query.Classi
 	}
 
 	response := GlobalSearchResponse{
+		Strategy:   "temporal",
 		Entities:   entities,
 		Count:      len(entities),
 		DurationMs: time.Since(startTime).Milliseconds(),
@@ -1296,6 +1304,7 @@ func (c *Component) handleStrategySpatial(ctx context.Context, cr *query.Classif
 	}
 
 	response := GlobalSearchResponse{
+		Strategy:   "spatial",
 		Entities:   entities,
 		Count:      len(entities),
 		DurationMs: time.Since(startTime).Milliseconds(),
@@ -1316,19 +1325,18 @@ func (c *Component) handleStrategySpatial(ctx context.Context, cr *query.Classif
 	return json.Marshal(response)
 }
 
-// parseEntityIDsFromResults extracts entity_id values from a JSON array of objects.
-// Both temporal and spatial handlers return arrays where each element has an "entity_id" field.
+// parseEntityIDsFromResults extracts canonical id values from temporal and spatial rows.
 func parseEntityIDsFromResults(data []byte) ([]string, error) {
 	var results []struct {
-		EntityID string `json:"entity_id"`
+		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(data, &results); err != nil {
 		return nil, err
 	}
 	ids := make([]string, 0, len(results))
 	for _, r := range results {
-		if r.EntityID != "" {
-			ids = append(ids, r.EntityID)
+		if r.ID != "" {
+			ids = append(ids, r.ID)
 		}
 	}
 	return ids, nil
@@ -1377,6 +1385,7 @@ func (c *Component) globalSearchTextBased(ctx context.Context, req GlobalSearchR
 		"cache_ready", stats.Ready)
 	if len(communities) == 0 {
 		response := GlobalSearchResponse{
+			Strategy:   "graphrag",
 			Entities:   []*gtypes.EntityState{},
 			Count:      0,
 			DurationMs: time.Since(startTime).Milliseconds(),
@@ -1449,6 +1458,7 @@ func (c *Component) globalSearchTextBased(ctx context.Context, req GlobalSearchR
 
 	// Build response
 	response := GlobalSearchResponse{
+		Strategy:          "graphrag",
 		Entities:          matchedEntities,
 		Count:             len(matchedEntities),
 		DurationMs:        time.Since(startTime).Milliseconds(),

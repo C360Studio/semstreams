@@ -16,7 +16,6 @@ import (
 // (errs.IsInvalid / IsTransient, errors.As → ce.Code); success unmarshals here.
 type QueryResponse[T any] struct {
 	Data      T         `json:"data"`
-	RequestID string    `json:"request_id,omitempty"`
 	Timestamp time.Time `json:"timestamp"`
 }
 
@@ -34,7 +33,6 @@ func NewQueryResponse[T any](data T) QueryResponse[T] {
 // discriminator silently stops recognizing the envelope it describes.
 const (
 	queryResponseDataKey      = "data"
-	queryResponseRequestIDKey = "request_id"
 	queryResponseTimestampKey = "timestamp"
 )
 
@@ -66,7 +64,7 @@ const (
 // # The discriminator is the CLOSED key set, deliberately
 //
 // A reply is the envelope only when it has BOTH `data` and `timestamp` and
-// every one of its keys is drawn from {data, request_id, timestamp}.
+// every one of its keys is drawn from {data, timestamp}.
 //
 // Detecting on `data` alone would be the dangerous form: any reply that
 // legitimately carries a top-level `data` field would be stripped of a nesting
@@ -82,7 +80,7 @@ const (
 //     exactly one is applied by the producer. Re-testing the payload would make
 //     the number of layers removed depend on user data, so a reply whose own
 //     contents happened to match would be silently flattened.
-//   - It does NOT validate the payload, the timestamp's type, or the request_id.
+//   - It does NOT validate the payload or the timestamp's type.
 //     Key presence is the whole discriminator.
 //   - It does NOT report envelope-borne errors. ADR-060 removed the in-body
 //     Error field: a query reply is EITHER this success body OR a classified
@@ -107,7 +105,7 @@ func UnwrapQueryResponse(raw []byte) ([]byte, bool) {
 	// shares two field names with the envelope.
 	for key := range fields {
 		switch key {
-		case queryResponseDataKey, queryResponseRequestIDKey, queryResponseTimestampKey:
+		case queryResponseDataKey, queryResponseTimestampKey:
 		default:
 			return raw, false
 		}

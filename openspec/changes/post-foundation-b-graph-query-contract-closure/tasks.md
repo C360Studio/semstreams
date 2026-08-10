@@ -113,24 +113,26 @@ of an internal contradiction and a new owner ruling.
 
 ## E. Bounded embedded decoding and truthful query outcomes
 
-- [ ] E.1 Add failing focused tests showing: full-entity-only searchGraph success becomes zero research candidates;
+- [x] E.1 Add failing focused tests showing: full-entity-only searchGraph success becomes zero research candidates;
   fusion Entity rejects the real ExactEntity shape; successful global-search strategies are blank; and temporal/spatial
   `id` rows become zero IDs.
-- [ ] E.2 Pass each success through `graph.UnwrapQueryResponse` exactly once at the research-classify,
+- [x] E.2 Pass each success through `graph.UnwrapQueryResponse` exactly once at the research-classify,
   research-execute, and fusionnats request/reply boundaries. Prove current bare and equivalent standard-enveloped
   fixtures agree without changing producer declarations.
-- [ ] E.3 Project validated full entities into the existing research Candidate contract only when digests are absent.
+- [x] E.3 Project validated full entities into the existing research Candidate contract only when digests are absent.
   Preserve order, limit, digest behavior, and degradation. Do not widen CandidateSet or Evidence.
-- [ ] E.4 Decode fusion Entity replies as `graph.ExactEntity`; validate matching entity and nonzero revision, then
+- [x] E.4 Decode fusion Entity replies as `graph.ExactEntity`; validate matching entity and nonzero revision, then
   project only ID and triples into the existing `fusion.Entity`. Preserve the six-method interface, six request-subject
   mapping, constructor, lazy readiness, ordering, similarity, missing reasons, and relationship direction.
-- [ ] E.5 Decode temporal and spatial result IDs from canonical `id`; populate the existing terminal strategy on every
+- [x] E.5 Decode temporal and spatial result IDs from canonical `id`; populate the existing terminal strategy on every
   successful global-search path, including empty and fallthrough success.
-- [ ] E.6 Delete the unreachable private `similaritySearch` wrapper decoder and tests. Delete the unused
+- [x] E.6 Delete the unreachable private `similaritySearch` wrapper decoder and tests. Delete the unused
   `QueryResponse.RequestID`, discriminator key, and request-ID envelope fixtures. Add no alias or compatibility path.
-- [ ] E.7 Remove every claim that a nonexistent embedding/fusion-host component owns six fusion outputs or readiness.
+- [x] E.7 Remove every claim that a nonexistent embedding/fusion-host component owns six fusion outputs or readiness.
   Make no Slice E component, configuration, Registry-count, schema, service, bucket, stream, or readiness change.
-- [ ] E.8 Extend the existing research-graph E2E to read `research.classify.candidate-count` from the seeded loop's
+- [x] E.8 Within the existing research-graph stages, seed one canonical entity through `graphmutation.Client.Create`,
+  register and lifecycle-manage a test-owned `graph.embedding.query.search` responder returning that entity ID, and
+  require `graph-query` to be healthy. Add no new stage. Then read `research.classify.candidate-count` from the
   production classify result and fail unless it is a parsed integer greater than zero. In the existing
   `test-http-gateway` stage, add `strategy` to the controlled `globalSearch("robot warehouse", level:0)`
   selection/response, require exactly `graphrag`, and make every earlier marshal/request/transport/status/read/parse/

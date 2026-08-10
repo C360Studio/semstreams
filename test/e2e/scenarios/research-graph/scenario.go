@@ -33,15 +33,27 @@ package researchgraph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/agentic/research"
+	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/natsclient"
+	graphembedding "github.com/c360studio/semstreams/processor/graph-embedding"
 	"github.com/c360studio/semstreams/test/e2e/client"
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
+)
+
+const (
+	researchEmbeddingSearchSubject = "graph.embedding.query.search"
+	researchGraphTopic             = "drone hover anomalies"
+	researchGraphSeedSimilarity    = 0.95
 )
 
 // Scenario validates the ADR-045 Phase 1 chain works end-to-end.
@@ -55,6 +67,9 @@ type Scenario struct {
 	nats    *client.NATSValidationClient
 	metrics *client.MetricsClient
 	obs     *client.ObservabilityClient
+
+	embeddingSearchResponder *natsclient.Subscription
+	researchSeedEntityID     string
 
 	config *Config
 }
@@ -124,17 +139,65 @@ func (s *Scenario) Setup(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create NATS client: %w", err)
 	}
+	s.researchSeedEntityID = researchGraphSeedEntityID(fmt.Sprintf("%x", time.Now().UnixNano()))
+	responder, err := natsClient.Client().SubscribeForRequests(
+		ctx,
+		researchEmbeddingSearchSubject,
+		newResearchEmbeddingSearchHandler(s.researchSeedEntityID),
+	)
+	if err != nil {
+		_ = natsClient.Close(ctx)
+		return fmt.Errorf("subscribe deterministic embedding search responder: %w", err)
+	}
 	s.nats = natsClient
 	s.metrics = client.NewMetricsClient(s.metricsURL)
+	s.embeddingSearchResponder = responder
 	return nil
 }
 
 // Teardown closes connections.
 func (s *Scenario) Teardown(ctx context.Context) error {
-	if s.nats != nil {
-		return s.nats.Close(ctx)
+	var teardownErr error
+	if s.embeddingSearchResponder != nil {
+		if err := s.embeddingSearchResponder.Unsubscribe(); err != nil {
+			teardownErr = fmt.Errorf("unsubscribe deterministic embedding search responder: %w", err)
+		}
+		s.embeddingSearchResponder = nil
 	}
-	return nil
+	if s.nats != nil {
+		if err := s.nats.Close(ctx); err != nil {
+			teardownErr = errors.Join(teardownErr, fmt.Errorf("close NATS validation client: %w", err))
+		}
+	}
+	return teardownErr
+}
+
+func researchGraphSeedEntityID(runToken string) string {
+	return "c360.rg-e2e.research.seed.document." + runToken
+}
+
+func newResearchEmbeddingSearchHandler(seedEntityID string) func(context.Context, []byte) ([]byte, error) {
+	return func(ctx context.Context, data []byte) ([]byte, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		var request graphembedding.SearchRequest
+		if err := json.Unmarshal(data, &request); err != nil {
+			return nil, fmt.Errorf("decode embedding search request: %w", err)
+		}
+		if request.Query != researchGraphTopic {
+			return nil, fmt.Errorf("unexpected query %q, want %q", request.Query, researchGraphTopic)
+		}
+		return json.Marshal(graphembedding.SearchResponse{
+			Query: request.Query,
+			Results: []graphembedding.SearchResult{{
+				EntityID:   seedEntityID,
+				Similarity: researchGraphSeedSimilarity,
+			}},
+			Duration:     "0s",
+			EmbedderType: "e2e-fixture",
+		})
+	}
 }
 
 // Execute runs the chain end-to-end.
@@ -195,6 +258,7 @@ func (s *Scenario) verifyComponents(ctx context.Context, result *scenarios.Resul
 		"agentic-model",
 		"agentic-tools",
 		"graph-ingest",
+		"graph-query",
 		"rule-processor",
 		"research-graph-classify",
 		"research-graph-route",
@@ -233,6 +297,36 @@ func (s *Scenario) verifyComponents(ctx context.Context, result *scenarios.Resul
 // call; the parent loop then dispatches to research_graph and the
 // chain kicks off.
 func (s *Scenario) injectParentTask(ctx context.Context, result *scenarios.Result) error {
+	if s.researchSeedEntityID == "" {
+		return errors.New("research seed entity ID is not initialized")
+	}
+	mutationClient, err := graphmutation.NewClient(s.nats, 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("construct graph mutation client for research seed: %w", err)
+	}
+	seeded, err := mutationClient.Create(ctx, graph.CreateEntityRequest{
+		Entity: &graph.EntityState{
+			ID: s.researchSeedEntityID,
+			MessageType: message.Type{
+				Domain: "research", Category: "e2e_search_seed", Version: "v1",
+			},
+		},
+		Triples: []message.Triple{{
+			Subject:    s.researchSeedEntityID,
+			Predicate:  "dc.terms.title",
+			Object:     "Drone hover anomalies",
+			Source:     "research-graph-e2e",
+			Timestamp:  time.Now().UTC(),
+			Confidence: 1,
+		}},
+		RequestID: "e2e-research-graph-seed",
+	})
+	if err != nil {
+		return fmt.Errorf("seed research search entity through canonical mutation: %w", err)
+	}
+	result.Details["research_seed_entity_id"] = seeded.Entity.ID
+	result.Details["research_seed_entity_revision"] = seeded.KVRevision
+
 	parentLoopID := fmt.Sprintf("e2e-parent-%d", time.Now().UnixNano())
 	task := agentic.TaskMessage{
 		LoopID: parentLoopID,
@@ -412,6 +506,23 @@ func (s *Scenario) verifyOrchestrationTriples(ctx context.Context, result *scena
 	} {
 		if _, present := got[pred]; !present {
 			missing = append(missing, pred)
+		}
+	}
+
+	candidateCountRaw, present := got[research.PredicateResearchClassifyCandidateCount]
+	if !present {
+		missing = append(missing, research.PredicateResearchClassifyCandidateCount)
+	} else {
+		candidateCount, parseErr := strconv.Atoi(candidateCountRaw)
+		if parseErr != nil {
+			mismatched = append(mismatched, fmt.Sprintf("%s: %q is not an integer: %v",
+				research.PredicateResearchClassifyCandidateCount, candidateCountRaw, parseErr))
+		} else if candidateCount <= 0 {
+			mismatched = append(mismatched, fmt.Sprintf("%s: got %d want > 0",
+				research.PredicateResearchClassifyCandidateCount, candidateCount))
+		} else {
+			result.Metrics["research_classify_candidate_count"] = candidateCount
+			result.Details["research_classify_candidate_count"] = candidateCount
 		}
 	}
 

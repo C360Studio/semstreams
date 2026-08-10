@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/stretchr/testify/require"
@@ -513,26 +512,4 @@ func TestGateway_PrefixPreservesTypedPage(t *testing.T) {
 	require.NoError(t, json.Unmarshal(projected, &page))
 	require.Len(t, page.Entities, 1)
 	require.Equal(t, "next-page", page.NextCursor)
-}
-
-// TestGateway_EnvelopeWithRequestIDProjectsUnwrapped covers the optional third
-// key: request_id is allowed by the closed set, so an envelope carrying it is
-// still an envelope.
-func TestGateway_EnvelopeWithRequestIDProjectsUnwrapped(t *testing.T) {
-	t.Parallel()
-
-	reply, err := json.Marshal(graph.QueryResponse[graph.SummaryData]{
-		Data:      graph.SummaryData{TotalEntities: 9},
-		RequestID: "req-42",
-		Timestamp: time.Now(),
-	})
-	require.NoError(t, err)
-
-	_, projected := projectField(t, "graph.query.summary", reply)
-	requireNoRepeatedDataHop(t, projected)
-
-	var summary map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(projected, &summary))
-	require.Contains(t, summary, "total_entities")
-	require.NotContains(t, summary, "request_id", "envelope metadata must not leak into the payload")
 }
