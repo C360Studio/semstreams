@@ -49,10 +49,10 @@ GraphQL-shaped router; it is not a general GraphQL executor, has no mutation typ
 does not read graph KV through a `QueryManager`, and exposes no implemented MCP
 graph tools.
 
-The gateway advertises `graph.query.capabilities`, but no component subscribes.
-There is no `QueryCapabilityProvider` contract and no served general
-`*.capabilities` discovery family. Treat those advertised routes as GS-12
-read-front debt, not runtime capability discovery.
+The gateway advertises only served operations. It has no `capabilities` root
+field, `QueryCapabilityProvider` contract, or general `*.capabilities`
+discovery family. Use GraphQL introspection to discover the admitted remote
+surface.
 
 See [Query Access Patterns](../concepts/11-query-access.md) for admitted caller
 guidance and [graph-gateway README](../../gateway/graph-gateway/README.md) for the

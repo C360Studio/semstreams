@@ -16,7 +16,7 @@ type Mode string
 const (
 	// ModeGlobal uses globalSearch (community-based GraphRAG search).
 	ModeGlobal Mode = "global"
-	// ModeSimilarity uses similaritySearch (embedding similarity search).
+	// ModeSimilarity uses semanticSearch (embedding similarity search).
 	// Works on both statistical (BM25) and semantic (neural) tiers.
 	ModeSimilarity Mode = "similarity"
 )
@@ -38,7 +38,7 @@ func NewExecutor(graphqlURL string, timeout time.Duration) *Executor {
 	}
 }
 
-// NewSimilarityExecutor creates a new search executor using similaritySearch.
+// NewSimilarityExecutor creates a new search executor using semanticSearch.
 // This provides embedding-based similarity search with real scores.
 // Works on both statistical (BM25) and semantic (neural) tiers.
 func NewSimilarityExecutor(graphqlURL string, timeout time.Duration) *Executor {
@@ -175,7 +175,7 @@ func (e *Executor) buildGraphQLQuery(queryText string, limit int) map[string]any
 	if e.mode == ModeSimilarity {
 		return map[string]any{
 			"query": `query($query: String!, $limit: Int) {
-				similaritySearch(query: $query, limit: $limit) {
+				semanticSearch(query: $query, limit: $limit) {
 					id
 					type
 					score
@@ -252,17 +252,17 @@ func (e *Executor) parseGraphQLResponse(bodyBytes []byte) ([]Hit, error) {
 
 func parseSimilarityResponse(bodyBytes []byte) ([]Hit, error) {
 	// Response format from graph-embedding via graph-gateway:
-	// {"data": {"similaritySearch": {"query": "...", "results": [{"entity_id": "...", "similarity": 0.85}]}}}
+	// {"data": {"semanticSearch": {"query": "...", "results": [{"entity_id": "...", "similarity": 0.85}]}}}
 	var gqlResp struct {
 		Data struct {
-			SimilaritySearch struct {
+			SemanticSearch struct {
 				Query   string `json:"query"`
 				Results []struct {
 					EntityID   string  `json:"entity_id"`
 					Similarity float64 `json:"similarity"`
 				} `json:"results"`
 				Duration string `json:"duration"`
-			} `json:"similaritySearch"`
+			} `json:"semanticSearch"`
 		} `json:"data"`
 		Errors []struct {
 			Message string `json:"message"`
@@ -277,7 +277,7 @@ func parseSimilarityResponse(bodyBytes []byte) ([]Hit, error) {
 	}
 
 	var hits []Hit
-	for _, result := range gqlResp.Data.SimilaritySearch.Results {
+	for _, result := range gqlResp.Data.SemanticSearch.Results {
 		hits = append(hits, Hit{EntityID: result.EntityID, Score: result.Similarity})
 	}
 	return hits, nil

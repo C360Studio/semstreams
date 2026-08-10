@@ -64,10 +64,19 @@ Hand-written GraphQL-shaped, query-only endpoint.
 It is not a general parser/schema executor and does not project response fields
 from a selection set.
 
-The operation inventory is code-defined and can drift: compare
-`buildIntrospectionSchema` with `mapGraphQLQueryToNATSSubject` and its handler
-tests before relying on an operation. Current examples include `entity`,
-`entityByAlias`, `entitiesByPrefix`, `relationships`, and `pathSearch`.
+The root operation inventory is pinned by routing conformance tests. Its fourteen
+graph-query-backed fields are `entity`, `entitiesByPrefix`, `entityByAlias`,
+`relationships`, `entityIdHierarchy`, `pathSearch`, `spatialSearch`,
+`temporalSearch`, `semanticSearch`, `findSimilar`, `localSearch`, `globalSearch`,
+`graphSummary`, and `searchGraph`. The five other served fields are `trajectory`,
+`entitiesByPredicate`, `predicates`, `predicateStats`, and
+`compoundPredicateQuery`.
+
+`semanticSearch` is the only semantic-search spelling. The former hidden
+`similaritySearch` and `textSearch` routes are not aliases. The unserved
+`capabilities` field and type are also absent; use introspection to discover the
+served remote surface. Classified query failures copy their existing `class`
+and non-empty `code` into the GraphQL error extensions without exposing detail.
 Introspection reports `mutationType: null`; the facade exposes no mutation API.
 
 ### Reserved placeholder (`/mcp`)
@@ -81,7 +90,7 @@ replace it with a separately specified implementation before the foundation tag.
 
 When enabled, serves an interactive request UI for:
 - Query composition and testing
-- Advertised-operation exploration; introspection may drift from handlers
+- Advertised-operation exploration; field/route/response parity is mechanically pinned
 - Response visualization
 
 ## Prefix Scoping Best Practices

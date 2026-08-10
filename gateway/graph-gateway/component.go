@@ -928,7 +928,7 @@ func (c *Component) mapGraphQLQueryToNATSSubject(query string) string {
 	if strings.Contains(query, "temporalsearch") {
 		return querySubject(c.queries.graph, "temporal")
 	}
-	if strings.Contains(query, "semanticsearch") || strings.Contains(query, "textsearch") || strings.Contains(query, "similaritysearch") {
+	if strings.Contains(query, "semanticsearch") {
 		return querySubject(c.queries.graph, "semantic")
 	}
 	if strings.Contains(query, "findsimilar") || strings.Contains(query, "similarentities") {
@@ -936,7 +936,7 @@ func (c *Component) mapGraphQLQueryToNATSSubject(query string) string {
 	}
 
 	// Composite resolvers — match BEFORE the single-resolver substring
-	// checks below (relationships, capabilities, predicates) so a
+	// checks below (relationships and predicates) so a
 	// composite query whose name, arguments, or result-type fields
 	// happen to include one of those substrings doesn't get hijacked
 	// by a collision lower down.
@@ -996,10 +996,6 @@ func (c *Component) mapGraphQLQueryToNATSSubject(query string) string {
 	if strings.Contains(query, "relationships") {
 		return querySubject(c.queries.graph, "relationships")
 	}
-	if strings.Contains(query, "capabilities") {
-		return querySubject(c.queries.graph, "capabilities")
-	}
-
 	// Predicate queries - must come before generic "entity" check
 	if strings.Contains(query, "compoundpredicatequery") || strings.Contains(query, "compoundpredicate") {
 		return querySubject(c.queries.index, "predicateCompound")
@@ -1033,8 +1029,6 @@ func (c *Component) subjectToGraphQLField(subject string) string {
 		return "entityByAlias"
 	case "relationships":
 		return "relationships"
-	case "capabilities":
-		return "capabilities"
 	case "hierarchyStats":
 		return "entityIdHierarchy"
 	case "prefix":
@@ -1044,7 +1038,7 @@ func (c *Component) subjectToGraphQLField(subject string) string {
 	case "temporal":
 		return "temporalSearch"
 	case "semantic":
-		return "similaritySearch"
+		return "semanticSearch"
 	case "similar":
 		return "findSimilar"
 	case "localSearch":
@@ -1299,13 +1293,23 @@ func (c *Component) mergeClassificationOptions(payload map[string]interface{}, r
 	}
 }
 
-// writeGraphQLError writes a GraphQL error response with the given status code and message.
-func (c *Component) writeGraphQLError(w http.ResponseWriter, statusCode int, message string) {
+// writeGraphQLError writes a GraphQL error response while preserving existing
+// classified error authority. It does not classify plain errors or expose detail.
+func (c *Component) writeGraphQLError(w http.ResponseWriter, statusCode int, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
+	graphQLError := map[string]interface{}{"message": err.Error()}
+	var classified *errs.ClassifiedError
+	if errors.As(err, &classified) {
+		extensions := map[string]interface{}{"class": classified.Class.String()}
+		if classified.Code != "" {
+			extensions["code"] = classified.Code
+		}
+		graphQLError["extensions"] = extensions
+	}
 	response := map[string]interface{}{
 		"errors": []map[string]interface{}{
-			{"message": message},
+			graphQLError,
 		},
 	}
 	json.NewEncoder(w).Encode(response)
@@ -1655,7 +1659,6 @@ func buildIntrospectionSchema() map[string]interface{} {
 					fieldDef("findSimilar", "[Entity]", argDef("entityId", "String!"), argDef("limit", "Int")),
 					fieldDef("localSearch", "LocalSearchResult", argDef("entityId", "String!"), argDef("query", "String"), argDef("level", "Int")),
 					fieldDef("globalSearch", "GlobalSearchResult", argDef("query", "String!"), argDef("level", "Int"), argDef("maxCommunities", "Int"), argDef("summarizeThreshold", "Int"), argDef("includeSummaries", "Boolean"), argDef("includeRelationships", "Boolean"), argDef("includeSources", "Boolean")),
-					fieldDef("capabilities", "Capabilities"),
 					// Agentic queries
 					fieldDef("trajectory", "Trajectory", argDef("loopId", "String!"), argDef("limit", "Int"), argDef("cursor", "String")),
 					// Predicate queries
@@ -1682,7 +1685,6 @@ func buildIntrospectionSchema() map[string]interface{} {
 			typeDef("OBJECT", "EntityDigest", "id", "type", "label", "relevance", "tags"),
 			typeDef("OBJECT", "SearchRelationship", "from_entity_id", "to_entity_id", "predicate"),
 			typeDef("OBJECT", "SearchSource", "entity_id", "community_id", "relevance"),
-			typeDef("OBJECT", "Capabilities", "queries", "mutations"),
 			// Predicate types
 			typeDef("OBJECT", "PredicateSummary", "predicate", "entityCount"),
 			typeDef("OBJECT", "PredicateListResult", "predicates", "total"),
@@ -1821,7 +1823,7 @@ func (c *Component) handleNATSResponseWithExtensions(w http.ResponseWriter, subj
 	if isPubAckResponse(resp) {
 		atomic.AddInt64(&c.errors, 1)
 		c.writeGraphQLError(w, http.StatusBadGateway,
-			"received stream acknowledgment instead of query response")
+			errors.New("received stream acknowledgment instead of query response"))
 		return
 	}
 
@@ -1867,14 +1869,14 @@ func (c *Component) handleNATSResponseWithExtensions(w http.ResponseWriter, subj
 	if queryOperation(subject) == "prefix" {
 		if err := validatePrefixResponse(resp); err != nil {
 			atomic.AddInt64(&c.errors, 1)
-			c.writeGraphQLError(w, http.StatusInternalServerError, err.Error())
+			c.writeGraphQLError(w, http.StatusInternalServerError, err)
 			return
 		}
 	}
 	if queryOperation(subject) == "trajectory" {
 		if err := validateTrajectoryResponse(resp); err != nil {
 			atomic.AddInt64(&c.errors, 1)
-			c.writeGraphQLError(w, http.StatusInternalServerError, err.Error())
+			c.writeGraphQLError(w, http.StatusInternalServerError, err)
 			return
 		}
 	}
@@ -1928,7 +1930,7 @@ func (c *Component) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 	atomic.AddInt64(&c.messagesProcessed, 1)
 	c.lastActivity.Store(time.Now())
 	if r.Method != http.MethodPost {
-		c.writeGraphQLError(w, http.StatusMethodNotAllowed, "method not allowed")
+		c.writeGraphQLError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
 		return
 	}
 
@@ -1941,13 +1943,13 @@ func (c *Component) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&gqlReq); err != nil {
 		atomic.AddInt64(&c.errors, 1)
-		c.writeGraphQLError(w, http.StatusBadRequest, "invalid request")
+		c.writeGraphQLError(w, http.StatusBadRequest, errors.New("invalid request"))
 		return
 	}
 
 	if gqlReq.Query == "" {
 		atomic.AddInt64(&c.errors, 1)
-		c.writeGraphQLError(w, http.StatusBadRequest, "invalid request")
+		c.writeGraphQLError(w, http.StatusBadRequest, errors.New("invalid request"))
 		return
 	}
 
@@ -1962,7 +1964,7 @@ func (c *Component) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 	// Reject unrecognized queries immediately instead of dispatching to NATS
 	if queryOperation(subject) == "unknown" {
 		atomic.AddInt64(&c.errors, 1)
-		c.writeGraphQLError(w, http.StatusBadRequest, "unrecognized query")
+		c.writeGraphQLError(w, http.StatusBadRequest, errors.New("unrecognized query"))
 		return
 	}
 
@@ -1971,14 +1973,14 @@ func (c *Component) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 	mergedVars := mergeVariables(inlineArgs, gqlReq.Variables)
 	if err := validateGatewayTrajectoryPayload(subject, mergedVars); err != nil {
 		atomic.AddInt64(&c.errors, 1)
-		c.writeGraphQLError(w, http.StatusBadRequest, err.Error())
+		c.writeGraphQLError(w, http.StatusBadRequest, err)
 		return
 	}
 
 	payload := c.transformVariablesToNATSPayload(mergedVars, subject)
 	if err := validateGatewayPrefixPayload(subject, payload); err != nil {
 		atomic.AddInt64(&c.errors, 1)
-		c.writeGraphQLError(w, http.StatusBadRequest, err.Error())
+		c.writeGraphQLError(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -2015,7 +2017,7 @@ func (c *Component) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		atomic.AddInt64(&c.errors, 1)
 		if err == context.DeadlineExceeded || ctx.Err() == context.DeadlineExceeded || ctx.Err() == context.Canceled {
-			c.writeGraphQLError(w, http.StatusGatewayTimeout, "request timeout")
+			c.writeGraphQLError(w, http.StatusGatewayTimeout, errors.New("request timeout"))
 			return
 		}
 		// Classified handler error (server alive, reporting failure)
@@ -2025,12 +2027,12 @@ func (c *Component) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 		// the wire text without framework attribution).
 		var ce *errs.ClassifiedError
 		if errors.As(err, &ce) {
-			c.writeGraphQLError(w, http.StatusOK, err.Error())
+			c.writeGraphQLError(w, http.StatusOK, err)
 			return
 		}
 		// Transport-layer failure (no responders, connection error)
 		// → 500 Internal Server Error. Component is unreachable.
-		c.writeGraphQLError(w, http.StatusInternalServerError, "query failed")
+		c.writeGraphQLError(w, http.StatusInternalServerError, errors.New("query failed"))
 		return
 	}
 

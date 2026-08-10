@@ -1,31 +1,31 @@
 # Tasks — post-Foundation-B graph query contract closure
 
-No implementation task is complete at promotion time. Each slice receives independent `semstreams-reviewer` approval
+No implementation task was complete at promotion time. Each slice receives independent `semstreams-reviewer` approval
 before the next slice lands. A later slice MUST NOT reopen the fourteen owner rulings without implementation evidence
 of an internal contradiction and a new owner ruling.
 
 ## P. Promotion and frozen evidence
 
-- [ ] P.1 Retain the accepted inventory and reviewed roadmap with their SHA-256 provenance.
-- [ ] P.2 Record all fourteen owner rulings and the `semanticSearch` clean-cutover clarification.
-- [ ] P.3 Validate every target-state delta strictly before production implementation begins.
-- [ ] P.4 Obtain independent review of the promoted OpenSpec change.
+- [x] P.1 Retain the accepted inventory and reviewed roadmap with their SHA-256 provenance.
+- [x] P.2 Record all fourteen owner rulings and the `semanticSearch` clean-cutover clarification.
+- [x] P.3 Validate every target-state delta strictly before production implementation begins.
+- [x] P.4 Obtain independent review of the promoted OpenSpec change.
 
 ## A. Gateway surface and error truth
 
-- [ ] A.1 Add failing conformance tests for exactly nineteen introspected root fields, the exact fourteen graph-query
+- [x] A.1 Add failing conformance tests for exactly nineteen introspected root fields, the exact fourteen graph-query
   subset, one production route/response field per root, and absence of `capabilities`.
-- [ ] A.2 Remove the `capabilities` field, type, route, response mapping, fixtures, and documentation with no responder,
+- [x] A.2 Remove the `capabilities` field, type, route, response mapping, fixtures, and documentation with no responder,
   alias, stub, or deprecated field.
-- [ ] A.3 Make `semanticSearch` the sole semantic-search root and response key; migrate the owned E2E search executor,
+- [x] A.3 Make `semanticSearch` the sole semantic-search root and response key; migrate the owned E2E search executor,
   fixtures, and adopter documentation from hidden `similaritySearch` atomically, leaving no gateway alias.
-- [ ] A.4 Pass the original `error` to graph-gateway error projection and copy only existing classified class and
+- [x] A.4 Pass the original `error` to graph-gateway error projection and copy only existing classified class and
   non-empty code into `errors[].extensions`; expose no detail and infer nothing.
-- [ ] A.5 Prove gateway-local invalid input retains HTTP 400, handler-side classified failure retains HTTP 200,
+- [x] A.5 Prove gateway-local invalid input retains HTTP 400, handler-side classified failure retains HTTP 200,
   transport behavior is unchanged, plain errors have no extensions, and uncoded classified errors expose class only.
-- [ ] A.6 Run focused race tests, strict OpenSpec validation, schema/no-drift checks, contract tests, and the
+- [x] A.6 Run focused race tests, strict OpenSpec validation, schema/no-drift checks, contract tests, and the
   statistical E2E gateway/search path before the breaking slice lands.
-- [ ] A.7 Obtain independent review for Slice A.
+- [x] A.7 Obtain independent review for Slice A.
 
 ## B. Operation inventory and atomic port cutover
 
