@@ -212,22 +212,6 @@ func extractEntityInstance(entityID string) string {
 	return entityID
 }
 
-// setupGraphRAGHandlers registers the GraphRAG NATS request handlers
-func (c *Component) setupGraphRAGHandlers(ctx context.Context) error {
-	// Subscribe to local search (globalSearch is registered in setupQueryHandlers
-	// to ensure it's available at all tiers, even before the community cache is ready).
-	sub, err := c.natsClient.SubscribeForRequests(ctx, "graph.query.localSearch", c.handleLocalSearch)
-	if err != nil {
-		return errs.WrapTransient(err, "GraphQuery", "setupGraphRAGHandlers", "subscribe to localSearch")
-	}
-	c.querySubscriptions = append(c.querySubscriptions, sub)
-
-	c.logger.Info("GraphRAG handlers registered",
-		"subjects", []string{"graph.query.localSearch"})
-
-	return nil
-}
-
 // handleLocalSearch handles local search requests via NATS request/reply
 func (c *Component) handleLocalSearch(ctx context.Context, data []byte) ([]byte, error) {
 	startTime := time.Now()
@@ -247,8 +231,9 @@ func (c *Component) handleLocalSearch(ctx context.Context, data []byte) ([]byte,
 	}
 
 	// Check if community cache is available
-	if c.communityCache == nil {
-		return nil, errs.WrapTransient(errors.New("community cache not available"), "GraphQuery", "handleLocalSearch", "check cache")
+	if c.communityCache == nil || !c.communityCache.IsReady() {
+		return nil, errs.ClassifiedCode(errs.ErrorTransient, gtypes.ErrorCodeIndexNotReady,
+			errors.New("community index is not ready"))
 	}
 
 	// Tiered community lookup with fallback

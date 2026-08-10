@@ -81,9 +81,14 @@ func DefaultConfig() Config {
 					Description: "R0's publish target. Subject suffix carries the research-pipeline loop_id.",
 				},
 			},
-			Outputs: []component.PortDefinition{{
-				Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType, Version: graphmutation.InterfaceVersion}}, Required: true,
-			}},
+			Outputs: []component.PortDefinition{
+				{
+					Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType, Version: graphmutation.InterfaceVersion}}, Required: true,
+				},
+				{
+					Name: "searchGraph", Config: component.NATSRequestPort{Subject: "graph.query.searchGraph", Interface: &component.InterfaceContract{Type: "graph.query", Version: "v1"}}, Required: true,
+				},
+			},
 		},
 		LoopsBucket:         "AGENT_LOOPS",
 		ClassifyTimeout:     30 * time.Second,

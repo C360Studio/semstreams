@@ -1,5 +1,5 @@
 {
-  "version": "1.1.0",
+  "version": "1.1.1",
   "platform": {
     "org": "example",
     "id": "graph-backend",
@@ -184,9 +184,11 @@
             {
               "config": {
                 "kind": "nats-request",
-                "subject": "graph.query.>"
+                "subject": "graph.query.*",
+                "interface": {"type": "graph.query", "version": "v1"}
               },
-              "name": "query_requests"
+              "name": "graph_queries",
+              "required": true
             }
           ],
           "outputs": []

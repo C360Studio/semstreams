@@ -2,6 +2,7 @@ package researchexecute
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -10,6 +11,7 @@ import (
 	"github.com/c360studio/semstreams/agentic/research"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/internal/graphmutation"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/fusion"
 )
 
@@ -350,13 +352,22 @@ func TestComponent_DiscoverableSurface(t *testing.T) {
 		t.Errorf("InputPorts: got %d, want 1", len(c.InputPorts()))
 	}
 	outputs := c.OutputPorts()
-	if len(outputs) != 1 {
-		t.Fatalf("OutputPorts: got %d, want canonical mutation port", len(outputs))
+	if len(outputs) != 5 {
+		t.Fatalf("OutputPorts: got %d, want mutation + four graph query ports", len(outputs))
 	}
 	request, ok := outputs[0].Config.(component.NATSRequestPort)
 	if !ok || !outputs[0].Required || request.Subject != graphmutation.SubjectFamily || request.Interface == nil ||
 		request.Interface.Type != graphmutation.InterfaceType || request.Interface.Version != graphmutation.InterfaceVersion {
 		t.Errorf("graph mutation output drift: %#v", outputs[0])
+	}
+	want := []string{"batch", "relationships", "temporal", "searchGraph"}
+	for index, operation := range want {
+		port := outputs[index+1]
+		request, ok := port.Config.(component.NATSRequestPort)
+		if !ok || port.Name != operation || !port.Required || request.Subject != "graph.query."+operation ||
+			request.Interface == nil || request.Interface.Type != "graph.query" || request.Interface.Version != "v1" {
+			t.Errorf("%s output drift: %#v", operation, port)
+		}
 	}
 }
 
@@ -372,6 +383,41 @@ func TestConfig_ValidateRejectsNegativeCaps(t *testing.T) {
 	c.MaxResultsPerSubquery = -1
 	if err := c.Validate(); err == nil {
 		t.Error("Validate accepted negative max_results_per_subquery")
+	}
+}
+
+func TestNewProcessorRejectsMissingOrMismatchedGraphQueryOutputs(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "missing", mutate: func(config *Config) { config.Ports.Outputs = config.Ports.Outputs[:4] }},
+		{name: "wrong interface", mutate: func(config *Config) {
+			config.Ports.Outputs[1].Config = component.NATSRequestPort{
+				Subject:   "graph.query.batch",
+				Interface: &component.InterfaceContract{Type: "graph.query", Version: "v2"},
+			}
+		}},
+		{name: "undeclared adapter subject", mutate: func(config *Config) {
+			config.Ports.Outputs[1].Config = component.NATSRequestPort{
+				Subject:   "graph.query.entity",
+				Interface: &component.InterfaceContract{Type: "graph.query", Version: "v1"},
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := DefaultConfig()
+			test.mutate(&config)
+			raw, err := json.Marshal(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = NewProcessor(raw, component.Dependencies{NATSClient: &natsclient.Client{}})
+			if err == nil {
+				t.Fatal("NewProcessor accepted invalid graph query outputs")
+			}
+		})
 	}
 }
 

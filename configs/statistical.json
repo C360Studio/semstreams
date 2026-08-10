@@ -1,5 +1,5 @@
 {
-  "version": "1.1.0",
+  "version": "1.1.1",
   "platform": {
     "org": "c360",
     "id": "semstreams-statistical",
@@ -817,10 +817,12 @@
             {
               "config": {
                 "kind": "nats-request",
-                "subject": "graph.query.>"
+                "subject": "graph.query.*",
+                "interface": {"type": "graph.query", "version": "v1"}
               },
               "description": "Query requests from gateway",
-              "name": "query_requests"
+              "name": "graph_queries",
+              "required": true
             }
           ],
           "outputs": []
@@ -840,7 +842,8 @@
           {
             "config": {
               "kind": "nats-request",
-              "subject": "graph.query.*"
+              "subject": "graph.query.*",
+              "interface": {"type": "graph.query", "version": "v1"}
             },
             "name": "graph_queries",
             "required": true

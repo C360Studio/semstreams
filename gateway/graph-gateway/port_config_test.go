@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShippedGraphGatewayOverridesCarryAgenticQueryInterface(t *testing.T) {
+func TestShippedGraphGatewayOverridesCarryVersionedQueryInterfaces(t *testing.T) {
 	paths := []string{
 		"configs/e2e-structural.json",
 		"configs/hello-world.json",
@@ -42,19 +42,21 @@ func TestShippedGraphGatewayOverridesCarryAgenticQueryInterface(t *testing.T) {
 			require.NoError(t, createErr)
 			outputs := discoverable.OutputPorts()
 			require.Len(t, outputs, 3)
-			facts, factsErr := outputs[2].Facts()
-			require.NoError(t, factsErr)
-			contract, hasContract := facts.Interface()
-			require.True(t, hasContract)
-			assert.Equal(t, "agentic.query", contract.Type)
-			assert.Equal(t, "v1", contract.Version)
+			for index, wantType := range map[int]string{0: "graph.query", 2: "agentic.query"} {
+				facts, factsErr := outputs[index].Facts()
+				require.NoError(t, factsErr)
+				contract, hasContract := facts.Interface()
+				require.True(t, hasContract)
+				assert.Equal(t, wantType, contract.Type)
+				assert.Equal(t, "v1", contract.Version)
+			}
 		})
 	}
 }
 
 func canonicalQueryOutputs(graph, index, agentic string) []component.PortDefinition {
 	return []component.PortDefinition{
-		{Name: "graph_queries", Required: true, Config: component.NATSRequestPort{Subject: graph}},
+		{Name: "graph_queries", Required: true, Config: component.NATSRequestPort{Subject: graph, Interface: graphQueryInterface()}},
 		{Name: "graph_index_queries", Required: true, Config: component.NATSRequestPort{Subject: index}},
 		{Name: "agentic_queries", Required: true, Config: component.NATSRequestPort{Subject: agentic, Interface: agenticQueryInterface()}},
 	}
@@ -89,9 +91,9 @@ func TestGraphGatewayCanonicalPortContract(t *testing.T) {
 	}
 }
 
-func TestGraphGatewayCustomRequestFamiliesDriveRouting(t *testing.T) {
+func TestGraphGatewayResolvedRequestFamiliesDriveRouting(t *testing.T) {
 	config := DefaultConfig()
-	config.Ports.Outputs = canonicalQueryOutputs("tenant.graph.*", "tenant.index.*", "tenant.agentic.query.*")
+	config.Ports.Outputs = canonicalQueryOutputs("graph.query.*", "tenant.index.*", "tenant.agentic.query.*")
 	gateway := createGatewayFromPortConfig(t, config)
 
 	tests := []struct {
@@ -99,7 +101,7 @@ func TestGraphGatewayCustomRequestFamiliesDriveRouting(t *testing.T) {
 		want  string
 		field string
 	}{
-		{query: `{ entity(id: "acme.ops.demo.one.type.001") { id } }`, want: "tenant.graph.entity", field: "entity"},
+		{query: `{ entity(id: "acme.ops.demo.one.type.001") { id } }`, want: "graph.query.entity", field: "entity"},
 		{query: `{ predicateStats(predicate: "demo.kind.value") { count } }`, want: "tenant.index.predicateStats", field: "predicateStats"},
 		{query: `{ trajectory(loopId: "loop-1") { id } }`, want: "tenant.agentic.query.trajectory", field: "trajectory"},
 	}
@@ -149,6 +151,19 @@ func TestGraphGatewayRejectsInvalidPortContracts(t *testing.T) {
 		{name: "agentic interface wrong version", mutate: func(config *Config) {
 			config.Ports.Outputs[2].Config = component.NATSRequestPort{
 				Subject: "agentic.query.*", Interface: &component.InterfaceContract{Type: "agentic.query", Version: "v2"},
+			}
+		}},
+		{name: "graph interface missing", mutate: func(config *Config) {
+			config.Ports.Outputs[0].Config = component.NATSRequestPort{Subject: "graph.query.*"}
+		}},
+		{name: "graph interface wrong version", mutate: func(config *Config) {
+			config.Ports.Outputs[0].Config = component.NATSRequestPort{
+				Subject: "graph.query.*", Interface: &component.InterfaceContract{Type: "graph.query", Version: "v2"},
+			}
+		}},
+		{name: "graph family changed", mutate: func(config *Config) {
+			config.Ports.Outputs[0].Config = component.NATSRequestPort{
+				Subject: "tenant.graph.*", Interface: graphQueryInterface(),
 			}
 		}},
 		{name: "not a family pattern", mutate: func(config *Config) {

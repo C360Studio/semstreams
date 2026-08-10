@@ -128,8 +128,8 @@ func TestMessageLoggerShippedSubjectCensusArtifactIsCompleteAndExact(t *testing.
 		computed.Raw, computed.Effective, computed.Delta, computed.ExactCollapses,
 		computed.AddedKinds, computed.ContainmentOverlaps)
 
-	require.Equal(t, subjectCensusCounts{Rows: 385, PerConfigExactKeys: 243, GlobalStrings: 51}, census.Raw)
-	require.Equal(t, subjectCensusCounts{Rows: 561, PerConfigExactKeys: 378, GlobalStrings: 66}, census.Effective)
+	require.Equal(t, subjectCensusCounts{Rows: 395, PerConfigExactKeys: 243, GlobalStrings: 54}, census.Raw)
+	require.Equal(t, subjectCensusCounts{Rows: 571, PerConfigExactKeys: 378, GlobalStrings: 69}, census.Effective)
 	require.Equal(t, subjectCensusCounts{Rows: 176, PerConfigExactKeys: 135, GlobalStrings: 15}, census.Delta)
 	require.Equal(t, census.Raw.Rows+census.Delta.Rows, census.Effective.Rows)
 	require.Equal(t, census.Raw.PerConfigExactKeys+census.Delta.PerConfigExactKeys, census.Effective.PerConfigExactKeys)
@@ -165,6 +165,21 @@ func TestMessageLoggerShippedSubjectCensusArtifactIsCompleteAndExact(t *testing.
 	require.Equal(t, 1, computed.ExactCollapses.Governance)
 	require.Equal(t, census.AddedKinds, computed.AddedKinds)
 	require.Equal(t, census.ContainmentOverlaps, computed.ContainmentOverlaps)
+	require.Equal(t, map[string]int{
+		"agentic-tools": 9, "graph-gateway": 8, "graph-query": 11,
+		"research-graph-classify": 2, "research-graph-execute": 2,
+	}, map[string]int{
+		"agentic-tools":           computed.FactoryInstances["agentic-tools"],
+		"graph-gateway":           computed.FactoryInstances["graph-gateway"],
+		"graph-query":             computed.FactoryInstances["graph-query"],
+		"research-graph-classify": computed.FactoryInstances["research-graph-classify"],
+		"research-graph-execute":  computed.FactoryInstances["research-graph-execute"],
+	})
+	require.Equal(t, 11, computed.GraphQueryProviderRows)
+	require.Equal(t, 8, computed.GatewayGraphQueryRows)
+	require.Equal(t, 2, computed.ResearchClassifyQueryRows)
+	require.Equal(t, 8, computed.ResearchExecuteQueryRows)
+	require.Zero(t, computed.AgenticQueryRows)
 }
 
 func TestMessageLoggerCensusRejectsUnknownEnabledFactory(t *testing.T) {
@@ -202,13 +217,19 @@ func TestExactCollapseAttributionComesFromAddedProductionRows(t *testing.T) {
 }
 
 type computedSubjectCensus struct {
-	Raw                  subjectCensusCounts
-	Effective            subjectCensusCounts
-	Delta                subjectCensusCounts
-	ExactCollapses       exactCollapseCounts
-	AddedKinds           map[string]int
-	ConstructionFailures []string
-	ContainmentOverlaps  []struct {
+	Raw                       subjectCensusCounts
+	Effective                 subjectCensusCounts
+	Delta                     subjectCensusCounts
+	ExactCollapses            exactCollapseCounts
+	AddedKinds                map[string]int
+	FactoryInstances          map[string]int
+	GraphQueryProviderRows    int
+	GatewayGraphQueryRows     int
+	ResearchClassifyQueryRows int
+	ResearchExecuteQueryRows  int
+	AgenticQueryRows          int
+	ConstructionFailures      []string
+	ContainmentOverlaps       []struct {
 		Config  string `json:"config"`
 		Broader string `json:"broader"`
 		Covered string `json:"covered"`
@@ -229,7 +250,7 @@ func computeMessageLoggerSubjectCensus(t *testing.T, scope []string) computedSub
 	computed := computedSubjectCensus{AddedKinds: map[string]int{
 		"jetstream_inputs": 0, "jetstream_outputs": 0,
 		"nats_inputs": 0, "nats_outputs": 0, "nats_request_inputs": 0,
-	}}
+	}, FactoryInstances: make(map[string]int)}
 	rawGlobal := make(map[string]struct{})
 	effectiveGlobal := make(map[string]struct{})
 	deps := messageLoggerCensusDependencies()
@@ -266,10 +287,26 @@ func computeMessageLoggerSubjectCensus(t *testing.T, scope []string) computedSub
 			}
 		}
 		for _, snapshot := range registry.Snapshots(componentadmission.Access{}) {
+			computed.FactoryInstances[snapshot.Factory()]++
 			collectEffectiveCensusRows(snapshot.Name(), snapshot.Factory(), component.DirectionInput,
 				snapshot.Inputs(), snapshot.InputDeclarationFacts(), effectiveRows, effectiveKeys, effectiveGlobal)
 			collectEffectiveCensusRows(snapshot.Name(), snapshot.Factory(), component.DirectionOutput,
 				snapshot.Outputs(), snapshot.OutputDeclarationFacts(), effectiveRows, effectiveKeys, effectiveGlobal)
+		}
+		for row, count := range effectiveRows {
+			switch {
+			case row.Factory == "graph-query" && row.Direction == component.DirectionInput && row.Subject == "graph.query.*":
+				computed.GraphQueryProviderRows += count
+			case row.Factory == "graph-gateway" && row.Direction == component.DirectionOutput && row.Subject == "graph.query.*":
+				computed.GatewayGraphQueryRows += count
+			case row.Factory == "research-graph-classify" && row.Direction == component.DirectionOutput && row.Subject == "graph.query.searchGraph":
+				computed.ResearchClassifyQueryRows += count
+			case row.Factory == "research-graph-execute" && row.Direction == component.DirectionOutput && strings.HasPrefix(row.Subject, "graph.query."):
+				computed.ResearchExecuteQueryRows += count
+			case row.Factory == "agentic-tools" && row.Direction == component.DirectionOutput &&
+				(row.Subject == "graph.query.searchGraph" || row.Subject == "graph.query.summary"):
+				computed.AgenticQueryRows += count
+			}
 		}
 
 		computed.Raw.Rows += censusRowCount(rawRows)

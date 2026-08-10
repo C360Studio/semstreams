@@ -5,7 +5,7 @@
     "Used by docker/compose/research-graph.yml + task e2e:research-graph.",
     "Reference flow at configs/examples/research-graph-pipeline.json is the operator-facing template; this file is the e2e-tuned variant."
   ],
-  "version": "1.0.0",
+  "version": "1.0.1",
   "platform": {
     "org": "c360",
     "id": "research-graph-e2e",
@@ -409,10 +409,11 @@
           "inputs": [
             {
               "config": {
-                "kind": "nats",
-                "subject": "graph.query.>"
+                "kind": "nats-request",
+                "subject": "graph.query.*",
+                "interface": {"type": "graph.query", "version": "v1"}
               },
-              "name": "graph.query",
+              "name": "graph_queries",
               "required": true
             }
           ]
@@ -446,6 +447,15 @@
                 "subject": "graph.mutation.>"
               },
               "name": "graph_mutations",
+              "required": true
+            },
+            {
+              "config": {
+                "interface": {"type": "graph.query", "version": "v1"},
+                "kind": "nats-request",
+                "subject": "graph.query.searchGraph"
+              },
+              "name": "searchGraph",
               "required": true
             }
           ]
@@ -513,6 +523,42 @@
                 "subject": "graph.mutation.>"
               },
               "name": "graph_mutations",
+              "required": true
+            },
+            {
+              "config": {
+                "interface": {"type": "graph.query", "version": "v1"},
+                "kind": "nats-request",
+                "subject": "graph.query.batch"
+              },
+              "name": "batch",
+              "required": true
+            },
+            {
+              "config": {
+                "interface": {"type": "graph.query", "version": "v1"},
+                "kind": "nats-request",
+                "subject": "graph.query.relationships"
+              },
+              "name": "relationships",
+              "required": true
+            },
+            {
+              "config": {
+                "interface": {"type": "graph.query", "version": "v1"},
+                "kind": "nats-request",
+                "subject": "graph.query.temporal"
+              },
+              "name": "temporal",
+              "required": true
+            },
+            {
+              "config": {
+                "interface": {"type": "graph.query", "version": "v1"},
+                "kind": "nats-request",
+                "subject": "graph.query.searchGraph"
+              },
+              "name": "searchGraph",
               "required": true
             }
           ]

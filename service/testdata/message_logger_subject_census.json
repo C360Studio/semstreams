@@ -45,8 +45,8 @@
     "configs/statistical.json",
     "configs/structural.json"
   ],
-  "raw": {"rows": 385, "per_config_exact_keys": 243, "global_strings": 51},
-  "effective": {"rows": 561, "per_config_exact_keys": 378, "global_strings": 66},
+  "raw": {"rows": 395, "per_config_exact_keys": 243, "global_strings": 54},
+  "effective": {"rows": 571, "per_config_exact_keys": 378, "global_strings": 69},
   "delta": {"rows": 176, "per_config_exact_keys": 135, "global_strings": 15, "removals": 0},
   "exact_collapses": {"loop_dispatch": 40, "governance": 1, "total": 41},
   "added_kinds": {

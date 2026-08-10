@@ -29,7 +29,7 @@
     "  docs/operations/22-adr045-phase1-plan.md - PR 6 plan (this file)",
     "  configs/rules/research-graph/README.md - rule pack notes"
   ],
-  "version": "1.0.0",
+  "version": "1.0.1",
   "platform": {
     "org": "CHANGE_ME",
     "id": "research-graph-pipeline",
@@ -408,10 +408,11 @@
           "inputs": [
             {
               "config": {
-                "kind": "nats",
-                "subject": "graph.query.>"
+                "kind": "nats-request",
+                "subject": "graph.query.*",
+                "interface": {"type": "graph.query", "version": "v1"}
               },
-              "name": "graph.query",
+              "name": "graph_queries",
               "required": true
             }
           ]
@@ -445,6 +446,15 @@
                 "subject": "graph.mutation.>"
               },
               "name": "graph_mutations",
+              "required": true
+            },
+            {
+              "config": {
+                "interface": {"type": "graph.query", "version": "v1"},
+                "kind": "nats-request",
+                "subject": "graph.query.searchGraph"
+              },
+              "name": "searchGraph",
               "required": true
             }
           ]
@@ -512,6 +522,42 @@
                 "subject": "graph.mutation.>"
               },
               "name": "graph_mutations",
+              "required": true
+            },
+            {
+              "config": {
+                "interface": {"type": "graph.query", "version": "v1"},
+                "kind": "nats-request",
+                "subject": "graph.query.batch"
+              },
+              "name": "batch",
+              "required": true
+            },
+            {
+              "config": {
+                "interface": {"type": "graph.query", "version": "v1"},
+                "kind": "nats-request",
+                "subject": "graph.query.relationships"
+              },
+              "name": "relationships",
+              "required": true
+            },
+            {
+              "config": {
+                "interface": {"type": "graph.query", "version": "v1"},
+                "kind": "nats-request",
+                "subject": "graph.query.temporal"
+              },
+              "name": "temporal",
+              "required": true
+            },
+            {
+              "config": {
+                "interface": {"type": "graph.query", "version": "v1"},
+                "kind": "nats-request",
+                "subject": "graph.query.searchGraph"
+              },
+              "name": "searchGraph",
               "required": true
             }
           ]
