@@ -17,15 +17,12 @@ import (
 	"github.com/c360studio/semstreams/pkg/fusion"
 )
 
-// Graph-query NATS-direct subjects this component requests against.
-// Centralised here so a subject rename in graph-query (rare; subject
-// names are part of the public contract) updates exactly one site.
-const (
-	subjectGraphQueryBatch         = "graph.query.batch"
-	subjectGraphQueryRelationships = "graph.query.relationships"
-	subjectGraphQueryTemporal      = "graph.query.temporal"
-	subjectGraphQuerySearchGraph   = "graph.query.searchGraph"
-)
+type graphQueryAdapterSubjects struct {
+	batch         string
+	relationships string
+	temporal      string
+	searchGraph   string
+}
 
 // graphQueryAdapter wraps natsclient.Client into the fusion.GraphQueryClient
 // interface. Production wires this adapter via Start; tests inject a
@@ -38,18 +35,19 @@ const (
 // [[feedback_silent_handler_error_payload_audit]] this is the right
 // default for every new natsclient.Request caller.
 type graphQueryAdapter struct {
-	client  *natsclient.Client
-	timeout time.Duration
+	client   *natsclient.Client
+	subjects graphQueryAdapterSubjects
+	timeout  time.Duration
 	// logger reports partial hydration. Nil-safe: tests that construct the adapter
 	// directly get a silent one rather than a panic.
 	logger *slog.Logger
 }
 
-func newGraphQueryAdapter(client *natsclient.Client, timeout time.Duration, logger *slog.Logger) *graphQueryAdapter {
+func newGraphQueryAdapter(client *natsclient.Client, subjects graphQueryAdapterSubjects, timeout time.Duration, logger *slog.Logger) *graphQueryAdapter {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	return &graphQueryAdapter{client: client, timeout: timeout, logger: logger}
+	return &graphQueryAdapter{client: client, subjects: subjects, timeout: timeout, logger: logger}
 }
 
 // EntityState implements fusion.GraphQueryClient via graph.query.batch
@@ -78,9 +76,9 @@ func (a *graphQueryAdapter) EntityState(ctx context.Context, args EntityStateArg
 	req := struct {
 		IDs []string `json:"ids"`
 	}{IDs: args.EntityIDs}
-	respData, err := a.request(ctx, subjectGraphQueryBatch, req)
+	respData, err := a.request(ctx, a.subjects.batch, req)
 	if err != nil {
-		return nil, fmt.Errorf("entity_state via %s: %w", subjectGraphQueryBatch, err)
+		return nil, fmt.Errorf("entity_state via %s: %w", a.subjects.batch, err)
 	}
 	entities, missing, err := decodeEntityStateResponse(respData)
 	if err != nil {
@@ -182,9 +180,9 @@ func (a *graphQueryAdapter) PredicateWalk(ctx context.Context, args PredicateWal
 			EntityID  string `json:"entity_id"`
 			Direction string `json:"direction"`
 		}{EntityID: seed, Direction: "outgoing"}
-		respData, err := a.request(ctx, subjectGraphQueryRelationships, req)
+		respData, err := a.request(ctx, a.subjects.relationships, req)
 		if err != nil {
-			return nil, fmt.Errorf("predicate_walk seed=%s via %s: %w", seed, subjectGraphQueryRelationships, err)
+			return nil, fmt.Errorf("predicate_walk seed=%s via %s: %w", seed, a.subjects.relationships, err)
 		}
 		// graph.query.relationships returns a BARE array; no envelope.
 		var resp []struct {
@@ -235,9 +233,9 @@ func (a *graphQueryAdapter) TemporalRange(ctx context.Context, args TemporalRang
 		EndTime   string `json:"endTime"`
 		Limit     int    `json:"limit,omitempty"`
 	}{StartTime: args.Start, EndTime: args.End, Limit: limit}
-	respData, err := a.request(ctx, subjectGraphQueryTemporal, req)
+	respData, err := a.request(ctx, a.subjects.temporal, req)
 	if err != nil {
-		return nil, fmt.Errorf("temporal_range via %s: %w", subjectGraphQueryTemporal, err)
+		return nil, fmt.Errorf("temporal_range via %s: %w", a.subjects.temporal, err)
 	}
 	// graph.temporal.query.range returns a BARE array of
 	// TemporalResult {id, type}; no envelope.
@@ -285,9 +283,9 @@ func (a *graphQueryAdapter) BM25(ctx context.Context, args BM25Args, tier, sourc
 		Query          string `json:"query"`
 		MaxCommunities int    `json:"max_communities,omitempty"`
 	}{Query: args.Query, MaxCommunities: limitCap}
-	respData, err := a.request(ctx, subjectGraphQuerySearchGraph, req)
+	respData, err := a.request(ctx, a.subjects.searchGraph, req)
 	if err != nil {
-		return nil, fmt.Errorf("bm25 via %s: %w", subjectGraphQuerySearchGraph, err)
+		return nil, fmt.Errorf("bm25 via %s: %w", a.subjects.searchGraph, err)
 	}
 	var resp struct {
 		EntityDigests []struct {

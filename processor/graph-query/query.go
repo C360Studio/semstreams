@@ -9,55 +9,83 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/pkg/errs"
 	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/nats-io/nats.go"
 )
 
+const (
+	graphQueriesPortName       = "graph_queries"
+	graphQuerySubjectFamily    = "graph.query.*"
+	graphQueryInterfaceType    = "graph.query"
+	graphQueryInterfaceVersion = "v1"
+)
+
+type queryEnvelopeShape string
+
+const (
+	queryEnvelopeBare     queryEnvelopeShape = "bare"
+	queryEnvelopeStandard queryEnvelopeShape = "graph.QueryResponse"
+)
+
+type queryOperationSpec struct {
+	operation    string
+	suffix       string
+	requestType  string
+	successType  string
+	envelope     queryEnvelopeShape
+	graphQLField string
+	consumers    []string
+	availability string
+	handler      func(*Component) func(context.Context, []byte) ([]byte, error)
+}
+
+// graphQueryOperations is the single internal conformance and registration
+// inventory for the admitted graph.query/v1 family. It is deliberately not an
+// exported subject catalog: components declare the family or exact operation
+// ports, while remote applications discover the admitted GraphQL fields.
+var graphQueryOperations = []queryOperationSpec{
+	{operation: "entity", suffix: "entity", requestType: "{id:string}", successType: "graph.ExactEntity", envelope: queryEnvelopeBare, graphQLField: "entity", consumers: []string{"graph-gateway", "fusionnats"}, availability: "authority responder required", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleQueryEntity }},
+	{operation: "entityByAlias", suffix: "entityByAlias", requestType: "{aliasOrID:string}", successType: "graph.ExactEntity", envelope: queryEnvelopeBare, graphQLField: "entityByAlias", consumers: []string{"graph-gateway"}, availability: "alias view errors remain classified", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleQueryEntityByAlias }},
+	{operation: "batch", suffix: "batch", requestType: "{ids:[]string}", successType: "graph.EntityBatchResponse", envelope: queryEnvelopeBare, consumers: []string{"research-graph-execute", "fusionnats"}, availability: "authority responder required", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleQueryBatch }},
+	{operation: "relationships", suffix: "relationships", requestType: "{entity_id:string,direction:string}", successType: "[]relationshipWire", envelope: queryEnvelopeBare, graphQLField: "relationships", consumers: []string{"graph-gateway", "research-graph-execute", "fusionnats"}, availability: "graph-index errors remain classified", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleQueryRelationships }},
+	{operation: "pathSearch", suffix: "pathSearch", requestType: "graphquery.PathSearchRequest", successType: "graphquery.PathSearchResponse", envelope: queryEnvelopeBare, graphQLField: "pathSearch", consumers: []string{"graph-gateway"}, availability: "required backing responders remain classified", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handlePathSearch }},
+	{operation: "hierarchyStats", suffix: "hierarchyStats", requestType: "{prefix:string}", successType: "{prefix:string,totalEntities:int,children:[]graphquery.HierarchyChild}", envelope: queryEnvelopeBare, graphQLField: "entityIdHierarchy", consumers: []string{"graph-gateway"}, availability: "authority errors remain classified", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleQueryHierarchyStats }},
+	{operation: "prefix", suffix: "prefix", requestType: "graph.PrefixQueryRequest", successType: "graph.PrefixQueryResponse", envelope: queryEnvelopeBare, graphQLField: "entitiesByPrefix", consumers: []string{"graph-gateway", "fusionnats"}, availability: "authority responder required", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleQueryPrefix }},
+	{operation: "spatial", suffix: "spatial", requestType: "{north:float64,south:float64,east:float64,west:float64,limit:int}", successType: "[]graphindexspatial.SpatialResult", envelope: queryEnvelopeBare, graphQLField: "spatialSearch", consumers: []string{"graph-gateway"}, availability: "optional index errors remain classified", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleQuerySpatial }},
+	{operation: "temporal", suffix: "temporal", requestType: "{startTime:string,endTime:string,limit:int}", successType: "[]graphindextemporal.TemporalResult", envelope: queryEnvelopeBare, graphQLField: "temporalSearch", consumers: []string{"graph-gateway", "research-graph-execute"}, availability: "optional index errors remain classified", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleQueryTemporal }},
+	{operation: "semantic", suffix: "semantic", requestType: "graphembedding.SearchRequest", successType: "graphembedding.SearchResponse", envelope: queryEnvelopeBare, graphQLField: "semanticSearch", consumers: []string{"graph-gateway", "fusionnats"}, availability: "optional embedding errors remain classified", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleQuerySemantic }},
+	{operation: "similar", suffix: "similar", requestType: "graphembedding.SimilarRequest", successType: "graphembedding.SimilarResponse", envelope: queryEnvelopeBare, graphQLField: "findSimilar", consumers: []string{"graph-gateway"}, availability: "optional embedding errors remain classified", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleQuerySimilar }},
+	{operation: "globalSearch", suffix: "globalSearch", requestType: "graphquery.GlobalSearchRequest", successType: "graphquery.GlobalSearchResponse", envelope: queryEnvelopeBare, graphQLField: "globalSearch", consumers: []string{"graph-gateway"}, availability: "lower tiers may serve; unavailable community data can return unmarked empty success", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleGlobalSearch }},
+	{operation: "summary", suffix: "summary", requestType: "graph.SummaryRequest", successType: "graph.SummaryData", envelope: queryEnvelopeStandard, graphQLField: "graphSummary", consumers: []string{"graph-gateway", "agentic-tools (unadmitted)"}, availability: "required backing responders remain classified", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleQueryGraphSummary }},
+	{operation: "searchGraph", suffix: "searchGraph", requestType: "graphquery.GlobalSearchRequest", successType: "graphquery.GlobalSearchResponse", envelope: queryEnvelopeBare, graphQLField: "searchGraph", consumers: []string{"graph-gateway", "research-graph-classify", "research-graph-execute", "agentic-tools (unadmitted)"}, availability: "empty global search attempts semantic fallback and can remain unmarked empty success", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleSearchGraph }},
+	{operation: "byName", suffix: "byName", requestType: "{name:string,limit:int}", successType: "graph.NameData", envelope: queryEnvelopeStandard, consumers: []string{"fusionnats"}, availability: "name-index errors remain classified", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleQueryByName }},
+	{operation: "localSearch", suffix: "localSearch", requestType: "graphquery.LocalSearchRequest", successType: "graphquery.LocalSearchResponse", envelope: queryEnvelopeBare, graphQLField: "localSearch", consumers: []string{"graph-gateway"}, availability: "transient index_not_ready until community cache usable", handler: func(c *Component) func(context.Context, []byte) ([]byte, error) { return c.handleLocalSearch }},
+}
+
+func graphQueryInterface() *component.InterfaceContract {
+	return &component.InterfaceContract{Type: graphQueryInterfaceType, Version: graphQueryInterfaceVersion}
+}
+
 // setupQueryHandlers subscribes to all query request subjects
 func (c *Component) setupQueryHandlers(ctx context.Context) error {
-	// Table-driven registration: each row is a NATS subject + its
-	// handler. Keeping this as a table rather than 12 inline blocks
-	// lets the function stay under the revive function-length cap
-	// AND makes the "what subjects this component owns" surface
-	// scannable at a glance. Order is preserved across iterations so
-	// the slog.Info call below reports subjects in declaration order.
-	type subRegistration struct {
-		subject string
-		handler func(ctx context.Context, data []byte) ([]byte, error)
-	}
-	registrations := []subRegistration{
-		{"graph.query.entity", c.handleQueryEntity},
-		{"graph.query.entityByAlias", c.handleQueryEntityByAlias},
-		{"graph.query.batch", c.handleQueryBatch},
-		{"graph.query.relationships", c.handleQueryRelationships},
-		{"graph.query.pathSearch", c.handlePathSearch},
-		{"graph.query.hierarchyStats", c.handleQueryHierarchyStats},
-		{"graph.query.prefix", c.handleQueryPrefix},
-		{"graph.query.spatial", c.handleQuerySpatial},
-		{"graph.query.temporal", c.handleQueryTemporal},
-		{"graph.query.semantic", c.handleQuerySemantic},
-		{"graph.query.similar", c.handleQuerySimilar},
-		{"graph.query.globalSearch", c.handleGlobalSearch},
-		// graphSummary — composite discovery resolver (fans out to
-		// graph.ingest.query.prefix + graph.index.query.predicateList).
-		{"graph.query.summary", c.handleQueryGraphSummary},
-		// searchGraph — wraps globalSearch with a semantic fallback
-		// when GraphRAG strategies return empty.
-		{"graph.query.searchGraph", c.handleSearchGraph},
-		// byName — deterministic name→ranked-IDs (gh#376), passthrough to graph-index.
-		{"graph.query.byName", c.handleQueryByName},
-	}
-
-	subjects := make([]string, 0, len(registrations))
-	for _, r := range registrations {
-		sub, err := c.natsClient.SubscribeForRequests(ctx, r.subject, r.handler)
+	subjects := make([]string, 0, len(graphQueryOperations))
+	for _, operation := range graphQueryOperations {
+		subject, err := component.ResolveSubject([]component.PortDefinition{{
+			Name:   graphQueriesPortName,
+			Config: component.NATSRequestPort{Subject: c.queryFamily},
+		}}, graphQueriesPortName, operation.suffix)
 		if err != nil {
-			return errs.WrapTransient(err, "GraphQuery", "setupQueryHandlers", "subscribe to "+r.subject)
+			return errs.WrapInvalid(err, "GraphQuery", "setupQueryHandlers", "resolve "+operation.operation)
+		}
+		sub, err := c.natsClient.SubscribeForRequests(ctx, subject, operation.handler(c))
+		if err != nil {
+			return errs.WrapTransient(err, "GraphQuery", "setupQueryHandlers", "subscribe to "+subject)
 		}
 		c.querySubscriptions = append(c.querySubscriptions, sub)
-		subjects = append(subjects, r.subject)
+		subjects = append(subjects, subject)
 	}
 
 	c.logger.Info("query handlers registered", "subjects", subjects)
@@ -309,6 +337,16 @@ func validateEntityPrefixQueryResponse(data []byte) error {
 	return nil
 }
 
+// relationshipWire is the bare graph.query.relationships success row consumed
+// by graph-gateway, research execute, and fusion. EdgeType is intentionally
+// spelled edge_type on the wire; the GraphRAG Relationship type is a different
+// internal representation with a predicate field.
+type relationshipWire struct {
+	EdgeType     string `json:"edge_type"`
+	FromEntityID string `json:"from_entity_id"`
+	ToEntityID   string `json:"to_entity_id"`
+}
+
 // handleQueryRelationships handles relationship query requests (passthrough to graph-index)
 func (c *Component) handleQueryRelationships(ctx context.Context, data []byte) ([]byte, error) {
 	// Report querying stage (throttled to avoid KV spam)
@@ -347,8 +385,8 @@ func (c *Component) handleQueryRelationships(ctx context.Context, data []byte) (
 
 	// Transform envelope response to normalized relationship format
 	// graph-index returns QueryResponse envelope with relationships array
-	// We need to return: {relationships: [{from_entity_id, to_entity_id, edge_type}]}
-	var relationships []map[string]any
+	// Return a bare array; graph-gateway adds its GraphQL response wrapper.
+	var relationships []relationshipWire
 
 	if isIncoming {
 		// Parse incoming relationships from envelope
@@ -356,12 +394,10 @@ func (c *Component) handleQueryRelationships(ctx context.Context, data []byte) (
 		if err := json.Unmarshal(response, &envelope); err != nil {
 			return nil, errs.WrapInvalid(err, "GraphQuery", "handleQueryRelationships", "parse incoming entries")
 		}
-		relationships = make([]map[string]any, len(envelope.Data.Relationships))
+		relationships = make([]relationshipWire, len(envelope.Data.Relationships))
 		for i, e := range envelope.Data.Relationships {
-			relationships[i] = map[string]any{
-				"from_entity_id": e.FromEntityID,
-				"to_entity_id":   req.EntityID,
-				"edge_type":      e.Predicate,
+			relationships[i] = relationshipWire{
+				EdgeType: e.Predicate, FromEntityID: e.FromEntityID, ToEntityID: req.EntityID,
 			}
 		}
 	} else {
@@ -370,12 +406,10 @@ func (c *Component) handleQueryRelationships(ctx context.Context, data []byte) (
 		if err := json.Unmarshal(response, &envelope); err != nil {
 			return nil, errs.WrapInvalid(err, "GraphQuery", "handleQueryRelationships", "parse outgoing entries")
 		}
-		relationships = make([]map[string]any, len(envelope.Data.Relationships))
+		relationships = make([]relationshipWire, len(envelope.Data.Relationships))
 		for i, e := range envelope.Data.Relationships {
-			relationships[i] = map[string]any{
-				"from_entity_id": req.EntityID,
-				"to_entity_id":   e.ToEntityID,
-				"edge_type":      e.Predicate,
+			relationships[i] = relationshipWire{
+				EdgeType: e.Predicate, FromEntityID: req.EntityID, ToEntityID: e.ToEntityID,
 			}
 		}
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/types"
 )
@@ -443,13 +444,18 @@ func TestDiscoverableSurface(t *testing.T) {
 		t.Errorf("InputPorts should have at least one port")
 	}
 	ports := c.OutputPorts()
-	if len(ports) != 1 {
-		t.Fatalf("OutputPorts = %d, want canonical mutation port", len(ports))
+	if len(ports) != 2 {
+		t.Fatalf("OutputPorts = %d, want mutation + searchGraph", len(ports))
 	}
 	request, ok := ports[0].Config.(component.NATSRequestPort)
 	if !ok || !ports[0].Required || request.Subject != graphmutation.SubjectFamily || request.Interface == nil ||
 		request.Interface.Type != graphmutation.InterfaceType || request.Interface.Version != graphmutation.InterfaceVersion {
 		t.Errorf("graph mutation output drift: %#v", ports[0])
+	}
+	search, ok := ports[1].Config.(component.NATSRequestPort)
+	if !ok || ports[1].Name != "searchGraph" || !ports[1].Required || search.Subject != "graph.query.searchGraph" ||
+		search.Interface == nil || search.Interface.Type != "graph.query" || search.Interface.Version != "v1" {
+		t.Errorf("searchGraph output drift: %#v", ports[1])
 	}
 
 	if schema := c.ConfigSchema(); schema.Properties == nil {
@@ -489,6 +495,60 @@ func TestConfig_ValidateRejectsMissingPorts(t *testing.T) {
 				t.Errorf("Validate = %v, want nil", err)
 			}
 		})
+	}
+}
+
+func TestNewProcessorRejectsMissingOrMismatchedSearchGraphOutput(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "missing", mutate: func(config *Config) { config.Ports.Outputs = config.Ports.Outputs[:1] }},
+		{name: "wrong interface", mutate: func(config *Config) {
+			config.Ports.Outputs[1].Config = component.NATSRequestPort{
+				Subject:   "graph.query.searchGraph",
+				Interface: &component.InterfaceContract{Type: "graph.query", Version: "v2"},
+			}
+		}},
+		{name: "wrong subject", mutate: func(config *Config) {
+			config.Ports.Outputs[1].Config = component.NATSRequestPort{
+				Subject:   "graph.query.summary",
+				Interface: &component.InterfaceContract{Type: "graph.query", Version: "v1"},
+			}
+		}},
+		{name: "reordered missing mutation", mutate: func(config *Config) {
+			searchGraph := config.Ports.Outputs[1]
+			config.Ports.Outputs = []component.PortDefinition{
+				searchGraph,
+				{Name: "unexpected", Required: true, Config: component.NATSRequestPort{Subject: "graph.query.summary"}},
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := DefaultConfig()
+			test.mutate(&config)
+			raw, err := json.Marshal(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = NewProcessor(raw, component.Dependencies{NATSClient: &natsclient.Client{}})
+			if err == nil {
+				t.Fatal("NewProcessor accepted invalid searchGraph output")
+			}
+		})
+	}
+}
+
+func TestNewProcessorAcceptsReorderedRequiredOutputs(t *testing.T) {
+	config := DefaultConfig()
+	config.Ports.Outputs[0], config.Ports.Outputs[1] = config.Ports.Outputs[1], config.Ports.Outputs[0]
+	raw, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = NewProcessor(raw, component.Dependencies{NATSClient: &natsclient.Client{}}); err != nil {
+		t.Fatalf("NewProcessor rejected reordered complete output set: %v", err)
 	}
 }
 

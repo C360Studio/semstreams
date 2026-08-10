@@ -32,28 +32,21 @@ func (a *classifierChainAdapter) ClassifyQuery(ctx context.Context, topic string
 	return a.chain.ClassifyQuery(ctx, topic)
 }
 
-// searchGraphSubject is the existing graph-query NATS surface for
-// natural-language search. PR 2 reuses it (rather than introducing a
-// new endpoint) so the candidate-retrieval path shares wiring with
-// the search_graph agent tool (PR #54). PR 4 (execute_subqueries) is
-// expected to use the same subject for cross-tier retrieval; sharing
-// the surface keeps the evidence schema consistent.
-const searchGraphSubject = "graph.query.searchGraph"
-
 // searchGraphRetriever satisfies CandidateRetriever via a NATS
 // request to graph.query.searchGraph. Returns degraded=true when the
 // server-side fallback fired so PR 3's router can downgrade
 // confidence.
 type searchGraphRetriever struct {
 	client  *natsclient.Client
+	subject string
 	timeout time.Duration
 }
 
-func newSearchGraphRetriever(client *natsclient.Client, timeout time.Duration) *searchGraphRetriever {
+func newSearchGraphRetriever(client *natsclient.Client, subject string, timeout time.Duration) *searchGraphRetriever {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	return &searchGraphRetriever{client: client, timeout: timeout}
+	return &searchGraphRetriever{client: client, subject: subject, timeout: timeout}
 }
 
 // searchGraphRequest mirrors the agent tool's wire shape (see
@@ -143,7 +136,7 @@ func (r *searchGraphRetriever) FetchCandidates(ctx context.Context, topic string
 	// "search subsystem unreachable" from "search returned no
 	// candidates legitimately" once header-classified errors are
 	// the canonical path.
-	respData, err := r.client.RequestClassified(ctx, searchGraphSubject, reqData, r.timeout)
+	respData, err := r.client.RequestClassified(ctx, r.subject, reqData, r.timeout)
 	if err != nil {
 		return CandidateSet{}, fmt.Errorf("search_graph: %w", err)
 	}

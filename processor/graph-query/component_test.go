@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
@@ -33,6 +34,7 @@ type mockNATSClient struct {
 	// Invalid (gh#163 test coverage for the 3-way branch).
 	requestClassifiedFunc func(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error)
 	subscribed            map[string]bool
+	handlers              map[string]func(context.Context, []byte) ([]byte, error)
 	connected             bool
 	status                natsclient.ConnectionStatus
 	// buckets allows tests to configure which KV buckets exist.
@@ -44,6 +46,7 @@ type mockNATSClient struct {
 func newMockNATSClient() *mockNATSClient {
 	return &mockNATSClient{
 		subscribed: make(map[string]bool),
+		handlers:   make(map[string]func(context.Context, []byte) ([]byte, error)),
 		connected:  true,
 		status:     natsclient.StatusConnected,
 		buckets:    make(map[string]jetstream.KeyValue),
@@ -80,8 +83,9 @@ func (m *mockNATSClient) RequestClassified(ctx context.Context, subject string, 
 	return natsclient.ClassifyReply(msg)
 }
 
-func (m *mockNATSClient) SubscribeForRequests(_ context.Context, subject string, _ func(ctx context.Context, data []byte) ([]byte, error)) (*natsclient.Subscription, error) {
+func (m *mockNATSClient) SubscribeForRequests(_ context.Context, subject string, handler func(ctx context.Context, data []byte) ([]byte, error)) (*natsclient.Subscription, error) {
 	m.subscribed[subject] = true
+	m.handlers[subject] = handler
 	// Return a nil subscription since the mock doesn't actually subscribe
 	return nil, nil
 }
@@ -125,30 +129,17 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 		config Config
 	}{
 		{
-			name: "valid minimal config",
-			config: Config{
-				Ports: &component.PortConfig{
-					Inputs: []component.PortDefinition{
-						{Name: "query_entity", Config: component.NATSRequestPort{Subject: "graph.query.entity"}},
-					},
-					Outputs: []component.PortDefinition{},
-				},
-			},
+			name:   "valid minimal config",
+			config: DefaultConfig(),
 		},
 		{
 			name: "valid full config",
-			config: Config{
-				Ports: &component.PortConfig{
-					Inputs: []component.PortDefinition{
-						{Name: "query_entity", Config: component.NATSRequestPort{Subject: "graph.query.entity"}},
-						{Name: "query_relationships", Config: component.NATSRequestPort{Subject: "graph.query.relationships"}},
-						{Name: "query_path_search", Config: component.NATSRequestPort{Subject: "graph.query.pathSearch"}},
-					},
-					Outputs: []component.PortDefinition{},
-				},
-				QueryTimeout: 5 * time.Second,
-				MaxDepth:     10,
-			},
+			config: func() Config {
+				config := DefaultConfig()
+				config.QueryTimeout = 5 * time.Second
+				config.MaxDepth = 10
+				return config
+			}(),
 		},
 	}
 
@@ -224,6 +215,47 @@ func TestDefaultConfig_ReturnsValidConfig(t *testing.T) {
 	assert.NotEmpty(t, config.Ports.Inputs)
 	assert.Equal(t, 5*time.Second, config.QueryTimeout)
 	assert.Equal(t, 10, config.MaxDepth)
+}
+
+func TestGraphQueryProviderPortIsOneVersionedRequiredFamily(t *testing.T) {
+	config := DefaultConfig()
+	require.NotNil(t, config.Ports)
+	require.Len(t, config.Ports.Inputs, 1)
+	require.Empty(t, config.Ports.Outputs)
+
+	definition := config.Ports.Inputs[0]
+	require.Equal(t, "graph_queries", definition.Name)
+	require.True(t, definition.Required)
+	port, err := definition.Resolve(component.DirectionInput)
+	require.NoError(t, err)
+	facts, err := port.Facts()
+	require.NoError(t, err)
+	require.Equal(t, component.PortKindNATSRequest, facts.Kind())
+	require.Equal(t, []string{"graph.query.*"}, facts.NATSSubjects())
+	contract, ok := facts.Interface()
+	require.True(t, ok)
+	require.Equal(t, component.InterfaceContract{Type: "graph.query", Version: "v1"}, contract)
+}
+
+func TestGraphQueryStartRegistersStableLocalSearchResponder(t *testing.T) {
+	mockClient := newMockNATSClient()
+	comp := createTestComponentWithMockClient(t, mockClient)
+	comp.config.StartupAttempts = 1
+	comp.config.StartupInterval = time.Millisecond
+	require.NoError(t, comp.Initialize())
+	require.NoError(t, comp.Start(context.Background()))
+	t.Cleanup(func() { require.NoError(t, comp.Stop(time.Second)) })
+
+	require.Len(t, mockClient.handlers, 16)
+	handler, ok := mockClient.handlers["graph.query.localSearch"]
+	require.True(t, ok, "localSearch responder must exist before COMMUNITY_INDEX")
+
+	_, err := handler(context.Background(), []byte(`{"entity_id":"test.fixture.graph.query.entity.001","query":"battery"}`))
+	require.Error(t, err)
+	var classified *errs.ClassifiedError
+	require.ErrorAs(t, err, &classified)
+	require.Equal(t, errs.ErrorTransient, classified.Class)
+	require.Equal(t, gtypes.ErrorCodeIndexNotReady, classified.Code)
 }
 
 // ====================================================================================
@@ -909,6 +941,7 @@ func createTestComponentWithMockClient(t *testing.T, mockClient *mockNATSClient)
 		natsClient:       mockClient, // Interface field accepts mock
 		config:           config,
 		inputs:           inputs,
+		queryFamily:      graphQuerySubjectFamily,
 		logger:           slog.Default(),
 		lastMetricsReset: time.Now(),
 	}

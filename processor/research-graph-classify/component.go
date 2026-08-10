@@ -3,6 +3,7 @@ package researchclassify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -131,6 +132,10 @@ func NewProcessor(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		}
 		outputs = append(outputs, port)
 	}
+	searchGraphSubject, err := resolveSearchGraphOutput(outputs)
+	if err != nil {
+		return nil, errs.WrapInvalid(err, ComponentName, "NewProcessor", "resolve searchGraph output")
+	}
 
 	return &Component{
 		config:     config,
@@ -139,10 +144,49 @@ func NewProcessor(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		inputs:     inputs,
 		outputs:    outputs,
 		classifier: &classifierChainAdapter{chain: query.NewClassifierChain(query.NewKeywordClassifier(), nil, nil)},
-		retriever:  newSearchGraphRetriever(deps.NATSClient, config.RetrieveTimeout),
+		retriever:  newSearchGraphRetriever(deps.NATSClient, searchGraphSubject, config.RetrieveTimeout),
 		loops:      nil, // wired in Start() once the bucket is open
 		triplePub:  llmwrap.NewNATSTriplePublisher(deps.NATSClient),
 	}, nil
+}
+
+func resolveSearchGraphOutput(outputs []component.Port) (string, error) {
+	if len(outputs) != 2 {
+		return "", fmt.Errorf("exactly graph_mutations and searchGraph outputs are required, got %d", len(outputs))
+	}
+	mutationFound := false
+	searchGraphSubject := ""
+	for _, port := range outputs {
+		switch port.Name {
+		case "graph_mutations":
+			if mutationFound || !port.Required {
+				return "", errors.New("graph_mutations output must be unique and required")
+			}
+			mutationFound = true
+			continue
+		case "searchGraph":
+			if searchGraphSubject != "" || !port.Required {
+				return "", errors.New("searchGraph output must be unique and required")
+			}
+		default:
+			return "", fmt.Errorf("unexpected or invalid output port %q", port.Name)
+		}
+		facts, err := port.Facts()
+		if err != nil {
+			return "", err
+		}
+		contract, ok := facts.Interface()
+		subjects := facts.NATSSubjects()
+		if facts.Kind() != component.PortKindNATSRequest || !ok || contract.Type != "graph.query" ||
+			contract.Version != "v1" || len(subjects) != 1 || subjects[0] != "graph.query.searchGraph" {
+			return "", errors.New("searchGraph output must be required nats-request graph.query v1 on graph.query.searchGraph")
+		}
+		searchGraphSubject = subjects[0]
+	}
+	if !mutationFound || searchGraphSubject == "" {
+		return "", errors.New("required graph_mutations or searchGraph output is missing")
+	}
+	return searchGraphSubject, nil
 }
 
 // Initialize is part of the LifecycleComponent contract. nl_classify

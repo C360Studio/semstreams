@@ -59,8 +59,33 @@ type Config struct {
 
 // Validate validates the configuration
 func (c *Config) Validate() error {
-	if c.Ports == nil || len(c.Ports.Inputs) == 0 {
-		return errors.New("ports configuration with at least one input port is required")
+	if c.Ports == nil {
+		return errors.New("ports configuration is required")
+	}
+	if len(c.Ports.Inputs) != 1 {
+		return fmt.Errorf("exactly one graph_queries input port is required, got %d", len(c.Ports.Inputs))
+	}
+	if len(c.Ports.Outputs) != 0 {
+		return fmt.Errorf("graph-query declares no output ports, got %d", len(c.Ports.Outputs))
+	}
+	definition := c.Ports.Inputs[0]
+	if definition.Name != graphQueriesPortName || !definition.Required {
+		return errors.New("graph-query input must be the required graph_queries port")
+	}
+	port, err := definition.Resolve(component.DirectionInput)
+	if err != nil {
+		return fmt.Errorf("resolve graph_queries input: %w", err)
+	}
+	facts, err := port.Facts()
+	if err != nil {
+		return fmt.Errorf("inspect graph_queries input: %w", err)
+	}
+	contract, hasContract := facts.Interface()
+	if facts.Kind() != component.PortKindNATSRequest || !hasContract ||
+		contract.Type != graphQueryInterfaceType || contract.Version != graphQueryInterfaceVersion ||
+		len(facts.NATSSubjects()) != 1 || facts.NATSSubjects()[0] != graphQuerySubjectFamily {
+		return fmt.Errorf("graph_queries must be required nats-request %s %s on %s",
+			graphQueryInterfaceType, graphQueryInterfaceVersion, graphQuerySubjectFamily)
 	}
 	return nil
 }
@@ -91,10 +116,14 @@ func DefaultConfig() Config {
 	return Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "query_entity", Config: component.NATSRequestPort{Subject: "graph.query.entity"}},
-				{Name: "query_batch", Config: component.NATSRequestPort{Subject: "graph.query.batch"}},
-				{Name: "query_relationships", Config: component.NATSRequestPort{Subject: "graph.query.relationships"}},
-				{Name: "query_path_search", Config: component.NATSRequestPort{Subject: "graph.query.pathSearch"}},
+				{
+					Name:     graphQueriesPortName,
+					Required: true,
+					Config: component.NATSRequestPort{
+						Subject:   graphQuerySubjectFamily,
+						Interface: graphQueryInterface(),
+					},
+				},
 			},
 			Outputs: []component.PortDefinition{},
 		},
@@ -107,6 +136,7 @@ func DefaultConfig() Config {
 type Component struct {
 	config        Config
 	inputs        []component.Port
+	queryFamily   string
 	natsClient    natsRequester
 	pathSearcher  *PathSearcher
 	router        *StaticRouter
@@ -202,11 +232,17 @@ func CreateGraphQuery(rawConfig json.RawMessage, deps component.Dependencies) (c
 		}
 		inputs = append(inputs, port)
 	}
+	queryFacts, err := inputs[0].Facts()
+	if err != nil {
+		return nil, fmt.Errorf("inspect graph query subject family: %w", err)
+	}
+	queryFamily := queryFacts.NATSSubjects()[0]
 
 	// Create component with keyword-only classifier; LLM classifier wired in Start()
 	comp := &Component{
 		config:               config,
 		inputs:               inputs,
+		queryFamily:          queryFamily,
 		natsClient:           deps.NATSClient, // Assign to interface field
 		pathSearcher:         NewPathSearcher(deps.NATSClient, config.QueryTimeout, config.MaxDepth, logger),
 		logger:               logger,
@@ -447,13 +483,15 @@ func (c *Component) Start(ctx context.Context) error {
 	// Create router for static routing
 	c.router = NewStaticRouter(c.logger)
 
+	// Construct the cache before responders are installed. localSearch is stable
+	// at every successful Start and may receive a request as soon as its
+	// subscription exists; publishing the pointer first avoids a startup race.
+	c.communityCache = NewCommunityCache(c.logger)
+
 	// Subscribe to query subjects
 	if err := c.setupQueryHandlers(componentCtx); err != nil {
 		return fmt.Errorf("subscribe to queries: %w", err)
 	}
-
-	// Initialize community cache for GraphRAG
-	c.communityCache = NewCommunityCache(c.logger)
 
 	// Set up resource watcher for COMMUNITY_INDEX bucket
 	// This handles graceful startup and recovery if the bucket appears later
@@ -599,11 +637,6 @@ func (c *Component) startGraphRAGWatcher(ctx context.Context) error {
 	// bucket created AFTER GraphRAG starts (the rolling-upgrade case) is still picked
 	// up without a restart. That watcher is created once and outlives GraphRAG
 	// enable/disable flapping on COMMUNITY_INDEX.
-
-	// Register GraphRAG handlers
-	if err := c.setupGraphRAGHandlers(ctx); err != nil {
-		return fmt.Errorf("setup GraphRAG handlers: %w", err)
-	}
 
 	c.logger.Info("GraphRAG enabled")
 	return nil

@@ -139,7 +139,7 @@ func DefaultConfig() Config {
 	return Config{
 		Ports: &component.PortConfig{
 			Outputs: []component.PortDefinition{
-				{Name: "graph_queries", Required: true, Config: component.NATSRequestPort{Subject: "graph.query.*"}},
+				{Name: "graph_queries", Required: true, Config: component.NATSRequestPort{Subject: "graph.query.*", Interface: graphQueryInterface()}},
 				{Name: "graph_index_queries", Required: true, Config: component.NATSRequestPort{Subject: "graph.index.query.*"}},
 				{Name: "agentic_queries", Required: true, Config: component.NATSRequestPort{Subject: "agentic.query.*", Interface: agenticQueryInterface()}},
 			},
@@ -154,7 +154,7 @@ func DefaultConfig() Config {
 
 func gatewayQueryOutputContract() []component.PortDefinition {
 	return []component.PortDefinition{
-		{Name: "graph_queries", Required: true, Config: component.NATSRequestPort{Subject: "graph.query.*"}},
+		{Name: "graph_queries", Required: true, Config: component.NATSRequestPort{Subject: "graph.query.*", Interface: graphQueryInterface()}},
 		{Name: "graph_index_queries", Required: true, Config: component.NATSRequestPort{Subject: "graph.index.query.*"}},
 		{Name: "agentic_queries", Required: true, Config: component.NATSRequestPort{Subject: "agentic.query.*", Interface: agenticQueryInterface()}},
 	}
@@ -162,6 +162,10 @@ func gatewayQueryOutputContract() []component.PortDefinition {
 
 func agenticQueryInterface() *component.InterfaceContract {
 	return &component.InterfaceContract{Type: "agentic.query", Version: "v1"}
+}
+
+func graphQueryInterface() *component.InterfaceContract {
+	return &component.InterfaceContract{Type: "graph.query", Version: "v1"}
 }
 
 func validateGatewayQueryOutputs(outputs []component.PortDefinition) error {
@@ -205,7 +209,13 @@ func validateGatewayQueryOutputs(outputs []component.PortDefinition) error {
 		if facts.Kind() != expectedKind {
 			return fmt.Errorf("query output port %q must use %s, got %q", definition.Name, expectedKind, facts.Kind())
 		}
-		if definition.Name == agenticQueriesPortName {
+		switch definition.Name {
+		case graphQueriesPortName:
+			contract, hasContract := facts.Interface()
+			if !hasContract || contract.Type != "graph.query" || contract.Version != "v1" {
+				return fmt.Errorf("query output port %q must declare interface graph.query v1", definition.Name)
+			}
+		case agenticQueriesPortName:
 			contract, hasContract := facts.Interface()
 			if !hasContract || contract.Type != "agentic.query" || contract.Version != "v1" {
 				return fmt.Errorf("query output port %q must declare interface agentic.query v1", definition.Name)
@@ -214,6 +224,9 @@ func validateGatewayQueryOutputs(outputs []component.PortDefinition) error {
 		subjects := facts.NATSSubjects()
 		if len(subjects) != 1 || !isQueryFamilyPattern(subjects[0]) {
 			return fmt.Errorf("query output port %q must declare one trailing-wildcard subject family", definition.Name)
+		}
+		if definition.Name == graphQueriesPortName && subjects[0] != "graph.query.*" {
+			return fmt.Errorf("query output port %q must declare subject family graph.query.*", definition.Name)
 		}
 		if previous, duplicate := seenSubjects[subjects[0]]; duplicate {
 			return fmt.Errorf("query output ports %q and %q duplicate subject family %q", previous, definition.Name, subjects[0])

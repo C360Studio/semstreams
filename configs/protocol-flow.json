@@ -1,5 +1,5 @@
 {
-  "version": "1.0.1",
+  "version": "1.0.2",
   "platform": {
     "org": "c360",
     "id": "streamkit-pure",
@@ -434,9 +434,11 @@
             {
               "config": {
                 "kind": "nats-request",
-                "subject": "graph.query.>"
+                "subject": "graph.query.*",
+                "interface": {"type": "graph.query", "version": "v1"}
               },
-              "name": "query_requests"
+              "name": "graph_queries",
+              "required": true
             }
           ],
           "outputs": []
@@ -456,7 +458,8 @@
           {
             "config": {
               "kind": "nats-request",
-              "subject": "graph.query.*"
+              "subject": "graph.query.*",
+              "interface": {"type": "graph.query", "version": "v1"}
             },
             "name": "graph_queries",
             "required": true

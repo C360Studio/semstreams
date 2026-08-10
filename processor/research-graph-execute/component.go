@@ -27,11 +27,12 @@ import (
 // plumbing and the per-message handler hands off to the pure
 // executeAll function in handler.go.
 type Component struct {
-	config  Config
-	deps    component.Dependencies
-	logger  *slog.Logger
-	inputs  []component.Port
-	outputs []component.Port
+	config        Config
+	deps          component.Dependencies
+	logger        *slog.Logger
+	inputs        []component.Port
+	outputs       []component.Port
+	querySubjects graphQueryAdapterSubjects
 
 	// Injected dependencies. Tests replace these directly via the
 	// constructor; production wires them via Start() from the
@@ -104,13 +105,66 @@ func NewProcessor(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		}
 		outputs = append(outputs, port)
 	}
+	querySubjects, err := resolveGraphQueryOutputs(outputs)
+	if err != nil {
+		return nil, errs.WrapInvalid(err, ComponentName, "NewProcessor", "resolve graph query outputs")
+	}
 	return &Component{
-		config:    config,
-		deps:      deps,
-		logger:    logger,
-		inputs:    inputs,
-		outputs:   outputs,
-		triplePub: llmwrap.NewNATSTriplePublisher(deps.NATSClient),
+		config:        config,
+		deps:          deps,
+		logger:        logger,
+		inputs:        inputs,
+		outputs:       outputs,
+		querySubjects: querySubjects,
+		triplePub:     llmwrap.NewNATSTriplePublisher(deps.NATSClient),
+	}, nil
+}
+
+func resolveGraphQueryOutputs(outputs []component.Port) (graphQueryAdapterSubjects, error) {
+	if len(outputs) != 5 {
+		return graphQueryAdapterSubjects{}, fmt.Errorf("exactly graph_mutations and four graph query outputs are required, got %d", len(outputs))
+	}
+	want := map[string]string{
+		"batch":         "graph.query.batch",
+		"relationships": "graph.query.relationships",
+		"temporal":      "graph.query.temporal",
+		"searchGraph":   "graph.query.searchGraph",
+	}
+	resolved := make(map[string]string, len(want))
+	mutationFound := false
+	for _, port := range outputs {
+		if port.Name == "graph_mutations" {
+			if mutationFound || !port.Required {
+				return graphQueryAdapterSubjects{}, errors.New("graph_mutations output must be unique and required")
+			}
+			mutationFound = true
+			continue
+		}
+		subject, ok := want[port.Name]
+		if !ok || !port.Required {
+			return graphQueryAdapterSubjects{}, fmt.Errorf("unexpected or invalid output port %q", port.Name)
+		}
+		if _, duplicate := resolved[port.Name]; duplicate {
+			return graphQueryAdapterSubjects{}, fmt.Errorf("duplicate output port %q", port.Name)
+		}
+		facts, err := port.Facts()
+		if err != nil {
+			return graphQueryAdapterSubjects{}, err
+		}
+		contract, hasContract := facts.Interface()
+		subjects := facts.NATSSubjects()
+		if facts.Kind() != component.PortKindNATSRequest || !hasContract || contract.Type != "graph.query" ||
+			contract.Version != "v1" || len(subjects) != 1 || subjects[0] != subject {
+			return graphQueryAdapterSubjects{}, fmt.Errorf("output %s must be required nats-request graph.query v1 on %s", port.Name, subject)
+		}
+		resolved[port.Name] = subject
+	}
+	if !mutationFound || len(resolved) != len(want) {
+		return graphQueryAdapterSubjects{}, errors.New("required graph mutation or graph query output is missing")
+	}
+	return graphQueryAdapterSubjects{
+		batch: resolved["batch"], relationships: resolved["relationships"],
+		temporal: resolved["temporal"], searchGraph: resolved["searchGraph"],
 	}, nil
 }
 
@@ -138,7 +192,7 @@ func (c *Component) Start(ctx context.Context) error {
 		return err
 	}
 	if c.gq == nil {
-		c.gq = newGraphQueryAdapter(c.deps.NATSClient, c.config.ExecuteTimeout, c.logger)
+		c.gq = newGraphQueryAdapter(c.deps.NATSClient, c.querySubjects, c.config.ExecuteTimeout, c.logger)
 	}
 	if err := c.subscribeInputs(ctx); err != nil {
 		return err

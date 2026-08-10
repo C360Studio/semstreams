@@ -21,6 +21,7 @@ func createTestComponentForLifecycle() component.LifecycleComponent {
 	return &Component{
 		natsClient:       newMockNATSClient(),
 		config:           config,
+		queryFamily:      graphQuerySubjectFamily,
 		logger:           slog.Default(),
 		lastMetricsReset: time.Now(),
 	}

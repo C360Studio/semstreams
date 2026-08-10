@@ -29,22 +29,22 @@ of an internal contradiction and a new owner ruling.
 
 ## B. Operation inventory and atomic port cutover
 
-- [ ] B.1 Add failing tests for one internal inventory containing exactly the current sixteen operations, with stable
+- [x] B.1 Add failing tests for one internal inventory containing exactly the current sixteen operations, with stable
   subjects/request/success types, GraphQL exposure, consumers, and availability outcomes.
-- [ ] B.2 Install all sixteen responders on every successful graph-query Start and return classified
+- [x] B.2 Install all sixteen responders on every successful graph-query Start and return classified
   `index_not_ready` from `localSearch` until a usable community generation exists.
-- [ ] B.3 Replace graph-query's effective wildcard declaration with one required `graph_queries` `nats-request` input
+- [x] B.3 Replace graph-query's effective wildcard declaration with one required `graph_queries` `nats-request` input
   for `graph.query.*`, interface `graph.query/v1`, and derive all responder subjects from that resolved family.
-- [ ] B.4 Retain graph-gateway's three required outputs and version `graph_queries` as `graph.query/v1`.
-- [ ] B.5 Add one required `searchGraph` output to research classify and four required
+- [x] B.4 Retain graph-gateway's three required outputs and version `graph_queries` as `graph.query/v1`.
+- [x] B.5 Add one required `searchGraph` output to research classify and four required
   `batch`/`relationships`/`temporal`/`searchGraph` outputs to research execute; add no agentic query outputs.
-- [ ] B.6 Load all twenty-one shipped configs through production factories and Registry. Prove eleven query, eight
+- [x] B.6 Load all twenty-one shipped configs through production factories and Registry. Prove eleven query, eight
   gateway, two classify, two execute, and nine agentic-tools instances; raw `395/243/54`, effective `571/378/69`, and
   unchanged delta `176/135/15`.
-- [ ] B.7 Reject unknown operations, out-of-family declarations, missing/mismatched interface facts, and any effective
+- [x] B.7 Reject unknown operations, out-of-family declarations, missing/mismatched interface facts, and any effective
   adapter request without its exact declared output.
-- [ ] B.8 Run focused race/integration, schema/no-drift, contract, strict OpenSpec, and relevant E2E gates.
-- [ ] B.9 Obtain independent review for Slice B.
+- [x] B.8 Run focused race/integration, schema/no-drift, contract, strict OpenSpec, and relevant E2E gates.
+- [x] B.9 Obtain independent review for Slice B.
 
 ## C. Community generation supervisor
 
