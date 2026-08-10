@@ -12,6 +12,7 @@ import (
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/clustering"
 	"github.com/c360studio/semstreams/graph/llm"
+	"github.com/c360studio/semstreams/pkg/graphview"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,9 +54,8 @@ func (oneEntityPerIDQuerier) GetEntities(_ context.Context, ids []string) ([]*gt
 //
 // It drives the PRODUCTION trigger path — a COMMUNITY_INDEX write, seen by the
 // worker's real WatchAll — rather than calling enhanceCommunity directly, and it
-// drives graph-query's real WatchSummaries loop over NATS rather than calling
-// handleSummaryUpdate directly. That closes the reviewer's MEDIUM: the
-// WatchSummaries-over-real-NATS seam was previously covered only by the e2e tier.
+// drives graph-query's catalog-backed serving view over NATS rather than calling
+// its decoder directly. That closes the real-NATS read-join seam below the e2e tier.
 func TestIntegration_EnhancementWorker_WiresThroughToGraphQuerySummary(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -139,27 +139,42 @@ func TestIntegration_EnhancementWorker_WiresThroughToGraphQuerySummary(t *testin
 	require.NoError(t, err, "summary must be stored at the {level}.{membership_hash} key")
 	assert.NotEmpty(t, entry.Value())
 
-	// (2) graph-query's private community cache, driven by its real generation +
-	// summary watch loops over NATS, joins the summary to the community by
-	// membership hash and surfaces it.
-	cache := newCommunityCache(logger)
-	go func() { _ = cache.watchGeneration(ctx, communityKV, newCommunityGeneration(1)) }()
-	go func() { _ = cache.watchSummaries(ctx, summaryKV) }()
+	// (2) graph-query's catalog-backed serving-view supervisor joins the summary
+	// to the community by membership hash and surfaces it. Hooks synchronize on
+	// the real NATS replay; no polling interval participates in the assertion.
+	attached := make(chan *graphview.View[clustering.CommunitySummaryRecord], 1)
+	applied := make(chan uint64, 1)
+	comp := &Component{
+		config: Config{RecheckInterval: time.Second},
+		logger: logger,
+		openSummaryReader: func(openCtx context.Context) (gtypes.CatalogReader, error) {
+			return gtypes.OpenCatalogReader(openCtx, natsClient, gtypes.BucketCommunitySummaries)
+		},
+		summaryViewChanged: func(view *graphview.View[clustering.CommunitySummaryRecord]) {
+			if view != nil {
+				attached <- view
+			}
+		},
+		summaryViewApplied: func(_ string, revision uint64) { applied <- revision },
+	}
+	supervisorDone := make(chan struct{})
+	go func() {
+		comp.superviseSummaryView(ctx)
+		close(supervisorDone)
+	}()
+	view := receiveSummaryEvent(t, attached)
+	receiveSummaryEvent(t, applied)
+	waitSummaryCaughtUp(t, view)
 
-	require.Eventually(t, func() bool {
-		got, ok := cache.summaryFor(comm)
-		return ok && got == mockSummary
-	}, 30*time.Second, 200*time.Millisecond,
-		"graph-query cache never surfaced the worker's summary via WatchSummaries over real NATS — REAL read-join defect")
-
-	got, ok := cache.summaryFor(comm)
+	got, ok := comp.summaryFor(comm)
 	require.True(t, ok)
 	assert.Equal(t, mockSummary, got)
 
 	// resolveCommunitySummary must surface the joined LLM summary, NOT the
 	// statistical floor — proving the tiered read path prefers the store hit.
-	comp := &Component{communityCache: cache}
 	resolved := comp.resolveCommunitySummary(comm)
 	assert.Equal(t, mockSummary, resolved, "resolveCommunitySummary must return the LLM summary, not the statistical floor")
 	assert.NotEqual(t, comm.StatisticalSummary, resolved)
+	cancel()
+	receiveSummaryEvent(t, supervisorDone)
 }

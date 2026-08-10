@@ -11,8 +11,9 @@
 - Slice D merged-tree reassessment:
   `docs/proposals/post-foundation-b-slice-d-optional-summary-serving-view-inventory.md`, SHA-256
   `6a28a0fe9349218baf07bf6d4d79bd89c6bc4ad483fa937e575974d30f499a6b`.
-- Independent review passed for the original inventory and design before the 2026-08-09 owner approval. Independent
-  review of the reduced Slice D reassessment is pending.
+- Independent review passed for the original inventory and design before the 2026-08-09 owner approval. The reduced
+  Slice D reassessment passed independent planning review, and its implementation passed independent
+  `semstreams-reviewer` review on 2026-08-10. The hash-pinned reassessment retains its capture-time status text.
 
 On 2026-08-09 the owner approved the following fourteen rulings. These are binding implementation constraints; a
 deviation stops the affected slice for a new owner ruling.

@@ -11,6 +11,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/clustering"
+	"github.com/c360studio/semstreams/pkg/graphview"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
 )
@@ -23,7 +24,7 @@ import (
 //
 // This test drives the REAL component: COMMUNITY_INDEX present at Start,
 // COMMUNITY_SUMMARIES absent. It then creates COMMUNITY_SUMMARIES and writes an
-// enhanced record, and asserts the cache attaches WatchSummaries and SummaryFor starts
+// enhanced record, and asserts the catalog-backed serving view attaches and starts
 // surfacing the summary WITHOUT a restart.
 func TestIntegration_GraphQuery_SummaryBucketCreatedLate_Attaches(t *testing.T) {
 	if testing.Short() {
@@ -59,12 +60,20 @@ func TestIntegration_GraphQuery_SummaryBucketCreatedLate_Attaches(t *testing.T) 
 	require.NoError(t, err)
 	gq, ok := comp.(*Component)
 	require.True(t, ok)
+	attached := make(chan *graphview.View[clustering.CommunitySummaryRecord], 1)
+	applied := make(chan uint64, 1)
+	gq.summaryViewChanged = func(view *graphview.View[clustering.CommunitySummaryRecord]) {
+		if view != nil {
+			attached <- view
+		}
+	}
+	gq.summaryViewApplied = func(_ string, revision uint64) { applied <- revision }
 	require.NoError(t, gq.Initialize())
 	require.NoError(t, gq.Start(ctx))
 	defer func() { _ = gq.Stop(5 * time.Second) }()
 
 	// Sanity: with COMMUNITY_SUMMARIES still absent, SummaryFor misses (statistical floor).
-	_, ok = gq.communityCache.summaryFor(comm)
+	_, ok = gq.summaryFor(comm)
 	require.False(t, ok, "with no summary bucket yet, SummaryFor must miss")
 
 	// LATE: the enhancement worker creates COMMUNITY_SUMMARIES and writes the record.
@@ -82,13 +91,14 @@ func TestIntegration_GraphQuery_SummaryBucketCreatedLate_Attaches(t *testing.T) 
 		GeneratedAt:    time.Now(),
 	}))
 
-	// The independent summary resource watcher must detect the late bucket, attach
-	// WatchSummaries, and surface the summary — all without a component restart.
-	require.Eventually(t, func() bool {
-		got, ok := gq.communityCache.summaryFor(comm)
-		return ok && got == wantSummary
-	}, 15*time.Second, 200*time.Millisecond,
-		"COMMUNITY_SUMMARIES created after Start must attach without a restart and surface via SummaryFor")
+	// The summary supervisor must reopen the late bucket, publish a bootstrapping
+	// view, apply the replayed record, and reach caught-up without a component restart.
+	view := receiveSummaryEvent(t, attached)
+	receiveSummaryEvent(t, applied)
+	waitSummaryCaughtUp(t, view)
+	got, ok := gq.summaryFor(comm)
+	require.True(t, ok)
+	require.Equal(t, wantSummary, got)
 
 	// And resolveCommunitySummary must now prefer the LLM summary over the statistical floor.
 	require.Equal(t, wantSummary, gq.resolveCommunitySummary(comm))
