@@ -10,12 +10,12 @@ import (
 )
 
 func TestExecutor_ExecuteOne_Success(t *testing.T) {
-	// Mock server returning GraphQL search results (similaritySearch format from graph-embedding)
+	// Mock server returning GraphQL search results (semanticSearch format from graph-embedding)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		// Return GraphQL similaritySearch response format matching graph-embedding output
+		// Return GraphQL semanticSearch response format matching graph-embedding output
 		resp := map[string]any{
 			"data": map[string]any{
-				"similaritySearch": map[string]any{
+				"semanticSearch": map[string]any{
 					"query": "temperature sensors",
 					"results": []map[string]any{
 						{"entity_id": "test.e2e.search.scenario.entity.sensor-temp-001", "similarity": 0.85},
@@ -69,7 +69,7 @@ func TestExecutor_ExecuteOne_NoHits(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		resp := map[string]any{
 			"data": map[string]any{
-				"similaritySearch": map[string]any{
+				"semanticSearch": map[string]any{
 					"query":    "nonexistent",
 					"results":  []map[string]any{},
 					"duration": "10ms",
@@ -124,7 +124,7 @@ func TestExecutor_ExecuteOne_MustIncludeFails(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		resp := map[string]any{
 			"data": map[string]any{
-				"similaritySearch": map[string]any{
+				"semanticSearch": map[string]any{
 					"query": "temperature",
 					"results": []map[string]any{
 						{"entity_id": "test.e2e.search.scenario.entity.sensor-humid-001", "similarity": 0.9},
@@ -158,7 +158,7 @@ func TestExecutor_ExecuteOne_MustExcludeWarning(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		resp := map[string]any{
 			"data": map[string]any{
-				"similaritySearch": map[string]any{
+				"semanticSearch": map[string]any{
 					"query": "temperature",
 					"results": []map[string]any{
 						{"entity_id": "test.e2e.search.scenario.entity.sensor-temp-001", "similarity": 0.9},
@@ -199,7 +199,7 @@ func TestExecutor_ExecuteAll_Stats(t *testing.T) {
 		if callCount == 1 {
 			resp = map[string]any{
 				"data": map[string]any{
-					"similaritySearch": map[string]any{
+					"semanticSearch": map[string]any{
 						"query": "query1",
 						"results": []map[string]any{
 							{"entity_id": "test.e2e.search.scenario.entity.hit-1", "similarity": 0.8},
@@ -212,7 +212,7 @@ func TestExecutor_ExecuteAll_Stats(t *testing.T) {
 		} else {
 			resp = map[string]any{
 				"data": map[string]any{
-					"similaritySearch": map[string]any{
+					"semanticSearch": map[string]any{
 						"query":    "query2",
 						"results":  []map[string]any{},
 						"duration": "10ms",
@@ -255,7 +255,7 @@ func TestExecutor_ExecuteAll_KnownAnswerTracking(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		resp := map[string]any{
 			"data": map[string]any{
-				"similaritySearch": map[string]any{
+				"semanticSearch": map[string]any{
 					"query": "test",
 					"results": []map[string]any{
 						{"entity_id": "test.e2e.search.scenario.entity.sensor-temp-001", "similarity": 0.8},
@@ -293,7 +293,7 @@ func TestValidation_AvgScore(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		resp := map[string]any{
 			"data": map[string]any{
-				"similaritySearch": map[string]any{
+				"semanticSearch": map[string]any{
 					"query": "test",
 					"results": []map[string]any{
 						{"entity_id": "test.e2e.search.scenario.entity.a", "similarity": 0.9},
@@ -322,7 +322,7 @@ func TestValidation_HitsAboveMinScore(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		resp := map[string]any{
 			"data": map[string]any{
-				"similaritySearch": map[string]any{
+				"semanticSearch": map[string]any{
 					"query": "test",
 					"results": []map[string]any{
 						{"entity_id": "test.e2e.search.scenario.entity.a", "similarity": 0.9},
@@ -467,7 +467,7 @@ func TestValidate_MustIncludeInTopN(t *testing.T) {
 
 				resp := map[string]any{
 					"data": map[string]any{
-						"similaritySearch": map[string]any{
+						"semanticSearch": map[string]any{
 							"query":    "test",
 							"results":  results,
 							"duration": "10ms",
@@ -663,7 +663,7 @@ func TestValidate_MustRankHigherThan(t *testing.T) {
 
 				resp := map[string]any{
 					"data": map[string]any{
-						"similaritySearch": map[string]any{
+						"semanticSearch": map[string]any{
 							"query":    "test",
 							"results":  results,
 							"duration": "10ms",
@@ -717,7 +717,7 @@ func TestValidate_CombinedPositionAndRanking(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		resp := map[string]any{
 			"data": map[string]any{
-				"similaritySearch": map[string]any{
+				"semanticSearch": map[string]any{
 					"query": "test",
 					"results": []map[string]any{
 						{"entity_id": "test.e2e.search.scenario.entity.doc-ops-001", "similarity": 0.9},

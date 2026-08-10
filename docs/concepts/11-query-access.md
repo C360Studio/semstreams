@@ -52,7 +52,9 @@ mixes direct KV and RPC and is provisional. MCP graph access is unavailable.
 The current gateway accepts a bounded set of GraphQL-shaped HTTP operations. It
 uses hand-written routing, argument parsing, and introspection, and forwards full
 NATS JSON results without applying a selection set. Do not promise general
-GraphQL validation or field projection.
+GraphQL validation or field projection. Conformance tests mechanically pin every
+advertised root field to its production route and response mapping; hand-written
+does not mean those three inventories are allowed to drift.
 
 ```text
 ┌─────────────┐        ┌─────────────┐        ┌─────────────┐
@@ -66,7 +68,7 @@ GraphQL validation or field projection.
 **Key characteristics:**
 
 - Only admitted root operations are supported
-- Advertised introspection and handlers require drift checks
+- Advertised roots, production routes, and response mappings have a mechanical parity check
 - Single HTTP endpoint for all operations
 - Natural language classification can extract supported search intents
 
@@ -140,7 +142,7 @@ Step 2: answer source
 | **Schema control** | Hand-written | Not implemented | Named operation |
 | **Auditability** | Metrics/logs; no audit contract | Not implemented | Logs; no audit contract |
 | **External access** | Yes | No graph surface | No (internal) |
-| **Discovery** | Advertised surface may drift | No graph tools | Adapter contract |
+| **Discovery** | Exact advertised routes are pinned | No graph tools | Adapter contract |
 
 ### Common Patterns
 
@@ -178,12 +180,15 @@ Each pattern has different discovery:
 
 | Pattern | Discovery Method | Granularity |
 |---------|-----------------|-------------|
-| HTTP graph facade | Advertised introspection | May drift from handlers |
+| HTTP graph facade | Advertised introspection | Exact field/route/response parity is pinned |
 | MCP | Not available for graph reads | None implemented |
 | Typed adapter | Named operation contract | Per operation |
 
-Treat advertised introspection as discovery evidence, not proof of parser or
-handler parity. A named typed adapter documents only its own operation.
+Treat advertised introspection as discovery evidence for the exact admitted root
+inventory. Conformance tests prove parity with the hand-written production routes
+and response mappings; they do not turn the facade into a general GraphQL parser,
+validator, selection-set projector, or schema executor. A named typed adapter
+documents only its own operation.
 
 ## Consistency Considerations
 

@@ -57,7 +57,7 @@ shape directly.
 | `pathSearch` | `PathSearchResult` | composite, raw marshal |
 | `entityIdHierarchy` | hierarchy object | raw marshal |
 | `spatialSearch`, `temporalSearch` | arrays | served by the spatial/temporal indexes, never enveloped |
-| `similaritySearch`, `findSimilar` | search results | served by graph-embedding, never enveloped |
+| `semanticSearch`, `findSimilar` | search results | served by graph-embedding, never enveloped |
 | `globalSearch`, `localSearch`, `searchGraph` | GraphRAG results | raw marshal |
 | `trajectory` | `Trajectory` object | served by agentic-loop over `agentic.query.trajectory`, never enveloped |
 

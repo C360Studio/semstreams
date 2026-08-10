@@ -145,7 +145,7 @@ Each component exposes query capabilities via NATS request-reply on configurable
 |-----------|---------------|------------|
 | graph-ingest | `graph.ingest.query.*` | `getEntity`, `getBatch` |
 | graph-index | `graph.index.query.*` | `getOutgoing`, `getIncoming`, `getAlias`, `getPredicate` |
-| graph-query | `graph.query.*` | `entity`, `relationships`, `pathSearch`, `capabilities` |
+| graph-query | `graph.query.*` | 16 admitted operations, including `entity`, `relationships`, and `pathSearch` |
 
 ### graph-query Component
 
@@ -153,7 +153,7 @@ The graph-query component provides unified query routing and orchestration acros
 
 - **Unified Query Routing**: Routes queries to appropriate components (graph-ingest, graph-index, etc.)
 - **PathRAG Traversal**: Orchestrates multi-hop graph traversal for path-based retrieval
-- **Capability Aggregation**: Collects and exposes capabilities from all available components
+- **Stable operation routing**: Serves the admitted graph-query request family
 
 **Example Configuration**:
 
@@ -167,8 +167,7 @@ The graph-query component provides unified query routing and orchestration acros
       "inputs": [
         {"name":"query_entity","config":{"kind":"nats-request","subject":"graph.query.entity"}},
         {"name":"query_relationships","config":{"kind":"nats-request","subject":"graph.query.relationships"}},
-        {"name":"query_path_search","config":{"kind":"nats-request","subject":"graph.query.pathSearch"}},
-        {"name":"query_capabilities","config":{"kind":"nats-request","subject":"graph.query.capabilities"}}
+        {"name":"query_path_search","config":{"kind":"nats-request","subject":"graph.query.pathSearch"}}
       ]
     }
   }

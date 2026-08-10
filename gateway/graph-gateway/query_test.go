@@ -2158,9 +2158,9 @@ func TestBuildIntrospectionSchema_GlobalSearchArgs(t *testing.T) {
 //
 // Same shape bug also affects `searchGraph` and `localSearch` (both
 // return `GlobalSearchResult` which carries `relationships`), so all
-// three are covered. The inverse — bare `relationships(entityId)` and
-// bare `capabilities` queries must still route to their dedicated
-// subjects after the reorder — is locked by the regression-safe cases.
+// three are covered. The inverse — bare `relationships(entityId)` queries
+// must still route to their dedicated subject after the reorder — is locked
+// by the regression-safe case.
 func TestGateway_MapGraphQLToNATSSubject_NestedSelectionRouting(t *testing.T) {
 	comp := createTestGateway(t)
 
@@ -2221,12 +2221,6 @@ func TestGateway_MapGraphQLToNATSSubject_NestedSelectionRouting(t *testing.T) {
 				}
 			}`,
 			expectedSubject: "graph.query.relationships",
-		},
-		// Same regression-safe inverse for capabilities.
-		{
-			name:            "regression-safe -- bare capabilities routes correctly",
-			query:           `query { capabilities { name version } }`,
-			expectedSubject: "graph.query.capabilities",
 		},
 		// Defensive: GlobalSearchResult also carries `sources` —
 		// neither has a generic substring check today, but a future

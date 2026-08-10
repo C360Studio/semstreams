@@ -218,9 +218,7 @@ func routedSubjectShapes() []routedSubjectShape {
 			[]byte(`{"schema_version":"v1","loop_id":"loop-1","coverage":"observed","observed_totals":{"facts":0},"terminal_observed":false,"facts":[]}`), false},
 
 		// --- Routed with NO producer --------------------------------------
-		// graph.query.capabilities is routed by the gateway but no component
-		// subscribes to it (gh#784), so no reply shape exists to classify.
-		// graph.query.unknown is the routing fallback, likewise never served.
+		// graph.query.unknown is the routing fallback and is never served.
 	}
 }
 
@@ -228,8 +226,7 @@ func routedSubjectShapes() []routedSubjectShape {
 // they have no reply shape. Enumerated explicitly so the completeness guard
 // below cannot be satisfied by silently forgetting them.
 var subjectsWithNoProducer = map[string]string{
-	"graph.query.capabilities": "no component subscribes — gh#784",
-	"graph.query.unknown":      "routing fallback, never served",
+	"graph.query.unknown": "routing fallback, never served",
 }
 
 // TestGateway_EveryRoutedSubjectHasAShapeCase makes the collision inventory
