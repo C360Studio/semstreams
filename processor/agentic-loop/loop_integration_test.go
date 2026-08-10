@@ -661,10 +661,18 @@ func TestIntegration_LoopStatePersistence(t *testing.T) {
 	require.NoError(t, err)
 	defer lc.Stop(5 * time.Second)
 
-	time.Sleep(200 * time.Millisecond)
+	js, err := natsClient.JetStream()
+	require.NoError(t, err)
+
+	kv, err := js.KeyValue(ctx, "AGENT_LOOPS")
+	require.NoError(t, err)
 
 	// Publish task
 	loopID := "loop_persist_" + time.Now().Format("150405")
+	watcher, err := kv.Watch(ctx, loopID, jetstream.UpdatesOnly())
+	require.NoError(t, err)
+	defer watcher.Stop()
+
 	task := &agentic.TaskMessage{
 		LoopID: loopID,
 		TaskID: "task_persist",
@@ -674,17 +682,13 @@ func TestIntegration_LoopStatePersistence(t *testing.T) {
 	}
 	publishTaskMessage(t, natsClient, "agent.task.persist", task)
 
-	time.Sleep(500 * time.Millisecond)
-
-	// Verify loop entity exists in KV
-	js, err := natsClient.JetStream()
-	require.NoError(t, err)
-
-	kv, err := js.KeyValue(ctx, "AGENT_LOOPS")
-	require.NoError(t, err)
-
-	entry, err := kv.Get(ctx, loopID)
-	require.NoError(t, err, "Loop entity should be persisted in KV")
+	var entry jetstream.KeyValueEntry
+	select {
+	case entry = <-watcher.Updates():
+		require.NotNil(t, entry, "Loop entity should be persisted in KV")
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for loop entity persistence: %v", ctx.Err())
+	}
 
 	var entity agentic.LoopEntity
 	err = json.Unmarshal(entry.Value(), &entity)
