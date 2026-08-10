@@ -2387,10 +2387,8 @@ func (c *Component) resolveCommunitySummary(comm *clustering.Community) string {
 	if comm == nil {
 		return ""
 	}
-	if c.communityCache != nil {
-		if summary, ok := c.communityCache.summaryFor(comm); ok {
-			return summary
-		}
+	if summary, ok := c.summaryFor(comm); ok {
+		return summary
 	}
 	return comm.StatisticalSummary
 }

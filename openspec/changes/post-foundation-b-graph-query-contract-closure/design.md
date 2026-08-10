@@ -1,7 +1,8 @@
 # Post-Foundation-B graph query contract-closure roadmap
 
 **Status:** Owner-approved target state. The original inventory and design review passed before the owner approved all
-fourteen rulings on 2026-08-09. The reduced Slice D reassessment is owner-approved and awaits independent review.
+fourteen rulings on 2026-08-09. The reduced Slice D reassessment passed independent planning review, and its
+implementation passed independent `semstreams-reviewer` review on 2026-08-10.
 
 **Promoted from:** `docs/proposals/post-foundation-b-graph-query-contract-closure-roadmap.md`, SHA-256
 `ff23db51ce7bf6e3d45da09a1706bf70ee548ae5e6aa2b12201ceeae64c4f343`.
@@ -13,7 +14,8 @@ fourteen rulings on 2026-08-09. The reduced Slice D reassessment is owner-approv
 
 **Slice D reassessment:** `docs/proposals/post-foundation-b-slice-d-optional-summary-serving-view-inventory.md`,
 SHA-256 `6a28a0fe9349218baf07bf6d4d79bd89c6bc4ad483fa937e575974d30f499a6b`. The 2026-08-10 owner ruling supersedes only
-the original optional-summary generation-supervisor mechanism.
+the original optional-summary generation-supervisor mechanism. Its capture-time status remains in the hash-pinned
+artifact; the completed planning and implementation review status is recorded here and in `tasks.md`.
 
 This roadmap is re-derived from the accepted inventory. It does not resume superseded GS sequencing or the rejected
 `Ports() PortConfig` shape.

@@ -14,12 +14,13 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph/clustering"
 	"github.com/c360studio/semstreams/graph/llm"
 	"github.com/c360studio/semstreams/graph/query"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
-	"github.com/c360studio/semstreams/pkg/resource"
+	"github.com/c360studio/semstreams/pkg/graphview"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -27,7 +28,7 @@ import (
 // This is the standard pattern across all processor components.
 // natsclient wraps NATS operations but doesn't abstract jetstream types.
 
-// natsRequester is a local interface for NATS request/reply and KV operations.
+// natsRequester is a local interface for NATS request/reply and JetStream access.
 // *natsclient.Client satisfies this interface, and tests can provide mocks.
 type natsRequester interface {
 	Request(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error)
@@ -41,7 +42,6 @@ type natsRequester interface {
 	Connect(ctx context.Context) error
 	WaitForConnection(ctx context.Context) error
 	JetStream() (jetstream.JetStream, error)
-	GetKeyValueBucket(ctx context.Context, name string) (jetstream.KeyValue, error)
 }
 
 // Config defines the configuration for the graph-query coordinator component
@@ -155,17 +155,17 @@ type Component struct {
 	globalSearchBeforeFinalize func()
 	localSearchBeforeFinalize  func()
 
-	// summaryWatcher independently watches/retries the COMMUNITY_SUMMARIES bucket.
-	// It is SEPARATE from the COMMUNITY_INDEX generation supervisor because on
-	// a rolling upgrade COMMUNITY_INDEX already exists (old version) while
-	// COMMUNITY_SUMMARIES is created later by the enhancement worker; a single
-	// attempt at GraphRAG-start would miss it and never re-attach, stranding the
-	// component on the statistical floor until restart. summaryWatchMu +
-	// summaryWatchStarted guarantee the WatchSummaries loop is started EXACTLY ONCE
-	// even if the resource watcher's OnAvailable fires more than once.
-	summaryWatcher      *resource.Watcher
-	summaryWatchMu      sync.Mutex
-	summaryWatchStarted bool
+	// Optional COMMUNITY_SUMMARIES serving view. The supervisor is the sole
+	// lifecycle owner; readers copy this synchronized pointer and call Get outside
+	// the mutex so view loss and Stop remain fail-closed.
+	summaryViewMu          sync.RWMutex
+	summaryView            *graphview.View[clustering.CommunitySummaryRecord]
+	openSummaryReader      func(context.Context) (graph.CatalogReader, error)
+	waitSummaryRetry       func(context.Context, time.Duration) bool
+	summaryViewConstructed func(*graphview.View[clustering.CommunitySummaryRecord])
+	summaryViewChanged     func(*graphview.View[clustering.CommunitySummaryRecord])
+	summaryViewApplied     func(string, uint64)
+	summaryViewStopped     func(*graphview.View[clustering.CommunitySummaryRecord])
 
 	// Lifecycle state
 	mu          sync.RWMutex
@@ -253,6 +253,9 @@ func CreateGraphQuery(rawConfig json.RawMessage, deps component.Dependencies) (c
 		minTextRelevance:     MinTextRelevance,
 		openCommunityReader: func(ctx context.Context) (graph.CatalogReader, error) {
 			return graph.OpenCatalogReader(ctx, deps.NATSClient, graph.BucketCommunityIndex)
+		},
+		openSummaryReader: func(ctx context.Context) (graph.CatalogReader, error) {
+			return graph.OpenCatalogReader(ctx, deps.NATSClient, graph.BucketCommunitySummaries)
 		},
 	}
 
@@ -505,10 +508,13 @@ func (c *Component) Start(ctx context.Context) error {
 		c.superviseCommunityGenerations(componentCtx)
 	}()
 
-	// Independently watch/retry the OPTIONAL COMMUNITY_SUMMARIES bucket. Decoupled
-	// from the COMMUNITY_INDEX watcher above so a bucket created LATER (rolling
-	// upgrade) still attaches the summary join without a restart (finding 1).
-	c.startSummaryBucketWatcher(componentCtx)
+	// Independently supervise the optional, content-addressed summary serving
+	// view. Absence and bootstrap never delay component startup or gate queries.
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.superviseSummaryView(componentCtx)
+	}()
 
 	c.started = true
 
@@ -567,16 +573,6 @@ func (c *Component) Stop(timeout time.Duration) error {
 		c.logger.Warn("stop timeout waiting for goroutines")
 	}
 
-	// Stop the COMMUNITY_SUMMARIES resource watcher (background check goroutine)
-	if c.summaryWatcher != nil {
-		c.summaryWatcher.Stop()
-	}
-
-	// Stop community cache watcher
-	if c.communityCache != nil {
-		c.communityCache.stop()
-	}
-
 	c.mu.Lock()
 	c.started = false
 	c.mu.Unlock()
@@ -622,84 +618,6 @@ func (c *Component) superviseCommunityGenerations(ctx context.Context) {
 			return
 		}
 	}
-}
-
-// startSummaryBucketWatcher sets up the independent resource watcher for the
-// OPTIONAL COMMUNITY_SUMMARIES bucket and attaches the cache's WatchSummaries loop
-// as soon as the bucket is available.
-//
-// It does a single non-blocking availability check so an absent
-// bucket never delays component start — COMMUNITY_SUMMARIES is optional and often
-// absent (statistical-tier deployments). If the bucket is present it attaches
-// immediately; otherwise it starts a background recheck that attaches the moment the
-// enhancement worker creates the bucket later (the rolling-upgrade case, finding 1).
-// Readiness is NOT coupled to this bucket (ADR-087): a summary miss is a graceful
-// statistical fallback, so the watcher only ever adds summaries, never gates GraphRAG.
-func (c *Component) startSummaryBucketWatcher(ctx context.Context) {
-	cfg := resource.DefaultConfig()
-	cfg.StartupAttempts = 1 // one immediate probe; the background recheck does the retrying
-	cfg.RecheckInterval = c.config.RecheckInterval
-	cfg.Logger = c.logger
-	cfg.OnAvailable = func() { c.attachSummaryWatch(ctx) }
-
-	c.summaryWatcher = resource.NewWatcher(
-		graph.BucketCommunitySummaries,
-		func(checkCtx context.Context) error {
-			_, err := c.natsClient.GetKeyValueBucket(checkCtx, graph.BucketCommunitySummaries)
-			return err
-		},
-		cfg,
-	)
-
-	if c.summaryWatcher.WaitForStartup(ctx) {
-		// Present now — attach immediately (common semantic-tier case).
-		c.attachSummaryWatch(ctx)
-	} else {
-		// Absent now — retry in the background so a late-created bucket still attaches
-		// without a component restart.
-		c.logger.Info("COMMUNITY_SUMMARIES not yet available; community summaries degrade to the statistical floor until it appears")
-		c.summaryWatcher.StartBackgroundCheck(ctx)
-	}
-}
-
-// attachSummaryWatch opens COMMUNITY_SUMMARIES and starts the cache's WatchSummaries
-// loop EXACTLY ONCE. It is safe to call repeatedly (the resource watcher's
-// OnAvailable can fire more than once, and startup + background paths can both call
-// it): the once-guard is consumed ONLY on a successful attach, so a transient open
-// failure leaves the guard unset and a later OnAvailable retries.
-func (c *Component) attachSummaryWatch(ctx context.Context) {
-	if ctx.Err() != nil {
-		return // Component shutting down.
-	}
-
-	c.summaryWatchMu.Lock()
-	if c.summaryWatchStarted {
-		c.summaryWatchMu.Unlock()
-		return
-	}
-	// Open the bucket while holding the guard so two concurrent OnAvailable callers
-	// cannot both open + start a loop. The open is a cheap KV lookup.
-	summaryBucket, err := c.natsClient.GetKeyValueBucket(ctx, graph.BucketCommunitySummaries)
-	if err != nil {
-		c.summaryWatchMu.Unlock()
-		// Do NOT set summaryWatchStarted: leave the guard unset so a subsequent
-		// OnAvailable (or the background recheck) retries the attach.
-		c.logger.Info("COMMUNITY_SUMMARIES became available but open failed; will retry", "error", err)
-		return
-	}
-	c.summaryWatchStarted = true
-	c.summaryWatchMu.Unlock()
-
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
-		if err := c.communityCache.watchSummaries(ctx, summaryBucket); err != nil {
-			if ctx.Err() == nil {
-				c.logger.Error("community summary cache watcher failed", "error", err)
-			}
-		}
-	}()
-	c.logger.Info("COMMUNITY_SUMMARIES attached; LLM community summaries now surface via the membership-hash join")
 }
 
 // recordSuccess records successful query metrics

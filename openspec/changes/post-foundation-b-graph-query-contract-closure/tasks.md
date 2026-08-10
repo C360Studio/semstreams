@@ -76,19 +76,34 @@ of an internal contradiction and a new owner ruling.
 
 ## D. Optional-summary serving view
 
-- [ ] D.1 Add explicit-synchronization failing tests for absent and late buckets, replay staging and empty caught-up,
+- [x] D.1 Add explicit-synchronization failing tests for absent and late buckets, replay staging and empty caught-up,
   update/delete/purge, typed decode/poison, nonblocking loss signaling, failed-Start cleanup, loss/reopen/replacement,
   ghost removal, single-pointer publication, and orderly cancellation.
-- [ ] D.2 Replace the bucket-presence watcher, once guard, raw KV handle, shared summary map, and bespoke watcher with
+- [x] D.2 Replace the bucket-presence watcher, once guard, raw KV handle, shared summary map, and bespoke watcher with
   one component-owned supervisor and catalog-backed `pkg/graphview.View[clustering.CommunitySummaryRecord]` projection.
-- [ ] D.3 Make subsequent point reads fail closed after view loss. The sole supervisor receives a nonblocking loss
+- [x] D.3 Make subsequent point reads fail closed after view loss. The sole supervisor receives a nonblocking loss
   signal, clears and stops the exact failed view, reopens the catalog reader, then constructs/starts one replacement
   using the existing recheck interval. Stop failed initial Starts and the current view on cancellation; use no summary
   generation ID, request lease, or final-response validation.
-- [ ] D.4 Preserve statistical fallback for absent, late, staging, empty, failed, stopped, poisoned, and not-found
+- [x] D.4 Preserve statistical fallback for absent, late, staging, empty, failed, stopped, poisoned, and not-found
   summaries without `index_not_ready`, readiness/`GRAPH_STATUS`, degradation metadata, metric contract, config, or new
   infrastructure.
-- [ ] D.5 Run focused race and real-NATS integration tests with no arbitrary sleeps and obtain independent review.
+- [x] D.5 Run focused race and real-NATS integration tests with no arbitrary sleeps and obtain independent review.
+
+### Slice D gate evidence (2026-08-10)
+
+- Explicitly synchronized tests cover absent and late buckets, replay staging and empty caught-up views,
+  update/delete/purge, typed decode and per-key poison, nonblocking coalesced loss and poison signals, failed-Start
+  cleanup, loss/reopen/replacement, ghost removal, single-pointer publication, and orderly cancellation. A controlled
+  blocking logger proves poison observability cannot stall later view updates or deletes.
+- `go test -race ./processor/graph-query -count=1`, `task lint`, and `go test -race ./...` passed.
+- `scripts/run-integration-tests.sh` passed, including the real-NATS late-attach and loss/reopen/no-ghost paths.
+- `task schema:generate` produced no schema or spec drift; `go test ./test/contract/...` passed.
+- `task openspec:validate` and the breaking-change gate `task e2e:statistical` passed all 41 steps.
+- Independent `semstreams-reviewer` review approved Slice D after its blocking finding about poison observability was
+  remediated and the affected focused race and real-NATS tests were rerun.
+- Slice D changes only the optional-summary consumer serving view. It does not close #609's producer cold-start
+  remainder, #608/#829 producer and content-quality work, or #710's future measurement-gated retention design.
 
 ## E. Embedded decoding, result truth, and fusion preservation
 
