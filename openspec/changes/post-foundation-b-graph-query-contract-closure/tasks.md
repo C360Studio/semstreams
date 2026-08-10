@@ -74,15 +74,20 @@ of an internal contradiction and a new owner ruling.
 - Independent `semstreams-reviewer` review approved Slice C after its blocking and high findings were remediated and
   the affected focused race and real-NATS tests were rerun.
 
-## D. Optional-summary generation supervisor
+## D. Optional-summary serving view
 
-- [ ] D.1 Add explicit-synchronization failing tests for fresh-map staging, sentinel publication including empty,
-  update/delete, close-before-sentinel, loss while bucket remains, deletion during gap, late old-generation events,
-  replacement, and orderly cancellation.
-- [ ] D.2 Remove the bucket-presence watcher, once guard, and shared always-published summary map. Retry must-exist open
-  and `WatchAll` for component lifetime using the existing recheck interval.
-- [ ] D.3 Unpublish the exact summary generation on loss and serve only a finally validated current generation.
-- [ ] D.4 Preserve statistical fallback without `index_not_ready`, readiness coupling, or degradation metadata.
+- [ ] D.1 Add explicit-synchronization failing tests for absent and late buckets, replay staging and empty caught-up,
+  update/delete/purge, typed decode/poison, nonblocking loss signaling, failed-Start cleanup, loss/reopen/replacement,
+  ghost removal, single-pointer publication, and orderly cancellation.
+- [ ] D.2 Replace the bucket-presence watcher, once guard, raw KV handle, shared summary map, and bespoke watcher with
+  one component-owned supervisor and catalog-backed `pkg/graphview.View[clustering.CommunitySummaryRecord]` projection.
+- [ ] D.3 Make subsequent point reads fail closed after view loss. The sole supervisor receives a nonblocking loss
+  signal, clears and stops the exact failed view, reopens the catalog reader, then constructs/starts one replacement
+  using the existing recheck interval. Stop failed initial Starts and the current view on cancellation; use no summary
+  generation ID, request lease, or final-response validation.
+- [ ] D.4 Preserve statistical fallback for absent, late, staging, empty, failed, stopped, poisoned, and not-found
+  summaries without `index_not_ready`, readiness/`GRAPH_STATUS`, degradation metadata, metric contract, config, or new
+  infrastructure.
 - [ ] D.5 Run focused race and real-NATS integration tests with no arbitrary sleeps and obtain independent review.
 
 ## E. Embedded decoding, result truth, and fusion preservation

@@ -74,35 +74,63 @@ classified transient `index_not_ready`, never stale data or invented empty succe
 - **THEN** its result is returned with explicit community-cache degradation
 - **AND** no absent community data is represented as complete enrichment
 
-### Requirement: Optional enhanced summaries use an independent generation supervisor
+### Requirement: Optional enhanced summaries use the shared serving view
 
-`COMMUNITY_SUMMARIES` SHALL use a separate fresh-map generation supervisor with independent generation IDs. It SHALL
-retry must-exist bucket open and `WatchAll` for the component lifetime using the existing recheck interval, including
-after watch closure while the bucket remains present. It SHALL distinguish a closed updates channel from the initial
-sentinel.
+`COMMUNITY_SUMMARIES` SHALL use one component-owned supervisor and one catalog-backed
+`pkg/graphview.View[clustering.CommunitySummaryRecord]`. The supervisor SHALL be the only owner allowed to open,
+publish, clear, stop, or replace the view. It SHALL retry must-exist catalog acquisition using the existing recheck
+interval. Its watcher-loss hook SHALL only perform a nonblocking send to a capacity-one control channel.
 
-Each attempt SHALL stage updates and deletes in a fresh private map and publish only on its sentinel, including empty
-enumeration. Unexpected loss SHALL unpublish that exact generation, make its map unreachable, and retry. Late old-
-generation events SHALL have no effect. Component cancellation SHALL be orderly. `SummaryFor` SHALL consult and finally
-validate only the current published summary generation.
+After a successful Start, one mutex SHALL guard the single published view pointer. Bootstrap MAY be published because
+point reads fail `ErrNotReady` until caught-up. If initial Start fails, the supervisor SHALL Stop the unpublished view
+before retry. On loss it SHALL clear the exact pointer, Stop the failed view, reopen the catalog reader, and only then
+construct and Start a fresh view. At most one view SHALL be published or unstopped. Component cancellation SHALL clear
+and Stop the exact current view, create no replacement, and exit from every acquisition, retry, Start, or loss state.
 
-When no enhanced summary generation or matching record is usable, resolution SHALL use the community's statistical
-summary. Summary loss SHALL NOT gate partition readiness, return `index_not_ready`, or set query degradation. It SHALL
-remain visible through bounded component logging and SHALL add no status key, metric contract, or configuration.
+The typed decoder SHALL parse a canonical key containing one non-negative base-10 level and one 64-character lowercase
+hexadecimal SHA-256 membership hash. It SHALL decode JSON exactly once, require a canonical record hash, require exact
+`key == clustering.SummaryKey(record.Level, record.MembershipHash)`, and accept only the closed
+`SummaryStatusEnhanced` and `SummaryStatusFailed` status vocabulary. Enhanced with a non-empty `LLMSummary` SHALL be
+servable. Failed SHALL map to absence. Malformed keys, JSON, or hashes; key-record mismatch; unknown status; and
+enhanced with an empty summary SHALL be poison. Unknown JSON fields MAY be tolerated.
+
+After watcher loss, subsequent point reads SHALL fail closed while the supervisor replaces the stopped view through a
+fresh catalog reader. A successful point read SHALL NOT require a summary generation ID, request lease, or
+final-response validation because the exact record is content-addressed by level and membership hash.
+
+When an enhanced summary is absent, late, staging, empty, failed, stopped, poisoned, or not found, resolution SHALL use
+the community's statistical summary. Summary availability SHALL NOT gate partition readiness, return `index_not_ready`,
+or set query degradation. It SHALL remain visible through bounded component logging and SHALL add no status key,
+metric contract, configuration, or infrastructure.
 
 #### Scenario: summary watch loss falls back and rebinds
 
-- **GIVEN** an enhanced summary generation is published and its bucket remains present
+- **GIVEN** an enhanced summary is readable and its bucket remains present
 - **WHEN** that watch closes unexpectedly
-- **THEN** the generation is unpublished and a new `WatchAll` is attempted
-- **AND** queries use the statistical summary until a fresh generation reaches its sentinel
+- **THEN** subsequent point reads fail closed and the failed view is stopped
+- **AND** the catalog reader is reopened before a fresh view is constructed and started
+- **AND** queries use the statistical summary until the view is caught up again
 
 #### Scenario: summary deletion during the gap cannot survive
 
-- **GIVEN** a summary existed in generation N
-- **WHEN** N is lost and that summary is deleted before N+1 enumeration
-- **THEN** N+1 publishes without the deleted summary
-- **AND** no N map is retained, copied, served, or mutated
+- **GIVEN** a summary existed before watcher loss
+- **WHEN** it is deleted before the replacement replay
+- **THEN** the fresh replay excludes the ghost key
+- **AND** the deleted summary is not served after the view is caught up
+
+#### Scenario: initial view Start failure is cleaned up
+
+- **GIVEN** the catalog reader opens but the initial `WatchAll` fails
+- **WHEN** `View.Start` returns its error
+- **THEN** the supervisor stops that unpublished view before retry
+- **AND** no ticker, watcher, view pointer, or second concurrent view remains
+
+#### Scenario: poisoned summary does not hide the statistical floor
+
+- **GIVEN** one summary key contains an invalid record
+- **WHEN** graph-query resolves that community summary
+- **THEN** the view classifies the key as poison and graph-query uses the statistical summary
+- **AND** unrelated valid enhanced summaries remain readable
 
 ### Requirement: Framework-owned embedded consumers decode one success envelope and preserve representations
 

@@ -17,8 +17,9 @@ research orchestration, or readiness.
 - Keep all sixteen responders present for every successful graph-query Start; optional view availability becomes a
   classified query outcome rather than transport-level no-responder.
 - Add exact declared request outputs for graph-gateway and the existing research consumers. Libraries own no ports.
-- Replace partition and optional-summary watch lifecycles with independent fresh-map generation supervisors that
-  publish only after initial enumeration and unpublish immediately on watch loss.
+- Replace the partition watch lifecycle with a fresh-map generation supervisor. Consolidate the content-addressed,
+  optional-summary reader on the existing catalog-backed `pkg/graphview.View`, with statistical fallback for every
+  unavailable outcome.
 - **BREAKING** Remove GraphQL `capabilities`, leaving exactly fourteen graph-query-backed and nineteen total served
   root fields.
 - **BREAKING** Make `semanticSearch` the sole advertised and projected semantic-search field; remove the hidden
@@ -44,8 +45,9 @@ research orchestration, or readiness.
 ### Modified Capabilities
 
 - `component-discovery`: Adds the exact versioned graph-query provider/consumer port topology.
-- `graph-query`: Adds the admitted operation family, stable responder and generation-safe cache contracts, canonical
-  success decoding and representation preservation, terminal strategy, and embedded-client boundary.
+- `graph-query`: Adds the admitted operation family, stable responder, generation-safe partition cache, shared
+  serving-view summary reader, canonical success decoding and representation preservation, terminal strategy, and
+  embedded-client boundary.
 - `agentic-tools`: Removes two unadmitted query wrappers and their complete exported/configuration surfaces.
 - `fusion`: Preserves the operation-specific NATS adapter while converging reply decoding on production shapes.
 - `graph-index`: Corrects stale predicate representation text only.

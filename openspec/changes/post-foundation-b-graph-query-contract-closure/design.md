@@ -1,7 +1,7 @@
 # Post-Foundation-B graph query contract-closure roadmap
 
-**Status:** Owner-approved target state. Independent inventory and design review passed; the owner approved all
-fourteen rulings on 2026-08-09.
+**Status:** Owner-approved target state. The original inventory and design review passed before the owner approved all
+fourteen rulings on 2026-08-09. The reduced Slice D reassessment is owner-approved and awaits independent review.
 
 **Promoted from:** `docs/proposals/post-foundation-b-graph-query-contract-closure-roadmap.md`, SHA-256
 `ff23db51ce7bf6e3d45da09a1706bf70ee548ae5e6aa2b12201ceeae64c4f343`.
@@ -10,6 +10,10 @@ fourteen rulings on 2026-08-09.
 
 **Accepted inventory:** `docs/proposals/post-foundation-b-graph-foundation-remap-inventory.md`, SHA-256
 `c87cdf12506ac62272f340f975f14a27f28e78307207a6aae554ede595a99040`.
+
+**Slice D reassessment:** `docs/proposals/post-foundation-b-slice-d-optional-summary-serving-view-inventory.md`,
+SHA-256 `6a28a0fe9349218baf07bf6d4d79bd89c6bc4ad483fa937e575974d30f499a6b`. The 2026-08-10 owner ruling supersedes only
+the original optional-summary generation-supervisor mechanism.
 
 This roadmap is re-derived from the accepted inventory. It does not resume superseded GS sequencing or the rejected
 `Ports() PortConfig` shape.
@@ -194,27 +198,39 @@ not watch recovery. Replace it for `COMMUNITY_INDEX` with one component-owned ge
 A community read leases generation ID plus cache pointer and revalidates the same generation before returning. Failure
 to acquire or validate serves no community data.
 
-`COMMUNITY_SUMMARIES` uses its own optional generation supervisor, independent of the partition supervisor and its
-generation IDs. Remove the bucket-presence watcher, `summaryWatchStarted` once guard, and shared always-published map.
-For the component lifetime, the summary supervisor:
+`COMMUNITY_SUMMARIES` is a different read class. Its key is content-addressed by level and membership hash, so a
+summary read for an old membership cannot match a community with new membership. Replace its bucket-presence watcher,
+once guard, raw KV handle, shared summary map, and bespoke watcher with one component-owned, catalog-backed
+`pkg/graphview.View` serving projection.
 
-1. retries must-exist bucket open and `WatchAll` using the existing `RecheckInterval`, including after closure while
-   the bucket remains present;
-2. allocates a fresh private map and monotonic token for each watch;
-3. distinguishes initial sentinel from loss with `entry, ok := <-watcher.Updates()`;
-4. applies pre-sentinel updates/deletes to staging only;
-5. publishes that fresh generation atomically on the sentinel, including an empty generation;
-6. applies post-sentinel changes only while its token is current;
-7. unpublishes its exact generation on unexpected close/error, makes the map unreachable, and retries without waiting
-   for bucket disappearance; and
-8. treats component cancellation as orderly shutdown, without retry or loss classification.
+One component-owned supervisor is the only code allowed to open, publish, clear, stop, or replace the summary view. It
+retries `graph.OpenCatalogReader` with the existing `RecheckInterval`, constructs exactly one
+`graphview.View[clustering.CommunitySummaryRecord]`, and installs an `OnWatcherLost` hook that only performs a
+nonblocking send to a capacity-one supervisor control channel. The graphview watcher goroutine never performs retry,
+stop, or synchronous logging.
 
-Summary generations never copy, seed, or inherit partition state or an older summary map. `SummaryFor` consults only
-the currently published summary generation and finally validates it before return. With none published, or no matching
-record, the existing resolver uses `Community.StatisticalSummary`. Summary loss never gates partition readiness,
-returns `index_not_ready`, or sets query degradation: the statistical floor is the already-admitted successful tier.
-Loss remains visible through bounded component logging; no new status key, metric contract, or configuration surface
-is introduced.
+The supervisor calls `Start` and publishes the single view pointer under one mutex only after Start succeeds. Bootstrap
+publication is safe because point reads return `ErrNotReady` until caught-up. If Start fails, the supervisor stops the
+unpublished view before waiting or retrying, cleaning up the ticker Start created before `WatchAll`. On loss, it clears
+that exact pointer, stops the failed view, then reopens the catalog reader and constructs/starts a fresh replacement.
+There is at most one published or unstopped view. On component cancellation it clears and stops the exact current view,
+creates no replacement, and exits from every acquisition, retry, Start, or loss-handling state.
+
+The typed decoder parses one canonical `{level}.{membership_hash}` key: a canonical non-negative decimal level and a
+64-character lowercase hexadecimal SHA-256 hash. It decodes one `CommunitySummaryRecord`, requires canonical record
+hash and exact `key == SummaryKey(record.Level, record.MembershipHash)`, and treats status as the closed
+`SummaryStatusEnhanced`/`SummaryStatusFailed` vocabulary. Enhanced plus non-empty summary is servable; failed is valid
+absence. Malformed keys/JSON/hash, key-record mismatch, unknown status, and enhanced with an empty summary are poison.
+Unknown JSON fields are tolerated while owned fields are verified.
+
+After watcher loss, subsequent point reads fail closed until the fresh view catches up. A successful point read needs
+no summary generation ID, request lease, or final-response validation: the exact content-addressed record remains
+truthful after the read completes.
+
+With an absent, late, staging, empty, failed, stopped, poisoned, or not-found summary, the existing resolver uses
+`Community.StatisticalSummary`. Summary availability never gates partition readiness, returns `index_not_ready`, or
+sets query degradation. Loss and poison remain visible through bounded component logging; no new status key, metric
+contract, configuration, or infrastructure is introduced.
 
 Exactly `localSearch`, `globalSearch`, and `searchGraph` can reach community state. Generation gating covers every
 internal community access, including fallback, entity-community lookup, text search, summary enrichment, source
@@ -367,24 +383,39 @@ the same usable generation remains current immediately before return.
 - **THEN** no N+1 entry is visible to a response
 - **AND** the incomplete generation is discarded
 
-The optional `COMMUNITY_SUMMARIES` cache SHALL use a separate fresh-map generation supervisor. It SHALL distinguish a
-closed updates channel from the initial sentinel, unpublish its current generation on loss, and retry `WatchAll` while
-the bucket remains. Missing/lost enhanced summaries SHALL use the admitted statistical fallback without changing
-partition readiness or query degradation.
+The optional `COMMUNITY_SUMMARIES` reader SHALL use one component-owned supervisor and one catalog-backed
+`pkg/graphview.View[clustering.CommunitySummaryRecord]`. The supervisor SHALL receive loss through a nonblocking,
+capacity-one control channel, clear and stop the exact failed view, reopen the catalog reader, and only then construct
+and Start a fresh view. A failed initial Start SHALL be stopped before retry. One mutex SHALL guard the single published
+pointer; at most one view may be published or unstopped. Cancellation SHALL clear and stop the exact view without
+replacement.
+
+The typed decoder SHALL require canonical key/hash, exact key-record identity, and the closed enhanced/failed status
+vocabulary. Enhanced plus non-empty SHALL be servable; failed SHALL map to absence. Malformed, mismatched, unknown, or
+empty-enhanced records SHALL be poison. Missing or unavailable enhanced summaries SHALL use the admitted statistical
+fallback without changing partition readiness or query degradation.
 
 #### Scenario: summary watch loss falls back and rebinds
 
-- **GIVEN** an enhanced summary generation is published and its bucket remains
+- **GIVEN** an enhanced summary is readable and its bucket remains
 - **WHEN** that watch closes unexpectedly
-- **THEN** the generation is unpublished and a new `WatchAll` is attempted
-- **AND** queries use the statistical summary until a fresh generation reaches its sentinel
+- **THEN** subsequent point reads fail closed and the failed view is stopped
+- **AND** the catalog reader is reopened before a fresh view is constructed and started
+- **AND** queries use the statistical summary until the view is caught up again
 
 #### Scenario: summary deletion during the gap cannot survive
 
-- **GIVEN** a summary existed in generation N
-- **WHEN** N is lost and that summary is deleted before N+1 enumeration
-- **THEN** N+1 publishes without the deleted summary
-- **AND** no N map is retained, copied, or served
+- **GIVEN** a summary existed before watcher loss
+- **WHEN** it is deleted before the replacement replay
+- **THEN** the fresh replay excludes the ghost key
+- **AND** the deleted summary is not served after the view is caught up
+
+#### Scenario: initial view Start failure is cleaned up
+
+- **GIVEN** the catalog reader opens but the view's initial `WatchAll` fails
+- **WHEN** `View.Start` returns its error
+- **THEN** the supervisor stops that unpublished view before retry
+- **AND** no ticker, watcher, view pointer, or second concurrent view remains
 
 ### Add `graph-query` success decoding and representation preservation
 
@@ -522,7 +553,8 @@ current code only; it does not authorize an index migration.
 | Inventory item | Classification here | Treatment |
 |---|---|---|
 | #822/#785/#819/#823 | Query usability/correctness | Included |
-| #820/#609 cache lifecycle subset | Availability contract | Consumer observation only; no producer status |
+| #609 | Separate remainder | Exact boundary below |
+| #820 readiness | Non-goal | No `GRAPH_STATUS` producer/key or generic readiness change |
 | #784/#315 | Remote-surface truth | Remove phantom field |
 | #421/#422/#571 | Complexity deletion | Remove aggregate client |
 | #828 | Touched-spec defect | Documentation-only correction |
@@ -533,20 +565,24 @@ current code only; it does not authorize an index migration.
 | #855 destructive pruning | Clustering correctness defect | Separate high-priority fix; no completeness claim here |
 | #839 payload ceilings | Capacity-contract candidate | Measure distributions before design |
 | #619 BM25 restart order | Evidence-requiring candidate | Measure restart known answers; no persistence here |
-| #633/#710 GC | Retention candidate | Separate owner-specific reachability/bounds design |
-| #829 content summaries | Optional semantic enhancement | Separate |
+| #633/#710 GC | Retention candidate | Separate measurement-gated owner-specific reachability/bounds design |
+| #608/#829 content summaries | Producer/content quality | Separate from the consumer serving view |
 | #606/#672/#436/#751 | Hierarchy/clustering model/cache | Separate remap |
 | #391/#376/#347 | Research verification/enhancement | Separate |
 | #810/#842 | Agentic tool collision | Outside graph query |
 | #868 | Generic readiness | No generic change without three proven owners |
 | #875 | Storage reference defect | Separate storage contract |
 
+For #609 exactly: Slice C addressed the `COMMUNITY_INDEX` consumer subset. The remaining producer cold-start
+first-ticker delay is separate, and Slice D does not close it.
+
 ## Decision-skill outcomes
 
 - `query-pattern`: remote callers use admitted GraphQL-shaped operations; embedded services use named typed adapters;
   NATS request/reply remains the declared port transport; no general client, MCP, raw KV, or unowned subject fallback.
-- `orchestration-check`: the partition and optional-summary supervisors are private execution mechanics owned by the
-  graph-query component lifecycle. They add no rule, workflow, lifecycle entity, or operator-visible phase state.
+- `orchestration-check`: the partition supervisor and optional-summary serving view are private execution mechanics
+  owned by the graph-query component lifecycle. They add no rule, workflow, lifecycle entity, or operator-visible
+  phase state.
 - `new-payload`: not applicable; no registry payload type is added.
 - `kv-or-stream`: no new communication path in Option 3. Cache availability is observed through the existing KV watch.
   Option 4 would be a KV current-state fact, but would also require explicit repair/degradation obligations.
@@ -591,10 +627,12 @@ Migration notice draft:
 - Deliver a late generation-N update/exit after N+1 publication. Prove it cannot affect or invalidate N+1.
 - Exercise `localSearch`, `globalSearch`, and `searchGraph` through absent, staging, usable, lost, and replaced community
   generations. Prove lower-tier results remain available with explicit degradation when community enrichment is absent.
-- Close a published summary watch while its bucket remains. Prove immediate unpublish, statistical fallback without
-  `index_not_ready` or degradation, and a new `WatchAll` attempt.
-- Exercise summary update/delete staging, close-before-sentinel, empty enumeration, deletion during the gap, late old-
-  generation events, replacement publication, and orderly cancellation without sleeps.
+- Close a live summary view while its bucket remains. Prove the nonblocking loss signal, synchronized pointer clear,
+  failed-view Stop, statistical fallback without `index_not_ready` or degradation, catalog reopen, and fresh Start.
+- Exercise typed decode for canonical enhanced/failed records and poison for malformed key/JSON/hash, key-record
+  mismatch, unknown status, and empty enhanced summary.
+- Exercise summary replay staging, empty caught-up, update/delete/purge, deletion during the gap, fresh replay without
+  ghosts, initial-Start cleanup, one-view ownership, and orderly cancellation without sleeps.
 - Load all 21 shipped configs through production factories and Registry validation. Assert eleven query, eight gateway,
   two classify, two execute, and nine agentic-tools instances with their exact allowlists.
 - Assert zero shipped effective agentic summary/searchGraph outputs, two required classify outputs, eight required
@@ -664,9 +702,10 @@ Implementation stops for owner ruling if:
 15. Required unit/race/integration/contract/strict-OpenSpec and relevant semantic/agentic/research E2E gates are not
     green before breaking cutover.
 16. GraphQL class/code projection requires message parsing, status inference, a new enum, or a gateway-owned code.
-17. Summary watch closure cannot be distinguished with the updates-channel `ok` value, or loss cannot unpublish and
-    retry while the bucket remains.
-18. A replacement summary generation would copy, retain, serve, or mutate an older generation's map.
+17. `pkg/graphview.View` cannot provide close detection, fail-closed subsequent point reads, and retry/reconciliation
+    while the bucket remains without changing its public contract.
+18. Correctness requires a summary generation ID, request lease, final-response validation, status/readiness fact,
+    degradation reason, metric contract, config knob, or new infrastructure.
 19. Preserving the two unadmitted wrappers would require a registry/discovery redesign, definition-only executor, or
     agentic query-port model; delete them instead and return to the owner if deletion is declined.
 20. Either deleted name remains in shared/local discovery, `RegisterBuiltins`, `BuiltinGroupKeys`, accepted
@@ -692,8 +731,9 @@ Implementation stops for owner ruling if:
    builtin group/skip keys, registration functions, implementations, full exported type/option/constructor/querier
    surface, tests, docs, and expectations. Keep GraphQL/query operations and unrelated local-tool extensibility; add no
    no-op key, replacement tool, port system, or discovery redesign.
-6. Give optional summaries their own fresh-map generation supervisor, with sentinel publication, immediate
-   unpublish-on-loss, retry while the bucket remains, and statistical fallback without readiness/degradation coupling.
+6. Give optional summaries one catalog-backed `pkg/graphview.View`: fail subsequent point reads closed after loss,
+   retry/reconcile with the existing interval, and preserve statistical fallback without generation leases,
+   readiness, or degradation coupling.
 7. Seed `gateway-error-projection` and copy existing classified class/non-empty code into GraphQL extensions without
    creating new classification authority.
 8. Give libraries no component ports; the component embedding fusion owns its six outputs and readiness declaration.
