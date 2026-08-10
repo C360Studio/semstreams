@@ -15,7 +15,10 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/componentregistry"
+	semconfig "github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/internal/graphmutation"
+	"github.com/c360studio/semstreams/natsclient"
 )
 
 type targetConfigItem struct {
@@ -141,6 +144,212 @@ func TestFoundationBTargetCompleteness(t *testing.T) {
 	}, root, plan, documents, portsParents, graphGatewayParents)
 }
 
+func TestPostFoundationBGraphQueryCutoverAmendmentIsExact(t *testing.T) {
+	t.Parallel()
+
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := LoadPlan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := indexItems(plan.ConfigItems())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(postFoundationBGraphQueryLegacyInputRetirements) != 11 {
+		t.Fatalf("graph-query legacy input retirements=%d, want 11",
+			len(postFoundationBGraphQueryLegacyInputRetirements))
+	}
+	if len(postFoundationBGraphGatewayInterfaceAmendments) != 8 {
+		t.Fatalf("graph-gateway interface amendments=%d, want 8",
+			len(postFoundationBGraphGatewayInterfaceAmendments))
+	}
+	if len(postFoundationBGraphQueryProviderReplacements) != 11 {
+		t.Fatalf("graph-query provider replacements=%d, want 11",
+			len(postFoundationBGraphQueryProviderReplacements))
+	}
+	if len(postFoundationBResearchQueryRawAdditions) != 10 {
+		t.Fatalf("research query raw additions=%d, want 10",
+			len(postFoundationBResearchQueryRawAdditions))
+	}
+	if len(postFoundationBGraphQueryProviderReplacements)+len(postFoundationBResearchQueryRawAdditions) != 21 {
+		t.Fatalf("post-Foundation-B enumerated additions=%d, want 21",
+			len(postFoundationBGraphQueryProviderReplacements)+len(postFoundationBResearchQueryRawAdditions))
+	}
+	for id := range postFoundationBGraphQueryLegacyInputRetirements {
+		item, ok := items[id]
+		if !ok {
+			t.Fatalf("graph-query retirement %s is not a frozen config identity", id)
+		}
+		if item.Enclosing != "graph-query" || item.Lane != "inputs" {
+			t.Fatalf("graph-query retirement %s has enclosing/lane %s/%s", id, item.Enclosing, item.Lane)
+		}
+	}
+	for id := range postFoundationBGraphGatewayInterfaceAmendments {
+		item, ok := items[id]
+		if !ok {
+			t.Fatalf("graph-gateway amendment %s is not a frozen config identity", id)
+		}
+		if item.Enclosing != "graph-gateway" || item.Lane != "outputs" {
+			t.Fatalf("graph-gateway amendment %s has enclosing/lane %s/%s", id, item.Enclosing, item.Lane)
+		}
+	}
+	if len(postFoundationBGraphQueryProviderReplacements) != len(postFoundationBGraphQueryLegacyInputRetirements) {
+		t.Fatalf("provider replacements=%d, legacy retirements=%d; cutover must remain one-for-one",
+			len(postFoundationBGraphQueryProviderReplacements), len(postFoundationBGraphQueryLegacyInputRetirements))
+	}
+	for _, identity := range postFoundationBGraphQueryProviderReplacements {
+		t.Run("effective/"+identity.testName(), func(t *testing.T) {
+			assertEffectiveGraphQueryPortIdentity(t, root, identity)
+		})
+	}
+	for _, identity := range postFoundationBResearchQueryRawAdditions {
+		t.Run("raw/"+identity.testName(), func(t *testing.T) {
+			assertRawGraphQueryPortIdentity(t, root, identity)
+		})
+	}
+	goItems, err := indexItems(plan.GoItems())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(postFoundationBGraphQueryGoIdentityRetirements) != 4 {
+		t.Fatalf("graph-query Go identity retirements=%d, want 4",
+			len(postFoundationBGraphQueryGoIdentityRetirements))
+	}
+	for id := range postFoundationBGraphQueryGoIdentityRetirements {
+		item, ok := goItems[id]
+		if !ok || item.Path != "processor/graph-query/component.go" {
+			t.Fatalf("graph-query Go retirement %s is not a frozen component.go identity", id)
+		}
+	}
+	goAdditions := 0
+	for _, identities := range postFoundationBGraphQueryGoIdentityAdditions {
+		goAdditions += len(identities)
+	}
+	if goAdditions != 3 {
+		t.Fatalf("graph-query cutover Go additions=%d, want 3", goAdditions)
+	}
+}
+
+func assertEffectiveGraphQueryPortIdentity(t *testing.T, root string, identity postFoundationBGraphQueryPortIdentity) {
+	t.Helper()
+	cfg := loadPostFoundationBConfig(t, root, identity.path)
+	componentConfig, ok := cfg.Components[identity.instance]
+	if !ok {
+		t.Fatalf("%s component %q is missing", identity.path, identity.instance)
+	}
+	if componentConfig.Name != identity.factory {
+		t.Fatalf("%s component %q factory=%q, want %q",
+			identity.path, identity.instance, componentConfig.Name, identity.factory)
+	}
+	registry := component.NewRegistry()
+	if err := componentregistry.Register(registry); err != nil {
+		t.Fatal(err)
+	}
+	discoverable, err := registry.CreateComponent(
+		identity.instance, componentConfig, component.Dependencies{NATSClient: &natsclient.Client{}},
+	)
+	if err != nil {
+		t.Fatalf("production Registry admission %s/%s: %v", identity.path, identity.instance, err)
+	}
+	ports := discoverable.InputPorts()
+	if identity.lane == "outputs" {
+		ports = discoverable.OutputPorts()
+	}
+	matches := make([]component.Port, 0, 1)
+	for _, port := range ports {
+		if port.Name == identity.name {
+			matches = append(matches, port)
+		}
+	}
+	if len(matches) != 1 {
+		t.Fatalf("effective %s/%s %s port %q matches=%d, want 1",
+			identity.path, identity.instance, identity.lane, identity.name, len(matches))
+	}
+	assertGraphQueryPortFacts(t, identity, matches[0])
+}
+
+func assertRawGraphQueryPortIdentity(t *testing.T, root string, identity postFoundationBGraphQueryPortIdentity) {
+	t.Helper()
+	cfg := loadPostFoundationBConfig(t, root, identity.path)
+	componentConfig, ok := cfg.Components[identity.instance]
+	if !ok {
+		t.Fatalf("%s component %q is missing", identity.path, identity.instance)
+	}
+	if componentConfig.Name != identity.factory {
+		t.Fatalf("%s component %q factory=%q, want %q",
+			identity.path, identity.instance, componentConfig.Name, identity.factory)
+	}
+	var raw struct {
+		Ports component.PortConfig `json:"ports"`
+	}
+	if err := json.Unmarshal(componentConfig.Config, &raw); err != nil {
+		t.Fatalf("decode raw ports %s/%s: %v", identity.path, identity.instance, err)
+	}
+	definitions := raw.Ports.Inputs
+	direction := component.DirectionInput
+	if identity.lane == "outputs" {
+		definitions = raw.Ports.Outputs
+		direction = component.DirectionOutput
+	}
+	matches := namedRowsFromDefinitions(definitions, identity.name)
+	if len(matches) != 1 {
+		t.Fatalf("raw %s/%s %s port %q matches=%d, want 1",
+			identity.path, identity.instance, identity.lane, identity.name, len(matches))
+	}
+	port, err := matches[0].Resolve(direction)
+	if err != nil {
+		t.Fatalf("resolve raw %s/%s/%s: %v", identity.path, identity.instance, identity.name, err)
+	}
+	assertGraphQueryPortFacts(t, identity, port)
+}
+
+func assertGraphQueryPortFacts(t *testing.T, identity postFoundationBGraphQueryPortIdentity, port component.Port) {
+	t.Helper()
+	if port.Direction != identity.direction() || !port.Required {
+		t.Fatalf("%s direction/required=%s/%t, want %s/true",
+			identity.testName(), port.Direction, port.Required, identity.direction())
+	}
+	facts, err := port.Facts()
+	if err != nil {
+		t.Fatalf("facts %s: %v", identity.testName(), err)
+	}
+	if facts.Kind() != component.PortKindNATSRequest || !slices.Equal(facts.NATSSubjects(), []string{identity.subject}) {
+		t.Fatalf("%s kind/subjects=%s/%v, want nats-request/[%s]",
+			identity.testName(), facts.Kind(), facts.NATSSubjects(), identity.subject)
+	}
+	contract, ok := facts.Interface()
+	if !ok || contract.Type != "graph.query" || contract.Version != "v1" {
+		t.Fatalf("%s interface=%+v/%t, want graph.query/v1", identity.testName(), contract, ok)
+	}
+}
+
+func loadPostFoundationBConfig(t *testing.T, root, path string) *semconfig.Config {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := semconfig.NewLoader().LoadFromBytes(data)
+	if err != nil {
+		t.Fatalf("load %s: %v", path, err)
+	}
+	return cfg
+}
+
+func namedRowsFromDefinitions(definitions []component.PortDefinition, name string) []component.PortDefinition {
+	result := make([]component.PortDefinition, 0, 1)
+	for _, definition := range definitions {
+		if definition.Name == name {
+			result = append(result, definition)
+		}
+	}
+	return result
+}
+
 func isOwnerApprovedRetiredConfig(path string) bool {
 	_, retired := map[string]struct{}{
 		"configs/examples/bm25-semantic-search.json":    {},
@@ -196,11 +405,12 @@ func assertFoundationBTargetAccounting(
 	graphGatewayParents map[string]struct{},
 ) {
 	t.Helper()
-	if accounting.survivors+accounting.retiredSurvivors != 505 ||
-		accounting.deletions+accounting.retiredDeletions != 17 {
-		t.Fatalf("target accounting: active=%d/%d retired=%d/%d, want historical 505 survivors and 17 deletions",
+	legacyRetirements := len(postFoundationBGraphQueryLegacyInputRetirements)
+	if accounting.survivors+accounting.retiredSurvivors != 505-legacyRetirements ||
+		accounting.deletions+accounting.retiredDeletions != 17+legacyRetirements {
+		t.Fatalf("target accounting: active=%d/%d retired=%d/%d, want 505 survivors minus %d post-Foundation-B retirements and 17 deletions plus those retirements",
 			accounting.survivors, accounting.deletions,
-			accounting.retiredSurvivors, accounting.retiredDeletions)
+			accounting.retiredSurvivors, accounting.retiredDeletions, legacyRetirements)
 	}
 	retiredTargets := accounting.retiredSurvivors + accounting.retiredDeletions
 	if retiredTargets != 5 || accounting.retiredDocuments != 2 {
@@ -221,9 +431,16 @@ func assertFoundationBTargetAccounting(
 	// two owner-approved production-prerequisite additions outside the frozen
 	// worklist. They offset two of the five retired historical rows.
 	const approvedPrerequisiteAdditions = 2
-	if actualRows != 522-retiredTargets+approvedPrerequisiteAdditions {
-		t.Fatalf("canonical active config rows=%d, want historical 522 minus %d retired targets plus %d prerequisite additions",
-			actualRows, retiredTargets, approvedPrerequisiteAdditions)
+	// The post-Foundation-B graph-query cutover retires eleven legacy provider
+	// targets and replaces them one-for-one, versions eight existing gateway
+	// rows without changing their count, and adds ten exact research consumer
+	// rows (two classify plus eight execute).
+	wantRows := 522 - retiredTargets + approvedPrerequisiteAdditions - legacyRetirements +
+		len(postFoundationBGraphQueryProviderReplacements) + len(postFoundationBResearchQueryRawAdditions)
+	if actualRows != wantRows {
+		t.Fatalf("canonical active config rows=%d, want %d (historical 522 - %d retired fixture targets + %d prerequisites - %d retired legacy graph-query inputs + %d provider replacements + %d research query additions)",
+			actualRows, wantRows, retiredTargets, approvedPrerequisiteAdditions, legacyRetirements,
+			len(postFoundationBGraphQueryProviderReplacements), len(postFoundationBResearchQueryRawAdditions))
 	}
 	assertProtocolFlowWebSocketOutput(t, documents)
 	assertGraphGatewayConfigAmendment(t, documents, graphGatewayParents)
@@ -337,6 +554,12 @@ func assertGraphGatewayConfigAmendment(t *testing.T, documents map[string]any, p
 			if facts.Kind() != component.PortKindNATSRequest || !slices.Equal(facts.NATSSubjects(), []string{subject}) {
 				t.Errorf("%s output %q facts kind=%q subjects=%v", identity, definition.Name, facts.Kind(), facts.NATSSubjects())
 			}
+			if definition.Name == "graph_queries" {
+				contract, ok := facts.Interface()
+				if !ok || contract.Type != "graph.query" || contract.Version != "v1" {
+					t.Errorf("%s graph_queries interface=%+v/%t, want graph.query/v1", identity, contract, ok)
+				}
+			}
 		}
 	}
 }
@@ -345,6 +568,9 @@ func assertGoTargetCompleteness(t *testing.T, root string, plan *Plan) {
 	t.Helper()
 	wantByPath := map[string]map[string]int{}
 	for _, item := range plan.GoItems() {
+		if _, retired := postFoundationBGraphQueryGoIdentityRetirements[item.RecordID]; retired {
+			continue
+		}
 		if item.Path == "gateway/graph-gateway/component.go" {
 			continue
 		}
@@ -394,6 +620,14 @@ func assertGoTargetCompleteness(t *testing.T, root string, plan *Plan) {
 		},
 	}
 	for path, additions := range approved {
+		if wantByPath[path] == nil {
+			wantByPath[path] = map[string]int{}
+		}
+		for _, identity := range additions {
+			wantByPath[path][identity]++
+		}
+	}
+	for path, additions := range postFoundationBGraphQueryGoIdentityAdditions {
 		if wantByPath[path] == nil {
 			wantByPath[path] = map[string]int{}
 		}
@@ -499,8 +733,13 @@ func assertGoTargetCompleteness(t *testing.T, root string, plan *Plan) {
 			t.Errorf("%s target Go identities differ: %s", path, difference)
 		}
 	}
-	if total != 137 {
-		t.Fatalf("canonical Go PortDefinition identities=%d, want 137", total)
+	wantTotal := 137 - len(postFoundationBGraphQueryGoIdentityRetirements)
+	for _, additions := range postFoundationBGraphQueryGoIdentityAdditions {
+		wantTotal += len(additions)
+	}
+	if total != wantTotal {
+		t.Fatalf("canonical Go PortDefinition identities=%d, want %d after post-Foundation-B graph-query cutover",
+			total, wantTotal)
 	}
 }
 
@@ -746,6 +985,106 @@ var foundationBTrajectoryOverrideRetirements = map[string]struct{}{
 	"config:configs/flows/ops-agent.json#/components/agentic-loop/config/ports/kv_write/1":          {},
 }
 
+type postFoundationBGraphQueryPortIdentity struct {
+	path     string
+	instance string
+	factory  string
+	lane     string
+	name     string
+	subject  string
+}
+
+func (i postFoundationBGraphQueryPortIdentity) testName() string {
+	return strings.ReplaceAll(i.path+"/"+i.instance+"/"+i.lane+"/"+i.name, "/", "_")
+}
+
+func (i postFoundationBGraphQueryPortIdentity) direction() component.Direction {
+	if i.lane == "outputs" {
+		return component.DirectionOutput
+	}
+	return component.DirectionInput
+}
+
+var postFoundationBGraphQueryProviderReplacements = []postFoundationBGraphQueryPortIdentity{
+	{path: "configs/e2e-structural.json", instance: "graph-query", factory: "graph-query", lane: "inputs", name: "graph_queries", subject: "graph.query.*"},
+	{path: "configs/examples/research-graph-pipeline.json", instance: "graph-query", factory: "graph-query", lane: "inputs", name: "graph_queries", subject: "graph.query.*"},
+	{path: "configs/graph-backend.json", instance: "graph-query", factory: "graph-query", lane: "inputs", name: "graph_queries", subject: "graph.query.*"},
+	{path: "configs/hello-world.json", instance: "graph-query", factory: "graph-query", lane: "inputs", name: "graph_queries", subject: "graph.query.*"},
+	{path: "configs/protocol-flow.json", instance: "graph-query", factory: "graph-query", lane: "inputs", name: "graph_queries", subject: "graph.query.*"},
+	{path: "configs/research-graph-e2e.json", instance: "graph-query", factory: "graph-query", lane: "inputs", name: "graph_queries", subject: "graph.query.*"},
+	{path: "configs/semantic-8b.json", instance: "graph-query", factory: "graph-query", lane: "inputs", name: "graph_queries", subject: "graph.query.*"},
+	{path: "configs/semantic-frontier.json", instance: "graph-query", factory: "graph-query", lane: "inputs", name: "graph_queries", subject: "graph.query.*"},
+	{path: "configs/semantic.json", instance: "graph-query", factory: "graph-query", lane: "inputs", name: "graph_queries", subject: "graph.query.*"},
+	{path: "configs/statistical.json", instance: "graph-query", factory: "graph-query", lane: "inputs", name: "graph_queries", subject: "graph.query.*"},
+	{path: "configs/structural.json", instance: "graph-query", factory: "graph-query", lane: "inputs", name: "graph_queries", subject: "graph.query.*"},
+}
+
+var postFoundationBResearchQueryRawAdditions = []postFoundationBGraphQueryPortIdentity{
+	{path: "configs/examples/research-graph-pipeline.json", instance: "research-graph-classify", factory: "research-graph-classify", lane: "outputs", name: "searchGraph", subject: "graph.query.searchGraph"},
+	{path: "configs/examples/research-graph-pipeline.json", instance: "research-graph-execute", factory: "research-graph-execute", lane: "outputs", name: "batch", subject: "graph.query.batch"},
+	{path: "configs/examples/research-graph-pipeline.json", instance: "research-graph-execute", factory: "research-graph-execute", lane: "outputs", name: "relationships", subject: "graph.query.relationships"},
+	{path: "configs/examples/research-graph-pipeline.json", instance: "research-graph-execute", factory: "research-graph-execute", lane: "outputs", name: "temporal", subject: "graph.query.temporal"},
+	{path: "configs/examples/research-graph-pipeline.json", instance: "research-graph-execute", factory: "research-graph-execute", lane: "outputs", name: "searchGraph", subject: "graph.query.searchGraph"},
+	{path: "configs/research-graph-e2e.json", instance: "research-graph-classify", factory: "research-graph-classify", lane: "outputs", name: "searchGraph", subject: "graph.query.searchGraph"},
+	{path: "configs/research-graph-e2e.json", instance: "research-graph-execute", factory: "research-graph-execute", lane: "outputs", name: "batch", subject: "graph.query.batch"},
+	{path: "configs/research-graph-e2e.json", instance: "research-graph-execute", factory: "research-graph-execute", lane: "outputs", name: "relationships", subject: "graph.query.relationships"},
+	{path: "configs/research-graph-e2e.json", instance: "research-graph-execute", factory: "research-graph-execute", lane: "outputs", name: "temporal", subject: "graph.query.temporal"},
+	{path: "configs/research-graph-e2e.json", instance: "research-graph-execute", factory: "research-graph-execute", lane: "outputs", name: "searchGraph", subject: "graph.query.searchGraph"},
+}
+
+// postFoundationBGraphQueryLegacyInputRetirements records the approved clean
+// cutover from the frozen graph.query.> identities to one required, versioned
+// graph_queries graph.query.* provider row in each shipped graph-query config.
+// The immutable Foundation B worklist remains historical evidence.
+var postFoundationBGraphQueryLegacyInputRetirements = map[string]struct{}{
+	"config:configs/e2e-structural.json#/components/graph-query/config/ports/inputs/0":                   {},
+	"config:configs/examples/research-graph-pipeline.json#/components/graph-query/config/ports/inputs/0": {},
+	"config:configs/graph-backend.json#/components/graph-query/config/ports/inputs/0":                    {},
+	"config:configs/hello-world.json#/components/graph-query/config/ports/inputs/0":                      {},
+	"config:configs/protocol-flow.json#/components/graph-query/config/ports/inputs/0":                    {},
+	"config:configs/research-graph-e2e.json#/components/graph-query/config/ports/inputs/0":               {},
+	"config:configs/semantic-8b.json#/components/graph-query/config/ports/inputs/0":                      {},
+	"config:configs/semantic-frontier.json#/components/graph-query/config/ports/inputs/0":                {},
+	"config:configs/semantic.json#/components/graph-query/config/ports/inputs/0":                         {},
+	"config:configs/statistical.json#/components/graph-query/config/ports/inputs/0":                      {},
+	"config:configs/structural.json#/components/graph-query/config/ports/inputs/0":                       {},
+}
+
+// postFoundationBGraphGatewayInterfaceAmendments records the eight existing
+// graph_queries rows that gained the graph.query/v1 interface without changing
+// row count or subject coverage.
+var postFoundationBGraphGatewayInterfaceAmendments = map[string]struct{}{
+	"config:configs/e2e-structural.json#/components/graph-gateway/config/ports/outputs/0":    {},
+	"config:configs/hello-world.json#/components/graph-gateway/config/ports/outputs/0":       {},
+	"config:configs/protocol-flow.json#/components/graph-gateway/config/ports/outputs/0":     {},
+	"config:configs/semantic-8b.json#/components/graph-gateway/config/ports/outputs/0":       {},
+	"config:configs/semantic-frontier.json#/components/graph-gateway/config/ports/outputs/0": {},
+	"config:configs/semantic.json#/components/graph-gateway/config/ports/outputs/0":          {},
+	"config:configs/statistical.json#/components/graph-gateway/config/ports/outputs/0":       {},
+	"config:configs/structural.json#/components/graph-gateway/config/ports/outputs/0":        {},
+}
+
+// postFoundationBGraphQueryGoIdentityRetirements replaces four exact-operation
+// defaults with the single versioned provider family. These IDs remain in the
+// immutable Go worklist as historical Foundation B evidence.
+var postFoundationBGraphQueryGoIdentityRetirements = map[string]struct{}{
+	"go:processor/graph-query/component.go#L94C5": {},
+	"go:processor/graph-query/component.go#L95C5": {},
+	"go:processor/graph-query/component.go#L96C5": {},
+	"go:processor/graph-query/component.go#L97C5": {},
+}
+
+// postFoundationBGraphQueryGoIdentityAdditions are the constructions visible
+// to the frozen AST census after the approved cutover: the provider family,
+// its subject-derivation definition, and classify's exact searchGraph output.
+// Execute's four outputs use its graphQueryOutput helper and are validated by
+// production factory/config tests rather than this literal-only AST census.
+var postFoundationBGraphQueryGoIdentityAdditions = map[string][]string{
+	"processor/graph-query/component.go":          {"<dynamic>|NATSRequestPort"},
+	"processor/graph-query/query.go":              {"<dynamic>|NATSRequestPort"},
+	"processor/research-graph-classify/config.go": {"searchGraph|NATSRequestPort"},
+}
+
 func targetForConfigItem(item WorkItem, dispositions map[string]Disposition) (targetConfigItem, error) {
 	var legacy map[string]any
 	if err := json.Unmarshal([]byte(item.CurrentData), &legacy); err != nil {
@@ -754,18 +1093,23 @@ func targetForConfigItem(item WorkItem, dispositions map[string]Disposition) (ta
 	if _, retired := foundationBTrajectoryOverrideRetirements[item.RecordID]; retired {
 		return targetConfigItem{workItem: item, deleted: true}, nil
 	}
+	if _, retired := postFoundationBGraphQueryLegacyInputRetirements[item.RecordID]; retired {
+		return targetConfigItem{workItem: item, deleted: true}, nil
+	}
 	if item.Enclosing == "graph-gateway" {
 		if item.Lane == "inputs" {
 			return targetConfigItem{workItem: item, deleted: true}, nil
 		}
 		legacy["name"] = "graph_queries"
 		legacy["required"] = true
+		data := map[string]any{"subject": "graph.query.*"}
+		if _, amended := postFoundationBGraphGatewayInterfaceAmendments[item.RecordID]; amended {
+			data["interface"] = map[string]any{"type": "graph.query", "version": "v1"}
+		}
 		return targetConfigItem{
 			workItem: item,
 			lane:     "outputs",
-			row: canonicalRow(legacy, "nats-request", map[string]any{
-				"subject": "graph.query.*",
-			}),
+			row:      canonicalRow(legacy, "nats-request", data),
 		}, nil
 	}
 	if item.Classification == "adjudicated" {
