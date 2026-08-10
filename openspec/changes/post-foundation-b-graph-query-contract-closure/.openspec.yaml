@@ -1,0 +1,5 @@
+schema: spec-driven
+created: 2026-08-09
+goal: Close the graph query contract around one admitted port family, stable responders,
+  honest gateway routing and errors, generation-safe optional views, typed adapters,
+  and deletion of unused aggregate surfaces.
