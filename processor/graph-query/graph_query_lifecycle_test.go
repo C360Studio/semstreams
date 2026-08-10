@@ -14,8 +14,6 @@ func createTestComponentForLifecycle() component.LifecycleComponent {
 	// through initialization without requiring real NATS infrastructure.
 	config := DefaultConfig()
 	config.ApplyDefaults()
-	config.StartupAttempts = 1
-	config.StartupInterval = time.Millisecond
 	config.RecheckInterval = time.Hour
 
 	return &Component{

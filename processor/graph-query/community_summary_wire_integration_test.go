@@ -139,20 +139,20 @@ func TestIntegration_EnhancementWorker_WiresThroughToGraphQuerySummary(t *testin
 	require.NoError(t, err, "summary must be stored at the {level}.{membership_hash} key")
 	assert.NotEmpty(t, entry.Value())
 
-	// (2) graph-query's community cache, driven by its REAL WatchAndSync +
-	// WatchSummaries loops over NATS, joins the summary to the community by
+	// (2) graph-query's private community cache, driven by its real generation +
+	// summary watch loops over NATS, joins the summary to the community by
 	// membership hash and surfaces it.
-	cache := NewCommunityCache(logger)
-	go func() { _ = cache.WatchAndSync(ctx, communityKV) }()
-	go func() { _ = cache.WatchSummaries(ctx, summaryKV) }()
+	cache := newCommunityCache(logger)
+	go func() { _ = cache.watchGeneration(ctx, communityKV, newCommunityGeneration(1)) }()
+	go func() { _ = cache.watchSummaries(ctx, summaryKV) }()
 
 	require.Eventually(t, func() bool {
-		got, ok := cache.SummaryFor(comm)
+		got, ok := cache.summaryFor(comm)
 		return ok && got == mockSummary
 	}, 30*time.Second, 200*time.Millisecond,
 		"graph-query cache never surfaced the worker's summary via WatchSummaries over real NATS — REAL read-join defect")
 
-	got, ok := cache.SummaryFor(comm)
+	got, ok := cache.summaryFor(comm)
 	require.True(t, ok)
 	assert.Equal(t, mockSummary, got)
 

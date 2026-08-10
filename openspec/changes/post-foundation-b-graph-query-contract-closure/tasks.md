@@ -48,18 +48,31 @@ of an internal contradiction and a new owner ruling.
 
 ## C. Community generation supervisor
 
-- [ ] C.1 Add explicit-synchronization failing tests for absent bucket, staging, sentinel publication, usable state,
+- [x] C.1 Add explicit-synchronization failing tests for absent bucket, staging, sentinel publication, usable state,
   update/delete, unexpected watch close while the bucket remains, replacement, and orderly cancellation.
-- [ ] C.2 Replace bucket-presence recovery with component-lifetime open/`WatchAll` retry and monotonically identified
+- [x] C.2 Replace bucket-presence recovery with component-lifetime open/`WatchAll` retry and monotonically identified
   fresh private generations. Never seed, copy, retain, or serve an old generation map.
-- [ ] C.3 Publish only after the initial sentinel, unpublish the exact generation before retry on unexpected loss, and
+- [x] C.3 Publish only after the initial sentinel, unpublish the exact generation before retry on unexpected loss, and
   prevent late generation-N updates/exits from affecting N+1.
-- [ ] C.4 Make every community-backed access lease and finally validate one generation. Exercise `localSearch`,
+- [x] C.4 Make every community-backed access lease and finally validate one generation. Exercise `localSearch`,
   `globalSearch`, and `searchGraph` across all lifecycle states.
-- [ ] C.5 Require a usable generation for `localSearch`; let lower-tier global/searchGraph results serve with
+- [x] C.5 Require a usable generation for `localSearch`; let lower-tier global/searchGraph results serve with
   `degraded=true`, `degraded_reason=community_cache_not_ready` when requested enrichment is unavailable.
-- [ ] C.6 Add no readiness producer/key, service, bucket, stream, metric contract, or retry/configuration surface.
-- [ ] C.7 Run focused race and real-NATS integration tests with no arbitrary sleeps and obtain independent review.
+- [x] C.6 Add no readiness producer/key, service, bucket, stream, metric contract, or retry/configuration surface.
+- [x] C.7 Run focused race and real-NATS integration tests with no arbitrary sleeps and obtain independent review.
+
+### Slice C gate evidence (2026-08-10)
+
+- Explicitly synchronized generation and query-behavior tests cover staging, sentinel publication including an empty
+  generation, update/delete, watch loss with the bucket still present, fresh replacement, stale-generation fencing,
+  final lease validation, degradation, and orderly cancellation.
+- `task lint` and `go test -race ./...` passed.
+- `scripts/run-integration-tests.sh` passed, including the real-NATS graph-query lifecycle, orderly-cancellation, and
+  response-enrichment paths.
+- `task schema:generate` produced no schema or spec drift; `go test ./test/contract/...` passed.
+- `task openspec:validate` and the breaking-change gate `task e2e:statistical` passed.
+- Independent `semstreams-reviewer` review approved Slice C after its blocking and high findings were remediated and
+  the affected focused race and real-NATS tests were rerun.
 
 ## D. Optional-summary generation supervisor
 

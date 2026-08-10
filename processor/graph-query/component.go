@@ -49,8 +49,6 @@ type Config struct {
 	Ports                *component.PortConfig `json:"ports,omitempty" schema:"type:ports,description:Port configuration,category:basic"`
 	QueryTimeout         time.Duration         `json:"query_timeout,omitempty" schema:"type:duration,description:Timeout for query operations,default:5s,category:basic"`
 	MaxDepth             int                   `json:"max_depth,omitempty" schema:"type:int,description:Maximum traversal depth for path search,default:10,min:1,max:100,category:basic"`
-	StartupAttempts      int                   `json:"startup_attempts,omitempty" schema:"type:int,description:Max attempts for startup dependency checks,default:10,min:1,category:advanced"`
-	StartupInterval      time.Duration         `json:"startup_interval,omitempty" schema:"type:duration,description:Interval between startup attempts,default:500ms,category:advanced"`
 	RecheckInterval      time.Duration         `json:"recheck_interval,omitempty" schema:"type:duration,description:Interval for rechecking missing buckets,default:5s,category:advanced"`
 	MinSemanticRelevance float64               `json:"min_semantic_relevance,omitempty" schema:"type:float,description:Minimum neural embedding similarity score (0.0-1.0),default:0.5,min:0,max:1,category:advanced"`
 	MinBM25Relevance     float64               `json:"min_bm25_relevance,omitempty" schema:"type:float,description:Minimum BM25 embedding similarity score (0.0-1.0),default:0.4,min:0,max:1,category:advanced"`
@@ -97,13 +95,6 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.MaxDepth == 0 {
 		c.MaxDepth = 10
-	}
-	// Resource startup defaults match resource.DefaultConfig()
-	if c.StartupAttempts == 0 {
-		c.StartupAttempts = 10
-	}
-	if c.StartupInterval == 0 {
-		c.StartupInterval = 500 * time.Millisecond
 	}
 	// Use shorter recheck interval than resource.DefaultConfig (60s) for faster recovery
 	if c.RecheckInterval == 0 {
@@ -154,11 +145,18 @@ type Component struct {
 	minTextRelevance     float64
 
 	// Community cache for GraphRAG (consumer-owned, KV watch based)
-	communityCache   *CommunityCache
-	communityWatcher *resource.Watcher
+	communityCache       *communityCache
+	openCommunityReader  func(context.Context) (graph.CatalogReader, error)
+	waitCommunityRetry   func(context.Context, time.Duration) bool
+	communityPublished   func(uint64)
+	communityUnpublished func(uint64)
+	// Private synchronization seams for proving final lease validation in tests.
+	searchGraphBeforeFinalize  func()
+	globalSearchBeforeFinalize func()
+	localSearchBeforeFinalize  func()
 
 	// summaryWatcher independently watches/retries the COMMUNITY_SUMMARIES bucket.
-	// It is SEPARATE from communityWatcher (which tracks COMMUNITY_INDEX) because on
+	// It is SEPARATE from the COMMUNITY_INDEX generation supervisor because on
 	// a rolling upgrade COMMUNITY_INDEX already exists (old version) while
 	// COMMUNITY_SUMMARIES is created later by the enhancement worker; a single
 	// attempt at GraphRAG-start would miss it and never re-attach, stranding the
@@ -253,6 +251,9 @@ func CreateGraphQuery(rawConfig json.RawMessage, deps component.Dependencies) (c
 		minSemanticRelevance: MinSemanticRelevance,
 		minBM25Relevance:     MinBM25Relevance,
 		minTextRelevance:     MinTextRelevance,
+		openCommunityReader: func(ctx context.Context) (graph.CatalogReader, error) {
+			return graph.OpenCatalogReader(ctx, deps.NATSClient, graph.BucketCommunityIndex)
+		},
 	}
 
 	// Apply config overrides for relevance thresholds
@@ -486,47 +487,23 @@ func (c *Component) Start(ctx context.Context) error {
 	// Construct the cache before responders are installed. localSearch is stable
 	// at every successful Start and may receive a request as soon as its
 	// subscription exists; publishing the pointer first avoids a startup race.
-	c.communityCache = NewCommunityCache(c.logger)
+	c.communityCache = newCommunityCache(c.logger)
+	c.communityCache.onPublished = c.communityPublished
+	c.communityCache.onUnpublished = c.communityUnpublished
 
 	// Subscribe to query subjects
 	if err := c.setupQueryHandlers(componentCtx); err != nil {
 		return fmt.Errorf("subscribe to queries: %w", err)
 	}
 
-	// Set up resource watcher for COMMUNITY_INDEX bucket
-	// This handles graceful startup and recovery if the bucket appears later
-	watcherCfg := resource.DefaultConfig()
-	watcherCfg.StartupAttempts = c.config.StartupAttempts
-	watcherCfg.StartupInterval = c.config.StartupInterval
-	watcherCfg.RecheckInterval = c.config.RecheckInterval
-	watcherCfg.Logger = c.logger
-	watcherCfg.OnAvailable = func() {
-		c.enableGraphRAG(componentCtx)
-	}
-	watcherCfg.OnLost = func() {
-		c.disableGraphRAG()
-	}
-
-	c.communityWatcher = resource.NewWatcher(
-		graph.BucketCommunityIndex,
-		func(ctx context.Context) error {
-			_, err := c.natsClient.GetKeyValueBucket(ctx, graph.BucketCommunityIndex)
-			return err
-		},
-		watcherCfg,
-	)
-
-	// Try to get bucket during startup
-	if c.communityWatcher.WaitForStartup(componentCtx) {
-		// Bucket available - enable GraphRAG immediately
-		if err := c.startGraphRAGWatcher(componentCtx); err != nil {
-			return fmt.Errorf("start GraphRAG watcher: %w", err)
-		}
-	} else {
-		// Bucket not available - start background checking
-		c.logger.Info("COMMUNITY_INDEX bucket not available at startup, GraphRAG disabled (will retry)")
-		c.communityWatcher.StartBackgroundCheck(componentCtx)
-	}
+	// COMMUNITY_INDEX is optional at component start. One component-lifetime
+	// supervisor repeatedly performs the catalog's must-exist reader open and a
+	// fresh WatchAll generation; responders remain installed throughout.
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.superviseCommunityGenerations(componentCtx)
+	}()
 
 	// Independently watch/retry the OPTIONAL COMMUNITY_SUMMARIES bucket. Decoupled
 	// from the COMMUNITY_INDEX watcher above so a bucket created LATER (rolling
@@ -590,11 +567,6 @@ func (c *Component) Stop(timeout time.Duration) error {
 		c.logger.Warn("stop timeout waiting for goroutines")
 	}
 
-	// Stop community watcher (background check goroutine)
-	if c.communityWatcher != nil {
-		c.communityWatcher.Stop()
-	}
-
 	// Stop the COMMUNITY_SUMMARIES resource watcher (background check goroutine)
 	if c.summaryWatcher != nil {
 		c.summaryWatcher.Stop()
@@ -602,7 +574,7 @@ func (c *Component) Stop(timeout time.Duration) error {
 
 	// Stop community cache watcher
 	if c.communityCache != nil {
-		c.communityCache.Stop()
+		c.communityCache.stop()
 	}
 
 	c.mu.Lock()
@@ -613,40 +585,50 @@ func (c *Component) Stop(timeout time.Duration) error {
 	return nil
 }
 
-// startGraphRAGWatcher initializes and starts the community cache KV watcher.
-// Called when COMMUNITY_INDEX bucket is available at startup.
-func (c *Component) startGraphRAGWatcher(ctx context.Context) error {
-	communityBucket, err := c.natsClient.GetKeyValueBucket(ctx, graph.BucketCommunityIndex)
-	if err != nil {
-		return fmt.Errorf("get COMMUNITY_INDEX bucket: %w", err)
+func (c *Component) superviseCommunityGenerations(ctx context.Context) {
+	if c.openCommunityReader == nil {
+		c.logger.Error("community generation supervisor has no catalog reader opener")
+		return
 	}
-
-	// Start community cache watcher in background
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
-		if err := c.communityCache.WatchAndSync(ctx, communityBucket); err != nil {
-			if ctx.Err() == nil {
-				c.logger.Error("community cache watcher failed", "error", err)
+	waitRetry := c.waitCommunityRetry
+	if waitRetry == nil {
+		waitRetry = func(ctx context.Context, interval time.Duration) bool {
+			timer := time.NewTimer(interval)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return false
+			case <-timer.C:
+				return true
 			}
 		}
-	}()
+	}
 
-	// The COMMUNITY_SUMMARIES second watcher is NOT started here. It is driven by an
-	// independent resource watcher set up in Start() (summaryWatcher) so that a
-	// bucket created AFTER GraphRAG starts (the rolling-upgrade case) is still picked
-	// up without a restart. That watcher is created once and outlives GraphRAG
-	// enable/disable flapping on COMMUNITY_INDEX.
-
-	c.logger.Info("GraphRAG enabled")
-	return nil
+	var generationID uint64
+	for ctx.Err() == nil {
+		generationID++
+		generation := newCommunityGeneration(generationID)
+		reader, err := c.openCommunityReader(ctx)
+		if err == nil {
+			err = c.communityCache.watchGeneration(ctx, reader, generation)
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		c.logger.Warn("community generation unavailable; retrying",
+			"generation", generationID, "error", err,
+			"retry_interval", c.config.RecheckInterval)
+		if !waitRetry(ctx, c.config.RecheckInterval) {
+			return
+		}
+	}
 }
 
 // startSummaryBucketWatcher sets up the independent resource watcher for the
 // OPTIONAL COMMUNITY_SUMMARIES bucket and attaches the cache's WatchSummaries loop
 // as soon as the bucket is available.
 //
-// It does a single non-blocking availability check (StartupAttempts=1) so an absent
+// It does a single non-blocking availability check so an absent
 // bucket never delays component start — COMMUNITY_SUMMARIES is optional and often
 // absent (statistical-tier deployments). If the bucket is present it attaches
 // immediately; otherwise it starts a background recheck that attaches the moment the
@@ -656,7 +638,6 @@ func (c *Component) startGraphRAGWatcher(ctx context.Context) error {
 func (c *Component) startSummaryBucketWatcher(ctx context.Context) {
 	cfg := resource.DefaultConfig()
 	cfg.StartupAttempts = 1 // one immediate probe; the background recheck does the retrying
-	cfg.StartupInterval = c.config.StartupInterval
 	cfg.RecheckInterval = c.config.RecheckInterval
 	cfg.Logger = c.logger
 	cfg.OnAvailable = func() { c.attachSummaryWatch(ctx) }
@@ -712,38 +693,13 @@ func (c *Component) attachSummaryWatch(ctx context.Context) {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
-		if err := c.communityCache.WatchSummaries(ctx, summaryBucket); err != nil {
+		if err := c.communityCache.watchSummaries(ctx, summaryBucket); err != nil {
 			if ctx.Err() == nil {
 				c.logger.Error("community summary cache watcher failed", "error", err)
 			}
 		}
 	}()
 	c.logger.Info("COMMUNITY_SUMMARIES attached; LLM community summaries now surface via the membership-hash join")
-}
-
-// enableGraphRAG is called when COMMUNITY_INDEX bucket becomes available after being unavailable.
-// This is the OnAvailable callback for the resource watcher.
-func (c *Component) enableGraphRAG(ctx context.Context) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if ctx.Err() != nil {
-		return // Component shutting down
-	}
-
-	if err := c.startGraphRAGWatcher(ctx); err != nil {
-		c.logger.Error("failed to enable GraphRAG after bucket became available", "error", err)
-	}
-}
-
-// disableGraphRAG is called when COMMUNITY_INDEX bucket is lost.
-// This is the OnLost callback for the resource watcher.
-func (c *Component) disableGraphRAG() {
-	c.logger.Warn("COMMUNITY_INDEX bucket lost, GraphRAG queries will fail until recovered")
-	// Note: We don't stop the community cache watcher here because:
-	// 1. The watcher will handle the bucket disappearing gracefully
-	// 2. When bucket returns, we'll get the OnAvailable callback
-	// The communityCache.IsAvailable() check in handlers will prevent queries
 }
 
 // recordSuccess records successful query metrics

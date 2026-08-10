@@ -52,8 +52,6 @@ func TestIntegration_GraphQuery_SummaryBucketCreatedLate_Attaches(t *testing.T) 
 	// Build the real component with a fast recheck so the late-bucket attach is quick.
 	cfg := DefaultConfig()
 	cfg.RecheckInterval = 200 * time.Millisecond
-	cfg.StartupInterval = 100 * time.Millisecond
-	cfg.StartupAttempts = 2
 	configJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
 
@@ -66,7 +64,7 @@ func TestIntegration_GraphQuery_SummaryBucketCreatedLate_Attaches(t *testing.T) 
 	defer func() { _ = gq.Stop(5 * time.Second) }()
 
 	// Sanity: with COMMUNITY_SUMMARIES still absent, SummaryFor misses (statistical floor).
-	_, ok = gq.communityCache.SummaryFor(comm)
+	_, ok = gq.communityCache.summaryFor(comm)
 	require.False(t, ok, "with no summary bucket yet, SummaryFor must miss")
 
 	// LATE: the enhancement worker creates COMMUNITY_SUMMARIES and writes the record.
@@ -87,7 +85,7 @@ func TestIntegration_GraphQuery_SummaryBucketCreatedLate_Attaches(t *testing.T) 
 	// The independent summary resource watcher must detect the late bucket, attach
 	// WatchSummaries, and surface the summary — all without a component restart.
 	require.Eventually(t, func() bool {
-		got, ok := gq.communityCache.SummaryFor(comm)
+		got, ok := gq.communityCache.summaryFor(comm)
 		return ok && got == wantSummary
 	}, 15*time.Second, 200*time.Millisecond,
 		"COMMUNITY_SUMMARIES created after Start must attach without a restart and surface via SummaryFor")

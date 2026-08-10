@@ -258,7 +258,7 @@ func TestIntegration_PathSearch_Structure(t *testing.T) {
 // - Handlers never registered after bucket appears
 // - Recheck interval too long
 // - OnAvailable callback not firing
-// - Race conditions in enableGraphRAG()
+// - Race conditions while publishing the first community generation
 func TestIntegration_GraphRAGLifecycle(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -277,8 +277,6 @@ func TestIntegration_GraphRAGLifecycle(t *testing.T) {
 
 	// Create component with short recheck interval for testing
 	config := DefaultConfig()
-	config.StartupAttempts = 1 // Fail fast on startup
-	config.StartupInterval = 10 * time.Millisecond
 	config.RecheckInterval = 100 * time.Millisecond // Fast recheck for test
 	configJSON, err := json.Marshal(config)
 	require.NoError(t, err)
@@ -291,6 +289,8 @@ func TestIntegration_GraphRAGLifecycle(t *testing.T) {
 	require.NoError(t, err)
 
 	graphQuery := comp.(*Component)
+	published := make(chan uint64, 1)
+	graphQuery.communityPublished = func(generation uint64) { published <- generation }
 	require.NoError(t, graphQuery.Initialize())
 
 	// Start component - COMMUNITY_INDEX doesn't exist yet
@@ -298,7 +298,7 @@ func TestIntegration_GraphRAGLifecycle(t *testing.T) {
 	defer graphQuery.Stop(5 * time.Second)
 
 	// Verify GraphRAG is disabled initially (community cache should not be ready)
-	assert.False(t, graphQuery.communityCache.IsReady(),
+	assert.Nil(t, graphQuery.communityCache.acquire(),
 		"community cache should not be ready when bucket doesn't exist")
 
 	// Create COMMUNITY_INDEX bucket (simulating graph-clustering starting)
@@ -308,30 +308,12 @@ func TestIntegration_GraphRAGLifecycle(t *testing.T) {
 	})
 	require.NoError(t, err, "should create COMMUNITY_INDEX bucket")
 
-	// Wait for resource watcher to detect the bucket and enable GraphRAG
-	// With 100ms recheck interval, should detect within 500ms
-	require.Eventually(t, func() bool {
-		// Check if GraphRAG handlers are registered by attempting a request
-		// The request will fail (no communities) but shouldn't return "not subscribed" error
-		reqData, _ := json.Marshal(GlobalSearchRequest{
-			Query:          "test",
-			Level:          0,
-			MaxCommunities: 5,
-		})
-
-		// Try to call the handler directly - if GraphRAG is enabled, handler exists
-		resp, err := graphQuery.handleGlobalSearch(ctx, reqData)
-		// Accept: response returned (even empty) means handlers work
-		return err == nil && resp != nil
-	}, 2*time.Second, 50*time.Millisecond,
-		"GraphRAG should become available within 2s after bucket creation")
-
-	// Verify community cache watcher started (indicated by cache being ready after initial sync)
-	// Note: Cache will be "ready" after receiving nil entry (initial state complete)
-	require.Eventually(t, func() bool {
-		return graphQuery.communityCache.IsReady()
-	}, 2*time.Second, 50*time.Millisecond,
-		"community cache should become ready after bucket is available")
+	select {
+	case <-published:
+	case <-time.After(2 * time.Second):
+		t.Fatal("community generation was not published after bucket creation")
+	}
+	require.NotNil(t, graphQuery.communityCache.acquire())
 
 	// Verify we can make GraphRAG requests (they return empty results, not errors)
 	globalReq, _ := json.Marshal(GlobalSearchRequest{
@@ -349,9 +331,9 @@ func TestIntegration_GraphRAGLifecycle(t *testing.T) {
 	assert.Empty(t, globalResp.CommunitySummaries, "should return empty summaries")
 }
 
-// TestIntegration_GraphRAGBucketRecovery tests that GraphRAG recovers when
-// the COMMUNITY_INDEX bucket is deleted and recreated.
-func TestIntegration_GraphRAGBucketRecovery(t *testing.T) {
+// TestIntegration_GraphRAGOrderlyCancellation proves a real WatchAll generation
+// stops with the component without being classified as unexpected watch loss.
+func TestIntegration_GraphRAGOrderlyCancellation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -372,8 +354,6 @@ func TestIntegration_GraphRAGBucketRecovery(t *testing.T) {
 
 	// Create component with short intervals for testing
 	config := DefaultConfig()
-	config.StartupAttempts = 3
-	config.StartupInterval = 50 * time.Millisecond
 	config.RecheckInterval = 100 * time.Millisecond
 	configJSON, err := json.Marshal(config)
 	require.NoError(t, err)
@@ -386,15 +366,24 @@ func TestIntegration_GraphRAGBucketRecovery(t *testing.T) {
 	require.NoError(t, err)
 
 	graphQuery := comp.(*Component)
+	published := make(chan uint64, 2)
+	unpublished := make(chan uint64, 1)
+	retryCalled := make(chan struct{}, 1)
+	graphQuery.communityPublished = func(generation uint64) { published <- generation }
+	graphQuery.communityUnpublished = func(generation uint64) { unpublished <- generation }
+	graphQuery.waitCommunityRetry = func(context.Context, time.Duration) bool {
+		retryCalled <- struct{}{}
+		return false
+	}
 	require.NoError(t, graphQuery.Initialize())
 	require.NoError(t, graphQuery.Start(ctx))
-	defer graphQuery.Stop(5 * time.Second)
 
-	// Wait for GraphRAG to be enabled (bucket exists at startup)
-	require.Eventually(t, func() bool {
-		return graphQuery.communityCache.IsReady()
-	}, 2*time.Second, 50*time.Millisecond,
-		"community cache should be ready when bucket exists at startup")
+	var firstGeneration uint64
+	select {
+	case firstGeneration = <-published:
+	case <-time.After(2 * time.Second):
+		t.Fatal("initial community generation was not published")
+	}
 
 	// Verify global search works
 	globalReq, _ := json.Marshal(GlobalSearchRequest{Query: "test", Level: 0, MaxCommunities: 5})
@@ -402,27 +391,19 @@ func TestIntegration_GraphRAGBucketRecovery(t *testing.T) {
 	require.NoError(t, err, "global search should work initially")
 	require.NotNil(t, resp)
 
-	// Delete the bucket (simulating graph-clustering crash/restart)
-	err = js.DeleteKeyValue(ctx, "COMMUNITY_INDEX")
-	require.NoError(t, err, "should delete COMMUNITY_INDEX bucket")
-
-	// Give time for health check to detect loss (healthInterval defaults to 30s,
-	// but our watcher will detect on next check cycle)
-	time.Sleep(200 * time.Millisecond)
-
-	// Recreate the bucket
-	_, err = js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
-		Bucket:      "COMMUNITY_INDEX",
-		Description: "Recreated community index",
-	})
-	require.NoError(t, err, "should recreate COMMUNITY_INDEX bucket")
-
-	// Verify GraphRAG recovers
-	require.Eventually(t, func() bool {
-		resp, err := graphQuery.handleGlobalSearch(ctx, globalReq)
-		return err == nil && resp != nil
-	}, 3*time.Second, 100*time.Millisecond,
-		"GraphRAG should recover after bucket is recreated")
+	require.NoError(t, graphQuery.Stop(5*time.Second))
+	select {
+	case revokedGeneration := <-unpublished:
+		require.Equal(t, firstGeneration, revokedGeneration)
+	case <-time.After(time.Second):
+		t.Fatal("orderly cancellation did not revoke the active generation")
+	}
+	require.Nil(t, graphQuery.communityCache.acquire())
+	select {
+	case <-retryCalled:
+		t.Fatal("orderly cancellation was classified as retryable watcher loss")
+	default:
+	}
 }
 
 // TestIntegration_AnswerSynthesis verifies that globalSearch produces an answer
@@ -495,8 +476,6 @@ func TestIntegration_AnswerSynthesis(t *testing.T) {
 
 	// Create and start component with template synthesizer (no LLM endpoint needed)
 	config := DefaultConfig()
-	config.StartupAttempts = 3
-	config.StartupInterval = 50 * time.Millisecond
 	config.RecheckInterval = 100 * time.Millisecond
 	configJSON, err := json.Marshal(config)
 	require.NoError(t, err)
@@ -515,10 +494,11 @@ func TestIntegration_AnswerSynthesis(t *testing.T) {
 
 	// Wait for community cache to be ready and populated
 	require.Eventually(t, func() bool {
-		if !graphQuery.communityCache.IsReady() {
+		lease := graphQuery.communityCache.acquire()
+		if lease == nil {
 			return false
 		}
-		allComms := graphQuery.communityCache.GetAllCommunities()
+		allComms := lease.getAllCommunities()
 		return len(allComms) >= 2
 	}, 3*time.Second, 50*time.Millisecond,
 		"community cache should have 2 communities")
@@ -529,7 +509,8 @@ func TestIntegration_AnswerSynthesis(t *testing.T) {
 		"acme.ops.robotics.gcs.drone.001",
 		"acme.ops.logistics.warehouse.worker.w1",
 	}
-	commSummaries := graphQuery.findCommunitiesForEntities(matchedEntityIDs)
+	queryCtx, _ := graphQuery.withCommunityRequestLease(ctx)
+	commSummaries := graphQuery.findCommunitiesForEntities(queryCtx, matchedEntityIDs)
 	assert.Len(t, commSummaries, 2, "should match 2 communities")
 
 	for _, cs := range commSummaries {
@@ -619,8 +600,6 @@ func TestIntegration_EnrichGlobalResponse(t *testing.T) {
 
 	// Create and start component
 	config := DefaultConfig()
-	config.StartupAttempts = 3
-	config.StartupInterval = 50 * time.Millisecond
 	config.RecheckInterval = 100 * time.Millisecond
 	configJSON, _ := json.Marshal(config)
 
@@ -634,7 +613,8 @@ func TestIntegration_EnrichGlobalResponse(t *testing.T) {
 
 	// Wait for community cache
 	require.Eventually(t, func() bool {
-		return graphQuery.communityCache.IsReady() && len(graphQuery.communityCache.GetAllCommunities()) >= 1
+		lease := graphQuery.communityCache.acquire()
+		return lease != nil && len(lease.getAllCommunities()) >= 1
 	}, 3*time.Second, 50*time.Millisecond)
 
 	// Test enrichGlobalResponse
@@ -642,7 +622,8 @@ func TestIntegration_EnrichGlobalResponse(t *testing.T) {
 	response := GlobalSearchResponse{
 		Count: len(entityIDs),
 	}
-	require.NoError(t, graphQuery.enrichGlobalResponse(ctx, &response, "drone operations", entityIDs, nil))
+	queryCtx, _ := graphQuery.withCommunityRequestLease(ctx)
+	require.NoError(t, graphQuery.enrichGlobalResponse(queryCtx, &response, "drone operations", entityIDs, nil))
 
 	assert.NotEmpty(t, response.CommunitySummaries, "CommunitySummaries should be populated")
 	assert.NotEmpty(t, response.Answer, "Answer should be synthesized")
@@ -750,8 +731,6 @@ func TestIntegration_CommunityCacheCrossLevelCollision(t *testing.T) {
 	require.NoError(t, err)
 
 	config := DefaultConfig()
-	config.StartupAttempts = 3
-	config.StartupInterval = 50 * time.Millisecond
 	config.RecheckInterval = 100 * time.Millisecond
 	configJSON, _ := json.Marshal(config)
 
@@ -763,7 +742,7 @@ func TestIntegration_CommunityCacheCrossLevelCollision(t *testing.T) {
 	require.NoError(t, graphQuery.Start(ctx))
 	defer graphQuery.Stop(5 * time.Second)
 
-	require.Eventually(t, func() bool { return graphQuery.communityCache.IsReady() },
+	require.Eventually(t, func() bool { return graphQuery.communityCache.acquire() != nil },
 		5*time.Second, 50*time.Millisecond, "community cache must complete initial sync")
 
 	putCommunity := func(level int, id string, members []string) {
@@ -784,17 +763,26 @@ func TestIntegration_CommunityCacheCrossLevelCollision(t *testing.T) {
 	// Level-0 pass.
 	putCommunity(0, entDrone1, []string{entDrone1, entDrone2})
 	putCommunity(0, entDrone3, []string{entDrone3})
-	require.Eventually(t, func() bool { return len(graphQuery.communityCache.GetCommunitiesByLevel(0)) == 2 },
+	require.Eventually(t, func() bool {
+		lease := graphQuery.communityCache.acquire()
+		return lease != nil && len(lease.getCommunitiesByLevel(0)) == 2
+	},
 		5*time.Second, 25*time.Millisecond, "both level-0 communities must reach the cache")
 
 	// Level-1 pass re-uses entDrone1 as a community ID.
 	putCommunity(1, entDrone1, []string{entDrone1, entDrone2, entDrone3})
-	require.Eventually(t, func() bool { return len(graphQuery.communityCache.GetCommunitiesByLevel(1)) == 1 },
+	require.Eventually(t, func() bool {
+		lease := graphQuery.communityCache.acquire()
+		return lease != nil && len(lease.getCommunitiesByLevel(1)) == 1
+	},
 		5*time.Second, 25*time.Millisecond, "the level-1 community must reach the cache")
 
 	// Prune of the previous partition lands last.
 	require.NoError(t, communityBucket.Delete(ctx, communityKVKey(0, entDrone3)))
-	require.Eventually(t, func() bool { return len(graphQuery.communityCache.GetCommunitiesByLevel(0)) == 1 },
+	require.Eventually(t, func() bool {
+		lease := graphQuery.communityCache.acquire()
+		return lease != nil && len(lease.getCommunitiesByLevel(0)) == 1
+	},
 		5*time.Second, 25*time.Millisecond,
 		"level-0 index must settle at exactly the surviving community, not collapse to empty")
 

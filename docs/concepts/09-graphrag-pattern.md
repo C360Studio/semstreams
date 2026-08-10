@@ -139,7 +139,7 @@ recomputation. See [Community Detection](07-community-detection.md).
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `max_communities` | 5 | Maximum communities to return per query |
-| `summarize_threshold` | 50 | Auto-summarize above this count; negative disables |
+| `summarize_threshold` | 50 | Auto-summarize above this count; non-positive disables |
 | `include_summaries` | true | Include community summary records |
 | `include_relationships` | false | Include relationships between returned entities |
 | `include_sources` | false | Include source-attribution records |
@@ -170,7 +170,7 @@ admitted operation returns a GraphRAG result, it uses two query patterns:
 | `summarized`, `community_summaries` | Summary mode and matched summaries |
 | `relationships`, `sources` | Optional requested relationship and attribution data |
 | `count`, `duration_ms` | Result count and processing duration |
-| `degraded`, `degraded_reason` | Answer-synthesis fallback evidence |
+| `degraded`, `degraded_reason` | Bounded degradation evidence: answer-synthesis fallback, or `community_cache_not_ready` when a lower-tier result is returned without requested community enrichment |
 | `entities_truncated` | Candidate corpus was capped and the result is not exhaustive |
 
 ## How Context Flows to the LLM

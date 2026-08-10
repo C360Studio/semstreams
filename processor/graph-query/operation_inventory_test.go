@@ -10,6 +10,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,10 +50,12 @@ func TestGraphQueryOperationInventoryIsExactAndComplete(t *testing.T) {
 		"pathSearch": "required backing responders remain classified", "hierarchyStats": "authority errors remain classified",
 		"prefix": "authority responder required", "spatial": "optional index errors remain classified",
 		"temporal": "optional index errors remain classified", "semantic": "optional embedding errors remain classified",
-		"similar":     "optional embedding errors remain classified",
-		"summary":     "required backing responders remain classified",
-		"byName":      "name-index errors remain classified",
-		"localSearch": "transient index_not_ready until community cache usable",
+		"similar":      "optional embedding errors remain classified",
+		"summary":      "required backing responders remain classified",
+		"byName":       "name-index errors remain classified",
+		"localSearch":  "transient index_not_ready until community cache usable",
+		"globalSearch": "community-only tier returns transient index_not_ready; lower tiers preserve results with community_cache_not_ready degradation",
+		"searchGraph":  "semantic fallback preserves its strategy and reports requested unavailable community enrichment",
 	}
 	want := []struct {
 		operation string
@@ -125,11 +128,11 @@ func TestRelationshipInventoryMatchesResponderWire(t *testing.T) {
 	require.NotContains(t, rows[0], "predicate")
 }
 
-func TestSearchInventoryRecordsCurrentUnmarkedEmptyFallback(t *testing.T) {
+func TestSearchInventoryRecordsCommunityGenerationOutcomes(t *testing.T) {
 	component := newSummaryTestComponent(func(context.Context, string, []byte, time.Duration) ([]byte, error) {
 		return nil, errors.New("optional semantic responder unavailable")
 	})
-	component.communityCache = NewCommunityCache(component.logger)
+	component.communityCache = newCommunityCache(component.logger)
 
 	request := []byte(`{"query":"no current matches"}`)
 	for _, test := range []struct {
@@ -140,17 +143,13 @@ func TestSearchInventoryRecordsCurrentUnmarkedEmptyFallback(t *testing.T) {
 		{operation: "searchGraph", handler: component.handleSearchGraph},
 	} {
 		t.Run(test.operation, func(t *testing.T) {
-			response, err := test.handler(context.Background(), request)
-			require.NoError(t, err)
-			var decoded GlobalSearchResponse
-			require.NoError(t, json.Unmarshal(response, &decoded))
-			require.Zero(t, decoded.Count)
-			require.False(t, decoded.Degraded)
-			require.Empty(t, decoded.DegradedReason)
-
+			_, err := test.handler(context.Background(), request)
+			require.Error(t, err)
+			var classified *errs.ClassifiedError
+			require.ErrorAs(t, err, &classified)
+			require.Equal(t, "index_not_ready", classified.Code)
 			availability := graphQueryOperation(t, test.operation).availability
-			require.Contains(t, availability, "unmarked empty success")
-			require.NotContains(t, availability, "community degradation")
+			require.NotContains(t, availability, "unmarked empty success")
 		})
 	}
 }
