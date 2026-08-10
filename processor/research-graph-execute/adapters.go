@@ -35,7 +35,9 @@ type graphQueryAdapterSubjects struct {
 // [[feedback_silent_handler_error_payload_audit]] this is the right
 // default for every new natsclient.Request caller.
 type graphQueryAdapter struct {
-	client   *natsclient.Client
+	client interface {
+		RequestClassified(context.Context, string, []byte, time.Duration) ([]byte, error)
+	}
 	subjects graphQueryAdapterSubjects
 	timeout  time.Duration
 	// logger reports partial hydration. Nil-safe: tests that construct the adapter
@@ -333,7 +335,12 @@ func (a *graphQueryAdapter) request(ctx context.Context, subject string, body an
 		ctx, cancel = context.WithTimeout(ctx, a.timeout)
 		defer cancel()
 	}
-	return a.client.RequestClassified(ctx, subject, reqData, 0)
+	response, err := a.client.RequestClassified(ctx, subject, reqData, 0)
+	if err != nil {
+		return nil, err
+	}
+	response, _ = graph.UnwrapQueryResponse(response)
+	return response, nil
 }
 
 // natsLoopStore adapts natsclient.KVStore to the LoopStore

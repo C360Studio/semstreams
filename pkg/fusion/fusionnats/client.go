@@ -379,14 +379,23 @@ func (c *Client) Entity(ctx context.Context, id string) (*fusion.Entity, error) 
 		}
 		return nil, err
 	}
-	var es graph.EntityState
-	if err := json.Unmarshal(raw, &es); err != nil {
+	var exact graph.ExactEntity
+	if err := json.Unmarshal(raw, &exact); err != nil {
 		return nil, fmt.Errorf("fusionnats: decode entity %q: %w", id, err)
 	}
-	if err := graph.ValidateDecodedEntityState(&es); err != nil {
+	if exact.Entity == nil {
+		return nil, fmt.Errorf("fusionnats: entity %q response has no entity", id)
+	}
+	if exact.KVRevision == 0 {
+		return nil, fmt.Errorf("fusionnats: entity %q response has zero KV revision", id)
+	}
+	if err := graph.ValidateDecodedEntityState(exact.Entity); err != nil {
 		return nil, fmt.Errorf("fusionnats: validate entity %q: %w", id, err)
 	}
-	return &fusion.Entity{ID: es.ID, Triples: es.Triples}, nil
+	if exact.Entity.ID != id {
+		return nil, fmt.Errorf("fusionnats: entity response ID mismatch: requested %q, received %q", id, exact.Entity.ID)
+	}
+	return &fusion.Entity{ID: exact.Entity.ID, Triples: exact.Entity.Triples}, nil
 }
 
 // Entities batch-fetches entities by ID via graph.query.batch, RECONCILING the reply
@@ -558,18 +567,18 @@ func (c *Client) byNameMatches(ctx context.Context, query string, limit int) ([]
 	if err != nil {
 		return nil, err
 	}
-	var resp graph.QueryResponse[graph.NameData]
+	var resp graph.NameData
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, fmt.Errorf("fusionnats: decode byName: %w", err)
 	}
-	entityIDs := make([]string, 0, len(resp.Data.Matches))
-	for _, match := range resp.Data.Matches {
+	entityIDs := make([]string, 0, len(resp.Matches))
+	for _, match := range resp.Matches {
 		entityIDs = append(entityIDs, match.EntityID)
 	}
 	if err := graph.ValidateDecodedEntityIDs(entityIDs); err != nil {
 		return nil, fmt.Errorf("fusionnats: validate byName: %w", err)
 	}
-	return resp.Data.Matches, nil
+	return resp.Matches, nil
 }
 
 // request marshals req and issues a classified request/reply on subject.
@@ -578,7 +587,12 @@ func (c *Client) request(ctx context.Context, subject string, req any) ([]byte, 
 	if err != nil {
 		return nil, fmt.Errorf("fusionnats: marshal %s request: %w", subject, err)
 	}
-	return c.nats.RequestClassified(ctx, subject, body, c.timeout)
+	response, err := c.nats.RequestClassified(ctx, subject, body, c.timeout)
+	if err != nil {
+		return nil, err
+	}
+	response, _ = graph.UnwrapQueryResponse(response)
+	return response, nil
 }
 
 // directionString maps a fusion.Direction to the relationship query's wire value.

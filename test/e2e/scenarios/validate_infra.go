@@ -371,6 +371,7 @@ func (s *TieredScenario) executeTestHTTPGateway(ctx context.Context, result *Res
 			globalSearch(query: $query, level: $level, maxCommunities: $maxCommunities) {
 				entities { id type }
 				count
+				strategy
 			}
 		}`,
 		"variables": map[string]any{
@@ -382,22 +383,19 @@ func (s *TieredScenario) executeTestHTTPGateway(ctx context.Context, result *Res
 
 	queryJSON, err := json.Marshal(graphqlQuery)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to marshal GraphQL query: %v", err))
-		return nil // Not a hard failure
+		return fmt.Errorf("marshal GraphQL gateway query: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", graphqlURL, strings.NewReader(string(queryJSON)))
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to create gateway request: %v", err))
-		return nil
+		return fmt.Errorf("create GraphQL gateway request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	startTime := time.Now()
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("GraphQL Gateway request failed: %v", err))
-		return nil
+		return fmt.Errorf("execute GraphQL gateway request: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -405,9 +403,11 @@ func (s *TieredScenario) executeTestHTTPGateway(ctx context.Context, result *Res
 	result.Metrics["graphql_gateway_latency_ms"] = latency.Milliseconds()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		result.Warnings = append(result.Warnings, fmt.Sprintf("GraphQL Gateway returned status %d: %s", resp.StatusCode, body))
-		return nil
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return fmt.Errorf("GraphQL gateway returned status %d and body read failed: %w", resp.StatusCode, readErr)
+		}
+		return fmt.Errorf("GraphQL gateway returned status %d: %s", resp.StatusCode, body)
 	}
 
 	// Parse GraphQL response structure
@@ -418,7 +418,8 @@ func (s *TieredScenario) executeTestHTTPGateway(ctx context.Context, result *Res
 					ID   string `json:"id"`
 					Type string `json:"type"`
 				} `json:"entities"`
-				Count int `json:"count"`
+				Count    int    `json:"count"`
+				Strategy string `json:"strategy"`
 			} `json:"globalSearch"`
 		} `json:"data"`
 		Errors []struct {
@@ -428,24 +429,25 @@ func (s *TieredScenario) executeTestHTTPGateway(ctx context.Context, result *Res
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to read gateway response: %v", err))
-		return nil
+		return fmt.Errorf("read GraphQL gateway response: %w", err)
 	}
 
 	if err := json.Unmarshal(bodyBytes, &gqlResp); err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to parse gateway response: %v", err))
-		return nil
+		return fmt.Errorf("decode GraphQL gateway response: %w", err)
 	}
 
 	if len(gqlResp.Errors) > 0 {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("GraphQL search error: %s", gqlResp.Errors[0].Message))
-		return nil
+		return fmt.Errorf("GraphQL gateway search error: %s", gqlResp.Errors[0].Message)
+	}
+	if gqlResp.Data.GlobalSearch.Strategy != "graphrag" {
+		return fmt.Errorf("GraphQL globalSearch strategy = %q, want %q", gqlResp.Data.GlobalSearch.Strategy, "graphrag")
 	}
 
 	hitCount := len(gqlResp.Data.GlobalSearch.Entities)
 	result.Metrics["graphql_gateway_search_hits"] = hitCount
 	result.Details["graphql_gateway_tested"] = true
 	result.Details["graphql_gateway_endpoint"] = graphqlURL
+	result.Details["graphql_gateway_strategy"] = gqlResp.Data.GlobalSearch.Strategy
 
 	return nil
 }

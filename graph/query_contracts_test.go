@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 )
 
 // mustMarshal fails the test rather than returning an error, so a table entry
@@ -45,15 +44,6 @@ func TestUnwrapQueryResponse_RecognizesTheEnvelope(t *testing.T) {
 			// unwrapped verdict and the timestamp-absence check below. `"{"`
 			// would be true of any JSON object and only reads like coverage.
 			want: ``,
-		},
-		{
-			name: "envelope carrying request_id (the optional third key)",
-			resp: QueryResponse[SummaryData]{
-				Data:      SummaryData{TotalEntities: 7},
-				RequestID: "req-1",
-				Timestamp: time.Now(),
-			},
-			want: `"total_entities":7`,
 		},
 	}
 
@@ -235,8 +225,8 @@ func TestQueryResponse_HasNoErrorField(t *testing.T) {
 // sync with the struct it describes.
 //
 // It walks the STRUCT TAGS, not a marshalled value. An earlier version iterated
-// the keys of a marshalled zero value, which cannot see an `omitempty` field —
-// it never even exercised `request_id`. That blind spot is the exact re-entry
+// the keys of a marshalled zero value, which cannot see an `omitempty` field.
+// That blind spot is the exact re-entry
 // path for gh#762: add `Cursor string \`json:"cursor,omitempty"\“ to
 // QueryResponse and every detector test stays green, but a real reply that
 // populates Cursor then carries a foreign key, UnwrapQueryResponse returns
@@ -254,7 +244,7 @@ func TestQueryResponse_DeclaredFieldsMatchClosedKeySet(t *testing.T) {
 		}
 		seen[key] = true
 		switch key {
-		case queryResponseDataKey, queryResponseRequestIDKey, queryResponseTimestampKey:
+		case queryResponseDataKey, queryResponseTimestampKey:
 		default:
 			t.Errorf("QueryResponse declares json key %q, absent from the closed key set used "+
 				"by UnwrapQueryResponse. Add it to the constants, or detection stops "+
@@ -265,7 +255,7 @@ func TestQueryResponse_DeclaredFieldsMatchClosedKeySet(t *testing.T) {
 	// The reverse direction: a constant naming a key the struct no longer
 	// declares makes the closed set wider than the type, which admits foreign
 	// shapes.
-	for _, key := range []string{queryResponseDataKey, queryResponseRequestIDKey, queryResponseTimestampKey} {
+	for _, key := range []string{queryResponseDataKey, queryResponseTimestampKey} {
 		if !seen[key] {
 			t.Errorf("closed key set names %q, which QueryResponse no longer declares — "+
 				"the discriminator is wider than the type it describes", key)

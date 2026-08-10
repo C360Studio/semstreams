@@ -562,7 +562,7 @@ func TestEntity_Found(t *testing.T) {
 	es := graph.EntityState{ID: "a.b.c.d.e.1", Triples: []message.Triple{
 		{Subject: "a.b.c.d.e.1", Predicate: "dc.terms.title", Object: "Widget"},
 	}}
-	fake := &fakeRequester{resp: mustJSON(t, es)}
+	fake := &fakeRequester{resp: mustJSON(t, graph.ExactEntity{Entity: &es, KVRevision: 1})}
 	c := New(fake, time.Second)
 
 	ent, err := c.Entity(context.Background(), "a.b.c.d.e.1")
@@ -660,7 +660,10 @@ func TestAuthoritativeRepliesRejectPoisonBeforeProjection(t *testing.T) {
 		},
 		{
 			name: "entity malformed subject",
-			resp: graph.EntityState{ID: validID, Triples: []message.Triple{{Subject: invalidEntityID, Predicate: "test.state.value"}}},
+			resp: graph.ExactEntity{
+				Entity:     &graph.EntityState{ID: validID, Triples: []message.Triple{{Subject: invalidEntityID, Predicate: "test.state.value"}}},
+				KVRevision: 1,
+			},
 			call: func(c *Client) (any, error) {
 				return c.Entity(context.Background(), validID)
 			},

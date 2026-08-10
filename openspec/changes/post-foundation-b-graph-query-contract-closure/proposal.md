@@ -51,6 +51,8 @@ research orchestration, or readiness.
 - `graph-query`: Adds the admitted operation family, stable responder, generation-safe partition cache, shared
   serving-view summary reader, bounded research success decoding, truthful terminal strategy and specialized-index ID
   projection, stale query compatibility deletion, and the embedded-client boundary.
+- `gateway-response-projection`: Narrows the query-success envelope discriminator and reserved key set to the
+  surviving `data` and `timestamp` fields.
 - `agentic-tools`: Removes two unadmitted query wrappers and their complete exported/configuration surfaces.
 - `fusion`: Preserves the operation-specific NATS adapter while converging reply decoding on production shapes.
 - `graph-index`: Corrects stale predicate representation text only.

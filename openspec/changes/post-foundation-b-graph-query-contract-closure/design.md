@@ -324,9 +324,13 @@ actual raw graph-embedding response. The unused `QueryResponse.RequestID` field 
 Mutation correlation remains unchanged. No alias, compatibility path, producer envelope change, or new public client
 is added.
 
-The existing research-graph E2E reads the production classify result stamped on its seeded loop entity and requires
-`research.classify.candidate-count` to parse as an integer greater than zero. Focused adapter fixtures, not pipeline
-completion, prove the full-entity-only representation path.
+The existing research-graph E2E seeds one canonical authority entity through the existing graph-mutation client and
+installs a test-owned responder on the existing `graph.embedding.query.search` operation. The responder returns that
+entity ID above the production relevance threshold. Production graph-query must authoritative-load and return the full
+entity, and the production classify result stamped on the loop entity must report
+`research.classify.candidate-count` greater than zero. This fixture adds no shipped component, port, configuration,
+storage, retry, or readiness behavior and does not claim to validate embedding quality. Focused adapter fixtures retain
+exhaustive representation coverage.
 
 The existing `test-http-gateway` stage provides the live strategy proof through its controlled
 `globalSearch("robot warehouse", level:0)` request. It selects and decodes `strategy`, requires exactly `graphrag`, and

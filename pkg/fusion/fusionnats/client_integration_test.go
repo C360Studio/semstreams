@@ -71,9 +71,12 @@ func TestIntegration_RetrievalClient_RealWire(t *testing.T) {
 		if req.ID == "missing" {
 			return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeEntityNotFound, errors.New("not found"))
 		}
-		return json.Marshal(graph.EntityState{ID: req.ID, Triples: []message.Triple{
-			{Subject: req.ID, Predicate: "dc.terms.title", Object: "Widget"},
-		}})
+		return json.Marshal(graph.ExactEntity{
+			Entity: &graph.EntityState{ID: req.ID, Triples: []message.Triple{
+				{Subject: req.ID, Predicate: "dc.terms.title", Object: "Widget"},
+			}},
+			KVRevision: 7,
+		})
 	})
 	// The batch responder MODELS the real handler rather than echoing a fixed pair:
 	// it answers only for IDs it knows, reports the rest as missing, and — like

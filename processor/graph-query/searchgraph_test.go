@@ -67,10 +67,10 @@ func TestSearchGraphResponseEmpty_MalformedJSONIsNonEmpty(t *testing.T) {
 // results map onto EntityDigests with similarity → Relevance and the
 // fallback-marker fields are set.
 func TestAdaptSemanticToGlobalSearchResponse_HappyPath(t *testing.T) {
-	semanticPayload := []byte(`{"similaritySearch":{"results":[
+	semanticPayload := []byte(`{"query":"drone","results":[
 		{"entity_id":"acme.x.agent.web.observation.h1","similarity":0.82},
 		{"entity_id":"acme.x.agent.web.observation.h2","similarity":0.71}
-	]}}`)
+	]}`)
 
 	got := adaptSemanticToGlobalSearchResponse(semanticPayload)
 	if got == nil {
@@ -106,8 +106,8 @@ func TestAdaptSemanticToGlobalSearchResponse_EmptyReturnsNil(t *testing.T) {
 	tests := []struct{ name, body string }{
 		{"unparseable", "not-json"},
 		{"no results key", `{}`},
-		{"empty results", `{"similaritySearch":{"results":[]}}`},
-		{"all rows missing entity_id", `{"similaritySearch":{"results":[{"similarity":0.9}]}}`},
+		{"empty results", `{"query":"x","results":[]}`},
+		{"all rows missing entity_id", `{"query":"x","results":[{"similarity":0.9}]}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
