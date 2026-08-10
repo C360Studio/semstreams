@@ -16,9 +16,9 @@ outputs for `batch`, `relationships`, `temporal`, and `searchGraph`. Each SHALL 
 `graph.query.<operation>` subject, and carry interface `graph.query` version `v1`. Agentic-tools SHALL declare no output
 for the deleted search or summary wrappers.
 
-Libraries and E2E harnesses SHALL NOT synthesize component ports. `pkg/fusion/fusionnats.Client` owns adapter behavior;
-the component that embeds it owns the six exact graph-query outputs and `GRAPH_STATUS` KV-read declaration required by
-that composition.
+Libraries and E2E harnesses SHALL NOT synthesize component ports. Slice E adds no port or configuration requirement for
+`pkg/fusion/fusionnats.Client` because no current in-repo component constructs it. Research classify and execute retain
+their already-admitted exact graph-query outputs.
 
 #### Scenario: canonical graph-query provider and gateway compose
 
