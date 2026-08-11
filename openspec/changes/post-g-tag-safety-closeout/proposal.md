@@ -1,5 +1,10 @@
 <!-- markdownlint-disable MD041 -->
 
+**Status:** Decision F implementation, independent SemStreams review, and the live pre-candidate #860 proof are
+complete and green with exact `9/0/3` deltas. Final package-manifest regeneration, strict validation, and amended-
+package review are executing as the last preparation operation. Candidate selection has not begun; no product tag
+exists, and #827 has not executed.
+
 ## Why
 
 The accepted post-G inventory found two bounded runtime correctness defects before a stable downstream pin:
@@ -34,6 +39,11 @@ promote the wider derived-state findings into runtime work.
   accepted #839 limitation without authorizing runtime work.
 - Make #860's existing crud-tools rule proof fail closed when required metrics cannot be scraped or observed. Treat an
   absent pre-increment CounterVec label series as observed zero only after collector availability is established.
+- Correct the rule-action observation seam used by #860. Shipped rule processors do not declare a `rule_events`
+  output, so its absence disables the optional notification without a publish attempt or warning. Preserve explicit
+  malformed-port and publish failures as observable failures, and count each admitted action once through
+  `semstreams_rule_action_gate_passes_total{rule_name}` after `FireEveryNEvents` admission and before execution or
+  delivery.
 - Give one test helper sole ownership of `Cmd.Wait` across timeout and cleanup so exact-candidate race proof cannot be
   failed by a second waiter.
 - Disable the Go test cache for exact-candidate proof and include the core clustering/embedding packages in the focused
@@ -47,6 +57,8 @@ promote the wider derived-state findings into runtime work.
 ### New Capabilities
 
 - `release-candidate-proof`: Defines deterministic-path disposition, exact-candidate proof, and exact-tag identity.
+- `rule-action-observability`: Defines optional rule-trigger notification and an action-gate admission counter that is
+  independent of downstream execution or delivery.
 
 ### Modified Capabilities
 
@@ -57,14 +69,16 @@ promote the wider derived-state findings into runtime work.
 
 ## Impact
 
-Runtime changes are limited to `graph/clustering`, `processor/graph-clustering`, `graph/embedding`, and
-`processor/graph-embedding`. Research changes are test fixtures and E2E assertions over the existing rule,
-component, subject, payload, and fusion paths.
+Runtime changes are limited to `graph/clustering`, `processor/graph-clustering`, `graph/embedding`,
+`processor/graph-embedding`, and the bounded `processor/rule` observability/optional-notification seam. Research
+changes are test fixtures and E2E assertions over the existing rule, component, subject, payload, and fusion paths.
 
-The bounded pre-candidate correction touches only test truth and release documentation:
-`test/e2e/scenarios/crud-tools` makes the retained #860 assertion fail closed, and
-`test/testinfra/integration_runner_contract_test.go` gives process waiting one owner across timeout and cleanup. It
-changes no production or workflow behavior.
+The bounded pre-candidate correction changes test truth, release documentation, and one narrow production
+observability/optional-notification seam. `test/e2e/scenarios/crud-tools` makes the retained #860 assertion fail
+closed, `test/testinfra/integration_runner_contract_test.go` gives process waiting one owner across timeout and
+cleanup, and the rule processor exposes admitted action gates independently of optional rule-event publication.
+Shipped configurations that omit `rule_events` continue executing actions without attempting or warning about that
+notification. No workflow behavior changes.
 
 ADR-063 is corrected because its accepted registry-miss fallback ruling conflicts with instance-exact resolution.
 ADR-068, the suspended semantic-tier change, and two workflow comment blocks receive truth corrections without
@@ -76,8 +90,9 @@ exact pre-tag proof under `candidate-proof-<fullSHA>`; product tag and artifact 
 product-Release attestation.
 The in-tree migration guide remains version-independent. Tag-specific guidance exists only in product Release notes.
 
-External producers keep the existing `StorageReference` shape and exact logical `StorageInstance`. No new public
-symbol, configuration field, subject, port, bucket, stream, service, query, or compatibility layer is added.
+External producers keep the existing `StorageReference` shape and exact logical `StorageInstance`. The only new
+operator surface is `semstreams_rule_action_gate_passes_total{rule_name}`. No new public symbol, configuration field,
+subject, port, bucket, stream, service, query, or compatibility layer is added.
 
 ## Non-goals
 
@@ -88,5 +103,7 @@ symbol, configuration field, subject, port, bucket, stream, service, query, or c
 - No community transaction, generation manifest, checkpoint, rollback store, or clustering status producer.
 - No generic store resolver, default store, bucket inference, alternate resolution authority, or store-port redesign.
 - No new research rule, subject, payload, component, top-level E2E tier, or task family.
+- No requirement for shipped rule processors to add a `rule_events` port, and no use of optional notification
+  publication as the #860 action-gate proof.
 - No compatibility shim, deprecated fallback, dual route, or downstream implementation audit.
 - No activation or task completion in the suspended `semantic-tier-split` change.

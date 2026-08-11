@@ -1,9 +1,12 @@
 # Tasks — post-G tag-safety closeout
 
 The #855 and #875 runtime corrections, deterministic research proof, and truth/disposition slice are complete. The
-bounded pre-candidate correction is implemented, focused-green, and independently approved.
-Candidate selection and proof have not begun. Every nontrivial implementation slice receives independent
-`semstreams-reviewer` approval before integration.
+earlier bounded pre-candidate proof correction is focused-green and independently approved. Decision F implementation,
+independent implementation review, and the live pre-candidate #860 proof are complete and green with exact `9/0/3`
+deltas. Final manifest generation, strict validation, and amended-package review are executing as the last preparation
+operation. Candidate selection and exact-candidate proof have not begun; no product tag exists, and #827 has not
+executed. Every nontrivial implementation slice receives independent `semstreams-reviewer` approval before
+integration.
 
 ## P. Promotion and evidence
 
@@ -73,19 +76,40 @@ Candidate selection and proof have not begun. Every nontrivial implementation sl
 - [x] D.7 Publish version-independent migration guidance for the exact-instance clean break and disclosed
   limitations. Exact candidate/tag guidance remains product-Release-only.
 - [x] D.8 Obtain technical-writer and independent SemStreams review of exact truth propagation.
-- [x] D.9 Regenerate the package manifest as the final in-tree preparation step before candidate selection.
+- [x] D.9 Regenerate the package manifest for the prior independently approved package. Decision F requires the new
+  final regeneration tracked in PF.6 before candidate selection.
 
 ## PC. Bounded pre-candidate correction
 
 - [x] PC.1 Make #860's crud-tools metrics/rule assertion fail closed: an unreachable scrape, missing required
   active-rule baseline, hot-reload timeout, or missing post-increment result fails the scenario. An absent
-  pre-increment CounterVec label series remains an observed zero after collector reachability is established.
+  pre-increment CounterVec label series remains an observed zero after collector reachability is established. This
+  initial correction does not satisfy the superseding Decision F live-delta gate.
 - [x] PC.2 Give one test helper sole ownership of `Cmd.Wait` across timeout and cleanup; add targeted race coverage
   proving cleanup kills and reaps through that owner and repeated observation preserves the result.
 - [x] PC.3 Bind cache-disabled exact-candidate Go commands and include both core graph packages in focused proof.
 - [x] PC.4 Run the full focused `go test -count=1 -race` command bound in `candidate-evidence.md` and record its green
   result before candidate selection.
 - [x] PC.5 Obtain independent SemStreams review of the bounded test-truth and evidence-contract correction.
+
+## PF. Decision F rule-action observation correction
+
+- [x] PF.1 Record the owner-approved boundary: shipped rule processors have no required `rule_events` port; absence
+  disables only optional notification without an attempt or warning, while explicit malformed/publish failures remain
+  observable.
+- [x] PF.2 Implement absent-port short-circuiting without changing rule execution or graph-event delivery behavior,
+  and preserve explicit malformed-port and configured-publication failure telemetry.
+- [x] PF.3 Add `semstreams_rule_action_gate_passes_total{rule_name}` and increment it exactly once after
+  `FireEveryNEvents` admission and before execution or delivery; add focused behavioral coverage for admitted,
+  gate-rejected, absent-notification, malformed-notification, and publication-failure paths.
+- [x] PF.4 Change #860 to use the dedicated gate-pass counter, not `semstreams_rule_events_published_total`, and fail
+  closed unless one live run observes exact deltas of nine triggered, zero not-triggered, and three gate passes for
+  the named rule.
+- [x] PF.5 Obtain independent SemStreams implementation review and run the live crud-tools proof green at exact
+  `9/0/3`. Retain #860 for the exact-candidate E.4 rerun; this pre-candidate result does not authorize tagging.
+- [x] PF.6 Freeze all Decision F covered artifacts and execute package-manifest regeneration, strict OpenSpec
+  validation, and independent amended-package review as one final preparation operation. Make no covered-artifact edit
+  afterward; any correction requires another manifest regeneration and review before candidate selection.
 
 ## E. Candidate proof and tag
 
@@ -96,7 +120,8 @@ Candidate selection and proof have not begun. Every nontrivial implementation sl
   contract, and strict OpenSpec commands with exact provenance. Every `go test` command uses `-count=1`; the focused
   command covers core graph packages as well as processor wrappers and support/scenario packages.
 - [ ] E.4 Run and record statistical, agentic, deep-research, the single research direct-plus-execute invocation,
-  crud-tools for distinct #301/#860 assertions, and ops for #844.
+  crud-tools for distinct #301/#860 assertions, and ops for #844. The #860 assertion requires exact live deltas of
+  nine triggered, zero not-triggered, and three gate passes and does not use `events_published_total`.
 - [ ] E.5 Run semantic E2E with recorded 30–60 second `/readyz`, authoritative-counter, and stage-timestamp polling;
   abort and fail proof when authoritative state proves the run wedged.
 - [ ] E.6 Record independent review and exact-SHA green GitHub CI in candidate proof.

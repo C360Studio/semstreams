@@ -97,7 +97,13 @@ command SHALL cover both core graph packages, both processor wrappers, the store
 the crud-tools and research-graph scenario packages.
 
 One `task e2e:research-graph` invocation SHALL prove both isolated direct and execute/fusion rounds. One
-`task e2e:crud-tools` invocation MAY prove #301 and #860 only when their distinct assertions are identified.
+`task e2e:crud-tools` invocation MAY prove #301 and #860 only when their distinct assertions are identified. The #860
+assertion SHALL send nine matching events to a rule configured with `FireEveryNEvents = 3` and observe exact per-rule
+deltas of nine `semstreams_rule_evaluations_total{result="triggered"}` increments, zero
+`semstreams_rule_evaluations_total{result="not_triggered"}` increments, and three
+`semstreams_rule_action_gate_passes_total` increments. It SHALL NOT use
+`semstreams_rule_events_published_total` as evidence of gate admission. An unreachable scrape, missing required
+series after collector reachability is established, non-converging value, or different delta SHALL make #860 red.
 
 Long-running paid or resource-intensive proof SHALL be polled every 30–60 seconds using `/readyz`, authoritative
 counters, and stage timestamps. A provably wedged run SHALL be aborted rather than allowed to consume its natural
@@ -116,6 +122,22 @@ timeout.
 - **WHEN** the operator confirms the run cannot converge
 - **THEN** the run is aborted
 - **AND** the candidate remains unproven
+
+#### Scenario: The retained #860 gate observes exact action admission
+
+- **GIVEN** a live rule named by the fixture with `FireEveryNEvents = 3`
+- **WHEN** the crud-tools scenario sends nine matching events
+- **THEN** the triggered-evaluation delta is exactly nine
+- **AND** the not-triggered-evaluation delta is exactly zero
+- **AND** the named rule's action-gate-pass delta is exactly three
+- **AND** optional rule-event publication metrics are not used to infer admission
+
+#### Scenario: The retained #860 deltas do not converge
+
+- **GIVEN** the #860 live proof has established collector reachability
+- **WHEN** any required series is missing or any required delta differs from nine, zero, and three respectively
+- **THEN** #860 is red
+- **AND** tag authorization remains blocked
 
 ### Requirement: Tag authorization and publication are separate evidence phases
 

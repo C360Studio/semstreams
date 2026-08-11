@@ -194,6 +194,9 @@ func (rp *Processor) fireRuleActions(
 			"rule_name", ruleName, "fire_every_n_events", n)
 		return
 	}
+	if rp.metrics != nil && rp.metrics.actionGatePassesTotal != nil {
+		rp.metrics.actionGatePassesTotal.WithLabelValues(ruleName).Inc()
+	}
 
 	rp.logger.Debug("Rule triggered", "rule_name", ruleName)
 
