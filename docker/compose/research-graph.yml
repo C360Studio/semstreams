@@ -41,7 +41,7 @@ services:
       context: ../..
       dockerfile: test/e2e/mock/Dockerfile
     container_name: semstreams-research-graph-mock-llm
-    command: ["--scenario", "research-graph"]
+    command: ["--scenario", "${RESEARCH_GRAPH_MOCK_SCENARIO:-research-graph}"]
     ports:
       - "48180:8080"  # Mock LLM (4xxxx range)
     networks:

@@ -2,14 +2,15 @@ version: "3"
 
 # Research-Graph Tier: ADR-045 Phase 1 R0-R6 chain end-to-end
 # Uses the same mock OpenAI server shape as e2e:agentic, scripted via
-# --scenario=research-graph (test/e2e/mock/cmd/main.go).
+# --scenario=research-graph or research-graph-execute
+# (test/e2e/mock/cmd/main.go).
 #
 # Override with AGENTIC_LLM_URL=http://localhost:11434/v1 for real LLM
 # testing (response quality + JSON-shape adherence at scale).
 
 tasks:
   default:
-    desc: "Research-graph tier: ADR-045 R0-R6 chain end-to-end (~30s)"
+    desc: "Research-graph tier: direct + walk_seeds R0-R6 paths (~60s)"
     silent: false
     deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
     cmds:
@@ -17,8 +18,14 @@ tasks:
       - docker compose -f docker/compose/research-graph.yml up -d --wait --build
       - defer: docker compose -f docker/compose/research-graph.yml down -v --timeout 15
       - echo "[OK] Services are healthy (NATS + mock-llm + semstreams)"
-      - echo "[RESEARCH-GRAPH] Running research-graph scenario..."
+      - echo "[RESEARCH-GRAPH] Running preserved synthesize_directly scenario..."
       - cd cmd/e2e && ./e2e --scenario research-graph --base-url http://localhost:48080 --output-dir ./test/e2e/results --metrics-url http://localhost:49090
+      - echo "[RESEARCH-GRAPH] Resetting isolated fixture state..."
+      - docker compose -f docker/compose/research-graph.yml down -v --timeout 15
+      - echo "[RESEARCH-GRAPH] Starting walk_seeds execute fixture..."
+      - RESEARCH_GRAPH_MOCK_SCENARIO=research-graph-execute docker compose -f docker/compose/research-graph.yml up -d --wait --build
+      - echo "[RESEARCH-GRAPH] Running production execute/fusion/assessment/synthesis path..."
+      - cd cmd/e2e && ./e2e --scenario research-graph-execute --base-url http://localhost:48080 --output-dir ./test/e2e/results --metrics-url http://localhost:49090
 
   up:
     desc: Start research-graph tier services without running tests
