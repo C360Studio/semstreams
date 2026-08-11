@@ -11,7 +11,7 @@ nontrivial implementation slice receives independent `semstreams-reviewer` appro
   approval.
 - [x] P.3 Apply every design-review correction, add the disposition/evidence artifacts, regenerate the acyclic package content root `manifest.sha256`, run strict OpenSpec validation, and verify exact package scope. No manifest-covered artifact may require the manifest's digest.
 - [x] P.4 Obtain independent `DESIGN PASS` on the exact checksum-addressed corrected package.
-- [ ] P.5 Record final owner rulings without widening runtime authority.
+- [x] P.5 Record final owner rulings without widening runtime authority.
 
 ## A. #855 incomplete community candidate
 
@@ -49,7 +49,7 @@ nontrivial implementation slice receives independent `semstreams-reviewer` appro
 ## C. Research execute/fusion proof
 
 - [ ] C.1 Preserve the current direct fixture and all positive/negative assertions.
-- [ ] C.2 Add an explicit isolated mock/scenario mode for a deterministic non-trivial route; prefer `walk_seeds` with
+- [ ] C.2 Add an explicit isolated mock/scenario mode for a deterministic non-trivial route using `walk_seeds` with
   the controlled candidate-index seed.
 - [ ] C.3 Assert execute completion, positive evidence count, controlled evidence identity, assessment completion and
   sufficiency, terminal synthesis, exact evidence references, completion envelope, and R6 continuation.

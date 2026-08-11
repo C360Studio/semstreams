@@ -1,6 +1,7 @@
 # Post-G tag-safety disposition ledger
 
-**Status:** PENDING binding owner decisions. Any PENDING required field blocks candidate freeze.
+**Status:** Binding disposition policy owner-approved on 2026-08-11. Per-finding dispositions and candidate evidence
+remain PENDING; any PENDING required field blocks candidate freeze.
 
 **Binding owner:** SemStreams repository owner.
 
@@ -8,6 +9,11 @@
 decision authority.
 
 **Candidate SHA:** PENDING
+
+**Binding policy:** #301, #844, and #860 are evaluated individually during D.5 as `retained-green` or
+`folded-with-replacement`; wrapper output cannot be relabeled to manufacture success. Every other row remains
+disposition-only unless separately owner-promoted, and no row authorizes silent runtime scope expansion. This policy
+does not decide the PENDING per-finding outcomes below.
 
 | Finding | Surface | Owner decision | Disposition | Owner / decided at UTC | Candidate SHA | Retained or replacement coverage | Exact command and result | Evidence pointer |
 |---|---|---|---|---|---|---|---|---|

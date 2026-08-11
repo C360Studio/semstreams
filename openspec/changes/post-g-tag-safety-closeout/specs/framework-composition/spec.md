@@ -9,9 +9,9 @@ configured execution path is available. A partial graph-research configuration M
 error rather than register a tool that can stall.
 
 Repository-owned deterministic proof SHALL retain both admitted branch shapes: `synthesize_directly`, which bypasses
-execute and assess, and a non-trivial route that traverses `execute_subqueries`, `fusion.Fuse`, assessment, and terminal
-synthesis. The two branches SHALL be asserted independently so success on one cannot mask absence or misrouting of the
-other.
+execute and assess, and a deterministic `walk_seeds` route that traverses `execute_subqueries`, `fusion.Fuse`,
+assessment, and terminal synthesis. The two branches SHALL be asserted independently so success on one cannot mask
+absence or misrouting of the other.
 
 #### Scenario: Graph research is absent by choice
 
@@ -44,9 +44,9 @@ other.
 - **AND** execute and assess completion markers are absent
 - **AND** the result remains retrievable by the parent
 
-#### Scenario: The execute and fusion route is independently proven
+#### Scenario: The walk-seeds execute and fusion route is independently proven
 
-- **GIVEN** the deterministic non-trivial-route fixture with controlled graph evidence
+- **GIVEN** the deterministic `walk_seeds` fixture with controlled graph evidence
 - **WHEN** a research invocation completes
 - **THEN** `execute_subqueries` invokes the production fusion path
 - **AND** execute completion carries a positive evidence count and controlled evidence identity

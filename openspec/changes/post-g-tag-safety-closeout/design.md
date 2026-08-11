@@ -1,6 +1,6 @@
 # Post-G tag-safety closeout design
 
-**Status:** Corrected exact checksum-addressed target state received independent `DESIGN PASS` and awaits final owner rulings before implementation.
+**Status:** Corrected exact checksum-addressed target state received independent `DESIGN PASS`. The repository owner approved all binding design rulings on 2026-08-11; implementation has not begun.
 
 **Baseline:** `4593996ef56f50766dcf58fe2200081b72a59133`
 
@@ -48,7 +48,7 @@ It adds no generic abstraction or adopter-facing knob.
 | Option | Result | Ruling |
 |---|---|---|
 | Keep registry-first plus unnamed fallback | Preserves the wrong-store ambiguity. | Rejected. |
-| Resolve only the exact registered name; exclude misses | One identity authority, no prediction, existing exclusion semantics. | Recommended. |
+| Resolve only the exact registered name; exclude misses | One identity authority, no prediction, existing exclusion semantics. | Owner-approved on 2026-08-11. |
 | Validate a configured fallback against inferred bucket/name | Creates a second identity authority and compatibility mechanism. | Rejected. |
 | Redesign generic storage and ports | Expands beyond #875. | Rejected. |
 
@@ -58,7 +58,7 @@ It adds no generic abstraction or adopter-facing knob.
 |---|---|---|
 | Keep direct-only proof | Leaves execute/fusion unproven. | Rejected. |
 | Replace direct proof | Loses the direct-route negative assertions. | Rejected. |
-| Run isolated direct and execute fixtures under the existing research task | Deterministic attribution with no production surface. | Recommended. |
+| Run isolated direct and execute fixtures under the existing research task | Deterministic attribution with no production surface. | Owner-approved on 2026-08-11; the execute fixture uses `walk_seeds`. |
 | Add another E2E tier | Collides with the frozen tier work and adds unnecessary operator surface. | Rejected. |
 
 ## Decision A: complete-candidate gate for #855
@@ -138,7 +138,7 @@ The existing `synthesize_directly` fixture remains intact and continues assertin
 - completion envelope; and
 - R6 continuation.
 
-A second explicit fixture selects a deterministic non-trivial route. The preferred bounded implementation is an
+A second explicit fixture selects a deterministic non-trivial route. The owner-approved bounded implementation is an
 isolated mock/scenario mode returning `walk_seeds` with the existing seeded candidate index, sufficient assessment, and
 synthesis quoting the returned evidence. Direct and execute modes run as isolated compose rounds under the existing
 `task e2e:research-graph`. No prompt-quality inference chooses the test branch.
@@ -168,15 +168,17 @@ The implementation documentation slice:
 - adds a premise-status annotation to suspended `semantic-tier-split` without unfreezing it or completing tasks; and
 - corrects stale comments in `e2e-ladder.yml` and `sister-validation.yml` without changing workflow behavior.
 
-Before candidate freeze, #301, #844, and #860 each receive one owner-recorded disposition:
+Owner-approved policy (2026-08-11): before candidate freeze, #301, #844, and #860 each receive one owner-recorded
+disposition:
 
 1. retained/advertised and green on the candidate; or
 2. owner-approved fold/delete with explicit replacement coverage green on the candidate.
 
 An honest nonzero wrapper result is evidence of a red path, not grounds to relabel it a harness success.
 
-Every disposition-only matrix finding receives an owner row: accepted release limitation, separately approved blocker,
-or deferred named program. Inventory presence alone is not conformance and does not authorize implementation.
+Every other matrix finding remains disposition-only unless separately owner-promoted. Each receives an owner row:
+accepted release limitation, separately approved blocker, or deferred named program. Inventory presence alone is not
+conformance, does not authorize implementation, and cannot silently expand runtime scope.
 
 The authoritative in-tree disposition ledger is `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md`. The repository owner owns every binding decision; the technical writer owns faithful transcription and conservative task truth. Each row requires the finding, decision, disposition, owner identity/time, candidate SHA, retained or replacement coverage, exact command/result provenance, and evidence pointer.
 
@@ -236,10 +238,25 @@ blockers.
   state-dependent mock sequencing.
 - Release disposition can block freeze. That is the purpose of the gate.
 
-## Unresolved binding rulings
+## Binding owner rulings
 
-- Final ADR-063 supersession wording remains owner-owned.
-- #301, #844, and #860 retain/fold outcomes remain owner-owned.
-- Every disposition-only matrix row remains owner-owned.
-- Whether the deterministic non-trivial research fixture uses `walk_seeds` or `decompose` may be selected during
-  implementation, but it must have controlled nonzero evidence and the assertions above. `walk_seeds` is recommended.
+The repository owner approved these rulings on 2026-08-11:
+
+- Exact `StorageInstance` registration in `StoreRegistry` is the sole resolution authority; implementation removes the
+  unnamed fallback accepted by ADR-063.
+- #301, #844, and #860 are evaluated individually during D.5 as retained and green or folded/deleted with explicit
+  replacement coverage green. A wrapper result is not relabeled to manufacture success. The individual outcomes
+  remain PENDING until D.5 records their evidence.
+- Every other matrix finding remains disposition-only unless separately owner-promoted; no finding silently expands
+  runtime scope. Individual row dispositions remain PENDING until D.6 records them.
+- The deterministic research execute fixture uses `walk_seeds` with controlled nonzero evidence and the assertions
+  above.
+
+## Binding owner-ruling conformance
+
+| Owner-approved ruling | Result | Target-state locations |
+|---|---|---|
+| Exact `StorageInstance` registration in `StoreRegistry` is the sole authority; remove the ADR-063 unnamed fallback. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md:94`; `openspec/changes/post-g-tag-safety-closeout/design.md:96`; `openspec/changes/post-g-tag-safety-closeout/specs/graph-embedding/spec.md:5`; `openspec/changes/post-g-tag-safety-closeout/tasks.md:36`; `openspec/changes/post-g-tag-safety-closeout/tasks.md:44` |
+| Evaluate #301/#844/#860 individually during D.5 as retain-and-green or fold/delete with replacement coverage; never relabel wrapper failure. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md:171`; `openspec/changes/post-g-tag-safety-closeout/design.md:177`; `openspec/changes/post-g-tag-safety-closeout/specs/release-candidate-proof/spec.md:5`; `openspec/changes/post-g-tag-safety-closeout/tasks.md:67`; `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md:13`; `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md:20` |
+| Keep every other matrix finding disposition-only absent separate owner promotion; do not silently expand runtime scope. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md:179`; `openspec/changes/post-g-tag-safety-closeout/specs/release-candidate-proof/spec.md:10`; `openspec/changes/post-g-tag-safety-closeout/tasks.md:68`; `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md:14`; `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md:23` |
+| Bind the deterministic research execute fixture to `walk_seeds`. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md:141`; `openspec/changes/post-g-tag-safety-closeout/specs/framework-composition/spec.md:11`; `openspec/changes/post-g-tag-safety-closeout/specs/framework-composition/spec.md:47`; `openspec/changes/post-g-tag-safety-closeout/tasks.md:52` |
