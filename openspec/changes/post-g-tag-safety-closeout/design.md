@@ -1,9 +1,11 @@
 # Post-G tag-safety closeout design
 
-**Status:** Corrected exact checksum-addressed target state received independent `DESIGN PASS`. The repository owner
+**Status:** The prior exact checksum-addressed target state received independent `DESIGN PASS`. The repository owner
 approved all binding design rulings on 2026-08-11. Runtime slices #855 and #875, research execute/fusion proof, and
-truth/disposition merged as #933, #934, #936, and #937. This pre-candidate correction removes the remaining evidence
-cycle. Candidate selection and proof have not begun.
+truth/disposition merged as #933, #934, #936, and #937. Decision F implementation, independent implementation review,
+and the live pre-candidate #860 proof are complete and green with exact `9/0/3` deltas. Refreshed manifest generation,
+strict validation, and amended-package review are executing as the final preparation operation. Candidate selection
+and proof have not begun; no product tag exists, and #827 has not executed.
 
 **Baseline:** `4593996ef56f50766dcf58fe2200081b72a59133`
 
@@ -17,14 +19,17 @@ requires the manifest's digest. Candidate proof records the selected manifest's 
 
 ## Boundary
 
-Only #855 and #875 are runtime correction slices. Research work proves an existing execution path. Release work
-corrects truth and establishes the external candidate-proof and release-attestation contracts.
+#855 and #875 remain the original runtime correctness slices. Decision F adds only the bounded `processor/rule`
+observability/optional-notification correction required to make #860 truthful. Research work proves an existing
+execution path. Release work corrects truth and establishes the external candidate-proof and release-attestation
+contracts.
 
-The bounded pre-candidate correction also changes test truth, not production behavior. The existing crud-tools
-scenario must fail closed when #860's required metrics proof is unreachable or does not converge. The integration
-runner contract test must give `Cmd.Wait` one owner across timeout and cleanup. Exact-candidate Go commands bypass the
-test cache and the focused command covers core graph packages as well as processor wrappers. No workflow behavior
-changes.
+The bounded pre-candidate correction changes test truth plus one narrow production observability and optional-
+notification seam. The existing crud-tools scenario must fail closed when #860's required metrics proof is
+unreachable or does not converge. Rule processors must expose admission through a dedicated gate-pass counter and
+must treat an absent optional `rule_events` output as disabled, not as a failed publish. The integration-runner
+contract test must give `Cmd.Wait` one owner across timeout and cleanup. Exact-candidate Go commands bypass the test
+cache and the focused command covers core graph packages as well as processor wrappers. No workflow behavior changes.
 
 DI-01 through DI-03, #619, #672, and temporal poison/cleanup are deferred to the Derived-Index Convergence Program.
 DI-04 is deferred to the Anomaly Lifecycle and Retention Program. #857 is deferred to the Payload Bounds and
@@ -43,6 +48,7 @@ It adds no generic abstraction or adopter-facing knob.
 | Embedding operator | Run the named storage component that owns the reference. | Exact registered refs resolve; missing names are excluded. | Existing component/store discovery and metrics. | No duplicate wiring or fallback store. |
 | Clustering/query adopter | Nothing new. | An incomplete run cannot prune or claim completion, but successful or partial writes may overwrite entity mappings and readers may observe a mixed prior/candidate projection. | Existing clustering query behavior and error telemetry. | No knowledge of NATS payload ceilings or partition internals. |
 | Research adopter | Existing direct and non-trivial routes remain. | The capability behaves as today; the repository gains deterministic proof of both. | Existing `research_graph` result and E2E evidence. | No rule subjects, KV keys, or fixture mechanics. |
+| Rule processor operator | Nothing for shipped configurations; `rule_events` remains optional. | Actions still execute. No notification is attempted and no missing-port warning is emitted; admitted gates remain visible by rule name. | `semstreams_rule_action_gate_passes_total{rule_name}` and existing explicit malformed/publish failure telemetry. | No dummy notification port or inference from a delivery counter. |
 | Release owner | Select one immutable SHA, publish its non-product candidate proof, then publish a separate product-Release attestation. | Tag authorization is blocked until every pre-tag gate is green. | The checksum-addressed change package and evidence schema. | No evidence cycle, self-reference, inference from issue labels, wrapper silence, or downstream guesses. |
 | Downstream repository | Pin the exact published tag, then migrate and test. | It remains safely on its prior pin. | Product Release notes and version-independent migration guide. | No pre-tag lockstep or compatibility shim. |
 
@@ -213,17 +219,18 @@ attestation. The in-tree `candidate-evidence.md` is only the schema for those ex
 | Community writer | The detector remains the sole partition writer. No manifest, generation, or rollback writer is added. |
 | Community lifecycle | Save candidate, require completeness, then prune remains the sole replacement lifecycle. |
 | Store identity | `StoreRegistry` is the sole `StorageInstance → store` authority. The owned fallback is removed. |
-| Ports | Existing store-provide/store-read federation remains; no second port or config vocabulary appears. |
+| Ports | Existing store-provide/store-read federation remains; no second port or config vocabulary appears. Shipped rule processors remain valid without `rule_events`. |
+| Rule observability | One gate-pass counter observes admitted actions independently of optional notification delivery. |
 | Research | Existing rules, subjects, payloads, components, and fusion remain. Fixtures observe them. |
 | E2E ownership | Existing research task owns both branch runs; no parallel tier capability is created. |
 | Release truth | `disposition-ledger.md` binds decisions; `candidate-evidence.md` defines both external schemas. Exact-SHA pre-tag proof and post-publication attestation remain separate. Both in-tree artifacts are covered by `manifest.sha256`. |
 | Frozen change | `semantic-tier-split` stays suspended and does not own this release proof. |
 
-## Decision E: bounded pre-candidate test truth correction
+## Decision E: bounded pre-candidate proof truth correction
 
-The retained #860 proof is meaningful only when the crud-tools scenario observes the rule metric. The scenario SHALL
-fail when the required metrics scrape is unreachable, when the active-rule gauge does not converge after hot reload,
-or when the expected `fire_every_n_events` increments do not appear. An absent labeled CounterVec series before its
+The retained #860 proof is meaningful only when the crud-tools scenario observes the required rule metrics. The
+scenario SHALL fail when the required metrics scrape is unreachable, when the active-rule gauge does not converge
+after hot reload, or when the exact Decision F deltas do not appear. An absent labeled CounterVec series before its
 first increment remains a valid observed zero only after a successful scrape has established that the metrics
 collector is reachable. Absence is not equivalent to an unreachable scrape.
 
@@ -234,8 +241,34 @@ subsequent observations.
 
 Every exact-candidate `go test` command uses `-count=1`. The focused command includes `./graph/clustering` and
 `./graph/embedding` alongside both processor wrappers, store registry, test infrastructure, and the retained scenario
-packages. These corrections alter only test/proof behavior and require focused verification plus independent review
-before candidate selection.
+packages. These proof corrections require focused verification plus independent review before candidate selection.
+
+## Decision F: optional rule notification and action-gate observability
+
+The repository's shipped rule processors do not declare a `rule_events` output port. That port is an optional
+notification seam, not a prerequisite for rule action execution. When the port is absent, the processor SHALL skip
+notification construction and publication without a publish attempt, error, or warning. Rule execution and graph-
+event delivery continue through their existing paths.
+
+Absence is distinct from explicit failure. If `rule_events` is present but its facts or subject declaration is
+malformed, that failure remains observable through the existing error path. If its configured publication fails, the
+failure remains observable through the existing warning/error telemetry. Neither case may be silently downgraded to
+the absent-port behavior.
+
+The rule processor adds
+`semstreams_rule_action_gate_passes_total{rule_name}`. It increments exactly once after a match is admitted by
+`FireEveryNEvents` and before rule-event execution or any delivery attempt. It does not increment for matches rejected
+by the gate. Because its position is independent of optional notification, empty action lists, malformed actions,
+notification publication, and graph-event delivery cannot fabricate or erase an admission already counted.
+
+The retained #860 live proof sends nine matching events to a rule configured with `FireEveryNEvents = 3`. For the
+named rule it requires exact deltas of nine from
+`semstreams_rule_evaluations_total{result="triggered"}`, zero from
+`semstreams_rule_evaluations_total{result="not_triggered"}`, and three from
+`semstreams_rule_action_gate_passes_total`. It no longer reads or infers admission from
+`semstreams_rule_events_published_total`. A missing metric, scrape failure, non-converging delta, or any different
+exact delta is red. The live pre-candidate run is green at exact `9/0/3`; #860 remains a retained gate that must be
+rerun on the exact candidate under E.4 after candidate selection.
 
 ## Candidate and tag proof
 
@@ -271,7 +304,8 @@ task e2e:ops
 
 The semantic gate adds active 30–60 second polling of `/readyz`, authoritative counters, and stage timestamps. The
 single research invocation proves isolated direct and execute/fusion rounds. The single crud-tools invocation proves
-distinct #301 and #860 assertions; the ops invocation proves #844.
+distinct #301 and #860 assertions; #860 records exact deltas of nine triggered, zero not-triggered, and three action-
+gate passes without using `semstreams_rule_events_published_total`. The ops invocation proves #844.
 
 A provably wedged paid run is aborted rather than left to timeout. Independent SemStreams review and green GitHub CI
 are tied to the same complete candidate SHA. Any correction selects a new candidate SHA and invalidates affected
@@ -295,6 +329,8 @@ edited after proof. Downstream repositories pin that tag afterward and are not e
 - A store deregistration race can exclude one revision's body. The outcome remains observable and non-degrading.
 - Two isolated research branch runs increase E2E time. Isolation provides deterministic attribution and avoids
   state-dependent mock sequencing.
+- Omitting `rule_events` suppresses only the optional notification. Explicitly configured malformed ports and publish
+  failures remain observable, so operators do not lose signal for configuration or transport defects.
 - Red candidate proof can block tag authorization. That is the purpose of the gate.
 
 ## Binding owner rulings
@@ -315,6 +351,9 @@ The repository owner approved these rulings on 2026-08-11:
   candidate-proof Release; post-publication facts live in a separate product-Release attestation.
 - The deterministic research execute fixture uses `walk_seeds` with controlled nonzero evidence and the assertions
   above.
+- Shipped rule processors need no `rule_events` output. Its absence silently disables only the optional notification;
+  explicit malformed/publish failures remain observable. The dedicated per-rule gate-pass counter increments once
+  after `FireEveryNEvents` admission and before execution or delivery, and #860 requires exact live deltas `9/0/3`.
 
 ## Binding owner-ruling conformance
 
@@ -325,3 +364,4 @@ The repository owner approved these rulings on 2026-08-11:
 | Defer derived-index, anomaly, payload, and semantic-summary findings to their named programs; accept #839 for this tag. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md`; `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md`; `docs/operations/migration-post-g-tag-safety-closeout.md` |
 | Keep decisions/templates in-tree; separate exact-SHA candidate proof from post-publication attestation. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md`; `openspec/changes/post-g-tag-safety-closeout/candidate-evidence.md`; `openspec/changes/post-g-tag-safety-closeout/specs/release-candidate-proof/spec.md` |
 | Bind the deterministic research execute fixture to `walk_seeds`. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md`; `openspec/changes/post-g-tag-safety-closeout/specs/framework-composition/spec.md`; `openspec/changes/post-g-tag-safety-closeout/tasks.md` |
+| Keep `rule_events` optional and prove #860 through the dedicated post-gate counter with exact `9/0/3` live deltas. | CONFORMS; PRE-CANDIDATE LIVE PROOF GREEN, EXACT-CANDIDATE RERUN PENDING | `openspec/changes/post-g-tag-safety-closeout/design.md`; `openspec/changes/post-g-tag-safety-closeout/specs/rule-action-observability/spec.md`; `openspec/changes/post-g-tag-safety-closeout/specs/release-candidate-proof/spec.md`; `openspec/changes/post-g-tag-safety-closeout/tasks.md` |

@@ -174,22 +174,6 @@ func isNilRuleEvent(event Event) bool {
 
 // publishRuleEvent publishes a rule-specific event to the configured output port
 func (rp *Processor) publishRuleEvent(ctx context.Context, ruleName, eventType string) error {
-
-	// Create rule event payload
-	ruleEvent := map[string]any{
-		"rule_name":  ruleName,
-		"event_type": eventType,
-		"timestamp":  time.Now().Format(time.RFC3339),
-		"processor":  "rule-processor",
-		"action":     eventType, // For backward compatibility with tests
-	}
-
-	// Marshal event
-	data, err := json.Marshal(ruleEvent)
-	if err != nil {
-		return errs.Wrap(err, "RuleProcessor", "publishRuleEvent", "marshal rule event")
-	}
-
 	var subject string
 	for _, port := range rp.outputPorts {
 		if port.Name != "rule_events" {
@@ -207,7 +191,23 @@ func (rp *Processor) publishRuleEvent(ctx context.Context, ruleName, eventType s
 		break
 	}
 	if subject == "" {
-		return fmt.Errorf("rule_events output port is required")
+		return nil
+	}
+	if rp.natsClient == nil {
+		return errs.WrapFatal(errs.ErrInvalidConfig, "RuleProcessor", "publishRuleEvent", "publisher is not configured")
+	}
+
+	// Construct notification payload only when the optional output is enabled.
+	ruleEvent := map[string]any{
+		"rule_name":  ruleName,
+		"event_type": eventType,
+		"timestamp":  time.Now().Format(time.RFC3339),
+		"processor":  "rule-processor",
+		"action":     eventType, // For backward compatibility with tests
+	}
+	data, err := json.Marshal(ruleEvent)
+	if err != nil {
+		return errs.Wrap(err, "RuleProcessor", "publishRuleEvent", "marshal rule event")
 	}
 
 	// Publish to NATS, respecting port type configuration

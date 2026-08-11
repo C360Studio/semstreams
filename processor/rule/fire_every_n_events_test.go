@@ -1,11 +1,15 @@
 package rule
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"sync/atomic"
 	"testing"
 
 	"github.com/c360studio/semstreams/message"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -99,6 +103,79 @@ func TestFireEveryNEvents_RulesDoNotShareCounters(t *testing.T) {
 	assert.True(t, results[3].bFired, "B event 4: fire")
 	assert.False(t, results[4].bFired, "B event 5")
 	assert.True(t, results[5].bFired, "B event 6: fire")
+}
+
+func TestActionGatePassMetricCountsAdmittedMatches(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		n     int
+		calls int
+		want  float64
+	}{
+		{name: "N zero admits every match", n: 0, calls: 9, want: 9},
+		{name: "N one admits every match", n: 1, calls: 9, want: 9},
+		{name: "N three admits every third match", n: 3, calls: 9, want: 3},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			metrics := &Metrics{
+				actionGatePassesTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+					Name: "test_rule_action_gate_passes_total",
+				}, []string{"rule_name"}),
+			}
+			processor := &Processor{
+				logger:  slog.Default(),
+				config:  &Config{PackID: "action-gate-metric-test"},
+				metrics: metrics,
+			}
+			counter := &atomic.Int64{}
+			const ruleName = "metric-rule"
+			for range test.calls {
+				processor.fireRuleActions(
+					context.Background(), ruleName, true,
+					Definition{FireEveryNEvents: test.n},
+					map[string]*atomic.Int64{ruleName: counter},
+					&alwaysMatchTestRule{name: ruleName}, nil,
+				)
+			}
+			assert.Equal(t, test.want, testutil.ToFloat64(
+				metrics.actionGatePassesTotal.WithLabelValues(ruleName),
+			))
+		})
+	}
+}
+
+func TestActionGatePassMetricRecordsAdmissionBeforeExecutionFailure(t *testing.T) {
+	t.Parallel()
+
+	metrics := &Metrics{
+		actionGatePassesTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "test_rule_action_gate_pass_before_failure_total",
+		}, []string{"rule_name"}),
+		errorsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "test_rule_action_gate_execution_errors_total",
+		}, []string{"rule_name", "error_type"}),
+	}
+	processor := &Processor{
+		logger:  slog.Default(),
+		config:  &Config{PackID: "action-gate-failure-test"},
+		metrics: metrics,
+	}
+	counter := &atomic.Int64{}
+	const ruleName = "failing-rule"
+	processor.fireRuleActions(
+		context.Background(), ruleName, true, Definition{FireEveryNEvents: 1},
+		map[string]*atomic.Int64{ruleName: counter},
+		&executeErrorTestRule{name: ruleName}, nil,
+	)
+
+	assert.Equal(t, float64(1), testutil.ToFloat64(
+		metrics.actionGatePassesTotal.WithLabelValues(ruleName),
+	))
 }
 
 // TestValidateDefinition_FireEveryNEvents verifies that ValidateDefinition
@@ -286,6 +363,17 @@ func TestApplyRuleChanges_SyncsRuleDefinitions(t *testing.T) {
 // without NATS.
 type alwaysMatchTestRule struct {
 	name string
+}
+
+type executeErrorTestRule struct {
+	name string
+}
+
+func (r *executeErrorTestRule) Name() string                      { return r.name }
+func (r *executeErrorTestRule) Subscribe() []string               { return []string{">"} }
+func (r *executeErrorTestRule) Evaluate(_ []message.Message) bool { return true }
+func (r *executeErrorTestRule) ExecuteEvents(_ []message.Message) ([]Event, error) {
+	return nil, errors.New("fixture execution failure")
 }
 
 func (r *alwaysMatchTestRule) Name() string                      { return r.name }
