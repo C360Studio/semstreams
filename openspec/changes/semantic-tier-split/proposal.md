@@ -4,6 +4,14 @@
 > This change preserves historical design truth but is non-executable until the
 > [canonical program](../../../docs/proposals/graph-state-read-write-program.md)
 > explicitly releases it. Do not implement, archive, or promote it.
+>
+> **Post-G premise status — 2026-08-11.** None of the resource measurements,
+> tier-boundary assumptions, issue dependencies, or proposed CI wiring below
+> was revalidated after the graph-state foundation and post-G closeout. #829 is
+> deferred to the Semantic Summary Content/Quality Program. This historical
+> change does not own that program, the stable-tag candidate, or a current E2E
+> roadmap. A future owner must inventory the then-current tier topology before
+> deciding whether any proposal below remains useful.
 
 **The `semantic` e2e tier tests two unrelated capabilities, so its red light cannot
 tell you which one broke.** gh#830 is the proof: a `globalSearch` probe failed

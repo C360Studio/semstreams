@@ -21,10 +21,23 @@ incrementally, only as the exception paths are actually exercised.
 **Current implementation note (PR #524, 2026-07-13).** Graph-index now orders
 updates, deletes, and repair per entity and reconciles authoritative state at
 execution; this closes the stale-write/resurrection prerequisite for future
-retention work. It also self-reconciles and self-cleans entity-prefixed
-`CONTEXT_INDEX` rows. This does not implement semantic retirement: durable
-manifests, source-owned INCOMING retraction, predicate/name/alias cleanup,
-tombstone payload, blob reclamation, and purge remain follow-on scope (gh#527).
+retention work. This does not implement semantic retirement: alias, spatial, and
+temporal cleanup; tombstone semantics; blob reclamation; and purge remain
+follow-on questions (gh#527).
+
+**Post-G current-state correction (2026-08-11).** The preceding cleanup list is
+partly superseded. Current graph-index replacement/delete handling is
+owner-complete for raw-predicate `PREDICATE_INDEX`, hashed-name `NAME_INDEX`,
+source-owned `OUTGOING_INDEX`, and target-prefixed but source-owned
+`INCOMING_INDEX` rows. `CONTEXT_INDEX` is retired: it is not cataloged and is not
+created. There is no live `PREDICATE_CATALOG` bucket.
+`ALIAS_INDEX` remains the base graph-index exception: its single-value layout
+has no owner axis and production removal is incomplete. Spatial and temporal
+indexes are separate component-owned aggregate projections with their own
+malformed-value and cleanup gaps. The reverse-index/tombstone increments later
+in this proposed ADR predate that current layout and are not implementation
+authority. Any future work must begin from the Derived-Index Convergence Program
+inventory rather than treating the historical proposal as an approved plan.
 
 An adversarial code-grounded review sharpened this draft: every "what exists
 today" claim was verified against source, and the forward-looking design was
@@ -86,16 +99,14 @@ documented ways**:
   (ADR-056 §"no per-key TTL"). **So nothing is being evicted today** — the risk
   is purely that someone adds TTL/MaxBytes to bound growth.
 - **The three gaps:**
-  - **(a) Derived-index leak (gh#433).** On delete, `graph-index`
-    `DeleteFromIndexes` removes the deleted entity's own `OUTGOING_INDEX` and
-    `CONTEXT_INDEX` rows plus legacy target-prefixed `INCOMING_INDEX` rows. It
-    does NOT clean the entity's `PREDICATE_INDEX` memberships, remove it as a
-    source from other targets' INCOMING composite keys, or clean
-    `NAME_INDEX`/`ALIAS_INDEX`. Deleted entities can therefore keep answering
-    byName/predicate/alias queries. The blocker is real: a
-    KV-watch delete event carries only the deleted key, not the entity's former
-    triples (`component.go:1455-1460`), so cleanup needs a **per-entity reverse
-    index** ("which predicates/names/aliases did this entity carry").
+  - **(a) Derived-index cleanup is no longer one undifferentiated gap.** Current
+    graph-index replacement/delete handling retracts entity-owned predicate,
+    hashed-name, outgoing, and source-owned incoming rows. Alias remains
+    incomplete because `ALIAS_INDEX` stores one raw alias-to-entity value without
+    an owner axis. Spatial moves/removals/deletes can leave stale aggregate rows;
+    temporal reverse/cleanup failures can strand rows; malformed spatial or
+    temporal aggregates can be rewritten from an empty decode. Those component-
+    specific findings are deferred to the Derived-Index Convergence Program.
   - **(b) Referential incompleteness.** Deleting `A` cleans `A`'s own adjacency
     but does NOT rewrite a **referrer**: a triple `B —calls→ A` lives on `B`, so
     `A`'s deletion leaves a **dangling edge** on `B`. Reference-blind eviction
@@ -182,16 +193,18 @@ Storage-management and semantic-lifecycle are separate concerns and one must
 never do the other's job:
 
 - Live graph buckets (`ENTITY_STATES`, `PREDICATE_INDEX`, `INCOMING_INDEX`,
-  `OUTGOING_INDEX`, `NAME_INDEX`, `ALIAS_INDEX`, `CONTEXT_INDEX`,
-  `PREDICATE_CATALOG`) MUST NOT set `TTL`/`MaxAge`, and MUST NOT set a `MaxBytes`
-  that can bind under expected load. If a size cap is set at all, it is a
+  `OUTGOING_INDEX`, `NAME_INDEX`, `ALIAS_INDEX`, `ENTITY_SUFFIX_INDEX`,
+  `SPATIAL_INDEX`, `TEMPORAL_INDEX`, and
+  `TEMPORAL_INDEX_REVERSE`) MUST NOT set `TTL`/`MaxAge`, and MUST NOT set a
+  `MaxBytes` that can bind under expected load. `CONTEXT_INDEX` is retired,
+  not cataloged, and not created; there is also no current `PREDICATE_CATALOG`
+  bucket. If a size cap is set at all, it is a
   crash-prevention backstop sized to a hard multiple of projected steady state,
   and hitting it is a **paging alert**, never a designed reclamation path.
 - Rationale is one sentence: age/size eviction is **reachability-blind** and will
-  drop an entity with live inbound edges (problem-2/3 failure mode). Precedent:
-  `pkg/ownership/epoch.go` already uses a bucket TTL ONLY as an
-  `OWNER_PRESENCE` backstop, never as the reclamation mechanism (compaction on
-  CAS does the real work).
+  drop an entity with live inbound edges (problem-2/3 failure mode). Current
+  framework-owned graph catalog descriptors use no lifecycle retention; retired
+  ownership buckets are not precedent for live graph reclamation.
 
 This D1 is the increment worth landing first: it is a one-way door (a bucket
 config change is get-or-create and hard to reverse — `natsclient/client.go:970`)
@@ -211,7 +224,13 @@ The default lifecycle is **assert / supersede**, never delete:
   low-value **churn** a product explicitly opts to reclaim, or an **erasure
   request** (GDPR-style). All three are rare and operator/producer-initiated.
 
-### D3. Delete as a first-class integrity-preserving mutation
+### D3. Historical delete proposal, not current implementation authority
+
+The remainder of D3 through D5 records the original design exploration. Its
+assumed cleanup layout and birth-side stub premise have changed. No referential
+policy, reverse index, tombstone, or GC worker below is authorized by this ADR
+or the post-G closeout. Future work must re-inventory current owners and contracts
+in its named program before selecting a mechanism.
 
 `graph.mutation.entity.delete` gains an explicit **referential policy**, defaulting
 to the safe one:
@@ -240,9 +259,9 @@ to the safe one:
   referrers, refuse past the bound) and runs against tombstones (D4) so an
   in-flight cascade never exposes a truly missing target.
 
-Both policies, plus gh#433 cleanup, depend on the **same new primitive**:
+The historical draft made both policies depend on the **same new primitive**:
 
-- **Per-entity reverse index** — `entity → {predicates, names, aliases, context,
+- **Per-entity reverse index** — `entity → {predicates, names, aliases,
   outgoing-targets}` it carries, maintained on the WRITE path alongside the
   forward indexes, bounded by the entity's own triple count (NOT global
   cardinality). **This is genuinely new work, not free from gh#430.** gh#430's
@@ -255,9 +274,11 @@ Both policies, plus gh#433 cleanup, depend on the **same new primitive**:
   must include **outgoing-targets** so cleanup can remove the deleted entity as a
   stale `FromEntityID` in each peer's `INCOMING_INDEX` (that step reads
   `OUTGOING_INDEX(A)` / the reverse record BEFORE deleting it — an
-  ordering-sensitive step, see D0). This closes gh#433 (cleanup knows what to
-  remove even though the KV-watch delete event carries only the key) AND feeds
-  refuse/cascade (find referrers).
+  ordering-sensitive step, see D0). Current owner-complete predicate, name,
+  outgoing, and incoming cleanup no longer depends on this proposed
+  reverse index. Alias and the separate spatial/temporal owners require fresh
+  design in the Derived-Index Convergence Program; this paragraph does not
+  authorize that design.
 
 Owned-blob policy is **refcount-or-reachability, never naive cascade** (because
 `StorageRef` is not unique per entity): on delete, a blob is reclaimed only when
@@ -345,11 +366,12 @@ caught the naive mapping):
   ingest (miscounts strand entities). Use the `INCOMING_INDEX` as the source of
   truth for referrers; a per-entity reverse index for cleanup. Refcounts, if
   used, are a derived optimization, not the authority.
-- **Fix gh#433 standalone.** Rejected as the *unit of work* — index cleanup
-  can't be done correctly without the per-entity reverse index, and that same
-  index is what referential completeness (b) needs, so patching (a) alone leaves
-  the responsibility unnamed and (b)/(c) unaddressed. gh#433 is increment (a)
-  under this ADR.
+- **Fix gh#433 standalone (historical ruling).** The original draft rejected
+  this unit of work because it assumed all cleanup required a new per-entity
+  reverse index. Current graph-index now owns complete replacement/delete
+  cleanup for predicate, name, outgoing, and incoming rows. Alias and
+  separate spatial/temporal projections remain bounded future-program findings;
+  this historical ruling no longer selects their mechanism.
 
 ## Consequences
 
@@ -381,7 +403,12 @@ caught the naive mapping):
   past bound).
 - **Blob sharers.** Mitigated by refcount/reachability, never naive cascade.
 
-## Increments
+## Historical increments — not executable
+
+This sequence preserves the proposal's reasoning but is not an approved roadmap.
+Current base-index ownership and cleanup invalidate its shared-reverse-index
+premise, and ADR-091 invalidates its stub analogy. The named future programs must
+produce their own current inventory and owner-approved increments.
 
 Ordered by dependency — the review showed the naive order (refuse before
 tombstone) ships an un-honorable guarantee, and that the async-ordering

@@ -1,29 +1,24 @@
 name: Sister Validation
 
-# Runs the reference designs (semsource, semboids) against THIS checkout of
-# semstreams rather than against a published tag. The `go mod edit -replace`
-# step below is the whole point: it makes a sister repo's own e2e suite an
-# oracle for unreleased framework changes.
+# Manually runs two downstream holdout projects against THIS checkout of
+# semstreams rather than a published tag. The `go mod edit -replace` step makes
+# the selected downstream suite useful diagnostic evidence for unreleased
+# framework changes; it is optional and non-exhaustive, not a release oracle.
 #
-# Why this exists: the pre-v1 audit (docs/proposals/prev1-audit-synthesis.md)
-# found that the reference designs were doing the job of a pre-merge gate while
-# being triggered only after tagging. Every finding they produced (gh#600/601/602
-# from semsource, gh#590 from semboids) was therefore discovered against a
-# shipped surface, forcing sister lockstep for what would otherwise have been an
-# ordinary pre-merge fix.
+# Historical why: downstream suites exposed valuable framework findings after
+# tags. Current policy keeps them as holdout migration feedback after a stable
+# tag, with this dispatch-only workflow available for targeted diagnosis. They
+# do not force sister lockstep.
 #
 # Deliberately NO path filters. The blocking bug that audit found was a change in
 # processor/rule/ that breaks ENTITY_STATES for every consumer — any plausible
 # path filter would have skipped it.
 
 # DISABLED pre-v1 (owner, 2026-07-23) — no automatic triggers. The sisters
-# conform to semstreams at TAG boundaries (lockstep), not per-commit, so gating
-# every intermediate PR (and nightly) on a sister's full product e2e costs CI
-# time for a break we catch at tag time anyway. Meanwhile the ingest→graph→query
-# path is gated per-PR by our own e2e ladder (e2e-ladder.yml, statistical tier)
-# and cross-repo breaks are caught by tag-time lockstep + the pre-tag e2e HARD
-# RULE (CLAUDE.md). RE-ENABLE at v1/RC: restore `pull_request:` and the nightly
-# `schedule:` cron below. The workflow still runs on demand via workflow_dispatch.
+# are downstream holdout adopters, not per-commit or tag-time lockstep gates.
+# Framework ingest→graph→query remains gated by the repository's own E2E ladder
+# and pre-tag proof. Any future automatic trigger is a separate owner decision;
+# this workflow currently runs only through workflow_dispatch.
 on:
   workflow_dispatch:
     inputs:
@@ -44,7 +39,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Fast lane: highest-ROI dogfood, runs on every PR.
+  # Manual semsource lane: highest-ROI document/embedding/body dogfood.
   # semsource exercises the document/embedding/body path — the surface that
   # produced the last three bug waves.
   semsource:
@@ -95,8 +90,8 @@ jobs:
         working-directory: semsource
         run: task test:e2e
 
-  # Nightly-only: broader and slower. semboids drives the real sim against real
-  # graph-ingest at high volume — the load-dial holdout.
+  # Manual broader lane: semboids drives the real sim against real graph-ingest
+  # at high volume — the load-dial holdout.
   semboids:
     name: semboids integration
     runs-on: ubuntu-latest
@@ -144,8 +139,8 @@ jobs:
         working-directory: semboids
         run: task test:integration
 
-  # Nightly-only: the internal core tier. Cheap (~10s of test time) and it is
-  # currently the ONLY e2e tier reachable from CI at all — ci.yml runs none.
+  # Manual internal core comparison. The per-PR statistical gate lives in
+  # e2e-ladder.yml; this dispatch-only workflow is not its owner.
   semstreams-core:
     name: semstreams e2e core
     runs-on: ubuntu-latest

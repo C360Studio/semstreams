@@ -2,16 +2,19 @@
 
 ### Requirement: Every advertised deterministic path has an explicit candidate disposition
 
-Before candidate freeze, every known-red advertised deterministic path SHALL have one owner-recorded disposition:
-retained and green on the candidate, or folded/deleted with explicit replacement coverage green on the candidate.
-A nonzero test or wrapper result SHALL be treated as a red result unless the underlying path is corrected or the owner
-approves its removal and coverage transfer.
+Before candidate freeze, every retained advertised deterministic path SHALL have a green exact-candidate result in the
+detached attestation. #301, #844, and #860 are retained gates. A nonzero test or wrapper result SHALL be treated as red,
+and D SHALL NOT authorize a fix, removal, or coverage transfer merely because a retained path is red.
 
 Every release-truth finding outside the approved runtime scope SHALL likewise be recorded as an accepted limitation,
 a separately approved blocker, or a deferred named program. Recording a finding SHALL NOT imply conformance or
 implementation authority.
 
-The binding record SHALL be `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md`. Each row SHALL carry the binding owner decision, owner identity and UTC decision time, candidate SHA, retained or replacement coverage, exact command/result provenance, and evidence pointer. A blank or `PENDING` required field blocks candidate freeze.
+The binding decision record SHALL be `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md`. It SHALL
+record owner, decision date, disposition, and coverage/publication plan. It SHALL NOT predict the SHA of the commit
+that contains it. Exact candidate identity, command/results, timestamps, and evidence pointers SHALL live in the
+immutable detached GitHub Release attestation keyed to that SHA. Any required detached field left PENDING blocks
+candidate freeze.
 
 #### Scenario: A retained advertised path is red
 
@@ -20,19 +23,26 @@ The binding record SHALL be `openspec/changes/post-g-tag-safety-closeout/disposi
 - **THEN** candidate freeze is blocked
 - **AND** wrapper silence or invocation shape does not convert the red result into success
 
-#### Scenario: The owner folds an advertised path
+#### Scenario: D encounters a red retained path
 
-- **GIVEN** a known-red path the owner elects not to retain
-- **WHEN** the fold/delete disposition is recorded
-- **THEN** the removed capability is no longer advertised
-- **AND** named replacement coverage is green on the candidate
+- **GIVEN** #301, #844, or #860 is red on the exact candidate
+- **WHEN** D records the result
+- **THEN** candidate freeze stops
+- **AND** D does not authorize a runtime fix or remove the retained path
 
 #### Scenario: A matrix finding remains outside runtime scope
 
-- **GIVEN** a disposition-only finding such as DI-01 through DI-04, #619, #672, spatial/temporal cleanup, or #839/#857
+- **GIVEN** a disposition-only finding such as DI-01 through DI-04, #619, #672, temporal cleanup, #857, or #829
 - **WHEN** release disposition is recorded
 - **THEN** the row names its limitation, blocker, or owning future program
 - **AND** no runtime implementation is inferred from the disposition
+
+#### Scenario: The accepted community-value limitation is published
+
+- **GIVEN** #839 is accepted for this tag
+- **WHEN** the candidate is prepared for publication
+- **THEN** release material states that an oversized community value may be rejected by NATS
+- **AND** it claims only #855's incomplete-candidate protection, not oversized-community success
 
 ### Requirement: Release proof is tied to one exact candidate
 
@@ -40,13 +50,28 @@ The release candidate SHALL be one clean exact commit SHA. Focused tests, lint, 
 schema/no-drift, contracts, strict OpenSpec, required deterministic E2E paths, independent review, and GitHub CI SHALL
 refer to that same candidate.
 
-The authoritative proof record SHALL be `openspec/changes/post-g-tag-safety-closeout/candidate-evidence.md`, covered by `manifest.sha256`. It SHALL record candidate cleanliness; command/result provenance; semantic polls; independent review and CI identity; tag resolution; binary/container identity; and #827 outcome.
+The authoritative proof record SHALL be an immutable detached GitHub Release attestation keyed to the candidate's full
+SHA. The in-tree `candidate-evidence.md`, covered by `manifest.sha256`, SHALL define its schema but SHALL NOT be
+completed as evidence or redefine candidate identity. The detached record SHALL include candidate cleanliness,
+command/result provenance, semantic polls, retained-path results, limitation publication, independent review and CI
+identity, tag resolution, binary/container identity, and #827 outcome.
+
+The detached attestation SHALL NOT contain or require its own SHA-256. A digest MAY be carried only by external GitHub
+Release metadata or a sibling checksum asset created after upload, and SHALL NOT redefine candidate or attestation
+identity.
 
 Long-running paid or resource-intensive proof SHALL be actively polled using authoritative readiness, counters, and
 stage progress. A provably wedged run SHALL be aborted rather than allowed to consume its natural timeout.
 
 Any code, specification, evidence, generated-file, or task-truth correction after proof begins SHALL create a new
 candidate identity and invalidate affected proof, review, and CI.
+
+#### Scenario: The candidate cannot name itself
+
+- **GIVEN** the in-tree decision and attestation-template files
+- **WHEN** the candidate commit is created
+- **THEN** neither file contains or predicts that commit's SHA
+- **AND** the release owner creates the SHA-keyed detached attestation afterward
 
 #### Scenario: The candidate changes after review
 
@@ -76,7 +101,8 @@ owner-accepted limitations, and downstream migration responsibility. The coordin
 scheduled at the tag boundary; if its permitted pre-v1 window closes first, tagging SHALL halt and the operation SHALL
 become an explicit migration.
 
-Tag resolution, binary version/checksum, container reference/digest/reported version, and exact-SHA CI identity SHALL be recorded in `candidate-evidence.md`.
+Tag resolution, binary version/checksum, container reference/digest/reported version, and exact-SHA CI identity SHALL
+be recorded in the detached attestation.
 
 The built binary and published container SHALL report the intended version. Container tag and digest SHALL be recorded.
 Downstream repositories MAY pin and migrate after publication; they SHALL NOT be treated as an exhaustive pre-tag gate.

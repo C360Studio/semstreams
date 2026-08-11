@@ -1,7 +1,8 @@
 # Tasks — post-G tag-safety closeout
 
-The #855 and #875 runtime corrections and their independent reviews are complete. No other runtime or release task is
-complete. Every nontrivial implementation slice receives independent `semstreams-reviewer` approval before integration.
+The #855 and #875 runtime corrections and their independent reviews are complete. The deterministic research proof is
+also complete. Release candidate proof has not begun. Every nontrivial implementation slice receives independent
+`semstreams-reviewer` approval before integration.
 
 ## P. Promotion and evidence
 
@@ -60,28 +61,39 @@ complete. Every nontrivial implementation slice receives independent `semstreams
 
 ## D. Truth and disposition
 
-- [ ] D.1 Correct ADR-063's registry-miss fallback ruling to the owner-approved exact-instance decision.
-- [ ] D.2 Correct ADR-068's retired predicate/context/catalog assumptions to current physical ownership and cleanup.
-- [ ] D.3 Annotate suspended `semantic-tier-split` premise status without unfreezing it or completing tasks.
-- [ ] D.4 Correct stale `e2e-ladder.yml` and `sister-validation.yml` comments without workflow behavior changes.
-- [ ] D.5 Complete `disposition-ledger.md` for #301, #844, and #860 with binding owner decision, candidate SHA, retained or replacement coverage, exact command/result provenance, and evidence pointer.
-- [ ] D.6 Complete the same ledger fields for DI-01 through DI-04, #619, #672, spatial/temporal malformed aggregate and cleanup findings, #839/#857, and #829 without implementing them in this change.
-- [ ] D.7 Publish release notes and migration guidance naming the fallback clean break and accepted limitations.
+- [x] D.1 Correct ADR-063's registry-miss fallback ruling to the owner-approved exact-instance decision.
+- [x] D.2 Correct ADR-068's retired predicate/context/catalog assumptions to current physical ownership and cleanup.
+- [x] D.3 Annotate suspended `semantic-tier-split` premise status without unfreezing it or completing tasks.
+- [x] D.4 Correct stale `e2e-ladder.yml` and `sister-validation.yml` comments without workflow behavior changes.
+- [ ] D.5 Record #301, #844, and #860 as retained exact-candidate gates, then publish their exact SHA, commands,
+  results, timestamps, and evidence pointers in the detached GitHub Release attestation. Any red path stops freeze;
+  D authorizes no fix.
+- [ ] D.6 Record the binding accepted/deferred decisions for DI-01 through DI-04, #619, #672, temporal malformed and
+  reverse cleanup, #839, #857, and #829, then publish every limitation and evidence pointer in the exact-candidate
+  detached attestation without implementing them in this change.
+- [ ] D.7 Publish final release notes and migration guidance naming the exact candidate/tag, retained-path outcomes,
+  fallback clean break, and accepted/deferred limitations.
 - [ ] D.8 Obtain technical-writer and independent SemStreams review of exact truth propagation.
-- [ ] D.9 Regenerate the package manifest after every truth or task edit.
+- [x] D.9 Regenerate the package manifest after every truth or task edit.
 
 ## E. Candidate proof and tag
 
-- [ ] E.1 Create `candidate-evidence.md` for one clean exact candidate SHA and record clean generated schemas/specs.
-- [ ] E.2 Record focused tests, lint, full race, integration, schema/no-drift, contracts, and strict OpenSpec with exact
-  command, UTC start/end, exit/result, runner identity, and log/artifact checksum.
+- [ ] E.1 Create one clean exact candidate, then create its immutable detached GitHub Release attestation from the
+  in-tree `candidate-evidence.md` schema and record clean generated schemas/specs. Do not put the attestation's own
+  digest in its body; any checksum is external metadata created after upload.
+- [ ] E.2 Record focused tests, lint, full race, integration, schema/no-drift, contracts, and strict OpenSpec in the
+  detached attestation with exact command, UTC start/end, exit/result, runner identity, and artifact checksum.
 - [ ] E.3 Record statistical, agentic, deep-research, both research branches, and every retained advertised
-  crud-tools/ops/rule path with the same provenance fields.
-- [ ] E.4 Record semantic E2E polls every 30–60 seconds with `/readyz`, counters, stage/timestamp progress, and abort
-  evidence if authoritative state proves the run wedged.
+  crud-tools/ops/rule path in the detached attestation with the same provenance fields.
+- [ ] E.4 Record semantic E2E polls every 30–60 seconds in the detached attestation with `/readyz`, counters,
+  stage/timestamp progress, and abort evidence if authoritative state proves the run wedged.
 - [ ] E.5 Treat any code, spec, evidence, manifest, or task correction as a new candidate requiring applicable proof.
-- [ ] E.6 Record independent reviewer identity/result and exact reviewed candidate SHA.
-- [ ] E.7 Record exact-SHA GitHub CI run/check identities and green results.
-- [ ] E.8 Record #827 owner, scheduled boundary, result, and halt/migration outcome if the pre-v1 window closes.
-- [ ] E.9 Record tag name and resolved SHA, binary version and checksum, container reference/digest and reported version.
-- [ ] E.10 Regenerate the acyclic `manifest.sha256` content root, verify every entry, publish the exact tag/migration notice, and hand downstream migration to adopters. Record any manifest digest only outside the manifest-covered in-tree artifacts.
+- [ ] E.6 Record independent reviewer identity/result and exact reviewed candidate SHA in the detached attestation.
+- [ ] E.7 Record exact-SHA GitHub CI run/check identities and green results in the detached attestation.
+- [ ] E.8 Record #827 owner, scheduled boundary, result, and halt/migration outcome in the detached attestation if the
+  pre-v1 window closes.
+- [ ] E.9 Record tag name and resolved SHA, binary version and checksum, and container identity in the detached
+  attestation.
+- [ ] E.10 Regenerate the acyclic `manifest.sha256` content root, verify every entry, publish the immutable detached
+  attestation plus exact tag/migration notice, and hand downstream migration to adopters. Record the manifest digest
+  only in the detached attestation, never in a manifest-covered artifact.
