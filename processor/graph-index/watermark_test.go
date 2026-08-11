@@ -262,8 +262,8 @@ func TestComputeIndexStatus_ReadyImpliesBootstrapComplete(t *testing.T) {
 // finding. The latch originally flipped only on Ready — caught up to the LIVE stream
 // target — which under continuous write is a measure-zero instant (gh#590 F1). On a
 // firehose deployment the bit would therefore read false forever, and because every
-// ADR-084 health gate defers on it, fusion and the graph/query client would withhold
-// permanently. That is the exact failure this change exists to end, reappearing with a
+// ADR-084 health gate defers on it, fusion would withhold permanently. That is the
+// exact failure this change exists to end, reappearing with a
 // different defer reason.
 //
 // The latch is against the ENUMERATION-TIME target instead, which is fixed and

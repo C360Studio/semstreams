@@ -122,7 +122,7 @@ type BucketSpec struct {
 
 // ErrorCodeBucketNotReady is the classified error code OpenFrameworkBucket
 // returns for an absent must-exist bucket. Its value deliberately equals
-// graph.ErrorCodeIndexNotReady (the code graph/query already emits for a
+// graph.ErrorCodeIndexNotReady (the code graph-index emits for a
 // not-sound-to-read index) so classified consumers handle "the bucket's owner
 // has not provisioned it yet" with the same retry-with-backoff posture; a
 // cross-pin test in graph asserts the two can never drift.

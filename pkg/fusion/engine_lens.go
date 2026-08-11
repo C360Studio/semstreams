@@ -125,10 +125,8 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 	if err != nil {
 		if errors.Is(err, ErrReadinessUnknown) {
 			// A feed we cannot vouch for fails CLOSED as an honest empty envelope
-			// (ADR-084 D6). Deliberately no ungated escape here, asymmetric with
-			// graph/query's allow_ungated_reads: that flag exists for a standalone
-			// deployment reading its own bucket, while fusion is a shared product
-			// surface whose empty answer other people act on.
+			// (ADR-084 D6). Fusion exposes no ungated escape because it is a shared
+			// product surface whose empty answer other people act on.
 			//
 			// The client returns a ZERO IndexStatus alongside this error, so State is
 			// stamped explicitly rather than shipped as "": an empty string is outside

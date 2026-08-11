@@ -156,7 +156,7 @@ func TestSpecFor_UnknownNameResolvesFalse(t *testing.T) {
 }
 
 // TestErrorCodeBucketNotReady_MatchesIndexNotReady cross-pins the classified
-// code the reader seam emits to the code graph/query already emits for a
+// code the catalog-reader seam emits to the code graph-index emits for a
 // not-sound index, so classified consumers can never see the two drift apart.
 func TestErrorCodeBucketNotReady_MatchesIndexNotReady(t *testing.T) {
 	assert.Equal(t, ErrorCodeIndexNotReady, natsclient.ErrorCodeBucketNotReady)

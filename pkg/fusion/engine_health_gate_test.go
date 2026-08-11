@@ -111,9 +111,8 @@ func TestFuse_StatusUnknownDefersButWiringFails(t *testing.T) {
 	})
 
 	t.Run("there is no ungated escape", func(t *testing.T) {
-		// Deliberate asymmetry with graph/query's allow_ungated_reads: that flag is for
-		// a standalone deployment reading its own bucket, while fusion is a shared
-		// product surface whose empty answer other people act on. If an escape is ever
+		// Fusion is a shared product surface whose empty answer other people act on,
+		// so an unknown readiness state has no ungated escape. If an escape is ever
 		// added, this test is where the decision must be re-argued.
 		eng := newEngine(fmt.Errorf("never published: %w", fusion.ErrReadinessUnknown))
 		resp, err := eng.Fuse(context.Background(), fusion.Request{Query: "OnEvent"}, refLens{})

@@ -140,21 +140,46 @@ of an internal contradiction and a new owner ruling.
   `task e2e:statistical`, focused package tests under race, the focused real-NATS fusion integration test, and
   independent SemStreams review; add no stage or tier.
 
-## F. Complexity deletion
+## F1. Provisional aggregate query-client deletion
 
-- [ ] F.1 Delete only the provisional `graph/query.Client` cohort: client-only configuration/defaults,
-  constructors, direct bucket/RPC state, cache/watch/readiness/poison, query methods, client-only path/cache types,
-  tests, and examples.
-- [ ] F.2 Prove `graph.ExactEntityReader`, `pkg/projection.MutationClient`, classifier/search-option code,
-  component-local research adapters, and `pkg/fusion/fusionnats.Client` remain.
-- [ ] F.3 Delete `search_graph` and `summarize_graph` from shared/local discovery, `RegisterBuiltins`,
-  `BuiltinGroupKeys`, accepted `SkipBuiltins`, implementations, registration functions, complete exported
-  type/option/constructor/querier surfaces, tests, schemas, docs, and expectations.
-- [ ] F.4 Prove stale skip values fail existing closed-set validation and non-reserved local executor registration,
-  discovery, and dispatch precedence remain unchanged.
-- [ ] F.5 Prove deletion does not reach GraphQL `searchGraph`/`graphSummary`, graph-query responders, research
-  consumers, fusion, exact reads, projection, or classifier code.
-- [ ] F.6 Run focused race, schema/no-drift, agentic and research E2E gates and obtain independent review.
+- [x] F1.1 Add failing source-surface checks for absence of `Client`, client `Config`, `NewClient`,
+  `NewClientWithMetrics`, `PathQuery`, `PathResult`, and `CacheStats`, while proving classifier/search-option symbols
+  remain.
+- [x] F1.2 Migrate the graph-index activation/tombstone integration test to the production
+  `graph.query.pathSearch` responder with a canonical test-owned exact-read provider; retain the existing public
+  incoming and clustering assertions.
+- [x] F1.3 Delete only the client implementation, interface/types, prefix extension, client-only tests/benchmarks,
+  package client documentation, and current operational claims.
+- [x] F1.4 Prove `graph.ExactEntityReader`, `pkg/projection.MutationClient`, graph-query responders,
+  classifier/search-option code, research adapters, GraphQL routing, and `pkg/fusion/fusionnats.Client` remain.
+- [x] F1.5 Run focused race and integration tests, full race tests, lint, schema/no-drift, contract tests, strict
+  OpenSpec validation, `task e2e:statistical`, and independent SemStreams review.
+
+### Slice F1 gate evidence (2026-08-10)
+
+- RED caught all seven retired exported names and an alias mutation before implementation.
+- The exact ten approved client files were deleted: `client.go`, `interface.go`, `prefix.go`, `client_test.go`,
+  `incoming_shard_integration_test.go`, `readiness_gate_test.go`, `prefix_test.go`, `path_benchmark_test.go`, `doc.go`,
+  and `README.md` under `graph/query`.
+- The graph-index integration test now uses production `graph.query.pathSearch` with a test-owned exact responder and
+  retains its incoming and clustering assertions.
+- Preservation checks found no F2 reach, replacement general client, compatibility shim, deprecated alias, or copied
+  traversal client.
+- Focused race and targeted integration tests passed, followed by full `go test -race ./...` and Docker
+  `scripts/run-integration-tests.sh`.
+- Lint, schema generation with no drift, contract tests, strict OpenSpec validation (39/39), and statistical E2E
+  (41/41) passed.
+- Independent `semstreams-reviewer` gave final **APPROVE** after two medium documentation and AST-guard fixes.
+
+## F2. Unadmitted agentic wrapper deletion
+
+- [ ] F2.1 Delete `search_graph` and `summarize_graph` from registrations, builtin/skip keys, implementations,
+  complete exported surfaces, tests, schemas, docs, and expectations.
+- [ ] F2.2 Prove stale skip values fail existing validation and unrelated local registration, discovery, and dispatch
+  precedence remain unchanged.
+- [ ] F2.3 Prove deletion does not reach GraphQL, graph-query responders, research consumers, fusion, exact reads,
+  projection, or classifier code.
+- [ ] F2.4 Run focused race, schema/no-drift, agentic and research E2E gates and obtain independent review.
 
 ## G. Spec correction, release evidence, and archive
 

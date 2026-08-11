@@ -100,3 +100,15 @@ passes.
 The exact-field ruling makes introspected `semanticSearch` the sole GraphQL spelling. The current hidden
 `similaritySearch` request/response spelling and its in-repo E2E consumer migrate atomically and are deleted without an
 alias. This is a same-class correction required by rulings 11 and 14, not a new operation or producer wire change.
+
+## Approved Slice F sequencing clarification
+
+On 2026-08-10 the owner approved splitting complexity deletion into two independently implemented and reviewed slices.
+
+- F1 deletes only the provisional mixed direct-KV `graph/query.Client` cohort under rulings 9 and 14. It preserves all
+  admitted query responders and operation-specific adapters. The graph-index activation/tombstone integration test
+  migrates from the retired client to the existing production `graph.query.pathSearch` operation; no replacement
+  general client is added.
+- F2 separately deletes the unadmitted agentic `search_graph` and `summarize_graph` wrappers under rulings 5 and 14.
+
+F1 lands and is independently reviewed before F2 begins. Neither slice may absorb the other or unrelated issue work.

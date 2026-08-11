@@ -3,9 +3,8 @@ package graphindex
 // Tests for Layer 1 of the graph-index-hardening change (gh#474, design.md).
 // Covers tasks 4.1–4.4: key round-trip, load linearity, cutover inertness,
 // graph-index reader parity (handleQueryIncomingNATS), entity-delete cleanup,
-// and the NAME production-wire query test. The graph/query `GetIncomingEdges`
-// bugfix is covered separately in graph/query (incoming_shard_integration_test.go),
-// since that reader lives in a different package on a real KV bucket.
+// and the NAME production-wire query test. Public incoming-row replacement is
+// also covered through real NATS in replacement_reconcile_integration_test.go.
 
 import (
 	"context"
