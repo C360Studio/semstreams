@@ -258,12 +258,13 @@ of an internal contradiction and a new owner ruling.
 
 ### Checkpoint 2 archive-candidate evidence (2026-08-11)
 
-- The exact corrected implementation tree is commit `cbbc907e`. `task lint`, `go test -race ./...`,
-  `task test:integration` (including `natsclient` in 102.483s), `task schema:generate` with no generated schema/spec
-  drift, `go test ./test/contract/...`, and strict `task openspec:validate` (39/39) passed on that tree.
-- The required E2E tiers passed with active monitoring: statistical (41/41, about 29.18s), semantic (48/48, about
-  11m17s, exact `graphrag`, 7/7 known answers), agentic, research-graph with a positive candidate count, and
-  deep-research.
+- The durable command transcript, UTC intervals, exit codes, hard assertions, and commit attribution are recorded at
+  `docs/proposals/post-foundation-b-g-closeout-gate-evidence.md`.
+- Corrected implementation commit `cbbc907e` passed statistical (41/41, 7/7 known answers) and semantic (48/48,
+  exact `graphrag`, 30 hits, 7/7 known answers) E2E gates.
+- Archive candidate `344e58bf`, a documentation/OpenSpec-only descendant, passed lint, full race, integration
+  (`natsclient` 94.246s), schema generation/no drift, contract, strict OpenSpec (40/40), agentic, research-graph with
+  candidate count 1, and deep-research gates.
 - The first semantic run exposed a test-only mismatch: the HTTP gateway caller allowed 10s while server-side answer
   synthesis allowed 15s. Bounded correction `cbbc907e` changed only that caller to the existing 60s helper and made
   the helper comments truthful. Independent review approved the correction; the rerun passed with the gateway

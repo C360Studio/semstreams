@@ -1,8 +1,8 @@
 # Post-Foundation-B graph query ruling conformance
 
-**Status:** Checkpoint 2 archive candidate derived from verified corrected implementation commit `cbbc907e`. G.2 and
-G.6 are complete on the materialized archive tree. G.7 remains pending exact-commit independent review, exact-SHA
-GitHub CI, and unchanged merge; this artifact claims neither G.7 nor downstream completion.
+**Status:** Checkpoint 2 archive candidate `344e58bf`, a documentation/OpenSpec-only descendant of corrected
+implementation commit `cbbc907e`. G.2 and G.6 are complete. G.7 remains pending exact-commit independent review,
+exact-SHA GitHub CI, and unchanged merge; this artifact claims neither G.7 nor downstream completion.
 
 ## Fourteen primary rulings
 
@@ -77,10 +77,13 @@ design checkpoints likewise retain their capture-time text.
 ### Archive-time and final-gate boundaries preserved
 
 - The exact owner-approved Purpose is now published at `openspec/specs/graph-query/spec.md:3-11`; G.2 is complete.
-- Checkpoint 2 gates passed on corrected implementation commit `cbbc907e`: lint, full race tests, integration tests
-  (`natsclient` 102.483s), schema generation with no drift, contract tests, and strict OpenSpec validation (39/39).
-- Statistical (41/41), semantic (48/48, exact `graphrag`, 7/7 known answers), agentic, research-graph with a positive
-  candidate count, and deep-research E2E tiers passed. G.6 is complete.
+- Durable UTC intervals, exact commands, exit codes, hard assertions, and commit attribution are recorded at
+  `docs/proposals/post-foundation-b-g-closeout-gate-evidence.md`.
+- Corrected implementation commit `cbbc907e` passed statistical (41/41, 7/7 known answers) and semantic (48/48,
+  exact `graphrag`, 30 hits, 7/7 known answers) E2E gates.
+- Archive candidate `344e58bf` passed lint, full race, integration (`natsclient` 94.246s), schema generation/no drift,
+  contract, strict OpenSpec (40/40), agentic, research-graph with candidate count 1, and deep-research gates. G.6 is
+  complete.
 - The first semantic attempt exposed a test-only 10s caller versus 15s server synthesis timeout. Correction
   `cbbc907e` reused the existing 60s helper; independent review approved it, and semantic passed with a 43.6s gateway
   response.
