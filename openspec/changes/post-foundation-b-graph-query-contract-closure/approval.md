@@ -92,8 +92,9 @@ stale private `similaritySearch` compatibility, phantom query `RequestID`, and E
    with all pre-assertion gateway failures made hard. Exhaustive representation and strategy branches remain in
    focused tests; add no stage, tier, or semantic E2E requirement.
 
-Implementation tasks E.1-E.8 remain unchecked until their evidence exists and independent implementation review
-passes.
+Implementation tasks E.1-E.8 completed with focused race/real-NATS verification, research-graph and statistical E2E
+proof, correction-propagation review, and final independent `semstreams-reviewer` approval. Measured task truth is
+recorded in `tasks.md:114-141`.
 
 ## Approved implementation clarification
 
@@ -127,3 +128,17 @@ surface. Nil/empty allowlists remain permissive but cannot create an absent exec
 before registry dispatch; and ordinary application-local reuse of either former name remains available through the
 existing local extension seam. This clarification adds no new ruling, alias, reservation, compatibility behavior,
 port, subject, client, MCP surface, or configuration field.
+
+## Approved G closeout Option 2 and Checkpoint 1
+
+On 2026-08-11 the owner approved Option 2 and authorized Checkpoint 1 after independent design review. The accepted
+inventory was reviewed at SHA-256 `ce7b27274f75b91be72c1c24c9b8780226094d021d37b0f432142fd001e670ae` and
+promoted at SHA-256 `bde4c51db3044e575be04b384d4e6941f829331b598a59058072959b69fe5645`. The reviewed plan
+checkpoint was approved at SHA-256 `4220173426389576c37ad4656133cc2ceaa03deb85fe46d15dd5be806423f797` and
+promoted at SHA-256 `f5279d86f9b522240aac69a0ceac70c1ac5c40d3a28b84222f09f0d65b3aa884`.
+
+Checkpoint 1 corrects active specification and closeout truth, publishes the downstream migration notice and ruling
+evidence, and freezes the exact archive-time Purpose in the approved plan. It does not edit the current
+`openspec/specs/graph-query/spec.md`, perform runtime or schema changes, audit downstream repositories, run the final
+merged-tree gate, archive the change, merge implementation, or execute queued issues. G.2, G.6, and G.7 remain pending;
+Checkpoint 2 requires separate owner direction against the merged Checkpoint 1 proof tree.

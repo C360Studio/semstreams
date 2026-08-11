@@ -219,19 +219,39 @@ of an internal contradiction and a new owner ruling.
 
 ## G. Spec correction, release evidence, and archive
 
-- [ ] G.1 Confirm the graph-index predicate correction documents the shipped raw nine-token `PREDICATE_INDEX`, absent
-  `PREDICATE_CATALOG`, NAME hashing, and INCOMING-only reversible predicate hex without runtime index change.
+- [x] G.1 Confirm the graph-index predicate correction documents the shipped raw nine-token `PREDICATE_INDEX`, absent
+  `PREDICATE_CATALOG`, NAME hashing on the name axis, NAME and INCOMING reversible predicate hex, and no runtime index
+  migration.
 - [ ] G.2 On archive, update the current `graph-query` Purpose to name the admitted operation family, versioned port
   contract, stable responders, generation-safe optional-view caches, success decoding, bounded research projection,
   and truthful query outcomes, while explicitly excluding a public subject catalog and general embedded client.
-- [ ] G.3 Publish one downstream migration notice covering removed GraphQL fields/spellings, deleted Go/tool surfaces,
-  deleted `graph.QueryResponse.RequestID`, `graph.query/v1` port declarations, and retryable `localSearch`; perform no
-  downstream implementation or audit.
-- [ ] G.4 Produce a fourteen-row ruling-conformance table mapping every ruling to final `file:line` evidence or an
-  owner-approved deviation; no sentence-only conformance claim is sufficient.
-- [ ] G.5 Run the correction-propagation sweep over every change artifact, task, migration note, schema, fixture, and
-  cited mechanism. Record measured evidence only from reproducible in-tree or CI artifacts.
+- [x] G.3 Publish one downstream migration notice covering every accepted adopter break and consequence, including
+  GraphQL spellings, retryable `localSearch`, deleted Go/tool surfaces, open-vocabulary F2 configuration behavior,
+  category fallback, `graph.QueryResponse.RequestID`, and `graph.query/v1` declarations; perform no downstream audit.
+- [x] G.4 Produce fourteen primary ruling-conformance rows plus affected-row addenda mapping every later binding Slice
+  D, E, F1, and F2 clarification or approval condition to final `file:line` evidence or an owner-approved deviation.
+- [x] G.5 Run the correction-propagation sweep over every mutable active artifact, task, migration note, schema,
+  fixture, and cited mechanism. Preserve hash-pinned capture-time artifacts verbatim and disposition stale claims in
+  new evidence. Record only reproducible in-tree or CI evidence.
 - [ ] G.6 Run `task lint`, `go test -race ./...`, integration tests, schema generation/no drift, contract tests, strict
   OpenSpec validation, and relevant statistical, semantic, agentic, and research E2E tiers with active monitoring.
 - [ ] G.7 Obtain final independent review, merge all implementation slices, verify merged-tree negative searches and
   gates, conservatively update task truth, and archive the OpenSpec change.
+
+### Checkpoint 1 evidence (2026-08-11)
+
+- G.1 now records shipped code truth: NAME hashes only its name axis; NAME and INCOMING retain reversible predicate
+  hex; PREDICATE uses the canonical raw nine-token key; no predicate catalog exists. This is a documentation
+  correction, not a runtime index migration.
+- G.3 is published at `docs/operations/migration-post-foundation-b-graph-query-contract-closure.md`. It covers every
+  accepted adopter break and consequence, names the surface-specific discovery path, and leaves downstream audit and
+  migration downstream-owned.
+- G.4 is recorded at `docs/proposals/post-foundation-b-g-ruling-conformance.md`: fourteen primary ruling rows plus the
+  binding Slice D, E, F1, and F2 addenda, each mapped to final in-tree evidence or an explicit disposition.
+- G.5 corrected mutable active design, approval, task, specification, and migration layers. Hash-pinned and
+  baseline-identified capture artifacts remain preserved; stale capture-time claims are dispositioned in the new
+  conformance evidence rather than rewritten.
+- The approved plan freezes the exact archive-time Purpose. The current `openspec/specs/graph-query/spec.md` is
+  untouched, so G.2 remains incomplete.
+- Checkpoint 1 changes no Go source, generated schema, fixture, runtime behavior, or downstream repository. G.6 and
+  G.7 remain incomplete pending the merged-tree gate, final review, merge verification, and archive transaction.

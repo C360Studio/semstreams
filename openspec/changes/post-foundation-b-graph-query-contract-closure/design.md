@@ -1,10 +1,8 @@
 # Post-Foundation-B graph query contract-closure roadmap
 
-**Status:** Owner-approved target state. The original inventory and design review passed before the owner approved all
-fourteen rulings on 2026-08-09. The reduced Slice D reassessment passed independent planning review, and its
-implementation passed independent `semstreams-reviewer` review on 2026-08-10. The bounded Slice E reassessment passed
-independent pre-owner design review, and the owner approved all eight Slice E rulings on 2026-08-10; implementation
-remains pending.
+**Status:** Owner-approved target state. Slices A through F2 are implemented and independently reviewed. On 2026-08-11
+the owner approved the two-checkpoint closeout plan and authorized Checkpoint 1 documentation/specification work.
+Archive-time Purpose publication, final merged-tree gates, and archive remain pending under G.2, G.6, and G.7.
 
 **Promoted from:** `docs/proposals/post-foundation-b-graph-query-contract-closure-roadmap.md`, SHA-256
 `ff23db51ce7bf6e3d45da09a1706bf70ee548ae5e6aa2b12201ceeae64c4f343`.
@@ -632,31 +630,29 @@ first-ticker delay is separate, and Slice D does not close it.
 
 | Adopter | Required action | If they do nothing | Discovery |
 |---|---|---|---|
-| Ordinary GraphQL caller | None | Existing 14 fields retain wire shape | Introspection/spec |
-| GraphQL localSearch caller | Treat `index_not_ready` as retryable | Classified transient replaces no-responder until usable | Error contract/release note |
-| GraphQL capabilities caller | Remove query; select known admitted operation | Query validation fails | Introspection/break notice |
-| Embedded framework consumer | Use named port-declared adapter | In-repo consumers migrate atomically | Adapter/compiler/spec |
-| Agentic config/default-tools caller naming a deleted wrapper | Remove the name; use GraphQL or a separately owned custom tool | Closed-set validation fails or discovery drops the name | Config/dispatch error/break notice |
-| `SkipBuiltins` caller naming a deleted key | Remove the key | Existing validation fails; no no-op compatibility value | Boot error/break notice |
-| Importer of any deleted executor symbol | Remove it or own a distinct downstream tool/component | Compilation fails; full surface is deleted | Compiler/break notice |
-| Aggregate client importer | Replace with GraphQL or named adapter | Compilation fails; no shim | Compiler/migration notice |
-| External Go importer reading or setting `graph.QueryResponse.RequestID` | Remove the field access or keyed struct-literal entry; use only `Data` and `Timestamp` for query success | Compilation fails at field selection or keyed literal; there is no compatibility field | Compiler, reviewed query-success spec, and downstream migration notice |
-| Direct external NATS caller | No wire change in this program | Existing wire continues, but copied literal gains no separate API promise | Migration notice |
-| Readiness/config author | None | No clustering key/config introduced | Existing docs |
-| Component/port author | Declare `graph.query/v1` on graph-query ports and use named outputs | Old/missing interface or consumer declarations fail Registry validation | Port contract, generated schema, break notice |
+| GraphQL `capabilities` or `similaritySearch` caller | Remove `capabilities`; replace `similaritySearch` with exact `semanticSearch` | GraphQL validation fails; no alias exists | Introspection/error/migration notice |
+| GraphQL `localSearch` caller | Treat classified `index_not_ready` as retryable eventual availability | Typed transient replaces transport no-responder until usable | Error extensions/migration notice |
+| Aggregate `graph/query.Client` importer | Replace with GraphQL or a named operation-specific adapter | Compilation fails; no shim exists | Compiler/migration notice |
+| External Go importer using `graph.QueryResponse.RequestID` | Remove field selection/keyed literal; query success is `Data` plus `Timestamp` | Compilation fails; no compatibility field exists | Compiler/query-success spec/migration notice |
+| Importer of deleted agentic wrapper symbols | Remove executor/option/constructor/querier use or own a distinct local tool | Compilation fails; framework surface is absent | Compiler/migration notice |
+| `SkipBuiltins` caller naming a deleted wrapper key | Remove the key | Existing closed-set boot validation fails | Boot error/migration notice |
+| Config author retaining former shared names in allow/default/approval/retry fields | Remove stale framework references unless an application-local executor owns the name | Default resolution may warn/drop; approval may pause before registry miss; policy creates no executor | Warning, approval pause, typed not-found, migration notice |
+| Application intentionally reusing a former name locally | Keep the local executor and matching open-vocabulary policy | Existing local admission/discovery/approval/retry/dispatch applies | Local registration/discovery |
+| Category-API consumer querying `graph_search`/`graph_summary` | Accept unknown-name `CategoryCore` or explicitly categorize a local tool | Silent fallback changes from stale `CategoryKnowledge` entry to `CategoryCore` | Go behavior/migration notice |
+| Component/port author | Declare `graph.query/v1` and required named outputs | Missing/stale declarations fail Registry validation | Registry/schema/migration notice |
+| Direct external NATS caller | No wire change; copied literals gain no public catalog promise | Existing subjects continue without a new API guarantee | Migration notice |
 
 Migration notice draft:
 
-> Query contract closure removes the unserved GraphQL `capabilities` field and exported `graph/query.Client`. It also
-> removes the unused exported `graph.QueryResponse.RequestID` field: external Go code that selects it or names it in a
-> keyed struct literal must delete that use and treat query-success envelopes as `Data` plus `Timestamp`. No aliases,
-> compatibility fields, or deprecated wrappers are provided. The 16 existing request/reply subjects and 14 remaining
-> GraphQL operations are unchanged. `localSearch` always responds and reports `index_not_ready` while the optional
-> community view is unavailable or synchronizing. Remote applications use GraphQL; embedded framework services use
-> the named port-declared adapter for their operation. The unadmitted agentic `search_graph` and `summarize_graph`
-> wrappers are removed completely, including shared registrations, builtin skip keys, and exported executor symbols;
-> GraphQL and graph-query operations remain. Remove stale config/skip entries or own a distinct downstream tool.
-> Downstream teams own compilation, migration, flow validation, and E2E.
+> Query contract closure removes GraphQL `capabilities`, replaces hidden `similaritySearch` with exact
+> `semanticSearch`, deletes the aggregate `graph/query.Client`, deletes query-success `RequestID`, and removes the
+> framework-owned `search_graph`/`summarize_graph` wrappers and skip keys without aliases or shims. `localSearch`
+> remains a stable responder and returns retryable `index_not_ready` while its optional view is unusable. Component
+> authors must declare `graph.query/v1` and the required named outputs. Former wrapper names in open-vocabulary
+> allow/default/approval/retry fields create no executor; intentional application-local reuse remains supported.
+> Removed `graph_search`/`graph_summary` category aliases now use the existing unknown-name `CategoryCore` fallback.
+> The canonical, complete notice is `docs/operations/migration-post-foundation-b-graph-query-contract-closure.md`.
+> Downstream teams own compilation, migration, flow validation, and product E2E; this program performs no audit.
 
 ## Verification
 

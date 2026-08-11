@@ -3,12 +3,13 @@
 ### Requirement: Non-predicate codecs keep their recorded rationale
 
 NAME MUST keep fixed-width hashed keys for its open-content name axis, with the original case and priority retained in
-the small per-membership value. INCOMING MAY keep reversible `hex(predicate)` for its own source/target storage layout
-so an incoming row can reconstruct the accepted predicate without a catalog lookup.
+the small per-membership value. NAME and INCOMING MAY keep reversible `hex(predicate)` in their composite reverse-index
+layouts so readers can reconstruct the accepted predicate without a catalog lookup.
 
 `PREDICATE_INDEX` MUST NOT use either codec: its fixed nine-token membership key is the raw canonical three-part
 predicate followed by the canonical six-part entity ID, and `PREDICATE_CATALOG` is absent. No codec, hash, or physical
 key representation MAY be treated as acceptance authority for a predicate that violates the canonical grammar.
+This requirement documents the shipped layout only and SHALL NOT trigger a runtime index migration.
 
 #### Scenario: encoding cannot admit an invalid predicate
 
@@ -19,8 +20,8 @@ key representation MAY be treated as acceptance authority for a predicate that v
 #### Scenario: each surviving codec stays local to its axis
 
 - **WHEN** NAME, INCOMING, and PREDICATE membership layouts are inspected
-- **THEN** NAME uses its documented name hash, INCOMING alone uses reversible predicate hex, and PREDICATE uses the raw
-  canonical predicate
+- **THEN** NAME hashes its normalized name axis, NAME and INCOMING use reversible predicate hex, and PREDICATE uses the
+  raw canonical predicate
 - **AND** no shared predicate catalog or codec authority is inferred
 
 ### Requirement: Surviving index key axes are KV-safe and reconstructable
@@ -28,7 +29,8 @@ key representation MAY be treated as acceptance authority for a predicate that v
 Every token of a sharded index key MUST be NATS-KV-safe and unambiguously reconstructable under its declared layout:
 
 - **NAME open-vocabulary axis:** the normalized name value MUST hash to a fixed-width token so raw dotted values cannot
-  collide with token positions under NATS prefix matching. The per-key value MUST retain original case and priority.
+  collide with token positions under NATS prefix matching. Its composite membership key MAY retain the reversible
+  predicate hex token; the per-key value MUST retain original case and priority.
 - **INCOMING predicate axis:** the already-validated canonical predicate MAY use the reversible untagged hex token
   retained by that storage layout. Decoding reconstructs evidence; it does not authorize acceptance.
 - **PREDICATE membership axis:** the raw canonical predicate MUST occupy exactly three leading tokens followed by the
@@ -42,7 +44,7 @@ predicates or entity IDs before membership I/O and keep readiness honest under r
 
 #### Scenario: codec round-trip does not change predicate acceptance
 
-- **GIVEN** arbitrary bytes are passed directly to the INCOMING predicate codec
+- **GIVEN** arbitrary bytes are passed directly to the NAME/INCOMING predicate codec
 - **WHEN** the encoded token is decoded
 - **THEN** the codec reconstructs the exact original bytes
 - **AND** that result does not authorize a graph or index write
