@@ -5,11 +5,116 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/c360studio/semstreams/agentic/research"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/fusion"
 	graphembedding "github.com/c360studio/semstreams/processor/graph-embedding"
 	graphquery "github.com/c360studio/semstreams/processor/graph-query"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNewScenarioSelectsExplicitFixtureMode(t *testing.T) {
+	direct := NewScenario(nil, DefaultConfig())
+	require.Equal(t, "research-graph", direct.Name())
+	require.Equal(t, FixtureModeDirect, direct.config.FixtureMode)
+
+	executeConfig := DefaultConfig()
+	executeConfig.FixtureMode = FixtureModeExecute
+	execute := NewScenario(nil, executeConfig)
+	require.Equal(t, "research-graph-execute", execute.Name())
+}
+
+func TestValidateExecuteBranchArtifactsAcceptsControlledEvidence(t *testing.T) {
+	evidence := fusion.Evidence{
+		EntityID: ControlledSeedEntityID,
+		Tier:     "0",
+		Source:   walkSeedsEntityStateSource,
+	}
+	execution := research.ExecutionOutput{
+		Topic:         researchGraphTopic,
+		Action:        research.ActionWalkSeeds,
+		Evidence:      []fusion.Evidence{evidence},
+		SubQueryCount: 3,
+	}
+	assessment := research.AssessmentOutput{
+		Topic:         researchGraphTopic,
+		Sufficient:    true,
+		EvidenceCount: 1,
+	}
+	searchResult := research.SearchResult{
+		Synthesis: "Controlled seed evidence supports the answer.",
+		Evidence:  []fusion.Evidence{evidence},
+		DecompTrace: &research.DecompTrace{
+			RouterAction: research.ActionWalkSeeds,
+			SeedEntities: []string{"0"},
+		},
+	}
+
+	require.NoError(t, validateExecuteBranchArtifacts(execution, assessment, searchResult))
+}
+
+func TestValidateExecuteBranchArtifactsAcceptsPartialFanoutWithControlledEvidence(t *testing.T) {
+	evidence := fusion.Evidence{
+		EntityID: ControlledSeedEntityID,
+		Tier:     "0",
+		Source:   walkSeedsEntityStateSource,
+	}
+	execution := research.ExecutionOutput{
+		Topic:          researchGraphTopic,
+		Action:         research.ActionWalkSeeds,
+		Evidence:       []fusion.Evidence{evidence},
+		SubQueryCount:  3,
+		Degraded:       true,
+		DegradedReason: "optional predicate walk unavailable",
+	}
+	assessment := research.AssessmentOutput{
+		Topic:          researchGraphTopic,
+		Sufficient:     true,
+		EvidenceCount:  1,
+		Degraded:       true,
+		DegradedReason: "optional predicate walk unavailable",
+	}
+	searchResult := research.SearchResult{
+		Synthesis: "Controlled seed evidence supports the answer.",
+		Evidence:  []fusion.Evidence{evidence},
+		DecompTrace: &research.DecompTrace{
+			RouterAction: research.ActionWalkSeeds,
+			SeedEntities: []string{"0"},
+		},
+	}
+
+	require.NoError(t, validateExecuteBranchArtifacts(execution, assessment, searchResult))
+}
+
+func TestValidateExecuteBranchArtifactsRejectsUnattributedSynthesisEvidence(t *testing.T) {
+	execution := research.ExecutionOutput{
+		Topic:         researchGraphTopic,
+		Action:        research.ActionWalkSeeds,
+		Evidence:      []fusion.Evidence{{EntityID: ControlledSeedEntityID, Tier: "0", Source: walkSeedsEntityStateSource}},
+		SubQueryCount: 1,
+	}
+	assessment := research.AssessmentOutput{
+		Topic:         researchGraphTopic,
+		Sufficient:    true,
+		EvidenceCount: 1,
+	}
+	searchResult := research.SearchResult{
+		Synthesis: "Fabricated evidence should fail attribution.",
+		Evidence: []fusion.Evidence{
+			{EntityID: ControlledSeedEntityID, Tier: "0", Source: walkSeedsEntityStateSource},
+			{EntityID: "c360.rg-e2e.research.seed.document.fabricated", Tier: "0", Source: walkSeedsEntityStateSource},
+		},
+		DecompTrace: &research.DecompTrace{
+			RouterAction: research.ActionWalkSeeds,
+			SeedEntities: []string{"0"},
+		},
+	}
+
+	require.ErrorContains(t,
+		validateExecuteBranchArtifacts(execution, assessment, searchResult),
+		"not present in execution evidence",
+	)
+}
 
 func TestResearchEmbeddingSearchResponderReturnsSeededHit(t *testing.T) {
 	seedEntityID := researchGraphSeedEntityID("abc123")

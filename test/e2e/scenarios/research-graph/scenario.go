@@ -2,19 +2,14 @@
 // E2E scenario.
 //
 // The scenario boots the reference flow (configs/research-graph-e2e.json)
-// via docker compose with a mock LLM scripted (test/e2e/mock/cmd/main.go
-// `research-graph` preset) to return:
+// via docker compose with an explicit mock LLM fixture selected in
+// test/e2e/mock/cmd/main.go. The two isolated modes prove:
 //   - `research_graph` tool call when the parent agent receives the
 //     investigate-via-research_graph prompt
-//   - `synthesize_directly` action when route_search's persona prompt
-//     fires (chosen as the happy path that exercises R0 → R1 → R2 → R6
-//   - every triple-stamp seam without touching execute + assess)
-//   - SearchResult JSON when synthesize_answer's persona prompt fires
-//
-// Coverage scope: the synthesize_directly happy path. Refine-loop
-// coverage (walk_seeds / decompose + assess + iteration cap fallback)
-// is a follow-up — shipping the happy path first locks the orchestration
-// wire claim PR #203 made.
+//   - the preserved `synthesize_directly` action and absence of execute
+//     and assess effects
+//   - a `walk_seeds` action that traverses the production executeAll,
+//     fusion.Fuse, assessment, and synthesis path with controlled evidence
 //
 // Stages, in firing order:
 //
@@ -45,6 +40,7 @@ import (
 	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/fusion"
 	graphembedding "github.com/c360studio/semstreams/processor/graph-embedding"
 	"github.com/c360studio/semstreams/test/e2e/client"
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
@@ -54,6 +50,23 @@ const (
 	researchEmbeddingSearchSubject = "graph.embedding.query.search"
 	researchGraphTopic             = "drone hover anomalies"
 	researchGraphSeedSimilarity    = 0.95
+	walkSeedsEntityStateSource     = "walk_seeds.entity_state"
+
+	// ControlledSeedEntityID is the stable entity whose exact evidence
+	// identity proves the execute fixture traversed the production graph
+	// query and fusion path. The direct fixture intentionally keeps its
+	// run-scoped entity identity.
+	ControlledSeedEntityID = "c360.rg-e2e.research.seed.document.controlled"
+)
+
+// FixtureMode selects one of the two isolated research-graph E2E routes.
+type FixtureMode string
+
+const (
+	// FixtureModeDirect preserves the original synthesize_directly fixture.
+	FixtureModeDirect FixtureMode = "direct"
+	// FixtureModeExecute exercises walk_seeds through execute, assess, and synthesize.
+	FixtureModeExecute FixtureMode = "execute"
 )
 
 // Scenario validates the ADR-045 Phase 1 chain works end-to-end.
@@ -78,6 +91,9 @@ type Scenario struct {
 type Config struct {
 	NATSURL    string `json:"nats_url"`
 	MetricsURL string `json:"metrics_url"`
+
+	// FixtureMode selects the isolated route asserted by this E2E run.
+	FixtureMode FixtureMode `json:"fixture_mode"`
 
 	// ChainKickoffTimeout caps how long we wait for the rg_<loopID>
 	// entity to appear in AGENT_LOOPS after the parent task fires.
@@ -104,6 +120,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		NATSURL:             "nats://localhost:44222",
 		MetricsURL:          "http://localhost:49090",
+		FixtureMode:         FixtureModeDirect,
 		ChainKickoffTimeout: 30 * time.Second,
 		CompleteTimeout:     60 * time.Second,
 		PlatformOrg:         "c360",
@@ -117,9 +134,15 @@ func NewScenario(obs *client.ObservabilityClient, config *Config) *Scenario {
 	if config == nil {
 		config = DefaultConfig()
 	}
+	name := "research-graph"
+	description := "Validates ADR-045 Phase 1 R0-R6 chain end-to-end through the synthesize_directly route"
+	if config.FixtureMode == FixtureModeExecute {
+		name = "research-graph-execute"
+		description = "Validates ADR-045 Phase 1 R0-R6 chain end-to-end through walk_seeds execute, assess, and synthesize"
+	}
 	return &Scenario{
-		name:        "research-graph",
-		description: "Validates ADR-045 Phase 1 R0-R6 chain end-to-end through the synthesize_directly route",
+		name:        name,
+		description: description,
 		natsURL:     config.NATSURL,
 		metricsURL:  config.MetricsURL,
 		obs:         obs,
@@ -140,6 +163,9 @@ func (s *Scenario) Setup(ctx context.Context) error {
 		return fmt.Errorf("create NATS client: %w", err)
 	}
 	s.researchSeedEntityID = researchGraphSeedEntityID(fmt.Sprintf("%x", time.Now().UnixNano()))
+	if s.config.FixtureMode == FixtureModeExecute {
+		s.researchSeedEntityID = ControlledSeedEntityID
+	}
 	responder, err := natsClient.Client().SubscribeForRequests(
 		ctx,
 		researchEmbeddingSearchSubject,
@@ -221,9 +247,23 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 		{"wait-for-research-pipeline-loop", s.waitForResearchPipelineLoop},
 		{"wait-for-search-result-stamp", s.waitForSearchResultStamp},
 		{"verify-orchestration-triples", s.verifyOrchestrationTriples},
-		{"verify-search-result-envelope", s.verifySearchResultEnvelope},
-		{"verify-r6-continuation", s.verifyR6Continuation},
 	}
+	if s.config.FixtureMode == FixtureModeExecute {
+		stages = append(stages, struct {
+			name string
+			fn   func(context.Context, *scenarios.Result) error
+		}{"verify-execute-branch-artifacts", s.verifyExecuteBranchArtifacts})
+	}
+	stages = append(stages,
+		struct {
+			name string
+			fn   func(context.Context, *scenarios.Result) error
+		}{"verify-search-result-envelope", s.verifySearchResultEnvelope},
+		struct {
+			name string
+			fn   func(context.Context, *scenarios.Result) error
+		}{"verify-r6-continuation", s.verifyR6Continuation},
+	)
 
 	for _, stage := range stages {
 		stageStart := time.Now()
@@ -527,29 +567,51 @@ func (s *Scenario) verifyOrchestrationTriples(ctx context.Context, result *scena
 	}
 
 	// Route action — load-bearing for R2's dispatch.
-	if got[research.PredicateResearchRouteAction] != research.ActionSynthesizeDirectly {
+	expectedAction := research.ActionSynthesizeDirectly
+	if s.config.FixtureMode == FixtureModeExecute {
+		expectedAction = research.ActionWalkSeeds
+	}
+	if got[research.PredicateResearchRouteAction] != expectedAction {
 		mismatched = append(mismatched, fmt.Sprintf("%s: got %q want %q",
 			research.PredicateResearchRouteAction,
 			got[research.PredicateResearchRouteAction],
-			research.ActionSynthesizeDirectly))
+			expectedAction))
 	}
 
-	// Execute + Assess triples must be ABSENT on the synthesize_directly
-	// path — their presence would mean the route mis-fired and the chain
-	// took an unintended branch. Assert absence loudly so a router
-	// regression surfaces here, not in a downstream operator's trajectory
-	// review. Full paired set per Build{Execute,Assess}CompleteTriples
-	// so a batch-split refactor that stamps half a stage's triples
-	// surfaces too (per go-reviewer I2 on PR #205).
 	unexpected := []string{}
-	for _, pred := range []string{
-		research.PredicateResearchExecuteComplete,
-		research.PredicateResearchExecuteEvidenceCount,
-		research.PredicateResearchAssessComplete,
-		research.PredicateResearchAssessSufficient,
-	} {
-		if _, present := got[pred]; present {
-			unexpected = append(unexpected, pred)
+	if s.config.FixtureMode == FixtureModeDirect {
+		// Execute + Assess triples must remain ABSENT on the original
+		// synthesize_directly fixture.
+		for _, pred := range []string{
+			research.PredicateResearchExecuteComplete,
+			research.PredicateResearchExecuteEvidenceCount,
+			research.PredicateResearchAssessComplete,
+			research.PredicateResearchAssessSufficient,
+		} {
+			if _, present := got[pred]; present {
+				unexpected = append(unexpected, pred)
+			}
+		}
+	} else {
+		for _, pred := range []string{
+			research.PredicateResearchExecuteComplete,
+			research.PredicateResearchAssessComplete,
+		} {
+			if _, present := got[pred]; !present {
+				missing = append(missing, pred)
+			}
+		}
+		evidenceCountRaw, present := got[research.PredicateResearchExecuteEvidenceCount]
+		if !present {
+			missing = append(missing, research.PredicateResearchExecuteEvidenceCount)
+		} else if evidenceCount, parseErr := strconv.Atoi(evidenceCountRaw); parseErr != nil || evidenceCount <= 0 {
+			mismatched = append(mismatched, fmt.Sprintf("%s: got %q want positive integer",
+				research.PredicateResearchExecuteEvidenceCount, evidenceCountRaw))
+		}
+		if got[research.PredicateResearchAssessSufficient] != "true" {
+			mismatched = append(mismatched, fmt.Sprintf("%s: got %q want %q",
+				research.PredicateResearchAssessSufficient,
+				got[research.PredicateResearchAssessSufficient], "true"))
 		}
 	}
 
@@ -559,6 +621,132 @@ func (s *Scenario) verifyOrchestrationTriples(ctx context.Context, result *scena
 	if len(missing) > 0 || len(mismatched) > 0 || len(unexpected) > 0 {
 		return fmt.Errorf("orchestration triples failed: missing=%v mismatched=%v unexpected=%v",
 			missing, mismatched, unexpected)
+	}
+	return nil
+}
+
+// verifyExecuteBranchArtifacts reads the three durable envelopes produced by
+// the real walk_seeds branch. Their relationship proves that executeAll and
+// fusion.Fuse surfaced the controlled graph entity, assessment saw that
+// evidence, and synthesis only quoted evidence from the execution output.
+func (s *Scenario) verifyExecuteBranchArtifacts(ctx context.Context, result *scenarios.Result) error {
+	loopID, ok := result.Details["research_loop_id"].(string)
+	if !ok || loopID == "" {
+		return errors.New("research_loop_id not set")
+	}
+
+	var execution research.ExecutionOutput
+	if err := s.readLoopEnvelopePayload(ctx, "execute.complete."+loopID, &execution); err != nil {
+		return fmt.Errorf("read execution output: %w", err)
+	}
+	var assessment research.AssessmentOutput
+	if err := s.readLoopEnvelopePayload(ctx, "assess.complete."+loopID, &assessment); err != nil {
+		return fmt.Errorf("read assessment output: %w", err)
+	}
+	var searchResult research.SearchResult
+	if err := s.readLoopEnvelopePayload(ctx, "COMPLETE_"+loopID, &searchResult); err != nil {
+		return fmt.Errorf("read search result: %w", err)
+	}
+
+	if err := validateExecuteBranchArtifacts(execution, assessment, searchResult); err != nil {
+		return err
+	}
+	if execution.Degraded {
+		warning := "execute fan-out degraded while retaining controlled evidence: " + execution.DegradedReason
+		result.Warnings = append(result.Warnings, warning)
+		result.Details["execute_degraded"] = true
+		result.Details["execute_degraded_reason"] = execution.DegradedReason
+		result.Metrics["execute_degraded"] = 1
+	}
+	if assessment.Degraded {
+		warning := "assessment propagated partial fan-out degradation: " + assessment.DegradedReason
+		result.Warnings = append(result.Warnings, warning)
+		result.Details["assessment_degraded"] = true
+		result.Details["assessment_degraded_reason"] = assessment.DegradedReason
+		result.Metrics["assessment_degraded"] = 1
+	}
+	result.Details["execute_evidence_entity_id"] = ControlledSeedEntityID
+	result.Details["execute_evidence_source"] = walkSeedsEntityStateSource
+	result.Metrics["execute_evidence_count"] = len(execution.Evidence)
+	result.Metrics["execute_subquery_count"] = execution.SubQueryCount
+	return nil
+}
+
+func (s *Scenario) readLoopEnvelopePayload(ctx context.Context, key string, dst any) error {
+	envelope, err := s.nats.GetKV(ctx, "AGENT_LOOPS", key)
+	if err != nil {
+		return fmt.Errorf("fetch %s: %w", key, err)
+	}
+	var wire struct {
+		Payload json.RawMessage `json:"payload"`
+	}
+	if err := json.Unmarshal(envelope, &wire); err != nil {
+		return fmt.Errorf("decode %s envelope: %w", key, err)
+	}
+	if len(wire.Payload) == 0 {
+		return fmt.Errorf("%s envelope has no payload", key)
+	}
+	if err := json.Unmarshal(wire.Payload, dst); err != nil {
+		return fmt.Errorf("decode %s payload: %w", key, err)
+	}
+	return nil
+}
+
+func validateExecuteBranchArtifacts(
+	execution research.ExecutionOutput,
+	assessment research.AssessmentOutput,
+	searchResult research.SearchResult,
+) error {
+	if execution.Action != research.ActionWalkSeeds {
+		return fmt.Errorf("execution action = %q, want %q", execution.Action, research.ActionWalkSeeds)
+	}
+	if execution.SubQueryCount <= 0 {
+		return fmt.Errorf("execution subquery count = %d, want > 0", execution.SubQueryCount)
+	}
+	controlled := fusionEvidence(execution.Evidence, ControlledSeedEntityID)
+	if controlled == nil {
+		return fmt.Errorf("controlled entity %s absent from execution evidence", ControlledSeedEntityID)
+	}
+	if controlled.Tier != "0" || controlled.Source != walkSeedsEntityStateSource {
+		return fmt.Errorf("controlled evidence provenance = tier %q source %q, want tier 0 source %q",
+			controlled.Tier, controlled.Source, walkSeedsEntityStateSource)
+	}
+	if !assessment.Sufficient {
+		return errors.New("assessment is not sufficient")
+	}
+	if assessment.EvidenceCount != len(execution.Evidence) {
+		return fmt.Errorf("assessment evidence count = %d, execution evidence count = %d",
+			assessment.EvidenceCount, len(execution.Evidence))
+	}
+	if strings.TrimSpace(searchResult.Synthesis) == "" {
+		return errors.New("search result synthesis is empty")
+	}
+	if searchResult.DecompTrace == nil || searchResult.DecompTrace.RouterAction != research.ActionWalkSeeds {
+		return errors.New("search result decomp trace does not identify walk_seeds")
+	}
+	if fusionEvidence(searchResult.Evidence, ControlledSeedEntityID) == nil {
+		return fmt.Errorf("controlled entity %s absent from synthesis evidence", ControlledSeedEntityID)
+	}
+	for _, synthesizedEvidence := range searchResult.Evidence {
+		matched := false
+		for _, executedEvidence := range execution.Evidence {
+			if synthesizedEvidence == executedEvidence {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("synthesis evidence %s is not present in execution evidence", synthesizedEvidence.EntityID)
+		}
+	}
+	return nil
+}
+
+func fusionEvidence(evidence []fusion.Evidence, entityID string) *fusion.Evidence {
+	for i := range evidence {
+		if evidence[i].EntityID == entityID {
+			return &evidence[i]
+		}
 	}
 	return nil
 }

@@ -18,11 +18,12 @@ import (
 	"github.com/c360studio/semstreams/test/e2e/mock"
 	crudtools "github.com/c360studio/semstreams/test/e2e/scenarios/crud-tools"
 	opsscenario "github.com/c360studio/semstreams/test/e2e/scenarios/ops"
+	researchgraph "github.com/c360studio/semstreams/test/e2e/scenarios/research-graph"
 )
 
 func main() {
 	port := flag.Int("port", 8080, "Port for OpenAI mock server")
-	scenario := flag.String("scenario", "default", "Which preset of role responses / tool-call scripts to apply (default, deep-research, crud-tools, ops, research-graph)")
+	scenario := flag.String("scenario", "default", "Which preset of role responses / tool-call scripts to apply (default, deep-research, crud-tools, ops, research-graph, research-graph-execute)")
 	flag.Parse()
 
 	openaiAddr := fmt.Sprintf(":%d", *port)
@@ -69,6 +70,8 @@ func applyScenarioPreset(server *mock.OpenAIServer, scenario string) {
 		applyOpsPreset(server)
 	case "research-graph":
 		applyResearchGraphPreset(server)
+	case "research-graph-execute":
+		applyResearchGraphExecutePreset(server)
 	default:
 		// "default" leaves the server's base configuration in place —
 		// agentic tier uses this path, plus any future scenario that just
@@ -384,6 +387,49 @@ func applyResearchGraphPreset(server *mock.OpenAIServer) {
 					"hints": map[string]any{
 						"domain": "robotics",
 					},
+				},
+			},
+		})
+}
+
+// applyResearchGraphExecutePreset scripts the isolated walk_seeds fixture.
+// The candidate_index reference binds the router output to the classifier's
+// controlled nonzero candidate without teaching the mock a graph entity ID.
+func applyResearchGraphExecutePreset(server *mock.OpenAIServer) {
+	server.
+		WithRoleResponses([]mock.RoleResponse{
+			{
+				Marker: researchroute.SystemPromptMarker,
+				Content: `{
+  "action": "walk_seeds",
+  "args": {"seeds": [{"ref": "0", "ref_type": "candidate_index"}]},
+  "rationale": "Walk the controlled classifier candidate to collect graph evidence."
+}`,
+			},
+			{
+				Marker: researchassess.SystemPromptMarker,
+				Content: `{
+  "sufficient": true,
+  "refined_queries": [],
+  "rationale": "The controlled graph evidence is sufficient.",
+  "confidence": 1.0
+}`,
+			},
+			{
+				Marker: researchsynthesize.SystemPromptMarker,
+				Content: fmt.Sprintf(`{
+  "synthesis": "The controlled graph entity records drone hover anomaly evidence.",
+  "evidence_refs": [%q]
+}`, researchgraph.ControlledSeedEntityID),
+			},
+		}).
+		WithRoleToolCallSequence([]mock.RoleToolCall{
+			{
+				Marker:   "Investigate the research topic via research_graph",
+				ToolName: "research_graph",
+				Args: map[string]any{
+					"topic": "drone hover anomalies",
+					"hints": map[string]any{"domain": "robotics"},
 				},
 			},
 		})

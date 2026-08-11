@@ -48,15 +48,15 @@ complete. Every nontrivial implementation slice receives independent `semstreams
 
 ## C. Research execute/fusion proof
 
-- [ ] C.1 Preserve the current direct fixture and all positive/negative assertions.
-- [ ] C.2 Add an explicit isolated mock/scenario mode for a deterministic non-trivial route using `walk_seeds` with
+- [x] C.1 Preserve the current direct fixture and all positive/negative assertions.
+- [x] C.2 Add an explicit isolated mock/scenario mode for a deterministic non-trivial route using `walk_seeds` with
   the controlled candidate-index seed.
-- [ ] C.3 Assert execute completion, positive evidence count, controlled evidence identity, assessment completion and
+- [x] C.3 Assert execute completion, positive evidence count, controlled evidence identity, assessment completion and
   sufficiency, terminal synthesis, exact evidence references, completion envelope, and R6 continuation.
-- [ ] C.4 Prove the fixture traverses production `executeAll` and `fusion.Fuse`; do not use a unit-only hook.
-- [ ] C.5 Run both isolated modes under the existing `task e2e:research-graph`; add no top-level tier/task family.
-- [ ] C.6 Keep rules, subjects, payloads, components, and production fusion behavior unchanged.
-- [ ] C.7 Obtain independent SemStreams review of fixture determinism and assertions.
+- [x] C.4 Prove the fixture traverses production `executeAll` and `fusion.Fuse`; do not use a unit-only hook.
+- [x] C.5 Run both isolated modes under the existing `task e2e:research-graph`; add no top-level tier/task family.
+- [x] C.6 Keep rules, subjects, payloads, components, and production fusion behavior unchanged.
+- [x] C.7 Obtain independent SemStreams review of fixture determinism and assertions.
 
 ## D. Truth and disposition
 
