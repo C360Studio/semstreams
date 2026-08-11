@@ -40,8 +40,8 @@ func TestGraphQueryOperationInventoryIsExactAndComplete(t *testing.T) {
 		"prefix": {"graph-gateway", "fusionnats"}, "spatial": {"graph-gateway"},
 		"temporal": {"graph-gateway", "research-graph-execute"},
 		"semantic": {"graph-gateway", "fusionnats"}, "similar": {"graph-gateway"},
-		"globalSearch": {"graph-gateway"}, "summary": {"graph-gateway", "agentic-tools (unadmitted)"},
-		"searchGraph": {"graph-gateway", "research-graph-classify", "research-graph-execute", "agentic-tools (unadmitted)"},
+		"globalSearch": {"graph-gateway"}, "summary": {"graph-gateway"},
+		"searchGraph": {"graph-gateway", "research-graph-classify", "research-graph-execute"},
 		"byName":      {"fusionnats"}, "localSearch": {"graph-gateway"},
 	}
 	availability := map[string]string{

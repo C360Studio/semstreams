@@ -441,7 +441,7 @@ func TestBuiltinGroupKeys_Stability(t *testing.T) {
 		"bash", "web_search", "http_request",
 		"read_loop_result", "decide", "emit_diagnosis", "emit_lesson",
 		"write_todos", "scratchpad",
-		"summarize_graph", "search_graph", "flow_monitor",
+		"flow_monitor",
 		"graph_query",
 		"rules", "flows", "personas", "flow_templates",
 		"component_catalog",
@@ -463,7 +463,7 @@ func TestBuiltinGroupKeys_Stability(t *testing.T) {
 // emit_lesson (the sole agent-facing lesson WRITE path) and MUST NOT contain any
 // dedicated lesson search/list/query tool — lessons reach agents by bounded
 // deterministic brief injection, never a pull tool. Generic graph-read tools
-// (search_graph, query_entity) remain, governed by per-role allowlists.
+// in the query_* family remain, governed by per-role allowlists.
 func TestBuiltins_EmitLessonWriteOnly_NoLessonSearchTool(t *testing.T) {
 	t.Parallel()
 
@@ -492,7 +492,7 @@ func TestCoreToolGroupsExcludeProductAndCapabilityTools(t *testing.T) {
 			}
 		}
 	}
-	for _, required := range []string{"graph_query", "search_graph", "summarize_graph"} {
+	for _, required := range []string{"graph_query"} {
 		found := false
 		for _, group := range BuiltinGroupKeys {
 			if group == required {

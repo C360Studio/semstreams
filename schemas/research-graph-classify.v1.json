@@ -13,7 +13,7 @@
     },
     "max_candidates": {
       "type": "integer",
-      "description": "Cap on number of candidate entities to surface from the search_graph response (latency vs route_search prompt budget). 0 means default (25).",
+      "description": "Cap on number of candidate entities to surface from the graph.query.searchGraph response (latency vs route_search prompt budget). 0 means default (25).",
       "default": 25,
       "maximum": 200,
       "category": "advanced"

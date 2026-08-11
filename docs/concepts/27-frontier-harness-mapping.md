@@ -250,8 +250,8 @@ substrate is the same; only the prompts move.
 **Graph-not-for-agent-reasoning**
 (`feedback_graph_not_for_agent_reasoning`, 3 instrumented
 incidents). Frontier agents (Gemini 3.x Pro, Sonnet 4.6) do not
-reliably navigate the SKG even with `search_graph` / `query_entity`
-/ `summarize_graph` in the allowlist and the persona prompt
+reliably navigate the SKG even with the then-available `search_graph` /
+`query_entity` / `summarize_graph` tools in the allowlist and the persona prompt
 explicitly encouraging graph-first lookups. The fix that worked
 was injection-side (lineage triples into the prompt payload), not
 query-side. This is exactly the failure mode the skill analog of

@@ -9,15 +9,16 @@ decision record this page describes.
 ## Push, Not Pull
 
 The framework already tried the obvious design once: expose memory as agent-callable tools
-(`search_graph`, `query_*`) and let the model decide when to look something up. It failed on
+(historically `search_graph`, alongside the retained `query_*` family) and let the model decide
+when to look something up. It failed on
 interface friction, not on the model — agents fell back to training-corpus habits (grep and
-friends) instead of calling the tools, so the tools were removed. That failure is why memory in
-SemStreams is delivered, not fetched.
+friends) instead of calling the tools, so the open-ended wrapper was retired. That failure is why
+memory in SemStreams is delivered, not fetched.
 
 ```mermaid
 flowchart LR
     subgraph Rejected["Rejected: pull"]
-        M1[Model] -->|"maybe calls search_graph?"| Q1[Query tool]
+        M1[Model] -->|"maybe calls a graph tool?"| Q1[Query tool]
         Q1 -.->|often skipped| M1
     end
 
@@ -32,9 +33,9 @@ Concretely: at loop dispatch, brief assembly deterministically matches active le
 loop's scope and renders them straight into the system prompt — no tool call, no model judgment
 about whether to look. The one surviving pull is following a reference a brief already handed
 over — `read_loop_result(loop_id, max_bytes, offset)` to fetch a prior loop's full output, or
-`query_entity` on a lesson ID a brief cited — never an open-ended search. Generic graph-read tools
-(`query_entity`, `graph_query`, `search_graph`) still exist and remain useful, but they are
-governed per-role by tool allowlists: by convention, worker roles should not carry them, while
+`query_entity` on a lesson ID a brief cited — never an open-ended search. The five direct `query_*`
+graph-read tools still exist and remain useful, but they are governed per-role by tool allowlists:
+by convention, worker roles should not carry them, while
 observation roles like the [ops agent](../adr/027-ops-agent-meta-harness.md) legitimately do.
 
 ## The Three Memory Layers
@@ -45,7 +46,7 @@ The three-layer taxonomy (episodic / semantic / procedural) is the industry-conv
 | Layer | Answers | Framework surface | Access |
 |---|---|---|---|
 | **Episodic** — what happened | `AGENT_LOOPS` KV (`COMPLETE_{loopID}`, full text) + `agent.complete.*` JetStream stream + `AGENT_TRAJECTORIES` KV | `read_loop_result` dereferences a handed loop ID within the retention window |
-| **Semantic** — what's true | The knowledge graph, with BM25 (Tier 1) and neural (Tier 2) embeddings for text content | Per-role-allowlisted graph-read tools (`query_entity`, `graph_query`, `search_graph`); worker roles conventionally excluded |
+| **Semantic** — what's true | The knowledge graph, with BM25 (Tier 1) and neural (Tier 2) embeddings for text content | Per-role-allowlisted direct `query_*` graph-read tools; worker roles conventionally excluded |
 | **Procedural** — what to do | `agent.lesson.*` predicates + `emit_lesson` writer + `LessonCurator` promotion lane + `lessonmatch` matcher | Pushed into the system prompt at brief assembly — never a tool call |
 
 Episodic content is not durable: `AGENT_LOOPS` defaults to a 24-hour KV TTL and the

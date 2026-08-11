@@ -113,6 +113,6 @@
 //   - graph-embedding: queries for similar entities via NATS request/reply
 //
 // Downstream:
-//   - graph-query: reads COMMUNITY_INDEX (community cache → GraphRAG / search_graph)
+//   - graph-query: reads COMMUNITY_INDEX (community cache → GraphRAG / searchGraph)
 //   - graph-gateway: reads ANOMALY_INDEX for the optional inference-review API
 package graphclustering

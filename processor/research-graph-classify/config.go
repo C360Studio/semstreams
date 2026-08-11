@@ -29,7 +29,7 @@ type Config struct {
 
 	RetrieveTimeout time.Duration `json:"retrieve_timeout,omitempty" schema:"type:duration,description:Timeout for the downstream graph.query.searchGraph request that fetches initial candidate entities,default:30s,category:advanced"`
 
-	MaxCandidates int `json:"max_candidates,omitempty" schema:"type:int,description:Cap on number of candidate entities to surface from the search_graph response (latency vs route_search prompt budget). 0 means default (25). ,default:25,max:200,category:advanced"`
+	MaxCandidates int `json:"max_candidates,omitempty" schema:"type:int,description:Cap on number of candidate entities to surface from the graph.query.searchGraph response (latency vs route_search prompt budget). 0 means default (25). ,default:25,max:200,category:advanced"`
 
 	// EnableLLMClassifier toggles wiring the T3 LLM tier into the
 	// classifier chain when a query_classification capability is

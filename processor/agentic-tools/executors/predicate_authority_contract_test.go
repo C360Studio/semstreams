@@ -106,8 +106,8 @@ func isPredicateBearingName(name string) bool {
 // typeCanCarryGrammar reports whether a property's declared JSON-schema type
 // can convey a grammar-bearing VALUE. The spec bans accepting "a predicate,
 // triple, or equivalent grammar-bearing value" — a boolean or numeric toggle
-// whose NAME mentions predicates (summarize_graph's `include_predicates`
-// verbosity flag) carries no grammar and is not the banned surface. Absent or
+// whose NAME mentions predicates but carries only a verbosity toggle conveys
+// no grammar and is not the banned surface. Absent or
 // string/array/object types are conservatively treated as carriers.
 func typeCanCarryGrammar(raw any) bool {
 	schema, ok := raw.(map[string]any)

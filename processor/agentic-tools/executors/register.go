@@ -109,8 +109,6 @@ var BuiltinGroupKeys = []string{
 	"emit_lesson",
 	"write_todos",
 	"scratchpad",
-	"summarize_graph",
-	"search_graph",
 	"flow_monitor",
 	// Multi-tool registrations: key is the register-function's domain
 	"graph_query",       // registerGraphQuery — query_entity + 4 others
@@ -198,12 +196,6 @@ func RegisterBuiltins(ctx context.Context, reg *agentictools.ExecutorRegistry, d
 			return registerWriteTodos(reg, deps.MutationClient, deps.Platform, logger)
 		})
 		gate("scratchpad", func() error { return registerScratchpad(reg, deps.NATSClient, deps.Platform, logger) })
-		// Gateway-first discovery tools (PR #54 step 2): thin wrappers
-		// over the new graph.query.summary + graph.query.searchGraph
-		// server-side resolvers. Read-only, no platform identity
-		// required. See project_graph_tools_gateway_first_plan memory.
-		gate("summarize_graph", func() error { return registerSummarizeGraph(reg, deps.NATSClient, logger) })
-		gate("search_graph", func() error { return registerSearchGraph(reg, deps.NATSClient, logger) })
 	}
 
 	// Pattern-B registry-backed tools. A nil manager is a legal skip;

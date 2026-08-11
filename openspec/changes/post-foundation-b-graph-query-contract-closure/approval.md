@@ -112,3 +112,18 @@ On 2026-08-10 the owner approved splitting complexity deletion into two independ
 - F2 separately deletes the unadmitted agentic `search_graph` and `summarize_graph` wrappers under rulings 5 and 14.
 
 F1 lands and is independently reviewed before F2 begins. Neither slice may absorb the other or unrelated issue work.
+
+## Approved Slice F2 design
+
+On 2026-08-10 the owner, having already approved rulings 5 and 14 and the F1-before-F2 sequencing, explicitly directed
+“then F2” after PR #927. The accepted F2 inventory passed independent review at SHA-256
+`eb136b5b6b818d84a0eec4744cdc9bc0fadd7883735c82738fae5dc506494ebf`; the bounded F2 design passed independent design
+review at reviewed-draft SHA-256 `19b30bf02a29a39c83bfc87dac6e5febe4d21d274b4fbc01ec0ca9d5319abb50`.
+After owner acceptance and status promotion, the final approved design and its sidecar are SHA-256
+`3f6954800e0c68ffa19a8c2d6c76f16d2eeee7ac084d3571cccbac480d0bb502`.
+
+The owner selected Option 3: clean deletion of the two framework-owned shared wrappers with no replacement or new
+surface. Nil/empty allowlists remain permissive but cannot create an absent executor; approval interception remains
+before registry dispatch; and ordinary application-local reuse of either former name remains available through the
+existing local extension seam. This clarification adds no new ruling, alias, reservation, compatibility behavior,
+port, subject, client, MCP surface, or configuration field.
