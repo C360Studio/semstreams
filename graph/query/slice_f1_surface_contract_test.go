@@ -88,16 +88,6 @@ func TestSliceF1RetainedQuerySurfacesRemain(t *testing.T) {
 			directory: filepath.Join(repoRoot, "processor", "graph-index"),
 			names:     []string{"Component", "CreateGraphIndex"},
 		},
-		{
-			directory: filepath.Join(repoRoot, "processor", "agentic-tools", "executors"),
-			names: []string{
-				"NATSQuerier",
-				"SearchGraphExecutor",
-				"NewSearchGraphExecutor",
-				"SummarizeGraphExecutor",
-				"NewSummarizeGraphExecutor",
-			},
-		},
 	}
 
 	for _, tc := range cases {

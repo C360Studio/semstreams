@@ -34,6 +34,12 @@ func TestGetToolCategory_UnknownTool(t *testing.T) {
 	assert.Equal(t, CategoryCore, got, "unregistered tool should default to CategoryCore")
 }
 
+func TestSliceF2CategoryAliasesFallBackToCore(t *testing.T) {
+	for _, name := range []string{"graph_search", "graph_summary"} {
+		assert.Equal(t, CategoryCore, GetToolCategory(name))
+	}
+}
+
 func TestRegisterToolCategory(t *testing.T) {
 	const testTool = "test_tool_register_unique_abc123"
 

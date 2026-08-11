@@ -1,23 +1,67 @@
 ## ADDED Requirements
 
-### Requirement: The admitted builtin set excludes the unowned graph-query wrappers
+### Requirement: Framework-owned shared builtins exclude the unowned graph-query wrappers
 
-The framework SHALL NOT register, advertise, execute, configure, document, or export the agentic tools
-`search_graph` or `summarize_graph`. Their shared registrations, component-local registrations, `BuiltinGroupKeys`,
-accepted `SkipBuiltins` keys, registration functions, implementations, exported executor/option/constructor/querier
-symbols, tests, schemas, documentation, and discovery/default-tool expectations SHALL be absent.
+The framework SHALL NOT supply shared builtin tools named `search_graph` or
+`summarize_graph`. Their framework-owned shared registrations,
+`BuiltinGroupKeys`, accepted `SkipBuiltins` keys, registration functions,
+implementations, exported executor/option/constructor/querier symbols, tests,
+schemas, documentation, discovery defaults, operation-consumer claims, and
+alternate framework category entries `graph_search`/`graph_summary` SHALL be
+absent.
 
-GraphQL `searchGraph` and `graphSummary`, their graph-query responders, and research consumers SHALL remain. The
-general component-local extension seam and dispatch precedence SHALL remain unchanged for unrelated tool names. No
-replacement tool, reserved name, definition-only executor, dependency-port metadata, discovery redesign, no-op skip
-value, alias, or compatibility wrapper SHALL be added.
+This requirement does not reserve either former name or prohibit an application
+from registering its own component-local executor under that name through the
+existing general extension seam. An application-local executor SHALL remain
+subject to the existing allowlist, per-loop advertised set, approval, retry,
+local-over-shared discovery, and local-first dispatch behavior. SemStreams SHALL
+add no shared alias, compatibility executor, reserved-name rule, dependency
+inference, or special configuration behavior for such a local tool.
 
-#### Scenario: deleted wrappers cannot drift from query ports
+GraphQL `searchGraph` and `graphSummary`, their graph-query responders, research
+consumers, exact reads, fusion, projection, classifier/search options, direct
+`query_*` tools, and selected `research_graph` SHALL remain.
 
-- **WHEN** shared and component-local tool discovery, builtin keys, executor registrations, and exported symbols are
-  inspected
-- **THEN** neither deleted name or implementation is present
-- **AND** agentic-tools claims no `graph.query.searchGraph` or `graph.query.summary` output
+Open-vocabulary `allowed_tools`, `default_tools`, `approval_required`, and
+`tool_retries` SHALL NOT become a closed framework-tool enum. Nil or empty
+`AllowedTools` SHALL remain permissive for surviving or application-local
+registered tools, but SHALL NOT create an absent executor. Stale deleted
+`SkipBuiltins` values SHALL fail through existing closed-set validation.
+
+#### Scenario: framework shared discovery excludes the deleted wrappers
+
+- **WHEN** framework shared builtin registration and discovery run
+- **THEN** neither former name has a framework-supplied definition or executor
+- **AND** neither shared registration, skip key, exported implementation, or
+  alternate category entry is present
+
+#### Scenario: permissive allowlist does not create a deleted executor
+
+- **GIVEN** nil or empty `AllowedTools`
+- **AND** no application-local executor uses the former name
+- **WHEN** shared discovery runs
+- **THEN** the former name is absent
+- **AND** an admitted direct call that is not intercepted for approval reaches
+  the registries and returns the existing typed not-found outcome
+
+#### Scenario: approval interception precedes registry miss
+
+- **GIVEN** a former name remains in `approval_required`
+- **AND** the wire call passes global and per-loop admission
+- **AND** no executor is registered under that name
+- **WHEN** the unapproved call is handled
+- **THEN** ApprovalFilter produces the existing approval-required permission and
+  pause behavior before registry dispatch
+- **AND** a later approved or bypassed dispatch returns typed not-found if no
+  local executor exists
+
+#### Scenario: application-local reuse remains ordinary local extension
+
+- **GIVEN** an application registers a local executor under a former name
+- **WHEN** discovery and dispatch run
+- **THEN** the local definition is discovered through existing local precedence
+- **AND** existing admission, approval, retry, and dispatch rules apply
+- **AND** no shared alias, reservation, or compatibility executor participates
 
 #### Scenario: stale skip configuration fails visibly
 
@@ -25,10 +69,3 @@ value, alias, or compatibility wrapper SHALL be added.
 - **WHEN** builtin configuration is validated
 - **THEN** existing closed-set validation rejects it
 - **AND** the framework does not silently accept a compatibility no-op
-
-#### Scenario: unrelated local tools keep their existing seam
-
-- **GIVEN** an application registers a non-reserved local executor name
-- **WHEN** discovery and dispatch run after the wrapper deletion
-- **THEN** registration, discovery, and local-over-shared dispatch precedence remain unchanged
-- **AND** no new dependency inference or port mechanism is required

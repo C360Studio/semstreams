@@ -52,9 +52,8 @@ func newSearchGraphRetriever(client *natsclient.Client, subject string, timeout 
 	return &searchGraphRetriever{client: client, subject: subject, timeout: timeout}
 }
 
-// searchGraphRequest mirrors the agent tool's wire shape (see
-// processor/agentic-tools/executors/search_graph.go). Limit is
-// surfaced via max_communities — the server-side resolver uses it
+// searchGraphRequest mirrors the graph.query.searchGraph operation's request
+// shape. Limit is surfaced via max_communities — the server-side resolver uses it
 // to cap the result fan-out.
 type searchGraphRequest struct {
 	Query          string `json:"query"`

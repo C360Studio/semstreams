@@ -40,9 +40,7 @@ var toolCategories = map[string]ToolCategory{
 	"write_todos": CategoryCore,
 
 	// Knowledge
-	"graph_query":   CategoryKnowledge,
-	"graph_search":  CategoryKnowledge,
-	"graph_summary": CategoryKnowledge,
+	"graph_query": CategoryKnowledge,
 
 	// Network
 	"web_search":   CategoryNetwork,

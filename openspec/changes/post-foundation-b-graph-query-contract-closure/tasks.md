@@ -173,13 +173,49 @@ of an internal contradiction and a new owner ruling.
 
 ## F2. Unadmitted agentic wrapper deletion
 
-- [ ] F2.1 Delete `search_graph` and `summarize_graph` from registrations, builtin/skip keys, implementations,
-  complete exported surfaces, tests, schemas, docs, and expectations.
-- [ ] F2.2 Prove stale skip values fail existing validation and unrelated local registration, discovery, and dispatch
-  precedence remain unchanged.
-- [ ] F2.3 Prove deletion does not reach GraphQL, graph-query responders, research consumers, fusion, exact reads,
-  projection, or classifier code.
-- [ ] F2.4 Run focused race, schema/no-drift, agentic and research E2E gates and obtain independent review.
+- [x] F2.1 Add failing source and behavior guards for the complete exported,
+  registration, skip-key, category-alias, discovery, dispatch, permissive-
+  allowlist, and operation-consumer surfaces.
+- [x] F2.2 Delete exactly the six framework wrapper implementation,
+  registration, and test files; remove both shared builtin keys/gates, all nine
+  exported symbols, and stale `graph_search`/`graph_summary` category entries.
+  Do not prohibit application-local reuse of either former name. Add no shared
+  replacement, reserved name, alias, shim, port, subject, client, MCP surface,
+  or config field.
+- [x] F2.3 Make stale deleted `SkipBuiltins` values fail through existing
+  closed-set validation. Preserve open-vocabulary
+  allow/default/approval/retry fields, nil/empty `AllowedTools` semantics for
+  registered tools, admission-before-approval ordering, ApprovalFilter-before-
+  registry ordering on the wire path, application-local registration,
+  local-over-shared discovery, and local-first dispatch.
+- [x] F2.4 Update the graph-query operation consumer inventory, temporary F1
+  preservation guard, current docs, research adapter comments, and generated
+  research-classify description. Preserve historical ADR/archive evidence and
+  the independent research provenance spelling `Source: "search_graph"`.
+- [x] F2.5 Prove GraphQL fields, all sixteen responders, research adapters,
+  fusionnats, exact reads, projection, classifier/search options, five direct
+  `query_*` tools, and selected `research_graph` remain unchanged.
+- [x] F2.6 Run focused and full race tests, lint, schema/no-drift review,
+  contract tests, strict OpenSpec validation, `task e2e:agentic`, and
+  `task e2e:research-graph`; obtain independent SemStreams review before the
+  breaking F2 commit lands.
+
+### Slice F2 gate evidence (2026-08-10)
+
+- RED caught the exact six wrapper files, nine exports, two registration functions, two builtin/skip keys, stale
+  category aliases, skip behavior, shared discovery, and operation-consumer claims.
+- Negative mutation runs reintroduced the `search_graph` key and removed `ResearchGraphToolName`; both corresponding
+  guards failed, and the tree was checksum-restored after each run.
+- Implementation deleted exactly the approved wrapper cohort and added no replacement, alias, reserved name, shim,
+  port, subject, client, MCP surface, or configuration field.
+- Real-NATS behavior proved ApprovalFilter ordering before registry miss and ordinary application-local reuse of both
+  former names through existing admission, discovery, approval, and dispatch rules.
+- Preservation checks retained GraphQL fields, all sixteen responders, research adapters and provenance, fusionnats,
+  exact reads, projection, classifier/search options, five direct `query_*` tools, and selected `research_graph`.
+- Focused and full race tests, full Docker integration, lint, contract tests, and strict OpenSpec validation (39/39)
+  passed. Schema generation changed only the expected research-classify description.
+- Agentic and research-graph E2E tiers passed. Independent `semstreams-reviewer` gave final **APPROVE** after the
+  checkpoint-identity correction.
 
 ## G. Spec correction, release evidence, and archive
 

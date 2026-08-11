@@ -13,6 +13,12 @@ All sixteen responders SHALL install during every successful graph-query Start t
 whether the responder exists. The sixteen existing exact subjects and success payloads SHALL remain wire-stable.
 `batch` and `byName` remain NATS-only. A seventeenth operation requires an explicit query-contract delta.
 
+After removal of the unadmitted agentic wrappers, the operation inventory SHALL
+record `summary` with graph-gateway as its sole in-repo consumer and
+`searchGraph` with graph-gateway, research-graph-classify, and
+research-graph-execute as its exact in-repo consumers. Subjects, handlers,
+success shapes, availability behavior, and GraphQL fields SHALL remain unchanged.
+
 #### Scenario: local search before the community bucket exists
 
 - **GIVEN** graph-query started without `COMMUNITY_INDEX`

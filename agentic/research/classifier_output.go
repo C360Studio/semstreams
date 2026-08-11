@@ -9,10 +9,10 @@ import (
 )
 
 // Candidate is one entity hit the classifier surfaced for the topic.
-// Mirrors the search_graph EntityDigest shape (entity_id + label +
-// type + relevance score + optional snippet) so PR 4
-// (execute_subqueries) can consume nl_classify's output and search-
-// graph's output through one evidence schema.
+// Mirrors the graph.query.searchGraph entity-digest shape (entity_id + label +
+// type + relevance score + optional snippet) so PR 4 (execute_subqueries) can
+// consume nl_classify's output and the graph-query operation's output through
+// one evidence schema.
 //
 // Provenance is mandatory: every Candidate carries the Tier ("0"
 // keyword / "1" embedding/BM25 / "2" neural — Phase 2) and Source
