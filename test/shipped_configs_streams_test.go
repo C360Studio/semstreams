@@ -110,6 +110,37 @@ func TestShippedConfigs_DeclareNoExpiringOverrides(t *testing.T) {
 	}
 }
 
+func TestShippedConfigs_ToolStreamCapturesOnlyQueuedToolWork(t *testing.T) {
+	wantPaths := []string{
+		"agentic.json",
+		"examples/research-graph-pipeline.json",
+		"flows/crud-tools-test.json",
+		"flows/deep-research-test.json",
+		"flows/deep-research.json",
+		"flows/lesson-example.json",
+		"flows/ops-agent-test.json",
+		"flows/ops-agent.json",
+		"research-graph-e2e.json",
+	}
+
+	var gotPaths []string
+	for _, path := range shippedConfigPaths(t) {
+		tool, ok := loadShippedConfig(t, path).Streams["TOOL"]
+		if !ok {
+			continue
+		}
+		rel := mustRel(t, path)
+		gotPaths = append(gotPaths, rel)
+		t.Run(rel, func(t *testing.T) {
+			assert.Equal(t, []string{"tool.execute.>", "tool.result.>"}, tool.Subjects)
+			assert.Equal(t, "24h", tool.MaxAge)
+			assert.EqualValues(t, 268435456, tool.MaxBytes)
+			assert.Equal(t, config.StreamDiscardOld, tool.Discard)
+		})
+	}
+	assert.Equal(t, wantPaths, gotPaths, "the shipped TOOL declaration census changed")
+}
+
 // loadShippedConfig decodes one shipped config. A failure is a FAILURE, never a
 // skip: every file under configs/ that this walk selects is one an operator can
 // start from, so "it would not even load" is the strongest possible finding.

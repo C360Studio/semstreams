@@ -384,21 +384,21 @@ func (s *Scenario) verifyRegisteredTools(ctx context.Context, result *scenarios.
 	return nil
 }
 
-// toolListSubject is the DEFAULT discovery request/reply subject, used
-// deliberately rather than an override.
+// toolListSubject is the configurable default discovery request/reply subject.
+// This stage deliberately exercises the default so it remains a regression
+// guard for the shipped stream-capture contract.
 //
-// This stage is RED against a deployment whose streams cover `tool.>` — which
-// this tier's TOOL stream does — and that is the stage working, not a bug in
-// the stage. The request is captured by JetStream and answered with a publish
-// ack (`{"stream":"TOOL","seq":N}`) before the component's core-NATS responder
-// sees it, silently, because the subscription itself succeeds. Filed as gh#810.
+// Every shipped TOOL stream must cover exactly `tool.execute.>` and
+// `tool.result.>`, leaving default `tool.list` on core NATS. If a deployment
+// widens TOOL back to `tool.>`, JetStream captures this request and answers with
+// a publish ack (`{"stream":"TOOL","seq":N}`) before the component's core-NATS
+// responder sees it, silently, because the subscription itself succeeds.
 //
 // An earlier revision of this stage pointed at an overridden subject so it
 // would pass. That was a workaround masking the defect the stage had just
 // found: it made the tier green while every real deployment on the default
-// subject still had no discovery. The stage stays on the default subject and
-// stays red until gh#810 closes it — at which point this becomes a live
-// regression guard for the capture class.
+// subject still had no discovery. This stage therefore stays on default
+// `tool.list`; its shipped-config regression remedy is narrowing TOOL subjects.
 const toolListSubject = "tool.list"
 
 // verifyToolEffectCatalog asserts the operator-visible discovery catalog carries
@@ -443,7 +443,7 @@ func (s *Scenario) verifyToolEffectCatalog(ctx context.Context, result *scenario
 		// responder does, and the subscription still succeeds so nothing warns.
 		return fmt.Errorf("%s returned zero tools — the catalog assertion would be vacuous (body: %.200s). "+
 			"A {\"stream\",\"seq\"} body means a JetStream stream captured the discovery subject; "+
-			"override the tool.list port subject to one no stream covers", toolListSubject, raw)
+			"narrow the capturing stream subjects; the shipped TOOL contract is tool.execute.> + tool.result.>", toolListSubject, raw)
 	}
 
 	validEffects := map[string]bool{
