@@ -2,18 +2,24 @@
 
 **Status:** Owner approved revised Option 2 and approved adding the derived-index/current-state conformance matrix.
 This artifact remains design/release authority only for the bounded Option 2 slices stated below; the matrix does not
-independently authorize runtime work, issue administration, or a generic convergence programme.
+independently authorize runtime work, issue administration, or a generic convergence programme. The 2026-08-11
+recovery pass below corrects inventory truth only; it does not expand the owner-approved runtime boundary.
 
-**Runtime baseline:** `480607d9` (`v1.0.0-beta.159-121-g480607d9`)
+**Runtime evidence baseline:** `480607d9` (`v1.0.0-beta.159-121-g480607d9`)
 
-**Frozen documentation commit:** `bf5bfeaf`
+**Recovered merged-tree design baseline:** `4593996ef56f50766dcf58fe2200081b72a59133`
+
+**Frozen documentation commit before this correction:** `bf5bfeaf`
 
 **Issue-queue snapshot:** 155 open issues on 2026-08-11. The adjacent
 `post-g-foundation-remap-issue-census.tsv` records every issue number exactly once with its title and disposition.
 
-**Inventory review:** The initial inventory received `INVENTORY PASS` against the runtime baseline above. The first
-matrix draft received `INVENTORY FAIL`; after its completeness findings and two subsequent blocking omissions were
-corrected, the corrected matrix received independent exact-diff approval.
+**Inventory review:** The initial runtime-baseline inventory received `INVENTORY PASS`; the derived-index matrix later
+received independent exact-diff approval after correction. The recovered merged-tree inventory at `4593996e` received
+`INVENTORY FAIL` because it omitted an accepted ADR conflict, current contrary regression tests and completion
+accounting, and the full research task/rule dispatch surface. The correction addendum below incorporates all four
+findings. The exact materialized correction received independent `INVENTORY PASS` on 2026-08-11 against recovered
+baseline `4593996e`; target-state drafting began only after that pass.
 
 ## Program intent and evidence boundary
 
@@ -60,6 +66,73 @@ The initial closeout identified #855 and #875 as the two owner-approved runtime 
 conformance matrix also records bounded current findings in suffix, alias, spatial, payload-bound, BM25, and possibly
 anomaly lifecycle behavior. Recording those findings corrects release truth; it does not silently add them to Option
 2. Each requires separate owner disposition before implementation or tag acceptance.
+
+### Recovered merged-tree inventory correction
+
+This addendum records the exact current authorities that constrain the already-approved Option 2. It is inventory,
+not a new runtime decision.
+
+#### Accepted ADR and current-test conflicts
+
+- **#875 conflicts with accepted ADR-063, not only implementation.** ADR-063 explicitly directs graph-embedding to
+  resolve `resolver.Streamable(ref.StorageInstance)` per fetch, then use the worker's owned `contentStore` whenever
+  the registry misses, preserving single-bucket BM25 deploys; it also directs `shouldFetchViaStorageRef` to admit the
+  fetch lane on either an exact registry match or any wired fallback
+  (`docs/adr/063-store-substrate-and-resolver.md:362-372`). Any instance-exact correction must update that ADR truth or
+  carry an explicit owner-approved deviation/supersession; it cannot silently reinterpret the accepted decision.
+- **#855 contradicts current permanent-failure tests.**
+  `graph/clustering/lpa_error_test.go:331-377` requires one permanent oversized community to save its writable
+  siblings and return partial success with no error; `:379-409` requires an error only when every community is
+  permanently rejected. By contrast, `:426-485` already requires a transient partial save failure to fail the run and
+  preserve the prior partition. On nil error, `processor/graph-clustering/component.go:1779-1800` increments processed
+  and activity state, observes duration, and logs `community detection complete`. The correction must retain the
+  #837 sibling-save behavior while changing permanent-partial terminal truth: successful sibling writes may coexist,
+  but an incomplete candidate cannot prune or enter any complete-success accounting. The safety promise is no
+  deletion of prior keys—a stale superset—not byte-identical rollback of candidate writes.
+- **#875 contradicts current fallback tests.**
+  `graph/embedding/worker_storeresolver_test.go:84-102` requires a registry miss to read the generic owned fallback,
+  and `processor/graph-embedding/storageref_fallback_test.go:27-72` requires any wired `contentStore` to admit the
+  StorageReference fetch lane. These tests are implementation surfaces that must be replaced or tightened. The
+  existing exact registry lookup remains at `storage/storeregistry/storeregistry.go:58-88`; the existing unresolved
+  exclusion and inline continuation remain at
+  `processor/graph-embedding/component.go:1816-1827,1956-1978`. A resolved exact-instance `Open` failure remains an
+  infrastructure failure; a foreign or unregistered instance is excluded and must not become failed/degraded merely
+  because it is unresolved.
+
+#### Research task, fixture, and rule surfaces
+
+- The existing public task maps `e2e:research-graph` to one tier
+  (`taskfile.yml:61-62`; `taskfiles/e2e/research-graph.yml:1-47`). Its scenario identity and description are explicitly
+  direct-only (`test/e2e/scenarios/research-graph/scenario.go:102-123`), and its orchestration assertions require
+  `synthesize_directly` while requiring execute/assess stamps to be absent (`:446-553`).
+- The mock preset hardcodes `synthesize_directly` and a matching direct synthesis trace
+  (`test/e2e/mock/cmd/main.go:301-369`). A second deterministic full-stack route therefore needs an explicit fixture
+  selector; mutating the only preset would erase existing negative coverage.
+- The production rule chain already owns both branches. R2 sends `synthesize_directly` to synthesis and sends
+  `walk_seeds`/`decompose` to `component.execute_subqueries.*`
+  (`configs/rules/research-graph/02-route-decision-dispatch.json:1-84`); R3 sends execute completion to assessment
+  (`configs/rules/research-graph/03-execute-assesses.json:1-27`); R4 sends sufficient assessment to synthesis and an
+  insufficient assessment through bounded execute refinement
+  (`configs/rules/research-graph/04-assess-dispatch.json:1-90`). Focused rule integration already checks all four R2
+  actions and the refine dispatch (`processor/rule/research_graph_pipeline_integration_test.go:30-31,223-235,287-312`).
+  Production execute invokes `fusion.Fuse` at `processor/research-graph-execute/handler.go:158-202`. The uncovered
+  surface is deterministic full-stack evidence through the existing task/tier, not missing runtime rules, subjects,
+  payloads, or fusion logic.
+
+#### Corrected collision and adopter consequences
+
+- ADR-063 and the fallback tests are adjacent claims on the same resolution authority. Instance-exact registry
+  resolution must leave one authority; retaining the owned store as an unnamed second resolution authority or adding
+  a compatibility shim would preserve the collision.
+- An external `Storable` producer still owes only the existing exact logical `StorageInstance`. If that name is foreign
+  or currently unregistered, the framework observes the miss and takes the existing loud excluded/inline path; the
+  producer never predicts a bucket, default store, readiness state, or fallback.
+- A clustering adopter configures nothing. A permanent record-local rejection may leave successful candidate writes
+  alongside the prior valid partition, but it cannot delete prior keys or advertise a complete cycle. A later complete
+  run converges through the existing prune path.
+- The research adopter retains the deterministic `synthesize_directly` proof and gains a separate deterministic
+  execute/assess/fusion proof inside the existing tier; no new task family, subject, payload, or orchestration rule is
+  introduced.
 
 ### Every current spelling of the modeled facts
 
