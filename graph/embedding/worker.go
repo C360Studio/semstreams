@@ -144,14 +144,13 @@ type WorkerMetrics interface {
 	SetPending(count float64)
 	// IncContentResolveError counts a body fetch that FAILED after a store was
 	// resolved (an infra fault: read error, deleted bucket) — distinct from the
-	// component-side content_unresolved (no store wired at all). Preserves the
-	// gh#414 diagnosability the ADR-063 resolver would otherwise blur (M1).
+	// content_unresolved outcome (the exact StorageInstance was not registered).
+	// This preserves the gh#414 diagnosability the ADR-063 resolver would otherwise
+	// blur (M1).
 	IncContentResolveError()
 	// IncContentResolved counts a body successfully fetched from a resolved store.
-	// This is the POSITIVE observable for the ADR-063 H2 behavior change: offloaded
-	// bodies that configs without a store-read port previously excluded now embed —
-	// a rising value is that inclusion happening, not merely content_unresolved
-	// falling (the cost-ledger "make the delta observable" discipline).
+	// This is the positive observable for exact-instance body inclusion; a rising
+	// value is successful resolution, not merely content_unresolved falling.
 	IncContentResolved()
 }
 
@@ -162,6 +161,18 @@ type WorkerMetrics interface {
 type StoreResolver interface {
 	Streamable(instance string) (storage.StreamableStore, bool)
 }
+
+// contentUnresolvedMetrics is an optional extension implemented by the component's
+// metrics adapter. It deliberately stays outside WorkerMetrics so exact-instance
+// resolution does not expand the public worker contract for custom metrics users.
+type contentUnresolvedMetrics interface {
+	IncContentUnresolved()
+}
+
+// errContentUnresolved distinguishes a missing exact registry entry from a store
+// that resolved and then failed to Open/Read. The former excludes only the offloaded
+// body and continues with inline identity; the latter remains a content failure.
+var errContentUnresolved = errors.New("storage instance unresolved")
 
 // Worker processes pending embedding requests asynchronously
 type Worker struct {
@@ -191,15 +202,13 @@ type Worker struct {
 	// KV-reservation variant is deferred.
 	generateGroup singleflight.Group
 
-	// Content store for fetching body text from ObjectStore via streaming.
-	// This is the OWNED fallback (built from a store-read port, closed by the
-	// component). Federated resolution goes through storeResolver first.
-	contentStore storage.StreamableStore
-
 	// storeResolver resolves a StorageRef's StorageInstance to the live store
-	// that owns it (ADR-063 shared registry). Primary path; per-fetch; the
+	// that owns it (ADR-063 shared registry). Sole path; per-fetch; the
 	// resolved handle is BORROWED and never cached or closed by the worker.
 	storeResolver StoreResolver
+	// unresolvedStoreWarn makes a worker-time deregistration loud without flooding
+	// logs. The per-entity content_unresolved counter retains the full cardinality.
+	unresolvedStoreWarn sync.Once
 
 	// Callbacks
 	onGenerated GeneratedCallback // Called when embedding is generated
@@ -262,19 +271,10 @@ func (w *Worker) WithWorkers(n int) *Worker {
 	return w
 }
 
-// WithContentStore sets the OWNED fallback content store for streaming body text
-// retrieval. Used only when the shared resolver cannot resolve a ref's
-// StorageInstance (single-bucket / legacy store-read deploys). The component owns
-// and closes this store.
-func (w *Worker) WithContentStore(store storage.StreamableStore) *Worker {
-	w.contentStore = store
-	return w
-}
-
-// WithStoreResolver sets the shared store resolver (ADR-063). This is the primary
+// WithStoreResolver sets the shared store resolver (ADR-063). This is the sole
 // content-fetch path: a StorageRef's StorageInstance is resolved to the live
-// store that owns it, so the worker fetches offloaded bodies from ANY registered
-// storage instance, not just one wired bucket. Resolved per-fetch; never cached.
+// store that owns it, so the worker fetches an offloaded body only from the exact
+// registered instance named by the reference. Resolved per-fetch; never cached.
 func (w *Worker) WithStoreResolver(r StoreResolver) *Worker {
 	w.storeResolver = r
 	return w
@@ -870,6 +870,11 @@ func (w *Worker) getSourceText(record *Record) (string, error) {
 		// the body to the cap for memory safety, reports whether IT truncated (bodyTruncated),
 		// and counts that body truncation once (#602).
 		body, bodyTruncated, err := w.fetchTextFromStorage(record.StorageRef)
+		if errors.Is(err, errContentUnresolved) {
+			// The store disappeared after hop-1 admission (or was never registered).
+			// Exclude only the body; inline identity remains valid source text.
+			body, bodyTruncated, err = "", false, nil
+		}
 		if err != nil {
 			return "", err
 		}
@@ -978,18 +983,16 @@ func truncateAtWord(text string, maxLen int) string {
 	return truncated
 }
 
-// resolveStore returns the store that backs a StorageInstance: the shared
-// registry first (federated — resolves ANY registered storage instance), then
-// the worker's OWNED fallback store (single wired store-read bucket). Resolves
-// per-fetch and returns a BORROWED handle from the registry path — callers must
-// not close it. Returns nil when neither path can serve the instance.
+// resolveStore returns the exact registered owner of StorageInstance. Resolution
+// happens per fetch and returns a borrowed handle; callers never cache or close it.
+// A different registered instance is never a candidate.
 func (w *Worker) resolveStore(instance string) storage.StreamableStore {
 	if w.storeResolver != nil && instance != "" {
 		if s, ok := w.storeResolver.Streamable(instance); ok {
 			return s
 		}
 	}
-	return w.contentStore // owned fallback (may be nil)
+	return nil
 }
 
 // fetchTextFromStorage streams raw content from the store, reading only up to
@@ -1004,7 +1007,16 @@ func (w *Worker) resolveStore(instance string) storage.StreamableStore {
 func (w *Worker) fetchTextFromStorage(ref *StorageRef) (text string, bodyTruncated bool, err error) {
 	store := w.resolveStore(ref.StorageInstance)
 	if store == nil {
-		return "", false, fmt.Errorf("content store not configured")
+		if metrics, ok := w.metrics.(contentUnresolvedMetrics); ok {
+			metrics.IncContentUnresolved()
+		}
+		if w.logger != nil {
+			w.unresolvedStoreWarn.Do(func() {
+				w.logger.Warn("offloaded body excluded from embedding: no live store is registered for the StorageInstance; start or restore that storage component to include the body",
+					slog.String("storage_instance", ref.StorageInstance))
+			})
+		}
+		return "", false, fmt.Errorf("%w: %q", errContentUnresolved, ref.StorageInstance)
 	}
 
 	reader, err := store.Open(w.ctx, ref.Key)

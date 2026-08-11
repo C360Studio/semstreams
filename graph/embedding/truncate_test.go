@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/c360studio/semstreams/storage"
 )
 
 func TestTruncateAtWord(t *testing.T) {
@@ -169,12 +171,12 @@ func TestFetchTextFromStorage_StreamsLimitedBytes(t *testing.T) {
 	defer cancel()
 
 	w := &Worker{
-		contentStore:     store,
+		storeResolver:    fakeResolver{stores: map[string]storage.StreamableStore{"content": store}},
 		maxSourceTextLen: 100,
 		ctx:              ctx,
 	}
 
-	text, _, err := w.fetchTextFromStorage(&StorageRef{Key: "doc/safety-001"})
+	text, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "content", Key: "doc/safety-001"})
 	if err != nil {
 		t.Fatalf("fetchTextFromStorage error: %v", err)
 	}
@@ -210,30 +212,18 @@ func TestFetchTextFromStorage_ShortContent(t *testing.T) {
 	defer cancel()
 
 	w := &Worker{
-		contentStore:     store,
+		storeResolver:    fakeResolver{stores: map[string]storage.StreamableStore{"content": store}},
 		maxSourceTextLen: 4000,
 		ctx:              ctx,
 	}
 
-	text, _, err := w.fetchTextFromStorage(&StorageRef{Key: "doc/short"})
+	text, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "content", Key: "doc/short"})
 	if err != nil {
 		t.Fatalf("fetchTextFromStorage error: %v", err)
 	}
 
 	if text != "brief" {
 		t.Errorf("expected 'brief', got %q", text)
-	}
-}
-
-func TestFetchTextFromStorage_NilStore(t *testing.T) {
-	w := &Worker{
-		contentStore:     nil,
-		maxSourceTextLen: 4000,
-	}
-
-	_, _, err := w.fetchTextFromStorage(&StorageRef{Key: "doc/any"})
-	if err == nil {
-		t.Error("expected error when content store is nil")
 	}
 }
 
@@ -246,12 +236,12 @@ func TestFetchTextFromStorage_KeyNotFound(t *testing.T) {
 	defer cancel()
 
 	w := &Worker{
-		contentStore:     store,
+		storeResolver:    fakeResolver{stores: map[string]storage.StreamableStore{"content": store}},
 		maxSourceTextLen: 4000,
 		ctx:              ctx,
 	}
 
-	_, _, err := w.fetchTextFromStorage(&StorageRef{Key: "doc/missing"})
+	_, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "content", Key: "doc/missing"})
 	if err == nil {
 		t.Error("expected error for missing key")
 	}
@@ -268,13 +258,13 @@ func TestGetSourceText_StorageRef_UsesStreaming(t *testing.T) {
 	defer cancel()
 
 	w := &Worker{
-		contentStore:     store,
+		storeResolver:    fakeResolver{stores: map[string]storage.StreamableStore{"content": store}},
 		maxSourceTextLen: 4000,
 		ctx:              ctx,
 	}
 
 	record := &Record{
-		StorageRef: &StorageRef{Key: "doc/safety"},
+		StorageRef: &StorageRef{StorageInstance: "content", Key: "doc/safety"},
 	}
 
 	text, err := w.getSourceText(record)
@@ -309,14 +299,14 @@ func TestGetSourceText_OffloadedWithIdentity_ConcatenatesIdentityFirst(t *testin
 	defer cancel()
 
 	w := &Worker{
-		contentStore:     store,
+		storeResolver:    fakeResolver{stores: map[string]storage.StreamableStore{"content": store}},
 		maxSourceTextLen: 4000,
 		ctx:              ctx,
 	}
 
 	record := &Record{
 		IdentityText: "triple-based text",
-		StorageRef:   &StorageRef{Key: "doc/safety"},
+		StorageRef:   &StorageRef{StorageInstance: "content", Key: "doc/safety"},
 	}
 
 	text, err := w.getSourceText(record)

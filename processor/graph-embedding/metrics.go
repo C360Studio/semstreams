@@ -29,21 +29,20 @@ type embeddingMetrics struct {
 	// (#763). Emitted metric names are unchanged, pinned by a test.
 	readiness *readiness.Gauges
 	// contentUnresolved counts entities whose offloaded BODY (a StorageRef)
-	// could not be fetched because no content store is wired, so that body was
-	// excluded from the embedding (gh#414). The entity may still be embedded from
-	// any inline text triples it carries; a rising value means offloaded body
-	// text is being dropped from embeddings — wire a store-read port.
+	// could not be fetched because its exact StorageInstance was not registered,
+	// so that body was excluded from the embedding (gh#414). The entity may still
+	// be embedded from any inline text triples it carries; a rising value means
+	// offloaded body text is being dropped from embeddings — restore the owner.
 	contentUnresolved prometheus.Counter
 	// contentResolveError counts body fetches that FAILED after a store was
 	// resolved (ADR-063 M1): the StorageInstance resolved to a live store, but the
 	// Open/read errored (network fault, deleted bucket, closed handle). Distinct
-	// from contentUnresolved (no store at all) so operators can tell a wiring gap
-	// from a failing backend.
+	// from contentUnresolved (the exact instance is not registered) so operators
+	// can tell an unresolved identity from a failing backend.
 	contentResolveError prometheus.Counter
 	// contentResolved counts offloaded bodies successfully fetched from a resolved
-	// store — the POSITIVE observable for the ADR-063 H2 behavior change (configs
-	// without a store-read port now embed bodies they previously excluded). Rising
-	// value = the inclusion happening, not merely content_unresolved falling.
+	// exact store. A rising value is successful body inclusion, not merely
+	// contentUnresolved falling.
 	contentResolved prometheus.Counter
 	// dedupSkipped counts embeddings generated on a condition where the durable dedup
 	// bucket was NOT consulted (currently: an embedder whose vector width is
@@ -124,21 +123,21 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 				Namespace: "semstreams",
 				Subsystem: "graph_embedding",
 				Name:      "content_unresolved_total",
-				Help:      "Entities whose offloaded body (StorageRef) was excluded from embedding because no content store is wired; inline text, if any, is still embedded (gh#414)",
+				Help:      "Entities whose offloaded body (StorageRef) was excluded because its exact StorageInstance was not registered; inline text, if any, is still embedded (gh#414/#875)",
 			}),
 
 			contentResolveError: prometheus.NewCounter(prometheus.CounterOpts{
 				Namespace: "semstreams",
 				Subsystem: "graph_embedding",
 				Name:      "content_resolve_error_total",
-				Help:      "Offloaded body fetches that failed after a store was resolved (infra fault: read error, deleted bucket); distinct from content_unresolved which is a missing wiring (ADR-063)",
+				Help:      "Offloaded body fetches that failed after the exact StorageInstance resolved (infra fault: read error, deleted bucket); distinct from content_unresolved which is an unregistered instance (ADR-063/#875)",
 			}),
 
 			contentResolved: prometheus.NewCounter(prometheus.CounterOpts{
 				Namespace: "semstreams",
 				Subsystem: "graph_embedding",
 				Name:      "content_resolved_total",
-				Help:      "Offloaded bodies successfully fetched from a resolved store — the positive signal that ADR-063 federated resolution is including bodies previously excluded",
+				Help:      "Offloaded bodies successfully fetched from their exact registered StorageInstance",
 			}),
 
 			// Revision-lag producer: indexed_revision / target_revision are
@@ -347,7 +346,7 @@ func (m *embeddingMetrics) recordDedupHit() {
 }
 
 // recordContentUnresolved increments the counter for offloaded content that was
-// excluded from embedding because no content store is wired (gh#414).
+// excluded because its exact StorageInstance was not registered (gh#414/#875).
 func (m *embeddingMetrics) recordContentUnresolved() {
 	m.contentUnresolved.Inc()
 }
@@ -447,6 +446,15 @@ func (a *workerMetricsAdapter) IncContentResolveError() {
 func (a *workerMetricsAdapter) IncContentResolved() {
 	if a.metrics != nil {
 		a.metrics.recordContentResolved()
+	}
+}
+
+// IncContentUnresolved implements the worker's optional unresolved-content metrics
+// capability without expanding embedding.WorkerMetrics. It covers a store that
+// deregisters between hop-1 admission and hop-2 fetch.
+func (a *workerMetricsAdapter) IncContentUnresolved() {
+	if a.metrics != nil {
+		a.metrics.recordContentUnresolved()
 	}
 }
 

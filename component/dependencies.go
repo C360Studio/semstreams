@@ -103,9 +103,10 @@ type Dependencies struct {
 	// StorageInstance through it, lazily per-fetch. Concrete framework-leaf type
 	// per the PayloadRegistry / LifecycleManager precedent.
 	//
-	// Can be nil — deployments with no offloaded-content fetch pay zero cost;
-	// consumers degrade (embedding falls back to its local store-read store or
-	// reports content-unresolved) rather than panicking.
+	// Can be nil — deployments with no offloaded-content fetch pay zero cost. A
+	// consumer that receives a StorageReference without this exact-name authority
+	// reports content-unresolved and excludes the body; it never selects another
+	// store or degrades solely because the name is unresolved.
 	StoreRegistry *storeregistry.Registry
 }
 
