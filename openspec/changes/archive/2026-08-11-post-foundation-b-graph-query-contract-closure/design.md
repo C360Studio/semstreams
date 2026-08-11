@@ -1,8 +1,7 @@
 # Post-Foundation-B graph query contract-closure roadmap
 
-**Status:** Owner-approved target state. Slices A through F2 are implemented and independently reviewed. On 2026-08-11
-the owner approved the two-checkpoint closeout plan and authorized Checkpoint 1 documentation/specification work.
-Archive-time Purpose publication, final merged-tree gates, and archive remain pending under G.2, G.6, and G.7.
+**Status:** Archive candidate. Slices A through F2 are implemented and independently reviewed; G.2 and G.6 are
+complete. G.7 remains pending exact final independent review, exact-SHA GitHub CI, and unchanged merge.
 
 **Promoted from:** `docs/proposals/post-foundation-b-graph-query-contract-closure-roadmap.md`, SHA-256
 `ff23db51ce7bf6e3d45da09a1706bf70ee548ae5e6aa2b12201ceeae64c4f343`.

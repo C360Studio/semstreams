@@ -363,7 +363,7 @@ func (s *TieredScenario) getEntityCountForEmbeddings(result *Result) int {
 // executeTestHTTPGateway validates GraphQL Gateway query endpoints
 func (s *TieredScenario) executeTestHTTPGateway(ctx context.Context, result *Result) error {
 	graphqlURL := s.config.GraphQLURL
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	httpClient := &http.Client{Timeout: globalSearchClientTimeout(60 * time.Second)}
 
 	// Test globalSearch via GraphQL endpoint
 	graphqlQuery := map[string]any{

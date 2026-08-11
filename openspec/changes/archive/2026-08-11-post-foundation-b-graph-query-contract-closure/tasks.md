@@ -222,7 +222,7 @@ of an internal contradiction and a new owner ruling.
 - [x] G.1 Confirm the graph-index predicate correction documents the shipped raw nine-token `PREDICATE_INDEX`, absent
   `PREDICATE_CATALOG`, NAME hashing on the name axis, NAME and INCOMING reversible predicate hex, and no runtime index
   migration.
-- [ ] G.2 On archive, update the current `graph-query` Purpose to name the admitted operation family, versioned port
+- [x] G.2 On archive, update the current `graph-query` Purpose to name the admitted operation family, versioned port
   contract, stable responders, generation-safe optional-view caches, success decoding, bounded research projection,
   and truthful query outcomes, while explicitly excluding a public subject catalog and general embedded client.
 - [x] G.3 Publish one downstream migration notice covering every accepted adopter break and consequence, including
@@ -233,7 +233,7 @@ of an internal contradiction and a new owner ruling.
 - [x] G.5 Run the correction-propagation sweep over every mutable active artifact, task, migration note, schema,
   fixture, and cited mechanism. Preserve hash-pinned capture-time artifacts verbatim and disposition stale claims in
   new evidence. Record only reproducible in-tree or CI evidence.
-- [ ] G.6 Run `task lint`, `go test -race ./...`, integration tests, schema generation/no drift, contract tests, strict
+- [x] G.6 Run `task lint`, `go test -race ./...`, integration tests, schema generation/no drift, contract tests, strict
   OpenSpec validation, and relevant statistical, semantic, agentic, and research E2E tiers with active monitoring.
 - [ ] G.7 Obtain final independent review, merge all implementation slices, verify merged-tree negative searches and
   gates, conservatively update task truth, and archive the OpenSpec change.
@@ -255,3 +255,28 @@ of an internal contradiction and a new owner ruling.
   untouched, so G.2 remains incomplete.
 - Checkpoint 1 changes no Go source, generated schema, fixture, runtime behavior, or downstream repository. G.6 and
   G.7 remain incomplete pending the merged-tree gate, final review, merge verification, and archive transaction.
+
+### Checkpoint 2 archive-candidate evidence (2026-08-11)
+
+- The durable command transcript, UTC intervals, exit codes, hard assertions, and commit attribution are recorded at
+  `docs/proposals/post-foundation-b-g-closeout-gate-evidence.md`.
+- Corrected implementation commit `cbbc907e` passed statistical (41/41, 7/7 known answers) and semantic (48/48,
+  exact `graphrag`, 30 hits, 7/7 known answers) E2E gates.
+- Archive candidate `344e58bf`, a documentation/OpenSpec-only descendant, passed lint, full race, integration
+  (`natsclient` 94.246s), schema generation/no drift, contract, strict OpenSpec (40/40), agentic, research-graph with
+  candidate count 1, and deep-research gates.
+- The first semantic run exposed a test-only mismatch: the HTTP gateway caller allowed 10s while server-side answer
+  synthesis allowed 15s. Bounded correction `cbbc907e` changed only that caller to the existing 60s helper and made
+  the helper comments truthful. Independent review approved the correction; the rerun passed with the gateway
+  response arriving in 43.6s.
+- All nine named frozen-artifact checksum sidecars passed. Focused Slice F1, Slice F2, gateway-query closure, and
+  sixteen-operation inventory guards passed. Production-source searches found no retired GraphQL alias or
+  capabilities field, F2 wrapper declaration, `QueryResponse.RequestID`, or graph-index `PREDICATE_CATALOG`.
+- `openspec archive -y post-foundation-b-graph-query-contract-closure` materialized this archive, promoted all deltas,
+  and the current `graph-query` Purpose now contains the exact owner-approved capability statement. G.2 and G.6 are
+  therefore complete on this archive candidate.
+- Strict post-archive `task openspec:validate` passed all 40 materialized specs/changes, `git diff --check` passed, and
+  both moved Slice F2 checksum sidecars still verify in the archive directory.
+- G.7 remains unchecked. Final independent review must be tied to the exact archive commit; every GitHub CI check for
+  that unchanged commit must pass before merge. The review and unchanged merge are completion evidence and cannot be
+  claimed by the diff still awaiting them.
