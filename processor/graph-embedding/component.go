@@ -23,7 +23,6 @@ import (
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/resource"
 	"github.com/c360studio/semstreams/pkg/revlag"
-	"github.com/c360studio/semstreams/storage/objectstore"
 	"github.com/c360studio/semstreams/storage/storeregistry"
 	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/nats-io/nats.go/jetstream"
@@ -250,18 +249,15 @@ type Component struct {
 	modelRegistry model.RegistryReader
 
 	// Domain resources
-	embedder     embedding.Embedder
-	storage      *embedding.Storage
-	worker       *embedding.Worker
-	contentStore *objectstore.Store // ContentStorable access (owned lifecycle; fallback only)
+	embedder embedding.Embedder
+	storage  *embedding.Storage
+	worker   *embedding.Worker
 	// storeRegistry is the shared {StorageInstance → store} resolver (ADR-063).
-	// Primary content-fetch path: resolves a StorageRef against ANY registered
-	// storage instance. Nil when the deployment wires no registry; the worker then
-	// falls back to contentStore (single store-read bucket).
+	// Sole content-fetch path: resolves a StorageRef against its exact registered
+	// storage instance. Nil when the deployment does not admit the store-read port.
 	storeRegistry *storeregistry.Registry
-	// noContentStoreWarn fires the "offloaded content excluded, no content store
-	// wired" warning exactly once (gh#414) — the per-entity metric carries the
-	// count; the log stays a single actionable line rather than a flood.
+	// noContentStoreWarn fires the unresolved StorageInstance warning exactly once
+	// (gh#414/#875); the per-entity metric carries the full count.
 	noContentStoreWarn sync.Once
 	entityCoalescer    *cache.CoalescingSet
 	entityStatesBucket entityStatesReader
@@ -760,13 +756,6 @@ func (c *Component) Stop(timeout time.Duration) error {
 		}
 	}
 
-	// Close content store (releases ObjectStore handle + cache)
-	if c.contentStore != nil {
-		if err := c.contentStore.Close(); err != nil {
-			c.logger.Warn("content store close error", slog.Any("error", err))
-		}
-	}
-
 	// Close embedder
 	if c.embedder != nil {
 		if err := c.embedder.Close(); err != nil {
@@ -935,26 +924,12 @@ func (c *Component) initStorageAndWorker(ctx context.Context, indexBucket, dedup
 			c.completeEmbedding(entityID, sourceRevision, outcome, reason)
 		})
 
-	// Wire the shared store resolver (ADR-063) as the PRIMARY content-fetch path:
-	// resolves a StorageRef against any registered storage instance. Guard the nil
+	// Wire the shared store resolver (ADR-063) as the SOLE content-fetch path:
+	// resolves a StorageRef against its exact registered storage instance. Guard the nil
 	// case explicitly — passing a nil *storeregistry.Registry through the interface
 	// would be a non-nil interface over a nil pointer and panic on use.
 	if c.storeRegistry != nil {
 		c.worker = c.worker.WithStoreResolver(c.storeRegistry)
-	}
-
-	// Wire the OWNED fallback content store (single store-read bucket) for
-	// deployments without a registry entry for the ref's instance. Reads bucket
-	// name from the store-read port config; owned by Component, closed in Stop().
-	// A fatal retention error here (#600/#616) must abort Start closed — Start
-	// returns this error before starting the entity watcher or query handlers.
-	contentStore, err := c.createContentStore(ctx)
-	if err != nil {
-		return err
-	}
-	c.contentStore = contentStore
-	if c.contentStore != nil {
-		c.worker = c.worker.WithContentStore(c.contentStore)
 	}
 
 	if err := c.worker.Start(ctx); err != nil {
@@ -1105,71 +1080,6 @@ func (c *Component) failedSnapshot() (count uint64, reasons map[string]uint64, f
 		}
 	}
 	return count, reasons, firstAt
-}
-
-// createContentStore creates an ObjectStore handle from the store-read port config.
-// Returns (nil, nil) if no store-read port is configured or if the store is merely
-// unavailable (unconfigured / not reachable) — the content store is legitimately
-// OPTIONAL and ContentStorable degrades gracefully without it. It returns a FATAL
-// error only when the D2 retention guard (#600/#616) refuses a backing stream that
-// keeps lifecycle eviction it cannot strip; that must fail Start closed rather than
-// silently disable content, so the caller must propagate it.
-func (c *Component) createContentStore(ctx context.Context) (*objectstore.Store, error) {
-	// Find store-read port bucket name
-	bucket := ""
-	for _, port := range c.inputs {
-		facts, err := port.Facts()
-		if err != nil {
-			return nil, fmt.Errorf("project input port %q: %w", port.Name, err)
-		}
-		if storeBucket, ok := facts.StoreReadBucket(); ok {
-			bucket = storeBucket
-			break
-		}
-	}
-	if bucket == "" {
-		return nil, nil
-	}
-
-	store, err := objectstore.NewStoreWithConfig(ctx, c.natsClient, objectstore.Config{
-		BucketName: bucket,
-	})
-	resolved, resErr := contentStoreOutcome(store, err, bucket)
-	switch {
-	case resErr != nil:
-		// Fatal retention violation (#600/#616): fail Start closed.
-		return nil, resErr
-	case resolved == nil:
-		// Non-fatal / unavailable: the content store is OPTIONAL, so disable it and
-		// continue (BM25 / no-store tiers boot without it).
-		c.logger.Debug("content store not available, ContentStorable disabled",
-			slog.String("bucket", bucket),
-			slog.Any("error", err))
-		return nil, nil
-	default:
-		c.logger.Info("content store wired for embedding text extraction",
-			slog.String("bucket", bucket))
-		return resolved, nil
-	}
-}
-
-// contentStoreOutcome maps a content-store constructor result to createContentStore's
-// return, PRESERVING the D2 retention guard's fail-closed semantics (#600/#616). The
-// content store is legitimately OPTIONAL, so a non-fatal "unavailable" error resolves
-// to a disabled store (nil, nil) and the component degrades gracefully; a FATAL
-// retention violation returns (nil, WrapFatal) so Start fails CLOSED. The IsFatal
-// branch is load-bearing — folding a fatal into the graceful nil path re-introduces
-// the #632 swallowed-fatal defect. Extracted so the decision is directly testable.
-func contentStoreOutcome(store *objectstore.Store, err error, bucket string) (*objectstore.Store, error) {
-	switch {
-	case err == nil:
-		return store, nil
-	case errs.IsFatal(err):
-		return nil, errs.WrapFatal(err, "Component", "createContentStore",
-			fmt.Sprintf("content store %q retention", bucket))
-	default:
-		return nil, nil // non-fatal: content store optional, disable and continue
-	}
 }
 
 // waitForDependenciesAndStartWatcher waits for ENTITY_STATES bucket and starts the entity watcher.
@@ -1801,18 +1711,14 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 		return
 	}
 
-	// ContentStorable path: prefer the StorageRef → ObjectStore fetch, but ONLY
-	// when a content store is actually wired (a store-read port is configured).
+	// ContentStorable path: take the StorageRef fetch only when its exact owning
+	// StorageInstance is currently registered through the admitted store-read port.
 	//
 	// #264 (ADR-055 Wave 0) began lifting StorageRef onto the EntityState at the
-	// ingest seam. Without a content store, the worker's fetchTextFromStorage
-	// hard-fails ("content store not configured") and markFailed fires — which
-	// silently collapses ALL embedding (and therefore BM25/search) for every
-	// entity whose content was offloaded. Configs without a content store (e.g.
-	// the BM25 statistical tier, which wires no store-read port) have no way to
-	// honour a StorageRef, so degrade gracefully to inline text extraction from
-	// the entity's content triples instead of failing. Configs WITH a content
-	// store keep the offloaded-content fetch path unchanged.
+	// ingest seam. An unresolved owner used to fall through to an unrelated owned
+	// store and could read the wrong body. Exact membership now decides whether to
+	// queue the reference; a miss explicitly excludes the body and continues with
+	// inline text rather than creating a content failure (#875).
 	if c.shouldFetchViaStorageRef(&entityState) {
 		c.queueEmbeddingWithStorageRef(ctx, entityID, sourceRevision, &entityState)
 		return
@@ -1933,14 +1839,10 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 
 // shouldFetchViaStorageRef reports whether an entity's offloaded content should
 // be fetched via its StorageRef. It requires a StorageRef AND a store that can
-// serve it — either (ADR-063) the shared registry can resolve the ref's owning
-// StorageInstance (federated: ANY registered instance), or the legacy single
-// wired content store is present as a fallback. Without either, the worker's
-// fetchTextFromStorage hard-fails ("content store not configured") and markFailed
-// fires, silently collapsing all embedding/search for offloaded entities; so we
-// fall back to inline text extraction instead and report the exclusion loudly
-// (gh#414, see queueEntityForEmbedding). Configs that can serve the ref are
-// unaffected.
+// serve it. Another registered instance is not equivalent: StorageInstance is
+// the logical owner identity, not a hint from which a reader may choose a bucket.
+// A miss excludes only the offloaded body, continues through inline extraction,
+// and reports the exclusion loudly (gh#414/#875).
 func (c *Component) shouldFetchViaStorageRef(state *graph.EntityState) bool {
 	if state.StorageRef == nil {
 		return false
@@ -1950,31 +1852,30 @@ func (c *Component) shouldFetchViaStorageRef(state *graph.EntityState) bool {
 			return true
 		}
 	}
-	return c.contentStore != nil
+	return false
 }
 
 // reportOffloadedContentExcluded makes the silent-loss case observable (gh#414):
 // an entity carries a StorageRef (its BODY is offloaded to a store, NOT inline)
-// but no content store is wired, so the inline fallback cannot see that body and
-// it is EXCLUDED from the embedding (and thus BM25/search). The entity may still
-// be embedded from any inline text triples it carries — only the offloaded body
-// is lost. A per-entity metric carries the count; the warning fires once so the
-// log is a single actionable line, not a flood. Fix on the operator side: wire a
-// store-read port for the StorageInstance that produced the content.
+// but its exact StorageInstance is not registered, so the inline path cannot see
+// that body and it is EXCLUDED from the embedding (and thus BM25/search). The
+// entity may still be embedded from any inline text triples it carries — only the
+// offloaded body is lost. A per-entity metric carries the count; the warning fires
+// once so the log is a single actionable line, not a flood. Fix on the operator
+// side: start or restore the owning storage component.
 func (c *Component) reportOffloadedContentExcluded(entityID, storageInstance string) {
 	if c.metrics != nil {
 		c.metrics.recordContentUnresolved()
 	}
 	c.noContentStoreWarn.Do(func() {
-		c.logger.Warn("offloaded body EXCLUDED from embeddings: entity carries a "+
-			"StorageRef but no content store is wired — wire a store-read port for its "+
-			"StorageInstance to embed offloaded bodies (inline text, if any, is still "+
-			"embedded) (gh#414)",
+		c.logger.Warn("offloaded body EXCLUDED from embeddings: no live store is registered "+
+			"for the StorageRef's exact StorageInstance — start or restore that storage "+
+			"component (inline text, if any, is still embedded) (gh#414/#875)",
 			slog.String("entity", entityID),
 			slog.String("storage_instance", storageInstance))
 	})
-	c.logger.Debug("entity has StorageRef but no content store; inline fallback",
-		slog.String("entity", entityID))
+	c.logger.Debug("entity StorageInstance is unresolved; continuing with inline text",
+		slog.String("entity", entityID), slog.String("storage_instance", storageInstance))
 }
 
 // queueEmbeddingWithStorageRef queues an embedding using ContentStorable pattern.

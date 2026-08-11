@@ -37,6 +37,12 @@ func TestWorkerMetricsAdapter_NewSignalsHaveRealConsumers(t *testing.T) {
 	require.Equal(t, tbefore+1, testutil.ToFloat64(m.textTruncated),
 		"IncTruncated must increment the registered text_truncated_total counter")
 
+	// content_unresolved_total (#875 worker-time deregistration lane)
+	ubefore := testutil.ToFloat64(m.contentUnresolved)
+	adapter.IncContentUnresolved()
+	require.Equal(t, ubefore+1, testutil.ToFloat64(m.contentUnresolved),
+		"IncContentUnresolved must increment the existing content_unresolved_total counter")
+
 	// offloaded_identity_included_total (#601)
 	ibefore := testutil.ToFloat64(m.offloadedIdentityIncluded)
 	adapter.IncOffloadedIdentityIncluded()

@@ -1,7 +1,7 @@
 # Tasks — post-G tag-safety closeout
 
-The #855 runtime correction and its independent review are complete. No other runtime or release task is complete.
-Every nontrivial implementation slice receives independent `semstreams-reviewer` approval before integration.
+The #855 and #875 runtime corrections and their independent reviews are complete. No other runtime or release task is
+complete. Every nontrivial implementation slice receives independent `semstreams-reviewer` approval before integration.
 
 ## P. Promotion and evidence
 
@@ -31,20 +31,20 @@ Every nontrivial implementation slice receives independent `semstreams-reviewer`
 
 ## B. #875 instance-exact storage resolution
 
-- [ ] B.1 Replace contrary component/worker fallback tests with exact-match, foreign-miss, inline continuation,
+- [x] B.1 Replace contrary component/worker fallback tests with exact-match, foreign-miss, inline continuation,
   no-inline skip, deregistration-race, and resolved-read-failure regressions.
-- [ ] B.2 Make component admission depend only on exact current `StoreRegistry` membership.
-- [ ] B.3 Remove worker `contentStore` fallback, `WithContentStore`, and graph-embedding's duplicate direct ObjectStore
+- [x] B.2 Make component admission depend only on exact current `StoreRegistry` membership.
+- [x] B.3 Remove worker `contentStore` fallback, `WithContentStore`, and graph-embedding's duplicate direct ObjectStore
   construction/ownership/close path.
-- [ ] B.4 Preserve the existing store-read declaration and injected registry lifecycle without port/schema redesign.
-- [ ] B.5 Route an ordinary exact miss through the existing loud exclusion and inline path.
-- [ ] B.6 Route a worker-time registry miss caused by deregistration to content-unresolved plus identity-only/no-text
+- [x] B.4 Preserve the existing store-read declaration and injected registry lifecycle without port/schema redesign.
+- [x] B.5 Route an ordinary exact miss through the existing loud exclusion and inline path.
+- [x] B.6 Route a worker-time registry miss caused by deregistration to content-unresolved plus identity-only/no-text
   behavior, never `SaveFailed` or failed/degraded accounting.
-- [ ] B.7 Preserve resolved exact-store Open/Read failure as bounded content failure and degraded readiness.
-- [ ] B.8 Update ADR-063, dependency comments, metrics/log wording, tests, and operator guidance to one exact-name
+- [x] B.7 Preserve resolved exact-store Open/Read failure as bounded content failure and degraded readiness.
+- [x] B.8 Update ADR-063, dependency comments, metrics/log wording, tests, and operator guidance to one exact-name
   authority with no fallback or shim.
-- [ ] B.9 Run focused race and integration tests, including live register/deregister ordering.
-- [ ] B.10 Obtain independent SemStreams implementation review.
+- [x] B.9 Run focused race and integration tests, including live register/deregister ordering.
+- [x] B.10 Obtain independent SemStreams implementation review.
 
 ## C. Research execute/fusion proof
 

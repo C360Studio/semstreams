@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/c360studio/semstreams/storage"
 )
 
 // TestFetchTextFromStorage_OverCapCountsTruncation is the offloaded-lane half of
@@ -22,13 +24,13 @@ func TestFetchTextFromStorage_OverCapCountsTruncation(t *testing.T) {
 	}
 	m := &recordingWorkerMetrics{}
 	w := &Worker{
-		contentStore:     store,
+		storeResolver:    fakeResolver{stores: map[string]storage.StreamableStore{"content": store}},
 		maxSourceTextLen: 100,
 		metrics:          m,
 		ctx:              context.Background(),
 	}
 
-	text, _, err := w.fetchTextFromStorage(&StorageRef{Key: "doc/big"})
+	text, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "content", Key: "doc/big"})
 	if err != nil {
 		t.Fatalf("fetchTextFromStorage: %v", err)
 	}
@@ -51,13 +53,13 @@ func TestFetchTextFromStorage_UnderCapDoesNotCountTruncation(t *testing.T) {
 	}
 	m := &recordingWorkerMetrics{}
 	w := &Worker{
-		contentStore:     store,
+		storeResolver:    fakeResolver{stores: map[string]storage.StreamableStore{"content": store}},
 		maxSourceTextLen: 100,
 		metrics:          m,
 		ctx:              context.Background(),
 	}
 
-	if _, _, err := w.fetchTextFromStorage(&StorageRef{Key: "doc/exact"}); err != nil {
+	if _, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "content", Key: "doc/exact"}); err != nil {
 		t.Fatalf("fetchTextFromStorage: %v", err)
 	}
 	if got := m.snapshot().truncated; got != 0 {
