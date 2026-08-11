@@ -105,9 +105,9 @@ type Scenario struct {
 
 	// baselineActiveRules captures semstreams_rule_active_rules at the end of
 	// verifyComponents so verify-hotreload-pickup can assert the gauge
-	// increased by exactly one after the mock's create_rule call landed. A
-	// value of -1 means the metrics endpoint was unreachable and the
-	// hot-reload stage should be skipped rather than failed.
+	// increased by exactly one after the mock's create_rule call landed.
+	// The scenario fails before mutation when this required baseline cannot be
+	// established.
 	baselineActiveRules float64
 }
 
@@ -235,17 +235,13 @@ func (s *Scenario) verifyComponents(ctx context.Context, result *scenarios.Resul
 
 	// Capture baseline active-rules gauge so verify-hotreload-pickup can
 	// assert the rule written by the mock's create_rule call incremented it.
-	// Failure to reach the metrics endpoint is non-fatal here — the
-	// hot-reload stage will skip gracefully when baselineActiveRules == -1.
 	baseline, err := s.metrics.GetMetricValue(ctx, "semstreams_rule_active_rules")
 	if err != nil {
-		result.Warnings = append(result.Warnings,
-			fmt.Sprintf("hot-reload baseline: could not scrape semstreams_rule_active_rules (%v); verify-hotreload-pickup will be skipped", err))
-		s.baselineActiveRules = -1
-	} else {
-		s.baselineActiveRules = baseline
-		result.Details["baseline_active_rules"] = baseline
+		return fmt.Errorf("capture required semstreams_rule_active_rules baseline from %s: %w",
+			s.config.MetricsURL, err)
 	}
+	s.baselineActiveRules = baseline
+	result.Details["baseline_active_rules"] = baseline
 	return nil
 }
 
@@ -301,16 +297,9 @@ func (s *Scenario) seedPersonaOverride(ctx context.Context, result *scenarios.Re
 // The rule-processor's debounce window is 250ms; after the apply step the
 // metric update is synchronous. Two seconds of polling window is generous
 // for CI variance.
-//
-// If the metrics endpoint was unreachable at baseline time
-// (s.baselineActiveRules == -1) the stage is skipped with a Warning entry
-// rather than failed, keeping the scenario resilient on minimal flows
-// without a metrics service.
 func (s *Scenario) verifyHotreloadPickup(ctx context.Context, result *scenarios.Result) error {
 	if s.baselineActiveRules < 0 {
-		result.Warnings = append(result.Warnings,
-			"verify-hotreload-pickup: metrics unreachable at baseline; stage skipped")
-		return nil
+		return fmt.Errorf("hot-reload pickup: required active-rules baseline is unavailable")
 	}
 
 	stageStart := time.Now()
@@ -547,7 +536,10 @@ func (s *Scenario) verifyFireEveryNEvents(ctx context.Context, result *scenarios
 		return err
 	}
 
-	baselinePublished := s.captureFireEveryNBaseline(ctx)
+	baselinePublished, err := s.captureFireEveryNBaseline(ctx)
+	if err != nil {
+		return err
+	}
 	result.Details["fire_every_n_baseline_published"] = baselinePublished
 
 	injectedKeys, err := s.injectProbeEntities(ctx, result)
@@ -589,16 +581,10 @@ func (s *Scenario) seedFireEveryNRule(ctx context.Context, result *scenarios.Res
 }
 
 // waitForFireEveryNRuleHotReload polls until the rule-processor's active_rules
-// gauge reaches baseline+2 (e2e-crud-rule plus the new gate rule). Falls back
-// to a fixed 400ms delay when metrics are unavailable.
+// gauge reaches baseline+2 (e2e-crud-rule plus the new gate rule).
 func (s *Scenario) waitForFireEveryNRuleHotReload(ctx context.Context, result *scenarios.Result) error {
 	if s.baselineActiveRules < 0 {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(400 * time.Millisecond):
-		}
-		return nil
+		return fmt.Errorf("fire-every-n hot-reload: required active-rules baseline is unavailable")
 	}
 
 	// e2e-crud-rule (loaded by verify-hotreload-pickup) + e2e-fire-every-n-test
@@ -621,24 +607,29 @@ func (s *Scenario) waitForFireEveryNRuleHotReload(ctx context.Context, result *s
 			return nil
 		}
 	}
-	result.Warnings = append(result.Warnings,
-		fmt.Sprintf("fire-every-n hot-reload: active_rules did not reach %.0f within 2s (last=%.0f); proceeding",
-			expected, lastSeen))
-	return nil
+	return fmt.Errorf("fire-every-n hot-reload: active_rules did not reach %.0f within 2s (last=%.0f)",
+		expected, lastSeen)
 }
 
 // captureFireEveryNBaseline reads the current value of the events-published
 // metric so the assertion can compute a delta rather than an absolute count.
-func (s *Scenario) captureFireEveryNBaseline(ctx context.Context) float64 {
+func (s *Scenario) captureFireEveryNBaseline(ctx context.Context) (float64, error) {
 	if s.baselineActiveRules < 0 {
-		return 0
+		return 0, fmt.Errorf("capture %s baseline: required active-rules baseline is unavailable",
+			fireEveryNMetricName)
 	}
 	metrics, err := s.metrics.GetMetricByLabels(ctx, fireEveryNMetricName,
 		map[string]string{"event_type": fireEveryNMetricET, "subject": fireEveryNMetricSubj})
-	if err != nil || len(metrics) == 0 {
-		return 0
+	if err != nil {
+		return 0, fmt.Errorf("capture %s baseline from %s: %w", fireEveryNMetricName, s.config.MetricsURL, err)
 	}
-	return metrics[0].Value
+	if len(metrics) == 0 {
+		// CounterVec label series do not exist until their first increment.
+		// verifyComponents already established the rule metrics collector via
+		// active_rules, so an absent pre-publish series is an observed zero.
+		return 0, nil
+	}
+	return metrics[0].Value, nil
 }
 
 // injectProbeEntities writes 9 EntityState records to ENTITY_STATES KV.
@@ -682,9 +673,7 @@ func (s *Scenario) injectProbeEntities(ctx context.Context, result *scenarios.Re
 // times for 9 matching events with N=3.
 func (s *Scenario) assertFireEveryNGate(ctx context.Context, result *scenarios.Result, baselinePublished float64) error {
 	if s.baselineActiveRules < 0 {
-		result.Warnings = append(result.Warnings,
-			"verify-fire-every-n-events: metrics unreachable; gate assertion skipped")
-		return nil
+		return fmt.Errorf("fire_every_n_events gate: required metrics baseline is unavailable")
 	}
 
 	target := baselinePublished + float64(fireEveryNExpected)

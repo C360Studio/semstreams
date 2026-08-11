@@ -2,33 +2,33 @@
 
 ### Requirement: Every advertised deterministic path has an explicit candidate disposition
 
-Before candidate freeze, every retained advertised deterministic path SHALL have a green exact-candidate result in the
-detached attestation. #301, #844, and #860 are retained gates. A nonzero test or wrapper result SHALL be treated as red,
-and D SHALL NOT authorize a fix, removal, or coverage transfer merely because a retained path is red.
+Every retained advertised deterministic path SHALL have a green exact-candidate result before tag authorization.
+Issues #301, #844, and #860 are retained gates. A nonzero test or wrapper result SHALL be treated as red. The
+documentation slice SHALL NOT authorize a fix, removal, or coverage transfer merely because a retained path is red.
 
-Every release-truth finding outside the approved runtime scope SHALL likewise be recorded as an accepted limitation,
-a separately approved blocker, or a deferred named program. Recording a finding SHALL NOT imply conformance or
-implementation authority.
+Every release-truth finding outside approved runtime scope SHALL be recorded as an accepted limitation, a separately
+approved blocker, or a deferred named program. Recording a finding SHALL NOT imply conformance or implementation
+authority.
 
 The binding decision record SHALL be `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md`. It SHALL
-record owner, decision date, disposition, and coverage/publication plan. It SHALL NOT predict the SHA of the commit
-that contains it. Exact candidate identity, command/results, timestamps, and evidence pointers SHALL live in the
-immutable detached GitHub Release attestation keyed to that SHA. Any required detached field left PENDING blocks
-candidate freeze.
+record owner, decision date, disposition, and coverage/publication plan. It SHALL NOT predict the SHA of its containing
+commit. Exact candidate identity, command results, timestamps, and evidence pointers SHALL live in the immutable
+`candidate-proof-<fullSHA>` GitHub Release asset. Product tag, artifact, actual #827, and final decision facts SHALL
+live in the separate immutable product-Release attestation.
 
 #### Scenario: A retained advertised path is red
 
 - **GIVEN** #301, #844, #860, or another retained advertised deterministic path
-- **WHEN** its candidate proof is red
-- **THEN** candidate freeze is blocked
+- **WHEN** its exact-candidate proof is red
+- **THEN** tag authorization is blocked
 - **AND** wrapper silence or invocation shape does not convert the red result into success
 
-#### Scenario: D encounters a red retained path
+#### Scenario: The documentation slice encounters a red retained path
 
 - **GIVEN** #301, #844, or #860 is red on the exact candidate
-- **WHEN** D records the result
-- **THEN** candidate freeze stops
-- **AND** D does not authorize a runtime fix or remove the retained path
+- **WHEN** the result is recorded
+- **THEN** tag authorization stops
+- **AND** the documentation slice does not authorize a runtime fix or remove the retained path
 
 #### Scenario: A matrix finding remains outside runtime scope
 
@@ -39,46 +39,69 @@ candidate freeze.
 
 #### Scenario: The accepted community-value limitation is published
 
-- **GIVEN** #839 is accepted for this tag
-- **WHEN** the candidate is prepared for publication
-- **THEN** release material states that an oversized community value may be rejected by NATS
-- **AND** it claims only #855's incomplete-candidate protection, not oversized-community success
+- **GIVEN** #839 is accepted for the product release
+- **WHEN** product Release notes are published
+- **THEN** they state that an oversized community value may be rejected by NATS
+- **AND** they claim only #855's incomplete-candidate protection, not oversized-community success
 
-### Requirement: Release proof is tied to one exact candidate
+### Requirement: Candidate selection precedes immutable pre-tag proof
 
-The release candidate SHALL be one clean exact commit SHA. Focused tests, lint, full race, integration,
-schema/no-drift, contracts, strict OpenSpec, required deterministic E2E paths, independent review, and GitHub CI SHALL
-refer to that same candidate.
+Candidate freeze SHALL mean selection of one clean immutable commit SHA after all in-tree preparation. The package
+manifest SHALL be regenerated once as the final preparation edit and SHALL only be verified after selection. Candidate
+selection SHALL NOT require a proof record, product tag, artifact, or #827 result that cannot yet exist.
 
-The authoritative proof record SHALL be an immutable detached GitHub Release attestation keyed to the candidate's full
-SHA. The in-tree `candidate-evidence.md`, covered by `manifest.sha256`, SHALL define its schema but SHALL NOT be
-completed as evidence or redefine candidate identity. The detached record SHALL include candidate cleanliness,
-command/result provenance, semantic polls, retained-path results, limitation publication, independent review and CI
-identity, tag resolution, binary/container identity, and #827 outcome.
+After candidate selection, proof runs SHALL collect local/run evidence. Only after every required gate is green SHALL
+the release owner create a non-product GitHub Release tag named `candidate-proof-<fullSHA>` targeting the exact
+candidate and publish its immutable asset. Because this tag does not start with `v`, it SHALL NOT trigger the current
+product release or container workflows. Its immutable asset SHALL record only green pre-tag facts: candidate identity
+and cleanliness, package-manifest verification, exact command/result provenance, semantic polls, retained-path
+results, independent review, exact-SHA CI, the #827 operator/window/planned action, and tag authorization. A red gate
+SHALL reject the candidate through local/run evidence and SHALL NOT require a failed candidate-proof Release.
 
-The detached attestation SHALL NOT contain or require its own SHA-256. A digest MAY be carried only by external GitHub
-Release metadata or a sibling checksum asset created after upload, and SHALL NOT redefine candidate or attestation
-identity.
+The candidate-proof asset SHALL NOT contain or require its own URL or SHA-256. GitHub Release metadata or a sibling
+checksum asset created after upload MAY carry that external verification metadata.
 
-Long-running paid or resource-intensive proof SHALL be actively polled using authoritative readiness, counters, and
-stage progress. A provably wedged run SHALL be aborted rather than allowed to consume its natural timeout.
-
-Any code, specification, evidence, generated-file, or task-truth correction after proof begins SHALL create a new
+Any code, specification, generated-file, task-truth, or package-manifest correction after selection SHALL create a new
 candidate identity and invalidate affected proof, review, and CI.
 
 #### Scenario: The candidate cannot name itself
 
-- **GIVEN** the in-tree decision and attestation-template files
-- **WHEN** the candidate commit is created
+- **GIVEN** the in-tree decision and evidence-schema files
+- **WHEN** the candidate commit is selected
 - **THEN** neither file contains or predicts that commit's SHA
-- **AND** the release owner creates the SHA-keyed detached attestation afterward
+- **AND** the release owner creates the SHA-keyed candidate proof afterward
+
+#### Scenario: The manifest is checked after selection
+
+- **GIVEN** the manifest was regenerated as the final in-tree preparation edit
+- **WHEN** candidate proof begins
+- **THEN** the operator verifies every existing manifest entry
+- **AND** does not regenerate or edit the manifest on the candidate
 
 #### Scenario: The candidate changes after review
 
 - **GIVEN** an independently reviewed candidate SHA
 - **WHEN** any file in the release tree changes
-- **THEN** the prior review and exact-candidate evidence no longer authorize release
-- **AND** the corrected candidate is reproved and independently reviewed
+- **THEN** the prior review and candidate proof no longer authorize release
+- **AND** the corrected candidate is selected, reproved, and independently reviewed
+
+### Requirement: Candidate proof binds exact commands and active observation
+
+The candidate-proof record SHALL bind and record the exact commands in `candidate-evidence.md` for focused tests,
+lint, full race, integration, schema generation, schema/spec no-drift, contracts, strict OpenSpec, statistical,
+semantic, agentic, research direct-plus-execute, deep-research, crud-tools, and ops gates. It SHALL record runner
+identity, UTC start/end, exit/result, and log or artifact SHA-256 for every command.
+
+Every bound `go test` command SHALL use `-count=1` so cached results cannot satisfy exact-candidate proof. The focused
+command SHALL cover both core graph packages, both processor wrappers, the store registry, test infrastructure, and
+the crud-tools and research-graph scenario packages.
+
+One `task e2e:research-graph` invocation SHALL prove both isolated direct and execute/fusion rounds. One
+`task e2e:crud-tools` invocation MAY prove #301 and #860 only when their distinct assertions are identified.
+
+Long-running paid or resource-intensive proof SHALL be polled every 30–60 seconds using `/readyz`, authoritative
+counters, and stage timestamps. A provably wedged run SHALL be aborted rather than allowed to consume its natural
+timeout.
 
 #### Scenario: Semantic proof continues making progress
 
@@ -94,23 +117,36 @@ candidate identity and invalidate affected proof, review, and CI.
 - **THEN** the run is aborted
 - **AND** the candidate remains unproven
 
-### Requirement: The published tag and artifacts identify the approved candidate
+### Requirement: Tag authorization and publication are separate evidence phases
 
-The release tag SHALL resolve to the exact reviewed and CI-green candidate SHA. Release notes SHALL name clean breaks,
-owner-accepted limitations, and downstream migration responsibility. The coordinated #827 wipe/reseed SHALL be
-scheduled at the tag boundary; if its permitted pre-v1 window closes first, tagging SHALL halt and the operation SHALL
+The release owner SHALL authorize a product tag only after all candidate-proof gates are green and the proof records a
+named #827 operator, tag-boundary window, and planned wipe/reseed action. #827 SHALL NOT execute during in-tree work or
+candidate proof.
+
+The product tag SHALL resolve to the authorized candidate SHA. The coordinated #827 operation SHALL execute
+immediately at the product tag boundary. If its permitted window closes, tagging SHALL halt and the operation SHALL
 become an explicit migration.
 
-Tag resolution, binary version/checksum, container reference/digest/reported version, and exact-SHA CI identity SHALL
-be recorded in the detached attestation.
+After publication, a separate immutable asset on the product GitHub Release SHALL link and externally digest the
+candidate-proof asset. It SHALL record product tag resolution, binary version/checksum, container
+reference/digest/reported version, the actual #827 result or migration halt, the final release decision, and accepted
+or deferred limitations. It SHALL NOT contain or require its own URL or SHA-256.
 
-The built binary and published container SHALL report the intended version. Container tag and digest SHALL be recorded.
-Downstream repositories MAY pin and migrate after publication; they SHALL NOT be treated as an exhaustive pre-tag gate.
+Tag-specific migration guidance SHALL exist only in the product GitHub Release notes and attestation. The candidate
+tree SHALL NOT be edited after proof to inject release facts. Downstream repositories MAY pin and migrate after
+publication; they SHALL NOT be treated as exhaustive pre-tag gates.
+
+#### Scenario: Tag authorization is requested before proof is green
+
+- **GIVEN** the candidate SHA has been selected
+- **WHEN** any required pre-tag gate is red or missing
+- **THEN** the release owner rejects tag authorization
+- **AND** no failed candidate-proof Release is required
 
 #### Scenario: The tag points to a different commit
 
-- **GIVEN** an approved candidate SHA
-- **WHEN** the proposed tag resolves elsewhere
+- **GIVEN** an authorized candidate SHA
+- **WHEN** the proposed product tag resolves elsewhere
 - **THEN** publication is blocked
 
 #### Scenario: The pre-v1 wipe window closes
@@ -118,7 +154,7 @@ Downstream repositories MAY pin and migrate after publication; they SHALL NOT be
 - **GIVEN** #827 has not executed and the permitted pre-v1 boundary has closed
 - **WHEN** release preparation reaches tagging
 - **THEN** tagging halts
-- **AND** wipe/reseed is handled through an explicit migration instead
+- **AND** wipe/reseed is handled through an explicit migration
 
 #### Scenario: A downstream has not yet migrated
 

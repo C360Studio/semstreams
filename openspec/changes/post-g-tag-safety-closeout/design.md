@@ -1,8 +1,9 @@
 # Post-G tag-safety closeout design
 
 **Status:** Corrected exact checksum-addressed target state received independent `DESIGN PASS`. The repository owner
-approved all binding design rulings on 2026-08-11. Runtime slices #855 and #875 and the research execute/fusion proof
-merged as #933, #934, and #936. The bounded truth/disposition slice is in progress; candidate proof has not begun.
+approved all binding design rulings on 2026-08-11. Runtime slices #855 and #875, research execute/fusion proof, and
+truth/disposition merged as #933, #934, #936, and #937. This pre-candidate correction removes the remaining evidence
+cycle. Candidate selection and proof have not begun.
 
 **Baseline:** `4593996ef56f50766dcf58fe2200081b72a59133`
 
@@ -10,14 +11,20 @@ merged as #933, #934, and #936. The bounded truth/disposition slice is in progre
 `8368e9b17e869561ca5c2123c8028d1311e449dae930c483d450c627a4acfcc6`.
 
 **Package content root:** `openspec/changes/post-g-tag-safety-closeout/manifest.sha256`. The manifest covers every
-OpenSpec artifact beneath this change directory except itself and is regenerated after any covered edit. It is the
-in-tree package content root; no covered artifact records or requires the manifest's digest. The detached attestation
-records the candidate's manifest digest after the candidate exists; no additional in-tree sidecar is required.
+OpenSpec artifact beneath this change directory except itself. It is regenerated once as the final in-tree preparation
+step before candidate selection, then only verified on the immutable candidate. No covered artifact records or
+requires the manifest's digest. Candidate proof records the selected manifest's digest after the candidate exists.
 
 ## Boundary
 
 Only #855 and #875 are runtime correction slices. Research work proves an existing execution path. Release work
-corrects truth and establishes the detached candidate-evidence contract.
+corrects truth and establishes the external candidate-proof and release-attestation contracts.
+
+The bounded pre-candidate correction also changes test truth, not production behavior. The existing crud-tools
+scenario must fail closed when #860's required metrics proof is unreachable or does not converge. The integration
+runner contract test must give `Cmd.Wait` one owner across timeout and cleanup. Exact-candidate Go commands bypass the
+test cache and the focused command covers core graph packages as well as processor wrappers. No workflow behavior
+changes.
 
 DI-01 through DI-03, #619, #672, and temporal poison/cleanup are deferred to the Derived-Index Convergence Program.
 DI-04 is deferred to the Anomaly Lifecycle and Retention Program. #857 is deferred to the Payload Bounds and
@@ -36,8 +43,8 @@ It adds no generic abstraction or adopter-facing knob.
 | Embedding operator | Run the named storage component that owns the reference. | Exact registered refs resolve; missing names are excluded. | Existing component/store discovery and metrics. | No duplicate wiring or fallback store. |
 | Clustering/query adopter | Nothing new. | An incomplete run cannot prune or claim completion, but successful or partial writes may overwrite entity mappings and readers may observe a mixed prior/candidate projection. | Existing clustering query behavior and error telemetry. | No knowledge of NATS payload ceilings or partition internals. |
 | Research adopter | Existing direct and non-trivial routes remain. | The capability behaves as today; the repository gains deterministic proof of both. | Existing `research_graph` result and E2E evidence. | No rule subjects, KV keys, or fixture mechanics. |
-| Release owner | Keep decisions in the in-tree ledger, then publish an immutable detached GitHub Release attestation keyed to the exact candidate SHA. | Candidate freeze is blocked until every required detached field is complete. | The checksum-addressed change package and attestation schema. | No self-referential SHA, inference from issue labels, wrapper silence, or downstream guesses. |
-| Downstream repository | Pin the exact published tag, then migrate and test. | It remains safely on its prior pin. | Release notes and migration guide. | No pre-tag lockstep or compatibility shim. |
+| Release owner | Select one immutable SHA, publish its non-product candidate proof, then publish a separate product-Release attestation. | Tag authorization is blocked until every pre-tag gate is green. | The checksum-addressed change package and evidence schema. | No evidence cycle, self-reference, inference from issue labels, wrapper silence, or downstream guesses. |
+| Downstream repository | Pin the exact published tag, then migrate and test. | It remains safely on its prior pin. | Product Release notes and version-independent migration guide. | No pre-tag lockstep or compatibility shim. |
 
 ## Options
 
@@ -174,10 +181,10 @@ The implementation documentation slice:
   `CONTEXT_INDEX` as retired, not cataloged, and not created; and records that no `PREDICATE_CATALOG` exists;
 - adds a premise-status annotation to suspended `semantic-tier-split` without unfreezing it or completing tasks; and
 - corrects stale comments in `e2e-ladder.yml` and `sister-validation.yml` without changing workflow behavior; and
-- adds a candidate-aware migration draft that cannot claim an exact tag or outcome before detached proof exists.
+- adds version-independent migration guidance; exact tag, artifact, and #827 facts remain product-Release-only.
 
 Owner-approved policy (2026-08-11): #301, #844, and #860 remain advertised. Each exact candidate must run its named
-path green or candidate freeze stops. D authorizes neither a fix nor removal if one is red, and an honest nonzero
+path green or tag authorization stops. D authorizes neither a fix nor removal if one is red, and an honest nonzero
 wrapper result cannot be relabeled as harness success.
 
 The remaining owner dispositions are binding:
@@ -189,14 +196,15 @@ The remaining owner dispositions are binding:
 - #857 defers to the Payload Bounds and Retention Program; and
 - #829 defers to the Semantic Summary Content/Quality Program.
 
-Each accepted or deferred limitation is published with the candidate. Inventory presence alone is not conformance,
-does not authorize implementation, and cannot silently expand runtime scope.
+Each accepted or deferred limitation is published in product GitHub Release notes. Inventory presence alone is not
+conformance, does not authorize implementation, and cannot silently expand runtime scope.
 
 `disposition-ledger.md` is the authoritative in-tree decision record. The repository owner owns binding decisions;
 the technical writer owns faithful transcription and conservative task truth. The ledger records decision date and
 coverage/publication plan, but it cannot contain the SHA of the candidate commit that contains it. Candidate identity,
-exact command/results, timestamps, and evidence pointers live in the immutable detached GitHub Release attestation
-keyed to the candidate's full SHA. The in-tree `candidate-evidence.md` is only the schema for that external record.
+exact command/results, timestamps, and evidence pointers live in the immutable `candidate-proof-<fullSHA>` Release
+asset. Tag, artifact, actual #827, and final decision facts live in the separate immutable product-Release
+attestation. The in-tree `candidate-evidence.md` is only the schema for those external records.
 
 ## Same-class collision result
 
@@ -208,47 +216,76 @@ keyed to the candidate's full SHA. The in-tree `candidate-evidence.md` is only t
 | Ports | Existing store-provide/store-read federation remains; no second port or config vocabulary appears. |
 | Research | Existing rules, subjects, payloads, components, and fusion remain. Fixtures observe them. |
 | E2E ownership | Existing research task owns both branch runs; no parallel tier capability is created. |
-| Release truth | `disposition-ledger.md` binds decisions; `candidate-evidence.md` defines the schema only. Exact-SHA proof lives in the detached GitHub Release attestation. Both in-tree artifacts are covered by `manifest.sha256`. |
+| Release truth | `disposition-ledger.md` binds decisions; `candidate-evidence.md` defines both external schemas. Exact-SHA pre-tag proof and post-publication attestation remain separate. Both in-tree artifacts are covered by `manifest.sha256`. |
 | Frozen change | `semantic-tier-split` stays suspended and does not own this release proof. |
+
+## Decision E: bounded pre-candidate test truth correction
+
+The retained #860 proof is meaningful only when the crud-tools scenario observes the rule metric. The scenario SHALL
+fail when the required metrics scrape is unreachable, when the active-rule gauge does not converge after hot reload,
+or when the expected `fire_every_n_events` increments do not appear. An absent labeled CounterVec series before its
+first increment remains a valid observed zero only after a successful scrape has established that the metrics
+collector is reachable. Absence is not equivalent to an unreachable scrape.
+
+The integration-runner contract helper SHALL give exactly one goroutine ownership of `Cmd.Wait`. A caller may time
+out without creating a second waiter; cleanup kills the process when necessary and waits on the same owner's
+completion signal. Targeted race coverage proves timeout cleanup reaps the process and preserves the killed result for
+subsequent observations.
+
+Every exact-candidate `go test` command uses `-count=1`. The focused command includes `./graph/clustering` and
+`./graph/embedding` alongside both processor wrappers, store registry, test infrastructure, and the retained scenario
+packages. These corrections alter only test/proof behavior and require focused verification plus independent review
+before candidate selection.
 
 ## Candidate and tag proof
 
-The candidate commit cannot contain or predict its own SHA. The authoritative evidence artifact is therefore an
-immutable detached GitHub Release attestation keyed to the candidate's full SHA and created only after that commit
-exists. `candidate-evidence.md`, covered by the package manifest, is the in-tree schema/template and MUST NOT be
-completed as evidence or redefine candidate identity. The release owner owns the detached attestation; the technical
-writer has custody of its schema and validates faithful completion. A missing required detached field blocks freeze.
-The attestation body does not contain or require its own SHA-256. A digest may appear only in external GitHub Release
-metadata or a sibling checksum asset created after upload, and it does not redefine candidate or attestation identity.
+The candidate commit cannot contain or predict its own SHA. Candidate freeze therefore means only selecting one clean
+immutable SHA after all in-tree preparation, including the one final manifest regeneration. The selected candidate
+verifies the manifest; it does not regenerate or edit it.
 
-Candidate freeze records one clean SHA and confirms generated schemas/specs are clean. All proof is rerun on that SHA:
+After selection, proof runs collect local/run evidence. Only a fully green candidate may receive a non-product GitHub
+Release tag named `candidate-proof-<fullSHA>` at that exact SHA and its immutable proof asset. A red gate rejects the
+candidate without requiring a failed proof Release. The tag's non-`v` name prevents the current product release and
+container workflows from treating it as a product release. The asset body does not contain or require its own URL or
+SHA-256; GitHub Release metadata or a sibling checksum may supply those facts after upload.
 
-- focused affected-package tests;
-- `task lint`;
-- `go test -race ./...`;
-- `task test:integration`;
-- `task schema:generate` followed by a clean generated-schema/spec diff;
-- `go test ./test/contract/...`;
-- strict OpenSpec validation;
-- statistical E2E;
-- semantic E2E with active 30–60 second polling of `/readyz`, authoritative counters, and stage output;
-- agentic E2E;
-- direct and execute research-graph branches;
-- deep-research E2E; and
-- retained advertised crud-tools/ops/rule paths required by the disposition ledger.
+All proof is rerun on the selected SHA using these exact commands:
 
-A provably wedged paid run is aborted rather than left to timeout. Any fix changes the candidate SHA and invalidates
-earlier review, CI, and detached candidate evidence.
+```text
+go test -count=1 -race ./graph/clustering ./graph/embedding ./processor/graph-clustering ./processor/graph-embedding ./storage/storeregistry ./test/testinfra ./test/e2e/scenarios/crud-tools ./test/e2e/scenarios/research-graph
+task lint
+go test -count=1 -race ./...
+task test:integration
+task schema:generate
+task schema:check-changes
+go test -count=1 ./test/contract/...
+task openspec:validate
+task e2e:statistical
+task e2e:semantic
+task e2e:agentic
+task e2e:research-graph
+task e2e:deep-research
+task e2e:crud-tools
+task e2e:ops
+```
 
-Independent SemStreams review is tied to the complete exact-candidate diff and SHA. GitHub CI must be green on that
-same commit. Release notes name clean breaks and accepted limitations.
+The semantic gate adds active 30–60 second polling of `/readyz`, authoritative counters, and stage timestamps. The
+single research invocation proves isolated direct and execute/fusion rounds. The single crud-tools invocation proves
+distinct #301 and #860 assertions; the ops invocation proves #844.
 
-The #827 wipe/reseed is scheduled at the tag boundary. If the permitted pre-v1 window closes first, tagging halts and
-the operation becomes an explicit migration.
+A provably wedged paid run is aborted rather than left to timeout. Independent SemStreams review and green GitHub CI
+are tied to the same complete candidate SHA. Any correction selects a new candidate SHA and invalidates affected
+proof, review, and CI. The release owner may authorize tagging only after every required pre-tag gate is green and a
+named #827 operator, tag-boundary window, and planned action are recorded.
 
-The tag must resolve to the approved SHA. Binary and container outputs must report the intended version, and the
-container tag/digest must be recorded in the detached attestation. Downstream repositories pin that tag afterward;
-they are not exhaustive pre-tag blockers.
+At the product tag boundary, the tag must resolve to the authorized SHA, binary and container outputs must report the
+intended version, and the coordinated #827 wipe/reseed executes immediately. If the permitted window closes, tagging
+halts and the operation becomes an explicit migration. This change does not execute #827.
+
+After publication, a separate immutable asset on the product GitHub Release links and digests candidate proof. It
+records tag resolution, binary/container identity, the actual #827 result, final release decision, and limitations.
+Tag-specific migration guidance exists only in the product Release notes and attestation; the candidate tree is never
+edited after proof. Downstream repositories pin that tag afterward and are not exhaustive pre-tag blockers.
 
 ## Risks
 
@@ -258,7 +295,7 @@ they are not exhaustive pre-tag blockers.
 - A store deregistration race can exclude one revision's body. The outcome remains observable and non-degrading.
 - Two isolated research branch runs increase E2E time. Isolation provides deterministic attribution and avoids
   state-dependent mock sequencing.
-- Release disposition can block freeze. That is the purpose of the gate.
+- Red candidate proof can block tag authorization. That is the purpose of the gate.
 
 ## Binding owner rulings
 
@@ -266,16 +303,16 @@ The repository owner approved these rulings on 2026-08-11:
 
 - Exact `StorageInstance` registration in `StoreRegistry` is the sole resolution authority; implementation removes the
   unnamed fallback accepted by ADR-063.
-- #301, #844, and #860 are retained. Each named path must run green on the exact candidate or freeze stops. D does not
-  authorize a fix if red, and wrapper output is not relabeled to manufacture success.
+- #301, #844, and #860 are retained. Each named path must run green on the exact candidate or tag authorization
+  stops. D does not authorize a fix if red, and wrapper output is not relabeled to manufacture success.
 - DI-01 through DI-03, #619, #672, and temporal malformed/reverse cleanup defer to the Derived-Index Convergence
   Program and publish as limitations.
 - DI-04 defers to the Anomaly Lifecycle and Retention Program and publishes as a limitation.
 - #839 is an accepted measured community-value limitation for this tag.
 - #857 defers to the Payload Bounds and Retention Program and publishes as a limitation.
 - #829 defers to the Semantic Summary Content/Quality Program and publishes as a limitation.
-- Decisions and templates stay in-tree. Exact candidate identity and run evidence live in an immutable detached GitHub
-  Release attestation keyed to that SHA; the candidate commit does not predict itself.
+- Decisions and templates stay in-tree. Exact candidate identity and run evidence live in an immutable non-product
+  candidate-proof Release; post-publication facts live in a separate product-Release attestation.
 - The deterministic research execute fixture uses `walk_seeds` with controlled nonzero evidence and the assertions
   above.
 
@@ -283,8 +320,8 @@ The repository owner approved these rulings on 2026-08-11:
 
 | Owner-approved ruling | Result | Target-state locations |
 |---|---|---|
-| Exact `StorageInstance` registration in `StoreRegistry` is the sole authority; remove the ADR-063 unnamed fallback. | CONFORMS | `docs/adr/063-store-substrate-and-resolver.md:11`; `docs/adr/063-store-substrate-and-resolver.md:12`; `docs/adr/063-store-substrate-and-resolver.md:371`; `docs/adr/063-store-substrate-and-resolver.md:373`; `openspec/changes/post-g-tag-safety-closeout/design.md:98`; `openspec/changes/post-g-tag-safety-closeout/design.md:100`; `openspec/changes/post-g-tag-safety-closeout/specs/graph-embedding/spec.md:5`; `openspec/changes/post-g-tag-safety-closeout/specs/graph-embedding/spec.md:6` |
-| Retain #301/#844/#860 and require each exact-candidate path green; do not relabel wrapper failure. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md:179`; `openspec/changes/post-g-tag-safety-closeout/design.md:180`; `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md:19`; `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md:21`; `openspec/changes/post-g-tag-safety-closeout/specs/release-candidate-proof/spec.md:5`; `openspec/changes/post-g-tag-safety-closeout/specs/release-candidate-proof/spec.md:7` |
-| Defer derived-index, anomaly, payload, and semantic-summary findings to their named programs; accept #839 for this tag. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md:183`; `openspec/changes/post-g-tag-safety-closeout/design.md:190`; `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md:22`; `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md:31`; `docs/operations/migration-post-g-tag-safety-closeout.md:66`; `docs/operations/migration-post-g-tag-safety-closeout.md:78` |
-| Keep decisions/templates in-tree and exact-SHA evidence in a detached immutable attestation. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md:214`; `openspec/changes/post-g-tag-safety-closeout/design.md:221`; `openspec/changes/post-g-tag-safety-closeout/candidate-evidence.md:11`; `openspec/changes/post-g-tag-safety-closeout/candidate-evidence.md:28`; `openspec/changes/post-g-tag-safety-closeout/specs/release-candidate-proof/spec.md:53`; `openspec/changes/post-g-tag-safety-closeout/specs/release-candidate-proof/spec.md:59` |
-| Bind the deterministic research execute fixture to `walk_seeds`. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md:130`; `openspec/changes/post-g-tag-safety-closeout/design.md:148`; `openspec/changes/post-g-tag-safety-closeout/design.md:151`; `openspec/changes/post-g-tag-safety-closeout/specs/framework-composition/spec.md:11`; `openspec/changes/post-g-tag-safety-closeout/specs/framework-composition/spec.md:47`; `openspec/changes/post-g-tag-safety-closeout/tasks.md:53`; `openspec/changes/post-g-tag-safety-closeout/tasks.md:57` |
+| Exact `StorageInstance` registration in `StoreRegistry` is the sole authority; remove the ADR-063 unnamed fallback. | CONFORMS | `docs/adr/063-store-substrate-and-resolver.md`; `openspec/changes/post-g-tag-safety-closeout/design.md`; `openspec/changes/post-g-tag-safety-closeout/specs/graph-embedding/spec.md` |
+| Retain #301/#844/#860 and require each exact-candidate path green; do not relabel wrapper failure. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md`; `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md`; `openspec/changes/post-g-tag-safety-closeout/specs/release-candidate-proof/spec.md` |
+| Defer derived-index, anomaly, payload, and semantic-summary findings to their named programs; accept #839 for this tag. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md`; `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md`; `docs/operations/migration-post-g-tag-safety-closeout.md` |
+| Keep decisions/templates in-tree; separate exact-SHA candidate proof from post-publication attestation. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md`; `openspec/changes/post-g-tag-safety-closeout/candidate-evidence.md`; `openspec/changes/post-g-tag-safety-closeout/specs/release-candidate-proof/spec.md` |
+| Bind the deterministic research execute fixture to `walk_seeds`. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md`; `openspec/changes/post-g-tag-safety-closeout/specs/framework-composition/spec.md`; `openspec/changes/post-g-tag-safety-closeout/tasks.md` |

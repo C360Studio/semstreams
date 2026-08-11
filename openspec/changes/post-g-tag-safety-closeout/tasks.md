@@ -1,7 +1,8 @@
 # Tasks — post-G tag-safety closeout
 
-The #855 and #875 runtime corrections and their independent reviews are complete. The deterministic research proof is
-also complete. Release candidate proof has not begun. Every nontrivial implementation slice receives independent
+The #855 and #875 runtime corrections, deterministic research proof, and truth/disposition slice are complete. The
+bounded pre-candidate correction is implemented, focused-green, and independently approved.
+Candidate selection and proof have not begun. Every nontrivial implementation slice receives independent
 `semstreams-reviewer` approval before integration.
 
 ## P. Promotion and evidence
@@ -65,35 +66,46 @@ also complete. Release candidate proof has not begun. Every nontrivial implement
 - [x] D.2 Correct ADR-068's retired predicate/context/catalog assumptions to current physical ownership and cleanup.
 - [x] D.3 Annotate suspended `semantic-tier-split` premise status without unfreezing it or completing tasks.
 - [x] D.4 Correct stale `e2e-ladder.yml` and `sister-validation.yml` comments without workflow behavior changes.
-- [ ] D.5 Record #301, #844, and #860 as retained exact-candidate gates, then publish their exact SHA, commands,
-  results, timestamps, and evidence pointers in the detached GitHub Release attestation. Any red path stops freeze;
-  D authorizes no fix.
-- [ ] D.6 Record the binding accepted/deferred decisions for DI-01 through DI-04, #619, #672, temporal malformed and
-  reverse cleanup, #839, #857, and #829, then publish every limitation and evidence pointer in the exact-candidate
-  detached attestation without implementing them in this change.
-- [ ] D.7 Publish final release notes and migration guidance naming the exact candidate/tag, retained-path outcomes,
-  fallback clean break, and accepted/deferred limitations.
-- [ ] D.8 Obtain technical-writer and independent SemStreams review of exact truth propagation.
-- [x] D.9 Regenerate the package manifest after every truth or task edit.
+- [x] D.5 Record #301, #844, and #860 as retained exact-candidate gates. D authorizes no fix or coverage transfer if a
+  candidate result is red.
+- [x] D.6 Record the binding accepted/deferred decisions for DI-01 through DI-04, #619, #672, temporal malformed and
+  reverse cleanup, #839, #857, and #829 without implementing them in this change.
+- [x] D.7 Publish version-independent migration guidance for the exact-instance clean break and disclosed
+  limitations. Exact candidate/tag guidance remains product-Release-only.
+- [x] D.8 Obtain technical-writer and independent SemStreams review of exact truth propagation.
+- [x] D.9 Regenerate the package manifest as the final in-tree preparation step before candidate selection.
+
+## PC. Bounded pre-candidate correction
+
+- [x] PC.1 Make #860's crud-tools metrics/rule assertion fail closed: an unreachable scrape, missing required
+  active-rule baseline, hot-reload timeout, or missing post-increment result fails the scenario. An absent
+  pre-increment CounterVec label series remains an observed zero after collector reachability is established.
+- [x] PC.2 Give one test helper sole ownership of `Cmd.Wait` across timeout and cleanup; add targeted race coverage
+  proving cleanup kills and reaps through that owner and repeated observation preserves the result.
+- [x] PC.3 Bind cache-disabled exact-candidate Go commands and include both core graph packages in focused proof.
+- [x] PC.4 Run the full focused `go test -count=1 -race` command bound in `candidate-evidence.md` and record its green
+  result before candidate selection.
+- [x] PC.5 Obtain independent SemStreams review of the bounded test-truth and evidence-contract correction.
 
 ## E. Candidate proof and tag
 
-- [ ] E.1 Create one clean exact candidate, then create its immutable detached GitHub Release attestation from the
-  in-tree `candidate-evidence.md` schema and record clean generated schemas/specs. Do not put the attestation's own
-  digest in its body; any checksum is external metadata created after upload.
-- [ ] E.2 Record focused tests, lint, full race, integration, schema/no-drift, contracts, and strict OpenSpec in the
-  detached attestation with exact command, UTC start/end, exit/result, runner identity, and artifact checksum.
-- [ ] E.3 Record statistical, agentic, deep-research, both research branches, and every retained advertised
-  crud-tools/ops/rule path in the detached attestation with the same provenance fields.
-- [ ] E.4 Record semantic E2E polls every 30–60 seconds in the detached attestation with `/readyz`, counters,
-  stage/timestamp progress, and abort evidence if authoritative state proves the run wedged.
-- [ ] E.5 Treat any code, spec, evidence, manifest, or task correction as a new candidate requiring applicable proof.
-- [ ] E.6 Record independent reviewer identity/result and exact reviewed candidate SHA in the detached attestation.
-- [ ] E.7 Record exact-SHA GitHub CI run/check identities and green results in the detached attestation.
-- [ ] E.8 Record #827 owner, scheduled boundary, result, and halt/migration outcome in the detached attestation if the
-  pre-v1 window closes.
-- [ ] E.9 Record tag name and resolved SHA, binary version and checksum, and container identity in the detached
-  attestation.
-- [ ] E.10 Regenerate the acyclic `manifest.sha256` content root, verify every entry, publish the immutable detached
-  attestation plus exact tag/migration notice, and hand downstream migration to adopters. Record the manifest digest
-  only in the detached attestation, never in a manifest-covered artifact.
+- [ ] E.1 Select one clean immutable candidate SHA. Do not edit the candidate tree after selection.
+- [ ] E.2 Verify the already-generated package manifest and collect candidate identity/cleanliness evidence using the
+  in-tree `candidate-evidence.md` schema.
+- [ ] E.3 Run and record the bound focused, lint, full-race, integration, schema-generation, schema-no-drift,
+  contract, and strict OpenSpec commands with exact provenance. Every `go test` command uses `-count=1`; the focused
+  command covers core graph packages as well as processor wrappers and support/scenario packages.
+- [ ] E.4 Run and record statistical, agentic, deep-research, the single research direct-plus-execute invocation,
+  crud-tools for distinct #301/#860 assertions, and ops for #844.
+- [ ] E.5 Run semantic E2E with recorded 30–60 second `/readyz`, authoritative-counter, and stage-timestamp polling;
+  abort and fail proof when authoritative state proves the run wedged.
+- [ ] E.6 Record independent review and exact-SHA green GitHub CI in candidate proof.
+- [ ] E.7 Confirm #827's named operator, tag-boundary window, and planned wipe/reseed action. Do not execute it yet.
+- [ ] E.8 After every pre-tag gate is green, create the non-product `candidate-proof-<fullSHA>` Release at that SHA,
+  publish its immutable proof asset, and record release-owner tag authorization. A red gate rejects the candidate
+  without a failed proof Release. The asset does not require its own URL or digest. Any correction selects a new
+  candidate and invalidates affected proof, review, and CI.
+- [ ] E.9 Create the product tag at the approved SHA, publish binary/container artifacts, and execute coordinated #827
+  immediately at the tag boundary. If its window closes, halt and convert the operation to an explicit migration.
+- [ ] E.10 Verify, do not regenerate, `manifest.sha256`; publish the separate immutable product-Release attestation
+  and tag-specific Release notes; then hand downstream migration to adopters.

@@ -32,8 +32,15 @@ promote the wider derived-state findings into runtime work.
 - Correct accepted architectural and workflow commentary that describes superseded storage/index/release behavior.
 - Retain #301, #844, and #860 as exact-candidate gates; record named future programs for the deferred findings and the
   accepted #839 limitation without authorizing runtime work.
-- Keep decisions and evidence templates in-tree, while tying release proof, review, CI, tag/artifact identity, and the
-  coordinated #827 outcome to one immutable detached GitHub Release attestation keyed by the exact candidate SHA.
+- Make #860's existing crud-tools rule proof fail closed when required metrics cannot be scraped or observed. Treat an
+  absent pre-increment CounterVec label series as observed zero only after collector availability is established.
+- Give one test helper sole ownership of `Cmd.Wait` across timeout and cleanup so exact-candidate race proof cannot be
+  failed by a second waiter.
+- Disable the Go test cache for exact-candidate proof and include the core clustering/embedding packages in the focused
+  command, not only their processor wrappers.
+- Keep decisions and evidence templates in-tree. Tie pre-tag proof, review, and CI to an immutable SHA-specific
+  candidate-proof Release, then record tag/artifact identity and the actual coordinated #827 outcome in a separate
+  immutable product-Release attestation.
 
 ## Capabilities
 
@@ -54,14 +61,20 @@ Runtime changes are limited to `graph/clustering`, `processor/graph-clustering`,
 `processor/graph-embedding`. Research changes are test fixtures and E2E assertions over the existing rule,
 component, subject, payload, and fusion paths.
 
+The bounded pre-candidate correction touches only test truth and release documentation:
+`test/e2e/scenarios/crud-tools` makes the retained #860 assertion fail closed, and
+`test/testinfra/integration_runner_contract_test.go` gives process waiting one owner across timeout and cleanup. It
+changes no production or workflow behavior.
+
 ADR-063 is corrected because its accepted registry-miss fallback ruling conflicts with instance-exact resolution.
 ADR-068, the suspended semantic-tier change, and two workflow comment blocks receive truth corrections without
 runtime or workflow activation.
 
 The candidate commit cannot contain or predict its own SHA. `candidate-evidence.md` is therefore a schema/template,
-not a completed proof record; exact SHA and run evidence are published only after the commit exists.
-`docs/operations/migration-post-g-tag-safety-closeout.md` is a candidate-aware draft until it names that proof and the
-published tag.
+not a completed proof record. Candidate freeze selects one clean immutable SHA. Only a fully green candidate publishes
+exact pre-tag proof under `candidate-proof-<fullSHA>`; product tag and artifact facts follow in the separate
+product-Release attestation.
+The in-tree migration guide remains version-independent. Tag-specific guidance exists only in product Release notes.
 
 External producers keep the existing `StorageReference` shape and exact logical `StorageInstance`. No new public
 symbol, configuration field, subject, port, bucket, stream, service, query, or compatibility layer is added.
