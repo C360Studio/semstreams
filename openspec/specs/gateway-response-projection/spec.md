@@ -67,10 +67,10 @@ default, silently, and is discovered by a consumer rather than by a test.
 - **AND** the outer subject's name does not affect the decision
 
 ### Requirement: Envelope detection MUST be conservative, admitting only the exact envelope shape
+
 A response MUST be treated as the envelope only when its top-level JSON object carries both `data` and
 `timestamp` and every one of its keys is drawn from the envelope's own field set
-(`data`, `request_id`, `timestamp`); any other response MUST be passed through byte-for-byte
-unchanged.
+(`data`, `timestamp`); any other response MUST be passed through byte-for-byte unchanged.
 
 Detecting on the presence of `data` alone is prohibited. A payload that legitimately carries a
 top-level `data` field would be stripped of a nesting level, which converts this capability's
@@ -105,10 +105,11 @@ envelope is the ordinary case for the families that do not use one.
 - **THEN** it is passed through unchanged
 
 ### Requirement: The envelope's key set MUST be reserved against collision by other response types
+
 A response type served through the gateway's projection path MUST NOT consist solely of keys drawn
-from the envelope field set (`data`, `request_id`, `timestamp`) unless it IS the envelope. The
-envelope's shape is reserved, and a new or modified response type that would occupy it MUST be given
-a distinguishing field or a different field name instead.
+from the envelope field set (`data`, `timestamp`) unless it IS the envelope. The envelope's shape is
+reserved, and a new or modified response type that would occupy it MUST be given a distinguishing
+field or a different field name instead.
 
 Detection on a closed key set is exact for every response type that exists when it is written, and
 carries exactly one residual risk forward: a response type introduced LATER that happens to consist
@@ -125,7 +126,7 @@ not only backward to the defect that prompted the capability.
 #### Scenario: A new response type may not occupy the envelope's shape
 
 - **GIVEN** a proposed gateway response type whose marshalled form consists only of keys drawn from
-  `{data, request_id, timestamp}`
+  `{data, timestamp}`
 - **AND** that type is not the query-response envelope
 - **WHEN** it is reviewed
 - **THEN** it is rejected as a contract violation
