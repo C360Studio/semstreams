@@ -3,9 +3,10 @@ package clustering
 import (
 	"context"
 	"errors"
+	"testing"
+
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go"
-	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -309,6 +310,9 @@ type selectiveFailStorage struct {
 	*MockCommunityStorage
 	failAtOrAboveMembers int
 	err                  error
+	pruneCalls           int
+	deleteCalls          int
+	saveAttempts         []*Community
 }
 
 // permanentOversizeErr is the error production actually returns for an
@@ -322,20 +326,27 @@ func permanentOversizeErr() error {
 }
 
 func (s *selectiveFailStorage) SaveCommunity(ctx context.Context, community *Community) error {
+	s.saveAttempts = append(s.saveAttempts, community)
 	if len(community.Members) >= s.failAtOrAboveMembers {
 		return s.err
 	}
 	return s.MockCommunityStorage.SaveCommunity(ctx, community)
 }
 
-// TestLPADetector_OversizedCommunityDoesNotDiscardTheLevel pins gh#837's core
-// fix: one unwritable community must not take its siblings down with it.
-//
-// Before the fix this returned an error and zero communities, because the
-// persist loop returned on the first SaveCommunity failure and the caller
-// returns on any error — so every community after it in the loop, and every
-// higher level, was lost.
-func TestLPADetector_OversizedCommunityDoesNotDiscardTheLevel(t *testing.T) {
+func (s *selectiveFailStorage) Prune(ctx context.Context, keep []*Community) error {
+	s.pruneCalls++
+	s.deleteCalls++ // Prune owns the storage-layer Delete path.
+	return s.MockCommunityStorage.Prune(ctx, keep)
+}
+
+// TestLPADetector_PermanentPartialCandidateSavesSiblingsButDoesNotPrune pins
+// #855's complete-candidate boundary without weakening #837: a permanently
+// rejected record does not prevent writable siblings at the same level from
+// persisting, but any rejected record makes the run incomplete. The detector
+// must preserve the classified error, stop before higher levels, and never hand
+// the partial candidate to Prune.
+func TestLPADetector_PermanentPartialCandidateSavesSiblingsButDoesNotPrune(t *testing.T) {
+	ctx := context.Background()
 	provider := NewMockProvider()
 	// Two disconnected groups => two communities. One is deliberately larger.
 	big := []string{"b1", "b2", "b3", "b4", "b5"}
@@ -349,38 +360,104 @@ func TestLPADetector_OversizedCommunityDoesNotDiscardTheLevel(t *testing.T) {
 	provider.AddEntity("s2")
 	provider.AddEdge("s1", "s2", 1.0)
 
+	backing := NewMockCommunityStorage()
+	priorID := "prior-overlapping-community"
+	require.NoError(t, backing.SaveCommunity(ctx, &Community{
+		ID: priorID, Level: 0, Members: []string{"s1", "prior-only"},
+	}))
 	storage := &selectiveFailStorage{
-		MockCommunityStorage: NewMockCommunityStorage(),
+		MockCommunityStorage: backing,
 		failAtOrAboveMembers: 5,
 		err:                  permanentOversizeErr(),
 	}
 
 	detector := NewLPADetector(provider, storage)
-	detector.WithLevels(1)
+	detector.WithLevels(3)
 
-	result, err := detector.DetectCommunities(context.Background())
+	result, err := detector.DetectCommunities(ctx)
 
-	// The level survives: detection succeeds and the small community persisted.
-	require.NoError(t, err, "one unwritable community must not fail the whole detection pass")
-	require.NotEmpty(t, result[0], "the writable community must still be returned")
+	require.Error(t, err, "a partial candidate must not report a complete detection pass")
+	assert.True(t, errs.IsInvalid(err), "the existing permanent classification must survive wrapping")
+	assert.Nil(t, result, "an incomplete candidate must not be returned as a successful partition")
+	assert.Zero(t, storage.pruneCalls, "Prune must not receive an incomplete candidate")
+	assert.Zero(t, storage.deleteCalls, "no prune-driven deletion path may run")
 
-	// Every returned community is one that actually persisted — the return value
-	// must not advertise communities the store rejected, or a caller counts
-	// communities that cannot be read back.
-	for _, c := range result[0] {
-		assert.Less(t, len(c.Members), 5,
-			"a community that failed to save must not appear in the result")
-		saved, ok := storage.communities[0][c.ID]
-		assert.True(t, ok, "returned community %s was never persisted", c.ID)
-		assert.NotNil(t, saved)
+	for _, attempted := range storage.saveAttempts {
+		assert.Zero(t, attempted.Level, "an incomplete lower level must not construct a higher level")
+	}
+
+	// The writable sibling did persist and was allowed to overwrite the prior
+	// mapping. #855 promises no prune/deletion and no false completion, not
+	// rollback or an unmixed prior projection.
+	assert.NotEqual(t, priorID, backing.entityCommunity[0]["s1"],
+		"a successful sibling write may overwrite an overlapping prior mapping")
+	_, priorStillPresent := backing.communities[0][priorID]
+	assert.True(t, priorStillPresent, "without prune the prior community record remains visible")
+	_, priorOnlyStillMapped := backing.entityCommunity[0]["prior-only"]
+	assert.True(t, priorOnlyStillMapped, "without prune prior-only mappings remain visible")
+}
+
+// partialMappingFailStorage models SaveCommunity's non-atomic write shape: the
+// community record and an early entity mapping land before a later mapping Put
+// fails. The earlier writes are intentionally retained as a mixed projection.
+type partialMappingFailStorage struct {
+	*MockCommunityStorage
+	pruneCalls  int
+	deleteCalls int
+}
+
+func (s *partialMappingFailStorage) SaveCommunity(_ context.Context, community *Community) error {
+	if s.communities[community.Level] == nil {
+		s.communities[community.Level] = make(map[string]*Community)
+	}
+	s.communities[community.Level][community.ID] = community
+	if s.entityCommunity[community.Level] == nil {
+		s.entityCommunity[community.Level] = make(map[string]string)
+	}
+	if len(community.Members) > 0 {
+		s.entityCommunity[community.Level][community.Members[0]] = community.ID
+	}
+	return errs.WrapTransient(errors.New("nats: mapping put failed"),
+		"NATSCommunityStorage", "SaveCommunity", "put entity mapping")
+}
+
+func (s *partialMappingFailStorage) Prune(ctx context.Context, keep []*Community) error {
+	s.pruneCalls++
+	s.deleteCalls++ // Prune owns the storage-layer Delete path.
+	return s.MockCommunityStorage.Prune(ctx, keep)
+}
+
+func TestLPADetector_PartialMappingWriteDoesNotPrune(t *testing.T) {
+	ctx := context.Background()
+	provider := NewMockProvider()
+	provider.AddEntity("A")
+	provider.AddEntity("B")
+	provider.AddEdge("A", "B", 1.0)
+
+	storage := &partialMappingFailStorage{MockCommunityStorage: NewMockCommunityStorage()}
+	detector := NewLPADetector(provider, storage).WithLevels(1)
+
+	_, err := detector.DetectCommunities(ctx)
+	require.Error(t, err)
+	assert.True(t, errs.IsTransient(err), "the existing mapping-write classification must survive wrapping")
+	assert.Zero(t, storage.pruneCalls, "partial mapping state must never drive prune")
+	assert.Zero(t, storage.deleteCalls, "partial mapping state must never drive deletion")
+
+	require.Len(t, storage.communities[0], 1,
+		"the community record may remain after a later mapping write fails")
+	require.Len(t, storage.entityCommunity[0], 1,
+		"an earlier mapping may remain after a later mapping write fails")
+	for entityID, communityID := range storage.entityCommunity[0] {
+		assert.NotEmpty(t, entityID)
+		assert.NotEmpty(t, communityID)
+		assert.Contains(t, storage.communities[0], communityID)
 	}
 }
 
-// TestLPADetector_TotalSaveFailureStillErrors pins the other half of the gh#837
-// decision. Degrading on a completely broken store would turn "the store is
-// unreachable" into a silent "no communities found" — strictly worse than the
-// abort it replaces, because zero results are indistinguishable from an empty
-// graph. Partial results are useful; zero results with no error are a lie.
+// TestLPADetector_TotalSaveFailureStillErrors retains the all-permanent
+// classification case alongside the partial-candidate regression above. No
+// rejected candidate is successful; same-level sibling attempts only determine
+// which writes may remain visible before the classified error returns.
 func TestLPADetector_TotalSaveFailureStillErrors(t *testing.T) {
 	provider := NewMockProvider()
 	provider.AddEntity("A")

@@ -241,6 +241,40 @@ func TestLPADetector_PruneFailureLeavesSupersetNotError(t *testing.T) {
 	}
 }
 
+type observingPruneStorage struct {
+	*MockCommunityStorage
+	calls [][]*Community
+}
+
+func (s *observingPruneStorage) Prune(ctx context.Context, keep []*Community) error {
+	s.calls = append(s.calls, keep)
+	return s.MockCommunityStorage.Prune(ctx, keep)
+}
+
+func TestLPADetector_CompleteCandidatesAlwaysAttemptPrune(t *testing.T) {
+	t.Run("non-empty candidate", func(t *testing.T) {
+		storage := &observingPruneStorage{MockCommunityStorage: NewMockCommunityStorage()}
+		detector := NewLPADetector(twoTriangleProvider(), storage).WithMaxIterations(50)
+
+		communities, err := detector.DetectCommunities(context.Background())
+		require.NoError(t, err)
+		require.NotEmpty(t, communities)
+		require.Len(t, storage.calls, 1)
+		assert.NotEmpty(t, storage.calls[0], "a complete non-empty candidate must supply its keep set")
+	})
+
+	t.Run("empty candidate", func(t *testing.T) {
+		storage := &observingPruneStorage{MockCommunityStorage: NewMockCommunityStorage()}
+		detector := NewLPADetector(NewMockProvider(), storage)
+
+		communities, err := detector.DetectCommunities(context.Background())
+		require.NoError(t, err)
+		assert.Empty(t, communities)
+		require.Len(t, storage.calls, 1)
+		assert.Nil(t, storage.calls[0], "an empty authority graph must explicitly attempt Prune(ctx, nil)")
+	})
+}
+
 // TestLPADetector_EmptyGraphPrunesIndex keeps the empty-graph end state honest:
 // no entities means no communities, so the index must not retain a partition for
 // entities that no longer exist. (This is the end state the old up-front Clear

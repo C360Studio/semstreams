@@ -372,17 +372,10 @@ func (d *LPADetector) detectCommunitiesAtLevel(
 
 		// Save community.
 		//
-		// A single community that cannot be persisted does NOT discard the level
-		// (gh#837). One oversized community — members are unbounded while the KV
-		// value carrying them is not — used to abort here, and because the caller
-		// returns on any error, every community after it in the loop AND every
-		// higher level was lost. semsource measured the result on a 14,802-entity
-		// graph: 2 communities holding 4.4% of entities, where re-running with a
-		// larger payload ceiling produced 11 communities holding 12,810.
-		//
-		// Skipping matches what this loop already does for every other failure —
-		// summarization fetch and summary generation both warn and continue. A
-		// per-community storage fault is the same shape.
+		// A record-local permanent rejection does not stop attempts for its writable
+		// siblings (gh#837). It does make the candidate incomplete: after this level's
+		// attempts the detector returns the classified error, so higher levels and
+		// Prune cannot consume a partial partition (#855).
 		if err := d.storage.SaveCommunity(ctx, community); err != nil {
 			// ONLY a record-local PERMANENT rejection may be skipped.
 			//
@@ -403,9 +396,9 @@ func (d *LPADetector) detectCommunitiesAtLevel(
 			// prunes against a partial partition breaks the contract rather
 			// than bending it.
 			//
-			// Permanent means the record itself cannot be stored — the input
-			// is identical on every retry, so no amount of waiting helps and
-			// the only alternative to skipping is discarding the level.
+			// Permanent means the record itself cannot be stored — the input is
+			// identical on every retry. Continue only to preserve writable siblings;
+			// the error below still fails the incomplete run.
 			if ctx.Err() != nil || !errs.IsInvalid(err) {
 				return nil, errs.Wrap(err, "LPADetector", "detectCommunitiesAtLevel", "save community")
 			}
@@ -424,13 +417,13 @@ func (d *LPADetector) detectCommunitiesAtLevel(
 		// by EnhancementWorker via KV watcher for async LLM enhancement
 	}
 
-	// TOTAL failure is still an error. Degrading here would convert a broken or
-	// unreachable store into a silent "no communities found", which is strictly
-	// worse than the abort this replaces: partial results are useful, zero
-	// results indistinguishable from an empty graph. The distinction is the
-	// whole point — drop the community that cannot fit, not the store that is
-	// not working.
-	if len(dropped) > 0 && len(saved) == 0 {
+	if len(dropped) > 0 {
+		d.logger.Error("level persistence incomplete",
+			"level", level,
+			"dropped", len(dropped),
+			"saved", len(saved),
+			"dropped_ids", dropped)
+
 		// errs.Wrap, NOT WrapTransient: it adds context via %w without minting a
 		// new ClassifiedError, so errs.IsTransient/IsInvalid still observe the
 		// INNER classification. Wrapping transient here would re-label a
@@ -438,13 +431,6 @@ func (d *LPADetector) detectCommunitiesAtLevel(
 		// — undoing, one layer up, the exact fix this change makes in storage —
 		// because errors.As finds the outermost ClassifiedError first.
 		return nil, errs.Wrap(lastSaveErr, "LPADetector", "detectCommunitiesAtLevel", "save community")
-	}
-	if len(dropped) > 0 {
-		d.logger.Error("level persisted with dropped communities — results are incomplete",
-			"level", level,
-			"dropped", len(dropped),
-			"saved", len(saved),
-			"dropped_ids", dropped)
 	}
 
 	return saved, nil

@@ -1,7 +1,7 @@
 # Tasks — post-G tag-safety closeout
 
-No runtime or release task is complete. The accepted inventory is the only completed promotion prerequisite. Every
-nontrivial implementation slice receives independent `semstreams-reviewer` approval before integration.
+The #855 runtime correction and its independent review are complete. No other runtime or release task is complete.
+Every nontrivial implementation slice receives independent `semstreams-reviewer` approval before integration.
 
 ## P. Promotion and evidence
 
@@ -15,19 +15,19 @@ nontrivial implementation slice receives independent `semstreams-reviewer` appro
 
 ## A. #855 incomplete community candidate
 
-- [ ] A.1 Replace the permanent-partial success test with a failing regression that seeds a prior partition, rejects
+- [x] A.1 Replace the permanent-partial success test with a failing regression that seeds a prior partition, rejects
   one permanent-invalid candidate, permits writable sibling saves, and asserts classified error plus zero prune.
-- [ ] A.2 Assert `Prune` and prune-driven `Delete` are never called for an incomplete run; seed an overlapping entity mapping and prove successful candidate writes may overwrite it, so the test does not claim rollback or an unmixed stale superset.
-- [ ] A.3 Add a partial-mapping regression in which the community record and an earlier entity mapping write succeed before a later mapping write fails; assert classified error, zero prune/delete, mixed projection allowed, and no complete-success accounting.
-- [ ] A.4 Retain and pass all-permanent classification, transient no-prune, complete candidate SHALL-attempt-prune, nonfatal prune-failure, and empty candidate SHALL-attempt-Prune(nil) tests.
-- [ ] A.5 Continue save attempts after record-local permanent rejection, then return the wrapped existing classified
+- [x] A.2 Assert `Prune` and prune-driven `Delete` are never called for an incomplete run; seed an overlapping entity mapping and prove successful candidate writes may overwrite it, so the test does not claim rollback or an unmixed stale superset.
+- [x] A.3 Add a partial-mapping regression in which the community record and an earlier entity mapping write succeed before a later mapping write fails; assert classified error, zero prune/delete, mixed projection allowed, and no complete-success accounting.
+- [x] A.4 Retain and pass all-permanent classification, transient no-prune, complete candidate SHALL-attempt-prune, nonfatal prune-failure, and empty candidate SHALL-attempt-Prune(nil) tests.
+- [x] A.5 Continue save attempts after record-local permanent rejection, then return the wrapped existing classified
   error whenever any candidate was rejected.
-- [ ] A.6 Prevent higher-level construction and prune after any incomplete level.
-- [ ] A.7 Add component coverage proving incomplete detection performs no processed/activity/duration/complete
+- [x] A.6 Prevent higher-level construction and prune after any incomplete level.
+- [x] A.7 Add component coverage proving incomplete detection performs no processed/activity/duration/complete
   accounting and no structural/anomaly pass.
-- [ ] A.8 Add no payload preflight, chunking, member cap, manifest, bucket, status producer, or configuration.
-- [ ] A.9 Run focused race tests and real-NATS storage/prune integration tests.
-- [ ] A.10 Obtain independent SemStreams implementation review.
+- [x] A.8 Add no payload preflight, chunking, member cap, manifest, bucket, status producer, or configuration.
+- [x] A.9 Run focused race tests and real-NATS storage/prune integration tests.
+- [x] A.10 Obtain independent SemStreams implementation review.
 
 ## B. #875 instance-exact storage resolution
 
