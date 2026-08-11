@@ -1,8 +1,8 @@
-# Post-G tag-safety migration draft
+# Post-G tag-safety migration guide
 
-> **Status: candidate-aware draft, not a release notice.** The exact candidate SHA, tag, retained-path results,
-> artifact identities, and detached attestation URL do not exist yet. Do not use this document as evidence that a
-> release is approved.
+> **Status: version-independent operator guidance, not a release notice.** Exact candidate, tag, retained-path,
+> artifact, and #827 outcomes exist only in immutable candidate proof and product GitHub Release material. This file
+> is never edited after candidate proof to inject release facts.
 
 This closeout prepares one stable SemStreams tag for downstream pin-and-migrate work. It keeps SemStreams' existing
 flow, graph mutation, storage-reference, NATS, and eventual-consistency model. It adds no compatibility shim or
@@ -54,11 +54,11 @@ This is proof of existing behavior. It adds no production rule, subject, payload
 
 The following advertised paths remain part of SemStreams and must be green on the exact candidate:
 
-| Finding | Required path | Freeze behavior |
+| Finding | Required path | Authorization behavior |
 |---|---|---|
-| #301 | `task e2e:crud-tools` | Any red result stops candidate freeze. |
-| #844 | `task e2e:ops` | Any red result stops candidate freeze. |
-| #860 | `task e2e:crud-tools`, including its rule assertions | Any red result stops candidate freeze. |
+| #301 | `task e2e:crud-tools` | Any red result stops tag authorization. |
+| #844 | `task e2e:ops` | Any red result stops tag authorization. |
+| #860 | `task e2e:crud-tools`, including its rule assertions | Any red result stops tag authorization. |
 
 The D documentation slice authorizes no fix if a retained path is red. A fix requires a separately approved change and
 creates a new candidate.
@@ -82,19 +82,20 @@ issue.
 
 ## Candidate and release evidence
 
-The candidate commit cannot contain or predict its own SHA. In-tree OpenSpec files hold decisions and the attestation
-schema. After the exact candidate commit exists, the release owner publishes an immutable detached GitHub Release
-attestation keyed to its full SHA. That attestation records all commands/results, timestamps, active semantic polling,
-independent review, exact-SHA CI, retained-path results, limitation publication, tag/artifact identity, and the #827
-outcome.
+The release owner first selects one clean immutable candidate SHA and collects cache-disabled command results, active
+semantic polling, independent review, exact-SHA CI, retained-path results, and the named #827
+operator/window/action plan. Only a fully green candidate gets the non-product `candidate-proof-<fullSHA>` GitHub
+Release and tag authorization. A red candidate is rejected without publishing a failed proof Release.
 
-This draft becomes release guidance only after it names the published tag and links the complete detached attestation.
+After the tag boundary, a separate immutable asset on the product Release links the candidate proof and records tag
+resolution, artifacts, the actual #827 result, and final limitations. Tag-specific migration guidance belongs only in
+the product GitHub Release notes and attestation, not in this file.
 
 ## Downstream migration
 
 Downstream projects should:
 
-1. remain pinned to their current SemStreams version until the stable tag and detached attestation are published;
+1. remain pinned to their current SemStreams version until the stable tag and product attestation are published;
 2. pin the exact published tag;
 3. remove any assumption that graph embedding can read an offloaded body from an unnamed or merely wired store;
 4. ensure every `StorageReference.StorageInstance` has the intended live provider in the deployed flow;

@@ -222,25 +222,48 @@ func TestIntegrationRunner_InterruptReapsPullBeforeReleasingLock(t *testing.T) {
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if command.ProcessState == nil {
-			_ = command.Process.Kill()
-			_ = command.Wait()
-		}
-	})
+	waiter := newCommandWaiter(command)
+	t.Cleanup(func() { _ = waiter.killAndWait() })
 	waitForFileContent(t, pullPIDFile, "", 3*time.Second)
 	waitForFileContent(t, filepath.Join(lockDir, "owner"), "token=", 3*time.Second)
 	pullPID := readPID(t, pullPIDFile)
 	if err := command.Process.Signal(os.Interrupt); err != nil {
 		t.Fatalf("interrupt runner: %v", err)
 	}
-	if err := waitCommand(command, 3*time.Second); err == nil {
+	if err := waiter.wait(3 * time.Second); err == nil {
 		t.Fatalf("interrupted runner unexpectedly succeeded:\n%s", output.String())
 	}
 	if _, err := os.Stat(lockDir); !os.IsNotExist(err) {
 		t.Fatalf("runner released process before host lock: lock remains: %v", err)
 	}
 	assertProcessGone(t, pullPID, "interrupted fake image pull")
+}
+
+func TestCommandWaiter_TimeoutCleanupKillsAndReapsThroughOneOwner(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process signals differ on Windows")
+	}
+	command := exec.Command("/bin/sh", "-c", "exec /bin/sleep 30")
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := command.Process.Pid
+	waiter := newCommandWaiter(command)
+	t.Cleanup(func() { _ = waiter.killAndWait() })
+
+	if err := waiter.wait(10 * time.Millisecond); err == nil || !strings.Contains(err.Error(), "did not exit") {
+		t.Fatalf("wait before cleanup = %v, want bounded timeout", err)
+	}
+	if err := waiter.killAndWait(); err == nil {
+		t.Fatal("killed command unexpectedly reported success")
+	}
+	if command.ProcessState == nil {
+		t.Fatalf("cleanup returned before command was reaped: state=%v", command.ProcessState)
+	}
+	assertProcessGone(t, pid, "timeout-cleaned command")
+	if err := waiter.wait(time.Second); err == nil {
+		t.Fatal("repeated wait lost the command's killed result")
+	}
 }
 
 func TestIntegrationRunner_ImagePullTimeoutCannotExceedProductionCeiling(t *testing.T) {
@@ -286,10 +309,11 @@ func TestIntegrationRunner_HostLockHasBoundedContentionDiagnostics(t *testing.T)
 	if err := holder.Start(); err != nil {
 		t.Fatal(err)
 	}
+	holderWaiter := newCommandWaiter(holder)
 	t.Cleanup(func() {
 		_ = os.WriteFile(releaseFile, []byte("release\n"), 0o644)
 		cancelHolder()
-		_ = holder.Wait()
+		_ = holderWaiter.killAndWait()
 	})
 	waitForFileContent(t, filepath.Join(lockDir, "owner"), "token=", 3*time.Second)
 
@@ -315,7 +339,7 @@ func TestIntegrationRunner_HostLockHasBoundedContentionDiagnostics(t *testing.T)
 	if err := os.WriteFile(releaseFile, []byte("release\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := waitCommand(holder, 3*time.Second); err != nil {
+	if err := holderWaiter.wait(3 * time.Second); err != nil {
 		t.Fatalf("holder did not finish after release: %v\n%s", err, holderOutput.String())
 	}
 	cancelHolder()
@@ -503,15 +527,50 @@ func waitForFileContent(t *testing.T, path, content string, timeout time.Duratio
 	}
 }
 
-func waitCommand(command *exec.Cmd, timeout time.Duration) error {
-	result := make(chan error, 1)
-	go func() { result <- command.Wait() }()
+// commandWaiter gives exactly one goroutine ownership of Cmd.Wait. Callers may
+// time out, kill during cleanup, and wait again without racing a second Wait.
+type commandWaiter struct {
+	command *exec.Cmd
+	done    chan struct{}
+	err     error
+}
+
+func newCommandWaiter(command *exec.Cmd) *commandWaiter {
+	waiter := &commandWaiter{
+		command: command,
+		done:    make(chan struct{}),
+	}
+	go func() {
+		waiter.err = command.Wait()
+		close(waiter.done)
+	}()
+	return waiter
+}
+
+func (w *commandWaiter) wait(timeout time.Duration) error {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
-	case err := <-result:
-		return err
-	case <-time.After(timeout):
+	case <-w.done:
+		return w.err
+	case <-timer.C:
 		return fmt.Errorf("command did not exit within %s", timeout)
 	}
+}
+
+func (w *commandWaiter) killAndWait() error {
+	select {
+	case <-w.done:
+		return w.err
+	default:
+	}
+
+	killErr := w.command.Process.Kill()
+	<-w.done
+	if w.err != nil {
+		return w.err
+	}
+	return killErr
 }
 
 func writeExecutable(t *testing.T, path, content string) {

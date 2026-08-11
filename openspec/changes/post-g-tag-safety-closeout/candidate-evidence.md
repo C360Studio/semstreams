@@ -1,130 +1,131 @@
-# Post-G tag-safety detached attestation schema
+# Post-G tag-safety evidence schema
 
-**Status:** In-tree schema/template only. This file is not candidate evidence and MUST NOT be completed with a
-candidate SHA or run result.
+**Status:** In-tree schema/template only. This file is neither candidate proof nor a release attestation and MUST NOT
+be completed with a candidate SHA or run result.
 
 **Evidence owner:** Release owner.
 
 **Custodian:** Technical writer. Independent SemStreams review validates the exact candidate identity, diff, and
-detached attestation.
+proof records.
 
-## Authority and publication
+## Evidence order
 
-The candidate commit cannot contain or predict its own Git SHA. Exact candidate identity and all command/run evidence
-therefore live outside the candidate tree in an immutable GitHub Release attestation keyed by the candidate's full
-commit SHA. The release owner creates that attestation only after the candidate commit exists.
+Candidate freeze means selecting one clean immutable commit SHA. It happens before proof. No proof record, tag,
+artifact, or release fact is required to select that SHA.
 
-The detached attestation SHALL:
+Evidence is published in two distinct immutable records:
 
-- identify its full candidate SHA in both its release metadata and document body;
-- use this file as its field schema without treating this template as evidence;
-- remain immutable after approval; a correction creates a new candidate and a new attestation;
-- link the in-tree disposition ledger and package manifest from the candidate tree; and
-- fill every required field below before candidate freeze.
+1. **Pre-tag candidate proof.** After candidate selection, collect every required pre-tag result. Only when all gates
+   are green may the release owner create a non-product GitHub Release tag named `candidate-proof-<fullSHA>` targeting
+   the exact candidate and publish its immutable asset. Because the tag does not start with `v`, it MUST NOT trigger
+   the product release or container workflows. A red gate rejects the candidate through local/run evidence; it does
+   not require publication of a failed candidate-proof Release.
+2. **Post-publication release attestation.** After the product tag boundary, publish a separate immutable asset on the
+   product GitHub Release. It links and digests the candidate-proof asset, then records tag resolution, published
+   artifacts, the actual #827 result, the final release decision, and limitations.
 
-The Git object SHA is candidate identity. This template, its package-manifest digest, a branch name, a pull request,
-or a workflow run MUST NOT redefine candidate identity.
+Neither asset contains or requires its own URL or SHA-256. GitHub Release metadata or a sibling checksum asset created
+after upload MAY carry the asset URL or digest. That metadata does not redefine candidate or evidence identity.
 
-The completed attestation MUST NOT contain or require its own SHA-256. GitHub Release metadata or a sibling checksum
-asset created after the attestation upload MAY carry a digest. That external digest is verification metadata only; it
-does not redefine candidate or attestation identity.
+Any correction to code, specification, generated content, task truth, or the package manifest selects a new candidate
+SHA and requires a new `candidate-proof-<fullSHA>` record. Evidence from the old candidate is not carried forward as
+release authority.
 
-## Candidate identity
+## Pre-tag candidate-proof record
+
+### Candidate identity
 
 | Required field | Detached value |
 |---|---|
 | Candidate full SHA | `<required>` |
 | Candidate commit URL | `<required>` |
+| Proof tag | `candidate-proof-<fullSHA>` |
+| Proof tag-resolved SHA and command output | `<required>` |
 | Clean `git status --short` | `<required>` |
 | Accepted inventory SHA-256 | `8368e9b17e869561ca5c2123c8028d1311e449dae930c483d450c627a4acfcc6` |
 | Package-manifest SHA-256 | `<required>` |
-| Generated schema/spec diff | `<required>` |
-| Disposition ledger commit path | `<required>` |
+| Package-manifest verification | `(cd openspec/changes/post-g-tag-safety-closeout && shasum -a 256 -c manifest.sha256)` |
+| Generated schema/spec no-drift result | `<required>` |
+| Disposition ledger commit path | `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md` |
 
-## Command and result provenance
+### Command and result provenance
+
+Each row records runner identity, UTC start and end, exit/result, and a log or artifact SHA-256 in addition to the
+bound command below.
 
 | Gate | Exact command | Runner identity | Start UTC | End UTC | Exit/result | Log or artifact SHA-256 |
 |---|---|---|---|---|---|---|
-| Focused affected tests | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
-| Lint | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
-| Full race | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
-| Integration | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
-| Schema/no drift | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
-| Contracts | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
-| Strict OpenSpec | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
-| Statistical E2E | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
-| Semantic E2E | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
-| Agentic E2E | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
-| Research direct branch | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
-| Research execute/fusion branch | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
-| Deep-research E2E | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
-| #301 crud-tools path | `task e2e:crud-tools` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
+| Focused affected tests | `go test -count=1 -race ./graph/clustering ./graph/embedding ./processor/graph-clustering ./processor/graph-embedding ./storage/storeregistry ./test/testinfra ./test/e2e/scenarios/crud-tools ./test/e2e/scenarios/research-graph` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
+| Lint | `task lint` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
+| Full race | `go test -count=1 -race ./...` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
+| Integration | `task test:integration` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
+| Schema generation | `task schema:generate` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
+| Schema/spec no drift | `task schema:check-changes` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
+| Contracts | `go test -count=1 ./test/contract/...` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
+| Strict OpenSpec | `task openspec:validate` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
+| Statistical E2E | `task e2e:statistical` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
+| Semantic E2E | `task e2e:semantic` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
+| Agentic E2E | `task e2e:agentic` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
+| Research direct and execute/fusion rounds | `task e2e:research-graph` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
+| Deep-research E2E | `task e2e:deep-research` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
+| #301 and #860 crud-tools paths | `task e2e:crud-tools` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
 | #844 ops path | `task e2e:ops` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
-| #860 rule/crud-tools path | `task e2e:crud-tools` | `<required>` | `<required>` | `<required>` | `<required>` | `<required>` |
 
-Any red retained path blocks freeze. D does not authorize a fix or allow wrapper output to be reclassified as green.
+The research task runs and proves both isolated rounds in one invocation. The crud-tools task proves #301 and #860 in
+one invocation, but the proof record identifies their distinct assertions. Any red retained path blocks tag
+authorization. The documentation slice does not authorize a fix or allow wrapper output to be reclassified as green.
 
-## Semantic active polling
+### Semantic active polling
 
 | Poll UTC | `/readyz` result | Authoritative counters | Current stage/output timestamp | Progress judgment |
 |---|---|---|---|---|
 | `<required, repeated every 30-60 seconds>` | `<required>` | `<required>` | `<required>` | `<required>` |
 
-If authoritative state shows no forward progress for more than twice the expected step duration, the attestation
-records abort evidence and leaves the semantic gate failed.
+If authoritative state shows no forward progress for more than twice the expected step duration, record abort evidence
+and leave the semantic gate failed. Silence is not success.
 
-## Disposition outcomes and release limitations
-
-The attestation SHALL point to the owner decisions in `disposition-ledger.md`, record the exact-candidate result for
-each retained path, and reproduce every accepted or deferred limitation in the release notes. At minimum it records:
-
-- #301, #844, and #860 as retained and green, or blocks freeze;
-- #839 as an owner-accepted community-value limitation;
-- the Derived-Index Convergence Program limitations;
-- the Anomaly Lifecycle and Retention Program limitation;
-- the Payload Bounds and Retention Program limitation; and
-- the Semantic Summary Content/Quality Program limitation.
-
-## Review and CI identity
+### Review, CI, disposition, and tag authorization
 
 | Required field | Detached value |
 |---|---|
-| Independent reviewer | `<required>` |
-| Review result | `<required>` |
+| Independent reviewer and result | `<required>` |
 | Reviewed candidate SHA | `<required>` |
 | Reviewed diff/artifact pointer | `<required>` |
-| GitHub CI run/check identities | `<required>` |
+| GitHub CI run/check identities and result | `<required>` |
 | CI candidate SHA | `<required>` |
-| CI result | `<required>` |
-
-## Tag and artifact identity
-
-| Required field | Detached value |
-|---|---|
-| Tag name | `<required>` |
-| Tag-resolved SHA | `<required>` |
-| Tag resolution command/output | `<required>` |
-| Binary version output | `<required>` |
-| Binary SHA-256 | `<required>` |
-| Container reference | `<required>` |
-| Container digest | `<required>` |
-| Container-reported version | `<required>` |
-
-## Coordinated #827 outcome
-
-| Required field | Detached value |
-|---|---|
-| Operation owner | `<required>` |
-| Scheduled tag boundary | `<required>` |
-| Pre-v1 window open | `<required>` |
-| Wipe/reseed result or migration halt | `<required>` |
-| Evidence pointer | `<required>` |
-
-## Release decision
-
-| Required field | Detached value |
-|---|---|
+| #827 named operator | `<required>` |
+| #827 tag-boundary window | `<required>` |
+| #827 planned wipe/reseed action | `<required>` |
 | Binding release owner | `<required>` |
-| Decision and UTC time | `<required>` |
-| Exact approved candidate/tag | `<required>` |
-| Detached attestation asset URL | `<required>` |
+| Tag authorization and UTC time | `<required>` |
+
+The candidate proof points to the owner decisions in `disposition-ledger.md` and records #301, #844, and #860 as
+green. It also confirms that the product Release notes will disclose #839 and every deferred named program. It does
+not claim that #827 ran, predict a product tag, identify unpublished artifacts, or preserve a rejected candidate as a
+published proof Release.
+
+## Post-publication release attestation
+
+This separate immutable product-Release asset contains only facts knowable after tag authorization or publication.
+Tag-specific migration guidance lives in the product GitHub Release notes and this attestation; the candidate tree is
+not edited after proof.
+
+| Required field | Release value |
+|---|---|
+| Candidate full SHA | `<required>` |
+| Candidate-proof tag | `candidate-proof-<fullSHA>` |
+| Candidate-proof asset pointer and external SHA-256 | `<required>` |
+| Product tag name | `<required>` |
+| Product tag-resolved SHA and command output | `<required>` |
+| Binary version output and SHA-256 | `<required>` |
+| Container reference, digest, and reported version | `<required>` |
+| #827 operation owner and scheduled boundary | `<required>` |
+| #827 actual wipe/reseed result, or halt and migration outcome | `<required>` |
+| #827 evidence pointer | `<required>` |
+| Binding release owner | `<required>` |
+| Final decision and UTC time | `<required>` |
+| Exact published candidate/tag | `<required>` |
+| Retained-path outcomes and accepted/deferred limitations | `<required>` |
+
+If the coordinated #827 window closes, publication halts and the operation becomes an explicit migration. The actual
+result is recorded only here, never predicted in pre-tag proof.

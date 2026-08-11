@@ -1,7 +1,8 @@
 # Post-G tag-safety disposition ledger
 
-**Status:** Binding owner decisions recorded on 2026-08-11. Candidate-specific results and publication evidence
-remain PENDING in the detached GitHub Release attestation; those fields block candidate freeze.
+**Status:** Binding owner decisions recorded on 2026-08-11. Candidate-specific results remain PENDING. A fully green
+candidate publishes the pre-tag proof record; a red required result blocks tag authorization and needs no failed
+candidate-proof Release.
 
 **Binding owner:** Coby, SemStreams repository owner.
 
@@ -11,25 +12,26 @@ remain PENDING in the detached GitHub Release attestation; those fields block ca
 decision authority.
 
 **Candidate identity and evidence:** Not stored in this ledger. The exact candidate SHA, commands, results, and
-evidence pointers belong in the immutable detached attestation keyed by that SHA. This in-tree record cannot predict
-the SHA of the commit that contains it.
+evidence pointers belong in the immutable `candidate-proof-<fullSHA>` Release asset. Product tag, artifact, and #827
+outcomes belong in the separate product-Release attestation. This in-tree record cannot predict its containing SHA.
 
 | Finding | Surface | Owner decision | Disposition | Coverage or publication plan | Candidate result / evidence |
 |---|---|---|---|---|---|
-| #301 | Advertised crud-tools path | Retain; the exact candidate must pass or freeze stops. | `retained-candidate-gate` | Run `task e2e:crud-tools` on the exact candidate. No fix is authorized by D if red. | PENDING — detached attestation |
-| #844 | Advertised ops path | Retain; the exact candidate must pass or freeze stops. | `retained-candidate-gate` | Run `task e2e:ops` on the exact candidate. No fix is authorized by D if red. | PENDING — detached attestation |
-| #860 | Advertised rule/crud-tools path | Retain; the exact candidate must pass or freeze stops. | `retained-candidate-gate` | Run `task e2e:crud-tools` and retain its rule assertions on the exact candidate. No fix is authorized by D if red. | PENDING — detached attestation |
-| DI-01 | Suffix collision/retraction | Defer explicitly; publish the limitation. | `deferred-named-program` | Derived-Index Convergence Program | PENDING — limitation publication in detached attestation |
-| DI-02 | Alias collision/retraction | Defer explicitly; publish the limitation. | `deferred-named-program` | Derived-Index Convergence Program | PENDING — limitation publication in detached attestation |
-| DI-03 | Spatial stale rows/malformed aggregate | Defer explicitly; publish the limitation. | `deferred-named-program` | Derived-Index Convergence Program | PENDING — limitation publication in detached attestation |
-| #619 | BM25/dedup lifecycle | Defer explicitly; publish the limitation. | `deferred-named-program` | Derived-Index Convergence Program | PENDING — limitation publication in detached attestation |
-| #672 | Clustering identity caches | Defer explicitly; publish the limitation. | `deferred-named-program` | Derived-Index Convergence Program | PENDING — limitation publication in detached attestation |
-| Temporal cleanup | Malformed aggregate and reverse cleanup failures | Defer explicitly; publish the limitation. | `deferred-named-program` | Derived-Index Convergence Program | PENDING — limitation publication in detached attestation |
-| DI-04 | Anomaly lifecycle/cleanup truth | Defer explicitly; publish the limitation. | `deferred-named-program` | Anomaly Lifecycle and Retention Program | PENDING — limitation publication in detached attestation |
-| #839 | Community value can exceed the NATS payload ceiling | Accept the measured limitation for this tag. | `accepted-release-limitation` | Retain #855 incomplete-candidate protection and statistical E2E; promise no oversized-community success. | PENDING — limitation publication in detached attestation |
-| #857 | Framework payload bounds and retention | Defer explicitly; publish the limitation. | `deferred-named-program` | Payload Bounds and Retention Program | PENDING — limitation publication in detached attestation |
-| #829 | Semantic summary content/quality | Defer explicitly; publish the limitation. | `deferred-named-program` | Semantic Summary Content/Quality Program | PENDING — limitation publication in detached attestation |
+| #301 | Advertised crud-tools path | Retain; the exact candidate must pass or tag authorization stops. | `retained-candidate-gate` | Run `task e2e:crud-tools` on the exact candidate. No fix is authorized by D if red. | PENDING — candidate proof |
+| #844 | Advertised ops path | Retain; the exact candidate must pass or tag authorization stops. | `retained-candidate-gate` | Run `task e2e:ops` on the exact candidate. No fix is authorized by D if red. | PENDING — candidate proof |
+| #860 | Advertised rule/crud-tools path | Retain; the exact candidate must pass or tag authorization stops. | `retained-candidate-gate` | Run `task e2e:crud-tools` and retain its rule assertions. No fix is authorized by D if red. | PENDING — candidate proof |
+| DI-01 | Suffix collision/retraction | Defer explicitly; publish the limitation. | `deferred-named-program` | Derived-Index Convergence Program | PENDING — product Release notes |
+| DI-02 | Alias collision/retraction | Defer explicitly; publish the limitation. | `deferred-named-program` | Derived-Index Convergence Program | PENDING — product Release notes |
+| DI-03 | Spatial stale rows/malformed aggregate | Defer explicitly; publish the limitation. | `deferred-named-program` | Derived-Index Convergence Program | PENDING — product Release notes |
+| #619 | BM25/dedup lifecycle | Defer explicitly; publish the limitation. | `deferred-named-program` | Derived-Index Convergence Program | PENDING — product Release notes |
+| #672 | Clustering identity caches | Defer explicitly; publish the limitation. | `deferred-named-program` | Derived-Index Convergence Program | PENDING — product Release notes |
+| Temporal cleanup | Malformed aggregate and reverse cleanup failures | Defer explicitly; publish the limitation. | `deferred-named-program` | Derived-Index Convergence Program | PENDING — product Release notes |
+| DI-04 | Anomaly lifecycle/cleanup truth | Defer explicitly; publish the limitation. | `deferred-named-program` | Anomaly Lifecycle and Retention Program | PENDING — product Release notes |
+| #839 | Community value can exceed the NATS payload ceiling | Accept the measured limitation for this tag. | `accepted-release-limitation` | Retain #855 incomplete-candidate protection and statistical E2E; promise no oversized-community success. | PENDING — product Release notes |
+| #857 | Framework payload bounds and retention | Defer explicitly; publish the limitation. | `deferred-named-program` | Payload Bounds and Retention Program | PENDING — product Release notes |
+| #829 | Semantic summary content/quality | Defer explicitly; publish the limitation. | `deferred-named-program` | Semantic Summary Content/Quality Program | PENDING — product Release notes |
 
 `retained-candidate-gate` records the binding decision to retain a capability; it does not claim the candidate is
 green. `accepted-release-limitation` and `deferred-named-program` do not imply conformance or authorize runtime work.
-Inventory presence is not a disposition. No issue is closed by this ledger.
+Inventory presence is not a disposition. No issue is closed by this ledger. #827 remains coordinated at the product
+tag boundary and is not executed by this documentation change.

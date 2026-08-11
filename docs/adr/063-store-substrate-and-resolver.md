@@ -430,5 +430,3 @@ discipline — the tier covers the seam and will surface embedding/search output
 - `pkg/fusion/hydrate.go`, `graph/embedding/worker.go`, `processor/graph-embedding/component.go`,
   `storage/objectstore/{store,component}.go`, `component/port_store.go`,
   `service/component_manager.go`.
-</content>
-</invoke>
