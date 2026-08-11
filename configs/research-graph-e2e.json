@@ -90,7 +90,8 @@
     },
     "TOOL": {
       "subjects": [
-        "tool.>"
+        "tool.execute.>",
+        "tool.result.>"
       ],
       "max_age": "24h",
       "max_bytes": 268435456,
