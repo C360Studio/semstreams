@@ -17,7 +17,7 @@ import (
 
 // buildIncomingKey mirrors processor/graph-index/incoming_index.go incomingIndexKey:
 // key = targetID + "." + sourceID + "." + hex(predicate) (gh#474 P1a). Kept in sync by
-// the live e2e HARD-FAIL gate and graph/query/incoming_shard_integration_test.go.
+// the live e2e HARD-FAIL gate and the graph-index replacement integration test.
 func buildIncomingKey(targetID, sourceID, predicate string) string {
 	return targetID + "." + sourceID + "." + graph.EncodePredicateToken(predicate)
 }

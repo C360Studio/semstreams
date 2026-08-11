@@ -62,8 +62,8 @@ func TestComputeEmbeddingStatus_BootstrapCompleteStamped(t *testing.T) {
 // the moment the initial entries had been DELIVERED and validated. But embedding
 // generation is asynchronous, so the watermark can sit far behind the enumeration-time
 // target while the envelope already claims the build finished. An unbounded health
-// consumer (fusion, the graph/query client) would then serve a partially built cold
-// index, which is exactly what bootstrap_complete exists to prevent.
+// consumer such as fusion would then serve a partially built cold index, which is
+// exactly what bootstrap_complete exists to prevent.
 //
 // Delivery is not application. The bit now waits for the applied floor to reach a
 // target captured when enumeration ended — fixed, so it stays reachable under load.

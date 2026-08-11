@@ -14,13 +14,13 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	clusteringdata "github.com/c360studio/semstreams/graph/clustering"
-	graphquery "github.com/c360studio/semstreams/graph/query"
 	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	graphclustering "github.com/c360studio/semstreams/processor/graph-clustering"
+	graphquery "github.com/c360studio/semstreams/processor/graph-query"
 	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
@@ -350,26 +350,66 @@ func TestIntegration_ReplacementActivationTombstoneTraversalClustering(t *testin
 		{FromEntityID: liveSource, Predicate: "robotics.assigned.mission"},
 	})
 
-	// The query client is a must-exist READER now; provision the one bucket
-	// this composition's components don't own (SPATIAL_INDEX belongs to
-	// graph-index-spatial, which is not part of this test) the way its owner
-	// would — through the catalog seam.
-	_, err = graph.EnsureCatalogBucket(ctx, nc, graph.BucketSpatialIndex)
+	exactResponder, err := nc.SubscribeForRequests(ctx, "graph.ingest.query.entity",
+		func(requestCtx context.Context, data []byte) ([]byte, error) {
+			var request struct {
+				ID string `json:"id"`
+			}
+			if unmarshalErr := json.Unmarshal(data, &request); unmarshalErr != nil {
+				return nil, unmarshalErr
+			}
+			entry, getErr := states.Get(requestCtx, request.ID)
+			if getErr != nil {
+				return nil, getErr
+			}
+			if entry.Revision() == 0 {
+				return nil, errors.New("exact entity response requires a nonzero KV revision")
+			}
+			var entity graph.EntityState
+			if decodeErr := graph.UnmarshalEntityState(entry.Value(), &entity); decodeErr != nil {
+				return nil, decodeErr
+			}
+			if entity.ID != request.ID {
+				return nil, errors.New("exact entity authority key/value identity mismatch")
+			}
+			return json.Marshal(graph.ExactEntity{
+				Entity:     entity.Clone(),
+				KVRevision: entry.Revision(),
+			})
+		})
 	require.NoError(t, err)
-	queryClient, err := graphquery.NewClient(ctx, nc, nil)
+	defer func() { require.NoError(t, exactResponder.Unsubscribe()) }()
+
+	queryConfig, err := json.Marshal(graphquery.DefaultConfig())
 	require.NoError(t, err)
-	defer queryClient.Close()
-	path, err := queryClient.ExecutePathQuery(ctx, graphquery.PathQuery{
-		StartEntity: liveSource, MaxDepth: 3, MaxNodes: 10, MaxTime: 5 * time.Second,
-		DecayFactor: 0.8, MaxPaths: 10,
+	queryComponent, err := graphquery.CreateGraphQuery(queryConfig, component.Dependencies{NATSClient: nc})
+	require.NoError(t, err)
+	queryLifecycle := queryComponent.(component.LifecycleComponent)
+	require.NoError(t, queryLifecycle.Initialize())
+	require.NoError(t, queryLifecycle.Start(ctx))
+	defer func() { require.NoError(t, queryLifecycle.Stop(5*time.Second)) }()
+
+	pathRequest, err := json.Marshal(graphquery.PathSearchRequest{
+		StartEntity: liveSource,
+		MaxDepth:    3,
+		MaxNodes:    10,
+		Direction:   graphquery.DirectionOutgoing,
+		Timeout:     "5s",
+		MaxPaths:    10,
 	})
 	require.NoError(t, err)
+	pathData, err := nc.RequestClassified(ctx, "graph.query.pathSearch", pathRequest, 5*time.Second)
+	require.NoError(t, err)
+	var path graphquery.PathSearchResponse
+	require.NoError(t, json.Unmarshal(pathData, &path))
 	visited := make([]string, 0, len(path.Entities))
 	for _, entity := range path.Entities {
 		visited = append(visited, entity.ID)
 	}
 	sort.Strings(visited)
-	require.Equal(t, []string{targetID, leafID, liveSource}, visited,
+	wantVisited := []string{leafID, liveSource, targetID}
+	sort.Strings(wantVisited)
+	require.Equal(t, wantVisited, visited,
 		"authoritative ENTITY_STATES traversal must follow canonical live relationships")
 
 	clusteringConfig := graphclustering.DefaultConfig()
@@ -408,10 +448,6 @@ func TestIntegration_ReplacementActivationTombstoneTraversalClustering(t *testin
 	assertIncomingPublic(t, ctx, nc, targetID, []graph.IncomingEntry{{
 		FromEntityID: liveSource, Predicate: "robotics.assigned.mission",
 	}})
-	incomingSources, err := queryClient.GetIncomingRelationships(ctx, targetID)
-	require.NoError(t, err)
-	require.Equal(t, []string{liveSource}, incomingSources,
-		"production graph/query reader must exclude the tombstoned source")
 
 	require.NoError(t, states.Delete(ctx, targetID))
 	targetDeleteRevision, err := natsclient.BucketLastSeq(ctx, states)
@@ -420,10 +456,6 @@ func TestIntegration_ReplacementActivationTombstoneTraversalClustering(t *testin
 	assertIncomingPublic(t, ctx, nc, targetID, []graph.IncomingEntry{{
 		FromEntityID: liveSource, Predicate: "robotics.assigned.mission",
 	}})
-	incomingSources, err = queryClient.GetIncomingRelationships(ctx, targetID)
-	require.NoError(t, err)
-	require.Equal(t, []string{liveSource}, incomingSources,
-		"production graph/query reader must preserve live-source ownership after target retirement")
 	outgoing := requestPublic[graph.OutgoingQueryResponse](t, ctx, nc, "graph.index.query.outgoing",
 		map[string]any{"entity_id": targetID})
 	require.Empty(t, outgoing.Data.Relationships, "retired target must retract its source-owned outgoing edge")

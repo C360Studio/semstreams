@@ -51,8 +51,6 @@ poison on their own paths:
 - **rule processor** — evaluation kill switch latches sticky on a consumed poisoned value.
 - **graph-clustering / graph-index and all projection owners** — sticky reset-required for
   the derived view.
-- **direct graph query client** (`graph/query` embedders: graph-query, graph-gateway,
-  agentic-tools, research-graph-classify, fusion) — whole-client sticky latch.
 - **pkg/lifecycle Manager** — manager-lifetime latch.
 
 After repairing the entities, restart the affected processes (or the deployment) to clear

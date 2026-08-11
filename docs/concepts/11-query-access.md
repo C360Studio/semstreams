@@ -42,8 +42,8 @@ SemStreams:
 
 No general graph front door currently serves every caller. The remote endpoint is
 a hand-written GraphQL-shaped facade, not a schema executor. Embedded access is
-admitted only through operation-specific typed adapters; `graph/query.Client`
-mixes direct KV and RPC and is provisional. MCP graph access is unavailable.
+admitted only through operation-specific typed adapters; the former mixed direct-KV
+`graph/query.Client` has been removed. MCP graph access is unavailable.
 
 ## Implemented and Future Access Patterns
 

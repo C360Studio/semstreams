@@ -31,8 +31,8 @@ const (
 	subjectRelationships = "graph.query.relationships"
 )
 
-// defaultTimeout is used when New is given a non-positive timeout. Matches the
-// 5s the existing graph/query client uses for index lookups.
+// defaultTimeout is used when New is given a non-positive timeout. It matches
+// the graph-query component's default request timeout.
 const defaultTimeout = 5 * time.Second
 
 // requester is the minimal NATS surface the retrieval client needs: classified

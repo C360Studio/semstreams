@@ -301,8 +301,8 @@ func (w *Watcher) Read() Reading {
 // returns nil once something has arrived (fresh or not — Read is what judges that) and
 // ctx.Err() otherwise.
 //
-// It exists for the LAZILY-BOUND consumers (the graph/query client, fusion): they bind
-// the watch on their first gate decision, and without a bounded wait that first
+// It exists for lazily bound consumers such as fusion: they bind the watch on
+// their first gate decision, and without a bounded wait that first
 // decision would fail closed purely because the watch had not delivered yet — a
 // regression against the request/reply this replaces, which always got an answer or an
 // error. Waiting once at bind, bounded by the same timeout the request used, keeps the

@@ -14,7 +14,7 @@ import (
 // serving index is not SOUND — its watcher is unavailable, it is degraded by an
 // unresolved required write, or its initial build has not completed
 // (graph.ErrorCodeIndexNotReady), mirroring processor/graph-index/query.go and
-// graph/query/client.go.
+// the graph-query responders that preserve classified index errors.
 //
 // ADR-084 narrowed this: the transient no longer fires on ordinary catch-up lag, so the
 // window in which Fuse's internal reads hit it is now a health window rather than a
