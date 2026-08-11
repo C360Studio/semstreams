@@ -1,22 +1,29 @@
 # Post-G tag-safety closeout design
 
-**Status:** Corrected exact checksum-addressed target state received independent `DESIGN PASS`. The repository owner approved all binding design rulings on 2026-08-11; implementation has not begun.
+**Status:** Corrected exact checksum-addressed target state received independent `DESIGN PASS`. The repository owner
+approved all binding design rulings on 2026-08-11. Runtime slices #855 and #875 and the research execute/fusion proof
+merged as #933, #934, and #936. The bounded truth/disposition slice is in progress; candidate proof has not begun.
 
 **Baseline:** `4593996ef56f50766dcf58fe2200081b72a59133`
 
 **Accepted inventory:** `docs/proposals/post-g-foundation-remap-inventory.md`, SHA-256
 `8368e9b17e869561ca5c2123c8028d1311e449dae930c483d450c627a4acfcc6`.
 
-**Package content root:** `openspec/changes/post-g-tag-safety-closeout/manifest.sha256`. The manifest covers every change artifact except itself and is regenerated after any covered artifact edit. It is the in-tree package content root; no artifact covered by the manifest records or requires the manifest's digest. External review/release systems MAY record the manifest digest alongside the candidate SHA, but no additional in-tree sidecar is required.
+**Package content root:** `openspec/changes/post-g-tag-safety-closeout/manifest.sha256`. The manifest covers every
+OpenSpec artifact beneath this change directory except itself and is regenerated after any covered edit. It is the
+in-tree package content root; no covered artifact records or requires the manifest's digest. The detached attestation
+records the candidate's manifest digest after the candidate exists; no additional in-tree sidecar is required.
 
 ## Boundary
 
 Only #855 and #875 are runtime correction slices. Research work proves an existing execution path. Release work
-corrects truth and establishes candidate evidence.
+corrects truth and establishes the detached candidate-evidence contract.
 
-DI-01 through DI-04, #619, #672, spatial and temporal poison/cleanup, #839/#857 payload bounds, #829, hierarchy,
-reclamation, generic readiness, and anomaly-retention questions remain disposition-only. Promoting any of them
-requires a separate owner-approved amendment.
+DI-01 through DI-03, #619, #672, and temporal poison/cleanup are deferred to the Derived-Index Convergence Program.
+DI-04 is deferred to the Anomaly Lifecycle and Retention Program. #857 is deferred to the Payload Bounds and
+Retention Program, and #829 is deferred to the Semantic Summary Content/Quality Program. #839 is an accepted measured
+community-value limitation for this tag. Hierarchy, reclamation, and generic readiness remain disposition-only.
+Promoting any of them requires a separate owner-approved amendment.
 
 The design stays on current NATS KV, component ports, `StorageReference`, `StoreRegistry`, research rules, and fusion.
 It adds no generic abstraction or adopter-facing knob.
@@ -29,7 +36,7 @@ It adds no generic abstraction or adopter-facing knob.
 | Embedding operator | Run the named storage component that owns the reference. | Exact registered refs resolve; missing names are excluded. | Existing component/store discovery and metrics. | No duplicate wiring or fallback store. |
 | Clustering/query adopter | Nothing new. | An incomplete run cannot prune or claim completion, but successful or partial writes may overwrite entity mappings and readers may observe a mixed prior/candidate projection. | Existing clustering query behavior and error telemetry. | No knowledge of NATS payload ceilings or partition internals. |
 | Research adopter | Existing direct and non-trivial routes remain. | The capability behaves as today; the repository gains deterministic proof of both. | Existing `research_graph` result and E2E evidence. | No rule subjects, KV keys, or fixture mechanics. |
-| Release owner | Complete `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md` and `candidate-evidence.md` for one exact candidate/tag. | Candidate freeze is blocked. | The checksum-addressed change package. | No inference from issue labels, wrapper silence, or downstream guesses. |
+| Release owner | Keep decisions in the in-tree ledger, then publish an immutable detached GitHub Release attestation keyed to the exact candidate SHA. | Candidate freeze is blocked until every required detached field is complete. | The checksum-addressed change package and attestation schema. | No self-referential SHA, inference from issue labels, wrapper silence, or downstream guesses. |
 | Downstream repository | Pin the exact published tag, then migrate and test. | It remains safely on its prior pin. | Release notes and migration guide. | No pre-tag lockstep or compatibility shim. |
 
 ## Options
@@ -163,24 +170,33 @@ This proves the production execute/fusion path. A unit hook that bypasses the co
 The implementation documentation slice:
 
 - updates ADR-063 to remove the accepted fallback ruling and record exact-name-only resolution;
-- corrects ADR-068's retired predicate/context/catalog layouts to the current raw-predicate, hashed-name,
-  source-owned-incoming, owner-complete reality;
+- corrects ADR-068 to current raw-predicate, hashed-name, source-owned incoming/outgoing cleanup; records
+  `CONTEXT_INDEX` as retired, not cataloged, and not created; and records that no `PREDICATE_CATALOG` exists;
 - adds a premise-status annotation to suspended `semantic-tier-split` without unfreezing it or completing tasks; and
-- corrects stale comments in `e2e-ladder.yml` and `sister-validation.yml` without changing workflow behavior.
+- corrects stale comments in `e2e-ladder.yml` and `sister-validation.yml` without changing workflow behavior; and
+- adds a candidate-aware migration draft that cannot claim an exact tag or outcome before detached proof exists.
 
-Owner-approved policy (2026-08-11): before candidate freeze, #301, #844, and #860 each receive one owner-recorded
-disposition:
+Owner-approved policy (2026-08-11): #301, #844, and #860 remain advertised. Each exact candidate must run its named
+path green or candidate freeze stops. D authorizes neither a fix nor removal if one is red, and an honest nonzero
+wrapper result cannot be relabeled as harness success.
 
-1. retained/advertised and green on the candidate; or
-2. owner-approved fold/delete with explicit replacement coverage green on the candidate.
+The remaining owner dispositions are binding:
 
-An honest nonzero wrapper result is evidence of a red path, not grounds to relabel it a harness success.
+- DI-01 through DI-03, #619, #672, and temporal malformed/reverse cleanup defer to the Derived-Index Convergence
+  Program;
+- DI-04 defers to the Anomaly Lifecycle and Retention Program;
+- #839 is an accepted measured community-value limitation for this tag;
+- #857 defers to the Payload Bounds and Retention Program; and
+- #829 defers to the Semantic Summary Content/Quality Program.
 
-Every other matrix finding remains disposition-only unless separately owner-promoted. Each receives an owner row:
-accepted release limitation, separately approved blocker, or deferred named program. Inventory presence alone is not
-conformance, does not authorize implementation, and cannot silently expand runtime scope.
+Each accepted or deferred limitation is published with the candidate. Inventory presence alone is not conformance,
+does not authorize implementation, and cannot silently expand runtime scope.
 
-The authoritative in-tree disposition ledger is `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md`. The repository owner owns every binding decision; the technical writer owns faithful transcription and conservative task truth. Each row requires the finding, decision, disposition, owner identity/time, candidate SHA, retained or replacement coverage, exact command/result provenance, and evidence pointer.
+`disposition-ledger.md` is the authoritative in-tree decision record. The repository owner owns binding decisions;
+the technical writer owns faithful transcription and conservative task truth. The ledger records decision date and
+coverage/publication plan, but it cannot contain the SHA of the candidate commit that contains it. Candidate identity,
+exact command/results, timestamps, and evidence pointers live in the immutable detached GitHub Release attestation
+keyed to the candidate's full SHA. The in-tree `candidate-evidence.md` is only the schema for that external record.
 
 ## Same-class collision result
 
@@ -192,12 +208,18 @@ The authoritative in-tree disposition ledger is `openspec/changes/post-g-tag-saf
 | Ports | Existing store-provide/store-read federation remains; no second port or config vocabulary appears. |
 | Research | Existing rules, subjects, payloads, components, and fusion remain. Fixtures observe them. |
 | E2E ownership | Existing research task owns both branch runs; no parallel tier capability is created. |
-| Release truth | `disposition-ledger.md` is the sole binding disposition record; `candidate-evidence.md` is the sole candidate/tag proof record. Both are covered by `manifest.sha256`. |
+| Release truth | `disposition-ledger.md` binds decisions; `candidate-evidence.md` defines the schema only. Exact-SHA proof lives in the detached GitHub Release attestation. Both in-tree artifacts are covered by `manifest.sha256`. |
 | Frozen change | `semantic-tier-split` stays suspended and does not own this release proof. |
 
 ## Candidate and tag proof
 
-The authoritative evidence artifact is `openspec/changes/post-g-tag-safety-closeout/candidate-evidence.md`, owned by the release owner with technical-writer custody. It records candidate SHA and cleanliness; command/result provenance; semantic polling; exact review and CI identity; tag resolution; binary/container identity; and #827 outcome. Blank or `PENDING` fields block release.
+The candidate commit cannot contain or predict its own SHA. The authoritative evidence artifact is therefore an
+immutable detached GitHub Release attestation keyed to the candidate's full SHA and created only after that commit
+exists. `candidate-evidence.md`, covered by the package manifest, is the in-tree schema/template and MUST NOT be
+completed as evidence or redefine candidate identity. The release owner owns the detached attestation; the technical
+writer has custody of its schema and validates faithful completion. A missing required detached field blocks freeze.
+The attestation body does not contain or require its own SHA-256. A digest may appear only in external GitHub Release
+metadata or a sibling checksum asset created after upload, and it does not redefine candidate or attestation identity.
 
 Candidate freeze records one clean SHA and confirms generated schemas/specs are clean. All proof is rerun on that SHA:
 
@@ -216,7 +238,7 @@ Candidate freeze records one clean SHA and confirms generated schemas/specs are 
 - retained advertised crud-tools/ops/rule paths required by the disposition ledger.
 
 A provably wedged paid run is aborted rather than left to timeout. Any fix changes the candidate SHA and invalidates
-earlier review, CI, and candidate evidence.
+earlier review, CI, and detached candidate evidence.
 
 Independent SemStreams review is tied to the complete exact-candidate diff and SHA. GitHub CI must be green on that
 same commit. Release notes name clean breaks and accepted limitations.
@@ -225,8 +247,8 @@ The #827 wipe/reseed is scheduled at the tag boundary. If the permitted pre-v1 w
 the operation becomes an explicit migration.
 
 The tag must resolve to the approved SHA. Binary and container outputs must report the intended version, and the
-container tag/digest must be recorded. Downstream repositories pin that tag afterward; they are not exhaustive pre-tag
-blockers.
+container tag/digest must be recorded in the detached attestation. Downstream repositories pin that tag afterward;
+they are not exhaustive pre-tag blockers.
 
 ## Risks
 
@@ -244,11 +266,16 @@ The repository owner approved these rulings on 2026-08-11:
 
 - Exact `StorageInstance` registration in `StoreRegistry` is the sole resolution authority; implementation removes the
   unnamed fallback accepted by ADR-063.
-- #301, #844, and #860 are evaluated individually during D.5 as retained and green or folded/deleted with explicit
-  replacement coverage green. A wrapper result is not relabeled to manufacture success. The individual outcomes
-  remain PENDING until D.5 records their evidence.
-- Every other matrix finding remains disposition-only unless separately owner-promoted; no finding silently expands
-  runtime scope. Individual row dispositions remain PENDING until D.6 records them.
+- #301, #844, and #860 are retained. Each named path must run green on the exact candidate or freeze stops. D does not
+  authorize a fix if red, and wrapper output is not relabeled to manufacture success.
+- DI-01 through DI-03, #619, #672, and temporal malformed/reverse cleanup defer to the Derived-Index Convergence
+  Program and publish as limitations.
+- DI-04 defers to the Anomaly Lifecycle and Retention Program and publishes as a limitation.
+- #839 is an accepted measured community-value limitation for this tag.
+- #857 defers to the Payload Bounds and Retention Program and publishes as a limitation.
+- #829 defers to the Semantic Summary Content/Quality Program and publishes as a limitation.
+- Decisions and templates stay in-tree. Exact candidate identity and run evidence live in an immutable detached GitHub
+  Release attestation keyed to that SHA; the candidate commit does not predict itself.
 - The deterministic research execute fixture uses `walk_seeds` with controlled nonzero evidence and the assertions
   above.
 
@@ -256,7 +283,8 @@ The repository owner approved these rulings on 2026-08-11:
 
 | Owner-approved ruling | Result | Target-state locations |
 |---|---|---|
-| Exact `StorageInstance` registration in `StoreRegistry` is the sole authority; remove the ADR-063 unnamed fallback. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md:94`; `openspec/changes/post-g-tag-safety-closeout/design.md:96`; `openspec/changes/post-g-tag-safety-closeout/specs/graph-embedding/spec.md:5`; `openspec/changes/post-g-tag-safety-closeout/tasks.md:36`; `openspec/changes/post-g-tag-safety-closeout/tasks.md:44` |
-| Evaluate #301/#844/#860 individually during D.5 as retain-and-green or fold/delete with replacement coverage; never relabel wrapper failure. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md:171`; `openspec/changes/post-g-tag-safety-closeout/design.md:177`; `openspec/changes/post-g-tag-safety-closeout/specs/release-candidate-proof/spec.md:5`; `openspec/changes/post-g-tag-safety-closeout/tasks.md:67`; `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md:13`; `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md:20` |
-| Keep every other matrix finding disposition-only absent separate owner promotion; do not silently expand runtime scope. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md:179`; `openspec/changes/post-g-tag-safety-closeout/specs/release-candidate-proof/spec.md:10`; `openspec/changes/post-g-tag-safety-closeout/tasks.md:68`; `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md:14`; `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md:23` |
-| Bind the deterministic research execute fixture to `walk_seeds`. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md:141`; `openspec/changes/post-g-tag-safety-closeout/specs/framework-composition/spec.md:11`; `openspec/changes/post-g-tag-safety-closeout/specs/framework-composition/spec.md:47`; `openspec/changes/post-g-tag-safety-closeout/tasks.md:52` |
+| Exact `StorageInstance` registration in `StoreRegistry` is the sole authority; remove the ADR-063 unnamed fallback. | CONFORMS | `docs/adr/063-store-substrate-and-resolver.md:11`; `docs/adr/063-store-substrate-and-resolver.md:12`; `docs/adr/063-store-substrate-and-resolver.md:371`; `docs/adr/063-store-substrate-and-resolver.md:373`; `openspec/changes/post-g-tag-safety-closeout/design.md:98`; `openspec/changes/post-g-tag-safety-closeout/design.md:100`; `openspec/changes/post-g-tag-safety-closeout/specs/graph-embedding/spec.md:5`; `openspec/changes/post-g-tag-safety-closeout/specs/graph-embedding/spec.md:6` |
+| Retain #301/#844/#860 and require each exact-candidate path green; do not relabel wrapper failure. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md:179`; `openspec/changes/post-g-tag-safety-closeout/design.md:180`; `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md:19`; `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md:21`; `openspec/changes/post-g-tag-safety-closeout/specs/release-candidate-proof/spec.md:5`; `openspec/changes/post-g-tag-safety-closeout/specs/release-candidate-proof/spec.md:7` |
+| Defer derived-index, anomaly, payload, and semantic-summary findings to their named programs; accept #839 for this tag. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md:183`; `openspec/changes/post-g-tag-safety-closeout/design.md:190`; `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md:22`; `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md:31`; `docs/operations/migration-post-g-tag-safety-closeout.md:66`; `docs/operations/migration-post-g-tag-safety-closeout.md:78` |
+| Keep decisions/templates in-tree and exact-SHA evidence in a detached immutable attestation. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md:214`; `openspec/changes/post-g-tag-safety-closeout/design.md:221`; `openspec/changes/post-g-tag-safety-closeout/candidate-evidence.md:11`; `openspec/changes/post-g-tag-safety-closeout/candidate-evidence.md:28`; `openspec/changes/post-g-tag-safety-closeout/specs/release-candidate-proof/spec.md:53`; `openspec/changes/post-g-tag-safety-closeout/specs/release-candidate-proof/spec.md:59` |
+| Bind the deterministic research execute fixture to `walk_seeds`. | CONFORMS | `openspec/changes/post-g-tag-safety-closeout/design.md:130`; `openspec/changes/post-g-tag-safety-closeout/design.md:148`; `openspec/changes/post-g-tag-safety-closeout/design.md:151`; `openspec/changes/post-g-tag-safety-closeout/specs/framework-composition/spec.md:11`; `openspec/changes/post-g-tag-safety-closeout/specs/framework-composition/spec.md:47`; `openspec/changes/post-g-tag-safety-closeout/tasks.md:53`; `openspec/changes/post-g-tag-safety-closeout/tasks.md:57` |

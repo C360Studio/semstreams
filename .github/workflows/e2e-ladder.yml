@@ -2,10 +2,11 @@ name: E2E Ladder
 
 # Our own e2e ladder — the per-PR end-to-end gate that exercises the
 # ingest → entity → graph store → query path THIS repo owns. It replaces the
-# per-PR sister-validation gate (semsource/semboids), which is disabled pre-v1
-# (see sister-validation.yml): the sisters conform to semstreams at TAG
-# boundaries (lockstep), not per-commit, so gating every intermediate PR on a
-# sister's full product e2e cost a lot for a break we catch at tag time anyway.
+# disabled automatic sister-validation gate (see sister-validation.yml).
+# Downstream projects are non-exhaustive holdout adopters: after a stable tag
+# they pin, migrate, and prove their own product parity. They are not lockstep
+# pre-merge or pre-tag framework gates, and no compatibility shim is inferred
+# from a downstream migration failure.
 #
 # Tier choice (owner, 2026-07-23): run the `statistical` tier per-PR. It runs
 # the tiered scenario at --variant statistical, which subsumes the structural

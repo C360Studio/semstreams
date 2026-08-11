@@ -4,6 +4,12 @@
 > non-executable until the
 > [ADR-090 program](../../../docs/proposals/graph-state-read-write-program.md)
 > explicitly releases this change. Do not implement, archive, or promote it.
+>
+> **Post-G premise status — 2026-08-11.** The graph-state foundation and
+> post-G closeout may have changed the measurements and dependencies assumed by
+> these historical tasks. #829 now belongs to the Semantic Summary
+> Content/Quality Program. No task below is reopened or completed by that
+> disposition; reactivation requires a fresh inventory and owner ruling.
 
 **Amend a task line when the work HAPPENS, not only when it succeeds.** A gate that
 ran and was never recorded is indistinguishable from one that was skipped — that

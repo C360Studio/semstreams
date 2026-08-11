@@ -30,10 +30,10 @@ promote the wider derived-state findings into runtime work.
 - Add deterministic full-stack research proof for `execute_subqueries`, fusion, assessment, and synthesis while
   retaining the existing `synthesize_directly` proof as a separate branch.
 - Correct accepted architectural and workflow commentary that describes superseded storage/index/release behavior.
-- Require explicit owner disposition of #301, #844, #860 and every disposition-only matrix finding before candidate
-  freeze.
-- Tie all release proof, independent review, CI, tag identity, binary/container identity, and the coordinated #827
-  wipe/reseed to one exact candidate SHA.
+- Retain #301, #844, and #860 as exact-candidate gates; record named future programs for the deferred findings and the
+  accepted #839 limitation without authorizing runtime work.
+- Keep decisions and evidence templates in-tree, while tying release proof, review, CI, tag/artifact identity, and the
+  coordinated #827 outcome to one immutable detached GitHub Release attestation keyed by the exact candidate SHA.
 
 ## Capabilities
 
@@ -58,12 +58,18 @@ ADR-063 is corrected because its accepted registry-miss fallback ruling conflict
 ADR-068, the suspended semantic-tier change, and two workflow comment blocks receive truth corrections without
 runtime or workflow activation.
 
+The candidate commit cannot contain or predict its own SHA. `candidate-evidence.md` is therefore a schema/template,
+not a completed proof record; exact SHA and run evidence are published only after the commit exists.
+`docs/operations/migration-post-g-tag-safety-closeout.md` is a candidate-aware draft until it names that proof and the
+published tag.
+
 External producers keep the existing `StorageReference` shape and exact logical `StorageInstance`. No new public
 symbol, configuration field, subject, port, bucket, stream, service, query, or compatibility layer is added.
 
 ## Non-goals
 
-- No #839/#857 payload preflight, chunking, size prediction, storage layout, or general payload-ceiling solution.
+- No #839/#857 payload preflight, chunking, size prediction, storage layout, or general payload-ceiling solution. #839
+  is an accepted tag limitation; #857 belongs to the Payload Bounds and Retention Program.
 - No runtime work for DI-01 through DI-04, #619, #672, spatial/temporal malformed-aggregate handling or cleanup,
   hierarchy, anomaly retention, #829 summary quality, reclamation, or generic readiness.
 - No community transaction, generation manifest, checkpoint, rollback store, or clustering status producer.
