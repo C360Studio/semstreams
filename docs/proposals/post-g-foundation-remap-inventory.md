@@ -1,15 +1,19 @@
 # Post-G foundation remap inventory and recommendation
 
-**Status:** Post-G inventory candidate and architect recommendation awaiting owner rulings. This artifact does not
-authorize implementation or issue administration.
+**Status:** Owner approved revised Option 2 and approved adding the derived-index/current-state conformance matrix.
+This artifact remains design/release authority only for the bounded Option 2 slices stated below; the matrix does not
+independently authorize runtime work, issue administration, or a generic convergence programme.
 
-**Exact merged baseline:** `480607d9` (`v1.0.0-beta.159-121-g480607d9`)
+**Runtime baseline:** `480607d9` (`v1.0.0-beta.159-121-g480607d9`)
+
+**Frozen documentation commit:** `bf5bfeaf`
 
 **Issue-queue snapshot:** 155 open issues on 2026-08-11. The adjacent
 `post-g-foundation-remap-issue-census.tsv` records every issue number exactly once with its title and disposition.
 
-**Inventory review:** The initial inventory received `INVENTORY PASS` against the exact baseline above. This corrected
-candidate awaits independent re-review before owner ruling.
+**Inventory review:** The initial inventory received `INVENTORY PASS` against the runtime baseline above. The first
+matrix draft received `INVENTORY FAIL`; after its completeness findings and two subsequent blocking omissions were
+corrected, the corrected matrix received independent exact-diff approval.
 
 ## Program intent and evidence boundary
 
@@ -52,9 +56,10 @@ and owner-filtered index replacement. The concrete tag-safety gaps are narrower:
 - ADR-068 still reasons from the retired predicate layout (#828), while the current physical layouts are raw
   predicate, hashed name, and source-owned incoming.
 
-These are two bounded runtime invariants, exact coverage/release-truth gaps, and stale truth. They do not establish a
-need for another general client, exported subject catalog, global readiness registry, generic storage redesign,
-retention framework, or production-hardening program.
+The initial closeout identified #855 and #875 as the two owner-approved runtime slices. The subsequent store-by-store
+conformance matrix also records bounded current findings in suffix, alias, spatial, payload-bound, BM25, and possibly
+anomaly lifecycle behavior. Recording those findings corrects release truth; it does not silently add them to Option
+2. Each requires separate owner disposition before implementation or tag acceptance.
 
 ### Every current spelling of the modeled facts
 
@@ -96,6 +101,63 @@ retention framework, or production-hardening program.
 - No production `PREDICATE_CATALOG`, `CONTEXT_INDEX`, or `STRUCTURAL_INDEX` surface remains.
 - `graph/clustering/summary_store.go:144-180` writes content-addressed `COMMUNITY_SUMMARIES`; the current spec records
   observable accumulation and no GC in this increment at `openspec/specs/graph-clustering/spec.md:342-345`.
+
+### Derived-index and current-state conformance matrix
+
+This inventory was enumerated from `graph.KVCatalog()` and then extended only to process-local state that changes
+graph/query semantics. Different physical layouts are compared by authority, ownership, replacement, retraction,
+readiness, failure, bounds, rebuild, retention, and consumers—not by superficial key-shape similarity.
+`STORAGE_REPORT` is excluded because it is operational capacity evidence rather than graph/query correctness state.
+`GRAPH_INGEST_APPLIED_SEQ` and `GRAPH_STATUS` are included because they gate mutation correctness and derived-read
+availability. All catalog KV rows use no-lifecycle retention; history is 1 except `GRAPH_STATUS`, whose history is 3:
+`graph/kvcatalog.go:37-138`.
+
+| Store/index | Semantic class / purpose | Authoritative input | Physical key / ownership | Writer | Replacement / update | Retraction / delete | Bootstrap / readiness | Poison / watch / loss | Read/write/payload bounds | Rebuild source | Retention | Current consumers | Verdict | Exact finding / owner |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `ENTITY_STATES` plus graph-ingest entity cache | Authority anchor, not derived | Admitted graph mutation and Graphable ingest | `entityID`; graph-ingest sole writer. Component groups bucket/read-through cache (`processor/graph-ingest/component.go:490-495`) and a per-key invalidation-generation map (`processor/graph-ingest/component.go:548-562`); cache max 5,000, 30s TTL (`processor/graph-ingest/component.go:1072-1083`) | graph-ingest | Create/CAS merge/reconcile; each write bumps the generation guard before cache refill | Revision-fenced delete plus cache invalidation | Startup snapshot validation; graph-ingest status | Poison is per entity; generation guard prevents stale read refill after invalidation | One value per entity; large bodies may offload; generation map grows by distinct IDs ever written | Canonical producers/reseed | KV history 1/no lifecycle; cache TTL; generation map process lifetime | Exact/batch/prefix reads and every derived owner | Conforming authority anchor | Cache state is grouped with authority because it changes query observations; it is not a second source of truth |
+| `ENTITY_SUFFIX_INDEX` plus suffix cache | Partial-ID resolver | `ENTITY_STATES` identity | Two raw keys per entity: `instance`, `type.instance`; each stores one ID. Component groups the bucket and TTL cache (`processor/graph-ingest/component.go:490-495,1085-1103`) | graph-ingest and suffix fallback repair | Blind `Put`; cache max 500/5m TTL | Entity delete blindly deletes both keys (`processor/graph-ingest/component.go:2579-2600`) | No independent completeness/readiness currency | Malformed row errors; fallback scans authority and chooses first match (`processor/graph-ingest/query.go:456-613`) | IDs bounded; full fallback scan unbounded; singular value cannot represent collision | Lazy authority scan, not complete boot rebuild | History 1, no lifecycle | `graph.ingest.query.suffix`, graph-query partial resolver | **Bounded finding** | **DI-01, graph-ingest:** same suffix can belong to multiple entities; last write wins, first scan match wins, cache freezes that choice, and either entity's delete removes the shared mapping |
+| `GRAPH_INGEST_APPLIED_SEQ` plus lane-local memory tier | Index-adjacent operational correctness: redelivery guard | JetStream stream sequence after successful authority effects | Durable `entityID/streamName → uint64` plus one in-memory `laneGuard` map per keyed lane (`processor/graph-ingest/component.go:606-613`; `processor/graph-ingest/keyed_ingest.go:64-68`) | graph-ingest keyed lane | Memory is the lock-free fast path; durable `Put` follows effects before ack (`processor/graph-ingest/keyed_ingest.go:125-233`) | Memory may evict/restart; durable row has no ordinary delete and survives entity churn | Durable bucket must be available for safe stale detection; read/write failure Naks | Short/corrupt durable value is treated first-seen and restamped (`processor/graph-ingest/keyed_ingest.go:260-299`) | Eight-byte durable value; memory bounded by lane policy; durable key set entity×stream | Memory repopulates from durable checks; durable state follows successful JetStream delivery and is not derivable solely from authority | History 1, no TTL by design (`processor/graph-ingest/component.go:1105-1115`) | graph-ingest only | Conforming two-tier operational exception | Correctness is durable-tier owned; memory retention is optimization only |
+| `OUTGOING_INDEX` | Source-owned complete relationship projection | Current entity triples | `entityID → JSON relationship array`; source owns one key | graph-index | Complete replacement, including explicit empty array (`openspec/specs/graph-index/spec.md:88-93`) | Source delete removes owner key (`processor/graph-index/component.go:1910-2053`) | WatchAll replay, watermark, failed-entity repair; `GRAPH_STATUS/graph-index` | Required failure withholds readiness and retries | One value grows with out-degree; NATS payload is the ceiling | `ENTITY_STATES` WatchAll | History 1, no lifecycle | graph-index queries, PathRAG, clustering/anomaly | **Bounded finding** | **#839/#857, graph-index:** lifecycle conforms, but one value scales with entity degree |
+| `INCOMING_INDEX` | Source-owned reverse memberships | Current source relationship triples | `targetID.sourceID.hex(predicate) → marker`; source owns despite target prefix (`processor/graph-index/incoming_index.go:20-99`) | graph-index | Owner-filtered complete replacement | Source removal retracts its rows; target removal preserves live-source evidence (`processor/graph-index/component.go:1910-2025`) | Shared graph-index readiness/repair | Poisoned key/filter or required failure fails closed | One bounded membership per key; query result caps are consumer-level | `ENTITY_STATES` WatchAll | History 1, no lifecycle | reverse queries, PathRAG, clustering/anomaly | Conforming | Different target-first physical layout is intentional, not contract drift |
+| `PREDICATE_INDEX` | Predicate membership | Current entity predicates | Raw fixed-nine-token `predicate3.entity6 → marker`; entity owner (`processor/graph-index/predicate_index.go:12-45`) | graph-index | Owner-filtered complete replacement | Entity delete/replacement retracts stale memberships | Shared graph-index readiness/repair | Malformed authority latches reset; required write fails closed | One bounded membership per key; query limit enforced | `ENTITY_STATES` WatchAll | History 1, no lifecycle | predicate query, graph-query | Conforming | Raw predicate layout intentionally differs from NAME/INCOMING codecs; no `PREDICATE_CATALOG` |
+| `NAME_INDEX` | Ranked human-name membership | Configured name predicates in entity triples | `sha256(normalizedName).entityID.hex(predicate) → {original name, priority}` (`processor/graph-index/name_index.go:35-112`) | graph-index | Owner-filtered complete replacement | Entity replacement/delete retracts owned rows | Shared graph-index readiness/repair | Required failure fails closed | One bounded membership per key; huge shared-name scan returns typed `resource_exhausted` (`openspec/specs/graph-index/spec.md:169-173`) | `ENTITY_STATES` WatchAll | History 1, no lifecycle | by-name query and graph-query | Conforming | Hashed open-content axis is an intentional physical-layout distinction |
+| `ALIAS_INDEX` | Exact alias resolver | Configured alias predicates in entity triples | Raw `alias → single entityID`; no owner axis (`processor/graph-index/component.go:1805-1832`) | graph-index | Blind last-writer `Put`; explicitly outside owner-complete replacement (`processor/graph-index/component.go:1359-1381`) | `DeleteFromAliasIndex(alias)` exists, but production search finds no caller; entity delete omits alias (`processor/graph-index/component.go:1910-2053,2103-2133`) | Alias writes participate in graph-index failure readiness, but absence/staleness is not owner-complete | Malformed rows are read as plain ID; no collision state | Single bounded value; raw alias must satisfy KV literal grammar | Replay can add current aliases but cannot identify/retract historical aliases | History 1, no lifecycle | alias query, graph-query/GraphRAG resolution | **Bounded finding** | **DI-02, graph-index:** same-alias last-writer collision, stale alias after predicate/entity removal, and unreachable production delete helper |
+| `SPATIAL_INDEX` | Geohash-cell membership and coordinates | Coordinate triples in `ENTITY_STATES` | `geohash → JSON map(entityID→position)`; spatial component owns | graph-index-spatial | CAS cell RMW adds/updates current entity. Malformed existing aggregate JSON is treated as an empty cell, then normal `Update` rewrites that same revision (`processor/graph-index-spatial/component.go:782-823`) | Delete handler only logs “not fully implemented”; coordinate removal or cell move does not retract old cell (`processor/graph-index-spatial/component.go:668-715,834-838`) | Local WatchAll bootstrap sentinel; typed `index_not_ready`; no `GRAPH_STATUS` producer | Authority poison/watcher loss fails local reads closed, but malformed stored cell JSON does not poison: it takes the empty-cell rewrite path | Cell value grows with occupancy; bounds/polygon queries have result limits | `ENTITY_STATES` WatchAll, but replay does not remove orphan rows or restore members erased by aggregate rewrite without their redelivery | History 1, no lifecycle | spatial component queries and graph-query | **Bounded release-truth finding** | **DI-03, graph-index-spatial:** stale rows survive moves/removal/delete; malformed aggregate rewrite can silently erase every other cell member; #857 cell-value ceiling remains. No runtime authority in Option 2 |
+| `TEMPORAL_INDEX` + `TEMPORAL_INDEX_REVERSE` | Time-bucket membership plus entity→current-bucket retraction aid | Observation time, then `UpdatedAt` fallback | Forward `timeBucket → JSON entity map`; reverse `entityID → timeBucket`; temporal component owns | graph-index-temporal | New forward row is written first. Malformed existing aggregate JSON is treated as an empty bucket, then normal `Update` rewrites that same revision with only the current event (`processor/graph-index-temporal/component.go:872-930`) | Reverse lookup normally drives entity delete/moved-bucket cleanup, but stale-row writes and reverse writes/deletes log/metric and fail open (`processor/graph-index-temporal/component.go:942-1057`) | Local WatchAll bootstrap; typed not-ready; no `GRAPH_STATUS` producer; aggregate rewrite and cleanup drift do not withhold readiness | Authority poison/watcher loss fails local queries closed, but malformed stored bucket JSON and cleanup/reverse failures do not | Forward bucket value grows with occupancy; reverse value bounded | `ENTITY_STATES` WatchAll; lost reverse state can strand forward rows, and erased aggregate members return only if their authority rows redeliver | History 1, no lifecycle | temporal range query and graph-query | **Bounded release-truth finding** | Reverse layout is justified, but malformed aggregate rewrite can silently erase other bucket members and cleanup failures can strand rows without readiness withholding; #857 remains. No runtime authority in Option 2 |
+| `EMBEDDING_INDEX` plus process-local vector cache | Per-entity pending/generated/failed embedding state and similarity view | Entity projection plus optional offloaded body | `entityID → embedding.Record`; graph-embedding owns; memory vector cache mirrors generated rows | graph-embedding worker/storage | Revision-aware pending→terminal transition; entity identity is replacement axis | Tombstone/no-source removes entity embedding (`graph/embedding/storage.go:635-645`) | WatchAll bootstrap, watermark, repair/failed state; `GRAPH_STATUS/graph-embedding` | Vector-cache watcher loss invalidates cache; poison/read failure fails closed | Vector dimensions/config and source-text truncation bound individual records | `ENTITY_STATES` plus resolvable body references | History 1, no lifecycle | embedding query, graph-query, clustering semantic edges | **Bounded finding** | **#875, graph-embedding:** named `StorageInstance` miss can fall back to unrelated legacy store and poison failed/degraded outcome (`processor/graph-embedding/component.go:1934-1954`; `graph/embedding/worker.go:981-1007`) |
+| `EMBEDDING_DEDUP` | Durable accumulated content-key cache, not current-state projection | Exact source text plus embedder identity at generation time | `DedupKey(identity,text) → vector plus accumulated entity-ID list`; graph-embedding owns. The key is durable, untimed, and never cleared (`graph/embedding/dedup.go:18-39`) | graph-embedding | Same content/identity reuses the vector and appends entity IDs | Entity deletion removes only `EMBEDDING_INDEX`; it never retracts dedup keys or entity-ID lists (`graph/embedding/storage.go:574-648`) | Used inside embedding worker; no independent readiness | Corrupt read surfaces storage error; no public watch | One vector and growing entity-ID list per unique content+identity; total cardinality has no reclamation policy | Not rebuilt as current state; old keys remain reusable until external reset | History 1, no lifecycle/TTL/clear | graph-embedding worker | **Bounded finding** | **#619, graph-embedding:** BM25 vector depends on process-local corpus state absent from durable identity; independently, dedup is accumulated historical cache rather than entity-current state |
+| BM25 corpus statistics, process-local | Statistical state that changes produced/query vectors | Order of document `Generate` calls | In-memory `docCount`, average length, term-document map (`graph/embedding/bm25_embedder.go:59-70`) | BM25 embedder | `Generate` mutates incrementally; `GenerateQuery` is read-only | No document retraction | Empty on process start; no readiness/corpus-generation currency | Process loss silently resets; no poison channel | Term map grows with observed vocabulary; no persisted bound | Re-observation order only, not immutable snapshot | Process lifetime | graph-embedding and semantic/BM25 query | **Bounded finding** | **#619, graph-embedding:** unpersisted, order-dependent corpus; restarts and replay order can change vectors/rankings (`graph/embedding/bm25_embedder.go:106-140`) |
+| EntityID type/system caches, process-local | Virtual sibling/system-peer topology used by clustering | Current entity-ID enumeration from wrapped provider | In-memory `typePrefixCache` and `systemCache`, built once under `cacheInitialized` (`graph/clustering/entityid_provider.go:26-50,333-395`) | clustering `EntityIDProvider` | First access builds sorted capped candidate lists | `ClearCache` exists but no automatic authority-watch invalidation is in this lifecycle (`graph/clustering/entityid_provider.go:498-510`) | No readiness or revision currency | Process restart clears; otherwise entity churn does not invalidate | Memory proportional to entity IDs grouped by type/system; configured candidate caps affect returned edges | Full entity-ID enumeration only when cache is empty | Process lifetime until explicit clear | LPA sibling/system virtual edges | **Bounded finding** | **#672, graph-clustering:** entity additions/removals can leave lifetime-stale sibling/system candidate sets |
+| Mutual-kNN semantic cache, process-local | Revision-keyed semantic virtual-edge projection for clustering | Similarity results plus coarse embedding-index revision | Directed top-k and symmetric mutual-neighbor maps keyed by committed `cacheRevision`, with per-cycle settlement state (`graph/clustering/semantic_edge_provider.go:202-323`) | clustering `SemanticEdgeProvider` | `BeginCycle` advances epoch; unchanged revision reuses results; missing/errored entities are refreshed | Next-cycle/revision refresh replaces maps; process loss clears | Embedding readiness controls activation; not-ready/fatal aborts cycle, coverage abort keeps prior good cache or degrades | Abort/coverage state is cycle-scoped; a settled decision prevents same-cycle query storms (`graph/clustering/semantic_edge_provider.go:641-669`) | O(N) directed candidates bounded by k; refresh threshold bounds partial error acceptance | Similarity queries against embedding index | Process lifetime, revision/cycle scoped | LPA semantic virtual edges and applied-edge metrics | Conforming process-local projection | Revision and cycle state are material graph inputs; they are intentionally not durable membership state |
+| Same-cycle K-core/pivot plus retained `previousKCore` | Structural/anomaly inputs | Current graph provider snapshot per detection cycle | Ephemeral `KCoreIndex` and `PivotIndex` computed together (`processor/graph-clustering/structural.go:13-51`); component retains prior K-core | graph-clustering | Recompute both each cycle; after successful anomaly detection, assign current K-core to `previousKCore` | Same-cycle indices drop after use; retained prior index is replaced only after successful detection | No distributed readiness of its own; enclosing cycle owns failure | Restart loses prior K-core; failed anomaly run leaves previous successful baseline | Memory proportional to current graph; pivot count fixed by structural default | Graph provider snapshot each cycle; previous comparison requires prior successful cycle | Same cycle, plus one successful prior K-core in process | Anomaly detectors, especially core demotion | **Observed process-local behavior** | Restart has no previous-cycle demotion baseline until another successful cycle (`processor/graph-clustering/anomaly.go:272-322`); record as release truth, not implicit runtime authority |
+| `COMMUNITY_INDEX` | Current multi-level partition plus entity membership map | Periodic graph-index relationships and optional embeddings | `{level}.{communityID} → Community`; `entity.{level}.{entityID} → communityID` (`graph/clustering/storage.go:21-29`) | graph-clustering detector | Save candidate communities then prune keys outside saved set | `Prune` deletes all keys not represented in supplied partition (`graph/clustering/storage.go:387-468`) | Consumes graph-index and optional embedding readiness; graph-query has operation-local generation; no clustering status key | Individual malformed reads may be skipped; storage failures abort/degrade cycle | Community value contains unbounded member list; NATS max payload is explicit permanent failure (`graph/clustering/storage.go:108-150`) | Periodic whole recomputation | History 1, no lifecycle | clustering queries, graph-query community generation, anomaly detection | **Bounded finding** | **#855, graph-clustering:** partial saved set after permanent oversize rejection can drive destructive prune; **#839/#857** capacity remains |
+| Clustering whole-view authority-poison latch, process-local | Sticky safety state for the entire derived clustering view | Validating reads of authoritative `ENTITY_STATES` during polled detection/enhancement | Atomic `graphStatePoison`; it is not a `COMMUNITY_INDEX` record or malformed-row marker | graph-clustering consuming read path | First authoritative `StateContractError` latches; later valid authority cannot clear it (`processor/graph-clustering/component.go:1707-1730`) | Same-instance Stop/Start does not clear; operator reset plus process restart is required | Start retains query handlers for typed reset response but blocks detector, enhancement, and action workers when latched (`processor/graph-clustering/component.go:1006-1012`) | Every clustering query returns fatal reset-required; this is distinct from individual malformed `COMMUNITY_INDEX` record handling | One process-local pointer; no payload/cardinality growth | Canonical authority reset/reingest followed by process restart | Process lifetime, deliberately across same-instance Stop/Start | detector/enhancement/action workers and clustering query handlers | **Conforming to current specification** | `openspec/specs/graph-clustering/spec.md:353-367` requires the sticky whole-view reset latch. This is release truth, not a new runtime finding |
+| Graph-query community generation | Atomic process-local projection of `COMMUNITY_INDEX` | `COMMUNITY_INDEX` WatchAll | In-memory maps per independent generation (`processor/graph-query/community_cache.go:32-68`) | graph-query watcher | Build fresh generation, publish only after initial sentinel; old leases remain isolated | Delete/purge updates remove community/mappings (`processor/graph-query/community_cache.go:200-324`) | Operation-local availability; missing generation returns typed `index_not_ready` | Watch loss unpublishes current generation; restart builds a new one | Memory proportional to current community rows; query caps remain operation-specific | `COMMUNITY_INDEX` watch | Process lifetime | global/local search, summaries and community enrichment | Conforming process-local projection | Distinct generation state is justified; do not add clustering `GRAPH_STATUS` merely to replace it |
+| `COMMUNITY_SUMMARIES` | Content-addressed LLM prose cache, separate from detector partition | Exact `(level, membershipHash)` plus enhancement outcome | `{level}.{sha256(sorted members)} → summary record`; enhancement worker sole writer (`graph/clustering/summary_store.go:28-69`) | graph-clustering enhancement worker | Success overwrites failed/same success; failed CAS cannot downgrade enhanced (`graph/clustering/summary_store.go:75-105,144-225`) | No current GC by declared increment | Optional; graph-query falls back to statistical summary | Poisoned row warns; watcher/bucket loss detaches view and degrades to statistical summary (`processor/graph-query/summary_view.go:108-195`) | One bounded generated summary per historical membership; total cardinality accumulates | Regenerate only when exact membership recurs | History 1, no lifecycle; no GC currently | graph-query summary graphview | **Justified semantic exception** | No-GC is explicitly current truth; #710 owns future reclamation and must not be folded into #855 |
+| Graph-query summary graphview | Optional process-local mirror of summaries | `COMMUNITY_SUMMARIES` WatchAll | Typed in-memory view keyed identically | graph-query view | Atomic view updates | KV tombstone/purge removes row | Optional attach/rebind; absence is allowed | Poison warns/coalesces; watch loss clears view and retries | Memory proportional to summary bucket | `COMMUNITY_SUMMARIES` | Process lifetime | graph-query community summary join | Conforming degradation view | No separate generic helper needed; it already uses `pkg/graphview` |
+| `ANOMALY_INDEX` | Durable anomaly and human/LLM review lifecycle state plus physical secondary/suppression indexes | Periodic detection and review outcomes | Primary records include pending/reviewed/applied/dismissed lifecycle (`graph/inference/types.go:31-114`); status/type indexes and dismissed-pair/entity suppression keys share the bucket | graph-clustering detector/review worker | Revision-aware primary update; status/type indexes maintained, while suppression keys prevent re-detection (`graph/inference/storage.go:172-218,570-645`) | `Delete` ignores status/type-index failures and never removes pair/entity suppression keys; `Cleanup` has no production caller (`graph/inference/storage.go:371-414,480-568`) | Optional component feature; no independent distributed readiness | Review worker uses WatchAll; startup watch failure returns error | `Count` trusts physical status-index keys, so ignored delete drift changes operator counts (`graph/inference/storage.go:570-606`) | Detection can recreate candidates, but not review history; suppression keys deliberately alter future detection | History 1, no catalog lifecycle | review worker, clustering query, optional inference-review gateway | **Uncertain bounded finding** | **DI-04 candidate, graph-clustering/inference:** missing cleanup scheduling, ignored secondary deletes, permanent suppression keys, and physical-key counts are proven. Whether suppression must survive primary cleanup is not specified; owner adjudication is required before calling it nonconforming |
+| `GRAPH_STATUS` plus producer-local readiness state | Index-adjacent operational readiness/liveness distribution | Producer-local computed state | Four explicit durable keys: graph-index, graph-embedding, graph-ingest, rule (`graph/readiness/watcher.go:39-70`), backed by per-process watermark, failure, reset, watch, and bootstrap state | Each named producer owns its key and local projection state | Heartbeat `Put` every tick; `pkg/revlag.Watermark` tracks observed/completed revision floor (`graph/readiness/publisher.go:74-105`; `pkg/revlag/watermark.go:23-65`) | No normal durable deletion; process-local state resets at restart and silence ages to unknown | Graph-index groups watermark, failed entities, reset, and bootstrap latches (`processor/graph-index/component.go:266-346`); embedding groups failed map, watermark, reset/watch, and bootstrap latches (`processor/graph-embedding/component.go:311-365`) | Missing/malformed/lost/stale feed becomes unknown and fails closed; producer-local failure state withholds ready before publication | Small durable envelope; 2s write timeout; 5s heartbeat/3× freshness; local maps scale with current failures/pending revisions | Recomputed from producer state and authority replay | Durable history 3, no lifecycle; local state process lifetime | fusion, clustering, query/readiness gates, operators | Conforming operational classification | Durable status cannot be interpreted apart from its producer-local revlag/failure/bootstrap projection; do not infer a global producer registry or require clustering/spatial/temporal keys |
+
+### Matrix collision and layout conclusions
+
+The newly visible same-class collision defects are `ENTITY_SUFFIX_INDEX` and `ALIAS_INDEX`: both reduce a potentially
+many-owner lookup to one last-writer value, but their public semantics differ. Suffix guessing, exact alias resolution,
+NAME membership, incoming reverse membership, temporal reverse placement, content-addressed summaries, and anomaly
+suppression are not interchangeable merely because several use reverse keys.
+
+These distinct physical layouts are not contract drift:
+
+- raw fixed-nine-token predicate membership;
+- hashed NAME open-content axis;
+- target-prefixed but source-owned INCOMING membership;
+- forward temporal bucket plus entity-owned reverse placement;
+- community partition rows separate from content-addressed summary rows; and
+- anomaly primary records plus status/type/suppression indexes.
+
+The adopter-seam result is to add no generic index interface, owner-reconcile helper, readiness registry, or
+reverse-index abstraction in this closeout. At least two components share WatchAll mechanics, but current consumers
+already use the narrower `pkg/graphview` and `pkg/revlag` primitives where their semantics match; the lifecycle
+contracts above remain materially different.
 
 #### Hierarchy, research, retention, and trajectory evidence
 
@@ -168,6 +230,23 @@ The fixed issue census is the adjacent-claim inventory. The most important bound
 - #828 is stale architectural truth and belongs in tag safety.
 - #839 is a current measured capacity limit that can cross the tag only as an explicit owner-accepted release
   limitation. #857 is the broader payload-size class and remains separate follow-on work.
+- DI-01 suffix collision/retraction, DI-02 alias collision/retraction, and DI-03 spatial stale-row plus malformed-cell
+  aggregate erasure are current bounded findings discovered by the conformance pass. They are not subsumed by
+  #855/#875 and are not implementation-authorized by this artifact.
+- #619 spans both process-local BM25 corpus state and durable dedup reuse because corpus state is absent from the
+  durable identity. The durable store is an untimed, never-cleared accumulation of content keys and entity-ID lists,
+  not a current-state rebuild output.
+- DI-04 anomaly lifecycle remains explicitly uncertain: missing production cleanup, ignored secondary-index deletion,
+  suppression keys that are never removed, and counts derived from physical status keys are observed;
+  suppression-retention intent still needs owner adjudication.
+- #672's lifetime type/system caches and temporal's fail-open reverse cleanup plus malformed-bucket aggregate erasure
+  are additional current-state findings surfaced by the completed process-local inventory. Neither is
+  runtime-authorized by Option 2.
+- Clustering's sticky whole-view authority-poison latch is conforming current behavior, not a new finding. It survives
+  same-instance Stop/Start and blocks all clustering work until reset/restart; malformed `COMMUNITY_INDEX` row handling
+  remains a separate record-local behavior.
+- `STORAGE_REPORT` was considered and excluded because it reports capacity rather than determining graph/query
+  answers.
 - #633/#710 reclamation, generalized readiness, hierarchy redesign, and startup hardening are distinct programs or
   measurement-triggered work.
 - #829 remains a declared summary-quality limitation unless the owner separately makes generated-summary quality a
@@ -197,10 +276,12 @@ readiness list, or aggregate query client. None is added for a future consumer.
 | Writers | Canonical mutation RPC is the admitted provider; graph-ingest persists refs supplied by admitted `Storable` producers. No new writer is proposed. |
 | Recovery | Current state recovers through KV watch/rebuild and owner reconciliation. The recommended closeout adds no checkpoint, recovery service, or backup primitive. Operators retain normal NATS backup responsibility. |
 
-The collision result is consolidation already achieved, plus two concrete violations. #855 lets an incomplete
-community partition masquerade as the saved set for prune. #875 lets an instance-blind legacy fallback compete with
-`StoreRegistry` and read a reference owned by another store. Fixing either invariant does not authorize collapsing
-the other distinct semantic classes or designing generic storage routing.
+Consolidation is already achieved for owner-filtered graph-index memberships, but the exhaustive pass found two
+singular-lookup collision classes: suffix and alias. Spatial lacks current-owner retraction; spatial and temporal can
+replace malformed aggregates as empty and erase other members; temporal cleanup can fail open; and EntityID
+type/system caches can outlive authority changes. These findings do not justify one generic reverse-index or lifecycle
+abstraction: their adopters, ambiguity semantics, ownership axes, and recovery sources differ. The approved Option 2
+remains bounded unless the owner separately promotes one of these findings.
 
 ## Adopter seam inventory
 
@@ -216,6 +297,13 @@ the other distinct semantic classes or designing generic storage routing.
 | Content/trajectory reader | Resolve `StorageInstance` through the registry and stream the body. | Fact metadata remains readable; body is unresolved. | Response-bounds and trajectory contracts. | No bucket, chunk, or payload-limit guessing. |
 | `Storable` producer | Stamp the registered backend instance in `StorageReference.StorageInstance`; SemSource may use its filestore rather than ObjectStore. | Graph-ingest persists the exact handle; consumers must not reinterpret it. | `message.Storable`, ADR-062, and storage component contract. | No knowledge of embedding's fallback store or downstream reader wiring. |
 | Embedding operator | Register the store instance that owns each resolvable body; treat an unresolved foreign instance as explicit exclusion. | The body is excluded loudly while entity processing continues; it never poisons failed/degraded readiness. | Embedding metrics/log and storage registration contract. | No need to duplicate content into a legacy default store. |
+| Partial-ID caller | A suffix can resolve to one silently selected ID and is not collision-safe. | Resolution may vary with write/cache/scan order. | Graph-ingest suffix contract and release limitation. | Ideally nothing: use canonical identity or an explicit ambiguity-aware discovery operation. |
+| Exact-alias caller | Current alias storage is singular last-writer state and does not retract owner-completely. | A collision or retired alias may resolve to the wrong entity. | Graph-index alias contract and release limitation. | Exact alias plus absent/singular/ambiguous result; no KV key grammar. |
+| Spatial caller | Rows may outlive movement/removal/delete, and malformed cell JSON is rewritten as an empty aggregate plus the current entity. | Bounds/polygon queries may include stale candidates or silently lose other cell members. | Spatial query contract and explicit release limitation. | No geohash/cleanup knowledge; the framework should return current-authority results without destructive repair. |
+| Temporal caller | Reverse cleanup can fail open, and malformed bucket JSON is rewritten as an empty aggregate plus the current event. | Range results may include a stranded prior row or silently lose other bucket members. | Temporal query contract and explicit release limitation. | No forward/reverse-key knowledge; the framework should return current-authority results without destructive repair. |
+| BM25 caller | Rankings depend on process-local corpus observation order. | Restart/replay order can change vectors and ranking. | Embedding capability limitation / #619. | A stable declared lexical contract, not corpus internals. |
+| Clustering consumer | Virtual sibling/system edges can use a lifetime cache; semantic and structural comparison state has process/revision/cycle lifetimes. | Entity churn or restart can change the graph presented to clustering/anomaly detection. | Clustering capability limitations / #672 and matrix. | Declared consistency and restart behavior, not cache or watermark internals. |
+| Clustering operator after authority poison | Perform canonical reset/reingest and restart the process. | Same-instance Stop/Start stays latched; workers remain blocked and queries return fatal reset-required. | Typed query outcome, logs, and graph-clustering spec. | The reset requirement and affected view; no `COMMUNITY_INDEX` row-repair guesswork. |
 | Research parent | Supply loop identity and parent-role metadata; observe classify completion. | Accepted dispatch can stall after suppressed birth failure. | Graph-research contract and outcomes. | No rule subjects or KV keys; parent-role metadata remains debt. |
 | Downstream repository | Pin the exact tag, then compile, migrate config, validate flows, and run product E2E. | It safely remains on its prior pin. | Release notes and migration guide. | No aliases, shims, or framework redesign for unknown holdouts. |
 
@@ -253,6 +341,12 @@ behavior. Not recommended.
 6. Correct the two stale workflow comment blocks without changing workflow behavior, then freeze one exact candidate,
    prove it, review it, publish its breaks and owner-accepted known limits, execute the coordinated
    pre-v1 wipe/reseed, and tag that exact SHA.
+
+The conformance-matrix findings DI-01 through DI-04, #619, #672, spatial/temporal malformed-aggregate erasure,
+temporal cleanup, and payload bounds are inventory truth, not implicit additions to this runtime closeout. Only #855
+and #875 are authorized runtime slices by this ruling. A separately approved amendment is required to promote
+another matrix finding. The clustering authority-poison latch is conforming current-spec behavior, not an additional
+runtime slice.
 
 This option adds no shim, public query surface, generic client, readiness abstraction, or retention abstraction.
 Recommended.
@@ -298,15 +392,25 @@ The stable downstream pin is eligible only when:
    halts and the work becomes an explicit migration.
 12. The published tag points to the approved SHA, and binary/container artifacts plus reported version are verified.
 13. Downstreams can pin that exact tag and then own compilation, config migration, adoption, and parity proof.
+14. Every matrix finding outside approved Option 2—including spatial/temporal malformed-aggregate erasure—has an
+    explicit owner disposition: accepted release limitation, separately approved blocker, or deferred owner
+    programme. “Inventory recorded” alone is not equivalent to “conforming.”
 
 Representative downstream holdouts are optional evidence, not an exhaustive gate. A holdout blocks only when it
 reproduces a framework contract regression in the candidate. Adoption debt is recorded after pinning and never causes
 a shim or deprecated surface.
 
-## Owner rulings requested
+## Owner-approved rulings
 
-The architect recommends rulings 1-10 and 13 below; they are not binding until the owner approves them. Items 11 and
-12 restate already-binding owner constraints and are included so the recommendation cannot weaken those boundaries.
+The owner approves revised Option 2 and the derived-index/current-state conformance matrix as the frozen evidence
+base. The matrix corrects release truth but does not broaden runtime authority: #855 and #875 remain the only approved
+runtime correction slices in this closeout. No generic index, reverse-index, lifecycle, readiness, or rebuild
+abstraction is authorized. Suffix, alias, spatial/temporal malformed-aggregate erasure, temporal cleanup,
+EntityID-cache/#672, BM25/#619, payload-bound, and uncertain anomaly findings require explicit release disposition or
+a separately approved amendment. The clustering whole-view authority-poison latch is accepted as conforming current
+specification and remains distinct from malformed `COMMUNITY_INDEX` rows. Distinct physical layouts remain valid
+where semantic ownership differs. A shared interface or helper may be proposed only when at least two same-class
+implementations duplicate the same contract and present consumers materially benefit.
 
 1. Option 2 is the smallest next program and the goal is a stable downstream pin.
 2. The existing non-destructive community invariant stands: incomplete partitions do not prune or report complete
@@ -328,6 +432,17 @@ The architect recommends rulings 1-10 and 13 below; they are not binding until t
 12. The refactor takes no correctness shortcuts, but it also does not build production machinery this repository has
    no honest isolated test for.
 13. #827 executes at the tag boundary with its halt-if-v1-window-closes condition intact.
+14. The derived-index/current-state conformance matrix is accepted as release-truth evidence. It does not authorize a
+    generic index/lifecycle abstraction or expand Option 2 runtime scope. Suffix, alias, spatial/temporal
+    malformed-aggregate erasure, temporal cleanup, EntityID-cache, BM25, payload-bound, and uncertain anomaly findings
+    receive explicit release disposition or separately approved work; none is silently treated as conforming.
+    Clustering's sticky authority-poison latch is separately accepted as conforming to the current spec and does not
+    authorize runtime work.
+15. `GRAPH_INGEST_APPLIED_SEQ` and `GRAPH_STATUS` are included as index-adjacent operational state;
+    `STORAGE_REPORT` is excluded from graph/query conformance.
+16. Different physical layouts are not contract drift when their semantic ownership requires them. A new shared
+    helper/interface is permitted only after at least two same-class implementations duplicate the same contract and
+    current consumers benefit.
 
 ## Recommended next checkpoint
 
