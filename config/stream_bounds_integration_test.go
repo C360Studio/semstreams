@@ -86,7 +86,7 @@ func TestEnsureStreams_FrameworkStreamsCarryDeclaredBounds(t *testing.T) {
 	require.NoError(t, sm.EnsureStreams(ctx, &Config{}),
 		"a configuration declaring no streams must still boot")
 
-	for _, name := range []string{"LOGS", "HEALTH", "METRICS", "FLOWS", "GOVERNANCE_VERDICT_AUDIT"} {
+	for _, name := range []string{"LOGS", "HEALTH", "METRICS", "FLOWS", "GOVERNANCE_VERDICT_AUDIT", "MAX_DELIVERY_EVENTS"} {
 		live := liveStreamConfig(t, js, ctx, name)
 		assert.Positive(t, live.MaxAge, "%s must carry a finite max_age", name)
 		assert.Positive(t, live.MaxBytes, "%s must carry a finite max_bytes", name)

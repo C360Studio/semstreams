@@ -1,13 +1,56 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/types"
 )
+
+func TestMaxDeliveryEventsDeclarationIsFixedAndBounded(t *testing.T) {
+	decls, err := resolveStreamDeclarations(&Config{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := declarationNamed(t, decls, "MAX_DELIVERY_EVENTS")
+	want := StreamConfig{
+		Subjects: []string{"$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.>"}, Storage: "file",
+		MaxAge: "168h", MaxBytes: 64 * 1024 * 1024, Discard: StreamDiscardOld,
+		Retention: "limits", Replicas: 1,
+	}
+	if !reflect.DeepEqual(got.cfg, want) {
+		t.Fatalf("MAX_DELIVERY_EVENTS declaration = %+v, want %+v", got.cfg, want)
+	}
+}
+
+func TestMaxDeliveryEventsOperatorCollisionFailsBeforeNATSAccess(t *testing.T) {
+	for _, supplied := range []StreamConfig{
+		maxDeliveryEventsStreamConfig,
+		{Subjects: []string{"operator.>"}, MaxAge: "1h", MaxBytes: 1, Discard: StreamDiscardNew},
+	} {
+		cfg := &Config{Streams: StreamConfigs{"MAX_DELIVERY_EVENTS": supplied}}
+		manager := NewStreamsManager(nil, nil)
+		err := manager.EnsureStreams(context.Background(), cfg)
+		if !errors.Is(err, errFixedFrameworkStreamCollision) {
+			t.Fatalf("collision error = %v, want fixed-framework collision", err)
+		}
+	}
+}
+
+func TestMaxDeliveryEventsComponentCollisionIsRejected(t *testing.T) {
+	raw := json.RawMessage(`{"ports":{"outputs":[{"name":"reserved","config":{"kind":"jetstream","stream_name":"MAX_DELIVERY_EVENTS","subjects":["application.>"]}}]}}`)
+	cfg := &Config{Components: map[string]types.ComponentConfig{
+		"publisher": {Type: types.ComponentTypeProcessor, Name: "publisher", Enabled: true, Config: raw},
+	}}
+	_, err := resolveStreamDeclarations(cfg, nil)
+	if !errors.Is(err, errFixedFrameworkStreamCollision) {
+		t.Fatalf("component collision error = %v, want fixed-framework collision", err)
+	}
+}
 
 // TestExtractPortsFromConfig_JSONRoundTripPopulatesStreamName closes the
 // shadow-struct gap surfaced 2026-05-08 (semspec). Stream extraction now

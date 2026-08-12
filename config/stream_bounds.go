@@ -52,6 +52,10 @@ const discardPolicyGuidance = `discard must be "old" or "new": "old" evicts the 
 // archival declaration, all of which fail readiness for different reasons and
 // have different fixes.
 var (
+	// errFixedFrameworkStreamCollision is intentionally private: it classifies
+	// an invalid configuration without creating a new adopter-facing API.
+	errFixedFrameworkStreamCollision = errors.New("configuration collides with a fixed framework stream")
+
 	// ErrStreamBoundsUndeclared is returned when an ordinary stream carries no
 	// explicitly declared finite MaxAge, finite MaxBytes, or discard policy and
 	// is not admitted by an archival declaration or an active migration override.
@@ -219,17 +223,27 @@ func resolveStreamDeclarations(cfg *Config, _ *slog.Logger) ([]streamDeclaration
 		explicit bool // declared by a framework constant or the operator map
 	}
 	decls := make(map[string]*resolved)
+	fixed := make(map[string]struct{})
 
 	// 1. Framework constants. These are explicit declarations at a named source
 	//    in framework code, not silent defaults: the values are written down,
 	//    and readiness reports the source when one of them is incomplete.
 	for _, fc := range frameworkStreams() {
 		decls[fc.name] = &resolved{cfg: fc.cfg, source: frameworkConstantSource, explicit: true}
+		if fc.fixed {
+			fixed[fc.name] = struct{}{}
+		}
 	}
 
-	// 2. Operator map. Highest priority; can override a framework constant.
+	// 2. Operator map. Highest priority for ordinary framework constants. Fixed
+	//    framework declarations reject even byte-for-byte identical duplicates:
+	//    accepting one would imply that this is an operator-owned policy surface.
 	for _, name := range slices.Sorted(maps.Keys(cfg.Streams)) {
 		source := fmt.Sprintf("config.streams[%q]", name)
+		if _, isFixed := fixed[name]; isFixed {
+			return nil, fmt.Errorf("%w: %s must not declare %q; remove the declaration and allow SemStreams to provision its fixed policy",
+				errFixedFrameworkStreamCollision, source, name)
+		}
 		if err := checkOrdinaryStream(name, source); err != nil {
 			return nil, fmt.Errorf("validate stream declaration %q: %w", name, err)
 		}
@@ -282,6 +296,10 @@ func resolveStreamDeclarations(cfg *Config, _ *slog.Logger) ([]streamDeclaration
 			}
 
 			source := fmt.Sprintf("component %q port %q", compName, definition.Name)
+			if _, isFixed := fixed[streamName]; isFixed {
+				return nil, fmt.Errorf("%w: %s must not declare %q; choose an application stream name",
+					errFixedFrameworkStreamCollision, source, streamName)
+			}
 			if err := checkOrdinaryStream(streamName, source); err != nil {
 				return nil, fmt.Errorf("validate stream declaration %q: %w", streamName, err)
 			}

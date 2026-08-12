@@ -3,7 +3,31 @@ package scenarios
 import (
 	"fmt"
 	"testing"
+
+	"github.com/c360studio/semstreams/test/e2e/client"
 )
+
+func TestMaxDeliveryMetricObservedRequiresBoundedInfrastructureLabels(t *testing.T) {
+	t.Parallel()
+
+	snapshot := &client.MetricsSnapshot{Metrics: map[string]client.Metric{
+		"other": {
+			Name: coreMaxDeliveryMetric, Value: 99,
+			Labels: map[string]string{"stream": "OTHER", "consumer": coreRawStorageConsumer},
+		},
+		"target": {
+			Name: coreMaxDeliveryMetric, Value: 1,
+			Labels: map[string]string{"domain": "", "stream": coreRawStorageStream, "consumer": coreRawStorageConsumer},
+		},
+	}}
+
+	if !maxDeliveryMetricObserved(snapshot, coreRawStorageStream, coreRawStorageConsumer) {
+		t.Fatal("target infrastructure label set was not observed")
+	}
+	if maxDeliveryMetricObserved(snapshot, "MISSING", coreRawStorageConsumer) {
+		t.Fatal("metric for another stream must not satisfy the occurrence proof")
+	}
+}
 
 func TestExtractRawStorageEnvelope(t *testing.T) {
 	t.Parallel()
