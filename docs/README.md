@@ -77,6 +77,8 @@ Multi-step processes with loops, timeouts, and retries:
 
 ## Operations
 
+- [Migrate beta.159 to beta.160](operations/migration-beta159-to-beta160.md) - Canonical downstream breaking-change
+  guide
 - [Local Monitoring](operations/01-local-monitoring.md) - Prometheus + Grafana setup
 - [Troubleshooting](operations/02-troubleshooting.md) - Common issues and solutions
 

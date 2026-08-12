@@ -1,5 +1,8 @@
 # Graph foundation breaking cutover
 
+This is a detailed contract reference. Downstream adopters should start with the canonical
+[beta.159 to beta.160 migration guide](migration-beta159-to-beta160.md).
+
 This note coordinates the pre-v1 cutover to the graph read/write foundation established by
 [ADR-091](../adr/091-graph-mutation-authority-without-semantic-ownership.md). It is a migration notice, not a
 compatibility plan. SemStreams ships no aliases, deprecated APIs, dual subjects, ownership adapter, or legacy todo

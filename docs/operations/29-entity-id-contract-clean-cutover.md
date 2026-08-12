@@ -153,10 +153,9 @@ authoritative system; regenerate canonical Graphables from that source after the
 7. Prove raw exact/category/domain predicate queries, owner replacement, relationship, prefix, and search parity.
 8. Restart with the same recorded command and no intervening write. Prove the same readiness revision and results.
 
-The concrete service-manager, container, and reseed commands are product-owned because SemStreams cannot infer an
-upstream authoritative source. They must appear as literal commands in the product evidence envelope defined by
-[31 — sister-repo cutover checklist](31-sister-repo-cutover-checklist.md). “Restart and reseed” without those
-commands, revisions, and counts is not release evidence.
+This historical procedure is not the beta.160 adoption path. Current downstream adopters start with the canonical
+[beta.159 to beta.160 migration guide](migration-beta159-to-beta160.md), which requires newly provisioned NATS
+storage and no migration, wipe, or reseed operation.
 
 If the deployment returns `graph_state_reset_required`, stop. Find and fix the incompatible producer or injected
 state before wiping again; repeating the wipe cannot correct a source that still emits malformed identities.
