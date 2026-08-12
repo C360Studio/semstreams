@@ -649,7 +649,7 @@ func (c *Client) PublishToStreamWithAck(
 
 	ack, err := js.PublishMsg(ctx, msg)
 	if err != nil {
-		c.recordFailure()
+		c.recordStreamPublishFailure(err)
 		c.jsMetrics.recordError("publish_to_stream")
 		return nil, errs.WrapTransient(err, "Client", "PublishToStreamWithAck",
 			"failed to publish to subject "+subject)
