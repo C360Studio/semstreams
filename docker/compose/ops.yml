@@ -66,11 +66,14 @@ services:
 
   semstreams:
     # Per-target image tag — see docker/compose/e2e.yml for rationale.
-    image: c360studio/semstreams:e2e-production
+    # The ops scenario drives the E2E-only lesson-curation control responder
+    # installed by cmd/e2e-semstreams; the production composition deliberately
+    # does not expose that test control surface.
+    image: c360studio/semstreams:e2e-test
     build:
       context: ../..
       dockerfile: docker/Dockerfile
-      target: production
+      target: e2e
     container_name: semstreams-ops-app
     command: ["--config", "/app/configs/flows/ops-agent-test.json"]
     depends_on:
