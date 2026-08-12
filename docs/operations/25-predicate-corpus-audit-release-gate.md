@@ -1,5 +1,11 @@
 # Predicate Corpus Audit and Release Gate
 
+**Historical cutover evidence — not an active release procedure.**
+
+This document records the 2026 cutover plan. Stable release adoption starts on newly provisioned NATS storage; do not
+execute this body as a release gate. Its no-shim conclusions remain evidence. Typed graph-poison recovery is governed
+by [operations 17](17-predicate-cutover-clean-wipe.md) and [operations 33](33-graph-poison-response-runbook.md).
+
 **Status:** Release procedure. The commands define the evidence required for the ADR-074 breaking cutover; this
 document is not evidence that the gate has passed. The destructive cutover procedure is
 [`17-predicate-cutover-clean-wipe.md`](17-predicate-cutover-clean-wipe.md): wipe, restart, and canonical

@@ -136,9 +136,12 @@ until the owner explicitly accepts the reviewed design.
   `DiscardNew` with replacement/recovery reserve and typed rejection.
 - Large content remains backend-neutral through `storage.Store` and `StorageReference`; NATS ObjectStore is one
   bounded implementation.
-- Before v1, flag any legacy reader, beta-state exporter/inspector, alias ledger, dual format/writer, online or
-  in-place migration, or rollback path. The clean policy is announce, update owned sources/configurations/fixtures,
-  wipe incompatible NATS state, reseed, and rerun product e2e.
+- Before v1, require breaking identity/index adoption to start downstreams on newly provisioned NATS storage after
+  owned sources, configurations, schemas, fixtures, and queries are updated. Require cold-start, readiness, and
+  affected product E2E proof. Flag any requirement to migrate, preserve, wipe, or reseed absent state and any legacy
+  reader, beta-state exporter/inspector, alias ledger, dual format/writer, online migration, or rollback path. If
+  retained deployed state is discovered, require a separate owner-reviewed migration or recovery design. Preserve
+  typed poison recovery and optional-state degradation.
 - After v1, migration behavior requires an active `bounded-storage-operability` contract with report-only preflight,
   operator approval, backup/restore proof, staged enforcement, a safe rollback point, and a removal deadline for any
   temporary compatibility. Flag an expired or indefinite bridge.

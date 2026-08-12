@@ -61,7 +61,8 @@ with reason `graph_state_reset_required`; re-spawn them after repair.
 
 Above roughly 50 entities, per-entity repair is the wrong tool. Escalate to the clean
 wipe/reseed contract: stop writers → wipe ENTITY_STATES + derived index buckets → restart →
-reseed from canonical sources (procedure: `docs/operations/17-predicate-cutover-clean-wipe.md`).
+repopulate from canonical sources (procedure: `docs/operations/17-predicate-cutover-clean-wipe.md`, Graph State
+Poison Recovery).
 
 **Guard-bucket warning**: if a wipe recreates the ingest stream, you MUST also clear
 `GRAPH_INGEST_APPLIED_SEQ` — retained guard stamps above the reset stream sequences will

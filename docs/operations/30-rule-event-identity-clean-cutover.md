@@ -1,5 +1,11 @@
 # Rule-Event Identity Clean Cutover
 
+**Historical cutover evidence — not an active release procedure.**
+
+This document records the 2026 cutover plan. Stable release adoption starts on newly provisioned NATS storage; do not
+execute this body as a release gate. Its no-shim conclusions remain evidence. Typed graph-poison recovery is governed
+by [operations 17](17-predicate-cutover-clean-wipe.md) and [operations 33](33-graph-poison-response-runbook.md).
+
 This procedure is the SemStreams-local pre-v1 cutover for graph-event constructors, framework-derived alert and
 trigger identities, and rule-pack producer identity. It is a clean break with no compatibility constructor, default
 pack identity, dual identity, alias ledger, or rollback path.

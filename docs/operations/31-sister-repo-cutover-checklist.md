@@ -1,5 +1,11 @@
 # Sister-repo cutover checklist — pre-v1 breaking wave
 
+**Historical cutover evidence — not an active release procedure.**
+
+This document records the 2026 cutover plan. Stable release adoption starts on newly provisioned NATS storage; do not
+execute this body as a release gate. Its no-shim conclusions remain evidence. Typed graph-poison recovery is governed
+by [operations 17](17-predicate-cutover-clean-wipe.md) and [operations 33](33-graph-poison-response-runbook.md).
+
 This checklist coordinates one migration target and one destructive graph-state cutover per product. The beta pins
 below were observed in local checkouts on 2026-07-17. They describe audit starting points, not approved migration
 targets. Re-read each repository's dependency file and record its commit before relying on a pin.

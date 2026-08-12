@@ -149,9 +149,12 @@ PRs fell into the four classes below.
   ceiling is only a verified `DiscardNew` circuit breaker with replacement/recovery reserve and honest rejection.
 - Large content uses backend-neutral `storage.Store` and `StorageReference` contracts. NATS ObjectStore is one
   bounded backend, not a mandatory address exposed to graph or query contracts.
-- Before v1, breaking identity/index changes use the clean beta policy: announce the break, update every owned source,
-  configuration, schema, and fixture, wipe incompatible NATS state, reseed, and rerun product e2e. Do not add legacy
-  readers, beta-state exporters, aliases, dual formats, online migrations, or rollback paths.
+- Before v1, breaking identity/index adoption starts downstreams on newly provisioned NATS storage after every owned
+  source, configuration, schema, fixture, and query is updated. Prove cold start, readiness, and affected product E2E.
+  Do not require migration, preservation, wipe, or reseed for absent state, and add no legacy reader, beta-state
+  exporter, alias, dual format, online migration, or rollback path. If retained deployed state is discovered, stop
+  for a separate owner-reviewed migration or recovery design. Preserve typed poison recovery and optional-state
+  degradation.
 - After v1, retained-state upgrades are authorized only by the active `bounded-storage-operability` contract: a
   versioned report-only preflight, operator-approved plan, proven backup/restore, staged enforcement, safe rollback
   point, and removal deadline for temporary migration compatibility.

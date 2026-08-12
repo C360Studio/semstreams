@@ -1,8 +1,8 @@
 # Post-G tag-safety migration guide
 
-> **Status: version-independent operator guidance, not a release notice.** Exact candidate, tag, retained-path,
-> artifact, and #827 outcomes exist only in immutable candidate proof and product GitHub Release material. This file
-> is never edited after candidate proof to inject release facts.
+> **Status: version-independent operator guidance, not a release notice.** Exact candidate, tag, retained-path, and
+> artifact outcomes exist only in immutable candidate proof and product GitHub Release material. This file is never
+> edited after candidate proof to inject release facts.
 
 This closeout prepares one stable SemStreams tag for downstream pin-and-migrate work. It keeps SemStreams' existing
 flow, graph mutation, storage-reference, NATS, and eventual-consistency model. It adds no compatibility shim or
@@ -83,13 +83,15 @@ issue.
 ## Candidate and release evidence
 
 The release owner first selects one clean immutable candidate SHA and collects cache-disabled command results, active
-semantic polling, independent review, exact-SHA CI, retained-path results, and the named #827
-operator/window/action plan. Only a fully green candidate gets the non-product `candidate-proof-<fullSHA>` GitHub
-Release and tag authorization. A red candidate is rejected without publishing a failed proof Release.
+semantic polling, independent review, exact-SHA CI, retained-path results, and the owner-approved fresh-state ruling
+and decision reference. Only a fully green candidate gets the non-product `candidate-proof-<fullSHA>` GitHub Release
+and tag authorization. A red candidate is rejected without publishing a failed proof Release.
 
 After the tag boundary, a separate immutable asset on the product Release links the candidate proof and records tag
-resolution, artifacts, the actual #827 result, and final limitations. Tag-specific migration guidance belongs only in
-the product GitHub Release notes and attestation, not in this file.
+resolution, artifacts, Release-note inclusion of the fresh-storage premise, no destructive storage operation during
+publication, and final limitations. Every downstream product adopting the stable release starts on
+newly provisioned NATS storage. Discovery of retained deployed state stops only that adoption and requires a separate owner-reviewed
+migration or recovery design.
 
 ## Downstream migration
 
@@ -100,7 +102,7 @@ Downstream projects should:
 3. remove any assumption that graph embedding can read an offloaded body from an unnamed or merely wired store;
 4. ensure every `StorageReference.StorageInstance` has the intended live provider in the deployed flow;
 5. update broken APIs/configuration directly, with no compatibility shim or deprecated surface; and
-6. run the downstream project's own product-parity suite after migration.
+6. run the downstream project's own product-parity suite after fresh-state adoption.
 
 The ten downstream projects are useful holdout feedback, but they are not exhaustive pre-tag blockers. A downstream
 migration failure is fixed in that project or promoted through a new owner-approved framework change; it does not
