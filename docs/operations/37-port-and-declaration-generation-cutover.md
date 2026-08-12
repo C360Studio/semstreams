@@ -1,5 +1,8 @@
 # Port and declaration-generation breaking cutover
 
+This is a detailed contract reference. Downstream adopters should start with the canonical
+[beta.159 to beta.160 migration guide](migration-beta159-to-beta160.md).
+
 This note tells downstream teams how to adopt the strict port language and declaration-generation release. It is a
 migration notice, not a compatibility plan. The cutover has no aliases, deprecated paths, dual readers, or shims.
 

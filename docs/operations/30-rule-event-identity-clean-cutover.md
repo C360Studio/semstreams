@@ -94,9 +94,10 @@ fresh-volume E2E tiers are mandatory for the combined breaking tag, even when a 
 earlier.
 
 Owned products must record the exact SemStreams revision, their migrated PackIDs, explicit graph-integration modes,
-constructor call sites, and affected product E2E result before v1 release and archive. Record the event-consumer
-classification in [31 — sister-repo cutover checklist](31-sister-repo-cutover-checklist.md). A named consumer must
-prove that the first trigger creates or upserts the stable trigger entity and later triggers replace/update it. A
+constructor call sites, and affected product E2E result before v1 release and archive. Current downstream adoption
+proof is defined by the canonical [beta.159 to beta.160 migration guide](migration-beta159-to-beta160.md). A named
+consumer must prove that the first trigger creates or upserts the stable trigger entity and later triggers
+replace/update it. A
 must-exist update consumer rejects the first trigger; append semantics violate the stable-entity contract. The
 current bounded no-consumer audit remains an open release item until its normative amendment is approved or a
 consumer supplies that proof.
