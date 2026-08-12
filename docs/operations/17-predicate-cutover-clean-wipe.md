@@ -1,7 +1,7 @@
-# Predicate Cutover: Wipe, Restart, and Canonical Reseed
+# Graph State Poison Recovery: Stop, Reset, Restart, and Canonical Repopulation
 
-The canonical predicate release is a beta breaking change. It does not translate old predicate identities or
-mixed-format graph indexes in place.
+This recovery applies only after graph-index reports a typed `graph_state_reset_required` reason. It is not a stable-
+release migration, cutover, or release gate. Stable adoption starts on newly provisioned NATS storage.
 
 ## Detect the condition
 
@@ -48,7 +48,7 @@ Do not delete unrelated operational or application KV buckets. Bucket names may 
 configuration, so derive the exact destructive set from the rendered configuration and the current
 `graph.FrameworkOwnedBuckets()` list before execution.
 
-This pre-v1 procedure does not export, inspect, preserve, translate, or roll back incompatible beta graph state.
+This scoped poison-recovery procedure does not export, inspect, preserve, translate, or roll back poisoned graph state.
 Canonical source systems remain authoritative and must be fixed before reseed.
 
 ## Restart and reseed canonical sources
@@ -67,4 +67,4 @@ recreate the same poison state.
 ## Explicit non-features
 
 There is no runtime alias table, permissive flag, dual reader/writer, in-process migration command, beta-state
-preservation contract, or rollback path. This is the intentional clean beta boundary before v1.
+preservation contract, or rollback path. These are scoped recovery mechanics, not a general release procedure.

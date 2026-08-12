@@ -116,8 +116,8 @@ NATS may run single-node or clustered. SemStreams does not implement backup, che
 Operators own normal NATS backup/checkpoint procedures for their topology; this note adds no framework recovery gate,
 tool, or compatibility workflow.
 
-Before a product cutover, stop its writers and take whatever deployment backup/checkpoint its operator policy requires.
-Because this is a clean pre-v1 state-model break, reset and reseed the product's derived graph state when legacy stubs,
-ownership-era state, or old todo records are present. Derive exact bucket targets from the deployment configuration;
-never use copied wildcard deletion commands. Missing references after reseed are observable eventual state, not a reason
-to fail startup.
+Before adoption, take whatever deployment backup/checkpoint the operator's normal policy requires. Every downstream
+product adopting this stable release starts on newly provisioned NATS storage. Discovery of retained deployed state
+stops that adoption and requires a separate owner-reviewed migration or recovery design; it does not authorize copied
+wildcard deletion commands. Typed graph poison remains governed by the scoped recovery runbook. Missing references
+after fresh startup are observable eventual state, not a reason to fail startup.

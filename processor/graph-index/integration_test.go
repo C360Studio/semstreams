@@ -115,11 +115,11 @@ func TestIntegration_PreexistingPredicatePoisonIsSticky(t *testing.T) {
 	require.Equal(t, graph.ErrorCodeGraphStateResetRequired, classified.Code)
 }
 
-// TestIntegration_PredicateCleanWipeReseedRestoresQueryParity proves the
-// destructive pre-v1 cutover contract against real NATS. A poisoned process
-// cannot be repaired in place; after stop + complete incompatible-bucket wipe,
-// a canonical reseed restores exact and namespace queries, and a second clean
-// restart replays to the same results.
+// TestIntegration_PredicateCleanWipeReseedRestoresQueryParity proves typed
+// stored-state poison recovery against real NATS. A poisoned process cannot be
+// repaired in place; after stop + complete incompatible-bucket reset, canonical
+// repopulation restores exact and namespace queries, and a second clean restart
+// replays to the same results.
 func TestIntegration_PredicateCleanWipeReseedRestoresQueryParity(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
 	nc := testClient.Client

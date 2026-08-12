@@ -13,8 +13,8 @@ authority.
 The binding decision record SHALL be `openspec/changes/post-g-tag-safety-closeout/disposition-ledger.md`. It SHALL
 record owner, decision date, disposition, and coverage/publication plan. It SHALL NOT predict the SHA of its containing
 commit. Exact candidate identity, command results, timestamps, and evidence pointers SHALL live in the immutable
-`candidate-proof-<fullSHA>` GitHub Release asset. Product tag, artifact, actual #827, and final decision facts SHALL
-live in the separate immutable product-Release attestation.
+`candidate-proof-<fullSHA>` GitHub Release asset. Product tag, artifact, fresh-state publication, and final decision
+facts SHALL live in the separate immutable product-Release attestation.
 
 #### Scenario: A retained advertised path is red
 
@@ -48,14 +48,16 @@ live in the separate immutable product-Release attestation.
 
 Candidate freeze SHALL mean selection of one clean immutable commit SHA after all in-tree preparation. The package
 manifest SHALL be regenerated once as the final preparation edit and SHALL only be verified after selection. Candidate
-selection SHALL NOT require a proof record, product tag, artifact, or #827 result that cannot yet exist.
+selection SHALL NOT require a proof record, product tag, artifact, or downstream deployment fact that cannot yet
+exist.
 
 After candidate selection, proof runs SHALL collect local/run evidence. Only after every required gate is green SHALL
 the release owner create a non-product GitHub Release tag named `candidate-proof-<fullSHA>` targeting the exact
 candidate and publish its immutable asset. Because this tag does not start with `v`, it SHALL NOT trigger the current
 product release or container workflows. Its immutable asset SHALL record only green pre-tag facts: candidate identity
 and cleanliness, package-manifest verification, exact command/result provenance, semantic polls, retained-path
-results, independent review, exact-SHA CI, the #827 operator/window/planned action, and tag authorization. A red gate
+results, independent review, exact-SHA CI, the binding fresh-storage ruling and decision reference, and tag
+authorization. A red gate
 SHALL reject the candidate through local/run evidence and SHALL NOT require a failed candidate-proof Release.
 
 The candidate-proof asset SHALL NOT contain or require its own URL or SHA-256. GitHub Release metadata or a sibling
@@ -141,22 +143,23 @@ timeout.
 
 ### Requirement: Tag authorization and publication are separate evidence phases
 
-The release owner SHALL authorize a product tag only after all candidate-proof gates are green and the proof records a
-named #827 operator, tag-boundary window, and planned wipe/reseed action. #827 SHALL NOT execute during in-tree work or
-candidate proof.
+The release owner SHALL authorize a product tag only after all candidate-proof gates are green and the proof records
+the binding owner-approved ruling that every downstream product adopting the stable release starts on newly
+provisioned NATS storage, with its decision date and in-tree reference. Candidate proof SHALL NOT inspect or predict
+future downstream storage.
 
-The product tag SHALL resolve to the authorized candidate SHA. The coordinated #827 operation SHALL execute
-immediately at the product tag boundary. If its permitted window closes, tagging SHALL halt and the operation SHALL
-become an explicit migration.
+The product tag SHALL resolve to the authorized candidate SHA. Release publication SHALL NOT perform or require a
+destructive storage operation.
 
 After publication, a separate immutable asset on the product GitHub Release SHALL link and externally digest the
 candidate-proof asset. It SHALL record product tag resolution, binary version/checksum, container
-reference/digest/reported version, the actual #827 result or migration halt, the final release decision, and accepted
-or deferred limitations. It SHALL NOT contain or require its own URL or SHA-256.
+reference/digest/reported version, inclusion of the fresh-storage premise in product Release notes, confirmation that
+no destructive storage operation was performed during publication, the final release decision, and accepted or
+deferred limitations. It SHALL NOT contain or require its own URL or SHA-256.
 
-Tag-specific migration guidance SHALL exist only in the product GitHub Release notes and attestation. The candidate
-tree SHALL NOT be edited after proof to inject release facts. Downstream repositories MAY pin and migrate after
-publication; they SHALL NOT be treated as exhaustive pre-tag gates.
+The candidate tree SHALL NOT be edited after proof to inject release facts. Downstream repositories MAY pin and adopt
+after publication; they SHALL NOT be treated as exhaustive pre-tag gates. Discovery of retained deployed state SHALL
+stop only the affected adoption and require a separate owner-reviewed migration or recovery design.
 
 #### Scenario: Tag authorization is requested before proof is green
 
@@ -171,16 +174,24 @@ publication; they SHALL NOT be treated as exhaustive pre-tag gates.
 - **WHEN** the proposed product tag resolves elsewhere
 - **THEN** publication is blocked
 
-#### Scenario: The pre-v1 wipe window closes
+#### Scenario: Fresh-storage publication states the release premise
 
-- **GIVEN** #827 has not executed and the permitted pre-v1 boundary has closed
-- **WHEN** release preparation reaches tagging
-- **THEN** tagging halts
-- **AND** wipe/reseed is handled through an explicit migration
+- **GIVEN** the exact framework candidate is proven and authorized
+- **WHEN** the product tag and Release notes are published
+- **THEN** the notes require downstream adoption on newly provisioned NATS storage
+- **AND** the attestation records that no destructive storage operation was performed during publication
 
-#### Scenario: A downstream has not yet migrated
+#### Scenario: Retained deployed state is discovered during adoption
+
+- **GIVEN** a downstream begins adoption of the published release
+- **WHEN** retained deployed NATS state is discovered
+- **THEN** that adoption stops
+- **AND** a separate owner-reviewed migration or recovery design is required
+- **AND** no compatibility reader, alias, dual format, online migration, or rollback is inferred
+
+#### Scenario: A downstream has not yet adopted
 
 - **GIVEN** the exact framework candidate is proven and published
 - **WHEN** one downstream remains on an older pin
 - **THEN** that adoption work does not create a framework compatibility shim
-- **AND** the downstream migrates and proves product parity after pinning
+- **AND** the downstream provisions fresh storage and proves product parity after pinning

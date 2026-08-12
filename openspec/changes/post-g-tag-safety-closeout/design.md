@@ -3,9 +3,10 @@
 **Status:** The prior exact checksum-addressed target state received independent `DESIGN PASS`. The repository owner
 approved all binding design rulings on 2026-08-11. Runtime slices #855 and #875, research execute/fusion proof, and
 truth/disposition merged as #933, #934, #936, and #937. Decision F implementation, independent implementation review,
-and the live pre-candidate #860 proof are complete and green with exact `9/0/3` deltas. Refreshed manifest generation,
-strict validation, and amended-package review are executing as the final preparation operation. Candidate selection
-and proof have not begun; no product tag exists, and #827 has not executed.
+and the live pre-candidate #860 proof are complete and green with exact `9/0/3` deltas. Decision G fresh-state truth
+propagation, refreshed manifest generation, strict validation, and submission of the immutable amended package for
+review are complete. Candidate freeze requires external independent approval over this exact package; that verdict
+does not mutate covered artifacts. Candidate selection and proof have not begun; no product tag exists.
 
 **Baseline:** `4593996ef56f50766dcf58fe2200081b72a59133`
 
@@ -187,7 +188,7 @@ The implementation documentation slice:
   `CONTEXT_INDEX` as retired, not cataloged, and not created; and records that no `PREDICATE_CATALOG` exists;
 - adds a premise-status annotation to suspended `semantic-tier-split` without unfreezing it or completing tasks; and
 - corrects stale comments in `e2e-ladder.yml` and `sister-validation.yml` without changing workflow behavior; and
-- adds version-independent migration guidance; exact tag, artifact, and #827 facts remain product-Release-only.
+- adds version-independent release guidance; exact tag and artifact facts remain product-Release-only.
 
 Owner-approved policy (2026-08-11): #301, #844, and #860 remain advertised. Each exact candidate must run its named
 path green or tag authorization stops. D authorizes neither a fix nor removal if one is red, and an honest nonzero
@@ -209,7 +210,7 @@ conformance, does not authorize implementation, and cannot silently expand runti
 the technical writer owns faithful transcription and conservative task truth. The ledger records decision date and
 coverage/publication plan, but it cannot contain the SHA of the candidate commit that contains it. Candidate identity,
 exact command/results, timestamps, and evidence pointers live in the immutable `candidate-proof-<fullSHA>` Release
-asset. Tag, artifact, actual #827, and final decision facts live in the separate immutable product-Release
+asset. Tag, artifact, fresh-state publication, and final decision facts live in the separate immutable product-Release
 attestation. The in-tree `candidate-evidence.md` is only the schema for those external records.
 
 ## Same-class collision result
@@ -270,6 +271,27 @@ named rule it requires exact deltas of nine from
 exact delta is red. The live pre-candidate run is green at exact `9/0/3`; #860 remains a retained gate that must be
 rerun on the exact candidate under E.4 after candidate selection.
 
+## Decision G: fresh-state stable-release premise
+
+Accepted on 2026-08-11 from `/private/tmp/fresh-state-release-inventory.md`, SHA-256
+`b91a8d24a22eae2f44f42864798f593e61428d7e13fc05dce0081b73d0dfa348`, against baseline
+`c893cd53a958e5f79c23b93cc2b0ba23f2f342a1`.
+
+Every downstream product adopting the stable release starts on newly provisioned NATS storage. Owner-confirmed
+deployment state contains no existing NATS data to migrate, preserve, wipe, or reseed. The release provides no
+compatibility reader, alias, dual format, online migration, or rollback. Discovery of retained deployed state blocks
+that adoption and requires a separate owner-reviewed migration or recovery design.
+
+This is a release premise, not runtime behavior. Historical cutover records remain evidence, while typed
+`graph_state_reset_required` handling remains the scoped response to observed graph poison. Cold replay stays
+fail-closed until the authoritative watermark, ordinary backup/recovery remains valid, and optional
+`AGENT_TRAJECTORIES` degradation remains independent.
+
+The release owner records the binding ruling and decision reference; they do not predict an operator, window, or
+destructive action for absent state. Product Release notes tell downstream owners to provision fresh storage and stop
+only the affected adoption if retained deployed state is found. This truth must be propagated through current specs,
+evidence schemas, role contracts, and live guidance before candidate freeze.
+
 ## Candidate and tag proof
 
 The candidate commit cannot contain or predict its own SHA. Candidate freeze therefore means only selecting one clean
@@ -309,17 +331,17 @@ gate passes without using `semstreams_rule_events_published_total`. The ops invo
 
 A provably wedged paid run is aborted rather than left to timeout. Independent SemStreams review and green GitHub CI
 are tied to the same complete candidate SHA. Any correction selects a new candidate SHA and invalidates affected
-proof, review, and CI. The release owner may authorize tagging only after every required pre-tag gate is green and a
-named #827 operator, tag-boundary window, and planned action are recorded.
+proof, review, and CI. The release owner may authorize tagging only after every required pre-tag gate is green and
+the binding fresh-storage ruling and decision reference are recorded.
 
-At the product tag boundary, the tag must resolve to the authorized SHA, binary and container outputs must report the
-intended version, and the coordinated #827 wipe/reseed executes immediately. If the permitted window closes, tagging
-halts and the operation becomes an explicit migration. This change does not execute #827.
+At the product tag boundary, the tag must resolve to the authorized SHA and binary and container outputs must report
+the intended version. No destructive storage operation is part of release publication.
 
 After publication, a separate immutable asset on the product GitHub Release links and digests candidate proof. It
-records tag resolution, binary/container identity, the actual #827 result, final release decision, and limitations.
-Tag-specific migration guidance exists only in the product Release notes and attestation; the candidate tree is never
-edited after proof. Downstream repositories pin that tag afterward and are not exhaustive pre-tag blockers.
+records tag resolution, binary/container identity, inclusion of the fresh-storage premise in Release notes, that no
+destructive storage operation was performed, the final release decision, and limitations. The candidate tree is
+never edited after proof. Downstream repositories pin that tag afterward and are not exhaustive pre-tag blockers;
+discovery of retained deployed state blocks only the affected adoption pending separate owner review.
 
 ## Risks
 

@@ -4,6 +4,11 @@
 
 **Date:** 2026-07-14
 
+**Release-premise annotation (2026-08-11):** The destructive stable-release cutover premise is superseded. Every
+downstream adoption starts on newly provisioned NATS storage; contrary retained deployed state requires separate
+owner review. Canonical predicate decisions, fail-closed poison behavior, scoped recovery, and restored-deployment
+rebuild remain in force. The historical body below is preserved as decision evidence.
+
 **Partially superseded by [ADR-091](091-graph-mutation-authority-without-semantic-ownership.md):** canonical predicate
 syntax and namespace declaration remain in force. ADR-091 retires global graph/predicate ownership; mutation intent is
 now validated by local projection contracts and applied through revision-aware create/reconcile/append/delete operations.

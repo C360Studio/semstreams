@@ -22,7 +22,8 @@ Evidence is published in two distinct immutable records:
    not require publication of a failed candidate-proof Release.
 2. **Post-publication release attestation.** After the product tag boundary, publish a separate immutable asset on the
    product GitHub Release. It links and digests the candidate-proof asset, then records tag resolution, published
-   artifacts, the actual #827 result, the final release decision, and limitations.
+   artifacts, fresh-state Release-note inclusion, no destructive storage operation, the final release decision, and
+   limitations.
 
 Neither asset contains or requires its own URL or SHA-256. GitHub Release metadata or a sibling checksum asset created
 after upload MAY carry the asset URL or digest. That metadata does not redefine candidate or evidence identity.
@@ -93,16 +94,16 @@ and leave the semantic gate failed. Silence is not success.
 | Reviewed diff/artifact pointer | `<required>` |
 | GitHub CI run/check identities and result | `<required>` |
 | CI candidate SHA | `<required>` |
-| #827 named operator | `<required>` |
-| #827 tag-boundary window | `<required>` |
-| #827 planned wipe/reseed action | `<required>` |
+| Binding fresh-storage invariant | `Every downstream product adopting the stable release starts on newly provisioned NATS storage.` |
+| Fresh-storage decision date | `2026-08-11` |
+| Fresh-storage decision reference | `openspec/changes/post-g-tag-safety-closeout/design.md#decision-g-fresh-state-stable-release-premise` |
 | Binding release owner | `<required>` |
 | Tag authorization and UTC time | `<required>` |
 
 The candidate proof points to the owner decisions in `disposition-ledger.md` and records #301, #844, and #860 as
 green. It also confirms that the product Release notes will disclose #839 and every deferred named program. It does
-not claim that #827 ran, predict a product tag, identify unpublished artifacts, or preserve a rejected candidate as a
-published proof Release.
+not inspect or predict future downstream storage, predict a product tag, identify unpublished artifacts, or preserve
+a rejected candidate as a published proof Release.
 
 ## Post-publication release attestation
 
@@ -119,13 +120,14 @@ not edited after proof.
 | Product tag-resolved SHA and command output | `<required>` |
 | Binary version output and SHA-256 | `<required>` |
 | Container reference, digest, and reported version | `<required>` |
-| #827 operation owner and scheduled boundary | `<required>` |
-| #827 actual wipe/reseed result, or halt and migration outcome | `<required>` |
-| #827 evidence pointer | `<required>` |
+| Fresh-storage premise included in product Release notes | `<required>` |
+| Destructive storage operation performed during publication | `none` |
+| Fresh-storage decision reference | `openspec/changes/post-g-tag-safety-closeout/design.md#decision-g-fresh-state-stable-release-premise` |
 | Binding release owner | `<required>` |
 | Final decision and UTC time | `<required>` |
 | Exact published candidate/tag | `<required>` |
 | Retained-path outcomes and accepted/deferred limitations | `<required>` |
 
-If the coordinated #827 window closes, publication halts and the operation becomes an explicit migration. The actual
-result is recorded only here, never predicted in pre-tag proof.
+Every downstream adoption begins on newly provisioned NATS storage. If retained deployed state is discovered during
+adoption, only that adoption stops; it requires a separate owner-reviewed migration or recovery design and does not
+retroactively redefine release publication.

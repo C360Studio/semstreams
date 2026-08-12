@@ -1,9 +1,10 @@
 <!-- markdownlint-disable MD041 -->
 
 **Status:** Decision F implementation, independent SemStreams review, and the live pre-candidate #860 proof are
-complete and green with exact `9/0/3` deltas. Final package-manifest regeneration, strict validation, and amended-
-package review are executing as the last preparation operation. Candidate selection has not begun; no product tag
-exists, and #827 has not executed.
+complete and green with exact `9/0/3` deltas. Decision G fresh-state truth propagation, final package-manifest
+regeneration, strict validation, and submission of the immutable amended package for review are complete. Candidate
+freeze requires an external independent approval over this exact package; that verdict does not mutate these covered
+artifacts. Candidate selection has not begun and no product tag exists.
 
 ## Why
 
@@ -49,8 +50,12 @@ promote the wider derived-state findings into runtime work.
 - Disable the Go test cache for exact-candidate proof and include the core clustering/embedding packages in the focused
   command, not only their processor wrappers.
 - Keep decisions and evidence templates in-tree. Tie pre-tag proof, review, and CI to an immutable SHA-specific
-  candidate-proof Release, then record tag/artifact identity and the actual coordinated #827 outcome in a separate
+  candidate-proof Release, then record tag/artifact identity and the fresh-state release facts in a separate
   immutable product-Release attestation.
+- Establish the owner-approved release premise: every downstream product adopting the stable release starts on
+  newly provisioned NATS storage, with no deployed NATS data to migrate, preserve, wipe, or reseed and no
+  compatibility path. Discovery of retained deployed state stops that adoption for separate owner review.
+- Record #827 as superseded by this premise and close it only after this housekeeping change merges.
 
 ## Capabilities
 
@@ -89,6 +94,9 @@ not a completed proof record. Candidate freeze selects one clean immutable SHA. 
 exact pre-tag proof under `candidate-proof-<fullSHA>`; product tag and artifact facts follow in the separate
 product-Release attestation.
 The in-tree migration guide remains version-independent. Tag-specific guidance exists only in product Release notes.
+
+The stable release is adopted only on newly provisioned NATS storage. This release premise does not alter typed graph
+poison recovery, cold-replay readiness, ordinary backup/recovery, or optional trajectory-observability degradation.
 
 External producers keep the existing `StorageReference` shape and exact logical `StorageInstance`. The only new
 operator surface is `semstreams_rule_action_gate_passes_total{rule_name}`. No new public symbol, configuration field,

@@ -187,9 +187,11 @@ independently correlated triples.
   message. The model can self-correct without retrying through the
   loop's outer retry policy.
 - **Legacy todo triples remain after deployment**: there is no
-  compatibility decoder, alias, or dual-write path. This is a clean
-  pre-v1 cutover; wipe/reseed according to the coordinated GS-01
-  migration rather than expecting the reader to translate old data.
+  compatibility decoder, alias, or dual-write path. Stable-release adoption
+  starts on newly provisioned NATS storage rather than expecting the reader to
+  translate old data. If typed graph poison is reported, follow
+  [graph-state poison recovery](17-predicate-cutover-clean-wipe.md); retained
+  deployed state instead requires separate owner review.
 
 ## Related ADRs
 

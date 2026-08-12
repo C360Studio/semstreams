@@ -6,6 +6,11 @@
 the graph-state decision proposal and authorized breaking pre-v1 implementation without
 compatibility layers.
 
+**Release-premise annotation (2026-08-11):** The destructive stable-release cutover premise is superseded. Every
+downstream adoption starts on newly provisioned NATS storage; contrary retained deployed state requires separate
+owner review. The authoritative-state/materialized-view decision, fail-closed poison behavior, scoped recovery, and
+restored-deployment rebuild remain in force. The historical body below is preserved as decision evidence.
+
 The evidence baseline is the frozen
 [graph-state inventory](../proposals/graph-state-read-write-inventory.md). The
 canonical living implementation state is the

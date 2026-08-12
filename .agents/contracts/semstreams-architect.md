@@ -137,9 +137,13 @@ terminal event was silently dropped. No amount of caller care fixes a prediction
   not to add interpreter N+1.
 - ADRs record genuine decisions — irreversible choices and cross-repo contracts, the why. Mechanics live in the
   capability's spec. Do not draft "how it works" as an ADR.
-- Respect the pre-v1 clean beta policy: breaking identity/index changes announce, update every owned source, wipe and
-  reseed — no legacy readers, aliases, dual formats, or online migrations. A design that needs a BREAKING commit
-  names the e2e tier that must be green before it lands, or files the coverage gap.
+- Respect the pre-v1 fresh-state policy: breaking identity/index adoption starts downstreams on
+  newly provisioned NATS storage after every owned source, configuration, schema, fixture, and query is updated. Prove cold start,
+  readiness, and affected E2E. Do not require migration, preservation, wipe, or reseed for absent state, and add no
+  legacy reader, alias, dual format, online migration, or rollback path. If retained deployed state is discovered,
+  stop for a separate owner-reviewed migration or recovery design. Preserve typed poison recovery and optional-state
+  degradation. A design that needs a BREAKING commit names the e2e tier that must be green before it lands, or files
+  the coverage gap.
 - New exported surface on `natsclient`, `graph`, `message`, or `pkg/*` requires owner design review before
   implementation; flag it in the handoff rather than treating drafting as approval.
 - Rules trigger, components execute, lifecycle is a convention, rules carry references not payloads. A design that

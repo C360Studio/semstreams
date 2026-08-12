@@ -1,5 +1,11 @@
 # Predicate Contract Breaking Rename Ledger
 
+**Historical cutover evidence — not an active release procedure.**
+
+This document records the 2026 cutover plan. Stable release adoption starts on newly provisioned NATS storage; do not
+execute this body as a release gate. Its no-shim conclusions remain evidence. Typed graph-poison recovery is governed
+by [operations 17](17-predicate-cutover-clean-wipe.md) and [operations 33](33-graph-poison-response-runbook.md).
+
 **Status:** Cutover review artifact. Reviewed against the SemStreams enforcement diff on 2026-07-14 and the
 SemConnect owner cutover inventory on 2026-07-17.
 

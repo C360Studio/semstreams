@@ -3,10 +3,11 @@
 The #855 and #875 runtime corrections, deterministic research proof, and truth/disposition slice are complete. The
 earlier bounded pre-candidate proof correction is focused-green and independently approved. Decision F implementation,
 independent implementation review, and the live pre-candidate #860 proof are complete and green with exact `9/0/3`
-deltas. Final manifest generation, strict validation, and amended-package review are executing as the last preparation
-operation. Candidate selection and exact-candidate proof have not begun; no product tag exists, and #827 has not
-executed. Every nontrivial implementation slice receives independent `semstreams-reviewer` approval before
-integration.
+deltas. Decision G fresh-state truth propagation, final manifest generation, strict validation, and submission of the
+immutable amended package for review are complete. Candidate freeze requires external independent approval over this
+exact package; that verdict does not mutate covered artifacts. Candidate selection and exact-candidate proof have not
+begun; no product tag exists. Every nontrivial implementation slice receives independent `semstreams-reviewer`
+approval before integration.
 
 ## P. Promotion and evidence
 
@@ -113,6 +114,25 @@ integration.
 
 ## E. Candidate proof and tag
 
+Every downstream adoption covered by this release starts on newly provisioned NATS storage. The candidate and
+publication records do not require migration, preservation, wipe, or reseed evidence for state that does not exist.
+
+## PG. Decision G fresh-state truth consolidation
+
+- [x] PG.1 Archive completed `move-tool-discovery-default` through the normal OpenSpec archive command and promote its
+  four requirement groups without rewriting archived history.
+- [x] PG.2 Correct the promoted message-logger raw/effective census totals while preserving delta, removal, and
+  collapse truth.
+- [x] PG.3 Propagate the owner-approved fresh-storage premise through the post-G package and add graph-index and
+  entity-ID target-state deltas without changing runtime behavior or promoted specs directly.
+- [x] PG.4 Separate historical cutover evidence from live release guidance; preserve typed graph-poison recovery,
+  backup policy, optional-state degradation, and historical decision bodies.
+- [x] PG.5 Update all three canonical SemStreams role contracts so future handoffs preserve the same premise and stop
+  for owner review when retained deployed state is discovered.
+- [x] PG.6 Regenerate the exact twelve-file manifest after all covered edits, run strict validation and falsification
+  checks, and submit the immutable amended package for independent review before candidate selection. The external
+  review verdict does not mutate this manifest-covered task file.
+
 - [ ] E.1 Select one clean immutable candidate SHA. Do not edit the candidate tree after selection.
 - [ ] E.2 Verify the already-generated package manifest and collect candidate identity/cleanliness evidence using the
   in-tree `candidate-evidence.md` schema.
@@ -125,12 +145,14 @@ integration.
 - [ ] E.5 Run semantic E2E with recorded 30–60 second `/readyz`, authoritative-counter, and stage-timestamp polling;
   abort and fail proof when authoritative state proves the run wedged.
 - [ ] E.6 Record independent review and exact-SHA green GitHub CI in candidate proof.
-- [ ] E.7 Confirm #827's named operator, tag-boundary window, and planned wipe/reseed action. Do not execute it yet.
+- [ ] E.7 Record the binding owner-approved fresh-storage invariant, its 2026-08-11 decision date, and its in-tree
+  reference in candidate proof; do not predict downstream storage or a destructive action.
 - [ ] E.8 After every pre-tag gate is green, create the non-product `candidate-proof-<fullSHA>` Release at that SHA,
   publish its immutable proof asset, and record release-owner tag authorization. A red gate rejects the candidate
   without a failed proof Release. The asset does not require its own URL or digest. Any correction selects a new
   candidate and invalidates affected proof, review, and CI.
-- [ ] E.9 Create the product tag at the approved SHA, publish binary/container artifacts, and execute coordinated #827
-  immediately at the tag boundary. If its window closes, halt and convert the operation to an explicit migration.
+- [ ] E.9 Create the product tag at the approved SHA and publish binary/container artifacts. Include the requirement
+  that adoption starts on newly provisioned NATS storage in product Release notes; perform no destructive storage
+  operation as part of publication.
 - [ ] E.10 Verify, do not regenerate, `manifest.sha256`; publish the separate immutable product-Release attestation
-  and tag-specific Release notes; then hand downstream migration to adopters.
+  recording Release-note inclusion and no destructive operation, then hand fresh-state adoption to downstreams.

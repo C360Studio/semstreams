@@ -243,8 +243,9 @@ leaving the literal token in place and logging the unresolved-template warning:
 
 > **Legacy-data note (pre-canonical buckets only):** on ENTITY_STATES written before the canonical predicate
 > contract (PR #532), a stale 4-part predicate literally named `a.b.c.value` is shadowed by the `.value` suffix
-> form (which resolves the 3-part `a.b.c` instead, warn-free). Fresh state cannot carry 4-part predicates.
-> Wipe/reseed per the pre-v1 cutover before relying on `.value` templates against pre-contract data.
+> form (which resolves the 3-part `a.b.c` instead, warn-free). Fresh state cannot carry 4-part predicates. Stable
+> release adoption starts on newly provisioned NATS storage; retained deployed state requires owner review. Use the
+> graph-state poison runbook only for a typed `graph_state_reset_required` response.
 
 
 `.value` is arity-disambiguated: the suffix is only recognized when the text before

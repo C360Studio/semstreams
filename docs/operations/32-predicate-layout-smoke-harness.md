@@ -1,5 +1,11 @@
 # Predicate Layout Evidence and Reproduction Runbook
 
+**Historical cutover evidence — not an active release procedure.**
+
+This document records the 2026 cutover plan. Stable release adoption starts on newly provisioned NATS storage; do not
+execute this body as a release gate. Its no-shim conclusions remain evidence. Typed graph-poison recovery is governed
+by [operations 17](17-predicate-cutover-clean-wipe.md) and [operations 33](33-graph-poison-response-runbook.md).
+
 **Status:** Executable integration harness; supervised 5k and 21k decision runs recorded 2026-07-17.
 
 [ADR-078](../adr/078-raw-canonical-predicate-membership-keys.md) selects the fixed-nine-token raw

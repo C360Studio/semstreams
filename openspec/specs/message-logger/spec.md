@@ -55,8 +55,8 @@ SHALL NOT block on logger reconciliation.
 ### Requirement: Resolved observation expansion is exact and inspectable
 
 Across the 21 production-constructible shipped configurations, wildcard discovery SHALL preserve the measured
-migration from 385 raw subject rows, 243 summed per-configuration exact keys, and 51 global strings to 561 effective
-rows, 378 keys, and 66 strings.
+migration from 395 raw subject rows, 243 summed per-configuration exact keys, and 54 global strings to 571 effective
+rows, 378 keys, and 69 strings.
 
 The 176-row / 135-key / 15-string delta SHALL have zero removals. Exact deduplication SHALL account for 40
 loop/dispatch collapses and one governance collapse. The three named `configs/agentic.json` wildcard-containment
@@ -72,7 +72,7 @@ The exact accepted containment overlaps are:
 #### Scenario: Shipped census remains exact
 
 - **WHEN** effective generations are constructed for every enabled component in all 21 shipped configurations
-- **THEN** the raw and effective totals equal 385/243/51 and 561/378/66 respectively
+- **THEN** the raw and effective totals equal 395/243/54 and 571/378/69 respectively
 - **AND** the delta equals 176/135/15 with zero removals and 41 exact collapses
 
 #### Scenario: Wildcard containment does not duplicate capture
