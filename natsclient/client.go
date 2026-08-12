@@ -306,6 +306,33 @@ func (m *Client) recordFailure() {
 	}
 }
 
+// recordStreamPublishFailure accounts a failed JetStream publish against the
+// connection circuit unless the server's typed PubAck says only that the target
+// stream reached one of its configured admission ceilings. Capacity refusal is
+// a healthy connection reporting durable-resource state, not connection loss.
+// The exact typed API error remains caller-visible at each publish seam.
+func (m *Client) recordStreamPublishFailure(err error) {
+	if isCircuitNeutralStreamCapacityError(err) {
+		return
+	}
+	m.recordFailure()
+}
+
+func isCircuitNeutralStreamCapacityError(err error) bool {
+	var apiErr *jetstream.APIError
+	if !stderrors.As(err, &apiErr) || apiErr == nil || apiErr.ErrorCode != jetstream.ErrorCode(10077) {
+		return false
+	}
+	switch apiErr.Description {
+	case "maximum bytes exceeded",
+		"maximum messages exceeded",
+		"maximum messages per subject exceeded":
+		return true
+	default:
+		return false
+	}
+}
+
 // resetCircuit resets the circuit breaker state
 func (m *Client) resetCircuit() {
 	m.failures.Store(0)
@@ -1007,7 +1034,7 @@ func (m *Client) publishToStream(ctx context.Context, subject string, data []byt
 
 	_, err = js.PublishMsg(ctx, msg)
 	if err != nil {
-		m.recordFailure()
+		m.recordStreamPublishFailure(err)
 		return err
 	}
 
@@ -1016,13 +1043,12 @@ func (m *Client) publishToStream(ctx context.Context, subject string, data []byt
 }
 
 // asyncPublishErrHandler is the connection-level handler jetstream-go invokes for
-// every failed async publish ack. It bridges the ack failure into the circuit
-// breaker so an async-only producer degrades the breaker exactly as a failed
-// synchronous publish would (see design.md §4 in the gh#470 change). The reset
-// side of the breaker lives on the enqueue path (successful enqueue = connection
-// healthy); this handler only records failures.
+// every failed async publish ack. It applies the same failure accounting as a
+// failed synchronous publish; a typed target-stream capacity refusal remains
+// circuit-neutral. The reset side lives on the enqueue path (successful enqueue
+// = connection healthy); this handler never resets the circuit.
 func (m *Client) asyncPublishErrHandler(_ jetstream.JetStream, msg *nats.Msg, err error) {
-	m.recordFailure()
+	m.recordStreamPublishFailure(err)
 	if m.jsMetrics != nil {
 		m.jsMetrics.recordError("publish_async")
 	}
@@ -1045,8 +1071,8 @@ func (m *Client) asyncPublishErrHandler(_ jetstream.JetStream, msg *nats.Msg, er
 // disconnected client returns ErrNotConnected, and a full in-flight window past
 // the stall wait returns jetstream's ErrTooManyStalledMsgs — in all of which the
 // returned future is nil. Trace context injection is preserved. Failed acks are
-// delivered on the future's Err() channel AND recorded against the circuit breaker
-// via the connection-level async error handler.
+// delivered on the future's Err() channel and accounted by the connection-level
+// async error handler; only the exact classified capacity set is circuit-neutral.
 //
 // Ordering: jetstream-go preserves per-subject order per connection, so a single
 // caller publishing to one subject gets in-order storage. Cross-goroutine ordering
@@ -1121,12 +1147,11 @@ func (m *Client) publishToStreamAsync(ctx context.Context, subject string, data 
 	// Enqueue succeeded: the connection is up and JetStream accepted the message
 	// onto the wire. On the async path the breaker is a CONNECTION-LIVENESS gate:
 	// a successful enqueue proves the connection is healthy, so we reset here
-	// rather than at ack time. Message-level ack failures (a stream-full nack, a
-	// bad subject) are surfaced to the caller via the future's Err() channel /
-	// the batch aggregate, and do NOT by themselves open the breaker; a genuine
-	// connection outage fires asyncPublishErrHandler for every pending publish
-	// (jetstream-go's reconnect drain) AND makes subsequent enqueues fail, which
-	// trips the breaker. See design.md §4.
+	// rather than at ack time. The exact classified target-stream capacity set is
+	// surfaced through the future/batch and remains circuit-neutral. Every other
+	// ack failure still contributes through asyncPublishErrHandler; connection
+	// outage also makes subsequent enqueues fail, which trips the breaker. See
+	// the nats-streaming capability contract.
 	m.resetCircuit()
 	return future, nil
 }
@@ -1168,9 +1193,9 @@ func (m *Client) PublishAsyncPending() int {
 // returns the context error rather than hanging; the already-enqueued publishes
 // still resolve in the background (and feed the circuit breaker via the async
 // error handler on a connection fault). An enqueue error stops further enqueuing
-// but already-enqueued messages are still drained. Ack failures are recorded
-// against the breaker once, by asyncPublishErrHandler — this loop only collects
-// them for the returned error (recording here too would double-count).
+// but already-enqueued messages are still drained. Ack failures are accounted
+// once by asyncPublishErrHandler — this loop only collects them for the returned
+// error (accounting here too would double-count).
 func (m *Client) PublishBatchToStream(ctx context.Context, subject string, msgs [][]byte) error {
 	if len(msgs) == 0 {
 		return nil
