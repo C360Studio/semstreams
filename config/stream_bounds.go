@@ -342,8 +342,10 @@ func describeSource(explicitSource string, explicit bool, derived []portAttribut
 // An explicit stream_name from the port definition wins over subject-derived
 // naming. The canonical port type carries stream_name (e.g. agentic-tools'
 // tool.result port declares stream_name: "AGENT" so its publishes land on the
-// existing AGENT stream rather than spawning a derived TOOL stream that would
-// collide with AGENT's "tool.>" capture). This relies on the shadow struct
+// existing AGENT stream rather than spawning a derived TOOL stream). The
+// historical failure involved broad AGENT "tool.>" coverage; current shipped
+// guidance uses the explicit "tool.execute.>" and "tool.result.>" families.
+// This relies on the shadow struct
 // having been retired in favour of component.PortDefinition; a previous shadow
 // stripped this field on JSON unmarshal and silently swallowed every tool.result
 // publish in semspec (project_open_work_2026_05_08.md, bug class 3).

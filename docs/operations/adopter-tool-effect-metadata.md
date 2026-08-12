@@ -3,9 +3,13 @@
 **Audience:** semdev and the second gh#749 consumer, and any repo building tool
 discovery, a tool picker, or a default approval policy over SemStreams tools.
 
-**Status:** additive, NOT breaking. Nothing you have today stops working, and you
-do not need to adopt this to compile against the next tag. You were asked on
-gh#749 not to hand-roll an interim effect enum — this is the canonical one.
+**Effect-metadata status:** additive. The effect field and enum remain compatible.
+
+**Discovery-address status (2026-08-11):** breaking. The logical port remains
+`tool.list`, but its kind is now `nats-request` and its default request subject is
+`discovery.tool.list`. Clients using the former default address and deployments
+with an explicit kind `nats` override must migrate. See
+[Move the tool-discovery default](migration-tool-discovery-default.md).
 
 This note states **the rules**, not the diff. Mechanics live in
 `openspec/specs/agentic-tools/`; ADR-089 records the decision and the rejected
@@ -61,7 +65,8 @@ resolving to `unknown` is load-bearing, not defensive style.
 
 ## Rule 4 — over discovery, the value is already resolved and always present
 
-The `tool.list` response gains one field:
+The response served by logical port `tool.list` includes one field. With the
+default configuration, request it from `discovery.tool.list`:
 
 ```json
 {"tools": [
@@ -78,6 +83,11 @@ framework boundary already did. On the canonical Go struct
 (`agentic.ToolDefinition`) the field *is* `omitempty`, so an undeclared tool
 carries no key and an unrecognized value survives decode as-received — which is
 why Rule 2 says to read it through `Canonical()` there.
+
+The framework subscribes only to the subject resolved from the `tool.list`
+`nats-request` port. It does not also answer the former default subject, add an
+alias, or repair a legacy kind `nats` declaration. A custom subject remains valid
+when the override retains kind `nats-request`.
 
 ## Rule 5 — adopting this changes no enforcement, in either direction
 

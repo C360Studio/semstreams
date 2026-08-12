@@ -201,12 +201,26 @@ func TestDefaultConfig(t *testing.T) {
 		if subjects := facts.NATSSubjects(); len(subjects) == 1 {
 			ins[p.Name] = subjects[0]
 		}
+		if p.Name == "tool.list" {
+			if resolved.Direction != component.DirectionInput {
+				t.Errorf("tool.list direction = %q, want input", resolved.Direction)
+			}
+			if facts.Kind() != component.PortKindNATSRequest {
+				t.Errorf("tool.list kind = %q, want %q", facts.Kind(), component.PortKindNATSRequest)
+			}
+			if facts.InteractionPattern() != component.PatternRequest {
+				t.Errorf("tool.list interaction = %q, want %q", facts.InteractionPattern(), component.PatternRequest)
+			}
+			if _, ok := p.Config.(component.NATSRequestPort); !ok {
+				t.Errorf("tool.list config = %T, want NATSRequestPort", p.Config)
+			}
+		}
 	}
 	if ins["tool.execute"] != "tool.execute.>" {
 		t.Errorf("tool.execute input subject = %q, want tool.execute.>", ins["tool.execute"])
 	}
-	if ins["tool.list"] != "tool.list" {
-		t.Errorf("tool.list input subject = %q, want tool.list", ins["tool.list"])
+	if ins["tool.list"] != "discovery.tool.list" {
+		t.Errorf("tool.list input subject = %q, want discovery.tool.list", ins["tool.list"])
 	}
 	for name, bucket := range map[string]string{"entity_states": "ENTITY_STATES", "agent_loops": "AGENT_LOOPS"} {
 		for _, port := range cfg.Ports.Inputs {

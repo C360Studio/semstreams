@@ -129,7 +129,7 @@ func DefaultConfig() Config {
 			Description: "Tool execution requests (JetStream)",
 		},
 		{
-			Name: "tool.list", Config: component.NATSPort{Subject: "tool.list"}, Description: "Tool discovery request/reply (core NATS). Override to e.g. 'discovery.tool.list' when JetStream streams cover 'tool.>'.",
+			Name: "tool.list", Config: component.NATSRequestPort{Subject: "discovery.tool.list"}, Description: "Tool discovery request/reply",
 		},
 		{Name: "entity_states", Config: component.KVReadPort{Bucket: graph.BucketEntityStates}},
 		{Name: "agent_loops", Config: component.KVReadPort{Bucket: "AGENT_LOOPS"}},

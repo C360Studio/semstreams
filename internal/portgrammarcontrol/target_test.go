@@ -234,6 +234,48 @@ func TestPostFoundationBGraphQueryCutoverAmendmentIsExact(t *testing.T) {
 	}
 }
 
+func TestPostFoundationBToolDiscoveryCutoverAmendmentIsExact(t *testing.T) {
+	t.Parallel()
+
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := LoadPlan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goItems, err := indexItems(plan.GoItems())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(postFoundationBToolDiscoveryGoIdentityRetirements) != 1 {
+		t.Fatalf("tool-discovery Go identity retirements=%d, want 1",
+			len(postFoundationBToolDiscoveryGoIdentityRetirements))
+	}
+	for id := range postFoundationBToolDiscoveryGoIdentityRetirements {
+		item, ok := goItems[id]
+		if !ok {
+			t.Fatalf("tool-discovery Go retirement %s is not a frozen Go identity", id)
+		}
+		if item.Path != "processor/agentic-tools/config.go" ||
+			item.Enclosing != "DefaultConfig@L136" || item.Name != "tool.list" || item.CurrentKind != "nats" {
+			t.Fatalf("tool-discovery Go retirement %s has path/enclosing/name/kind %s/%s/%s/%s",
+				id, item.Path, item.Enclosing, item.Name, item.CurrentKind)
+		}
+	}
+	additions := postFoundationBToolDiscoveryGoIdentityAdditions["processor/agentic-tools/config.go"]
+	if len(postFoundationBToolDiscoveryGoIdentityAdditions) != 1 ||
+		!slices.Equal(additions, []string{"tool.list|NATSRequestPort"}) {
+		t.Fatalf("tool-discovery Go additions=%v, want exact config.go tool.list|NATSRequestPort addition",
+			postFoundationBToolDiscoveryGoIdentityAdditions)
+	}
+	if len(postFoundationBToolDiscoveryGoIdentityRetirements) != len(additions) {
+		t.Fatalf("tool-discovery Go additions=%d, retirements=%d; cutover must remain one-for-one",
+			len(additions), len(postFoundationBToolDiscoveryGoIdentityRetirements))
+	}
+}
+
 func assertEffectiveGraphQueryPortIdentity(t *testing.T, root string, identity postFoundationBGraphQueryPortIdentity) {
 	t.Helper()
 	cfg := loadPostFoundationBConfig(t, root, identity.path)
@@ -571,6 +613,9 @@ func assertGoTargetCompleteness(t *testing.T, root string, plan *Plan) {
 		if _, retired := postFoundationBGraphQueryGoIdentityRetirements[item.RecordID]; retired {
 			continue
 		}
+		if _, retired := postFoundationBToolDiscoveryGoIdentityRetirements[item.RecordID]; retired {
+			continue
+		}
 		if item.Path == "gateway/graph-gateway/component.go" {
 			continue
 		}
@@ -628,6 +673,14 @@ func assertGoTargetCompleteness(t *testing.T, root string, plan *Plan) {
 		}
 	}
 	for path, additions := range postFoundationBGraphQueryGoIdentityAdditions {
+		if wantByPath[path] == nil {
+			wantByPath[path] = map[string]int{}
+		}
+		for _, identity := range additions {
+			wantByPath[path][identity]++
+		}
+	}
+	for path, additions := range postFoundationBToolDiscoveryGoIdentityAdditions {
 		if wantByPath[path] == nil {
 			wantByPath[path] = map[string]int{}
 		}
@@ -737,8 +790,12 @@ func assertGoTargetCompleteness(t *testing.T, root string, plan *Plan) {
 	for _, additions := range postFoundationBGraphQueryGoIdentityAdditions {
 		wantTotal += len(additions)
 	}
+	wantTotal -= len(postFoundationBToolDiscoveryGoIdentityRetirements)
+	for _, additions := range postFoundationBToolDiscoveryGoIdentityAdditions {
+		wantTotal += len(additions)
+	}
 	if total != wantTotal {
-		t.Fatalf("canonical Go PortDefinition identities=%d, want %d after post-Foundation-B graph-query cutover",
+		t.Fatalf("canonical Go PortDefinition identities=%d, want %d after post-Foundation-B amendments",
 			total, wantTotal)
 	}
 }
@@ -1083,6 +1140,19 @@ var postFoundationBGraphQueryGoIdentityAdditions = map[string][]string{
 	"processor/graph-query/component.go":          {"<dynamic>|NATSRequestPort"},
 	"processor/graph-query/query.go":              {"<dynamic>|NATSRequestPort"},
 	"processor/research-graph-classify/config.go": {"searchGraph|NATSRequestPort"},
+}
+
+// postFoundationBToolDiscoveryGoIdentityRetirements records the exact frozen
+// ordinary-NATS discovery identity superseded by the approved request/reply
+// cutover. The immutable Go worklist remains historical evidence.
+var postFoundationBToolDiscoveryGoIdentityRetirements = map[string]struct{}{
+	"go:processor/agentic-tools/config.go#L146C3": {},
+}
+
+// postFoundationBToolDiscoveryGoIdentityAdditions records the one current AST
+// identity that replaces the frozen tool.list row.
+var postFoundationBToolDiscoveryGoIdentityAdditions = map[string][]string{
+	"processor/agentic-tools/config.go": {"tool.list|NATSRequestPort"},
 }
 
 func targetForConfigItem(item WorkItem, dispositions map[string]Disposition) (targetConfigItem, error) {

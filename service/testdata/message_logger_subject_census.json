@@ -52,9 +52,9 @@
   "added_kinds": {
     "jetstream_inputs": 60,
     "jetstream_outputs": 61,
-    "nats_inputs": 18,
+    "nats_inputs": 9,
     "nats_outputs": 28,
-    "nats_request_inputs": 9
+    "nats_request_inputs": 18
   },
   "affected_configs": [
     "configs/agentic.json",
