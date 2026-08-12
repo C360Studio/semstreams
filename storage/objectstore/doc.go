@@ -24,7 +24,8 @@
 // Component:
 //
 // The Component wrapper owns and registers Store and exposes ordinary flow ports:
-//   - "write" port: Fire-and-forget async writes
+//   - Every declared NATS/JetStream input: Fire-and-forget async writes; the
+//     local port name is a flow label, not an operation selector
 //   - "events" port: Publishes storage events (stored, retrieved, deleted)
 //   - "stored" port: Publishes bounded metadata plus StorageReference
 //   - "store-provide" port: Registers the live StreamableStore
@@ -248,8 +249,9 @@
 //
 // The Component exposes ordinary flow ports plus its StoreProvider declaration:
 //
-// Write Port (Fire-and-Forget):
+// Write Inputs (Fire-and-Forget):
 //   - Subject: "{namespace}.{instance}.write" (default: "storage.{instance}.write")
+//   - Name: Any non-reserved local port name; every declared ordinary input binds
 //   - Pattern: Fire-and-forget
 //   - Payload: Raw binary data
 //   - Key: Generated via KeyGenerator

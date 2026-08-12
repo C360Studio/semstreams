@@ -53,8 +53,9 @@ get/store/list request DTOs and handlers, direct responder, NATS API documentati
 `graph/llm.NATSContentFetcher` SHALL be absent.
 
 ObjectStore construction SHALL reject every input named `api` and every `nats-request` input. It SHALL retain ordinary
-`nats` and `jetstream` write inputs. Old explicit request/reply configuration MUST fail startup; no inert input,
-deprecated path, alias, or compatibility shim may remain.
+`nats` and `jetstream` write inputs. Every declared ordinary input SHALL bind as a write lane independent of its local
+port name; local names are flow-graph labels, not operation selectors. Old explicit request/reply configuration MUST
+fail startup; no inert input, deprecated path, alias, or compatibility shim may remain.
 
 #### Scenario: an old ObjectStore API config fails loudly
 
@@ -69,3 +70,21 @@ deprecated path, alias, or compatibility shim may remain.
 - **WHEN** an internal authorized consumer needs stored content
 - **THEN** it resolves that instance through `StoreRegistry`
 - **AND** it may use `StreamableStore.Open` for a streaming read without a NATS request/reply body
+
+#### Scenario: renamed ordinary inputs remain active
+
+- **GIVEN** an ObjectStore component with ordinary NATS or JetStream inputs whose local names are not `write`
+- **WHEN** the component starts
+- **THEN** every declared input binds its configured subject as a write lane
+- **AND** each distinct JetStream stream/subject binding has a legal, deterministic durable identity independent of
+  declaration order and local port name
+- **AND** an existing non-colliding durable identity remains unchanged
+- **AND** stopping the component tears down every local input binding
+
+#### Scenario: duplicate effective write bindings fail before startup
+
+- **GIVEN** two ordinary Core NATS inputs with the same subject
+- **OR** two JetStream inputs with the same stream and subject
+- **WHEN** ObjectStore construction plans its bindings
+- **THEN** construction rejects the duplicate before any store or subscription I/O
+- **AND** the error identifies the declaring ports deterministically

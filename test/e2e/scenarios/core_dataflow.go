@@ -114,6 +114,7 @@ func (s *CoreDataflowScenario) Execute(ctx context.Context) (*Result, error) {
 		{"verify-components", s.executeVerifyComponents},
 		{"send-data", s.executeSendData},
 		{"validate-processing", s.executeValidateProcessing},
+		{"verify-objectstore-raw-lane", s.executeVerifyRawObjectStore},
 		{"verify-websocket-stream", s.executeVerifyWebSocketStream},
 	}
 
