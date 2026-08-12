@@ -4,11 +4,13 @@ package objectstore
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -56,14 +58,31 @@ type Component struct {
 	portsByName     map[string]component.Port
 	portKinds       map[string]component.PortKind
 	portSubjects    map[string]string
+	inputBindings   []objectStoreInputBinding
 
-	// NATS subscriptions
-	writeSub *nats.Subscription
+	// Active write-input bindings. Core NATS subscriptions belong to this
+	// component and must all be unsubscribed on rollback/Stop. JetStream consume
+	// contexts are owned by natsclient and are stopped by their durable identity.
+	writeSubs      []*nats.Subscription
+	writeConsumers []objectStoreConsumerBinding
 
 	// Metrics tracking
 	messagesReceived uint64
 	messagesStored   uint64
 	lastActivity     atomic.Value // stores time.Time
+}
+
+type objectStoreConsumerBinding struct {
+	streamName   string
+	consumerName string
+}
+
+type objectStoreInputBinding struct {
+	portName     string
+	kind         component.PortKind
+	subject      string
+	streamName   string
+	consumerName string
 }
 
 // Event represents a simple storage event published by ObjectStore
@@ -137,6 +156,10 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	if err != nil {
 		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve ports")
 	}
+	inputBindings, err := planObjectStoreInputBindings(instanceName, inputPorts, portKinds, portSubjects)
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "plan input bindings")
+	}
 
 	return &Component{
 		instanceName:    instanceName,
@@ -151,7 +174,128 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		portsByName:     portsByName,
 		portKinds:       portKinds,
 		portSubjects:    portSubjects,
+		inputBindings:   inputBindings,
 	}, nil
+}
+
+const objectStoreConsumerHashDomain = "objectstore-js-consumer-v1"
+
+func planObjectStoreInputBindings(
+	instanceName string,
+	inputs []component.Port,
+	kinds map[string]component.PortKind,
+	subjects map[string]string,
+) ([]objectStoreInputBinding, error) {
+	plans := make([]objectStoreInputBinding, len(inputs))
+	plansByPort := make(map[string]objectStoreInputBinding, len(inputs))
+	duplicatePorts := make(map[string][]string)
+	collisionGroups := make(map[string][]int)
+
+	for i, input := range inputs {
+		plan := objectStoreInputBinding{
+			portName: input.Name,
+			kind:     kinds[input.Name],
+			subject:  subjects[input.Name],
+		}
+		switch plan.kind {
+		case component.PortKindNATS:
+			duplicatePorts["nats\x00"+plan.subject] = append(
+				duplicatePorts["nats\x00"+plan.subject], plan.portName)
+		case component.PortKindJetStream:
+			facts, err := input.Facts()
+			if err != nil {
+				return nil, fmt.Errorf("project input port %q facts: %w", plan.portName, err)
+			}
+			stream, ok := facts.Stream()
+			if !ok {
+				return nil, fmt.Errorf("input port %q has no JetStream declaration", plan.portName)
+			}
+			plan.streamName = stream.Name()
+			duplicateKey := "jetstream\x00" + plan.streamName + "\x00" + plan.subject
+			duplicatePorts[duplicateKey] = append(duplicatePorts[duplicateKey], plan.portName)
+			plan.consumerName = legacyObjectStoreConsumerName(instanceName, plan.subject)
+			collisionKey := plan.streamName + "\x00" + plan.consumerName
+			collisionGroups[collisionKey] = append(collisionGroups[collisionKey], i)
+		default:
+			return nil, fmt.Errorf("input port %q has unsupported kind %q", plan.portName, plan.kind)
+		}
+		plans[i] = plan
+		plansByPort[plan.portName] = plan
+	}
+
+	duplicateKeys := make([]string, 0)
+	for key, ports := range duplicatePorts {
+		if len(ports) > 1 {
+			duplicateKeys = append(duplicateKeys, key)
+		}
+	}
+	sort.Strings(duplicateKeys)
+	if len(duplicateKeys) > 0 {
+		ports := duplicatePorts[duplicateKeys[0]]
+		sort.Strings(ports)
+		plan := plansByPort[ports[0]]
+		if plan.kind == component.PortKindJetStream {
+			return nil, fmt.Errorf(
+				"duplicate ObjectStore JetStream binding stream=%q subject=%q declared by ports %q",
+				plan.streamName, plan.subject, ports)
+		}
+		return nil, fmt.Errorf(
+			"duplicate ObjectStore NATS binding subject=%q declared by ports %q", plan.subject, ports)
+	}
+
+	for _, indexes := range collisionGroups {
+		if len(indexes) < 2 {
+			continue
+		}
+		for _, index := range indexes {
+			plan := &plans[index]
+			canonical := objectStoreConsumerHashDomain + "\x00" + instanceName + "\x00" +
+				plan.streamName + "\x00" + plan.subject
+			digest := sha256.Sum256([]byte(canonical))
+			plan.consumerName = "objectstore-h-" + fmt.Sprintf("%x", digest[:])
+		}
+	}
+
+	consumerOwners := make(map[string]string)
+	for _, plan := range plans {
+		if plan.kind != component.PortKindJetStream {
+			continue
+		}
+		if err := validateObjectStoreConsumerName(plan.consumerName); err != nil {
+			return nil, fmt.Errorf("input port %q planned invalid consumer name %q: %w",
+				plan.portName, plan.consumerName, err)
+		}
+		key := plan.streamName + "\x00" + plan.consumerName
+		if owner, duplicate := consumerOwners[key]; duplicate {
+			ports := []string{owner, plan.portName}
+			sort.Strings(ports)
+			return nil, fmt.Errorf(
+				"ObjectStore JetStream consumer identity collision stream=%q consumer=%q ports=%q",
+				plan.streamName, plan.consumerName, ports)
+		}
+		consumerOwners[key] = plan.portName
+	}
+	return plans, nil
+}
+
+func legacyObjectStoreConsumerName(instanceName, subject string) string {
+	sanitizedSubject := strings.ReplaceAll(subject, ".", "-")
+	sanitizedSubject = strings.ReplaceAll(sanitizedSubject, "*", "all")
+	sanitizedSubject = strings.ReplaceAll(sanitizedSubject, ">", "wildcard")
+	return fmt.Sprintf("objectstore-%s-%s", instanceName, sanitizedSubject)
+}
+
+func validateObjectStoreConsumerName(name string) error {
+	if name == "" {
+		return errors.New("name is required")
+	}
+	if len(name) > 255 {
+		return fmt.Errorf("name is %d bytes, maximum is 255", len(name))
+	}
+	if strings.ContainsAny(name, ">*. /\\\t\r\n") {
+		return errors.New("name contains a character forbidden by NATS")
+	}
+	return nil
 }
 
 func resolveObjectStorePorts(cfg Config, instanceName string) ([]component.Port, []component.Port, map[string]component.Port, map[string]component.PortKind, map[string]string, error) {
@@ -282,36 +426,45 @@ func (c *Component) Start(ctx context.Context) error {
 
 	c.logger.Debug("ObjectStore created successfully", "name", c.instanceName, "bucket", c.config.BucketName)
 
-	// Get raw NATS connection for subscriptions
+	// Get raw NATS connection for subscriptions.
 	nc := c.natsClient.GetConnection()
 
-	// Subscribe to write requests (async fire-and-forget)
-	// Check port type to determine subscription method (JetStream vs core NATS)
-	if c.hasPort("write") {
-		writeSubject := c.getPortSubject("write")
-		c.logger.Debug("Subscribing to write subject", "name", c.instanceName, "subject", writeSubject)
+	// Every declared ordinary input is a write lane. Port names are local graph
+	// labels, not operation selectors; interpreting only the literal name
+	// "write" left valid renamed inputs (including protocol-flow's store_in)
+	// configured and healthy-looking but inert (#848).
+	for _, input := range c.inputBindings {
+		writeSubject := input.subject
+		c.logger.Debug("Subscribing to write subject",
+			"name", c.instanceName,
+			"port", input.portName,
+			"subject", writeSubject)
 
-		if c.isJetStreamInputPort("write") {
-			// JetStream subscription - use durable consumer
-			if err := c.setupJetStreamConsumer(ctx, "write", writeSubject); err != nil {
-				return errs.WrapTransient(err, "Component", "Start", "setup JetStream consumer for write")
+		if input.kind == component.PortKindJetStream {
+			binding, setupErr := c.setupJetStreamConsumer(ctx, input)
+			if setupErr != nil {
+				c.rollbackStart()
+				return errs.WrapTransient(setupErr, "Component", "Start",
+					fmt.Sprintf("setup JetStream consumer for input %s", input.portName))
 			}
-		} else {
-			// Core NATS subscription
-			c.writeSub, err = nc.Subscribe(writeSubject, c.handleWriteRequest)
-			if err != nil {
-				c.logger.Error(
-					"Failed to subscribe to write subject",
-					"name",
-					c.instanceName,
-					"subject",
-					writeSubject,
-					"error",
-					err,
-				)
-				return errs.WrapTransient(err, "Component", "Start", fmt.Sprintf("subscribe to write subject %s", writeSubject))
-			}
+			c.writeConsumers = append(c.writeConsumers, binding)
+			continue
 		}
+
+		writeSub, subscribeErr := nc.Subscribe(writeSubject, c.handleWriteRequest)
+		if subscribeErr != nil {
+			c.logger.Error(
+				"Failed to subscribe to write subject",
+				"name", c.instanceName,
+				"port", input.portName,
+				"subject", writeSubject,
+				"error", subscribeErr,
+			)
+			c.rollbackStart()
+			return errs.WrapTransient(subscribeErr, "Component", "Start",
+				fmt.Sprintf("subscribe to input %s subject %s", input.portName, writeSubject))
+		}
+		c.writeSubs = append(c.writeSubs, writeSub)
 	}
 
 	// NOTE: Stream creation is handled centrally by config.StreamsManager
@@ -334,22 +487,58 @@ func (c *Component) Stop(_ time.Duration) error {
 		return nil
 	}
 
-	// Close underlying store first to clean up cache resources
-	if c.store != nil {
-		if err := c.store.Close(); err != nil {
-			return errs.WrapTransient(err, "Component", "Stop", "close store")
-		}
+	// Stop deliveries before closing the store they call into. Cleanup attempts
+	// every binding even if one Core NATS unsubscribe fails.
+	var stopErrs []error
+	if err := c.stopWriteInputs(); err != nil {
+		stopErrs = append(stopErrs, err)
 	}
 
-	// Then unsubscribe from NATS
-	if c.writeSub != nil {
-		if err := c.writeSub.Unsubscribe(); err != nil {
-			return errs.WrapTransient(err, "Component", "Stop", "unsubscribe from write")
+	// Close the underlying store after no new callbacks can begin.
+	if c.store != nil {
+		if err := c.store.Close(); err != nil {
+			stopErrs = append(stopErrs, fmt.Errorf("close store: %w", err))
 		}
+		c.store = nil
 	}
 
 	c.started = false
+	if err := errors.Join(stopErrs...); err != nil {
+		return errs.WrapTransient(err, "Component", "Stop", "stop write inputs")
+	}
 	return nil
+}
+
+// rollbackStart tears down every input binding established before a later
+// startup failure. The original startup error remains authoritative; cleanup
+// failures are logged because replacing its classification would make the
+// caller retry the wrong condition.
+func (c *Component) rollbackStart() {
+	if err := c.stopWriteInputs(); err != nil {
+		c.logger.Error("Failed to roll back ObjectStore write inputs", "error", err)
+	}
+	if c.store != nil {
+		if err := c.store.Close(); err != nil {
+			c.logger.Error("Failed to close ObjectStore during startup rollback", "error", err)
+		}
+		c.store = nil
+	}
+}
+
+func (c *Component) stopWriteInputs() error {
+	for _, binding := range c.writeConsumers {
+		c.natsClient.StopConsumer(binding.streamName, binding.consumerName)
+	}
+	c.writeConsumers = nil
+
+	var unsubscribeErrs []error
+	for _, sub := range c.writeSubs {
+		if err := sub.Unsubscribe(); err != nil {
+			unsubscribeErrs = append(unsubscribeErrs, err)
+		}
+	}
+	c.writeSubs = nil
+	return errors.Join(unsubscribeErrs...)
 }
 
 // IsStarted returns whether the component is running
@@ -537,38 +726,27 @@ func (c *Component) isJetStreamPort(portName string) bool {
 	return c.portKinds[portName] == component.PortKindJetStream
 }
 
-// isJetStreamInputPort checks if an input port is configured for JetStream
-func (c *Component) isJetStreamInputPort(portName string) bool {
-	return c.portKinds[portName] == component.PortKindJetStream
-}
-
 // setupJetStreamConsumer creates a JetStream consumer for an input port
-func (c *Component) setupJetStreamConsumer(ctx context.Context, portName, subject string) error {
-	port, found := c.portsByName[portName]
+func (c *Component) setupJetStreamConsumer(
+	ctx context.Context,
+	binding objectStoreInputBinding,
+) (objectStoreConsumerBinding, error) {
+	port, found := c.portsByName[binding.portName]
 	if !found || port.Direction != component.DirectionInput {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "setupJetStreamConsumer", fmt.Sprintf("port %s not found", portName))
+		return objectStoreConsumerBinding{}, errs.WrapInvalid(
+			errs.ErrInvalidConfig, "Component", "setupJetStreamConsumer",
+			fmt.Sprintf("port %s not found", binding.portName))
 	}
-	facts, err := port.Facts()
-	if err != nil {
-		return errs.WrapInvalid(err, "Component", "setupJetStreamConsumer", "project input port facts")
-	}
-	stream, ok := facts.Stream()
-	if !ok {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "setupJetStreamConsumer", fmt.Sprintf("port %s is not JetStream", portName))
-	}
-
-	streamName := stream.Name()
+	streamName := binding.streamName
+	subject := binding.subject
 
 	// Wait for stream to be available
 	if err := c.waitForStream(ctx, streamName); err != nil {
-		return errs.WrapTransient(err, "Component", "setupJetStreamConsumer", fmt.Sprintf("stream %s not available", streamName))
+		return objectStoreConsumerBinding{}, errs.WrapTransient(
+			err, "Component", "setupJetStreamConsumer", fmt.Sprintf("stream %s not available", streamName))
 	}
 
-	// Generate unique consumer name
-	sanitizedSubject := strings.ReplaceAll(subject, ".", "-")
-	sanitizedSubject = strings.ReplaceAll(sanitizedSubject, "*", "all")
-	sanitizedSubject = strings.ReplaceAll(sanitizedSubject, ">", "wildcard")
-	consumerName := fmt.Sprintf("objectstore-%s-%s", c.instanceName, sanitizedSubject)
+	consumerName := binding.consumerName
 
 	c.logger.Debug("Setting up JetStream consumer",
 		"stream", streamName,
@@ -583,7 +761,18 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, portName, subjec
 	// (the startup first-message race). An explicit deliver_policy still wins.
 	consumerCfg, consumerErr := component.GetConsumerConfig(port)
 	if consumerErr != nil {
-		return errs.WrapInvalid(consumerErr, "ObjectStoreComponent", "setupJetStreamConsumer", "resolve consumer config")
+		return objectStoreConsumerBinding{}, errs.WrapInvalid(
+			consumerErr, "ObjectStoreComponent", "setupJetStreamConsumer", "resolve consumer config")
+	}
+	facts, factsErr := port.Facts()
+	if factsErr != nil {
+		return objectStoreConsumerBinding{}, errs.WrapInvalid(
+			factsErr, "ObjectStoreComponent", "setupJetStreamConsumer", "project input port facts")
+	}
+	stream, ok := facts.Stream()
+	if !ok {
+		return objectStoreConsumerBinding{}, errs.WrapInvalid(
+			errs.ErrInvalidConfig, "ObjectStoreComponent", "setupJetStreamConsumer", "missing stream facts")
 	}
 	if stream.DeliverPolicy() == "" {
 		consumerCfg.DeliverPolicy = "all"
@@ -599,14 +788,15 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, portName, subjec
 		AutoCreate:    false,
 	}
 
-	err = c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	consumeErr := c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		c.handleJetStreamWriteRequest(msgCtx, msg)
 	})
-	if err != nil {
-		return errs.WrapTransient(err, "Component", "setupJetStreamConsumer", fmt.Sprintf("consumer setup failed for stream %s", streamName))
+	if consumeErr != nil {
+		return objectStoreConsumerBinding{}, errs.WrapTransient(
+			consumeErr, "Component", "setupJetStreamConsumer", fmt.Sprintf("consumer setup failed for stream %s", streamName))
 	}
 
-	return nil
+	return objectStoreConsumerBinding{streamName: streamName, consumerName: consumerName}, nil
 }
 
 // waitForStream waits for a JetStream stream to be available

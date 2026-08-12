@@ -87,6 +87,34 @@ func startWriteComponent(
 	return comp
 }
 
+// startWriteComponentWithInputs boots the production component with the exact
+// ordinary input declarations supplied by the test. Unlike startWriteComponent,
+// it deliberately does not impose the default local label "write".
+func startWriteComponentWithInputs(
+	t *testing.T,
+	ctx context.Context,
+	client *natsclient.Client,
+	bucket string,
+	inputs []component.PortDefinition,
+) *objectstore.Component {
+	t.Helper()
+
+	cfgJSON, err := json.Marshal(objectstore.Config{
+		BucketName: bucket,
+		Ports:      &component.PortConfig{Inputs: inputs},
+	})
+	require.NoError(t, err)
+
+	disc, err := objectstore.NewComponent(cfgJSON, component.Dependencies{NATSClient: client})
+	require.NoError(t, err)
+	comp, ok := disc.(*objectstore.Component)
+	require.True(t, ok)
+	require.NoError(t, comp.Initialize())
+	require.NoError(t, comp.Start(ctx))
+	t.Cleanup(func() { _ = comp.Stop(5 * time.Second) })
+	return comp
+}
+
 // consumerInfo fetches fresh info for the component's durable write consumer.
 func consumerInfo(
 	t *testing.T, ctx context.Context, js jetstream.JetStream, streamName, consumerName string,
@@ -99,6 +127,237 @@ func consumerInfo(
 	ci, err := cons.Info(ctx)
 	require.NoError(t, err)
 	return ci
+}
+
+// TestIntegration_OrdinaryInputsWriteIndependentOfLocalName is the runtime
+// assembly proof for the shipped protocol-flow canary: every declared ordinary
+// input is a write lane. Before #848 Start looked up only the literal local name
+// "write", so all three differently named declarations below were inert and no
+// store_in durable consumer existed.
+func TestIntegration_OrdinaryInputsWriteIndependentOfLocalName(t *testing.T) {
+	client := getSharedNATSClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	const (
+		streamName    = "OS848INPUTS"
+		streamSubject = "os848inputs.mapped"
+		coreSubjectA  = "os848inputs.direct"
+		coreSubjectB  = "os848inputs.archive"
+		bucket        = "OS848_INPUTS"
+	)
+
+	js, err := client.JetStream()
+	require.NoError(t, err)
+	_, err = js.CreateStream(ctx, jetstream.StreamConfig{
+		Name: streamName, Subjects: []string{streamSubject},
+	})
+	require.NoError(t, err)
+
+	comp := startWriteComponentWithInputs(t, ctx, client, bucket, []component.PortDefinition{
+		{Name: "direct_ingest", Config: component.NATSPort{Subject: coreSubjectA}},
+		{Name: "archive_in", Config: component.NATSPort{Subject: coreSubjectB}},
+		{Name: "store_in", Config: component.JetStreamPort{
+			StreamName: streamName, Subjects: []string{streamSubject},
+		}},
+	})
+
+	wantPayloads := [][]byte{
+		[]byte(`{"lane":"direct"}`),
+		[]byte(`{"lane":"archive"}`),
+		[]byte(`{"lane":"mapped"}`),
+	}
+	require.NoError(t, client.Publish(ctx, coreSubjectA, wantPayloads[0]))
+	require.NoError(t, client.Publish(ctx, coreSubjectB, wantPayloads[1]))
+	require.NoError(t, client.PublishToStream(ctx, streamSubject, wantPayloads[2]))
+
+	consumerName := writeConsumerName(streamSubject)
+	pollCtx, cancelPoll := context.WithTimeout(ctx, 20*time.Second)
+	defer cancelPoll()
+	pollTicker := time.NewTicker(50 * time.Millisecond)
+	defer pollTicker.Stop()
+	for {
+		ci := consumerInfo(t, ctx, js, streamName, consumerName)
+		if ci.AckFloor.Consumer == 1 && ci.NumAckPending == 0 && ci.NumPending == 0 {
+			break
+		}
+		select {
+		case <-pollCtx.Done():
+			t.Fatalf("renamed JetStream lane did not ack: ack_floor=%d ack_pending=%d pending=%d",
+				ci.AckFloor.Consumer, ci.NumAckPending, ci.NumPending)
+		case <-pollTicker.C:
+		}
+	}
+
+	obs, err := js.ObjectStore(ctx, bucket)
+	require.NoError(t, err)
+	storeCtx, cancelStore := context.WithTimeout(ctx, 20*time.Second)
+	defer cancelStore()
+	for {
+		listCtx, cancelList := context.WithTimeout(storeCtx, 2*time.Second)
+		entries, listErr := obs.List(listCtx)
+		cancelList()
+		if listErr == nil && len(entries) == len(wantPayloads) {
+			gotPayloads := make(map[string]bool, len(entries))
+			for _, entry := range entries {
+				getCtx, cancelGet := context.WithTimeout(storeCtx, 2*time.Second)
+				got, getErr := obs.GetBytes(getCtx, entry.Name)
+				cancelGet()
+				require.NoError(t, getErr)
+				gotPayloads[string(got)] = true
+			}
+			for _, want := range wantPayloads {
+				require.True(t, gotPayloads[string(want)], "missing payload from active ordinary lane: %s", want)
+			}
+			break
+		}
+		select {
+		case <-storeCtx.Done():
+			t.Fatalf("ordinary inputs stored %d/%d objects (list err: %v)",
+				len(entries), len(wantPayloads), listErr)
+		case <-pollTicker.C:
+		}
+	}
+
+	// Stop must tear down every binding, not only whichever Core NATS
+	// subscription happened to be retained last. The durable consumer remains on
+	// the server by design, but its local consume context is stopped.
+	require.NoError(t, comp.Stop(5*time.Second))
+	require.NoError(t, client.Publish(ctx, coreSubjectA, []byte(`{"lane":"stopped-direct"}`)))
+	require.NoError(t, client.Publish(ctx, coreSubjectB, []byte(`{"lane":"stopped-archive"}`)))
+	require.NoError(t, client.PublishToStream(ctx, streamSubject, []byte(`{"lane":"stopped-mapped"}`)))
+	require.Never(t, func() bool {
+		listCtx, cancelList := context.WithTimeout(ctx, 100*time.Millisecond)
+		defer cancelList()
+		entries, listErr := obs.List(listCtx)
+		return listErr == nil && len(entries) > len(wantPayloads)
+	}, 500*time.Millisecond, 25*time.Millisecond,
+		"stopped ObjectStore component continued consuming an ordinary input")
+}
+
+func TestIntegration_CollidingJetStreamSubjectsUseDistinctStableConsumers(t *testing.T) {
+	client := getSharedNATSClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	const (
+		streamName   = "OS848COLLIDE"
+		subjectDot   = "os848.foo.bar"
+		subjectDash  = "os848.foo-bar"
+		bucket       = "OS848_COLLIDE"
+		consumerDot  = "objectstore-h-cef082fc93dd8cd98bde8bbf49364ce1ca0e87067dfd5c02e4b248c911113c7c"
+		consumerDash = "objectstore-h-510e7fdacd305bd16d7e75c88a05205af4bd4442b0a28e8a8a7cd485917a9ec4"
+	)
+
+	js, err := client.JetStream()
+	require.NoError(t, err)
+	_, err = js.CreateStream(ctx, jetstream.StreamConfig{
+		Name: streamName, Subjects: []string{subjectDot, subjectDash},
+	})
+	require.NoError(t, err)
+
+	forward := []component.PortDefinition{
+		{Name: "dot", Config: component.JetStreamPort{StreamName: streamName, Subjects: []string{subjectDot}}},
+		{Name: "dash", Config: component.JetStreamPort{StreamName: streamName, Subjects: []string{subjectDash}}},
+	}
+	first := startWriteComponentWithInputs(t, ctx, client, bucket, forward)
+
+	wantBodies := [][]byte{
+		[]byte(`{"pass":1,"lane":"dot"}`),
+		[]byte(`{"pass":1,"lane":"dash"}`),
+	}
+	require.NoError(t, client.PublishToStream(ctx, subjectDot, wantBodies[0]))
+	require.NoError(t, client.PublishToStream(ctx, subjectDash, wantBodies[1]))
+	waitForConsumerAckFloor(t, ctx, js, streamName, consumerDot, subjectDot, 1)
+	waitForConsumerAckFloor(t, ctx, js, streamName, consumerDash, subjectDash, 1)
+	waitForStoredBodies(t, ctx, js, bucket, wantBodies)
+	require.NoError(t, first.Stop(5*time.Second))
+
+	// Reversing declaration order must bind the same subject-derived identities,
+	// then both durable consumers must resume and process new work.
+	reverse := []component.PortDefinition{
+		{Name: "renamed_dash", Config: component.JetStreamPort{StreamName: streamName, Subjects: []string{subjectDash}}},
+		{Name: "renamed_dot", Config: component.JetStreamPort{StreamName: streamName, Subjects: []string{subjectDot}}},
+	}
+	second := startWriteComponentWithInputs(t, ctx, client, bucket, reverse)
+	wantBodies = append(wantBodies,
+		[]byte(`{"pass":2,"lane":"dot"}`),
+		[]byte(`{"pass":2,"lane":"dash"}`),
+	)
+	require.NoError(t, client.PublishToStream(ctx, subjectDot, wantBodies[2]))
+	require.NoError(t, client.PublishToStream(ctx, subjectDash, wantBodies[3]))
+	waitForConsumerAckFloor(t, ctx, js, streamName, consumerDot, subjectDot, 2)
+	waitForConsumerAckFloor(t, ctx, js, streamName, consumerDash, subjectDash, 2)
+	waitForStoredBodies(t, ctx, js, bucket, wantBodies)
+	require.NoError(t, second.Stop(5*time.Second))
+}
+
+func waitForConsumerAckFloor(
+	t *testing.T,
+	ctx context.Context,
+	js jetstream.JetStream,
+	streamName, consumerName, wantFilter string,
+	wantFloor uint64,
+) {
+	t.Helper()
+	pollCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		ci := consumerInfo(t, pollCtx, js, streamName, consumerName)
+		require.Equal(t, wantFilter, ci.Config.FilterSubject)
+		if ci.AckFloor.Consumer >= wantFloor && ci.NumAckPending == 0 && ci.NumPending == 0 {
+			return
+		}
+		select {
+		case <-pollCtx.Done():
+			t.Fatalf("consumer %s did not reach ack floor %d: floor=%d ack_pending=%d pending=%d",
+				consumerName, wantFloor, ci.AckFloor.Consumer, ci.NumAckPending, ci.NumPending)
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForStoredBodies(
+	t *testing.T,
+	ctx context.Context,
+	js jetstream.JetStream,
+	bucket string,
+	wantBodies [][]byte,
+) {
+	t.Helper()
+	store, err := js.ObjectStore(ctx, bucket)
+	require.NoError(t, err)
+	pollCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		listCtx, cancelList := context.WithTimeout(pollCtx, 2*time.Second)
+		entries, listErr := store.List(listCtx)
+		cancelList()
+		if listErr == nil && len(entries) == len(wantBodies) {
+			gotBodies := make(map[string]bool, len(entries))
+			for _, entry := range entries {
+				getCtx, cancelGet := context.WithTimeout(pollCtx, 2*time.Second)
+				body, getErr := store.GetBytes(getCtx, entry.Name)
+				cancelGet()
+				require.NoError(t, getErr)
+				gotBodies[string(body)] = true
+			}
+			for _, want := range wantBodies {
+				require.True(t, gotBodies[string(want)], "missing stored body %s", want)
+			}
+			return
+		}
+		select {
+		case <-pollCtx.Done():
+			t.Fatalf("ObjectStore %s has %d/%d bodies (list error: %v)",
+				bucket, len(entries), len(wantBodies), listErr)
+		case <-ticker.C:
+		}
+	}
 }
 
 // TestIntegration_JetStreamWrite_TransientStoreFailureNaksForRedelivery is THE

@@ -79,9 +79,10 @@ Choose caching strategy based on workload characteristics:
 
 ### Input Ports
 
-**write** (NATS/JetStream)
+**Ordinary write inputs** (NATS/JetStream)
 
 - Pattern: Fire-and-forget async writes
+- Name: Any local flow-graph label; every declared ordinary input is active, and the name does not select behavior
 - Subject: `storage.objectstore.write`
 - Payload: Raw message data (any format)
 - Behavior: Stores message and publishes storage event
@@ -207,7 +208,7 @@ components:
 
 **Workflow:**
 
-1. Receive video file on `write` port
+1. Receive video file on any declared ordinary input
 2. Store to ObjectStore with time-bucketed key
 3. Publish `stored` event to `events` port
 4. Cache popular videos for fast retrieval
@@ -229,7 +230,7 @@ components:
 
 **Workflow:**
 
-1. Ingest sensor readings via `write` port
+1. Ingest sensor readings via a declared ordinary input
 2. Store with entity-based keys (sensor ID + timestamp)
 3. Authorized readers resolve the store through StoreRegistry and list recent readings
 4. Expire old cache entries after 5 minutes
@@ -251,7 +252,7 @@ components:
 
 **Workflow:**
 
-1. Append events via `write` port (fire-and-forget)
+1. Append events via a declared ordinary input (fire-and-forget)
 2. Automatic versioning preserves complete history
 3. Authorized readers replay events using the registered Store's List operation
 4. Recent events cached for fast access
@@ -274,7 +275,7 @@ components:
 
 **Workflow:**
 
-1. Send message implementing `ContentStorable` to `write` port
+1. Send message implementing `ContentStorable` to a declared ordinary input
 2. ObjectStore detects interface and calls `StoreContent(ctx, ContentStorable)`
 3. Generates key from `EntityID()` and `ContentType()`
 4. Wraps content in `StoredContent` envelope with metadata
