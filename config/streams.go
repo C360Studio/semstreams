@@ -181,10 +181,25 @@ var governanceVerdictAuditStreamConfig = StreamConfig{
 	Replicas:  1,
 }
 
+// maxDeliveryEventsStreamConfig is the framework-owned ledger for JetStream's
+// terminal consumer-delivery advisories. Its declaration is deliberately fixed:
+// changing the subject, retention, or capacity from application configuration
+// could silently remove the failure signal the framework is promising to expose.
+var maxDeliveryEventsStreamConfig = StreamConfig{
+	Subjects:  []string{"$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.>"},
+	Storage:   "file",
+	MaxAge:    "168h",
+	MaxBytes:  64 * 1024 * 1024,
+	Discard:   StreamDiscardOld,
+	Retention: "limits",
+	Replicas:  1,
+}
+
 // frameworkStream pairs a framework-guaranteed stream with its name.
 type frameworkStream struct {
-	name string
-	cfg  StreamConfig
+	name  string
+	cfg   StreamConfig
+	fixed bool
 }
 
 // FrameworkStreamAutoCreate returns the EFFECTIVE declaration for a
@@ -259,17 +274,22 @@ func FrameworkStreamAutoCreate(cfg *Config, name string) (*natsclient.StreamAuto
 // These are explicit declarations at a named source, not silent defaults: each
 // value is written down above with its rationale, readiness names
 // "framework constant (config/streams.go)" when one is incomplete, and an
-// operator can still override any of them through config.streams.
+// operator can still override ordinary entries through config.streams. Entries
+// marked fixed reject a duplicate configuration declaration instead.
 func frameworkStreams() []frameworkStream {
 	return []frameworkStream{
-		{"LOGS", logsStreamConfig},
-		{"HEALTH", healthStreamConfig},
-		{"METRICS", metricsStreamConfig},
-		{"FLOWS", flowsStreamConfig},
+		{name: "LOGS", cfg: logsStreamConfig},
+		{name: "HEALTH", cfg: healthStreamConfig},
+		{name: "METRICS", cfg: metricsStreamConfig},
+		{name: "FLOWS", cfg: flowsStreamConfig},
 		// GOVERNANCE_VERDICT_AUDIT is a framework guarantee (ADR-055 §3a): the
 		// append-only verdict audit must exist wherever the rule engine can issue
 		// deny/approve verdicts, independent of operator stream config.
-		{"GOVERNANCE_VERDICT_AUDIT", governanceVerdictAuditStreamConfig},
+		{name: "GOVERNANCE_VERDICT_AUDIT", cfg: governanceVerdictAuditStreamConfig},
+		// Unlike ordinary framework defaults, this declaration is immutable.
+		// The observer and its retained source are one framework guarantee, not an
+		// operator-sized application stream.
+		{name: "MAX_DELIVERY_EVENTS", cfg: maxDeliveryEventsStreamConfig, fixed: true},
 	}
 }
 

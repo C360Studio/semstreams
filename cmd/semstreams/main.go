@@ -26,6 +26,7 @@ import (
 	"github.com/c360studio/semstreams/frameworkcapabilities/graphresearch"
 	rulepackcap "github.com/c360studio/semstreams/frameworkcapabilities/rulepacks"
 	"github.com/c360studio/semstreams/internal/builtinprojection"
+	"github.com/c360studio/semstreams/internal/maxdelivery"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
@@ -129,6 +130,11 @@ func run() error {
 	// 7. NOW create the full logger with NATS publisher (no nil, no mutation)
 	logger := setupLogger(cliCfg.LogLevel, cliCfg.LogFormat, natsClient, cfg, metricsRegistry)
 	slog.SetDefault(logger)
+	stopMaxDeliveryObserver, err := maxdelivery.Start(ctx, natsClient, metricsRegistry, logger)
+	if err != nil {
+		return fmt.Errorf("start MaxDeliver observer: %w", err)
+	}
+	defer stopMaxDeliveryObserver()
 
 	slog.Info("SemStreams ready",
 		"version", Version,

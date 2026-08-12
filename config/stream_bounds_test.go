@@ -215,7 +215,7 @@ func TestConfigValidate_FrameworkStreamsSatisfyTheirOwnRequirement(t *testing.T)
 			"a framework constant must report its SOURCE, not an invented owner")
 	}
 	assert.ElementsMatch(t,
-		[]string{"LOGS", "HEALTH", "METRICS", "FLOWS", "GOVERNANCE_VERDICT_AUDIT"}, names)
+		[]string{"LOGS", "HEALTH", "METRICS", "FLOWS", "GOVERNANCE_VERDICT_AUDIT", "MAX_DELIVERY_EVENTS"}, names)
 }
 
 // TestEnsureStreams_UnboundedStreamFailsBeforeAnyJetStreamCall pins that the

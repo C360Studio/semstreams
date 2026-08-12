@@ -30,6 +30,7 @@ import (
 	"github.com/c360studio/semstreams/frameworkcapabilities/graphresearch"
 	rulepackcap "github.com/c360studio/semstreams/frameworkcapabilities/rulepacks"
 	"github.com/c360studio/semstreams/internal/builtinprojection"
+	"github.com/c360studio/semstreams/internal/maxdelivery"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
@@ -129,6 +130,11 @@ func run() error {
 		return err
 	}
 	defer configManager.Stop(5 * time.Second)
+	stopMaxDeliveryObserver, err := maxdelivery.Start(ctx, natsClient, metricsRegistry, logger)
+	if err != nil {
+		return fmt.Errorf("start MaxDeliver observer: %w", err)
+	}
+	defer stopMaxDeliveryObserver()
 
 	componentRegistry, manager, err := setupRegistriesAndManager(cfg)
 	if err != nil {

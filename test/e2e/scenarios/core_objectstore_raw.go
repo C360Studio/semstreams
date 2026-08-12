@@ -14,6 +14,7 @@ import (
 
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/test/e2e/client"
 	e2econfig "github.com/c360studio/semstreams/test/e2e/config"
 )
 
@@ -30,12 +31,179 @@ const (
 	coreRawStorageCallTimeout  = 5 * time.Second
 	coreRawStorageStageTimeout = 2 * time.Minute
 	coreRawStorageCloseTimeout = 5 * time.Second
+	coreMaxDeliveryCapture     = "MAX_DELIVERY_EVENTS"
+	coreMaxDeliveryMetric      = "semstreams_nats_max_delivery_exhaustions_total"
+	coreMaxDeliveryPollTimeout = 45 * time.Second
 )
 
 type rawStorageEnvelope struct {
 	wireID      string
 	messageType string
 	marker      string
+}
+
+// executeVerifyMaxDeliveryVisibility proves #742 against the assembled
+// production binary and shipped ObjectStore lane. Test-side NATS administration
+// updates the existing durable to MaxDeliver=1, then seals the already-open
+// ObjectStore backing stream. This makes Put through the component's held handle
+// fail deterministically without a production fault knob. The server occurrence
+// must remain in the bounded capture ledger and the fixed observer must emit its
+// bounded-label Prometheus counter.
+//
+// This stage is last because sealing is irreversible for this disposable E2E
+// stack. The subsequent core graph-roundtrip scenario does not use ObjectStore.
+func (s *CoreDataflowScenario) executeVerifyMaxDeliveryVisibility(ctx context.Context, result *Result) error {
+	// ObjectStore's production transient disposition is NakWithDelay(30s).
+	// NATS emits MAX_DELIVERIES when that delayed schedule matures and discovers
+	// the MaxDeliver=1 ceiling, so the E2E budget must cover the real delay.
+	stageCtx, cancelStage := context.WithTimeout(ctx, coreMaxDeliveryPollTimeout)
+	defer cancelStage()
+
+	natsClient, err := natsclient.NewClient(e2econfig.DefaultEndpoints.NATS)
+	if err != nil {
+		return fmt.Errorf("create NATS client for MaxDeliver proof: %w", err)
+	}
+	if err := natsClient.Connect(stageCtx); err != nil {
+		return fmt.Errorf("connect to E2E NATS for MaxDeliver proof: %w", err)
+	}
+	defer func() {
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), coreRawStorageCloseTimeout)
+		defer cancelCleanup()
+		_ = natsClient.Close(cleanupCtx)
+	}()
+
+	js, err := natsClient.JetStream()
+	if err != nil {
+		return fmt.Errorf("open JetStream for MaxDeliver proof: %w", err)
+	}
+	capture, err := js.Stream(stageCtx, coreMaxDeliveryCapture)
+	if err != nil {
+		return fmt.Errorf("open framework MaxDeliver capture stream: %w", err)
+	}
+	captureInfo, err := capture.Info(stageCtx)
+	if err != nil {
+		return fmt.Errorf("read MaxDeliver capture baseline: %w", err)
+	}
+	baselineSequence := captureInfo.State.LastSeq
+
+	if err := prepareMaxDeliveryFailure(stageCtx, js); err != nil {
+		return err
+	}
+
+	marker := uuid.NewString()
+	publishAck, err := js.Publish(stageCtx, "mapped.messages", []byte(`{"_e2e_max_delivery_marker":"`+marker+`"}`))
+	if err != nil {
+		return fmt.Errorf("publish through shipped objectstore raw lane: %w", err)
+	}
+
+	advisorySubject := "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES." +
+		coreRawStorageStream + "." + coreRawStorageConsumer
+	var event struct {
+		Type       string `json:"type"`
+		ID         string `json:"id"`
+		Stream     string `json:"stream"`
+		Consumer   string `json:"consumer"`
+		StreamSeq  uint64 `json:"stream_seq"`
+		Deliveries uint64 `json:"deliveries"`
+	}
+	poll := time.NewTicker(coreRawStoragePollInterval)
+	defer poll.Stop()
+	for {
+		captured, getErr := capture.GetLastMsgForSubject(stageCtx, advisorySubject)
+		if getErr == nil && captured.Sequence > baselineSequence {
+			if err := json.Unmarshal(captured.Data, &event); err != nil {
+				return fmt.Errorf("decode captured MaxDeliver advisory: %w", err)
+			}
+			break
+		}
+		select {
+		case <-stageCtx.Done():
+			return fmt.Errorf("MaxDeliver advisory was not retained after sealed ObjectStore failure: %w", stageCtx.Err())
+		case <-poll.C:
+		}
+	}
+	if event.Type != "io.nats.jetstream.advisory.v1.max_deliver" || event.ID == "" ||
+		event.Stream != coreRawStorageStream || event.Consumer != coreRawStorageConsumer ||
+		event.StreamSeq != publishAck.Sequence || event.Deliveries != 1 {
+		return fmt.Errorf("captured MaxDeliver advisory has unexpected typed fields: %+v", event)
+	}
+
+	metrics := client.NewMetricsClient(e2econfig.DefaultEndpoints.Metrics)
+	for {
+		snapshot, metricErr := metrics.FetchSnapshot(stageCtx)
+		if metricErr == nil && maxDeliveryMetricObserved(snapshot, coreRawStorageStream, coreRawStorageConsumer) {
+			break
+		}
+		select {
+		case <-stageCtx.Done():
+			return fmt.Errorf("MaxDeliver occurrence was retained but operator metric was not emitted: %w", stageCtx.Err())
+		case <-poll.C:
+		}
+	}
+
+	result.Details["max_delivery_advisory_id"] = event.ID
+	result.Details["max_delivery_stream"] = event.Stream
+	result.Details["max_delivery_consumer"] = event.Consumer
+	result.Metrics["max_delivery_deliveries"] = event.Deliveries
+	return nil
+}
+
+func prepareMaxDeliveryFailure(ctx context.Context, js jetstream.JetStream) error {
+	consumer, err := js.Consumer(ctx, coreRawStorageStream, coreRawStorageConsumer)
+	if err != nil {
+		return fmt.Errorf("open shipped objectstore consumer for MaxDeliver proof: %w", err)
+	}
+	consumerInfo, err := consumer.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("read shipped objectstore consumer policy: %w", err)
+	}
+	consumerConfig := consumerInfo.Config
+	consumerConfig.MaxDeliver = 1
+	inputStream, err := js.Stream(ctx, coreRawStorageStream)
+	if err != nil {
+		return fmt.Errorf("open shipped objectstore input stream: %w", err)
+	}
+	consumer, err = inputStream.CreateOrUpdateConsumer(ctx, consumerConfig)
+	if err != nil {
+		return fmt.Errorf("set test-only ObjectStore MaxDeliver=1: %w", err)
+	}
+	consumerInfo, err = consumer.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("verify test-only ObjectStore consumer policy: %w", err)
+	}
+	if consumerInfo.Config.MaxDeliver != 1 {
+		return fmt.Errorf("test-side ObjectStore consumer MaxDeliver=%d after update, want 1", consumerInfo.Config.MaxDeliver)
+	}
+
+	backing, err := js.Stream(ctx, "OBJ_"+coreRawStorageBucket)
+	if err != nil {
+		return fmt.Errorf("open shipped objectstore backing stream: %w", err)
+	}
+	backingInfo, err := backing.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("read shipped objectstore backing stream: %w", err)
+	}
+	sealed := backingInfo.Config
+	sealed.Sealed = true
+	if _, err := js.UpdateStream(ctx, sealed); err != nil {
+		return fmt.Errorf("seal shipped objectstore backing stream: %w", err)
+	}
+	return nil
+}
+
+func maxDeliveryMetricObserved(snapshot *client.MetricsSnapshot, stream, consumer string) bool {
+	if snapshot == nil {
+		return false
+	}
+	for _, metric := range snapshot.Metrics {
+		if metric.Name != coreMaxDeliveryMetric || metric.Value < 1 {
+			continue
+		}
+		if metric.Labels["stream"] == stream && metric.Labels["consumer"] == consumer {
+			return true
+		}
+	}
+	return false
 }
 
 type rawStoredObject struct {

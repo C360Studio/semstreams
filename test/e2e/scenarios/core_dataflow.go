@@ -116,6 +116,7 @@ func (s *CoreDataflowScenario) Execute(ctx context.Context) (*Result, error) {
 		{"validate-processing", s.executeValidateProcessing},
 		{"verify-objectstore-raw-lane", s.executeVerifyRawObjectStore},
 		{"verify-websocket-stream", s.executeVerifyWebSocketStream},
+		{"verify-max-delivery-visibility", s.executeVerifyMaxDeliveryVisibility},
 	}
 
 	// Execute each stage
