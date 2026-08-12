@@ -71,8 +71,23 @@ func TestComponent_InputPorts(t *testing.T) {
 		t.Errorf("tool.execute stream = %s, want AGENT", jsConfig.StreamName)
 	}
 
-	if _, ok := byName["tool.list"]; !ok {
-		t.Errorf("expected input port tool.list for discovery request/reply, got %v", byName)
+	toolList, ok := byName["tool.list"]
+	if !ok {
+		t.Fatalf("expected input port tool.list for discovery request/reply, got %v", byName)
+	}
+	toolListFacts, err := toolList.Facts()
+	if err != nil {
+		t.Fatalf("tool.list facts: %v", err)
+	}
+	if toolList.Direction != component.DirectionInput ||
+		toolListFacts.Kind() != component.PortKindNATSRequest ||
+		toolListFacts.InteractionPattern() != component.PatternRequest {
+		t.Errorf("tool.list resolved contract = direction %q kind %q interaction %q, want input/%q/%q",
+			toolList.Direction, toolListFacts.Kind(), toolListFacts.InteractionPattern(),
+			component.PortKindNATSRequest, component.PatternRequest)
+	}
+	if subjects := toolListFacts.NATSSubjects(); len(subjects) != 1 || subjects[0] != "discovery.tool.list" {
+		t.Errorf("tool.list subjects = %v, want [discovery.tool.list]", subjects)
 	}
 	for name, bucket := range map[string]string{"entity_states": "ENTITY_STATES", "agent_loops": "AGENT_LOOPS"} {
 		port, ok := byName[name]

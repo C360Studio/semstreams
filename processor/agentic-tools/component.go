@@ -73,6 +73,13 @@ type consumerInfo struct {
 	consumerName string
 }
 
+type consumerSetup struct {
+	port           component.Port
+	streamName     string
+	subject        string
+	consumerConfig component.ConsumerConfig
+}
+
 // NewComponent creates a new agentic-tools processor component
 func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
 	defaults := DefaultConfig()
@@ -159,43 +166,28 @@ func (c *Component) Start(ctx context.Context) error {
 		return errs.WrapFatal(errs.ErrNoConnection, "Component", "Start", "check NATS client")
 	}
 
-	// Set up consumers for input ports
-	for _, port := range c.inputs {
-		facts, err := port.Facts()
-		if err != nil {
-			return err
-		}
-		if facts.Kind() == component.PortKindJetStream {
-			if err := c.setupConsumer(ctx, port); err != nil {
-				return errs.Wrap(err, "Component", "Start", fmt.Sprintf("setup consumer for %s", port.Name))
-			}
-		}
+	// Resolve and validate every required startup fact before allocating the
+	// discovery subscription or any local JetStream consumer.
+	toolListSubject, consumers, err := c.startupPlan()
+	if err != nil {
+		return err
 	}
 
-	// tool.list for request/reply discovery.
-	// Port name is "tool.list" in DefaultConfig; override the subject if your
-	// JetStream stream subjects include "tool.>" or similar patterns that
-	// would capture the request/reply before the core NATS handler responds
-	// (e.g., override to "discovery.tool.list").
-	toolListSubject := "tool.list"
-	for _, port := range c.inputs {
-		if port.Name == "tool.list" {
-			facts, factsErr := port.Facts()
-			if factsErr != nil {
-				return factsErr
-			}
-			if subjects := facts.NATSSubjects(); len(subjects) == 1 {
-				toolListSubject = subjects[0]
-			}
-			break
-		}
-	}
+	// tool.list request/reply discovery is bound exclusively by its resolved
+	// typed input port. There is no subject fallback or legacy alias.
 	sub, err := c.natsClient.SubscribeForRequests(ctx, toolListSubject, c.handleToolListRequest)
 	if err != nil {
-		c.logger.Warn("Failed to subscribe to tool.list", "error", err, "subject", toolListSubject)
-	} else {
-		c.toolListSub = sub
-		c.logger.Info("Subscribed to tool.list", "subject", toolListSubject)
+		c.cleanupLocked(0, false)
+		return errs.WrapTransient(err, "Component", "Start", "subscribe to tool.list discovery")
+	}
+	c.toolListSub = sub
+	c.logger.Info("Subscribed to tool.list", "subject", toolListSubject)
+
+	for _, consumer := range consumers {
+		if err := c.setupConsumer(ctx, consumer); err != nil {
+			c.cleanupLocked(0, false)
+			return errs.Wrap(err, "Component", "Start", fmt.Sprintf("setup consumer for %s", consumer.port.Name))
+		}
 	}
 
 	// Tool registration happens in main.go via executors.RegisterAll before
@@ -210,18 +202,68 @@ func (c *Component) Start(ctx context.Context) error {
 	return nil
 }
 
+func (c *Component) startupPlan() (string, []consumerSetup, error) {
+	var toolListSubject string
+	consumers := make([]consumerSetup, 0, len(c.inputs))
+	for _, port := range c.inputs {
+		facts, err := port.Facts()
+		if err != nil {
+			return "", nil, errs.WrapInvalid(err, "Component", "Start", fmt.Sprintf("resolve facts for port %s", port.Name))
+		}
+		if port.Name == "tool.list" {
+			if port.Direction != component.DirectionInput ||
+				facts.Kind() != component.PortKindNATSRequest ||
+				facts.InteractionPattern() != component.PatternRequest {
+				return "", nil, errs.WrapInvalid(
+					fmt.Errorf("port %q expected input kind %q with request interaction, observed direction %q kind %q interaction %q",
+						port.Name, component.PortKindNATSRequest, port.Direction, facts.Kind(), facts.InteractionPattern()),
+					"Component", "Start", "resolve tool.list request port",
+				)
+			}
+			subjects := facts.NATSSubjects()
+			if len(subjects) != 1 || subjects[0] == "" {
+				return "", nil, errs.WrapInvalid(
+					fmt.Errorf("tool.list must declare exactly one NATS request subject"),
+					"Component", "Start", "resolve tool.list request subject",
+				)
+			}
+			toolListSubject = subjects[0]
+			continue
+		}
+		if facts.Kind() != component.PortKindJetStream {
+			continue
+		}
+		stream, ok := facts.Stream()
+		if !ok || len(stream.Subjects()) != 1 {
+			return "", nil, errs.WrapInvalid(
+				fmt.Errorf("port %s must declare one JetStream subject", port.Name),
+				"Component", "Start", "validate consumer facts",
+			)
+		}
+		consumerConfig, err := component.GetConsumerConfig(port)
+		if err != nil {
+			return "", nil, errs.WrapInvalid(err, "Component", "Start", fmt.Sprintf("validate consumer config for %s", port.Name))
+		}
+		consumers = append(consumers, consumerSetup{
+			port:           port,
+			streamName:     stream.Name(),
+			subject:        stream.Subjects()[0],
+			consumerConfig: consumerConfig,
+		})
+	}
+	if toolListSubject == "" {
+		return "", nil, errs.WrapInvalid(
+			fmt.Errorf("tool.list input port is required"),
+			"Component", "Start", "resolve tool.list request port",
+		)
+	}
+	return toolListSubject, consumers, nil
+}
+
 // setupConsumer sets up a JetStream consumer for an input port
-func (c *Component) setupConsumer(ctx context.Context, port component.Port) error {
-	facts, err := port.Facts()
-	if err != nil {
-		return err
-	}
-	stream, ok := facts.Stream()
-	if !ok || len(stream.Subjects()) != 1 {
-		return fmt.Errorf("port %s must declare one JetStream subject", port.Name)
-	}
-	streamName := stream.Name()
-	subject := stream.Subjects()[0]
+func (c *Component) setupConsumer(ctx context.Context, setup consumerSetup) error {
+	streamName := setup.streamName
+	subject := setup.subject
 
 	// Wait for stream to be available
 	if err := c.waitForStream(ctx, streamName); err != nil {
@@ -241,10 +283,7 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port) erro
 
 	// Get consumer config from port definition (allows user configuration)
 	// Defaults to "new" - only process new tool calls, don't replay old ones
-	consumerCfg, consumerErr := component.GetConsumerConfig(port)
-	if consumerErr != nil {
-		return errs.WrapInvalid(consumerErr, "Component", "setupConsumer", "resolve consumer config")
-	}
+	consumerCfg := setup.consumerConfig
 
 	// Per-component defaults preserved as fallbacks so zero-config
 	// deployments behave identically to pre-port-config builds. The 5m
@@ -290,7 +329,7 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port) erro
 	// "always ack on completion" semantics. A future PR can differentiate
 	// success/failure semantics by returning err on tool-execution
 	// failure, but that's a behaviour change beyond this PR's scope.
-	err = c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err := c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		if hbErr := natsclient.ConsumeWithHeartbeat(msgCtx, msg, heartbeatInterval,
 			func(workCtx context.Context) error {
 				c.handleToolCall(workCtx, msg.Data())
@@ -362,7 +401,11 @@ func (c *Component) Stop(timeout time.Duration) error {
 	if !c.running {
 		return nil
 	}
+	c.cleanupLocked(timeout, c.config.DeleteConsumerOnStop)
+	return nil
+}
 
+func (c *Component) cleanupLocked(timeout time.Duration, deleteDurable bool) {
 	// Unsubscribe from tool.list request handler
 	if c.toolListSub != nil {
 		if err := c.toolListSub.Unsubscribe(); err != nil {
@@ -373,7 +416,7 @@ func (c *Component) Stop(timeout time.Duration) error {
 
 	// Stop all JetStream consumers
 	for _, info := range c.consumerInfos {
-		if c.config.DeleteConsumerOnStop {
+		if deleteDurable {
 			// Delete consumer from server (for test cleanup)
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			if err := c.natsClient.StopAndDeleteConsumer(ctx, info.streamName, info.consumerName); err != nil {
@@ -391,7 +434,6 @@ func (c *Component) Stop(timeout time.Duration) error {
 	c.consumerInfos = nil
 
 	c.running = false
-	return nil
 }
 
 // handleToolCall processes a tool call request

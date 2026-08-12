@@ -19,9 +19,11 @@ import (
 //	    "subjects":["tool.result.*"], "stream_name":"AGENT"}}]}}
 //
 // silently dropped stream_name on unmarshal. EnsureStreams would then fall
-// back to DeriveStreamName("tool.result.*") = "TOOL", create a colliding
-// TOOL stream, and tool.result publishes never reached subscribers
-// because AGENT's "tool.>" capture already covered the subject.
+// back to DeriveStreamName("tool.result.*") = "TOOL" and create a colliding
+// TOOL stream. At the time, AGENT's broad "tool.>" coverage already captured
+// the subject, so tool.result publishes never reached subscribers. Current
+// shipped guidance uses the explicit "tool.execute.>" and "tool.result.>"
+// families; the historical shadow-struct regression remains the test target.
 //
 // Test discipline (per feedback memory):
 // "For every operator-configurable field, there must be a test that loads

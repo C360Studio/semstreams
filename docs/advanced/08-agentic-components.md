@@ -330,6 +330,7 @@ and returns results.
 | Port | Type | Subject | Description |
 |------|------|---------|-------------|
 | tool_execute | jetstream | tool.execute.> | Tool execution requests |
+| tool.list | nats-request | discovery.tool.list | Tool discovery request/reply |
 
 **Output Ports**:
 
@@ -347,7 +348,8 @@ and returns results.
   "consumer_name_suffix": "",
   "ports": {
     "inputs": [
-      {"name":"tool_execute","config":{"kind":"jetstream","subjects":["tool.execute.>"]}}
+      {"name":"tool_execute","config":{"kind":"jetstream","subjects":["tool.execute.>"]}},
+      {"name":"tool.list","config":{"kind":"nats-request","subject":"discovery.tool.list"}}
     ],
     "outputs": [
       {"name":"tool_result","config":{"kind":"jetstream","subjects":["tool.result.*"]}}
@@ -355,6 +357,13 @@ and returns results.
   }
 }
 ```
+
+The logical discovery port name remains `tool.list`; its default request address
+is `discovery.tool.list`. A custom subject override must retain kind
+`nats-request`. Kind `nats` is not a compatible spelling and fails component
+startup. The runtime subscribes only to the resolved subject and provides no
+legacy responder at the former default address. See the
+[tool-discovery migration note](../operations/migration-tool-discovery-default.md).
 
 **Configuration Options**:
 
@@ -579,7 +588,7 @@ Configure the AGENT stream for your deployment:
 ```json
 {
   "name": "AGENT",
-  "subjects": ["agent.>", "tool.>"],
+  "subjects": ["agent.>", "tool.execute.>", "tool.result.>"],
   "retention": "limits",
   "max_age": "1h",
   "max_msgs": 100000,
@@ -588,6 +597,10 @@ Configure the AGENT stream for your deployment:
   "replicas": 1
 }
 ```
+
+Discovery request/reply is not stream traffic. Keep `discovery.tool.list` out of
+the AGENT stream; the explicit execution and result families above replace the
+stale `tool.>` guidance.
 
 | Setting | Production | Development |
 |---------|------------|-------------|

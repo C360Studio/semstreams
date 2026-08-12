@@ -385,22 +385,9 @@ func (s *Scenario) verifyRegisteredTools(ctx context.Context, result *scenarios.
 	return nil
 }
 
-// toolListSubject is the configurable default discovery request/reply subject.
-// This stage deliberately exercises the default so it remains a regression
-// guard for the shipped stream-capture contract.
-//
-// Every shipped TOOL stream must cover exactly `tool.execute.>` and
-// `tool.result.>`, leaving default `tool.list` on core NATS. If a deployment
-// widens TOOL back to `tool.>`, JetStream captures this request and answers with
-// a publish ack (`{"stream":"TOOL","seq":N}`) before the component's core-NATS
-// responder sees it, silently, because the subscription itself succeeds.
-//
-// An earlier revision of this stage pointed at an overridden subject so it
-// would pass. That was a workaround masking the defect the stage had just
-// found: it made the tier green while every real deployment on the default
-// subject still had no discovery. This stage therefore stays on default
-// `tool.list`; its shipped-config regression remedy is narrowing TOOL subjects.
-const toolListSubject = "tool.list"
+// toolListSubject is the typed request/reply discovery default. This stage
+// deliberately exercises the shipped default rather than a scenario override.
+const toolListSubject = "discovery.tool.list"
 
 // verifyToolEffectCatalog asserts the operator-visible discovery catalog carries
 // a resolved effect classification for every tool (gh#749, ADR-089).

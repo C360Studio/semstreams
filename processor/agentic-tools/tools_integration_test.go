@@ -671,12 +671,17 @@ func TestIntegration_ToolConcurrentExecution(t *testing.T) {
 
 // TestIntegration_ToolListRequestReply tests tool.list request/reply for tool discovery
 func TestIntegration_ToolListRequestReply(t *testing.T) {
-	natsClient := getSharedNATSClient(t)
+	testClient := natsclient.NewTestClient(t,
+		natsclient.WithJetStream(),
+		natsclient.WithStreams(natsclient.TestStreamConfig{
+			Name: "AGENT", Subjects: []string{"agent.>", "tool.execute.>", "tool.result.>"},
+		}),
+	)
+	natsClient := testClient.Client
 
-	// Use unique subject to avoid interference from other tests sharing the NATS connection.
-	// tool.list uses core NATS request/reply (not JetStream), so multiple subscribers
-	// on the same subject would cause unpredictable responses.
-	toolListSubject := "tool.list.list-req-test"
+	// Use a same-kind custom request subject to prove the typed port remains
+	// runtime-configurable without retaining the old default as an alias.
+	toolListSubject := "discovery.tool.list.list-req-test"
 
 	config := agentictools.Config{
 		Ports: &component.PortConfig{
@@ -685,7 +690,7 @@ func TestIntegration_ToolListRequestReply(t *testing.T) {
 					Name: "tool.execute", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.execute.>"}}, Required: true,
 				},
 				{
-					Name: "tool.list", Config: component.NATSPort{Subject: toolListSubject}, Required: false,
+					Name: "tool.list", Config: component.NATSRequestPort{Subject: toolListSubject}, Required: false,
 				},
 			},
 			Outputs: []component.PortDefinition{
@@ -767,6 +772,50 @@ func TestIntegration_ToolListRequestReply(t *testing.T) {
 		}
 	}
 	assert.True(t, foundInternalTool, "Response should include internal tool")
+
+	_, err = natsClient.Request(ctx, "tool.list", []byte("{}"), 100*time.Millisecond)
+	require.Error(t, err, "legacy tool.list subject must not retain a fallback responder")
+	_, err = natsClient.Request(ctx, "discovery.tool.list", []byte("{}"), 100*time.Millisecond)
+	require.Error(t, err, "new default subject must not remain as an alias for a custom override")
+}
+
+func TestIntegration_ToolListDefaultDoesNotServeLegacySubject(t *testing.T) {
+	testClient := natsclient.NewTestClient(t,
+		natsclient.WithJetStream(),
+		natsclient.WithStreams(natsclient.TestStreamConfig{
+			Name: "AGENT", Subjects: []string{"agent.>", "tool.execute.>", "tool.result.>"},
+		}),
+	)
+	natsClient := testClient.Client
+	config := agentictools.DefaultConfig()
+	config.ConsumerNameSuffix = "default-list-req-test"
+	rawConfig, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	comp, err := agentictools.NewComponent(rawConfig, component.Dependencies{
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+	})
+	require.NoError(t, err)
+	lifecycle, ok := comp.(component.LifecycleComponent)
+	require.True(t, ok)
+	require.NoError(t, lifecycle.Initialize())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	require.NoError(t, lifecycle.Start(ctx))
+	defer lifecycle.Stop(5 * time.Second)
+
+	retryConfig := natsclient.DefaultRetryConfig()
+	retryConfig.InitialBackoff = 100 * time.Millisecond
+	retryConfig.MaxRetries = 5
+	_, err = natsClient.RequestWithRetry(
+		ctx, "discovery.tool.list", []byte("{}"), 2*time.Second, retryConfig,
+	)
+	require.NoError(t, err, "new default discovery subject must have a responder")
+
+	_, err = natsClient.Request(ctx, "tool.list", []byte("{}"), 100*time.Millisecond)
+	require.Error(t, err, "old default tool.list subject must have no responder")
 }
 
 // TestIntegration_SharedRegistryTools tests that tools registered in the

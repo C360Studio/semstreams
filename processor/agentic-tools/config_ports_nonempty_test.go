@@ -49,11 +49,49 @@ func TestNewComponentMergesCanonicalPortOverridesIntoDefaults(t *testing.T) {
 	t.Fatal("merged outputs omit tool.result")
 }
 
+func TestNewComponentAcceptsToolListRequestPortOverride(t *testing.T) {
+	rawConfig, err := json.Marshal(agentictools.Config{
+		Ports: &component.PortConfig{Inputs: []component.PortDefinition{{
+			Name: "tool.list", Config: component.NATSRequestPort{Subject: "custom.discovery.tool.list"},
+		}}},
+		Timeout: "60s",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := agentictools.NewComponent(rawConfig, component.Dependencies{})
+	if err != nil {
+		t.Fatalf("NewComponent() request-port override error = %v", err)
+	}
+	for _, port := range created.InputPorts() {
+		if port.Name != "tool.list" {
+			continue
+		}
+		facts, factsErr := port.Facts()
+		if factsErr != nil {
+			t.Fatal(factsErr)
+		}
+		if port.Direction != component.DirectionInput ||
+			facts.Kind() != component.PortKindNATSRequest ||
+			facts.InteractionPattern() != component.PatternRequest {
+			t.Fatalf("tool.list override contract = direction %q kind %q interaction %q",
+				port.Direction, facts.Kind(), facts.InteractionPattern())
+		}
+		if subjects := facts.NATSSubjects(); len(subjects) != 1 || subjects[0] != "custom.discovery.tool.list" {
+			t.Fatalf("tool.list override subjects = %v, want [custom.discovery.tool.list]", subjects)
+		}
+		return
+	}
+	t.Fatal("merged inputs omit tool.list")
+}
+
 func TestNewComponentRejectsNoncanonicalPortOverrides(t *testing.T) {
 	tests := []struct {
-		name    string
-		ports   func() *component.PortConfig
-		wantErr string
+		name     string
+		ports    func() *component.PortConfig
+		wantErr  string
+		alsoWant []string
 	}{
 		{
 			name: "renamed ports",
@@ -73,6 +111,20 @@ func TestNewComponentRejectsNoncanonicalPortOverrides(t *testing.T) {
 				return ports
 			},
 			wantErr: "does not match default kind",
+		},
+		{
+			name: "legacy tool list nats kind",
+			ports: func() *component.PortConfig {
+				ports := agentictools.DefaultConfig().Ports
+				ports.Inputs[1].Config = component.NATSPort{Subject: "tool.list"}
+				return ports
+			},
+			wantErr: "does not match default kind",
+			alsoWant: []string{
+				`port "tool.list"`,
+				`default kind "nats-request"`,
+				`override kind "nats"`,
+			},
 		},
 		{
 			name: "direction change",
@@ -109,6 +161,11 @@ func TestNewComponentRejectsNoncanonicalPortOverrides(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), test.wantErr) {
 				t.Fatalf("NewComponent() error = %v, want substring %q", err, test.wantErr)
+			}
+			for _, want := range test.alsoWant {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("NewComponent() error = %v, want additional substring %q", err, want)
+				}
 			}
 		})
 	}
