@@ -165,6 +165,12 @@ func run() error {
 	// Build the shared tool registry and register builtins BEFORE
 	// service deps so component construction can resolve via
 	// deps.ToolRegistry. Mirrors cmd/semstreams/main.go — see ADR-029.
+	personaMgr := buildPersonaManager(natsClient, logger)
+	if personaMgr != nil {
+		if err := persona.LoadFromDirectory(ctx, "configs/personas/fragments", personaMgr, logger); err != nil {
+			logger.Warn("persona file loader encountered errors", slog.Any("error", err))
+		}
+	}
 	toolRegistry := agentictools.NewExecutorRegistry()
 	if err := executors.RegisterBuiltins(ctx, toolRegistry, executors.ToolDependencies{
 		NATSClient:              natsClient,
@@ -173,7 +179,7 @@ func run() error {
 		Logger:                  logger,
 		RuleManager:             buildRuleManager(ctx, natsClient, configManager, logger),
 		FlowManager:             buildFlowManager(natsClient, logger),
-		PersonaManager:          buildPersonaManager(natsClient, logger),
+		PersonaManager:          personaMgr,
 		FlowTemplateManager:     buildFlowTemplateManager(natsClient, logger),
 		ComponentRegistry:       componentRegistry,
 		LoopsBucket:             graphresearch.LoopsBucket(cfg),
@@ -332,8 +338,10 @@ func buildFlowManager(natsClient *natsclient.Client, logger *slog.Logger) execut
 	return mgr
 }
 
-// buildPersonaManager mirrors cmd/semstreams/main.go; ADR-029 Pattern B.
-func buildPersonaManager(natsClient *natsclient.Client, logger *slog.Logger) executors.PersonaManager {
+// buildPersonaManager mirrors cmd/semstreams/main.go; ADR-029 Pattern B. It
+// returns the concrete manager so the startup file loader can install the same
+// checked-in persona fragments used by the production composition root.
+func buildPersonaManager(natsClient *natsclient.Client, logger *slog.Logger) *persona.Manager {
 	mgr, err := persona.NewManager(natsClient)
 	if err != nil {
 		logger.Warn("persona CRUD tools disabled: could not initialise persona store",
