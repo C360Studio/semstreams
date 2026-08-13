@@ -30,6 +30,25 @@ func newCompletionTestComponent(t *testing.T) (*Component, *captureSink) {
 		decoder:     message.NewDecoder(reg),
 	}
 	c.sendResponseFn = sink.add
+	c.sendTerminalResponseFn = func(_ context.Context, response agentic.UserResponse, _ string) error {
+		sink.add(response)
+		return nil
+	}
+	c.loadPersistedLoopFn = func(_ context.Context, loopID string) (*agentic.LoopEntity, error) {
+		info := c.loopTracker.getSnapshot(loopID)
+		if info == nil {
+			return nil, nil
+		}
+		return &agentic.LoopEntity{
+			ID:            loopID,
+			TaskID:        info.TaskID,
+			State:         agentic.LoopStateExecuting,
+			MaxIterations: info.MaxIterations,
+			UserID:        info.UserID,
+			ChannelType:   info.ChannelType,
+			ChannelID:     info.ChannelID,
+		}, nil
+	}
 	return c, sink
 }
 

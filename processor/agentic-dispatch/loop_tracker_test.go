@@ -578,6 +578,24 @@ func TestLoopTracker_UpdateCompletion_InvalidOutcome(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid outcome")
 }
 
+func TestLoopTracker_UpdateCompletionAtIsIdempotentAndRejectsConflict(t *testing.T) {
+	tracker := NewLoopTracker()
+	tracker.Track(&LoopInfo{LoopID: "loop-1", State: "executing"})
+	at := time.Unix(1_700_000_700, 0).UTC()
+
+	changed, err := tracker.updateCompletionAt("loop-1", agentic.OutcomeSuccess, "done", "", at)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	changed, err = tracker.updateCompletionAt("loop-1", agentic.OutcomeSuccess, "done", "", at)
+	require.NoError(t, err)
+	require.False(t, changed)
+
+	changed, err = tracker.updateCompletionAt("loop-1", agentic.OutcomeFailed, "", "boom", at)
+	require.Error(t, err)
+	require.False(t, changed)
+}
+
 func TestLoopTracker_SetPendingApproval(t *testing.T) {
 	tracker := NewLoopTracker()
 	tracker.Track(&LoopInfo{

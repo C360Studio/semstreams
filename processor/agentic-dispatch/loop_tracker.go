@@ -191,6 +191,20 @@ func (t *LoopTracker) Get(loopID string) *LoopInfo {
 	return t.loops[loopID]
 }
 
+// getSnapshot returns an immutable point-in-time copy for terminal routing.
+// Returning the tracker-owned pointer would race terminal reconciliation with
+// concurrent create/approval updates.
+func (t *LoopTracker) getSnapshot(loopID string) *LoopInfo {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	info := t.loops[loopID]
+	if info == nil {
+		return nil
+	}
+	snapshot := *info
+	return &snapshot
+}
+
 // GetActiveLoop returns the most recent active loop for a user/channel
 func (t *LoopTracker) GetActiveLoop(userID, channelID string) string {
 	t.mu.RLock()
@@ -262,8 +276,16 @@ func (t *LoopTracker) UpdateIterations(loopID string, iterations int) {
 // the outcome AND clears any stale PendingApproval — once a loop has
 // completed, an approval request against it is meaningless.
 func (t *LoopTracker) UpdateCompletion(loopID, outcome, result, errMsg string) error {
+	_, err := t.updateCompletionAt(loopID, outcome, result, errMsg, time.Now())
+	return err
+}
+
+// updateCompletionAt applies a terminal projection exactly once. The boolean
+// reports whether this call performed the transition, allowing callers to keep
+// process-local gauges idempotent across JetStream redelivery.
+func (t *LoopTracker) updateCompletionAt(loopID, outcome, result, errMsg string, completedAt time.Time) (bool, error) {
 	if !isValidOutcome(outcome) {
-		return errs.WrapInvalid(fmt.Errorf("invalid outcome: %s", outcome), "LoopTracker", "UpdateCompletion", "validate outcome")
+		return false, errs.WrapInvalid(fmt.Errorf("invalid outcome: %s", outcome), "LoopTracker", "UpdateCompletion", "validate outcome")
 	}
 
 	t.mu.Lock()
@@ -271,13 +293,22 @@ func (t *LoopTracker) UpdateCompletion(loopID, outcome, result, errMsg string) e
 
 	info, ok := t.loops[loopID]
 	if !ok {
-		return errs.WrapInvalid(fmt.Errorf("loop %s not found", loopID), "LoopTracker", "UpdateCompletion", "find loop")
+		return false, errs.WrapInvalid(fmt.Errorf("loop %s not found", loopID), "LoopTracker", "UpdateCompletion", "find loop")
+	}
+
+	if info.Outcome != "" && isTerminalState(info.State) {
+		if info.Outcome == outcome && info.Result == result && info.Error == errMsg && info.CompletedAt.Equal(completedAt) {
+			return false, nil
+		}
+		return false, errs.WrapInvalid(
+			fmt.Errorf("loop %s already has a different terminal projection", loopID),
+			"LoopTracker", "UpdateCompletion", "reject conflicting terminal projection")
 	}
 
 	info.Outcome = outcome
 	info.Result = result
 	info.Error = errMsg
-	info.CompletedAt = time.Now()
+	info.CompletedAt = completedAt
 	info.State = outcomeToState(outcome)
 	info.PendingApproval = nil
 
@@ -290,7 +321,7 @@ func (t *LoopTracker) UpdateCompletion(loopID, outcome, result, errMsg string) e
 			slog.Bool("has_error", errMsg != ""))
 	}
 
-	return nil
+	return true, nil
 }
 
 // SetPendingApproval records the gated tool-call info for a loop

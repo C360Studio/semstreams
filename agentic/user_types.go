@@ -175,12 +175,13 @@ const (
 	ResponseTypeStream = "stream" // Streaming partial content
 )
 
-// UserResponse is sent back to users via their channel
+// UserResponse is sent back to users via their channel. ChannelType and
+// ChannelID form the required delivery address; UserID is optional metadata.
 type UserResponse struct {
 	ResponseID  string `json:"response_id"`
 	ChannelType string `json:"channel_type"`
 	ChannelID   string `json:"channel_id"`
-	UserID      string `json:"user_id"` // who to respond to
+	UserID      string `json:"user_id"` // optional identity of the recipient
 
 	// What we're responding to
 	InReplyTo string `json:"in_reply_to,omitempty"` // message_id or loop_id

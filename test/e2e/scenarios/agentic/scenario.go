@@ -157,6 +157,7 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 		{"capture-baseline", s.captureBaseline},
 		{"inject-task", s.injectTask},
 		{"wait-for-completion", s.waitForCompletion},
+		{"verify-terminal-response", s.verifyTerminalResponse},
 		{"validate-trajectory", s.validateTrajectory},
 		{"verify-graph-triples", s.verifyGraphTriples},
 		{"verify-tool-execution", s.verifyToolExecution},
@@ -432,7 +433,7 @@ func (s *Scenario) verifyComponents(ctx context.Context, result *scenarios.Resul
 }
 
 func requiredComponents() []string {
-	return []string{"agentic-loop", "agentic-model", "rule"}
+	return []string{"agentic-dispatch", "agentic-loop", "agentic-model", "rule"}
 }
 
 // captureBaseline captures metrics baseline before task injection.
@@ -474,12 +475,15 @@ func (s *Scenario) injectTask(ctx context.Context, result *scenarios.Result) err
 }
 
 func newTestTask(now time.Time) agentic.TaskMessage {
+	taskID := fmt.Sprintf("e2e-agentic-%d", now.UnixNano())
 	return agentic.TaskMessage{
-		LoopID: fmt.Sprintf("e2e-loop-%d", now.UnixNano()),
-		TaskID: fmt.Sprintf("e2e-agentic-%d", now.UnixNano()),
-		Role:   "general",
-		Model:  "mock",
-		Prompt: "Analyze the temperature sensor temp-sensor-001. Respond with a brief assessment including valid JSON in your response.",
+		LoopID:      fmt.Sprintf("e2e-loop-%d", now.UnixNano()),
+		TaskID:      taskID,
+		Role:        "general",
+		Model:       "mock",
+		Prompt:      "Analyze the temperature sensor temp-sensor-001. Respond with a brief assessment including valid JSON in your response.",
+		ChannelType: "e2e",
+		ChannelID:   taskID,
 		Tools: []agentic.ToolDefinition{{
 			Name:        "query_entity",
 			Description: "Query the test temperature sensor by its entity ID.",
@@ -493,6 +497,85 @@ func newTestTask(now time.Time) agentic.TaskMessage {
 		}},
 		ToolChoice: &agentic.ToolChoice{Mode: "function", FunctionName: "query_entity"},
 	}
+}
+
+func (s *Scenario) verifyTerminalResponse(ctx context.Context, result *scenarios.Result) error {
+	loopID, _ := result.Details["loop_id"].(string)
+	taskID, _ := result.Details["task_id"].(string)
+	if loopID == "" || taskID == "" {
+		return fmt.Errorf("terminal response proof requires loop_id and task_id")
+	}
+	js, err := s.nats.Client().JetStream()
+	if err != nil {
+		return fmt.Errorf("open JetStream for terminal response proof: %w", err)
+	}
+	agentStream, err := js.Stream(ctx, "AGENT")
+	if err != nil {
+		return fmt.Errorf("open AGENT stream: %w", err)
+	}
+	terminal, err := agentStream.GetLastMsgForSubject(ctx, "agent.complete."+loopID)
+	if err != nil {
+		return fmt.Errorf("read source terminal: %w", err)
+	}
+	var source struct {
+		ID      string `json:"id"`
+		Payload struct {
+			Outcome string `json:"outcome"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(terminal.Data, &source); err != nil {
+		return fmt.Errorf("decode source terminal: %w", err)
+	}
+	if source.ID == "" || source.Payload.Outcome != agentic.OutcomeSuccess {
+		return fmt.Errorf("source terminal id/outcome = %q/%q, want nonempty/success", source.ID, source.Payload.Outcome)
+	}
+
+	userStream, err := js.Stream(ctx, "USER")
+	if err != nil {
+		return fmt.Errorf("open USER stream: %w", err)
+	}
+	responseSubject := "user.response.e2e." + taskID
+	deadline := time.Now().Add(15 * time.Second)
+	var stored *jetstream.RawStreamMsg
+	for time.Now().Before(deadline) {
+		stored, err = userStream.GetLastMsgForSubject(ctx, responseSubject)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, jetstream.ErrMsgNotFound) {
+			return fmt.Errorf("read terminal-derived response: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	if stored == nil {
+		return fmt.Errorf("terminal-derived response did not publish within 15s")
+	}
+	wantID := "terminal-user-response:" + source.ID
+	if got := stored.Header.Get(nats.MsgIdHdr); got != wantID {
+		return fmt.Errorf("terminal response Nats-Msg-Id = %q, want %q", got, wantID)
+	}
+	var response struct {
+		Payload agentic.UserResponse `json:"payload"`
+	}
+	if err := json.Unmarshal(stored.Data, &response); err != nil {
+		return fmt.Errorf("decode terminal-derived response: %w", err)
+	}
+	if response.Payload.ResponseID != wantID || response.Payload.Type != agentic.ResponseTypeResult ||
+		response.Payload.ChannelType != "e2e" || response.Payload.ChannelID != taskID || response.Payload.UserID != "" {
+		return fmt.Errorf("terminal response projection = id:%q type:%q route:%q/%q user:%q",
+			response.Payload.ResponseID, response.Payload.Type, response.Payload.ChannelType,
+			response.Payload.ChannelID, response.Payload.UserID)
+	}
+	if response.Payload.Content == "" || response.Payload.Timestamp.IsZero() {
+		return fmt.Errorf("terminal response missing result content or terminal timestamp")
+	}
+	result.Details["terminal_response_id"] = wantID
+	result.Details["terminal_response_subject"] = responseSubject
+	return nil
 }
 
 // waitForCompletion waits for agent loop completion

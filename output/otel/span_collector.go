@@ -3,10 +3,15 @@ package otel
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/internal/agentterminal"
+	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/payloadregistry"
 )
 
 // SpanData represents collected span information.
@@ -127,6 +132,7 @@ type SpanCollector struct {
 
 	// Sampling
 	samplingRate float64
+	decoder      *message.Decoder
 
 	// Counters
 	spansCreated   int64
@@ -136,12 +142,21 @@ type SpanCollector struct {
 
 // NewSpanCollector creates a new span collector.
 func NewSpanCollector(serviceName, serviceVersion string, samplingRate float64) *SpanCollector {
+	reg := payloadregistry.New()
+	if err := agentic.RegisterPayloads(reg); err != nil {
+		panic(fmt.Sprintf("otel: register agentic payloads: %v", err))
+	}
+	return newSpanCollector(serviceName, serviceVersion, samplingRate, message.NewDecoder(reg))
+}
+
+func newSpanCollector(serviceName, serviceVersion string, samplingRate float64, decoder *message.Decoder) *SpanCollector {
 	return &SpanCollector{
 		activeSpans:    make(map[string]*SpanData),
 		completedSpans: make([]*SpanData, 0),
 		serviceName:    serviceName,
 		serviceVersion: serviceVersion,
 		samplingRate:   samplingRate,
+		decoder:        decoder,
 	}
 }
 
@@ -181,16 +196,29 @@ func (sc *SpanCollector) ProcessEvent(_ context.Context, data []byte) error {
 
 // ProcessMessage processes a BaseMessage envelope published by the agentic loop.
 // It dispatches on the message category to create or update spans.
-func (sc *SpanCollector) ProcessMessage(_ context.Context, _ string, data []byte) error {
-	// Light envelope unmarshal — only extract type.category and raw payload.
+func (sc *SpanCollector) ProcessMessage(_ context.Context, subject string, data []byte) error {
 	var envelope struct {
 		Type struct {
 			Category string `json:"category"`
 		} `json:"type"`
-		Payload json.RawMessage `json:"payload"`
+		Category string          `json:"category"`
+		Payload  json.RawMessage `json:"payload"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return err
+	}
+
+	// Classification only decides whether this broad input must cross the
+	// shared terminal boundary. Subject and flat discriminators never decide
+	// semantics; Decode remains the sole interpreter and rejects bad wire shapes.
+	if isTerminalCategory(envelope.Type.Category) || isTerminalCategory(envelope.Category) ||
+		strings.HasPrefix(subject, "agent.complete.") || strings.HasPrefix(subject, "agent.failed.") {
+		terminal, err := agentterminal.Decode(sc.decoder, data)
+		if err != nil {
+			return err
+		}
+		sc.endLoopSpanTerminal(terminal)
+		return nil
 	}
 
 	switch envelope.Type.Category {
@@ -200,35 +228,12 @@ func (sc *SpanCollector) ProcessMessage(_ context.Context, _ string, data []byte
 			return err
 		}
 		sc.startLoopSpanFromEvent(&evt)
-
-	case agentic.CategoryLoopCompleted:
-		var evt agentic.LoopCompletedEvent
-		if err := json.Unmarshal(envelope.Payload, &evt); err != nil {
-			return err
-		}
-		sc.endLoopSpanCompleted(&evt)
-
-	case agentic.CategoryLoopFailed:
-		var evt agentic.LoopFailedEvent
-		if err := json.Unmarshal(envelope.Payload, &evt); err != nil {
-			return err
-		}
-		sc.endLoopSpanFailed(&evt)
-
-	case agentic.CategoryLoopCancelled:
-		var evt agentic.LoopCancelledEvent
-		if err := json.Unmarshal(envelope.Payload, &evt); err != nil {
-			return err
-		}
-		sc.endLoopSpanCancelled(&evt)
-
 	case agentic.CategoryToolResult:
 		var evt agentic.ToolResult
 		if err := json.Unmarshal(envelope.Payload, &evt); err != nil {
 			return err
 		}
 		sc.createToolSpanFromResult(&evt)
-
 	case agentic.CategoryContextEvent:
 		var evt agentic.ContextEvent
 		if err := json.Unmarshal(envelope.Payload, &evt); err != nil {
@@ -238,6 +243,67 @@ func (sc *SpanCollector) ProcessMessage(_ context.Context, _ string, data []byte
 	}
 
 	return nil
+}
+
+func isTerminalCategory(category string) bool {
+	switch category {
+	case agentic.CategoryLoopCompleted, agentic.CategoryLoopFailed, agentic.CategoryLoopCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+func (sc *SpanCollector) endLoopSpanTerminal(evt agentterminal.Event) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	span, ok := sc.activeSpans[evt.LoopID]
+	if !ok {
+		return
+	}
+	span.EndTime = evt.TerminalAt
+	span.Attributes["agent.outcome"] = evt.Outcome
+	if evt.Model != "" {
+		span.Attributes["agent.model"] = evt.Model
+	}
+	if evt.Role != "" {
+		span.Attributes["agent.role"] = evt.Role
+	}
+	if evt.Iterations != 0 {
+		span.Attributes["agent.iterations"] = evt.Iterations
+	}
+	if evt.TokensIn != 0 {
+		span.Attributes["agent.tokens_in"] = evt.TokensIn
+	}
+	if evt.TokensOut != 0 {
+		span.Attributes["agent.tokens_out"] = evt.TokensOut
+	}
+	if evt.Prompt != "" {
+		span.Attributes["agent.prompt"] = evt.Prompt
+	}
+	if evt.WorkflowSlug != "" {
+		span.Attributes["agent.workflow_slug"] = evt.WorkflowSlug
+	}
+	if evt.WorkflowStep != "" {
+		span.Attributes["agent.workflow_step"] = evt.WorkflowStep
+	}
+
+	switch evt.Class {
+	case agentterminal.ClassSucceeded:
+		span.Status = SpanStatus{Code: "ok"}
+	case agentterminal.ClassFailed:
+		span.Status = SpanStatus{Code: "error", Message: evt.Error}
+		span.Attributes["agent.error"] = evt.Error
+		span.Attributes["agent.reason"] = evt.Reason
+	case agentterminal.ClassCancelled:
+		span.Status = SpanStatus{Code: "error", Message: "cancelled"}
+		span.Attributes["agent.cancelled_by"] = evt.CancelledBy
+	}
+
+	delete(sc.activeSpans, evt.LoopID)
+	sc.completedSpans = append(sc.completedSpans, span)
+	sc.spansCompleted++
 }
 
 // startLoopSpanFromEvent creates a root span from a typed LoopCreatedEvent.
@@ -275,91 +341,6 @@ func (sc *SpanCollector) startLoopSpanFromEvent(evt *agentic.LoopCreatedEvent) {
 
 	sc.activeSpans[evt.LoopID] = span
 	sc.spansCreated++
-}
-
-// endLoopSpanCompleted completes a loop span from a LoopCompletedEvent.
-func (sc *SpanCollector) endLoopSpanCompleted(evt *agentic.LoopCompletedEvent) {
-	sc.mu.Lock()
-	defer sc.mu.Unlock()
-
-	span, ok := sc.activeSpans[evt.LoopID]
-	if !ok {
-		return
-	}
-
-	span.EndTime = evt.CompletedAt
-	span.Status = SpanStatus{Code: "ok"}
-	span.Attributes["agent.outcome"] = evt.Outcome
-	span.Attributes["agent.model"] = evt.Model
-	span.Attributes["agent.role"] = evt.Role
-	span.Attributes["agent.iterations"] = evt.Iterations
-	span.Attributes["agent.tokens_in"] = evt.TokensIn
-	span.Attributes["agent.tokens_out"] = evt.TokensOut
-	if evt.Prompt != "" {
-		span.Attributes["agent.prompt"] = evt.Prompt
-	}
-	if evt.WorkflowSlug != "" {
-		span.Attributes["agent.workflow_slug"] = evt.WorkflowSlug
-	}
-	if evt.WorkflowStep != "" {
-		span.Attributes["agent.workflow_step"] = evt.WorkflowStep
-	}
-
-	delete(sc.activeSpans, evt.LoopID)
-	sc.completedSpans = append(sc.completedSpans, span)
-	sc.spansCompleted++
-}
-
-// endLoopSpanFailed completes a loop span from a LoopFailedEvent.
-func (sc *SpanCollector) endLoopSpanFailed(evt *agentic.LoopFailedEvent) {
-	sc.mu.Lock()
-	defer sc.mu.Unlock()
-
-	span, ok := sc.activeSpans[evt.LoopID]
-	if !ok {
-		return
-	}
-
-	span.EndTime = evt.FailedAt
-	span.Status = SpanStatus{Code: "error", Message: evt.Error}
-	span.Attributes["agent.outcome"] = evt.Outcome
-	span.Attributes["agent.model"] = evt.Model
-	span.Attributes["agent.role"] = evt.Role
-	span.Attributes["agent.iterations"] = evt.Iterations
-	span.Attributes["agent.tokens_in"] = evt.TokensIn
-	span.Attributes["agent.tokens_out"] = evt.TokensOut
-	span.Attributes["agent.error"] = evt.Error
-	span.Attributes["agent.reason"] = evt.Reason
-	if evt.Prompt != "" {
-		span.Attributes["agent.prompt"] = evt.Prompt
-	}
-
-	delete(sc.activeSpans, evt.LoopID)
-	sc.completedSpans = append(sc.completedSpans, span)
-	sc.spansCompleted++
-}
-
-// endLoopSpanCancelled completes a loop span from a LoopCancelledEvent.
-func (sc *SpanCollector) endLoopSpanCancelled(evt *agentic.LoopCancelledEvent) {
-	sc.mu.Lock()
-	defer sc.mu.Unlock()
-
-	span, ok := sc.activeSpans[evt.LoopID]
-	if !ok {
-		return
-	}
-
-	span.EndTime = evt.CancelledAt
-	span.Status = SpanStatus{Code: "error", Message: "cancelled"}
-	span.Attributes["agent.outcome"] = evt.Outcome
-	span.Attributes["agent.cancelled_by"] = evt.CancelledBy
-	if evt.WorkflowSlug != "" {
-		span.Attributes["agent.workflow_slug"] = evt.WorkflowSlug
-	}
-
-	delete(sc.activeSpans, evt.LoopID)
-	sc.completedSpans = append(sc.completedSpans, span)
-	sc.spansCompleted++
 }
 
 // createToolSpanFromResult creates a self-contained tool span from a ToolResult.

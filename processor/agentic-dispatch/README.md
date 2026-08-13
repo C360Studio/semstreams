@@ -48,6 +48,21 @@ All messaging uses JetStream for durability:
 - Agent tasks published to AGENT stream
 - Completion events consumed from AGENT stream
 
+Terminal responses are projected from the registered production envelope, not
+from the physical subject name. Success becomes a `result`, failure an `error`,
+and cancellation a `status`. Dispatch merges `ChannelType`, `ChannelID`, and
+optional `UserID` independently from the terminal event, the local tracker, and
+`AGENT_LOOPS/<loopID>`. A response requires the channel type and channel ID;
+`UserID` is optional metadata.
+
+Dispatch ACKs a terminal only after any required `UserResponse` receives a
+synchronous JetStream PubAck. Its response ID and `Nats-Msg-Id` are both
+`terminal-user-response:<terminal BaseMessage ID>`, so a redelivery is stable
+inside the USER stream duplicate window. Transient KV/publication failures are
+delayed-NAKed, malformed terminals and routing collisions are Termed, and the
+terminal consumers have unlimited attempts only while the source remains in
+AGENT. See [Agent terminal settlement](../../docs/operations/38-agent-terminal-settlement.md).
+
 Consumer naming: `agentic-dispatch-{port-name}`
 
 ## Built-in Commands
@@ -151,7 +166,8 @@ type CommandConfig struct {
 | `user.response.{channel}.{id}` | Publish | Responses to users |
 | `agent.task.{task_id}` | Publish | Task dispatch |
 | `agent.signal.{loop_id}` | Publish | Signals (cancel, pause) |
-| `agent.complete.{loop_id}` | Subscribe | Completion events |
+| `agent.complete.{loop_id}` | Subscribe | Success and cancellation terminal events |
+| `agent.failed.{loop_id}` | Subscribe | Failure terminal events |
 
 ## Metrics
 
@@ -162,6 +178,7 @@ type CommandConfig struct {
 | `router_tasks_submitted_total` | counter | | Tasks submitted |
 | `router_loops_active` | gauge | | Currently active loops |
 | `router_routing_duration_seconds` | histogram | | Message routing latency |
+| `router_terminal_settlement_total` | counter | `reason` | Terminal validation/routing/publication disposition |
 
 ## Integration Example
 
