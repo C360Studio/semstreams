@@ -173,3 +173,22 @@ LABEL org.opencontainers.image.title="SemStreams" \
       org.opencontainers.image.source="https://github.com/c360/semstreams" \
       org.opencontainers.image.vendor="C360" \
       org.opencontainers.image.licenses="MIT"
+
+# ============================================================================
+# Tagged product-assembly stage for the isolated slow-consumer E2E gate
+# ============================================================================
+FROM builder AS slow-consumer-builder
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+    -tags=e2e_slow_consumer \
+    -ldflags="-w -s \
+      -X main.Version=${VERSION} \
+      -X main.GitCommit=${COMMIT_SHA} \
+      -X main.BuildTime=${BUILD_DATE}" \
+    -o /build/semstreams-slow-consumer-bin \
+    ./cmd/semstreams
+
+FROM production AS e2e-slow-consumer
+
+COPY --from=slow-consumer-builder --chown=semstreams:semstreams \
+    /build/semstreams-slow-consumer-bin /app/semstreams

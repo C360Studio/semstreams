@@ -1,0 +1,49 @@
+# Isolated tagged cmd/semstreams product-assembly proof for GitHub #954.
+services:
+  nats:
+    image: nats:2.14-alpine
+    container_name: semstreams-e2e-slow-consumer-nats
+    command: ["-js", "-sd", "/data", "-m", "8222", "--name", "semstreams-e2e-slow-consumer-nats"]
+    volumes:
+      - nats-semstreams-e2e-slow-consumer-data:/data
+    networks:
+      - semstreams-e2e-slow-consumer-net
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8222/healthz"]
+      interval: 1s
+      timeout: 3s
+      retries: 15
+
+  semstreams:
+    image: c360studio/semstreams:e2e-slow-consumer
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+      target: e2e-slow-consumer
+    container_name: semstreams-e2e-slow-consumer-app
+    command: ["--config", "/app/configs/protocol-flow.json"]
+    depends_on:
+      nats:
+        condition: service_healthy
+    environment:
+      - SEMSTREAMS_NATS_URLS=nats://nats:4222
+      - SEMSTREAMS_CONFIG=/app/configs/protocol-flow.json
+      - SEMSTREAMS_LOG_LEVEL=debug
+    ports:
+      - "38090:8080"
+      - "39100:9090"
+    networks:
+      - semstreams-e2e-slow-consumer-net
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/readyz"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+networks:
+  semstreams-e2e-slow-consumer-net:
+    driver: bridge
+
+volumes:
+  nats-semstreams-e2e-slow-consumer-data:
+    driver: local

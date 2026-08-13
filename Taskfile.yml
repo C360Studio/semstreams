@@ -50,6 +50,8 @@ includes:
     taskfile: ./taskfiles/e2e/common.yml
   e2e:core:
     taskfile: ./taskfiles/e2e/core.yml
+  e2e:slow-consumer:
+    taskfile: ./taskfiles/e2e/slow-consumer.yml
   e2e:structural:
     taskfile: ./taskfiles/e2e/structural.yml
   e2e:statistical:

@@ -45,6 +45,9 @@ type Result struct {
 	Errors   []string       `json:"errors,omitempty"`
 	Warnings []string       `json:"warnings,omitempty"`
 
+	// AssertionsRun is the number of assertions the scenario actually executed.
+	AssertionsRun int `json:"assertions_run,omitempty"`
+
 	// Structured results (new typed format for tiered scenarios)
 	// This is populated alongside Metrics/Details for backward compatibility
 	Structured *TieredResults `json:"structured,omitempty"`

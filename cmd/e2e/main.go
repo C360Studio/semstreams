@@ -229,6 +229,7 @@ func handleListCommand(listScenarios bool) bool {
 	fmt.Println("    core-health     - Component health checks")
 	fmt.Println("    core-dataflow   - UDP → Filter → Map → File pipeline")
 	fmt.Println("    core-graph-roundtrip - Projection write → ENTITY_STATES/index → GraphQL read")
+	fmt.Println("    core-slow-consumer - Assembled slow-consumer attribution")
 	fmt.Println("    core-federation - Edge → Cloud federation via WebSocket")
 	fmt.Println("")
 	fmt.Println("  Tiered (unified scenario with --variant flag):")
@@ -369,6 +370,11 @@ func createScenario(
 			flags.baseURL,
 			strings.TrimRight(flags.baseURL, "/")+"/graph-gateway/graphql",
 		)
+	case "core-slow-consumer", "slow-consumer":
+		return scenarios.NewSlowConsumerAttributionScenario(scenarios.SlowConsumerAttributionConfig{
+			AppContainer: "semstreams-e2e-slow-consumer-app",
+			MetricsURL:   flags.metricsURL,
+		})
 	case "core-federation", "federation":
 		return scenarios.NewCoreFederationScenario(edgeClient, cloudClient, flags.udpEndpoint, flags.wsEndpoint, nil)
 
@@ -502,20 +508,22 @@ func runScenario(ctx context.Context, logger *slog.Logger, scenario scenarios.Sc
 	}
 
 	if err != nil {
-		logger.Error("Scenario failed", "error", err)
+		logger.Error("Scenario failed", "error", err, "assertions_run", assertionsRun(result))
 		return 1
 	}
 
 	if !result.Success {
 		logger.Error("Scenario completed with failure",
 			"error", result.Error,
-			"duration", result.Duration)
+			"duration", result.Duration,
+			"assertions_run", result.AssertionsRun)
 		return 1
 	}
 
 	logger.Info("Scenario completed successfully",
 		"duration", result.Duration,
-		"metrics", result.Metrics)
+		"metrics", result.Metrics,
+		"assertions_run", result.AssertionsRun)
 
 	// Save structured results if output directory is specified and results exist
 	if flags.outputDir != "" && result.Structured != nil {
@@ -540,6 +548,13 @@ func runScenario(ctx context.Context, logger *slog.Logger, scenario scenarios.Sc
 	}
 
 	return 0
+}
+
+func assertionsRun(result *scenarios.Result) int {
+	if result == nil {
+		return 0
+	}
+	return result.AssertionsRun
 }
 
 // saveMetricsDump fetches raw Prometheus metrics and saves them to a file

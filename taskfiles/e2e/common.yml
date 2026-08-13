@@ -26,6 +26,7 @@ tasks:
     cmds:
       - echo "[E2E CLEAN] Cleaning SemStreams E2E environment..."
       - docker compose -f docker/compose/e2e.yml down -v --timeout 15 2>/dev/null || true
+      - docker compose -f docker/compose/e2e-slow-consumer.yml down -v --timeout 15 2>/dev/null || true
       - docker compose -f docker/compose/tiered.yml --profile structural down -v --timeout 15 2>/dev/null || true
       - docker compose -f docker/compose/tiered.yml --profile statistical down -v --timeout 15 2>/dev/null || true
       - docker compose -f docker/compose/tiered.yml --profile semantic down -v --timeout 15 2>/dev/null || true
