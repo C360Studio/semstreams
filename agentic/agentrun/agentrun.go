@@ -19,7 +19,6 @@ package agentrun
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -30,8 +29,10 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/internal/agentterminal"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/vocabulary"
 )
@@ -412,6 +413,7 @@ type MilestoneSubscriber struct {
 	org      string
 	platform string
 	logger   *slog.Logger
+	decoder  *message.Decoder
 }
 
 // NewMilestoneSubscriber constructs a subscriber wired to the given concrete
@@ -441,12 +443,17 @@ func NewMilestoneSubscriberWithRunStateReader(
 	if logger == nil {
 		logger = slog.Default()
 	}
+	reg := payloadregistry.New()
+	if err := agentic.RegisterPayloads(reg); err != nil {
+		panic(fmt.Sprintf("agentrun: register terminal payloads: %v", err))
+	}
 	return &MilestoneSubscriber{
 		runs:     runs,
 		reader:   reader,
 		org:      org,
 		platform: platform,
 		logger:   logger,
+		decoder:  message.NewDecoder(reg),
 	}
 }
 
@@ -470,66 +477,17 @@ func (s *MilestoneSubscriber) AddHandler(h MilestoneHandler) {
 // errors are logged but do not propagate — the subscriber continues processing
 // subsequent events.
 func (s *MilestoneSubscriber) HandleEvent(ctx context.Context, data []byte) error {
-	// Decode the BaseMessage envelope to extract the category.
-	var envelope struct {
-		Domain   string          `json:"domain"`
-		Category string          `json:"category"`
-		Version  string          `json:"version"`
-		Payload  json.RawMessage `json:"payload"`
+	normalized, err := agentterminal.Decode(s.decoder, data)
+	if err != nil {
+		return fmt.Errorf("agentrun: HandleEvent: normalize terminal: %w", err)
 	}
-	if err := json.Unmarshal(data, &envelope); err != nil {
-		return fmt.Errorf("agentrun: HandleEvent: decode envelope: %w", err)
-	}
-
-	var ev LoopTerminalEvent
-	switch envelope.Category {
-	case agentic.CategoryLoopCompleted:
-		var completed agentic.LoopCompletedEvent
-		if err := json.Unmarshal(envelope.Payload, &completed); err != nil {
-			return fmt.Errorf("agentrun: HandleEvent: decode LoopCompletedEvent: %w", err)
-		}
-		ev = LoopTerminalEvent{
-			LoopID:      completed.LoopID,
-			RunID:       completed.RunID,
-			RunEntityID: completed.RunEntityID,
-			Category:    agentic.CategoryLoopCompleted,
-			Outcome:     completed.Outcome,
-			Role:        completed.Role,
-		}
-
-	case agentic.CategoryLoopCancelled:
-		var cancelled agentic.LoopCancelledEvent
-		if err := json.Unmarshal(envelope.Payload, &cancelled); err != nil {
-			return fmt.Errorf("agentrun: HandleEvent: decode LoopCancelledEvent: %w", err)
-		}
-		ev = LoopTerminalEvent{
-			LoopID:      cancelled.LoopID,
-			RunID:       cancelled.RunID,
-			RunEntityID: cancelled.RunEntityID,
-			Category:    agentic.CategoryLoopCancelled,
-			Outcome:     agentic.OutcomeCancelled,
-			Role:        "",
-		}
-
-	case agentic.CategoryLoopFailed:
-		var failed agentic.LoopFailedEvent
-		if err := json.Unmarshal(envelope.Payload, &failed); err != nil {
-			return fmt.Errorf("agentrun: HandleEvent: decode LoopFailedEvent: %w", err)
-		}
-		ev = LoopTerminalEvent{
-			LoopID:      failed.LoopID,
-			RunID:       failed.RunID,
-			RunEntityID: failed.RunEntityID,
-			Category:    agentic.CategoryLoopFailed,
-			Outcome:     agentic.OutcomeFailed,
-			Role:        failed.Role,
-		}
-
-	default:
-		// Not a terminal loop event — skip silently. Other categories
-		// (loop_created, context_event, etc.) may appear on agent.complete.*
-		// in future; we only act on the terminal set.
-		return nil
+	ev := LoopTerminalEvent{
+		LoopID:      normalized.LoopID,
+		RunID:       normalized.RunID,
+		RunEntityID: normalized.RunEntityID,
+		Category:    normalized.Category,
+		Outcome:     normalized.Outcome,
+		Role:        normalized.Role,
 	}
 
 	// Resolve the run. Prefer the wire RunID (D8 typed path); fall back to walk.
@@ -668,14 +626,17 @@ func (s *MilestoneSubscriber) Start(ctx context.Context, client *natsclient.Clie
 
 	handleMsg := func(subject string) func(ctx context.Context, msg jetstream.Msg) {
 		return func(msgCtx context.Context, msg jetstream.Msg) {
-			if handleErr := s.HandleEvent(msgCtx, msg.Data()); handleErr != nil {
+			handleErr := natsclient.ConsumeWithHeartbeat(msgCtx, msg, 10*time.Second, func(workCtx context.Context) error {
+				if err := s.HandleEvent(workCtx, msg.Data()); err != nil {
+					return natsclient.TerminateDelivery(err)
+				}
+				return nil
+			})
+			if handleErr != nil {
 				s.logger.Warn("agentrun: MilestoneSubscriber: HandleEvent error",
 					slog.String("subject", subject),
 					slog.Any("error", handleErr))
-				msg.Nak() //nolint:errcheck // best-effort nak; NATS will redeliver
-				return
 			}
-			msg.Ack() //nolint:errcheck // best-effort ack; benign on double-ack
 		}
 	}
 

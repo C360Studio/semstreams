@@ -118,6 +118,11 @@ type Component struct {
 	// sendResponseFn is a test hook; production leaves this nil. When non-nil
 	// it replaces the NATS-publishing behavior of sendResponse.
 	sendResponseFn func(agentic.UserResponse)
+	// Terminal-only seams preserve production settlement semantics in focused
+	// tests without weakening the normal response API.
+	sendTerminalResponseFn func(context.Context, agentic.UserResponse, string) error
+	loadPersistedLoopFn    func(context.Context, string) (*agentic.LoopEntity, error)
+	terminalDeliveryDoneFn func(error)
 }
 
 // consumerInfo tracks JetStream consumer details for cleanup
@@ -406,13 +411,14 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		FilterSubject: bindings.agentComplete.subject,
 		DeliverPolicy: "new",
 		AckPolicy:     "explicit",
-		MaxDeliver:    3,
+		MaxDeliver:    0,
 		AutoCreate:    false,
 	}
 	err = c.natsClient.ConsumeStreamWithConfig(ctx, agentCompleteCfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		c.handleAgentComplete(msgCtx, msg.Data())
-		if ackErr := msg.Ack(); ackErr != nil {
-			c.logger.Error("Failed to ack agent complete message", slog.String("error", ackErr.Error()))
+		handleErr := c.handleTerminalDelivery(msgCtx, msg)
+		c.observeTerminalDelivery(handleErr)
+		if handleErr != nil {
+			c.logger.Warn("Agent completion settlement failed", slog.Any("error", handleErr))
 		}
 	})
 	if err != nil {
@@ -454,13 +460,14 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		FilterSubject: bindings.agentFailed.subject,
 		DeliverPolicy: "new",
 		AckPolicy:     "explicit",
-		MaxDeliver:    3,
+		MaxDeliver:    0,
 		AutoCreate:    false,
 	}
 	err = c.natsClient.ConsumeStreamWithConfig(ctx, agentFailedCfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		c.handleAgentFailed(msgCtx, msg.Data())
-		if ackErr := msg.Ack(); ackErr != nil {
-			c.logger.Error("Failed to ack agent failed message", slog.String("error", ackErr.Error()))
+		handleErr := c.handleTerminalDelivery(msgCtx, msg)
+		c.observeTerminalDelivery(handleErr)
+		if handleErr != nil {
+			c.logger.Warn("Agent failure settlement failed", slog.Any("error", handleErr))
 		}
 	})
 	if err != nil {
@@ -477,12 +484,12 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	// dispatch surface continues to function without it; only the
 	// approval HTTP endpoint requires the cache populated.
 	//
-	// MaxDeliver is intentionally higher than the sibling agent.*
-	// subscriptions (10 vs 3): a missed approval-pending event has
+	// MaxDeliver is intentionally finite while terminal sibling subscriptions
+	// use unlimited delivery: a missed approval-pending event has
 	// asymmetric blast radius — it leaves the HTTP approval handler
 	// returning 400 forever for that loop until the next approval
-	// cycle. Sibling agent.complete / agent.failed losses just delay
-	// SSE updates. Combined with the LoopTracker's early-arrival
+	// cycle. Terminal siblings instead use unlimited, retention-bounded
+	// settlement. Combined with the LoopTracker's early-arrival
 	// buffer (drains on the matching agent.created), 10 retries gives
 	// generous slack for race resolution without unbounded redelivery.
 	agentApprovalPendingCfg := natsclient.StreamConsumerConfig{
@@ -509,6 +516,24 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	})
 
 	return nil
+}
+
+func (c *Component) observeTerminalDelivery(err error) {
+	if c.terminalDeliveryDoneFn != nil {
+		c.terminalDeliveryDoneFn(err)
+	}
+}
+
+// handleTerminalDelivery is the shared production callback for both physical
+// terminal lanes. Semantic category authority remains in agentterminal.Decode.
+func (c *Component) handleTerminalDelivery(msgCtx context.Context, msg jetstream.Msg) error {
+	return natsclient.ConsumeWithHeartbeat(msgCtx, msg, 10*time.Second, func(workCtx context.Context) error {
+		err := c.settleAgentTerminal(workCtx, msg.Data())
+		if isPermanentTerminal(err) {
+			return natsclient.TerminateDelivery(err)
+		}
+		return err
+	})
 }
 
 // waitForStream waits for a JetStream stream to be available
@@ -794,83 +819,12 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		slog.String("user_id", msg.UserID))
 }
 
-// handleAgentComplete processes agent completion events
+// handleAgentComplete is the focused-test entry point for the shared terminal
+// settlement path used by both physical terminal consumers.
 func (c *Component) handleAgentComplete(ctx context.Context, data []byte) {
-	// Parse BaseMessage envelope
-	baseMsg, err := c.decoder.Decode(data)
-	if err != nil {
-		c.logger.Error("Failed to unmarshal BaseMessage", slog.String("error", err.Error()))
-		return
+	if err := c.settleAgentTerminal(ctx, data); err != nil {
+		c.logger.Warn("Agent terminal settlement failed", slog.Any("error", err))
 	}
-
-	// Extract LoopCompletedEvent from payload
-	completionPtr, ok := baseMsg.Payload().(*agentic.LoopCompletedEvent)
-	if !ok {
-		c.logger.Error("Unexpected payload type", slog.String("type", fmt.Sprintf("%T", baseMsg.Payload())))
-		return
-	}
-	completion := *completionPtr
-
-	// Get loop info
-	loopInfo := c.loopTracker.Get(completion.LoopID)
-	if loopInfo == nil {
-		c.logger.Warn("Completion for unknown loop", slog.String("loop_id", completion.LoopID))
-		return
-	}
-
-	// Update loop state via UpdateCompletion so Outcome → State mapping
-	// goes through outcomeToState (e.g., outcome="success" → state="complete").
-	// UpdateState would have written the raw outcome string into State,
-	// breaking isTerminalState() for the success path. Result/CompletedAt
-	// also get populated for /loops + SSE consumers.
-	if err := c.loopTracker.UpdateCompletion(
-		completion.LoopID,
-		completion.Outcome,
-		completion.Result,
-		"",
-	); err != nil {
-		c.logger.Error("failed to record loop completion",
-			slog.String("loop_id", completion.LoopID),
-			slog.String("outcome", completion.Outcome),
-			slog.Any("error", err))
-		// Continue: response building below should still happen so the
-		// user sees something even if our internal tracker is out of sync.
-	}
-
-	// Record loop ended
-	c.metrics.recordLoopEnded()
-
-	// Record completion received
-	c.metrics.recordCompletionReceived(completion.Outcome)
-
-	// Build response content
-	var content string
-	var respType string
-	switch completion.Outcome {
-	case "complete":
-		respType = agentic.ResponseTypeResult
-		content = fmt.Sprintf("Loop %s completed.", completion.LoopID)
-		if completion.Result != "" {
-			content = completion.Result
-		}
-	case "cancelled":
-		respType = agentic.ResponseTypeStatus
-		content = fmt.Sprintf("Loop %s cancelled.", completion.LoopID)
-	case "failed":
-		// Note: Failed loops are handled by handleAgentFailed, but handle gracefully
-		respType = agentic.ResponseTypeError
-		content = fmt.Sprintf("Loop %s failed", completion.LoopID)
-	default:
-		respType = agentic.ResponseTypeStatus
-		content = fmt.Sprintf("Loop %s: %s", completion.LoopID, completion.Outcome)
-	}
-
-	// Send response to user (skipped for workflow-initiated loops without user routing)
-	c.sendUserResponseForLoop(ctx, loopInfo, respType, content)
-
-	c.logger.Info("Loop completed",
-		slog.String("loop_id", completion.LoopID),
-		slog.String("outcome", completion.Outcome))
 }
 
 // handleAgentCreated processes loop creation events for workflow context sync
@@ -924,55 +878,9 @@ func (c *Component) handleAgentCreated(_ context.Context, data []byte) {
 
 // handleAgentFailed processes loop failure events
 func (c *Component) handleAgentFailed(ctx context.Context, data []byte) {
-	// Parse BaseMessage envelope
-	baseMsg, err := c.decoder.Decode(data)
-	if err != nil {
-		c.logger.Error("Failed to unmarshal BaseMessage", slog.String("error", err.Error()))
-		return
+	if err := c.settleAgentTerminal(ctx, data); err != nil {
+		c.logger.Warn("Agent terminal settlement failed", slog.Any("error", err))
 	}
-
-	// Extract LoopFailedEvent from payload
-	failurePtr, ok := baseMsg.Payload().(*agentic.LoopFailedEvent)
-	if !ok {
-		c.logger.Error("Unexpected payload type", slog.String("type", fmt.Sprintf("%T", baseMsg.Payload())))
-		return
-	}
-	failure := *failurePtr
-
-	// Update loop state via UpdateCompletion so failure.Error and
-	// CompletedAt are recorded too — UpdateState alone would only set
-	// the State field and discard everything else from the failure event.
-	if err := c.loopTracker.UpdateCompletion(
-		failure.LoopID,
-		failure.Outcome,
-		"",
-		failure.Error,
-	); err != nil {
-		c.logger.Error("failed to record loop failure",
-			slog.String("loop_id", failure.LoopID),
-			slog.String("outcome", failure.Outcome),
-			slog.Any("error", err))
-	}
-
-	// Record metrics
-	c.metrics.recordLoopEnded()
-	c.metrics.recordCompletionReceived("failed")
-
-	// Get loop info for response routing
-	loopInfo := c.loopTracker.Get(failure.LoopID)
-	if loopInfo == nil {
-		c.logger.Warn("Failure for unknown loop", slog.String("loop_id", failure.LoopID))
-		return
-	}
-
-	// Send error response to user (skipped for workflow-initiated loops without user routing)
-	errorContent := fmt.Sprintf("Loop %s failed: %s", failure.LoopID, failure.Error)
-	c.sendUserResponseForLoop(ctx, loopInfo, agentic.ResponseTypeError, errorContent)
-
-	c.logger.Info("Loop failed",
-		slog.String("loop_id", failure.LoopID),
-		slog.String("reason", failure.Reason),
-		slog.String("error", failure.Error))
 }
 
 // handleAgentApprovalPending records the gated tool-call info on the

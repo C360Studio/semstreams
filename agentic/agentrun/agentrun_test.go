@@ -679,17 +679,10 @@ func (h *testMilestoneHandler) OnLoopTerminal(ctx context.Context, ev agentrun.L
 	return h.fn(ctx, ev, run)
 }
 
-// mustMarshalBaseMessage wraps a payload in the envelope shape HandleEvent.Unmarshal reads.
-func mustMarshalBaseMessage(t *testing.T, schema message.Type, payload any) []byte {
+// mustMarshalBaseMessage uses the exact registry-discriminated production wire.
+func mustMarshalBaseMessage(t *testing.T, schema message.Type, payload message.Payload) []byte {
 	t.Helper()
-	payloadBytes, err := json.Marshal(payload)
-	require.NoError(t, err)
-	envelope := map[string]any{
-		"domain":   schema.Domain,
-		"category": schema.Category,
-		"version":  schema.Version,
-		"payload":  json.RawMessage(payloadBytes),
-	}
+	envelope := message.NewBaseMessage(schema, payload, "agentic-loop")
 	data, err := json.Marshal(envelope)
 	require.NoError(t, err)
 	return data

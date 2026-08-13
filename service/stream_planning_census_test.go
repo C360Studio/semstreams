@@ -38,8 +38,8 @@ func TestShippedDefaultOnlyJetStreamOutputsHaveExplicitPreconstructionCoverage(t
 	summary, err := validateDefaultOnlyJetStreamCoverage(rows)
 	require.NoError(t, err)
 	require.Equal(t, streamPlanningCoverageSummary{
-		DefaultOnly: 61,
-		Covered:     61,
+		DefaultOnly: 65,
+		Covered:     65,
 		Uncovered:   0,
 	}, summary)
 
@@ -48,18 +48,24 @@ func TestShippedDefaultOnlyJetStreamOutputsHaveExplicitPreconstructionCoverage(t
 	for _, row := range rows {
 		byFactory[row.Factory]++
 		bySubject[row.Subject]++
-		require.Equal(t, []string{"AGENT/agent.>"}, row.CoveredBy,
+		wantCoverage := []string{"AGENT/agent.>"}
+		if row.Subject == "user.response.>" {
+			wantCoverage = []string{"USER/user.>"}
+		}
+		require.Equal(t, wantCoverage, row.CoveredBy,
 			"%s %s/%s must retain the accepted explicit coverage", row.Config, row.Component, row.Port)
 	}
-	require.Equal(t, map[string]int{"agentic-dispatch": 16, "agentic-loop": 45}, byFactory)
+	require.Equal(t, map[string]int{"agentic-dispatch": 20, "agentic-loop": 45}, byFactory)
 	require.Equal(t, map[string]int{
 		"agent.approval_pending.*":   9,
-		"agent.approval_response.*":  8,
+		"agent.approval_response.*":  9,
 		"agent.context.compaction.*": 9,
 		"agent.created.*":            9,
 		"agent.failed.*":             9,
-		"agent.signal.*":             8,
+		"agent.signal.*":             9,
+		"agent.task.*":               1,
 		"agent.toolcall.proposed.*":  9,
+		"user.response.>":            1,
 	}, bySubject)
 }
 

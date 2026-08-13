@@ -14,6 +14,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/agentic/agentrun"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
@@ -22,6 +23,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type integrationMilestoneHandler struct {
+	events chan agentrun.LoopTerminalEvent
+}
+
+func (h *integrationMilestoneHandler) OnLoopTerminal(_ context.Context, event agentrun.LoopTerminalEvent, _ *agentrun.AgentRun) error {
+	h.events <- event
+	return nil
+}
 
 // TestIntegration_D1_ProjectionRoundTrip verifies that lifecycle.Manager.Get
 // correctly populates AgentRun.EntityIDField with the FULL 6-part chain execution
@@ -159,4 +169,52 @@ func TestIntegration_MilestoneSubscriber_StartsWhenStreamPresent(t *testing.T) {
 	require.NoError(t, err, "Start must succeed when the AGENT stream is present")
 	require.NotNil(t, stop)
 	stop()
+}
+
+func TestIntegration_MilestoneSubscriberProductionEnvelopeCallbacks(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithStreams(
+		natsclient.TestStreamConfig{Name: agentrun.AgentStreamName, Subjects: []string{"agent.>"}},
+	))
+	ctx := t.Context()
+	mgr := lifecycle.NewManager(tc.Client, nil)
+	require.NoError(t, agentrun.Register(mgr))
+	sub := agentrun.NewMilestoneSubscriber(mgr, nil, "acme", "ops", nil)
+	handler := &integrationMilestoneHandler{events: make(chan agentrun.LoopTerminalEvent, 3)}
+	sub.AddHandler(handler)
+	stop, err := sub.Start(ctx, tc.Client, agentrun.StartConfig{StreamName: agentrun.AgentStreamName, ConsumerNameSuffix: "terminal-production"})
+	require.NoError(t, err)
+	defer stop()
+
+	at := time.Now().UTC()
+	payloads := []message.Payload{
+		&agentic.LoopCompletedEvent{LoopID: "run-success", TaskID: "task-success", Outcome: agentic.OutcomeSuccess, CompletedAt: at, RunEntityID: "missing-run-success"},
+		&agentic.LoopFailedEvent{LoopID: "run-failed", TaskID: "task-failed", Outcome: agentic.OutcomeFailed, FailedAt: at, RunEntityID: "missing-run-failed"},
+		&agentic.LoopCancelledEvent{LoopID: "run-cancelled", TaskID: "task-cancelled", Outcome: agentic.OutcomeCancelled, CancelledAt: at, RunEntityID: "missing-run-cancelled"},
+	}
+	for _, payload := range payloads {
+		data, marshalErr := json.Marshal(message.NewBaseMessage(payload.Schema(), payload, "agentic-loop"))
+		require.NoError(t, marshalErr)
+		subjectPrefix := "agent.complete."
+		if payload.Schema().Category == agentic.CategoryLoopFailed {
+			subjectPrefix = "agent.failed."
+		}
+		require.NoError(t, tc.Client.PublishToStream(ctx, subjectPrefix+payload.Schema().Category, data))
+	}
+
+	want := map[string]bool{
+		agentic.CategoryLoopCompleted: false,
+		agentic.CategoryLoopFailed:    false,
+		agentic.CategoryLoopCancelled: false,
+	}
+	for range 3 {
+		select {
+		case event := <-handler.events:
+			want[event.Category] = true
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for AgentRun production-envelope callback")
+		}
+	}
+	for category, observed := range want {
+		require.True(t, observed, category)
+	}
 }

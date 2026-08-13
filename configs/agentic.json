@@ -45,6 +45,14 @@
       "max_age": "24h",
       "max_bytes": 268435456,
       "discard": "old"
+    },
+    "USER": {
+      "subjects": [
+        "user.>"
+      ],
+      "max_age": "1h",
+      "max_bytes": 16777216,
+      "discard": "old"
     }
   },
   "model_registry": {
@@ -110,6 +118,17 @@
     }
   },
   "components": {
+    "agentic-dispatch": {
+      "type": "processor",
+      "name": "agentic-dispatch",
+      "enabled": true,
+      "config": {
+        "default_role": "general",
+        "default_tools": [],
+        "auto_continue": false,
+        "stream_name": "USER"
+      }
+    },
     "objectstore": {
       "type": "storage",
       "name": "objectstore",

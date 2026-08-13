@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
@@ -32,6 +33,7 @@ type Component struct {
 	inputs     []component.Port
 	natsClient *natsclient.Client
 	logger     *slog.Logger
+	decoder    *message.Decoder
 
 	// Span collection
 	spanCollector *SpanCollector
@@ -119,16 +121,18 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		inputs:     inputs,
 		natsClient: deps.NATSClient,
 		logger:     deps.GetLogger(),
+		decoder:    message.NewDecoder(deps.PayloadRegistry),
 	}, nil
 }
 
 // Initialize prepares the component.
 func (c *Component) Initialize() error {
 	// Create span collector
-	c.spanCollector = NewSpanCollector(
+	c.spanCollector = newSpanCollector(
 		c.config.ServiceName,
 		c.config.ServiceVersion,
 		c.config.SamplingRate,
+		c.decoder,
 	)
 
 	// Create metric mapper
@@ -286,6 +290,10 @@ func (c *Component) consumeEventsFromConsumer(ctx context.Context, consumer jets
 				c.logger.Warn("Failed to process event",
 					slog.Any("error", err))
 				c.incrementErrors()
+				if termErr := msg.Term(); termErr != nil {
+					c.logger.Warn("Failed to terminate invalid event", slog.Any("error", termErr))
+				}
+				continue
 			}
 			if err := msg.Ack(); err != nil {
 				c.logger.Warn("Failed to ack message", slog.Any("error", err))

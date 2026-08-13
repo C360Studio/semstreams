@@ -77,6 +77,12 @@ These components communicate over NATS JetStream using the types defined here.
 | `ResponseBlock` | Block of content in a rich response (text, code, diff) |
 | `ResponseAction` | Interactive action in a response (button, reaction) |
 
+`UserResponse.ChannelType` and `UserResponse.ChannelID` form the required
+delivery address. `UserID` is optional recipient metadata. Terminal-derived
+responses retain the same wire type and use a stable response ID across source
+redelivery; dispatch does not require adopters to synthesize a user identity or
+choose a terminal retry count.
+
 ## Usage
 
 ### Creating an Agent Request
@@ -173,7 +179,14 @@ Components communicate via these subjects:
 | `agent.response.*` | model → loop | Model responses |
 | `tool.execute.*` | loop → tools | Tool execution |
 | `tool.result.*` | tools → loop | Tool results |
-| `agent.complete.*` | loop → external | Completions |
+| `agent.complete.*` | loop → external | Successful and cancelled loop terminals |
+| `agent.failed.*` | loop → external | Failed loop terminals |
+
+The terminal semantic type is the registered `BaseMessage` category plus its
+outcome, never the subject alone: `loop_completed + success`,
+`loop_failed + failed`, or `loop_cancelled + cancelled`. AgentRun milestone
+callbacks consume this production envelope and receive all three classes;
+cancellation intentionally travels on `agent.complete.*`.
 
 ## User Signals
 

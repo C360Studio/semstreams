@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/message"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewSpanCollector(t *testing.T) {
@@ -431,21 +433,13 @@ func TestSpanCollectorInvalidJSON(t *testing.T) {
 
 // ---- ProcessMessage tests ----
 
-// wrapPayload wraps a typed payload in a minimal BaseMessage envelope JSON.
-func wrapPayload(t *testing.T, category string, payload any) []byte {
+// wrapPayload wraps a typed payload in the exact production BaseMessage wire.
+func wrapPayload(t *testing.T, category string, payload message.Payload) []byte {
 	t.Helper()
-	p, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
+	if payload.Schema().Category != category {
+		t.Fatalf("fixture category %q does not match payload schema %q", category, payload.Schema().Category)
 	}
-	env := map[string]any{
-		"type": map[string]string{
-			"domain":   "agentic",
-			"category": category,
-		},
-		"payload": json.RawMessage(p),
-	}
-	data, err := json.Marshal(env)
+	data, err := json.Marshal(message.NewBaseMessage(payload.Schema(), payload, "agentic-loop"))
 	if err != nil {
 		t.Fatalf("marshal envelope: %v", err)
 	}
@@ -464,7 +458,7 @@ func TestProcessMessage_LoopCreated(t *testing.T) {
 		Model:     "gpt-4o",
 		CreatedAt: now,
 	}
-	data := wrapPayload(t, agentic.CategoryLoopCreated, evt)
+	data := wrapPayload(t, agentic.CategoryLoopCreated, &evt)
 
 	if err := sc.ProcessMessage(ctx, "agent.loop.created", data); err != nil {
 		t.Fatalf("ProcessMessage failed: %v", err)
@@ -507,7 +501,7 @@ func TestProcessMessage_LoopCompleted(t *testing.T) {
 		Model:     "claude-3-5-sonnet",
 		CreatedAt: now,
 	}
-	_ = sc.ProcessMessage(ctx, "agent.loop.created", wrapPayload(t, agentic.CategoryLoopCreated, created))
+	_ = sc.ProcessMessage(ctx, "agent.loop.created", wrapPayload(t, agentic.CategoryLoopCreated, &created))
 
 	// Now complete it with beta.5 fields
 	completed := agentic.LoopCompletedEvent{
@@ -523,7 +517,7 @@ func TestProcessMessage_LoopCompleted(t *testing.T) {
 		TokensOut:   800,
 		CompletedAt: now.Add(10 * time.Second),
 	}
-	if err := sc.ProcessMessage(ctx, "agent.loop.completed", wrapPayload(t, agentic.CategoryLoopCompleted, completed)); err != nil {
+	if err := sc.ProcessMessage(ctx, "agent.loop.completed", wrapPayload(t, agentic.CategoryLoopCompleted, &completed)); err != nil {
 		t.Fatalf("ProcessMessage failed: %v", err)
 	}
 
@@ -565,7 +559,7 @@ func TestProcessMessage_LoopFailed(t *testing.T) {
 		LoopID: "loop-msg-003", TaskID: "task-003",
 		Role: "developer", Model: "gpt-4o", CreatedAt: now,
 	}
-	_ = sc.ProcessMessage(ctx, "agent.loop.created", wrapPayload(t, agentic.CategoryLoopCreated, created))
+	_ = sc.ProcessMessage(ctx, "agent.loop.created", wrapPayload(t, agentic.CategoryLoopCreated, &created))
 
 	failed := agentic.LoopFailedEvent{
 		LoopID:     "loop-msg-003",
@@ -580,7 +574,7 @@ func TestProcessMessage_LoopFailed(t *testing.T) {
 		TokensOut:  3000,
 		FailedAt:   now.Add(30 * time.Second),
 	}
-	if err := sc.ProcessMessage(ctx, "agent.loop.failed", wrapPayload(t, agentic.CategoryLoopFailed, failed)); err != nil {
+	if err := sc.ProcessMessage(ctx, "agent.loop.failed", wrapPayload(t, agentic.CategoryLoopFailed, &failed)); err != nil {
 		t.Fatalf("ProcessMessage failed: %v", err)
 	}
 
@@ -601,6 +595,24 @@ func TestProcessMessage_LoopFailed(t *testing.T) {
 	}
 }
 
+func TestProcessMessage_LoopCancelledProductionEnvelope(t *testing.T) {
+	sc := NewSpanCollector("test-service", "1.0.0", 1.0)
+	ctx := context.Background()
+	now := time.Now()
+	created := &agentic.LoopCreatedEvent{LoopID: "loop-cancelled", TaskID: "task-cancelled", CreatedAt: now}
+	require.NoError(t, sc.ProcessMessage(ctx, "agent.created", wrapPayload(t, agentic.CategoryLoopCreated, created)))
+	cancelled := &agentic.LoopCancelledEvent{
+		LoopID: "loop-cancelled", TaskID: "task-cancelled", Outcome: agentic.OutcomeCancelled,
+		CancelledBy: "operator", CancelledAt: now.Add(time.Second),
+	}
+	require.NoError(t, sc.ProcessMessage(ctx, "agent.complete.loop-cancelled", wrapPayload(t, agentic.CategoryLoopCancelled, cancelled)))
+	spans := sc.FlushCompleted()
+	require.Len(t, spans, 1)
+	require.Equal(t, "error", spans[0].Status.Code)
+	require.Equal(t, "cancelled", spans[0].Status.Message)
+	require.Equal(t, "operator", spans[0].Attributes["agent.cancelled_by"])
+}
+
 func TestProcessMessage_ToolResult(t *testing.T) {
 	sc := NewSpanCollector("test-service", "1.0.0", 1.0)
 	ctx := context.Background()
@@ -611,7 +623,7 @@ func TestProcessMessage_ToolResult(t *testing.T) {
 		LoopID: "loop-msg-004", TaskID: "task-004",
 		Role: "developer", Model: "gpt-4o", CreatedAt: now,
 	}
-	_ = sc.ProcessMessage(ctx, "agent.loop.created", wrapPayload(t, agentic.CategoryLoopCreated, created))
+	_ = sc.ProcessMessage(ctx, "agent.loop.created", wrapPayload(t, agentic.CategoryLoopCreated, &created))
 
 	// Tool result with error classification
 	toolResult := agentic.ToolResult{
@@ -622,7 +634,7 @@ func TestProcessMessage_ToolResult(t *testing.T) {
 		ErrorKind: agentic.ToolErrorNetwork,
 		LoopID:    "loop-msg-004",
 	}
-	if err := sc.ProcessMessage(ctx, "tool.result.code_search", wrapPayload(t, agentic.CategoryToolResult, toolResult)); err != nil {
+	if err := sc.ProcessMessage(ctx, "tool.result.code_search", wrapPayload(t, agentic.CategoryToolResult, &toolResult)); err != nil {
 		t.Fatalf("ProcessMessage failed: %v", err)
 	}
 
@@ -675,7 +687,7 @@ func TestProcessMessage_ToolResultSuccess(t *testing.T) {
 		Content: "wrote 42 bytes",
 		LoopID:  "loop-orphan",
 	}
-	if err := sc.ProcessMessage(ctx, "tool.result.file_write", wrapPayload(t, agentic.CategoryToolResult, toolResult)); err != nil {
+	if err := sc.ProcessMessage(ctx, "tool.result.file_write", wrapPayload(t, agentic.CategoryToolResult, &toolResult)); err != nil {
 		t.Fatalf("ProcessMessage failed: %v", err)
 	}
 
@@ -701,7 +713,7 @@ func TestProcessMessage_ContextEvent(t *testing.T) {
 		LoopID: "loop-msg-005", TaskID: "task-005",
 		Role: "developer", Model: "gpt-4o", CreatedAt: now,
 	}
-	_ = sc.ProcessMessage(ctx, "agent.loop.created", wrapPayload(t, agentic.CategoryLoopCreated, created))
+	_ = sc.ProcessMessage(ctx, "agent.loop.created", wrapPayload(t, agentic.CategoryLoopCreated, &created))
 
 	ctxEvt := agentic.ContextEvent{
 		Type:        agentic.ContextEventCompactionComplete,
@@ -711,7 +723,7 @@ func TestProcessMessage_ContextEvent(t *testing.T) {
 		TokensSaved: 1500,
 		Summary:     "Compacted 3 iterations",
 	}
-	if err := sc.ProcessMessage(ctx, "agent.context.event", wrapPayload(t, agentic.CategoryContextEvent, ctxEvt)); err != nil {
+	if err := sc.ProcessMessage(ctx, "agent.context.event", wrapPayload(t, agentic.CategoryContextEvent, &ctxEvt)); err != nil {
 		t.Fatalf("ProcessMessage failed: %v", err)
 	}
 
@@ -720,7 +732,7 @@ func TestProcessMessage_ContextEvent(t *testing.T) {
 		LoopID: "loop-msg-005", TaskID: "task-005",
 		Outcome: agentic.OutcomeSuccess, CompletedAt: now.Add(5 * time.Second),
 	}
-	_ = sc.ProcessMessage(ctx, "agent.loop.completed", wrapPayload(t, agentic.CategoryLoopCompleted, completed))
+	_ = sc.ProcessMessage(ctx, "agent.loop.completed", wrapPayload(t, agentic.CategoryLoopCompleted, &completed))
 
 	spans := sc.FlushCompleted()
 	if len(spans) != 1 {
@@ -748,19 +760,30 @@ func TestProcessMessage_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestProcessMessage_RejectsFlatTerminalIntent(t *testing.T) {
+	sc := NewSpanCollector("test-service", "1.0.0", 1.0)
+	flat := []byte(`{"domain":"agentic","category":"loop_completed","version":"v1","payload":{"loop_id":"loop-flat","task_id":"task-flat","outcome":"success","completed_at":"2026-08-12T12:00:00Z"}}`)
+
+	err := sc.ProcessMessage(context.Background(), "agent.complete.loop-flat", flat)
+	require.Error(t, err)
+}
+
 func TestProcessMessage_UnknownCategory(t *testing.T) {
 	sc := NewSpanCollector("test-service", "1.0.0", 1.0)
 	ctx := context.Background()
 
-	// Unknown categories are silently ignored (no error, no span created)
+	// Nonterminal categories retain the existing ignore behavior. Only the
+	// terminal set is normalized fail-closed by this change.
 	env := map[string]any{
-		"type":    map[string]string{"domain": "agentic", "category": "unknown_category"},
+		"id":      "unknown-1",
+		"type":    map[string]string{"domain": "agentic", "category": "unknown_category", "version": "v1"},
 		"payload": json.RawMessage(`{}`),
+		"meta":    map[string]any{"created_at": time.Now().UnixMilli(), "received_at": time.Now().UnixMilli(), "source": "test"},
 	}
 	data, _ := json.Marshal(env)
 
 	if err := sc.ProcessMessage(ctx, "agent.unknown", data); err != nil {
-		t.Errorf("unexpected error for unknown category: %v", err)
+		t.Errorf("unexpected error for unknown nonterminal category: %v", err)
 	}
 	if sc.Stats()["spans_created"] != 0 {
 		t.Error("expected no spans created for unknown category")
