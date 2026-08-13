@@ -38,6 +38,25 @@ env:
   GO_VERSION: "1.26"
 
 jobs:
+  e2e-slow-consumer:
+    name: e2e slow consumer attribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install task
+        run: sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+
+      - name: Run assembled slow-consumer attribution proof
+        run: task e2e:slow-consumer
+
   e2e-statistical:
     name: e2e statistical
     runs-on: ubuntu-latest

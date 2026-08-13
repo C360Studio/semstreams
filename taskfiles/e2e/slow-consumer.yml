@@ -1,0 +1,14 @@
+version: "3"
+
+tasks:
+  default:
+    desc: Run isolated cmd/semstreams slow-consumer attribution E2E
+    silent: false
+    deps: [":build:e2e"]
+    cmds:
+      - defer: docker compose -f docker/compose/e2e-slow-consumer.yml down -v --timeout 15
+      - docker compose -f docker/compose/e2e-slow-consumer.yml down -v --timeout 15
+      - docker compose -f docker/compose/e2e-slow-consumer.yml up -d --wait --build
+      - >-
+        cd cmd/e2e && ./e2e --scenario core-slow-consumer
+        --base-url http://localhost:38090 --metrics-url http://localhost:39100

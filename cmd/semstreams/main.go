@@ -342,6 +342,10 @@ func connectToNATSWithSpinner(
 		spinner.StopWithError(err)
 		return nil, err
 	}
+	if err := runSlowConsumerProbe(ctx, natsClient); err != nil {
+		spinner.StopWithError(err)
+		return nil, fmt.Errorf("run slow-consumer E2E probe: %w", err)
+	}
 
 	spinner.Stop()
 	return natsClient, nil
