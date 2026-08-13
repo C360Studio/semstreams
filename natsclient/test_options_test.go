@@ -27,3 +27,16 @@ func TestWithMinimalFeatures_PreservesExplicitContainerStartTimeout(t *testing.T
 		t.Fatal("KV enabled after applying WithMinimalFeatures")
 	}
 }
+
+func TestWithTestMaxPayload_NonPositivePreservesServerDefault(t *testing.T) {
+	t.Parallel()
+
+	for _, value := range []int64{0, -1} {
+		cfg := defaultTestConfig()
+		WithTestMaxPayload(value)(cfg)
+		request := newTestContainerRequest(cfg)
+		if len(request.ContainerRequest.Files) != 0 {
+			t.Errorf("WithTestMaxPayload(%d) installed a broker config, want server default", value)
+		}
+	}
+}

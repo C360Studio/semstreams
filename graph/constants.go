@@ -44,6 +44,10 @@ const (
 	BucketAnomalyIndex       = "ANOMALY_INDEX"
 
 	// Operational buckets
+	// BucketToolCallOutcomes is agentic-tools' immutable COMPLETED ledger for
+	// durable tool-result replay. Keys are opaque v1 hashes of ToolCall.ID.
+	BucketToolCallOutcomes = "TOOL_CALL_OUTCOMES"
+
 	// BucketGraphIngestAppliedSeq is graph-ingest's ADR-072 redelivery-guard
 	// durable tier: `(entityID/streamName) → last-applied stream sequence`.
 	// Created and owned exclusively by graph-ingest (processor/graph-ingest);

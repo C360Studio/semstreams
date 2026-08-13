@@ -24,6 +24,7 @@ The `agentic-tools` component executes tool calls from the agentic loop orchestr
 - **Allowlist Filtering**: Restrict which tools can execute
 - **Timeout Handling**: Per-execution timeout with context cancellation
 - **Concurrent Execution**: Multiple tools can run in parallel
+- **Durable Completion**: Completed calls replay their authoritative result without re-running the executor
 
 ## Configuration
 
@@ -88,6 +89,15 @@ type ToolExecutor interface {
     ListTools() []agentic.ToolDefinition
 }
 ```
+
+An effectful executor must use `ToolCall.ID` as its downstream idempotency key. The framework stores only completed
+outcomes: if a process or storage write fails after an external effect but before completion is durably recorded, the
+same call can be delivered to `Execute` again. Executors do not need to know the outcome bucket, key, result subject,
+message ID, or payload ceiling; agentic-tools owns those mechanics and observes real transport outcomes.
+
+For a completed call, agentic-tools persists the full `ToolResult` before publishing it and acknowledging the request.
+A failed result publication is retried by request redelivery, which republishes the stored result without invoking the
+executor. Reusing one call ID for different arguments or metadata is a permanent collision and is terminated.
 
 The tool registry follows ADR-029 Pattern A (boot-registry): the embedding binary constructs an `*ExecutorRegistry`, registers builtins and any custom tools at startup, then plumbs the registry through `component.Dependencies.ToolRegistry`. There is no package-level singleton — every process owns its registry explicitly. This mirrors how `component.Registry` is wired in `cmd/semstreams/main.go`.
 

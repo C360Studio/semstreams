@@ -10,6 +10,10 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+// ErrHeartbeatFailed identifies loss of the InProgress settlement path while
+// work may already have caused an external effect.
+var ErrHeartbeatFailed = errors.New("delivery heartbeat failed")
+
 // PermanentDeliveryError marks a handler failure as structurally permanent for
 // this exact message. ConsumeWithHeartbeat terminates the JetStream delivery
 // instead of retrying it. Unwrap preserves the handler's typed error contract.
@@ -71,7 +75,7 @@ func ConsumeWithHeartbeat(
 					"error", err,
 					"subject", msg.Subject())
 				workCancel() // stop the orphaned work goroutine
-				return fmt.Errorf("failed to send InProgress: %w", err)
+				return errors.Join(ErrHeartbeatFailed, fmt.Errorf("failed to send InProgress: %w", err))
 			}
 
 		case err := <-done:
@@ -80,7 +84,9 @@ func ConsumeWithHeartbeat(
 			// this check select can choose done first and spend the normal 30s
 			// work-error NAK path instead of the one shutdown/restart NAK below.
 			if ctx.Err() != nil {
-				_ = msg.NakWithDelay(5 * time.Second)
+				if nakErr := msg.NakWithDelay(5 * time.Second); nakErr != nil {
+					return errors.Join(ctx.Err(), fmt.Errorf("NAK cancelled delivery: %w", nakErr))
+				}
 				return ctx.Err()
 			}
 			if err != nil {
@@ -91,13 +97,17 @@ func ConsumeWithHeartbeat(
 					}
 					return err
 				}
-				_ = msg.NakWithDelay(30 * time.Second)
+				if nakErr := msg.NakWithDelay(30 * time.Second); nakErr != nil {
+					return errors.Join(err, fmt.Errorf("NAK transient delivery: %w", nakErr))
+				}
 				return err
 			}
 			return msg.Ack()
 
 		case <-ctx.Done():
-			_ = msg.NakWithDelay(5 * time.Second)
+			if nakErr := msg.NakWithDelay(5 * time.Second); nakErr != nil {
+				return errors.Join(ctx.Err(), fmt.Errorf("NAK cancelled delivery: %w", nakErr))
+			}
 			return ctx.Err()
 		}
 	}

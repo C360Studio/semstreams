@@ -10,7 +10,10 @@ import (
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
-// ToolExecutor defines the interface for tool executors
+// ToolExecutor defines the interface for tool executors. Execute
+// implementations that may cause external effects MUST use ToolCall.ID as the
+// downstream idempotency key. agentic-tools writes only COMPLETED outcomes;
+// failure after the effect but before that write can redeliver the same call.
 type ToolExecutor interface {
 	Execute(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error)
 	ListTools() []agentic.ToolDefinition

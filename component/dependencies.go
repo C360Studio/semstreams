@@ -50,6 +50,11 @@ type StoreProvider interface {
 // fallback in agentic-tools/component.go was the source of repeated
 // extension friction and is gone with this contract.
 type ToolRegistryReader interface {
+	// Execute implementations that may cause external effects MUST use
+	// ToolCall.ID as the downstream idempotency key. agentic-tools persists only
+	// COMPLETED outcomes, so a crash or transient Create failure after the
+	// external effect but before durable completion is inherently ambiguous and
+	// may redeliver the same call to Execute.
 	Execute(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error)
 	ListTools() []agentic.ToolDefinition
 }
