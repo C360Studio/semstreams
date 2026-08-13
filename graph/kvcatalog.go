@@ -108,6 +108,9 @@ func KVCatalog() []natsclient.BucketSpec {
 		owned(BucketGraphIngestAppliedSeq, "graph-ingest",
 			"graph-ingest redelivery guard: (entityID/streamName) -> last-applied stream sequence (ADR-072)",
 			natsclient.ClassOperational),
+		owned(BucketToolCallOutcomes, "agentic-tools",
+			"Immutable completed tool-call outcomes for result replay",
+			natsclient.ClassOperational),
 
 		// graph-index's four config-declared output indexes + the name lookup internal.
 		derived(BucketOutgoingIndex, "graph-index", "Graph index bucket: outgoing relationships"),

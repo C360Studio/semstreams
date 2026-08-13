@@ -8,110 +8,63 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// toolsMetrics holds Prometheus metrics for the agentic-tools component.
+type outcomePath string
+type outcomeStoreOperation string
+type outcomeStoreFailureReason string
+type resultPublishFailureReason string
+type ambiguousRedeliveryCause string
+
+const (
+	outcomePathNew       outcomePath = "new"
+	outcomePathReplay    outcomePath = "replay"
+	outcomePathRejection outcomePath = "rejection"
+	outcomePathCompact   outcomePath = "compact"
+
+	storeOperationGet        outcomeStoreOperation = "get"
+	storeOperationCreate     outcomeStoreOperation = "create"
+	storeOperationReadWinner outcomeStoreOperation = "read_winner"
+
+	storeReasonTransport outcomeStoreFailureReason = "transport"
+	storeReasonOversize  outcomeStoreFailureReason = "oversize"
+	storeReasonCorrupt   outcomeStoreFailureReason = "corrupt"
+
+	publishReasonTransport resultPublishFailureReason = "transport"
+	publishReasonOversize  resultPublishFailureReason = "oversize"
+	publishReasonMarshal   resultPublishFailureReason = "marshal"
+
+	ambiguousCauseStoreFailure ambiguousRedeliveryCause = "store_failure"
+	ambiguousCauseShutdown     ambiguousRedeliveryCause = "shutdown"
+	ambiguousCauseHeartbeat    ambiguousRedeliveryCause = "heartbeat"
+	ambiguousCausePanic        ambiguousRedeliveryCause = "panic"
+)
+
+// toolsMetrics holds Prometheus metrics for agentic-tools component.
 type toolsMetrics struct {
-	// Executions
 	executionsTotal   *prometheus.CounterVec
 	executionDuration *prometheus.HistogramVec
+	errorsTotal       *prometheus.CounterVec
+	timeoutTotal      *prometheus.CounterVec
+	filteredTotal     *prometheus.CounterVec
+	rejectionsTotal   *prometheus.CounterVec
+	retriesTotal      *prometheus.CounterVec
+	retriesExhausted  *prometheus.CounterVec
+	toolsRegistered   prometheus.Gauge
 
-	// Errors
-	errorsTotal  *prometheus.CounterVec
-	timeoutTotal *prometheus.CounterVec
-
-	// Filtering
-	filteredTotal *prometheus.CounterVec
-
-	// Writer-gate rejections (a tool's own contract gate bounced the call
-	// before any graph mutation), labelled by tool and the gate reason. Kept
-	// distinct from filteredTotal (governance/approval filtering upstream of
-	// the executor) and errorsTotal (execution failures): a rejection is a
-	// deliberate, instructive refusal that names the violated contract.
-	rejectionsTotal *prometheus.CounterVec
-
-	// Retries (opt-in via Config.ToolRetries policies)
-	retriesTotal     *prometheus.CounterVec
-	retriesExhausted *prometheus.CounterVec
-
-	// Registry
-	toolsRegistered prometheus.Gauge
+	outcomeTotal          *prometheus.CounterVec
+	outcomeStoreFailures  *prometheus.CounterVec
+	outcomeCollisions     prometheus.Counter
+	resultPublishFailures *prometheus.CounterVec
+	ambiguousRedeliveries *prometheus.CounterVec
 }
 
-// Package-level metrics (registered once to avoid duplicate registration errors)
 var (
 	metricsOnce sync.Once
 	metrics     *toolsMetrics
 )
 
-// getMetrics returns the singleton metrics instance, creating and registering it if needed.
 func getMetrics(registry *metric.MetricsRegistry) *toolsMetrics {
 	metricsOnce.Do(func() {
-		metrics = &toolsMetrics{
-			executionsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-				Namespace: "semstreams",
-				Subsystem: "agentic_tools",
-				Name:      "executions_total",
-				Help:      "Total tool executions by tool name and status",
-			}, []string{"tool_name", "status"}),
-
-			executionDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-				Namespace: "semstreams",
-				Subsystem: "agentic_tools",
-				Name:      "execution_duration_seconds",
-				Help:      "Tool execution latency in seconds",
-				Buckets:   prometheus.ExponentialBuckets(0.001, 2, 12), // 1ms to ~4s
-			}, []string{"tool_name"}),
-
-			errorsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-				Namespace: "semstreams",
-				Subsystem: "agentic_tools",
-				Name:      "errors_total",
-				Help:      "Total tool errors by tool name and error type",
-			}, []string{"tool_name", "error_type"}),
-
-			timeoutTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-				Namespace: "semstreams",
-				Subsystem: "agentic_tools",
-				Name:      "timeout_total",
-				Help:      "Total tool execution timeouts by tool name",
-			}, []string{"tool_name"}),
-
-			filteredTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-				Namespace: "semstreams",
-				Subsystem: "agentic_tools",
-				Name:      "filtered_total",
-				Help:      "Total tool calls filtered by reason",
-			}, []string{"tool_name", "reason"}),
-
-			rejectionsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-				Namespace: "semstreams",
-				Subsystem: "agentic_tools",
-				Name:      "rejections_total",
-				Help:      "Total tool-call rejections by a tool's own writer-gate, labelled by tool name and gate reason",
-			}, []string{"tool_name", "reason"}),
-
-			retriesTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-				Namespace: "semstreams",
-				Subsystem: "agentic_tools",
-				Name:      "retries_total",
-				Help:      "Total tool-call retries triggered by a retry policy, labelled by tool and the error kind that triggered the retry",
-			}, []string{"tool_name", "error_kind"}),
-
-			retriesExhausted: prometheus.NewCounterVec(prometheus.CounterOpts{
-				Namespace: "semstreams",
-				Subsystem: "agentic_tools",
-				Name:      "retries_exhausted_total",
-				Help:      "Total tool calls whose retry budget was exhausted without success",
-			}, []string{"tool_name"}),
-
-			toolsRegistered: prometheus.NewGauge(prometheus.GaugeOpts{
-				Namespace: "semstreams",
-				Subsystem: "agentic_tools",
-				Name:      "registered",
-				Help:      "Number of registered tools",
-			}),
-		}
-
-		// Register metrics with the metrics registry if available
+		metrics = newToolsMetrics()
 		if registry != nil {
 			_ = registry.RegisterCounterVec("agentic-tools", "executions_total", metrics.executionsTotal)
 			_ = registry.RegisterHistogramVec("agentic-tools", "execution_duration_seconds", metrics.executionDuration)
@@ -122,30 +75,60 @@ func getMetrics(registry *metric.MetricsRegistry) *toolsMetrics {
 			_ = registry.RegisterCounterVec("agentic-tools", "retries_total", metrics.retriesTotal)
 			_ = registry.RegisterCounterVec("agentic-tools", "retries_exhausted_total", metrics.retriesExhausted)
 			_ = registry.RegisterGauge("agentic-tools", "registered", metrics.toolsRegistered)
-		} else {
-			// Fallback to default prometheus registry for testing
-			_ = prometheus.DefaultRegisterer.Register(metrics.executionsTotal)
-			_ = prometheus.DefaultRegisterer.Register(metrics.executionDuration)
-			_ = prometheus.DefaultRegisterer.Register(metrics.errorsTotal)
-			_ = prometheus.DefaultRegisterer.Register(metrics.timeoutTotal)
-			_ = prometheus.DefaultRegisterer.Register(metrics.filteredTotal)
-			_ = prometheus.DefaultRegisterer.Register(metrics.rejectionsTotal)
-			_ = prometheus.DefaultRegisterer.Register(metrics.retriesTotal)
-			_ = prometheus.DefaultRegisterer.Register(metrics.retriesExhausted)
-			_ = prometheus.DefaultRegisterer.Register(metrics.toolsRegistered)
+			_ = registry.RegisterCounterVec("agentic-tools", "outcome_total", metrics.outcomeTotal)
+			_ = registry.RegisterCounterVec("agentic-tools", "outcome_store_failures_total", metrics.outcomeStoreFailures)
+			_ = registry.RegisterCounter("agentic-tools", "outcome_collisions_total", metrics.outcomeCollisions)
+			_ = registry.RegisterCounterVec("agentic-tools", "result_publish_failures_total", metrics.resultPublishFailures)
+			_ = registry.RegisterCounterVec("agentic-tools", "ambiguous_redeliveries_total", metrics.ambiguousRedeliveries)
+			return
+		}
+		for _, collector := range []prometheus.Collector{
+			metrics.executionsTotal, metrics.executionDuration, metrics.errorsTotal, metrics.timeoutTotal,
+			metrics.filteredTotal, metrics.rejectionsTotal, metrics.retriesTotal, metrics.retriesExhausted,
+			metrics.toolsRegistered, metrics.outcomeTotal, metrics.outcomeStoreFailures, metrics.outcomeCollisions,
+			metrics.resultPublishFailures, metrics.ambiguousRedeliveries,
+		} {
+			_ = prometheus.DefaultRegisterer.Register(collector)
 		}
 	})
 	return metrics
 }
 
-// recordToolsRegistered sets the number of registered tools.
-func (m *toolsMetrics) recordToolsRegistered(count int) {
-	m.toolsRegistered.Set(float64(count))
+func newToolsMetrics() *toolsMetrics {
+	return &toolsMetrics{
+		executionsTotal:       prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "semstreams", Subsystem: "agentic_tools", Name: "executions_total", Help: "Total tool executions by tool name and status"}, []string{"tool_name", "status"}),
+		executionDuration:     prometheus.NewHistogramVec(prometheus.HistogramOpts{Namespace: "semstreams", Subsystem: "agentic_tools", Name: "execution_duration_seconds", Help: "Tool execution latency in seconds", Buckets: prometheus.ExponentialBuckets(0.001, 2, 12)}, []string{"tool_name"}),
+		errorsTotal:           prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "semstreams", Subsystem: "agentic_tools", Name: "errors_total", Help: "Total tool errors by tool name and error type"}, []string{"tool_name", "error_type"}),
+		timeoutTotal:          prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "semstreams", Subsystem: "agentic_tools", Name: "timeout_total", Help: "Total tool execution timeouts by tool name"}, []string{"tool_name"}),
+		filteredTotal:         prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "semstreams", Subsystem: "agentic_tools", Name: "filtered_total", Help: "Total tool calls filtered by reason"}, []string{"tool_name", "reason"}),
+		rejectionsTotal:       prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "semstreams", Subsystem: "agentic_tools", Name: "rejections_total", Help: "Total writer-gate rejections"}, []string{"tool_name", "reason"}),
+		retriesTotal:          prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "semstreams", Subsystem: "agentic_tools", Name: "retries_total", Help: "Total tool-call retries"}, []string{"tool_name", "error_kind"}),
+		retriesExhausted:      prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "semstreams", Subsystem: "agentic_tools", Name: "retries_exhausted_total", Help: "Total exhausted tool-call retry budgets"}, []string{"tool_name"}),
+		toolsRegistered:       prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "semstreams", Subsystem: "agentic_tools", Name: "registered", Help: "Number of registered tools"}),
+		outcomeTotal:          prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "semstreams", Subsystem: "agentic_tools", Name: "outcome_total", Help: "Durable outcome paths"}, []string{"path"}),
+		outcomeStoreFailures:  prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "semstreams", Subsystem: "agentic_tools", Name: "outcome_store_failures_total", Help: "Outcome store failures"}, []string{"operation", "reason"}),
+		outcomeCollisions:     prometheus.NewCounter(prometheus.CounterOpts{Namespace: "semstreams", Subsystem: "agentic_tools", Name: "outcome_collisions_total", Help: "Immutable outcome collisions"}),
+		resultPublishFailures: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "semstreams", Subsystem: "agentic_tools", Name: "result_publish_failures_total", Help: "Tool result publication failures"}, []string{"reason"}),
+		ambiguousRedeliveries: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "semstreams", Subsystem: "agentic_tools", Name: "ambiguous_redeliveries_total", Help: "Redeliveries with potentially completed external effects"}, []string{"cause"}),
+	}
 }
 
-// recordExecutionStart is called when a tool execution starts.
-// Returns a function to call when the execution completes.
-func (m *toolsMetrics) recordExecutionStart(toolName string) func(success bool) {
+func (m *toolsMetrics) recordOutcome(path outcomePath) {
+	m.outcomeTotal.WithLabelValues(string(path)).Inc()
+}
+func (m *toolsMetrics) recordStoreFailure(operation outcomeStoreOperation, reason outcomeStoreFailureReason) {
+	m.outcomeStoreFailures.WithLabelValues(string(operation), string(reason)).Inc()
+}
+func (m *toolsMetrics) recordCollision() { m.outcomeCollisions.Inc() }
+func (m *toolsMetrics) recordPublishFailure(reason resultPublishFailureReason) {
+	m.resultPublishFailures.WithLabelValues(string(reason)).Inc()
+}
+func (m *toolsMetrics) recordAmbiguous(cause ambiguousRedeliveryCause) {
+	m.ambiguousRedeliveries.WithLabelValues(string(cause)).Inc()
+}
+
+func (m *toolsMetrics) recordToolsRegistered(count int) { m.toolsRegistered.Set(float64(count)) }
+func (m *toolsMetrics) recordExecutionStart(toolName string) func(bool) {
 	start := prometheus.NewTimer(m.executionDuration.WithLabelValues(toolName))
 	return func(success bool) {
 		start.ObserveDuration()
@@ -156,47 +139,29 @@ func (m *toolsMetrics) recordExecutionStart(toolName string) func(success bool) 
 		m.executionsTotal.WithLabelValues(toolName, status).Inc()
 	}
 }
-
-// recordExecutionSuccess records a successful tool execution.
-func (m *toolsMetrics) recordExecutionSuccess(toolName string, durationSeconds float64) {
+func (m *toolsMetrics) recordExecutionSuccess(toolName string, seconds float64) {
 	m.executionsTotal.WithLabelValues(toolName, "success").Inc()
-	m.executionDuration.WithLabelValues(toolName).Observe(durationSeconds)
+	m.executionDuration.WithLabelValues(toolName).Observe(seconds)
 }
-
-// recordExecutionError records a failed tool execution.
-func (m *toolsMetrics) recordExecutionError(toolName, errorType string, durationSeconds float64) {
+func (m *toolsMetrics) recordExecutionError(toolName, errorType string, seconds float64) {
 	m.executionsTotal.WithLabelValues(toolName, "error").Inc()
-	m.executionDuration.WithLabelValues(toolName).Observe(durationSeconds)
+	m.executionDuration.WithLabelValues(toolName).Observe(seconds)
 	m.errorsTotal.WithLabelValues(toolName, errorType).Inc()
 }
-
-// recordExecutionTimeout records a tool execution timeout.
-func (m *toolsMetrics) recordExecutionTimeout(toolName string, durationSeconds float64) {
+func (m *toolsMetrics) recordExecutionTimeout(toolName string, seconds float64) {
 	m.executionsTotal.WithLabelValues(toolName, "timeout").Inc()
-	m.executionDuration.WithLabelValues(toolName).Observe(durationSeconds)
+	m.executionDuration.WithLabelValues(toolName).Observe(seconds)
 	m.timeoutTotal.WithLabelValues(toolName).Inc()
 }
-
-// recordToolFiltered records a filtered tool call.
 func (m *toolsMetrics) recordToolFiltered(toolName, reason string) {
 	m.filteredTotal.WithLabelValues(toolName, reason).Inc()
 }
-
-// recordToolRejection records that a tool's own writer-gate bounced a call
-// before any graph mutation, labelled by the gate reason (e.g. evidence,
-// bound, grammar, cap for emit_lesson).
 func (m *toolsMetrics) recordToolRejection(toolName, reason string) {
 	m.rejectionsTotal.WithLabelValues(toolName, reason).Inc()
 }
-
-// recordToolRetry records that a retry was triggered for a tool by a
-// specific error kind (the kind of the preceding failed attempt).
-func (m *toolsMetrics) recordToolRetry(toolName, errorKind string) {
-	m.retriesTotal.WithLabelValues(toolName, errorKind).Inc()
+func (m *toolsMetrics) recordToolRetry(toolName, kind string) {
+	m.retriesTotal.WithLabelValues(toolName, kind).Inc()
 }
-
-// recordToolRetryExhausted records that a tool's retry budget was exhausted
-// without the call succeeding.
 func (m *toolsMetrics) recordToolRetryExhausted(toolName string) {
 	m.retriesExhausted.WithLabelValues(toolName).Inc()
 }

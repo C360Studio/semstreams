@@ -497,6 +497,15 @@ func WithStartTimeout(timeout time.Duration) TestOption {
 	}
 }
 
+// WithTestMaxPayload configures the broker max_payload used by the canonical
+// NATS integration-test substrate. It is a test-fixture option, not production
+// runtime configuration. Non-positive values preserve the substrate default.
+func WithTestMaxPayload(maxPayload int64) TestOption {
+	return func(cfg *testConfig) {
+		cfg.maxPayload = maxPayload
+	}
+}
+
 // WithFileStorage enables file-backed JetStream storage instead of the default
 // memory-only store. Use this when tests create many KV buckets or write large
 // volumes of data that would exceed the 256MB default memory limit.

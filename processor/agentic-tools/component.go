@@ -17,6 +17,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -40,11 +41,13 @@ type Component struct {
 	// component.Dependencies.ToolRegistry. Built and populated by
 	// main.go via executors.RegisterBuiltins. May be nil for tests
 	// that exercise the component in isolation.
-	shared     component.ToolRegistryReader
-	decoder    *message.Decoder
-	natsClient *natsclient.Client
-	logger     *slog.Logger
-	platform   component.PlatformMeta
+	shared        component.ToolRegistryReader
+	decoder       *message.Decoder
+	natsClient    *natsclient.Client
+	logger        *slog.Logger
+	platform      component.PlatformMeta
+	outcomes      completedOutcomeStore
+	publishStream func(context.Context, string, []byte, string) error
 
 	// Lifecycle management
 	running   bool
@@ -132,6 +135,9 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		platform:   deps.Platform,
 		metrics:    getMetrics(deps.MetricsRegistry),
 	}
+	if deps.NATSClient != nil {
+		comp.publishStream = deps.NATSClient.PublishToStreamWithMsgID
+	}
 
 	if len(config.ApprovalRequired) > 0 {
 		comp.approvalFilter = NewApprovalFilter(config.ApprovalRequired)
@@ -172,6 +178,11 @@ func (c *Component) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	outcomeBucket, err := graph.EnsureCatalogBucket(ctx, c.natsClient, graph.BucketToolCallOutcomes)
+	if err != nil {
+		return errs.Wrap(err, "Component", "Start", "acquire tool-call outcome ledger")
+	}
+	c.outcomes = jetStreamCompletedOutcomeStore{bucket: outcomeBucket}
 
 	// tool.list request/reply discovery is bound exclusively by its resolved
 	// typed input port. There is no subject fallback or legacy alias.
@@ -325,18 +336,15 @@ func (c *Component) setupConsumer(ctx context.Context, setup consumerSetup) erro
 	// Without heartbeat, any tool exceeding AckWait gets redelivered
 	// while the original handler is still working — duplicate work +
 	// potential duplicate publishes. ConsumeWithHeartbeat owns ack/nak;
-	// returning nil from the work closure preserves the prior
-	// "always ack on completion" semantics. A future PR can differentiate
-	// success/failure semantics by returning err on tool-execution
-	// failure, but that's a behaviour change beyond this PR's scope.
+	// The handler's error is the delivery disposition contract: nil ACKs,
+	// transient failures delayed-NAK, and PermanentDeliveryError Terms.
 	err := c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		if hbErr := natsclient.ConsumeWithHeartbeat(msgCtx, msg, heartbeatInterval,
 			func(workCtx context.Context) error {
-				c.handleToolCall(workCtx, msg.Data())
-				return nil
+				return c.handleToolCall(workCtx, msg.Data())
 			},
 		); hbErr != nil {
-			c.logger.Error("Tool handler error", "error", hbErr)
+			c.recordHandlerError(msgCtx, hbErr)
 		}
 	})
 	if err != nil {
@@ -354,6 +362,23 @@ func (c *Component) setupConsumer(ctx context.Context, setup consumerSetup) erro
 		"stream", streamName,
 		"consumer", consumerName)
 	return nil
+}
+
+func (c *Component) recordHandlerError(ctx context.Context, err error) {
+	switch {
+	case errors.Is(err, natsclient.ErrHeartbeatFailed):
+		if c.metrics != nil {
+			c.metrics.recordAmbiguous(ambiguousCauseHeartbeat)
+		}
+		c.logger.Error("Tool delivery heartbeat failed", "error", err, "ambiguous_effect", true)
+	case ctx.Err() != nil:
+		if c.metrics != nil {
+			c.metrics.recordAmbiguous(ambiguousCauseShutdown)
+		}
+		c.logger.Error("Tool delivery interrupted by shutdown", "error", err, "ambiguous_effect", true)
+	default:
+		c.logger.Error("Tool handler error", "error", err)
+	}
 }
 
 // waitForStream waits for a JetStream stream to be available
@@ -437,7 +462,7 @@ func (c *Component) cleanupLocked(timeout time.Duration, deleteDurable bool) {
 }
 
 // handleToolCall processes a tool call request
-func (c *Component) handleToolCall(ctx context.Context, data []byte) {
+func (c *Component) handleToolCall(ctx context.Context, data []byte) error {
 	c.mu.Lock()
 	c.lastActivity = time.Now()
 	c.mu.Unlock()
@@ -447,7 +472,7 @@ func (c *Component) handleToolCall(ctx context.Context, data []byte) {
 	if err != nil {
 		c.logger.Error("Failed to unmarshal BaseMessage", "error", err)
 		c.incrementErrors()
-		return
+		return natsclient.TerminateDelivery(fmt.Errorf("decode tool call: %w", err))
 	}
 
 	// Extract ToolCall from payload
@@ -455,13 +480,27 @@ func (c *Component) handleToolCall(ctx context.Context, data []byte) {
 	if !ok {
 		c.logger.Error("Unexpected payload type", "type", fmt.Sprintf("%T", baseMsg.Payload()))
 		c.incrementErrors()
-		return
+		return natsclient.TerminateDelivery(fmt.Errorf("unexpected tool-call payload type %T", baseMsg.Payload()))
 	}
 	call := *callPtr
+	if err := call.Validate(); err != nil {
+		c.logger.Error("Invalid tool call", "error", err)
+		c.incrementErrors()
+		return natsclient.TerminateDelivery(fmt.Errorf("validate tool call: %w", err))
+	}
 
 	c.logger.Debug("Processing tool call",
 		slog.String("tool", call.Name),
 		slog.String("call_id", call.ID))
+
+	if c.outcomes == nil {
+		return fmt.Errorf("tool-call outcome ledger is not initialized")
+	}
+	if outcome, found, err := c.loadCompletedOutcome(ctx, call, storeOperationGet); err != nil {
+		return err
+	} else if found {
+		return c.publishCompletedResult(ctx, call, outcome.Result, outcomePathReplay)
+	}
 
 	// Check admission: global allowlist + per-loop advertised set (gh#551)
 	if rejection := c.admitToolCall(call); rejection != nil {
@@ -480,9 +519,9 @@ func (c *Component) handleToolCall(ctx context.Context, data []byte) {
 			LoopID:    call.LoopID,
 			TraceID:   call.TraceID,
 		}
-		c.publishResult(ctx, result)
+		err := c.persistAndPublishOutcome(ctx, call, result, outcomePathRejection, false)
 		c.incrementErrors()
-		return
+		return err
 	}
 
 	// Check approval filter
@@ -497,19 +536,28 @@ func (c *Component) handleToolCall(ctx context.Context, data []byte) {
 
 			result := agentic.ToolResult{
 				CallID:    call.ID,
+				Name:      call.Name,
 				Error:     filterResult.Rejected[0].Reason,
 				ErrorKind: agentic.ToolErrorPermission,
 				LoopID:    call.LoopID,
 				TraceID:   call.TraceID,
 			}
-			c.publishResult(ctx, result)
-			return
+			// Approval-required is a pause signal, not a terminal outcome. The
+			// loop deliberately re-dispatches the SAME CallID with ApprovedBy set;
+			// persisting this gate as COMPLETED would collide with that request.
+			// It also gets a distinct message ID so stream dedup cannot suppress
+			// the later terminal result.
+			err := c.publishResultWithMsgID(ctx, result, toolApprovalRequiredMessageID(call.ID))
+			if err == nil && c.metrics != nil {
+				c.metrics.recordOutcome(outcomePathRejection)
+			}
+			return err
 		}
 	}
 
 	// Execute tool with timeout
 	startTime := time.Now()
-	result, err := c.executeWithTimeout(ctx, call)
+	result, err := c.executeWithPanicRecovery(ctx, call)
 	duration := time.Since(startTime).Seconds()
 
 	c.classifyToolOutcome(ctx, call, &result, err, duration)
@@ -517,17 +565,161 @@ func (c *Component) handleToolCall(ctx context.Context, data []byte) {
 	// Propagate trace correlation fields from call to result
 	result.LoopID = call.LoopID
 	result.TraceID = call.TraceID
+	result.CallID = call.ID
+	if result.Name == "" {
+		result.Name = call.Name
+	}
 
-	// Publish result
-	if err := c.publishResult(ctx, result); err != nil {
+	// Persist the immutable completed outcome before publishing. Only the
+	// result's synchronous PubAck permits the request delivery to ACK.
+	if err := c.persistAndPublishOutcome(ctx, call, result, outcomePathNew, true); err != nil {
 		c.logger.Error("Failed to publish result", "error", err)
 		c.incrementErrors()
-		return
+		return err
 	}
 
 	c.mu.Lock()
 	c.requestsProcessed++
 	c.mu.Unlock()
+	return nil
+}
+
+func (c *Component) executeWithPanicRecovery(ctx context.Context, call agentic.ToolCall) (
+	result agentic.ToolResult, err error,
+) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			c.logger.Error("Tool executor panicked", "tool", call.Name, "ambiguous_effect", true)
+			c.incrementErrors()
+			if c.metrics != nil {
+				c.metrics.recordAmbiguous(ambiguousCausePanic)
+			}
+			result = compactPanicResult(call)
+			err = nil
+		}
+	}()
+	return c.executeWithTimeout(ctx, call)
+}
+
+func (c *Component) loadCompletedOutcome(
+	ctx context.Context, call agentic.ToolCall, operation outcomeStoreOperation,
+) (completedOutcome, bool, error) {
+	data, err := c.outcomes.Get(ctx, toolCallOutcomeKey(call.ID))
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return completedOutcome{}, false, nil
+	}
+	if err != nil {
+		if c.metrics != nil {
+			c.metrics.recordStoreFailure(operation, storeReasonTransport)
+		}
+		return completedOutcome{}, false, fmt.Errorf("read tool-call outcome: %w", err)
+	}
+	outcome, err := decodeCompletedOutcome(data, call)
+	if err != nil {
+		if c.metrics != nil {
+			var collision *outcomeCollisionError
+			if errors.As(err, &collision) {
+				c.metrics.recordCollision()
+			} else {
+				c.metrics.recordStoreFailure(operation, storeReasonCorrupt)
+			}
+		}
+		c.logger.Error("Irrecoverable tool-call outcome", "error", err)
+		return completedOutcome{}, false, natsclient.TerminateDelivery(err)
+	}
+	return outcome, true, nil
+}
+
+func (c *Component) persistAndPublishOutcome(
+	ctx context.Context, call agentic.ToolCall, result agentic.ToolResult, path outcomePath, effectful bool,
+) error {
+	winner, finalPath, err := c.persistCompletedOutcome(ctx, call, result, path, false, effectful)
+	if err != nil {
+		return err
+	}
+	return c.publishCompletedResult(ctx, call, winner.Result, finalPath)
+}
+
+func (c *Component) persistCompletedOutcome(
+	ctx context.Context, call agentic.ToolCall, result agentic.ToolResult, path outcomePath, compact, effectful bool,
+) (completedOutcome, outcomePath, error) {
+	record, err := newCompletedOutcome(call, result)
+	if err != nil {
+		return completedOutcome{}, path, natsclient.TerminateDelivery(err)
+	}
+	data, err := marshalCompletedOutcome(record)
+	if err != nil {
+		return completedOutcome{}, path, natsclient.TerminateDelivery(fmt.Errorf("marshal tool outcome: %w", err))
+	}
+	err = c.outcomes.Create(ctx, toolCallOutcomeKey(call.ID), data)
+	if err == nil {
+		if compact {
+			path = outcomePathCompact
+		}
+		return record, path, nil
+	}
+	if errors.Is(err, jetstream.ErrKeyExists) {
+		winner, found, readErr := c.loadCompletedOutcome(ctx, call, storeOperationReadWinner)
+		if readErr != nil {
+			return completedOutcome{}, path, readErr
+		}
+		if !found {
+			if c.metrics != nil {
+				c.metrics.recordStoreFailure(storeOperationReadWinner, storeReasonTransport)
+			}
+			return completedOutcome{}, path, fmt.Errorf("read winning tool-call outcome after create collision")
+		}
+		return winner, outcomePathReplay, nil
+	}
+	if isObservedOversize(err) {
+		if c.metrics != nil {
+			c.metrics.recordStoreFailure(storeOperationCreate, storeReasonOversize)
+		}
+		if compact {
+			c.logger.Error("Compact tool outcome exceeded transport bound", "error", err)
+			return completedOutcome{}, outcomePathCompact, natsclient.TerminateDelivery(fmt.Errorf("compact tool outcome exceeds bound: %w", err))
+		}
+		return c.persistCompletedOutcome(ctx, call, compactTooLargeResult(call), outcomePathCompact, true, effectful)
+	}
+	if c.metrics != nil {
+		c.metrics.recordStoreFailure(storeOperationCreate, storeReasonTransport)
+	}
+	if effectful {
+		if c.metrics != nil {
+			c.metrics.recordAmbiguous(ambiguousCauseStoreFailure)
+		}
+		c.logger.Error("Tool outcome persistence failed after execution", "error", err, "ambiguous_effect", true)
+	}
+	// A failed Create after external execution is intentionally transient. The
+	// next delivery cannot know whether an external effect happened; executors
+	// use ToolCall.ID for downstream idempotency across this ambiguity window.
+	return completedOutcome{}, path, fmt.Errorf("create tool-call outcome: %w", err)
+}
+
+func (c *Component) publishCompletedResult(
+	ctx context.Context, call agentic.ToolCall, result agentic.ToolResult, path outcomePath,
+) error {
+	err := c.publishResult(ctx, result)
+	if err == nil {
+		if c.metrics != nil {
+			c.metrics.recordOutcome(path)
+		}
+		return nil
+	}
+	if !isObservedOversize(err) {
+		return err
+	}
+	// The full immutable authority stays in KV. A publication-only bound gets
+	// exactly one compact transport surrogate using the same call-derived MsgID.
+	compact := compactTooLargeResult(call)
+	if compactErr := c.publishResult(ctx, compact); compactErr != nil {
+		c.logger.Error("Compact tool result publication failed", "error", compactErr)
+		return natsclient.TerminateDelivery(fmt.Errorf("publish compact tool result: %w", compactErr))
+	}
+	if c.metrics != nil {
+		c.metrics.recordOutcome(outcomePathCompact)
+	}
+	return nil
 }
 
 // classifyToolOutcome records metrics and updates the result's ErrorKind based
@@ -786,9 +978,15 @@ func backoffFor(attempt int, policy RetryPolicy) time.Duration {
 // The constructor merges and resolves the required tool.result declaration;
 // publication fails closed if that declaration is absent or malformed.
 func (c *Component) publishResult(ctx context.Context, result agentic.ToolResult) error {
-	resultMsg := message.NewBaseMessage(result.Schema(), &result, "agentic-tools")
-	data, err := json.Marshal(resultMsg)
+	return c.publishResultWithMsgID(ctx, result, toolResultMessageID(result.CallID))
+}
+
+func (c *Component) publishResultWithMsgID(ctx context.Context, result agentic.ToolResult, msgID string) error {
+	data, err := marshalToolResult(result)
 	if err != nil {
+		if c.metrics != nil {
+			c.metrics.recordPublishFailure(publishReasonMarshal)
+		}
 		return errs.Wrap(err, "Component", "publishResult", "marshal result")
 	}
 
@@ -796,7 +994,17 @@ func (c *Component) publishResult(ctx context.Context, result agentic.ToolResult
 	if err != nil {
 		return errs.WrapInvalid(err, "Component", "publishResult", "resolve output subject")
 	}
-	if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {
+	if c.publishStream == nil {
+		return errs.WrapTransient(errors.New("tool result publisher is not initialized"), "Component", "publishResult", "publish result")
+	}
+	if err := c.publishStream(ctx, subject, data, msgID); err != nil {
+		if c.metrics != nil {
+			reason := publishReasonTransport
+			if isObservedOversize(err) {
+				reason = publishReasonOversize
+			}
+			c.metrics.recordPublishFailure(reason)
+		}
 		return errs.WrapTransient(err, "Component", "publishResult", fmt.Sprintf("publish to %s", subject))
 	}
 	return nil

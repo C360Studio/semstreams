@@ -66,7 +66,7 @@ func TestKVCatalog_EveryRowValidates(t *testing.T) {
 		assert.False(t, seen[spec.Name], "catalog row %q must be declared exactly once", spec.Name)
 		seen[spec.Name] = true
 	}
-	assert.Len(t, seen, 18, "the catalog carries the 18 retained framework-guaranteed buckets")
+	assert.Len(t, seen, 19, "the catalog carries the 19 retained framework-guaranteed buckets")
 }
 
 // TestKVCatalog_DeclaredPolicies pins the architect-census policy decisions
@@ -82,6 +82,16 @@ func TestKVCatalog_DeclaredPolicies(t *testing.T) {
 	assert.Equal(t, uint8(1), spec(BucketEntityStates).History)
 	assert.Equal(t, natsclient.ClassAuthoritative, spec(BucketEntityStates).Class)
 	assert.Equal(t, "graph-ingest", spec(BucketEntityStates).Owner)
+
+	// Durable tool outcomes are single-revision, single-replica operational
+	// state with no lifecycle reclamation. BucketSpec has no MaxBytes field,
+	// so the creation seam leaves that limit at NATS' unlimited zero value.
+	toolOutcomes := spec(BucketToolCallOutcomes)
+	assert.Equal(t, uint8(1), toolOutcomes.History)
+	assert.Equal(t, 1, toolOutcomes.Replicas)
+	assert.Equal(t, natsclient.ClassOperational, toolOutcomes.Class)
+	assert.Equal(t, "agentic-tools", toolOutcomes.Owner)
+	assert.Equal(t, natsclient.RetentionNoLifecycle, toolOutcomes.Retention.Kind)
 
 	// GRAPH_STATUS keeps its readiness replay depth.
 	assert.Equal(t, uint8(3), spec(BucketGraphStatus).History)
@@ -122,14 +132,14 @@ func TestFrameworkOwnedBuckets_DerivesFromWritePolicy(t *testing.T) {
 // TestFrameworkOwnedBuckets_ProductionView pins the production derived view.
 func TestFrameworkOwnedBuckets_ProductionView(t *testing.T) {
 	owned := FrameworkOwnedBuckets()
-	assert.Len(t, owned, 18)
+	assert.Len(t, owned, 19)
 	for _, name := range []string{
 		BucketEntityStates, BucketPredicateIndex, BucketIncomingIndex, BucketOutgoingIndex,
 		BucketAliasIndex, BucketNameIndex, BucketEntitySuffixIndex, BucketSpatialIndex,
 		BucketTemporalIndex, BucketTemporalIndexReverse,
 		BucketEmbeddingIndex, BucketEmbeddingDedup, BucketCommunityIndex,
 		BucketCommunitySummaries, BucketAnomalyIndex,
-		BucketGraphIngestAppliedSeq, BucketGraphStatus, BucketStorageReport,
+		BucketGraphIngestAppliedSeq, BucketToolCallOutcomes, BucketGraphStatus, BucketStorageReport,
 	} {
 		assert.True(t, IsFrameworkOwnedBucket(name), "%s must be framework-owned", name)
 	}

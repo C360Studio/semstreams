@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,7 +19,19 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
+	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
+
+type approvalFlowExecutor struct{ calls atomic.Int32 }
+
+func (e *approvalFlowExecutor) Execute(_ context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
+	e.calls.Add(1)
+	return agentic.ToolResult{CallID: call.ID, Name: call.Name, Content: "approved terminal result"}, nil
+}
+
+func (e *approvalFlowExecutor) ListTools() []agentic.ToolDefinition {
+	return []agentic.ToolDefinition{{Name: "delete_rule", Parameters: map[string]any{"type": "object"}}}
+}
 
 // TestIntegration_ApprovalFlow_Approve exercises the full
 // human-in-the-loop round trip end-to-end through a running
@@ -86,6 +99,33 @@ func TestIntegration_ApprovalFlow_Approve(t *testing.T) {
 	require.NoError(t, lc.Start(ctx))
 	defer lc.Stop(5 * time.Second)
 
+	toolsConfig := agentictools.DefaultConfig()
+	toolsConfig.ApprovalRequired = []string{"delete_rule"}
+	toolsConfig.ConsumerNameSuffix = "approval-tools-test"
+	for index := range toolsConfig.Ports.Inputs {
+		if toolsConfig.Ports.Inputs[index].Name == "tool.execute" {
+			toolsConfig.Ports.Inputs[index].Config = component.JetStreamPort{
+				StreamName: "AGENT", Subjects: []string{"tool.execute.>"},
+			}
+		}
+	}
+	for index := range toolsConfig.Ports.Outputs {
+		if toolsConfig.Ports.Outputs[index].Name == "tool.result" {
+			toolsConfig.Ports.Outputs[index].Config = component.JetStreamPort{
+				StreamName: "AGENT", Subjects: []string{"tool.result.*"},
+			}
+		}
+	}
+	toolsRaw, err := json.Marshal(toolsConfig)
+	require.NoError(t, err)
+	toolsDiscoverable, err := agentictools.NewComponent(toolsRaw, deps)
+	require.NoError(t, err)
+	toolsComponent := toolsDiscoverable.(*agentictools.Component)
+	toolExecutor := &approvalFlowExecutor{}
+	require.NoError(t, toolsComponent.RegisterToolExecutor(toolExecutor))
+	require.NoError(t, toolsComponent.Start(ctx))
+	defer toolsComponent.Stop(5 * time.Second)
+
 	time.Sleep(200 * time.Millisecond)
 
 	dec := payloadbuiltins.NewTestDecoder(t)
@@ -147,6 +187,22 @@ func TestIntegration_ApprovalFlow_Approve(t *testing.T) {
 		pendingMu.Unlock()
 	})
 	require.NoError(t, err)
+	toolResults := make([]agentic.ToolResult, 0, 2)
+	var resultsMu sync.Mutex
+	_, err = natsClient.Subscribe(ctx, "tool.result.>", func(_ context.Context, msg *nats.Msg) {
+		baseMsg, decErr := dec.Decode(msg.Data)
+		if decErr != nil {
+			return
+		}
+		toolResult, ok := baseMsg.Payload().(*agentic.ToolResult)
+		if !ok || toolResult.CallID != callID {
+			return
+		}
+		resultsMu.Lock()
+		toolResults = append(toolResults, *toolResult)
+		resultsMu.Unlock()
+	})
+	require.NoError(t, err)
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -190,18 +246,8 @@ func TestIntegration_ApprovalFlow_Approve(t *testing.T) {
 		return len(dispatchedCalls) >= 1
 	}, 5*time.Second, 50*time.Millisecond, "loop should dispatch the original tool call")
 
-	// Step 4: simulate the agentic-tools approval filter rejecting
-	// the call by publishing a tool result with the approval_required
-	// prefix.
-	gateResult := &agentic.ToolResult{
-		CallID:    callID,
-		Name:      "delete_rule",
-		ErrorKind: agentic.ToolErrorPermission,
-		Error:     agentic.ApprovalRequiredPrefix + "Tool 'delete_rule' requires human approval before execution",
-	}
-	publishToolResultMessage(t, natsClient, "tool.result."+callID, gateResult)
-
-	// Step 5: wait for ApprovalPendingEvent.
+	// Step 4/5: the running agentic-tools component publishes the nonterminal
+	// approval gate; the running loop consumes it and emits ApprovalPending.
 	require.Eventually(t, func() bool {
 		pendingMu.Lock()
 		defer pendingMu.Unlock()
@@ -215,6 +261,7 @@ func TestIntegration_ApprovalFlow_Approve(t *testing.T) {
 	assert.Equal(t, callID, pe.CallID)
 	assert.Equal(t, "delete_rule", pe.ToolName)
 	assert.Contains(t, pe.Reason, "approval_required:")
+	assert.Equal(t, int32(0), toolExecutor.calls.Load(), "initial gate must not execute")
 
 	// Step 6: publish ApprovalResponse with decision=approve.
 	approval := &agentic.ApprovalResponse{
@@ -239,7 +286,6 @@ func TestIntegration_ApprovalFlow_Approve(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "loop should re-dispatch the approved tool call")
 
 	dispatchMu.Lock()
-	defer dispatchMu.Unlock()
 	require.GreaterOrEqual(t, len(dispatchedCalls), 2)
 	approved := dispatchedCalls[1]
 	assert.Equal(t, callID, approved.ID, "re-dispatch should reuse the original call_id")
@@ -248,6 +294,20 @@ func TestIntegration_ApprovalFlow_Approve(t *testing.T) {
 	if v, ok := approved.Arguments["rule_id"].(string); !ok || v != "rule-42" {
 		t.Errorf("re-dispatch lost original arguments: %v", approved.Arguments)
 	}
+	dispatchMu.Unlock()
+
+	require.Eventually(t, func() bool {
+		resultsMu.Lock()
+		defer resultsMu.Unlock()
+		return len(toolResults) >= 2 && toolResults[len(toolResults)-1].Content == "approved terminal result"
+	}, 5*time.Second, 50*time.Millisecond, "approved same-ID re-dispatch should publish terminal result")
+	assert.Equal(t, int32(1), toolExecutor.calls.Load(), "approved same-ID flow must execute exactly once")
+	resultsMu.Lock()
+	terminal := toolResults[len(toolResults)-1]
+	resultsMu.Unlock()
+	assert.Equal(t, callID, terminal.CallID)
+	assert.Equal(t, "delete_rule", terminal.Name)
+	assert.Equal(t, loopID, terminal.LoopID)
 }
 
 // TestIntegration_ApprovalTimeoutSweeper_PublishesWireResponse verifies that

@@ -20,12 +20,6 @@ import (
 
 const responseBoundsTestMaxPayload int64 = 1024
 
-func withResponseBoundsTestMaxPayload(maxPayload int64) TestOption {
-	return func(cfg *testConfig) {
-		cfg.maxPayload = maxPayload
-	}
-}
-
 type responseBoundsLogRecorder struct {
 	mu      sync.Mutex
 	records []slog.Record
@@ -70,7 +64,7 @@ func (r *responseBoundsLogRecorder) containsError(parts ...string) bool {
 }
 
 func TestIntegration_ClientMaxPayloadObservesActiveConnection(t *testing.T) {
-	testClient := NewTestClient(t, withResponseBoundsTestMaxPayload(responseBoundsTestMaxPayload))
+	testClient := NewTestClient(t, WithTestMaxPayload(responseBoundsTestMaxPayload))
 
 	maxPayload, err := testClient.Client.MaxPayload()
 	require.NoError(t, err)
@@ -78,7 +72,7 @@ func TestIntegration_ClientMaxPayloadObservesActiveConnection(t *testing.T) {
 }
 
 func TestIntegration_SubscribeForRequestsPublishesBeforeClassifyingResponseLimit(t *testing.T) {
-	testClient := NewTestClient(t, withResponseBoundsTestMaxPayload(responseBoundsTestMaxPayload))
+	testClient := NewTestClient(t, WithTestMaxPayload(responseBoundsTestMaxPayload))
 	client := testClient.Client
 	ctx := context.Background()
 
@@ -146,7 +140,7 @@ func TestIntegration_SubscribeForRequestsPublishesBeforeClassifyingResponseLimit
 }
 
 func TestIntegration_SubscribeForRequestsUsesSubscriptionConnectionForOversizeDiagnostic(t *testing.T) {
-	testClient := NewTestClient(t, withResponseBoundsTestMaxPayload(responseBoundsTestMaxPayload))
+	testClient := NewTestClient(t, WithTestMaxPayload(responseBoundsTestMaxPayload))
 	client := testClient.Client
 	ctx := context.Background()
 	const subject = "test.response.bounds.subscription.connection"
@@ -213,7 +207,7 @@ func TestIntegration_SubscribeForRequestsUsesSubscriptionConnectionForOversizeDi
 
 func TestIntegration_SubscribeForRequestsLogsResponseLimitRefusalPublishFailure(t *testing.T) {
 	const tinyMaxPayload int64 = 64
-	testClient := NewTestClient(t, withResponseBoundsTestMaxPayload(tinyMaxPayload))
+	testClient := NewTestClient(t, WithTestMaxPayload(tinyMaxPayload))
 	client := testClient.Client
 	recorder := &responseBoundsLogRecorder{}
 	client.logger = slog.New(recorder)

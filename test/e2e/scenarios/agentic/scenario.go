@@ -3,9 +3,13 @@ package agentic
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base32"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -13,6 +17,8 @@ import (
 	"github.com/c360studio/semstreams/test/e2e/client"
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // Scenario validates the agentic components (loop, model, tools) work together.
@@ -154,6 +160,7 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 		{"validate-trajectory", s.validateTrajectory},
 		{"verify-graph-triples", s.verifyGraphTriples},
 		{"verify-tool-execution", s.verifyToolExecution},
+		{"verify-durable-tool-replay", s.verifyDurableToolReplay},
 		{"verify-streaming-metrics", s.verifyStreamingMetrics},
 		{"verify-tool-call-governance", s.verifyToolCallGovernance},
 		{"validate-results", s.validateResults},
@@ -178,6 +185,204 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 	result.Duration = result.EndTime.Sub(result.StartTime)
 
 	return result, nil
+}
+
+// verifyDurableToolReplay injects one test-side TOOL stream admission fault
+// after a completed outcome is durable. There is no production fault knob: the
+// harness pauses the shipped consumer, stores the request, temporarily makes
+// the already-full stream reject new messages, resumes, observes the actual
+// result publication failure, and restores the stream for redelivery.
+func (s *Scenario) verifyDurableToolReplay(ctx context.Context, result *scenarios.Result) error {
+	const (
+		toolStream   = "TOOL"
+		toolConsumer = "agentic-tools-tool-execute-all"
+	)
+	js, err := s.nats.Client().JetStream()
+	if err != nil {
+		return fmt.Errorf("open JetStream for durable replay proof: %w", err)
+	}
+	stream, err := js.Stream(ctx, toolStream)
+	if err != nil {
+		return fmt.Errorf("open %s stream: %w", toolStream, err)
+	}
+
+	executionsBefore, err := s.metricWithLabels(ctx, "semstreams_agentic_tools_executions_total", map[string]string{
+		"tool_name": "query_entity",
+	})
+	if err != nil {
+		return fmt.Errorf("read execution baseline: %w", err)
+	}
+	retriesBefore, err := s.metricWithLabels(ctx, "semstreams_agentic_tools_result_publish_failures_total", map[string]string{
+		"reason": "transport",
+	})
+	if err != nil {
+		return fmt.Errorf("read publish-retry baseline: %w", err)
+	}
+
+	if _, err := stream.PauseConsumer(ctx, toolConsumer, time.Now().Add(2*time.Minute)); err != nil {
+		return fmt.Errorf("pause %s consumer: %w", toolConsumer, err)
+	}
+	originalInfo, err := stream.Info(ctx)
+	if err != nil {
+		_, _ = stream.ResumeConsumer(context.Background(), toolConsumer)
+		return fmt.Errorf("read %s stream config: %w", toolStream, err)
+	}
+	originalConfig := originalInfo.Config
+	restored := false
+	defer func() {
+		if !restored {
+			_, _ = js.UpdateStream(context.Background(), originalConfig)
+		}
+		_, _ = stream.ResumeConsumer(context.Background(), toolConsumer)
+	}()
+
+	call := agentic.ToolCall{
+		ID:      fmt.Sprintf("e2e-durable-replay-%d", time.Now().UnixNano()),
+		Name:    "query_entity",
+		LoopID:  fmt.Sprintf("e2e-durable-loop-%d", time.Now().UnixNano()),
+		TraceID: fmt.Sprintf("e2e-durable-trace-%d", time.Now().UnixNano()),
+		Arguments: map[string]any{
+			"entity_id": "c360.agentic.sensor.temperature.temp-sensor-001",
+		},
+	}
+	request := message.NewBaseMessage(call.Schema(), &call, "e2e-durable-replay")
+	wire, err := json.Marshal(request)
+	if err != nil {
+		return fmt.Errorf("marshal durable replay tool call: %w", err)
+	}
+	if err := s.nats.Publish(ctx, "tool.execute."+call.ID, wire); err != nil {
+		return fmt.Errorf("publish paused durable replay tool call: %w", err)
+	}
+
+	fullInfo, err := stream.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("read %s state after request: %w", toolStream, err)
+	}
+	if fullInfo.State.Msgs == 0 {
+		return fmt.Errorf("%s has no stored request to hold while faulting result publication", toolStream)
+	}
+	faultConfig := fullInfo.Config
+	faultConfig.Discard = jetstream.DiscardNew
+	faultConfig.DiscardNewPerSubject = false
+	faultConfig.MaxMsgs = int64(fullInfo.State.Msgs)
+	if _, err := js.UpdateStream(ctx, faultConfig); err != nil {
+		return fmt.Errorf("install test-only result publication fault: %w", err)
+	}
+	if _, err := stream.ResumeConsumer(ctx, toolConsumer); err != nil {
+		return fmt.Errorf("resume %s into result publication fault: %w", toolConsumer, err)
+	}
+
+	if err := s.waitMetricWithLabels(ctx, "semstreams_agentic_tools_result_publish_failures_total",
+		map[string]string{"reason": "transport"}, retriesBefore+1, 15*time.Second); err != nil {
+		return fmt.Errorf("result publication failure was not observed: %w", err)
+	}
+	if _, err := js.UpdateStream(ctx, originalConfig); err != nil {
+		return fmt.Errorf("restore %s stream after fault: %w", toolStream, err)
+	}
+	restored = true
+
+	wantMsgID, executionDelta, err := s.verifyReplayedToolResult(ctx, stream, call, executionsBefore)
+	if err != nil {
+		return err
+	}
+	result.Details["durable_tool_replay_call_id"] = call.ID
+	result.Details["durable_tool_replay_msg_id"] = wantMsgID
+	result.Metrics["durable_tool_replay_executor_invocations"] = executionDelta
+	return nil
+}
+
+func (s *Scenario) verifyReplayedToolResult(
+	ctx context.Context, stream jetstream.Stream, call agentic.ToolCall, executionsBefore float64,
+) (string, float64, error) {
+	resultSubject := "tool.result." + call.ID
+	deadline := time.Now().Add(45 * time.Second)
+	var stored *jetstream.RawStreamMsg
+	for time.Now().Before(deadline) {
+		var err error
+		stored, err = stream.GetLastMsgForSubject(ctx, resultSubject)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, jetstream.ErrMsgNotFound) {
+			return "", 0, fmt.Errorf("read replayed result: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return "", 0, ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	if stored == nil {
+		return "", 0, fmt.Errorf("stored result did not replay within 45s")
+	}
+	wantMsgID := "tool-result/v1/" + durableCallDigest(call.ID)
+	if got := stored.Header.Get(nats.MsgIdHdr); got != wantMsgID {
+		return "", 0, fmt.Errorf("replayed result Nats-Msg-Id = %q, want %q", got, wantMsgID)
+	}
+	var resultEnvelope struct {
+		Payload agentic.ToolResult `json:"payload"`
+	}
+	if err := json.Unmarshal(stored.Data, &resultEnvelope); err != nil {
+		return "", 0, fmt.Errorf("decode replayed ToolResult: %w", err)
+	}
+	replayed := resultEnvelope.Payload
+	if replayed.CallID != call.ID || replayed.Name != call.Name || replayed.LoopID != call.LoopID || replayed.TraceID != call.TraceID {
+		return "", 0, fmt.Errorf("replayed ToolResult correlation = call:%q name:%q loop:%q trace:%q, want call:%q name:%q loop:%q trace:%q",
+			replayed.CallID, replayed.Name, replayed.LoopID, replayed.TraceID,
+			call.ID, call.Name, call.LoopID, call.TraceID)
+	}
+	if replayed.Content == "" && replayed.Error == "" {
+		return "", 0, fmt.Errorf("replayed ToolResult has neither terminal content nor error")
+	}
+	executionsAfter, err := s.metricWithLabels(ctx, "semstreams_agentic_tools_executions_total", map[string]string{
+		"tool_name": "query_entity",
+	})
+	if err != nil {
+		return "", 0, fmt.Errorf("read execution result: %w", err)
+	}
+	executionDelta := executionsAfter - executionsBefore
+	if executionDelta != 1 {
+		return "", 0, fmt.Errorf("durable replay executor invocation delta = %.0f, want exactly 1", executionDelta)
+	}
+	return wantMsgID, executionDelta, nil
+}
+
+func durableCallDigest(callID string) string {
+	sum := sha256.Sum256([]byte(callID))
+	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:]))
+}
+
+func (s *Scenario) metricWithLabels(ctx context.Context, name string, labels map[string]string) (float64, error) {
+	metrics, err := s.metrics.GetMetricByLabels(ctx, name, labels)
+	if err != nil {
+		return 0, err
+	}
+	if len(metrics) == 0 {
+		return 0, nil
+	}
+	var total float64
+	for _, metric := range metrics {
+		total += metric.Value
+	}
+	return total, nil
+}
+
+func (s *Scenario) waitMetricWithLabels(
+	ctx context.Context, name string, labels map[string]string, want float64, timeout time.Duration,
+) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		got, err := s.metricWithLabels(ctx, name, labels)
+		if err == nil && got >= want {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("metric %s%v did not reach %.0f", name, labels, want)
 }
 
 // Teardown cleans up after the scenario.

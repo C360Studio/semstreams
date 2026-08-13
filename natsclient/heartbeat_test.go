@@ -27,6 +27,8 @@ type mockMsg struct {
 	mu            sync.Mutex
 	inProgressErr error
 	ackErr        error
+	nakErr        error
+	termErr       error
 }
 
 func (m *mockMsg) Data() []byte                              { return m.data }
@@ -52,7 +54,9 @@ func (m *mockMsg) Nak() error {
 func (m *mockMsg) NakWithDelay(delay time.Duration) error {
 	m.nakCalled.Store(true)
 	m.nakDelay.Store(int64(delay))
-	return nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.nakErr
 }
 
 func (m *mockMsg) InProgress() error {
@@ -64,7 +68,37 @@ func (m *mockMsg) InProgress() error {
 
 func (m *mockMsg) Term() error {
 	m.termCalled.Store(true)
-	return nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.termErr
+}
+
+func TestConsumeWithHeartbeatSurfacesSettlementErrors(t *testing.T) {
+	t.Run("transient NAK", func(t *testing.T) {
+		settleErr := errors.New("nak failed")
+		msg := &mockMsg{nakErr: settleErr}
+		err := ConsumeWithHeartbeat(context.Background(), msg, time.Second,
+			func(context.Context) error { return errors.New("work failed") })
+		require.ErrorIs(t, err, settleErr)
+	})
+
+	t.Run("shutdown NAK", func(t *testing.T) {
+		settleErr := errors.New("shutdown nak failed")
+		msg := &mockMsg{nakErr: settleErr}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := ConsumeWithHeartbeat(ctx, msg, time.Second,
+			func(workCtx context.Context) error { <-workCtx.Done(); return workCtx.Err() })
+		require.ErrorIs(t, err, settleErr)
+	})
+
+	t.Run("permanent Term", func(t *testing.T) {
+		settleErr := errors.New("term failed")
+		msg := &mockMsg{termErr: settleErr}
+		err := ConsumeWithHeartbeat(context.Background(), msg, time.Second,
+			func(context.Context) error { return TerminateDelivery(errors.New("bad payload")) })
+		require.ErrorIs(t, err, settleErr)
+	})
 }
 
 func (m *mockMsg) TermWithReason(_ string) error {
