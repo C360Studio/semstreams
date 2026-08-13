@@ -6,10 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"time"
 
 	"github.com/c360studio/semstreams/test/e2e/client"
+	"github.com/gorilla/websocket"
 )
+
+const protocolFlowWebSocketURL = "ws://localhost:38082/e2e-output"
 
 // CoreDataflowScenario validates complete core data pipeline
 type CoreDataflowScenario struct {
@@ -64,7 +68,7 @@ func NewCoreDataflowScenario(
 
 	return &CoreDataflowScenario{
 		name:        "core-dataflow",
-		description: "Tests complete core data pipeline: UDP → JSONFilter → JSONMap → File, plus WebSocket status streaming",
+		description: "Tests UDP → JSONFilter → JSONMap → File plus WebSocket output and status routes",
 		client:      obsClient,
 		wsClient:    wsClient,
 		udpAddr:     udpAddr,
@@ -112,6 +116,7 @@ func (s *CoreDataflowScenario) Execute(ctx context.Context) (*Result, error) {
 		fn   func(context.Context, *Result) error
 	}{
 		{"verify-components", s.executeVerifyComponents},
+		{"verify-websocket-output-route", s.executeVerifyWebSocketOutputRoute},
 		{"send-data", s.executeSendData},
 		{"validate-processing", s.executeValidateProcessing},
 		{"verify-objectstore-raw-lane", s.executeVerifyRawObjectStore},
@@ -140,6 +145,25 @@ func (s *CoreDataflowScenario) Execute(ctx context.Context) (*Result, error) {
 	result.Duration = result.EndTime.Sub(result.StartTime)
 
 	return result, nil
+}
+
+func (s *CoreDataflowScenario) executeVerifyWebSocketOutputRoute(ctx context.Context, result *Result) error {
+	connection, response, err := websocket.DefaultDialer.DialContext(ctx, protocolFlowWebSocketURL, nil)
+	if err != nil {
+		if response != nil {
+			_ = response.Body.Close()
+			return fmt.Errorf("WebSocket upgrade at %s returned HTTP %d: %w", protocolFlowWebSocketURL, response.StatusCode, err)
+		}
+		return fmt.Errorf("WebSocket upgrade at %s failed: %w", protocolFlowWebSocketURL, err)
+	}
+	defer connection.Close()
+	if response == nil || response.StatusCode != http.StatusSwitchingProtocols {
+		return fmt.Errorf("WebSocket upgrade at %s returned an unexpected response", protocolFlowWebSocketURL)
+	}
+
+	result.Details["websocket_output_route"] = protocolFlowWebSocketURL
+	result.Details["websocket_output_upgrade"] = "HTTP 101 Switching Protocols"
+	return nil
 }
 
 // Teardown cleans up after the scenario

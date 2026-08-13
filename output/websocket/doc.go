@@ -25,12 +25,11 @@
 //
 // The Config struct controls WebSocket server behavior:
 //
-//   - Port: TCP port to listen on (1024-65535)
-//   - Path: WebSocket endpoint path (default: "/ws")
-//   - Subjects: NATS subjects to subscribe to (from Ports config)
-//   - WriteTimeout: Per-client write timeout (default: 5s)
-//   - ReadTimeout: Client read timeout (default: 60s)
-//   - PingInterval: WebSocket ping interval (default: 30s)
+//   - Ports: NATS input declarations and one HTTP network listener declaration
+//   - Path: Path-only HTTP ServeMux pattern for WebSocket upgrades (default: "/ws")
+//   - DeliveryMode: At-most-once or at-least-once delivery
+//   - AckTimeout: Client acknowledgment timeout for at-least-once delivery
+//   - Passthrough: Whether valid JSON bypasses metadata injection and map re-encoding
 //
 // # Client Management
 //
@@ -262,13 +261,15 @@
 //	  "ports": {
 //	    "inputs": [
 //	      {"name":"stream","required":true,"config":{"kind":"nats","subject":"events.>"}}
+//	    ],
+//	    "outputs": [
+//	      {"name":"server","config":{"kind":"network","protocol":"http","host":"0.0.0.0","port":8080}}
 //	    ]
 //	  },
-//	  "port": 8080,
 //	  "path": "/ws",
-//	  "write_timeout": "5s",
-//	  "read_timeout": "60s",
-//	  "ping_interval": "30s"
+//	  "delivery_mode": "at-most-once",
+//	  "ack_timeout": "5s",
+//	  "passthrough": false
 //	}
 //
 // # Comparison with HTTP POST Output

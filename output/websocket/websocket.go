@@ -42,6 +42,8 @@ const (
 type Config struct {
 	// Port configuration for inputs and outputs
 	Ports *component.PortConfig `json:"ports"                   schema:"type:ports,description:Port configuration,category:basic"`
+	// Path is the path-only HTTP ServeMux pattern used for WebSocket upgrades.
+	Path string `json:"path" schema:"type:string,description:WebSocket upgrade path-only ServeMux pattern,category:basic,default:/ws"`
 	// DeliveryMode specifies reliability semantics (at-most-once or at-least-once)
 	DeliveryMode DeliveryMode `json:"delivery_mode,omitempty" schema:"type:string,description:Delivery reliability mode,category:advanced"`
 	// AckTimeout specifies how long to wait for ack before considering message lost
@@ -97,11 +99,20 @@ func DefaultConfig() Config {
 	outputDefs := websocketOutputDefinitions(8081)
 
 	return Config{
+		Path: "/ws",
 		Ports: &component.PortConfig{
 			Inputs:  inputDefs,
 			Outputs: outputDefs,
 		},
 	}
+}
+
+// Validate checks component-local configuration before factory construction.
+func (c Config) Validate() error {
+	if err := validateWebSocketPath(c.Path); err != nil {
+		return errs.WrapInvalid(err, "websocket-output-config", "validate", "path")
+	}
+	return nil
 }
 
 // websocketSchema defines the configuration schema for WebSocket output component
@@ -333,6 +344,9 @@ func NewOutput(port int, path string, subjects []string, natsClient *natsclient.
 // NewOutputFromConfig creates a new WebSocket output component from ConstructorConfig.
 // This is the recommended way to create Output instances with full configuration control.
 func NewOutputFromConfig(cfg ConstructorConfig) (*Output, error) {
+	if err := validateWebSocketPath(cfg.Path); err != nil {
+		return nil, errs.WrapInvalid(err, "Output", "NewOutputFromConfig", "validate path")
+	}
 	if len(cfg.InputPorts) == 0 || len(cfg.OutputPorts) != 1 {
 		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Output", "NewOutputFromConfig", "at least one input and exactly one output port are required")
 	}
@@ -411,6 +425,28 @@ func NewOutputFromConfig(cfg ConstructorConfig) (*Output, error) {
 		metrics:      newMetrics(cfg.MetricsRegistry, cfg.Name),
 		logger:       logger,
 	}, nil
+}
+
+func validateWebSocketPath(path string) (err error) {
+	if path == "" {
+		return fmt.Errorf("path cannot be empty")
+	}
+	if !strings.HasPrefix(path, "/") {
+		return fmt.Errorf("path must begin with /")
+	}
+	for index := 0; index < len(path); index++ {
+		if path[index] <= ' ' || path[index] == 0x7f {
+			return fmt.Errorf("path contains ASCII whitespace or control character at byte %d", index)
+		}
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("path is not a valid HTTP ServeMux pattern: %v", recovered)
+		}
+	}()
+	http.NewServeMux().HandleFunc(path, func(http.ResponseWriter, *http.Request) {})
+	return nil
 }
 
 func natsInputDefinitions(subjects []string) []component.PortDefinition {
@@ -539,8 +575,8 @@ func (w *Output) Initialize() error {
 			fmt.Sprintf("invalid port %d (out of range 1024-65535)", w.port))
 	}
 
-	if w.path == "" {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "Output", "validateConfig", "WebSocket path cannot be empty")
+	if err := validateWebSocketPath(w.path); err != nil {
+		return errs.WrapInvalid(err, "Output", "validateConfig", "WebSocket path")
 	}
 
 	if len(w.subjects) == 0 {
@@ -644,6 +680,9 @@ func (w *Output) cleanupOnError() {
 
 // setupHTTPServer creates and configures the HTTP server with TLS if enabled
 func (w *Output) setupHTTPServer() error {
+	if err := validateWebSocketPath(w.path); err != nil {
+		return errs.WrapInvalid(err, "websocket_output", "setupHTTPServer", "validate path")
+	}
 	// Set up HTTP server with WebSocket endpoint
 	mux := http.NewServeMux()
 	mux.HandleFunc(w.path, w.handleWebSocket)
@@ -1628,13 +1667,14 @@ func CreateOutput(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		if err := component.SafeUnmarshal(rawConfig, &cfg); err != nil {
 			return nil, errs.WrapInvalid(err, "websocket-output-factory", "create", "parse config")
 		}
+		if err := rejectRetiredEndpoint(rawConfig); err != nil {
+			return nil, errs.WrapInvalid(err, "websocket-output-factory", "create", "parse config")
+		}
 	}
 
 	if cfg.Ports == nil || len(cfg.Ports.Inputs) == 0 || len(cfg.Ports.Outputs) != 1 {
 		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "websocket-output-factory", "create", "at least one input and exactly one output port are required")
 	}
-	path := "/ws"
-
 	// Parse delivery mode (default: at-most-once).
 	deliveryMode := DeliveryAtMostOnce
 	if cfg.DeliveryMode != "" {
@@ -1660,7 +1700,7 @@ func CreateOutput(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	// Create constructor config
 	ctorCfg := ConstructorConfig{
 		Name:            "websocket-output",
-		Path:            path,
+		Path:            cfg.Path,
 		InputPorts:      cfg.Ports.Inputs,
 		OutputPorts:     cfg.Ports.Outputs,
 		NATSClient:      deps.NATSClient,
@@ -1672,4 +1712,15 @@ func CreateOutput(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	}
 
 	return NewOutputFromConfig(ctorCfg)
+}
+
+func rejectRetiredEndpoint(rawConfig json.RawMessage) error {
+	var rootFields map[string]json.RawMessage
+	if err := json.Unmarshal(rawConfig, &rootFields); err != nil {
+		return nil // SafeUnmarshal reports malformed or incompatible JSON first.
+	}
+	if _, exists := rootFields["endpoint"]; exists {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "websocket-output-config", "validate", "retired field endpoint is not supported; use path")
+	}
+	return nil
 }

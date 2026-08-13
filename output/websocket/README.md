@@ -15,46 +15,63 @@ dashboards, monitoring systems, and event visualization.
 
 ```yaml
 type: websocket
+path: /ws
 ports:
   inputs:
     - name: nats_input
-      type: nats
-      subject: semantic.>
+      config:
+        kind: nats
+        subject: semantic.>
       required: true
   outputs:
     - name: websocket_server
-      type: network
-      subject: http://0.0.0.0:8081/ws
+      config:
+        kind: network
+        protocol: http
+        host: 0.0.0.0
+        port: 8081
 ```
 
 ### Advanced Configuration
 
 ```yaml
 type: websocket
+path: /stream
 delivery_mode: at-least-once
 ack_timeout: 5s
 ports:
   inputs:
     - name: events
-      type: nats
-      subject: events.>
+      config:
+        kind: nats
+        subject: events.>
     - name: metrics
-      type: nats
-      subject: metrics.>
+      config:
+        kind: nats
+        subject: metrics.>
   outputs:
     - name: websocket_server
-      type: network
-      subject: http://0.0.0.0:8081/ws
+      config:
+        kind: network
+        protocol: http
+        host: 0.0.0.0
+        port: 8081
 ```
 
 ### Configuration Options
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
+| `path` | string | `/ws` | Path-only Go `http.ServeMux` pattern used for WebSocket upgrades |
 | `delivery_mode` | string | `at-most-once` | Delivery reliability (`at-most-once`, `at-least-once`) |
 | `ack_timeout` | duration | `5s` | Timeout for client acknowledgments |
-| `ports.inputs[].subject` | string | `semantic.>` | NATS subject patterns to subscribe |
-| `ports.outputs[].subject` | string | `http://0.0.0.0:8081/ws` | WebSocket server endpoint |
+| `passthrough` | boolean | `false` | Broadcast valid JSON without metadata injection or map re-encoding |
+| `ports.inputs[].config.subject` | string | `semantic.>` | NATS subject pattern to subscribe |
+| `ports.outputs[].config` | network | HTTP on `0.0.0.0:8081` | Protocol, host, and port listener binding |
+
+Omitting `path` serves `/ws`. The field accepts path-only patterns supported by the running Go version, including
+root, trailing-slash, percent-escaped, and valid wildcard patterns. Empty paths, full URLs, method/host patterns,
+ASCII whitespace/control characters, and invalid mux patterns fail configuration validation.
 
 ## Input/Output Ports
 
@@ -70,34 +87,38 @@ are supported for subscribing to different subject patterns.
 ```yaml
 inputs:
   - name: graph_updates
-    type: nats
-    subject: graph.entities.>
+    config:
+      kind: nats
+      subject: graph.entities.>
   - name: alerts
-    type: nats
-    subject: alerts.critical
+    config:
+      kind: nats
+      subject: alerts.critical
 ```
 
 ### Output Ports
 
 **Type**: `network`
 
-Exposes a WebSocket server endpoint that clients connect to for receiving real-time messages. The endpoint
-is encoded as a URL in the `subject` field.
+Exposes a WebSocket server endpoint that clients connect to for receiving real-time messages. The network port owns
+the protocol, host, and port listener identity; component-root `path` independently owns the WebSocket upgrade route.
 
 **Example**:
 
 ```yaml
 outputs:
   - name: websocket_server
-    type: network
-    subject: http://0.0.0.0:8081/ws
+    config:
+      kind: network
+      protocol: http
+      host: 0.0.0.0
+      port: 8081
 ```
 
-**URL Format**: `http://<host>:<port><path>`
-
+- **protocol**: `http` for the WebSocket listener
 - **host**: Binding address (use `0.0.0.0` for all interfaces)
 - **port**: TCP port (1024-65535)
-- **path**: WebSocket endpoint path (e.g., `/ws`, `/stream`)
+- **path**: Separate component-root route pattern (for example `/ws` or `/stream`)
 
 ## Connection Management
 
@@ -214,18 +235,24 @@ Stream knowledge graph updates to a web dashboard for live visualization.
 
 ```yaml
 type: websocket
+path: /dashboard
 ports:
   inputs:
     - name: graph_updates
-      type: nats
-      subject: graph.entities.>
+      config:
+        kind: nats
+        subject: graph.entities.>
     - name: query_results
-      type: nats
-      subject: graph.queries.>
+      config:
+        kind: nats
+        subject: graph.queries.>
   outputs:
     - name: dashboard
-      type: network
-      subject: http://0.0.0.0:8080/dashboard
+      config:
+        kind: network
+        protocol: http
+        host: 0.0.0.0
+        port: 8080
 ```
 
 ### Live Monitoring
@@ -234,19 +261,25 @@ Broadcast system metrics and logs to monitoring clients.
 
 ```yaml
 type: websocket
+path: /monitor
 delivery_mode: at-most-once
 ports:
   inputs:
     - name: metrics
-      type: nats
-      subject: metrics.>
+      config:
+        kind: nats
+        subject: metrics.>
     - name: logs
-      type: nats
-      subject: logs.>
+      config:
+        kind: nats
+        subject: logs.>
   outputs:
     - name: monitor
-      type: network
-      subject: http://0.0.0.0:9090/monitor
+      config:
+        kind: network
+        protocol: http
+        host: 0.0.0.0
+        port: 9090
 ```
 
 ### Critical Alerts
@@ -255,17 +288,22 @@ Ensure critical alerts are reliably delivered to connected clients.
 
 ```yaml
 type: websocket
+path: /alerts
 delivery_mode: at-least-once
 ack_timeout: 10s
 ports:
   inputs:
     - name: alerts
-      type: nats
-      subject: alerts.critical
+      config:
+        kind: nats
+        subject: alerts.critical
   outputs:
     - name: alert_stream
-      type: network
-      subject: http://0.0.0.0:8000/alerts
+      config:
+        kind: network
+        protocol: http
+        host: 0.0.0.0
+        port: 8000
 ```
 
 ### Event Broadcasting
@@ -274,15 +312,20 @@ Broadcast application events to multiple client types.
 
 ```yaml
 type: websocket
+path: /events
 ports:
   inputs:
     - name: events
-      type: nats
-      subject: events.>
+      config:
+        kind: nats
+        subject: events.>
   outputs:
     - name: event_stream
-      type: network
-      subject: http://0.0.0.0:8081/events
+      config:
+        kind: network
+        protocol: http
+        host: 0.0.0.0
+        port: 8081
 ```
 
 ## Client Example

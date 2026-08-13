@@ -142,7 +142,7 @@ func TestIntegration_WebSocketOutput_Integration_NATSToWebSocket(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Connect WebSocket client
-	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", port)
+	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/test", port)
 	wsConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	require.NoError(t, err)
 	defer wsConn.Close()
@@ -287,7 +287,7 @@ func TestIntegration_WebSocketOutput_Integration_MultipleClients(t *testing.T) {
 	clients := make([]*websocket.Conn, numClients)
 	receivers := make([]chan map[string]any, numClients)
 
-	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", port)
+	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/multi", port)
 
 	for i := 0; i < numClients; i++ {
 		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)

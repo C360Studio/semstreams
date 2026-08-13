@@ -34,7 +34,7 @@
       "name": "websocket",
       "enabled": true,
       "config": {
-        "endpoint": "ws://localhost:8080/stream"
+        "path": "/stream"
       }
     },
     "graph-processor": {

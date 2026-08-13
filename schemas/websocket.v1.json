@@ -21,6 +21,12 @@
       "default": false,
       "category": "advanced"
     },
+    "path": {
+      "type": "string",
+      "description": "WebSocket upgrade path-only ServeMux pattern",
+      "default": "/ws",
+      "category": "basic"
+    },
     "ports": {
       "type": "string",
       "description": "Port configuration",
