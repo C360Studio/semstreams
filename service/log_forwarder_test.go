@@ -245,7 +245,7 @@ func TestLogForwarder_DefaultConfig(t *testing.T) {
 	// Verify defaults
 	cfg := lf.Config()
 	assert.Equal(t, "INFO", cfg.MinLevel)
-	assert.Empty(t, cfg.ExcludeSources)
+	assert.Equal(t, []string{"flow-service.websocket"}, cfg.ExcludeSources)
 }
 
 // TestLogForwarderService_ExcludeSources tests that exclude_sources is properly parsed

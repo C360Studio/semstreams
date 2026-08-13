@@ -83,7 +83,7 @@ logger.Info("Hello world")
 
 ### NATSLogHandler
 
-Publishes log records to NATS subjects in the format `logs.{source}.{level}`.
+Publishes log records to NATS subjects in the format `logs.{level}.{source}`.
 
 ```go
 natsHandler := logging.NewNATSLogHandler(natsClient, logging.NATSLogHandlerConfig{
@@ -111,15 +111,15 @@ NATSLogHandler extracts the source identifier from log attributes with priority:
 ```go
 // Explicit source
 logger.With("source", "my-service.worker").Info("Working")
-// → logs.my-service.worker.INFO
+// → logs.INFO.my-service.worker
 
 // Component attribute
 logger.With("component", "udp-input").Info("Packet received")
-// → logs.udp-input.INFO
+// → logs.INFO.udp-input
 
 // No source attributes
 slog.Info("System message")
-// → logs.system.INFO
+// → logs.INFO.system
 ```
 
 ## Source Filtering
@@ -143,11 +143,11 @@ ExcludeSources: []string{"flow-service.websocket"}
 Logs are published to subjects following this pattern:
 
 ```
-logs.{source}.{level}
-  └── logs.udp-input.INFO
-  └── logs.graph-processor.ERROR
-  └── logs.system.WARN
-  └── logs.flow-service.DEBUG
+logs.{level}.{source}
+  └── logs.INFO.udp-input
+  └── logs.ERROR.graph-processor
+  └── logs.WARN.system
+  └── logs.DEBUG.flow-service
 ```
 
 ### JetStream Stream Configuration
@@ -280,18 +280,36 @@ import (
     "os"
 
     "github.com/c360/semstreams/config"
+    "github.com/c360/semstreams/metric"
     "github.com/c360/semstreams/natsclient"
     "github.com/c360/semstreams/pkg/logging"
 )
 
 func main() {
-    // Connect to NATS
-    natsClient, err := natsclient.NewClient("nats://localhost:4222")
+    // Build the local/counter graph before client construction. Keep the
+    // client logger non-forwarding so it can never publish through itself.
+    metrics := metric.NewMetricsRegistry()
+    stdoutHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+    counterHandler := logging.NewCounterHandler(metrics.CoreMetrics().LogEntriesTotal)
+    localHandler := logging.NewMultiHandler(stdoutHandler, counterHandler)
+    baseLogger := slog.New(localHandler).With("service", "example")
+    clientLogger := baseLogger.With("component", "natsclient")
+    slog.SetDefault(baseLogger)
+
+    natsClient, err := natsclient.NewClient(
+        "nats://localhost:4222",
+        natsclient.WithLogger(clientLogger),
+        natsclient.WithMetrics(metrics),
+    )
     if err != nil {
-        slog.Error("Failed to connect to NATS", "error", err)
+        slog.Error("Failed to create NATS client", "error", err)
         os.Exit(1)
     }
     defer natsClient.Close(context.Background())
+    if err := natsClient.Connect(context.Background()); err != nil {
+        slog.Error("Failed to connect to NATS", "error", err)
+        os.Exit(1)
+    }
 
     // Ensure LOGS stream exists
     streamsManager := config.NewStreamsManager(natsClient, slog.Default())
@@ -300,20 +318,15 @@ func main() {
         os.Exit(1)
     }
 
-    // Setup multi-destination logging
+    // Add NATS only to the steady-state application logger after LOGS exists.
     level := slog.LevelInfo
-    
-    stdoutHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-        Level: level,
-    })
-    
     natsHandler := logging.NewNATSLogHandler(natsClient, logging.NATSLogHandlerConfig{
         MinLevel:       level,
         ExcludeSources: []string{"flow-service.websocket"},
     })
     
-    multiHandler := logging.NewMultiHandler(stdoutHandler, natsHandler)
-    logger := slog.New(multiHandler)
+    multiHandler := logging.NewMultiHandler(localHandler, natsHandler)
+    logger := slog.New(multiHandler).With("service", "example")
     slog.SetDefault(logger)
 
     // Application logs now go to both stdout and NATS
