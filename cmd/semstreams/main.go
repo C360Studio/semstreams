@@ -25,6 +25,7 @@ import (
 	optionalotel "github.com/c360studio/semstreams/frameworkadapters/otel"
 	"github.com/c360studio/semstreams/frameworkcapabilities/graphresearch"
 	rulepackcap "github.com/c360studio/semstreams/frameworkcapabilities/rulepacks"
+	"github.com/c360studio/semstreams/internal/bootstrapobservability"
 	"github.com/c360studio/semstreams/internal/builtinprojection"
 	"github.com/c360studio/semstreams/internal/maxdelivery"
 	"github.com/c360studio/semstreams/metric"
@@ -110,25 +111,49 @@ func run() error {
 		return nil
 	}
 
-	// 4. Connect to NATS (required - semstreams cannot operate without NATS)
+	// 4. Build all local observability dependencies before the NATS client can
+	// capture them. The client/config-manager graphs remain non-forwarding.
+	metricsRegistry, phaseLogging, err := bootstrapobservability.NewProductionPhaseA(
+		os.Stdout, cliCfg.LogLevel, cliCfg.LogFormat,
+		[]slog.Attr{
+			slog.String("service", "semstreams"),
+			slog.String("version", Version),
+			slog.Int("pid", os.Getpid()),
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("compose phase-A logger: %w", err)
+	}
+	slog.SetDefault(phaseLogging.Process)
+
+	// 5. Connect to NATS (required - semstreams cannot operate without NATS).
 	ctx := context.Background()
-	natsClient, err := connectToNATSWithSpinner(ctx, cfg)
+	natsClient, err := connectToNATSWithSpinner(ctx, cfg, phaseLogging.Client, metricsRegistry)
 	if err != nil {
 		return err
 	}
 	defer natsClient.Close(ctx)
 
-	// 5. Ensure JetStream streams exist (LOGS, HEALTH, METRICS, FLOWS)
-	if err := ensureStreamsWithSpinner(ctx, cfg, natsClient); err != nil {
+	// 6. Complete config arbitration before any final composition decision.
+	configManager, effectiveConfig, err := bootstrapobservability.StartValidatedConfigManager(
+		ctx, cfg, natsClient, phaseLogging.ConfigManager,
+	)
+	if err != nil {
+		return err
+	}
+	defer configManager.Stop(5 * time.Second)
+	// 7. Effective streams, including LOGS, exist before forwarding is built.
+	if err := ensureStreamsWithSpinner(ctx, effectiveConfig, natsClient, phaseLogging.ConfigManager); err != nil {
 		return err
 	}
 
-	// 6. Create the metrics registry up front so the logger chain can
-	// increment semstreams_log_entries_total for every WARN+ record.
-	metricsRegistry := metric.NewMetricsRegistry()
-
-	// 7. NOW create the full logger with NATS publisher (no nil, no mutation)
-	logger := setupLogger(cliCfg.LogLevel, cliCfg.LogFormat, natsClient, cfg, metricsRegistry)
+	forwardingHandler, err := bootstrapobservability.NewForwardingHandler(
+		effectiveConfig.Services, natsClient, phaseLogging.Process,
+	)
+	if err != nil {
+		return err
+	}
+	logger := phaseLogging.Steady(forwardingHandler)
 	slog.SetDefault(logger)
 	stopMaxDeliveryObserver, err := maxdelivery.Start(ctx, natsClient, metricsRegistry, logger)
 	if err != nil {
@@ -141,12 +166,13 @@ func run() error {
 		"git_commit", GitCommit,
 		"build_time", BuildTime)
 
-	// 8. Create remaining infrastructure
-	platform, configManager, err := setupRemainingInfrastructure(ctx, cfg, natsClient, logger)
-	if err != nil {
-		return err
-	}
-	defer configManager.Stop(5 * time.Second)
+	// All remaining composition consumes post-arbitration desired state.
+	cfg = effectiveConfig
+	platform := extractPlatformMeta(cfg)
+	logger.Info("Platform identity configured",
+		"org", platform.Org,
+		"platform", platform.Platform,
+		"environment", cfg.Platform.Environment)
 
 	// 8. Setup registries and manager
 	componentRegistry, manager, err := setupRegistriesAndManager(cfg)
@@ -255,8 +281,7 @@ func run() error {
 	}
 
 	// 11. Configure and create services
-	effectiveConfig := configManager.GetConfig().Get()
-	if err := configureAndCreateServices(effectiveConfig, manager, svcDeps); err != nil {
+	if err := configureAndCreateServices(cfg, manager, svcDeps); err != nil {
 		return err
 	}
 
@@ -298,27 +323,24 @@ func parseCLI() (*CLIConfig, bool, error) {
 
 // connectToNATSWithSpinner connects to NATS with a spinner for user feedback.
 // NATS is a hard requirement - semstreams cannot operate without it.
-func connectToNATSWithSpinner(ctx context.Context, cfg *config.Config) (*natsclient.Client, error) {
+func connectToNATSWithSpinner(
+	ctx context.Context,
+	cfg *config.Config,
+	logger *slog.Logger,
+	metricsRegistry *metric.MetricsRegistry,
+) (*natsclient.Client, error) {
 	spinner := NewSpinner("Connecting to NATS...")
 	spinner.Start()
 
-	natsClient, err := createNATSClient(cfg)
+	natsClient, err := createNATSClient(cfg, logger, metricsRegistry)
 	if err != nil {
 		spinner.StopWithError(err)
 		return nil, fmt.Errorf("create NATS client: %w", err)
 	}
 
-	if err := natsClient.Connect(ctx); err != nil {
+	if err := bootstrapobservability.ConnectClient(ctx, natsClient, logger); err != nil {
 		spinner.StopWithError(err)
-		return nil, fmt.Errorf("connect to NATS: %w", err)
-	}
-
-	connCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	if err := natsClient.WaitForConnection(connCtx); err != nil {
-		spinner.StopWithError(err)
-		return nil, fmt.Errorf("NATS connection timeout: %w", err)
+		return nil, err
 	}
 
 	spinner.Stop()
@@ -326,64 +348,30 @@ func connectToNATSWithSpinner(ctx context.Context, cfg *config.Config) (*natscli
 }
 
 // ensureStreamsWithSpinner creates JetStream streams with a spinner for user feedback.
-func ensureStreamsWithSpinner(ctx context.Context, cfg *config.Config, natsClient *natsclient.Client) error {
+func ensureStreamsWithSpinner(
+	ctx context.Context,
+	cfg *config.Config,
+	natsClient *natsclient.Client,
+	logger *slog.Logger,
+) error {
 	spinner := NewSpinner("Creating JetStream streams...")
 	spinner.Start()
 
-	// Use a quiet logger for stream creation (we have the spinner for feedback)
-	quietLogger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	streamsManager := config.NewStreamsManager(natsClient, quietLogger)
-
-	// #101: diagnostic verification of operator-configured JetStream
-	// account limits against the server's actual limits. Best-effort
-	// (Debug on internal failure); a real gap surfaces as a Warn so
-	// operators see it before EnsureStreams hits a CreateStream error.
-	if err := streamsManager.VerifyJetStreamLimits(ctx, cfg); err != nil {
+	if err := bootstrapobservability.EnsureEffectiveStreams(ctx, cfg, natsClient, logger); err != nil {
 		spinner.StopWithError(err)
-		return fmt.Errorf("verify jetstream limits: %w", err)
-	}
-
-	if err := streamsManager.EnsureStreams(ctx, cfg); err != nil {
-		spinner.StopWithError(err)
-		return fmt.Errorf("ensure streams: %w", err)
+		return err
 	}
 
 	spinner.Stop()
 	return nil
 }
 
-// setupRemainingInfrastructure builds platform metadata and the config
-// manager. The metrics registry is created earlier so setupLogger can wire
-// the log-counter handler into the chain before any records are emitted.
-func setupRemainingInfrastructure(
-	ctx context.Context,
-	cfg *config.Config,
-	natsClient *natsclient.Client,
-	logger *slog.Logger,
-) (types.PlatformMeta, *config.Manager, error) {
-	// Extract platform identity
-	platform := extractPlatformMeta(cfg)
-
-	slog.Info("Platform identity configured",
-		"org", platform.Org,
-		"platform", platform.Platform,
-		"environment", cfg.Platform.Environment)
-
-	// Create and start config manager
-	configManager, err := config.NewConfigManager(cfg, natsClient, logger)
-	if err != nil {
-		return types.PlatformMeta{}, nil, fmt.Errorf("create config manager: %w", err)
-	}
-
-	if err := configManager.Start(ctx); err != nil {
-		return types.PlatformMeta{}, nil, fmt.Errorf("start config manager: %w", err)
-	}
-
-	return platform, configManager, nil
-}
-
 // createNATSClient creates a NATS client from config.
-func createNATSClient(cfg *config.Config) (*natsclient.Client, error) {
+func createNATSClient(
+	cfg *config.Config,
+	logger *slog.Logger,
+	metricsRegistry *metric.MetricsRegistry,
+) (*natsclient.Client, error) {
 	natsURLs := "nats://localhost:4222"
 
 	// Environment variable override takes precedence
@@ -393,7 +381,7 @@ func createNATSClient(cfg *config.Config) (*natsclient.Client, error) {
 		natsURLs = strings.Join(cfg.NATS.URLs, ",")
 	}
 
-	return natsclient.NewClient(natsURLs)
+	return bootstrapobservability.NewClient(natsURLs, logger, metricsRegistry)
 }
 
 // extractRestrictedDecideActions reads the deployment-level decide-action

@@ -5,8 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
+
+	"github.com/c360studio/semstreams/internal/logforwarderpolicy"
 )
 
 // NewLogForwarderService creates a new log forwarder service using the standard constructor pattern.
@@ -14,25 +15,13 @@ import (
 // directly by the NATSLogHandler in pkg/logging. This service exists for configuration management
 // and potential future features (e.g., log aggregation, filtering at the service level).
 func NewLogForwarderService(rawConfig json.RawMessage, deps *Dependencies) (Service, error) {
-	// Parse config - handle empty or invalid JSON properly
-	var cfg LogForwarderConfig
-	if len(rawConfig) > 0 {
-		if err := json.Unmarshal(rawConfig, &cfg); err != nil {
-			return nil, fmt.Errorf("parse log-forwarder config: %w", err)
-		}
+	policy, err := logforwarderpolicy.Resolve(rawConfig)
+	if err != nil {
+		return nil, fmt.Errorf("parse log-forwarder config: %w", err)
 	}
-
-	// Apply defaults
-	if cfg.MinLevel == "" {
-		cfg.MinLevel = "INFO"
-	}
-
-	// Normalize level to uppercase
-	cfg.MinLevel = strings.ToUpper(cfg.MinLevel)
-
-	// Validate configuration
-	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("validate log-forwarder config: %w", err)
+	cfg := LogForwarderConfig{
+		MinLevel:       policy.MinLevel.String(),
+		ExcludeSources: policy.ExcludeSources,
 	}
 
 	// Create the LogForwarder with dependencies
@@ -67,19 +56,7 @@ type LogForwarderConfig struct {
 
 // Validate checks if the configuration is valid.
 func (c LogForwarderConfig) Validate() error {
-	// Validate log level
-	validLevels := map[string]bool{
-		"DEBUG": true,
-		"INFO":  true,
-		"WARN":  true,
-		"ERROR": true,
-	}
-
-	if !validLevels[c.MinLevel] {
-		return fmt.Errorf("invalid log level: %s (must be DEBUG, INFO, WARN, or ERROR)", c.MinLevel)
-	}
-
-	return nil
+	return logforwarderpolicy.ValidateFields(c.MinLevel, c.ExcludeSources)
 }
 
 // LogForwarder is a service for log configuration management.
@@ -93,8 +70,13 @@ type LogForwarder struct {
 // NewLogForwarder creates a new LogForwarder service.
 func NewLogForwarder(config *LogForwarderConfig, opts ...Option) (*LogForwarder, error) {
 	if config == nil {
+		policy, err := logforwarderpolicy.Resolve(nil)
+		if err != nil {
+			return nil, fmt.Errorf("resolve default log-forwarder policy: %w", err)
+		}
 		config = &LogForwarderConfig{
-			MinLevel: "INFO",
+			MinLevel:       policy.MinLevel.String(),
+			ExcludeSources: policy.ExcludeSources,
 		}
 	}
 

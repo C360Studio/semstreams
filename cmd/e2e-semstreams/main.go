@@ -29,6 +29,7 @@ import (
 	optionalotel "github.com/c360studio/semstreams/frameworkadapters/otel"
 	"github.com/c360studio/semstreams/frameworkcapabilities/graphresearch"
 	rulepackcap "github.com/c360studio/semstreams/frameworkcapabilities/rulepacks"
+	"github.com/c360studio/semstreams/internal/bootstrapobservability"
 	"github.com/c360studio/semstreams/internal/builtinprojection"
 	"github.com/c360studio/semstreams/internal/maxdelivery"
 	"github.com/c360studio/semstreams/metric"
@@ -107,29 +108,31 @@ func run() error {
 		return nil
 	}
 
+	metricsRegistry, phaseLogging, err := bootstrapobservability.NewE2EPhaseA(
+		os.Stdout, cliCfg.LogLevel, cliCfg.LogFormat,
+		[]slog.Attr{
+			slog.String("service", "e2e-semstreams"),
+			slog.String("version", Version),
+			slog.Int("pid", os.Getpid()),
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("compose phase-A logger: %w", err)
+	}
+	slog.SetDefault(phaseLogging.Process)
+
 	ctx := context.Background()
-	natsClient, err := connectToNATSWithSpinner(ctx, cfg)
+	phaseA, err := completeE2EPhaseA(ctx, cfg, phaseLogging, metricsRegistry)
 	if err != nil {
 		return err
 	}
-	defer natsClient.Close(ctx)
-
-	if err := ensureStreamsWithSpinner(ctx, cfg, natsClient); err != nil {
-		return err
-	}
-
-	logger := setupLogger(cliCfg.LogLevel, cliCfg.LogFormat, natsClient, cfg)
-	slog.SetDefault(logger)
-
-	slog.Info("E2E SemStreams ready",
-		"version", Version,
-		"build_time", BuildTime)
-
-	metricsRegistry, platform, configManager, err := setupRemainingInfrastructure(ctx, cfg, natsClient, logger)
-	if err != nil {
-		return err
-	}
-	defer configManager.Stop(5 * time.Second)
+	defer phaseA.natsClient.Close(ctx)
+	defer phaseA.configManager.Stop(5 * time.Second)
+	cfg = phaseA.config
+	logger := phaseA.logger
+	platform := phaseA.platform
+	natsClient := phaseA.natsClient
+	configManager := phaseA.configManager
 	stopMaxDeliveryObserver, err := maxdelivery.Start(ctx, natsClient, metricsRegistry, logger)
 	if err != nil {
 		return fmt.Errorf("start MaxDeliver observer: %w", err)
@@ -239,8 +242,7 @@ func run() error {
 		return fmt.Errorf("register milestone service: %w", err)
 	}
 
-	effectiveConfig := configManager.GetConfig().Get()
-	if err := configureAndCreateServices(effectiveConfig, manager, svcDeps); err != nil {
+	if err := configureAndCreateServices(cfg, manager, svcDeps); err != nil {
 		return err
 	}
 
@@ -261,6 +263,53 @@ func run() error {
 		}
 		return seedMission(seedCtx, svcDeps.LifecycleManager, cliCfg.LifecycleSeed)
 	})
+}
+
+type e2ePhaseAResult struct {
+	natsClient    *natsclient.Client
+	configManager *config.Manager
+	config        *config.Config
+	logger        *slog.Logger
+	platform      types.PlatformMeta
+}
+
+// completeE2EPhaseA keeps the E2E root's presentation details around the
+// shared plain bootstrap helpers while preserving its explicit stdout-only
+// steady-state logger.
+func completeE2EPhaseA(
+	ctx context.Context,
+	initial *config.Config,
+	phaseLogging *bootstrapobservability.PhaseALogging,
+	metricsRegistry *metric.MetricsRegistry,
+) (*e2ePhaseAResult, error) {
+	natsClient, err := connectToNATSWithSpinner(ctx, initial, phaseLogging.Client, metricsRegistry)
+	if err != nil {
+		return nil, err
+	}
+	configManager, effective, err := bootstrapobservability.StartValidatedConfigManager(
+		ctx, initial, natsClient, phaseLogging.ConfigManager,
+	)
+	if err != nil {
+		_ = natsClient.Close(ctx)
+		return nil, err
+	}
+	if err := ensureStreamsWithSpinner(ctx, effective, natsClient, phaseLogging.ConfigManager); err != nil {
+		_ = configManager.Stop(5 * time.Second)
+		_ = natsClient.Close(ctx)
+		return nil, err
+	}
+
+	logger := phaseLogging.Steady(nil)
+	slog.SetDefault(logger)
+	logger.Info("E2E SemStreams ready", "version", Version, "build_time", BuildTime)
+	platform := extractPlatformMeta(effective)
+	logger.Info("Platform identity configured",
+		"org", platform.Org,
+		"platform", platform.Platform,
+		"environment", effective.Platform.Environment)
+	return &e2ePhaseAResult{
+		natsClient: natsClient, configManager: configManager, config: effective, logger: logger, platform: platform,
+	}, nil
 }
 
 // buildPayloadRegistry constructs the shared payload registry and
@@ -484,33 +533,34 @@ func loadConfig(path string) (*config.Config, error) {
 
 // --- Infrastructure Setup (copied from semstreams main.go) ---
 
-func connectToNATSWithSpinner(ctx context.Context, cfg *config.Config) (*natsclient.Client, error) {
+func connectToNATSWithSpinner(
+	ctx context.Context,
+	cfg *config.Config,
+	logger *slog.Logger,
+	metricsRegistry *metric.MetricsRegistry,
+) (*natsclient.Client, error) {
 	fmt.Print("Connecting to NATS...")
 
-	natsClient, err := createNATSClient(cfg)
+	natsClient, err := createNATSClient(cfg, logger, metricsRegistry)
 	if err != nil {
 		fmt.Println(" ✗")
 		return nil, fmt.Errorf("create NATS client: %w", err)
 	}
 
-	if err := natsClient.Connect(ctx); err != nil {
+	if err := bootstrapobservability.ConnectClient(ctx, natsClient, logger); err != nil {
 		fmt.Println(" ✗")
-		return nil, fmt.Errorf("connect to NATS: %w", err)
-	}
-
-	connCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	if err := natsClient.WaitForConnection(connCtx); err != nil {
-		fmt.Println(" ✗")
-		return nil, fmt.Errorf("NATS connection timeout: %w", err)
+		return nil, err
 	}
 
 	fmt.Println(" ✓")
 	return natsClient, nil
 }
 
-func createNATSClient(cfg *config.Config) (*natsclient.Client, error) {
+func createNATSClient(
+	cfg *config.Config,
+	logger *slog.Logger,
+	metricsRegistry *metric.MetricsRegistry,
+) (*natsclient.Client, error) {
 	natsURLs := "nats://localhost:4222"
 
 	if envURL := os.Getenv("SEMSTREAMS_NATS_URLS"); envURL != "" {
@@ -519,74 +569,24 @@ func createNATSClient(cfg *config.Config) (*natsclient.Client, error) {
 		natsURLs = strings.Join(cfg.NATS.URLs, ",")
 	}
 
-	return natsclient.NewClient(natsURLs)
+	return bootstrapobservability.NewClient(natsURLs, logger, metricsRegistry)
 }
 
-func ensureStreamsWithSpinner(ctx context.Context, cfg *config.Config, natsClient *natsclient.Client) error {
-	fmt.Print("Creating JetStream streams...")
-
-	quietLogger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	streamsManager := config.NewStreamsManager(natsClient, quietLogger)
-
-	if err := streamsManager.EnsureStreams(ctx, cfg); err != nil {
-		fmt.Println(" ✗")
-		return fmt.Errorf("ensure streams: %w", err)
-	}
-
-	fmt.Println(" ✓")
-	return nil
-}
-
-func setupLogger(level, format string, _ *natsclient.Client, _ *config.Config) *slog.Logger {
-	var logLevel slog.Level
-	switch strings.ToLower(level) {
-	case "debug":
-		logLevel = slog.LevelDebug
-	case "warn":
-		logLevel = slog.LevelWarn
-	case "error":
-		logLevel = slog.LevelError
-	default:
-		logLevel = slog.LevelInfo
-	}
-
-	opts := &slog.HandlerOptions{Level: logLevel}
-
-	var handler slog.Handler
-	if format == "json" {
-		handler = slog.NewJSONHandler(os.Stdout, opts)
-	} else {
-		handler = slog.NewTextHandler(os.Stdout, opts)
-	}
-
-	return slog.New(handler)
-}
-
-func setupRemainingInfrastructure(
+func ensureStreamsWithSpinner(
 	ctx context.Context,
 	cfg *config.Config,
 	natsClient *natsclient.Client,
 	logger *slog.Logger,
-) (*metric.MetricsRegistry, types.PlatformMeta, *config.Manager, error) {
-	metricsRegistry := metric.NewMetricsRegistry()
+) error {
+	fmt.Print("Creating JetStream streams...")
 
-	platform := extractPlatformMeta(cfg)
-
-	slog.Info("Platform identity configured",
-		"org", platform.Org,
-		"platform", platform.Platform,
-		"environment", cfg.Platform.Environment)
-
-	configManager, err := config.NewConfigManager(cfg, natsClient, logger)
-	if err != nil {
-		return nil, types.PlatformMeta{}, nil, fmt.Errorf("create config manager: %w", err)
+	if err := bootstrapobservability.EnsureEffectiveStreams(ctx, cfg, natsClient, logger); err != nil {
+		fmt.Println(" ✗")
+		return err
 	}
 
-	if err := configManager.Start(ctx); err != nil {
-		return nil, types.PlatformMeta{}, nil, fmt.Errorf("start config manager: %w", err)
-	}
-
-	return metricsRegistry, platform, configManager, nil
+	fmt.Println(" ✓")
+	return nil
 }
 
 func extractPlatformMeta(cfg *config.Config) types.PlatformMeta {

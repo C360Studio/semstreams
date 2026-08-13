@@ -447,7 +447,7 @@ Logs flow through the system using the [logging package](../pkg/logging):
 
 1. Application code calls `slog.Info()`, `slog.Error()`, etc.
 2. `MultiHandler` dispatches to both `TextHandler` (stdout) and `NATSLogHandler`
-3. `NATSLogHandler` publishes to NATS `logs.{source}.{level}` subjects
+3. `NATSLogHandler` publishes to NATS `logs.{level}.{source}` subjects
 4. LOGS JetStream stream stores logs with 1hr TTL and 100MB limit
 5. WebSocket's `logStreamer` subscribes to `logs.>` and forwards to clients
 
