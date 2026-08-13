@@ -50,6 +50,25 @@ func TestExtractEntityInstance(t *testing.T) {
 }
 
 func TestResolveLabel(t *testing.T) {
+	t.Run("fixed predicate order advances after unusable first stored match", func(t *testing.T) {
+		entityID := "acme.ops.agent.loop.agent.bot1"
+		entity := &gtypes.EntityState{
+			ID: entityID,
+			Triples: []message.Triple{
+				{Subject: entityID, Predicate: "test.fixture.note", Object: "heuristic must not win"},
+				{Subject: entityID, Predicate: semantictest.Predicate(t, "dc", "terms", "title"), Object: ""},
+				{Subject: entityID, Predicate: semantictest.Predicate(t, "dc", "terms", "title"), Object: "later title must not win"},
+				{Subject: entityID, Predicate: semantictest.Predicate(t, "agent", "identity", "display-name"), Object: 42},
+				{Subject: entityID, Predicate: semantictest.Predicate(t, "agent", "capability", "name"), Object: "Routing Specialist"},
+				{Subject: entityID, Predicate: semantictest.Predicate(t, "agent", "model", "name"), Object: "later model"},
+			},
+		}
+
+		if got := resolveLabel(entity); got != "Routing Specialist" {
+			t.Errorf("resolveLabel() = %q, want Routing Specialist", got)
+		}
+	})
+
 	t.Run("dc.terms.title wins", func(t *testing.T) {
 		entity := &gtypes.EntityState{
 			ID: "acme.ops.robotics.gcs.drone.001",

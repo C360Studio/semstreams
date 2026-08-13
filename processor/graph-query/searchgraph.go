@@ -128,6 +128,9 @@ func (c *Component) handleSearchGraphWithLease(ctx context.Context, data []byte,
 		}
 		return globalResp, nil
 	}
+	if err := c.enrichTopLevelEntityDigests(ctx, out.EntityDigests); err != nil {
+		return nil, err
+	}
 
 	if origReq.MaxCommunities <= 0 {
 		origReq.MaxCommunities = DefaultMaxCommunities
@@ -179,6 +182,34 @@ func (c *Component) handleSearchGraphWithLease(ctx context.Context, data []byte,
 		return nil, errs.Wrap(err, "GraphQuery", "handleSearchGraph", "marshal fallback response")
 	}
 	return respBytes, nil
+}
+
+// enrichTopLevelEntityDigests fills only the existing type and label fields.
+// The adapter owns row order, multiplicity, tags, IDs, and per-hit relevance.
+func (c *Component) enrichTopLevelEntityDigests(ctx context.Context, digests []EntityDigest) error {
+	entityIDs := make([]string, 0, len(digests))
+	seen := make(map[string]struct{}, len(digests))
+	for i := range digests {
+		id := digests[i].ID
+		digests[i].Type = extractEntityType(id)
+		digests[i].Label = extractEntityInstance(id)
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		entityIDs = append(entityIDs, id)
+	}
+
+	labels, err := c.resolveEntityLabels(ctx, entityIDs)
+	if err != nil {
+		return err
+	}
+	for i := range digests {
+		if label := labels[digests[i].ID]; label != "" {
+			digests[i].Label = label
+		}
+	}
+	return nil
 }
 
 // searchGraphResponseEmpty mirrors semspec's globalSearchEmpty

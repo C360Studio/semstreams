@@ -889,12 +889,11 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 				return nil, enrichErr
 			}
 
-			// Collect labels from enriched summaries for entity digests
-			labels := make(map[string]string)
-			for _, s := range enriched {
-				for _, e := range s.Entities {
-					labels[e.ID] = e.Label
-				}
+			// Top-level digests are independent of the representative subset:
+			// hydrate the final ranked IDs once and join labels by entity ID.
+			labels, labelErr := c.resolveEntityLabels(ctx, entityIDs)
+			if labelErr != nil {
+				return nil, labelErr
 			}
 
 			synth := c.synthesizeQueryAnswer(ctx, searchQuery, enriched, len(entityIDs))

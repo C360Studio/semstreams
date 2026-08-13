@@ -3,6 +3,7 @@ package graphquery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -144,12 +145,18 @@ func TestSearchGraphSemanticFallbackKeepsStrategyUnderCommunityDegradation(t *te
 func TestSearchGraphSemanticFallbackWithoutEnrichmentKeepsExistingReason(t *testing.T) {
 	semanticCalls := 0
 	component := newSummaryTestComponent(func(_ context.Context, subject string, _ []byte, _ time.Duration) ([]byte, error) {
-		require.Equal(t, "graph.embedding.query.search", subject)
-		semanticCalls++
-		if semanticCalls == 1 {
-			return []byte(`{"query":"widget","results":[]}`), nil
+		switch subject {
+		case "graph.embedding.query.search":
+			semanticCalls++
+			if semanticCalls == 1 {
+				return []byte(`{"query":"widget","results":[]}`), nil
+			}
+			return []byte(`{"query":"widget","results":[{"entity_id":"acme.ops.test.system.widget.001","similarity":0.88}]}`), nil
+		case "graph.ingest.query.batch":
+			return nil, errors.New("label hydration unavailable")
+		default:
+			return nil, fmt.Errorf("unexpected request: %s", subject)
 		}
-		return []byte(`{"query":"widget","results":[{"entity_id":"acme.ops.test.system.widget.001","similarity":0.88}]}`), nil
 	})
 	component.communityCache = newCommunityCache(component.logger)
 

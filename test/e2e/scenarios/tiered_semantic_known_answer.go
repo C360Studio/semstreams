@@ -22,6 +22,15 @@ type knownAnswerTerm struct {
 	// tolerate ID-shape variation (different entityID parts may carry the
 	// substring) and summary phrasing.
 	substrAny []string
+	// requiredDigest locks a measured compact-result fixture to the label
+	// projection itself. Matching the ID or any other response surface cannot
+	// satisfy this assertion.
+	requiredDigest *knownAnswerDigest
+}
+
+type knownAnswerDigest struct {
+	entityID string
+	label    string
 }
 
 // knownAnswerTerms are the corpus probes for the semantic-tier known-answer
@@ -31,6 +40,10 @@ var knownAnswerTerms = []knownAnswerTerm{
 	{
 		term:      "forklift",
 		substrAny: []string{"forklift", "fl-042", "fl_042"},
+		requiredDigest: &knownAnswerDigest{
+			entityID: "c360.logistics.content.document.operations.doc-ops-001",
+			label:    "Forklift Operation Manual",
+		},
 	},
 	{
 		term:      "hydraulic",
@@ -53,6 +66,8 @@ var knownAnswerTerms = []knownAnswerTerm{
 //   - None of the term's expected substrings appear in any returned entity
 //     ID or community summary text (the search may return entities, but if
 //     none are related to the term the search is broken).
+//   - A measured compact-result fixture does not carry its exact canonical
+//     title in EntityDigest.Label; ID and other response surfaces do not count.
 //
 // Probes use level=0 because that's the level the bug surfaced at. If a
 // future deployment's communities live at a different level, change the
@@ -127,6 +142,7 @@ func (s *TieredScenario) runKnownAnswerProbe(ctx context.Context, gatewayURL str
 		"latency_ms":     latency.Milliseconds(),
 		"matched_substr": matched.substring,
 		"match_location": matched.location,
+		"digest_labels":  entityDigestLabels(gs),
 	}
 
 	if gs.Count == 0 {
@@ -143,7 +159,33 @@ func (s *TieredScenario) runKnownAnswerProbe(ctx context.Context, gatewayURL str
 				ka.term, gs.Count, gs.Summarized, len(gs.EntityIDs), len(gs.EntityDigests), len(gs.CommunitySummaries), ka.substrAny),
 		}
 	}
+	if required := ka.requiredDigest; required != nil && !hasExactEntityDigestLabel(gs, required.entityID, required.label) {
+		return knownAnswerProbeResult{
+			detail: detail,
+			failure: fmt.Sprintf(
+				"term %q: compact digest %q did not carry exact label %q in EntityDigest.Label",
+				ka.term, required.entityID, required.label,
+			),
+		}
+	}
 	return knownAnswerProbeResult{detail: detail}
+}
+
+func hasExactEntityDigestLabel(gs globalSearchPayload, entityID, label string) bool {
+	for _, digest := range gs.EntityDigests {
+		if digest.ID == entityID && digest.Label == label {
+			return true
+		}
+	}
+	return false
+}
+
+func entityDigestLabels(gs globalSearchPayload) []string {
+	labels := make([]string, 0, len(gs.EntityDigests))
+	for _, digest := range gs.EntityDigests {
+		labels = append(labels, digest.Label)
+	}
+	return labels
 }
 
 // knownAnswerMatch records WHERE a substring was found (for diagnostics).
@@ -279,8 +321,8 @@ func (s *TieredScenario) sendGlobalSearchAtLevel(ctx context.Context, gatewayURL
 	// match the wire format. Request both summarized and non-summarized
 	// surfaces so the matcher can scan whichever the server populated.
 	graphqlQuery := map[string]any{
-		"query": `query($query: String!, $level: Int, $maxCommunities: Int) {
-			searchGraph(query: $query, level: $level, maxCommunities: $maxCommunities) {
+		"query": `query($query: String!, $level: Int, $maxCommunities: Int, $summarizeThreshold: Int) {
+			searchGraph(query: $query, level: $level, maxCommunities: $maxCommunities, summarizeThreshold: $summarizeThreshold) {
 				entities { id type label }
 				entity_ids
 				entity_digests { id type label }
@@ -289,9 +331,10 @@ func (s *TieredScenario) sendGlobalSearchAtLevel(ctx context.Context, gatewayURL
 				summarized
 			}}`,
 		"variables": map[string]any{
-			"query":          query,
-			"level":          level,
-			"maxCommunities": 10,
+			"query":              query,
+			"level":              level,
+			"maxCommunities":     10,
+			"summarizeThreshold": 1,
 		},
 	}
 
