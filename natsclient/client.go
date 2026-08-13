@@ -1702,9 +1702,24 @@ func (m *Client) handleClosed(_ *nats.Conn) {
 	}
 }
 
-func (m *Client) handleError(_ *nats.Conn, _ *nats.Subscription, err error) {
+func (m *Client) handleError(_ *nats.Conn, sub *nats.Subscription, err error) {
+	attrs := []any{slog.Any("error", err)}
+	if sub != nil {
+		attrs = append(attrs, slog.String("subject", sub.Subject))
+		if sub.Queue != "" {
+			attrs = append(attrs, slog.String("queue", sub.Queue))
+		}
+		if stderrors.Is(err, nats.ErrSlowConsumer) {
+			if dropped, droppedErr := sub.Dropped(); droppedErr == nil {
+				attrs = append(attrs, slog.Int("dropped", dropped))
+			} else {
+				attrs = append(attrs, slog.Bool("dropped_available", false))
+			}
+		}
+	}
+
 	// Log error for debugging
-	m.logger.Error("NATS error", slog.Any("error", err))
+	m.logger.Error("NATS error", attrs...)
 	// Don't record failure here as it may be called for non-connection errors
 }
 
