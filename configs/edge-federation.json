@@ -114,6 +114,7 @@
       "name": "websocket",
       "enabled": true,
       "config": {
+        "path": "/stream",
         "ports": {
           "inputs": [
             {

@@ -24,7 +24,7 @@ import (
 )
 
 // testWebSocketConfig creates a standard test configuration for WebSocket output
-func testWebSocketConfig(port int, _ string, subjects []string) Config {
+func testWebSocketConfig(port int, path string, subjects []string) Config {
 	// Create input ports for each subject
 	inputs := make([]component.PortDefinition, len(subjects))
 	for i, subject := range subjects {
@@ -36,7 +36,7 @@ func testWebSocketConfig(port int, _ string, subjects []string) Config {
 		}
 	}
 
-	// Create output port for WebSocket server (encode as URL in Subject)
+	// Create the output listener separately from the component-owned route.
 	outputs := []component.PortDefinition{
 		{
 			Name:        "websocket_server",
@@ -47,6 +47,7 @@ func testWebSocketConfig(port int, _ string, subjects []string) Config {
 	}
 
 	return Config{
+		Path: path,
 		Ports: &component.PortConfig{
 			Inputs:  inputs,
 			Outputs: outputs,
@@ -239,7 +240,7 @@ func TestWebSocketOutput_Initialize(t *testing.T) {
 			subjects:   []string{"test.subject"},
 			natsClient: &natsclient.Client{},
 			wantErr:    true,
-			errMsg:     "WebSocket path cannot be empty",
+			errMsg:     "path cannot be empty",
 		},
 		{
 			name:       "empty subjects",
@@ -852,7 +853,7 @@ func TestWebSocketOutput_SpecificErrorCases(t *testing.T) {
 				return ws.Initialize()
 			},
 			wantErr: true,
-			errMsg:  "WebSocket path cannot be empty",
+			errMsg:  "path cannot be empty",
 		},
 		{
 			name: "initialize_with_empty_subjects",

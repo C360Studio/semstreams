@@ -275,6 +275,7 @@
       "name": "websocket",
       "enabled": true,
       "config": {
+        "path": "/e2e-output",
         "ports": {
           "inputs": [
             {
