@@ -14,6 +14,8 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/payloadbuiltins"
+	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/test/e2e/client"
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
@@ -558,19 +560,27 @@ func (s *Scenario) verifyTerminalResponse(ctx context.Context, result *scenarios
 	if got := stored.Header.Get(nats.MsgIdHdr); got != wantID {
 		return fmt.Errorf("terminal response Nats-Msg-Id = %q, want %q", got, wantID)
 	}
-	var response struct {
-		Payload agentic.UserResponse `json:"payload"`
+	registry := payloadregistry.New()
+	if err := payloadbuiltins.Register(registry); err != nil {
+		return fmt.Errorf("register production payloads for terminal response proof: %w", err)
 	}
-	if err := json.Unmarshal(stored.Data, &response); err != nil {
-		return fmt.Errorf("decode terminal-derived response: %w", err)
+	decoded, err := message.NewDecoder(registry).Decode(stored.Data)
+	if err != nil {
+		return fmt.Errorf("decode terminal-derived response through production registry: %w", err)
 	}
-	if response.Payload.ResponseID != wantID || response.Payload.Type != agentic.ResponseTypeResult ||
-		response.Payload.ChannelType != "e2e" || response.Payload.ChannelID != taskID || response.Payload.UserID != "" {
+	if decoded.Type().String() != "agentic.user_response.v1" {
+		return fmt.Errorf("terminal response envelope type = %q, want agentic.user_response.v1", decoded.Type())
+	}
+	response, ok := decoded.Payload().(*agentic.UserResponse)
+	if !ok {
+		return fmt.Errorf("terminal response payload type = %T, want *agentic.UserResponse", decoded.Payload())
+	}
+	if response.ResponseID != wantID || response.Type != agentic.ResponseTypeResult ||
+		response.ChannelType != "e2e" || response.ChannelID != taskID || response.UserID != "" {
 		return fmt.Errorf("terminal response projection = id:%q type:%q route:%q/%q user:%q",
-			response.Payload.ResponseID, response.Payload.Type, response.Payload.ChannelType,
-			response.Payload.ChannelID, response.Payload.UserID)
+			response.ResponseID, response.Type, response.ChannelType, response.ChannelID, response.UserID)
 	}
-	if response.Payload.Content == "" || response.Payload.Timestamp.IsZero() {
+	if response.Content == "" || response.Timestamp.IsZero() {
 		return fmt.Errorf("terminal response missing result content or terminal timestamp")
 	}
 	result.Details["terminal_response_id"] = wantID

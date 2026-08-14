@@ -33,7 +33,6 @@
 //   - agent.request.validated.* - Approved requests
 //   - agent.response.validated.* - Approved responses
 //   - governance.violation.* - Policy violations
-//   - user.response.* - Error notifications
 //
 // # Configuration
 //
@@ -58,8 +57,7 @@
 //	    ]
 //	  },
 //	  "violations": {
-//	    "store": "GOVERNANCE_VIOLATIONS",
-//	    "notify_user": true
+//	    "store": "GOVERNANCE_VIOLATIONS"
 //	  }
 //	}
 //

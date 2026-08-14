@@ -879,6 +879,11 @@ func (e *ActionExecutor) executePublish(ctx context.Context, action Action, ec *
 	}
 
 	subject := ec.SubstituteVariables(action.Subject)
+	if targetsReservedUserResponseSubject(subject) {
+		return errs.WrapInvalid(
+			fmt.Errorf("%s action resolved subject %q targets reserved family %q", action.Type, subject, reservedUserResponseSubjectFamily),
+			"RuleActionExecutor", "executePublish", "reject reserved publish subject")
+	}
 	// Substitute $message.*/$entity.* etc. tokens in string property
 	// values before publish. ADR-039's canonical reject pattern relies
 	// on `properties.call_id = "$message.call_id"` resolving so the
@@ -1484,6 +1489,11 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 	// Existing rule packs that hardcode role values are unaffected —
 	// strings without `$`-prefixed tokens pass through unchanged.
 	subject := ec.SubstituteVariablesWithIterVar(action.Subject, iterVarName, iterVarValue)
+	if targetsReservedUserResponseSubject(subject) {
+		return errs.WrapInvalid(
+			fmt.Errorf("%s action resolved subject %q targets reserved family %q", action.Type, subject, reservedUserResponseSubjectFamily),
+			"RuleActionExecutor", "publishAgentOnce", "reject reserved publish subject")
+	}
 	prompt := ec.SubstituteVariablesWithIterVar(action.Prompt, iterVarName, iterVarValue)
 	role := ec.SubstituteVariablesWithIterVar(action.Role, iterVarName, iterVarValue)
 
@@ -1853,6 +1863,11 @@ func (e *ActionExecutor) executeApprove(ctx context.Context, action Action, ec *
 	}
 
 	subject := ec.SubstituteVariables(action.Subject)
+	if targetsReservedUserResponseSubject(subject) {
+		return errs.WrapInvalid(
+			fmt.Errorf("%s action resolved subject %q targets reserved family %q", action.Type, subject, reservedUserResponseSubjectFamily),
+			"RuleActionExecutor", "executeApprove", "reject reserved publish subject")
+	}
 	reason := ec.SubstituteVariables(action.Reason)
 	ruleID := ec.RuleID()
 	entityID := ec.EntityID

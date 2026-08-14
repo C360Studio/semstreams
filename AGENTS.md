@@ -35,6 +35,16 @@ Events → Graphable Interface → Knowledge Graph → Queries
   canonical `.agents/skills/<name>/SKILL.md` directly; the `.claude/skills/` entries of the same
   names are thin adapters to it.
 
+## Repository ownership boundary (HARD RULE)
+
+SemStreams agents mutate only the SemStreams repository. Sister repositories are read-only inventory sources: agents
+may inspect them to measure downstream impact, but must not create branches, edit files, commit, push, open or modify
+pull requests or issues, comment, label, tag, release, or otherwise change their state.
+
+When a SemStreams change breaks a downstream adopter, record the exact impact and migration instructions in a
+SemStreams-owned migration document. The downstream repository owner implements and validates that migration in its
+own repository. The completed one-time SemDev #952 migration is not precedent for future cross-repository writes.
+
 ## The adopter seam rule (house rule)
 
 SemStreams is a framework other people build on. Every surface we expose is a bill an adopter pays, and the adopter is

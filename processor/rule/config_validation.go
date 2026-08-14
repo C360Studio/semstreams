@@ -324,6 +324,12 @@ var validRunScopeValues = map[string]bool{
 func validateActionLists(def Definition) error {
 	check := func(label string, actions []Action) error {
 		for i, a := range actions {
+			if isArbitrarySubjectPublisher(a.Type) && targetsReservedUserResponseSubject(a.Subject) {
+				return errs.WrapInvalid(
+					fmt.Errorf("rule %s %s[%d] %s action subject %q targets reserved family %q",
+						def.ID, label, i, a.Type, a.Subject, reservedUserResponseSubjectFamily),
+					"RuleProcessor", "ValidateDefinition", "validate reserved publish subject")
+			}
 			if a.RelatedLoops != nil && a.Type != ActionTypePublishAgent {
 				return errs.WrapInvalid(
 					fmt.Errorf("rule %s %s[%d] related_loops is only valid on publish_agent actions", def.ID, label, i),

@@ -158,7 +158,8 @@
                 "stream_name": "USER",
                 "subjects": [
                   "user.response.*"
-                ]
+                ],
+                "interface": {"type": "agentic.user_response", "version": "v1"}
               },
               "description": "Responses back to users",
               "name": "user.response"

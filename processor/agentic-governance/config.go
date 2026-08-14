@@ -86,7 +86,6 @@ type ToolCallFilterConfig struct {
 type ViolationConfig struct {
 	Store               string     `json:"store" schema:"type:string,description:KV bucket for violations,category:basic,default:GOVERNANCE_VIOLATIONS"`
 	RetentionDays       int        `json:"retention_days" schema:"type:int,description:Violation retention in days,category:basic,default:90"`
-	NotifyUser          bool       `json:"notify_user" schema:"type:bool,description:Send error messages to users,category:basic,default:true"`
 	NotifyAdminSeverity []Severity `json:"notify_admin_severity,omitempty" schema:"type:array,description:Severity levels that trigger admin alerts,category:basic"`
 	AdminSubject        string     `json:"admin_subject,omitempty" schema:"type:string,description:NATS subject for admin alerts,category:advanced,default:admin.governance.alert"`
 }
@@ -217,10 +216,6 @@ func DefaultConfig() Config {
 			Name: "violations", Config: component.JetStreamPort{Subjects: []string{"governance.violation.*"}, StreamName: "AGENT"}, Required: true,
 			Description: "Policy violations for audit (JetStream)",
 		},
-		{
-			Name: "user_errors", Config: component.NATSPort{Subject: "user.response.*"}, Required: false,
-			Description: "Error notifications to users (NATS)",
-		},
 	}
 
 	return Config{
@@ -273,7 +268,6 @@ func DefaultConfig() Config {
 		Violations: ViolationConfig{
 			Store:               "GOVERNANCE_VIOLATIONS",
 			RetentionDays:       90,
-			NotifyUser:          true,
 			NotifyAdminSeverity: []Severity{SeverityCritical, SeverityHigh},
 			AdminSubject:        "admin.governance.alert",
 		},

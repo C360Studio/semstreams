@@ -90,7 +90,10 @@ func DefaultConfig() Config {
 					Name: "agent.signal", Config: component.JetStreamPort{Subjects: []string{"agent.signal.*"}, StreamName: "AGENT"}, Description: "Agent control signals",
 				},
 				{
-					Name: "user.response", Config: component.JetStreamPort{Subjects: []string{"user.response.>"}, StreamName: "USER"}, Description: "Responses back to users",
+					Name: "user.response", Config: component.JetStreamPort{
+						Subjects: []string{"user.response.>"}, StreamName: "USER",
+						Interface: &component.InterfaceContract{Type: "agentic.user_response", Version: "v1"},
+					}, Description: "Typed responses back to users",
 				},
 				{
 					Name: "agent.approval_response", Config: component.JetStreamPort{Subjects: []string{"agent.approval_response.*"}, StreamName: "AGENT"}, Description: "Approval responses submitted via the dispatch HTTP /loops/{id}/approval endpoint, consumed by agentic-loop's approval-response handler",

@@ -65,9 +65,8 @@ const (
 )
 
 // ViolationHandler processes detected violations. It holds a copy of the
-// component's output port definitions so publish subjects can honor port
-// overrides — mirroring what every other agentic component does for its
-// outputs.
+// component's output port definitions so the violation event can honor its
+// accepted port override.
 type ViolationHandler struct {
 	config     ViolationConfig
 	natsClient *natsclient.Client
@@ -77,8 +76,8 @@ type ViolationHandler struct {
 }
 
 // NewViolationHandler creates a new violation handler. outputs must be the
-// component's output port slice so the violations and user_errors publish
-// subjects resolve via port config rather than hardcoded fmt.Sprintf.
+// component's output port slice so the violation event resolves via port
+// config rather than a hardcoded subject.
 func NewViolationHandler(config ViolationConfig, nc *natsclient.Client, logger *slog.Logger, metrics *governanceMetrics, outputs []component.PortDefinition) *ViolationHandler {
 	return &ViolationHandler{
 		config:     config,
@@ -92,10 +91,8 @@ func NewViolationHandler(config ViolationConfig, nc *natsclient.Client, logger *
 // Handle processes a violation. Shadow-mode violations (Action ==
 // ViolationActionFlagged, used by ADR-043 Phase 2 classifier shadow
 // mode) still emit the audit event + publish so observability and
-// downstream rule consumers can see the verdict, but skip the
-// user-facing notification and admin alert paths — operators are
-// not yet ready to act on shadow-mode results, that's the whole
-// point of shadow mode.
+// downstream rule consumers can see the verdict, but skip admin alerts —
+// operators are not yet ready to act on shadow-mode results.
 func (h *ViolationHandler) Handle(ctx context.Context, violation *Violation) error {
 	shadow := violation.Action == ViolationActionFlagged
 
@@ -131,19 +128,11 @@ func (h *ViolationHandler) Handle(ctx context.Context, violation *Violation) err
 	if h.config.Store != "" {
 		if err := h.storeViolation(ctx, violation); err != nil {
 			h.logger.Error("Failed to store violation", "error", err, "violation_id", violation.ID)
-			// Don't fail on storage errors, continue with notifications
+			// Don't fail on storage errors; continue with remaining audit paths.
 		}
 	}
 
 	if !shadow {
-		// Notify user if configured. Skipped in shadow mode —
-		// the user took no action that warrants a message back.
-		if h.config.NotifyUser {
-			if err := h.notifyUser(ctx, violation); err != nil {
-				h.logger.Error("Failed to notify user", "error", err, "violation_id", violation.ID)
-			}
-		}
-
 		// Alert admins if severity warrants. Skipped in shadow
 		// mode — admin paging on calibration noise defeats the
 		// purpose.
@@ -174,12 +163,15 @@ func (h *ViolationHandler) Handle(ctx context.Context, violation *Violation) err
 
 // storeViolation saves to KV bucket
 func (h *ViolationHandler) storeViolation(ctx context.Context, violation *Violation) error {
+	key := fmt.Sprintf("violation.%s", violation.ID)
+	if err := natsclient.ValidateKVLiteralKey(key); err != nil {
+		return errs.WrapInvalid(err, "ViolationHandler", "storeViolation", "validate violation audit key")
+	}
 	kv, err := h.natsClient.GetKeyValueBucket(ctx, h.config.Store)
 	if err != nil {
 		return errs.WrapTransient(err, "ViolationHandler", "storeViolation", "get KV bucket")
 	}
 
-	key := fmt.Sprintf("violation:%s", violation.ID)
 	value, err := json.Marshal(violation)
 	if err != nil {
 		return errs.Wrap(err, "ViolationHandler", "storeViolation", "marshal violation")
@@ -187,49 +179,6 @@ func (h *ViolationHandler) storeViolation(ctx context.Context, violation *Violat
 
 	_, err = kv.Put(ctx, key, value)
 	return err
-}
-
-// notifyUser sends error message to user
-func (h *ViolationHandler) notifyUser(ctx context.Context, violation *Violation) error {
-	notification := map[string]any{
-		"type":      "error",
-		"timestamp": violation.Timestamp,
-		"message":   h.formatUserMessage(violation),
-		"severity":  violation.Severity,
-		"details": map[string]any{
-			"violation_id": violation.ID,
-			"filter":       violation.FilterName,
-		},
-	}
-
-	notificationJSON, err := json.Marshal(notification)
-	if err != nil {
-		return errs.Wrap(err, "ViolationHandler", "notifyUser", "marshal notification")
-	}
-
-	// User-notification subject resolved via output port; defaults to
-	// user.response.{channel}.{user} when no port override is set.
-	subject, err := component.ResolveSubject(h.outputs, "user_errors", violation.ChannelID+"."+violation.UserID)
-	if err != nil {
-		return errs.WrapInvalid(err, "ViolationHandler", "notifyUser", "resolve notification subject")
-	}
-	return errs.WrapTransient(h.natsClient.Publish(ctx, subject, notificationJSON), "ViolationHandler", "notifyUser", "publish notification")
-}
-
-// formatUserMessage creates user-friendly error message
-func (h *ViolationHandler) formatUserMessage(violation *Violation) string {
-	switch violation.FilterName {
-	case "pii_redaction":
-		return "Your message contained sensitive information that was automatically redacted."
-	case "injection_detection":
-		return "Your message was blocked due to detected security concerns. Please rephrase your request."
-	case "content_moderation":
-		return "Your message violates content policy and cannot be processed."
-	case "rate_limiting":
-		return "Rate limit exceeded. Please wait before sending more requests."
-	default:
-		return "Your message could not be processed due to policy restrictions."
-	}
 }
 
 // alertAdmin sends notification to administrators

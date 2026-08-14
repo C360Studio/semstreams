@@ -139,6 +139,9 @@ func TestPortDefinitions_Subjects(t *testing.T) {
 			assert.Equal(t, "AGENT", stream.StreamName)
 		case "user.response":
 			assert.Equal(t, []string{"user.response.>"}, stream.Subjects)
+			require.NotNil(t, stream.Interface)
+			assert.Equal(t, "agentic.user_response", stream.Interface.Type)
+			assert.Equal(t, "v1", stream.Interface.Version)
 			assert.Equal(t, "USER", stream.StreamName)
 		}
 	}
