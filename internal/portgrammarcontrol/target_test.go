@@ -616,6 +616,9 @@ func assertGoTargetCompleteness(t *testing.T, root string, plan *Plan) {
 		if _, retired := postFoundationBToolDiscoveryGoIdentityRetirements[item.RecordID]; retired {
 			continue
 		}
+		if _, retired := postFoundationBUserResponseGoIdentityRetirements[item.RecordID]; retired {
+			continue
+		}
 		if item.Path == "gateway/graph-gateway/component.go" {
 			continue
 		}
@@ -794,6 +797,7 @@ func assertGoTargetCompleteness(t *testing.T, root string, plan *Plan) {
 	for _, additions := range postFoundationBToolDiscoveryGoIdentityAdditions {
 		wantTotal += len(additions)
 	}
+	wantTotal -= len(postFoundationBUserResponseGoIdentityRetirements)
 	if total != wantTotal {
 		t.Fatalf("canonical Go PortDefinition identities=%d, want %d after post-Foundation-B amendments",
 			total, wantTotal)
@@ -1155,6 +1159,13 @@ var postFoundationBToolDiscoveryGoIdentityAdditions = map[string][]string{
 	"processor/agentic-tools/config.go": {"tool.list|NATSRequestPort"},
 }
 
+// postFoundationBUserResponseGoIdentityRetirements records the governance
+// user-notification port removed by the owner-approved #952 subject-ownership
+// cut. The immutable Foundation B worklist remains historical evidence.
+var postFoundationBUserResponseGoIdentityRetirements = map[string]struct{}{
+	"go:processor/agentic-governance/config.go#L248C3": {},
+}
+
 func targetForConfigItem(item WorkItem, dispositions map[string]Disposition) (targetConfigItem, error) {
 	var legacy map[string]any
 	if err := json.Unmarshal([]byte(item.CurrentData), &legacy); err != nil {
@@ -1253,6 +1264,9 @@ func correctComponentPortName(target targetConfigItem, err error) (targetConfigI
 		target.row = canonicalRow(target.row, "jetstream", map[string]any{
 			"stream_name": "USER",
 			"subjects":    []any{stringValue(config["subject"])},
+			"interface": map[string]any{
+				"type": "agentic.user_response", "version": "v1",
+			},
 		})
 		target.primitiveCorrected = true
 	}

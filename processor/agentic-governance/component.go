@@ -55,6 +55,9 @@ type Component struct {
 
 // NewComponent creates a new agentic-governance processor component
 func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+	if err := rejectRetiredNotifyUser(rawConfig); err != nil {
+		return nil, err
+	}
 	defaults := DefaultConfig()
 	config := DefaultConfig()
 	if err := json.Unmarshal(rawConfig, &config); err != nil {
@@ -149,8 +152,8 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	}
 
 	// Create violation handler. Pass the component's output port defs so
-	// the handler can resolve publish subjects via component.ResolveSubject
-	// (honors any per-deployment port overrides on violations/user_errors).
+	// the handler can resolve the violation event subject via the accepted
+	// port declaration.
 	var outputDefs []component.PortDefinition
 	if config.Ports != nil {
 		outputDefs = config.Ports.Outputs
@@ -168,6 +171,27 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		violations: violationHandler,
 		metrics:    metrics,
 	}, nil
+}
+
+func rejectRetiredNotifyUser(rawConfig json.RawMessage) error {
+	var outer map[string]json.RawMessage
+	if err := json.Unmarshal(rawConfig, &outer); err != nil {
+		return nil // The production config decode below reports malformed JSON.
+	}
+	rawViolations, ok := outer["violations"]
+	if !ok {
+		return nil
+	}
+	var violations map[string]json.RawMessage
+	if err := json.Unmarshal(rawViolations, &violations); err != nil {
+		return nil // The production config decode below reports the type error.
+	}
+	if _, present := violations["notify_user"]; present {
+		return errs.WrapInvalid(
+			fmt.Errorf("violations.notify_user was removed; delete the key before adopting this breaking version"),
+			"Component", "NewComponent", "reject retired governance user notification")
+	}
+	return nil
 }
 
 // Initialize prepares the component

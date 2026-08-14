@@ -34,7 +34,6 @@ is enforced at the infrastructure layer rather than delegated to agents.
 - `agent.request.validated.*` - Approved requests
 - `agent.response.validated.*` - Approved responses
 - `governance.violation.*` - Policy violations
-- `user.response.*` - Error notifications
 
 ## Configuration
 
@@ -84,7 +83,6 @@ is enforced at the infrastructure layer rather than delegated to agents.
     "violations": {
       "store": "GOVERNANCE_VIOLATIONS",
       "retention_days": 90,
-      "notify_user": true,
       "notify_admin_severity": ["critical", "high"]
     }
   }

@@ -30,8 +30,8 @@ func TestNewComponentMergesCanonicalPortOverridesIntoDefaults(t *testing.T) {
 		t.Fatalf("InputPorts() count = %d, want 3 preserved defaults", got)
 	}
 	outputs := governancePortsByName(created.OutputPorts())
-	if got := len(outputs); got != 5 {
-		t.Fatalf("OutputPorts() count = %d, want 5 merged defaults", got)
+	if got := len(outputs); got != 4 {
+		t.Fatalf("OutputPorts() count = %d, want 4 merged defaults", got)
 	}
 	facts, err := outputs["agent.request.validated"].Facts()
 	if err != nil {
@@ -40,7 +40,7 @@ func TestNewComponentMergesCanonicalPortOverridesIntoDefaults(t *testing.T) {
 	if subjects := facts.NATSSubjects(); len(subjects) != 1 || subjects[0] != "custom.agent.request.validated.*" {
 		t.Fatalf("agent.request.validated subjects = %v, want [custom.agent.request.validated.*]", subjects)
 	}
-	for _, name := range []string{"agent.task.validated", "agent.response.validated", "violations", "user_errors"} {
+	for _, name := range []string{"agent.task.validated", "agent.response.validated", "violations"} {
 		if _, ok := outputs[name]; !ok {
 			t.Fatalf("omitted default %s was not preserved: %v", name, outputs)
 		}

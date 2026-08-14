@@ -147,7 +147,8 @@
                 "stream_name": "USER",
                 "subjects": [
                   "user.response.*"
-                ]
+                ],
+                "interface": {"type": "agentic.user_response", "version": "v1"}
               },
               "description": "Responses back to users",
               "name": "user.response"
@@ -373,8 +374,7 @@
         },
         "violations": {
           "store": "GOVERNANCE_VIOLATIONS",
-          "retention_days": 30,
-          "notify_user": true
+		  "retention_days": 30
         },
         "ports": {
           "inputs": [

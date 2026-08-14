@@ -86,7 +86,7 @@ func TestComponent_OutputPorts(t *testing.T) {
 	c := comp.(*Component)
 	ports := c.OutputPorts()
 
-	assert.Len(t, ports, 5)
+	assert.Len(t, ports, 4)
 
 	// Verify port names
 	portNames := make([]string, len(ports))
@@ -97,7 +97,7 @@ func TestComponent_OutputPorts(t *testing.T) {
 	assert.Contains(t, portNames, "agent.request.validated")
 	assert.Contains(t, portNames, "agent.response.validated")
 	assert.Contains(t, portNames, "violations")
-	assert.Contains(t, portNames, "user_errors")
+	assert.NotContains(t, portNames, "user_errors")
 }
 
 func TestComponent_Health(t *testing.T) {

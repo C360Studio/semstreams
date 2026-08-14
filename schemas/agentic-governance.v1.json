@@ -443,12 +443,6 @@
           },
           "category": "basic"
         },
-        "notify_user": {
-          "type": "boolean",
-          "description": "Send error messages to users",
-          "default": true,
-          "category": "basic"
-        },
         "retention_days": {
           "type": "integer",
           "description": "Violation retention in days",

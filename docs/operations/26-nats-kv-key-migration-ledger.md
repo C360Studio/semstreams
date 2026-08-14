@@ -85,9 +85,10 @@ allowed values as the boundary inventory.
 - `component/config_validator.go:ValidateAndPersistComponentConfig`: caller-produced component config key through the
   persister interface; component configuration; component key bound; possible config migration; config key contract;
   unassessed; pending.
-- `processor/agentic-governance/violation.go:ViolationHandler.storeViolation`: `violation:<violation.ID>` with a
-  literal colon; agentic governance audit; replacement-free physical layout and ID bound; byte change and migration
-  required because `:` is not accepted by NATS KV; governance persistence contract; nonconforming; pending.
+- `processor/agentic-governance/violation.go:ViolationHandler.storeViolation`: `violation.<violation.ID>` validated
+  before bucket lookup; agentic governance audit; generated-ID bound and literal-key validation; no rebuild because
+  the former colon key was rejected by NATS and never persisted; GitHub #952 governance persistence correction;
+  conforming; complete.
 - `flowstore/manager.go`: raw `flow.ID` Create/Put/Get/Delete, raw Keys, and caller Watch pattern; flow store; flow-ID
   bound plus filter grammar; possible flow bucket rebuild; flow identity contract; unassessed; pending.
 - `flowtemplate/manager.go`: raw template ID Create/Put/Get/Delete and Keys; flow templates; template-ID bound;

@@ -129,17 +129,17 @@ func TestMessageLoggerShippedSubjectCensusArtifactIsCompleteAndExact(t *testing.
 		computed.AddedKinds, computed.ContainmentOverlaps)
 
 	require.Equal(t, subjectCensusCounts{Rows: 395, PerConfigExactKeys: 243, GlobalStrings: 54}, census.Raw)
-	require.Equal(t, subjectCensusCounts{Rows: 580, PerConfigExactKeys: 380, GlobalStrings: 70}, census.Effective)
-	require.Equal(t, subjectCensusCounts{Rows: 185, PerConfigExactKeys: 137, GlobalStrings: 16}, census.Delta)
+	require.Equal(t, subjectCensusCounts{Rows: 579, PerConfigExactKeys: 380, GlobalStrings: 70}, census.Effective)
+	require.Equal(t, subjectCensusCounts{Rows: 184, PerConfigExactKeys: 137, GlobalStrings: 16}, census.Delta)
 	require.Equal(t, census.Raw.Rows+census.Delta.Rows, census.Effective.Rows)
 	require.Equal(t, census.Raw.PerConfigExactKeys+census.Delta.PerConfigExactKeys, census.Effective.PerConfigExactKeys)
 	require.Equal(t, census.Raw.GlobalStrings+census.Delta.GlobalStrings, census.Effective.GlobalStrings)
 	require.Zero(t, census.Delta.Removals)
-	require.Equal(t, 48, census.ExactCollapses.Total)
+	require.Equal(t, 47, census.ExactCollapses.Total)
 	require.Equal(t, census.ExactCollapses.LoopDispatch+census.ExactCollapses.Governance, census.ExactCollapses.Total)
 	require.Equal(t, census.Raw.PerConfigExactKeys+census.Delta.Rows-census.ExactCollapses.Total,
 		census.Effective.PerConfigExactKeys)
-	require.Equal(t, 185, census.AddedKinds["jetstream_inputs"]+census.AddedKinds["jetstream_outputs"]+
+	require.Equal(t, 184, census.AddedKinds["jetstream_inputs"]+census.AddedKinds["jetstream_outputs"]+
 		census.AddedKinds["nats_inputs"]+census.AddedKinds["nats_outputs"]+census.AddedKinds["nats_request_inputs"])
 	require.Len(t, census.AffectedConfigs, 9)
 	for _, path := range census.AffectedConfigs {
@@ -162,7 +162,7 @@ func TestMessageLoggerShippedSubjectCensusArtifactIsCompleteAndExact(t *testing.
 	require.Equal(t, census.Delta, computed.Delta)
 	require.Equal(t, census.ExactCollapses, computed.ExactCollapses)
 	require.Equal(t, 47, computed.ExactCollapses.LoopDispatch)
-	require.Equal(t, 1, computed.ExactCollapses.Governance)
+	require.Zero(t, computed.ExactCollapses.Governance)
 	require.Equal(t, census.AddedKinds, computed.AddedKinds)
 	require.Equal(t, census.ContainmentOverlaps, computed.ContainmentOverlaps)
 	require.Equal(t, map[string]int{
@@ -180,6 +180,8 @@ func TestMessageLoggerShippedSubjectCensusArtifactIsCompleteAndExact(t *testing.
 	require.Equal(t, 2, computed.ResearchClassifyQueryRows)
 	require.Equal(t, 8, computed.ResearchExecuteQueryRows)
 	require.Zero(t, computed.AgenticQueryRows)
+	require.Equal(t, 9, computed.TypedUserResponseRows,
+		"all enabled agentic-dispatch instances must retain the typed user.response interface after production merge")
 }
 
 func TestMessageLoggerCensusRejectsUnknownEnabledFactory(t *testing.T) {
@@ -228,6 +230,7 @@ type computedSubjectCensus struct {
 	ResearchClassifyQueryRows int
 	ResearchExecuteQueryRows  int
 	AgenticQueryRows          int
+	TypedUserResponseRows     int
 	ConstructionFailures      []string
 	ContainmentOverlaps       []struct {
 		Config  string `json:"config"`
@@ -288,6 +291,21 @@ func computeMessageLoggerSubjectCensus(t *testing.T, scope []string) computedSub
 		}
 		for _, snapshot := range registry.Snapshots(componentadmission.Access{}) {
 			computed.FactoryInstances[snapshot.Factory()]++
+			if snapshot.Factory() == "agentic-dispatch" {
+				outputs := snapshot.Outputs()
+				facts := snapshot.OutputDeclarationFacts()
+				require.Len(t, facts, len(outputs), "%s %s output facts", path, snapshot.Name())
+				for i, output := range outputs {
+					if output.Name != "user.response" {
+						continue
+					}
+					contract, ok := facts[i].Interface()
+					require.True(t, ok, "%s %s user.response lost its typed interface during production merge", path, snapshot.Name())
+					require.Equal(t, component.InterfaceContract{Type: "agentic.user_response", Version: "v1"}, contract,
+						"%s %s user.response interface", path, snapshot.Name())
+					computed.TypedUserResponseRows++
+				}
+			}
 			collectEffectiveCensusRows(snapshot.Name(), snapshot.Factory(), component.DirectionInput,
 				snapshot.Inputs(), snapshot.InputDeclarationFacts(), effectiveRows, effectiveKeys, effectiveGlobal)
 			collectEffectiveCensusRows(snapshot.Name(), snapshot.Factory(), component.DirectionOutput,
