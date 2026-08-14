@@ -40,9 +40,11 @@
 - [x] 4.3 Final gates passed: `task lint`; `go test -race ./...`; `task schema:generate` with no `schemas/` or
   `specs/` drift; `go test ./test/contract/...`; `go mod tidy -diff`; strict OpenSpec validation (43/43); and
   `task e2e:core` (3/3, exact marker PubAck/advisory sequence equality, clean teardown).
-- [ ] 4.4 **BLOCKED — REVIEW EVIDENCE NOT RECORDED.** PR #948 merged at
-  `acf656edf18d322dfc82490608621b446ff55c12`, but its GitHub review record contains no review. Merge status and the
-  completed verification gates above do not substitute for the required independent SemStreams reviewer approval.
+- [x] 4.4 Record current-session independent `semstreams-reviewer` approval with no findings. Focused race proof
+  passed for `config` (1.552s), `internal/maxdelivery` (1.402s), and scenario helpers (1.404s). Sequential real-NATS
+  proof passed for `config` (28.088s) and `internal/maxdelivery` (9.644s), including restrictive authorization and
+  disposable three-node coverage. PR #948's GitHub review collection remains empty; this is session-local evidence,
+  not retroactive GitHub approval.
 
 ## Binding ruling conformance table
 

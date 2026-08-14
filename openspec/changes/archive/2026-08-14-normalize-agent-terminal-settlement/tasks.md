@@ -53,9 +53,13 @@
 - [x] Prove OTel processing errors are not unconditionally ACKed.
 - [x] Verify both framework binary wiring paths.
 - [x] Verify the retained callback contract through the durable representative adopter fixture.
-- [ ] **BLOCKED — DOWNSTREAM EVIDENCE NOT RECORDED.** Verify the actual semteams behavioral path after its beta.160
-  migration. The checked-in representative adopter fixture is not actual semteams wiring evidence, and the available
-  local semteams checkout remains on its beta.159 realignment branch.
+- [ ] **SUPERSEDED AS AN ARCHIVE GATE — PRODUCT-OWNED/NONBLOCKING.**
+  The actual SemTeams path was not verified in this repository. The sister-repository cutover remains product-owned
+  and is tracked through the durable operator checklist and issue handoff; it does not block the SemStreams archive.
+
+  OpenSpec 1.7.0 recognizes only checked and unchecked task truth here. The task therefore remains `[ ]`; the explicit
+  disposition, rather than an unsupported marker, explains why `-y` archive confirmation is intentional. Do not mark
+  it `[x]` without actual sister-repository evidence.
 
 ## 5. Retention-bound evidence
 
