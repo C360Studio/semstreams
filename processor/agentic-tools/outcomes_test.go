@@ -386,7 +386,11 @@ func TestCompactTooLargeResultDropsSensitiveAndSizeFields(t *testing.T) {
 	encoded, err := marshalToolResult(compact)
 	require.NoError(t, err)
 	assert.NotContains(t, string(encoded), "SECRET")
-	assert.NotContains(t, string(encoded), "123")
+	var envelope struct {
+		Payload map[string]json.RawMessage `json:"payload"`
+	}
+	require.NoError(t, json.Unmarshal(encoded, &envelope))
+	assert.NotContains(t, envelope.Payload, "metadata")
 }
 
 func TestObservedOversizeUsesTypedErrorsOnly(t *testing.T) {

@@ -9,4 +9,7 @@
       (`openspec/changes/stream-capacity-rejection-is-circuit-neutral/design.md`).
 - [x] Record the per-ruling conformance table and adopter seam inventory
       (`openspec/changes/stream-capacity-rejection-is-circuit-neutral/design.md`).
-- [ ] Obtain SemStreams reviewer approval and run the required integration gates before archive.
+- [ ] **BLOCKED — REVIEW AND GATE EVIDENCE NOT RECORDED.** Obtain SemStreams reviewer approval and record the required
+      integration-gate commands/results before archive. PR #947 merged at
+      `eec5c1afa2e610415e0c4e96bba6d46bcbd84cba`; its GitHub review record contains no review, and merge status does
+      not prove either remaining gate.
