@@ -8,6 +8,12 @@ This is a fresh-state, lockstep migration. Stop the deployment, update SemStream
 NATS state, and then start the updated components. Do not retain or forward old park-post messages from
 `user.response.*`.
 
+SemDev PR #6 completed the one-time coordinated #952 migration. That exception is closed and is not a precedent.
+After this cut, SemStreams agents treat SemDev, SemTeams, and every other sister repository as read-only: they may
+inventory downstream impact, but downstream owners must implement these instructions, run their native gates, and
+publish their own changes. SemStreams agents must not mutate sister-repository branches, files, GitHub state, tags,
+or releases.
+
 ## Required adopter changes
 
 - Delete `violations.notify_user` from every agentic-governance configuration. Any presence, including `false` or

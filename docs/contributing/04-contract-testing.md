@@ -4,6 +4,16 @@
 
 Contract testing ensures that schemas, OpenAPI specifications, and TypeScript types remain synchronized across the SemStreams ecosystem without requiring the backend to be running. These tests validate that committed artifacts match the source code and that contracts are compatible across repositories.
 
+## Repository ownership
+
+SemStreams contributors and agents change only this repository. Sister repositories may be inspected read-only for
+compatibility inventories, but all branches, edits, commits, pushes, pull requests, issues, comments, labels, tags,
+releases, and other mutations belong to their downstream owners.
+
+For a breaking contract change, add exact downstream impact, required edits, and validation commands to a
+SemStreams-owned migration document. Downstream owners apply those instructions and report their own evidence; a
+SemStreams agent does not perform the downstream migration.
+
 ## Test Locations
 
 ### semstreams
@@ -14,12 +24,14 @@ Contract testing ensures that schemas, OpenAPI specifications, and TypeScript ty
   - OpenAPI spec validation (`openapi_contract_test.go`)
 
 ### semmem
+- **Owner**: semmem downstream maintainers; SemStreams agents inspect this surface read-only
 - **Location**: `test/contract/`
 - **Framework**: Go testing
 - **Coverage**:
   - Cross-repo schema validation (`cross_repo_test.go`)
 
 ### semstreams-ui
+- **Owner**: semstreams-ui downstream maintainers; SemStreams agents inspect this surface read-only
 - **Location**: `src/lib/contract/`
 - **Framework**: Vitest
 - **Coverage**:
@@ -107,7 +119,7 @@ go test ./test/contract -v -run TestOpenAPI
 - `TestSchemasValidateAgainstSemStreamsMeta`: Validates semmem schemas against semstreams meta-schema
 - `TestMetaSchemasAreCompatible`: Ensures both repos use compatible meta-schemas
 
-**How to Run**:
+**Downstream-owner command** (record in the SemStreams migration guide; SemStreams agents do not execute it):
 ```bash
 cd semmem
 go test ./test/contract -v
@@ -133,7 +145,7 @@ go test ./test/contract -v
 - ComponentType schema validation
 - Schema reference validation
 
-**How to Run**:
+**Downstream-owner command** (record in the SemStreams migration guide; SemStreams agents do not execute it):
 ```bash
 cd semstreams-ui
 npm test -- src/lib/contract/openapi.contract.test.ts
@@ -156,7 +168,7 @@ npm test -- src/lib/contract/openapi.contract.test.ts
 - Contains expected type definitions
 - Has proper exports
 
-**How to Run**:
+**Downstream-owner command** (record in the SemStreams migration guide; SemStreams agents do not execute it):
 ```bash
 cd semstreams-ui
 npm test -- src/lib/contract/types.contract.test.ts
@@ -180,7 +192,11 @@ schema-validation:
   - Run: go test ./test/contract
 ```
 
-### semmem CI
+### semmem CI (downstream-owned)
+
+This is a read-only inventory of the downstream gate. SemStreams agents record the expected result in the migration
+guide; semmem owners run and maintain this workflow.
+
 ```yaml
 schema-validation:
   - Run: task schema:generate
@@ -189,7 +205,11 @@ schema-validation:
   - Run: go test ./test/contract
 ```
 
-### semstreams-ui CI
+### semstreams-ui CI (downstream-owned)
+
+This is a read-only inventory of the downstream gate. SemStreams agents record the expected result in the migration
+guide; semstreams-ui owners run and maintain this workflow.
+
 ```yaml
 type-generation:
   - Run: task generate-types
@@ -204,7 +224,9 @@ See [CI Integration](./05-ci-integration.md) for detailed CI configuration.
 
 ### Making Schema Changes
 
-1. **Modify component code** (in semstreams or semmem):
+These steps apply only to SemStreams-owned changes in this repository:
+
+1. **Modify SemStreams component code**:
    ```go
    type Config struct {
        NewField string `schema:"type:string,desc:New field"`
@@ -221,7 +243,7 @@ See [CI Integration](./05-ci-integration.md) for detailed CI configuration.
    go test ./test/contract -v
    ```
 
-4. **Commit both code and schemas**:
+4. **Commit the SemStreams code and schemas**:
    ```bash
    git add .
    git commit -m "feat(component): add new field"
@@ -229,20 +251,22 @@ See [CI Integration](./05-ci-integration.md) for detailed CI configuration.
 
 ### Updating Frontend Types
 
-After OpenAPI spec changes:
+After an OpenAPI change, the SemStreams contributor records the affected downstream repository, required generated
+artifacts, exact validation commands, and expected results in the applicable SemStreams migration guide. The
+semstreams-ui owner then performs these steps in that repository:
 
-1. **Regenerate types**:
+1. **Downstream owner regenerates types**:
    ```bash
    cd semstreams-ui
    task generate-types
    ```
 
-2. **Run contract tests**:
+2. **Downstream owner runs contract tests**:
    ```bash
    npm test -- src/lib/contract
    ```
 
-3. **Commit generated types**:
+3. **Downstream owner commits generated types**:
    ```bash
    git add src/lib/types/api.generated.ts
    git commit -m "chore: regenerate types from OpenAPI spec"
@@ -287,7 +311,11 @@ git commit -m "chore: update OpenAPI spec"
 ❌ Generated TypeScript types have uncommitted changes!
 ```
 
-**Fix**:
+**Downstream-owner fix**:
+
+Record these commands and the expected clean generated diff in the SemStreams migration guide. The semstreams-ui
+owner executes and publishes the change; a SemStreams agent does not enter or modify that repository.
+
 ```bash
 cd semstreams-ui
 task generate-types
@@ -304,11 +332,13 @@ TestSchemasValidateAgainstSemStreamsMeta failed:
 ```
 
 **Fix**:
-Ensure both repos have compatible meta-schemas and regenerate schemas in both:
+Regenerate the SemStreams artifacts here, then document the downstream command and expected result in the applicable
+SemStreams migration guide. Do not enter or modify the downstream repository:
 ```bash
-cd semstreams && task schema:generate
-cd ../semmem && task schema:generate
+task schema:generate
 ```
+
+The downstream owner independently regenerates and validates its artifacts in its own repository.
 
 ## Benefits of Contract Testing
 
@@ -340,14 +370,12 @@ cd ../semmem && task schema:generate
 ## Best Practices
 
 ### 1. **Always Run Locally First**
-Before pushing, run contract tests:
+Before pushing SemStreams changes, run the SemStreams contract tests:
 ```bash
-# Backend
-cd semstreams && go test ./test/contract
-
-# Frontend
-cd semstreams-ui && npm test -- src/lib/contract
+go test ./test/contract
 ```
+
+Record any downstream contract gates in the SemStreams migration guide for the relevant repository owners to run.
 
 ### 2. **Commit Schemas with Code**
 Never commit code changes without regenerating schemas:
@@ -361,7 +389,8 @@ git commit -m "feat: add new field (with regenerated schemas)"
 Always wait for CI to validate contracts before merging PRs.
 
 ### 4. **Use Task Commands**
-Always use `task schema:generate` and `task generate-types` instead of running tools directly.
+Use `task schema:generate` for SemStreams artifacts. When downstream type generation is required, record the
+downstream-owned `task generate-types` command in the SemStreams migration guide.
 
 ### 5. **Document Breaking Changes**
 When schemas change in breaking ways, document the migration path.
@@ -375,7 +404,7 @@ When schemas change in breaking ways, document the migration path.
 **Fix**:
 ```bash
 git status
-git add schemas/ specs/ src/lib/types/
+git add schemas/ specs/
 git commit --amend
 ```
 
@@ -383,13 +412,16 @@ git commit --amend
 
 **Cause**: Repos not in sibling directories
 
-**Fix**: Ensure directory structure:
+**Inventory note**: Some downstream-owned tests expect the following checkout layout. SemStreams agents may inspect
+this layout read-only, but do not create, move, or modify sister repositories to satisfy the test:
 ```
 /code/semstreams/
   semstreams/
   semmem/
   semstreams-ui/
 ```
+
+Record the skipped gate and expected downstream-owner validation in the applicable SemStreams migration guide.
 
 ### Path Resolution Failures
 
