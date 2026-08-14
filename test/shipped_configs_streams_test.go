@@ -31,6 +31,7 @@
 package referenceconfigs_test
 
 import (
+	"encoding/json"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -41,6 +42,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/c360studio/semstreams/config"
+	"github.com/c360studio/semstreams/model"
 )
 
 // configsDir is repository-relative: this test lives in test/, configs/ is a
@@ -139,6 +141,49 @@ func TestShippedConfigs_ToolStreamCapturesOnlyQueuedToolWork(t *testing.T) {
 		})
 	}
 	assert.Equal(t, wantPaths, gotPaths, "the shipped TOOL declaration census changed")
+}
+
+func TestShippedResearchConfigs_DeclareModelCapabilitiesOnlyInRegistry(t *testing.T) {
+	paths := []string{
+		filepath.Join(configsDir, "examples", "research-graph-pipeline.json"),
+		filepath.Join(configsDir, "research-graph-e2e.json"),
+	}
+	components := []string{
+		"research-graph-route",
+		"research-graph-assess",
+		"research-graph-synthesize",
+	}
+
+	for _, path := range paths {
+		t.Run(mustRel(t, path), func(t *testing.T) {
+			cfg := loadShippedConfig(t, path)
+			require.NotNil(t, cfg.ModelRegistry, "%s is missing model_registry", path)
+			for _, capability := range []string{
+				model.CapabilityResearchRouting,
+				model.CapabilityResearchAssessment,
+				model.CapabilityResearchSynthesis,
+			} {
+				assert.Contains(t, cfg.ModelRegistry.Capabilities, capability,
+					"%s must declare the graph-research capability in model_registry", path)
+			}
+
+			data, err := os.ReadFile(path)
+			require.NoError(t, err)
+
+			var raw struct {
+				Components map[string]struct {
+					Config map[string]json.RawMessage `json:"config"`
+				} `json:"components"`
+			}
+			require.NoError(t, json.Unmarshal(data, &raw))
+			for _, name := range components {
+				componentConfig, ok := raw.Components[name]
+				require.True(t, ok, "%s is missing component %s", path, name)
+				assert.NotContains(t, componentConfig.Config, "model_capability",
+					"%s declares unsupported component-local model_capability; graph research selects its fixed capability from model_registry", name)
+			}
+		})
+	}
 }
 
 // loadShippedConfig decodes one shipped config. A failure is a FAILURE, never a

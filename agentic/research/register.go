@@ -7,13 +7,11 @@ import (
 	"github.com/c360studio/semstreams/payloadregistry"
 )
 
-// RegisterPayloads registers the three research payload types with the
-// supplied registry. Called from payloadbuiltins.Register at process
-// bootstrap so every production binary picks up the types without
-// extra wiring.
-//
-// Mirrors the agentic.RegisterPayloads shape so the bootstrap aggregator
-// can call this uniformly.
+// RegisterPayloads registers the complete research payload family with the
+// supplied registry. Production composition roots call it through
+// graphresearch.RegisterPayloads only when graphresearch.Selected reports that
+// the deployment selected the graph-research capability; it is intentionally
+// absent from the unconditional payloadbuiltins registry.
 func RegisterPayloads(reg *payloadregistry.Registry) error {
 	registrations := []*payloadregistry.Registration{
 		{

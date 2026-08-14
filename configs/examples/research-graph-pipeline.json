@@ -467,7 +467,6 @@
       "name": "research-graph-route",
       "enabled": true,
       "config": {
-        "model_capability": "research_routing",
         "ports": {
           "inputs": [
             {
@@ -570,7 +569,6 @@
       "name": "research-graph-assess",
       "enabled": true,
       "config": {
-        "model_capability": "research_assessment",
         "ports": {
           "inputs": [
             {
@@ -604,7 +602,6 @@
       "name": "research-graph-synthesize",
       "enabled": true,
       "config": {
-        "model_capability": "research_synthesis",
         "ports": {
           "inputs": [
             {
