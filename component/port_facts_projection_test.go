@@ -25,7 +25,7 @@ func TestPortFactsProjectionResolvesEveryCanonicalFactAndReturnsCopies(t *testin
 		},
 	}
 
-	port, err := definition.Resolve(DirectionOutput)
+	port, err := definition.Resolve(DirectionInput)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -21,18 +21,26 @@ operations.
 
 ## Current State
 
-All three agentic components share this consumer pattern:
+Agentic acknowledgement admission is deliberately component-owned. `agentic-loop` applies `1` to task, response,
+and tool-result inputs and `10` to its fast advisory input; `agentic-model` applies `1`; `agentic-tools` applies `3`.
+These components reject a nonzero port `max_ack_pending` instead of accepting and silently overriding it. Other
+port-backed consumers honor the port declaration.
+
+The managed consumer path observes the final NATS policy before delivery and emits requested, effective, and
+availability gauges. A zero request means NATS owns the inherited/default/capped result; it is not a promise of 1000.
+
+The long-running components otherwise share this shape:
 
 ```go
 cfg := natsclient.StreamConsumerConfig{
     AckPolicy:  "explicit",
     MaxDeliver: 3,
     // AckWait: not set → defaults to 30s
-    // MaxAckPending: not set → defaults to 1000
+    MaxAckPending: componentOwnedPolicy,
 }
 
 // Handler acks AFTER processing completes
-err := c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+err := c.natsClient.ConsumeStreamWithConfig(ctx, owner, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
     handler(msgCtx, msg.Data())   // ← LLM call lives here, could be minutes
     msg.Ack()                     // ← this arrives after AckWait has expired
 })
@@ -44,8 +52,8 @@ err := c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Contex
    subscriber (or re-queues for the same one). The original call eventually acks a message that has already been
    redelivered — duplicate processing.
 
-2. **No backpressure:** `MaxAckPending` of 1000 means the server can flood the consumer with 1000 concurrent LLM
-   requests before applying backpressure. For an agentic loop, this is almost never what you want.
+2. **Admission is not execution concurrency:** `MaxAckPending` bounds delivered-but-unacked messages at NATS. Local
+   goroutines, worker pools, and provider throttles remain separate concurrency owners and need their own observation.
 
 3. **Fixed MaxDeliver=3 across all tiers:** Tool calls might warrant 3 retries. An LLM reasoning step that requires
    human-quality output should probably get 1–2 attempts max, with proper failure signaling rather than silently
@@ -384,7 +392,7 @@ not firing.
 
 ---
 
-## Migration Plan for Current Code
+## Operational checklist
 
 The immediate changes with the most impact, in order of priority:
 
@@ -392,9 +400,10 @@ The immediate changes with the most impact, in order of priority:
    Wrap the handler body in all three agentic components with the heartbeat pattern. This is a drop-in change
    that doesn't require consumer config changes.
 
-2. **Set `MaxAckPending: 1` on loop and model consumers (free backpressure).**
-   This is a consumer config change. Durable consumers must be deleted and recreated to change
-   `MaxAckPending` — this is a NATS limitation. Plan for a brief restart cycle.
+2. **Inspect requested and effective acknowledgement admission.**
+   Use the `semstreams_jetstream_consumer_max_ack_pending_{requested,effective,observation_available}` gauges. Ordinary
+   port-backed inputs may be tuned through `max_ack_pending`; agentic loop/model/tools retain the fixed policies above.
+   Component replacement uses NATS `CreateOrUpdateConsumer`; do not delete the durable merely to update this field.
 
 3. **Set explicit `AckWait` matching the latency class.**
    Replace the implicit 30s default with explicit values per component. Use `BackOff` slices instead of a

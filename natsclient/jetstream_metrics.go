@@ -23,6 +23,9 @@ type jetstreamMetrics struct {
 	consumerDelivered   *prometheus.CounterVec // Total delivered by consumer
 	consumerAcked       *prometheus.CounterVec // Total acked by consumer
 	consumerRedelivered *prometheus.CounterVec // Total redelivered by consumer
+	policyRequested     *prometheus.GaugeVec
+	policyEffective     *prometheus.GaugeVec
+	policyAvailable     *prometheus.GaugeVec
 
 	// Operation errors
 	errors *prometheus.CounterVec // JetStream operation errors
@@ -31,6 +34,7 @@ type jetstreamMetrics struct {
 	mu        sync.RWMutex
 	streams   map[string]jetstream.Stream   // Streams we've created/accessed
 	consumers map[string]jetstream.Consumer // Consumers we've created
+	policies  map[consumerPolicyKey]*consumerPolicyRecord
 }
 
 // newJetStreamMetrics creates and registers JetStream metrics with the provided registry.
@@ -90,6 +94,18 @@ func newJetStreamMetrics(registry *metric.MetricsRegistry) (*jetstreamMetrics, e
 			Name:      "consumer_redelivered_total",
 			Help:      "Total messages redelivered to consumer",
 		}, []string{"stream", "consumer"}),
+		policyRequested: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "semstreams", Subsystem: "jetstream", Name: "consumer_max_ack_pending_requested",
+			Help: "Final requested MaxAckPending for a port-backed consumer",
+		}, []string{"component", "port", "stream", "consumer", "policy_source"}),
+		policyEffective: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "semstreams", Subsystem: "jetstream", Name: "consumer_max_ack_pending_effective",
+			Help: "Observed effective MaxAckPending for a port-backed consumer",
+		}, []string{"component", "port", "stream", "consumer", "policy_source"}),
+		policyAvailable: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "semstreams", Subsystem: "jetstream", Name: "consumer_max_ack_pending_observation_available",
+			Help: "Whether effective MaxAckPending observation is currently available",
+		}, []string{"component", "port", "stream", "consumer", "policy_source"}),
 
 		// Error counters
 		errors: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -101,6 +117,7 @@ func newJetStreamMetrics(registry *metric.MetricsRegistry) (*jetstreamMetrics, e
 
 		streams:   make(map[string]jetstream.Stream),
 		consumers: make(map[string]jetstream.Consumer),
+		policies:  make(map[consumerPolicyKey]*consumerPolicyRecord),
 	}
 
 	// Register all metrics
@@ -125,11 +142,63 @@ func newJetStreamMetrics(registry *metric.MetricsRegistry) (*jetstreamMetrics, e
 	if err := registry.RegisterCounterVec("jetstream", "consumer_redelivered", m.consumerRedelivered); err != nil {
 		return nil, err
 	}
+	var err error
+	if m.policyRequested, err = registry.RegisterOrGetGaugeVec("jetstream", "consumer_max_ack_pending_requested", m.policyRequested); err != nil {
+		return nil, err
+	}
+	if m.policyEffective, err = registry.RegisterOrGetGaugeVec("jetstream", "consumer_max_ack_pending_effective", m.policyEffective); err != nil {
+		return nil, err
+	}
+	if m.policyAvailable, err = registry.RegisterOrGetGaugeVec("jetstream", "consumer_max_ack_pending_observation_available", m.policyAvailable); err != nil {
+		return nil, err
+	}
 	if err := registry.RegisterCounterVec("jetstream", "errors", m.errors); err != nil {
 		return nil, err
 	}
 
 	return m, nil
+}
+
+func (m *jetstreamMetrics) trackPolicy(key consumerPolicyKey, record *consumerPolicyRecord, effective int) {
+	if m == nil || key == (consumerPolicyKey{}) {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if existing, ok := m.policies[key]; ok {
+		m.deactivatePolicy(existing)
+		delete(m.policies, key)
+	}
+	record.mu.Lock()
+	record.active = true
+	record.mu.Unlock()
+	m.policies[key] = record
+	labels := record.labels()
+	m.policyRequested.WithLabelValues(labels...).Set(float64(record.requested))
+	m.policyEffective.WithLabelValues(labels...).Set(float64(effective))
+	m.policyAvailable.WithLabelValues(labels...).Set(1)
+}
+
+func (m *jetstreamMetrics) forgetPolicy(key consumerPolicyKey) {
+	if m == nil || key == (consumerPolicyKey{}) {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if record, ok := m.policies[key]; ok {
+		m.deactivatePolicy(record)
+		delete(m.policies, key)
+	}
+}
+
+func (m *jetstreamMetrics) deactivatePolicy(record *consumerPolicyRecord) {
+	record.mu.Lock()
+	defer record.mu.Unlock()
+	record.active = false
+	labels := record.labels()
+	m.policyRequested.DeleteLabelValues(labels...)
+	m.policyEffective.DeleteLabelValues(labels...)
+	m.policyAvailable.DeleteLabelValues(labels...)
 }
 
 // trackStream adds a stream to the tracking list for metrics collection.
@@ -171,11 +240,15 @@ func (m *jetstreamMetrics) updateStats(ctx context.Context) {
 	m.mu.RLock()
 	streams := make(map[string]jetstream.Stream, len(m.streams))
 	consumers := make(map[string]jetstream.Consumer, len(m.consumers))
+	policies := make(map[consumerPolicyKey]*consumerPolicyRecord, len(m.policies))
 	for k, v := range m.streams {
 		streams[k] = v
 	}
 	for k, v := range m.consumers {
 		consumers[k] = v
+	}
+	for k, v := range m.policies {
+		policies[k] = v
 	}
 	m.mu.RUnlock()
 
@@ -208,6 +281,30 @@ func (m *jetstreamMetrics) updateStats(ctx context.Context) {
 		m.consumerDelivered.WithLabelValues(streamName, consumerName).Add(float64(info.Delivered.Stream))
 		m.consumerAcked.WithLabelValues(streamName, consumerName).Add(float64(info.AckFloor.Stream))
 		m.consumerRedelivered.WithLabelValues(streamName, consumerName).Add(float64(info.NumRedelivered))
+	}
+	for _, record := range policies {
+		info, err := record.handle.Info(ctx)
+		record.mu.Lock()
+		if !record.active {
+			record.mu.Unlock()
+			continue
+		}
+		labels := record.labels()
+		if err != nil {
+			m.policyEffective.DeleteLabelValues(labels...)
+			m.policyAvailable.WithLabelValues(labels...).Set(0)
+			if record.available && record.logger != nil {
+				record.logger.Warn("JetStream consumer acknowledgement policy observation unavailable",
+					"component", record.component, "port", record.port, "stream", record.stream, "consumer", record.consumer)
+			}
+			record.available = false
+			record.mu.Unlock()
+			continue
+		}
+		m.policyEffective.WithLabelValues(labels...).Set(float64(info.Config.MaxAckPending))
+		m.policyAvailable.WithLabelValues(labels...).Set(1)
+		record.available = true
+		record.mu.Unlock()
 	}
 }
 

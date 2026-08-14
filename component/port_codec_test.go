@@ -64,6 +64,8 @@ func TestPortCodecOuterErrorsRetainPortAndKindContext(t *testing.T) {
 
 func TestPortDefinitionAndPortUseOneStrictWire(t *testing.T) {
 	iface := &InterfaceContract{Type: "example.payload", Version: "v2", Compatible: []string{"v1"}}
+	outputJetStream := completeJetStreamPort(iface)
+	outputJetStream.MaxAckPending = 0
 	tests := []struct {
 		name      string
 		direction Direction
@@ -80,7 +82,7 @@ func TestPortDefinitionAndPortUseOneStrictWire(t *testing.T) {
 		{"nats-request-input", DirectionInput, NATSRequestPort{Subject: "request.in", Timeout: "2s", Retries: 3, Interface: iface}},
 		{"nats-request-output", DirectionOutput, NATSRequestPort{Subject: "request.out", Timeout: "3s", Retries: 2, Interface: iface}},
 		{"jetstream-input", DirectionInput, completeJetStreamPort(iface)},
-		{"jetstream-output", DirectionOutput, completeJetStreamPort(iface)},
+		{"jetstream-output", DirectionOutput, outputJetStream},
 		{"kv-watch", DirectionInput, KVWatchPort{Bucket: "WATCH", Keys: []string{"a", "b.*"}, History: true, Interface: iface}},
 		{"kv-read", DirectionInput, KVReadPort{Bucket: "READ", Interface: iface}},
 		{"kv-write", DirectionOutput, KVWritePort{Bucket: "WRITE", Interface: iface}},

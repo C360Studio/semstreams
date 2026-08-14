@@ -3,6 +3,8 @@ package metric
 import (
 	stderrors "errors"
 	"fmt"
+	"reflect"
+	"sort"
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -20,6 +22,66 @@ type MetricsRegistrar interface {
 	RegisterGaugeVec(serviceName, metricName string, gaugeVec *prometheus.GaugeVec) error
 	RegisterHistogramVec(serviceName, metricName string, histogramVec *prometheus.HistogramVec) error
 	Unregister(serviceName, metricName string) bool
+}
+
+// RegisterOrGetGaugeVec registers candidate or returns the compatible canonical
+// GaugeVec already registered under the same service/metric key.
+func (r *MetricsRegistry) RegisterOrGetGaugeVec(
+	serviceName, metricName string,
+	candidate *prometheus.GaugeVec,
+) (*prometheus.GaugeVec, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if candidate == nil {
+		return nil, errs.WrapFatal(fmt.Errorf("candidate gauge vector is nil"),
+			"MetricsRegistry", "RegisterOrGetGaugeVec", "invalid gauge vector registration")
+	}
+
+	key := fmt.Sprintf("%s.%s", serviceName, metricName)
+	if existingCollector, exists := r.registeredMetrics[key]; exists {
+		existing, ok := existingCollector.(*prometheus.GaugeVec)
+		if !ok {
+			return nil, errs.WrapFatal(fmt.Errorf("logical metric key %q is registered as %T", key, existingCollector),
+				"MetricsRegistry", "RegisterOrGetGaugeVec", "registered collector is not a gauge vector")
+		}
+		if !sameCollectorDescriptors(existing, candidate) {
+			return nil, errs.WrapFatal(fmt.Errorf("logical metric key %q has a different descriptor", key),
+				"MetricsRegistry", "RegisterOrGetGaugeVec", "incompatible gauge vector registration")
+		}
+		return existing, nil
+	}
+	if err := r.prometheusRegistry.Register(candidate); err != nil {
+		var alreadyRegistered prometheus.AlreadyRegisteredError
+		if !stderrors.As(err, &alreadyRegistered) {
+			return nil, errs.WrapFatal(err, "MetricsRegistry", "RegisterOrGetGaugeVec",
+				"incompatible gauge vector registration")
+		}
+		return nil, errs.WrapFatal(err, "MetricsRegistry", "RegisterOrGetGaugeVec",
+			"collector descriptor is already owned by a different logical metric key")
+	}
+	r.registeredMetrics[key] = candidate
+	return candidate, nil
+}
+
+func sameCollectorDescriptors(left, right prometheus.Collector) bool {
+	return reflect.DeepEqual(collectorDescriptors(left), collectorDescriptors(right))
+}
+
+func collectorDescriptors(collector prometheus.Collector) []string {
+	if collector == nil {
+		return nil
+	}
+	descriptors := make(chan *prometheus.Desc)
+	values := make([]string, 0, 1)
+	go func() {
+		collector.Describe(descriptors)
+		close(descriptors)
+	}()
+	for descriptor := range descriptors {
+		values = append(values, descriptor.String())
+	}
+	sort.Strings(values)
+	return values
 }
 
 // MetricsRegistry manages the registration and lifecycle of metrics
@@ -181,30 +243,8 @@ func (r *MetricsRegistry) RegisterCounterVec(serviceName, metricName string, cou
 // RegisterGaugeVec registers a gauge vector metric for a service.
 // Idempotent: returns success if metric already registered with same key.
 func (r *MetricsRegistry) RegisterGaugeVec(serviceName, metricName string, gaugeVec *prometheus.GaugeVec) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	key := fmt.Sprintf("%s.%s", serviceName, metricName)
-
-	// Idempotent: if already registered with same key, return success
-	if _, exists := r.registeredMetrics[key]; exists {
-		return nil
-	}
-
-	if err := r.prometheusRegistry.Register(gaugeVec); err != nil {
-		// Check if it's a duplicate registration error from Prometheus
-		var alreadyRegErr prometheus.AlreadyRegisteredError
-		if stderrors.As(err, &alreadyRegErr) {
-			// Prometheus already has this metric - treat as success for idempotency
-			r.registeredMetrics[key] = gaugeVec
-			return nil
-		}
-		return errs.WrapFatal(err, "MetricsRegistry", "RegisterGaugeVec",
-			"failed to register gauge vector with prometheus")
-	}
-
-	r.registeredMetrics[key] = gaugeVec
-	return nil
+	_, err := r.RegisterOrGetGaugeVec(serviceName, metricName, gaugeVec)
+	return err
 }
 
 // RegisterHistogramVec registers a histogram vector metric for a service.

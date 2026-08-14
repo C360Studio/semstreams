@@ -785,10 +785,11 @@ func (c *Component) setupJetStreamConsumer(
 		DeliverPolicy: consumerCfg.DeliverPolicy,
 		AckPolicy:     consumerCfg.AckPolicy,
 		MaxDeliver:    consumerCfg.MaxDeliver,
+		MaxAckPending: consumerCfg.MaxAckPending,
 		AutoCreate:    false,
 	}
 
-	consumeErr := c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	consumeErr := c.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		c.handleJetStreamWriteRequest(msgCtx, msg)
 	})
 	if consumeErr != nil {

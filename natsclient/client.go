@@ -627,6 +627,7 @@ func (m *Client) Close(ctx context.Context) error {
 type consumerBinding struct {
 	consumeCtx jetstream.ConsumeContext
 	consumer   jetstream.Consumer
+	policyKey  consumerPolicyKey
 }
 
 // guardedConsumer serializes Info() on one consumer handle.
@@ -748,6 +749,9 @@ func (m *Client) stopAllConsumers() {
 
 	for name, binding := range m.consumers {
 		binding.consumeCtx.Stop()
+		if m.jsMetrics != nil {
+			m.jsMetrics.forgetPolicy(binding.policyKey)
+		}
 		m.logger.Debug("Stopped consumer", slog.String("consumer", name))
 	}
 	m.consumers = nil
@@ -1256,95 +1260,6 @@ func (m *Client) PublishBatchToStream(ctx context.Context, subject string, msgs 
 	failed := (len(msgs) - len(futures)) + ackFailures
 	return fmt.Errorf("PublishBatchToStream: %d of %d publishes failed (%d ack failures): %w",
 		failed, len(msgs), ackFailures, stderrors.Join(errsList...))
-}
-
-// ConsumeStream creates a consumer for a stream.
-// Handler receives the full jetstream.Msg to access Subject, Data, Headers, etc.
-// This is essential for wildcard subscriptions where the actual subject differs from the pattern.
-// The handler is responsible for calling msg.Ack() after processing.
-func (m *Client) ConsumeStream(ctx context.Context, streamName, subject string, handler func(jetstream.Msg)) error {
-	// Check circuit breaker first
-	if m.Status() == StatusCircuitOpen {
-		return ErrCircuitOpen
-	}
-
-	if m.Status() != StatusConnected {
-		return ErrNotConnected
-	}
-
-	js, err := m.JetStream()
-	if err != nil {
-		m.recordFailure()
-		return err
-	}
-
-	// Check if client is closing to prevent new consumers during shutdown
-	if m.closed.Load() {
-		return errs.WrapInvalid(
-			fmt.Errorf("client is closed"),
-			"Client", "ConsumeStream", "check client state")
-	}
-
-	// Create consumer configuration
-	consumerCfg := jetstream.ConsumerConfig{
-		FilterSubject: subject,
-	}
-
-	consumer, err := js.CreateOrUpdateConsumer(ctx, streamName, consumerCfg)
-	if err != nil {
-		m.recordFailure()
-		m.jsMetrics.recordError("create_consumer")
-		return err
-	}
-
-	// Wrap ONCE, then share the wrapper with every holder — the metrics registry and
-	// the consumer bookkeeping below both get the same guarded handle.
-	guarded := &guardedConsumer{Consumer: consumer}
-
-	// Track consumer for metrics collection
-	consumerInfo, err := guarded.Info(ctx)
-	if err == nil {
-		m.jsMetrics.trackConsumer(streamName, consumerInfo.Name, guarded)
-	}
-
-	// Start consuming messages
-	consumeContext, err := consumer.Consume(func(msg jetstream.Msg) {
-		handler(msg)
-	})
-
-	if err != nil {
-		m.recordFailure()
-		return err
-	}
-
-	// Store the consume context for lifecycle management with race protection
-	m.consumersMu.Lock()
-	defer m.consumersMu.Unlock()
-
-	// Double-check client isn't closing while we have the lock
-	if m.closed.Load() {
-		// Client is closing, stop the consumer we just created
-		consumeContext.Stop()
-		return errs.WrapInvalid(
-			fmt.Errorf("client is closing"),
-			"Client", "ConsumeStream", "check client state during consumer registration")
-	}
-
-	if m.consumers == nil {
-		m.consumers = make(map[string]consumerBinding)
-	}
-	consumerKey := fmt.Sprintf("%s:%s", streamName, subject)
-
-	// Stop any existing consumer for this key
-	if existing, exists := m.consumers[consumerKey]; exists {
-		existing.consumeCtx.Stop()
-		m.logger.Debug("Replaced existing consumer", slog.String("consumer_key", consumerKey))
-	}
-
-	m.consumers[consumerKey] = consumerBinding{consumeCtx: consumeContext, consumer: guarded}
-
-	m.resetCircuit()
-	return nil
 }
 
 // GetStream gets an existing JetStream stream

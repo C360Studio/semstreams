@@ -85,8 +85,8 @@ as shared infrastructure.
 | **`.triples` enumeration** (ADR-048) | `processor/rule` substitution | Plural-substitution suffix mirroring `.length`. `$entity.triple.<predicate>.triples` resolves to a JSON-encoded array string of all element values across all matching triples (handles both N-triples-with-scalar-Objects and one-triple-with-list-Object patterns). Composes with `for_each` to enumerate child entities + array operators like `array_contains` / `length_eq`. Consumers parse the JSON string per the canonical persona-prose template (ADR-048). **Asymmetry vs `.length`**: `.triples` best-effort-stringifies scalar Objects (Pattern A) into JSON array elements; `.length` returns an error sentinel on scalar Objects because it was designed for Pattern B (single triple with list Object) before Pattern A existed. Both are defensible in isolation — `.length` is for "count of elements in a list-typed triple," `.triples` is for "collect everything that could be enumerated." |
 
 **"Rules sequence, components parallelize"**: rules are single-
-threaded per evaluation (MaxAckPending=1 on `agent.task` consumers
-is the substrate's serial-per-consumer commitment); components
+threaded per evaluation (`agentic-loop` owns MaxAckPending=1 on
+`agent.task` consumers and rejects port overrides); components
 compose `pkg/dispatch.BoundedDispatcher` internally when they need
 parallel work. Trying to make rules drive parallelism via
 agent-loop fan-out fights the substrate; see ADR-045's

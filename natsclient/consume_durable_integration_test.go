@@ -37,7 +37,7 @@ func TestIntegration_ConsumeDurable_ReceivesAndAcks(t *testing.T) {
 	require.NoError(t, err)
 
 	got := make(chan []byte, 1)
-	err = client.ConsumeDurable(ctx, StreamConsumerConfig{
+	err = client.ConsumeDurable(ctx, PortConsumerContext{Component: "integration", Port: "input"}, StreamConsumerConfig{
 		StreamName: "CD_RECV", ConsumerName: "cd-recv", FilterSubject: subject, AckWait: 2 * time.Second,
 	}, 500*time.Millisecond, func(_ context.Context, data []byte) error {
 		got <- data
@@ -79,7 +79,7 @@ func TestIntegration_ConsumeDurable_MsgIDDedup(t *testing.T) {
 	require.NoError(t, err)
 
 	var deliveries int32
-	err = client.ConsumeDurable(ctx, StreamConsumerConfig{
+	err = client.ConsumeDurable(ctx, PortConsumerContext{Component: "integration", Port: "input"}, StreamConsumerConfig{
 		StreamName: "CD_DEDUP", ConsumerName: "cd-dedup", FilterSubject: subject, AckWait: 2 * time.Second,
 	}, 500*time.Millisecond, func(_ context.Context, _ []byte) error {
 		atomic.AddInt32(&deliveries, 1)

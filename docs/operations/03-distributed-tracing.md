@@ -105,11 +105,13 @@ client.Request(childCtx, "service.action", data, timeout)
 
 ### JetStream Messages
 
-When using `ConsumeStream` or `ConsumeStreamWithConfig`, trace extraction is automatic:
+When using `ConsumeStreamWithConfig`, trace extraction is automatic:
 
 ```go
 // Trace is automatically extracted and added to ctx
-client.ConsumeStreamWithConfig(ctx, cfg, func(ctx context.Context, msg jetstream.Msg) {
+client.ConsumeStreamWithConfig(ctx,
+    natsclient.PortConsumerContext{Component: "example", Port: "events"},
+    cfg, func(ctx context.Context, msg jetstream.Msg) {
     // ctx already contains trace from message headers
     // Downstream calls automatically inherit the trace
     client.Publish(ctx, "processed.event", result)

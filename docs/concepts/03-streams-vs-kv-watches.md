@@ -127,8 +127,9 @@ obligations, it must redesign the seam rather than use a watch as a work queue.
 JetStream consumers with explicit ack give you the full tuning surface from the
 [JetStream Tuning Guide](../advanced/11-jetstream-tuning.md): `AckWait` for deadline enforcement,
 `InProgress` heartbeats for long operations, `BackOff` for graduated retry, `MaxAckPending`
-for backpressure. These tools exist precisely because work items have variable, potentially
-long processing times and real consequences for failure.
+for delivery admission. SemStreams ordinary port-backed consumers honor that port field and report its requested and
+effective values; components that own a fixed policy reject nonzero overrides. This NATS limit is distinct from local
+queue capacity and execution concurrency.
 
 ---
 

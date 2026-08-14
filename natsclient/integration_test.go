@@ -214,7 +214,9 @@ func TestIntegration_JetStream(t *testing.T) {
 
 	// Create consumer and receive message
 	received := make(chan string, 1)
-	err = manager.ConsumeStream(ctx, streamName, "test.*", func(msg jetstream.Msg) {
+	err = manager.ConsumeInternalStreamWithConfig(ctx, StreamConsumerConfig{
+		StreamName: streamName, FilterSubject: "test.*",
+	}, func(_ context.Context, msg jetstream.Msg) {
 		received <- string(msg.Data())
 		msg.Ack()
 	})
@@ -332,7 +334,9 @@ func TestIntegration_JetStreamMetrics(t *testing.T) {
 
 	// Create a consumer
 	received := make(chan bool, 5)
-	err = client.ConsumeStream(ctx, "TEST_METRICS", "test.metrics.>", func(msg jetstream.Msg) {
+	err = client.ConsumeInternalStreamWithConfig(ctx, StreamConsumerConfig{
+		StreamName: "TEST_METRICS", FilterSubject: "test.metrics.>",
+	}, func(_ context.Context, msg jetstream.Msg) {
 		select {
 		case received <- true:
 		default:

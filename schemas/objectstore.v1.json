@@ -12,9 +12,788 @@
       "category": "basic"
     },
     "ports": {
-      "type": "string",
+      "type": "object",
       "description": "Port configuration for inputs and outputs",
-      "category": "basic"
+      "category": "basic",
+      "properties": {
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "config": {
+                "type": "object",
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "file"
+                        ]
+                      },
+                      "path": {
+                        "type": "string"
+                      },
+                      "pattern": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "path"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "auth_ref": {
+                        "type": "string"
+                      },
+                      "contact_policy": {
+                        "type": "string"
+                      },
+                      "interface": {
+                        "type": "object",
+                        "properties": {
+                          "compatible": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false,
+                        "required": [
+                          "type"
+                        ]
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "http-client"
+                        ]
+                      },
+                      "method": {
+                        "type": "string"
+                      },
+                      "trigger_port": {
+                        "type": "string"
+                      },
+                      "url_pattern": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "method",
+                      "url_pattern"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "ack_policy": {
+                        "type": "string"
+                      },
+                      "ack_wait": {
+                        "type": "string"
+                      },
+                      "consumer_name": {
+                        "type": "string"
+                      },
+                      "deliver_policy": {
+                        "type": "string"
+                      },
+                      "heartbeat_interval": {
+                        "type": "string"
+                      },
+                      "interface": {
+                        "type": "object",
+                        "properties": {
+                          "compatible": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false,
+                        "required": [
+                          "type"
+                        ]
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "jetstream"
+                        ]
+                      },
+                      "max_ack_pending": {
+                        "type": "integer",
+                        "minimum": -1
+                      },
+                      "max_deliver": {
+                        "type": "integer"
+                      },
+                      "max_size_gb": {
+                        "type": "integer"
+                      },
+                      "replicas": {
+                        "type": "integer"
+                      },
+                      "retention": {
+                        "type": "string"
+                      },
+                      "retention_days": {
+                        "type": "integer"
+                      },
+                      "storage": {
+                        "type": "string"
+                      },
+                      "stream_name": {
+                        "type": "string"
+                      },
+                      "subjects": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "subjects",
+                      "stream_name"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "bucket": {
+                        "type": "string"
+                      },
+                      "interface": {
+                        "type": "object",
+                        "properties": {
+                          "compatible": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false,
+                        "required": [
+                          "type"
+                        ]
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "kv-read"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "bucket"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "bucket": {
+                        "type": "string"
+                      },
+                      "history": {
+                        "type": "boolean"
+                      },
+                      "interface": {
+                        "type": "object",
+                        "properties": {
+                          "compatible": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false,
+                        "required": [
+                          "type"
+                        ]
+                      },
+                      "keys": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "kv-watch"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "bucket"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "interface": {
+                        "type": "object",
+                        "properties": {
+                          "compatible": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false,
+                        "required": [
+                          "type"
+                        ]
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "nats"
+                        ]
+                      },
+                      "queue": {
+                        "type": "string"
+                      },
+                      "subject": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "subject"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "interface": {
+                        "type": "object",
+                        "properties": {
+                          "compatible": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false,
+                        "required": [
+                          "type"
+                        ]
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "nats-request"
+                        ]
+                      },
+                      "retries": {
+                        "type": "integer"
+                      },
+                      "subject": {
+                        "type": "string"
+                      },
+                      "timeout": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "subject"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "host": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "network"
+                        ]
+                      },
+                      "port": {
+                        "type": "integer"
+                      },
+                      "protocol": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "protocol",
+                      "port"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "bucket": {
+                        "type": "string"
+                      },
+                      "interface": {
+                        "type": "object",
+                        "properties": {
+                          "compatible": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false,
+                        "required": [
+                          "type"
+                        ]
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "store-read"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "bucket"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "interface": {
+                        "type": "object",
+                        "properties": {
+                          "compatible": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false,
+                        "required": [
+                          "type"
+                        ]
+                      },
+                      "interval": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "timer"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "interval"
+                    ]
+                  }
+                ]
+              },
+              "description": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "required": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "config"
+            ]
+          }
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "config": {
+                "type": "object",
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "file"
+                        ]
+                      },
+                      "path": {
+                        "type": "string"
+                      },
+                      "pattern": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "path"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "ack_policy": {
+                        "type": "string"
+                      },
+                      "ack_wait": {
+                        "type": "string"
+                      },
+                      "consumer_name": {
+                        "type": "string"
+                      },
+                      "deliver_policy": {
+                        "type": "string"
+                      },
+                      "heartbeat_interval": {
+                        "type": "string"
+                      },
+                      "interface": {
+                        "type": "object",
+                        "properties": {
+                          "compatible": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false,
+                        "required": [
+                          "type"
+                        ]
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "jetstream"
+                        ]
+                      },
+                      "max_ack_pending": {
+                        "type": "integer",
+                        "const": 0
+                      },
+                      "max_deliver": {
+                        "type": "integer"
+                      },
+                      "max_size_gb": {
+                        "type": "integer"
+                      },
+                      "replicas": {
+                        "type": "integer"
+                      },
+                      "retention": {
+                        "type": "string"
+                      },
+                      "retention_days": {
+                        "type": "integer"
+                      },
+                      "storage": {
+                        "type": "string"
+                      },
+                      "stream_name": {
+                        "type": "string"
+                      },
+                      "subjects": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "subjects"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "bucket": {
+                        "type": "string"
+                      },
+                      "interface": {
+                        "type": "object",
+                        "properties": {
+                          "compatible": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false,
+                        "required": [
+                          "type"
+                        ]
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "kv-write"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "bucket"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "interface": {
+                        "type": "object",
+                        "properties": {
+                          "compatible": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false,
+                        "required": [
+                          "type"
+                        ]
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "nats"
+                        ]
+                      },
+                      "queue": {
+                        "type": "string"
+                      },
+                      "subject": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "subject"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "interface": {
+                        "type": "object",
+                        "properties": {
+                          "compatible": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false,
+                        "required": [
+                          "type"
+                        ]
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "nats-request"
+                        ]
+                      },
+                      "retries": {
+                        "type": "integer"
+                      },
+                      "subject": {
+                        "type": "string"
+                      },
+                      "timeout": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "subject"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "host": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "network"
+                        ]
+                      },
+                      "port": {
+                        "type": "integer"
+                      },
+                      "protocol": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "protocol",
+                      "port"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "instance": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "store-provide"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "instance"
+                    ]
+                  }
+                ]
+              },
+              "description": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "required": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "config"
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
     }
   },
   "required": [],

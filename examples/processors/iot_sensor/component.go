@@ -325,6 +325,29 @@ func (c *Component) isJetStreamPortBySubject(subject string) bool {
 	return false
 }
 
+// iotSensorConsumerConfig preserves the IoT processor's replay-safe consumer defaults.
+func iotSensorConsumerConfig(port component.Port) (component.ConsumerConfig, error) {
+	consumerCfg, err := component.GetConsumerConfig(port)
+	if err != nil {
+		return component.ConsumerConfig{}, err
+	}
+	facts, err := port.Facts()
+	if err != nil {
+		return component.ConsumerConfig{}, err
+	}
+	stream, ok := facts.Stream()
+	if !ok {
+		return component.ConsumerConfig{}, fmt.Errorf("port kind %q does not declare JetStream consumer configuration", facts.Kind())
+	}
+	if stream.DeliverPolicy() == "" {
+		consumerCfg.DeliverPolicy = "all"
+	}
+	if stream.MaxDeliver() == 0 {
+		consumerCfg.MaxDeliver = 5
+	}
+	return consumerCfg, nil
+}
+
 // setupJetStreamConsumer creates a JetStream consumer for an input port
 func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.Port) error {
 	facts, err := port.Facts()
@@ -353,18 +376,23 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.P
 		"stream", streamName,
 		"consumer", consumerName,
 		"filter_subject", subject)
+	consumerCfg, err := iotSensorConsumerConfig(port)
+	if err != nil {
+		return fmt.Errorf("resolve consumer config for port %q: %w", port.Name, err)
+	}
 
 	cfg := natsclient.StreamConsumerConfig{
 		StreamName:    streamName,
 		ConsumerName:  consumerName,
 		FilterSubject: subject,
-		DeliverPolicy: "all",
-		AckPolicy:     "explicit",
-		MaxDeliver:    5,
+		DeliverPolicy: consumerCfg.DeliverPolicy,
+		AckPolicy:     consumerCfg.AckPolicy,
+		MaxDeliver:    consumerCfg.MaxDeliver,
+		MaxAckPending: consumerCfg.MaxAckPending,
 		AutoCreate:    false,
 	}
 
-	err = c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err = c.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		c.handleJetStreamMessage(msgCtx, msg)
 	})
 	if err != nil {

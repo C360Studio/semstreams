@@ -167,7 +167,9 @@ func TestIntegration_JetStreamMethods_RealServer(t *testing.T) {
 
 	// Test consume from stream
 	received := make(chan []byte, 1)
-	err = client.ConsumeStream(ctx, "UNIT_TEST", "unit.test.*", func(msg jetstream.Msg) {
+	err = client.ConsumeInternalStreamWithConfig(ctx, StreamConsumerConfig{
+		StreamName: "UNIT_TEST", FilterSubject: "unit.test.*",
+	}, func(_ context.Context, msg jetstream.Msg) {
 		received <- msg.Data()
 		msg.Ack()
 	})

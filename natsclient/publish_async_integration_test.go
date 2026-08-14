@@ -113,7 +113,7 @@ func TestIntegration_PublishToStreamAsync_Ordering(t *testing.T) {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	wg.Add(n)
-	err = client.ConsumeStreamWithConfig(ctx, StreamConsumerConfig{
+	err = client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, StreamConsumerConfig{
 		StreamName:    "ASYNC_ORDER_STREAM",
 		ConsumerName:  "order-consumer",
 		FilterSubject: "asyncorder.>",
@@ -224,7 +224,7 @@ func TestIntegration_PublishBatchToStream(t *testing.T) {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	wg.Add(m)
-	err = client.ConsumeStreamWithConfig(ctx, StreamConsumerConfig{
+	err = client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, StreamConsumerConfig{
 		StreamName:    "BATCH_STREAM",
 		ConsumerName:  "batch-consumer",
 		FilterSubject: "batch.>",
@@ -285,7 +285,7 @@ func TestIntegration_PublishToStreamAsync_StampsTraceAndMsgID(t *testing.T) {
 	var hdr map[string][]string
 	var wg sync.WaitGroup
 	wg.Add(1)
-	err = client.ConsumeStreamWithConfig(ctx, StreamConsumerConfig{
+	err = client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, StreamConsumerConfig{
 		StreamName:    "ASYNC_HDR_STREAM",
 		ConsumerName:  "hdr-consumer",
 		FilterSubject: "asynchdr.>",

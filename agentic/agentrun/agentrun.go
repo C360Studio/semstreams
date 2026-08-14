@@ -650,7 +650,7 @@ func (s *MilestoneSubscriber) Start(ctx context.Context, client *natsclient.Clie
 		MaxDeliver:    5,
 		AckWait:       30 * time.Second,
 	}
-	if err := client.ConsumeStreamWithConfig(ctx, completeCfg, handleMsg("agent.complete.*")); err != nil {
+	if err := client.ConsumeInternalStreamWithConfig(ctx, completeCfg, handleMsg("agent.complete.*")); err != nil {
 		return nil, fmt.Errorf("agentrun: MilestoneSubscriber: start durable consumer agent.complete.*: %w", err)
 	}
 
@@ -664,7 +664,7 @@ func (s *MilestoneSubscriber) Start(ctx context.Context, client *natsclient.Clie
 		MaxDeliver:    5,
 		AckWait:       30 * time.Second,
 	}
-	if err := client.ConsumeStreamWithConfig(ctx, failedCfg, handleMsg("agent.failed.*")); err != nil {
+	if err := client.ConsumeInternalStreamWithConfig(ctx, failedCfg, handleMsg("agent.failed.*")); err != nil {
 		// Roll back the first consumer before returning error.
 		client.StopConsumer(cfg.StreamName, completeConsumer)
 		return nil, fmt.Errorf("agentrun: MilestoneSubscriber: start durable consumer agent.failed.*: %w", err)

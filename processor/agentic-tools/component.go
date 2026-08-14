@@ -251,7 +251,7 @@ func (c *Component) startupPlan() (string, []consumerSetup, error) {
 				"Component", "Start", "validate consumer facts",
 			)
 		}
-		consumerConfig, err := component.GetConsumerConfig(port)
+		consumerConfig, err := agenticToolsConsumerPolicy(port)
 		if err != nil {
 			return "", nil, errs.WrapInvalid(err, "Component", "Start", fmt.Sprintf("validate consumer config for %s", port.Name))
 		}
@@ -338,7 +338,7 @@ func (c *Component) setupConsumer(ctx context.Context, setup consumerSetup) erro
 	// potential duplicate publishes. ConsumeWithHeartbeat owns ack/nak;
 	// The handler's error is the delivery disposition contract: nil ACKs,
 	// transient failures delayed-NAK, and PermanentDeliveryError Terms.
-	err := c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err := c.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: setup.port.Name, ComponentOwned: true}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		if hbErr := natsclient.ConsumeWithHeartbeat(msgCtx, msg, heartbeatInterval,
 			func(workCtx context.Context) error {
 				return c.handleToolCall(workCtx, msg.Data())
@@ -362,6 +362,19 @@ func (c *Component) setupConsumer(ctx context.Context, setup consumerSetup) erro
 		"stream", streamName,
 		"consumer", consumerName)
 	return nil
+}
+
+func agenticToolsConsumerPolicy(port component.Port) (component.ConsumerConfig, error) {
+	consumerConfig, err := component.GetConsumerConfig(port)
+	if err != nil {
+		return component.ConsumerConfig{}, err
+	}
+	if consumerConfig.MaxAckPending != 0 {
+		return component.ConsumerConfig{}, errs.WrapInvalid(
+			fmt.Errorf("port %q max_ack_pending is component-owned at 3", port.Name),
+			"agentic-tools", "consumerPolicy", "component-owned consumer policy")
+	}
+	return consumerConfig, nil
 }
 
 func (c *Component) recordHandlerError(ctx context.Context, err error) {

@@ -41,8 +41,9 @@ type JetStreamPort struct {
 	HeartbeatInterval string `json:"heartbeat_interval,omitempty"`
 	// MaxAckPending caps the number of delivered-but-unacked messages the
 	// server keeps in flight for this consumer — the consumer-side backpressure
-	// lever. Empty/0 falls through to the NATS server default (1000 for
-	// explicit-ack consumers); -1 is unlimited. gh#480: there was previously no
+	// lever. Empty/0 leaves policy to NATS, which may inherit a stream limit,
+	// apply its default, or cap it under server/account policy; -1 is unlimited
+	// outstanding acknowledgements. gh#480: there was previously no
 	// config path to this at all, so operators could not tune ingest backpressure.
 	MaxAckPending int `json:"max_ack_pending,omitempty"`
 
@@ -83,7 +84,7 @@ type ConsumerConfig struct {
 	MaxDeliver        int
 	AckWait           time.Duration
 	HeartbeatInterval time.Duration
-	MaxAckPending     int // 0 = server default (1000); -1 = unlimited (gh#480)
+	MaxAckPending     int // 0 = inherited/default/capped server policy; -1 = unlimited outstanding acks (gh#480)
 }
 
 // GetConsumerConfig validates a JetStream port through the canonical facts

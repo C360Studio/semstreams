@@ -49,6 +49,80 @@ func TestSchemaGeneration(t *testing.T) {
 	verifyOpenAPISpec(t, openapiPath, openapi)
 }
 
+func TestConvertProperties_PortConstraintsFollowDirection(t *testing.T) {
+	schema := component.GenerateConfigSchema(reflect.TypeOf(struct {
+		Ports *component.PortConfig `json:"ports" schema:"type:ports,description:Port configuration"`
+	}{}))
+
+	ports := convertProperties(schema.Properties)["ports"]
+	if ports.Type != "object" || ports.AdditionalProperties == nil || *ports.AdditionalProperties {
+		t.Fatalf("ports schema = %#v", ports)
+	}
+
+	inputJetStream := findPortVariant(t, ports.Properties["inputs"], component.PortKindJetStream)
+	maxAckPending, ok := inputJetStream.Properties["max_ack_pending"]
+	if !ok || maxAckPending.Minimum == nil || *maxAckPending.Minimum != -1 {
+		t.Fatalf("input max_ack_pending = %#v", maxAckPending)
+	}
+
+	outputJetStream := findPortVariant(t, ports.Properties["outputs"], component.PortKindJetStream)
+	outputMaxAckPending, ok := outputJetStream.Properties["max_ack_pending"]
+	if !ok || outputMaxAckPending.Const == nil || *outputMaxAckPending.Const != 0 {
+		t.Fatalf("output max_ack_pending = %#v, want zero-only property", outputMaxAckPending)
+	}
+	for _, required := range outputJetStream.Required {
+		if required == "max_ack_pending" {
+			t.Fatal("output max_ack_pending must remain optional")
+		}
+	}
+	encodedOutputSchema, err := json.Marshal(outputJetStream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name    string
+		value   int
+		include bool
+		valid   bool
+	}{
+		{name: "omitted", valid: true},
+		{name: "explicit zero", value: 0, include: true, valid: true},
+		{name: "positive", value: 7, include: true, valid: false},
+		{name: "unlimited", value: -1, include: true, valid: false},
+	} {
+		t.Run("output_"+tt.name, func(t *testing.T) {
+			config := map[string]any{"kind": "jetstream", "subjects": []string{"events.>"}}
+			if tt.include {
+				config["max_ack_pending"] = tt.value
+			}
+			result, validateErr := gojsonschema.Validate(
+				gojsonschema.NewBytesLoader(encodedOutputSchema), gojsonschema.NewGoLoader(config))
+			if validateErr != nil {
+				t.Fatal(validateErr)
+			}
+			if result.Valid() != tt.valid {
+				t.Fatalf("valid = %v, want %v; errors: %#v", result.Valid(), tt.valid, result.Errors())
+			}
+		})
+	}
+}
+
+func findPortVariant(t *testing.T, lane PropertySchema, kind component.PortKind) PropertySchema {
+	t.Helper()
+	if lane.Items == nil {
+		t.Fatalf("lane has no items: %#v", lane)
+	}
+	config := lane.Items.Properties["config"]
+	for _, variant := range config.OneOf {
+		kindField, ok := variant.Properties["kind"]
+		if ok && reflect.DeepEqual(kindField.Enum, []string{string(kind)}) {
+			return variant
+		}
+	}
+	t.Fatalf("variant %q not found in %#v", kind, config)
+	return PropertySchema{}
+}
+
 // setupTestDirectories creates temporary test directories
 func setupTestDirectories(t *testing.T) (schemasDir, specsDir, openapiPath string) {
 	tempDir := t.TempDir()

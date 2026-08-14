@@ -43,8 +43,8 @@ type StreamConsumerConfig struct {
 
 	// MaxAckPending limits the number of outstanding (unacknowledged) messages
 	// that can be delivered to a consumer. This provides backpressure to prevent
-	// overwhelming the consumer. 0 leaves it unset, so the NATS server applies its
-	// default of 1000 for explicit-ack consumers; -1 means unlimited (gh#480).
+	// overwhelming the consumer. 0 leaves it unset, so NATS applies inherited,
+	// default, or server/account-capped policy; -1 means unlimited outstanding acks (gh#480).
 	MaxAckPending int
 
 	// AutoCreate enables automatic stream creation if it doesn't exist.
@@ -69,6 +69,14 @@ type StreamConsumerConfig struct {
 	// lifecycle. Use only when the handler applies its own ordinary work deadline
 	// and needs to retain an in-flight delivery across that deadline.
 	DisableMessageTimeout bool
+}
+
+// PortConsumerContext identifies the component port that owns a managed consumer.
+// Stream, consumer, and policy values are derived from the final configuration and NATS.
+type PortConsumerContext struct {
+	Component      string
+	Port           string
+	ComponentOwned bool
 }
 
 // StreamAutoCreateConfig configures automatic stream creation.
@@ -269,10 +277,21 @@ func (c *Client) reportBindDivergence(declared jetstream.StreamConfig, stream je
 // Handler MUST call one of these methods to acknowledge the message.
 func (c *Client) ConsumeStreamWithConfig(
 	ctx context.Context,
+	owner PortConsumerContext,
 	cfg StreamConsumerConfig,
 	handler func(ctx context.Context, msg jetstream.Msg),
 ) error {
-	return c.ConsumeStreamWithConfigContexts(ctx, ctx, cfg, handler)
+	return c.ConsumeStreamWithConfigContexts(ctx, ctx, owner, cfg, handler)
+}
+
+// ConsumeInternalStreamWithConfig consumes a stream for framework-internal users
+// that make no JetStreamPort configuration claim.
+func (c *Client) ConsumeInternalStreamWithConfig(
+	ctx context.Context,
+	cfg StreamConsumerConfig,
+	handler func(ctx context.Context, msg jetstream.Msg),
+) error {
+	return c.consumeStreamWithConfigContexts(ctx, ctx, PortConsumerContext{}, cfg, handler, false)
 }
 
 // ConsumeStreamWithConfigContexts separates bounded setup I/O from callback
@@ -281,9 +300,28 @@ func (c *Client) ConsumeStreamWithConfig(
 func (c *Client) ConsumeStreamWithConfigContexts(
 	setupCtx context.Context,
 	handlerCtx context.Context,
+	owner PortConsumerContext,
 	cfg StreamConsumerConfig,
 	handler func(ctx context.Context, msg jetstream.Msg),
 ) error {
+	return c.consumeStreamWithConfigContexts(setupCtx, handlerCtx, owner, cfg, handler, true)
+}
+
+func (c *Client) consumeStreamWithConfigContexts(
+	setupCtx context.Context,
+	handlerCtx context.Context,
+	owner PortConsumerContext,
+	cfg StreamConsumerConfig,
+	handler func(ctx context.Context, msg jetstream.Msg),
+	observePolicy bool,
+) error {
+	if observePolicy {
+		owner.Component = strings.TrimSpace(owner.Component)
+		owner.Port = strings.TrimSpace(owner.Port)
+		if err := validatePortConsumerContext(owner, "ConsumeStreamWithConfig"); err != nil {
+			return err
+		}
+	}
 	if cfg.StreamName == "" {
 		return errs.WrapInvalid(
 			fmt.Errorf("stream name is required"),
@@ -324,6 +362,9 @@ func (c *Client) ConsumeStreamWithConfigContexts(
 	if c.consumers != nil {
 		if existing, exists := c.consumers[consumerKey]; exists {
 			existing.consumeCtx.Stop()
+			if c.jsMetrics != nil {
+				c.jsMetrics.forgetPolicy(existing.policyKey)
+			}
 			delete(c.consumers, consumerKey)
 			c.logger.Debug("Stopped existing consumer before recreation", slog.String("consumer_key", consumerKey))
 		}
@@ -337,9 +378,9 @@ func (c *Client) ConsumeStreamWithConfigContexts(
 	consumer, err := stream.CreateOrUpdateConsumer(setupCtx, consumerCfg)
 	if err != nil {
 		c.recordFailure()
-		return errs.WrapTransient(err, "Client", "ConsumeStreamWithConfig",
-			"failed to create consumer for stream "+cfg.StreamName)
+		return ClassifyConsumerPolicyError(err, "ConsumeStreamWithConfig")
 	}
+	guarded := &guardedConsumer{Consumer: consumer}
 
 	// Determine message timeout (default 30s if not specified).
 	messageTimeout := cfg.MessageTimeout
@@ -347,12 +388,7 @@ func (c *Client) ConsumeStreamWithConfigContexts(
 		messageTimeout = 30 * time.Second
 	}
 
-	// Start consuming
-	if err := setupCtx.Err(); err != nil {
-		return errs.WrapTransient(err, "Client", "ConsumeStreamWithConfig",
-			"setup context ended before starting consumer")
-	}
-	consumeCtx, err := consumer.Consume(func(msg jetstream.Msg) {
+	consumeCtx, policyKey, err := c.observeAndStartManagedConsumer(setupCtx, owner, cfg, guarded, func(msg jetstream.Msg) {
 		// Extract trace from JetStream message headers
 		msgCtx := handlerCtx
 		if tc := ExtractTraceFromJetStream(msg.Headers()); tc != nil {
@@ -364,23 +400,14 @@ func (c *Client) ConsumeStreamWithConfigContexts(
 
 		// Wrap handler with panic recovery and default Nak
 		c.safeHandleMessage(msgCtx, msg, handler)
-	})
+	}, observePolicy)
 	if err != nil {
-		c.recordFailure()
-		return errs.WrapTransient(err, "Client", "ConsumeStreamWithConfig",
-			"failed to start consuming from stream "+cfg.StreamName)
-	}
-	if err := setupCtx.Err(); err != nil {
-		consumeCtx.Stop()
-		return errs.WrapTransient(err, "Client", "ConsumeStreamWithConfig",
-			"setup context ended while starting consumer")
+		return err
 	}
 
 	// Wrap ONCE and share the wrapper: the metrics registry and the consumer
 	// bookkeeping below hold the same handle under different keys, so the Info()
 	// guard has to live on the handle itself (see guardedConsumer).
-	guarded := &guardedConsumer{Consumer: consumer}
-
 	// Track consumer for JetStream metrics only after setup committed.
 	if c.jsMetrics != nil {
 		c.jsMetrics.trackConsumer(cfg.StreamName, consumerCfg.Durable, guarded)
@@ -391,7 +418,7 @@ func (c *Client) ConsumeStreamWithConfigContexts(
 	if c.consumers == nil {
 		c.consumers = make(map[string]consumerBinding)
 	}
-	c.consumers[consumerKey] = consumerBinding{consumeCtx: consumeCtx, consumer: guarded}
+	c.consumers[consumerKey] = consumerBinding{consumeCtx: consumeCtx, consumer: guarded, policyKey: policyKey}
 	c.consumersMu.Unlock()
 
 	c.resetCircuit()
@@ -471,7 +498,7 @@ func (c *Client) buildConsumerConfig(cfg StreamConsumerConfig) jetstream.Consume
 
 	// Set max ack pending for backpressure. Use != 0 (not > 0) so a -1 reaches
 	// NATS as "unlimited" (gh#480) rather than being dropped to the server default;
-	// 0 stays unset (server default 1000).
+	// 0 stays unset so NATS owns the inherited/default/capped result.
 	if cfg.MaxAckPending != 0 {
 		consumerCfg.MaxAckPending = cfg.MaxAckPending
 	}
@@ -668,6 +695,9 @@ func (c *Client) StopConsumer(streamName, consumerName string) {
 	key := streamName + ":" + consumerName
 	if binding, ok := c.consumers[key]; ok {
 		binding.consumeCtx.Stop()
+		if c.jsMetrics != nil {
+			c.jsMetrics.forgetPolicy(binding.policyKey)
+		}
 		delete(c.consumers, key)
 	}
 }
@@ -700,6 +730,9 @@ func (c *Client) StopAllConsumers() {
 
 	for key, binding := range c.consumers {
 		binding.consumeCtx.Stop()
+		if c.jsMetrics != nil {
+			c.jsMetrics.forgetPolicy(binding.policyKey)
+		}
 		delete(c.consumers, key)
 	}
 }
