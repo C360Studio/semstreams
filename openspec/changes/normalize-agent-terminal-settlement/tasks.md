@@ -53,7 +53,9 @@
 - [x] Prove OTel processing errors are not unconditionally ACKed.
 - [x] Verify both framework binary wiring paths.
 - [x] Verify the retained callback contract through the durable representative adopter fixture.
-- [ ] Verify the actual semteams behavioral path after its beta.160 migration.
+- [ ] **BLOCKED — DOWNSTREAM EVIDENCE NOT RECORDED.** Verify the actual semteams behavioral path after its beta.160
+  migration. The checked-in representative adopter fixture is not actual semteams wiring evidence, and the available
+  local semteams checkout remains on its beta.159 realignment branch.
 
 ## 5. Retention-bound evidence
 

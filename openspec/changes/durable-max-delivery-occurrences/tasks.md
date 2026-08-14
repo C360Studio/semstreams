@@ -40,7 +40,9 @@
 - [x] 4.3 Final gates passed: `task lint`; `go test -race ./...`; `task schema:generate` with no `schemas/` or
   `specs/` drift; `go test ./test/contract/...`; `go mod tidy -diff`; strict OpenSpec validation (43/43); and
   `task e2e:core` (3/3, exact marker PubAck/advisory sequence equality, clean teardown).
-- [ ] 4.4 SemStreams reviewer approval.
+- [ ] 4.4 **BLOCKED — REVIEW EVIDENCE NOT RECORDED.** PR #948 merged at
+  `acf656edf18d322dfc82490608621b446ff55c12`, but its GitHub review record contains no review. Merge status and the
+  completed verification gates above do not substitute for the required independent SemStreams reviewer approval.
 
 ## Binding ruling conformance table
 
