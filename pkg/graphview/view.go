@@ -143,9 +143,9 @@ type View[T any] struct {
 	tickCh       <-chan time.Time
 	hooks        Hooks
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	cancel         context.CancelFunc
+	restartWatcher func() error
+	wg             sync.WaitGroup
 
 	// mu is THE projection mutex: apply, attach (snapshot+register), tick
 	// fan-out, and point reads all serialize on it (see package doc).
@@ -202,6 +202,9 @@ func New[T any](source WatcherSource, decode DecodeFunc[T], opts ...Option) (*Vi
 // of the watcher and ticker; its cancellation is a watcher-loss event (fail
 // closed), not a clean shutdown — use Stop for that.
 func (v *View[T]) Start(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("graphview: nil start context")
+	}
 	v.mu.Lock()
 	switch v.state {
 	case stateNew:
@@ -212,14 +215,16 @@ func (v *View[T]) Start(ctx context.Context) error {
 		v.mu.Unlock()
 		return ErrAlreadyStarted
 	}
-	v.ctx, v.cancel = context.WithCancel(ctx)
+	runCtx, cancel := context.WithCancel(ctx)
+	v.cancel = cancel
+	v.restartWatcher = func() error { return v.openWatcher(runCtx) }
 	v.state = stateBootstrap
 	v.mu.Unlock()
 
 	v.wg.Add(1)
-	go v.runTicker()
+	go v.runTicker(runCtx)
 
-	return v.openWatcher()
+	return v.openWatcher(runCtx)
 }
 
 // Restart re-bootstraps a failed view: it opens a fresh WatchAll, replays,
@@ -240,15 +245,20 @@ func (v *View[T]) Restart() error {
 		v.mu.Unlock()
 		return errors.New("graphview: restart requires a failed view")
 	}
+	restartWatcher := v.restartWatcher
+	if restartWatcher == nil {
+		v.mu.Unlock()
+		return errors.New("graphview: restart lifecycle unavailable")
+	}
 	v.state = stateBootstrap
 	v.cause = nil
 	v.pending = make(map[string]pendingOp[T])
 	v.mu.Unlock()
-	return v.openWatcher()
+	return restartWatcher()
 }
 
-func (v *View[T]) openWatcher() error {
-	watcher, err := v.source.WatchAll(v.ctx)
+func (v *View[T]) openWatcher(ctx context.Context) error {
+	watcher, err := v.source.WatchAll(ctx)
 	if err != nil {
 		v.mu.Lock()
 		if v.state == stateBootstrap {
@@ -278,7 +288,7 @@ func (v *View[T]) openWatcher() error {
 		return fmt.Errorf("graphview: watcher opened after state transition: %w", stateErr)
 	}
 	v.wg.Add(1)
-	go v.runWatcher(watcher)
+	go v.runWatcher(ctx, watcher)
 	v.mu.Unlock()
 	return nil
 }
@@ -302,6 +312,8 @@ func (v *View[T]) Stop() {
 	v.pending = make(map[string]pendingOp[T])
 	v.rotateReadyLocked()
 	cancel := v.cancel
+	v.cancel = nil
+	v.restartWatcher = nil
 	v.mu.Unlock()
 
 	for _, s := range subs {
@@ -319,6 +331,9 @@ func (v *View[T]) Stop() {
 // WaitCaughtUp blocks until the view is caught up (nil), the view fails
 // (wrapped ErrWatcherLost), the view stops (ErrViewStopped), or ctx is done.
 func (v *View[T]) WaitCaughtUp(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("graphview: nil wait context")
+	}
 	for {
 		v.mu.Lock()
 		switch v.state {
@@ -474,6 +489,9 @@ func (v *View[T]) List(prefix string, limit int) ([]KeyedEntry[T], error) {
 // cancellation detaches like Unsubscribe. Fails with ErrNotReady until the
 // view is caught up.
 func (v *View[T]) SnapshotAndSubscribe(ctx context.Context) (Snapshot[T], *Subscription[T], error) {
+	if ctx == nil {
+		return Snapshot[T]{}, nil, errors.New("graphview: nil subscription context")
+	}
 	v.mu.Lock()
 	if err := v.usableLocked(); err != nil {
 		v.mu.Unlock()
@@ -492,10 +510,10 @@ func (v *View[T]) SnapshotAndSubscribe(ctx context.Context) (Snapshot[T], *Subsc
 	for k, p := range v.poisoned {
 		snap.Poisoned[k] = p
 	}
-	s := v.attachLocked(ctx)
+	s := v.attachLocked()
 	n := len(v.subs)
 	v.mu.Unlock()
-	go s.run()
+	go s.run(ctx)
 	if v.hooks.OnSubscribers != nil {
 		v.hooks.OnSubscribers(n)
 	}
@@ -507,15 +525,18 @@ func (v *View[T]) SnapshotAndSubscribe(ctx context.Context) (Snapshot[T], *Subsc
 // changes after the attach sequence. Same readiness gate as
 // SnapshotAndSubscribe.
 func (v *View[T]) Subscribe(ctx context.Context) (*Subscription[T], error) {
+	if ctx == nil {
+		return nil, errors.New("graphview: nil subscription context")
+	}
 	v.mu.Lock()
 	if err := v.usableLocked(); err != nil {
 		v.mu.Unlock()
 		return nil, err
 	}
-	s := v.attachLocked(ctx)
+	s := v.attachLocked()
 	n := len(v.subs)
 	v.mu.Unlock()
-	go s.run()
+	go s.run(ctx)
 	if v.hooks.OnSubscribers != nil {
 		v.hooks.OnSubscribers(n)
 	}
@@ -524,14 +545,13 @@ func (v *View[T]) Subscribe(ctx context.Context) (*Subscription[T], error) {
 
 // attachLocked registers a subscription at the current apply sequence.
 // Caller holds v.mu.
-func (v *View[T]) attachLocked(ctx context.Context) *Subscription[T] {
+func (v *View[T]) attachLocked() *Subscription[T] {
 	id := v.nextSubID
 	v.nextSubID++
 	s := &Subscription[T]{
 		view:      v,
 		id:        id,
 		attachSeq: v.seq,
-		ctx:       ctx,
 		pending:   make(map[string]Delta[T]),
 		notify:    make(chan struct{}, 1),
 		deltas:    make(chan []Delta[T], 1),
@@ -585,7 +605,7 @@ func (v *View[T]) rotateReadyLocked() {
 // runWatcher is the single projection writer: it applies every delivered
 // entry in watch order and detects the end-of-replay marker and watcher
 // loss. One instance runs per watcher generation (Start, then each Restart).
-func (v *View[T]) runWatcher(watcher jetstream.KeyWatcher) {
+func (v *View[T]) runWatcher(ctx context.Context, watcher jetstream.KeyWatcher) {
 	defer v.wg.Done()
 	defer func() { _ = watcher.Stop() }()
 	// seen tracks keys delivered during bootstrap replay for ghost-key
@@ -593,8 +613,8 @@ func (v *View[T]) runWatcher(watcher jetstream.KeyWatcher) {
 	seen := make(map[string]struct{})
 	for {
 		select {
-		case <-v.ctx.Done():
-			v.failClosed(fmt.Errorf("graphview: watch context cancelled: %w", v.ctx.Err()))
+		case <-ctx.Done():
+			v.failClosed(fmt.Errorf("graphview: watch context cancelled: %w", ctx.Err()))
 			return
 		case entry, ok := <-watcher.Updates():
 			if !ok {
@@ -758,7 +778,7 @@ func (v *View[T]) failClosed(cause error) {
 }
 
 // runTicker drives the fan-out window.
-func (v *View[T]) runTicker() {
+func (v *View[T]) runTicker(ctx context.Context) {
 	defer v.wg.Done()
 	tick := v.tickCh
 	if tick == nil {
@@ -768,7 +788,7 @@ func (v *View[T]) runTicker() {
 	}
 	for {
 		select {
-		case <-v.ctx.Done():
+		case <-ctx.Done():
 			return
 		case <-tick:
 			v.fanOut()

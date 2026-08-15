@@ -18,7 +18,6 @@ type Subscription[T any] struct {
 	view      *View[T]
 	id        uint64
 	attachSeq uint64
-	ctx       context.Context
 
 	mu      sync.Mutex
 	pending map[string]Delta[T] // LWW per key; nil after terminate
@@ -70,15 +69,15 @@ func (s *Subscription[T]) terminate(cause error) {
 // run is the per-subscriber delivery goroutine: it drains the pending buffer
 // into the deltas channel OUTSIDE the projection mutex, so a slow consumer
 // blocks only its own delivery — never the watcher, the apply, or peers.
-func (s *Subscription[T]) run() {
+func (s *Subscription[T]) run(ctx context.Context) {
 	defer s.view.wg.Done()
 	defer close(s.deltas)
 	for {
 		select {
 		case <-s.done:
 			return
-		case <-s.ctx.Done():
-			s.detach(s.ctx.Err())
+		case <-ctx.Done():
+			s.detach(ctx.Err())
 			return
 		case <-s.notify:
 			batch := s.take()
@@ -89,8 +88,8 @@ func (s *Subscription[T]) run() {
 			case s.deltas <- batch:
 			case <-s.done:
 				return
-			case <-s.ctx.Done():
-				s.detach(s.ctx.Err())
+			case <-ctx.Done():
+				s.detach(ctx.Err())
 				return
 			}
 		}

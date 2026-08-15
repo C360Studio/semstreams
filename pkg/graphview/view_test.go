@@ -3,6 +3,7 @@ package graphview
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -14,6 +15,33 @@ func TestNewValidatesArguments(t *testing.T) {
 	require.Error(t, err)
 	_, err = New[string](&fakeSource{}, nil)
 	require.Error(t, err)
+}
+
+// TestStartRejectsNilContext: Start is an exported error-returning boundary,
+// so an invalid nil context is reported instead of panicking in
+// context.WithCancel.
+func TestStartRejectsNilContext(t *testing.T) {
+	view, err := New[string](&fakeSource{}, decodeTest)
+	require.NoError(t, err)
+	require.Error(t, view.Start(nil))
+}
+
+// TestContextBoundariesRejectNil: subscription and wait contexts are
+// call-scoped lifecycle controls, so nil is rejected at the exported
+// error-returning boundary rather than reaching a delivery goroutine.
+func TestContextBoundariesRejectNil(t *testing.T) {
+	h := newHarness(t, 0)
+	h.endReplay()
+
+	require.Error(t, h.view.WaitCaughtUp(nil))
+	_, _, err := h.view.SnapshotAndSubscribe(nil)
+	require.Error(t, err)
+	_, err = h.view.Subscribe(nil)
+	require.Error(t, err)
+
+	h.view.mu.Lock()
+	require.Empty(t, h.view.subs, "invalid contexts must not attach subscribers")
+	h.view.mu.Unlock()
 }
 
 // TestStartLifecycleGuards: double Start is refused; Start after Stop is
@@ -82,6 +110,40 @@ func TestSubscriberContextCancelDetaches(t *testing.T) {
 	h.view.mu.Lock()
 	require.Empty(t, h.view.subs)
 	h.view.mu.Unlock()
+}
+
+// TestStartContextCancellationFailsClosed: the exact Start-derived lifecycle
+// reaches the watcher generation, so cancelling the caller's context marks the
+// view stale and terminates subscribers with the cancellation cause.
+func TestStartContextCancellationFailsClosed(t *testing.T) {
+	watcher := newFakeWatcher()
+	src := &fakeSource{queue: []*fakeWatcher{watcher}}
+	lost := make(chan error, 1)
+	view, err := New[string](src, decodeTest, WithHooks(Hooks{
+		OnWatcherLost: func(err error) { lost <- err },
+	}))
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	require.NoError(t, view.Start(ctx))
+	t.Cleanup(view.Stop)
+
+	watcher.updates <- nil
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), testWait)
+	defer waitCancel()
+	require.NoError(t, view.WaitCaughtUp(waitCtx))
+	sub, err := view.Subscribe(context.Background())
+	require.NoError(t, err)
+
+	cancel()
+	select {
+	case err := <-lost:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(testWait):
+		t.Fatal("timed out waiting for context-cancellation watcher loss")
+	}
+	recvClosed(t, sub)
+	require.ErrorIs(t, sub.Err(), ErrWatcherLost)
+	require.ErrorIs(t, sub.Err(), context.Canceled)
 }
 
 // TestStopDeliversTerminalClose: view shutdown terminates every subscription
