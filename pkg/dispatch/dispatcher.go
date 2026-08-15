@@ -91,8 +91,11 @@ type Deps struct {
 //
 // The pool is started immediately — callers don't need to call
 // Start. Workers are running and ready to receive Submit calls when
-// New returns.
+// New returns. The ctx must be non-nil.
 func New[W any](ctx context.Context, cfg Config[W], deps Deps) (*BoundedDispatcher[W], error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("%w: context is required", ErrInvalidConfig)
+	}
 	if cfg.Workers <= 0 {
 		return nil, fmt.Errorf("%w: Workers must be > 0 (got %d)", ErrInvalidConfig, cfg.Workers)
 	}
