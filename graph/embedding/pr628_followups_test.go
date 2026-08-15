@@ -24,14 +24,13 @@ func TestFetchTextFromStorage_PathologicalCapDoesNotReturnEmpty(t *testing.T) {
 
 	const body = "real body content that must survive a pathological cap"
 	w := &Worker{
-		ctx:              context.Background(),
 		maxSourceTextLen: math.MaxInt64, // overflows int64(limit)+1 without the clamp
 		storeResolver: fakeResolver{stores: map[string]storage.StreamableStore{
 			"objectstore": readerStore{data: body},
 		}},
 	}
 
-	got, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "objectstore", Key: "k"})
+	got, _, err := w.fetchTextFromStorage(t.Context(), &StorageRef{StorageInstance: "objectstore", Key: "k"})
 	if err != nil {
 		t.Fatalf("fetchTextFromStorage: %v", err)
 	}
@@ -82,13 +81,12 @@ func TestSaveAndNotify_CASExhaustedIsNotAFailure(t *testing.T) {
 		embedder: &stubEmbedder{model: "m", dimensions: 3},
 		metrics:  m,
 		logger:   discardLogger(),
-		ctx:      ctx,
 	}
 
 	// Every Update conflicts → SaveGenerated returns ErrCASExhausted. The terminal
 	// return is ignored on purpose. An inline record (no StorageRef) is passed for the
 	// offloaded-identity derivation; CAS exhaustion returns before that success-path block.
-	w.saveAndNotify(entityID, &Record{EntityID: entityID}, []float32{1, 2, 3}, "dedup-key", rev, false)
+	w.saveAndNotify(ctx, entityID, &Record{EntityID: entityID}, []float32{1, 2, 3}, "dedup-key", rev, false)
 
 	// The generation-failure metric is the discriminator: pre-fix counts 1, fixed 0.
 	if got := m.snapshot().failed; got != 0 {

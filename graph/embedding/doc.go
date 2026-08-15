@@ -63,7 +63,7 @@
 //	worker := embedding.NewWorker(storage, embedder, indexBucket, logger).
 //	    WithWorkers(5).
 //	    WithStoreResolver(storeRegistry). // Exact StorageInstance lookup for ContentStorable entities
-//	    WithOnGenerated(func(entityID string, vector []float32) {
+//	    WithOnGenerated(func(ctx context.Context, entityID string, vector []float32) {
 //	        // Update vector index cache
 //	    })
 //

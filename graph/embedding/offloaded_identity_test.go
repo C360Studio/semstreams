@@ -15,7 +15,6 @@ import (
 func offloadedWorker(t *testing.T, body string, maxLen int, m WorkerMetrics) *Worker {
 	t.Helper()
 	return &Worker{
-		ctx:              context.Background(),
 		maxSourceTextLen: maxLen,
 		metrics:          m,
 		storeResolver: fakeResolver{stores: map[string]storage.StreamableStore{
@@ -36,7 +35,7 @@ func TestGetSourceText_OffloadedIdentityFirst(t *testing.T) {
 	const body = "the handler waits between attempts and gives up after a ceiling"
 
 	w := offloadedWorker(t, body, 4000, nil)
-	got, err := w.getSourceText(&Record{IdentityText: identity, StorageRef: offloadedRef()})
+	got, err := w.getSourceText(t.Context(), &Record{IdentityText: identity, StorageRef: offloadedRef()})
 	if err != nil {
 		t.Fatalf("getSourceText: %v", err)
 	}
@@ -56,7 +55,7 @@ func TestGetSourceText_OffloadedNoIdentity_BodyOnly(t *testing.T) {
 	const body = "device reports voltage and current at fixed intervals"
 
 	w := offloadedWorker(t, body, 4000, nil)
-	got, err := w.getSourceText(&Record{IdentityText: "", StorageRef: offloadedRef()})
+	got, err := w.getSourceText(t.Context(), &Record{IdentityText: "", StorageRef: offloadedRef()})
 	if err != nil {
 		t.Fatalf("getSourceText: %v", err)
 	}
@@ -73,8 +72,8 @@ func TestGetSourceText_OffloadedNoIdentity_BodyOnly(t *testing.T) {
 func TestGetSourceText_InlineLane_Unchanged(t *testing.T) {
 	const text = "wholly inline text extracted from triples"
 
-	w := &Worker{ctx: context.Background(), maxSourceTextLen: 4000}
-	got, err := w.getSourceText(&Record{SourceText: text})
+	w := &Worker{maxSourceTextLen: 4000}
+	got, err := w.getSourceText(t.Context(), &Record{SourceText: text})
 	if err != nil {
 		t.Fatalf("getSourceText: %v", err)
 	}
@@ -92,7 +91,7 @@ func TestGetSourceText_CapKeepsIdentityTrimsBody(t *testing.T) {
 	const capLen = 20 // runes; identity(5)+separator(2)=7, so ~13 body runes survive
 
 	w := offloadedWorker(t, body, capLen, nil)
-	got, err := w.getSourceText(&Record{IdentityText: identity, StorageRef: offloadedRef()})
+	got, err := w.getSourceText(t.Context(), &Record{IdentityText: identity, StorageRef: offloadedRef()})
 	if err != nil {
 		t.Fatalf("getSourceText: %v", err)
 	}
@@ -118,7 +117,7 @@ func TestGetSourceText_OffloadedTruncationCountedOnce(t *testing.T) {
 
 	m := &recordingWorkerMetrics{}
 	w := offloadedWorker(t, body, capLen, m)
-	if _, err := w.getSourceText(&Record{IdentityText: "Identity Prefix", StorageRef: offloadedRef()}); err != nil {
+	if _, err := w.getSourceText(t.Context(), &Record{IdentityText: "Identity Prefix", StorageRef: offloadedRef()}); err != nil {
 		t.Fatalf("getSourceText: %v", err)
 	}
 
@@ -151,7 +150,7 @@ func TestGetSourceText_IdentityTipsCombinedOverCap_CountsOnce(t *testing.T) {
 
 	m := &recordingWorkerMetrics{}
 	w := offloadedWorker(t, body, capLen, m)
-	got, err := w.getSourceText(&Record{IdentityText: identity, StorageRef: offloadedRef()})
+	got, err := w.getSourceText(t.Context(), &Record{IdentityText: identity, StorageRef: offloadedRef()})
 	if err != nil {
 		t.Fatalf("getSourceText: %v", err)
 	}
@@ -180,7 +179,7 @@ func TestGetSourceText_EmptyBodyIdentityOnly(t *testing.T) {
 
 	m := &recordingWorkerMetrics{}
 	w := offloadedWorker(t, "", 4000, m) // empty offloaded body
-	got, err := w.getSourceText(&Record{IdentityText: identity, StorageRef: offloadedRef()})
+	got, err := w.getSourceText(t.Context(), &Record{IdentityText: identity, StorageRef: offloadedRef()})
 	if err != nil {
 		t.Fatalf("getSourceText: %v", err)
 	}
@@ -201,8 +200,8 @@ func TestGetSourceText_EmptyBodyIdentityOnly(t *testing.T) {
 	// Cross-lane dedup: an inline record whose whole SourceText is the same identity must
 	// derive the SAME dedup key — the trailing-separator noise would have split them.
 	id := EmbedderIdentity{Type: "bm25", Model: "bm25-384", Dimensions: 384, MaxTextLen: 4000}
-	inlineWorker := &Worker{ctx: context.Background(), maxSourceTextLen: 4000}
-	inlineText, err := inlineWorker.getSourceText(&Record{SourceText: identity})
+	inlineWorker := &Worker{maxSourceTextLen: 4000}
+	inlineText, err := inlineWorker.getSourceText(t.Context(), &Record{SourceText: identity})
 	if err != nil {
 		t.Fatalf("inline getSourceText: %v", err)
 	}
@@ -227,7 +226,7 @@ func TestOffloadedIdentityMetric_CountsStoredVectorsOnly(t *testing.T) {
 	// wire to a terminal outcome, and returns the metric snapshot.
 	runWorker := func(t *testing.T, body string, gen func([]string) ([][]float32, error), seed func(ctx context.Context, s *Storage) error) metricsSnapshot {
 		t.Helper()
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 
 		index := newWatchableKV()
@@ -242,7 +241,7 @@ func TestOffloadedIdentityMetric_CountsStoredVectorsOnly(t *testing.T) {
 			WithMaxSourceTextLen(4000).
 			WithStoreResolver(resolver).
 			WithMetrics(m).
-			WithOnTerminal(func(id string, _ uint64, _ TerminalOutcome, _ string) { done <- id })
+			WithOnTerminal(func(_ context.Context, id string, _ uint64, _ TerminalOutcome, _ string) { done <- id })
 
 		if err := w.Start(ctx); err != nil {
 			t.Fatalf("Start: %v", err)
@@ -329,7 +328,7 @@ func TestOffloadedIdentityMetric_DedupServedPathCountsBoth(t *testing.T) {
 	// plus the total Generate calls (1 == the second was served from dedup).
 	run := func(t *testing.T, identity string) (fresh, served metricsSnapshot, generateCalls int) {
 		t.Helper()
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 
 		const body = "the device reports voltage and current at fixed intervals"
@@ -346,7 +345,7 @@ func TestOffloadedIdentityMetric_DedupServedPathCountsBoth(t *testing.T) {
 			WithMaxSourceTextLen(4000).
 			WithStoreResolver(resolver).
 			WithMetrics(m).
-			WithOnTerminal(func(id string, _ uint64, _ TerminalOutcome, _ string) { done <- id })
+			WithOnTerminal(func(_ context.Context, id string, _ uint64, _ TerminalOutcome, _ string) { done <- id })
 		if err := w.Start(ctx); err != nil {
 			t.Fatalf("Start: %v", err)
 		}
@@ -458,7 +457,7 @@ func TestDedupKey_TracksIdentityAndBody(t *testing.T) {
 	keyFor := func(t *testing.T, identityText, storeBody string) string {
 		t.Helper()
 		w := offloadedWorker(t, storeBody, 4000, nil)
-		text, err := w.getSourceText(&Record{IdentityText: identityText, StorageRef: offloadedRef()})
+		text, err := w.getSourceText(t.Context(), &Record{IdentityText: identityText, StorageRef: offloadedRef()})
 		if err != nil {
 			t.Fatalf("getSourceText: %v", err)
 		}
@@ -483,8 +482,8 @@ func TestDedupKey_TracksIdentityAndBody(t *testing.T) {
 	// combined bytes must derive the SAME key — the key is over the embedded bytes, not
 	// the lane (#627 stays moot).
 	combined := identity + identityBodySeparator + body
-	inlineWorker := &Worker{ctx: context.Background(), maxSourceTextLen: 4000}
-	inlineText, err := inlineWorker.getSourceText(&Record{SourceText: combined})
+	inlineWorker := &Worker{maxSourceTextLen: 4000}
+	inlineText, err := inlineWorker.getSourceText(t.Context(), &Record{SourceText: combined})
 	if err != nil {
 		t.Fatalf("inline getSourceText: %v", err)
 	}
