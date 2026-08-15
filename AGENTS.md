@@ -64,6 +64,40 @@ Full form — the **adopter seam inventory**, a mandatory design deliverable —
 `.agents/contracts/semstreams-architect.md`, mirrored as an implementation-time question in the developer contract
 and a diff-level check in the reviewer contract.
 
+## Go context ownership (HARD RULE)
+
+Production structs SHALL NOT retain `context.Context`. This prohibition includes embedded fields, renamed imports,
+type aliases, wrapper types, interface containers, getters, provider closures, and public configuration knobs that
+hide or recover a stored context. Existing violations are removal work, never precedent.
+
+Production root contexts are created only at the process composition boundary. Library constructors, factories,
+callbacks, watchers, and goroutines SHALL NOT invent roots with `context.Background`, `context.TODO`, or
+`context.WithoutCancel`. For blocking or cancelable operations, use the context-aware standard API when one exists.
+`http.Server.BaseContext` is the narrow standard-library lifecycle-injection exception: set it where the server is
+composed and have its closure capture the exact `Start` context. Repository-defined generic context getters and
+providers remain prohibited.
+
+Callers never pass nil context. Exported context-taking boundaries that can return an error reject nil; private
+helpers rely on the caller invariant. No boundary or helper defaults nil to `context.Background`.
+
+Pass `context.Context` as the first argument to operations that need it. An owning `Start` or `Run` may derive a
+lifecycle child context locally; pass the exact received or derived operation context directly into every goroutine,
+callback, and helper. Component work derives from `Start` or `Run`, and every spawned task joins `Stop`.
+
+Only terminal cleanup or finalization, or an already-accepted durability operation whose invariant requires bounded
+completion after owner cancellation, may detach. `context.WithTimeout` is the immediate boundary. With a parent, use
+`context.WithTimeout(context.WithoutCancel(parent), budget)`. Inside a timeout-only `Stop` or equivalent terminal
+finalizer with no parent contract, `context.WithTimeout(context.Background(), budget)` is allowed. The work completes
+synchronously or all tasks join before return; these contexts never feed `Start`, `Run`, `Watch`, or continuing work.
+
+Nothing uses `context.WithoutCancel(parent)` directly or creates an unbounded descendant from it. Nested child
+cancellation, including `context.WithCancel` or `context.WithCancelCause`, is allowed beneath the bounded context only
+when all tasks join before the terminal operation returns.
+
+A lifecycle owner may retain only a private `context.CancelFunc`, protected by synchronization required for its
+start/stop contract; it must not retain the context itself. Exported lifecycle records SHALL NOT expose
+`context.CancelFunc`. Existing exported cancel functions are removal debt, never precedent.
+
 Flow-based component architecture:
 - **Input**: UDP, WebSocket, File — ingest external data
 - **Processor**: Graph, JSONMap, Rule — transform and enrich

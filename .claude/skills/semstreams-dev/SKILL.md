@@ -64,8 +64,28 @@ Start(ctx context.Context) error   // ctx is per-component; honor cancellation
 Stop(timeout time.Duration) error  // graceful shutdown within timeout
 ```
 
-Discipline: thread the `Start` ctx into every goroutine you spawn — never `context.Background()`
-(see `feedback_eager_resource_creation_before_consumer_register`). For I/O, ctx is first arg.
+Discipline: an owning `Start` or `Run` may derive a lifecycle child context locally. Thread the exact received or
+derived operation context directly into every goroutine, callback, and helper you spawn. Component work derives from
+`Start` or `Run`, and spawned tasks join `Stop`. Context is the first argument to every operation that needs it; nil
+is rejected, never defaulted.
+
+**HARD RULE:** production structs SHALL NOT retain `context.Context`, including through embedding, aliases, wrappers,
+getters, providers, or knobs. Roots exist only at process composition. Constructors, factories, callbacks, watchers,
+and goroutines do not invent them with `context.Background`, `context.TODO`, or `context.WithoutCancel`. Use
+context-aware variants for blocking or cancelable operations when available. `http.Server.BaseContext` may inject
+lifecycle only where the server is composed and its closure captures the exact `Start` context; generic repository
+context getters and providers remain prohibited. Callers never pass nil; exported boundaries reject it when able to
+return an error, private helpers rely on the invariant, and nothing defaults nil to `context.Background`.
+
+Detach only terminal cleanup or finalization, or already-accepted durability work whose invariant requires bounded
+completion. `context.WithTimeout` is the immediate boundary. With a parent, use
+`context.WithTimeout(context.WithoutCancel(parent), budget)`; a timeout-only `Stop` or equivalent finalizer with no
+parent contract may use `context.WithTimeout(context.Background(), budget)`. Complete synchronously or join all tasks
+before return, and never feed `Start`, `Run`, `Watch`, or continuing work. Do not use `WithoutCancel` directly or
+create an unbounded descendant; nested `WithCancel`, `WithCancelCause`, or other child cancellation beneath the
+bounded context is allowed only when all tasks join. Only the lifecycle owner may retain a private, synchronized
+`context.CancelFunc`; exported lifecycle records do not expose it. Stop and read
+`.agents/contracts/semstreams-developer.md` fully if a change would violate these rules.
 
 ### The factory + explicit registration (the #1 footgun)
 
