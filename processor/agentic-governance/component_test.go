@@ -123,7 +123,7 @@ func TestComponent_Health(t *testing.T) {
 	assert.Equal(t, "running", health.Status)
 
 	// Stop
-	err = c.Stop(0)
+	err = c.Stop(context.Background())
 	require.NoError(t, err)
 
 	health = c.Health()
@@ -164,11 +164,11 @@ func TestComponent_StartStop(t *testing.T) {
 	assert.Error(t, err)
 
 	// Stop
-	err = c.Stop(0)
+	err = c.Stop(context.Background())
 	require.NoError(t, err)
 
 	// Stop again should be no-op
-	err = c.Stop(0)
+	err = c.Stop(context.Background())
 	assert.NoError(t, err)
 }
 

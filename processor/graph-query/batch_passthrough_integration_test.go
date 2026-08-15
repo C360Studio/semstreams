@@ -70,7 +70,7 @@ func TestIntegration_BatchQueryPassthrough_ForwardsToGraphIngest(t *testing.T) {
 	gq := comp.(*Component)
 	require.NoError(t, gq.Initialize())
 	require.NoError(t, gq.Start(ctx))
-	t.Cleanup(func() { _ = gq.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = gq.Stop(context.Background()) })
 
 	// Fire a request at the PUBLIC graph.query.batch subject — exactly
 	// what semconnect's collection-hydration path would do.
@@ -136,7 +136,7 @@ func TestIntegration_BatchQueryPassthrough_RejectsMalformedRequest(t *testing.T)
 	gq := comp.(*Component)
 	require.NoError(t, gq.Initialize())
 	require.NoError(t, gq.Start(ctx))
-	t.Cleanup(func() { _ = gq.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = gq.Stop(context.Background()) })
 
 	// Fire a malformed JSON request. The natsclient.Request call
 	// itself may not surface an error (gh#93 dual-encoding window

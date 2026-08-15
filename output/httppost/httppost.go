@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/acme"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -102,13 +104,11 @@ type Output struct {
 	httpClient  *http.Client
 
 	// Lifecycle management
-	shutdown      chan struct{}
-	done          chan struct{}
 	running       bool
 	startTime     time.Time
 	mu            sync.RWMutex
 	lifecycleMu   sync.Mutex
-	wg            *sync.WaitGroup
+	generation    *lifecyclejoin.Generation
 	subscriptions []*natsclient.Subscription
 	tlsCleanup    func() // TLS cleanup function (ACME renewal loop)
 
@@ -228,9 +228,6 @@ func NewOutput(rawConfig json.RawMessage, deps component.Dependencies) (componen
 		logger:      deps.GetLogger(),
 		security:    deps.Security,
 		httpClient:  httpClient,
-		shutdown:    make(chan struct{}),
-		done:        make(chan struct{}),
-		wg:          &sync.WaitGroup{},
 		tlsCleanup:  tlsCleanup,
 	}, nil
 }
@@ -261,15 +258,14 @@ func (h *Output) Start(ctx context.Context) error {
 		return errs.WrapFatal(errs.ErrMissingConfig, "Output", "Start", "NATS client required")
 	}
 
-	// Recreate shutdown/done channels for restart support
-	h.shutdown = make(chan struct{})
-	h.done = make(chan struct{})
-	h.wg = &sync.WaitGroup{}
+	runCtx, cancel := context.WithCancel(ctx)
 
 	// Subscribe to input ports based on port type
-	if err := h.setupSubscriptions(ctx); err != nil {
+	if err := h.setupSubscriptions(runCtx); err != nil {
+		cancel()
 		return err
 	}
+	h.generation = lifecyclejoin.NewGeneration(cancel, nil)
 
 	h.mu.Lock()
 	h.running = true
@@ -410,55 +406,37 @@ func (h *Output) waitForStream(ctx context.Context, streamName string) error {
 }
 
 // Stop gracefully stops the output
-func (h *Output) Stop(timeout time.Duration) error {
+func (h *Output) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
 	h.lifecycleMu.Lock()
-	defer h.lifecycleMu.Unlock()
-
-	if !h.running {
+	generation := h.generation
+	if generation == nil {
+		h.lifecycleMu.Unlock()
 		return nil
 	}
+	h.lifecycleMu.Unlock()
 
-	// Signal shutdown
-	close(h.shutdown)
-
-	// Unsubscribe from all NATS subjects
-	for _, sub := range h.subscriptions {
-		if err := sub.Unsubscribe(); err != nil {
-			h.logger.Warn("Failed to unsubscribe", "error", err)
+	return generation.Stop(ctx, func() error {
+		var stopErr error
+		for _, sub := range h.subscriptions {
+			if err := sub.Unsubscribe(); err != nil {
+				h.logger.Warn("Failed to unsubscribe", "error", err)
+				stopErr = errors.Join(stopErr, err)
+			}
 		}
-	}
-	h.subscriptions = nil
-
-	// Wait for goroutines with timeout
-	waitCh := make(chan struct{})
-	go func() {
-		h.wg.Wait()
-		close(waitCh)
-	}()
-
-	select {
-	case <-waitCh:
-		// Clean shutdown
-	case <-time.After(timeout):
-		return errs.WrapTransient(
-			errs.ErrConnectionTimeout,
-			"Output",
-			"Stop",
-			fmt.Sprintf("shutdown timeout after %v", timeout),
-		)
-	}
-
-	// Stop ACME renewal loop if active
-	if h.tlsCleanup != nil {
-		h.tlsCleanup()
-	}
-
-	h.mu.Lock()
-	h.running = false
-	close(h.done)
-	h.mu.Unlock()
-
-	return nil
+		h.subscriptions = nil
+		return stopErr
+	}, func(context.Context) error {
+		if h.tlsCleanup != nil {
+			h.tlsCleanup()
+		}
+		h.mu.Lock()
+		h.running = false
+		h.mu.Unlock()
+		return nil
+	})
 }
 
 // handleMessage processes incoming messages

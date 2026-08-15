@@ -115,7 +115,7 @@ func TestEntityWatcher_RuleTriggerDebouncing(t *testing.T) {
 	err = processor.Start(ctx)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		processor.Stop(5 * time.Second)
+		processor.Stop(context.Background())
 	})
 
 	// Subscribe to rule events to count triggers
@@ -400,7 +400,7 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 	err = processor.Start(ctx)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		processor.Stop(5 * time.Second)
+		processor.Stop(context.Background())
 	})
 
 	// Track baseline trigger count from metrics (not NATS subscription)

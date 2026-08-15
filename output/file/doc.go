@@ -82,7 +82,9 @@
 //	output.Start(ctx)
 //
 //	// Graceful shutdown with flush
-//	output.Stop(5 * time.Second)
+//	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+//	defer shutdownCancel()
+//	_ = output.Stop(shutdownCtx)
 //
 // During shutdown:
 //  1. Stop accepting new messages

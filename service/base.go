@@ -14,8 +14,10 @@ import (
 
 	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/health"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 )
 
 // ErrAlreadyStopped signals that a Stop was invoked on a service already in a
@@ -24,6 +26,13 @@ import (
 // shutdown error (gh#520). A Stop that reaches an already-stopped state MAY
 // return nil (the BaseService.Stop default) OR this sentinel; both are success.
 var ErrAlreadyStopped = errors.New("service already stopped")
+
+func validateLifecycleContext(ctx context.Context, owner, operation string) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, owner, operation, "nil context")
+	}
+	return nil
+}
 
 // Status represents the current status of a service
 type Status int
@@ -99,9 +108,9 @@ type BaseService struct {
 	onHealthChange func(bool)
 
 	// Lifecycle management
-	done      chan struct{}
-	waitGroup sync.WaitGroup
-	mu        sync.RWMutex
+	mu          sync.RWMutex
+	generation  *lifecyclejoin.Generation
+	terminalErr error
 }
 
 // NewBaseServiceWithOptions creates a new base service using functional options pattern
@@ -220,13 +229,14 @@ func (s *BaseService) Health() health.Status {
 
 // Start starts the service
 func (s *BaseService) Start(ctx context.Context) error {
+	if err := validateLifecycleContext(ctx, "BaseService", "Start"); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Check if already running or starting
-	currentStatus := s.Status()
-	if currentStatus == StatusRunning || currentStatus == StatusStarting {
-		return nil
+	if s.generation != nil {
+		return errs.WrapFatal(errs.ErrAlreadyStarted, "BaseService", "Start", "prior generation is still active")
 	}
 
 	s.status.Store(StatusStarting)
@@ -234,36 +244,34 @@ func (s *BaseService) Start(ctx context.Context) error {
 		s.metricsRegistry.CoreMetrics().RecordServiceStatus(s.name, int(StatusStarting))
 	}
 
-	// Create done channel for service lifecycle
-	s.done = make(chan struct{})
+	// Create generation-scoped lifecycle state. Stop retains cancellation and
+	// completion authority, never the context itself.
+	runtimeCtx, runtimeCancel := context.WithCancel(ctx)
+	var runtimeWG sync.WaitGroup
+	runtimeWG.Add(2)
+	s.generation = lifecyclejoin.NewGeneration(runtimeCancel, runtimeWG.Wait)
+	s.terminalErr = nil
 
 	// Record start time
 	startTime := time.Now()
 	s.startTime.Store(startTime)
 	s.lastActivity.Store(startTime)
-
-	// Start health monitoring
-	if s.healthInterval > 0 {
-		s.healthTicker = time.NewTicker(s.healthInterval)
-		s.waitGroup.Add(1)
-		go s.healthMonitor()
-
-		// Perform initial health check after a delay to ensure setup is complete
-		// ComponentManager needs extra time for component startup goroutines
-		go func() {
-			time.Sleep(200 * time.Millisecond)
-			s.performHealthCheck()
-		}()
-	}
-
-	// Start context monitor for graceful shutdown
-	s.waitGroup.Add(1)
-	go s.contextMonitor(ctx)
-
 	s.status.Store(StatusRunning)
 	if s.metricsRegistry != nil {
 		s.metricsRegistry.CoreMetrics().RecordServiceStatus(s.name, int(StatusRunning))
 	}
+
+	// Start health monitoring
+	if s.healthInterval > 0 {
+		s.healthTicker = time.NewTicker(s.healthInterval)
+		go s.healthMonitor(runtimeCtx, &runtimeWG)
+	} else {
+		runtimeWG.Done()
+	}
+
+	// Start context monitor for graceful shutdown
+	go s.contextMonitor(runtimeCtx, &runtimeWG)
+
 	return nil
 }
 
@@ -273,70 +281,57 @@ func (s *BaseService) Start(ctx context.Context) error {
 // parent-context cancellation (performGracefulShutdown) transitions status
 // without closing done, which would otherwise leave healthMonitor parked
 // forever (gh#549).
-func (s *BaseService) Stop(timeout time.Duration) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *BaseService) Stop(ctx context.Context) error {
+	if err := validateLifecycleContext(ctx, "BaseService", "Stop"); err != nil {
+		return err
+	}
 
-	// Check if already stopped or stopping
-	currentStatus := s.Status()
-	alreadyTerminal := currentStatus == StatusStopped || currentStatus == StatusStopping
+	s.mu.RLock()
+	generation := s.generation
+	terminalErr := s.terminalErr
+	s.mu.RUnlock()
+	if generation == nil {
+		// A never-started service has no generation to stop. Preserve the
+		// longstanding idempotent contract for a caller that already observed a
+		// terminal/stopping transition without an installed runtime generation.
+		s.mu.Lock()
+		if s.status.Load() != StatusStopped {
+			s.status.Store(StatusStopped)
+		}
+		s.mu.Unlock()
+		return terminalErr
+	}
 
-	if !alreadyTerminal {
-		// Transition to stopping status
+	stopErr := generation.Stop(ctx, func() error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
 		s.status.Store(StatusStopping)
 		if s.metricsRegistry != nil {
 			s.metricsRegistry.CoreMetrics().RecordServiceStatus(s.name, int(StatusStopping))
 		}
-	}
-
-	// Signal all goroutines to stop
-	if s.done != nil {
-		select {
-		case <-s.done:
-			// Already closed
-		default:
-			close(s.done)
+		if s.healthTicker != nil {
+			s.healthTicker.Stop()
 		}
-	}
-
-	// Stop health monitoring
-	if s.healthTicker != nil {
-		s.healthTicker.Stop()
-	}
-
-	// Use provided timeout or default
-	if timeout == 0 {
-		timeout = 5 * time.Second // Default timeout
-	}
-
-	// Create fresh context for cleanup
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	// Wait for goroutines to finish
-	done := make(chan struct{})
-	go func() {
-		s.waitGroup.Wait()
-		close(done)
-	}()
-
-	// Wait for shutdown or timeout
-	select {
-	case <-done:
-		// Graceful shutdown completed
-	case <-ctx.Done():
-		// Timeout - force shutdown
-	}
-
-	if !alreadyTerminal {
+		return nil
+	}, func(context.Context) error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
 		s.status.Store(StatusStopped)
 		if s.metricsRegistry != nil {
 			s.metricsRegistry.CoreMetrics().RecordServiceStatus(s.name, int(StatusStopped))
 		}
 		s.healthy.Store(false)
+		return nil
+	})
+	if ctx.Err() == nil {
+		s.mu.Lock()
+		if s.generation == generation {
+			s.generation = nil
+			s.terminalErr = stopErr
+		}
+		s.mu.Unlock()
 	}
-
-	return nil
+	return stopErr
 }
 
 // SetHealthCheck sets a custom health check function
@@ -383,12 +378,18 @@ func (s *BaseService) RegisterMetrics(_ metric.MetricsRegistrar) error {
 }
 
 // healthMonitor runs the health check monitoring loop
-func (s *BaseService) healthMonitor() {
-	defer s.waitGroup.Done()
+func (s *BaseService) healthMonitor(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+	select {
+	case <-ctx.Done():
+		return
+	default:
+		s.performHealthCheck()
+	}
 
 	for {
 		select {
-		case <-s.done:
+		case <-ctx.Done():
 			return
 		case <-s.healthTicker.C:
 			s.performHealthCheck()
@@ -398,13 +399,20 @@ func (s *BaseService) healthMonitor() {
 
 // performHealthCheck executes the health check
 func (s *BaseService) performHealthCheck() {
+	if s.Status() != StatusRunning {
+		return
+	}
 	s.healthChecks.Add(1)
 
 	var err error
+	s.mu.RLock()
+	healthCheck := s.healthCheckFunc
+	onHealthChange := s.onHealthChange
+	s.mu.RUnlock()
 
 	// Custom health check has priority
-	if s.healthCheckFunc != nil {
-		err = s.healthCheckFunc()
+	if healthCheck != nil {
+		err = healthCheck()
 	}
 
 	// Default health checks (only if no custom health check or custom passed)
@@ -418,55 +426,32 @@ func (s *BaseService) performHealthCheck() {
 	if err != nil {
 		s.failedHealthChecks.Add(1)
 	}
+	if s.Status() != StatusRunning {
+		return
+	}
 
 	s.healthy.Store(isHealthy)
 
 	// Notify health change
-	if wasHealthy != isHealthy && s.onHealthChange != nil {
-		go s.onHealthChange(isHealthy)
+	if wasHealthy != isHealthy && onHealthChange != nil {
+		onHealthChange(isHealthy)
 	}
 }
 
 // contextMonitor monitors the parent context for cancellation
-func (s *BaseService) contextMonitor(ctx context.Context) {
-	defer s.waitGroup.Done()
-
-	select {
-	case <-ctx.Done():
-		// Parent context canceled - perform graceful shutdown
-		s.performGracefulShutdown()
-	case <-s.done:
-		// Service stopped via Stop() method - exit gracefully
-		return
-	}
+func (s *BaseService) contextMonitor(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+	<-ctx.Done()
+	s.performGracefulShutdown()
 }
 
 // performGracefulShutdown atomically transitions service to stopped state
 func (s *BaseService) performGracefulShutdown() {
-	// Use atomic compare-and-swap to avoid race conditions - load atomically to prevent races
-	const maxRetries = 100
-	for range maxRetries {
-		current := s.status.Load().(Status)
-		if current != StatusRunning {
-			return // Already shutting down or stopped
-		}
-
-		// Attempt atomic transition to stopping state
-		if s.status.CompareAndSwap(current, StatusStopping) {
-			if s.metricsRegistry != nil {
-				s.metricsRegistry.CoreMetrics().RecordServiceStatus(s.name, int(StatusStopping))
-			}
-			break
-		}
-		// If CAS failed, retry with brief backoff to reduce contention
-		time.Sleep(time.Microsecond)
+	if !s.status.CompareAndSwap(StatusRunning, StatusStopping) {
+		return
 	}
-	// Fallback: if max retries exhausted, force status change (unlikely scenario)
-	if s.status.Load().(Status) == StatusRunning {
-		s.status.Store(StatusStopping)
-		if s.metricsRegistry != nil {
-			s.metricsRegistry.CoreMetrics().RecordServiceStatus(s.name, int(StatusStopping))
-		}
+	if s.metricsRegistry != nil {
+		s.metricsRegistry.CoreMetrics().RecordServiceStatus(s.name, int(StatusStopping))
 	}
 
 	// Stop health monitoring
@@ -492,7 +477,7 @@ type Service interface {
 	// coordinated shutdown a service may reach a terminal state via
 	// parent-context cancellation before the manager calls Stop; that ordering
 	// is clean, not an error (gh#520).
-	Stop(timeout time.Duration) error
+	Stop(ctx context.Context) error
 	Status() Status
 	IsHealthy() bool       // Keep for compatibility during migration
 	GetStatus() Info       // Keep for compatibility during migration

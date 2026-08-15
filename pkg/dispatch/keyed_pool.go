@@ -54,6 +54,9 @@ type KeyedPool[W any] struct {
 
 	lifecycleMu sync.Mutex
 	stopped     bool
+	stopOnce    sync.Once
+	stopSignal  chan struct{}
+	stopDone    chan struct{}
 
 	// submitWG tracks in-flight Submit/SubmitBlocking calls between the
 	// stopped-check (which registers the WG) and the channel send. Stop
@@ -161,14 +164,16 @@ func NewKeyedPool[W any](ctx context.Context, cfg KeyedConfig[W], deps KeyedDeps
 	}
 
 	p := &KeyedPool[W]{
-		lanes:   cfg.Lanes,
-		keyOf:   cfg.KeyOf,
-		process: cfg.Process,
-		onPanic: cfg.OnPanic,
-		logger:  logger,
-		name:    cfg.Name,
-		laneCh:  make([]chan keyedItem[W], cfg.Lanes),
-		drainCh: make(chan struct{}),
+		lanes:      cfg.Lanes,
+		keyOf:      cfg.KeyOf,
+		process:    cfg.Process,
+		onPanic:    cfg.OnPanic,
+		logger:     logger,
+		name:       cfg.Name,
+		laneCh:     make([]chan keyedItem[W], cfg.Lanes),
+		drainCh:    make(chan struct{}),
+		stopSignal: make(chan struct{}),
+		stopDone:   make(chan struct{}),
 	}
 
 	if deps.MetricsRegistry != nil {
@@ -184,6 +189,13 @@ func NewKeyedPool[W any](ctx context.Context, cfg KeyedConfig[W], deps KeyedDeps
 		p.wg.Add(1)
 		go p.metricsUpdater(ctx)
 	}
+	go func() {
+		<-p.stopSignal
+		p.submitWG.Wait()
+		close(p.drainCh)
+		p.wg.Wait()
+		close(p.stopDone)
+	}()
 
 	return p, nil
 }
@@ -351,47 +363,22 @@ func (p *KeyedPool[W]) runOne(ctx context.Context, lane int, item keyedItem[W]) 
 // the lanes keep draining in the background; the caller has simply
 // stopped waiting.
 func (p *KeyedPool[W]) Stop(ctx context.Context) error {
-	p.lifecycleMu.Lock()
-	if p.stopped {
-		p.lifecycleMu.Unlock()
-		return nil
+	if ctx == nil {
+		return fmt.Errorf("dispatch: nil Stop context")
 	}
-	p.stopped = true // reject NEW submits (they see stopped under the lock)
+	p.lifecycleMu.Lock()
+	if !p.stopped {
+		p.stopped = true // reject NEW submits before the coordinator starts
+		p.stopOnce.Do(func() { close(p.stopSignal) })
+	}
+	stopDone := p.stopDone
 	p.lifecycleMu.Unlock()
 
-	// Atomic accept/stop handoff: wait for in-flight submits (those that passed
-	// the stopped-check and registered on submitWG) to finish landing or aborting
-	// BEFORE signaling drain, so no item can land after the lanes start draining
-	// and exiting. drainCh stays OPEN during this wait, so a SubmitBlocking parked
-	// on a full lane still lands as the (still-running) lane frees capacity — or
-	// aborts via its own ctx (the M3 composer cancels it first). Bounded by the
-	// Stop ctx: on timeout we proceed best-effort (shutdown is already incomplete).
-	submitsDone := make(chan struct{})
-	go func() {
-		p.submitWG.Wait()
-		close(submitsDone)
-	}()
 	select {
-	case <-submitsDone:
-	case <-ctx.Done():
-		p.logger.Warn("dispatch: Stop timed out waiting for in-flight submits",
-			slog.String("pool", p.name))
-		close(p.drainCh)
-		return ctx.Err()
-	}
-
-	close(p.drainCh)
-
-	done := make(chan struct{})
-	go func() {
-		p.wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
+	case <-stopDone:
 		return nil
 	case <-ctx.Done():
-		p.logger.Warn("dispatch: Stop timed out before lanes drained",
+		p.logger.Warn("dispatch: Stop timed out before accepted work drained",
 			slog.String("pool", p.name))
 		return ctx.Err()
 	}

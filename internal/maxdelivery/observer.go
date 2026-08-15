@@ -224,7 +224,7 @@ func Start(
 	client *natsclient.Client,
 	registry *metric.MetricsRegistry,
 	logger *slog.Logger,
-) (func(), error) {
+) (func(context.Context) error, error) {
 	telemetry, err := newPrometheusTelemetry(registry, logger)
 	if err != nil {
 		return nil, err
@@ -232,7 +232,7 @@ func Start(
 	return start(ctx, client, telemetry)
 }
 
-func start(ctx context.Context, client *natsclient.Client, telemetry telemetry) (func(), error) {
+func start(ctx context.Context, client *natsclient.Client, telemetry telemetry) (func(context.Context) error, error) {
 	if client == nil {
 		return nil, errors.New("max-delivery observer requires a NATS client")
 	}
@@ -245,7 +245,9 @@ func start(ctx context.Context, client *natsclient.Client, telemetry telemetry) 
 	}); err != nil {
 		return nil, fmt.Errorf("start MaxDeliver observer: %w", err)
 	}
-	return func() { client.StopConsumer(captureStreamName, observerConsumerName) }, nil
+	return func(stopCtx context.Context) error {
+		return client.StopConsumer(stopCtx, captureStreamName, observerConsumerName)
+	}, nil
 }
 
 func observerConsumerConfig() natsclient.StreamConsumerConfig {

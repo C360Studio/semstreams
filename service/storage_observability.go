@@ -51,6 +51,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -167,6 +168,7 @@ type StorageObservabilityService struct {
 	stopChan chan struct{}
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
+	loopDone chan struct{}
 }
 
 // NewStorageObservabilityService builds the service from its config block.
@@ -266,6 +268,9 @@ func NewStorageObservabilityService(rawConfig json.RawMessage, deps *Dependencie
 // Start begins collecting and consuming. Instances are single-use, matching the
 // sibling services: once Stop has run its teardown, create a new one.
 func (s *StorageObservabilityService) Start(ctx context.Context) error {
+	if err := validateLifecycleContext(ctx, "StorageObservabilityService", "Start"); err != nil {
+		return err
+	}
 	if s.Status() == StatusRunning {
 		return fmt.Errorf("storage-observability already running")
 	}
@@ -294,6 +299,12 @@ func (s *StorageObservabilityService) Start(ctx context.Context) error {
 		defer s.wg.Done()
 		s.consumer.Run(runCtx)
 	}()
+	s.loopDone = make(chan struct{})
+	loopDone := s.loopDone
+	go func() {
+		s.wg.Wait()
+		close(loopDone)
+	}()
 
 	s.logger.Info("storage observability started",
 		"interval", s.collectionInterval(), "report_only", true)
@@ -301,26 +312,26 @@ func (s *StorageObservabilityService) Start(ctx context.Context) error {
 }
 
 // Stop halts collection and consumption. Idempotent per the Service contract.
-func (s *StorageObservabilityService) Stop(timeout time.Duration) error {
+func (s *StorageObservabilityService) Stop(ctx context.Context) error {
+	if err := validateLifecycleContext(ctx, "StorageObservabilityService", "Stop"); err != nil {
+		return err
+	}
 	s.stopOnce.Do(func() {
 		if s.cancel != nil {
 			s.cancel()
 		}
 		close(s.stopChan)
 	})
+	baseErr := s.BaseService.Stop(ctx)
 
-	done := make(chan struct{})
-	go func() {
-		s.wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(timeout):
-		s.logger.Warn("storage observability stop timeout waiting for its loops")
+	if s.loopDone != nil {
+		select {
+		case <-s.loopDone:
+		case <-ctx.Done():
+			return errors.Join(baseErr, fmt.Errorf("wait for storage observability loops: %w", ctx.Err()))
+		}
 	}
-
-	return s.BaseService.Stop(timeout)
+	return baseErr
 }
 
 // Health reports the storage picture WITHOUT letting it become a verdict.

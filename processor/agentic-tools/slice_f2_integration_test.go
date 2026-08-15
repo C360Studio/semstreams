@@ -58,7 +58,7 @@ func TestSliceF2ApprovalRequiredFormerNameInterceptsBeforeRegistryMiss(t *testin
 	if err := comp.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	results := make(chan agentic.ToolResult, 4)
 	decoder := payloadbuiltins.NewTestDecoder(t)

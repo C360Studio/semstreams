@@ -42,7 +42,7 @@ func TestIntegration_MaxAckPendingEffectivePolicy(t *testing.T) {
 					AckPolicy: "explicit", MaxAckPending: requested,
 				}, func(context.Context, jetstream.Msg) {})
 			require.NoError(t, consumeErr)
-			t.Cleanup(func() { client.StopConsumer(streamName, consumerName) })
+			t.Cleanup(func() { require.NoError(t, client.StopConsumer(ctx, streamName, consumerName)) })
 
 			consumer, consumerErr := js.Consumer(ctx, streamName, consumerName)
 			require.NoError(t, consumerErr)
@@ -115,9 +115,9 @@ func TestIntegration_MaxAckPendingUpdatesDurableInPlace(t *testing.T) {
 	require.Equal(t, 3, before.Config.MaxAckPending)
 	require.Positive(t, before.AckFloor.Stream)
 
-	client.StopConsumer(streamName, consumerName)
+	require.NoError(t, client.StopConsumer(ctx, streamName, consumerName))
 	start(9, func(_ context.Context, msg jetstream.Msg) { _ = msg.Ack() })
-	t.Cleanup(func() { client.StopConsumer(streamName, consumerName) })
+	defer func() { require.NoError(t, client.StopConsumer(ctx, streamName, consumerName)) }()
 
 	consumer, err = js.Consumer(ctx, streamName, consumerName)
 	require.NoError(t, err)

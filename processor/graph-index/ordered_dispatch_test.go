@@ -50,7 +50,7 @@ func startOrderedTestPool(t *testing.T, comp *Component, workers int) (context.C
 	require.NoError(t, comp.startIndexPool(ctx))
 	t.Cleanup(func() {
 		cancel()
-		require.NoError(t, comp.indexPool.Stop(time.Second))
+		require.NoError(t, comp.indexPool.Stop(context.Background()))
 	})
 	return ctx, cancel
 }
@@ -392,5 +392,5 @@ func TestKeyedDispatcher_AllowsDifferentEntitiesToRunConcurrently(t *testing.T) 
 	}
 	close(release)
 	cancel()
-	require.NoError(t, d.Stop(time.Second))
+	require.NoError(t, d.Stop(context.Background()))
 }

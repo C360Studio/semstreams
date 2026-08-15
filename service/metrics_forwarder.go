@@ -4,6 +4,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -138,7 +139,8 @@ type MetricsForwarder struct {
 	stopOnce sync.Once
 
 	// WaitGroup for goroutine tracking
-	wg sync.WaitGroup
+	wg       sync.WaitGroup
+	loopDone chan struct{}
 
 	// Internal logger
 	logger *slog.Logger
@@ -189,6 +191,9 @@ func newMetricsForwarderWithPublisher(
 // its teardown the instance cannot be restarted — create a new one via the
 // constructor (production disable→enable already does this via CreateService).
 func (mf *MetricsForwarder) Start(ctx context.Context) error {
+	if err := validateLifecycleContext(ctx, "MetricsForwarder", "Start"); err != nil {
+		return err
+	}
 	// Check if already running
 	if mf.Status() == StatusRunning {
 		return fmt.Errorf("metrics forwarder already running")
@@ -211,6 +216,12 @@ func (mf *MetricsForwarder) Start(ctx context.Context) error {
 	mf.ticker = time.NewTicker(mf.pushInterval)
 	mf.wg.Add(1)
 	go mf.publishLoop(ctx)
+	mf.loopDone = make(chan struct{})
+	loopDone := mf.loopDone
+	go func() {
+		mf.wg.Wait()
+		close(loopDone)
+	}()
 
 	return nil
 }
@@ -221,7 +232,10 @@ func (mf *MetricsForwarder) Start(ctx context.Context) error {
 // a clean shutdown, and repeated calls are safe (gh#549). Teardown still runs
 // on the already-stopped path so the ticker is released when cancellation wins
 // the race.
-func (mf *MetricsForwarder) Stop(timeout time.Duration) error {
+func (mf *MetricsForwarder) Stop(ctx context.Context) error {
+	if err := validateLifecycleContext(ctx, "MetricsForwarder", "Stop"); err != nil {
+		return err
+	}
 	mf.stopOnce.Do(func() {
 		mf.logger.Info("MetricsForwarder stopping")
 
@@ -232,23 +246,16 @@ func (mf *MetricsForwarder) Stop(timeout time.Duration) error {
 		// Signal the publishing loop to exit
 		close(mf.stopChan)
 	})
+	baseErr := mf.BaseService.Stop(ctx)
 
-	// Wait for publishing goroutine with timeout
-	done := make(chan struct{})
-	go func() {
-		mf.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		// Goroutine finished
-	case <-time.After(timeout):
-		// Timeout waiting for goroutine
-		mf.logger.Warn("MetricsForwarder stop timeout waiting for goroutine")
+	if mf.loopDone != nil {
+		select {
+		case <-mf.loopDone:
+		case <-ctx.Done():
+			return errors.Join(baseErr, fmt.Errorf("wait for metrics forwarder loop: %w", ctx.Err()))
+		}
 	}
-
-	return mf.BaseService.Stop(timeout)
+	return baseErr
 }
 
 // publishLoop periodically publishes metrics to NATS.

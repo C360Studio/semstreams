@@ -211,7 +211,7 @@ func TestIntegration_UDPInput_Lifecycle_StartStop(t *testing.T) {
 	require.True(t, health.Healthy, "Component should be healthy after start")
 
 	// Test Stop
-	err = udpInput.Stop(5 * time.Second)
+	err = udpInput.Stop(context.Background())
 	require.NoError(t, err)
 
 	// Verify actually stopped
@@ -261,7 +261,7 @@ func TestIntegration_UDPInput_Integration_RealUDPAndNATS(t *testing.T) {
 	defer cancel()
 
 	require.NoError(t, udpInput.Start(ctx))
-	defer udpInput.Stop(5 * time.Second)
+	defer udpInput.Stop(context.Background())
 
 	// Verify component is healthy and socket is bound
 	health := udpInput.Health()
@@ -338,7 +338,7 @@ func TestIntegration_UDPInput_Integration_MultipleMessages(t *testing.T) {
 	defer cancel()
 
 	require.NoError(t, udpInput.Start(ctx))
-	defer udpInput.Stop(5 * time.Second)
+	defer udpInput.Stop(context.Background())
 
 	// Set up NATS subscriber to collect all messages
 	nc := testClient.GetNativeConnection()

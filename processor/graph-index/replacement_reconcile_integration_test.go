@@ -105,7 +105,7 @@ func TestIntegration_ReplacementWatcherWatermarkPublicParityAndRestart(t *testin
 		{"predicate": semantictest.Predicate(t, "robotics", "status", "armed")},
 		{"predicate": semantictest.Predicate(t, "robotics", "status", "disarmed")},
 	}, []string{"Alpha", "Beta"}, []string{targetA, targetB})
-	require.NoError(t, index.Stop(5*time.Second))
+	require.NoError(t, index.Stop(context.Background()))
 
 	// Seed in reverse lexical order while stopped. The next component replays B then A,
 	// but every public result must retain its declared total order and match live state.
@@ -124,7 +124,7 @@ func TestIntegration_ReplacementWatcherWatermarkPublicParityAndRestart(t *testin
 	require.NoError(t, err)
 
 	replayed := startReplacementIntegrationIndex(t, ctx, nc, 4)
-	defer replayed.Stop(5 * time.Second)
+	defer replayed.Stop(context.Background())
 	waitPublicWatermark(t, ctx, nc, lastRevision)
 	assertPredicateEntitiesPublic(t, ctx, nc, map[string]any{
 		"predicate": semantictest.Predicate(t, "robotics", "status", "ready"),
@@ -147,7 +147,7 @@ func TestIntegration_ReplacementPartialFailureWithholdsUntilOrderedRepair(t *tes
 	states, err := js.KeyValue(ctx, graph.BucketEntityStates)
 	require.NoError(t, err)
 	index := startReplacementIntegrationIndex(t, ctx, nc, 4)
-	defer index.Stop(5 * time.Second)
+	defer index.Stop(context.Background())
 
 	realPredicate, err := js.KeyValue(ctx, graph.BucketPredicateIndex) // predicate-audit:unrelated {"column":24,"surface":"go-assignment:realPredicate","value":"","basis":"reviewed predicate-index KV bucket handle used for failure injection"}
 	require.NoError(t, err)
@@ -210,7 +210,7 @@ func TestIntegration_MalformedAuthoritativeDeletePoisonsWatcherWatermark(t *test
 	states, err := js.KeyValue(ctx, graph.BucketEntityStates)
 	require.NoError(t, err)
 	index := startReplacementIntegrationIndex(t, ctx, nc, 4)
-	defer index.Stop(5 * time.Second)
+	defer index.Stop(context.Background())
 
 	entityID := "acme.ops.robotics.gcs.drone.040"
 	readyTriple := message.Triple{
@@ -283,10 +283,10 @@ func TestIntegration_ReplacementAuthoritativeIdentityMismatchPoisonsAndCanonical
 	}, 5*time.Second, 20*time.Millisecond, "canonical replacement did not repair derived indexes")
 	require.Equal(t, graph.IndexStateResetRequired, index.computeIndexStatus(ctx).State,
 		"graph reset latch must remain fail-closed until restart")
-	require.NoError(t, index.Stop(5*time.Second))
+	require.NoError(t, index.Stop(context.Background()))
 
 	restarted := startReplacementIntegrationIndex(t, ctx, nc, 4)
-	defer restarted.Stop(5 * time.Second)
+	defer restarted.Stop(context.Background())
 	waitPublicWatermark(t, ctx, nc, repairRevision)
 	assertReplacementPublicState(t, ctx, nc, keyID, "CanonicalOwner", replacementPredicateRequests{
 		exactOnly: map[string]any{
@@ -322,7 +322,7 @@ func TestIntegration_ReplacementActivationTombstoneTraversalClustering(t *testin
 	states, err := js.KeyValue(ctx, graph.BucketEntityStates)
 	require.NoError(t, err)
 	index := startReplacementIntegrationIndex(t, ctx, nc, 4)
-	defer index.Stop(5 * time.Second)
+	defer index.Stop(context.Background())
 
 	retiredSource := "acme.ops.robotics.gcs.drone.100"
 	liveSource := "acme.ops.robotics.gcs.sensor.100"
@@ -387,7 +387,7 @@ func TestIntegration_ReplacementActivationTombstoneTraversalClustering(t *testin
 	queryLifecycle := queryComponent.(component.LifecycleComponent)
 	require.NoError(t, queryLifecycle.Initialize())
 	require.NoError(t, queryLifecycle.Start(ctx))
-	defer func() { require.NoError(t, queryLifecycle.Stop(5*time.Second)) }()
+	defer func() { require.NoError(t, queryLifecycle.Stop(context.Background())) }()
 
 	pathRequest, err := json.Marshal(graphquery.PathSearchRequest{
 		StartEntity: liveSource,
@@ -423,7 +423,7 @@ func TestIntegration_ReplacementActivationTombstoneTraversalClustering(t *testin
 	require.NoError(t, err)
 	require.NoError(t, clusteringComponent.(component.LifecycleComponent).Initialize())
 	require.NoError(t, clusteringComponent.(component.LifecycleComponent).Start(ctx))
-	defer clusteringComponent.(component.LifecycleComponent).Stop(5 * time.Second)
+	defer clusteringComponent.(component.LifecycleComponent).Stop(context.Background())
 	communityKV, err := js.KeyValue(ctx, graph.BucketCommunityIndex)
 	require.NoError(t, err)
 	// The window must clear a full readiness HEARTBEAT, not just a detection tick.

@@ -137,7 +137,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("start MaxDeliver observer: %w", err)
 	}
-	defer stopMaxDeliveryObserver()
+	defer stopMaxDeliveryOnExit(logger, stopMaxDeliveryObserver)
 
 	componentRegistry, manager, err := setupRegistriesAndManager(cfg)
 	if err != nil {
@@ -263,6 +263,14 @@ func run() error {
 		}
 		return seedMission(seedCtx, svcDeps.LifecycleManager, cliCfg.LifecycleSeed)
 	})
+}
+
+func stopMaxDeliveryOnExit(logger *slog.Logger, stop func(context.Context) error) {
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelStop()
+	if err := stop(stopCtx); err != nil {
+		logger.Warn("stop MaxDeliver observer", slog.Any("error", err))
+	}
 }
 
 type e2ePhaseAResult struct {
@@ -718,7 +726,7 @@ func runWithSignalHandling(ctx context.Context, manager *service.Manager, shutdo
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
 
-	if err := shutdown(shutdownCtx, manager, shutdownTimeout); err != nil {
+	if err := shutdown(shutdownCtx, manager); err != nil {
 		return fmt.Errorf("graceful shutdown failed: %w", err)
 	}
 
@@ -726,15 +734,8 @@ func runWithSignalHandling(ctx context.Context, manager *service.Manager, shutdo
 	return nil
 }
 
-func shutdown(ctx context.Context, manager *service.Manager, timeout time.Duration) error {
-	if deadline, ok := ctx.Deadline(); ok {
-		remaining := time.Until(deadline)
-		if remaining < timeout {
-			timeout = remaining
-		}
-	}
-
-	if err := manager.StopAll(timeout); err != nil {
+func shutdown(ctx context.Context, manager *service.Manager) error {
+	if err := manager.StopAll(ctx); err != nil {
 		slog.Error("Error stopping services", "error", err)
 		return err
 	}

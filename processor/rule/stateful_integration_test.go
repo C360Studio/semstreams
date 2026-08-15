@@ -39,7 +39,7 @@ func TestStatefulEvaluator_Integration(t *testing.T) {
 	if err := processor.Start(ctx); err != nil {
 		t.Fatalf("Failed to start processor: %v", err)
 	}
-	defer processor.Stop(5 * time.Second)
+	defer processor.Stop(context.Background())
 
 	// Verify StateTracker was initialized
 	if processor.stateTracker == nil {

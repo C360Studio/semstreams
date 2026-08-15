@@ -83,7 +83,7 @@ func startCronProcessorForTest(t *testing.T, natsClient *natsclient.Client, rule
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 	require.NoError(t, proc.Start(ctx))
-	t.Cleanup(func() { _ = proc.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = proc.Stop(context.Background()) })
 
 	return proc, registry
 }
@@ -231,7 +231,7 @@ func TestIntegration_CronRule_DetectsMissedFiresAcrossRestart(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("first run did not fire")
 	}
-	require.NoError(t, proc1.Stop(5*time.Second))
+	require.NoError(t, proc1.Stop(context.Background()))
 
 	// Seed a stale timestamp so missed-fire detection sees several
 	// expected fires without us waiting real seconds. Six seconds of
@@ -311,7 +311,7 @@ func TestIntegration_CronRule_CooldownAcrossRestart(t *testing.T) {
 	// within the same run are cooldown-skipped).
 	proc1, _ := startCronProcessorForTest(t, natsClient, rules)
 	time.Sleep(2500 * time.Millisecond)
-	require.NoError(t, proc1.Stop(5*time.Second))
+	require.NoError(t, proc1.Stop(context.Background()))
 
 	mu.Lock()
 	firstRunCount := received
@@ -325,7 +325,7 @@ func TestIntegration_CronRule_CooldownAcrossRestart(t *testing.T) {
 	// fired" and dispatch immediately.
 	proc2, _ := startCronProcessorForTest(t, natsClient, rules)
 	time.Sleep(2500 * time.Millisecond)
-	require.NoError(t, proc2.Stop(5*time.Second))
+	require.NoError(t, proc2.Stop(context.Background()))
 
 	mu.Lock()
 	totalCount := received

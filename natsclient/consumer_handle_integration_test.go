@@ -120,7 +120,7 @@ func TestOutstandingWork_UnboundConsumerIsAnError(t *testing.T) {
 	_, err = tc.Client.OutstandingWork(ctx, "HANDLE_STOP", consumerName)
 	require.NoError(t, err, "readable while bound")
 
-	tc.Client.StopConsumer("HANDLE_STOP", consumerName)
+	require.NoError(t, tc.Client.StopConsumer(ctx, "HANDLE_STOP", consumerName))
 
 	_, err = tc.Client.OutstandingWork(ctx, "HANDLE_STOP", consumerName)
 	require.Error(t, err, "a stopped consumer must error, not report an empty backlog")

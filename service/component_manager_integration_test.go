@@ -165,7 +165,7 @@ func TestComponentManagerWithRealNATS(t *testing.T) {
 	assert.NotNil(t, validation)
 
 	// Stop should work
-	err = cm.Stop(5 * time.Second)
+	err = cm.Stop(context.Background())
 	assert.NoError(t, err, "Stop should succeed")
 	assert.False(t, cm.IsStarted())
 }
@@ -204,7 +204,7 @@ func TestComponentManagerFlowGraphValidation(t *testing.T) {
 
 	err = cm.Start(ctx)
 	require.NoError(t, err)
-	defer cm.Stop(5 * time.Second)
+	defer cm.Stop(context.Background())
 
 	// Test FlowGraph functionality
 	t.Run("GetFlowGraph", func(t *testing.T) {
@@ -294,7 +294,7 @@ func TestServiceManagerMandatoryService(t *testing.T) {
 	// StartAll should create mandatory services
 	err = manager.StartAll(ctx)
 	require.NoError(t, err)
-	defer manager.StopAll(5 * time.Second)
+	defer manager.StopAll(context.Background())
 
 	// ComponentManager should exist even though it wasn't in config
 	cm, exists := manager.GetService("component-manager")

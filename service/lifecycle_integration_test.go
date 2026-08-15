@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"testing"
-	"time"
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/metric"
@@ -36,11 +35,11 @@ func TestServiceLifecycleRobustness(t *testing.T) {
 		require.NoError(t, err)
 
 		// Stop once
-		err = metrics.Stop(5 * time.Second)
+		err = metrics.Stop(context.Background())
 		assert.NoError(t, err)
 
 		// Stop again - should be safe
-		err = metrics.Stop(5 * time.Second)
+		err = metrics.Stop(context.Background())
 		assert.NoError(t, err, "Double stop should be safe")
 	})
 
@@ -57,7 +56,7 @@ func TestServiceLifecycleRobustness(t *testing.T) {
 		// Start the service
 		err = metrics.Start(ctx)
 		require.NoError(t, err)
-		defer metrics.Stop(5 * time.Second)
+		defer metrics.Stop(context.Background())
 
 		// Start again - should error
 		err = metrics.Start(ctx)
@@ -85,11 +84,11 @@ func TestServiceLifecycleRobustness(t *testing.T) {
 		require.NoError(t, err)
 
 		// Stop once
-		err = msgLogger.Stop(5 * time.Second)
+		err = msgLogger.Stop(context.Background())
 		assert.NoError(t, err)
 
 		// Stop again - should be safe
-		err = msgLogger.Stop(5 * time.Second)
+		err = msgLogger.Stop(context.Background())
 		assert.NoError(t, err, "Double stop should be safe")
 	})
 
@@ -111,7 +110,7 @@ func TestServiceLifecycleRobustness(t *testing.T) {
 		// Start the service
 		err = msgLogger.Start(ctx)
 		require.NoError(t, err)
-		defer msgLogger.Stop(5 * time.Second)
+		defer msgLogger.Stop(context.Background())
 
 		// Start again - should error
 		err = msgLogger.Start(ctx)
@@ -153,7 +152,7 @@ func TestServiceLifecycleRobustness(t *testing.T) {
 			stopErrors := make(chan error, 5)
 			for j := 0; j < 5; j++ {
 				go func() {
-					stopErrors <- metrics.Stop(1 * time.Second)
+					stopErrors <- metrics.Stop(context.Background())
 				}()
 			}
 

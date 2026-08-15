@@ -207,7 +207,7 @@ func (c *Component) Health() component.HealthStatus
 func (c *Component) DataFlow() component.FlowMetrics
 func (c *Component) Initialize() error
 func (c *Component) Start(ctx context.Context) error
-func (c *Component) Stop(timeout time.Duration) error
+func (c *Component) Stop(ctx context.Context) error
 
 // Gateway interface method:
 func (c *Component) RegisterHTTPHandlers(prefix string, mux *http.ServeMux)

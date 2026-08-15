@@ -4,6 +4,7 @@ package file
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go"
@@ -112,6 +114,7 @@ type Output struct {
 	mu            sync.RWMutex
 	lifecycleMu   sync.Mutex
 	wg            *sync.WaitGroup
+	generation    *lifecyclejoin.Generation
 	subscriptions []*natsclient.Subscription
 
 	// Metrics
@@ -233,7 +236,9 @@ func (f *Output) Start(ctx context.Context) error {
 	// Recreate shutdown/done channels for restart support
 	f.shutdown = make(chan struct{})
 	f.done = make(chan struct{})
+	f.closeOnce = sync.Once{}
 	f.wg = &sync.WaitGroup{}
+	runCtx, cancel := context.WithCancel(ctx)
 
 	// Open output file
 	var err error
@@ -246,17 +251,20 @@ func (f *Output) Start(ctx context.Context) error {
 
 	f.file, err = os.OpenFile(f.filePath, flags, 0644)
 	if err != nil {
+		cancel()
 		return errs.WrapFatal(err, "Output", "Start", "open output file")
 	}
 
 	// Subscribe to input ports based on port type
-	if err := f.setupSubscriptions(ctx); err != nil {
+	if err := f.setupSubscriptions(runCtx); err != nil {
+		cancel()
 		return err
 	}
 
 	// Start flush goroutine
 	f.wg.Add(1)
 	go f.flushLoop()
+	f.generation = lifecyclejoin.NewGeneration(cancel, f.wg.Wait)
 
 	f.mu.Lock()
 	f.running = true
@@ -401,63 +409,49 @@ func (f *Output) waitForStream(ctx context.Context, streamName string) error {
 }
 
 // Stop gracefully stops the output
-func (f *Output) Stop(timeout time.Duration) error {
+func (f *Output) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
 	f.lifecycleMu.Lock()
-	defer f.lifecycleMu.Unlock()
-
-	if !f.running {
+	generation := f.generation
+	if generation == nil {
+		f.lifecycleMu.Unlock()
 		return nil
 	}
+	f.lifecycleMu.Unlock()
 
-	// Signal shutdown
-	close(f.shutdown)
-
-	// Unsubscribe from all NATS subjects
-	for _, sub := range f.subscriptions {
-		if err := sub.Unsubscribe(); err != nil {
-			f.logger.Warn("Failed to unsubscribe", "error", err)
+	return generation.Stop(ctx, func() error {
+		close(f.shutdown)
+		var stopErr error
+		for _, sub := range f.subscriptions {
+			if err := sub.Unsubscribe(); err != nil {
+				f.logger.Warn("Failed to unsubscribe", "error", err)
+				stopErr = errors.Join(stopErr, err)
+			}
 		}
-	}
-	f.subscriptions = nil
+		f.subscriptions = nil
+		return stopErr
+	}, func(context.Context) error {
+		f.flush()
 
-	// Wait for goroutines with timeout
-	waitCh := make(chan struct{})
-	go func() {
-		f.wg.Wait()
-		close(waitCh)
-	}()
-
-	select {
-	case <-waitCh:
-		// Clean shutdown
-	case <-time.After(timeout):
-		return errs.WrapTransient(context.DeadlineExceeded, "Output", "Stop",
-			fmt.Sprintf("shutdown timeout after %v", timeout))
-	}
-
-	// Flush remaining buffer
-	f.flush()
-
-	// Close file
-	f.fileMu.Lock()
-	if f.file != nil {
-		if err := f.file.Close(); err != nil {
-			f.logger.Warn("failed to close output file", "error", err, "path", f.file.Name())
+		var closeErr error
+		f.fileMu.Lock()
+		if f.file != nil {
+			if err := f.file.Close(); err != nil {
+				f.logger.Warn("failed to close output file", "error", err, "path", f.file.Name())
+				closeErr = err
+			}
+			f.file = nil
 		}
-		f.file = nil
-	}
-	f.fileMu.Unlock()
+		f.fileMu.Unlock()
 
-	f.mu.Lock()
-	f.running = false
-	f.mu.Unlock()
-
-	// Close done channel exactly once, even if Stop() called multiple times
-	f.closeOnce.Do(func() {
-		close(f.done)
+		f.mu.Lock()
+		f.running = false
+		f.mu.Unlock()
+		f.closeOnce.Do(func() { close(f.done) })
+		return closeErr
 	})
-
-	return nil
 }
 
 // handleMessage processes incoming messages

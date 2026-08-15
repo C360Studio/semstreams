@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/c360studio/semstreams/health"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/stretchr/testify/require"
 )
 
 // mockNATSClient provides a mock NATS client for testing
@@ -49,6 +51,43 @@ type MockService struct {
 	healthy bool
 }
 
+type stopFailService struct {
+	MockService
+	err error
+}
+
+func (s *stopFailService) Stop(context.Context) error { return s.err }
+
+func TestStopAllRetainsServiceAuthorityAfterFailure(t *testing.T) {
+	m := NewServiceManager(NewServiceRegistry())
+	wantErr := errors.New("stop failed")
+	svc := &stopFailService{MockService: MockService{name: "failing", status: StatusRunning}, err: wantErr}
+	m.services[svc.name] = svc
+	m.order = []string{svc.name}
+	require.ErrorIs(t, m.StopAll(context.Background()), wantErr)
+	_, retained := m.services[svc.name]
+	require.True(t, retained)
+	require.Equal(t, []string{svc.name}, m.order)
+}
+
+func TestRuntimeServerGenerationCancelsBaseContextWithCanceledStopBudget(t *testing.T) {
+	m := NewServiceManager(NewServiceRegistry())
+	m.httpMux = http.NewServeMux()
+	m.isHTTPManager = true
+	require.NoError(t, m.completeHTTPSetup(context.Background()))
+	require.NotNil(t, m.httpServer.BaseContext)
+	handlerCtx := m.httpServer.BaseContext(nil)
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, m.stopRuntimeServers(canceled), context.Canceled)
+	select {
+	case <-handlerCtx.Done():
+	default:
+		t.Fatal("server generation did not cancel handler BaseContext")
+	}
+	require.NoError(t, m.stopRuntimeServers(context.Background()))
+}
+
 func (m *MockService) Name() string { return m.name }
 func (m *MockService) Start(ctx context.Context) error {
 	// Check for cancellation
@@ -59,7 +98,7 @@ func (m *MockService) Start(ctx context.Context) error {
 	}
 	return nil
 }
-func (m *MockService) Stop(_ time.Duration) error { return nil }
+func (m *MockService) Stop(context.Context) error { return nil }
 func (m *MockService) Status() Status             { return m.status }
 func (m *MockService) IsHealthy() bool            { return m.healthy }
 func (m *MockService) GetStatus() Info {
@@ -162,7 +201,7 @@ func TestServiceManager_ConfigWatcher_WithNATSAvailable(t *testing.T) {
 	// We cannot directly test configUpdates channel as it's not accessible
 
 	// Clean up
-	err = serviceManager.Stop(1 * time.Second)
+	err = serviceManager.Stop(context.Background())
 	if err != nil {
 		t.Errorf("Failed to stop Manager: %v", err)
 	}
@@ -193,7 +232,7 @@ func TestServiceManager_ConfigWatcher_WithNATSUnavailable(t *testing.T) {
 	// Verify service started successfully without ConfigWatcher
 
 	// Clean up
-	err = serviceManager.Stop(1 * time.Second)
+	err = serviceManager.Stop(context.Background())
 	if err != nil {
 		t.Errorf("Failed to stop Manager: %v", err)
 	}
@@ -223,7 +262,7 @@ func TestServiceManager_ConfigWatcher_NATSConnectionNil(t *testing.T) {
 	}
 
 	// Clean up
-	err = serviceManager.Stop(1 * time.Second)
+	err = serviceManager.Stop(context.Background())
 	if err != nil {
 		t.Errorf("Failed to stop Manager: %v", err)
 	}
@@ -253,13 +292,13 @@ func TestServiceManager_ConfigWatcher_ShutdownBehavior(t *testing.T) {
 	}
 
 	// Test shutdown behavior
-	err = serviceManager.Stop(1 * time.Second)
+	err = serviceManager.Stop(context.Background())
 	if err != nil {
 		t.Errorf("Failed to stop Manager cleanly: %v", err)
 	}
 
 	// Verify multiple stops don't cause issues
-	err = serviceManager.Stop(1 * time.Second)
+	err = serviceManager.Stop(context.Background())
 	if err != nil {
 		t.Errorf("Second stop should not cause errors: %v", err)
 	}
@@ -280,7 +319,7 @@ func TestServiceManager_NonHTTPManager_NoConfigWatcher(t *testing.T) {
 	}
 
 	// Clean up
-	err = manager.Stop(1 * time.Second)
+	err = manager.Stop(context.Background())
 	if err != nil {
 		t.Errorf("Failed to stop non-HTTP Manager: %v", err)
 	}

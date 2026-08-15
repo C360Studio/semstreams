@@ -124,7 +124,7 @@ func TestIntegration_JSONFilterProcessing(t *testing.T) {
 	// Start processor
 	err = filterProc.Start(ctx)
 	require.NoError(t, err)
-	defer filterProc.Stop(5 * time.Second)
+	defer filterProc.Stop(context.Background())
 
 	// Give processor time to subscribe
 	time.Sleep(100 * time.Millisecond)
@@ -237,7 +237,7 @@ func TestIntegration_MultipleRules(t *testing.T) {
 
 	err = filterProc.Start(ctx)
 	require.NoError(t, err)
-	defer filterProc.Stop(5 * time.Second)
+	defer filterProc.Stop(context.Background())
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -336,7 +336,7 @@ func TestIntegration_ContainsOperator(t *testing.T) {
 
 	err = filterProc.Start(ctx)
 	require.NoError(t, err)
-	defer filterProc.Stop(5 * time.Second)
+	defer filterProc.Stop(context.Background())
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -431,7 +431,7 @@ func TestIntegration_RejectsInvalidJSON(t *testing.T) {
 
 	err = filterProc.Start(ctx)
 	require.NoError(t, err)
-	defer filterProc.Stop(5 * time.Second)
+	defer filterProc.Stop(context.Background())
 
 	time.Sleep(100 * time.Millisecond)
 

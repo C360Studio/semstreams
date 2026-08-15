@@ -91,7 +91,7 @@ func TestRuntimeMessagesIntegration(t *testing.T) {
 	err = msgLogger.Start(ctx)
 	require.NoError(t, err)
 	defer func() {
-		_ = msgLogger.Stop(5 * time.Second)
+		_ = msgLogger.Stop(context.Background())
 	}()
 
 	// Create service manager and manually add message logger for testing
@@ -487,7 +487,7 @@ func TestRuntimeMessagesWithActualNATSFlow(t *testing.T) {
 	err = msgLogger.Start(ctx)
 	require.NoError(t, err)
 	defer func() {
-		_ = msgLogger.Stop(5 * time.Second)
+		_ = msgLogger.Stop(context.Background())
 	}()
 
 	// Create service manager and manually add message logger for testing

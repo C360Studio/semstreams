@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -43,6 +44,7 @@ import (
 	"github.com/c360studio/semstreams/graph/inference"
 	"github.com/c360studio/semstreams/graph/query"
 	"github.com/c360studio/semstreams/graph/readiness"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	semtypes "github.com/c360studio/semstreams/pkg/types"
@@ -271,20 +273,21 @@ type Component struct {
 	logger        *slog.Logger
 
 	// Query classification (T0: keywords, T1/T2: embedding similarity)
-	classifier *query.ClassifierChain
+	classifier       *query.ClassifierChain
+	inferenceHandler *inference.HTTPHandler
 
 	// HTTP server for GraphQL endpoint
 	httpServer *http.Server
 	httpMux    *http.ServeMux
 
 	// Lifecycle state
-	mu          sync.RWMutex
-	running     bool
-	initialized bool
-	startTime   time.Time
-	wg          sync.WaitGroup
-	ctx         context.Context // Stored context from Start() for use in handler registration
-	cancel      context.CancelFunc
+	mu                sync.RWMutex
+	running           bool
+	initialized       bool
+	startTime         time.Time
+	wg                sync.WaitGroup
+	generation        *lifecyclejoin.Generation
+	shutdownOperation *lifecyclejoin.Operation
 
 	// Metrics (atomic)
 	messagesProcessed int64
@@ -668,10 +671,9 @@ func (c *Component) Start(ctx context.Context) error {
 		return nil
 	}
 
-	// Create cancellable context and store for handler registration
+	// Create the component lifetime. Runtime resources are resolved below using
+	// this context; no context is retained on the component.
 	ctx, cancel := context.WithCancel(ctx)
-	c.ctx = ctx
-	c.cancel = cancel
 
 	// Readiness watchers for the read-only operator surface. A failure here is
 	// NON-FATAL: this gateway's job is serving queries, and losing an observability
@@ -681,6 +683,14 @@ func (c *Component) Start(ctx context.Context) error {
 		if err := c.startReadinessSet(ctx); err != nil {
 			c.logger.Warn("readiness surface watchers unavailable; "+
 				"the surface will report its keys as unknown", slog.Any("error", err))
+		}
+	}
+	if c.config.EnableInferenceAPI {
+		handler, err := c.prepareInferenceHandler(ctx)
+		if err != nil {
+			c.logger.Warn("inference handlers unavailable", slog.Any("error", err))
+		} else {
+			c.inferenceHandler = handler
 		}
 	}
 
@@ -694,6 +704,7 @@ func (c *Component) Start(ctx context.Context) error {
 		c.httpServer = &http.Server{
 			Addr:         c.config.BindAddress,
 			Handler:      c.httpMux,
+			BaseContext:  func(net.Listener) context.Context { return ctx },
 			ReadTimeout:  30 * time.Second,
 			WriteTimeout: 60 * time.Second,
 			IdleTimeout:  120 * time.Second,
@@ -711,6 +722,8 @@ func (c *Component) Start(ctx context.Context) error {
 			}
 		}()
 	}
+	c.generation = lifecyclejoin.NewGeneration(cancel, c.wg.Wait)
+	c.shutdownOperation = lifecyclejoin.NewOperation()
 
 	// Mark as running
 	c.running = true
@@ -726,50 +739,50 @@ func (c *Component) Start(ctx context.Context) error {
 }
 
 // Stop gracefully shuts down the component
-func (c *Component) Stop(timeout time.Duration) error {
+func (c *Component) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
 	c.mu.Lock()
-
-	if !c.running {
+	generation := c.generation
+	shutdownOperation := c.shutdownOperation
+	if generation == nil {
 		c.mu.Unlock()
-		return nil // Already stopped
+		return nil
 	}
-
-	c.stopReadinessSet()
-
-	// Shutdown HTTP server gracefully
-	if c.httpServer != nil {
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), timeout)
-		defer shutdownCancel()
-
-		c.logger.Info("shutting down HTTP server")
-		if err := c.httpServer.Shutdown(shutdownCtx); err != nil {
-			c.logger.Warn("HTTP server shutdown error", slog.Any("error", err))
-		}
-	}
-
-	// Cancel context
-	if c.cancel != nil {
-		c.cancel()
-	}
-
-	c.running = false
 	c.mu.Unlock()
 
-	// Wait for goroutines with timeout
-	done := make(chan struct{})
-	go func() {
-		c.wg.Wait()
-		close(done)
-	}()
+	generation.Cancel()
+	shutdownErr := shutdownOperation.Run(ctx, func(ctx context.Context) error {
+		c.mu.Lock()
+		readinessSet := c.readinessSet
+		c.readinessSet = nil
+		server := c.httpServer
+		c.mu.Unlock()
+		if readinessSet != nil {
+			readinessSet.Stop()
+		}
+		if server == nil {
+			return nil
+		}
+		c.logger.Info("shutting down HTTP server")
+		err := server.Shutdown(ctx)
+		if err != nil {
+			c.logger.Warn("HTTP server shutdown error", slog.Any("error", err))
+		}
+		return err
+	})
+	if errors.Is(shutdownErr, context.Canceled) || errors.Is(shutdownErr, context.DeadlineExceeded) {
+		return shutdownErr
+	}
 
-	select {
-	case <-done:
+	return generation.Stop(ctx, func() error { return shutdownErr }, func(context.Context) error {
+		c.mu.Lock()
+		c.running = false
+		c.mu.Unlock()
 		c.logger.Info("component stopped gracefully", slog.String("component", "graph-gateway"))
 		return nil
-	case <-time.After(timeout):
-		c.logger.Warn("component stop timed out", slog.String("component", "graph-gateway"))
-		return fmt.Errorf("stop timeout after %v", timeout)
-	}
+	})
 }
 
 // ============================================================================
@@ -849,10 +862,8 @@ func (c *Component) RegisterHTTPHandlers(prefix string, mux *http.ServeMux) {
 	// Register inference API handlers if enabled
 	inferenceEnabled := false
 	if c.config.EnableInferenceAPI {
-		if err := c.registerInferenceHandlers(prefix, mux); err != nil {
-			c.logger.Warn("failed to register inference handlers",
-				slog.Any("error", err))
-		} else {
+		if c.inferenceHandler != nil {
+			c.registerInferenceHandlers(prefix, mux)
 			inferenceEnabled = true
 		}
 	}
@@ -864,22 +875,21 @@ func (c *Component) RegisterHTTPHandlers(prefix string, mux *http.ServeMux) {
 		slog.Bool("inference_enabled", inferenceEnabled))
 }
 
-// registerInferenceHandlers registers inference API handlers for anomaly review.
-// The gateway creates its own read-only connection to ANOMALY_INDEX bucket.
-func (c *Component) registerInferenceHandlers(prefix string, mux *http.ServeMux) error {
+// prepareInferenceHandler resolves the anomaly store during Start so handler
+// registration never needs a retained lifecycle context.
+func (c *Component) prepareInferenceHandler(ctx context.Context) (*inference.HTTPHandler, error) {
 	// Get JetStream to access the ANOMALY_INDEX bucket
 	js, err := c.natsClient.JetStream()
 	if err != nil {
-		return errs.Wrap(err, "Component", "registerInferenceHandlers", "get JetStream")
+		return nil, errs.Wrap(err, "Component", "prepareInferenceHandler", "get JetStream")
 	}
 
 	// Get the ANOMALY_INDEX bucket (created by graph-clustering)
-	// Use stored context to allow cancellation during shutdown
-	anomalyBucket, err := js.KeyValue(c.ctx, graph.BucketAnomalyIndex)
+	anomalyBucket, err := js.KeyValue(ctx, graph.BucketAnomalyIndex)
 	if err != nil {
 		// Bucket may not exist if graph-clustering hasn't started yet
 		// This is not a fatal error - just skip inference API
-		return errs.Wrap(err, "Component", "registerInferenceHandlers", "get anomaly bucket")
+		return nil, errs.Wrap(err, "Component", "prepareInferenceHandler", "get anomaly bucket")
 	}
 
 	// Create read-only storage for listing/viewing anomalies
@@ -888,8 +898,10 @@ func (c *Component) registerInferenceHandlers(prefix string, mux *http.ServeMux)
 	// Create relationship applier for approved anomalies
 	applier := inference.NewNATSRelationshipApplier(js, "graph.events.relationship.create", c.logger)
 
-	// Create and register inference HTTP handler
-	handler := inference.NewHTTPHandler(storage, applier, c.logger)
+	return inference.NewHTTPHandler(storage, applier, c.logger), nil
+}
+
+func (c *Component) registerInferenceHandlers(prefix string, mux *http.ServeMux) {
 	inferencePath := prefix + "/inference"
 	if inferencePath[0] != '/' {
 		inferencePath = "/" + inferencePath
@@ -901,12 +913,11 @@ func (c *Component) registerInferenceHandlers(prefix string, mux *http.ServeMux)
 			i--
 		}
 	}
-	handler.RegisterHTTPHandlers(inferencePath, mux)
+	c.inferenceHandler.RegisterHTTPHandlers(inferencePath, mux)
 
 	c.logger.Debug("inference API handlers registered",
 		slog.String("inference_path", inferencePath))
 
-	return nil
 }
 
 // ============================================================================

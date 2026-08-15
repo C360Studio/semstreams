@@ -77,6 +77,8 @@ Multi-step processes with loops, timeouts, and retries:
 
 ## Operations
 
+- [Caller-owned lifecycle context migration][lifecycle-context] - **BREAKING** atomic Stop prerequisite for
+  components, services, managers, and NATS consumers
 - [Post-beta.160 ComponentManager context migration][cm-context] - Breaking Go source migration for the release
   after beta.160
 - [Migrate beta.159 to beta.160](operations/migration-beta159-to-beta160.md) - Canonical downstream breaking-change
@@ -85,6 +87,7 @@ Multi-step processes with loops, timeouts, and retries:
 - [Troubleshooting](operations/02-troubleshooting.md) - Common issues and solutions
 
 [cm-context]: operations/migration-post-beta160-component-manager-context.md
+[lifecycle-context]: operations/migration-restore-go-lifecycle-ownership.md
 
 ## Federation
 

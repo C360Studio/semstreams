@@ -62,7 +62,7 @@ func TestIntegration_EmbeddingFlow(t *testing.T) {
 
 	// Start component (now that input bucket exists)
 	require.NoError(t, embeddingComp.Start(ctx))
-	defer embeddingComp.Stop(5 * time.Second)
+	defer embeddingComp.Stop(context.Background())
 
 	// Wait for EMBEDDING_INDEX bucket to be created by component
 	var embeddingBucket jetstream.KeyValue
@@ -178,7 +178,7 @@ func TestIntegration_EmbeddingReadiness_DeadlockAvoidance(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, embeddingComp.Start(ctx))
-	defer embeddingComp.Stop(5 * time.Second)
+	defer embeddingComp.Stop(context.Background())
 
 	conn := nc.GetConnection()
 	// Raw Request is fine here — the status handler's only error path is an
@@ -323,7 +323,7 @@ func TestIntegration_EmbeddingReadiness_DependencyDownDegradesThenRecovers(t *te
 	require.NoError(t, err)
 
 	require.NoError(t, embeddingComp.Start(ctx))
-	defer embeddingComp.Stop(5 * time.Second)
+	defer embeddingComp.Stop(context.Background())
 
 	conn := nc.GetConnection()
 	statusNow := func() graph.IndexStatusResponse {
@@ -423,7 +423,7 @@ func TestIntegration_EmbeddingDeduplication(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, embeddingComp.Start(ctx))
-	defer embeddingComp.Stop(5 * time.Second)
+	defer embeddingComp.Stop(context.Background())
 
 	var embeddingBucket jetstream.KeyValue
 	require.Eventually(t, func() bool {
@@ -570,7 +570,7 @@ func TestIntegration_EmbeddingTextExtraction(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, embeddingComp.Start(ctx))
-	defer embeddingComp.Stop(5 * time.Second)
+	defer embeddingComp.Stop(context.Background())
 
 	var embeddingBucket jetstream.KeyValue
 	require.Eventually(t, func() bool {

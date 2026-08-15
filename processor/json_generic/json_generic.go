@@ -4,6 +4,7 @@ package jsongeneric
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -67,20 +69,24 @@ type Processor struct {
 	logger           *slog.Logger
 
 	// Lifecycle management
-	shutdown      chan struct{}
-	done          chan struct{}
 	running       bool
 	startTime     time.Time
 	mu            sync.RWMutex
 	lifecycleMu   sync.Mutex
-	wg            *sync.WaitGroup
+	generation    *lifecyclejoin.Generation
 	subscriptions []*natsclient.Subscription
+	consumers     []streamConsumerBinding
 
 	// Metrics
 	messagesProcessed int64
 	messagesWrapped   int64
 	errors            int64
 	lastActivity      time.Time
+}
+
+type streamConsumerBinding struct {
+	streamName   string
+	consumerName string
 }
 
 // NewProcessor creates a new JSON generic processor from configuration
@@ -133,9 +139,6 @@ func NewProcessor(
 		jetStreamOutputs: jetStreamOutputs,
 		natsClient:       deps.NATSClient,
 		logger:           deps.GetLogger(),
-		shutdown:         make(chan struct{}),
-		done:             make(chan struct{}),
-		wg:               &sync.WaitGroup{},
 	}, nil
 }
 
@@ -170,7 +173,7 @@ func (p *Processor) Initialize() error {
 }
 
 // Start begins wrapping messages
-func (p *Processor) Start(ctx context.Context) error {
+func (p *Processor) Start(ctx context.Context) (startErr error) {
 	p.lifecycleMu.Lock()
 	defer p.lifecycleMu.Unlock()
 
@@ -181,7 +184,7 @@ func (p *Processor) Start(ctx context.Context) error {
 		return errs.WrapInvalid(err, "JSONGenericProcessor", "Start", "context already cancelled")
 	}
 
-	if p.running {
+	if p.generation != nil {
 		return errs.WrapFatal(errs.ErrAlreadyStarted, "JSONGenericProcessor", "Start", "check running state")
 	}
 
@@ -189,12 +192,36 @@ func (p *Processor) Start(ctx context.Context) error {
 		return errs.WrapFatal(errs.ErrMissingConfig, "JSONGenericProcessor", "Start", "NATS client required")
 	}
 
-	// Recreate channels if component is being restarted
-	p.shutdown = make(chan struct{})
-	p.done = make(chan struct{})
+	runCtx, cancel := context.WithCancel(ctx)
+	generation := lifecyclejoin.NewGeneration(cancel, nil)
+	p.generation = generation
+	started := false
+	defer func() {
+		if !started {
+			rollbackErr := lifecyclejoin.RunPartialStartRollback(func(ctx context.Context) error {
+				return generation.Stop(ctx, nil, func(ctx context.Context) error {
+					stopErr := p.stopInputs(ctx)
+					if ctxErr := ctx.Err(); ctxErr != nil {
+						return errors.Join(stopErr, ctxErr)
+					}
+					p.mu.Lock()
+					p.running = false
+					p.mu.Unlock()
+					return stopErr
+				})
+			})
+			if rollbackErr == nil && p.generation == generation {
+				p.generation = nil
+			}
+			if rollbackErr != nil {
+				startErr = errors.Join(startErr, rollbackErr)
+				p.logger.Error("Failed to roll back input subscriptions", "error", rollbackErr)
+			}
+		}
+	}()
 
 	// Subscribe to input ports based on port type
-	if err := p.setupSubscriptions(ctx); err != nil {
+	if err := p.setupSubscriptions(runCtx); err != nil {
 		return err
 	}
 
@@ -202,6 +229,7 @@ func (p *Processor) Start(ctx context.Context) error {
 	p.running = true
 	p.startTime = time.Now()
 	p.mu.Unlock()
+	started = true
 
 	p.logger.Info("JSON generic processor started",
 		"component", p.name,
@@ -305,6 +333,7 @@ func (p *Processor) setupJetStreamConsumer(ctx context.Context, port component.P
 		return errs.WrapTransient(err, "JSONGenericProcessor", "setupJetStreamConsumer",
 			fmt.Sprintf("consumer setup for stream %s", streamName))
 	}
+	p.consumers = append(p.consumers, streamConsumerBinding{streamName: streamName, consumerName: consumerName})
 
 	p.logger.Debug("JSON generic subscribed (JetStream)", "subject", subject, "stream", streamName)
 	return nil
@@ -341,47 +370,51 @@ func (p *Processor) waitForStream(ctx context.Context, streamName string) error 
 }
 
 // Stop gracefully stops the processor
-func (p *Processor) Stop(timeout time.Duration) error {
+func (p *Processor) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
 	p.lifecycleMu.Lock()
-	defer p.lifecycleMu.Unlock()
-
-	if !p.running {
+	generation := p.generation
+	if generation == nil {
+		p.lifecycleMu.Unlock()
 		return nil
 	}
+	p.lifecycleMu.Unlock()
 
-	// Signal shutdown
-	close(p.shutdown)
-
-	// Unsubscribe from all NATS subjects
-	for _, sub := range p.subscriptions {
-		if err := sub.Unsubscribe(); err != nil {
-			p.logger.Warn("Failed to unsubscribe", "error", err)
+	stopErr := generation.Stop(ctx, nil, func(ctx context.Context) error {
+		stopErr := p.stopInputs(ctx)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return errors.Join(stopErr, ctxErr)
 		}
+		p.mu.Lock()
+		p.running = false
+		p.mu.Unlock()
+		return stopErr
+	})
+	if stopErr == nil {
+		p.lifecycleMu.Lock()
+		if p.generation == generation {
+			p.generation = nil
+		}
+		p.lifecycleMu.Unlock()
 	}
-	p.subscriptions = nil
+	return stopErr
+}
 
-	// Wait for goroutines with timeout
-	waitCh := make(chan struct{})
-	go func() {
-		p.wg.Wait()
-		close(waitCh)
-	}()
-
-	select {
-	case <-waitCh:
-		// Clean shutdown
-	case <-time.After(timeout):
-		return errs.WrapTransient(
-			errs.ErrConnectionTimeout, "JSONGenericProcessor", "Stop",
-			fmt.Sprintf("graceful shutdown (timeout after %v)", timeout))
+func (p *Processor) stopInputs(ctx context.Context) error {
+	var stopErr error
+	for _, sub := range p.subscriptions {
+		stopErr = errors.Join(stopErr, sub.Drain(ctx))
 	}
-
-	p.mu.Lock()
-	p.running = false
-	close(p.done)
-	p.mu.Unlock()
-
-	return nil
+	for _, binding := range p.consumers {
+		stopErr = errors.Join(stopErr, p.natsClient.StopConsumer(ctx, binding.streamName, binding.consumerName))
+	}
+	if ctx.Err() == nil {
+		p.subscriptions = nil
+		p.consumers = nil
+	}
+	return stopErr
 }
 
 // IsStarted returns whether the processor is running

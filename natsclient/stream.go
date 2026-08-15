@@ -418,7 +418,7 @@ func (c *Client) consumeStreamWithConfigContexts(
 	if c.consumers == nil {
 		c.consumers = make(map[string]consumerBinding)
 	}
-	c.consumers[consumerKey] = consumerBinding{consumeCtx: consumeCtx, consumer: guarded, policyKey: policyKey}
+	c.consumers[consumerKey] = newConsumerBinding(consumeCtx, guarded, policyKey)
 	c.consumersMu.Unlock()
 
 	c.resetCircuit()
@@ -686,20 +686,41 @@ func (c *Client) PublishToStreamWithAck(
 	return ack, nil
 }
 
-// StopConsumer stops a specific consumer by stream and consumer name.
-// This stops the local consume context but does not delete the durable consumer from the server.
-func (c *Client) StopConsumer(streamName, consumerName string) {
-	c.consumersMu.Lock()
-	defer c.consumersMu.Unlock()
-
+// StopConsumer gracefully stops a local consumer without deleting its durable
+// server state. It drains buffered callbacks and waits for authoritative native
+// completion under ctx. A later call rejoins the same drain after caller expiry.
+func (c *Client) StopConsumer(ctx context.Context, streamName, consumerName string) error {
+	if ctx == nil {
+		return errors.New("natsclient: nil StopConsumer context")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	key := streamName + ":" + consumerName
-	if binding, ok := c.consumers[key]; ok {
-		binding.consumeCtx.Stop()
+	c.consumersMu.RLock()
+	binding, ok := c.consumers[key]
+	c.consumersMu.RUnlock()
+	if !ok {
+		return nil
+	}
+
+	binding.drain.once.Do(binding.consumeCtx.Drain)
+	select {
+	case <-binding.drain.closed:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	c.consumersMu.Lock()
+	current, stillBound := c.consumers[key]
+	if stillBound && current.drain == binding.drain {
 		if c.jsMetrics != nil {
 			c.jsMetrics.forgetPolicy(binding.policyKey)
 		}
 		delete(c.consumers, key)
 	}
+	c.consumersMu.Unlock()
+	return nil
 }
 
 // StopAndDeleteConsumer stops a specific consumer and deletes the durable consumer from the server.
@@ -707,7 +728,9 @@ func (c *Client) StopConsumer(streamName, consumerName string) {
 // or when you intentionally want to reset consumer state.
 func (c *Client) StopAndDeleteConsumer(ctx context.Context, streamName, consumerName string) error {
 	// First stop the local consume context
-	c.StopConsumer(streamName, consumerName)
+	if err := c.StopConsumer(ctx, streamName, consumerName); err != nil {
+		return err
+	}
 
 	// Then delete the durable consumer from the server
 	js, err := c.JetStream()

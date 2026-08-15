@@ -370,7 +370,7 @@ func TestStreamChatCompletion_ChunkHandler(t *testing.T) {
 
 	var mu sync.Mutex
 	var received []agenticmodel.StreamChunk
-	client.SetChunkHandler(func(chunk agenticmodel.StreamChunk) {
+	client.SetChunkHandler(func(_ context.Context, chunk agenticmodel.StreamChunk) {
 		mu.Lock()
 		received = append(received, chunk)
 		mu.Unlock()

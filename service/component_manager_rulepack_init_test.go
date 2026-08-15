@@ -6,7 +6,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/config"
@@ -30,7 +29,7 @@ func (probe *rulePackInitProbe) Start(context.Context) error {
 	return nil
 }
 
-func (*rulePackInitProbe) Stop(time.Duration) error {
+func (*rulePackInitProbe) Stop(context.Context) error {
 	return nil
 }
 

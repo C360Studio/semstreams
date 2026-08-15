@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/llm"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/persona"
@@ -46,9 +47,12 @@ type Component struct {
 	messageTimeout time.Duration
 
 	// Lifecycle state
-	mu        sync.RWMutex
-	started   bool
-	startTime time.Time
+	mu          sync.RWMutex
+	lifecycleMu sync.Mutex
+	generation  *lifecyclejoin.Generation
+	starting    bool
+	started     bool
+	startTime   time.Time
 
 	// KV buckets
 	loopsBucket           jetstream.KeyValue
@@ -62,8 +66,7 @@ type Component struct {
 	outputPorts []component.Port
 
 	// Track consumers for cleanup
-	consumerInfos  []consumerInfo
-	consumerCancel context.CancelFunc
+	consumerInfos []consumerInfo
 
 	// Query subscription for trajectory requests
 	trajectorySub *natsclient.Subscription
@@ -159,12 +162,6 @@ func adaptVoidInputHandler(handler func(context.Context, []byte)) inputHandler {
 		handler(ctx, data)
 		return nil
 	}
-}
-
-func newConsumerLifecycleContext(startCtx context.Context) (context.Context, context.CancelFunc) {
-	// Preserve trace/value propagation from Start while intentionally detaching
-	// startup cancellation/deadlines. Component.Stop owns this lifecycle.
-	return context.WithCancel(context.WithoutCancel(startCtx))
 }
 
 // consumerInfo tracks JetStream consumer details for cleanup
@@ -431,7 +428,7 @@ func (c *Component) Initialize() error {
 
 // Start starts the component.
 // The context is used for cancellation during startup operations.
-func (c *Component) Start(ctx context.Context) error {
+func (c *Component) Start(ctx context.Context) (startErr error) {
 	// Validate context
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "agentic-loop", "Start", "context cannot be nil")
@@ -440,57 +437,79 @@ func (c *Component) Start(ctx context.Context) error {
 		return errs.WrapInvalid(err, "agentic-loop", "Start", "context already cancelled")
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.started {
+	c.lifecycleMu.Lock()
+	if c.generation != nil {
+		c.lifecycleMu.Unlock()
 		return errs.ErrAlreadyStarted
 	}
+	runCtx, cancel := context.WithCancel(ctx)
+	startDone := make(chan struct{})
+	generation := lifecyclejoin.NewGeneration(cancel, func() { <-startDone })
+	var finishStart sync.Once
+	finish := func() { finishStart.Do(func() { close(startDone) }) }
+	c.generation = generation
+	c.starting = true
+	c.lifecycleMu.Unlock()
+	committed := false
+	defer func() {
+		finish()
+		c.lifecycleMu.Lock()
+		c.starting = false
+		c.lifecycleMu.Unlock()
+		if committed {
+			return
+		}
+		rollbackErr := lifecyclejoin.RunPartialStartRollback(func(ctx context.Context) error {
+			return generation.Stop(ctx, nil, func(ctx context.Context) error {
+				return c.cleanup(ctx, false)
+			})
+		})
+		if rollbackErr == nil {
+			c.lifecycleMu.Lock()
+			if c.generation == generation {
+				c.generation = nil
+			}
+			c.lifecycleMu.Unlock()
+		}
+		startErr = errors.Join(startErr, rollbackErr)
+	}()
 
 	// Initialize KV buckets if NATS client available
 	if c.natsClient != nil {
-		if err := c.initializeKVBuckets(ctx); err != nil {
+		if err := c.initializeKVBuckets(runCtx); err != nil {
 			return errs.Wrap(err, "agentic-loop", "Start", "initialize KV buckets")
 		}
 
-		// Consumer callbacks use a component-owned lifecycle context rather than
-		// the caller's startup deadline. Stop cancels it so in-flight deliveries
-		// are released (NAKed once) during shutdown.
-		consumerCtx, consumerCancel := newConsumerLifecycleContext(ctx)
-		c.consumerCancel = consumerCancel
-
 		// Set up NATS subscriptions for input ports.
-		if err := c.setupSubscriptions(ctx, consumerCtx); err != nil {
-			c.cleanupConsumersAfterStartFailure()
+		if err := c.setupSubscriptions(runCtx, runCtx); err != nil {
 			return errs.Wrap(err, "agentic-loop", "Start", "setup subscriptions")
 		}
 
 		// Set up trajectory query handler from the declared exact request input.
 		querySubject, err := c.trajectoryQuerySubject()
 		if err != nil {
-			c.cleanupConsumersAfterStartFailure()
 			return errs.Wrap(err, "agentic-loop", "Start", "resolve trajectory query input")
 		}
-		sub, err := c.natsClient.SubscribeForRequests(ctx, querySubject, c.handleTrajectoryQuery)
+		sub, err := c.natsClient.SubscribeForRequests(runCtx, querySubject, c.handleTrajectoryQuery)
 		if err != nil {
-			c.cleanupConsumersAfterStartFailure()
 			return errs.Wrap(err, "agentic-loop", "Start", "subscribe to trajectory query")
 		}
 		c.trajectorySub = sub
 
 		// Set up in-flight query handler (gh#733). Same wire as the trajectory
 		// query: the answer is served, never the consumer name it is derived from.
-		inflightSub, err := c.natsClient.SubscribeForRequests(ctx,
+		inflightSub, err := c.natsClient.SubscribeForRequests(runCtx,
 			InFlightQuerySubjectFor(c.config.ConsumerNameSuffix), c.handleInFlightQuery)
 		if err != nil {
-			c.cleanupConsumersAfterStartFailure()
 			return errs.Wrap(err, "agentic-loop", "Start", "subscribe to in-flight query")
 		}
 		c.inflightSub = inflightSub
 	}
 
+	c.mu.Lock()
 	c.started = true
 	c.startTime = time.Now()
+	c.mu.Unlock()
 
 	// Start the approval-timeout sweeper. Derives a sub-context so
 	// Stop can terminate the sweeper independently of whatever
@@ -501,10 +520,12 @@ func (c *Component) Start(ctx context.Context) error {
 	// — Stop nils c.sweeperDone before waiting on it, and the
 	// goroutine's deferred close needs a stable reference that
 	// survives that nilling.
-	sweepCtx, cancel := context.WithCancel(ctx)
+	sweepCtx, cancelSweep := context.WithCancel(runCtx)
 	done := make(chan struct{})
-	c.sweeperCancel = cancel
+	c.mu.Lock()
+	c.sweeperCancel = cancelSweep
 	c.sweeperDone = done
+	c.mu.Unlock()
 	go func() {
 		defer close(done)
 		c.runApprovalTimeoutSweeper(sweepCtx)
@@ -516,48 +537,15 @@ func (c *Component) Start(ctx context.Context) error {
 	// Best-effort — failure to open the bucket logs and proceeds with
 	// defaults only. Nil NATSClient paths (pure unit tests) skip persona
 	// loading silently.
-	c.initPromptRegistry(ctx)
+	c.initPromptRegistry(runCtx)
 
 	// Emit model endpoint entities to graph (non-fatal)
 	if c.graphWriter != nil {
-		c.graphWriter.WriteModelEndpoints(ctx)
+		c.graphWriter.WriteModelEndpoints(runCtx)
 	}
+	committed = true
 
 	return nil
-}
-
-func (c *Component) cleanupConsumersAfterStartFailure() {
-	if c.consumerCancel != nil {
-		c.consumerCancel()
-		c.consumerCancel = nil
-	}
-	if c.natsClient != nil {
-		for _, info := range c.consumerInfos {
-			c.natsClient.StopConsumer(info.streamName, info.consumerName)
-		}
-	}
-	c.consumerInfos = nil
-
-	// Request subscriptions must be torn down here too. Start installs them in
-	// sequence, so a failure on the Nth leaves the first N-1 live while `started`
-	// stays false — and Stop returns early when not started, so nothing ever
-	// reaps them. A Start retry would then install a SECOND responder on the same
-	// subject, and NATS would deliver requests to both.
-	c.unsubscribeRequestHandlers()
-}
-
-// unsubscribeRequestHandlers tears down every installed request/reply subscription
-// and nils it, so the operation is idempotent and safe on both the start-failure
-// and the normal-Stop path.
-func (c *Component) unsubscribeRequestHandlers() {
-	if c.trajectorySub != nil {
-		_ = c.trajectorySub.Unsubscribe()
-		c.trajectorySub = nil
-	}
-	if c.inflightSub != nil {
-		_ = c.inflightSub.Unsubscribe()
-		c.inflightSub = nil
-	}
 }
 
 // initPromptRegistry seeds the handler's prompt.Registry with
@@ -598,76 +586,75 @@ func (c *Component) initPromptRegistry(ctx context.Context) {
 }
 
 // Stop stops the component within the given timeout.
-func (c *Component) Stop(timeout time.Duration) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if !c.started {
+func (c *Component) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
+	c.lifecycleMu.Lock()
+	generation := c.generation
+	c.lifecycleMu.Unlock()
+	if generation == nil {
 		return nil
 	}
+	stopErr := generation.Stop(ctx, nil, func(ctx context.Context) error {
+		return c.cleanup(ctx, c.config.DeleteConsumerOnStop)
+	})
+	if stopErr == nil {
+		c.lifecycleMu.Lock()
+		if c.generation == generation {
+			c.generation = nil
+		}
+		c.lifecycleMu.Unlock()
+	}
+	return stopErr
+}
 
-	// Stop the approval-timeout sweeper before unsubscribing — the
-	// sweeper calls into HandleApprovalResponse which may publish
-	// results via NATS, and we'd rather drain those callbacks
-	// before the consumers tear down.
-	//
-	// Capture the cancel + done channel under c.mu, then release the
-	// lock BEFORE waiting on the goroutine. Holding c.mu across the
-	// wait is a latent deadlock: the sweeper's per-candidate path
-	// (publishResults / persistLoopState / handler.GetLoop) doesn't
-	// take c.mu today, but a future defensive guard there would
-	// block the in-flight goroutine on c.mu while Stop blocks on
-	// sweeperDone. Release-then-wait keeps the cleanup race-free.
-	cancel := c.sweeperCancel
+func (c *Component) cleanup(ctx context.Context, deleteDurable bool) error {
+	c.mu.RLock()
+	cancelSweep := c.sweeperCancel
 	done := c.sweeperDone
+	trajectorySub := c.trajectorySub
+	inflightSub := c.inflightSub
+	infos := append([]consumerInfo(nil), c.consumerInfos...)
+	c.mu.RUnlock()
+	if cancelSweep != nil {
+		cancelSweep()
+	}
+	if done != nil {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return fmt.Errorf("wait for approval-timeout sweeper: %w", ctx.Err())
+		}
+	}
+	var cleanupErr error
+	if trajectorySub != nil {
+		cleanupErr = errors.Join(cleanupErr, trajectorySub.Drain(ctx))
+	}
+	if inflightSub != nil {
+		cleanupErr = errors.Join(cleanupErr, inflightSub.Drain(ctx))
+	}
+	for _, info := range infos {
+		var err error
+		if deleteDurable {
+			err = c.natsClient.StopAndDeleteConsumer(ctx, info.streamName, info.consumerName)
+		} else {
+			err = c.natsClient.StopConsumer(ctx, info.streamName, info.consumerName)
+		}
+		cleanupErr = errors.Join(cleanupErr, err)
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return errors.Join(cleanupErr, ctxErr)
+	}
+	c.mu.Lock()
 	c.sweeperCancel = nil
 	c.sweeperDone = nil
-	if cancel != nil {
-		c.mu.Unlock()
-		cancel()
-		if done != nil {
-			select {
-			case <-done:
-			case <-time.After(timeout):
-				c.logger.Warn("approval-timeout sweeper did not exit within Stop timeout",
-					slog.Duration("timeout", timeout))
-			}
-		}
-		c.mu.Lock()
-	}
-
-	// Unsubscribe every request handler. Once the in-flight one is gone a caller
-	// sees no-responders — which is UNKNOWN, not zero (gh#733).
-	c.unsubscribeRequestHandlers()
-
-	// Cancel the component-owned consumer lifecycle before stopping consumers.
-	// In-flight deliveries observe this cancellation and are NAKed exactly once.
-	if c.consumerCancel != nil {
-		c.consumerCancel()
-		c.consumerCancel = nil
-	}
-
-	// Stop all JetStream consumers
-	for _, info := range c.consumerInfos {
-		if c.config.DeleteConsumerOnStop {
-			// Delete consumer from server (for test cleanup)
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			if err := c.natsClient.StopAndDeleteConsumer(ctx, info.streamName, info.consumerName); err != nil {
-				c.logger.Debug("Failed to delete consumer", "stream", info.streamName, "consumer", info.consumerName, "error", err)
-			} else {
-				c.logger.Debug("Stopped and deleted consumer", "stream", info.streamName, "consumer", info.consumerName)
-			}
-			cancel()
-		} else {
-			// Just stop local consumption (keep durable consumer for resume)
-			c.natsClient.StopConsumer(info.streamName, info.consumerName)
-			c.logger.Debug("Stopped consumer", "stream", info.streamName, "consumer", info.consumerName)
-		}
-	}
+	c.trajectorySub = nil
+	c.inflightSub = nil
 	c.consumerInfos = nil
-
 	c.started = false
-	return nil
+	c.mu.Unlock()
+	return cleanupErr
 }
 
 // initializeKVBuckets initializes the KV buckets for loop and trajectory storage

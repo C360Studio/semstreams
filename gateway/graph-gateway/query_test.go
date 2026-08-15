@@ -360,7 +360,7 @@ func TestGateway_GlobalSearchProjectsCommunityCacheNotReady(t *testing.T) {
 	component := createTestGatewayWithMock(t, mock)
 	require.NoError(t, component.Initialize())
 	require.NoError(t, component.Start(context.Background()))
-	defer component.Stop(5 * time.Second)
+	defer component.Stop(context.Background())
 
 	body := []byte(`{"query":"query { globalSearch(query: \"widget\") { count degraded degraded_reason } }"}`)
 	request := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(body))
@@ -401,7 +401,7 @@ func TestGateway_ForwardQueryToNATS_Success(t *testing.T) {
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	// Create HTTP request
 	gqlRequest := map[string]interface{}{
@@ -450,7 +450,7 @@ func TestGateway_ForwardQueryToNATS_WithVariables(t *testing.T) {
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query": `query PathSearch($start: String!, $depth: Int!) { pathSearch(startEntity: $start, maxDepth: $depth) { entities } }`,
@@ -506,7 +506,7 @@ func TestGateway_ForwardQueryToNATS_MultipleQueryTypes(t *testing.T) {
 			comp := createTestGatewayWithMock(t, mock)
 			require.NoError(t, comp.Initialize())
 			require.NoError(t, comp.Start(context.Background()))
-			defer comp.Stop(5 * time.Second)
+			defer comp.Stop(context.Background())
 
 			gqlRequest := map[string]interface{}{
 				"query":     tt.query,
@@ -541,7 +541,7 @@ func TestGateway_QueryErrorHandling_NATSTimeout(t *testing.T) {
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query": `query { entity(id: "acme.ops.test.graph.entity.001") { id } }`,
@@ -571,7 +571,7 @@ func TestGateway_QueryErrorHandling_InvalidRequest(t *testing.T) {
 	comp := createTestGateway(t)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	tests := []struct {
 		name        string
@@ -627,7 +627,7 @@ func TestGateway_QueryErrorHandling_ComponentUnavailable(t *testing.T) {
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query": `query { entity(id: "acme.ops.test.graph.entity.001") { id } }`,
@@ -678,7 +678,7 @@ func TestGateway_QueryErrorHandling_ClassifiedHandlerError(t *testing.T) {
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query": `query { entity(id: "acme.ops.test.graph.entity.001") { id } }`,
@@ -728,7 +728,7 @@ func TestGateway_QueryErrorHandling_GraphQLError(t *testing.T) {
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query": `query { entity(id: "nonexistent") { id } }`,
@@ -777,7 +777,7 @@ func TestGateway_ContextTimeout_CancelsNATSRequest(t *testing.T) {
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query": `query { entity(id: "acme.ops.test.graph.entity.001") { id } }`,
@@ -820,7 +820,7 @@ func TestGateway_ContextPropagation_HTTPTimeout(t *testing.T) {
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query": `query { entity(id: "acme.ops.test.graph.entity.001") { id } }`,
@@ -862,7 +862,7 @@ func TestGateway_ContextPropagation_ClientDisconnect(t *testing.T) {
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query": `query { pathSearch(startEntity: "acme.ops.test.graph.entity.001", maxDepth: 10) { entities } }`,
@@ -905,7 +905,7 @@ func TestGateway_GraphQLResponseFormat_Success(t *testing.T) {
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query": `query { pathSearch(startEntity: "acme.ops.test.graph.entity.001", maxDepth: 3) { entities } }`,
@@ -952,7 +952,7 @@ func TestGateway_GraphQLResponseFormat_Error(t *testing.T) {
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query": `query { entity(id: "acme.ops.test.graph.entity.001") { id } }`,
@@ -982,7 +982,7 @@ func TestGateway_HTTPMethodValidation(t *testing.T) {
 	comp := createTestGateway(t)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	tests := []struct {
 		name           string
@@ -1186,7 +1186,7 @@ func TestGateway_PubAckResponse_ReturnsError(t *testing.T) {
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query": `query { entity(id: "test") { id } }`,
@@ -1221,7 +1221,7 @@ func TestGateway_Introspection_Schema(t *testing.T) {
 	comp := createTestGateway(t)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query": `{ __schema { types { name } } }`,
@@ -1277,7 +1277,7 @@ func TestGateway_Introspection_DoesNotRouteToNATS(t *testing.T) {
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query": `{ __schema { queryType { name } } }`,
@@ -1299,7 +1299,7 @@ func TestGateway_Introspection_Type(t *testing.T) {
 	comp := createTestGateway(t)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query": `{ __type(name: "Entity") { name fields { name } } }`,
@@ -1350,7 +1350,7 @@ func TestGateway_InlineArgs_EntityQuery(t *testing.T) {
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query": `{ entity(id: "acme.ops.test.graph.entity.001") { id } }`,
@@ -1387,7 +1387,7 @@ func TestGateway_InlineArgs_PrefixQuery(t *testing.T) {
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query": `{ entitiesByPrefix(prefix: "", limit: 5, cursor: "next-page") { entities { id } next_cursor } }`,
@@ -1429,7 +1429,7 @@ func TestGateway_PrefixQueryLeavesOmittedLimitToResultOwner(t *testing.T) {
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query": `{ entitiesByPrefix(prefix: "test") { entities { id } next_cursor } }`,
@@ -1462,7 +1462,7 @@ func TestGateway_PrefixQuery_ExplicitLimitOverridesDefault(t *testing.T) {
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query": `{ entitiesByPrefix(prefix: "test", limit: 500) { entities { id } next_cursor } }`,
@@ -1538,7 +1538,7 @@ func TestGateway_InlineArgs_ExplicitVariablesOverrideInline(t *testing.T) {
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query":     `{ entity(id: "inline.id") { id } }`,
@@ -1574,7 +1574,7 @@ func TestGateway_InlineArgs_RelationshipsQuery(t *testing.T) {
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query": `{ relationships(entityId: "acme.ops.test.graph.entity.001") { from to predicate } }`,
@@ -1712,7 +1712,7 @@ func TestGateway_TrajectoryQueryForwardsCursorAndPreservesReferencePage(t *testi
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query": `{ trajectory(loopId: "loop-1", limit: 10, cursor: "current-page") { loop_id coverage observed_totals terminal_observed facts { attempt_id evidence_capture evidence { storage_instance key content_type size } } next_cursor } }`,
@@ -1748,7 +1748,7 @@ func TestGateway_TrajectoryQueryRejectsHydrateEvidence(t *testing.T) {
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	body, err := json.Marshal(map[string]interface{}{
 		"query": `{ trajectory(loopId: "loop-1", hydrateEvidence: true) { facts { attempt_id } } }`,
@@ -1780,7 +1780,7 @@ func TestGateway_UnknownQuery_ReturnsBadRequest(t *testing.T) {
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	gqlRequest := map[string]interface{}{
 		"query": `query { unknownOperation { data } }`,

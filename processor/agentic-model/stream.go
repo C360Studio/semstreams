@@ -1,6 +1,7 @@
 package agenticmodel
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"sort"
@@ -21,7 +22,7 @@ type StreamChunk struct {
 
 // ChunkHandler is a callback for receiving streaming deltas.
 // Implementations must be safe for concurrent use if the handler is shared.
-type ChunkHandler func(chunk StreamChunk)
+type ChunkHandler func(ctx context.Context, chunk StreamChunk)
 
 // streamAccumulator aggregates streaming deltas into a complete AgentResponse.
 type streamAccumulator struct {

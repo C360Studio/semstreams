@@ -136,7 +136,7 @@ func TestIntegration_WebSocketOutput_Integration_NATSToWebSocket(t *testing.T) {
 
 	err = wsLifecycle.Start(ctx)
 	require.NoError(t, err)
-	defer wsLifecycle.Stop(5 * time.Second)
+	defer wsLifecycle.Stop(context.Background())
 
 	// Give server time to start
 	time.Sleep(200 * time.Millisecond)
@@ -237,7 +237,7 @@ func TestIntegration_WebSocketOutput_Lifecycle_StartStop(t *testing.T) {
 	require.True(t, health.Healthy, "Component should be healthy after start")
 
 	// Test Stop
-	err = wsLifecycle.Stop(5 * time.Second)
+	err = wsLifecycle.Stop(context.Background())
 	require.NoError(t, err)
 
 	// Verify actually stopped
@@ -278,7 +278,7 @@ func TestIntegration_WebSocketOutput_Integration_MultipleClients(t *testing.T) {
 	defer cancel()
 
 	require.NoError(t, wsLifecycle.Start(ctx))
-	defer wsLifecycle.Stop(5 * time.Second)
+	defer wsLifecycle.Stop(context.Background())
 
 	time.Sleep(200 * time.Millisecond) // Allow server to start
 

@@ -167,7 +167,7 @@ func TestIntegration_ToolExecution(t *testing.T) {
 
 	err = lc.Start(ctx)
 	require.NoError(t, err)
-	defer lc.Stop(5 * time.Second)
+	defer lc.Stop(context.Background())
 
 	time.Sleep(200 * time.Millisecond)
 
@@ -276,7 +276,7 @@ func TestIntegration_ToolAllowedList(t *testing.T) {
 
 	err = lc.Start(ctx)
 	require.NoError(t, err)
-	defer lc.Stop(5 * time.Second)
+	defer lc.Stop(context.Background())
 
 	time.Sleep(200 * time.Millisecond)
 
@@ -378,7 +378,7 @@ func TestIntegration_AdvertisedToolsEnforced(t *testing.T) {
 	defer cancel()
 
 	require.NoError(t, lc.Start(ctx))
-	defer lc.Stop(5 * time.Second)
+	defer lc.Stop(context.Background())
 
 	time.Sleep(200 * time.Millisecond)
 
@@ -495,7 +495,7 @@ func TestIntegration_ToolTimeout(t *testing.T) {
 
 	err = lc.Start(ctx)
 	require.NoError(t, err)
-	defer lc.Stop(5 * time.Second)
+	defer lc.Stop(context.Background())
 
 	time.Sleep(200 * time.Millisecond)
 
@@ -612,7 +612,7 @@ func TestIntegration_ToolConcurrentExecution(t *testing.T) {
 
 	err = lc.Start(ctx)
 	require.NoError(t, err)
-	defer lc.Stop(5 * time.Second)
+	defer lc.Stop(context.Background())
 
 	time.Sleep(200 * time.Millisecond)
 
@@ -738,7 +738,7 @@ func TestIntegration_ToolListRequestReply(t *testing.T) {
 
 	err = lc.Start(ctx)
 	require.NoError(t, err)
-	defer lc.Stop(5 * time.Second)
+	defer lc.Stop(context.Background())
 
 	time.Sleep(200 * time.Millisecond)
 
@@ -804,7 +804,7 @@ func TestIntegration_ToolListDefaultDoesNotServeLegacySubject(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	require.NoError(t, lifecycle.Start(ctx))
-	defer lifecycle.Stop(5 * time.Second)
+	defer lifecycle.Stop(context.Background())
 
 	retryConfig := natsclient.DefaultRetryConfig()
 	retryConfig.InitialBackoff = 100 * time.Millisecond
@@ -946,7 +946,7 @@ func TestIntegration_SharedRegistryExecution(t *testing.T) {
 
 	err = lc.Start(ctx)
 	require.NoError(t, err)
-	defer lc.Stop(5 * time.Second)
+	defer lc.Stop(context.Background())
 
 	time.Sleep(200 * time.Millisecond)
 

@@ -1,23 +1,35 @@
 # Migrate to caller-owned lifecycle contexts
 
-The next breaking SemStreams lifecycle release replaces duration-based component and service shutdown with
+The breaking SemStreams lifecycle change replaces duration-based component and service shutdown with
 caller-owned contexts. The change intentionally fails compilation at adopter call sites instead of preserving detached
 work through compatibility overloads.
 
-This guide describes a planned breaking contract. Use the release notes to confirm the first tag that contains it.
+The atomic Stop prerequisite described here is implemented and validated. Use the release notes to confirm the first
+tag that contains it; the later Registry declaration/runtime split described by the active OpenSpec change remains
+deferred.
+
+## BREAKING release entry
+
+The atomic Stop prerequisite is a clean Go source break: component and service Stop, manager StopAll and component
+removal, and NATS consumer cleanup now require caller-owned contexts. Start context owns runtime lifetime; an
+independent Stop context bounds native drain, join, and terminal cleanup. There is no duration adapter or detached
+compatibility path. Downstream teams must compile their own current checkout and follow this migration guide; no
+sister repository was edited by SemStreams.
 
 ## Public API changes
 
-The atomic prerequisite changes all three signatures together:
+The atomic prerequisite changes the shutdown and removal signatures together:
 
 ```go
 // Before
 Stop(timeout time.Duration) error
 manager.StopAll(timeout time.Duration) error
+componentManager.RemoveComponent(instanceName string) error
 
 // After
 Stop(ctx context.Context) error
 manager.StopAll(ctx context.Context) error
+componentManager.RemoveComponent(ctx context.Context, instanceName string) error
 ```
 
 Both `component.LifecycleComponent` and `service.Service` use `Stop(context.Context) error`. There is no duration
@@ -25,6 +37,66 @@ overload, default timeout, context-to-duration adapter, or deprecated bridge.
 
 If an adopter does nothing, implementations no longer satisfy their interface and direct Stop calls fail compilation.
 Those compiler errors are the migration list.
+
+`RemoveComponent` is also an intentional compiler-visible break: the caller now supplies the operation context used
+to bound same-generation cancellation, Start finalization, and Stop. There is no duration or background-context
+fallback.
+
+NATS consumer shutdown is part of the same breaking contract:
+
+```go
+// Before: immediate local discard with no completion result.
+client.StopConsumer(streamName, consumerName)
+
+// After: graceful native drain and authoritative completion bounded by ctx.
+err := client.StopConsumer(ctx, streamName, consumerName)
+```
+
+`StopConsumer` preserves the durable consumer and drains callbacks already buffered by the native JetStream consume
+context. An already-ended context starts no drain. If the context expires while a drain is in progress, the call
+returns the context error and a later call rejoins that native drain. A missing or already-stopped binding is a
+successful no-op. Callers that previously stored a `func()` cleanup must migrate it to `func(context.Context) error`
+and pass the independent shutdown context; ordinary library cleanup must not invent a background context.
+`natsclient.Subscription.Drain(ctx)` provides the equivalent graceful contract for Core NATS subscriptions.
+
+Factories that return an existing cleanup function together with an error use that pair to report partial
+acquisition. In particular, `MilestoneSubscriber.Start` may return `(stop != nil, err != nil)` after its first durable
+consumer was acquired and a later consumer failed. Retain and invoke `stop(ctx)` even though Start failed; discarding
+it leaks the partial acquisition. A context-expired cleanup remains rejoinable by a later call with a fresh Stop
+budget, while a terminal cleanup error is replayed.
+
+Streaming model chunk handlers now receive the request context that owns the stream:
+
+```go
+// Before
+client.SetChunkHandler(func(chunk agenticmodel.StreamChunk) { /* ... */ })
+
+// After
+client.SetChunkHandler(func(ctx context.Context, chunk agenticmodel.StreamChunk) { /* ... */ })
+```
+
+Use that context for chunk-side I/O. Do not retain it on the handler or another struct, and do not replace it with a
+background context.
+
+## SemStreams cleanup authority
+
+The implementation uses private `internal/lifecyclejoin` primitives rather than retained contexts:
+
+- `Generation` owns one Start generation's cancel function, completion signal, and terminal Stop result;
+- `Operation` serializes one context-bound native shutdown and lets a later caller rejoin after an earlier caller's
+  context expires; and
+- native NATS subscription drain, JetStream consume-context drain, `http.Server.Shutdown`, and fixed goroutine joins
+  provide authoritative completion. Stop does not substitute a timer for those protocol results.
+
+No context is stored by these primitives or by the migrated lifecycle fields. The Stop argument is the caller's exact
+shutdown authority; it is not saved for later and does not become a new runtime lifetime.
+
+The one new framework-owned root is `RunPartialStartRollback`: it creates a five-second context and runs rollback
+synchronously when Start has acquired resources but cannot publish a usable generation to an external Stop caller.
+It does not detach cleanup or authorize general library fallback to `context.Background()`.
+
+This prerequisite does not claim repository-wide context-debt eradication. Stored contexts and invented roots in
+Rule and the other phase-3 areas listed in the OpenSpec inventory remain deferred work.
 
 ## Composition-root migration
 
@@ -136,6 +208,11 @@ The exact synchronization may differ, but the contract does not:
 - Reject Start while a generation remains active; do not overwrite or leak it.
 - Clear the active generation only after terminal join, then permit the suite's Start-after-Stop lifecycle.
 
+A Start error does not prove that nothing needs cleanup. If Start acquired resources or installed a generation before
+failing, it may retain private cleanup authority. The owner must later call Stop with a fresh live shutdown context;
+it must not pass the canceled or expired Start context. A second Start is rejected until that cleanup reaches a
+terminal result, preventing the failed generation from being overwritten or leaked.
+
 Do not replace the removed `component.ManagedComponent.Cancel` field with a context getter, a public cancel function,
 or an adopter-owned side channel. ComponentManager owns per-instance cancellation.
 
@@ -169,15 +246,16 @@ if err := component.Stop(stopCtx); err != nil {
 Tests are allowed to create roots. Concurrent tests should use channels or wait groups for synchronization; a timeout
 is only a failure bound, never a substitute for synchronization.
 
-## Registry and runtime access migration
+## Deferred Registry and runtime access migration
 
-Registry becomes declaration-only. Its generations, snapshots, observers, and flow graph contain no runtime component
-handles. Retire calls to Registry `Component`, `ListComponents`, deprecated `GetComponent`, handle-returning
-`CreateComponent` and `ReplaceComponent`, and construction-capability-returning `GetFactory`.
+This phase is not part of the implemented atomic Stop prerequisite. Registry still exposes its existing runtime
+handles and construction surfaces. A later breaking slice will make Registry declaration-only and retire calls to
+Registry `Component`, `ListComponents`, deprecated `GetComponent`, handle-returning `CreateComponent` and
+`ReplaceComponent`, and construction-capability-returning `GetFactory`.
 
-ComponentManager also retires `Component`, `ListComponents`, exported `ManagedComponent`, and
-`GetManagedComponents` handle leakage. `component.Lookup` and `Dependencies.ComponentRegistry` no longer provide raw
-sibling handles. Use value DTOs for observation and the manager's scoped `WithComponent` callback for runtime access:
+That later slice will also retire ComponentManager `Component`, `ListComponents`, exported `ManagedComponent`, and
+`GetManagedComponents` handle leakage. It will replace raw sibling access through `component.Lookup` and
+`Dependencies.ComponentRegistry` with value observation and a scoped `WithComponent` callback such as:
 
 ```go
 err := componentManager.WithComponent(ctx, "graph-query", func(comp component.Discoverable) error {
@@ -189,25 +267,28 @@ err := componentManager.WithComponent(ctx, "graph-query", func(comp component.Di
 })
 ```
 
-The handle is valid only inside the callback and must not be retained. The callback runs without manager or gate locks.
-Handle access returns typed missing, Transitioning, or Failed errors; it never returns ambiguous nil.
+In that future API, the handle will be valid only inside the callback and must not be retained. The callback will run
+without manager or gate locks. Handle access will return typed missing, Transitioning, or Failed errors; it will never
+return ambiguous nil.
 
-Do not synchronously Stop, Remove, or Replace the same instance from inside its borrow callback. That would wait on the
-callback's own borrow. Return from the callback, then ask an outer coordinator to request the lifecycle mutation.
+Callers will not synchronously Stop, Remove, or Replace the same instance from inside its borrow callback because that
+would wait on the callback's own borrow. They will return from the callback before asking an outer coordinator to
+request the lifecycle mutation.
 
-Registry declaration observation continues to show only complete old or new generations. It never reports
-Transitioning or Failed because declaration identity is not runtime availability.
+Registry declaration observation will show only complete old or new generations. It will not report Transitioning or
+Failed because declaration identity is not runtime availability.
 
-## Replacement lifecycle changes
+## Deferred replacement lifecycle changes
 
-Replacement closes and drains scoped borrows before canceling the incumbent. It then waits for that exact generation's
-Start completion/finalization before same-generation Stop. Start and Stop never overlap.
+The replacement protocol below is approved target state, not implemented by the atomic Stop prerequisite. The later
+Registry/runtime slice will close and drain scoped borrows before canceling the incumbent, then wait for that exact
+generation's Start completion/finalization before same-generation Stop so Start and Stop never overlap.
 
-Removal uses the same order. Terminal ComponentManager Stop differs: after validating context, it closes every gate,
-cancels every runtime before bounded waits, drains admitted borrows, joins exact Start/finalization, then invokes each
-started component's Stop. Neither callbacks nor drains run under manager or gate locks.
+Removal will use the same order. Terminal ComponentManager Stop will differ: after validating context, it will close
+every gate, cancel every runtime before bounded waits, drain admitted borrows, join exact Start/finalization, then
+invoke each started component's Stop. Neither callbacks nor drains will run under manager or gate locks.
 
-The lifecycle outcomes are:
+The target lifecycle outcomes are:
 
 | Outcome | Current generation | Availability | Candidate |
 |---|---|---|---|
@@ -217,9 +298,9 @@ The lifecycle outcomes are:
 | Commit succeeds, candidate Start succeeds | Candidate started | Available | Current |
 | Commit succeeds, candidate Start fails | Candidate `Failed` | Unavailable | Current; predecessor is not restored |
 
-Cancellation is the availability point of no return. Successful Stop is the later declaration-commit point of no
-return. A request context bounds the operation but never owns admitted runtime; dynamic Start descends from the manager
-supervisor's Start context.
+Cancellation will be the availability point of no return. Successful Stop will be the later declaration-commit point
+of no return. A request context will bound the operation but never own admitted runtime; dynamic Start will descend
+from the manager supervisor's Start context.
 
 ## Sister repositories
 
@@ -241,7 +322,7 @@ This change has no wire-format, NATS subject, persisted-state, bucket, or config
 storage wipe, compatibility reader, or mixed-version bridge. Mixed Go source versions do not compile and are not a
 supported deployment state.
 
-## SemStreams release gates
+## SemStreams release gates and implementation evidence
 
 Before the atomic Stop prerequisite merges:
 
@@ -255,3 +336,13 @@ Before the atomic Stop prerequisite merges:
 
 The semantic tier is mandatory because a lifecycle/interface migration can leave one framework binary or component
 registration path half-migrated even when package tests pass.
+
+The integrated atomic prerequisite passed `task lint`, `go test -race ./...`, `task test:integration`, contract tests,
+schema generation with zero drift, strict OpenSpec validation, `task e2e:core` (3/3), and `task e2e:semantic` (48/48).
+An independent `semstreams-reviewer` approved the post-integration implementation. The semantic run's non-gating
+thematic recorder reported one degraded-floor observation; that recorder metric is preserved as evidence and is not a
+runner failure.
+
+This evidence is from the implementation worktree, not an identified release commit. The breaking entry is indexed
+from `docs/README.md`; the repository's release workflow will derive the GitHub changelog from the eventual commit
+subject. Exact commit/tag evidence therefore remains a release task.

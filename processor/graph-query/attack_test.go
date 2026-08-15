@@ -72,7 +72,7 @@ func TestAttack_ZeroMaxDepth(t *testing.T) {
 	comp.config.MaxDepth = 10
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 	// Request with max_depth: 0 should apply component default
@@ -94,7 +94,7 @@ func TestAttack_MalformedJSON(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 
@@ -139,7 +139,7 @@ func TestAttack_MissingEntityID(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 
@@ -158,7 +158,7 @@ func TestAttack_MissingStartEntity(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 
@@ -187,7 +187,7 @@ func TestAttack_NoGoroutineLeakOnStartStop(t *testing.T) {
 
 		ctx := context.Background()
 		require.NoError(t, comp.Start(ctx))
-		require.NoError(t, comp.Stop(1*time.Second))
+		require.NoError(t, comp.Stop(context.Background()))
 	}
 
 	// Allow goroutines to terminate
@@ -214,7 +214,7 @@ func TestAttack_NoGoroutineLeakOnContextCancel(t *testing.T) {
 	cancel()
 
 	// Stop component
-	require.NoError(t, comp.Stop(1*time.Second))
+	require.NoError(t, comp.Stop(context.Background()))
 
 	// Allow goroutines to terminate
 	time.Sleep(100 * time.Millisecond)
@@ -232,7 +232,7 @@ func TestAttack_ConcurrentHealthChecks(t *testing.T) {
 	comp := createTestComponent(t)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	// Concurrent health checks
 	const n = 100
@@ -262,7 +262,7 @@ func TestAttack_ConcurrentMetricsAccess(t *testing.T) {
 	comp := createTestComponent(t)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	// Concurrent metrics access
 	const n = 100
@@ -306,7 +306,7 @@ func TestAttack_VeryLongEntityID(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 
@@ -328,7 +328,7 @@ func TestAttack_DeeplyNestedJSON(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 
@@ -369,7 +369,7 @@ func TestAttack_PathSearchExcessiveMaxDepth(t *testing.T) {
 	comp.config.MaxDepth = 3 // Component limit
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 
@@ -391,7 +391,7 @@ func TestAttack_PathSearchEmptyStartEntity(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 
@@ -441,7 +441,7 @@ func TestAttack_HealthCheckWithDisconnectedNATS(t *testing.T) {
 	// Should report unhealthy when NATS disconnected
 	assert.False(t, health.Healthy, "component should be unhealthy with disconnected NATS")
 
-	comp.Stop(1 * time.Second)
+	comp.Stop(context.Background())
 }
 
 // ====================================================================================
@@ -454,7 +454,7 @@ func TestAttack_EmptyRequestBody(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 

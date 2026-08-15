@@ -103,7 +103,7 @@ func TestService_Lifecycle(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Stop service
-	err = service.Stop(5 * time.Second)
+	err = service.Stop(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, StatusStopped, service.Status())
 }
@@ -141,7 +141,7 @@ func TestService_HealthMonitoring(t *testing.T) {
 	assert.True(t, waitForHealthy(service, 500*time.Millisecond), "service should become healthy")
 
 	// Stop service
-	err = service.Stop(5 * time.Second)
+	err = service.Stop(context.Background())
 	require.NoError(t, err)
 }
 
@@ -166,7 +166,7 @@ func TestService_GracefulShutdown(t *testing.T) {
 	require.NoError(t, err)
 
 	// Stop with timeout
-	err = service.Stop(100 * time.Millisecond)
+	err = service.Stop(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, StatusStopped, service.Status())
 }
@@ -252,7 +252,7 @@ func TestService_CustomHealthCheck(t *testing.T) {
 	)
 	assert.Equal(t, int64(1), atomic.LoadInt64(&healthCheckCalled))
 
-	err = service.Stop(5 * time.Second)
+	err = service.Stop(context.Background())
 	require.NoError(t, err)
 }
 
@@ -284,7 +284,7 @@ func TestService_FailingHealthCheck(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	assert.False(t, service.IsHealthy())
 
-	err = service.Stop(5 * time.Second)
+	err = service.Stop(context.Background())
 	require.NoError(t, err)
 }
 
@@ -315,7 +315,7 @@ func TestService_ConcurrentOperations(t *testing.T) {
 	// Stop service multiple times concurrently
 	for i := 0; i < 10; i++ {
 		go func() {
-			_ = service.Stop(5 * time.Second)
+			_ = service.Stop(context.Background())
 		}()
 	}
 
@@ -347,7 +347,7 @@ func TestService_Restart(t *testing.T) {
 	assert.Equal(t, StatusRunning, service.Status())
 
 	// Stop service
-	err = service.Stop(5 * time.Second)
+	err = service.Stop(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, StatusStopped, service.Status())
 
@@ -356,7 +356,7 @@ func TestService_Restart(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StatusRunning, service.Status())
 
-	err = service.Stop(5 * time.Second)
+	err = service.Stop(context.Background())
 	require.NoError(t, err)
 }
 
@@ -377,7 +377,7 @@ func TestService_StatusTransitions(t *testing.T) {
 		{
 			name:         "running to stopped",
 			initial:      StatusRunning,
-			action:       func(s *BaseService, _ context.Context) error { return s.Stop(5 * time.Second) },
+			action:       func(s *BaseService, _ context.Context) error { return s.Stop(context.Background()) },
 			expectedNext: StatusStopped,
 		},
 	}
@@ -410,7 +410,7 @@ func TestService_StatusTransitions(t *testing.T) {
 			assert.Equal(t, tt.expectedNext, service.Status())
 
 			// Cleanup
-			service.Stop(5 * time.Second)
+			service.Stop(context.Background())
 		})
 	}
 }

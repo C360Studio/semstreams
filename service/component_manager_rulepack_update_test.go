@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/config"
@@ -27,7 +26,7 @@ func (p *rulePackLifecycleProbe) Start(context.Context) error {
 	return nil
 }
 
-func (p *rulePackLifecycleProbe) Stop(time.Duration) error {
+func (p *rulePackLifecycleProbe) Stop(context.Context) error {
 	p.stops++
 	return nil
 }

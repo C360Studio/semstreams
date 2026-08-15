@@ -2,15 +2,20 @@ package researchsynthesize
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/c360studio/semstreams/agentic/research"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/internal/graphmutation"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/fusion"
+	natsserver "github.com/nats-io/nats-server/v2/server"
+	"github.com/stretchr/testify/require"
 )
 
 func TestComponent_OutputPorts(t *testing.T) {
@@ -30,7 +35,10 @@ func TestComponent_OutputPorts(t *testing.T) {
 // the test can assert on key ordering, envelope shape, and miss vs
 // hit paths.
 type fakeLoopStore struct {
-	mu sync.Mutex
+	mu                sync.Mutex
+	intentEnteredOnce sync.Once
+	intentEntered     chan struct{}
+	intentRelease     chan struct{}
 
 	intent    *research.Intent
 	intentErr error
@@ -58,6 +66,12 @@ type fakeLoopStore struct {
 }
 
 func (s *fakeLoopStore) GetIntent(_ context.Context, _ string) (*research.Intent, error) {
+	if s.intentEntered != nil {
+		s.intentEnteredOnce.Do(func() { close(s.intentEntered) })
+	}
+	if s.intentRelease != nil {
+		<-s.intentRelease
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.getIntentCalls++
@@ -65,6 +79,89 @@ func (s *fakeLoopStore) GetIntent(_ context.Context, _ string) (*research.Intent
 		return nil, s.intentErr
 	}
 	return s.intent, nil
+}
+
+type blockingNATSPort struct {
+	subject string
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (p *blockingNATSPort) ResourceID() string { return "nats:" + p.subject }
+func (*blockingNATSPort) IsExclusive() bool    { return false }
+func (*blockingNATSPort) Kind() component.PortKind {
+	return component.PortKindNATS
+}
+func (p *blockingNATSPort) MarshalJSON() ([]byte, error) {
+	p.once.Do(func() { close(p.entered) })
+	<-p.release
+	return json.Marshal(component.NATSPort{Subject: p.subject})
+}
+
+func TestStartRetainsFailedPartialGenerationForLaterStopRejoin(t *testing.T) {
+	server, err := natsserver.NewServer(&natsserver.Options{
+		Port: -1, NoLog: true, NoSigs: true,
+	})
+	require.NoError(t, err)
+	go server.Start()
+	require.True(t, server.ReadyForConnections(5*time.Second))
+	t.Cleanup(server.Shutdown)
+
+	client, err := natsclient.NewClient(server.ClientURL())
+	require.NoError(t, err)
+	require.NoError(t, client.Connect(t.Context()))
+	t.Cleanup(func() { _ = client.Close(context.Background()) })
+
+	first, err := (component.PortDefinition{
+		Name: "first", Config: component.NATSPort{Subject: "component.synthesize_answer.loop-1"},
+	}).Resolve(component.DirectionInput)
+	require.NoError(t, err)
+	portEntered := make(chan struct{})
+	portRelease := make(chan struct{})
+	second := component.Port{
+		Name: "second", Direction: component.DirectionInput,
+		Config: &blockingNATSPort{subject: "invalid..subject", entered: portEntered, release: portRelease},
+	}
+	handlerEntered := make(chan struct{})
+	handlerRelease := make(chan struct{})
+	loops := &fakeLoopStore{
+		intentErr: context.Canceled, intentEntered: handlerEntered, intentRelease: handlerRelease,
+	}
+	c := newTestComponent(loops, &fakeSynthesizer{})
+	c.deps.NATSClient = client
+	c.inputs = []component.Port{first, second}
+
+	startResult := make(chan error, 1)
+	go func() { startResult <- c.Start(t.Context()) }()
+	<-portEntered
+	require.NoError(t, client.Publish(t.Context(), "component.synthesize_answer.loop-1", nil))
+	require.NoError(t, client.GetConnection().Flush())
+	<-handlerEntered
+	close(portRelease)
+
+	startErr := <-startResult
+	require.Error(t, startErr)
+	require.ErrorIs(t, startErr, context.DeadlineExceeded)
+	require.NotNil(t, c.generation, "failed rollback must retain exact generation authority")
+	require.Len(t, c.subscriptions, 1, "failed rollback must retain the allocated subscription")
+	failedGeneration := c.generation
+
+	retryErr := c.Start(t.Context())
+	require.Error(t, retryErr)
+	require.ErrorContains(t, retryErr, "already started")
+	require.Same(t, failedGeneration, c.generation, "a second Start must not overwrite retained cleanup authority")
+
+	close(handlerRelease)
+	require.NoError(t, c.Stop(t.Context()))
+	require.Empty(t, c.subscriptions)
+	require.Nil(t, c.generation, "terminal Stop must release the completed generation")
+
+	c.inputs = []component.Port{first}
+	require.NoError(t, c.Start(t.Context()), "a new generation may start after exact cleanup reaches terminal success")
+	require.NotNil(t, c.generation)
+	require.NotSame(t, failedGeneration, c.generation)
+	require.NoError(t, c.Stop(t.Context()))
 }
 
 func (s *fakeLoopStore) GetExecutionOutput(_ context.Context, _ string) (*research.ExecutionOutput, error) {

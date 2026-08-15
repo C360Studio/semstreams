@@ -53,7 +53,7 @@ func TestIntegration_ReadinessGaugesAreEmitted(t *testing.T) {
 	require.NoError(t, c.Initialize())
 	registerMergeTestPayload(t, c)
 	require.NoError(t, c.Start(ctx))
-	defer func() { _ = c.Stop(5 * time.Second) }()
+	defer func() { _ = c.Stop(context.Background()) }()
 
 	// Assert a VALUE this component drove, not mere presence. Presence alone is
 	// satisfied by any earlier test's collectors, because DefaultRegisterer swallows

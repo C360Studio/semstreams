@@ -79,5 +79,7 @@
 //	// Lifecycle management
 //	comp.Initialize()
 //	comp.Start(ctx)
-//	defer comp.Stop(5 * time.Second)
+//	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+//	defer shutdownCancel()
+//	_ = comp.Stop(shutdownCtx)
 package graphgateway

@@ -2,7 +2,6 @@ package component
 
 import (
 	"context"
-	"time"
 
 	"github.com/c360studio/semstreams/types"
 )
@@ -45,12 +44,12 @@ func (cs State) String() string {
 // following the unified Pattern A:
 //   - Initialize() error                     // Setup/create only, NO context
 //   - Start(ctx context.Context) error      // Start with context passed through
-//   - Stop(timeout time.Duration) error     // Stop with timeout for graceful shutdown
+//   - Stop(ctx context.Context) error       // Cancel Start lifetime, then bound join/cleanup
 type LifecycleComponent interface {
 	Discoverable
 	Initialize() error
 	Start(ctx context.Context) error
-	Stop(timeout time.Duration) error
+	Stop(ctx context.Context) error
 }
 
 // ManagedComponent tracks a component and its lifecycle state
@@ -68,11 +67,6 @@ type ManagedComponent struct {
 	// actually changed — a no-op update is skipped instead of stop/start-cycling
 	// a healthy running component (gh#520).
 	Config types.ComponentConfig
-
-	// Cancel lets ComponentManager signal this specific component to stop. The
-	// child context itself is passed directly to Start and is never retained on
-	// this mutable lifecycle record.
-	Cancel context.CancelFunc
 
 	// StartOrder tracks the order components were started for reverse shutdown
 	StartOrder int

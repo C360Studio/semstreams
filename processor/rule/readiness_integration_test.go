@@ -79,7 +79,7 @@ func TestIntegration_RuleReadiness_EmptyReplayIsAuthoritativelyNothingToDo(t *te
 	require.NoError(t, err)
 	require.NoError(t, processor.Initialize())
 	require.NoError(t, processor.Start(ctx))
-	t.Cleanup(func() { _ = processor.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = processor.Stop(context.Background()) })
 
 	require.Eventually(t, func() bool {
 		status, ok := readRuleEnvelope(ctx, t, tc)
@@ -129,7 +129,7 @@ func TestIntegration_RuleReadiness_NonEmptyReplayReportsScope(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, processor.Initialize())
 	require.NoError(t, processor.Start(ctx))
-	t.Cleanup(func() { _ = processor.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = processor.Stop(context.Background()) })
 
 	require.Eventually(t, func() bool {
 		status, ok := readRuleEnvelope(ctx, t, tc)

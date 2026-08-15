@@ -324,7 +324,9 @@
 //	lc := comp.(component.LifecycleComponent)
 //	lc.Initialize()
 //	lc.Start(ctx)
-//	defer lc.Stop(5 * time.Second)
+//	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+//	defer shutdownCancel()
+//	_ = lc.Stop(shutdownCtx)
 //
 // Publish a task:
 //

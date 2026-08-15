@@ -54,7 +54,7 @@ func TestComponent_SynchronousHierarchy_IncludedBeforeWrite(t *testing.T) {
 
 			require.NoError(t, comp.Initialize())
 			require.NoError(t, comp.Start(ctx))
-			defer comp.Stop(5 * time.Second)
+			defer comp.Stop(context.Background())
 
 			// Create entity
 			entity := &graph.EntityState{
@@ -133,7 +133,7 @@ func TestComponent_SynchronousHierarchy_SingleWrite(t *testing.T) {
 
 			require.NoError(t, comp.Initialize())
 			require.NoError(t, comp.Start(ctx))
-			defer comp.Stop(5 * time.Second)
+			defer comp.Stop(context.Background())
 
 			// Create entity
 			entity := &graph.EntityState{
@@ -207,7 +207,7 @@ func TestComponent_SynchronousHierarchy_ContainerCreation(t *testing.T) {
 
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(ctx))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	// Create a single entity that triggers all container creation
 	entityID := "c360.platform.robotics.mav1.drone.test001"
@@ -264,7 +264,7 @@ func TestComponent_SynchronousHierarchy_MultipleEntitiesSameType(t *testing.T) {
 
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(ctx))
-	defer comp.Stop(5 * time.Second)
+	defer comp.Stop(context.Background())
 
 	// Create multiple entities that share type container
 	entities := []string{
@@ -422,7 +422,7 @@ func TestComponent_SynchronousHierarchy_NoWatcherLifecycle(t *testing.T) {
 
 			require.NoError(t, comp.Initialize())
 			require.NoError(t, comp.Start(ctx))
-			defer comp.Stop(5 * time.Second)
+			defer comp.Stop(context.Background())
 
 			tt.verify(t, comp)
 		})
@@ -437,7 +437,7 @@ func TestComponent_SynchronousHierarchy_DisabledConfig(t *testing.T) {
 
 		require.NoError(t, comp.Initialize())
 		require.NoError(t, comp.Start(ctx))
-		defer comp.Stop(5 * time.Second)
+		defer comp.Stop(context.Background())
 
 		entityID := "c360.platform.robotics.mav1.drone.test001"
 		entity := &graph.EntityState{
@@ -526,7 +526,7 @@ func TestComponent_SynchronousHierarchy_InvalidEntityID(t *testing.T) {
 
 			require.NoError(t, comp.Initialize())
 			require.NoError(t, comp.Start(ctx))
-			defer comp.Stop(5 * time.Second)
+			defer comp.Stop(context.Background())
 
 			entity := &graph.EntityState{
 				ID: tt.entityID,
@@ -586,7 +586,7 @@ func TestComponent_SynchronousHierarchy_ContextCancellation(t *testing.T) {
 
 		require.NoError(t, comp.Initialize())
 		require.NoError(t, comp.Start(ctx))
-		defer comp.Stop(5 * time.Second)
+		defer comp.Stop(context.Background())
 
 		// Create cancelled context
 		cancelledCtx, cancel := context.WithCancel(context.Background())
@@ -633,7 +633,7 @@ func TestComponent_SynchronousHierarchy_SiblingEdges(t *testing.T) {
 
 		require.NoError(t, comp.Initialize())
 		require.NoError(t, comp.Start(ctx))
-		defer comp.Stop(5 * time.Second)
+		defer comp.Stop(context.Background())
 
 		// Create first entity - no siblings yet
 		entity1ID := "c360.platform.sensors.hvac.temperature.sensor001"
@@ -729,7 +729,7 @@ func TestComponent_SynchronousHierarchy_SiblingEdges(t *testing.T) {
 
 		require.NoError(t, comp.Initialize())
 		require.NoError(t, comp.Start(ctx))
-		defer comp.Stop(5 * time.Second)
+		defer comp.Stop(context.Background())
 
 		// Create 3 entities of same type
 		entityIDs := []string{

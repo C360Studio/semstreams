@@ -51,7 +51,7 @@ func (c *Client) streamResponses(ctx context.Context, rc *responses.Client, req 
 				slog.Any("err", accErr))
 		}
 
-		c.dispatchResponsesChunk(ev, requestID)
+		c.dispatchResponsesChunk(ctx, ev, requestID)
 
 		if c.metrics != nil {
 			c.metrics.recordStreamChunk(req.Model)
@@ -63,7 +63,7 @@ func (c *Client) streamResponses(ctx context.Context, rc *responses.Client, req 
 	}
 
 	if c.chunkHandler != nil {
-		c.chunkHandler(StreamChunk{RequestID: requestID, Done: true})
+		c.chunkHandler(ctx, StreamChunk{RequestID: requestID, Done: true})
 	}
 
 	final := acc.Final()
@@ -75,18 +75,18 @@ func (c *Client) streamResponses(ctx context.Context, rc *responses.Client, req 
 // flat StreamChunk shape the rest of the agentic stack consumes.
 // Non-text events (lifecycle, item lifecycle) are not forwarded —
 // they don't carry visible content.
-func (c *Client) dispatchResponsesChunk(ev *responses.Event, requestID string) {
+func (c *Client) dispatchResponsesChunk(ctx context.Context, ev *responses.Event, requestID string) {
 	if c.chunkHandler == nil {
 		return
 	}
 	switch ev.Type {
 	case responses.EventTypeOutputTextDelta:
-		c.chunkHandler(StreamChunk{
+		c.chunkHandler(ctx, StreamChunk{
 			RequestID:    requestID,
 			ContentDelta: ev.Delta,
 		})
 	case responses.EventTypeReasoningSummaryTextDelta:
-		c.chunkHandler(StreamChunk{
+		c.chunkHandler(ctx, StreamChunk{
 			RequestID:      requestID,
 			ReasoningDelta: ev.Delta,
 		})
@@ -94,7 +94,7 @@ func (c *Client) dispatchResponsesChunk(ev *responses.Event, requestID string) {
 		// Function-call arguments deltas flow through as content for
 		// trace observability. The terminal accumulator still
 		// reconstructs the full ToolCall from the .done snapshot.
-		c.chunkHandler(StreamChunk{
+		c.chunkHandler(ctx, StreamChunk{
 			RequestID:    requestID,
 			ContentDelta: ev.Delta,
 		})

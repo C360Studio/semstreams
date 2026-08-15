@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/acme"
@@ -65,16 +66,17 @@ type Input struct {
 	jetStreamOutputs map[string]bool
 
 	// Lifecycle management
-	shutdown     chan struct{}
-	shutdownOnce sync.Once
-	done         chan struct{}
-	doneOnce     sync.Once
-	started      atomic.Bool
-	startTime    time.Time
-	cancel       context.CancelFunc
-	wg           sync.WaitGroup
-	lifecycleMu  sync.Mutex
-	tlsCleanup   func() // TLS cleanup function (ACME renewal loop)
+	shutdown          chan struct{}
+	shutdownOnce      sync.Once
+	done              chan struct{}
+	doneOnce          sync.Once
+	started           atomic.Bool
+	startTime         time.Time
+	wg                sync.WaitGroup
+	generation        *lifecyclejoin.Generation
+	shutdownOperation *lifecyclejoin.Operation
+	lifecycleMu       sync.Mutex
+	tlsCleanup        func() // TLS cleanup function (ACME renewal loop)
 
 	// Statistics
 	messagesReceived  int64
@@ -533,7 +535,6 @@ func (i *Input) Start(ctx context.Context) error {
 
 	// Create component context (local variable, not stored)
 	componentCtx, cancel := context.WithCancel(ctx)
-	i.cancel = cancel
 
 	// Start message processor goroutine (captures componentCtx)
 	i.wg.Add(1)
@@ -548,9 +549,11 @@ func (i *Input) Start(ctx context.Context) error {
 	}
 
 	if err != nil {
-		i.cancel()
+		cancel()
 		return err
 	}
+	i.generation = lifecyclejoin.NewGeneration(cancel, i.wg.Wait)
+	i.shutdownOperation = lifecyclejoin.NewOperation()
 
 	i.startTime = time.Now()
 	i.started.Store(true)
@@ -558,63 +561,42 @@ func (i *Input) Start(ctx context.Context) error {
 }
 
 // Stop stops the WebSocket input component
-func (i *Input) Stop(timeout time.Duration) error {
+func (i *Input) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
 	i.lifecycleMu.Lock()
-	defer i.lifecycleMu.Unlock()
-
-	if !i.started.Load() {
-		return nil // Already stopped
+	generation := i.generation
+	shutdownOperation := i.shutdownOperation
+	if generation == nil {
+		i.lifecycleMu.Unlock()
+		return nil
 	}
-
-	// Signal shutdown exactly once
-	i.shutdownOnce.Do(func() {
-		close(i.shutdown)
-	})
-	i.cancel()
-
-	// Stop mode-specific logic with timeout context
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	if i.mode == ModeServer {
-		i.stopServer(ctx)
-	} else {
+	i.lifecycleMu.Unlock()
+	generation.Cancel()
+	prepareErr := shutdownOperation.Run(ctx, func(ctx context.Context) error {
+		if i.mode == ModeServer {
+			return i.stopServer(ctx)
+		}
 		i.stopClient()
-	}
-
-	// Wait for goroutines with timeout
-	doneCh := make(chan struct{})
-	go func() {
-		i.wg.Wait()
-		close(doneCh)
-	}()
-
-	select {
-	case <-doneCh:
-		// Clean shutdown
-	case <-time.After(timeout):
-		return errs.WrapTransient(
-			fmt.Errorf("shutdown timeout after %v", timeout),
-			"websocket_input",
-			"Stop",
-			"wait for goroutines",
-		)
-	}
-
-	// Stop ACME renewal loop if active
-	if i.tlsCleanup != nil {
-		i.tlsCleanup()
-	}
-
-	// Close message buffer after goroutines have stopped
-	_ = i.messageBuffer.Close()
-
-	// Close done exactly once
-	i.doneOnce.Do(func() {
-		close(i.done)
+		return nil
 	})
-	i.started.Store(false)
-	return nil
+	if errors.Is(prepareErr, context.Canceled) || errors.Is(prepareErr, context.DeadlineExceeded) {
+		return errs.WrapTransient(prepareErr, "websocket_input", "Stop", "shutdown server")
+	}
+
+	return generation.Stop(ctx, func() error {
+		i.shutdownOnce.Do(func() { close(i.shutdown) })
+		return prepareErr
+	}, func(context.Context) error {
+		if i.tlsCleanup != nil {
+			i.tlsCleanup()
+		}
+		closeErr := i.messageBuffer.Close()
+		i.doneOnce.Do(func() { close(i.done) })
+		i.started.Store(false)
+		return closeErr
+	})
 }
 
 // Process implements component.LifecycleComponent (not used for input components)
@@ -699,9 +681,10 @@ func (i *Input) startServer(ctx context.Context) error {
 }
 
 // stopServer stops the WebSocket server
-func (i *Input) stopServer(ctx context.Context) {
+func (i *Input) stopServer(ctx context.Context) error {
+	var shutdownErr error
 	if i.httpServer != nil {
-		_ = i.httpServer.Shutdown(ctx)
+		shutdownErr = i.httpServer.Shutdown(ctx)
 	}
 
 	// Close all client connections
@@ -711,6 +694,7 @@ func (i *Input) stopServer(ctx context.Context) {
 	}
 	i.clients = make(map[string]*websocket.Conn)
 	i.clientsMu.Unlock()
+	return shutdownErr
 }
 
 // startClient starts the WebSocket client (Mode: client)

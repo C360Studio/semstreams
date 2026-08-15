@@ -76,8 +76,10 @@
 //	// Start receiving
 //	input.Start(ctx)
 //
-//	// Graceful shutdown with timeout
-//	input.Stop(5 * time.Second)
+//	// Graceful shutdown bounded by caller authority
+//	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+//	defer shutdownCancel()
+//	_ = input.Stop(shutdownCtx)
 //
 // During shutdown:
 //  1. Stop accepting new datagrams

@@ -70,7 +70,7 @@ func TestIntegration_GraphQuery_SummaryBucketCreatedLate_Attaches(t *testing.T) 
 	gq.summaryViewApplied = func(_ string, revision uint64) { applied <- revision }
 	require.NoError(t, gq.Initialize())
 	require.NoError(t, gq.Start(ctx))
-	defer func() { _ = gq.Stop(5 * time.Second) }()
+	defer func() { _ = gq.Stop(context.Background()) }()
 
 	// Sanity: with COMMUNITY_SUMMARIES still absent, SummaryFor misses (statistical floor).
 	_, ok = gq.summaryFor(comm)

@@ -58,7 +58,7 @@ func TestIntegration_TemporalIndexFlow(t *testing.T) {
 
 	// Start component (now that input bucket exists)
 	require.NoError(t, temporalIndex.Start(ctx))
-	defer temporalIndex.Stop(5 * time.Second)
+	defer temporalIndex.Stop(context.Background())
 
 	// Wait for TEMPORAL_INDEX bucket to be created by component
 	var temporalBucket jetstream.KeyValue
@@ -215,7 +215,7 @@ func TestIntegration_TemporalIndexAccumulation(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, temporalIndex.Start(ctx))
-	defer temporalIndex.Stop(5 * time.Second)
+	defer temporalIndex.Stop(context.Background())
 
 	var temporalBucket jetstream.KeyValue
 	require.Eventually(t, func() bool {

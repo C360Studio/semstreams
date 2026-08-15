@@ -117,7 +117,7 @@ func TestComponentManager_RestartsDependentsOnModelRegistryChange(t *testing.T) 
 
 	require.NoError(t, cm.Initialize())
 	require.NoError(t, cm.Start(ctx))
-	defer cm.Stop(5 * time.Second)
+	defer cm.Stop(context.Background())
 
 	// The boot barrier has returned, so both initial instance Starts must also
 	// have returned. Assert that contract explicitly with bounded channel waits.
@@ -222,7 +222,7 @@ func (c *registryTestComponent) Start(_ context.Context) error {
 	c.startMu.Unlock()
 	return nil
 }
-func (c *registryTestComponent) Stop(_ time.Duration) error { return nil }
+func (c *registryTestComponent) Stop(context.Context) error { return nil }
 
 var _ component.Discoverable = (*registryTestComponent)(nil)
 var _ component.LifecycleComponent = (*registryTestComponent)(nil)

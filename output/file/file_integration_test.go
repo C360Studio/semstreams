@@ -106,7 +106,7 @@ func TestIntegration_BasicJSONLFileWrite(t *testing.T) {
 	// Start output
 	err = fileOutput.Start(ctx)
 	require.NoError(t, err)
-	defer fileOutput.Stop(5 * time.Second)
+	defer fileOutput.Stop(context.Background())
 
 	// Give output time to subscribe
 	time.Sleep(100 * time.Millisecond)
@@ -186,7 +186,7 @@ func TestIntegration_JSONFormatPrettyPrint(t *testing.T) {
 
 	err = fileOutput.Start(ctx)
 	require.NoError(t, err)
-	defer fileOutput.Stop(5 * time.Second)
+	defer fileOutput.Stop(context.Background())
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -260,7 +260,7 @@ func TestIntegration_RawFormat(t *testing.T) {
 
 	err = fileOutput.Start(ctx)
 	require.NoError(t, err)
-	defer fileOutput.Stop(5 * time.Second)
+	defer fileOutput.Stop(context.Background())
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -335,7 +335,7 @@ func TestIntegration_AppendMode(t *testing.T) {
 	natsClient.Publish(ctx, "test.file.append1", data1)
 
 	time.Sleep(2 * time.Second)
-	fileOutput1.Stop(5 * time.Second)
+	fileOutput1.Stop(context.Background())
 
 	// Verify first file has 1 line
 	content1, err := os.ReadFile(outputFile)
@@ -380,7 +380,7 @@ func TestIntegration_AppendMode(t *testing.T) {
 	natsClient.Publish(ctx, "test.file.append2", data2)
 
 	time.Sleep(2 * time.Second)
-	fileOutput2.Stop(5 * time.Second)
+	fileOutput2.Stop(context.Background())
 
 	// Verify file now has 2 lines (appended)
 	content2, err := os.ReadFile(outputFile)
@@ -430,7 +430,7 @@ func TestIntegration_BufferFlushing(t *testing.T) {
 
 	err = fileOutput.Start(ctx)
 	require.NoError(t, err)
-	defer fileOutput.Stop(5 * time.Second)
+	defer fileOutput.Stop(context.Background())
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -494,7 +494,7 @@ func TestIntegration_MultipleSubjects(t *testing.T) {
 
 	err = fileOutput.Start(ctx)
 	require.NoError(t, err)
-	defer fileOutput.Stop(5 * time.Second)
+	defer fileOutput.Stop(context.Background())
 
 	time.Sleep(100 * time.Millisecond)
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/dispatch"
 	"github.com/c360studio/semstreams/pkg/gateddag"
@@ -68,8 +69,8 @@ type executor struct {
 	// trigger coalesces a burst of watch events into <=1 queued pass (cap 1).
 	trigger chan struct{}
 
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	generation *lifecyclejoin.Generation
+	wg         sync.WaitGroup
 }
 
 // start wires the dispatcher, the watch pump, and the eval goroutine. The
@@ -92,7 +93,6 @@ func (e *executor) start(ctx context.Context) error {
 	e.trigger = make(chan struct{}, 1)
 
 	runCtx, cancel := context.WithCancel(ctx)
-	e.cancel = cancel
 
 	// Concurrency leg only: NO CompletionKVBucket (its completion-watcher
 	// suppresses bootstrap replay; re-eval/recovery ride the lifecycle Watch
@@ -185,6 +185,7 @@ func (e *executor) start(ctx context.Context) error {
 			}
 		}
 	}()
+	e.generation = lifecyclejoin.NewGeneration(cancel, e.wg.Wait)
 
 	return nil
 }
@@ -198,16 +199,14 @@ func (e *executor) nudge() {
 }
 
 // stop cancels the run context and waits for goroutines + the dispatcher.
-func (e *executor) stop(timeout time.Duration) {
-	if e.cancel != nil {
-		e.cancel()
-	}
+func (e *executor) stop(ctx context.Context) error {
+	e.generation.Cancel()
 	if e.disp != nil {
-		stopCtx, c := context.WithTimeout(context.Background(), timeout)
-		_ = e.disp.Stop(stopCtx)
-		c()
+		if err := e.disp.Stop(ctx); err != nil {
+			return err
+		}
 	}
-	e.wg.Wait()
+	return e.generation.Stop(ctx, nil, nil)
 }
 
 // reEvaluate is one authoritative pass. Single-flight via evalMu (invariant #1).

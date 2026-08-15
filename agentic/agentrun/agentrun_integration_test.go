@@ -136,7 +136,7 @@ func TestIntegration_MilestoneSubscriber_GracefulSkipWhenStreamAbsent(t *testing
 	stop, err := sub.Start(ctx, tc.Client, agentrun.StartConfig{StreamName: agentrun.AgentStreamName})
 	require.NoError(t, err, "Start must not error when the AGENT stream is absent (gh#246)")
 	require.NotNil(t, stop, "Start must return a non-nil (no-op) stop func when skipping")
-	stop() // no-op stop must not panic
+	require.NoError(t, stop(ctx))
 
 	// And it did not CREATE the stream to make the error go away. This subscriber is
 	// the framework's reference read-only consumer, and a stream's limits belong to
@@ -168,7 +168,7 @@ func TestIntegration_MilestoneSubscriber_StartsWhenStreamPresent(t *testing.T) {
 	})
 	require.NoError(t, err, "Start must succeed when the AGENT stream is present")
 	require.NotNil(t, stop)
-	stop()
+	require.NoError(t, stop(ctx))
 }
 
 func TestIntegration_MilestoneSubscriberProductionEnvelopeCallbacks(t *testing.T) {
@@ -183,7 +183,7 @@ func TestIntegration_MilestoneSubscriberProductionEnvelopeCallbacks(t *testing.T
 	sub.AddHandler(handler)
 	stop, err := sub.Start(ctx, tc.Client, agentrun.StartConfig{StreamName: agentrun.AgentStreamName, ConsumerNameSuffix: "terminal-production"})
 	require.NoError(t, err)
-	defer stop()
+	defer func() { require.NoError(t, stop(ctx)) }()
 
 	at := time.Now().UTC()
 	payloads := []message.Payload{

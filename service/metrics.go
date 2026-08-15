@@ -6,9 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
+	"sync"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/security"
@@ -18,11 +19,19 @@ import (
 type Metrics struct {
 	*BaseService
 
-	config     MetricsConfig           // Consistent config field
-	server     *metric.Server          // Runtime state
-	registry   *metric.MetricsRegistry // Dependency
-	natsClient *natsclient.Client      // For JetStream metrics publishing
-	security   security.Config         // Platform security config
+	config       MetricsConfig           // Consistent config field
+	server       metricsServer           // Runtime state
+	registry     *metric.MetricsRegistry // Dependency
+	natsClient   *natsclient.Client      // For JetStream metrics publishing
+	security     security.Config         // Platform security config
+	generation   *lifecyclejoin.Generation
+	teardownOnce sync.Once
+	teardownErr  error
+}
+
+type metricsServer interface {
+	Start() error
+	Stop() error
 }
 
 // MetricsConfig holds configuration for the metrics service
@@ -96,8 +105,14 @@ func NewMetrics(rawConfig json.RawMessage, deps *Dependencies) (Service, error) 
 
 // Start starts the metrics HTTP server
 func (m *Metrics) Start(ctx context.Context) error {
+	if err := validateLifecycleContext(ctx, "Metrics", "Start"); err != nil {
+		return err
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	generation := lifecyclejoin.NewGeneration(cancel, nil)
 	// Call BaseService Start first
-	if err := m.BaseService.Start(ctx); err != nil {
+	if err := m.BaseService.Start(runCtx); err != nil {
+		cancel()
 		return err
 	}
 
@@ -114,12 +129,16 @@ func (m *Metrics) Start(ctx context.Context) error {
 	slog.Info("Starting metrics server", "port", m.config.Port, "path", m.config.Path)
 	if err := server.Start(); err != nil {
 		m.mu.Unlock()
-		if stopErr := m.BaseService.Stop(5 * time.Second); stopErr != nil {
+		generation.Cancel()
+		if stopErr := lifecyclejoin.RunPartialStartRollback(m.BaseService.Stop); stopErr != nil {
 			return errors.Join(fmt.Errorf("start metrics server: %w", err), stopErr)
 		}
 		return fmt.Errorf("start metrics server: %w", err)
 	}
 	m.server = server
+	m.generation = generation
+	m.teardownOnce = sync.Once{}
+	m.teardownErr = nil
 
 	m.mu.Unlock()
 	scheme := "http"
@@ -136,29 +155,37 @@ func (m *Metrics) Start(ctx context.Context) error {
 }
 
 // Stop stops the metrics HTTP server
-func (m *Metrics) Stop(timeout time.Duration) error {
-	m.mu.Lock()
-
-	if m.server != nil {
-		// Stop the metrics server
-		if err := m.server.Stop(); err != nil {
-			slog.Error("Error stopping metrics server", "error", err)
-			m.mu.Unlock()
-			return fmt.Errorf("failed to stop metrics server: %w", err)
-		}
-		m.server = nil
-	}
-
-	m.mu.Unlock()
-
-	// Call BaseService Stop to handle status changes
-	if err := m.BaseService.Stop(timeout); err != nil {
+func (m *Metrics) Stop(ctx context.Context) error {
+	if err := validateLifecycleContext(ctx, "Metrics", "Stop"); err != nil {
 		return err
 	}
+	m.mu.Lock()
+	generation := m.generation
+	m.mu.Unlock()
+	if generation == nil {
+		return nil
+	}
 
-	slog.Info("Metrics service stopped")
-
-	return nil
+	return generation.Stop(ctx, nil, func(ctx context.Context) error {
+		m.teardownOnce.Do(func() {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			if m.server != nil {
+				if err := m.server.Stop(); err != nil {
+					m.teardownErr = fmt.Errorf("failed to stop metrics server: %w", err)
+					slog.Error("Error stopping metrics server", "error", err)
+				} else {
+					m.server = nil
+				}
+			}
+		})
+		baseErr := m.BaseService.Stop(ctx)
+		if ctx.Err() != nil && errors.Is(baseErr, ctx.Err()) {
+			return errors.Join(m.teardownErr, baseErr)
+		}
+		slog.Info("Metrics service stopped")
+		return errors.Join(m.teardownErr, baseErr)
+	})
 }
 
 // healthCheck performs health check for metrics service

@@ -122,8 +122,6 @@ func (rp *Processor) statusMetricsLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-rp.shutdown:
-			return
 		case <-ticker.C:
 			rp.refreshReadinessStatus(ctx)
 		}

@@ -132,7 +132,9 @@
 //	input.Start(ctx)
 //
 //	// Graceful shutdown
-//	input.Stop(5 * time.Second)
+//	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+//	defer shutdownCancel()
+//	_ = input.Stop(shutdownCtx)
 //
 // During shutdown:
 //  1. Signal shutdown via channel

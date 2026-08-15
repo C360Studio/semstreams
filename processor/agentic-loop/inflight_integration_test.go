@@ -122,7 +122,7 @@ func TestIntegration_InFlight_OutstandingWork(t *testing.T) {
 	stopped := false
 	defer func() {
 		if !stopped {
-			lc.Stop(5 * time.Second)
+			lc.Stop(context.Background())
 		}
 	}()
 
@@ -164,7 +164,7 @@ func TestIntegration_InFlight_OutstandingWork(t *testing.T) {
 	// This is the most expensive wrong answer in the whole API — the work is on the
 	// stream, and "nothing in flight" would strand it.
 	publishTaskBurst(t, natsClient, taskSubject, "loop_inflight_pending", 300)
-	require.NoError(t, lc.Stop(5*time.Second))
+	require.NoError(t, lc.Stop(context.Background()))
 	stopped = true
 
 	var lastErr error
@@ -194,9 +194,9 @@ func TestIntegration_InFlight_DeploymentsAreAddressedSeparately(t *testing.T) {
 	const idleSubject = "agent.task.deploy_idle"
 
 	busy, busyQuery := inflightTestComponent(ctx, t, natsClient, busySubject, "deploy-busy")
-	defer busy.Stop(5 * time.Second)
+	defer busy.Stop(context.Background())
 	idle, idleQuery := inflightTestComponent(ctx, t, natsClient, idleSubject, "deploy-idle")
-	defer idle.Stop(5 * time.Second)
+	defer idle.Stop(context.Background())
 
 	require.NotEqual(t, busyQuery, idleQuery,
 		"distinct deployments must occupy distinct subjects, or the requester cannot "+
@@ -249,7 +249,7 @@ func TestIntegration_InFlightQuery(t *testing.T) {
 
 	const taskSubject = "agent.task.wire_contract"
 	lc, querySubject := inflightTestComponent(ctx, t, natsClient, taskSubject, "wire-contract-test")
-	defer lc.Stop(5 * time.Second)
+	defer lc.Stop(context.Background())
 
 	t.Run("bound subject returns a known, decodable answer", func(t *testing.T) {
 		resp, err := queryInFlight(ctx, t, natsClient, querySubject, taskSubject)

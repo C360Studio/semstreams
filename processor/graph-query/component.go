@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/graph/clustering"
 	"github.com/c360studio/semstreams/graph/llm"
 	"github.com/c360studio/semstreams/graph/query"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -172,7 +173,7 @@ type Component struct {
 	wg          sync.WaitGroup
 	initialized bool
 	started     bool
-	cancel      context.CancelFunc
+	generation  *lifecyclejoin.Generation
 
 	// Health tracking
 	healthMu   sync.RWMutex
@@ -471,10 +472,10 @@ func (c *Component) Start(ctx context.Context) error {
 
 	// Create component context for lifecycle management
 	componentCtx, cancel := context.WithCancel(ctx)
-	c.cancel = cancel
 
 	// Wait for NATS connection
 	if err := c.natsClient.WaitForConnection(componentCtx); err != nil {
+		cancel()
 		return fmt.Errorf("wait for NATS connection: %w", err)
 	}
 
@@ -496,6 +497,7 @@ func (c *Component) Start(ctx context.Context) error {
 
 	// Subscribe to query subjects
 	if err := c.setupQueryHandlers(componentCtx); err != nil {
+		cancel()
 		return fmt.Errorf("subscribe to queries: %w", err)
 	}
 
@@ -515,6 +517,7 @@ func (c *Component) Start(ctx context.Context) error {
 		defer c.wg.Done()
 		c.superviseSummaryView(componentCtx)
 	}()
+	c.generation = lifecyclejoin.NewGeneration(cancel, c.wg.Wait)
 
 	c.started = true
 
@@ -523,62 +526,46 @@ func (c *Component) Start(ctx context.Context) error {
 }
 
 // Stop stops the component
-func (c *Component) Stop(timeout time.Duration) error {
+func (c *Component) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
 	c.mu.Lock()
-	if !c.started {
+	generation := c.generation
+	if generation == nil {
 		c.mu.Unlock()
 		return nil // Not started - safe to stop
 	}
 
-	// Unsubscribe from query handlers
-	for _, sub := range c.querySubscriptions {
-		if sub != nil {
-			if err := sub.Unsubscribe(); err != nil {
-				c.logger.Warn("query subscription unsubscribe error", slog.Any("error", err))
+	c.mu.Unlock()
+
+	return generation.Stop(ctx, func() error {
+		for _, sub := range c.querySubscriptions {
+			if sub != nil {
+				if err := sub.Unsubscribe(); err != nil {
+					c.logger.Warn("query subscription unsubscribe error", slog.Any("error", err))
+				}
 			}
 		}
-	}
-	c.querySubscriptions = nil
-
-	// Close LLM client if present
-	if c.llmClient != nil {
-		if err := c.llmClient.Close(); err != nil {
-			c.logger.Warn("LLM client close error", slog.Any("error", err))
+		c.querySubscriptions = nil
+		if c.llmClient != nil {
+			if err := c.llmClient.Close(); err != nil {
+				c.logger.Warn("LLM client close error", slog.Any("error", err))
+			}
 		}
-	}
-
-	// Close answer synthesizer (releases its LLM client if LLM-backed)
-	if c.answerSynthesizer != nil {
-		if err := c.answerSynthesizer.Close(); err != nil {
-			c.logger.Warn("answer synthesizer close error", slog.Any("error", err))
+		if c.answerSynthesizer != nil {
+			if err := c.answerSynthesizer.Close(); err != nil {
+				c.logger.Warn("answer synthesizer close error", slog.Any("error", err))
+			}
 		}
-	}
-
-	if c.cancel != nil {
-		c.cancel()
-	}
-	c.mu.Unlock()
-
-	// Wait for background goroutines with timeout
-	done := make(chan struct{})
-	go func() {
-		c.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		// Clean shutdown
-	case <-time.After(timeout):
-		c.logger.Warn("stop timeout waiting for goroutines")
-	}
-
-	c.mu.Lock()
-	c.started = false
-	c.mu.Unlock()
-
-	c.logger.Info("graph-query coordinator stopped")
-	return nil
+		return nil
+	}, func(context.Context) error {
+		c.mu.Lock()
+		c.started = false
+		c.mu.Unlock()
+		c.logger.Info("graph-query coordinator stopped")
+		return nil
+	})
 }
 
 func (c *Component) superviseCommunityGenerations(ctx context.Context) {

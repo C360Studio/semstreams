@@ -299,7 +299,7 @@ func TestComponent_Health_Running(t *testing.T) {
 
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(ctx))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	// Allow time for component to become healthy
 	time.Sleep(100 * time.Millisecond)
@@ -373,7 +373,7 @@ func TestComponent_Start_Success(t *testing.T) {
 
 	require.NoError(t, comp.Initialize())
 	err := comp.Start(ctx)
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	assert.NoError(t, err)
 }
@@ -395,7 +395,7 @@ func TestComponent_Start_AlreadyStarted(t *testing.T) {
 
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(ctx))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	// Start again - should be idempotent or return appropriate error
 	err := comp.Start(ctx)
@@ -413,7 +413,7 @@ func TestComponent_Stop_Success(t *testing.T) {
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(ctx))
 
-	err := comp.Stop(5 * time.Second)
+	err := comp.Stop(context.Background())
 
 	assert.NoError(t, err)
 }
@@ -422,7 +422,7 @@ func TestComponent_Stop_BeforeStart(t *testing.T) {
 	comp := createTestComponent(t)
 
 	// Stop without Start
-	err := comp.Stop(1 * time.Second)
+	err := comp.Stop(context.Background())
 
 	assert.NoError(t, err, "Stop should be safe even if not started")
 }
@@ -436,7 +436,7 @@ func TestComponent_Stop_Timeout(t *testing.T) {
 	require.NoError(t, comp.Start(ctx))
 
 	// Very short timeout
-	err := comp.Stop(1 * time.Nanosecond)
+	err := comp.Stop(context.Background())
 
 	// Should either succeed quickly or timeout gracefully
 	// Implementation may vary, but should not panic
@@ -518,6 +518,23 @@ func TestComponent_RegisterHTTPHandlers_RegistersPlayground(t *testing.T) {
 
 	// Playground should be registered (may return HTML or redirect, but not 404)
 	assert.NotEqual(t, http.StatusNotFound, w.Code, "Playground handler should be registered when enabled")
+}
+
+func TestStandaloneServerBaseContextCancelsBeforeShutdownJoin(t *testing.T) {
+	comp := createTestComponent(t)
+	comp.config.StandaloneServer = true
+	comp.config.BindAddress = "127.0.0.1:0"
+	require.NoError(t, comp.Initialize())
+	require.NoError(t, comp.Start(context.Background()))
+	require.NotNil(t, comp.httpServer.BaseContext)
+
+	handlerCtx := comp.httpServer.BaseContext(nil)
+	require.NoError(t, comp.Stop(context.Background()))
+	select {
+	case <-handlerCtx.Done():
+	default:
+		t.Fatal("standalone handler context was not canceled before Stop returned")
+	}
 }
 
 func TestComponent_RegisterHTTPHandlers_NoPlaygroundByDefault(t *testing.T) {
@@ -703,7 +720,7 @@ func TestComponent_RespectsContext_Cancellation(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Component should handle cancellation gracefully
-	err := comp.Stop(1 * time.Second)
+	err := comp.Stop(context.Background())
 	assert.NoError(t, err)
 }
 

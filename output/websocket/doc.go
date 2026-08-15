@@ -86,7 +86,9 @@
 //	output.Start(ctx)
 //
 //	// Graceful shutdown
-//	output.Stop(5 * time.Second)
+//	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+//	defer shutdownCancel()
+//	_ = output.Stop(shutdownCtx)
 //
 // During shutdown:
 //  1. Stop accepting new client connections

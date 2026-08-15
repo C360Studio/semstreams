@@ -44,7 +44,7 @@ func startPrefixTestComponent(t *testing.T) (*Component, *natsclient.Client) {
 	c := comp.(*Component)
 	require.NoError(t, c.Initialize())
 	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 
 	// Allow subscriptions to stabilise.
 	time.Sleep(100 * time.Millisecond)

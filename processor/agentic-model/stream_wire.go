@@ -1,6 +1,7 @@
 package agenticmodel
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"strings"
@@ -77,7 +78,7 @@ func newWireStreamAccumulator(adapter ProviderAdapter, logger *slog.Logger, hand
 // the (content, reasoning) deltas routed through the inline-think
 // state machine. If a chunk handler is registered, the deltas are
 // dispatched in the same call to keep ordering deterministic.
-func (a *wireStreamAccumulator) processChunk(chunk *wire.StreamChunk, requestID string) (contentDelta, reasoningDelta string) {
+func (a *wireStreamAccumulator) processChunk(ctx context.Context, chunk *wire.StreamChunk, requestID string) (contentDelta, reasoningDelta string) {
 	if chunk == nil {
 		return "", ""
 	}
@@ -143,7 +144,7 @@ func (a *wireStreamAccumulator) processChunk(chunk *wire.StreamChunk, requestID 
 	// unconditionally so consumers see one tick per delta, even when the
 	// delta contained only tool_call updates (empty content + reasoning).
 	if a.chunkHandler != nil {
-		a.chunkHandler(StreamChunk{
+		a.chunkHandler(ctx, StreamChunk{
 			RequestID:      requestID,
 			ContentDelta:   contentDelta,
 			ReasoningDelta: reasoningDelta,

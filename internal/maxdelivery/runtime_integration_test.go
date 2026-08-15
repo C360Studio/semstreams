@@ -70,7 +70,7 @@ func TestRestrictiveAuthorizationRuntimeContract(t *testing.T) {
 		telemetry := newIntegrationTelemetry(false)
 		stop, err := start(ctx, runtimeClient, telemetry)
 		require.NoError(t, err)
-		defer stop()
+		defer func() { require.NoError(t, stop(ctx)) }()
 
 		baseline := captureInfo.State.LastSeq
 		want := forceMaxDeliveryAdvisory(t, ctx, admin, "AUTH_PROOF", "auth.proof")
@@ -190,10 +190,10 @@ func TestThreeNodeClusterReplicasOneRetainsAndHandlesOccurrenceOnce(t *testing.T
 	telemetry := newIntegrationTelemetry(false)
 	stopSecondNode, err := start(ctx, clients[1], telemetry)
 	require.NoError(t, err)
-	defer stopSecondNode()
+	defer func() { require.NoError(t, stopSecondNode(ctx)) }()
 	stopThirdNode, err := start(ctx, clients[2], telemetry)
 	require.NoError(t, err)
-	defer stopThirdNode()
+	defer func() { require.NoError(t, stopThirdNode(ctx)) }()
 
 	want := forceMaxDeliveryAdvisory(t, ctx, clients[0], "CLUSTER_PROOF", "cluster.proof")
 	select {

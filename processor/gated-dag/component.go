@@ -15,6 +15,7 @@ import (
 	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 )
 
@@ -134,6 +135,9 @@ func (c *Component) Initialize() error {
 
 // Start builds the executor and begins the eval loop.
 func (c *Component) Start(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, componentName, "Start", "context cannot be nil")
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.running {
@@ -286,14 +290,19 @@ func subjectCovered(want string, subjects []string) bool {
 }
 
 // Stop gracefully stops the executor.
-func (c *Component) Stop(timeout time.Duration) error {
+func (c *Component) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.running {
 		return nil
 	}
 	if c.exec != nil {
-		c.exec.stop(timeout)
+		if err := c.exec.stop(ctx); err != nil {
+			return err
+		}
 	}
 	c.running = false
 	c.logger.Info("gated-dag executor stopped")

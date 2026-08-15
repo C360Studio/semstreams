@@ -42,7 +42,7 @@ func TestTrajectoryFactBucketIsImmutableHistoryWithoutTTL(t *testing.T) {
 	require.NoError(t, err)
 	lifecycle := discoverable.(component.LifecycleComponent)
 	require.NoError(t, lifecycle.Start(context.Background()))
-	t.Cleanup(func() { _ = lifecycle.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = lifecycle.Stop(context.Background()) })
 
 	js, err := natsClient.JetStream()
 	require.NoError(t, err)
@@ -85,7 +85,7 @@ func TestExistingIncompatibleTrajectoryBucketDisablesAuditAndDegradesHealth(t *t
 	require.NoError(t, err)
 	lifecycle := discoverable.(component.LifecycleComponent)
 	require.NoError(t, lifecycle.Start(ctx))
-	t.Cleanup(func() { _ = lifecycle.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = lifecycle.Stop(context.Background()) })
 
 	health := lifecycle.Health()
 	require.False(t, health.Healthy)
@@ -226,7 +226,7 @@ func TestIntegration_LoopFullCycle(t *testing.T) {
 
 	err = lc.Start(ctx)
 	require.NoError(t, err)
-	defer lc.Stop(5 * time.Second)
+	defer lc.Stop(context.Background())
 
 	time.Sleep(200 * time.Millisecond)
 
@@ -366,7 +366,7 @@ func TestIntegration_LoopWithToolCalls(t *testing.T) {
 
 	err = lc.Start(ctx)
 	require.NoError(t, err)
-	defer lc.Stop(5 * time.Second)
+	defer lc.Stop(context.Background())
 
 	time.Sleep(200 * time.Millisecond)
 
@@ -522,7 +522,7 @@ func TestIntegration_LoopMaxIterations(t *testing.T) {
 
 	err = lc.Start(ctx)
 	require.NoError(t, err)
-	defer lc.Stop(5 * time.Second)
+	defer lc.Stop(context.Background())
 
 	time.Sleep(200 * time.Millisecond)
 
@@ -659,7 +659,7 @@ func TestIntegration_LoopStatePersistence(t *testing.T) {
 
 	err = lc.Start(ctx)
 	require.NoError(t, err)
-	defer lc.Stop(5 * time.Second)
+	defer lc.Stop(context.Background())
 
 	js, err := natsClient.JetStream()
 	require.NoError(t, err)
@@ -756,7 +756,7 @@ func TestIntegration_LoopTrajectoryCapture(t *testing.T) {
 
 	err = lc.Start(ctx)
 	require.NoError(t, err)
-	defer lc.Stop(5 * time.Second)
+	defer lc.Stop(context.Background())
 
 	time.Sleep(200 * time.Millisecond)
 

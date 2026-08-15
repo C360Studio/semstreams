@@ -2,6 +2,7 @@ package agenticmodel
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"strings"
 	"testing"
@@ -18,7 +19,7 @@ func driveWire(acc *wireStreamAccumulator, deltas []string) (chunkContent, chunk
 	for _, d := range deltas {
 		delta := &wire.Message{}
 		_ = delta.SetContentString(d)
-		cd, rd := acc.processChunk(&wire.StreamChunk{
+		cd, rd := acc.processChunk(context.Background(), &wire.StreamChunk{
 			Choices: []wire.Choice{{Delta: delta}},
 		}, "req-think-test")
 		c.WriteString(cd)
@@ -171,7 +172,7 @@ func TestWireRouteDelta_ChannelReasoningStillSurfacedAlongsideInline(t *testing.
 	// Inline-think delta + a separate channel-reasoning delta in the same chunk.
 	delta := &wire.Message{ReasoningContent: "channel"}
 	_ = delta.SetContentString("<think>inline</think>visible")
-	cd, rd := acc.processChunk(&wire.StreamChunk{
+	cd, rd := acc.processChunk(context.Background(), &wire.StreamChunk{
 		Choices: []wire.Choice{{Delta: delta}},
 	}, "req-channel")
 

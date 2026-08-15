@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/readiness"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -243,7 +244,8 @@ type Component struct {
 	initialized     bool
 	startTime       time.Time
 	wg              sync.WaitGroup
-	cancel          context.CancelFunc
+	generation      *lifecyclejoin.Generation
+	poolStop        *lifecyclejoin.Operation
 	indexPool       *keyedDispatcher[entityIndexWork]
 	entityCoalescer *revisionCoalescer
 
@@ -569,16 +571,15 @@ func (c *Component) Initialize() error {
 
 // Start begins processing (must be initialized first)
 func (c *Component) Start(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Validate context
+	// Validate before inspecting lifecycle state.
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "Start", "context cannot be nil")
 	}
 	if err := ctx.Err(); err != nil {
 		return errs.WrapInvalid(err, "Component", "Start", "context already cancelled")
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	// Check initialization
 	if !c.initialized {
@@ -592,7 +593,6 @@ func (c *Component) Start(ctx context.Context) error {
 
 	// Create cancellable context
 	ctx, cancel := context.WithCancel(ctx)
-	c.cancel = cancel
 
 	// Cache alias predicates from vocabulary for fast lookup during indexing
 	c.aliasPredicates = vocabulary.DiscoverAliasPredicates()
@@ -655,6 +655,8 @@ func (c *Component) Start(ctx context.Context) error {
 		cancel()
 		return errs.Wrap(err, "Component", "Start", "query handler setup")
 	}
+	c.generation = lifecyclejoin.NewGeneration(cancel, c.wg.Wait)
+	c.poolStop = lifecyclejoin.NewOperation()
 
 	// Mark as running
 	c.running = true
@@ -668,60 +670,57 @@ func (c *Component) Start(ctx context.Context) error {
 }
 
 // Stop gracefully shuts down the component
-func (c *Component) Stop(timeout time.Duration) error {
+func (c *Component) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
 	c.mu.Lock()
-
-	if !c.running {
+	generation := c.generation
+	poolStop := c.poolStop
+	if generation == nil {
 		c.mu.Unlock()
-		return nil // Already stopped
+		return nil
 	}
-
-	// Unsubscribe from query handlers
-	for _, sub := range c.querySubscriptions {
-		if sub != nil {
-			if err := sub.Unsubscribe(); err != nil {
-				c.logger.Warn("query subscription unsubscribe error", slog.Any("error", err))
-			}
-		}
-	}
-	c.querySubscriptions = nil
-
-	// Cancel producers before stopping the ordered dispatcher. This prevents a
-	// watcher submission from racing a closed execution lane.
-	if c.cancel != nil {
-		c.cancel()
-	}
-
-	// Stop the entity coalescer before the worker pool.
-	if c.entityCoalescer != nil {
-		c.entityCoalescer.Close()
-	}
-
-	// Wait for ordered execution lanes to observe cancellation and exit.
-	if c.indexPool != nil {
-		if err := c.indexPool.Stop(timeout); err != nil {
-			c.logger.Warn("index pool stop error", slog.Any("error", err))
-		}
-	}
-
-	c.running = false
 	c.mu.Unlock()
 
-	// Wait for goroutines with timeout
-	done := make(chan struct{})
-	go func() {
-		c.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		c.logger.Info("component stopped gracefully", slog.String("component", "graph-index"))
-		return nil
-	case <-time.After(timeout):
-		c.logger.Warn("component stop timed out", slog.String("component", "graph-index"))
-		return fmt.Errorf("stop timeout after %v", timeout)
+	signalErr := generation.Signal(func() error {
+		var stopErr error
+		c.mu.Lock()
+		subscriptions := c.querySubscriptions
+		c.querySubscriptions = nil
+		coalescer := c.entityCoalescer
+		c.entityCoalescer = nil
+		c.mu.Unlock()
+		for _, sub := range subscriptions {
+			if sub != nil {
+				stopErr = errors.Join(stopErr, sub.Unsubscribe())
+			}
+		}
+		if coalescer != nil {
+			coalescer.Close()
+		}
+		return stopErr
+	})
+	prepareErr := poolStop.Run(ctx, func(ctx context.Context) error {
+		c.mu.Lock()
+		pool := c.indexPool
+		c.mu.Unlock()
+		if pool == nil {
+			return nil
+		}
+		return pool.Stop(ctx)
+	})
+	if errors.Is(prepareErr, context.Canceled) || errors.Is(prepareErr, context.DeadlineExceeded) {
+		return errors.Join(signalErr, prepareErr)
 	}
+
+	return generation.Stop(ctx, nil, func(context.Context) error {
+		c.mu.Lock()
+		c.running = false
+		c.mu.Unlock()
+		c.logger.Info("component stopped gracefully", slog.String("component", "graph-index"))
+		return prepareErr
+	})
 }
 
 // createOutputBuckets acquires every output KV bucket through the catalog

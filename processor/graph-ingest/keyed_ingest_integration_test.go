@@ -57,7 +57,7 @@ func TestIntegration_IngestGuardBucket_ReconcilesTTLBucketAtAcquisition(t *testi
 	require.NoError(t, err)
 	c := comp.(*Component)
 	require.NoError(t, c.Initialize())
-	t.Cleanup(func() { _ = c.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 
 	// Start succeeds — and the acquisition reconciled the bucket to its
 	// declared no-lifecycle policy.
@@ -200,7 +200,7 @@ func startKeyedWireComponent(t *testing.T) (context.Context, *Component, *natscl
 	require.NoError(t, c.Initialize())
 	registerMergeTestPayload(t, c) // decoder BEFORE Start (no consumer race)
 	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 	return ctx, c, testClient
 }
 

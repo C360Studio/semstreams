@@ -56,7 +56,7 @@ func TestStartDiscoverySubscriptionFailureIsTransientAndRestartable(t *testing.T
 		t.Fatalf("successful restart resources: running=%t toolListSub=%v consumers=%v",
 			comp.running, comp.toolListSub != nil, comp.consumerInfos)
 	}
-	if err := comp.Stop(5 * time.Second); err != nil {
+	if err := comp.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop() after successful restart: %v", err)
 	}
 }
@@ -114,7 +114,7 @@ func TestStartLaterConsumerFailureRollsBackLocallyPreservesDurableAndRestarts(t 
 		t.Fatalf("successful restart resources: running=%t toolListSub=%v consumers=%v",
 			comp.running, comp.toolListSub != nil, comp.consumerInfos)
 	}
-	if err := comp.Stop(5 * time.Second); err != nil {
+	if err := comp.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop() after successful restart: %v", err)
 	}
 }

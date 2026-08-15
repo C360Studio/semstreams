@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"context"
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
@@ -63,7 +64,7 @@ func TestNewOutputFromConfigUsesCanonicalNetworkAndStreamFacts(t *testing.T) {
 	require.Equal(t, 9191, output.port)
 	require.Equal(t, []string{"events.>"}, output.subjects)
 	require.NoError(t, output.Initialize())
-	require.NoError(t, output.setupHTTPServer())
+	require.NoError(t, output.setupHTTPServer(context.Background()))
 	require.Equal(t, "127.0.0.1:9191", output.server.Addr)
 	facts, err := output.InputPorts()[0].Facts()
 	require.NoError(t, err)

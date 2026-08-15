@@ -148,7 +148,7 @@ func executeGraphQLForContractClosure(
 	comp := createTestGatewayWithMock(t, mock)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	t.Cleanup(func() { require.NoError(t, comp.Stop(5*time.Second)) })
+	t.Cleanup(func() { require.NoError(t, comp.Stop(context.Background())) })
 
 	body, err := json.Marshal(map[string]interface{}{"query": query})
 	require.NoError(t, err)

@@ -70,7 +70,7 @@ func TestEntityWatcherHardeningRealNATS(t *testing.T) {
 	stopped := false
 	t.Cleanup(func() {
 		if !stopped {
-			_ = processor.Stop(5 * time.Second)
+			_ = processor.Stop(context.Background())
 		}
 	})
 
@@ -113,7 +113,7 @@ func TestEntityWatcherHardeningRealNATS(t *testing.T) {
 		return counter.evaluated.Load() > 3
 	}, 350*time.Millisecond, 10*time.Millisecond, "retired generations must not evaluate")
 
-	require.NoError(t, processor.Stop(5*time.Second))
+	require.NoError(t, processor.Stop(context.Background()))
 	stopped = true
 	active, idle := processor.entityEvaluationFence.counts()
 	require.Zero(t, active)

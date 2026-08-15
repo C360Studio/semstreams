@@ -83,7 +83,7 @@ func (s *MyService) Start(ctx context.Context) error {
     return nil
 }
 
-func (s *MyService) Stop(timeout time.Duration) error {
+func (s *MyService) Stop(ctx context.Context) error {
     s.logger.Info("Stopping my-service")
     // Graceful shutdown logic
     return nil
@@ -498,7 +498,7 @@ Primary interface that all services must implement.
 ```go
 type Service interface {
     Start(ctx context.Context) error    // Start service with context
-    Stop(timeout time.Duration) error   // Stop service with timeout
+    Stop(ctx context.Context) error     // Cancel Start lifetime and bound join/cleanup
     IsHealthy() bool                    // Health check
     GetStatus() ServiceStatus           // Service status for monitoring
 }
@@ -542,9 +542,9 @@ Creates a service instance using the registered constructor with proper dependen
 
 Starts all created services in registration order with proper error handling.
 
-#### `(m *Manager) StopAll(timeout time.Duration) error`
+#### `(m *Manager) StopAll(ctx context.Context) error`
 
-Stops all services in reverse order with graceful shutdown and timeout handling.
+Stops all services in reverse order, passing the exact caller-owned shutdown context to each service.
 
 #### `(cm *ComponentManager) ListComponents() []component.Discoverable`
 
@@ -815,7 +815,7 @@ func (m *MonitoringService) Start(ctx context.Context) error {
     return nil
 }
 
-func (m *MonitoringService) Stop(timeout time.Duration) error {
+func (m *MonitoringService) Stop(ctx context.Context) error {
     if m.ticker != nil {
         m.ticker.Stop()
     }

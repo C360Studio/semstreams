@@ -1,21 +1,32 @@
 ## 1. Atomic Stop contract prerequisite
 
-- [ ] 1.1 In one PR, change `Service.Stop`, `Manager.StopAll`, and `LifecycleComponent.Stop` to accept
+- [x] 1.1 In one PR, change `Service.Stop`, `Manager.StopAll`, and `LifecycleComponent.Stop` to accept
   `context.Context`; migrate every SemStreams implementation and direct caller.
-- [ ] 1.2 Preserve service idempotency, reverse order, continued stop attempts, and genuine error aggregation.
-- [ ] 1.3 Remove service and component shutdown roots; prove Start-owned goroutines are canceled and joined.
-- [ ] 1.4 Remove `ManagedComponent.Cancel`; keep cancellation only in private synchronized manager state.
-- [ ] 1.5 Add service tests for nil context, cancellation, deadline, repeated Stop, StopAll order, aggregation, and
+- [x] 1.2 Preserve service idempotency, reverse order, continued stop attempts, and genuine error aggregation.
+- [x] 1.3 Remove service and component shutdown roots; prove Start-owned goroutines are canceled and joined.
+- [x] 1.4 Remove `ManagedComponent.Cancel`; keep cancellation only in private synchronized manager state.
+- [x] 1.5 Add service tests for nil context, cancellation, deadline, repeated Stop, StopAll order, aggregation, and
   races.
-- [ ] 1.6 Add component tests for nil context, cancellation-before-wait, deadline, repeated Stop, private cancellation,
+- [x] 1.6 Add component tests for nil context, cancellation-before-wait, deadline, repeated Stop, private cancellation,
   and races.
-- [ ] 1.7 Add a generation-binding test proving cancel, exact in-flight Start completion/finalization, then
+- [x] 1.7 Add a generation-binding test proving cancel, exact in-flight Start completion/finalization, then
   same-generation Stop, with no Start/Stop method overlap.
-- [ ] 1.8 Establish the manager lifecycle supervisor with Start context passed as its goroutine function parameter;
+- [x] 1.8 Establish the manager lifecycle supervisor with Start context passed as its goroutine function parameter;
   prove dynamic post-boot Start descends from that context rather than a request context.
-- [ ] 1.9 Add no duration adapter, deprecated overload, default duration, or incomplete intermediate signature set.
-- [ ] 1.10 Obtain semstreams-reviewer approval; run `task lint`, `go test -race ./...`, integration and contract tests,
+- [x] 1.9 Add no duration adapter, deprecated overload, default duration, or incomplete intermediate signature set.
+- [x] 1.10 Obtain semstreams-reviewer approval; run `task lint`, `go test -race ./...`, integration and contract tests,
   schema drift check, `task e2e:core`, and `task e2e:semantic` before merging the atomic prerequisite.
+
+Completion of section 1 is deliberately narrow. The implementation retains only private `lifecyclejoin.Generation`
+and `lifecyclejoin.Operation` cancellation, completion, and terminal-result authority; it stores no new contexts.
+NATS, JetStream, and HTTP shutdown uses the protocol's native drain/shutdown completion plus generation-scoped joins.
+The sole new framework-owned root is the bounded five-second context used synchronously by
+`RunPartialStartRollback` when an uncommitted Start has no external Stop caller. It does not launch detached cleanup.
+
+The completed contract also permits a failed Start to retain cleanup authority. Such a generation rejects another
+Start until a later Stop, called with a fresh live shutdown context, reaches terminal cleanup. In particular,
+`MilestoneSubscriber.Start` can return both a non-nil stop function and a non-nil error after partial acquisition;
+the caller must preserve and invoke that stop function.
 
 ## 2. Replacement lifecycle protocol
 
@@ -43,6 +54,9 @@
 
 ## 3. Remaining context debt
 
+This entire phase remains deferred. In particular, the stored-context and invented-root debt inventoried in Rule and
+the other phase-3 areas is not erased by completion of the atomic Stop prerequisite.
+
 - [ ] 3.1 Remove the nine stored context fields across eight structs listed in `inventory.md` in reviewed slices.
 - [ ] 3.2 Inventory and remove remaining production Background, TODO, WithoutCancel, nil fallback, and indirect roots.
 - [ ] 3.3 Add a type-aware zero-debt guard that distinguishes process/test roots from production library violations.
@@ -51,8 +65,22 @@
 
 ## 4. Migration and release evidence
 
-- [ ] 4.1 Keep the SemStreams migration guide synchronized with exact final signatures and compiler-visible changes.
-- [ ] 4.2 Record sister-repository callsites as read-only notices; do not edit sister repositories.
-- [ ] 4.3 Add the breaking changelog entry and name the atomic Stop prerequisite.
-- [ ] 4.4 Run `openspec validate restore-go-lifecycle-ownership --strict` after every contract edit.
+- [x] 4.1 Keep the SemStreams migration guide synchronized with exact final signatures and compiler-visible changes.
+- [x] 4.2 Record sister-repository callsites as read-only notices; do not edit sister repositories.
+- [x] 4.3 Add the breaking changelog entry and name the atomic Stop prerequisite.
+- [x] 4.4 Run `openspec validate restore-go-lifecycle-ownership --strict` after every contract edit.
 - [ ] 4.5 Before the next breaking tag, run all required E2E tiers and record exact commits and results.
+
+Implementation evidence for the completed atomic prerequisite:
+
+- independent `semstreams-reviewer` approval after integration;
+- `task lint`, `go test -race ./...`, `task test:integration`, and `go test ./test/contract/...` passed;
+- `task schema:generate` produced no schema or materialized-spec drift;
+- strict OpenSpec validation passed;
+- `task e2e:core` passed 3/3 scenarios;
+- `task e2e:semantic` passed 48/48 scenarios. Its non-gating thematic recorder also reported one degraded-floor
+  observation; that recorder metric does not change the green 48/48 gate result.
+
+Task 4.5 remains open because this evidence belongs to an uncommitted implementation worktree and therefore cannot
+yet name the exact breaking commit/tag. The breaking entry is indexed from `docs/README.md`; the repository's release
+workflow later derives the GitHub changelog from commit subjects. No sister repository was edited.

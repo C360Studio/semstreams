@@ -486,9 +486,6 @@ func (rp *Processor) handleEntityUpdatesForKey(
 				watcher.Stop()
 			}
 			return
-		case <-rp.shutdown:
-			watcher.Stop()
-			return
 		case <-rp.graphStateGuardDone:
 			watcher.Stop()
 			return
@@ -572,12 +569,6 @@ func (rp *Processor) entityWatcherCloseExpected(
 	if ctx.Err() != nil {
 		return true
 	}
-	select {
-	case <-rp.shutdown:
-		return true
-	default:
-	}
-
 	if managedKey != "" {
 		return !rp.entityWatcherIsActive(managedKey, watcher, managedGeneration)
 	}

@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -30,7 +29,7 @@ func startGraphIngestForMutationTest(t *testing.T, client *natsclient.Client) *g
 	ingest := created.(*graphingest.Component)
 	require.NoError(t, ingest.Initialize())
 	require.NoError(t, ingest.Start(context.Background()))
-	t.Cleanup(func() { require.NoError(t, ingest.Stop(5*time.Second)) })
+	t.Cleanup(func() { require.NoError(t, ingest.Stop(context.Background())) })
 	return ingest
 }
 

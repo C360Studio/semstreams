@@ -2,12 +2,13 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
-	"time"
 
 	"github.com/c360studio/semstreams/agentic/agentrun"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/natsclient"
 )
 
@@ -17,7 +18,7 @@ import (
 // is unit-testable without a live NATS connection (every Start path otherwise
 // requires the subscriber's real durable-consumer setup).
 type milestoneStarter interface {
-	Start(ctx context.Context, client *natsclient.Client, cfg agentrun.StartConfig) (func(), error)
+	Start(ctx context.Context, client *natsclient.Client, cfg agentrun.StartConfig) (func(context.Context) error, error)
 }
 
 // MilestoneService is the Phase-B service wrapper for the agent-run milestone
@@ -43,10 +44,11 @@ type MilestoneService struct {
 	*BaseService
 	logger     *slog.Logger
 	subscriber milestoneStarter
-	client     *natsclient.Client   // live NATS conn (Phase A), passed to subscriber.Start.
-	cfg        agentrun.StartConfig // StreamName: agentrun.AgentStreamName.
-	mu         sync.Mutex           // serializes Start/Stop so the re-entrancy guard is atomic.
-	stop       func()               // captured stop func from subscriber.Start; nil until started / after Stop.
+	client     *natsclient.Client          // live NATS conn (Phase A), passed to subscriber.Start.
+	cfg        agentrun.StartConfig        // StreamName: agentrun.AgentStreamName.
+	mu         sync.Mutex                  // serializes Start/Stop so the re-entrancy guard is atomic.
+	stop       func(context.Context) error // captured stop func from subscriber.Start; nil until started / after Stop.
+	stopOp     *lifecyclejoin.Operation
 }
 
 // NewMilestoneService builds the MilestoneService over a pre-built subscriber.
@@ -72,36 +74,61 @@ func NewMilestoneService(subscriber milestoneStarter, client *natsclient.Client,
 // subscriber's stream-absent graceful-skip returns a non-nil no-op stop with no
 // error, so that path stores the no-op and reports running (boot preserved).
 func (s *MilestoneService) Start(ctx context.Context) error {
+	if err := validateLifecycleContext(ctx, "MilestoneService", "Start"); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.Status() == StatusRunning {
 		return fmt.Errorf("milestone service already running")
 	}
+	if s.stop != nil {
+		return fmt.Errorf("milestone subscriber cleanup still pending")
+	}
 	if err := s.BaseService.Start(ctx); err != nil {
 		return err
 	}
 	stop, err := s.subscriber.Start(ctx, s.client, s.cfg)
+	if stop != nil {
+		s.stop = stop
+		s.stopOp = lifecyclejoin.NewOperation()
+	}
 	if err != nil {
 		// Forward the error so StartAll does not report an observer with no
-		// consumers. Roll back BaseService status after the failed start.
-		_ = s.BaseService.Stop(0)
-		return fmt.Errorf("milestone subscriber start: %w", err)
+		// consumers. A non-nil stop alongside the error owns partial durable
+		// acquisition and remains available to the later service Stop.
+		baseErr := s.BaseService.Stop(ctx)
+		return errors.Join(fmt.Errorf("milestone subscriber start: %w", err), baseErr)
 	}
-	s.stop = stop
 	return nil
 }
 
 // Stop cancels the subscriber's local consumption (durable offsets persist in
-// NATS for restart recovery). The wrapper spawns no goroutine of its own, so —
-// there is nothing to join. Idempotent: a second Stop
-// (or a Stop before Start) is a no-op.
-func (s *MilestoneService) Stop(timeout time.Duration) error {
+// NATS for restart recovery). The wrapper spawns no goroutine of its own; Stop
+// instead joins the subscriber's native shutdown operation. Later callers
+// rejoin or replay that operation's result. Stop before Start is a no-op.
+func (s *MilestoneService) Stop(ctx context.Context) error {
+	if err := validateLifecycleContext(ctx, "MilestoneService", "Stop"); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	stop := s.stop
-	s.stop = nil
+	stopOp := s.stopOp
 	s.mu.Unlock()
-	if stop != nil {
-		stop()
+	var subscriberErr error
+	if stopOp != nil {
+		nativeErr := stopOp.Run(ctx, stop)
+		if nativeErr == nil {
+			s.mu.Lock()
+			if s.stopOp == stopOp {
+				s.stop = nil
+				s.stopOp = nil
+			}
+			s.mu.Unlock()
+		}
+		if nativeErr != nil {
+			subscriberErr = fmt.Errorf("stop milestone subscriber: %w", nativeErr)
+		}
 	}
-	return s.BaseService.Stop(timeout)
+	return errors.Join(subscriberErr, s.BaseService.Stop(ctx))
 }

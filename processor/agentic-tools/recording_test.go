@@ -91,7 +91,7 @@ func TestRecordingExecutor_ListTools(t *testing.T) {
 	store := NewInMemoryToolCallStore()
 	executor := newMockExecutor()
 	recorder := NewRecordingExecutor(executor, store, nil)
-	defer func() { _ = recorder.Stop(time.Second) }()
+	defer func() { _ = recorder.Stop(5 * time.Second) }()
 
 	tools := recorder.ListTools()
 	require.Len(t, tools, 1)
@@ -197,7 +197,7 @@ func TestRecordingExecutor_ListToolsPreservesEffect(t *testing.T) {
 		{Name: "quiet_tool", Description: "declares nothing"},
 	}
 	recorder := NewRecordingExecutor(executor, store, nil)
-	defer func() { _ = recorder.Stop(time.Second) }()
+	defer func() { _ = recorder.Stop(5 * time.Second) }()
 
 	got := recorder.ListTools()
 	require.Len(t, got, len(executor.tools))

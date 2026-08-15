@@ -68,7 +68,7 @@ func TestPredicateIndex_LoadScale(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, graphIndex.Start(ctx))
-	defer graphIndex.Stop(5 * time.Second)
+	defer graphIndex.Stop(context.Background())
 
 	// Seed directly through the production write path, concurrently —
 	// this test benchmarks the READ side; the write side's own cost is

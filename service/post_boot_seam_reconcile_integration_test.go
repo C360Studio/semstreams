@@ -70,7 +70,7 @@ func TestIntegration_PostBootDynamicEditReconcilesBucketAtSeam(t *testing.T) {
 	// Boot FULLY: StartAll returns only after graph-embedding's Start has run
 	// (its first seam acquisition creates EMBEDDING_INDEX clean).
 	require.NoError(t, h.manager.StartAll(ctx))
-	defer func() { _ = h.manager.StopAll(5 * time.Second) }()
+	defer func() { _ = h.manager.StopAll(context.Background()) }()
 	bootDone := time.Now()
 
 	status := h.cm.GetComponentStatus()

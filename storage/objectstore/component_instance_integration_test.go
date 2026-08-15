@@ -44,7 +44,7 @@ func TestIntegration_GH400_ComponentThreadsInstanceNameIntoStore(t *testing.T) {
 	c := disc.(*Component)
 	require.NoError(t, c.Initialize())
 	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 
 	require.NotNil(t, c.store, "component must have built its store on Start")
 	require.Equal(t, c.instanceName, c.store.InstanceName(),
@@ -90,7 +90,7 @@ func TestIntegration_ComponentStart_LegacyRetentionGracefulBoot(t *testing.T) {
 	// Start must reconcile-and-boot, not fail closed, for a strippable retention.
 	require.NoError(t, c.Start(ctx),
 		"a strippable legacy retention must reconcile through Start, not fail closed")
-	t.Cleanup(func() { _ = c.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 
 	require.NotNil(t, c.store, "the store must be built through Start")
 

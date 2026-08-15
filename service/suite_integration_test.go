@@ -122,7 +122,7 @@ func (s *ServiceSuite) TestService_LifecycleSuite() {
 	time.Sleep(10 * time.Millisecond)
 
 	// Stop service
-	err = service.Stop(5 * time.Second)
+	err = service.Stop(context.Background())
 	s.Require().NoError(err)
 	s.Equal(StatusStopped, service.Status())
 }

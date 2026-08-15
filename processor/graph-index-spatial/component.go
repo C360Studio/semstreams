@@ -15,6 +15,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -182,7 +183,7 @@ type Component struct {
 	initialized bool
 	startTime   time.Time
 	wg          sync.WaitGroup
-	cancel      context.CancelFunc
+	generation  *lifecyclejoin.Generation
 
 	// Metrics (atomic)
 	messagesProcessed int64
@@ -442,16 +443,15 @@ func (c *Component) waitForEntityBucket(ctx context.Context) (entityStatesWatche
 
 // Start begins processing (must be initialized first)
 func (c *Component) Start(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Validate context
+	// Validate before inspecting lifecycle state.
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "Start", "context cannot be nil")
 	}
 	if err := ctx.Err(); err != nil {
 		return errs.WrapInvalid(err, "Component", "Start", "context already cancelled")
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	// Check initialization
 	if !c.initialized {
@@ -465,7 +465,6 @@ func (c *Component) Start(ctx context.Context) error {
 
 	// Create cancellable context
 	ctx, cancel := context.WithCancel(ctx)
-	c.cancel = cancel
 
 	// SPATIAL_INDEX bucket (we are the WRITER) — acquired through the catalog
 	// owner seam, which reconciles an adopted bucket to the declared policy.
@@ -501,6 +500,7 @@ func (c *Component) Start(ctx context.Context) error {
 	// Start entity watcher goroutine
 	c.wg.Add(1)
 	go c.watchEntityStates(ctx, entityBucket)
+	c.generation = lifecyclejoin.NewGeneration(cancel, c.wg.Wait)
 
 	// Mark as running
 	c.running = true
@@ -517,47 +517,36 @@ func (c *Component) Start(ctx context.Context) error {
 }
 
 // Stop gracefully shuts down the component
-func (c *Component) Stop(timeout time.Duration) error {
+func (c *Component) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
 	c.mu.Lock()
-
-	if !c.running {
+	generation := c.generation
+	if generation == nil {
 		c.mu.Unlock()
 		return nil // Already stopped
 	}
 
-	// Unsubscribe from query handlers
-	for _, sub := range c.querySubscriptions {
-		if sub != nil {
-			if err := sub.Unsubscribe(); err != nil {
-				c.logger.Warn("query subscription unsubscribe error", slog.Any("error", err))
-			}
-		}
-	}
-	c.querySubscriptions = nil
-
-	// Cancel context
-	if c.cancel != nil {
-		c.cancel()
-	}
-
-	c.running = false
 	c.mu.Unlock()
 
-	// Wait for goroutines with timeout
-	done := make(chan struct{})
-	go func() {
-		c.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
+	return generation.Stop(ctx, func() error {
+		for _, sub := range c.querySubscriptions {
+			if sub != nil {
+				if err := sub.Unsubscribe(); err != nil {
+					c.logger.Warn("query subscription unsubscribe error", slog.Any("error", err))
+				}
+			}
+		}
+		c.querySubscriptions = nil
+		return nil
+	}, func(context.Context) error {
+		c.mu.Lock()
+		c.running = false
+		c.mu.Unlock()
 		c.logger.Info("component stopped gracefully", slog.String("component", "graph-index-spatial"))
 		return nil
-	case <-time.After(timeout):
-		c.logger.Warn("component stop timed out", slog.String("component", "graph-index-spatial"))
-		return errs.WrapTransient(errs.ErrConnectionTimeout, "Component", "Stop", fmt.Sprintf("timeout after %v", timeout))
-	}
+	})
 }
 
 // ============================================================================

@@ -304,7 +304,9 @@ func TestIntegrationProductionCallbackShutdownDelayedNAK(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("production callback did not finish its shutdown delayed-NAK")
 	}
-	tc.Client.StopConsumer("CALLBACK_SHUTDOWN", "agentic-dispatch-agent-complete-shutdown")
+	cleanupCtx, cleanupCancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cleanupCancel()
+	require.NoError(t, tc.Client.StopConsumer(cleanupCtx, "CALLBACK_SHUTDOWN", "agentic-dispatch-agent-complete-shutdown"))
 	redelivery, err := consumer.Fetch(1, jetstream.FetchMaxWait(10*time.Second))
 	require.NoError(t, err)
 	redelivered := <-redelivery.Messages()
@@ -351,6 +353,6 @@ func startProductionTerminalDispatch(
 		configure(c)
 	}
 	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(3 * time.Second) })
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 	return c
 }

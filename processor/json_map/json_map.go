@@ -4,6 +4,7 @@ package jsonmapprocessor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -86,14 +88,13 @@ type Processor struct {
 	logger           *slog.Logger
 
 	// Lifecycle management
-	shutdown      chan struct{}
-	done          chan struct{}
 	running       bool
 	startTime     time.Time
 	mu            sync.RWMutex
 	lifecycleMu   sync.Mutex
-	wg            *sync.WaitGroup
+	generation    *lifecyclejoin.Generation
 	subscriptions []*natsclient.Subscription
+	consumers     []streamConsumerBinding
 
 	// Metrics (atomic counters for DataFlow)
 	messagesProcessed   int64
@@ -103,6 +104,11 @@ type Processor struct {
 
 	// Prometheus metrics
 	metrics *mapMetrics
+}
+
+type streamConsumerBinding struct {
+	streamName   string
+	consumerName string
 }
 
 // NewProcessor creates a new JSON map processor from configuration
@@ -172,9 +178,6 @@ func NewProcessor(
 		decoder:          message.NewDecoder(deps.PayloadRegistry),
 		natsClient:       deps.NATSClient,
 		logger:           deps.GetLogger(),
-		shutdown:         make(chan struct{}),
-		done:             make(chan struct{}),
-		wg:               &sync.WaitGroup{},
 		metrics:          metrics,
 	}, nil
 }
@@ -210,7 +213,7 @@ func (m *Processor) Initialize() error {
 }
 
 // Start begins transforming messages
-func (m *Processor) Start(ctx context.Context) error {
+func (m *Processor) Start(ctx context.Context) (startErr error) {
 	// Validate context
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "JSONMapProcessor", "Start", "context cannot be nil")
@@ -222,7 +225,7 @@ func (m *Processor) Start(ctx context.Context) error {
 	m.lifecycleMu.Lock()
 	defer m.lifecycleMu.Unlock()
 
-	if m.running {
+	if m.generation != nil {
 		return errs.WrapFatal(errs.ErrAlreadyStarted, "JSONMapProcessor", "Start", "check running state")
 	}
 
@@ -230,12 +233,36 @@ func (m *Processor) Start(ctx context.Context) error {
 		return errs.WrapFatal(errs.ErrMissingConfig, "JSONMapProcessor", "Start", "NATS client required")
 	}
 
-	// Recreate channels if component is being restarted
-	m.shutdown = make(chan struct{})
-	m.done = make(chan struct{})
+	runCtx, cancel := context.WithCancel(ctx)
+	generation := lifecyclejoin.NewGeneration(cancel, nil)
+	m.generation = generation
+	started := false
+	defer func() {
+		if !started {
+			rollbackErr := lifecyclejoin.RunPartialStartRollback(func(ctx context.Context) error {
+				return generation.Stop(ctx, nil, func(ctx context.Context) error {
+					stopErr := m.stopInputs(ctx)
+					if ctxErr := ctx.Err(); ctxErr != nil {
+						return errors.Join(stopErr, ctxErr)
+					}
+					m.mu.Lock()
+					m.running = false
+					m.mu.Unlock()
+					return stopErr
+				})
+			})
+			if rollbackErr == nil && m.generation == generation {
+				m.generation = nil
+			}
+			if rollbackErr != nil {
+				startErr = errors.Join(startErr, rollbackErr)
+				m.logger.Error("Failed to roll back input subscriptions", "error", rollbackErr)
+			}
+		}
+	}()
 
 	// Subscribe to input ports based on port type
-	if err := m.setupSubscriptions(ctx); err != nil {
+	if err := m.setupSubscriptions(runCtx); err != nil {
 		return err
 	}
 
@@ -243,6 +270,7 @@ func (m *Processor) Start(ctx context.Context) error {
 	m.running = true
 	m.startTime = time.Now()
 	m.mu.Unlock()
+	started = true
 
 	m.logger.Info("JSON map processor started",
 		"component", m.name,
@@ -350,6 +378,7 @@ func (m *Processor) setupJetStreamConsumer(ctx context.Context, port component.P
 		return errs.WrapTransient(err, "JSONMapProcessor", "setupJetStreamConsumer",
 			fmt.Sprintf("consumer setup for stream %s", streamName))
 	}
+	m.consumers = append(m.consumers, streamConsumerBinding{streamName: streamName, consumerName: consumerName})
 
 	m.logger.Debug("JSON map subscribed (JetStream)", "subject", subject, "stream", streamName)
 	return nil
@@ -386,50 +415,51 @@ func (m *Processor) waitForStream(ctx context.Context, streamName string) error 
 }
 
 // Stop gracefully stops the processor
-func (m *Processor) Stop(timeout time.Duration) error {
+func (m *Processor) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
 	m.lifecycleMu.Lock()
-	defer m.lifecycleMu.Unlock()
-
-	if !m.running {
+	generation := m.generation
+	if generation == nil {
+		m.lifecycleMu.Unlock()
 		return nil
 	}
+	m.lifecycleMu.Unlock()
 
-	// Mark as not running first to prevent concurrent operations
-	m.mu.Lock()
-	m.running = false
-	m.mu.Unlock()
-
-	// Signal shutdown
-	close(m.shutdown)
-
-	// Unsubscribe from all NATS subjects
-	for _, sub := range m.subscriptions {
-		if err := sub.Unsubscribe(); err != nil {
-			m.logger.Warn("Failed to unsubscribe", "error", err)
+	stopErr := generation.Stop(ctx, nil, func(ctx context.Context) error {
+		stopErr := m.stopInputs(ctx)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return errors.Join(stopErr, ctxErr)
 		}
+		m.mu.Lock()
+		m.running = false
+		m.mu.Unlock()
+		return stopErr
+	})
+	if stopErr == nil {
+		m.lifecycleMu.Lock()
+		if m.generation == generation {
+			m.generation = nil
+		}
+		m.lifecycleMu.Unlock()
 	}
-	m.subscriptions = nil
+	return stopErr
+}
 
-	// Wait for goroutines with timeout
-	waitCh := make(chan struct{})
-	go func() {
-		m.wg.Wait()
-		close(waitCh)
-	}()
-
-	select {
-	case <-waitCh:
-		// Clean shutdown
-	case <-time.After(timeout):
-		return errs.WrapTransient(
-			errs.ErrConnectionTimeout, "JSONMapProcessor", "Stop",
-			fmt.Sprintf("graceful shutdown timeout after %v", timeout))
+func (m *Processor) stopInputs(ctx context.Context) error {
+	var stopErr error
+	for _, sub := range m.subscriptions {
+		stopErr = errors.Join(stopErr, sub.Drain(ctx))
 	}
-
-	// Close done channel to signal completion
-	close(m.done)
-
-	return nil
+	for _, binding := range m.consumers {
+		stopErr = errors.Join(stopErr, m.natsClient.StopConsumer(ctx, binding.streamName, binding.consumerName))
+	}
+	if ctx.Err() == nil {
+		m.subscriptions = nil
+		m.consumers = nil
+	}
+	return stopErr
 }
 
 // isJetStreamPortBySubject checks if an output port with the given subject is configured for JetStream

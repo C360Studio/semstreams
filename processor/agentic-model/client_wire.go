@@ -426,7 +426,7 @@ func (c *Client) streamChatCompletionWire(ctx context.Context, wc *wire.Client, 
 			return resp, nil
 		}
 
-		contentDelta, reasoningDelta := acc.processChunk(chunk, requestID)
+		contentDelta, reasoningDelta := acc.processChunk(ctx, chunk, requestID)
 		// Metric parity with the SDK streaming path: record one chunk per
 		// choice unconditionally; TTFT fires on the first non-empty delta
 		// (content or reasoning), matching SDK behaviour at client.go:617.
@@ -440,7 +440,7 @@ func (c *Client) streamChatCompletionWire(ctx context.Context, wc *wire.Client, 
 	}
 
 	if c.chunkHandler != nil {
-		c.chunkHandler(StreamChunk{RequestID: requestID, Done: true})
+		c.chunkHandler(ctx, StreamChunk{RequestID: requestID, Done: true})
 	}
 
 	return acc.toAgentResponse(requestID), nil

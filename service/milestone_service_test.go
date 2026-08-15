@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,14 +19,69 @@ type fakeStarter struct {
 	startErr   error
 	startCalls int
 	stopCalls  int
+	stop       func(context.Context) error
 }
 
-func (f *fakeStarter) Start(_ context.Context, _ *natsclient.Client, _ agentrun.StartConfig) (func(), error) {
+func (f *fakeStarter) Start(_ context.Context, _ *natsclient.Client, _ agentrun.StartConfig) (func(context.Context) error, error) {
 	f.startCalls++
-	if f.startErr != nil {
+	if f.startErr != nil && f.stop == nil {
 		return nil, f.startErr
 	}
-	return func() { f.stopCalls++ }, nil
+	stop := func(ctx context.Context) error {
+		if f.stop != nil {
+			return f.stop(ctx)
+		}
+		f.stopCalls++
+		return nil
+	}
+	return stop, f.startErr
+}
+
+func TestMilestoneServiceStartRetainsPartialCleanupReturnedWithError(t *testing.T) {
+	startErr := errors.New("second durable consumer failed")
+	f := &fakeStarter{startErr: startErr}
+	f.stop = func(ctx context.Context) error {
+		f.stopCalls++
+		return ctx.Err()
+	}
+	svc := newTestMilestoneService(f)
+
+	require.ErrorIs(t, svc.Start(context.Background()), startErr)
+	require.NotNil(t, svc.stop, "partial Start cleanup authority must remain reachable")
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, svc.Stop(canceled), context.Canceled)
+
+	f.stop = func(context.Context) error {
+		f.stopCalls++
+		return nil
+	}
+	require.NoError(t, svc.Stop(context.Background()))
+	require.Nil(t, svc.stop, "terminal cleanup clears the native stop function")
+	require.NoError(t, svc.Stop(context.Background()))
+	require.Equal(t, 2, f.stopCalls)
+}
+
+func TestMilestoneServiceCanceledStopRetainsSubscriberAuthorityForRejoin(t *testing.T) {
+	f := &fakeStarter{}
+	f.stop = func(ctx context.Context) error {
+		f.stopCalls++
+		return ctx.Err()
+	}
+	svc := newTestMilestoneService(f)
+	require.NoError(t, svc.Start(context.Background()))
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, svc.Stop(canceled), context.Canceled)
+
+	f.stop = func(context.Context) error {
+		f.stopCalls++
+		return nil
+	}
+	require.NoError(t, svc.Stop(context.Background()))
+	require.NoError(t, svc.Stop(context.Background()))
+	require.Equal(t, 2, f.stopCalls)
 }
 
 func newTestMilestoneService(f *fakeStarter) *MilestoneService {
@@ -48,7 +102,7 @@ func TestMilestoneService_Start_RunsAndStops(t *testing.T) {
 	assert.Equal(t, StatusRunning, svc.Status())
 	assert.Equal(t, 1, f.startCalls)
 
-	require.NoError(t, svc.Stop(time.Second))
+	require.NoError(t, svc.Stop(context.Background()))
 	assert.Equal(t, 1, f.stopCalls, "Stop must call the captured stop func exactly once")
 }
 
@@ -74,7 +128,7 @@ func TestMilestoneService_ReentrancyGuard(t *testing.T) {
 	svc := newTestMilestoneService(f)
 
 	require.NoError(t, svc.Start(context.Background()))
-	defer svc.Stop(time.Second) //nolint:errcheck
+	defer svc.Stop(context.Background()) //nolint:errcheck
 
 	require.Error(t, svc.Start(context.Background()), "double-Start must return an error")
 	assert.Equal(t, 1, f.startCalls, "double-Start must NOT re-invoke subscriber.Start")
@@ -88,8 +142,8 @@ func TestMilestoneService_Stop_Idempotent(t *testing.T) {
 	svc := newTestMilestoneService(f)
 
 	require.NoError(t, svc.Start(context.Background()))
-	require.NoError(t, svc.Stop(time.Second))
-	require.NoError(t, svc.Stop(time.Second), "second Stop must be a clean no-op")
+	require.NoError(t, svc.Stop(context.Background()))
+	require.NoError(t, svc.Stop(context.Background()), "second Stop must be a clean no-op")
 	assert.Equal(t, 1, f.stopCalls, "stop func must be called at most once")
 }
 
@@ -100,7 +154,7 @@ func TestMilestoneService_StopBeforeStart_NoPanic(t *testing.T) {
 	f := &fakeStarter{}
 	svc := newTestMilestoneService(f)
 
-	require.NoError(t, svc.Stop(time.Second))
+	require.NoError(t, svc.Stop(context.Background()))
 	assert.Equal(t, 0, f.stopCalls)
 }
 
@@ -113,6 +167,6 @@ func TestMilestoneService_StopAfterFailedStart_NoPanic(t *testing.T) {
 	svc := newTestMilestoneService(f)
 
 	require.Error(t, svc.Start(context.Background()))
-	require.NoError(t, svc.Stop(time.Second), "Stop after a failed Start must be a clean no-op")
+	require.NoError(t, svc.Stop(context.Background()), "Stop after a failed Start must be a clean no-op")
 	assert.Equal(t, 0, f.stopCalls)
 }

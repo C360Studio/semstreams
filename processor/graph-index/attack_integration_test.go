@@ -58,7 +58,7 @@ func TestIntegration_Attack_NoGoroutineLeakOnStart(t *testing.T) {
 
 		require.NoError(t, graphIndex.Start(ctx))
 		time.Sleep(50 * time.Millisecond)
-		require.NoError(t, graphIndex.Stop(1*time.Second))
+		require.NoError(t, graphIndex.Stop(context.Background()))
 
 		cancel()
 		// Cleanup NATS client between iterations to prevent goroutine accumulation
@@ -107,7 +107,7 @@ func TestIntegration_Attack_ManyTriplesSingleEntity(t *testing.T) {
 	})
 
 	require.NoError(t, graphIndex.Start(ctx))
-	defer graphIndex.Stop(5 * time.Second)
+	defer graphIndex.Stop(context.Background())
 
 	// Create entity with 1000 relationships
 	entityID := "c360.test.stress.entity.massive.001"
@@ -172,7 +172,7 @@ func TestIntegration_Attack_MultipleEntitiesSamePredicate(t *testing.T) {
 	})
 
 	require.NoError(t, graphIndex.Start(ctx))
-	defer graphIndex.Stop(5 * time.Second)
+	defer graphIndex.Stop(context.Background())
 
 	// Create 3 entities with the same predicate
 	entities := []string{
@@ -253,7 +253,7 @@ func TestIntegration_Attack_MultipleSourcesSameTarget(t *testing.T) {
 	})
 
 	require.NoError(t, graphIndex.Start(ctx))
-	defer graphIndex.Stop(5 * time.Second)
+	defer graphIndex.Stop(context.Background())
 
 	// 3 drones all reference the same mission
 	targetID := "c360.platform.robotics.mav1.mission.alpha"

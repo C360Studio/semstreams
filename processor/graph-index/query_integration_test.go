@@ -64,7 +64,7 @@ func setupIntegrationTest(t *testing.T, preStart ...func(*Component)) (*Componen
 
 	// Cleanup function - testClient.Terminate() is called by t.Cleanup automatically
 	cleanup := func() {
-		graphIndexComp.Stop(5 * time.Second)
+		graphIndexComp.Stop(context.Background())
 	}
 
 	return graphIndexComp, testClient.Client, cleanup
@@ -620,7 +620,7 @@ func TestQueryStatus_NonEmptyReplay_NotReadyUntilCaughtUp(t *testing.T) {
 	// of waiting out the 5s production cadence.
 	graphIndexComp.statusInterval = 100 * time.Millisecond
 	require.NoError(t, graphIndexComp.Start(ctx))
-	defer graphIndexComp.Stop(5 * time.Second)
+	defer graphIndexComp.Stop(context.Background())
 
 	// Readiness is monotonic (the sticky bootstrap flag never un-sets, and there are no
 	// write failures here), so the race-free invariant is: an incoming query succeeds

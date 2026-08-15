@@ -414,7 +414,10 @@ func (c *Component) Start(ctx context.Context) error {
 // part of the server's graceful shutdown, not via any check inside
 // this component (we don't gate handlers on running.Load() — graph-
 // gateway and the http gateway follow the same convention).
-func (c *Component) Stop(_ time.Duration) error {
+func (c *Component) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
 	c.running.Store(false)
 	return nil
 }

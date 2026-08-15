@@ -131,7 +131,7 @@ func (c *bucketAdopterComponent) Start(ctx context.Context) error {
 	c.mu.Unlock()
 	return nil
 }
-func (c *bucketAdopterComponent) Stop(_ time.Duration) error { return nil }
+func (c *bucketAdopterComponent) Stop(context.Context) error { return nil }
 
 func (c *bucketAdopterComponent) dirtyTTLBeforeSeam() time.Duration {
 	c.mu.Lock()
@@ -163,7 +163,7 @@ func (c *failingStartComponent) Initialize() error { return nil }
 func (c *failingStartComponent) Start(_ context.Context) error {
 	return errSimulatedStartFailure
 }
-func (c *failingStartComponent) Stop(_ time.Duration) error { return nil }
+func (c *failingStartComponent) Stop(context.Context) error { return nil }
 
 var _ component.LifecycleComponent = (*failingStartComponent)(nil)
 
@@ -258,7 +258,7 @@ func TestIntegration_StartAll_OwnerSeamReconcilesCreateRaceDirtInsideBoot(t *tes
 		"precondition: the guarded bucket must not exist before StartAll")
 
 	require.NoError(t, manager.StartAll(ctx))
-	defer func() { _ = manager.StopAll(2 * time.Second) }()
+	defer func() { _ = manager.StopAll(context.Background()) }()
 
 	// The component started through the real ComponentManager wire, and the
 	// bucket really carried the foreign TTL mid-boot before the seam ran.
@@ -324,7 +324,7 @@ func TestIntegration_StartAll_BootFailsClosedOnComponentStartFailure(t *testing.
 	manager.RegisterInstance("component-manager", cm)
 
 	err := manager.StartAll(ctx)
-	defer func() { _ = manager.StopAll(2 * time.Second) }()
+	defer func() { _ = manager.StopAll(context.Background()) }()
 
 	require.Error(t, err, "a component Start failure must fail Manager.StartAll (boot fails closed)")
 	assert.Contains(t, err.Error(), "doomed-component", "the boot error must name the failed component")

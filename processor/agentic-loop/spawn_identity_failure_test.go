@@ -211,7 +211,7 @@ func TestGraphStatePoisonFailsLoopWhileIntakeContinues(t *testing.T) {
 	if err := c.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer c.Stop(time.Second)
+	defer c.Stop(context.Background())
 
 	poison := errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired,
 		&graph.StateContractError{Reason: graph.GraphStateReasonNoncanonicalEntityID})
@@ -288,50 +288,19 @@ func TestGraphStatePoisonFailsLoopWhileIntakeContinues(t *testing.T) {
 	}
 }
 
-func TestConsumerLifecycleContext_DetachesStartupDeadlineButPreservesValues(t *testing.T) {
+func TestCleanupAfterStartFailureResetsState(t *testing.T) {
 	t.Parallel()
 
-	type traceKey struct{}
-	startCtx := context.WithValue(context.Background(), traceKey{}, "trace-value")
-	startCtx, expireStartup := context.WithCancel(startCtx)
-	lifecycleCtx, stop := newConsumerLifecycleContext(startCtx)
-	defer stop()
-
-	expireStartup()
-	if got := lifecycleCtx.Value(traceKey{}); got != "trace-value" {
-		t.Fatalf("lifecycle trace value = %v, want preserved value", got)
-	}
-	select {
-	case <-lifecycleCtx.Done():
-		t.Fatal("startup cancellation leaked into consumer lifecycle")
-	default:
-	}
-	stop()
-	select {
-	case <-lifecycleCtx.Done():
-	case <-time.After(time.Second):
-		t.Fatal("component lifecycle cancellation did not stop consumer context")
-	}
-}
-
-func TestCleanupConsumersAfterStartFailure_CancelsAndResetsState(t *testing.T) {
-	t.Parallel()
-
-	var cancelled atomic.Bool
 	c := &Component{
-		natsClient: &natsclient.Client{},
-		consumerCancel: func() {
-			cancelled.Store(true)
-		},
+		natsClient:    &natsclient.Client{},
 		consumerInfos: []consumerInfo{{streamName: "AGENT", consumerName: "partial-start"}},
 	}
 
-	c.cleanupConsumersAfterStartFailure()
-
-	if !cancelled.Load() {
-		t.Fatal("partial-start consumer lifecycle was not cancelled")
+	if err := c.cleanup(context.Background(), false); err != nil {
+		t.Fatalf("cleanup consumers: %v", err)
 	}
-	if c.consumerCancel != nil || c.consumerInfos != nil {
-		t.Fatalf("partial-start consumer state not reset: cancel=%v infos=%v", c.consumerCancel != nil, c.consumerInfos)
+
+	if c.consumerInfos != nil {
+		t.Fatalf("partial-start consumer state not reset: infos=%v", c.consumerInfos)
 	}
 }

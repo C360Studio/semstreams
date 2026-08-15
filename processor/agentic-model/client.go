@@ -726,7 +726,7 @@ func (c *Client) streamChatCompletion(ctx context.Context, chatReq openai.ChatCo
 					ContentDelta:   contentDelta,
 					ReasoningDelta: reasoningDelta,
 				}
-				c.chunkHandler(sc)
+				c.chunkHandler(ctx, sc)
 			}
 
 			// Record streaming metrics. TTFT is gated on either side
@@ -744,7 +744,7 @@ func (c *Client) streamChatCompletion(ctx context.Context, chatReq openai.ChatCo
 
 	// Send done signal to handler
 	if c.chunkHandler != nil {
-		c.chunkHandler(StreamChunk{RequestID: requestID, Done: true})
+		c.chunkHandler(ctx, StreamChunk{RequestID: requestID, Done: true})
 	}
 
 	return acc.toAgentResponse(requestID), nil

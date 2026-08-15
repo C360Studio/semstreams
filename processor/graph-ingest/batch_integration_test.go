@@ -44,7 +44,7 @@ func startBatchTestComponent(t *testing.T) (context.Context, *Component) {
 	require.NoError(t, c.Initialize())
 	require.NoError(t, c.Start(ctx))
 	t.Cleanup(func() {
-		_ = c.Stop(5 * time.Second)
+		_ = c.Stop(context.Background())
 	})
 
 	time.Sleep(100 * time.Millisecond)

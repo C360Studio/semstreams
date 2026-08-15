@@ -42,7 +42,7 @@ func TestEntityWatcher_DeletedEntityCleansRuleState(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, proc.Initialize())
 	require.NoError(t, proc.Start(ctx))
-	t.Cleanup(func() { _ = proc.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = proc.Stop(context.Background()) })
 	require.NotNil(t, proc.stateTracker, "state tracker must initialize")
 
 	const ruleID = "retry-rule"

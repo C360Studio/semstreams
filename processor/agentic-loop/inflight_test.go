@@ -153,46 +153,27 @@ func TestInFlight_UnknownHasExactlyOneConstructionSite(t *testing.T) {
 // introduced by adding a SECOND request subscription to Start.
 //
 // Start installs trajectorySub then inflightSub. If the second fails,
-// cleanupConsumersAfterStartFailure previously stopped only JetStream consumers, so
+// start-failure cleanup previously stopped only JetStream consumers, so
 // trajectorySub stayed live while `started` remained false — and Stop returns early
 // when not started, so nothing ever reaped it. A Start retry then installed a
 // SECOND responder on the same subject and NATS delivered requests to both.
 //
-// COVERAGE LIMIT, stated rather than implied: this asserts the teardown is wired
-// into the start-failure path and is idempotent. It does NOT inject a failure into
-// the second SubscribeForRequests call — there is no seam to do that without a
-// client fake, and inventing one would test the fake. The behavioural half is
-// covered by the integration suite, where a stopped component surfaces as
-// no-responders.
+// This local check covers the cleanup operation's idempotent, nil-safe request
+// subscription state transition. Start-failure generation retention is covered
+// separately through the component lifecycle path.
 func TestStartFailure_TearsDownRequestSubscriptions(t *testing.T) {
 	t.Parallel()
 
 	// Idempotent and nil-safe: both cleanup paths call it, and a Start that fails
 	// before either subscription exists must not panic.
 	c := &Component{}
-	c.unsubscribeRequestHandlers()
-	c.unsubscribeRequestHandlers()
+	if err := c.cleanup(context.Background(), false); err != nil {
+		t.Fatalf("first cleanup: %v", err)
+	}
+	if err := c.cleanup(context.Background(), false); err != nil {
+		t.Fatalf("second cleanup: %v", err)
+	}
 	if c.trajectorySub != nil || c.inflightSub != nil {
 		t.Error("teardown must leave both subscription handles nil")
-	}
-
-	src, err := os.ReadFile("component.go")
-	if err != nil {
-		t.Fatalf("read component.go: %v", err)
-	}
-	body := string(src)
-
-	cleanupAt := strings.Index(body, "func (c *Component) cleanupConsumersAfterStartFailure()")
-	if cleanupAt < 0 {
-		t.Fatal("cleanupConsumersAfterStartFailure not found — update this test with the rename")
-	}
-	end := strings.Index(body[cleanupAt:], "\n}\n")
-	if end < 0 {
-		t.Fatal("could not delimit cleanupConsumersAfterStartFailure")
-	}
-	if !strings.Contains(body[cleanupAt:cleanupAt+end], "unsubscribeRequestHandlers()") {
-		t.Error("start-failure cleanup must tear down request subscriptions: a subscription " +
-			"installed before the failing one otherwise stays live with started=false, which " +
-			"Stop will not reap, and a Start retry adds a duplicate responder")
 	}
 }

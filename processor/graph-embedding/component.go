@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/embedding"
 	"github.com/c360studio/semstreams/graph/readiness"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/cache"
@@ -293,7 +294,7 @@ type Component struct {
 	initialized bool
 	startTime   time.Time
 	wg          sync.WaitGroup
-	cancel      context.CancelFunc
+	generation  *lifecyclejoin.Generation
 
 	// Metrics (atomic for internal tracking)
 	messagesProcessed int64
@@ -610,16 +611,15 @@ func (c *Component) Initialize() error {
 
 // Start begins processing (must be initialized first)
 func (c *Component) Start(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Validate context
+	// Validate before inspecting lifecycle state.
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "Start", "context cannot be nil")
 	}
 	if err := ctx.Err(); err != nil {
 		return errs.WrapInvalid(err, "Component", "Start", "context already cancelled")
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	// Check initialization
 	if !c.initialized {
@@ -633,7 +633,6 @@ func (c *Component) Start(ctx context.Context) error {
 
 	// Create cancellable context
 	ctx, cancel := context.WithCancel(ctx)
-	c.cancel = cancel
 
 	// Check context before proceeding
 	if err := ctx.Err(); err != nil {
@@ -704,6 +703,7 @@ func (c *Component) Start(ctx context.Context) error {
 		c.closeCoalescerAfterFailedStart()
 		return errs.Wrap(err, "Component", "Start", "setup query handlers")
 	}
+	c.generation = lifecyclejoin.NewGeneration(cancel, c.wg.Wait)
 
 	// Mark as running
 	c.running = true
@@ -718,69 +718,53 @@ func (c *Component) Start(ctx context.Context) error {
 }
 
 // Stop gracefully shuts down the component
-func (c *Component) Stop(timeout time.Duration) error {
+func (c *Component) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
 	c.mu.Lock()
-
-	if !c.running {
+	generation := c.generation
+	if generation == nil {
 		c.mu.Unlock()
 		return nil // Already stopped
 	}
 
-	// Cancel the component context BEFORE closing the coalescer: Close blocks on
-	// an in-flight flush callback, and with the ctx already dead that flush aborts
-	// promptly (processEntityBatch's ctx guard; KV ops fail fast) instead of
-	// finishing KV operations against live NATS while the component tears down.
-	if c.cancel != nil {
-		c.cancel()
-	}
-
-	// Stop coalescer so no new batch callbacks fire during teardown
-	if c.entityCoalescer != nil {
-		_ = c.entityCoalescer.Close()
-	}
-
-	// Unsubscribe from query handlers
-	for _, sub := range c.querySubscriptions {
-		if sub != nil {
-			if err := sub.Unsubscribe(); err != nil {
-				c.logger.Warn("query subscription unsubscribe error", slog.Any("error", err))
-			}
-		}
-	}
-	c.querySubscriptions = nil
-
-	// Stop worker first
-	if c.worker != nil {
-		if err := c.worker.Stop(); err != nil {
-			c.logger.Warn("worker stop error", slog.Any("error", err))
-		}
-	}
-
-	// Close embedder
-	if c.embedder != nil {
-		if err := c.embedder.Close(); err != nil {
-			c.logger.Warn("embedder close error", slog.Any("error", err))
-		}
-	}
-
-	c.running = false
 	c.mu.Unlock()
 
-	// Wait for goroutines with timeout
-	done := make(chan struct{})
-	go func() {
-		c.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
+	return generation.Stop(ctx, func() error {
+		var stopErr error
+		if c.entityCoalescer != nil {
+			stopErr = errors.Join(stopErr, c.entityCoalescer.Close())
+		}
+		for _, sub := range c.querySubscriptions {
+			if sub != nil {
+				if err := sub.Unsubscribe(); err != nil {
+					c.logger.Warn("query subscription unsubscribe error", slog.Any("error", err))
+					stopErr = errors.Join(stopErr, err)
+				}
+			}
+		}
+		c.querySubscriptions = nil
+		if c.worker != nil {
+			if err := c.worker.Stop(); err != nil {
+				c.logger.Warn("worker stop error", slog.Any("error", err))
+				stopErr = errors.Join(stopErr, err)
+			}
+		}
+		if c.embedder != nil {
+			if err := c.embedder.Close(); err != nil {
+				c.logger.Warn("embedder close error", slog.Any("error", err))
+				stopErr = errors.Join(stopErr, err)
+			}
+		}
+		return stopErr
+	}, func(context.Context) error {
+		c.mu.Lock()
+		c.running = false
+		c.mu.Unlock()
 		c.logger.Info("component stopped gracefully", slog.String("component", "graph-embedding"))
 		return nil
-	case <-time.After(timeout):
-		c.logger.Warn("component stop timed out", slog.String("component", "graph-embedding"))
-		return errs.WrapTransient(errs.ErrConnectionTimeout, "Component", "Stop", fmt.Sprintf("stop timeout after %v", timeout))
-	}
+	})
 }
 
 // closeCoalescerAfterFailedStart releases the coalescer on a Start that fails

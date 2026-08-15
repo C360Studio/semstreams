@@ -432,7 +432,7 @@ func TestIntegration_ReadinessGate_WiredByComponentStart(t *testing.T) {
 	c := comp.(*Component)
 	require.NoError(t, c.Initialize())
 	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(10 * time.Second) })
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 
 	require.NotNil(t, c.statusWatcher, "Start must bind the readiness watcher")
 	require.Eventually(t, func() bool {
@@ -445,6 +445,6 @@ func TestIntegration_ReadinessGate_WiredByComponentStart(t *testing.T) {
 
 	// Stop must release the watcher so a later Start can bind a fresh one (a stopped
 	// Watcher cannot be restarted).
-	require.NoError(t, c.Stop(10*time.Second))
+	require.NoError(t, c.Stop(context.Background()))
 	assert.Nil(t, c.statusWatcher, "Stop must detach the watcher")
 }

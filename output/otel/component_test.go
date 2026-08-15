@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewComponent(t *testing.T) {
@@ -47,6 +49,23 @@ func TestNewComponent(t *testing.T) {
 	if meta.Type != "output" {
 		t.Errorf("expected type 'output', got %q", meta.Type)
 	}
+}
+
+func TestStopRetainsExporterShutdownErrorAcrossRepeatedCallers(t *testing.T) {
+	wantErr := errors.New("shutdown failed")
+	exporter := &MockExporter{ShutdownErr: wantErr}
+	runtimeDone := make(chan struct{})
+	close(runtimeDone)
+	c := &Component{
+		running:    true,
+		generation: lifecyclejoin.NewGeneration(func() {}, func() { <-runtimeDone }),
+		shutdownOp: lifecyclejoin.NewOperation(),
+		exporter:   exporter,
+		logger:     slog.Default(),
+	}
+	require.ErrorIs(t, c.Stop(context.Background()), wantErr)
+	require.ErrorIs(t, c.Stop(context.Background()), wantErr)
+	require.Equal(t, 1, exporter.shutdownCalls)
 }
 
 func TestNewComponentInvalidConfig(t *testing.T) {
@@ -310,7 +329,7 @@ func TestComponentStopWhenNotRunning(t *testing.T) {
 	otelComp := comp.(*Component)
 
 	// Stop when not running should not error
-	err = otelComp.Stop(5 * time.Second)
+	err = otelComp.Stop(context.Background())
 	if err != nil {
 		t.Errorf("Stop should not error when not running: %v", err)
 	}
@@ -321,7 +340,6 @@ func TestDirectPolicyObservationPrecedesFetchAndCleanupFollowsFetchExit(t *testi
 	ctx, cancel := context.WithCancel(context.Background())
 	comp := &Component{
 		running: true,
-		cancel:  cancel,
 		logger:  slog.Default(),
 		observePolicy: func(
 			context.Context,
@@ -347,9 +365,11 @@ func TestDirectPolicyObservationPrecedesFetchAndCleanupFollowsFetchExit(t *testi
 	}
 	assertOTELPolicyEvent(t, events, "observe")
 	comp.startObservedSubscription(ctx, observed)
+	comp.generation = lifecyclejoin.NewGeneration(cancel, comp.wg.Wait)
+	comp.shutdownOp = lifecyclejoin.NewOperation()
 	assertOTELPolicyEvent(t, events, "fetch-start")
 
-	if err := comp.Stop(time.Second); err != nil {
+	if err := comp.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	assertOTELPolicyEvent(t, events, "fetch-exit")
@@ -484,48 +504,6 @@ func TestExportDataBoundsEachFlushWithExportTimeout(t *testing.T) {
 	}
 }
 
-func TestExportLoopFinalFlushUsesFreshBoundedContext(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.ExportTraces = false
-	cfg.ExportTimeout = "20ms"
-	rawConfig, _ := json.Marshal(cfg)
-	created, err := NewComponent(rawConfig, component.Dependencies{})
-	if err != nil {
-		t.Fatalf("NewComponent: %v", err)
-	}
-	c := created.(*Component)
-	if err := c.Initialize(); err != nil {
-		t.Fatalf("Initialize: %v", err)
-	}
-
-	exporter := newHangingExporter()
-	defer close(exporter.release)
-	c.SetExporter(exporter)
-	c.metricMapper.RecordCounter("shutdown", "", "1", 1, nil)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	c.wg.Add(1)
-	done := make(chan struct{})
-	go func() {
-		c.exportLoop(ctx)
-		close(done)
-	}()
-
-	call := <-exporter.started
-	if !call.hasDeadline {
-		t.Fatal("shutdown flush context has no deadline")
-	}
-	if call.initiallyCanceled {
-		t.Fatal("shutdown flush reused the canceled component context")
-	}
-	select {
-	case <-done:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("final flush exceeded export_timeout")
-	}
-}
-
 func TestComponentGetSpanCollector(t *testing.T) {
 	cfg := DefaultConfig()
 	rawConfig, _ := json.Marshal(cfg)
@@ -614,6 +592,7 @@ type MockExporter struct {
 	ShutdownErr      error
 
 	shutdownCalled bool
+	shutdownCalls  int
 }
 
 type exportCall struct {
@@ -683,6 +662,7 @@ func (m *MockExporter) Shutdown(_ context.Context) error {
 	defer m.mu.Unlock()
 
 	m.shutdownCalled = true
+	m.shutdownCalls++
 	return m.ShutdownErr
 }
 

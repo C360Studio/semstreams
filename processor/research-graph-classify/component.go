@@ -18,11 +18,12 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph/llm"
 	"github.com/c360studio/semstreams/graph/query"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
-	"github.com/c360studio/semstreams/processor/research-graph-llmwrap"
+	llmwrap "github.com/c360studio/semstreams/processor/research-graph-llmwrap"
 )
 
 // Component implements the nl_classify processor. The struct field
@@ -65,10 +66,10 @@ type Component struct {
 	// the window without losing the Start/Stop serialisation, since
 	// neither method ever returns to the caller mid-mutation while
 	// holding the lock.
-	mu        sync.RWMutex
-	started   bool
-	startTime time.Time
-	wg        sync.WaitGroup
+	mu         sync.RWMutex
+	started    bool
+	startTime  time.Time
+	generation *lifecyclejoin.Generation
 
 	// NATS subscriptions kept for cleanup at Stop.
 	subscriptions []*natsclient.Subscription
@@ -198,7 +199,7 @@ func (c *Component) Initialize() error { return nil }
 // Start opens the AGENT_LOOPS bucket, optionally wires the LLM tier
 // into the classifier chain, subscribes to the configured input
 // ports, and reports idle.
-func (c *Component) Start(ctx context.Context) error {
+func (c *Component) Start(ctx context.Context) (startErr error) {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, ComponentName, "Start", "context cannot be nil")
 	}
@@ -207,19 +208,29 @@ func (c *Component) Start(ctx context.Context) error {
 	}
 
 	c.mu.Lock()
-	if c.started {
+	if c.generation != nil {
 		c.mu.Unlock()
 		return errs.WrapFatal(errs.ErrAlreadyStarted, ComponentName, "Start", "already started")
 	}
+	runCtx, cancel := context.WithCancel(ctx)
+	generation := lifecyclejoin.NewGeneration(cancel, nil)
+	c.generation = generation
 	c.mu.Unlock()
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		startErr = errors.Join(startErr, lifecyclejoin.RunPartialStartRollback(c.Stop))
+	}()
 
-	if err := c.openLoopsBucket(ctx); err != nil {
+	if err := c.openLoopsBucket(runCtx); err != nil {
 		return err
 	}
 
 	c.initLLMClassifierIfEnabled()
 
-	if err := c.subscribeInputs(ctx); err != nil {
+	if err := c.subscribeInputs(runCtx); err != nil {
 		return err
 	}
 
@@ -227,6 +238,7 @@ func (c *Component) Start(ctx context.Context) error {
 	c.started = true
 	c.startTime = time.Now()
 	c.mu.Unlock()
+	committed = true
 
 	c.logger.Info("nl_classify component started",
 		slog.String("loops_bucket", c.config.LoopsBucket),
@@ -325,59 +337,47 @@ func (c *Component) subscribeInputs(ctx context.Context) error {
 // Stop drains subscriptions, closes the LLM client, and reports
 // shutdown. Flips `started` under c.mu so a concurrent Health /
 // DataFlow read can't see a torn read of the lifecycle flag.
-func (c *Component) Stop(timeout time.Duration) error {
+func (c *Component) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
 	c.mu.Lock()
-	if !c.started {
+	generation := c.generation
+	if generation == nil {
 		c.mu.Unlock()
 		return nil
 	}
-	c.started = false
 	c.mu.Unlock()
 
-	for _, sub := range c.subscriptions {
-		if sub == nil {
-			continue
+	stopErr := generation.Stop(ctx, nil, func(ctx context.Context) error {
+		var drainErr error
+		for _, sub := range c.subscriptions {
+			if sub != nil {
+				drainErr = errors.Join(drainErr, sub.Drain(ctx))
+			}
 		}
-		if err := sub.Unsubscribe(); err != nil {
-			c.logger.Debug("unsubscribe failed during stop", slog.Any("error", err))
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return errors.Join(drainErr, ctxErr)
 		}
-	}
-	c.subscriptions = nil
-
-	// Wait for in-flight handlers to finish, bounded by the caller's
-	// timeout. Goroutine-leak avoidance per the standard pattern.
-	done := make(chan struct{})
-	go func() {
-		c.wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(timeout):
-		c.logger.Warn("Stop timeout reached with handlers in flight",
-			slog.Duration("timeout", timeout))
-	}
-
-	// gh#189: c.mu guards the close+nil-assign. The matching write in
-	// initLLMTier (line ~232) is ALSO under c.mu, so the data race
-	// between Stop's nil-assign and a concurrent Start's write is now
-	// eliminated — `go test -race` is clean on
-	// TestClassify_ConcurrentStartStop. Same shape as the
-	// research-graph-route fix; paired per the gh#189 issue body
-	// noting both components share this pattern.
-	//
-	// Acquired AFTER wg.Wait so handlers (which use c.classifier
-	// transitively holding c.llmClient) drain before Close runs,
-	// preventing HTTP connection corruption mid-call.
-	c.mu.Lock()
-	if c.llmClient != nil {
-		if err := c.llmClient.Close(); err != nil {
-			c.logger.Debug("LLM client close failed during stop", slog.Any("error", err))
+		c.subscriptions = nil
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		var closeErr error
+		if c.llmClient != nil {
+			closeErr = c.llmClient.Close()
+			c.llmClient = nil
 		}
-		c.llmClient = nil
+		c.started = false
+		return errors.Join(drainErr, closeErr)
+	})
+	if stopErr == nil {
+		c.mu.Lock()
+		if c.generation == generation {
+			c.generation = nil
+		}
+		c.mu.Unlock()
 	}
-	c.mu.Unlock()
-	return nil
+	return stopErr
 }
 
 // handleMessage is the per-message hot path. Recovers loop_id from
@@ -387,8 +387,6 @@ func (c *Component) Stop(timeout time.Duration) error {
 // to NATS because the publisher is fire-and-forget (no reply
 // expected) — propagation would silently drop the message.
 func (c *Component) handleMessage(ctx context.Context, subject string, _ []byte) {
-	c.wg.Add(1)
-	defer c.wg.Done()
 	atomic.AddInt64(&c.messagesProcessed, 1)
 	c.lastActivity.Store(time.Now())
 

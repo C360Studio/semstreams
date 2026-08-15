@@ -18,6 +18,7 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -50,9 +51,12 @@ type Component struct {
 	publishStream func(context.Context, string, []byte, string) error
 
 	// Lifecycle management
-	running   bool
-	startTime time.Time
-	mu        sync.RWMutex
+	running     bool
+	startTime   time.Time
+	mu          sync.RWMutex
+	lifecycleMu sync.Mutex
+	generation  *lifecyclejoin.Generation
+	starting    bool
 
 	// Metrics
 	requestsProcessed int64
@@ -152,7 +156,7 @@ func (c *Component) Initialize() error {
 }
 
 // Start begins processing tool calls
-func (c *Component) Start(ctx context.Context) error {
+func (c *Component) Start(ctx context.Context) (startErr error) {
 	// Validate context
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "Start", "context cannot be nil")
@@ -161,16 +165,47 @@ func (c *Component) Start(ctx context.Context) error {
 		return errs.WrapInvalid(err, "Component", "Start", "context already cancelled")
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.running {
-		return errs.WrapFatal(errs.ErrAlreadyStarted, "Component", "Start", "check running state")
+	c.lifecycleMu.Lock()
+	if c.generation != nil {
+		c.lifecycleMu.Unlock()
+		return errs.WrapFatal(errs.ErrAlreadyStarted, "Component", "Start", "cleanup authority already active")
 	}
 
 	if c.natsClient == nil {
+		c.lifecycleMu.Unlock()
 		return errs.WrapFatal(errs.ErrNoConnection, "Component", "Start", "check NATS client")
 	}
+	runCtx, cancel := context.WithCancel(ctx)
+	startDone := make(chan struct{})
+	generation := lifecyclejoin.NewGeneration(cancel, func() { <-startDone })
+	var finishStart sync.Once
+	finish := func() { finishStart.Do(func() { close(startDone) }) }
+	c.generation = generation
+	c.starting = true
+	c.lifecycleMu.Unlock()
+	committed := false
+	defer func() {
+		finish()
+		c.lifecycleMu.Lock()
+		c.starting = false
+		c.lifecycleMu.Unlock()
+		if committed {
+			return
+		}
+		rollbackErr := lifecyclejoin.RunPartialStartRollback(func(ctx context.Context) error {
+			return generation.Stop(ctx, nil, func(ctx context.Context) error {
+				return c.cleanup(ctx, false)
+			})
+		})
+		if rollbackErr == nil {
+			c.lifecycleMu.Lock()
+			if c.generation == generation {
+				c.generation = nil
+			}
+			c.lifecycleMu.Unlock()
+		}
+		startErr = errors.Join(startErr, rollbackErr)
+	}()
 
 	// Resolve and validate every required startup fact before allocating the
 	// discovery subscription or any local JetStream consumer.
@@ -178,7 +213,7 @@ func (c *Component) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	outcomeBucket, err := graph.EnsureCatalogBucket(ctx, c.natsClient, graph.BucketToolCallOutcomes)
+	outcomeBucket, err := graph.EnsureCatalogBucket(runCtx, c.natsClient, graph.BucketToolCallOutcomes)
 	if err != nil {
 		return errs.Wrap(err, "Component", "Start", "acquire tool-call outcome ledger")
 	}
@@ -186,17 +221,15 @@ func (c *Component) Start(ctx context.Context) error {
 
 	// tool.list request/reply discovery is bound exclusively by its resolved
 	// typed input port. There is no subject fallback or legacy alias.
-	sub, err := c.natsClient.SubscribeForRequests(ctx, toolListSubject, c.handleToolListRequest)
+	sub, err := c.natsClient.SubscribeForRequests(runCtx, toolListSubject, c.handleToolListRequest)
 	if err != nil {
-		c.cleanupLocked(0, false)
 		return errs.WrapTransient(err, "Component", "Start", "subscribe to tool.list discovery")
 	}
 	c.toolListSub = sub
 	c.logger.Info("Subscribed to tool.list", "subject", toolListSubject)
 
 	for _, consumer := range consumers {
-		if err := c.setupConsumer(ctx, consumer); err != nil {
-			c.cleanupLocked(0, false)
+		if err := c.setupConsumer(runCtx, consumer); err != nil {
 			return errs.Wrap(err, "Component", "Start", fmt.Sprintf("setup consumer for %s", consumer.port.Name))
 		}
 	}
@@ -207,8 +240,11 @@ func (c *Component) Start(ctx context.Context) error {
 	// component lets agentic-tools stay a pure tool-execution endpoint
 	// (it reads from the global registry, never writes).
 
+	c.mu.Lock()
 	c.running = true
 	c.startTime = time.Now()
+	c.mu.Unlock()
+	committed = true
 
 	return nil
 }
@@ -432,46 +468,71 @@ func sanitizeSubject(subject string) string {
 }
 
 // Stop gracefully stops the component within the given timeout
-func (c *Component) Stop(timeout time.Duration) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if !c.running {
+func (c *Component) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
+	c.lifecycleMu.Lock()
+	generation := c.generation
+	c.lifecycleMu.Unlock()
+	if generation == nil {
 		return nil
 	}
-	c.cleanupLocked(timeout, c.config.DeleteConsumerOnStop)
-	return nil
+	stopErr := generation.Stop(ctx, nil, func(ctx context.Context) error {
+		return c.cleanup(ctx, c.config.DeleteConsumerOnStop)
+	})
+	if stopErr == nil {
+		c.lifecycleMu.Lock()
+		if c.generation == generation {
+			c.generation = nil
+		}
+		c.lifecycleMu.Unlock()
+	}
+	return stopErr
 }
 
-func (c *Component) cleanupLocked(timeout time.Duration, deleteDurable bool) {
+func (c *Component) cleanup(ctx context.Context, deleteDurable bool) error {
+	c.mu.Lock()
+	toolListSub := c.toolListSub
+	infos := append([]consumerInfo(nil), c.consumerInfos...)
+	c.mu.Unlock()
+	var cleanupErr error
 	// Unsubscribe from tool.list request handler
-	if c.toolListSub != nil {
-		if err := c.toolListSub.Unsubscribe(); err != nil {
+	if toolListSub != nil {
+		if err := toolListSub.Drain(ctx); err != nil {
 			c.logger.Warn("tool list subscription unsubscribe error", slog.Any("error", err))
+			cleanupErr = errors.Join(cleanupErr, err)
 		}
-		c.toolListSub = nil
 	}
 
 	// Stop all JetStream consumers
-	for _, info := range c.consumerInfos {
+	for _, info := range infos {
 		if deleteDurable {
 			// Delete consumer from server (for test cleanup)
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			if err := c.natsClient.StopAndDeleteConsumer(ctx, info.streamName, info.consumerName); err != nil {
 				c.logger.Debug("Failed to delete consumer", "stream", info.streamName, "consumer", info.consumerName, "error", err)
+				cleanupErr = errors.Join(cleanupErr, err)
 			} else {
 				c.logger.Debug("Stopped and deleted consumer", "stream", info.streamName, "consumer", info.consumerName)
 			}
-			cancel()
 		} else {
 			// Just stop local consumption (keep durable consumer for resume)
-			c.natsClient.StopConsumer(info.streamName, info.consumerName)
+			if err := c.natsClient.StopConsumer(ctx, info.streamName, info.consumerName); err != nil {
+				c.logger.Debug("Failed to stop consumer", "stream", info.streamName, "consumer", info.consumerName, "error", err)
+				cleanupErr = errors.Join(cleanupErr, err)
+			}
 			c.logger.Debug("Stopped consumer", "stream", info.streamName, "consumer", info.consumerName)
 		}
 	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return errors.Join(cleanupErr, ctxErr)
+	}
+	c.mu.Lock()
+	c.toolListSub = nil
 	c.consumerInfos = nil
-
 	c.running = false
+	c.mu.Unlock()
+	return cleanupErr
 }
 
 // handleToolCall processes a tool call request
