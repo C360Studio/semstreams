@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/natsclient"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 func TestNewComponent(t *testing.T) {
@@ -310,6 +313,58 @@ func TestComponentStopWhenNotRunning(t *testing.T) {
 	err = otelComp.Stop(5 * time.Second)
 	if err != nil {
 		t.Errorf("Stop should not error when not running: %v", err)
+	}
+}
+
+func TestDirectPolicyObservationPrecedesFetchAndCleanupFollowsFetchExit(t *testing.T) {
+	events := make(chan string, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	comp := &Component{
+		running: true,
+		cancel:  cancel,
+		logger:  slog.Default(),
+		observePolicy: func(
+			context.Context,
+			natsclient.PortConsumerContext,
+			jetstream.ConsumerConfig,
+			jetstream.Consumer,
+		) (func(), error) {
+			events <- "observe"
+			return func() { events <- "cleanup" }, nil
+		},
+		consumeFrom: func(fetchCtx context.Context, _ jetstream.Consumer) {
+			events <- "fetch-start"
+			<-fetchCtx.Done()
+			events <- "fetch-exit"
+		},
+	}
+
+	observed, err := comp.prepareObservedSubscription(ctx,
+		natsclient.PortConsumerContext{Component: "otel-exporter", Port: "agent_events"},
+		jetstream.ConsumerConfig{MaxAckPending: 4}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOTELPolicyEvent(t, events, "observe")
+	comp.startObservedSubscription(ctx, observed)
+	assertOTELPolicyEvent(t, events, "fetch-start")
+
+	if err := comp.Stop(time.Second); err != nil {
+		t.Fatal(err)
+	}
+	assertOTELPolicyEvent(t, events, "fetch-exit")
+	assertOTELPolicyEvent(t, events, "cleanup")
+}
+
+func assertOTELPolicyEvent(t *testing.T, events <-chan string, want string) {
+	t.Helper()
+	select {
+	case got := <-events:
+		if got != want {
+			t.Fatalf("event = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %q", want)
 	}
 }
 

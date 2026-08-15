@@ -33,14 +33,18 @@ const defaultConsumerAckWait = 30 * time.Second
 // merely documenting it (ADR-070 B3).
 func (c *Client) ConsumeDurable(
 	ctx context.Context,
+	owner PortConsumerContext,
 	cfg StreamConsumerConfig,
 	heartbeat time.Duration,
 	handler func(context.Context, []byte) error,
 ) error {
+	if err := validatePortConsumerContext(owner, "ConsumeDurable"); err != nil {
+		return err
+	}
 	if err := validateHeartbeatBelowAckWait(heartbeat, cfg.AckWait); err != nil {
 		return err
 	}
-	return c.ConsumeStreamWithConfig(ctx, cfg, func(mctx context.Context, msg jetstream.Msg) {
+	return c.ConsumeStreamWithConfig(ctx, owner, cfg, func(mctx context.Context, msg jetstream.Msg) {
 		data := msg.Data()
 		// ConsumeWithHeartbeat owns Ack/Nak; a returned error is already handled
 		// (nak'd) — log for operator visibility only.

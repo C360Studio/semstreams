@@ -40,7 +40,10 @@ func TestIntegrationConsumerTermsFlatTerminalIntentWithoutAck(t *testing.T) {
 		spanCollector: NewSpanCollector("test", "v1", 1),
 	}
 	c.wg.Add(1)
-	go c.consumeEventsFromConsumer(ctx, consumer)
+	go func() {
+		defer c.wg.Done()
+		c.consumeEventsFromConsumer(ctx, consumer)
+	}()
 
 	flat := []byte(`{"domain":"agentic","category":"loop_completed","version":"v1","payload":{"loop_id":"loop-flat","task_id":"task-flat","outcome":"success","completed_at":"2026-08-12T12:00:00Z"}}`)
 	require.NoError(t, tc.Client.PublishToStream(ctx, "agent.complete.loop-flat", flat))

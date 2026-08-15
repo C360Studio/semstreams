@@ -41,7 +41,7 @@ func TestValidateHeartbeatBelowAckWait(t *testing.T) {
 // at the public entry (before any server interaction).
 func TestConsumeDurable_RejectsMisconfiguredHeartbeat(t *testing.T) {
 	c := &Client{}
-	err := c.ConsumeDurable(nil, StreamConsumerConfig{StreamName: "S", ConsumerName: "C", AckWait: 30 * time.Second},
+	err := c.ConsumeDurable(nil, PortConsumerContext{Component: "test", Port: "input"}, StreamConsumerConfig{StreamName: "S", ConsumerName: "C", AckWait: 30 * time.Second},
 		90*time.Second, func(_ context.Context, _ []byte) error { return nil })
 	if err == nil {
 		t.Fatal("ConsumeDurable must reject heartbeat >= ack_wait before touching the server")

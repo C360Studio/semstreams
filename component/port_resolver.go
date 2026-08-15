@@ -39,6 +39,9 @@ func resolveAndProjectPort(def PortDefinition, direction Direction) (Port, PortF
 	if field, err := validateDirectionRequirements(config, direction, binding); err != nil {
 		return Port{}, PortFacts{}, portConfigError(def.Name, config.Kind(), field, err)
 	}
+	if field, err := validateFieldConstraints(config, direction, binding); err != nil {
+		return Port{}, PortFacts{}, portConfigError(def.Name, config.Kind(), field, err)
+	}
 	port := Port{
 		Name:        def.Name,
 		Direction:   direction,
@@ -47,6 +50,46 @@ func resolveAndProjectPort(def PortDefinition, direction Direction) (Port, PortF
 		Config:      config,
 	}
 	return port, binding.facts(config), nil
+}
+
+func validateFieldConstraints(config Portable, direction Direction, binding portBinding) (string, error) {
+	if len(binding.fieldConstraints) == 0 {
+		return "", nil
+	}
+	data, err := json.Marshal(config)
+	if err != nil {
+		return "config", fmt.Errorf("marshal field constraints: %w", err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return "config", fmt.Errorf("decode field constraints: %w", err)
+	}
+	for name, constraint := range binding.fieldConstraints {
+		value, exists := fields[name]
+		if !exists {
+			continue
+		}
+		number, numeric := value.(float64)
+		if constraint.Minimum != nil && numeric && number < float64(*constraint.Minimum) {
+			return name, fmt.Errorf("field %q must be %d or greater", name, *constraint.Minimum)
+		}
+		if numeric && number == 0 && constraint.zeroIsOmitted {
+			continue
+		}
+		if len(constraint.Directions) > 0 && !directionAllowed(direction, constraint.Directions) {
+			return name, fmt.Errorf("field %q is not allowed for direction %q", name, direction)
+		}
+	}
+	return "", nil
+}
+
+func directionAllowed(direction Direction, allowed []Direction) bool {
+	for _, candidate := range allowed {
+		if candidate == direction {
+			return true
+		}
+	}
+	return false
 }
 
 func validateDirectionRequirements(config Portable, direction Direction, binding portBinding) (string, error) {

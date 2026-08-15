@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	semerrs "github.com/c360studio/semstreams/pkg/errs"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -72,6 +73,153 @@ func TestMetricsRegistry_RegisterGauge(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "Gauge should be registered in Prometheus registry")
+}
+
+func TestMetricsRegistryRegisterOrGetGaugeVecReturnsCanonicalCollector(t *testing.T) {
+	registry := NewMetricsRegistry()
+	newGauge := func() *prometheus.GaugeVec {
+		return prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "canonical_test_gauge",
+			Help: "Canonical identity test gauge",
+		}, []string{"component"})
+	}
+
+	first, err := registry.RegisterOrGetGaugeVec("test", "canonical", newGauge())
+	require.NoError(t, err)
+	second, err := registry.RegisterOrGetGaugeVec("test", "canonical", newGauge())
+	require.NoError(t, err)
+	assert.Same(t, first, second)
+
+	second.WithLabelValues("second").Set(2)
+	families, err := registry.PrometheusRegistry().Gather()
+	require.NoError(t, err)
+	var found bool
+	for _, family := range families {
+		if family.GetName() == "canonical_test_gauge" {
+			found = true
+			require.Len(t, family.Metric, 1)
+			assert.Equal(t, 2.0, family.Metric[0].GetGauge().GetValue())
+		}
+	}
+	assert.True(t, found)
+}
+
+func TestMetricsRegistryRegisterOrGetGaugeVecRejectsIncompatibleCollector(t *testing.T) {
+	registry := NewMetricsRegistry()
+	counter := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "logical_key_counter",
+		Help: "A counter occupying the logical key",
+	}, []string{"component"})
+	require.NoError(t, registry.RegisterCounterVec("test", "policy", counter))
+
+	candidate := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "different_gauge_descriptor",
+		Help: "A gauge with a different descriptor",
+	}, []string{"component"})
+	_, err := registry.RegisterOrGetGaugeVec("test", "policy", candidate)
+	require.Error(t, err)
+	assert.True(t, semerrs.IsFatal(err))
+}
+
+func TestMetricsRegistryRegisterOrGetGaugeVecRejectsSameKeyDifferentDescriptor(t *testing.T) {
+	registry := NewMetricsRegistry()
+	first := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "first_descriptor", Help: "First descriptor",
+	}, []string{"component"})
+	_, err := registry.RegisterOrGetGaugeVec("test", "policy", first)
+	require.NoError(t, err)
+
+	second := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "second_descriptor", Help: "Second descriptor",
+	}, []string{"component"})
+	_, err = registry.RegisterOrGetGaugeVec("test", "policy", second)
+	require.Error(t, err)
+	assert.True(t, semerrs.IsFatal(err))
+}
+
+func TestMetricsRegistryRegisterOrGetGaugeVecRejectsCrossKeyDescriptorAlias(t *testing.T) {
+	registry := NewMetricsRegistry()
+	newGauge := func() *prometheus.GaugeVec {
+		return prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "cross_key_alias", Help: "One descriptor must have one logical key",
+		}, []string{"component"})
+	}
+	_, err := registry.RegisterOrGetGaugeVec("test", "first", newGauge())
+	require.NoError(t, err)
+	_, err = registry.RegisterOrGetGaugeVec("test", "second", newGauge())
+	require.Error(t, err)
+	assert.True(t, semerrs.IsFatal(err))
+}
+
+func TestMetricsRegistryGaugeVecAPIsShareCanonicalOwnership(t *testing.T) {
+	newGauge := func() *prometheus.GaugeVec {
+		return prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "mixed_api_gauge", Help: "Legacy and canonical APIs share ownership",
+		}, []string{"component"})
+	}
+
+	t.Run("legacy first same key", func(t *testing.T) {
+		registry := NewMetricsRegistry()
+		legacy := newGauge()
+		require.NoError(t, registry.RegisterGaugeVec("test", "policy", legacy))
+		canonical, err := registry.RegisterOrGetGaugeVec("test", "policy", newGauge())
+		require.NoError(t, err)
+		assert.Same(t, legacy, canonical)
+	})
+
+	t.Run("legacy first cross key", func(t *testing.T) {
+		registry := NewMetricsRegistry()
+		require.NoError(t, registry.RegisterGaugeVec("test", "first", newGauge()))
+		_, err := registry.RegisterOrGetGaugeVec("test", "second", newGauge())
+		require.Error(t, err)
+		assert.True(t, semerrs.IsFatal(err))
+	})
+
+	t.Run("canonical first cross key", func(t *testing.T) {
+		registry := NewMetricsRegistry()
+		_, err := registry.RegisterOrGetGaugeVec("test", "first", newGauge())
+		require.NoError(t, err)
+		err = registry.RegisterGaugeVec("test", "second", newGauge())
+		require.Error(t, err)
+		assert.True(t, semerrs.IsFatal(err))
+	})
+}
+
+func TestMetricsRegistryRegisterOrGetGaugeVecConcurrentCompatibleIdentity(t *testing.T) {
+	registry := NewMetricsRegistry()
+	const workers = 24
+	start := make(chan struct{})
+	results := make(chan *prometheus.GaugeVec, workers)
+	errors := make(chan error, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			candidate := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+				Name: "concurrent_canonical_gauge", Help: "Concurrent canonical identity",
+			}, []string{"component"})
+			result, err := registry.RegisterOrGetGaugeVec("test", "concurrent", candidate)
+			results <- result
+			errors <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errors)
+	for err := range errors {
+		require.NoError(t, err)
+	}
+	var canonical *prometheus.GaugeVec
+	for result := range results {
+		if canonical == nil {
+			canonical = result
+			continue
+		}
+		assert.Same(t, canonical, result)
+	}
 }
 
 func TestMetricsRegistry_RegisterHistogram(t *testing.T) {

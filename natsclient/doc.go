@@ -113,13 +113,22 @@
 //	// Publish to stream
 //	err = client.PublishToStream(ctx, "events.user.created", []byte(`{"user_id": "123"}`))
 //
-//	// Consume from stream (receives full jetstream.Msg for access to Subject, Data, Headers)
-//	// Handler is responsible for calling msg.Ack() after processing
-//	err = client.ConsumeStream(ctx, "EVENTS", "events.>", func(msg jetstream.Msg) {
+//	// A port-backed consumer supplies bounded owner context. The client observes
+//	// requested versus effective acknowledgement admission before delivery.
+//	err = client.ConsumeStreamWithConfig(ctx,
+//	    natsclient.PortConsumerContext{Component: "example", Port: "events"},
+//	    natsclient.StreamConsumerConfig{
+//	        StreamName: "EVENTS", ConsumerName: "example-events",
+//	        FilterSubject: "events.>", AckPolicy: "explicit",
+//	    }, func(_ context.Context, msg jetstream.Msg) {
 //	    // Process event - msg.Subject() contains actual subject for wildcard filters
 //	    processEvent(msg.Subject(), msg.Data())
 //	    msg.Ack()
 //	})
+//
+//	// Framework-internal consumers with no JetStreamPort contract use the
+//	// explicitly unobserved operation with one complete consumer config.
+//	err = client.ConsumeInternalStreamWithConfig(ctx, internalConfig, internalHandler)
 //
 // # Key-Value Store
 //

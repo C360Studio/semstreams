@@ -142,9 +142,43 @@ func TestResolveJetStreamOutputAllowsProvisionerOwnedName(t *testing.T) {
 	}
 }
 
+func TestResolveJetStreamMaxAckPendingDirectionConstraints(t *testing.T) {
+	tests := []struct {
+		name      string
+		direction Direction
+		value     int
+		wantErr   bool
+	}{
+		{name: "input zero", direction: DirectionInput, value: 0},
+		{name: "input positive", direction: DirectionInput, value: 17},
+		{name: "input unlimited", direction: DirectionInput, value: -1},
+		{name: "input below minimum", direction: DirectionInput, value: -2, wantErr: true},
+		{name: "output zero remains omission", direction: DirectionOutput, value: 0},
+		{name: "output positive", direction: DirectionOutput, value: 17, wantErr: true},
+		{name: "output unlimited", direction: DirectionOutput, value: -1, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			definition := PortDefinition{Name: "events", Config: JetStreamPort{
+				StreamName: "EVENTS", Subjects: []string{"events.>"}, MaxAckPending: tt.value,
+			}}
+			_, err := definition.Resolve(tt.direction)
+			if tt.wantErr && err == nil {
+				t.Fatal("Resolve succeeded")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if err != nil && !strings.Contains(err.Error(), "max_ack_pending") {
+				t.Fatalf("error = %q, want max_ack_pending context", err)
+			}
+		})
+	}
+}
+
 func TestFactsForPortPreservesStreamAndInterfaceFacts(t *testing.T) {
 	iface := &InterfaceContract{Type: "example", Version: "v1"}
-	port, err := (PortDefinition{Name: "stream", Config: completeJetStreamPort(iface)}).Resolve(DirectionOutput)
+	port, err := (PortDefinition{Name: "stream", Config: completeJetStreamPort(iface)}).Resolve(DirectionInput)
 	if err != nil {
 		t.Fatal(err)
 	}

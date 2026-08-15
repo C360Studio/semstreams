@@ -42,7 +42,10 @@ type Component struct {
 	metricMapper *MetricMapper
 
 	// JetStream consumer
-	consumer jetstream.Consumer
+	consumer       jetstream.Consumer
+	policyCleanups []func()
+	observePolicy  func(context.Context, natsclient.PortConsumerContext, jetstream.ConsumerConfig, jetstream.Consumer) (func(), error)
+	consumeFrom    func(context.Context, jetstream.Consumer)
 
 	// Export client. Configuration validation guarantees a supported exporter.
 	exporter Exporter
@@ -63,6 +66,11 @@ type Component struct {
 	metricsExported int64
 	errors          int64
 	lastActivity    time.Time
+}
+
+type observedSubscription struct {
+	consumer jetstream.Consumer
+	cleanup  func()
 }
 
 // Exporter defines the interface for OTEL export operations.
@@ -214,13 +222,22 @@ func (c *Component) subscribeToEvents(ctx context.Context) error {
 		baseConsumerName += "-" + c.config.ConsumerNameSuffix
 	}
 
+	subscriptions := make([]observedSubscription, 0, len(c.inputs))
+	rollback := func() {
+		for _, created := range subscriptions {
+			created.cleanup()
+		}
+	}
+
 	for _, port := range c.inputs {
 		facts, err := port.Facts()
 		if err != nil {
+			rollback()
 			return err
 		}
 		stream, ok := facts.Stream()
 		if !ok || len(stream.Subjects()) != 1 {
+			rollback()
 			return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "subscribeToEvents", "input must declare one JetStream subject")
 		}
 		streamName := stream.Name()
@@ -236,34 +253,75 @@ func (c *Component) subscribeToEvents(ctx context.Context) error {
 
 		// Each port gets a unique consumer name derived from the base name and port name.
 		consumerName := baseConsumerName + "-" + port.Name
-
-		consumer, err := js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
+		consumerConfig, err := component.GetConsumerConfig(port)
+		if err != nil {
+			rollback()
+			return err
+		}
+		finalConfig := jetstream.ConsumerConfig{
 			Name:          consumerName,
 			Durable:       consumerName,
 			FilterSubject: subject,
 			AckPolicy:     jetstream.AckExplicitPolicy,
 			DeliverPolicy: jetstream.DeliverNewPolicy,
-		})
+			MaxAckPending: consumerConfig.MaxAckPending,
+		}
+		consumer, err := js.CreateOrUpdateConsumer(ctx, streamName, finalConfig)
 		if err != nil {
+			rollback()
+			return natsclient.ClassifyConsumerPolicyError(err, "otel.CreateOrUpdateConsumer")
+		}
+		observed, err := c.prepareObservedSubscription(ctx,
+			natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name}, finalConfig, consumer)
+		if err != nil {
+			rollback()
 			return err
 		}
+		subscriptions = append(subscriptions, observed)
+	}
 
-		// Track the first consumer for backward-compat access via c.consumer.
-		if c.consumer == nil {
-			c.consumer = consumer
-		}
-
-		c.wg.Add(1)
-		go c.consumeEventsFromConsumer(ctx, consumer)
+	for _, created := range subscriptions {
+		c.startObservedSubscription(ctx, created)
 	}
 
 	return nil
 }
 
+func (c *Component) prepareObservedSubscription(
+	ctx context.Context,
+	owner natsclient.PortConsumerContext,
+	finalConfig jetstream.ConsumerConfig,
+	consumer jetstream.Consumer,
+) (observedSubscription, error) {
+	observer := c.observePolicy
+	if observer == nil {
+		observer = c.natsClient.ObserveDirectPortConsumerPolicy
+	}
+	cleanup, err := observer(ctx, owner, finalConfig, consumer)
+	if err != nil {
+		return observedSubscription{}, err
+	}
+	return observedSubscription{consumer: consumer, cleanup: cleanup}, nil
+}
+
+func (c *Component) startObservedSubscription(ctx context.Context, subscription observedSubscription) {
+	c.policyCleanups = append(c.policyCleanups, subscription.cleanup)
+	if c.consumer == nil {
+		c.consumer = subscription.consumer
+	}
+	runner := c.consumeFrom
+	if runner == nil {
+		runner = c.consumeEventsFromConsumer
+	}
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		runner(ctx, subscription.consumer)
+	}()
+}
+
 // consumeEventsFromConsumer processes incoming agent events from a specific consumer.
 func (c *Component) consumeEventsFromConsumer(ctx context.Context, consumer jetstream.Consumer) {
-	defer c.wg.Done()
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -446,6 +504,10 @@ func (c *Component) Stop(_ time.Duration) error {
 
 	// Wait for goroutines
 	c.wg.Wait()
+	for _, cleanup := range c.policyCleanups {
+		cleanup()
+	}
+	c.policyCleanups = nil
 
 	// Shutdown exporter
 	exporter := c.getExporter()

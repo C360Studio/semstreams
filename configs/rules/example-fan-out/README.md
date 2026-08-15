@@ -92,10 +92,10 @@ has a unique TaskID stamped as `agent.loop.task` at spawn time
 - **DAG edges between subtasks.** No depends_on, no priority order.
   See [ADR-046 Phase 2](../../docs/adr/046-parallel-fan-out-and-gated-dag-dispatch.md)
   / GH #139 for the gated-DAG dispatch pattern.
-- **Bounded concurrency.** All N spawn in parallel. Operators with
-  rate-limited LLM endpoints should set the JetStream consumer's
-  `MaxAckPending` on the `agent.task.*` subject. Framework-side
-  concurrency caps are also Phase 2.
+- **Bounded concurrency.** All N publish operations fan out immediately.
+  `agentic-loop` owns `agent.task` acknowledgement admission at 1 and rejects
+  a nonzero port override. Provider concurrency remains component-owned;
+  configurable framework-side concurrency caps are Phase 2.
 - **Partial failure recovery.** If one investigator fails (`outcome=failed`),
   rule 02's condition (`outcome=success`) doesn't match, the counter
   never reaches the expected length, and rule 03 never fires. Add a

@@ -313,7 +313,7 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port) erro
 
 	// Get consumer config from port definition (allows user configuration)
 	// Defaults to "new" - only process new requests, don't replay old ones
-	consumerCfg, consumerErr := component.GetConsumerConfig(port)
+	consumerCfg, consumerErr := agenticModelConsumerPolicy(port)
 	if consumerErr != nil {
 		return errs.WrapInvalid(consumerErr, "agentic-model", "setupConsumer", "resolve consumer config")
 	}
@@ -358,7 +358,7 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port) erro
 		MessageTimeout: 30 * time.Minute,
 	}
 
-	err = c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err = c.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name, ComponentOwned: true}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		if hbErr := natsclient.ConsumeWithHeartbeat(msgCtx, msg, heartbeatInterval,
 			func(workCtx context.Context) error {
 				c.handleRequest(workCtx, msg.Data())
@@ -383,6 +383,19 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port) erro
 		"stream", streamName,
 		"consumer", consumerName)
 	return nil
+}
+
+func agenticModelConsumerPolicy(port component.Port) (component.ConsumerConfig, error) {
+	consumerConfig, err := component.GetConsumerConfig(port)
+	if err != nil {
+		return component.ConsumerConfig{}, err
+	}
+	if consumerConfig.MaxAckPending != 0 {
+		return component.ConsumerConfig{}, errs.WrapInvalid(
+			fmt.Errorf("port %q max_ack_pending is component-owned at 1", port.Name),
+			"agentic-model", "consumerPolicy", "component-owned consumer policy")
+	}
+	return consumerConfig, nil
 }
 
 // waitForStream waits for a JetStream stream to be available

@@ -845,7 +845,7 @@ func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port co
 
 	// Get consumer config from port (allows user configuration)
 	// Defaults to "new" - only process new messages, don't replay old ones
-	consumerCfg, consumerErr := component.GetConsumerConfig(port)
+	consumerCfg, componentMaxAckPending, consumerErr := agenticLoopConsumerPolicy(port)
 	if consumerErr != nil {
 		return errs.WrapInvalid(consumerErr, "agentic-loop", "setupConsumer", "resolve consumer config")
 	}
@@ -867,7 +867,7 @@ func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port co
 	switch port.Name {
 	case "agent.task":
 		ackWait = c.config.Consumer.ParsedAckWait()
-		maxAckPending = 1
+		maxAckPending = componentMaxAckPending
 		maxDeliver = c.config.Consumer.MaxDeliver
 		// The task adapter (taskInputHandler) owns the ordinary 30m work
 		// deadline; the outer callback stays lifecycle-bound so a timed-out
@@ -878,7 +878,7 @@ func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port co
 		heartbeatInterval = c.config.Consumer.ParsedHeartbeatInterval()
 	case "agent.response", "tool.result":
 		ackWait = c.config.Consumer.ParsedAckWait()
-		maxAckPending = 1
+		maxAckPending = componentMaxAckPending
 		maxDeliver = c.config.Consumer.MaxDeliver
 		msgTimeout = 30 * time.Minute
 		backOff = []time.Duration{30 * time.Second, 2 * time.Minute}
@@ -886,7 +886,7 @@ func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port co
 		heartbeatInterval = c.config.Consumer.ParsedHeartbeatInterval()
 	default: // agent.signal — fast, advisory
 		ackWait = 30 * time.Second
-		maxAckPending = 10
+		maxAckPending = componentMaxAckPending
 		maxDeliver = consumerCfg.MaxDeliver
 		msgTimeout = c.messageTimeout
 		useHeartbeat = false
@@ -931,7 +931,7 @@ func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port co
 		}
 	}
 
-	err = c.natsClient.ConsumeStreamWithConfigContexts(setupCtx, consumerCtx, cfg, handlerFn)
+	err = c.natsClient.ConsumeStreamWithConfigContexts(setupCtx, consumerCtx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name, ComponentOwned: true}, cfg, handlerFn)
 	if err != nil {
 		return errs.Wrap(err, "agentic-loop", "setupConsumer", fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
@@ -949,6 +949,23 @@ func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port co
 		"consumer", consumerName,
 		"port", port.Name)
 	return nil
+}
+
+func agenticLoopConsumerPolicy(port component.Port) (component.ConsumerConfig, int, error) {
+	consumerConfig, err := component.GetConsumerConfig(port)
+	if err != nil {
+		return component.ConsumerConfig{}, 0, err
+	}
+	fixed := 10
+	if port.Name == "agent.task" || port.Name == "agent.response" || port.Name == "tool.result" {
+		fixed = 1
+	}
+	if consumerConfig.MaxAckPending != 0 {
+		return component.ConsumerConfig{}, fixed, errs.WrapInvalid(
+			fmt.Errorf("port %q max_ack_pending is component-owned at %d", port.Name, fixed),
+			"agentic-loop", "consumerPolicy", "component-owned consumer policy")
+	}
+	return consumerConfig, fixed, nil
 }
 
 func consumeLongRunningInput(

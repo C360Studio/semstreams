@@ -150,7 +150,7 @@ type ComponentMetadata struct {
 
 // PropertySchema represents a JSON Schema property definition
 type PropertySchema struct {
-	Type                 string                    `json:"type"`
+	Type                 string                    `json:"type,omitempty"`
 	Description          string                    `json:"description,omitempty"`
 	Default              any                       `json:"default,omitempty"`
 	Enum                 []string                  `json:"enum,omitempty"`
@@ -164,6 +164,8 @@ type PropertySchema struct {
 	Properties           map[string]PropertySchema `json:"properties,omitempty"` // Nested properties for object types
 	AdditionalProperties *bool                     `json:"additionalProperties,omitempty"`
 	Required             []string                  `json:"required,omitempty"` // Required nested fields for object types
+	OneOf                []PropertySchema          `json:"oneOf,omitempty"`
+	Const                *int                      `json:"const,omitempty"`
 }
 
 // extractSchema converts a component registration to a JSON Schema
@@ -230,10 +232,126 @@ func convertProperties(props map[string]component.PropertySchema) map[string]Pro
 			}
 		}
 
+		if propSchema.Type == "ports" {
+			jsonSchemaProp = convertPortConfigSchema(propSchema)
+		}
+
 		result[propName] = jsonSchemaProp
 	}
 	return result
 }
+
+func convertPortConfigSchema(src component.PropertySchema) PropertySchema {
+	closed := false
+	return PropertySchema{
+		Type:                 "object",
+		Description:          src.Description,
+		Category:             src.Category,
+		AdditionalProperties: &closed,
+		Properties: map[string]PropertySchema{
+			"inputs":  portLaneSchema(src.PortFields, component.DirectionInput),
+			"outputs": portLaneSchema(src.PortFields, component.DirectionOutput),
+		},
+	}
+}
+
+func portLaneSchema(fields map[string]component.PortFieldInfo, direction component.Direction) PropertySchema {
+	return PropertySchema{
+		Type: "array",
+		Items: &PropertySchema{
+			Type:                 "object",
+			Properties:           portEnvelopeProperties(fields, direction),
+			Required:             []string{"name", "config"},
+			AdditionalProperties: boolPointer(false),
+		},
+	}
+}
+
+func portEnvelopeProperties(
+	fields map[string]component.PortFieldInfo,
+	direction component.Direction,
+) map[string]PropertySchema {
+	properties := make(map[string]PropertySchema, len(fields))
+	for name, field := range fields {
+		if name == "config" {
+			variants := make([]PropertySchema, 0, len(field.Variants))
+			variantNames := make([]string, 0, len(field.Variants))
+			for kind := range field.Variants {
+				variantNames = append(variantNames, kind)
+			}
+			sort.Strings(variantNames)
+			for _, kind := range variantNames {
+				variant := field.Variants[kind]
+				if !portFieldAllowsDirection(variant, direction) {
+					continue
+				}
+				variants = append(variants, convertPortFieldInfo(variant, direction))
+			}
+			properties[name] = PropertySchema{Type: "object", OneOf: variants}
+			continue
+		}
+		properties[name] = convertPortFieldInfo(field, direction)
+	}
+	return properties
+}
+
+func convertPortFieldInfo(field component.PortFieldInfo, direction component.Direction) PropertySchema {
+	result := PropertySchema{
+		Type:                 mapTypeToJSONSchema(field.Type),
+		Enum:                 append([]string(nil), field.Enum...),
+		Minimum:              field.Minimum,
+		AdditionalProperties: field.AdditionalProperties,
+	}
+	if field.Items != nil {
+		item := convertPortFieldInfo(*field.Items, direction)
+		result.Items = &item
+	}
+	if len(field.Properties) > 0 {
+		result.Properties = make(map[string]PropertySchema, len(field.Properties))
+		for name, property := range field.Properties {
+			converted, include := convertPortFieldForDirection(property, direction)
+			if !include {
+				continue
+			}
+			result.Properties[name] = converted
+		}
+		for _, required := range append(append([]string(nil), field.Required...), field.RequiredByDirection[direction]...) {
+			if _, ok := result.Properties[required]; ok {
+				result.Required = append(result.Required, required)
+			}
+		}
+	}
+	return result
+}
+
+func convertPortFieldForDirection(
+	field component.PortFieldInfo,
+	direction component.Direction,
+) (PropertySchema, bool) {
+	if portFieldAllowsDirection(field, direction) {
+		return convertPortFieldInfo(field, direction), true
+	}
+	if field.ZeroIsOmitted() {
+		return PropertySchema{Type: mapTypeToJSONSchema(field.Type), Const: intPointer(0)}, true
+	}
+	return PropertySchema{}, false
+}
+
+func portFieldAllowsDirection(field component.PortFieldInfo, direction component.Direction) bool {
+	if len(field.Directions) == 0 {
+		return true
+	}
+	for _, allowed := range field.Directions {
+		if allowed == direction {
+			return true
+		}
+	}
+	return false
+}
+
+func boolPointer(value bool) *bool { return &value }
+
+func intPointer(value int) *int { return &value }
 
 // convertPropertySchemaPtr converts a component.PropertySchema pointer to local PropertySchema
 func convertPropertySchemaPtr(src *component.PropertySchema) *PropertySchema {

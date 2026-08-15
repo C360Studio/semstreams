@@ -240,7 +240,7 @@ func start(ctx context.Context, client *natsclient.Client, telemetry telemetry) 
 		return nil, errors.New("max-delivery observer requires telemetry")
 	}
 	cfg := observerConsumerConfig()
-	if err := client.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	if err := client.ConsumeInternalStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		handleMessage(msgCtx, msg, telemetry)
 	}); err != nil {
 		return nil, fmt.Errorf("start MaxDeliver observer: %w", err)

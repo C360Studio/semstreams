@@ -37,7 +37,7 @@ func TestOutstandingWork_CountsDeliveredButUnacked(t *testing.T) {
 	// server-side counters internally rather than exposing either.
 	release := make(chan struct{})
 	delivered := make(chan struct{}, 16)
-	err := tc.Client.ConsumeStreamWithConfig(ctx, StreamConsumerConfig{
+	err := tc.Client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, StreamConsumerConfig{
 		StreamName:    "HANDLE_PROBE",
 		ConsumerName:  consumerName,
 		FilterSubject: "handle.probe.>",
@@ -107,7 +107,7 @@ func TestOutstandingWork_UnboundConsumerIsAnError(t *testing.T) {
 	defer cancel()
 
 	const consumerName = "handle-stop-consumer"
-	err := tc.Client.ConsumeStreamWithConfig(ctx, StreamConsumerConfig{
+	err := tc.Client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, StreamConsumerConfig{
 		StreamName:    "HANDLE_STOP",
 		ConsumerName:  consumerName,
 		FilterSubject: "handle.stop.>",

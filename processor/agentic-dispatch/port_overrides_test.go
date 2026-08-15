@@ -96,11 +96,11 @@ func TestResolveAndWaitForSubscriptionBindingsUsesOnlyDistinctResolvedStreams(t 
 		t.Fatalf("waited streams = %v, want distinct resolved streams %v", waited, want)
 	}
 	wantBindings := subscriptionInputBindings{
-		userMessage:     subscriptionInputBinding{streamName: "TENANT_USER", subject: "tenant.user.message.>"},
-		agentComplete:   subscriptionInputBinding{streamName: "TENANT_COMPLETE", subject: "tenant.agent.complete.*"},
-		agentCreated:    subscriptionInputBinding{streamName: "TENANT_EVENTS", subject: "tenant.agent.created.*"},
-		agentFailed:     subscriptionInputBinding{streamName: "TENANT_EVENTS", subject: "tenant.agent.failed.*"},
-		approvalPending: subscriptionInputBinding{streamName: "TENANT_APPROVAL", subject: "tenant.agent.approval-pending.*"},
+		userMessage:     subscriptionInputBinding{portName: "user.message", streamName: "TENANT_USER", subject: "tenant.user.message.>", consumerConfig: component.ConsumerConfig{DeliverPolicy: "new", AckPolicy: "explicit", MaxDeliver: 3}},
+		agentComplete:   subscriptionInputBinding{portName: "agent.complete", streamName: "TENANT_COMPLETE", subject: "tenant.agent.complete.*", consumerConfig: component.ConsumerConfig{DeliverPolicy: "new", AckPolicy: "explicit", MaxDeliver: 3}},
+		agentCreated:    subscriptionInputBinding{portName: "agent.created", streamName: "TENANT_EVENTS", subject: "tenant.agent.created.*", consumerConfig: component.ConsumerConfig{DeliverPolicy: "new", AckPolicy: "explicit", MaxDeliver: 3}},
+		agentFailed:     subscriptionInputBinding{portName: "agent.failed", streamName: "TENANT_EVENTS", subject: "tenant.agent.failed.*", consumerConfig: component.ConsumerConfig{DeliverPolicy: "new", AckPolicy: "explicit", MaxDeliver: 3}},
+		approvalPending: subscriptionInputBinding{portName: "agent.approval_pending", streamName: "TENANT_APPROVAL", subject: "tenant.agent.approval-pending.*", consumerConfig: component.ConsumerConfig{DeliverPolicy: "new", AckPolicy: "explicit", MaxDeliver: 3}},
 	}
 	if !reflect.DeepEqual(bindings, wantBindings) {
 		t.Fatalf("resolved bindings = %+v, want %+v", bindings, wantBindings)

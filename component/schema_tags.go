@@ -86,6 +86,7 @@ type SchemaDirectives struct {
 type PortFieldInfo struct {
 	Type                 string                   `json:"type"`
 	Editable             bool                     `json:"editable"`
+	Minimum              *int                     `json:"minimum,omitempty"`
 	Enum                 []string                 `json:"enum,omitempty"`
 	Required             []string                 `json:"required,omitempty"`
 	AnyRequired          [][]string               `json:"anyRequired,omitempty"`
@@ -95,7 +96,14 @@ type PortFieldInfo struct {
 	Variants             map[string]PortFieldInfo `json:"variants,omitempty"`
 	Items                *PortFieldInfo           `json:"items,omitempty"`
 	AdditionalProperties *bool                    `json:"additionalProperties,omitempty"`
+	zeroIsOmitted        bool
 }
+
+// ZeroIsOmitted reports whether numeric zero has omission semantics for this
+// field. It is intentionally absent from discovery JSON: editors use the
+// canonical Directions metadata, while schema projection uses this predicate
+// to preserve an explicitly supplied zero as semantic absence.
+func (p PortFieldInfo) ZeroIsOmitted() bool { return p.zeroIsOmitted }
 
 // CacheFieldInfo describes metadata for cache.Config fields
 type CacheFieldInfo struct {
@@ -723,6 +731,19 @@ func GeneratePortFieldSchema() map[string]PortFieldInfo {
 				continue
 			}
 			properties[name] = portConfigSchemaForType(field.Type)
+		}
+		for name, constraint := range binding.fieldConstraints {
+			property, exists := properties[name]
+			if !exists {
+				panic(fmt.Sprintf("port kind %q constraint names absent field %q", kind, name))
+			}
+			if constraint.Type != "" && constraint.Type != property.Type {
+				panic(fmt.Sprintf("port kind %q field %q constraint type %q conflicts with reflected type %q", kind, name, constraint.Type, property.Type))
+			}
+			property.Minimum = constraint.Minimum
+			property.zeroIsOmitted = constraint.zeroIsOmitted
+			property.Directions = append([]Direction(nil), constraint.Directions...)
+			properties[name] = property
 		}
 
 		directions := make([]Direction, 0, len(binding.directions))

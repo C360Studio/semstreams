@@ -85,7 +85,7 @@ Two observations make the fix clear:
 
 2. **The at-least-once consumer pattern is a framework primitive, not per-consumer
    glue.** natsclient gains a typed durable-consume wrapper —
-   `ConsumeDurable(ctx, cfg, heartbeat, handler func(ctx, []byte) error)` —
+   `ConsumeDurable(ctx, owner, cfg, heartbeat, handler func(ctx, []byte) error)` —
    composing `ConsumeStreamWithConfig` + `ConsumeWithHeartbeat` + ack/nak so a
    consumer's handler is `func(ctx, payload) error` and never touches
    `jetstream.Msg`. The framework owns the ack/heartbeat/redelivery semantics
@@ -181,6 +181,11 @@ Framework lands first (stream + `PublishToStreamWithAck` publisher +
 switch their dispatch consumers to `ConsumeDurable` + ack-after-marker in a
 coordinated pass. The old core-NATS subject publish is removed only after both
 consumers migrate (or behind a brief transitional config if needed).
+
+`ConsumeDurable` now requires `natsclient.PortConsumerContext` so every port-backed durable consumer is observed before
+delivery. Adopters supply only component/port ownership context; stream, consumer, and requested policy remain derived
+from the final `StreamConsumerConfig` and NATS `ConsumerInfo`. There is no compatibility overload for the former
+unobserved signature.
 
 ## References
 

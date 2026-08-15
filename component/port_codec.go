@@ -22,6 +22,7 @@ type portBinding struct {
 	required            []string
 	anyRequired         [][]string
 	requiredByDirection map[Direction][]string
+	fieldConstraints    map[string]PortFieldInfo
 }
 
 var canonicalPortKinds = []PortKind{
@@ -46,15 +47,27 @@ var portBindingTable = map[PortKind]portBinding{
 	PortKindHTTPClient:  newPortBinding(PortKindHTTPClient, inputOnly(), func() Portable { return &HTTPClientPort{} }, normalizeHTTPClientPort, httpClientPortFacts, []string{"method", "url_pattern"}, nil),
 	PortKindNATS:        newPortBinding(PortKindNATS, inputOutput(), func() Portable { return &NATSPort{} }, normalizeNATSPort, natsPortFacts, []string{"subject"}, nil),
 	PortKindNATSRequest: newPortBinding(PortKindNATSRequest, inputOutput(), func() Portable { return &NATSRequestPort{} }, normalizeNATSRequestPort, natsRequestPortFacts, []string{"subject"}, nil),
-	PortKindJetStream: withDirectionRequirements(
+	PortKindJetStream: withFieldConstraints(withDirectionRequirements(
 		newPortBinding(PortKindJetStream, inputOutput(), func() Portable { return &JetStreamPort{} }, normalizeJetStreamPort, jetStreamPortFacts, []string{"subjects"}, nil),
 		map[Direction][]string{DirectionInput: {"stream_name"}},
-	),
+	), map[string]PortFieldInfo{
+		"max_ack_pending": {
+			Type: "int", Editable: true, Minimum: intPointer(-1),
+			Directions: []Direction{DirectionInput}, zeroIsOmitted: true,
+		},
+	}),
 	PortKindKVWatch:      newPortBinding(PortKindKVWatch, inputOnly(), func() Portable { return &KVWatchPort{} }, normalizeKVWatchPort, kvWatchPortFacts, []string{"bucket"}, nil),
 	PortKindKVRead:       newPortBinding(PortKindKVRead, inputOnly(), func() Portable { return &KVReadPort{} }, normalizeKVReadPort, kvReadPortFacts, []string{"bucket"}, nil),
 	PortKindKVWrite:      newPortBinding(PortKindKVWrite, outputOnly(), func() Portable { return &KVWritePort{} }, normalizeKVWritePort, kvWritePortFacts, []string{"bucket"}, nil),
 	PortKindStoreRead:    newPortBinding(PortKindStoreRead, inputOnly(), func() Portable { return &StoreReadPort{} }, normalizeStoreReadPort, storeReadPortFacts, []string{"bucket"}, nil),
 	PortKindStoreProvide: newPortBinding(PortKindStoreProvide, outputOnly(), func() Portable { return &StoreProvidePort{} }, normalizeStoreProvidePort, storeProvidePortFacts, []string{"instance"}, nil),
+}
+
+func intPointer(value int) *int { return &value }
+
+func withFieldConstraints(binding portBinding, constraints map[string]PortFieldInfo) portBinding {
+	binding.fieldConstraints = constraints
+	return binding
 }
 
 func withDirectionRequirements(binding portBinding, requirements map[Direction][]string) portBinding {
@@ -362,9 +375,6 @@ func normalizeJetStreamPort(config Portable) (Portable, error) {
 	}
 	if port.MaxDeliver < 0 {
 		return nil, errors.New("field \"max_deliver\" must not be negative")
-	}
-	if port.MaxAckPending < -1 {
-		return nil, errors.New("field \"max_ack_pending\" must be -1 or greater")
 	}
 	if port.AckWait != "" {
 		if err := validatePositiveDuration("ack_wait", port.AckWait); err != nil {

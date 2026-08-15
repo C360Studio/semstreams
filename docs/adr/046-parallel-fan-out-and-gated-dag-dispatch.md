@@ -126,8 +126,10 @@ Constraints:
   independent by contract.
 - No bounded concurrency at the dispatch layer. Each iteration is a
   NATS publish (non-blocking); concurrency is determined by the
-  downstream consumer's `MaxAckPending` and worker pool. Operators
-  who need a cap set it on the JetStream consumer.
+  downstream consumer's `MaxAckPending` and worker pool. Ordinary port-backed
+  consumers honor the port declaration; agentic-loop owns its `agent.task`
+  value at 1, so broader agent fan-out requires a component-owned concurrency
+  design rather than an ineffective port override.
 - No framework-side join. The coordinator-as-counter pattern (issue
   #134 Option 3) handles join semantics rule-side: a downstream rule
   fires on each child completion, stamps a counter triple onto the

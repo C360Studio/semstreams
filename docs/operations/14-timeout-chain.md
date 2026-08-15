@@ -183,16 +183,17 @@ controls:
 even with perfect cancellation, a non-streaming cancel may bill for
 the full response the upstream finished generating.
 
-## Two surfaces for consumer tuning
+## Consumer tuning ownership
 
-The framework exposes consumer config at two levels. Both work; the
-per-port surface is preferred for new code because it generalizes to
-any JetStream consumer without per-component plumbing.
+Ordinary port-backed inputs honor per-port consumer configuration. The agentic-loop, agentic-model, and agentic-tools
+components own fixed acknowledgement-admission values (1/10, 1, and 3 respectively) and reject nonzero
+`max_ack_pending` declarations. Zero leaves those component policies intact. This makes ownership explicit instead of
+accepting a knob that cannot take effect.
 
 ### Per-port `JetStreamPort`
 
 `AckWait`, `HeartbeatInterval`, `MaxDeliver`, `DeliverPolicy`,
-`AckPolicy` live on the port struct. Operators tune them per-port
+`AckPolicy` live on the port struct. Operators tune honored fields per-port
 in component config:
 
 ```yaml

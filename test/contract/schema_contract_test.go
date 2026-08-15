@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/google/go-cmp/cmp"
+	"github.com/xeipuuv/gojsonschema"
 )
 
 // nonComponentSchemas lists schema files that are not component configurations.
@@ -149,6 +151,48 @@ func TestCommittedSchemasValidStructure(t *testing.T) {
 			// Validate required field exists (can be empty array)
 			if _, ok := schema["required"]; !ok {
 				t.Errorf("Missing required field")
+			}
+		})
+	}
+}
+
+func TestCommittedSchemaJetStreamOutputMaxAckPendingZeroSemantics(t *testing.T) {
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	schemaPath := filepath.Join(repoRoot, "schemas", "graph-ingest.v1.json")
+	tests := []struct {
+		name    string
+		value   any
+		include bool
+		valid   bool
+	}{
+		{name: "omitted", valid: true},
+		{name: "explicit zero", value: 0, include: true, valid: true},
+		{name: "positive", value: 7, include: true, valid: false},
+		{name: "unlimited", value: -1, include: true, valid: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := map[string]any{
+				"kind": "jetstream", "subjects": []string{"events.>"},
+			}
+			if tt.include {
+				config["max_ack_pending"] = tt.value
+			}
+			document := map[string]any{"ports": map[string]any{
+				"outputs": []any{map[string]any{"name": "events", "config": config}},
+			}}
+			result, validateErr := gojsonschema.Validate(
+				gojsonschema.NewReferenceLoader("file://"+schemaPath),
+				gojsonschema.NewGoLoader(document),
+			)
+			if validateErr != nil {
+				t.Fatal(validateErr)
+			}
+			if result.Valid() != tt.valid {
+				t.Fatalf("valid = %v, want %v; errors: %#v", result.Valid(), tt.valid, result.Errors())
 			}
 		})
 	}
@@ -453,6 +497,9 @@ func extractSchemaFromRegistration(name string, reg *component.Registration) map
 				prop["required"] = reqAny
 			}
 		}
+		if propSchema.Type == "ports" {
+			prop = convertPortConfigToMap(propSchema)
+		}
 
 		properties[propName] = prop
 	}
@@ -476,6 +523,128 @@ func extractSchemaFromRegistration(name string, reg *component.Registration) map
 	schema["x-component-metadata"] = metadata
 
 	return schema
+}
+
+func convertPortConfigToMap(src component.PropertySchema) map[string]interface{} {
+	result := map[string]interface{}{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]interface{}{
+			"inputs":  portLaneToMap(src.PortFields, component.DirectionInput),
+			"outputs": portLaneToMap(src.PortFields, component.DirectionOutput),
+		},
+	}
+	if src.Description != "" {
+		result["description"] = src.Description
+	}
+	if src.Category != "" {
+		result["category"] = src.Category
+	}
+	return result
+}
+
+func portLaneToMap(fields map[string]component.PortFieldInfo, direction component.Direction) map[string]interface{} {
+	return map[string]interface{}{
+		"type": "array",
+		"items": map[string]interface{}{
+			"type":                 "object",
+			"properties":           portEnvelopeToMap(fields, direction),
+			"required":             []interface{}{"name", "config"},
+			"additionalProperties": false,
+		},
+	}
+}
+
+func portEnvelopeToMap(
+	fields map[string]component.PortFieldInfo,
+	direction component.Direction,
+) map[string]interface{} {
+	result := make(map[string]interface{}, len(fields))
+	for name, field := range fields {
+		if name != "config" {
+			result[name] = portFieldInfoToMap(field, direction)
+			continue
+		}
+		variantNames := make([]string, 0, len(field.Variants))
+		for kind := range field.Variants {
+			variantNames = append(variantNames, kind)
+		}
+		sort.Strings(variantNames)
+		variants := make([]interface{}, 0, len(variantNames))
+		for _, kind := range variantNames {
+			variant := field.Variants[kind]
+			if portFieldAllowsDirection(variant, direction) {
+				variants = append(variants, portFieldInfoToMap(variant, direction))
+			}
+		}
+		result[name] = map[string]interface{}{"type": "object", "oneOf": variants}
+	}
+	return result
+}
+
+func portFieldInfoToMap(field component.PortFieldInfo, direction component.Direction) map[string]interface{} {
+	result := map[string]interface{}{"type": mapTypeToJSONSchema(field.Type)}
+	if len(field.Enum) > 0 {
+		values := make([]interface{}, len(field.Enum))
+		for index, value := range field.Enum {
+			values[index] = value
+		}
+		result["enum"] = values
+	}
+	if field.Minimum != nil {
+		result["minimum"] = float64(*field.Minimum)
+	}
+	if field.AdditionalProperties != nil {
+		result["additionalProperties"] = *field.AdditionalProperties
+	}
+	if field.Items != nil {
+		result["items"] = portFieldInfoToMap(*field.Items, direction)
+	}
+	if len(field.Properties) > 0 {
+		properties := make(map[string]interface{}, len(field.Properties))
+		for name, property := range field.Properties {
+			converted, include := portFieldForDirectionToMap(property, direction)
+			if include {
+				properties[name] = converted
+			}
+		}
+		result["properties"] = properties
+		required := make([]interface{}, 0, len(field.Required)+len(field.RequiredByDirection[direction]))
+		for _, name := range append(append([]string(nil), field.Required...), field.RequiredByDirection[direction]...) {
+			if _, ok := properties[name]; ok {
+				required = append(required, name)
+			}
+		}
+		if len(required) > 0 {
+			result["required"] = required
+		}
+	}
+	return result
+}
+
+func portFieldForDirectionToMap(
+	field component.PortFieldInfo,
+	direction component.Direction,
+) (map[string]interface{}, bool) {
+	if portFieldAllowsDirection(field, direction) {
+		return portFieldInfoToMap(field, direction), true
+	}
+	if field.ZeroIsOmitted() {
+		return map[string]interface{}{"type": mapTypeToJSONSchema(field.Type), "const": float64(0)}, true
+	}
+	return nil, false
+}
+
+func portFieldAllowsDirection(field component.PortFieldInfo, direction component.Direction) bool {
+	if len(field.Directions) == 0 {
+		return true
+	}
+	for _, allowed := range field.Directions {
+		if allowed == direction {
+			return true
+		}
+	}
+	return false
 }
 
 // mapTypeToJSONSchema must stay in sync with cmd/openapi-generator/main.go's

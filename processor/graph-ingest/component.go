@@ -1386,11 +1386,11 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.P
 		DeliverPolicy: consumerCfg.DeliverPolicy,
 		AckPolicy:     consumerCfg.AckPolicy,
 		MaxDeliver:    consumerCfg.MaxDeliver,
-		MaxAckPending: consumerCfg.MaxAckPending, // gh#480 backpressure knob (0 = server default)
+		MaxAckPending: consumerCfg.MaxAckPending, // gh#480: 0 leaves inherited/default/capped policy to NATS
 		AutoCreate:    false,
 	}
 
-	err = c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(_ context.Context, msg jetstream.Msg) {
+	err = c.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name}, cfg, func(_ context.Context, msg jetstream.Msg) {
 		// ADR-072: the consume closure decodes ONCE and submits to the keyed pool;
 		// the redelivery guard, apply, and ack move into processIngest (run on a
 		// pool lane, not this consumer goroutine). Metadata carries the stream name

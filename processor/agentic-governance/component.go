@@ -421,10 +421,11 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port, hand
 		DeliverPolicy: consumerCfg.DeliverPolicy,
 		AckPolicy:     consumerCfg.AckPolicy,
 		MaxDeliver:    consumerCfg.MaxDeliver,
+		MaxAckPending: consumerCfg.MaxAckPending,
 		AutoCreate:    false,
 	}
 
-	err = c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err = c.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		handler(msgCtx, msg.Data())
 		if ackErr := msg.Ack(); ackErr != nil {
 			c.logger.Error("Failed to ack JetStream message", "error", ackErr)

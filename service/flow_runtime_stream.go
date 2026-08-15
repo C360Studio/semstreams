@@ -288,12 +288,12 @@ func (fs *FlowService) handleStatusWebSocketImpl(w http.ResponseWriter, r *http.
 }
 
 // natsSubscriber interface for NATS pub/sub operations.
-// WebSocket streamers use JetStream consumers (ConsumeStreamWithConfig) to receive
+// WebSocket streamers use internal JetStream consumers to receive
 // observability data that is published via PublishToStream to JetStream streams.
 type natsSubscriber interface {
-	// ConsumeStreamWithConfig creates a JetStream consumer for receiving stream messages.
+	// ConsumeInternalStreamWithConfig creates a non-port consumer for receiving stream messages.
 	// Used by WebSocket streamers to consume logs, health, metrics, and flow status.
-	ConsumeStreamWithConfig(ctx context.Context, cfg natsclient.StreamConsumerConfig, handler func(context.Context, jetstream.Msg)) error
+	ConsumeInternalStreamWithConfig(ctx context.Context, cfg natsclient.StreamConsumerConfig, handler func(context.Context, jetstream.Msg)) error
 
 	// PublishToStream publishes data to a JetStream stream.
 	// Used for testing to inject messages into streams.
@@ -332,7 +332,7 @@ func healthStreamer(
 		AutoCreateConfig: autoCreate,
 	}
 
-	err := natsClient.ConsumeStreamWithConfig(ctx, cfg, func(_ context.Context, msg jetstream.Msg) {
+	err := natsClient.ConsumeInternalStreamWithConfig(ctx, cfg, func(_ context.Context, msg jetstream.Msg) {
 		// Check if client is subscribed to component_health
 		if !clientState.IsSubscribed("component_health") {
 			return
@@ -382,7 +382,7 @@ func flowStatusStreamer(
 		AutoCreateConfig: autoCreate,
 	}
 
-	err := natsClient.ConsumeStreamWithConfig(ctx, cfg, func(_ context.Context, msg jetstream.Msg) {
+	err := natsClient.ConsumeInternalStreamWithConfig(ctx, cfg, func(_ context.Context, msg jetstream.Msg) {
 		// Check if client is subscribed to flow_status
 		if !clientState.IsSubscribed("flow_status") {
 			return
@@ -430,7 +430,7 @@ func logStreamer(
 		AutoCreateConfig: autoCreate,
 	}
 
-	err := natsClient.ConsumeStreamWithConfig(ctx, cfg, func(_ context.Context, msg jetstream.Msg) {
+	err := natsClient.ConsumeInternalStreamWithConfig(ctx, cfg, func(_ context.Context, msg jetstream.Msg) {
 		// Check if client is subscribed to log_entry
 		if !clientState.IsSubscribed("log_entry") {
 			return
@@ -501,7 +501,7 @@ func metricsStreamer(
 		AutoCreateConfig: autoCreate,
 	}
 
-	err := natsClient.ConsumeStreamWithConfig(ctx, cfg, func(_ context.Context, msg jetstream.Msg) {
+	err := natsClient.ConsumeInternalStreamWithConfig(ctx, cfg, func(_ context.Context, msg jetstream.Msg) {
 		// Check if client is subscribed to component_metrics
 		if !clientState.IsSubscribed("component_metrics") {
 			return

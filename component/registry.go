@@ -1590,7 +1590,7 @@ func (r *Registry) SubscribeCapabilities(ctx context.Context, patterns ...string
 	// Use natsclient's consumer management
 	// Note: Currently using first pattern only. For multiple patterns, we would need
 	// to create multiple consumers or use a more complex filter.
-	err := natsClient.ConsumeStreamWithConfig(ctx, natsclient.StreamConsumerConfig{
+	err := natsClient.ConsumeInternalStreamWithConfig(ctx, natsclient.StreamConsumerConfig{
 		StreamName:    "COMPONENT_CAPABILITIES",
 		ConsumerName:  fmt.Sprintf("cap-registry-%s", nodeID),
 		FilterSubject: patterns[0],

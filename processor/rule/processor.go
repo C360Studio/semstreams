@@ -1122,10 +1122,11 @@ func (rp *Processor) setupJetStreamConsumer(ctx context.Context, port component.
 		DeliverPolicy: consumerCfg.DeliverPolicy,
 		AckPolicy:     consumerCfg.AckPolicy,
 		MaxDeliver:    consumerCfg.MaxDeliver,
+		MaxAckPending: consumerCfg.MaxAckPending,
 		AutoCreate:    false,
 	}
 
-	err = rp.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err = rp.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: rp.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		rp.handleMessage(msgCtx, subject, msg.Data())
 		if ackErr := msg.Ack(); ackErr != nil {
 			rp.logger.Error("Failed to ack JetStream message", "error", ackErr)

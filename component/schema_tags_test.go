@@ -1,6 +1,8 @@
 package component
 
 import (
+	"bytes"
+	"encoding/json"
 	stderrors "errors"
 	"reflect"
 	"testing"
@@ -576,6 +578,18 @@ func TestGeneratePortFieldSchema(t *testing.T) {
 	}
 	if len(jetstream.AnyRequired) != 0 {
 		t.Fatalf("jetstream retains alternative requirements = %#v", jetstream.AnyRequired)
+	}
+	maxAckPending := jetstream.Properties["max_ack_pending"]
+	if maxAckPending.Minimum == nil || *maxAckPending.Minimum != -1 ||
+		!maxAckPending.ZeroIsOmitted() || !sameDirections(maxAckPending.Directions, []Direction{DirectionInput}) {
+		t.Fatalf("max_ack_pending constraint = %#v", maxAckPending)
+	}
+	discoveryJSON, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(discoveryJSON, []byte("zeroIsOmitted")) || bytes.Contains(discoveryJSON, []byte("zero_is_omitted")) {
+		t.Fatalf("private zero-omission marker leaked into discovery JSON: %s", discoveryJSON)
 	}
 	if got := configField.Variants[string(PortKindTimer)].Directions; !sameDirections(got, []Direction{DirectionInput}) {
 		t.Fatalf("timer directions = %v", got)

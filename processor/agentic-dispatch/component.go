@@ -132,8 +132,10 @@ type consumerInfo struct {
 }
 
 type subscriptionInputBinding struct {
-	streamName string
-	subject    string
+	portName       string
+	streamName     string
+	subject        string
+	consumerConfig component.ConsumerConfig
 }
 
 type subscriptionInputBindings struct {
@@ -388,9 +390,10 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		DeliverPolicy: "last",
 		AckPolicy:     "explicit",
 		MaxDeliver:    3,
+		MaxAckPending: bindings.userMessage.consumerConfig.MaxAckPending,
 		AutoCreate:    false,
 	}
-	err = c.natsClient.ConsumeStreamWithConfig(ctx, userMsgCfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err = c.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.userMessage.portName}, userMsgCfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		c.handleUserMessage(msgCtx, msg.Data())
 		if ackErr := msg.Ack(); ackErr != nil {
 			c.logger.Error("Failed to ack user message", slog.String("error", ackErr.Error()))
@@ -412,9 +415,10 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		DeliverPolicy: "new",
 		AckPolicy:     "explicit",
 		MaxDeliver:    0,
+		MaxAckPending: bindings.agentComplete.consumerConfig.MaxAckPending,
 		AutoCreate:    false,
 	}
-	err = c.natsClient.ConsumeStreamWithConfig(ctx, agentCompleteCfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err = c.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.agentComplete.portName}, agentCompleteCfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		handleErr := c.handleTerminalDelivery(msgCtx, msg)
 		c.observeTerminalDelivery(handleErr)
 		if handleErr != nil {
@@ -437,9 +441,10 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		DeliverPolicy: "new",
 		AckPolicy:     "explicit",
 		MaxDeliver:    3,
+		MaxAckPending: bindings.agentCreated.consumerConfig.MaxAckPending,
 		AutoCreate:    false,
 	}
-	err = c.natsClient.ConsumeStreamWithConfig(ctx, agentCreatedCfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err = c.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.agentCreated.portName}, agentCreatedCfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		c.handleAgentCreated(msgCtx, msg.Data())
 		if ackErr := msg.Ack(); ackErr != nil {
 			c.logger.Error("Failed to ack agent created message", slog.String("error", ackErr.Error()))
@@ -461,9 +466,10 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		DeliverPolicy: "new",
 		AckPolicy:     "explicit",
 		MaxDeliver:    0,
+		MaxAckPending: bindings.agentFailed.consumerConfig.MaxAckPending,
 		AutoCreate:    false,
 	}
-	err = c.natsClient.ConsumeStreamWithConfig(ctx, agentFailedCfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err = c.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.agentFailed.portName}, agentFailedCfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		handleErr := c.handleTerminalDelivery(msgCtx, msg)
 		c.observeTerminalDelivery(handleErr)
 		if handleErr != nil {
@@ -499,9 +505,10 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		DeliverPolicy: "new",
 		AckPolicy:     "explicit",
 		MaxDeliver:    10,
+		MaxAckPending: bindings.approvalPending.consumerConfig.MaxAckPending,
 		AutoCreate:    false,
 	}
-	err = c.natsClient.ConsumeStreamWithConfig(ctx, agentApprovalPendingCfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err = c.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.approvalPending.portName}, agentApprovalPendingCfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		c.handleAgentApprovalPending(msgCtx, msg.Data())
 		if ackErr := msg.Ack(); ackErr != nil {
 			c.logger.Error("Failed to ack agent approval-pending message", slog.String("error", ackErr.Error()))
@@ -1059,7 +1066,16 @@ func (c *Component) resolveAndWaitForSubscriptionBindings(
 		if err != nil {
 			return subscriptionInputBinding{}, err
 		}
-		return subscriptionInputBinding{streamName: streamName, subject: subject}, nil
+		for _, port := range c.inputPorts {
+			if port.Name == portName {
+				consumerConfig, configErr := component.GetConsumerConfig(port)
+				if configErr != nil {
+					return subscriptionInputBinding{}, configErr
+				}
+				return subscriptionInputBinding{portName: portName, streamName: streamName, subject: subject, consumerConfig: consumerConfig}, nil
+			}
+		}
+		return subscriptionInputBinding{}, fmt.Errorf("input port %q not found", portName)
 	}
 
 	var bindings subscriptionInputBindings
