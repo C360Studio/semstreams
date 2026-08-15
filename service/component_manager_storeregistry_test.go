@@ -344,8 +344,8 @@ func TestDynamicProviderDuplicateFailsAndRemainsVisible(t *testing.T) {
 	if !rivalComp.stopped {
 		t.Fatal("dynamic rejected rival lifecycle Stop was not called")
 	}
-	if cm.components["rival"].Context != nil || cm.components["rival"].Cancel != nil {
-		t.Fatal("dynamic rejected rival component context was not cleared")
+	if cm.components["rival"].Cancel != nil {
+		t.Fatal("dynamic rejected rival component cancellation handle was not cleared")
 	}
 	select {
 	case <-rivalComp.startReturned:
@@ -470,8 +470,8 @@ func TestRestartedProviderDuplicateLeavesAdmittedReplacementFailed(t *testing.T)
 	if !rivalComp.stopped {
 		t.Fatal("restarted rejected rival lifecycle Stop was not called")
 	}
-	if cm.components["rival"].Context != nil || cm.components["rival"].Cancel != nil {
-		t.Fatal("restarted rejected rival component context was not cleared")
+	if cm.components["rival"].Cancel != nil {
+		t.Fatal("restarted rejected rival component cancellation handle was not cleared")
 	}
 	if _, ok := cm.storeRegistry.Streamable("rival-old"); ok {
 		t.Fatal("restart left the old provider registered after teardown")

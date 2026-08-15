@@ -69,24 +69,10 @@ type ManagedComponent struct {
 	// a healthy running component (gh#520).
 	Config types.ComponentConfig
 
-	// Named Context Management for Individual Component Lifecycle Control
-	//
-	// These fields store named child contexts to enable individual component cancellation
-	// during shutdown. This follows the pattern where ComponentManager creates a child
-	// context for each component and passes it to lifecycle.Start(ctx).
-	//
-	// The component itself NEVER stores the context - it receives it as a parameter
-	// following proper Go idioms. Only the ComponentManager stores these contexts
-	// to coordinate orderly shutdown and individual component cancellation.
-	//
-	// Pattern:
-	//   1. ComponentManager creates: ctx, cancel := context.WithCancel(parentCtx)
-	//   2. ComponentManager stores: mc.Context = ctx, mc.Cancel = cancel
-	//   3. ComponentManager calls: lifecycle.Start(mc.Context)
-	//   4. Component uses context as parameter (proper Go idiom)
-	//   5. ComponentManager can cancel individual components: mc.Cancel()
-	Context context.Context    // Named child context for this specific component
-	Cancel  context.CancelFunc // Named cancellation for this specific component
+	// Cancel lets ComponentManager signal this specific component to stop. The
+	// child context itself is passed directly to Start and is never retained on
+	// this mutable lifecycle record.
+	Cancel context.CancelFunc
 
 	// StartOrder tracks the order components were started for reverse shutdown
 	StartOrder int
