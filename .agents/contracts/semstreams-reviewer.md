@@ -148,6 +148,34 @@ until the owner explicitly accepts the reviewed design.
 
 ## High-signal runtime review
 
+### Context ownership
+
+- Any production struct retaining `context.Context` is `BLOCKING`, including embedded fields, renamed imports, type
+  aliases, wrapper types, and interface containers. A getter, provider closure, public knob, or other indirect path
+  that hides or recovers a stored context is the same blocking finding.
+- Require context as the first argument. An owning `Start` or `Run` may derive a lifecycle child context locally;
+  verify the exact received or derived operation context passes directly into goroutines, callbacks, and helpers. A
+  lifecycle owner may retain only a private `context.CancelFunc`, with synchronization proven against its start/stop
+  contract; it may not retain the context itself. Verify component tasks derive from `Start` or `Run` and join
+  `Stop`.
+- Root creation outside the process composition boundary is `BLOCKING`. Check constructors, factories, callbacks,
+  watchers, goroutines, `context.Background`, `context.TODO`, nil fallback, and `context.WithoutCancel`. Require
+  context-aware variants for blocking or cancelable operations when available. Permit `http.Server.BaseContext` only
+  as a lifecycle-injection closure where the server is composed and it captures the exact `Start` context;
+  repository-defined generic context getters and providers remain `BLOCKING`.
+- Callers must never pass nil. Exported context-taking boundaries reject nil when able to return an error; private
+  helpers rely on that invariant. Any nil-to-`context.Background` default is `BLOCKING`.
+- Detachment is allowed only for terminal cleanup or finalization, or an already-accepted durability operation whose
+  invariant requires bounded completion after owner cancellation. Require `context.WithTimeout` as the immediate
+  boundary. With a parent, require `context.WithTimeout(context.WithoutCancel(parent), budget)`. A timeout-only `Stop`
+  or equivalent finalizer with no parent contract may use `context.WithTimeout(context.Background(), budget)`. Work
+  must complete synchronously or join before return and never feed `Start`, `Run`, `Watch`, or continuing work.
+- Direct use or any unbounded descendant of `context.WithoutCancel` is `BLOCKING`. Nested child cancellation,
+  including `context.WithCancel` and `context.WithCancelCause`, is allowed beneath the bounded context only when all
+  tasks join before the terminal operation returns.
+- An exported lifecycle record exposing `context.CancelFunc` is `BLOCKING`. Existing hits are removal debt; only the
+  lifecycle owner may retain a private cancel function with proven synchronization.
+
 ### NATS RPC error contract
 
 - A classified handler called by raw `Request` plus JSON unmarshal can decode an error envelope as a zero-valued
@@ -246,8 +274,9 @@ until the owner explicitly accepts the reviewed design.
 
 ## Generic Go second pass
 
-Briefly flag context misuse, ignored cancellation, shared-memory races, missing `%w`, unlock hazards, error-class loss,
-or revive failures visible in the diff. Deep generic Go analysis is secondary to the semantic review above.
+Briefly flag ignored cancellation, shared-memory races, missing `%w`, unlock hazards, error-class loss, or revive
+failures visible in the diff. The production stored-context prohibition above is a primary blocking gate, not an
+optional generic-Go observation. Deep generic Go analysis is secondary to the semantic review above.
 
 ## Finding and verdict format
 

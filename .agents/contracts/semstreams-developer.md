@@ -161,6 +161,36 @@ PRs fell into the four classes below.
 
 ## Runtime footguns
 
+### Context ownership
+
+- Production structs SHALL NOT retain `context.Context`. This includes embedded fields, renamed imports, type
+  aliases, wrapper types, interface containers, getters, provider closures, and public knobs that hide or recover a
+  stored context. Existing violations are removal work, never precedent.
+- Pass context as the first argument. An owning `Start` or `Run` may derive a lifecycle child context locally; pass
+  the exact received or derived operation context directly into goroutines, callbacks, and helpers. Lifecycle owners
+  may retain only a private `context.CancelFunc` with synchronization matching the start/stop contract. Component
+  work derives from `Start` or `Run`, and every spawned task joins `Stop`.
+- Create production root contexts only at the process composition boundary. Constructors, factories, callbacks,
+  watchers, and goroutines must not invent roots with `context.Background`, `context.TODO`, or
+  `context.WithoutCancel`. Use context-aware standard APIs for blocking or cancelable operations when available.
+  `http.Server.BaseContext` may inject lifecycle only where the server is composed and its closure captures the exact
+  `Start` context; repository-defined generic context getters and providers remain prohibited.
+- Callers never pass nil context. Exported context-taking boundaries reject nil when able to return an error; private
+  helpers rely on the caller invariant. Never default nil to `context.Background`.
+- Detach only terminal cleanup or finalization, or an already-accepted durability operation whose invariant requires
+  bounded completion after owner cancellation. `context.WithTimeout` is the immediate boundary. With a parent, use
+  `context.WithTimeout(context.WithoutCancel(parent), budget)`. A timeout-only `Stop` or equivalent finalizer with no
+  parent contract may use `context.WithTimeout(context.Background(), budget)`. Complete synchronously or join all
+  tasks before return; never feed `Start`, `Run`, `Watch`, or continuing work.
+- Do not use `context.WithoutCancel(parent)` directly or create an unbounded descendant. Nested `context.WithCancel`,
+  `context.WithCancelCause`, or other child cancellation is allowed beneath the bounded context only when all tasks
+  join before the terminal operation returns.
+- Exported lifecycle records SHALL NOT expose `context.CancelFunc`. Existing violations are removal debt; only the
+  lifecycle owner may retain a private, synchronized cancel function.
+- Before changing a lifecycle or concurrency seam, inventory it for every disguised form above. If the requested
+  implementation would add, preserve, or work around any violation above, stop the slice and escalate for a removal
+  design; do not implement it.
+
 ### NATS RPC
 
 - Classified handlers require `RequestClassified` or `RequestWithRetryClassified`. Raw `Request` plus JSON unmarshal

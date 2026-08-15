@@ -129,6 +129,30 @@ terminal event was silently dropped. No amount of caller care fixes a prediction
 
 ## Design discipline
 
+- **Context retention is prohibited.** Inventory production code for `context.Context` retention whenever designing
+  lifecycle or concurrency work; a repository-wide removal change inventories every violation. Include embedded
+  fields, renamed imports, aliases, wrappers, interface containers, getters, provider closures, and configuration
+  knobs that hide or recover one. Treat each hit as a violation whose target state removes it, never as precedent.
+  Contexts enter operations as the first argument. An owning `Start` or `Run` may derive a lifecycle child context
+  locally; the design passes the exact received or derived operation context directly to goroutines, callbacks, and
+  helpers. Component work derives from `Start` or `Run`, and every spawned task joins `Stop`.
+- **Root creation stays at composition.** Inventory constructors, factories, callbacks, watchers, goroutines,
+  `context.Background`, `context.TODO`, nil fallback, and `context.WithoutCancel`. Blocking or cancelable operations
+  use context-aware standard APIs when available. The narrow `http.Server.BaseContext` lifecycle-injection closure
+  captures the exact `Start` context where the server is composed; repository-defined generic getters and providers
+  remain prohibited. Callers never pass nil. Exported context-taking boundaries reject nil when they can return an
+  error; private helpers rely on the caller invariant. Nothing defaults nil to `context.Background`.
+- **Detachment is terminal and bounded.** Permit it only for terminal cleanup or finalization, or an already-accepted
+  durability operation whose invariant requires bounded completion after owner cancellation. `context.WithTimeout`
+  is the immediate boundary. With a parent, use `context.WithTimeout(context.WithoutCancel(parent), budget)`. A
+  timeout-only `Stop` or equivalent terminal finalizer with no parent contract may use
+  `context.WithTimeout(context.Background(), budget)`. Work completes synchronously or joins before return and never
+  feeds `Start`, `Run`, `Watch`, or continuing work. Nothing uses `context.WithoutCancel` directly or creates an
+  unbounded descendant. Nested child cancellation, including `context.WithCancel` or `context.WithCancelCause`, is
+  allowed beneath the bounded context only when all tasks join.
+- **Cancellation authority stays private.** A lifecycle owner may retain only a private, correctly synchronized
+  `context.CancelFunc`; it may not retain the context itself. Inventory exported lifecycle records for
+  `context.CancelFunc` and design every hit out as removal debt, never precedent.
 - Extend the model, never build a channel beside it. A parallel declaration buys a resolution layer whose whole job
   is re-deriving a linkage the model already had. The tell: a design note admitting the linkage rests on a naming
   coincidence. A surface that cannot be expressed in the model needs the model extended, not an exemption.
