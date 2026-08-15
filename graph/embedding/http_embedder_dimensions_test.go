@@ -209,16 +209,14 @@ func TestWorkerSkipsDedupWhenEmbedderUnresolved(t *testing.T) {
 
 	w := NewWorker(s, unresolved, nil, discardLogger()).WithMaxSourceTextLen(8000).WithEmbedderType("http")
 	// Start needs a real index bucket to watch; this exercises the hop-2 dedup
-	// decision directly, so only the context it reads from is supplied.
-	w.ctx = ctx
-
+	// decision directly, so the operation context is passed to the helper below.
 	// The worker derives the key itself now; an unresolved width yields "".
 	key := DedupKey(w.embedderIdentity(), "text")
 	if key != "" {
 		t.Fatalf("an unresolved embedder must yield an empty dedup key, got %q", key)
 	}
 
-	vector, _, _, _, _, err := w.getOrGenerateEmbedding("acme.ops.a.b.c.2", "text", key, 1)
+	vector, _, _, _, _, err := w.getOrGenerateEmbedding(ctx, "acme.ops.a.b.c.2", "text", key, 1)
 	if err != nil {
 		t.Fatalf("getOrGenerateEmbedding: %v", err)
 	}

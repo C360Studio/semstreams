@@ -77,7 +77,6 @@ func TestFetchText_RegistryResolvesExactInstance(t *testing.T) {
 	m := &countingMetrics{}
 	var aOpens, bOpens int
 	w := &Worker{
-		ctx:              context.Background(),
 		maxSourceTextLen: 100,
 		metrics:          m,
 		storeResolver: fakeResolver{stores: map[string]storage.StreamableStore{
@@ -86,7 +85,7 @@ func TestFetchText_RegistryResolvesExactInstance(t *testing.T) {
 		}},
 	}
 
-	got, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "store-b", Key: "k"})
+	got, _, err := w.fetchTextFromStorage(t.Context(), &StorageRef{StorageInstance: "store-b", Key: "k"})
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -108,7 +107,6 @@ func TestGetSourceText_UnregisteredInstanceExcludesBodyAndContinuesIdentity(t *t
 	m := &countingMetrics{}
 	var foreignOpens int
 	w := &Worker{
-		ctx:              context.Background(),
 		maxSourceTextLen: 100,
 		metrics:          m,
 		storeResolver: fakeResolver{stores: map[string]storage.StreamableStore{
@@ -117,7 +115,7 @@ func TestGetSourceText_UnregisteredInstanceExcludesBodyAndContinuesIdentity(t *t
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	got, err := w.getSourceText(&Record{
+	got, err := w.getSourceText(t.Context(), &Record{
 		IdentityText: "inline identity",
 		StorageRef:   &StorageRef{StorageInstance: "missing", Key: "k"},
 	})
@@ -153,13 +151,13 @@ func TestHandleKVEntry_DeregisteredInstanceSkipsAndDeletesStaleRecord(t *testing
 	registry.Deregister("content")
 
 	m := &countingMetrics{}
-	w := &Worker{storage: s, ctx: ctx, maxSourceTextLen: 100, metrics: m,
+	w := &Worker{storage: s, maxSourceTextLen: 100, metrics: m,
 		storeResolver: registry, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	entry, err := index.Get(ctx, entityID)
 	if err != nil {
 		t.Fatalf("Get pending: %v", err)
 	}
-	_, _, terminal, outcome, reason := w.handleKVEntry(entry, false, 0)
+	_, _, terminal, outcome, reason := w.handleKVEntry(ctx, entry, false, 0)
 	if !terminal || outcome != OutcomeSkipped || reason != "" {
 		t.Fatalf("terminal outcome = (%v, %v, %q), want (true, skipped, empty reason)", terminal, outcome, reason)
 	}
@@ -174,7 +172,6 @@ func TestHandleKVEntry_DeregisteredInstanceSkipsAndDeletesStaleRecord(t *testing
 func TestFetchText_ResolveErrorMetricOnReadFailure(t *testing.T) {
 	m := &countingMetrics{}
 	w := &Worker{
-		ctx:              context.Background(),
 		maxSourceTextLen: 100,
 		metrics:          m,
 		storeResolver: fakeResolver{stores: map[string]storage.StreamableStore{
@@ -182,7 +179,7 @@ func TestFetchText_ResolveErrorMetricOnReadFailure(t *testing.T) {
 		}},
 	}
 
-	_, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "objectstore", Key: "k"})
+	_, _, err := w.fetchTextFromStorage(t.Context(), &StorageRef{StorageInstance: "objectstore", Key: "k"})
 	if err == nil {
 		t.Fatal("expected error when a resolved store fails to open")
 	}
@@ -195,7 +192,6 @@ func TestFetchText_ResolveErrorMetricOnReadFailure(t *testing.T) {
 func TestFetchText_ResolveErrorMetricOnStreamReadFailure(t *testing.T) {
 	m := &countingMetrics{}
 	w := &Worker{
-		ctx:              context.Background(),
 		maxSourceTextLen: 100,
 		metrics:          m,
 		storeResolver: fakeResolver{stores: map[string]storage.StreamableStore{
@@ -203,7 +199,7 @@ func TestFetchText_ResolveErrorMetricOnStreamReadFailure(t *testing.T) {
 		}},
 	}
 
-	_, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "objectstore", Key: "k"})
+	_, _, err := w.fetchTextFromStorage(t.Context(), &StorageRef{StorageInstance: "objectstore", Key: "k"})
 	if err == nil {
 		t.Fatal("expected error when a resolved store fails during Read")
 	}
@@ -224,7 +220,7 @@ func TestHandleKVEntry_ResolvedStoreFailureRemainsContentFailure(t *testing.T) {
 
 	m := &countingMetrics{}
 	w := &Worker{
-		storage: s, ctx: ctx, maxSourceTextLen: 100, metrics: m,
+		storage: s, maxSourceTextLen: 100, metrics: m,
 		storeResolver: fakeResolver{stores: map[string]storage.StreamableStore{
 			"content": readerStore{openErr: errors.New("bucket unavailable")},
 		}},
@@ -234,7 +230,7 @@ func TestHandleKVEntry_ResolvedStoreFailureRemainsContentFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get pending: %v", err)
 	}
-	_, _, terminal, outcome, reason := w.handleKVEntry(entry, false, 0)
+	_, _, terminal, outcome, reason := w.handleKVEntry(ctx, entry, false, 0)
 	if !terminal || outcome != OutcomeFailed || reason != failReasonContentError {
 		t.Fatalf("terminal outcome = (%v, %v, %q), want (true, failed, content_error)", terminal, outcome, reason)
 	}

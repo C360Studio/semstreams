@@ -46,6 +46,8 @@ const defaultSummaryFailedRetryBackoff = 5 * time.Minute
 // store. It holds NO CommunityStorage — it structurally cannot write the partition
 // bucket, which is the single-writer invariant that closes #607/#617 (ADR-087).
 type EnhancementWorker struct {
+	// Lifecycle methods take mu before pauseMu whenever both are needed. Worker
+	// loops use pauseMu alone, so Stop may hold mu while cancelling and joining.
 	mu sync.RWMutex
 
 	// Dependencies
@@ -60,12 +62,11 @@ type EnhancementWorker struct {
 	// State
 	started  bool
 	stopping bool
-	ctx      context.Context
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 
 	// Pause/resume coordination
-	pauseMu  sync.RWMutex  // Guards paused state
+	pauseMu  sync.RWMutex  // Guards paused state; lock order is mu -> pauseMu
 	paused   bool          // Whether worker is paused
 	pauseCh  chan struct{} // Closed when pausing requested
 	resumeCh chan struct{} // Closed when resume requested
@@ -166,6 +167,9 @@ func (w *EnhancementWorker) WithWorkers(n int) *EnhancementWorker {
 // Pause stops processing new communities while allowing in-flight work to complete.
 // Safe to call multiple times. Returns immediately after signaling workers to pause.
 func (w *EnhancementWorker) Pause() {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
 	w.pauseMu.Lock()
 	defer w.pauseMu.Unlock()
 
@@ -182,10 +186,13 @@ func (w *EnhancementWorker) Pause() {
 // Resume allows processing to continue after a Pause.
 // Safe to call multiple times.
 func (w *EnhancementWorker) Resume() {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
 	w.pauseMu.Lock()
 	defer w.pauseMu.Unlock()
 
-	if !w.paused {
+	if !w.started || !w.paused {
 		return
 	}
 
@@ -209,30 +216,40 @@ func (w *EnhancementWorker) Start(ctx context.Context) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "EnhancementWorker", "Start", "context cannot be nil")
+	}
 	if w.started {
 		return fmt.Errorf("enhancement worker already started")
 	}
 
 	// Create context for the worker
-	w.ctx, w.cancel = context.WithCancel(ctx)
+	runCtx, cancel := context.WithCancel(ctx)
 
-	// Initialize pause/resume channels
+	// Initialize pause/resume state for this generation while holding the
+	// lifecycle lock before any worker can observe it.
+	w.pauseMu.Lock()
+	w.paused = false
+	w.pauseCh = nil
 	w.resumeCh = make(chan struct{})
+	w.pauseMu.Unlock()
+	w.stopping = false
 
 	// Start KV watcher for COMMUNITY_INDEX
-	watcher, err := w.communityBucket.WatchAll(w.ctx)
+	watcher, err := w.communityBucket.WatchAll(runCtx)
 	if err != nil {
-		w.cancel()
+		cancel()
 		return errs.WrapTransient(err, "EnhancementWorker", "Start", "failed to create KV watcher")
 	}
 	w.watcher = watcher
+	w.cancel = cancel
 
 	// Start worker goroutines
 	for i := 0; i < w.workers; i++ {
 		w.wg.Add(1)
 		go func(workerID int) {
 			defer w.wg.Done()
-			w.processCommunities(workerID)
+			w.processCommunities(runCtx, workerID)
 		}(i)
 	}
 
@@ -244,14 +261,14 @@ func (w *EnhancementWorker) Start(ctx context.Context) error {
 	// pinned at 0 forever — violating the "summary-store volume is observable"
 	// requirement. Seeding at Start makes the gauge reflect the real count on the
 	// no-write path.
-	w.updateSizeGauge()
+	w.updateSizeGauge(runCtx)
 
 	w.logger.Info("Enhancement worker started", "workers", w.workers)
 	return nil
 }
 
 // processCommunities watches for KV changes and processes communities needing enhancement
-func (w *EnhancementWorker) processCommunities(workerID int) {
+func (w *EnhancementWorker) processCommunities(ctx context.Context, workerID int) {
 	defer func() {
 		if r := recover(); r != nil {
 			w.logger.Error("Enhancement worker panic recovered", "worker_id", workerID, "panic", r)
@@ -264,14 +281,14 @@ func (w *EnhancementWorker) processCommunities(workerID int) {
 		// Check if paused before processing
 		if w.IsPaused() {
 			w.logger.Debug("Worker waiting for resume", "worker_id", workerID)
-			if !w.waitForResume() {
+			if !w.waitForResume(ctx) {
 				return // Context cancelled while waiting
 			}
 			w.logger.Debug("Worker resumed", "worker_id", workerID)
 		}
 
 		select {
-		case <-w.ctx.Done():
+		case <-ctx.Done():
 			w.logger.Debug("Enhancement worker context cancelled", "worker_id", workerID)
 			return
 
@@ -287,7 +304,7 @@ func (w *EnhancementWorker) processCommunities(workerID int) {
 
 			// Process if this is a community record (not entity mapping)
 			if entry.Operation() == jetstream.KeyValuePut {
-				w.handleKVEntry(entry, workerID)
+				w.handleKVEntry(ctx, entry, workerID)
 			}
 		}
 	}
@@ -295,13 +312,13 @@ func (w *EnhancementWorker) processCommunities(workerID int) {
 
 // waitForResume blocks until Resume() is called or context is cancelled.
 // Returns true if resumed, false if context cancelled.
-func (w *EnhancementWorker) waitForResume() bool {
+func (w *EnhancementWorker) waitForResume(ctx context.Context) bool {
 	w.pauseMu.RLock()
 	resumeCh := w.resumeCh
 	w.pauseMu.RUnlock()
 
 	select {
-	case <-w.ctx.Done():
+	case <-ctx.Done():
 		return false
 	case <-resumeCh:
 		return true
@@ -312,7 +329,7 @@ func (w *EnhancementWorker) waitForResume() bool {
 // content-addressed enhancement decision. The partition bucket is a TRIGGER only:
 // what work happens is decided entirely by the summary store, not by the
 // COMMUNITY_INDEX record's status.
-func (w *EnhancementWorker) handleKVEntry(entry jetstream.KeyValueEntry, workerID int) {
+func (w *EnhancementWorker) handleKVEntry(ctx context.Context, entry jetstream.KeyValueEntry, workerID int) {
 	// Skip entity mapping keys (format: entity.{level}.{entityID}) — they carry a
 	// bare community ID string, not a Community record.
 	if strings.HasPrefix(entry.Key(), "entity.") {
@@ -338,14 +355,14 @@ func (w *EnhancementWorker) handleKVEntry(entry jetstream.KeyValueEntry, workerI
 		"kv_key", entry.Key(),
 		"member_count", len(community.Members))
 
-	w.enhanceCommunity(&community)
+	w.enhanceCommunity(ctx, &community)
 }
 
 // enhanceCommunity applies the content-addressed enhancement decision for one
 // community: compute the membership hash, read the summary store, and skip on an
 // llm-enhanced hit / back off on a fresh llm-failed record / summarize on a miss.
 // It NEVER writes COMMUNITY_INDEX.
-func (w *EnhancementWorker) enhanceCommunity(community *Community) {
+func (w *EnhancementWorker) enhanceCommunity(ctx context.Context, community *Community) {
 	hash := MembershipHash(community.Members)
 	// Key the summary by the payload's level. The detector writes key-level ==
 	// payload-level, and the graph-query cache resolves by key-normalized level,
@@ -353,7 +370,7 @@ func (w *EnhancementWorker) enhanceCommunity(community *Community) {
 	// fall back to the statistical floor (degraded, never corrupt).
 	level := community.Level
 
-	existing, err := w.summaries.GetSummary(w.ctx, level, hash)
+	existing, err := w.summaries.GetSummary(ctx, level, hash)
 	if err != nil {
 		// A transient read error skips this trigger rather than stampeding the LLM:
 		// the next COMMUNITY_INDEX change re-triggers and self-heals.
@@ -377,26 +394,26 @@ func (w *EnhancementWorker) enhanceCommunity(community *Community) {
 		}
 	}
 
-	w.summarizeAndStore(community, hash, level)
+	w.summarizeAndStore(ctx, community, hash, level)
 }
 
 // summarizeAndStore performs the LLM work for a membership miss (or a failed
 // record past its backoff) and writes the result to the summary store. On any
 // failure it records an llm-failed record so the backoff timer starts.
-func (w *EnhancementWorker) summarizeAndStore(community *Community, hash string, level int) {
+func (w *EnhancementWorker) summarizeAndStore(ctx context.Context, community *Community, hash string, level int) {
 	startTime := time.Now()
 
-	entities, err := w.fetchEntities(w.ctx, community.Members)
+	entities, err := w.fetchEntities(ctx, community.Members)
 	if err != nil {
 		latency := time.Since(startTime).Seconds()
 		w.metrics.RecordFailed(latency)
 		w.logger.Error("Failed to fetch entities", "community_id", community.ID, "error", err, "latency_s", latency)
-		w.markFailed(community, hash, level)
+		w.markFailed(ctx, community, hash, level)
 		return
 	}
 
 	// Generate LLM summary with per-request timeout (content fetching happens internally via ContentFetcher)
-	llmCtx, llmCancel := context.WithTimeout(w.ctx, w.llmTimeout)
+	llmCtx, llmCancel := context.WithTimeout(ctx, w.llmTimeout)
 	enhanced, err := w.llm.SummarizeCommunity(llmCtx, community, entities)
 	llmCancel()
 	// Treat an error, a nil result, an empty summary, or a graceful
@@ -406,7 +423,7 @@ func (w *EnhancementWorker) summarizeAndStore(community *Community, hash string,
 		latency := time.Since(startTime).Seconds()
 		w.metrics.RecordFailed(latency)
 		w.logger.Error("Failed to generate LLM summary", "community_id", community.ID, "error", err, "latency_s", latency)
-		w.markFailed(community, hash, level)
+		w.markFailed(ctx, community, hash, level)
 		return
 	}
 
@@ -420,7 +437,7 @@ func (w *EnhancementWorker) summarizeAndStore(community *Community, hash string,
 		MemberCount:    len(community.Members),
 		GeneratedAt:    time.Now(),
 	}
-	if err := w.summaries.PutSummary(w.ctx, rec); err != nil {
+	if err := w.summaries.PutSummary(ctx, rec); err != nil {
 		latency := time.Since(startTime).Seconds()
 		w.metrics.RecordFailed(latency)
 		w.logger.Error("Failed to write summary record", "community_id", community.ID, "error", err, "latency_s", latency)
@@ -430,7 +447,7 @@ func (w *EnhancementWorker) summarizeAndStore(community *Community, hash string,
 
 	latency := time.Since(startTime).Seconds()
 	w.metrics.RecordGenerated(latency)
-	w.updateSizeGauge()
+	w.updateSizeGauge(ctx)
 
 	w.logger.Debug("Community summary generated",
 		"community_id", community.ID,
@@ -450,7 +467,7 @@ func (w *EnhancementWorker) summarizeAndStore(community *Community, hash string,
 // succeeds and the other fails later, a blind failed write would overwrite the
 // llm-enhanced record. The CAS write guarantees a failure can never downgrade a
 // success (ADR-087 idempotency).
-func (w *EnhancementWorker) markFailed(community *Community, hash string, level int) {
+func (w *EnhancementWorker) markFailed(ctx context.Context, community *Community, hash string, level int) {
 	rec := &CommunitySummaryRecord{
 		MembershipHash: hash,
 		Level:          level,
@@ -458,21 +475,21 @@ func (w *EnhancementWorker) markFailed(community *Community, hash string, level 
 		MemberCount:    len(community.Members),
 		GeneratedAt:    time.Now(),
 	}
-	if err := w.summaries.PutFailedUnlessEnhanced(w.ctx, rec); err != nil {
+	if err := w.summaries.PutFailedUnlessEnhanced(ctx, rec); err != nil {
 		w.logger.Error("Failed to write llm-failed record", "community_id", community.ID, "error", err)
 		return
 	}
-	w.updateSizeGauge()
+	w.updateSizeGauge(ctx)
 }
 
 // updateSizeGauge refreshes the summaries-size gauge from the store. Called after
 // each write (writes are rare — only membership misses cost anything), so a steady
 // graph leaves the gauge at its last value, which is correct.
-func (w *EnhancementWorker) updateSizeGauge() {
+func (w *EnhancementWorker) updateSizeGauge(ctx context.Context) {
 	if w.metrics == nil {
 		return
 	}
-	n, err := w.summaries.CountSummaries(w.ctx)
+	n, err := w.summaries.CountSummaries(ctx)
 	if err != nil {
 		w.logger.Debug("failed to count summaries for size gauge", "error", err)
 		return
@@ -520,6 +537,12 @@ func (w *EnhancementWorker) Stop() error {
 		}
 	}
 
+	w.pauseMu.Lock()
+	w.paused = false
+	w.pauseCh = nil
+	w.resumeCh = nil
+	w.pauseMu.Unlock()
+	w.cancel = nil
 	w.started = false
 	w.logger.Info("Enhancement worker stopped")
 	return nil

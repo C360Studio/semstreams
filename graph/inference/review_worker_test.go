@@ -8,9 +8,24 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph/llm"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type reviewLifecycleWatcher struct {
+	jetstream.KeyWatcher
+	updates chan jetstream.KeyValueEntry
+}
+
+func (w *reviewLifecycleWatcher) Updates() <-chan jetstream.KeyValueEntry { return w.updates }
+func (*reviewLifecycleWatcher) Stop() error                               { return nil }
+
+type reviewLifecycleKV struct{ jetstream.KeyValue }
+
+func (*reviewLifecycleKV) WatchAll(context.Context, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
+	return &reviewLifecycleWatcher{updates: make(chan jetstream.KeyValueEntry)}, nil
+}
 
 // mockLLMClient implements llm.Client for testing.
 type mockLLMClient struct {
@@ -19,6 +34,21 @@ type mockLLMClient struct {
 	err       error
 	callCount int
 }
+
+type cancellationAwareReviewClient struct {
+	started chan context.Context
+}
+
+func (c *cancellationAwareReviewClient) ChatCompletion(ctx context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+	c.started <- ctx
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (*cancellationAwareReviewClient) Model() string { return "test-model" }
+func (*cancellationAwareReviewClient) Close() error  { return nil }
+
+type reviewContextKey struct{}
 
 func (m *mockLLMClient) ChatCompletion(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
 	m.mu.Lock()
@@ -105,6 +135,73 @@ func TestReviewWorker_NewReviewWorker(t *testing.T) {
 	// and covered by the code review.
 }
 
+func TestReviewWorkerStartRejectsNilContext(t *testing.T) {
+	w := &ReviewWorker{}
+
+	require.Error(t, w.Start(nil))
+}
+
+func TestReviewWorkerPauseStopRestartUsesOneLifecycleGeneration(t *testing.T) {
+	w := &ReviewWorker{
+		anomalyBucket: &reviewLifecycleKV{},
+		config:        ReviewConfig{Workers: 1},
+		logger:        slog.New(slog.DiscardHandler),
+	}
+	require.NoError(t, w.Start(t.Context()))
+
+	start := make(chan struct{})
+	stopErr := make(chan error, 1)
+	var calls sync.WaitGroup
+	calls.Add(2)
+	go func() {
+		defer calls.Done()
+		<-start
+		w.Pause()
+	}()
+	go func() {
+		defer calls.Done()
+		<-start
+		stopErr <- w.Stop()
+	}()
+	close(start)
+	calls.Wait()
+	require.NoError(t, <-stopErr)
+	require.False(t, w.IsPaused(), "Stop must retire the prior generation's pause state")
+
+	require.NoError(t, w.Start(t.Context()))
+	require.False(t, w.IsPaused(), "a restarted worker must begin unpaused")
+	require.NoError(t, w.Stop())
+}
+
+func TestReviewWorkerLLMChildContextRetainsGenerationAndCancels(t *testing.T) {
+	client := &cancellationAwareReviewClient{started: make(chan context.Context, 1)}
+	w := &ReviewWorker{
+		llmClient: client,
+		config: ReviewConfig{
+			AutoApproveThreshold: 0.9,
+			AutoRejectThreshold:  0.3,
+			FallbackToHuman:      true,
+			ReviewTimeout:        time.Minute,
+		},
+		logger: slog.New(slog.DiscardHandler),
+	}
+	parent, cancel := context.WithCancel(context.WithValue(t.Context(), reviewContextKey{}, "generation-1"))
+	done := make(chan struct{})
+	go func() {
+		w.makeDecision(parent, &StructuralAnomaly{ID: "review", Confidence: 0.6})
+		close(done)
+	}()
+	llmCtx := <-client.started
+	require.Equal(t, "generation-1", llmCtx.Value(reviewContextKey{}))
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("LLM review did not return after generation cancellation")
+	}
+	require.ErrorIs(t, llmCtx.Err(), context.Canceled)
+}
+
 func TestReviewWorker_MakeDecision_AutoApprove(t *testing.T) {
 	storage := newMockStorage()
 	applier := &mockApplier{}
@@ -131,7 +228,7 @@ func TestReviewWorker_MakeDecision_AutoApprove(t *testing.T) {
 		},
 	}
 
-	decision, reason := worker.makeDecision(anomaly)
+	decision, reason := worker.makeDecision(t.Context(), anomaly)
 	assert.Equal(t, DecisionApprove, decision)
 	assert.Contains(t, reason, "auto-approved")
 }
@@ -156,7 +253,7 @@ func TestReviewWorker_MakeDecision_AutoReject(t *testing.T) {
 		Confidence: 0.2, // Below 0.3 threshold
 	}
 
-	decision, reason := worker.makeDecision(anomaly)
+	decision, reason := worker.makeDecision(t.Context(), anomaly)
 	assert.Equal(t, DecisionReject, decision)
 	assert.Contains(t, reason, "auto-rejected")
 }
@@ -182,7 +279,7 @@ func TestReviewWorker_MakeDecision_HumanReview(t *testing.T) {
 		Confidence: 0.6, // Between thresholds
 	}
 
-	decision, reason := worker.makeDecision(anomaly)
+	decision, reason := worker.makeDecision(t.Context(), anomaly)
 	assert.Equal(t, DecisionHumanReview, decision)
 	assert.Contains(t, reason, "human review")
 }
@@ -192,11 +289,10 @@ func TestReviewWorker_MakeDecision_LLMApprove(t *testing.T) {
 	applier := &mockApplier{}
 	llmClient := &mockLLMClient{response: "APPROVE This relationship makes sense."}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	worker := &ReviewWorker{
-		ctx:       ctx,
 		storage:   storage,
 		applier:   applier,
 		llmClient: llmClient,
@@ -222,7 +318,7 @@ func TestReviewWorker_MakeDecision_LLMApprove(t *testing.T) {
 		},
 	}
 
-	decision, reason := worker.makeDecision(anomaly)
+	decision, reason := worker.makeDecision(ctx, anomaly)
 	assert.Equal(t, DecisionApprove, decision)
 	assert.Contains(t, reason, "This relationship makes sense")
 	assert.Equal(t, 1, llmClient.CallCount())
@@ -233,11 +329,10 @@ func TestReviewWorker_MakeDecision_LLMReject(t *testing.T) {
 	applier := &mockApplier{}
 	llmClient := &mockLLMClient{response: "REJECT These entities are unrelated."}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	worker := &ReviewWorker{
-		ctx:       ctx,
 		storage:   storage,
 		applier:   applier,
 		llmClient: llmClient,
@@ -257,7 +352,7 @@ func TestReviewWorker_MakeDecision_LLMReject(t *testing.T) {
 		Type:       AnomalySemanticStructuralGap,
 	}
 
-	decision, reason := worker.makeDecision(anomaly)
+	decision, reason := worker.makeDecision(ctx, anomaly)
 	assert.Equal(t, DecisionReject, decision)
 	assert.Contains(t, reason, "These entities are unrelated")
 }

@@ -17,7 +17,7 @@ import (
 // via the real pending -> failed transition (SaveFailed is an UPDATE lane).
 func seedFailedRecord(t *testing.T, s *Storage, entityID, sourceText, reason string, sourceRevision uint64) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := s.SavePending(ctx, entityID, "", sourceText, sourceRevision); err != nil {
 		t.Fatalf("seed SavePending: %v", err)
 	}
@@ -54,13 +54,13 @@ func TestHandleKVEntry_SaveFailedPersistenceMissIsNonTerminal(t *testing.T) {
 	embedder := &stubEmbedder{model: "m", dimensions: 3, generate: func([]string) ([][]float32, error) {
 		return nil, errors.New("dial tcp: connect: connection refused")
 	}}
-	w := &Worker{storage: s, embedder: embedder, ctx: ctx, logger: discardLogger()}
+	w := &Worker{storage: s, embedder: embedder, logger: discardLogger()}
 
 	entry, err := index.Get(ctx, entityID)
 	if err != nil {
 		t.Fatalf("Get seed: %v", err)
 	}
-	_, srcRev, terminal, _, _ := w.handleKVEntry(entry, false /*live phase*/, 0)
+	_, srcRev, terminal, _, _ := w.handleKVEntry(ctx, entry, false /*live phase*/, 0)
 
 	require.Equal(t, rev, srcRev)
 	require.False(t, terminal,
@@ -83,7 +83,7 @@ func TestHandleKVEntry_SaveFailedPersistenceMissIsNonTerminal(t *testing.T) {
 // (defaulting false in a bare Worker), so the live case would reprocess too.
 func TestHandleKVEntry_FailedRecordReprocessGatedByPhase(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	const entityID = "acme.ops.robotics.gcs.drone.phase"
 	const rev = uint64(5)
@@ -101,9 +101,9 @@ func TestHandleKVEntry_FailedRecordReprocessGatedByPhase(t *testing.T) {
 
 	t.Run("snapshot phase reprocesses the failed record", func(t *testing.T) {
 		s, entry, gen := newFailedWorker()
-		w := &Worker{storage: s, embedder: &stubEmbedder{model: "m", dimensions: 3, generate: gen.generate}, ctx: ctx, logger: discardLogger()}
+		w := &Worker{storage: s, embedder: &stubEmbedder{model: "m", dimensions: 3, generate: gen.generate}, logger: discardLogger()}
 
-		_, _, terminal, outcome, _ := w.handleKVEntry(entry, true /*snapshot*/, 0)
+		_, _, terminal, outcome, _ := w.handleKVEntry(ctx, entry, true /*snapshot*/, 0)
 		require.True(t, terminal)
 		require.Equal(t, OutcomeGenerated, outcome)
 		require.Equal(t, 1, gen.count(), "a failed record delivered in the restart snapshot must be re-embedded (#613 F3/D4)")
@@ -115,9 +115,9 @@ func TestHandleKVEntry_FailedRecordReprocessGatedByPhase(t *testing.T) {
 
 	t.Run("live phase skips the failed record", func(t *testing.T) {
 		s, entry, gen := newFailedWorker()
-		w := &Worker{storage: s, embedder: &stubEmbedder{model: "m", dimensions: 3, generate: gen.generate}, ctx: ctx, logger: discardLogger()}
+		w := &Worker{storage: s, embedder: &stubEmbedder{model: "m", dimensions: 3, generate: gen.generate}, logger: discardLogger()}
 
-		_, _, terminal, _, _ := w.handleKVEntry(entry, false /*live*/, 0)
+		_, _, terminal, _, _ := w.handleKVEntry(ctx, entry, false /*live*/, 0)
 		require.False(t, terminal, "a live failed record must not be reprocessed (hot-loop guard)")
 		require.Equal(t, 0, gen.count(), "a live failed record must not be re-embedded")
 
@@ -136,7 +136,7 @@ func TestHandleKVEntry_FailedRecordReprocessGatedByPhase(t *testing.T) {
 // phase gate can fail safe toward not-reprocessing without losing recovery.
 func TestFailedRecordRecoveredByHop1RepublishBackstop(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	const entityID = "acme.ops.robotics.gcs.drone.backstop"
 	index := newMemKV()
@@ -144,12 +144,12 @@ func TestFailedRecordRecoveredByHop1RepublishBackstop(t *testing.T) {
 	seedFailedRecord(t, s, entityID, "text", failReasonConnectionRefused, 5)
 
 	gen := &genCounter{}
-	w := &Worker{storage: s, embedder: &stubEmbedder{model: "m", dimensions: 3, generate: gen.generate}, ctx: ctx, logger: discardLogger()}
+	w := &Worker{storage: s, embedder: &stubEmbedder{model: "m", dimensions: 3, generate: gen.generate}, logger: discardLogger()}
 
 	// Live phase: the failed record is skipped (as if the race had misclassified it).
 	failedEntry, err := index.Get(ctx, entityID)
 	require.NoError(t, err)
-	_, _, terminal, _, _ := w.handleKVEntry(failedEntry, false, 0)
+	_, _, terminal, _, _ := w.handleKVEntry(ctx, failedEntry, false, 0)
 	require.False(t, terminal)
 	require.Equal(t, 0, gen.count())
 
@@ -157,7 +157,7 @@ func TestFailedRecordRecoveredByHop1RepublishBackstop(t *testing.T) {
 	require.NoError(t, s.SavePending(ctx, entityID, "", "text", 6))
 	pendingEntry, err := index.Get(ctx, entityID)
 	require.NoError(t, err)
-	_, _, terminal2, outcome2, _ := w.handleKVEntry(pendingEntry, false, 0)
+	_, _, terminal2, outcome2, _ := w.handleKVEntry(ctx, pendingEntry, false, 0)
 	require.True(t, terminal2)
 	require.Equal(t, OutcomeGenerated, outcome2)
 	require.Equal(t, 1, gen.count(),
@@ -174,12 +174,99 @@ func TestFailedRecordRecoveredByHop1RepublishBackstop(t *testing.T) {
 // goroutine interleaving.
 type manualWatchKV struct {
 	*memKV
-	updates chan jetstream.KeyValueEntry
+	updates  chan jetstream.KeyValueEntry
+	watchCtx chan context.Context
+	ioCtx    chan context.Context
 }
 
-func (k *manualWatchKV) WatchAll(context.Context, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
+func (k *manualWatchKV) WatchAll(ctx context.Context, _ ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
+	if k.watchCtx != nil {
+		k.watchCtx <- ctx
+	}
 	return &memWatcher{updates: k.updates}, nil
 }
+
+func (k *manualWatchKV) Get(ctx context.Context, key string) (jetstream.KeyValueEntry, error) {
+	if k.ioCtx != nil {
+		k.ioCtx <- ctx
+	}
+	return k.memKV.Get(ctx, key)
+}
+
+func (k *manualWatchKV) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {
+	if k.ioCtx != nil {
+		k.ioCtx <- ctx
+	}
+	return k.memKV.Update(ctx, key, value, revision)
+}
+
+type workerContextKey struct{}
+
+func TestWorkerPassesExactRunContextThroughWatcherIOEmbedderAndCallbacks(t *testing.T) {
+	parent, cancel := context.WithCancel(context.WithValue(t.Context(), workerContextKey{}, "generation-1"))
+	defer cancel()
+
+	base := newMemKV()
+	kv := &manualWatchKV{
+		memKV:    base,
+		updates:  make(chan jetstream.KeyValueEntry, 2),
+		watchCtx: make(chan context.Context, 1),
+	}
+	storage := NewStorage(kv, newMemKV())
+	const entityID = "acme.ops.robotics.gcs.drone.context"
+	require.NoError(t, storage.SavePending(parent, entityID, "", "context propagation", 1))
+	entry, err := base.Get(parent, entityID)
+	require.NoError(t, err)
+	kv.ioCtx = make(chan context.Context, 4)
+
+	embedCtx := make(chan context.Context, 1)
+	generatedCtx := make(chan context.Context, 1)
+	terminalCtx := make(chan context.Context, 1)
+	w := NewWorker(storage, &contextCapturingEmbedder{ctxs: embedCtx}, kv, discardLogger()).
+		WithWorkers(1).
+		WithOnGenerated(func(ctx context.Context, _ string, _ []float32) { generatedCtx <- ctx }).
+		WithOnTerminal(func(ctx context.Context, _ string, _ uint64, _ TerminalOutcome, _ string) { terminalCtx <- ctx })
+
+	require.NoError(t, w.Start(parent))
+	runCtx := <-kv.watchCtx
+	kv.updates <- entry
+
+	require.Same(t, runCtx, <-embedCtx)
+	require.Same(t, runCtx, <-generatedCtx)
+	require.Same(t, runCtx, <-terminalCtx)
+	for i := 0; i < 2; i++ {
+		require.Same(t, runCtx, <-kv.ioCtx)
+	}
+	require.Equal(t, "generation-1", runCtx.Value(workerContextKey{}))
+
+	cancel()
+	stopped := make(chan error, 1)
+	go func() { stopped <- w.Stop() }()
+	select {
+	case err := <-stopped:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not join the cancelled worker generation")
+	}
+	require.ErrorIs(t, runCtx.Err(), context.Canceled)
+}
+
+type contextCapturingEmbedder struct {
+	ctxs chan context.Context
+}
+
+func (e *contextCapturingEmbedder) Generate(ctx context.Context, _ []string) ([][]float32, error) {
+	e.ctxs <- ctx
+	return [][]float32{{1, 2, 3}}, nil
+}
+
+func (e *contextCapturingEmbedder) GenerateQuery(ctx context.Context, texts []string) ([][]float32, error) {
+	return e.Generate(ctx, texts)
+}
+
+func (*contextCapturingEmbedder) Model() string   { return "m" }
+func (*contextCapturingEmbedder) Dimensions() int { return 3 }
+func (*contextCapturingEmbedder) Close() error    { return nil }
 
 // TestFailedSnapshotRecordReprocessed_MultiWorker is the finding's deterministic multi-worker
 // (>1 worker) statement: a failed record delivered in the restart snapshot is reprocessed
@@ -188,7 +275,7 @@ func (k *manualWatchKV) WatchAll(context.Context, ...jetstream.WatchOpt) (jetstr
 // snapshot and the assertion cannot flake on scheduling.
 func TestFailedSnapshotRecordReprocessed_MultiWorker(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	base := newMemKV()
@@ -204,7 +291,7 @@ func TestFailedSnapshotRecordReprocessed_MultiWorker(t *testing.T) {
 	done := make(chan string, 8)
 	w := NewWorker(s, &stubEmbedder{model: "m", dimensions: 3, generate: gen.generate}, kv, discardLogger()).
 		WithWorkers(3).
-		WithOnTerminal(func(id string, _ uint64, _ TerminalOutcome, _ string) { done <- id })
+		WithOnTerminal(func(_ context.Context, id string, _ uint64, _ TerminalOutcome, _ string) { done <- id })
 
 	require.NoError(t, w.Start(ctx))
 	defer func() { _ = w.Stop() }()
@@ -234,7 +321,7 @@ func TestFailedSnapshotRecordReprocessed_MultiWorker(t *testing.T) {
 // called the embedder directly, issuing one paid call per worker at cold start.
 func TestColdStartIdenticalContentCollapsesToOneGenerate(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	var genCount atomic.Int64
@@ -249,7 +336,7 @@ func TestColdStartIdenticalContentCollapsesToOneGenerate(t *testing.T) {
 		<-release
 		return [][]float32{{1, 2, 3}}, nil
 	}}
-	w := &Worker{embedder: embedder, embedderType: "http", ctx: ctx, logger: discardLogger()}
+	w := &Worker{embedder: embedder, embedderType: "http", logger: discardLogger()}
 
 	const K = 8
 	start := make(chan struct{})
@@ -262,7 +349,7 @@ func TestColdStartIdenticalContentCollapsesToOneGenerate(t *testing.T) {
 			defer wg.Done()
 			<-start
 			// EMPTY durable key — the cold-start condition.
-			results[i], errsOut[i] = w.generateShared("", "identical cold-start content")
+			results[i], errsOut[i] = w.generateShared(ctx, "", "identical cold-start content")
 		}(i)
 	}
 	close(start)
@@ -297,7 +384,7 @@ func TestColdStartIdenticalContentCollapsesToOneGenerate(t *testing.T) {
 // stored string became an unbounded label.
 func TestScanFailed_NormalizesReasonAndSeedsRevision(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	kv := &replayKV{memKV: newMemKV()}
 	s := NewStorage(kv, newMemKV())

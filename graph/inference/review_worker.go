@@ -31,6 +31,8 @@ func isExpectedShutdownError(err error) bool {
 // ReviewWorker watches ANOMALY_INDEX and processes pending anomalies.
 // Follows enhancement_worker.go patterns for lifecycle management.
 type ReviewWorker struct {
+	// Lifecycle methods take mu before pauseMu whenever both are needed. Worker
+	// loops use pauseMu alone, so Stop may hold mu while cancelling and joining.
 	mu sync.RWMutex
 
 	// Dependencies
@@ -45,14 +47,13 @@ type ReviewWorker struct {
 	watcher       jetstream.KeyWatcher
 
 	// Lifecycle
-	ctx      context.Context
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 	started  bool
 	stopping bool
 
 	// Pause/resume coordination (follows enhancement_worker pattern)
-	pauseMu  sync.RWMutex
+	pauseMu  sync.RWMutex // Guards paused state; lock order is mu -> pauseMu
 	paused   bool
 	pauseCh  chan struct{}
 	resumeCh chan struct{}
@@ -114,21 +115,30 @@ func (w *ReviewWorker) Start(ctx context.Context) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "ReviewWorker", "Start", "context cannot be nil")
+	}
 	if w.started {
 		return nil // Idempotent
 	}
 
-	w.ctx, w.cancel = context.WithCancel(ctx)
+	runCtx, cancel := context.WithCancel(ctx)
+	w.pauseMu.Lock()
+	w.paused = false
+	w.pauseCh = nil
 	w.resumeCh = make(chan struct{})
+	w.pauseMu.Unlock()
+	w.stopping = false
 
 	// Create KV watcher
-	watcher, err := w.anomalyBucket.WatchAll(w.ctx)
+	watcher, err := w.anomalyBucket.WatchAll(runCtx)
 	if err != nil {
-		w.cancel()
+		cancel()
 		return errs.WrapTransient(err, "ReviewWorker", "Start",
 			"failed to create KV watcher")
 	}
 	w.watcher = watcher
+	w.cancel = cancel
 
 	// Determine worker count
 	workers := w.config.Workers
@@ -139,7 +149,7 @@ func (w *ReviewWorker) Start(ctx context.Context) error {
 	// Start worker goroutines
 	for i := 0; i < workers; i++ {
 		w.wg.Add(1)
-		go w.processAnomalies(i)
+		go w.processAnomalies(runCtx, i)
 	}
 
 	w.started = true
@@ -172,6 +182,12 @@ func (w *ReviewWorker) Stop() error {
 
 	w.wg.Wait()
 
+	w.pauseMu.Lock()
+	w.paused = false
+	w.pauseCh = nil
+	w.resumeCh = nil
+	w.pauseMu.Unlock()
+	w.cancel = nil
 	w.started = false
 	w.logger.Info("Review worker stopped")
 	return nil
@@ -179,6 +195,9 @@ func (w *ReviewWorker) Stop() error {
 
 // Pause stops processing new anomalies while allowing in-flight work to complete.
 func (w *ReviewWorker) Pause() {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
 	w.pauseMu.Lock()
 	defer w.pauseMu.Unlock()
 
@@ -194,10 +213,13 @@ func (w *ReviewWorker) Pause() {
 
 // Resume allows processing to continue after a Pause.
 func (w *ReviewWorker) Resume() {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
 	w.pauseMu.Lock()
 	defer w.pauseMu.Unlock()
 
-	if !w.paused {
+	if !w.started || !w.paused {
 		return
 	}
 
@@ -218,13 +240,13 @@ func (w *ReviewWorker) IsPaused() bool {
 
 // waitForResume blocks until Resume() is called or context is cancelled.
 // Returns true if resumed, false if context cancelled.
-func (w *ReviewWorker) waitForResume() bool {
+func (w *ReviewWorker) waitForResume(ctx context.Context) bool {
 	w.pauseMu.RLock()
 	resumeCh := w.resumeCh
 	w.pauseMu.RUnlock()
 
 	select {
-	case <-w.ctx.Done():
+	case <-ctx.Done():
 		return false
 	case <-resumeCh:
 		return true
@@ -232,7 +254,7 @@ func (w *ReviewWorker) waitForResume() bool {
 }
 
 // processAnomalies is the main worker loop.
-func (w *ReviewWorker) processAnomalies(workerID int) {
+func (w *ReviewWorker) processAnomalies(ctx context.Context, workerID int) {
 	defer w.wg.Done()
 	defer func() {
 		if r := recover(); r != nil {
@@ -247,13 +269,13 @@ func (w *ReviewWorker) processAnomalies(workerID int) {
 		// Check for pause
 		if w.IsPaused() {
 			w.logger.Debug("Worker waiting for resume", "worker_id", workerID)
-			if !w.waitForResume() {
+			if !w.waitForResume(ctx) {
 				return
 			}
 		}
 
 		select {
-		case <-w.ctx.Done():
+		case <-ctx.Done():
 			w.logger.Debug("Review worker context cancelled", "worker_id", workerID)
 			return
 
@@ -269,14 +291,14 @@ func (w *ReviewWorker) processAnomalies(workerID int) {
 
 			// Only process put operations (new or updated anomalies)
 			if entry.Operation() == jetstream.KeyValuePut {
-				w.handleKVEntry(entry, workerID)
+				w.handleKVEntry(ctx, entry, workerID)
 			}
 		}
 	}
 }
 
 // handleKVEntry processes a single anomaly from KV.
-func (w *ReviewWorker) handleKVEntry(entry jetstream.KeyValueEntry, workerID int) {
+func (w *ReviewWorker) handleKVEntry(ctx context.Context, entry jetstream.KeyValueEntry, workerID int) {
 	// Parse anomaly from KV entry
 	var anomaly StructuralAnomaly
 	if err := json.Unmarshal(entry.Value(), &anomaly); err != nil {
@@ -302,11 +324,11 @@ func (w *ReviewWorker) handleKVEntry(entry jetstream.KeyValueEntry, workerID int
 		"revision", revision)
 
 	// Decision flow with confidence thresholds
-	decision, reason := w.makeDecision(&anomaly)
+	decision, reason := w.makeDecision(ctx, &anomaly)
 
 	switch decision {
 	case DecisionApprove:
-		if err := w.applyAndMarkApprovedWithRevision(&anomaly, reason, revision); err != nil {
+		if err := w.applyAndMarkApprovedWithRevision(ctx, &anomaly, reason, revision); err != nil {
 			if err == ErrConcurrentModification {
 				w.logger.Debug("Anomaly already processed by another worker",
 					"anomaly_id", anomaly.ID, "worker_id", workerID)
@@ -314,14 +336,14 @@ func (w *ReviewWorker) handleKVEntry(entry jetstream.KeyValueEntry, workerID int
 			}
 			w.logger.Error("Failed to apply approved anomaly",
 				"anomaly_id", anomaly.ID, "error", err)
-			w.markFailed(&anomaly, fmt.Sprintf("apply failed: %v", err))
+			w.markFailed(ctx, &anomaly, fmt.Sprintf("apply failed: %v", err))
 			w.recordMetric("failed", time.Since(startTime))
 			return
 		}
 		w.recordMetric("approved", time.Since(startTime))
 
 	case DecisionReject:
-		if err := w.markRejectedWithRevision(&anomaly, reason, revision); err != nil {
+		if err := w.markRejectedWithRevision(ctx, &anomaly, reason, revision); err != nil {
 			if err == ErrConcurrentModification {
 				w.logger.Debug("Anomaly already processed by another worker",
 					"anomaly_id", anomaly.ID, "worker_id", workerID)
@@ -333,7 +355,7 @@ func (w *ReviewWorker) handleKVEntry(entry jetstream.KeyValueEntry, workerID int
 		w.recordMetric("rejected", time.Since(startTime))
 
 	case DecisionHumanReview:
-		if err := w.markForHumanReviewWithRevision(&anomaly, reason, revision); err != nil {
+		if err := w.markForHumanReviewWithRevision(ctx, &anomaly, reason, revision); err != nil {
 			if err == ErrConcurrentModification {
 				w.logger.Debug("Anomaly already processed by another worker",
 					"anomaly_id", anomaly.ID, "worker_id", workerID)
@@ -347,7 +369,7 @@ func (w *ReviewWorker) handleKVEntry(entry jetstream.KeyValueEntry, workerID int
 }
 
 // makeDecision determines how to handle an anomaly.
-func (w *ReviewWorker) makeDecision(anomaly *StructuralAnomaly) (Decision, string) {
+func (w *ReviewWorker) makeDecision(ctx context.Context, anomaly *StructuralAnomaly) (Decision, string) {
 	// Auto-approve high confidence
 	if anomaly.CanAutoApprove(w.config.AutoApproveThreshold) {
 		return DecisionApprove, fmt.Sprintf("auto-approved: confidence %.2f >= %.2f",
@@ -362,7 +384,7 @@ func (w *ReviewWorker) makeDecision(anomaly *StructuralAnomaly) (Decision, strin
 
 	// LLM review if configured
 	if w.llmClient != nil {
-		decision, reason, err := w.llmReview(anomaly)
+		decision, reason, err := w.llmReview(ctx, anomaly)
 		if err != nil {
 			w.logger.Warn("LLM review failed, falling back",
 				"anomaly_id", anomaly.ID, "error", err)
@@ -382,11 +404,11 @@ func (w *ReviewWorker) makeDecision(anomaly *StructuralAnomaly) (Decision, strin
 }
 
 // llmReview asks the LLM to review an anomaly.
-func (w *ReviewWorker) llmReview(anomaly *StructuralAnomaly) (Decision, string, error) {
+func (w *ReviewWorker) llmReview(ctx context.Context, anomaly *StructuralAnomaly) (Decision, string, error) {
 	// Check if context already cancelled before starting LLM call
 	select {
-	case <-w.ctx.Done():
-		return DecisionHumanReview, "", w.ctx.Err()
+	case <-ctx.Done():
+		return DecisionHumanReview, "", ctx.Err()
 	default:
 	}
 
@@ -395,7 +417,7 @@ func (w *ReviewWorker) llmReview(anomaly *StructuralAnomaly) (Decision, string, 
 		timeout = 30 * time.Second
 	}
 
-	ctx, cancel := context.WithTimeout(w.ctx, timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	// Build prompt with entity context
@@ -494,13 +516,8 @@ func (w *ReviewWorker) parseLLMDecision(response string) (Decision, string, erro
 	return DecisionHumanReview, fmt.Sprintf("unclear LLM response: %s", truncate(response, 100)), nil
 }
 
-// applyAndMarkApproved applies the suggestion and updates status (no revision check).
-func (w *ReviewWorker) applyAndMarkApproved(anomaly *StructuralAnomaly, reason string) error {
-	return w.applyAndMarkApprovedWithRevision(anomaly, reason, 0)
-}
-
 // applyAndMarkApprovedWithRevision applies the suggestion with optimistic locking.
-func (w *ReviewWorker) applyAndMarkApprovedWithRevision(anomaly *StructuralAnomaly, reason string, revision uint64) error {
+func (w *ReviewWorker) applyAndMarkApprovedWithRevision(ctx context.Context, anomaly *StructuralAnomaly, reason string, revision uint64) error {
 	if anomaly.Suggestion == nil {
 		return errs.WrapInvalid(errs.ErrMissingConfig, "ReviewWorker", "applyAndMarkApproved",
 			"anomaly has no suggestion to apply")
@@ -513,7 +530,7 @@ func (w *ReviewWorker) applyAndMarkApprovedWithRevision(anomaly *StructuralAnoma
 	anomaly.ReviewedBy = "review_worker"
 	anomaly.LLMReasoning = reason
 
-	if err := w.storage.SaveWithRevision(w.ctx, anomaly, revision); err != nil {
+	if err := w.storage.SaveWithRevision(ctx, anomaly, revision); err != nil {
 		if err == ErrConcurrentModification {
 			return err // Let caller handle
 		}
@@ -522,11 +539,11 @@ func (w *ReviewWorker) applyAndMarkApprovedWithRevision(anomaly *StructuralAnoma
 	}
 
 	// Apply the relationship after claiming
-	if err := w.applier.ApplyRelationship(w.ctx, anomaly.Suggestion); err != nil {
+	if err := w.applier.ApplyRelationship(ctx, anomaly.Suggestion); err != nil {
 		// Relationship application failed - revert status
 		anomaly.Status = StatusHumanReview
 		anomaly.ReviewNotes = fmt.Sprintf("apply failed after claim: %v", err)
-		_ = w.storage.Save(w.ctx, anomaly) // Best effort revert
+		_ = w.storage.Save(ctx, anomaly) // Best effort revert
 		return err
 	}
 
@@ -539,20 +556,15 @@ func (w *ReviewWorker) applyAndMarkApprovedWithRevision(anomaly *StructuralAnoma
 	return nil
 }
 
-// markRejected updates the anomaly status to rejected (no revision check).
-func (w *ReviewWorker) markRejected(anomaly *StructuralAnomaly, reason string) error {
-	return w.markRejectedWithRevision(anomaly, reason, 0)
-}
-
 // markRejectedWithRevision updates status with optimistic locking.
-func (w *ReviewWorker) markRejectedWithRevision(anomaly *StructuralAnomaly, reason string, revision uint64) error {
+func (w *ReviewWorker) markRejectedWithRevision(ctx context.Context, anomaly *StructuralAnomaly, reason string, revision uint64) error {
 	now := time.Now()
 	anomaly.Status = StatusRejected
 	anomaly.ReviewedAt = &now
 	anomaly.ReviewedBy = "review_worker"
 	anomaly.LLMReasoning = reason
 
-	if err := w.storage.SaveWithRevision(w.ctx, anomaly, revision); err != nil {
+	if err := w.storage.SaveWithRevision(ctx, anomaly, revision); err != nil {
 		if err == ErrConcurrentModification {
 			return err
 		}
@@ -568,17 +580,12 @@ func (w *ReviewWorker) markRejectedWithRevision(anomaly *StructuralAnomaly, reas
 	return nil
 }
 
-// markForHumanReview updates status for human attention (no revision check).
-func (w *ReviewWorker) markForHumanReview(anomaly *StructuralAnomaly, reason string) error {
-	return w.markForHumanReviewWithRevision(anomaly, reason, 0)
-}
-
 // markForHumanReviewWithRevision updates status with optimistic locking.
-func (w *ReviewWorker) markForHumanReviewWithRevision(anomaly *StructuralAnomaly, reason string, revision uint64) error {
+func (w *ReviewWorker) markForHumanReviewWithRevision(ctx context.Context, anomaly *StructuralAnomaly, reason string, revision uint64) error {
 	anomaly.Status = StatusHumanReview
 	anomaly.ReviewNotes = reason
 
-	if err := w.storage.SaveWithRevision(w.ctx, anomaly, revision); err != nil {
+	if err := w.storage.SaveWithRevision(ctx, anomaly, revision); err != nil {
 		if err == ErrConcurrentModification {
 			return err
 		}
@@ -595,12 +602,12 @@ func (w *ReviewWorker) markForHumanReviewWithRevision(anomaly *StructuralAnomaly
 }
 
 // markFailed handles anomalies that failed to process.
-func (w *ReviewWorker) markFailed(anomaly *StructuralAnomaly, reason string) {
+func (w *ReviewWorker) markFailed(ctx context.Context, anomaly *StructuralAnomaly, reason string) {
 	// For failed anomalies, mark as needing human review
 	anomaly.Status = StatusHumanReview
 	anomaly.ReviewNotes = fmt.Sprintf("Processing failed: %s", reason)
 
-	if err := w.storage.Save(w.ctx, anomaly); err != nil {
+	if err := w.storage.Save(ctx, anomaly); err != nil {
 		w.logger.Error("Failed to save failed status",
 			"anomaly_id", anomaly.ID, "error", err)
 	}

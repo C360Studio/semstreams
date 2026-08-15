@@ -911,13 +911,13 @@ func (c *Component) initStorageAndWorker(ctx context.Context, indexBucket, dedup
 		WithMaxSourceTextLen(c.maxSourceTextLen()).
 		WithEmbedderType(c.config.EmbedderType).
 		WithMetrics(newWorkerMetricsAdapter(c.metrics, c.failuresVec)).
-		WithOnGenerated(func(entityID string, _ []float32) {
+		WithOnGenerated(func(_ context.Context, entityID string, _ []float32) {
 			if c.metrics != nil {
 				c.metrics.recordEmbeddingGenerated()
 			}
 			c.logger.Debug("embedding generated", "entity_id", entityID)
 		}).
-		WithOnTerminal(func(entityID string, sourceRevision uint64, outcome embedding.TerminalOutcome, reason string) {
+		WithOnTerminal(func(_ context.Context, entityID string, sourceRevision uint64, outcome embedding.TerminalOutcome, reason string) {
 			// hop-2 reached a terminal (generated / failed / no-text skip). Complete the
 			// hop-1 readiness watermark for this entity (ADR-066 §3) and route the
 			// current-failed map by outcome (#613).

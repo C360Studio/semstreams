@@ -1,9 +1,26 @@
 package embedding
 
 import (
+	"context"
 	"log/slog"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
+
+func TestWorkerCallbacksCarryOperationContext(t *testing.T) {
+	generated := GeneratedCallback(func(context.Context, string, []float32) {})
+	terminal := TerminalCallback(func(context.Context, string, uint64, TerminalOutcome, string) {})
+
+	require.NotNil(t, generated)
+	require.NotNil(t, terminal)
+}
+
+func TestWorkerStartRejectsNilContext(t *testing.T) {
+	w := &Worker{}
+
+	require.Error(t, w.Start(nil))
+}
 
 // TestWithWorkers_FloorsAtOne guards gh#620 at the library seam.
 //

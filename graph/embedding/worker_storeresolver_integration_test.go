@@ -41,18 +41,18 @@ func TestIntegration_WorkerResolvesLiveRegistryStatePerFetch(t *testing.T) {
 	}
 	metrics := &countingMetrics{}
 	worker := &Worker{
-		ctx: ctx, maxSourceTextLen: 100, metrics: metrics, storeResolver: registry,
+		maxSourceTextLen: 100, metrics: metrics, storeResolver: registry,
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	ref := &StorageRef{StorageInstance: "content", Key: "doc/1"}
 
-	body, _, err := worker.fetchTextFromStorage(ref)
+	body, _, err := worker.fetchTextFromStorage(ctx, ref)
 	if err != nil || body != "owned body" {
 		t.Fatalf("registered fetch = (%q, %v), want owned body", body, err)
 	}
 
 	registry.Deregister("content")
-	text, err := worker.getSourceText(&Record{StorageRef: ref, IdentityText: "inline identity"})
+	text, err := worker.getSourceText(ctx, &Record{StorageRef: ref, IdentityText: "inline identity"})
 	if err != nil || text != "inline identity" {
 		t.Fatalf("deregistered fetch = (%q, %v), want inline identity exclusion", text, err)
 	}
@@ -63,7 +63,7 @@ func TestIntegration_WorkerResolvesLiveRegistryStatePerFetch(t *testing.T) {
 	if err := registry.Register("content", store); err != nil {
 		t.Fatalf("re-register: %v", err)
 	}
-	body, _, err = worker.fetchTextFromStorage(ref)
+	body, _, err = worker.fetchTextFromStorage(ctx, ref)
 	if err != nil || body != "owned body" {
 		t.Fatalf("re-registered fetch = (%q, %v), want owned body", body, err)
 	}

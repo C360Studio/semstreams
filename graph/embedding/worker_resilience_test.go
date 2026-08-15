@@ -101,7 +101,7 @@ func TestWorkerPanicCostsOneEntryNotTheGoroutine(t *testing.T) {
 
 	w := NewWorker(s, embedder, index, slog.New(recorder)).
 		WithWorkers(1).
-		WithOnTerminal(func(entityID string, _ uint64, _ TerminalOutcome, _ string) {
+		WithOnTerminal(func(_ context.Context, entityID string, _ uint64, _ TerminalOutcome, _ string) {
 			terminalMu.Lock()
 			terminals = append(terminals, entityID)
 			terminalMu.Unlock()
@@ -215,12 +215,12 @@ func TestWorkerTombstoneDuringGenerationIsNotAPanic(t *testing.T) {
 
 	w := NewWorker(s, embedder, index, slog.New(recorder)).
 		WithWorkers(1).
-		WithOnGenerated(func(string, []float32) {
+		WithOnGenerated(func(context.Context, string, []float32) {
 			generatedMu.Lock()
 			generatedFired++
 			generatedMu.Unlock()
 		}).
-		WithOnTerminal(func(entityID string, _ uint64, _ TerminalOutcome, _ string) { done <- entityID })
+		WithOnTerminal(func(_ context.Context, entityID string, _ uint64, _ TerminalOutcome, _ string) { done <- entityID })
 
 	if err := w.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)

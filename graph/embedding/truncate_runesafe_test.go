@@ -1,7 +1,6 @@
 package embedding
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -28,8 +27,8 @@ func TestTruncate_CrossLaneEquivalence(t *testing.T) {
 	const body = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda"
 
 	// Inline lane.
-	inline := &Worker{maxSourceTextLen: capLen, ctx: context.Background()}
-	inlineText, err := inline.getSourceText(&Record{SourceText: body})
+	inline := &Worker{maxSourceTextLen: capLen}
+	inlineText, err := inline.getSourceText(t.Context(), &Record{SourceText: body})
 	if err != nil {
 		t.Fatalf("inline getSourceText: %v", err)
 	}
@@ -37,10 +36,9 @@ func TestTruncate_CrossLaneEquivalence(t *testing.T) {
 	// Offloaded lane — same content, delivered via the store resolver.
 	offloaded := &Worker{
 		maxSourceTextLen: capLen,
-		ctx:              context.Background(),
 		storeResolver:    fakeResolver{stores: map[string]storage.StreamableStore{"objectstore": readerStore{data: body}}},
 	}
-	offloadedText, err := offloaded.getSourceText(&Record{StorageRef: &StorageRef{StorageInstance: "objectstore", Key: "k"}})
+	offloadedText, err := offloaded.getSourceText(t.Context(), &Record{StorageRef: &StorageRef{StorageInstance: "objectstore", Key: "k"}})
 	if err != nil {
 		t.Fatalf("offloaded getSourceText: %v", err)
 	}

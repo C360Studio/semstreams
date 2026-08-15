@@ -93,7 +93,7 @@ func TestGetSourceText_Truncation(t *testing.T) {
 		SourceText: "this is a longer text that should be truncated",
 	}
 
-	text, err := w.getSourceText(record)
+	text, err := w.getSourceText(t.Context(), record)
 	if err != nil {
 		t.Fatalf("getSourceText error: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestGetSourceText_NoTruncation_WhenZero(t *testing.T) {
 		SourceText: longText,
 	}
 
-	text, err := w.getSourceText(record)
+	text, err := w.getSourceText(t.Context(), record)
 	if err != nil {
 		t.Fatalf("getSourceText error: %v", err)
 	}
@@ -167,16 +167,15 @@ func TestFetchTextFromStorage_StreamsLimitedBytes(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	w := &Worker{
 		storeResolver:    fakeResolver{stores: map[string]storage.StreamableStore{"content": store}},
 		maxSourceTextLen: 100,
-		ctx:              ctx,
 	}
 
-	text, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "content", Key: "doc/safety-001"})
+	text, _, err := w.fetchTextFromStorage(ctx, &StorageRef{StorageInstance: "content", Key: "doc/safety-001"})
 	if err != nil {
 		t.Fatalf("fetchTextFromStorage error: %v", err)
 	}
@@ -208,16 +207,15 @@ func TestFetchTextFromStorage_ShortContent(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	w := &Worker{
 		storeResolver:    fakeResolver{stores: map[string]storage.StreamableStore{"content": store}},
 		maxSourceTextLen: 4000,
-		ctx:              ctx,
 	}
 
-	text, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "content", Key: "doc/short"})
+	text, _, err := w.fetchTextFromStorage(ctx, &StorageRef{StorageInstance: "content", Key: "doc/short"})
 	if err != nil {
 		t.Fatalf("fetchTextFromStorage error: %v", err)
 	}
@@ -232,16 +230,15 @@ func TestFetchTextFromStorage_KeyNotFound(t *testing.T) {
 		data: map[string][]byte{},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	w := &Worker{
 		storeResolver:    fakeResolver{stores: map[string]storage.StreamableStore{"content": store}},
 		maxSourceTextLen: 4000,
-		ctx:              ctx,
 	}
 
-	_, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "content", Key: "doc/missing"})
+	_, _, err := w.fetchTextFromStorage(ctx, &StorageRef{StorageInstance: "content", Key: "doc/missing"})
 	if err == nil {
 		t.Error("expected error for missing key")
 	}
@@ -254,20 +251,19 @@ func TestGetSourceText_StorageRef_UsesStreaming(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	w := &Worker{
 		storeResolver:    fakeResolver{stores: map[string]storage.StreamableStore{"content": store}},
 		maxSourceTextLen: 4000,
-		ctx:              ctx,
 	}
 
 	record := &Record{
 		StorageRef: &StorageRef{StorageInstance: "content", Key: "doc/safety"},
 	}
 
-	text, err := w.getSourceText(record)
+	text, err := w.getSourceText(ctx, record)
 	if err != nil {
 		t.Fatalf("getSourceText error: %v", err)
 	}
@@ -295,13 +291,12 @@ func TestGetSourceText_OffloadedWithIdentity_ConcatenatesIdentityFirst(t *testin
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	w := &Worker{
 		storeResolver:    fakeResolver{stores: map[string]storage.StreamableStore{"content": store}},
 		maxSourceTextLen: 4000,
-		ctx:              ctx,
 	}
 
 	record := &Record{
@@ -309,7 +304,7 @@ func TestGetSourceText_OffloadedWithIdentity_ConcatenatesIdentityFirst(t *testin
 		StorageRef:   &StorageRef{StorageInstance: "content", Key: "doc/safety"},
 	}
 
-	text, err := w.getSourceText(record)
+	text, err := w.getSourceText(ctx, record)
 	if err != nil {
 		t.Fatalf("getSourceText error: %v", err)
 	}

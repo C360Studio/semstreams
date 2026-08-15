@@ -11,9 +11,24 @@ import (
 
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/llm"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type enhancementLifecycleWatcher struct {
+	jetstream.KeyWatcher
+	updates chan jetstream.KeyValueEntry
+}
+
+func (w *enhancementLifecycleWatcher) Updates() <-chan jetstream.KeyValueEntry { return w.updates }
+func (*enhancementLifecycleWatcher) Stop() error                               { return nil }
+
+type enhancementLifecycleKV struct{ jetstream.KeyValue }
+
+func (*enhancementLifecycleKV) WatchAll(context.Context, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
+	return &enhancementLifecycleWatcher{updates: make(chan jetstream.KeyValueEntry)}, nil
+}
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -83,6 +98,21 @@ type countingLLMClient struct {
 	calls int
 }
 
+type cancellationAwareSummaryClient struct {
+	started chan context.Context
+}
+
+func (c *cancellationAwareSummaryClient) ChatCompletion(ctx context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+	c.started <- ctx
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (*cancellationAwareSummaryClient) Model() string { return "test-model" }
+func (*cancellationAwareSummaryClient) Close() error  { return nil }
+
+type enhancementContextKey struct{}
+
 func (c *countingLLMClient) ChatCompletion(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -120,7 +150,6 @@ func newTestWorker(t *testing.T, store SummaryStore, client llm.Client) *Enhance
 		llmTimeout:         2 * time.Second,
 		failedRetryBackoff: time.Hour,
 		logger:             discardLogger(),
-		ctx:                context.Background(),
 	}
 }
 
@@ -132,6 +161,66 @@ func themedCommunity() *Community {
 		StatisticalSummary: "statistical baseline",
 		SummaryStatus:      "statistical",
 	}
+}
+
+func TestEnhancementWorkerStartRejectsNilContext(t *testing.T) {
+	w := &EnhancementWorker{}
+
+	require.Error(t, w.Start(nil))
+}
+
+func TestEnhancementWorkerPauseStopRestartUsesOneLifecycleGeneration(t *testing.T) {
+	w := &EnhancementWorker{
+		communityBucket: &enhancementLifecycleKV{},
+		workers:         1,
+		logger:          discardLogger(),
+	}
+	require.NoError(t, w.Start(t.Context()))
+
+	start := make(chan struct{})
+	stopErr := make(chan error, 1)
+	var calls sync.WaitGroup
+	calls.Add(2)
+	go func() {
+		defer calls.Done()
+		<-start
+		w.Pause()
+	}()
+	go func() {
+		defer calls.Done()
+		<-start
+		stopErr <- w.Stop()
+	}()
+	close(start)
+	calls.Wait()
+	require.NoError(t, <-stopErr)
+	require.False(t, w.IsPaused(), "Stop must retire the prior generation's pause state")
+
+	require.NoError(t, w.Start(t.Context()))
+	require.False(t, w.IsPaused(), "a restarted worker must begin unpaused")
+	require.NoError(t, w.Stop())
+}
+
+func TestEnhancementWorkerLLMChildContextRetainsGenerationAndCancels(t *testing.T) {
+	client := &cancellationAwareSummaryClient{started: make(chan context.Context, 1)}
+	w := newTestWorker(t, newFakeSummaryStore(), client)
+	community := themedCommunity()
+	parent, cancel := context.WithCancel(context.WithValue(t.Context(), enhancementContextKey{}, "generation-1"))
+
+	done := make(chan struct{})
+	go func() {
+		w.summarizeAndStore(parent, community, MembershipHash(community.Members), community.Level)
+		close(done)
+	}()
+	llmCtx := <-client.started
+	require.Equal(t, "generation-1", llmCtx.Value(enhancementContextKey{}))
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("LLM operation did not return after generation cancellation")
+	}
+	require.ErrorIs(t, llmCtx.Err(), context.Canceled)
 }
 
 // An unchanged membership with a stored llm-enhanced record is a cache hit: the
@@ -153,7 +242,7 @@ func TestEnhanceCommunity_SkipOnEnhancedHit_NoLLMCall(t *testing.T) {
 	client := &countingLLMClient{}
 	w := newTestWorker(t, store, client)
 
-	w.enhanceCommunity(comm)
+	w.enhanceCommunity(t.Context(), comm)
 
 	assert.Equal(t, 0, client.count(), "an llm-enhanced hit must not invoke the LLM")
 	assert.Equal(t, 0, store.puts, "an llm-enhanced hit must not write the store")
@@ -179,7 +268,7 @@ func TestEnhanceCommunity_FailedRetryBackoff(t *testing.T) {
 	w.failedRetryBackoff = time.Hour
 
 	// Within backoff → no retry.
-	w.enhanceCommunity(comm)
+	w.enhanceCommunity(t.Context(), comm)
 	assert.Equal(t, 0, client.count(), "a fresh llm-failed record must not be retried within the backoff")
 
 	// Age the failure past the backoff → retry (LLM invoked, record upgraded).
@@ -187,7 +276,7 @@ func TestEnhanceCommunity_FailedRetryBackoff(t *testing.T) {
 	store.records[SummaryKey(comm.Level, hash)].GeneratedAt = time.Now().Add(-2 * time.Hour)
 	store.mu.Unlock()
 
-	w.enhanceCommunity(comm)
+	w.enhanceCommunity(t.Context(), comm)
 	assert.Equal(t, 1, client.count(), "an llm-failed record past the backoff must be retried")
 	got, _ := store.GetSummary(context.Background(), comm.Level, hash)
 	require.NotNil(t, got)
@@ -205,7 +294,7 @@ func TestEnhanceCommunity_MissSummarizesAndWritesSummaryStoreOnly(t *testing.T) 
 	client := &countingLLMClient{}
 	w := newTestWorker(t, store, client)
 
-	w.enhanceCommunity(comm)
+	w.enhanceCommunity(t.Context(), comm)
 
 	assert.Equal(t, 1, client.count(), "a miss must invoke the LLM exactly once")
 	hash := MembershipHash(comm.Members)
@@ -239,7 +328,7 @@ func TestMarkFailed_NeverDowngradesEnhanced(t *testing.T) {
 	w := newTestWorker(t, store, &countingLLMClient{})
 
 	// A late failure for the same membership must be a no-op on the enhanced record.
-	w.markFailed(comm, hash, comm.Level)
+	w.markFailed(t.Context(), comm, hash, comm.Level)
 
 	got, err := store.GetSummary(context.Background(), comm.Level, hash)
 	require.NoError(t, err)
@@ -259,7 +348,7 @@ func TestEnhanceCommunity_ReadErrorSkips(t *testing.T) {
 	client := &countingLLMClient{}
 	w := newTestWorker(t, store, client)
 
-	w.enhanceCommunity(comm)
+	w.enhanceCommunity(t.Context(), comm)
 
 	assert.Equal(t, 0, client.count(), "a read error must not trigger an LLM call")
 	assert.Equal(t, 0, store.puts, "a read error must not write the store")

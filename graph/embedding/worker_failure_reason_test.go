@@ -51,9 +51,9 @@ func TestMarkFailed_PersistsBoundedReasonAndCounts(t *testing.T) {
 			t.Fatalf("SavePending: %v", err)
 		}
 		m := &countingMetrics{}
-		w := &Worker{storage: s, metrics: m, ctx: ctx, logger: discardLogger()}
+		w := &Worker{storage: s, metrics: m, logger: discardLogger()}
 
-		if got, gotReason, terminal := w.markFailed(entityID, "generation failed: connection refused", failReasonConnectionRefused, 1); got != OutcomeFailed || gotReason != failReasonConnectionRefused || !terminal {
+		if got, gotReason, terminal := w.markFailed(ctx, entityID, "generation failed: connection refused", failReasonConnectionRefused, 1); got != OutcomeFailed || gotReason != failReasonConnectionRefused || !terminal {
 			t.Fatalf("markFailed = (%v, %q, %v), want (OutcomeFailed, connection_refused, true)", got, gotReason, terminal)
 		}
 		rec, err := s.GetEmbedding(ctx, entityID)
@@ -81,11 +81,11 @@ func TestMarkFailed_PersistsBoundedReasonAndCounts(t *testing.T) {
 			t.Fatalf("SaveGenerated: %v", err)
 		}
 		m := &countingMetrics{}
-		w := &Worker{storage: s, metrics: m, ctx: ctx, logger: discardLogger()}
+		w := &Worker{storage: s, metrics: m, logger: discardLogger()}
 
 		// An older-revision (3) failure is superseded: OutcomeSkipped, no reason, terminal
 		// (the newer outcome already resolved the entity).
-		if got, gotReason, terminal := w.markFailed(entityID, "generation failed", failReasonEmbedderError, 3); got != OutcomeSkipped || gotReason != "" || !terminal {
+		if got, gotReason, terminal := w.markFailed(ctx, entityID, "generation failed", failReasonEmbedderError, 3); got != OutcomeSkipped || gotReason != "" || !terminal {
 			t.Fatalf("markFailed = (%v, %q, %v), want (OutcomeSkipped, \"\", true) for a superseded failure", got, gotReason, terminal)
 		}
 		if m.failed != 0 || len(m.failedReasons) != 0 {
@@ -98,7 +98,7 @@ func TestMarkFailed_PersistsBoundedReasonAndCounts(t *testing.T) {
 // proves a generation error is classified into the bounded reason on the durable
 // record and reported as OutcomeFailed with that reason to the terminal callback.
 func TestGenerationFailureClassifiedThroughWorker(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	index := newWatchableKV()
@@ -116,7 +116,7 @@ func TestGenerationFailureClassifiedThroughWorker(t *testing.T) {
 	w := NewWorker(s, embedder, index, discardLogger()).
 		WithWorkers(1).
 		WithMaxSourceTextLen(4000).
-		WithOnTerminal(func(_ string, _ uint64, o TerminalOutcome, r string) { done <- terminal{o, r} })
+		WithOnTerminal(func(_ context.Context, _ string, _ uint64, o TerminalOutcome, r string) { done <- terminal{o, r} })
 
 	if err := w.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -171,7 +171,7 @@ func TestConcurrentIdenticalContentCollapsesToOneGenerate(t *testing.T) {
 		<-release
 		return [][]float32{{1, 2, 3}}, nil
 	}}
-	w := &Worker{embedder: embedder, ctx: ctx, logger: discardLogger()}
+	w := &Worker{embedder: embedder, logger: discardLogger()}
 
 	const (
 		K   = 8
@@ -186,7 +186,7 @@ func TestConcurrentIdenticalContentCollapsesToOneGenerate(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			results[i], errsOut[i] = w.generateShared(key, "identical over-window content")
+			results[i], errsOut[i] = w.generateShared(ctx, key, "identical over-window content")
 		}(i)
 	}
 	close(start) // release all K simultaneously
@@ -222,7 +222,7 @@ func TestConcurrentIdenticalContentCollapsesToOneGenerate(t *testing.T) {
 // directly (no production change), so a future edit that re-splits the two lanes'
 // truncation reddens here.
 func TestOverCapContentDedupsAcrossLanes(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	const capLen = 20
@@ -243,13 +243,11 @@ func TestOverCapContentDedupsAcrossLanes(t *testing.T) {
 		WithMaxSourceTextLen(capLen).
 		WithEmbedderType("test").
 		WithStoreResolver(resolver)
-	w.ctx = ctx
-
-	inlineText, err := w.getSourceText(&Record{SourceText: overCap})
+	inlineText, err := w.getSourceText(ctx, &Record{SourceText: overCap})
 	if err != nil {
 		t.Fatalf("inline getSourceText: %v", err)
 	}
-	offloadedText, err := w.getSourceText(&Record{StorageRef: &StorageRef{StorageInstance: "objectstore", Key: "k"}})
+	offloadedText, err := w.getSourceText(ctx, &Record{StorageRef: &StorageRef{StorageInstance: "objectstore", Key: "k"}})
 	if err != nil {
 		t.Fatalf("offloaded getSourceText: %v", err)
 	}

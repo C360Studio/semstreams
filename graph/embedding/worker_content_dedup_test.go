@@ -178,7 +178,7 @@ func TestOffloadedLaneDedupsOnIdenticalBytes(t *testing.T) {
 		WithWorkers(1).
 		WithMaxSourceTextLen(4000).
 		WithStoreResolver(resolver).
-		WithOnTerminal(func(id string, _ uint64, _ TerminalOutcome, _ string) { done <- id })
+		WithOnTerminal(func(_ context.Context, id string, _ uint64, _ TerminalOutcome, _ string) { done <- id })
 
 	if err := w.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -238,7 +238,7 @@ func TestOverwritingStableStorageKeyRegenerates(t *testing.T) {
 		WithWorkers(1).
 		WithMaxSourceTextLen(4000).
 		WithStoreResolver(resolver).
-		WithOnTerminal(func(id string, _ uint64, _ TerminalOutcome, _ string) { done <- id })
+		WithOnTerminal(func(_ context.Context, id string, _ uint64, _ TerminalOutcome, _ string) { done <- id })
 
 	if err := w.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -316,7 +316,7 @@ func TestDedupKeyIsOverTruncatedEmbeddedBytes(t *testing.T) {
 	w := NewWorker(s, embedder, index, discardLogger()).
 		WithWorkers(1).
 		WithMaxSourceTextLen(capLen).
-		WithOnTerminal(func(id string, _ uint64, _ TerminalOutcome, _ string) { done <- id })
+		WithOnTerminal(func(_ context.Context, id string, _ uint64, _ TerminalOutcome, _ string) { done <- id })
 
 	if err := w.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -353,7 +353,7 @@ func TestTruncationEmitsSignal(t *testing.T) {
 
 	truncM := &recordingWorkerMetrics{}
 	wTrunc := &Worker{maxSourceTextLen: 10, metrics: truncM}
-	if _, err := wTrunc.getSourceText(&Record{SourceText: "this text is definitely longer than ten characters"}); err != nil {
+	if _, err := wTrunc.getSourceText(t.Context(), &Record{SourceText: "this text is definitely longer than ten characters"}); err != nil {
 		t.Fatalf("getSourceText: %v", err)
 	}
 	if got := truncM.snapshot().truncated; got != 1 {
@@ -362,7 +362,7 @@ func TestTruncationEmitsSignal(t *testing.T) {
 
 	shortM := &recordingWorkerMetrics{}
 	wShort := &Worker{maxSourceTextLen: 100, metrics: shortM}
-	if _, err := wShort.getSourceText(&Record{SourceText: "short"}); err != nil {
+	if _, err := wShort.getSourceText(t.Context(), &Record{SourceText: "short"}); err != nil {
 		t.Fatalf("getSourceText: %v", err)
 	}
 	if got := shortM.snapshot().truncated; got != 0 {
@@ -392,7 +392,7 @@ func TestDedupSkippedIsCounted(t *testing.T) {
 	w := NewWorker(s, embedder, index, discardLogger()).
 		WithWorkers(1).
 		WithMetrics(m).
-		WithOnTerminal(func(id string, _ uint64, _ TerminalOutcome, _ string) { done <- id })
+		WithOnTerminal(func(_ context.Context, id string, _ uint64, _ TerminalOutcome, _ string) { done <- id })
 
 	if err := w.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
