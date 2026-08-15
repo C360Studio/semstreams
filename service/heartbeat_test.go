@@ -143,7 +143,7 @@ func TestHeartbeatService_StartStop(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 
 	// Stop service
-	if err := hb.Stop(time.Second); err != nil {
+	if err := hb.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
 
@@ -164,7 +164,7 @@ func TestHeartbeatService_StartAlreadyRunning(t *testing.T) {
 	if err := hb.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer hb.Stop(time.Second)
+	defer hb.Stop(context.Background())
 
 	// Try to start again
 	err = hb.Start(ctx)
@@ -181,7 +181,7 @@ func TestHeartbeatService_StopNotRunning(t *testing.T) {
 
 	// Stop without Start: an already-stopped service is clean success per the
 	// Service contract (gh#520) — nil or ErrAlreadyStopped, never a fatal error.
-	err = hb.Stop(time.Second)
+	err = hb.Stop(context.Background())
 	if err != nil && !errors.Is(err, ErrAlreadyStopped) {
 		t.Errorf("Stop() when not running = %v, want nil or ErrAlreadyStopped", err)
 	}
@@ -200,7 +200,7 @@ func TestHeartbeatService_StopIdempotent(t *testing.T) {
 	}
 
 	for i := range 3 {
-		if err := hb.Stop(time.Second); err != nil && !errors.Is(err, ErrAlreadyStopped) {
+		if err := hb.Stop(context.Background()); err != nil && !errors.Is(err, ErrAlreadyStopped) {
 			t.Fatalf("Stop() call %d = %v, want nil or ErrAlreadyStopped", i+1, err)
 		}
 	}
@@ -222,7 +222,7 @@ func TestHeartbeatService_StartAfterStop(t *testing.T) {
 	if err := hb.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	if err := hb.Stop(time.Second); err != nil && !errors.Is(err, ErrAlreadyStopped) {
+	if err := hb.Stop(context.Background()); err != nil && !errors.Is(err, ErrAlreadyStopped) {
 		t.Fatalf("Stop() error = %v", err)
 	}
 
@@ -254,7 +254,7 @@ func TestHeartbeatService_WithComponentManager(t *testing.T) {
 	// Let it emit a heartbeat
 	time.Sleep(150 * time.Millisecond)
 
-	if err := hb.Stop(time.Second); err != nil {
+	if err := hb.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
 
@@ -288,7 +288,7 @@ func TestHeartbeatService_ContextCancellation(t *testing.T) {
 
 	// Stop after cancellation already won the race is a clean shutdown and
 	// still completes ticker/goroutine teardown (gh#549).
-	if err := hb.Stop(time.Second); err != nil && !errors.Is(err, ErrAlreadyStopped) {
+	if err := hb.Stop(context.Background()); err != nil && !errors.Is(err, ErrAlreadyStopped) {
 		t.Errorf("Stop() after context cancellation = %v, want nil or ErrAlreadyStopped", err)
 	}
 

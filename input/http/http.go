@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -82,6 +83,7 @@ type Input struct {
 	running     atomic.Bool
 	startTime   time.Time
 	wg          sync.WaitGroup
+	generation  *lifecyclejoin.Generation
 
 	// Counters (atomic for thread safety; exposed via Metric()).
 	requestsTotal     atomic.Int64
@@ -264,12 +266,14 @@ func (h *Input) Start(ctx context.Context) error {
 		return nil
 	}
 
+	runCtx, cancel := context.WithCancel(ctx)
 	h.shutdown = make(chan struct{})
 	h.done = make(chan struct{})
 	h.running.Store(true)
 	h.wg.Add(1)
 
-	go h.pollLoop(ctx)
+	go h.pollLoop(runCtx)
+	h.generation = lifecyclejoin.NewGeneration(cancel, h.wg.Wait)
 
 	h.logger.Info("HTTP input started",
 		slog.String("url", h.resolved.url),
@@ -281,29 +285,28 @@ func (h *Input) Start(ctx context.Context) error {
 
 // Stop signals shutdown and waits up to timeout for the polling
 // loop to exit.
-func (h *Input) Stop(timeout time.Duration) error {
+func (h *Input) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
 	h.lifecycleMu.Lock()
-	if !h.running.Load() {
+	generation := h.generation
+	if generation == nil {
 		h.lifecycleMu.Unlock()
 		return nil
 	}
-	h.running.Store(false)
-	close(h.shutdown)
 	h.lifecycleMu.Unlock()
 
-	done := make(chan struct{})
-	go func() {
-		h.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
+	return generation.Stop(ctx, func() error {
+		close(h.shutdown)
+		return nil
+	}, func(context.Context) error {
+		h.lifecycleMu.Lock()
+		h.running.Store(false)
+		h.lifecycleMu.Unlock()
 		h.logger.Info("HTTP input stopped")
-	case <-time.After(timeout):
-		h.logger.Warn("HTTP input stop timed out")
-	}
-	return nil
+		return nil
+	})
 }
 
 // pollLoop runs the request-decode-publish cycle on the configured

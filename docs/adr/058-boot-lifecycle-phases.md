@@ -207,6 +207,7 @@ type OwnershipService struct { // in package service — no self-qualification b
     metrics  *metric.MetricsRegistry
     cancel   context.CancelFunc
     wg       sync.WaitGroup
+    done     chan struct{}
 }
 
 func (s *OwnershipService) Start(ctx context.Context) error {
@@ -233,22 +234,22 @@ func (s *OwnershipService) Start(ctx context.Context) error {
     s.wg.Add(2)
     go func() { defer s.wg.Done(); s.staticHB.Run(runCtx) }()
     go func() { defer s.wg.Done(); _ = s.reg.WatchRevival(runCtx, s.metrics) }()
+    s.done = make(chan struct{})
+    go func() { s.wg.Wait(); close(s.done) }()
     return nil
 }
 
-func (s *OwnershipService) Stop(timeout time.Duration) error {
+func (s *OwnershipService) Stop(ctx context.Context) error {
     if s.cancel != nil {
         s.cancel() // signal (no-op on the disabled path — cancel is nil)
     }
-    // Join with timeout — inline, mirroring HeartbeatService.Stop:142-160.
-    done := make(chan struct{})
-    go func() { s.wg.Wait(); close(done) }()
+    baseErr := s.BaseService.Stop(ctx)
     select {
-    case <-done:
-    case <-time.After(timeout):
-        s.logger.Warn("ownership service: stop timeout waiting for goroutines")
+    case <-s.done:
+        return baseErr
+    case <-ctx.Done():
+        return errors.Join(baseErr, ctx.Err())
     }
-    return s.BaseService.Stop(timeout)
 }
 ```
 

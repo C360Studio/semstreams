@@ -31,7 +31,7 @@ func TestIntegration_ConcurrentCanonicalAppend(t *testing.T) {
 	c := created.(*Component)
 	require.NoError(t, c.Initialize())
 	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 
 	const entityID = "c360.test.cas.concurrent.drone.001"
 	require.NoError(t, c.CreateEntity(ctx, &graph.EntityState{ID: entityID, Version: 1, UpdatedAt: time.Now()}))

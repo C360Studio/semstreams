@@ -57,7 +57,7 @@ func TestIntegration_SpatialIndexFlow(t *testing.T) {
 
 	// Start component (now that input bucket exists)
 	require.NoError(t, spatialIndex.Start(ctx))
-	defer spatialIndex.Stop(5 * time.Second)
+	defer spatialIndex.Stop(context.Background())
 
 	// Wait for SPATIAL_INDEX bucket to be created by component
 	var spatialBucket jetstream.KeyValue
@@ -270,7 +270,7 @@ func TestIntegration_SpatialIndexAccumulation(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, spatialIndex.Start(ctx))
-	defer spatialIndex.Stop(5 * time.Second)
+	defer spatialIndex.Stop(context.Background())
 
 	var spatialBucket jetstream.KeyValue
 	require.Eventually(t, func() bool {

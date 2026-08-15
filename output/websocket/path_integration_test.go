@@ -30,9 +30,8 @@ func TestCreateOutputCustomPathServesProductionMux(t *testing.T) {
 	// Start normally creates this lifecycle state before setupHTTPServer. The
 	// test serves the production handler with httptest's kernel-selected port so
 	// it proves routing without changing or claiming Output listener binding.
-	output.setupShutdownChannels()
 	output.wg = &sync.WaitGroup{}
-	require.NoError(t, output.setupHTTPServer())
+	require.NoError(t, output.setupHTTPServer(t.Context()))
 
 	server := httptest.NewServer(output.server.Handler)
 	var connection *websocket.Conn
@@ -47,7 +46,6 @@ func TestCreateOutputCustomPathServesProductionMux(t *testing.T) {
 		if connection != nil {
 			_ = connection.Close()
 		}
-		close(output.shutdown)
 		server.Close()
 		if registrationObserved && assert.Eventually(t, func() bool {
 			return clientCount() == 0

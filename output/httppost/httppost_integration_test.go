@@ -124,7 +124,7 @@ func TestIntegration_BasicHTTPPost(t *testing.T) {
 	// Start output
 	err = httpOutput.Start(ctx)
 	require.NoError(t, err)
-	defer httpOutput.Stop(5 * time.Second)
+	defer httpOutput.Stop(context.Background())
 
 	// Give output time to subscribe
 	time.Sleep(100 * time.Millisecond)
@@ -217,7 +217,7 @@ func TestIntegration_CustomHeaders(t *testing.T) {
 
 	err = httpOutput.Start(ctx)
 	require.NoError(t, err)
-	defer httpOutput.Stop(5 * time.Second)
+	defer httpOutput.Stop(context.Background())
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -296,7 +296,7 @@ func TestIntegration_RetryOnFailure(t *testing.T) {
 
 	err = httpOutput.Start(ctx)
 	require.NoError(t, err)
-	defer httpOutput.Stop(5 * time.Second)
+	defer httpOutput.Stop(context.Background())
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -381,7 +381,7 @@ func TestIntegration_StatusCodeValidation(t *testing.T) {
 
 			err = httpOutput.Start(ctx)
 			require.NoError(t, err)
-			defer httpOutput.Stop(5 * time.Second)
+			defer httpOutput.Stop(context.Background())
 
 			time.Sleep(100 * time.Millisecond)
 
@@ -469,7 +469,7 @@ func TestIntegration_MultipleSubjects(t *testing.T) {
 
 	err = httpOutput.Start(ctx)
 	require.NoError(t, err)
-	defer httpOutput.Stop(5 * time.Second)
+	defer httpOutput.Stop(context.Background())
 
 	time.Sleep(100 * time.Millisecond)
 

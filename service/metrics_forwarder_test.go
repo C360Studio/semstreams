@@ -206,7 +206,7 @@ func TestMetricsForwarder_ServiceLifecycle(t *testing.T) {
 	assert.Equal(t, StatusRunning, forwarder.Status())
 
 	// Stop service
-	err = forwarder.Stop(5 * time.Second)
+	err = forwarder.Stop(context.Background())
 	require.NoError(t, err)
 
 	// Verify stopped
@@ -256,7 +256,7 @@ func TestMetricsForwarder_TickerInterval(t *testing.T) {
 	// Wait for at least 3 tick cycles (~300ms + buffer)
 	time.Sleep(350 * time.Millisecond)
 
-	err = forwarder.Stop(1 * time.Second)
+	err = forwarder.Stop(context.Background())
 	require.NoError(t, err)
 
 	// Verify multiple tick cycles occurred
@@ -323,7 +323,7 @@ func TestMetricsForwarder_GatherMetrics(t *testing.T) {
 	// Wait for at least one publish cycle
 	time.Sleep(150 * time.Millisecond)
 
-	err = forwarder.Stop(1 * time.Second)
+	err = forwarder.Stop(context.Background())
 	require.NoError(t, err)
 
 	// Verify metrics were published
@@ -416,7 +416,7 @@ func TestMetricsForwarder_SubjectPattern(t *testing.T) {
 			// Wait for publish cycle
 			time.Sleep(150 * time.Millisecond)
 
-			err = forwarder.Stop(1 * time.Second)
+			err = forwarder.Stop(context.Background())
 			require.NoError(t, err)
 
 			// Verify subject
@@ -466,7 +466,7 @@ func TestMetricsForwarder_MessageFormat(t *testing.T) {
 	// Wait for publish cycle
 	time.Sleep(150 * time.Millisecond)
 
-	err = forwarder.Stop(1 * time.Second)
+	err = forwarder.Stop(context.Background())
 	require.NoError(t, err)
 
 	// Verify message format
@@ -593,7 +593,7 @@ func TestMetricsForwarder_ExtractComponent(t *testing.T) {
 			// Wait for publish cycle
 			time.Sleep(150 * time.Millisecond)
 
-			err = forwarder.Stop(1 * time.Second)
+			err = forwarder.Stop(context.Background())
 			require.NoError(t, err)
 
 			// Verify component extraction
@@ -640,7 +640,7 @@ func TestMetricsForwarder_PublishError(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 
 	// Service should stop cleanly even after publish errors
-	err = forwarder.Stop(1 * time.Second)
+	err = forwarder.Stop(context.Background())
 	assert.NoError(t, err, "Stop should not return error even if publish failed")
 }
 
@@ -691,7 +691,7 @@ func TestMetricsForwarder_ConcurrentGather(t *testing.T) {
 	wg.Wait()
 	time.Sleep(150 * time.Millisecond)
 
-	err = forwarder.Stop(1 * time.Second)
+	err = forwarder.Stop(context.Background())
 	require.NoError(t, err)
 
 	// Verify publishes occurred
@@ -722,7 +722,7 @@ func TestMetricsForwarder_MultipleStarts(t *testing.T) {
 	err = forwarder.Start(ctx)
 	assert.Error(t, err, "second Start should return error")
 
-	err = forwarder.Stop(1 * time.Second)
+	err = forwarder.Stop(context.Background())
 	require.NoError(t, err)
 }
 
@@ -739,7 +739,7 @@ func TestMetricsForwarder_StopBeforeStart(t *testing.T) {
 
 	// Stop without Start: an already-stopped service is clean success per the
 	// Service contract (gh#520) — nil or ErrAlreadyStopped, never a fatal error.
-	err := forwarder.Stop(1 * time.Second)
+	err := forwarder.Stop(context.Background())
 	if err != nil {
 		assert.ErrorIs(t, err, ErrAlreadyStopped, "Stop before Start must be nil or ErrAlreadyStopped")
 	}
@@ -753,7 +753,7 @@ func TestMetricsForwarder_StopIdempotent(t *testing.T) {
 	require.NoError(t, forwarder.Start(context.Background()))
 
 	for i := range 3 {
-		if err := forwarder.Stop(time.Second); err != nil {
+		if err := forwarder.Stop(context.Background()); err != nil {
 			assert.ErrorIs(t, err, ErrAlreadyStopped, "Stop() call %d must be nil or ErrAlreadyStopped", i+1)
 		}
 	}
@@ -777,7 +777,7 @@ func TestMetricsForwarder_StopAfterContextCancellation(t *testing.T) {
 	}, 2*time.Second, 5*time.Millisecond,
 		"service must self-stop when the parent context is cancelled")
 
-	if err := forwarder.Stop(time.Second); err != nil {
+	if err := forwarder.Stop(context.Background()); err != nil {
 		assert.ErrorIs(t, err, ErrAlreadyStopped, "Stop after cancellation must be nil or ErrAlreadyStopped")
 	}
 	assert.Equal(t, StatusStopped, forwarder.Status())
@@ -790,7 +790,7 @@ func TestMetricsForwarder_StartAfterStop(t *testing.T) {
 	forwarder := createTestMetricsForwarder(t, "5s", &metricsForwarderMockNATS{}, metric.NewMetricsRegistry())
 
 	require.NoError(t, forwarder.Start(context.Background()))
-	if err := forwarder.Stop(time.Second); err != nil {
+	if err := forwarder.Stop(context.Background()); err != nil {
 		require.ErrorIs(t, err, ErrAlreadyStopped)
 	}
 
@@ -843,7 +843,7 @@ func TestMetricsForwarder_GatherReturnsError(t *testing.T) {
 	// Wait for publish attempt
 	time.Sleep(150 * time.Millisecond)
 
-	err = forwarder.Stop(1 * time.Second)
+	err = forwarder.Stop(context.Background())
 	require.NoError(t, err)
 
 	// Verify publish was not called when gather fails
@@ -959,7 +959,7 @@ func TestMetricsForwarder_SystemMetricsFiltering(t *testing.T) {
 			// Wait for publish cycle
 			time.Sleep(150 * time.Millisecond)
 
-			err = forwarder.Stop(1 * time.Second)
+			err = forwarder.Stop(context.Background())
 			require.NoError(t, err)
 
 			publishMu.Lock()

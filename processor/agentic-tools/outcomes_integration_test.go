@@ -208,7 +208,7 @@ func TestIntegrationAckFailureRestartReplaysWithoutSecondExecution(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, publisher.PublishToStream(ctx, "tool.execute."+call.ID, wire))
 	require.Eventually(t, func() bool { return executor.calls.Load() == 1 }, 5*time.Second, 25*time.Millisecond)
-	_ = first.Stop(time.Second)
+	_ = first.Stop(context.Background())
 	replayBefore := testutil.ToFloat64(first.metrics.outcomeTotal.WithLabelValues(string(outcomePathReplay)))
 
 	secondClient, err := natsclient.NewClient(testClient.URL)
@@ -216,7 +216,7 @@ func TestIntegrationAckFailureRestartReplaysWithoutSecondExecution(t *testing.T)
 	require.NoError(t, secondClient.Connect(ctx))
 	t.Cleanup(func() { require.NoError(t, secondClient.Close(context.Background())) })
 	second := newRunning(secondClient)
-	defer second.Stop(5 * time.Second)
+	defer second.Stop(context.Background())
 	require.Eventually(t, func() bool {
 		return testutil.ToFloat64(second.metrics.outcomeTotal.WithLabelValues(string(outcomePathReplay))) > replayBefore
 	}, 20*time.Second, 100*time.Millisecond, "redelivery must traverse durable replay after configured 15s backoff")
@@ -294,7 +294,7 @@ func TestIntegrationResultPublishFailureRestartReplaysStoredOutcome(t *testing.T
 	authority, err := decodeCompletedOutcome(entry.Value(), call)
 	require.NoError(t, err)
 	require.Equal(t, "executed", authority.Result.Content)
-	require.NoError(t, first.Stop(time.Second))
+	require.NoError(t, first.Stop(context.Background()))
 
 	_, err = testClient.Client.EnsureStream(ctx, jetstream.StreamConfig{
 		Name: "TOOL_PUBLISH_RESULTS", Subjects: []string{"tool.result.>"},
@@ -306,7 +306,7 @@ func TestIntegrationResultPublishFailureRestartReplaysStoredOutcome(t *testing.T
 	require.NoError(t, secondClient.Connect(ctx))
 	t.Cleanup(func() { require.NoError(t, secondClient.Close(context.Background())) })
 	second := newRunning(secondClient)
-	defer second.Stop(5 * time.Second)
+	defer second.Stop(context.Background())
 
 	js, err := secondClient.JetStream()
 	require.NoError(t, err)

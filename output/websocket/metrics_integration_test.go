@@ -80,7 +80,7 @@ func TestWebSocketOutput_ClientConnectionMetrics(t *testing.T) {
 	ctx := context.Background()
 	err := ws.Start(ctx)
 	require.NoError(t, err)
-	defer ws.Stop(5 * time.Second)
+	defer ws.Stop(context.Background())
 
 	// Wait for server to start
 	time.Sleep(100 * time.Millisecond)
@@ -146,7 +146,7 @@ func TestWebSocketOutput_MessageBroadcastMetrics(t *testing.T) {
 	ctx := context.Background()
 	err := ws.Start(ctx)
 	require.NoError(t, err)
-	defer ws.Stop(5 * time.Second)
+	defer ws.Stop(context.Background())
 
 	// Wait for server to start
 	time.Sleep(100 * time.Millisecond)
@@ -248,7 +248,7 @@ func TestWebSocketOutput_ErrorMetrics(t *testing.T) {
 	require.NoError(t, err)
 	err = ws.Start(ctx)
 	require.NoError(t, err)
-	defer ws.Stop(5 * time.Second)
+	defer ws.Stop(context.Background())
 
 	// Wait for server to start
 	time.Sleep(100 * time.Millisecond)
@@ -292,7 +292,7 @@ func TestWebSocketOutput_ServerUptimeMetrics(t *testing.T) {
 	ctx := context.Background()
 	err := ws.Start(ctx)
 	require.NoError(t, err)
-	defer ws.Stop(5 * time.Second)
+	defer ws.Stop(context.Background())
 
 	// Wait for uptime tracking to update (should happen every 10 seconds, but we test structure)
 	time.Sleep(100 * time.Millisecond)
@@ -327,7 +327,7 @@ func TestWebSocketOutput_MessageSizeMetrics(t *testing.T) {
 	ctx := context.Background()
 	err := ws.Start(ctx)
 	require.NoError(t, err)
-	defer ws.Stop(5 * time.Second)
+	defer ws.Stop(context.Background())
 
 	// Wait for server to start
 	time.Sleep(100 * time.Millisecond)

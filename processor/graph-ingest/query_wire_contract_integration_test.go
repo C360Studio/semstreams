@@ -52,7 +52,7 @@ func TestIntegration_QueryEntityNATS_WireContract(t *testing.T) {
 	c := comp.(*Component)
 	require.NoError(t, c.Initialize())
 	require.NoError(t, c.Start(ctx))
-	defer func() { _ = c.Stop(5 * time.Second) }()
+	defer func() { _ = c.Stop(context.Background()) }()
 	time.Sleep(100 * time.Millisecond)
 
 	t.Run("not_found_path", func(t *testing.T) {

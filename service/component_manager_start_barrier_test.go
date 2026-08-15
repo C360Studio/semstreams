@@ -54,7 +54,7 @@ func (c *barrierTestComponent) Health() component.HealthStatus {
 }
 func (c *barrierTestComponent) DataFlow() component.FlowMetrics { return component.FlowMetrics{} }
 func (c *barrierTestComponent) Initialize() error               { return nil }
-func (c *barrierTestComponent) Stop(_ time.Duration) error      { return nil }
+func (c *barrierTestComponent) Stop(context.Context) error      { return nil }
 
 func (c *barrierTestComponent) Start(_ context.Context) error {
 	defer close(c.startReturned)
@@ -147,7 +147,7 @@ func TestComponentManagerStart_ProvidersRegisterBeforeConcurrentConsumers(t *tes
 		"consumer-a": consumerA,
 		"consumer-b": consumerB,
 	})
-	defer func() { _ = cm.Stop(2 * time.Second) }()
+	defer func() { _ = cm.Stop(context.Background()) }()
 
 	done := make(chan error, 1)
 	go func() { done <- cm.Start(context.Background()) }()
@@ -215,7 +215,7 @@ func TestComponentManagerStart_ProviderFailurePreventsConsumerPhase(t *testing.T
 		},
 		"consumer": consumer,
 	})
-	defer func() { _ = cm.Stop(2 * time.Second) }()
+	defer func() { _ = cm.Stop(context.Background()) }()
 
 	err := cm.Start(context.Background())
 	require.Error(t, err)
@@ -227,6 +227,45 @@ func TestComponentManagerStart_ProviderFailurePreventsConsumerPhase(t *testing.T
 	}
 	status := cm.GetComponentStatus()
 	assert.Equal(t, component.StateInitialized, status["consumer"].State)
+}
+
+func TestComponentManagerStopAfterProviderFailureDoesNotWaitForUnlaunchedSupervisor(t *testing.T) {
+	providerComp := newBarrierTestComponent("provider")
+	providerComp.startErr = errors.New("provider unavailable")
+	cm := newProviderBarrierTestManager(map[string]component.Discoverable{
+		"provider": &barrierStoreProvider{
+			barrierTestComponent: providerComp,
+			provided:             map[string]storage.StreamableStore{"store": &fakeStreamable{id: "store"}},
+		},
+	})
+
+	require.Error(t, cm.Start(context.Background()))
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), time.Second)
+	defer cancelStop()
+	require.NoError(t, cm.Stop(stopCtx))
+}
+
+func TestComponentManagerStopAfterBootDrainFailureDoesNotWaitForUnlaunchedSupervisor(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	comp := newBarrierTestComponent("consumer")
+	comp.entered = entered
+	comp.release = release
+	cm := newBarrierTestManager(t, comp)
+	// A non-nil manager enters the boot-drain path. Cancellation is observed
+	// before it reads manager state, so no configured backing store is needed.
+	cm.configManager = new(config.Manager)
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	startDone := make(chan error, 1)
+	go func() { startDone <- cm.Start(runCtx) }()
+	<-entered
+	cancelRun()
+	close(release)
+	require.ErrorIs(t, <-startDone, context.Canceled)
+
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), time.Second)
+	defer cancelStop()
+	require.NoError(t, cm.Stop(stopCtx))
 }
 
 func TestComponentManagerStart_DuplicateProviderFailsWithoutStartingConsumers(t *testing.T) {
@@ -249,7 +288,7 @@ func TestComponentManagerStart_DuplicateProviderFailsWithoutStartingConsumers(t 
 		},
 		"consumer": consumer,
 	})
-	defer func() { _ = cm.Stop(2 * time.Second) }()
+	defer func() { _ = cm.Stop(context.Background()) }()
 
 	err := cm.Start(context.Background())
 	require.Error(t, err)
@@ -291,7 +330,7 @@ func TestComponentManagerStart_FailsClosedOnComponentStartError(t *testing.T) {
 	cm := newBarrierTestManager(t, failing, ok)
 	admitTestRegistryComponent(t, cm.registry, "failing-comp", failing)
 	admitTestRegistryComponent(t, cm.registry, "healthy-comp", ok)
-	defer func() { _ = cm.Stop(2 * time.Second) }()
+	defer func() { _ = cm.Stop(context.Background()) }()
 
 	err := cm.Start(context.Background())
 	require.Error(t, err, "a component Start failure must fail ComponentManager.Start")
@@ -323,7 +362,7 @@ func TestComponentManagerStart_JoinsMultipleFailures(t *testing.T) {
 	failB.startErr = errB
 
 	cm := newBarrierTestManager(t, failA, failB)
-	defer func() { _ = cm.Stop(2 * time.Second) }()
+	defer func() { _ = cm.Stop(context.Background()) }()
 
 	err := cm.Start(context.Background())
 	require.Error(t, err)
@@ -344,7 +383,7 @@ func TestComponentManagerStart_WaitsForAllComponentStarts(t *testing.T) {
 	gated.release = make(chan struct{})
 
 	cm := newBarrierTestManager(t, gated)
-	defer func() { _ = cm.Stop(2 * time.Second) }()
+	defer func() { _ = cm.Stop(context.Background()) }()
 
 	done := make(chan error, 1)
 	go func() { done <- cm.Start(context.Background()) }()
@@ -482,7 +521,7 @@ func (c *signalingStartComponent) Start(_ context.Context) error {
 	}
 	return nil
 }
-func (c *signalingStartComponent) Stop(_ time.Duration) error { return nil }
+func (c *signalingStartComponent) Stop(context.Context) error { return nil }
 
 var _ component.LifecycleComponent = (*signalingStartComponent)(nil)
 
@@ -556,7 +595,7 @@ func TestComponentManagerStart_ConfigUpdatesSerializedAfterBarrier(t *testing.T)
 		State:     component.StateInitialized,
 	}
 	cm.initialized.Store(true)
-	defer func() { _ = cm.Stop(2 * time.Second) }()
+	defer func() { _ = cm.Stop(context.Background()) }()
 
 	done := make(chan error, 1)
 	go func() { done <- cm.Start(context.Background()) }()

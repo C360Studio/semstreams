@@ -628,6 +628,25 @@ type consumerBinding struct {
 	consumeCtx jetstream.ConsumeContext
 	consumer   jetstream.Consumer
 	policyKey  consumerPolicyKey
+	drain      *consumerDrain
+}
+
+type consumerDrain struct {
+	once   sync.Once
+	closed <-chan struct{}
+}
+
+func newConsumerBinding(
+	consumeCtx jetstream.ConsumeContext,
+	consumer jetstream.Consumer,
+	policyKey consumerPolicyKey,
+) consumerBinding {
+	return consumerBinding{
+		consumeCtx: consumeCtx,
+		consumer:   consumer,
+		policyKey:  policyKey,
+		drain:      &consumerDrain{closed: consumeCtx.Closed()},
+	}
 }
 
 // guardedConsumer serializes Info() on one consumer handle.
@@ -842,17 +861,83 @@ func (m *Client) RTT() (time.Duration, error) {
 	return conn.RTT()
 }
 
-// Subscription wraps a NATS subscription for lifecycle management
+type nativeSubscription interface {
+	Drain() error
+	IsValid() bool
+	StatusChanged(...nats.SubStatus) <-chan nats.SubStatus
+	Unsubscribe() error
+}
+
+// Subscription wraps a NATS subscription for lifecycle management.
 type Subscription struct {
-	sub *nats.Subscription
+	sub nativeSubscription
+
+	drainOnce     sync.Once
+	drainErr      error
+	drainComplete bool
+	closed        <-chan nats.SubStatus
+}
+
+func newSubscription(sub nativeSubscription) *Subscription {
+	return &Subscription{
+		sub:    sub,
+		closed: sub.StatusChanged(nats.SubscriptionClosed),
+	}
 }
 
 // Unsubscribe unsubscribes from the subject
 func (s *Subscription) Unsubscribe() error {
-	if s.sub == nil {
+	if s == nil || s.sub == nil {
 		return nil
 	}
 	return s.sub.Unsubscribe()
+}
+
+// Drain stops new deliveries and waits for NATS to close the subscription
+// after all queued callbacks finish. If ctx expires, a later call rejoins the
+// same native drain; it never starts a second drain operation.
+func (s *Subscription) Drain(ctx context.Context) error {
+	if ctx == nil {
+		return stderrors.New("natsclient: nil Subscription.Drain context")
+	}
+	if s == nil || s.sub == nil {
+		return nil
+	}
+	s.drainOnce.Do(func() {
+		if !s.sub.IsValid() {
+			select {
+			case <-s.closed:
+				s.drainComplete = true
+			default:
+				s.drainErr = nats.ErrBadSubscription
+			}
+			return
+		}
+		s.drainErr = s.sub.Drain()
+		if stderrors.Is(s.drainErr, nats.ErrBadSubscription) {
+			select {
+			case <-s.closed:
+				s.drainErr = nil
+				s.drainComplete = true
+			default:
+			}
+		}
+	})
+	if s.drainErr != nil {
+		return stderrors.Join(s.drainErr, ctx.Err())
+	}
+	if s.drainComplete {
+		return ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-s.closed:
+		return ctx.Err()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Subscribe subscribes to a NATS subject with context propagation.
@@ -885,7 +970,7 @@ func (m *Client) Subscribe(ctx context.Context, subject string, handler func(con
 	}
 
 	m.subs = append(m.subs, sub)
-	return &Subscription{sub: sub}, nil
+	return newSubscription(sub), nil
 }
 
 // Publish publishes a message to a NATS subject

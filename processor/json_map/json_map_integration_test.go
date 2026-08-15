@@ -121,7 +121,7 @@ func TestIntegration_FieldRenaming(t *testing.T) {
 	// Start processor
 	err = mapProc.Start(ctx)
 	require.NoError(t, err)
-	defer mapProc.Stop(5 * time.Second)
+	defer mapProc.Stop(context.Background())
 
 	// Give processor time to subscribe
 	time.Sleep(100 * time.Millisecond)
@@ -220,7 +220,7 @@ func TestIntegration_StringTransforms(t *testing.T) {
 
 	err = mapProc.Start(ctx)
 	require.NoError(t, err)
-	defer mapProc.Stop(5 * time.Second)
+	defer mapProc.Stop(context.Background())
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -314,7 +314,7 @@ func TestIntegration_AddRemoveFields(t *testing.T) {
 
 	err = mapProc.Start(ctx)
 	require.NoError(t, err)
-	defer mapProc.Stop(5 * time.Second)
+	defer mapProc.Stop(context.Background())
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -418,7 +418,7 @@ func TestIntegration_CombinedTransformations(t *testing.T) {
 
 	err = mapProc.Start(ctx)
 	require.NoError(t, err)
-	defer mapProc.Stop(5 * time.Second)
+	defer mapProc.Stop(context.Background())
 
 	time.Sleep(100 * time.Millisecond)
 

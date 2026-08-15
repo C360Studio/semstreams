@@ -85,7 +85,7 @@ func (t *TestMockComponent) Start(_ context.Context) error {
 	return t.startErr
 }
 
-func (t *TestMockComponent) Stop(_ time.Duration) error {
+func (t *TestMockComponent) Stop(context.Context) error {
 	t.stopped = true
 	return t.stopErr
 }
@@ -180,7 +180,7 @@ func TestComponentManagerConfigUpdates(t *testing.T) {
 
 	err = cm.Start(ctx)
 	require.NoError(t, err)
-	defer cm.Stop(5 * time.Second)
+	defer cm.Stop(context.Background())
 
 	// Give the config watcher time to start and receive initial update
 	time.Sleep(500 * time.Millisecond)
@@ -476,7 +476,7 @@ func TestComponentManagerConfigResilience(t *testing.T) {
 	require.NoError(t, err)
 	err = cm.Start(ctx)
 	require.NoError(t, err)
-	defer cm.Stop(5 * time.Second)
+	defer cm.Stop(context.Background())
 
 	t.Logf("ComponentManager started with config watching enabled")
 
@@ -630,7 +630,7 @@ func TestComponentManagerReconcileOnBulkPush(t *testing.T) {
 	cm := cmService.(*service.ComponentManager)
 	require.NoError(t, cm.Initialize())
 	require.NoError(t, cm.Start(ctx))
-	defer cm.Stop(5 * time.Second)
+	defer cm.Stop(context.Background())
 
 	// Give watcher goroutine time to start
 	time.Sleep(200 * time.Millisecond)
@@ -722,7 +722,7 @@ func TestComponentManagerNoOpConfigUpdateSkipsRestart(t *testing.T) {
 	cm := cmService.(*service.ComponentManager)
 	require.NoError(t, cm.Initialize())
 	require.NoError(t, cm.Start(ctx))
-	defer cm.Stop(5 * time.Second)
+	defer cm.Stop(context.Background())
 	time.Sleep(300 * time.Millisecond)
 
 	compCfg := types.ComponentConfig{
@@ -832,7 +832,7 @@ func TestComponentManagerRepushUnchangedRestartsNothing(t *testing.T) {
 	cm := cmService.(*service.ComponentManager)
 	require.NoError(t, cm.Initialize())
 	require.NoError(t, cm.Start(ctx))
-	defer cm.Stop(5 * time.Second)
+	defer cm.Stop(context.Background())
 	time.Sleep(200 * time.Millisecond)
 
 	// Create the 5 components via the full config.

@@ -4,6 +4,7 @@ package jsonfilter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -79,14 +81,13 @@ type Processor struct {
 	logger           *slog.Logger
 
 	// Lifecycle management
-	shutdown      chan struct{}
-	done          chan struct{}
 	running       bool
 	startTime     time.Time
 	mu            sync.RWMutex
 	lifecycleMu   sync.Mutex
-	wg            *sync.WaitGroup
+	generation    *lifecyclejoin.Generation
 	subscriptions []*natsclient.Subscription
+	consumers     []streamConsumerBinding
 
 	// Metrics (atomic counters for DataFlow)
 	messagesProcessed int64
@@ -97,6 +98,11 @@ type Processor struct {
 
 	// Prometheus metrics
 	metrics *filterMetrics
+}
+
+type streamConsumerBinding struct {
+	streamName   string
+	consumerName string
 }
 
 // NewProcessor creates a new JSON filter processor from configuration
@@ -154,9 +160,6 @@ func NewProcessor(
 		decoder:          message.NewDecoder(deps.PayloadRegistry),
 		natsClient:       deps.NATSClient,
 		logger:           deps.GetLogger(),
-		shutdown:         make(chan struct{}),
-		done:             make(chan struct{}),
-		wg:               &sync.WaitGroup{},
 		metrics:          metrics,
 	}, nil
 }
@@ -192,7 +195,7 @@ func (f *Processor) Initialize() error {
 }
 
 // Start begins filtering messages
-func (f *Processor) Start(ctx context.Context) error {
+func (f *Processor) Start(ctx context.Context) (startErr error) {
 	// Validate context
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "JSONFilterProcessor", "Start", "context cannot be nil")
@@ -204,7 +207,7 @@ func (f *Processor) Start(ctx context.Context) error {
 	f.lifecycleMu.Lock()
 	defer f.lifecycleMu.Unlock()
 
-	if f.running {
+	if f.generation != nil {
 		return errs.WrapFatal(errs.ErrAlreadyStarted, "JSONFilterProcessor", "Start", "check running state")
 	}
 
@@ -212,12 +215,36 @@ func (f *Processor) Start(ctx context.Context) error {
 		return errs.WrapFatal(errs.ErrMissingConfig, "JSONFilterProcessor", "Start", "NATS client required")
 	}
 
-	// Recreate channels if component is being restarted
-	f.shutdown = make(chan struct{})
-	f.done = make(chan struct{})
+	runCtx, cancel := context.WithCancel(ctx)
+	generation := lifecyclejoin.NewGeneration(cancel, nil)
+	f.generation = generation
+	started := false
+	defer func() {
+		if !started {
+			rollbackErr := lifecyclejoin.RunPartialStartRollback(func(ctx context.Context) error {
+				return generation.Stop(ctx, nil, func(ctx context.Context) error {
+					stopErr := f.stopInputs(ctx)
+					if ctxErr := ctx.Err(); ctxErr != nil {
+						return errors.Join(stopErr, ctxErr)
+					}
+					f.mu.Lock()
+					f.running = false
+					f.mu.Unlock()
+					return stopErr
+				})
+			})
+			if rollbackErr == nil && f.generation == generation {
+				f.generation = nil
+			}
+			if rollbackErr != nil {
+				startErr = errors.Join(startErr, rollbackErr)
+				f.logger.Error("Failed to roll back input subscriptions", "error", rollbackErr)
+			}
+		}
+	}()
 
 	// Subscribe to input ports based on port type
-	if err := f.setupSubscriptions(ctx); err != nil {
+	if err := f.setupSubscriptions(runCtx); err != nil {
 		return err
 	}
 
@@ -225,6 +252,7 @@ func (f *Processor) Start(ctx context.Context) error {
 	f.running = true
 	f.startTime = time.Now()
 	f.mu.Unlock()
+	started = true
 
 	f.logger.Info("JSON filter processor started",
 		"component", f.name,
@@ -328,6 +356,7 @@ func (f *Processor) setupJetStreamConsumer(ctx context.Context, port component.P
 		return errs.WrapTransient(err, "JSONFilterProcessor", "setupJetStreamConsumer",
 			fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
+	f.consumers = append(f.consumers, streamConsumerBinding{streamName: streamName, consumerName: consumerName})
 
 	f.logger.Debug("JSON filter subscribed (JetStream)", "subject", subject, "stream", streamName)
 	return nil
@@ -384,48 +413,51 @@ func sanitizeSubject(subject string) string {
 }
 
 // Stop gracefully stops the processor
-func (f *Processor) Stop(timeout time.Duration) error {
+func (f *Processor) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
 	f.lifecycleMu.Lock()
-	defer f.lifecycleMu.Unlock()
-
-	if !f.running {
+	generation := f.generation
+	if generation == nil {
+		f.lifecycleMu.Unlock()
 		return nil
 	}
+	f.lifecycleMu.Unlock()
 
-	// Signal shutdown
-	close(f.shutdown)
-
-	// Unsubscribe from all NATS subjects
-	for _, sub := range f.subscriptions {
-		if err := sub.Unsubscribe(); err != nil {
-			f.logger.Warn("Failed to unsubscribe", "error", err)
+	stopErr := generation.Stop(ctx, nil, func(ctx context.Context) error {
+		stopErr := f.stopInputs(ctx)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return errors.Join(stopErr, ctxErr)
 		}
+		f.mu.Lock()
+		f.running = false
+		f.mu.Unlock()
+		return stopErr
+	})
+	if stopErr == nil {
+		f.lifecycleMu.Lock()
+		if f.generation == generation {
+			f.generation = nil
+		}
+		f.lifecycleMu.Unlock()
 	}
-	f.subscriptions = nil
+	return stopErr
+}
 
-	// Wait for goroutines with timeout
-	waitCh := make(chan struct{})
-	go func() {
-		f.wg.Wait()
-		close(waitCh)
-	}()
-
-	select {
-	case <-waitCh:
-		// Clean shutdown
-	case <-time.After(timeout):
-		return errs.WrapTransient(
-			errs.ErrConnectionTimeout,
-			"JSONFilterProcessor", "Stop",
-			fmt.Sprintf("graceful shutdown timeout after %v", timeout))
+func (f *Processor) stopInputs(ctx context.Context) error {
+	var stopErr error
+	for _, sub := range f.subscriptions {
+		stopErr = errors.Join(stopErr, sub.Drain(ctx))
 	}
-
-	f.mu.Lock()
-	f.running = false
-	close(f.done)
-	f.mu.Unlock()
-
-	return nil
+	for _, binding := range f.consumers {
+		stopErr = errors.Join(stopErr, f.natsClient.StopConsumer(ctx, binding.streamName, binding.consumerName))
+	}
+	if ctx.Err() == nil {
+		f.subscriptions = nil
+		f.consumers = nil
+	}
+	return stopErr
 }
 
 // isJetStreamPortBySubject checks if an output port with the given subject is configured for JetStream

@@ -198,7 +198,7 @@ func setupFullStack(t *testing.T, opts fsOpts) *fullStack {
 	gi := giDisc.(*graphingest.Component)
 	require.NoError(t, gi.Initialize())
 	require.NoError(t, gi.Start(ctx))
-	t.Cleanup(func() { _ = gi.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = gi.Stop(context.Background()) })
 
 	// Rule engine (no rules) — present so its DELETED-branch cleanup runs for the
 	// Stage D assertion; harmless no-op for the other scenarios.
@@ -209,7 +209,7 @@ func setupFullStack(t *testing.T, opts fsOpts) *fullStack {
 	require.NoError(t, err)
 	require.NoError(t, rproc.Initialize())
 	require.NoError(t, rproc.Start(ctx))
-	t.Cleanup(func() { _ = rproc.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = rproc.Stop(context.Background()) })
 
 	mgr := lifecycle.NewManager(nc, nil)
 
@@ -274,7 +274,7 @@ func setupFullStack(t *testing.T, opts fsOpts) *fullStack {
 	require.NoError(t, err)
 	require.NoError(t, exec.Initialize())
 	require.NoError(t, exec.Start(ctx))
-	t.Cleanup(func() { _ = exec.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = exec.Stop(context.Background()) })
 
 	return &fullStack{nc: nc, gi: gi, mgr: mgr, prefix: prefix, dispatched: dispatched}
 }

@@ -59,7 +59,7 @@ func TestIntegration_CoalescedLane_TombstoneConverges(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, embeddingComp.Start(ctx))
-	defer embeddingComp.Stop(5 * time.Second)
+	defer embeddingComp.Stop(context.Background())
 
 	var embeddingBucket jetstream.KeyValue
 	require.Eventually(t, func() bool {
@@ -188,7 +188,7 @@ func TestIntegration_PreloadedBootstrap_TakesCoalescedLane(t *testing.T) {
 	require.NoError(t, embeddingComp.Start(ctx))
 	// Stop must not hang on the 60s window: it cancels the component ctx before
 	// entityCoalescer.Close(), which unblocks the coalescer's run goroutine.
-	defer embeddingComp.Stop(10 * time.Second)
+	defer embeddingComp.Stop(context.Background())
 
 	// Every bootstrap entry flows through the coalesced lane: the pending set
 	// fills to the seeded count and stays there (no flush for 60s).

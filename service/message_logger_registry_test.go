@@ -67,7 +67,7 @@ func TestMessageLoggerWildcardReconcilesRegistryCompleteSetsAndStops(t *testing.
 
 	registry.UnregisterInstance("worker")
 	waitForLoggerSubjects(t, ml, []string{"operator.>"})
-	require.NoError(t, ml.Stop(5*time.Second))
+	require.NoError(t, ml.Stop(context.Background()))
 	require.Nil(t, ml.observerCancel)
 	require.Empty(t, ml.subscriptions)
 	require.Empty(t, ml.resolvedSubjects)
@@ -84,7 +84,7 @@ func TestMessageLoggerExplicitModeNeverAttachesRegistryObserver(t *testing.T) {
 	require.Nil(t, ml.observerCancel)
 	require.Nil(t, ml.observerDone)
 	waitForLoggerSubjects(t, ml, []string{"explicit.>"})
-	require.NoError(t, ml.Stop(5*time.Second))
+	require.NoError(t, ml.Stop(context.Background()))
 }
 
 func TestMessageLoggerAcceptedContainmentCapturesOnceAndReportsResolution(t *testing.T) {
@@ -106,7 +106,7 @@ func TestMessageLoggerAcceptedContainmentCapturesOnceAndReportsResolution(t *tes
 	ml := serviceInstance.(*MessageLogger)
 	ml.subscribe = fake.subscribe
 	require.NoError(t, ml.Start(context.Background()))
-	defer ml.Stop(5 * time.Second)
+	defer ml.Stop(context.Background())
 	waitForLoggerSubjects(t, ml, []string{"agent.toolcall.proposed.>"})
 
 	fake.deliver(t, "agent.toolcall.proposed.>", "agent.toolcall.proposed.loop", []byte(`{}`))
@@ -133,7 +133,7 @@ func TestMessageLoggerRetriesSubscribeFailureAndClearsDegradedState(t *testing.T
 
 	retryTicks <- time.Now()
 	waitForLoggerReconciliation(t, ml, []string{"explicit.>"}, false)
-	require.NoError(t, ml.Stop(5*time.Second))
+	require.NoError(t, ml.Stop(context.Background()))
 }
 
 func TestMessageLoggerRetainsFailedOverlapUnsubscribeWithoutDuplicateThenRetries(t *testing.T) {
@@ -190,10 +190,10 @@ func TestMessageLoggerRetainsFailedOverlapUnsubscribeWithoutDuplicateThenRetries
 
 	retryTicks <- time.Now()
 	waitForLoggerReconciliation(t, ml, []string{"agent.toolcall.proposed.>"}, false)
-	require.NoError(t, ml.Stop(5*time.Second))
+	require.NoError(t, ml.Stop(context.Background()))
 }
 
-func TestMessageLoggerStopRetainsFailedHandleForSecondStop(t *testing.T) {
+func TestMessageLoggerStopRetainsAndReplaysFirstTeardownFailure(t *testing.T) {
 	fake := newFakeLoggerSubscriber()
 	ml, err := NewMessageLogger(&MessageLoggerConfig{
 		MonitorSubjects: []string{"explicit.>"}, MaxEntries: 1000, SampleRate: 1,
@@ -206,11 +206,43 @@ func TestMessageLoggerStopRetainsFailedHandleForSecondStop(t *testing.T) {
 	fake.unsubscribeFailures["explicit.>"] = 1
 	fake.mu.Unlock()
 
-	firstErr := ml.Stop(5 * time.Second)
+	firstErr := ml.Stop(context.Background())
 	require.ErrorContains(t, firstErr, "unsubscribe explicit.>")
 	waitForLoggerReconciliation(t, ml, []string{"explicit.>"}, true)
-	require.NoError(t, ml.Stop(5*time.Second))
-	waitForLoggerReconciliation(t, ml, nil, false)
+	secondErr := ml.Stop(context.Background())
+	require.EqualError(t, secondErr, firstErr.Error())
+	waitForLoggerReconciliation(t, ml, []string{"explicit.>"}, true)
+	fake.mu.Lock()
+	require.Equal(t, 1, fake.unsubscribeAttempts["explicit.>"], "genuine teardown failure must not be retried")
+	fake.mu.Unlock()
+}
+
+func TestMessageLoggerStopDeadlineCanResumeSameGeneration(t *testing.T) {
+	fake := newFakeLoggerSubscriber()
+	ml, err := NewMessageLogger(&MessageLoggerConfig{
+		MonitorSubjects: []string{"explicit.>"}, MaxEntries: 1000, SampleRate: 1,
+	}, &natsclient.Client{})
+	require.NoError(t, err)
+	ml.subscribe = fake.subscribe
+	require.NoError(t, ml.Start(context.Background()))
+	waitForLoggerSubjects(t, ml, []string{"explicit.>"})
+
+	retryDone := make(chan struct{})
+	ml.lifecycleMu.Lock()
+	ml.retryDone = retryDone
+	ml.lifecycleMu.Unlock()
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	cancelFirst()
+	require.ErrorIs(t, ml.Stop(firstCtx), context.Canceled)
+	fake.mu.Lock()
+	require.Zero(t, fake.unsubscribeAttempts["explicit.>"], "expired Stop must not begin terminal teardown")
+	fake.mu.Unlock()
+
+	close(retryDone)
+	require.NoError(t, ml.Stop(context.Background()))
+	fake.mu.Lock()
+	require.Equal(t, 1, fake.unsubscribeAttempts["explicit.>"])
+	fake.mu.Unlock()
 }
 
 func TestMessageLoggerStartStopTransitionDoesNotMissInstalledObserverOrSubscription(t *testing.T) {
@@ -230,7 +262,7 @@ func TestMessageLoggerStartStopTransitionDoesNotMissInstalledObserverOrSubscript
 	require.False(t, ml.transitionMu.TryLock(), "Start must retain the transition lock through handle installation")
 
 	stopResult := make(chan error, 1)
-	go func() { stopResult <- ml.Stop(5 * time.Second) }()
+	go func() { stopResult <- ml.Stop(context.Background()) }()
 	close(fake.releaseSubscribe)
 	require.NoError(t, <-startResult)
 	require.NoError(t, <-stopResult)

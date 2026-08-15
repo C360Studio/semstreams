@@ -67,7 +67,7 @@ func TestIntegration_ComponentLifecycle(t *testing.T) {
 	assert.True(t, health.Healthy, "component should be healthy after start")
 
 	// Stop
-	err = graphQuery.Stop(5 * time.Second)
+	err = graphQuery.Stop(context.Background())
 	assert.NoError(t, err)
 }
 
@@ -194,7 +194,7 @@ func TestIntegration_MetricsTracking(t *testing.T) {
 
 	ctx := context.Background()
 	require.NoError(t, graphQuery.Start(ctx))
-	defer graphQuery.Stop(1 * time.Second)
+	defer graphQuery.Stop(context.Background())
 
 	// Get initial metrics
 	metrics := graphQuery.DataFlow()
@@ -228,7 +228,7 @@ func TestIntegration_PathSearch_Structure(t *testing.T) {
 
 	ctx := context.Background()
 	require.NoError(t, graphQuery.Start(ctx))
-	defer graphQuery.Stop(1 * time.Second)
+	defer graphQuery.Stop(context.Background())
 
 	// Test PathSearch request structure
 	req := PathSearchRequest{
@@ -295,7 +295,7 @@ func TestIntegration_GraphRAGLifecycle(t *testing.T) {
 
 	// Start component - COMMUNITY_INDEX doesn't exist yet
 	require.NoError(t, graphQuery.Start(ctx))
-	defer graphQuery.Stop(5 * time.Second)
+	defer graphQuery.Stop(context.Background())
 
 	// Verify GraphRAG is disabled initially (community cache should not be ready)
 	assert.Nil(t, graphQuery.communityCache.acquire(),
@@ -391,7 +391,7 @@ func TestIntegration_GraphRAGOrderlyCancellation(t *testing.T) {
 	require.NoError(t, err, "global search should work initially")
 	require.NotNil(t, resp)
 
-	require.NoError(t, graphQuery.Stop(5*time.Second))
+	require.NoError(t, graphQuery.Stop(context.Background()))
 	select {
 	case revokedGeneration := <-unpublished:
 		require.Equal(t, firstGeneration, revokedGeneration)
@@ -490,7 +490,7 @@ func TestIntegration_AnswerSynthesis(t *testing.T) {
 	graphQuery := comp.(*Component)
 	require.NoError(t, graphQuery.Initialize())
 	require.NoError(t, graphQuery.Start(ctx))
-	defer graphQuery.Stop(5 * time.Second)
+	defer graphQuery.Stop(context.Background())
 
 	// Wait for community cache to be ready and populated
 	require.Eventually(t, func() bool {
@@ -609,7 +609,7 @@ func TestIntegration_EnrichGlobalResponse(t *testing.T) {
 	graphQuery := comp.(*Component)
 	require.NoError(t, graphQuery.Initialize())
 	require.NoError(t, graphQuery.Start(ctx))
-	defer graphQuery.Stop(5 * time.Second)
+	defer graphQuery.Stop(context.Background())
 
 	// Wait for community cache
 	require.Eventually(t, func() bool {
@@ -673,7 +673,7 @@ func TestIntegration_StaticRouting(t *testing.T) {
 	graphQuery := comp.(*Component)
 	require.NoError(t, graphQuery.Initialize())
 	require.NoError(t, graphQuery.Start(ctx))
-	defer graphQuery.Stop(1 * time.Second)
+	defer graphQuery.Stop(context.Background())
 
 	// Verify static routing works for known query types
 	subject := graphQuery.router.Route("entity")
@@ -740,7 +740,7 @@ func TestIntegration_CommunityCacheCrossLevelCollision(t *testing.T) {
 	graphQuery := comp.(*Component)
 	require.NoError(t, graphQuery.Initialize())
 	require.NoError(t, graphQuery.Start(ctx))
-	defer graphQuery.Stop(5 * time.Second)
+	defer graphQuery.Stop(context.Background())
 
 	require.Eventually(t, func() bool { return graphQuery.communityCache.acquire() != nil },
 		5*time.Second, 50*time.Millisecond, "community cache must complete initial sync")

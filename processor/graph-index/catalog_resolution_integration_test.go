@@ -38,7 +38,7 @@ func TestIntegration_Start_DoesNotCreateRetiredContextIndex(t *testing.T) {
 	indexComponent := created.(component.LifecycleComponent)
 	require.NoError(t, indexComponent.Initialize())
 	require.NoError(t, indexComponent.Start(ctx))
-	defer func() { require.NoError(t, indexComponent.Stop(5*time.Second)) }()
+	defer func() { require.NoError(t, indexComponent.Stop(context.Background())) }()
 
 	_, err = nc.GetKeyValueBucket(ctx, "CONTEXT_INDEX")
 	require.ErrorIs(t, err, jetstream.ErrBucketNotFound,
@@ -79,7 +79,7 @@ func TestIntegration_Start_OffCatalogOutputSubjectFailsBoot(t *testing.T) {
 		require.NoError(t, lc.Initialize())
 		cerr = lc.Start(ctx)
 		if cerr == nil {
-			defer func() { _ = lc.Stop(2 * time.Second) }()
+			defer func() { _ = lc.Stop(context.Background()) }()
 		}
 	}
 	require.Error(t, cerr,

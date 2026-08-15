@@ -504,21 +504,18 @@ func (u *Input) bindSocket() error {
 	return nil
 }
 
-// Stop gracefully stops the UDP listener with the specified timeout
-func (u *Input) Stop(timeout time.Duration) error {
-	return u.StopWithTimeout(timeout)
-}
-
-// StopWithTimeout gracefully stops the UDP listener with the specified timeout
-func (u *Input) StopWithTimeout(timeout time.Duration) error {
-	if !u.running.Load() {
-		return nil
+// Stop gracefully stops the UDP listener under caller authority.
+func (u *Input) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-
-	u.running.Store(false)
-
 	// Signal shutdown to goroutines
 	u.mu.Lock()
+	if !u.running.Load() && u.done == nil {
+		u.mu.Unlock()
+		return nil
+	}
+	done := u.done
 	if u.shutdown != nil {
 		select {
 		case <-u.shutdown:
@@ -532,16 +529,24 @@ func (u *Input) StopWithTimeout(timeout time.Duration) error {
 	}
 	u.mu.Unlock()
 
-	// Wait for graceful shutdown with timeout
+	// An already-ended caller still signals shutdown, but it does not gain
+	// cleanup authority. A later Stop may rejoin the same completion.
+	if err := ctx.Err(); err != nil {
+		return errs.WrapTransient(fmt.Errorf("stop timeout: %w", err),
+			"udp-input", "Stop", "graceful shutdown")
+	}
+
+	// Wait for graceful shutdown under caller authority.
 	select {
-	case <-u.done:
+	case <-done:
 		// Goroutine finished cleanly
-	case <-time.After(timeout):
-		return errs.WrapTransient(fmt.Errorf("stop timeout after %v", timeout),
+	case <-ctx.Done():
+		return errs.WrapTransient(fmt.Errorf("stop timeout: %w", ctx.Err()),
 			"udp-input", "Stop", "graceful shutdown")
 	}
 
 	// Clean up resources
+	u.running.Store(false)
 	u.cleanup()
 	return nil
 }

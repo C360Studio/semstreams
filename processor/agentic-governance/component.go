@@ -6,6 +6,7 @@ package agenticgovernance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
@@ -42,9 +44,12 @@ type Component struct {
 	metrics *governanceMetrics
 
 	// Lifecycle management
-	running   bool
-	startTime time.Time
-	mu        sync.RWMutex
+	running       bool
+	startTime     time.Time
+	consumerInfos []natsclient.StreamConsumerConfig
+	mu            sync.RWMutex
+	lifecycleMu   sync.Mutex
+	generation    *lifecyclejoin.Generation
 
 	// Counters
 	messagesProcessed int64
@@ -200,7 +205,7 @@ func (c *Component) Initialize() error {
 }
 
 // Start begins processing governance events
-func (c *Component) Start(ctx context.Context) error {
+func (c *Component) Start(ctx context.Context) (startErr error) {
 	// Validate context
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "Start", "context cannot be nil")
@@ -209,25 +214,45 @@ func (c *Component) Start(ctx context.Context) error {
 		return errs.WrapInvalid(err, "Component", "Start", "context already cancelled")
 	}
 
-	c.mu.Lock()
-	if c.running {
-		c.mu.Unlock()
+	c.lifecycleMu.Lock()
+	if c.generation != nil {
+		c.lifecycleMu.Unlock()
 		return errs.ErrAlreadyStarted
 	}
-	c.running = true
-	c.mu.Unlock()
+	runCtx, cancel := context.WithCancel(ctx)
+	startDone := make(chan struct{})
+	generation := lifecyclejoin.NewGeneration(cancel, func() { <-startDone })
+	var finishStart sync.Once
+	finish := func() { finishStart.Do(func() { close(startDone) }) }
+	c.generation = generation
+	c.lifecycleMu.Unlock()
+	defer func() {
+		finish()
+		if startErr == nil {
+			return
+		}
+		rollbackErr := lifecyclejoin.RunPartialStartRollback(func(ctx context.Context) error {
+			return generation.Stop(ctx, nil, c.stopConsumers)
+		})
+		if rollbackErr == nil {
+			c.lifecycleMu.Lock()
+			if c.generation == generation {
+				c.generation = nil
+			}
+			c.lifecycleMu.Unlock()
+		}
+		startErr = errors.Join(startErr, rollbackErr)
+	}()
 
 	// NATS client is optional for unit tests
 	if c.natsClient != nil {
-		if err := c.setupInputConsumers(ctx); err != nil {
-			c.mu.Lock()
-			c.running = false
-			c.mu.Unlock()
+		if err := c.setupInputConsumers(runCtx); err != nil {
 			return errs.Wrap(err, "Component", "Start", "setup input consumers")
 		}
 	}
 
 	c.mu.Lock()
+	c.running = true
 	c.startTime = time.Now()
 	c.mu.Unlock()
 
@@ -434,6 +459,9 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port, hand
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupConsumer", fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
+	c.mu.Lock()
+	c.consumerInfos = append(c.consumerInfos, cfg)
+	c.mu.Unlock()
 
 	c.logger.Info("Subscribed (JetStream)",
 		"subject", subject,
@@ -481,17 +509,48 @@ func sanitizeSubject(subject string) string {
 }
 
 // Stop gracefully stops the component within the given timeout
-func (c *Component) Stop(_ time.Duration) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if !c.running {
+func (c *Component) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
+	c.lifecycleMu.Lock()
+	generation := c.generation
+	c.lifecycleMu.Unlock()
+	if generation == nil {
 		return nil
 	}
+	stopErr := generation.Stop(ctx, nil, c.stopConsumers)
+	if stopErr == nil {
+		c.lifecycleMu.Lock()
+		if c.generation == generation {
+			c.generation = nil
+		}
+		c.lifecycleMu.Unlock()
+		c.mu.Lock()
+		c.running = false
+		c.mu.Unlock()
+		c.logger.Info("Agentic governance component stopped")
+	}
+	return stopErr
+}
 
-	c.running = false
-	c.logger.Info("Agentic governance component stopped")
-	return nil
+func (c *Component) stopConsumers(ctx context.Context) error {
+	c.mu.RLock()
+	infos := append([]natsclient.StreamConsumerConfig(nil), c.consumerInfos...)
+	c.mu.RUnlock()
+
+	var stopErr error
+	for _, info := range infos {
+		if err := c.natsClient.StopConsumer(ctx, info.StreamName, info.ConsumerName); err != nil {
+			stopErr = errors.Join(stopErr, err)
+		}
+	}
+	if stopErr == nil {
+		c.mu.Lock()
+		c.consumerInfos = nil
+		c.mu.Unlock()
+	}
+	return stopErr
 }
 
 // Discoverable interface implementation

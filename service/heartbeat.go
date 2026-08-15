@@ -4,6 +4,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime"
@@ -65,7 +66,8 @@ type HeartbeatService struct {
 	stopOnce sync.Once
 
 	// WaitGroup for goroutine tracking
-	wg sync.WaitGroup
+	wg       sync.WaitGroup
+	loopDone chan struct{}
 
 	// Internal logger
 	logger *slog.Logger
@@ -129,6 +131,9 @@ func NewHeartbeatService(rawConfig json.RawMessage, deps *Dependencies) (Service
 // run its teardown the instance cannot be restarted — create a new one via the
 // constructor (production disable→enable already does this via CreateService).
 func (hb *HeartbeatService) Start(ctx context.Context) error {
+	if err := validateLifecycleContext(ctx, "HeartbeatService", "Start"); err != nil {
+		return err
+	}
 	if hb.Status() == StatusRunning {
 		return fmt.Errorf("heartbeat service already running")
 	}
@@ -151,6 +156,12 @@ func (hb *HeartbeatService) Start(ctx context.Context) error {
 	hb.ticker = time.NewTicker(hb.interval)
 	hb.wg.Add(1)
 	go hb.heartbeatLoop(ctx)
+	hb.loopDone = make(chan struct{})
+	loopDone := hb.loopDone
+	go func() {
+		hb.wg.Wait()
+		close(loopDone)
+	}()
 
 	return nil
 }
@@ -161,7 +172,10 @@ func (hb *HeartbeatService) Start(ctx context.Context) error {
 // a clean shutdown, and repeated calls are safe (gh#549). Teardown still runs
 // on the already-stopped path so the ticker is released when cancellation wins
 // the race.
-func (hb *HeartbeatService) Stop(timeout time.Duration) error {
+func (hb *HeartbeatService) Stop(ctx context.Context) error {
+	if err := validateLifecycleContext(ctx, "HeartbeatService", "Stop"); err != nil {
+		return err
+	}
 	hb.stopOnce.Do(func() {
 		hb.logger.Info("Heartbeat service stopping")
 
@@ -172,22 +186,16 @@ func (hb *HeartbeatService) Stop(timeout time.Duration) error {
 		// Signal the heartbeat loop to exit
 		close(hb.stopChan)
 	})
+	baseErr := hb.BaseService.Stop(ctx)
 
-	// Wait for goroutine with timeout
-	done := make(chan struct{})
-	go func() {
-		hb.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		// Goroutine finished
-	case <-time.After(timeout):
-		hb.logger.Warn("Heartbeat service stop timeout waiting for goroutine")
+	if hb.loopDone != nil {
+		select {
+		case <-hb.loopDone:
+		case <-ctx.Done():
+			return errors.Join(baseErr, fmt.Errorf("wait for heartbeat loop: %w", ctx.Err()))
+		}
 	}
-
-	return hb.BaseService.Stop(timeout)
+	return baseErr
 }
 
 // heartbeatLoop emits periodic heartbeat logs

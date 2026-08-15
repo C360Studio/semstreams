@@ -3,6 +3,7 @@ package agenticdispatch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
@@ -88,9 +90,12 @@ type Component struct {
 	modelRegistry model.RegistryReader // Unified model registry for model selection
 
 	// Lifecycle state
-	mu        sync.RWMutex
-	started   bool
-	startTime time.Time
+	mu          sync.RWMutex
+	lifecycleMu sync.Mutex
+	generation  *lifecyclejoin.Generation
+	starting    bool
+	started     bool
+	startTime   time.Time
 
 	// Ports
 	inputPorts  []component.Port
@@ -299,7 +304,7 @@ func (c *Component) Initialize() error {
 }
 
 // Start begins processing
-func (c *Component) Start(ctx context.Context) error {
+func (c *Component) Start(ctx context.Context) (startErr error) {
 	// Validate context
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "Start", "context cannot be nil")
@@ -308,24 +313,50 @@ func (c *Component) Start(ctx context.Context) error {
 		return errs.WrapInvalid(err, "Component", "Start", "context already cancelled")
 	}
 
-	c.mu.Lock()
-	if c.started {
-		c.mu.Unlock()
+	c.lifecycleMu.Lock()
+	if c.generation != nil {
+		c.lifecycleMu.Unlock()
 		return errs.ErrAlreadyStarted
 	}
-	c.started = true
-	c.startTime = time.Now()
-	c.mu.Unlock()
+	runCtx, cancel := context.WithCancel(ctx)
+	startDone := make(chan struct{})
+	generation := lifecyclejoin.NewGeneration(cancel, func() { <-startDone })
+	var finishStart sync.Once
+	finish := func() { finishStart.Do(func() { close(startDone) }) }
+	c.generation = generation
+	c.starting = true
+	c.lifecycleMu.Unlock()
+	defer func() {
+		finish()
+		c.lifecycleMu.Lock()
+		c.starting = false
+		c.lifecycleMu.Unlock()
+		if startErr == nil {
+			return
+		}
+		rollbackErr := lifecyclejoin.RunPartialStartRollback(func(ctx context.Context) error {
+			return generation.Stop(ctx, nil, c.stopConsumers)
+		})
+		if rollbackErr == nil {
+			c.lifecycleMu.Lock()
+			if c.generation == generation {
+				c.generation = nil
+			}
+			c.lifecycleMu.Unlock()
+		}
+		startErr = errors.Join(startErr, rollbackErr)
+	}()
 
 	c.logger.Info("Starting router component")
 
 	// Setup subscriptions
-	if err := c.setupSubscriptions(ctx); err != nil {
-		c.mu.Lock()
-		c.started = false
-		c.mu.Unlock()
+	if err := c.setupSubscriptions(runCtx); err != nil {
 		return errs.Wrap(err, "Component", "Start", "setup subscriptions")
 	}
+	c.mu.Lock()
+	c.started = true
+	c.startTime = time.Now()
+	c.mu.Unlock()
 
 	c.logger.Info("Router component started",
 		slog.Int("commands", c.registry.Count()))
@@ -334,7 +365,10 @@ func (c *Component) Start(ctx context.Context) error {
 }
 
 // Stop halts processing with graceful shutdown
-func (c *Component) Stop(timeout time.Duration) error {
+func (c *Component) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
 	// Stop the shared activity view first (if the lazy first /activity
 	// request created it): attached SSE subscriptions receive the explicit
 	// terminal close and the single AGENT_LOOPS watcher shuts down. Runs
@@ -342,36 +376,63 @@ func (c *Component) Stop(timeout time.Duration) error {
 	// Start (unit harnesses) still releases the watcher.
 	c.stopActivityView()
 
-	c.mu.Lock()
-	if !c.started {
-		c.mu.Unlock()
+	c.lifecycleMu.Lock()
+	generation := c.generation
+	c.lifecycleMu.Unlock()
+	if generation == nil {
 		return nil
 	}
+	stopErr := generation.Stop(ctx, nil, func(ctx context.Context) error {
+		stopErr := c.stopConsumers(ctx)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return errors.Join(stopErr, ctxErr)
+		}
+		c.mu.Lock()
+		c.started = false
+		c.mu.Unlock()
+		c.logger.Info("Router component stopped")
+		return stopErr
+	})
+	if stopErr == nil {
+		c.lifecycleMu.Lock()
+		if c.generation == generation {
+			c.generation = nil
+		}
+		c.lifecycleMu.Unlock()
+	}
+	return stopErr
+}
 
-	// Stop all JetStream consumers
-	for _, info := range c.consumerInfos {
-		if c.config.DeleteConsumerOnStop {
+func (c *Component) stopConsumers(ctx context.Context) error {
+	c.mu.RLock()
+	infos := append([]consumerInfo(nil), c.consumerInfos...)
+	deleteConsumer := c.config.DeleteConsumerOnStop
+	c.mu.RUnlock()
+	var stopErr error
+	for _, info := range infos {
+		if deleteConsumer {
 			// Delete consumer from server (for test cleanup)
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			if err := c.natsClient.StopAndDeleteConsumer(ctx, info.streamName, info.consumerName); err != nil {
 				c.logger.Debug("Failed to delete consumer", "stream", info.streamName, "consumer", info.consumerName, "error", err)
+				stopErr = errors.Join(stopErr, err)
 			} else {
 				c.logger.Debug("Stopped and deleted consumer", "stream", info.streamName, "consumer", info.consumerName)
 			}
-			cancel()
 		} else {
 			// Just stop local consumption (keep durable consumer for resume)
-			c.natsClient.StopConsumer(info.streamName, info.consumerName)
+			if err := c.natsClient.StopConsumer(ctx, info.streamName, info.consumerName); err != nil {
+				c.logger.Debug("Failed to stop consumer", "stream", info.streamName, "consumer", info.consumerName, "error", err)
+				stopErr = errors.Join(stopErr, err)
+			}
 			c.logger.Debug("Stopped consumer", "stream", info.streamName, "consumer", info.consumerName)
 		}
 	}
-	c.consumerInfos = nil
-
-	c.started = false
-	c.mu.Unlock()
-
-	c.logger.Info("Router component stopped")
-	return nil
+	if ctx.Err() == nil {
+		c.mu.Lock()
+		c.consumerInfos = nil
+		c.mu.Unlock()
+	}
+	return stopErr
 }
 
 // setupSubscriptions sets up JetStream consumers for durable messaging

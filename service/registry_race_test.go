@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/c360studio/semstreams/health"
 	"github.com/c360studio/semstreams/metric"
@@ -48,7 +47,7 @@ func (m *mockService) Start(ctx context.Context) error {
 	return nil
 }
 
-func (m *mockService) Stop(_ time.Duration) error {
+func (m *mockService) Stop(context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.started {
@@ -116,9 +115,9 @@ type shutdownTrackingService struct {
 	shutdownCallback func()
 }
 
-func (s *shutdownTrackingService) Stop(timeout time.Duration) error {
+func (s *shutdownTrackingService) Stop(ctx context.Context) error {
 	s.shutdownCallback()
-	return s.mockService.Stop(timeout)
+	return s.mockService.Stop(ctx)
 }
 
 func (m *mockService) SetHealthy(healthy bool) {
@@ -195,7 +194,7 @@ func TestServiceManager_ServiceLifecycle(t *testing.T) {
 	assert.True(t, service.IsHealthy(), "Service should be healthy")
 
 	// Stop service
-	err = service.Stop(5 * time.Second)
+	err = service.Stop(context.Background())
 	require.NoError(t, err)
 	assert.True(t, mockSvc.IsStopped(), "Service should be stopped")
 	assert.False(t, service.IsHealthy(), "Service should not be healthy after stop")
@@ -229,7 +228,7 @@ func TestServiceManager_StopAllCleanup(t *testing.T) {
 	}
 
 	// Stop all services
-	err := manager.StopAll(5 * time.Second)
+	err := manager.StopAll(context.Background())
 	assert.NoError(t, err)
 
 	// Verify manager is cleaned up
@@ -278,7 +277,7 @@ func TestServiceManager_ReverseOrderShutdown(t *testing.T) {
 	}
 
 	// Stop all services
-	err := manager.StopAll(5 * time.Second)
+	err := manager.StopAll(context.Background())
 	assert.NoError(t, err)
 
 	// Verify shutdown order is reverse of registration order
@@ -343,7 +342,7 @@ func TestServiceManager_ConcurrentStartStop(t *testing.T) {
 	assert.GreaterOrEqual(t, len(healthy), numServices, "Expected all services to be healthy")
 
 	// Stop all services
-	err = manager.StopAll(5 * time.Second)
+	err = manager.StopAll(context.Background())
 	assert.NoError(t, err)
 
 	// Verify cleanup

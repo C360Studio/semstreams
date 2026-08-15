@@ -84,7 +84,7 @@ func TestCaptureBeforeObserverRestart(t *testing.T) {
 	telemetry := newIntegrationTelemetry(false)
 	stopObserver, err := start(ctx, tc.Client, telemetry)
 	require.NoError(t, err)
-	t.Cleanup(stopObserver)
+	t.Cleanup(func() { require.NoError(t, stopObserver(ctx)) })
 
 	select {
 	case got := <-telemetry.events:
@@ -113,7 +113,7 @@ func TestObserverEmissionFailureRedelivers(t *testing.T) {
 	telemetry := newIntegrationTelemetry(true)
 	stopObserver, err := start(ctx, tc.Client, telemetry)
 	require.NoError(t, err)
-	t.Cleanup(stopObserver)
+	t.Cleanup(func() { require.NoError(t, stopObserver(ctx)) })
 
 	select {
 	case <-telemetry.events:
@@ -137,10 +137,10 @@ func TestTwoObserversShareOneLogicalDelivery(t *testing.T) {
 	telemetry := newIntegrationTelemetry(false)
 	stopFirst, err := start(ctx, tc.Client, telemetry)
 	require.NoError(t, err)
-	t.Cleanup(stopFirst)
+	t.Cleanup(func() { require.NoError(t, stopFirst(ctx)) })
 	stopSecond, err := start(ctx, second, telemetry)
 	require.NoError(t, err)
-	t.Cleanup(stopSecond)
+	t.Cleanup(func() { require.NoError(t, stopSecond(ctx)) })
 
 	forceMaxDeliveryAdvisory(t, ctx, tc.Client, "SHARED_DURABLE", "shared.durable")
 	select {

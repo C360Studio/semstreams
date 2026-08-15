@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"sync"
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -55,10 +57,11 @@ type Component struct {
 	startTime time.Time
 	mu        sync.RWMutex
 
-	// Context for background operations
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	// Private generation cancellation and Start-owned join state.
+	lifecycleMu sync.Mutex
+	generation  *lifecyclejoin.Generation
+	shutdownOp  *lifecyclejoin.Operation
+	wg          sync.WaitGroup
 
 	// Metrics tracking
 	eventsProcessed int64
@@ -184,18 +187,22 @@ func (c *Component) Start(ctx context.Context) error {
 		return errs.WrapFatal(errs.ErrNoConnection, "Component", "Start", "check NATS client")
 	}
 
-	// Create cancellable context for background operations
-	c.ctx, c.cancel = context.WithCancel(ctx)
+	// Derive background work from Start and retain only generation authority.
+	runtimeCtx, cancel := context.WithCancel(ctx)
 
 	// Subscribe to agent events
-	if err := c.subscribeToEvents(c.ctx); err != nil {
-		c.cancel()
+	if err := c.subscribeToEvents(runtimeCtx); err != nil {
+		cancel()
 		return errs.Wrap(err, "Component", "Start", "subscribe to events")
 	}
 
 	// Start export loop
 	c.wg.Add(1)
-	go c.exportLoop(c.ctx)
+	go c.exportLoop(runtimeCtx)
+	c.lifecycleMu.Lock()
+	c.generation = lifecyclejoin.NewGeneration(cancel, c.wg.Wait)
+	c.shutdownOp = lifecyclejoin.NewOperation()
+	c.lifecycleMu.Unlock()
 
 	c.running = true
 	c.startTime = time.Now()
@@ -387,9 +394,6 @@ func (c *Component) exportLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			// The component context is already canceled. Give the final flush a
-			// fresh parent; exportData applies the configured hard deadline.
-			c.exportData(context.Background())
 			return
 		case <-ticker.C:
 			c.exportData(ctx)
@@ -489,46 +493,41 @@ func (c *Component) GetMetricMapper() *MetricMapper {
 }
 
 // Stop gracefully stops the component.
-func (c *Component) Stop(_ time.Duration) error {
-	c.mu.Lock()
-	if !c.running {
-		c.mu.Unlock()
+func (c *Component) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
+	c.lifecycleMu.Lock()
+	generation := c.generation
+	shutdownOp := c.shutdownOp
+	c.lifecycleMu.Unlock()
+	if generation == nil {
 		return nil
 	}
-	c.mu.Unlock()
-
-	// Cancel background context
-	if c.cancel != nil {
-		c.cancel()
-	}
-
-	// Wait for goroutines
-	c.wg.Wait()
-	for _, cleanup := range c.policyCleanups {
-		cleanup()
-	}
-	c.policyCleanups = nil
-
-	// Shutdown exporter
-	exporter := c.getExporter()
-	if exporter != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := exporter.Shutdown(ctx); err != nil {
-			c.logger.Warn("Failed to shutdown exporter", slog.Any("error", err))
-		}
-	}
-
-	c.mu.Lock()
-	c.running = false
-	c.mu.Unlock()
-
-	c.logger.Info("OTEL exporter stopped",
-		slog.Int64("events_processed", c.eventsProcessed),
-		slog.Int64("spans_exported", c.spansExported),
-		slog.Int64("metrics_exported", c.metricsExported))
-
-	return nil
+	generation.Cancel()
+	return generation.Stop(ctx, nil, func(ctx context.Context) error {
+		return shutdownOp.Run(ctx, func(ctx context.Context) error {
+			c.exportData(ctx)
+			for _, cleanup := range c.policyCleanups {
+				cleanup()
+			}
+			c.policyCleanups = nil
+			exporter := c.getExporter()
+			if exporter != nil {
+				if err := exporter.Shutdown(ctx); err != nil {
+					return fmt.Errorf("shutdown OTEL exporter: %w", err)
+				}
+			}
+			c.mu.Lock()
+			c.running = false
+			c.mu.Unlock()
+			c.logger.Info("OTEL exporter stopped",
+				slog.Int64("events_processed", c.eventsProcessed),
+				slog.Int64("spans_exported", c.spansExported),
+				slog.Int64("metrics_exported", c.metricsExported))
+			return nil
+		})
+	})
 }
 
 // Discoverable interface implementation

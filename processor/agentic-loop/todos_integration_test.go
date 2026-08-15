@@ -79,7 +79,7 @@ func TestIntegration_TodoWriteReadRoundTrip(t *testing.T) {
 	c := comp.(*graphingest.Component)
 	require.NoError(t, c.Initialize())
 	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 	time.Sleep(100 * time.Millisecond) // wait for handlers to register
 
 	const loopID = "compaction-survival-001"
@@ -195,7 +195,7 @@ func TestIntegration_FreshLoopReturnsEmptyList(t *testing.T) {
 	c := comp.(*graphingest.Component)
 	require.NoError(t, c.Initialize())
 	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 	time.Sleep(100 * time.Millisecond)
 
 	loopEntityID := agentic.LoopExecutionEntityID("acme", "ops", "fresh-loop-never-wrote-todos")

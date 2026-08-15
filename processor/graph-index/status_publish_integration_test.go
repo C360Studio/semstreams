@@ -80,7 +80,7 @@ func TestIntegration_GraphIndexPublishesReadinessHeartbeat(t *testing.T) {
 	indexComponent.statusInterval = 250 * time.Millisecond
 
 	require.NoError(t, indexComponent.Start(ctx))
-	defer indexComponent.Stop(5 * time.Second)
+	defer indexComponent.Stop(context.Background())
 
 	// 2.1: the bucket exists because Start created it eagerly, not because a
 	// consumer's watch lazily provoked it.

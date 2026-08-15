@@ -47,7 +47,7 @@ func startStack(t *testing.T, backstop string) (*graphingest.Component, *natscli
 	gi := giDisc.(*graphingest.Component)
 	require.NoError(t, gi.Initialize())
 	require.NoError(t, gi.Start(ctx))
-	t.Cleanup(func() { _ = gi.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = gi.Stop(context.Background()) })
 
 	mgr := lifecycle.NewManager(nc, nil)
 
@@ -67,7 +67,7 @@ func startStack(t *testing.T, backstop string) (*graphingest.Component, *natscli
 
 	time.Sleep(100 * time.Millisecond) // let graph-ingest subscriptions stabilise
 	require.NoError(t, execDisc.Start(ctx))
-	t.Cleanup(func() { _ = execDisc.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = execDisc.Stop(context.Background()) })
 
 	return gi, nc, execDisc
 }
@@ -177,7 +177,7 @@ func TestIntegration_BootReconcile(t *testing.T) {
 	// startStack already called Start. The initial reEvaluate fires on Start —
 	// but seeding happened after Start here, so nudge a fresh reconcile by
 	// restarting the executor against the now-seeded bucket.
-	require.NoError(t, exec.Stop(5*time.Second))
+	require.NoError(t, exec.Stop(context.Background()))
 	require.NoError(t, exec.Start(context.Background()))
 
 	require.Eventually(t, func() bool {

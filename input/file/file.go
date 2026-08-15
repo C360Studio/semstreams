@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -109,6 +110,7 @@ type Input struct {
 	startTime   time.Time
 	mu          sync.RWMutex // Protects data access
 	wg          sync.WaitGroup
+	generation  *lifecyclejoin.Generation
 
 	// Metrics (atomic for thread safety)
 	linesRead      atomic.Int64
@@ -393,6 +395,7 @@ func (f *Input) Start(ctx context.Context) error {
 		return nil // Already running
 	}
 
+	runCtx, cancel := context.WithCancel(ctx)
 	// Create channels before starting goroutine
 	f.shutdown = make(chan struct{})
 	f.done = make(chan struct{})
@@ -402,43 +405,37 @@ func (f *Input) Start(ctx context.Context) error {
 	f.running.Store(true)
 
 	// Spawn goroutine outside of any data mutex
-	go f.readLoop(ctx)
+	go f.readLoop(runCtx)
+	f.generation = lifecyclejoin.NewGeneration(cancel, f.wg.Wait)
 
 	f.logger.Info("File input started", "path", f.path, "subject", f.subject)
 	return nil
 }
 
 // Stop gracefully shuts down the file input
-func (f *Input) Stop(timeout time.Duration) error {
+func (f *Input) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
 	f.lifecycleMu.Lock()
-
-	if !f.running.Load() {
+	generation := f.generation
+	if generation == nil {
 		f.lifecycleMu.Unlock()
 		return nil
 	}
 
-	// Set running to false first to prevent concurrent stops
-	f.running.Store(false)
-
-	// Signal shutdown - safe to close channel here
-	close(f.shutdown)
 	f.lifecycleMu.Unlock()
 
-	// Wait for goroutine to finish with timeout
-	done := make(chan struct{})
-	go func() {
-		f.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
+	return generation.Stop(ctx, func() error {
+		close(f.shutdown)
+		return nil
+	}, func(context.Context) error {
+		f.lifecycleMu.Lock()
+		f.running.Store(false)
+		f.lifecycleMu.Unlock()
 		f.logger.Info("File input stopped gracefully")
-	case <-time.After(timeout):
-		f.logger.Warn("File input stop timed out")
-	}
-
-	return nil
+		return nil
+	})
 }
 
 // readLoop reads files and publishes lines to NATS

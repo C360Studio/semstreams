@@ -46,7 +46,7 @@ func TestIntegration_QueryHandlers(t *testing.T) {
 	require.NoError(t, component.Initialize())
 	require.NoError(t, component.Start(ctx))
 	defer func() {
-		_ = component.Stop(5 * time.Second)
+		_ = component.Stop(context.Background())
 	}()
 
 	// Wait for component to be ready

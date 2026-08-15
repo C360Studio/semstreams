@@ -19,6 +19,7 @@ import (
 	"github.com/c360studio/semstreams/graph/inference"
 	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/internal/graphmutation"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -502,7 +503,8 @@ type Component struct {
 	initialized             bool
 	startTime               time.Time
 	wg                      sync.WaitGroup
-	cancel                  context.CancelFunc
+	generation              *lifecyclejoin.Generation
+	poolStop                *lifecyclejoin.Operation
 	entityWatchLost         atomic.Bool
 	entityBootstrapStarted  atomic.Bool
 	entityBootstrapComplete atomic.Bool
@@ -854,16 +856,15 @@ func (c *Component) Initialize() error {
 
 // Start begins processing (must be initialized first)
 func (c *Component) Start(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Validate context
+	// Validate before inspecting lifecycle state.
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "Start", "context cannot be nil")
 	}
 	if err := ctx.Err(); err != nil {
 		return errs.WrapInvalid(err, "Component", "Start", "context already cancelled")
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	// Check initialization
 	if !c.initialized {
@@ -877,7 +878,6 @@ func (c *Component) Start(ctx context.Context) error {
 
 	// Create cancellable context
 	ctx, cancel := context.WithCancel(ctx)
-	c.cancel = cancel
 
 	// Check context before proceeding
 	if err := ctx.Err(); err != nil {
@@ -966,6 +966,8 @@ func (c *Component) Start(ctx context.Context) error {
 
 	c.wg.Add(1)
 	go c.statusMetricsLoop(ctx)
+	c.generation = lifecyclejoin.NewGeneration(cancel, c.wg.Wait)
+	c.poolStop = lifecyclejoin.NewOperation()
 
 	// Mark as running
 	c.running = true
@@ -979,18 +981,22 @@ func (c *Component) Start(ctx context.Context) error {
 }
 
 // Stop gracefully shuts down the component
-func (c *Component) Stop(timeout time.Duration) error {
-	c.mu.Lock()
-	if !c.running {
-		c.mu.Unlock()
-		return nil // Already stopped
+func (c *Component) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-	c.running = false
+	c.mu.Lock()
+	generation := c.generation
+	poolStop := c.poolStop
+	if generation == nil {
+		c.mu.Unlock()
+		return nil
+	}
 	pool := c.ingestPool
 	submitCancel := c.ingestSubmitCancel
 	poolCancel := c.ingestPoolCancel
-	consumeCancel := c.cancel
 	c.mu.Unlock()
+	generation.Cancel()
 
 	// ADR-072 M3 shutdown ordering, BEFORE tearing down KV/NATS:
 	//  1. cancel the submit ctx so a consume callback parked in SubmitBlocking
@@ -1002,57 +1008,46 @@ func (c *Component) Stop(timeout time.Duration) error {
 	if submitCancel != nil {
 		submitCancel()
 	}
-	if consumeCancel != nil {
-		consumeCancel()
-	}
-	if pool != nil {
-		drainCtx, cancelDrain := context.WithTimeout(context.Background(), timeout)
-		if err := pool.Stop(drainCtx); err != nil {
-			c.logger.Warn("ingest pool drain incomplete", slog.Any("error", err))
+	poolErr := poolStop.Run(ctx, func(ctx context.Context) error {
+		if pool == nil {
+			return nil
 		}
-		cancelDrain()
+		return pool.Stop(ctx)
+	})
+	if errors.Is(poolErr, context.Canceled) || errors.Is(poolErr, context.DeadlineExceeded) {
+		return poolErr
 	}
 	if poolCancel != nil {
 		poolCancel()
 	}
 
-	// Teardown query/mutation subscriptions + caches now that the pool is drained.
-	c.mu.Lock()
-	for _, sub := range c.subscriptions {
-		if sub != nil {
-			if err := sub.Unsubscribe(); err != nil {
-				c.logger.Warn("subscription unsubscribe error", slog.Any("error", err))
+	return generation.Stop(ctx, func() error {
+		stopErr := poolErr
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		for _, sub := range c.subscriptions {
+			if sub != nil {
+				if err := sub.Unsubscribe(); err != nil {
+					c.logger.Warn("subscription unsubscribe error", slog.Any("error", err))
+					stopErr = errors.Join(stopErr, err)
+				}
 			}
 		}
-	}
-	c.subscriptions = nil
-	if c.entityCache != nil {
-		if err := c.entityCache.Close(); err != nil {
-			c.logger.Warn("entity cache close error", slog.Any("error", err))
+		c.subscriptions = nil
+		if c.entityCache != nil {
+			stopErr = errors.Join(stopErr, c.entityCache.Close())
 		}
-	}
-	if c.suffixCache != nil {
-		if err := c.suffixCache.Close(); err != nil {
-			c.logger.Warn("suffix cache close error", slog.Any("error", err))
+		if c.suffixCache != nil {
+			stopErr = errors.Join(stopErr, c.suffixCache.Close())
 		}
-	}
-	c.mu.Unlock()
-
-	// Wait for goroutines with timeout
-	done := make(chan struct{})
-	go func() {
-		c.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
+		return stopErr
+	}, func(context.Context) error {
+		c.mu.Lock()
+		c.running = false
+		c.mu.Unlock()
 		c.logger.Info("component stopped gracefully", slog.String("component", "graph-ingest"))
 		return nil
-	case <-time.After(timeout):
-		c.logger.Warn("component stop timed out", slog.String("component", "graph-ingest"))
-		return fmt.Errorf("stop timeout after %v", timeout)
-	}
+	})
 }
 
 // initStorage initializes KV buckets and query caches. Every bucket this

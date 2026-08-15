@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/c360studio/semstreams/internal/logforwarderpolicy"
 )
@@ -95,6 +94,9 @@ func NewLogForwarder(config *LogForwarderConfig, opts ...Option) (*LogForwarder,
 // Note: Log forwarding to NATS is handled by NATSLogHandler in main.go.
 // This service provides configuration validation and service lifecycle management.
 func (lf *LogForwarder) Start(ctx context.Context) error {
+	if err := validateLifecycleContext(ctx, "LogForwarder", "Start"); err != nil {
+		return err
+	}
 	if err := lf.BaseService.Start(ctx); err != nil {
 		return err
 	}
@@ -107,9 +109,12 @@ func (lf *LogForwarder) Start(ctx context.Context) error {
 }
 
 // Stop gracefully stops the LogForwarder.
-func (lf *LogForwarder) Stop(timeout time.Duration) error {
+func (lf *LogForwarder) Stop(ctx context.Context) error {
+	if err := validateLifecycleContext(ctx, "LogForwarder", "Stop"); err != nil {
+		return err
+	}
 	lf.logger.Info("LogForwarder stopping")
-	return lf.BaseService.Stop(timeout)
+	return lf.BaseService.Stop(ctx)
 }
 
 // Config returns the LogForwarder configuration.

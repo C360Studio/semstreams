@@ -64,7 +64,7 @@ func newRevisionClaimHarness(t *testing.T) *revisionClaimHarness {
 	require.NoError(t, ingest.Start(ctx))
 	require.NoError(t, testClient.GetNativeConnection().Flush())
 	t.Cleanup(func() {
-		_ = ingest.Stop(5 * time.Second)
+		_ = ingest.Stop(context.Background())
 		cancel()
 	})
 

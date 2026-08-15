@@ -64,7 +64,7 @@ func TestIntegration_GraphEmbeddingStart_DoesNotAcquireOrMutateStoreReadBucket(t
 
 	// Start must not acquire this store or apply the storage owner's retention policy.
 	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 
 	// The backing stream's TTL remains exactly as the owner configured it.
 	stream, err := js.Stream(ctx, "OBJ_"+bucket)

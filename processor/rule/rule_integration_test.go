@@ -140,7 +140,7 @@ func TestIntegration_KVEntityStateWatch(t *testing.T) {
 
 	err = processor.Start(testCtx)
 	require.NoError(t, err)
-	defer processor.Stop(5 * time.Second)
+	defer processor.Stop(context.Background())
 
 	// Give processor time to set up watchers
 	time.Sleep(200 * time.Millisecond)
@@ -236,7 +236,7 @@ func TestIntegration_DynamicRuleCRUD(t *testing.T) {
 
 	err = processor.Start(ctx)
 	require.NoError(t, err)
-	defer processor.Stop(5 * time.Second)
+	defer processor.Stop(context.Background())
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -428,7 +428,7 @@ func TestIntegration_PrometheusMetrics(t *testing.T) {
 
 	err = processor.Start(ctx)
 	require.NoError(t, err)
-	defer processor.Stop(5 * time.Second)
+	defer processor.Stop(context.Background())
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -518,7 +518,7 @@ func TestIntegration_DynamicWatchPatterns(t *testing.T) {
 
 	err = processor.Start(testCtx)
 	require.NoError(t, err)
-	defer processor.Stop(5 * time.Second)
+	defer processor.Stop(context.Background())
 
 	// Wait for watchers to start
 	time.Sleep(300 * time.Millisecond)
@@ -654,7 +654,7 @@ func TestIntegration_GraphIntegration(t *testing.T) {
 
 	err = processor.Start(ctx)
 	require.NoError(t, err)
-	defer processor.Stop(5 * time.Second)
+	defer processor.Stop(context.Background())
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -800,7 +800,7 @@ func TestIntegration_TransitionOperator_UpdateKV(t *testing.T) {
 
 	err = processor.Start(testCtx)
 	require.NoError(t, err)
-	defer processor.Stop(5 * time.Second)
+	defer processor.Stop(context.Background())
 
 	time.Sleep(300 * time.Millisecond) // Wait for watchers
 

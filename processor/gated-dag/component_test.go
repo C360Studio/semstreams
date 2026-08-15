@@ -1,10 +1,10 @@
 package gateddagexec
 
 import (
+	"context"
 	"encoding/json"
 	"regexp"
 	"testing"
-	"time"
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/internal/graphmutation"
@@ -102,7 +102,7 @@ func TestComponent_StopBeforeStartIsNoop(t *testing.T) {
 	raw := json.RawMessage(`{"unit_entity_prefix":"acme.ops.plan.fanout.unit","dispatch_subject":"gateddag.dispatch.unit"}`)
 	c, err := NewComponent(raw, component.Dependencies{})
 	require.NoError(t, err)
-	require.NoError(t, c.Stop(time.Second))
+	require.NoError(t, c.Stop(context.Background()))
 }
 
 func TestRegister(t *testing.T) {

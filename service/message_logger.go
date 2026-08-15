@@ -15,6 +15,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/internal/componentadmission"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go"
@@ -231,6 +232,9 @@ type MessageLogger struct {
 	subscriptionCancel context.CancelFunc
 	retryCancel        context.CancelFunc
 	retryDone          chan struct{}
+	generation         *lifecyclejoin.Generation
+	teardownOnce       sync.Once
+	teardownErr        error
 	logger             *slog.Logger
 	running            bool // Track if service is running (replaces config.Enabled)
 }
@@ -543,6 +547,9 @@ func (ml *MessageLogger) runExplicitRetry(
 
 // Start begins message observation
 func (ml *MessageLogger) Start(ctx context.Context) error {
+	if err := validateLifecycleContext(ctx, "MessageLogger", "Start"); err != nil {
+		return err
+	}
 	ml.transitionMu.Lock()
 	defer ml.transitionMu.Unlock()
 
@@ -557,7 +564,10 @@ func (ml *MessageLogger) Start(ctx context.Context) error {
 	}
 	ml.lifecycleMu.Unlock()
 
-	if err := ml.BaseService.Start(ctx); err != nil {
+	runCtx, cancel := context.WithCancel(ctx)
+	generation := lifecyclejoin.NewGeneration(cancel, nil)
+	if err := ml.BaseService.Start(runCtx); err != nil {
+		cancel()
 		return err
 	}
 
@@ -565,10 +575,13 @@ func (ml *MessageLogger) Start(ctx context.Context) error {
 	ml.logger.Info("MessageLogger starting")
 	ml.lifecycleMu.Lock()
 	ml.running = true
+	ml.generation = generation
+	ml.teardownOnce = sync.Once{}
+	ml.teardownErr = nil
 	ml.lifecycleMu.Unlock()
 
 	if ml.autoDiscover {
-		observerCtx, cancel := context.WithCancel(ctx)
+		observerCtx, cancel := context.WithCancel(runCtx)
 		updates := ml.componentRegistry.ObserveSnapshots(observerCtx, componentadmission.Access{})
 		done := make(chan struct{})
 		ml.lifecycleMu.Lock()
@@ -580,13 +593,14 @@ func (ml *MessageLogger) Start(ctx context.Context) error {
 		case _, ok := <-updates:
 			if !ok {
 				cancel()
+				generation.Cancel()
 				close(done)
 				ml.lifecycleMu.Lock()
 				ml.running = false
 				ml.observerCancel = nil
 				ml.observerDone = nil
 				ml.lifecycleMu.Unlock()
-				_ = ml.BaseService.Stop(time.Second)
+				_ = ml.BaseService.Stop(runCtx)
 				return fmt.Errorf("component declaration observer closed during message logger start")
 			}
 			retry := ml.reconcileRegistryState(observerCtx) != nil
@@ -612,22 +626,23 @@ func (ml *MessageLogger) Start(ctx context.Context) error {
 			}()
 		case <-observerCtx.Done():
 			close(done)
+			generation.Cancel()
 			ml.lifecycleMu.Lock()
 			ml.running = false
 			ml.observerCancel = nil
 			ml.observerDone = nil
 			ml.lifecycleMu.Unlock()
-			_ = ml.BaseService.Stop(time.Second)
+			_ = ml.BaseService.Stop(runCtx)
 			return observerCtx.Err()
 		}
 	} else {
-		subscriptionCtx, subscriptionCancel := context.WithCancel(ctx)
+		subscriptionCtx, subscriptionCancel := context.WithCancel(runCtx)
 		ml.lifecycleMu.Lock()
 		ml.subscriptionCancel = subscriptionCancel
 		ml.lifecycleMu.Unlock()
 		retry := ml.reconcileSubjects(subscriptionCtx, ml.explicitSubjects, map[string]portMetadata{}, nil) != nil
 		if retry {
-			retryCtx, retryCancel := context.WithCancel(ctx)
+			retryCtx, retryCancel := context.WithCancel(runCtx)
 			done := make(chan struct{})
 			ml.lifecycleMu.Lock()
 			ml.retryCancel = retryCancel
@@ -650,95 +665,109 @@ func (ml *MessageLogger) Start(ctx context.Context) error {
 }
 
 // Stop gracefully stops the MessageLogger
-func (ml *MessageLogger) Stop(timeout time.Duration) error {
+func (ml *MessageLogger) Stop(ctx context.Context) error {
+	if err := validateLifecycleContext(ctx, "MessageLogger", "Stop"); err != nil {
+		return err
+	}
 	ml.transitionMu.Lock()
-	defer ml.transitionMu.Unlock()
-
 	ml.lifecycleMu.Lock()
-	ml.running = false
-	observerCancel := ml.observerCancel
-	observerDone := ml.observerDone
-	subscriptionCancel := ml.subscriptionCancel
-	retryCancel := ml.retryCancel
-	retryDone := ml.retryDone
-	ml.observerCancel = nil
-	ml.observerDone = nil
-	ml.subscriptionCancel = nil
-	ml.retryCancel = nil
-	ml.retryDone = nil
+	generation := ml.generation
 	ml.lifecycleMu.Unlock()
-
-	if observerCancel != nil {
-		observerCancel()
-	}
-	if retryCancel != nil {
-		retryCancel()
-	}
-	if subscriptionCancel != nil {
-		subscriptionCancel()
-	}
-	var stopErrors []error
-	if err := waitForMessageLoggerShutdown(observerDone, timeout, "declaration observer"); err != nil {
-		stopErrors = append(stopErrors, err)
-	}
-	if err := waitForMessageLoggerShutdown(retryDone, timeout, "reconciliation retry"); err != nil {
-		stopErrors = append(stopErrors, err)
+	ml.transitionMu.Unlock()
+	if generation == nil {
+		return nil
 	}
 
-	ml.lifecycleMu.Lock()
-	retainedSubjects := make(map[string]struct{})
-	for subject, subscription := range ml.subscriptions {
-		if err := subscription.Unsubscribe(); err != nil {
-			ml.logger.Warn("Failed to unsubscribe", "subject", subject, "error", err)
-			stopErrors = append(stopErrors, fmt.Errorf("unsubscribe %s: %w", subject, err))
-			retainedSubjects[subject] = struct{}{}
-			continue
+	return generation.Stop(ctx, nil, func(ctx context.Context) error {
+		ml.lifecycleMu.Lock()
+		ml.running = false
+		observerCancel := ml.observerCancel
+		observerDone := ml.observerDone
+		subscriptionCancel := ml.subscriptionCancel
+		retryCancel := ml.retryCancel
+		retryDone := ml.retryDone
+		ml.lifecycleMu.Unlock()
+
+		if observerCancel != nil {
+			observerCancel()
 		}
-		delete(ml.subscriptions, subject)
-	}
-	ml.resolvedSubjects = ml.resolvedSubjects[:0]
-	for subject := range ml.subscriptions {
-		ml.resolvedSubjects = append(ml.resolvedSubjects, subject)
-	}
-	sort.Strings(ml.resolvedSubjects)
-	ml.subjectOverlaps = nil
-	if len(stopErrors) == 0 {
-		ml.reconcileError = ""
-	} else {
-		ml.reconcileError = errors.Join(stopErrors...).Error()
-	}
-	ml.lifecycleMu.Unlock()
-	ml.subjectMu.Lock()
-	for subject := range ml.subjectMetadata {
-		_, retained := retainedSubjects[subject]
-		if !retained {
-			delete(ml.subjectMetadata, subject)
+		if retryCancel != nil {
+			retryCancel()
 		}
-	}
-	ml.subjectMu.Unlock()
-	ml.logger.Info("MessageLogger stopped")
+		if subscriptionCancel != nil {
+			subscriptionCancel()
+		}
+		var waitErrors []error
+		if err := waitForMessageLoggerShutdown(ctx, observerDone, "declaration observer"); err != nil {
+			waitErrors = append(waitErrors, err)
+		}
+		if err := waitForMessageLoggerShutdown(ctx, retryDone, "reconciliation retry"); err != nil {
+			waitErrors = append(waitErrors, err)
+		}
+		if waitErr := errors.Join(waitErrors...); waitErr != nil {
+			return waitErr
+		}
 
-	if err := ml.BaseService.Stop(timeout); err != nil {
-		stopErrors = append(stopErrors, err)
-	}
-	return errors.Join(stopErrors...)
+		ml.teardownOnce.Do(func() {
+			ml.lifecycleMu.Lock()
+			defer ml.lifecycleMu.Unlock()
+			retainedSubjects := make(map[string]struct{})
+			var teardownErrors []error
+			for subject, subscription := range ml.subscriptions {
+				if err := subscription.Unsubscribe(); err != nil {
+					ml.logger.Warn("Failed to unsubscribe", "subject", subject, "error", err)
+					teardownErrors = append(teardownErrors, fmt.Errorf("unsubscribe %s: %w", subject, err))
+					retainedSubjects[subject] = struct{}{}
+					continue
+				}
+				delete(ml.subscriptions, subject)
+			}
+			ml.resolvedSubjects = ml.resolvedSubjects[:0]
+			for subject := range ml.subscriptions {
+				ml.resolvedSubjects = append(ml.resolvedSubjects, subject)
+			}
+			sort.Strings(ml.resolvedSubjects)
+			ml.subjectOverlaps = nil
+			ml.teardownErr = errors.Join(teardownErrors...)
+			if ml.teardownErr == nil {
+				ml.reconcileError = ""
+			} else {
+				ml.reconcileError = ml.teardownErr.Error()
+			}
+			ml.subjectMu.Lock()
+			for subject := range ml.subjectMetadata {
+				if _, retained := retainedSubjects[subject]; !retained {
+					delete(ml.subjectMetadata, subject)
+				}
+			}
+			ml.subjectMu.Unlock()
+		})
+
+		baseErr := ml.BaseService.Stop(ctx)
+		if ctx.Err() != nil && errors.Is(baseErr, ctx.Err()) {
+			return errors.Join(ml.teardownErr, baseErr)
+		}
+		ml.lifecycleMu.Lock()
+		ml.observerCancel = nil
+		ml.observerDone = nil
+		ml.subscriptionCancel = nil
+		ml.retryCancel = nil
+		ml.retryDone = nil
+		ml.lifecycleMu.Unlock()
+		ml.logger.Info("MessageLogger stopped")
+		return errors.Join(ml.teardownErr, baseErr)
+	})
 }
 
-func waitForMessageLoggerShutdown(done <-chan struct{}, timeout time.Duration, name string) error {
+func waitForMessageLoggerShutdown(ctx context.Context, done <-chan struct{}, name string) error {
 	if done == nil {
 		return nil
 	}
-	if timeout <= 0 {
-		<-done
-		return nil
-	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
 	select {
 	case <-done:
 		return nil
-	case <-timer.C:
-		return fmt.Errorf("timed out waiting for %s shutdown", name)
+	case <-ctx.Done():
+		return fmt.Errorf("wait for %s shutdown: %w", name, ctx.Err())
 	}
 }
 

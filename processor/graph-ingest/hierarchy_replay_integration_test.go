@@ -131,7 +131,7 @@ func TestComponent_HierarchyReplay_UnchangedEntitiesAdvanceNoRevision(t *testing
 	for _, id := range replayEntityIDs {
 		require.NoError(t, seed.CreateEntity(ctx, replayEntity(id)))
 	}
-	require.NoError(t, seed.Stop(5*time.Second))
+	require.NoError(t, seed.Stop(context.Background()))
 
 	// ---- Restart: a FRESH component over the SAME store. -----------------
 	// Initialize + Start is the production startup path; initStorage re-acquires
@@ -139,7 +139,7 @@ func TestComponent_HierarchyReplay_UnchangedEntitiesAdvanceNoRevision(t *testing
 	replay := createHierarchyComponentOnClient(t, testClient.Client, true)
 	require.NoError(t, replay.Initialize())
 	require.NoError(t, replay.Start(ctx))
-	defer func() { _ = replay.Stop(5 * time.Second) }()
+	defer func() { _ = replay.Stop(context.Background()) }()
 
 	// Nothing is writing now (the seed component is stopped, the replay
 	// component has not been asked to do anything), so this is a quiescent read.

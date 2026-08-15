@@ -390,7 +390,7 @@ func runOwnerLoadWorkerShape(
 		require.NoError(t, samplerErr)
 	}
 	cancelDispatch()
-	require.NoError(t, dispatcher.Stop(5*time.Second))
+	require.NoError(t, dispatcher.Stop(context.Background()))
 
 	for label, samples := range durations {
 		assertOwnerLoadLatency(t, label, samples, profile)

@@ -80,7 +80,7 @@ func TestIntegration_GraphEmbeddingPublishesReadinessHeartbeat(t *testing.T) {
 	embeddingComponent.statusInterval = 250 * time.Millisecond
 
 	require.NoError(t, embeddingComponent.Start(ctx))
-	defer embeddingComponent.Stop(5 * time.Second)
+	defer embeddingComponent.Stop(context.Background())
 
 	// 2.1: the bucket exists because Start created it eagerly, not because a
 	// consumer's watch lazily provoked it.

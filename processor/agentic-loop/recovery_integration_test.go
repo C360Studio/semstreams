@@ -83,7 +83,7 @@ func TestIntegration_CancelMidExecution_NoOrphanToolCalls(t *testing.T) {
 	defer cancel()
 
 	require.NoError(t, lc.Start(ctx))
-	defer func() { _ = lc.Stop(5 * time.Second) }()
+	defer func() { _ = lc.Stop(context.Background()) }()
 
 	time.Sleep(200 * time.Millisecond)
 

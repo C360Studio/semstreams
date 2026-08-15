@@ -97,7 +97,7 @@ func TestIntegration_ApprovalFlow_Approve(t *testing.T) {
 	defer cancel()
 
 	require.NoError(t, lc.Start(ctx))
-	defer lc.Stop(5 * time.Second)
+	defer lc.Stop(context.Background())
 
 	toolsConfig := agentictools.DefaultConfig()
 	toolsConfig.ApprovalRequired = []string{"delete_rule"}
@@ -124,7 +124,7 @@ func TestIntegration_ApprovalFlow_Approve(t *testing.T) {
 	toolExecutor := &approvalFlowExecutor{}
 	require.NoError(t, toolsComponent.RegisterToolExecutor(toolExecutor))
 	require.NoError(t, toolsComponent.Start(ctx))
-	defer toolsComponent.Stop(5 * time.Second)
+	defer toolsComponent.Stop(context.Background())
 
 	time.Sleep(200 * time.Millisecond)
 
@@ -371,7 +371,7 @@ func TestIntegration_ApprovalTimeoutSweeper_PublishesWireResponse(t *testing.T) 
 	defer cancel()
 
 	require.NoError(t, lc.Start(ctx))
-	defer lc.Stop(5 * time.Second)
+	defer lc.Stop(context.Background())
 
 	time.Sleep(200 * time.Millisecond)
 

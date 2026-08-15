@@ -590,10 +590,10 @@ func TestIntegration_StopConsumer(t *testing.T) {
 	require.NoError(t, err)
 
 	// Stop consumer - should not panic
-	client.StopConsumer("STOP_STREAM", "stop-consumer")
+	require.NoError(t, client.StopConsumer(ctx, "STOP_STREAM", "stop-consumer"))
 
 	// Stop again - should be no-op
-	client.StopConsumer("STOP_STREAM", "stop-consumer")
+	require.NoError(t, client.StopConsumer(ctx, "STOP_STREAM", "stop-consumer"))
 }
 
 // TestIntegration_StopAllConsumers tests stopping all consumers

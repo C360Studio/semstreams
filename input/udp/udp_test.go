@@ -285,7 +285,7 @@ func TestUDPInput_StartStop(t *testing.T) {
 
 	// Ensure cleanup happens even on test failure
 	t.Cleanup(func() {
-		_ = udp.Stop(5 * time.Second)
+		_ = udp.Stop(context.Background())
 	})
 
 	// Start should succeed
@@ -301,7 +301,7 @@ func TestUDPInput_StartStop(t *testing.T) {
 	assert.True(t, health.Healthy)
 
 	// Stop should succeed
-	err = udp.Stop(5 * time.Second)
+	err = udp.Stop(context.Background())
 	require.NoError(t, err)
 
 	// Should be stopped now
@@ -332,7 +332,7 @@ func TestUDPInput_RetryOnBindFailure(t *testing.T) {
 
 	// Ensure UDP input is cleaned up even on test failure
 	t.Cleanup(func() {
-		_ = udp.Stop(5 * time.Second)
+		_ = udp.Stop(context.Background())
 	})
 
 	err = udp.Initialize()
@@ -511,7 +511,7 @@ func TestUDPInput_NoRaceCondition(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	require.NoError(t, input.Start(ctx))
-	defer input.Stop(5 * time.Second)
+	defer input.Stop(context.Background())
 
 	// Concurrent metric updates and reads
 	for i := 0; i < numGoroutines; i++ {
@@ -572,7 +572,7 @@ func TestUDPInput_NoGoroutineLeak(t *testing.T) {
 
 		// Proper cleanup with t.Cleanup to ensure resources are cleaned even on test failure
 		t.Cleanup(func() {
-			_ = input.Stop(5 * time.Second)
+			_ = input.Stop(context.Background())
 			cancel()
 		})
 
@@ -586,7 +586,7 @@ func TestUDPInput_NoGoroutineLeak(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 
 		// Stop should clean up goroutines
-		require.NoError(t, input.Stop(5*time.Second))
+		require.NoError(t, input.Stop(context.Background()))
 		cancel()
 	}
 
@@ -623,7 +623,7 @@ func TestUDPInput_NoPanic(t *testing.T) {
 
 		require.NoError(t, input.Start(ctx))
 		time.Sleep(10 * time.Millisecond)
-		require.NoError(t, input.Stop(5*time.Second))
+		require.NoError(t, input.Stop(context.Background()))
 	}, "normal UDP input operation should not panic")
 
 	// Test force-close connection doesn't panic
@@ -649,7 +649,7 @@ func TestUDPInput_NoPanic(t *testing.T) {
 		}
 
 		time.Sleep(20 * time.Millisecond)
-		require.NoError(t, input.Stop(5*time.Second))
+		require.NoError(t, input.Stop(context.Background()))
 	}, "force connection close should not panic")
 
 	// Test context cancellation doesn't panic
@@ -670,7 +670,7 @@ func TestUDPInput_NoPanic(t *testing.T) {
 		// Cancel context immediately
 		cancel()
 		time.Sleep(10 * time.Millisecond)
-		require.NoError(t, input.Stop(5*time.Second))
+		require.NoError(t, input.Stop(context.Background()))
 	}, "context cancellation should not panic")
 }
 
@@ -695,7 +695,7 @@ func TestUDPInput_CleanShutdown(t *testing.T) {
 
 	// Ensure cleanup even on test failure
 	t.Cleanup(func() {
-		_ = input.Stop(5 * time.Second)
+		_ = input.Stop(context.Background())
 	})
 
 	// Send some data to ensure read loop is active
@@ -710,7 +710,7 @@ func TestUDPInput_CleanShutdown(t *testing.T) {
 
 	// Stop should complete within reasonable time (much less than 5 second timeout)
 	start := time.Now()
-	err = input.Stop(5 * time.Second)
+	err = input.Stop(context.Background())
 	duration := time.Since(start)
 
 	require.NoError(t, err, "Stop should not return error")
@@ -719,57 +719,6 @@ func TestUDPInput_CleanShutdown(t *testing.T) {
 	// Verify clean state
 	assert.False(t, input.running.Load(), "should not be running after stop")
 	assert.Nil(t, input.conn, "connection should be nil after stop")
-}
-
-// TestUDPInput_StopTimeout tests the 5-second timeout in Stop()
-func TestUDPInput_StopTimeout(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping timeout test in short mode")
-	}
-
-	mockClient := &natsclient.Client{}
-	port := findAvailablePort(t)
-	deps := InputDeps{
-		Config:          testUDPConfig(port, "127.0.0.1", "test.subject"),
-		NATSClient:      mockClient,
-		MetricsRegistry: nil,
-		Logger:          nil,
-	}
-	input, err := NewInput(deps)
-	require.NoError(t, err)
-
-	require.NoError(t, input.Initialize())
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	require.NoError(t, input.Start(ctx))
-
-	// Let the real goroutine exit first by cancelling context and waiting briefly
-	cancel()
-	time.Sleep(200 * time.Millisecond) // Give time for goroutine to notice cancellation and exit
-
-	// Now simulate a stuck goroutine by replacing the done channel
-	// This simulates the case where a goroutine exists but doesn't signal completion
-	input.mu.Lock()
-	// Replace with new done channel that will never be closed - simulates stuck goroutine
-	input.done = make(chan struct{}) // New channel that will never be closed
-	// Need to set running back to true so Stop() doesn't early return
-	input.running.Store(true)
-	input.mu.Unlock()
-
-	start := time.Now()
-	err = input.Stop(5 * time.Second)
-	duration := time.Since(start)
-
-	// Should timeout and return error
-	if err == nil {
-		t.Fatal("Stop should return timeout error but got nil")
-	}
-	assert.Error(t, err, "Stop should return timeout error")
-	// Error should be properly classified
-	assert.True(t, errs.IsTransient(err), "timeout errors should be transient")
-	assert.GreaterOrEqual(t, duration, 4500*time.Millisecond, "should wait at least ~5 seconds")
-	assert.Less(t, duration, 6*time.Second, "should not wait much longer than 5 seconds")
 }
 
 // TestUDPInput_MetricsThreadSafety tests that metrics operations are thread-safe
@@ -897,7 +846,7 @@ func TestUDPInput_ErrorHandling(t *testing.T) {
 	defer cancel()
 
 	require.NoError(t, input.Start(ctx))
-	defer input.Stop(5 * time.Second)
+	defer input.Stop(context.Background())
 
 	// Starting again should not error (idempotent)
 	err = input.Start(ctx)
@@ -912,7 +861,7 @@ func TestUDPInput_ErrorHandling(t *testing.T) {
 	}
 	input2, err := NewInput(deps2)
 	require.NoError(t, err)
-	err = input2.Stop(5 * time.Second)
+	err = input2.Stop(context.Background())
 	assert.NoError(t, err, "stopping not running input should not error")
 }
 

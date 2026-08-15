@@ -65,7 +65,7 @@ func TestIntegration_Processor_DebounceZero_NoCoalescingSet(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Start failed: %v", err)
 			}
-			defer processor.Stop(5 * time.Second)
+			defer processor.Stop(context.Background())
 
 			// Check entityCoalescer state
 			isNil := processor.entityCoalescer == nil
@@ -112,7 +112,7 @@ func TestIntegration_Processor_DebounceZero_ImmediateProcessing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
-	defer processor.Stop(5 * time.Second)
+	defer processor.Stop(context.Background())
 
 	// Verify coalescer is nil
 	if processor.entityCoalescer != nil {
@@ -151,7 +151,7 @@ func TestIntegration_Processor_DebounceZero_NoTickerSpinning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
-	defer processor.Stop(5 * time.Second)
+	defer processor.Stop(context.Background())
 
 	// When debounce=0, entityCoalescer should be nil
 	// Therefore no ticker goroutine exists
@@ -194,7 +194,7 @@ func TestIntegration_Processor_DebounceNonZero_CoalescingSetCreated(t *testing.T
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
-	defer processor.Stop(5 * time.Second)
+	defer processor.Stop(context.Background())
 
 	// Should have created coalescer
 	if processor.entityCoalescer == nil {
@@ -271,7 +271,7 @@ func TestIntegration_Processor_DebounceZero_Transition(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Start failed: %v", err)
 			}
-			defer processor.Stop(5 * time.Second)
+			defer processor.Stop(context.Background())
 
 			coalescerExists := processor.entityCoalescer != nil
 
@@ -314,7 +314,7 @@ func TestIntegration_Processor_DebounceZero_ConfigValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start should succeed with debounce=0, got error: %v", err)
 	}
-	defer processor.Stop(5 * time.Second)
+	defer processor.Stop(context.Background())
 
 	// Verify coalescer is nil
 	if processor.entityCoalescer != nil {
@@ -379,7 +379,7 @@ func TestIntegration_Processor_DebounceZero_EdgeCases(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Start failed: %v", err)
 			}
-			defer processor.Stop(5 * time.Second)
+			defer processor.Stop(context.Background())
 
 			coalescerExists := processor.entityCoalescer != nil
 
@@ -427,7 +427,7 @@ func TestIntegration_Processor_DebounceZero_NoResourceLeak(t *testing.T) {
 		}
 
 		// Stop cleanly
-		processor.Stop(5 * time.Second)
+		processor.Stop(context.Background())
 
 		// Brief sleep to allow cleanup
 		time.Sleep(10 * time.Millisecond)

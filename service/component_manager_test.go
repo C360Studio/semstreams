@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/types"
 )
@@ -158,7 +159,7 @@ func TestComponentManagerLifecycle(t *testing.T) {
 		}
 
 		// Stop should always work
-		err = cm.Stop(1 * time.Second)
+		err = cm.Stop(context.Background())
 		if err != nil {
 			t.Logf("Stop error: %v", err)
 		}
@@ -172,24 +173,27 @@ func TestComponentManagerStopCancelsDynamicStart(t *testing.T) {
 	comp := newCancellationBlockingComponent()
 	cm := &ComponentManager{
 		BaseService: NewBaseServiceWithOptions("component-manager", nil),
-		components: map[string]*component.ManagedComponent{
-			"blocking": {
-				Component: comp,
-				State:     component.StateInitialized,
-			},
-		},
-		registry: component.NewRegistry(),
-		shutdown: make(chan struct{}),
-		done:     make(chan struct{}),
+		components:  make(map[string]*component.ManagedComponent),
+		runtimes:    make(map[string]*componentRuntime),
+		registry:    component.NewRegistry(),
 	}
-	cm.started.Store(true)
+	cm.initialized.Store(true)
+	runtimeCtx, runtimeCancel := context.WithCancel(context.Background())
+	defer runtimeCancel()
+	require.NoError(t, cm.Start(runtimeCtx))
+	cm.mu.Lock()
+	cm.components["blocking"] = &component.ManagedComponent{
+		Component: comp,
+		State:     component.StateInitialized,
+	}
+	cm.mu.Unlock()
 
 	require.NoError(t, cm.startSingleComponent(context.Background(), "blocking"))
 	waitForSignal(t, comp.startEntered, "dynamic component Start entry")
 
 	stopDone := make(chan error, 1)
 	go func() {
-		stopDone <- cm.Stop(2 * time.Second)
+		stopDone <- cm.Stop(context.Background())
 	}()
 
 	waitForSignal(t, comp.startReturned, "dynamic component Start return after cancellation")
@@ -202,6 +206,33 @@ func TestComponentManagerStopCancelsDynamicStart(t *testing.T) {
 	}
 }
 
+func TestComponentManagerCanceledStopStillSignalsDynamicStart(t *testing.T) {
+	comp := newCancellationBlockingComponent()
+	cm := &ComponentManager{
+		BaseService: NewBaseServiceWithOptions("component-manager", nil),
+		components:  make(map[string]*component.ManagedComponent),
+		runtimes:    make(map[string]*componentRuntime),
+		registry:    component.NewRegistry(),
+	}
+	cm.initialized.Store(true)
+	require.NoError(t, cm.Start(t.Context()))
+	cm.mu.Lock()
+	cm.components["blocking"] = &component.ManagedComponent{
+		Component: comp,
+		State:     component.StateInitialized,
+	}
+	cm.mu.Unlock()
+
+	require.NoError(t, cm.startSingleComponent(t.Context(), "blocking"))
+	waitForSignal(t, comp.startEntered, "dynamic component Start entry")
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, cm.Stop(canceled), context.Canceled)
+	waitForSignal(t, comp.startReturned, "dynamic component Start cancellation from expired Stop")
+	require.NoError(t, cm.Stop(t.Context()))
+	waitForSignal(t, comp.stopEntered, "dynamic component Stop rejoin")
+}
+
 func TestGetManagedComponentsDoesNotExposeCancellationAuthority(t *testing.T) {
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -209,12 +240,14 @@ func TestGetManagedComponentsDoesNotExposeCancellationAuthority(t *testing.T) {
 	cm := createTestComponentManager(t)
 	cm.components["test"] = &component.ManagedComponent{
 		Component: &mockDiscoverableComponent{},
-		Cancel:    cancel,
+	}
+	cm.runtimes = map[string]*componentRuntime{
+		"test": {generation: lifecyclejoin.NewGeneration(cancel, func() {})},
 	}
 
 	snapshot := cm.GetManagedComponents()
-	require.NotNil(t, cm.components["test"].Cancel, "manager must retain cancellation authority")
-	require.Nil(t, snapshot["test"].Cancel, "read-only snapshot must not expose cancellation authority")
+	require.NotNil(t, cm.runtimes["test"].generation, "manager must retain private generation authority")
+	require.NotNil(t, snapshot["test"], "read-only snapshot remains available without cancellation authority")
 }
 
 func waitForSignal(t *testing.T, signal <-chan struct{}, description string) {
@@ -256,7 +289,7 @@ func (c *cancellationBlockingComponent) Start(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func (c *cancellationBlockingComponent) Stop(time.Duration) error {
+func (c *cancellationBlockingComponent) Stop(context.Context) error {
 	c.stopOnce.Do(func() { close(c.stopEntered) })
 	return nil
 }
@@ -400,14 +433,14 @@ func TestComponentManagerRemoveComponent(t *testing.T) {
 	assert.Contains(t, cm.components, "test-delete")
 
 	// Remove it
-	err := cm.RemoveComponent("test-delete")
+	err := cm.RemoveComponent(context.Background(), "test-delete")
 	require.NoError(t, err)
 
 	// Verify it's gone
 	assert.NotContains(t, cm.components, "test-delete")
 
 	// Try to remove non-existent
-	err = cm.RemoveComponent("non-existent")
+	err = cm.RemoveComponent(context.Background(), "non-existent")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }

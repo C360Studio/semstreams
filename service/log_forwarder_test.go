@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"testing"
-	"time"
 
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/stretchr/testify/assert"
@@ -200,7 +199,7 @@ func TestLogForwarder_ServiceLifecycle(t *testing.T) {
 	assert.Equal(t, StatusRunning, lf.Status())
 
 	// Stop service
-	err = lf.Stop(5 * time.Second)
+	err = lf.Stop(context.Background())
 	require.NoError(t, err)
 
 	// Verify stopped

@@ -227,7 +227,7 @@ func TestIntegration_StartAll_MidBootComponentJoinsBootTransaction(t *testing.T)
 	case <-time.After(30 * time.Second):
 		t.Fatal("Manager.StartAll did not return")
 	}
-	defer func() { _ = h.manager.StopAll(2 * time.Second) }()
+	defer func() { _ = h.manager.StopAll(context.Background()) }()
 
 	// The mid-boot component started inside the boot transaction...
 	status := h.cm.GetComponentStatus()
@@ -275,7 +275,7 @@ func (c *valuedComponent) Health() component.HealthStatus {
 }
 func (c *valuedComponent) DataFlow() component.FlowMetrics { return component.FlowMetrics{} }
 func (c *valuedComponent) Initialize() error               { return nil }
-func (c *valuedComponent) Stop(_ time.Duration) error      { return nil }
+func (c *valuedComponent) Stop(context.Context) error      { return nil }
 func (c *valuedComponent) Start(_ context.Context) error {
 	if c.onStart != nil {
 		c.onStart(c.value)
@@ -387,7 +387,7 @@ func TestIntegration_StartAll_MidBootEditJoinsBootTransaction(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("Manager.StartAll did not return")
 	}
-	defer func() { _ = h.manager.StopAll(2 * time.Second) }()
+	defer func() { _ = h.manager.StopAll(context.Background()) }()
 
 	// The edit joined the boot transaction: the live instance was rebuilt and
 	// started with the NEW config before StartAll returned.
@@ -428,7 +428,7 @@ func (c *registryProbeComponent) Health() component.HealthStatus {
 func (c *registryProbeComponent) DataFlow() component.FlowMetrics { return component.FlowMetrics{} }
 func (c *registryProbeComponent) Initialize() error               { return nil }
 func (c *registryProbeComponent) Start(_ context.Context) error   { return nil }
-func (c *registryProbeComponent) Stop(_ time.Duration) error      { return nil }
+func (c *registryProbeComponent) Stop(context.Context) error      { return nil }
 
 var _ component.LifecycleComponent = (*registryProbeComponent)(nil)
 
@@ -548,7 +548,7 @@ func TestIntegration_StartAll_MidBootRegistryChangeRebindsDependents(t *testing.
 	case <-time.After(30 * time.Second):
 		t.Fatal("Manager.StartAll did not return")
 	}
-	defer func() { _ = h.manager.StopAll(2 * time.Second) }()
+	defer func() { _ = h.manager.StopAll(context.Background()) }()
 
 	// The dependent joined the boot transaction: rebuilt against the NEW
 	// registry before StartAll returned.

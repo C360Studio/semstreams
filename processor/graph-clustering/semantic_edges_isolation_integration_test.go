@@ -156,7 +156,7 @@ func TestIntegration_SemanticEdges_ScopedToDetectionNotStructural(t *testing.T) 
 	publishHealthyReadiness(ctx, t, nc, readiness.KeyGraphEmbedding)
 
 	require.NoError(t, clusteringComp.Start(ctx))
-	defer clusteringComp.Stop(5 * time.Second)
+	defer clusteringComp.Stop(context.Background())
 
 	// Seed the two entities with NO explicit edges between them.
 	now := time.Now().UTC()

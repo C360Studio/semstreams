@@ -259,7 +259,7 @@ func TestIntegration_MergeEntity_HierarchyDoesNotDuplicate(t *testing.T) {
 	c := comp.(*Component)
 	require.NoError(t, c.Initialize())
 	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 
 	time.Sleep(100 * time.Millisecond)
 

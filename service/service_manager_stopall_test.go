@@ -19,7 +19,7 @@ type stopSpyService struct {
 	stopCalls int
 }
 
-func (s *stopSpyService) Stop(_ time.Duration) error {
+func (s *stopSpyService) Stop(context.Context) error {
 	s.stopCalls++
 	return s.stopErr
 }
@@ -45,7 +45,7 @@ func TestServiceManager_StopAll_Idempotency(t *testing.T) {
 		manager.order = []string{"clean", "already"}
 		manager.mu.Unlock()
 
-		err := manager.StopAll(time.Second)
+		err := manager.StopAll(context.Background())
 		require.NoError(t, err, "an already-stopped service must not fail StopAll")
 		assert.Equal(t, 1, already.stopCalls, "already-stopped service is still visited")
 		assert.Equal(t, 1, clean.stopCalls, "clean service is stopped")
@@ -69,7 +69,7 @@ func TestServiceManager_StopAll_Idempotency(t *testing.T) {
 		manager.order = []string{"other", "failing"}
 		manager.mu.Unlock()
 
-		err := manager.StopAll(time.Second)
+		err := manager.StopAll(context.Background())
 		require.Error(t, err, "a genuine stop error must be surfaced")
 		assert.Contains(t, err.Error(), "failing")
 		assert.Equal(t, 1, other.stopCalls, "remaining services are stopped despite one failure")
@@ -87,7 +87,7 @@ func TestServiceManager_StopAll_Idempotency(t *testing.T) {
 		manager.order = []string{"a", "b"}
 		manager.mu.Unlock()
 
-		require.NoError(t, manager.StopAll(time.Second))
+		require.NoError(t, manager.StopAll(context.Background()))
 	})
 }
 
@@ -118,7 +118,7 @@ func TestServiceManager_StopAll_CancellationBeforeStopAll(t *testing.T) {
 	}, 2*time.Second, 5*time.Millisecond,
 		"services must self-stop when the parent context is cancelled")
 
-	require.NoError(t, manager.StopAll(time.Second),
+	require.NoError(t, manager.StopAll(context.Background()),
 		"services already stopped by parent-context cancellation are a clean shutdown (gh#520/gh#549)")
 }
 
@@ -131,13 +131,13 @@ func TestBaseService_StopIdempotent(t *testing.T) {
 	// Simulate a running service that is then stopped, then stopped again.
 	svc.status.Store(StatusRunning)
 
-	require.NoError(t, svc.Stop(time.Second), "first Stop succeeds")
+	require.NoError(t, svc.Stop(context.Background()), "first Stop succeeds")
 	assert.Equal(t, StatusStopped, svc.Status())
 
-	require.NoError(t, svc.Stop(time.Second), "second Stop on an already-stopped service returns nil")
+	require.NoError(t, svc.Stop(context.Background()), "second Stop on an already-stopped service returns nil")
 	assert.Equal(t, StatusStopped, svc.Status())
 
 	// A service that observed self-transition to stopping also stops cleanly.
 	svc.status.Store(StatusStopping)
-	require.NoError(t, svc.Stop(time.Second), "Stop while stopping returns nil")
+	require.NoError(t, svc.Stop(context.Background()), "Stop while stopping returns nil")
 }

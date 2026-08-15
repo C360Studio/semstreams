@@ -18,6 +18,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -43,8 +44,11 @@ type Component struct {
 	enabled      bool
 
 	// Mutex to protect concurrent access to state fields
-	mu      sync.RWMutex
-	started bool
+	mu          sync.RWMutex
+	lifecycleMu sync.Mutex
+	generation  *lifecyclejoin.Generation
+	starting    bool
+	started     bool
 
 	// core dependencies
 	store           *Store
@@ -63,7 +67,7 @@ type Component struct {
 	// Active write-input bindings. Core NATS subscriptions belong to this
 	// component and must all be unsubscribed on rollback/Stop. JetStream consume
 	// contexts are owned by natsclient and are stopped by their durable identity.
-	writeSubs      []*nats.Subscription
+	writeSubs      []*natsclient.Subscription
 	writeConsumers []objectStoreConsumerBinding
 
 	// Metrics tracking
@@ -378,19 +382,45 @@ func startStoreError(err error) error {
 }
 
 // Start initializes the ObjectStore and sets up NATS handlers
-func (c *Component) Start(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.started {
-		c.logger.Debug("ObjectStore already started", "name", c.instanceName)
-		return nil
-	}
-
-	// Validate context
+func (c *Component) Start(ctx context.Context) (startErr error) {
+	// Validate before inspecting lifecycle state.
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "Start", "context cannot be nil")
 	}
+	c.lifecycleMu.Lock()
+	if c.generation != nil {
+		c.lifecycleMu.Unlock()
+		return errs.WrapFatal(errs.ErrAlreadyStarted, "Component", "Start", "already started")
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	startDone := make(chan struct{})
+	generation := lifecyclejoin.NewGeneration(cancel, func() { <-startDone })
+	var finishStart sync.Once
+	finish := func() { finishStart.Do(func() { close(startDone) }) }
+	c.generation = generation
+	c.starting = true
+	c.lifecycleMu.Unlock()
+	committed := false
+	defer func() {
+		finish()
+		c.lifecycleMu.Lock()
+		c.starting = false
+		c.lifecycleMu.Unlock()
+		if committed {
+			return
+		}
+		rollbackErr := lifecyclejoin.RunPartialStartRollback(func(ctx context.Context) error {
+			return generation.Stop(ctx, nil, c.cleanup)
+		})
+		if rollbackErr == nil {
+			c.lifecycleMu.Lock()
+			if c.generation == generation {
+				c.generation = nil
+			}
+			c.lifecycleMu.Unlock()
+		}
+		startErr = errors.Join(startErr, rollbackErr)
+	}()
 
 	c.logger.Debug("Creating ObjectStore", "name", c.instanceName, "bucket", c.config.BucketName)
 
@@ -406,9 +436,12 @@ func (c *Component) Start(ctx context.Context) error {
 	c.config.Logger = c.logger
 
 	// Create the underlying ObjectStore with metrics support
-	store, err := NewStoreWithConfigAndMetrics(ctx, c.natsClient, c.config, c.metricsRegistry)
+	store, err := NewStoreWithConfigAndMetrics(runCtx, c.natsClient, c.config, c.metricsRegistry)
 	if store != nil {
 		store.SetDecoder(c.decoder)
+		c.mu.Lock()
+		c.store = store
+		c.mu.Unlock()
 	}
 	if err != nil {
 		c.logger.Error(
@@ -422,12 +455,8 @@ func (c *Component) Start(ctx context.Context) error {
 		)
 		return startStoreError(err)
 	}
-	c.store = store
 
 	c.logger.Debug("ObjectStore created successfully", "name", c.instanceName, "bucket", c.config.BucketName)
-
-	// Get raw NATS connection for subscriptions.
-	nc := c.natsClient.GetConnection()
 
 	// Every declared ordinary input is a write lane. Port names are local graph
 	// labels, not operation selectors; interpreting only the literal name
@@ -441,17 +470,17 @@ func (c *Component) Start(ctx context.Context) error {
 			"subject", writeSubject)
 
 		if input.kind == component.PortKindJetStream {
-			binding, setupErr := c.setupJetStreamConsumer(ctx, input)
+			binding, setupErr := c.setupJetStreamConsumer(runCtx, input)
 			if setupErr != nil {
-				c.rollbackStart()
-				return errs.WrapTransient(setupErr, "Component", "Start",
+				startErr := errs.WrapTransient(setupErr, "Component", "Start",
 					fmt.Sprintf("setup JetStream consumer for input %s", input.portName))
+				return startErr
 			}
 			c.writeConsumers = append(c.writeConsumers, binding)
 			continue
 		}
 
-		writeSub, subscribeErr := nc.Subscribe(writeSubject, c.handleWriteRequest)
+		writeSub, subscribeErr := c.natsClient.Subscribe(runCtx, writeSubject, c.handleWriteRequest)
 		if subscribeErr != nil {
 			c.logger.Error(
 				"Failed to subscribe to write subject",
@@ -460,9 +489,9 @@ func (c *Component) Start(ctx context.Context) error {
 				"subject", writeSubject,
 				"error", subscribeErr,
 			)
-			c.rollbackStart()
-			return errs.WrapTransient(subscribeErr, "Component", "Start",
+			startErr := errs.WrapTransient(subscribeErr, "Component", "Start",
 				fmt.Sprintf("subscribe to input %s subject %s", input.portName, writeSubject))
+			return startErr
 		}
 		c.writeSubs = append(c.writeSubs, writeSub)
 	}
@@ -471,7 +500,10 @@ func (c *Component) Start(ctx context.Context) error {
 	// which derives streams from component port definitions at startup.
 	// Components no longer need to create their own streams.
 
+	c.mu.Lock()
 	c.started = true
+	c.mu.Unlock()
+	committed = true
 	c.lastActivity.Store(time.Now())
 	c.logger.Debug("ObjectStore component fully started", "name", c.instanceName)
 
@@ -479,66 +511,70 @@ func (c *Component) Start(ctx context.Context) error {
 }
 
 // Stop cleanly shuts down the component
-func (c *Component) Stop(_ time.Duration) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if !c.started {
+func (c *Component) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
+	c.lifecycleMu.Lock()
+	generation := c.generation
+	c.lifecycleMu.Unlock()
+	if generation == nil {
 		return nil
 	}
-
-	// Stop deliveries before closing the store they call into. Cleanup attempts
-	// every binding even if one Core NATS unsubscribe fails.
-	var stopErrs []error
-	if err := c.stopWriteInputs(); err != nil {
-		stopErrs = append(stopErrs, err)
-	}
-
-	// Close the underlying store after no new callbacks can begin.
-	if c.store != nil {
-		if err := c.store.Close(); err != nil {
-			stopErrs = append(stopErrs, fmt.Errorf("close store: %w", err))
+	stopErr := generation.Stop(ctx, nil, c.cleanup)
+	if stopErr == nil {
+		c.lifecycleMu.Lock()
+		if c.generation == generation {
+			c.generation = nil
 		}
+		c.lifecycleMu.Unlock()
+	}
+	return stopErr
+}
+
+func (c *Component) cleanup(ctx context.Context) error {
+	stopErr := c.stopWriteInputs(ctx)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return errors.Join(stopErr, ctxErr)
+	}
+	c.mu.Lock()
+	store := c.store
+	c.mu.Unlock()
+	if store != nil {
+		stopErr = errors.Join(stopErr, store.Close())
+	}
+	c.mu.Lock()
+	if c.store == store {
 		c.store = nil
 	}
-
 	c.started = false
-	if err := errors.Join(stopErrs...); err != nil {
-		return errs.WrapTransient(err, "Component", "Stop", "stop write inputs")
+	c.mu.Unlock()
+	if stopErr != nil {
+		return errs.WrapTransient(stopErr, "Component", "Stop", "stop write inputs")
 	}
 	return nil
 }
 
-// rollbackStart tears down every input binding established before a later
-// startup failure. The original startup error remains authoritative; cleanup
-// failures are logged because replacing its classification would make the
-// caller retry the wrong condition.
-func (c *Component) rollbackStart() {
-	if err := c.stopWriteInputs(); err != nil {
-		c.logger.Error("Failed to roll back ObjectStore write inputs", "error", err)
-	}
-	if c.store != nil {
-		if err := c.store.Close(); err != nil {
-			c.logger.Error("Failed to close ObjectStore during startup rollback", "error", err)
-		}
-		c.store = nil
-	}
-}
-
-func (c *Component) stopWriteInputs() error {
+func (c *Component) stopWriteInputs(ctx context.Context) error {
+	var stopErrs []error
 	for _, binding := range c.writeConsumers {
-		c.natsClient.StopConsumer(binding.streamName, binding.consumerName)
+		if err := c.natsClient.StopConsumer(ctx, binding.streamName, binding.consumerName); err != nil {
+			stopErrs = append(stopErrs, err)
+		}
 	}
-	c.writeConsumers = nil
 
 	var unsubscribeErrs []error
 	for _, sub := range c.writeSubs {
-		if err := sub.Unsubscribe(); err != nil {
+		if err := sub.Drain(ctx); err != nil {
 			unsubscribeErrs = append(unsubscribeErrs, err)
 		}
 	}
-	c.writeSubs = nil
-	return errors.Join(unsubscribeErrs...)
+	if ctx.Err() == nil {
+		c.writeConsumers = nil
+		c.writeSubs = nil
+	}
+	stopErrs = append(stopErrs, unsubscribeErrs...)
+	return errors.Join(stopErrs...)
 }
 
 // IsStarted returns whether the component is running
@@ -553,12 +589,9 @@ func (c *Component) IsStarted() bool {
 // Core NATS has no ack/redelivery semantics, so a failed write can only be
 // surfaced — logged once here (the shared processWriteMessage returns errors
 // rather than logging, per the return-vs-log convention).
-func (c *Component) handleWriteRequest(msg *nats.Msg) {
+func (c *Component) handleWriteRequest(ctx context.Context, msg *nats.Msg) {
 	atomic.AddUint64(&c.messagesReceived, 1)
 	c.lastActivity.Store(time.Now())
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 
 	if err := c.processWriteMessage(ctx, msg.Data); err != nil {
 		c.logger.Error("Failed to process write message",
@@ -580,7 +613,7 @@ func (c *Component) handleWriteRequest(msg *nats.Msg) {
 // failed store — the caller must not ack the delivery (#727). Errors are
 // returned, not logged here; the transport caller logs once.
 func (c *Component) emitStoredMessage(
-	baseMsg *message.BaseMessage, decodeErr error, data []byte, storageKey string,
+	ctx context.Context, baseMsg *message.BaseMessage, decodeErr error, data []byte, storageKey string,
 ) error {
 	if !c.hasPort("stored") {
 		return nil // No stored output port configured
@@ -609,7 +642,7 @@ func (c *Component) emitStoredMessage(
 		Size:            int64(len(data)),
 	}
 
-	if err := c.publishStoredMessage(graphable, storageRef, baseMsg.Type().Key()); err != nil {
+	if err := c.publishStoredMessage(ctx, graphable, storageRef, baseMsg.Type().Key()); err != nil {
 		return err
 	}
 
@@ -626,6 +659,7 @@ func (c *Component) emitStoredMessage(
 // port, ContentStorable not Graphable), a classified error when the required
 // publication fails so the caller can refuse the ack (#727).
 func (c *Component) emitStoredMessageFromContentStorable(
+	ctx context.Context,
 	baseMsg *message.BaseMessage,
 	cs message.ContentStorable,
 	storageRef *message.StorageReference,
@@ -642,7 +676,7 @@ func (c *Component) emitStoredMessageFromContentStorable(
 		return nil
 	}
 
-	if err := c.publishStoredMessage(graphable, storageRef, baseMsg.Type().Key()); err != nil {
+	if err := c.publishStoredMessage(ctx, graphable, storageRef, baseMsg.Type().Key()); err != nil {
 		return err
 	}
 
@@ -657,6 +691,7 @@ func (c *Component) emitStoredMessageFromContentStorable(
 // paths. Marshal failure is Invalid (retrying the same message cannot fix it);
 // publish failure is Transient (broker or stream unavailability).
 func (c *Component) publishStoredMessage(
+	ctx context.Context,
 	graphable graph.Graphable,
 	storageRef *message.StorageReference,
 	originalType string,
@@ -679,14 +714,14 @@ func (c *Component) publishStoredMessage(
 
 	// Use JetStream publishing when port type is "jetstream" for durability
 	if c.isJetStreamPort("stored") {
-		if err := c.natsClient.PublishToStream(context.Background(), storedSubject, msgData); err != nil {
+		if err := c.natsClient.PublishToStream(ctx, storedSubject, msgData); err != nil {
 			return errs.WrapTransient(err, "Component", "publishStoredMessage",
 				fmt.Sprintf("publish StoredMessage to JetStream subject %s", storedSubject))
 		}
 		return nil
 	}
 	// Fallback to core NATS for non-JetStream ports
-	if err := c.natsClient.GetConnection().Publish(storedSubject, msgData); err != nil {
+	if err := c.natsClient.Publish(ctx, storedSubject, msgData); err != nil {
 		return errs.WrapTransient(err, "Component", "publishStoredMessage",
 			fmt.Sprintf("publish StoredMessage to subject %s", storedSubject))
 	}
@@ -991,7 +1026,7 @@ func (c *Component) processWriteMessage(ctx context.Context, data []byte) error 
 
 			// Emit StoredMessage with proper StorageRef — a REQUIRED publication
 			// when the "stored" port is configured; its failure gates the ack.
-			return c.emitStoredMessageFromContentStorable(baseMsg, cs, storageRef)
+			return c.emitStoredMessageFromContentStorable(ctx, baseMsg, cs, storageRef)
 		}
 	}
 
@@ -1026,7 +1061,7 @@ func (c *Component) processWriteMessage(ctx context.Context, data []byte) error 
 
 	// Emit StoredMessage if we have a "stored" output port — required
 	// publication when configured; decode/non-Graphable skips return nil.
-	return c.emitStoredMessage(baseMsg, decodeErr, data, key)
+	return c.emitStoredMessage(ctx, baseMsg, decodeErr, data, key)
 }
 
 // getPortSubject gets the canonical subject for a configured named port.

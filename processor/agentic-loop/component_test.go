@@ -592,7 +592,7 @@ func TestComponent_Lifecycle(t *testing.T) {
 	// Component should implement LifecycleComponent interface
 	lifecycle, ok := comp.(interface {
 		Start(ctx context.Context) error
-		Stop(timeout time.Duration) error
+		Stop(ctx context.Context) error
 	})
 	if !ok {
 		t.Fatal("Component should implement lifecycle methods (Start, Stop)")
@@ -610,7 +610,7 @@ func TestComponent_Lifecycle(t *testing.T) {
 	_ = lifecycle.Start(ctx)
 
 	// Stop should not panic
-	_ = lifecycle.Stop(5 * time.Second)
+	_ = lifecycle.Stop(context.Background())
 }
 
 func TestComponent_StopWithTimeout(t *testing.T) {
@@ -618,7 +618,7 @@ func TestComponent_StopWithTimeout(t *testing.T) {
 
 	lifecycle, ok := comp.(interface {
 		Start(ctx context.Context) error
-		Stop(timeout time.Duration) error
+		Stop(ctx context.Context) error
 	})
 	if !ok {
 		t.Fatal("Component should implement lifecycle methods")
@@ -628,9 +628,10 @@ func TestComponent_StopWithTimeout(t *testing.T) {
 	ctx := context.Background()
 	_ = lifecycle.Start(ctx)
 
-	// Stop should use timeout properly (not ignore with _)
-	// This tests that Stop() respects the timeout duration
-	err := lifecycle.Stop(5 * time.Second)
+	// Stop should honor the caller's lifecycle context.
+	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := lifecycle.Stop(stopCtx)
 
 	// Should return (not hang indefinitely)
 	// Error is acceptable in unit tests without real NATS

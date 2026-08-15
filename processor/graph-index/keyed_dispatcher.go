@@ -4,17 +4,19 @@ import (
 	"context"
 	"hash/fnv"
 	"sync"
-	"time"
+
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 )
 
 // keyedDispatcher preserves FIFO ordering for a single entity while retaining
 // concurrency across entities. A key always hashes to the same single-consumer
 // lane, so an older update cannot finish after a later delete for that key.
 type keyedDispatcher[T any] struct {
-	key     func(T) string
-	process func(context.Context, T)
-	lanes   []chan T
-	wg      sync.WaitGroup
+	key        func(T) string
+	process    func(context.Context, T)
+	lanes      []chan T
+	wg         sync.WaitGroup
+	generation *lifecyclejoin.Generation
 }
 
 func newKeyedDispatcher[T any](workers, queueSize int, key func(T) string, process func(context.Context, T)) *keyedDispatcher[T] {
@@ -53,6 +55,7 @@ func (d *keyedDispatcher[T]) Start(ctx context.Context) {
 			}
 		}(lane)
 	}
+	d.generation = lifecyclejoin.NewGeneration(nil, d.wg.Wait)
 }
 
 func (d *keyedDispatcher[T]) Submit(ctx context.Context, item T) error {
@@ -67,16 +70,6 @@ func (d *keyedDispatcher[T]) Submit(ctx context.Context, item T) error {
 	}
 }
 
-func (d *keyedDispatcher[T]) Stop(timeout time.Duration) error {
-	done := make(chan struct{})
-	go func() {
-		d.wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return nil
-	case <-time.After(timeout):
-		return context.DeadlineExceeded
-	}
+func (d *keyedDispatcher[T]) Stop(ctx context.Context) error {
+	return d.generation.Stop(ctx, nil, nil)
 }

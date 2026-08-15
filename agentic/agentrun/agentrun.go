@@ -30,6 +30,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/internal/agentterminal"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
@@ -592,8 +593,22 @@ type StartConfig struct {
 // The ctx controls the consumers' lifetime; Stop cancels consumption but preserves
 // the durable consumer offsets in NATS for restart recovery.
 //
-// Returns a stop func that cancels consumption — call it on shutdown.
-func (s *MilestoneSubscriber) Start(ctx context.Context, client *natsclient.Client, cfg StartConfig) (stop func(), err error) {
+// Returns a stop func that cancels consumption — call it on shutdown. If Start
+// acquires one durable consumer and a later acquisition fails, it returns both
+// a non-nil stop and a non-nil error. The caller must retain and invoke that
+// stop: it owns the partial acquisition and may need a later context budget to
+// finish or replay cleanup.
+func (s *MilestoneSubscriber) Start(
+	ctx context.Context,
+	client *natsclient.Client,
+	cfg StartConfig,
+) (stop func(context.Context) error, err error) {
+	if ctx == nil {
+		return nil, errors.New("agentrun: MilestoneSubscriber.Start: nil context")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("agentrun: MilestoneSubscriber.Start: context ended: %w", err)
+	}
 	if cfg.StreamName == "" {
 		return nil, fmt.Errorf("agentrun: MilestoneSubscriber.Start: StreamName must not be empty")
 	}
@@ -611,17 +626,41 @@ func (s *MilestoneSubscriber) Start(ctx context.Context, client *natsclient.Clie
 			s.logger.Info("agentrun: MilestoneSubscriber disabled — stream not present",
 				slog.String("stream", cfg.StreamName),
 				slog.String("hint", "likely no agentic components in this deployment (or the stream isn't created yet at boot); agent.complete/failed milestones will not be processed"))
-			return func() {}, nil
+			return func(context.Context) error { return nil }, nil
 		}
 		return nil, fmt.Errorf("agentrun: MilestoneSubscriber.Start: check stream %q: %w", cfg.StreamName, streamErr)
 	}
-
 	makeDurable := func(suffix string) string {
 		name := "agentrun-milestone-" + suffix
 		if cfg.ConsumerNameSuffix != "" {
 			name += "-" + cfg.ConsumerNameSuffix
 		}
 		return name
+	}
+	completeConsumer := makeDurable("complete")
+	failedConsumer := makeDurable("failed")
+	runCtx, cancel := context.WithCancel(ctx)
+	generation := lifecyclejoin.NewGeneration(cancel, nil)
+	completeStarted := false
+	failedStarted := false
+	stop = func(stopCtx context.Context) error {
+		return generation.Stop(stopCtx, nil, func(cleanupCtx context.Context) error {
+			var cleanupErr error
+			if completeStarted {
+				cleanupErr = errors.Join(cleanupErr,
+					client.StopConsumer(cleanupCtx, cfg.StreamName, completeConsumer))
+			}
+			if failedStarted {
+				cleanupErr = errors.Join(cleanupErr,
+					client.StopConsumer(cleanupCtx, cfg.StreamName, failedConsumer))
+			}
+			if ctxErr := cleanupCtx.Err(); ctxErr != nil {
+				return errors.Join(cleanupErr, ctxErr)
+			}
+			completeStarted = false
+			failedStarted = false
+			return cleanupErr
+		})
 	}
 
 	handleMsg := func(subject string) func(ctx context.Context, msg jetstream.Msg) {
@@ -640,7 +679,6 @@ func (s *MilestoneSubscriber) Start(ctx context.Context, client *natsclient.Clie
 		}
 	}
 
-	completeConsumer := makeDurable("complete")
 	completeCfg := natsclient.StreamConsumerConfig{
 		StreamName:    cfg.StreamName,
 		ConsumerName:  completeConsumer,
@@ -650,11 +688,12 @@ func (s *MilestoneSubscriber) Start(ctx context.Context, client *natsclient.Clie
 		MaxDeliver:    5,
 		AckWait:       30 * time.Second,
 	}
-	if err := client.ConsumeInternalStreamWithConfig(ctx, completeCfg, handleMsg("agent.complete.*")); err != nil {
+	if err := client.ConsumeInternalStreamWithConfig(runCtx, completeCfg, handleMsg("agent.complete.*")); err != nil {
+		cancel()
 		return nil, fmt.Errorf("agentrun: MilestoneSubscriber: start durable consumer agent.complete.*: %w", err)
 	}
+	completeStarted = true
 
-	failedConsumer := makeDurable("failed")
 	failedCfg := natsclient.StreamConsumerConfig{
 		StreamName:    cfg.StreamName,
 		ConsumerName:  failedConsumer,
@@ -664,15 +703,13 @@ func (s *MilestoneSubscriber) Start(ctx context.Context, client *natsclient.Clie
 		MaxDeliver:    5,
 		AckWait:       30 * time.Second,
 	}
-	if err := client.ConsumeInternalStreamWithConfig(ctx, failedCfg, handleMsg("agent.failed.*")); err != nil {
-		// Roll back the first consumer before returning error.
-		client.StopConsumer(cfg.StreamName, completeConsumer)
-		return nil, fmt.Errorf("agentrun: MilestoneSubscriber: start durable consumer agent.failed.*: %w", err)
+	if err := client.ConsumeInternalStreamWithConfig(runCtx, failedCfg, handleMsg("agent.failed.*")); err != nil {
+		rollbackErr := lifecyclejoin.RunPartialStartRollback(stop)
+		startErr := fmt.Errorf("agentrun: MilestoneSubscriber: start durable consumer agent.failed.*: %w", err)
+		return stop, errors.Join(startErr, rollbackErr)
 	}
+	failedStarted = true
 
 	// Stop cancels local consumption; durable state is preserved in NATS for restart recovery.
-	return func() {
-		client.StopConsumer(cfg.StreamName, completeConsumer)
-		client.StopConsumer(cfg.StreamName, failedConsumer)
-	}, nil
+	return stop, nil
 }

@@ -91,7 +91,7 @@ func TestIntegration_ClusteringFlow(t *testing.T) {
 
 	// Start component (now that input buckets exist)
 	require.NoError(t, clusteringComp.Start(ctx))
-	defer clusteringComp.Stop(5 * time.Second)
+	defer clusteringComp.Stop(context.Background())
 
 	// Wait for COMMUNITY_INDEX bucket to be created by component
 	var communityBucket jetstream.KeyValue
@@ -289,7 +289,7 @@ func TestIntegration_ClusteringHierarchy(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, clusteringComp.Start(ctx))
-	defer clusteringComp.Stop(5 * time.Second)
+	defer clusteringComp.Stop(context.Background())
 
 	var communityBucket jetstream.KeyValue
 	require.Eventually(t, func() bool {
@@ -471,7 +471,7 @@ func TestIntegration_ClusteringMinSize(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, clusteringComp.Start(ctx))
-	defer clusteringComp.Stop(5 * time.Second)
+	defer clusteringComp.Stop(context.Background())
 
 	var communityBucket jetstream.KeyValue
 	require.Eventually(t, func() bool {
@@ -643,7 +643,7 @@ func TestIntegration_ClusteringMetrics(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, clusteringComp.Start(ctx))
-	defer clusteringComp.Stop(5 * time.Second)
+	defer clusteringComp.Stop(context.Background())
 
 	// Create a few entities
 	now := time.Now().UTC()
@@ -784,7 +784,7 @@ func TestIntegration_LLMEnhancementWorkerStarts(t *testing.T) {
 
 	// Start component - this should initialize the enhancement worker
 	require.NoError(t, clusteringComp.Start(ctx))
-	defer clusteringComp.Stop(5 * time.Second)
+	defer clusteringComp.Stop(context.Background())
 
 	// Verify enhancement worker was initialized
 	// This is the key assertion that would have caught the wiring bug
@@ -859,7 +859,7 @@ func TestIntegration_LLMEnhancementDisabled(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, clusteringComp.Start(ctx))
-	defer clusteringComp.Stop(5 * time.Second)
+	defer clusteringComp.Stop(context.Background())
 
 	// Verify no LLM resources allocated
 	assert.Nil(t, clusteringComp.enhancementWorker,
@@ -933,7 +933,7 @@ func TestIntegration_FreshStartOmitsRetiredStructuralBucket(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, clusteringComp.Start(ctx))
-	defer clusteringComp.Stop(5 * time.Second)
+	defer clusteringComp.Stop(context.Background())
 
 	// Create 4 connected entities
 	now := time.Now().UTC()
@@ -1076,7 +1076,7 @@ func TestIntegration_AnomalyDetectionEnabled(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, clusteringComp.Start(ctx))
-	defer clusteringComp.Stop(5 * time.Second)
+	defer clusteringComp.Stop(context.Background())
 
 	// Verify ANOMALY_INDEX bucket is created
 	var anomalyBucket jetstream.KeyValue
@@ -1227,7 +1227,7 @@ func TestIntegration_AnomalyDisabledByDefault(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, clusteringComp.Start(ctx))
-	defer clusteringComp.Stop(5 * time.Second)
+	defer clusteringComp.Stop(context.Background())
 
 	assert.Nil(t, clusteringComp.anomalyOrchestrator,
 		"Anomaly orchestrator should be nil when EnableAnomalyDetection=false")
@@ -1308,7 +1308,7 @@ func TestIntegration_EntityCommunityLookup(t *testing.T) {
 
 	// Start the component
 	require.NoError(t, clusteringComp.Start(ctx))
-	defer clusteringComp.Stop(5 * time.Second)
+	defer clusteringComp.Stop(context.Background())
 
 	// Create test entities - 4 sensors connected to the same container
 	// This mimics hierarchy inference where sensors are connected via shared containers

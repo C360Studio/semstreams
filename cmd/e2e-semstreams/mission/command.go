@@ -245,6 +245,9 @@ func (c *Component) Initialize() error { return nil }
 
 // Start subscribes to the input subject.
 func (c *Component) Start(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "mission.Component", "Start", "context cannot be nil")
+	}
 	if c.running.Load() {
 		return errs.WrapFatal(errs.ErrAlreadyStarted, "mission.Component", "Start", "already running")
 	}
@@ -269,7 +272,10 @@ func (c *Component) Start(ctx context.Context) error {
 }
 
 // Stop unsubscribes + flips running.
-func (c *Component) Stop(_ time.Duration) error {
+func (c *Component) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
 	if !c.running.Load() {
 		return nil
 	}

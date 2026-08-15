@@ -17,7 +17,9 @@ import (
 
 	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/health"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/types"
 )
 
@@ -48,14 +50,14 @@ type Manager struct {
 	// the service-manager UI port. Zero means disabled (the default).
 	// Both endpoints reuse the Manager's existing handleSystemHealth /
 	// handleLiveness handlers; no separate health logic.
-	healthServer *http.Server
+	healthServer     *http.Server
+	serverGeneration *lifecyclejoin.Generation
+	healthGeneration *lifecyclejoin.Generation
+	serverShutdown   *lifecyclejoin.Operation
+	healthShutdown   *lifecyclejoin.Operation
 
 	// Track if we're the instance managing HTTP
 	isHTTPManager bool
-
-	// Lifecycle context — used as BaseContext for HTTP server so all
-	// request contexts cancel on shutdown
-	lifecycleCtx context.Context
 
 	// Config management
 	natsClient    *natsclient.Client
@@ -299,8 +301,9 @@ var mandatoryServices = []string{
 
 // StartAll starts all registered service instances and the HTTP server
 func (m *Manager) StartAll(ctx context.Context) error {
-	// Store lifecycle context for HTTP server BaseContext
-	m.lifecycleCtx = ctx
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "Manager", "StartAll", "nil context")
+	}
 
 	// Use the injected logger from BaseService if available
 	logger := m.logger
@@ -350,7 +353,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 
 	// Now that all services are started, register their HTTP handlers and start the server
 	logger.Debug("Manager.StartAll: Completing HTTP setup with service handlers")
-	if err := m.completeHTTPSetup(); err != nil {
+	if err := m.completeHTTPSetup(ctx); err != nil {
 		return fmt.Errorf("complete HTTP setup: %w", err)
 	}
 	logger.Info("Manager HTTP server started", "port", m.config.HTTPPort)
@@ -498,7 +501,10 @@ func (m *Manager) createMandatoryServices(logger *slog.Logger) error {
 }
 
 // StopAll stops all registered service instances in reverse order and the HTTP server
-func (m *Manager) StopAll(timeout time.Duration) error {
+func (m *Manager) StopAll(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "Manager", "StopAll", "nil context")
+	}
 	// Use injected logger with operation context
 	logger := m.logger
 	if logger == nil {
@@ -522,7 +528,6 @@ func (m *Manager) StopAll(timeout time.Duration) error {
 
 	logger.Debug("Starting service shutdown sequence",
 		"count", len(services),
-		"timeout", timeout,
 		"order", reverseOrder,
 	)
 	overallStart := time.Now()
@@ -534,7 +539,7 @@ func (m *Manager) StopAll(timeout time.Duration) error {
 			serviceStart := time.Now()
 			logger.Debug("Stopping service", "service", name)
 
-			if err := service.Stop(timeout); err != nil && !stderrors.Is(err, ErrAlreadyStopped) {
+			if err := service.Stop(ctx); err != nil && !stderrors.Is(err, ErrAlreadyStopped) {
 				logger.Error("Service stop failed",
 					"service", name,
 					"duration_ms", time.Since(serviceStart).Milliseconds(),
@@ -550,31 +555,12 @@ func (m *Manager) StopAll(timeout time.Duration) error {
 		}
 	}
 
-	// Clear the registry
-	m.mu.Lock()
-	m.services = make(map[string]Service)
-	m.order = nil
-	m.mu.Unlock()
-
-	// Stop the dedicated health listener first (cheap shutdown, no
-	// pending requests to drain at scale). No-op when not started.
-	// #100: production shutdown runs through StopAll (cmd/semstreams's
-	// shutdown() calls manager.StopAll, NOT manager.Stop), so the
-	// teardown has to live here to actually free the port on graceful
-	// drain. Log-and-continue: health-listener shutdown failure must
-	// not block the main HTTP server shutdown.
-	if err := m.StopHealthListener(); err != nil {
-		logger.Warn("dedicated health listener stop failed; continuing main shutdown", "error", err)
+	if err := m.BaseService.Stop(ctx); err != nil {
+		errors = append(errors, err)
 	}
-
-	// Stop the HTTP server if running
-	// This was missing and causing containers to not shutdown cleanly!
-	if m.isHTTPManager {
-		logger.Debug("Stopping HTTP server")
-		if err := m.stopHTTPServer(); err != nil {
-			logger.Error("HTTP server stop failed", "error", err)
-			errors = append(errors, fmt.Errorf("failed to stop HTTP server: %w", err))
-		}
+	if err := m.stopRuntimeServers(ctx); err != nil {
+		logger.Error("HTTP listeners stop failed", "error", err)
+		errors = append(errors, err)
 	}
 
 	logger.Debug("Service shutdown sequence completed",
@@ -584,8 +570,12 @@ func (m *Manager) StopAll(timeout time.Duration) error {
 
 	// Return combined errors if any
 	if len(errors) > 0 {
-		return fmt.Errorf("stop errors: %v", errors)
+		return fmt.Errorf("stop errors: %w", stderrors.Join(errors...))
 	}
+	m.mu.Lock()
+	m.services = make(map[string]Service)
+	m.order = nil
+	m.mu.Unlock()
 	return nil
 }
 
@@ -649,41 +639,26 @@ func (m *Manager) hasNATSAccess() bool {
 
 // Start starts the Manager HTTP server if configured
 func (m *Manager) Start(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "Manager", "Start", "nil context")
+	}
 	// First start the base service
 	if err := m.BaseService.Start(ctx); err != nil {
 		return err
 	}
-
 	// HTTP server is now started in StartAll(), not here
 	// This prevents duplicate startup attempts
 	return nil
 }
 
 // Stop stops the Manager HTTP server
-func (m *Manager) Stop(timeout time.Duration) error {
-	// Config watching is now handled by Manager, no need to stop it here
-
-	// Stop the dedicated health listener first (cheaper shutdown, no
-	// pending requests to drain at scale). No-op when not started.
-	if err := m.StopHealthListener(); err != nil {
-		// Log-and-continue — health listener shutdown failure must not
-		// block the main HTTP server shutdown.
-		logger := m.logger
-		if logger == nil {
-			logger = slog.Default()
-		}
-		logger.Warn("dedicated health listener stop failed; continuing main shutdown", "error", err)
+func (m *Manager) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "Manager", "Stop", "nil context")
 	}
-
-	// Stop HTTP server if running
-	if m.isHTTPManager {
-		if err := m.stopHTTPServer(); err != nil {
-			return err
-		}
-	}
-
-	// Stop base service
-	return m.BaseService.Stop(timeout)
+	baseErr := m.BaseService.Stop(ctx)
+	serverErr := m.stopRuntimeServers(ctx)
+	return stderrors.Join(baseErr, serverErr)
 }
 
 // UseHTTPMiddleware appends product-supplied middleware to the
@@ -763,7 +738,7 @@ func (m *Manager) initializeHTTPInfrastructure() error {
 
 // completeHTTPSetup registers service handlers and starts the HTTP server
 // This is called after all services have been started
-func (m *Manager) completeHTTPSetup() error {
+func (m *Manager) completeHTTPSetup(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -783,16 +758,18 @@ func (m *Manager) completeHTTPSetup() error {
 	// Register OpenAPI endpoints
 	m.registerOpenAPIEndpoints()
 
+	serverCtx, serverCancel := context.WithCancel(ctx)
+	serveDone := make(chan struct{})
+	m.serverGeneration = lifecyclejoin.NewGeneration(serverCancel, func() { <-serveDone })
+	m.serverShutdown = lifecyclejoin.NewOperation()
+
 	// Create HTTP server with lifecycle context as BaseContext.
 	// All request contexts (r.Context()) derive from this, so they cancel on shutdown.
 	m.httpServer = &http.Server{
 		Addr:    ":" + strconv.Itoa(m.config.HTTPPort),
 		Handler: m.buildHTTPHandler(),
 		BaseContext: func(_ net.Listener) context.Context {
-			if m.lifecycleCtx != nil {
-				return m.lifecycleCtx
-			}
-			return context.Background()
+			return serverCtx
 		},
 		ReadTimeout:  m.config.ResolvedHTTPReadTimeout(),
 		WriteTimeout: m.config.ResolvedHTTPWriteTimeout(),
@@ -803,6 +780,7 @@ func (m *Manager) completeHTTPSetup() error {
 	// Capture server reference before goroutine to avoid race condition
 	server := m.httpServer
 	go func() {
+		defer close(serveDone)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			m.logger.Error("HTTP server error", "error", err)
 		}
@@ -813,7 +791,10 @@ func (m *Manager) completeHTTPSetup() error {
 
 // startHTTPServer starts the HTTP server and registers all service handlers
 // DEPRECATED: Use initializeHTTPInfrastructure() and completeHTTPSetup() instead
-func (m *Manager) startHTTPServer() error {
+func (m *Manager) startHTTPServer(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "Manager", "startHTTPServer", "nil context")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -835,15 +816,17 @@ func (m *Manager) startHTTPServer() error {
 	// Register OpenAPI endpoints
 	m.registerOpenAPIEndpoints()
 
+	serverCtx, serverCancel := context.WithCancel(ctx)
+	serveDone := make(chan struct{})
+	m.serverGeneration = lifecyclejoin.NewGeneration(serverCancel, func() { <-serveDone })
+	m.serverShutdown = lifecyclejoin.NewOperation()
+
 	// Create HTTP server with lifecycle context as BaseContext
 	m.httpServer = &http.Server{
 		Addr:    ":" + strconv.Itoa(m.config.HTTPPort),
 		Handler: m.buildHTTPHandler(),
 		BaseContext: func(_ net.Listener) context.Context {
-			if m.lifecycleCtx != nil {
-				return m.lifecycleCtx
-			}
-			return context.Background()
+			return serverCtx
 		},
 		ReadTimeout:  m.config.ResolvedHTTPReadTimeout(),
 		WriteTimeout: m.config.ResolvedHTTPWriteTimeout(),
@@ -854,6 +837,7 @@ func (m *Manager) startHTTPServer() error {
 	// Capture server reference before goroutine to avoid race condition
 	server := m.httpServer
 	go func() {
+		defer close(serveDone)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			m.logger.Error("HTTP server error", "error", err)
 		}
@@ -876,7 +860,10 @@ func (m *Manager) startHTTPServer() error {
 // Idempotent: calling twice with the same non-zero port returns an
 // error rather than re-binding; callers should call StopHealthListener
 // first if they need to switch ports at runtime.
-func (m *Manager) StartHealthListener(port int) error {
+func (m *Manager) StartHealthListener(ctx context.Context, port int) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "Manager", "StartHealthListener", "nil context")
+	}
 	if port == 0 {
 		return nil
 	}
@@ -890,15 +877,16 @@ func (m *Manager) StartHealthListener(port int) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", m.handleSystemHealth)
 	mux.HandleFunc("/healthz", m.handleLiveness)
+	healthCtx, healthCancel := context.WithCancel(ctx)
+	serveDone := make(chan struct{})
+	m.healthGeneration = lifecyclejoin.NewGeneration(healthCancel, func() { <-serveDone })
+	m.healthShutdown = lifecyclejoin.NewOperation()
 
 	m.healthServer = &http.Server{
 		Addr:    ":" + strconv.Itoa(port),
 		Handler: mux,
 		BaseContext: func(_ net.Listener) context.Context {
-			if m.lifecycleCtx != nil {
-				return m.lifecycleCtx
-			}
-			return context.Background()
+			return healthCtx
 		},
 		// Health probes are short-lived; keep timeouts tight so a
 		// misbehaving probe client can't pin a goroutine.
@@ -914,6 +902,7 @@ func (m *Manager) StartHealthListener(port int) error {
 	}
 	logger.Info("Starting dedicated health listener", "port", port, "routes", []string{"/health", "/healthz"})
 	go func() {
+		defer close(serveDone)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Warn("dedicated health listener error", "port", port, "error", err)
 		}
@@ -921,16 +910,84 @@ func (m *Manager) StartHealthListener(port int) error {
 	return nil
 }
 
+func (m *Manager) stopRuntimeServers(ctx context.Context) error {
+	m.mu.RLock()
+	generation := m.serverGeneration
+	healthGeneration := m.healthGeneration
+	serverShutdown := m.serverShutdown
+	healthShutdown := m.healthShutdown
+	httpServer := m.httpServer
+	healthServer := m.healthServer
+	m.mu.RUnlock()
+	if generation == nil && healthGeneration == nil {
+		return nil
+	}
+	var stopErr error
+	if healthGeneration != nil {
+		healthGeneration.Cancel()
+		shutdownErr := healthShutdown.Run(ctx, func(ctx context.Context) error {
+			if healthServer == nil {
+				return nil
+			}
+			if err := healthServer.Shutdown(ctx); err != nil {
+				return fmt.Errorf("shutdown dedicated health listener: %w", err)
+			}
+			return nil
+		})
+		joinErr := healthGeneration.Stop(ctx, nil, nil)
+		healthErr := stderrors.Join(shutdownErr, joinErr)
+		stopErr = stderrors.Join(stopErr, healthErr)
+		if healthErr == nil {
+			m.mu.Lock()
+			if m.healthServer == healthServer {
+				m.healthServer = nil
+				m.healthGeneration = nil
+				m.healthShutdown = nil
+			}
+			m.mu.Unlock()
+		}
+	}
+	if generation != nil {
+		generation.Cancel()
+		shutdownErr := serverShutdown.Run(ctx, func(ctx context.Context) error {
+			if httpServer == nil {
+				return nil
+			}
+			if err := httpServer.Shutdown(ctx); err != nil {
+				return fmt.Errorf("failed to shutdown HTTP server: %w", err)
+			}
+			return nil
+		})
+		joinErr := generation.Stop(ctx, nil, nil)
+		serverErr := stderrors.Join(shutdownErr, joinErr)
+		stopErr = stderrors.Join(stopErr, serverErr)
+		if serverErr == nil {
+			m.mu.Lock()
+			if m.httpServer == httpServer {
+				m.httpServer = nil
+				m.httpMux = nil
+				m.serverGeneration = nil
+				m.serverShutdown = nil
+			}
+			m.mu.Unlock()
+		}
+	}
+	return stopErr
+}
+
 // StopHealthListener gracefully shuts down the dedicated health-port
 // listener if one was started. No-op when the listener is not running.
-// Same 5s graceful-shutdown budget as stopHTTPServer.
-func (m *Manager) StopHealthListener() error {
-	m.mu.Lock()
+func (m *Manager) StopHealthListener(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "Manager", "StopHealthListener", "nil context")
+	}
+	m.mu.RLock()
 	server := m.healthServer
-	m.healthServer = nil
-	m.mu.Unlock()
+	generation := m.healthGeneration
+	shutdown := m.healthShutdown
+	m.mu.RUnlock()
 
-	if server == nil {
+	if server == nil || generation == nil {
 		return nil
 	}
 
@@ -938,17 +995,31 @@ func (m *Manager) StopHealthListener() error {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := server.Shutdown(ctx); err != nil {
+	generation.Cancel()
+	shutdownErr := shutdown.Run(ctx, func(ctx context.Context) error {
+		return server.Shutdown(ctx)
+	})
+	joinErr := generation.Stop(ctx, nil, nil)
+	err := stderrors.Join(shutdownErr, joinErr)
+	if err != nil {
 		logger.Warn("dedicated health listener shutdown failed", "error", err)
 		return fmt.Errorf("shutdown dedicated health listener: %w", err)
 	}
+	m.mu.Lock()
+	if m.healthServer == server {
+		m.healthServer = nil
+		m.healthGeneration = nil
+		m.healthShutdown = nil
+	}
+	m.mu.Unlock()
 	return nil
 }
 
 // stopHTTPServer stops the HTTP server gracefully
-func (m *Manager) stopHTTPServer() error {
+func (m *Manager) stopHTTPServer(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "Manager", "stopHTTPServer", "nil context")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -963,12 +1034,8 @@ func (m *Manager) stopHTTPServer() error {
 	}
 	logger = logger.With("operation", "http-shutdown")
 
-	logger.Debug("Starting HTTP server shutdown", "timeout", "5s")
+	logger.Debug("Starting HTTP server shutdown")
 	start := time.Now()
-
-	// Create context for graceful shutdown
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 
 	// Gracefully shutdown the server
 	if err := m.httpServer.Shutdown(ctx); err != nil {

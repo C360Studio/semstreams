@@ -84,7 +84,7 @@ func startIngest(ctx context.Context, t *testing.T, nc *natsclient.Client) {
 	c := comp.(component.LifecycleComponent)
 	require.NoError(t, c.Initialize())
 	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 }
 
 func startIndex(ctx context.Context, t *testing.T, nc *natsclient.Client) *Component {
@@ -96,7 +96,7 @@ func startIndex(ctx context.Context, t *testing.T, nc *natsclient.Client) *Compo
 	c := comp.(*Component)
 	require.NoError(t, c.Initialize())
 	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 	return c
 }
 

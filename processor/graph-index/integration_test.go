@@ -69,7 +69,7 @@ func TestIntegration_PreexistingPredicatePoisonIsSticky(t *testing.T) {
 	indexComponent := created.(*Component)
 	require.NoError(t, indexComponent.Initialize())
 	require.NoError(t, indexComponent.Start(ctx))
-	defer indexComponent.Stop(5 * time.Second)
+	defer indexComponent.Stop(context.Background())
 
 	require.Eventually(t, func() bool {
 		status := indexComponent.computeIndexStatus(ctx)
@@ -181,7 +181,7 @@ func TestIntegration_PredicateCleanWipeReseedRestoresQueryParity(t *testing.T) {
 		return !status.Ready && status.State == graph.IndexStateResetRequired &&
 			status.Reason == string(graph.GraphStateReasonNoncanonicalPredicate)
 	}, 5*time.Second, 25*time.Millisecond, "poisoned replay never latched reset-required")
-	require.NoError(t, poisonedIndex.Stop(5*time.Second))
+	require.NoError(t, poisonedIndex.Stop(context.Background()))
 
 	// This is the graph-index-owned subset of the operator runbook's complete
 	// resource set. Every bucket exists because Start created it before replay.
@@ -216,13 +216,13 @@ func TestIntegration_PredicateCleanWipeReseedRestoresQueryParity(t *testing.T) {
 	require.NoError(t, reseededIndex.Start(ctx))
 	waitReady(reseededIndex)
 	assertPredicateParity(reseededIndex)
-	require.NoError(t, reseededIndex.Stop(5*time.Second))
+	require.NoError(t, reseededIndex.Stop(context.Background()))
 
 	replayedIndex := newIndex()
 	require.NoError(t, replayedIndex.Start(ctx))
 	waitReady(replayedIndex)
 	assertPredicateParity(replayedIndex)
-	require.NoError(t, replayedIndex.Stop(5*time.Second))
+	require.NoError(t, replayedIndex.Stop(context.Background()))
 }
 
 // TestIntegration_KVWatchToIndexFlow tests the full KV watch -> index update flow
@@ -266,7 +266,7 @@ func TestIntegration_KVWatchToIndexFlow(t *testing.T) {
 
 	// Start component (now that input bucket exists)
 	require.NoError(t, graphIndex.Start(ctx))
-	defer graphIndex.Stop(5 * time.Second)
+	defer graphIndex.Stop(context.Background())
 
 	// Create test entity with relationships
 	entityID := "c360.platform.robotics.mav1.drone.001"
@@ -387,7 +387,7 @@ func TestIntegration_EntityDeletion(t *testing.T) {
 
 	// Start component (now that input bucket exists)
 	require.NoError(t, graphIndex.Start(ctx))
-	defer graphIndex.Stop(5 * time.Second)
+	defer graphIndex.Stop(context.Background())
 
 	// Create test entity
 	entityID := "c360.platform.robotics.mav1.drone.002"
@@ -492,7 +492,7 @@ func TestIntegration_MultipleRelationships(t *testing.T) {
 
 	// Start component (now that input bucket exists)
 	require.NoError(t, graphIndex.Start(ctx))
-	defer graphIndex.Stop(5 * time.Second)
+	defer graphIndex.Stop(context.Background())
 
 	// Create entity with multiple relationships
 	entityID := "c360.platform.robotics.mav1.drone.003"
@@ -606,7 +606,7 @@ func TestIntegration_ConcurrentUpdates(t *testing.T) {
 
 	// Start component (now that input bucket exists)
 	require.NoError(t, graphIndex.Start(ctx))
-	defer graphIndex.Stop(5 * time.Second)
+	defer graphIndex.Stop(context.Background())
 
 	// Create multiple entities concurrently
 	const numEntities = 10
@@ -714,7 +714,7 @@ func TestIntegration_HierarchyEdgeIndexing(t *testing.T) {
 
 	// Start component
 	require.NoError(t, graphIndex.Start(ctx))
-	defer graphIndex.Stop(5 * time.Second)
+	defer graphIndex.Stop(context.Background())
 
 	// Create entity with hierarchy edges - mimics what graph-ingest produces
 	// Entity ID follows 6-part format: org.platform.domain.system.type.instance

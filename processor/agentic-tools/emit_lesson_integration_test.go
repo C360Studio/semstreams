@@ -59,7 +59,7 @@ func startGraphIngestForLessons(t *testing.T, natsClient *natsclient.Client) {
 	gi := comp.(*graphingest.Component)
 	require.NoError(t, gi.Initialize())
 	require.NoError(t, gi.Start(context.Background()))
-	t.Cleanup(func() { _ = gi.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = gi.Stop(context.Background()) })
 
 	time.Sleep(150 * time.Millisecond) // let mutation subscriptions propagate
 }
@@ -105,7 +105,7 @@ func startToolsWithEmitLesson(t *testing.T, natsClient *natsclient.Client) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	t.Cleanup(cancel)
 	require.NoError(t, lc.Start(ctx))
-	t.Cleanup(func() { _ = lc.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = lc.Stop(context.Background()) })
 
 	time.Sleep(200 * time.Millisecond) // let the tool-call consumer bind
 }

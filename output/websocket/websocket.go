@@ -4,6 +4,7 @@ package websocket
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/buffer"
@@ -145,17 +147,14 @@ type Output struct {
 	subscriptions []*natsclient.Subscription
 
 	// Lifecycle management
-	shutdown      chan struct{} // Signal shutdown to all goroutines
-	done          chan struct{} // Signal completion of shutdown
-	running       bool
-	startTime     time.Time
-	mu            sync.RWMutex
-	lifecycleMu   sync.Mutex      // Ensures Start/Stop operations are serialized
-	wg            *sync.WaitGroup // Track goroutines for safe shutdown (pointer for replacement)
-	tlsCleanup    func()          // ACME cleanup function (stops renewal loop)
-	tlsCleanupMu  sync.Mutex      // Protects tlsCleanup
-	lifecycleCtx  context.Context // Context for lifecycle operations (ACME, etc.)
-	lifecycleStop context.CancelFunc
+	running        bool
+	startTime      time.Time
+	mu             sync.RWMutex
+	wg             *sync.WaitGroup
+	generation     *lifecyclejoin.Generation
+	serverShutdown *lifecyclejoin.Operation
+	tlsCleanup     func()     // ACME cleanup function (stops renewal loop)
+	tlsCleanupMu   sync.Mutex // Protects tlsCleanup
 
 	// Message ID generation
 	messageIDCounter atomic.Uint64
@@ -590,52 +589,65 @@ func (w *Output) Initialize() error {
 
 // Start begins the WebSocket server and NATS subscription
 func (w *Output) Start(ctx context.Context) error {
-	// Serialize Start/Stop operations to prevent race conditions
-	w.lifecycleMu.Lock()
-	defer w.lifecycleMu.Unlock()
-
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	if w.running {
-		return nil
-	}
-
-	// Validate context
+	// Validate before locking or inspecting lifecycle state.
 	if err := w.validateContext(ctx); err != nil {
 		return err
 	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
 
-	// Create lifecycle context for ACME and other background operations
-	w.lifecycleCtx, w.lifecycleStop = context.WithCancel(context.Background())
+	if w.generation != nil {
+		return errs.WrapFatal(errs.ErrAlreadyStarted, "Output", "Start", "cleanup authority already active")
+	}
 
-	// Create shutdown channels for coordinated shutdown
-	w.setupShutdownChannels()
-
-	// Cleanup on error
-	var cleanupErr error
-	defer func() {
-		if cleanupErr != nil {
-			w.cleanupOnError()
+	// Derive the generation lifetime from Start; only cancellation and join
+	// authority are retained. Publish the exact authority before acquisition so
+	// a failed Start and every later Stop rejoin the same operations.
+	runtimeCtx, runtimeCancel := context.WithCancel(ctx)
+	runtimeWG := &sync.WaitGroup{}
+	startReady := make(chan struct{})
+	generation := lifecyclejoin.NewGeneration(runtimeCancel, func() {
+		<-startReady
+		runtimeWG.Wait()
+	})
+	serverShutdown := lifecyclejoin.NewOperation()
+	w.wg = runtimeWG
+	w.generation = generation
+	w.serverShutdown = serverShutdown
+	rollback := func() error {
+		close(startReady)
+		subscriptions := append([]*natsclient.Subscription(nil), w.subscriptions...)
+		rollbackErr := lifecyclejoin.RunPartialStartRollback(func(ctx context.Context) error {
+			return w.stopRuntime(ctx, generation, serverShutdown, w.server, subscriptions)
+		})
+		if rollbackErr == nil {
+			w.clearRuntime(generation, serverShutdown)
 		}
-	}()
+		return rollbackErr
+	}
 
 	// Set up HTTP server with WebSocket endpoint
-	if err := w.setupHTTPServer(); err != nil {
-		cleanupErr = err
-		return err
+	if err := w.setupHTTPServer(runtimeCtx); err != nil {
+		return errors.Join(err, rollback())
 	}
 
 	// Subscribe to NATS subjects for graph updates
-	if err := w.setupSubscriptions(ctx); err != nil {
-		cleanupErr = err
-		return errs.Wrap(err, "Output", "Start", fmt.Sprintf("subscribe to NATS subjects %v", w.subjects))
+	if err := w.setupSubscriptions(runtimeCtx); err != nil {
+		return errors.Join(
+			errs.Wrap(err, "Output", "Start", fmt.Sprintf("subscribe to NATS subjects %v", w.subjects)),
+			rollback(),
+		)
 	}
 
-	// Mark as running and start background goroutines
+	goroutineCount := 2 // runServer + maintainClients
+	if w.metrics != nil {
+		goroutineCount++
+	}
+	runtimeWG.Add(goroutineCount)
 	w.running = true
 	w.startTime = time.Now()
-	w.startBackgroundGoroutines(ctx)
+	close(startReady)
+	w.startBackgroundGoroutines(runtimeCtx, runtimeWG)
 
 	return nil
 }
@@ -654,32 +666,8 @@ func (w *Output) validateContext(ctx context.Context) error {
 	return nil
 }
 
-// setupShutdownChannels creates channels for coordinated shutdown
-func (w *Output) setupShutdownChannels() {
-	w.shutdown = make(chan struct{})
-	w.done = make(chan struct{})
-}
-
-// cleanupOnError cleans up resources when Start fails
-func (w *Output) cleanupOnError() {
-	// Clean up channels if we created them
-	// Note: We close but don't nil the channels to avoid race conditions
-	// with goroutines that may be reading from them in select statements
-	if w.shutdown != nil {
-		close(w.shutdown)
-	}
-	if w.done != nil {
-		close(w.done)
-	}
-	// Clean up server if we created it
-	if w.server != nil {
-		_ = w.server.Shutdown(context.Background())
-		w.server = nil
-	}
-}
-
 // setupHTTPServer creates and configures the HTTP server with TLS if enabled
-func (w *Output) setupHTTPServer() error {
+func (w *Output) setupHTTPServer(ctx context.Context) error {
 	if err := validateWebSocketPath(w.path); err != nil {
 		return errs.WrapInvalid(err, "websocket_output", "setupHTTPServer", "validate path")
 	}
@@ -690,6 +678,9 @@ func (w *Output) setupHTTPServer() error {
 	w.server = &http.Server{
 		Addr:    net.JoinHostPort(w.host, strconv.Itoa(w.port)),
 		Handler: mux,
+		BaseContext: func(_ net.Listener) context.Context {
+			return ctx
+		},
 	}
 
 	// Configure TLS if enabled at platform level
@@ -703,7 +694,7 @@ func (w *Output) setupHTTPServer() error {
 		if mode == "acme" && w.security.TLS.Server.ACME.Enabled {
 			// Use ACME-aware TLS configuration
 			tlsConfig, cleanup, err := tlsutil.LoadServerTLSConfigWithACME(
-				w.lifecycleCtx,
+				ctx,
 				w.security.TLS.Server,
 			)
 			if err != nil {
@@ -734,32 +725,22 @@ func (w *Output) setupHTTPServer() error {
 }
 
 // startBackgroundGoroutines starts all background goroutines for the WebSocket server
-func (w *Output) startBackgroundGoroutines(ctx context.Context) {
-	// Create a fresh wait group for this start cycle to avoid reuse issues
-	w.wg = &sync.WaitGroup{}
-
-	// Add all goroutines to wait group before starting any of them
-	goroutineCount := 2 // runServer + maintainClients
-	if w.metrics != nil {
-		goroutineCount++ // metrics goroutine
-	}
-	w.wg.Add(goroutineCount)
-
+func (w *Output) startBackgroundGoroutines(ctx context.Context, runtimeWG *sync.WaitGroup) {
 	// Start uptime tracking goroutine
 	if w.metrics != nil {
-		go w.trackUptime(ctx)
+		go w.trackUptime(ctx, runtimeWG)
 	}
 
 	// Start the HTTP server in a goroutine
-	go w.runServer(ctx)
+	go w.runServer(runtimeWG)
 
 	// Start client maintenance in a goroutine
-	go w.maintainClients(ctx)
+	go w.maintainClients(ctx, runtimeWG)
 }
 
 // trackUptime periodically updates the server uptime metric
-func (w *Output) trackUptime(ctx context.Context) {
-	defer w.wg.Done()
+func (w *Output) trackUptime(ctx context.Context, runtimeWG *sync.WaitGroup) {
+	defer runtimeWG.Done()
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -773,91 +754,85 @@ func (w *Output) trackUptime(ctx context.Context) {
 			}
 		case <-ctx.Done():
 			return
-		case <-w.shutdown:
-			return
 		}
 	}
 }
 
 // Stop gracefully stops the WebSocket server and closes all connections
-func (w *Output) Stop(timeout time.Duration) error {
-	w.lifecycleMu.Lock()
-	defer w.lifecycleMu.Unlock()
-
-	w.mu.Lock()
-	if !w.running {
-		w.mu.Unlock()
+func (w *Output) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
+	w.mu.RLock()
+	generation := w.generation
+	serverShutdown := w.serverShutdown
+	server := w.server
+	subscriptions := append([]*natsclient.Subscription(nil), w.subscriptions...)
+	w.mu.RUnlock()
+	if generation == nil {
 		return nil
 	}
-	w.running = false
 
-	// Step 1: Signal shutdown to all goroutines
-	if w.shutdown != nil {
-		close(w.shutdown)
+	stopErr := w.stopRuntime(ctx, generation, serverShutdown, server, subscriptions)
+	if stopErr != nil {
+		return stopErr
 	}
 
-	// Step 2: Capture references we need
-	wg := w.wg
-	server := w.server
-	w.mu.Unlock()
-
-	// Step 3: Shutdown HTTP server FIRST (outside locks)
-	// This causes ListenAndServe to return with http.ErrServerClosed
-	if server != nil {
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), timeout)
-		defer shutdownCancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			// Log but continue - we still need to clean up
-			// Note: In production this should use a proper logger
-			fmt.Printf("[WARN] HTTP server shutdown error: %v\n", err)
-		}
-	}
-
-	// Step 4: NOW wait for goroutines (they can exit after server shutdown)
-	if wg != nil {
-		done := make(chan struct{})
-		go func() {
-			wg.Wait()
-			close(done)
-		}()
-
-		select {
-		case <-done:
-			// All goroutines exited cleanly
-		case <-time.After(5 * time.Second):
-			fmt.Printf("[WARN] WebSocket goroutines did not exit within timeout\n")
-		}
-	}
-
-	// Step 5: Stop ACME renewal loop if active
-	w.tlsCleanupMu.Lock()
-	if w.tlsCleanup != nil {
-		w.tlsCleanup()
-		w.tlsCleanup = nil
-	}
-	w.tlsCleanupMu.Unlock()
-
-	// Cancel lifecycle context (stops ACME renewal loop)
-	if w.lifecycleStop != nil {
-		w.lifecycleStop()
-	}
-
-	// Step 6: Clean up remaining resources
 	w.mu.Lock()
-	w.unsubscribeFromNATS()
-	w.closeAllClients()
-
-	// Clear references and close done channel to signal completion
-	// Note: We close but don't nil shutdown/done channels to avoid race conditions
-	// with goroutines that may be reading from them in select statements
-	w.server = nil
-	if w.done != nil {
-		close(w.done)
-	}
-	w.wg = nil
+	w.clearRuntime(generation, serverShutdown)
 	w.mu.Unlock()
-
 	return nil
+}
+
+func (w *Output) stopRuntime(
+	ctx context.Context,
+	generation *lifecyclejoin.Generation,
+	serverShutdown *lifecyclejoin.Operation,
+	server *http.Server,
+	subscriptions []*natsclient.Subscription,
+) error {
+	generation.Signal(func() error {
+		w.closeAllClients()
+		w.tlsCleanupMu.Lock()
+		defer w.tlsCleanupMu.Unlock()
+		if w.tlsCleanup != nil {
+			w.tlsCleanup()
+		}
+		return nil
+	})
+	shutdownErr := serverShutdown.Run(ctx, func(ctx context.Context) error {
+		if server == nil {
+			return nil
+		}
+		return server.Shutdown(ctx)
+	})
+	joinErr := generation.Stop(ctx, nil, func(ctx context.Context) error {
+		var drainErr error
+		for _, sub := range subscriptions {
+			if sub != nil {
+				drainErr = errors.Join(drainErr, sub.Drain(ctx))
+			}
+		}
+		return drainErr
+	})
+	return errors.Join(shutdownErr, joinErr)
+}
+
+// clearRuntime requires w.mu write ownership and clears only the exact cleanly
+// completed generation. Genuine terminal errors deliberately retain authority.
+func (w *Output) clearRuntime(generation *lifecyclejoin.Generation, serverShutdown *lifecyclejoin.Operation) {
+	if w.generation != generation || w.serverShutdown != serverShutdown {
+		return
+	}
+	w.running = false
+	w.server = nil
+	w.subscriptions = nil
+	w.wg = nil
+	w.generation = nil
+	w.serverShutdown = nil
+	w.tlsCleanupMu.Lock()
+	w.tlsCleanup = nil
+	w.tlsCleanupMu.Unlock()
 }
 
 // setupSubscriptions creates subscriptions for all resolved input ports.
@@ -990,17 +965,6 @@ func (w *Output) waitForStream(ctx context.Context, streamName string) error {
 		fmt.Sprintf("stream %s not available after %d retries", streamName, maxRetries))
 }
 
-// unsubscribeFromNATS unsubscribes from all NATS subjects
-func (w *Output) unsubscribeFromNATS() {
-	// Unsubscribe from all NATS subjects
-	for _, sub := range w.subscriptions {
-		if err := sub.Unsubscribe(); err != nil {
-			w.logger.Warn("Failed to unsubscribe", "error", err)
-		}
-	}
-	w.subscriptions = nil
-}
-
 // closeAllClients closes all WebSocket client connections
 func (w *Output) closeAllClients() {
 	w.clientsMu.Lock()
@@ -1013,11 +977,9 @@ func (w *Output) closeAllClients() {
 
 // handleNATSMessageData processes incoming message data from NATS and broadcasts to WebSocket clients
 func (w *Output) handleNATSMessageData(ctx context.Context, data []byte, subject string) {
-	// Check for context cancellation or shutdown signal
+	// Check for generation cancellation.
 	select {
 	case <-ctx.Done():
-		return
-	case <-w.shutdown:
 		return
 	default:
 	}
@@ -1037,11 +999,9 @@ func (w *Output) handleNATSMessageData(ctx context.Context, data []byte, subject
 
 // handleNATSMessage processes incoming messages from NATS and broadcasts to WebSocket clients
 func (w *Output) handleNATSMessage(ctx context.Context, msg *natspkg.Msg) {
-	// Check for context cancellation or shutdown signal
+	// Check for generation cancellation.
 	select {
 	case <-ctx.Done():
-		return
-	case <-w.shutdown:
 		return
 	default:
 	}
@@ -1131,12 +1091,8 @@ func (w *Output) transformPayload(subject string, data []byte) []byte {
 }
 
 // runServer runs the HTTP server
-func (w *Output) runServer(_ context.Context) {
-	defer func() {
-		if w.wg != nil {
-			w.wg.Done()
-		}
-	}()
+func (w *Output) runServer(runtimeWG *sync.WaitGroup) {
+	defer runtimeWG.Done()
 
 	w.mu.RLock()
 	server := w.server
@@ -1212,13 +1168,20 @@ func (w *Output) handleWebSocket(wr http.ResponseWriter, r *http.Request) {
 	}
 
 	// Handle client in a goroutine
-	w.wg.Add(1)
-	go w.handleClient(context.Background(), conn, clientInfo)
+	w.mu.RLock()
+	runtimeWG := w.wg
+	w.mu.RUnlock()
+	if runtimeWG == nil {
+		w.removeClient(conn, clientInfo)
+		return
+	}
+	runtimeWG.Add(1)
+	go w.handleClient(conn, clientInfo, runtimeWG)
 }
 
 // handleClient manages a single WebSocket client connection
-func (w *Output) handleClient(ctx context.Context, conn *websocket.Conn, info *clientInfo) {
-	defer w.wg.Done()
+func (w *Output) handleClient(conn *websocket.Conn, info *clientInfo, runtimeWG *sync.WaitGroup) {
+	defer runtimeWG.Done()
 	defer w.removeClient(conn, info)
 
 	// Set up ping/pong handling for connection health
@@ -1229,15 +1192,6 @@ func (w *Output) handleClient(ctx context.Context, conn *websocket.Conn, info *c
 
 	// Read messages from client (control messages: ack, nack, slow)
 	for {
-		// Check if we should stop
-		select {
-		case <-ctx.Done():
-			return
-		case <-w.shutdown:
-			return
-		default:
-		}
-
 		// Set read deadline
 		_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 
@@ -1353,8 +1307,6 @@ func (w *Output) broadcastToClients(ctx context.Context, subject string, data []
 	// Check for context cancellation before broadcast
 	select {
 	case <-ctx.Done():
-		return
-	case <-w.shutdown:
 		return
 	default:
 	}
@@ -1584,8 +1536,8 @@ func (w *Output) pingClient(conn *websocket.Conn, info *clientInfo) error {
 }
 
 // maintainClients performs periodic maintenance on client connections
-func (w *Output) maintainClients(ctx context.Context) {
-	defer w.wg.Done()
+func (w *Output) maintainClients(ctx context.Context, runtimeWG *sync.WaitGroup) {
+	defer runtimeWG.Done()
 
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -1593,8 +1545,6 @@ func (w *Output) maintainClients(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
-		case <-w.shutdown:
 			return
 		case <-ticker.C:
 			w.pingClients(ctx)
@@ -1618,8 +1568,6 @@ func (w *Output) pingClients(ctx context.Context) {
 	// Check for context cancellation before pinging
 	select {
 	case <-ctx.Done():
-		return
-	case <-w.shutdown:
 		return
 	default:
 	}

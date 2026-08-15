@@ -83,7 +83,7 @@ func TestIntegration_OffloadedEntityEmbedsIdentityAlongsideBody(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, embeddingComp.Start(ctx))
-	defer embeddingComp.Stop(5 * time.Second)
+	defer embeddingComp.Stop(context.Background())
 
 	var embeddingBucket jetstream.KeyValue
 	require.Eventually(t, func() bool {

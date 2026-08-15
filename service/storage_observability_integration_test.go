@@ -68,7 +68,7 @@ func TestIntegration_StorageObservability_CollectPublishConsume(t *testing.T) {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	require.NoError(t, svc.Start(runCtx))
-	t.Cleanup(func() { _ = svc.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = svc.Stop(context.Background()) })
 
 	storage, ok := svc.(*StorageObservabilityService)
 	require.True(t, ok)
@@ -332,5 +332,5 @@ func TestIntegration_StorageObservability_BootsWithoutAReachableBucket(t *testin
 	assert.True(t, status.Healthy, "an unreadable account must not make the service unhealthy")
 	assert.False(t, storage.Snapshot().Synced, "nothing was read, and nothing claims otherwise")
 
-	require.NoError(t, svc.Stop(5*time.Second))
+	require.NoError(t, svc.Stop(context.Background()))
 }

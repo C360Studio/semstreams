@@ -912,11 +912,18 @@ func (c *Component) Start(ctx context.Context) error {
         "input_subjects", c.subjects,
         "output_subject", c.outputSubj)
 
+    runtimeDone := c.done
+    wg := c.wg
+    go func() {
+        wg.Wait()
+        close(runtimeDone)
+    }()
+
     return nil
 }
 
 // Stop gracefully stops the component.
-func (c *Component) Stop(timeout time.Duration) error {
+func (c *Component) Stop(ctx context.Context) error {
     c.lifecycleMu.Lock()
     defer c.lifecycleMu.Unlock()
 
@@ -933,21 +940,14 @@ func (c *Component) Stop(timeout time.Duration) error {
     }
     c.subscriptions = nil
 
-    waitCh := make(chan struct{})
-    go func() {
-        c.wg.Wait()
-        close(waitCh)
-    }()
-
     select {
-    case <-waitCh:
-    case <-time.After(timeout):
-        return fmt.Errorf("shutdown timeout after %v", timeout)
+    case <-c.done:
+    case <-ctx.Done():
+        return fmt.Errorf("shutdown: %w", ctx.Err())
     }
 
     c.mu.Lock()
     c.running = false
-    close(c.done)
     c.mu.Unlock()
 
     return nil

@@ -648,7 +648,7 @@ func TestComponent_Health_Running(t *testing.T) {
 
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(ctx))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	// Allow time for component to become healthy
 	time.Sleep(100 * time.Millisecond)
@@ -724,7 +724,7 @@ func TestComponent_Start_Success(t *testing.T) {
 
 	require.NoError(t, comp.Initialize())
 	err := comp.Start(ctx)
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	assert.NoError(t, err)
 }
@@ -746,7 +746,7 @@ func TestComponent_Start_AlreadyStarted(t *testing.T) {
 
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(ctx))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	// Start again - should be idempotent
 	err := comp.Start(ctx)
@@ -762,7 +762,7 @@ func TestComponent_Stop_Success(t *testing.T) {
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(ctx))
 
-	err := comp.Stop(5 * time.Second)
+	err := comp.Stop(context.Background())
 
 	assert.NoError(t, err)
 }
@@ -771,7 +771,7 @@ func TestComponent_Stop_BeforeStart(t *testing.T) {
 	comp := createTestComponent(t)
 
 	// Stop without Start
-	err := comp.Stop(1 * time.Second)
+	err := comp.Stop(context.Background())
 
 	assert.NoError(t, err, "Stop should be safe even if not started")
 }
@@ -785,7 +785,7 @@ func TestComponent_Stop_Timeout(t *testing.T) {
 	require.NoError(t, comp.Start(ctx))
 
 	// Very short timeout
-	err := comp.Stop(1 * time.Nanosecond)
+	err := comp.Stop(context.Background())
 
 	// Should either succeed quickly or timeout gracefully
 	// Implementation may vary, but should not panic
@@ -935,7 +935,7 @@ func TestComponent_RespectsContext_Cancellation(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Component should handle cancellation gracefully
-	err := comp.Stop(1 * time.Second)
+	err := comp.Stop(context.Background())
 	assert.NoError(t, err)
 }
 

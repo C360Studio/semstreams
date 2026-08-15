@@ -127,7 +127,10 @@ func (g *Gateway) Start(ctx context.Context) error {
 }
 
 // Stop gracefully stops the HTTP gateway
-func (g *Gateway) Stop(_ time.Duration) error {
+func (g *Gateway) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
 	if !g.running.Load() {
 		return nil
 	}
@@ -135,6 +138,10 @@ func (g *Gateway) Stop(_ time.Duration) error {
 	g.mu.Lock()
 	g.running.Store(false)
 	g.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return errs.WrapTransient(err, "Gateway", "Stop", "caller context ended")
+	}
 
 	return nil
 }

@@ -91,7 +91,7 @@ func TestIntegrationDocumentConsumerReplaysMessagePublishedBeforeStart(t *testin
 	require.NoError(t, err)
 	processor := discoverable.(*Component)
 	require.NoError(t, processor.Start(ctx))
-	t.Cleanup(func() { require.NoError(t, processor.Stop(time.Second)) })
+	t.Cleanup(func() { require.NoError(t, processor.Stop(context.Background())) })
 
 	select {
 	case result := <-delivered:

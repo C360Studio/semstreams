@@ -58,7 +58,7 @@ func TestIntegration_NoGuardConsumerOnEntityStatesAfterStart(t *testing.T) {
 	// Seed one resident entity so the snapshot sweep has real pre-marker work.
 	const seededID = "c360.test.poison.scope.entity.pre"
 	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 
 	// The sweep watcher is stopped inside Start (snapshot-then-stop). Its
 	// ephemeral ordered consumer is deleted asynchronously by the server;
@@ -128,7 +128,7 @@ func TestIntegration_BootSweepInventoriesResidentPoisonRealNATS(t *testing.T) {
 	c := comp.(*Component)
 	require.NoError(t, c.Initialize())
 	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 
 	// Boots with the poison inventoried; queries ready.
 	require.NoError(t, c.ensureEntityQueriesReady())

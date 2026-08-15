@@ -52,13 +52,15 @@ func TestMessageLoggerExplicitSubscriptionContextLivesUntilStop(t *testing.T) {
 		return len(ml.GetMessages()) == 1
 	}, 5*time.Second, 10*time.Millisecond)
 
-	require.ErrorContains(t, ml.Stop(5*time.Second), "injected unsubscribe failure")
+	firstStopErr := ml.Stop(context.Background())
+	require.ErrorContains(t, firstStopErr, "injected unsubscribe failure")
 	require.NoError(t, testClient.Client.Publish(t.Context(), "logger.explicit", []byte(`{"phase":"stopped"}`)))
 	require.NoError(t, testClient.GetNativeConnection().Flush())
 	require.ErrorIs(t, receiveCallbackContextError(t, callbackCompletions), context.Canceled,
 		"Stop must cancel handler context even when unsubscribe must be retried")
 	require.Len(t, ml.GetMessages(), 1, "a stopped logger must not capture later publishes")
-	require.NoError(t, ml.Stop(5*time.Second), "the retained subscription must unsubscribe on retry")
+	require.EqualError(t, ml.Stop(context.Background()), firstStopErr.Error(),
+		"a genuine teardown failure is retained and replayed without repeating the side effect")
 }
 
 type failFirstMessageLoggerUnsubscribe struct {

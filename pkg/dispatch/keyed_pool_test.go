@@ -90,6 +90,29 @@ func TestKeyedPool_ProcessUsesConstructorContext(t *testing.T) {
 	require.NoError(t, p.Stop(stopCtx(t)))
 }
 
+func TestKeyedPool_StopDeadlineCanResumeConstructorOwnedDrain(t *testing.T) {
+	processEntered := make(chan struct{})
+	releaseProcess := make(chan struct{})
+	p, err := NewKeyedPool(context.Background(), KeyedConfig[string]{
+		Lanes: 1, QueueDepth: 1,
+		KeyOf: func(string) string { return "key" },
+		Process: func(context.Context, int, string) error {
+			close(processEntered)
+			<-releaseProcess
+			return nil
+		},
+	}, KeyedDeps{})
+	require.NoError(t, err)
+	require.NoError(t, p.Submit("work"))
+	<-processEntered
+
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	cancelFirst()
+	require.ErrorIs(t, p.Stop(firstCtx), context.Canceled)
+	close(releaseProcess)
+	require.NoError(t, p.Stop(context.Background()))
+}
+
 // --- Config validation (task 1.1) ---
 
 func TestKeyedPool_RejectsNilContext(t *testing.T) {

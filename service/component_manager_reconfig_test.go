@@ -17,10 +17,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/config"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/types"
 	"github.com/stretchr/testify/assert"
@@ -142,7 +142,7 @@ func (c *lifecycleGenerationProbe) Start(context.Context) error {
 	c.startCalls++
 	return nil
 }
-func (c *lifecycleGenerationProbe) Stop(time.Duration) error {
+func (c *lifecycleGenerationProbe) Stop(context.Context) error {
 	c.stopCalls++
 	return c.stopErr
 }
@@ -489,7 +489,7 @@ func TestRecreateUsesAuthoritativeComponentAfterWaitingOnInstanceSequence(t *tes
 	require.NoError(t, cm.recreateComponentWithNewConfig(
 		context.Background(), "sequenced", configs["final"], oldManaged))
 	assert.Equal(t, 1, old.stopCalls)
-	assert.Equal(t, 1, middle.stopCalls, "second replacement must retire the current generation, not stale old pointer")
+	assert.Equal(t, 0, middle.stopCalls, "a replacement generation whose Start was never invoked must not be stopped")
 	assert.Equal(t, 0, final.stopCalls)
 	assert.Same(t, final, cm.registry.Component("sequenced"))
 }
@@ -500,7 +500,7 @@ func TestRemovalUsesAuthoritativeComponentAfterWaitingOnInstanceSequence(t *test
 		context.Background(), "sequenced", configs["middle"], oldManaged))
 	require.NoError(t, cm.stopAndRemoveComponent(context.Background(), "sequenced", oldManaged))
 	assert.Equal(t, 1, old.stopCalls)
-	assert.Equal(t, 1, middle.stopCalls, "removal must stop the current generation, not stale old pointer")
+	assert.Equal(t, 0, middle.stopCalls, "removal must not Stop the current never-started generation")
 	assert.Nil(t, cm.registry.Component("sequenced"))
 	assert.NotContains(t, cm.components, "sequenced")
 }
@@ -509,7 +509,6 @@ func TestReplacementOldStopFailureAbortsCandidateAndRetainsOldGenerationDegraded
 	cm, old, replacement, _, oldManaged, configs := newStaleGenerationTestManager(t)
 	stopErr := errors.New("old generation still draining")
 	old.stopErr = stopErr
-	cm.started.Store(true)
 
 	err := cm.restartComponentWithNewConfig(
 		context.Background(), "sequenced", configs["middle"], oldManaged)
@@ -518,7 +517,7 @@ func TestReplacementOldStopFailureAbortsCandidateAndRetainsOldGenerationDegraded
 	require.ErrorIs(t, err, stopErr)
 	assert.Equal(t, "replacement_aborted_old_retirement_failed", restartFailureAction(err))
 	assert.Equal(t, 0, replacement.startCalls, "replacement candidate must not Start while old retirement is unresolved")
-	assert.Equal(t, 1, replacement.stopCalls, "aborted initialized candidate must be cleaned up")
+	assert.Equal(t, 0, replacement.stopCalls, "aborted candidate whose Start was never invoked must not be stopped")
 	assert.Same(t, old, cm.registry.Component("sequenced"))
 	managed := cm.components["sequenced"]
 	assert.Same(t, old, managed.Component)
@@ -581,11 +580,22 @@ func newStaleGenerationTestManager(t *testing.T) (
 	oldManaged := &component.ManagedComponent{
 		Component: probes["old"], State: component.StateStarted, Config: configs["old"],
 	}
+	startDone := make(chan struct{})
+	close(startDone)
+	_, cancel := context.WithCancel(context.Background())
+	runtime := &componentRuntime{startDone: startDone, startInvoked: true}
+	runtime.generation = lifecyclejoin.NewGeneration(cancel, func() { <-startDone })
 	cm := &ComponentManager{
 		BaseService: NewBaseServiceWithOptions("component-manager", nil),
 		registry:    registry, natsClient: client,
-		components: map[string]*component.ManagedComponent{"sequenced": oldManaged},
+		components: make(map[string]*component.ManagedComponent),
+		runtimes:   make(map[string]*componentRuntime),
 	}
+	startPostBootComponentManager(t, cm)
+	cm.mu.Lock()
+	cm.components["sequenced"] = oldManaged
+	cm.runtimes["sequenced"] = runtime
+	cm.mu.Unlock()
 	return cm, probes["old"], probes["middle"], probes["final"], oldManaged, configs
 }
 

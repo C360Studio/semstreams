@@ -5,6 +5,7 @@ package weatherstation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -62,13 +64,11 @@ type Component struct {
 	logger     *slog.Logger
 	processor  *Processor
 
-	shutdown      chan struct{}
-	done          chan struct{}
 	running       bool
 	startTime     time.Time
 	mu            sync.RWMutex
 	lifecycleMu   sync.Mutex
-	wg            *sync.WaitGroup
+	generation    *lifecyclejoin.Generation
 	subscriptions []*natsclient.Subscription
 
 	messagesProcessed int64
@@ -149,9 +149,6 @@ func NewComponent(
 		natsClient: deps.NATSClient,
 		logger:     deps.GetLogger(),
 		processor:  processor,
-		shutdown:   make(chan struct{}),
-		done:       make(chan struct{}),
-		wg:         &sync.WaitGroup{},
 	}, nil
 }
 
@@ -161,20 +158,38 @@ func (c *Component) Initialize() error {
 }
 
 // Start begins processing messages.
-func (c *Component) Start(ctx context.Context) error {
+func (c *Component) Start(ctx context.Context) (startErr error) {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "WeatherStationComponent", "Start", "context cannot be nil")
+	}
 	c.lifecycleMu.Lock()
 	defer c.lifecycleMu.Unlock()
 
-	if c.running {
+	if c.generation != nil {
 		return errs.WrapFatal(errs.ErrAlreadyStarted, "WeatherStationComponent", "Start", "already running")
 	}
 
 	if c.natsClient == nil {
 		return errs.WrapFatal(errs.ErrMissingConfig, "WeatherStationComponent", "Start", "NATS client required")
 	}
+	runCtx, cancel := context.WithCancel(ctx)
+	generation := lifecyclejoin.NewGeneration(cancel, nil)
+	c.generation = generation
+	started := false
+	defer func() {
+		if !started {
+			rollbackErr := lifecyclejoin.RunPartialStartRollback(func(ctx context.Context) error {
+				return generation.Stop(ctx, nil, c.stopSubscriptions)
+			})
+			if rollbackErr == nil && c.generation == generation {
+				c.generation = nil
+			}
+			startErr = errors.Join(startErr, rollbackErr)
+		}
+	}()
 
 	for _, subject := range c.subjects {
-		sub, err := c.natsClient.Subscribe(ctx, subject, func(ctx context.Context, msg *nats.Msg) {
+		sub, err := c.natsClient.Subscribe(runCtx, subject, func(ctx context.Context, msg *nats.Msg) {
 			c.handleMessage(ctx, msg.Data)
 		})
 		if err != nil {
@@ -188,6 +203,7 @@ func (c *Component) Start(ctx context.Context) error {
 	c.running = true
 	c.startTime = time.Now()
 	c.mu.Unlock()
+	started = true
 
 	c.logger.Info("Weather station processor started",
 		"component", c.name,
@@ -198,41 +214,42 @@ func (c *Component) Start(ctx context.Context) error {
 }
 
 // Stop gracefully stops the component.
-func (c *Component) Stop(timeout time.Duration) error {
+func (c *Component) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
 	c.lifecycleMu.Lock()
-	defer c.lifecycleMu.Unlock()
-
-	if !c.running {
+	generation := c.generation
+	if generation == nil {
+		c.lifecycleMu.Unlock()
 		return nil
 	}
+	c.lifecycleMu.Unlock()
 
-	close(c.shutdown)
-
-	for _, sub := range c.subscriptions {
-		if err := sub.Unsubscribe(); err != nil {
-			c.logger.Warn("Failed to unsubscribe", "error", err)
+	stopErr := generation.Stop(ctx, nil, c.stopSubscriptions)
+	if stopErr == nil {
+		c.lifecycleMu.Lock()
+		if c.generation == generation {
+			c.generation = nil
 		}
+		c.lifecycleMu.Unlock()
+	}
+	return stopErr
+}
+
+func (c *Component) stopSubscriptions(ctx context.Context) error {
+	var drainErr error
+	for _, sub := range c.subscriptions {
+		drainErr = errors.Join(drainErr, sub.Drain(ctx))
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return errors.Join(drainErr, ctxErr)
 	}
 	c.subscriptions = nil
-
-	waitCh := make(chan struct{})
-	go func() {
-		c.wg.Wait()
-		close(waitCh)
-	}()
-
-	select {
-	case <-waitCh:
-	case <-time.After(timeout):
-		return fmt.Errorf("shutdown timeout after %v", timeout)
-	}
-
 	c.mu.Lock()
 	c.running = false
-	close(c.done)
 	c.mu.Unlock()
-
-	return nil
+	return drainErr
 }
 
 // handleMessage processes incoming weather JSON messages.

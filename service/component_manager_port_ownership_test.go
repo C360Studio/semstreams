@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -28,7 +27,7 @@ func (c *exclusiveLifecycleComponent) OutputPorts() []component.Port {
 
 func (c *exclusiveLifecycleComponent) Initialize() error           { return c.initializeErr }
 func (c *exclusiveLifecycleComponent) Start(context.Context) error { return nil }
-func (c *exclusiveLifecycleComponent) Stop(time.Duration) error    { return nil }
+func (c *exclusiveLifecycleComponent) Stop(context.Context) error  { return nil }
 
 func exclusiveComponentConfig(factory string) types.ComponentConfig {
 	return types.ComponentConfig{
@@ -51,7 +50,7 @@ func TestComponentManagerRegistryReleasesExclusiveResourceAfterRemove(t *testing
 	}
 	deps := component.Dependencies{NATSClient: new(natsclient.Client)}
 	require.NoError(t, cm.CreateComponent(context.Background(), "owner", exclusiveComponentConfig("exclusive"), deps))
-	require.NoError(t, cm.RemoveComponent("owner"))
+	require.NoError(t, cm.RemoveComponent(context.Background(), "owner"))
 	require.NoError(t, cm.CreateComponent(context.Background(), "successor", exclusiveComponentConfig("exclusive"), deps),
 		"Registry must release the removed generation's exclusive claim")
 }

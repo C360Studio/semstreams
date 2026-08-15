@@ -83,7 +83,7 @@ func startWriteComponent(
 	require.True(t, ok)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(ctx))
-	t.Cleanup(func() { _ = comp.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = comp.Stop(context.Background()) })
 	return comp
 }
 
@@ -111,7 +111,7 @@ func startWriteComponentWithInputs(
 	require.True(t, ok)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(ctx))
-	t.Cleanup(func() { _ = comp.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = comp.Stop(context.Background()) })
 	return comp
 }
 
@@ -222,7 +222,7 @@ func TestIntegration_OrdinaryInputsWriteIndependentOfLocalName(t *testing.T) {
 	// Stop must tear down every binding, not only whichever Core NATS
 	// subscription happened to be retained last. The durable consumer remains on
 	// the server by design, but its local consume context is stopped.
-	require.NoError(t, comp.Stop(5*time.Second))
+	require.NoError(t, comp.Stop(context.Background()))
 	require.NoError(t, client.Publish(ctx, coreSubjectA, []byte(`{"lane":"stopped-direct"}`)))
 	require.NoError(t, client.Publish(ctx, coreSubjectB, []byte(`{"lane":"stopped-archive"}`)))
 	require.NoError(t, client.PublishToStream(ctx, streamSubject, []byte(`{"lane":"stopped-mapped"}`)))
@@ -271,7 +271,7 @@ func TestIntegration_CollidingJetStreamSubjectsUseDistinctStableConsumers(t *tes
 	waitForConsumerAckFloor(t, ctx, js, streamName, consumerDot, subjectDot, 1)
 	waitForConsumerAckFloor(t, ctx, js, streamName, consumerDash, subjectDash, 1)
 	waitForStoredBodies(t, ctx, js, bucket, wantBodies)
-	require.NoError(t, first.Stop(5*time.Second))
+	require.NoError(t, first.Stop(context.Background()))
 
 	// Reversing declaration order must bind the same subject-derived identities,
 	// then both durable consumers must resume and process new work.
@@ -289,7 +289,7 @@ func TestIntegration_CollidingJetStreamSubjectsUseDistinctStableConsumers(t *tes
 	waitForConsumerAckFloor(t, ctx, js, streamName, consumerDot, subjectDot, 2)
 	waitForConsumerAckFloor(t, ctx, js, streamName, consumerDash, subjectDash, 2)
 	waitForStoredBodies(t, ctx, js, bucket, wantBodies)
-	require.NoError(t, second.Stop(5*time.Second))
+	require.NoError(t, second.Stop(context.Background()))
 }
 
 func waitForConsumerAckFloor(

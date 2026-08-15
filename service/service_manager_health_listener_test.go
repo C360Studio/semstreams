@@ -2,12 +2,54 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
+
+func TestHealthGenerationDoesNotCompleteBeforeServeReturns(t *testing.T) {
+	deps := createTestServiceDependencies(nil)
+	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
+	port := freePort(t)
+	if err := manager.StartHealthListener(context.Background(), port); err != nil {
+		t.Fatalf("StartHealthListener: %v", err)
+	}
+	t.Cleanup(func() { _ = manager.StopHealthListener(context.Background()) })
+	waitForListener(t, fmt.Sprintf("http://127.0.0.1:%d/healthz", port), 10*time.Second)
+
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancelWait()
+	err := manager.healthGeneration.Stop(waitCtx, nil, nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("generation Stop before Serve return = %v, want deadline exceeded", err)
+	}
+
+	if err := manager.StopHealthListener(context.Background()); err != nil {
+		t.Fatalf("StopHealthListener: %v", err)
+	}
+}
+
+func TestManagerHTTPGenerationDoesNotCompleteBeforeServeReturns(t *testing.T) {
+	deps := createTestServiceDependencies(nil)
+	port := freePort(t)
+	manager := createTestServiceManager(ManagerConfig{HTTPPort: port}, deps)
+	require.NoError(t, manager.initializeHTTPInfrastructure())
+	require.NoError(t, manager.completeHTTPSetup(t.Context()))
+	t.Cleanup(func() { _ = manager.stopRuntimeServers(context.Background()) })
+	waitForListener(t, fmt.Sprintf("http://127.0.0.1:%d/healthz", port), 10*time.Second)
+
+	waitCtx, cancelWait := context.WithTimeout(t.Context(), 25*time.Millisecond)
+	defer cancelWait()
+	err := manager.serverGeneration.Stop(waitCtx, nil, nil)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	require.NoError(t, manager.stopRuntimeServers(t.Context()))
+}
 
 // TestStartHealthListener_BindsHealthAndHealthz verifies that
 // StartHealthListener binds /health and /healthz on the requested port
@@ -24,11 +66,11 @@ func TestStartHealthListener_BindsHealthAndHealthz(t *testing.T) {
 	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
 
 	port := freePort(t)
-	if err := manager.StartHealthListener(port); err != nil {
-		t.Fatalf("StartHealthListener(%d) error = %v", port, err)
+	if err := manager.StartHealthListener(context.Background(), port); err != nil {
+		t.Fatalf("StartHealthListener(context.Background(), %d) error = %v", port, err)
 	}
 	t.Cleanup(func() {
-		if err := manager.StopHealthListener(); err != nil {
+		if err := manager.StopHealthListener(context.Background()); err != nil {
 			t.Errorf("StopHealthListener cleanup error = %v", err)
 		}
 	})
@@ -86,14 +128,14 @@ func TestStartHealthListener_ZeroIsNoOp(t *testing.T) {
 	deps := createTestServiceDependencies(nil)
 	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
 
-	if err := manager.StartHealthListener(0); err != nil {
-		t.Errorf("StartHealthListener(0) error = %v, want nil (no-op)", err)
+	if err := manager.StartHealthListener(context.Background(), 0); err != nil {
+		t.Errorf("StartHealthListener(context.Background(), 0) error = %v, want nil (no-op)", err)
 	}
 	if manager.healthServer != nil {
 		t.Error("healthServer should remain nil when port is 0")
 	}
 	// Stop should also be a no-op when no listener was started.
-	if err := manager.StopHealthListener(); err != nil {
+	if err := manager.StopHealthListener(context.Background()); err != nil {
 		t.Errorf("StopHealthListener with no listener error = %v, want nil", err)
 	}
 }
@@ -113,12 +155,12 @@ func TestStartHealthListener_DoubleStartErrors(t *testing.T) {
 	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
 
 	port := freePort(t)
-	if err := manager.StartHealthListener(port); err != nil {
+	if err := manager.StartHealthListener(context.Background(), port); err != nil {
 		t.Fatalf("first StartHealthListener error = %v", err)
 	}
-	t.Cleanup(func() { _ = manager.StopHealthListener() })
+	t.Cleanup(func() { _ = manager.StopHealthListener(context.Background()) })
 
-	if err := manager.StartHealthListener(port); err == nil {
+	if err := manager.StartHealthListener(context.Background(), port); err == nil {
 		t.Error("second StartHealthListener should error; got nil")
 	}
 }
@@ -135,8 +177,8 @@ func TestStopAll_TearsDownHealthListener(t *testing.T) {
 	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
 
 	port := freePort(t)
-	if err := manager.StartHealthListener(port); err != nil {
-		t.Fatalf("StartHealthListener(%d) error = %v", port, err)
+	if err := manager.StartHealthListener(context.Background(), port); err != nil {
+		t.Fatalf("StartHealthListener(context.Background(), %d) error = %v", port, err)
 	}
 
 	// Sanity: listener is up before shutdown.
@@ -146,7 +188,7 @@ func TestStopAll_TearsDownHealthListener(t *testing.T) {
 
 	// StopAll is the production shutdown entry point. It must tear
 	// down the dedicated health listener as part of its sequence.
-	if err := manager.StopAll(5 * time.Second); err != nil {
+	if err := manager.StopAll(context.Background()); err != nil {
 		t.Fatalf("StopAll error = %v", err)
 	}
 

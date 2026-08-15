@@ -113,6 +113,9 @@ func NewFlowServiceFromConfig(rawConfig json.RawMessage, deps *Dependencies) (Se
 
 // Start starts the flow service
 func (fs *FlowService) Start(ctx context.Context) error {
+	if err := validateLifecycleContext(ctx, "FlowService", "Start"); err != nil {
+		return err
+	}
 	// Set health check
 	fs.SetHealthCheck(func() error {
 		return nil // Always healthy for now
@@ -238,9 +241,12 @@ func (fs *FlowService) ensureDefaultFlowFromConfig(ctx context.Context) error {
 }
 
 // Stop stops the flow service
-func (fs *FlowService) Stop(timeout time.Duration) error {
+func (fs *FlowService) Stop(ctx context.Context) error {
+	if err := validateLifecycleContext(ctx, "FlowService", "Stop"); err != nil {
+		return err
+	}
 	fs.logger.Info("Flow service stopped")
-	return fs.BaseService.Stop(timeout)
+	return fs.BaseService.Stop(ctx)
 }
 
 // RegisterHTTPHandlers registers HTTP endpoints for the flow service

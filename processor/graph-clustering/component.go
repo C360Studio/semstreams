@@ -23,6 +23,7 @@ import (
 	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/graph/structural"
 	"github.com/c360studio/semstreams/internal/graphmutation"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
@@ -641,7 +642,7 @@ type Component struct {
 	initialized bool
 	startTime   time.Time
 	wg          sync.WaitGroup
-	cancel      context.CancelFunc
+	generation  *lifecyclejoin.Generation
 
 	// Metrics (atomic)
 	messagesProcessed int64
@@ -915,16 +916,15 @@ func (c *Component) Initialize() error {
 
 // Start begins processing (must be initialized first)
 func (c *Component) Start(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Validate context
+	// Validate before inspecting lifecycle state.
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "Start", "context cannot be nil")
 	}
 	if err := ctx.Err(); err != nil {
 		return errs.WrapInvalid(err, "Component", "Start", "context already cancelled")
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	// Check initialization
 	if !c.initialized {
@@ -938,7 +938,6 @@ func (c *Component) Start(ctx context.Context) error {
 
 	// Create cancellable context
 	ctx, cancel := context.WithCancel(ctx)
-	c.cancel = cancel
 
 	// Check context before proceeding
 	if err := ctx.Err(); err != nil {
@@ -1053,6 +1052,7 @@ func (c *Component) Start(ctx context.Context) error {
 		c.wg.Add(1)
 		go c.runDetectionLoop(ctx)
 	}
+	c.generation = lifecyclejoin.NewGeneration(cancel, c.wg.Wait)
 
 	c.logger.Info("component started",
 		slog.String("component", "graph-clustering"),
@@ -1065,90 +1065,62 @@ func (c *Component) Start(ctx context.Context) error {
 }
 
 // Stop gracefully shuts down the component
-func (c *Component) Stop(timeout time.Duration) error {
+func (c *Component) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
+	}
 	c.mu.Lock()
-
-	if !c.running {
+	generation := c.generation
+	if generation == nil {
 		c.mu.Unlock()
 		return nil // Already stopped
 	}
 
-	// Unsubscribe from query handlers
-	for _, sub := range c.querySubscriptions {
-		if sub != nil {
-			if err := sub.Unsubscribe(); err != nil {
-				c.logger.Warn("query subscription unsubscribe error", slog.Any("error", err))
-			}
-		}
-	}
-	c.querySubscriptions = nil
-
-	// Stop review worker if running
-	if c.reviewWorker != nil {
-		if err := c.reviewWorker.Stop(); err != nil {
-			c.logger.Warn("review worker stop error", slog.Any("error", err))
-		}
-	}
-
-	// Stop enhancement worker if running
-	if c.enhancementWorker != nil {
-		if err := c.enhancementWorker.Stop(); err != nil {
-			c.logger.Warn("enhancement worker stop error", slog.Any("error", err))
-		}
-	}
-
-	// Close LLM client if present
-	if c.llmClient != nil {
-		if err := c.llmClient.Close(); err != nil {
-			c.logger.Warn("LLM client close error", slog.Any("error", err))
-		}
-	}
-
-	// Close the dedicated review LLM client if distinct from the shared one.
-	if c.reviewLLMClient != nil {
-		if err := c.reviewLLMClient.Close(); err != nil {
-			c.logger.Warn("review LLM client close error", slog.Any("error", err))
-		}
-	}
-
-	// Cancel context
-	if c.cancel != nil {
-		c.cancel()
-	}
-
-	// Detach the readiness watchers under the lock but join them after unlocking:
-	// Stop blocks until the watch goroutine exits, and a stopped Watcher cannot be
-	// restarted, so the next Start builds fresh ones.
-	statusWatcher := c.statusWatcher
-	c.statusWatcher = nil
-	embeddingStatusWatcher := c.embeddingStatusWatcher
-	c.embeddingStatusWatcher = nil
-
-	c.running = false
 	c.mu.Unlock()
 
-	if statusWatcher != nil {
-		statusWatcher.Stop()
-	}
-	if embeddingStatusWatcher != nil {
-		embeddingStatusWatcher.Stop()
-	}
-
-	// Wait for goroutines with timeout
-	done := make(chan struct{})
-	go func() {
-		c.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
+	return generation.Stop(ctx, func() error {
+		var stopErr error
+		for _, sub := range c.querySubscriptions {
+			if sub != nil {
+				if err := sub.Unsubscribe(); err != nil {
+					c.logger.Warn("query subscription unsubscribe error", slog.Any("error", err))
+					stopErr = errors.Join(stopErr, err)
+				}
+			}
+		}
+		c.querySubscriptions = nil
+		if c.reviewWorker != nil {
+			stopErr = errors.Join(stopErr, c.reviewWorker.Stop())
+		}
+		if c.enhancementWorker != nil {
+			stopErr = errors.Join(stopErr, c.enhancementWorker.Stop())
+		}
+		if c.llmClient != nil {
+			stopErr = errors.Join(stopErr, c.llmClient.Close())
+		}
+		if c.reviewLLMClient != nil {
+			stopErr = errors.Join(stopErr, c.reviewLLMClient.Close())
+		}
+		c.mu.Lock()
+		statusWatcher := c.statusWatcher
+		c.statusWatcher = nil
+		embeddingStatusWatcher := c.embeddingStatusWatcher
+		c.embeddingStatusWatcher = nil
+		c.mu.Unlock()
+		if statusWatcher != nil {
+			statusWatcher.Stop()
+		}
+		if embeddingStatusWatcher != nil {
+			embeddingStatusWatcher.Stop()
+		}
+		return stopErr
+	}, func(context.Context) error {
+		c.mu.Lock()
+		c.running = false
+		c.mu.Unlock()
 		c.logger.Info("component stopped gracefully", slog.String("component", "graph-clustering"))
 		return nil
-	case <-time.After(timeout):
-		c.logger.Warn("component stop timed out", slog.String("component", "graph-clustering"))
-		return errs.WrapTransient(errors.New("timeout"), "Component", "Stop", "graceful shutdown timeout")
-	}
+	})
 }
 
 // waitForDependencies waits for all required KV buckets and stores references.

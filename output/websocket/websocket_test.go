@@ -300,7 +300,7 @@ func TestWebSocketOutput_RaceConditions(t *testing.T) {
 	if err := ws.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer ws.Stop(5 * time.Second)
+	defer ws.Stop(context.Background())
 
 	// Give server time to start
 	time.Sleep(100 * time.Millisecond)
@@ -377,7 +377,7 @@ func TestWebSocketOutput_ConcurrentClients(t *testing.T) {
 	if err := ws.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer ws.Stop(5 * time.Second)
+	defer ws.Stop(context.Background())
 
 	// Give server time to start
 	time.Sleep(100 * time.Millisecond)
@@ -474,7 +474,7 @@ func TestWebSocketOutput_DoubleClose(t *testing.T) {
 	if err := ws.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer ws.Stop(5 * time.Second)
+	defer ws.Stop(context.Background())
 
 	// Give server time to start
 	time.Sleep(100 * time.Millisecond)
@@ -557,7 +557,7 @@ func TestWebSocketOutput_AtomicCleanup(t *testing.T) {
 	if err := ws.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer ws.Stop(5 * time.Second)
+	defer ws.Stop(context.Background())
 
 	// Give server time to start
 	time.Sleep(100 * time.Millisecond)
@@ -631,7 +631,7 @@ func TestWebSocketOutput_Lifecycle(t *testing.T) {
 	// We expect this to fail due to no real NATS connection, which is fine for this test
 
 	// Test Stop
-	err = ws.Stop(5 * time.Second)
+	err = ws.Stop(context.Background())
 	if err != nil {
 		t.Errorf("Stop() failed: %v", err)
 	}
@@ -948,7 +948,7 @@ func TestWebSocketOutput_SpecificErrorCases(t *testing.T) {
 			}
 
 			// Ensure component can be cleaned up
-			ws.Stop(5 * time.Second)
+			ws.Stop(context.Background())
 		})
 	}
 }
@@ -962,7 +962,7 @@ func TestWebSocketOutput_ConcurrentClientHandling(t *testing.T) {
 	defer cancel()
 
 	require.NoError(t, ws.Start(ctx))
-	defer ws.Stop(5 * time.Second)
+	defer ws.Stop(context.Background())
 
 	// Give server time to start
 	time.Sleep(100 * time.Millisecond)
@@ -1033,7 +1033,7 @@ func TestWebSocketOutput_MemoryStability(t *testing.T) {
 		broadcastCtx := context.Background()
 		ws.broadcastToClients(broadcastCtx, "test.subject", testData)
 
-		_ = ws.Stop(5 * time.Second)
+		_ = ws.Stop(context.Background())
 		cancel()
 
 		// Periodic cleanup
@@ -1095,7 +1095,7 @@ func TestWebSocketOutput_StateTransitions(t *testing.T) {
 				case "Start":
 					err = ws.Start(ctx)
 				case "Stop":
-					err = ws.Stop(5 * time.Second)
+					err = ws.Stop(context.Background())
 				}
 
 				cancel()
@@ -1112,7 +1112,7 @@ func TestWebSocketOutput_StateTransitions(t *testing.T) {
 			}
 
 			// Always ensure clean shutdown
-			ws.Stop(5 * time.Second)
+			ws.Stop(context.Background())
 		})
 	}
 }
@@ -1140,7 +1140,7 @@ func TestWebSocketOutput_BroadcastStress(t *testing.T) {
 	defer cancel()
 
 	require.NoError(t, ws.Start(ctx))
-	defer ws.Stop(5 * time.Second)
+	defer ws.Stop(context.Background())
 
 	const numBroadcasts = 1000
 
@@ -1225,7 +1225,7 @@ func TestWebSocketOutput_MessageEnvelope(t *testing.T) {
 	defer cancel()
 
 	require.NoError(t, ws.Start(ctx))
-	defer ws.Stop(5 * time.Second)
+	defer ws.Stop(context.Background())
 
 	time.Sleep(100 * time.Millisecond) // Allow server to start
 
@@ -1304,7 +1304,7 @@ func TestWebSocketOutput_DeliveryModes(t *testing.T) {
 			assert.Equal(t, tt.deliveryMode, ws.deliveryMode)
 			assert.Equal(t, tt.ackTimeout, ws.ackTimeout)
 
-			ws.Stop(1 * time.Second)
+			ws.Stop(context.Background())
 		})
 	}
 }
@@ -1353,7 +1353,7 @@ func TestWebSocketOutput_PendingBufferCreation(t *testing.T) {
 	defer cancel()
 
 	require.NoError(t, ws.Start(ctx))
-	defer ws.Stop(5 * time.Second)
+	defer ws.Stop(context.Background())
 
 	time.Sleep(100 * time.Millisecond)
 

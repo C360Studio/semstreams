@@ -107,7 +107,7 @@ func TestHotReload_SeedIdempotency(t *testing.T) {
 	proc := buildHotReloadProcessor(t, tc.Client)
 	// Start so ruleConfigs is populated.
 	require.NoError(t, proc.Start(ctx))
-	defer proc.Stop(5 * time.Second) //nolint:errcheck
+	defer proc.Stop(context.Background()) //nolint:errcheck
 
 	rcm := NewConfigManager(proc, nil, nil)
 	require.NoError(t, rcm.InitializeKVStore(tc.Client))
@@ -139,7 +139,7 @@ func TestHotReload_SeedRespectsOperatorEdits(t *testing.T) {
 
 	proc := buildHotReloadProcessor(t, tc.Client)
 	require.NoError(t, proc.Start(ctx))
-	defer proc.Stop(5 * time.Second) //nolint:errcheck
+	defer proc.Stop(context.Background()) //nolint:errcheck
 
 	rcm := NewConfigManager(proc, nil, nil)
 	require.NoError(t, rcm.InitializeKVStore(tc.Client))
@@ -178,7 +178,7 @@ func TestHotReload_ReconcileFromKV(t *testing.T) {
 
 	proc := buildHotReloadProcessor(t, tc.Client)
 	require.NoError(t, proc.Start(ctx))
-	defer proc.Stop(5 * time.Second) //nolint:errcheck
+	defer proc.Stop(context.Background()) //nolint:errcheck
 
 	rcm := NewConfigManager(proc, nil, nil)
 	require.NoError(t, rcm.InitializeKVStore(tc.Client))
@@ -229,7 +229,7 @@ func TestHotReload_WatcherPicksUpNewRule(t *testing.T) {
 
 	proc := buildHotReloadProcessor(t, tc.Client)
 	require.NoError(t, proc.Start(ctx))
-	defer proc.Stop(5 * time.Second) //nolint:errcheck
+	defer proc.Stop(context.Background()) //nolint:errcheck
 
 	// Allow the hot-reload watcher to settle (seed + initial snapshot).
 	time.Sleep(400 * time.Millisecond)
@@ -267,7 +267,7 @@ func TestHotReload_WatcherPicksUpNewRule(t *testing.T) {
 	// Stop and assert the watcher goroutine exits cleanly (Stop waits via WaitGroup).
 	doneCh := make(chan struct{})
 	go func() {
-		proc.Stop(5 * time.Second) //nolint:errcheck
+		proc.Stop(context.Background()) //nolint:errcheck
 		close(doneCh)
 	}()
 	select {
@@ -298,7 +298,7 @@ func TestHotReload_DebounceCoalescing(t *testing.T) {
 
 	proc := buildHotReloadProcessor(t, tc.Client)
 	require.NoError(t, proc.Start(ctx))
-	defer proc.Stop(5 * time.Second) //nolint:errcheck
+	defer proc.Stop(context.Background()) //nolint:errcheck
 
 	rcm := NewConfigManager(proc, nil, nil)
 	require.NoError(t, rcm.InitializeKVStore(tc.Client))

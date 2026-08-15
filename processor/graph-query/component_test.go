@@ -242,7 +242,7 @@ func TestGraphQueryStartRegistersStableLocalSearchResponder(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	t.Cleanup(func() { require.NoError(t, comp.Stop(time.Second)) })
+	t.Cleanup(func() { require.NoError(t, comp.Stop(context.Background())) })
 
 	require.Len(t, mockClient.handlers, 16)
 	handler, ok := mockClient.handlers["graph.query.localSearch"]
@@ -373,7 +373,7 @@ func TestComponent_Start_Success(t *testing.T) {
 
 	require.NoError(t, comp.Initialize())
 	err := comp.Start(ctx)
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	assert.NoError(t, err)
 }
@@ -394,7 +394,7 @@ func TestComponent_Start_AlreadyStarted(t *testing.T) {
 
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(ctx))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	// Start again - should be idempotent
 	err := comp.Start(ctx)
@@ -409,7 +409,7 @@ func TestComponent_Stop_Success(t *testing.T) {
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(ctx))
 
-	err := comp.Stop(5 * time.Second)
+	err := comp.Stop(context.Background())
 
 	assert.NoError(t, err)
 }
@@ -418,7 +418,7 @@ func TestComponent_Stop_BeforeStart(t *testing.T) {
 	comp := createTestComponent(t)
 
 	// Stop without Start
-	err := comp.Stop(1 * time.Second)
+	err := comp.Stop(context.Background())
 
 	assert.NoError(t, err, "Stop should be safe even if not started")
 }
@@ -520,7 +520,7 @@ func TestComponent_QueryEntity_PassthroughSuccess(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 	queryData := []byte(`{"id":"acme.ops.test.system.widget.001"}`)
@@ -542,7 +542,7 @@ func TestComponent_QueryEntity_ComponentUnavailable(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 	queryData := []byte(`{"id":"test.fixture.graph.query.entity.001"}`)
@@ -560,7 +560,7 @@ func TestComponent_QueryEntity_InvalidRequest(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 	invalidData := []byte(`{invalid json}`)
@@ -592,7 +592,7 @@ func TestComponent_QueryRelationships_TransformSuccess(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 	queryData := []byte(`{"entity_id":"test.fixture.graph.query.entity.001"}`)
@@ -640,7 +640,7 @@ func TestComponent_PathSearch_SimpleTraversal(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.001","max_depth":2}`)
@@ -701,7 +701,7 @@ func TestComponent_PathSearch_MaxDepthEnforced(t *testing.T) {
 	comp.config.MaxDepth = 3 // Override default
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.001","max_depth":3}`)
@@ -741,7 +741,7 @@ func TestComponent_PathSearch_ContextCancellation(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	// Cancel context immediately
 	ctx, cancel := context.WithCancel(context.Background())
@@ -768,7 +768,7 @@ func TestComponent_PathSearch_Timeout(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -794,7 +794,7 @@ func TestComponent_PathSearch_StartEntityNotFound(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.absent","max_depth":2}`)
@@ -838,7 +838,7 @@ func TestComponent_PathSearch_CyclicGraph(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.001","max_depth":10}`)
@@ -880,7 +880,7 @@ func TestComponent_RespectsContext_Cancellation(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Component should handle cancellation gracefully
-	err := comp.Stop(1 * time.Second)
+	err := comp.Stop(context.Background())
 	assert.NoError(t, err)
 }
 
@@ -982,7 +982,7 @@ func TestComponent_PathSearch_DirectionIncoming(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.002","max_depth":2,"direction":"incoming"}`)
@@ -1038,7 +1038,7 @@ func TestComponent_PathSearch_DirectionBoth(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.002","max_depth":2,"direction":"both"}`)
@@ -1093,7 +1093,7 @@ func TestComponent_PathSearch_PredicateFilter_Single(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 	// Filter to only "graph.community.member-of" predicate
@@ -1148,7 +1148,7 @@ func TestComponent_PathSearch_PredicateFilter_NoMatch(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 	// Filter to predicate that doesn't exist
@@ -1207,7 +1207,7 @@ func TestComponent_PathSearch_MaxPathsLimit(t *testing.T) {
 	comp := createTestComponentWithMockClient(t, mockClient)
 	require.NoError(t, comp.Initialize())
 	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(1 * time.Second)
+	defer comp.Stop(context.Background())
 
 	ctx := context.Background()
 	// Limit to 3 paths (start + 2 more)

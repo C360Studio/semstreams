@@ -1033,7 +1033,7 @@ func TestFactory_FullProductionWire(t *testing.T) {
 	if err := comp.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer func() { _ = comp.Stop(0) }()
+	defer func() { _ = comp.Stop(context.Background()) }()
 
 	mux := http.NewServeMux()
 	comp.RegisterHTTPHandlers("/wire", mux)

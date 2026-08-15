@@ -46,7 +46,7 @@ func TestWebSocketFederation_AckFlow(t *testing.T) {
 
 	require.NoError(t, wsOutput.Initialize())
 	require.NoError(t, wsOutput.Start(ctx))
-	defer wsOutput.Stop(5 * time.Second)
+	defer wsOutput.Stop(context.Background())
 
 	// Wait for Output server to start
 	time.Sleep(200 * time.Millisecond)
@@ -70,7 +70,7 @@ func TestWebSocketFederation_AckFlow(t *testing.T) {
 
 	require.NoError(t, wsInput.Initialize())
 	require.NoError(t, wsInput.Start(ctx))
-	defer wsInput.Stop(5 * time.Second)
+	defer wsInput.Stop(context.Background())
 
 	// Wait for Input client to connect to Output server
 	time.Sleep(500 * time.Millisecond)
@@ -152,7 +152,7 @@ func TestWebSocketFederation_NackFlow(t *testing.T) {
 
 	require.NoError(t, wsOutput.Initialize())
 	require.NoError(t, wsOutput.Start(ctx))
-	defer wsOutput.Stop(5 * time.Second)
+	defer wsOutput.Stop(context.Background())
 
 	// Wait for Output server to start
 	time.Sleep(200 * time.Millisecond)
@@ -176,7 +176,7 @@ func TestWebSocketFederation_NackFlow(t *testing.T) {
 
 	require.NoError(t, wsInput.Initialize())
 	require.NoError(t, wsInput.Start(ctx))
-	defer wsInput.Stop(5 * time.Second)
+	defer wsInput.Stop(context.Background())
 
 	// Wait for connection
 	time.Sleep(500 * time.Millisecond)
@@ -250,7 +250,7 @@ func TestWebSocketFederation_MessageEnvelopeProtocol(t *testing.T) {
 
 	require.NoError(t, wsOutput.Initialize())
 	require.NoError(t, wsOutput.Start(ctx))
-	defer wsOutput.Stop(5 * time.Second)
+	defer wsOutput.Stop(context.Background())
 
 	// Wait for server to start
 	time.Sleep(200 * time.Millisecond)
@@ -362,7 +362,7 @@ func TestWebSocketFederation_PassthroughPreservesBytes(t *testing.T) {
 
 			require.NoError(t, wsOutput.Initialize())
 			require.NoError(t, wsOutput.Start(ctx))
-			defer wsOutput.Stop(5 * time.Second)
+			defer wsOutput.Stop(context.Background())
 
 			time.Sleep(200 * time.Millisecond)
 
@@ -468,7 +468,7 @@ func TestWebSocketOutput_PingSerializesWithFrameWrites(t *testing.T) {
 
 	require.NoError(t, wsOutput.Initialize())
 	require.NoError(t, wsOutput.Start(ctx))
-	defer wsOutput.Stop(5 * time.Second)
+	defer wsOutput.Stop(context.Background())
 
 	time.Sleep(200 * time.Millisecond)
 

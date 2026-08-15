@@ -8,7 +8,6 @@ import (
 	"io"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/natsclient"
@@ -46,7 +45,7 @@ type stopObservingProvider struct {
 	stopped bool
 }
 
-func (p *stopObservingProvider) Stop(time.Duration) error {
+func (p *stopObservingProvider) Stop(context.Context) error {
 	p.stopped = true
 	if p.onStop == nil {
 		return nil
@@ -74,7 +73,9 @@ func provider(instance string) *storeProviderComponent {
 // StateStarted (the liveness precondition registerProvidedStores enforces)
 // before its stores are registered.
 func registerStarted(cm *ComponentManager, name string, comp component.Discoverable) error {
+	cm.mu.Lock()
 	cm.components[name] = &component.ManagedComponent{Component: comp, State: component.StateStarted}
+	cm.mu.Unlock()
 	return cm.registerProvidedStores(name, comp)
 }
 
@@ -143,7 +144,7 @@ func TestStopLifecycleComponent_DeregistersBeforeProviderStop(t *testing.T) {
 		t.Fatalf("register provider: %v", err)
 	}
 
-	if err := cm.stopLifecycleComponent(context.Background(), "objectstore", provider); err != nil {
+	if err := cm.stopLifecycleComponent(context.Background(), "objectstore", nil, provider); err != nil {
 		t.Fatalf("stop lifecycle provider: %v", err)
 	}
 }
@@ -277,8 +278,7 @@ func TestDynamicProviderDuplicateFailsAndRemainsVisible(t *testing.T) {
 		t.Fatalf("new NATS client: %v", err)
 	}
 	cm.natsClient = client
-	cm.started.Store(true)
-	cm.initialized.Store(true)
+	startPostBootComponentManager(t, cm)
 
 	incumbentStore := &fakeStreamable{id: "incumbent"}
 	incumbent := &barrierStoreProvider{
@@ -344,9 +344,6 @@ func TestDynamicProviderDuplicateFailsAndRemainsVisible(t *testing.T) {
 	if !rivalComp.stopped {
 		t.Fatal("dynamic rejected rival lifecycle Stop was not called")
 	}
-	if cm.components["rival"].Cancel != nil {
-		t.Fatal("dynamic rejected rival component cancellation handle was not cleared")
-	}
 	select {
 	case <-rivalComp.startReturned:
 	default:
@@ -368,8 +365,7 @@ func TestRestartedProviderDuplicateLeavesAdmittedReplacementFailed(t *testing.T)
 		t.Fatalf("new NATS client: %v", err)
 	}
 	cm.natsClient = client
-	cm.started.Store(true)
-	cm.initialized.Store(true)
+	startPostBootComponentManager(t, cm)
 
 	incumbentStore := &fakeStreamable{id: "incumbent"}
 	incumbent := &barrierStoreProvider{
@@ -392,11 +388,13 @@ func TestRestartedProviderDuplicateLeavesAdmittedReplacementFailed(t *testing.T)
 		Enabled: true,
 		Config:  json.RawMessage(`{"version":"old"}`),
 	}
+	cm.mu.Lock()
 	cm.components["rival"] = &component.ManagedComponent{
 		Component: old,
 		State:     component.StateStarted,
 		Config:    oldCfg,
 	}
+	cm.mu.Unlock()
 	if err := cm.registerProvidedStores("rival", old); err != nil {
 		t.Fatalf("register old rival store: %v", err)
 	}
@@ -469,9 +467,6 @@ func TestRestartedProviderDuplicateLeavesAdmittedReplacementFailed(t *testing.T)
 	}
 	if !rivalComp.stopped {
 		t.Fatal("restarted rejected rival lifecycle Stop was not called")
-	}
-	if cm.components["rival"].Cancel != nil {
-		t.Fatal("restarted rejected rival component cancellation handle was not cleared")
 	}
 	if _, ok := cm.storeRegistry.Streamable("rival-old"); ok {
 		t.Fatal("restart left the old provider registered after teardown")

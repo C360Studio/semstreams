@@ -302,7 +302,7 @@ func TestStorageObservabilityReadiness_IsUnmovedByCriticalPressure(t *testing.T)
 	// covered by the integration test. What is under test here is the gate.
 	require.NoError(t, svc.BaseService.Start(context.Background()))
 	svc.BaseService.performHealthCheck()
-	t.Cleanup(func() { _ = svc.BaseService.Stop(time.Second) })
+	t.Cleanup(func() { _ = svc.BaseService.Stop(context.Background()) })
 
 	manager := NewServiceManager(NewServiceRegistry())
 	manager.RegisterInstance(StorageObservabilityServiceName, svc)

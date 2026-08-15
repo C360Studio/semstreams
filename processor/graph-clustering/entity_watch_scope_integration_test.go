@@ -94,7 +94,7 @@ func TestIntegration_ClusteringHoldsNoEntityStatesWatcher(t *testing.T) {
 	clusteringComp := comp.(*Component)
 	require.NoError(t, clusteringComp.Initialize())
 	require.NoError(t, clusteringComp.Start(ctx))
-	defer clusteringComp.Stop(5 * time.Second)
+	defer clusteringComp.Stop(context.Background())
 
 	require.Equal(t, 0, consumerCount(),
 		"clustering must hold no ENTITY_STATES watcher after Start")

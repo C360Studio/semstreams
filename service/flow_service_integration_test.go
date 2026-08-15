@@ -110,7 +110,7 @@ func (s *FlowServiceHTTPSuite) TearDownTest() {
 		s.httpServer.Close()
 	}
 	if s.flowService != nil {
-		s.flowService.Stop(5 * time.Second)
+		s.flowService.Stop(context.Background())
 	}
 	if s.configMgr != nil {
 		s.configMgr.Stop(5 * time.Second)

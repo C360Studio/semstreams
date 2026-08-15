@@ -85,7 +85,7 @@ func startIngestForReadiness(ctx context.Context, t *testing.T) (*natsclient.Tes
 	// vacuously.
 	registerMergeTestPayload(t, c)
 	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(5 * time.Second) })
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 	return tc, c
 }
 
@@ -179,7 +179,7 @@ func TestIntegration_ReadinessEnvelope_BacklogIsNotReady(t *testing.T) {
 	require.NoError(t, c.Initialize())
 	registerMergeTestPayload(t, c)
 	require.NoError(t, c.Start(ctx))
-	defer func() { _ = c.Stop(5 * time.Second) }()
+	defer func() { _ = c.Stop(context.Background()) }()
 
 	// FIRST assert the not-ready window this test is named for. Without it the test
 	// only proved eventual readiness plus a non-zero scope — the gh#732 case — while
@@ -256,7 +256,7 @@ func TestIntegration_ReadinessEnvelope_NoStreamingPortIsHonestlyCaughtUp(t *test
 	require.NoError(t, c.Initialize())
 	registerMergeTestPayload(t, c)
 	require.NoError(t, c.Start(ctx))
-	defer func() { _ = c.Stop(5 * time.Second) }()
+	defer func() { _ = c.Stop(context.Background()) }()
 
 	require.Eventually(t, func() bool {
 		status, _, ok := tryReadEnvelope(ctx, t, tc)
@@ -338,7 +338,7 @@ func TestIntegration_ReadyImpliesTheWritesAreDurable(t *testing.T) {
 	require.NoError(t, c.Initialize())
 	registerMergeTestPayload(t, c)
 	require.NoError(t, c.Start(ctx))
-	defer func() { _ = c.Stop(5 * time.Second) }()
+	defer func() { _ = c.Stop(context.Background()) }()
 
 	bucket, err := tc.GetKVBucket(ctx, graph.BucketEntityStates)
 	require.NoError(t, err)
