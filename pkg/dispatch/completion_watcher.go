@@ -31,7 +31,6 @@ type completionWatcher[W any] struct {
 	onComplete func(ctx context.Context, work W) error
 	logger     *slog.Logger
 
-	ctx    context.Context
 	cancel context.CancelFunc
 
 	mu       sync.RWMutex
@@ -52,22 +51,20 @@ type completionWatcherConfig[W any] struct {
 // goroutine, and returns the live watcher ready for track calls.
 // Returns an error if the bucket can't be opened.
 //
-// The watcher's lifecycle is tied to its own internal context (not
-// the parent ctx) so Stop() can cancel cleanly without leaking.
-// The parent ctx is used only for the initial bucket resolution.
+// The watcher's lifecycle is derived from the caller's context so
+// caller cancellation and Stop both terminate the watcher cleanly.
 func newCompletionWatcher[W any](ctx context.Context, cfg completionWatcherConfig[W]) (*completionWatcher[W], error) {
 	bucket, err := cfg.natsClient.GetKeyValueBucket(ctx, cfg.bucket)
 	if err != nil {
 		return nil, fmt.Errorf("open KV bucket %q: %w", cfg.bucket, err)
 	}
 
-	watcherCtx, cancel := context.WithCancel(context.Background())
+	watcherCtx, cancel := context.WithCancel(ctx)
 	w := &completionWatcher[W]{
 		bucket:     bucket,
 		keyFor:     cfg.keyFor,
 		onComplete: cfg.onComplete,
 		logger:     cfg.logger,
-		ctx:        watcherCtx,
 		cancel:     cancel,
 		inFlight:   make(map[string]W),
 	}
@@ -83,7 +80,7 @@ func newCompletionWatcher[W any](ctx context.Context, cfg completionWatcherConfi
 	}
 
 	w.wg.Add(1)
-	go w.run(kvWatcher)
+	go w.run(watcherCtx, kvWatcher)
 	return w, nil
 }
 
@@ -110,13 +107,13 @@ func (w *completionWatcher[W]) forget(work W) {
 // looks up each one in the in-flight map, fires OnComplete for
 // matches. Exits when ctx is canceled or the watcher channel
 // closes.
-func (w *completionWatcher[W]) run(kvWatcher jetstream.KeyWatcher) {
+func (w *completionWatcher[W]) run(ctx context.Context, kvWatcher jetstream.KeyWatcher) {
 	defer w.wg.Done()
 	defer func() { _ = kvWatcher.Stop() }()
 
 	for {
 		select {
-		case <-w.ctx.Done():
+		case <-ctx.Done():
 			return
 		case entry, ok := <-kvWatcher.Updates():
 			if !ok {
@@ -134,7 +131,7 @@ func (w *completionWatcher[W]) run(kvWatcher jetstream.KeyWatcher) {
 				// replay); skip.
 				continue
 			}
-			w.handleUpdate(entry)
+			w.handleUpdate(ctx, entry)
 		}
 	}
 }
@@ -143,7 +140,7 @@ func (w *completionWatcher[W]) run(kvWatcher jetstream.KeyWatcher) {
 // work item in the in-flight map; fires OnComplete and removes the
 // tracking entry on match. Silent on no-match (bootstrap replay,
 // out-of-band writes by other producers).
-func (w *completionWatcher[W]) handleUpdate(entry jetstream.KeyValueEntry) {
+func (w *completionWatcher[W]) handleUpdate(ctx context.Context, entry jetstream.KeyValueEntry) {
 	key := entry.Key()
 	w.mu.RLock()
 	work, tracked := w.inFlight[key]
@@ -170,7 +167,7 @@ func (w *completionWatcher[W]) handleUpdate(entry jetstream.KeyValueEntry) {
 	// goroutine and crash the process (matches Go convention —
 	// uncaught panics in framework goroutines are programming
 	// errors, not runtime conditions to swallow).
-	if err := w.onComplete(w.ctx, work); err != nil {
+	if err := w.onComplete(ctx, work); err != nil {
 		w.logger.Warn("dispatch: OnComplete returned error (tracking entry dropped anyway — completion signal was observed)",
 			slog.String("key", key),
 			slog.String("error", err.Error()))

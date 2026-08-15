@@ -51,7 +51,51 @@ func validKeyedConfig() KeyedConfig[string] {
 	}
 }
 
+func TestKeyedPool_ProcessUsesConstructorContext(t *testing.T) {
+	type contextKey struct{}
+	runCtx, cancel := context.WithCancel(context.WithValue(context.Background(), contextKey{}, "run-value"))
+	received := make(chan context.Context, 1)
+	processDone := make(chan struct{})
+
+	p, err := NewKeyedPool(runCtx, KeyedConfig[string]{
+		Lanes:      1,
+		QueueDepth: 1,
+		KeyOf:      func(string) string { return "key" },
+		Process: func(ctx context.Context, _ int, _ string) error {
+			received <- ctx
+			<-ctx.Done()
+			close(processDone)
+			return ctx.Err()
+		},
+	}, KeyedDeps{})
+	require.NoError(t, err)
+	require.NoError(t, p.Submit("work"))
+
+	select {
+	case got := <-received:
+		if got != runCtx {
+			t.Fatal("Process did not receive the exact pool constructor context")
+		}
+		require.Equal(t, "run-value", got.Value(contextKey{}))
+	case <-time.After(2 * time.Second):
+		t.Fatal("Process did not receive the pool's constructor context")
+	}
+
+	cancel()
+	select {
+	case <-processDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Process did not observe constructor context cancellation")
+	}
+	require.NoError(t, p.Stop(stopCtx(t)))
+}
+
 // --- Config validation (task 1.1) ---
+
+func TestKeyedPool_RejectsNilContext(t *testing.T) {
+	_, err := NewKeyedPool[string](nil, validKeyedConfig(), KeyedDeps{})
+	require.ErrorIs(t, err, ErrInvalidConfig)
+}
 
 func TestKeyedPool_RejectsBadConfig(t *testing.T) {
 	cases := []struct {

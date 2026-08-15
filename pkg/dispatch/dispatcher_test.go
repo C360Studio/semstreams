@@ -14,6 +14,15 @@ import (
 
 // --- Config validation ---
 
+func TestNew_RejectsNilContext(t *testing.T) {
+	_, err := New[string](nil, Config[string]{
+		Workers:   1,
+		QueueSize: 1,
+		Process:   func(context.Context, string) error { return nil },
+	}, Deps{})
+	require.ErrorIs(t, err, ErrInvalidConfig)
+}
+
 func TestNew_RejectsZeroWorkers(t *testing.T) {
 	_, err := New(context.Background(), Config[string]{
 		Workers:   0,

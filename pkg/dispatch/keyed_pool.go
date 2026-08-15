@@ -45,7 +45,6 @@ type KeyedPool[W any] struct {
 	name    string
 
 	laneCh []chan keyedItem[W]
-	ctx    context.Context
 	wg     sync.WaitGroup
 
 	// drainCh is closed by Stop to signal a graceful drain: lane
@@ -135,10 +134,14 @@ type KeyedDeps struct {
 // cancellation aborts all lanes immediately (in-flight Process calls
 // see the cancellation via their ctx; buffered items are NOT drained).
 // For a graceful drain that DOES finish buffered work, call Stop.
+// The ctx must be non-nil.
 //
 // Returns ErrInvalidConfig for a missing or out-of-range required
 // field.
 func NewKeyedPool[W any](ctx context.Context, cfg KeyedConfig[W], deps KeyedDeps) (*KeyedPool[W], error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("%w: context is required", ErrInvalidConfig)
+	}
 	if cfg.Lanes <= 0 {
 		return nil, fmt.Errorf("%w: Lanes must be > 0 (got %d)", ErrInvalidConfig, cfg.Lanes)
 	}
@@ -165,7 +168,6 @@ func NewKeyedPool[W any](ctx context.Context, cfg KeyedConfig[W], deps KeyedDeps
 		logger:  logger,
 		name:    cfg.Name,
 		laneCh:  make([]chan keyedItem[W], cfg.Lanes),
-		ctx:     ctx,
 		drainCh: make(chan struct{}),
 	}
 
@@ -176,11 +178,11 @@ func NewKeyedPool[W any](ctx context.Context, cfg KeyedConfig[W], deps KeyedDeps
 	for i := 0; i < cfg.Lanes; i++ {
 		p.laneCh[i] = make(chan keyedItem[W], cfg.QueueDepth)
 		p.wg.Add(1)
-		go p.lane(i, p.laneCh[i])
+		go p.lane(ctx, i, p.laneCh[i])
 	}
 	if p.metrics != nil {
 		p.wg.Add(1)
-		go p.metricsUpdater()
+		go p.metricsUpdater(ctx)
 	}
 
 	return p, nil
@@ -276,20 +278,20 @@ func (p *KeyedPool[W]) SubmitBlocking(ctx context.Context, work W) error {
 // running each item through Process. On the pool's ctx cancellation it
 // aborts immediately; on Stop (drainCh closed) it finishes buffered
 // items then exits.
-func (p *KeyedPool[W]) lane(idx int, ch chan keyedItem[W]) {
+func (p *KeyedPool[W]) lane(ctx context.Context, idx int, ch chan keyedItem[W]) {
 	defer p.wg.Done()
 	for {
 		select {
-		case <-p.ctx.Done():
+		case <-ctx.Done():
 			return
 		case item := <-ch:
-			p.runOne(idx, item)
+			p.runOne(ctx, idx, item)
 		case <-p.drainCh:
 			// Graceful stop: drain buffered items, then exit.
 			for {
 				select {
 				case item := <-ch:
-					p.runOne(idx, item)
+					p.runOne(ctx, idx, item)
 				default:
 					return
 				}
@@ -302,7 +304,7 @@ func (p *KeyedPool[W]) lane(idx int, ch chan keyedItem[W]) {
 // H2): a panic in Process must not crash the host or wedge the lane.
 // The recovered panic is logged, the composer's OnPanic disposition is
 // invoked, and the lane goroutine continues to the next item.
-func (p *KeyedPool[W]) runOne(lane int, item keyedItem[W]) {
+func (p *KeyedPool[W]) runOne(ctx context.Context, lane int, item keyedItem[W]) {
 	if p.metrics != nil {
 		p.metrics.queueWait.Observe(time.Since(item.submitAt).Seconds())
 		p.metrics.inflight.Inc()
@@ -327,7 +329,7 @@ func (p *KeyedPool[W]) runOne(lane int, item keyedItem[W]) {
 	}()
 
 	start := time.Now()
-	err := p.process(p.ctx, lane, item.work)
+	err := p.process(ctx, lane, item.work)
 	if p.metrics != nil {
 		p.metrics.processing.Observe(time.Since(start).Seconds())
 	}
@@ -397,13 +399,13 @@ func (p *KeyedPool[W]) Stop(ctx context.Context) error {
 
 // metricsUpdater periodically refreshes the aggregate queue-depth
 // gauge (sum of lane buffer lengths). Exits on ctx cancel or Stop.
-func (p *KeyedPool[W]) metricsUpdater() {
+func (p *KeyedPool[W]) metricsUpdater(ctx context.Context) {
 	defer p.wg.Done()
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-p.ctx.Done():
+		case <-ctx.Done():
 			return
 		case <-p.drainCh:
 			return
