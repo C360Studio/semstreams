@@ -518,9 +518,8 @@ func (cm *ComponentManager) initCapabilityDiscovery(ctx context.Context) {
 
 // componentToStart holds component info for the parallel launch batch.
 type componentToStart struct {
-	name      string
-	mc        *component.ManagedComponent
-	lifecycle component.LifecycleComponent
+	name  string
+	start func() error
 }
 
 // startAllComponents starts all lifecycle components in the provider-first
@@ -577,9 +576,17 @@ func (cm *ComponentManager) startComponentsPhase(ctx context.Context, names []st
 		}
 		if lifecycle, ok := component.AsLifecycleComponent(mc.Component); ok {
 			childCtx, cancel := context.WithCancel(ctx)
-			mc.Context = childCtx
 			mc.Cancel = cancel
-			componentsToStart = append(componentsToStart, componentToStart{name, mc, lifecycle})
+			componentName := name
+			managed := mc
+			lifecycleComponent := lifecycle
+			launchCtx := childCtx
+			componentsToStart = append(componentsToStart, componentToStart{
+				name: componentName,
+				start: func() error {
+					return cm.startComponent(launchCtx, componentName, managed, lifecycleComponent)
+				},
+			})
 			mc.StartOrder = len(cm.startOrder)
 			cm.startOrder = append(cm.startOrder, name)
 		}
@@ -595,7 +602,7 @@ func (cm *ComponentManager) startComponentsPhase(ctx context.Context, names []st
 		batch.Add(1)
 		go func(c componentToStart) {
 			defer batch.Done()
-			if err := cm.startComponent(c.name, c.mc, c.lifecycle); err != nil {
+			if err := c.start(); err != nil {
 				errMu.Lock()
 				startErrs = append(startErrs, fmt.Errorf("component %q: %w", c.name, err))
 				errMu.Unlock()
@@ -609,10 +616,12 @@ func (cm *ComponentManager) startComponentsPhase(ctx context.Context, names []st
 // startComponent runs a single component's Start (on a launch goroutine) and
 // records the resulting state. The returned error propagates through the
 // startAllComponents barrier so boot fails closed on it.
-func (cm *ComponentManager) startComponent(name string, mc *component.ManagedComponent, lc component.LifecycleComponent) error {
+func (cm *ComponentManager) startComponent(
+	ctx context.Context, name string, mc *component.ManagedComponent, lc component.LifecycleComponent,
+) error {
 	cm.logger.Debug("Starting component", "name", name, "type", mc.Component.Meta().Type)
 
-	if err := lc.Start(mc.Context); err != nil {
+	if err := lc.Start(ctx); err != nil {
 		cm.updateComponentState(name, component.StateFailed, err)
 		cm.logger.Error("Component failed to start",
 			"name", name, "type", mc.Component.Meta().Type, "error", err)
@@ -857,12 +866,9 @@ func (cm *ComponentManager) stopAllComponents(ctx context.Context) []error {
 	// operate against an immutable view while re-acquiring the lock for
 	// per-component state updates.
 	//
-	// The context-cancel pass runs under the same write lock: it nils
-	// mc.Cancel/mc.Context, and the periodic health check reads mc.Context
-	// under RLock until BaseService.Stop tears the health loop down — a cancel
-	// outside the lock is a data race with that reader (surfaced by the
-	// post-boot seam-reconcile integration test). Cancel() itself is cheap and
-	// non-blocking, so holding the lock across the loop cannot deadlock.
+	// The context-cancel pass runs under the same write lock because it clears
+	// the manager-owned Cancel handle. Cancel itself is cheap and non-blocking,
+	// so holding the lock across the loop cannot deadlock.
 	cm.mu.Lock()
 	type target struct {
 		name string
@@ -875,8 +881,8 @@ func (cm *ComponentManager) stopAllComponents(ctx context.Context) []error {
 			targets = append(targets, target{name: name, mc: mc})
 		}
 	}
-	// Cancel all component contexts first to signal shutdown intent; mc
-	// pointers stay valid until removal.
+	// Invoke all manager-owned cancellation handles first to signal shutdown
+	// intent; mc pointers stay valid until removal.
 	for _, t := range targets {
 		cm.cancelComponentContext(t.mc)
 	}
@@ -907,14 +913,12 @@ func (cm *ComponentManager) stopAllComponents(ctx context.Context) []error {
 	return errors
 }
 
-// cancelComponentContext cancels the component's context if it exists
+// cancelComponentContext invokes and clears the manager-owned cancellation
+// handle if one exists.
 func (cm *ComponentManager) cancelComponentContext(mc *component.ManagedComponent) {
 	if mc.Cancel != nil {
 		mc.Cancel()
-		// Clean up references to prevent resource leaks
-		// This is safe during shutdown when no other operations should be using the context
 		mc.Cancel = nil
-		mc.Context = nil
 	}
 }
 
@@ -1093,7 +1097,6 @@ func (cm *ComponentManager) RemoveComponent(instanceName string) error {
 	if mc.Cancel != nil {
 		mc.Cancel()
 		mc.Cancel = nil
-		mc.Context = nil
 	}
 	cm.deregisterProvidedStores(instanceName)
 
@@ -1141,8 +1144,6 @@ func (cm *ComponentManager) GetManagedComponents() map[string]*component.Managed
 			Component:  mc.Component,
 			State:      mc.State,
 			Config:     mc.Config,
-			Context:    mc.Context, // Component's individual context
-			Cancel:     mc.Cancel,  // Note: this is just a function pointer
 			StartOrder: mc.StartOrder,
 			LastError:  mc.LastError,
 		}
@@ -1189,19 +1190,14 @@ func (cm *ComponentManager) performDetailedHealthCheck() error {
 			return fmt.Errorf("component %s has nil implementation", name)
 		}
 
-		// A failed lifecycle operation (post-boot dynamic start/restart, stop
-		// error) leaves the component in StateFailed with its context still
-		// live — health must report it, not silently skip it.
+		// A failed lifecycle operation (post-boot dynamic start/restart or stop
+		// error) leaves the component in StateFailed. Health must report it, not
+		// silently skip it.
 		if comp.State == component.StateFailed {
 			if comp.LastError != nil {
 				return fmt.Errorf("component %s failed: %w", name, comp.LastError)
 			}
 			return fmt.Errorf("component %s failed", name)
-		}
-
-		// Check if component context is cancelled (indicates failure)
-		if comp.Context != nil && comp.Context.Err() != nil {
-			return fmt.Errorf("component %s context cancelled: %w", name, comp.Context.Err())
 		}
 	}
 
@@ -1970,7 +1966,7 @@ func (cm *ComponentManager) stopAndRemoveComponentLocked(
 
 	cm.deregisterProvidedStores(name)
 
-	// Step 2: Cancel the component's context
+	// Step 2: signal cancellation through the manager-owned handle.
 	if existingComp.Cancel != nil {
 		existingComp.Cancel()
 	}
@@ -2026,7 +2022,6 @@ func (cm *ComponentManager) startSingleComponent(ctx context.Context, name strin
 
 	// Create child context for this component
 	childCtx, cancel := context.WithCancel(ctx)
-	mc.Context = childCtx
 	mc.Cancel = cancel
 
 	// Update tracking state under lock so a concurrent stopAllComponents
@@ -2037,7 +2032,7 @@ func (cm *ComponentManager) startSingleComponent(ctx context.Context, name strin
 	cm.mu.Unlock()
 
 	if _, isProvider := mc.Component.(component.StoreProvider); isProvider {
-		startErr := cm.startComponentWithRetry(name, mc, lifecycle)
+		startErr := cm.startComponentWithRetry(childCtx, name, mc, lifecycle)
 		if startErr != nil {
 			return startErr
 		}
@@ -2050,7 +2045,7 @@ func (cm *ComponentManager) startSingleComponent(ctx context.Context, name strin
 	go func() {
 		defer cm.wg.Done()
 
-		if err := cm.startComponentWithRetry(name, mc, lifecycle); err != nil {
+		if err := cm.startComponentWithRetry(childCtx, name, mc, lifecycle); err != nil {
 			return
 		}
 
@@ -2062,11 +2057,11 @@ func (cm *ComponentManager) startSingleComponent(ctx context.Context, name strin
 }
 
 func (cm *ComponentManager) startComponentWithRetry(
-	name string, mc *component.ManagedComponent, lifecycle component.LifecycleComponent,
+	ctx context.Context, name string, mc *component.ManagedComponent, lifecycle component.LifecycleComponent,
 ) error {
 	retryConfig := retry.Quick() // 10 attempts over ~1 second
-	startErr := retry.Do(mc.Context, retryConfig, func() error {
-		if err := lifecycle.Start(mc.Context); err != nil {
+	startErr := retry.Do(ctx, retryConfig, func() error {
+		if err := lifecycle.Start(ctx); err != nil {
 			cm.logger.Debug("Component start attempt failed, will retry",
 				"component", name,
 				"error", err)
@@ -2087,8 +2082,9 @@ func (cm *ComponentManager) startComponentWithRetry(
 		// Start succeeded, so a rejected dynamic/restarted provider may already
 		// own subscriptions or other live resources. Roll it back synchronously:
 		// remove any tracked claims before Stop can close their handles, then
-		// cancel and clear its component context. The provider remains tracked as
-		// failed so health reports the wiring fault until reconfigured or removed.
+		// invoke and clear its manager-owned cancellation handle. The provider
+		// remains tracked as failed so health reports the wiring fault until
+		// reconfigured or removed.
 		cm.deregisterProvidedStores(name)
 		stopErr := lifecycle.Stop(30 * time.Second)
 		cm.mu.Lock()

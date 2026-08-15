@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
@@ -163,6 +164,104 @@ func TestComponentManagerLifecycle(t *testing.T) {
 		}
 	})
 }
+
+// TestComponentManagerStopCancelsDynamicStart proves the dynamic lifecycle
+// handoff that previously raced: Start receives its immutable child context,
+// while ComponentManager retains only the cancellation function used by Stop.
+func TestComponentManagerStopCancelsDynamicStart(t *testing.T) {
+	comp := newCancellationBlockingComponent()
+	cm := &ComponentManager{
+		BaseService: NewBaseServiceWithOptions("component-manager", nil),
+		components: map[string]*component.ManagedComponent{
+			"blocking": {
+				Component: comp,
+				State:     component.StateInitialized,
+			},
+		},
+		registry: component.NewRegistry(),
+		shutdown: make(chan struct{}),
+		done:     make(chan struct{}),
+	}
+	cm.started.Store(true)
+
+	require.NoError(t, cm.startSingleComponent(context.Background(), "blocking"))
+	waitForSignal(t, comp.startEntered, "dynamic component Start entry")
+
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- cm.Stop(2 * time.Second)
+	}()
+
+	waitForSignal(t, comp.startReturned, "dynamic component Start return after cancellation")
+	waitForSignal(t, comp.stopEntered, "dynamic component Stop entry")
+	select {
+	case err := <-stopDone:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for ComponentManager Stop to complete")
+	}
+}
+
+func TestGetManagedComponentsDoesNotExposeCancellationAuthority(t *testing.T) {
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cm := createTestComponentManager(t)
+	cm.components["test"] = &component.ManagedComponent{
+		Component: &mockDiscoverableComponent{},
+		Cancel:    cancel,
+	}
+
+	snapshot := cm.GetManagedComponents()
+	require.NotNil(t, cm.components["test"].Cancel, "manager must retain cancellation authority")
+	require.Nil(t, snapshot["test"].Cancel, "read-only snapshot must not expose cancellation authority")
+}
+
+func waitForSignal(t *testing.T, signal <-chan struct{}, description string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s", description)
+	}
+}
+
+type cancellationBlockingComponent struct {
+	*mockDiscoverableComponent
+	startEntered  chan struct{}
+	startReturned chan struct{}
+	stopEntered   chan struct{}
+	startOnce     sync.Once
+	returnOnce    sync.Once
+	stopOnce      sync.Once
+}
+
+func newCancellationBlockingComponent() *cancellationBlockingComponent {
+	return &cancellationBlockingComponent{
+		mockDiscoverableComponent: &mockDiscoverableComponent{
+			metadata: component.Metadata{Name: "blocking", Type: "processor"},
+		},
+		startEntered:  make(chan struct{}),
+		startReturned: make(chan struct{}),
+		stopEntered:   make(chan struct{}),
+	}
+}
+
+func (*cancellationBlockingComponent) Initialize() error { return nil }
+
+func (c *cancellationBlockingComponent) Start(ctx context.Context) error {
+	c.startOnce.Do(func() { close(c.startEntered) })
+	defer c.returnOnce.Do(func() { close(c.startReturned) })
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (c *cancellationBlockingComponent) Stop(time.Duration) error {
+	c.stopOnce.Do(func() { close(c.stopEntered) })
+	return nil
+}
+
+var _ component.LifecycleComponent = (*cancellationBlockingComponent)(nil)
 
 // TestPerformDetailedHealthCheckDoesNotLeakReader is a regression test for gh#508.
 //
