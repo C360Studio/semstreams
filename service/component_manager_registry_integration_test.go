@@ -35,25 +35,21 @@ func TestComponentManager_RestartsDependentsOnModelRegistryChange(t *testing.T) 
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
 	defer testClient.Terminate()
 
-	// Two test factories sharing one set of counters. The "dep" factory
-	// declares DepModelRegistry; the "nodep" factory declares nothing.
-	// Each call to the factory increments its counter so we can assert
-	// who was restarted.
-	var mu sync.Mutex
-	depCalls := 0
-	nodepCalls := 0
+	// Each factory publishes the exact instance it creates. The test waits for
+	// that instance's Start call to return instead of treating factory creation
+	// as a proxy for lifecycle completion.
+	depInstances := make(chan *registryTestComponent, 2)
+	nodepInstances := make(chan *registryTestComponent, 2)
 
 	depFactory := func(_ json.RawMessage, _ component.Dependencies) (component.Discoverable, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		depCalls++
-		return &registryTestComponent{}, nil
+		instance := newRegistryTestComponent()
+		depInstances <- instance
+		return instance, nil
 	}
 	nodepFactory := func(_ json.RawMessage, _ component.Dependencies) (component.Discoverable, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		nodepCalls++
-		return &registryTestComponent{}, nil
+		instance := newRegistryTestComponent()
+		nodepInstances <- instance
+		return instance, nil
 	}
 
 	registry := component.NewRegistry()
@@ -123,14 +119,12 @@ func TestComponentManager_RestartsDependentsOnModelRegistryChange(t *testing.T) 
 	require.NoError(t, cm.Start(ctx))
 	defer cm.Stop(5 * time.Second)
 
-	// Confirm both components were built once at Initialize.
-	time.Sleep(200 * time.Millisecond)
-	mu.Lock()
-	initialDep := depCalls
-	initialNodep := nodepCalls
-	mu.Unlock()
-	require.Equal(t, 1, initialDep, "dep-instance factory should be called once at Initialize")
-	require.Equal(t, 1, initialNodep, "nodep-instance factory should be called once at Initialize")
+	// The boot barrier has returned, so both initial instance Starts must also
+	// have returned. Assert that contract explicitly with bounded channel waits.
+	initialDep := waitForRegistryTestInstance(t, depInstances, "initial dependent instance")
+	waitForRegistryTestStart(t, initialDep, "initial dependent instance")
+	initialNodep := waitForRegistryTestInstance(t, nodepInstances, "initial non-dependent instance")
+	waitForRegistryTestStart(t, initialNodep, "initial non-dependent instance")
 
 	// Write a new model_registry. ComponentManager's watcher must see
 	// it and restart only the dependent component.
@@ -145,23 +139,37 @@ func TestComponentManager_RestartsDependentsOnModelRegistryChange(t *testing.T) 
 	_, err = kv.Put(ctx, "model_registry", data)
 	require.NoError(t, err)
 
-	// Poll up to 2s for the restart to land. Going directly to an
-	// explicit expected count avoids flake on slow CI.
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		mu.Lock()
-		currentDep := depCalls
-		currentNodep := nodepCalls
-		mu.Unlock()
+	// Wait for the replacement's Start call itself to return. Factory creation
+	// alone is too early: ComponentManager launches dynamic Start asynchronously.
+	replacement := waitForRegistryTestInstance(t, depInstances, "replacement dependent instance")
+	waitForRegistryTestStart(t, replacement, "replacement dependent instance")
 
-		if currentDep == 2 && currentNodep == 1 {
-			return // success
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("after model_registry update, got depCalls=%d (want 2), nodepCalls=%d (want 1)",
-				currentDep, currentNodep)
-		}
-		time.Sleep(20 * time.Millisecond)
+	select {
+	case <-nodepInstances:
+		t.Fatal("non-dependent component was rebuilt after model_registry update")
+	default:
+	}
+}
+
+func waitForRegistryTestInstance(
+	t *testing.T, instances <-chan *registryTestComponent, description string,
+) *registryTestComponent {
+	t.Helper()
+	select {
+	case instance := <-instances:
+		return instance
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s to be created", description)
+		return nil
+	}
+}
+
+func waitForRegistryTestStart(t *testing.T, instance *registryTestComponent, description string) {
+	t.Helper()
+	select {
+	case <-instance.startReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s Start to return", description)
 	}
 }
 
@@ -175,8 +183,13 @@ func TestComponentManager_RestartsDependentsOnModelRegistryChange(t *testing.T) 
 // the race detector flags the unsynchronized read/write pair under
 // -race + -tags=integration.
 type registryTestComponent struct {
-	startMu   sync.RWMutex
-	startTime time.Time
+	startMu       sync.RWMutex
+	startTime     time.Time
+	startReturned chan struct{}
+}
+
+func newRegistryTestComponent() *registryTestComponent {
+	return &registryTestComponent{startReturned: make(chan struct{})}
 }
 
 func (c *registryTestComponent) Meta() component.Metadata {
@@ -203,6 +216,7 @@ func (c *registryTestComponent) DataFlow() component.FlowMetrics {
 }
 func (c *registryTestComponent) Initialize() error { return nil }
 func (c *registryTestComponent) Start(_ context.Context) error {
+	defer close(c.startReturned)
 	c.startMu.Lock()
 	c.startTime = time.Now()
 	c.startMu.Unlock()
