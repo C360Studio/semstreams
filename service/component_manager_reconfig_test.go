@@ -585,6 +585,7 @@ func newStaleGenerationTestManager(t *testing.T) (
 	_, cancel := context.WithCancel(context.Background())
 	runtime := &componentRuntime{startDone: startDone, startInvoked: true}
 	runtime.generation = lifecyclejoin.NewGeneration(cancel, func() { <-startDone })
+	runtime.admitGracefulShutdown()
 	cm := &ComponentManager{
 		BaseService: NewBaseServiceWithOptions("component-manager", nil),
 		registry:    registry, natsClient: client,

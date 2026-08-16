@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,6 +14,8 @@ import (
 	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/storage"
+	"github.com/c360studio/semstreams/storage/storeregistry"
 	"github.com/stretchr/testify/require"
 )
 
@@ -226,6 +229,330 @@ type controlledGenerationComponent struct {
 	cancelOnce      sync.Once
 	returnOnce      sync.Once
 	stopOnce        sync.Once
+}
+
+type liveAuthorityStopComponent struct {
+	*mockDiscoverableComponent
+	startCtx context.Context
+	stopped  chan struct{}
+}
+
+func newLiveAuthorityStopComponent(name string) *liveAuthorityStopComponent {
+	return &liveAuthorityStopComponent{
+		mockDiscoverableComponent: &mockDiscoverableComponent{
+			metadata: component.Metadata{Name: name, Type: "processor"},
+		},
+		stopped: make(chan struct{}),
+	}
+}
+
+func (*liveAuthorityStopComponent) Initialize() error { return nil }
+
+func (c *liveAuthorityStopComponent) Start(ctx context.Context) error {
+	c.startCtx = ctx
+	return nil
+}
+
+func (c *liveAuthorityStopComponent) Stop(context.Context) error {
+	select {
+	case <-c.startCtx.Done():
+		return errors.New("Start authority canceled before component Stop")
+	default:
+	}
+	close(c.stopped)
+	return nil
+}
+
+var _ component.LifecycleComponent = (*liveAuthorityStopComponent)(nil)
+
+type lateRegisteringStoreComponent struct {
+	*mockDiscoverableComponent
+	startEntered  chan struct{}
+	startCanceled chan struct{}
+	releaseStart  chan struct{}
+	stopCalls     atomic.Int32
+	store         storage.StreamableStore
+}
+
+func newLateRegisteringStoreComponent(name string) *lateRegisteringStoreComponent {
+	return &lateRegisteringStoreComponent{
+		mockDiscoverableComponent: &mockDiscoverableComponent{
+			metadata: component.Metadata{Name: name, Type: "storage"},
+		},
+		startEntered:  make(chan struct{}),
+		startCanceled: make(chan struct{}),
+		releaseStart:  make(chan struct{}),
+		store:         &fakeStreamable{id: name},
+	}
+}
+
+func (*lateRegisteringStoreComponent) Initialize() error { return nil }
+
+func (c *lateRegisteringStoreComponent) Start(ctx context.Context) error {
+	close(c.startEntered)
+	<-ctx.Done()
+	close(c.startCanceled)
+	<-c.releaseStart
+	return nil
+}
+
+func (c *lateRegisteringStoreComponent) Stop(context.Context) error {
+	c.stopCalls.Add(1)
+	return nil
+}
+
+func (c *lateRegisteringStoreComponent) ProvidedStores() map[string]storage.StreamableStore {
+	return map[string]storage.StreamableStore{c.Meta().Name: c.store}
+}
+
+var _ component.LifecycleComponent = (*lateRegisteringStoreComponent)(nil)
+var _ component.StoreProvider = (*lateRegisteringStoreComponent)(nil)
+
+type failedPartialStartComponent struct {
+	*mockDiscoverableComponent
+	startCtx        context.Context
+	startErr        error
+	stopCalls       atomic.Int32
+	stopSawCanceled chan struct{}
+}
+
+func (*failedPartialStartComponent) Initialize() error { return nil }
+
+func (c *failedPartialStartComponent) Start(ctx context.Context) error {
+	c.startCtx = ctx
+	return c.startErr
+}
+
+func (c *failedPartialStartComponent) Stop(context.Context) error {
+	c.stopCalls.Add(1)
+	select {
+	case <-c.startCtx.Done():
+		close(c.stopSawCanceled)
+		return nil
+	default:
+		return errors.New("failed partial Start authority remained live during Stop")
+	}
+}
+
+var _ component.LifecycleComponent = (*failedPartialStartComponent)(nil)
+
+type rollbackStoreComponent struct {
+	*mockDiscoverableComponent
+	stopCalls atomic.Int32
+	store     storage.StreamableStore
+}
+
+func (*rollbackStoreComponent) Initialize() error           { return nil }
+func (*rollbackStoreComponent) Start(context.Context) error { return nil }
+func (c *rollbackStoreComponent) Stop(context.Context) error {
+	c.stopCalls.Add(1)
+	return nil
+}
+func (c *rollbackStoreComponent) ProvidedStores() map[string]storage.StreamableStore {
+	return map[string]storage.StreamableStore{"shared": c.store}
+}
+
+var _ component.LifecycleComponent = (*rollbackStoreComponent)(nil)
+var _ component.StoreProvider = (*rollbackStoreComponent)(nil)
+
+type gracefulArbitrationStoreComponent struct {
+	*mockDiscoverableComponent
+	runtimeCtx    context.Context
+	storeRegistry *storeregistry.Registry
+	store         storage.StreamableStore
+	stopCalls     atomic.Int32
+}
+
+func (*gracefulArbitrationStoreComponent) Initialize() error { return nil }
+func (c *gracefulArbitrationStoreComponent) Start(ctx context.Context) error {
+	c.runtimeCtx = ctx
+	return nil
+}
+func (c *gracefulArbitrationStoreComponent) Stop(context.Context) error {
+	c.stopCalls.Add(1)
+	if err := c.runtimeCtx.Err(); err != nil {
+		return errors.Join(errors.New("runtime canceled before graceful Stop"), err)
+	}
+	if _, registered := c.storeRegistry.Streamable(c.Meta().Name); registered {
+		return errors.New("store fence did not run before graceful Stop")
+	}
+	return nil
+}
+func (c *gracefulArbitrationStoreComponent) ProvidedStores() map[string]storage.StreamableStore {
+	return map[string]storage.StreamableStore{c.Meta().Name: c.store}
+}
+
+var _ component.LifecycleComponent = (*gracefulArbitrationStoreComponent)(nil)
+var _ component.StoreProvider = (*gracefulArbitrationStoreComponent)(nil)
+
+func TestComponentManagerCallsComponentStopBeforeRuntimeCancellation(t *testing.T) {
+	cm := &ComponentManager{
+		BaseService: NewBaseServiceWithOptions("component-manager", nil),
+		components:  make(map[string]*component.ManagedComponent),
+		runtimes:    make(map[string]*componentRuntime),
+		registry:    component.NewRegistry(),
+	}
+	comp := newLiveAuthorityStopComponent("live-stop")
+	cm.components["live-stop"] = &component.ManagedComponent{
+		Component: comp,
+		State:     component.StateInitialized,
+	}
+	cm.initialized.Store(true)
+	require.NoError(t, cm.Start(t.Context()))
+
+	require.NoError(t, cm.Stop(t.Context()))
+	waitForSignal(t, comp.stopped, "component Stop with live Start authority")
+	require.ErrorIs(t, comp.startCtx.Err(), context.Canceled)
+}
+
+func TestComponentManagerAbortModeRejoinsAfterLateStoreRegistration(t *testing.T) {
+	cm := &ComponentManager{
+		BaseService:   NewBaseServiceWithOptions("component-manager", nil),
+		components:    make(map[string]*component.ManagedComponent),
+		runtimes:      make(map[string]*componentRuntime),
+		registry:      component.NewRegistry(),
+		storeRegistry: storeregistry.New(),
+		storeProvided: make(map[string][]string),
+	}
+	comp := newLateRegisteringStoreComponent("late-store")
+	cm.components["late-store"] = &component.ManagedComponent{
+		Component: comp,
+		State:     component.StateInitialized,
+	}
+	cm.initialized.Store(true)
+
+	startResult := make(chan error, 1)
+	go func() { startResult <- cm.Start(t.Context()) }()
+	<-comp.startEntered
+
+	stopCtx, cancelStop := context.WithCancel(context.Background())
+	firstStopResult := make(chan error, 1)
+	go func() { firstStopResult <- cm.Stop(stopCtx) }()
+	<-comp.startCanceled
+	cancelStop()
+	require.ErrorIs(t, <-firstStopResult, context.Canceled)
+
+	close(comp.releaseStart)
+	_ = <-startResult
+	_, registered := cm.storeRegistry.Streamable("late-store")
+	require.True(t, registered, "late successful Start must reproduce the post-abort registration window")
+
+	require.NoError(t, cm.Stop(context.Background()))
+	_, registered = cm.storeRegistry.Streamable("late-store")
+	require.False(t, registered, "rejoined cancel-first cleanup must remove late stores")
+	require.Equal(t, int32(1), comp.stopCalls.Load())
+}
+
+func TestComponentManagerFailedPartialStartCancelsBeforeStop(t *testing.T) {
+	wantErr := errors.New("partial start failed")
+	comp := &failedPartialStartComponent{
+		mockDiscoverableComponent: &mockDiscoverableComponent{
+			metadata: component.Metadata{Name: "partial", Type: "processor"},
+		},
+		startErr:        wantErr,
+		stopSawCanceled: make(chan struct{}),
+	}
+	cm := &ComponentManager{
+		BaseService: NewBaseServiceWithOptions("component-manager", nil),
+		components: map[string]*component.ManagedComponent{
+			"partial": {Component: comp, State: component.StateInitialized},
+		},
+		runtimes: make(map[string]*componentRuntime),
+		registry: component.NewRegistry(),
+	}
+	cm.initialized.Store(true)
+	require.ErrorIs(t, cm.Start(t.Context()), wantErr)
+
+	require.NoError(t, cm.Stop(context.Background()))
+	<-comp.stopSawCanceled
+	require.Equal(t, int32(1), comp.stopCalls.Load())
+}
+
+func TestComponentManagerDynamicRegistrationRollbackIsNotRepeatedByManagerStop(t *testing.T) {
+	cm := &ComponentManager{
+		BaseService:   NewBaseServiceWithOptions("component-manager", nil),
+		components:    make(map[string]*component.ManagedComponent),
+		runtimes:      make(map[string]*componentRuntime),
+		registry:      component.NewRegistry(),
+		storeRegistry: storeregistry.New(),
+		storeProvided: make(map[string][]string),
+	}
+	cm.initialized.Store(true)
+	require.NoError(t, cm.Start(t.Context()))
+	require.NoError(t, cm.storeRegistry.Register("shared", &fakeStreamable{id: "incumbent"}))
+
+	comp := &rollbackStoreComponent{
+		mockDiscoverableComponent: &mockDiscoverableComponent{
+			metadata: component.Metadata{Name: "rollback", Type: "storage"},
+		},
+		store: &fakeStreamable{id: "replacement"},
+	}
+	cm.mu.Lock()
+	cm.components["rollback"] = &component.ManagedComponent{
+		Component: comp,
+		State:     component.StateInitialized,
+	}
+	cm.mu.Unlock()
+
+	require.Error(t, cm.startSingleComponent(t.Context(), "rollback"))
+	require.Equal(t, int32(1), comp.stopCalls.Load(), "registration rollback must tear down once")
+	require.NoError(t, cm.Stop(context.Background()))
+	require.Equal(t, int32(1), comp.stopCalls.Load(), "manager Stop must rejoin rollback teardown")
+}
+
+func TestComponentManagerStopArbitrationBranchesOnGracefulWinner(t *testing.T) {
+	runtimeCtx, cancelRuntime := context.WithCancel(context.Background())
+	startDone := make(chan struct{})
+	close(startDone)
+	runtime := &componentRuntime{startDone: startDone, startInvoked: true}
+	runtime.generation = lifecyclejoin.NewGeneration(cancelRuntime, func() { <-startDone })
+	storeRegistry := storeregistry.New()
+	comp := &gracefulArbitrationStoreComponent{
+		mockDiscoverableComponent: &mockDiscoverableComponent{
+			metadata: component.Metadata{Name: "arbitrated", Type: "storage"},
+		},
+		runtimeCtx:    runtimeCtx,
+		storeRegistry: storeRegistry,
+		store:         &fakeStreamable{id: "arbitrated"},
+	}
+	cm := &ComponentManager{
+		BaseService: NewBaseServiceWithOptions("component-manager", nil),
+		components: map[string]*component.ManagedComponent{
+			"arbitrated": {Component: comp, State: component.StateStarted},
+		},
+		runtimes:      map[string]*componentRuntime{"arbitrated": runtime},
+		storeRegistry: storeRegistry,
+		storeProvided: make(map[string][]string),
+	}
+	require.NoError(t, cm.registerProvidedStores("arbitrated", comp))
+
+	stopObservedPending := make(chan struct{})
+	releaseStopDecision := make(chan struct{})
+	stopResult := make(chan error, 1)
+	go func() {
+		if componentGenerationShutdownMode(runtime.shutdownMode.Load()) != componentShutdownPending {
+			stopResult <- errors.New("Stop did not observe pending shutdown mode")
+			return
+		}
+		close(stopObservedPending)
+		<-releaseStopDecision
+		if mode := runtime.selectShutdownModeForStop(); mode != componentShutdownGraceful {
+			stopResult <- fmt.Errorf("Stop arbitration selected %v, want graceful", mode)
+			return
+		}
+		stopResult <- cm.stopLifecycleComponent(
+			context.Background(), "arbitrated", runtime, comp,
+		)
+	}()
+
+	<-stopObservedPending
+	runtime.admitGracefulShutdown()
+	close(releaseStopDecision)
+	require.NoError(t, <-stopResult)
+	require.ErrorIs(t, runtimeCtx.Err(), context.Canceled)
+	_, registered := storeRegistry.Streamable("arbitrated")
+	require.False(t, registered)
+	require.Equal(t, int32(1), comp.stopCalls.Load())
 }
 
 func newControlledGenerationComponent(name string) *controlledGenerationComponent {

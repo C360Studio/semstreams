@@ -66,17 +66,16 @@ type Input struct {
 	jetStreamOutputs map[string]bool
 
 	// Lifecycle management
-	shutdown          chan struct{}
-	shutdownOnce      sync.Once
-	done              chan struct{}
-	doneOnce          sync.Once
-	started           atomic.Bool
-	startTime         time.Time
-	wg                sync.WaitGroup
-	generation        *lifecyclejoin.Generation
-	shutdownOperation *lifecyclejoin.Operation
-	lifecycleMu       sync.Mutex
-	tlsCleanup        func() // TLS cleanup function (ACME renewal loop)
+	shutdown     chan struct{}
+	shutdownOnce sync.Once
+	done         chan struct{}
+	doneOnce     sync.Once
+	started      atomic.Bool
+	startTime    time.Time
+	wg           sync.WaitGroup
+	generation   *lifecyclejoin.Generation
+	lifecycleMu  sync.Mutex
+	tlsCleanup   func() // TLS cleanup function (ACME renewal loop)
 
 	// Statistics
 	messagesReceived  int64
@@ -553,7 +552,6 @@ func (i *Input) Start(ctx context.Context) error {
 		return err
 	}
 	i.generation = lifecyclejoin.NewGeneration(cancel, i.wg.Wait)
-	i.shutdownOperation = lifecyclejoin.NewOperation()
 
 	i.startTime = time.Now()
 	i.started.Store(true)
@@ -567,27 +565,20 @@ func (i *Input) Stop(ctx context.Context) error {
 	}
 	i.lifecycleMu.Lock()
 	generation := i.generation
-	shutdownOperation := i.shutdownOperation
 	if generation == nil {
 		i.lifecycleMu.Unlock()
 		return nil
 	}
 	i.lifecycleMu.Unlock()
-	generation.Cancel()
-	prepareErr := shutdownOperation.Run(ctx, func(ctx context.Context) error {
+	stopErr := generation.StopWithQuiesce(ctx, nil, func(ctx context.Context) error {
+		var quiesceErr error
 		if i.mode == ModeServer {
-			return i.stopServer(ctx)
+			quiesceErr = errs.NewShutdownError("websocket-input", errs.PhaseShutdownListener, i.stopServer(ctx))
+		} else {
+			i.stopClient()
 		}
-		i.stopClient()
-		return nil
-	})
-	if errors.Is(prepareErr, context.Canceled) || errors.Is(prepareErr, context.DeadlineExceeded) {
-		return errs.WrapTransient(prepareErr, "websocket_input", "Stop", "shutdown server")
-	}
-
-	return generation.Stop(ctx, func() error {
 		i.shutdownOnce.Do(func() { close(i.shutdown) })
-		return prepareErr
+		return quiesceErr
 	}, func(context.Context) error {
 		if i.tlsCleanup != nil {
 			i.tlsCleanup()
@@ -597,6 +588,18 @@ func (i *Input) Stop(ctx context.Context) error {
 		i.started.Store(false)
 		return closeErr
 	})
+	return attributeComponentShutdownError("websocket-input", errs.PhaseJoinRuntime, stopErr)
+}
+
+func attributeComponentShutdownError(owner string, phase errs.ShutdownPhase, err error) error {
+	if err == nil {
+		return nil
+	}
+	var shutdownErr *errs.ShutdownError
+	if errors.As(err, &shutdownErr) {
+		return err
+	}
+	return errs.NewShutdownError(owner, phase, err)
 }
 
 // Process implements component.LifecycleComponent (not used for input components)

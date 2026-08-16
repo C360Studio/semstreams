@@ -4,17 +4,83 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/health"
+	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
+	shutdownerrs "github.com/c360studio/semstreams/pkg/errs"
 	"github.com/stretchr/testify/require"
 )
+
+type blockingHTTPGeneration struct {
+	server          *http.Server
+	generation      *lifecyclejoin.Generation
+	handlerCtx      <-chan context.Context
+	releaseHandler  chan struct{}
+	shutdownStarted chan struct{}
+}
+
+func newBlockingHTTPGeneration(t *testing.T) *blockingHTTPGeneration {
+	t.Helper()
+	runtimeCtx, cancel := context.WithCancel(t.Context())
+	handlerCtx := make(chan context.Context, 1)
+	releaseHandler := make(chan struct{})
+	shutdownStarted := make(chan struct{})
+	var shutdownStartedOnce sync.Once
+	mux := http.NewServeMux()
+	mux.HandleFunc("/block", func(w http.ResponseWriter, r *http.Request) {
+		handlerCtx <- r.Context()
+		<-releaseHandler
+		w.WriteHeader(http.StatusNoContent)
+	})
+	server := &http.Server{
+		Handler: mux,
+		BaseContext: func(net.Listener) context.Context {
+			return runtimeCtx
+		},
+	}
+	server.RegisterOnShutdown(func() { shutdownStartedOnce.Do(func() { close(shutdownStarted) }) })
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		_ = server.Serve(listener)
+	}()
+	requestDone := make(chan error, 1)
+	go func() {
+		response, requestErr := http.Get("http://" + listener.Addr().String() + "/block")
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		requestDone <- requestErr
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-releaseHandler:
+		default:
+			close(releaseHandler)
+		}
+		server.Close()
+		<-serveDone
+		<-requestDone
+	})
+	return &blockingHTTPGeneration{
+		server:          server,
+		generation:      lifecyclejoin.NewGeneration(cancel, func() { <-serveDone }),
+		handlerCtx:      handlerCtx,
+		releaseHandler:  releaseHandler,
+		shutdownStarted: shutdownStarted,
+	}
+}
 
 // mockNATSClient provides a mock NATS client for testing
 type mockNATSClient struct {
@@ -86,6 +152,69 @@ func TestRuntimeServerGenerationCancelsBaseContextWithCanceledStopBudget(t *test
 		t.Fatal("server generation did not cancel handler BaseContext")
 	}
 	require.NoError(t, m.stopRuntimeServers(context.Background()))
+}
+
+func TestRuntimeServerShutdownKeepsHandlerAuthorityLiveUntilHandlerReturns(t *testing.T) {
+	runtime := newBlockingHTTPGeneration(t)
+	m := NewServiceManager(NewServiceRegistry())
+	m.httpServer = runtime.server
+	m.serverGeneration = runtime.generation
+	handlerCtx := <-runtime.handlerCtx
+
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- m.stopRuntimeServers(t.Context()) }()
+	<-runtime.shutdownStarted
+	select {
+	case <-handlerCtx.Done():
+		t.Fatal("HTTP handler authority canceled before listener Shutdown drained it")
+	default:
+	}
+	close(runtime.releaseHandler)
+	require.NoError(t, <-stopDone)
+	require.ErrorIs(t, handlerCtx.Err(), context.Canceled)
+}
+
+func TestHealthListenerShutdownKeepsHandlerAuthorityLiveUntilHandlerReturns(t *testing.T) {
+	runtime := newBlockingHTTPGeneration(t)
+	m := NewServiceManager(NewServiceRegistry())
+	m.healthServer = runtime.server
+	m.healthGeneration = runtime.generation
+	handlerCtx := <-runtime.handlerCtx
+
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- m.StopHealthListener(t.Context()) }()
+	<-runtime.shutdownStarted
+	select {
+	case <-handlerCtx.Done():
+		t.Fatal("health handler authority canceled before listener Shutdown drained it")
+	default:
+	}
+	close(runtime.releaseHandler)
+	require.NoError(t, <-stopDone)
+	require.ErrorIs(t, handlerCtx.Err(), context.Canceled)
+}
+
+func TestRuntimeServerShutdownDeadlineNamesListenerOwnerAndPhase(t *testing.T) {
+	runtime := newBlockingHTTPGeneration(t)
+	m := NewServiceManager(NewServiceRegistry())
+	m.httpServer = runtime.server
+	m.serverGeneration = runtime.generation
+	<-runtime.handlerCtx
+
+	stopCtx, cancelStop := context.WithCancel(t.Context())
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- m.stopRuntimeServers(stopCtx) }()
+	<-runtime.shutdownStarted
+	cancelStop()
+	err := <-stopDone
+	var shutdownErr *shutdownerrs.ShutdownError
+	require.ErrorAs(t, err, &shutdownErr)
+	require.Equal(t, "service-manager/http-listener", shutdownErr.Owner)
+	require.Equal(t, shutdownerrs.PhaseShutdownListener, shutdownErr.Phase)
+	require.ErrorIs(t, err, context.Canceled)
+
+	close(runtime.releaseHandler)
+	require.NoError(t, m.stopRuntimeServers(t.Context()))
 }
 
 func (m *MockService) Name() string { return m.name }

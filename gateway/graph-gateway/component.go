@@ -281,13 +281,12 @@ type Component struct {
 	httpMux    *http.ServeMux
 
 	// Lifecycle state
-	mu                sync.RWMutex
-	running           bool
-	initialized       bool
-	startTime         time.Time
-	wg                sync.WaitGroup
-	generation        *lifecyclejoin.Generation
-	shutdownOperation *lifecyclejoin.Operation
+	mu          sync.RWMutex
+	running     bool
+	initialized bool
+	startTime   time.Time
+	wg          sync.WaitGroup
+	generation  *lifecyclejoin.Generation
 
 	// Metrics (atomic)
 	messagesProcessed int64
@@ -723,7 +722,6 @@ func (c *Component) Start(ctx context.Context) error {
 		}()
 	}
 	c.generation = lifecyclejoin.NewGeneration(cancel, c.wg.Wait)
-	c.shutdownOperation = lifecyclejoin.NewOperation()
 
 	// Mark as running
 	c.running = true
@@ -745,23 +743,15 @@ func (c *Component) Stop(ctx context.Context) error {
 	}
 	c.mu.Lock()
 	generation := c.generation
-	shutdownOperation := c.shutdownOperation
+	readinessSet := c.readinessSet
+	server := c.httpServer
 	if generation == nil {
 		c.mu.Unlock()
 		return nil
 	}
 	c.mu.Unlock()
 
-	generation.Cancel()
-	shutdownErr := shutdownOperation.Run(ctx, func(ctx context.Context) error {
-		c.mu.Lock()
-		readinessSet := c.readinessSet
-		c.readinessSet = nil
-		server := c.httpServer
-		c.mu.Unlock()
-		if readinessSet != nil {
-			readinessSet.Stop()
-		}
+	stopErr := generation.StopWithQuiesce(ctx, nil, func(ctx context.Context) error {
 		if server == nil {
 			return nil
 		}
@@ -770,19 +760,32 @@ func (c *Component) Stop(ctx context.Context) error {
 		if err != nil {
 			c.logger.Warn("HTTP server shutdown error", slog.Any("error", err))
 		}
-		return err
-	})
-	if errors.Is(shutdownErr, context.Canceled) || errors.Is(shutdownErr, context.DeadlineExceeded) {
-		return shutdownErr
-	}
-
-	return generation.Stop(ctx, func() error { return shutdownErr }, func(context.Context) error {
+		return errs.NewShutdownError("graph-gateway", errs.PhaseShutdownListener, err)
+	}, func(context.Context) error {
+		if readinessSet != nil {
+			readinessSet.Stop()
+		}
 		c.mu.Lock()
+		if c.generation == generation {
+			c.readinessSet = nil
+		}
 		c.running = false
 		c.mu.Unlock()
 		c.logger.Info("component stopped gracefully", slog.String("component", "graph-gateway"))
 		return nil
 	})
+	return attributeComponentShutdownError("graph-gateway", errs.PhaseJoinRuntime, stopErr)
+}
+
+func attributeComponentShutdownError(owner string, phase errs.ShutdownPhase, err error) error {
+	if err == nil {
+		return nil
+	}
+	var shutdownErr *errs.ShutdownError
+	if errors.As(err, &shutdownErr) {
+		return err
+	}
+	return errs.NewShutdownError(owner, phase, err)
 }
 
 // ============================================================================

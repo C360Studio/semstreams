@@ -147,14 +147,13 @@ type Output struct {
 	subscriptions []*natsclient.Subscription
 
 	// Lifecycle management
-	running        bool
-	startTime      time.Time
-	mu             sync.RWMutex
-	wg             *sync.WaitGroup
-	generation     *lifecyclejoin.Generation
-	serverShutdown *lifecyclejoin.Operation
-	tlsCleanup     func()     // ACME cleanup function (stops renewal loop)
-	tlsCleanupMu   sync.Mutex // Protects tlsCleanup
+	running      bool
+	startTime    time.Time
+	mu           sync.RWMutex
+	wg           *sync.WaitGroup
+	generation   *lifecyclejoin.Generation
+	tlsCleanup   func()     // ACME cleanup function (stops renewal loop)
+	tlsCleanupMu sync.Mutex // Protects tlsCleanup
 
 	// Message ID generation
 	messageIDCounter atomic.Uint64
@@ -610,18 +609,16 @@ func (w *Output) Start(ctx context.Context) error {
 		<-startReady
 		runtimeWG.Wait()
 	})
-	serverShutdown := lifecyclejoin.NewOperation()
 	w.wg = runtimeWG
 	w.generation = generation
-	w.serverShutdown = serverShutdown
 	rollback := func() error {
 		close(startReady)
 		subscriptions := append([]*natsclient.Subscription(nil), w.subscriptions...)
 		rollbackErr := lifecyclejoin.RunPartialStartRollback(func(ctx context.Context) error {
-			return w.stopRuntime(ctx, generation, serverShutdown, w.server, subscriptions)
+			return w.stopRuntime(ctx, generation, w.server, subscriptions)
 		})
 		if rollbackErr == nil {
-			w.clearRuntime(generation, serverShutdown)
+			w.clearRuntime(generation)
 		}
 		return rollbackErr
 	}
@@ -765,7 +762,6 @@ func (w *Output) Stop(ctx context.Context) error {
 	}
 	w.mu.RLock()
 	generation := w.generation
-	serverShutdown := w.serverShutdown
 	server := w.server
 	subscriptions := append([]*natsclient.Subscription(nil), w.subscriptions...)
 	w.mu.RUnlock()
@@ -773,13 +769,13 @@ func (w *Output) Stop(ctx context.Context) error {
 		return nil
 	}
 
-	stopErr := w.stopRuntime(ctx, generation, serverShutdown, server, subscriptions)
+	stopErr := w.stopRuntime(ctx, generation, server, subscriptions)
 	if stopErr != nil {
 		return stopErr
 	}
 
 	w.mu.Lock()
-	w.clearRuntime(generation, serverShutdown)
+	w.clearRuntime(generation)
 	w.mu.Unlock()
 	return nil
 }
@@ -787,11 +783,10 @@ func (w *Output) Stop(ctx context.Context) error {
 func (w *Output) stopRuntime(
 	ctx context.Context,
 	generation *lifecyclejoin.Generation,
-	serverShutdown *lifecyclejoin.Operation,
 	server *http.Server,
 	subscriptions []*natsclient.Subscription,
 ) error {
-	generation.Signal(func() error {
+	stopErr := generation.StopWithQuiesce(ctx, func() error {
 		w.closeAllClients()
 		w.tlsCleanupMu.Lock()
 		defer w.tlsCleanupMu.Unlock()
@@ -799,29 +794,42 @@ func (w *Output) stopRuntime(
 			w.tlsCleanup()
 		}
 		return nil
-	})
-	shutdownErr := serverShutdown.Run(ctx, func(ctx context.Context) error {
+	}, func(ctx context.Context) error {
 		if server == nil {
 			return nil
 		}
-		return server.Shutdown(ctx)
-	})
-	joinErr := generation.Stop(ctx, nil, func(ctx context.Context) error {
+		return errs.NewShutdownError("websocket-output", errs.PhaseShutdownListener, server.Shutdown(ctx))
+	}, func(ctx context.Context) error {
 		var drainErr error
 		for _, sub := range subscriptions {
 			if sub != nil {
-				drainErr = errors.Join(drainErr, sub.Drain(ctx))
+				drainErr = errors.Join(drainErr, errs.NewShutdownError(
+					"websocket-output/subscriptions",
+					errs.PhaseDrainSubscriptions,
+					sub.Drain(ctx),
+				))
 			}
 		}
 		return drainErr
 	})
-	return errors.Join(shutdownErr, joinErr)
+	return attributeComponentShutdownError("websocket-output", errs.PhaseJoinRuntime, stopErr)
+}
+
+func attributeComponentShutdownError(owner string, phase errs.ShutdownPhase, err error) error {
+	if err == nil {
+		return nil
+	}
+	var shutdownErr *errs.ShutdownError
+	if errors.As(err, &shutdownErr) {
+		return err
+	}
+	return errs.NewShutdownError(owner, phase, err)
 }
 
 // clearRuntime requires w.mu write ownership and clears only the exact cleanly
 // completed generation. Genuine terminal errors deliberately retain authority.
-func (w *Output) clearRuntime(generation *lifecyclejoin.Generation, serverShutdown *lifecyclejoin.Operation) {
-	if w.generation != generation || w.serverShutdown != serverShutdown {
+func (w *Output) clearRuntime(generation *lifecyclejoin.Generation) {
+	if w.generation != generation {
 		return
 	}
 	w.running = false
@@ -829,7 +837,6 @@ func (w *Output) clearRuntime(generation *lifecyclejoin.Generation, serverShutdo
 	w.subscriptions = nil
 	w.wg = nil
 	w.generation = nil
-	w.serverShutdown = nil
 	w.tlsCleanupMu.Lock()
 	w.tlsCleanup = nil
 	w.tlsCleanupMu.Unlock()

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"sync"
+
+	shutdownerrs "github.com/c360studio/semstreams/pkg/errs"
 )
 
 // Operation coordinates one context-bound protocol shutdown operation. The
@@ -59,6 +61,9 @@ func (o *Operation) Run(ctx context.Context, op func(context.Context) error) err
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		o.accumulate(nonContextError(err, ctxErr))
+		if err != nil {
+			return errors.Join(o.result(), err)
+		}
 		return errors.Join(o.result(), ctxErr)
 	}
 	o.mu.Lock()
@@ -86,11 +91,22 @@ func (o *Operation) result() error {
 
 // nonContextError removes the caller's expired-context branch while retaining
 // genuine errors returned alongside it. Joined errors are the standard shape
-// for reporting both; wrappers around a joined error lose only their wrapper
-// text so a stale context sentinel cannot contaminate the eventual result.
+// for reporting both. Structured shutdown attribution is rebuilt around its
+// filtered genuine cause so owner and phase survive later authorized rejoin.
 func nonContextError(err, ctxErr error) error {
 	if err == nil || ctxErr == nil {
 		return err
+	}
+	if shutdownErr, ok := err.(*shutdownerrs.ShutdownError); ok {
+		filtered := nonContextError(shutdownErr.Err, ctxErr)
+		if filtered == nil {
+			return nil
+		}
+		return &shutdownerrs.ShutdownError{
+			Owner: shutdownErr.Owner,
+			Phase: shutdownErr.Phase,
+			Err:   filtered,
+		}
 	}
 	if children, ok := err.(interface{ Unwrap() []error }); ok {
 		filtered := make([]error, 0, len(children.Unwrap()))
