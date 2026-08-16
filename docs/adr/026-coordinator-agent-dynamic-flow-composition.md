@@ -2,6 +2,11 @@
 
 ## Status
 
+**Partially superseded by [ADR-094](094-boot-only-composition-and-observable-rule-activation.md) — 2026-08-16.**
+Coordinator judgment, structured decisions, and durable flow/rule authoring remain. Generalized live flow-topology
+activation is retired; flow changes require restart, while dedicated rule-definition hot reload remains available with
+revision-bound activation truth.
+
 **Partial — Phase 1 shipped, dynamic-composition tools deferred.** The
 coordinator persona, the `decide` terminal tool, and the deep-research
 flow that exercises coordinator judgment are all landed and verified
@@ -31,9 +36,13 @@ Semstreams commits to rule skeleton + coordinator agent + ops agent (ADR-028). T
 - **Reads agent output on demand** via `read_loop_result(loop_id)`. The upstream agent's prose is never injected into the coordinator's prompt — the coordinator fetches only what fits its context.
 - **Returns a structured terminal decision** via a `decide()` tool whose schema enumerates the valid next actions (e.g. `fan_out`, `synthesize`, `retry`, `done`). Rules downstream match on `coordinator.decision.next_action` triples and route accordingly.
 - **Contains schema discipline to one role.** Researcher, coder, synthesizer, reviewer agents produce free text. Only the coordinator needs structured output — which means ADR-028's per-tool retry policy gets invoked at the coordinator's `decide` tool, not at every role's submit boundary.
-- **Can manipulate flows and rules at runtime** via the six tool executors defined below. That's how the coordinator adapts the pipeline when its judgment reveals a gap.
+- **Can author durable flows and hot-activate bounded rule definitions.** ADR-094 makes component/topology activation
+  boot-only; the historical runtime-flow wording below is superseded. Coordinator judgment still adapts desired
+  pipelines, but flow composition becomes effective only after a successful restart.
 
-The six dynamic-flow-composition tools originally proposed by this ADR remain correct and necessary — they're the coordinator's mechanism for shaping flows when static configuration doesn't cover the case. But the coordinator is not primarily a flow composer; it's the judgment layer that *happens to be able to* compose flows when it needs to.
+The authoring tools originally proposed by this ADR remain useful for shaping durable desired flows when static
+configuration does not cover the case. Their historical same-process activation semantics are superseded by ADR-094.
+The coordinator is not primarily a flow composer; it is the judgment layer that can author composition when needed.
 
 ## Why one judgment role, not per-agent schema
 
@@ -114,7 +123,12 @@ Per-flow coordinators can tighten or relax the retry envelope in their config.
 
 ### Flow-composition tool executors
 
-The original six executors remain the coordinator's toolkit for shaping pipelines when static configuration doesn't cover the case. They're still required; the framing around them just shifts from "coordinator's purpose" to "coordinator's reach."
+> **Historical activation model:** ADR-094 supersedes this section wherever it says a flow write changes the running
+> component topology. Flow tools author and validate durable desired state; only the dedicated rule-definition path may
+> activate live.
+
+The original executors remain the coordinator's authoring toolkit for shaping desired pipelines when static
+configuration does not cover the case. Their runtime activation descriptions below are retained as historical context.
 
 ### Tool executors
 
@@ -163,6 +177,9 @@ goal and to decide the next action.
 
 ### Composition model: flows, not composite components
 
+> **Historical activation model:** the structural choice to compose flows remains. The `ComponentManager` watch and
+> same-process instantiation claims below are superseded by ADR-094; a successful boot consumes the authored topology.
+
 SemStreams implements composition at the flow orchestration level, not the component
 level. There is no runtime "composite component" type — components are atomic processors
 that transform data, and composition is the job of flows.
@@ -187,6 +204,10 @@ model, tools, and memory nodes with port connections between them — not a sing
 component that hides its internals.
 
 ### Infrastructure prerequisites
+
+> **Historical activation model:** the ConfigManager-to-ComponentManager activation wiring below is superseded.
+> Current rule work uses the bounded, pack-scoped, revision-observable Rule capability from ADR-094 and does not restore
+> generic runtime component configuration.
 
 Two wiring tasks must be completed before `create_rule` has a working backend:
 

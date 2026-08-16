@@ -20,12 +20,13 @@ state under the caller's Stop context and SHALL NOT manufacture a detached conte
 - **THEN** every continuing goroutine started by that owner observes cancellation
 - **AND** the owner can join those goroutines without inventing another lifetime root
 
-#### Scenario: Supervisor stack owns dynamic runtime authority
+#### Scenario: Supervisor stack owns boot runtime authority
 
 - **GIVEN** ComponentManager starts its supervisor with context C as a goroutine function parameter
-- **WHEN** an admitted dynamic component starts
+- **WHEN** an admitted boot component starts
 - **THEN** its lifetime descends from C
 - **AND** no request context, struct field, retained closure, or provider becomes its runtime authority
+- **AND** no post-boot component Start is admitted
 
 #### Scenario: Library startup cannot invent authority
 
@@ -74,37 +75,49 @@ and end when the server is stopped and joined. No other production closure may r
 - **THEN** it returns C or a descendant without inventing or detaching a root
 - **AND** the private closure cannot outlive the joined server lifecycle
 
-### Requirement: Stop signals the Start lifetime before bounding its join
+### Requirement: Stop quiesces accepted work before canceling its Start lifetime
 
-`Stop(ctx context.Context)` SHALL first signal cancellation of runtime work derived from Start, then use the Stop
-argument only to bound joining that work and completing terminal cleanup. Stop SHALL NOT use its argument to launch a
-new runtime lifetime. Stop SHALL be idempotent and SHALL NOT repeat teardown side effects.
+`Stop(ctx context.Context)` SHALL use the Stop argument only to bound quiesce, accepted-work drain, private Start
+cancellation, joining, and terminal cleanup. It SHALL NOT use that argument to launch a new runtime lifetime. An owner
+with admission or already-accepted work SHALL fence new admission and drain or settle accepted work while its Start
+authority remains live, then signal private Start cancellation and join. An owner with no admission or accepted-work
+drain MAY signal cancellation immediately. Stop SHALL be idempotent and SHALL NOT repeat teardown side effects.
 
-An exported error-returning context boundary SHALL reject nil. A canceled Stop context does not excuse failure to
-signal runtime cancellation; after signaling, the implementation SHALL return the context error when bounded join or
-cleanup cannot continue.
+An exported error-returning context boundary SHALL reject nil. An already-canceled Stop context cannot authorize new
+cleanup work; the owner SHALL fence admission, signal private cancellation, and return the context error if no phase
+can complete immediately. It SHALL NOT invent a replacement context.
 
-#### Scenario: Stop cancellation precedes join
+#### Scenario: NATS owner drains before cancellation
 
-- **GIVEN** an owner with running work derived from Start context C
+- **GIVEN** an owner with admitted NATS callbacks derived from Start context C
 - **WHEN** `Stop(S)` is called
-- **THEN** the owner signals cancellation of work under C before waiting
-- **AND** S bounds only the wait and terminal cleanup
+- **THEN** the owner fences new intake while C remains live
+- **AND** it drains and settles accepted callbacks before signaling private cancellation under C
+- **AND** S bounds the phases and join without becoming work authority
+
+#### Scenario: Simple owner may cancel immediately
+
+- **GIVEN** an owner has no admission or accepted-work drain
+- **WHEN** `Stop(S)` is called
+- **THEN** it may signal private Start cancellation immediately
+- **AND** S bounds its join and terminal cleanup
 
 #### Scenario: Stop waits for the exact in-flight Start
 
 - **GIVEN** generation G has an in-flight Start call
 - **WHEN** its owner begins `Stop(S)`
-- **THEN** the owner cancels G and waits for G's Start call and Start finalization to return
+- **THEN** the owner completes any required quiesce and then cancels G
+- **AND** it waits for G's Start call and Start finalization to return
 - **AND** it invokes Stop on G only after that completion
 - **AND** no Start and Stop method body overlaps for G
 
-#### Scenario: Terminal manager Stop cancels before bounded drains
+#### Scenario: Terminal manager Stop fences borrows before component drain
 
 - **GIVEN** ComponentManager owns running generations and admitted callback borrows
 - **WHEN** terminal `Stop(S)` receives valid S
-- **THEN** it closes every borrow gate and signals every runtime cancellation before bounded waiting
-- **AND** it drains admitted borrows before awaiting exact Start/finalization and invoking component Stop
+- **THEN** it closes every borrow gate and drains admitted borrows before component Stop
+- **AND** NATS-owning components quiesce and drain accepted work before their private cancellation
+- **AND** the manager then cancels remaining runtimes and awaits exact Start/finalization
 - **AND** no manager or gate lock is held during callbacks, drains, joins, or component Stop
 
 #### Scenario: Stop deadline expires
@@ -112,7 +125,7 @@ cleanup cannot continue.
 - **GIVEN** runtime work does not join before Stop context S expires
 - **WHEN** `Stop(S)` waits for it
 - **THEN** Stop returns an error wrapping `S.Err()`
-- **AND** the runtime cancellation signal remains issued
+- **AND** admission remains fenced and any issued runtime cancellation remains issued
 
 #### Scenario: Nil context is rejected
 

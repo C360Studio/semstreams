@@ -1,24 +1,30 @@
 ## Context
 
 At baseline `444b7912`, public Stop contracts take `time.Duration`, shutdown invents background roots,
-`ManagedComponent` exports cancellation, and Registry generations expose component handles. Replacement can therefore
-return an incumbent while it is stopping and can still fail after retirement.
+`ManagedComponent` exports cancellation, and Registry generations expose component handles. The atomic Stop migration
+landed before beta.161. ADR-094 subsequently removed the need to repair live replacement: runtime composition is one
+sealed boot generation plus restart-safe terminal shutdown.
 
 ## Goals
 
 - Make the composition-root context the ancestor of runtime work.
 - Make cancellation and bounded joining explicit at every lifecycle boundary.
 - Keep Registry declaration-only and ComponentManager the sole runtime-handle owner.
-- Make replacement availability and declaration commit authority honest and race-free.
+- Make terminal access fencing and same-generation shutdown honest and race-free.
 - Keep this lifecycle protocol out of reactive orchestration.
 
 ## Decisions
 
-### D1 — Start owns lifetime; Stop bounds joining
+### D1 — Start owns lifetime; Stop bounds quiesce and joining
 
 `Start(ctx)` receives runtime lifetime authority. An owner may derive a child and retain only private synchronized
-cancellation and join state, never the context. `Stop(ctx)` validates non-nil first, signals the Start lifetime, and
-uses its argument only to bound joining and terminal cleanup. It never launches continuing work.
+cancellation and join state, never the context. `Stop(ctx)` validates non-nil first and uses its argument only to bound
+quiesce, drain, cancellation, join, and terminal cleanup. It never launches continuing work.
+
+For a NATS-owning component, graceful Stop first closes admission and drains already-accepted callbacks while their
+work context remains live, then cancels and joins remaining Start-owned work. A component with no admission/drain may
+cancel immediately. The composition root does not pre-cancel runtime on SIGTERM before owners can quiesce. Dirty
+shutdown correctness comes from durable settlement and idempotent recovery, not Stop ordering.
 
 A valid repeated Stop rejoins the same generation and returns nil only after clean terminal completion. A previously
 observed genuine terminal failure remains observable; repetition does not erase it. Nil Stop and StopAll return a typed
@@ -58,16 +64,16 @@ and ends with the joined server lifecycle.
 Terminal cleanup uses private cancellation and join state under caller authority. A future exception requires a new
 owner-approved inventory and design.
 
-### D4 — Registry is declaration-only
+### D4 — Registry is declaration-only and boot-admitted
 
-Registry generations and snapshots contain factory identity, cloned declarations, normalized facts, resources, and a
-local generation identifier. They contain no runtime component handle, lifecycle state, readiness, or availability.
+Registry snapshots contain factory identity, cloned declarations, normalized facts, resources, and a local boot
+generation identifier. They contain no runtime component handle, lifecycle state, readiness, or availability.
 Flow graph and declaration observers consume those value facts only.
 
 Retire Registry `Component`, `ListComponents`, deprecated `GetComponent`, handle-returning `CreateComponent` and
 `ReplaceComponent`, construction-capability-returning `GetFactory`, and every snapshot component reference. Factory
-construction moves behind an opaque, manager-authorized prepare operation. `RegisterFactory` remains registration
-input and value-only `ListFactories` remains observation. Every other exported Registry method is value-only.
+construction moves behind opaque manager-authorized boot preparation. `RegisterFactory` remains registration input
+and value-only `ListFactories` remains observation. No post-boot admission, replacement, or removal API survives.
 
 ### D5 — ComponentManager owns runtime access through scoped borrows
 
@@ -85,83 +91,50 @@ func (cm *ComponentManager) WithComponent(
 ) error
 ```
 
-`WithComponent` returns typed `Missing`, `Transitioning`, or `Failed` errors. On success it increments an entry-local
+`WithComponent` returns typed `Missing`, `Stopping`, or `Failed` errors. On success it increments an entry-local
 borrow count under a private gate lock, releases every manager/gate lock, invokes `use`, and decrements the count on
 return. The handle is valid only for the callback and must not be retained. Callback execution and drain waiting never
 hold manager or gate locks.
 
-A callback must not synchronously request Stop, Remove, or Replace for the same instance: that operation would wait on
-the callback's own borrow. It returns first and asks an outer coordinator to request the lifecycle mutation.
+A callback must not synchronously request terminal Stop for its own instance: that operation would wait on the
+callback's own borrow. Closing a gate rejects new borrows and exposes a boot-generation-scoped drained signal.
+Terminal Stop waits on that signal outside locks. There is no post-boot remove or replace transition.
 
-Closing a gate rejects new borrows and exposes a generation-scoped drained signal. Replacement/removal waits on that
-signal outside locks. Tests deterministically cover borrow-versus-transition races.
-
-### D6 — The supervisor lexically owns the Start context
+### D6 — The boot supervisor lexically owns the Start context
 
 `ComponentManager.Start(ctx)` passes `ctx` as the supervisor goroutine function parameter (`go supervise(ctx)`). The
-goroutine stack owns it; no stored closure or context-returning provider does. The struct retains only command, done,
-cancel, and join state. Dynamic add/replacement requests send commands to that supervisor.
+goroutine stack owns it; no stored closure or context-returning provider does. The struct retains only private fence,
+cancel, done, and join state. The supervisor starts only the validated boot set. No request can transfer a later
+component lifetime into it.
 
-An operation context bounds preparation, admission, borrow drain, and waiting for a result. It never becomes the new
-component lifetime. Candidate Start derives from the supervisor's Start context. Once admitted, cancellation of the
-request context does not cancel candidate runtime; manager lifetime cancellation does.
+### D7 — Terminal Stop owns the only runtime transition
 
-### D7 — Replacement has two points of no return
+Terminal Stop validates its context, closes every borrow gate, and invokes each started component's Stop while the
+Start lifetime remains live enough for component-owned quiesce and accepted-work drain. It holds no manager or gate
+lock while waiting or calling component code. A NATS-owning component fences intake, drains accepted callbacks, and
+settles required publications before signaling its private Start cancellation. Components without admission or drain
+may cancel immediately.
 
-Replacement is a local lifecycle protocol, not a rule or workflow. Its exact order is:
-
-1. prepare candidate and reserve declaration/resources;
-2. close incumbent borrow gate and drain in-flight borrows;
-3. cancel the incumbent generation;
-4. wait for the exact in-flight Start call and Start finalization;
-5. call Stop on that same generation, only if Start was invoked;
-6. receive declaration-commit authority from successful Stop;
-7. infallibly commit candidate declaration;
-8. install candidate runtime entry and Start it from the supervisor context.
-
-The first point of no return is availability: once generation cancellation is signaled, the incumbent never becomes
-borrowable again. The second is declaration replacement: successful Stop produces the phase-typed token authorizing
-an infallible Registry commit. No fallible check remains after that token is issued.
-
-Before cancellation, operation failure may reopen the borrow gate and preserve the incumbent. Stop failure leaves the
-incumbent current, `Failed`, and unavailable; reservation releases and candidate is discarded. No predecessor is
-resurrected.
-
-If the operation context expires after cancellation while waiting for Start completion/finalization, the incumbent
-becomes current `Failed` and unavailable. The candidate is discarded; nothing commits or starts, and no detached
-cleanup is launched. If Start was never invoked, Lifecycle Stop is not called. A later caller-authorized cleanup first
-joins the generation and then calls Stop.
-
-Candidate Start occurs only after declaration commit. If it fails, the manager closes the candidate borrow gate,
-cancels that exact generation, joins its Start completion and finalization, invokes Lifecycle Stop because Start was
-invoked, and removes exact partial store claims. The candidate then remains current, `Failed`, and unavailable; the
-predecessor never returns.
-
-Removal uses the same incumbent retirement order without a candidate: close gate, drain admitted borrows outside
-locks, cancel the generation, await exact Start completion/finalization, invoke Stop if Start ran, then remove runtime
-and declaration state.
-
-Terminal ComponentManager Stop has a different safety order. It validates the Stop context first, closes every borrow
-gate, signals every runtime lifetime cancellation before any bounded wait, drains admitted borrows, awaits each exact
-Start/finalization, and invokes Stop for each started generation. No callback or drain holds manager or gate locks.
+After component quiesce, ComponentManager signals remaining Start cancellations, joins each exact boot generation and
+Start finalization, and records the same-generation Stop result. Transport connection drain follows component-owned
+publication barriers. Deadline failure remains observable and a repeated Stop rejoins the same shutdown operation; no
+detached cleanup starts. Dirty shutdown runs none of this protocol and relies on durable recovery from ADR-094.
 
 ## Invariants
 
-1. Registry owns declarations; ComponentManager alone owns runtime handles and availability.
+1. Registry owns boot declarations; ComponentManager alone owns runtime handles and availability.
 2. A runtime handle never escapes a scoped manager borrow callback.
-3. Replacement/removal gate close and borrow drain precede cancellation; cancellation ends availability.
-4. Cancellation, exact Start completion/finalization, and same-generation Stop occur in that order.
-5. Start and Stop method bodies never overlap for one generation.
-6. Successful Stop alone creates declaration-commit authority; commit is then infallible.
-7. Request cancellation after admission cannot cancel runtime; the manager Start context can.
-8. Stop failure or post-cancel drain expiry leaves the incumbent current, `Failed`, and unavailable.
-9. Post-commit Start failure leaves the candidate current, `Failed`, and unavailable.
-10. No cleanup invents or detaches a context.
-11. Terminal manager Stop closes all gates, cancels all runtimes, then drains borrows before Start joins and Stop.
-12. A borrow callback never synchronously mutates lifecycle for its own instance.
+3. No component/service/topology mutation changes the admitted boot generation.
+4. Terminal Stop closes borrow admission and drains admitted callbacks without manager or gate locks.
+5. NATS-owning components quiesce and drain accepted work before Start cancellation; simple owners may cancel first.
+6. Start and Stop method bodies never overlap for one boot generation.
+7. The exact started generation is the generation joined and stopped.
+8. A deadline failure remains observable and repeated Stop rejoins the same operation.
+9. No cleanup invents or detaches a context.
+10. Dirty restart recovery depends on durable state and settlement, never shutdown hooks.
 
 ## Validation strategy
 
 - Atomic Stop prerequisite: all local gates, `task e2e:core`, and `task e2e:semantic`.
-- Declaration/runtime split and replacement: deterministic race tests plus both core and semantic E2E tiers.
+- Declaration/runtime split and terminal shutdown: deterministic race tests plus both core and semantic E2E tiers.
 - Every implementation PR requires semstreams-reviewer approval before merge.

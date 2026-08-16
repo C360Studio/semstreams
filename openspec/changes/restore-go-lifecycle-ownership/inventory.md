@@ -8,6 +8,23 @@
 - Sister repositories were inspected only to identify migration surfaces. They remain read-only.
 - File and line references below are exact at the baseline. Later edits may move them.
 
+### Beta.161 target addendum
+
+The baseline sections below remain forensic evidence, not current target design. At exact beta.161 candidate
+`9d0ff67f377ea3dd82dca2f3bf614871c0100766`:
+
+- the atomic context-bearing Stop prerequisite is complete;
+- ADR-094 supersedes the replacement authority and phase-collision target;
+- post-boot replacement/removal/Transitioning protocols are deleted rather than repaired;
+- runtime composition is one sealed boot generation plus restart-safe terminal Stop; and
+- the remaining direct-field census is five contexts across four structs:
+  `processor/graph-ingest.Component` (`ingestPoolCtx`, `ingestSubmitCtx`), `processor/rule.Processor`
+  (`watcherCtx`), `processor/rule.KVConfigManager` (`ctx`), and `processor/rule.CronScheduler` (`parentCtx`).
+
+The beta.161 root census also found 39 unauthorized production `Background`, `TODO`, `WithoutCancel`, nil-fallback,
+or indirect roots after the approved partial-start rollback and HTTP `BaseContext` exceptions. Phase 3 must refresh the
+exact callsite list before implementation because this file's original nine/eight count is historical.
+
 ## SemStreams lifecycle contract surfaces
 
 - Component lifecycle: `component/lifecycle.go:44-54`. `LifecycleComponent.Stop(time.Duration)` cannot receive caller
@@ -60,7 +77,10 @@ The baseline still retains nine `context.Context` fields across eight production
 The baseline has no production `context.TODO` call. This is not a zero-debt claim: production roots and severances
 remain outside this narrow list and require their own type-aware closeout inventory.
 
-## Replacement authority and phase collision table
+## Historical replacement authority and phase collision table
+
+**Superseded by ADR-094.** The bullets below describe the abandoned repair design. They are retained only to explain
+why boot-only composition removes material lifecycle complexity; none is an implementation target.
 
 - Candidate preparation is compatible: both designs prepare off-Registry without runtime authority.
 - Reservation extends current behavior with explicit, phase-typed replacement authority.
@@ -77,6 +97,9 @@ current, Failed, and unavailable. Successful Stop permits only infallible candid
 
 ## Existing specification collisions
 
+The first two collisions below are historical and move to `require-restart-for-config-activation`; this change no
+longer carries component-discovery or component-runtime-config deltas.
+
 - `component-runtime-config`, `openspec/specs/component-runtime-config/spec.md:494-514`: modify replacement for the
   scoped-borrow transition and separate availability/commit points of no return.
 - `component-discovery`, `openspec/specs/component-discovery/spec.md:163-200`: keep declaration identity and add the
@@ -92,7 +115,7 @@ contracts. No materialized spec or active change authorizes a stored context or 
 
 The adopter is a developer outside SemStreams who implements a component or service and has not read the manager.
 
-- What must they know? `Start(ctx)` owns runtime lifetime. `Stop(ctx)` cancels it and bounds join and cleanup.
+- What must they know? `Start(ctx)` owns runtime lifetime. `Stop(ctx)` bounds quiesce, cancellation, join, and cleanup.
 - What happens if they do nothing? Implementations and direct calls fail compilation.
 - Where do they find out? Migration guide, release notes, compiler errors, and interface documentation.
 - What should they have to know? No manager internals, replacement phases, timeout defaults, or cancel handles.
@@ -106,13 +129,13 @@ root, or reach into a managed record to cancel another owner.
 The second adopter is a runtime consumer that currently reads a component handle from Registry, ComponentManager,
 flow graph, or `Dependencies.ComponentRegistry`.
 
-- What must they know? Runtime access is callback-scoped; missing, Transitioning, and Failed are typed errors.
+- What must they know? Runtime access is callback-scoped; missing, stopping, and failed are typed errors.
 - What happens if they do nothing? Retired raw-return APIs fail compilation at the exact consumer call site.
 - Where do they find out? The lifecycle migration guide, release notes, compiler errors, and `WithComponent` GoDoc.
-- What should they have to know? No gate, borrow counter, generation cancel, replacement phase, or drain ordering.
+- What should they have to know? No gate, borrow counter, generation cancel, or drain ordering.
 
-The callback-only handle cannot be retained. If the callback needs its own instance stopped, removed, or replaced, it
-returns first and asks an outer coordinator to request the mutation so it never waits on its own borrow.
+The callback-only handle cannot be retained. If terminal shutdown begins, an admitted callback returns before its
+component is stopped; no post-boot remove or replace request exists.
 
 ## Sister-repository migration census
 
