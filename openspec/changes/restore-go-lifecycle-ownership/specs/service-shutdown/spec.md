@@ -48,15 +48,16 @@ attempting remaining services after an error. It MUST NOT invent a background ro
 
 - **GIVEN** shutdown context S expires while services remain
 - **WHEN** `Manager.StopAll(S)` continues the reverse-order sequence
-- **THEN** each remaining service still receives S so it can signal its runtime cancellation
+- **THEN** each remaining service still receives S so it can fence admission and signal private cancellation
 - **AND** `StopAll` returns errors that preserve the cancellation or deadline cause
 
 ### Requirement: A framework service Stop is idempotent on repeated invocation
 
-A framework service's `Stop(ctx context.Context)` MUST first signal cancellation of work derived from its Start
-context and use the Stop argument only to bound joining and terminal cleanup. Stop MUST be idempotent: invoking it on a
-service already stopped or stopping MUST NOT repeat teardown side effects. It MUST NOT invent a background root.
-`Stop(nil)` MUST return typed invalid-input before inspecting state or performing any lifecycle action.
+A framework service's `Stop(ctx context.Context)` MUST use the Stop argument only to bound quiesce, accepted-work
+drain, private Start cancellation, joining, and terminal cleanup. A service with admission or accepted work MUST fence
+and drain before cancellation; a service without those phases MAY cancel immediately. Stop MUST be idempotent:
+invoking it on a service already stopped or stopping MUST NOT repeat teardown side effects. It MUST NOT invent a
+background root. `Stop(nil)` MUST return typed invalid-input before inspecting state or performing lifecycle action.
 
 #### Scenario: Stop called twice does not repeat teardown
 
@@ -91,7 +92,7 @@ service already stopped or stopping MUST NOT repeat teardown side effects. It MU
 
 - **GIVEN** a running service and an already-canceled Stop context S
 - **WHEN** `Stop(S)` is called
-- **THEN** the service still signals its Start-owned runtime cancellation
+- **THEN** the service fences new admission and signals its private Start-owned runtime cancellation
 - **AND** it returns an error preserving `S.Err()` if the join cannot complete immediately
 
 #### Scenario: Nil Stop performs no action

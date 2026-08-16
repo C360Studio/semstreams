@@ -1,9 +1,13 @@
 ## Why
 
-SemStreams still represents graceful shutdown with a duration even though `Start` receives caller authority. Services
-and components therefore invent new background roots at shutdown, managed records export cancellation functions, and
-replacement stops an incumbent while Registry still advertises it as available. Those shapes obscure lifecycle
-ownership in a reactive framework where cancellation and join ordering are correctness properties.
+SemStreams originally represented graceful shutdown with a duration even though `Start` receives caller authority.
+The atomic Stop prerequisite corrected that signature and private cancellation ownership. Remaining work removes raw
+runtime handles, retained contexts, invented roots, and teardown paths that can bypass native drain or restart
+recovery.
+
+ADR-094 and `require-restart-for-config-activation` supersede this change's live component replacement design. Runtime
+composition is one sealed boot generation plus restart-safe terminal shutdown; replacement/removal transition
+protocols are deleted rather than repaired.
 
 This is **BREAKING** by design. Compile failures are safer than compatibility shims that preserve detached work or
 ambiguous authority.
@@ -14,18 +18,16 @@ ambiguous authority.
 - Change component shutdown to caller-owned context: `LifecycleComponent.Stop(ctx)`.
 - Land the service and component signature changes as one atomic prerequisite, with distinct test and migration
   sections inside that PR.
-- Define `Start(ctx)` as the lifetime authority for runtime work. `Stop(ctx)` first signals that lifetime to cancel,
-  then uses its argument only to bound join and cleanup.
-- Establish a manager supervisor whose goroutine function parameter owns the Start context for every dynamic runtime.
+- Define `Start(ctx)` as the lifetime authority for runtime work. `Stop(ctx)` uses its argument to bound quiesce,
+  drain, private lifetime cancellation, join, and cleanup. Owners with accepted work drain before cancellation;
+  owners without an admission/drain phase may cancel immediately.
+- Establish manager/component supervisors whose goroutine function parameters own Start contexts for boot runtimes.
 - Remove exported `context.CancelFunc` authority and prohibit production context retention or invented roots outside
   process composition and tests.
-- Make Registry declaration-only and ComponentManager the sole runtime-handle owner through scoped callback borrows.
-- Replace callback-driven Registry replacement with phase-typed authority and two explicit points of no return.
-- Make an incumbent unavailable before its `Stop` begins; make post-retirement commit infallible; start the candidate
-  only after commit.
-- If incumbent Stop fails, retain the incumbent as current in `Failed` and unavailable; do not commit or start the
-  candidate and do not resurrect a canceled runtime.
-- If candidate Start fails after commit, retain it as the current `Failed` generation. Never resurrect its predecessor.
+- Depend on ADR-094 for value-only Registry/observation, callback-scoped boot-runtime access, and deletion of all live
+  replacement/removal paths.
+- Make terminal Stop fence external borrows, quiesce and drain accepted NATS work, then cancel and join the exact boot
+  generation. Dirty restart relies on durable settlement rather than shutdown hooks.
 - Publish a migration guide and read-only sister-repository callsite census.
 
 ## Atomic prerequisite
@@ -44,7 +46,7 @@ temporary adapter, deprecated overload, or knowingly incomplete merged state.
 - Storing `context.Context` so a no-argument Stop can find it later.
 - Keeping deprecated duration-based public overloads or exported cancellation handles.
 - Editing sister repositories from SemStreams.
-- Combining later NATS, HTTP, store-manager, embedding, rule, fusion, or recording cleanup into this prerequisite.
+- Reintroducing generalized live component replacement or removal.
 - Changing wire formats, NATS subjects, persisted state, or configuration schema.
 
 ## Capabilities
@@ -56,8 +58,6 @@ temporary adapter, deprecated overload, or knowingly incomplete merged state.
 
 ### Modified Capabilities
 
-- `component-runtime-config`: ComponentManager owns scoped runtime borrows and phase-typed replacement.
-- `component-discovery`: Registry generations become declaration-only and all raw handle/factory reads retire.
 - `service-shutdown`: service Stop and StopAll accept caller context while preserving idempotency, reverse ordering,
   and genuine error aggregation.
 
@@ -65,7 +65,7 @@ temporary adapter, deprecated overload, or knowingly incomplete merged state.
 
 - **Go API:** every `LifecycleComponent`, `Service`, direct Stop caller, and `Manager.StopAll` caller must migrate.
 - **Runtime:** shutdown authority flows from composition root to services and components; no library root is invented.
-- **Replacement:** manager-scoped borrows return typed missing, Transitioning, or Failed; Registry remains
-  declaration-only.
+- **Runtime access:** Registry remains value-only; callback borrows of the sealed boot generation return typed missing,
+  failed, or stopping without exposing transition/replacement authority.
 - **Downstream:** compiler-directed migrations are required. Sister teams own their repositories and product proof.
 - **Release:** the atomic prerequisite is breaking and requires both relevant E2E gates before it merges.

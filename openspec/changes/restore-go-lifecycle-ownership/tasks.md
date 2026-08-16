@@ -12,7 +12,8 @@
 - [x] 1.7 Add a generation-binding test proving cancel, exact in-flight Start completion/finalization, then
   same-generation Stop, with no Start/Stop method overlap.
 - [x] 1.8 Establish the manager lifecycle supervisor with Start context passed as its goroutine function parameter;
-  prove dynamic post-boot Start descends from that context rather than a request context.
+  prove its supervisor-owned Start context rather than a request context. The historical dynamic post-boot Start half
+  is superseded by ADR-094 and is not a current target.
 - [x] 1.9 Add no duration adapter, deprecated overload, default duration, or incomplete intermediate signature set.
 - [x] 1.10 Obtain semstreams-reviewer approval; run `task lint`, `go test -race ./...`, integration and contract tests,
   schema drift check, `task e2e:core`, and `task e2e:semantic` before merging the atomic prerequisite.
@@ -28,36 +29,28 @@ Start until a later Stop, called with a fresh live shutdown context, reaches ter
 `MilestoneSubscriber.Start` can return both a non-nil stop function and a non-nil error after partial acquisition;
 the caller must preserve and invoke that stop function.
 
-## 2. Replacement lifecycle protocol
+## 2. Boot runtime ownership and restart-safe terminal Stop
 
-- [ ] 2.1 Remove runtime handles from Registry generations, snapshots, observers, and flow graph.
-- [ ] 2.2 Internalize Registry `CreateComponent`, `ReplaceComponent`, and `GetFactory`; retire `Component`,
-  `ListComponents`, and deprecated `GetComponent`; leave exported Registry methods registration-only or value-only.
-- [ ] 2.3 Retire ComponentManager raw handle reads, exported `ManagedComponent` leakage, `component.Lookup`, and
-  `Dependencies.ComponentRegistry`; add value DTO observation and scoped `WithComponent` borrows.
-- [ ] 2.4 Add typed missing, Transitioning, and Failed borrow errors; prohibit same-instance lifecycle mutation inside
-  a borrow callback.
-- [ ] 2.5 Implement replacement/removal gate close/drain, cancellation, exact Start finalization, and same-generation
-  Stop in that order.
-- [ ] 2.6 Implement terminal manager Stop as validate context, close all gates, cancel all runtimes, drain borrows,
-  await exact Start/finalization, then component Stop.
-- [ ] 2.7 Prove cancellation is irreversible availability loss and successful Stop alone authorizes infallible commit.
-- [ ] 2.8 On post-cancel Start-drain expiry, retain incumbent Failed/unavailable, discard candidate, and launch no
-  detached cleanup; later authorized cleanup joins before Stop.
-- [ ] 2.9 Reuse the prerequisite supervisor for candidate Start and prove request cancellation after replacement
-  admission does not cancel runtime.
-- [ ] 2.10 On candidate Start failure, cancel and join that generation, call Stop, remove exact partial store claims,
-  then retain it current Failed/unavailable without predecessor restoration.
-- [ ] 2.11 Add deterministic active-borrow races for Remove and terminal Stop, plus replacement, Stop failure,
-  drain-expiry, and Start-failure tests.
-- [ ] 2.12 Obtain reviewer approval; run all local gates, `task e2e:core`, and `task e2e:semantic` before merge.
+- [ ] 2.1 Land `require-restart-for-config-activation` first. It owns value-only Registry/observation, callback-scoped
+  boot-runtime access, generalized live-mutation deletion, graceful drain, and dirty-restart proof.
+- [ ] 2.2 Verify Registry, ComponentManager DTOs, flow graph, `component.Lookup`, and
+  `Dependencies.ComponentRegistry` expose no raw runtime handle or cancellation authority.
+- [ ] 2.3 Verify live `ReplaceComponent`, removal, reservation, Transitioning, candidate, and predecessor-restoration
+  protocols are absent rather than redesigned.
+- [ ] 2.4 Prove callback borrows return typed missing/failed/stopping and terminal Stop fences and drains them without
+  holding manager locks.
+- [ ] 2.5 Prove terminal manager Stop lets NATS-owning components quiesce/drain accepted work before cancellation and
+  exact-generation join; deadline failure remains observable and rejoinable.
+- [ ] 2.6 Obtain reviewer approval; run local gates plus controlled/dirty restart, `task e2e:core`, and
+  `task e2e:semantic` before merge.
 
 ## 3. Remaining context debt
 
-This entire phase remains deferred. In particular, the stored-context and invented-root debt inventoried in Rule and
-the other phase-3 areas is not erased by completion of the atomic Stop prerequisite.
+This phase remains required. The beta.161 refresh found five retained direct runtime contexts across four structs and
+39 unauthorized production roots after the approved rollback/BaseContext exceptions; the older nine/eight baseline
+count below is historical, not current truth.
 
-- [ ] 3.1 Remove the nine stored context fields across eight structs listed in `inventory.md` in reviewed slices.
+- [ ] 3.1 Remove the five retained direct runtime contexts across the four beta.161 structs listed in `inventory.md`.
 - [ ] 3.2 Inventory and remove remaining production Background, TODO, WithoutCancel, nil fallback, and indirect roots.
 - [ ] 3.3 Add a type-aware zero-debt guard that distinguishes process/test roots from production library violations.
 - [ ] 3.4 Verify no exported lifecycle record exposes `context.CancelFunc`.
