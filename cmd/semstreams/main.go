@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	_ "net/http/pprof" // Register pprof handlers on DefaultServeMux (served by service.MaybeStartPProf)
@@ -33,6 +34,7 @@ import (
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/persona"
+	shutdownerrs "github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/processor/agentic-tools/executors"
@@ -71,7 +73,7 @@ func main() {
 	}
 }
 
-func run() error {
+func run() (runErr error) {
 	// Register first-party semantic names before config/rule/workflow
 	// validation. Import side effects are not an authoring contract.
 	builtins.Register()
@@ -132,7 +134,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer natsClient.Close(ctx)
+	rootResources := &semstreamsRootResources{natsClient: natsClient}
+	defer rootResources.abortOnReturn(cliCfg.ShutdownTimeout, &runErr)
 
 	// 6. Complete config arbitration before any final composition decision.
 	configManager, effectiveConfig, err := bootstrapobservability.StartValidatedConfigManager(
@@ -141,7 +144,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer configManager.Stop(5 * time.Second)
+	rootResources.configManager = configManager
 	// 7. Effective streams, including LOGS, exist before forwarding is built.
 	if err := ensureStreamsWithSpinner(ctx, effectiveConfig, natsClient, phaseLogging.ConfigManager); err != nil {
 		return err
@@ -155,11 +158,10 @@ func run() error {
 	}
 	logger := phaseLogging.Steady(forwardingHandler)
 	slog.SetDefault(logger)
-	stopMaxDeliveryObserver, err := maxdelivery.Start(ctx, natsClient, metricsRegistry, logger)
+	rootResources.stopMaxDeliveryObserver, err = maxdelivery.Start(ctx, natsClient, metricsRegistry, logger)
 	if err != nil {
 		return fmt.Errorf("start MaxDeliver observer: %w", err)
 	}
-	defer stopMaxDeliveryOnExit(logger, stopMaxDeliveryObserver)
 
 	slog.Info("SemStreams ready",
 		"version", Version,
@@ -287,8 +289,8 @@ func run() error {
 
 	// 11b. Validate each rule pack's local projection-contract composition. Done
 	// HERE (after the rule processors are
-	// constructed by configureAndCreateServices) and BEFORE StartAll runs inside
-	// runWithSignalHandling. Pack contracts are read ONCE, statically — this is
+	// constructed by configureAndCreateServices) and BEFORE the signal-handling
+	// runtime path calls StartAll. Pack contracts are read ONCE, statically — this is
 	// the ONLY rule-pack bind site, and it must NEVER be called from the
 	// hot-reload path. Every composition, overlap, and mutation-client injection
 	// error is a boot gate. Repeated binding reaches the processor's one-time
@@ -298,15 +300,41 @@ func run() error {
 	}
 
 	// 12. Run application with signal handling
-	return runWithSignalHandling(ctx, manager, cliCfg.ShutdownTimeout, cliCfg.HealthPort)
+	return runWithSignalHandling(
+		ctx, manager, cliCfg.ShutdownTimeout, cliCfg.HealthPort, rootResources.close,
+	)
 }
 
-func stopMaxDeliveryOnExit(logger *slog.Logger, stop func(context.Context) error) {
-	stopCtx, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancelStop()
-	if err := stop(stopCtx); err != nil {
-		logger.Warn("stop MaxDeliver observer", slog.Any("error", err))
+type semstreamsRootResources struct {
+	natsClient              *natsclient.Client
+	configManager           *config.Manager
+	stopMaxDeliveryObserver func(context.Context) error
+	closeAttempted          bool
+}
+
+func (r *semstreamsRootResources) close(ctx context.Context) error {
+	var closeErr error
+	if r.stopMaxDeliveryObserver != nil {
+		closeErr = errors.Join(closeErr, shutdownerrs.NewShutdownError(
+			appName+"/max-delivery", shutdownerrs.PhaseDrainConsumers, r.stopMaxDeliveryObserver(ctx),
+		))
 	}
+	if r.configManager != nil {
+		closeErr = errors.Join(closeErr, stopWithinShutdownBudget(ctx, r.configManager.Stop))
+	}
+	r.closeAttempted = true
+	return errors.Join(closeErr, shutdownerrs.NewShutdownError(
+		appName, shutdownerrs.PhaseCloseTransport, r.natsClient.Close(ctx),
+	))
+}
+
+func (r *semstreamsRootResources) abortOnReturn(timeout time.Duration, runErr *error) {
+	if r.closeAttempted {
+		return
+	}
+	abortCtx, abortCancel := context.WithTimeout(context.Background(), timeout)
+	defer abortCancel()
+	*runErr = errors.Join(*runErr, r.close(abortCtx))
 }
 
 // parseCLI parses and validates CLI flags.
@@ -507,14 +535,39 @@ func configureAndCreateServices(
 // healthPort is the optional dedicated health-port listener (#100); 0
 // disables it. The listener is bound AFTER StartAll succeeds so it never
 // reports "healthy" while services are still spinning up.
-func runWithSignalHandling(ctx context.Context, manager *service.Manager, shutdownTimeout time.Duration, healthPort int) error {
+func runWithSignalHandling(
+	ctx context.Context,
+	manager *service.Manager,
+	shutdownTimeout time.Duration,
+	healthPort int,
+	closeTransport func(context.Context) error,
+) error {
 	slog.Debug("Setting up signal handling")
 	signalCtx, signalCancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer signalCancel()
+	return runUntilShutdown(ctx, signalCtx.Done(), manager, shutdownTimeout, healthPort, closeTransport)
+}
+
+type runtimeManager interface {
+	StartAll(context.Context) error
+	StartHealthListener(context.Context, int) error
+	StopAll(context.Context) error
+}
+
+func runUntilShutdown(
+	runtimeCtx context.Context,
+	shutdownRequested <-chan struct{},
+	manager runtimeManager,
+	shutdownTimeout time.Duration,
+	healthPort int,
+	closeTransport func(context.Context) error,
+) error {
 
 	slog.Info("Starting all services")
-	if err := manager.StartAll(signalCtx); err != nil {
-		return fmt.Errorf("start services: %w", err)
+	if err := manager.StartAll(runtimeCtx); err != nil {
+		cleanupErr := stopAndCloseRuntime(manager, shutdownTimeout, closeTransport)
+		logShutdownError(cleanupErr)
+		return errors.Join(fmt.Errorf("start services: %w", err), cleanupErr)
 	}
 	slog.Info("All services started successfully")
 
@@ -524,18 +577,16 @@ func runWithSignalHandling(ctx context.Context, manager *service.Manager, shutdo
 	// (the default). Bind failure logs at Warn level inside the manager;
 	// boot continues since the service-manager's main /health is the
 	// authoritative health surface.
-	if err := manager.StartHealthListener(signalCtx, healthPort); err != nil {
+	if err := manager.StartHealthListener(runtimeCtx, healthPort); err != nil {
 		slog.Warn("dedicated health listener failed to start; continuing without it",
 			"port", healthPort, "error", err)
 	}
 
-	<-signalCtx.Done()
+	<-shutdownRequested
 	slog.Info("Received shutdown signal")
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer shutdownCancel()
-
-	if err := shutdown(shutdownCtx, manager); err != nil {
+	if err := stopAndCloseRuntime(manager, shutdownTimeout, closeTransport); err != nil {
+		logShutdownError(err)
 		return fmt.Errorf("graceful shutdown failed: %w", err)
 	}
 
@@ -543,14 +594,75 @@ func runWithSignalHandling(ctx context.Context, manager *service.Manager, shutdo
 	return nil
 }
 
-// shutdown performs graceful shutdown of all services
-func shutdown(ctx context.Context, manager *service.Manager) error {
-	if err := manager.StopAll(ctx); err != nil {
-		slog.Error("Error stopping services", "error", err)
+func stopAndCloseRuntime(
+	manager runtimeManager,
+	shutdownTimeout time.Duration,
+	closeTransport func(context.Context) error,
+) error {
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer shutdownCancel()
+	stopErr := manager.StopAll(shutdownCtx)
+	var closeErr error
+	if closeTransport != nil {
+		closeErr = attributeRootCloseError(closeTransport(shutdownCtx))
+	}
+	return errors.Join(stopErr, closeErr)
+}
+
+func attributeRootCloseError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var shutdownErr *shutdownerrs.ShutdownError
+	if errors.As(err, &shutdownErr) {
 		return err
 	}
+	return shutdownerrs.NewShutdownError(appName, shutdownerrs.PhaseCloseTransport, err)
+}
 
-	return nil
+func stopWithinShutdownBudget(ctx context.Context, stop func(time.Duration) error) error {
+	budget, budgetErr := remainingShutdownBudget(ctx)
+	if budgetErr != nil {
+		stopErr := stop(time.Nanosecond)
+		return errors.Join(
+			shutdownerrs.NewShutdownError(appName+"/config-manager", shutdownerrs.PhaseDrainSubscriptions, budgetErr),
+			shutdownerrs.NewShutdownError(appName+"/config-manager", shutdownerrs.PhaseDrainSubscriptions, stopErr),
+		)
+	}
+	stopErr := stop(budget)
+	if stopErr == nil {
+		stopErr = ctx.Err()
+	}
+	return shutdownerrs.NewShutdownError(appName+"/config-manager", shutdownerrs.PhaseDrainSubscriptions, stopErr)
+}
+
+func remainingShutdownBudget(ctx context.Context) (time.Duration, error) {
+	if ctx == nil {
+		return 0, errors.New("shutdown context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0, errors.New("shutdown context has no deadline")
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return 0, context.DeadlineExceeded
+	}
+	return remaining, nil
+}
+
+func logShutdownError(err error) {
+	var shutdownErr *shutdownerrs.ShutdownError
+	if errors.As(err, &shutdownErr) {
+		slog.Error("shutdown phase failed",
+			"owner", shutdownErr.Owner,
+			"phase", shutdownErr.Phase,
+			"error", shutdownErr.Err,
+		)
+	}
 }
 
 // printHelp prints help information

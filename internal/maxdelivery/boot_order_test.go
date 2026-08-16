@@ -272,7 +272,8 @@ func requireStreamWrapper(t *testing.T, path string) {
 
 func requireStartsManager(t *testing.T, path string) {
 	t.Helper()
-	require.Contains(t, functionCalls(t, path, "runWithSignalHandling"), "manager.StartAll")
+	require.Contains(t, functionCalls(t, path, "runWithSignalHandling"), "runUntilShutdown")
+	require.Contains(t, functionCalls(t, path, "runUntilShutdown"), "manager.StartAll")
 }
 
 func checkBootstrapDataflow(

@@ -111,6 +111,34 @@ type componentRuntime struct {
 	startDone    chan struct{}
 	startInvoked bool
 	startErr     error
+	shutdownMode atomic.Uint32
+}
+
+type componentGenerationShutdownMode uint32
+
+const (
+	componentShutdownPending componentGenerationShutdownMode = iota
+	componentShutdownCancelFirst
+	componentShutdownGraceful
+)
+
+func (r *componentRuntime) selectCancelFirstShutdown() {
+	if r == nil {
+		return
+	}
+	r.shutdownMode.CompareAndSwap(uint32(componentShutdownPending), uint32(componentShutdownCancelFirst))
+}
+
+func (r *componentRuntime) admitGracefulShutdown() {
+	if r == nil {
+		return
+	}
+	r.shutdownMode.CompareAndSwap(uint32(componentShutdownPending), uint32(componentShutdownGraceful))
+}
+
+func (r *componentRuntime) selectShutdownModeForStop() componentGenerationShutdownMode {
+	r.selectCancelFirstShutdown()
+	return componentGenerationShutdownMode(r.shutdownMode.Load())
 }
 
 type componentStartRequest struct {
@@ -693,6 +721,7 @@ func (cm *ComponentManager) startComponent(
 	cm.logger.Debug("Starting component", "name", name, "type", mc.Component.Meta().Type)
 
 	if err := lc.Start(ctx); err != nil {
+		runtime.selectCancelFirstShutdown()
 		runtime.startErr = err
 		cm.updateComponentState(name, component.StateFailed, err)
 		cm.logger.Error("Component failed to start",
@@ -702,11 +731,13 @@ func (cm *ComponentManager) startComponent(
 
 	cm.updateComponentState(name, component.StateStarted, nil)
 	if err := cm.registerProvidedStores(name, mc.Component); err != nil {
+		runtime.selectCancelFirstShutdown()
 		cm.updateComponentState(name, component.StateFailed, err)
 		cm.logger.Error("Component store registration failed",
 			"name", name, "type", mc.Component.Meta().Type, "error", err)
 		return err
 	}
+	runtime.admitGracefulShutdown()
 	cm.logger.Debug("Component started successfully", "name", name, "type", mc.Component.Meta().Type)
 	return nil
 }
@@ -879,7 +910,7 @@ func (cm *ComponentManager) Stop(ctx context.Context) error {
 	cm.stopping = true
 	cm.stopMu.Unlock()
 
-	stopErr := generation.Stop(ctx, func() error {
+	stopErr := generation.StopWithQuiesce(ctx, func() error {
 		if cm.shutdown != nil {
 			select {
 			case <-cm.shutdown:
@@ -892,15 +923,15 @@ func (cm *ComponentManager) Stop(ctx context.Context) error {
 		}
 		return nil
 	}, func(ctx context.Context) error {
-		// The supervisor is now unable to admit a generation after this snapshot.
-		// Its context cancellation already signaled every admitted descendant; the
-		// per-generation pass below repeats that idempotent signal before joining.
-		stopErrors := cm.stopAllComponents(ctx)
+		return errors.Join(cm.stopAllComponents(ctx)...)
+	}, func(ctx context.Context) error {
+		var stopErrors []error
 		if baseErr := cm.BaseService.Stop(ctx); baseErr != nil {
 			stopErrors = append(stopErrors, fmt.Errorf("failed to stop base service: %w", baseErr))
 		}
 		return errors.Join(stopErrors...)
 	})
+	stopErr = attributeShutdownError("component-manager", errs.PhaseJoinRuntime, stopErr)
 	if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(stopErr, ctxErr) {
 		return stopErr
 	}
@@ -934,13 +965,6 @@ func (cm *ComponentManager) stopAllComponents(ctx context.Context) []error {
 			targets = append(targets, target{name: name, mc: mc, runtime: cm.runtimes[name]})
 		}
 	}
-	// Invoke all manager-owned cancellation handles first to signal shutdown
-	// intent; mc pointers stay valid until removal.
-	for _, t := range targets {
-		if t.runtime != nil {
-			t.runtime.generation.Cancel()
-		}
-	}
 	cm.mu.Unlock()
 
 	var stopErrors []error
@@ -971,19 +995,47 @@ func (cm *ComponentManager) stopLifecycleComponent(
 	ctx context.Context, name string, runtime *componentRuntime, lifecycle component.LifecycleComponent,
 ) error {
 	if runtime != nil {
-		stopErr := runtime.generation.Stop(ctx, nil, func(ctx context.Context) error {
+		if runtime.selectShutdownModeForStop() != componentShutdownGraceful {
+			// Pending Stop, failed Start, partial admission, and prior rollback all
+			// select the generation's cancel-first operation permanently. Repeated
+			// calls rejoin that same operation even after startDone closes.
+			stopErr := runtime.generation.Stop(ctx, nil, func(ctx context.Context) error {
+				cm.deregisterProvidedStores(name)
+				if err := lifecycle.Stop(ctx); err != nil {
+					cm.updateComponentState(name, component.StateFailed, err)
+					return errs.NewShutdownError(
+						"component/"+name,
+						errs.PhaseDrainConsumers,
+						fmt.Errorf("component '%s': %w", name, err),
+					)
+				}
+				cm.updateComponentState(name, component.StateStopped, nil)
+				return nil
+			})
+			return attributeShutdownError("component/"+name, errs.PhaseJoinRuntime, stopErr)
+		}
+		// Only a generation whose Start and store registration both completed
+		// before any abort selection may quiesce with live Start authority.
+		stopErr := runtime.generation.StopWithQuiesce(ctx, func() error {
 			// Clear this component's stores from the shared registry before Stop closes
 			// them (ADR-063), so no consumer resolves a closing handle.
 			cm.deregisterProvidedStores(name)
-
+			return nil
+		}, func(ctx context.Context) error {
 			if err := lifecycle.Stop(ctx); err != nil {
 				cm.updateComponentState(name, component.StateFailed, err)
-				return fmt.Errorf("component '%s': %w", name, err)
+				return errs.NewShutdownError(
+					"component/"+name,
+					errs.PhaseDrainConsumers,
+					fmt.Errorf("component '%s': %w", name, err),
+				)
 			}
+			return nil
+		}, func(context.Context) error {
 			cm.updateComponentState(name, component.StateStopped, nil)
 			return nil
 		})
-		return stopErr
+		return attributeShutdownError("component/"+name, errs.PhaseJoinRuntime, stopErr)
 	}
 	return nil
 }
@@ -2025,11 +2077,18 @@ func (cm *ComponentManager) startSingleComponent(ctx context.Context, name strin
 		return errs.WrapInvalid(errs.ErrInvalidData, "ComponentManager", "startSingleComponent", "nil context")
 	}
 	request := componentStartRequest{name: name, result: make(chan error, 1)}
+	cm.stopMu.Lock()
+	if cm.stopping {
+		cm.stopMu.Unlock()
+		return fmt.Errorf("component manager stopping")
+	}
 	select {
 	case cm.supervisorRequests <- request:
 		// Admission transfers lifetime authority to the supervisor. Cancellation
 		// below only stops this caller waiting for the result.
+		cm.stopMu.Unlock()
 	case <-ctx.Done():
+		cm.stopMu.Unlock()
 		return ctx.Err()
 	}
 	select {
@@ -2115,6 +2174,7 @@ func (cm *ComponentManager) startComponentWithRetry(
 		return nil
 	})
 	if startErr != nil {
+		runtime.selectCancelFirstShutdown()
 		runtime.startErr = startErr
 		cm.updateComponentState(name, component.StateFailed, startErr)
 		cm.logger.Error("Component start failed after retries",
@@ -2132,6 +2192,7 @@ func (cm *ComponentManager) startComponentWithRetry(
 		// invoke and clear its manager-owned cancellation handle. The provider
 		// remains tracked as failed so health reports the wiring fault until
 		// reconfigured or removed.
+		runtime.selectCancelFirstShutdown()
 		cm.deregisterProvidedStores(name)
 		close(runtime.startDone)
 		stopErr := lifecyclejoin.RunPartialStartRollback(func(ctx context.Context) error {
@@ -2144,6 +2205,7 @@ func (cm *ComponentManager) startComponentWithRetry(
 			"error", startErr)
 		return startErr
 	}
+	runtime.admitGracefulShutdown()
 	close(runtime.startDone)
 	return nil
 }

@@ -53,8 +53,6 @@ type Manager struct {
 	healthServer     *http.Server
 	serverGeneration *lifecyclejoin.Generation
 	healthGeneration *lifecyclejoin.Generation
-	serverShutdown   *lifecyclejoin.Operation
-	healthShutdown   *lifecyclejoin.Operation
 
 	// Track if we're the instance managing HTTP
 	isHTTPManager bool
@@ -761,7 +759,6 @@ func (m *Manager) completeHTTPSetup(ctx context.Context) error {
 	serverCtx, serverCancel := context.WithCancel(ctx)
 	serveDone := make(chan struct{})
 	m.serverGeneration = lifecyclejoin.NewGeneration(serverCancel, func() { <-serveDone })
-	m.serverShutdown = lifecyclejoin.NewOperation()
 
 	// Create HTTP server with lifecycle context as BaseContext.
 	// All request contexts (r.Context()) derive from this, so they cancel on shutdown.
@@ -819,7 +816,6 @@ func (m *Manager) startHTTPServer(ctx context.Context) error {
 	serverCtx, serverCancel := context.WithCancel(ctx)
 	serveDone := make(chan struct{})
 	m.serverGeneration = lifecyclejoin.NewGeneration(serverCancel, func() { <-serveDone })
-	m.serverShutdown = lifecyclejoin.NewOperation()
 
 	// Create HTTP server with lifecycle context as BaseContext
 	m.httpServer = &http.Server{
@@ -880,7 +876,6 @@ func (m *Manager) StartHealthListener(ctx context.Context, port int) error {
 	healthCtx, healthCancel := context.WithCancel(ctx)
 	serveDone := make(chan struct{})
 	m.healthGeneration = lifecyclejoin.NewGeneration(healthCancel, func() { <-serveDone })
-	m.healthShutdown = lifecyclejoin.NewOperation()
 
 	m.healthServer = &http.Server{
 		Addr:    ":" + strconv.Itoa(port),
@@ -914,8 +909,6 @@ func (m *Manager) stopRuntimeServers(ctx context.Context) error {
 	m.mu.RLock()
 	generation := m.serverGeneration
 	healthGeneration := m.healthGeneration
-	serverShutdown := m.serverShutdown
-	healthShutdown := m.healthShutdown
 	httpServer := m.httpServer
 	healthServer := m.healthServer
 	m.mu.RUnlock()
@@ -924,42 +917,39 @@ func (m *Manager) stopRuntimeServers(ctx context.Context) error {
 	}
 	var stopErr error
 	if healthGeneration != nil {
-		healthGeneration.Cancel()
-		shutdownErr := healthShutdown.Run(ctx, func(ctx context.Context) error {
+		healthErr := healthGeneration.StopWithQuiesce(ctx, nil, func(ctx context.Context) error {
 			if healthServer == nil {
 				return nil
 			}
-			if err := healthServer.Shutdown(ctx); err != nil {
-				return fmt.Errorf("shutdown dedicated health listener: %w", err)
-			}
-			return nil
-		})
-		joinErr := healthGeneration.Stop(ctx, nil, nil)
-		healthErr := stderrors.Join(shutdownErr, joinErr)
+			return errs.NewShutdownError(
+				"service-manager/health-listener",
+				errs.PhaseShutdownListener,
+				healthServer.Shutdown(ctx),
+			)
+		}, nil)
+		healthErr = attributeShutdownError("service-manager/health-listener", errs.PhaseJoinRuntime, healthErr)
 		stopErr = stderrors.Join(stopErr, healthErr)
 		if healthErr == nil {
 			m.mu.Lock()
 			if m.healthServer == healthServer {
 				m.healthServer = nil
 				m.healthGeneration = nil
-				m.healthShutdown = nil
 			}
 			m.mu.Unlock()
 		}
 	}
 	if generation != nil {
-		generation.Cancel()
-		shutdownErr := serverShutdown.Run(ctx, func(ctx context.Context) error {
+		serverErr := generation.StopWithQuiesce(ctx, nil, func(ctx context.Context) error {
 			if httpServer == nil {
 				return nil
 			}
-			if err := httpServer.Shutdown(ctx); err != nil {
-				return fmt.Errorf("failed to shutdown HTTP server: %w", err)
-			}
-			return nil
-		})
-		joinErr := generation.Stop(ctx, nil, nil)
-		serverErr := stderrors.Join(shutdownErr, joinErr)
+			return errs.NewShutdownError(
+				"service-manager/http-listener",
+				errs.PhaseShutdownListener,
+				httpServer.Shutdown(ctx),
+			)
+		}, nil)
+		serverErr = attributeShutdownError("service-manager/http-listener", errs.PhaseJoinRuntime, serverErr)
 		stopErr = stderrors.Join(stopErr, serverErr)
 		if serverErr == nil {
 			m.mu.Lock()
@@ -967,7 +957,6 @@ func (m *Manager) stopRuntimeServers(ctx context.Context) error {
 				m.httpServer = nil
 				m.httpMux = nil
 				m.serverGeneration = nil
-				m.serverShutdown = nil
 			}
 			m.mu.Unlock()
 		}
@@ -984,7 +973,6 @@ func (m *Manager) StopHealthListener(ctx context.Context) error {
 	m.mu.RLock()
 	server := m.healthServer
 	generation := m.healthGeneration
-	shutdown := m.healthShutdown
 	m.mu.RUnlock()
 
 	if server == nil || generation == nil {
@@ -995,12 +983,14 @@ func (m *Manager) StopHealthListener(ctx context.Context) error {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	generation.Cancel()
-	shutdownErr := shutdown.Run(ctx, func(ctx context.Context) error {
-		return server.Shutdown(ctx)
-	})
-	joinErr := generation.Stop(ctx, nil, nil)
-	err := stderrors.Join(shutdownErr, joinErr)
+	err := generation.StopWithQuiesce(ctx, nil, func(ctx context.Context) error {
+		return errs.NewShutdownError(
+			"service-manager/health-listener",
+			errs.PhaseShutdownListener,
+			server.Shutdown(ctx),
+		)
+	}, nil)
+	err = attributeShutdownError("service-manager/health-listener", errs.PhaseJoinRuntime, err)
 	if err != nil {
 		logger.Warn("dedicated health listener shutdown failed", "error", err)
 		return fmt.Errorf("shutdown dedicated health listener: %w", err)
@@ -1009,10 +999,20 @@ func (m *Manager) StopHealthListener(ctx context.Context) error {
 	if m.healthServer == server {
 		m.healthServer = nil
 		m.healthGeneration = nil
-		m.healthShutdown = nil
 	}
 	m.mu.Unlock()
 	return nil
+}
+
+func attributeShutdownError(owner string, phase errs.ShutdownPhase, err error) error {
+	if err == nil {
+		return nil
+	}
+	var shutdownErr *errs.ShutdownError
+	if stderrors.As(err, &shutdownErr) {
+		return err
+	}
+	return errs.NewShutdownError(owner, phase, err)
 }
 
 // stopHTTPServer stops the HTTP server gracefully
