@@ -5,13 +5,14 @@ embedding worker callbacks described below. These are **BREAKING Go source chang
 
 `ComponentManager` now creates each child context and passes it directly to
 `LifecycleComponent.Start(ctx)`. It retains only the cancellation function needed to stop that component.
-`GetManagedComponents` snapshots expose lifecycle observations, not context or cancellation authority.
+Value-only component status APIs expose lifecycle observations, not handles,
+contexts, or cancellation authority. `GetManagedComponents` is removed.
 
 ## Required adopter changes
 
 - Delete reads, copies, comparisons, and health checks against `ManagedComponent.Context`.
 - Use the `ctx` supplied to `LifecycleComponent.Start(ctx)` inside the component's running work.
-- Use `ManagedComponent.State`, `ManagedComponent.LastError`, and component `Health()` for lifecycle observation.
+- Use ComponentManager's value-only status and health responses for lifecycle observation.
 - Do not replace the removed field with another stored context or a context getter. The framework owns cancellation.
 
 If downstream code does not directly reference `ManagedComponent.Context`, no code change is required. A direct use

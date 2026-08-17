@@ -246,33 +246,16 @@ if err := component.Stop(stopCtx); err != nil {
 Tests are allowed to create roots. Concurrent tests should use channels or wait groups for synchronization; a timeout
 is only a failure bound, never a substitute for synchronization.
 
-## Deferred Registry and runtime access migration
+## Registry and runtime access migration
 
-This phase is not part of the implemented atomic Stop prerequisite. Registry still exposes its existing runtime
-handles and construction surfaces. A later breaking slice will make Registry declaration-only and retire calls to
-Registry `Component`, `ListComponents`, deprecated `GetComponent`, handle-returning `CreateComponent` and
-`ReplaceComponent`, and construction-capability-returning `GetFactory`.
+The boot-only activation slice completed this migration. Registry no longer exposes live instance lookup,
+replacement, reservation, or unregister operations. It retains immutable declaration values only. ComponentManager
+no longer exports `Component`, `ListComponents`, `CreateComponent`, `RemoveComponent`, or `GetManagedComponents`.
 
-That later slice will also retire ComponentManager `Component`, `ListComponents`, exported `ManagedComponent`, and
-`GetManagedComponents` handle leakage. It will replace raw sibling access through `component.Lookup` and
-`Dependencies.ComponentRegistry` with value observation and a scoped `WithComponent` callback such as:
-
-```go
-err := componentManager.WithComponent(ctx, "graph-query", func(comp component.Discoverable) error {
-    query, ok := comp.(*graphquery.Component)
-    if !ok {
-        return fmt.Errorf("unexpected graph-query component %T", comp)
-    }
-    return query.Refresh(ctx)
-})
-```
-
-In that future API, the handle will be valid only inside the callback and must not be retained. The callback will run
-without manager or gate locks. Handle access will return typed missing, Transitioning, or Failed errors; it will never
-return ambiguous nil.
-
-Callers will not synchronously Stop, Remove, or Replace the same instance from inside its borrow callback because that
-would wait on the callback's own borrow. They will return from the callback before asking an outer coordinator to
+Framework composition uses one private callback borrow while wiring boot-selected components. The callback runs
+without manager or gate locks and the handle cannot escape that internal seam. A callback must not synchronously call
+terminal `Stop`: Stop closes borrow admission and waits for accepted callbacks to return. The callback returns first;
+an outer composition owner then requests shutdown.
 request the lifecycle mutation.
 
 Registry declaration observation will show only complete old or new generations. It will not report Transitioning or

@@ -128,7 +128,7 @@ ship unclassified or misspelled. Broad strokes:
 | Effect | Tools |
 |---|---|
 | `read_only` | `query_entity`, `query_entities`, `query_relationships`, `query_neighbors`, `query_by_type`, `read_loop_result`, `component_catalog`, `flow_monitor`, `instantiate_flow_template` (renders, persists nothing), and the `list_*` / `get_*` half of the rule, flow, persona, and flow-template tools |
-| `mutating` | the `create_*` / `update_*` / `delete_*` half of those same CRUD tools, `deploy_flow`, `start_flow`, `stop_flow`, `undeploy_flow`, `scratchpad`, `write_todos`, `decide`, `emit_lesson`, `emit_diagnosis`, `research_graph`, and `web_search` **when backed by a real provider** — it writes observation triples to the graph; the no-provider stub is `read_only` |
+| `mutating` | the `create_*` / `update_*` / `delete_*` half of those same CRUD tools, `scratchpad`, `write_todos`, `decide`, `emit_lesson`, `emit_diagnosis`, `research_graph`, and `web_search` **when backed by a real provider** — it writes observation triples to the graph; the no-provider stub is `read_only` |
 | `external_effect` | `bash`, `http_request` |
 
 Note `web_search`: two implementations share one tool name and legitimately

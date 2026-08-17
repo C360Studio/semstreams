@@ -87,22 +87,22 @@ This precedence pattern:
 
 ## Flow Lifecycle
 
-Flows progress through defined states:
+Flows carry desired activation for the next successful boot:
 
 ```text
-not_deployed → deployed_stopped → running → deployed_stopped → not_deployed
-                     ↓                            ↑
-                   error ─────────────────────────┘
+absent → disabled → enabled → disabled → absent
 ```
 
-| State | Description | Available Actions |
+| Desired state | Description | Available Actions |
 |-------|-------------|-------------------|
-| `not_deployed` | Design phase, not in runtime | Deploy |
-| `deployed_stopped` | Pushed to config KV, not running | Start, Undeploy |
-| `running` | Components actively processing | Stop |
-| `error` | Deployment or runtime failure | Fix and redeploy |
+| `absent` | No desired component configuration | Deploy |
+| `disabled` | Desired component configuration exists but is disabled | Start, Undeploy |
+| `enabled` | Components are requested for the next boot | Stop |
 
-Static configs start in `running` state since components are already active at startup.
+Flow reads report `effective_state` independently. Without an authoritative
+runtime observer it is `unknown`; it is never inferred from desired state,
+admission, or health. `restart_required` compares the desired digest with the
+sealed boot-applied digest.
 
 ## Flow Engine Operations
 
@@ -115,28 +115,28 @@ Converts Flow → ComponentConfigs and pushes to config KV bucket:
 2. Build FlowGraph for port analysis
 3. Convert nodes to ComponentConfigs
 4. Persist to `semstreams_config` bucket
-5. ComponentManager watches and creates components
+5. Return `runtime_unchanged: true`; the next process boot selects the change
 
 ### Start
 
-Enables components and begins processing:
+Enables desired components for the next boot:
 1. Update component `enabled` flags in config KV
-2. ComponentManager reacts and starts components
-3. Data begins flowing through the pipeline
+2. Current runtime remains unchanged
+3. Response reports whether restart is required
 
 ### Stop
 
-Pauses processing while preserving deployment:
+Disables desired components while preserving the definition:
 1. Disable components in config KV
-2. ComponentManager stops components gracefully
-3. State preserved for restart
+2. Current runtime remains unchanged
+3. Normal process shutdown still drains and joins boot-owned work
 
 ### Undeploy
 
-Removes components from runtime:
+Removes components from desired configuration:
 1. Delete component configs from config KV
-2. ComponentManager removes components
-3. Flow returns to `not_deployed` state
+2. Current runtime remains unchanged
+3. Flow returns to `absent` desired state
 
 ## Visual Flow Concepts
 
