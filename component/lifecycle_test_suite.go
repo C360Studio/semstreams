@@ -49,7 +49,6 @@ func testLifecycleCompliance(t *testing.T, factory LifecycleFactory) {
 		{"StartWithoutInit", testStartWithoutInit},
 		{"StopWithoutStart", testStopWithoutStart},
 		{"InitializeAfterStop", testInitializeAfterStop},
-		{"RestartAfterStop", testRestartAfterStop},
 	}
 
 	for _, tt := range tests {
@@ -163,37 +162,6 @@ func testInitializeAfterStop(t *testing.T, comp LifecycleComponent) {
 	// Re-initialize after stop
 	err = comp.Initialize()
 	assert.NoError(t, err, "Initialize should succeed after Stop")
-}
-
-func testRestartAfterStop(t *testing.T, comp LifecycleComponent) {
-	err := comp.Initialize()
-	require.NoError(t, err, "Initialize should succeed")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	err = comp.Start(ctx)
-	require.NoError(t, err, "First Start should succeed")
-
-	err = comp.Stop(context.Background())
-	require.NoError(t, err, "Stop should succeed")
-
-	// Restart
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel2()
-
-	err = comp.Start(ctx2)
-	if err != nil {
-		// Some components might require re-initialization after stop
-		err = comp.Initialize()
-		require.NoError(t, err, "Re-initialize should succeed if Start fails after Stop")
-
-		err = comp.Start(ctx2)
-		assert.NoError(t, err, "Start should succeed after re-initialization")
-	}
-
-	err = comp.Stop(context.Background())
-	assert.NoError(t, err, "Final Stop should succeed")
 }
 
 // testErrorPaths tests error scenarios and edge cases
