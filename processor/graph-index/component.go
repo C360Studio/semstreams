@@ -17,7 +17,6 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/readiness"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -244,8 +243,8 @@ type Component struct {
 	initialized     bool
 	startTime       time.Time
 	wg              sync.WaitGroup
-	generation      *lifecyclejoin.Generation
-	poolStop        *lifecyclejoin.Operation
+	runCancel       context.CancelFunc
+	runDone         chan struct{}
 	indexPool       *keyedDispatcher[entityIndexWork]
 	entityCoalescer *revisionCoalescer
 
@@ -586,9 +585,16 @@ func (c *Component) Start(ctx context.Context) error {
 		return errs.WrapFatal(fmt.Errorf("component not initialized"), "Component", "Start", "initialization check")
 	}
 
-	// Idempotent - already running
 	if c.running {
-		return nil
+		if c.runCancel != nil {
+			return nil
+		}
+		return errs.WrapFatal(fmt.Errorf("component Stop already claimed its one-shot runtime"),
+			"Component", "Start", "one-shot lifecycle")
+	}
+	if c.runCancel != nil || c.runDone != nil {
+		return errs.WrapFatal(fmt.Errorf("component cannot restart after successful Stop"),
+			"Component", "Start", "one-shot lifecycle")
 	}
 
 	// Create cancellable context
@@ -655,8 +661,13 @@ func (c *Component) Start(ctx context.Context) error {
 		cancel()
 		return errs.Wrap(err, "Component", "Start", "query handler setup")
 	}
-	c.generation = lifecyclejoin.NewGeneration(cancel, c.wg.Wait)
-	c.poolStop = lifecyclejoin.NewOperation()
+	runDone := make(chan struct{})
+	go func() {
+		c.wg.Wait()
+		close(runDone)
+	}()
+	c.runCancel = cancel
+	c.runDone = runDone
 
 	// Mark as running
 	c.running = true
@@ -675,52 +686,73 @@ func (c *Component) Stop(ctx context.Context) error {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
 	c.mu.Lock()
-	generation := c.generation
-	poolStop := c.poolStop
-	if generation == nil {
+	cancel := c.runCancel
+	if cancel == nil || !c.running {
 		c.mu.Unlock()
 		return nil
 	}
+	runDone := c.runDone
+	pool := c.indexPool
+	coalescer := c.entityCoalescer
+	subscriptions := c.querySubscriptions
+	// Claim the one-shot owner before releasing the lock. A later Stop is a
+	// no-op even when this call fails; process supervision exits non-cleanly
+	// rather than rejoining or publishing a replacement generation.
+	c.runCancel = nil
 	c.mu.Unlock()
 
-	signalErr := generation.Signal(func() error {
-		var stopErr error
-		c.mu.Lock()
-		subscriptions := c.querySubscriptions
-		c.querySubscriptions = nil
-		coalescer := c.entityCoalescer
-		c.entityCoalescer = nil
-		c.mu.Unlock()
-		for _, sub := range subscriptions {
-			if sub != nil {
-				stopErr = errors.Join(stopErr, sub.Unsubscribe())
+	// Drain is the native admission fence and callback join. Keep the exact
+	// Start-owned callback context live until every subscription observes Closed,
+	// so already-admitted queries can finish instead of being canceled as if they
+	// were dirty-shutdown work.
+	var stopErr error
+	for _, sub := range subscriptions {
+		if sub != nil {
+			if err := sub.Drain(ctx); err != nil {
+				stopErr = errors.Join(stopErr,
+					fmt.Errorf("drain graph-index query subscription: %w", err))
 			}
 		}
-		if coalescer != nil {
-			coalescer.Close()
-		}
-		return stopErr
-	})
-	prepareErr := poolStop.Run(ctx, func(ctx context.Context) error {
-		c.mu.Lock()
-		pool := c.indexPool
-		c.mu.Unlock()
-		if pool == nil {
-			return nil
-		}
-		return pool.Stop(ctx)
-	})
-	if errors.Is(prepareErr, context.Canceled) || errors.Is(prepareErr, context.DeadlineExceeded) {
-		return errors.Join(signalErr, prepareErr)
 	}
 
-	return generation.Stop(ctx, nil, func(context.Context) error {
-		c.mu.Lock()
-		c.running = false
-		c.mu.Unlock()
-		c.logger.Info("component stopped gracefully", slog.String("component", "graph-index"))
-		return prepareErr
-	})
+	// Every admission fence was attempted while callback authority remained live.
+	// Cancel exactly once even when one or more native drains failed.
+	cancel()
+
+	// c.wg owns the ENTITY_STATES watcher plus repair and readiness-metrics
+	// loops. The watcher and repair loop are the coalescer's producers, so their
+	// join is observed first. The remaining waits observe already-canceled owners
+	// and are safe to attempt under ctx even if an earlier observation failed.
+	select {
+	case <-runDone:
+	case <-ctx.Done():
+		stopErr = errors.Join(stopErr, fmt.Errorf("wait for graph-index runtime: %w", ctx.Err()))
+	}
+	if coalescer != nil {
+		select {
+		case <-coalescer.done:
+		case <-ctx.Done():
+			stopErr = errors.Join(stopErr, fmt.Errorf("wait for graph-index coalescer: %w", ctx.Err()))
+		}
+	}
+	if pool != nil {
+		if err := pool.Stop(ctx); err != nil {
+			stopErr = errors.Join(stopErr, fmt.Errorf("wait for graph-index pool: %w", err))
+		}
+	}
+	if stopErr != nil {
+		atomic.AddInt64(&c.errors, 1)
+		return stopErr
+	}
+
+	// Successful Start publishes immutable resource handles. Stop records only
+	// the observed terminal health state; it does not detach or clear handles.
+	c.mu.Lock()
+	c.running = false
+	c.mu.Unlock()
+
+	c.logger.Info("component stopped gracefully", slog.String("component", "graph-index"))
+	return nil
 }
 
 // createOutputBuckets acquires every output KV bucket through the catalog
