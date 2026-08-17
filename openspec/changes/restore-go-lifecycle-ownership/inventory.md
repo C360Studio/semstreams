@@ -8,6 +8,12 @@
 - Sister repositories were inspected only to identify migration surfaces. They remain read-only.
 - File and line references below are exact at the baseline. Later edits may move them.
 
+ADR-095 and `simplify-one-shot-lifecycle-ownership` own current service-shutdown and terminal owner sequencing.
+`restore-go-lifecycle-ownership` retains its completed context-bearing signature prerequisite and active
+runtime-context-ownership work. It no longer claims that stopping is clean completion, concurrent Stop joins one
+result, deadline expiry is rejoinable, or repeated Stop replays a retained error. It preserves context provenance,
+exact Start finalization, failed-Start cleanup authority, nil rejection, and no detached roots.
+
 ### Beta.161 target addendum
 
 The baseline sections below remain forensic evidence, not current target design. At exact beta.161 candidate
@@ -104,8 +110,9 @@ longer carries component-discovery or component-runtime-config deltas.
   scoped-borrow transition and separate availability/commit points of no return.
 - `component-discovery`, `openspec/specs/component-discovery/spec.md:163-200`: keep declaration identity and add the
   declaration/runtime-handle split.
-- `service-shutdown`, `openspec/specs/service-shutdown/spec.md:47-66`: preserve Stop idempotency with caller context.
-- `service-shutdown`, `openspec/specs/service-shutdown/spec.md:16-45`: preserve reverse order and error aggregation.
+- `service-shutdown`, `openspec/specs/service-shutdown/spec.md:16-67`: ADR-095 and
+  `simplify-one-shot-lifecycle-ownership` own exact current-title modifications; this inventory retains only the
+  completed context-bearing signature provenance.
 - `framework-composition`, `openspec/specs/framework-composition/spec.md:152-205`: preserve Start barrier semantics.
 
 `semantic-tier-split` is the only other active OpenSpec change at this baseline. It does not overlap these lifecycle

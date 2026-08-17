@@ -9,6 +9,12 @@ ADR-094 and `require-restart-for-config-activation` supersede this change's live
 composition is one sealed boot generation plus restart-safe terminal shutdown; replacement/removal transition
 protocols are deleted rather than repaired.
 
+ADR-095 and `simplify-one-shot-lifecycle-ownership` own current service-shutdown and terminal owner sequencing.
+`restore-go-lifecycle-ownership` retains its completed context-bearing signature prerequisite and active
+runtime-context-ownership work. It no longer claims that stopping is clean completion, concurrent Stop joins one
+result, deadline expiry is rejoinable, or repeated Stop replays a retained error. It preserves context provenance,
+exact Start finalization, failed-Start cleanup authority, nil rejection, and no detached roots.
+
 This is **BREAKING** by design. Compile failures are safer than compatibility shims that preserve detached work or
 ambiguous authority.
 
@@ -56,10 +62,10 @@ temporary adapter, deprecated overload, or knowingly incomplete merged state.
 - `runtime-context-ownership`: defines runtime context provenance, retention prohibitions, cancellation ownership, and
   Start/Stop join semantics.
 
-### Modified Capabilities
+### Delegated Capabilities
 
-- `service-shutdown`: service Stop and StopAll accept caller context while preserving idempotency, reverse ordering,
-  and genuine error aggregation.
+- `service-shutdown`: the completed context-bearing signature prerequisite remains historical implementation truth;
+  ADR-095 and `simplify-one-shot-lifecycle-ownership` own current Stop and StopAll semantics.
 
 ## Impact
 

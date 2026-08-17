@@ -5,6 +5,12 @@ At baseline `444b7912`, public Stop contracts take `time.Duration`, shutdown inv
 landed before beta.161. ADR-094 subsequently removed the need to repair live replacement: runtime composition is one
 sealed boot generation plus restart-safe terminal shutdown.
 
+ADR-095 and `simplify-one-shot-lifecycle-ownership` own current service-shutdown and terminal owner sequencing.
+`restore-go-lifecycle-ownership` retains its completed context-bearing signature prerequisite and active
+runtime-context-ownership work. It no longer claims that stopping is clean completion, concurrent Stop joins one
+result, deadline expiry is rejoinable, or repeated Stop replays a retained error. It preserves context provenance,
+exact Start finalization, failed-Start cleanup authority, nil rejection, and no detached roots.
+
 ## Goals
 
 - Make the composition-root context the ancestor of runtime work.
@@ -26,9 +32,9 @@ work context remains live, then cancels and joins remaining Start-owned work. A 
 cancel immediately. The composition root does not pre-cancel runtime on SIGTERM before owners can quiesce. Dirty
 shutdown correctness comes from durable settlement and idempotent recovery, not Stop ordering.
 
-A valid repeated Stop rejoins the same generation and returns nil only after clean terminal completion. A previously
-observed genuine terminal failure remains observable; repetition does not erase it. Nil Stop and StopAll return a typed
-invalid-input error before inspecting state, signaling cancellation, or performing any action.
+A completed repeated Stop is a no-op. This change does not claim concurrent Stop, running-generation rejoin, or
+retained terminal-result replay. Nil Stop and StopAll return a typed invalid-input error before inspecting state,
+signaling cancellation, or performing any action.
 
 ### D2 — Stop signatures migrate atomically
 
@@ -115,10 +121,10 @@ lock while waiting or calling component code. A NATS-owning component fences int
 settles required publications before signaling its private Start cancellation. Components without admission or drain
 may cancel immediately.
 
-After component quiesce, ComponentManager signals remaining Start cancellations, joins each exact boot generation and
-Start finalization, and records the same-generation Stop result. Transport connection drain follows component-owned
-publication barriers. Deadline failure remains observable and a repeated Stop rejoins the same shutdown operation; no
-detached cleanup starts. Dirty shutdown runs none of this protocol and relies on durable recovery from ADR-094.
+After component quiesce, ComponentManager signals remaining Start cancellations and joins each exact boot generation
+and Start finalization. Transport connection drain follows component-owned publication barriers. Deadline failure
+remains observable, runtime cancellation still precedes any ctx-driven WaitGroup wait, and no detached cleanup starts.
+Dirty shutdown runs none of this protocol and relies on durable recovery from ADR-094.
 
 ## Invariants
 
@@ -129,7 +135,7 @@ detached cleanup starts. Dirty shutdown runs none of this protocol and relies on
 5. NATS-owning components quiesce and drain accepted work before Start cancellation; simple owners may cancel first.
 6. Start and Stop method bodies never overlap for one boot generation.
 7. The exact started generation is the generation joined and stopped.
-8. A deadline failure remains observable and repeated Stop rejoins the same operation.
+8. A deadline failure remains observable; it does not authorize running-generation rejoin.
 9. No cleanup invents or detaches a context.
 10. Dirty restart recovery depends on durable state and settlement, never shutdown hooks.
 

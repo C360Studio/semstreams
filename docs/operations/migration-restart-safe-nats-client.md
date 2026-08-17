@@ -1,147 +1,144 @@
-# Migrating to owner-local restart-safe NATS lifecycle
+# Migrating to native one-shot lifecycle ownership
 
 ## Status and scope
 
-This guide records the approved pre-v1 target contract. The contract reset does not claim the runtime migration or
-restart proofs are complete. Do not treat the new signatures or shutdown result as available until their ordered PR
+This guide records the owner-approved pre-v1 target from ADR-095 and
+`simplify-one-shot-lifecycle-ownership`. Contract application does not claim that runtime migration, controlled proof,
+dirty proof, or settlement proof is complete. Do not use the target signatures until their ordered implementation
 lands and its checks pass.
 
-The migration replaces Client-wide child discovery with ordinary Go ownership: the component or service that starts a
-subscription or managed consumer retains its exact returned handle and drains it during `Stop(ctx)`. Composition owns
-one synchronous Connect, aggregates all owner Stop results, invokes one terminal transport-only Close, and exits the
-process. Clean versus failed changes exit status and observability only; supervision always creates the next process
-and Client.
+ADR-095 supersedes PR #984's proposed stateful `ManagedConsumer`, `DrainAndDelete`, lifecycle-local backlog,
+running-generation rejoin, name-routed child catalog, and retained Close-result mechanics. ADR-094 remains immutable
+history. Its boot-only composition, dedicated rule-definition hot reload, raw-root retirement, always-exit controlled
+shutdown, dirty recovery, and proof gates remain accepted.
 
-Boot-only service/component composition, the dedicated rule-definition hot-reload exception, and dirty-power recovery
-remain unchanged. Power loss runs no cleanup and recovers from durable JetStream/KV plus boot reconciliation.
+ADR-095 and `simplify-one-shot-lifecycle-ownership` supersede PR #984's managed-consumer, lifecycle deletion,
+concurrent/rejoin, and retained-result mechanics and own the complete `restart-safe-shutdown` and
+`jetstream-consumer-policy` lifecycle target. This change retains boot-only composition and depends on the new change's
+broad-root retirement, settlement/outbound-flush, controlled-process proof, dirty-recovery, durable-communication,
+live-storage/replica validation, NATS restart, clean-marker independence, and latest-desired-state guarantees. No
+runtime or proof task is completed by delegation.
 
-## Required owner migration
+## Native owner migration
 
-The retained consume constructors change from error-only setup to exact-handle returns:
+The three retained consume constructors change from error-only setup to exact native ownership:
 
 ```go
-func (c *Client) ConsumeStreamWithConfig(...) (*ManagedConsumer, error)
-func (c *Client) ConsumeStreamWithConfigContexts(...) (*ManagedConsumer, error)
-func (c *Client) ConsumeInternalStreamWithConfig(...) (*ManagedConsumer, error)
+func (c *Client) ConsumeStreamWithConfig(...) (jetstream.ConsumeContext, error)
+func (c *Client) ConsumeStreamWithConfigContexts(...) (jetstream.ConsumeContext, error)
+func (c *Client) ConsumeInternalStreamWithConfig(...) (jetstream.ConsumeContext, error)
 ```
 
-Every caller must retain the returned handle in the owner that started it. During `Stop(ctx)`, that owner must:
+All fallible stream, consumer, policy, and observation setup must finish before `Consumer.Consume`. Successful Consume
+is the delivery commit point; no fallible setup follows it. The caller retains that exact native handle through Closed.
+There is no SemStreams managed lifecycle wrapper.
 
-1. stop admitting new work;
-2. invoke `Drain(ctx)` on each exact core `Subscription` and `ManagedConsumer`;
-3. wait for authoritative native closure while accepted callback authority remains live;
-4. commit required effects/publications before ACK, or leave unfinished durable work eligible for redelivery; and
-5. cancel and join remaining Start-owned work only after drain completion.
+`ConsumeDurable` retires because its measured production-adopter census is zero. Durable owners use a retained native
+handle plus the existing heartbeat and settlement primitives. ADR-070 remains historical context.
 
-### Compiler-directed outstanding-work migration
+For a successfully running owner, `Stop(ctx)` uses one direct order:
 
-Outstanding-work observation moves with ownership. Replace
-`Client.OutstandingWork(ctx, streamName, consumerName)` with
-`managedConsumer.OutstandingWork(ctx)` on the exact handle returned during setup. There is no compatibility alias or
-name-based fallback.
+1. return nil without side effects if Stop already completed;
+2. fence external and queue admission;
+3. initiate concrete native Drain or Shutdown while accepted callback contexts remain live;
+4. await exact native Closed under the shutdown context;
+5. cancel remaining runtime work;
+6. await owner done/WaitGroup under the shutdown context;
+7. perform terminal best-effort cleanup; and
+8. return the aggregate observed by this invocation.
 
-The in-repository compiler-directed migration has exactly three production callsites:
+A class with no native callback resource omits Drain/Closed but cancels ctx-driven work before awaiting its WaitGroup.
+Deadline expiry is a failed process result. It does not create authority for later running-generation rejoin. Completed
+repeated Stop is nil/no-op; concurrent Stop and replay of the first result are not supported contracts.
 
-- `processor/graph-ingest/readiness.go` has two calls; both move to the graph-ingest-owned consumer handles.
-- `processor/agentic-loop/inflight.go` has one call; it moves to the agentic-loop-owned consumer handle.
+## Failed-Start cleanup migration
 
-After the owner-handle PR, an unresolved `Client.OutstandingWork` compile error means the caller failed to retain its
-resource. Fix ownership at setup and carry the handle to the query; do not reconstruct stream/durable identity or add
-a Client helper.
+Failed Start is not running-generation rejoin. Any owner that can acquire a resource during Start must publish its owner
+record before the acquisition can escape. Where manager Stop can race Start, retain `startDone` and observe it before
+choosing cleanup.
 
-Graceful Stop must not use managed-consumer `Stop` or core-subscription `Unsubscribe`. Those abrupt primitives can
-discard buffered delivery and cannot contribute to a clean controlled shutdown. `Subscription` exposes Drain only;
-there is no exported Abort or Unsubscribe lifecycle escape.
+On Start failure, finalize Start and attempt the one bounded synchronous rollback. Clear handles only when cleanup
+succeeds. If rollback fails or expires, retain cancel, done, and every exact acquired handle; enter `cleanupPending`;
+reject another Start; and permit later manager `Stop(ctx)` to retry cleanup using its caller context. Keep
+`RunPartialStartRollback` or an exactly equivalent bounded helper until all 21 measured paths prove this invariant.
 
-`ConsumeDurable` is retired because its measured production consumer census is zero. Durable adopters use one of the
-retained exact-handle constructors with the existing heartbeat and settlement primitives. ADR-070 remains unchanged
-historical context for durable gated-DAG dispatch, ack-after-terminal-marker, and redelivery semantics; retiring an
-unused convenience helper does not rewrite that decision.
+## Duplicate durable identity
 
-## Exact graceful deletion
+Two local owners cannot share one `(stream,durable)` identity. Canonically derive and validate every identity knowable
+from sealed composition before the parallel Start barrier. If an identity is genuinely unknowable before acquisition,
+use only a minimal active identity-plus-opaque-owner-token claim.
 
-`ManagedConsumer.DrainAndDelete(ctx)` is the only graceful durable-consumer deletion operation. The handle privately
-binds deletion to the exact stream/durable identity acquired at construction.
+A duplicate names both owners and fails boot. It never stops, drains, deletes, or replaces the incumbent. The fallback
+claim is not a handle catalog and stores no lifecycle, observation, deletion, generation, or result authority.
 
-- Drain must reach exact Closed before deletion starts; a drain deadline prevents deletion.
-- A later caller may rejoin the same drain.
-- Concurrent or repeated callers issue at most one bound deletion and observe one retained terminal result.
-- Consumer-not-found after drain is benign success.
-- Every other deletion failure, including an ambiguous deadline, remains non-clean and is not retried in process.
-- Failed partial setup publishes no handle and cleans only its exact partial acquisition.
-- No Client name lookup, catalog, or public administrative delete can substitute for the exact handle.
+## Backlog observation and topology deletion
 
-These rules fence partial acquisition, duplicate cleanup, and stale ownership from deleting another owner's durable.
+Outstanding-work observation remains an independent, concurrency-guarded exact-consumer read. Graph-ingest readiness
+and the accepted agent-loop inflight API keep their current semantics. The observer exposes no Stop, Drain, deletion,
+or child cleanup. Unknown observation remains an error, not zero. `NumPending + NumAckPending == 0` means no currently
+outstanding deliverable work; it is not semantic completion and does not prove the absence of MaxDeliver-parked work.
 
-## Terminal Client migration
+Production owner Stop and Client Close never delete durable consumers. Retire without aliases:
 
-Client Close owns transport only. It does not enumerate, drain, abort, delete, or compensate for subscriptions or
-managed consumers. Before calling it, composition must have received every owner Stop result.
+- `Client.StopConsumer`;
+- `Client.StopAndDeleteConsumer`;
+- `Client.StopAllConsumers`; and
+- the five production `DeleteConsumerOnStop` fields.
 
-Close rejects later Client work, cancels and joins only Client-owned health and metrics workers, registers CLOSED
-observation, initiates native connection Drain, observes CLOSED, clears native authority, and retains one result for
-repeated callers. The result is deliberately conservative:
+A namespace-scoped fixture/admin helper records exact test-created stream/durable identities, drains local owners, and
+deletes only those recorded identities. It is not a production Stop option and Client Close never calls it.
 
-- an installed connection already closed before Close is failed even when native `LastError()` is nil;
-- any historical or terminal non-nil `LastError()` makes Close non-clean;
-- caller deadline may force native Close, but the retained result remains failed; and
-- no detached cleanup or later caller can convert a failed boundary into clean.
+## Settlement and poison boundaries
 
-Connect is synchronous and installs private `nats.FlusherTimeout(5*time.Second)`. There is no option, config, or
-environment knob. A blocked native write or flush therefore fails visibly within the framework ceiling rather than
-requiring an adopter to predict it.
+A durable callback ACKs only after its required durable or externally acknowledged effect. Transient effect failure
+controls NAK; structurally permanent input may control Term. Settlement-changing errors must reach disposition rather
+than be logged and swallowed. Shutdown and heartbeat cancellation join long-running work before overlapping redelivery.
 
-## Retired and narrowed native roots
+Graph-ingest keeps two explicit paths:
 
-The authoritative per-symbol disposition is
-`openspec/changes/require-restart-for-config-activation/native-surface-inventory.md`, preserved exactly from the
-owner-approved artifact with SHA-256
-`d79df592e7049d4f0e3412bf41e8c61d44ea0829a6fddc2734cff40ceb966617`.
+- metadata/decode/extract poison occurs before keyed admission and follows the existing counted policy ACK-drop;
+  caught-up remains “no deliverable work,” never semantic completion; and
+- keyed work validates, reads the durable guard, applies graph effects, commits the guard, updates the in-memory guard,
+  and only then ACKs.
 
-Before the breaking tag, Client and framework constructors stop returning broad mutable ownership roots:
+Every externally repeatable lane declares stable idempotency, durable progress/outbox, or explicit at-most-once
+semantics. File append, HTTP POST, WebSocket, paid model calls, rule actions, raw ObjectStore writes, and multi-output
+transforms do not receive fabricated exactly-once claims. A path claiming server-confirmed source settlement records a
+latency/failure SLO and uses `DoubleAck(ctx)` only when that SLO requires it. Plain Ack is not synchronous confirmation;
+DoubleAck timeout or failure remains replay-safe and non-clean.
 
-- raw `*nats.Conn`;
-- `jetstream.JetStream`;
-- `jetstream.Stream`;
-- `jetstream.KeyValue`;
-- `jetstream.ObjectStore`; and
-- equivalent capabilities that permit unbounded work outside Client lifetime.
+## Terminal Client and process shutdown
 
-Broad injected roots narrow to their measured local method interfaces. Reviewed NATS message, config, value, watcher,
-lister, and future seams may remain when caller context bounds acquisition/operation and local Stop or completion
-ownership is explicit. There is no `Unsafe*` alias or compatibility shim. A missing narrow operation must receive
-separate surface review; it does not justify restoring a raw root.
+After all owner Stops, Client Close rejects new work, initiates native connection Drain, observes exact CLOSED, cancels
+remaining Client-owned health/metrics runtime, awaits those workers, performs terminal credential/transport cleanup,
+and returns the observed aggregate. Client never enumerates, rediscover, drains, stops, deletes, or waits for
+component-owned consumers or subscriptions. Preclosed transport, native LastError, and deadline-forced close remain
+non-clean. Completed repeated Close is nil/no-op; concurrent Close and retained result replay are not contracts.
 
-Sister repositories are read-only to this change. Their owners migrate compilation failures in their repositories
-after the corresponding SemStreams tag; this work records the requirement but does not edit downstream code.
+Composition retains the live runtime context, creates one fresh bounded shutdown context, stops owners in reverse
+dependency order, aggregates every owner and Client result, and exits. Clean and failed controlled shutdown both exit;
+only status and observability differ. Supervision constructs the fresh process and Client from latest committed desired
+state. A clean marker is never an activation precondition.
 
-## Controlled shutdown sequence
+## Raw roots remain a separate gate
 
-For SIGTERM, SIGINT, or operator-requested configuration activation, composition must:
-
-1. create one fresh bounded shutdown context, not reuse the canceled runtime context;
-2. stop external listeners and admission owners;
-3. call service/component Stop in dependency-safe reverse order while callback authority remains live;
-4. let every owner drain exact handles, settle durable work, then cancel and join remaining work;
-5. aggregate every Stop error without skipping later owners;
-6. call terminal Client Close only after every owner Stop returns;
-7. aggregate transport and owner results;
-8. emit clean observability and exit zero when the aggregate is nil; or
-9. emit failed phase/owner observability and exit nonzero when it is not nil.
-
-Both outcomes terminate the current process. Neither reuses Client or restarts components in process. Supervision
-starts a fresh process, which consumes the latest committed desired state without requiring a clean-exit marker.
+The authoritative per-symbol disposition remains
+`openspec/changes/require-restart-for-config-activation/native-surface-inventory.md`, SHA-256
+`d79df592e7049d4f0e3412bf41e8c61d44ea0829a6fddc2734cff40ceb966617`. Execute every RETIRE/NARROW row without an
+`Unsafe*` alias. ADR-095 does not weaken this separately approved surface gate.
 
 ## Ordered delivery and release gates
 
-The migration is deliberately split so removing temporary ownership scaffolding cannot race owner adoption:
+1. **Contract supersession** — ADR-095, new OpenSpec change/deltas, PR #984 supersession, task truth, and this guide.
+2. **Owner handles, admission, lifecycle simplification** — native handles, fallible-before-Consume setup, duplicate
+   rejection, all 42 owner migrations, failed-Start authority, fixture deletion, and removal of stateful helpers.
+3. **Client minimal** — remove child catalogs and same-name replacement; retain independent observation; make Close
+   terminal transport-only.
+4. **Raw-root narrowing** — execute every approved RETIRE/NARROW disposition.
+5. **Controlled proof** — real SIGTERM/SIGINT ordering, cleanupPending, duplicate rejection, aggregate exit truth,
+   listener release, and fresh boot.
+6. **Dirty and settlement proof** — deterministic kill at delivery/effect/guard/publication/pre-ACK boundaries,
+   redelivery/convergence, effect guarantees, and the declared DoubleAck decision.
 
-1. **PR2-reset-contract** — approved contract, inventory, spec deltas, ADR amendment, and this guide.
-2. **PR2-owner-handles** — exact handles and owner migration while temporary Client catalogs remain.
-3. **PR2-client-minimal** — remove catalogs and implement synchronous Connect plus terminal transport-only Close.
-4. **PR2-raw-capabilities** — execute every approved RETIRE/NARROW native-surface disposition.
-5. **PR2-composition-proof** — prove clean and failed controlled shutdown both exit and fresh-process restart works.
-6. **PR2-dirty-proof** — prove retained-state recovery at deterministic kill and settlement boundaries.
-
-The breaking tag remains blocked until all six PRs, focused/race/integration/contract checks, schema no-drift, and the
-relevant real-process and E2E gates are green. Contract approval alone is not runtime or recovery evidence.
+The breaking tag remains blocked until runtime migrations, focused/race/integration/contract checks, schema no-drift,
+and relevant controlled, dirty, and E2E gates are green. This contract-only application checks none of those tasks.

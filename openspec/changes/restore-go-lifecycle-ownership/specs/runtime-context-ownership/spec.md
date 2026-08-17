@@ -77,15 +77,19 @@ and end when the server is stopped and joined. No other production closure may r
 
 ### Requirement: Stop quiesces accepted work before canceling its Start lifetime
 
-`Stop(ctx context.Context)` SHALL use the Stop argument only to bound quiesce, accepted-work drain, private Start
-cancellation, joining, and terminal cleanup. It SHALL NOT use that argument to launch a new runtime lifetime. An owner
-with admission or already-accepted work SHALL fence new admission and drain or settle accepted work while its Start
-authority remains live, then signal private Start cancellation and join. An owner with no admission or accepted-work
-drain MAY signal cancellation immediately. Stop SHALL be idempotent and SHALL NOT repeat teardown side effects.
+`Stop(ctx)` SHALL use the caller argument only to bound shutdown and SHALL NOT launch runtime authority. A NATS owner
+SHALL fence admission, initiate native Drain/Shutdown, await exact native Closed while callback authority remains live,
+cancel remaining Start-owned runtime, await exact done/WaitGroup, then clean up. A simple owner MAY omit native phases
+but SHALL cancel ctx-driven runtime before waiting for its completion. Stop SHALL reject nil before action.
 
-An exported error-returning context boundary SHALL reject nil. An already-canceled Stop context cannot authorize new
-cleanup work; the owner SHALL fence admission, signal private cancellation, and return the context error if no phase
-can complete immediately. It SHALL NOT invent a replacement context.
+An M-class owner SHALL observe exact Start finalization before selecting running Stop or failed-Start cleanupPending.
+Completed repeated Stop SHALL be a no-op. This capability SHALL NOT claim concurrent Stop, running-generation rejoin,
+or retained result replay; ADR-095 and `simplify-one-shot-lifecycle-ownership` own those service-shutdown semantics.
+
+An already-canceled Stop context cannot authorize native drain work. The owner SHALL fence admission, issue private
+cancellation, and return the context cause unless completion is already observed. It SHALL NOT invent a replacement
+context. Failed-Start cleanup uses only its separately approved bounded synchronous rollback root and retains authority
+if that rollback fails.
 
 #### Scenario: NATS owner drains before cancellation
 
@@ -106,9 +110,8 @@ can complete immediately. It SHALL NOT invent a replacement context.
 
 - **GIVEN** generation G has an in-flight Start call
 - **WHEN** its owner begins `Stop(S)`
-- **THEN** the owner completes any required quiesce and then cancels G
-- **AND** it waits for G's Start call and Start finalization to return
-- **AND** it invokes Stop on G only after that completion
+- **THEN** the owner waits for G's Start call and exact Start finalization to return
+- **AND** it selects the running Stop or failed-Start cleanupPending path only after that completion
 - **AND** no Start and Stop method body overlaps for G
 
 #### Scenario: Terminal manager Stop fences borrows before component drain
@@ -126,6 +129,14 @@ can complete immediately. It SHALL NOT invent a replacement context.
 - **WHEN** `Stop(S)` waits for it
 - **THEN** Stop returns an error wrapping `S.Err()`
 - **AND** admission remains fenced and any issued runtime cancellation remains issued
+- **AND** it never waits on ctx-driven completion before issuing runtime cancellation
+
+#### Scenario: Already-canceled Stop cannot invent drain authority
+
+- **GIVEN** Stop receives a context whose cause is already set
+- **WHEN** the owner has not observed completion
+- **THEN** it fences admission, issues private runtime cancellation, and returns the context cause
+- **AND** it does not invent a replacement context or begin native drain work
 
 #### Scenario: Nil context is rejected
 

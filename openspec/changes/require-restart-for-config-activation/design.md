@@ -234,6 +234,21 @@ clean-shutdown record, and stale boot-incarnation facts must not suppress or imp
 
 ### D10. Resource owners drain; Client closes terminal transport
 
+> **Superseded lifecycle mechanics.** ADR-095 and
+> `openspec/changes/simplify-one-shot-lifecycle-ownership/` supersede D10's `ManagedConsumer`,
+> `DrainAndDelete`, handle-local backlog, later running-generation rejoin, and retained repeated Client Close result.
+> D10 remains decision provenance inside this active design, but it is not the lifecycle implementation target.
+> PR #984 retains boot-only composition, rule hot reload, and flow activation truth. Raw-root retirement and
+> restart-safe guarantees are delegated dependencies owned by the superseding change.
+
+ADR-095 and `simplify-one-shot-lifecycle-ownership` supersede PR #984's managed-consumer, lifecycle deletion,
+concurrent/rejoin, and retained-result mechanics and own the complete `restart-safe-shutdown` and
+`jetstream-consumer-policy` lifecycle target. PR #984 retains boot-only composition, rule hot reload, and flow
+activation truth; it depends on `simplify-one-shot-lifecycle-ownership` for broad-root retirement and restart-safe
+settlement/outbound-flush, controlled-process proof, dirty-recovery, durable-communication, live-storage/replica
+validation, NATS restart, clean-marker independence, and latest-desired-state guarantees. No runtime or proof task is
+completed by delegation.
+
 Composition owns one synchronous Connect and one terminal Close. Concurrent Connect/Close is outside the supported
 contract. Every retained managed-consumer constructor and subscription setup returns an exact owner handle; the
 component that starts the resource retains it and drains it during Stop. `ConsumeStreamWithConfig`,
@@ -289,21 +304,21 @@ text; every runtime task cited below remains unchecked.
 | Approved ruling | Contract evidence |
 |---|---|
 | Boot-only topology and dedicated rule-definition hot reload remain | `design.md:39`, `design.md:74` |
-| Dirty power and settlement stay Close-independent | `design.md:216`, `restart-safe-shutdown/spec.md:188` |
-| Resource owners retain and drain exact handles | `design.md:237`, `restart-safe-shutdown/spec.md:27` |
-| Quiesce and drain precede Start cancellation | `restart-safe-shutdown/spec.md:3` |
-| Exact deletion fences partial, duplicate, and stale ownership | `restart-safe-shutdown/spec.md:84` |
-| OutstandingWork is handle-local and three named callers migrate | `tasks.md:28` |
-| Compiler errors direct callers to retain the exact handle | `migration-restart-safe-nats-client.md:36` |
-| Abrupt Stop cannot become clean; no Abort/Unsubscribe escape exists | `restart-safe-shutdown/spec.md:77` |
-| Client Close is terminal transport-only | `restart-safe-shutdown/spec.md:121` |
-| Preclosed, LastError, deadline, and repeated-Close truth is retained | `restart-safe-shutdown/spec.md:128` |
-| Connect owns a private five-second flusher ceiling | `restart-safe-shutdown/spec.md:134` |
-| Every controlled result exits to a supervisor-started fresh process | `restart-safe-shutdown/spec.md:219` |
-| ConsumeDurable retires | `jetstream-consumer-policy/spec.md:9` |
+| Dirty power and settlement stay Close-independent | `design.md:216`, `../simplify-one-shot-lifecycle-ownership/specs/restart-safe-shutdown/spec.md:74`, `../simplify-one-shot-lifecycle-ownership/specs/restart-safe-shutdown/spec.md:137` |
+| Resource owners retain exact native handles | ADR-095; `../simplify-one-shot-lifecycle-ownership/specs/jetstream-consumer-policy/spec.md` |
+| Quiesce and exact Closed precede runtime cancellation | ADR-095; `../simplify-one-shot-lifecycle-ownership/specs/restart-safe-shutdown/spec.md` |
+| Normal lifecycle does not delete durable topology | ADR-095; `../simplify-one-shot-lifecycle-ownership/specs/restart-safe-shutdown/spec.md` |
+| OutstandingWork remains an independent exact observer | `../simplify-one-shot-lifecycle-ownership/design.md` |
+| Compiler errors direct callers to retain the exact native handle | `docs/operations/migration-restart-safe-nats-client.md` |
+| Abrupt Stop cannot become clean; no lifecycle deletion escape exists | ADR-095; `../simplify-one-shot-lifecycle-ownership/specs/restart-safe-shutdown/spec.md` |
+| Client Close is terminal transport-only | ADR-095; `../simplify-one-shot-lifecycle-ownership/specs/restart-safe-shutdown/spec.md` |
+| Preclosed, LastError, and deadline truth remains non-clean; completed repeat is nil | `../simplify-one-shot-lifecycle-ownership/specs/restart-safe-shutdown/spec.md` |
+| Connect owns a private five-second flusher ceiling | `../simplify-one-shot-lifecycle-ownership/specs/restart-safe-shutdown/spec.md:51` |
+| Every controlled result exits to a supervisor-started fresh process | `../simplify-one-shot-lifecycle-ownership/specs/restart-safe-shutdown/spec.md:107` |
+| ConsumeDurable retires | `../simplify-one-shot-lifecycle-ownership/specs/jetstream-consumer-policy/spec.md:10` |
 | Historical ADR-070 remains unchanged | `094-boot-only-composition-and-observable-rule-activation.md:163` |
 | Broad roots retire or narrow to locally owned seams | `native-surface-inventory.md:134` |
-| Six-PR order binds; runtime and proof tasks remain unchecked | `tasks.md:14` |
+| Superseding six-PR order binds; runtime and proof tasks remain unchecked | `../simplify-one-shot-lifecycle-ownership/tasks.md` |
 | Reset inventory approval artifact and SHA are durable | `inventory.md:5` |
 | Minimal lifecycle design approval artifact and SHA are durable | `design.md:15` |
 | Native inventory is byte-identical to its approved SHA | `native-surface-inventory.md:1`, `inventory.md:113` |
