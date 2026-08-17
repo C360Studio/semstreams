@@ -41,9 +41,9 @@ large non-idiomatic surface to copy.
 - Make restart-safe shutdown a prerequisite for relying on boot activation. A controlled restart must quiesce new
   intake, drain already-accepted NATS callbacks, settle ACK/NAK and publications, cancel and join Start-owned work, and
   flush and close the NATS connection before exit.
-- Make the owner that starts each subscription or managed consumer retain and drain its exact returned handle before
-  Start cancellation. Retire zero-production-consumer `ConsumeDurable`; propagate exact handles through the three
-  retained consume constructors instead of making Client rediscover children by name.
+- Preserve owner-local shutdown as a prerequisite, but supersede this change's managed-consumer lifecycle mechanics
+  with ADR-095 and `simplify-one-shot-lifecycle-ownership`: retained consume constructors return the exact native
+  `jetstream.ConsumeContext`, failed-Start cleanup authority is retained, and Client does not rediscover children.
 - Make Client Close terminal and transport-only: it joins only Client-owned health/metrics workers, native-drains the
   connection, observes CLOSED and conservative error history, and never compensates for missing owner cleanup.
 - Remove abrupt NATS consumer `Stop` and subscription `Unsubscribe` from graceful shutdown paths. Deadline-forced
@@ -60,13 +60,25 @@ large non-idiomatic surface to copy.
 - Simplify `restore-go-lifecycle-ownership`: delete its live replacement protocol and retain boot ownership, raw-handle
   retirement, terminal shutdown, context cleanup, and their race proofs.
 
+ADR-095 and `simplify-one-shot-lifecycle-ownership` supersede PR #984's managed-consumer, lifecycle deletion,
+concurrent/rejoin, and retained-result mechanics and own the complete `restart-safe-shutdown` and
+`jetstream-consumer-policy` lifecycle target. PR #984 retains boot-only composition, rule hot reload, and flow
+activation truth; it depends on `simplify-one-shot-lifecycle-ownership` for broad-root retirement and restart-safe
+settlement/outbound-flush, controlled-process proof, dirty-recovery, durable-communication, live-storage/replica
+validation, NATS restart, clean-marker independence, and latest-desired-state guarantees. No runtime or proof task is
+completed by delegation.
+
 ## Capabilities
 
 ### New capability
 
 - `rule-hot-reload`: bounded live rule-definition activation and revision-bound outcome truth.
-- `restart-safe-shutdown`: controlled drain plus dirty-crash recovery and restart proof.
 - `flow-activation-truth`: durable desired activation and independently observed effective runtime state.
+
+### Delegated dependency capability
+
+- `restart-safe-shutdown`: ADR-095 and `simplify-one-shot-lifecycle-ownership` own the raw-root and restart-safe
+  guarantees that PR #984 consumes as prerequisites for its boot, rule, and flow scope.
 
 ### Modified capabilities
 

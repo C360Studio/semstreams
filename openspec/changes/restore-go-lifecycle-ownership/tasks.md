@@ -18,8 +18,9 @@
 - [x] 1.10 Obtain semstreams-reviewer approval; run `task lint`, `go test -race ./...`, integration and contract tests,
   schema drift check, `task e2e:core`, and `task e2e:semantic` before merging the atomic prerequisite.
 
-Completion of section 1 is deliberately narrow. The implementation retains only private `lifecyclejoin.Generation`
-and `lifecyclejoin.Operation` cancellation, completion, and terminal-result authority; it stores no new contexts.
+Completion of section 1 is deliberately narrow. The context-bearing signature prerequisite is complete. Stateful
+`lifecyclejoin.Generation` and `lifecyclejoin.Operation` terminal-result/rejoin semantics are superseded by ADR-095
+and `simplify-one-shot-lifecycle-ownership`; this change retains no active claim over that service-shutdown behavior.
 NATS, JetStream, and HTTP shutdown uses the protocol's native drain/shutdown completion plus generation-scoped joins.
 The sole new framework-owned root is the bounded five-second context used synchronously by
 `RunPartialStartRollback` when an uncommitted Start has no external Stop caller. It does not launch detached cleanup.
@@ -31,18 +32,19 @@ the caller must preserve and invoke that stop function.
 
 ## 2. Boot runtime ownership and restart-safe terminal Stop
 
-- [ ] 2.1 Land `require-restart-for-config-activation` first. It owns value-only Registry/observation, callback-scoped
-  boot-runtime access, generalized live-mutation deletion, graceful drain, and dirty-restart proof.
+- [ ] 2.1 Land `require-restart-for-config-activation` and `simplify-one-shot-lifecycle-ownership` first. They own
+  value-only Registry/observation, callback-scoped boot-runtime access, generalized live-mutation deletion, terminal
+  owner sequencing, and controlled/dirty restart proof.
 - [ ] 2.2 Verify Registry, ComponentManager DTOs, flow graph, `component.Lookup`, and
   `Dependencies.ComponentRegistry` expose no raw runtime handle or cancellation authority.
 - [ ] 2.3 Verify live `ReplaceComponent`, removal, reservation, Transitioning, candidate, and predecessor-restoration
   protocols are absent rather than redesigned.
 - [ ] 2.4 Prove callback borrows return typed missing/failed/stopping and terminal Stop fences and drains them without
   holding manager locks.
-- [ ] 2.5 Prove terminal manager Stop lets NATS-owning components quiesce/drain accepted work before cancellation and
-  exact-generation join; deadline failure remains observable and rejoinable.
-- [ ] 2.6 Obtain reviewer approval; run local gates plus controlled/dirty restart, `task e2e:core`, and
-  `task e2e:semantic` before merge.
+- [ ] 2.5 **SUPERSEDED — tracked by `simplify-one-shot-lifecycle-ownership`.** Terminal owner ordering, completed
+  repeated Stop, failed-Start cleanup authority, and the prohibition on running-generation rejoin belong there.
+- [ ] 2.6 **SUPERSEDED — tracked by `simplify-one-shot-lifecycle-ownership`.** Controlled/dirty process proof and
+  lifecycle-specific E2E gates remain unchecked in that change.
 
 ## 3. Remaining context debt
 
