@@ -220,9 +220,9 @@ func kvConfigFor(spec BucketSpec) jetstream.KeyValueConfig {
 // root fails closed (the component-start barrier) — that composition is why
 // no post-start boot sweep exists anymore.
 //
-// Reconciling at acquisition (rather than at boot only) is what closes the
-// post-boot-cutoff class: a dynamic component add/edit re-acquires its buckets
-// through this seam and reconciles them right there.
+// Reconciling at every owner acquisition closes the stale-resource class for
+// both fresh process boots and same-identity owner recovery. Desired component
+// edits never invoke this seam in the running process.
 func EnsureFrameworkBucket(ctx context.Context, c *Client, spec BucketSpec) (jetstream.KeyValue, error) {
 	if c == nil {
 		return nil, errs.WrapInvalid(errors.New("nil NATS client"),

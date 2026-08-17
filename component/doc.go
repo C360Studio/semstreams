@@ -1,18 +1,17 @@
 // Package component provides the core component infrastructure for SemStreams,
-// enabling dynamic component discovery, registration, lifecycle management, and
-// instance creation.
+// including factory registration, boot-time declaration admission, ports,
+// schemas, and value-only discovery.
 //
 // # Overview
 //
 // The component package defines fundamental abstractions for all SemStreams components,
 // supporting five component types: inputs (data sources), processors (data transformers),
 // outputs (data sinks), storage (persistence), and gateways (query surfaces). Components
-// are self-describing units that can be discovered at runtime, configured through schemas,
-// and managed through their lifecycle.
+// are self-describing units whose declarations are sealed at boot, configured
+// through schemas, and owned through their lifecycle by ComponentManager.
 //
-// The Registry serves as the central component management system, handling both factory
-// registration and instance management with thread-safe operations and proper lifecycle
-// control.
+// Registry owns factories and immutable admitted declaration values. It does
+// not retain runtime component handles or lifecycle authority.
 //
 // # Component Registration Pattern
 //
@@ -27,7 +26,7 @@
 //  1. Each component package exports a Register(*Registry) error function
 //  2. componentregistry.RegisterAll() orchestrates all registrations
 //  3. main.go explicitly calls RegisterAll() with a created Registry
-//  4. Components are now available for instantiation
+//  4. Components are available to ComponentManager's boot admission
 //
 // Example component registration:
 //
@@ -91,15 +90,9 @@
 //		Logger: slog.Default(),
 //	}
 //
-//	// Create component instance
-//	instance, err := registry.CreateComponent("udp-input-1", config, deps)
-//	if err != nil {
-//		return err
-//	}
-//
-//	// Component is now ready to use
-//	meta := instance.Meta()
-//	health := instance.Health()
+//	// Add config under the desired component instance name and pass the
+//	// registry plus dependencies to ComponentManager at process composition.
+//	// Component admission is framework-internal and seals after boot.
 //
 // # core Concepts
 //
@@ -329,10 +322,9 @@
 //   - Listing operations use read locks
 //
 // Concurrency characteristics:
-//   - Multiple goroutines can create components concurrently
-//   - Factory registration blocks component creation temporarily
-//   - ListAvailable() is safe to call during component creation
-//   - No deadlocks due to ordered lock acquisition
+//   - Factory registration completes before component boot admission
+//   - ListAvailable() is safe for concurrent schema and discovery reads
+//   - ComponentManager serializes the one boot-admission transaction
 //
 // # Error Handling
 //
@@ -345,15 +337,8 @@
 //	ErrInstanceExists       // Instance name already in use
 //	ErrInstanceNotFound     // Attempted to access unknown instance
 //
-// Error checking:
-//
-//	_, err := registry.CreateComponent("instance-1", config, deps)
-//	if errors.Is(err, component.ErrFactoryNotFound) {
-//		// Handle missing factory - configuration error
-//	}
-//	if errors.Is(err, component.ErrComponentCreation) {
-//		// Handle factory failure - component-specific error
-//	}
+// ComponentManager reports these errors while validating and admitting the
+// boot composition. Direct Registry admission is not an adopter API.
 //
 // # Testing
 //
@@ -377,15 +362,9 @@
 //		Logger: slog.Default(),
 //	}
 //
-//	// Test component creation
-//	instance, err := registry.CreateComponent("test-1", config, deps)
-//	if err != nil {
-//		t.Fatal(err)
-//	}
-//
-//	// Verify component behavior through Discoverable interface
-//	assert.Equal(t, "udp", instance.Meta().Type)
-//	assert.True(t, instance.Health().Healthy)
+//	// Assemble ComponentManager with the isolated registry and desired test
+//	// config, then verify behavior through its value-only health and status
+//	// observations.
 //
 // Testing patterns:
 //   - Use real NATS client via natsclient.NewTestClient() for integration tests

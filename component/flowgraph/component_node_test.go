@@ -1,13 +1,17 @@
 package flowgraph
 
-import "github.com/c360studio/semstreams/component"
+import (
+	"fmt"
+
+	"github.com/c360studio/semstreams/component"
+)
 
 // addTestComponentNode adapts standalone unit fixtures to the retained-port
 // ingestion helper. Production flowgraphs are built only from Registry
 // snapshots through BuildFromRegistry.
 func addTestComponentNode(graph *FlowGraph, name string, comp component.Discoverable) error {
 	if comp == nil {
-		return graph.addComponentNode(name, comp, nil, nil, nil, nil)
+		return fmt.Errorf("component cannot be nil")
 	}
 	inputs := comp.InputPorts()
 	inputFacts, err := testPortFacts(inputs)
@@ -19,7 +23,7 @@ func addTestComponentNode(graph *FlowGraph, name string, comp component.Discover
 	if err != nil {
 		return err
 	}
-	return graph.addComponentNode(name, comp, inputs, inputFacts, outputs, outputFacts)
+	return graph.addComponentNode(name, inputs, inputFacts, outputs, outputFacts)
 }
 
 func extractTestPortInfo(graph *FlowGraph, ports []component.Port) ([]PortInfo, error) {

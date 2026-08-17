@@ -1304,6 +1304,17 @@ components:
             type: object
         Flow:
             properties:
+                boot_applied_provenance:
+                    anyOf:
+                        - properties:
+                            boot_id:
+                                type: string
+                            digest:
+                                type: string
+                          required:
+                            - digest
+                          type: object
+                        - type: "null"
                 connections:
                     items:
                         properties:
@@ -1330,12 +1341,27 @@ components:
                     type: string
                 created_by:
                     type: string
-                deployed_at:
+                description:
+                    type: string
+                desired_changed_at:
                     anyOf:
                         - format: date-time
                           type: string
                         - type: "null"
-                description:
+                desired_provenance:
+                    anyOf:
+                        - properties:
+                            boot_id:
+                                type: string
+                            digest:
+                                type: string
+                          required:
+                            - digest
+                          type: object
+                        - type: "null"
+                desired_state:
+                    type: string
+                effective_state:
                     type: string
                 id:
                     type: string
@@ -1377,18 +1403,8 @@ components:
                             - config
                         type: object
                     type: array
-                runtime_state:
-                    type: string
-                started_at:
-                    anyOf:
-                        - format: date-time
-                          type: string
-                        - type: "null"
-                stopped_at:
-                    anyOf:
-                        - format: date-time
-                          type: string
-                        - type: "null"
+                restart_required:
+                    type: boolean
                 updated_at:
                     format: date-time
                     type: string
@@ -1400,24 +1416,48 @@ components:
                 - version
                 - nodes
                 - connections
-                - runtime_state
+                - desired_state
+                - restart_required
                 - created_at
                 - updated_at
                 - last_modified
             type: object
         FlowStatusPayload:
             properties:
-                error:
+                boot_applied_provenance:
+                    anyOf:
+                        - properties:
+                            boot_id:
+                                type: string
+                            digest:
+                                type: string
+                          required:
+                            - digest
+                          type: object
+                        - type: "null"
+                desired_provenance:
+                    anyOf:
+                        - properties:
+                            boot_id:
+                                type: string
+                            digest:
+                                type: string
+                          required:
+                            - digest
+                          type: object
+                        - type: "null"
+                desired_state:
                     type: string
-                prev_state:
+                effective_state:
                     type: string
-                state:
-                    type: string
+                restart_required:
+                    type: boolean
                 timestamp:
                     type: integer
             required:
-                - state
-                - prev_state
+                - desired_state
+                - effective_state
+                - restart_required
                 - timestamp
             type: object
         GraphQLRequest:

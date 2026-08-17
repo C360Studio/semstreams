@@ -20,12 +20,6 @@ import (
 // Type alias to avoid import cycles while maintaining compatibility.
 type PlatformMeta = types.PlatformMeta
 
-// Lookup provides read-only access to sibling components at call time.
-// Lazy lookup avoids stale pointers when ComponentManager restarts components.
-type Lookup interface {
-	Component(name string) Discoverable
-}
-
 // StoreProvider is implemented by storage components that own one or more stores
 // addressable by StorageInstance name (ADR-063). The ComponentManager reads this
 // AFTER the component Starts to populate the shared StoreRegistry, and clears
@@ -69,15 +63,14 @@ type ToolRegistryReader interface {
 // to type-assert at every Decoder construction site — pure friction
 // for no abstraction win.
 type Dependencies struct {
-	NATSClient        *natsclient.Client        // NATS client for messaging
-	MetricsRegistry   *metric.MetricsRegistry   // Metrics registry for Prometheus (can be nil)
-	Logger            *slog.Logger              // Structured logger (can be nil, defaults to slog.Default())
-	Platform          PlatformMeta              // Platform identity (organization and platform)
-	Security          security.Config           // Platform-wide security configuration
-	ModelRegistry     model.RegistryReader      // Unified model registry (can be nil)
-	ToolRegistry      ToolRegistryReader        // Shared tool executor registry (can be nil; agentic-tools requires it)
-	PayloadRegistry   *payloadregistry.Registry // Shared payload registry (can be nil; components unmarshaling BaseMessage require it)
-	ComponentRegistry Lookup                    // Sibling component lookup (can be nil)
+	NATSClient      *natsclient.Client        // NATS client for messaging
+	MetricsRegistry *metric.MetricsRegistry   // Metrics registry for Prometheus (can be nil)
+	Logger          *slog.Logger              // Structured logger (can be nil, defaults to slog.Default())
+	Platform        PlatformMeta              // Platform identity (organization and platform)
+	Security        security.Config           // Platform-wide security configuration
+	ModelRegistry   model.RegistryReader      // Unified model registry (can be nil)
+	ToolRegistry    ToolRegistryReader        // Shared tool executor registry (can be nil; agentic-tools requires it)
+	PayloadRegistry *payloadregistry.Registry // Shared payload registry (can be nil; components unmarshaling BaseMessage require it)
 
 	// LifecycleManager is the shared pkg/lifecycle.Manager that
 	// owns workflow-shaped entity instances (ADR-047). Apps that

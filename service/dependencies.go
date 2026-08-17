@@ -7,6 +7,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/config"
+	"github.com/c360studio/semstreams/flowstore"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
@@ -31,6 +32,7 @@ type Dependencies struct {
 	Platform          types.PlatformMeta           // Platform identity
 	Manager           *config.Manager              // Centralized configuration management
 	ComponentRegistry *component.Registry          // Component registry for ComponentManager
+	FlowManager       *flowstore.Manager           // Shared flow authoring and boot-provenance manager
 	ToolRegistry      component.ToolRegistryReader // Shared tool executor registry plumbed to component deps
 	PayloadRegistry   *payloadregistry.Registry    // Shared payload registry plumbed to component deps
 	LifecycleManager  *lifecycle.Manager           // Shared Lifecycle harness Manager (ADR-047), plumbed to component deps (rule processor + lifecycle-gateway). Nil when no app workflows are registered.

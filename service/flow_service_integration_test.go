@@ -78,12 +78,15 @@ func (s *FlowServiceHTTPSuite) SetupTest() {
 	s.Require().NoError(err)
 
 	// Create flow service
+	flowManager, err := flowstore.NewManager(s.ctx, s.natsClient)
+	s.Require().NoError(err)
 	deps := &service.Dependencies{
 		NATSClient:        s.natsClient,
 		Manager:           s.configMgr,
 		ComponentRegistry: s.componentRegistry,
 		MetricsRegistry:   metric.NewMetricsRegistry(),
 		Logger:            slog.Default(),
+		FlowManager:       flowManager,
 	}
 
 	s.flowService, err = service.NewFlowServiceFromConfig(nil, deps)
@@ -472,7 +475,7 @@ func (s *FlowServiceHTTPSuite) TestHTTP_DeployFlow() {
 	err := json.Unmarshal(body, &deployedFlow)
 	s.Require().NoError(err)
 
-	s.Equal(flowstore.StateDeployedStopped, deployedFlow.RuntimeState)
+	s.Equal(flowstore.DesiredDisabled, deployedFlow.DesiredState)
 }
 
 // TestHTTP_StartFlow tests POST /deployment/{id}/start
@@ -505,7 +508,7 @@ func (s *FlowServiceHTTPSuite) TestHTTP_StartFlow() {
 	err := json.Unmarshal(body, &startedFlow)
 	s.Require().NoError(err)
 
-	s.Equal(flowstore.StateRunning, startedFlow.RuntimeState)
+	s.Equal(flowstore.DesiredEnabled, startedFlow.DesiredState)
 }
 
 // TestHTTP_StopFlow tests POST /deployment/{id}/stop
@@ -539,7 +542,7 @@ func (s *FlowServiceHTTPSuite) TestHTTP_StopFlow() {
 	err := json.Unmarshal(body, &stoppedFlow)
 	s.Require().NoError(err)
 
-	s.Equal(flowstore.StateDeployedStopped, stoppedFlow.RuntimeState)
+	s.Equal(flowstore.DesiredDisabled, stoppedFlow.DesiredState)
 }
 
 // TestHTTP_UndeployFlow tests POST /deployment/{id}/undeploy
@@ -572,7 +575,7 @@ func (s *FlowServiceHTTPSuite) TestHTTP_UndeployFlow() {
 	err := json.Unmarshal(body, &undeployedFlow)
 	s.Require().NoError(err)
 
-	s.Equal(flowstore.StateNotDeployed, undeployedFlow.RuntimeState)
+	s.Equal(flowstore.DesiredAbsent, undeployedFlow.DesiredState)
 }
 
 // TestHTTP_DeployInvalidFlow tests deploying a flow that fails validation

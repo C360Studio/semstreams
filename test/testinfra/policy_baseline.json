@@ -2,21 +2,6 @@
   "version": 1,
   "entries": [
     {
-      "key": "integration-time-sleep|component/registry_integration_test.go|TestRegistry_Heartbeat|time.Sleep(250 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|component/registry_integration_test.go|TestRegistry_MultiNodeDiscovery|time.Sleep(300 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|component/registry_integration_test.go|TestRegistry_SubscribeCapabilities|time.Sleep(200 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
       "key": "integration-time-sleep|config/manager_integration_test.go|SetupTest|time.Sleep(50 * time.Millisecond)|1",
       "kind": "migration-debt",
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
@@ -1283,71 +1268,6 @@
     },
     {
       "key": "integration-time-sleep|service/base_test.go|waitForHealthy|time.Sleep(10 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|service/component_manager_config_test.go|TestComponentManagerConfigUpdates|time.Sleep(2 * time.Second)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|service/component_manager_config_test.go|TestComponentManagerConfigUpdates|time.Sleep(50 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|service/component_manager_config_test.go|TestComponentManagerConfigUpdates|time.Sleep(500 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|service/component_manager_config_test.go|TestComponentManagerConfigUpdates|time.Sleep(500 * time.Millisecond)|2",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|service/component_manager_config_test.go|TestComponentManagerConfigUpdates|time.Sleep(500 * time.Millisecond)|3",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|service/component_manager_config_test.go|TestComponentManagerConfigUpdates|time.Sleep(500 * time.Millisecond)|4",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|service/component_manager_config_test.go|TestComponentManagerConfigUpdates|time.Sleep(500 * time.Millisecond)|5",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|service/component_manager_config_test.go|TestComponentManagerNoOpConfigUpdateSkipsRestart|time.Sleep(1 * time.Second)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|service/component_manager_config_test.go|TestComponentManagerNoOpConfigUpdateSkipsRestart|time.Sleep(300 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|service/component_manager_config_test.go|TestComponentManagerNoOpConfigUpdateSkipsRestart|time.Sleep(500 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|service/component_manager_config_test.go|TestComponentManagerReconcileOnBulkPush|time.Sleep(200 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|service/component_manager_config_test.go|TestComponentManagerRepushUnchangedRestartsNothing|time.Sleep(2 * time.Second)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|service/component_manager_config_test.go|TestComponentManagerRepushUnchangedRestartsNothing|time.Sleep(200 * time.Millisecond)|1",
       "kind": "migration-debt",
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
     },

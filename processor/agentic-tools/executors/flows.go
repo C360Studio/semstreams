@@ -186,18 +186,22 @@ func (e *FlowExecutor) listFlows(ctx context.Context, call agentic.ToolCall) (ag
 	// Return a compact summary (id/name/state/version) rather than full
 	// flow bodies — reduces LLM context pressure. Use get_flow for detail.
 	type flowSummary struct {
-		ID           string `json:"id"`
-		Name         string `json:"name"`
-		RuntimeState string `json:"runtime_state"`
-		Version      int64  `json:"version"`
+		ID              string `json:"id"`
+		Name            string `json:"name"`
+		DesiredState    string `json:"desired_state"`
+		EffectiveState  string `json:"effective_state"`
+		RestartRequired bool   `json:"restart_required"`
+		Version         int64  `json:"version"`
 	}
 	summaries := make([]flowSummary, 0, len(flows))
 	for _, f := range flows {
 		summaries = append(summaries, flowSummary{
-			ID:           f.ID,
-			Name:         f.Name,
-			RuntimeState: string(f.RuntimeState),
-			Version:      f.Version,
+			ID:              f.ID,
+			Name:            f.Name,
+			DesiredState:    string(f.DesiredState),
+			EffectiveState:  string(f.EffectiveState),
+			RestartRequired: f.RestartRequired,
+			Version:         f.Version,
 		})
 	}
 	data, err := json.MarshalIndent(summaries, "", "  ")

@@ -319,7 +319,7 @@ All messages are wrapped in a `StatusStreamEnvelope`:
 
 | Type | Trigger | Description |
 |------|---------|-------------|
-| `flow_status` | State change | Flow state transitions (deployed, running, stopped, failed) |
+| `flow_status` | Desired write | Desired/effective activation observation and restart requirement |
 | `component_health` | Every 5s | Component health status from ComponentManager |
 | `component_metrics` | As published | Real-time metrics from MetricsForwarder |
 | `log_entry` | As logged | Application logs via NATS LogForwarder |
@@ -328,14 +328,12 @@ All messages are wrapped in a `StatusStreamEnvelope`:
 
 ```json
 {
-    "state": "running",
-    "prev_state": "deployed_stopped",
-    "timestamps": {
-        "created": "2025-01-15T10:00:00Z",
-        "deployed": "2025-01-15T10:05:00Z",
-        "started": "2025-01-15T10:05:30Z"
-    },
-    "error": null
+    "desired_state": "enabled",
+    "effective_state": "unknown",
+    "restart_required": true,
+    "desired_provenance": {"boot_id": "...", "digest": "sha256:..."},
+    "boot_applied_provenance": {"boot_id": "...", "digest": "sha256:..."},
+    "timestamp": 1705412345000
 }
 ```
 

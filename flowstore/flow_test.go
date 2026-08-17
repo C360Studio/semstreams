@@ -23,7 +23,7 @@ func TestFlowValidation(t *testing.T) {
 				Name:         "Test Flow",
 				Description:  "A test flow",
 				Version:      1,
-				RuntimeState: StateNotDeployed,
+				DesiredState: DesiredAbsent,
 				Nodes: []FlowNode{
 					{
 						ID:        "node-1",
@@ -45,7 +45,7 @@ func TestFlowValidation(t *testing.T) {
 			flow: Flow{
 				ID:           "",
 				Name:         "Test Flow",
-				RuntimeState: StateNotDeployed,
+				DesiredState: DesiredAbsent,
 				Nodes:        []FlowNode{},
 				Connections:  []FlowConnection{},
 			},
@@ -57,7 +57,7 @@ func TestFlowValidation(t *testing.T) {
 			flow: Flow{
 				ID:           "flow-123",
 				Name:         "",
-				RuntimeState: StateNotDeployed,
+				DesiredState: DesiredAbsent,
 				Nodes:        []FlowNode{},
 				Connections:  []FlowConnection{},
 			},
@@ -65,11 +65,11 @@ func TestFlowValidation(t *testing.T) {
 			errorType: "invalid",
 		},
 		{
-			name: "invalid runtime state should fail",
+			name: "invalid desired state should fail",
 			flow: Flow{
 				ID:           "flow-123",
 				Name:         "Test Flow",
-				RuntimeState: RuntimeState("invalid_state"),
+				DesiredState: DesiredState("invalid_state"),
 				Nodes:        []FlowNode{},
 				Connections:  []FlowConnection{},
 			},
@@ -81,7 +81,7 @@ func TestFlowValidation(t *testing.T) {
 			flow: Flow{
 				ID:           "flow-123",
 				Name:         "Test Flow",
-				RuntimeState: StateNotDeployed,
+				DesiredState: DesiredAbsent,
 				Nodes: []FlowNode{
 					{
 						ID:        "",
@@ -101,7 +101,7 @@ func TestFlowValidation(t *testing.T) {
 			flow: Flow{
 				ID:           "flow-123",
 				Name:         "Test Flow",
-				RuntimeState: StateNotDeployed,
+				DesiredState: DesiredAbsent,
 				Nodes: []FlowNode{
 					{
 						ID:        "node-1",
@@ -121,7 +121,7 @@ func TestFlowValidation(t *testing.T) {
 			flow: Flow{
 				ID:           "flow-123",
 				Name:         "Test Flow",
-				RuntimeState: StateNotDeployed,
+				DesiredState: DesiredAbsent,
 				Nodes: []FlowNode{
 					{
 						ID:        "node-1",
@@ -141,7 +141,7 @@ func TestFlowValidation(t *testing.T) {
 			flow: Flow{
 				ID:           "flow-123",
 				Name:         "Test Flow",
-				RuntimeState: StateNotDeployed,
+				DesiredState: DesiredAbsent,
 				Nodes: []FlowNode{
 					{
 						ID:        "node-1",
@@ -161,7 +161,7 @@ func TestFlowValidation(t *testing.T) {
 			flow: Flow{
 				ID:           "flow-123",
 				Name:         "Test Flow",
-				RuntimeState: StateNotDeployed,
+				DesiredState: DesiredAbsent,
 				Nodes: []FlowNode{
 					{
 						ID:        "node-1",
@@ -188,7 +188,7 @@ func TestFlowValidation(t *testing.T) {
 			flow: Flow{
 				ID:           "flow-123",
 				Name:         "Test Flow",
-				RuntimeState: StateNotDeployed,
+				DesiredState: DesiredAbsent,
 				Nodes: []FlowNode{
 					{
 						ID:        "node-1",
@@ -216,7 +216,7 @@ func TestFlowValidation(t *testing.T) {
 			flow: Flow{
 				ID:           "flow-123",
 				Name:         "Test Flow",
-				RuntimeState: StateNotDeployed,
+				DesiredState: DesiredAbsent,
 				Nodes: []FlowNode{
 					{
 						ID:        "node-1",
@@ -244,7 +244,7 @@ func TestFlowValidation(t *testing.T) {
 			flow: Flow{
 				ID:           "flow-123",
 				Name:         "Test Flow",
-				RuntimeState: StateNotDeployed,
+				DesiredState: DesiredAbsent,
 				Nodes: []FlowNode{
 					{
 						ID:        "node-1",
@@ -279,7 +279,7 @@ func TestFlowValidation(t *testing.T) {
 			flow: Flow{
 				ID:           "flow-123",
 				Name:         "Test Flow",
-				RuntimeState: StateNotDeployed,
+				DesiredState: DesiredAbsent,
 				Nodes: []FlowNode{
 					{
 						ID:        "node-1",
@@ -314,7 +314,7 @@ func TestFlowValidation(t *testing.T) {
 			flow: Flow{
 				ID:           "flow-123",
 				Name:         "Test Flow",
-				RuntimeState: StateNotDeployed,
+				DesiredState: DesiredAbsent,
 				Nodes: []FlowNode{
 					{
 						ID:        "node-1",
@@ -374,20 +374,18 @@ func TestFlowValidation(t *testing.T) {
 	}
 }
 
-// TestRuntimeStateConstants tests that all runtime state constants are defined
-func TestRuntimeStateConstants(t *testing.T) {
-	states := []RuntimeState{
-		StateNotDeployed,
-		StateDeployedStopped,
-		StateRunning,
-		StateError,
+// TestDesiredStateConstants tests that all runtime state constants are defined
+func TestDesiredStateConstants(t *testing.T) {
+	states := []DesiredState{
+		DesiredAbsent,
+		DesiredDisabled,
+		DesiredEnabled,
 	}
 
-	expectedValues := map[RuntimeState]string{
-		StateNotDeployed:     "not_deployed",
-		StateDeployedStopped: "deployed_stopped",
-		StateRunning:         "running",
-		StateError:           "error",
+	expectedValues := map[DesiredState]string{
+		DesiredAbsent:   "absent",
+		DesiredDisabled: "disabled",
+		DesiredEnabled:  "enabled",
 	}
 
 	for _, state := range states {
@@ -398,7 +396,7 @@ func TestRuntimeStateConstants(t *testing.T) {
 		}
 
 		if string(state) != expected {
-			t.Errorf("RuntimeState %v should equal %q, got %q", state, expected, string(state))
+			t.Errorf("DesiredState %v should equal %q, got %q", state, expected, string(state))
 		}
 	}
 }
@@ -418,7 +416,7 @@ func TestFlowNodeValidation(t *testing.T) {
 	flow := Flow{
 		ID:           "flow-1",
 		Name:         "Test",
-		RuntimeState: StateNotDeployed,
+		DesiredState: DesiredAbsent,
 		Nodes:        []FlowNode{node},
 		Connections:  []FlowConnection{},
 	}
@@ -447,7 +445,7 @@ func TestFlowNodeValidation(t *testing.T) {
 			testFlow := Flow{
 				ID:           "flow-1",
 				Name:         "Test",
-				RuntimeState: StateNotDeployed,
+				DesiredState: DesiredAbsent,
 				Nodes:        []FlowNode{testNode},
 				Connections:  []FlowConnection{},
 			}
@@ -468,7 +466,7 @@ func TestFlowConnectionValidation(t *testing.T) {
 	baseFlow := Flow{
 		ID:           "flow-1",
 		Name:         "Test",
-		RuntimeState: StateNotDeployed,
+		DesiredState: DesiredAbsent,
 		Nodes: []FlowNode{
 			{
 				ID:        "node-1",

@@ -55,13 +55,15 @@ func main() {
 }
 ```
 
-## Lifecycle Operations
+## Desired Activation Operations
 
-FlowEngine enforces a strict state machine with four lifecycle operations:
+FlowEngine enforces a strict desired-state transition graph. These operations
+persist configuration for the next successful boot; they never mutate the
+currently running component topology.
 
 ### 1. Deploy
 
-**Transition:** `not_deployed → deployed_stopped`
+**Transition:** `absent → disabled`
 
 Deploys a flow by:
 
@@ -69,7 +71,7 @@ Deploys a flow by:
 - Validating flow structure and connections
 - Translating flow nodes to component configurations
 - Adding components to configuration manager
-- Keeping components disabled (not started)
+- Keeping desired components disabled
 
 ```go
 err := flowEngine.Deploy(ctx, "flow-123")
@@ -77,13 +79,13 @@ err := flowEngine.Deploy(ctx, "flow-123")
 
 ### 2. Start
 
-**Transition:** `deployed_stopped → running`
+**Transition:** `disabled → enabled`
 
-Starts all components in the flow:
+Requests all components in the flow at the next boot:
 
-- Enables components in topological order (inputs first, outputs last)
-- Components begin processing data
-- Metrics recorded for runtime monitoring
+- Sets desired component configuration to enabled
+- Leaves the current process unchanged
+- Reports `restart_required`
 
 ```go
 err := flowEngine.Start(ctx, "flow-123")
@@ -91,13 +93,13 @@ err := flowEngine.Start(ctx, "flow-123")
 
 ### 3. Stop
 
-**Transition:** `running → deployed_stopped`
+**Transition:** `enabled → disabled`
 
-Stops all running components:
+Requests the flow disabled at the next boot:
 
-- Disables components in reverse topological order (outputs first, inputs last)
-- Graceful shutdown with context timeout
-- Flow definition remains in configuration
+- Sets desired component configuration to disabled
+- Leaves current components running until normal process shutdown
+- Preserves the flow definition
 
 ```go
 err := flowEngine.Stop(ctx, "flow-123")
@@ -105,13 +107,13 @@ err := flowEngine.Stop(ctx, "flow-123")
 
 ### 4. Undeploy
 
-**Transition:** `deployed_stopped → not_deployed`
+**Transition:** `disabled → absent`
 
-Removes flow from configuration:
+Removes the desired component set:
 
 - Removes all component configurations
-- Cleans up resources
-- Flow must be stopped before undeploying
+- Does not tear down current runtime resources
+- Desired flow must be disabled before removal
 
 ```go
 err := flowEngine.Undeploy(ctx, "flow-123")
@@ -122,21 +124,21 @@ err := flowEngine.Undeploy(ctx, "flow-123")
 ```text
 ┌─────────────┐
 │             │
-│ not_deployed│
+│    absent   │
 │             │
 └──────┬──────┘
        │ Deploy
        ▼
 ┌─────────────────┐
 │                 │
-│ deployed_stopped│◄─┐
+│     disabled    │◄─┐
 │                 │  │
 └────┬────────────┘  │
      │ Start      Stop
      ▼               │
 ┌──────────┐         │
 │          │         │
-│  running │─────────┘
+│  enabled │─────────┘
 │          │
 └──────────┘
 ```
@@ -247,7 +249,8 @@ if err != nil {
 
 ## Configuration Integration
 
-The engine integrates with the config package for dynamic component management:
+The engine writes desired component configuration for selection at the next
+successful process boot:
 
 ```go
 // Component configurations written to NATS KV

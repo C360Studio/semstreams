@@ -127,15 +127,14 @@ func (fs *FlowService) getComponentsHealth(
 		return nil, errs.WrapTransient(err, "FlowService", "getComponentsHealth", "get component manager")
 	}
 
-	// Get all managed components with their state
-	managedComponents := componentManager.GetManagedComponents()
+	componentStatuses := componentManager.GetComponentStatus()
 
 	// Build component health list and collect counts
 	healthList, runningCount, degradedCount, errorCount := fs.buildComponentHealthList(
 		componentNames,
 		components,
 		componentTypes,
-		managedComponents,
+		componentStatuses,
 	)
 
 	// Calculate overall status based on counts
@@ -157,7 +156,7 @@ func (fs *FlowService) buildComponentHealthList(
 	componentNames []string,
 	components map[string]string,
 	componentTypes map[string]types.ComponentType,
-	managedComponents map[string]*component.ManagedComponent,
+	componentStatuses map[string]ComponentStatus,
 ) ([]ComponentHealth, int, int, int) {
 	healthList := make([]ComponentHealth, 0, len(componentNames))
 	runningCount := 0
@@ -165,7 +164,7 @@ func (fs *FlowService) buildComponentHealthList(
 	errorCount := 0
 
 	for _, name := range componentNames {
-		mc, exists := managedComponents[name]
+		componentStatus, exists := componentStatuses[name]
 		if !exists {
 			// Component not found - likely not started yet
 			healthList = append(healthList, ComponentHealth{
@@ -181,9 +180,10 @@ func (fs *FlowService) buildComponentHealthList(
 		}
 
 		// Get component health status
-		var healthStatus component.HealthStatus
-		if mc.Component != nil {
-			healthStatus = mc.Component.Health()
+		healthStatus := componentStatus.Health
+		mc := &component.ManagedComponent{
+			State:     componentStatus.State,
+			LastError: componentStatus.LastError,
 		}
 
 		// Calculate timing information

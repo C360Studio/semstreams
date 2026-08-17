@@ -9,24 +9,22 @@ import (
 
 func TestFromComponentConfigs(t *testing.T) {
 	tests := []struct {
-		name            string
-		flowName        string
-		configs         map[string]types.ComponentConfig
-		wantNodeCount   int
-		wantNodeIDs     []string
-		wantComponents  map[string]string              // nodeID -> component (factory name)
-		wantTypes       map[string]types.ComponentType // nodeID -> type (category)
-		wantState       RuntimeState
-		wantHasDeployed bool
+		name           string
+		flowName       string
+		configs        map[string]types.ComponentConfig
+		wantNodeCount  int
+		wantNodeIDs    []string
+		wantComponents map[string]string              // nodeID -> component (factory name)
+		wantTypes      map[string]types.ComponentType // nodeID -> type (category)
+		wantState      DesiredState
 	}{
 		{
-			name:            "empty configs creates empty flow",
-			flowName:        "empty",
-			configs:         map[string]types.ComponentConfig{},
-			wantNodeCount:   0,
-			wantNodeIDs:     []string{},
-			wantState:       StateRunning,
-			wantHasDeployed: true,
+			name:          "empty configs creates empty flow",
+			flowName:      "empty",
+			configs:       map[string]types.ComponentConfig{},
+			wantNodeCount: 0,
+			wantNodeIDs:   []string{},
+			wantState:     DesiredEnabled,
 		},
 		{
 			name:     "single component",
@@ -39,12 +37,11 @@ func TestFromComponentConfigs(t *testing.T) {
 					Config:  json.RawMessage(`{"port": 14550}`),
 				},
 			},
-			wantNodeCount:   1,
-			wantNodeIDs:     []string{"udp-input"},
-			wantComponents:  map[string]string{"udp-input": "udp"},
-			wantTypes:       map[string]types.ComponentType{"udp-input": types.ComponentTypeInput},
-			wantState:       StateRunning,
-			wantHasDeployed: true,
+			wantNodeCount:  1,
+			wantNodeIDs:    []string{"udp-input"},
+			wantComponents: map[string]string{"udp-input": "udp"},
+			wantTypes:      map[string]types.ComponentType{"udp-input": types.ComponentTypeInput},
+			wantState:      DesiredEnabled,
 		},
 		{
 			name:     "multiple components",
@@ -81,8 +78,7 @@ func TestFromComponentConfigs(t *testing.T) {
 				"graph-processor": types.ComponentTypeProcessor,
 				"file-output":     types.ComponentTypeOutput,
 			},
-			wantState:       StateRunning,
-			wantHasDeployed: true,
+			wantState: DesiredEnabled,
 		},
 		{
 			name:     "disabled components are excluded",
@@ -99,12 +95,11 @@ func TestFromComponentConfigs(t *testing.T) {
 					Enabled: false,
 				},
 			},
-			wantNodeCount:   1,
-			wantNodeIDs:     []string{"enabled-input"},
-			wantComponents:  map[string]string{"enabled-input": "udp"},
-			wantTypes:       map[string]types.ComponentType{"enabled-input": types.ComponentTypeInput},
-			wantState:       StateRunning,
-			wantHasDeployed: true,
+			wantNodeCount:  1,
+			wantNodeIDs:    []string{"enabled-input"},
+			wantComponents: map[string]string{"enabled-input": "udp"},
+			wantTypes:      map[string]types.ComponentType{"enabled-input": types.ComponentTypeInput},
+			wantState:      DesiredEnabled,
 		},
 	}
 
@@ -122,14 +117,8 @@ func TestFromComponentConfigs(t *testing.T) {
 			if flow.ID == "" {
 				t.Error("flow.ID should not be empty")
 			}
-			if flow.RuntimeState != tt.wantState {
-				t.Errorf("flow.RuntimeState = %v, want %v", flow.RuntimeState, tt.wantState)
-			}
-			if tt.wantHasDeployed && flow.DeployedAt == nil {
-				t.Error("flow.DeployedAt should not be nil for running state")
-			}
-			if tt.wantHasDeployed && flow.StartedAt == nil {
-				t.Error("flow.StartedAt should not be nil for running state")
+			if flow.DesiredState != tt.wantState {
+				t.Errorf("flow.DesiredState = %v, want %v", flow.DesiredState, tt.wantState)
 			}
 
 			// Verify node count

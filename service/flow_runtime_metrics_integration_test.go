@@ -29,7 +29,7 @@ func TestRuntimeMetricsIntegration(t *testing.T) {
 	}()
 
 	// Create flow store
-	flowStore, err := flowstore.NewManager(natsClient)
+	flowStore, err := flowstore.NewManager(context.Background(), natsClient)
 	require.NoError(t, err)
 
 	// Create a test flow with components
@@ -65,7 +65,7 @@ func TestRuntimeMetricsIntegration(t *testing.T) {
 				},
 			},
 		},
-		RuntimeState: flowstore.StateRunning,
+		DesiredState: flowstore.DesiredEnabled,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 		LastModified: time.Now(),
@@ -147,7 +147,7 @@ func TestRuntimeMetricsIntegration(t *testing.T) {
 			ID:           "empty-flow",
 			Name:         "Empty Flow",
 			Nodes:        []flowstore.FlowNode{},
-			RuntimeState: flowstore.StateNotDeployed,
+			DesiredState: flowstore.DesiredAbsent,
 			CreatedAt:    time.Now(),
 			UpdatedAt:    time.Now(),
 			LastModified: time.Now(),
@@ -235,7 +235,7 @@ func TestRuntimeMetrics_WithMockPrometheus(t *testing.T) {
 	}()
 
 	// Create flow store
-	flowStore, err := flowstore.NewManager(natsClient)
+	flowStore, err := flowstore.NewManager(context.Background(), natsClient)
 	require.NoError(t, err)
 
 	// Create test flow
@@ -250,7 +250,7 @@ func TestRuntimeMetrics_WithMockPrometheus(t *testing.T) {
 				Type:      types.ComponentTypeInput,
 			},
 		},
-		RuntimeState: flowstore.StateRunning,
+		DesiredState: flowstore.DesiredEnabled,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 		LastModified: time.Now(),

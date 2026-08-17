@@ -23,7 +23,7 @@ func TestRuntimeMessagesIntegration(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
 	// Create flow store
-	flowStore, err := flowstore.NewManager(natsClient)
+	flowStore, err := flowstore.NewManager(context.Background(), natsClient)
 	require.NoError(t, err)
 
 	// Create test context
@@ -62,7 +62,7 @@ func TestRuntimeMessagesIntegration(t *testing.T) {
 				},
 			},
 		},
-		RuntimeState: flowstore.StateRunning,
+		DesiredState: flowstore.DesiredEnabled,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 		LastModified: time.Now(),
@@ -296,7 +296,7 @@ func TestRuntimeMessagesIntegration(t *testing.T) {
 			ID:           "empty-flow",
 			Name:         "Empty Flow",
 			Nodes:        []flowstore.FlowNode{},
-			RuntimeState: flowstore.StateNotDeployed,
+			DesiredState: flowstore.DesiredAbsent,
 			CreatedAt:    time.Now(),
 			UpdatedAt:    time.Now(),
 			LastModified: time.Now(),
@@ -353,7 +353,7 @@ func TestRuntimeMessagesLoggerUnavailable(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
 	// Create flow store
-	flowStore, err := flowstore.NewManager(natsClient)
+	flowStore, err := flowstore.NewManager(context.Background(), natsClient)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -370,7 +370,7 @@ func TestRuntimeMessagesLoggerUnavailable(t *testing.T) {
 				Type:      types.ComponentTypeProcessor,
 			},
 		},
-		RuntimeState: flowstore.StateRunning,
+		DesiredState: flowstore.DesiredEnabled,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 		LastModified: time.Now(),
@@ -438,7 +438,7 @@ func TestRuntimeMessagesWithActualNATSFlow(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
 	// Create flow store
-	flowStore, err := flowstore.NewManager(natsClient)
+	flowStore, err := flowstore.NewManager(context.Background(), natsClient)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -461,7 +461,7 @@ func TestRuntimeMessagesWithActualNATSFlow(t *testing.T) {
 				Type:      types.ComponentTypeProcessor,
 			},
 		},
-		RuntimeState: flowstore.StateRunning,
+		DesiredState: flowstore.DesiredEnabled,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 		LastModified: time.Now(),

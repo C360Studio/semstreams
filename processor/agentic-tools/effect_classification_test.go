@@ -16,7 +16,7 @@ import (
 // a constructor helper — the count collapses and this floor fails loudly rather
 // than reporting green over an empty set. Raise it when the tool count grows
 // substantially; it is a floor, not an exact count.
-const minimumClassifiedTools = 40
+const minimumClassifiedTools = 39
 
 // TestEveryFrameworkToolDeclaresAnEffect asserts that every agentic.ToolDefinition
 // composite literal in the framework's own tool packages declares an Effect.

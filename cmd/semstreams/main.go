@@ -213,13 +213,14 @@ func run() (runErr error) {
 		}
 	}
 	toolRegistry := agentictools.NewExecutorRegistry()
+	flowManager := buildFlowManager(ctx, natsClient, logger)
 	if err := executors.RegisterBuiltins(ctx, toolRegistry, executors.ToolDependencies{
 		NATSClient:              natsClient,
 		MutationClient:          mutationClient,
 		Platform:                platform,
 		Logger:                  logger,
 		RuleManager:             buildRuleManager(ctx, natsClient, configManager, logger),
-		FlowManager:             buildFlowManager(natsClient, logger),
+		FlowManager:             flowManager,
 		PersonaManager:          personaMgr,
 		FlowTemplateManager:     buildFlowTemplateManager(natsClient, logger),
 		ComponentRegistry:       componentRegistry,
@@ -235,7 +236,9 @@ func run() (runErr error) {
 	}
 
 	// 10. Create service dependencies
-	svcDeps := createServiceDependencies(natsClient, metricsRegistry, logger, platform, configManager, componentRegistry)
+	svcDeps := createServiceDependencies(
+		natsClient, metricsRegistry, logger, platform, configManager, componentRegistry, flowManager,
+	)
 	svcDeps.ToolRegistry = toolRegistry
 	svcDeps.PayloadRegistry = payloadReg
 
@@ -507,6 +510,7 @@ func createServiceDependencies(
 	platform types.PlatformMeta,
 	configManager *config.Manager,
 	componentRegistry *component.Registry,
+	flowManager *flowstore.Manager,
 ) *service.Dependencies {
 	return &service.Dependencies{
 		NATSClient:        natsClient,
@@ -515,6 +519,7 @@ func createServiceDependencies(
 		Platform:          platform,
 		Manager:           configManager,
 		ComponentRegistry: componentRegistry,
+		FlowManager:       flowManager,
 	}
 }
 
@@ -703,8 +708,8 @@ func buildRuleManager(ctx context.Context, natsClient *natsclient.Client, config
 // buildFlowManager constructs a flowstore.Manager (KV-backed flow CRUD).
 // Nil returned on init failure so registerFlows skips tool registration
 // — consistent with the nil-RuleManager path. Matches ADR-029 Pattern B.
-func buildFlowManager(natsClient *natsclient.Client, logger *slog.Logger) executors.FlowManager {
-	mgr, err := flowstore.NewManager(natsClient)
+func buildFlowManager(ctx context.Context, natsClient *natsclient.Client, logger *slog.Logger) *flowstore.Manager {
+	mgr, err := flowstore.NewManager(ctx, natsClient)
 	if err != nil {
 		logger.Warn("flow CRUD tools disabled: could not initialise flow store",
 			slog.Any("error", err))

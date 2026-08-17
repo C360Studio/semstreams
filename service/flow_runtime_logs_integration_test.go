@@ -34,7 +34,7 @@ func createTestFlowService(t *testing.T) (*http.ServeMux, *flowstore.Manager, *n
 	natsClient := testClient.Client
 
 	// Create flow store
-	flowStore, err := flowstore.NewManager(natsClient)
+	flowStore, err := flowstore.NewManager(context.Background(), natsClient)
 	require.NoError(t, err)
 
 	return http.NewServeMux(), flowStore, natsClient

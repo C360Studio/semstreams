@@ -40,7 +40,7 @@ func TestStatusStreamEnvelope_JSONMarshaling(t *testing.T) {
 				ID:        "msg-123",
 				Timestamp: 1705412345000,
 				FlowID:    "flow-001",
-				Payload:   json.RawMessage(`{"state":"running","prev_state":"starting"}`),
+				Payload:   json.RawMessage(`{"desired_state":"enabled","effective_state":"unknown","restart_required":true}`),
 			},
 			wantType:    "flow_status",
 			wantFlowID:  "flow-001",
@@ -817,7 +817,7 @@ type streamMockComponentManager struct {
 	mu         sync.RWMutex
 }
 
-func (m *streamMockComponentManager) GetManagedComponents() map[string]*component.ManagedComponent {
+func (m *streamMockComponentManager) Components() map[string]*component.ManagedComponent {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -1059,7 +1059,7 @@ func TestHealthTicker_SendsHealthEnvelopes(t *testing.T) {
 					select {
 					case <-ticker.C:
 						// Get health from component manager
-						health := mockCompMgr.GetManagedComponents()
+						health := mockCompMgr.Components()
 
 						// Create envelope
 						envelope := StatusStreamEnvelope{
@@ -1187,7 +1187,7 @@ func TestHealthTicker_StopsOnContextCancel(t *testing.T) {
 		for {
 			select {
 			case <-ticker.C:
-				health := mockCompMgr.GetManagedComponents()
+				health := mockCompMgr.Components()
 				envelope := StatusStreamEnvelope{
 					Type:      "component_health",
 					ID:        generateTestMessageID(),
@@ -1231,29 +1231,29 @@ func TestHealthTicker_StopsOnContextCancel(t *testing.T) {
 func TestFlowWatcher_SendsStatusOnChange(t *testing.T) {
 	tests := []struct {
 		name          string
-		initialState  flowstore.RuntimeState
-		updatedState  flowstore.RuntimeState
+		initialState  flowstore.DesiredState
+		updatedState  flowstore.DesiredState
 		wantEnvelopes int
 		expectChange  bool
 	}{
 		{
 			name:          "sends on state change",
-			initialState:  flowstore.StateDeployedStopped,
-			updatedState:  flowstore.StateRunning,
+			initialState:  flowstore.DesiredDisabled,
+			updatedState:  flowstore.DesiredEnabled,
 			wantEnvelopes: 1,
 			expectChange:  true,
 		},
 		{
 			name:          "does not send when state unchanged",
-			initialState:  flowstore.StateRunning,
-			updatedState:  flowstore.StateRunning,
+			initialState:  flowstore.DesiredEnabled,
+			updatedState:  flowstore.DesiredEnabled,
 			wantEnvelopes: 0,
 			expectChange:  false,
 		},
 		{
 			name:          "sends on not deployed to running",
-			initialState:  flowstore.StateNotDeployed,
-			updatedState:  flowstore.StateRunning,
+			initialState:  flowstore.DesiredAbsent,
+			updatedState:  flowstore.DesiredEnabled,
 			wantEnvelopes: 1,
 			expectChange:  true,
 		},
@@ -1269,7 +1269,7 @@ func TestFlowWatcher_SendsStatusOnChange(t *testing.T) {
 					"test-flow": {
 						ID:           "test-flow",
 						Name:         "Test Flow",
-						RuntimeState: tt.initialState,
+						DesiredState: tt.initialState,
 					},
 				},
 			}
@@ -1289,7 +1289,7 @@ func TestFlowWatcher_SendsStatusOnChange(t *testing.T) {
 			go func() {
 				time.Sleep(100 * time.Millisecond)
 				mockStore.mu.Lock()
-				mockStore.flows["test-flow"].RuntimeState = tt.updatedState
+				mockStore.flows["test-flow"].DesiredState = tt.updatedState
 				mockStore.mu.Unlock()
 			}()
 
@@ -1304,18 +1304,18 @@ func TestFlowWatcher_SendsStatusOnChange(t *testing.T) {
 						}
 
 						// Only send if state changed
-						if flow.RuntimeState != prevState {
+						if flow.DesiredState != prevState {
 							envelope := StatusStreamEnvelope{
 								Type:      "flow_status",
 								ID:        generateTestMessageID(),
 								Timestamp: time.Now().UnixMilli(),
 								FlowID:    "test-flow",
-								Payload:   marshalFlowStatusPayload(t, string(flow.RuntimeState), string(prevState)),
+								Payload:   marshalFlowStatusPayload(t, flow.DesiredState),
 							}
 
 							select {
 							case envelopeChan <- envelope:
-								prevState = flow.RuntimeState
+								prevState = flow.DesiredState
 							case <-ctx.Done():
 								return
 							}
@@ -1339,8 +1339,9 @@ func TestFlowWatcher_SendsStatusOnChange(t *testing.T) {
 					var payload map[string]interface{}
 					err := json.Unmarshal(envelope.Payload, &payload)
 					require.NoError(t, err)
-					assert.Equal(t, string(tt.updatedState), payload["state"])
-					assert.Equal(t, string(tt.initialState), payload["prev_state"])
+					assert.Equal(t, string(tt.updatedState), payload["desired_state"])
+					assert.Equal(t, string(flowstore.EffectiveUnknown), payload["effective_state"])
+					assert.Equal(t, false, payload["restart_required"])
 
 					receivedCount++
 
@@ -1886,11 +1887,11 @@ func marshalHealthPayload(t *testing.T, components map[string]*component.Managed
 	return data
 }
 
-func marshalFlowStatusPayload(t *testing.T, state, prevState string) json.RawMessage {
-	payload := map[string]interface{}{
-		"state":      state,
-		"prev_state": prevState,
-		"timestamp":  time.Now().UnixMilli(),
+func marshalFlowStatusPayload(t *testing.T, desiredState flowstore.DesiredState) json.RawMessage {
+	payload := FlowStatusPayload{
+		DesiredState:   desiredState,
+		EffectiveState: flowstore.EffectiveUnknown,
+		Timestamp:      time.Now().UnixMilli(),
 	}
 
 	data, err := json.Marshal(payload)

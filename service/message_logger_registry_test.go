@@ -11,69 +11,12 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/internal/componentadmission"
 	"github.com/c360studio/semstreams/natsclient"
-	"github.com/c360studio/semstreams/types"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 )
 
-func TestMessageLoggerWildcardReconcilesRegistryCompleteSetsAndStops(t *testing.T) {
-	natsClient := &natsclient.Client{}
-	fake := newFakeLoggerSubscriber()
-	registry := component.NewRegistry()
-	serviceInstance, err := NewMessageLoggerService(
-		json.RawMessage(`{"monitor_subjects":["*","operator.>"]}`),
-		&Dependencies{NATSClient: natsClient, ComponentRegistry: registry},
-	)
-	require.NoError(t, err)
-	ml := serviceInstance.(*MessageLogger)
-	ml.subscribe = fake.subscribe
-	require.Nil(t, ml.observerCancel, "constructor must not attach the Registry observer")
-	require.Empty(t, ml.subscriptions, "constructor must not subscribe")
-
-	require.NoError(t, ml.Start(context.Background()))
-	waitForLoggerSubjects(t, ml, []string{"operator.>"})
-
-	first := &portFactsDiscoverable{
-		baseDiscoverable: baseDiscoverable{name: "worker"},
-		outputs: []component.Port{{
-			Name: "events", Direction: component.DirectionOutput,
-			Config: component.NATSPort{Subject: "events.first"},
-		}},
-	}
-	admitTestRegistryComponent(t, registry, "worker", first)
-	waitForLoggerSubjects(t, ml, []string{"events.first", "operator.>"})
-
-	second := &portFactsDiscoverable{
-		baseDiscoverable: baseDiscoverable{name: "worker"},
-		outputs: []component.Port{{
-			Name: "events", Direction: component.DirectionOutput,
-			Config: component.JetStreamPort{Subjects: []string{"events.second"}},
-		}},
-	}
-	require.NoError(t, registry.RegisterWithConfig(component.RegistrationConfig{
-		Name: "worker-v2", Type: "processor",
-		Factory: func(json.RawMessage, component.Dependencies) (component.Discoverable, error) {
-			return second, nil
-		},
-	}))
-	_, err = registry.ReplaceComponent(
-		componentadmission.Access{}, "worker", types.ComponentConfig{
-			Name: "worker-v2", Type: types.ComponentTypeProcessor, Enabled: true, Config: json.RawMessage(`{}`),
-		}, component.Dependencies{NATSClient: natsClient}, nil)
-	require.NoError(t, err)
-	waitForLoggerSubjects(t, ml, []string{"events.second", "operator.>"})
-
-	registry.UnregisterInstance("worker")
-	waitForLoggerSubjects(t, ml, []string{"operator.>"})
-	require.NoError(t, ml.Stop(context.Background()))
-	require.Nil(t, ml.observerCancel)
-	require.Empty(t, ml.subscriptions)
-	require.Empty(t, ml.resolvedSubjects)
-}
-
-func TestMessageLoggerExplicitModeNeverAttachesRegistryObserver(t *testing.T) {
+func TestMessageLoggerExplicitModeUsesOnlyConfiguredSubjects(t *testing.T) {
 	fake := newFakeLoggerSubscriber()
 	ml, err := NewMessageLogger(&MessageLoggerConfig{
 		MonitorSubjects: []string{"explicit.>"}, MaxEntries: 1000, SampleRate: 1,
@@ -81,8 +24,6 @@ func TestMessageLoggerExplicitModeNeverAttachesRegistryObserver(t *testing.T) {
 	require.NoError(t, err)
 	ml.subscribe = fake.subscribe
 	require.NoError(t, ml.Start(context.Background()))
-	require.Nil(t, ml.observerCancel)
-	require.Nil(t, ml.observerDone)
 	waitForLoggerSubjects(t, ml, []string{"explicit.>"})
 	require.NoError(t, ml.Stop(context.Background()))
 }
@@ -133,63 +74,6 @@ func TestMessageLoggerRetriesSubscribeFailureAndClearsDegradedState(t *testing.T
 
 	retryTicks <- time.Now()
 	waitForLoggerReconciliation(t, ml, []string{"explicit.>"}, false)
-	require.NoError(t, ml.Stop(context.Background()))
-}
-
-func TestMessageLoggerRetainsFailedOverlapUnsubscribeWithoutDuplicateThenRetries(t *testing.T) {
-	fake := newFakeLoggerSubscriber()
-	retryTicks := make(chan time.Time, 1)
-	registry := component.NewRegistry()
-	covered := &portFactsDiscoverable{
-		baseDiscoverable: baseDiscoverable{name: "governance"},
-		outputs: []component.Port{{
-			Name: "covered", Direction: component.DirectionOutput,
-			Config: component.NATSPort{Subject: "agent.toolcall.proposed.*"},
-		}},
-	}
-	admitTestRegistryComponent(t, registry, "governance", covered)
-	serviceInstance, err := NewMessageLoggerService(
-		json.RawMessage(`{"monitor_subjects":["*"]}`),
-		&Dependencies{NATSClient: &natsclient.Client{}, ComponentRegistry: registry},
-	)
-	require.NoError(t, err)
-	ml := serviceInstance.(*MessageLogger)
-	ml.subscribe = fake.subscribe
-	ml.retryAfter = func(time.Duration) <-chan time.Time { return retryTicks }
-	require.NoError(t, ml.Start(context.Background()))
-	waitForLoggerReconciliation(t, ml, []string{"agent.toolcall.proposed.*"}, false)
-
-	broadAndCovered := &portFactsDiscoverable{
-		baseDiscoverable: baseDiscoverable{name: "governance"},
-		outputs: []component.Port{
-			{Name: "broad", Direction: component.DirectionOutput,
-				Config: component.NATSPort{Subject: "agent.toolcall.proposed.>"}},
-			{Name: "covered", Direction: component.DirectionOutput,
-				Config: component.NATSPort{Subject: "agent.toolcall.proposed.*"}},
-		},
-	}
-	require.NoError(t, registry.RegisterWithConfig(component.RegistrationConfig{
-		Name: "governance-v2", Type: "processor",
-		Factory: func(json.RawMessage, component.Dependencies) (component.Discoverable, error) {
-			return broadAndCovered, nil
-		},
-	}))
-	fake.mu.Lock()
-	fake.unsubscribeFailures["agent.toolcall.proposed.*"] = 1
-	fake.mu.Unlock()
-	_, err = registry.ReplaceComponent(
-		componentadmission.Access{}, "governance", types.ComponentConfig{
-			Name: "governance-v2", Type: types.ComponentTypeProcessor, Enabled: true, Config: json.RawMessage(`{}`),
-		}, component.Dependencies{NATSClient: &natsclient.Client{}}, nil)
-	require.NoError(t, err)
-	waitForLoggerReconciliation(t, ml, []string{"agent.toolcall.proposed.*"}, true)
-	fake.mu.Lock()
-	require.Zero(t, fake.subscribeAttempts["agent.toolcall.proposed.>"],
-		"broader subscription must wait while the covered subscription remains active")
-	fake.mu.Unlock()
-
-	retryTicks <- time.Now()
-	waitForLoggerReconciliation(t, ml, []string{"agent.toolcall.proposed.>"}, false)
 	require.NoError(t, ml.Stop(context.Background()))
 }
 
@@ -245,7 +129,7 @@ func TestMessageLoggerStopDeadlineCanResumeSameGeneration(t *testing.T) {
 	fake.mu.Unlock()
 }
 
-func TestMessageLoggerStartStopTransitionDoesNotMissInstalledObserverOrSubscription(t *testing.T) {
+func TestMessageLoggerStartStopTransitionDoesNotMissInstalledSubscription(t *testing.T) {
 	fake := newFakeLoggerSubscriber()
 	fake.subscribeEntered = make(chan struct{})
 	fake.releaseSubscribe = make(chan struct{})
@@ -266,8 +150,6 @@ func TestMessageLoggerStartStopTransitionDoesNotMissInstalledObserverOrSubscript
 	close(fake.releaseSubscribe)
 	require.NoError(t, <-startResult)
 	require.NoError(t, <-stopResult)
-	require.Nil(t, ml.observerCancel)
-	require.Nil(t, ml.observerDone)
 	require.Nil(t, ml.retryCancel)
 	require.Nil(t, ml.retryDone)
 	require.Empty(t, ml.subscriptions)

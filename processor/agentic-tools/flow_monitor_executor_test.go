@@ -166,7 +166,7 @@ func TestFlowMonitorExecutor_AggregationAndFiltering(t *testing.T) {
 
 	kv := newFakeLoopKV()
 	flows := newFakeFlowStateReader()
-	flows.states["my-flow"] = FlowState{RuntimeState: "running"}
+	flows.states["my-flow"] = FlowState{DesiredState: "enabled"}
 
 	now := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
 
@@ -238,8 +238,8 @@ func TestFlowMonitorExecutor_AggregationAndFiltering(t *testing.T) {
 	if r.FlowID != "my-flow" {
 		t.Errorf("flow_id: want 'my-flow', got %q", r.FlowID)
 	}
-	if r.RuntimeState != "running" {
-		t.Errorf("runtime_state: want 'running', got %q", r.RuntimeState)
+	if r.DesiredState != "enabled" {
+		t.Errorf("desired_state: want 'enabled', got %q", r.DesiredState)
 	}
 	if r.TotalLoops != 3 {
 		t.Errorf("total_loops: want 3, got %d", r.TotalLoops)
@@ -282,7 +282,7 @@ func TestFlowMonitorExecutor_RecentLimitTrimming(t *testing.T) {
 
 	kv := newFakeLoopKV()
 	flows := newFakeFlowStateReader()
-	flows.states["trim-flow"] = FlowState{RuntimeState: "running"}
+	flows.states["trim-flow"] = FlowState{DesiredState: "enabled"}
 
 	base := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
 	// Seed 5 loops but request only 2 recent.
@@ -401,7 +401,7 @@ func TestFlowMonitorExecutor_PolymorphicEventShapes(t *testing.T) {
 
 	kv := newFakeLoopKV()
 	flows := newFakeFlowStateReader()
-	flows.states["poly-flow"] = FlowState{RuntimeState: "idle"}
+	flows.states["poly-flow"] = FlowState{DesiredState: "idle"}
 
 	// T1 < T2 < T3 — cancelled is most recent, success is oldest.
 	t1 := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)

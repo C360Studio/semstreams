@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/c360studio/semstreams/internal/componentadmission"
 	"github.com/c360studio/semstreams/natsclient"
 )
 
@@ -75,7 +76,7 @@ func TestCapabilityPreparationUsesRetainedGenerationWithoutPortReread(t *testing
 		Factory: func(json.RawMessage, Dependencies) (Discoverable, error) { return component, nil },
 	}))
 	_, err := registry.CreateComponent(
-		"source", generationTestConfig("source-factory", `{}`), generationTestDeps())
+		componentadmission.Access{}, "source", generationTestConfig("source-factory", `{}`), generationTestDeps(), nil)
 	requireNoError(t, err)
 	if component.inputCalls != 1 || component.outputCalls != 1 {
 		t.Fatalf("admission port calls = input %d output %d, want one each", component.inputCalls, component.outputCalls)

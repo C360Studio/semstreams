@@ -22,11 +22,16 @@ type Flow struct {
 	Nodes       []FlowNode       `json:"nodes"`
 	Connections []FlowConnection `json:"connections"`
 
-	// Runtime state
-	RuntimeState RuntimeState `json:"runtime_state"`
-	DeployedAt   *time.Time   `json:"deployed_at,omitempty"`
-	StartedAt    *time.Time   `json:"started_at,omitempty"`
-	StoppedAt    *time.Time   `json:"stopped_at,omitempty"`
+	// Desired activation is durable authoring state. Runtime observation is
+	// process-local and is populated on reads; it is never persisted as flow
+	// authority.
+	DesiredState     DesiredState `json:"desired_state"`
+	DesiredChangedAt *time.Time   `json:"desired_changed_at,omitempty"`
+
+	EffectiveState        EffectiveState    `json:"effective_state,omitempty"`
+	DesiredProvenance     *ConfigProvenance `json:"desired_provenance,omitempty"`
+	BootAppliedProvenance *ConfigProvenance `json:"boot_applied_provenance,omitempty"`
+	RestartRequired       bool              `json:"restart_required"`
 
 	// Audit
 	CreatedAt    time.Time `json:"created_at"`
@@ -60,20 +65,38 @@ type Position struct {
 	Y float64 `json:"y"`
 }
 
-// RuntimeState represents the deployment and execution state of a flow
-type RuntimeState string
+// DesiredState is the flow activation requested for the next successful boot.
+type DesiredState string
 
-// RuntimeState constants define the lifecycle states of a flow:
-//   - StateNotDeployed: Flow exists but has never been deployed
-//   - StateDeployedStopped: Flow deployed to config but not running
-//   - StateRunning: Flow is actively processing messages
-//   - StateError: Flow encountered an error during deployment/execution
 const (
-	StateNotDeployed     RuntimeState = "not_deployed"
-	StateDeployedStopped RuntimeState = "deployed_stopped"
-	StateRunning         RuntimeState = "running"
-	StateError           RuntimeState = "error"
+	// DesiredAbsent requests no components from this flow at the next boot.
+	DesiredAbsent DesiredState = "absent"
+	// DesiredDisabled requests present but disabled component configuration.
+	DesiredDisabled DesiredState = "disabled"
+	// DesiredEnabled requests enabled component configuration.
+	DesiredEnabled DesiredState = "enabled"
 )
+
+// EffectiveState is an independently observed runtime activation state.
+type EffectiveState string
+
+const (
+	// EffectiveUnknown means no authoritative runtime observer is available.
+	EffectiveUnknown EffectiveState = "unknown"
+	// EffectiveAbsent means the runtime observer found no active flow components.
+	EffectiveAbsent EffectiveState = "absent"
+	// EffectiveDisabled means the runtime observer found the flow disabled.
+	EffectiveDisabled EffectiveState = "disabled"
+	// EffectiveEnabled means the runtime observer found the flow enabled.
+	EffectiveEnabled EffectiveState = "enabled"
+)
+
+// ConfigProvenance identifies one canonical desired or boot-applied flow
+// configuration. BootID is set only for boot-applied provenance.
+type ConfigProvenance struct {
+	BootID string `json:"boot_id,omitempty"`
+	Digest string `json:"digest"`
+}
 
 // Validate checks if the flow is valid for deployment
 func (f *Flow) Validate() error {
@@ -85,17 +108,16 @@ func (f *Flow) Validate() error {
 		return errs.WrapInvalid(fmt.Errorf("flow name cannot be empty"), "flowstore", "Validate", "validation failed")
 	}
 
-	// Validate runtime state
-	validStates := map[RuntimeState]bool{
-		StateNotDeployed:     true,
-		StateDeployedStopped: true,
-		StateRunning:         true,
-		StateError:           true,
+	// Validate desired activation state.
+	validStates := map[DesiredState]bool{
+		DesiredAbsent:   true,
+		DesiredDisabled: true,
+		DesiredEnabled:  true,
 	}
-	if !validStates[f.RuntimeState] {
+	if !validStates[f.DesiredState] {
 		return errs.WrapInvalid(
-			fmt.Errorf("invalid runtime state: %s", string(f.RuntimeState)),
-			"flowstore", "Validate", "runtime state validation failed")
+			fmt.Errorf("invalid desired state: %s", string(f.DesiredState)),
+			"flowstore", "Validate", "desired state validation failed")
 	}
 
 	// Validate nodes

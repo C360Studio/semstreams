@@ -176,13 +176,14 @@ func run() (runErr error) {
 		}
 	}
 	toolRegistry := agentictools.NewExecutorRegistry()
+	flowManager := buildFlowManager(ctx, natsClient, logger)
 	if err := executors.RegisterBuiltins(ctx, toolRegistry, executors.ToolDependencies{
 		NATSClient:              natsClient,
 		MutationClient:          mutationClient,
 		Platform:                platform,
 		Logger:                  logger,
 		RuleManager:             buildRuleManager(ctx, natsClient, configManager, logger),
-		FlowManager:             buildFlowManager(natsClient, logger),
+		FlowManager:             flowManager,
 		PersonaManager:          personaMgr,
 		FlowTemplateManager:     buildFlowTemplateManager(natsClient, logger),
 		ComponentRegistry:       componentRegistry,
@@ -197,7 +198,9 @@ func run() (runErr error) {
 		}
 	}
 
-	svcDeps := createServiceDependencies(natsClient, metricsRegistry, logger, platform, configManager, componentRegistry)
+	svcDeps := createServiceDependencies(
+		natsClient, metricsRegistry, logger, platform, configManager, componentRegistry, flowManager,
+	)
 	svcDeps.ToolRegistry = toolRegistry
 	svcDeps.PayloadRegistry = payloadReg
 
@@ -419,8 +422,8 @@ func buildRuleManager(ctx context.Context, natsClient *natsclient.Client, config
 // buildFlowManager constructs a flowstore.Manager for flow CRUD. Mirrors
 // cmd/semstreams/main.go. Returns nil on init failure so registerFlows
 // skips registration — consistent with the RuleManager path.
-func buildFlowManager(natsClient *natsclient.Client, logger *slog.Logger) executors.FlowManager {
-	mgr, err := flowstore.NewManager(natsClient)
+func buildFlowManager(ctx context.Context, natsClient *natsclient.Client, logger *slog.Logger) *flowstore.Manager {
+	mgr, err := flowstore.NewManager(ctx, natsClient)
 	if err != nil {
 		logger.Warn("flow CRUD tools disabled: could not initialise flow store",
 			slog.Any("error", err))
@@ -703,6 +706,7 @@ func createServiceDependencies(
 	platform types.PlatformMeta,
 	configManager *config.Manager,
 	componentRegistry *component.Registry,
+	flowManager *flowstore.Manager,
 ) *service.Dependencies {
 	return &service.Dependencies{
 		NATSClient:        natsClient,
@@ -711,6 +715,7 @@ func createServiceDependencies(
 		Platform:          platform,
 		Manager:           configManager,
 		ComponentRegistry: componentRegistry,
+		FlowManager:       flowManager,
 	}
 }
 

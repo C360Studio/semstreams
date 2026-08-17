@@ -63,31 +63,33 @@
 //		return registration.Type, nil
 //	}
 //
-// # Deployment Lifecycle
+// # Desired Activation Lifecycle
 //
-// The Engine manages four operations that map to flow runtime states:
+// The Engine manages four authoring operations. They persist desired
+// component configuration for the next successful process boot; they do not
+// mutate the current runtime:
 //
-// 1. Deploy (not_deployed → deployed_stopped):
+// 1. Deploy (absent → disabled):
 //   - Retrieve Flow from flowstore
 //   - Validate flow structure
 //   - Translate nodes to ComponentConfigs (using registry)
 //   - Write to semstreams_config KV
-//   - Update Flow.RuntimeState
+//   - Update Flow.DesiredState
 //
-// 2. Start (deployed_stopped → running):
+// 2. Start (disabled → enabled):
 //   - Set all component configs Enabled = true
 //   - Write to semstreams_config KV
-//   - Update Flow.RuntimeState
+//   - Update Flow.DesiredState
 //
-// 3. Stop (running → deployed_stopped):
+// 3. Stop (enabled → disabled):
 //   - Set all component configs Enabled = false
 //   - Write to semstreams_config KV
-//   - Update Flow.RuntimeState
+//   - Update Flow.DesiredState
 //
-// 4. Undeploy (deployed_stopped → not_deployed):
+// 4. Undeploy (disabled → absent):
 //   - Delete all component configs from KV
-//   - Update Flow.RuntimeState
-//   - Cannot undeploy running flows (validation error)
+//   - Update Flow.DesiredState
+//   - Cannot remove an enabled desired flow
 //
 // # Translation Logic
 //
@@ -106,18 +108,16 @@
 //   - Node.Name becomes the config key: "components.udp-input-1"
 //   - Node.Type (factory name) looked up in registry for ComponentType
 //   - Node.Config marshaled to ComponentConfig.Config
-//   - ComponentConfig.Enabled set based on operation (deploy=true)
+//   - ComponentConfig.Enabled set from desired activation (deploy=false)
 //
 // # State Transitions
 //
 // Valid state transitions enforced by the Engine:
 //
-//	not_deployed ──Deploy()──> deployed_stopped ──Start()──> running
-//	      ▲                           │                        │
-//	      │                           │                        │
-//	      └──────Undeploy()───────────┘                        │
-//	                                                            │
-//	                       deployed_stopped <──Stop()──────────┘
+//	absent ──Deploy()──> disabled ──Start()──> enabled
+//	  ▲                     │                      │
+//	  └────Undeploy()───────┘                      │
+//	                     disabled <──Stop()────────┘
 //
 // Invalid transitions return errs.WrapInvalid.
 //
@@ -126,14 +126,12 @@
 // The Engine reuses 100% of existing deployment infrastructure:
 //
 // Manager:
-//   - Already watches semstreams_config KV
-//   - Fires OnChange("components.*") when Engine writes
-//   - No changes needed
+//   - Persists semstreams_config desired state
+//   - Does not imply activation in the current process
 //
 // ComponentManager:
-//   - Already creates/starts/stops components
-//   - Already respects Enabled field
-//   - No changes needed
+//   - Selects one immutable component snapshot at boot
+//   - Ignores later desired writes until process restart
 //
 // ComponentRegistry:
 //   - Already contains factory metadata
@@ -167,22 +165,19 @@
 //
 //	// User clicks "Deploy" in UI
 //	err := engine.Deploy(ctx, "my-flow")
-//	// Flow state: not_deployed → deployed_stopped
-//	// Components created but not started
+//	// Desired state: absent → disabled; runtime unchanged
 //
 //	// User clicks "Start" in UI
 //	err = engine.Start(ctx, "my-flow")
-//	// Flow state: deployed_stopped → running
-//	// Components now processing data
+//	// Desired state: disabled → enabled; restart required
 //
 //	// User clicks "Stop" in UI
 //	err = engine.Stop(ctx, "my-flow")
-//	// Flow state: running → deployed_stopped
+//	// Desired state: enabled → disabled; runtime unchanged
 //
 //	// User clicks "Undeploy" in UI
 //	err = engine.Undeploy(ctx, "my-flow")
-//	// Flow state: deployed_stopped → not_deployed
-//	// Components deleted from runtime
+//	// Desired state: disabled → absent; runtime unchanged
 //
 // # Future Enhancements
 //

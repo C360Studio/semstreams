@@ -16,12 +16,12 @@
 // Design-time (flowstore):
 //   - User creates/edits flows in UI
 //   - Canvas layout and connections stored as Flow entities
-//   - Metadata: name, description, runtime state
+//   - Metadata: name, description, desired activation state
 //
-// Runtime (config package):
+// Next-boot composition (config package):
 //   - FlowEngine translates Flow → ComponentConfigs
 //   - ComponentConfigs stored in semstreams_config KV
-//   - Manager watches and triggers ComponentManager
+//   - The next successful process boot selects that desired snapshot
 //
 // # Key Concepts
 //
@@ -29,7 +29,9 @@
 //   - ID: Unique flow identifier
 //   - Nodes: Visual components on canvas (with positions)
 //   - Connections: Edges between node ports
-//   - RuntimeState: not_deployed, deployed_stopped, running, error
+//   - DesiredState: absent, disabled, enabled
+//   - EffectiveState: independent observation; unknown without an observer
+//   - RestartRequired: desired digest differs from the sealed boot digest
 //   - Version: Optimistic concurrency control
 //
 // Node vs Component:
@@ -40,8 +42,8 @@
 // # Validation
 //
 // Flow.Validate() checks:
-//   - Required fields (ID, Name, RuntimeState)
-//   - Valid RuntimeState values
+//   - Required fields (ID, Name, DesiredState)
+//   - Valid DesiredState values
 //   - Node completeness (ID, Type, Name)
 //   - No duplicate node IDs
 //   - Connection validity (IDs, ports, node references)
@@ -69,13 +71,18 @@
 //
 // # Integration with FlowEngine
 //
-// The flowstore package is used by flowengine for deployment:
+// The flowstore package is used by flowengine for desired activation writes:
 //
 //  1. FlowEngine.Deploy(flowID) retrieves Flow from flowstore
 //  2. Validates flow structure
 //  3. Translates to ComponentConfigs (using component registry)
 //  4. Writes to semstreams_config KV
-//  5. Updates Flow.RuntimeState to deployed_stopped
+//  5. Updates Flow.DesiredState to disabled
+//
+// None of these writes mutates the current process. Flow reads compare the
+// current desired component digest to the boot-sealed digest and report
+// restart_required. Effective state remains unknown unless a separate runtime
+// observer supplies it.
 //
 // # Testing
 //
@@ -96,13 +103,13 @@
 // # Example Usage
 //
 //	// Create manager
-//	store, err := flowstore.NewManager(natsClient)
+//	store, err := flowstore.NewManager(ctx, natsClient)
 //
 //	// Create flow
 //	flow := &flowstore.Flow{
 //		ID:   "my-flow",
 //		Name: "My First Flow",
-//		RuntimeState: flowstore.StateNotDeployed,
+//		DesiredState: flowstore.DesiredAbsent,
 //		Nodes: []flowstore.FlowNode{
 //			{
 //				ID:       "node-1",

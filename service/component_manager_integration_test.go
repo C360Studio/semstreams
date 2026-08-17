@@ -75,15 +75,10 @@ func TestComponentManagerInitializeCreatesComponents(t *testing.T) {
 	cm := cmService.(*service.ComponentManager)
 
 	// Before Initialize, no components should exist
-	components := cm.ListComponents()
+	components := cm.GetComponentStatus()
 	// Note: If this fails, it may be due to test pollution from shared registry
 	if len(components) > 0 {
 		t.Logf("Warning: Found existing components in registry (test pollution): %v", components)
-		// Clean them up for this test
-		for range components {
-			// We can't directly unregister from ComponentManager,
-			// but we can at least not fail the test
-		}
 		// Skip the assertion since we can't clean up properly
 	} else {
 		assert.Empty(t, components, "No components should exist before Initialize")
@@ -95,7 +90,7 @@ func TestComponentManagerInitializeCreatesComponents(t *testing.T) {
 	require.NoError(t, err, "Failed to initialize ComponentManager")
 
 	// After Initialize, enabled components should be created
-	components = cm.ListComponents()
+	components = cm.GetComponentStatus()
 
 	// We may not have all component factories registered in test environment
 	// But at least verify Initialize didn't fail and tried to create components
@@ -152,7 +147,7 @@ func TestComponentManagerWithRealNATS(t *testing.T) {
 	assert.NotNil(t, health)
 
 	// Test component listing (should be empty without config)
-	components := cm.ListComponents()
+	components := cm.GetComponentStatus()
 	assert.NotNil(t, components)
 
 	// Test FlowGraph (should work even with no components)
@@ -228,7 +223,7 @@ func TestComponentManagerFlowGraphValidation(t *testing.T) {
 		assert.NotNil(t, result.OrphanedPorts, "OrphanedPorts should be initialized")
 
 		// With no components, validation should show healthy but empty
-		if len(cm.ListComponents()) == 0 {
+		if len(cm.GetComponentStatus()) == 0 {
 			assert.Equal(t, "healthy", result.ValidationStatus, "Empty system should be healthy")
 		}
 	})
@@ -238,7 +233,7 @@ func TestComponentManagerFlowGraphValidation(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, paths, "Flow paths should not be nil")
 		// With no components, paths should be empty
-		if len(cm.ListComponents()) == 0 {
+		if len(cm.GetComponentStatus()) == 0 {
 			assert.Empty(t, paths, "No paths without components")
 		}
 	})

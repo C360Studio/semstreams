@@ -29,7 +29,7 @@ func TestWebSocketStatusStream_ReceivesMetrics(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
 	// Create flow store and test flow
-	flowStore, err := flowstore.NewManager(natsClient)
+	flowStore, err := flowstore.NewManager(context.Background(), natsClient)
 	require.NoError(t, err)
 
 	flowID := createTestFlowForStream(t, ctx, flowStore)
@@ -88,7 +88,7 @@ func TestWebSocketStatusStream_ReceivesLogs(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
 	// Create flow store and test flow
-	flowStore, err := flowstore.NewManager(natsClient)
+	flowStore, err := flowstore.NewManager(context.Background(), natsClient)
 	require.NoError(t, err)
 
 	flowID := createTestFlowForStream(t, ctx, flowStore)
@@ -154,7 +154,7 @@ func TestWebSocketStatusStream_ReceivesFlowStatus(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
 	// Create flow store
-	flowStore, err := flowstore.NewManager(natsClient)
+	flowStore, err := flowstore.NewManager(context.Background(), natsClient)
 	require.NoError(t, err)
 
 	// Create test flow in initial state
@@ -181,7 +181,7 @@ func TestWebSocketStatusStream_ReceivesFlowStatus(t *testing.T) {
 	statusData := map[string]interface{}{
 		"timestamp": time.Now().UnixMilli(),
 		"flow_id":   flowID,
-		"state":     string(flowstore.StateRunning),
+		"state":     string(flowstore.DesiredEnabled),
 	}
 	statusBytes, err := json.Marshal(statusData)
 	require.NoError(t, err)
@@ -200,7 +200,7 @@ func TestWebSocketStatusStream_ReceivesFlowStatus(t *testing.T) {
 	err = json.Unmarshal(envelope.Payload, &payload)
 	require.NoError(t, err)
 
-	assert.Equal(t, string(flowstore.StateRunning), payload["state"])
+	assert.Equal(t, string(flowstore.DesiredEnabled), payload["state"])
 }
 
 // TestWebSocketStatusStream_ReceivesComponentHealth verifies component health flows through WebSocket via NATS
@@ -212,7 +212,7 @@ func TestWebSocketStatusStream_ReceivesComponentHealth(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
 	// Create flow store and test flow
-	flowStore, err := flowstore.NewManager(natsClient)
+	flowStore, err := flowstore.NewManager(context.Background(), natsClient)
 	require.NoError(t, err)
 
 	flowID := createTestFlowForStream(t, ctx, flowStore)
@@ -279,7 +279,7 @@ func TestWebSocketStatusStream_LogsNotReceivedWhenLogForwarderDisabled(t *testin
 	natsClient := getSharedNATSClient(t)
 
 	// Create flow store and test flow
-	flowStore, err := flowstore.NewManager(natsClient)
+	flowStore, err := flowstore.NewManager(context.Background(), natsClient)
 	require.NoError(t, err)
 
 	flowID := createTestFlowForStream(t, ctx, flowStore)
@@ -326,7 +326,7 @@ func TestWebSocketStatusStream_ExcludeSourcesFiltering(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
 	// Create flow store and test flow
-	flowStore, err := flowstore.NewManager(natsClient)
+	flowStore, err := flowstore.NewManager(context.Background(), natsClient)
 	require.NoError(t, err)
 
 	flowID := createTestFlowForStream(t, ctx, flowStore)
@@ -402,7 +402,7 @@ func createTestFlowForStream(t *testing.T, ctx context.Context, store *flowstore
 		ID:           flowID,
 		Name:         "Test Flow",
 		Version:      1,
-		RuntimeState: flowstore.StateDeployedStopped,
+		DesiredState: flowstore.DesiredDisabled,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}

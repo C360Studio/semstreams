@@ -2,10 +2,10 @@
 package types
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 
+	"github.com/c360studio/semstreams/internal/jsoncanon"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -72,26 +72,11 @@ func equalJSONConfig(a, b json.RawMessage) bool {
 // is that "1" and "1.0" canonicalize distinctly (a harmless spurious restart, the
 // safe direction), which is acceptable for a restart-avoidance guard.
 func canonicalJSON(raw json.RawMessage) (string, bool) {
-	if len(raw) == 0 {
-		return "null", true
-	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	var v any
-	if err := dec.Decode(&v); err != nil {
+	canonical, ok := jsoncanon.Normalize(raw)
+	if !ok {
 		return "", false
 	}
-	// Reject trailing content after the first JSON value (Decode reads only one).
-	if dec.More() {
-		return "", false
-	}
-	// Re-marshal: encoding/json sorts object keys, yielding a canonical,
-	// whitespace-free form for equality comparison.
-	canon, err := json.Marshal(v)
-	if err != nil {
-		return "", false
-	}
-	return string(canon), true
+	return string(canonical), true
 }
 
 // Validate ensures the component configuration is valid

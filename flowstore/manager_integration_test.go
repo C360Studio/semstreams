@@ -32,7 +32,7 @@ func (s *ManagerIntegrationSuite) SetupSuite() {
 func (s *ManagerIntegrationSuite) SetupTest() {
 	// Create store
 	var err error
-	s.store, err = NewManager(s.natsClient)
+	s.store, err = NewManager(context.Background(), s.natsClient)
 	s.Require().NoError(err)
 
 	// Create context for test
@@ -49,7 +49,7 @@ func (s *ManagerIntegrationSuite) TestCreateAndGet() {
 		ID:           "test-flow-1",
 		Name:         "Test Flow",
 		Description:  "A test flow for integration testing",
-		RuntimeState: StateNotDeployed,
+		DesiredState: DesiredAbsent,
 		Nodes: []FlowNode{
 			{
 				ID:        "node-1",
@@ -81,7 +81,7 @@ func (s *ManagerIntegrationSuite) TestCreateAndGet() {
 	s.Equal("test-flow-1", retrieved.ID)
 	s.Equal("Test Flow", retrieved.Name)
 	s.Equal("A test flow for integration testing", retrieved.Description)
-	s.Equal(StateNotDeployed, retrieved.RuntimeState)
+	s.Equal(DesiredAbsent, retrieved.DesiredState)
 	s.Equal(int64(1), retrieved.Version)
 	s.Len(retrieved.Nodes, 1)
 	s.Equal("node-1", retrieved.Nodes[0].ID)
@@ -94,7 +94,7 @@ func (s *ManagerIntegrationSuite) TestCreateDuplicate() {
 	flow := &Flow{
 		ID:           "duplicate-flow",
 		Name:         "Duplicate",
-		RuntimeState: StateNotDeployed,
+		DesiredState: DesiredAbsent,
 		Nodes:        []FlowNode{},
 		Connections:  []FlowConnection{},
 	}
@@ -107,7 +107,7 @@ func (s *ManagerIntegrationSuite) TestCreateDuplicate() {
 	duplicate := &Flow{
 		ID:           "duplicate-flow",
 		Name:         "Different Name",
-		RuntimeState: StateNotDeployed,
+		DesiredState: DesiredAbsent,
 		Nodes:        []FlowNode{},
 		Connections:  []FlowConnection{},
 	}
@@ -123,7 +123,7 @@ func (s *ManagerIntegrationSuite) TestUpdate() {
 		ID:           "update-flow",
 		Name:         "Original Name",
 		Description:  "Original description",
-		RuntimeState: StateNotDeployed,
+		DesiredState: DesiredAbsent,
 		Nodes:        []FlowNode{},
 		Connections:  []FlowConnection{},
 	}
@@ -135,7 +135,7 @@ func (s *ManagerIntegrationSuite) TestUpdate() {
 	// Update the flow
 	flow.Name = "Updated Name"
 	flow.Description = "Updated description"
-	flow.RuntimeState = StateDeployedStopped
+	flow.DesiredState = DesiredDisabled
 
 	err = s.store.Update(s.ctx, flow)
 	s.Require().NoError(err)
@@ -146,7 +146,7 @@ func (s *ManagerIntegrationSuite) TestUpdate() {
 	s.Require().NoError(err)
 	s.Equal("Updated Name", retrieved.Name)
 	s.Equal("Updated description", retrieved.Description)
-	s.Equal(StateDeployedStopped, retrieved.RuntimeState)
+	s.Equal(DesiredDisabled, retrieved.DesiredState)
 	s.Equal(int64(2), retrieved.Version)
 }
 
@@ -156,7 +156,7 @@ func (s *ManagerIntegrationSuite) TestOptimisticConcurrency() {
 	flow := &Flow{
 		ID:           "concurrent-flow",
 		Name:         "Concurrent Test",
-		RuntimeState: StateNotDeployed,
+		DesiredState: DesiredAbsent,
 		Nodes:        []FlowNode{},
 		Connections:  []FlowConnection{},
 	}
@@ -175,7 +175,7 @@ func (s *ManagerIntegrationSuite) TestOptimisticConcurrency() {
 	staleFlow := &Flow{
 		ID:           "concurrent-flow",
 		Name:         "Stale update",
-		RuntimeState: StateRunning,
+		DesiredState: DesiredEnabled,
 		Version:      1, // Stale version
 		Nodes:        []FlowNode{},
 		Connections:  []FlowConnection{},
@@ -192,7 +192,7 @@ func (s *ManagerIntegrationSuite) TestDelete() {
 	flow := &Flow{
 		ID:           "delete-flow",
 		Name:         "To Be Deleted",
-		RuntimeState: StateNotDeployed,
+		DesiredState: DesiredAbsent,
 		Nodes:        []FlowNode{},
 		Connections:  []FlowConnection{},
 	}
@@ -221,21 +221,21 @@ func (s *ManagerIntegrationSuite) TestList() {
 		{
 			ID:           "list-flow-1",
 			Name:         "Flow 1",
-			RuntimeState: StateNotDeployed,
+			DesiredState: DesiredAbsent,
 			Nodes:        []FlowNode{},
 			Connections:  []FlowConnection{},
 		},
 		{
 			ID:           "list-flow-2",
 			Name:         "Flow 2",
-			RuntimeState: StateRunning,
+			DesiredState: DesiredEnabled,
 			Nodes:        []FlowNode{},
 			Connections:  []FlowConnection{},
 		},
 		{
 			ID:           "list-flow-3",
 			Name:         "Flow 3",
-			RuntimeState: StateDeployedStopped,
+			DesiredState: DesiredDisabled,
 			Nodes:        []FlowNode{},
 			Connections:  []FlowConnection{},
 		},
@@ -268,7 +268,7 @@ func (s *ManagerIntegrationSuite) TestComplexFlow() {
 		ID:           "complex-flow",
 		Name:         "Complex Flow with Connections",
 		Description:  "Tests node and connection persistence",
-		RuntimeState: StateNotDeployed,
+		DesiredState: DesiredAbsent,
 		Nodes: []FlowNode{
 			{
 				ID:        "node-1",

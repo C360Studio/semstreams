@@ -1,14 +1,21 @@
 # Component Package
 
-core component infrastructure for SemStreams, providing registration, discovery, lifecycle management, and instance creation with explicit registration patterns.
+Core component infrastructure for SemStreams, providing factory registration,
+boot-time declaration admission, ports, schemas, and value-only discovery.
 
 ## Overview
 
-The component package defines the fundamental abstractions for all SemStreams components, enabling dynamic discovery, registration, and management of input, processor, output, storage, and gateway components. This package follows explicit registration patterns with dependency injection through structured configuration.
+The component package defines the fundamental abstractions for input, processor,
+output, storage, and gateway components. Factory registration is explicit;
+ComponentManager owns runtime handles and admits one immutable declaration set
+from boot configuration.
 
-Components in SemStreams are self-describing units that can be discovered at runtime, configured through schemas, and managed through their lifecycle. The package supports five types of components: inputs (data sources), processors (data transformers), outputs (data sinks), storage (persistence), and gateways (query surfaces).
+Components are self-describing units configured through schemas. Their runtime
+composition is sealed after boot; desired configuration changes take effect on
+the next successful process start.
 
-The Registry serves as the central component management system, handling both factory registration and instance management with thread-safe operations and proper lifecycle control.
+Registry owns factories and immutable admitted declaration values. It retains
+no runtime component handle or lifecycle authority.
 
 ## Installation
 
@@ -76,8 +83,9 @@ sequenceDiagram
     CR->>Graph: Register(registry)
     Graph->>Reg: RegisterProcessor("graph-processor", factory, ...)
     CR-->>Main: All components registered
-    Main->>Reg: CreateComponent("udp-1", config, deps)
-    Reg-->>Main: component instance
+    Main->>ComponentManager: compose desired boot configuration
+    ComponentManager->>Reg: internal boot admission
+    Reg-->>ComponentManager: immutable declaration snapshot
 ```
 
 ### Why Explicit Registration?
@@ -162,14 +170,8 @@ func main() {
         Logger: slog.Default(),
     }
 
-    // Create component instance
-    instance, err := registry.CreateComponent("udp-input-1", config, deps)
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    // Component is ready to use
-    log.Printf("Created: %s", instance.Meta().Name)
+    // Supply registry, config, and dependencies to ComponentManager during
+    // process composition. Direct Registry admission is framework-internal.
 }
 ```
 
@@ -338,10 +340,6 @@ component.NetworkPort{Protocol: "udp", Port: 14550, Bind: "0.0.0.0"}
 
 Creates a new Registry with initialized maps.
 
-#### `CreateComponent(instanceName string, config types.ComponentConfig, deps Dependencies) (Discoverable, error)`
-
-Creates a component instance from registered factory.
-
 #### `RegisterInput(name string, factory Factory, protocol, description, version string) error`
 
 Registers an input component factory.
@@ -389,17 +387,9 @@ ErrInstanceExists       // Instance name conflict
 ErrInstanceNotFound     // Unknown instance
 ```
 
-### Error Detection
-
-```go
-_, err := registry.CreateComponent("instance-1", config, deps)
-if errors.Is(err, component.ErrFactoryNotFound) {
-    // Configuration error - component type not registered
-}
-if errors.Is(err, component.ErrComponentCreation) {
-    // Factory error - check component-specific logs
-}
-```
+ComponentManager returns factory lookup, validation, conflict, and construction
+errors from the boot composition boundary. Direct admission is not an adopter
+API.
 
 ## Testing
 
@@ -415,20 +405,8 @@ func TestMyComponent(t *testing.T) {
         t.Fatal(err)
     }
 
-    // Create test dependencies
-    deps := component.Dependencies{
-        NATSClient: natsclient.NewTestClient(t),
-        Platform: component.PlatformMeta{
-            Org:      "test",
-            Platform: "test",
-        },
-        Logger: slog.Default(),
-    }
-
-    // Test component creation
-    instance, err := registry.CreateComponent("test-1", config, deps)
-    assert.NoError(t, err)
-    assert.Equal(t, "my-input", instance.Meta().Type)
+    // Assemble ComponentManager with this isolated registry and desired test
+    // configuration, then assert through value-only health/status surfaces.
 }
 ```
 
@@ -437,7 +415,7 @@ func TestMyComponent(t *testing.T) {
 - ✅ Use real NATS via `natsclient.NewTestClient()` for integration tests
 - ✅ Create isolated registries per test to avoid global state
 - ✅ Mock external dependencies that cannot be containerized
-- ✅ Test component behavior through Discoverable interface
+- ✅ Test boot composition through ComponentManager and component behavior through declared interfaces
 - ✅ Verify factory registration and creation separately
 
 ## Performance

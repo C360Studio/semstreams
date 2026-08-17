@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/c360studio/semstreams/internal/componentadmission"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/types"
 )
@@ -137,9 +138,9 @@ func TestRegisterWithConfig_DependenciesRoundTrip(t *testing.T) {
 		t.Errorf("Registration.Dependencies: got %v, want [%q]", reg.Dependencies, DepModelRegistry)
 	}
 
-	_, err = registry.CreateComponent("my-instance", types.ComponentConfig{
+	_, err = registry.CreateComponent(componentadmission.Access{}, "my-instance", types.ComponentConfig{
 		Name: "reg-with-deps", Type: types.ComponentTypeProcessor, Enabled: true, Config: json.RawMessage(`{}`),
-	}, Dependencies{NATSClient: new(natsclient.Client)})
+	}, Dependencies{NATSClient: new(natsclient.Client)}, nil)
 	if err != nil {
 		t.Fatalf("CreateComponent: %v", err)
 	}

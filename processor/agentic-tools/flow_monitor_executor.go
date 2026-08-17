@@ -30,10 +30,8 @@ type LoopKVScanner interface {
 	Get(ctx context.Context, key string) (*natsclient.KVEntry, error)
 }
 
-// FlowStateReader is the minimal flowstore surface needed to read
-// runtime_state. FlowManager (declared in executors package) already
-// satisfies this — we use a separate interface here to keep
-// agentic-tools free of a direct dependency on the executors package.
+// FlowStateReader is the minimal flowstore surface needed to distinguish
+// desired activation from independently observed boot-effective activation.
 type FlowStateReader interface {
 	Get(ctx context.Context, id string) (FlowState, error)
 }
@@ -41,7 +39,18 @@ type FlowStateReader interface {
 // FlowState is the minimal projection of flowstore.Flow that monitor_flow
 // needs. Returned by FlowStateReader.
 type FlowState struct {
-	RuntimeState string
+	DesiredState          string
+	EffectiveState        string
+	RestartRequired       bool
+	DesiredProvenance     *FlowProvenance
+	BootAppliedProvenance *FlowProvenance
+}
+
+// FlowProvenance identifies a canonical flow digest and, for attested
+// boot-applied observations, the boot incarnation that applied it.
+type FlowProvenance struct {
+	BootID string `json:"boot_id,omitempty"`
+	Digest string `json:"digest"`
 }
 
 // FlowMonitorExecutor aggregates completed-loop data for a given flow.
@@ -196,14 +205,18 @@ type loopRecentEntry struct {
 
 // flowMonitorResult is the JSON shape returned to the LLM.
 type flowMonitorResult struct {
-	FlowID         string            `json:"flow_id"`
-	RuntimeState   string            `json:"runtime_state"`
-	TotalLoops     int               `json:"total_loops"`
-	ByOutcome      map[string]int    `json:"by_outcome"`
-	ByRole         map[string]int    `json:"by_role"`
-	TotalTokensIn  int               `json:"total_tokens_in"`
-	TotalTokensOut int               `json:"total_tokens_out"`
-	Recent         []loopRecentEntry `json:"recent"`
+	FlowID                string            `json:"flow_id"`
+	DesiredState          string            `json:"desired_state"`
+	EffectiveState        string            `json:"effective_state"`
+	RestartRequired       bool              `json:"restart_required"`
+	DesiredProvenance     *FlowProvenance   `json:"desired_provenance,omitempty"`
+	BootAppliedProvenance *FlowProvenance   `json:"boot_applied_provenance,omitempty"`
+	TotalLoops            int               `json:"total_loops"`
+	ByOutcome             map[string]int    `json:"by_outcome"`
+	ByRole                map[string]int    `json:"by_role"`
+	TotalTokensIn         int               `json:"total_tokens_in"`
+	TotalTokensOut        int               `json:"total_tokens_out"`
+	Recent                []loopRecentEntry `json:"recent"`
 }
 
 func (e *FlowMonitorExecutor) monitorFlow(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
@@ -218,8 +231,7 @@ func (e *FlowMonitorExecutor) monitorFlow(ctx context.Context, call agentic.Tool
 
 	recentLimit := parsePositiveInt(call.Arguments["recent_limit"], defaultRecentLimit)
 
-	// 1. Fetch flow runtime state.
-	runtimeState := "unknown"
+	flowState := FlowState{EffectiveState: "unknown"}
 	if e.flows != nil {
 		fs, err := e.flows.Get(ctx, flowID)
 		if err != nil {
@@ -227,7 +239,7 @@ func (e *FlowMonitorExecutor) monitorFlow(ctx context.Context, call agentic.Tool
 			e.logger.Warn("monitor_flow: could not fetch flow state",
 				slog.String("flow_id", flowID), slog.Any("error", err))
 		} else {
-			runtimeState = fs.RuntimeState
+			flowState = fs
 		}
 	}
 
@@ -242,11 +254,15 @@ func (e *FlowMonitorExecutor) monitorFlow(ctx context.Context, call agentic.Tool
 	}
 
 	result := &flowMonitorResult{
-		FlowID:       flowID,
-		RuntimeState: runtimeState,
-		ByOutcome:    map[string]int{},
-		ByRole:       map[string]int{},
-		Recent:       []loopRecentEntry{},
+		FlowID:                flowID,
+		DesiredState:          flowState.DesiredState,
+		EffectiveState:        flowState.EffectiveState,
+		RestartRequired:       flowState.RestartRequired,
+		DesiredProvenance:     flowState.DesiredProvenance,
+		BootAppliedProvenance: flowState.BootAppliedProvenance,
+		ByOutcome:             map[string]int{},
+		ByRole:                map[string]int{},
+		Recent:                []loopRecentEntry{},
 	}
 
 	for _, key := range keys {

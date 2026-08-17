@@ -45,6 +45,7 @@ type FlowService struct {
 	flowStore  *flowstore.Manager
 	flowEngine *flowengine.Engine
 	configMgr  *config.Manager
+	bootConfig *config.Config
 
 	// overrideExpiry re-evaluates migration-override expiry on an interval, because
 	// boot-time evaluation cannot see a bridge that lapses while the process runs.
@@ -79,11 +80,13 @@ func NewFlowServiceFromConfig(rawConfig json.RawMessage, deps *Dependencies) (Se
 	if deps.ComponentRegistry == nil {
 		return nil, fmt.Errorf("flow service requires component registry")
 	}
-
-	// Create flow store
-	flowStore, err := flowstore.NewManager(deps.NATSClient)
-	if err != nil {
-		return nil, fmt.Errorf("create flow store: %w", err)
+	if deps.FlowManager == nil {
+		return nil, fmt.Errorf("flow service requires shared flow manager")
+	}
+	flowStore := deps.FlowManager
+	var bootConfig *config.Config
+	if safe := deps.Manager.GetConfig(); safe != nil {
+		bootConfig = safe.Get()
 	}
 
 	// Create flow engine with metrics
@@ -103,6 +106,7 @@ func NewFlowServiceFromConfig(rawConfig json.RawMessage, deps *Dependencies) (Se
 		flowStore:   flowStore,
 		flowEngine:  flowEngine,
 		configMgr:   deps.Manager,
+		bootConfig:  bootConfig,
 		serviceMgr:  deps.ServiceManager,
 		natsClient:  deps.NATSClient,
 		config:      cfg,
@@ -174,12 +178,10 @@ func (fs *FlowService) ensureDefaultFlowFromConfig(ctx context.Context) error {
 		return nil // No config manager available
 	}
 
-	cfg := fs.configMgr.GetConfig()
-	if cfg == nil {
+	if fs.bootConfig == nil {
 		return nil
 	}
-
-	currentCfg := cfg.Get()
+	currentCfg := fs.bootConfig
 	if currentCfg == nil || len(currentCfg.Components) == 0 {
 		fs.logger.Debug("No components in static config, skipping default flow creation")
 		return nil
@@ -235,7 +237,7 @@ func (fs *FlowService) ensureDefaultFlowFromConfig(ctx context.Context) error {
 		"flow_id", defaultFlow.ID,
 		"components", enabledCount,
 		"connections", len(defaultFlow.Connections),
-		"state", defaultFlow.RuntimeState)
+		"desired_state", defaultFlow.DesiredState)
 
 	return nil
 }
@@ -689,19 +691,6 @@ func (fs *FlowService) handleUpdateFlow(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// Check if flow is running - cannot edit running flows
-	existingFlow, err := fs.flowStore.Get(r.Context(), flowID)
-	if err != nil {
-		fs.logger.Error("Failed to get existing flow", "error", err)
-		fs.writeJSONError(w, "Failed to get flow", http.StatusInternalServerError)
-		return
-	}
-
-	if existingFlow.RuntimeState == flowstore.StateRunning {
-		fs.writeJSONError(w, "Cannot modify running flow. Stop the flow first.", http.StatusConflict)
-		return
-	}
-
 	if err := fs.flowStore.Update(r.Context(), &flow); err != nil {
 		if strings.Contains(err.Error(), "conflict") {
 			fs.writeJSONError(w, err.Error(), http.StatusConflict)
@@ -745,7 +734,8 @@ func (fs *FlowService) handleDeleteFlow(w http.ResponseWriter, r *http.Request, 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleDeployment handles deployment operations (deploy, start, stop, undeploy)
+// handleDeployment records desired activation operations. The running process
+// remains sealed; a successful response never claims live mutation.
 func (fs *FlowService) handleDeployment(w http.ResponseWriter, r *http.Request) {
 	flowID := r.PathValue("id")
 	operation := r.PathValue("operation")
@@ -790,7 +780,7 @@ func (fs *FlowService) handleDeployment(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Fetch the updated flow to return with new runtime_state
+	// Fetch the decorated desired/effective observation after the write.
 	updatedFlow, err := fs.flowStore.Get(r.Context(), flowID)
 	if err != nil {
 		fs.logger.Error("Failed to fetch updated flow after deployment", "flow_id", flowID, "error", err)
@@ -800,7 +790,12 @@ func (fs *FlowService) handleDeployment(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(updatedFlow); err != nil {
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"flow":              updatedFlow,
+		"desired_state":     updatedFlow.DesiredState,
+		"runtime_unchanged": true,
+		"restart_required":  updatedFlow.RestartRequired,
+	}); err != nil {
 		fs.logger.Error("Failed to encode flow response", "error", err)
 	}
 }
@@ -918,7 +913,7 @@ func (fs *FlowService) startFlowStatusPublisher(ctx context.Context) {
 	if flows, err := fs.flowStore.List(ctx); err == nil {
 		for _, flow := range flows {
 			if flow != nil {
-				fs.publishFlowStatus(ctx, flow.ID, flow.RuntimeState)
+				fs.publishFlowStatus(ctx, flow)
 			}
 		}
 	} else {
@@ -945,29 +940,42 @@ func (fs *FlowService) startFlowStatusPublisher(ctx context.Context) {
 				if entry == nil {
 					continue
 				}
-				// Parse flow and publish state change
+				// Parse only the identity from the raw desired record, then ask the
+				// manager for the independently decorated observation.
 				var flow flowstore.Flow
 				if err := json.Unmarshal(entry.Value(), &flow); err != nil {
 					fs.logger.Debug("Failed to unmarshal flow for status publish", "error", err)
 					continue
 				}
-				fs.publishFlowStatus(ctx, flow.ID, flow.RuntimeState)
+				observed, err := fs.flowStore.Get(ctx, flow.ID)
+				if err != nil {
+					fs.logger.Debug("Failed to observe flow for status publish", "flow_id", flow.ID, "error", err)
+					continue
+				}
+				fs.publishFlowStatus(ctx, observed)
 			}
 		}
 	}()
 }
 
 // publishFlowStatus publishes a flow state change to NATS JetStream.
-func (fs *FlowService) publishFlowStatus(ctx context.Context, flowID string, state flowstore.RuntimeState) {
+func (fs *FlowService) publishFlowStatus(ctx context.Context, flow *flowstore.Flow) {
+	if flow == nil {
+		return
+	}
 	data, err := json.Marshal(map[string]any{
-		"timestamp": time.Now().UnixMilli(),
-		"flow_id":   flowID,
-		"state":     string(state),
+		"timestamp":               time.Now().UnixMilli(),
+		"flow_id":                 flow.ID,
+		"desired_state":           flow.DesiredState,
+		"effective_state":         flow.EffectiveState,
+		"restart_required":        flow.RestartRequired,
+		"desired_provenance":      flow.DesiredProvenance,
+		"boot_applied_provenance": flow.BootAppliedProvenance,
 	})
 	if err != nil {
 		return
 	}
-	_ = fs.natsClient.PublishToStream(ctx, "flows."+flowID+".status", data)
+	_ = fs.natsClient.PublishToStream(ctx, "flows."+flow.ID+".status", data)
 }
 
 // startOverrideExpiryReporter runs the migration-override expiry reporter for this

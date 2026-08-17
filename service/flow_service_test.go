@@ -50,7 +50,7 @@ func createTestFlowService(t *testing.T) (*http.ServeMux, *flowstore.Manager, *n
 	require.NoError(t, configMgr.Start(context.Background()))
 
 	// Create flow store
-	flowStore, err := flowstore.NewManager(natsClient)
+	flowStore, err := flowstore.NewManager(context.Background(), natsClient)
 	require.NoError(t, err)
 
 	// Create dependencies
@@ -59,6 +59,7 @@ func createTestFlowService(t *testing.T) (*http.ServeMux, *flowstore.Manager, *n
 		Manager:           configMgr,
 		ComponentRegistry: registry,
 		Logger:            logger,
+		FlowManager:       flowStore,
 	}
 
 	// Create flow service
@@ -85,7 +86,7 @@ func TestHandleValidateFlow_WithBody(t *testing.T) {
 	requestFlow := flowstore.Flow{
 		ID:           flowID,
 		Name:         "Test Flow",
-		RuntimeState: flowstore.StateNotDeployed,
+		DesiredState: flowstore.DesiredAbsent,
 		Nodes: []flowstore.FlowNode{
 			{
 				ID:        "node-1",
@@ -152,7 +153,7 @@ func TestHandleValidateFlow_WithoutBody(t *testing.T) {
 	flow := &flowstore.Flow{
 		ID:           flowID,
 		Name:         "Test Flow in KV",
-		RuntimeState: flowstore.StateNotDeployed,
+		DesiredState: flowstore.DesiredAbsent,
 		Nodes: []flowstore.FlowNode{
 			{
 				ID:        "node-1",
@@ -257,7 +258,7 @@ func TestHandleValidateFlow_IDMismatch(t *testing.T) {
 	requestFlow := flowstore.Flow{
 		ID:           bodyFlowID, // Different from URL
 		Name:         "Test Flow",
-		RuntimeState: flowstore.StateNotDeployed,
+		DesiredState: flowstore.DesiredAbsent,
 		Nodes:        []flowstore.FlowNode{},
 		Connections:  []flowstore.FlowConnection{},
 	}
@@ -306,7 +307,7 @@ func TestHandleValidateFlow_WithBodyNoID(t *testing.T) {
 	// Create test flow WITHOUT ID in body
 	requestFlow := map[string]any{
 		"name":          "Test Flow",
-		"runtime_state": "not_deployed",
+		"desired_state": "absent",
 		"nodes": []flowstore.FlowNode{
 			{
 				ID:        "node-1",

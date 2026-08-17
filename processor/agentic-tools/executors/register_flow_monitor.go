@@ -21,7 +21,24 @@ func (a *flowStateAdapter) Get(ctx context.Context, id string) (agentictools.Flo
 	if err != nil {
 		return agentictools.FlowState{}, err
 	}
-	return agentictools.FlowState{RuntimeState: string(flow.RuntimeState)}, nil
+	state := agentictools.FlowState{
+		DesiredState:    string(flow.DesiredState),
+		EffectiveState:  string(flow.EffectiveState),
+		RestartRequired: flow.RestartRequired,
+	}
+	if flow.DesiredProvenance != nil {
+		state.DesiredProvenance = &agentictools.FlowProvenance{
+			BootID: flow.DesiredProvenance.BootID,
+			Digest: flow.DesiredProvenance.Digest,
+		}
+	}
+	if flow.BootAppliedProvenance != nil {
+		state.BootAppliedProvenance = &agentictools.FlowProvenance{
+			BootID: flow.BootAppliedProvenance.BootID,
+			Digest: flow.BootAppliedProvenance.Digest,
+		}
+	}
+	return state, nil
 }
 
 // registerFlowMonitor wires monitor_flow without opening AGENT_LOOPS. Nil

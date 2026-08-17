@@ -30,7 +30,7 @@ func TestRuntimeHealthIntegration(t *testing.T) {
 	}()
 
 	// Create flow store
-	flowStore, err := flowstore.NewManager(natsClient)
+	flowStore, err := flowstore.NewManager(context.Background(), natsClient)
 	require.NoError(t, err)
 
 	// For this integration test, we'll test the handler without ComponentManager
@@ -70,7 +70,7 @@ func TestRuntimeHealthIntegration(t *testing.T) {
 				},
 			},
 		},
-		RuntimeState: flowstore.StateRunning,
+		DesiredState: flowstore.DesiredEnabled,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 		LastModified: time.Now(),
@@ -142,7 +142,7 @@ func TestRuntimeHealthIntegration(t *testing.T) {
 			ID:           "empty-flow",
 			Name:         "Empty Flow",
 			Nodes:        []flowstore.FlowNode{},
-			RuntimeState: flowstore.StateNotDeployed,
+			DesiredState: flowstore.DesiredAbsent,
 			CreatedAt:    time.Now(),
 			UpdatedAt:    time.Now(),
 			LastModified: time.Now(),

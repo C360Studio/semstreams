@@ -82,7 +82,7 @@ func (s *EngineIntegrationSuite) SetupTest() {
 	s.Require().NoError(err)
 
 	// Create flow store
-	s.flowStore, err = flowstore.NewManager(s.natsClient)
+	s.flowStore, err = flowstore.NewManager(context.Background(), s.natsClient)
 	s.Require().NoError(err)
 
 	// Create engine (without metrics for testing)
@@ -111,7 +111,7 @@ func (s *EngineIntegrationSuite) TestDeployFlow() {
 	flow := &flowstore.Flow{
 		ID:           "deploy-test-flow",
 		Name:         "Deploy Test Flow",
-		RuntimeState: flowstore.StateNotDeployed,
+		DesiredState: flowstore.DesiredAbsent,
 		Nodes: []flowstore.FlowNode{
 			{
 				ID:        "node-1",
@@ -135,7 +135,7 @@ func (s *EngineIntegrationSuite) TestDeployFlow() {
 	// Verify flow state changed
 	deployed, err := s.flowStore.Get(s.ctx, "deploy-test-flow")
 	s.Require().NoError(err)
-	s.Equal(flowstore.StateDeployedStopped, deployed.RuntimeState, "Flow should be in deployed_stopped state")
+	s.Equal(flowstore.DesiredDisabled, deployed.DesiredState, "flow should be disabled in desired state")
 
 	// Verify component config was created
 	cfg := s.configMgr.GetConfig()
@@ -164,7 +164,7 @@ func (s *EngineIntegrationSuite) TestStartFlow() {
 	flow := &flowstore.Flow{
 		ID:           "start-test-flow",
 		Name:         "Start Test Flow",
-		RuntimeState: flowstore.StateNotDeployed,
+		DesiredState: flowstore.DesiredAbsent,
 		Nodes: []flowstore.FlowNode{
 			{
 				ID:        "node-1",
@@ -191,7 +191,7 @@ func (s *EngineIntegrationSuite) TestStartFlow() {
 	// Verify flow state changed
 	running, err := s.flowStore.Get(s.ctx, "start-test-flow")
 	s.Require().NoError(err)
-	s.Equal(flowstore.StateRunning, running.RuntimeState, "Flow should be running")
+	s.Equal(flowstore.DesiredEnabled, running.DesiredState, "Flow should be running")
 
 	// Verify components are enabled
 	cfg := s.configMgr.GetConfig()
@@ -206,7 +206,7 @@ func (s *EngineIntegrationSuite) TestStartNotDeployedFlow() {
 	flow := &flowstore.Flow{
 		ID:           "not-deployed-flow",
 		Name:         "Not Deployed",
-		RuntimeState: flowstore.StateNotDeployed,
+		DesiredState: flowstore.DesiredAbsent,
 		Nodes:        []flowstore.FlowNode{},
 		Connections:  []flowstore.FlowConnection{},
 	}
@@ -226,7 +226,7 @@ func (s *EngineIntegrationSuite) TestStopFlow() {
 	flow := &flowstore.Flow{
 		ID:           "stop-test-flow",
 		Name:         "Stop Test Flow",
-		RuntimeState: flowstore.StateNotDeployed,
+		DesiredState: flowstore.DesiredAbsent,
 		Nodes: []flowstore.FlowNode{
 			{
 				ID:        "node-1",
@@ -256,7 +256,7 @@ func (s *EngineIntegrationSuite) TestStopFlow() {
 	// Verify flow state changed
 	stopped, err := s.flowStore.Get(s.ctx, "stop-test-flow")
 	s.Require().NoError(err)
-	s.Equal(flowstore.StateDeployedStopped, stopped.RuntimeState, "Flow should be deployed_stopped")
+	s.Equal(flowstore.DesiredDisabled, stopped.DesiredState, "flow should be disabled in desired state")
 
 	// Verify components are disabled. engine.Stop() returns once the flow's
 	// RuntimeState is persisted (asserted above), but disabling the component
@@ -280,7 +280,7 @@ func (s *EngineIntegrationSuite) TestStopNotRunningFlow() {
 	flow := &flowstore.Flow{
 		ID:           "deployed-not-running",
 		Name:         "Deployed Not Running",
-		RuntimeState: flowstore.StateNotDeployed,
+		DesiredState: flowstore.DesiredAbsent,
 		Nodes: []flowstore.FlowNode{
 			{
 				ID:        "node-1",
@@ -312,7 +312,7 @@ func (s *EngineIntegrationSuite) TestUndeployFlow() {
 	flow := &flowstore.Flow{
 		ID:           "undeploy-test-flow",
 		Name:         "Undeploy Test Flow",
-		RuntimeState: flowstore.StateNotDeployed,
+		DesiredState: flowstore.DesiredAbsent,
 		Nodes: []flowstore.FlowNode{
 			{
 				ID:        "node-1",
@@ -339,7 +339,7 @@ func (s *EngineIntegrationSuite) TestUndeployFlow() {
 	// Verify flow state changed
 	undeployed, err := s.flowStore.Get(s.ctx, "undeploy-test-flow")
 	s.Require().NoError(err)
-	s.Equal(flowstore.StateNotDeployed, undeployed.RuntimeState, "Flow should be not_deployed")
+	s.Equal(flowstore.DesiredAbsent, undeployed.DesiredState, "flow should be absent in desired state")
 
 	// Verify component configs were removed
 	cfg := s.configMgr.GetConfig()
@@ -353,7 +353,7 @@ func (s *EngineIntegrationSuite) TestUndeployRunningFlow() {
 	flow := &flowstore.Flow{
 		ID:           "running-undeploy",
 		Name:         "Running Undeploy",
-		RuntimeState: flowstore.StateNotDeployed,
+		DesiredState: flowstore.DesiredAbsent,
 		Nodes: []flowstore.FlowNode{
 			{
 				ID:        "node-1",
@@ -389,7 +389,7 @@ func (s *EngineIntegrationSuite) TestFullLifecycle() {
 	flow := &flowstore.Flow{
 		ID:           "lifecycle-flow",
 		Name:         "Full Lifecycle Test",
-		RuntimeState: flowstore.StateNotDeployed,
+		DesiredState: flowstore.DesiredAbsent,
 		Nodes: []flowstore.FlowNode{
 			{
 				ID:        "node-1",
@@ -428,7 +428,7 @@ func (s *EngineIntegrationSuite) TestFullLifecycle() {
 
 	deployed, err := s.flowStore.Get(s.ctx, "lifecycle-flow")
 	s.Require().NoError(err)
-	s.Equal(flowstore.StateDeployedStopped, deployed.RuntimeState)
+	s.Equal(flowstore.DesiredDisabled, deployed.DesiredState)
 
 	// Step 2: Start
 	err = s.engine.Start(s.ctx, "lifecycle-flow")
@@ -436,7 +436,7 @@ func (s *EngineIntegrationSuite) TestFullLifecycle() {
 
 	running, err := s.flowStore.Get(s.ctx, "lifecycle-flow")
 	s.Require().NoError(err)
-	s.Equal(flowstore.StateRunning, running.RuntimeState)
+	s.Equal(flowstore.DesiredEnabled, running.DesiredState)
 
 	// Step 3: Stop
 	err = s.engine.Stop(s.ctx, "lifecycle-flow")
@@ -444,7 +444,7 @@ func (s *EngineIntegrationSuite) TestFullLifecycle() {
 
 	stopped, err := s.flowStore.Get(s.ctx, "lifecycle-flow")
 	s.Require().NoError(err)
-	s.Equal(flowstore.StateDeployedStopped, stopped.RuntimeState)
+	s.Equal(flowstore.DesiredDisabled, stopped.DesiredState)
 
 	// Step 4: Undeploy
 	err = s.engine.Undeploy(s.ctx, "lifecycle-flow")
@@ -452,7 +452,7 @@ func (s *EngineIntegrationSuite) TestFullLifecycle() {
 
 	undeployed, err := s.flowStore.Get(s.ctx, "lifecycle-flow")
 	s.Require().NoError(err)
-	s.Equal(flowstore.StateNotDeployed, undeployed.RuntimeState)
+	s.Equal(flowstore.DesiredAbsent, undeployed.DesiredState)
 
 	// Verify all components removed. This is a one-shot assertion —
 	// no Eventually polling — because the Manager's engine-write
@@ -480,7 +480,7 @@ func (s *EngineIntegrationSuite) TestStart_AfterDeploy_DoesNotRewriteAlreadyEnab
 	flow := &flowstore.Flow{
 		ID:           "idempotent-start-flow",
 		Name:         "Idempotent Start",
-		RuntimeState: flowstore.StateNotDeployed,
+		DesiredState: flowstore.DesiredAbsent,
 		Nodes: []flowstore.FlowNode{
 			{
 				ID:        "node-1",

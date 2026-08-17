@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/config"
+	"github.com/c360studio/semstreams/flowstore"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/gorilla/websocket"
 	"github.com/nats-io/nats.go/jetstream"
@@ -51,10 +52,12 @@ type ErrorResponse struct {
 
 // FlowStatusPayload is the payload for type=flow_status messages
 type FlowStatusPayload struct {
-	State     string `json:"state"`           // Current state: draft, deployed, running, stopped, failed
-	PrevState string `json:"prev_state"`      // Previous state (if changed)
-	Timestamp int64  `json:"timestamp"`       // State change timestamp (Unix milliseconds)
-	Error     string `json:"error,omitempty"` // Error message if state=failed
+	DesiredState          flowstore.DesiredState      `json:"desired_state"`
+	EffectiveState        flowstore.EffectiveState    `json:"effective_state"`
+	RestartRequired       bool                        `json:"restart_required"`
+	DesiredProvenance     *flowstore.ConfigProvenance `json:"desired_provenance,omitempty"`
+	BootAppliedProvenance *flowstore.ConfigProvenance `json:"boot_applied_provenance,omitempty"`
+	Timestamp             int64                       `json:"timestamp"`
 }
 
 // LogEntryPayload is the payload for type=log_entry messages
@@ -755,13 +758,7 @@ func (fs *FlowService) frameworkAutoCreate(stream string) *natsclient.StreamAuto
 	// reads that as "the framework declaration, unmodified", which is what a
 	// deployment without operator configuration actually has. Declining here would
 	// disable stream recovery for the dashboard entirely.
-	var live *config.Config
-	if fs.configMgr != nil {
-		if safe := fs.configMgr.GetConfig(); safe != nil {
-			live = safe.Get()
-		}
-	}
-	declared, ok := config.FrameworkStreamAutoCreate(live, stream)
+	declared, ok := config.FrameworkStreamAutoCreate(fs.bootConfig, stream)
 	if !ok {
 		return nil
 	}

@@ -43,7 +43,7 @@ func NewEngine(
 		metrics = nil // Continue without metrics
 	}
 
-	return &Engine{
+	engine := &Engine{
 		configMgr:         configMgr,
 		flowStore:         flowStore,
 		componentRegistry: componentRegistry,
@@ -51,6 +51,8 @@ func NewEngine(
 		logger:            logger,
 		metrics:           metrics,
 	}
+	flowStore.SealBootActivation(configMgr)
+	return engine
 }
 
 // ValidateFlowDefinition validates a flow without deploying it
@@ -86,17 +88,8 @@ func (e *Engine) ValidateFlowDefinition(flow *flowstore.Flow) (*ValidationResult
 	return result, nil
 }
 
-// Deploy translates a flow to component configs and writes to semstreams_config KV
-// The existing Manager will detect the changes and ComponentManager will create the components
+// Deploy persists a validated disabled desired component set for the next boot.
 func (e *Engine) Deploy(ctx context.Context, flowID string) error {
-	start := time.Now()
-	success := false
-
-	defer func() {
-		duration := time.Since(start).Seconds()
-		e.metrics.recordDeploy(flowID, success, duration)
-	}()
-
 	// Get the flow
 	flow, err := e.flowStore.Get(ctx, flowID)
 	if err != nil {
@@ -113,43 +106,38 @@ func (e *Engine) Deploy(ctx context.Context, flowID string) error {
 	if err != nil {
 		return errs.WrapInvalid(err, "flowengine", "Deploy", "translation failed")
 	}
+	for name, componentConfig := range componentConfigs {
+		componentConfig.Enabled = false
+		componentConfigs[name] = componentConfig
+	}
 
-	// Write component configs to semstreams_config KV
-	// Manager is already watching this bucket and will trigger ComponentManager
+	// Write the desired component configs for selection at the next boot.
 	if err := e.writeComponentConfigs(ctx, componentConfigs); err != nil {
 		return errs.WrapTransient(err, "flowengine", "Deploy", "write configs to KV")
 	}
 
-	// Update flow state
-	flow.RuntimeState = flowstore.StateDeployedStopped
+	// Record desired activation only. The running process is sealed.
+	flow.DesiredState = flowstore.DesiredDisabled
+	now := time.Now()
+	flow.DesiredChangedAt = &now
 	if err := e.flowStore.Update(ctx, flow); err != nil {
 		return errs.WrapTransient(err, "flowengine", "Deploy", "update flow state")
 	}
 
-	success = true
 	return nil
 }
 
-// Start starts all components in a deployed flow
-// This is achieved by updating the "enabled" field in component configs
+// Start enables the desired component set for the next successful boot.
 func (e *Engine) Start(ctx context.Context, flowID string) error {
-	start := time.Now()
-	success := false
-
-	defer func() {
-		duration := time.Since(start).Seconds()
-		e.metrics.recordStart(flowID, success, duration)
-	}()
-
 	flow, err := e.flowStore.Get(ctx, flowID)
 	if err != nil {
 		return errs.WrapTransient(err, "flowengine", "Start", "get flow")
 	}
 
-	if flow.RuntimeState != flowstore.StateDeployedStopped {
+	if flow.DesiredState != flowstore.DesiredDisabled {
 		return errs.WrapInvalid(
-			fmt.Errorf("flow state is %s", flow.RuntimeState),
-			"flowengine", "Start", "flow must be deployed and stopped")
+			fmt.Errorf("flow desired state is %s", flow.DesiredState),
+			"flowengine", "Start", "flow desired state must be disabled")
 	}
 
 	// Enable all components in the flow
@@ -159,35 +147,27 @@ func (e *Engine) Start(ctx context.Context, flowID string) error {
 		}
 	}
 
-	// Update flow state
-	flow.RuntimeState = flowstore.StateRunning
+	flow.DesiredState = flowstore.DesiredEnabled
+	now := time.Now()
+	flow.DesiredChangedAt = &now
 	if err := e.flowStore.Update(ctx, flow); err != nil {
 		return errs.WrapTransient(err, "flowengine", "Start", "update flow state")
 	}
 
-	success = true
 	return nil
 }
 
-// Stop stops all components in a running flow
+// Stop disables the desired component set for the next successful boot.
 func (e *Engine) Stop(ctx context.Context, flowID string) error {
-	start := time.Now()
-	success := false
-
-	defer func() {
-		duration := time.Since(start).Seconds()
-		e.metrics.recordStop(flowID, success, duration)
-	}()
-
 	flow, err := e.flowStore.Get(ctx, flowID)
 	if err != nil {
 		return errs.WrapTransient(err, "flowengine", "Stop", "get flow")
 	}
 
-	if flow.RuntimeState != flowstore.StateRunning {
+	if flow.DesiredState != flowstore.DesiredEnabled {
 		return errs.WrapInvalid(
-			fmt.Errorf("flow state is %s", flow.RuntimeState),
-			"flowengine", "Stop", "flow must be running")
+			fmt.Errorf("flow desired state is %s", flow.DesiredState),
+			"flowengine", "Stop", "flow desired state must be enabled")
 	}
 
 	// Disable all components in the flow
@@ -197,13 +177,13 @@ func (e *Engine) Stop(ctx context.Context, flowID string) error {
 		}
 	}
 
-	// Update flow state
-	flow.RuntimeState = flowstore.StateDeployedStopped
+	flow.DesiredState = flowstore.DesiredDisabled
+	now := time.Now()
+	flow.DesiredChangedAt = &now
 	if err := e.flowStore.Update(ctx, flow); err != nil {
 		return errs.WrapTransient(err, "flowengine", "Stop", "update flow state")
 	}
 
-	success = true
 	return nil
 }
 
@@ -214,10 +194,10 @@ func (e *Engine) Undeploy(ctx context.Context, flowID string) error {
 		return errs.WrapTransient(err, "flowengine", "Undeploy", "get flow")
 	}
 
-	if flow.RuntimeState == flowstore.StateRunning {
+	if flow.DesiredState == flowstore.DesiredEnabled {
 		return errs.WrapInvalid(
-			fmt.Errorf("cannot undeploy running flow"),
-			"flowengine", "Undeploy", "flow must be stopped before undeploying")
+			fmt.Errorf("cannot remove enabled desired flow"),
+			"flowengine", "Undeploy", "flow desired state must be disabled before removal")
 	}
 
 	// Delete all component configs
@@ -227,8 +207,9 @@ func (e *Engine) Undeploy(ctx context.Context, flowID string) error {
 		}
 	}
 
-	// Update flow state
-	flow.RuntimeState = flowstore.StateNotDeployed
+	flow.DesiredState = flowstore.DesiredAbsent
+	now := time.Now()
+	flow.DesiredChangedAt = &now
 	if err := e.flowStore.Update(ctx, flow); err != nil {
 		return errs.WrapTransient(err, "flowengine", "Undeploy", "update flow state")
 	}
@@ -295,7 +276,7 @@ func (e *Engine) translateToComponentConfigs(flow *flowstore.Flow) (map[string]t
 		configs[node.Name] = types.ComponentConfig{
 			Type:    node.Type,      // Category (input/processor/output/storage/gateway)
 			Name:    node.Component, // Factory name (e.g., "udp", "graph-processor")
-			Enabled: true,           // Deploy as enabled by default
+			Enabled: false,          // Deploy records disabled desired state
 			Config:  configJSON,
 		}
 	}

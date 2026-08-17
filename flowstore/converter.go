@@ -25,22 +25,18 @@ import (
 // Connections are left empty as they require runtime component instances
 // to derive from port subject matching. Users can connect nodes in the UI.
 func FromComponentConfigs(name string, configs map[string]types.ComponentConfig) (*Flow, error) {
-	now := time.Now()
-
 	flow := &Flow{
 		ID:           uuid.New().String(),
 		Name:         name,
 		Description:  "Auto-generated from static configuration",
 		Version:      1,
-		RuntimeState: StateRunning, // Static configs are already running at startup
-		DeployedAt:   &now,
-		StartedAt:    &now,
-		CreatedAt:    now,
-		UpdatedAt:    now,
-		LastModified: now,
+		DesiredState: DesiredEnabled,
+		CreatedAt:    time.Now(),
 		Nodes:        make([]FlowNode, 0, len(configs)),
 		Connections:  []FlowConnection{}, // Empty - connections derived at runtime
 	}
+	flow.UpdatedAt = flow.CreatedAt
+	flow.LastModified = flow.CreatedAt
 
 	// Sort keys for deterministic node ordering
 	keys := make([]string, 0, len(configs))

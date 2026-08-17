@@ -2,9 +2,7 @@ package service
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,8 +12,6 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/health"
-	"github.com/c360studio/semstreams/internal/componentadmission"
-	"github.com/c360studio/semstreams/types"
 )
 
 func init() {
@@ -325,25 +321,23 @@ func (cm *ComponentManager) handleComponentsList(w http.ResponseWriter, r *http.
 		return
 	}
 
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
+	statuses := cm.GetComponentStatus()
+	components := make([]map[string]any, 0, len(statuses))
 
-	components := make([]map[string]any, 0, len(cm.components))
-
-	for name, mc := range cm.components {
+	for name, status := range statuses {
+		cfg := cm.componentConfigs[name]
 		compInfo := map[string]any{
 			"name":  name,
-			"state": mc.State.String(),
+			"state": status.State.String(),
 		}
 
 		// Report the effective config the component is actually running, from the
 		// single source of truth refreshed on every write path (gh#522).
-		compInfo["component"] = mc.Config.Name    // Component factory name (e.g., "udp", "graph-processor")
-		compInfo["type"] = string(mc.Config.Type) // Component category (input/processor/output/storage/gateway)
-		compInfo["enabled"] = mc.Config.Enabled
+		compInfo["component"] = cfg.Name    // Component factory name (e.g., "udp", "graph-processor")
+		compInfo["type"] = string(cfg.Type) // Component category (input/processor/output/storage/gateway)
+		compInfo["enabled"] = cfg.Enabled
 
-		// Add health status
-		healthStatus := mc.Component.Health()
+		healthStatus := status.Health
 		compInfo["healthy"] = healthStatus.Healthy
 		if healthStatus.LastError != "" {
 			compInfo["last_error"] = healthStatus.LastError
@@ -508,9 +502,7 @@ func (cm *ComponentManager) handleComponentStatus(w http.ResponseWriter, r *http
 	debugParam := r.URL.Query().Get("debug")
 	includeDebug := debugParam == "true"
 
-	cm.mu.RLock()
-	mc, exists := cm.components[componentName]
-	defer cm.mu.RUnlock()
+	componentStatus, exists := cm.GetComponentStatus()[componentName]
 
 	if !exists {
 		http.NotFound(w, r)
@@ -518,17 +510,15 @@ func (cm *ComponentManager) handleComponentStatus(w http.ResponseWriter, r *http
 	}
 
 	status := map[string]any{
-		"name":        componentName,
-		"state":       mc.State.String(),
-		"start_order": mc.StartOrder,
+		"name":  componentName,
+		"state": componentStatus.State.String(),
 	}
 
-	// Effective config from the single source of truth (gh#522).
-	status["type"] = string(mc.Config.Type)
-	status["enabled"] = mc.Config.Enabled
+	bootConfig := cm.componentConfigs[componentName]
+	status["type"] = string(bootConfig.Type)
+	status["enabled"] = bootConfig.Enabled
 
-	// Add health information
-	healthStatus := mc.Component.Health()
+	healthStatus := componentStatus.Health
 	status["healthy"] = healthStatus.Healthy
 	if healthStatus.LastError != "" {
 		status["last_error"] = healthStatus.LastError
@@ -539,15 +529,21 @@ func (cm *ComponentManager) handleComponentStatus(w http.ResponseWriter, r *http
 	}
 
 	// Add last error if present (avoid duplicate if already set from health)
-	if mc.LastError != nil && healthStatus.LastError == "" {
-		status["lifecycle_error"] = mc.LastError.Error()
+	if componentStatus.LastError != nil && healthStatus.LastError == "" {
+		status["lifecycle_error"] = componentStatus.LastError.Error()
 	}
 
 	// Add debug information if requested and component supports it
 	if includeDebug {
-		if debugProvider, ok := mc.Component.(component.DebugStatusProvider); ok {
-			status["debug"] = debugProvider.DebugStatus()
-		}
+		_ = cm.withComponents(func(components map[string]*component.ManagedComponent) error {
+			managed := components[componentName]
+			if managed != nil {
+				if debugProvider, ok := managed.Component.(component.DebugStatusProvider); ok {
+					status["debug"] = debugProvider.DebugStatus()
+				}
+			}
+			return nil
+		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -556,13 +552,13 @@ func (cm *ComponentManager) handleComponentStatus(w http.ResponseWriter, r *http
 	}
 }
 
-// handleComponentConfig handles component configuration GET and PUT requests
+// handleComponentConfig exposes boot-effective configuration as a value-only
+// observation. Mutations belong to desired configuration and take effect only
+// on a later process boot.
 func (cm *ComponentManager) handleComponentConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		cm.handleGetComponentConfig(w, r)
-	case http.MethodPut:
-		cm.handlePutComponentConfig(w, r)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -588,9 +584,7 @@ func (cm *ComponentManager) handleGetComponentConfig(w http.ResponseWriter, r *h
 		return
 	}
 
-	// Return the effective config the component is actually running, from the
-	// single source of truth refreshed on every write path — create, KV-restart,
-	// and live-PUT — so a KV-driven restart does not leave a stale body (gh#522).
+	// Return the immutable configuration selected for this boot.
 	compConfig := mc.Config
 	config := any(map[string]any{
 		"type":    compConfig.Type,
@@ -604,222 +598,6 @@ func (cm *ComponentManager) handleGetComponentConfig(w http.ResponseWriter, r *h
 		cm.logger.Error("Failed to encode component config", "error", err)
 	}
 }
-
-// handlePutComponentConfig updates component configuration with schema validation
-func (cm *ComponentManager) handlePutComponentConfig(w http.ResponseWriter, r *http.Request) {
-	// Extract and validate component name from URL path
-	componentName, valid := extractComponentName(r.URL.Path)
-	if !valid {
-		http.Error(w, "Invalid component name", http.StatusBadRequest)
-		return
-	}
-	unlock := cm.lockInstanceOperation(componentName)
-	defer unlock()
-
-	// Check if component exists, and capture the factory name from the component's
-	// effective config under the same lock (gh#522: the single source of truth, not
-	// the boot-time componentConfigs which is stale for a KV-restarted or
-	// runtime-added component).
-	cm.mu.RLock()
-	comp, exists := cm.components[componentName]
-	var componentType string
-	var effectiveConfig types.ComponentConfig
-	if exists {
-		componentType = comp.Config.Name // Factory name
-		effectiveConfig = cloneComponentConfig(comp.Config)
-	}
-	cm.mu.RUnlock()
-
-	if !exists {
-		http.NotFound(w, r)
-		return
-	}
-
-	// Parse request body
-	var req struct {
-		Config json.RawMessage `json:"config"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	if componentType == "" {
-		cm.logger.Warn("Component type not found, skipping validation", "component_name", componentName)
-		http.Error(w, "Component type not found", http.StatusInternalServerError)
-		return
-	}
-
-	// Validate configuration against schema if config manager is available
-	if cm.configManager != nil {
-		validationErrors := component.ValidateComponentConfig(
-			r.Context(),
-			cm.logger,
-			cm.registry,
-			componentType,
-			req.Config,
-		)
-
-		if len(validationErrors) > 0 {
-			// Return structured validation errors (FR-005)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"errors": validationErrors,
-			})
-			return
-		}
-	}
-
-	// Prove declaration neutrality against a separately constructed candidate
-	// before invoking either live-mutation contract or changing retained config.
-	proposedConfig := effectiveConfig
-	proposedConfig.Config = append(json.RawMessage(nil), req.Config...)
-	proof, err := cm.registry.ValidateDeclarationUpdate(
-		componentadmission.Access{}, componentName, proposedConfig, cm.buildComponentDependencies(),
-	)
-	if err != nil {
-		var declarationChange *component.DeclarationChangeRequiresReplacementError
-		if errors.As(err, &declarationChange) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusConflict)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"code":  declarationChange.Code,
-				"error": declarationChange.Error(),
-			})
-			return
-		}
-		cm.logger.Error("Failed to validate component declaration update",
-			"component_name", componentName, "error", err)
-		http.Error(w, fmt.Sprintf("Failed to validate declaration: %v", err), http.StatusBadRequest)
-		return
-	}
-	if err := cm.registry.ConfirmDeclarationUpdate(componentadmission.Access{}, proof); err != nil {
-		http.Error(w, fmt.Sprintf("Component changed during declaration validation: %v", err), http.StatusConflict)
-		return
-	}
-
-	// Configuration passed schema validation. Apply it to the running component
-	// via whichever runtime-reconfig contract it implements, learning whether it
-	// was applied live (gh#455). Apply BEFORE persisting so a component's own
-	// validate/apply rejection leaves no stored-but-unapplied config that a
-	// restart would silently load.
-	applied, err := cm.applyRuntimeConfig(r.Context(), comp.Component, req.Config)
-	if err != nil {
-		cm.logger.Error("Failed to apply config update", "component_name", componentName, "error", err)
-		// A component's own validation rejection is a client error (structured
-		// 400), mirroring the schema-validation path above; a genuine apply
-		// failure is a server error (500). Either way nothing was stored (apply
-		// runs before the persist below), so a restart won't load it.
-		if errors.Is(err, errReconfigValidation) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"errors": []string{err.Error()},
-			})
-			return
-		}
-		http.Error(w, fmt.Sprintf("Failed to apply config: %v", err), http.StatusInternalServerError)
-		return
-	}
-	if err := cm.registry.ConfirmDeclarationUpdate(componentadmission.Access{}, proof); err != nil {
-		http.Error(w, fmt.Sprintf("Component changed during config apply: %v", err), http.StatusConflict)
-		return
-	}
-
-	// Update the ComponentManager's in-memory view of the config, only after a
-	// successful apply or an explicit no-hook accept, so the GET-config read stays
-	// consistent with what was applied. NOTE: this is the manager's in-memory state
-	// only — this endpoint does NOT durably persist to the config KV store (that
-	// write is one-directional KV→cm here, and an in-handler KV write is a known
-	// deadlock hazard — gh#388), so the change does not survive a restart. That is
-	// exactly why the response below does not promise a restart-time apply.
-	//
-	// The retained ManagedComponent.Config is the single source of truth for the
-	// component's effective config (gh#522): it backs the GET /config read AND the
-	// KV-watch idempotency guard (gh#520). Refreshing it here keeps both correct —
-	// GET returns the live-applied body, and a later KV re-push of the same config
-	// is a no-op rather than a spurious restart.
-	cm.mu.Lock()
-	if mc, ok := cm.components[componentName]; ok && mc == comp {
-		mc.Config.Config = append(json.RawMessage(nil), req.Config...)
-	} else {
-		cm.mu.Unlock()
-		http.Error(w, "Component changed during config commit", http.StatusConflict)
-		return
-	}
-	cm.mu.Unlock()
-
-	// Honest response (gh#455): report whether the change was applied to the
-	// running component live, instead of an unconditional success that implies a
-	// live apply. A no-hook component is NOT reconfigured live, and this endpoint
-	// does not persist for restart, so we do not claim a restart-time apply.
-	message := "Configuration applied to the running component"
-	if !applied {
-		message = "Component does not support live runtime reconfiguration; the update was not applied to the running component"
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status":  "success",
-		"message": message,
-		"applied": applied,
-	})
-}
-
-// applyRuntimeConfig applies a schema-validated raw config to a running
-// component via whichever runtime-reconfig contract it implements, returning
-// whether the change was applied live. It probes two contracts in order:
-//
-//  1. the component-side UpdateConfig(ctx, json.RawMessage) (existing behavior);
-//  2. the service-flavored reconfig method pair
-//     ValidateConfigUpdate/ApplyConfigUpdate over a map[string]any, so a
-//     component implementing it (e.g. processor/rule) is reachable via the
-//     ComponentManager HTTP API (gh#455).
-//
-// It type-asserts the reconfig method pair rather than a broader service
-// contract because a component's ConfigSchema returns component.ConfigSchema.
-// The narrow anonymous interface matches exactly the methods this bridge calls.
-//
-// A component implementing neither contract returns (false, nil); the caller
-// reports applied:false. On the method-pair path, ValidateConfigUpdate runs
-// before ApplyConfigUpdate — a validation failure returns an error wrapping
-// errReconfigValidation (mapped to a 400 by the caller) and applies nothing.
-func (cm *ComponentManager) applyRuntimeConfig(ctx context.Context, comp component.Discoverable, raw json.RawMessage) (bool, error) {
-	if configurable, ok := comp.(interface {
-		UpdateConfig(ctx context.Context, config json.RawMessage) error
-	}); ok {
-		if err := configurable.UpdateConfig(ctx, raw); err != nil {
-			return false, err
-		}
-		return true, nil
-	}
-
-	if rc, ok := comp.(interface {
-		ValidateConfigUpdate(changes map[string]any) error
-		ApplyConfigUpdate(changes map[string]any) error
-	}); ok {
-		var changes map[string]any
-		if err := json.Unmarshal(raw, &changes); err != nil {
-			return false, fmt.Errorf("%w: config is not a JSON object: %w", errReconfigValidation, err)
-		}
-		if err := rc.ValidateConfigUpdate(changes); err != nil {
-			return false, fmt.Errorf("%w: %w", errReconfigValidation, err)
-		}
-		if err := rc.ApplyConfigUpdate(changes); err != nil {
-			return false, err
-		}
-		return true, nil
-	}
-
-	return false, nil
-}
-
-// errReconfigValidation marks a client-side rejection of a runtime config update
-// (a malformed body or a component's ValidateConfigUpdate failure) so the PUT
-// handler maps it to a structured 400. An ApplyConfigUpdate failure after
-// successful validation is a server-side error (bare, → 500).
-var errReconfigValidation = errors.New("runtime config rejected by component validation")
 
 // =============================================================================
 // FlowGraph HTTP Handlers
