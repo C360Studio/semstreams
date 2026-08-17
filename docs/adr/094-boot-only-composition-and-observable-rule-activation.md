@@ -96,15 +96,25 @@ Because component and flow changes activate at boot, controlled restart becomes 
 Boot-only activation does not land until shutdown is loss-aware and proven end to end.
 
 SIGTERM and SIGINT initiate bounded quiesce; they do not cancel the runtime Start context before lifecycle owners can
-stop admission and drain. Managed JetStream consumers use `ConsumeContext.Drain` and wait for `Closed`. Core NATS
-subscriptions use native Drain and wait for closure. Graceful paths do not substitute `ConsumeContext.Stop` or
-`Unsubscribe`, both of which can discard queued delivery.
+stop admission and drain. The owner that starts a managed JetStream consumer or core NATS subscription retains its
+exact returned handle, invokes native Drain during Stop, and waits for authoritative closure before canceling
+Start-owned work. Graceful paths do not substitute `ConsumeContext.Stop` or `Unsubscribe`, both of which can discard
+queued delivery. `ConsumeDurable` is retired because its production consumer census is zero; the three retained
+consume constructors return exact managed-consumer handles instead.
 
 Already-delivered callbacks retain a live work context during drain. Durable work acknowledges only after its effects
 and required publications commit. Work that misses the shutdown deadline remains unacknowledged or is negatively
-acknowledged for redelivery. After accepted work settles, owners cancel and join remaining Start-owned goroutines; the
-NATS client then flushes and drains the connection before close. A deadline-forced close is an observable failed
-shutdown, never a clean restart result.
+acknowledged for redelivery. After accepted work settles, owners cancel and join remaining Start-owned goroutines and
+composition aggregates every Stop result. Only then does terminal transport-only Client Close cancel and join its own
+health/metrics workers, native-drain the connection, observe CLOSED, and report conservative transport history. Client
+does not catalog, rediscover, or compensate for children. A preclosed installed transport, any historical or terminal
+`LastError`, or a deadline-forced close is an observable failed shutdown, never a clean restart result. Connect owns a
+private five-second native flusher ceiling with no adopter-facing knob.
+
+Every controlled shutdown exits the current process. A clean all-owner Stop plus Client Close result produces clean
+observability and successful exit; an incomplete owner or transport boundary produces failed observability and
+nonzero exit. Neither result authorizes in-process restart or Client reuse. Supervision starts the fresh process that
+consumes the latest committed desired state.
 
 The required proof runs the real process across SIGTERM and a new boot against retained NATS state, with both in-flight
 and pending work. It proves semantic completion for acknowledged work, recovery of unfinished durable work, no loss of
@@ -133,7 +143,11 @@ clean-exit record nor stale status from a dead boot incarnation may suppress com
 
 The runtime lifecycle model becomes one boot generation plus restart-safe terminal shutdown. The pending lifecycle
 restoration no longer needs live component replacement, removal, reservation, borrow, or candidate-failure protocols.
-Raw-handle retirement, terminal Stop behavior, context cleanup, and deterministic race proofs remain required.
+NATS lifetime follows exact owner handles rather than a Client-wide child ledger. Broad mutable Conn, JetStream,
+Stream, KV, and ObjectStore roots returned by Client/framework constructors retire before release; retained narrow
+watcher, lister, future, message, and value seams carry caller context and local Stop/completion ownership. No
+`Unsafe*` compatibility alias survives. Terminal Stop behavior, context cleanup, and deterministic race proofs remain
+required.
 
 Operators may author flows without stopping the process, but their activation boundary is the next successful boot. The
 response makes that boundary explicit. Operators retain immediate rule editing and gain revision-bound evidence of
@@ -143,6 +157,11 @@ This is a breaking pre-v1 change. Restart-safe shutdown is a prerequisite, not d
 no compatibility shims or parallel live paths. Sister repositories are read-only to this work; migration documentation
 records downstream changes for their owners. Controlled- and dirty-restart plus relevant core, structural, CRUD,
 agentic, and semantic E2E evidence is required before the breaking commit lands.
+
+Delivery is dependency ordered: contract reset; owner-handle adoption while temporary catalogs remain; minimal Client
+and catalog removal; broad raw-root retirement/narrowing; controlled always-exit process proof; then dirty-power proof.
+ADR-070 remains unchanged historical context for durable gated-DAG dispatch even though its unused `ConsumeDurable`
+helper is retired by the current capability contract.
 
 ## Superseded ADR-026 scope
 

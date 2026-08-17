@@ -1,12 +1,19 @@
 package contract
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+)
+
+const (
+	nativeSurfaceInventoryPath = "openspec/changes/require-restart-for-config-activation/native-surface-inventory.md"
+	nativeSurfaceInventorySHA  = "d79df592e7049d4f0e3412bf41e8c61d44ea0829a6fddc2734cff40ceb966617"
 )
 
 var retiredComponentStatusTerms = []string{
@@ -30,8 +37,17 @@ func TestComponentStatusPlaneRemainsRetired(t *testing.T) {
 	t.Parallel()
 
 	root := repoRootForComponentStatusRetirement(t)
+	inventoryBody, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(nativeSurfaceInventoryPath)))
+	if err != nil {
+		t.Fatalf("read approved native-surface inventory: %v", err)
+	}
+	inventorySum := sha256.Sum256(inventoryBody)
+	if actual := hex.EncodeToString(inventorySum[:]); actual != nativeSurfaceInventorySHA {
+		t.Fatalf("approved native-surface inventory SHA-256 = %s, want %s", actual, nativeSurfaceInventorySHA)
+	}
+
 	var violations []string
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -45,6 +61,9 @@ func TestComponentStatusPlaneRemainsRetired(t *testing.T) {
 			case ".git", "vendor", "node_modules", "docs/adr", "docs/proposals", "openspec/changes/archive":
 				return filepath.SkipDir
 			}
+			return nil
+		}
+		if rel == nativeSurfaceInventoryPath {
 			return nil
 		}
 

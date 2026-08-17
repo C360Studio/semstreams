@@ -12,6 +12,12 @@ This design separates them. Desired state remains writable. Effective component 
 boot. Live rule-definition activation remains as a dedicated capability because it has a demonstrated UX consumer and
 does not require component generation replacement.
 
+Approval provenance: D10 and its delivery order derive from the owner-approved minimal lifecycle design artifact with
+SHA-256 `0047789823bd8a6b3f772bb598fae90ca6060a8799cd828a95487589e0a7a11e`. The measured reset inventory is
+`openspec/changes/require-restart-for-config-activation/inventory.md`; the exact native-surface companion is
+`openspec/changes/require-restart-for-config-activation/native-surface-inventory.md` with approved SHA-256
+`d79df592e7049d4f0e3412bf41e8c61d44ea0829a6fddc2734cff40ceb966617`.
+
 ## Goals
 
 - Preserve flow/rule authoring, validation, persistence, and boot-time assembly.
@@ -185,15 +191,17 @@ Boot-only activation makes process restart a normal configuration operation. Sem
 process death as its activation mechanism until controlled shutdown is proven loss-aware.
 
 Receipt of SIGTERM or SIGINT initiates bounded shutdown; it does not pre-cancel the Start contexts passed to services
-and components. Lifecycle owners first stop admitting new work. Managed JetStream consumers use native
-`ConsumeContext.Drain` and wait for `Closed`; core NATS subscriptions use native subscription Drain and wait for
-closure. Abrupt `Stop` and `Unsubscribe` are forced-termination operations, not graceful-shutdown aliases.
+and components. Lifecycle owners first stop admitting new work. The owner that starts a managed JetStream consumer or
+core NATS subscription retains its exact returned handle, invokes native Drain during `Stop(ctx)`, and waits for
+authoritative closure before Start-owned cancellation. Abrupt consumer Stop and subscription Unsubscribe are
+forced-termination operations, not graceful-shutdown aliases, and cannot contribute to a clean shutdown result.
 
 Already-delivered callbacks keep a live work context while draining. Successful durable work acknowledges only after
 its effects and required publications commit. Work that cannot complete before the shutdown deadline remains unacked
 or is negatively acknowledged for durable redelivery; shutdown never fabricates success. After admissions and
-accepted work settle, owners cancel and join remaining Start-owned goroutines. The NATS connection then drains its
-outbound buffer and closes.
+accepted work settle, owners cancel and join remaining Start-owned goroutines. Composition aggregates every owner
+Stop result, then calls terminal transport-only Client Close to cancel and join only Client-owned workers, drain the
+native connection's outbound buffer, observe CLOSED, and close transport.
 
 This ordering is framework lifecycle mechanics, not a reactive rule or workflow. No public Quiesce phase is added
 without implementation inventory proving it necessary; components may implement the phases behind their existing
@@ -223,6 +231,82 @@ recovery, and honest failure where an external system cannot provide idempotency
 
 Every successful new boot selects the latest committed desired state. Crash recovery must not require a preceding
 clean-shutdown record, and stale boot-incarnation facts must not suppress or impersonate the new boot's applied state.
+
+### D10. Resource owners drain; Client closes terminal transport
+
+Composition owns one synchronous Connect and one terminal Close. Concurrent Connect/Close is outside the supported
+contract. Every retained managed-consumer constructor and subscription setup returns an exact owner handle; the
+component that starts the resource retains it and drains it during Stop. `ConsumeStreamWithConfig`,
+`ConsumeStreamWithConfigContexts`, and `ConsumeInternalStreamWithConfig` return `*ManagedConsumer`.
+`ConsumeDurable` has no production consumer and is retired rather than widened. Client does not catalog or rediscover
+child resources, and name-routed Stop/Delete, setup/delete reservations, generations, admission gates, readiness
+latches, publisher settlement, and forced child convergence are not part of the lifecycle contract.
+
+`ManagedConsumer.DrainAndDelete(ctx)` is the only graceful durable-deletion shape. Construction binds a private
+deletion closure to the exact stream/durable identity; callers receive no deletion capability separate from the
+handle. Drain must complete before deletion begins. An incomplete drain prevents deletion and permits a later caller
+to rejoin the same drain. Concurrent or repeated deletion calls issue at most one exact deletion and observe one
+retained result. Consumer-not-found after drain is benign success; every other failure, including an ambiguous
+deadline, is retained as non-clean and is not retried. Partial setup never publishes a handle, and its exact acquired
+resources are cleaned before return. Exact handle identity, not a rediscovered name, fences partial, duplicate, and
+stale ownership.
+
+`ManagedConsumer.OutstandingWork(ctx)` is the only outstanding-work query for a managed consumer. It reads the exact
+handle's bound consumer under the caller context; it does not rediscover a mutable stream/name identity through
+Client. The two callers in `processor/graph-ingest/readiness.go` and the caller in
+`processor/agentic-loop/inflight.go` migrate to their retained handles. `Client.OutstandingWork(stream,name)` retires
+without an alias.
+
+Client Close rejects new Client work, cancels and exactly joins only Client-owned health and metrics workers,
+initiates native connection Drain, observes native CLOSED, and returns one retained terminal result to repeated
+callers. An installed transport already closed before Close is failed even when `LastError()` is nil. Any historical
+or terminal non-nil `LastError()` conservatively makes the result non-clean; no drain-window callback state infers it
+away. Caller-budget expiry force-closes transport but remains failed. Close never enumerates, drains, aborts, deletes,
+or compensates for child resources and never launches detached cleanup. Subscription exposes Drain only: no exported
+Abort or Unsubscribe lifecycle escape exists.
+
+Synchronous Connect installs a private framework-owned `nats.FlusherTimeout(5*time.Second)` with no option, config, or
+environment knob. The ceiling makes a blocked native write/flush fail visibly so owner Stop and controlled shutdown
+can terminate rather than predict an adopter-provided timeout.
+
+Every controlled shutdown uses one fresh bounded shutdown context, stops admission owners, drains every exact owner
+handle while accepted-work authority remains live, cancels and joins remaining owner work, aggregates all Stop
+results, and only then invokes Client Close. Both clean and failed controlled shutdowns exit the current process.
+Clean versus failed controls exit status and observability only; neither authorizes Client reuse or in-process restart.
+Supervision starts a fresh process with a newly constructed Client and the latest committed desired state.
+
+Before the breaking tag, Client and framework constructors retire broad mutable native roots (`*nats.Conn`,
+`jetstream.JetStream`, `jetstream.Stream`, `jetstream.KeyValue`, `jetstream.ObjectStore`, or equivalent capabilities).
+Broad injected roots narrow to measured local interfaces. Reviewed message, value, watcher, lister, and future seams
+remain only with explicit caller context and local Stop/completion ownership. There is no `Unsafe*` compatibility
+alias, and sister repositories remain read-only to this change.
+
+## Approved-ruling conformance
+
+This contract-only slice claims no runtime implementation or proof. Each binding ruling maps to durable target-state
+text; every runtime task cited below remains unchecked.
+
+| Approved ruling | Contract evidence |
+|---|---|
+| Boot-only topology and dedicated rule-definition hot reload remain | `design.md:39`, `design.md:74` |
+| Dirty power and settlement stay Close-independent | `design.md:216`, `restart-safe-shutdown/spec.md:188` |
+| Resource owners retain and drain exact handles | `design.md:237`, `restart-safe-shutdown/spec.md:27` |
+| Quiesce and drain precede Start cancellation | `restart-safe-shutdown/spec.md:3` |
+| Exact deletion fences partial, duplicate, and stale ownership | `restart-safe-shutdown/spec.md:84` |
+| OutstandingWork is handle-local and three named callers migrate | `tasks.md:28` |
+| Compiler errors direct callers to retain the exact handle | `migration-restart-safe-nats-client.md:36` |
+| Abrupt Stop cannot become clean; no Abort/Unsubscribe escape exists | `restart-safe-shutdown/spec.md:77` |
+| Client Close is terminal transport-only | `restart-safe-shutdown/spec.md:121` |
+| Preclosed, LastError, deadline, and repeated-Close truth is retained | `restart-safe-shutdown/spec.md:128` |
+| Connect owns a private five-second flusher ceiling | `restart-safe-shutdown/spec.md:134` |
+| Every controlled result exits to a supervisor-started fresh process | `restart-safe-shutdown/spec.md:219` |
+| ConsumeDurable retires | `jetstream-consumer-policy/spec.md:9` |
+| Historical ADR-070 remains unchanged | `094-boot-only-composition-and-observable-rule-activation.md:163` |
+| Broad roots retire or narrow to locally owned seams | `native-surface-inventory.md:134` |
+| Six-PR order binds; runtime and proof tasks remain unchecked | `tasks.md:14` |
+| Reset inventory approval artifact and SHA are durable | `inventory.md:5` |
+| Minimal lifecycle design approval artifact and SHA are durable | `design.md:15` |
+| Native inventory is byte-identical to its approved SHA | `native-surface-inventory.md:1`, `inventory.md:113` |
 
 ## Risks and mitigations
 
