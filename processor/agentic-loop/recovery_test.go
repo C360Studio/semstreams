@@ -5,9 +5,75 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 )
+
+type contextCapturingGovernanceDispatcher struct {
+	received chan context.Context
+	release  chan struct{}
+}
+
+func (d *contextCapturingGovernanceDispatcher) Propose(
+	ctx context.Context,
+	_, _ string,
+	calls []agentic.ToolCall,
+) (DispatcherResult, error) {
+	d.received <- ctx
+	<-d.release
+	return DispatcherResult{Approved: calls}, ctx.Err()
+}
+
+func (*contextCapturingGovernanceDispatcher) HandleVerdict(string, string, []byte) {}
+func (*contextCapturingGovernanceDispatcher) Mode() string                         { return "enforce" }
+
+func TestHandleModelResponsePropagatesContextToGovernance(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	loopID, err := handler.loopManager.CreateLoop("task-context", "general", "m", 20)
+	if err != nil {
+		t.Fatalf("CreateLoop: %v", err)
+	}
+	dispatcher := &contextCapturingGovernanceDispatcher{
+		received: make(chan context.Context, 1),
+		release:  make(chan struct{}),
+	}
+	handler.SetGovernanceDispatcher(dispatcher)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	returned := make(chan error, 1)
+	go func() {
+		_, handleErr := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+			RequestID: "request-context",
+			Status:    agentic.StatusToolCall,
+			Message: agentic.ChatMessage{ToolCalls: []agentic.ToolCall{
+				{ID: "call-context", Name: "test_tool"},
+			}},
+		})
+		returned <- handleErr
+	}()
+
+	var received context.Context
+	select {
+	case received = <-dispatcher.received:
+	case <-time.After(time.Second):
+		t.Fatal("governance Propose was not called")
+	}
+	if received != ctx {
+		t.Errorf("governance received a substituted context")
+	}
+	cancel()
+	close(dispatcher.release)
+
+	select {
+	case err = <-returned:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("HandleModelResponse error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("HandleModelResponse did not return after governance released")
+	}
+}
 
 // TestSynthesizeToolFailure_StoresResultWithProvidedName verifies the
 // helper writes a synthetic ToolResult into the loop's result map with
@@ -504,7 +570,7 @@ func TestHandleToolCallResponse_AllDispatchesFail(t *testing.T) {
 	}
 
 	result := &HandlerResult{}
-	if err := handler.handleToolCallResponse(result, loopID, bad); err != nil {
+	if err := handler.handleToolCallResponse(context.Background(), result, loopID, bad); err != nil {
 		t.Fatalf("handleToolCallResponse: %v", err)
 	}
 

@@ -34,6 +34,29 @@ func TerminateDelivery(err error) error {
 	return &PermanentDeliveryError{err: err}
 }
 
+func nonCancellationWorkError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		var retained []error
+		for _, child := range joined.Unwrap() {
+			if child = nonCancellationWorkError(child); child != nil {
+				retained = append(retained, child)
+			}
+		}
+		return errors.Join(retained...)
+	}
+	if unwrapped := errors.Unwrap(err); unwrapped != nil &&
+		(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		return nonCancellationWorkError(unwrapped)
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return nil
+	}
+	return err
+}
+
 // ConsumeWithHeartbeat runs work in a goroutine while periodically calling
 // msg.InProgress() to reset the AckWait clock. This allows short AckWait
 // values for failure detection while supporting arbitrarily long processing.
@@ -46,6 +69,8 @@ func TerminateDelivery(err error) error {
 // On other work error: msg.NakWithDelay(30s) to allow breathing room before retry
 // On context cancellation: msg.NakWithDelay(5s) for graceful shutdown
 // On InProgress failure: returns error (message will be redelivered by server)
+// Cancellation and heartbeat failure wait for work to exit before returning
+// delivery control.
 func ConsumeWithHeartbeat(
 	ctx context.Context,
 	msg jetstream.Msg,
@@ -74,8 +99,13 @@ func ConsumeWithHeartbeat(
 				slog.Warn("Failed to send InProgress heartbeat",
 					"error", err,
 					"subject", msg.Subject())
-				workCancel() // stop the orphaned work goroutine
-				return errors.Join(ErrHeartbeatFailed, fmt.Errorf("failed to send InProgress: %w", err))
+				workCancel()
+				workErr := <-done
+				heartbeatErr := errors.Join(ErrHeartbeatFailed, fmt.Errorf("failed to send InProgress: %w", err))
+				if cleanupErr := nonCancellationWorkError(workErr); cleanupErr != nil {
+					return errors.Join(heartbeatErr, fmt.Errorf("work cleanup after heartbeat failure: %w", cleanupErr))
+				}
+				return heartbeatErr
 			}
 
 		case err := <-done:
@@ -105,6 +135,8 @@ func ConsumeWithHeartbeat(
 			return msg.Ack()
 
 		case <-ctx.Done():
+			workCancel()
+			<-done
 			if nakErr := msg.NakWithDelay(5 * time.Second); nakErr != nil {
 				return errors.Join(ctx.Err(), fmt.Errorf("NAK cancelled delivery: %w", nakErr))
 			}

@@ -1165,7 +1165,7 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 		// future truncation can self-heal once.
 		h.loopManager.ResetTruncationRetry(loopID)
 
-		if err := h.handleToolCallResponse(&result, loopID, response.Message.ToolCalls); err != nil {
+		if err := h.handleToolCallResponse(ctx, &result, loopID, response.Message.ToolCalls); err != nil {
 			return result, err
 		}
 
@@ -1213,7 +1213,12 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 // proposed via the dispatcher; rejected calls receive immediate error results
 // and approved calls are dispatched. Domain metadata from the task is
 // propagated to each approved tool call.
-func (h *MessageHandler) handleToolCallResponse(result *HandlerResult, loopID string, toolCalls []agentic.ToolCall) error {
+func (h *MessageHandler) handleToolCallResponse(
+	ctx context.Context,
+	result *HandlerResult,
+	loopID string,
+	toolCalls []agentic.ToolCall,
+) error {
 	for index, toolCall := range toolCalls {
 		h.loopManager.TrackToolOrdinal(toolCall.ID, uint32(index+1))
 	}
@@ -1254,7 +1259,7 @@ func (h *MessageHandler) handleToolCallResponse(result *HandlerResult, loopID st
 	// same shape as the in-process filter's rejection path below.
 	if h.governanceDispatcher != nil {
 		parentLoopID := h.resolveParentLoopID(loopID)
-		govResult, gErr := h.governanceDispatcher.Propose(context.Background(), loopID, parentLoopID, toolCalls)
+		govResult, gErr := h.governanceDispatcher.Propose(ctx, loopID, parentLoopID, toolCalls)
 		if gErr != nil {
 			// Governance-layer failure that isn't a per-call rejection
 			// is currently reserved (ErrGovernancePublishFailed) — the

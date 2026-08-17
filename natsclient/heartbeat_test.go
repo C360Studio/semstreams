@@ -20,9 +20,14 @@ type mockMsg struct {
 	data            []byte
 	ackCalled       atomic.Bool
 	nakCalled       atomic.Bool
+	ackCount        atomic.Int32
+	nakCount        atomic.Int32
 	nakDelay        atomic.Int64 // stored as nanoseconds
 	inProgressCount atomic.Int32
 	termCalled      atomic.Bool
+	termCount       atomic.Int32
+	order           *atomic.Int64
+	settlementOrder atomic.Int64
 
 	mu            sync.Mutex
 	inProgressErr error
@@ -39,6 +44,8 @@ func (m *mockMsg) Metadata() (*jetstream.MsgMetadata, error) { return nil, nil }
 
 func (m *mockMsg) Ack() error {
 	m.ackCalled.Store(true)
+	m.ackCount.Add(1)
+	m.recordSettlement()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.ackErr
@@ -48,11 +55,15 @@ func (m *mockMsg) DoubleAck(_ context.Context) error { return nil }
 
 func (m *mockMsg) Nak() error {
 	m.nakCalled.Store(true)
+	m.nakCount.Add(1)
+	m.recordSettlement()
 	return nil
 }
 
 func (m *mockMsg) NakWithDelay(delay time.Duration) error {
 	m.nakCalled.Store(true)
+	m.nakCount.Add(1)
+	m.recordSettlement()
 	m.nakDelay.Store(int64(delay))
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -68,6 +79,8 @@ func (m *mockMsg) InProgress() error {
 
 func (m *mockMsg) Term() error {
 	m.termCalled.Store(true)
+	m.termCount.Add(1)
+	m.recordSettlement()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.termErr
@@ -103,7 +116,15 @@ func TestConsumeWithHeartbeatSurfacesSettlementErrors(t *testing.T) {
 
 func (m *mockMsg) TermWithReason(_ string) error {
 	m.termCalled.Store(true)
+	m.termCount.Add(1)
+	m.recordSettlement()
 	return nil
+}
+
+func (m *mockMsg) recordSettlement() {
+	if m.order != nil {
+		m.settlementOrder.CompareAndSwap(0, m.order.Add(1))
+	}
 }
 
 func TestConsumeWithHeartbeat_AcksOnSuccess(t *testing.T) {
@@ -160,28 +181,49 @@ func TestConsumeWithHeartbeatTermsPermanentWorkError(t *testing.T) {
 }
 
 func TestConsumeWithHeartbeat_NaksOnContextCancel(t *testing.T) {
-	msg := &mockMsg{subject: "test.subject"}
-	ctx, cancel := context.WithCancel(context.Background())
+	var order atomic.Int64
+	msg := &mockMsg{subject: "test.subject", order: &order}
+	ctx, cancel := context.WithCancel(t.Context())
+	workStarted := make(chan struct{})
+	workCancelled := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	returned := make(chan error, 1)
+	var workExitOrder atomic.Int64
+	var helperReturnOrder atomic.Int64
 
-	// Cancel context after a short delay
 	go func() {
-		time.Sleep(20 * time.Millisecond)
-		cancel()
+		err := ConsumeWithHeartbeat(
+			ctx,
+			msg,
+			time.Second,
+			func(workCtx context.Context) error {
+				close(workStarted)
+				<-workCtx.Done()
+				close(workCancelled)
+				<-releaseCleanup
+				workExitOrder.Store(order.Add(1))
+				return workCtx.Err()
+			},
+		)
+		helperReturnOrder.Store(order.Add(1))
+		returned <- err
 	}()
 
-	err := ConsumeWithHeartbeat(
-		ctx,
-		msg,
-		10*time.Millisecond,
-		func(workCtx context.Context) error {
-			<-workCtx.Done()
-			// Simulate work noticing cancellation but taking time to clean up
-			time.Sleep(50 * time.Millisecond)
-			return workCtx.Err()
-		},
-	)
+	<-workStarted
+	cancel()
+	<-workCancelled
+	close(releaseCleanup)
+	var err error
+	select {
+	case err = <-returned:
+	case <-time.After(time.Second):
+		require.FailNow(t, "ConsumeWithHeartbeat did not return after work cleanup")
+	}
 
 	require.ErrorIs(t, err, context.Canceled)
+	assert.Positive(t, workExitOrder.Load())
+	assert.Greater(t, msg.settlementOrder.Load(), workExitOrder.Load(), "work exit must precede settlement")
+	assert.Greater(t, helperReturnOrder.Load(), msg.settlementOrder.Load(), "settlement must precede helper return")
 	assert.True(t, msg.nakCalled.Load(), "expected NakWithDelay to be called")
 	assert.Equal(t, int64(5*time.Second), msg.nakDelay.Load(), "expected 5s delay")
 }
@@ -230,28 +272,91 @@ func TestConsumeWithHeartbeat_ReturnsErrorOnInProgressFailure(t *testing.T) {
 }
 
 func TestConsumeWithHeartbeat_CancelsWorkOnInProgressFailure(t *testing.T) {
+	var order atomic.Int64
 	msg := &mockMsg{
 		subject:       "test.subject",
 		inProgressErr: errors.New("connection lost"),
+		order:         &order,
+	}
+	workStarted := make(chan struct{})
+	workCancelled := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	returned := make(chan error, 1)
+	var workExitOrder atomic.Int64
+	var helperReturnOrder atomic.Int64
+
+	go func() {
+		err := ConsumeWithHeartbeat(
+			t.Context(),
+			msg,
+			time.Millisecond,
+			func(workCtx context.Context) error {
+				close(workStarted)
+				<-workCtx.Done()
+				close(workCancelled)
+				<-releaseCleanup
+				workExitOrder.Store(order.Add(1))
+				return workCtx.Err()
+			},
+		)
+		helperReturnOrder.Store(order.Add(1))
+		returned <- err
+	}()
+
+	<-workStarted
+	<-workCancelled
+	close(releaseCleanup)
+	var err error
+	select {
+	case err = <-returned:
+	case <-time.After(time.Second):
+		require.FailNow(t, "ConsumeWithHeartbeat did not return after work cleanup")
 	}
 
-	var workCancelled atomic.Bool
+	require.ErrorIs(t, err, ErrHeartbeatFailed)
+	assert.Contains(t, err.Error(), "failed to send InProgress")
+	assert.Positive(t, workExitOrder.Load())
+	assert.Greater(t, helperReturnOrder.Load(), workExitOrder.Load(), "work exit must precede helper return")
+	assert.Zero(t, msg.ackCount.Load(), "heartbeat failure must not ACK")
+	assert.Zero(t, msg.nakCount.Load(), "heartbeat failure must remain unsettled")
+	assert.Zero(t, msg.termCount.Load(), "heartbeat failure must not terminate")
+}
+func TestConsumeWithHeartbeat_JoinsCleanupErrorOnInProgressFailure(t *testing.T) {
+	cleanupErr := errors.New("cleanup failed")
+	heartbeatErr := errors.New("connection lost")
+	msg := &mockMsg{
+		subject:       "test.subject",
+		inProgressErr: heartbeatErr,
+	}
+
 	err := ConsumeWithHeartbeat(
-		context.Background(),
+		t.Context(),
 		msg,
-		10*time.Millisecond,
+		time.Millisecond,
 		func(workCtx context.Context) error {
 			<-workCtx.Done()
-			workCancelled.Store(true)
-			return workCtx.Err()
+			return cleanupErr
 		},
 	)
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to send InProgress")
-	// Give the goroutine a moment to observe cancellation
-	time.Sleep(20 * time.Millisecond)
-	assert.True(t, workCancelled.Load(), "work goroutine should be cancelled on heartbeat failure")
+	require.ErrorIs(t, err, ErrHeartbeatFailed)
+	require.ErrorIs(t, err, heartbeatErr)
+	require.ErrorIs(t, err, cleanupErr)
+}
+
+func TestConsumeWithHeartbeat_RetainsCleanupErrorJoinedWithCancellation(t *testing.T) {
+	cleanupErr := errors.New("cleanup failed")
+	heartbeatErr := errors.New("connection lost")
+	msg := &mockMsg{subject: "test.subject", inProgressErr: heartbeatErr}
+
+	err := ConsumeWithHeartbeat(t.Context(), msg, time.Millisecond, func(workCtx context.Context) error {
+		<-workCtx.Done()
+		return errors.Join(workCtx.Err(), cleanupErr)
+	})
+
+	require.ErrorIs(t, err, ErrHeartbeatFailed)
+	require.ErrorIs(t, err, heartbeatErr)
+	require.ErrorIs(t, err, cleanupErr)
 }
 
 func TestConsumeWithHeartbeat_FastWorkNoHeartbeat(t *testing.T) {
