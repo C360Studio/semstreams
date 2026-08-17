@@ -24,16 +24,20 @@ SHALL NOT add a separate quiesce method unless implementation inventory proves `
 - **THEN** shutdown returns a typed error naming the incomplete phase and owner
 - **AND** the process does not report a clean restart boundary
 
-### Requirement: Graceful NATS teardown uses authoritative native drain
+### Requirement: Graceful NATS teardown is owned by exact returned handles
 
-Every managed JetStream consumer SHALL stop new delivery with native `ConsumeContext.Drain` and SHALL wait for its
-`Closed` channel. Every core NATS subscription SHALL use native subscription Drain and SHALL wait for authoritative
-closure. Graceful shutdown SHALL NOT use `ConsumeContext.Stop` or `Subscription.Unsubscribe`, because those operations
-may discard buffered delivery.
+Every owner of a managed JetStream consumer SHALL retain the exact handle returned by consume setup, invoke native
+`ConsumeContext.Drain` through that handle during `Stop(ctx)`, and wait for its `Closed` channel before canceling the
+Start-owned handler authority. Every owner of a core NATS subscription SHALL retain the exact returned subscription
+wrapper, invoke native subscription Drain, and wait for authoritative closure before Start cancellation.
 
-Client-wide close SHALL rejoin every remaining consumer and subscription drain before draining and closing the NATS
-connection. Caller deadline MAY force transport close, but that path SHALL preserve and report the drain failure and
-SHALL NOT launch detached cleanup.
+Graceful shutdown SHALL NOT use `ConsumeContext.Stop` or subscription `Unsubscribe`, because those operations may
+discard buffered delivery. An abrupt Stop/Unsubscribe path SHALL be non-clean even if later transport Close succeeds.
+Client SHALL NOT catalog, rediscover, drain, abort, delete, or compensate for child resources during Close.
+
+Managed-consumer outstanding-work observation SHALL be handle-local. `ManagedConsumer.OutstandingWork(ctx)` SHALL read
+the exact consumer bound to that handle under the caller context. `Client.OutstandingWork(stream,name)` and equivalent
+name-rediscovery aliases SHALL NOT exist.
 
 #### Scenario: JetStream callback buffer drains
 
@@ -55,6 +59,131 @@ SHALL NOT launch detached cleanup.
 - **WHEN** a later authorized Stop is called
 - **THEN** it rejoins the same drain operation
 - **AND** no second drain or detached cleanup starts
+
+#### Scenario: Outstanding work uses exact ownership
+
+- **GIVEN** an owner retained the managed-consumer handle returned by setup
+- **WHEN** readiness or in-flight accounting queries outstanding work
+- **THEN** it calls `OutstandingWork(ctx)` on that exact handle
+- **AND** Client does not rediscover a consumer from caller-supplied stream and durable names
+
+#### Scenario: Owner drain precedes Start cancellation
+
+- **GIVEN** an owner has admitted a callback under its Start authority
+- **WHEN** controlled Stop begins
+- **THEN** the owner closes admission and drains its exact handle while that callback authority remains live
+- **AND** it cancels and joins remaining Start-owned work only after authoritative drain completion
+
+#### Scenario: Abrupt child stop cannot become false-clean
+
+- **GIVEN** an owner uses consumer Stop or subscription Unsubscribe during controlled shutdown
+- **WHEN** final transport Close later succeeds
+- **THEN** the owner result remains failed
+- **AND** Client Close does not relabel discarded or unproved callback work as clean
+
+### Requirement: Exact managed-consumer deletion is private, drain-first, and fenced
+
+`ManagedConsumer.DrainAndDelete(ctx)` SHALL be the only graceful durable-consumer deletion surface. Consume setup
+SHALL bind private deletion authority to the exact stream and durable identity acquired by that handle. Client SHALL
+NOT expose a name-routed administrative graceful delete or rediscover deletion authority from mutable catalog state.
+
+DrainAndDelete SHALL rejoin the handle's one native drain and SHALL NOT begin deletion until exact `Closed` is
+observed. A drain deadline SHALL prevent deletion and permit a later caller to rejoin. Concurrent or repeated callers
+SHALL issue at most one bound deletion and SHALL observe its one retained terminal result. Consumer-not-found after
+drain SHALL be benign success; any other deletion failure, including an ambiguous deadline, SHALL remain non-clean and
+SHALL NOT be retried in process.
+
+If consume setup fails after partial acquisition, it SHALL NOT publish a handle. It SHALL clean only the exact partial
+resources it acquired and SHALL fence duplicate or stale cleanup from deleting another owner's durable. Exact acquired
+identity, not a later name lookup, SHALL be the deletion authority.
+
+#### Scenario: Exact-handle deletion cannot outrun drain
+
+- **GIVEN** a managed-consumer owner requests graceful durable deletion
+- **WHEN** `DrainAndDelete(ctx)` runs
+- **THEN** it initiates and joins the exact handle's native Drain before durable deletion
+- **AND** an incomplete drain prevents deletion
+
+#### Scenario: Repeated deletion has one retained result
+
+- **GIVEN** concurrent or repeated callers request deletion through one exact handle
+- **WHEN** drain completes
+- **THEN** at most one bound deletion runs
+- **AND** every caller observes the same retained terminal result or its own waiting-context error
+
+#### Scenario: Partial acquisition cannot delete foreign state
+
+- **GIVEN** consume setup acquired only part of its exact resource set and then failed
+- **WHEN** rollback runs concurrently with another owner or a later setup
+- **THEN** no handle is published for the failed setup
+- **AND** cleanup is fenced to the exact partial acquisition and cannot delete a duplicate or stale namesake
+
+### Requirement: Client Close is terminal transport-only and conservatively truthful
+
+Client Close SHALL reject new Client work, cancel and exactly join only Client-owned health and metrics workers,
+register native CLOSED observation before initiating connection Drain, wait for CLOSED, clear native authority, and
+retain one terminal result. Repeated Close calls SHALL serialize and return that retained result; they SHALL NOT start
+another drain or cleanup generation.
+
+An installed connection already closed before Client Close SHALL produce retained non-clean preclosed-transport
+failure even when native `LastError()` is nil. Any non-nil `LastError()` observed before drain or after CLOSED SHALL
+conservatively make the result non-clean; Client SHALL NOT add drain-window callback state to infer historical errors
+away. Caller deadline MAY force native Close, but the retained result SHALL name failure and Close SHALL still join its
+owned workers and CLOSED observation without detached cleanup.
+
+Connect SHALL install private framework-owned `nats.FlusherTimeout(5*time.Second)`. No option, config, or environment
+surface SHALL expose that timeout. A blocked native write or flush SHALL fail within that ceiling so controlled
+shutdown can report failure and exit.
+
+The core subscription wrapper SHALL expose Drain as its only graceful lifecycle operation. It SHALL expose no Abort or
+Unsubscribe method. Client Close SHALL NOT enumerate, drain, abort, delete, or wait for managed consumers or core
+subscriptions and SHALL NOT claim their accepted work settled.
+
+#### Scenario: Preclosed installed transport is not clean
+
+- **GIVEN** Client still owns an installed connection that was closed outside Client
+- **AND** native LastError is nil
+- **WHEN** Client Close runs
+- **THEN** it returns retained non-clean preclosed-transport failure
+
+#### Scenario: Historical transport error is conservatively non-clean
+
+- **GIVEN** LastError is non-nil before native drain begins
+- **WHEN** native drain later reaches CLOSED
+- **THEN** Close still returns non-clean transport-history failure
+- **AND** it creates no drain-window callback state to infer the error away
+
+#### Scenario: Repeated Close returns one terminal result
+
+- **GIVEN** one Close has started or completed terminal transport drain
+- **WHEN** another caller invokes Close
+- **THEN** it waits for or observes the same terminal operation
+- **AND** it returns the retained result without a second drain or detached cleanup
+
+#### Scenario: Blocked native write has a private framework ceiling
+
+- **GIVEN** a native socket write or flush cannot make progress
+- **WHEN** the private flusher timeout elapses
+- **THEN** the operation fails within five seconds and controlled shutdown can report failure
+- **AND** no adopter-facing timeout knob exists
+
+### Requirement: Broad NATS ownership roots retire before release
+
+Client and framework constructors SHALL NOT return raw `*nats.Conn`, `jetstream.JetStream`, `jetstream.Stream`,
+`jetstream.KeyValue`, `jetstream.ObjectStore`, or an equivalent broad mutable ownership root. Broad injected native
+roots SHALL narrow to the measured local method set unless a separately approved named adapter boundary proves that
+the caller already owns the root and the callee owns neither transport close nor rediscovery; the approved inventory
+contains no such exception.
+
+Reviewed native message, config, value, watcher, lister, and future seams MAY remain only when caller context bounds
+operation or acquisition and local Stop/completion ownership is explicit. No `Unsafe*` compatibility alias SHALL
+preserve a retired root. Sister repositories SHALL remain read-only to this change and migrate in their own work.
+
+#### Scenario: Framework constructor does not leak a mutable root
+
+- **WHEN** exported Client and framework constructor signatures are enumerated before the breaking tag
+- **THEN** no broad mutable native ownership root is returned
+- **AND** every retained narrow watcher, lister, or future seam names caller context and Stop/completion ownership
 
 ### Requirement: Durable settlement distinguishes completed from unfinished work
 
@@ -89,8 +218,14 @@ SHALL mean that accepted callbacks either committed and settled or remain recove
 
 ### Requirement: Restart safety is proven across a real process boundary
 
-The breaking boot-activation change SHALL NOT land until a real-process test starts SemStreams against retained NATS
-state, admits both in-flight and pending work, sends SIGTERM, observes a clean exit, and starts a new process with
+Every controlled shutdown SHALL terminate the current process. Composition SHALL use one fresh bounded shutdown
+context, stop admission owners, aggregate every owner Stop result, and call terminal Client Close only after every
+owner Stop returns. A nil aggregate SHALL produce clean observability and successful exit. Any owner or transport
+failure SHALL produce failed observability and nonzero exit. Neither result SHALL authorize Client reuse or an
+in-process runtime restart; supervision SHALL start a fresh process with a newly constructed Client.
+
+The breaking boot-activation change SHALL NOT land until real-process tests start SemStreams against retained NATS
+state, admit both in-flight and pending work, send SIGTERM, observe clean and failed exits, and start a new process with
 changed desired configuration.
 
 The proof SHALL show that acknowledged work has its committed semantic result, unfinished durable work is recovered,
@@ -104,6 +239,13 @@ in-process coverage is possible and in an E2E loop for process boundaries.
 - **WHEN** G exits through the complete graceful protocol and a new process boots
 - **THEN** the new process uses C'
 - **AND** no runtime from G remains active
+
+#### Scenario: Controlled shutdown always exits
+
+- **GIVEN** either a clean or failed all-owner Stop plus Client Close aggregate
+- **WHEN** controlled shutdown completes
+- **THEN** the current process exits with corresponding status and observability
+- **AND** supervision, not the old process, starts the next Client and runtime
 
 #### Scenario: Restart proof fails closed
 

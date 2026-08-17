@@ -41,8 +41,18 @@ large non-idiomatic surface to copy.
 - Make restart-safe shutdown a prerequisite for relying on boot activation. A controlled restart must quiesce new
   intake, drain already-accepted NATS callbacks, settle ACK/NAK and publications, cancel and join Start-owned work, and
   flush and close the NATS connection before exit.
-- Remove abrupt NATS `Stop` and `Unsubscribe` from graceful shutdown paths. Deadline-forced termination remains an
-  observable failed shutdown; it cannot be reported as a clean restart boundary.
+- Make the owner that starts each subscription or managed consumer retain and drain its exact returned handle before
+  Start cancellation. Retire zero-production-consumer `ConsumeDurable`; propagate exact handles through the three
+  retained consume constructors instead of making Client rediscover children by name.
+- Make Client Close terminal and transport-only: it joins only Client-owned health/metrics workers, native-drains the
+  connection, observes CLOSED and conservative error history, and never compensates for missing owner cleanup.
+- Remove abrupt NATS consumer `Stop` and subscription `Unsubscribe` from graceful shutdown paths. Deadline-forced
+  termination remains an observable failed shutdown; it cannot be reported as a clean restart boundary.
+- Retire broad mutable NATS roots returned by Client/framework constructors and narrow broad injected roots before the
+  breaking tag. Preserve only reviewed message/value/watcher/lister/future seams with explicit caller context and
+  local Stop/completion ownership; add no `Unsafe*` compatibility alias.
+- Require every controlled shutdown, clean or failed, to exit the current process. Exit status and observability name
+  the result; supervision always starts the next process with a fresh Client.
 - Make dirty restart correctness independent of shutdown hooks. Crash-critical work uses durable JetStream or KV,
   acknowledges only after durable effects commit, and converges safely when a crash causes redelivery.
 - Make every successful boot consume the latest committed desired state regardless of whether the previous process
@@ -82,7 +92,8 @@ large non-idiomatic surface to copy.
 - **Lifecycle:** ComponentManager owns one boot generation per admitted component and terminal shutdown. It no longer
   coordinates incumbent/candidate replacement.
 - **Restart safety:** the process signal path must preserve runtime authority until lifecycle owners quiesce and drain.
-  A graceful shutdown never silently converts native NATS drain into abrupt stop/unsubscribe.
+  A graceful shutdown never silently converts native NATS drain into abrupt stop/unsubscribe, and Client Close alone
+  never certifies owner callback settlement.
 - **Crash safety:** power loss runs no cleanup. Durable work remains recoverable and at-least-once redelivery converges;
   core NATS is not used for work whose loss would violate restart correctness.
 - **Observability:** rule writers receive a desired revision and can observe the terminal activation outcome for that
@@ -91,7 +102,8 @@ large non-idiomatic surface to copy.
 - **Deployment identity:** Rule hot reload requires a validated, stable `platform.instance_id`. Concurrent ownership of
   one process-slot/component/pack readiness key fails admission through compare-and-set rather than overwriting truth.
 - **Migration:** sister repositories remain read-only. Migration documentation names removed APIs and new response
-  semantics; downstream teams update their own repositories.
+  semantics, exact owner-handle adoption, `ConsumeDurable` retirement, and broad-root narrowing; downstream teams
+  update their own repositories. ADR-070 remains historical decision context rather than being rewritten.
 - **Release:** restart-safe shutdown is a prerequisite, not a follow-up. This pre-v1 breaking work requires controlled
   SIGTERM and SIGKILL restart evidence plus relevant core, structural, agentic, CRUD, and semantic E2E before the
   breaking commit lands.

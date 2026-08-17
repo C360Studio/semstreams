@@ -9,32 +9,48 @@
 - [x] 1.4 Revise `restore-go-lifecycle-ownership` P2/P3 target and tasks after this prerequisite is approved.
 - [x] 1.5 Run strict OpenSpec validation after every contract edit.
 
-## 2. Prove restart-safe shutdown
+## 2. Restart-safe shutdown reset and ordered delivery
 
-- [ ] 2.1 Inventory every production NATS consumer, core subscription, watcher, publisher, and connection owner; name
-  its graceful primitive, accepted-work boundary, settlement rule, and join proof.
-- [ ] 2.2 Separate controlled signal receipt from runtime Start-context cancellation so SIGTERM/SIGINT initiates
-  bounded quiesce before cancellation.
-- [ ] 2.3 Replace graceful JetStream `ConsumeContext.Stop` and core-NATS `Unsubscribe` with native drain plus
-  authoritative closure waiting. Preserve abrupt operations only for typed deadline-forced failure.
-- [ ] 2.4 Prove component Stop closes admission, drains accepted callbacks with a live work context, settles durable
-  ACK/NAK and required publications, then cancels and joins remaining Start-owned work.
-- [ ] 2.5 Make `natsclient.Client.Close(ctx)` rejoin all remaining consumer/subscription drains before connection drain
-  and close; surface every incomplete phase without detached cleanup.
-- [ ] 2.6 Add deterministic unit and integration tests for drain completion, deadline/rejoin, ACK-after-commit,
-  unfinished-work redelivery, publisher flush, repeated Stop, and signal/Stop races.
-- [ ] 2.7 Add a real-process SIGTERM/restart E2E known answer against retained NATS state. Require its clean-shutdown
-  proof as a release gate, but never use a clean-exit marker as a runtime gate on committed desired configuration.
-- [ ] 2.8 Inventory every crash-critical communication path and move any core-NATS-only work/fact path to durable
-  JetStream or KV according to the canonical four-test decision.
-- [ ] 2.9 Require file-backed live storage and declared replica-policy verification for desired config, activation
-  status, authoritative facts, and crash-critical work; fail boot on incompatible memory-backed resources.
-- [ ] 2.10 Add deterministic real-process SIGKILL tests after delivery, durable effect, publication, and before ACK;
-  prove retained-state redelivery, idempotent convergence, desired-config recovery, and honest external-effect limits.
-- [ ] 2.11 Kill SemStreams and its isolated NATS server without drain, restart NATS from the same file store, and prove
-  recovery. Do not touch Docker resources outside the test project's namespace.
-- [ ] 2.12 Prove every successful boot consumes the latest committed desired state after both clean and dirty exits;
-  clean-exit evidence is observability and never an activation gate.
+The six PRs below are dependency ordered. A later PR SHALL NOT land before its predecessor. Only the contract reset is
+complete; every runtime migration and proof remains unchecked.
+
+- [x] 2.1 **PR2-reset-contract.** Replace the Client-wide child-ledger contract with the approved owner-local exact
+  handle design; record the reset inventory, native-root disposition, `ConsumeDurable` retirement, terminal
+  transport-only Close, always-exit controlled restart, and migration sequence. Preserve the exact approved native
+  census at `openspec/changes/require-restart-for-config-activation/native-surface-inventory.md` with SHA-256
+  `d79df592e7049d4f0e3412bf41e8c61d44ea0829a6fddc2734cff40ceb966617`. Run strict OpenSpec validation only.
+- [ ] 2.2 **PR2-owner-handles.** While temporary Client catalogs still exist, return `*ManagedConsumer` from
+  `ConsumeStreamWithConfig`, `ConsumeStreamWithConfigContexts`, and `ConsumeInternalStreamWithConfig`; update every
+  interface, mock, test, and caller; retire zero-production-consumer `ConsumeDurable`; simplify core Subscription to
+  exact-handle Drain; and migrate every in-repo owner to quiesce, Drain/DrainAndDelete, wait authoritative closure,
+  settle accepted callbacks, then cancel and join Start-owned work. Keep catalogs only as temporary migration
+  scaffolding so partial acquisition, duplicate cleanup, or stale ownership cannot lose an owner. Add handle-local
+  `ManagedConsumer.OutstandingWork(ctx)`; migrate exactly the two callsites in
+  `processor/graph-ingest/readiness.go` and the one callsite in `processor/agentic-loop/inflight.go` to the handles
+  their owners retain; retire `Client.OutstandingWork(stream,name)` without an alias.
+- [ ] 2.3 **PR2-client-minimal.** After every owner retains its exact handle, remove Client child catalogs,
+  name-routed Stop/Delete, setup/delete reservations, generations, admission gates, readiness latches, publisher
+  convergence, and forced child cleanup. Make Connect synchronous with private `nats.FlusherTimeout(5s)` and no knob.
+  Make Close terminal transport-only: reject later work; cancel/join health and metrics; native-drain and observe
+  CLOSED; classify preclosed transport and any historical/terminal `LastError` as non-clean; force close on caller
+  expiry without reporting clean; retain one result for repeated Close. Expose no Subscription Abort or Unsubscribe.
+- [ ] 2.4 **PR2-raw-capabilities.** Execute every RETIRE/NARROW row in the approved native-surface inventory. Remove
+  broad mutable roots returned by Client/framework constructors, narrow broad injected roots to measured local method
+  sets, and preserve only reviewed message/value/watcher/lister/future seams with caller context and local
+  Stop/completion ownership. Add no `Unsafe*` alias and edit no sister repository.
+- [ ] 2.5 **PR2-composition-proof.** Separate controlled signal receipt from Start-context cancellation. Use one fresh
+  bounded shutdown context; stop admission owners; drain exact handles while accepted-work authority remains live;
+  aggregate every owner Stop result; then call Client Close. Prove ACK-after-commit, unfinished-work redelivery,
+  publisher flush, repeated Stop/Close, and signal races. Add a real-process SIGTERM known answer proving that clean
+  shutdown exits zero, failed owner/transport shutdown exits nonzero, both processes terminate, and supervision boots
+  a fresh process and Client with latest desired configuration. A clean marker remains observability, never an
+  activation gate.
+- [ ] 2.6 **PR2-dirty-proof.** Inventory every crash-critical communication path and move any core-NATS-only critical
+  work/fact to durable JetStream or KV using the canonical four-test decision. Require file-backed live resources and
+  verify declared replica policy. Add deterministic real-process SIGKILL tests after delivery, durable effect,
+  publication, and before ACK; kill SemStreams and its isolated NATS server without drain; restart from the same file
+  store; and prove retained-state redelivery, idempotent convergence, latest desired-state recovery, and honest
+  external-effect limits. Do not touch Docker resources outside the test project's namespace.
 
 ## 3. Retire generic runtime composition mutation
 
