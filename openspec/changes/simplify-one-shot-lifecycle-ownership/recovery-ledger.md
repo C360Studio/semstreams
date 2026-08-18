@@ -122,6 +122,20 @@ The inventory-first reconciliation design is recorded in
 `9af0ceeacae2dc0a854b0337f5eb6dd19710a90fde586944e7f9bca0b06df039`); design only, with no runtime or proof credit.
 Applying the approved authority reconciliation changes no runtime-migration or proof completion credit.
 
+PR #990 truth-reset inventory revision 1 was superseded before its first commit; its bytes are not a durable artifact.
+This ledger retains only SHA-256 `a3e83b5843381b6d69183c959b0497be7c6d0f0d4538aade5f6604d637e69817`, measured from current-main baseline
+`eb1f6d7758f75a2ff5598e2ca92af92e8c21d753` against historical PR head
+`8f19ef3678a549913385b090e4de1766a7a43a27`, independent `semstreams-reviewer` verdict
+`INVENTORY CHANGES REQUESTED`, and the zero implementation, lifecycle, proof, or release-credit outcome.
+
+PR #990 truth-reset inventory revision 2:
+[`pr990-truth-reset-inventory.md`](../require-restart-for-config-activation/pr990-truth-reset-inventory.md),
+measured from the same baseline and historical head. SHA-256:
+`5256057932030c7e854a3889ae2756fbec577870ee5e5c9c7c0e8ab86874541d`. Independent
+`semstreams-reviewer` verdict: `INVENTORY PASS`. Revision 2
+supersedes revision 1 only as the inventory submitted for re-review. PR #990
+continues to receive zero implementation, lifecycle, proof, or release credit.
+
 The authoritative eight-worktree evidence, binding classifications, bounded preservation sets, and exact cleanup
 scope are recorded in [`worktree-recovery-manifest.md`](worktree-recovery-manifest.md). No dirty lifecycle worktree may
 be removed until that manifest is merged and its two bounded preservation artifacts are verified.
