@@ -22,25 +22,20 @@ import (
 //   - Node.Config = component config as map[string]any
 //   - Positions are auto-calculated using grid layout
 //
-// Connections are left empty as they require runtime component instances
-// to derive from port subject matching. Users can connect nodes in the UI.
+// Connections are left empty. A caller may use the flow validator's detached
+// port discovery to suggest connections, or users can author them directly.
 func FromComponentConfigs(name string, configs map[string]types.ComponentConfig) (*Flow, error) {
-	now := time.Now()
-
 	flow := &Flow{
-		ID:           uuid.New().String(),
-		Name:         name,
-		Description:  "Auto-generated from static configuration",
-		Version:      1,
-		RuntimeState: StateRunning, // Static configs are already running at startup
-		DeployedAt:   &now,
-		StartedAt:    &now,
-		CreatedAt:    now,
-		UpdatedAt:    now,
-		LastModified: now,
-		Nodes:        make([]FlowNode, 0, len(configs)),
-		Connections:  []FlowConnection{}, // Empty - connections derived at runtime
+		ID:          uuid.New().String(),
+		Name:        name,
+		Description: "Auto-generated from static configuration",
+		Version:     1,
+		CreatedAt:   time.Now(),
+		Nodes:       make([]FlowNode, 0, len(configs)),
+		Connections: []FlowConnection{}, // Empty - connections are diagram authoring data
 	}
+	flow.UpdatedAt = flow.CreatedAt
+	flow.LastModified = flow.CreatedAt
 
 	// Sort keys for deterministic node ordering
 	keys := make([]string, 0, len(configs))
@@ -57,7 +52,6 @@ func FromComponentConfigs(name string, configs map[string]types.ComponentConfig)
 		if !cfg.Enabled {
 			continue
 		}
-
 		// Convert json.RawMessage to map[string]any
 		var configMap map[string]any
 		if len(cfg.Config) > 0 {
@@ -80,7 +74,6 @@ func FromComponentConfigs(name string, configs map[string]types.ComponentConfig)
 		}
 		flow.Nodes = append(flow.Nodes, node)
 	}
-
 	return flow, nil
 }
 

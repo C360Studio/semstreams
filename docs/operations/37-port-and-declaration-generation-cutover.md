@@ -39,10 +39,10 @@ direction are rejected. Components continue to expose `InputPorts()` and `Output
 ## Component admission and declaration snapshots
 
 Identity-free Registry admission is removed. Construct components through their registered factory and the normal
-ComponentManager path so Registry can retain the factory identity and one immutable declaration generation.
+ComponentManager path so Registry can retain the factory identity and one immutable boot declaration.
 
-Registry generation snapshot and observer APIs are internal framework coordination surfaces. Downstream components
-must not treat them as a public integration API or a durable declaration feed.
+Registry defensive snapshot reads are internal framework coordination surfaces. Downstream components must not treat
+them as a public integration API. Registry exposes no observer or declaration feed.
 
 ## Services are restart-only composition
 

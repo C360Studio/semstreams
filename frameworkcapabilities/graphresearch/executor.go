@@ -65,8 +65,8 @@ type ResearchKVWriter interface {
 // AGENT_LOOPS:
 //
 //  1. A LoopEntity at key <loopID> with role=research_pipeline so
-//     downstream tools (read_loop_result, flow_monitor) can find
-//     the operation by its loop ID.
+//     downstream tools such as read_loop_result can find the operation by its
+//     loop ID.
 //
 //  2. The research_intent payload wrapped in a BaseMessage envelope
 //     at key research.request.received.<loopID> — the R0 trigger key.

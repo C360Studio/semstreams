@@ -87,6 +87,6 @@ Documented in [`docs/adr/045-graph-search-rule-chain.md`](../../../docs/adr/045-
   (currently defaults of 2 and 5).
 - LLM-driven decomp expansion for novel topics (Phase 1 uses
   template fast-path only).
-- Standalone deployable flow via `start_flow` (ADR-042 Phase 4).
+- A separately composed boot configuration for standalone deployment; saved-flow authoring no longer exposes `start_flow`.
 - ops `emit_diagnosis` flags for `route_search` / `assess` /
   `synthesize` quality.

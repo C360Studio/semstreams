@@ -76,10 +76,11 @@ an error.
 
 ### Supported Construction Boundary
 
-Production flow graphs are built by the framework service root from complete, admitted Registry
-generation snapshots. `service.ComponentManager` owns that construction and its cache. Component
-authors declare ports and use the normal component admission lifecycle; they do not construct a
-`FlowGraph` or add nodes directly.
+Production flow graphs are built once by the framework service root from the complete, admitted
+Registry declaration set captured at boot. `service.ComponentManager` owns that construction and
+its cache for the process lifetime. Component authors declare ports and use normal boot admission;
+they do not construct a `FlowGraph` or add nodes directly. Later desired-state writes affect the
+next process start and do not rebuild the running graph.
 
 Direct downstream graph assembly is retired. Registry-to-node ingestion remains an internal
 framework seam so flow validation consumes the same retained declaration and normalized facts as
@@ -87,7 +88,7 @@ the other Registry-backed runtime views.
 
 ### Flow Analysis
 
-Obtain the graph through the running component manager, then use its read and analysis methods:
+Obtain the sealed boot graph through the component manager, then use its read and analysis methods:
 
 ```go
 graph, err := componentManager.GetFlowGraph()

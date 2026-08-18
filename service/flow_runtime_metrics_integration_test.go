@@ -65,7 +65,6 @@ func TestRuntimeMetricsIntegration(t *testing.T) {
 				},
 			},
 		},
-		RuntimeState: flowstore.StateRunning,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 		LastModified: time.Now(),
@@ -99,7 +98,7 @@ func TestRuntimeMetricsIntegration(t *testing.T) {
 
 	// Test 1: Successful request (may fail to Prometheus but should return health-only)
 	t.Run("GetMetrics", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/flowbuilder/flows/metrics-test-flow/runtime/metrics", nil)
+		req := httptest.NewRequest(http.MethodGet, "/flowbuilder/flows/metrics-test-flow/observations/metrics", nil)
 		req.SetPathValue("id", "metrics-test-flow")
 		w := httptest.NewRecorder()
 
@@ -132,7 +131,7 @@ func TestRuntimeMetricsIntegration(t *testing.T) {
 
 	// Test 2: Non-existent flow
 	t.Run("FlowNotFound", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/flowbuilder/flows/nonexistent/runtime/metrics", nil)
+		req := httptest.NewRequest(http.MethodGet, "/flowbuilder/flows/nonexistent/observations/metrics", nil)
 		req.SetPathValue("id", "nonexistent")
 		w := httptest.NewRecorder()
 
@@ -147,7 +146,6 @@ func TestRuntimeMetricsIntegration(t *testing.T) {
 			ID:           "empty-flow",
 			Name:         "Empty Flow",
 			Nodes:        []flowstore.FlowNode{},
-			RuntimeState: flowstore.StateNotDeployed,
 			CreatedAt:    time.Now(),
 			UpdatedAt:    time.Now(),
 			LastModified: time.Now(),
@@ -160,7 +158,7 @@ func TestRuntimeMetricsIntegration(t *testing.T) {
 			_ = flowStore.Delete(context.Background(), emptyFlow.ID)
 		}()
 
-		req := httptest.NewRequest(http.MethodGet, "/flowbuilder/flows/empty-flow/runtime/metrics", nil)
+		req := httptest.NewRequest(http.MethodGet, "/flowbuilder/flows/empty-flow/observations/metrics", nil)
 		req.SetPathValue("id", "empty-flow")
 		w := httptest.NewRecorder()
 
@@ -250,7 +248,6 @@ func TestRuntimeMetrics_WithMockPrometheus(t *testing.T) {
 				Type:      types.ComponentTypeInput,
 			},
 		},
-		RuntimeState: flowstore.StateRunning,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 		LastModified: time.Now(),
@@ -281,7 +278,7 @@ func TestRuntimeMetrics_WithMockPrometheus(t *testing.T) {
 	}
 
 	// Make request
-	req := httptest.NewRequest(http.MethodGet, "/flowbuilder/flows/prometheus-test-flow/runtime/metrics", nil)
+	req := httptest.NewRequest(http.MethodGet, "/flowbuilder/flows/prometheus-test-flow/observations/metrics", nil)
 	req.SetPathValue("id", "prometheus-test-flow")
 	w := httptest.NewRecorder()
 

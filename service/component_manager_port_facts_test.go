@@ -1,14 +1,12 @@
 package service
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/stretchr/testify/require"
 )
 
 type portFactsDiscoverable struct {
@@ -20,17 +18,25 @@ type portFactsDiscoverable struct {
 func (c portFactsDiscoverable) InputPorts() []component.Port  { return c.inputs }
 func (c portFactsDiscoverable) OutputPorts() []component.Port { return c.outputs }
 
-func newPortOwnershipCM(t *testing.T) *ComponentManager {
+func newPortOwnershipCM(t *testing.T, registry *component.Registry) *ComponentManager {
 	t.Helper()
-	serviceInstance, err := NewComponentManager(json.RawMessage(`{}`), &Dependencies{
-		Logger: slog.Default(), ComponentRegistry: component.NewRegistry(),
-	})
-	require.NoError(t, err)
-	return serviceInstance.(*ComponentManager)
+	if registry == nil {
+		registry = component.NewRegistry()
+	}
+	return &ComponentManager{
+		BaseService: NewBaseServiceWithOptions("component-manager-test", nil, WithLogger(slog.Default())),
+		registry:    registry,
+	}
+}
+
+func TestComponentManagerAbsentBootModelRegistryRemainsNil(t *testing.T) {
+	manager := newPortOwnershipCM(t, nil)
+	if manager.bootModelRegistry != nil {
+		t.Fatalf("bootModelRegistry = %T, want nil", manager.bootModelRegistry)
+	}
 }
 
 func TestComponentManagerPortReportingUsesCanonicalFactsWithoutDroppingKinds(t *testing.T) {
-	manager := newPortOwnershipCM(t)
 	instance := &portFactsDiscoverable{
 		baseDiscoverable: baseDiscoverable{name: "facts"},
 		inputs: []component.Port{
@@ -41,7 +47,9 @@ func TestComponentManagerPortReportingUsesCanonicalFactsWithoutDroppingKinds(t *
 			{Name: "request", Direction: component.DirectionOutput, Config: component.NATSRequestPort{Subject: "graph.mutation.>"}},
 		},
 	}
-	admitTestRegistryComponent(t, manager.registry, "facts", instance)
+	registry := component.NewRegistry()
+	admitTestRegistryComponent(t, registry, "facts", instance)
+	manager := newPortOwnershipCM(t, registry)
 
 	info, err := manager.extractComponentPortInfo("facts")
 	if err != nil {
@@ -62,14 +70,13 @@ func TestComponentManagerPortReportingUsesCanonicalFactsWithoutDroppingKinds(t *
 }
 
 func TestComponentManagerPortReportingRejectsUnadmittedInstance(t *testing.T) {
-	manager := newPortOwnershipCM(t)
+	manager := newPortOwnershipCM(t, nil)
 	if _, err := manager.extractComponentPortInfo("missing"); err == nil {
 		t.Fatal("manager reporting accepted an unadmitted instance")
 	}
 }
 
 func TestComponentManagerFlowReportingUsesRetainedPortsAfterComponentMutation(t *testing.T) {
-	manager := newPortOwnershipCM(t)
 	instance := &portFactsDiscoverable{
 		baseDiscoverable: baseDiscoverable{name: "source"},
 		inputs: []component.Port{{
@@ -77,7 +84,9 @@ func TestComponentManagerFlowReportingUsesRetainedPortsAfterComponentMutation(t 
 			Config: component.NATSPort{Subject: "events.original"},
 		}},
 	}
-	admitTestRegistryComponent(t, manager.registry, "source", instance)
+	registry := component.NewRegistry()
+	admitTestRegistryComponent(t, registry, "source", instance)
+	manager := newPortOwnershipCM(t, registry)
 	instance.inputs[0].Config = component.NATSPort{}
 
 	graph, err := manager.GetFlowGraph()

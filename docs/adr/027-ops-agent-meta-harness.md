@@ -12,19 +12,19 @@ Semstreams commits to rule skeleton + coordinator agent + ops agent (ADR-028). T
 
 - **Reads telemetry, not individual decisions.** Where the coordinator (Layer 3) makes per-invocation judgments, the ops agent looks at patterns across many completed loops and coordinator decisions. Its observation substrate is the graph — the same ~113 predicates Phase 0 laid down.
 - **Proposes refinements to any harness axis.** System prompts, rules, flow topology, model selection, coordinator `decide` schemas, retry policies, tool allowlists. Anything that affects agent behaviour at scale is fair game.
-- **Reuses the coordinator's runtime composition tools.** `create_rule`, `manage_flow`, `list_components`, `list_personas`, `list_flow_templates`, `monitor_flow` — all defined in ADR-026 — are the ops agent's deployment surface. Schema validation + governance + sandbox + approval gates (ADR-026 safety model) apply uniformly. There is no separate ops-only deployment path, and no privileged bypass.
+- **Reuses the coordinator's authoring and inspection tools.** Rule-definition CRUD, saved-flow CRUD, `list_components`, `list_personas`, and `list_flow_templates` share the ADR-026 safety model. The former flow lifecycle and `monitor_flow` tools are retired; saved diagrams do not grant runtime ownership.
 - **Closes the improvement loop.** Coordinator makes decisions; ops agent observes whether those decisions correlate with good outcomes; ops agent proposes changes to how decisions are made (the coordinator's `decide` schema, its stock prompt, its retry policy). Rules are skeleton, coordinator is judgment, ops is learning.
 
 ## Why reuse coordinator tools
 
-The operational learning from ADR-028: containing schema discipline to one role (the coordinator) works because the surface area is small. The same reasoning applies to deployment tooling — having one set of runtime composition tools, used by both coordinator and ops, means:
+The operational learning from ADR-028: containing schema discipline to one role (the coordinator) works because the surface area is small. The same reasoning applies to authoring tooling — having one governed set, used by both coordinator and ops, means:
 
 - Governance rules reviewed once apply to both.
 - Approval gates configured once cover both.
 - The audit trail (who changed what, when, why) lands on the same graph entities.
 - Adding a new composition capability (e.g. "adjust a retry policy") ships to both in one change.
 
-A parallel ops-only toolset would double the safety surface and invite drift between "what the coordinator can do at runtime" and "what the ops agent can do at runtime." The ADR-028 commitment to one runtime composition surface explicitly rejects that split.
+A parallel ops-only toolset would double the safety surface and invite drift between coordinator and ops authoring contracts. ADR-094 narrows that shared surface: flow records are diagrams, while boot owns component composition.
 
 ## Context
 

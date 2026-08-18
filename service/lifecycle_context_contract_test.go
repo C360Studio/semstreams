@@ -468,38 +468,6 @@ func TestComponentManagerFailedPartialStartCancelsBeforeStop(t *testing.T) {
 	require.Equal(t, int32(1), comp.stopCalls.Load())
 }
 
-func TestComponentManagerDynamicRegistrationRollbackIsNotRepeatedByManagerStop(t *testing.T) {
-	cm := &ComponentManager{
-		BaseService:   NewBaseServiceWithOptions("component-manager", nil),
-		components:    make(map[string]*component.ManagedComponent),
-		runtimes:      make(map[string]*componentRuntime),
-		registry:      component.NewRegistry(),
-		storeRegistry: storeregistry.New(),
-		storeProvided: make(map[string][]string),
-	}
-	cm.initialized.Store(true)
-	require.NoError(t, cm.Start(t.Context()))
-	require.NoError(t, cm.storeRegistry.Register("shared", &fakeStreamable{id: "incumbent"}))
-
-	comp := &rollbackStoreComponent{
-		mockDiscoverableComponent: &mockDiscoverableComponent{
-			metadata: component.Metadata{Name: "rollback", Type: "storage"},
-		},
-		store: &fakeStreamable{id: "replacement"},
-	}
-	cm.mu.Lock()
-	cm.components["rollback"] = &component.ManagedComponent{
-		Component: comp,
-		State:     component.StateInitialized,
-	}
-	cm.mu.Unlock()
-
-	require.Error(t, cm.startSingleComponent(t.Context(), "rollback"))
-	require.Equal(t, int32(1), comp.stopCalls.Load(), "registration rollback must tear down once")
-	require.NoError(t, cm.Stop(context.Background()))
-	require.Equal(t, int32(1), comp.stopCalls.Load(), "manager Stop must rejoin rollback teardown")
-}
-
 func TestComponentManagerStopArbitrationBranchesOnGracefulWinner(t *testing.T) {
 	runtimeCtx, cancelRuntime := context.WithCancel(context.Background())
 	startDone := make(chan struct{})
@@ -607,61 +575,4 @@ func newStartedSupervisorManager(t *testing.T) (*ComponentManager, context.Cance
 	runtimeCtx, runtimeCancel := context.WithCancel(context.Background())
 	require.NoError(t, cm.Start(runtimeCtx))
 	return cm, runtimeCancel
-}
-
-func TestComponentManagerDynamicRuntimeIgnoresRequestCancellationAfterAdmission(t *testing.T) {
-	cm, runtimeCancel := newStartedSupervisorManager(t)
-	defer runtimeCancel()
-	comp := newControlledGenerationComponent("request-owned")
-	cm.mu.Lock()
-	cm.components["request-owned"] = &component.ManagedComponent{
-		Component: comp,
-		State:     component.StateInitialized,
-	}
-	cm.mu.Unlock()
-
-	requestCtx, requestCancel := context.WithCancel(context.Background())
-	require.NoError(t, cm.startSingleComponent(requestCtx, "request-owned"))
-	waitForSignal(t, comp.startEntered, "dynamic Start admission")
-	requestCancel()
-	select {
-	case <-comp.runtimeCanceled:
-		t.Fatal("request cancellation canceled admitted runtime")
-	default:
-	}
-
-	stopResult := make(chan error, 1)
-	go func() { stopResult <- cm.Stop(context.Background()) }()
-	waitForSignal(t, comp.runtimeCanceled, "manager lifetime cancellation")
-	close(comp.allowStartExit)
-	waitForSignal(t, comp.stopEntered, "same-generation Stop")
-	require.NoError(t, <-stopResult)
-}
-
-func TestComponentManagerStopContextExpiryHandsOffSameGeneration(t *testing.T) {
-	cm, runtimeCancel := newStartedSupervisorManager(t)
-	defer runtimeCancel()
-	comp := newControlledGenerationComponent("handoff")
-	cm.mu.Lock()
-	cm.components["handoff"] = &component.ManagedComponent{
-		Component: comp,
-		State:     component.StateInitialized,
-	}
-	cm.mu.Unlock()
-	require.NoError(t, cm.startSingleComponent(context.Background(), "handoff"))
-	waitForSignal(t, comp.startEntered, "dynamic Start entry")
-
-	firstCtx, cancelFirst := context.WithCancel(context.Background())
-	firstResult := make(chan error, 1)
-	go func() { firstResult <- cm.Stop(firstCtx) }()
-	waitForSignal(t, comp.runtimeCanceled, "generation cancellation")
-	cancelFirst()
-	require.ErrorIs(t, <-firstResult, context.Canceled)
-	require.Zero(t, comp.stopCalls.Load(), "expired Stop must not overlap the in-flight Start")
-
-	close(comp.allowStartExit)
-	waitForSignal(t, comp.startReturned, "Start finalization")
-	require.NoError(t, cm.Stop(context.Background()))
-	waitForSignal(t, comp.stopEntered, "resumed same-generation Stop")
-	require.Equal(t, int32(1), comp.stopCalls.Load())
 }

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/health"
 	"github.com/c360studio/semstreams/internal/lifecyclejoin"
@@ -1092,25 +1093,20 @@ func (m *Manager) registerComponentHandlers() error {
 		return nil
 	}
 
-	// Get all managed components
-	components := cm.GetManagedComponents()
-
-	// Register gateway components
-	for name, mc := range components {
-		// Check if component implements gateway.Gateway interface
-		if gateway, ok := mc.Component.(interface {
-			RegisterHTTPHandlers(prefix string, mux *http.ServeMux)
-		}); ok {
-			// Use component instance name as URL prefix
-			prefix := "/" + name
-			gateway.RegisterHTTPHandlers(prefix, m.httpMux)
-			m.logger.Debug("Registered gateway component HTTP handlers",
-				"component", name,
-				"prefix", prefix)
+	return cm.withComponents(func(components map[string]*component.ManagedComponent) error {
+		for name, managed := range components {
+			if gateway, ok := managed.Component.(interface {
+				RegisterHTTPHandlers(prefix string, mux *http.ServeMux)
+			}); ok {
+				prefix := "/" + name
+				gateway.RegisterHTTPHandlers(prefix, m.httpMux)
+				m.logger.Debug("Registered gateway component HTTP handlers",
+					"component", name,
+					"prefix", prefix)
+			}
 		}
-	}
-
-	return nil
+		return nil
+	})
 }
 
 // registerOpenAPIEndpoints registers OpenAPI documentation endpoints

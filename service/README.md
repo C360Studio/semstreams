@@ -36,7 +36,7 @@ Central coordinator that manages service lifecycle, owns the shared HTTP server,
 
 ### ComponentManager Service
 
-Special service that manages component lifecycle (inputs, processors, outputs, storage). Provides HTTP APIs for component health, status, and configuration management. See [component package](../component) for component architecture and [flowgraph](../component/flowgraph) for connectivity validation.
+Special service that composes the constructor-captured boot component set and remains the sole lifecycle owner. It admits immutable declarations to Registry, seals composition, and exposes read-only component health, status, and configuration views. Later configuration writes do not mutate the running set.
 
 ## Usage
 
@@ -138,354 +138,44 @@ func (s *MyService) OpenAPISpec() *OpenAPISpec {
 
 ### ComponentManager HTTP APIs
 
-ComponentManager service exposes HTTP endpoints for component management:
+ComponentManager exposes read-only endpoints for boot-composition observation:
 
 ```go
-// GET /api/v1/components - List all managed components
-// GET /api/v1/components/{name} - Get specific component details
-// GET /api/v1/components/{name}/health - Component health status
-// POST /api/v1/components/{name}/start - Start a component
-// POST /api/v1/components/{name}/stop - Stop a component
+// GET {prefix}/health - Aggregate component health
+// GET {prefix}/list - List the boot-composed components
+// GET {prefix}/types and {prefix}/types/{id} - Factory metadata and schemas
+// GET {prefix}/status/{name} - Observe one component's status
+// GET {prefix}/config/{name} - Observe its captured boot configuration
 
 // Connectivity validation endpoints (uses flowgraph internally)
-// GET /api/v1/flowgraph - Component connectivity graph
-// GET /api/v1/validate/connectivity - Connectivity analysis
+// GET {prefix}/flowgraph - Component connectivity graph
+// GET {prefix}/validate - Connectivity analysis
 ```
+
+There is no HTTP start, stop, or component-configuration write operation.
 
 For component architecture and connectivity validation details, see [component package](../component) and [flowgraph](../component/flowgraph).
 
-### FlowService Runtime Endpoints
+### Saved Flow Authoring Endpoints
 
-FlowService exposes runtime observability endpoints for debugging and monitoring running flows:
+FlowService treats flows as saved diagrams, not runtime lifecycle owners:
 
-```go
-// GET /flowbuilder/flows/{id}/runtime/metrics - Component metrics (JSON polling)
-// Returns throughput, error rates, queue depth per component
-// Poll interval: 2-5s recommended
-// Response time: <100ms (90ms timeout)
-
-// GET /flowbuilder/flows/{id}/runtime/health - Component health (JSON polling)
-// Returns component status, uptime, last activity
-// Poll interval: 5s recommended
-// Response time: <200ms (180ms timeout)
-
-// GET /flowbuilder/flows/{id}/runtime/messages - NATS message flow (JSON polling)
-// Returns filtered message logger entries for flow components
-// Poll interval: 1-2s recommended
-// Response time: <100ms (90ms timeout)
-
-// GET /flowbuilder/flows/{id}/runtime/logs - Component logs (SSE streaming)
-// Streams real-time logs from all components in the flow
-// Connection: Server-Sent Events (text/event-stream)
+```text
+GET|POST /flowbuilder/flows
+GET|PUT|DELETE /flowbuilder/flows/{id}
+POST /flowbuilder/flows/{id}/validate
+POST /flowbuilder/flows/{id}/publish-component-configs
+GET /flowbuilder/flows/{id}/observations/{metrics,health,messages}
 ```
 
-**Runtime Metrics Response** (`GET /runtime/metrics`):
+CRUD and validation do not publish configuration. Explicit publication validates
+and compiles the diagram, sorts component names, and performs upsert-only writes.
+It reports exact partial progress, leaves the current process unchanged, and
+requires a restart before published candidates can be composed. Diagram
+omissions never delete component configuration.
 
-```json
-{
-  "timestamp": "2025-11-17T14:23:05.123456789Z",
-  "components": [
-    {
-      "name": "udp-source",
-      "throughput": 1234.5,
-      "error_rate": 0.0,
-      "queue_depth": 0,
-      "status": "healthy"
-    }
-  ],
-  "prometheus_available": true
-}
-```
-
-**Runtime Health Response** (`GET /runtime/health`):
-
-```json
-{
-  "timestamp": "2025-11-17T14:23:05.123456789Z",
-  "overall": {
-    "status": "healthy",
-    "running_count": 3,
-    "degraded_count": 0,
-    "error_count": 0
-  },
-  "components": [
-    {
-      "name": "udp-source",
-      "type": "udp",
-      "status": "running",
-      "healthy": true,
-      "message": "Processing messages",
-      "start_time": "2025-11-17T14:07:33.123Z",
-      "last_activity": "2025-11-17T14:23:04.567Z",
-      "uptime_seconds": 932,
-      "details": null
-    }
-  ]
-}
-```
-
-**Runtime Messages Response** (`GET /runtime/messages?limit=100`):
-
-```json
-{
-  "timestamp": "2025-11-17T14:23:01.123456789Z",
-  "messages": [
-    {
-      "timestamp": "2025-11-17T14:23:01.234567890Z",
-      "subject": "process.json-processor.data",
-      "message_id": "msg-12345",
-      "component": "json-processor",
-      "direction": "published",
-      "summary": "JSON filter applied",
-      "metadata": {"size_bytes": 256},
-      "message_type": "ProcessedData"
-    }
-  ],
-  "total": 1,
-  "limit": 100
-}
-```
-
-**Runtime Logs Stream** (`GET /runtime/logs` - SSE):
-
-```
-event: log
-data: {"timestamp":"2025-11-17T14:23:01.123Z","level":"INFO","component":"udp-source","message":"Listening on :5000"}
-
-event: log
-data: {"timestamp":"2025-11-17T14:23:02.456Z","level":"ERROR","component":"processor","message":"Failed to parse JSON"}
-
-event: ping
-data: {"timestamp":"2025-11-17T14:23:05.000Z"}
-```
-
-**Architecture**:
-
-- **Metrics**: Three-tier fallback (Prometheus API → raw metrics → health only)
-- **Health**: Uses ComponentManager health status with timing enhancements
-- **Messages**: Filters MessageLogger circular buffer by flow component subjects
-- **Logs**: Aggregates component logs and streams via SSE with reconnection support
-
-**Performance**:
-
-- All endpoints enforce strict timeouts (<100ms or <200ms)
-- Graceful degradation when optional services unavailable
-- UTC timestamps for consistency across distributed systems
-- Pre-allocated buffers and efficient filtering
-
-**Security**:
-
-- Input validation on all query parameters
-- DoS protection via limit enforcement (max 1000 messages)
-- Subject pattern sanitization prevents injection attacks
-- Error messages safe for client exposure
-
-For implementation details, see:
-
-- `flow_runtime_metrics.go` - Prometheus integration with fallback tiers
-- `flow_runtime_health.go` - Component health aggregation with timing
-- `flow_runtime_messages.go` - NATS message flow filtering
-- `flow_runtime_logs.go` - SSE log streaming (if implemented)
-
-### WebSocket Status Stream
-
-Real-time flow status updates via WebSocket connection. This endpoint provides unified streaming of flow state changes, component health, metrics, and logs.
-
-```go
-// GET /flowbuilder/status/stream?flowId={flowId} - WebSocket status stream
-// Connection: WebSocket (ws:// or wss://)
-// Real-time streaming of all flow observability data
-```
-
-**Connection:**
-
-```bash
-wscat -c "ws://localhost:8080/flowbuilder/status/stream?flowId=my-flow-id"
-```
-
-**Message Types (Server → Client):**
-
-All messages are wrapped in a `StatusStreamEnvelope`:
-
-```json
-{
-    "type": "flow_status",
-    "id": "msg-uuid-12345",
-    "timestamp": 1705412345000,
-    "flow_id": "my-flow-id",
-    "payload": { ... }
-}
-```
-
-| Type | Trigger | Description |
-|------|---------|-------------|
-| `flow_status` | State change | Flow state transitions (deployed, running, stopped, failed) |
-| `component_health` | Every 5s | Component health status from ComponentManager |
-| `component_metrics` | As published | Real-time metrics from MetricsForwarder |
-| `log_entry` | As logged | Application logs via NATS LogForwarder |
-
-**Flow Status Payload:**
-
-```json
-{
-    "state": "running",
-    "prev_state": "deployed_stopped",
-    "timestamps": {
-        "created": "2025-01-15T10:00:00Z",
-        "deployed": "2025-01-15T10:05:00Z",
-        "started": "2025-01-15T10:05:30Z"
-    },
-    "error": null
-}
-```
-
-**Component Health Payload:**
-
-```json
-{
-    "udp-input": {
-        "healthy": true,
-        "status": "running",
-        "error_count": 0
-    },
-    "json-processor": {
-        "healthy": true,
-        "status": "processing",
-        "error_count": 2
-    }
-}
-```
-
-**Log Entry Payload:**
-
-```json
-{
-    "level": "INFO",
-    "source": "udp-input",
-    "message": "Packet received from 192.168.1.1:5000",
-    "fields": {
-        "bytes": 1024,
-        "remote_addr": "192.168.1.1:5000"
-    }
-}
-```
-
-**Component Metrics Payload:**
-
-```json
-{
-    "component": "udp-input",
-    "metrics": [
-        {
-            "name": "packets_received_total",
-            "type": "counter",
-            "value": 12345,
-            "labels": {"status": "success"}
-        }
-    ]
-}
-```
-
-**Client Commands (Client → Server):**
-
-Clients can filter what messages they receive:
-
-```json
-{
-    "command": "subscribe",
-    "message_types": ["flow_status", "log_entry"],
-    "log_level": "WARN",
-    "sources": ["udp-input", "json-processor"]
-}
-```
-
-| Field | Description |
-|-------|-------------|
-| `message_types` | Filter which message types to receive |
-| `log_level` | Minimum log level: DEBUG, INFO, WARN, ERROR |
-| `sources` | Filter logs/metrics by component names |
-
-**Architecture:**
-
-The WebSocket status stream uses NATS as the backbone for all real-time data:
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Application                               │
-│  ┌─────────────┐  ┌──────────────┐  ┌─────────────────────┐ │
-│  │ slog.Logger │  │MetricsForward│  │ ComponentManager    │ │
-│  └──────┬──────┘  └──────┬───────┘  └──────────┬──────────┘ │
-└─────────┼────────────────┼───────────────────────┼───────────┘
-          │                │                       │
-          ▼                ▼                       │
-   ┌──────────────────────────────────────┐       │
-   │         NATS JetStream               │       │
-   │  ┌────────┐  ┌──────────┐            │       │
-   │  │ logs.> │  │ metrics.>│            │       │
-   │  └────────┘  └──────────┘            │       │
-   └──────────────────┬───────────────────┘       │
-                      │                           │
-                      ▼                           ▼
-            ┌─────────────────────────────────────────┐
-            │        WebSocket Status Stream          │
-            │  ┌────────────┐  ┌────────────────────┐ │
-            │  │logStreamer │  │metricsStreamer     │ │
-            │  │flowWatcher │  │healthTicker        │ │
-            │  └────────────┘  └────────────────────┘ │
-            └─────────────────────────────────────────┘
-                              │
-                              ▼
-                    ┌──────────────────┐
-                    │  WebSocket Client │
-                    │  (Frontend UI)    │
-                    └──────────────────┘
-```
-
-**Log Architecture:**
-
-Logs flow through the system using the [logging package](../pkg/logging):
-
-1. Application code calls `slog.Info()`, `slog.Error()`, etc.
-2. `MultiHandler` dispatches to both `TextHandler` (stdout) and `NATSLogHandler`
-3. `NATSLogHandler` publishes to NATS `logs.{level}.{source}` subjects
-4. LOGS JetStream stream stores logs with 1hr TTL and 100MB limit
-5. WebSocket's `logStreamer` subscribes to `logs.>` and forwards to clients
-
-This architecture ensures:
-- **No timing issues**: Logs publish to NATS at handler creation time
-- **Out-of-band logs**: Always available via NATS even without WebSocket
-- **Graceful fallback**: NATS failures don't block stdout logging
-- **Source filtering**: `exclude_sources` config prevents feedback loops
-
-**Configuration:**
-
-Log forwarding is configured via `log-forwarder` service config:
-
-```json
-{
-    "services": {
-        "log-forwarder": {
-            "enabled": true,
-            "config": {
-                "min_level": "INFO",
-                "exclude_sources": ["flow-service.websocket"]
-            }
-        }
-    }
-}
-```
-
-| Field | Description |
-|-------|-------------|
-| `min_level` | Minimum log level to publish to NATS |
-| `exclude_sources` | Source prefixes to exclude (prevents feedback loops) |
-
-**Implementation Files:**
-
-- `flow_runtime_stream.go` - WebSocket handler, client state, worker goroutines
-- `flow_runtime_stream_test.go` - Unit tests
-- `flow_runtime_stream_integration_test.go` - Integration tests with real NATS
-- [`pkg/logging/`](../pkg/logging) - MultiHandler, NATSLogHandler
+Flow deploy/start/stop/undeploy routes, the flow status WebSocket, associated
+runtime log stream, runtime ownership state, and lifecycle tools are absent.
 
 ## API Reference
 
@@ -546,13 +236,13 @@ Starts all created services in registration order with proper error handling.
 
 Stops all services in reverse order, passing the exact caller-owned shutdown context to each service.
 
-#### `(cm *ComponentManager) ListComponents() []component.Discoverable`
+#### `(cm *ComponentManager) GetComponentHealth() map[string]component.HealthStatus`
 
-Returns all managed components for introspection and monitoring.
+Returns health values for the sealed boot composition.
 
-#### `(cm *ComponentManager) GetComponent(name string) (component.Discoverable, bool)`
+#### `(cm *ComponentManager) GetComponentStatus() map[string]ComponentStatus`
 
-Retrieves a specific managed component by name. Returns false if component not found.
+Returns defensive status values without exposing live component handles.
 
 ### Interfaces
 
@@ -569,7 +259,7 @@ Optional interface for services that want to expose HTTP endpoints. Manager auto
 
 Service configuration is restart-only. KV updates change desired next-boot
 state; `GET /services` reports whether those changes require restart. Component
-runtime reconfiguration remains a separate ComponentManager concern.
+post-boot reconfiguration is not a ComponentManager concern; published changes become eligible at the next boot.
 
 ## Architecture
 
@@ -604,7 +294,7 @@ runtime reconfiguration remains a separate ComponentManager concern.
 - Manages component startup/shutdown and health monitoring
 - Provides HTTP APIs for component introspection and control
 - Integrates with component package for connectivity validation
-- Enables runtime component management and debugging
+- Enables boot-composition observation and debugging without runtime mutation
 
 ### Integration Points
 

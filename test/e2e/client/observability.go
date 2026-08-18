@@ -79,9 +79,9 @@ func (c *ObservabilityClient) GetPlatformHealth(ctx context.Context) (*PlatformH
 
 // FlowInfo represents a flow from the flowbuilder API
 type FlowInfo struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	RuntimeState string `json:"runtime_state"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Version int64  `json:"version"`
 }
 
 // FlowsResponse represents the response from GET /flowbuilder/flows

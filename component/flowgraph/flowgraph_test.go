@@ -32,7 +32,6 @@ func TestFlowGraphConstruction(t *testing.T) {
 
 		node := nodes["test-component"]
 		assert.Equal(t, "test-component", node.ComponentName)
-		assert.Equal(t, mockComponent, node.Component)
 	})
 
 	t.Run("add duplicate component node returns error", func(t *testing.T) {

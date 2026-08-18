@@ -3,17 +3,13 @@ package service
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
-	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/storage"
 	"github.com/c360studio/semstreams/storage/storeregistry"
-	"github.com/c360studio/semstreams/types"
 )
 
 // fakeStreamable is a minimal StreamableStore for manager-wiring tests.
@@ -99,9 +95,8 @@ func TestRegisterProvidedStores_PopulatesRegistry(t *testing.T) {
 
 func TestRegisterProvidedStores_SkipsWhenNotLive(t *testing.T) {
 	cm := newStoreRegistryTestManager()
-	// A component that started but was already removed/halted by a concurrent
-	// stop/reconfig (not tracked as StateStarted) must NOT register — otherwise a
-	// late register shadows a teardown that already deregistered (ADR-063 M1).
+	// A component that failed startup or has entered terminal stop (and therefore
+	// is not tracked as StateStarted) must not register a late store handle.
 	if err := cm.registerProvidedStores("ghost", provider("ghost")); err != nil {
 		t.Fatalf("untracked provider returned an error: %v", err)
 	}
@@ -156,7 +151,7 @@ func TestDuplicateOwnership_RefusedNotClobbered(t *testing.T) {
 		t.Fatalf("register incumbent: %v", err)
 	}
 
-	// A second live component claims the same instance — refused, incumbent kept.
+	// A second boot-composed component claims the same instance — refused, incumbent kept.
 	err := registerStarted(cm, "owner-b", provider("objectstore"))
 	if err == nil {
 		t.Fatal("duplicate ownership did not return a provider startup error")
@@ -196,7 +191,7 @@ func TestDuplicateOwnership_RollsBackOnlyRivalRegistrations(t *testing.T) {
 	}
 }
 
-func TestReconfigSwapsHandle(t *testing.T) {
+func TestSequentialComponentLifetimesCanReuseStorageInstance(t *testing.T) {
 	cm := newStoreRegistryTestManager()
 
 	oldComp := provider("objectstore")
@@ -204,8 +199,8 @@ func TestReconfigSwapsHandle(t *testing.T) {
 		t.Fatalf("register old store: %v", err)
 	}
 
-	// Reconfig: deregister the old instance, then register the fresh one under the
-	// same StorageInstance. No collision, and the new handle wins.
+	// After the first component lifetime has stopped and deregistered, a later
+	// independently composed lifetime may reuse the same StorageInstance.
 	cm.deregisterProvidedStores("objectstore")
 	freshComp := provider("objectstore")
 	if err := registerStarted(cm, "objectstore", freshComp); err != nil {
@@ -214,7 +209,7 @@ func TestReconfigSwapsHandle(t *testing.T) {
 
 	got, _ := cm.storeRegistry.Streamable("objectstore")
 	if got != freshComp.provided["objectstore"] {
-		t.Fatal("post-reconfig resolve did not return the fresh handle")
+		t.Fatal("later component lifetime did not resolve to the fresh handle")
 	}
 }
 
@@ -270,214 +265,3 @@ func TestRegisterProvidedStores_NilClaimFails(t *testing.T) {
 		})
 	}
 }
-
-func TestDynamicProviderDuplicateFailsAndRemainsVisible(t *testing.T) {
-	cm := newStoreRegistryTestManager()
-	client, err := natsclient.NewClient("nats://localhost:4222")
-	if err != nil {
-		t.Fatalf("new NATS client: %v", err)
-	}
-	cm.natsClient = client
-	startPostBootComponentManager(t, cm)
-
-	incumbentStore := &fakeStreamable{id: "incumbent"}
-	incumbent := &barrierStoreProvider{
-		barrierTestComponent: newBarrierTestComponent("incumbent"),
-		provided:             map[string]storage.StreamableStore{"shared": incumbentStore},
-	}
-	if err := registerStarted(cm, "incumbent", incumbent); err != nil {
-		t.Fatalf("register incumbent: %v", err)
-	}
-
-	if err := cm.registry.RegisterFactory("dynamic-provider", &component.Registration{
-		Name: "dynamic-provider",
-		Type: string(types.ComponentTypeStorage),
-		Factory: func(json.RawMessage, component.Dependencies) (component.Discoverable, error) {
-			return &stopObservingProvider{
-				barrierStoreProvider: &barrierStoreProvider{
-					barrierTestComponent: newBarrierTestComponent("rival"),
-					provided: map[string]storage.StreamableStore{
-						"rival-only": &fakeStreamable{id: "rival-only"},
-						"shared":     &fakeStreamable{id: "rival"},
-					},
-				},
-				onStop: func() error { return errDynamicProviderRollback },
-			}, nil
-		},
-	}); err != nil {
-		t.Fatalf("register dynamic provider factory: %v", err)
-	}
-	cfg := types.ComponentConfig{
-		Type:    types.ComponentTypeStorage,
-		Name:    "dynamic-provider",
-		Enabled: true,
-		Config:  json.RawMessage(`{}`),
-	}
-
-	err = cm.createAndStartComponent(context.Background(), "rival", cfg)
-	if err == nil {
-		t.Fatal("dynamic duplicate provider start did not return an error")
-	}
-	if !errors.Is(err, errDynamicProviderRollback) {
-		t.Fatalf("dynamic provider error did not join teardown failure: %v", err)
-	}
-	status := cm.GetComponentStatus()
-	if got := status["rival"].State; got != component.StateFailed {
-		t.Fatalf("dynamic rival state = %s, want failed", got)
-	}
-	if status["rival"].LastError == nil {
-		t.Fatal("dynamic rival did not retain its registration error")
-	}
-	if !strings.Contains(status["rival"].LastError.Error(), "duplicate ownership") {
-		t.Fatalf("dynamic rival LastError lost registration failure: %v", status["rival"].LastError)
-	}
-	if !errors.Is(status["rival"].LastError, errDynamicProviderRollback) {
-		t.Fatalf("dynamic rival LastError did not join teardown failure: %v", status["rival"].LastError)
-	}
-	if err := cm.performDetailedHealthCheck(); err == nil {
-		t.Fatal("dynamic rival registration failure was absent from manager health")
-	}
-	rivalComp, ok := cm.components["rival"].Component.(*stopObservingProvider)
-	if !ok {
-		t.Fatalf("dynamic rival component type = %T", cm.components["rival"].Component)
-	}
-	if !rivalComp.stopped {
-		t.Fatal("dynamic rejected rival lifecycle Stop was not called")
-	}
-	select {
-	case <-rivalComp.startReturned:
-	default:
-		t.Fatal("dynamic rival lifecycle Start did not return")
-	}
-	if _, ok := cm.storeRegistry.Streamable("rival-only"); ok {
-		t.Fatal("dynamic rejected rival left a store claim registered")
-	}
-	got, ok := cm.storeRegistry.Streamable("shared")
-	if !ok || got != incumbentStore {
-		t.Fatalf("dynamic rival replaced incumbent: (%v, %v)", got, ok)
-	}
-}
-
-func TestRestartedProviderDuplicateLeavesAdmittedReplacementFailed(t *testing.T) {
-	cm := newStoreRegistryTestManager()
-	client, err := natsclient.NewClient("nats://localhost:4222")
-	if err != nil {
-		t.Fatalf("new NATS client: %v", err)
-	}
-	cm.natsClient = client
-	startPostBootComponentManager(t, cm)
-
-	incumbentStore := &fakeStreamable{id: "incumbent"}
-	incumbent := &barrierStoreProvider{
-		barrierTestComponent: newBarrierTestComponent("incumbent"),
-		provided:             map[string]storage.StreamableStore{"shared": incumbentStore},
-	}
-	if err := registerStarted(cm, "incumbent", incumbent); err != nil {
-		t.Fatalf("register incumbent: %v", err)
-	}
-
-	old := &barrierStoreProvider{
-		barrierTestComponent: newBarrierTestComponent("rival"),
-		provided: map[string]storage.StreamableStore{
-			"rival-old": &fakeStreamable{id: "old"},
-		},
-	}
-	oldCfg := types.ComponentConfig{
-		Type:    types.ComponentTypeStorage,
-		Name:    "restart-provider",
-		Enabled: true,
-		Config:  json.RawMessage(`{"version":"old"}`),
-	}
-	cm.mu.Lock()
-	cm.components["rival"] = &component.ManagedComponent{
-		Component: old,
-		State:     component.StateStarted,
-		Config:    oldCfg,
-	}
-	cm.mu.Unlock()
-	if err := cm.registerProvidedStores("rival", old); err != nil {
-		t.Fatalf("register old rival store: %v", err)
-	}
-
-	if err := cm.registry.RegisterFactory("restart-provider", &component.Registration{
-		Name: "restart-provider",
-		Type: string(types.ComponentTypeStorage),
-		Factory: func(raw json.RawMessage, _ component.Dependencies) (component.Discoverable, error) {
-			var cfg struct {
-				Version string `json:"version"`
-			}
-			if err := json.Unmarshal(raw, &cfg); err != nil {
-				return nil, err
-			}
-			if cfg.Version == "old" {
-				return old, nil
-			}
-			return &stopObservingProvider{
-				barrierStoreProvider: &barrierStoreProvider{
-					barrierTestComponent: newBarrierTestComponent("rival"),
-					provided: map[string]storage.StreamableStore{
-						"rival-only": &fakeStreamable{id: "replacement-only"},
-						"shared":     &fakeStreamable{id: "replacement"},
-					},
-				},
-				onStop: func() error { return nil },
-			}, nil
-		},
-	}); err != nil {
-		t.Fatalf("register restart provider factory: %v", err)
-	}
-	if _, err := cm.registry.CreateComponent(
-		"rival", oldCfg, component.Dependencies{NATSClient: client},
-	); err != nil {
-		t.Fatalf("admit old rival generation: %v", err)
-	}
-	newCfg := oldCfg
-	newCfg.Config = json.RawMessage(`{"version":"new"}`)
-
-	err = cm.restartComponentWithNewConfig(context.Background(), "rival", newCfg, cm.components["rival"])
-	if err == nil {
-		t.Fatal("restarted duplicate provider did not return an error")
-	}
-	var committedStartFailure *replacementStartError
-	if !errors.As(err, &committedStartFailure) {
-		t.Fatalf("restart error = %T %v, want committed replacement start failure", err, err)
-	}
-	if got := restartFailureAction(err); got != "replacement_admitted_start_failed" {
-		t.Fatalf("restart failure action = %q, want honest post-commit diagnostic", got)
-	}
-	if got := restartFailureAction(errors.New("prepare failed")); got != "component_continues_with_old_config" {
-		t.Fatalf("pre-commit failure action = %q", got)
-	}
-	status := cm.GetComponentStatus()
-	if got := status["rival"].State; got != component.StateFailed {
-		t.Fatalf("restarted rival state = %s, want failed", got)
-	}
-	if status["rival"].LastError == nil || !strings.Contains(status["rival"].LastError.Error(), "duplicate ownership") {
-		t.Fatalf("restarted rival did not retain registration failure: %v", status["rival"].LastError)
-	}
-	if err := cm.performDetailedHealthCheck(); err == nil {
-		t.Fatal("restarted rival registration failure was absent from manager health")
-	}
-	rivalComp, ok := cm.components["rival"].Component.(*stopObservingProvider)
-	if !ok {
-		t.Fatalf("restarted rival component type = %T", cm.components["rival"].Component)
-	}
-	if cm.registry.Component("rival") != rivalComp {
-		t.Fatal("post-commit start failure diagnostic claimed old generation despite admitted replacement")
-	}
-	if !rivalComp.stopped {
-		t.Fatal("restarted rejected rival lifecycle Stop was not called")
-	}
-	if _, ok := cm.storeRegistry.Streamable("rival-old"); ok {
-		t.Fatal("restart left the old provider registered after teardown")
-	}
-	if _, ok := cm.storeRegistry.Streamable("rival-only"); ok {
-		t.Fatal("restarted rejected rival left a store claim registered")
-	}
-	got, ok := cm.storeRegistry.Streamable("shared")
-	if !ok || got != incumbentStore {
-		t.Fatalf("restarted rival replaced incumbent: (%v, %v)", got, ok)
-	}
-}
-
-var errDynamicProviderRollback = errors.New("dynamic provider rollback failed")

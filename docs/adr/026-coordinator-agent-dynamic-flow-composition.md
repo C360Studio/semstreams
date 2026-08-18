@@ -2,20 +2,17 @@
 
 ## Status
 
-**Partially superseded by [ADR-094](094-boot-only-composition-and-observable-rule-activation.md) — 2026-08-16.**
-Coordinator judgment, structured decisions, and durable flow/rule authoring remain. Generalized live flow-topology
-activation is retired; flow changes require restart, while dedicated rule-definition hot reload remains available with
-revision-bound activation truth.
+**Partially superseded by [ADR-094](094-boot-only-composition-and-observable-rule-activation.md) and
+[ADR-096](096-flow-diagrams-are-not-lifecycle-authority.md).** Coordinator judgment, structured decisions, and durable
+Flow and Rule authoring remain. Generalized live Flow-topology activation is retired. ADR-096 defines authoring CRUD,
+explicit component-configuration publication, and reboot. It does not advance the separate Rule hot-reload target.
 
 **Partial — Phase 1 shipped, dynamic-composition tools deferred.** The
 coordinator persona, the `decide` terminal tool, and the deep-research
 flow that exercises coordinator judgment are all landed and verified
-e2e. The six dynamic-flow-composition tools below (`create_rule`,
-`update_rule`, `manage_flow`, `list_components`, `list_personas`,
-`list_flow_templates`, `monitor_flow`) are partially shipped — rule and
-flow CRUD tools are wired (via ADR-029 Pattern B); component-catalog
-and flow-monitor are wired; persona/flow-template tools are wired but
-have not been exercised end-to-end by a coordinator. Refreshed
+e2e. Rule and Flow CRUD tools are wired as durable authoring via ADR-029 Pattern B. The component catalog is wired.
+Flow lifecycle and monitoring tools are retired. Persona and Flow-template tools are wired but have not been exercised
+end-to-end by a coordinator. Refreshed
 2026-04-18 with ADR-028 framing. The coordinator's primary purpose is
 broader than dynamic flow composition: it is the **judgment role** in
 the three-layer orchestration architecture (ADR-028). Dynamic flow
@@ -36,13 +33,13 @@ Semstreams commits to rule skeleton + coordinator agent + ops agent (ADR-028). T
 - **Reads agent output on demand** via `read_loop_result(loop_id)`. The upstream agent's prose is never injected into the coordinator's prompt — the coordinator fetches only what fits its context.
 - **Returns a structured terminal decision** via a `decide()` tool whose schema enumerates the valid next actions (e.g. `fan_out`, `synthesize`, `retry`, `done`). Rules downstream match on `coordinator.decision.next_action` triples and route accordingly.
 - **Contains schema discipline to one role.** Researcher, coder, synthesizer, reviewer agents produce free text. Only the coordinator needs structured output — which means ADR-028's per-tool retry policy gets invoked at the coordinator's `decide` tool, not at every role's submit boundary.
-- **Can author durable flows and hot-activate bounded rule definitions.** ADR-094 makes component/topology activation
-  boot-only; the historical runtime-flow wording below is superseded. Coordinator judgment still adapts desired
-  pipelines, but flow composition becomes effective only after a successful restart.
+- **Can author durable Flow and Rule definitions.** ADR-096 makes Flow a saved diagram and compiler input. Publishing
+  component configuration is explicit, and the running process remains unchanged until reboot. The historical
+  runtime-Flow wording below is superseded; separate Rule hot-reload target state is not advanced by ADR-096.
 
-The authoring tools originally proposed by this ADR remain useful for shaping durable desired flows when static
-configuration does not cover the case. Their historical same-process activation semantics are superseded by ADR-094.
-The coordinator is not primarily a flow composer; it is the judgment layer that can author composition when needed.
+The authoring tools originally proposed by this ADR remain useful for shaping saved diagrams when static configuration
+does not cover the case. Their historical same-process activation semantics are superseded by ADR-094 and ADR-096.
+The coordinator is not primarily a Flow composer; it is the judgment layer that can author composition when needed.
 
 ## Why one judgment role, not per-agent schema
 
@@ -169,11 +166,8 @@ templates are JSON files in `configs/templates/`:
 Templates lower the bar for the coordinator LLM: customizing a skeleton toward a specific
 goal is a simpler reasoning task than composing from primitives.
 
-**`monitor_flow`** reads flow runtime state from `flowstore`, loop state from the
-`AGENT_LOOPS` KV bucket, and completion events. It returns an aggregated status: which
-loops are running, which have completed, their outcomes, and token usage. This gives the
-coordinator the feedback signal it needs to evaluate whether a spawned flow achieved its
-goal and to decide the next action.
+**Historical:** `monitor_flow` inferred runtime ownership from saved flow records. That tool is retired by ADR-094.
+Agents inspect durable loop outcomes through `read_loop_result`; saved-flow CRUD remains diagram authoring only.
 
 ### Composition model: flows, not composite components
 

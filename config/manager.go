@@ -38,15 +38,6 @@ type Manager struct {
 	wg         sync.WaitGroup // Track all goroutines
 	stopped    atomic.Bool    // Indicates manager is stopped
 
-	// detached is set when Start refuses to adopt config from a bucket
-	// owned by a different platform identity (gh#459). In detached mode the
-	// manager runs on its local file config and must not touch the shared KV
-	// bucket at all — the write methods (PushToKV / PutComponentToKV /
-	// DeleteComponentFromKV) no-op so a later operator-triggered flow deploy
-	// cannot bleed the local app's components INTO the foreign bucket
-	// (the reverse-direction of the adoption bug).
-	detached atomic.Bool
-
 	// engineHighWaterRev is the highest KV revision the Manager has
 	// produced via its own write methods (PutComponentToKV,
 	// DeleteComponentFromKV, PushToKV). The watcher's handleUpdate
@@ -55,9 +46,9 @@ type Manager struct {
 	// ALREADY been applied synchronously to in-memory state.
 	//
 	// Without this guard, the watcher's async processing of queued
-	// KV events can override the engine's recent in-memory writes —
-	// e.g. a stale Stop PUT (Enabled=false) processed after Undeploy's
-	// DELETE re-inserts the component into the in-memory map.
+	// KV events can override the Manager's recent in-memory desired-state
+	// writes — for example, an older PUT processed after a later DELETE can
+	// reinsert a component into the next-boot configuration view.
 	//
 	// NATS KV revisions are bucket-monotonic, so a single per-bucket
 	// watermark is sufficient. External writers (UI, other processes)
@@ -111,11 +102,10 @@ func (cm *Manager) GetConfig() *SafeConfig {
 // channel is buffered (cap 1); slow consumers see the most recent
 // registry on their next read — intermediate updates coalesce.
 //
-// Use this for external library consumers that hold their own
-// *model.Registry alongside the semstreams runtime and need to refresh
-// it on KV change. semstreams components do NOT need this — they're
-// restarted by ComponentManager when their factory declares
-// component.DepModelRegistry.
+// Use this for external library consumers that deliberately maintain a live
+// model-registry view. SemStreams components receive the registry selected at
+// boot; later writes are durable desired state for the next process start and
+// do not restart or rewire the running ComponentManager.
 //
 // See model.Watch for a one-line consumer pattern.
 //
@@ -208,10 +198,7 @@ func (cm *Manager) Start(ctx context.Context) error {
 		// silently adopt the first's components (and can panic creating a
 		// foreign component). If the stored config carries a DIFFERENT
 		// platform identity (org+id+env) than the local file, refuse to
-		// adopt: mark the manager detached, run on local file config, and
-		// touch the shared bucket no further (no sync, push, watch, or later
-		// runtime write — see the detached field). Shout so the operator
-		// notices they're on the wrong NATS. Identity-less configs (no
+		// adopt or continue startup. Identity-less configs (no
 		// org/id on either side) fall through to the existing behavior —
 		// they're indistinguishable, and per-platform bucket namespacing is
 		// the complete fix for that case.
@@ -219,15 +206,19 @@ func (cm *Manager) Start(ctx context.Context) error {
 			localIdentity := cm.config.Get().Platform
 			if platformHasIdentity(localIdentity) && platformHasIdentity(kvIdentity) &&
 				platformIdentityKey(localIdentity) != platformIdentityKey(kvIdentity) {
-				cm.detached.Store(true)
-				cm.logger.Error(
-					"Refusing to adopt config from a bucket owned by a different platform identity; "+
-						"running on local file config, detached from KV. Likely pointed at the wrong "+
-						"NATS server, or the shared config bucket needs per-platform namespacing.",
-					"local_identity", platformIdentityKey(localIdentity),
-					"kv_identity", platformIdentityKey(kvIdentity),
-					"bucket", "semstreams_config")
-				return nil
+				return fmt.Errorf(
+					"config bucket platform identity mismatch: "+
+						"local org=%q platform=%q environment=%q, "+
+						"stored org=%q platform=%q environment=%q: "+
+						"shared bucket %q belongs to another platform",
+					localIdentity.Org,
+					localIdentity.ID,
+					localIdentity.Environment,
+					kvIdentity.Org,
+					kvIdentity.ID,
+					kvIdentity.Environment,
+					"semstreams_config",
+				)
 			}
 		}
 
@@ -409,17 +400,14 @@ func (cm *Manager) processWatcher(ctx context.Context, watcher jetstream.KeyWatc
 // Manager's own write methods (PutComponentToKV, DeleteComponentFromKV,
 // PushToKV), which already applied the change to in-memory state
 // synchronously, so re-applying would (a) be redundant and (b) can
-// overwrite more recent engine writes when the watcher is lagging behind
-// a burst of operations (the Stop-then-Undeploy race surfaced by
-// TestEngineIntegrationSuite/TestFullLifecycle).
+// overwrite more recent desired-state writes when the watcher is lagging
+// behind a rapid PUT/DELETE sequence.
 //
-// Subscribers are notified for BOTH engine-owned and external events —
-// the skip suppresses only the in-memory re-apply, never the
-// notification. Suppressing the notification would silently drop a
-// runtime add/remove reconcile (gh#388): e.g. a delete at revision N
-// followed by a later engine PUT raising the high-water above N leaves
-// the delete event engine-owned, and a subscriber (ComponentManager)
-// must still be notified to tear the component down.
+// Subscribers are notified for BOTH Manager-owned and external events. The
+// skip suppresses only the in-memory re-apply, never durable desired-state
+// observation. A delete at revision N followed by a later Manager PUT can
+// raise the high-water above N; observers must still see that delete even
+// though no running component is reconciled from it.
 //
 // External writes (UI, other processes) produce revisions strictly
 // greater than the engine's watermark at the time they wrote, so they
@@ -433,7 +421,7 @@ func (cm *Manager) handleUpdate(key string, value []byte, revision uint64) {
 	// Skip the in-memory RE-APPLY for events produced by our own writes
 	// (the engine already applied them synchronously; re-applying from the
 	// watcher's queue can override more recent engine state) — but STILL
-	// notify subscribers below so the reconcile fires (gh#388).
+	// notify subscribers below so durable desired-state observers see it.
 	engineOwned := revision != 0 && revision <= cm.engineHighWaterRev.Load()
 	if engineOwned {
 		cm.logger.Debug("Skipping in-memory re-apply for engine-owned revision (still notifying subscribers)",
@@ -626,25 +614,17 @@ func sanitizeNATSKey(key string) string {
 	return strings.ReplaceAll(key, " ", "_")
 }
 
-// DeleteComponentFromKV deletes a component's configuration from NATS KV.
-// This should be called when a component is removed (e.g., during undeploy).
-// PushToKV only puts keys that exist in memory - it doesn't delete removed keys.
+// DeleteComponentFromKV removes a component from durable next-boot desired
+// state. PushToKV only puts keys that exist in memory; it does not delete keys
+// that are absent.
 //
-// This method applies the removal to the in-memory config synchronously (the
-// engine pattern), so a runtime caller invokes only this method to remove a
-// component and the ComponentManager reconciles (tears down) it. The Delete
-// generates a watcher event at a fresh revision the underlying API doesn't
-// expose, so no watermark bump: the delete event arrives and is handled by
-// handleUpdate — either external (applies the already-idempotent delete) or,
-// when a later engine write has raised the high-water above it, engine-owned
-// (skips the redundant re-apply but STILL notifies, gh#388). Either path
-// reconciles the teardown.
+// The removal is also applied synchronously to the Manager's current
+// desired-state view. It does not tear down or otherwise change the running
+// ComponentManager; composition changes only on process restart. The NATS API
+// does not expose the Delete revision, so this path cannot bump the watermark.
+// Its watcher event either reapplies the idempotent delete or skips a redundant
+// reapply after a later Manager write, while still notifying observers.
 func (cm *Manager) DeleteComponentFromKV(ctx context.Context, name string) error {
-	if cm.detached.Load() {
-		cm.logger.Warn("Config manager detached from foreign KV bucket; skipping component delete",
-			"component", name)
-		return nil
-	}
 	key := fmt.Sprintf("components.%s", sanitizeNATSKey(name))
 	if err := cm.kvStore.Delete(ctx, key); err != nil {
 		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
@@ -656,10 +636,9 @@ func (cm *Manager) DeleteComponentFromKV(ctx context.Context, name string) error
 		}
 		return fmt.Errorf("delete component %s from KV: %w", name, err)
 	}
-	// Apply the removal in-memory synchronously so the (possibly engine-owned)
-	// watcher event skips re-apply but the reconcile still tears down the
-	// removed component (gh#388). updateConfig with an empty value deletes the
-	// component from the in-memory map.
+	// Apply the removal to the desired-state view synchronously. updateConfig
+	// with an empty value deletes the component from the in-memory map; the
+	// running component set remains unchanged.
 	if err := cm.updateConfig(key, nil); err != nil {
 		return fmt.Errorf("apply delete of component %s in memory: %w", name, err)
 	}
@@ -696,19 +675,13 @@ func (cm *Manager) bumpEngineHighWater(rev uint64) {
 // This is more efficient than PushToKV when only one component has changed,
 // and avoids race conditions with KV watchers when multiple operations are in flight.
 //
-// This method makes the engine pattern (write KV → apply in-memory → bump
-// watermark) self-contained: it applies the component to the in-memory config
-// synchronously, so a runtime caller invokes only this method to add a component
-// and the ComponentManager reconciles (spawns) it. The revision returned by
-// KV.Put is captured into engineHighWaterRev so the watcher's handleUpdate skips
-// the redundant re-apply of the resulting event — but still notifies subscribers
-// (gh#388). KV-write is first so a failed Put leaves in-memory state untouched.
+// The method performs write KV → apply desired state in memory → bump watermark.
+// It records a component candidate for the next process start; it does not add
+// or restart a component in the running ComponentManager. The revision returned
+// by KV.Put lets handleUpdate skip the redundant reapply while still notifying
+// desired-state observers. KV-write is first so a failed Put leaves memory
+// untouched.
 func (cm *Manager) PutComponentToKV(ctx context.Context, name string, compConfig types.ComponentConfig) error {
-	if cm.detached.Load() {
-		cm.logger.Warn("Config manager detached from foreign KV bucket; skipping component write",
-			"component", name)
-		return nil
-	}
 	key := fmt.Sprintf("components.%s", sanitizeNATSKey(name))
 	data, err := json.Marshal(compConfig)
 	if err != nil {
@@ -718,8 +691,8 @@ func (cm *Manager) PutComponentToKV(ctx context.Context, name string, compConfig
 	if err != nil {
 		return fmt.Errorf("put component %s to KV: %w", name, err)
 	}
-	// Apply in-memory synchronously so the (engine-owned) watcher event skips
-	// re-apply but the reconcile still sees the added component (gh#388).
+	// Apply the next-boot desired state synchronously; the watcher can skip its
+	// redundant reapply while the current runtime remains unchanged.
 	if err := cm.updateConfig(key, data); err != nil {
 		return fmt.Errorf("apply component %s in memory: %w", name, err)
 	}
@@ -731,10 +704,6 @@ func (cm *Manager) PutComponentToKV(ctx context.Context, name string, compConfig
 // PushToKV pushes the current configuration to NATS KV
 // This is useful for initial setup or config synchronization
 func (cm *Manager) PushToKV(ctx context.Context) error {
-	if cm.detached.Load() {
-		cm.logger.Warn("Config manager detached from foreign KV bucket; skipping config push")
-		return nil
-	}
 	cfg := cm.config.Get()
 
 	// Push version first
@@ -813,7 +782,7 @@ func (cm *Manager) PushToKV(ctx context.Context) error {
 		}
 	}
 
-	// After bulk push, notify subscribers to reconcile.
+	// After bulk push, notify durable desired-state observers.
 	// Individual KV watcher notifications may be dropped when the subscriber
 	// channel (buffer=1) is full during rapid successive puts.
 	cm.notifySubscribers("components.*")
@@ -822,8 +791,8 @@ func (cm *Manager) PushToKV(ctx context.Context) error {
 }
 
 // notifySubscribers sends a synthetic update to all subscribers matching the
-// given path. This is used after bulk operations (like PushToKV) to trigger
-// reconciliation, since individual per-key notifications may have been dropped.
+// given path. This is used after bulk operations such as PushToKV to preserve
+// desired-state observation when individual per-key notifications were dropped.
 func (cm *Manager) notifySubscribers(path string) {
 	if cm.stopped.Load() {
 		return
@@ -846,7 +815,7 @@ func (cm *Manager) notifySubscribers(path string) {
 				if cm.stopped.Load() {
 					return
 				}
-				// Drain any stale notification so the reconciliation signal is
+				// Drain any stale notification so the latest observation signal is
 				// guaranteed to be delivered. This is critical after bulk PushToKV
 				// where individual per-key notifications may have filled the buffer.
 				select {

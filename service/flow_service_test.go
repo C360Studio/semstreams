@@ -27,6 +27,14 @@ import (
 // createTestFlowService creates a FlowService instance for testing with HTTP server
 func createTestFlowService(t *testing.T) (*http.ServeMux, *flowstore.Manager, *natsclient.Client) {
 	t.Helper()
+	mux, flowStore, natsClient, _ := createTestFlowServiceWithConfigManager(t)
+	return mux, flowStore, natsClient
+}
+
+func createTestFlowServiceWithConfigManager(
+	t *testing.T,
+) (*http.ServeMux, *flowstore.Manager, *natsclient.Client, *config.Manager) {
+	t.Helper()
 
 	// Build tag ensures this only runs with -tags=integration
 	// Create NATS client using shared test helper
@@ -44,7 +52,10 @@ func createTestFlowService(t *testing.T) (*http.ServeMux, *flowstore.Manager, *n
 	require.NoError(t, err)
 
 	// Create config manager with minimal config
-	baseConfig := &config.Config{}
+	baseConfig := &config.Config{
+		Version:  "1.0.0",
+		Platform: config.PlatformConfig{Org: "c360", ID: "flow-service-test", Type: "test"},
+	}
 	configMgr, err := config.NewConfigManager(baseConfig, natsClient, logger)
 	require.NoError(t, err)
 	require.NoError(t, configMgr.Start(context.Background()))
@@ -73,7 +84,62 @@ func createTestFlowService(t *testing.T) (*http.ServeMux, *flowstore.Manager, *n
 	mux := http.NewServeMux()
 	flowService.RegisterHTTPHandlers("/flowbuilder/", mux)
 
-	return mux, flowStore, natsClient
+	return mux, flowStore, natsClient, configMgr
+}
+
+func TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager(t *testing.T) {
+	mux, _, _, configManager := createTestFlowServiceWithConfigManager(t)
+	flow := flowstore.Flow{
+		ID: "authoring-contract", Name: "Authoring contract",
+		CreatedBy: "preserved-client-field",
+		Nodes: []flowstore.FlowNode{{
+			ID: "node-1", Component: "udp", Type: types.ComponentTypeInput,
+			Name: "published-input", Config: map[string]any{"port": 14550},
+		}},
+		Connections: []flowstore.FlowConnection{},
+	}
+
+	doJSON := func(method, path string, body any) *httptest.ResponseRecorder {
+		t.Helper()
+		var reader io.Reader
+		if body != nil {
+			data, err := json.Marshal(body)
+			require.NoError(t, err)
+			reader = bytes.NewReader(data)
+		}
+		request := httptest.NewRequest(method, path, reader)
+		recorder := httptest.NewRecorder()
+		mux.ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	created := doJSON(http.MethodPost, "/flowbuilder/flows", flow)
+	require.Equal(t, http.StatusCreated, created.Code, created.Body.String())
+	require.NoError(t, json.Unmarshal(created.Body.Bytes(), &flow))
+	require.Equal(t, "authoring-contract", flow.ID)
+	require.Equal(t, int64(1), flow.Version)
+	require.Equal(t, "preserved-client-field", flow.CreatedBy)
+	require.Empty(t, configManager.GetConfig().Get().Components, "CRUD create must not publish component config")
+
+	flow.Description = "updated authoring metadata"
+	updated := doJSON(http.MethodPut, "/flowbuilder/flows/authoring-contract", flow)
+	require.Equal(t, http.StatusOK, updated.Code, updated.Body.String())
+	require.NoError(t, json.Unmarshal(updated.Body.Bytes(), &flow))
+	require.Equal(t, int64(2), flow.Version)
+	require.Empty(t, configManager.GetConfig().Get().Components, "CRUD update must not publish component config")
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		published := doJSON(http.MethodPost, "/flowbuilder/flows/authoring-contract/publish-component-configs", nil)
+		require.Equal(t, http.StatusOK, published.Code, "attempt %d: %s", attempt, published.Body.String())
+		var response map[string]any
+		require.NoError(t, json.Unmarshal(published.Body.Bytes(), &response))
+		require.Equal(t, []any{"published-input"}, response["persisted_components"])
+		require.Equal(t, true, response["runtime_unchanged"])
+		require.Equal(t, true, response["restart_required"])
+		persisted := configManager.GetConfig().Get().Components["published-input"]
+		require.Equal(t, "udp", persisted.Name)
+		require.True(t, persisted.Enabled)
+	}
 }
 
 // TestHandleValidateFlow_WithBody tests validation with flow definition in request body
@@ -83,9 +149,8 @@ func TestHandleValidateFlow_WithBody(t *testing.T) {
 	// Create test flow in request body
 	flowID := "test-flow-with-body"
 	requestFlow := flowstore.Flow{
-		ID:           flowID,
-		Name:         "Test Flow",
-		RuntimeState: flowstore.StateNotDeployed,
+		ID:   flowID,
+		Name: "Test Flow",
 		Nodes: []flowstore.FlowNode{
 			{
 				ID:        "node-1",
@@ -150,9 +215,8 @@ func TestHandleValidateFlow_WithoutBody(t *testing.T) {
 	// Create and save a flow to NATS KV
 	flowID := "test-flow-without-body"
 	flow := &flowstore.Flow{
-		ID:           flowID,
-		Name:         "Test Flow in KV",
-		RuntimeState: flowstore.StateNotDeployed,
+		ID:   flowID,
+		Name: "Test Flow in KV",
 		Nodes: []flowstore.FlowNode{
 			{
 				ID:        "node-1",
@@ -246,7 +310,6 @@ func TestHandleValidateFlow_InvalidJSON(t *testing.T) {
 	t.Logf("Error response: %+v", errorResp)
 }
 
-// TestHandleValidateFlow_IDMismatch tests validation when body ID doesn't match URL ID
 func TestHandleValidateFlow_IDMismatch(t *testing.T) {
 	mux, _, _ := createTestFlowService(t)
 
@@ -255,11 +318,10 @@ func TestHandleValidateFlow_IDMismatch(t *testing.T) {
 
 	// Create test flow with different ID
 	requestFlow := flowstore.Flow{
-		ID:           bodyFlowID, // Different from URL
-		Name:         "Test Flow",
-		RuntimeState: flowstore.StateNotDeployed,
-		Nodes:        []flowstore.FlowNode{},
-		Connections:  []flowstore.FlowConnection{},
+		ID:          bodyFlowID,
+		Name:        "Test Flow",
+		Nodes:       []flowstore.FlowNode{},
+		Connections: []flowstore.FlowConnection{},
 	}
 
 	// Marshal flow to JSON
@@ -305,8 +367,7 @@ func TestHandleValidateFlow_WithBodyNoID(t *testing.T) {
 
 	// Create test flow WITHOUT ID in body
 	requestFlow := map[string]any{
-		"name":          "Test Flow",
-		"runtime_state": "not_deployed",
+		"name": "Test Flow",
 		"nodes": []flowstore.FlowNode{
 			{
 				ID:        "node-1",

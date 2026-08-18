@@ -38,7 +38,7 @@ paths:
     /config/{name}:
         get:
             summary: Get component configuration
-            description: Returns the current configuration for a specific component
+            description: Returns the constructor-captured boot configuration for a specific component
             tags:
                 - Components
             parameters:
@@ -70,35 +70,6 @@ paths:
                         application/json:
                             schema:
                                 type: object
-    /deployment/{id}/deploy:
-        post:
-            summary: Deploy flow
-            description: Deploys a flow to the runtime
-            tags:
-                - Deployment
-            responses:
-                "200":
-                    description: Flow deployed
-                "400":
-                    description: Validation errors
-    /deployment/{id}/start:
-        post:
-            summary: Start flow
-            description: Starts a deployed flow
-            tags:
-                - Deployment
-            responses:
-                "200":
-                    description: Flow started
-    /deployment/{id}/stop:
-        post:
-            summary: Stop flow
-            description: Stops a running flow
-            tags:
-                - Deployment
-            responses:
-                "200":
-                    description: Flow stopped
     /entries:
         get:
             summary: Get recent message entries
@@ -141,24 +112,24 @@ paths:
                                 type: object
     /flows:
         get:
-            summary: List all flows
-            description: Returns a list of all visual flows
+            summary: List saved flow diagrams
+            description: Lists saved diagrams; no runtime lifecycle state is implied.
             tags:
                 - Flows
             responses:
                 "200":
-                    description: List of flows
+                    description: Saved flow diagrams
                     content:
                         application/json:
                             schema:
                                 type: object
         post:
-            summary: Create a new flow
-            description: Creates a new visual flow
+            summary: Create a saved flow diagram
+            description: Saves a diagram without changing runtime configuration.
             tags:
                 - Flows
             requestBody:
-                description: Flow definition to create
+                description: Flow definition
                 required: true
                 content:
                     application/json:
@@ -166,40 +137,47 @@ paths:
                             $ref: '#/components/schemas/Flow'
             responses:
                 "201":
-                    description: Flow created
+                    description: Diagram created
                     content:
                         application/json:
                             schema:
-                                type: object
+                                $ref: '#/components/schemas/Flow'
                 "400":
                     description: Invalid request
     /flows/{id}:
         get:
-            summary: Get flow by ID
-            description: Returns a single flow by ID
+            summary: Get a saved flow diagram
+            description: Returns diagram metadata, nodes, connections, and audit fields.
             tags:
                 - Flows
             parameters:
                 - name: id
                   in: path
                   required: true
-                  description: Flow ID
+                  description: Saved flow diagram ID
                   schema:
                     type: string
             responses:
                 "200":
-                    description: Flow details
+                    description: Saved diagram
                     content:
                         application/json:
                             schema:
                                 type: object
                 "404":
-                    description: Flow not found
+                    description: Saved diagram not found
         put:
-            summary: Update flow
-            description: Updates an existing flow
+            summary: Update a saved flow diagram
+            description: Updates a diagram with optimistic concurrency. Runtime configuration is unchanged.
             tags:
                 - Flows
+            parameters:
+                - name: id
+                  in: path
+                  required: true
+                  description: Saved flow diagram ID
+                  schema:
+                    type: string
             requestBody:
                 description: Updated flow definition
                 required: true
@@ -209,96 +187,148 @@ paths:
                             $ref: '#/components/schemas/Flow'
             responses:
                 "200":
-                    description: Flow updated
+                    description: Diagram updated
                     content:
                         application/json:
                             schema:
-                                type: object
-                "404":
-                    description: Flow not found
+                                $ref: '#/components/schemas/Flow'
+                "400":
+                    description: Invalid request
                 "409":
                     description: Version conflict
         delete:
-            summary: Delete flow
-            description: Deletes a flow
+            summary: Delete a saved flow diagram
+            description: Deletes only the diagram; runtime configuration is unchanged.
             tags:
                 - Flows
-            responses:
-                "204":
-                    description: Flow deleted
-                "404":
-                    description: Flow not found
-    /flows/{id}/runtime/health:
-        get:
-            summary: Get runtime health
-            description: Returns health status and timing for flow components (status, uptime, last activity)
-            tags:
-                - Runtime
             parameters:
                 - name: id
                   in: path
                   required: true
-                  description: Flow ID
+                  description: Saved flow diagram ID
+                  schema:
+                    type: string
+            responses:
+                "204":
+                    description: Diagram deleted
+    /flows/{id}/observations/health:
+        get:
+            summary: Observe health for diagram component names
+            description: Queries health for component names declared by the saved diagram; it does not assert ownership or activation.
+            tags:
+                - Flow observations
+            parameters:
+                - name: id
+                  in: path
+                  required: true
+                  description: Saved flow diagram ID
                   schema:
                     type: string
             responses:
                 "200":
-                    description: Runtime health status
+                    description: Observe health for diagram component names
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/RuntimeHealthResponse'
                 "404":
-                    description: Flow not found
-    /flows/{id}/runtime/messages:
+                    description: Saved flow diagram not found
+    /flows/{id}/observations/messages:
         get:
-            summary: Get runtime messages
-            description: Returns filtered message logger entries for flow components (NATS message flow visibility)
+            summary: Observe messages for diagram component names
+            description: Filters message observations using names declared by the saved diagram; it does not assert ownership or activation.
             tags:
-                - Runtime
+                - Flow observations
             parameters:
                 - name: id
                   in: path
                   required: true
-                  description: Flow ID
+                  description: Saved flow diagram ID
                   schema:
                     type: string
-                - name: limit
-                  in: query
-                  description: 'Maximum number of messages to return (default: 100, max: 1000)'
-                  schema:
-                    type: integer
             responses:
                 "200":
-                    description: Runtime message entries
+                    description: Observe messages for diagram component names
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/RuntimeMessagesResponse'
                 "404":
-                    description: Flow not found
-    /flows/{id}/runtime/metrics:
+                    description: Saved flow diagram not found
+    /flows/{id}/observations/metrics:
         get:
-            summary: Get runtime metrics
-            description: Returns runtime metrics for flow components (throughput, errors, queue depth) with graceful degradation
+            summary: Observe metrics for diagram component names
+            description: Queries metrics for component names declared by the saved diagram; it does not assert ownership or activation.
             tags:
-                - Runtime
+                - Flow observations
             parameters:
                 - name: id
                   in: path
                   required: true
-                  description: Flow ID
+                  description: Saved flow diagram ID
                   schema:
                     type: string
             responses:
                 "200":
-                    description: Runtime metrics
+                    description: Observe metrics for diagram component names
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/RuntimeMetricsResponse'
                 "404":
-                    description: Flow not found
+                    description: Saved flow diagram not found
+    /flows/{id}/publish-component-configs:
+        post:
+            summary: Publish component configuration candidates
+            description: Compiles the saved diagram and upserts its component configurations. The current process remains unchanged and a restart is required before published candidates can be composed.
+            tags:
+                - Flows
+            parameters:
+                - name: id
+                  in: path
+                  required: true
+                  description: Saved flow diagram ID
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: Published component configuration names
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/publishComponentConfigsResponse'
+                "400":
+                    description: Diagram validation failed
+                "500":
+                    description: Partial or complete persistence failure
+    /flows/{id}/validate:
+        post:
+            summary: Validate a flow diagram
+            description: Validates a saved diagram or optional request-body draft without changing configuration.
+            tags:
+                - Flows
+            parameters:
+                - name: id
+                  in: path
+                  required: true
+                  description: Saved flow diagram ID
+                  schema:
+                    type: string
+            requestBody:
+                description: Optional flow definition
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/Flow'
+            responses:
+                "200":
+                    description: Validation result
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                "400":
+                    description: Invalid request
     /gaps:
         get:
             summary: Get component flow gaps
@@ -713,46 +743,6 @@ paths:
                                 type: object
                 "404":
                     description: Component not found
-    /status/stream:
-        get:
-            summary: WebSocket status stream
-            description: |
-                Real-time flow status updates via WebSocket.
-
-                ## Connection
-                Connect with: ws://host/flowbuilder/status/stream?flowId={flowId}
-
-                ## Message Types (Server → Client)
-                All messages are wrapped in StatusStreamEnvelope:
-                - **flow_status**: Flow state changes (deployed, running, stopped, failed)
-                - **component_health**: Component health updates (every 5s)
-                - **component_metrics**: Real-time metrics from MetricsForwarder
-                - **log_entry**: Log messages from LogForwarder
-
-                ## Filtering (Client → Server)
-                Send SubscribeCommand JSON to filter messages:
-                - message_types: Array of message types to receive
-                - log_level: Minimum log level (DEBUG < INFO < WARN < ERROR)
-                - sources: Array of component names to filter by
-
-                ## Example Subscribe Command
-                {"command":"subscribe","message_types":["flow_status","log_entry"],"log_level":"WARN"}
-            tags:
-                - Status
-            parameters:
-                - name: flowId
-                  in: query
-                  required: true
-                  description: Flow ID to subscribe to for status updates
-                  schema:
-                    type: string
-            responses:
-                "101":
-                    description: Switching to WebSocket protocol
-                "400":
-                    description: Missing or invalid flowId parameter
-                "404":
-                    description: Flow not found
     /subjects:
         get:
             summary: Get monitored subjects
@@ -1330,11 +1320,6 @@ components:
                     type: string
                 created_by:
                     type: string
-                deployed_at:
-                    anyOf:
-                        - format: date-time
-                          type: string
-                        - type: "null"
                 description:
                     type: string
                 id:
@@ -1377,18 +1362,6 @@ components:
                             - config
                         type: object
                     type: array
-                runtime_state:
-                    type: string
-                started_at:
-                    anyOf:
-                        - format: date-time
-                          type: string
-                        - type: "null"
-                stopped_at:
-                    anyOf:
-                        - format: date-time
-                          type: string
-                        - type: "null"
                 updated_at:
                     format: date-time
                     type: string
@@ -1400,25 +1373,9 @@ components:
                 - version
                 - nodes
                 - connections
-                - runtime_state
                 - created_at
                 - updated_at
                 - last_modified
-            type: object
-        FlowStatusPayload:
-            properties:
-                error:
-                    type: string
-                prev_state:
-                    type: string
-                state:
-                    type: string
-                timestamp:
-                    type: integer
-            required:
-                - state
-                - prev_state
-                - timestamp
             type: object
         GraphQLRequest:
             properties:
@@ -1472,23 +1429,6 @@ components:
                 - type
                 - content
                 - timestamp
-            type: object
-        LogEntryPayload:
-            properties:
-                fields:
-                    additionalProperties: {}
-                    type: object
-                level:
-                    type: string
-                message:
-                    type: string
-                source:
-                    type: string
-            required:
-                - level
-                - source
-                - message
-                - fields
             type: object
         Loop:
             properties:
@@ -1658,52 +1598,6 @@ components:
                 - timestamp
                 - subject
                 - summary
-            type: object
-        MetricEntry:
-            properties:
-                labels:
-                    additionalProperties:
-                        type: string
-                    type: object
-                name:
-                    type: string
-                type:
-                    type: string
-                value:
-                    type: number
-            required:
-                - name
-                - type
-                - value
-                - labels
-            type: object
-        MetricsPayload:
-            properties:
-                component:
-                    type: string
-                metrics:
-                    items:
-                        properties:
-                            labels:
-                                additionalProperties:
-                                    type: string
-                                type: object
-                            name:
-                                type: string
-                            type:
-                                type: string
-                            value:
-                                type: number
-                        required:
-                            - name
-                            - type
-                            - value
-                            - labels
-                        type: object
-                    type: array
-            required:
-                - component
-                - metrics
             type: object
         ReviewRequest:
             properties:
@@ -1939,25 +1833,6 @@ components:
                 - human_rejected
                 - applied
             type: object
-        StatusStreamEnvelope:
-            properties:
-                flow_id:
-                    type: string
-                id:
-                    type: string
-                payload:
-                    format: byte
-                    type: string
-                timestamp:
-                    type: integer
-                type:
-                    type: string
-            required:
-                - type
-                - id
-                - timestamp
-                - flow_id
-            type: object
         StructuralAnomaly:
             properties:
                 confidence:
@@ -2057,23 +1932,6 @@ components:
                 - status
                 - detected_at
             type: object
-        SubscribeCommand:
-            properties:
-                command:
-                    type: string
-                log_level:
-                    type: string
-                message_types:
-                    items:
-                        type: string
-                    type: array
-                sources:
-                    items:
-                        type: string
-                    type: array
-            required:
-                - command
-            type: object
         TransitionRequest:
             properties:
                 note:
@@ -2083,17 +1941,36 @@ components:
             required:
                 - phase
             type: object
+        publishComponentConfigsResponse:
+            properties:
+                error:
+                    type: string
+                failed_component:
+                    type: string
+                persisted_components:
+                    items:
+                        type: string
+                    type: array
+                restart_required:
+                    type: boolean
+                runtime_unchanged:
+                    type: boolean
+            required:
+                - persisted_components
+                - runtime_unchanged
+                - restart_required
+            type: object
 tags:
     - name: AgenticDispatch
       description: User message processing and command dispatch
     - name: Components
       description: Component management and monitoring endpoints
-    - name: Deployment
-      description: Flow deployment and runtime control
+    - name: Flow observations
+      description: Best-effort observation keyed by names declared in a saved diagram
     - name: FlowGraph
       description: Component flow analysis and connectivity validation endpoints
     - name: Flows
-      description: Visual flow CRUD operations
+      description: Saved flow-diagram CRUD, validation, and explicit component-config publishing
     - name: GraphQL
       description: GraphQL query endpoint for knowledge graph operations
     - name: Inference
@@ -2104,7 +1981,3 @@ tags:
       description: Model Context Protocol endpoint for AI tool integration
     - name: MessageLogger
       description: Message observation and debugging endpoints
-    - name: Runtime
-      description: Runtime metrics and observability
-    - name: Status
-      description: Real-time status updates
