@@ -8,11 +8,10 @@
 - Sister repositories were inspected only to identify migration surfaces. They remain read-only.
 - File and line references below are exact at the baseline. Later edits may move them.
 
-ADR-095 and `simplify-one-shot-lifecycle-ownership` own current service-shutdown and terminal owner sequencing.
-`restore-go-lifecycle-ownership` retains its completed context-bearing signature prerequisite and active
-runtime-context-ownership work. It no longer claims that stopping is clean completion, concurrent Stop joins one
-result, deadline expiry is rejoinable, or repeated Stop replays a retained error. It preserves context provenance,
-exact Start finalization, failed-Start cleanup authority, nil rejection, and no detached roots.
+> **Non-normative provenance.** The baseline evidence below remains intact as a forensic record; it is not current
+> implementation or migration guidance. `restore-go-lifecycle-ownership` owns only the completed context-bearing
+> signature prerequisite and remaining context/root debt. ADR-095 and `simplify-one-shot-lifecycle-ownership` own
+> exact Start finalization, failed-Start cleanup, Stop ordering, and lifecycle proof.
 
 ### Beta.161 target addendum
 

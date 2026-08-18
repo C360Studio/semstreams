@@ -3,70 +3,35 @@
 ## Why
 
 SemStreams currently treats broad configuration writes as commands against the running process. ComponentManager can
-watch `components.*` and `model_registry`, create and remove components, restart dependants, and replace Registry
-generations. Its generic HTTP config endpoint also probes hidden component interfaces and may mutate a running
-component without persisting the change.
+watch configuration and mutate running composition even though no shipped configuration enables that general behavior
+and no production component implements its generic live-update hook.
 
-That flexibility has not become a product requirement. `watch_config` defaults false and no shipped configuration
-enables it. No production component implements the generic `UpdateConfig(ctx, json.RawMessage)` hook. Flow lifecycle
-tools exist but neither shipped binary wires their runtime manager. The only shipped live-authoring path with clear UX
-value is rule create/update/delete followed by Rule-processor activation.
-
-The unused generality is expensive: it is the reason the pending lifecycle design needs replacement reservations,
-borrow gates, transition states, request-to-supervisor lifetime handoff, failed-candidate policy, and exact
-same-generation teardown. Those mechanisms make the framework harder to reason about and give future contributors a
-large non-idiomatic surface to copy.
+The demonstrated live-authoring need is narrower: rule create/update/delete followed by activation inside an already
+running Rule processor. This change separates durable desired state, sealed boot-effective composition, and that one
+dedicated rules-only hot-reload capability.
 
 ## What changes
 
 - Treat service and component composition as immutable after successful boot.
 - Keep config KV, flow storage, rule storage, schemas, validation, and authoring APIs as durable desired state.
-- Make flow deploy/start/stop/undeploy operations mutate desired state only while a process is running. Their response
-  must state that the runtime is unchanged and restart is required.
+- Make flow deploy/start/stop/undeploy operations mutate desired state only while running and report runtime unchanged,
+  restart required.
 - Retire ComponentManager config watching, generic live config PUT, runtime create/remove/restart/replace, and
   model-registry-triggered component restart.
 - Make Registry and observation value-only. ComponentManager remains the sole runtime-handle owner and exposes only
-  callback-scoped borrows for concrete in-process consumers, fenced by terminal Stop rather than live transitions.
-- Retire the generic component `UpdateConfig` capability. A future live operational control must be separately named,
-  typed, observable, and justified by a current consumer.
-- Preserve one bounded exception: rule definitions may hot reload inside an already-running Rule processor. The Rule
-  processor's ports, dependencies, watch-bucket set, integration mode, and projection bindings remain boot-only.
-- Scope rule authoring to an already-composed `pack_id`; retire the ambiguous global rule namespace. Deletes use typed
-  desired tombstones so every mutation has an exact receipt and deterministic restart replay.
-- Make rule activation revision-bound and observable. A durable rule write is not evidence that the rule became
-  active; the writer reports `pending`, and the owning Rule processor records `applied`, `rejected`, `superseded`, or
-  `canceled_shutdown` for the exact desired revision.
-- Use KV Watch for desired rule facts and rule-activation facts. Restart replay and fan-out are correct, application is
-  fast and idempotent, and both records describe current facts rather than queued work.
-- Make restart-safe shutdown a prerequisite for relying on boot activation. A controlled restart must quiesce new
-  intake, drain already-accepted NATS callbacks, settle ACK/NAK and publications, cancel and join Start-owned work, and
-  flush and close the NATS connection before exit.
-- Preserve owner-local shutdown as a prerequisite, but supersede this change's managed-consumer lifecycle mechanics
-  with ADR-095 and `simplify-one-shot-lifecycle-ownership`: retained consume constructors return the exact native
-  `jetstream.ConsumeContext`, failed-Start cleanup authority is retained, and Client does not rediscover children.
-- Make Client Close terminal and transport-only: it joins only Client-owned health/metrics workers, native-drains the
-  connection, observes CLOSED and conservative error history, and never compensates for missing owner cleanup.
-- Remove abrupt NATS consumer `Stop` and subscription `Unsubscribe` from graceful shutdown paths. Deadline-forced
-  termination remains an observable failed shutdown; it cannot be reported as a clean restart boundary.
-- Retire broad mutable NATS roots returned by Client/framework constructors and narrow broad injected roots before the
-  breaking tag. Preserve only reviewed message/value/watcher/lister/future seams with explicit caller context and
-  local Stop/completion ownership; add no `Unsafe*` compatibility alias.
-- Require every controlled shutdown, clean or failed, to exit the current process. Exit status and observability name
-  the result; supervision always starts the next process with a fresh Client.
-- Make dirty restart correctness independent of shutdown hooks. Crash-critical work uses durable JetStream or KV,
-  acknowledges only after durable effects commit, and converges safely when a crash causes redelivery.
-- Make every successful boot consume the latest committed desired state regardless of whether the previous process
-  drained cleanly or lost power. A clean-exit marker is observability, never an activation precondition.
-- Simplify `restore-go-lifecycle-ownership`: delete its live replacement protocol and retain boot ownership, raw-handle
-  retirement, terminal shutdown, context cleanup, and their race proofs.
+  callback-scoped access; lifecycle behavior for those callbacks is delegated.
+- Retire the generic component `UpdateConfig` capability.
+- Preserve one bounded exception: rule definitions may hot reload inside an already-running Rule processor while its
+  ports, dependencies, watch-bucket set, integration mode, and projection bindings remain boot-only.
+- Scope rule authoring to an already-composed `pack_id`, use typed desired tombstones, and make activation
+  revision-bound and observable.
+- Use KV Watch for desired rule facts and rule-activation facts.
 
-ADR-095 and `simplify-one-shot-lifecycle-ownership` supersede PR #984's managed-consumer, lifecycle deletion,
-concurrent/rejoin, and retained-result mechanics and own the complete `restart-safe-shutdown` and
-`jetstream-consumer-policy` lifecycle target. PR #984 retains boot-only composition, rule hot reload, and flow
-activation truth; it depends on `simplify-one-shot-lifecycle-ownership` for broad-root retirement and restart-safe
-settlement/outbound-flush, controlled-process proof, dirty-recovery, durable-communication, live-storage/replica
-validation, NATS restart, clean-marker independence, and latest-desired-state guarantees. No runtime or proof task is
-completed by delegation.
+ADR-095 and `simplify-one-shot-lifecycle-ownership` are external prerequisites and exclusively own generic
+component/service callback-borrow shutdown, Stop/Close terminal sequencing, native handle lifecycle, failed-Start
+cleanup, ACK ordering, settlement, controlled/dirty recovery, and lifecycle proof. This change owns only Rule-specific
+activation terminalization—fencing status publication and canceling/joining Rule-local work—executed under simplify's
+generic lifecycle contract. It receives no generic lifecycle task or proof completion credit from that dependency.
 
 ## Capabilities
 
@@ -77,45 +42,34 @@ completed by delegation.
 
 ### Delegated dependency capability
 
-- `restart-safe-shutdown`: ADR-095 and `simplify-one-shot-lifecycle-ownership` own the raw-root and restart-safe
-  guarantees that PR #984 consumes as prerequisites for its boot, rule, and flow scope.
+- `restart-safe-shutdown`: ADR-095 and `simplify-one-shot-lifecycle-ownership` own all lifecycle mechanics and proof
+  required before boot-only activation can claim release readiness.
 
 ### Modified capabilities
 
 - `component-runtime-config`: desired component configuration is next-boot state; generic live apply and generation
   replacement are retired.
 - `service-composition`: all service and component composition is sealed at boot, with the dedicated Rule exception.
-- `component-discovery`: Registry admission is boot-owned and has no live replacement/removal protocol.
+- `component-discovery`: Registry admission is boot-owned and has no live replacement/removal protocol or lifecycle
+  authority.
 - `framework-composition`: the component-start barrier consumes one boot snapshot and has no late boot-drain or
   post-boot dynamic Start path.
 - `graph-index-readiness`: Rule readiness gains boot-incarnation identity and remains the sole Rule liveness fact;
   configured entity-watch membership becomes boot-only.
-- `rule-entity-watching`: watcher generation replacement repairs the same boot-authoritative watcher after transport
-  loss and cannot apply a configured pattern-set change.
+- `rule-entity-watching`: watcher generation repair preserves the boot-authoritative configured pattern set.
 
 ## Impact
 
 - **Breaking API and behavior:** ComponentManager live mutation methods, Registry replacement, generic config PUT, and
-  live flow-topology activation are retired without compatibility shims.
-- **Preserved authoring:** flow and rule definitions remain durable and validated. Flow mutations made while running
-  become pending-next-boot; rule-definition mutations retain bounded hot activation.
-- **Flow truth:** persisted flow state is renamed as desired activation. Runtime monitoring derives effective state
-  from the sealed process and never relabels a desired write as deployed or running.
-- **Lifecycle:** ComponentManager owns one boot generation per admitted component and terminal shutdown. It no longer
-  coordinates incumbent/candidate replacement.
-- **Restart safety:** the process signal path must preserve runtime authority until lifecycle owners quiesce and drain.
-  A graceful shutdown never silently converts native NATS drain into abrupt stop/unsubscribe, and Client Close alone
-  never certifies owner callback settlement.
-- **Crash safety:** power loss runs no cleanup. Durable work remains recoverable and at-least-once redelivery converges;
-  core NATS is not used for work whose loss would violate restart correctness.
-- **Observability:** rule writers receive a desired revision and can observe the terminal activation outcome for that
-  revision through typed rule reads, without knowing operational KV grammar. Watcher/status failure degrades Rule
-  readiness. Flow writers receive an honest restart-required result.
-- **Deployment identity:** Rule hot reload requires a validated, stable `platform.instance_id`. Concurrent ownership of
-  one process-slot/component/pack readiness key fails admission through compare-and-set rather than overwriting truth.
-- **Migration:** sister repositories remain read-only. Migration documentation names removed APIs and new response
-  semantics, exact owner-handle adoption, `ConsumeDurable` retirement, and broad-root narrowing; downstream teams
-  update their own repositories. ADR-070 remains historical decision context rather than being rewritten.
-- **Release:** restart-safe shutdown is a prerequisite, not a follow-up. This pre-v1 breaking work requires controlled
-  SIGTERM and SIGKILL restart evidence plus relevant core, structural, agentic, CRUD, and semantic E2E before the
-  breaking commit lands.
+  live flow-topology activation retire without compatibility shims.
+- **Preserved authoring:** flow and rule definitions remain durable and validated. Flow mutations become
+  pending-next-boot; rule-definition mutations retain bounded hot activation.
+- **Flow truth:** desired activation and sealed runtime-effective state are distinct and observable.
+- **Observability:** rule writers receive a desired revision and can observe its typed terminal activation outcome
+  without knowing operational KV grammar. Flow writers receive an honest restart-required result.
+- **Deployment identity:** Rule hot reload requires a validated stable `platform.instance_id`; competing ownership of
+  one readiness slot fails admission through compare-and-set.
+- **Migration:** sister repositories remain read-only. Downstream owners update and validate their own repositories.
+- **Release dependency:** this change cannot claim activation or release readiness until the simplify lifecycle proof
+  passes. It owns no generic lifecycle task or shutdown mechanism, controlled/dirty proof, or E2E lifecycle gate; its
+  only lifecycle-adjacent work is Rule-specific activation terminalization under simplify's generic contract.

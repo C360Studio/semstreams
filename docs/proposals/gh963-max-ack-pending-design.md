@@ -10,6 +10,16 @@ Design body SHA-256: `4360372a0a1e4381d61373624f03ebea987dcfd853b2426628ab9090fb
 
 Hash method: `sed -n '/^## Design body$/,$p' <file> | tail -n +2 | shasum -a 256`
 
+## Lifecycle supersession addendum
+
+The hashed design body remains accepted historical evidence. Its private `consumerBinding`, replacement,
+`StopConsumer`, `StopAllConsumers`, `StopAndDeleteConsumer`, and Client Close policy-cleanup mechanics are superseded
+by ADR-095 and `simplify-one-shot-lifecycle-ownership` and are non-normative.
+
+The current target attaches policy-observation cleanup to the owner-local record for the exact native
+`jetstream.ConsumeContext`: refresh that exact handle, reject duplicate ownership, and let the owner forget policy
+labels only after observing exact `Closed()`. The OpenTelemetry cleanup closure is unchanged.
+
 ## Design body
 
 ## Accepted inventory body

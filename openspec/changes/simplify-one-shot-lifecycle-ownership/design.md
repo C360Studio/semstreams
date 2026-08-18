@@ -73,9 +73,11 @@ These PR #984 files remain byte-identical:
 
 ```text
 docs/adr/094-boot-only-composition-and-observable-rule-activation.md
-openspec/changes/require-restart-for-config-activation/inventory.md
 openspec/changes/require-restart-for-config-activation/native-surface-inventory.md
 ```
+
+The PR #984 inventory keeps its forensic body and approved hash as provenance, with only the explicit historical
+supersession banner required by this reconciliation.
 
 All non-lifecycle spec deltas remain owned by PR #984.
 
@@ -95,15 +97,19 @@ openspec/changes/restore-go-lifecycle-ownership/specs/service-shutdown/spec.md
 Compatible retained truth:
 
 - context-bearing `Service.Stop`, `Manager.StopAll`, and `LifecycleComponent.Stop` signatures;
-- Start context is runtime authority; production structs retain cancel/join state, not `context.Context`;
+- Start context is lexical runtime authority; production structs retain cancel/join state, not `context.Context`;
 - no invented/detached library roots, with the measured synchronous failed-Start rollback and HTTP BaseContext
   exceptions;
 - caller Stop context bounds work but is not runtime authority;
 - nil context is rejected before action;
 - manager Start context is passed as a goroutine function parameter;
+
+Lifecycle truth owned by this change:
+
 - exact `startDone`/Start finalization and no Start/Stop method-body overlap;
 - failed Start may retain exact cleanup authority, reject another Start, and later clean under manager Stop;
-- callback borrow gates close without manager/gate locks during callbacks or waits.
+- callback-borrow shutdown fences new borrows, waits for admitted callbacks to return without manager/gate locks, and
+  requires the callback to return before outer composition requests Stop rather than self-stopping.
 
 Conflicting truth to remove/delegate:
 
@@ -178,11 +184,11 @@ The restart-safe delta owns broad-root retirement, settlement and outbound flush
 recovery without hooks, durable-only crash-critical communication, live storage/replica validation, external-effect
 limits, SemStreams/NATS kill proof, clean-marker independence, and latest-desired-state recovery.
 
-### D5. Restore retains context truth, not terminal-result semantics
+### D5. Restore retains context prerequisite; lifecycle truth is owned here
 
-The restore change keeps caller-owned context signatures, lexical Start authority, nil rejection, exact Start
-finalization, failed-Start cleanup, and no detached roots. ADR-095 and this change exclusively own service-shutdown and
-terminal sequencing.
+Restore retains the completed context-bearing signature prerequisite and remaining context/root debt. This change
+exclusively owns exact Start finalization, failed-Start cleanup, service shutdown, terminal sequencing, ACK ordering,
+and controlled/dirty proof.
 
 ## Approved-ruling conformance
 

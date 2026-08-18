@@ -114,6 +114,14 @@ are a pinned-baseline reproduction aid, not a future-proof substitute for type-a
 
 ## Workspace recovery checkpoint
 
+Authority collisions are inventoried in
+[`authority-reconciliation-inventory.md`](authority-reconciliation-inventory.md) (SHA-256
+`d495b4acb908bb846194eec0ce9c97076691bf3cba5d3143b8c2453335792f4e`); inventory only, with no completion credit.
+The inventory-first reconciliation design is recorded in
+[`authority-reconciliation-design.md`](authority-reconciliation-design.md) (SHA-256
+`9af0ceeacae2dc0a854b0337f5eb6dd19710a90fde586944e7f9bca0b06df039`); design only, with no runtime or proof credit.
+Applying the approved authority reconciliation changes no runtime-migration or proof completion credit.
+
 The authoritative eight-worktree evidence, binding classifications, bounded preservation sets, and exact cleanup
 scope are recorded in [`worktree-recovery-manifest.md`](worktree-recovery-manifest.md). No dirty lifecycle worktree may
 be removed until that manifest is merged and its two bounded preservation artifacts are verified.

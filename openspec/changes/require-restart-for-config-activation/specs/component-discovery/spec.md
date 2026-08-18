@@ -7,8 +7,7 @@ boot set is sealed, Registry SHALL NOT create, replace, or remove a declaration 
 model-registry, flow, rule, HTTP, or direct KV mutation.
 
 Registry SHALL expose defensive declaration values and SHALL NOT expose runtime component handles or lifecycle
-authority. Terminal shutdown MAY retire process-local state only after the owning ComponentManager has canceled and
-joined the exact runtime generations; shutdown is not live reconfiguration.
+authority. Process-local state ends with process lifetime; this capability defines no terminal shutdown ordering.
 
 #### Scenario: Post-boot desired edit cannot change Registry
 

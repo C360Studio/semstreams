@@ -1,4 +1,7 @@
-## 1. Atomic Stop contract prerequisite
+## 1. Historical completed Stop(ctx) prerequisite
+
+Checked items in this section record the landed context-bearing signature prerequisite. They do not define current
+lifecycle mechanics, terminal ordering, failed-Start behavior, or restart proof.
 
 - [x] 1.1 In one PR, change `Service.Stop`, `Manager.StopAll`, and `LifecycleComponent.Stop` to accept
   `context.Context`; migrate every SemStreams implementation and direct caller.
@@ -18,33 +21,15 @@
 - [x] 1.10 Obtain semstreams-reviewer approval; run `task lint`, `go test -race ./...`, integration and contract tests,
   schema drift check, `task e2e:core`, and `task e2e:semantic` before merging the atomic prerequisite.
 
-Completion of section 1 is deliberately narrow. The context-bearing signature prerequisite is complete. Stateful
-`lifecyclejoin.Generation` and `lifecyclejoin.Operation` terminal-result/rejoin semantics are superseded by ADR-095
-and `simplify-one-shot-lifecycle-ownership`; this change retains no active claim over that service-shutdown behavior.
-NATS, JetStream, and HTTP shutdown uses the protocol's native drain/shutdown completion plus generation-scoped joins.
-The sole new framework-owned root is the bounded five-second context used synchronously by
-`RunPartialStartRollback` when an uncommitted Start has no external Stop caller. It does not launch detached cleanup.
+Completion of section 1 is deliberately narrow. The context-bearing signature prerequisite is complete. Historical
+implementation and E2E evidence below proves only that prerequisite at its original integration point.
 
-The completed contract also permits a failed Start to retain cleanup authority. Such a generation rejects another
-Start until a later Stop, called with a fresh live shutdown context, reaches terminal cleanup. In particular,
-`MilestoneSubscriber.Start` can return both a non-nil stop function and a non-nil error after partial acquisition;
-the caller must preserve and invoke that stop function.
+## 2. Delegated lifecycle and composition work
 
-## 2. Boot runtime ownership and restart-safe terminal Stop
-
-- [ ] 2.1 Land `require-restart-for-config-activation` and `simplify-one-shot-lifecycle-ownership` first. They own
-  value-only Registry/observation, callback-scoped boot-runtime access, generalized live-mutation deletion, terminal
-  owner sequencing, and controlled/dirty restart proof.
-- [ ] 2.2 Verify Registry, ComponentManager DTOs, flow graph, `component.Lookup`, and
-  `Dependencies.ComponentRegistry` expose no raw runtime handle or cancellation authority.
-- [ ] 2.3 Verify live `ReplaceComponent`, removal, reservation, Transitioning, candidate, and predecessor-restoration
-  protocols are absent rather than redesigned.
-- [ ] 2.4 Prove callback borrows return typed missing/failed/stopping and terminal Stop fences and drains them without
-  holding manager locks.
-- [ ] 2.5 **SUPERSEDED — tracked by `simplify-one-shot-lifecycle-ownership`.** Terminal owner ordering, completed
-  repeated Stop, failed-Start cleanup authority, and the prohibition on running-generation rejoin belong there.
-- [ ] 2.6 **SUPERSEDED — tracked by `simplify-one-shot-lifecycle-ownership`.** Controlled/dirty process proof and
-  lifecycle-specific E2E gates remain unchecked in that change.
+No tasks are tracked in this section. `require-restart-for-config-activation` owns Registry and boot-only composition.
+ADR-095 and `simplify-one-shot-lifecycle-ownership` own exact Start finalization, failed-Start cleanup,
+callback-borrow fencing, terminal owner sequencing, native drain/Closed behavior, ACK ordering, controlled/dirty
+restart proof, and lifecycle-specific release gates. Delegation grants this change no completion credit.
 
 ## 3. Remaining context debt
 
@@ -58,13 +43,12 @@ count below is historical, not current truth.
 - [ ] 3.4 Verify no exported lifecycle record exposes `context.CancelFunc`.
 - [ ] 3.5 Give every slice focused race tests and the relevant E2E tier; do not combine unrelated cleanup.
 
-## 4. Migration and release evidence
+## 4. Historical prerequisite migration and evidence
 
 - [x] 4.1 Keep the SemStreams migration guide synchronized with exact final signatures and compiler-visible changes.
 - [x] 4.2 Record sister-repository callsites as read-only notices; do not edit sister repositories.
 - [x] 4.3 Add the breaking changelog entry and name the atomic Stop prerequisite.
 - [x] 4.4 Run `openspec validate restore-go-lifecycle-ownership --strict` after every contract edit.
-- [ ] 4.5 Before the next breaking tag, run all required E2E tiers and record exact commits and results.
 
 Implementation evidence for the completed atomic prerequisite:
 
@@ -76,6 +60,5 @@ Implementation evidence for the completed atomic prerequisite:
 - `task e2e:semantic` passed 48/48 scenarios. Its non-gating thematic recorder also reported one degraded-floor
   observation; that recorder metric does not change the green 48/48 gate result.
 
-Task 4.5 remains open because this evidence belongs to an uncommitted implementation worktree and therefore cannot
-yet name the exact breaking commit/tag. The breaking entry is indexed from `docs/README.md`; the repository's release
-workflow later derives the GitHub changelog from commit subjects. No sister repository was edited.
+The next-tag lifecycle and E2E release gate is tracked only in `simplify-one-shot-lifecycle-ownership`; this historical
+evidence does not satisfy it. No sister repository was edited.

@@ -75,72 +75,33 @@ and end when the server is stopped and joined. No other production closure may r
 - **THEN** it returns C or a descendant without inventing or detaching a root
 - **AND** the private closure cannot outlive the joined server lifecycle
 
-### Requirement: Stop quiesces accepted work before canceling its Start lifetime
+### Requirement: Stop uses caller-owned bounded authority without inventing a root
 
-`Stop(ctx)` SHALL use the caller argument only to bound shutdown and SHALL NOT launch runtime authority. A NATS owner
-SHALL fence admission, initiate native Drain/Shutdown, await exact native Closed while callback authority remains live,
-cancel remaining Start-owned runtime, await exact done/WaitGroup, then clean up. A simple owner MAY omit native phases
-but SHALL cancel ctx-driven runtime before waiting for its completion. Stop SHALL reject nil before action.
+`Stop(ctx)` SHALL reject nil before inspecting state or performing any action. Its caller context SHALL only bound the
+terminal operation specified by `simplify-one-shot-lifecycle-ownership`; the argument SHALL NOT be retained and SHALL
+NOT launch runtime work.
 
-An M-class owner SHALL observe exact Start finalization before selecting running Stop or failed-Start cleanupPending.
-Completed repeated Stop SHALL be a no-op. This capability SHALL NOT claim concurrent Stop, running-generation rejoin,
-or retained result replay; ADR-095 and `simplify-one-shot-lifecycle-ownership` own those service-shutdown semantics.
+Cancellation or deadline expiry SHALL be returned honestly and SHALL NOT be replaced with `context.Background`,
+`context.TODO`, `context.WithoutCancel`, or any other invented authority. This capability defines no drain ordering,
+`startDone`, failed-Start cleanup, callback-borrow fencing, rejoin, or result replay. All such lifecycle behavior is
+specified by ADR-095 and `simplify-one-shot-lifecycle-ownership`.
 
-An already-canceled Stop context cannot authorize native drain work. The owner SHALL fence admission, issue private
-cancellation, and return the context cause unless completion is already observed. It SHALL NOT invent a replacement
-context. Failed-Start cleanup uses only its separately approved bounded synchronous rollback root and retains authority
-if that rollback fails.
+#### Scenario: Stop context never becomes work authority
 
-#### Scenario: NATS owner drains before cancellation
+- **GIVEN** Stop receives caller context S
+- **WHEN** the separately specified terminal operation runs
+- **THEN** S bounds that operation without being retained
+- **AND** no runtime or continuing work is launched from S
 
-- **GIVEN** an owner with admitted NATS callbacks derived from Start context C
-- **WHEN** `Stop(S)` is called
-- **THEN** the owner fences new intake while C remains live
-- **AND** it drains and settles accepted callbacks before signaling private cancellation under C
-- **AND** S bounds the phases and join without becoming work authority
+#### Scenario: Canceled or deadlined Stop invents no replacement root
 
-#### Scenario: Simple owner may cancel immediately
+- **GIVEN** Stop context S is canceled or reaches its deadline
+- **WHEN** the terminal operation cannot complete within S
+- **THEN** Stop returns the cancellation or deadline honestly
+- **AND** it does not substitute Background, TODO, WithoutCancel, or another root
 
-- **GIVEN** an owner has no admission or accepted-work drain
-- **WHEN** `Stop(S)` is called
-- **THEN** it may signal private Start cancellation immediately
-- **AND** S bounds its join and terminal cleanup
+#### Scenario: Nil rejects before state or action
 
-#### Scenario: Stop waits for the exact in-flight Start
-
-- **GIVEN** generation G has an in-flight Start call
-- **WHEN** its owner begins `Stop(S)`
-- **THEN** the owner waits for G's Start call and exact Start finalization to return
-- **AND** it selects the running Stop or failed-Start cleanupPending path only after that completion
-- **AND** no Start and Stop method body overlaps for G
-
-#### Scenario: Terminal manager Stop fences borrows before component drain
-
-- **GIVEN** ComponentManager owns running generations and admitted callback borrows
-- **WHEN** terminal `Stop(S)` receives valid S
-- **THEN** it closes every borrow gate and drains admitted borrows before component Stop
-- **AND** NATS-owning components quiesce and drain accepted work before their private cancellation
-- **AND** the manager then cancels remaining runtimes and awaits exact Start/finalization
-- **AND** no manager or gate lock is held during callbacks, drains, joins, or component Stop
-
-#### Scenario: Stop deadline expires
-
-- **GIVEN** runtime work does not join before Stop context S expires
-- **WHEN** `Stop(S)` waits for it
-- **THEN** Stop returns an error wrapping `S.Err()`
-- **AND** admission remains fenced and any issued runtime cancellation remains issued
-- **AND** it never waits on ctx-driven completion before issuing runtime cancellation
-
-#### Scenario: Already-canceled Stop cannot invent drain authority
-
-- **GIVEN** Stop receives a context whose cause is already set
-- **WHEN** the owner has not observed completion
-- **THEN** it fences admission, issues private runtime cancellation, and returns the context cause
-- **AND** it does not invent a replacement context or begin native drain work
-
-#### Scenario: Nil context is rejected
-
-- **WHEN** an exported error-returning Start or Stop boundary receives nil context
+- **WHEN** Stop receives nil context
 - **THEN** it returns a typed invalid-input error
-- **AND** it does not replace nil with a background context
-- **AND** it inspects no lifecycle state and performs no cancellation, wait, or cleanup action
+- **AND** it inspects no lifecycle state and performs no cancellation, wait, drain, or cleanup action
