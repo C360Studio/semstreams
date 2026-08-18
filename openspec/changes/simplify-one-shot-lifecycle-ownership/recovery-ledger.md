@@ -112,6 +112,154 @@ are a pinned-baseline reproduction aid, not a future-proof substitute for type-a
 - A checkpoint is valid only when it records the full commit, clean/dirty state, exact search commands, and results.
   Counts copied from a prior report are not a new checkpoint.
 
+## Post-PR #997 merged-main checkpoint — 2026-08-18
+
+Checkpoint measured on clean merged `main` at
+`8117858367e1cc9d1dc434d211989e7a2ed1e552`. The measuring worktree had an empty porcelain status before this ledger
+entry was added.
+
+| Measurement | Count |
+|---|---:|
+| Production owner files importing `internal/lifecyclejoin` | 41 |
+| `lifecyclejoin.NewGeneration` | 43 |
+| `Generation.Stop` | 48 |
+| External `Generation.Cancel` | 5 |
+| External `Generation.Signal` | 0 |
+| `Generation.StopWithQuiesce` | 8 |
+| `lifecyclejoin.NewOperation` | 3 |
+| `Operation.Run` | 3 |
+| External `RunPartialStartRollback` calls | 20 |
+
+These counts were reproduced from the merged commit with the same production-only searches defined by this ledger:
+
+```text
+git grep -l 'internal/lifecyclejoin' 8117858367e1cc9d1dc434d211989e7a2ed1e552 -- '*.go' ':!*_test.go'
+git grep -n 'lifecyclejoin.NewGeneration' 8117858367e1cc9d1dc434d211989e7a2ed1e552 -- '*.go' ':!*_test.go'
+git grep -n -E '(generation|Generation)\.Stop\(' 8117858367e1cc9d1dc434d211989e7a2ed1e552 -- '*.go' ':!*_test.go'
+git grep -n '\.StopWithQuiesce(' 8117858367e1cc9d1dc434d211989e7a2ed1e552 -- '*.go' ':!*_test.go'
+git grep -n -E '(generation|Generation)\.Cancel\(\)' 8117858367e1cc9d1dc434d211989e7a2ed1e552 -- '*.go' ':!*_test.go'
+git grep -n 'generation.Signal(' 8117858367e1cc9d1dc434d211989e7a2ed1e552 -- '*.go' ':!*_test.go'
+git grep -n 'lifecyclejoin.NewOperation' 8117858367e1cc9d1dc434d211989e7a2ed1e552 -- '*.go' ':!*_test.go'
+git grep -n -E '(shutdownOp|poolStop|stopOp)\.Run\(' 8117858367e1cc9d1dc434d211989e7a2ed1e552 -- '*.go' ':!*_test.go'
+git grep -n 'lifecyclejoin.RunPartialStartRollback(' 8117858367e1cc9d1dc434d211989e7a2ed1e552 -- '*.go' ':!*_test.go'
+```
+
+PR #997 removed zero production owner files and earns zero lifecycle-migration, proof, release, archive, or tag credit.
+Lower helper-call counts without a lower production-owner count are not owner migration. The next authorized action is
+implementation Gate A; this checkpoint introduces no design change or completion claim.
+
+## Gate A two-input implementation worktree checkpoint — 2026-08-18
+
+Checkpoint measured in a dirty implementation worktree based on full commit
+`cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. The runtime/test slice is limited to
+`input/file/file.go`, `input/file/file_lifecycle_test.go`, `input/http/http.go`, and the new
+`input/http/http_lifecycle_test.go`; this ledger and `tasks.md` are the only task-truth additions. This is not a clean
+candidate-commit checkpoint and earns no Gate A, proof, release, archive, or tag completion credit.
+
+The two architect-approved S-owner candidates replace `Generation` with one private owner-local cancel function and
+the existing lifecycle mutex, running flag, and wait group. Start publishes cancel/join authority before launching
+work. Stop consumes cancel once, cancels before the caller-context-bounded join, reports a deadline honestly, and
+makes a completed repeated Stop nil/no-op without concurrent execution, rejoin, or result replay. Redundant shutdown
+and done channels are absent. `input/file` no longer invokes `component.StandardLifecycleTests`; both owners instead
+have focused deterministic Start/Stop, parent-cancellation, blocked-join deadline, and completed-repeat tests.
+
+Stable worktree source identities for this review are:
+
+- `input/file/file.go`: `cba90b467715767bedcd26b21d15b31f04b20ba37832447fd171fd809c75d802`
+- `input/file/file_lifecycle_test.go`: `8d55ae618e8abc9319d99aeb3e90b6abfd243c0538010017471646d44d2491db`
+- `input/http/http.go`: `914a4171ac3011fa98ca7ca4f70db36f5b4563497113f17a35d5389bd15ed86b`
+- `input/http/http_lifecycle_test.go`: `67c78b1e2970272880efd126bd25389c34d1f02b550dcbf8125bfce005db78ed`
+
+| Ruling | Evidence | Checkpoint result |
+|---|---|---|
+| Owner-local allowed state only | `A01` | Independently approved for this slice. |
+| Start publishes authority before launch | `A02` | Independently approved for this slice. |
+| One-shot cancel precedes caller-bounded join | `A03` | Independently approved for this slice. |
+| Honest timeout, no rejoin, completed repeat nil | `A04` | Independently approved for this slice. |
+| Prohibited mechanisms absent | `Z01` | Independently approved for this slice. |
+| Focused behavior and race tests | `T01` | Independently approved for this slice. |
+| Required census movement | `C01` | Independently approved delta; no gate credit. |
+| Adjacent outputs remain out of slice | `U01` | Approved Q-primary/F classification; zero credit. |
+
+Independent `semstreams-reviewer` verdict on 2026-08-18: `CORRECTIONS CONFIRMED`. The verdict approves `A01`-`A04`,
+`Z01`, `T01`, `C01`, and `U01` for this exact two-owner slice and the stable source identities above. It does not
+approve Gate A or any broader runtime-migration or proof claim.
+
+Exact anchor definitions:
+
+- `A01`: owner state at `input/file/file.go:104-110` and `input/http/http.go:78-83` is limited to the lifecycle
+  mutex, private cancel function, running flag, and WaitGroup; no context is stored.
+- `A02`: `input/file/file.go:379-401` and `input/http/http.go:251-272` validate Start context, derive the run context,
+  and publish cancel, running, and WaitGroup ownership before launching work.
+- `A03`: `input/file/file.go:408-437` and `input/http/http.go:284-313` consume and clear cancel once under the
+  lifecycle mutex, cancel before waiting, and bound only the join with the caller context.
+- `A04`: production repeat/timeout branches are `input/file/file.go:413-436` and `input/http/http.go:289-312`.
+  Behavior proof is `input/file/file_lifecycle_test.go:65-82,98-143` and
+  `input/http/http_lifecycle_test.go:57-83,106-132`.
+- `T01`: focused behavior proof spans `input/file/file_lifecycle_test.go:65-143` and
+  `input/http/http_lifecycle_test.go:57-132`; the focused race command and result are recorded below.
+
+The compact search evidence for the table is:
+
+```text
+Z01:
+! git grep -n -E \
+  -e 'internal/lifecyclejoin|lifecyclejoin\.|Generation|StopWithQuiesce' \
+  -e 'NewOperation|RunPartialStartRollback|shutdown[[:space:]]+chan' \
+  -e 'done[[:space:]]+chan|\.shutdown|\.done|rejoin' \
+  -- input/file/file.go input/http/http.go
+result: no matches
+
+C01:
+git grep -l 'internal/lifecyclejoin' -- '*.go' ':!*_test.go' | wc -l
+=> 39
+git grep -n 'lifecyclejoin.NewGeneration' -- '*.go' ':!*_test.go' | wc -l
+=> 41
+git grep -n -E '(generation|Generation)\.Stop\(' -- '*.go' ':!*_test.go' | wc -l
+=> 46
+
+U01: git diff --quiet -- output/file/file.go output/httppost/httppost.go
+result: exit 0; both output files untouched
+```
+
+No deviation is recorded for this two-owner slice. The independently approved dirty-worktree findings grant
+owner-migrated credit to `input/file` and `input/http` only; they do not complete Gate A.
+
+Focused race evidence from this worktree:
+
+```text
+go test -race ./input/file ./input/http -count=1 -timeout=120s
+ok github.com/c360studio/semstreams/input/file 1.302s
+ok github.com/c360studio/semstreams/input/http 1.432s
+```
+
+The production-only recovery searches defined above report this exact delta from the post-PR #997 checkpoint:
+
+| Measurement | Post-PR #997 | This worktree | Delta |
+|---|---:|---:|---:|
+| Production owner files importing `internal/lifecyclejoin` | 41 | 39 | -2 |
+| `lifecyclejoin.NewGeneration` | 43 | 41 | -2 |
+| `Generation.Stop` | 48 | 46 | -2 |
+| External `Generation.Cancel` | 5 | 5 | 0 |
+| External `Generation.Signal` | 0 | 0 | 0 |
+| `Generation.StopWithQuiesce` | 8 | 8 | 0 |
+| `lifecyclejoin.NewOperation` | 3 | 3 | 0 |
+| `Operation.Run` | 3 | 3 | 0 |
+| External `RunPartialStartRollback` calls | 20 | 20 | 0 |
+
+Owner-migrated credit is granted to `input/file` and `input/http` only. Gate A remains incomplete because its remaining
+assigned owners and gate-wide exit criteria are not complete. Runtime migration, proof, release, archive, and tag
+completion remain incomplete.
+
+The current architect reclassification is binding for the adjacent output owners and changes no historical inventory:
+
+- `output/file/file.go` is Q-primary with an F facet, not S, pending exact native subscription/consumer handles,
+  protocol-specific callback-admission ordering, and retained partial-Start cleanup authority.
+- `output/httppost/httppost.go` is Q-primary with an F facet, not S, pending exact native subscription/consumer
+  handles, protocol-specific callback-admission ordering, and retained partial-Start cleanup authority.
+
+Neither output owner is edited or receives migration credit in this checkpoint.
+
 ## Workspace recovery checkpoint
 
 Authority collisions are inventoried in

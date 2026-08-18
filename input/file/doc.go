@@ -137,8 +137,8 @@
 //	_ = input.Stop(shutdownCtx)
 //
 // During shutdown:
-//  1. Signal shutdown via channel
-//  2. Wait for current file processing to complete
+//  1. Cancel the owner-local run context created by Start
+//  2. Join the component's goroutines through its WaitGroup
 //  3. Close all resources
 //
 // # Observability
@@ -225,18 +225,16 @@
 //	f.lifecycleMu.Lock()
 //	defer f.lifecycleMu.Unlock()
 //
-//	// Graceful shutdown via channel
-//	select {
-//	case <-ctx.Done():
-//	    return ctx.Err()
-//	case <-f.shutdown:
-//	    return nil
-//	default:
-//	}
+//	// Start derives a run context and retains only its cancel function.
+//	runCtx, cancel := context.WithCancel(ctx)
+//	f.cancel = cancel
 //
-//	// WaitGroup for goroutine tracking
+//	// Owned goroutines observe runCtx and always join the WaitGroup.
 //	f.wg.Add(1)
-//	go f.readLoop(ctx)
+//	go f.readLoop(runCtx)
+//
+// Stop invokes the retained cancel function and waits for the WaitGroup to
+// join within the caller's shutdown budget.
 //
 // # Scanner Buffer Pool
 //

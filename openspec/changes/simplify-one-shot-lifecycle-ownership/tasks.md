@@ -19,6 +19,10 @@
 - [ ] 2.3 Migrate every production owner in the rebased recovery census; preserve failed-Start/startDone authority and
   make terminal callback-borrow shutdown fence new borrows, wait for admitted callbacks to return outside manager/gate
   locks, then let outer composition request Stop without callback self-stop.
+  - 2026-08-18 checkpoint: independent `semstreams-reviewer` verdict `CORRECTIONS CONFIRMED` grants owner-migrated
+    credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
+    worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.
+    `output/file` and `output/httppost` remain Q-primary owners with F facets; neither was changed or receives credit.
 - [ ] 2.4 Remove Generation/Operation only after focused/race proof.
 - [ ] 2.5 Remove lifecycle deletion and provide fixture/admin teardown.
 

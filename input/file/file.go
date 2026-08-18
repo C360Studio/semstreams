@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -104,13 +103,11 @@ type Input struct {
 
 	// Lifecycle management - use separate mutex for lifecycle operations
 	lifecycleMu sync.Mutex // Protects start/stop operations
-	shutdown    chan struct{}
-	done        chan struct{}
+	cancel      context.CancelFunc
 	running     atomic.Bool
 	startTime   time.Time
 	mu          sync.RWMutex // Protects data access
 	wg          sync.WaitGroup
-	generation  *lifecyclejoin.Generation
 
 	// Metrics (atomic for thread safety)
 	linesRead      atomic.Int64
@@ -396,17 +393,12 @@ func (f *Input) Start(ctx context.Context) error {
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
-	// Create channels before starting goroutine
-	f.shutdown = make(chan struct{})
-	f.done = make(chan struct{})
-
-	// Set running state and add to waitgroup before spawning goroutine
+	// Publish cancellation and join ownership before launching work.
+	f.cancel = cancel
 	f.wg.Add(1)
 	f.running.Store(true)
 
-	// Spawn goroutine outside of any data mutex
 	go f.readLoop(runCtx)
-	f.generation = lifecyclejoin.NewGeneration(cancel, f.wg.Wait)
 
 	f.logger.Info("File input started", "path", f.path, "subject", f.subject)
 	return nil
@@ -418,30 +410,36 @@ func (f *Input) Stop(ctx context.Context) error {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
 	f.lifecycleMu.Lock()
-	generation := f.generation
-	if generation == nil {
+	cancel := f.cancel
+	if cancel == nil {
 		f.lifecycleMu.Unlock()
 		return nil
 	}
-
+	f.cancel = nil
+	cancel()
+	joined := make(chan struct{})
+	go func() {
+		f.wg.Wait()
+		f.running.Store(false)
+		close(joined)
+	}()
 	f.lifecycleMu.Unlock()
 
-	return generation.Stop(ctx, func() error {
-		close(f.shutdown)
-		return nil
-	}, func(context.Context) error {
-		f.lifecycleMu.Lock()
-		f.running.Store(false)
-		f.lifecycleMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("wait for file input runtime: %w", err)
+	}
+	select {
+	case <-joined:
 		f.logger.Info("File input stopped gracefully")
 		return nil
-	})
+	case <-ctx.Done():
+		return fmt.Errorf("wait for file input runtime: %w", ctx.Err())
+	}
 }
 
 // readLoop reads files and publishes lines to NATS
 func (f *Input) readLoop(ctx context.Context) {
 	defer f.wg.Done()
-	defer close(f.done)
 
 	for {
 		// Check context before expensive glob operation
@@ -458,11 +456,9 @@ func (f *Input) readLoop(ctx context.Context) {
 		}
 
 		for _, filePath := range matches {
-			// Check for shutdown/cancellation before processing each file
+			// Check for cancellation before processing each file
 			select {
 			case <-ctx.Done():
-				return
-			case <-f.shutdown:
 				return
 			default:
 			}
@@ -489,8 +485,6 @@ func (f *Input) readLoop(ctx context.Context) {
 		// Wait before reprocessing
 		select {
 		case <-ctx.Done():
-			return
-		case <-f.shutdown:
 			return
 		case <-time.After(time.Second):
 			// Continue loop
@@ -527,8 +521,6 @@ func (f *Input) processFile(ctx context.Context, filePath string) error {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-f.shutdown:
-				return nil
 			default:
 			}
 		}
@@ -566,8 +558,6 @@ func (f *Input) processFile(ctx context.Context, filePath string) error {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-f.shutdown:
-				return nil
 			case <-time.After(f.interval):
 			}
 		}
