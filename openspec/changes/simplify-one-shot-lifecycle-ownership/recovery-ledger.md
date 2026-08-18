@@ -114,6 +114,10 @@ are a pinned-baseline reproduction aid, not a future-proof substitute for type-a
 
 ## Workspace recovery checkpoint
 
+The authoritative eight-worktree evidence, binding classifications, bounded preservation sets, and exact cleanup
+scope are recorded in [`worktree-recovery-manifest.md`](worktree-recovery-manifest.md). No dirty lifecycle worktree may
+be removed until that manifest is merged and its two bounded preservation artifacts are verified.
+
 Known worktrees at approval time:
 
 - **Draft PR #990:** `/private/tmp/semstreams-gh986-boot-only-flow-activation`, branch
