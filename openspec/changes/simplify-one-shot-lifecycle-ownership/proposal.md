@@ -48,3 +48,6 @@ controlled shutdown follow direct native ownership and one terminal process life
   or rejoin state.
 - **Runtime truth:** this contract-only change claims no implementation or proof completion.
 - **Release:** controlled and dirty real-process evidence remain mandatory before the breaking lifecycle lands.
+- **Recovery authority:** [`recovery-ledger.md`](recovery-ledger.md) is the durable execution record, current baseline,
+  completion vocabulary, and archive/tag gate for this change. A merged design or green document validation is not
+  runtime completion.

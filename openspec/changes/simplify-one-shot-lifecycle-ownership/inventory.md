@@ -155,3 +155,12 @@ The pinned census found 44 settlement calls, including 26 direct Ack calls, zero
 production `AckSync`. Settlement errors were predominantly logged or ignored. Graph poison ACKs occur before keyed
 admission; the keyed guard begins later. Therefore contract proof must distinguish the existing counted pre-pool poison
 disposition from keyed effect/guard/ACK convergence, and no plain Ack path may claim server-confirmed settlement.
+
+## Current recovery checkpoint
+
+Everything above this heading is the immutable census at `63a733a2378dff9f09c74c461ba776d352f79221`. It remains
+the record of the 42-owner design review and must not be rewritten to resemble later repository state.
+
+The current `main` checkpoint, definitions, workspace state, and zero-count exit gates are maintained in
+[`recovery-ledger.md`](recovery-ledger.md). At the pinned recovery baseline `9fcc841e`, 41 production owner files still
+imported `internal/lifecyclejoin`; only one of the historical 42 owners had been migrated.
