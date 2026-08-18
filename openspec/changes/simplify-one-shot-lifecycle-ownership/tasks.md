@@ -7,7 +7,8 @@
 - [x] 1.1 Record pinned inventory and owner-approved audit digest.
 - [x] 1.2 Add ADR-095, new change artifacts, verbatim inventories, and exact-title deltas.
 - [x] 1.3 Transfer every retained PR #984 restart-safe requirement and scenario before removing its old deltas.
-- [x] 1.4 Reconcile both older active changes and migration guide; preserve compatible context/boot truth.
+- [x] 1.4 Reconcile every inventoried normative and adopter surface across both older active changes and migration
+  guidance; preserve compatible context/boot truth.
 - [x] 1.5 Validate all three active changes and all specs strictly.
 - [x] 1.6 Archive the new change successfully on a throwaway copy and prove the original worktree did not change.
 
@@ -15,7 +16,9 @@
 
 - [ ] 2.1 Reorder consume commit and retain native handles.
 - [ ] 2.2 Add reject-not-replace identity validation/claim.
-- [ ] 2.3 Migrate every production owner in the rebased recovery census; preserve failed-Start/startDone authority.
+- [ ] 2.3 Migrate every production owner in the rebased recovery census; preserve failed-Start/startDone authority and
+  make terminal callback-borrow shutdown fence new borrows, wait for admitted callbacks to return outside manager/gate
+  locks, then let outer composition request Stop without callback self-stop.
 - [ ] 2.4 Remove Generation/Operation only after focused/race proof.
 - [ ] 2.5 Remove lifecycle deletion and provide fixture/admin teardown.
 

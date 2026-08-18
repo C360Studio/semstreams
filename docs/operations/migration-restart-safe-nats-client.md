@@ -7,6 +7,11 @@ This guide records the owner-approved pre-v1 target from ADR-095 and
 dirty proof, or settlement proof is complete. Do not use the target signatures until their ordered implementation
 lands and its checks pass.
 
+The landed caller-owned context signature prerequisite is documented in
+[Migrate to caller-owned lifecycle contexts](migration-restore-go-lifecycle-ownership.md). Execution status and sole
+lifecycle completion authority are recorded in the OpenSpec
+[`recovery-ledger.md`](../../openspec/changes/simplify-one-shot-lifecycle-ownership/recovery-ledger.md).
+
 ADR-095 supersedes PR #984's proposed stateful `ManagedConsumer`, `DrainAndDelete`, lifecycle-local backlog,
 running-generation rejoin, name-routed child catalog, and retained Close-result mechanics. ADR-094 remains immutable
 history. Its boot-only composition, dedicated rule-definition hot reload, raw-root retirement, always-exit controlled

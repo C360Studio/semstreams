@@ -9,60 +9,13 @@
 - [x] 1.4 Revise `restore-go-lifecycle-ownership` P2/P3 target and tasks after this prerequisite is approved.
 - [x] 1.5 Run strict OpenSpec validation after every contract edit.
 
-## 2. Restart-safe shutdown reset and ordered delivery
+## 2. Historical lifecycle reset delegation
 
-The six PRs below are dependency ordered. A later PR SHALL NOT land before its predecessor. Only the contract reset is
-complete; every runtime migration and proof remains unchecked.
-
-ADR-095 and `simplify-one-shot-lifecycle-ownership` supersede PR #984's managed-consumer, lifecycle deletion,
-concurrent/rejoin, and retained-result mechanics and own the complete `restart-safe-shutdown` and
-`jetstream-consumer-policy` lifecycle target. This change retains boot-only composition and depends on the new change's
-broad-root retirement, settlement/outbound-flush, controlled-process proof, dirty-recovery, durable-communication,
-live-storage/replica validation, NATS restart, clean-marker independence, and latest-desired-state guarantees. No
-runtime or proof task is completed by delegation.
-
-- [x] 2.1 **PR2-reset-contract.** Replace the Client-wide child-ledger contract with the approved owner-local exact
-  handle design; record the reset inventory, native-root disposition, `ConsumeDurable` retirement, terminal
-  transport-only Close, always-exit controlled restart, and migration sequence. Preserve the exact approved native
-  census at `openspec/changes/require-restart-for-config-activation/native-surface-inventory.md` with SHA-256
-  `d79df592e7049d4f0e3412bf41e8c61d44ea0829a6fddc2734cff40ceb966617`. Run strict OpenSpec validation only.
-- [ ] 2.2 **SUPERSEDED — tracked by `simplify-one-shot-lifecycle-ownership`.** The former PR2-owner-handles task would
-  return `*ManagedConsumer` from
-  `ConsumeStreamWithConfig`, `ConsumeStreamWithConfigContexts`, and `ConsumeInternalStreamWithConfig`; update every
-  interface, mock, test, and caller; retire zero-production-consumer `ConsumeDurable`; simplify core Subscription to
-  exact-handle Drain; and migrate every in-repo owner to quiesce, Drain/DrainAndDelete, wait authoritative closure,
-  settle accepted callbacks, then cancel and join Start-owned work. Keep catalogs only as temporary migration
-  scaffolding so partial acquisition, duplicate cleanup, or stale ownership cannot lose an owner. Add handle-local
-  `ManagedConsumer.OutstandingWork(ctx)`; migrate exactly the two callsites in
-  `processor/graph-ingest/readiness.go` and the one callsite in `processor/agentic-loop/inflight.go` to the handles
-  their owners retain; retire `Client.OutstandingWork(stream,name)` without an alias.
-- [ ] 2.3 **SUPERSEDED — tracked by `simplify-one-shot-lifecycle-ownership`.** The former PR2-client-minimal task would
-  remove Client child catalogs,
-  name-routed Stop/Delete, setup/delete reservations, generations, admission gates, readiness latches, publisher
-  convergence, and forced child cleanup. Make Connect synchronous with private `nats.FlusherTimeout(5s)` and no knob.
-  Make Close terminal transport-only: reject later work; cancel/join health and metrics; native-drain and observe
-  CLOSED; classify preclosed transport and any historical/terminal `LastError` as non-clean; force close on caller
-  expiry without reporting clean; retain one result for repeated Close. Expose no Subscription Abort or Unsubscribe.
-- [ ] 2.4 **SUPERSEDED — tracked by `simplify-one-shot-lifecycle-ownership`.** Execute every RETIRE/NARROW row in the
-  approved native-surface inventory. Remove
-  broad mutable roots returned by Client/framework constructors, narrow broad injected roots to measured local method
-  sets, and preserve only reviewed message/value/watcher/lister/future seams with caller context and local
-  Stop/completion ownership. Add no `Unsafe*` alias and edit no sister repository.
-- [ ] 2.5 **SUPERSEDED — tracked by `simplify-one-shot-lifecycle-ownership`.** The former PR2-composition-proof task
-  would separate controlled signal receipt from Start-context cancellation. Use one fresh
-  bounded shutdown context; stop admission owners; drain exact handles while accepted-work authority remains live;
-  aggregate every owner Stop result; then call Client Close. Prove ACK-after-commit, unfinished-work redelivery,
-  publisher flush, repeated Stop/Close, and signal races. Add a real-process SIGTERM known answer proving that clean
-  shutdown exits zero, failed owner/transport shutdown exits nonzero, both processes terminate, and supervision boots
-  a fresh process and Client with latest desired configuration. A clean marker remains observability, never an
-  activation gate.
-- [ ] 2.6 **SUPERSEDED — tracked by `simplify-one-shot-lifecycle-ownership`.** The former PR2-dirty-proof task would
-  inventory every crash-critical communication path and move any core-NATS-only critical
-  work/fact to durable JetStream or KV using the canonical four-test decision. Require file-backed live resources and
-  verify declared replica policy. Add deterministic real-process SIGKILL tests after delivery, durable effect,
-  publication, and before ACK; kill SemStreams and its isolated NATS server without drain; restart from the same file
-  store; and prove retained-state redelivery, idempotent convergence, latest desired-state recovery, and honest
-  external-effect limits. Do not touch Docker resources outside the test project's namespace.
+The earlier PR2 lifecycle reset is historical evidence only and has no task boxes here. ADR-095 and
+`simplify-one-shot-lifecycle-ownership` supersede its ManagedConsumer, lifecycle deletion, concurrent/rejoin,
+retained-result, terminal Close, settlement, controlled/dirty proof, and raw-root lifecycle mechanics. This change
+retains boot-only composition, desired/effective flow truth, and rules-only hot reload. Delegation grants no runtime or
+proof completion credit.
 
 ## 3. Retire generic runtime composition mutation
 
@@ -72,12 +25,9 @@ runtime or proof task is completed by delegation.
 - [ ] 3.4 Remove `watch_config` and other operator surfaces that imply live component mutation.
 - [ ] 3.5 Keep config KV desired-state synchronization but prove post-boot writes cannot mutate running services or
   components.
-- [ ] 3.6 Preserve terminal Start-owned cancellation, exact Start joins, same-generation Stop, and idempotent shutdown.
 - [ ] 3.7 Classify every production post-boot `config.Manager.GetConfig()` read. Desired-state reporting may read the
   mutable desired view; boot construction uses the selected snapshot; runtime behavior and resource recovery use only
   the sealed boot snapshot.
-- [ ] 3.8 Document and test that a callback borrow cannot synchronously request terminal Stop for its own instance.
-  Inventory production callbacks for reentrant lifecycle calls and keep manager locks out of borrow drain.
 
 ## 4. Preserve desired flow authoring
 
@@ -140,4 +90,6 @@ runtime or proof task is completed by delegation.
   strict OpenSpec validation.
 - [ ] 6.4 Run relevant `task e2e:core`, `task e2e:structural`, CRUD, agentic, and semantic tiers before the breaking
   commit lands.
-- [ ] 6.5 Record exact commit, test, controlled/dirty restart, and E2E artifacts before tagging the breaking release.
+- [ ] 6.5 Record the exact commit, tests, and relevant E2E artifacts for boot composition, desired/effective flow
+  truth, and rules-only hot reload before tagging; cross-reference the separately owned simplify lifecycle prerequisite
+  evidence without tracking controlled/dirty proof here.

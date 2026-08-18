@@ -12,8 +12,9 @@ This design separates them. Desired state remains writable. Effective component 
 boot. Live rule-definition activation remains as a dedicated capability because it has a demonstrated UX consumer and
 does not require component generation replacement.
 
-Approval provenance: D10 and its delivery order derive from the owner-approved minimal lifecycle design artifact with
-SHA-256 `0047789823bd8a6b3f772bb598fae90ca6060a8799cd828a95487589e0a7a11e`. The measured reset inventory is
+Historical artifact provenance: the original D10 and delivery order derive from the owner-approved minimal lifecycle
+design artifact with SHA-256 `0047789823bd8a6b3f772bb598fae90ca6060a8799cd828a95487589e0a7a11e`;
+they are not current authority. The measured reset inventory is
 `openspec/changes/require-restart-for-config-activation/inventory.md`; the exact native-surface companion is
 `openspec/changes/require-restart-for-config-activation/native-surface-inventory.md` with approved SHA-256
 `d79df592e7049d4f0e3412bf41e8c61d44ea0829a6fddc2734cff40ceb966617`.
@@ -24,8 +25,9 @@ SHA-256 `0047789823bd8a6b3f772bb598fae90ca6060a8799cd828a95487589e0a7a11e`. The 
 - Remove general in-process component/service/topology mutation.
 - Preserve live expression and cron rule-definition changes inside a fixed Rule processor envelope.
 - Make activation claims revision-bound and observable.
-- Make clean, loss-aware shutdown and restart the required activation mechanism for next-boot state.
-- Remove lifecycle machinery whose only consumer is hot component replacement.
+- Keep boot composition free of live replacement/removal machinery.
+- Depend on the generic lifecycle ordering and proof owned by `simplify-one-shot-lifecycle-ownership` while retaining
+  only Rule-specific activation terminalization under that contract.
 
 ## Non-goals
 
@@ -44,13 +46,9 @@ views; it has no live replacement protocol.
 
 Registry, flow graph, dependency records, lifecycle records, and observation DTOs expose no runtime handles.
 ComponentManager owns concrete handles and permits only callback-scoped access where a remaining in-process consumer
-requires it. Terminal Stop fences and drains those borrows; there are no replacement/removal transition gates.
-
-Terminal Stop fences runtime access and invokes each fully started component's `Stop(ctx)` while its Start authority
-remains live so the component can quiesce and drain. It then cancels and joins remaining Start-owned work and records
-the exact boot generation's terminal result. An in-flight Start that never reached admission uses the separate
-partial-start rollback path: cancel, join Start finalization, then clean partial acquisitions. Removing live replacement
-does not weaken shutdown ownership or allow Start and Stop method bodies to overlap.
+requires it. The handle is valid only for the callback and cannot be retained. This change defines no terminal fence,
+result, Start-finalization, or failed-Start behavior; ADR-095 and `simplify-one-shot-lifecycle-ownership` own those
+lifecycle mechanics. There are no replacement/removal transition gates.
 
 ### D2. Config KV remains durable desired state
 
@@ -62,8 +60,9 @@ An accepted flow mutation returns an honest pending-next-boot result: desired st
 restart required. SemStreams does not automatically exit or restart; process supervision is deployment policy.
 
 Every successful boot consumes the latest committed desired state regardless of how the prior process exited. Planned
-activation uses the graceful-shutdown protocol in D9; a dirty restart uses crash recovery. A prior clean-exit record is
-useful operational evidence but never a gate that can suppress committed desired configuration.
+activation depends on the separately owned lifecycle and proof named in D9; dirty restart correctness is also an
+external lifecycle dependency. A prior clean-exit record is useful operational evidence but never a gate that can
+suppress committed desired configuration.
 
 ### D3. Retire generic live component configuration
 
@@ -170,14 +169,14 @@ their configuration differs. Runtime health is a separate observation and cannot
 no authoritative runtime observer is available, effective state and boot-applied provenance report `unknown`; neither
 is copied from flowstore or desired state.
 
-### D7. Simplify the pending lifecycle protocol
+### D7. Lifecycle authority is an external prerequisite
 
-In `restore-go-lifecycle-ownership`, replacement tasks 2.5 and 2.7 through 2.10 disappear, as do replacement/removal
-cases in 2.11. Registry raw-handle retirement, boot admission ownership, terminal manager Stop, context debt, and
-terminal race tests remain. `ReplaceComponent` is deleted rather than redesigned.
-
-Rule hot reload has its own bounded lifecycle design and does not use ComponentManager replacement, runtime borrows,
-or request-owned component generations.
+ADR-095 and `simplify-one-shot-lifecycle-ownership` exclusively own generic component/service exact Start
+finalization, failed-Start cleanup, callback-borrow shutdown, terminal owner sequencing, ACK ordering, settlement, and
+controlled/dirty restart proof. This change receives no completion credit from that dependency. It retains only
+Rule-specific activation terminalization: fence status publication and cancel/join the Rule-local activation work
+under the generic lifecycle contract. Rule hot reload remains bounded to the fixed boot-composed Rule processor and
+does not use ComponentManager replacement or request-owned component generations.
 
 ### D8. Pre-v1 breaking migration is clean
 
@@ -185,116 +184,20 @@ There are no deprecated aliases, dual live paths, or compatibility shims. Migrat
 and response changes. Sister repositories are read-only; downstream teams update their own code. Relevant E2E must be
 green before the breaking commit lands.
 
-### D9. Restart-safe shutdown is a prerequisite
+### D9. Lifecycle proof is a release dependency, not owned work
 
-Boot-only activation makes process restart a normal configuration operation. SemStreams therefore cannot rely on
-process death as its activation mechanism until controlled shutdown is proven loss-aware.
+Boot-only activation cannot claim activation or release readiness until the generic runtime, settlement,
+controlled-process, dirty-recovery, and E2E proof owned by `simplify-one-shot-lifecycle-ownership` passes. This change
+owns no generic component/service lifecycle task, shutdown ordering, ACK rule, recovery mechanism, or proof artifact
+and receives no completion credit by cross-reference. Its only lifecycle-adjacent ownership is Rule-specific
+activation terminalization under that external contract.
 
-Receipt of SIGTERM or SIGINT initiates bounded shutdown; it does not pre-cancel the Start contexts passed to services
-and components. Lifecycle owners first stop admitting new work. The owner that starts a managed JetStream consumer or
-core NATS subscription retains its exact returned handle, invokes native Drain during `Stop(ctx)`, and waits for
-authoritative closure before Start-owned cancellation. Abrupt consumer Stop and subscription Unsubscribe are
-forced-termination operations, not graceful-shutdown aliases, and cannot contribute to a clean shutdown result.
+### D10. Superseded lifecycle design tombstone
 
-Already-delivered callbacks keep a live work context while draining. Successful durable work acknowledges only after
-its effects and required publications commit. Work that cannot complete before the shutdown deadline remains unacked
-or is negatively acknowledged for durable redelivery; shutdown never fabricates success. After admissions and
-accepted work settle, owners cancel and join remaining Start-owned goroutines. Composition aggregates every owner
-Stop result, then calls terminal transport-only Client Close to cancel and join only Client-owned workers, drain the
-native connection's outbound buffer, observe CLOSED, and close transport.
-
-This ordering is framework lifecycle mechanics, not a reactive rule or workflow. No public Quiesce phase is added
-without implementation inventory proving it necessary; components may implement the phases behind their existing
-`Stop(ctx)` contract. ComponentManager must not cancel every generation before NATS-owning components have had the
-opportunity to drain.
-
-The controlled-restart proof starts the real binary against durable NATS state, admits work, sends SIGTERM with work
-both in flight and pending, waits for a clean exit, starts a new process with desired configuration, and proves that
-redelivery converges without an invalid semantic duplicate, unfinished durable work is recovered, no accepted work is
-lost, and no old listener, consumer, callback, or goroutine competes with the new process.
-
-Dirty shutdown is a separate proof because power loss runs none of the graceful protocol. Crash-critical work uses
-durable JetStream or KV, never core NATS alone. A durable handler commits its effect before ACK; a crash before ACK may
-redeliver and therefore the effect must be idempotent or use a stable deduplication key. Exactly-once external side
-effects are not fabricated across NATS and another system: an adopter-facing output contract must state its
-at-least-once behavior and stable idempotency evidence.
-
-Crash-critical JetStream and KV resources are file backed, and boot verifies the live resource rather than trusting a
-desired declaration that an existing bucket or stream may not satisfy. Replica policy matches the declared deployment
-failure domain. If every persistent NATS copy is destroyed, the data is gone; SemStreams reports that boundary rather
-than calling it restart recovery.
-
-The dirty-restart proof kills the real process at deterministic boundaries after delivery, after durable effect, after
-publication, and before ACK, then boots against retained NATS state. It also kills NATS and restarts it from the same
-file store. The proof covers no silent loss, expected redelivery, semantic convergence, durable desired-config
-recovery, and honest failure where an external system cannot provide idempotency.
-
-Every successful new boot selects the latest committed desired state. Crash recovery must not require a preceding
-clean-shutdown record, and stale boot-incarnation facts must not suppress or impersonate the new boot's applied state.
-
-### D10. Resource owners drain; Client closes terminal transport
-
-> **Superseded lifecycle mechanics.** ADR-095 and
-> `openspec/changes/simplify-one-shot-lifecycle-ownership/` supersede D10's `ManagedConsumer`,
-> `DrainAndDelete`, handle-local backlog, later running-generation rejoin, and retained repeated Client Close result.
-> D10 remains decision provenance inside this active design, but it is not the lifecycle implementation target.
-> PR #984 retains boot-only composition, rule hot reload, and flow activation truth. Raw-root retirement and
-> restart-safe guarantees are delegated dependencies owned by the superseding change.
-
-ADR-095 and `simplify-one-shot-lifecycle-ownership` supersede PR #984's managed-consumer, lifecycle deletion,
-concurrent/rejoin, and retained-result mechanics and own the complete `restart-safe-shutdown` and
-`jetstream-consumer-policy` lifecycle target. PR #984 retains boot-only composition, rule hot reload, and flow
-activation truth; it depends on `simplify-one-shot-lifecycle-ownership` for broad-root retirement and restart-safe
-settlement/outbound-flush, controlled-process proof, dirty-recovery, durable-communication, live-storage/replica
-validation, NATS restart, clean-marker independence, and latest-desired-state guarantees. No runtime or proof task is
-completed by delegation.
-
-Composition owns one synchronous Connect and one terminal Close. Concurrent Connect/Close is outside the supported
-contract. Every retained managed-consumer constructor and subscription setup returns an exact owner handle; the
-component that starts the resource retains it and drains it during Stop. `ConsumeStreamWithConfig`,
-`ConsumeStreamWithConfigContexts`, and `ConsumeInternalStreamWithConfig` return `*ManagedConsumer`.
-`ConsumeDurable` has no production consumer and is retired rather than widened. Client does not catalog or rediscover
-child resources, and name-routed Stop/Delete, setup/delete reservations, generations, admission gates, readiness
-latches, publisher settlement, and forced child convergence are not part of the lifecycle contract.
-
-`ManagedConsumer.DrainAndDelete(ctx)` is the only graceful durable-deletion shape. Construction binds a private
-deletion closure to the exact stream/durable identity; callers receive no deletion capability separate from the
-handle. Drain must complete before deletion begins. An incomplete drain prevents deletion and permits a later caller
-to rejoin the same drain. Concurrent or repeated deletion calls issue at most one exact deletion and observe one
-retained result. Consumer-not-found after drain is benign success; every other failure, including an ambiguous
-deadline, is retained as non-clean and is not retried. Partial setup never publishes a handle, and its exact acquired
-resources are cleaned before return. Exact handle identity, not a rediscovered name, fences partial, duplicate, and
-stale ownership.
-
-`ManagedConsumer.OutstandingWork(ctx)` is the only outstanding-work query for a managed consumer. It reads the exact
-handle's bound consumer under the caller context; it does not rediscover a mutable stream/name identity through
-Client. The two callers in `processor/graph-ingest/readiness.go` and the caller in
-`processor/agentic-loop/inflight.go` migrate to their retained handles. `Client.OutstandingWork(stream,name)` retires
-without an alias.
-
-Client Close rejects new Client work, cancels and exactly joins only Client-owned health and metrics workers,
-initiates native connection Drain, observes native CLOSED, and returns one retained terminal result to repeated
-callers. An installed transport already closed before Close is failed even when `LastError()` is nil. Any historical
-or terminal non-nil `LastError()` conservatively makes the result non-clean; no drain-window callback state infers it
-away. Caller-budget expiry force-closes transport but remains failed. Close never enumerates, drains, aborts, deletes,
-or compensates for child resources and never launches detached cleanup. Subscription exposes Drain only: no exported
-Abort or Unsubscribe lifecycle escape exists.
-
-Synchronous Connect installs a private framework-owned `nats.FlusherTimeout(5*time.Second)` with no option, config, or
-environment knob. The ceiling makes a blocked native write/flush fail visibly so owner Stop and controlled shutdown
-can terminate rather than predict an adopter-provided timeout.
-
-Every controlled shutdown uses one fresh bounded shutdown context, stops admission owners, drains every exact owner
-handle while accepted-work authority remains live, cancels and joins remaining owner work, aggregates all Stop
-results, and only then invokes Client Close. Both clean and failed controlled shutdowns exit the current process.
-Clean versus failed controls exit status and observability only; neither authorizes Client reuse or in-process restart.
-Supervision starts a fresh process with a newly constructed Client and the latest committed desired state.
-
-Before the breaking tag, Client and framework constructors retire broad mutable native roots (`*nats.Conn`,
-`jetstream.JetStream`, `jetstream.Stream`, `jetstream.KeyValue`, `jetstream.ObjectStore`, or equivalent capabilities).
-Broad injected roots narrow to measured local interfaces. Reviewed message, value, watcher, lister, and future seams
-remain only with explicit caller context and local Stop/completion ownership. There is no `Unsafe*` compatibility
-alias, and sister repositories remain read-only to this change.
+> **Historical provenance only.** The original owner-approved lifecycle artifact hash
+> `0047789823bd8a6b3f772bb598fae90ca6060a8799cd828a95487589e0a7a11e` and Git history preserve the superseded
+> design evidence. Its ManagedConsumer, DrainAndDelete, rejoin, and retained-result mechanics are non-normative.
+> ADR-095 and `simplify-one-shot-lifecycle-ownership` own the current lifecycle target.
 
 ## Approved-ruling conformance
 
@@ -304,24 +207,11 @@ text; every runtime task cited below remains unchecked.
 | Approved ruling | Contract evidence |
 |---|---|
 | Boot-only topology and dedicated rule-definition hot reload remain | `design.md:39`, `design.md:74` |
-| Dirty power and settlement stay Close-independent | `design.md:216`, `../simplify-one-shot-lifecycle-ownership/specs/restart-safe-shutdown/spec.md:74`, `../simplify-one-shot-lifecycle-ownership/specs/restart-safe-shutdown/spec.md:137` |
-| Resource owners retain exact native handles | ADR-095; `../simplify-one-shot-lifecycle-ownership/specs/jetstream-consumer-policy/spec.md` |
-| Quiesce and exact Closed precede runtime cancellation | ADR-095; `../simplify-one-shot-lifecycle-ownership/specs/restart-safe-shutdown/spec.md` |
-| Normal lifecycle does not delete durable topology | ADR-095; `../simplify-one-shot-lifecycle-ownership/specs/restart-safe-shutdown/spec.md` |
-| OutstandingWork remains an independent exact observer | `../simplify-one-shot-lifecycle-ownership/design.md` |
-| Compiler errors direct callers to retain the exact native handle | `docs/operations/migration-restart-safe-nats-client.md` |
-| Abrupt Stop cannot become clean; no lifecycle deletion escape exists | ADR-095; `../simplify-one-shot-lifecycle-ownership/specs/restart-safe-shutdown/spec.md` |
-| Client Close is terminal transport-only | ADR-095; `../simplify-one-shot-lifecycle-ownership/specs/restart-safe-shutdown/spec.md` |
-| Preclosed, LastError, and deadline truth remains non-clean; completed repeat is nil | `../simplify-one-shot-lifecycle-ownership/specs/restart-safe-shutdown/spec.md` |
-| Connect owns a private five-second flusher ceiling | `../simplify-one-shot-lifecycle-ownership/specs/restart-safe-shutdown/spec.md:51` |
-| Every controlled result exits to a supervisor-started fresh process | `../simplify-one-shot-lifecycle-ownership/specs/restart-safe-shutdown/spec.md:107` |
-| ConsumeDurable retires | `../simplify-one-shot-lifecycle-ownership/specs/jetstream-consumer-policy/spec.md:10` |
-| Historical ADR-070 remains unchanged | `094-boot-only-composition-and-observable-rule-activation.md:163` |
-| Broad roots retire or narrow to locally owned seams | `native-surface-inventory.md:134` |
-| Superseding six-PR order binds; runtime and proof tasks remain unchecked | `../simplify-one-shot-lifecycle-ownership/tasks.md` |
-| Reset inventory approval artifact and SHA are durable | `inventory.md:5` |
-| Minimal lifecycle design approval artifact and SHA are durable | `design.md:15` |
-| Native inventory is byte-identical to its approved SHA | `native-surface-inventory.md:1`, `inventory.md:113` |
+| Desired/effective flow truth is distinct | D2, D6; `specs/flow-activation-truth/spec.md` |
+| Rules-only hot reload and Rule-local activation terminalization remain bounded | D4, D5, D7; `specs/rule-hot-reload/spec.md` |
+| Lifecycle proof is a dependency with no completion credit | D7, D9; `../simplify-one-shot-lifecycle-ownership/tasks.md` |
+| Historical lifecycle design hash remains provenance | D10 |
+| Sister repositories remain read-only | D8 |
 
 ## Risks and mitigations
 
@@ -332,7 +222,5 @@ text; every runtime task cited below remains unchecked.
   `canceled_shutdown`; coalescing cannot silently relabel an intermediate write as applied.
 - **Rule reload recreates general component config.** The accepted payload is Definition-only. Component envelope
   fields are rejected as restart-required config, not interpreted by the hot path.
-- **Deletion removes lifecycle tests that protected Stop.** Terminal shutdown and Start/Stop race tests remain and are
-  strengthened around the smaller boot-owned manager.
-- **Restart becomes frequent and exposes latent teardown debt.** Boot-only activation does not land until the
-  controlled signal, drain, settlement, clean-exit, dirty-crash, and next-boot known-answer proofs are green.
+- **Lifecycle prerequisite is incomplete.** Boot-only activation cannot claim release readiness until the simplify
+  change records its runtime and proof gates; this change receives no lifecycle completion credit.

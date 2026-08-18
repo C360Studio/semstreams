@@ -67,13 +67,9 @@ dependency records, lifecycle records, and observation DTOs SHALL expose values 
 in-process consumer still requires it, SHALL be limited to a manager-scoped callback borrow.
 
 A borrow SHALL return typed `missing`, `failed`, or `stopping` errors and SHALL never return a handle to retain.
-Terminal Stop SHALL close admission for new borrows and drain admitted callbacks without holding manager locks before
-invoking component shutdown. No replacement/removal transition state or same-instance mutation protocol SHALL exist.
-
-A callback holding the borrow for instance A SHALL NOT synchronously invoke terminal ComponentManager Stop or call
-Lifecycle Stop for A. It SHALL return and release the borrow before an outer composition owner begins terminal
-shutdown. This prohibition is part of the callback contract because terminal Stop must wait for the admitted callback;
-a self-stop would wait on its own borrow.
+No replacement/removal transition state or same-instance mutation protocol SHALL exist. Terminal shutdown behavior,
+including callback-borrow fencing and return-before-Stop requirements, is specified only by
+`simplify-one-shot-lifecycle-ownership`'s `service-shutdown` capability.
 
 #### Scenario: Callback is the complete handle lifetime
 
@@ -82,22 +78,6 @@ a self-stop would wait on its own borrow.
 - **THEN** the manager releases its locks before invoking the callback
 - **AND** the borrow ends when the callback returns
 - **AND** retaining the handle outside the callback is unsupported
-
-#### Scenario: Terminal Stop fences runtime access
-
-- **GIVEN** terminal Stop races a callback borrow
-- **WHEN** the manager's admission gate orders them
-- **THEN** an admitted callback returns before component shutdown proceeds
-- **OR** the caller receives typed `stopping` without entering the callback
-- **AND** no manager lock is held while waiting or invoking component code
-
-#### Scenario: Borrow callback does not synchronously stop itself
-
-- **GIVEN** a callback holds the only admitted borrow for instance A
-- **WHEN** A requires terminal shutdown
-- **THEN** the callback returns without calling ComponentManager Stop or Lifecycle Stop for A
-- **AND** the composition owner starts terminal Stop only after the borrow is released
-- **AND** shutdown never waits on the callback's own borrow
 
 #### Scenario: Raw handle APIs are unavailable
 

@@ -70,6 +70,37 @@ authority or a detached cleanup root.
 
 ## ADDED Requirements
 
+### Requirement: Terminal ComponentManager shutdown fences callback borrows
+
+Terminal ComponentManager shutdown MUST fence callback-borrow admission before component shutdown. A callback admitted
+before the fence MUST return and release its borrow before the component is stopped; a caller ordered after the fence
+MUST receive typed `stopping` without entering the callback. The manager MUST hold no manager or gate lock while
+waiting for a callback or invoking component code.
+
+A callback MUST return before outer composition requests terminal Stop and MUST NOT synchronously stop its own
+component or ComponentManager while holding the borrow.
+
+#### Scenario: Admitted callback returns before component shutdown
+
+- **GIVEN** a callback borrow was admitted before terminal shutdown fenced admission
+- **WHEN** ComponentManager prepares to stop the borrowed component
+- **THEN** it waits outside manager and gate locks for the callback to return
+- **AND** it invokes component shutdown only after the callback releases the borrow
+
+#### Scenario: New borrow receives typed stopping
+
+- **GIVEN** terminal shutdown fenced callback-borrow admission
+- **WHEN** a caller requests a new borrow
+- **THEN** the caller receives typed `stopping`
+- **AND** the callback is not invoked
+
+#### Scenario: Callback returns before outer Stop and cannot self-stop
+
+- **GIVEN** a callback holds a borrow for component A
+- **WHEN** A requires terminal shutdown
+- **THEN** the callback returns without synchronously stopping A or ComponentManager
+- **AND** outer composition requests Stop only after the borrow is released
+
 ### Requirement: Failed Start retains cleanup authority
 
 An owner that may acquire resources during Start MUST publish cleanup authority before acquisition can escape and MUST

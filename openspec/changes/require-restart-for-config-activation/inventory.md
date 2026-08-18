@@ -3,8 +3,13 @@
 Inventory target: the frozen dirty PR2a surface at baseline `991c96bb517f74350cfabce3d55fed7c130b8833`.
 
 Approval provenance: this inventory was seeded from the owner-approved reset artifact with SHA-256
-`d22ba6806f0c355062ca021106683d98c05a2c402c434bbdac9626a51fe988a0`. Its lifecycle rulings are unchanged; this
-in-tree derivative replaces ephemeral companion references and records the reviewer-required conformance evidence.
+`d22ba6806f0c355062ca021106683d98c05a2c402c434bbdac9626a51fe988a0`. Its historical lifecycle rulings were
+subsequently superseded; this in-tree derivative replaces ephemeral companion references and records the
+reviewer-required conformance evidence.
+
+> **Historical reset inventory.** ADR-095 and `simplify-one-shot-lifecycle-ownership` supersede every ManagedConsumer,
+> DrainAndDelete, Client catalog, rejoin, retained-result, and lifecycle-proof disposition below. Preserve counts and
+> hash as evidence only; no row is current implementation or migration guidance.
 
 - Baseline HEAD: `991c96bb517f74350cfabce3d55fed7c130b8833`
 - Measured dirty surface: 36 tracked changes plus 6 untracked files, 42 unique files total.
