@@ -155,7 +155,7 @@ func TestWorkflowRunMonitorRejectsMalformedSlugMetadata(t *testing.T) {
 		`{"loop_id":"malformed-slug","task_id":"task","outcome":"success","workflow_slug":{},"completed_at":"2026-04-20T10:00:00Z"}`,
 	)
 
-	assertWorkflowRunMonitorDataFailure(t, kv)
+	assertWorkflowRunMonitorDataFailure(t, kv, "decode completed event")
 }
 
 func TestWorkflowRunMonitorRejectsMalformedMatchingTerminalEvent(t *testing.T) {
@@ -164,7 +164,7 @@ func TestWorkflowRunMonitorRejectsMalformedMatchingTerminalEvent(t *testing.T) {
 		`{"loop_id":"malformed-event","outcome":"success","workflow_slug":"wanted","completed_at":"2026-04-20T10:00:00Z"}`,
 	)
 
-	assertWorkflowRunMonitorDataFailure(t, kv)
+	assertWorkflowRunMonitorDataFailure(t, kv, "task_id required")
 }
 
 func TestWorkflowRunMonitorRejectsUnknownMatchingOutcome(t *testing.T) {
@@ -173,7 +173,36 @@ func TestWorkflowRunMonitorRejectsUnknownMatchingOutcome(t *testing.T) {
 		`{"loop_id":"unknown","task_id":"task","outcome":"mystery","workflow_slug":"wanted","completed_at":"2026-04-20T10:00:00Z"}`,
 	)
 
-	assertWorkflowRunMonitorDataFailure(t, kv)
+	assertWorkflowRunMonitorDataFailure(t, kv, `unknown terminal outcome "mystery"`)
+}
+
+func TestWorkflowRunMonitorRejectsMalformedJSON(t *testing.T) {
+	kv := newFakeLoopKV()
+	kv.entries[completeKeyPrefix+"malformed-json"] = []byte(`{"loop_id":`)
+
+	assertWorkflowRunMonitorDataFailure(t, kv, "decode terminal discriminator")
+}
+
+func TestWorkflowRunMonitorRejectsInvalidForeignSlugEvent(t *testing.T) {
+	kv := newFakeLoopKV()
+	kv.entries[completeKeyPrefix+"invalid-foreign"] = []byte(
+		`{"loop_id":"invalid-foreign","outcome":"success","workflow_slug":"other","completed_at":"2026-04-20T10:00:00Z"}`,
+	)
+
+	assertWorkflowRunMonitorDataFailure(t, kv, "task_id required")
+}
+
+func TestWorkflowRunMonitorIgnoresValidForeignSlugEvent(t *testing.T) {
+	kv := newFakeLoopKV()
+	kv.put(t, completeKeyPrefix+"valid-foreign", agentic.LoopCompletedEvent{
+		LoopID: "valid-foreign", TaskID: "task-foreign", WorkflowSlug: "other",
+		Outcome: agentic.OutcomeSuccess, CompletedAt: time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC),
+	})
+
+	result := executeWorkflowRunMonitor(t, kv)
+	if result.TotalLoops != 0 || len(result.Recent) != 0 {
+		t.Fatalf("unexpected foreign result: %#v", result)
+	}
 }
 
 func TestWorkflowRunMonitorSortsSameSecondByNanoseconds(t *testing.T) {
@@ -211,7 +240,7 @@ func TestWorkflowRunMonitorBreaksExactTimestampTiesByLoopID(t *testing.T) {
 	}
 }
 
-func assertWorkflowRunMonitorDataFailure(t *testing.T, kv *fakeLoopKV) {
+func assertWorkflowRunMonitorDataFailure(t *testing.T, kv *fakeLoopKV, wantError string) {
 	t.Helper()
 	executor := NewWorkflowRunMonitorExecutor(kv, slog.Default())
 	result, err := executor.Execute(context.Background(), agentic.ToolCall{
@@ -219,6 +248,9 @@ func assertWorkflowRunMonitorDataFailure(t *testing.T, kv *fakeLoopKV) {
 	})
 	if err == nil || result.Error == "" || result.Content != "" {
 		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if !strings.Contains(result.Error, wantError) {
+		t.Fatalf("error %q does not contain %q", result.Error, wantError)
 	}
 }
 

@@ -99,8 +99,10 @@ Start-owned supervisor retries transport loss and performs full-snapshot repair.
 
 ### Restart-safe shutdown and crash recovery are activation prerequisites
 
-Because component and flow changes activate at boot, controlled restart becomes a normal configuration operation.
-Boot-only activation does not land until shutdown is loss-aware and proven end to end.
+Because component-configuration changes and explicitly published diagram candidates activate at boot, controlled
+restart becomes a normal configuration operation. Diagram edits themselves have no activation boundary because they
+change no component configuration. Boot-only activation does not land until shutdown is loss-aware and proven end to
+end.
 
 SIGTERM and SIGINT initiate bounded quiesce; they do not cancel the runtime Start context before lifecycle owners can
 stop admission and drain. The owner that starts a managed JetStream consumer or core NATS subscription retains its
@@ -156,9 +158,10 @@ watcher, lister, future, message, and value seams carry caller context and local
 `Unsafe*` compatibility alias survives. Terminal Stop behavior, context cleanup, and deterministic race proofs remain
 required.
 
-Operators may author flows without stopping the process, but their activation boundary is the next successful boot. The
-response makes that boundary explicit. Operators retain immediate rule editing and gain revision-bound evidence of
-whether each processor instance applied the edit.
+Operators may author flow diagrams without stopping the process. Diagram edits have no activation boundary and change
+no desired or running component configuration. Only explicit candidate publication writes desired component
+configuration for a later successful boot. Operators retain immediate rule editing and gain revision-bound evidence
+of whether each processor instance applied the edit.
 
 This is a breaking pre-v1 change. Restart-safe shutdown is a prerequisite, not deferred hardening. Removed APIs receive
 no compatibility shims or parallel live paths. Sister repositories are read-only to this work; migration documentation
@@ -184,8 +187,9 @@ author durable flow and rule definitions. This ADR supersedes only these activat
 - `manage_flow` changes running topology without a reboot; and
 - all coordinator-authored configuration has immediate runtime effect.
 
-Coordinator-authored flow changes are now pending-next-boot desired state. Coordinator-authored rule definitions may
-hot activate only through the bounded, observable rule capability defined here.
+Coordinator-authored diagram changes remain diagram-only and have no activation boundary. Only explicit candidate
+publication writes desired component configuration for a later boot. Coordinator-authored rule definitions may hot
+activate only through the bounded, observable rule capability defined here.
 
 ## References
 
