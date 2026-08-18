@@ -1,3 +1,7 @@
+> **Execution authority:** follow [`recovery-ledger.md`](recovery-ledger.md). This file records task state; it does not
+> turn a merged contract PR, strict OpenSpec validation, or a green test suite for the old machinery into runtime
+> completion. No runtime task below is complete until its ledger evidence and mechanical exit gate both pass.
+
 ## 1. Contract transaction
 
 - [x] 1.1 Record pinned inventory and owner-approved audit digest.
@@ -11,7 +15,7 @@
 
 - [ ] 2.1 Reorder consume commit and retain native handles.
 - [ ] 2.2 Add reject-not-replace identity validation/claim.
-- [ ] 2.3 Migrate all 42 owners; preserve failed-Start/startDone authority.
+- [ ] 2.3 Migrate every production owner in the rebased recovery census; preserve failed-Start/startDone authority.
 - [ ] 2.4 Remove Generation/Operation only after focused/race proof.
 - [ ] 2.5 Remove lifecycle deletion and provide fixture/admin teardown.
 
