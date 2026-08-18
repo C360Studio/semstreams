@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -78,12 +77,10 @@ type Input struct {
 
 	// Lifecycle
 	lifecycleMu sync.Mutex
-	shutdown    chan struct{}
-	done        chan struct{}
+	cancel      context.CancelFunc
 	running     atomic.Bool
 	startTime   time.Time
 	wg          sync.WaitGroup
-	generation  *lifecyclejoin.Generation
 
 	// Counters (atomic for thread safety; exposed via Metric()).
 	requestsTotal     atomic.Int64
@@ -267,13 +264,12 @@ func (h *Input) Start(ctx context.Context) error {
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
-	h.shutdown = make(chan struct{})
-	h.done = make(chan struct{})
+	// Publish cancellation and join ownership before launching work.
+	h.cancel = cancel
 	h.running.Store(true)
 	h.wg.Add(1)
 
 	go h.pollLoop(runCtx)
-	h.generation = lifecyclejoin.NewGeneration(cancel, h.wg.Wait)
 
 	h.logger.Info("HTTP input started",
 		slog.String("url", h.resolved.url),
@@ -290,30 +286,37 @@ func (h *Input) Stop(ctx context.Context) error {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
 	h.lifecycleMu.Lock()
-	generation := h.generation
-	if generation == nil {
+	cancel := h.cancel
+	if cancel == nil {
 		h.lifecycleMu.Unlock()
 		return nil
 	}
+	h.cancel = nil
+	cancel()
+	joined := make(chan struct{})
+	go func() {
+		h.wg.Wait()
+		h.running.Store(false)
+		close(joined)
+	}()
 	h.lifecycleMu.Unlock()
 
-	return generation.Stop(ctx, func() error {
-		close(h.shutdown)
-		return nil
-	}, func(context.Context) error {
-		h.lifecycleMu.Lock()
-		h.running.Store(false)
-		h.lifecycleMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("wait for HTTP input runtime: %w", err)
+	}
+	select {
+	case <-joined:
 		h.logger.Info("HTTP input stopped")
 		return nil
-	})
+	case <-ctx.Done():
+		return fmt.Errorf("wait for HTTP input runtime: %w", ctx.Err())
+	}
 }
 
 // pollLoop runs the request-decode-publish cycle on the configured
 // interval until shutdown.
 func (h *Input) pollLoop(ctx context.Context) {
 	defer h.wg.Done()
-	defer close(h.done)
 
 	// Fire one cycle immediately so operators don't wait
 	// `interval` for the first observation.
@@ -325,8 +328,6 @@ func (h *Input) pollLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
-		case <-h.shutdown:
 			return
 		case <-ticker.C:
 			h.runCycle(ctx)
@@ -380,8 +381,6 @@ func (h *Input) doRequest(ctx context.Context) ([]byte, error) {
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
-			case <-h.shutdown:
-				return nil, errors.New("http-input: shutdown during retry backoff")
 			case <-time.After(backoff):
 			}
 			backoff = nextBackoff(backoff, h.resolved.maxBackoff, h.resolved.multiplier)
