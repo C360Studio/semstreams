@@ -255,7 +255,6 @@ Framework composition uses one private callback borrow while wiring boot-selecte
 without manager or gate locks and the handle cannot escape that internal seam. A callback must not synchronously call
 terminal `Stop`: Stop closes borrow admission and waits for accepted callbacks to return. The callback returns first;
 an outer composition owner then requests shutdown.
-request the lifecycle mutation.
 
 Registry declaration observation will show only complete old or new generations. It will not report Transitioning or
 Failed because declaration identity is not runtime availability.

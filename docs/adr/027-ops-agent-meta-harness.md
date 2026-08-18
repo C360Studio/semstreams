@@ -2,9 +2,18 @@
 
 ## Status
 
-**Accepted (Phase 1)** — refreshed 2026-04-18 with ADR-028 framing; Phase 1 shipped 2026-04-20. The Meta-Harness pattern and the three-phase delivery remain correct; this refresh clarifies that the ops agent is **Layer 4 of the three-layer orchestration architecture** and reuses the coordinator's runtime composition tools, not a parallel control path.
+**Accepted (Phase 1); Phase 2/3 deployment surface superseded by
+[ADR-096](096-flow-diagrams-are-not-lifecycle-authority.md) (2026-08-17).** Phase 1 read-only diagnosis remains current.
+The historical plan to reuse coordinator runtime-composition tools is not current: flow lifecycle tools are removed,
+saved diagrams have no runtime authority, and `monitor_workflow_runs(workflow_slug)` is the admitted completed-run
+aggregate. Any future write phase must use the surviving diagram-authoring, explicit desired-config publication, and
+bounded rule-definition contracts; it has no privileged runtime-composition path.
 
 Phase 1 (read-only diagnosis) is complete: the ops agent observes completed loops and graph telemetry, emits structured findings as `ops.diagnosis.*` triples via the `emit_diagnosis` tool, and is e2e-verified via `task e2e:ops`. Phase 2 and Phase 3 remain proposed. The ops seam now carries a second emission tool beside `emit_diagnosis`: `emit_lesson` (ADR-080), which distills completed work into evidence-cited, lifecycle-gated `agent.lesson.*` records injected back into future loops.
+
+> **Historical Phase 2/3 text:** references below to runtime-composition tooling, `manage_flow`, `monitor_flow`,
+> deployment, or flow hot reload describe the superseded proposal. They do not authorize current behavior. ADR-096's
+> diagram-only authoring and explicit desired-config publication contract governs any future implementation.
 
 ## Role within the three-layer orchestration architecture
 

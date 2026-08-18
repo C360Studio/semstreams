@@ -2,8 +2,11 @@
 
 ## Status
 
-**Accepted (2026-08-16).** Breaking pre-v1 lifecycle simplification. This ADR partially supersedes ADR-026's live
-flow-activation decision while preserving its coordinator judgment role and durable flow authoring.
+**Accepted (2026-08-16); flow-activation clauses superseded by
+[ADR-096](096-flow-diagrams-are-not-lifecycle-authority.md) (2026-08-17).** The boot-only component-composition and
+bounded rule-definition decisions remain accepted. ADR-096 replaces this ADR's intermediate desired/effective flow
+state, lifecycle-operation, provenance, and `monitor_flow` design with diagram-only authoring and explicit upsert-only
+candidate publication.
 
 ## Context
 
@@ -42,6 +45,10 @@ running service or component.
 ComponentManager's config subscribers, generic live-config PUT, hidden update interfaces, runtime reconcile, restart,
 and replacement paths are retired. Registry admits the boot set and exposes defensive values; it has no live
 replacement protocol. Terminal shutdown remains Start-owned and must cancel, join, and stop the exact boot generation.
+
+> **Superseded flow-activation clause (ADR-096).** The following two paragraphs record the intermediate 2026-08-16
+> design and are not current contract. Diagram CRUD now changes only flowstore; lifecycle operations and flow
+> desired/effective/provenance fields are removed. Explicit candidate publication is the only diagram-to-config write.
 
 Flow create, update, validation, and persistence remain supported. Deploy, start, stop, and undeploy operations change
 desired state only while the process is running. Their typed result states that desired state changed, runtime did not,
@@ -164,6 +171,11 @@ ADR-070 remains unchanged historical context for durable gated-DAG dispatch even
 helper is retired by the current capability contract.
 
 ## Superseded ADR-026 scope
+
+> **Amended by ADR-096.** The first two bullets below remain historical descriptions of what ADR-094 superseded in
+> ADR-026. ADR-096 subsequently removed `manage_flow`, every flow lifecycle operation, and flow activation truth
+> entirely. Surviving flow CRUD tools author diagrams only; `monitor_workflow_runs(workflow_slug)` replaces the
+> workflow-run aggregation portion of `monitor_flow` without flowstore or lifecycle state.
 
 ADR-026 remains authoritative for the coordinator as the judgment layer, its structured decisions, and its ability to
 author durable flow and rule definitions. This ADR supersedes only these activation claims:

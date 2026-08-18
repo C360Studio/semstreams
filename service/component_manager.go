@@ -809,9 +809,8 @@ func (cm *ComponentManager) createComponent(
 		return err
 	}
 
-	// Track as managed component. Retain the effective config so a later
-	// per-component config update can be compared and skipped when unchanged
-	// (gh#520).
+	// Track the component with the exact sealed boot configuration used to
+	// construct it. Desired writes cannot replace this generation in-process.
 	mc := &component.ManagedComponent{
 		Component: comp,
 		State:     state,
@@ -822,7 +821,7 @@ func (cm *ComponentManager) createComponent(
 	cm.components[instanceName] = mc
 	cm.mu.Unlock()
 
-	// Invalidate FlowGraph cache when components change
+	// Invalidate the FlowGraph cache while assembling the fixed boot set.
 	cm.invalidateFlowGraph()
 
 	return nil

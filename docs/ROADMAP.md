@@ -87,9 +87,11 @@ Complete stubbed action implementations in rules processor:
 - ActionTypePublish: Implemented for agentic workflows
 - ActionTypePublishAgent: Implemented for spawning agent tasks
 - ActionTypeUpdateTriple: Triple metadata updates (partial)
-- Dynamic watch pattern reloading without restart
+- Revision-bound rule-definition hot reload inside the fixed boot-composed Rule processor (in progress)
 
-Current state: Stateful ECA rules work. Publish actions implemented for agentic system integration. Update triple actions partially implemented.
+Current state: Stateful ECA rules work. Publish actions are implemented for agentic system integration. Update-triple
+actions are partial. Rule definitions may hot reload through their dedicated contract; ports, dependencies, entity
+watch patterns, integration mode, and projection bindings remain boot-only.
 
 ### Rule Engine + Lifecycle Harness
 **Status:** Implemented (Reactive rules + `pkg/lifecycle`)
@@ -125,9 +127,14 @@ Current state: Fully operational. Run `task e2e:agentic` for validation.
 ### UI Flow Builder
 **Status:** WIP | **Repo:** semstreams-ui
 
-Visual flow builder for designing, deploying, and managing flows through a drag-and-drop interface. Backend APIs (Flow CRUD, component lifecycle, live metrics) are implemented in semstreams. The frontend UI is under active development in the `semstreams-ui` repository.
+Visual flow builder for arranging component diagrams, validating connectivity, publishing desired next-boot component
+configuration, and observing components by diagram name. Diagram CRUD has no component lifecycle authority; publishing
+is upsert-only and leaves the current runtime unchanged. The frontend UI is under active development in the
+`semstreams-ui` repository.
 
-Current state: Backend ready. UI planned for beta release.
+Current state: Diagram CRUD, validation, explicit candidate publication, and best-effort observations are available.
+Deploy/start/stop/undeploy and flow-runtime-state surfaces are retired; operators restart the process to activate
+desired component changes.
 
 ---
 

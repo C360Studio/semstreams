@@ -6,16 +6,87 @@ separate, narrow hot-reload contract.
 
 ## Removed flow fields
 
-Remove every use of desired/effective flow state, desired component bundles, activation provenance, and flow-level
-restart fields. `Flow` now contains only diagram metadata, nodes, connections, audit fields, and its CAS version.
+Remove every use of these retired lifecycle fields:
+
+- legacy runtime fields: `runtime_state`, `deployed_at`, `started_at`, and `stopped_at`;
+- intermediate desired/effective fields: `desired_state`, `desired_components`, `desired_changed_at`, and
+  `effective_state`;
+- provenance/restart fields: `desired_provenance`, `boot_applied_provenance`, and `restart_required`; and
+- aliases that attempted to restate lifecycle: `deployment_state`, `activation_state`, `lifecycle_state`, and
+  `flow_state`.
+
+`Flow` now contains only diagram metadata, nodes, connections, server-owned audit fields, and its CAS version.
 
 Creating, updating, or deleting a diagram changes no component configuration and no running component.
 
 ## Use authoring request objects
 
-Flow create and draft-validation requests accept only `name`, optional `description`, `nodes`, and `connections`.
-Update accepts those fields plus `expected_version`. The path owns update and validation identity. The server owns the
-created ID, resulting version, and all audit fields.
+The old write shape reused the persisted response object. For example, callers sent identity, version, audit, and
+lifecycle fields back to create/update/validate:
+
+```json
+{
+  "id": "flow-123",
+  "name": "example",
+  "description": "example diagram",
+  "version": 7,
+  "nodes": [],
+  "connections": [],
+  "runtime_state": "running",
+  "deployed_at": "2026-08-17T12:00:00Z",
+  "started_at": "2026-08-17T12:01:00Z",
+  "stopped_at": null,
+  "created_at": "2026-08-16T12:00:00Z",
+  "updated_at": "2026-08-17T12:00:00Z",
+  "created_by": "operator",
+  "last_modified": "2026-08-17T12:00:00Z"
+}
+```
+
+Do not reuse that shape. `POST /flowbuilder/flows` and body-based
+`POST /flowbuilder/flows/{id}/validate` now accept only:
+
+```json
+{
+  "name": "example",
+  "description": "example diagram",
+  "nodes": [],
+  "connections": []
+}
+```
+
+`PUT /flowbuilder/flows/{id}` accepts the same authoring fields plus the prior CAS value under the newly named
+`expected_version` field:
+
+```json
+{
+  "name": "example",
+  "description": "updated diagram",
+  "expected_version": 7,
+  "nodes": [],
+  "connections": []
+}
+```
+
+The path owns update and validation identity. The server owns the created ID, resulting version, and all audit fields.
+Create and update responses remain the persisted `Flow` response shape:
+
+```json
+{
+  "id": "server-generated-id",
+  "name": "example",
+  "description": "updated diagram",
+  "version": 8,
+  "nodes": [],
+  "connections": [],
+  "created_at": "2026-08-16T12:00:00Z",
+  "updated_at": "2026-08-17T12:00:00Z",
+  "created_by": "operator",
+  "last_modified": "2026-08-17T12:00:00Z"
+}
+```
+
+Validation still returns `engine.ValidationResult`; it never returns a `Flow` or lifecycle state.
 
 Do not send the persisted `Flow` response object back as a write request. Unknown fields, including every retired
 lifecycle field and server-owned `id`, `version`, and audit field, now return HTTP 400. OpenAPI exposes separate
@@ -61,14 +132,25 @@ Retry is safe because each write is an idempotent upsert. Restart SemStreams aft
 
 ## Removed HTTP and tool surfaces
 
-There are no compatibility aliases for:
+There are no compatibility aliases for these retired routes:
 
-- `POST /flowbuilder/deployment/{id}/{operation}`
+- `POST /flowbuilder/deployment/{id}/deploy`
+- `POST /flowbuilder/deployment/{id}/start`
+- `POST /flowbuilder/deployment/{id}/stop`
+- `POST /flowbuilder/deployment/{id}/undeploy`
 - `/flowbuilder/status/stream`
-- `/flowbuilder/flows/{id}/runtime/logs`
-- the former runtime health, metrics, and messages paths
-- flow deployment/start/stop/undeploy tools
-- the former flow-monitoring tool
+- `GET /flowbuilder/flows/{id}/runtime/health`
+- `GET /flowbuilder/flows/{id}/runtime/metrics`
+- `GET /flowbuilder/flows/{id}/runtime/logs`
+- `GET /flowbuilder/flows/{id}/runtime/messages`
+
+These exact agent tools are also retired without aliases:
+
+- `deploy_flow`
+- `start_flow`
+- `stop_flow`
+- `undeploy_flow`
+- `monitor_flow`
 
 Retained observation paths are:
 

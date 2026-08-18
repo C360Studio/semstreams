@@ -52,7 +52,8 @@ Payloads are identified by "domain.category.version" strings:
 - `robotics.mavlink.v1` - MAVLink messages (domain-specific)
 - `iot.sensor.v2` - IoT sensor data (domain-specific)
 
-Components declare accepted types in their configuration, and the flow engine validates compatibility before deployment.
+Components declare accepted types in their configuration, and the flow engine validates compatibility while authoring
+a diagram. Publishing the compiled candidates changes desired next-boot configuration, never the running process.
 
 ### Behavioral Interfaces
 
@@ -187,7 +188,7 @@ This enables polymorphic deserialization without reflection or code generation.
 - `input_types`: ["core.json.v1", "iot.sensor.v2"]
 - `output_types`: ["core.json.v1"]
 
-**Flow Engine**: Validates type compatibility in flow graphs before deployment
+**Flow Engine**: Validates type compatibility in saved diagrams and compiles detached configuration candidates
 
 **Metrics**: Message counts tracked by type (via `Schema().String()`)
 
@@ -667,7 +668,7 @@ See `*_test.go` files for comprehensive examples:
 
 - [SemStreams Component Package](../component/) - Component registry and payload registration
 - [SemStreams Errors Package](../errors/) - Error classification system
-- [Flow Engine](../engine/) - Type validation and flow deployment
+- [Flow Engine](../engine/) - Diagram validation and detached configuration compilation
 - [NATS Client](../natsclient/) - Message transport layer
 
 ## Contributing

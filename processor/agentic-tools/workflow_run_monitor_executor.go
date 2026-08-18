@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/natsclient"
@@ -96,72 +97,93 @@ type eventDiscriminator struct {
 // KV entry, regardless of which concrete event shape was stored. It carries
 // only the fields that the aggregation and sort code needs.
 type terminalEvent struct {
-	loopID     string
-	role       string
-	outcome    string
-	terminalAt string // ISO-8601 UTC; derived from completed_at/failed_at/cancelled_at
-	iterations int
-	tokensIn   int
-	tokensOut  int
+	loopID       string
+	workflowSlug string
+	role         string
+	outcome      string
+	terminalAt   time.Time
+	iterations   int
+	tokensIn     int
+	tokensOut    int
 }
 
 // decodeTerminalEvent unmarshals raw JSON from a COMPLETE_* KV entry into a
 // terminalEvent. It dispatches on the "outcome" discriminator field so each
 // concrete event type contributes the correct timestamp and fields.
-// Returns (zero, false) for unknown outcomes — callers should skip those.
-func decodeTerminalEvent(data []byte) (terminalEvent, bool) {
-	const timeFormat = "2006-01-02T15:04:05Z"
-
+// Unknown outcomes, invalid payloads, and missing terminal timestamps fail
+// closed because a COMPLETE_* key is authoritative terminal state.
+func decodeTerminalEvent(data []byte) (terminalEvent, error) {
 	var disc eventDiscriminator
 	if err := json.Unmarshal(data, &disc); err != nil {
-		return terminalEvent{}, false
+		return terminalEvent{}, fmt.Errorf("decode terminal discriminator: %w", err)
 	}
 
 	switch disc.Outcome {
 	case agentic.OutcomeSuccess:
 		var ev agentic.LoopCompletedEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
-			return terminalEvent{}, false
+			return terminalEvent{}, fmt.Errorf("decode completed event: %w", err)
+		}
+		if err := ev.Validate(); err != nil {
+			return terminalEvent{}, fmt.Errorf("validate completed event: %w", err)
+		}
+		if ev.CompletedAt.IsZero() {
+			return terminalEvent{}, fmt.Errorf("validate completed event: completed_at required")
 		}
 		return terminalEvent{
-			loopID:     ev.LoopID,
-			role:       ev.Role,
-			outcome:    ev.Outcome,
-			terminalAt: ev.CompletedAt.UTC().Format(timeFormat),
-			iterations: ev.Iterations,
-			tokensIn:   ev.TokensIn,
-			tokensOut:  ev.TokensOut,
-		}, true
+			loopID:       ev.LoopID,
+			workflowSlug: ev.WorkflowSlug,
+			role:         ev.Role,
+			outcome:      ev.Outcome,
+			terminalAt:   ev.CompletedAt,
+			iterations:   ev.Iterations,
+			tokensIn:     ev.TokensIn,
+			tokensOut:    ev.TokensOut,
+		}, nil
 
 	case agentic.OutcomeFailed:
 		var ev agentic.LoopFailedEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
-			return terminalEvent{}, false
+			return terminalEvent{}, fmt.Errorf("decode failed event: %w", err)
+		}
+		if err := ev.Validate(); err != nil {
+			return terminalEvent{}, fmt.Errorf("validate failed event: %w", err)
+		}
+		if ev.FailedAt.IsZero() {
+			return terminalEvent{}, fmt.Errorf("validate failed event: failed_at required")
 		}
 		return terminalEvent{
-			loopID:     ev.LoopID,
-			role:       ev.Role,
-			outcome:    ev.Outcome,
-			terminalAt: ev.FailedAt.UTC().Format(timeFormat),
-			iterations: ev.Iterations,
-			tokensIn:   ev.TokensIn,
-			tokensOut:  ev.TokensOut,
-		}, true
+			loopID:       ev.LoopID,
+			workflowSlug: ev.WorkflowSlug,
+			role:         ev.Role,
+			outcome:      ev.Outcome,
+			terminalAt:   ev.FailedAt,
+			iterations:   ev.Iterations,
+			tokensIn:     ev.TokensIn,
+			tokensOut:    ev.TokensOut,
+		}, nil
 
 	case agentic.OutcomeCancelled:
 		var ev agentic.LoopCancelledEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
-			return terminalEvent{}, false
+			return terminalEvent{}, fmt.Errorf("decode cancelled event: %w", err)
+		}
+		if err := ev.Validate(); err != nil {
+			return terminalEvent{}, fmt.Errorf("validate cancelled event: %w", err)
+		}
+		if ev.CancelledAt.IsZero() {
+			return terminalEvent{}, fmt.Errorf("validate cancelled event: cancelled_at required")
 		}
 		// LoopCancelledEvent has no Role field; role stays empty.
 		return terminalEvent{
-			loopID:     ev.LoopID,
-			outcome:    ev.Outcome,
-			terminalAt: ev.CancelledAt.UTC().Format(timeFormat),
-		}, true
+			loopID:       ev.LoopID,
+			workflowSlug: ev.WorkflowSlug,
+			outcome:      ev.Outcome,
+			terminalAt:   ev.CancelledAt,
+		}, nil
 
 	default:
-		return terminalEvent{}, false
+		return terminalEvent{}, fmt.Errorf("unknown terminal outcome %q", disc.Outcome)
 	}
 }
 
@@ -176,6 +198,7 @@ type loopRecentEntry struct {
 	Iterations  int    `json:"iterations"`
 	TokensIn    int    `json:"tokens_in"`
 	TokensOut   int    `json:"tokens_out"`
+	terminalAt  time.Time
 }
 
 // workflowRunMonitorResult is the JSON shape returned to the LLM.
@@ -225,24 +248,20 @@ func (e *WorkflowRunMonitorExecutor) monitorWorkflowRuns(ctx context.Context, ca
 
 		entry, err := e.kv.Get(ctx, key)
 		if err != nil {
-			e.logger.Warn("monitor_workflow_runs: skipping unreadable key",
-				slog.String("key", key), slog.Any("error", err))
-			continue
+			return agentic.ToolResult{
+				CallID:    call.ID,
+				Error:     fmt.Sprintf("failed to read completed loop %q: %v", key, err),
+				ErrorKind: agentic.ToolErrorNetwork,
+			}, errs.WrapTransient(err, "WorkflowRunMonitorExecutor", "monitorWorkflowRuns", "read completed loop")
 		}
 
-		// Peek at workflow_slug before doing the full polymorphic decode so
-		// we skip foreign-flow entries cheaply.
-		var slug struct {
-			WorkflowSlug string `json:"workflow_slug"`
+		ev, err := decodeTerminalEvent(entry.Value)
+		if err != nil {
+			return corruptWorkflowRunResult(call.ID, key, err)
 		}
-		if err := json.Unmarshal(entry.Value, &slug); err != nil || slug.WorkflowSlug != workflowSlug {
-			continue
-		}
-
-		ev, ok := decodeTerminalEvent(entry.Value)
-		if !ok {
-			e.logger.Debug("monitor_workflow_runs: skipping entry with unknown outcome",
-				slog.String("key", key))
+		// A valid production decode is the only evidence that a COMPLETE_*
+		// record belongs to another workflow and may be ignored.
+		if ev.workflowSlug != workflowSlug {
 			continue
 		}
 
@@ -261,17 +280,21 @@ func (e *WorkflowRunMonitorExecutor) monitorWorkflowRuns(ctx context.Context, ca
 			LoopID:      ev.loopID,
 			Role:        ev.role,
 			Outcome:     ev.outcome,
-			CompletedAt: ev.terminalAt,
+			CompletedAt: ev.terminalAt.UTC().Format(time.RFC3339Nano),
 			Iterations:  ev.iterations,
 			TokensIn:    ev.tokensIn,
 			TokensOut:   ev.tokensOut,
+			terminalAt:  ev.terminalAt,
 		})
 	}
 
 	// 4. Sort recent descending by terminal timestamp (completed_at field carries
 	// completed_at/failed_at/cancelled_at depending on outcome), then cap.
 	sort.Slice(result.Recent, func(i, j int) bool {
-		return result.Recent[i].CompletedAt > result.Recent[j].CompletedAt
+		if result.Recent[i].terminalAt.Equal(result.Recent[j].terminalAt) {
+			return result.Recent[i].LoopID < result.Recent[j].LoopID
+		}
+		return result.Recent[i].terminalAt.After(result.Recent[j].terminalAt)
 	})
 	if len(result.Recent) > recentLimit {
 		result.Recent = result.Recent[:recentLimit]
@@ -290,4 +313,12 @@ func (e *WorkflowRunMonitorExecutor) monitorWorkflowRuns(ctx context.Context, ca
 		CallID:  call.ID,
 		Content: string(data),
 	}, nil
+}
+
+func corruptWorkflowRunResult(callID, key string, cause error) (agentic.ToolResult, error) {
+	return agentic.ToolResult{
+		CallID:    callID,
+		Error:     fmt.Sprintf("invalid completed loop %q: %v", key, cause),
+		ErrorKind: agentic.ToolErrorInternal,
+	}, errs.WrapInvalid(cause, "WorkflowRunMonitorExecutor", "monitorWorkflowRuns", "decode completed loop")
 }

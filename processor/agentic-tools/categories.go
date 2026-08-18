@@ -24,7 +24,8 @@ const (
 	// CategoryOrchestration contains tools for spawning sub-agents and decomposing tasks.
 	CategoryOrchestration ToolCategory = "orchestration"
 
-	// CategoryMeta contains tools for self-programming (create_rule, manage_flow).
+	// CategoryMeta contains durable authoring tools such as create_rule and
+	// create_flow. Flow authoring does not grant runtime lifecycle authority.
 	CategoryMeta ToolCategory = "meta"
 )
 

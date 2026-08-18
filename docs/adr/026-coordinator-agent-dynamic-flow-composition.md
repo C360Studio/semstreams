@@ -2,12 +2,14 @@
 
 ## Status
 
-**Partially superseded by [ADR-094](094-boot-only-composition-and-observable-rule-activation.md) — 2026-08-16.**
-Coordinator judgment, structured decisions, and durable flow/rule authoring remain. Generalized live flow-topology
-activation is retired; flow changes require restart, while dedicated rule-definition hot reload remains available with
-revision-bound activation truth.
+**Partially superseded by [ADR-094](094-boot-only-composition-and-observable-rule-activation.md) (2026-08-16) and
+[ADR-096](096-flow-diagrams-are-not-lifecycle-authority.md) (2026-08-17).** Coordinator judgment, structured decisions,
+and durable flow/rule authoring remain. ADR-096 removes `manage_flow`, `monitor_flow`, flow lifecycle operations, and
+flow activation state. Surviving `create_flow`, `update_flow`, `delete_flow`, `get_flow`, and `list_flows` tools author
+saved diagrams only. `monitor_workflow_runs(workflow_slug)` aggregates completed agent loops independently of
+flowstore. Dedicated rule-definition hot reload remains available with revision-bound activation truth.
 
-**Partial — Phase 1 shipped, dynamic-composition tools deferred.** The
+**Historical delivery status (superseded for flow activation).** The
 coordinator persona, the `decide` terminal tool, and the deep-research
 flow that exercises coordinator judgment are all landed and verified
 e2e. The six dynamic-flow-composition tools below (`create_rule`,
@@ -124,8 +126,8 @@ Per-flow coordinators can tighten or relax the retry envelope in their config.
 ### Flow-composition tool executors
 
 > **Historical activation model:** ADR-094 supersedes this section wherever it says a flow write changes the running
-> component topology. Flow tools author and validate durable desired state; only the dedicated rule-definition path may
-> activate live.
+> component topology; ADR-096 further supersedes its flow desired-state and lifecycle-tool claims. Surviving flow CRUD
+> tools author saved diagrams only. Only the dedicated rule-definition path may activate live.
 
 The original executors remain the coordinator's authoring toolkit for shaping desired pipelines when static
 configuration does not cover the case. Their runtime activation descriptions below are retained as historical context.

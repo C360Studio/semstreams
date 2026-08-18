@@ -16,9 +16,15 @@ import (
 type fakeLoopKV struct {
 	entries map[string][]byte
 	keysErr error
+	getErr  map[string]error
 }
 
-func newFakeLoopKV() *fakeLoopKV { return &fakeLoopKV{entries: map[string][]byte{}} }
+func newFakeLoopKV() *fakeLoopKV {
+	return &fakeLoopKV{
+		entries: map[string][]byte{},
+		getErr:  map[string]error{},
+	}
+}
 
 func (f *fakeLoopKV) put(t *testing.T, key string, value any) {
 	t.Helper()
@@ -41,6 +47,9 @@ func (f *fakeLoopKV) Keys(context.Context) ([]string, error) {
 }
 
 func (f *fakeLoopKV) Get(_ context.Context, key string) (*natsclient.KVEntry, error) {
+	if err := f.getErr[key]; err != nil {
+		return nil, err
+	}
 	value, ok := f.entries[key]
 	if !ok {
 		return nil, natsclient.ErrKVKeyNotFound
@@ -77,19 +86,19 @@ func TestWorkflowRunMonitorAggregatesOnlyMatchingSlug(t *testing.T) {
 	kv := newFakeLoopKV()
 	base := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
 	kv.put(t, completeKeyPrefix+"success", agentic.LoopCompletedEvent{
-		LoopID: "success", WorkflowSlug: "wanted", Outcome: agentic.OutcomeSuccess,
+		LoopID: "success", TaskID: "task-success", WorkflowSlug: "wanted", Outcome: agentic.OutcomeSuccess,
 		Role: "worker", Iterations: 2, TokensIn: 10, TokensOut: 4, CompletedAt: base,
 	})
 	kv.put(t, completeKeyPrefix+"failed", agentic.LoopFailedEvent{
-		LoopID: "failed", WorkflowSlug: "wanted", Outcome: agentic.OutcomeFailed,
+		LoopID: "failed", TaskID: "task-failed", WorkflowSlug: "wanted", Outcome: agentic.OutcomeFailed,
 		Role: "worker", TokensIn: 3, FailedAt: base.Add(time.Minute),
 	})
 	kv.put(t, completeKeyPrefix+"cancelled", agentic.LoopCancelledEvent{
-		LoopID: "cancelled", WorkflowSlug: "wanted", Outcome: agentic.OutcomeCancelled,
+		LoopID: "cancelled", TaskID: "task-cancelled", WorkflowSlug: "wanted", Outcome: agentic.OutcomeCancelled,
 		CancelledAt: base.Add(2 * time.Minute),
 	})
 	kv.put(t, completeKeyPrefix+"foreign", agentic.LoopCompletedEvent{
-		LoopID: "foreign", WorkflowSlug: "other", Outcome: agentic.OutcomeSuccess,
+		LoopID: "foreign", TaskID: "task-foreign", WorkflowSlug: "other", Outcome: agentic.OutcomeSuccess,
 		TokensIn: 999, CompletedAt: base,
 	})
 
@@ -123,4 +132,104 @@ func TestWorkflowRunMonitorPropagatesKVScanError(t *testing.T) {
 	if err == nil || result.ErrorKind != agentic.ToolErrorNetwork {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
+}
+
+func TestWorkflowRunMonitorPropagatesPerKeyGetError(t *testing.T) {
+	kv := newFakeLoopKV()
+	key := completeKeyPrefix + "unreadable"
+	kv.entries[key] = []byte(`{"workflow_slug":"wanted"}`)
+	kv.getErr[key] = errors.New("read failed")
+
+	executor := NewWorkflowRunMonitorExecutor(kv, slog.Default())
+	result, err := executor.Execute(context.Background(), agentic.ToolCall{
+		Name: WorkflowRunMonitorToolName, Arguments: map[string]any{"workflow_slug": "wanted"},
+	})
+	if err == nil || result.ErrorKind != agentic.ToolErrorNetwork || result.Content != "" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+func TestWorkflowRunMonitorRejectsMalformedSlugMetadata(t *testing.T) {
+	kv := newFakeLoopKV()
+	kv.entries[completeKeyPrefix+"malformed-slug"] = []byte(
+		`{"loop_id":"malformed-slug","task_id":"task","outcome":"success","workflow_slug":{},"completed_at":"2026-04-20T10:00:00Z"}`,
+	)
+
+	assertWorkflowRunMonitorDataFailure(t, kv)
+}
+
+func TestWorkflowRunMonitorRejectsMalformedMatchingTerminalEvent(t *testing.T) {
+	kv := newFakeLoopKV()
+	kv.entries[completeKeyPrefix+"malformed-event"] = []byte(
+		`{"loop_id":"malformed-event","outcome":"success","workflow_slug":"wanted","completed_at":"2026-04-20T10:00:00Z"}`,
+	)
+
+	assertWorkflowRunMonitorDataFailure(t, kv)
+}
+
+func TestWorkflowRunMonitorRejectsUnknownMatchingOutcome(t *testing.T) {
+	kv := newFakeLoopKV()
+	kv.entries[completeKeyPrefix+"unknown"] = []byte(
+		`{"loop_id":"unknown","task_id":"task","outcome":"mystery","workflow_slug":"wanted","completed_at":"2026-04-20T10:00:00Z"}`,
+	)
+
+	assertWorkflowRunMonitorDataFailure(t, kv)
+}
+
+func TestWorkflowRunMonitorSortsSameSecondByNanoseconds(t *testing.T) {
+	kv := newFakeLoopKV()
+	base := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
+	for _, event := range []agentic.LoopCompletedEvent{
+		{LoopID: "earlier", TaskID: "task-earlier", WorkflowSlug: "wanted", Outcome: agentic.OutcomeSuccess, CompletedAt: base.Add(100 * time.Nanosecond)},
+		{LoopID: "later", TaskID: "task-later", WorkflowSlug: "wanted", Outcome: agentic.OutcomeSuccess, CompletedAt: base.Add(900 * time.Nanosecond)},
+	} {
+		kv.put(t, completeKeyPrefix+event.LoopID, event)
+	}
+
+	result := executeWorkflowRunMonitor(t, kv)
+	if len(result.Recent) != 2 || result.Recent[0].LoopID != "later" || result.Recent[1].LoopID != "earlier" {
+		t.Fatalf("unexpected recent order: %#v", result.Recent)
+	}
+	if result.Recent[0].CompletedAt != "2026-04-20T10:00:00.0000009Z" {
+		t.Fatalf("timestamp = %q", result.Recent[0].CompletedAt)
+	}
+}
+
+func TestWorkflowRunMonitorBreaksExactTimestampTiesByLoopID(t *testing.T) {
+	kv := newFakeLoopKV()
+	terminalAt := time.Date(2026, 4, 20, 10, 0, 0, 500, time.UTC)
+	for _, loopID := range []string{"loop-b", "loop-a"} {
+		kv.put(t, completeKeyPrefix+loopID, agentic.LoopCompletedEvent{
+			LoopID: loopID, TaskID: "task-" + loopID, WorkflowSlug: "wanted",
+			Outcome: agentic.OutcomeSuccess, CompletedAt: terminalAt,
+		})
+	}
+
+	result := executeWorkflowRunMonitor(t, kv)
+	if len(result.Recent) != 2 || result.Recent[0].LoopID != "loop-a" || result.Recent[1].LoopID != "loop-b" {
+		t.Fatalf("unexpected recent order: %#v", result.Recent)
+	}
+}
+
+func assertWorkflowRunMonitorDataFailure(t *testing.T, kv *fakeLoopKV) {
+	t.Helper()
+	executor := NewWorkflowRunMonitorExecutor(kv, slog.Default())
+	result, err := executor.Execute(context.Background(), agentic.ToolCall{
+		Name: WorkflowRunMonitorToolName, Arguments: map[string]any{"workflow_slug": "wanted"},
+	})
+	if err == nil || result.Error == "" || result.Content != "" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+func executeWorkflowRunMonitor(t *testing.T, kv *fakeLoopKV) workflowRunMonitorResult {
+	t.Helper()
+	executor := NewWorkflowRunMonitorExecutor(kv, slog.Default())
+	toolResult, err := executor.Execute(context.Background(), agentic.ToolCall{
+		Name: WorkflowRunMonitorToolName, Arguments: map[string]any{"workflow_slug": "wanted"},
+	})
+	if err != nil || toolResult.Error != "" {
+		t.Fatalf("result=%#v err=%v", toolResult, err)
+	}
+	return parseWorkflowRunResult(t, toolResult.Content)
 }

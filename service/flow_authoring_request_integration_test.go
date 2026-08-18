@@ -37,6 +37,9 @@ func TestFlowAuthoringRequestsRejectRetiredLifecycleFields(t *testing.T) {
 		// Historical aliases must fail too; accepting them would recreate an
 		// undocumented lifecycle lane through permissive JSON decoding.
 		"runtime_state",
+		"deployed_at",
+		"started_at",
+		"stopped_at",
 		"deployment_state",
 		"activation_state",
 		"lifecycle_state",

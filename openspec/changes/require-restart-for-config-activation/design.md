@@ -174,7 +174,11 @@ The deployment routes, flow-status WebSocket, flow-associated log stream, lifecy
 operations are removed without aliases. Health, metrics, and message endpoints may remain only as best-effort
 observations keyed by component names declared in a saved diagram; they do not assert ownership or activation.
 Completed workflow-run aggregation is named `monitor_workflow_runs` and filters AGENT_LOOPS by `workflow_slug`; it has
-no dependency on flowstore.
+no dependency on flowstore. Once key enumeration succeeds, any per-key read failure fails the whole operation. A
+matching terminal record must decode as its concrete production event, pass that event's `Validate`, carry a known
+outcome and nonzero terminal timestamp, or the operation fails without partial aggregates. Malformed slug metadata
+fails unless a valid full event decode proves the record belongs to another slug. Recent records sort by the exact
+terminal instant descending and then loop ID ascending before limiting; no timestamp precision is discarded.
 
 ### D7. Simplify the pending lifecycle protocol
 

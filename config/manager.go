@@ -40,7 +40,7 @@ type Manager struct {
 	// owned by a different platform identity (gh#459). In detached mode the
 	// manager runs on its local file config and must not touch the shared KV
 	// bucket at all — the write methods (PushToKV / PutComponentToKV /
-	// DeleteComponentFromKV) reject writes so a later operator-triggered flow
+	// DeleteComponentFromKV) reject writes so a later explicit diagram
 	// publish cannot bleed the local app's components INTO the foreign bucket
 	// (the reverse-direction of the adoption bug).
 	detached atomic.Bool
@@ -74,7 +74,7 @@ func NewConfigManager(ctx context.Context, cfg *Config, natsClient *natsclient.C
 	// Create or get KV bucket for config
 	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
 		Bucket:      "semstreams_config",
-		Description: "SemStreams runtime configuration",
+		Description: "SemStreams durable desired configuration",
 		History:     5, // Keep last 5 versions
 	})
 	if err != nil {
@@ -98,7 +98,9 @@ func (cm *Manager) GetConfig() *SafeConfig {
 	return cm.config
 }
 
-// Start begins watching for configuration changes
+// Start arbitrates and seals boot configuration, then watches durable desired
+// configuration so authoring reads remain current. Watch updates never mutate
+// the sealed process composition.
 func (cm *Manager) Start(ctx context.Context) error {
 	// Initialize shutdown channel
 	cm.shutdownCh = make(chan struct{})
@@ -190,7 +192,7 @@ func (cm *Manager) Start(ctx context.Context) error {
 					cm.logger.Warn("Failed to sync from KV on startup", "error", err)
 				}
 			} else {
-				// Versions equal: sync from KV (UI may have made changes)
+				// Versions equal: sync from KV (an author may have changed desired state)
 				cm.logger.Debug("File and KV versions match, syncing from KV",
 					"version", fileVersion)
 				if err := cm.syncFromKV(ctx); err != nil {
@@ -430,7 +432,8 @@ func (cm *Manager) updateConfig(key string, value []byte) error {
 
 	// Apply the update as a single serialized read-modify-write so a concurrent
 	// mutation (the watcher goroutine vs a caller-goroutine PutComponentToKV /
-	// DeleteComponentFromKV, or an engine deploy) cannot drop this change (gh#515).
+	// DeleteComponentFromKV, or explicit diagram publication) cannot drop this
+	// desired-state change (gh#515).
 	// Returning errNoConfigChange from the mutation signals an ignored key without
 	// swapping — surfaced as a nil error to the caller.
 	err := cm.config.Mutate(func(currentConfig *Config) error {
@@ -547,10 +550,9 @@ func (cm *Manager) DeleteComponentFromKV(ctx context.Context, name string) error
 		}
 		return fmt.Errorf("delete component %s from KV: %w", name, err)
 	}
-	// Apply the removal in-memory synchronously so the (possibly engine-owned)
-	// watcher event skips re-apply but the reconcile still tears down the
-	// removed component (gh#388). updateConfig with an empty value deletes the
-	// component from the in-memory map.
+	// Apply the removal to the author's desired-state view synchronously so the
+	// watcher event skips only this write's echo. The sealed boot map and running
+	// ComponentManager remain unchanged until a fresh process starts.
 	if err := cm.updateConfig(key, nil); err != nil {
 		return fmt.Errorf("apply delete of component %s in memory: %w", name, err)
 	}

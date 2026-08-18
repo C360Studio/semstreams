@@ -15,9 +15,10 @@ These are typical configuration presets. Mix and match features based on your ne
 > **Default**: Native configuration. The Graph processor enables BM25 embeddings by default. For Rules-Only
 (no search), explicitly disable embeddings in your config.
 
-## Static Config and UI Flows
+## Boot Configuration and UI Diagrams
 
-SemStreams supports two operational modes that share the same underlying infrastructure.
+SemStreams has one component activation boundary: successful process boot. File and KV configuration participate in
+Config Manager's startup arbitration; the selected configuration is sealed for that process lifetime.
 
 ### Headless Mode (Static Config)
 
@@ -29,27 +30,33 @@ semstreams --config config.json
 
 Components defined in the config start automatically. Ideal for production and CI/CD.
 
-### UI Mode (Visual Flow Builder)
+### UI Authoring (Visual Flow Builder)
 
-> **WIP**: The visual flow builder UI is under active development in the `semstreams-ui` repository, planned for beta release. Backend APIs (Flow CRUD, component lifecycle, live metrics) are available now.
+> **WIP**: The visual flow builder UI is under active development in the `semstreams-ui` repository. SemStreams
+> provides diagram CRUD, validation, explicit desired-config publication, and best-effort observation APIs.
 
-Design flows visually with drag-and-drop components, real-time validation, and live metrics. The UI
-connects to the same APIs that power headless mode.
+Design diagrams visually with drag-and-drop components and validate their port compatibility. A saved diagram is an
+authoring artifact: creating, updating, validating, or deleting it does not change component configuration or the
+running process.
 
-### Static Config → Flow Bridge
+### Diagram → Desired Configuration
 
-When you start with a static config, SemStreams automatically creates a Flow in the flows bucket.
-This makes your static configuration visible and controllable through the UI:
+On first boot, Flow Service may import the sealed boot component map into a default saved diagram so the topology is
+visible for authoring. That diagram is never boot authority and is not read to choose running components.
 
-- **First boot**: Static config → Flow created in KV
-- **Subsequent boots**: KV wins (UI customizations preserved)
-- **Reset**: Delete flow from KV to restore static config
+To convert a saved diagram into desired configuration, explicitly publish its compiled component candidates:
 
-This allows you to start in headless mode for deployment, then connect the UI later to monitor
-and adjust the running flow.
+```text
+POST /flowbuilder/flows/{id}/publish-component-configs
+```
 
-See [Flow Architecture](../concepts/12-flow-architecture.md) for details on the dual-bucket design
-and lifecycle operations.
+Publication upserts only the diagram's named components, reports exact persistence progress and
+`runtime_unchanged: true`, and never infers deletion from a missing node. Activate the desired map by restarting
+SemStreams. Rule definitions are the narrow exception and may hot reload inside an already-running Rule processor;
+Rule component configuration remains boot-only.
+
+See [Flow Architecture](../concepts/12-flow-architecture.md) for the authoring, publication, observation, and boot
+activation contracts.
 
 ## Component-Based Deployment
 
