@@ -112,6 +112,42 @@ are a pinned-baseline reproduction aid, not a future-proof substitute for type-a
 - A checkpoint is valid only when it records the full commit, clean/dirty state, exact search commands, and results.
   Counts copied from a prior report are not a new checkpoint.
 
+## Post-PR #997 merged-main checkpoint — 2026-08-18
+
+Checkpoint measured on clean merged `main` at
+`8117858367e1cc9d1dc434d211989e7a2ed1e552`. The measuring worktree had an empty porcelain status before this ledger
+entry was added.
+
+| Measurement | Count |
+|---|---:|
+| Production owner files importing `internal/lifecyclejoin` | 41 |
+| `lifecyclejoin.NewGeneration` | 43 |
+| `Generation.Stop` | 48 |
+| External `Generation.Cancel` | 5 |
+| External `Generation.Signal` | 0 |
+| `Generation.StopWithQuiesce` | 8 |
+| `lifecyclejoin.NewOperation` | 3 |
+| `Operation.Run` | 3 |
+| External `RunPartialStartRollback` calls | 20 |
+
+These counts were reproduced from the merged commit with the same production-only searches defined by this ledger:
+
+```text
+git grep -l 'internal/lifecyclejoin' 8117858367e1cc9d1dc434d211989e7a2ed1e552 -- '*.go' ':!*_test.go'
+git grep -n 'lifecyclejoin.NewGeneration' 8117858367e1cc9d1dc434d211989e7a2ed1e552 -- '*.go' ':!*_test.go'
+git grep -n -E '(generation|Generation)\.Stop\(' 8117858367e1cc9d1dc434d211989e7a2ed1e552 -- '*.go' ':!*_test.go'
+git grep -n '\.StopWithQuiesce(' 8117858367e1cc9d1dc434d211989e7a2ed1e552 -- '*.go' ':!*_test.go'
+git grep -n -E '(generation|Generation)\.Cancel\(\)' 8117858367e1cc9d1dc434d211989e7a2ed1e552 -- '*.go' ':!*_test.go'
+git grep -n 'generation.Signal(' 8117858367e1cc9d1dc434d211989e7a2ed1e552 -- '*.go' ':!*_test.go'
+git grep -n 'lifecyclejoin.NewOperation' 8117858367e1cc9d1dc434d211989e7a2ed1e552 -- '*.go' ':!*_test.go'
+git grep -n -E '(shutdownOp|poolStop|stopOp)\.Run\(' 8117858367e1cc9d1dc434d211989e7a2ed1e552 -- '*.go' ':!*_test.go'
+git grep -n 'lifecyclejoin.RunPartialStartRollback(' 8117858367e1cc9d1dc434d211989e7a2ed1e552 -- '*.go' ':!*_test.go'
+```
+
+PR #997 removed zero production owner files and earns zero lifecycle-migration, proof, release, archive, or tag credit.
+Lower helper-call counts without a lower production-owner count are not owner migration. The next authorized action is
+implementation Gate A; this checkpoint introduces no design change or completion claim.
+
 ## Workspace recovery checkpoint
 
 Authority collisions are inventoried in
