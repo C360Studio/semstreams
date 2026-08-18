@@ -6,9 +6,20 @@ Flowstore SHALL persist `desired_state` with values `absent`, `disabled`, or `en
 the current `runtime_state` field or label a desired configuration write `not_deployed`, `deployed_stopped`, or
 `running`.
 
-Deploy SHALL validate and persist desired component records and set desired state `disabled`. Start SHALL set desired
-state `enabled`; Stop SHALL set desired state `disabled`; Undeploy SHALL remove desired component records and set
-desired state `absent`. While a process is running, none of those operations SHALL claim to have changed runtime.
+Flowstore SHALL persist a framework-owned `desired_components` bundle alongside
+`desired_state`. Deploy SHALL validate and atomically replace the complete
+bundle with every member disabled. Start SHALL atomically replace it with the
+same complete membership enabled; Stop SHALL replace it disabled; Undeploy
+SHALL replace it with an empty bundle and state `absent`. Ordinary flow
+authoring updates SHALL preserve both server-owned activation fields. While a
+process is running, none of those operations SHALL claim to have changed
+runtime.
+
+The durable invariant SHALL be exact: `absent` has an empty bundle;
+`disabled` has a non-empty bundle whose members are all disabled; `enabled`
+has a non-empty bundle whose members are all enabled. Activation transitions
+SHALL use KV compare-and-set and SHALL NOT split state from bundle across
+revisions.
 
 Persisted deployment, start, or stop timestamps and metrics SHALL describe desired-state mutation or be removed. They
 SHALL NOT claim an unobserved runtime transition.
@@ -28,6 +39,13 @@ SHALL NOT claim an unobserved runtime transition.
 - **THEN** boot consumes the enabled desired component set
 - **AND** recovery does not depend on a prior runtime-state transition or shutdown hook
 
+#### Scenario: Authoring update cannot erase activation authority
+
+- **GIVEN** flow F has a persisted enabled desired component bundle C
+- **WHEN** an author updates F's name, nodes, layout, or connections
+- **THEN** the same committed update preserves desired state `enabled` and exact bundle C
+- **AND** caller-supplied desired activation fields cannot replace the server-owned values
+
 ### Requirement: Flow observation separates desired from effective truth
 
 Flow reads and monitoring SHALL return desired state, current desired provenance, independently observed effective
@@ -35,7 +53,9 @@ state, immutable boot-applied provenance, and `restart_required`. A successful b
 canonicalize the selected desired configuration, and seal a framework-owned digest for the boot snapshot and relevant
 flow/component subsets. Effective observations SHALL name the `boot_id` and digest they actually applied.
 
-`restart_required` SHALL compare current desired digest and membership with boot-applied digest and membership. It
+`restart_required` SHALL be nullable. Before an authoritative boot selection is
+available it SHALL be `null`, never false. Otherwise it SHALL compare current
+desired digest and membership with boot-applied digest and membership. It
 SHALL NOT compare only desired/effective activation labels: both may say `enabled` while their structural configuration
 differs. Runtime health SHALL be reported separately and SHALL NOT prove that desired configuration became effective.
 Effective state and provenance SHALL NOT derive from flowstore or copy desired state.
@@ -68,7 +88,36 @@ stopping runtime SHALL be represented honestly rather than collapsed into desire
 - **WHEN** `monitor_flow` reads F
 - **THEN** effective state is `unknown`
 - **AND** boot-applied provenance is `unknown`
+- **AND** `restart_required` is `null`
 - **AND** it does not report runtime `running` from desired state
+
+### Requirement: Boot selection fails closed on component ownership conflicts
+
+One immutable `BootSelection` SHALL be created after file/KV arbitration and
+before component construction. The exact same selection instance SHALL supply
+ComponentManager, FlowService, status streaming, and flow tools. It SHALL merge
+static components with every non-absent persisted flow bundle in deterministic
+flow-ID/component-name order.
+
+A component instance name SHALL have one owner. A collision between static
+configuration and a flow, or between two flows, SHALL fail boot with a
+deterministic conflict naming the component and both owners. A missing flow
+store, failed flow listing, invalid persisted bundle, or missing selection
+SHALL fail boot rather than silently select static configuration alone.
+
+#### Scenario: Cross-flow ownership collision fails boot
+
+- **GIVEN** flows A and B both contain desired component instance X
+- **WHEN** the composition root selects the boot snapshot
+- **THEN** selection fails before component construction
+- **AND** the error names X and owners `flow:A` and `flow:B` deterministically
+
+#### Scenario: Every observer shares applied provenance
+
+- **GIVEN** composition root selected boot B
+- **WHEN** component construction, flow HTTP reads, status streaming, and tools observe flow F
+- **THEN** each consumes the same BootSelection instance B
+- **AND** no consumer independently re-reads mutable desired state as boot-applied truth
 
 ### Requirement: Flow mutation responses name persistence and activation separately
 

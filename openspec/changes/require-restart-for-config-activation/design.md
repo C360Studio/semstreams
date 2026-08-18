@@ -150,25 +150,36 @@ framework-owned, not an adopter knob.
 
 ### D6. Flow authoring remains, live topology activation does not
 
-Deploy/start/stop/undeploy may continue to mutate validated desired component records. While a process is running they
-return runtime-unchanged/restart-required truth. Runtime lifecycle agent tools remain unwired unless a future product
-proves a consumer for desired-state authoring; they do not regain live activation semantics.
+Deploy/start/stop/undeploy mutate one exact server-owned desired component
+bundle in flowstore. Each transition atomically full-replaces desired state and
+bundle with KV compare-and-set; ordinary authoring updates preserve both.
+While a process is running they return runtime-unchanged/restart-required
+truth. Runtime lifecycle agent tools remain unwired unless a future product
+proves a consumer for desired-state authoring; they do not regain live
+activation semantics.
 
 `flowstore.Flow.RuntimeState` cannot retain its current meaning: Engine writes `deployed_stopped` and `running` after
 desired config writes, and `monitor_flow` repeats those values as runtime truth. The durable field becomes
 `desired_state` with explicit `absent`, `disabled`, or `enabled` values. Historical deployment/start/stop timestamps
 that describe unobserved runtime are removed or renamed as desired-state audit facts.
 
-At boot, the framework assigns a unique `boot_id`, canonicalizes the selected desired configuration, and seals a
-framework-owned digest for the whole boot snapshot plus the relevant flow/component subsets. Effective observations
-carry that immutable boot-applied provenance. Rule/flow reads and monitoring expose current desired provenance,
-boot-applied provenance, independently observed effective state, and `restart_required`.
+After file/KV arbitration and flow listing, the composition root creates one
+immutable `BootSelection`, assigns a unique `boot_id`, canonicalizes the
+selected desired configuration, and seals framework-owned flow digests. Static
+and flow component names have exclusive ownership; deterministic static/flow
+or cross-flow collisions fail boot before construction. Missing flow storage,
+listing failure, invalid persisted activation, or missing selection also fails
+boot. The exact same selection pointer feeds ComponentManager, FlowService,
+status streaming, and flow tools.
 
-`restart_required` compares the current desired digest/membership with the digest/membership actually sealed by this
-boot. It does not compare only `enabled`/`disabled`, because desired and effective state can have equal labels while
-their configuration differs. Runtime health is a separate observation and cannot establish activation provenance. If
-no authoritative runtime observer is available, effective state and boot-applied provenance report `unknown`; neither
-is copied from flowstore or desired state.
+`restart_required` compares the current desired digest/membership with the
+digest/membership actually sealed by this boot. Before an authoritative
+selection exists it is null, never fabricated false. It does not compare only
+`enabled`/`disabled`, because desired and effective state can have equal labels
+while their configuration differs. Runtime health is a separate observation
+and cannot establish activation provenance. If no authoritative runtime
+observer is available, effective state and boot-applied provenance report
+`unknown`; neither is copied from mutable flowstore desired state.
 
 ### D7. Simplify the pending lifecycle protocol
 

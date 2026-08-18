@@ -102,7 +102,7 @@ absent → disabled → enabled → disabled → absent
 Flow reads report `effective_state` independently. Without an authoritative
 runtime observer it is `unknown`; it is never inferred from desired state,
 admission, or health. `restart_required` compares the desired digest with the
-sealed boot-applied digest.
+sealed boot-applied digest and is `null` when no boot selection is available.
 
 ## Flow Engine Operations
 

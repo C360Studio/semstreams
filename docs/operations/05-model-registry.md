@@ -1,16 +1,11 @@
 # Model Registry
 
-> Previously titled "Model Registry Runtime Updates". The runtime-updates
-> content lives under [Runtime Updates](#runtime-updates) below. This page
-> now also documents the registry's structure, every LLM workload it
-> routes, and the known gaps where workloads bypass the registry.
-
 The **model registry** is the single config block that names every LLM
 and embedding endpoint a SemStreams deployment can reach, and binds each
 LLM workload (called a **capability**) to a preferred endpoint. It lives
-in NATS KV under the key `model_registry` (bucket `semstreams_config`)
-and hot-reloads at runtime — components that depend on it auto-restart
-when the key changes.
+in NATS KV under the key `model_registry` (bucket `semstreams_config`).
+Edits are durable desired configuration selected on the next successful
+process boot; running components are not restarted or reconfigured in place.
 
 The registry replaced per-component config fields like
 `graph-clustering.llm_endpoint`, `graph-clustering.llm_model`, and
@@ -151,99 +146,14 @@ explicitly rather than reshaping `defaults.model`.
 specified `Model` or `Capability`. The named capability is resolved
 through the standard chain.
 
-## Runtime Updates
+## Activation boundary
 
-This section covers what happens when the `model_registry` KV key
-changes, how it propagates to running components, and how external
-library consumers can keep their own registry pointers in sync.
-
-### The Three Audiences
-
-There are three groups of code that care about the model registry, and
-they each see updates a different way:
-
-| Audience | Who | Update path |
-|---|---|---|
-| **Components in flow configs** | The `agentic-loop`, `agentic-model`, `agentic-dispatch`, `graph-query`, `graph-embedding` factories | Auto-restarted by ComponentManager when their factory declares `component.DepModelRegistry` |
-| **External library consumers** | Code outside the semstreams runtime that imports `model.Registry` directly (e.g., a downstream service that wraps the dispatcher) | `model.Watch` + `cfgMgr.WatchModelRegistry()` |
-| **Runtime-resolved callers** | Anything calling `RegistryReader.GetEndpoint(name)` per request | Just works — they read the latest state on the next call |
-
-If you're writing a new component for a flow config, you don't need
-this guide. Declare the dep on your registration and ComponentManager
-handles the rest. See [agentic component patterns](../advanced/08-agentic-components.md).
-
-### How an Update Propagates
-
-```text
-operator runs:                         config.Manager:                    ComponentManager:
-nats kv put semstreams_config \        receives KV watcher event,         receives OnChange("model_registry"),
-    model_registry @new.json   ──▶    parses + replaces internal     ──▶  iterates registered components,
-                                       ModelRegistry, fires               restarts those declaring
-                                       OnChange("model_registry")         component.DepModelRegistry
-```
-
-After the dust settles, registry-dependent components are running with
-fresh `deps.ModelRegistry` references. Components that don't declare
-the dep are untouched.
-
-### External Consumers
-
-If you hold your own `*model.Registry` outside the semstreams component
-lifecycle (e.g., a sidecar process that runs its own dispatcher), wire
-it like this:
-
-```go
-import (
-    "context"
-    "sync/atomic"
-
-    "github.com/c360studio/semstreams/config"
-    "github.com/c360studio/semstreams/model"
-)
-
-func wireRegistry(ctx context.Context, cfgMgr *config.Manager) *atomic.Pointer[model.Registry] {
-    var holder atomic.Pointer[model.Registry]
-
-    // Seed with the current registry so the first request doesn't race
-    // the watcher.
-    if initial := cfgMgr.GetConfig().Get().ModelRegistry; initial != nil {
-        holder.Store(initial)
-    }
-
-    // Keep it fresh as KV changes.
-    go model.Watch(ctx, cfgMgr, holder.Store)
-
-    return &holder
-}
-```
-
-Then any code that needs the latest registry just calls `holder.Load()`.
-
-`config.Manager` satisfies the `model.Watcher` interface via its
-`WatchModelRegistry` method, so you can pass it straight in. The watcher
-channel coalesces — if your consumer is slow, you'll see the most recent
-registry on your next read, not a backlog.
-
-#### Why `atomic.Pointer`?
-
-`model.Watch` is invoked from a goroutine. `holder.Store` from that
-goroutine races with `holder.Load` from request handlers. Plain
-assignment is a data race even on a single pointer field; the race
-detector will flag it. `atomic.Pointer[Registry]` is one line and is
-exactly what `model.Handle` was — the helper formalizes the pattern
-without forcing it into the framework.
-
-If you need the typed `RegistryReader` interface rather than a raw
-`*Registry`, wrap a getter:
-
-```go
-func (h *atomic.Pointer[model.Registry]) Resolve(cap string) string {
-    if r := h.Load(); r != nil {
-        return r.Resolve(cap)
-    }
-    return ""
-}
-```
+The composition root selects one model registry after file/KV version
+arbitration and passes that value to every component created for the boot.
+Post-boot writes update desired state only. They do not replace registry
+pointers or restart dependent components. External consumers should receive
+the selected registry through their own boot composition rather than watch
+SemStreams' operational KV.
 
 ### Updating the KV Key from Operations
 
@@ -260,12 +170,12 @@ nats kv put semstreams_config model_registry "$(nats kv get --raw semstreams_con
 ```
 
 The KV bucket keeps the last 5 revisions (`semstreams_config` History=5).
+Restart SemStreams after committing the desired revision.
 
 ## Validation
 
-`config.Manager` runs `model.Registry.Validate()` on every KV change.
-Bad registries are rejected before any subscriber sees them — the live
-state stays on the prior valid registry. Validate covers:
+Boot configuration validation runs `model.Registry.Validate()` before the
+registry is selected for component construction. Validate covers:
 
 - **Endpoint name** (the map key): non-empty, alphanumeric + `-_` only
 - **Endpoint config**: `model` required; `max_tokens` non-negative;
@@ -279,26 +189,15 @@ state stays on the prior valid registry. Validate covers:
 - **Defaults**: `defaults.model` and `defaults.capability` reference
   real entries
 
-If you push a bad registry, `nats kv put` succeeds (NATS doesn't
-validate JSON content) but the watcher logs a parse error and skips the
-update. Inspect the semstreams logs for `Failed to update configuration`
-to confirm.
+If you push a bad registry, `nats kv put` succeeds because NATS does not
+validate JSON content. The next boot fails validation rather than applying a
+partial or invalid registry.
 
-## When to Use This vs. Component Restart
+## Operational rule
 
-The component-restart path (auto, via `Registration.Dependencies`)
-covers everything inside the framework. Reach for `model.Watch` only
-when:
-
-- Your code lives outside the semstreams component lifecycle
-- You're embedding `model.Registry` in a library that runs alongside
-  semstreams in the same process
-- You're building tooling that needs to react to registry changes
-  (audit log, metrics emitter, etc.) but isn't itself a component
-
-If you find yourself reaching for `model.Watch` in code that could be
-modeled as a flow component, prefer the component path — it's tested,
-restart-safe, and free.
+Treat `model_registry` like every other component dependency: author it as
+desired state, validate it, and restart the process to activate it. Dedicated
+rule-definition hot reload is the sole live configuration exception.
 
 ## Related
 

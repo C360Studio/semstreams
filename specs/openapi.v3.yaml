@@ -1348,6 +1348,25 @@ components:
                         - format: date-time
                           type: string
                         - type: "null"
+                desired_components:
+                    additionalProperties:
+                        properties:
+                            config:
+                                format: byte
+                                type: string
+                            enabled:
+                                type: boolean
+                            name:
+                                type: string
+                            type:
+                                type: string
+                        required:
+                            - type
+                            - name
+                            - enabled
+                            - config
+                        type: object
+                    type: object
                 desired_provenance:
                     anyOf:
                         - properties:
@@ -1404,7 +1423,9 @@ components:
                         type: object
                     type: array
                 restart_required:
-                    type: boolean
+                    anyOf:
+                        - type: boolean
+                        - type: "null"
                 updated_at:
                     format: date-time
                     type: string
@@ -1417,7 +1438,7 @@ components:
                 - nodes
                 - connections
                 - desired_state
-                - restart_required
+                - desired_components
                 - created_at
                 - updated_at
                 - last_modified
@@ -1451,13 +1472,14 @@ components:
                 effective_state:
                     type: string
                 restart_required:
-                    type: boolean
+                    anyOf:
+                        - type: boolean
+                        - type: "null"
                 timestamp:
                     type: integer
             required:
                 - desired_state
                 - effective_state
-                - restart_required
                 - timestamp
             type: object
         GraphQLRequest:

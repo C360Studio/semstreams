@@ -27,6 +27,8 @@ the latest durable desired snapshot.
 Flow records replace `runtime_state` with:
 
 - `desired_state`: durable `absent`, `disabled`, or `enabled` authoring state;
+- `desired_components`: the exact server-owned component bundle selected by
+  that desired state;
 - `effective_state`: independently observed runtime state, or `unknown` when no
   observer is available;
 - `restart_required`: whether the current desired digest differs from the
@@ -35,11 +37,13 @@ Flow records replace `runtime_state` with:
 - `boot_applied_provenance`: an observer-attested boot identity and canonical
   applied digest, when available.
 
-When no authoritative runtime observer is available, `effective_state` is
-`unknown` and `boot_applied_provenance` is omitted. The framework still compares
-the current desired digest with the sealed boot-selection digest internally to
-report `restart_required`; it does not promote selection evidence into an
-application claim.
+The running SemStreams binaries pass the same immutable `BootSelection` to
+component construction, flow reads, status streaming, and tools. Before that
+selection is available, `effective_state` is `unknown`,
+`boot_applied_provenance` is omitted, and `restart_required` is `null`; unknown
+is never collapsed into false. Once boot succeeds, the selected flow bundle is
+the process-local applied provenance used for comparison. Health remains a
+separate signal and cannot prove activation.
 
 There is no compatibility alias for `runtime_state`, `not_deployed`,
 `deployed_stopped`, or `running`.
