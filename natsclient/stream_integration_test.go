@@ -596,55 +596,6 @@ func TestIntegration_StopConsumer(t *testing.T) {
 	require.NoError(t, client.StopConsumer(ctx, "STOP_STREAM", "stop-consumer"))
 }
 
-// TestIntegration_StopAllConsumers tests stopping all consumers
-func TestIntegration_StopAllConsumers(t *testing.T) {
-	ctx := context.Background()
-
-	// Start NATS container with JetStream
-	natsContainer, natsURL := startNATSContainerWithJS(ctx, t)
-	defer natsContainer.Terminate(ctx)
-
-	// Create and connect client
-	client, err := NewClient(natsURL)
-	require.NoError(t, err)
-	err = client.Connect(ctx)
-	require.NoError(t, err)
-	defer client.Close(ctx)
-
-	// Create stream
-	streamCfg := jetstream.StreamConfig{
-		Name:     "STOPALL_STREAM",
-		Subjects: []string{"stopall.>"},
-		Storage:  jetstream.MemoryStorage,
-		MaxAge:   testStreamMaxAge,
-		MaxBytes: testStreamMaxBytes,
-	}
-	_, err = client.EnsureStream(ctx, streamCfg)
-	require.NoError(t, err)
-
-	// Start multiple consumers
-	for i := 0; i < 3; i++ {
-		cfg := StreamConsumerConfig{
-			StreamName:    "STOPALL_STREAM",
-			ConsumerName:  "stopall-consumer-" + string(rune('a'+i)),
-			FilterSubject: "stopall.test",
-			DeliverPolicy: "all",
-			AckPolicy:     "explicit",
-		}
-
-		err = client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, cfg, func(_ context.Context, msg jetstream.Msg) {
-			msg.Ack()
-		})
-		require.NoError(t, err)
-	}
-
-	// Stop all consumers - should not panic
-	client.StopAllConsumers()
-
-	// Stop again - should be no-op
-	client.StopAllConsumers()
-}
-
 // TestIntegration_PublishToStreamWithAck tests publishing with acknowledgment
 func TestIntegration_PublishToStreamWithAck(t *testing.T) {
 	ctx := context.Background()

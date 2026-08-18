@@ -100,7 +100,9 @@ This creates edges that enable:
 ## Dependencies
 
 ### Upstream
-- None (entry point component)
+- Process composition supplies an already-connected shared NATS client. `Start`
+  fails visibly when the client is disconnected; graph-ingest does not assume
+  process-wide connection ownership from its component lifetime.
 
 ### Downstream
 - `graph-index` - watches ENTITY_STATES for index updates

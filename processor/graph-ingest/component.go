@@ -885,23 +885,13 @@ func (c *Component) Start(ctx context.Context) error {
 		return errs.Wrap(err, "Component", "Start", "context cancelled")
 	}
 
-	// Ensure NATS client is connected
+	// Connection ownership belongs to process composition. A component receives
+	// an already-connected shared client and must not extend or terminate that
+	// process-wide lifetime from its own generation context.
 	if c.natsClient.Status() != natsclient.StatusConnected {
-		if err := c.natsClient.Connect(ctx); err != nil {
-			cancel()
-			// Check if this is a context-related error
-			if ctx.Err() != nil {
-				return errs.Wrap(ctx.Err(), "Component", "Start", "context cancelled during NATS connection")
-			}
-			return errs.Wrap(err, "Component", "Start", "NATS connection failed")
-		}
-		if err := c.natsClient.WaitForConnection(ctx); err != nil {
-			cancel()
-			if ctx.Err() != nil {
-				return errs.Wrap(ctx.Err(), "Component", "Start", "context cancelled waiting for NATS")
-			}
-			return errs.Wrap(err, "Component", "Start", "wait for NATS connection")
-		}
+		cancel()
+		return errs.WrapTransient(natsclient.ErrNotConnected, "Component", "Start",
+			"composition must connect the shared NATS client before graph-ingest starts")
 	}
 
 	// Initialize storage buckets and query caches

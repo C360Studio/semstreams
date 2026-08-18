@@ -18,6 +18,7 @@ import (
 	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,8 +36,8 @@ type mockKVBucket struct {
 	watchAllFactory  func() (jetstream.KeyWatcher, error)
 }
 
-// entity-id-audit:classify intentional-malformed "" line=775 column=14 surface=go-field:EntityState.ID entity_id_invalid:empty empty state ID rejection fixture
-// entity-id-audit:classify intentional-malformed "" line=873 column=14 surface=go-triple-subject entity_id_invalid:empty empty triple subject rejection fixture
+// entity-id-audit:classify intentional-malformed "" line=788 column=14 surface=go-field:EntityState.ID entity_id_invalid:empty empty state ID rejection fixture
+// entity-id-audit:classify intentional-malformed "" line=886 column=14 surface=go-triple-subject entity_id_invalid:empty empty triple subject rejection fixture
 
 // mockKVData stores value with revision for CAS testing
 type mockKVData struct {
@@ -537,6 +538,18 @@ func TestComponent_Health_NotStarted(t *testing.T) {
 	assert.Equal(t, 0, health.ErrorCount)
 }
 
+func TestComponent_StartRequiresCompositionConnectedClient(t *testing.T) {
+	comp := createTestComponent(t)
+	require.NoError(t, comp.Initialize())
+
+	err := comp.Start(context.Background())
+	require.Error(t, err)
+	require.ErrorIs(t, err, natsclient.ErrNotConnected)
+	assert.True(t, errs.IsTransient(err))
+	assert.Contains(t, err.Error(), "composition must connect")
+	assert.False(t, comp.running)
+}
+
 func TestComponent_Health_Running(t *testing.T) {
 	t.Skip("requires real NATS connection - move to integration tests")
 	comp := createTestComponent(t)
@@ -907,19 +920,15 @@ func TestComponent_RespectsContext_Cancellation(t *testing.T) {
 
 func TestComponent_RespectsContext_Timeout(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 
 	require.NoError(t, comp.Initialize())
 
-	// Start with timeout context
+	// A context that is already done must win over later startup prerequisites.
 	err := comp.Start(ctx)
-
-	// Should either succeed or handle timeout gracefully
-	if err != nil {
-		// If error, it should be context-related
-		assert.Contains(t, err.Error(), "context")
-	}
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 // ====================================================================================

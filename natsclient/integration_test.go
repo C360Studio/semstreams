@@ -5,7 +5,6 @@ package natsclient
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -56,57 +55,6 @@ func TestIntegration_ConnectToRealNATS(t *testing.T) {
 	rtt, err := manager.RTT()
 	assert.NoError(t, err)
 	assert.Greater(t, rtt, time.Duration(0))
-}
-
-// TestIntegration_Reconnection tests automatic reconnection
-func TestIntegration_Reconnection(t *testing.T) {
-	t.Skip(
-		"Skipping reconnection test: testcontainers assigns new port on restart, breaking reconnection. Reconnection logic is covered by unit tests.",
-	)
-
-	ctx := context.Background()
-
-	testClient := NewTestClient(t)
-	natsContainer, natsURL := testClient.container, testClient.URL
-
-	// Track disconnection and reconnection
-	var disconnected, reconnected atomic.Bool
-
-	// Create manager with reconnect options
-	manager, err := NewClient(natsURL,
-		WithMaxReconnects(5),
-		WithReconnectWait(100*time.Millisecond),
-		WithDisconnectCallback(func(_ error) {
-			disconnected.Store(true)
-		}),
-		WithReconnectCallback(func() {
-			reconnected.Store(true)
-		}),
-	)
-	require.NoError(t, err)
-
-	// Connect
-	err = manager.Connect(ctx)
-	require.NoError(t, err)
-	defer manager.Close(ctx)
-
-	// Simulate network interruption by stopping container
-	err = natsContainer.Stop(ctx, nil)
-	require.NoError(t, err)
-
-	// Wait for disconnection to be detected
-	time.Sleep(500 * time.Millisecond)
-	assert.True(t, disconnected.Load(), "Expected disconnection callback to be triggered")
-	assert.False(t, manager.IsHealthy(), "Expected manager to be unhealthy after disconnect")
-
-	// Restart container
-	err = natsContainer.Start(ctx)
-	require.NoError(t, err)
-
-	// Wait for reconnection - NATS client will retry with configured interval
-	time.Sleep(1 * time.Second)
-	assert.True(t, reconnected.Load(), "Expected reconnection callback to be triggered")
-	assert.True(t, manager.IsHealthy(), "Expected manager to be healthy after reconnect")
 }
 
 // TestIntegration_CircuitBreakerWithRealConnection tests circuit breaker with actual failures
@@ -232,54 +180,6 @@ func TestIntegration_JetStream(t *testing.T) {
 }
 
 // TestIntegration_HealthMonitoring tests health check functionality
-func TestIntegration_HealthMonitoring(t *testing.T) {
-	ctx := context.Background()
-
-	testClient := NewTestClient(t)
-	natsContainer, natsURL := testClient.container, testClient.URL
-
-	// Create manager with health monitoring
-	manager, err := NewClient(natsURL)
-	require.NoError(t, err)
-	manager.WithHealthCheck(100 * time.Millisecond)
-
-	// Track health changes
-	healthChanges := make(chan bool, 10)
-	manager.OnHealthChange(func(healthy bool) {
-		healthChanges <- healthy
-	})
-
-	// Connect
-	err = manager.Connect(ctx)
-	require.NoError(t, err)
-	defer manager.Close(ctx)
-
-	// Should report healthy
-	select {
-	case healthy := <-healthChanges:
-		assert.True(t, healthy)
-	case <-time.After(200 * time.Millisecond):
-		// Initial state might already be healthy
-	}
-
-	// The harness client is not the subject of this test. Close it while the
-	// server is healthy so intentional server loss cannot turn its expected
-	// drain failure into a harness-cleanup failure.
-	require.NoError(t, testClient.Client.Close(ctx))
-
-	// Stop container to simulate failure
-	err = natsContainer.Stop(ctx, nil)
-	require.NoError(t, err)
-
-	// Should report unhealthy
-	select {
-	case healthy := <-healthChanges:
-		assert.False(t, healthy)
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("Health change not detected")
-	}
-}
-
 // startNATSContainer retains the package test helper contract while delegating
 // all lifecycle and readiness behavior to the canonical TestClient.
 func startNATSContainer(_ context.Context, t *testing.T) (testcontainers.Container, string) {

@@ -92,16 +92,6 @@
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
     },
     {
-      "key": "integration-time-sleep|natsclient/integration_test.go|TestIntegration_Reconnection|time.Sleep(1 * time.Second)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|natsclient/integration_test.go|TestIntegration_Reconnection|time.Sleep(500 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
       "key": "integration-time-sleep|natsclient/kv_error_integration_test.go|TestKVStore_ErrorBoundaries|time.Sleep(10 * time.Millisecond)|1",
       "kind": "migration-debt",
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"

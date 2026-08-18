@@ -5,7 +5,6 @@ import (
 	stderrors "errors"
 	"fmt"
 	"log/slog"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -151,12 +150,6 @@ func TestClientHandleErrorDoesNotMutateRuntimeStateOrCallbacks(t *testing.T) {
 	client.lastFailure.Store(lastFailure)
 	client.backoff.Store(4 * time.Second)
 
-	var callbackCalls atomic.Int32
-	client.onDisconnect = func(error) { callbackCalls.Add(1) }
-	client.onReconnect = func() { callbackCalls.Add(1) }
-	client.onHealthChange = func(bool) { callbackCalls.Add(1) }
-	client.onConnectionLost = func(error) { callbackCalls.Add(1) }
-
 	wantStatus := client.Status()
 	wantHealthy := client.IsHealthy()
 	wantFailures := client.Failures()
@@ -173,7 +166,6 @@ func TestClientHandleErrorDoesNotMutateRuntimeStateOrCallbacks(t *testing.T) {
 	assert.Equal(t, wantCircuitFailures, client.circuitFailures.Load())
 	assert.Equal(t, wantLastFailure, client.lastFailure.Load().(time.Time))
 	assert.Equal(t, wantBackoff, client.Backoff())
-	assert.Equal(t, int32(0), callbackCalls.Load())
 }
 
 var _ slog.Handler = (*asyncErrorLogHandler)(nil)

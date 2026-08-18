@@ -24,10 +24,7 @@ func TestStartDiscoverySubscriptionFailureIsTransientAndRestartable(t *testing.T
 		}),
 	)
 	comp := newAtomicStartTestComponent(t, testClient.Client, "discovery-failure")
-
-	nativeConnection := testClient.GetNativeConnection()
-	testClient.Client.SetConnection(nil)
-	t.Cleanup(func() { testClient.Client.SetConnection(nativeConnection) })
+	toolListIndex, validToolListPort := replaceToolListPortSubject(t, comp, "invalid subject")
 
 	err := comp.Start(t.Context())
 	if err == nil {
@@ -36,8 +33,8 @@ func TestStartDiscoverySubscriptionFailureIsTransientAndRestartable(t *testing.T
 	if !errs.IsTransient(err) {
 		t.Errorf("Start() error class = %v, want transient", err)
 	}
-	if !errors.Is(err, natsclient.ErrNotConnected) {
-		t.Errorf("Start() error = %v, want errors.Is(..., ErrNotConnected)", err)
+	if !errors.Is(err, nats.ErrBadSubject) {
+		t.Errorf("Start() error = %v, want errors.Is(..., nats.ErrBadSubject)", err)
 	}
 	var classified *errs.ClassifiedError
 	if !errors.As(err, &classified) || classified.Component != "Component" || classified.Operation != "Start" {
@@ -48,9 +45,9 @@ func TestStartDiscoverySubscriptionFailureIsTransientAndRestartable(t *testing.T
 	}
 	assertAtomicStartResourcesCleared(t, comp)
 
-	testClient.Client.SetConnection(nativeConnection)
+	comp.inputs[toolListIndex] = validToolListPort
 	if err := comp.Start(t.Context()); err != nil {
-		t.Fatalf("Start() after restoring the connection: %v", err)
+		t.Fatalf("Start() after restoring the valid discovery subject: %v", err)
 	}
 	if !comp.running || comp.toolListSub == nil || len(comp.consumerInfos) != 1 {
 		t.Fatalf("successful restart resources: running=%t toolListSub=%v consumers=%v",
@@ -59,6 +56,29 @@ func TestStartDiscoverySubscriptionFailureIsTransientAndRestartable(t *testing.T
 	if err := comp.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop() after successful restart: %v", err)
 	}
+}
+
+func replaceToolListPortSubject(t *testing.T, comp *Component, subject string) (int, component.Port) {
+	t.Helper()
+	for index, port := range comp.inputs {
+		if port.Name != "tool.list" {
+			continue
+		}
+		replacement, err := (component.PortDefinition{
+			Name: "tool.list",
+			Config: component.NATSRequestPort{
+				Subject: subject,
+			},
+			Required: true,
+		}).Resolve(component.DirectionInput)
+		if err != nil {
+			t.Fatal(err)
+		}
+		comp.inputs[index] = replacement
+		return index, port
+	}
+	t.Fatal("component has no tool.list input port")
+	return 0, component.Port{}
 }
 
 func TestStartLaterConsumerFailureRollsBackLocallyPreservesDurableAndRestarts(t *testing.T) {

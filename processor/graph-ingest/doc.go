@@ -76,7 +76,8 @@
 //
 // # Dependencies
 //
-// This component has no upstream graph component dependencies. It is the entry point
-// for entity data and other graph components (graph-index, graph-embedding, etc.)
-// watch its output KV bucket.
+// Process composition must connect the shared NATS client before graph-ingest Start.
+// The component never Connects or Closes that shared client from its own generation
+// context. It is otherwise the graph entry point; graph-index, graph-embedding, and
+// other downstream components watch its ENTITY_STATES output.
 package graphingest
