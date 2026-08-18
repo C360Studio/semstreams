@@ -34,7 +34,7 @@ func TestRegisterRules_NilManagerSkips(t *testing.T) {
 func TestRegisterFlows_NilManagerSkips(t *testing.T) {
 	t.Parallel()
 	reg := agentictools.NewExecutorRegistry()
-	if err := registerFlows(reg, nil, nil, slog.Default()); err != nil {
+	if err := registerFlows(reg, nil, slog.Default()); err != nil {
 		t.Fatalf("registerFlows(nil) should be a clean skip, got err: %v", err)
 	}
 	if got := len(reg.ListTools()); got != 0 {
@@ -441,7 +441,7 @@ func TestBuiltinGroupKeys_Stability(t *testing.T) {
 		"bash", "web_search", "http_request",
 		"read_loop_result", "decide", "emit_diagnosis", "emit_lesson",
 		"write_todos", "scratchpad",
-		"flow_monitor",
+		"monitor_workflow_runs",
 		"graph_query",
 		"rules", "flows", "personas", "flow_templates",
 		"component_catalog",

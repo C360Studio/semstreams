@@ -208,10 +208,6 @@ func run() (runErr error) {
 	}
 	toolRegistry := agentictools.NewExecutorRegistry()
 	flowManager := buildFlowManager(ctx, natsClient, logger)
-	bootSelection, err := selectBootComposition(ctx, cfg, flowManager)
-	if err != nil {
-		return err
-	}
 	if err := executors.RegisterBuiltins(ctx, toolRegistry, executors.ToolDependencies{
 		NATSClient:              natsClient,
 		MutationClient:          mutationClient,
@@ -219,7 +215,6 @@ func run() (runErr error) {
 		Logger:                  logger,
 		RuleManager:             buildRuleManager(ctx, natsClient, configManager, logger),
 		FlowManager:             flowManager,
-		BootSelection:           bootSelection,
 		PersonaManager:          personaMgr,
 		FlowTemplateManager:     buildFlowTemplateManager(natsClient, logger),
 		ComponentRegistry:       componentRegistry,
@@ -238,7 +233,6 @@ func run() (runErr error) {
 	svcDeps := createServiceDependencies(
 		natsClient, metricsRegistry, logger, platform, configManager, componentRegistry, flowManager,
 	)
-	svcDeps.BootSelection = bootSelection
 	svcDeps.ToolRegistry = toolRegistry
 	svcDeps.PayloadRegistry = payloadReg
 
@@ -715,25 +709,6 @@ func buildFlowManager(ctx context.Context, natsClient *natsclient.Client, logger
 		return nil
 	}
 	return mgr
-}
-
-func selectBootComposition(
-	ctx context.Context,
-	cfg *config.Config,
-	manager *flowstore.Manager,
-) (*flowstore.BootSelection, error) {
-	if manager == nil {
-		return nil, fmt.Errorf("runtime composition requires flow store")
-	}
-	flows, err := manager.List(ctx)
-	if err != nil && !strings.Contains(err.Error(), "no keys found") {
-		return nil, fmt.Errorf("list flows for boot selection: %w", err)
-	}
-	selection, err := flowstore.SelectBoot(cfg, flows)
-	if err != nil {
-		return nil, fmt.Errorf("select boot composition: %w", err)
-	}
-	return selection, nil
 }
 
 func validateRuntimeConfig(cfg *config.Config) error {

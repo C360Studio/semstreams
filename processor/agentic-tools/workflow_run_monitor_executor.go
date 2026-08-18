@@ -13,13 +13,14 @@ import (
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
-// FlowMonitorToolName is the tool name agents use to invoke monitor_flow.
-const FlowMonitorToolName = "monitor_flow"
+// WorkflowRunMonitorToolName is the tool name agents use to inspect completed
+// workflow runs.
+const WorkflowRunMonitorToolName = "monitor_workflow_runs"
 
 // defaultRecentLimit is the default cap on recent loop entries returned.
 const defaultRecentLimit = 20
 
-// LoopKVScanner is the minimal KV surface monitor_flow needs: list keys
+// LoopKVScanner is the minimal KV surface monitor_workflow_runs needs: list keys
 // and fetch individual entries. *natsclient.KVStore satisfies this interface
 // by duck-typing. Declared here so unit tests can inject an in-memory fake
 // without pulling in the NATS stack.
@@ -30,83 +31,57 @@ type LoopKVScanner interface {
 	Get(ctx context.Context, key string) (*natsclient.KVEntry, error)
 }
 
-// FlowStateReader is the minimal flowstore surface needed to distinguish
-// desired activation from independently observed boot-effective activation.
-type FlowStateReader interface {
-	Get(ctx context.Context, id string) (FlowState, error)
-}
-
-// FlowState is the minimal projection of flowstore.Flow that monitor_flow
-// needs. Returned by FlowStateReader.
-type FlowState struct {
-	DesiredState          string
-	EffectiveState        string
-	RestartRequired       *bool
-	DesiredProvenance     *FlowProvenance
-	BootAppliedProvenance *FlowProvenance
-}
-
-// FlowProvenance identifies a canonical flow digest and, for attested
-// boot-applied observations, the boot incarnation that applied it.
-type FlowProvenance struct {
-	BootID string `json:"boot_id,omitempty"`
-	Digest string `json:"digest"`
-}
-
-// FlowMonitorExecutor aggregates completed-loop data for a given flow.
+// WorkflowRunMonitorExecutor aggregates completed-loop data for a workflow.
 // It scans the AGENT_LOOPS KV bucket for COMPLETE_* keys, filters by
 // WorkflowSlug, and returns aggregate counts plus a recency-capped list.
-type FlowMonitorExecutor struct {
+type WorkflowRunMonitorExecutor struct {
 	kv     LoopKVScanner
-	flows  FlowStateReader
 	logger *slog.Logger
 }
 
-// NewFlowMonitorExecutor constructs the executor with its KV handle and
-// flow state reader. Both must be non-nil; callers that can't satisfy
-// either should skip registration (see executors.registerFlowMonitor).
-func NewFlowMonitorExecutor(kv LoopKVScanner, flows FlowStateReader, logger *slog.Logger) *FlowMonitorExecutor {
+// NewWorkflowRunMonitorExecutor constructs the executor with its KV handle.
+func NewWorkflowRunMonitorExecutor(kv LoopKVScanner, logger *slog.Logger) *WorkflowRunMonitorExecutor {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &FlowMonitorExecutor{kv: kv, flows: flows, logger: logger}
+	return &WorkflowRunMonitorExecutor{kv: kv, logger: logger}
 }
 
-// ListTools describes the monitor_flow tool.
-func (e *FlowMonitorExecutor) ListTools() []agentic.ToolDefinition {
+// ListTools describes the monitor_workflow_runs tool.
+func (e *WorkflowRunMonitorExecutor) ListTools() []agentic.ToolDefinition {
 	return []agentic.ToolDefinition{
 		{
-			Name:        FlowMonitorToolName,
-			Description: "Return aggregated runtime statistics for a flow: total completed loops, breakdown by outcome and role, total token usage, and a recency-capped list of individual loop records. Scans the AGENT_LOOPS KV bucket for completions whose workflow_slug matches flow_id. Note: flow_id must match the workflow_slug used at dispatch time.",
+			Name:        WorkflowRunMonitorToolName,
+			Description: "Return aggregate statistics for completed workflow runs: totals by outcome and role, token usage, and a recency-capped list of individual loop records. Scans AGENT_LOOPS entries whose workflow_slug matches the requested workflow_slug.",
 			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"flow_id": map[string]any{
+					"workflow_slug": map[string]any{
 						"type":        "string",
-						"description": "ID of the flow to monitor. Must match the workflow_slug set at task dispatch time.",
+						"description": "Workflow slug set when the task was dispatched.",
 					},
 					"recent_limit": map[string]any{
 						"type":        "integer",
 						"description": fmt.Sprintf("Maximum number of recent loop records to include (default %d). Set lower to reduce context pressure.", defaultRecentLimit),
 					},
 				},
-				"required": []string{"flow_id"},
+				"required": []string{"workflow_slug"},
 			},
 		},
 	}
 }
 
 // Execute routes the tool call to the handler.
-func (e *FlowMonitorExecutor) Execute(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
-	if call.Name != FlowMonitorToolName {
+func (e *WorkflowRunMonitorExecutor) Execute(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
+	if call.Name != WorkflowRunMonitorToolName {
 		return agentic.ToolResult{
 			CallID:    call.ID,
 			Error:     fmt.Sprintf("unknown tool: %s", call.Name),
 			ErrorKind: agentic.ToolErrorNotFound,
-		}, errs.WrapInvalid(fmt.Errorf("unknown tool: %s", call.Name), "FlowMonitorExecutor", "Execute", "route tool")
+		}, errs.WrapInvalid(fmt.Errorf("unknown tool: %s", call.Name), "WorkflowRunMonitorExecutor", "Execute", "route tool")
 	}
-	return e.monitorFlow(ctx, call)
+	return e.monitorWorkflowRuns(ctx, call)
 }
 
 // eventDiscriminator is used as a first-pass unmarshal to identify which
@@ -203,66 +178,44 @@ type loopRecentEntry struct {
 	TokensOut   int    `json:"tokens_out"`
 }
 
-// flowMonitorResult is the JSON shape returned to the LLM.
-type flowMonitorResult struct {
-	FlowID                string            `json:"flow_id"`
-	DesiredState          string            `json:"desired_state"`
-	EffectiveState        string            `json:"effective_state"`
-	RestartRequired       *bool             `json:"restart_required"`
-	DesiredProvenance     *FlowProvenance   `json:"desired_provenance,omitempty"`
-	BootAppliedProvenance *FlowProvenance   `json:"boot_applied_provenance,omitempty"`
-	TotalLoops            int               `json:"total_loops"`
-	ByOutcome             map[string]int    `json:"by_outcome"`
-	ByRole                map[string]int    `json:"by_role"`
-	TotalTokensIn         int               `json:"total_tokens_in"`
-	TotalTokensOut        int               `json:"total_tokens_out"`
-	Recent                []loopRecentEntry `json:"recent"`
+// workflowRunMonitorResult is the JSON shape returned to the LLM.
+type workflowRunMonitorResult struct {
+	WorkflowSlug   string            `json:"workflow_slug"`
+	TotalLoops     int               `json:"total_loops"`
+	ByOutcome      map[string]int    `json:"by_outcome"`
+	ByRole         map[string]int    `json:"by_role"`
+	TotalTokensIn  int               `json:"total_tokens_in"`
+	TotalTokensOut int               `json:"total_tokens_out"`
+	Recent         []loopRecentEntry `json:"recent"`
 }
 
-func (e *FlowMonitorExecutor) monitorFlow(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
-	flowID, _ := call.Arguments["flow_id"].(string)
-	if flowID == "" {
+func (e *WorkflowRunMonitorExecutor) monitorWorkflowRuns(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
+	workflowSlug, _ := call.Arguments["workflow_slug"].(string)
+	if workflowSlug == "" {
 		return agentic.ToolResult{
 			CallID:    call.ID,
-			Error:     "flow_id is required and must be a non-empty string",
+			Error:     "workflow_slug is required and must be a non-empty string",
 			ErrorKind: agentic.ToolErrorInvalidArgs,
 		}, nil
 	}
 
 	recentLimit := parsePositiveInt(call.Arguments["recent_limit"], defaultRecentLimit)
 
-	flowState := FlowState{EffectiveState: "unknown"}
-	if e.flows != nil {
-		fs, err := e.flows.Get(ctx, flowID)
-		if err != nil {
-			// Not found is not fatal — return aggregate with unknown state.
-			e.logger.Warn("monitor_flow: could not fetch flow state",
-				slog.String("flow_id", flowID), slog.Any("error", err))
-		} else {
-			flowState = fs
-		}
-	}
-
-	// 2. Scan all COMPLETE_* keys in the loops bucket.
+	// Scan all COMPLETE_* keys in the loops bucket.
 	keys, err := e.kv.Keys(ctx)
 	if err != nil {
 		return agentic.ToolResult{
 			CallID:    call.ID,
 			Error:     fmt.Sprintf("failed to list loops bucket: %v", err),
 			ErrorKind: agentic.ToolErrorNetwork,
-		}, errs.WrapTransient(err, "FlowMonitorExecutor", "monitorFlow", "list keys")
+		}, errs.WrapTransient(err, "WorkflowRunMonitorExecutor", "monitorWorkflowRuns", "list keys")
 	}
 
-	result := &flowMonitorResult{
-		FlowID:                flowID,
-		DesiredState:          flowState.DesiredState,
-		EffectiveState:        flowState.EffectiveState,
-		RestartRequired:       flowState.RestartRequired,
-		DesiredProvenance:     flowState.DesiredProvenance,
-		BootAppliedProvenance: flowState.BootAppliedProvenance,
-		ByOutcome:             map[string]int{},
-		ByRole:                map[string]int{},
-		Recent:                []loopRecentEntry{},
+	result := &workflowRunMonitorResult{
+		WorkflowSlug: workflowSlug,
+		ByOutcome:    map[string]int{},
+		ByRole:       map[string]int{},
+		Recent:       []loopRecentEntry{},
 	}
 
 	for _, key := range keys {
@@ -272,7 +225,7 @@ func (e *FlowMonitorExecutor) monitorFlow(ctx context.Context, call agentic.Tool
 
 		entry, err := e.kv.Get(ctx, key)
 		if err != nil {
-			e.logger.Warn("monitor_flow: skipping unreadable key",
+			e.logger.Warn("monitor_workflow_runs: skipping unreadable key",
 				slog.String("key", key), slog.Any("error", err))
 			continue
 		}
@@ -282,13 +235,13 @@ func (e *FlowMonitorExecutor) monitorFlow(ctx context.Context, call agentic.Tool
 		var slug struct {
 			WorkflowSlug string `json:"workflow_slug"`
 		}
-		if err := json.Unmarshal(entry.Value, &slug); err != nil || slug.WorkflowSlug != flowID {
+		if err := json.Unmarshal(entry.Value, &slug); err != nil || slug.WorkflowSlug != workflowSlug {
 			continue
 		}
 
 		ev, ok := decodeTerminalEvent(entry.Value)
 		if !ok {
-			e.logger.Debug("monitor_flow: skipping entry with unknown outcome",
+			e.logger.Debug("monitor_workflow_runs: skipping entry with unknown outcome",
 				slog.String("key", key))
 			continue
 		}
@@ -330,7 +283,7 @@ func (e *FlowMonitorExecutor) monitorFlow(ctx context.Context, call agentic.Tool
 			CallID:    call.ID,
 			Error:     fmt.Sprintf("marshal result: %v", err),
 			ErrorKind: agentic.ToolErrorInternal,
-		}, errs.WrapInvalid(err, "FlowMonitorExecutor", "monitorFlow", "marshal")
+		}, errs.WrapInvalid(err, "WorkflowRunMonitorExecutor", "monitorWorkflowRuns", "marshal")
 	}
 
 	return agentic.ToolResult{

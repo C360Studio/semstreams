@@ -97,7 +97,7 @@ func TestIntegrationProductionBootstrapObservability(t *testing.T) {
 			metrics.CoreMetrics().LogEntriesTotal.WithLabelValues("kv-worker", "warn")))
 	})
 
-	t.Run("config-manager start failure is returned and locally visible once", func(t *testing.T) {
+	t.Run("config-manager create failure is returned and locally visible once", func(t *testing.T) {
 		writer := &channelWriter{records: make(chan []byte, 64)}
 		local, err := bootstrapobservability.NewLocalHandler(writer, "info", "json")
 		require.NoError(t, err)
@@ -113,7 +113,7 @@ func TestIntegrationProductionBootstrapObservability(t *testing.T) {
 		_, _, err = bootstrapobservability.StartConfigManager(
 			canceledCtx, bootstrapIntegrationConfig(testNATS.URL), testNATS.Client, phase.ConfigManager,
 		)
-		require.ErrorContains(t, err, "start config manager: failed to create any watchers")
+		require.ErrorContains(t, err, "create config manager: create/get KV bucket: context canceled")
 
 		records := drainJSONRecords(t, writer.records)
 		var failures []map[string]any
@@ -123,7 +123,7 @@ func TestIntegrationProductionBootstrapObservability(t *testing.T) {
 			}
 		}
 		require.Len(t, failures, 1)
-		assert.Equal(t, "config-manager-start", failures[0]["boot_stage"])
+		assert.Equal(t, "config-manager-create", failures[0]["boot_stage"])
 		assert.Equal(t, "config-manager", failures[0]["component"])
 	})
 

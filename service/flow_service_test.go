@@ -60,7 +60,6 @@ func createTestFlowService(t *testing.T) (*http.ServeMux, *flowstore.Manager, *n
 		ComponentRegistry: registry,
 		Logger:            logger,
 		FlowManager:       flowStore,
-		BootSelection:     testBootSelection(t, configMgr),
 	}
 
 	// Create flow service
@@ -85,9 +84,8 @@ func TestHandleValidateFlow_WithBody(t *testing.T) {
 	// Create test flow in request body
 	flowID := "test-flow-with-body"
 	requestFlow := flowstore.Flow{
-		ID:           flowID,
-		Name:         "Test Flow",
-		DesiredState: flowstore.DesiredAbsent,
+		ID:   flowID,
+		Name: "Test Flow",
 		Nodes: []flowstore.FlowNode{
 			{
 				ID:        "node-1",
@@ -152,9 +150,8 @@ func TestHandleValidateFlow_WithoutBody(t *testing.T) {
 	// Create and save a flow to NATS KV
 	flowID := "test-flow-without-body"
 	flow := &flowstore.Flow{
-		ID:           flowID,
-		Name:         "Test Flow in KV",
-		DesiredState: flowstore.DesiredAbsent,
+		ID:   flowID,
+		Name: "Test Flow in KV",
 		Nodes: []flowstore.FlowNode{
 			{
 				ID:        "node-1",
@@ -257,11 +254,10 @@ func TestHandleValidateFlow_IDMismatch(t *testing.T) {
 
 	// Create test flow with different ID
 	requestFlow := flowstore.Flow{
-		ID:           bodyFlowID, // Different from URL
-		Name:         "Test Flow",
-		DesiredState: flowstore.DesiredAbsent,
-		Nodes:        []flowstore.FlowNode{},
-		Connections:  []flowstore.FlowConnection{},
+		ID:          bodyFlowID, // Different from URL
+		Name:        "Test Flow",
+		Nodes:       []flowstore.FlowNode{},
+		Connections: []flowstore.FlowConnection{},
 	}
 
 	// Marshal flow to JSON
@@ -292,9 +288,7 @@ func TestHandleValidateFlow_IDMismatch(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Contains(t, errorResp, "error")
-	assert.Contains(t, errorResp["error"], "Flow ID mismatch")
-	assert.Contains(t, errorResp["error"], urlFlowID)
-	assert.Contains(t, errorResp["error"], bodyFlowID)
+	assert.Equal(t, "Flow ID mismatch", errorResp["error"])
 
 	t.Logf("Error response: %+v", errorResp)
 }

@@ -57,7 +57,6 @@ func TestConsumerPolicyProductionCallsiteCensus(t *testing.T) {
 		"agentic/agentrun/agentrun.go":     2,
 		"component/registry.go":            1,
 		"internal/maxdelivery/observer.go": 1,
-		"service/flow_runtime_stream.go":   4,
 	}
 	if !reflect.DeepEqual(internalCallers, wantInternal) {
 		t.Fatalf("internal consumer census = %#v, want %#v", internalCallers, wantInternal)

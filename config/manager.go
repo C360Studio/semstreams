@@ -20,6 +20,8 @@ import (
 // Manager provides centralized durable configuration management.
 type Manager struct {
 	config   *SafeConfig
+	bootMu   sync.RWMutex
+	boot     *Config
 	kv       jetstream.KeyValue
 	kvStore  *natsclient.KVStore
 	watchers []jetstream.KeyWatcher
@@ -37,8 +39,8 @@ type Manager struct {
 	// owned by a different platform identity (gh#459). In detached mode the
 	// manager runs on its local file config and must not touch the shared KV
 	// bucket at all — the write methods (PushToKV / PutComponentToKV /
-	// DeleteComponentFromKV) no-op so a later operator-triggered flow deploy
-	// cannot bleed the local app's components INTO the foreign bucket
+	// DeleteComponentFromKV) reject writes so a later operator-triggered flow
+	// publish cannot bleed the local app's components INTO the foreign bucket
 	// (the reverse-direction of the adoption bug).
 	detached atomic.Bool
 }
@@ -138,6 +140,7 @@ func (cm *Manager) Start(ctx context.Context) error {
 					"local_identity", platformIdentityKey(localIdentity),
 					"kv_identity", platformIdentityKey(kvIdentity),
 					"bucket", "semstreams_config")
+				cm.sealBootConfig()
 				return nil
 			}
 		}
@@ -232,6 +235,17 @@ func (cm *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to create any watchers")
 	}
 
+	// Writes made during startup happened before UpdatesOnly watchers existed,
+	// so they cannot produce echoes and must not remain pending forever. From
+	// this point onward every local write has an active watcher to classify it.
+	cm.pendingMu.Lock()
+	clear(cm.pendingLocal)
+	cm.pendingMu.Unlock()
+
+	// Successful arbitration is the one boot authority. Seal it before any
+	// watcher can apply later desired-state writes.
+	cm.sealBootConfig()
+
 	// Process updates from all watchers in background
 	for _, watcher := range cm.watchers {
 		cm.wg.Add(1)
@@ -239,6 +253,46 @@ func (cm *Manager) Start(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (cm *Manager) sealBootConfig() {
+	cm.bootMu.Lock()
+	defer cm.bootMu.Unlock()
+	cm.boot = cm.config.Get()
+}
+
+// BootConfig returns a defensive copy of the exact configuration selected by
+// successful Start arbitration. Later desired writes never change it.
+func (cm *Manager) BootConfig() *Config {
+	cm.bootMu.RLock()
+	defer cm.bootMu.RUnlock()
+	if cm.boot == nil {
+		return nil
+	}
+	return cm.boot.Clone()
+}
+
+// ComponentRestartRequired reports whether current desired component
+// configuration differs from the sealed boot component map.
+func (cm *Manager) ComponentRestartRequired() (bool, error) {
+	boot := cm.BootConfig()
+	if boot == nil {
+		return false, fmt.Errorf("config manager has no sealed boot configuration")
+	}
+	current := cm.config.Get()
+	if current == nil {
+		return false, fmt.Errorf("config manager has no current configuration")
+	}
+	if len(boot.Components) != len(current.Components) {
+		return true, nil
+	}
+	for name, bootComponent := range boot.Components {
+		currentComponent, ok := current.Components[name]
+		if !ok || !bootComponent.Equal(currentComponent) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // Stop stops watching for configuration changes
@@ -481,9 +535,7 @@ func sanitizeNATSKey(key string) string {
 // hide it. Runtime composition remains sealed until the next boot.
 func (cm *Manager) DeleteComponentFromKV(ctx context.Context, name string) error {
 	if cm.detached.Load() {
-		cm.logger.Warn("Config manager detached from foreign KV bucket; skipping component delete",
-			"component", name)
-		return nil
+		return fmt.Errorf("config manager detached from foreign KV bucket: cannot delete component %q", name)
 	}
 	key := fmt.Sprintf("components.%s", sanitizeNATSKey(name))
 	cm.pendingMu.Lock()
@@ -520,9 +572,7 @@ func (cm *Manager) DeleteComponentFromKV(ctx context.Context, name string) error
 // first so a failed Put leaves in-memory state untouched.
 func (cm *Manager) PutComponentToKV(ctx context.Context, name string, compConfig types.ComponentConfig) error {
 	if cm.detached.Load() {
-		cm.logger.Warn("Config manager detached from foreign KV bucket; skipping component write",
-			"component", name)
-		return nil
+		return fmt.Errorf("config manager detached from foreign KV bucket: cannot write component %q", name)
 	}
 	key := fmt.Sprintf("components.%s", sanitizeNATSKey(name))
 	data, err := json.Marshal(compConfig)

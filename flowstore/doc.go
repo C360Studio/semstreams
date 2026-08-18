@@ -1,142 +1,15 @@
-// Package flowstore provides persistence for visual flow definitions.
+// Package flowstore persists saved flow diagrams in NATS KV.
 //
-// # Overview
+// A Flow contains authoring metadata, canvas nodes, connections, audit fields,
+// and an optimistic-concurrency version. It does not contain runtime lifecycle
+// state and does not own component instances. Creating, updating, or deleting a
+// Flow changes only the semstreams_flows bucket.
 //
-// The flowstore package manages the storage and retrieval of Flow entities,
-// which represent visual flow configurations created by users in the flow builder UI.
-// Flows contain canvas layout information (node positions, connections) and metadata,
-// but do not contain runtime component instances.
+// Flow.Validate checks required diagram fields, unique node IDs, complete node
+// declarations, and valid connection references. Manager.Update uses the Flow
+// version as a compare-and-swap guard.
 //
-// # Architecture
-//
-// Flow entities are stored in NATS KV bucket "semstreams_flows" with optimistic
-// concurrency control via version numbers. This is separate from the
-// "semstreams_config" bucket used for runtime component configurations.
-//
-// Design-time (flowstore):
-//   - User creates/edits flows in UI
-//   - Canvas layout and connections stored as Flow entities
-//   - Metadata: name, description, desired activation state
-//
-// Next-boot composition:
-//   - FlowEngine translates Flow → an exact server-owned DesiredComponents bundle
-//   - Desired state and the complete bundle are replaced atomically in flowstore
-//   - The next successful process boot combines static config and enabled flow bundles
-//
-// # Key Concepts
-//
-// Flow Entity:
-//   - ID: Unique flow identifier
-//   - Nodes: Visual components on canvas (with positions)
-//   - Connections: Edges between node ports
-//   - DesiredState: absent, disabled, enabled
-//   - DesiredComponents: exact server-owned bundle for next-boot composition
-//   - EffectiveState: independent observation; unknown without an observer
-//   - RestartRequired: desired digest differs from the sealed boot digest, or
-//     unknown when no boot selection is available
-//   - Version: Optimistic concurrency control
-//
-// Node vs Component:
-//   - Node.Type: Factory name (e.g., "udp", "graph-processor")
-//   - Node.Name: Instance name (e.g., "udp-input-1")
-//   - Node.Config: Component-specific configuration
-//
-// # Validation
-//
-// Flow.Validate() checks:
-//   - Required fields (ID, Name, DesiredState)
-//   - Valid DesiredState values
-//   - Node completeness (ID, Type, Name)
-//   - No duplicate node IDs
-//   - Connection validity (IDs, ports, node references)
-//
-// All validation errors use errs.WrapInvalid for consistent error handling.
-//
-// # Optimistic Concurrency
-//
-// The Store uses version-based conflict detection:
-//   - Create: Sets version to 1
-//   - Update: Checks current version matches, increments on success
-//   - Conflict: Returns errs.WrapInvalid with "conflict" message
-//
-// Example workflow:
-//
-//	flow, _ := store.Get(ctx, "my-flow")
-//	// flow.Version = 5
-//
-//	// Another user updates
-//	// Version is now 6 in KV
-//
-//	flow.Name = "Updated Name"
-//	err := store.Update(ctx, flow) // FAILS - version 5 != 6
-//	// Error contains "conflict"
-//
-// # Integration with FlowEngine
-//
-// The flowstore package is used by flowengine for desired activation writes:
-//
-//  1. FlowEngine.Deploy(flowID) retrieves Flow from flowstore
-//  2. Validates flow structure
-//  3. Translates to ComponentConfigs (using component registry)
-//  4. Atomically persists the disabled exact bundle in flowstore
-//
-// None of these writes mutates the current process. The composition root's
-// immutable BootSelection decorates reads with the boot-applied digest and
-// restart_required. Before a selection exists, effective state is unknown and
-// restart_required is null rather than a fabricated false value.
-//
-// # Testing
-//
-// Integration tests use testcontainers with real NATS:
-//   - TestCreateAndGet: Basic CRUD
-//   - TestOptimisticConcurrency: Version conflicts
-//   - TestComplexFlow: Nodes and connections
-//
-// All tests follow Constitutional Principle II (Real Dependencies).
-//
-// # Error Classification
-//
-// Following pkg/errors patterns:
-//   - WrapInvalid: Bad input, validation failures, version conflicts
-//   - WrapTransient: NATS KV errors, network issues
-//   - WrapFatal: Marshaling errors, nil flow pointer
-//
-// # Example Usage
-//
-//	// Create manager
-//	store, err := flowstore.NewManager(ctx, natsClient)
-//
-//	// Create flow
-//	flow := &flowstore.Flow{
-//		ID:   "my-flow",
-//		Name: "My First Flow",
-//		DesiredState: flowstore.DesiredAbsent,
-//		Nodes: []flowstore.FlowNode{
-//			{
-//				ID:       "node-1",
-//				Type:     "udp",
-//				Name:     "udp-input-1",
-//				Position: flowstore.Position{X: 100, Y: 100},
-//				Config:   map[string]any{"port": 5000},
-//			},
-//		},
-//		Connections: []flowstore.FlowConnection{},
-//	}
-//
-//	err = store.Create(ctx, flow)
-//	// flow.Version now = 1, timestamps set
-//
-//	// Update flow
-//	flow.Name = "Updated Name"
-//	err = store.Update(ctx, flow)
-//	// flow.Version now = 2
-//
-// # Package Structure
-//
-//	flowstore/
-//	├── doc.go                       # This file
-//	├── flow.go                      # Flow entity and validation
-//	├── flow_test.go                 # Unit tests for validation
-//	├── store.go                     # KV-based Store implementation
-//	└── store_integration_test.go   # Integration tests with real NATS
+// FromComponentConfigs is a one-way import helper for making an immutable boot
+// component map visible as an editable diagram. It does not make the resulting
+// Flow an activation authority.
 package flowstore

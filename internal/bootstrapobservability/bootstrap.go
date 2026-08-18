@@ -188,7 +188,12 @@ func StartConfigManager(
 			logger, "config-manager-start", fmt.Errorf("start config manager: %w", err),
 		)
 	}
-	return manager, manager.GetConfig().Get(), nil
+	effective := manager.BootConfig()
+	if effective == nil {
+		_ = manager.Stop(5 * time.Second)
+		return nil, nil, logBootFailure(logger, "config-manager-start", fmt.Errorf("config manager did not seal boot config"))
+	}
+	return manager, effective, nil
 }
 
 // StartValidatedConfigManager arbitrates desired state and validates the

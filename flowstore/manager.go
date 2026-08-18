@@ -56,11 +56,6 @@ func (s *Manager) Create(ctx context.Context, flow *Flow) error {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "flowstore", "Create", "flow ID cannot be empty")
 	}
 
-	// Set defaults before validation
-	flow.DesiredState = DesiredAbsent
-	flow.DesiredComponents = DesiredComponentSet{}
-	flow.DesiredChangedAt = nil
-
 	// Validate flow structure before saving
 	if err := flow.Validate(); err != nil {
 		return err
@@ -74,7 +69,7 @@ func (s *Manager) Create(ctx context.Context, flow *Flow) error {
 	flow.LastModified = now
 
 	// Marshal and store
-	data, err := marshalPersistedFlow(flow)
+	data, err := json.Marshal(flow)
 	if err != nil {
 		return errs.WrapFatal(err, "flowstore", "Create", "marshal flow")
 	}
@@ -127,9 +122,6 @@ func (s *Manager) Update(ctx context.Context, flow *Flow) error {
 		return errs.WrapFatal(err, "flowstore", "Update", "unmarshal current flow")
 	}
 
-	flow.DesiredState = current.DesiredState
-	flow.DesiredComponents = cloneDesiredComponentSet(current.DesiredComponents)
-	flow.DesiredChangedAt = current.DesiredChangedAt
 	if err := flow.Validate(); err != nil {
 		return err
 	}
@@ -147,7 +139,7 @@ func (s *Manager) Update(ctx context.Context, flow *Flow) error {
 	flow.LastModified = time.Now()
 
 	// Marshal and store
-	data, err := marshalPersistedFlow(flow)
+	data, err := json.Marshal(flow)
 	if err != nil {
 		return errs.WrapFatal(err, "flowstore", "Update", "marshal flow")
 	}
@@ -160,55 +152,6 @@ func (s *Manager) Update(ctx context.Context, flow *Flow) error {
 	}
 
 	return nil
-}
-
-// UpdateDesiredActivation atomically replaces the server-owned desired state
-// and complete desired component bundle using the flow version as its CAS token.
-func (s *Manager) UpdateDesiredActivation(
-	ctx context.Context,
-	id string,
-	expectedVersion int64,
-	state DesiredState,
-	components DesiredComponentSet,
-) (*Flow, error) {
-	if id == "" {
-		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "flowstore", "UpdateDesiredActivation", "flow ID cannot be empty")
-	}
-	bundle := cloneDesiredComponentSet(components)
-	if err := validateDesiredActivation(state, bundle); err != nil {
-		return nil, errs.WrapInvalid(err, "flowstore", "UpdateDesiredActivation", "invalid activation")
-	}
-	entry, err := s.kvStore.Get(ctx, id)
-	if err != nil {
-		return nil, errs.WrapTransient(err, "flowstore", "UpdateDesiredActivation", "get current flow")
-	}
-	var current Flow
-	if err := json.Unmarshal(entry.Value, &current); err != nil {
-		return nil, errs.WrapFatal(err, "flowstore", "UpdateDesiredActivation", "unmarshal current flow")
-	}
-	if current.Version != expectedVersion {
-		return nil, errs.WrapInvalid(
-			fmt.Errorf("version mismatch: expected %d, got %d", current.Version, expectedVersion),
-			"flowstore", "UpdateDesiredActivation", "conflict: flow was modified by another user")
-	}
-	current.DesiredState = state
-	current.DesiredComponents = bundle
-	now := time.Now()
-	current.DesiredChangedAt = &now
-	current.UpdatedAt = now
-	current.LastModified = now
-	current.Version++
-	data, err := marshalPersistedFlow(&current)
-	if err != nil {
-		return nil, errs.WrapFatal(err, "flowstore", "UpdateDesiredActivation", "marshal flow")
-	}
-	if _, err := s.kvStore.Update(ctx, id, data, entry.Revision); err != nil {
-		if natsclient.IsKVConflictError(err) || err == natsclient.ErrKVRevisionMismatch {
-			return nil, errs.WrapInvalid(err, "flowstore", "UpdateDesiredActivation", "conflict: flow was modified by another user")
-		}
-		return nil, errs.WrapTransient(err, "flowstore", "UpdateDesiredActivation", "CAS update flow")
-	}
-	return &current, nil
 }
 
 // Delete removes a flow by ID
@@ -242,27 +185,4 @@ func (s *Manager) List(ctx context.Context) ([]*Flow, error) {
 	}
 
 	return flows, nil
-}
-
-// Watch watches for changes to flows matching the pattern.
-// Pattern supports wildcards: "*" matches any single token, ">" matches remaining tokens.
-// Returns a KeyWatcher that emits updates on its Updates() channel.
-func (s *Manager) Watch(ctx context.Context, pattern string) (jetstream.KeyWatcher, error) {
-	return s.kvStore.Watch(ctx, pattern)
-}
-
-func marshalPersistedFlow(flow *Flow) ([]byte, error) {
-	encoded, err := json.Marshal(flow)
-	if err != nil {
-		return nil, err
-	}
-	var persisted map[string]json.RawMessage
-	if err := json.Unmarshal(encoded, &persisted); err != nil {
-		return nil, err
-	}
-	delete(persisted, "effective_state")
-	delete(persisted, "desired_provenance")
-	delete(persisted, "boot_applied_provenance")
-	delete(persisted, "restart_required")
-	return json.Marshal(persisted)
 }

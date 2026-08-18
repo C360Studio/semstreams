@@ -114,7 +114,7 @@ func TestBinaryBootOrder(t *testing.T) {
 	require.NoError(t, requireIdentArgument(validatedConfig, "ValidateEffectiveConfig", 0, validatedEffective))
 	require.NoError(t, requireReturnIdentifiers(validatedConfig, validatedManager, validatedEffective, "nil"))
 	requireCallOrder(t, functionCalls(t, sharedPath, "StartConfigManager"),
-		"config.NewConfigManager", "manager.Start", "manager.GetConfig")
+		"config.NewConfigManager", "manager.Start", "manager.BootConfig")
 	requireCallOrder(t, functionCalls(t, sharedPath, "ValidateEffectiveConfig"),
 		"cfg.Validate", "rulepackcap.ValidateConfig", "graphresearch.ValidateConfig")
 	streamCalls := functionCalls(t, sharedPath, "EnsureEffectiveStreams")

@@ -203,6 +203,44 @@ func (s *ManagerIntegrationSuite) TestComponentAddPersistsDesiredConfig() {
 
 }
 
+// TestSixRapidComponentPutsConverge pins the explicit flow-publish write path:
+// each acknowledged Put is durable, immediately visible through SafeConfig,
+// and its watcher echo eventually clears the per-key pending classifier.
+func (s *ManagerIntegrationSuite) TestSixRapidComponentPutsConverge() {
+	s.configManager.pendingMu.Lock()
+	startupPending := len(s.configManager.pendingLocal)
+	s.configManager.pendingMu.Unlock()
+	s.Zero(startupPending, "startup writes precede UpdatesOnly watcher ownership and can never have echoes")
+
+	want := make(ComponentConfigs, 6)
+	for i := 0; i < 6; i++ {
+		name := fmt.Sprintf("rapid-%d", i)
+		componentConfig := types.ComponentConfig{
+			Type: types.ComponentTypeProcessor, Name: "rapid-factory", Enabled: true,
+			Config: json.RawMessage(fmt.Sprintf(`{"index":%d}`, i)),
+		}
+		want[name] = componentConfig
+		s.Require().NoError(s.configManager.PutComponentToKV(s.ctx, name, componentConfig))
+	}
+
+	current := s.configManager.GetConfig().Get()
+	for name, expected := range want {
+		actual, ok := current.Components[name]
+		s.True(ok, "SafeConfig missing %s", name)
+		s.True(actual.Equal(expected), "SafeConfig[%s] = %#v", name, actual)
+		entry, err := s.kvStore.Get(s.ctx, "components."+name)
+		s.Require().NoError(err)
+		var persisted types.ComponentConfig
+		s.Require().NoError(json.Unmarshal(entry.Value, &persisted))
+		s.True(persisted.Equal(expected), "KV[%s] = %#v", name, persisted)
+	}
+	s.Require().Eventually(func() bool {
+		s.configManager.pendingMu.Lock()
+		defer s.configManager.pendingMu.Unlock()
+		return len(s.configManager.pendingLocal) == 0
+	}, time.Second, 10*time.Millisecond)
+}
+
 // TestComponentRemovePersistsDesiredConfig (gh#388) proves
 // DeleteComponentFromKV removes desired next-boot configuration and updates the
 // author's local view synchronously. Runtime composition remains sealed.

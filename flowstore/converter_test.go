@@ -16,7 +16,6 @@ func TestFromComponentConfigs(t *testing.T) {
 		wantNodeIDs    []string
 		wantComponents map[string]string              // nodeID -> component (factory name)
 		wantTypes      map[string]types.ComponentType // nodeID -> type (category)
-		wantState      DesiredState
 	}{
 		{
 			name:          "empty configs creates empty flow",
@@ -24,7 +23,6 @@ func TestFromComponentConfigs(t *testing.T) {
 			configs:       map[string]types.ComponentConfig{},
 			wantNodeCount: 0,
 			wantNodeIDs:   []string{},
-			wantState:     DesiredAbsent,
 		},
 		{
 			name:     "single component",
@@ -41,7 +39,6 @@ func TestFromComponentConfigs(t *testing.T) {
 			wantNodeIDs:    []string{"udp-input"},
 			wantComponents: map[string]string{"udp-input": "udp"},
 			wantTypes:      map[string]types.ComponentType{"udp-input": types.ComponentTypeInput},
-			wantState:      DesiredEnabled,
 		},
 		{
 			name:     "multiple components",
@@ -78,7 +75,6 @@ func TestFromComponentConfigs(t *testing.T) {
 				"graph-processor": types.ComponentTypeProcessor,
 				"file-output":     types.ComponentTypeOutput,
 			},
-			wantState: DesiredEnabled,
 		},
 		{
 			name:     "disabled components are excluded",
@@ -99,7 +95,6 @@ func TestFromComponentConfigs(t *testing.T) {
 			wantNodeIDs:    []string{"enabled-input"},
 			wantComponents: map[string]string{"enabled-input": "udp"},
 			wantTypes:      map[string]types.ComponentType{"enabled-input": types.ComponentTypeInput},
-			wantState:      DesiredEnabled,
 		},
 	}
 
@@ -117,10 +112,6 @@ func TestFromComponentConfigs(t *testing.T) {
 			if flow.ID == "" {
 				t.Error("flow.ID should not be empty")
 			}
-			if flow.DesiredState != tt.wantState {
-				t.Errorf("flow.DesiredState = %v, want %v", flow.DesiredState, tt.wantState)
-			}
-
 			// Verify node count
 			if len(flow.Nodes) != tt.wantNodeCount {
 				t.Errorf("len(flow.Nodes) = %v, want %v", len(flow.Nodes), tt.wantNodeCount)

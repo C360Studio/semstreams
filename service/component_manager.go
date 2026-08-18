@@ -148,17 +148,17 @@ func NewComponentManager(rawConfig json.RawMessage, deps *Dependencies) (Service
 		return nil, fmt.Errorf("validate component-manager config: %w", err)
 	}
 
-	if deps == nil || deps.BootSelection == nil {
-		return nil, fmt.Errorf("component-manager requires boot selection")
+	if deps == nil || deps.Manager == nil {
+		return nil, fmt.Errorf("component-manager requires config manager")
 	}
 
-	// Runtime construction uses only the immutable composition-root selection.
+	// Runtime construction reads the config manager's sealed boot authority once.
 	var componentsConfig config.ComponentConfigs
 	var bootSecurity security.Config
 	var bootModelRegistry model.RegistryReader
-	bootConfig := deps.BootSelection.Config()
+	bootConfig := deps.Manager.BootConfig()
 	if bootConfig == nil {
-		return nil, fmt.Errorf("component-manager boot selection has no config")
+		return nil, fmt.Errorf("component-manager config manager has no sealed boot config")
 	}
 	componentsConfig = bootConfig.Components
 	bootSecurity = bootConfig.Security

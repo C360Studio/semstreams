@@ -25,21 +25,16 @@ type FlowManager interface {
 // RuleExecutor's shape (one executor per Pattern-B type, dispatching
 // on ToolCall.Name to the right Manager method).
 type FlowExecutor struct {
-	manager   FlowManager
-	selection *flowstore.BootSelection
+	manager FlowManager
 }
 
 // NewFlowExecutor creates a flow management executor.
-func NewFlowExecutor(manager FlowManager, selections ...*flowstore.BootSelection) *FlowExecutor {
-	var selection *flowstore.BootSelection
-	if len(selections) != 0 {
-		selection = selections[0]
-	}
-	return &FlowExecutor{manager: manager, selection: selection}
+func NewFlowExecutor(manager FlowManager) *FlowExecutor {
+	return &FlowExecutor{manager: manager}
 }
 
 // ListTools returns the five flow-CRUD tool definitions.
-// Flow is a structured object (nodes, connections, runtime state, timestamps);
+// Flow is a structured object (nodes, connections, metadata, timestamps);
 // the tool schema accepts a JSON object via `flow` parameter so LLMs can
 // construct or edit definitions without a hand-crafted schema per field.
 // Validation happens when the Manager unmarshals + Validate()s the payload.
@@ -47,7 +42,7 @@ func (e *FlowExecutor) ListTools() []agentic.ToolDefinition {
 	return []agentic.ToolDefinition{
 		{
 			Name:        "create_flow",
-			Description: "Create a new flow definition. Flow becomes non-deployed by default. Provide the full flow JSON matching the flow schema (id, name, nodes, connections, ...).",
+			Description: "Create a new saved flow diagram. Provide the full flow JSON matching the flow schema (id, name, nodes, connections, ...).",
 			Effect:      agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
@@ -77,7 +72,7 @@ func (e *FlowExecutor) ListTools() []agentic.ToolDefinition {
 		},
 		{
 			Name:        "delete_flow",
-			Description: "Delete a flow definition by ID. Does not stop a running instance of this flow; that is a separate lifecycle operation.",
+			Description: "Delete a saved flow diagram by ID. This does not change process runtime configuration.",
 			Effect:      agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
@@ -92,7 +87,7 @@ func (e *FlowExecutor) ListTools() []agentic.ToolDefinition {
 		},
 		{
 			Name:        "list_flows",
-			Description: "List all persisted flow definitions with their IDs, names, and runtime state.",
+			Description: "List all saved flow diagrams with their IDs, names, and versions.",
 			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type":       "object",
@@ -101,7 +96,7 @@ func (e *FlowExecutor) ListTools() []agentic.ToolDefinition {
 		},
 		{
 			Name:        "get_flow",
-			Description: "Get the full definition of a specific flow by ID, including nodes, connections, runtime state, and version.",
+			Description: "Get a saved flow diagram by ID, including nodes, connections, metadata, and version.",
 			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type": "object",
@@ -188,28 +183,19 @@ func (e *FlowExecutor) listFlows(ctx context.Context, call agentic.ToolCall) (ag
 	if len(flows) == 0 {
 		return agentic.ToolResult{CallID: call.ID, Content: "No flows configured."}, nil
 	}
-	// Return a compact summary (id/name/state/version) rather than full
+	// Return a compact summary (id/name/version) rather than full
 	// flow bodies — reduces LLM context pressure. Use get_flow for detail.
 	type flowSummary struct {
-		ID              string `json:"id"`
-		Name            string `json:"name"`
-		DesiredState    string `json:"desired_state"`
-		EffectiveState  string `json:"effective_state"`
-		RestartRequired *bool  `json:"restart_required"`
-		Version         int64  `json:"version"`
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Version int64  `json:"version"`
 	}
 	summaries := make([]flowSummary, 0, len(flows))
 	for _, f := range flows {
-		if e.selection != nil {
-			e.selection.Decorate(f)
-		}
 		summaries = append(summaries, flowSummary{
-			ID:              f.ID,
-			Name:            f.Name,
-			DesiredState:    string(f.DesiredState),
-			EffectiveState:  string(f.EffectiveState),
-			RestartRequired: f.RestartRequired,
-			Version:         f.Version,
+			ID:      f.ID,
+			Name:    f.Name,
+			Version: f.Version,
 		})
 	}
 	data, err := json.MarshalIndent(summaries, "", "  ")
@@ -230,9 +216,6 @@ func (e *FlowExecutor) getFlow(ctx context.Context, call agentic.ToolCall) (agen
 	flow, err := e.manager.Get(ctx, flowID)
 	if err != nil {
 		return agentic.ToolResult{CallID: call.ID, Error: fmt.Sprintf("get failed: %v", err)}, nil
-	}
-	if e.selection != nil {
-		e.selection.Decorate(flow)
 	}
 	data, err := json.MarshalIndent(flow, "", "  ")
 	if err != nil {

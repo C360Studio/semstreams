@@ -1,16 +1,12 @@
 package service
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/config"
-	"github.com/c360studio/semstreams/flowstore"
-	"github.com/stretchr/testify/require"
 )
 
 type portFactsDiscoverable struct {
@@ -27,13 +23,10 @@ func newPortOwnershipCM(t *testing.T, registry *component.Registry) *ComponentMa
 	if registry == nil {
 		registry = component.NewRegistry()
 	}
-	selection, err := flowstore.SelectBoot(&config.Config{}, nil)
-	require.NoError(t, err)
-	serviceInstance, err := NewComponentManager(json.RawMessage(`{}`), &Dependencies{
-		Logger: slog.Default(), ComponentRegistry: registry, BootSelection: selection,
-	})
-	require.NoError(t, err)
-	return serviceInstance.(*ComponentManager)
+	return &ComponentManager{
+		BaseService: NewBaseServiceWithOptions("component-manager-test", nil, WithLogger(slog.Default())),
+		registry:    registry,
+	}
 }
 
 func TestComponentManagerAbsentBootModelRegistryRemainsNil(t *testing.T) {

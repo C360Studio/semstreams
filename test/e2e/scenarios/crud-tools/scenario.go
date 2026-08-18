@@ -337,8 +337,8 @@ func (s *Scenario) verifyHotreloadPickup(ctx context.Context, result *scenarios.
 	)
 }
 
-// verifyRegisteredTools confirms the ADR-026 M2 tools (list_components,
-// monitor_flow) actually registered into the shared tool registry at
+// verifyRegisteredTools confirms the component catalog and workflow-run
+// observation tools actually registered into the shared tool registry at
 // binary startup. This catches wiring regressions that unit tests
 // can't see — e.g. cmd/semstreams/main.go dropping
 // ComponentRegistry from ToolDependencies, or executors.RegisterBuiltins
@@ -349,14 +349,14 @@ func (s *Scenario) verifyHotreloadPickup(ctx context.Context, result *scenarios.
 //
 // This is a lightweight substitute for a full tool-invocation e2e.
 // Exercising the tools through the LLM → dispatcher → executor chain
-// would require adding list_components/monitor_flow to the flow's
+// would require adding list_components/monitor_workflow_runs to the flow's
 // allowed_tools and scripting multi-tool mock sequences, which dilutes
 // what the crud-tools scenario exists to test. A proper invocation
 // test belongs in a coordinator-flavored scenario (follow-up).
 func (s *Scenario) verifyRegisteredTools(ctx context.Context, result *scenarios.Result) error {
 	required := map[string]string{
-		"list_components": "Registered list_components tool",
-		"monitor_flow":    "Registered monitor_flow tool",
+		"list_components":       "Registered list_components tool",
+		"monitor_workflow_runs": "Registered monitor_workflow_runs tool",
 	}
 
 	cmd := exec.CommandContext(ctx, "docker", "logs", s.config.AppContainer)
@@ -381,7 +381,7 @@ func (s *Scenario) verifyRegisteredTools(ctx context.Context, result *scenarios.
 			missing)
 	}
 
-	result.Details["registered_m2_tools"] = []string{"list_components", "monitor_flow"}
+	result.Details["registered_m2_tools"] = []string{"list_components", "monitor_workflow_runs"}
 	return nil
 }
 

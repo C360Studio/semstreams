@@ -10,20 +10,12 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/config"
-	"github.com/c360studio/semstreams/flowstore"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/service"
 	"github.com/c360studio/semstreams/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func testBootSelection(t *testing.T, manager *config.Manager, flows ...*flowstore.Flow) *flowstore.BootSelection {
-	t.Helper()
-	selection, err := flowstore.SelectBoot(manager.GetConfig().Get(), flows)
-	require.NoError(t, err)
-	return selection
-}
 
 // TestComponentManagerInitializeCreatesComponents validates the critical fix:
 // ComponentManager.Initialize() now actually creates components from config
@@ -72,9 +64,8 @@ func TestComponentManagerInitializeCreatesComponents(t *testing.T) {
 
 	// Create service dependencies
 	deps := &service.Dependencies{
-		NATSClient:    testClient.Client,
-		Manager:       configManager,
-		BootSelection: testBootSelection(t, configManager),
+		NATSClient: testClient.Client,
+		Manager:    configManager,
 	}
 
 	// Create ComponentManager - constructor gets configs from Manager
@@ -132,9 +123,8 @@ func TestComponentManagerWithRealNATS(t *testing.T) {
 	defer configManager.Stop(5 * time.Second)
 
 	deps := &service.Dependencies{
-		NATSClient:    testClient.Client,
-		Manager:       configManager,
-		BootSelection: testBootSelection(t, configManager),
+		NATSClient: testClient.Client,
+		Manager:    configManager,
 	}
 
 	// Create ComponentManager
@@ -195,9 +185,8 @@ func TestComponentManagerFlowGraphValidation(t *testing.T) {
 	defer configManager.Stop(5 * time.Second)
 
 	deps := &service.Dependencies{
-		NATSClient:    testClient.Client,
-		Manager:       configManager,
-		BootSelection: testBootSelection(t, configManager),
+		NATSClient: testClient.Client,
+		Manager:    configManager,
 	}
 
 	cmService, err := service.NewComponentManager(json.RawMessage("{}"), deps)
@@ -279,10 +268,9 @@ func TestServiceManagerMandatoryService(t *testing.T) {
 
 	// Create service dependencies
 	deps := &service.Dependencies{
-		NATSClient:    testClient.Client,
-		Manager:       configManager,
-		BootSelection: testBootSelection(t, configManager),
-		Logger:        nil, // Will use default
+		NATSClient: testClient.Client,
+		Manager:    configManager,
+		Logger:     nil, // Will use default
 	}
 
 	// Get the default Manager

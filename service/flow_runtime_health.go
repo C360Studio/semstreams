@@ -1,12 +1,12 @@
 package service
 
-// Runtime health endpoint for Flow Builder UI.
+// Saved-diagram component-name health observation for Flow Builder UI.
 //
-// This file implements the GET /flowbuilder/flows/{id}/runtime/health endpoint
+// This file implements GET /flowbuilder/flows/{id}/observations/health
 // which provides component-level health status with timing information for
 // runtime debugging and monitoring.
 //
-// The endpoint returns health status for all components in a flow including:
+// The endpoint returns health status for names declared by a saved diagram:
 //   - Component health status (healthy, degraded, error)
 //   - Start time (when component was started)
 //   - Last activity time (last message processed)
@@ -60,8 +60,7 @@ type ComponentHealth struct {
 	Details       any                 `json:"details"`        // Additional details for degraded/error states
 }
 
-// handleRuntimeHealth handles GET /flows/{id}/runtime/health
-// Returns health status for all components in the specified flow
+// handleRuntimeHealth observes health for component names in a saved diagram.
 func (fs *FlowService) handleRuntimeHealth(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	flowID := r.PathValue("id")

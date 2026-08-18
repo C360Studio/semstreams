@@ -309,7 +309,7 @@
           "query_entities",
           "query_relationships",
           "read_loop_result",
-          "monitor_flow",
+          "monitor_workflow_runs",
           "list_rules",
           "get_rule",
           "list_flows",

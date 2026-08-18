@@ -87,3 +87,32 @@ func TestPendingMapEmptiesAfterChurnConverges(t *testing.T) {
 		t.Fatalf("pending writes after convergence = %#v", manager.pendingLocal)
 	}
 }
+
+func TestBootConfigIsDefensiveAndComponentRestartComparisonIsExact(t *testing.T) {
+	bootComponent := types.ComponentConfig{
+		Type: types.ComponentTypeProcessor, Name: "worker", Enabled: true,
+		Config: json.RawMessage(`{"a":1,"b":2}`),
+	}
+	manager := classifierManager()
+	manager.boot = &Config{Components: ComponentConfigs{"worker": bootComponent}}
+	manager.config = NewSafeConfig(&Config{Components: ComponentConfigs{
+		"worker": {Type: types.ComponentTypeProcessor, Name: "worker", Enabled: true, Config: json.RawMessage(`{"b":2,"a":1}`)},
+	}})
+
+	if restart, err := manager.ComponentRestartRequired(); err != nil || restart {
+		t.Fatalf("canonically identical config requires restart: restart=%v err=%v", restart, err)
+	}
+	bootCopy := manager.BootConfig()
+	bootCopy.Components["worker"] = types.ComponentConfig{Name: "mutated"}
+	if got := manager.BootConfig().Components["worker"]; !got.Equal(bootComponent) {
+		t.Fatalf("BootConfig exposed mutable authority: %#v", got)
+	}
+
+	manager.config = NewSafeConfig(&Config{Components: ComponentConfigs{
+		"worker": bootComponent,
+		"extra":  {Type: types.ComponentTypeInput, Name: "extra", Enabled: true},
+	}})
+	if restart, err := manager.ComponentRestartRequired(); err != nil || !restart {
+		t.Fatalf("component membership change not detected: restart=%v err=%v", restart, err)
+	}
+}

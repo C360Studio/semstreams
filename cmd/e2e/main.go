@@ -356,14 +356,7 @@ func createScenario(
 	case "core-health", "health":
 		return scenarios.NewCoreHealthScenario(edgeClient, nil)
 	case "core-dataflow", "dataflow":
-		// Create WebSocket client for status stream verification
-		var wsClient *client.WebSocketClient
-		wsURL := flags.wsStatusURL
-		if wsURL == "" {
-			wsURL = flags.baseURL // Default to same base URL
-		}
-		wsClient = client.NewWebSocketClient(wsURL)
-		return scenarios.NewCoreDataflowScenario(edgeClient, wsClient, flags.udpEndpoint, nil)
+		return scenarios.NewCoreDataflowScenario(edgeClient, flags.udpEndpoint, nil)
 	case "core-graph-roundtrip", "graph-roundtrip":
 		return scenarios.NewGraphRoundTripScenario(
 			config.DefaultEndpoints.NATS,
@@ -588,13 +581,9 @@ func runAllScenarios(
 	baseURL string,
 	udpEndpoint string,
 ) int {
-	// Create WebSocket client for dataflow scenario
-	// When running all scenarios, we use the default HTTP endpoint for WebSocket
-	wsClient := client.NewWebSocketClient(config.DefaultEndpoints.HTTP)
-
 	tests := []scenarios.Scenario{
 		scenarios.NewCoreHealthScenario(obsClient, nil),
-		scenarios.NewCoreDataflowScenario(obsClient, wsClient, udpEndpoint, nil),
+		scenarios.NewCoreDataflowScenario(obsClient, udpEndpoint, nil),
 		scenarios.NewGraphRoundTripScenario(
 			config.DefaultEndpoints.NATS,
 			baseURL,
