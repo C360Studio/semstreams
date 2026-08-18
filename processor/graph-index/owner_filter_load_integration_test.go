@@ -390,7 +390,11 @@ func runOwnerLoadWorkerShape(
 		require.NoError(t, samplerErr)
 	}
 	cancelDispatch()
-	require.NoError(t, dispatcher.Stop(context.Background()))
+	select {
+	case <-dispatcher.done:
+	case <-time.After(time.Second):
+		t.Fatal("owner-filter dispatcher did not join after parent cancellation")
+	}
 
 	for label, samples := range durations {
 		assertOwnerLoadLatency(t, label, samples, profile)

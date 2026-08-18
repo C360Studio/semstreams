@@ -260,6 +260,67 @@ The current architect reclassification is binding for the adjacent output owners
 
 Neither output owner is edited or receives migration credit in this checkpoint.
 
+## Graph-index parent and dispatcher implementation worktree checkpoint — 2026-08-18
+
+Checkpoint measured in a dirty implementation worktree based on merged `main` at full commit
+`e7789f6cf5714e5b5fb04c0221cb9b2def17d3a0`. The runtime/test slice is limited to the graph-index parent and its
+private keyed dispatcher: `processor/graph-index/component.go`, `processor/graph-index/keyed_dispatcher.go`, focused
+lifecycle proof in `processor/graph-index/lifecycle_order_test.go`, and the three existing dispatcher test-cleanup
+call sites in `processor/graph-index/ordered_dispatch_test.go` and
+`processor/graph-index/owner_filter_load_integration_test.go`. This ledger and `tasks.md` are the only task-truth
+additions. This is not a clean candidate-commit checkpoint and earns no Gate A, proof, release, archive, or tag
+completion credit.
+
+Stable worktree source identities for this checkpoint are:
+
+- `processor/graph-index/component.go`: `01d83a26fc2affc4136da86d60a5bb31a49e070716ba3d8ac6a8dca288711f5e`
+- `processor/graph-index/keyed_dispatcher.go`: `45added4af11d00c1a4eae158c612f868648e3e0f54f802b169060468503ede1`
+- `processor/graph-index/lifecycle_order_test.go`: `1689efb74f06d970b91b29b8a3b4355e2b4ace04829ced2f4a3cadaba5acad1f`
+- `processor/graph-index/ordered_dispatch_test.go`: `0a337acf0e8ae9aab274acf8220c8a83a77bc93ca8e3a4d819077a77bcc0c7dc`
+- `processor/graph-index/owner_filter_load_integration_test.go`:
+  `3d3e1fb464bdd09a502a4b140ea464b6b7eec5623d273a2f346cd9655ffb4711`
+
+| Ruling | Exact implementation evidence | Checkpoint result |
+|---|---|---|
+| Parent adds only failed-Start phase state | `processor/graph-index/component.go:241-253` | Existing lifecycle/resource fields remain; only private `cleanupPending` was added and no context is stored. |
+| Authority precedes escaping work | `processor/graph-index/component.go:608-650,698-712` | Cancel/runDone/cleanupPending publish first; the one runDone waiter starts after all Add sites are sealed. |
+| Failed Start uses bounded exact cleanup | `processor/graph-index/component.go:627-651,781-832` | Exact subscriptions drain before cancel; runDone, coalescer.done, and pool.done are awaited under the terminal bound. |
+| Failed-Start authority alone is retryable | `processor/graph-index/component.go:589-595,725-752` | Start rejects retained cleanup; later Stop clears authority only after complete cleanup. |
+| Normal Stop remains one-shot | `processor/graph-index/component.go:753-779` | Cancel authority is claimed once; timeout is honest and later normal Stop is a no-op. |
+| Dispatcher is a parent-owned child | `processor/graph-index/keyed_dispatcher.go:12-74` | Generation and independent Stop are absent; parent cancellation plus exact done replaces them. |
+| Channel-synchronized behavior proof | `processor/graph-index/lifecycle_order_test.go:127-214` | Failed cleanup retention/retry and dispatcher-child join are proved without sleep-based synchronization. |
+| Existing dispatcher cleanup follows target | `processor/graph-index/ordered_dispatch_test.go:46-59,378-403`; `processor/graph-index/owner_filter_load_integration_test.go:392-397` | Tests cancel their exact parent context and await private done. |
+| Census moves by the reviewed owner count | searches and table below | Dispatcher receives owner-migrated credit; the already lifecyclejoin-free parent receives none. |
+
+Focused and package race evidence from this worktree:
+
+```text
+go test -race ./processor/graph-index -run \
+  'TestComponent(StartFailure|FailedStart|Stop)|TestKeyedDispatcher' -count=1 -timeout=120s
+ok github.com/c360studio/semstreams/processor/graph-index 1.341s
+
+go test -race ./processor/graph-index -count=1 -timeout=120s
+ok github.com/c360studio/semstreams/processor/graph-index 1.798s
+```
+
+The production-only recovery searches defined above report this exact delta from merged baseline `e7789f6c`:
+
+| Measurement | Merged baseline | This worktree | Delta |
+|---|---:|---:|---:|
+| Production owner files importing `internal/lifecyclejoin` | 39 | 38 | -1 |
+| `lifecyclejoin.NewGeneration` | 41 | 40 | -1 |
+| `Generation.Stop` | 46 | 45 | -1 |
+| External `Generation.Cancel` | 5 | 5 | 0 |
+| External `Generation.Signal` | 0 | 0 | 0 |
+| `Generation.StopWithQuiesce` | 8 | 8 | 0 |
+| `lifecyclejoin.NewOperation` | 3 | 3 | 0 |
+| `Operation.Run` | 3 | 3 | 0 |
+| External `RunPartialStartRollback` calls | 20 | 20 | 0 |
+
+Owner-migrated credit is granted to `processor/graph-index/keyed_dispatcher.go` only. The graph-index parent already
+had no production `internal/lifecyclejoin` import at the merged baseline, so its failed-Start correction receives no
+owner-count credit. Task 2.3, Gate A, runtime migration, proof, release, archive, and tag completion remain incomplete.
+
 ## Workspace recovery checkpoint
 
 Authority collisions are inventoried in

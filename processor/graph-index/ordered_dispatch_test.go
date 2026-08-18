@@ -50,7 +50,11 @@ func startOrderedTestPool(t *testing.T, comp *Component, workers int) (context.C
 	require.NoError(t, comp.startIndexPool(ctx))
 	t.Cleanup(func() {
 		cancel()
-		require.NoError(t, comp.indexPool.Stop(context.Background()))
+		select {
+		case <-comp.indexPool.done:
+		case <-time.After(time.Second):
+			t.Fatal("ordered test dispatcher did not join after parent cancellation")
+		}
 	})
 	return ctx, cancel
 }
@@ -392,5 +396,9 @@ func TestKeyedDispatcher_AllowsDifferentEntitiesToRunConcurrently(t *testing.T) 
 	}
 	close(release)
 	cancel()
-	require.NoError(t, d.Stop(context.Background()))
+	select {
+	case <-d.done:
+	case <-time.After(time.Second):
+		t.Fatal("dispatcher did not join after parent cancellation")
+	}
 }
