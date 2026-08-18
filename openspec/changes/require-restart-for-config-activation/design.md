@@ -148,38 +148,28 @@ Current-active facts join to the existing framework-owned Rule `GRAPH_STATUS` he
 expired readiness incarnation as stale history, never as a running processor. The existing heartbeat/expiry policy is
 framework-owned, not an adopter knob.
 
-### D6. Flow authoring remains, live topology activation does not
+### D6. Flow diagrams are authoring artifacts, not activation owners
 
-Deploy/start/stop/undeploy mutate one exact server-owned desired component
-bundle in flowstore. Each transition atomically full-replaces desired state and
-bundle with KV compare-and-set; ordinary authoring updates preserve both.
-While a process is running they return runtime-unchanged/restart-required
-truth. Runtime lifecycle agent tools remain unwired unless a future product
-proves a consumer for desired-state authoring; they do not regain live
-activation semantics.
+Flowstore persists diagram metadata, nodes, connections, audit fields, and a CAS version. It persists no desired or
+effective lifecycle state, provenance, component bundle, or restart claim. Creating, updating, or deleting a diagram
+cannot change configuration or the running process.
 
-`flowstore.Flow.RuntimeState` cannot retain its current meaning: Engine writes `deployed_stopped` and `running` after
-desired config writes, and `monitor_flow` repeats those values as runtime truth. The durable field becomes
-`desired_state` with explicit `absent`, `disabled`, or `enabled` values. Historical deployment/start/stop timestamps
-that describe unobserved runtime are removed or renamed as desired-state audit facts.
+Engine validates diagrams and compiles nodes into detached enabled component-configuration candidates. Compilation
+rejects duplicate instance names and has no persistence or runtime effect. An explicit
+`POST /flows/{id}/publish-component-configs` operation loads the saved diagram, compiles it, sorts instance names, and
+upserts each candidate through Config Manager. Diagram omissions never imply deletion. A partial failure returns the
+exact persisted names and failed name so retry is safe.
 
-After file/KV arbitration and flow listing, the composition root creates one
-immutable `BootSelection`, assigns a unique `boot_id`, canonicalizes the
-selected desired configuration, and seals framework-owned flow digests. Static
-and flow component names have exclusive ownership; deterministic static/flow
-or cross-flow collisions fail boot before construction. Missing flow storage,
-listing failure, invalid persisted activation, or missing selection also fails
-boot. The exact same selection pointer feeds ComponentManager, FlowService,
-status streaming, and flow tools.
+Config Manager seals the post-arbitration component map at successful Start. The current ComponentManager reads that
+defensive snapshot once; later desired writes do not mutate it. Restart-required truth compares exact component-map
+membership and canonical component values against the sealed boot map. The publish response says only that persistence
+occurred, the current runtime is unchanged, and whether a restart is required.
 
-`restart_required` compares the current desired digest/membership with the
-digest/membership actually sealed by this boot. Before an authoritative
-selection exists it is null, never fabricated false. It does not compare only
-`enabled`/`disabled`, because desired and effective state can have equal labels
-while their configuration differs. Runtime health is a separate observation
-and cannot establish activation provenance. If no authoritative runtime
-observer is available, effective state and boot-applied provenance report
-`unknown`; neither is copied from mutable flowstore desired state.
+The deployment routes, flow-status WebSocket, flow-associated log stream, lifecycle agent fields, and lifecycle agent
+operations are removed without aliases. Health, metrics, and message endpoints may remain only as best-effort
+observations keyed by component names declared in a saved diagram; they do not assert ownership or activation.
+Completed workflow-run aggregation is named `monitor_workflow_runs` and filters AGENT_LOOPS by `workflow_slug`; it has
+no dependency on flowstore.
 
 ### D7. Simplify the pending lifecycle protocol
 

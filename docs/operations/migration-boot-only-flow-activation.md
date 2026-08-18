@@ -1,102 +1,85 @@
-# Migrate to boot-only flow activation
+# Migrate flow diagrams to boot-only component configuration
 
-The release containing ADR-094 makes process composition immutable after boot.
-Flow authoring and validation remain available, and dedicated rule-definition
-hot reload remains a separate narrow contract. Generic service, component,
-port, dependency, integration, and topology changes require a process restart.
+ADR-096 removes flow lifecycle authority. Flow diagrams remain available for CRUD, validation, connection discovery,
+and compilation. Component and service composition remains immutable after boot; Rule definitions retain their
+separate, narrow hot-reload contract.
 
-## Operator behavior
+## Removed flow fields
 
-Flow `deploy`, `start`, `stop`, and `undeploy` operations now update desired
-configuration only:
+Remove every use of desired/effective flow state, desired component bundles, activation provenance, and flow-level
+restart fields. `Flow` now contains only diagram metadata, nodes, connections, audit fields, and its CAS version.
 
-| Operation | Desired transition | Current runtime |
-|---|---|---|
-| Deploy | `absent` → `disabled` | Unchanged |
-| Start | `disabled` → `enabled` | Unchanged |
-| Stop | `enabled` → `disabled` | Unchanged |
-| Undeploy | `disabled` → `absent` | Unchanged |
+Creating, updating, or deleting a diagram changes no component configuration and no running component.
 
-Successful operation responses include `desired_state`,
-`runtime_unchanged: true`, and `restart_required`. Restart SemStreams to select
-the latest desired configuration. A graceful stop drains and joins the
-boot-owned generation; an ungraceful process or host loss does not make a
-partially applied configuration authoritative. The next successful boot reads
-the latest durable desired snapshot.
+## Publish component configuration explicitly
 
-Flow records replace `runtime_state` with:
+To turn a saved diagram into desired component configuration for a later boot, call:
 
-- `desired_state`: durable `absent`, `disabled`, or `enabled` authoring state;
-- `desired_components`: the exact server-owned component bundle selected by
-  that desired state;
-- `effective_state`: independently observed runtime state, or `unknown` when no
-  observer is available;
-- `restart_required`: whether the current desired digest differs from the
-  sealed boot-selection digest;
-- `desired_provenance`: the canonical current desired digest;
-- `boot_applied_provenance`: an observer-attested boot identity and canonical
-  applied digest, when available.
+```text
+POST /flowbuilder/flows/{id}/publish-component-configs
+```
 
-The running SemStreams binaries pass the same immutable `BootSelection` to
-component construction, flow reads, status streaming, and tools. Before that
-selection is available, `effective_state` is `unknown`,
-`boot_applied_provenance` is omitted, and `restart_required` is `null`; unknown
-is never collapsed into false. Once boot succeeds, the selected flow bundle is
-the process-local applied provenance used for comparison. Health remains a
-separate signal and cannot prove activation.
+Successful response:
 
-There is no compatibility alias for `runtime_state`, `not_deployed`,
-`deployed_stopped`, or `running`.
+```json
+{
+  "persisted_components": ["input-main", "processor-main"],
+  "runtime_unchanged": true,
+  "restart_required": true
+}
+```
 
-## Removed configuration and HTTP surfaces
+Names are persisted in lexical order. Publishing only upserts nodes present in the diagram; removing a node from a
+diagram never deletes an existing component configuration. Use the explicit Config Manager deletion surface when
+removal is intended.
 
-- Remove `watch_config` from the `component-manager` service configuration.
-- Stop sending `PUT /components/config/{name}`. The endpoint is read-only and
-  returns `405 Method Not Allowed` for mutation requests.
-- Config KV writes after boot remain valid desired-state writes but cannot
-  create, remove, replace, restart, or reconfigure a component in the current
-  process.
+A partial failure returns HTTP 500 with the exact successful prefix and failed name:
 
-## Removed Go APIs
+```json
+{
+  "persisted_components": ["input-main"],
+  "failed_component": "processor-main",
+  "runtime_unchanged": true,
+  "restart_required": true,
+  "error": "..."
+}
+```
 
-Registry replacement and runtime-handle surfaces are removed:
+Retry is safe because each write is an idempotent upsert. Restart SemStreams after a successful publish when
+`restart_required` is true.
 
-- direct adopter use of `Registry.CreateComponent` (boot admission is now
-  internal-token-gated and owned by `ComponentManager`)
-- `Registry.ReplaceComponent`
-- `Registry.ValidateDeclarationUpdate`
-- `Registry.ConfirmDeclarationUpdate`
-- `Registry.UnregisterInstance`
-- `Registry.Component`
-- `Registry.ListComponents`
-- `component.Lookup` and `Dependencies.ComponentRegistry`
+## Removed HTTP and tool surfaces
 
-Composition roots must create one shared flow manager with the process context
-using `flowstore.NewManager(ctx, natsClient)` and inject that same instance as
-`service.Dependencies.FlowManager`. The official SemStreams binaries already do
-this; downstream composition roots receive a compile-time error until migrated.
+There are no compatibility aliases for:
 
-ComponentManager runtime mutation and handle-leakage surfaces are removed:
+- `POST /flowbuilder/deployment/{id}/{operation}`
+- `/flowbuilder/status/stream`
+- `/flowbuilder/flows/{id}/runtime/logs`
+- the former runtime health, metrics, and messages paths
+- flow deployment/start/stop/undeploy tools
+- the former flow-monitoring tool
 
-- `ComponentManager.CreateComponent`
-- `ComponentManager.RemoveComponent`
-- `ComponentManager.Component`
-- `ComponentManager.ListComponents`
-- `ComponentManager.GetManagedComponents`
-- `ComponentManager.GetRegistry`
+Retained observation paths are:
 
-The unwired `deploy_flow`, `start_flow`, `stop_flow`, and `undeploy_flow` agent
-tools are also removed. Flow CRUD tools continue to author definitions;
-`monitor_flow` reports desired state, independently observed effective state,
-restart requirement, and provenance.
+- `GET /flowbuilder/flows/{id}/observations/health`
+- `GET /flowbuilder/flows/{id}/observations/metrics`
+- `GET /flowbuilder/flows/{id}/observations/messages`
 
-## Adopter action
+These query actual framework observations for component names declared by the saved diagram. They do not claim those
+components belong to, were activated by, or are controlled by the diagram.
 
-Adopters should remove live-reconfiguration calls, treat configuration writes
-as next-boot intent, and display the new flow observation fields. If an adopter
-does nothing and uses only static boot configuration, runtime behavior is
-unchanged. Direct references to removed Go fields or methods fail compilation
-at the exact migration site.
+Agent-loop aggregation is now `monitor_workflow_runs` with required `workflow_slug`. Its result contains workflow-run
+counts and records only; it does not return flow lifecycle state or provenance.
 
-SemStreams agents do not edit sister repositories. Downstream owners apply and
-validate these changes in their own repositories.
+## Go composition changes
+
+Config Manager must be started before ComponentManager or FlowService construction. `BootConfig()` returns a defensive
+copy of the successful post-arbitration boot configuration. `ComponentRestartRequired()` compares exact component-map
+membership and canonical component values.
+
+Flow Engine constructors no longer accept flow/config managers. Use `Compile(flow)` for detached candidates. The
+official binaries already use the new composition.
+
+If a downstream adopter does nothing and uses static boot configuration, runtime behavior is unchanged. Direct use of
+removed fields, routes, or tool names fails at the migration site. SemStreams agents do not edit sister repositories;
+downstream owners apply and validate their own migrations.

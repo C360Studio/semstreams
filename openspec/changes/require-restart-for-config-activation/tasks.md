@@ -79,23 +79,16 @@ runtime or proof task is completed by delegation.
 - [ ] 3.8 Document and test that a callback borrow cannot synchronously request terminal Stop for its own instance.
   Inventory production callbacks for reentrant lifecycle calls and keep manager locks out of borrow drain.
 
-## 4. Preserve desired flow authoring
+## 4. Preserve flow authoring without flow lifecycle
 
-- [ ] 4.1 Keep flow create/update/validation and desired component-config persistence.
-- [ ] 4.2 Make deploy/start/stop/undeploy responses state desired-state outcome, runtime unchanged, and restart
-  required.
-- [ ] 4.3 Add restart-known-answer tests: a desired flow change does not affect the current runtime and does affect the
-  next successful boot after both graceful exit and power loss.
-- [ ] 4.4 Remove or keep unwired any runtime-lifecycle tool surface with no present consumer; do not advertise immediate
-  activation.
-- [ ] 4.5 Replace persisted `runtime_state` with desired `absent`/`disabled`/`enabled` activation and migrate the
-  current not-deployed/deployed-stopped/running API without aliases.
-- [ ] 4.6 Remove or rename timestamps and metrics that currently claim a desired write deployed, started, stopped, or
-  ran a flow.
-- [ ] 4.7 Make flow reads and `monitor_flow` return desired state, independently observed effective state, and
-  `restart_required`; effective state never comes from flowstore and reports `unknown` without an observer.
-- [ ] 4.8 Seal unique boot identity plus canonical boot-applied configuration digests. Derive `restart_required` by
-  comparing current desired provenance with boot-applied provenance, independently of activation labels and health.
+- [ ] 4.1 Retain diagram CRUD, audit, CAS update, import from component configs, validation, validator metrics, and
+  compilation. Remove every persisted or returned flow lifecycle, provenance, component-bundle, and restart field.
+- [ ] 4.2 Add explicit deterministic upsert-only `publish-component-configs`. Return exact partial progress, unchanged
+  runtime truth, and component-map restart comparison; never infer deletion from a diagram omission.
+- [ ] 4.3 Seal a defensive post-arbitration component map at Config Manager Start. Prove six rapid writes converge in
+  KV and SafeConfig, cannot mutate the current component registry/start count, and are selected once by a fresh boot.
+- [ ] 4.4 Remove deployment, status-stream, flow-log, and lifecycle-tool surfaces without aliases. Rename retained
+  saved-diagram observations truthfully and replace flow monitoring with workflow-run aggregation by workflow slug.
 
 ## 5. Dedicated rule-definition hot reload
 
