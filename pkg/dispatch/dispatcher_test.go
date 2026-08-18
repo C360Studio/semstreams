@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/pkg/worker"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -266,4 +267,93 @@ func TestDispatcher_StopIdempotent(t *testing.T) {
 	require.NoError(t, d.Stop(context.Background()))
 	require.NoError(t, d.Stop(context.Background()),
 		"second Stop should be no-op success")
+}
+
+func TestDispatcher_StopRejectsNilContextBeforeAction(t *testing.T) {
+	d, err := New(context.Background(), Config[int]{
+		Workers:   1,
+		QueueSize: 1,
+		Process:   func(context.Context, int) error { return nil },
+	}, Deps{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = d.Stop(context.Background()) })
+
+	var stopErr error
+	require.NotPanics(t, func() { stopErr = d.Stop(nil) })
+	require.ErrorIs(t, stopErr, ErrInvalidConfig)
+	require.NoError(t, d.Submit(1), "nil Stop acted on the worker pool")
+}
+
+func TestDispatcher_StopReportsTerminalPoolTimeoutAndContextCause(t *testing.T) {
+	tests := []struct {
+		name    string
+		stopCtx func() (context.Context, context.CancelFunc)
+		cause   error
+	}{
+		{
+			name: "already canceled",
+			stopCtx: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx, func() {}
+			},
+			cause: context.Canceled,
+		},
+		{
+			name: "expired deadline",
+			stopCtx: func() (context.Context, context.CancelFunc) {
+				return context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			},
+			cause: context.DeadlineExceeded,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			processEntered := make(chan struct{})
+			processRelease := make(chan struct{})
+			processReturned := make(chan struct{})
+			var releaseOnce sync.Once
+			release := func() { releaseOnce.Do(func() { close(processRelease) }) }
+			t.Cleanup(release)
+
+			d, err := New(context.Background(), Config[int]{
+				Workers:   1,
+				QueueSize: 1,
+				Process: func(context.Context, int) error {
+					close(processEntered)
+					<-processRelease
+					close(processReturned)
+					return nil
+				},
+			}, Deps{})
+			require.NoError(t, err)
+			require.NoError(t, d.Submit(1))
+			select {
+			case <-processEntered:
+			case <-time.After(time.Second):
+				t.Fatal("dispatcher process did not start")
+			}
+
+			stopCtx, cancelStop := tt.stopCtx()
+			defer cancelStop()
+			stopResult := make(chan error, 1)
+			go func() { stopResult <- d.Stop(stopCtx) }()
+			var stopErr error
+			select {
+			case stopErr = <-stopResult:
+			case <-time.After(time.Second):
+				t.Fatal("Stop did not honor the already-finished caller context")
+			}
+			require.ErrorIs(t, stopErr, worker.ErrStopTimeout)
+			require.ErrorIs(t, stopErr, tt.cause)
+
+			release()
+			select {
+			case <-processReturned:
+			case <-time.After(time.Second):
+				t.Fatal("dispatcher process did not return after test release")
+			}
+		})
+	}
 }

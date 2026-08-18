@@ -80,3 +80,53 @@ func TestCompletionWatcherRunUsesLifecycleContext(t *testing.T) {
 	}
 	w.wg.Wait()
 }
+
+func TestCompletionWatcherStopReportsUnprovenJoin(t *testing.T) {
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	callbackEntered := make(chan struct{})
+	callbackRelease := make(chan struct{})
+	callbackReturned := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseCallback := func() { releaseOnce.Do(func() { close(callbackRelease) }) }
+	t.Cleanup(releaseCallback)
+	w := &completionWatcher[string]{
+		keyFor: func(work string) string { return work },
+		onComplete: func(context.Context, string) error {
+			close(callbackEntered)
+			<-callbackRelease
+			close(callbackReturned)
+			return nil
+		},
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		cancel:   cancelRun,
+		inFlight: map[string]string{"work": "work"},
+	}
+	watcher := &completionTestWatcher{
+		updates: make(chan jetstream.KeyValueEntry, 1),
+		stopped: make(chan struct{}),
+	}
+	w.wg.Add(1)
+	go w.run(runCtx, watcher)
+	watcher.updates <- completionTestEntry{key: "work"}
+	select {
+	case <-callbackEntered:
+	case <-time.After(time.Second):
+		t.Fatal("completion callback did not start")
+	}
+
+	stopCtx, cancelStop := context.WithCancel(context.Background())
+	cancelStop()
+	require.ErrorIs(t, w.stop(stopCtx), context.Canceled)
+
+	releaseCallback()
+	select {
+	case <-callbackReturned:
+	case <-time.After(time.Second):
+		t.Fatal("completion callback did not return after release")
+	}
+	select {
+	case <-watcher.stopped:
+	case <-time.After(time.Second):
+		t.Fatal("completion watcher did not stop after callback return")
+	}
+}

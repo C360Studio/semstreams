@@ -94,11 +94,13 @@
 //
 // # Shutdown
 //
-// Stop drains the underlying worker.Pool first (blocks until
-// in-flight Process calls complete), then stops the completion
-// watcher. Callers waiting on KV-triggered OnComplete callbacks
-// should ensure those complete before Stop — typically by canceling
-// the caller's own context and letting Process see the cancellation.
+// Stop attempts the underlying worker.Pool first, then cancels and joins the
+// completion watcher. It returns pool timeout and caller-context causes rather
+// than reporting an unobserved join as clean. A failed Stop is terminal and
+// must not be retried; a successfully completed repeated Stop remains nil.
+// Callers waiting on KV-triggered OnComplete callbacks should ensure those
+// complete before Stop, typically by canceling the caller's own runtime context
+// and using a separate live bounded shutdown context for Stop.
 //
 // # KeyedPool — keyed-ordered concurrency (ADR-072)
 //
