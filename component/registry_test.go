@@ -5,10 +5,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"testing"
-
-	"github.com/c360studio/semstreams/internal/componentadmission"
-	"github.com/c360studio/semstreams/natsclient"
-	"github.com/c360studio/semstreams/types"
 )
 
 // TestListFactories_PreservesSchemaAndName verifies that ListFactories copies
@@ -102,12 +98,9 @@ func TestListFactories_PreservesSchemaAndName(t *testing.T) {
 	}
 }
 
-// TestRegisterWithConfig_DependenciesRoundTrip verifies that Dependencies
-// declared via RegistrationConfig flow through to the stored Registration
-// and are queryable via InstanceDependencies once an instance is tracked.
-// This is the load-bearing guarantee behind ComponentManager's ability to
-// route model_registry updates to the components that opted in.
-func TestRegisterWithConfig_DependenciesRoundTrip(t *testing.T) {
+// TestRegisterWithConfig_DependenciesMetadata verifies that declared
+// dependencies remain discoverable as factory metadata.
+func TestRegisterWithConfig_DependenciesMetadata(t *testing.T) {
 	registry := NewRegistry()
 
 	mockFactory := func(_ json.RawMessage, _ Dependencies) (Discoverable, error) {
@@ -138,23 +131,6 @@ func TestRegisterWithConfig_DependenciesRoundTrip(t *testing.T) {
 		t.Errorf("Registration.Dependencies: got %v, want [%q]", reg.Dependencies, DepModelRegistry)
 	}
 
-	_, err = registry.CreateComponent(componentadmission.Access{}, "my-instance", types.ComponentConfig{
-		Name: "reg-with-deps", Type: types.ComponentTypeProcessor, Enabled: true, Config: json.RawMessage(`{}`),
-	}, Dependencies{NATSClient: new(natsclient.Client)}, nil)
-	if err != nil {
-		t.Fatalf("CreateComponent: %v", err)
-	}
-
-	deps := registry.InstanceDependencies("my-instance")
-	if len(deps) != 1 || deps[0] != DepModelRegistry {
-		t.Errorf("InstanceDependencies: got %v, want [%q]", deps, DepModelRegistry)
-	}
-
-	// Untracked instances return nil (not an empty slice — matches the
-	// "no registration found" contract).
-	if got := registry.InstanceDependencies("unknown-instance"); got != nil {
-		t.Errorf("InstanceDependencies for unknown instance: got %v, want nil", got)
-	}
 }
 
 // TestRegisterWithConfig_NoDependencies confirms the default (zero-value)

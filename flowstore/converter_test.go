@@ -24,7 +24,7 @@ func TestFromComponentConfigs(t *testing.T) {
 			configs:       map[string]types.ComponentConfig{},
 			wantNodeCount: 0,
 			wantNodeIDs:   []string{},
-			wantState:     DesiredEnabled,
+			wantState:     DesiredAbsent,
 		},
 		{
 			name:     "single component",

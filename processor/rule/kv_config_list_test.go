@@ -30,7 +30,7 @@ func TestListRules_KVStorePath(t *testing.T) {
 	// usage from cmd/semstreams/main.go:buildRuleManager takes this
 	// exact shape so the test mirrors production.
 	rcm := NewConfigManager(nil, nil, nil)
-	require.NoError(t, rcm.InitializeKVStore(tc.Client))
+	require.NoError(t, rcm.InitializeKVStore(context.Background(), tc.Client))
 
 	// Seed two rule definitions + one non-rule key in the same bucket.
 	// The non-rule key (config.other) proves the namespace filter works.
@@ -84,7 +84,7 @@ func TestListRules_EmptyBucketReturnsEmptyMap(t *testing.T) {
 	defer cancel()
 
 	rcm := NewConfigManager(nil, nil, nil)
-	require.NoError(t, rcm.InitializeKVStore(tc.Client))
+	require.NoError(t, rcm.InitializeKVStore(context.Background(), tc.Client))
 
 	rules, err := rcm.ListRules(ctx)
 	require.NoError(t, err)
@@ -104,7 +104,7 @@ func TestListRules_SkipsUnmarshalFailures(t *testing.T) {
 	defer cancel()
 
 	rcm := NewConfigManager(nil, nil, nil)
-	require.NoError(t, rcm.InitializeKVStore(tc.Client))
+	require.NoError(t, rcm.InitializeKVStore(context.Background(), tc.Client))
 
 	// Write a valid rule + a corrupt one.
 	require.NoError(t, rcm.SaveRule(ctx, "good", Definition{

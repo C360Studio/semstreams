@@ -135,7 +135,7 @@ func (s *ManagerIntegrationSuite) TestUpdate() {
 	// Update the flow
 	flow.Name = "Updated Name"
 	flow.Description = "Updated description"
-	flow.DesiredState = DesiredDisabled
+	flow.DesiredState = DesiredDisabled // ignored: authoring updates cannot change activation
 
 	err = s.store.Update(s.ctx, flow)
 	s.Require().NoError(err)
@@ -146,7 +146,7 @@ func (s *ManagerIntegrationSuite) TestUpdate() {
 	s.Require().NoError(err)
 	s.Equal("Updated Name", retrieved.Name)
 	s.Equal("Updated description", retrieved.Description)
-	s.Equal(DesiredDisabled, retrieved.DesiredState)
+	s.Equal(DesiredAbsent, retrieved.DesiredState)
 	s.Equal(int64(2), retrieved.Version)
 }
 

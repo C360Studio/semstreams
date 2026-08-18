@@ -25,12 +25,17 @@ type FlowManager interface {
 // RuleExecutor's shape (one executor per Pattern-B type, dispatching
 // on ToolCall.Name to the right Manager method).
 type FlowExecutor struct {
-	manager FlowManager
+	manager   FlowManager
+	selection *flowstore.BootSelection
 }
 
 // NewFlowExecutor creates a flow management executor.
-func NewFlowExecutor(manager FlowManager) *FlowExecutor {
-	return &FlowExecutor{manager: manager}
+func NewFlowExecutor(manager FlowManager, selections ...*flowstore.BootSelection) *FlowExecutor {
+	var selection *flowstore.BootSelection
+	if len(selections) != 0 {
+		selection = selections[0]
+	}
+	return &FlowExecutor{manager: manager, selection: selection}
 }
 
 // ListTools returns the five flow-CRUD tool definitions.
@@ -190,11 +195,14 @@ func (e *FlowExecutor) listFlows(ctx context.Context, call agentic.ToolCall) (ag
 		Name            string `json:"name"`
 		DesiredState    string `json:"desired_state"`
 		EffectiveState  string `json:"effective_state"`
-		RestartRequired bool   `json:"restart_required"`
+		RestartRequired *bool  `json:"restart_required"`
 		Version         int64  `json:"version"`
 	}
 	summaries := make([]flowSummary, 0, len(flows))
 	for _, f := range flows {
+		if e.selection != nil {
+			e.selection.Decorate(f)
+		}
 		summaries = append(summaries, flowSummary{
 			ID:              f.ID,
 			Name:            f.Name,
@@ -222,6 +230,9 @@ func (e *FlowExecutor) getFlow(ctx context.Context, call agentic.ToolCall) (agen
 	flow, err := e.manager.Get(ctx, flowID)
 	if err != nil {
 		return agentic.ToolResult{CallID: call.ID, Error: fmt.Sprintf("get failed: %v", err)}, nil
+	}
+	if e.selection != nil {
+		e.selection.Decorate(flow)
 	}
 	data, err := json.MarshalIndent(flow, "", "  ")
 	if err != nil {

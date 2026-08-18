@@ -269,7 +269,7 @@ func TestIntegration_DynamicRuleCRUD(t *testing.T) {
 	err = processor.ValidateConfigUpdate(changes)
 	require.NoError(t, err)
 
-	err = processor.ApplyConfigUpdate(changes)
+	err = processor.ApplyConfigUpdate(context.Background(), changes)
 	require.NoError(t, err)
 
 	// READ - Verify rule was added
@@ -300,7 +300,7 @@ func TestIntegration_DynamicRuleCRUD(t *testing.T) {
 		},
 	}
 
-	err = processor.ApplyConfigUpdate(updateChanges)
+	err = processor.ApplyConfigUpdate(context.Background(), updateChanges)
 	require.NoError(t, err)
 
 	currentConfig = processor.GetRuntimeConfig()
@@ -456,148 +456,6 @@ func TestIntegration_PrometheusMetrics(t *testing.T) {
 	health := processor.Health()
 	assert.True(t, health.Healthy)
 	assert.Greater(t, health.Uptime.Seconds(), 0.0)
-}
-
-// TestIntegration_DynamicWatchPatterns tests runtime updates to entity watch patterns
-func TestIntegration_DynamicWatchPatterns(t *testing.T) {
-	natsClient := getTestNATSClient(t)
-	ctx := context.Background()
-
-	// Create ENTITY_STATES KV bucket
-	js, err := natsClient.JetStream()
-	require.NoError(t, err)
-
-	kv, err := js.KeyValue(ctx, "ENTITY_STATES")
-	if err != nil {
-		kv, err = js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
-			Bucket: "ENTITY_STATES",
-		})
-		require.NoError(t, err)
-	}
-
-	// Create processor with initial watch patterns
-	config, configErr := rule.NewConfig("rule-dynamic-watch-integration-test")
-	require.NoError(t, configErr)
-	config.Ports = &component.PortConfig{
-		Inputs: []component.PortDefinition{
-			{Name: "entity_events", Config: component.NATSPort{Subject: "events.graph.entity.>"}, Required: true},
-		},
-		Outputs: []component.PortDefinition{
-			{Name: "rule_events", Config: component.NATSPort{Subject: "events.rule.triggered"}, Required: true},
-		},
-	}
-	config.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"c360.platform1.test.*.*.*"}}
-	config.EnableGraphIntegration = false
-
-	// Add a rule that triggers on battery level
-	ruleDef := rule.Definition{
-		ID:   "dynamic_watch_test",
-		Type: "test_rule",
-		Name: "Dynamic Watch Test",
-		Conditions: []expression.ConditionExpression{
-			{Field: "robotics.battery.level", Operator: "lt", Value: 50.0, Required: true},
-		},
-		Logic:   "and",
-		Enabled: true,
-		Entity: rule.EntityConfig{
-			Pattern:      "*.*.*.*.*.*", // Match all canonical entities
-			WatchBuckets: []string{gtypes.BucketEntityStates},
-		},
-	}
-	config.InlineRules = []rule.Definition{ruleDef}
-
-	processor, err := rule.NewProcessor(natsClient, &config)
-	require.NoError(t, err)
-	processor.SetDecoder(message.NewDecoder(payloadbuiltins.NewTestRegistry(t)))
-
-	err = processor.Initialize()
-	require.NoError(t, err)
-
-	testCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	err = processor.Start(testCtx)
-	require.NoError(t, err)
-	defer processor.Stop(context.Background())
-
-	// Wait for watchers to start
-	time.Sleep(300 * time.Millisecond)
-
-	// Subscribe to rule events
-	receivedEvents := make([]map[string]any, 0)
-	var receiveMu sync.Mutex
-
-	_, err = natsClient.Subscribe(testCtx, "events.rule.triggered", func(_ context.Context, msg *nats.Msg) {
-		var event map[string]any
-		if err := json.Unmarshal(msg.Data, &event); err == nil {
-			receiveMu.Lock()
-			receivedEvents = append(receivedEvents, event)
-			receiveMu.Unlock()
-		}
-	})
-	require.NoError(t, err)
-
-	// Create entity that matches initial pattern
-	entity1 := gtypes.EntityState{
-		ID: "c360.platform1.test.system.drone.d001",
-		Triples: []message.Triple{
-			{Subject: "c360.platform1.test.system.drone.d001", Predicate: "robotics.battery.level", Object: 25.0},
-		},
-		Version:   1,
-		UpdatedAt: time.Now(),
-	}
-	entity1JSON, _ := json.Marshal(entity1)
-	_, err = kv.Put(ctx, entity1.ID, entity1JSON)
-	require.NoError(t, err)
-
-	time.Sleep(300 * time.Millisecond)
-
-	// Verify rule triggered for entity1
-	receiveMu.Lock()
-	initialEventCount := len(receivedEvents)
-	receiveMu.Unlock()
-	assert.Greater(t, initialEventCount, 0, "Rule should have triggered for entity1")
-
-	// Now dynamically add a new watch pattern
-	changes := map[string]any{
-		"entity_watch_buckets": map[string][]string{
-			gtypes.BucketEntityStates: {
-				"c360.platform1.test.*.*.*",
-				"c360.platform2.test.*.*.*", // New pattern
-			},
-		},
-	}
-	err = processor.ApplyConfigUpdate(changes)
-	require.NoError(t, err)
-
-	// Wait for new watcher to start
-	time.Sleep(300 * time.Millisecond)
-
-	// Create entity that matches the new pattern
-	entity2 := gtypes.EntityState{
-		ID: "c360.platform2.test.system.drone.d002",
-		Triples: []message.Triple{
-			{Subject: "c360.platform2.test.system.drone.d002", Predicate: "robotics.battery.level", Object: 30.0},
-		},
-		Version:   1,
-		UpdatedAt: time.Now(),
-	}
-	entity2JSON, _ := json.Marshal(entity2)
-	_, err = kv.Put(ctx, entity2.ID, entity2JSON)
-	require.NoError(t, err)
-
-	time.Sleep(300 * time.Millisecond)
-
-	// Verify rule triggered for entity2 (matching new pattern)
-	receiveMu.Lock()
-	finalEventCount := len(receivedEvents)
-	receiveMu.Unlock()
-	assert.Greater(t, finalEventCount, initialEventCount, "Rule should have triggered for entity2 after adding new pattern")
-
-	// Verify runtime config shows updated patterns
-	runtimeConfig := processor.GetRuntimeConfig()
-	buckets := runtimeConfig["entity_watch_buckets"].(map[string][]string)
-	assert.Contains(t, buckets[gtypes.BucketEntityStates], "c360.platform2.test.*.*.*")
 }
 
 // TestIntegration_GraphIntegration tests event publishing to graph processor

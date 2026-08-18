@@ -397,7 +397,9 @@ func TestProcessor_RemoveRule_DeletesScheduleRecord(t *testing.T) {
 		scheduleTracker: tracker,
 	}
 
-	rp.removeRule(ruleID)
+	if err := rp.removeRule(context.Background(), ruleID); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := tracker.LastFiredAt(ctx, ruleID); !errors.Is(err, ErrScheduleRecordNotFound) {
 		t.Errorf("LastFiredAt after removeRule = %v, want ErrScheduleRecordNotFound", err)
@@ -428,7 +430,9 @@ func TestProcessor_TypeSwap_DeletesScheduleRecord(t *testing.T) {
 		scheduleTracker: tracker,
 	}
 
-	rp.deleteScheduleRecord(ruleID)
+	if err := rp.deleteScheduleRecord(context.Background(), ruleID); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := tracker.LastFiredAt(ctx, ruleID); !errors.Is(err, ErrScheduleRecordNotFound) {
 		t.Errorf("LastFiredAt after type-swap delete = %v, want ErrScheduleRecordNotFound", err)
@@ -443,5 +447,7 @@ func TestProcessor_DeleteScheduleRecord_NilTrackerNoop(t *testing.T) {
 	rp := &Processor{
 		logger: slog.Default(),
 	}
-	rp.deleteScheduleRecord("any-rule") // must not panic
+	if err := rp.deleteScheduleRecord(context.Background(), "any-rule"); err != nil {
+		t.Fatal(err)
+	}
 }

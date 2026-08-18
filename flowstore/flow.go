@@ -25,13 +25,14 @@ type Flow struct {
 	// Desired activation is durable authoring state. Runtime observation is
 	// process-local and is populated on reads; it is never persisted as flow
 	// authority.
-	DesiredState     DesiredState `json:"desired_state"`
-	DesiredChangedAt *time.Time   `json:"desired_changed_at,omitempty"`
+	DesiredState      DesiredState        `json:"desired_state"`
+	DesiredComponents DesiredComponentSet `json:"desired_components"`
+	DesiredChangedAt  *time.Time          `json:"desired_changed_at,omitempty"`
 
 	EffectiveState        EffectiveState    `json:"effective_state,omitempty"`
 	DesiredProvenance     *ConfigProvenance `json:"desired_provenance,omitempty"`
 	BootAppliedProvenance *ConfigProvenance `json:"boot_applied_provenance,omitempty"`
-	RestartRequired       bool              `json:"restart_required"`
+	RestartRequired       *bool             `json:"restart_required"`
 
 	// Audit
 	CreatedAt    time.Time `json:"created_at"`
@@ -39,6 +40,10 @@ type Flow struct {
 	CreatedBy    string    `json:"created_by,omitempty"`
 	LastModified time.Time `json:"last_modified"`
 }
+
+// DesiredComponentSet is the complete server-owned component bundle selected
+// by a flow for the next successful process boot.
+type DesiredComponentSet map[string]types.ComponentConfig
 
 // FlowNode represents a component instance on the canvas
 type FlowNode struct {
@@ -118,6 +123,9 @@ func (f *Flow) Validate() error {
 		return errs.WrapInvalid(
 			fmt.Errorf("invalid desired state: %s", string(f.DesiredState)),
 			"flowstore", "Validate", "desired state validation failed")
+	}
+	if err := validateDesiredActivation(f.DesiredState, f.DesiredComponents); err != nil {
+		return errs.WrapInvalid(err, "flowstore", "Validate", "desired activation validation failed")
 	}
 
 	// Validate nodes

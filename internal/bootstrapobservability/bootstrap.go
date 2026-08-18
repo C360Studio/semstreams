@@ -177,7 +177,7 @@ func StartConfigManager(
 	if logger == nil {
 		return nil, nil, fmt.Errorf("config-manager logger cannot be nil")
 	}
-	manager, err := config.NewConfigManager(initial, client, logger)
+	manager, err := config.NewConfigManager(ctx, initial, client, logger)
 	if err != nil {
 		return nil, nil, logBootFailure(
 			logger, "config-manager-create", fmt.Errorf("create config manager: %w", err),

@@ -14,6 +14,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/config"
+	"github.com/c360studio/semstreams/flowstore"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/types"
@@ -190,7 +191,9 @@ func newGuardsTestComponentManager(
 		},
 		Components: components,
 	}
-	configManager, err := config.NewConfigManager(initialCfg, client, slog.Default())
+	configManager, err := config.NewConfigManager(context.Background(), initialCfg, client, slog.Default())
+	require.NoError(t, err)
+	selection, err := flowstore.SelectBoot(initialCfg, nil)
 	require.NoError(t, err)
 
 	deps := &Dependencies{
@@ -198,6 +201,7 @@ func newGuardsTestComponentManager(
 		Manager:           configManager,
 		Logger:            slog.Default(),
 		ComponentRegistry: registry,
+		BootSelection:     selection,
 	}
 	cmService, err := NewComponentManager(json.RawMessage(`{}`), deps)
 	require.NoError(t, err)

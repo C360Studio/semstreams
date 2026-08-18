@@ -2,85 +2,88 @@ package config
 
 import (
 	"encoding/json"
+	"io"
 	"log/slog"
 	"testing"
-	"time"
 
 	"github.com/c360studio/semstreams/types"
-	"github.com/stretchr/testify/require"
 )
 
-// newReconcileTestManager builds a NATS-free Manager for exercising the
-// in-memory handleUpdate / notification path (no KV, no watcher goroutine).
-func newReconcileTestManager() *Manager {
-	cfg := &Config{
-		Version:    "1.0.0",
-		Platform:   PlatformConfig{Org: "c360", ID: "reconcile-test", Type: "test"},
-		Services:   make(types.ServiceConfigs),
-		Components: make(ComponentConfigs),
-	}
+func classifierManager() *Manager {
 	return &Manager{
-		config:      NewSafeConfig(cfg),
-		subscribers: make(map[string][]chan Update),
-		logger:      slog.Default(),
+		config: NewSafeConfig(&Config{
+			Platform: PlatformConfig{Org: "test", ID: "test"}, Components: make(ComponentConfigs),
+		}),
+		pendingLocal: make(map[string]pendingLocalWrite),
+		logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 
-func componentJSON(t *testing.T, name string) []byte {
+func encodedComponent(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := json.Marshal(types.ComponentConfig{Type: "input", Name: name, Enabled: true})
-	require.NoError(t, err)
+	data, err := json.Marshal(types.ComponentConfig{Name: name, Type: types.ComponentTypeProcessor})
+	if err != nil {
+		t.Fatal(err)
+	}
 	return data
 }
 
-// TestHandleUpdate_EngineOwnedRevisionStillNotifies is the gh#388 regression:
-// an engine-owned revision (revision <= engineHighWaterRev) must skip the
-// in-memory RE-APPLY but STILL notify subscribers, so a runtime add/remove
-// drives a reconcile. Before the fix, handleUpdate returned before notifying.
-func TestHandleUpdate_EngineOwnedRevisionStillNotifies(t *testing.T) {
-	cm := newReconcileTestManager()
-	cm.engineHighWaterRev.Store(100)
-
-	ch := cm.OnChange("components.*")
-	<-ch // drain the initial-config send from OnChange
-
-	// Engine-owned event: revision 50 <= high-water 100.
-	cm.handleUpdate("components.doc-source-003", componentJSON(t, "doc-source-003"), 50)
-
-	select {
-	case up := <-ch:
-		require.Equal(t, "components.doc-source-003", up.Path,
-			"engine-owned revision must still notify subscribers (gh#388)")
-	case <-time.After(time.Second):
-		t.Fatal("engine-owned revision did not notify subscriber (gh#388)")
+func TestPendingLocalClassificationIsPerKey(t *testing.T) {
+	manager := classifierManager()
+	manager.pendingLocal["components.local"] = pendingLocalWrite{revision: 11}
+	manager.handleUpdate("components.external", encodedComponent(t, "external"), 10)
+	if got := manager.config.Get().Components["external"].Name; got != "external" {
+		t.Fatalf("mixed-key external revision was hidden: %q", got)
 	}
-
-	// The in-memory config must NOT be re-applied from the event — the engine
-	// owns the apply, so the component is absent until the engine applies it.
-	_, present := cm.config.Get().Components["doc-source-003"]
-	require.False(t, present, "engine-owned event must not re-apply in memory")
+	if _, ok := manager.pendingLocal["components.local"]; !ok {
+		t.Fatal("unrelated external write cleared local pending entry")
+	}
 }
 
-// TestHandleUpdate_ExternalRevisionAppliesAndNotifies confirms the external
-// path is unchanged: a revision above the high-water applies in memory AND
-// notifies.
-func TestHandleUpdate_ExternalRevisionAppliesAndNotifies(t *testing.T) {
-	cm := newReconcileTestManager()
-	cm.engineHighWaterRev.Store(100)
-
-	ch := cm.OnChange("components.*")
-	<-ch
-
-	// External event: revision 150 > high-water 100.
-	cm.handleUpdate("components.ext-comp", componentJSON(t, "ext-comp"), 150)
-
-	select {
-	case up := <-ch:
-		require.Equal(t, "components.ext-comp", up.Path)
-	case <-time.After(time.Second):
-		t.Fatal("external revision did not notify subscriber")
+func TestPendingPutSkipsSupersededAndExactEchoThenAppliesLaterExternal(t *testing.T) {
+	manager := classifierManager()
+	key := "components.worker"
+	manager.pendingLocal[key] = pendingLocalWrite{revision: 11}
+	manager.handleUpdate(key, encodedComponent(t, "stale"), 10)
+	if _, ok := manager.pendingLocal[key]; !ok {
+		t.Fatal("superseded entry cleared pending write")
 	}
+	manager.handleUpdate(key, encodedComponent(t, "local"), 11)
+	if _, ok := manager.pendingLocal[key]; ok {
+		t.Fatal("exact local echo did not clear pending write")
+	}
+	manager.handleUpdate(key, encodedComponent(t, "external"), 12)
+	if got := manager.config.Get().Components["worker"].Name; got != "external" {
+		t.Fatalf("later external write not applied: %q", got)
+	}
+}
 
-	_, present := cm.config.Get().Components["ext-comp"]
-	require.True(t, present, "external event must apply in memory")
+func TestPendingDeleteSkipsEarlierPutUntilTombstoneThenAllowsRecreate(t *testing.T) {
+	manager := classifierManager()
+	key := "components.worker"
+	manager.pendingLocal[key] = pendingLocalWrite{delete: true}
+	manager.handleUpdate(key, encodedComponent(t, "stale"), 20)
+	if _, ok := manager.config.Get().Components["worker"]; ok {
+		t.Fatal("put ordered before local tombstone was applied")
+	}
+	manager.handleUpdate(key, nil, 21)
+	if _, ok := manager.pendingLocal[key]; ok {
+		t.Fatal("ordered tombstone did not clear pending delete")
+	}
+	manager.handleUpdate(key, encodedComponent(t, "recreated"), 22)
+	if got := manager.config.Get().Components["worker"].Name; got != "recreated" {
+		t.Fatalf("post-tombstone recreate not applied: %q", got)
+	}
+}
+
+func TestPendingMapEmptiesAfterChurnConverges(t *testing.T) {
+	manager := classifierManager()
+	for revision := uint64(1); revision <= 100; revision++ {
+		key := "components.worker"
+		manager.pendingLocal[key] = pendingLocalWrite{revision: revision}
+		manager.handleUpdate(key, encodedComponent(t, "local"), revision)
+	}
+	if len(manager.pendingLocal) != 0 {
+		t.Fatalf("pending writes after convergence = %#v", manager.pendingLocal)
+	}
 }

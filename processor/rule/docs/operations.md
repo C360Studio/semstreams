@@ -206,23 +206,23 @@ Returns:
 }
 ```
 
-### Update Config at Runtime
+### Update Rules at Runtime
 
 ```go
 changes := map[string]any{
-    "enable_graph_integration": false,
+    "rules": map[string]any{
+        "battery-low": map[string]any{
+            "type": "expression",
+            "conditions": [...],
+        },
+    },
 }
-err := processor.ApplyConfigUpdate(changes)
+err := processor.ApplyConfigUpdate(ctx, changes)
 ```
 
-Dynamically updateable:
-- `enable_graph_integration`
-- `rules` (add/update/remove)
-- `entity_watch_buckets`
-
-`pack_id` is a universally required static producer identity. It must be set before the processor is constructed and
-cannot be added or changed through runtime configuration. Graph integration may be toggled only on a processor that
-already passed that universal boot contract.
+Only `rules` may change live. `pack_id`, graph integration, entity-watch
+patterns, ports, and dependencies are selected at boot. Persist those edits as
+desired configuration and restart the process.
 
 ## Common Issues
 

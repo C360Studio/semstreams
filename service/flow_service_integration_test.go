@@ -66,12 +66,12 @@ func (s *FlowServiceHTTPSuite) SetupTest() {
 		Components: make(config.ComponentConfigs),
 	}
 
-	// Create config manager
-	s.configMgr, err = config.NewConfigManager(baseConfig, s.natsClient, nil)
-	s.Require().NoError(err)
-
 	// Create context for test
 	s.ctx, s.cancel = context.WithTimeout(context.Background(), 30*time.Second)
+
+	// Create config manager
+	s.configMgr, err = config.NewConfigManager(s.ctx, baseConfig, s.natsClient, nil)
+	s.Require().NoError(err)
 
 	// Start config manager
 	err = s.configMgr.Start(s.ctx)
@@ -87,6 +87,7 @@ func (s *FlowServiceHTTPSuite) SetupTest() {
 		MetricsRegistry:   metric.NewMetricsRegistry(),
 		Logger:            slog.Default(),
 		FlowManager:       flowManager,
+		BootSelection:     testBootSelection(s.T(), s.configMgr),
 	}
 
 	s.flowService, err = service.NewFlowServiceFromConfig(nil, deps)

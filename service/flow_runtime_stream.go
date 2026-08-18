@@ -54,7 +54,7 @@ type ErrorResponse struct {
 type FlowStatusPayload struct {
 	DesiredState          flowstore.DesiredState      `json:"desired_state"`
 	EffectiveState        flowstore.EffectiveState    `json:"effective_state"`
-	RestartRequired       bool                        `json:"restart_required"`
+	RestartRequired       *bool                       `json:"restart_required"`
 	DesiredProvenance     *flowstore.ConfigProvenance `json:"desired_provenance,omitempty"`
 	BootAppliedProvenance *flowstore.ConfigProvenance `json:"boot_applied_provenance,omitempty"`
 	Timestamp             int64                       `json:"timestamp"`

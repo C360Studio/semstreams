@@ -90,10 +90,13 @@
 //
 // # Runtime Configuration
 //
-// Rules support dynamic runtime updates via ApplyConfigUpdate():
+// Rule definitions support dynamic runtime updates via ApplyConfigUpdate(ctx, changes):
 //   - Add/remove rules without restart
 //   - Update rule conditions and metadata
 //   - Enable/disable rules on the fly
+//
+// Component configuration, including ports, entity-watch patterns, graph
+// integration, and pack identity, remains immutable until the next boot.
 //
 // # Event Generation
 //

@@ -10,7 +10,6 @@ import (
 
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/processor/rule/expression"
-	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -123,20 +122,22 @@ func TestRuntimeConfigurable_ValidateConfigUpdate(t *testing.T) {
 			errorMsg:  "must have at least one condition",
 		},
 		{
-			name: "valid_entity_watch_buckets",
+			name: "entity_watch_buckets_require_restart",
 			changes: map[string]any{
 				"entity_watch_buckets": map[string][]string{
 					"ENTITY_STATES": {"*.robotics.*.battery.*.*"},
 				},
 			},
-			wantError: false,
+			wantError: true,
+			errorMsg:  "rules",
 		},
 		{
-			name: "valid_graph_integration_toggle",
+			name: "graph_integration_requires_restart",
 			changes: map[string]any{
 				"enable_graph_integration": false,
 			},
-			wantError: false,
+			wantError: true,
+			errorMsg:  "rules",
 		},
 		{
 			name: "graph integration requires pack identity",
@@ -144,7 +145,7 @@ func TestRuntimeConfigurable_ValidateConfigUpdate(t *testing.T) {
 				"enable_graph_integration": true,
 			},
 			wantError: true,
-			errorMsg:  "universally required pack_id",
+			errorMsg:  "rules",
 		},
 	}
 
@@ -164,20 +165,20 @@ func TestRuntimeConfigurable_ValidateConfigUpdate(t *testing.T) {
 	}
 }
 
-func TestValidateConfigUpdateAllowsGraphIntegrationWithStablePackIdentity(t *testing.T) {
+func TestValidateConfigUpdateRejectsGraphIntegrationWithStablePackIdentity(t *testing.T) {
 	processor := &Processor{config: &Config{PackID: "runtime-opt-in-pack"}}
-	if err := processor.ValidateConfigUpdate(map[string]any{"enable_graph_integration": true}); err != nil {
-		t.Fatalf("ValidateConfigUpdate: %v", err)
+	if err := processor.ValidateConfigUpdate(map[string]any{"enable_graph_integration": true}); err == nil {
+		t.Fatal("ValidateConfigUpdate accepted non-rule runtime update")
 	}
 }
 
 func TestRuntimeConfigRejectsStaticPackIDUpdate(t *testing.T) {
 	processor := &Processor{config: &Config{PackID: "original-pack"}}
 	changes := map[string]any{"pack_id": "replacement-pack"}
-	if err := processor.ValidateConfigUpdate(changes); err == nil || !strings.Contains(err.Error(), "static") {
+	if err := processor.ValidateConfigUpdate(changes); err == nil || !strings.Contains(err.Error(), "rules") {
 		t.Fatalf("ValidateConfigUpdate pack_id error = %v, want static rejection", err)
 	}
-	if err := processor.ApplyConfigUpdate(changes); err == nil || !strings.Contains(err.Error(), "static") {
+	if err := processor.ApplyConfigUpdate(context.Background(), changes); err == nil || !strings.Contains(err.Error(), "rules") {
 		t.Fatalf("ApplyConfigUpdate pack_id error = %v, want static rejection", err)
 	}
 	if processor.config.PackID != "original-pack" {
@@ -219,7 +220,7 @@ func TestRuntimeConfigurable_ApplyConfigUpdate(t *testing.T) {
 			},
 		}
 
-		err := processor.ApplyConfigUpdate(changes)
+		err := processor.ApplyConfigUpdate(context.Background(), changes)
 		require.NoError(t, err)
 
 		// Verify rule was added
@@ -229,17 +230,18 @@ func TestRuntimeConfigurable_ApplyConfigUpdate(t *testing.T) {
 		require.Contains(t, rules, "battery_test")
 	})
 
-	// Test toggling graph integration
-	t.Run("toggle_graph_integration", func(t *testing.T) {
+	// Non-rule component fields remain fixed until restart.
+	t.Run("reject_graph_integration_toggle", func(t *testing.T) {
+		before := processor.config.EnableGraphIntegration
 		changes := map[string]any{
 			"enable_graph_integration": false,
 		}
 
-		err := processor.ApplyConfigUpdate(changes)
-		require.NoError(t, err)
+		err := processor.ApplyConfigUpdate(context.Background(), changes)
+		require.ErrorContains(t, err, "rules")
 
 		config := processor.GetRuntimeConfig()
-		assert.False(t, config["enable_graph_integration"].(bool))
+		assert.Equal(t, before, config["enable_graph_integration"].(bool))
 	})
 }
 
@@ -391,7 +393,7 @@ func TestDynamicRuleCRUD(t *testing.T) {
 	err := processor.ValidateConfigUpdate(createChanges)
 	require.NoError(t, err)
 
-	err = processor.ApplyConfigUpdate(createChanges)
+	err = processor.ApplyConfigUpdate(context.Background(), createChanges)
 	require.NoError(t, err)
 
 	// READ - Verify rule exists
@@ -419,7 +421,7 @@ func TestDynamicRuleCRUD(t *testing.T) {
 		},
 	}
 
-	err = processor.ApplyConfigUpdate(updateChanges)
+	err = processor.ApplyConfigUpdate(context.Background(), updateChanges)
 	require.NoError(t, err)
 
 	// Verify update
@@ -464,73 +466,4 @@ func createTestRuleDefinition(id string, threshold float64) Definition {
 func marshalRuleDefinition(def Definition) json.RawMessage {
 	data, _ := json.Marshal(def)
 	return data
-}
-
-// TestUpdateWatchBuckets_NotRunning tests bucket-pattern updates before activation.
-func TestUpdateWatchBuckets_NotRunning(t *testing.T) {
-	cfg := mustTestConfig(t, "rule-test-pack")
-	cfg.EntityWatchBuckets = map[string][]string{"ENTITY_STATES": {"*.initial.*.*.*.*"}}
-
-	processor := &Processor{
-		logger:           slog.Default(),
-		config:           &cfg,
-		entityWatcherMap: make(map[string]jetstream.KeyWatcher),
-		// watcherCtx is nil - processor not started
-	}
-
-	// Update patterns when not running should just update config
-	newBuckets := map[string][]string{
-		"ENTITY_STATES": {"*.new.pattern.*.*.*", "*.second.pattern.*.*.*"},
-	}
-	err := processor.UpdateWatchBuckets(newBuckets)
-	require.NoError(t, err)
-
-	// Verify config was updated
-	assert.Equal(t, newBuckets, processor.config.EntityWatchBuckets)
-}
-
-// TestUpdateWatchBuckets_AddRemove tests adding and removing bucket patterns.
-func TestUpdateWatchBuckets_AddRemove(t *testing.T) {
-	cfg := mustTestConfig(t, "rule-test-pack")
-
-	processor := &Processor{
-		logger:           slog.Default(),
-		config:           &cfg,
-		entityWatcherMap: make(map[string]jetstream.KeyWatcher),
-		entityWatchers:   make([]jetstream.KeyWatcher, 0),
-		// watcherCtx is nil - processor not started, so this tests the config-only path
-	}
-
-	// Start with no patterns
-	assert.Empty(t, processor.config.EntityWatchBuckets)
-
-	// Add some patterns
-	buckets1 := map[string][]string{"ENTITY_STATES": {"*.pattern1.*.*.*.*", "*.pattern2.*.*.*.*"}}
-	err := processor.UpdateWatchBuckets(buckets1)
-	require.NoError(t, err)
-	assert.Equal(t, buckets1, processor.config.EntityWatchBuckets)
-
-	// Update to different patterns (remove pattern1, keep pattern2, add pattern3)
-	buckets2 := map[string][]string{"ENTITY_STATES": {"*.pattern2.*.*.*.*", "*.pattern3.*.*.*.*"}}
-	err = processor.UpdateWatchBuckets(buckets2)
-	require.NoError(t, err)
-	assert.Equal(t, buckets2, processor.config.EntityWatchBuckets)
-
-	// Clear all patterns
-	err = processor.UpdateWatchBuckets(map[string][]string{})
-	require.NoError(t, err)
-	assert.Empty(t, processor.config.EntityWatchBuckets)
-}
-
-// TestStopWatcherForBucketPattern_NotExists tests stopping a non-existent watcher.
-func TestStopWatcherForBucketPattern_NotExists(t *testing.T) {
-	processor := &Processor{
-		logger:           slog.Default(),
-		entityWatcherMap: make(map[string]jetstream.KeyWatcher),
-		entityWatchers:   make([]jetstream.KeyWatcher, 0),
-	}
-
-	// Stopping a non-existent watcher should not error
-	err := processor.stopWatcherForBucketPattern("ENTITY_STATES", "*.nonexistent.*.*.*.*")
-	require.NoError(t, err)
 }

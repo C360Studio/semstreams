@@ -1,7 +1,7 @@
-// Package config provides configuration management for StreamKit applications.
+// Package config provides configuration management for SemStreams applications.
 //
-// This package handles loading, validation, and dynamic updates of application
-// configuration from JSON files, environment variables, and NATS KV store.
+// This package handles loading, validation, boot selection, and durable desired
+// configuration from JSON files, environment variables, and NATS KV.
 //
 // # Core Components
 //
@@ -11,9 +11,9 @@
 // SafeConfig: Thread-safe wrapper using RWMutex and deep cloning to prevent
 // concurrent access issues and accidental mutations.
 //
-// Manager: Manages the complete lifecycle of configuration including
-// initialization, NATS KV watching, change notifications via channels, and
-// graceful shutdown with timeout handling.
+// Manager: Arbitrates file and KV configuration at boot, keeps an in-memory
+// authoring view synchronized with durable desired state, and owns its watchers.
+// Post-boot writes do not mutate the process's sealed component composition.
 //
 // Loader: Loads configuration with layer merging (base + overrides) and
 // environment variable substitution for flexible deployment scenarios.
@@ -32,26 +32,24 @@
 //		log.Fatal(err)
 //	}
 //
-// # Dynamic Configuration
+// # Durable Desired Configuration
 //
-// Using Manager for runtime updates via NATS KV:
+// Using Manager to observe and author next-boot configuration via NATS KV:
 //
-//	cm, err := config.NewConfigManager(cfg, natsClient, logger)
+//	cm, err := config.NewConfigManager(ctx, cfg, natsClient, logger)
 //	if err != nil {
 //		log.Fatal(err)
 //	}
 //
-//	// Start watching for config changes
+//	// Start synchronizing the desired-state authoring view.
 //	if err := cm.Start(ctx); err != nil {
 //		log.Fatal(err)
 //	}
 //	defer cm.Stop(5 * time.Second)
 //
-//	// Subscribe to specific config changes
-//	updates := cm.OnChange("services.*")
-//	for update := range updates {
-//		log.Printf("Service config changed: %s", update.Key)
-//	}
+//	// Read the synchronized desired configuration. Composition roots select
+//	// their immutable boot snapshot before constructing components.
+//	desired := cm.GetConfig().Get()
 //
 // # Thread-Safe Access
 //

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/c360studio/semstreams/flowstore"
 	"github.com/c360studio/semstreams/natsclient"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
@@ -13,13 +14,17 @@ import (
 // agentictools.FlowStateReader interface so the monitor executor stays free
 // of a direct flowstore import.
 type flowStateAdapter struct {
-	mgr FlowManager
+	mgr       FlowManager
+	selection *flowstore.BootSelection
 }
 
 func (a *flowStateAdapter) Get(ctx context.Context, id string) (agentictools.FlowState, error) {
 	flow, err := a.mgr.Get(ctx, id)
 	if err != nil {
 		return agentictools.FlowState{}, err
+	}
+	if a.selection != nil {
+		a.selection.Decorate(flow)
 	}
 	state := agentictools.FlowState{
 		DesiredState:    string(flow.DesiredState),
@@ -49,7 +54,7 @@ func (a *flowStateAdapter) Get(ctx context.Context, id string) (agentictools.Flo
 // they're the same physical bucket, different access pattern (scan vs
 // point-get). ToolDependencies.LoopsBucket is the single source of truth
 // for both.
-func registerFlowMonitor(tools *agentictools.ExecutorRegistry, natsClient *natsclient.Client, flowMgr FlowManager, logger *slog.Logger, bucketName string) error {
+func registerFlowMonitor(tools *agentictools.ExecutorRegistry, natsClient *natsclient.Client, flowMgr FlowManager, selection *flowstore.BootSelection, logger *slog.Logger, bucketName string) error {
 	if natsClient == nil {
 		logger.Warn("monitor_flow tool disabled: no NATS client provided")
 		return nil
@@ -59,7 +64,7 @@ func registerFlowMonitor(tools *agentictools.ExecutorRegistry, natsClient *natsc
 		return nil
 	}
 
-	adapter := &flowStateAdapter{mgr: flowMgr}
+	adapter := &flowStateAdapter{mgr: flowMgr, selection: selection}
 	executor := agentictools.NewFlowMonitorExecutor(lazyLoopsKV{client: natsClient, bucket: bucketName}, adapter, logger)
 
 	if err := tools.RegisterTool(agentictools.FlowMonitorToolName, executor); err != nil {

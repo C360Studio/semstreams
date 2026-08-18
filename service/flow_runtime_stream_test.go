@@ -1341,7 +1341,7 @@ func TestFlowWatcher_SendsStatusOnChange(t *testing.T) {
 					require.NoError(t, err)
 					assert.Equal(t, string(tt.updatedState), payload["desired_state"])
 					assert.Equal(t, string(flowstore.EffectiveUnknown), payload["effective_state"])
-					assert.Equal(t, false, payload["restart_required"])
+					assert.Nil(t, payload["restart_required"])
 
 					receivedCount++
 

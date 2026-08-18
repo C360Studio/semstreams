@@ -92,8 +92,7 @@ func ExampleSafeConfig_Update() {
 	// Output: Configuration updated atomically
 }
 
-// ExampleManager demonstrates the complete lifecycle of dynamic
-// configuration management with NATS KV watching.
+// ExampleManager demonstrates durable configuration management with NATS KV.
 func ExampleManager() {
 	// This example shows the complete pattern, but cannot run without NATS
 	// In real usage:
@@ -104,28 +103,20 @@ func ExampleManager() {
 	// cfg, err := loader.Load()
 
 	// 2. Create Manager with NATS client
-	// cm, err := config.NewConfigManager(cfg, natsClient, logger)
+	// ctx := context.Background()
+	// cm, err := config.NewConfigManager(ctx, cfg, natsClient, logger)
 	// if err != nil {
 	//     log.Fatal(err)
 	// }
 
-	// 3. Start watching for changes
-	// ctx := context.Background()
+	// 3. Start the manager
 	// if err := cm.Start(ctx); err != nil {
 	//     log.Fatal(err)
 	// }
 	// defer cm.Stop(5 * time.Second)
 
-	// 4. Subscribe to configuration changes
-	// updates := cm.OnChange("components.*")
-	// go func() {
-	//     for update := range updates {
-	//         log.Printf("Component config changed: %s = %v",
-	//             update.Key, update.Value)
-	//     }
-	// }()
-
-	// 5. Push local changes to NATS KV
+	// 4. Push local desired changes to NATS KV. Runtime composition remains
+	// sealed until the next process boot.
 	// safeConfig := cm.GetConfig()
 	// safeConfig.Update(func(cfg *config.Config) {
 	//     cfg.Components["new-component"] = config.ComponentConfig{
@@ -135,36 +126,8 @@ func ExampleManager() {
 	// })
 	// cm.PushToKV(ctx)
 
-	fmt.Println("Dynamic configuration management")
-	// Output: Dynamic configuration management
-}
-
-// ExampleManager_OnChange demonstrates subscribing to specific
-// configuration change patterns.
-func ExampleManager_OnChange() {
-	// Assume we have a running Manager
-	// cm := getConfigManager()
-
-	// Subscribe to all service configuration changes
-	// serviceUpdates := cm.OnChange("services.*")
-
-	// Subscribe to specific component changes
-	// componentUpdates := cm.OnChange("components.my-component")
-
-	// Subscribe to platform configuration
-	// platformUpdates := cm.OnChange("platform")
-
-	// Process updates
-	// go func() {
-	//     for update := range serviceUpdates {
-	//         log.Printf("Service updated: %s", update.Key)
-	//         // React to configuration change
-	//         handleServiceUpdate(update)
-	//     }
-	// }()
-
-	fmt.Println("Subscribed to configuration changes")
-	// Output: Subscribed to configuration changes
+	fmt.Println("Durable configuration management")
+	// Output: Durable configuration management
 }
 
 // Example_componentAccess demonstrates type-safe component configuration access.

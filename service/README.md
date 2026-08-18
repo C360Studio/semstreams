@@ -512,7 +512,9 @@ type Dependencies struct {
     MetricsRegistry *metric.MetricsRegistry   // Optional: Prometheus metrics
     Logger          *slog.Logger              // Optional: structured logger (defaults to slog.Default())
     Platform        types.PlatformMeta        // Required: platform identity (org + platform)
-    Manager   *config.Manager     // Optional: centralized configuration management
+    Manager         *config.Manager           // Required: desired configuration manager
+    FlowManager     *flowstore.Manager        // Required: shared durable flow manager
+    BootSelection   *flowstore.BootSelection  // Required: immutable composition selected at boot
 }
 ```
 
@@ -544,14 +546,6 @@ Starts all created services in registration order with proper error handling.
 
 Stops all services in reverse order, passing the exact caller-owned shutdown context to each service.
 
-#### `(cm *ComponentManager) ListComponents() []component.Discoverable`
-
-Returns all managed components for introspection and monitoring.
-
-#### `(cm *ComponentManager) GetComponent(name string) (component.Discoverable, bool)`
-
-Retrieves a specific managed component by name. Returns false if component not found.
-
 ### Interfaces
 
 #### `HTTPHandler`
@@ -565,9 +559,9 @@ type HTTPHandler interface {
 
 Optional interface for services that want to expose HTTP endpoints. Manager automatically registers handlers and aggregates OpenAPI documentation.
 
-Service configuration is restart-only. KV updates change desired next-boot
-state; `GET /services` reports whether those changes require restart. Component
-runtime reconfiguration remains a separate ComponentManager concern.
+Service and component configuration are restart-only. KV and flow authoring
+updates change desired next-boot state; they do not mutate the sealed runtime.
+Dedicated rule-definition hot reload is the sole live configuration exception.
 
 ## Architecture
 

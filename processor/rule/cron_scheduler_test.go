@@ -3,7 +3,9 @@ package rule
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -22,6 +24,53 @@ type recordingExecutor struct {
 	errOnce error // returned for the first call only when set; subsequent calls succeed
 	delay   time.Duration
 	panicOn string // panic when action.Subject equals this token
+}
+
+type contextProbeExecutor struct {
+	want     context.Context
+	entered  chan struct{}
+	finished chan struct{}
+	waitDone bool
+}
+
+func (e *contextProbeExecutor) Execute(ctx context.Context, _ Action, _ *ExecutionContext) error {
+	if ctx != e.want {
+		panic("cron action did not receive the exact Start context")
+	}
+	close(e.entered)
+	if e.waitDone {
+		<-ctx.Done()
+	}
+	close(e.finished)
+	return ctx.Err()
+}
+
+type concurrentProbeExecutor struct {
+	entered chan string
+	release chan struct{}
+}
+
+func (e *concurrentProbeExecutor) Execute(_ context.Context, action Action, _ *ExecutionContext) error {
+	e.entered <- action.Subject
+	<-e.release
+	return nil
+}
+
+type blockingPutBucket struct {
+	*mockKVBucket
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingPutBucket) Put(ctx context.Context, key string, value []byte) (uint64, error) {
+	b.once.Do(func() { close(b.entered) })
+	select {
+	case <-b.release:
+		return b.mockKVBucket.Put(ctx, key, value)
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
 }
 
 func (r *recordingExecutor) Execute(_ context.Context, action Action, _ *ExecutionContext) error {
@@ -58,6 +107,31 @@ func newSchedulerForTest(t *testing.T, exec ActionExecutorInterface) *CronSchedu
 		t.Fatalf("NewCronScheduler = %v, want nil", err)
 	}
 	return s
+}
+
+func startCronSchedulerForTest(ctx context.Context, t *testing.T, s *CronScheduler) {
+	t.Helper()
+	if err := s.Start(ctx); err != nil {
+		t.Fatalf("Start = %v, want nil", err)
+	}
+	t.Cleanup(s.Stop)
+}
+
+func waitForCronStopping(t *testing.T, s *CronScheduler) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s.mu.Lock()
+		stopping := s.stopping
+		s.mu.Unlock()
+		if stopping {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("scheduler did not enter stopping state")
+		}
+		runtime.Gosched()
+	}
 }
 
 func cronRuleForTest(t *testing.T, mutate func(*Definition)) *CronRule {
@@ -142,10 +216,7 @@ func TestCronScheduler_StartTwiceFails(t *testing.T) {
 	if err := s.Start(ctx); err != nil {
 		t.Fatalf("first Start = %v, want nil", err)
 	}
-	defer func() {
-		stopCtx := s.Stop()
-		<-stopCtx.Done()
-	}()
+	defer s.Stop()
 
 	if err := s.Start(ctx); err == nil {
 		t.Fatal("second Start err = nil, want non-nil")
@@ -159,14 +230,262 @@ func TestCronScheduler_StartRejectsNilContext(t *testing.T) {
 	}
 }
 
+func TestCronScheduler_StartRejectsCanceledContext(t *testing.T) {
+	s := newSchedulerForTest(t, &recordingExecutor{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := s.Start(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Start(canceled) = %v, want context.Canceled", err)
+	}
+}
+
 func TestCronScheduler_StopOnNeverStartedIsSafe(t *testing.T) {
 	s := newSchedulerForTest(t, &recordingExecutor{})
-	stopCtx := s.Stop()
+	s.Stop()
+}
+
+func TestCronScheduler_HotRegisteredRuleReceivesExactStartContext(t *testing.T) {
+	type contextKey string
+	ctx := context.WithValue(context.Background(), contextKey("owner"), "processor")
+	exec := &contextProbeExecutor{
+		want:     ctx,
+		entered:  make(chan struct{}),
+		finished: make(chan struct{}),
+	}
+	s := newSchedulerForTest(t, exec)
+	startCronSchedulerForTest(ctx, t, s)
+
+	rule := cronRuleForTest(t, nil)
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register after Start = %v", err)
+	}
+	s.fire(rule.ID())
+
 	select {
-	case <-stopCtx.Done():
-		// Already-closed context; expected.
+	case <-exec.finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("hot-registered rule did not finish")
+	}
+}
+
+func TestCronScheduler_CancellationReachesBlockedAction(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	exec := &contextProbeExecutor{
+		want:     ctx,
+		entered:  make(chan struct{}),
+		finished: make(chan struct{}),
+		waitDone: true,
+	}
+	s := newSchedulerForTest(t, exec)
+	rule := cronRuleForTest(t, nil)
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	startCronSchedulerForTest(ctx, t, s)
+
+	fired := make(chan struct{})
+	go func() {
+		s.fire(rule.ID())
+		close(fired)
+	}()
+	select {
+	case <-exec.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("action did not start")
+	}
+	cancel()
+	select {
+	case <-exec.finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("action did not observe Start context cancellation")
+	}
+	select {
+	case <-fired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fire did not join canceled action")
+	}
+}
+
+func TestCronScheduler_DistinctRulesDispatchConcurrently(t *testing.T) {
+	exec := &concurrentProbeExecutor{
+		entered: make(chan string, 2),
+		release: make(chan struct{}),
+	}
+	s := newSchedulerForTest(t, exec)
+	first := cronRuleForTest(t, func(d *Definition) {
+		d.ID += "-first"
+		d.Actions = []Action{{Type: ActionTypePublish, Subject: "first"}}
+	})
+	second := cronRuleForTest(t, func(d *Definition) {
+		d.ID += "-second"
+		d.Actions = []Action{{Type: ActionTypePublish, Subject: "second"}}
+	})
+	for _, rule := range []*CronRule{first, second} {
+		if err := s.Register(rule); err != nil {
+			t.Fatalf("Register(%s) = %v", rule.ID(), err)
+		}
+	}
+	startCronSchedulerForTest(context.Background(), t, s)
+
+	var fires sync.WaitGroup
+	fires.Add(2)
+	go func() { defer fires.Done(); s.fire(first.ID()) }()
+	go func() { defer fires.Done(); s.fire(second.ID()) }()
+	seen := make(map[string]bool, 2)
+	for range 2 {
+		select {
+		case subject := <-exec.entered:
+			seen[subject] = true
+		case <-time.After(2 * time.Second):
+			t.Fatal("distinct rules did not enter concurrently")
+		}
+	}
+	close(exec.release)
+	fires.Wait()
+	if !seen["first"] || !seen["second"] {
+		t.Fatalf("entered subjects = %v, want first and second", seen)
+	}
+}
+
+func TestCronScheduler_SameRuleOverlappingFireIsSkipped(t *testing.T) {
+	exec := &concurrentProbeExecutor{
+		entered: make(chan string, 1),
+		release: make(chan struct{}),
+	}
+	s := newSchedulerForTest(t, exec)
+	rule := cronRuleForTest(t, nil)
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	startCronSchedulerForTest(context.Background(), t, s)
+
+	firstDone := make(chan struct{})
+	go func() {
+		s.fire(rule.ID())
+		close(firstDone)
+	}()
+	select {
+	case <-exec.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first fire did not enter")
+	}
+	secondDone := make(chan struct{})
+	go func() {
+		s.fire(rule.ID())
+		close(secondDone)
+	}()
+	select {
+	case <-secondDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("overlapping same-rule fire queued instead of being skipped")
+	}
+	close(exec.release)
+	select {
+	case <-firstDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first fire did not finish")
+	}
+}
+
+func TestCronScheduler_DeregisterOrdersBeforeAndAfterAdmission(t *testing.T) {
+	exec := &concurrentProbeExecutor{
+		entered: make(chan string, 1),
+		release: make(chan struct{}),
+	}
+	s := newSchedulerForTest(t, exec)
+	before := cronRuleForTest(t, func(d *Definition) { d.ID += "-before" })
+	if err := s.Register(before); err != nil {
+		t.Fatalf("Register(before) = %v", err)
+	}
+	startCronSchedulerForTest(context.Background(), t, s)
+	s.Deregister(before.ID())
+	s.fire(before.ID())
+	select {
+	case subject := <-exec.entered:
+		t.Fatalf("deregister-before-admission dispatched %q", subject)
 	default:
-		t.Fatal("Stop() on never-started scheduler returned an open context")
+	}
+
+	after := cronRuleForTest(t, func(d *Definition) { d.ID += "-after" })
+	if err := s.Register(after); err != nil {
+		t.Fatalf("Register(after) = %v", err)
+	}
+	fired := make(chan struct{})
+	go func() {
+		s.fire(after.ID())
+		close(fired)
+	}()
+	select {
+	case <-exec.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("admitted fire did not enter")
+	}
+	s.Deregister(after.ID())
+	close(exec.release)
+	select {
+	case <-fired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("deregister-after-admission prevented admitted fire from joining")
+	}
+	s.fire(after.ID())
+	select {
+	case subject := <-exec.entered:
+		t.Fatalf("post-deregister fire dispatched %q", subject)
+	default:
+	}
+}
+
+func TestCronScheduler_ConcurrentLifecycleOperationsJoin(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := newSchedulerForTest(t, &recordingExecutor{})
+	if err := s.Start(ctx); err != nil {
+		t.Fatalf("Start = %v", err)
+	}
+
+	rules := make([]*CronRule, 16)
+	for i := range rules {
+		rules[i] = cronRuleForTest(t, func(d *Definition) {
+			d.ID = fmt.Sprintf("%s-%d", d.ID, i)
+		})
+	}
+	begin := make(chan struct{})
+	var operations sync.WaitGroup
+	for _, rule := range rules {
+		operations.Add(1)
+		go func() {
+			defer operations.Done()
+			<-begin
+			if err := s.Register(rule); err != nil {
+				return
+			}
+			s.fire(rule.ID())
+			s.Deregister(rule.ID())
+		}()
+	}
+	operations.Add(3)
+	go func() {
+		defer operations.Done()
+		<-begin
+		cancel()
+	}()
+	for range 2 {
+		go func() {
+			defer operations.Done()
+			<-begin
+			s.Stop()
+		}()
+	}
+	close(begin)
+	done := make(chan struct{})
+	go func() {
+		operations.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("concurrent register/deregister/fire/cancel/Stop did not join")
 	}
 }
 
@@ -186,9 +505,8 @@ func TestCronScheduler_FireDispatchesAllActions(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	// Start sets parentCtx; required by fire's nil-check.
 	ctx := context.Background()
-	s.parentCtx = ctx
+	startCronSchedulerForTest(ctx, t, s)
 
 	s.fire(rule.ID())
 
@@ -212,6 +530,7 @@ func TestCronScheduler_GraphGuardBlocksDispatch(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	s.fire(rule.ID())
 	if got := exec.callCount(); got != 0 {
@@ -234,7 +553,7 @@ func TestCronScheduler_FireFireEveryNGate(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	// Tick 6 times. With N=3, only ticks 3 and 6 fire actions → 2 dispatches.
 	for i := 0; i < 6; i++ {
@@ -255,7 +574,7 @@ func TestCronScheduler_FireCooldownGate(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	// First fire dispatches; second within 10s is skipped by cooldown.
 	s.fire(rule.ID())
@@ -277,7 +596,7 @@ func TestCronScheduler_FireInflightGuard(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -306,7 +625,7 @@ func TestCronScheduler_FirePanicRecover(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	// If recover were missing this would crash the test goroutine.
 	s.fire(rule.ID())
@@ -320,7 +639,7 @@ func TestCronScheduler_FireUnknownRuleIsNoop(t *testing.T) {
 	// closure's map lookup. Dropping silently is correct.
 	exec := &recordingExecutor{}
 	s := newSchedulerForTest(t, exec)
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	s.fire("never-registered")
 
@@ -343,7 +662,7 @@ func TestCronScheduler_FireSurvivesActionError(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	s.fire(rule.ID())
 
@@ -369,13 +688,7 @@ func TestCronScheduler_StartIntegratesWithRegister(t *testing.T) {
 		t.Fatalf("Start = %v", err)
 	}
 
-	stopCtx := s.Stop()
-	select {
-	case <-stopCtx.Done():
-		// Drained cleanly.
-	case <-time.After(2 * time.Second):
-		t.Fatal("Stop drain timed out")
-	}
+	s.Stop()
 }
 
 func TestCronScheduler_StartActuallyFiresFromRobfig(t *testing.T) {
@@ -405,10 +718,7 @@ func TestCronScheduler_StartActuallyFiresFromRobfig(t *testing.T) {
 	if err := s.Start(ctx); err != nil {
 		t.Fatalf("Start = %v", err)
 	}
-	defer func() {
-		stopCtx := s.Stop()
-		<-stopCtx.Done()
-	}()
+	defer s.Stop()
 
 	deadline := time.Now().Add(1500 * time.Millisecond)
 	for time.Now().Before(deadline) {
@@ -418,6 +728,73 @@ func TestCronScheduler_StartActuallyFiresFromRobfig(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Errorf("expected at least 1 fire from robfig within 1.5s, got %d", exec.callCount())
+}
+
+func TestCronScheduler_StopFencesAndJoinsActionAndTracker(t *testing.T) {
+	exec := &concurrentProbeExecutor{
+		entered: make(chan string, 1),
+		release: make(chan struct{}),
+	}
+	bucket := &blockingPutBucket{
+		mockKVBucket: newMockKVBucket(),
+		entered:      make(chan struct{}),
+		release:      make(chan struct{}),
+	}
+	s, err := NewCronScheduler(CronSchedulerConfig{
+		Executor: exec,
+		Tracker:  NewScheduleTracker(bucket, slog.Default()),
+		Logger:   slog.Default(),
+	})
+	if err != nil {
+		t.Fatalf("NewCronScheduler = %v", err)
+	}
+	rule := cronRuleForTest(t, func(d *Definition) {
+		d.Schedule = "@every 1s"
+	})
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start = %v", err)
+	}
+
+	select {
+	case <-exec.entered:
+	case <-time.After(2500 * time.Millisecond):
+		t.Fatal("scheduled action did not enter")
+	}
+	stopDone := make(chan struct{})
+	go func() {
+		s.Stop()
+		close(stopDone)
+	}()
+	waitForCronStopping(t, s)
+	select {
+	case <-stopDone:
+		t.Fatal("Stop returned before the admitted action finished")
+	default:
+	}
+	if err := s.Register(cronRuleForTest(t, func(d *Definition) { d.ID += "-late" })); err == nil {
+		t.Fatal("Register while stopping = nil, want rejection")
+	}
+
+	close(exec.release)
+	select {
+	case <-bucket.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("tracker write did not enter after action completion")
+	}
+	select {
+	case <-stopDone:
+		t.Fatal("Stop returned before the admitted tracker write finished")
+	default:
+	}
+	close(bucket.release)
+	select {
+	case <-stopDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not join the completed action and tracker write")
+	}
 }
 
 // Sanity check: atomic counters in cronEntry behave under contention. Not
@@ -471,7 +848,7 @@ func TestCronScheduler_FirePersistsLastFiredRecord(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	before := time.Now()
 	s.fire(rule.ID())
@@ -501,7 +878,7 @@ func TestCronScheduler_FireWithNilTrackerNoops(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 	s.fire(rule.ID()) // must not panic
 	if exec.callCount() != 1 {
 		t.Errorf("Execute calls = %d, want 1", exec.callCount())
@@ -517,7 +894,7 @@ func TestCronScheduler_FireOverwritesPriorRecord(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	s.fire(rule.ID())
 	first, err := tracker.LastFiredAt(context.Background(), rule.ID())
@@ -649,7 +1026,7 @@ func TestCronScheduler_RestoreFromTracker_EnforcesCooldownAcrossRestart(t *testi
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	// Pretend the previous process fired one minute ago and persisted.
 	prev := time.Now().Add(-1 * time.Minute)
@@ -681,7 +1058,7 @@ func TestCronScheduler_FireBuildsScheduleContext(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	s.fire(rule.ID())
 
@@ -714,7 +1091,7 @@ func TestCronScheduler_FireScheduleContextSeesPriorFire(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	s.fire(rule.ID())
 	firstFireNanos := time.Now().UnixNano()
@@ -806,7 +1183,7 @@ func TestCronScheduler_Metrics_FireSuccessRecorded(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	s.fire(rule.ID())
 
@@ -827,7 +1204,7 @@ func TestCronScheduler_Metrics_FireErrorRecorded(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	s.fire(rule.ID())
 
@@ -852,7 +1229,7 @@ func TestCronScheduler_Metrics_FirePanicRecordedAsPanic(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	s.fire(rule.ID()) // recover keeps the test alive
 
@@ -872,7 +1249,7 @@ func TestCronScheduler_Metrics_CooldownSkippedRecorded(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	s.fire(rule.ID()) // first fire dispatches
 	s.fire(rule.ID()) // second within 10s is cooldown-skipped
@@ -899,7 +1276,7 @@ func TestCronScheduler_Metrics_FireUpdatesNextFireGauge(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	s.fire(rule.ID())
 
@@ -926,8 +1303,7 @@ func TestCronScheduler_Metrics_SchedulerRunningGauge(t *testing.T) {
 		t.Errorf("running after Start = %f, want 1", got)
 	}
 
-	stopCtx := s.Stop()
-	<-stopCtx.Done()
+	s.Stop()
 	if got := testutil.ToFloat64(m.schedulerRunning); got != 0 {
 		t.Errorf("running after Stop = %f, want 0", got)
 	}
@@ -950,7 +1326,7 @@ func TestCronScheduler_Metrics_PanicWinsOverPartialSuccess(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	s.fire(rule.ID()) // recover keeps the test alive
 
@@ -1013,7 +1389,7 @@ func TestCronScheduler_Metrics_CooldownSkippedDoesNotUpdateNextFire(t *testing.T
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	s.fire(rule.ID()) // first fire dispatches; updates next_fire
 	afterFirstFire := testutil.ToFloat64(m.nextFireTimestampSecs.WithLabelValues(rule.ID()))
@@ -1044,7 +1420,7 @@ func TestCronScheduler_Metrics_InflightSkippedRecorded(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -1155,7 +1531,7 @@ func TestCronFire_DenyShortCircuits(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	s.fire(rule.ID())
 
@@ -1185,7 +1561,7 @@ func TestCronFire_DeniedStatusDistinctFromError(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.parentCtx = context.Background()
+	startCronSchedulerForTest(context.Background(), t, s)
 
 	s.fire(rule.ID())
 

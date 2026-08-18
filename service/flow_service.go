@@ -42,10 +42,11 @@ type FlowServiceConfig struct {
 type FlowService struct {
 	*BaseService
 
-	flowStore  *flowstore.Manager
-	flowEngine *flowengine.Engine
-	configMgr  *config.Manager
-	bootConfig *config.Config
+	flowStore     *flowstore.Manager
+	flowEngine    *flowengine.Engine
+	configMgr     *config.Manager
+	bootConfig    *config.Config
+	bootSelection *flowstore.BootSelection
 
 	// overrideExpiry re-evaluates migration-override expiry on an interval, because
 	// boot-time evaluation cannot see a bridge that lapses while the process runs.
@@ -83,11 +84,11 @@ func NewFlowServiceFromConfig(rawConfig json.RawMessage, deps *Dependencies) (Se
 	if deps.FlowManager == nil {
 		return nil, fmt.Errorf("flow service requires shared flow manager")
 	}
-	flowStore := deps.FlowManager
-	var bootConfig *config.Config
-	if safe := deps.Manager.GetConfig(); safe != nil {
-		bootConfig = safe.Get()
+	if deps.BootSelection == nil {
+		return nil, fmt.Errorf("flow service requires boot selection")
 	}
+	flowStore := deps.FlowManager
+	bootConfig := deps.BootSelection.Config()
 
 	// Create flow engine with metrics
 	flowEngine := flowengine.NewEngine(deps.Manager, flowStore, deps.ComponentRegistry, deps.NATSClient, deps.Logger, deps.MetricsRegistry)
@@ -102,14 +103,15 @@ func NewFlowServiceFromConfig(rawConfig json.RawMessage, deps *Dependencies) (Se
 	)
 
 	service := &FlowService{
-		BaseService: baseService,
-		flowStore:   flowStore,
-		flowEngine:  flowEngine,
-		configMgr:   deps.Manager,
-		bootConfig:  bootConfig,
-		serviceMgr:  deps.ServiceManager,
-		natsClient:  deps.NATSClient,
-		config:      cfg,
+		BaseService:   baseService,
+		flowStore:     flowStore,
+		flowEngine:    flowEngine,
+		configMgr:     deps.Manager,
+		bootConfig:    bootConfig,
+		bootSelection: deps.BootSelection,
+		serviceMgr:    deps.ServiceManager,
+		natsClient:    deps.NATSClient,
+		config:        cfg,
 	}
 
 	return service, nil
@@ -634,6 +636,7 @@ func (fs *FlowService) handleListFlows(w http.ResponseWriter, r *http.Request) {
 		fs.writeJSONError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
+	fs.decorateFlows(flows)
 
 	fs.writeJSON(w, map[string]any{"flows": flows})
 }
@@ -671,6 +674,7 @@ func (fs *FlowService) handleGetFlow(w http.ResponseWriter, r *http.Request, flo
 		http.NotFound(w, r)
 		return
 	}
+	fs.bootSelection.Decorate(flow)
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(flow); err != nil {
@@ -787,6 +791,7 @@ func (fs *FlowService) handleDeployment(w http.ResponseWriter, r *http.Request) 
 		fs.writeJSONError(w, "Deployment succeeded but failed to fetch updated flow", http.StatusInternalServerError)
 		return
 	}
+	fs.bootSelection.Decorate(updatedFlow)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -911,6 +916,7 @@ func (fs *FlowService) startFlowStatusPublisher(ctx context.Context) {
 	// consumers see something immediately on connect. Best-effort: errors are
 	// logged but do not block publisher startup.
 	if flows, err := fs.flowStore.List(ctx); err == nil {
+		fs.decorateFlows(flows)
 		for _, flow := range flows {
 			if flow != nil {
 				fs.publishFlowStatus(ctx, flow)
@@ -952,10 +958,17 @@ func (fs *FlowService) startFlowStatusPublisher(ctx context.Context) {
 					fs.logger.Debug("Failed to observe flow for status publish", "flow_id", flow.ID, "error", err)
 					continue
 				}
+				fs.bootSelection.Decorate(observed)
 				fs.publishFlowStatus(ctx, observed)
 			}
 		}
 	}()
+}
+
+func (fs *FlowService) decorateFlows(flows []*flowstore.Flow) {
+	for _, flow := range flows {
+		fs.bootSelection.Decorate(flow)
+	}
 }
 
 // publishFlowStatus publishes a flow state change to NATS JetStream.

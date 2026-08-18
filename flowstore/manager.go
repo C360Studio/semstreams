@@ -2,17 +2,12 @@ package flowstore
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"sync"
 	"time"
 
-	"github.com/c360studio/semstreams/config"
-	"github.com/c360studio/semstreams/internal/jsoncanon"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
-	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -26,11 +21,6 @@ import (
 type Manager struct {
 	bucket  jetstream.KeyValue  // Raw bucket for operations like Keys()
 	kvStore *natsclient.KVStore // KVStore wrapper for CAS operations
-
-	activationMu sync.RWMutex
-	bootID       string
-	bootConfig   config.ComponentConfigs
-	desired      func() config.ComponentConfigs
 }
 
 // NewManager creates a new flow store
@@ -67,9 +57,9 @@ func (s *Manager) Create(ctx context.Context, flow *Flow) error {
 	}
 
 	// Set defaults before validation
-	if flow.DesiredState == "" {
-		flow.DesiredState = DesiredAbsent
-	}
+	flow.DesiredState = DesiredAbsent
+	flow.DesiredComponents = DesiredComponentSet{}
+	flow.DesiredChangedAt = nil
 
 	// Validate flow structure before saving
 	if err := flow.Validate(); err != nil {
@@ -116,7 +106,6 @@ func (s *Manager) Get(ctx context.Context, id string) (*Flow, error) {
 		return nil, errs.WrapFatal(err, "flowstore", "Get", "unmarshal flow")
 	}
 
-	s.decorate(&flow)
 	return &flow, nil
 }
 
@@ -129,15 +118,20 @@ func (s *Manager) Update(ctx context.Context, flow *Flow) error {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "flowstore", "Update", "flow ID cannot be empty")
 	}
 
-	// Validate flow structure before saving
-	if err := flow.Validate(); err != nil {
-		return err
-	}
-
-	// Get current version from KV
-	current, err := s.Get(ctx, flow.ID)
+	entry, err := s.kvStore.Get(ctx, flow.ID)
 	if err != nil {
 		return errs.WrapTransient(err, "flowstore", "Update", "get current version")
+	}
+	var current Flow
+	if err := json.Unmarshal(entry.Value, &current); err != nil {
+		return errs.WrapFatal(err, "flowstore", "Update", "unmarshal current flow")
+	}
+
+	flow.DesiredState = current.DesiredState
+	flow.DesiredComponents = cloneDesiredComponentSet(current.DesiredComponents)
+	flow.DesiredChangedAt = current.DesiredChangedAt
+	if err := flow.Validate(); err != nil {
+		return err
 	}
 
 	// Check version for optimistic concurrency
@@ -158,11 +152,63 @@ func (s *Manager) Update(ctx context.Context, flow *Flow) error {
 		return errs.WrapFatal(err, "flowstore", "Update", "marshal flow")
 	}
 
-	if _, err := s.kvStore.Put(ctx, flow.ID, data); err != nil {
-		return errs.WrapTransient(err, "flowstore", "Update", "put to KV")
+	if _, err := s.kvStore.Update(ctx, flow.ID, data, entry.Revision); err != nil {
+		if err == natsclient.ErrKVRevisionMismatch {
+			return errs.WrapInvalid(err, "flowstore", "Update", "conflict: flow was modified by another user")
+		}
+		return errs.WrapTransient(err, "flowstore", "Update", "CAS update in KV")
 	}
 
 	return nil
+}
+
+// UpdateDesiredActivation atomically replaces the server-owned desired state
+// and complete desired component bundle using the flow version as its CAS token.
+func (s *Manager) UpdateDesiredActivation(
+	ctx context.Context,
+	id string,
+	expectedVersion int64,
+	state DesiredState,
+	components DesiredComponentSet,
+) (*Flow, error) {
+	if id == "" {
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "flowstore", "UpdateDesiredActivation", "flow ID cannot be empty")
+	}
+	bundle := cloneDesiredComponentSet(components)
+	if err := validateDesiredActivation(state, bundle); err != nil {
+		return nil, errs.WrapInvalid(err, "flowstore", "UpdateDesiredActivation", "invalid activation")
+	}
+	entry, err := s.kvStore.Get(ctx, id)
+	if err != nil {
+		return nil, errs.WrapTransient(err, "flowstore", "UpdateDesiredActivation", "get current flow")
+	}
+	var current Flow
+	if err := json.Unmarshal(entry.Value, &current); err != nil {
+		return nil, errs.WrapFatal(err, "flowstore", "UpdateDesiredActivation", "unmarshal current flow")
+	}
+	if current.Version != expectedVersion {
+		return nil, errs.WrapInvalid(
+			fmt.Errorf("version mismatch: expected %d, got %d", current.Version, expectedVersion),
+			"flowstore", "UpdateDesiredActivation", "conflict: flow was modified by another user")
+	}
+	current.DesiredState = state
+	current.DesiredComponents = bundle
+	now := time.Now()
+	current.DesiredChangedAt = &now
+	current.UpdatedAt = now
+	current.LastModified = now
+	current.Version++
+	data, err := marshalPersistedFlow(&current)
+	if err != nil {
+		return nil, errs.WrapFatal(err, "flowstore", "UpdateDesiredActivation", "marshal flow")
+	}
+	if _, err := s.kvStore.Update(ctx, id, data, entry.Revision); err != nil {
+		if natsclient.IsKVConflictError(err) || err == natsclient.ErrKVRevisionMismatch {
+			return nil, errs.WrapInvalid(err, "flowstore", "UpdateDesiredActivation", "conflict: flow was modified by another user")
+		}
+		return nil, errs.WrapTransient(err, "flowstore", "UpdateDesiredActivation", "CAS update flow")
+	}
+	return &current, nil
 }
 
 // Delete removes a flow by ID
@@ -205,58 +251,6 @@ func (s *Manager) Watch(ctx context.Context, pattern string) (jetstream.KeyWatch
 	return s.kvStore.Watch(ctx, pattern)
 }
 
-// SealBootActivation captures the exact desired component snapshot selected by
-// this boot. Later desired writes are compared with this immutable snapshot;
-// they never mutate it.
-func (s *Manager) SealBootActivation(desired *config.Manager) {
-	if desired == nil {
-		return
-	}
-	safe := desired.GetConfig()
-	if safe == nil {
-		return
-	}
-	current := safe.Get()
-	s.activationMu.Lock()
-	s.bootID = newBootID()
-	s.bootConfig = cloneComponentConfigs(current.Components)
-	s.desired = func() config.ComponentConfigs {
-		safe := desired.GetConfig()
-		if safe == nil {
-			return nil
-		}
-		return safe.Get().Components
-	}
-	s.activationMu.Unlock()
-}
-
-func (s *Manager) decorate(flow *Flow) {
-	if flow == nil {
-		return
-	}
-	s.activationMu.RLock()
-	bootID := s.bootID
-	boot := cloneComponentConfigs(s.bootConfig)
-	desiredReader := s.desired
-	s.activationMu.RUnlock()
-
-	flow.EffectiveState = EffectiveUnknown
-	flow.DesiredProvenance = nil
-	flow.BootAppliedProvenance = nil
-	flow.RestartRequired = false
-	if desiredReader == nil || bootID == "" {
-		return
-	}
-	desired := desiredReader()
-	desiredDigest := digestFlowComponents(flow, desired)
-	bootDigest := digestFlowComponents(flow, boot)
-	flow.DesiredProvenance = &ConfigProvenance{Digest: desiredDigest}
-	// The sealed boot digest is sufficient to compute drift, but it is not
-	// evidence that the runtime applied that configuration. Without an
-	// authoritative observer, boot-applied provenance remains unknown.
-	flow.RestartRequired = desiredDigest != bootDigest
-}
-
 func marshalPersistedFlow(flow *Flow) ([]byte, error) {
 	encoded, err := json.Marshal(flow)
 	if err != nil {
@@ -271,35 +265,4 @@ func marshalPersistedFlow(flow *Flow) ([]byte, error) {
 	delete(persisted, "boot_applied_provenance")
 	delete(persisted, "restart_required")
 	return json.Marshal(persisted)
-}
-
-func digestFlowComponents(flow *Flow, components config.ComponentConfigs) string {
-	selected := make(config.ComponentConfigs)
-	if flow.DesiredState != DesiredAbsent {
-		for _, node := range flow.Nodes {
-			if componentConfig, ok := components[node.Name]; ok {
-				if canonical, valid := jsoncanon.Normalize(componentConfig.Config); valid {
-					componentConfig.Config = canonical
-				}
-				selected[node.Name] = componentConfig
-			}
-		}
-	}
-	encoded, _ := json.Marshal(selected)
-	digest := sha256.Sum256(encoded)
-	return fmt.Sprintf("sha256:%x", digest[:])
-}
-
-func cloneComponentConfigs(source config.ComponentConfigs) config.ComponentConfigs {
-	result := make(config.ComponentConfigs, len(source))
-	for name, componentConfig := range source {
-		cloned := componentConfig
-		cloned.Config = append(json.RawMessage(nil), componentConfig.Config...)
-		result[name] = cloned
-	}
-	return result
-}
-
-func newBootID() string {
-	return uuid.NewString()
 }

@@ -19,6 +19,7 @@ import (
 	"log/slog"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/flowstore"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/projection"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
@@ -47,8 +48,9 @@ type ToolDependencies struct {
 	MutationClient      *projection.MutationClient
 	Platform            component.PlatformMeta
 	Logger              *slog.Logger
-	RuleManager         RuleManager         // Pattern-B step 1
-	FlowManager         FlowManager         // Pattern-B step 2
+	RuleManager         RuleManager // Pattern-B step 1
+	FlowManager         FlowManager // Pattern-B step 2
+	BootSelection       *flowstore.BootSelection
 	PersonaManager      PersonaManager      // Pattern-B step 3
 	FlowTemplateManager FlowTemplateManager // Pattern-B step 4
 	ComponentRegistry   *component.Registry // Pattern-B step 5; nil → list_components skipped
@@ -199,11 +201,13 @@ func RegisterBuiltins(ctx context.Context, reg *agentictools.ExecutorRegistry, d
 	// Pattern-B registry-backed tools. A nil manager is a legal skip;
 	// duplicate-name failures propagate.
 	gate("rules", func() error { return registerRules(reg, deps.RuleManager, logger) })
-	gate("flows", func() error { return registerFlows(reg, deps.FlowManager, logger) })
+	gate("flows", func() error { return registerFlows(reg, deps.FlowManager, deps.BootSelection, logger) })
 	gate("personas", func() error { return registerPersonas(reg, deps.PersonaManager, logger) })
 	gate("flow_templates", func() error { return registerFlowTemplates(reg, deps.FlowTemplateManager, logger) })
 	gate("component_catalog", func() error { return registerComponentCatalog(reg, deps.ComponentRegistry, logger) })
-	gate("flow_monitor", func() error { return registerFlowMonitor(reg, deps.NATSClient, deps.FlowManager, logger, loopsBucket) })
+	gate("flow_monitor", func() error {
+		return registerFlowMonitor(reg, deps.NATSClient, deps.FlowManager, deps.BootSelection, logger, loopsBucket)
+	})
 
 	if len(errs) > 0 {
 		return fmt.Errorf("RegisterBuiltins: %w", errors.Join(errs...))

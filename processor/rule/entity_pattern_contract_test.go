@@ -79,22 +79,3 @@ func TestWatcherPatternRejectsBeforeNATSIO(t *testing.T) {
 	require.Equal(t, ErrorCodeEntityWatchBucketUnsupported, classified.Code)
 	require.Empty(t, processor.entityWatcherMap)
 }
-
-func TestUpdateWatchBucketsRejectsBeforeMutation(t *testing.T) {
-	t.Parallel()
-
-	original := map[string][]string{gtypes.BucketEntityStates: {"acme.*.*.*.*.*"}}
-	cfg := mustTestConfig(t, "entity-pattern-update-test")
-	cfg.EntityWatchBuckets = original
-	processor := &Processor{
-		logger:           slog.Default(),
-		config:           &cfg,
-		entityWatcherMap: make(map[string]jetstream.KeyWatcher),
-	}
-
-	require.Error(t, processor.UpdateWatchBuckets(map[string][]string{
-		gtypes.BucketEntityStates: {"acme.ops.robotics.>"},
-	}))
-	require.Equal(t, original, processor.config.EntityWatchBuckets)
-	require.Empty(t, processor.entityWatcherMap)
-}

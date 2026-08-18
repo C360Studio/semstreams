@@ -15,21 +15,11 @@ import (
 
 // ValidateConfigUpdate validates proposed configuration changes
 func (rp *Processor) ValidateConfigUpdate(changes map[string]any) error {
-	for _, field := range []string{
-		"pack_id",
-		"projection_contracts",
-		"projection_targets",
-		"mutation_client",
-		"owned_replacer",
-	} {
-		if _, present := changes[field]; present {
-			return errs.WrapInvalid(
-				fmt.Errorf("%s is static and cannot be updated at runtime", field),
-				"RuleProcessor",
-				"ValidateConfigUpdate",
-				"reject mutation envelope update",
-			)
-		}
+	if len(changes) != 1 {
+		return errs.WrapInvalid(fmt.Errorf("runtime update must contain only rules"), "RuleProcessor", "ValidateConfigUpdate", "reject non-rule update")
+	}
+	if _, ok := changes["rules"]; !ok {
+		return errs.WrapInvalid(fmt.Errorf("runtime update must contain rules"), "RuleProcessor", "ValidateConfigUpdate", "reject non-rule update")
 	}
 	// Validate rule configurations if present
 	if rulesConfig, ok := changes["rules"]; ok {
@@ -46,31 +36,6 @@ func (rp *Processor) ValidateConfigUpdate(changes map[string]any) error {
 				return errs.Wrap(err, "RuleProcessor", "ValidateConfigUpdate",
 					fmt.Sprintf("validate rule %s", ruleID))
 			}
-		}
-	}
-
-	if bucketsValue, ok := changes["entity_watch_buckets"]; ok {
-		buckets, err := parseEntityWatchBuckets(bucketsValue)
-		if err != nil {
-			return errs.WrapInvalid(err, "RuleProcessor", "ValidateConfigUpdate", "parse entity watch buckets")
-		}
-		if err := validateEntityWatchBuckets(buckets); err != nil {
-			return errs.WrapInvalid(err, "RuleProcessor", "ValidateConfigUpdate", "validate entity watch buckets")
-		}
-	}
-
-	// Validate enable_graph_integration if present
-	if integrationVal, ok := changes["enable_graph_integration"]; ok {
-		integration, ok := integrationVal.(bool)
-		if !ok {
-			return errs.WrapInvalid(
-				fmt.Errorf("enable_graph_integration must be boolean, got %T", integrationVal),
-				"RuleProcessor", "ValidateConfigUpdate", "validate integration type")
-		}
-		if integration && (rp.config == nil || rp.config.PackID == "") {
-			return errs.WrapInvalid(
-				fmt.Errorf("rule processor is missing its universally required pack_id"),
-				"RuleProcessor", "ValidateConfigUpdate", "validate graph producer identity")
 		}
 	}
 

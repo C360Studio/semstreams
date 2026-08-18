@@ -177,6 +177,10 @@ func run() (runErr error) {
 	}
 	toolRegistry := agentictools.NewExecutorRegistry()
 	flowManager := buildFlowManager(ctx, natsClient, logger)
+	bootSelection, err := selectBootComposition(ctx, cfg, flowManager)
+	if err != nil {
+		return err
+	}
 	if err := executors.RegisterBuiltins(ctx, toolRegistry, executors.ToolDependencies{
 		NATSClient:              natsClient,
 		MutationClient:          mutationClient,
@@ -184,6 +188,7 @@ func run() (runErr error) {
 		Logger:                  logger,
 		RuleManager:             buildRuleManager(ctx, natsClient, configManager, logger),
 		FlowManager:             flowManager,
+		BootSelection:           bootSelection,
 		PersonaManager:          personaMgr,
 		FlowTemplateManager:     buildFlowTemplateManager(natsClient, logger),
 		ComponentRegistry:       componentRegistry,
@@ -201,6 +206,7 @@ func run() (runErr error) {
 	svcDeps := createServiceDependencies(
 		natsClient, metricsRegistry, logger, platform, configManager, componentRegistry, flowManager,
 	)
+	svcDeps.BootSelection = bootSelection
 	svcDeps.ToolRegistry = toolRegistry
 	svcDeps.PayloadRegistry = payloadReg
 
@@ -410,12 +416,11 @@ func seedMission(ctx context.Context, mgr *lifecycle.Manager, entityID string) e
 // processor reference, kvStore-backed CRUD only, hot-reload deferred).
 func buildRuleManager(ctx context.Context, natsClient *natsclient.Client, configMgr *config.Manager, logger *slog.Logger) executors.RuleManager {
 	rcm := rulepkg.NewConfigManager(nil, configMgr, logger)
-	if err := rcm.InitializeKVStore(natsClient); err != nil {
+	if err := rcm.InitializeKVStore(ctx, natsClient); err != nil {
 		logger.Warn("rule CRUD tools disabled: could not initialise rules KV store",
 			slog.Any("error", err))
 		return nil
 	}
-	_ = ctx
 	return rcm
 }
 
@@ -430,6 +435,25 @@ func buildFlowManager(ctx context.Context, natsClient *natsclient.Client, logger
 		return nil
 	}
 	return mgr
+}
+
+func selectBootComposition(
+	ctx context.Context,
+	cfg *config.Config,
+	manager *flowstore.Manager,
+) (*flowstore.BootSelection, error) {
+	if manager == nil {
+		return nil, fmt.Errorf("runtime composition requires flow store")
+	}
+	flows, err := manager.List(ctx)
+	if err != nil && !strings.Contains(err.Error(), "no keys found") {
+		return nil, fmt.Errorf("list flows for boot selection: %w", err)
+	}
+	selection, err := flowstore.SelectBoot(cfg, flows)
+	if err != nil {
+		return nil, fmt.Errorf("select boot composition: %w", err)
+	}
+	return selection, nil
 }
 
 // buildPersonaManager mirrors cmd/semstreams/main.go; ADR-029 Pattern B. It

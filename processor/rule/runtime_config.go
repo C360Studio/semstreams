@@ -11,56 +11,37 @@ import (
 )
 
 // ApplyConfigUpdate applies validated configuration changes
-func (rp *Processor) ApplyConfigUpdate(changes map[string]any) error {
-	if _, present := changes["pack_id"]; present {
+func (rp *Processor) ApplyConfigUpdate(ctx context.Context, changes map[string]any) error {
+	if ctx == nil {
 		return errs.WrapInvalid(
-			fmt.Errorf("pack_id is static and cannot be updated at runtime"),
-			"RuleProcessor", "ApplyConfigUpdate", "reject producer identity update")
+			fmt.Errorf("context cannot be nil"),
+			"RuleProcessor", "ApplyConfigUpdate", "reject nil context")
 	}
-	var (
-		buckets    map[string][]string
-		hasBuckets bool
-	)
-	if bucketsVal, ok := changes["entity_watch_buckets"]; ok {
-		var err error
-		buckets, err = parseEntityWatchBuckets(bucketsVal)
-		if err != nil {
-			return errs.WrapInvalid(err, "RuleProcessor", "ApplyConfigUpdate", "parse entity watch buckets")
-		}
-		hasBuckets = true
+	if len(changes) != 1 {
+		return errs.WrapInvalid(fmt.Errorf("runtime update must contain only rules"), "RuleProcessor", "ApplyConfigUpdate", "reject non-rule update")
+	}
+	rulesConfig, ok := changes["rules"]
+	if !ok {
+		return errs.WrapInvalid(fmt.Errorf("runtime update must contain rules"), "RuleProcessor", "ApplyConfigUpdate", "reject non-rule update")
+	}
+	rulesMap, ok := rulesConfig.(map[string]any)
+	if !ok {
+		return errs.WrapInvalid(fmt.Errorf("rules configuration must be an object, got %T", rulesConfig), "RuleProcessor", "ApplyConfigUpdate", "reject invalid rules")
 	}
 
 	rp.mu.Lock()
-
-	// Apply rule configuration changes
-	if rulesConfig, ok := changes["rules"]; ok {
-		rulesMap := rulesConfig.(map[string]any) // Validated in ValidateConfigUpdate
-		if err := rp.applyRuleChanges(rulesMap); err != nil {
-			rp.mu.Unlock()
-			return errs.Wrap(err, "RuleProcessor", "ApplyConfigUpdate", "apply rule changes")
-		}
+	defer rp.mu.Unlock()
+	if err := rp.applyRuleChanges(ctx, rulesMap); err != nil {
+		return errs.Wrap(err, "RuleProcessor", "ApplyConfigUpdate", "apply rule changes")
 	}
-
-	// Apply enable_graph_integration changes
-	if integrationVal, ok := changes["enable_graph_integration"]; ok {
-		integration := integrationVal.(bool) // Validated in ValidateConfigUpdate
-		rp.config.EnableGraphIntegration = integration
-		rp.logger.Info("Updated graph integration setting", "enabled", integration)
-	}
-	rp.mu.Unlock()
-
-	// Watch preparation performs NATS I/O outside the processor config mutex.
-	if hasBuckets {
-		if err := rp.UpdateWatchBuckets(buckets); err != nil {
-			return errs.Wrap(err, "RuleProcessor", "ApplyConfigUpdate", "update watch buckets")
-		}
-	}
-
 	return nil
 }
 
-// applyRuleChanges applies dynamic rule configuration changes
-func (rp *Processor) applyRuleChanges(rulesMap map[string]any) error {
+// applyRuleChanges applies dynamic rule configuration changes.
+func (rp *Processor) applyRuleChanges(ctx context.Context, rulesMap map[string]any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// Ensure maps are initialized (struct-literal callers may omit them).
 	if rp.matchCounters == nil {
 		rp.matchCounters = make(map[string]*atomic.Int64)
@@ -72,10 +53,6 @@ func (rp *Processor) applyRuleChanges(rulesMap map[string]any) error {
 		rp.cronRules = make(map[string]*CronRule)
 	}
 
-	// Track existing rules in both registries so we can compute removals at
-	// the end. Cron rules and expression rules share the same ID namespace
-	// — a rule cannot switch types in place; the deletion + re-add path
-	// handles type changes naturally.
 	currentRuleIDs := make(map[string]bool)
 	for ruleID := range rp.rules {
 		currentRuleIDs[ruleID] = true
@@ -84,27 +61,23 @@ func (rp *Processor) applyRuleChanges(rulesMap map[string]any) error {
 		currentRuleIDs[ruleID] = true
 	}
 
-	// Process rule updates/additions
 	for ruleID, ruleConfig := range rulesMap {
-		delete(currentRuleIDs, ruleID) // Remove from deletion list
-
-		ruleMap := ruleConfig.(map[string]any) // Validated in ValidateConfigUpdate
-
+		delete(currentRuleIDs, ruleID)
+		ruleMap := ruleConfig.(map[string]any)
 		if t, _ := ruleMap["type"].(string); t == CronRuleType {
 			if err := rp.applyCronRuleChange(ruleID, ruleMap); err != nil {
 				return err
 			}
 			continue
 		}
-
-		if err := rp.applyExpressionRuleChange(ruleID, ruleMap); err != nil {
+		if err := rp.applyExpressionRuleChange(ctx, ruleID, ruleMap); err != nil {
 			return err
 		}
 	}
-
-	// Remove rules that are no longer configured
 	for ruleID := range currentRuleIDs {
-		rp.removeRule(ruleID)
+		if err := rp.removeRule(ctx, ruleID); err != nil {
+			return err
+		}
 	}
 
 	// Update active rules metric
@@ -205,7 +178,7 @@ func (rp *Processor) attachLifecycleManager(rule Rule) {
 // symmetric with applyCronRuleChange.
 //
 // Caller holds rp.mu.Lock.
-func (rp *Processor) applyExpressionRuleChange(ruleID string, ruleMap map[string]any) error {
+func (rp *Processor) applyExpressionRuleChange(ctx context.Context, ruleID string, ruleMap map[string]any) error {
 	newRule, def, err := rp.createRuleFromConfig(ruleID, ruleMap)
 	if err != nil {
 		return fmt.Errorf("failed to create rule %s: %w", ruleID, err)
@@ -222,7 +195,9 @@ func (rp *Processor) applyExpressionRuleChange(ruleID string, ruleMap map[string
 			rp.cronScheduler.Deregister(ruleID)
 		}
 		delete(rp.cronRules, ruleID)
-		rp.deleteScheduleRecord(ruleID)
+		if err := rp.deleteScheduleRecord(ctx, ruleID); err != nil {
+			return err
+		}
 	}
 
 	rp.rules[ruleID] = newRule
@@ -237,19 +212,22 @@ func (rp *Processor) applyExpressionRuleChange(ruleID string, ruleMap map[string
 // removeRule drops a rule from every registry it might appear in (rules,
 // cronRules, scheduler, definitions, configs, matchCounters). Called from
 // the removals loop in applyRuleChanges. Caller holds rp.mu.Lock.
-func (rp *Processor) removeRule(ruleID string) {
+func (rp *Processor) removeRule(ctx context.Context, ruleID string) error {
 	if _, isCron := rp.cronRules[ruleID]; isCron {
 		if rp.cronScheduler != nil {
 			rp.cronScheduler.Deregister(ruleID)
 		}
 		delete(rp.cronRules, ruleID)
-		rp.deleteScheduleRecord(ruleID)
+		if err := rp.deleteScheduleRecord(ctx, ruleID); err != nil {
+			return err
+		}
 	}
 	delete(rp.rules, ruleID)
 	delete(rp.ruleDefinitions, ruleID)
 	delete(rp.ruleConfigs, ruleID)
 	delete(rp.matchCounters, ruleID)
 	rp.logger.Info("Removed rule", "rule_id", ruleID)
+	return nil
 }
 
 // deleteScheduleRecord clears the persisted last-fired record for a cron
@@ -258,20 +236,16 @@ func (rp *Processor) removeRule(ruleID string) {
 // is purely an observability concern, and a future re-add of the same
 // rule ID will overwrite the record on its first fire.
 //
-// Uses context.Background() because this runs under rp.mu.Lock from
-// hot-reload paths (ApplyConfigUpdate) where no caller-supplied context
-// is available. The KV Delete is fast and idempotent; the underlying
-// NATS client enforces its own request timeout, so an unbounded ctx
-// here is bounded in practice.
-func (rp *Processor) deleteScheduleRecord(ruleID string) {
+// The exact ApplyConfigUpdate context follows the rule mutation through this
+// durability cleanup. No background lifetime is invented under rp.mu.
+func (rp *Processor) deleteScheduleRecord(ctx context.Context, ruleID string) error {
 	if rp.scheduleTracker == nil {
-		return
+		return nil
 	}
-	if err := rp.scheduleTracker.Delete(context.Background(), ruleID); err != nil {
-		rp.logger.Warn("Failed to delete schedule record on rule removal",
-			"rule_id", ruleID,
-			"error", err)
+	if err := rp.scheduleTracker.Delete(ctx, ruleID); err != nil {
+		return fmt.Errorf("delete schedule record for %s: %w", ruleID, err)
 	}
+	return nil
 }
 
 // GetRuntimeConfig returns current runtime configuration

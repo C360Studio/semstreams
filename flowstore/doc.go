@@ -18,10 +18,10 @@
 //   - Canvas layout and connections stored as Flow entities
 //   - Metadata: name, description, desired activation state
 //
-// Next-boot composition (config package):
-//   - FlowEngine translates Flow → ComponentConfigs
-//   - ComponentConfigs stored in semstreams_config KV
-//   - The next successful process boot selects that desired snapshot
+// Next-boot composition:
+//   - FlowEngine translates Flow → an exact server-owned DesiredComponents bundle
+//   - Desired state and the complete bundle are replaced atomically in flowstore
+//   - The next successful process boot combines static config and enabled flow bundles
 //
 // # Key Concepts
 //
@@ -30,8 +30,10 @@
 //   - Nodes: Visual components on canvas (with positions)
 //   - Connections: Edges between node ports
 //   - DesiredState: absent, disabled, enabled
+//   - DesiredComponents: exact server-owned bundle for next-boot composition
 //   - EffectiveState: independent observation; unknown without an observer
-//   - RestartRequired: desired digest differs from the sealed boot digest
+//   - RestartRequired: desired digest differs from the sealed boot digest, or
+//     unknown when no boot selection is available
 //   - Version: Optimistic concurrency control
 //
 // Node vs Component:
@@ -76,13 +78,12 @@
 //  1. FlowEngine.Deploy(flowID) retrieves Flow from flowstore
 //  2. Validates flow structure
 //  3. Translates to ComponentConfigs (using component registry)
-//  4. Writes to semstreams_config KV
-//  5. Updates Flow.DesiredState to disabled
+//  4. Atomically persists the disabled exact bundle in flowstore
 //
-// None of these writes mutates the current process. Flow reads compare the
-// current desired component digest to the boot-sealed digest and report
-// restart_required. Effective state remains unknown unless a separate runtime
-// observer supplies it.
+// None of these writes mutates the current process. The composition root's
+// immutable BootSelection decorates reads with the boot-applied digest and
+// restart_required. Before a selection exists, effective state is unknown and
+// restart_required is null rather than a fabricated false value.
 //
 // # Testing
 //

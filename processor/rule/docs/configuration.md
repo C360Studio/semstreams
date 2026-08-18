@@ -246,24 +246,20 @@ lifetime and has no implicit default or runtime fallback.
 
 ## Runtime Configuration
 
-Some settings can be updated at runtime without restart.
+Rule definitions are the only live configuration exception. Every other field
+is part of the immutable boot envelope.
 
-### Dynamically Updateable
-
-| Setting | Hot Reload | Notes |
-|---------|------------|-------|
-| `enable_graph_integration` | Yes | Takes effect on next action |
-| `rules` (individual) | Yes | Add/update/remove rules |
-| `entity_watch_buckets` | Yes | Watchers added/removed dynamically |
-
-`pack_id` is static and cannot be hot-reloaded. A runtime change may enable graph integration only when the processor
-started with a non-empty stable `pack_id`.
+| Setting | Activation |
+|---------|------------|
+| `rules` (individual) | Live add/update/remove |
+| `enable_graph_integration` | Next successful boot |
+| `entity_watch_buckets` | Next successful boot |
+| `pack_id`, ports, dependencies, consumer settings | Next successful boot |
 
 ### ApplyConfigUpdate
 
 ```go
 changes := map[string]any{
-    "enable_graph_integration": false,
     "rules": map[string]any{
         "battery-low": map[string]any{
             "type": "expression",
@@ -272,7 +268,7 @@ changes := map[string]any{
     },
 }
 
-err := processor.ApplyConfigUpdate(changes)
+err := processor.ApplyConfigUpdate(ctx, changes)
 ```
 
 ### GetRuntimeConfig

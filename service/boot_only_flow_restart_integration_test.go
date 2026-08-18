@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,11 +32,11 @@ type bootOnlyProcess struct {
 	engine  *flowengine.Engine
 }
 
-func TestFlowDesiredActivationAppliesAfterGracefulAndDirtyRestart(t *testing.T) {
+func TestFlowDesiredActivationAppliesAfterTransportCloseAndRestart(t *testing.T) {
 	testNATS := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithFileStorage())
 	ctx := t.Context()
 
-	first := startBootOnlyProcess(t, ctx, testNATS.URL, `{"value":"boot"}`)
+	first := startBootOnlyProcess(t, ctx, testNATS.URL)
 	flow := &flowstore.Flow{
 		ID: "restart-known-answer", Name: "restart-known-answer", DesiredState: flowstore.DesiredAbsent,
 		Nodes: []flowstore.FlowNode{{
@@ -53,10 +54,12 @@ func TestFlowDesiredActivationAppliesAfterGracefulAndDirtyRestart(t *testing.T) 
 	if err := first.engine.Start(ctx, flow.ID); err != nil {
 		t.Fatal(err)
 	}
-	assertBootComponentConfig(t, first.manager, `{"value":"boot"}`)
+	if _, exists := first.manager.components["worker"]; exists {
+		t.Fatal("new desired flow activated before restart")
+	}
 	stopBootOnlyProcess(t, ctx, first)
 
-	second := startBootOnlyProcess(t, ctx, testNATS.URL, `{"value":"file-default"}`)
+	second := startBootOnlyProcess(t, ctx, testNATS.URL)
 	assertBootComponentConfig(t, second.manager, `{"value":"graceful"}`)
 	stored, err := second.flows.Get(ctx, flow.ID)
 	if err != nil {
@@ -81,12 +84,12 @@ func TestFlowDesiredActivationAppliesAfterGracefulAndDirtyRestart(t *testing.T) 
 	// component/config Stop hook; the durable desired write must be sufficient.
 	second.client.GetConnection().Close()
 
-	third := startBootOnlyProcess(t, ctx, testNATS.URL, `{"value":"file-default"}`)
+	third := startBootOnlyProcess(t, ctx, testNATS.URL)
 	assertBootComponentConfig(t, third.manager, `{"value":"dirty"}`)
 	stopBootOnlyProcess(t, ctx, third)
 }
 
-func startBootOnlyProcess(t *testing.T, ctx context.Context, url, fileValue string) *bootOnlyProcess {
+func startBootOnlyProcess(t *testing.T, ctx context.Context, url string) *bootOnlyProcess {
 	t.Helper()
 	client, err := natsclient.NewClient(url, natsclient.WithHealthInterval(0), natsclient.WithMaxReconnects(0))
 	if err != nil {
@@ -96,15 +99,12 @@ func startBootOnlyProcess(t *testing.T, ctx context.Context, url, fileValue stri
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	desired, err := config.NewConfigManager(&config.Config{
+	desired, err := config.NewConfigManager(ctx, &config.Config{
 		Version: "1.0.0",
 		Platform: config.PlatformConfig{
 			Org: "test", ID: "semstreams", InstanceID: "boot-only-restart", Environment: "test",
 		},
-		Components: config.ComponentConfigs{"worker": {
-			Name: "worker-factory", Type: types.ComponentTypeProcessor, Enabled: true,
-			Config: json.RawMessage(fileValue),
-		}},
+		Components: config.ComponentConfigs{},
 	}, client, logger)
 	if err != nil {
 		t.Fatal(err)
@@ -127,8 +127,16 @@ func startBootOnlyProcess(t *testing.T, ctx context.Context, url, fileValue stri
 	}); err != nil {
 		t.Fatal(err)
 	}
+	bootFlows, err := flows.List(ctx)
+	if err != nil && !strings.Contains(err.Error(), "no keys found") {
+		t.Fatal(err)
+	}
+	selection, err := flowstore.SelectBoot(desired.GetConfig().Get(), bootFlows)
+	if err != nil {
+		t.Fatal(err)
+	}
 	service, err := NewComponentManager(nil, &Dependencies{
-		NATSClient: client, Manager: desired, ComponentRegistry: registry,
+		NATSClient: client, Manager: desired, ComponentRegistry: registry, BootSelection: selection,
 	})
 	if err != nil {
 		t.Fatal(err)

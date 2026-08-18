@@ -110,7 +110,7 @@ func TestHotReload_SeedIdempotency(t *testing.T) {
 	defer proc.Stop(context.Background()) //nolint:errcheck
 
 	rcm := NewConfigManager(proc, nil, nil)
-	require.NoError(t, rcm.InitializeKVStore(tc.Client))
+	require.NoError(t, rcm.InitializeKVStore(context.Background(), tc.Client))
 
 	// First seed.
 	require.NoError(t, rcm.SeedFromRuntime(ctx))
@@ -142,7 +142,7 @@ func TestHotReload_SeedRespectsOperatorEdits(t *testing.T) {
 	defer proc.Stop(context.Background()) //nolint:errcheck
 
 	rcm := NewConfigManager(proc, nil, nil)
-	require.NoError(t, rcm.InitializeKVStore(tc.Client))
+	require.NoError(t, rcm.InitializeKVStore(context.Background(), tc.Client))
 
 	// Pre-populate KV with an operator-modified version of rule_alpha before seeding.
 	operatorDef := Definition{
@@ -181,14 +181,14 @@ func TestHotReload_ReconcileFromKV(t *testing.T) {
 	defer proc.Stop(context.Background()) //nolint:errcheck
 
 	rcm := NewConfigManager(proc, nil, nil)
-	require.NoError(t, rcm.InitializeKVStore(tc.Client))
+	require.NoError(t, rcm.InitializeKVStore(context.Background(), tc.Client))
 
 	// Seed the two file-loaded rules so KV is not empty.
 	require.NoError(t, rcm.SeedFromRuntime(ctx))
 
 	// Write a third rule via a separate manager (simulating the CRUD tool path).
 	crudMgr := NewConfigManager(nil, nil, nil)
-	require.NoError(t, crudMgr.InitializeKVStore(tc.Client))
+	require.NoError(t, crudMgr.InitializeKVStore(context.Background(), tc.Client))
 	require.NoError(t, crudMgr.SaveRule(ctx, "rule_gamma", Definition{
 		ID:      "rule_gamma",
 		Type:    "expression",
@@ -241,7 +241,7 @@ func TestHotReload_WatcherPicksUpNewRule(t *testing.T) {
 
 	// Write a third rule via a separate CRUD manager (simulates agent tool write).
 	crudMgr := NewConfigManager(nil, nil, nil)
-	require.NoError(t, crudMgr.InitializeKVStore(tc.Client))
+	require.NoError(t, crudMgr.InitializeKVStore(context.Background(), tc.Client))
 	require.NoError(t, crudMgr.SaveRule(ctx, "rule_gamma", Definition{
 		ID:      "rule_gamma",
 		Type:    "expression",
@@ -301,7 +301,7 @@ func TestHotReload_DebounceCoalescing(t *testing.T) {
 	defer proc.Stop(context.Background()) //nolint:errcheck
 
 	rcm := NewConfigManager(proc, nil, nil)
-	require.NoError(t, rcm.InitializeKVStore(tc.Client))
+	require.NoError(t, rcm.InitializeKVStore(context.Background(), tc.Client))
 	require.NoError(t, rcm.SeedFromRuntime(ctx))
 
 	// Start the watcher so debounce fires reconcileFromKV via the goroutine.
@@ -315,7 +315,7 @@ func TestHotReload_DebounceCoalescing(t *testing.T) {
 
 	// Write 5 distinct rules in a tight loop (~100ms total, well inside the 250ms window).
 	crudMgr := NewConfigManager(nil, nil, nil)
-	require.NoError(t, crudMgr.InitializeKVStore(tc.Client))
+	require.NoError(t, crudMgr.InitializeKVStore(context.Background(), tc.Client))
 
 	newRuleIDs := []string{"burst_1", "burst_2", "burst_3", "burst_4", "burst_5"}
 	for _, id := range newRuleIDs {
@@ -397,7 +397,7 @@ func TestHotReload_KVInitFailure(t *testing.T) {
 	// degraded state via ConfigManager directly — which is the real failure path
 	// we are testing (the hot-reload manager init, not the subscription path).
 	rcm := NewConfigManager(proc, nil, nil)
-	err = rcm.InitializeKVStore(nil)
+	err = rcm.InitializeKVStore(context.Background(), nil)
 	assert.Error(t, err, "InitializeKVStore with nil client must return an error")
 	assert.Contains(t, err.Error(), "NATS client is required")
 

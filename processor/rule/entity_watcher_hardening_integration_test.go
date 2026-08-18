@@ -18,9 +18,9 @@ import (
 
 // TestEntityWatcherHardeningRealNATS exercises the watcher lifecycle against
 // real JetStream KV. Deterministic unit tests cover the exact lock seams; this
-// proof keeps the transport bootstrap, overlapping subscriptions, live
-// coalescing, delete cancellation, dynamic replacement, and shutdown drain in
-// one end-to-end watcher lifecycle.
+// proof keeps transport bootstrap, overlapping boot-selected subscriptions,
+// live coalescing, delete cancellation, and shutdown drain in one end-to-end
+// watcher lifecycle.
 func TestEntityWatcherHardeningRealNATS(t *testing.T) {
 	testClient, err := natsclient.NewSharedTestClient(
 		natsclient.WithJetStream(),
@@ -97,21 +97,6 @@ func TestEntityWatcherHardeningRealNATS(t *testing.T) {
 	require.Never(t, func() bool {
 		return counter.evaluated.Load() > 2
 	}, 500*time.Millisecond, 10*time.Millisecond, "delete must cancel all queued work for the entity")
-
-	// Replace both robotics generations with one logistics generation. The old
-	// physical watchers may still be winding down, but they no longer have
-	// dispatch authority.
-	require.NoError(t, processor.UpdateWatchBuckets(map[string][]string{
-		graph.BucketEntityStates: {"acme.prod.logistics.*.*.*"},
-	}))
-	putWatcherState(t, ctx, kv, "acme.prod.robotics.gcs.drone.retired")
-	putWatcherState(t, ctx, kv, "acme.prod.logistics.fleet.truck.current")
-	require.Eventually(t, func() bool {
-		return counter.evaluated.Load() == 3
-	}, 5*time.Second, 10*time.Millisecond, "replacement generation must evaluate its matching entity")
-	require.Never(t, func() bool {
-		return counter.evaluated.Load() > 3
-	}, 350*time.Millisecond, 10*time.Millisecond, "retired generations must not evaluate")
 
 	require.NoError(t, processor.Stop(context.Background()))
 	stopped = true

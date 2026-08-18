@@ -420,7 +420,7 @@ func TestReconcileFileAndHotReloadUseFrozenTargetIndex(t *testing.T) {
 	require.ErrorContains(t, err, "not reconcile")
 	for _, field := range []string{"pack_id", "projection_contracts", "projection_targets", "mutation_client"} {
 		err = processor.ValidateConfigUpdate(map[string]any{field: "changed"})
-		require.ErrorContains(t, err, "static")
+		require.ErrorContains(t, err, "rules")
 	}
 }
 

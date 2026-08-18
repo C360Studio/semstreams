@@ -10,6 +10,7 @@
 package rule
 
 import (
+	"context"
 	"log/slog"
 	"testing"
 
@@ -73,7 +74,7 @@ func TestApplyConfigUpdate_LifecycleManagerReachesReconciledRules(t *testing.T) 
 		},
 	}
 	require.NoError(t, rp.ValidateConfigUpdate(changes))
-	require.NoError(t, rp.ApplyConfigUpdate(changes))
+	require.NoError(t, rp.ApplyConfigUpdate(context.Background(), changes))
 
 	// The reconciled instance must be an ExpressionRule carrying the Manager.
 	rule, ok := rp.rules[ruleID]

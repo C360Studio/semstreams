@@ -2,26 +2,6 @@
   "version": 1,
   "entries": [
     {
-      "key": "integration-time-sleep|config/manager_integration_test.go|SetupTest|time.Sleep(50 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|config/manager_lifecycle_integration_test.go|TestConfigManager_ConcurrentShutdown|time.Sleep(100 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|config/manager_lifecycle_integration_test.go|TestConfigManager_ShutdownSequence|time.Sleep(10 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|config/manager_lifecycle_integration_test.go|TestConfigManager_ShutdownSequence|time.Sleep(10 * time.Millisecond)|2",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
       "key": "integration-time-sleep|input/udp/udp_nats_integration_test.go|TestIntegration_UDPInput_Integration_MultipleMessages|time.Sleep(100 * time.Millisecond)|1",
       "kind": "migration-debt",
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
@@ -1163,26 +1143,6 @@
     },
     {
       "key": "integration-time-sleep|processor/rule/rule_integration_test.go|TestIntegration_DynamicRuleCRUD|time.Sleep(100 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|processor/rule/rule_integration_test.go|TestIntegration_DynamicWatchPatterns|time.Sleep(300 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|processor/rule/rule_integration_test.go|TestIntegration_DynamicWatchPatterns|time.Sleep(300 * time.Millisecond)|2",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|processor/rule/rule_integration_test.go|TestIntegration_DynamicWatchPatterns|time.Sleep(300 * time.Millisecond)|3",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|processor/rule/rule_integration_test.go|TestIntegration_DynamicWatchPatterns|time.Sleep(300 * time.Millisecond)|4",
       "kind": "migration-debt",
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
     },

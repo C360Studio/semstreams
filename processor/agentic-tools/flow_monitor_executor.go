@@ -41,7 +41,7 @@ type FlowStateReader interface {
 type FlowState struct {
 	DesiredState          string
 	EffectiveState        string
-	RestartRequired       bool
+	RestartRequired       *bool
 	DesiredProvenance     *FlowProvenance
 	BootAppliedProvenance *FlowProvenance
 }
@@ -208,7 +208,7 @@ type flowMonitorResult struct {
 	FlowID                string            `json:"flow_id"`
 	DesiredState          string            `json:"desired_state"`
 	EffectiveState        string            `json:"effective_state"`
-	RestartRequired       bool              `json:"restart_required"`
+	RestartRequired       *bool             `json:"restart_required"`
 	DesiredProvenance     *FlowProvenance   `json:"desired_provenance,omitempty"`
 	BootAppliedProvenance *FlowProvenance   `json:"boot_applied_provenance,omitempty"`
 	TotalLoops            int               `json:"total_loops"`

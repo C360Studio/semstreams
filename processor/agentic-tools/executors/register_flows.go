@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/c360studio/semstreams/flowstore"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
 
@@ -15,13 +16,13 @@ import (
 // A nil manager is a deployment choice (skip + nil); a registry-level
 // failure (duplicate name) propagates so RegisterBuiltins can surface it
 // at boot.
-func registerFlows(tools *agentictools.ExecutorRegistry, manager FlowManager, logger *slog.Logger) error {
+func registerFlows(tools *agentictools.ExecutorRegistry, manager FlowManager, selection *flowstore.BootSelection, logger *slog.Logger) error {
 	if manager == nil {
 		logger.Debug("flow CRUD tools disabled: no FlowManager provided")
 		return nil
 	}
 
-	executor := NewFlowExecutor(manager)
+	executor := NewFlowExecutor(manager, selection)
 	if err := tools.RegisterExecutor(executor); err != nil {
 		return fmt.Errorf("register flow tools: %w", err)
 	}

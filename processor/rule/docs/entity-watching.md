@@ -428,35 +428,12 @@ INFO Started KV watcher bucket="ENTITY_STATES" pattern="acme.*.robotics.*.*.*"
 nats kv watch ENTITY_STATES "acme.*.robotics.*.*.*"
 ```
 
-## Dynamic Pattern Updates
+## Pattern changes
 
-Entity watch patterns can be updated at runtime without restarting the processor. When patterns are changed via `ApplyConfigUpdate()`:
-
-1. **Prepare additions**: Every new transport is created before the desired set is committed; preparation failure
-   stops all prepared additions and leaves the old set intact
-2. **Commit authority**: New generations are published and removed generations are retired atomically under the
-   dispatch gate
-3. **Stop removals**: Retired physical transports are stopped after they lose authority; stop failures are reported
-   but cannot revive them
-4. **Unchanged patterns**: Existing watchers continue uninterrupted
-
-```go
-// Example: Update patterns dynamically
-changes := map[string]any{
-    "entity_watch_buckets": map[string][]string{
-        "ENTITY_STATES": {
-            "acme.*.robotics.*.drone.*",
-            "acme.*.logistics.*.*.*", // New pattern
-        },
-    },
-}
-processor.ApplyConfigUpdate(changes)
-```
-
-This enables:
-- Adding monitoring for new entity types without downtime
-- Removing patterns for decommissioned systems
-- Adjusting scope based on operational needs
+Entity watch patterns are part of the Rule component's boot envelope. Persist
+configuration edits as desired state and restart SemStreams to select the new
+set. `ApplyConfigUpdate(ctx, changes)` accepts only the `rules` field and rejects
+`entity_watch_buckets` before changing watcher authority.
 
 ## Limitations
 

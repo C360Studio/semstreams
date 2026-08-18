@@ -83,7 +83,7 @@ type FlowInfo struct {
 	Name            string `json:"name"`
 	DesiredState    string `json:"desired_state"`
 	EffectiveState  string `json:"effective_state"`
-	RestartRequired bool   `json:"restart_required"`
+	RestartRequired *bool  `json:"restart_required"`
 }
 
 // FlowsResponse represents the response from GET /flowbuilder/flows

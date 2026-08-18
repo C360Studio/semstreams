@@ -70,12 +70,12 @@ func (s *EngineIntegrationSuite) SetupTest() {
 		},
 	}
 
-	// Create config manager
-	s.configMgr, err = config.NewConfigManager(baseConfig, s.natsClient, nil)
-	s.Require().NoError(err)
-
 	// Create context for test
 	s.ctx, s.cancel = context.WithTimeout(context.Background(), 30*time.Second)
+
+	// Create config manager
+	s.configMgr, err = config.NewConfigManager(s.ctx, baseConfig, s.natsClient, nil)
+	s.Require().NoError(err)
 
 	// Start config manager
 	err = s.configMgr.Start(s.ctx)
@@ -91,7 +91,9 @@ func (s *EngineIntegrationSuite) SetupTest() {
 
 func (s *EngineIntegrationSuite) TearDownTest() {
 	// Stop config manager first
-	s.configMgr.Stop(5 * time.Second)
+	if s.configMgr != nil {
+		_ = s.configMgr.Stop(5 * time.Second)
+	}
 	s.cancel()
 
 	// Delete the entire KV bucket to prevent test pollution
@@ -137,18 +139,13 @@ func (s *EngineIntegrationSuite) TestDeployFlow() {
 	s.Require().NoError(err)
 	s.Equal(flowstore.DesiredDisabled, deployed.DesiredState, "flow should be disabled in desired state")
 
-	// Verify component config was created
-	cfg := s.configMgr.GetConfig()
-	currentConfig := cfg.Get()
-
-	s.NotNil(currentConfig.Components, "Components should be created")
-	s.Contains(currentConfig.Components, "udp-1", "UDP component should exist")
-
-	// Verify component config has correct properties
-	udpConfig := currentConfig.Components["udp-1"]
+	// Verify the complete disabled desired bundle was persisted without
+	// mutating generic config authority.
+	udpConfig := deployed.DesiredComponents["udp-1"]
 	s.Equal("input", string(udpConfig.Type), "UDP is an input component")
 	s.Equal("udp", udpConfig.Name, "Name should be the factory name")
-	s.True(udpConfig.Enabled, "Component should be enabled by default on deploy")
+	s.False(udpConfig.Enabled, "Deploy records disabled desired activation")
+	s.NotContains(s.configMgr.GetConfig().Get().Components, "udp-1")
 }
 
 // TestDeployNonExistentFlow tests that deploying a non-existent flow fails
@@ -193,10 +190,8 @@ func (s *EngineIntegrationSuite) TestStartFlow() {
 	s.Require().NoError(err)
 	s.Equal(flowstore.DesiredEnabled, running.DesiredState, "Flow should be running")
 
-	// Verify components are enabled
-	cfg := s.configMgr.GetConfig()
-	currentConfig := cfg.Get()
-	udpConfig := currentConfig.Components["udp-start-1"]
+	// Verify the persisted desired bundle is enabled.
+	udpConfig := running.DesiredComponents["udp-start-1"]
 	s.True(udpConfig.Enabled, "Component should be enabled after start")
 }
 
@@ -258,20 +253,7 @@ func (s *EngineIntegrationSuite) TestStopFlow() {
 	s.Require().NoError(err)
 	s.Equal(flowstore.DesiredDisabled, stopped.DesiredState, "flow should be disabled in desired state")
 
-	// Verify components are disabled. engine.Stop() returns once the flow's
-	// RuntimeState is persisted (asserted above), but disabling the component
-	// in the config manager propagates asynchronously — reading GetConfig()
-	// immediately races that propagation and flaked intermittently under CI
-	// load. Poll for the end-state instead; a real "never disabled" bug still
-	// fails (the poll times out) rather than being masked. The window is
-	// generous (well within the suite's 30s ctx budget) because the async
-	// propagation exceeded a tighter 5s bound under peak CI runner contention
-	// (main CI run 28813286699); widening the poll, not touching prod logic, is
-	// the fix (cf. gh#373). A genuine never-disabled bug still times out.
-	s.Eventually(func() bool {
-		currentConfig := s.configMgr.GetConfig().Get()
-		return !currentConfig.Components["udp-stop-1"].Enabled
-	}, 20*time.Second, 20*time.Millisecond, "Component should be disabled after stop")
+	s.False(stopped.DesiredComponents["udp-stop-1"].Enabled, "Component should be disabled after stop")
 }
 
 // TestStopNotRunningFlow tests that stopping a non-running flow fails
@@ -341,10 +323,7 @@ func (s *EngineIntegrationSuite) TestUndeployFlow() {
 	s.Require().NoError(err)
 	s.Equal(flowstore.DesiredAbsent, undeployed.DesiredState, "flow should be absent in desired state")
 
-	// Verify component configs were removed
-	cfg := s.configMgr.GetConfig()
-	currentConfig := cfg.Get()
-	s.NotContains(currentConfig.Components, "udp-undeploy-1", "Component should be removed")
+	s.Empty(undeployed.DesiredComponents, "Undeploy must remove the complete desired bundle")
 }
 
 // TestUndeployRunningFlow tests that undeploying a running flow fails
@@ -454,79 +433,7 @@ func (s *EngineIntegrationSuite) TestFullLifecycle() {
 	s.Require().NoError(err)
 	s.Equal(flowstore.DesiredAbsent, undeployed.DesiredState)
 
-	// Verify all components removed. This is a one-shot assertion —
-	// no Eventually polling — because the Manager's engine-write
-	// watermark (engineHighWaterRev in config/manager.go) skips
-	// watcher events for revisions the engine has already applied
-	// to memory synchronously. Before that watermark existed, a
-	// queued Stop PUT (Enabled=false) could land in the watcher
-	// AFTER Undeploy's synchronous DELETE, transiently re-inserting
-	// the component into memory.
-	cfg := s.configMgr.GetConfig()
-	currentConfig := cfg.Get()
-	s.NotContains(currentConfig.Components, "udp-lifecycle-1")
-	s.NotContains(currentConfig.Components, "ws-lifecycle-1")
-}
-
-// TestStart_AfterDeploy_DoesNotRewriteAlreadyEnabledComponents (gh#388) proves
-// enableComponent is idempotent: Deploy writes components Enabled=true, so a
-// subsequent Start must NOT re-write an identical config. A redundant write
-// would notify the ComponentManager, whose per-key handler restarts an
-// already-running component unconditionally — spuriously stop-recreating every
-// running component on every Start. This regressed when the config watcher began
-// notifying on engine-owned revisions (previously the redundant write's event
-// was silently dropped).
-func (s *EngineIntegrationSuite) TestStart_AfterDeploy_DoesNotRewriteAlreadyEnabledComponents() {
-	flow := &flowstore.Flow{
-		ID:           "idempotent-start-flow",
-		Name:         "Idempotent Start",
-		DesiredState: flowstore.DesiredAbsent,
-		Nodes: []flowstore.FlowNode{
-			{
-				ID:        "node-1",
-				Component: "udp",
-				Type:      types.ComponentTypeInput,
-				Name:      "udp-idem-1",
-				Position:  flowstore.Position{X: 100, Y: 100},
-				Config:    udpFlowNodeConfig(s.T(), 5051),
-			},
-		},
-		Connections: []flowstore.FlowConnection{},
-	}
-	s.Require().NoError(s.flowStore.Create(s.ctx, flow))
-	s.Require().NoError(s.engine.Deploy(s.ctx, "idempotent-start-flow"))
-	s.Require().True(s.configMgr.GetConfig().Get().Components["udp-idem-1"].Enabled,
-		"precondition: Deploy writes the component Enabled=true")
-
-	// Subscribe AFTER Deploy so we observe only Start's writes. Drain to
-	// quiescence first: OnChange's initial send plus any lagging engine-owned
-	// Deploy watcher events (which now notify post-fix) must not bleed into the
-	// post-Start assertion window.
-	updates := s.configMgr.OnChange("components.*")
-	drainUntilQuiet(updates, 300*time.Millisecond)
-
-	// Start re-enables each node — but the component is already enabled, so the
-	// idempotent enableComponent must emit NO redundant per-component write.
-	s.Require().NoError(s.engine.Start(s.ctx, "idempotent-start-flow"))
-
-	select {
-	case up := <-updates:
-		s.Failf("spurious reconcile on idempotent Start",
-			"Start re-wrote an already-enabled component (would restart it): path=%s", up.Path)
-	case <-time.After(1 * time.Second):
-		// no notification — enableComponent correctly no-op'd on the already-enabled component
-	}
-}
-
-// drainUntilQuiet drains ch until no update arrives for the quiet window.
-func drainUntilQuiet(ch <-chan config.Update, quiet time.Duration) {
-	for {
-		select {
-		case <-ch:
-		case <-time.After(quiet):
-			return
-		}
-	}
+	s.Empty(undeployed.DesiredComponents)
 }
 
 func udpFlowNodeConfig(t testing.TB, port int) map[string]any {

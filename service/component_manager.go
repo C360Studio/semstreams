@@ -148,19 +148,22 @@ func NewComponentManager(rawConfig json.RawMessage, deps *Dependencies) (Service
 		return nil, fmt.Errorf("validate component-manager config: %w", err)
 	}
 
-	// Get initial component configs from Manager if available
+	if deps == nil || deps.BootSelection == nil {
+		return nil, fmt.Errorf("component-manager requires boot selection")
+	}
+
+	// Runtime construction uses only the immutable composition-root selection.
 	var componentsConfig config.ComponentConfigs
 	var bootSecurity security.Config
 	var bootModelRegistry model.RegistryReader
-
-	if deps != nil && deps.Manager != nil {
-		fullConfig := deps.Manager.GetConfig()
-		if fullConfig != nil {
-			bootConfig := fullConfig.Get()
-			componentsConfig = bootConfig.Components
-			bootSecurity = bootConfig.Security
-			bootModelRegistry = bootConfig.ModelRegistry
-		}
+	bootConfig := deps.BootSelection.Config()
+	if bootConfig == nil {
+		return nil, fmt.Errorf("component-manager boot selection has no config")
+	}
+	componentsConfig = bootConfig.Components
+	bootSecurity = bootConfig.Security
+	if bootConfig.ModelRegistry != nil {
+		bootModelRegistry = bootConfig.ModelRegistry
 	}
 
 	if componentsConfig == nil {

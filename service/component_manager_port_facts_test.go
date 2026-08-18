@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/config"
+	"github.com/c360studio/semstreams/flowstore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,11 +27,20 @@ func newPortOwnershipCM(t *testing.T, registry *component.Registry) *ComponentMa
 	if registry == nil {
 		registry = component.NewRegistry()
 	}
+	selection, err := flowstore.SelectBoot(&config.Config{}, nil)
+	require.NoError(t, err)
 	serviceInstance, err := NewComponentManager(json.RawMessage(`{}`), &Dependencies{
-		Logger: slog.Default(), ComponentRegistry: registry,
+		Logger: slog.Default(), ComponentRegistry: registry, BootSelection: selection,
 	})
 	require.NoError(t, err)
 	return serviceInstance.(*ComponentManager)
+}
+
+func TestComponentManagerAbsentBootModelRegistryRemainsNil(t *testing.T) {
+	manager := newPortOwnershipCM(t, nil)
+	if manager.bootModelRegistry != nil {
+		t.Fatalf("bootModelRegistry = %T, want nil", manager.bootModelRegistry)
+	}
 }
 
 func TestComponentManagerPortReportingUsesCanonicalFactsWithoutDroppingKinds(t *testing.T) {

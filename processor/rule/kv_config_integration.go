@@ -44,7 +44,6 @@ type ConfigManager struct {
 	// configMgr is retained for callers that pass it; no longer used for the
 	// watch subscription (rules.* is not in config.Manager's watch list).
 	configMgr *config.Manager
-	ctx       context.Context
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
 	logger    *slog.Logger
@@ -62,13 +61,9 @@ func NewConfigManager(processor *Processor, configMgr *config.Manager, logger *s
 		logger = slog.Default()
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-
 	return &ConfigManager{
 		processor: processor,
 		configMgr: configMgr,
-		ctx:       ctx,
-		cancel:    cancel,
 		logger:    logger.With("component", "rule-config-manager"),
 	}
 }
@@ -83,29 +78,44 @@ func NewConfigManager(processor *Processor, configMgr *config.Manager, logger *s
 //  2. Opens a KV watcher on "rules.*".
 //  3. Spawns a goroutine that debounces watcher events and calls
 //     reconcileFromKV on each coalesced burst.
-func (rcm *ConfigManager) Start(_ context.Context) error {
+func (rcm *ConfigManager) Start(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "ConfigManager", "Start", "context cannot be nil")
+	}
 	// Guard: CRUD-only manager (processor nil) — no watcher needed.
 	if rcm.processor == nil || rcm.kvStore == nil {
 		rcm.logger.Debug("Rule config manager started in CRUD-only mode (no hot-reload watcher)")
 		return nil
 	}
+	rcm.mu.Lock()
+	if rcm.cancel != nil {
+		rcm.mu.Unlock()
+		return errs.WrapInvalid(errs.ErrInvalidData, "ConfigManager", "Start", "already started")
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	rcm.cancel = cancel
+	rcm.mu.Unlock()
 
 	// Seed any file-loaded rules idempotently before opening the watcher.
-	if err := rcm.SeedFromRuntime(rcm.ctx); err != nil {
+	if err := rcm.SeedFromRuntime(runCtx); err != nil {
 		// Non-fatal: component runs with whatever is already in KV.
 		rcm.logger.Warn("SeedFromRuntime completed with errors; some file rules may not be in KV",
 			"error", err)
 	}
 
-	watcher, err := rcm.kvStore.Watch(rcm.ctx, "rules.*")
+	watcher, err := rcm.kvStore.Watch(runCtx, "rules.*")
 	if err != nil {
 		// Hot-reload silently disabled; processor still runs with file rules.
 		rcm.logger.Warn("Failed to open KV watcher for rules.*, hot-reload disabled", "error", err)
+		cancel()
+		rcm.mu.Lock()
+		rcm.cancel = nil
+		rcm.mu.Unlock()
 		return nil
 	}
 
 	rcm.wg.Add(1)
-	go rcm.processKVUpdates(watcher)
+	go rcm.processKVUpdates(runCtx, watcher)
 
 	rcm.logger.Info("Rule configuration hot-reload watcher started", "pattern", "rules.*")
 	return nil
@@ -114,7 +124,13 @@ func (rcm *ConfigManager) Start(_ context.Context) error {
 // Stop stops the configuration manager and waits for the watcher goroutine
 // to exit cleanly.
 func (rcm *ConfigManager) Stop() error {
-	rcm.cancel()
+	rcm.mu.Lock()
+	cancel := rcm.cancel
+	rcm.cancel = nil
+	rcm.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	rcm.wg.Wait()
 	rcm.logger.Info("Rule configuration manager stopped")
 	return nil
@@ -124,7 +140,7 @@ func (rcm *ConfigManager) Stop() error {
 // successive events within the window are collapsed into a single
 // reconcileFromKV call. All reconcile work runs inside this goroutine so
 // the WaitGroup correctly gates Stop().
-func (rcm *ConfigManager) processKVUpdates(watcher jetstream.KeyWatcher) {
+func (rcm *ConfigManager) processKVUpdates(ctx context.Context, watcher jetstream.KeyWatcher) {
 	defer rcm.wg.Done()
 	defer func() {
 		if err := watcher.Stop(); err != nil && !errors.Is(err, context.Canceled) {
@@ -152,7 +168,7 @@ func (rcm *ConfigManager) processKVUpdates(watcher jetstream.KeyWatcher) {
 
 	for {
 		select {
-		case <-rcm.ctx.Done():
+		case <-ctx.Done():
 			if timer != nil {
 				timer.Stop()
 			}
@@ -172,7 +188,7 @@ func (rcm *ConfigManager) processKVUpdates(watcher jetstream.KeyWatcher) {
 		case <-timerCh:
 			timerCh = nil
 			timer = nil
-			if err := rcm.reconcileFromKV(rcm.ctx); err != nil {
+			if err := rcm.reconcileFromKV(ctx); err != nil {
 				rcm.logger.Error("Rule hot-reload reconcile failed", "error", err)
 			}
 		}
@@ -216,7 +232,7 @@ func (rcm *ConfigManager) reconcileFromKV(ctx context.Context) error {
 		return fmt.Errorf("validate config update: %w", err)
 	}
 
-	if err := rcm.processor.ApplyConfigUpdate(changes); err != nil {
+	if err := rcm.processor.ApplyConfigUpdate(ctx, changes); err != nil {
 		rcm.logger.Error("Failed to apply rule configuration during hot-reload", "error", err)
 		return fmt.Errorf("apply config update: %w", err)
 	}
@@ -404,16 +420,19 @@ func (rcm *ConfigManager) WatchRules(_ context.Context, _ func(ruleID string, ru
 }
 
 // InitializeKVStore initializes the KVStore for direct KV operations
-func (rcm *ConfigManager) InitializeKVStore(natsClient *natsclient.Client) error {
+func (rcm *ConfigManager) InitializeKVStore(ctx context.Context, natsClient *natsclient.Client) error {
 	rcm.mu.Lock()
 	defer rcm.mu.Unlock()
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "ConfigManager", "InitializeKVStore", "context cannot be nil")
+	}
 
 	if natsClient == nil {
 		return errs.WrapInvalid(errs.ErrMissingConfig, "ConfigManager", "InitializeKVStore", "NATS client is required")
 	}
 
 	// Get or create the config KV bucket
-	kv, err := natsClient.CreateKeyValueBucket(context.Background(), jetstream.KeyValueConfig{
+	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
 		Bucket:      "semstreams_config",
 		Description: "SemStreams runtime configuration",
 		History:     5,

@@ -3,6 +3,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -24,7 +25,7 @@ func TestServiceCompositionDesiredStateProductionSeam(t *testing.T) {
 		"http-capable":      {Enabled: true, Config: json.RawMessage(`{"value":1}`)},
 		"component-manager": {Enabled: true, Config: json.RawMessage(`{}`)},
 	}
-	configManager, err := config.NewConfigManager(&config.Config{
+	configManager, err := config.NewConfigManager(context.Background(), &config.Config{
 		Version:  "1.0.0",
 		Platform: config.PlatformConfig{Org: "c360", ID: "service-composition-test", Type: "test"},
 		Services: cloneServiceConfigs(t, bootDesired),

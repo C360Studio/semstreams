@@ -45,7 +45,7 @@ func createTestFlowService(t *testing.T) (*http.ServeMux, *flowstore.Manager, *n
 
 	// Create config manager with minimal config
 	baseConfig := &config.Config{}
-	configMgr, err := config.NewConfigManager(baseConfig, natsClient, logger)
+	configMgr, err := config.NewConfigManager(context.Background(), baseConfig, natsClient, logger)
 	require.NoError(t, err)
 	require.NoError(t, configMgr.Start(context.Background()))
 
@@ -60,6 +60,7 @@ func createTestFlowService(t *testing.T) (*http.ServeMux, *flowstore.Manager, *n
 		ComponentRegistry: registry,
 		Logger:            logger,
 		FlowManager:       flowStore,
+		BootSelection:     testBootSelection(t, configMgr),
 	}
 
 	// Create flow service

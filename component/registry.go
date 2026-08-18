@@ -394,33 +394,6 @@ func (r *Registry) GetComponentSchema(name string) (ConfigSchema, error) {
 	return registration.Schema, nil
 }
 
-// GetComponent retrieves a component instance by factory type name (for schema retrieval)
-// DEPRECATED: Use GetComponentSchema() instead for schema retrieval.
-// This method creates a temporary component instance, which fails for components with dependency validation.
-func (r *Registry) GetComponent(name string) (Discoverable, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	// Look up by factory name (same as component type)
-	registration, exists := r.factories[name]
-	if !exists {
-		return nil, errs.WrapInvalid(
-			fmt.Errorf("component type %q not found", name),
-			"Registry", "GetComponent", "type lookup")
-	}
-
-	// Create a temporary instance just to get the schema
-	// ConfigSchema() doesn't perform I/O, so this is safe
-	// NOTE: This will fail if factory validates dependencies
-	deps := Dependencies{} // Empty deps for schema retrieval
-	component, err := registration.Factory(json.RawMessage("{}"), deps)
-	if err != nil {
-		return nil, errs.Wrap(err, "Registry", "GetComponent", "factory execution")
-	}
-
-	return component, nil
-}
-
 // ListComponentTypes returns all registered component factory type names
 // This returns factory names (e.g., "udp-input", "websocket-output") not instance names
 func (r *Registry) ListComponentTypes() []string {
@@ -504,21 +477,6 @@ func (r *Registry) RegisterWithConfig(config RegistrationConfig) error {
 	}
 
 	return r.RegisterFactory(config.Name, registration)
-}
-
-// InstanceDependencies returns the declared runtime dependencies for a
-// running component instance (e.g., []string{DepModelRegistry}). Returns
-// nil if the instance is not tracked or its factory didn't declare any
-// dependencies.
-//
-// Used by ComponentManager to route config-change events (e.g., a
-// model_registry KV update) to the components that opted in.
-func (r *Registry) InstanceDependencies(instanceName string) []string {
-	reg := r.getRegistrationForInstance(instanceName)
-	if reg == nil {
-		return nil
-	}
-	return reg.Dependencies
 }
 
 // ListAvailable returns information about all available component types

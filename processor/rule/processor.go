@@ -149,8 +149,7 @@ type Processor struct {
 	// JetStream consumer for entity events
 	entityConsumer jetstream.Consumer
 
-	// KV watchers for entity state changes
-	// Maps pattern string to watcher for dynamic management
+	// KV watchers for the immutable boot-selected entity state patterns.
 	entityWatchers        []jetstream.KeyWatcher
 	entityWatcherMap      map[string]jetstream.KeyWatcher
 	entityWatcherCancels  map[string]context.CancelFunc
@@ -160,7 +159,6 @@ type Processor struct {
 	entityNextGeneration  uint64
 	entityBeforeDispatch  func()
 	entityBeforeEvalLock  func(string)
-	watcherCtx            context.Context    // Context for watcher goroutines
 	watcherCancelFunc     context.CancelFunc // Cancel function for stopping all watchers
 
 	// Entity coalescer for batched rule evaluation
@@ -627,8 +625,7 @@ func (rp *Processor) drainCronScheduler() {
 	if rp.cronScheduler == nil {
 		return
 	}
-	stopCtx := rp.cronScheduler.Stop()
-	<-stopCtx.Done()
+	rp.cronScheduler.Stop()
 	rp.logger.Debug("Cron scheduler drained cleanly")
 }
 
@@ -1007,7 +1004,7 @@ func (rp *Processor) Start(ctx context.Context) error {
 // does not outlive the processor.
 func (rp *Processor) startHotReloadManager(ctx context.Context) {
 	rcm := NewConfigManager(rp, nil, rp.logger)
-	if err := rcm.InitializeKVStore(rp.natsClient); err != nil {
+	if err := rcm.InitializeKVStore(ctx, rp.natsClient); err != nil {
 		rp.logger.Warn("Failed to initialize KV store for rule hot-reload; running with file rules only",
 			slog.Any("error", err))
 		return
@@ -1214,7 +1211,7 @@ func (rp *Processor) Stop(ctx context.Context) error {
 			watcherCancel()
 		}
 		for _, watcher := range watchers {
-			// Each KV watcher was created with watcherCtx. The cancellation
+			// Each KV watcher was created with the Start-derived watcher context. The cancellation
 			// above may therefore close its native subscription before this
 			// explicit Stop reaches it; ErrBadSubscription is terminal only in
 			// this post-cancel loop. Preserve every other watcher failure.
@@ -1256,7 +1253,6 @@ func (rp *Processor) Stop(ctx context.Context) error {
 		rp.entityWatcherMap = nil
 		rp.entityWatcherCancels = nil
 		rp.entityDispatchRecords = nil
-		rp.watcherCtx = nil
 		rp.watcherCancelFunc = nil
 		rp.subscriptions = nil
 		rp.rules = nil

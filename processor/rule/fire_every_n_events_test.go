@@ -268,7 +268,7 @@ func TestFireEveryNEvents_CounterResetOnRuleUpdate(t *testing.T) {
 		"fire_every_n_events": float64(5), // JSON numbers decode as float64
 	}
 	rp.mu.Lock()
-	err := rp.applyRuleChanges(map[string]any{ruleID: ruleMap})
+	err := rp.applyRuleChanges(context.Background(), map[string]any{ruleID: ruleMap})
 	rp.mu.Unlock()
 	require.NoError(t, err, "applyRuleChanges must succeed")
 
@@ -332,7 +332,7 @@ func TestApplyRuleChanges_SyncsRuleDefinitions(t *testing.T) {
 	}
 
 	rp.mu.Lock()
-	err := rp.applyRuleChanges(map[string]any{ruleID: ruleMap})
+	err := rp.applyRuleChanges(context.Background(), map[string]any{ruleID: ruleMap})
 	rp.mu.Unlock()
 	require.NoError(t, err, "applyRuleChanges must succeed")
 
@@ -348,7 +348,7 @@ func TestApplyRuleChanges_SyncsRuleDefinitions(t *testing.T) {
 
 	// Delete: apply an empty rules map — the rule is no longer configured.
 	rp.mu.Lock()
-	err = rp.applyRuleChanges(map[string]any{})
+	err = rp.applyRuleChanges(context.Background(), map[string]any{})
 	rp.mu.Unlock()
 	require.NoError(t, err, "delete via empty applyRuleChanges must succeed")
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -28,10 +27,9 @@ type entityStatesWatcher interface {
 // dedicated ENTITY_STATES contract-guard watcher — with zero configured
 // entity-watch patterns the processor holds no ENTITY_STATES watcher at all.
 func (rp *Processor) watchEntityStates(ctx context.Context) error {
-	// Store the watcher context for dynamic management
+	watcherCtx, watcherCancel := context.WithCancel(ctx)
 	rp.mu.Lock()
-	rp.watcherCtx, rp.watcherCancelFunc = context.WithCancel(ctx)
-	watcherCtx := rp.watcherCtx
+	rp.watcherCancelFunc = watcherCancel
 	rp.mu.Unlock()
 
 	// Read the configured ENTITY_STATES patterns.
@@ -184,14 +182,6 @@ func watcherKey(bucketName, pattern string) string {
 	return bucketName + ":" + pattern
 }
 
-type preparedEntityWatcher struct {
-	key     string
-	pattern string
-	watcher jetstream.KeyWatcher
-}
-
-type entityWatcherFactory func(context.Context, string, string) (jetstream.KeyWatcher, error)
-
 type managedEntityWatcher struct {
 	watcher    jetstream.KeyWatcher
 	generation uint64
@@ -203,14 +193,9 @@ type managedEntityWatcher struct {
 
 // entityBootstrapProgress is one watcher generation's replay state.
 //
-// PER GENERATION, NOT PER PROCESS — this is the whole point, and it deliberately
-// diverges from graph-index's process-lifetime latch
-// (processor/graph-index/watermark.go:120-127). The watcher set is runtime-mutable via
-// a component-config PUT (service/component_manager_http.go -> updateWatchBuckets),
-// and recreating a watcher RE-RUNS its replay because the watch is created without
-// UpdatesOnly. A process-lifetime latch would keep reporting "bootstrapped" while a
-// freshly re-added pattern was mid-replay — which is gh#732's exact bug wearing a new
-// costume.
+// PER GENERATION, NOT PER PROCESS. A transport repair for the same boot-selected
+// pattern reruns replay because the watch is created without UpdatesOnly; a
+// process-lifetime latch could report bootstrapped while that replay is incomplete.
 type entityBootstrapProgress struct {
 	// complete flips when the watcher observes the nil sentinel that ends NATS's
 	// initial value replay.
@@ -277,163 +262,6 @@ func (rp *Processor) deactivateEntityWatcherLocked(key string, watcher jetstream
 			return
 		}
 	}
-}
-
-// stopWatcherForBucketPattern stops a KV watcher for a specific bucket and pattern.
-func (rp *Processor) stopWatcherForBucketPattern(bucketName, pattern string) error {
-	rp.entityWatcherUpdateMu.Lock()
-	defer rp.entityWatcherUpdateMu.Unlock()
-
-	key := watcherKey(bucketName, pattern)
-	rp.entityDispatchGate.Lock()
-	rp.mu.Lock()
-	watcher, exists := rp.entityWatcherMap[key]
-	if !exists {
-		rp.mu.Unlock()
-		rp.entityDispatchGate.Unlock()
-		rp.logger.Debug("No watcher exists", "bucket", bucketName, "pattern", pattern)
-		return nil
-	}
-
-	rp.deactivateEntityWatcherLocked(key, watcher)
-	rp.mu.Unlock()
-	rp.entityDispatchGate.Unlock()
-	if err := watcher.Stop(); err != nil {
-		return fmt.Errorf("stop ENTITY_STATES watcher %q: %w", pattern, err)
-	}
-
-	rp.logger.Info("Stopped KV watcher", "bucket", bucketName, "pattern", pattern)
-	return nil
-}
-
-// UpdateWatchBuckets atomically replaces the configured ENTITY_STATES patterns.
-func (rp *Processor) UpdateWatchBuckets(newBuckets map[string][]string) error {
-	rp.entityWatcherUpdateMu.Lock()
-	defer rp.entityWatcherUpdateMu.Unlock()
-	return rp.updateWatchBucketsWithFactory(newBuckets, rp.prepareEntityWatcher)
-}
-
-func (rp *Processor) updateWatchBucketsWithFactory(
-	newBuckets map[string][]string,
-	prepare entityWatcherFactory,
-) error {
-	if err := validateEntityWatchBuckets(newBuckets); err != nil {
-		return err
-	}
-	rp.mu.RLock()
-	watcherCtx := rp.watcherCtx
-
-	// If no watcher context, processor not started yet - just update config
-	if watcherCtx == nil {
-		rp.mu.RUnlock()
-		rp.mu.Lock()
-		rp.config.EntityWatchBuckets = cloneEntityWatchBuckets(newBuckets)
-		rp.mu.Unlock()
-		rp.logger.Info("Updated entity watch buckets (processor not running)", "buckets", newBuckets)
-		return nil
-	}
-
-	// Build set of current watcher keys (bucket:pattern)
-	currentKeys := make(map[string]bool)
-	for key := range rp.entityWatcherMap {
-		currentKeys[key] = true
-	}
-	rp.mu.RUnlock()
-
-	// Build set of new watcher keys
-	newKeys := make(map[string]bool)
-	for bucket, patterns := range newBuckets {
-		for _, pattern := range patterns {
-			key := watcherKey(bucket, pattern)
-			newKeys[key] = true
-		}
-	}
-
-	// Prepare every addition without registering it or starting its callback.
-	// A failure stops all prepared additions and leaves old watchers/config intact.
-	prepared := make([]preparedEntityWatcher, 0)
-	for _, bucket := range sortedWatchBucketNames(newBuckets) {
-		patterns := newBuckets[bucket]
-		for _, pattern := range patterns {
-			key := watcherKey(bucket, pattern)
-			if !currentKeys[key] {
-				watcher, err := prepare(watcherCtx, bucket, pattern)
-				if err != nil {
-					rp.stopPreparedEntityWatchers(prepared)
-					return fmt.Errorf("prepare ENTITY_STATES watcher %q: %w", pattern, err)
-				}
-				prepared = append(prepared, preparedEntityWatcher{key: key, pattern: pattern, watcher: watcher})
-			}
-		}
-	}
-
-	removedKeys := make([]string, 0)
-	for key := range currentKeys {
-		if !newKeys[key] {
-			removedKeys = append(removedKeys, key)
-		}
-	}
-	sort.Strings(removedKeys)
-	// Register and commit the desired set before retiring old transports. Each
-	// managed callback has its own cancellation and a map-membership fence, so a
-	// physical Stop failure cannot keep a stale watcher authoritative.
-	additionContexts := make(map[string]context.Context, len(prepared))
-	additionGenerations := make(map[string]uint64, len(prepared))
-	rp.entityDispatchGate.Lock()
-	rp.mu.Lock()
-	for _, addition := range prepared {
-		additionContexts[addition.key], additionGenerations[addition.key] =
-			rp.registerEntityWatcherLocked(watcherCtx, addition.key, addition.watcher)
-	}
-	rp.config.EntityWatchBuckets = cloneEntityWatchBuckets(newBuckets)
-
-	retired := make([]preparedEntityWatcher, 0, len(removedKeys))
-	for _, key := range removedKeys {
-		watcher := rp.entityWatcherMap[key]
-		retired = append(retired, preparedEntityWatcher{key: key, watcher: watcher})
-		rp.deactivateEntityWatcherLocked(key, watcher)
-	}
-	rp.mu.Unlock()
-	rp.entityDispatchGate.Unlock()
-
-	for _, addition := range prepared {
-		go rp.handleManagedEntityUpdates(
-			additionContexts[addition.key],
-			addition.watcher,
-			addition.key,
-			additionGenerations[addition.key],
-		)
-	}
-
-	var retirementErrors []error
-	for _, removal := range retired {
-		if err := removal.watcher.Stop(); err != nil {
-			retirementErrors = append(retirementErrors, fmt.Errorf("retire ENTITY_STATES watcher %q: %w", removal.key, err))
-		}
-	}
-
-	rp.logger.Info("Updated entity watch buckets dynamically",
-		"added", len(prepared),
-		"removed", len(retired),
-		"total", len(newKeys))
-
-	return errors.Join(retirementErrors...)
-}
-
-func (rp *Processor) stopPreparedEntityWatchers(prepared []preparedEntityWatcher) {
-	for _, addition := range prepared {
-		if err := addition.watcher.Stop(); err != nil {
-			rp.logger.Warn("Failed to stop rolled-back ENTITY_STATES watcher", "pattern", addition.pattern, "error", err)
-		}
-	}
-}
-
-func cloneEntityWatchBuckets(source map[string][]string) map[string][]string {
-	clone := make(map[string][]string, len(source))
-	for bucket, patterns := range source {
-		clone[bucket] = append([]string(nil), patterns...)
-	}
-	return clone
 }
 
 // handleEntityUpdates processes updates from a NATS KV watcher.
@@ -577,7 +405,7 @@ func (rp *Processor) entityWatcherCloseExpected(
 	// source. Managed handlers use the exact generation record above.
 	rp.mu.RLock()
 	defer rp.mu.RUnlock()
-	if rp.watcherCtx == nil {
+	if rp.watcherCancelFunc == nil {
 		return false
 	}
 	for _, active := range rp.entityWatcherMap {

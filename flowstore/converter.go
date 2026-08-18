@@ -26,14 +26,15 @@ import (
 // to derive from port subject matching. Users can connect nodes in the UI.
 func FromComponentConfigs(name string, configs map[string]types.ComponentConfig) (*Flow, error) {
 	flow := &Flow{
-		ID:           uuid.New().String(),
-		Name:         name,
-		Description:  "Auto-generated from static configuration",
-		Version:      1,
-		DesiredState: DesiredEnabled,
-		CreatedAt:    time.Now(),
-		Nodes:        make([]FlowNode, 0, len(configs)),
-		Connections:  []FlowConnection{}, // Empty - connections derived at runtime
+		ID:                uuid.New().String(),
+		Name:              name,
+		Description:       "Auto-generated from static configuration",
+		Version:           1,
+		DesiredState:      DesiredAbsent,
+		DesiredComponents: make(DesiredComponentSet),
+		CreatedAt:         time.Now(),
+		Nodes:             make([]FlowNode, 0, len(configs)),
+		Connections:       []FlowConnection{}, // Empty - connections derived at runtime
 	}
 	flow.UpdatedAt = flow.CreatedAt
 	flow.LastModified = flow.CreatedAt
@@ -53,6 +54,7 @@ func FromComponentConfigs(name string, configs map[string]types.ComponentConfig)
 		if !cfg.Enabled {
 			continue
 		}
+		flow.DesiredComponents[key] = cloneComponentConfig(cfg)
 
 		// Convert json.RawMessage to map[string]any
 		var configMap map[string]any
@@ -75,6 +77,9 @@ func FromComponentConfigs(name string, configs map[string]types.ComponentConfig)
 			Config:    configMap,
 		}
 		flow.Nodes = append(flow.Nodes, node)
+	}
+	if len(flow.DesiredComponents) != 0 {
+		flow.DesiredState = DesiredEnabled
 	}
 
 	return flow, nil
