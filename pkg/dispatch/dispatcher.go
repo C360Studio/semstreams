@@ -23,8 +23,8 @@ import (
 //
 // Concurrency: Submit is safe to call from concurrent goroutines
 // (delegates to pool.Submit which is lock-free via channel send).
-// Stop is idempotent. Stats reads atomic counters via the underlying
-// pool.
+// A successfully completed Stop is idempotent. A failed Stop is terminal and
+// must not be retried. Stats reads atomic counters via the underlying pool.
 type BoundedDispatcher[W any] struct {
 	pool       *worker.Pool[W]
 	completion *completionWatcher[W] // nil when no CompletionKVBucket configured
@@ -185,14 +185,18 @@ func (d *BoundedDispatcher[W]) Submit(work W) error {
 // or the given context expires), then stops the completion watcher
 // (if configured). Subsequent Submit calls return ErrStopped.
 //
-// Stop is idempotent. Multiple calls return nil after the first
-// successful Stop.
+// Multiple calls return nil after the first successful Stop. A Stop that
+// reports an unobserved pool or watcher join is terminal and must not be
+// retried; the underlying pool has already claimed shutdown.
 //
 // Callers waiting on KV-triggered OnComplete callbacks should
 // ensure those complete before Stop returns — typically by
 // canceling the caller's own context and letting Process see the
 // cancellation.
 func (d *BoundedDispatcher[W]) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return fmt.Errorf("%w: Stop context is required", ErrInvalidConfig)
+	}
 	// Compute pool-stop timeout from the context's deadline. The
 	// underlying pool.Stop takes a duration not a ctx (legacy API),
 	// so this is the translation layer.
@@ -203,12 +207,16 @@ func (d *BoundedDispatcher[W]) Stop(ctx context.Context) error {
 	//     intent ("stop immediately") by passing 0 to pool.Stop;
 	//     it will return ErrStopTimeout almost immediately, the
 	//     watcher still stops below
+	//   - ctx is already canceled without a deadline → also use zero rather
+	//     than treating it as an unrestricted no-deadline Stop
 	//   - ctx has no deadline (context.Background or context.TODO)
 	//     → fall back to a reasonable 30s default; Debug log so
 	//     operators tracing slow shutdowns can correlate
 	const noDeadlineDefault = 30 * time.Second
 	var timeout time.Duration
-	if deadline, ok := ctx.Deadline(); ok {
+	if ctx.Err() != nil {
+		timeout = 0
+	} else if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
 		if remaining > 0 {
 			timeout = remaining
@@ -220,16 +228,15 @@ func (d *BoundedDispatcher[W]) Stop(ctx context.Context) error {
 		d.logger.Debug("dispatch: Stop using default pool-stop timeout (no ctx deadline)",
 			slog.Duration("timeout", timeout))
 	}
-	if err := d.pool.Stop(timeout); err != nil && !errors.Is(err, worker.ErrPoolStopped) {
-		// Pool stop error — log but continue to shut down the
-		// watcher so we don't leak its goroutine.
-		d.logger.Warn("dispatch: pool stop returned error; continuing to shut down watcher",
-			slog.String("error", err.Error()))
+	poolErr := d.pool.Stop(timeout)
+	if errors.Is(poolErr, worker.ErrPoolStopped) {
+		poolErr = nil
 	}
+	var completionErr error
 	if d.completion != nil {
-		d.completion.stop()
+		completionErr = d.completion.stop(ctx)
 	}
-	return nil
+	return errors.Join(poolErr, completionErr, ctx.Err())
 }
 
 // Stats returns current dispatcher statistics via the underlying

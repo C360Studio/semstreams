@@ -321,6 +321,42 @@ Owner-migrated credit is granted to `processor/graph-index/keyed_dispatcher.go` 
 had no production `internal/lifecyclejoin` import at the merged baseline, so its failed-Start correction receives no
 owner-count credit. Task 2.3, Gate A, runtime migration, proof, release, archive, and tag completion remain incomplete.
 
+## Dispatcher Stop-error prerequisite worktree checkpoint — 2026-08-18
+
+Dirty worktree baseline: merged `main` `0f7687a7f371be7e937b70fe27d2a1e9f5587eba`. Scope is limited to
+`pkg/dispatch/{dispatcher.go,completion_watcher.go,doc.go}` and focused tests. This prerequisite corrects the exact
+`BoundedDispatcher` handle needed by later owner migrations and grants zero owner, Gate, proof, release, archive, or
+tag credit.
+
+| Ruling | Exact evidence | Result |
+|---|---|---|
+| Nil Stop context rejects before action | `pkg/dispatch/dispatcher.go:196-199`; `pkg/dispatch/dispatcher_test.go:272-285` | Pool remains usable after rejection. |
+| Finished caller context receives zero pool budget | `pkg/dispatch/dispatcher.go:200-230`; `pkg/dispatch/dispatcher_test.go:287-359` | Both canceled and expired contexts return promptly. |
+| Pool and caller failures are returned | `pkg/dispatch/dispatcher.go:231-239`; `pkg/dispatch/dispatcher_test.go:287-359` | Error matches `worker.ErrStopTimeout` and the exact context cause. |
+| Completion watcher is canceled and bounded | `pkg/dispatch/completion_watcher.go:180-195`; `pkg/dispatch/completion_watcher_test.go:84-132` | Unobserved callback join returns the caller context error. |
+| Failed Stop is terminal; completed repeat is nil | `pkg/dispatch/dispatcher.go:23-26,183-195`; `pkg/dispatch/doc.go:94-102`; `pkg/dispatch/dispatcher_test.go:259-269` | No retry/rejoin/result state was added. |
+
+Evidence:
+
+```text
+go test -race ./pkg/dispatch -run 'TestDispatcher_Stop|TestCompletionWatcherStop' -count=1 -timeout=120s
+ok github.com/c360studio/semstreams/pkg/dispatch 1.446s
+
+go test -race ./pkg/dispatch -count=1 -timeout=120s
+ok github.com/c360studio/semstreams/pkg/dispatch 1.850s
+
+go test -tags=integration -race ./pkg/dispatch -count=1 -timeout=120s
+ok github.com/c360studio/semstreams/pkg/dispatch 4.847s
+
+task lint
+PASS
+```
+
+The real-NATS integration gate proves the existing successful completion-watcher path still joins. It does not claim
+a real-NATS pool-timeout injection; channel-synchronized unit proof covers the failed boundary. Production lifecycle
+counts remain unchanged from the baseline: owner files 38, NewGeneration 40, Generation.Stop 45, external Cancel 5,
+StopWithQuiesce 8, NewOperation 3, Operation.Run 3, and old rollback calls 20.
+
 ## Workspace recovery checkpoint
 
 Authority collisions are inventoried in

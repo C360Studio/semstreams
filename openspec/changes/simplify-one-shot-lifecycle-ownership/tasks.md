@@ -29,6 +29,10 @@
     production owner files move 39 to 38. Owner-migrated credit is limited to
     `processor/graph-index/keyed_dispatcher.go`; the already lifecyclejoin-free parent receives no census credit.
     Task 2.3, Gate A, runtime migration, and every proof/release gate remain unchecked and incomplete.
+  - 2026-08-18 dispatcher prerequisite: dirty worktree based on merged `main` `0f7687a7` makes
+    `BoundedDispatcher.Stop` return pool/context/join failure and bounds completion-watcher join. Focused, package,
+    real-NATS integration, and lint gates pass. Counts are unchanged and this grants zero owner, Gate, proof, release,
+    archive, or tag credit; task 2.3 remains unchecked.
 - [ ] 2.4 Remove Generation/Operation only after focused/race proof.
 - [ ] 2.5 Remove lifecycle deletion and provide fixture/admin teardown.
 

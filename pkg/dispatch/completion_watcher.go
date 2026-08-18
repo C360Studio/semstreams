@@ -177,11 +177,22 @@ func (w *completionWatcher[W]) handleUpdate(ctx context.Context, entry jetstream
 	w.mu.Unlock()
 }
 
-// stop cancels the watcher's context and waits for the run loop
-// to exit. Idempotent.
-func (w *completionWatcher[W]) stop() {
+// stop cancels the watcher's context and observes the run loop under ctx.
+// A context error means completion was not observed; callers must treat that
+// failed Stop as terminal rather than retrying it.
+func (w *completionWatcher[W]) stop(ctx context.Context) error {
 	w.cancel()
-	w.wg.Wait()
+	done := make(chan struct{})
+	go func() {
+		w.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // inFlightCount returns the current number of tracked work items.
