@@ -381,3 +381,38 @@ The following user-owned or unrelated worktrees are explicitly outside this mani
 
 Do not remove an unlisted worktree by inference. Cleanup uses only exact paths from this manifest, does not touch
 Docker resources, and begins only after this manifest is durable and both bounded artifacts are verified.
+
+## Cleanup result
+
+Cleanup completed on 2026-08-18 after this manifest became durable through PR #992 at merge commit
+`8961357a4fdc8286e2b2d66b97e85359e39b81b3`.
+
+The two bounded preservation artifacts are clean and pushed:
+
+- `codex/recovery-artifact-restart-safe-prereqs` at
+  `92d59b0a2ef9db7ff4118a61e8aa48b1470c4e21` preserves the exact twelve-file subset. Its verified subset
+  SHA-256 is `67cc40f4465f5127793693a1423479a6b24df2b0607f4050d1e28f5e1a42f6b4`.
+- `codex/recovery-artifact-consume-durable-retirement` at
+  `fea02a42c4cbe67089d900c6712fb52c8648ed1a` preserves the exact `ConsumeDurable` three-file deletion. Its
+  verified subset SHA-256 is `ddcee4f8643d4992485f5e367ef4c0e203167e03901705c85cffdba4ce98782b`.
+
+Both temporary artifact worktrees were removed cleanly. The following eight manifested dirty worktrees were each
+removed with exit status 0:
+
+```text
+/private/tmp/semstreams-context-debt-cleanup
+/private/tmp/semstreams-context-race
+/private/tmp/semstreams-generation-removal-1
+/private/tmp/semstreams-lifecycle
+/private/tmp/semstreams-p3-rule-config-context
+/private/tmp/semstreams-pr2-minimal-handles
+/private/tmp/semstreams-pr2-owner-handles
+/private/tmp/semstreams-restart-safe-shutdown
+```
+
+Post-cleanup verification found `main` clean at `8961357a4fdc8286e2b2d66b97e85359e39b81b3`. Draft PR #990 remains
+clean and unchanged at `8f19ef3678a549913385b090e4de1766a7a43a27` on
+`codex/gh986-boot-only-flow-activation`. User-owned and unlisted exclusions were untouched.
+
+The recovery artifact commits are preservation only. They carry zero lifecycle or runtime completion credit and
+require review against current `main` before any content may land.
