@@ -124,6 +124,95 @@ func TestComponentCompletedStopIsNoOpAndCannotBeRestarted(t *testing.T) {
 	require.Contains(t, err.Error(), "one-shot lifecycle")
 }
 
+func TestComponentFailedStartCleanupTimeoutRetainsAuthorityForStopRetry(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	require.NoError(t, comp.Initialize())
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	processStarted := make(chan struct{})
+	processRelease := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseProcess := func() { releaseOnce.Do(func() { close(processRelease) }) }
+	t.Cleanup(releaseProcess)
+
+	pool := newKeyedDispatcher(1, 1, func(entityIndexWork) string { return "lane" }, func(context.Context, entityIndexWork) {
+		close(processStarted)
+		<-processRelease
+	})
+	pool.Start(runCtx)
+	require.NoError(t, pool.Submit(runCtx, entityIndexWork{entityID: "work"}))
+	select {
+	case <-processStarted:
+	case <-time.After(time.Second):
+		t.Fatal("post-pool worker did not start")
+	}
+
+	runDone := make(chan struct{})
+	close(runDone)
+	comp.runCancel = cancelRun
+	comp.runDone = runDone
+	comp.indexPool = pool
+	comp.cleanupPending = true
+
+	stopCtx, cancelStop := context.WithCancel(context.Background())
+	cancelStop()
+	err := comp.Stop(stopCtx)
+	require.ErrorIs(t, err, context.Canceled)
+
+	comp.mu.RLock()
+	require.True(t, comp.cleanupPending)
+	require.NotNil(t, comp.runCancel)
+	require.Equal(t, runDone, comp.runDone)
+	require.Same(t, pool, comp.indexPool)
+	comp.mu.RUnlock()
+
+	startErr := comp.Start(context.Background())
+	require.Error(t, startErr)
+	require.Contains(t, startErr.Error(), "cleanup pending")
+
+	releaseProcess()
+	require.NoError(t, comp.Stop(context.Background()))
+
+	comp.mu.RLock()
+	require.False(t, comp.cleanupPending)
+	require.Nil(t, comp.runCancel)
+	require.Nil(t, comp.runDone)
+	require.Nil(t, comp.indexPool)
+	comp.mu.RUnlock()
+}
+
+func TestKeyedDispatcherCancellationJoinsChildrenBeforeDone(t *testing.T) {
+	runCtx, cancel := context.WithCancel(context.Background())
+	processStarted := make(chan struct{})
+	processRelease := make(chan struct{})
+	processReturned := make(chan struct{})
+	dispatcher := newKeyedDispatcher(1, 1, func(string) string { return "lane" }, func(context.Context, string) {
+		close(processStarted)
+		<-processRelease
+		close(processReturned)
+	})
+	dispatcher.Start(runCtx)
+	require.NoError(t, dispatcher.Submit(runCtx, "work"))
+	select {
+	case <-processStarted:
+	case <-time.After(time.Second):
+		t.Fatal("dispatcher child did not start")
+	}
+
+	cancel()
+	close(processRelease)
+	select {
+	case <-processReturned:
+	case <-time.After(time.Second):
+		t.Fatal("dispatcher child did not return")
+	}
+	select {
+	case <-dispatcher.done:
+	case <-time.After(time.Second):
+		t.Fatal("dispatcher did not publish joined completion")
+	}
+}
+
 func newBlockedStopOwner(t *testing.T) (*Component, *revisionCoalescer, *blockingStopWatcher) {
 	t.Helper()
 	comp := createTestComponentWithMockKV(t)

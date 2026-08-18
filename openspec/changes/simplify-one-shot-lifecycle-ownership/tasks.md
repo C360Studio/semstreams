@@ -23,6 +23,12 @@
     credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
     worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.
     `output/file` and `output/httppost` remain Q-primary owners with F facets; neither was changed or receives credit.
+  - 2026-08-18 graph-index checkpoint: dirty worktree based on merged `main` `e7789f6c` replaces the private keyed
+    dispatcher's Generation/independent Stop with parent cancellation and exact `done`, and corrects parent
+    failed-Start authority/cleanup using the same owner-local shutdown path. Focused and package race tests pass;
+    production owner files move 39 to 38. Owner-migrated credit is limited to
+    `processor/graph-index/keyed_dispatcher.go`; the already lifecyclejoin-free parent receives no census credit.
+    Task 2.3, Gate A, runtime migration, and every proof/release gate remain unchecked and incomplete.
 - [ ] 2.4 Remove Generation/Operation only after focused/race proof.
 - [ ] 2.5 Remove lifecycle deletion and provide fixture/admin teardown.
 

@@ -33,7 +33,10 @@ var (
 	_ component.LifecycleComponent = (*Component)(nil)
 )
 
-const maxGraphIndexWorkers = 16
+const (
+	maxGraphIndexWorkers      = 16
+	failedStartCleanupTimeout = 5 * time.Second
+)
 
 // Config holds configuration for graph-index component
 type Config struct {
@@ -245,6 +248,7 @@ type Component struct {
 	wg              sync.WaitGroup
 	runCancel       context.CancelFunc
 	runDone         chan struct{}
+	cleanupPending  bool
 	indexPool       *keyedDispatcher[entityIndexWork]
 	entityCoalescer *revisionCoalescer
 
@@ -569,7 +573,7 @@ func (c *Component) Initialize() error {
 }
 
 // Start begins processing (must be initialized first)
-func (c *Component) Start(ctx context.Context) error {
+func (c *Component) Start(ctx context.Context) (startErr error) {
 	// Validate before inspecting lifecycle state.
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "Start", "context cannot be nil")
@@ -585,6 +589,10 @@ func (c *Component) Start(ctx context.Context) error {
 		return errs.WrapFatal(fmt.Errorf("component not initialized"), "Component", "Start", "initialization check")
 	}
 
+	if c.cleanupPending {
+		return errs.WrapFatal(fmt.Errorf("component failed-Start cleanup pending"),
+			"Component", "Start", "cleanup pending")
+	}
 	if c.running {
 		if c.runCancel != nil {
 			return nil
@@ -597,8 +605,50 @@ func (c *Component) Start(ctx context.Context) error {
 			"Component", "Start", "one-shot lifecycle")
 	}
 
-	// Create cancellable context
+	// Publish failed-Start cleanup authority before any worker, coalescer,
+	// watcher, or subscription can escape Start. The closer is launched only
+	// after all c.wg.Add calls are sealed.
 	ctx, cancel := context.WithCancel(ctx)
+	runDone := make(chan struct{})
+	c.runCancel = cancel
+	c.runDone = runDone
+	c.cleanupPending = true
+	runDoneSealed := false
+	sealRunDone := func() {
+		if runDoneSealed {
+			return
+		}
+		runDoneSealed = true
+		go func() {
+			c.wg.Wait()
+			close(runDone)
+		}()
+	}
+	defer func() {
+		if startErr == nil {
+			return
+		}
+		sealRunDone()
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), failedStartCleanupTimeout)
+		defer cleanupCancel()
+		cleanupErr := c.stopOwnedRuntime(
+			cleanupCtx,
+			cancel,
+			runDone,
+			c.indexPool,
+			c.entityCoalescer,
+			c.querySubscriptions,
+		)
+		if cleanupErr == nil {
+			c.runCancel = nil
+			c.runDone = nil
+			c.indexPool = nil
+			c.entityCoalescer = nil
+			c.querySubscriptions = nil
+			c.cleanupPending = false
+		}
+		startErr = errors.Join(startErr, cleanupErr)
+	}()
 
 	// Cache alias predicates from vocabulary for fast lookup during indexing
 	c.aliasPredicates = vocabulary.DiscoverAliasPredicates()
@@ -607,13 +657,11 @@ func (c *Component) Start(ctx context.Context) error {
 
 	// Check context before proceeding
 	if err := ctx.Err(); err != nil {
-		cancel()
 		return errs.Wrap(err, "Component", "Start", "context cancelled")
 	}
 
 	// Create output KV buckets (we are the writer)
 	if err := c.createOutputBuckets(ctx); err != nil {
-		cancel()
 		return err
 	}
 
@@ -625,7 +673,6 @@ func (c *Component) Start(ctx context.Context) error {
 	// above already hard-requires it), and a silently absent status bucket would fail
 	// every downstream gate closed forever with no producer-side evidence.
 	if err := c.createStatusBucket(ctx); err != nil {
-		cancel()
 		return err
 	}
 
@@ -635,7 +682,6 @@ func (c *Component) Start(ctx context.Context) error {
 
 	// Create and start the entity index worker pool
 	if err := c.startIndexPool(ctx); err != nil {
-		cancel()
 		return err
 	}
 
@@ -652,24 +698,17 @@ func (c *Component) Start(ctx context.Context) error {
 
 	// Wait for ENTITY_STATES bucket and start the watcher goroutine
 	if err := c.waitAndWatchEntityStates(ctx); err != nil {
-		cancel()
 		return err
 	}
 
 	// Set up query handler subscriptions
 	if err := c.setupQueryHandlers(ctx); err != nil {
-		cancel()
 		return errs.Wrap(err, "Component", "Start", "query handler setup")
 	}
-	runDone := make(chan struct{})
-	go func() {
-		c.wg.Wait()
-		close(runDone)
-	}()
-	c.runCancel = cancel
-	c.runDone = runDone
+	sealRunDone()
 
 	// Mark as running
+	c.cleanupPending = false
 	c.running = true
 	c.startTime = time.Now()
 
@@ -686,6 +725,29 @@ func (c *Component) Stop(ctx context.Context) error {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
 	c.mu.Lock()
+	if c.cleanupPending {
+		cancel := c.runCancel
+		runDone := c.runDone
+		pool := c.indexPool
+		coalescer := c.entityCoalescer
+		subscriptions := c.querySubscriptions
+		c.mu.Unlock()
+
+		stopErr := c.stopOwnedRuntime(ctx, cancel, runDone, pool, coalescer, subscriptions)
+		if stopErr != nil {
+			return stopErr
+		}
+		c.mu.Lock()
+		c.runCancel = nil
+		c.runDone = nil
+		c.indexPool = nil
+		c.entityCoalescer = nil
+		c.querySubscriptions = nil
+		c.cleanupPending = false
+		c.running = false
+		c.mu.Unlock()
+		return nil
+	}
 	cancel := c.runCancel
 	if cancel == nil || !c.running {
 		c.mu.Unlock()
@@ -697,14 +759,37 @@ func (c *Component) Stop(ctx context.Context) error {
 	subscriptions := c.querySubscriptions
 	// Claim the one-shot owner before releasing the lock. A later Stop is a
 	// no-op even when this call fails; process supervision exits non-cleanly
-	// rather than rejoining or publishing a replacement generation.
+	// rather than awaiting the already-claimed runtime again.
 	c.runCancel = nil
 	c.mu.Unlock()
 
+	stopErr := c.stopOwnedRuntime(ctx, cancel, runDone, pool, coalescer, subscriptions)
+	if stopErr != nil {
+		return stopErr
+	}
+
+	// Successful Start publishes immutable resource handles. Stop records only
+	// the observed terminal health state; it does not detach or clear handles.
+	c.mu.Lock()
+	c.running = false
+	c.mu.Unlock()
+
+	c.logger.Info("component stopped gracefully", slog.String("component", "graph-index"))
+	return nil
+}
+
+// stopOwnedRuntime performs graph-index's exact owner-local shutdown order.
+// Callers stabilize the immutable Start-owned handles before calling it.
+func (c *Component) stopOwnedRuntime(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	runDone <-chan struct{},
+	pool *keyedDispatcher[entityIndexWork],
+	coalescer *revisionCoalescer,
+	subscriptions []*natsclient.Subscription,
+) error {
 	// Drain is the native admission fence and callback join. Keep the exact
-	// Start-owned callback context live until every subscription observes Closed,
-	// so already-admitted queries can finish instead of being canceled as if they
-	// were dirty-shutdown work.
+	// Start-owned callback context live until every subscription observes Closed.
 	var stopErr error
 	for _, sub := range subscriptions {
 		if sub != nil {
@@ -716,13 +801,11 @@ func (c *Component) Stop(ctx context.Context) error {
 	}
 
 	// Every admission fence was attempted while callback authority remained live.
-	// Cancel exactly once even when one or more native drains failed.
 	cancel()
 
 	// c.wg owns the ENTITY_STATES watcher plus repair and readiness-metrics
-	// loops. The watcher and repair loop are the coalescer's producers, so their
-	// join is observed first. The remaining waits observe already-canceled owners
-	// and are safe to attempt under ctx even if an earlier observation failed.
+	// loops. Their join precedes the coalescer and dispatcher joins because they
+	// are the remaining producers for those children.
 	select {
 	case <-runDone:
 	case <-ctx.Done():
@@ -736,23 +819,16 @@ func (c *Component) Stop(ctx context.Context) error {
 		}
 	}
 	if pool != nil {
-		if err := pool.Stop(ctx); err != nil {
-			stopErr = errors.Join(stopErr, fmt.Errorf("wait for graph-index pool: %w", err))
+		select {
+		case <-pool.done:
+		case <-ctx.Done():
+			stopErr = errors.Join(stopErr, fmt.Errorf("wait for graph-index pool: %w", ctx.Err()))
 		}
 	}
 	if stopErr != nil {
 		atomic.AddInt64(&c.errors, 1)
-		return stopErr
 	}
-
-	// Successful Start publishes immutable resource handles. Stop records only
-	// the observed terminal health state; it does not detach or clear handles.
-	c.mu.Lock()
-	c.running = false
-	c.mu.Unlock()
-
-	c.logger.Info("component stopped gracefully", slog.String("component", "graph-index"))
-	return nil
+	return stopErr
 }
 
 // createOutputBuckets acquires every output KV bucket through the catalog
