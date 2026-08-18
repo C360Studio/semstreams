@@ -3,7 +3,7 @@
 //
 // A Template is a flow-shaped JSON blob with named substitution points the
 // coordinator agent (or any operator) fills in to produce a concrete
-// flowstore.Flow ready to deploy. Step 4 of ADR-029 Pattern B.
+// flowstore.Flow ready to validate, save, or compile. Step 4 of ADR-029 Pattern B.
 //
 // Templating is intentionally minimal for the first pass: Go's text/template
 // over the marshalled JSON body with a Parameters map. Real templating

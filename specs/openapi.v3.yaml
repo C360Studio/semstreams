@@ -125,23 +125,23 @@ paths:
                                 type: object
         post:
             summary: Create a saved flow diagram
-            description: Saves a diagram without changing runtime configuration.
+            description: Saves a diagram without changing runtime configuration. Identity, version, and audit fields are server-owned.
             tags:
                 - Flows
             requestBody:
-                description: Flow diagram
+                description: Flow authoring fields
                 required: true
                 content:
                     application/json:
                         schema:
-                            $ref: '#/components/schemas/Flow'
+                            $ref: '#/components/schemas/FlowCreateRequest'
             responses:
                 "201":
                     description: Diagram created
                     content:
                         application/json:
                             schema:
-                                type: object
+                                $ref: '#/components/schemas/Flow'
                 "400":
                     description: Invalid request
     /flows/{id}:
@@ -168,7 +168,7 @@ paths:
                     description: Saved diagram not found
         put:
             summary: Update a saved flow diagram
-            description: Updates a diagram with optimistic concurrency; runtime configuration is unchanged.
+            description: Updates authoring fields with optimistic concurrency; path identity and resulting persistence metadata are server-owned. Runtime configuration is unchanged.
             tags:
                 - Flows
             parameters:
@@ -179,19 +179,21 @@ paths:
                   schema:
                     type: string
             requestBody:
-                description: Updated diagram
+                description: Flow authoring fields and expected version
                 required: true
                 content:
                     application/json:
                         schema:
-                            $ref: '#/components/schemas/Flow'
+                            $ref: '#/components/schemas/FlowUpdateRequest'
             responses:
                 "200":
                     description: Diagram updated
                     content:
                         application/json:
                             schema:
-                                type: object
+                                $ref: '#/components/schemas/Flow'
+                "400":
+                    description: Invalid request
                 "409":
                     description: Version conflict
         delete:
@@ -302,7 +304,7 @@ paths:
     /flows/{id}/validate:
         post:
             summary: Validate a flow diagram
-            description: Validates a saved diagram or request-body draft without changing configuration.
+            description: Validates a saved diagram or strict request-body draft without changing configuration. The path supplies draft identity.
             tags:
                 - Flows
             parameters:
@@ -312,6 +314,12 @@ paths:
                   description: Saved flow diagram ID
                   schema:
                     type: string
+            requestBody:
+                description: Optional flow authoring fields
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/FlowValidateRequest'
             responses:
                 "200":
                     description: Validation result
@@ -319,6 +327,8 @@ paths:
                         application/json:
                             schema:
                                 type: object
+                "400":
+                    description: Invalid request
     /gaps:
         get:
             summary: Get component flow gaps
@@ -1366,6 +1376,207 @@ components:
                 - created_at
                 - updated_at
                 - last_modified
+            type: object
+        FlowCreateRequest:
+            additionalProperties: false
+            properties:
+                connections:
+                    items:
+                        properties:
+                            id:
+                                type: string
+                            source_node_id:
+                                type: string
+                            source_port:
+                                type: string
+                            target_node_id:
+                                type: string
+                            target_port:
+                                type: string
+                        required:
+                            - id
+                            - source_node_id
+                            - source_port
+                            - target_node_id
+                            - target_port
+                        type: object
+                    type: array
+                description:
+                    type: string
+                name:
+                    type: string
+                nodes:
+                    items:
+                        properties:
+                            component:
+                                type: string
+                            config:
+                                additionalProperties: {}
+                                type: object
+                            id:
+                                type: string
+                            name:
+                                type: string
+                            position:
+                                properties:
+                                    x:
+                                        type: number
+                                    "y":
+                                        type: number
+                                required:
+                                    - x
+                                    - "y"
+                                type: object
+                            type:
+                                type: string
+                        required:
+                            - id
+                            - component
+                            - type
+                            - name
+                            - position
+                            - config
+                        type: object
+                    type: array
+            required:
+                - name
+                - nodes
+                - connections
+            type: object
+        FlowUpdateRequest:
+            additionalProperties: false
+            properties:
+                connections:
+                    items:
+                        properties:
+                            id:
+                                type: string
+                            source_node_id:
+                                type: string
+                            source_port:
+                                type: string
+                            target_node_id:
+                                type: string
+                            target_port:
+                                type: string
+                        required:
+                            - id
+                            - source_node_id
+                            - source_port
+                            - target_node_id
+                            - target_port
+                        type: object
+                    type: array
+                description:
+                    type: string
+                expected_version:
+                    type: integer
+                name:
+                    type: string
+                nodes:
+                    items:
+                        properties:
+                            component:
+                                type: string
+                            config:
+                                additionalProperties: {}
+                                type: object
+                            id:
+                                type: string
+                            name:
+                                type: string
+                            position:
+                                properties:
+                                    x:
+                                        type: number
+                                    "y":
+                                        type: number
+                                required:
+                                    - x
+                                    - "y"
+                                type: object
+                            type:
+                                type: string
+                        required:
+                            - id
+                            - component
+                            - type
+                            - name
+                            - position
+                            - config
+                        type: object
+                    type: array
+            required:
+                - name
+                - nodes
+                - connections
+                - expected_version
+            type: object
+        FlowValidateRequest:
+            additionalProperties: false
+            properties:
+                connections:
+                    items:
+                        properties:
+                            id:
+                                type: string
+                            source_node_id:
+                                type: string
+                            source_port:
+                                type: string
+                            target_node_id:
+                                type: string
+                            target_port:
+                                type: string
+                        required:
+                            - id
+                            - source_node_id
+                            - source_port
+                            - target_node_id
+                            - target_port
+                        type: object
+                    type: array
+                description:
+                    type: string
+                name:
+                    type: string
+                nodes:
+                    items:
+                        properties:
+                            component:
+                                type: string
+                            config:
+                                additionalProperties: {}
+                                type: object
+                            id:
+                                type: string
+                            name:
+                                type: string
+                            position:
+                                properties:
+                                    x:
+                                        type: number
+                                    "y":
+                                        type: number
+                                required:
+                                    - x
+                                    - "y"
+                                type: object
+                            type:
+                                type: string
+                        required:
+                            - id
+                            - component
+                            - type
+                            - name
+                            - position
+                            - config
+                        type: object
+                    type: array
+            required:
+                - name
+                - nodes
+                - connections
             type: object
         GraphQLRequest:
             properties:

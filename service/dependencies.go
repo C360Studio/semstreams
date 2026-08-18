@@ -16,7 +16,7 @@ import (
 )
 
 // natsPublisher defines the interface for publishing to NATS JetStream.
-// All observability streams (logs, health, metrics, flows) should use
+// All observability streams (logs, health, and metrics) should use
 // PublishToStream for consistent async pub/sub behavior with persistence.
 type natsPublisher interface {
 	PublishToStream(ctx context.Context, subject string, data []byte) error

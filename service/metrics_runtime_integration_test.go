@@ -9,13 +9,54 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/metric"
+	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/security"
 	"github.com/stretchr/testify/suite"
 )
 
 type MetricsRuntimeSuite struct {
 	ServiceSuite // Inherits NATS client setup
 	kvHelper     *KVTestHelper
+}
+
+func TestMetricsUsesSealedBootSecurityAfterDesiredMutation(t *testing.T) {
+	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
+	initial := &config.Config{
+		Platform: config.PlatformConfig{Org: "test", ID: t.Name(), Type: "test"},
+		Security: security.Config{TLS: security.TLSConfig{
+			Server: security.ServerTLSConfig{MinVersion: "1.2"},
+		}},
+	}
+	manager, err := config.NewConfigManager(t.Context(), initial, testClient.Client, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Stop(5 * time.Second) })
+
+	if err := manager.GetConfig().Mutate(func(desired *config.Config) error {
+		desired.Security.TLS.Server.MinVersion = "1.3"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	svc, err := NewMetrics(json.RawMessage(`{}`), &Dependencies{
+		Manager:         manager,
+		Logger:          slog.Default(),
+		MetricsRegistry: metric.NewMetricsRegistry(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics := svc.(*Metrics)
+	if got := metrics.security.TLS.Server.MinVersion; got != "1.2" {
+		t.Fatalf("metrics security min version = %q, want sealed boot value 1.2", got)
+	}
 }
 
 func (s *MetricsRuntimeSuite) SetupTest() {

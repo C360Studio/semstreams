@@ -100,7 +100,8 @@ sequenceDiagram
 
 ### FlowGraph Component
 
-The FlowGraph component (`flowgraph/`) provides **static analysis and validation** of component interconnections. It is used by the flow engine's validator to analyze flow definitions before deployment.
+The FlowGraph component (`flowgraph/`) provides **static analysis and validation** of component interconnections. The
+flow engine uses it to analyze saved diagrams before compilation or explicit candidate publication.
 
 **Purpose**: Build and validate connectivity graphs from component port definitions
 
@@ -111,21 +112,22 @@ The FlowGraph component (`flowgraph/`) provides **static analysis and validation
 - Validate interface contracts between connected ports
 - Identify resource conflicts (e.g., network port binding)
 
-**Important**: FlowGraph is a **validation tool**, not a runtime component. It creates temporary graph structures for analysis during flow validation and is discarded after validation completes. The flow engine uses FlowGraph during pre-deployment validation but does not use it during runtime execution.
+**Important**: FlowGraph is a **validation tool**, not a runtime component. It creates temporary graph structures for
+analysis and is discarded after validation. Neither FlowGraph nor the flow engine owns runtime lifecycle.
 
 **Relationship to Flow Infrastructure**:
 
 ```
 Flow Service (HTTP API)
     ↓ uses
-Flow Engine (Lifecycle Orchestration)
+Flow Engine (Validation and Compilation)
     ↓ validation → FlowGraph (Static Analysis)
-    ↓ deployment → Component Manager (Runtime)
+    ↓ explicit publish → Config Manager (Desired Next-Boot State)
 ```
 
 - **FlowGraph**: "Can these components connect?" (static graph analysis)
-- **Flow Engine**: "Deploy/start/stop this flow" (lifecycle orchestration)
-- **Flow Service**: "HTTP interface to flow operations" (REST API layer)
+- **Flow Engine**: "Validate and compile this diagram" (no persistence or lifecycle)
+- **Flow Service**: "Save diagrams and explicitly publish candidates" (REST API layer)
 
 Each layer has distinct, non-overlapping responsibilities.
 
@@ -360,10 +362,6 @@ Registers a storage component factory.
 
 Returns metadata for all registered factories.
 
-#### `ListComponents() map[string]Discoverable`
-
-Returns all created component instances.
-
 ### Types
 
 #### `Factory`
@@ -434,7 +432,7 @@ func TestMyComponent(t *testing.T) {
 - Multiple goroutines can create components concurrently
 - Factory registration blocks component creation temporarily
 - No deadlocks due to ordered lock acquisition
-- Components maintain references until explicitly unregistered
+- Registry stores factory and immutable declaration values, not component instances
 
 ## Architecture Decisions
 
@@ -480,7 +478,7 @@ func TestMyComponent(t *testing.T) {
 ## Related Packages
 
 - [pkg/componentregistry](../componentregistry): Orchestrates component registration
-- [pkg/service](../service): Manager uses Registry for lifecycle
+- [pkg/service](../service): ComponentManager uses Registry factories and declarations during boot
 - [pkg/types](../types): ComponentConfig and ComponentType definitions
 - [pkg/natsclient](../natsclient): NATS client dependency
 - [pkg/metric](../metric): Optional Prometheus metrics

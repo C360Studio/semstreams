@@ -225,7 +225,7 @@ type Processor struct {
 
 	// kvConfigManager is the component-internal hot-reload manager. It owns a
 	// KV watcher on semstreams_config:rules.* and calls ApplyConfigUpdate when
-	// the watcher fires. Constructed in Start; nil when NATS is unavailable.
+	// the watcher fires. Constructed and drained by run; nil when NATS is unavailable.
 	// See also: cmd/semstreams/main.go buildRuleManager — a second ConfigManager
 	// instance (processor=nil) for agent CRUD tools. Both share the same KV bucket.
 	kvConfigManager *ConfigManager
@@ -571,9 +571,7 @@ func (rp *Processor) run(ctx context.Context) {
 	// Start the cron scheduler now that watchers and subscriptions are up.
 	// Doing this after setupSubscriptions guarantees the publisher's NATS
 	// subjects are ready before the first cron tick can dispatch a publish
-	// action. The deferred Stop drains in-flight fires when run() returns
-	// (either via shutdown or ctx cancellation) before the rest of the
-	// processor's resources are torn down in Stop().
+	// action.
 	if rp.cronScheduler != nil {
 		if err := rp.cronScheduler.Start(ctx); err != nil {
 			rp.logger.Warn("Failed to start cron scheduler", "error", err)
@@ -585,8 +583,6 @@ func (rp *Processor) run(ctx context.Context) {
 			rp.mu.Lock()
 			rp.cronScheduler = nil
 			rp.mu.Unlock()
-		} else {
-			defer rp.drainCronScheduler()
 		}
 	}
 
@@ -611,6 +607,15 @@ func (rp *Processor) run(ctx context.Context) {
 	rp.mu.Unlock()
 	rp.logger.Info("Rule processor ready - watchers and subscriptions established")
 
+	// run owns both internal rule-definition mutation and cron scheduling.
+	// Stop hot reload first so an admitted reconcile can finish its
+	// Deregister/Register pair before cron admission is fenced.
+	var hotReloadMgr *ConfigManager
+	if rp.natsClient != nil {
+		hotReloadMgr = rp.startHotReloadManager(ctx)
+	}
+	defer rp.drainRuleRuntime(hotReloadMgr)
+
 	<-ctx.Done()
 	rp.logger.Info("Rule processor context cancelled", "error", ctx.Err())
 	if rp.statusLoopDone != nil {
@@ -627,6 +632,18 @@ func (rp *Processor) drainCronScheduler() {
 	}
 	rp.cronScheduler.Stop()
 	rp.logger.Debug("Cron scheduler drained cleanly")
+}
+
+// drainRuleRuntime fences and joins rule-definition mutation before stopping
+// cron scheduling. It uses the exact manager started by run and holds no
+// processor lock while either owner joins its work.
+func (rp *Processor) drainRuleRuntime(hotReloadMgr *ConfigManager) {
+	if hotReloadMgr != nil {
+		if err := hotReloadMgr.Stop(); err != nil {
+			rp.logger.Error("Failed to stop rule hot-reload manager", "error", err)
+		}
+	}
+	rp.drainCronScheduler()
 }
 
 // initializeStateTracker creates the RULE_STATE KV bucket and initializes state tracking components.
@@ -917,10 +934,6 @@ func (rp *Processor) Start(ctx context.Context) error {
 	runCtx, runCancel := context.WithCancel(ctx)
 	var runtimeWG sync.WaitGroup
 	runtimeWG.Add(2)
-	reserveHotReload := rp.natsClient != nil
-	if reserveHotReload {
-		runtimeWG.Add(1)
-	}
 	rp.generation = lifecyclejoin.NewGeneration(runCancel, runtimeWG.Wait)
 	rp.ready = make(chan struct{})
 	rp.running = true
@@ -956,29 +969,11 @@ func (rp *Processor) Start(ctx context.Context) error {
 	case <-ctx.Done():
 		// Context cancelled during startup. The exact generation remains retained
 		// so Stop can rejoin any cleanup that outlives this caller.
-		if reserveHotReload {
-			runtimeWG.Done()
-		}
 		rp.generation.Cancel()
 		return ctx.Err()
 	}
 
 	rp.isSubscribed = true
-
-	// Wire hot-reload: component-internal ConfigManager owns a KV watcher on
-	// semstreams_config:rules.* and applies changes without restart. This is
-	// distinct from the Pattern-B CRUD manager in cmd/semstreams/main.go
-	// (buildRuleManager, processor=nil) which handles agent tool writes.
-	//
-	// Launched as a goroutine so that InitializeKVStore and Watch run after
-	// Start() returns and releases rp.mu. reconcileFromKV (debounced 250ms)
-	// will only fire after the lock is free.
-	if reserveHotReload {
-		go func() {
-			defer runtimeWG.Done()
-			rp.startHotReloadManager(runCtx)
-		}()
-	}
 
 	// Count subjects for logging
 	subjectCount := 0
@@ -994,37 +989,27 @@ func (rp *Processor) Start(ctx context.Context) error {
 }
 
 // startHotReloadManager constructs and starts the component-internal KV
-// hot-reload manager. It is called as a goroutine from Start() so that
-// InitializeKVStore, SeedFromRuntime, and Watch run after rp.mu is released
-// (all three ultimately call rp.mu.RLock or rp.mu.Lock). reconcileFromKV
-// fires after a 250ms debounce, well past the point where Start() returns.
-//
-// If Stop() races with this goroutine and the processor is no longer running
-// by the time we store the manager, we immediately stop the manager so it
-// does not outlive the processor.
-func (rp *Processor) startHotReloadManager(ctx context.Context) {
+// hot-reload manager from run after Start has released rp.mu. run owns and
+// drains the returned handle before stopping cron scheduling.
+func (rp *Processor) startHotReloadManager(ctx context.Context) *ConfigManager {
 	rcm := NewConfigManager(rp, nil, rp.logger)
 	if err := rcm.InitializeKVStore(ctx, rp.natsClient); err != nil {
 		rp.logger.Warn("Failed to initialize KV store for rule hot-reload; running with file rules only",
 			slog.Any("error", err))
-		return
+		return nil
 	}
 	if err := rcm.Start(ctx); err != nil {
 		rp.logger.Warn("Failed to start rule hot-reload watcher; running with file rules only",
 			slog.Any("error", err))
-		return
+		if stopErr := rcm.Stop(); stopErr != nil {
+			rp.logger.Error("Failed to clean partial rule hot-reload start", "error", stopErr)
+		}
+		return nil
 	}
 	rp.mu.Lock()
-	if rp.running {
-		rp.kvConfigManager = rcm
-		rp.mu.Unlock()
-	} else {
-		// Processor already stopped — clean up the manager we just started.
-		rp.mu.Unlock()
-		if err := rcm.Stop(); err != nil {
-			rp.logger.Debug("Hot-reload manager stop after race with Stop() (ignored)", slog.Any("error", err))
-		}
-	}
+	rp.kvConfigManager = rcm
+	rp.mu.Unlock()
+	return rcm
 }
 
 // setupSubscriptions creates subscriptions for input subjects based on port type
@@ -1194,7 +1179,6 @@ func (rp *Processor) Stop(ctx context.Context) error {
 		return nil
 	}, func(ctx context.Context) error {
 		rp.mu.RLock()
-		hotReloadMgr := rp.kvConfigManager
 		watcherCancel := rp.watcherCancelFunc
 		watchers := append([]jetstream.KeyWatcher(nil), rp.entityWatchers...)
 		subscriptions := append([]*natsclient.Subscription(nil), rp.subscriptions...)
@@ -1202,11 +1186,6 @@ func (rp *Processor) Stop(ctx context.Context) error {
 		rp.mu.RUnlock()
 
 		var stopErrors []error
-		if hotReloadMgr != nil {
-			if err := hotReloadMgr.Stop(); err != nil {
-				stopErrors = append(stopErrors, fmt.Errorf("stop rule hot-reload manager: %w", err))
-			}
-		}
 		if watcherCancel != nil {
 			watcherCancel()
 		}

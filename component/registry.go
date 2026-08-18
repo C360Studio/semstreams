@@ -42,10 +42,8 @@ type Factory func(rawConfig json.RawMessage, deps Dependencies) (Discoverable, e
 const (
 	// DepModelRegistry signals that a component consumes
 	// Dependencies.ModelRegistry at construction or run time. Components
-	// that declare this are restarted by ComponentManager when the
-	// model_registry KV key changes, so they rebuild any registry-
-	// derived state (LLM clients, embedder clients, summarizers) against
-	// the new config.
+	// that declare this consume the model registry selected at boot.
+	// Later model_registry writes require process restart.
 	DepModelRegistry = "model-registry"
 )
 
@@ -59,7 +57,7 @@ type Registration struct {
 	Version      string       `json:"version"`      // Component version
 	Schema       ConfigSchema `json:"schema"`       // Schema as static metadata (Feature 011)
 	Factory      Factory      `json:"-"`            // Factory function (not serializable)
-	Dependencies []string     `json:"dependencies"` // Runtime dependencies (e.g., DepModelRegistry) — used by ComponentManager for restart routing
+	Dependencies []string     `json:"dependencies"` // Boot dependencies such as DepModelRegistry
 }
 
 // RegistrationConfig provides a clean API for component registration.
@@ -152,9 +150,8 @@ type generationObserver struct {
 	pending chan []componentGeneration
 }
 
-// Registry manages component factories and instances
-// It provides thread-safe registration and lookup of both factories (for creation)
-// and instances (for discovery and management).
+// Registry manages component factories and immutable admitted declaration
+// generations. Runtime component handles remain private to ComponentManager.
 type Registry struct {
 	factories   map[string]*Registration       // Factory registry by name
 	generations map[string]componentGeneration // Admitted generation by instance name

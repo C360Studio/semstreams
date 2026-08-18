@@ -4,9 +4,8 @@ The breaking SemStreams lifecycle change replaces duration-based component and s
 caller-owned contexts. The change intentionally fails compilation at adopter call sites instead of preserving detached
 work through compatibility overloads.
 
-The atomic Stop prerequisite described here is implemented and validated. Use the release notes to confirm the first
-tag that contains it; the later Registry declaration/runtime split described by the active OpenSpec change remains
-deferred.
+The atomic Stop prerequisite and the Registry declaration/runtime split described here are implemented and validated.
+Use the release notes to confirm the first tag that contains them.
 
 ## BREAKING release entry
 
@@ -261,29 +260,15 @@ request the lifecycle mutation.
 Registry declaration observation will show only complete old or new generations. It will not report Transitioning or
 Failed because declaration identity is not runtime availability.
 
-## Deferred replacement lifecycle changes
+## Boot-only composition
 
-The replacement protocol below is approved target state, not implemented by the atomic Stop prerequisite. The later
-Registry/runtime slice will close and drain scoped borrows before canceling the incumbent, then wait for that exact
-generation's Start completion/finalization before same-generation Stop so Start and Stop never overlap.
+The replacement protocol was rejected and removed. ComponentManager owns one fixed boot generation for each admitted
+component. Configuration writes after boot persist desired next-boot state and cannot start, stop, remove, restart, or
+replace current components. Registry exposes immutable declaration values only.
 
-Removal will use the same order. Terminal ComponentManager Stop will differ: after validating context, it will close
-every gate, cancel every runtime before bounded waits, drain admitted borrows, join exact Start/finalization, then
-invoke each started component's Stop. Neither callbacks nor drains will run under manager or gate locks.
-
-The target lifecycle outcomes are:
-
-| Outcome | Current generation | Availability | Candidate |
-|---|---|---|---|
-| Preparation fails before cancel | Incumbent unchanged | Available | Discarded, never committed |
-| Request expires after cancel | Incumbent `Failed` | Unavailable | Discarded; no detached cleanup |
-| Incumbent Stop fails | Incumbent `Failed` | Unavailable | Discarded, never committed or started |
-| Commit succeeds, candidate Start succeeds | Candidate started | Available | Current |
-| Commit succeeds, candidate Start fails | Candidate `Failed` | Unavailable | Current; predecessor is not restored |
-
-Cancellation will be the availability point of no return. Successful Stop will be the later declaration-commit point
-of no return. A request context will bound the operation but never own admitted runtime; dynamic Start will descend
-from the manager supervisor's Start context.
+Flow diagrams are also not lifecycle authority. Diagram CRUD changes only flowstore. The explicit publish operation
+validates and compiles a saved diagram, then upserts desired component candidates; omissions never imply deletion.
+The current process remains unchanged and supervision owns restart.
 
 ## Sister repositories
 

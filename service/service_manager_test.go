@@ -301,7 +301,7 @@ func createTestServiceManager(config ManagerConfig, deps *Dependencies) *Manager
 	return serviceManager
 }
 
-func TestServiceManager_ConfigWatcher_WithNATSAvailable(t *testing.T) {
+func TestServiceManager_StartWithNATSAvailable(t *testing.T) {
 	// Create mock NATS client (connected and connection available)
 	mockNATS := newMockNATSClient(true, false)
 	deps := createTestServiceDependencies(mockNATS)
@@ -315,7 +315,7 @@ func TestServiceManager_ConfigWatcher_WithNATSAvailable(t *testing.T) {
 	// Create Manager for testing
 	serviceManager := createTestServiceManager(config, deps)
 
-	// Test Start method with ConfigWatcher integration
+	// Test Start with NATS dependencies available.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
@@ -324,10 +324,7 @@ func TestServiceManager_ConfigWatcher_WithNATSAvailable(t *testing.T) {
 		t.Fatalf("Failed to start Manager: %v", err)
 	}
 
-	// Verify Manager integration behavior
-	// Since we have a mock connection, config watching may or may not be available
-	// The service should still start successfully (graceful degradation)
-	// We cannot directly test configUpdates channel as it's not accessible
+	// The fixed service composition should start successfully.
 
 	// Clean up
 	err = serviceManager.Stop(context.Background())

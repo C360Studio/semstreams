@@ -104,9 +104,9 @@
 //
 // Registry Pattern:
 //
-// The Registry manages component factories and instances with thread-safe operations.
-// Components register explicitly via Register() functions called by componentregistry,
-// and the Registry handles creation and lifecycle management.
+// The Registry manages component factories and immutable admitted declarations with
+// thread-safe operations. Components register explicitly via Register() functions
+// called by componentregistry. ComponentManager owns boot-time creation and lifecycle.
 //
 // Dependencies:
 //
@@ -378,14 +378,13 @@
 // Registry Performance:
 //   - Factory lookup: O(1) with map-based storage
 //   - Component creation: Factory execution time + O(1) registry overhead
-//   - Memory: Components maintain references in Registry until unregistered
+//   - Memory: Registry retains factory and immutable declaration metadata only
 //   - Concurrency: Read-write mutex allows concurrent component creation
 //
 // Component Lifecycle:
-//   - Components are created on-demand, not pre-instantiated
-//   - Registry holds strong references to created instances
-//   - Memory is released when components are unregistered
-//   - No automatic garbage collection of unused components
+//   - Components are constructed during ComponentManager boot admission
+//   - Registry does not retain runtime instances
+//   - Runtime instances remain private to ComponentManager until terminal Stop
 //
 // # Architecture Decisions
 //
@@ -444,13 +443,13 @@
 //   - log/slog: Optional for structured logging (defaults to slog.Default())
 //
 // Used By:
-//   - pkg/service: Manager uses Registry for component lifecycle
+//   - pkg/service: ComponentManager uses Registry factories and declarations during boot
 //   - pkg/componentregistry: Orchestrates component registration
 //   - cmd/semstreams: Application entry point creates and populates Registry
 //
 // Data Flow:
 //
-//	Configuration → Factory Lookup → Factory Execution → Component Instance → Registry
+//	Boot Configuration → Registry Factory Lookup → Component Instance → ComponentManager
 //
 // # Examples
 //

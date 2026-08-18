@@ -131,7 +131,11 @@ func decodeStrictServiceJSON(raw json.RawMessage, target any) error {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return nil
 	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
+	return decodeStrictJSON(bytes.NewReader(raw), target)
+}
+
+func decodeStrictJSON(reader io.Reader, target any) error {
+	decoder := json.NewDecoder(reader)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		return err

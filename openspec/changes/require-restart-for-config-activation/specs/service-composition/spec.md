@@ -46,5 +46,6 @@ producer identity, or projection bindings.
 **Reason**: service and component composition now share one boot activation boundary. Only Definition content inside
 an already-admitted Rule processor may hot reload.
 
-**Migration**: persist component and flow changes as desired next-boot state. Use the dedicated rule-definition API for
-live expression and cron changes.
+**Migration**: persist component changes as desired next-boot state. Flow diagram CRUD remains authoring-only; use its
+explicit publish operation to upsert component candidates. Use the dedicated rule-definition API for live expression
+and cron changes.

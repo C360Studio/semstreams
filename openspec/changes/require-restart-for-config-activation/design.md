@@ -54,12 +54,11 @@ does not weaken shutdown ownership or allow Start and Stop method bodies to over
 
 ### D2. Config KV remains durable desired state
 
-Config KV remains authoritative for next-boot configuration after existing version arbitration. FlowService and other
+Config KV remains authoritative for next-boot configuration after existing version arbitration. Component-config
 authoring paths may validate and persist desired changes while a process is running. They must not mutate the sealed
-runtime.
-
-An accepted flow mutation returns an honest pending-next-boot result: desired state changed, current runtime unchanged,
-restart required. SemStreams does not automatically exit or restart; process supervision is deployment policy.
+runtime. Flow diagram CRUD persists only flowstore authoring artifacts. The separately named publish operation compiles
+a saved diagram and upserts desired component candidates; its response distinguishes exact persistence progress from
+the unchanged runtime and compares desired components with the sealed boot map.
 
 Every successful boot consumes the latest committed desired state regardless of how the prior process exited. Planned
 activation uses the graceful-shutdown protocol in D9; a dirty restart uses crash recovery. A prior clean-exit record is
@@ -80,6 +79,12 @@ integration, producer identity, and projection contract/index bindings cannot ho
 The Rule processor owns a Start-context supervisor. KV watcher and application goroutines receive that context as a
 goroutine parameter. No context is stored on a struct or recovered from a retained closure. A candidate rule set is
 validated and built before the active rule generation changes; rejection leaves the active generation unchanged.
+
+The processor's `run` method is the sole lifecycle owner of its successfully started internal rule ConfigManager and
+CronScheduler. On exit it stops and joins ConfigManager first, allowing any reconcile already admitted under the
+processor lock to complete its scheduler deregister/register pair. Only then does it stop and join CronScheduler. The
+drain uses the exact local manager handle, holds no processor lock, and remains safe when manager initialization or
+start returned no usable handle.
 
 ### D5. Desired rules and activation outcomes use KV Watch
 
@@ -239,13 +244,13 @@ clean-shutdown record, and stale boot-incarnation facts must not suppress or imp
 > `openspec/changes/simplify-one-shot-lifecycle-ownership/` supersede D10's `ManagedConsumer`,
 > `DrainAndDelete`, handle-local backlog, later running-generation rejoin, and retained repeated Client Close result.
 > D10 remains decision provenance inside this active design, but it is not the lifecycle implementation target.
-> PR #984 retains boot-only composition, rule hot reload, and flow activation truth. Raw-root retirement and
+> PR #984 retains boot-only composition, rule hot reload, and diagram-only flow authoring. Raw-root retirement and
 > restart-safe guarantees are delegated dependencies owned by the superseding change.
 
 ADR-095 and `simplify-one-shot-lifecycle-ownership` supersede PR #984's managed-consumer, lifecycle deletion,
 concurrent/rejoin, and retained-result mechanics and own the complete `restart-safe-shutdown` and
-`jetstream-consumer-policy` lifecycle target. PR #984 retains boot-only composition, rule hot reload, and flow
-activation truth; it depends on `simplify-one-shot-lifecycle-ownership` for broad-root retirement and restart-safe
+`jetstream-consumer-policy` lifecycle target. PR #984 retains boot-only composition, rule hot reload, and diagram-only
+flow authoring; it depends on `simplify-one-shot-lifecycle-ownership` for broad-root retirement and restart-safe
 settlement/outbound-flush, controlled-process proof, dirty-recovery, durable-communication, live-storage/replica
 validation, NATS restart, clean-marker independence, and latest-desired-state guarantees. No runtime or proof task is
 completed by delegation.
@@ -326,7 +331,8 @@ text; every runtime task cited below remains unchecked.
 
 ## Risks and mitigations
 
-- **Operator expects flow change to be immediate.** Typed responses state runtime unchanged and restart required.
+- **Operator expects diagram edits to affect runtime.** Diagram CRUD states that it changes no configuration. Only the
+  explicit publish operation writes desired component candidates and reports the current runtime unchanged.
 - **Rule write succeeds but activation fails.** Revision-bound terminal status records rejection; active generation
   remains unchanged.
 - **Rapid rule writes coalesce.** Every observed revision reaches `applied`, `rejected`, `superseded`, or

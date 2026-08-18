@@ -83,8 +83,7 @@ func TestHandleValidateFlow_WithBody(t *testing.T) {
 
 	// Create test flow in request body
 	flowID := "test-flow-with-body"
-	requestFlow := flowstore.Flow{
-		ID:   flowID,
+	requestFlow := service.FlowValidateRequest{
 		Name: "Test Flow",
 		Nodes: []flowstore.FlowNode{
 			{
@@ -245,19 +244,19 @@ func TestHandleValidateFlow_InvalidJSON(t *testing.T) {
 	t.Logf("Error response: %+v", errorResp)
 }
 
-// TestHandleValidateFlow_IDMismatch tests validation when body ID doesn't match URL ID
-func TestHandleValidateFlow_IDMismatch(t *testing.T) {
+// TestHandleValidateFlow_RejectsServerOwnedID proves request bodies cannot
+// compete with the path for flow identity.
+func TestHandleValidateFlow_RejectsServerOwnedID(t *testing.T) {
 	mux, _, _ := createTestFlowService(t)
 
 	urlFlowID := "test-flow-url-id"
-	bodyFlowID := "test-flow-body-id"
 
 	// Create test flow with different ID
-	requestFlow := flowstore.Flow{
-		ID:          bodyFlowID, // Different from URL
-		Name:        "Test Flow",
-		Nodes:       []flowstore.FlowNode{},
-		Connections: []flowstore.FlowConnection{},
+	requestFlow := map[string]any{
+		"id":          "test-flow-body-id",
+		"name":        "Test Flow",
+		"nodes":       []flowstore.FlowNode{},
+		"connections": []flowstore.FlowConnection{},
 	}
 
 	// Marshal flow to JSON
@@ -288,7 +287,7 @@ func TestHandleValidateFlow_IDMismatch(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Contains(t, errorResp, "error")
-	assert.Equal(t, "Flow ID mismatch", errorResp["error"])
+	assert.Contains(t, errorResp["error"], `unknown field "id"`)
 
 	t.Logf("Error response: %+v", errorResp)
 }
@@ -301,8 +300,7 @@ func TestHandleValidateFlow_WithBodyNoID(t *testing.T) {
 
 	// Create test flow WITHOUT ID in body
 	requestFlow := map[string]any{
-		"name":          "Test Flow",
-		"desired_state": "absent",
+		"name": "Test Flow",
 		"nodes": []flowstore.FlowNode{
 			{
 				ID:        "node-1",

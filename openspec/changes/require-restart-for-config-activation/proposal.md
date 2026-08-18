@@ -20,9 +20,11 @@ large non-idiomatic surface to copy.
 ## What changes
 
 - Treat service and component composition as immutable after successful boot.
-- Keep config KV, flow storage, rule storage, schemas, validation, and authoring APIs as durable desired state.
-- Make flow deploy/start/stop/undeploy operations mutate desired state only while a process is running. Their response
-  must state that the runtime is unchanged and restart is required.
+- Keep config KV and rule storage as durable desired state. Keep flow storage, schemas, validation, and authoring APIs
+  as diagram artifacts with no lifecycle meaning.
+- Retire flow deploy/start/stop/undeploy operations. Diagram CRUD cannot change configuration. One explicit publish
+  operation compiles a saved diagram and upserts desired component candidates for a later boot; it reports the current
+  runtime unchanged and whether the sealed boot map differs.
 - Retire ComponentManager config watching, generic live config PUT, runtime create/remove/restart/replace, and
   model-registry-triggered component restart.
 - Make Registry and observation value-only. ComponentManager remains the sole runtime-handle owner and exposes only
@@ -62,8 +64,8 @@ large non-idiomatic surface to copy.
 
 ADR-095 and `simplify-one-shot-lifecycle-ownership` supersede PR #984's managed-consumer, lifecycle deletion,
 concurrent/rejoin, and retained-result mechanics and own the complete `restart-safe-shutdown` and
-`jetstream-consumer-policy` lifecycle target. PR #984 retains boot-only composition, rule hot reload, and flow
-activation truth; it depends on `simplify-one-shot-lifecycle-ownership` for broad-root retirement and restart-safe
+`jetstream-consumer-policy` lifecycle target. PR #984 retains boot-only composition, rule hot reload, and diagram-only
+flow authoring; it depends on `simplify-one-shot-lifecycle-ownership` for broad-root retirement and restart-safe
 settlement/outbound-flush, controlled-process proof, dirty-recovery, durable-communication, live-storage/replica
 validation, NATS restart, clean-marker independence, and latest-desired-state guarantees. No runtime or proof task is
 completed by delegation.
@@ -73,7 +75,8 @@ completed by delegation.
 ### New capability
 
 - `rule-hot-reload`: bounded live rule-definition activation and revision-bound outcome truth.
-- `flow-activation-truth`: durable desired activation and independently observed effective runtime state.
+- `flow-diagram-authoring`: durable diagram CRUD, validation, compilation, explicit candidate publication, and
+  name-keyed observations without lifecycle authority.
 
 ### Delegated dependency capability
 
@@ -96,11 +99,11 @@ completed by delegation.
 ## Impact
 
 - **Breaking API and behavior:** ComponentManager live mutation methods, Registry replacement, generic config PUT, and
-  live flow-topology activation are retired without compatibility shims.
-- **Preserved authoring:** flow and rule definitions remain durable and validated. Flow mutations made while running
-  become pending-next-boot; rule-definition mutations retain bounded hot activation.
-- **Flow truth:** persisted flow state is renamed as desired activation. Runtime monitoring derives effective state
-  from the sealed process and never relabels a desired write as deployed or running.
+  every flow lifecycle route, field, stream, and tool are retired without compatibility shims.
+- **Preserved authoring:** flow diagrams and rule definitions remain durable and validated. Diagram CRUD has no config
+  effect; explicit diagram publication writes upsert-only desired component candidates for a later boot.
+- **Flow truth:** persisted flows are diagrams, not desired or effective activation records. Retained observations use
+  diagram component names only and never assert ownership or activation.
 - **Lifecycle:** ComponentManager owns one boot generation per admitted component and terminal shutdown. It no longer
   coordinates incumbent/candidate replacement.
 - **Restart safety:** the process signal path must preserve runtime authority until lifecycle owners quiesce and drain.
@@ -110,7 +113,7 @@ completed by delegation.
   core NATS is not used for work whose loss would violate restart correctness.
 - **Observability:** rule writers receive a desired revision and can observe the terminal activation outcome for that
   revision through typed rule reads, without knowing operational KV grammar. Watcher/status failure degrades Rule
-  readiness. Flow writers receive an honest restart-required result.
+  readiness. Diagram publishers receive exact persistence progress, runtime-unchanged truth, and a boot-map comparison.
 - **Deployment identity:** Rule hot reload requires a validated, stable `platform.instance_id`. Concurrent ownership of
   one process-slot/component/pack readiness key fails admission through compare-and-set rather than overwriting truth.
 - **Migration:** sister repositories remain read-only. Migration documentation names removed APIs and new response

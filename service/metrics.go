@@ -76,10 +76,11 @@ func NewMetrics(rawConfig json.RawMessage, deps *Dependencies) (Service, error) 
 	// Get security configuration from platform config
 	var securityCfg security.Config
 	if deps.Manager != nil {
-		fullConfig := deps.Manager.GetConfig()
-		if fullConfig != nil {
-			securityCfg = fullConfig.Get().Security
+		bootConfig := deps.Manager.BootConfig()
+		if bootConfig == nil {
+			return nil, fmt.Errorf("metrics service requires a started config manager")
 		}
+		securityCfg = bootConfig.Security
 	}
 
 	// Create base service

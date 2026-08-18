@@ -40,23 +40,27 @@ capability. The Rule component's own configuration remains next-boot-only.
 
 ### Requirement: Desired-state mutation reports restart truth
 
-An API that accepts a desired component or flow mutation while a process is running SHALL distinguish persistence from
-activation. A successful response SHALL report that desired state changed, the current runtime is unchanged, and
-restart is required.
+An API that accepts a desired component mutation while a process is running SHALL distinguish persistence from
+activation. A successful response SHALL report that desired state changed and the current runtime is unchanged. It
+SHALL report restart required exactly when desired component state differs from the sealed boot component map.
+
+Flow diagram CRUD SHALL NOT be a desired-state mutation. A separately named diagram publish operation MAY validate and
+compile the saved diagram, then upsert desired component candidates under this requirement. Diagram omissions SHALL
+NOT imply component deletion.
 
 Write success SHALL NOT be called applied, active, deployed, started, stopped, or removed with respect to the running
 process. SemStreams SHALL NOT automatically restart the process.
 
-#### Scenario: Flow deployment is pending next boot
+#### Scenario: Diagram publication writes candidates for a later boot
 
 - **GIVEN** a running process
-- **WHEN** a validated flow deployment persists desired component records
-- **THEN** the response reports desired state accepted
-- **AND** it reports runtime unchanged and restart required
+- **WHEN** explicit publication of a validated diagram persists desired component candidates
+- **THEN** the response reports exact persisted names and any failed name
+- **AND** it reports runtime unchanged and restart truth from the sealed boot comparison
 
 #### Scenario: Invalid desired state changes nothing
 
-- **WHEN** desired component or flow configuration fails schema, composition, or declaration validation
+- **WHEN** desired component configuration or diagram publication fails schema, composition, or declaration validation
 - **THEN** neither durable desired state nor the running process changes
 - **AND** the response identifies the validation failure
 
@@ -120,7 +124,8 @@ rule definitions.
 **Reason**: the transient live PUT is retired. Desired-state responses now report persistence, unchanged runtime, and
 restart requirement.
 
-**Migration**: callers stop using `applied`; flow/config authoring consumes the typed next-boot result.
+**Migration**: callers stop using `applied`; component-config authoring and explicit diagram publication consume the
+typed next-boot result.
 
 ### Requirement: A rejected update does not become a stored-but-unapplied config
 
@@ -133,7 +138,8 @@ application branch no longer exists.
 
 **Reason**: config writes are facts for the next boot, not commands to mutate the running component set.
 
-**Migration**: Engine writes desired component state and reports restart required.
+**Migration**: only explicit diagram publication compiles and writes desired component candidates; Engine itself has
+no persistence or lifecycle authority.
 
 ### Requirement: The engine-owned-revision skip suppresses only the in-memory re-apply
 

@@ -6,6 +6,12 @@ import (
 	"time"
 )
 
+type closedJSONSchema interface {
+	closedJSONSchema()
+}
+
+var closedJSONSchemaType = reflect.TypeOf((*closedJSONSchema)(nil)).Elem()
+
 // SchemaFromType generates a JSON Schema from a reflect.Type.
 // It handles primitives, structs, slices, maps, pointers, and time.Time.
 func SchemaFromType(t reflect.Type) map[string]any {
@@ -112,6 +118,9 @@ func schemaFromStruct(t reflect.Type) map[string]any {
 	schema := map[string]any{
 		"type":       "object",
 		"properties": properties,
+	}
+	if t.Implements(closedJSONSchemaType) || reflect.PointerTo(t).Implements(closedJSONSchemaType) {
+		schema["additionalProperties"] = false
 	}
 
 	if len(required) > 0 {

@@ -198,6 +198,19 @@ The Rule processor SHALL own watching, candidate preparation, activation, and st
 context. Goroutines SHALL receive that context as a function parameter. Production structs and retained callbacks
 SHALL NOT store or recover it; only private cancellation and join state may be retained.
 
+The Start-owned run function SHALL own the exact internal rule ConfigManager and CronScheduler handles. Shutdown SHALL
+cancel and join ConfigManager before stopping CronScheduler so an admitted reconcile completes its scheduler
+deregister/register pair before scheduler admission closes. This ordering SHALL hold no processor lock while joining,
+and a failed or degraded ConfigManager start SHALL leave no watcher or scheduler work orphaned.
+
+#### Scenario: Shutdown orders admitted cron replacement before scheduler stop
+
+- **GIVEN** hot reload has acquired the processor mutation lock and is replacing a cron rule
+- **WHEN** shutdown begins while replacement is waiting for the scheduler lock
+- **THEN** ConfigManager first fences new watcher work and joins the admitted replacement
+- **AND** the complete replacement is reflected in processor maps and scheduler entries
+- **AND** only then does CronScheduler stop and join
+
 For planned shutdown, Stop SHALL first close a private activation-admission fence without canceling the Start context.
 The Start-owned supervisor SHALL finish or reject any commit-selected candidate and publish
 `canceled_shutdown` for every observed, uncommitted revision while its Start context and NATS authority remain live.

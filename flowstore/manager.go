@@ -64,6 +64,7 @@ func (s *Manager) Create(ctx context.Context, flow *Flow) error {
 	// Initialize version and timestamps
 	flow.Version = 1
 	now := time.Now()
+	flow.CreatedBy = ""
 	flow.CreatedAt = now
 	flow.UpdatedAt = now
 	flow.LastModified = now
@@ -135,8 +136,11 @@ func (s *Manager) Update(ctx context.Context, flow *Flow) error {
 
 	// Increment version
 	flow.Version++
-	flow.UpdatedAt = time.Now()
-	flow.LastModified = time.Now()
+	flow.CreatedAt = current.CreatedAt
+	flow.CreatedBy = current.CreatedBy
+	now := time.Now()
+	flow.UpdatedAt = now
+	flow.LastModified = now
 
 	// Marshal and store
 	data, err := json.Marshal(flow)

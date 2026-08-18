@@ -13,6 +13,7 @@ import (
 
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/types"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -48,6 +49,11 @@ type Manager struct {
 type pendingLocalWrite struct {
 	revision uint64
 	delete   bool
+}
+
+func detachedConfigWriteError(operation, target string) error {
+	cause := fmt.Errorf("config manager detached from foreign KV bucket: cannot %s %s", operation, target)
+	return errs.WrapFatal(cause, "ConfigManager", operation, "refuse write to foreign KV bucket")
 }
 
 // NewConfigManager creates a new configuration manager
@@ -521,21 +527,12 @@ func sanitizeNATSKey(key string) string {
 	return strings.ReplaceAll(key, " ", "_")
 }
 
-// DeleteComponentFromKV deletes a component's configuration from NATS KV.
-// This should be called when a component is removed (e.g., during undeploy).
-// PushToKV only puts keys that exist in memory - it doesn't delete removed keys.
-//
-// This method applies the removal to the in-memory config synchronously (the
-// engine pattern), so a runtime caller invokes only this method to remove a
-// component and the ComponentManager reconciles (tears down) it. The Delete
-// generates a watcher event at a fresh revision the underlying API doesn't
-// expose, so no watermark bump: the delete event arrives and is handled by
-// handleUpdate — either external (applies the already-idempotent delete) or,
-// The exact delete echo is classified per key so unrelated revisions cannot
-// hide it. Runtime composition remains sealed until the next boot.
+// DeleteComponentFromKV deletes desired next-boot component configuration.
+// The current process composition remains sealed until restart. The exact
+// delete echo is classified per key so unrelated revisions cannot hide it.
 func (cm *Manager) DeleteComponentFromKV(ctx context.Context, name string) error {
 	if cm.detached.Load() {
-		return fmt.Errorf("config manager detached from foreign KV bucket: cannot delete component %q", name)
+		return detachedConfigWriteError("delete", fmt.Sprintf("component %q", name))
 	}
 	key := fmt.Sprintf("components.%s", sanitizeNATSKey(name))
 	cm.pendingMu.Lock()
@@ -572,7 +569,7 @@ func (cm *Manager) DeleteComponentFromKV(ctx context.Context, name string) error
 // first so a failed Put leaves in-memory state untouched.
 func (cm *Manager) PutComponentToKV(ctx context.Context, name string, compConfig types.ComponentConfig) error {
 	if cm.detached.Load() {
-		return fmt.Errorf("config manager detached from foreign KV bucket: cannot write component %q", name)
+		return detachedConfigWriteError("write", fmt.Sprintf("component %q", name))
 	}
 	key := fmt.Sprintf("components.%s", sanitizeNATSKey(name))
 	data, err := json.Marshal(compConfig)
@@ -607,8 +604,7 @@ func (cm *Manager) putLocal(ctx context.Context, key string, data []byte, apply 
 // This is useful for initial setup or config synchronization
 func (cm *Manager) PushToKV(ctx context.Context) error {
 	if cm.detached.Load() {
-		cm.logger.Warn("Config manager detached from foreign KV bucket; skipping config push")
-		return nil
+		return detachedConfigWriteError("push", "configuration")
 	}
 	cfg := cm.config.Get()
 

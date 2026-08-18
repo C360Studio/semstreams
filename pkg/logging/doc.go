@@ -79,7 +79,7 @@
 //	logger.With("source", "flow-service.websocket.health").Info("Health check")
 //
 //	// This log goes to both stdout and NATS:
-//	logger.With("source", "flow-service").Info("Flow started")
+//	logger.With("source", "flow-service").Info("Flow diagram saved")
 //
 // The prefix matching rule: excluding "flow-service.websocket" also excludes
 // "flow-service.websocket.health", but NOT "flow-service" itself.

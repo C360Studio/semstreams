@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/suite"
 
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/types"
 )
 
@@ -471,10 +472,38 @@ func TestConfigManager_RefusesForeignPlatformIdentity(t *testing.T) {
 	_, hasLocal := got.Components["local-comp"]
 	require.True(t, hasLocal, "manager B must keep its own component")
 
-	// Reverse-bleed guard: a detached manager must not write the local app's
-	// config INTO the foreign bucket either. PushToKV must no-op, leaving the
-	// stored platform identity as the foreign one.
-	require.NoError(t, mgrB.PushToKV(ctx))
+	// Reverse-bleed guard: every detached write path must refuse with the same
+	// fatal classified error and leave the foreign bucket byte-for-byte owned by
+	// manager A.
+	beforePlatform, err := mgrB.kvStore.Get(ctx, "platform")
+	require.NoError(t, err)
+	beforeComponents, err := mgrB.kvStore.Get(ctx, "components.foreign-comp")
+	require.NoError(t, err)
+
+	writeErrors := []error{
+		mgrB.PushToKV(ctx),
+		mgrB.PutComponentToKV(ctx, "local-extra", types.ComponentConfig{
+			Type: types.ComponentTypeOutput, Name: "websocket", Enabled: true,
+		}),
+		mgrB.DeleteComponentFromKV(ctx, "foreign-comp"),
+	}
+	for _, writeErr := range writeErrors {
+		require.Error(t, writeErr)
+		require.True(t, errs.IsFatal(writeErr), "detached write error class = %T: %v", writeErr, writeErr)
+		var classified *errs.ClassifiedError
+		require.ErrorAs(t, writeErr, &classified)
+		require.Contains(t, classified.Error(), "detached from foreign KV bucket")
+	}
+
+	afterPlatform, err := mgrB.kvStore.Get(ctx, "platform")
+	require.NoError(t, err)
+	afterComponents, err := mgrB.kvStore.Get(ctx, "components.foreign-comp")
+	require.NoError(t, err)
+	require.Equal(t, beforePlatform.Value, afterPlatform.Value)
+	require.Equal(t, beforeComponents.Value, afterComponents.Value)
+	_, err = mgrB.kvStore.Get(ctx, "components.local-extra")
+	require.ErrorIs(t, err, natsclient.ErrKVKeyNotFound)
+
 	kvID, found := mgrB.kvPlatformIdentity(ctx)
 	require.True(t, found)
 	require.Equal(t, "foreign-app", kvID.ID,

@@ -11,6 +11,17 @@ restart fields. `Flow` now contains only diagram metadata, nodes, connections, a
 
 Creating, updating, or deleting a diagram changes no component configuration and no running component.
 
+## Use authoring request objects
+
+Flow create and draft-validation requests accept only `name`, optional `description`, `nodes`, and `connections`.
+Update accepts those fields plus `expected_version`. The path owns update and validation identity. The server owns the
+created ID, resulting version, and all audit fields.
+
+Do not send the persisted `Flow` response object back as a write request. Unknown fields, including every retired
+lifecycle field and server-owned `id`, `version`, and audit field, now return HTTP 400. OpenAPI exposes separate
+`FlowCreateRequest`, `FlowUpdateRequest`, and `FlowValidateRequest` schemas with `additionalProperties: false`; response
+schemas remain `Flow`.
+
 ## Publish component configuration explicitly
 
 To turn a saved diagram into desired component configuration for a later boot, call:

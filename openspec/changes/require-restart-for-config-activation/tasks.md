@@ -97,7 +97,8 @@ runtime or proof task is completed by delegation.
 - [ ] 5.2 Restrict live payloads to rule definitions. Reject component envelope, watch-bucket, integration, port,
   dependency, producer-identity, and projection-binding changes from the hot path.
 - [ ] 5.3 Move the watcher and reconciler under a Start-context supervisor with contexts passed as goroutine parameters;
-  retain only private cancellation and join state.
+  retain only private cancellation and join state. Make the run function own the exact internal ConfigManager and
+  CronScheduler handles, joining ConfigManager before stopping CronScheduler without holding the processor lock.
 - [ ] 5.4 Build and validate a complete candidate rule generation before commit; rejection leaves the active generation
   unchanged.
 - [ ] 5.5 Publish revision-bound `applied`, `rejected`, `superseded`, or `canceled_shutdown` activation facts and an

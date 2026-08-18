@@ -2,7 +2,7 @@
 
 ## Status
 
-**Proposed (2026-08-17).** This draft supersedes only ADR-094's flow-activation clauses. ADR-094 remains immutable
+**Accepted (2026-08-17).** This decision supersedes only ADR-094's flow-activation clauses. ADR-094 remains immutable
 history. Its boot-only component and service composition, dedicated Rule activation, shutdown, recovery, and proof
 requirements are unchanged.
 

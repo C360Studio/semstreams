@@ -27,6 +27,41 @@ type FlowServiceConfig struct {
 	FallbackToRaw bool   `json:"fallback_to_raw,omitempty"`
 }
 
+// FlowCreateRequest is the complete authoring input for a new saved diagram.
+// Identity, version, and audit fields are owned by the server.
+type FlowCreateRequest struct {
+	Name        string                     `json:"name"`
+	Description string                     `json:"description,omitempty"`
+	Nodes       []flowstore.FlowNode       `json:"nodes"`
+	Connections []flowstore.FlowConnection `json:"connections"`
+}
+
+func (FlowCreateRequest) closedJSONSchema() {}
+
+// FlowUpdateRequest is the complete authoring input for an existing saved
+// diagram. ExpectedVersion supplies optimistic concurrency; all resulting
+// persistence metadata remains server-owned.
+type FlowUpdateRequest struct {
+	Name            string                     `json:"name"`
+	Description     string                     `json:"description,omitempty"`
+	Nodes           []flowstore.FlowNode       `json:"nodes"`
+	Connections     []flowstore.FlowConnection `json:"connections"`
+	ExpectedVersion int64                      `json:"expected_version"`
+}
+
+func (FlowUpdateRequest) closedJSONSchema() {}
+
+// FlowValidateRequest is the complete authoring input for validating a draft
+// diagram without persisting it.
+type FlowValidateRequest struct {
+	Name        string                     `json:"name"`
+	Description string                     `json:"description,omitempty"`
+	Nodes       []flowstore.FlowNode       `json:"nodes"`
+	Connections []flowstore.FlowConnection `json:"connections"`
+}
+
+func (FlowValidateRequest) closedJSONSchema() {}
+
 type componentConfigPublisher interface {
 	GetConfig() *config.SafeConfig
 	BootConfig() *config.Config
@@ -193,14 +228,14 @@ func flowServiceOpenAPISpec() *OpenAPISpec {
 		Paths: map[string]PathSpec{
 			"/flows": {
 				GET:  &OperationSpec{Summary: "List saved flow diagrams", Description: "Lists saved diagrams; no runtime lifecycle state is implied.", Tags: []string{"Flows"}, Responses: map[string]ResponseSpec{"200": {Description: "Saved flow diagrams", ContentType: "application/json"}}},
-				POST: &OperationSpec{Summary: "Create a saved flow diagram", Description: "Saves a diagram without changing runtime configuration.", Tags: []string{"Flows"}, RequestBody: &RequestBodySpec{Description: "Flow diagram", Required: true, SchemaRef: "#/components/schemas/Flow"}, Responses: map[string]ResponseSpec{"201": {Description: "Diagram created", ContentType: "application/json"}, "400": {Description: "Invalid request"}}},
+				POST: &OperationSpec{Summary: "Create a saved flow diagram", Description: "Saves a diagram without changing runtime configuration. Identity, version, and audit fields are server-owned.", Tags: []string{"Flows"}, RequestBody: &RequestBodySpec{Description: "Flow authoring fields", Required: true, SchemaRef: "#/components/schemas/FlowCreateRequest"}, Responses: map[string]ResponseSpec{"201": {Description: "Diagram created", ContentType: "application/json", SchemaRef: "#/components/schemas/Flow"}, "400": {Description: "Invalid request"}}},
 			},
 			"/flows/{id}": {
 				GET:    &OperationSpec{Summary: "Get a saved flow diagram", Description: "Returns diagram metadata, nodes, connections, and audit fields.", Tags: []string{"Flows"}, Parameters: idParam, Responses: map[string]ResponseSpec{"200": {Description: "Saved diagram", ContentType: "application/json"}, "404": {Description: "Saved diagram not found"}}},
-				PUT:    &OperationSpec{Summary: "Update a saved flow diagram", Description: "Updates a diagram with optimistic concurrency; runtime configuration is unchanged.", Tags: []string{"Flows"}, Parameters: idParam, RequestBody: &RequestBodySpec{Description: "Updated diagram", Required: true, SchemaRef: "#/components/schemas/Flow"}, Responses: map[string]ResponseSpec{"200": {Description: "Diagram updated", ContentType: "application/json"}, "409": {Description: "Version conflict"}}},
+				PUT:    &OperationSpec{Summary: "Update a saved flow diagram", Description: "Updates authoring fields with optimistic concurrency; path identity and resulting persistence metadata are server-owned. Runtime configuration is unchanged.", Tags: []string{"Flows"}, Parameters: idParam, RequestBody: &RequestBodySpec{Description: "Flow authoring fields and expected version", Required: true, SchemaRef: "#/components/schemas/FlowUpdateRequest"}, Responses: map[string]ResponseSpec{"200": {Description: "Diagram updated", ContentType: "application/json", SchemaRef: "#/components/schemas/Flow"}, "400": {Description: "Invalid request"}, "409": {Description: "Version conflict"}}},
 				DELETE: &OperationSpec{Summary: "Delete a saved flow diagram", Description: "Deletes only the diagram; runtime configuration is unchanged.", Tags: []string{"Flows"}, Parameters: idParam, Responses: map[string]ResponseSpec{"204": {Description: "Diagram deleted"}}},
 			},
-			"/flows/{id}/validate":                  {POST: &OperationSpec{Summary: "Validate a flow diagram", Description: "Validates a saved diagram or request-body draft without changing configuration.", Tags: []string{"Flows"}, Parameters: idParam, Responses: map[string]ResponseSpec{"200": {Description: "Validation result", ContentType: "application/json"}}}},
+			"/flows/{id}/validate":                  {POST: &OperationSpec{Summary: "Validate a flow diagram", Description: "Validates a saved diagram or strict request-body draft without changing configuration. The path supplies draft identity.", Tags: []string{"Flows"}, Parameters: idParam, RequestBody: &RequestBodySpec{Description: "Optional flow authoring fields", SchemaRef: "#/components/schemas/FlowValidateRequest"}, Responses: map[string]ResponseSpec{"200": {Description: "Validation result", ContentType: "application/json"}, "400": {Description: "Invalid request"}}}},
 			"/flows/{id}/publish-component-configs": {POST: &OperationSpec{Summary: "Publish component configuration candidates", Description: "Compiles the saved diagram and upserts its component configurations. The current process remains unchanged; a restart is required when the published map differs from the sealed boot map.", Tags: []string{"Flows"}, Parameters: idParam, Responses: map[string]ResponseSpec{"200": {Description: "Published component configuration names", ContentType: "application/json", SchemaRef: "#/components/schemas/PublishComponentConfigsResponse"}, "400": {Description: "Diagram validation failed"}, "500": {Description: "Partial or complete persistence failure"}}}},
 			"/flows/{id}/observations/metrics":      {GET: observation("Observe metrics for diagram component names", "Queries metrics for component names declared by the saved diagram; it does not assert ownership or activation.", "#/components/schemas/RuntimeMetricsResponse")},
 			"/flows/{id}/observations/health":       {GET: observation("Observe health for diagram component names", "Queries health for component names declared by the saved diagram; it does not assert ownership or activation.", "#/components/schemas/RuntimeHealthResponse")},
@@ -216,6 +251,11 @@ func flowServiceOpenAPISpec() *OpenAPISpec {
 			reflect.TypeOf(RuntimeMessagesResponse{}),
 			reflect.TypeOf(PublishComponentConfigsResponse{}),
 			reflect.TypeOf(flowstore.Flow{}),
+		},
+		RequestBodyTypes: []reflect.Type{
+			reflect.TypeOf(FlowCreateRequest{}),
+			reflect.TypeOf(FlowUpdateRequest{}),
+			reflect.TypeOf(FlowValidateRequest{}),
 		},
 	}
 }
@@ -246,13 +286,17 @@ func (fs *FlowService) handleListFlows(w http.ResponseWriter, r *http.Request) {
 }
 
 func (fs *FlowService) handleCreateFlow(w http.ResponseWriter, r *http.Request) {
-	var flow flowstore.Flow
-	if err := json.NewDecoder(r.Body).Decode(&flow); err != nil {
-		fs.writeJSONError(w, "Invalid request body", http.StatusBadRequest)
+	var request FlowCreateRequest
+	if err := decodeStrictJSON(r.Body, &request); err != nil {
+		fs.writeJSONError(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
 		return
 	}
-	if flow.ID == "" {
-		flow.ID = generateFlowID()
+	flow := flowstore.Flow{
+		ID:          generateFlowID(),
+		Name:        request.Name,
+		Description: request.Description,
+		Nodes:       request.Nodes,
+		Connections: request.Connections,
 	}
 	if err := fs.flowStore.Create(r.Context(), &flow); err != nil {
 		fs.writeJSONError(w, "Failed to create flow", http.StatusInternalServerError)
@@ -275,14 +319,18 @@ func (fs *FlowService) handleGetFlow(w http.ResponseWriter, r *http.Request, flo
 }
 
 func (fs *FlowService) handleUpdateFlow(w http.ResponseWriter, r *http.Request, flowID string) {
-	var flow flowstore.Flow
-	if err := json.NewDecoder(r.Body).Decode(&flow); err != nil {
-		fs.writeJSONError(w, "Invalid request body", http.StatusBadRequest)
+	var request FlowUpdateRequest
+	if err := decodeStrictJSON(r.Body, &request); err != nil {
+		fs.writeJSONError(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
 		return
 	}
-	if flow.ID != flowID {
-		fs.writeJSONError(w, "ID mismatch", http.StatusBadRequest)
-		return
+	flow := flowstore.Flow{
+		ID:          flowID,
+		Name:        request.Name,
+		Description: request.Description,
+		Version:     request.ExpectedVersion,
+		Nodes:       request.Nodes,
+		Connections: request.Connections,
 	}
 	if err := fs.flowStore.Update(r.Context(), &flow); err != nil {
 		if strings.Contains(err.Error(), "conflict") {
@@ -362,17 +410,19 @@ func (fs *FlowService) handlePublishComponentConfigs(w http.ResponseWriter, r *h
 func (fs *FlowService) handleValidateFlow(w http.ResponseWriter, r *http.Request) {
 	flowID := r.PathValue("id")
 	var flow *flowstore.Flow
-	if r.ContentLength > 0 {
-		var draft flowstore.Flow
-		if err := json.NewDecoder(r.Body).Decode(&draft); err != nil {
+	if r.Body != nil && r.Body != http.NoBody {
+		var request FlowValidateRequest
+		if err := decodeStrictJSON(r.Body, &request); err != nil {
 			fs.writeJSONError(w, fmt.Sprintf("Invalid JSON in request body: %v", err), http.StatusBadRequest)
 			return
 		}
-		if draft.ID != "" && draft.ID != flowID {
-			fs.writeJSONError(w, "Flow ID mismatch", http.StatusBadRequest)
-			return
+		draft := flowstore.Flow{
+			ID:          flowID,
+			Name:        request.Name,
+			Description: request.Description,
+			Nodes:       request.Nodes,
+			Connections: request.Connections,
 		}
-		draft.ID = flowID
 		flow = &draft
 	} else {
 		var err error

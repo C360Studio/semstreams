@@ -1,207 +1,73 @@
 # Flow Architecture
 
-SemStreams supports two operational modes that share a unified Flow abstraction. Understanding how these modes work helps you choose the right approach for your deployment.
+SemStreams flow diagrams are authoring artifacts. They help an operator arrange components, validate connections, and
+compile component configuration candidates. They are not runtime lifecycle owners.
 
-## Operation Modes
+## Runtime composition
 
-### Headless Mode (Static Config)
+A process starts components from the configuration selected and sealed by Config Manager at boot. Service and
+component composition stays fixed for that process lifetime. Later configuration writes are desired state for a later
+boot; they do not create, start, stop, remove, restart, or replace components in the current process.
 
-Start SemStreams with a JSON/YAML config file. Components load and run automatically:
+The bounded exception is Rule definition hot reload inside an already-started Rule processor. It does not change the
+processor's ports, dependencies, watch buckets, integration mode, or projection bindings.
 
-```bash
-semstreams --config config.json
-```
+## Saved diagrams
 
-- No UI required
-- Components start on boot
-- Ideal for production deployments, CI/CD pipelines
-- Config changes require restart (or use KV override)
+Flow Service persists diagrams in the `semstreams_flows` KV bucket. A diagram contains:
 
-### UI Mode (Visual Flow Builder)
+- a server-owned ID, CAS version, and audit timestamps;
+- authoring metadata;
+- canvas nodes; and
+- port-to-port connections.
 
-> **WIP**: The visual flow builder UI is under active development in the `semstreams-ui` repository, planned for beta release. Backend APIs are available now.
+It contains no desired/effective state, deployment state, component bundle, provenance, or restart field. Creating,
+updating, validating, or deleting a diagram changes no component configuration and has no runtime effect.
 
-Design and manage flows through a visual interface:
+On the first boot where no diagram exists, Flow Service may create a default diagram from the sealed boot component
+map. This makes the boot topology visible for authoring. The diagram never becomes boot authority and is not read to
+choose the running component set.
 
-- Drag-and-drop component placement
-- Visual connection of ports
-- Real-time deploy/start/stop control
-- Live metrics and health monitoring
+## Validation and compilation
 
-Both modes use the same underlying Flow abstraction, enabling seamless transitions.
+Engine validates diagram structure and uses `component/flowgraph` for static port compatibility and connection
+discovery. `Compile` produces detached, enabled component configuration candidates. Validation and compilation do not
+persist configuration and do not own lifecycle.
 
-## Two KV Buckets
+An explicit `POST /flows/{id}/publish-component-configs` request is the only diagram-to-config write. It:
 
-SemStreams persists state in two NATS JetStream KV buckets:
+1. loads and validates the saved diagram;
+2. compiles nodes into component configuration candidates;
+3. sorts component names and upserts each candidate through Config Manager; and
+4. reports exact persisted names, any failed name, `runtime_unchanged: true`, and whether the desired component map
+   differs from the sealed boot map.
 
-| Bucket | Contents | Used By |
-|--------|----------|---------|
-| `semstreams_config` | Component configs, service configs | ComponentManager (runtime) |
-| `semstreams_flows` | Visual flow definitions (canvas layout) | FlowService (UI API) |
+Publication is upsert-only. Removing a node from a diagram does not delete desired component configuration. Deletion
+must be an explicit Config Manager operation so a visual omission cannot silently remove runtime intent.
 
-The config bucket stores the runtime configuration that the ComponentManager watches and reacts to. The flows bucket stores visual flow definitions that the UI displays and modifies.
+## Observations
 
-Runtime configuration can change operational behavior. Graph writers declare copied local projection contracts with
-entity patterns plus reconcile or append groups; those contracts validate component intent and do not grant global
-predicate ownership. Wire changes follow the typed mutation-port contract in
-[Graph Mutation Contracts](28-governed-semantic-state.md).
+The retained health, metrics, and message endpoints use component names declared by a saved diagram as filters. They
+are best-effort observations; they do not prove that the diagram owns, deployed, or activated those components.
 
-## Static Config → Flow Bridge
+Completed agent-loop aggregation is exposed separately through `monitor_workflow_runs(workflow_slug)` and has no
+flowstore dependency.
 
-When you start with a static config file, SemStreams automatically creates a Flow entry in the flows bucket. This bridges the gap between headless and UI modes:
+## Authoring request contract
 
-```text
-First Boot (static config):
-┌─────────────┐     ┌──────────────────┐     ┌────────────────┐
-│ config.json │ ──► │ semstreams_config│ ──► │ ComponentMgr   │
-└─────────────┘     │     KV bucket    │     │ (runs them)    │
-                    └──────────────────┘     └────────────────┘
-                              │
-                    ┌─────────▼────────┐
-                    │  Auto-converted  │
-                    │  to Flow         │
-                    └─────────┬────────┘
-                              │
-                    ┌─────────▼────────┐     ┌────────────────┐
-                    │ semstreams_flows │ ◄── │ FlowService    │
-                    │     KV bucket    │     │ (UI reads)     │
-                    └──────────────────┘     └────────────────┘
-```
+Create, update, and draft-validation requests accept only authoring fields. Unknown fields are rejected. The server
+owns identity, resulting version, and audit metadata; update callers provide only `expected_version` for optimistic
+concurrency. Response objects include the server-owned persistence fields.
 
-This automatic conversion happens in the FlowService during startup, making static configs visible to the UI without manual intervention.
-
-## KV Wins Precedence
-
-On subsequent boots, **KV wins** over static config:
-
-| Scenario | Behavior |
-|----------|----------|
-| First boot, static config has components | Create flow in KV |
-| Subsequent boot, flow exists in KV | Use KV flow (ignore static config) |
-| Flow deleted from KV | Re-create from static config |
-
-This precedence pattern:
-- Preserves UI customizations across restarts
-- Allows "reset" by deleting the flow from KV
-- Matches the existing config.Manager behavior
-
-## Flow Lifecycle
-
-Flows carry desired activation for the next successful boot:
-
-```text
-absent → disabled → enabled → disabled → absent
-```
-
-| Desired state | Description | Available Actions |
-|-------|-------------|-------------------|
-| `absent` | No desired component configuration | Deploy |
-| `disabled` | Desired component configuration exists but is disabled | Start, Undeploy |
-| `enabled` | Components are requested for the next boot | Stop |
-
-Flow reads report `effective_state` independently. Without an authoritative
-runtime observer it is `unknown`; it is never inferred from desired state,
-admission, or health. `restart_required` compares the desired digest with the
-sealed boot-applied digest and is `null` when no boot selection is available.
-
-## Flow Engine Operations
-
-The FlowEngine handles lifecycle transitions:
-
-### Deploy
-
-Converts Flow → ComponentConfigs and pushes to config KV bucket:
-1. Validate flow structure and connections
-2. Build FlowGraph for port analysis
-3. Convert nodes to ComponentConfigs
-4. Persist to `semstreams_config` bucket
-5. Return `runtime_unchanged: true`; the next process boot selects the change
-
-### Start
-
-Enables desired components for the next boot:
-1. Update component `enabled` flags in config KV
-2. Current runtime remains unchanged
-3. Response reports whether restart is required
-
-### Stop
-
-Disables desired components while preserving the definition:
-1. Disable components in config KV
-2. Current runtime remains unchanged
-3. Normal process shutdown still drains and joins boot-owned work
-
-### Undeploy
-
-Removes components from desired configuration:
-1. Delete component configs from config KV
-2. Current runtime remains unchanged
-3. Flow returns to `absent` desired state
-
-## Visual Flow Concepts
-
-### Nodes
-
-Each FlowNode represents a component instance:
-
-```json
-{
-  "id": "udp-input",
-  "type": "udp",
-  "name": "UDP Input",
-  "position": {"x": 100, "y": 50},
-  "config": {"port": 14550}
-}
-```
-
-- `id`: Unique instance identifier
-- `type`: Component factory name (e.g., "udp", "graph-processor")
-- `position`: Canvas coordinates for UI layout
-- `config`: Component-specific configuration
-
-### Connections
-
-FlowConnections define data paths between component ports:
-
-```json
-{
-  "id": "conn-1",
-  "source_node_id": "udp-input",
-  "source_port": "data",
-  "target_node_id": "processor",
-  "target_port": "input"
-}
-```
-
-At deployment, connections are validated against component port definitions.
-
-### Automatic Layout
-
-When converting static configs to flows, nodes receive automatic grid positions. Users can rearrange nodes in the UI as needed.
-
-## When to Use Each Mode
-
-| Use Case | Recommended Mode |
-|----------|------------------|
-| Production deployment | Headless (static config) |
-| Development/debugging | UI mode |
-| CI/CD pipelines | Headless (static config) |
-| New flow design | UI mode |
-| Operational monitoring | UI mode |
-
-You can start in headless mode for initial deployment, then connect the UI later to monitor and adjust the running flow.
-
-## Key Files
+## Key files
 
 | File | Purpose |
-|------|---------|
-| `flowstore/store.go` | Flow persistence (NATS KV) |
-| `flowstore/flow.go` | Flow, FlowNode, FlowConnection types |
-| `flowstore/converter.go` | Static config → Flow conversion |
-| `engine/engine.go` | FlowEngine lifecycle operations |
-| `service/flow_service.go` | HTTP API for flow operations |
-| `config/manager.go` | Config KV watching and precedence |
+|---|---|
+| `flowstore/flow.go` | Persisted diagram response shape |
+| `flowstore/manager.go` | Diagram KV persistence and optimistic concurrency |
+| `component/flowgraph/` | Static component-port analysis |
+| `engine/engine.go` | Diagram validation and compilation |
+| `service/flow_service.go` | Diagram CRUD, validation, explicit publication, and observations |
+| `config/manager.go` | Desired configuration persistence and sealed boot snapshot |
 
-## Related Documentation
-
-- [Configuration Guide](../basics/06-configuration.md) - Static config structure
+See [ADR-096](../adr/096-flow-diagrams-are-not-lifecycle-authority.md) for the decision record.

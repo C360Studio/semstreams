@@ -59,7 +59,7 @@ natsHandler := logging.NewNATSLogHandler(natsClient, logging.NATSLogHandlerConfi
 logger.With("source", "flow-service.websocket.health").Info("Health check")
 
 // This goes to both stdout and NATS:
-logger.With("source", "flow-service").Info("Flow started")
+logger.With("source", "flow-service").Info("Flow diagram saved")
 ```
 
 ## Handlers

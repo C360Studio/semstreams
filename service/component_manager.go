@@ -137,8 +137,7 @@ func NewComponentManager(rawConfig json.RawMessage, deps *Dependencies) (Service
 		}
 	}
 
-	// Apply defaults - clear and visible in constructor
-	// WatchConfig defaults to false (zero value)
+	// Apply defaults - clear and visible in constructor.
 	if cfg.EnabledComponents == nil {
 		cfg.EnabledComponents = []string{}
 	}
@@ -263,8 +262,6 @@ func (cm *ComponentManager) Initialize() error {
 		cm.components = make(map[string]*component.ManagedComponent)
 	}
 	cm.startOrder = make([]string, 0)
-
-	// Manager handles config watching now, no need for separate ConfigWatcher initialization
 
 	// Create components from configuration
 	if len(cm.componentConfigs) > 0 {
@@ -879,9 +876,8 @@ func (cm *ComponentManager) performDetailedHealthCheck() error {
 			return fmt.Errorf("component %s has nil implementation", name)
 		}
 
-		// A failed lifecycle operation (post-boot dynamic start/restart or stop
-		// error) leaves the component in StateFailed. Health must report it, not
-		// silently skip it.
+		// A boot start or terminal stop error leaves the component in StateFailed.
+		// Health must report it, not silently skip it.
 		if comp.State == component.StateFailed {
 			if comp.LastError != nil {
 				return fmt.Errorf("component %s failed: %w", name, comp.LastError)
@@ -932,15 +928,9 @@ func (cm *ComponentManager) registerProvidedStores(name string, comp component.D
 	if !ok {
 		return nil
 	}
-	// Liveness guard: skip if a concurrent stop/reconfig already removed or
-	// halted this component between Start and here. Without it, a reconfig that
-	// deregistered the old instance could be shadowed by this late register,
-	// leaving the registry pointing at a store the teardown is closing (ADR-063
-	// late-register window). Read under cm.mu (register otherwise holds no cm
-	// lock, so cm.mu stays outermost — no ordering inversion). A vanishingly
-	// small TOCTOU remains after this check; it is self-healing (the stale
-	// handle's next fetch errors loudly via content_resolve_error and per-fetch
-	// resolution retries) and is bounded per the lazy no-cache contract.
+	// Liveness guard: skip if terminal Stop halted this component between Start
+	// and registration. Read under cm.mu; registration otherwise holds no manager
+	// lock, so the ordering remains acyclic.
 	cm.mu.RLock()
 	mc, tracked := cm.components[name]
 	live := tracked && mc.State == component.StateStarted
@@ -996,7 +986,7 @@ func (cm *ComponentManager) registerProvidedStores(name string, comp component.D
 	return nil
 }
 
-// deregisterProvidedStores clears a stopping/removed component's stores from the
+// deregisterProvidedStores clears a stopping component's stores from the
 // shared StoreRegistry (ADR-063). Idempotent and keyed by the tracked instance
 // names, so it never re-reads a component whose store may already be closed. Call
 // BEFORE the component's Stop() closes the underlying store, so the registry does
