@@ -48,6 +48,7 @@ func startStack(t *testing.T, backstop string) (*graphingest.Component, *natscli
 	require.NoError(t, gi.Initialize())
 	require.NoError(t, gi.Start(ctx))
 	t.Cleanup(func() { _ = gi.Stop(context.Background()) })
+	waitForGraphIngest(t, nc)
 
 	mgr := lifecycle.NewManager(nc, nil)
 
@@ -65,11 +66,26 @@ func startStack(t *testing.T, backstop string) (*graphingest.Component, *natscli
 	require.NoError(t, err)
 	require.NoError(t, execDisc.Initialize())
 
-	time.Sleep(100 * time.Millisecond) // let graph-ingest subscriptions stabilise
 	require.NoError(t, execDisc.Start(ctx))
 	t.Cleanup(func() { _ = execDisc.Stop(context.Background()) })
 
 	return gi, nc, execDisc
+}
+
+// waitForGraphIngest observes the real request/reply surface instead of
+// predicting subscription readiness with a sleep.
+func waitForGraphIngest(t *testing.T, nc *natsclient.Client) {
+	t.Helper()
+	reqData, err := json.Marshal(graph.PrefixQueryRequest{Prefix: itestPrefix, Limit: 1})
+	require.NoError(t, err)
+	_, err = nc.RequestReadyClassified(
+		context.Background(),
+		"graph.ingest.query.prefix",
+		reqData,
+		100*time.Millisecond,
+		5*time.Second,
+	)
+	require.NoError(t, err, "graph-ingest request surface must be ready")
 }
 
 // seedUnit creates a unit entity with the given (predicate, object) triples via
@@ -156,8 +172,14 @@ func TestIntegration_GatedDispatch_DependsOnAndDedup(t *testing.T) {
 		return false
 	}, 5*time.Second, 50*time.Millisecond, "b should carry the claim marker after dispatch")
 
-	// Let several more backstop passes run; b must NOT be re-dispatched (dedup).
-	time.Sleep(1 * time.Second)
+	// Drive several more authoritative passes directly. The durable claim must
+	// prevent another submission without relying on a wall-clock sleep.
+	submitted := c.exec.disp.Stats().Submitted
+	for range 3 {
+		c.exec.reEvaluate(context.Background(), false)
+	}
+	require.Equal(t, submitted, c.exec.disp.Stats().Submitted,
+		"claim dedup prevents another submission across passes")
 	require.Equal(t, []string{b}, capt.snapshot(), "claim dedup prevents re-dispatch across passes")
 }
 
@@ -167,18 +189,28 @@ func TestIntegration_GatedDispatch_DependsOnAndDedup(t *testing.T) {
 func TestIntegration_BootReconcile(t *testing.T) {
 	// Long backstop so the dispatch we observe came from the boot reconcile, not
 	// a backstop tick.
-	gi, nc, exec := startStack(t, "10m")
+	gi, nc, used := startStack(t, "10m")
+	require.NoError(t, used.Stop(context.Background()))
 	capt := subscribeDispatch(t, nc)
 
 	a, b := unitID("a"), unitID("b")
 	seedUnit(t, gi, a, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "completed"), Object: true, Confidence: 1.0})
 	seedUnit(t, gi, b, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "depends-on"), Object: a, Confidence: 1.0})
 
-	// startStack already called Start. The initial reEvaluate fires on Start —
-	// but seeding happened after Start here, so nudge a fresh reconcile by
-	// restarting the executor against the now-seeded bucket.
-	require.NoError(t, exec.Stop(context.Background()))
-	require.NoError(t, exec.Start(context.Background()))
+	// A used component is one process lifetime and cannot restart. Construct a
+	// fresh component against retained NATS state to model the next boot.
+	err := used.Start(context.Background())
+	require.ErrorContains(t, err, "cannot be restarted")
+	cfgJSON, err := json.Marshal(used.cfg)
+	require.NoError(t, err)
+	fresh, err := NewComponent(cfgJSON, component.Dependencies{
+		NATSClient:       nc,
+		LifecycleManager: used.mgr,
+	})
+	require.NoError(t, err)
+	require.NoError(t, fresh.Initialize())
+	require.NoError(t, fresh.Start(context.Background()))
+	t.Cleanup(func() { _ = fresh.Stop(context.Background()) })
 
 	require.Eventually(t, func() bool {
 		ids := capt.snapshot()

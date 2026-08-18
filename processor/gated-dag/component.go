@@ -133,13 +133,18 @@ func (c *Component) Initialize() error {
 	return nil
 }
 
-// Start builds the executor and begins the eval loop.
+// Start builds the executor and begins the eval loop. Component instances are
+// boot-only: after one successful Start, callers must construct a fresh
+// Component for another process lifetime.
 func (c *Component) Start(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, componentName, "Start", "context cannot be nil")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.exec != nil {
+		return fmt.Errorf("gated-dag: component instance cannot be restarted; construct a fresh component")
+	}
 	if c.running {
 		return fmt.Errorf("gated-dag: already running")
 	}
@@ -289,20 +294,26 @@ func subjectCovered(want string, subjects []string) bool {
 	return false
 }
 
-// Stop gracefully stops the executor.
+// Stop gracefully stops the executor. A failed Stop consumes this component's
+// cancellation authority and is terminal; a later Stop does not retry cleanup
+// or report a false successful completion.
 func (c *Component) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.exec == nil {
+		return nil
+	}
 	if !c.running {
 		return nil
 	}
-	if c.exec != nil {
-		if err := c.exec.stop(ctx); err != nil {
-			return err
-		}
+	if c.exec.cancel == nil {
+		return fmt.Errorf("gated-dag: Stop already claimed without observed completion")
+	}
+	if err := c.exec.stop(ctx); err != nil {
+		return err
 	}
 	c.running = false
 	c.logger.Info("gated-dag executor stopped")
@@ -335,14 +346,24 @@ func (c *Component) ConfigSchema() component.ConfigSchema { return c.cfg.Schema(
 func (c *Component) Health() component.HealthStatus {
 	c.mu.RLock()
 	running, startTime := c.running, c.startTime
+	healthy := running && c.exec != nil && c.exec.cancel != nil
+	if healthy {
+		select {
+		case <-c.exec.done:
+			healthy = false
+		default:
+		}
+	}
 	c.mu.RUnlock()
 
 	status := "stopped"
-	if running {
+	if healthy {
 		status = "running"
+	} else if running {
+		status = "unhealthy"
 	}
 	return component.HealthStatus{
-		Healthy:   running,
+		Healthy:   healthy,
 		LastCheck: time.Now(),
 		Uptime:    time.Since(startTime),
 		Status:    status,

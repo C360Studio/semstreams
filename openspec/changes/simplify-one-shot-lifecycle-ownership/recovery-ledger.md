@@ -357,6 +357,69 @@ a real-NATS pool-timeout injection; channel-synchronized unit proof covers the f
 counts remain unchanged from the baseline: owner files 38, NewGeneration 40, Generation.Stop 45, external Cancel 5,
 StopWithQuiesce 8, NewOperation 3, Operation.Run 3, and old rollback calls 20.
 
+## Gated-DAG one-shot owner worktree checkpoint — 2026-08-18
+
+Dirty worktree baseline: merged `main` `a1a68a784d6f82c5f6cbfb81fe81c86945eeda67`. Runtime/test scope is limited
+to `processor/gated-dag/{executor.go,component.go,executor_lifecycle_test.go,executor_integration_test.go}`; this ledger
+and `tasks.md` are the only task-truth additions. This checkpoint grants owner-migrated credit only to
+`processor/gated-dag/executor.go`; Gate A, runtime migration, proof, release, archive, and tag completion remain
+unchecked and incomplete.
+
+Stable worktree source identities:
+
+- `processor/gated-dag/executor.go`: `b772ebc214679ab8a688b833b17428e1566fae2c83a85058a5aad9c57eded28e`
+- `processor/gated-dag/component.go`: `1b867b93425165b4c7f6a2540fa38ede92465876a182da115b4b1be2e3a5062f`
+- `processor/gated-dag/executor_lifecycle_test.go`:
+  `2ab86ca28c0d78cc4bddaf47d5edd0ab1fade8d89093529e7757bc2a6d93e747`
+- `processor/gated-dag/executor_integration_test.go`:
+  `90f911716bea721046bc60d6a177319212cc143735c92fdaa8fa97dae20d352a`
+
+| Ruling | Exact implementation evidence | Checkpoint result |
+|---|---|---|
+| Owner-local lifecycle only | `processor/gated-dag/executor.go:71-73,188-194` | `Generation` is replaced by one private cancel, one done channel, and the existing WaitGroup; no context is stored. |
+| Exact dispatcher and failed-Watch rollback | `processor/gated-dag/executor.go:95-123`; `processor/gated-dag/executor_lifecycle_test.go:90-104` | The exact dispatcher is retained; failed lifecycle-Watch acquisition returns the joined Watch and dispatcher rollback result. |
+| Goroutine-local KV watcher | `processor/gated-dag/executor.go:374-407` | The exact watcher stays local to its goroutine and LIFO defers stop it before WaitGroup completion; no watcher catalog or field is added. |
+| One-shot Stop order | `processor/gated-dag/executor.go:207-227`; `processor/gated-dag/executor_lifecycle_test.go:14-40` | Stop consumes cancel once, cancels, stops the dispatcher, and bounds the existing done join; later executor Stop is nil/no-op. |
+| Boot-only parent and honest failed Stop | `processor/gated-dag/component.go:136-149,272-274,297-320`; `processor/gated-dag/executor_lifecycle_test.go:42-88` | The successful executor pointer is retained as used-instance evidence; a claimed failed Stop cannot become later Component success or healthy runtime. |
+| Fresh-component restart proof | `processor/gated-dag/executor_integration_test.go:189-218` | Same-instance restart rejects; a fresh Component boots against retained NATS and reconciles authoritative state. |
+| Touched sleep removal | `processor/gated-dag/executor_integration_test.go:34-89,146-184` | Graph-ingest readiness is observed through request/reply and dedup is driven by explicit passes/submission counts; the touched file has no `time.Sleep`. |
+
+TDD red evidence:
+
+```text
+go test -race ./processor/gated-dag -run \
+  'TestExecutorStop|TestComponent(FailedStop|CompletedStop|RejectsSameInstance)|TestExecutorStartWatchFailure' \
+  -count=1 -timeout=120s
+=> build failed: executor had no owner-local cancel/done fields
+
+go test -tags=integration -race ./processor/gated-dag -run TestIntegration_BootReconcile -count=1 -timeout=120s
+=> failed: the old test attempted same-instance Start after completed Stop and received the required boot-only rejection
+```
+
+Green evidence:
+
+```text
+go test -race ./processor/gated-dag -count=1 -timeout=120s
+ok github.com/c360studio/semstreams/processor/gated-dag 1.348s
+
+go test -tags=integration -race ./processor/gated-dag -count=1 -timeout=180s
+ok github.com/c360studio/semstreams/processor/gated-dag 8.869s
+```
+
+The production-only recovery searches report this exact delta from baseline `a1a68a78`:
+
+| Measurement | Baseline | Worktree | Delta |
+|---|---:|---:|---:|
+| Production owner files importing `internal/lifecyclejoin` | 38 | 37 | -1 |
+| `lifecyclejoin.NewGeneration` | 40 | 39 | -1 |
+| `Generation.Stop` | 45 | 44 | -1 |
+| External `Generation.Cancel` | 5 | 4 | -1 |
+| External `Generation.Signal` | 0 | 0 | 0 |
+| `Generation.StopWithQuiesce` | 8 | 8 | 0 |
+| `lifecyclejoin.NewOperation` | 3 | 3 | 0 |
+| `Operation.Run` | 3 | 3 | 0 |
+| External `RunPartialStartRollback` calls | 20 | 20 | 0 |
+
 ## Workspace recovery checkpoint
 
 Authority collisions are inventoried in

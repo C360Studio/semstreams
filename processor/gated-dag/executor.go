@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/dispatch"
 	"github.com/c360studio/semstreams/pkg/gateddag"
@@ -69,8 +68,9 @@ type executor struct {
 	// trigger coalesces a burst of watch events into <=1 queued pass (cap 1).
 	trigger chan struct{}
 
-	generation *lifecyclejoin.Generation
-	wg         sync.WaitGroup
+	cancel context.CancelFunc
+	done   chan struct{}
+	wg     sync.WaitGroup
 }
 
 // start wires the dispatcher, the watch pump, and the eval goroutine. The
@@ -118,9 +118,9 @@ func (e *executor) start(ctx context.Context) error {
 	// delivery coalesces into the trigger channel.
 	ch, err := e.mgr.Watch(runCtx, e.cfg.FanOutWorkflow)
 	if err != nil {
-		_ = e.disp.Stop(runCtx)
+		rollbackErr := e.disp.Stop(ctx)
 		cancel()
-		return err
+		return errors.Join(err, rollbackErr)
 	}
 	e.wg.Add(1)
 	go func() {
@@ -185,7 +185,13 @@ func (e *executor) start(ctx context.Context) error {
 			}
 		}
 	}()
-	e.generation = lifecyclejoin.NewGeneration(cancel, e.wg.Wait)
+	done := make(chan struct{})
+	e.cancel = cancel
+	e.done = done
+	go func() {
+		e.wg.Wait()
+		close(done)
+	}()
 
 	return nil
 }
@@ -200,13 +206,25 @@ func (e *executor) nudge() {
 
 // stop cancels the run context and waits for goroutines + the dispatcher.
 func (e *executor) stop(ctx context.Context) error {
-	e.generation.Cancel()
-	if e.disp != nil {
-		if err := e.disp.Stop(ctx); err != nil {
-			return err
-		}
+	cancel := e.cancel
+	if cancel == nil {
+		return nil
 	}
-	return e.generation.Stop(ctx, nil, nil)
+	e.cancel = nil
+	cancel()
+
+	var dispatcherErr error
+	if e.disp != nil {
+		dispatcherErr = e.disp.Stop(ctx)
+	}
+	if e.done == nil {
+		return dispatcherErr
+	}
+	select {
+	case <-e.done:
+	case <-ctx.Done():
+	}
+	return errors.Join(dispatcherErr, ctx.Err())
 }
 
 // reEvaluate is one authoritative pass. Single-flight via evalMu (invariant #1).
@@ -368,6 +386,8 @@ func (e *executor) startUnitWatch(ctx context.Context) error {
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
+		// Defers run LIFO: the exact native watcher stops before this goroutine
+		// publishes WaitGroup completion. Its Stop error stays goroutine-local.
 		defer func() { _ = watcher.Stop() }()
 		for {
 			select {
