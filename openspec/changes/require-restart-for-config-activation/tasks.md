@@ -1,95 +1,65 @@
-## 1. Contract and prerequisite truth
+## 1. Binding truth reset
 
-- [x] 1.1 Obtain SemStreams architect and owner approval for boot-only composition plus the dedicated rule-definition
-  exception.
-- [x] 1.2 Add ADR-094 and mark only ADR-026's live flow-activation decision superseded; retain coordinator judgment.
-- [x] 1.3 Add current-truth deltas for component runtime config, service composition, component discovery, rule hot
-  reload, graph index readiness, and rule entity watching. Replace stale Purpose text that advertises live component
-  or configured watcher-set mutation.
-- [x] 1.4 Revise `restore-go-lifecycle-ownership` P2/P3 target and tasks after this prerequisite is approved.
-- [x] 1.5 Run strict OpenSpec validation after every contract edit.
+- [x] 1.1 Record the current-main surface inventory, historical PR #990 collision table, adopter seams, and blocking
+  findings in `pr990-truth-reset-inventory.md`.
+- [x] 1.2 Obtain owner disposition for the narrow boot-only reconstruction and preserve it in
+  `pr990-boot-only-disposition.md`.
+- [x] 1.3 Record the Flow authoring and boot-composition decision in ADR-096 without importing historical PR #990
+  lifecycle or monitoring machinery.
+- [ ] 1.4 Reconcile every binding ruling against the final implementation in
+  `pr990-boot-only-implementation-conformance.md`; any deviation requires explicit owner signature.
+- [x] 1.5 Validate this active OpenSpec change strictly after the target-state rewrite.
 
-## 2. Historical lifecycle reset delegation
+## 2. Fixed boot composition
 
-The earlier PR2 lifecycle reset is historical evidence only and has no task boxes here. ADR-095 and
-`simplify-one-shot-lifecycle-ownership` supersede its ManagedConsumer, lifecycle deletion, concurrent/rejoin,
-retained-result, terminal Close, settlement, controlled/dirty proof, and raw-root lifecycle mechanics. This change
-retains boot-only composition, desired/effective flow truth, and rules-only hot reload. Delegation grants no runtime or
-proof completion credit.
-
-## 3. Retire generic runtime composition mutation
-
-- [ ] 3.1 Remove ComponentManager config/model-registry subscribers and all live reconcile/restart/replace/remove paths.
-- [ ] 3.2 Remove generic ComponentManager config PUT and anonymous live-update probes; retain value-only observation.
-- [ ] 3.3 Delete Registry replacement/reservation APIs and keep boot admission plus defensive value views.
-- [ ] 3.4 Remove `watch_config` and other operator surfaces that imply live component mutation.
-- [ ] 3.5 Keep config KV desired-state synchronization but prove post-boot writes cannot mutate running services or
-  components.
-- [ ] 3.7 Classify every production post-boot `config.Manager.GetConfig()` read. Desired-state reporting may read the
-  mutable desired view; boot construction uses the selected snapshot; runtime behavior and resource recovery use only
-  the sealed boot snapshot.
-
-## 4. Preserve desired flow authoring
-
-- [ ] 4.1 Keep flow create/update/validation and desired component-config persistence.
-- [ ] 4.2 Make deploy/start/stop/undeploy responses state desired-state outcome, runtime unchanged, and restart
-  required.
-- [ ] 4.3 Add restart-known-answer tests: a desired flow change does not affect the current runtime and does affect the
-  next successful boot after both graceful exit and power loss.
-- [ ] 4.4 Remove or keep unwired any runtime-lifecycle tool surface with no present consumer; do not advertise immediate
-  activation.
-- [ ] 4.5 Replace persisted `runtime_state` with desired `absent`/`disabled`/`enabled` activation and migrate the
-  current not-deployed/deployed-stopped/running API without aliases.
-- [ ] 4.6 Remove or rename timestamps and metrics that currently claim a desired write deployed, started, stopped, or
-  ran a flow.
-- [ ] 4.7 Make flow reads and `monitor_flow` return desired state, independently observed effective state, and
-  `restart_required`; effective state never comes from flowstore and reports `unknown` without an observer.
-- [ ] 4.8 Seal unique boot identity plus canonical boot-applied configuration digests. Derive `restart_required` by
-  comparing current desired provenance with boot-applied provenance, independently of activation labels and health.
-
-## 5. Dedicated rule-definition hot reload
-
-- [ ] 5.1 Replace global `rules.<rule_id>` values with pack-scoped typed desired records. Create/update write `present`;
-  delete writes a revision-returning `deleted` tombstone. Return an opaque pack/rule/revision receipt.
-- [ ] 5.2 Restrict live payloads to rule definitions. Reject component envelope, watch-bucket, integration, port,
-  dependency, producer-identity, and projection-binding changes from the hot path.
-- [ ] 5.3 Move the watcher and reconciler under a Start-context supervisor with contexts passed as goroutine parameters;
-  retain only private cancellation and join state.
-- [ ] 5.4 Build and validate a complete candidate rule generation before commit; rejection leaves the active generation
+- [ ] 2.1 Prove ComponentManager reads the existing configuration once during construction and composes only that
+  enabled component set.
+- [ ] 2.2 Prove ComponentManager has no component or model-registry configuration subscription and no generic runtime
+  component-config write surface.
+- [ ] 2.3 Prove post-construction component and model-registry writes leave running component identity and membership
   unchanged.
-- [ ] 5.5 Publish revision-bound `applied`, `rejected`, `superseded`, or `canceled_shutdown` activation facts and an
-  active-generation fact scoped by unique boot incarnation in a cataloged bounded operational KV bucket.
-- [ ] 5.6 Return the exact desired revision from create/update/delete. Report `pending` until the owning processor
-  proves a terminal outcome; never infer activation from write success.
-- [ ] 5.7 Prove expression and cron add/update/delete, invalid-set rejection, burst supersession, restart replay,
-  multiple processor instances, and cancellation/Stop races deterministically.
-- [ ] 5.8 Add a typed activation reader used by rule mutation responses, `get_rule`, `list_rules`, and a dedicated
-  status operation; callers never provide storage grammar.
-- [ ] 5.9 Make watcher/reconcile/status-publication failures degrade readiness and metrics, then repair through
-  Start-owned bounded retry plus full-snapshot reconciliation.
-- [ ] 5.10 Join active-generation facts to Rule's existing `GRAPH_STATUS` liveness by exact envelope `boot_id`; typed
-  reads label expired or different boot incarnations stale and never report a crashed generation currently active.
-- [ ] 5.11 Use one status record per boot/component/pack/rule with KV history five; GC expired boot status after the
-  `GRAPH_STATUS` freshness grace, retain at most five boot incarnations per stable process/component slot, and return
-  typed
-  unknown/history-expired results instead of promoting stale evidence.
-- [ ] 5.12 Back in-process tool executors with an admitted typed Go activation reader. Expose remote web reads through
-  a schema-defined operation on the existing GraphQL-shaped HTTP facade. Do not expose operational KV grammar or add
-  an MCP hop for in-process tools.
-- [ ] 5.13 Use one stable framework-owned Rule `GRAPH_STATUS` key per process slot/component/pack with History 3. Put
-  unique `boot_id` in the envelope and derive process slot from validated boot-sealed `platform.instance_id`. Claim the
-  slot with KV compare-and-set, discover Rule keys from sealed composition, and leave every non-Rule producer key
-  unchanged. Do not create a second liveness catalog or accumulating per-boot readiness keys.
+- [ ] 2.4 Prove Registry admits validated boot declarations, seals after composition, and exposes defensive values
+  without live component handles.
+- [ ] 2.5 Remove runtime replacement reservation, removal transition, and same-instance mutation protocols.
+- [ ] 2.6 Verify Config Manager has no production diff beyond the owner-approved foreign-identity fatal Start and
+  detached-path removal. Verify model watcher, validator/factories, lifecyclejoin, owner Start/Stop mechanics,
+  CronScheduler, ACK ordering, NATS shutdown/recovery, and the E2E WebSocket client have no production diff.
 
-## 6. Migration and verification
+## 3. Flow authoring and explicit publication
 
-- [ ] 6.1 Update SemStreams migration docs with exact removed APIs and response changes; make sister-repository notices
-  read-only. Document required stable `platform.instance_id` for Rule hot reload and typed collision failure.
-- [ ] 6.2 Remove tests that assert retired live component replacement and replace them with sealed-runtime tests.
-- [ ] 6.3 Run `task lint`, `go test -race ./...`, integration tests, contract tests, schema generation/no drift, and
-  strict OpenSpec validation.
-- [ ] 6.4 Run relevant `task e2e:core`, `task e2e:structural`, CRUD, agentic, and semantic tiers before the breaking
-  commit lands.
-- [ ] 6.5 Record the exact commit, tests, and relevant E2E artifacts for boot composition, desired/effective flow
-  truth, and rules-only hot reload before tagging; cross-reference the separately owned simplify lifecycle prerequisite
-  evidence without tracking controlled/dirty proof here.
+- [ ] 3.1 Preserve saved Flow create/read/update/delete, validation, and compilation behavior.
+- [ ] 3.2 Prove saving or updating a Flow changes flowstore only and does not publish component configuration.
+- [ ] 3.3 Add `POST /flows/{id}/publish-component-configs` using the existing validator/compiler and Config Manager
+  component write operation.
+- [ ] 3.4 Prove publication sorts instance names and performs deterministic sequential upserts.
+- [ ] 3.5 Prove omission never deletes an existing component configuration.
+- [ ] 3.6 Prove partial failure reports exact persisted names and the failed name, and retry safely converges.
+- [ ] 3.7 Prove successful publication reports the persisted names, unchanged runtime, and required reboot.
+- [ ] 3.8 Remove Flow runtime lifecycle state, operations, tools, metrics, timestamps, logs, and streams without aliases
+  or a replacement monitor.
+- [ ] 3.9 Prove retained name-keyed Flow observations do not claim Flow ownership of component lifecycle or activation.
+
+## 4. Rule and deferred findings
+
+- [ ] 4.1 Verify the reconstruction has no production diff in Rule code, Rule storage, Rule watchers, graph-index
+  readiness, or Rule entity watching.
+- [ ] 4.2 Record that separate Rule hot-reload target-state artifacts remain unadvanced and receive no completion
+  credit from this change.
+- [ ] 4.3 Keep multi-key configuration atomicity, partial watcher/arbitration behavior, and validator constructor
+  effects as deferred findings rather than implementation prerequisites.
+
+## 5. Migration and verification
+
+- [ ] 5.1 Document exact removed APIs and the save/validate/publish/reboot sequence in a SemStreams-owned migration
+  guide. Sister repositories remain read-only.
+- [ ] 5.2 Run focused unit and integration tests, including race coverage for boot-only composition and publication.
+- [ ] 5.3 Run `task lint`, `go test -race ./...`, contract tests, schema generation/no-drift, and strict OpenSpec
+  validation.
+- [ ] 5.4 Run relevant core and CRUD E2E before the breaking change lands.
+- [ ] 5.5 Record the exact implementation commit and verification artifacts in the conformance ledger.
+- [ ] 5.6 Obtain independent SemStreams reviewer approval of the final diff and every conformance-ledger row.
+
+## 6. Explicitly uncredited work
+
+- [ ] 6.1 Confirm this change claims no lifecycle migration, shutdown, controlled restart, dirty recovery,
+  effect-before-ACK, release, archive, or tag-readiness completion.

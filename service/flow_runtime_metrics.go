@@ -1,8 +1,8 @@
 package service
 
-// Runtime metrics proxy endpoint for Flow Builder UI.
+// Saved-diagram component-name metrics observation for Flow Builder UI.
 //
-// This file implements the GET /flowbuilder/flows/{id}/runtime/metrics endpoint
+// This file implements GET /flowbuilder/flows/{id}/observations/metrics
 // which provides component-level metrics (throughput, error rates, queue depth)
 // with graceful degradation across three tiers:
 //
@@ -84,7 +84,7 @@ func sanitizeComponentName(name string) string {
 	return regexp.MustCompile(`[^a-zA-Z0-9_-]`).ReplaceAllString(name, "_")
 }
 
-// handleRuntimeMetrics handles GET /flows/{id}/runtime/metrics
+// handleRuntimeMetrics observes metrics for component names in a saved diagram.
 // Implements three-tier fallback:
 // 1. Query Prometheus API for computed rates
 // 2. Parse raw metrics endpoint for counters

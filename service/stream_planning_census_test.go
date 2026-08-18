@@ -128,7 +128,7 @@ func computeDefaultOnlyJetStreamOutputs(t *testing.T, scope []string) []defaultO
 
 		// Keep the two lifecycle facts separate. rawRows is configured
 		// preconstruction intent resolved through PortDefinition/PortFacts;
-		// effectiveRows is the admitted generation captured by Registry after a
+		// effectiveRows is the admitted declaration captured by Registry after a
 		// production factory constructs it. Neither owner imports the other's
 		// policy response.
 		registry := newMessageLoggerCensusRegistry(t)
@@ -144,7 +144,9 @@ func computeDefaultOnlyJetStreamOutputs(t *testing.T, scope []string) []defaultO
 			}
 			collectRawCensusRows(t, instanceName, componentConfig.Name, componentConfig.Config,
 				rawRows, discardedKeys, discardedGlobal)
-			if _, createErr := registry.CreateComponent(instanceName, componentConfig, deps); createErr != nil {
+			if _, createErr := registry.CreateComponent(
+				componentadmission.Access{}, instanceName, componentConfig, deps, nil,
+			); createErr != nil {
 				constructionFailures = append(constructionFailures,
 					fmt.Sprintf("%s component %s factory %s: %v",
 						path, instanceName, componentConfig.Name, createErr))

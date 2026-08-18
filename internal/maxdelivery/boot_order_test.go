@@ -30,6 +30,8 @@ func TestBinaryBootOrder(t *testing.T) {
 		"bootstrapobservability.NewForwardingHandler",
 		"phaseLogging.Steady",
 		"maxdelivery.Start",
+		"setupRegistriesAndManager",
+		"configureAndCreateServices",
 		"runWithSignalHandling",
 	)
 	require.NotContains(t, productionCalls, "bootstrapobservability.NewE2EPhaseA")
@@ -56,6 +58,7 @@ func TestBinaryBootOrder(t *testing.T) {
 	require.NoError(t, requireIdentArgument(productionRun, "phaseLogging.Steady", 0, forwarding))
 	requireConnectionChain(t, productionPath)
 	requireStreamWrapper(t, productionPath)
+	requireCompositionConstructors(t, productionPath)
 	requireStartsManager(t, productionPath)
 
 	e2ePath := filepath.Join("..", "..", "cmd", "e2e-semstreams", "main.go")
@@ -65,6 +68,8 @@ func TestBinaryBootOrder(t *testing.T) {
 		"bootstrapobservability.NewE2EPhaseA",
 		"completeE2EPhaseA",
 		"maxdelivery.Start",
+		"setupRegistriesAndManager",
+		"configureAndCreateServices",
 		"runWithSignalHandling",
 	)
 	require.NotContains(t, e2eCalls, "bootstrapobservability.NewProductionPhaseA")
@@ -93,6 +98,7 @@ func TestBinaryBootOrder(t *testing.T) {
 	require.NotContains(t, e2ePhaseCalls, "bootstrapobservability.NewForwardingHandler")
 	requireConnectionChain(t, e2ePath)
 	requireStreamWrapper(t, e2ePath)
+	requireCompositionConstructors(t, e2ePath)
 	requireStartsManager(t, e2ePath)
 
 	sharedPath := filepath.Join("..", "bootstrapobservability", "bootstrap.go")
@@ -268,6 +274,14 @@ func requireStreamWrapper(t *testing.T, path string) {
 	ensureCalls := functionCalls(t, path, "ensureStreamsWithSpinner")
 	require.Contains(t, ensureCalls, "bootstrapobservability.EnsureEffectiveStreams")
 	require.NotContains(t, ensureCalls, "maxdelivery.EnsureCaptureStream")
+}
+
+func requireCompositionConstructors(t *testing.T, path string) {
+	t.Helper()
+	registryCalls := functionCalls(t, path, "setupRegistriesAndManager")
+	require.Contains(t, registryCalls, "component.NewRegistry")
+	require.Contains(t, registryCalls, "service.NewServiceManager")
+	require.Contains(t, functionCalls(t, path, "configureAndCreateServices"), "manager.ConfigureFromServices")
 }
 
 func requireStartsManager(t *testing.T, path string) {

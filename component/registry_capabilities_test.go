@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/c360studio/semstreams/internal/componentadmission"
 	"github.com/c360studio/semstreams/natsclient"
 )
 
@@ -67,28 +68,28 @@ func TestPortsToCapabilitiesRejectsInvalidPort(t *testing.T) {
 	}
 }
 
-func TestCapabilityPreparationUsesRetainedGenerationWithoutPortReread(t *testing.T) {
+func TestCapabilityPreparationUsesRetainedDeclarationWithoutPortReread(t *testing.T) {
 	registry := NewRegistry()
-	component := &generationTestComponent{outputs: []Port{generationTestPort("events.original")}}
+	component := &declarationTestComponent{outputs: []Port{declarationTestPort("events.original")}}
 	requireNoError(t, registry.RegisterWithConfig(RegistrationConfig{
 		Name: "source-factory", Type: "processor", Version: "v1",
 		Factory: func(json.RawMessage, Dependencies) (Discoverable, error) { return component, nil },
 	}))
 	_, err := registry.CreateComponent(
-		"source", generationTestConfig("source-factory", `{}`), generationTestDeps())
+		componentadmission.Access{}, "source", declarationTestConfig("source-factory", `{}`), declarationTestDeps(), nil)
 	requireNoError(t, err)
 	if component.inputCalls != 1 || component.outputCalls != 1 {
 		t.Fatalf("admission port calls = input %d output %d, want one each", component.inputCalls, component.outputCalls)
 	}
 
-	component.outputs[0] = generationTestPort("events.mutated")
+	component.outputs[0] = declarationTestPort("events.mutated")
 	registry.natsClient = &natsclient.Client{}
 	registry.nodeID = "node-a"
-	generation, ok := registry.generation("source")
+	declaration, ok := registry.declaration("source")
 	if !ok {
-		t.Fatal("admitted generation missing")
+		t.Fatal("admitted declaration missing")
 	}
-	publication, err := registry.prepareCapabilityPublication(generation)
+	publication, err := registry.prepareCapabilityPublication(declaration)
 	requireNoError(t, err)
 	if component.inputCalls != 1 || component.outputCalls != 1 {
 		t.Fatalf("capability preparation reread component ports: input %d output %d", component.inputCalls, component.outputCalls)

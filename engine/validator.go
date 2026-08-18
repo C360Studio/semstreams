@@ -241,9 +241,9 @@ func (v *Validator) buildFlowGraph(flow *flowstore.Flow) (*flowgraph.FlowGraph, 
 			configJSON = json.RawMessage(`{}`)
 		}
 		if admissionErr == nil {
-			_, admissionErr = validationRegistry.CreateComponent(node.ID, types.ComponentConfig{
+			_, admissionErr = validationRegistry.CreateComponent(componentadmission.Access{}, node.ID, types.ComponentConfig{
 				Name: node.Component, Type: node.Type, Enabled: true, Config: configJSON,
-			}, component.Dependencies{NATSClient: v.natsClient})
+			}, component.Dependencies{NATSClient: v.natsClient}, nil)
 		}
 		if admissionErr != nil {
 			v.logger.Debug("Failed to add component to graph",

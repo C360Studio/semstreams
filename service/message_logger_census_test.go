@@ -201,7 +201,8 @@ func TestMessageLoggerCensusRejectsUnknownEnabledFactory(t *testing.T) {
 
 	registry := newMessageLoggerCensusRegistry(t)
 	_, err = registry.CreateComponent(
-		"future-unknown", cfg.Components["future-unknown"], messageLoggerCensusDependencies())
+		componentadmission.Access{}, "future-unknown", cfg.Components["future-unknown"],
+		messageLoggerCensusDependencies(), nil)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "future-unknown")
 }
@@ -282,7 +283,9 @@ func computeMessageLoggerSubjectCensus(t *testing.T, scope []string) computedSub
 			}
 			collectRawCensusRows(t, instanceName, componentConfig.Name,
 				componentConfig.Config, rawRows, rawKeys, rawGlobal)
-			if _, err := registry.CreateComponent(instanceName, componentConfig, deps); err != nil {
+			if _, err := registry.CreateComponent(
+				componentadmission.Access{}, instanceName, componentConfig, deps, nil,
+			); err != nil {
 				// Every enabled factory failure, including an unknown future factory, is census-fatal.
 				// Accumulate all of them so one stale config cannot mask its siblings.
 				computed.ConstructionFailures = append(computed.ConstructionFailures,

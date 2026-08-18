@@ -1,226 +1,150 @@
-# Design: Boot-only composition with bounded rule activation
+# Design: Boot-only composition and explicit Flow publication
 
-## Context
+## Authority and baseline
 
-SemStreams configuration currently conflates three different facts:
+This design is subordinate to the owner-approved
+[`pr990-boot-only-disposition.md`](pr990-boot-only-disposition.md), SHA-256
+`40b2534b604a14f64aacbb8f4db86bdbc38129f3f114e0ac40118c9f7259fc41`.
+The passed surface inventory is
+[`pr990-truth-reset-inventory.md`](pr990-truth-reset-inventory.md), SHA-256
+`5256057932030c7e854a3889ae2756fbec577870ee5e5c9c7c0e8ab86874541d`.
+The durable architecture decision is
+[`ADR-096`](../../../docs/adr/096-flow-diagrams-are-not-lifecycle-authority.md).
 
-1. desired configuration persisted for a future boot;
-2. effective configuration of the running process;
-3. commands to mutate that process.
-
-This design separates them. Desired state remains writable. Effective component and service composition is sealed at
-boot. Live rule-definition activation remains as a dedicated capability because it has a demonstrated UX consumer and
-does not require component generation replacement.
-
-Historical artifact provenance: the original D10 and delivery order derive from the owner-approved minimal lifecycle
-design artifact with SHA-256 `0047789823bd8a6b3f772bb598fae90ca6060a8799cd828a95487589e0a7a11e`;
-they are not current authority. The measured reset inventory is
-`openspec/changes/require-restart-for-config-activation/inventory.md`; the exact native-surface companion is
-`openspec/changes/require-restart-for-config-activation/native-surface-inventory.md` with approved SHA-256
-`d79df592e7049d4f0e3412bf41e8c61d44ea0829a6fddc2734cff40ceb966617`.
+Historical PR #990 is evidence only. It must not be merged, rebased, replayed, or cherry-picked as a unit. The accepted
+behavior is reconstructed narrowly against current main. This change receives zero implementation credit until each
+ruling is mapped to the current implementation and independently reviewed.
 
 ## Goals
 
-- Preserve flow/rule authoring, validation, persistence, and boot-time assembly.
-- Remove general in-process component/service/topology mutation.
-- Preserve live expression and cron rule-definition changes inside a fixed Rule processor envelope.
-- Make activation claims revision-bound and observable.
-- Keep boot composition free of live replacement/removal machinery.
-- Depend on the generic lifecycle ordering and proof owned by `simplify-one-shot-lifecycle-ownership` while retaining
-  only Rule-specific activation terminalization under that contract.
+- Compose one fixed component set from configuration captured at process construction.
+- Make ComponentManager the sole owner of concrete runtime component handles.
+- Keep Registry useful for defensive declaration discovery without lifecycle authority.
+- Preserve Flow authoring, validation, compilation, and explicit next-boot configuration publication.
+- Make publication progress and reboot requirements observable without claiming runtime activation.
+- Remove unused Flow lifecycle and generic runtime component-mutation surfaces.
+- Preserve existing Rule, lifecycle, ACK, NATS, and recovery behavior, and ordinary Config Manager behavior.
 
 ## Non-goals
 
+- Component, service, model-registry, or topology hot reload.
 - Automatic process restart.
-- Live model-registry, credential, port, dependency, watch-bucket, integration-mode, or projection-binding changes.
-- A generic component configuration hook.
-- Compatibility aliases for retired beta APIs.
+- A new runtime lifecycle protocol, replacement state machine, or shutdown abstraction.
+- Flow runtime-state tracking, new runtime-comparison metadata, or a new monitoring replacement.
+- Advancing the separate Rule hot-reload target.
+- Repairing deferred Config Manager or validator findings.
+- Compatibility aliases for retired pre-v1 APIs.
 
 ## Decisions
 
-### D1. Successful boot seals service and component composition
+### D1. Existing Config Manager writes remain; foreign identity fails startup
 
-ComponentManager constructs and starts the validated boot set. After Start succeeds, config changes cannot create,
-remove, restart, or replace a running component. Registry admits declarations during boot and exposes defensive value
-views; it has no live replacement protocol.
+Config Manager remains the durable configuration writer and reader. Its persistence, version arbitration, watchers,
+`GetConfig`, `OnChange`, `WatchModelRegistry`, write operations, and shutdown behavior are unchanged.
 
-Registry, flow graph, dependency records, lifecycle records, and observation DTOs expose no runtime handles.
-ComponentManager owns concrete handles and permits only callback-scoped access where a remaining in-process consumer
-requires it. The handle is valid only for the callback and cannot be retained. This change defines no terminal fence,
-result, Start-finalization, or failed-Start behavior; ADR-095 and `simplify-one-shot-lifecycle-ownership` own those
-lifecycle mechanics. There are no replacement/removal transition gates.
+One owner-approved prerequisite narrows startup: if the shared bucket contains another platform identity, Config
+Manager Start fails before arbitration, watchers, writes, or dependent construction. It does not enter detached mode.
+This makes a successful component write observable without adding a status knob or write-receipt API.
 
-### D2. Config KV remains durable desired state
+ComponentManager calls the existing read path once during construction. The selected configuration is the complete
+input to process composition. Later writes remain durable for a later process boot, but ComponentManager does not
+subscribe to them or interpret them as lifecycle commands.
 
-Config KV remains authoritative for next-boot configuration after existing version arbitration. FlowService and other
-authoring paths may validate and persist desired changes while a process is running. They must not mutate the sealed
-runtime.
+### D2. ComponentManager owns one fixed boot composition
 
-An accepted flow mutation returns an honest pending-next-boot result: desired state changed, current runtime unchanged,
-restart required. SemStreams does not automatically exit or restart; process supervision is deployment policy.
+ComponentManager constructs the enabled component set from the captured configuration and retains the concrete
+runtime handles. Post-construction writes cannot create, start, stop, remove, reconfigure, restart, reconcile, or
+replace a component in that process.
 
-Every successful boot consumes the latest committed desired state regardless of how the prior process exited. Planned
-activation depends on the separately owned lifecycle and proof named in D9; dirty restart correctness is also an
-external lifecycle dependency. A prior clean-exit record is useful operational evidence but never a gate that can
-suppress committed desired configuration.
+The generic component-config HTTP write and `watch_config` tool retire. No alternate subscription, direct KV write,
+or interface probe reintroduces live component mutation.
 
-### D3. Retire generic live component configuration
+This decision changes composition authority only. Existing `Start` and `Stop` mechanics, lifecyclejoin use, component
+shutdown, transport shutdown, and recovery semantics are preserved and receive no completion credit.
 
-ComponentManager PUT and its anonymous interface probes are removed. No current production `UpdateConfig` implementer
-is lost. A future live operational control requires a separately named contract, a current consumer, explicit
-durability, and observable success/failure. It cannot re-enter through generic component config.
+### D3. Registry admits declarations at boot and then seals
 
-### D4. Rule definitions are the only live configuration exception
+Registry accepts validated declaration values while ComponentManager builds the boot composition. Once composition is
+complete, Registry seals and rejects further admission. It exposes defensive declaration snapshots, not shared live
+component handles. ComponentManager remains the only owner of the concrete handles.
 
-The fixed Rule processor may activate create/update/delete changes to rule definitions, including expression and cron
-definitions. Its component configuration remains boot-only: ports, dependencies, entity-watch buckets, graph
-integration, producer identity, and projection contract/index bindings cannot hot change.
+There is no runtime replacement reservation, removal transition, or same-instance mutation protocol. Declaration
+presence describes the admitted boot shape; it does not assert readiness or lifecycle state.
 
-The Rule processor owns a Start-context supervisor. KV watcher and application goroutines receive that context as a
-goroutine parameter. No context is stored on a struct or recovered from a retained closure. A candidate rule set is
-validated and built before the active rule generation changes; rejection leaves the active generation unchanged.
+### D4. Flow is an authoring and compilation surface
 
-### D5. Desired rules and activation outcomes use KV Watch
+Flow create, read, update, delete, validation, and compilation remain. Saving or updating a diagram changes only
+flowstore. It does not write component configuration or mutate the running process.
 
-The four storage tests all select KV:
+Flowstore contains authoring data only. It does not persist or claim current runtime lifecycle state, activation
+timestamps, or current runtime membership.
 
-| Test | Desired rules | Activation outcome |
-|---|---|---|
-| Restart | replay current definitions | replay current outcome |
-| Delivery | all Rule processors react | tools/operators may all observe |
-| Work | fast, idempotent reconciliation | fast fact publication |
-| Nature | desired-state fact | activation-state fact |
+### D5. Publication is explicit, sorted, sequential, and upsert-only
 
-Rule authoring targets one boot-composed `pack_id`. Desired keys are pack-scoped, and their typed values represent a
-present definition or deletion tombstone. Create, update, and delete therefore all produce an exact committed KV
-revision without post-delete inference. The caller receives an opaque `(pack_id, rule_id, revision)` receipt.
+`POST /flows/{id}/publish-component-configs` is the sole Flow-to-component-configuration publication operation. It
+loads the saved Flow, runs the existing validation and compilation behavior, sorts component instance names, and
+calls the existing Config Manager component write operation sequentially.
 
-The owning Rule processor publishes a terminal activation outcome for each observed desired revision: `applied`,
-`rejected`, `superseded`, or `canceled_shutdown`. A status also identifies the active rule-set generation. `pending`
-belongs to the writer-side response before a terminal processor outcome exists; write success alone never produces
-`applied`.
+The operation upserts compiled entries only. A node omitted from the Flow does not delete an existing component
+configuration. No new transaction, rollback protocol, bucket, subject, or storage type is introduced.
 
-Activation status is processor-instance scoped by a freshly generated `boot_id` plus stable process-slot and Rule
-component identity. A `boot_id` is never reused after a restart, including a dirty restart, so multiple Rule processors
-and successive boots cannot overwrite one another's truth. Status records repeat `boot_id`; an old incarnation is
-never current activation evidence for a new process.
+On failure, the response names exactly the component instances already persisted and the instance whose write failed.
+The unattempted suffix remains unreported. Repeating the operation is safe because it is a deterministic sequence of
+upserts. On success, the response reports the persisted names, that the running process is unchanged, and that reboot
+is required.
 
-Rule's existing readiness envelope in `GRAPH_STATUS` is the one liveness home. `process_slot` is the validated,
-non-empty `platform.instance_id` sealed into the boot snapshot. Rule hot-reload admission fails if that identity is
-absent. Its framework-owned key is stable per `(process_slot, component_id, pack_id)` and preserves the bucket's
-History 3 contract. The envelope adds the unique `boot_id` and repeats the stable identities. A new boot overwrites the
-stable slot; it does not create an accumulating per-boot key. Non-Rule readiness producers retain their existing fixed
-keys and consumers unchanged.
+### D6. Flow lifecycle surfaces retire without replacement
 
-Rule claims a missing or expired stable slot with KV compare-and-set. A fresh slot owned by another `boot_id` is a
-typed `readiness_slot_collision`; the new processor does not overwrite it or claim hot reload ready. Heartbeats update
-the claimed revision with compare-and-set, so losing slot ownership degrades Rule readiness rather than creating two
-live owners. Gateway/readiness consumers derive Rule keys from sealed composition; existing raw `readiness_keys`
-remain only for unchanged non-Rule producers.
+Flow lifecycle state, operations, tools, metrics, timestamps, logs, and streams retire without aliases. No new monitor
+is introduced. Existing Flow health, metrics, and message observations may remain only where they report current
+component observations by name; they do not establish Flow ownership of component lifecycle or runtime activation.
 
-The activation reader joins activation facts with the exact `boot_id` carried by the fresh Rule readiness envelope and
-uses the existing consumer-local three-heartbeat freshness rule. A fresh ready/degraded Rule incarnation is live; an
-explicit stopping/tombstoned or expired incarnation is historical. If the readiness fact cannot be read or freshness
-is indeterminate, current activation is `unknown`; the reader does not promote history. Clean Stop publishes terminal
-activation truth before making the readiness instance not current. Dirty shutdown relies on heartbeat expiry.
+### D7. Rule behavior remains separate and unchanged
 
-Status uses one current record per `(boot_id, component_id, pack_id, rule_id)` with KV history fixed at five revisions.
-Framework GC purges status keys for expired boot incarnations after the `GRAPH_STATUS` freshness grace period and
-retains at most the five most recent boot incarnations per stable process/component slot. A receipt outside retained
-history returns typed
-`history_expired` unless its newer desired record proves `superseded`; it is never guessed applied or rejected. This
-bounded policy and its constants are framework-owned, not adopter-provided knobs.
+Rule code, Rule storage, Rule watchers, and current Rule behavior are unchanged by this reconstruction. Existing
+target-state artifacts for Rule hot reload, graph-index readiness, and Rule entity watching remain separate,
+unimplemented work. This change neither completes nor advances them.
 
-A typed activation reader is part of the capability, not a follow-up. In-process rule tool executors call its admitted,
-operation-specific Go interface directly. A remote web UI uses a schema-defined operation on the existing
-GraphQL-shaped HTTP facade, backed by the same reader. Neither path exposes bucket grammar. MCP is reserved for an
-admitted external agent client; the existing in-process executors do not add a network hop. NATS Direct may carry an
-internal service request if a process boundary is later required, but raw operational KV is not a supported query
-surface.
+### D8. Deferred findings do not expand the reconstruction
 
-Rule mutation responses, `get_rule`, `list_rules`, and a dedicated activation-status operation consume the reader.
-Watcher or status-publication loss degrades Rule readiness and metrics. A Start-owned supervisor repairs transport
-loss with bounded framework backoff and full-snapshot reconciliation; it never silently falls back to file-only rules
-while claiming hot reload is available.
+Historical findings about multi-key configuration atomicity, partial watcher creation/version arbitration, and
+validator constructor effects remain recorded findings. They are not prerequisites for boot-only composition and are
+not repaired opportunistically in this change.
 
-Current-active facts join to the existing framework-owned Rule `GRAPH_STATUS` heartbeat. The typed reader treats an
-expired readiness incarnation as stale history, never as a running processor. The existing heartbeat/expiry policy is
-framework-owned, not an adopter knob.
+An implementation need outside the binding disposition stops work for owner review. It does not silently broaden the
+change.
 
-### D6. Flow authoring remains, live topology activation does not
+### D9. Breaking migration stays clean
 
-Deploy/start/stop/undeploy may continue to mutate validated desired component records. While a process is running they
-return runtime-unchanged/restart-required truth. Runtime lifecycle agent tools remain unwired unless a future product
-proves a consumer for desired-state authoring; they do not regain live activation semantics.
+Retired pre-v1 surfaces have no aliases, deprecated parallel paths, or compatibility shims. SemStreams migration
+documentation names the removals and the save/validate/publish/reboot sequence. Sister repositories are read-only;
+their owners apply and verify their migrations.
 
-`flowstore.Flow.RuntimeState` cannot retain its current meaning: Engine writes `deployed_stopped` and `running` after
-desired config writes, and `monitor_flow` repeats those values as runtime truth. The durable field becomes
-`desired_state` with explicit `absent`, `disabled`, or `enabled` values. Historical deployment/start/stop timestamps
-that describe unobserved runtime are removed or renamed as desired-state audit facts.
+## Adopter seam inventory
 
-At boot, the framework assigns a unique `boot_id`, canonicalizes the selected desired configuration, and seals a
-framework-owned digest for the whole boot snapshot plus the relevant flow/component subsets. Effective observations
-carry that immutable boot-applied provenance. Rule/flow reads and monitoring expose current desired provenance,
-boot-applied provenance, independently observed effective state, and `restart_required`.
+- **Component author:** configuration and topology changes apply after reboot. Doing nothing leaves the running process
+  unchanged. Removed API compile failures and the migration guide expose the change. The author should not need a
+  lifecycle protocol or predict activation.
+- **Flow author:** save and validate, explicitly publish, then reboot. Doing nothing after save leaves an authoring-only
+  record. The API schema and publication response expose the contract. The author should not know subjects, buckets,
+  write ordering, or a runtime-state model.
+- **Operator:** successful publication does not restart the process. Doing nothing leaves the existing runtime under
+  normal process supervision. Response fields and the migration guide expose the reboot requirement. The operator
+  should not manage extra comparison metadata or a reconciliation state machine.
+- **Rule author:** nothing changes. Existing Rule behavior continues, and separate target-state artifacts contain any
+  future work.
 
-`restart_required` compares the current desired digest/membership with the digest/membership actually sealed by this
-boot. It does not compare only `enabled`/`disabled`, because desired and effective state can have equal labels while
-their configuration differs. Runtime health is a separate observation and cannot establish activation provenance. If
-no authoritative runtime observer is available, effective state and boot-applied provenance report `unknown`; neither
-is copied from flowstore or desired state.
+## Verification and credit
 
-### D7. Lifecycle authority is an external prerequisite
+Implementation conformance is recorded in
+[`pr990-boot-only-implementation-conformance.md`](pr990-boot-only-implementation-conformance.md). Every binding ruling
+must map to current file-and-line evidence or an explicit deviation requiring owner signature.
 
-ADR-095 and `simplify-one-shot-lifecycle-ownership` exclusively own generic component/service exact Start
-finalization, failed-Start cleanup, callback-borrow shutdown, terminal owner sequencing, ACK ordering, settlement, and
-controlled/dirty restart proof. This change receives no completion credit from that dependency. It retains only
-Rule-specific activation terminalization: fence status publication and cancel/join the Rule-local activation work
-under the generic lifecycle contract. Rule hot reload remains bounded to the fixed boot-composed Rule processor and
-does not use ComponentManager replacement or request-owned component generations.
+Required gates are focused boot-only and authoring-only tests, the foreign-identity fatal-start proof, race tests,
+repository lint/race checks, schema/no-drift, contract tests, and relevant core/CRUD E2E. The final diff must leave
+Config Manager unchanged except for the owner-approved fatal foreign-identity rejection and removal of detached mode.
+It must leave model watcher, Rule, lifecyclejoin, CronScheduler, ACK/NATS/recovery, and the E2E WebSocket client
+untouched.
 
-### D8. Pre-v1 breaking migration is clean
-
-There are no deprecated aliases, dual live paths, or compatibility shims. Migration documentation names retired APIs
-and response changes. Sister repositories are read-only; downstream teams update their own code. Relevant E2E must be
-green before the breaking commit lands.
-
-### D9. Lifecycle proof is a release dependency, not owned work
-
-Boot-only activation cannot claim activation or release readiness until the generic runtime, settlement,
-controlled-process, dirty-recovery, and E2E proof owned by `simplify-one-shot-lifecycle-ownership` passes. This change
-owns no generic component/service lifecycle task, shutdown ordering, ACK rule, recovery mechanism, or proof artifact
-and receives no completion credit by cross-reference. Its only lifecycle-adjacent ownership is Rule-specific
-activation terminalization under that external contract.
-
-### D10. Superseded lifecycle design tombstone
-
-> **Historical provenance only.** The original owner-approved lifecycle artifact hash
-> `0047789823bd8a6b3f772bb598fae90ca6060a8799cd828a95487589e0a7a11e` and Git history preserve the superseded
-> design evidence. Its ManagedConsumer, DrainAndDelete, rejoin, and retained-result mechanics are non-normative.
-> ADR-095 and `simplify-one-shot-lifecycle-ownership` own the current lifecycle target.
-
-## Approved-ruling conformance
-
-This contract-only slice claims no runtime implementation or proof. Each binding ruling maps to durable target-state
-text; every runtime task cited below remains unchecked.
-
-| Approved ruling | Contract evidence |
-|---|---|
-| Boot-only topology and dedicated rule-definition hot reload remain | `design.md:39`, `design.md:74` |
-| Desired/effective flow truth is distinct | D2, D6; `specs/flow-activation-truth/spec.md` |
-| Rules-only hot reload and Rule-local activation terminalization remain bounded | D4, D5, D7; `specs/rule-hot-reload/spec.md` |
-| Lifecycle proof is a dependency with no completion credit | D7, D9; `../simplify-one-shot-lifecycle-ownership/tasks.md` |
-| Historical lifecycle design hash remains provenance | D10 |
-| Sister repositories remain read-only | D8 |
-
-## Risks and mitigations
-
-- **Operator expects flow change to be immediate.** Typed responses state runtime unchanged and restart required.
-- **Rule write succeeds but activation fails.** Revision-bound terminal status records rejection; active generation
-  remains unchanged.
-- **Rapid rule writes coalesce.** Every observed revision reaches `applied`, `rejected`, `superseded`, or
-  `canceled_shutdown`; coalescing cannot silently relabel an intermediate write as applied.
-- **Rule reload recreates general component config.** The accepted payload is Definition-only. Component envelope
-  fields are rejected as restart-required config, not interpreted by the hot path.
-- **Lifecycle prerequisite is incomplete.** Boot-only activation cannot claim release readiness until the simplify
-  change records its runtime and proof gates; this change receives no lifecycle completion credit.
+Passing those gates grants only this change's composition and Flow-authoring credit. Lifecycle migration, controlled
+restart, dirty recovery, effect-before-ACK proof, release readiness, archive, and tag readiness remain owned elsewhere.

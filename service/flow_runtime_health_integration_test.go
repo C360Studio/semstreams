@@ -70,7 +70,6 @@ func TestRuntimeHealthIntegration(t *testing.T) {
 				},
 			},
 		},
-		RuntimeState: flowstore.StateRunning,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 		LastModified: time.Now(),
@@ -105,7 +104,7 @@ func TestRuntimeHealthIntegration(t *testing.T) {
 
 	// Test 1: Get health for flow - should handle missing ComponentManager gracefully
 	t.Run("GetHealthWithoutComponentManager", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/flowbuilder/flows/health-test-flow/runtime/health", nil)
+		req := httptest.NewRequest(http.MethodGet, "/flowbuilder/flows/health-test-flow/observations/health", nil)
 		req.SetPathValue("id", "health-test-flow")
 		w := httptest.NewRecorder()
 
@@ -127,7 +126,7 @@ func TestRuntimeHealthIntegration(t *testing.T) {
 
 	// Test 2: Flow not found
 	t.Run("FlowNotFound", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/flowbuilder/flows/nonexistent-flow/runtime/health", nil)
+		req := httptest.NewRequest(http.MethodGet, "/flowbuilder/flows/nonexistent-flow/observations/health", nil)
 		req.SetPathValue("id", "nonexistent-flow")
 		w := httptest.NewRecorder()
 
@@ -142,7 +141,6 @@ func TestRuntimeHealthIntegration(t *testing.T) {
 			ID:           "empty-flow",
 			Name:         "Empty Flow",
 			Nodes:        []flowstore.FlowNode{},
-			RuntimeState: flowstore.StateNotDeployed,
 			CreatedAt:    time.Now(),
 			UpdatedAt:    time.Now(),
 			LastModified: time.Now(),
@@ -155,7 +153,7 @@ func TestRuntimeHealthIntegration(t *testing.T) {
 			_ = flowStore.Delete(context.Background(), emptyFlow.ID)
 		}()
 
-		req := httptest.NewRequest(http.MethodGet, "/flowbuilder/flows/empty-flow/runtime/health", nil)
+		req := httptest.NewRequest(http.MethodGet, "/flowbuilder/flows/empty-flow/observations/health", nil)
 		req.SetPathValue("id", "empty-flow")
 		w := httptest.NewRecorder()
 
@@ -175,7 +173,7 @@ func TestRuntimeHealthIntegration(t *testing.T) {
 
 	// Test 4: Response time < 200ms
 	t.Run("ResponseTime", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/flowbuilder/flows/health-test-flow/runtime/health", nil)
+		req := httptest.NewRequest(http.MethodGet, "/flowbuilder/flows/health-test-flow/observations/health", nil)
 		req.SetPathValue("id", "health-test-flow")
 		w := httptest.NewRecorder()
 

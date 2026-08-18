@@ -227,8 +227,6 @@ type MessageLogger struct {
 	// Lifecycle management
 	transitionMu       sync.Mutex // Serializes complete Start and Stop transitions.
 	lifecycleMu        sync.Mutex // Protects lifecycle fields and subscription state.
-	observerCancel     context.CancelFunc
-	observerDone       chan struct{}
 	subscriptionCancel context.CancelFunc
 	retryCancel        context.CancelFunc
 	retryDone          chan struct{}
@@ -406,11 +404,6 @@ func resolveLoggerSubjects(desired map[string]struct{}) ([]string, []subjectOver
 	return subjects, overlaps
 }
 
-func (ml *MessageLogger) reconcileRegistryState(ctx context.Context) error {
-	metadata, subjects, overlaps := ml.registrySubjects()
-	return ml.reconcileSubjects(ctx, subjects, metadata, overlaps)
-}
-
 func (ml *MessageLogger) reconcileSubjects(
 	ctx context.Context,
 	desired []string,
@@ -531,12 +524,14 @@ func (ml *MessageLogger) runExplicitRetry(
 	subscriptionCtx context.Context,
 	done chan<- struct{},
 	desired []string,
+	metadata map[string]portMetadata,
+	overlaps []subjectOverlap,
 ) {
 	defer close(done)
 	for {
 		select {
 		case <-ml.retryAfter(messageLoggerReconcileRetryDelay):
-			if ml.reconcileSubjects(subscriptionCtx, desired, map[string]portMetadata{}, nil) == nil {
+			if ml.reconcileSubjects(subscriptionCtx, desired, metadata, overlaps) == nil {
 				return
 			}
 		case <-retryCtx.Done():
@@ -581,59 +576,22 @@ func (ml *MessageLogger) Start(ctx context.Context) error {
 	ml.lifecycleMu.Unlock()
 
 	if ml.autoDiscover {
-		observerCtx, cancel := context.WithCancel(runCtx)
-		updates := ml.componentRegistry.ObserveSnapshots(observerCtx, componentadmission.Access{})
-		done := make(chan struct{})
+		subscriptionCtx, subscriptionCancel := context.WithCancel(runCtx)
 		ml.lifecycleMu.Lock()
-		ml.observerCancel = cancel
-		ml.observerDone = done
+		ml.subscriptionCancel = subscriptionCancel
 		ml.lifecycleMu.Unlock()
-
-		select {
-		case _, ok := <-updates:
-			if !ok {
-				cancel()
-				generation.Cancel()
-				close(done)
-				ml.lifecycleMu.Lock()
-				ml.running = false
-				ml.observerCancel = nil
-				ml.observerDone = nil
-				ml.lifecycleMu.Unlock()
-				_ = ml.BaseService.Stop(runCtx)
-				return fmt.Errorf("component declaration observer closed during message logger start")
-			}
-			retry := ml.reconcileRegistryState(observerCtx) != nil
-			go func() {
-				defer close(done)
-				for {
-					var retryTimer <-chan time.Time
-					if retry {
-						retryTimer = ml.retryAfter(messageLoggerReconcileRetryDelay)
-					}
-					select {
-					case _, ok := <-updates:
-						if !ok {
-							return
-						}
-						retry = ml.reconcileRegistryState(observerCtx) != nil
-					case <-retryTimer:
-						retry = ml.reconcileRegistryState(observerCtx) != nil
-					case <-observerCtx.Done():
-						return
-					}
-				}
-			}()
-		case <-observerCtx.Done():
-			close(done)
-			generation.Cancel()
+		metadata, subjects, overlaps := ml.registrySubjects()
+		if ml.reconcileSubjects(subscriptionCtx, subjects, metadata, overlaps) != nil {
+			retryCtx, retryCancel := context.WithCancel(runCtx)
+			done := make(chan struct{})
 			ml.lifecycleMu.Lock()
-			ml.running = false
-			ml.observerCancel = nil
-			ml.observerDone = nil
+			ml.retryCancel = retryCancel
+			ml.retryDone = done
 			ml.lifecycleMu.Unlock()
-			_ = ml.BaseService.Stop(runCtx)
-			return observerCtx.Err()
+			go func() {
+				defer retryCancel()
+				ml.runExplicitRetry(retryCtx, subscriptionCtx, done, subjects, metadata, overlaps)
+			}()
 		}
 	} else {
 		subscriptionCtx, subscriptionCancel := context.WithCancel(runCtx)
@@ -650,7 +608,9 @@ func (ml *MessageLogger) Start(ctx context.Context) error {
 			ml.lifecycleMu.Unlock()
 			go func() {
 				defer retryCancel()
-				ml.runExplicitRetry(retryCtx, subscriptionCtx, done, ml.explicitSubjects)
+				ml.runExplicitRetry(
+					retryCtx, subscriptionCtx, done, ml.explicitSubjects, map[string]portMetadata{}, nil,
+				)
 			}()
 		}
 	}
@@ -681,16 +641,11 @@ func (ml *MessageLogger) Stop(ctx context.Context) error {
 	return generation.Stop(ctx, nil, func(ctx context.Context) error {
 		ml.lifecycleMu.Lock()
 		ml.running = false
-		observerCancel := ml.observerCancel
-		observerDone := ml.observerDone
 		subscriptionCancel := ml.subscriptionCancel
 		retryCancel := ml.retryCancel
 		retryDone := ml.retryDone
 		ml.lifecycleMu.Unlock()
 
-		if observerCancel != nil {
-			observerCancel()
-		}
 		if retryCancel != nil {
 			retryCancel()
 		}
@@ -698,9 +653,6 @@ func (ml *MessageLogger) Stop(ctx context.Context) error {
 			subscriptionCancel()
 		}
 		var waitErrors []error
-		if err := waitForMessageLoggerShutdown(ctx, observerDone, "declaration observer"); err != nil {
-			waitErrors = append(waitErrors, err)
-		}
 		if err := waitForMessageLoggerShutdown(ctx, retryDone, "reconciliation retry"); err != nil {
 			waitErrors = append(waitErrors, err)
 		}
@@ -748,8 +700,6 @@ func (ml *MessageLogger) Stop(ctx context.Context) error {
 			return errors.Join(ml.teardownErr, baseErr)
 		}
 		ml.lifecycleMu.Lock()
-		ml.observerCancel = nil
-		ml.observerDone = nil
 		ml.subscriptionCancel = nil
 		ml.retryCancel = nil
 		ml.retryDone = nil

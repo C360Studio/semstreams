@@ -559,13 +559,13 @@ func putConfigValue(t *testing.T, ctx context.Context, manager *Manager, key str
 	require.NoError(t, err)
 }
 
-// TestConfigManager_RefusesForeignPlatformIdentity is a regression test for
+// TestConfigManager_RejectsForeignPlatformIdentityAtStart is a regression test for
 // gh#459: two sem* apps sharing one NATS server also share the fixed-name
 // semstreams_config bucket. With matching config versions, the second app to
 // boot silently adopted the first's components (and could panic creating a
-// foreign one). The manager must refuse to adopt config whose platform
-// identity (org+id) differs from the local file's, and run on local config.
-func TestConfigManager_RefusesForeignPlatformIdentity(t *testing.T) {
+// foreign one). The manager must fail startup before adopting or mutating a
+// bucket whose platform identity differs from the local file's.
+func TestConfigManager_RejectsForeignPlatformIdentityAtStart(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -586,6 +586,7 @@ func TestConfigManager_RefusesForeignPlatformIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, mgrA.Start(ctx)) // first boot → pushes foreign config to KV
 	require.NoError(t, mgrA.Stop(5*time.Second))
+	before := snapshotConfigBucket(t, ctx, mgrA)
 
 	// Manager B — the "local" app boots second against the same bucket with a
 	// DIFFERENT platform identity but the SAME version. It must NOT adopt the
@@ -603,8 +604,11 @@ func TestConfigManager_RefusesForeignPlatformIdentity(t *testing.T) {
 	}
 	mgrB, err := NewConfigManager(localCfg, tc.Client, nil)
 	require.NoError(t, err)
-	require.NoError(t, mgrB.Start(ctx))
-	defer mgrB.Stop(5 * time.Second)
+	err = mgrB.Start(ctx)
+	require.ErrorContains(t, err, "config bucket platform identity mismatch")
+	require.ErrorContains(t, err, `local org="localorg" platform="local-app" environment=""`)
+	require.ErrorContains(t, err, `stored org="foreignorg" platform="foreign-app" environment=""`)
+	require.ErrorContains(t, err, `shared bucket "semstreams_config" belongs to another platform`)
 
 	got := mgrB.GetConfig().Get()
 
@@ -618,12 +622,24 @@ func TestConfigManager_RefusesForeignPlatformIdentity(t *testing.T) {
 	_, hasLocal := got.Components["local-comp"]
 	require.True(t, hasLocal, "manager B must keep its own component")
 
-	// Reverse-bleed guard: a detached manager must not write the local app's
-	// config INTO the foreign bucket either. PushToKV must no-op, leaving the
-	// stored platform identity as the foreign one.
-	require.NoError(t, mgrB.PushToKV(ctx))
-	kvID, found := mgrB.kvPlatformIdentity(ctx)
-	require.True(t, found)
-	require.Equal(t, "foreign-app", kvID.ID,
-		"detached manager must not overwrite the foreign bucket's platform identity")
+	after := snapshotConfigBucket(t, ctx, mgrB)
+	require.Equal(t, before, after, "failed startup must leave every foreign bucket key and revision unchanged")
+}
+
+type configBucketSnapshotEntry struct {
+	Revision uint64
+	Value    string
+}
+
+func snapshotConfigBucket(t *testing.T, ctx context.Context, manager *Manager) map[string]configBucketSnapshotEntry {
+	t.Helper()
+	keys, err := manager.kv.Keys(ctx)
+	require.NoError(t, err)
+	snapshot := make(map[string]configBucketSnapshotEntry, len(keys))
+	for _, key := range keys {
+		entry, err := manager.kv.Get(ctx, key)
+		require.NoError(t, err)
+		snapshot[key] = configBucketSnapshotEntry{Revision: entry.Revision(), Value: string(entry.Value())}
+	}
+	return snapshot
 }

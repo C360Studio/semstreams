@@ -1,50 +1,38 @@
 ## ADDED Requirements
 
-### Requirement: Running service and component composition is immutable except rule definitions
+### Requirement: Running service and component composition is fixed at boot
 
-`services.*`, `components.*`, `platform`, `nats`, and `model_registry` edits SHALL be durable desired next-boot
-configuration. They SHALL NOT create, start, stop, remove, reconfigure, restart, or replace a service or component in
-the running process.
+The process SHALL select its service and component composition during boot. Later edits to `services.*`,
+`components.*`, `platform`, `nats`, or `model_registry` SHALL NOT create, start, stop, remove, reconfigure, restart,
+reconcile, or replace a service or component in that process.
 
-Successful boot SHALL seal the effective service and component identities, declarations, dependencies, ports, and
-configuration for that process lifetime.
+The selected service and component identities, declarations, dependencies, ports, and concrete instances SHALL remain
+fixed until process shutdown. Existing service and component lifecycle mechanics SHALL remain unchanged.
 
-Live rule-definition create/update/delete MAY remain available only through the dedicated `rule-hot-reload`
-capability. It SHALL NOT change the Rule component's ports, dependencies, entity-watch buckets, integration mode,
-producer identity, or projection bindings.
+#### Scenario: Service configuration edit does not mutate runtime
 
-#### Scenario: Desired service edit does not mutate runtime
-
-- **GIVEN** a running process with sealed service composition
+- **GIVEN** a running process with its boot-selected service composition
 - **WHEN** a `services.*` entry is added, enabled, disabled, removed, or reconfigured
-- **THEN** the running service identities and instances remain unchanged
+- **THEN** running service identities and instances remain unchanged
 
-#### Scenario: Desired component edit does not mutate runtime
+#### Scenario: Component configuration edit does not mutate runtime
 
-- **GIVEN** a running process with sealed component composition
+- **GIVEN** a running process with its boot-selected component composition
 - **WHEN** a `components.*` entry is added, enabled, disabled, removed, or reconfigured
-- **THEN** the running component identities, generations, declarations, and instances remain unchanged
+- **THEN** running component identities, declarations, and instances remain unchanged
 
-#### Scenario: Rule-definition activation stays inside the fixed Rule envelope
+#### Scenario: Rule behavior is outside this composition change
 
-- **GIVEN** an admitted Rule processor with fixed boot configuration
-- **WHEN** a rule definition is created, updated, or deleted through `rule-hot-reload`
-- **THEN** the Rule processor may activate a new rule-set generation
-- **AND** no service or component generation is created, removed, restarted, or replaced
-
-#### Scenario: Rule component configuration still requires restart
-
-- **WHEN** desired configuration changes Rule ports, dependencies, entity-watch buckets, integration mode, producer
-  identity, or projection bindings
-- **THEN** the running Rule processor remains unchanged
-- **AND** the mutation reports restart required
+- **WHEN** existing Rule storage or watchers process a Rule change
+- **THEN** this capability adds no Rule behavior or completion claim
+- **AND** any future Rule hot-reload contract remains separate work
 
 ## REMOVED Requirements
 
 ### Requirement: Running service composition is immutable while components remain runtime-configurable
 
-**Reason**: service and component composition now share one boot activation boundary. Only Definition content inside
-an already-admitted Rule processor may hot reload.
+**Reason**: service and component composition now share one boot boundary. Generic live component configuration and
+replacement retire.
 
-**Migration**: persist component and flow changes as desired next-boot state. Use the dedicated rule-definition API for
-live expression and cron changes.
+**Migration**: persist service or component configuration and restart the process. Use saved Flow authoring and
+optional explicit component-configuration publication where applicable.

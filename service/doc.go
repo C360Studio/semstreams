@@ -20,18 +20,17 @@
 //   - Health aggregation across all services
 //   - OpenAPI documentation aggregation
 //
-// ComponentManager: Dynamic component lifecycle management:
-//   - Component instantiation from registry factories
-//   - Flow-based component deployment
-//   - Runtime configuration updates via NATS KV
-//   - Flow graph validation with connectivity analysis
-//   - Health monitoring of managed components
+// ComponentManager: boot-only component lifecycle ownership:
+//   - Captures configuration once during construction
+//   - Creates the enabled boot set and seals Registry declarations
+//   - Retains live handles as the sole lifecycle owner
+//   - Exposes read-only health, status, configuration, and flow graph views
 //
-// FlowService: Visual flow builder HTTP API:
+// FlowService: saved flow-diagram authoring API:
 //   - CRUD operations for flow definitions
-//   - Flow deployment via Engine integration
-//   - Real-time flow status monitoring
-//   - Validation feedback with detailed errors
+//   - Validation and compilation through Engine
+//   - Explicit sorted, upsert-only publication for the next boot
+//   - Best-effort observations keyed by diagram component names
 //
 // # Service Patterns
 //
@@ -152,18 +151,15 @@
 //
 // # Component Management
 //
-// ComponentManager integrates with the component registry and flow engine:
+// ComponentManager composes only the configuration snapshot captured by its
+// constructor. It does not subscribe to later component or model-registry
+// changes. Registry stores defensive declaration values and is sealed after
+// boot admission; ComponentManager retains all concrete runtime handles.
 //
-//	cm := service.NewComponentManager(deps, flowEngine, configMgr)
-//
-//	// Deploy flow with components
-//	err := cm.DeployFlow(ctx, flowID, flowDef)
-//
-//	// Runtime configuration updates
-//	err := cm.UpdateComponentConfig(ctx, componentName, newConfig)
-//
-//	// Health monitoring
-//	status := cm.GetComponentStatus(componentName)
+// Flow CRUD and validation are authoring-only. Explicit
+// publish-component-configs writes sorted component candidates and reports exact
+// partial progress. Those writes do not change the current process and require
+// a later process boot.
 //
 // # Error Handling
 //

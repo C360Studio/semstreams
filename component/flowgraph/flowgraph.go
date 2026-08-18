@@ -20,7 +20,6 @@ type FlowGraph struct {
 // ComponentNode represents a component in the flow graph
 type ComponentNode struct {
 	ComponentName string
-	Component     component.Discoverable
 	InputPorts    []PortInfo
 	OutputPorts   []PortInfo
 }
@@ -85,7 +84,6 @@ func (g *FlowGraph) GetNodes() map[string]*ComponentNode {
 		// Deep copy the ComponentNode
 		nodeCopy := &ComponentNode{
 			ComponentName: v.ComponentName,
-			Component:     v.Component, // Interface reference - safe to share (read-only)
 			// Deep copy port slices
 			InputPorts:  make([]PortInfo, len(v.InputPorts)),
 			OutputPorts: make([]PortInfo, len(v.OutputPorts)),
@@ -132,7 +130,7 @@ func BuildFromRegistry(
 	graph := NewFlowGraph()
 	for _, snapshot := range registry.Snapshots(access) {
 		if err := graph.addComponentNode(
-			snapshot.Name(), snapshot.Discoverable(),
+			snapshot.Name(),
 			snapshot.Inputs(), snapshot.InputDeclarationFacts(),
 			snapshot.Outputs(), snapshot.OutputDeclarationFacts(),
 		); err != nil {
@@ -147,7 +145,6 @@ func BuildFromRegistry(
 
 func (g *FlowGraph) addComponentNode(
 	name string,
-	comp component.Discoverable,
 	inputDeclaration []component.Port,
 	inputFacts []component.PortFacts,
 	outputDeclaration []component.Port,
@@ -155,9 +152,6 @@ func (g *FlowGraph) addComponentNode(
 ) error {
 	if name == "" {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "FlowGraph", "AddComponentNode", "component name cannot be empty")
-	}
-	if comp == nil {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "FlowGraph", "AddComponentNode", "component cannot be nil")
 	}
 	if _, exists := g.nodes[name]; exists {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "FlowGraph", "AddComponentNode", fmt.Sprintf("component %s already exists", name))
@@ -173,7 +167,6 @@ func (g *FlowGraph) addComponentNode(
 	}
 	node := &ComponentNode{
 		ComponentName: name,
-		Component:     comp,
 		InputPorts:    inputPorts,
 		OutputPorts:   outputPorts,
 	}

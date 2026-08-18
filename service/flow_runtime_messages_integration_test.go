@@ -62,7 +62,6 @@ func TestRuntimeMessagesIntegration(t *testing.T) {
 				},
 			},
 		},
-		RuntimeState: flowstore.StateRunning,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 		LastModified: time.Now(),
@@ -123,7 +122,7 @@ func TestRuntimeMessagesIntegration(t *testing.T) {
 	// Test 1: Get messages with real logger - test endpoint response structure
 	t.Run("GetMessagesWithRealLogger", func(t *testing.T) {
 		// Query the messages endpoint
-		req := httptest.NewRequest("GET", "/flowbuilder/flows/messages-test-flow/runtime/messages", nil)
+		req := httptest.NewRequest("GET", "/flowbuilder/flows/messages-test-flow/observations/messages", nil)
 		req.SetPathValue("id", "messages-test-flow")
 		w := httptest.NewRecorder()
 
@@ -173,7 +172,7 @@ func TestRuntimeMessagesIntegration(t *testing.T) {
 		// Wait for message logger to capture
 		time.Sleep(100 * time.Millisecond)
 
-		req := httptest.NewRequest("GET", "/flowbuilder/flows/messages-test-flow/runtime/messages", nil)
+		req := httptest.NewRequest("GET", "/flowbuilder/flows/messages-test-flow/observations/messages", nil)
 		req.SetPathValue("id", "messages-test-flow")
 		w := httptest.NewRecorder()
 
@@ -210,7 +209,7 @@ func TestRuntimeMessagesIntegration(t *testing.T) {
 
 		// Test default limit (100)
 		t.Run("DefaultLimit", func(t *testing.T) {
-			req := httptest.NewRequest("GET", "/flowbuilder/flows/messages-test-flow/runtime/messages", nil)
+			req := httptest.NewRequest("GET", "/flowbuilder/flows/messages-test-flow/observations/messages", nil)
 			req.SetPathValue("id", "messages-test-flow")
 			w := httptest.NewRecorder()
 
@@ -228,7 +227,7 @@ func TestRuntimeMessagesIntegration(t *testing.T) {
 
 		// Test custom limit
 		t.Run("CustomLimit", func(t *testing.T) {
-			req := httptest.NewRequest("GET", "/flowbuilder/flows/messages-test-flow/runtime/messages?limit=50", nil)
+			req := httptest.NewRequest("GET", "/flowbuilder/flows/messages-test-flow/observations/messages?limit=50", nil)
 			req.SetPathValue("id", "messages-test-flow")
 			w := httptest.NewRecorder()
 
@@ -246,7 +245,7 @@ func TestRuntimeMessagesIntegration(t *testing.T) {
 
 		// Test max limit enforcement (1000)
 		t.Run("MaxLimitEnforced", func(t *testing.T) {
-			req := httptest.NewRequest("GET", "/flowbuilder/flows/messages-test-flow/runtime/messages?limit=5000", nil)
+			req := httptest.NewRequest("GET", "/flowbuilder/flows/messages-test-flow/observations/messages?limit=5000", nil)
 			req.SetPathValue("id", "messages-test-flow")
 			w := httptest.NewRecorder()
 
@@ -263,7 +262,7 @@ func TestRuntimeMessagesIntegration(t *testing.T) {
 
 		// Test minimum limit enforcement
 		t.Run("MinLimitEnforced", func(t *testing.T) {
-			req := httptest.NewRequest("GET", "/flowbuilder/flows/messages-test-flow/runtime/messages?limit=-10", nil)
+			req := httptest.NewRequest("GET", "/flowbuilder/flows/messages-test-flow/observations/messages?limit=-10", nil)
 			req.SetPathValue("id", "messages-test-flow")
 			w := httptest.NewRecorder()
 
@@ -281,7 +280,7 @@ func TestRuntimeMessagesIntegration(t *testing.T) {
 
 	// Test 4: Flow not found
 	t.Run("FlowNotFound", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/flowbuilder/flows/nonexistent-flow/runtime/messages", nil)
+		req := httptest.NewRequest("GET", "/flowbuilder/flows/nonexistent-flow/observations/messages", nil)
 		req.SetPathValue("id", "nonexistent-flow")
 		w := httptest.NewRecorder()
 
@@ -296,7 +295,6 @@ func TestRuntimeMessagesIntegration(t *testing.T) {
 			ID:           "empty-flow",
 			Name:         "Empty Flow",
 			Nodes:        []flowstore.FlowNode{},
-			RuntimeState: flowstore.StateNotDeployed,
 			CreatedAt:    time.Now(),
 			UpdatedAt:    time.Now(),
 			LastModified: time.Now(),
@@ -309,7 +307,7 @@ func TestRuntimeMessagesIntegration(t *testing.T) {
 			_ = flowStore.Delete(ctx, emptyFlow.ID)
 		}()
 
-		req := httptest.NewRequest("GET", "/flowbuilder/flows/empty-flow/runtime/messages", nil)
+		req := httptest.NewRequest("GET", "/flowbuilder/flows/empty-flow/observations/messages", nil)
 		req.SetPathValue("id", "empty-flow")
 		w := httptest.NewRecorder()
 
@@ -327,7 +325,7 @@ func TestRuntimeMessagesIntegration(t *testing.T) {
 
 	// Test 6: Response time requirement
 	t.Run("ResponseTime", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/flowbuilder/flows/messages-test-flow/runtime/messages", nil)
+		req := httptest.NewRequest("GET", "/flowbuilder/flows/messages-test-flow/observations/messages", nil)
 		req.SetPathValue("id", "messages-test-flow")
 		w := httptest.NewRecorder()
 
@@ -370,7 +368,6 @@ func TestRuntimeMessagesLoggerUnavailable(t *testing.T) {
 				Type:      types.ComponentTypeProcessor,
 			},
 		},
-		RuntimeState: flowstore.StateRunning,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 		LastModified: time.Now(),
@@ -407,7 +404,7 @@ func TestRuntimeMessagesLoggerUnavailable(t *testing.T) {
 
 	// Test graceful degradation
 	t.Run("GracefulDegradation", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/flowbuilder/flows/no-logger-flow/runtime/messages", nil)
+		req := httptest.NewRequest("GET", "/flowbuilder/flows/no-logger-flow/observations/messages", nil)
 		req.SetPathValue("id", "no-logger-flow")
 		w := httptest.NewRecorder()
 
@@ -461,7 +458,6 @@ func TestRuntimeMessagesWithActualNATSFlow(t *testing.T) {
 				Type:      types.ComponentTypeProcessor,
 			},
 		},
-		RuntimeState: flowstore.StateRunning,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 		LastModified: time.Now(),
@@ -519,7 +515,7 @@ func TestRuntimeMessagesWithActualNATSFlow(t *testing.T) {
 	t.Run("VerifyFilteringLogic", func(t *testing.T) {
 		// Test that the endpoint responds correctly even without captured messages
 		// This verifies the integration between FlowService and MessageLogger
-		req := httptest.NewRequest("GET", "/flowbuilder/flows/nats-flow-test/runtime/messages?limit=100", nil)
+		req := httptest.NewRequest("GET", "/flowbuilder/flows/nats-flow-test/observations/messages?limit=100", nil)
 		req.SetPathValue("id", "nats-flow-test")
 		w := httptest.NewRecorder()
 

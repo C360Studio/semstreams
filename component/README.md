@@ -1,14 +1,17 @@
 # Component Package
 
-core component infrastructure for SemStreams, providing registration, discovery, lifecycle management, and instance creation with explicit registration patterns.
+Core component infrastructure for SemStreams, providing explicit factory registration, immutable declaration discovery, ports, schemas, and lifecycle interfaces.
 
 ## Overview
 
 The component package defines the fundamental abstractions for all SemStreams components, enabling dynamic discovery, registration, and management of input, processor, output, storage, and gateway components. This package follows explicit registration patterns with dependency injection through structured configuration.
 
-Components in SemStreams are self-describing units that can be discovered at runtime, configured through schemas, and managed through their lifecycle. The package supports five types of components: inputs (data sources), processors (data transformers), outputs (data sinks), storage (persistence), and gateways (query surfaces).
+Components in SemStreams are self-describing units whose declarations support boot composition and diagram
+validation. Their configuration is validated through schemas, and ComponentManager owns their lifecycle. The package
+supports five types of components: inputs (data sources), processors (data transformers), outputs (data sinks),
+storage (persistence), and gateways (query surfaces).
 
-The Registry serves as the central component management system, handling both factory registration and instance management with thread-safe operations and proper lifecycle control.
+The Registry stores factory metadata and immutable declarations admitted during boot. ComponentManager is the sole owner of live component handles and lifecycle control. After boot admission, Registry is sealed.
 
 ## Installation
 
@@ -76,8 +79,9 @@ sequenceDiagram
     CR->>Graph: Register(registry)
     Graph->>Reg: RegisterProcessor("graph-processor", factory, ...)
     CR-->>Main: All components registered
-    Main->>Reg: CreateComponent("udp-1", config, deps)
-    Reg-->>Main: component instance
+    Main->>Reg: Internal boot admission
+    Reg-->>Main: immutable declaration
+    Main->>Reg: SealComposition()
 ```
 
 ### Why Explicit Registration?
@@ -92,7 +96,7 @@ sequenceDiagram
 
 ### FlowGraph Component
 
-The FlowGraph component (`flowgraph/`) provides **static analysis and validation** of component interconnections. It is used by the flow engine's validator to analyze flow definitions before deployment.
+The FlowGraph component (`flowgraph/`) provides **static analysis and validation** of component interconnections. It is used by the flow validator to analyze saved or draft diagrams before explicit publication.
 
 **Purpose**: Build and validate connectivity graphs from component port definitions
 
@@ -103,75 +107,41 @@ The FlowGraph component (`flowgraph/`) provides **static analysis and validation
 - Validate interface contracts between connected ports
 - Identify resource conflicts (e.g., network port binding)
 
-**Important**: FlowGraph is a **validation tool**, not a runtime component. It creates temporary graph structures for analysis during flow validation and is discarded after validation completes. The flow engine uses FlowGraph during pre-deployment validation but does not use it during runtime execution.
+**Important**: FlowGraph is a **validation tool**, not a runtime component. It creates temporary graph structures for diagram analysis and is discarded after validation completes.
 
 **Relationship to Flow Infrastructure**:
 
 ```
 Flow Service (HTTP API)
     ↓ uses
-Flow Engine (Lifecycle Orchestration)
+Flow Engine (Validation + Compilation)
     ↓ validation → FlowGraph (Static Analysis)
-    ↓ deployment → Component Manager (Runtime)
+    ↓ explicit publication → Config Manager (next boot)
 ```
 
 - **FlowGraph**: "Can these components connect?" (static graph analysis)
-- **Flow Engine**: "Deploy/start/stop this flow" (lifecycle orchestration)
-- **Flow Service**: "HTTP interface to flow operations" (REST API layer)
+- **Flow Engine**: "Validate and compile this diagram" (authoring operation)
+- **Flow Service**: "Save, validate, observe, or explicitly publish this diagram" (REST API layer)
 
 Each layer has distinct, non-overlapping responsibilities.
 
 ## Quick Start
 
-### Basic Usage
+### Boot composition
+
+Applications explicitly register factories before process composition:
 
 ```go
-package main
-
-import (
-    "encoding/json"
-    "log"
-
-    "github.com/c360/semstreams/component"
-    "github.com/c360/semstreams/componentregistry"
-    "github.com/c360/semstreams/types"
-)
-
-func main() {
-    // Create registry and register all components
-    registry := component.NewRegistry()
-    if err := componentregistry.RegisterAll(registry); err != nil {
-        log.Fatal(err)
-    }
-
-    // Create component configuration
-    config := types.ComponentConfig{
-        Type:    types.ComponentTypeInput,
-        Name:    "udp",
-        Enabled: true,
-        Config:  json.RawMessage(`{"port": 8080, "bind": "0.0.0.0"}`),
-    }
-
-    // Prepare dependencies
-    deps := component.Dependencies{
-        NATSClient: natsClient,
-        Platform: component.PlatformMeta{
-            Org:      "c360",
-            Platform: "platform1",
-        },
-        Logger: slog.Default(),
-    }
-
-    // Create component instance
-    instance, err := registry.CreateComponent("udp-input-1", config, deps)
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    // Component is ready to use
-    log.Printf("Created: %s", instance.Meta().Name)
+registry := component.NewRegistry()
+if err := componentregistry.Register(registry); err != nil {
+    return err
 }
 ```
+
+ComponentManager performs instance creation through the framework-internal
+admission boundary, captures immutable declarations, retains every live handle,
+and seals Registry. External callers do not create or recover runtime component
+handles through Registry.
 
 ### Implementing a Component
 
@@ -336,35 +306,19 @@ component.NetworkPort{Protocol: "udp", Port: 14550, Bind: "0.0.0.0"}
 
 #### `NewRegistry() *Registry`
 
-Creates a new Registry with initialized maps.
+Creates an empty registry for explicit factory registration and boot admission.
 
-#### `CreateComponent(instanceName string, config types.ComponentConfig, deps Dependencies) (Discoverable, error)`
+#### `RegisterWithConfig(config RegistrationConfig) error`
 
-Creates a component instance from registered factory.
-
-#### `RegisterInput(name string, factory Factory, protocol, description, version string) error`
-
-Registers an input component factory.
-
-#### `RegisterProcessor(name string, factory Factory, protocol, description, version string) error`
-
-Registers a processor component factory.
-
-#### `RegisterOutput(name string, factory Factory, protocol, description, version string) error`
-
-Registers an output component factory.
-
-#### `RegisterStorage(name string, factory Factory, protocol, description, version string) error`
-
-Registers a storage component factory.
+Registers a component factory and its static metadata before composition seals.
 
 #### `ListAvailable() map[string]Info`
 
-Returns metadata for all registered factories.
+Returns defensive component-type metadata. Registry declaration reads likewise
+return defensive values and never expose a live component handle.
 
-#### `ListComponents() map[string]Discoverable`
-
-Returns all created component instances.
+Component creation, declaration admission, and sealing require the
+framework-internal admission token and are not adopter APIs.
 
 ### Types
 
@@ -383,21 +337,16 @@ Factory function signature for component creation.
 ```go
 ErrFactoryAlreadyExists // Duplicate factory registration
 ErrInvalidFactory       // Invalid factory registration
-ErrFactoryNotFound      // Unknown factory name
-ErrComponentCreation    // Factory execution failed
-ErrInstanceExists       // Instance name conflict
-ErrInstanceNotFound     // Unknown instance
+ErrFactoryNotFound      // Unknown factory name during internal boot admission
+ErrComponentCreation    // Factory execution failed during internal boot admission
 ```
 
 ### Error Detection
 
 ```go
-_, err := registry.CreateComponent("instance-1", config, deps)
-if errors.Is(err, component.ErrFactoryNotFound) {
-    // Configuration error - component type not registered
-}
-if errors.Is(err, component.ErrComponentCreation) {
-    // Factory error - check component-specific logs
+err := registry.RegisterWithConfig(registration)
+if errors.Is(err, component.ErrFactoryAlreadyExists) {
+    // Registration was repeated before composition sealed.
 }
 ```
 
@@ -415,20 +364,8 @@ func TestMyComponent(t *testing.T) {
         t.Fatal(err)
     }
 
-    // Create test dependencies
-    deps := component.Dependencies{
-        NATSClient: natsclient.NewTestClient(t),
-        Platform: component.PlatformMeta{
-            Org:      "test",
-            Platform: "test",
-        },
-        Logger: slog.Default(),
-    }
-
-    // Test component creation
-    instance, err := registry.CreateComponent("test-1", config, deps)
-    assert.NoError(t, err)
-    assert.Equal(t, "my-input", instance.Meta().Type)
+    factories := registry.ListAvailable()
+    assert.Contains(t, factories, "my-input")
 }
 ```
 
@@ -438,7 +375,7 @@ func TestMyComponent(t *testing.T) {
 - ✅ Create isolated registries per test to avoid global state
 - ✅ Mock external dependencies that cannot be containerized
 - ✅ Test component behavior through Discoverable interface
-- ✅ Verify factory registration and creation separately
+- ✅ Verify public factory metadata and schemas through defensive values
 
 ## Performance
 

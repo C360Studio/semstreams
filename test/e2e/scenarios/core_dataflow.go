@@ -20,7 +20,6 @@ type CoreDataflowScenario struct {
 	name        string
 	description string
 	client      *client.ObservabilityClient
-	wsClient    *client.WebSocketClient
 	udpAddr     string
 	config      *CoreDataflowConfig
 }
@@ -65,12 +64,12 @@ func NewCoreDataflowScenario(
 	if udpAddr == "" {
 		udpAddr = "localhost:34550"
 	}
+	_ = wsClient // The legacy status-stream client remains outside this cutover.
 
 	return &CoreDataflowScenario{
 		name:        "core-dataflow",
-		description: "Tests UDP → JSONFilter → JSONMap → File plus WebSocket output and status routes",
+		description: "Tests UDP → JSONFilter → JSONMap → File plus the protocol WebSocket output route",
 		client:      obsClient,
-		wsClient:    wsClient,
 		udpAddr:     udpAddr,
 		config:      config,
 	}
@@ -120,7 +119,6 @@ func (s *CoreDataflowScenario) Execute(ctx context.Context) (*Result, error) {
 		{"send-data", s.executeSendData},
 		{"validate-processing", s.executeValidateProcessing},
 		{"verify-objectstore-raw-lane", s.executeVerifyRawObjectStore},
-		{"verify-websocket-stream", s.executeVerifyWebSocketStream},
 		{"verify-max-delivery-visibility", s.executeVerifyMaxDeliveryVisibility},
 	}
 
@@ -294,63 +292,6 @@ func (s *CoreDataflowScenario) executeValidateProcessing(ctx context.Context, re
 	return nil
 }
 
-// executeVerifyWebSocketStream verifies WebSocket status streaming works
-func (s *CoreDataflowScenario) executeVerifyWebSocketStream(ctx context.Context, result *Result) error {
-	// Skip if no WebSocket client configured
-	if s.wsClient == nil {
-		result.Warnings = append(result.Warnings, "WebSocket client not configured, skipping stream verification")
-		return nil
-	}
-
-	// Get the actual flow ID from the API (flows are auto-generated from config)
-	flowID, err := s.getFirstFlowID(ctx)
-	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Could not get flow ID: %v", err))
-		return nil
-	}
-	result.Details["websocket_flow_id"] = flowID
-
-	// Configure watch options
-	opts := client.WatchStatusStreamOpts{
-		Timeout:       s.config.WebSocketTimeout,
-		MessageTypes:  []string{"flow_status", "component_health", "component_metrics", "log_entry"},
-		LogLevel:      "DEBUG",
-		DrainDuration: 2 * time.Second, // Continue collecting to capture full last_per_subject burst
-	}
-
-	// Wait for ALL 4 message types to verify all observability streams are working
-	// Then drain for 2 seconds to capture the full last_per_subject burst from JetStream
-	condition := client.HasAllMessageTypes([]string{
-		"flow_status",       // Published on flow state changes
-		"component_health",  // Published every 5s by health ticker
-		"component_metrics", // Published by metrics forwarder
-		"log_entry",         // Published by log forwarder (includes heartbeat)
-	})
-
-	envelopes, err := s.wsClient.WatchStatusStream(ctx, flowID, condition, opts)
-
-	// Always record what we received, even on error
-	msgTypeCounts := client.CountMessageTypes(envelopes)
-	result.Metrics["websocket_envelopes_received"] = len(envelopes)
-	result.Metrics["websocket_flow_status"] = msgTypeCounts["flow_status"]
-	result.Metrics["websocket_component_health"] = msgTypeCounts["component_health"]
-	result.Metrics["websocket_component_metrics"] = msgTypeCounts["component_metrics"]
-	result.Metrics["websocket_log_entry"] = msgTypeCounts["log_entry"]
-	result.Details["websocket_message_types"] = msgTypeCounts
-
-	if err != nil {
-		// Context deadline exceeded means we didn't get all required types
-		result.Errors = append(result.Errors, fmt.Sprintf("WebSocket stream verification failed: %v", err))
-		result.Details["websocket_error"] = err.Error()
-		return fmt.Errorf("websocket verification failed: %w", err)
-	}
-
-	// Record log count in details (we already require log_entry in condition)
-	result.Details["websocket_logs_received"] = msgTypeCounts["log_entry"]
-
-	return nil
-}
-
 // validateOutputContent validates the content of file output lines
 func (s *CoreDataflowScenario) validateOutputContent(
 	ctx context.Context,
@@ -433,16 +374,4 @@ func (s *CoreDataflowScenario) executeValidateComponentsOnly(ctx context.Context
 	// In fallback mode, we just verify components are running
 	// This is weaker validation but allows test to pass when docker exec isn't available
 	return nil
-}
-
-// getFirstFlowID retrieves the first flow ID from the flowbuilder API
-func (s *CoreDataflowScenario) getFirstFlowID(ctx context.Context) (string, error) {
-	flows, err := s.client.GetFlows(ctx)
-	if err != nil {
-		return "", fmt.Errorf("failed to get flows: %w", err)
-	}
-	if len(flows) == 0 {
-		return "", fmt.Errorf("no flows found")
-	}
-	return flows[0].ID, nil
 }

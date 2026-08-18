@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/pkg/projection"
 	rulepackcontract "github.com/c360studio/semstreams/pkg/rulepack"
 )
@@ -26,11 +27,14 @@ func (m *Manager) ProjectionBinders() []ProjectionBinder {
 		return nil
 	}
 	var result []ProjectionBinder
-	for _, managed := range cm.GetManagedComponents() {
-		if binder, ok := managed.Component.(ProjectionBinder); ok {
-			result = append(result, binder)
+	_ = cm.withComponents(func(components map[string]*component.ManagedComponent) error {
+		for _, managed := range components {
+			if binder, ok := managed.Component.(ProjectionBinder); ok {
+				result = append(result, binder)
+			}
 		}
-	}
+		return nil
+	})
 	return result
 }
 

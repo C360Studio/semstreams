@@ -22,12 +22,6 @@ type Flow struct {
 	Nodes       []FlowNode       `json:"nodes"`
 	Connections []FlowConnection `json:"connections"`
 
-	// Runtime state
-	RuntimeState RuntimeState `json:"runtime_state"`
-	DeployedAt   *time.Time   `json:"deployed_at,omitempty"`
-	StartedAt    *time.Time   `json:"started_at,omitempty"`
-	StoppedAt    *time.Time   `json:"stopped_at,omitempty"`
-
 	// Audit
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
@@ -60,22 +54,7 @@ type Position struct {
 	Y float64 `json:"y"`
 }
 
-// RuntimeState represents the deployment and execution state of a flow
-type RuntimeState string
-
-// RuntimeState constants define the lifecycle states of a flow:
-//   - StateNotDeployed: Flow exists but has never been deployed
-//   - StateDeployedStopped: Flow deployed to config but not running
-//   - StateRunning: Flow is actively processing messages
-//   - StateError: Flow encountered an error during deployment/execution
-const (
-	StateNotDeployed     RuntimeState = "not_deployed"
-	StateDeployedStopped RuntimeState = "deployed_stopped"
-	StateRunning         RuntimeState = "running"
-	StateError           RuntimeState = "error"
-)
-
-// Validate checks if the flow is valid for deployment
+// Validate checks whether the saved flow diagram is structurally valid.
 func (f *Flow) Validate() error {
 	// Validate flow-level fields
 	if f.ID == "" {
@@ -83,19 +62,6 @@ func (f *Flow) Validate() error {
 	}
 	if f.Name == "" {
 		return errs.WrapInvalid(fmt.Errorf("flow name cannot be empty"), "flowstore", "Validate", "validation failed")
-	}
-
-	// Validate runtime state
-	validStates := map[RuntimeState]bool{
-		StateNotDeployed:     true,
-		StateDeployedStopped: true,
-		StateRunning:         true,
-		StateError:           true,
-	}
-	if !validStates[f.RuntimeState] {
-		return errs.WrapInvalid(
-			fmt.Errorf("invalid runtime state: %s", string(f.RuntimeState)),
-			"flowstore", "Validate", "runtime state validation failed")
 	}
 
 	// Validate nodes

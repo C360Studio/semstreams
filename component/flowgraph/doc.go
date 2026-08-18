@@ -37,12 +37,12 @@
 //
 // # Supported Construction Boundary
 //
-// The framework service root builds flow graphs from complete, admitted
-// [component.Registry] generation snapshots. In production,
-// service.ComponentManager owns that construction and exposes the resulting
-// graph and connectivity validation. Component authors declare ports and use
-// the supported component admission lifecycle; they do not assemble graph
-// nodes directly.
+// The framework service root builds flow graphs once from the complete
+// [component.Registry] declaration set admitted at boot. In production,
+// service.ComponentManager owns that construction and exposes the sealed graph
+// and connectivity validation for the process lifetime. Component authors
+// declare ports for boot admission; later desired-state writes apply on the
+// next process start and do not rebuild the running graph.
 //
 // Direct downstream graph assembly is retired. Registry-to-node ingestion is
 // an internal framework seam so every consumer sees the same retained

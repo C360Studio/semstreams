@@ -20,16 +20,11 @@ import (
 // Type alias to avoid import cycles while maintaining compatibility.
 type PlatformMeta = types.PlatformMeta
 
-// Lookup provides read-only access to sibling components at call time.
-// Lazy lookup avoids stale pointers when ComponentManager restarts components.
-type Lookup interface {
-	Component(name string) Discoverable
-}
-
 // StoreProvider is implemented by storage components that own one or more stores
-// addressable by StorageInstance name (ADR-063). The ComponentManager reads this
-// AFTER the component Starts to populate the shared StoreRegistry, and clears
-// those entries when the component Stops — so a reconfig swaps the live handle.
+// addressable by StorageInstance name (ADR-063). For the boot-composed component
+// set, ComponentManager reads this AFTER a component Starts to populate the
+// shared StoreRegistry and clears those entries when the component Stops. A
+// desired-state write does not swap a handle in the running process.
 //
 // The map is keyed by the StorageInstance name each store STAMPS into refs
 // (store.InstanceName()), so the registry key, the store-provide port token, and
@@ -69,15 +64,14 @@ type ToolRegistryReader interface {
 // to type-assert at every Decoder construction site — pure friction
 // for no abstraction win.
 type Dependencies struct {
-	NATSClient        *natsclient.Client        // NATS client for messaging
-	MetricsRegistry   *metric.MetricsRegistry   // Metrics registry for Prometheus (can be nil)
-	Logger            *slog.Logger              // Structured logger (can be nil, defaults to slog.Default())
-	Platform          PlatformMeta              // Platform identity (organization and platform)
-	Security          security.Config           // Platform-wide security configuration
-	ModelRegistry     model.RegistryReader      // Unified model registry (can be nil)
-	ToolRegistry      ToolRegistryReader        // Shared tool executor registry (can be nil; agentic-tools requires it)
-	PayloadRegistry   *payloadregistry.Registry // Shared payload registry (can be nil; components unmarshaling BaseMessage require it)
-	ComponentRegistry Lookup                    // Sibling component lookup (can be nil)
+	NATSClient      *natsclient.Client        // NATS client for messaging
+	MetricsRegistry *metric.MetricsRegistry   // Metrics registry for Prometheus (can be nil)
+	Logger          *slog.Logger              // Structured logger (can be nil, defaults to slog.Default())
+	Platform        PlatformMeta              // Platform identity (organization and platform)
+	Security        security.Config           // Platform-wide security configuration
+	ModelRegistry   model.RegistryReader      // Boot-selected model registry (can be nil)
+	ToolRegistry    ToolRegistryReader        // Shared tool executor registry (can be nil; agentic-tools requires it)
+	PayloadRegistry *payloadregistry.Registry // Shared payload registry (can be nil; components unmarshaling BaseMessage require it)
 
 	// LifecycleManager is the shared pkg/lifecycle.Manager that
 	// owns workflow-shaped entity instances (ADR-047). Apps that
@@ -102,8 +96,8 @@ type Dependencies struct {
 	LifecycleManager *lifecycle.Manager
 
 	// StoreRegistry is the shared {StorageInstance → storage.StreamableStore}
-	// resolver (ADR-063). The ComponentManager populates it from storage
-	// components' store-provide ports at Start and clears entries at Stop;
+	// resolver (ADR-063). The ComponentManager populates it from the boot-composed
+	// storage components' store-provide ports at Start and clears entries at Stop;
 	// content-fetch consumers (graph-embedding, fusion) resolve a StorageRef's
 	// StorageInstance through it, lazily per-fetch. Concrete framework-leaf type
 	// per the PayloadRegistry / LifecycleManager precedent.

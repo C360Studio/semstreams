@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/componentregistry"
 	semconfig "github.com/c360studio/semstreams/config"
+	"github.com/c360studio/semstreams/internal/componentadmission"
 	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/natsclient"
 )
@@ -292,7 +293,8 @@ func assertEffectiveGraphQueryPortIdentity(t *testing.T, root string, identity p
 		t.Fatal(err)
 	}
 	discoverable, err := registry.CreateComponent(
-		identity.instance, componentConfig, component.Dependencies{NATSClient: &natsclient.Client{}},
+		componentadmission.Access{}, identity.instance, componentConfig,
+		component.Dependencies{NATSClient: &natsclient.Client{}}, nil,
 	)
 	if err != nil {
 		t.Fatalf("production Registry admission %s/%s: %v", identity.path, identity.instance, err)

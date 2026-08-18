@@ -33,8 +33,8 @@ type RuntimeMessagesResponse struct {
 	Note      string           `json:"note,omitempty"`
 }
 
-// handleRuntimeMessages handles GET /flowbuilder/flows/{id}/runtime/messages
-// Returns filtered message logger entries for the flow's components
+// handleRuntimeMessages observes messages matching component names declared by
+// a saved diagram. The diagram does not claim ownership of those components.
 func (fs *FlowService) handleRuntimeMessages(w http.ResponseWriter, r *http.Request) {
 	// Extract flow ID from path
 	flowID := r.PathValue("id")

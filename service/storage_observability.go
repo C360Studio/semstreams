@@ -2,7 +2,7 @@
 // (storage-capacity-observability section 4).
 //
 // It is a service rather than a component because it watches the SUBSTRATE, not
-// the flow. Its peers are flow_runtime_health, flow_runtime_metrics,
+// the flow. Its peers are saved-diagram health and metrics observations,
 // metrics_forwarder, log_forwarder, heartbeat and pprof — every one of them
 // infrastructure observability. A component is a flow participant with ports
 // that processes messages; this has no ports and never receives or emits one,

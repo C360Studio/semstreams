@@ -54,11 +54,6 @@ func (s *Manager) Create(ctx context.Context, flow *Flow) error {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "flowstore", "Create", "flow ID cannot be empty")
 	}
 
-	// Set defaults before validation
-	if flow.RuntimeState == "" {
-		flow.RuntimeState = StateNotDeployed
-	}
-
 	// Validate flow structure before saving
 	if err := flow.Validate(); err != nil {
 		return err
