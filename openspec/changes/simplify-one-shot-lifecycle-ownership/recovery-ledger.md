@@ -136,6 +136,14 @@ measured from the same baseline and historical head. SHA-256:
 supersedes revision 1 only as the inventory submitted for re-review. PR #990
 continues to receive zero implementation, lifecycle, proof, or release credit.
 
+PR #990 binding boot-only disposition:
+[`pr990-boot-only-disposition.md`](../require-restart-for-config-activation/pr990-boot-only-disposition.md), SHA-256
+`40b2534b604a14f64aacbb8f4db86bdbc38129f3f114e0ac40118c9f7259fc41`, disposition baseline
+`42f349b02bfa9517cff575a9c2a1af3094e591ce`, historical PR head
+`8f19ef3678a549913385b090e4de1766a7a43a27`. Owner binding disposition: reject historical PR #990 as a merge,
+rebase, commit-replay, or cherry-pick unit; permit only the recorded narrow reconstruction. This checkpoint grants
+zero implementation, lifecycle, proof, release, archive, or tag credit.
+
 The authoritative eight-worktree evidence, binding classifications, bounded preservation sets, and exact cleanup
 scope are recorded in [`worktree-recovery-manifest.md`](worktree-recovery-manifest.md). No dirty lifecycle worktree may
 be removed until that manifest is merged and its two bounded preservation artifacts are verified.
