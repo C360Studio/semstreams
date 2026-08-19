@@ -772,16 +772,6 @@
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
     },
     {
-      "key": "integration-time-sleep|processor/gated-dag/executor_integration_test.go|TestIntegration_GatedDispatch_DependsOnAndDedup|time.Sleep(1 * time.Second)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|processor/gated-dag/executor_integration_test.go|startStack|time.Sleep(100 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
       "key": "integration-time-sleep|processor/gated-dag/fullstack_integration_test.go|TestFullStack_FailedNodeHoldsDependents|time.Sleep(2 * time.Second)|1",
       "kind": "migration-debt",
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
