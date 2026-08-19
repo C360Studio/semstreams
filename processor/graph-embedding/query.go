@@ -16,15 +16,19 @@ import (
 
 // setupQueryHandlers sets up NATS request/reply subscriptions for query handlers
 func (c *Component) setupQueryHandlers(ctx context.Context) error {
+	subscribe := c.subscribeForRequests
+	if subscribe == nil {
+		subscribe = c.natsClient.SubscribeForRequests
+	}
 	// Subscribe to similar entity query
-	sub, err := c.natsClient.SubscribeForRequests(ctx, "graph.embedding.query.similar", c.handleQuerySimilarNATS)
+	sub, err := subscribe(ctx, "graph.embedding.query.similar", c.handleQuerySimilarNATS)
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupQueryHandlers", "subscribe similar query")
 	}
 	c.querySubscriptions = append(c.querySubscriptions, sub)
 
 	// Subscribe to text search query
-	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.embedding.query.search", c.handleQuerySearchNATS)
+	sub, err = subscribe(ctx, "graph.embedding.query.search", c.handleQuerySearchNATS)
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupQueryHandlers", "subscribe search query")
 	}
@@ -32,7 +36,7 @@ func (c *Component) setupQueryHandlers(ctx context.Context) error {
 
 	// Subscribe to the honest embedding-readiness signal (ADR-066 §3). No consumer
 	// gates on embedding.ready until it is proven; this exposes it for observability.
-	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.embedding.query.status", c.handleEmbeddingStatusNATS)
+	sub, err = subscribe(ctx, "graph.embedding.query.status", c.handleEmbeddingStatusNATS)
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupQueryHandlers", "subscribe status query")
 	}

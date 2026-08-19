@@ -774,10 +774,10 @@ func TestComponent_Start_AlreadyStarted(t *testing.T) {
 	require.NoError(t, comp.Start(ctx))
 	defer comp.Stop(context.Background())
 
-	// Start again - should be idempotent
+	// A component instance is one-shot even while its first run is active.
 	err := comp.Start(ctx)
 
-	assert.NoError(t, err, "Start should be idempotent")
+	assert.ErrorContains(t, err, "already used")
 }
 
 func TestComponent_Stop_Success(t *testing.T) {
@@ -1053,11 +1053,8 @@ func TestComponent_RespectsContext_Timeout(t *testing.T) {
 	// Start with timeout context
 	err := comp.Start(ctx)
 
-	// Should either succeed or handle timeout gracefully
-	if err != nil {
-		// If error, it should be context-related
-		assert.Contains(t, err.Error(), "context")
-	}
+	// A disconnected test client fails before the deadline fires.
+	require.Error(t, err)
 }
 
 // ====================================================================================

@@ -289,6 +289,95 @@ The status-document hashes reported with the handoff are provenance, not additio
 checkpoint grants no approval to unrelated exported API rulings. Task 2.3 and Gate A/B/C remain unchecked and
 incomplete, and it grants no runtime-migration, proof, release, archive, or tag credit.
 
+### G1 graph-read five-owner implementation checkpoint — 2026-08-19
+
+Independent `semstreams-reviewer` verdict `APPROVE` applies to the G1 dirty worktree based on full commit
+`0d22802c363d0c283219f895c74267ec2913f16a`. Owner-migrated credit is granted only to these five frozen production
+owner files:
+
+- `processor/graph-query/component.go`;
+- `processor/graph-clustering/component.go`;
+- `processor/graph-embedding/component.go`;
+- `processor/graph-index-spatial/component.go`;
+- `processor/graph-index-temporal/component.go`.
+
+Adjacent query files and test files are supporting implementation/evidence surfaces and receive no separate owner
+credit.
+
+The TDD transcript is recorded conservatively:
+
+1. The original no-action Stop contract was RED in all five owners.
+2. The graph-query Start-path callback lock RED timed out in `Health`, proving the lock-order failure.
+3. The accepted corrections restored the focused lifecycle surface to green.
+
+Final evidence:
+
+| Evidence | Result |
+|---|---|
+| Full five-package race run | PASS |
+| Integration-tag lifecycle run | PASS |
+| `TestLifecycleOwner` under race, five repetitions | PASS |
+| `task lint` | PASS |
+| `git diff --check` | PASS |
+
+The production-only recovery census moved exactly as reviewed:
+
+| Measurement | HEAD `0d22802c` | G1 worktree | Delta |
+|---|---:|---:|---:|
+| Production owner files importing `internal/lifecyclejoin` | 30 | 25 | -5 |
+| `lifecyclejoin.NewGeneration` | 30 | 25 | -5 |
+| `Generation.Stop` | 38 | 33 | -5 |
+| Final parent-aware `RollbackFailedStart` production owner calls | 6 | 11 | +5 |
+| External `Generation.Cancel` | 4 | 4 | 0 |
+| `Generation.StopWithQuiesce` | 5 | 5 | 0 |
+| `lifecyclejoin.NewOperation` | 3 | 3 | 0 |
+| External `RunPartialStartRollback` calls | 15 | 15 | 0 |
+
+`git diff --quiet -- internal/lifecyclejoin` and `git diff --quiet -- natsclient` both returned success. The unrelated
+Metrics inventory remained byte-identical at SHA-256
+`8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`.
+
+Stable G1 source identities for this checkpoint are:
+
+- graph-query:
+  - `component.go`: `e8994dd1254d66da97bb93323b3395b0e1c6a938cef38014aa2cb835c7d601c4`;
+  - `component_test.go`: `9631e1832eb9384f510a7eb7f92487d0e8372763f21d26f1f1539f718ad83e8c`;
+  - `graph_query_lifecycle_test.go`:
+    `c62a710777d98725bb290726d5bfc5aeb6c946368a2ec72d91b65ad548efb464`;
+  - `query.go`: `3c2f11e1c81246e32888fd9cdfddf685890fa0eddfc8a152e2e802b1c1bc8c40`;
+  - `lifecycle_owner_test.go`: `14befd76b13c6333bf92f96315e6ae46e9874e8ba5e6953e3c15164ba3dc672a`.
+- graph-clustering:
+  - `component.go`: `778b1a8428ab7ba1ea22eb39ac007250f2410f3e0d5a342f5dc9e2afa430ba0d`;
+  - `component_test.go`: `114e7c875507b75344ab2e5fba486fe3ae33bf96093fb95892067656c74eaaa4`;
+  - `lifecycle_integration_test.go`:
+    `e2256f1a1812652dda9f8274e3b896adbe51d32ccdc7217610b6ae2cf4a0fcdc`;
+  - `query.go`: `02e5296cff7f4f7dd39719a1bb1065f3a189a645f46d477b0203a1ac76be75b8`;
+  - `lifecycle_owner_test.go`: `83fb0055e5ff9219e2005bdb5c68aefc91e4469246a818d7121e826645a7bd51`.
+- graph-embedding:
+  - `component.go`: `3a22b15ec8370bc35269b85693d49a6e909668290ed0467440549643cbc235cb`;
+  - `component_test.go`: `4286f69268070f7ca4711ae71146a1b39c759ef685a6c87ae6dbd16ec4884a06`;
+  - `lifecycle_integration_test.go`:
+    `c197723e953c82131662601a4f7e0dc63be0cc10c4f72ba20a8927fef8e92f16`;
+  - `query.go`: `2c19e340306874db92923763c6bca16ed77c3313ef31b8d9aeb73af99560efe5`;
+  - `lifecycle_owner_test.go`: `fd94be423bad50a82c02072b0be8732659026f656e3ce81de3b565454ac7441f`.
+- graph-index-spatial:
+  - `component.go`: `b5314085265e0b62f16dee4458aa9dc25211ab0359d23816497a1b3a5825ca5f`;
+  - `component_test.go`: `a0028ccc161aca30a8c86d9fd4303a2b8bcf4c657070611b21ca409905972831`;
+  - `lifecycle_integration_test.go`:
+    `7ec5d860edfc207eff4568701a54f660979192c0dfdb6aac56162b771395ca97`;
+  - `query.go`: `07e2d25c93e1e28856ef793827e1744b253bc8aeb4c311ee51883c6ad67b8410`;
+  - `lifecycle_owner_test.go`: `ddc5be339e8a5124e6e66b41a65ebe962d77c656158107f26ef569f4d4f6a2a6`.
+- graph-index-temporal:
+  - `component.go`: `2e74f93695372237c29206ae2348523cb5e1593bf32b6faa322f7573d41ac816`;
+  - `component_test.go`: `aa4fbfd0a0c3549c67c33de1fce163be019e842a7645829628d6055154bfc9f8`;
+  - `lifecycle_integration_test.go`:
+    `b5825c6b87b552ad86fc247a90bb5467003c687f9bdea08f0d0f459698fa7a92`;
+  - `query.go`: `4d6cda7198fefa8704ccbce7dc4742101795868ec85dbfd0b840d02de440e0d9`;
+  - `lifecycle_owner_test.go`: `c94a7c62f68187da90cf6c7992ded4394a4be0dec2b26665757344e01319c5aa`.
+
+This checkpoint grants no approval to unrelated exported API rulings. Task 2.3 and Gate A/B/C remain unchecked and
+incomplete, and it grants no runtime-migration, proof, release, archive, or tag credit.
+
 ## Completion vocabulary
 
 Use only these terms in status reports, PR descriptions, and handoffs:

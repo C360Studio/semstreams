@@ -15,7 +15,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -178,12 +178,19 @@ type Component struct {
 	spatialBucket jetstream.KeyValue
 
 	// Lifecycle state
-	mu          sync.RWMutex
-	running     bool
-	initialized bool
-	startTime   time.Time
-	wg          sync.WaitGroup
-	generation  *lifecyclejoin.Generation
+	mu                sync.RWMutex
+	lifecycleMu       sync.Mutex
+	running           bool
+	initialized       bool
+	startTime         time.Time
+	wg                sync.WaitGroup
+	lifecycleUsed     bool
+	cleanupPending    bool
+	lifecycleTerminal bool
+	stopping          bool
+	startDone         chan struct{}
+	cancel            context.CancelFunc
+	runtimeDone       chan struct{}
 
 	// Metrics (atomic)
 	messagesProcessed int64
@@ -196,7 +203,8 @@ type Component struct {
 	bootstrapComplete atomic.Bool
 
 	// Query subscriptions (for cleanup)
-	querySubscriptions []*natsclient.Subscription
+	querySubscriptions   []*natsclient.Subscription
+	subscribeForRequests func(context.Context, string, func(context.Context, []byte) ([]byte, error)) (*natsclient.Subscription, error)
 }
 
 // CreateGraphIndexSpatial is the factory function for creating graph-index-spatial components
@@ -442,7 +450,7 @@ func (c *Component) waitForEntityBucket(ctx context.Context) (entityStatesWatche
 }
 
 // Start begins processing (must be initialized first)
-func (c *Component) Start(ctx context.Context) error {
+func (c *Component) Start(ctx context.Context) (startErr error) {
 	// Validate before inspecting lifecycle state.
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "Start", "context cannot be nil")
@@ -450,31 +458,66 @@ func (c *Component) Start(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return errs.WrapInvalid(err, "Component", "Start", "context already cancelled")
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
+	c.lifecycleMu.Lock()
+	c.mu.RLock()
+	initialized := c.initialized
+	c.mu.RUnlock()
 	// Check initialization
-	if !c.initialized {
+	if !initialized {
+		c.lifecycleMu.Unlock()
 		return errs.WrapFatal(errs.ErrNotStarted, "Component", "Start", "component not initialized")
 	}
 
-	// Idempotent - already running
-	if c.running {
-		return nil
+	if c.lifecycleUsed {
+		c.lifecycleMu.Unlock()
+		return errs.WrapFatal(errs.ErrInvalidConfig, "Component", "Start", "component instance already used")
 	}
 
 	// Create cancellable context
+	parent := ctx
 	ctx, cancel := context.WithCancel(ctx)
+	startDone := make(chan struct{})
+	c.lifecycleUsed = true
+	c.cancel = cancel
+	c.startDone = startDone
+	c.cleanupPending = true
+	c.lifecycleMu.Unlock()
+
+	committed := false
+	defer func() {
+		if !committed {
+			rollbackErr := lifecyclecleanup.RollbackFailedStart(parent, c.cleanupFailedStart)
+			startErr = errors.Join(startErr, rollbackErr)
+			c.lifecycleMu.Lock()
+			if rollbackErr == nil {
+				c.cleanupPending = false
+				c.lifecycleTerminal = true
+				c.clearLifecycleHandles()
+			}
+			close(startDone)
+			c.startDone = nil
+			c.lifecycleMu.Unlock()
+			c.mu.Lock()
+			c.running = false
+			c.mu.Unlock()
+			return
+		}
+		c.lifecycleMu.Lock()
+		c.cleanupPending = false
+		close(startDone)
+		c.startDone = nil
+		c.lifecycleMu.Unlock()
+	}()
 
 	// SPATIAL_INDEX bucket (we are the WRITER) — acquired through the catalog
 	// owner seam, which reconciles an adopted bucket to the declared policy.
 	spatialBucket, err := graph.EnsureCatalogBucket(ctx, c.natsClient, graph.BucketSpatialIndex)
 	if err != nil {
-		cancel()
+		startErr := errs.Wrap(err, "Component", "Start", fmt.Sprintf("KV bucket creation: %s", graph.BucketSpatialIndex))
 		if ctx.Err() != nil {
-			return errs.Wrap(ctx.Err(), "Component", "Start", "context cancelled during bucket creation")
+			startErr = errs.Wrap(ctx.Err(), "Component", "Start", "context cancelled during bucket creation")
 		}
-		return errs.Wrap(err, "Component", "Start", fmt.Sprintf("KV bucket creation: %s", graph.BucketSpatialIndex))
+		return startErr
 	}
 	c.spatialBucket = spatialBucket
 
@@ -486,29 +529,35 @@ func (c *Component) Start(ctx context.Context) error {
 
 	// Set up query handlers
 	if err := c.setupQueryHandlers(ctx); err != nil {
-		cancel()
 		return errs.Wrap(err, "Component", "Start", "setup query handlers")
 	}
 
 	// Wait for entity states bucket
 	entityBucket, err := c.waitForEntityBucket(ctx)
 	if err != nil {
-		cancel()
 		return err
 	}
 
 	// Start entity watcher goroutine
 	c.wg.Add(1)
 	go c.watchEntityStates(ctx, entityBucket)
-	c.generation = lifecyclejoin.NewGeneration(cancel, c.wg.Wait)
+	c.runtimeDone = make(chan struct{})
+	go func(done chan struct{}) {
+		c.wg.Wait()
+		close(done)
+	}(c.runtimeDone)
 
 	// Mark as running
+	c.mu.Lock()
 	c.running = true
 	c.startTime = time.Now()
+	startTime := c.startTime
+	c.mu.Unlock()
+	committed = true
 
 	c.logger.Info("component started",
 		slog.String("component", "graph-index-spatial"),
-		slog.Time("start_time", c.startTime),
+		slog.Time("start_time", startTime),
 		slog.Int("geohash_precision", c.config.GeohashPrecision),
 		slog.Int("workers", c.config.Workers),
 		slog.Int("batch_size", c.config.BatchSize))
@@ -521,32 +570,97 @@ func (c *Component) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-	c.mu.Lock()
-	generation := c.generation
-	if generation == nil {
-		c.mu.Unlock()
-		return nil // Already stopped
-	}
-
-	c.mu.Unlock()
-
-	return generation.Stop(ctx, func() error {
-		for _, sub := range c.querySubscriptions {
-			if sub != nil {
-				if err := sub.Unsubscribe(); err != nil {
-					c.logger.Warn("query subscription unsubscribe error", slog.Any("error", err))
-				}
+	for {
+		c.lifecycleMu.Lock()
+		if !c.lifecycleUsed {
+			c.lifecycleUsed = true
+			c.lifecycleTerminal = true
+			c.lifecycleMu.Unlock()
+			return nil
+		}
+		if c.lifecycleTerminal {
+			c.lifecycleMu.Unlock()
+			return nil
+		}
+		startDone := c.startDone
+		if startDone != nil {
+			c.lifecycleMu.Unlock()
+			select {
+			case <-startDone:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 		}
-		c.querySubscriptions = nil
-		return nil
-	}, func(context.Context) error {
+		if c.stopping {
+			c.lifecycleMu.Unlock()
+			return errs.WrapTransient(errors.New("stop already in progress"), "Component", "Stop", "concurrent Stop is unsupported")
+		}
+		retryable := c.cleanupPending
+		c.stopping = true
+		c.lifecycleMu.Unlock()
+
+		stopErr := c.cleanup(ctx, retryable)
+		c.lifecycleMu.Lock()
+		c.stopping = false
+		if retryable && stopErr != nil {
+			c.lifecycleMu.Unlock()
+			return stopErr
+		}
+		c.cleanupPending = false
+		c.lifecycleTerminal = true
+		c.clearLifecycleHandles()
+		c.lifecycleMu.Unlock()
 		c.mu.Lock()
 		c.running = false
 		c.mu.Unlock()
 		c.logger.Info("component stopped gracefully", slog.String("component", "graph-index-spatial"))
-		return nil
-	})
+		return stopErr
+	}
+}
+
+func (c *Component) cleanupFailedStart(ctx context.Context) error {
+	return c.cleanup(ctx, true)
+}
+
+func (c *Component) cleanup(ctx context.Context, retryable bool) error {
+	var cleanupErr error
+	unresolved := c.querySubscriptions[:0]
+	for _, sub := range c.querySubscriptions {
+		if sub == nil {
+			continue
+		}
+		if err := sub.Drain(ctx); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+			unresolved = append(unresolved, sub)
+		}
+	}
+	if retryable {
+		c.querySubscriptions = unresolved
+	} else {
+		c.querySubscriptions = nil
+	}
+	if c.cancel != nil {
+		c.cancel()
+	}
+	if c.runtimeDone != nil {
+		select {
+		case <-c.runtimeDone:
+			if retryable {
+				c.runtimeDone = nil
+				c.cancel = nil
+			}
+		case <-ctx.Done():
+			cleanupErr = errors.Join(cleanupErr, ctx.Err())
+		}
+	}
+	return cleanupErr
+}
+
+func (c *Component) clearLifecycleHandles() {
+	c.querySubscriptions = nil
+	c.cancel = nil
+	c.runtimeDone = nil
 }
 
 // ============================================================================

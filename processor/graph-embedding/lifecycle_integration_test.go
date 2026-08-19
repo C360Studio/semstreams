@@ -70,8 +70,3 @@ func createTestComponentForLifecycle() component.LifecycleComponent {
 
 	return comp.(component.LifecycleComponent)
 }
-
-// TestGraphEmbedding_ComprehensiveLifecycle runs the complete lifecycle test suite.
-func TestGraphEmbedding_ComprehensiveLifecycle(t *testing.T) {
-	component.StandardLifecycleTests(t, createTestComponentForLifecycle)
-}

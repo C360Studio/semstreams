@@ -67,6 +67,16 @@
     and old graph-ingest target failures; separately, stale policy-baseline entries still expect two removed sleeps in
     root `service/base_test.go`. Task 2.3 and every Gate A/B/C, runtime, proof, release, archive, and tag requirement
     remain unchecked and incomplete; unrelated exported API rulings remain unapproved.
+  - 2026-08-19 G1 implementation checkpoint: independent `semstreams-reviewer` verdict `APPROVE` grants
+    owner-migrated credit only to the frozen graph-query, graph-clustering, graph-embedding, graph-index-spatial, and
+    graph-index-temporal `component.go` owners; adjacent query/test files receive no separate owner credit. Original
+    no-action Stop tests were RED in all five, and the graph-query Start-path callback lock RED timed out in `Health`
+    before correction. Full five-package race, integration-tag lifecycle, `TestLifecycleOwner` race x5, lint, and
+    diff-check passed. Census moved owners 30→25, NewGeneration 30→25, Generation.Stop 38→33, and final helper calls
+    6→11; Cancel 4, StopWithQuiesce 5, NewOperation 3, and old rollback 15 were unchanged. Lifecyclejoin and natsclient
+    remained unchanged, and the ledger records exact source identities. Task 2.3 and every Gate A/B/C, runtime, proof,
+    release, archive, and tag requirement remain unchecked and incomplete; unrelated exported API rulings remain
+    unapproved.
   - 2026-08-18 checkpoint: independent `semstreams-reviewer` verdict `CORRECTIONS CONFIRMED` grants owner-migrated
     credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
     worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.

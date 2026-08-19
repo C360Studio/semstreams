@@ -396,10 +396,10 @@ func TestComponent_Start_AlreadyStarted(t *testing.T) {
 	require.NoError(t, comp.Start(ctx))
 	defer comp.Stop(context.Background())
 
-	// Start again - should be idempotent
+	// A component instance is one-shot even while its first run is active.
 	err := comp.Start(ctx)
 
-	assert.NoError(t, err, "Start should be idempotent")
+	assert.ErrorContains(t, err, "already used")
 }
 
 func TestComponent_Stop_Success(t *testing.T) {

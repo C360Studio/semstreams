@@ -6,7 +6,8 @@
 > `APPROVE`; owner-migrated credit is limited to the five frozen research owners. This does not approve unrelated
 > exported API rulings or complete any task or gate. Independent review of the narrow SM1 correction returned
 > `DESIGN APPROVE`, and independent SM1 implementation review returned `APPROVE`; owner-migrated credit is limited to
-> `service/service_manager.go`.
+> `service/service_manager.go`. Independent G1 implementation review returned `APPROVE`; owner-migrated credit is
+> limited to its five frozen graph-read `component.go` owners.
 
 ## Evidence identity
 
@@ -179,6 +180,11 @@ exact incremental subs; rollback; Drain once before cancel; terminal child close
 serialized proof. All five have partial acquisition failures requiring bounded cancellation-independent rollback; old
 rollback delta remains zero; final helper call count is determined by implementation. G1 depends on R1. Do not combine
 R1/G1. Delta -5 owners/NG/Stop.
+
+Implementation status on 2026-08-19: independent `semstreams-reviewer` verdict `APPROVE`. Owner-migrated credit is
+limited to the frozen graph-query, graph-clustering, graph-embedding, graph-index-spatial, and graph-index-temporal
+`component.go` owner files. Adjacent query and test files are supporting evidence and receive no separate owner credit.
+Task 2.3, Gate A/B/C, runtime migration, proof, release, archive, and tag readiness remain incomplete.
 
 ## A1 — agentic M+Q/F family
 
@@ -415,4 +421,6 @@ selected first wave. The unrelated exported API rulings above remain unapproved.
 later returned `APPROVE`, granting owner-migrated credit only to the five frozen research owner files; no broader task
 or gate credit follows. Independent narrow SM1 design re-review returned `DESIGN APPROVE`, and independent SM1
 implementation review returned `APPROVE`, granting owner-migrated credit only to `service/service_manager.go`. The
-unrelated exported API rulings remain unapproved, and no broader task or gate credit follows.
+unrelated exported API rulings remain unapproved, and no broader task or gate credit follows. Independent G1
+implementation review returned `APPROVE`, granting owner-migrated credit only to its five frozen graph-read
+`component.go` owners; query/test support receives no owner credit and no broader task or gate credit follows.

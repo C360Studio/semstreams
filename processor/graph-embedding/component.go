@@ -17,7 +17,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/embedding"
 	"github.com/c360studio/semstreams/graph/readiness"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/cache"
@@ -283,18 +283,25 @@ type Component struct {
 	// behind hop-1 metadata operations would stall the pipeline.
 	//
 	// LOCK ORDER: hop1Mu → failedMu, never the reverse (repairTargets snapshots
-	// under failedMu and RELEASES before dispatching reconcileEntity). No path may
-	// take c.mu under hop1Mu: Stop holds c.mu across entityCoalescer.Close, whose
-	// in-flight flush holds hop1Mu — a c.mu acquisition there would deadlock Stop.
+	// under failedMu and RELEASES before dispatching reconcileEntity). Lifecycle
+	// cleanup closes entityCoalescer under stopping authority and without c.mu;
+	// in-flight flushes therefore finish without contending on lifecycle metadata.
 	hop1Mu sync.Mutex
 
 	// Lifecycle state
-	mu          sync.RWMutex
-	running     bool
-	initialized bool
-	startTime   time.Time
-	wg          sync.WaitGroup
-	generation  *lifecyclejoin.Generation
+	mu                sync.RWMutex
+	lifecycleMu       sync.Mutex
+	running           bool
+	initialized       bool
+	startTime         time.Time
+	wg                sync.WaitGroup
+	lifecycleUsed     bool
+	cleanupPending    bool
+	lifecycleTerminal bool
+	stopping          bool
+	startDone         chan struct{}
+	cancel            context.CancelFunc
+	runtimeDone       chan struct{}
 
 	// Metrics (atomic for internal tracking)
 	messagesProcessed int64
@@ -319,7 +326,8 @@ type Component struct {
 	failuresVec *prometheus.CounterVec
 
 	// Query subscriptions (for cleanup)
-	querySubscriptions []*natsclient.Subscription
+	querySubscriptions   []*natsclient.Subscription
+	subscribeForRequests func(context.Context, string, func(context.Context, []byte) ([]byte, error)) (*natsclient.Subscription, error)
 
 	// watermark is the ADR-066 §3 low-water-of-pending "caught up" tracker for the
 	// two-hop embedding pipeline. hop-1 (this component's ENTITY_STATES watcher)
@@ -591,6 +599,8 @@ func (c *Component) DataFlow() component.FlowMetrics {
 
 // Initialize validates configuration and sets up ports (no I/O)
 func (c *Component) Initialize() error {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -610,7 +620,7 @@ func (c *Component) Initialize() error {
 }
 
 // Start begins processing (must be initialized first)
-func (c *Component) Start(ctx context.Context) error {
+func (c *Component) Start(ctx context.Context) (startErr error) {
 	// Validate before inspecting lifecycle state.
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "Start", "context cannot be nil")
@@ -618,25 +628,59 @@ func (c *Component) Start(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return errs.WrapInvalid(err, "Component", "Start", "context already cancelled")
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
+	c.lifecycleMu.Lock()
+	c.mu.RLock()
+	initialized := c.initialized
+	c.mu.RUnlock()
 	// Check initialization
-	if !c.initialized {
+	if !initialized {
+		c.lifecycleMu.Unlock()
 		return errs.WrapFatal(errs.ErrInvalidConfig, "Component", "Start", "component not initialized")
 	}
 
-	// Idempotent - already running
-	if c.running {
-		return nil
+	if c.lifecycleUsed {
+		c.lifecycleMu.Unlock()
+		return errs.WrapFatal(errs.ErrInvalidConfig, "Component", "Start", "component instance already used")
 	}
 
 	// Create cancellable context
+	parent := ctx
 	ctx, cancel := context.WithCancel(ctx)
+	startDone := make(chan struct{})
+	c.lifecycleUsed = true
+	c.cancel = cancel
+	c.startDone = startDone
+	c.cleanupPending = true
+	c.lifecycleMu.Unlock()
+
+	committed := false
+	defer func() {
+		if !committed {
+			rollbackErr := lifecyclecleanup.RollbackFailedStart(parent, c.cleanupFailedStart)
+			startErr = errors.Join(startErr, rollbackErr)
+			c.lifecycleMu.Lock()
+			if rollbackErr == nil {
+				c.cleanupPending = false
+				c.lifecycleTerminal = true
+				c.clearLifecycleHandles()
+			}
+			close(startDone)
+			c.startDone = nil
+			c.lifecycleMu.Unlock()
+			c.mu.Lock()
+			c.running = false
+			c.mu.Unlock()
+			return
+		}
+		c.lifecycleMu.Lock()
+		c.cleanupPending = false
+		close(startDone)
+		c.startDone = nil
+		c.lifecycleMu.Unlock()
+	}()
 
 	// Check context before proceeding
 	if err := ctx.Err(); err != nil {
-		cancel()
 		return errs.Wrap(err, "Component", "Start", "context cancelled")
 	}
 
@@ -648,20 +692,17 @@ func (c *Component) Start(ctx context.Context) error {
 	// absent status bucket would fail every downstream gate closed forever with
 	// no producer-side evidence.
 	if err := c.createStatusBucket(ctx); err != nil {
-		cancel()
 		return err
 	}
 
 	// Create embedder based on config
 	if err := c.createEmbedder(); err != nil {
-		cancel()
 		return err
 	}
 
 	// Create embedding storage buckets
 	embeddingIndexBucket, embeddingDedupBucket, err := c.createEmbeddingBuckets(ctx)
 	if err != nil {
-		cancel()
 		return err
 	}
 
@@ -671,7 +712,6 @@ func (c *Component) Start(ctx context.Context) error {
 
 	// Create storage and worker
 	if err := c.initStorageAndWorker(ctx, embeddingIndexBucket, embeddingDedupBucket); err != nil {
-		cancel()
 		return err
 	}
 
@@ -692,26 +732,30 @@ func (c *Component) Start(ctx context.Context) error {
 
 	// Wait for ENTITY_STATES bucket and start entity watcher
 	if err := c.waitForDependenciesAndStartWatcher(ctx); err != nil {
-		cancel()
-		c.closeCoalescerAfterFailedStart()
 		return err
 	}
+	c.runtimeDone = make(chan struct{})
+	go func(done chan struct{}) {
+		c.wg.Wait()
+		close(done)
+	}(c.runtimeDone)
 
 	// Set up query handlers
 	if err := c.setupQueryHandlers(ctx); err != nil {
-		cancel()
-		c.closeCoalescerAfterFailedStart()
 		return errs.Wrap(err, "Component", "Start", "setup query handlers")
 	}
-	c.generation = lifecyclejoin.NewGeneration(cancel, c.wg.Wait)
 
 	// Mark as running
+	c.mu.Lock()
 	c.running = true
 	c.startTime = time.Now()
+	startTime := c.startTime
+	c.mu.Unlock()
+	committed = true
 
 	c.logger.Info("component started",
 		slog.String("component", "graph-embedding"),
-		slog.Time("start_time", c.startTime),
+		slog.Time("start_time", startTime),
 		slog.String("embedder_type", c.config.EmbedderType))
 
 	return nil
@@ -722,62 +766,121 @@ func (c *Component) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-	c.mu.Lock()
-	generation := c.generation
-	if generation == nil {
-		c.mu.Unlock()
-		return nil // Already stopped
-	}
+	for {
+		c.lifecycleMu.Lock()
+		if !c.lifecycleUsed {
+			c.lifecycleUsed = true
+			c.lifecycleTerminal = true
+			c.lifecycleMu.Unlock()
+			return nil
+		}
+		if c.lifecycleTerminal {
+			c.lifecycleMu.Unlock()
+			return nil
+		}
+		startDone := c.startDone
+		if startDone != nil {
+			c.lifecycleMu.Unlock()
+			select {
+			case <-startDone:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if c.stopping {
+			c.lifecycleMu.Unlock()
+			return errs.WrapTransient(errors.New("stop already in progress"), "Component", "Stop", "concurrent Stop is unsupported")
+		}
+		retryable := c.cleanupPending
+		c.stopping = true
+		c.lifecycleMu.Unlock()
 
-	c.mu.Unlock()
-
-	return generation.Stop(ctx, func() error {
-		var stopErr error
-		if c.entityCoalescer != nil {
-			stopErr = errors.Join(stopErr, c.entityCoalescer.Close())
+		stopErr := c.cleanup(ctx, retryable)
+		c.lifecycleMu.Lock()
+		c.stopping = false
+		if retryable && stopErr != nil {
+			c.lifecycleMu.Unlock()
+			return stopErr
 		}
-		for _, sub := range c.querySubscriptions {
-			if sub != nil {
-				if err := sub.Unsubscribe(); err != nil {
-					c.logger.Warn("query subscription unsubscribe error", slog.Any("error", err))
-					stopErr = errors.Join(stopErr, err)
-				}
-			}
-		}
-		c.querySubscriptions = nil
-		if c.worker != nil {
-			if err := c.worker.Stop(); err != nil {
-				c.logger.Warn("worker stop error", slog.Any("error", err))
-				stopErr = errors.Join(stopErr, err)
-			}
-		}
-		if c.embedder != nil {
-			if err := c.embedder.Close(); err != nil {
-				c.logger.Warn("embedder close error", slog.Any("error", err))
-				stopErr = errors.Join(stopErr, err)
-			}
-		}
-		return stopErr
-	}, func(context.Context) error {
+		c.cleanupPending = false
+		c.lifecycleTerminal = true
+		c.clearLifecycleHandles()
+		c.lifecycleMu.Unlock()
 		c.mu.Lock()
 		c.running = false
 		c.mu.Unlock()
 		c.logger.Info("component stopped gracefully", slog.String("component", "graph-embedding"))
-		return nil
-	})
+		return stopErr
+	}
 }
 
-// closeCoalescerAfterFailedStart releases the coalescer on a Start that fails
-// AFTER constructing it (#722 HIGH 3): Stop never runs for a component that
-// never started, so the failure path owns the cleanup. Callers cancel the
-// component ctx first, which unblocks the coalescer's run goroutine so Close's
-// wait returns promptly (no entries can be pending — the watcher never
-// started or is being torn down by the same cancel).
-func (c *Component) closeCoalescerAfterFailedStart() {
-	if c.entityCoalescer != nil {
-		_ = c.entityCoalescer.Close()
-		c.entityCoalescer = nil
+func (c *Component) cleanupFailedStart(ctx context.Context) error {
+	return c.cleanup(ctx, true)
+}
+
+func (c *Component) cleanup(ctx context.Context, retryable bool) error {
+	var cleanupErr error
+	unresolved := c.querySubscriptions[:0]
+	for _, sub := range c.querySubscriptions {
+		if sub == nil {
+			continue
+		}
+		if err := sub.Drain(ctx); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+			unresolved = append(unresolved, sub)
+		}
 	}
+	if retryable {
+		c.querySubscriptions = unresolved
+	} else {
+		c.querySubscriptions = nil
+	}
+	if c.cancel != nil {
+		c.cancel()
+	}
+	if c.runtimeDone != nil {
+		select {
+		case <-c.runtimeDone:
+			if retryable {
+				c.runtimeDone = nil
+				c.cancel = nil
+			}
+		case <-ctx.Done():
+			cleanupErr = errors.Join(cleanupErr, ctx.Err())
+		}
+	}
+	if c.entityCoalescer != nil {
+		if err := c.entityCoalescer.Close(); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		} else if retryable {
+			c.entityCoalescer = nil
+		}
+	}
+	if c.worker != nil {
+		if err := c.worker.Stop(); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		} else if retryable {
+			c.worker = nil
+		}
+	}
+	if c.embedder != nil {
+		if err := c.embedder.Close(); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		} else if retryable {
+			c.embedder = nil
+		}
+	}
+	return cleanupErr
+}
+
+func (c *Component) clearLifecycleHandles() {
+	c.querySubscriptions = nil
+	c.cancel = nil
+	c.runtimeDone = nil
+	c.entityCoalescer = nil
+	c.worker = nil
+	c.embedder = nil
 }
 
 // createEmbedder creates the embedder based on configuration.
