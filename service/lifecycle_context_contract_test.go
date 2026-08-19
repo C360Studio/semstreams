@@ -7,7 +7,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/health"
@@ -101,46 +100,6 @@ func TestBaseServiceStopSignalsLifetimeBeforeCanceledJoin(t *testing.T) {
 	require.NotEqual(t, StatusRunning, svc.Status(), "Stop must signal the active generation before returning")
 }
 
-func TestBaseServiceStopJoinsInitialHealthCheckWithoutLateCallback(t *testing.T) {
-	checkEntered := make(chan struct{})
-	releaseCheck := make(chan struct{})
-	callbackStarted := make(chan struct{}, 1)
-	svc := NewBaseServiceWithOptions(
-		"tracked-health",
-		nil,
-		WithHealthInterval(time.Hour),
-		WithHealthCheck(func() error {
-			close(checkEntered)
-			<-releaseCheck
-			return nil
-		}),
-	)
-	svc.OnHealthChange(func(bool) { callbackStarted <- struct{}{} })
-	require.NoError(t, svc.Start(context.Background()))
-
-	select {
-	case <-checkEntered:
-	case <-time.After(time.Second):
-		t.Fatal("initial health check did not start")
-	}
-	canceled, cancelStop := context.WithCancel(context.Background())
-	cancelStop()
-	require.ErrorIs(t, svc.Stop(canceled), context.Canceled)
-	stopDone := make(chan error, 1)
-	go func() { stopDone <- svc.Stop(context.Background()) }()
-	close(releaseCheck)
-	require.NoError(t, <-stopDone)
-	require.False(t, svc.IsHealthy())
-	require.Equal(t, StatusStopped, svc.Status())
-
-	select {
-	case <-callbackStarted:
-		t.Fatal("health callback ran after terminal shutdown began")
-	case <-time.After(100 * time.Millisecond):
-		// Failure bound only: the check and Stop are synchronized by channels.
-	}
-}
-
 func TestManagerStopAllRejectsNilBeforeCallingServices(t *testing.T) {
 	manager := createTestServiceManager(ManagerConfig{}, nil)
 	spy := &contextStopSpy{name: "spy", status: StatusRunning}
@@ -192,30 +151,6 @@ type serviceFunc struct {
 }
 
 func (s serviceFunc) Stop(ctx context.Context) error { return s.stop(ctx) }
-
-func TestBaseServiceConcurrentStopsShareCompletion(t *testing.T) {
-	svc := NewBaseServiceWithOptions("concurrent-stop", nil)
-	require.NoError(t, svc.Start(context.Background()))
-
-	const callers = 8
-	results := make(chan error, callers)
-	var ready sync.WaitGroup
-	ready.Add(callers)
-	start := make(chan struct{})
-	for range callers {
-		go func() {
-			ready.Done()
-			<-start
-			results <- svc.Stop(context.Background())
-		}()
-	}
-	ready.Wait()
-	close(start)
-	for range callers {
-		require.NoError(t, <-results)
-	}
-	require.Equal(t, StatusStopped, svc.Status())
-}
 
 type controlledGenerationComponent struct {
 	*mockDiscoverableComponent

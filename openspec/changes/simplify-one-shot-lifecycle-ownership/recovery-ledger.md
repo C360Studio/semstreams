@@ -420,6 +420,112 @@ The production-only recovery searches report this exact delta from baseline `a1a
 | `Operation.Run` | 3 | 3 | 0 |
 | External `RunPartialStartRollback` calls | 20 | 20 | 0 |
 
+## Gate A BaseService dirty-worktree checkpoint — 2026-08-19
+
+This dirty implementation checkpoint is based on clean merged `main`
+`c5953972bbc56f013bf4665674e99f03c11395f6`. The owner-selected handoff is
+[`base-service-owner-slice.md`](base-service-owner-slice.md), SHA-256
+`663094c67f65b444b2539ea9861cd51dd60f692b83eedb67817db68172c3f114`. The handoff limits production credit to
+`service/base.go` and includes only BaseService-specific test correction propagation.
+
+Exact reviewed file hashes:
+
+- `service/base.go`: `470cddafe9ffbd5d48f655ca05ee178e0228fe3cafd437433435ac729d202856`
+- `service/base_lifecycle_test.go`: `8b37f82a66a33e44c0cad2cfcac879c2657628a9f113d5dc00051f2d8cfad7ca`
+- `service/base_test.go`: `44e283023ba248eacf09bf26be942397c9ea71b5a9b42f10623a72d78dbb4d5d`
+- `service/lifecycle_context_contract_test.go`:
+  `ce575266e5ba10a6dc3a7bc492e754171bb7b78e7053dbe8965e9cb64c19cfcb`
+- `service/service_manager_stopall_test.go`:
+  `761e9c06733a68c0c538918b98a3c1ecfcd6c8ec5eec95c10a6a6bc2307465e9`
+- `openspec/changes/simplify-one-shot-lifecycle-ownership/base-service-owner-slice.md`:
+  `663094c67f65b444b2539ea9861cd51dd60f692b83eedb67817db68172c3f114`
+
+The final independent `semstreams-reviewer` verdict is `APPROVE` with no findings. Its conformance rulings are:
+
+- `service/base.go:111-114,254-291` replaces `Generation` and retained terminal results with private cancel,
+  done, and WaitGroup authority; no context is retained, and authority is published before owned goroutines escape.
+- `service/base.go:232-247` rejects nil, already-canceled, and same-instance reused Start before starting new work.
+- `service/base.go:296-349` makes Stop one-shot: it consumes cancel, stops ticker admission, cancels before the exact
+  caller-context-bounded join, returns timeout honestly, and gives later calls no rejoin or result-replay path.
+- `service/base.go:281-290,460-478` publishes `StatusStopped` only after both owned goroutines return; parent
+  cancellation converges through that same exact owner join.
+- `service/base_lifecycle_test.go:11-134` deterministically covers canceled Start, canceled/deadline Stop, no rejoin,
+  same-instance rejection, Stop-before-Start terminal use, parent cancellation, and owner completion.
+- `service/base_test.go:291-329` proves restart by fresh composition rather than same-instance generation reuse.
+- `service/lifecycle_context_contract_test.go:55-68,89-101` retains nil-context and cancel-before-wait contract coverage
+  while removing tests that required shared Stop completion or later rejoin.
+- `service/service_manager_stopall_test.go:27-29,125-136` corrects wording to exact completion and proves completed
+  repeated BaseService Stop without treating `StatusStopping` as completion. No Manager behavior changed.
+
+The developer supplied the following historical TDD red transcript. The reviewer found the failures consistent with
+the final change but marked TDD history `UNVERIFIED` because no in-tree or CI artifact preserves the runs. Record it
+as qualified execution history, not durable proof.
+
+```text
+go test -race ./service -run \
+  '^TestBaseService(StartRejectsCanceledContext|StopIsOneShotAfterCanceledJoin|'\
+'CompletedStopRejectsSameInstanceRestart)$' \
+  -count=1 -timeout=20s
+=> FAIL: canceled Start wanted context.Canceled, got nil; repeated Stop timed out after 1s while rejoining blocked
+   work; same-instance restart wanted an error, got nil; package failed in 1.509s
+
+go test -race ./service -run '^TestBaseServiceStopIsOneShotAfterFailedJoin$' -count=1 -timeout=20s
+=> FAIL: canceled and deadline subtests wanted StatusStopping (3), got StatusStopped (0):
+   "repeat Stop must not predict owner completion"; package failed in 0.513s
+
+go test -race ./service -run '^TestBaseServiceStopBeforeStartRejectsSameInstanceStart$' -count=1 -timeout=20s
+=> FAIL: base_lifecycle_test.go:117 wanted an error, got nil; package failed in 0.500s
+```
+
+Final green evidence after the reviewer-required corrections:
+
+```text
+# Independent root/Program Manager verification, before the final comment-only correction
+go test -race ./service -count=1 -timeout=180s
+=> ok github.com/c360studio/semstreams/service 7.045s
+
+go test -tags=integration -race ./service -run '^TestService_FreshInstanceRestart$' -count=1 -timeout=120s
+=> ok github.com/c360studio/semstreams/service 3.599s
+
+task lint
+=> PASS
+
+openspec validate simplify-one-shot-lifecycle-ownership --strict --no-interactive
+=> Change 'simplify-one-shot-lifecycle-ownership' is valid
+
+git diff --check
+=> PASS
+
+# Developer rerun after the final comment-only correction
+go test -race ./service -count=1 -timeout=180s
+=> ok github.com/c360studio/semstreams/service 6.703s
+
+go test -race ./service -run \
+  '^(TestServiceManager_StopAll_Idempotency|TestBaseService_CompletedStopIsIdempotent)$' \
+  -count=1 -timeout=30s
+=> ok github.com/c360studio/semstreams/service 1.472s
+
+git diff --check
+=> PASS
+```
+
+The production-only recovery census has this exact baseline-to-worktree delta:
+
+| Measurement | Baseline | Worktree | Delta |
+|---|---:|---:|---:|
+| Production owner files importing `internal/lifecyclejoin` | 37 | 36 | -1 |
+| `lifecyclejoin.NewGeneration` | 39 | 38 | -1 |
+| `Generation.Stop` | 44 | 43 | -1 |
+| External `Generation.Cancel` | 4 | 4 | 0 |
+| External `Generation.Signal` | 0 | 0 | 0 |
+| `Generation.StopWithQuiesce` | 8 | 8 | 0 |
+| `lifecyclejoin.NewOperation` | 3 | 3 | 0 |
+| `Operation.Run` | 3 | 3 | 0 |
+| External `RunPartialStartRollback` calls | 20 | 20 | 0 |
+
+Owner-migrated credit is limited to `service/base.go`. This remains a dirty-worktree checkpoint: task 2.3 and Gate A
+remain incomplete, and it grants no controlled/dirty proof, release, archive, or tag credit.
+
 ## PR #1001 integration-runner interrupt prerequisite inventory — 2026-08-19
 
 The repeated CI failure in `TestIntegrationRunner_InterruptReapsPullBeforeReleasingLock` is inventoried at

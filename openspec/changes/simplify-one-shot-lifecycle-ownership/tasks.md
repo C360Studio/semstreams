@@ -39,6 +39,11 @@
     Focused/package and real-NATS integration race tests pass; production owner files move 38 to 37. Owner-migrated
     credit is limited to `processor/gated-dag/executor.go`; task 2.3, Gate A, runtime migration, and every proof/release
     gate remain unchecked and incomplete.
+  - 2026-08-19 BaseService checkpoint: final independent reviewer verdict `APPROVE` grants owner-migrated credit only
+    to `service/base.go` in the dirty worktree based on clean `main` `c5953972`. Owner-local cancel/done/WaitGroup,
+    one-shot Stop, fresh-instance restart, exact completion status, focused/package race tests, lint, and strict
+    OpenSpec validation pass; production owner files move 37 to 36. Task 2.3, Gate A, runtime migration, and every
+    proof/release/archive/tag gate remain unchecked and incomplete.
 - [ ] 2.4 Remove Generation/Operation only after focused/race proof.
 - [ ] 2.5 Remove lifecycle deletion and provide fixture/admin teardown.
 
