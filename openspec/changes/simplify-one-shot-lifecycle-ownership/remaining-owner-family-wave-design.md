@@ -7,7 +7,8 @@
 > exported API rulings or complete any task or gate. Independent review of the narrow SM1 correction returned
 > `DESIGN APPROVE`, and independent SM1 implementation review returned `APPROVE`; owner-migrated credit is limited to
 > `service/service_manager.go`. Independent G1 implementation review returned `APPROVE`; owner-migrated credit is
-> limited to its five frozen graph-read `component.go` owners.
+> limited to its five frozen graph-read `component.go` owners. Independent CM1 implementation review returned
+> `APPROVE`; owner-migrated credit is limited to `service/component_manager.go`.
 
 ## Evidence identity
 
@@ -238,6 +239,10 @@ Membership service/component_manager.go. Fence callback-borrow admission; wait a
 startDone selects running/cleanupPending; caller context; no rejoin. Proof blocked borrow, typed stopping, overlap,
 partial failure, reverse aggregation/race. Delta owner -1, NG -2, Stop -1, SWQ -2. CM1 depends on R1.
 
+Implementation status on 2026-08-19: independent `semstreams-reviewer` verdict `APPROVE`. Owner-migrated credit is
+limited to `service/component_manager.go`; supporting test files receive no separate owner credit. Task 2.3, Gate
+A/B/C, runtime migration, proof, release, archive, and tag readiness remain incomplete.
+
 ## ML1 — MessageLogger singleton
 
 Membership service/message_logger.go plus adjacent HTTP/KV watch. Dynamic fence, retry cancel/done, exact core Drain
@@ -424,3 +429,5 @@ implementation review returned `APPROVE`, granting owner-migrated credit only to
 unrelated exported API rulings remain unapproved, and no broader task or gate credit follows. Independent G1
 implementation review returned `APPROVE`, granting owner-migrated credit only to its five frozen graph-read
 `component.go` owners; query/test support receives no owner credit and no broader task or gate credit follows.
+Independent CM1 implementation review returned `APPROVE`, granting owner-migrated credit only to
+`service/component_manager.go`; supporting tests receive no owner credit and no broader task or gate credit follows.

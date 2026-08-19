@@ -264,9 +264,8 @@ func TestComponentManagerStart_DuplicateProviderFailsWithoutStartingConsumers(t 
 	err := cm.Start(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate ownership")
-	got, ok := cm.storeRegistry.Streamable("shared")
-	require.True(t, ok)
-	assert.True(t, got == storeA || got == storeB, "incumbent store was replaced by an unknown handle")
+	_, ok := cm.storeRegistry.Streamable("shared")
+	assert.False(t, ok, "failed Start rollback must deregister the incumbent store")
 	select {
 	case <-consumer.entered:
 		t.Fatal("consumer started after duplicate provider registration failed")
@@ -274,18 +273,10 @@ func TestComponentManagerStart_DuplicateProviderFailsWithoutStartingConsumers(t 
 	}
 
 	status := cm.GetComponentStatus()
-	failed := 0
-	started := 0
 	for _, name := range []string{"provider-a", "provider-b"} {
-		switch status[name].State {
-		case component.StateFailed:
-			failed++
-		case component.StateStarted:
-			started++
-		}
+		assert.Equal(t, component.StateStopped, status[name].State,
+			"failed Start rollback must synchronously stop every provider that acquired authority")
 	}
-	assert.Equal(t, 1, failed)
-	assert.Equal(t, 1, started)
 }
 
 // TestComponentManagerStart_FailsClosedOnComponentStartError locks the
@@ -308,14 +299,13 @@ func TestComponentManagerStart_FailsClosedOnComponentStartError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failing-comp", "the error must name the failed component")
 	assert.ErrorIs(t, err, boom, "the component's own error must be wrapped, not replaced")
 
-	// The failed component is recorded as failed with its error; the healthy
-	// one still started.
+	// The Start result retains the failed component's error, while synchronous
+	// rollback leaves both acquired component records stopped.
 	status := cm.GetComponentStatus()
 	require.Contains(t, status, "failing-comp")
-	assert.Equal(t, component.StateFailed, status["failing-comp"].State)
-	assert.ErrorIs(t, status["failing-comp"].LastError, boom)
+	assert.Equal(t, component.StateStopped, status["failing-comp"].State)
 	require.Contains(t, status, "healthy-comp")
-	assert.Equal(t, component.StateStarted, status["healthy-comp"].State)
+	assert.Equal(t, component.StateStopped, status["healthy-comp"].State)
 
 	assert.Same(t, failing, cm.components["failing-comp"].Component,
 		"start failure must not erase honestly admitted shape")

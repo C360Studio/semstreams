@@ -378,6 +378,63 @@ Stable G1 source identities for this checkpoint are:
 This checkpoint grants no approval to unrelated exported API rulings. Task 2.3 and Gate A/B/C remain unchecked and
 incomplete, and it grants no runtime-migration, proof, release, archive, or tag credit.
 
+### CM1 ComponentManager implementation checkpoint — 2026-08-19
+
+Independent `semstreams-reviewer` verdict `APPROVE` applies to the CM1 dirty worktree based on full commit
+`01ec3bed0be5a517065befcb878f4a90efbb14de`. Owner-migrated credit is granted only to
+`service/component_manager.go`; supporting test files receive no separate owner credit.
+
+The TDD RED sequence is recorded conservatively:
+
+1. The initial callback-borrow fence test expected an error and received nil.
+2. The health terminal-projection RED returned the child map instead of the required terminal projection.
+3. The accepted corrections restored the focused ComponentManager lifecycle surface to green.
+
+Final independent evidence:
+
+| Evidence | Result | Elapsed |
+|---|---|---:|
+| Focused service race | PASS | 7.868s |
+| CM lifecycle matrix, 10 repetitions | PASS | 6.740s |
+| Integration ComponentManager/framework bucket | PASS | 8.950s |
+| `gofmt` | PASS | — |
+| `go vet` | PASS | — |
+| `revive` | PASS | — |
+| `git diff --check` | PASS | — |
+
+The production-only recovery census moved exactly as reviewed:
+
+| Measurement | HEAD `01ec3bed` | CM1 worktree | Delta |
+|---|---:|---:|---:|
+| Production owner files importing `internal/lifecyclejoin` | 25 | 24 | -1 |
+| `lifecyclejoin.NewGeneration` | 25 | 23 | -2 |
+| `Generation.Stop` | 33 | 32 | -1 |
+| `Generation.StopWithQuiesce` | 5 | 3 | -2 |
+| Final parent-aware `RollbackFailedStart` production owner calls | 11 | 12 | +1 |
+| External `Generation.Cancel` | 4 | 4 | 0 |
+| `lifecyclejoin.NewOperation` | 3 | 3 | 0 |
+| External `RunPartialStartRollback` calls | 15 | 15 | 0 |
+
+`git diff --quiet -- internal/lifecyclejoin` and `git diff --quiet -- natsclient` both returned success. The unrelated
+Metrics inventory remained byte-identical at SHA-256
+`8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`.
+
+Stable CM1 source identities for this checkpoint are:
+
+- `service/component_manager.go`:
+  `08a2a5bcb41fa393ee09e2043442982362dfdd1add6611d008e7894214dc76d0`;
+- `service/component_manager_start_barrier_test.go`:
+  `02f7227c468c9946deaa3930d7eb0a7c764fc0189708fd6d3767e6abc136a3dc`;
+- `service/component_manager_storeregistry_test.go`:
+  `f8956f5925587a52337ec9c796ccae2bfc3bf40ee1cca3ee2fdfb9a4d708f466`;
+- `service/lifecycle_context_contract_test.go`:
+  `b1434c3bafc475eefa9a519d261e02cc10e3b44e98ddc85d190a6dd4ebc87c25`;
+- `service/component_manager_owner_test.go`:
+  `4fb256e20a2cb9baf55a14ffe7373f8cd4c88a4cee5246e64507abdda135e9dc`.
+
+This checkpoint grants no approval to unrelated exported API rulings. Task 2.3 and Gate A/B/C remain unchecked and
+incomplete, and it grants no runtime-migration, proof, release, archive, or tag credit.
+
 ## Completion vocabulary
 
 Use only these terms in status reports, PR descriptions, and handoffs:

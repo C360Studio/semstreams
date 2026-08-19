@@ -135,12 +135,16 @@ func TestStopLifecycleComponent_DeregistersBeforeProviderStop(t *testing.T) {
 		}
 		return nil
 	}
-	if err := registerStarted(cm, "objectstore", provider); err != nil {
-		t.Fatalf("register provider: %v", err)
+	cm.components["objectstore"] = &component.ManagedComponent{
+		Component: provider,
+		State:     component.StateInitialized,
 	}
-
-	if err := cm.stopLifecycleComponent(context.Background(), "objectstore", nil, provider); err != nil {
-		t.Fatalf("stop lifecycle provider: %v", err)
+	cm.initialized.Store(true)
+	if err := cm.Start(context.Background()); err != nil {
+		t.Fatalf("start component manager: %v", err)
+	}
+	if err := cm.Stop(context.Background()); err != nil {
+		t.Fatalf("stop component manager: %v", err)
 	}
 }
 

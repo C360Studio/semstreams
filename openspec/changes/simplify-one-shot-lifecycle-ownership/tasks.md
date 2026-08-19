@@ -77,6 +77,16 @@
     remained unchanged, and the ledger records exact source identities. Task 2.3 and every Gate A/B/C, runtime, proof,
     release, archive, and tag requirement remain unchecked and incomplete; unrelated exported API rulings remain
     unapproved.
+  - 2026-08-19 CM1 implementation checkpoint: independent `semstreams-reviewer` verdict `APPROVE` grants
+    owner-migrated credit only to `service/component_manager.go`; supporting tests receive no owner credit. The
+    initial callback-borrow fence expected an error and received nil, and the health terminal-projection RED returned
+    the child map before correction. Focused service race passed in 7.868s, the CM lifecycle matrix passed 10
+    repetitions in 6.740s, the integration ComponentManager/framework bucket passed in 8.950s, and
+    gofmt/vet/revive/diff-check passed. Census moved owners 25→24, NewGeneration 25→23, Generation.Stop 33→32,
+    StopWithQuiesce 5→3, and final helper calls 11→12; Cancel 4, NewOperation 3, and old rollback 15 were unchanged.
+    Lifecyclejoin, natsclient, and Metrics inventory were unchanged. Task 2.3 and every Gate A/B/C, runtime, proof,
+    release, archive, and tag requirement remain unchecked and incomplete; unrelated exported API rulings remain
+    unapproved.
   - 2026-08-18 checkpoint: independent `semstreams-reviewer` verdict `CORRECTIONS CONFIRMED` grants owner-migrated
     credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
     worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.
