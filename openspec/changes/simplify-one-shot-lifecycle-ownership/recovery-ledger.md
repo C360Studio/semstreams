@@ -70,13 +70,13 @@ slices when the reviewed inventory cannot establish a genuine family.
 
 ### Reviewed dependency authority
 
-The reviewed global wave artifact records the full DAG. Execution status is dependency-based, not ordinal. R1, SM1,
-and ML1 have no implementation dependency. R1 births final
-`internal/lifecyclecleanup.RollbackFailedStart(parent, rollback)`. I1 depends on R1; G1/M1/CM1 depend on R1; S1
-depends on I1; OT1 depends on I1; A1/O1/H1/OS1/RU1/GI1 depend on S1; N1 depends on every owner wave and all
-exported/adopter proof. R1 is the selected first helper-birth family, but selection is not an exclusive repository-wide
-lock: SM1 and ML1 may proceed independently once the global design is finally accepted. A wave may be `blocked`,
-`ready`, `in progress`, `implementation review`, or `complete`.
+The reviewed global wave artifact records the full DAG. Execution status is dependency-based, not ordinal. R1 and ML1
+have no implementation dependency. R1 births final
+`internal/lifecyclecleanup.RollbackFailedStart(parent, rollback)`. I1/G1/M1/SM1/CM1 depend on R1; S1 depends on I1;
+OT1 depends on I1; A1/O1/H1/OS1/RU1/GI1 depend on S1; N1 depends on every owner wave and all exported/adopter proof.
+R1 is the selected first helper-birth family, but selection is not an exclusive repository-wide lock: ML1 may proceed
+independently once the global design is finally accepted. A wave may be `blocked`, `ready`, `in progress`,
+`implementation review`, or `complete`.
 
 ### Rejected standalone F0 worktree state — 2026-08-19
 
@@ -209,6 +209,85 @@ Stable R1 source identities for this checkpoint are:
 
 Task 2.3 and Gate A/B/C remain unchecked and incomplete. This checkpoint grants no runtime-migration, proof, release,
 archive, or tag credit.
+
+### SM1 dependency and failed-Start authority correction — 2026-08-19
+
+Architect binding interpretation corrects SM1 from an independent root to a child of R1. Every migrated owner with a
+post-acquisition Start failure uses final parent-aware
+`internal/lifecyclecleanup.RollbackFailedStart(parent, rollback)`. `Manager.StartAll` must locally attempt bounded
+synchronous rollback before returning a child Start, main listener bind, or publisher failure. Process-root `StopAll`
+is defense-in-depth, not a substitute for Manager-owned failed-Start cleanup.
+
+This correction changes no SM1 membership or exported surface and leaves its planned owner -1, NewGeneration -3, and
+StopWithQuiesce -3 deltas unchanged. After R1, SM1 is expected to move final helper calls 5→6 while removing no old
+rollback call. At this correction checkpoint, independent design re-review and later SM1 implementation review were
+still pending. It grants no SM1 owner, task, Gate A/B/C, runtime-migration, proof, release, archive, or tag credit; all
+tasks and gates remain unchecked and incomplete.
+
+### SM1 implementation checkpoint — 2026-08-19
+
+Independent review of the narrow corrected SM1 design returned `DESIGN APPROVE`. Independent
+`semstreams-reviewer` implementation verdict then returned `APPROVE` after all corrections for the dirty worktree
+based on full commit `509cf8b21bfb76a9bfc3196baaef14836a8dd934`. Owner-migrated credit is granted only to
+`service/service_manager.go`. Adjacent service tests and the process-root comment receive no owner credit.
+
+The developer RED sequence is recorded conservatively:
+
+1. Initial lifecycle tests exposed asynchronous bind and same-instance rebind behavior.
+2. Canceled-Stop behavior was proved RED before the one-shot terminal correction.
+3. Manager-local failed-Start rollback cases were proved RED before `StartAll` owned that cleanup.
+4. A `cleanupFailedStart` compile RED preceded the final helper integration.
+
+Final focused evidence:
+
+| Evidence | Result | Elapsed |
+|---|---|---:|
+| Independent focused service race | PASS | 6.772s |
+| Focused lifecycle matrix, 20 repetitions | PASS | 1.845s |
+| `task lint` | PASS | — |
+| `git diff --check` | PASS | — |
+| Strict OpenSpec validation | PASS | — |
+
+Full repository race is not claimed green for two distinct reasons:
+
+1. Two user-owned `.claude/worktrees` entered repository-wide scanners, causing duplicate-census failures and failures
+   against an old graph-ingest target.
+2. Separate stale policy-baseline entries still expect two removed sleeps in root `service/base_test.go`.
+
+The focused service surface passed, but the repository-wide race gate remains outstanding and receives no waiver.
+
+The production-only recovery census moved exactly as reviewed:
+
+| Measurement | HEAD `509cf8b2` | SM1 worktree | Delta |
+|---|---:|---:|---:|
+| Production owner files importing `internal/lifecyclejoin` | 31 | 30 | -1 |
+| `lifecyclejoin.NewGeneration` | 33 | 30 | -3 |
+| `Generation.Stop` | 38 | 38 | 0 |
+| External `Generation.Cancel` | 4 | 4 | 0 |
+| `Generation.StopWithQuiesce` | 8 | 5 | -3 |
+| `lifecyclejoin.NewOperation` | 3 | 3 | 0 |
+| External `RunPartialStartRollback` calls | 15 | 15 | 0 |
+| Final parent-aware `RollbackFailedStart` production owner calls | 5 | 6 | +1 |
+
+`git diff --quiet -- internal/lifecyclejoin` returned success. The unrelated Metrics inventory remained byte-identical
+at SHA-256 `8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`.
+
+Stable SM1 source identities for this checkpoint are:
+
+- `service/service_manager.go`:
+  `4813e385eb311a128a437280e9c375611dd9388b3c52ba5ebd531737405f60c7`;
+- `service/service_manager_test.go`:
+  `4d6c081210982d857cd011ba77fab16ba685a1953a9f03e19adbb143081e5d6f`;
+- `service/service_manager_health_listener_test.go`:
+  `232713a773f9b04dd7e25ff53a339917b22f722f51256d195ec2ccc503b4b410`;
+- `service/middleware_test.go`:
+  `dff52587818a47b6450757b349c8f589ad90744ec22f16f15b2c40c712b60694`;
+- `cmd/semstreams/main.go`:
+  `dd5a20c6c306267959841f63daf0b21141aaa1cf042b8e0f6226a261c70823b1`.
+
+The status-document hashes reported with the handoff are provenance, not additional implementation evidence. This
+checkpoint grants no approval to unrelated exported API rulings. Task 2.3 and Gate A/B/C remain unchecked and
+incomplete, and it grants no runtime-migration, proof, release, archive, or tag credit.
 
 ## Completion vocabulary
 

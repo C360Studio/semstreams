@@ -574,7 +574,7 @@ func runUntilShutdown(
 	// Optional dedicated health-port listener (#100). Binds /health and
 	// /healthz on a port independent of the service-manager UI's
 	// HTTPPort — convenience for Docker / k8s probes. Zero is a no-op
-	// (the default). Bind failure logs at Warn level inside the manager;
+	// (the default). Bind failure is logged here at Warn level;
 	// boot continues since the service-manager's main /health is the
 	// authoritative health surface.
 	if err := manager.StartHealthListener(runtimeCtx, healthPort); err != nil {

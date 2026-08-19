@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -12,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestHealthGenerationDoesNotCompleteBeforeServeReturns(t *testing.T) {
+func TestHealthServeDoneDoesNotCompleteBeforeServeReturns(t *testing.T) {
 	deps := createTestServiceDependencies(nil)
 	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
 	port := freePort(t)
@@ -22,11 +21,10 @@ func TestHealthGenerationDoesNotCompleteBeforeServeReturns(t *testing.T) {
 	t.Cleanup(func() { _ = manager.StopHealthListener(context.Background()) })
 	waitForListener(t, fmt.Sprintf("http://127.0.0.1:%d/healthz", port), 10*time.Second)
 
-	waitCtx, cancelWait := context.WithTimeout(context.Background(), 25*time.Millisecond)
-	defer cancelWait()
-	err := manager.healthGeneration.Stop(waitCtx, nil, nil)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("generation Stop before Serve return = %v, want deadline exceeded", err)
+	select {
+	case <-manager.healthServeDone:
+		t.Fatal("health serveDone closed before Serve returned")
+	default:
 	}
 
 	if err := manager.StopHealthListener(context.Background()); err != nil {
@@ -34,7 +32,7 @@ func TestHealthGenerationDoesNotCompleteBeforeServeReturns(t *testing.T) {
 	}
 }
 
-func TestManagerHTTPGenerationDoesNotCompleteBeforeServeReturns(t *testing.T) {
+func TestManagerHTTPServeDoneDoesNotCompleteBeforeServeReturns(t *testing.T) {
 	deps := createTestServiceDependencies(nil)
 	port := freePort(t)
 	manager := createTestServiceManager(ManagerConfig{HTTPPort: port}, deps)
@@ -43,12 +41,46 @@ func TestManagerHTTPGenerationDoesNotCompleteBeforeServeReturns(t *testing.T) {
 	t.Cleanup(func() { _ = manager.stopRuntimeServers(context.Background()) })
 	waitForListener(t, fmt.Sprintf("http://127.0.0.1:%d/healthz", port), 10*time.Second)
 
-	waitCtx, cancelWait := context.WithTimeout(t.Context(), 25*time.Millisecond)
-	defer cancelWait()
-	err := manager.serverGeneration.Stop(waitCtx, nil, nil)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
+	select {
+	case <-manager.httpServeDone:
+		t.Fatal("manager HTTP serveDone closed before Serve returned")
+	default:
+	}
 
 	require.NoError(t, manager.stopRuntimeServers(t.Context()))
+}
+
+func TestListenerBaseContextsPreserveExactStartValues(t *testing.T) {
+	type contextKey string
+	const key contextKey = "sm1"
+	startCtx := context.WithValue(t.Context(), key, "exact-parent")
+
+	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, createTestServiceDependencies(nil))
+	require.NoError(t, manager.initializeHTTPInfrastructure())
+	require.NoError(t, manager.completeHTTPSetup(startCtx))
+	t.Cleanup(func() { _ = manager.stopRuntimeServers(context.Background()) })
+	require.Equal(t, "exact-parent", manager.httpServer.BaseContext(manager.httpListener).Value(key))
+
+	healthManager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, createTestServiceDependencies(nil))
+	require.NoError(t, healthManager.StartHealthListener(startCtx, freePort(t)))
+	t.Cleanup(func() { _ = healthManager.StopHealthListener(context.Background()) })
+	require.Equal(t, "exact-parent", healthManager.healthServer.BaseContext(healthManager.healthListener).Value(key))
+}
+
+func TestListenerStartsRejectCanceledContextBeforeAcquisition(t *testing.T) {
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, createTestServiceDependencies(nil))
+	require.NoError(t, manager.initializeHTTPInfrastructure())
+	require.ErrorIs(t, manager.completeHTTPSetup(canceled), context.Canceled)
+	require.False(t, manager.httpUsed)
+	require.Nil(t, manager.httpListener)
+
+	healthManager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, createTestServiceDependencies(nil))
+	require.ErrorIs(t, healthManager.StartHealthListener(canceled, freePort(t)), context.Canceled)
+	require.False(t, healthManager.healthUsed)
+	require.Nil(t, healthManager.healthListener)
 }
 
 // TestStartHealthListener_BindsHealthAndHealthz verifies that
@@ -75,9 +107,9 @@ func TestStartHealthListener_BindsHealthAndHealthz(t *testing.T) {
 		}
 	})
 
-	// Wait briefly for the listener to come up. ListenAndServe is async
-	// in a goroutine; we poll until the port is reachable to keep the
-	// test deterministic without a wall-clock sleep.
+	// Binding is synchronous, while Serve runs in a goroutine. Poll until
+	// the bound listener serves requests to keep the test deterministic
+	// without a wall-clock sleep.
 	//
 	// gh#209 / gh#220 — budget widened from 3s to 10s. The 3s budget
 	// was empirically tight under parallel test load (race-detector
@@ -140,7 +172,43 @@ func TestStartHealthListener_ZeroIsNoOp(t *testing.T) {
 	}
 }
 
-// TestStartHealthListener_DoubleStartErrors verifies the idempotency
+func TestStartHealthListenerReportsBindFailureSynchronously(t *testing.T) {
+	listener, err := net.Listen("tcp", ":0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, createTestServiceDependencies(nil))
+	err = manager.StartHealthListener(t.Context(), port)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bind")
+}
+
+func TestCompleteHTTPSetupReportsBindFailureSynchronously(t *testing.T) {
+	listener, err := net.Listen("tcp", ":0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	manager := createTestServiceManager(ManagerConfig{HTTPPort: port}, createTestServiceDependencies(nil))
+	require.NoError(t, manager.initializeHTTPInfrastructure())
+	err = manager.completeHTTPSetup(t.Context())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bind")
+}
+
+func TestHealthListenerCannotRebindAfterCompletedStop(t *testing.T) {
+	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, createTestServiceDependencies(nil))
+	port := freePort(t)
+	require.NoError(t, manager.StartHealthListener(t.Context(), port))
+	require.NoError(t, manager.StopHealthListener(t.Context()))
+
+	err := manager.StartHealthListener(t.Context(), freePort(t))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "already used")
+}
+
+// TestStartHealthListener_DoubleStartErrors verifies the one-shot
 // guard: calling twice with a non-zero port returns an error rather
 // than silently re-binding (which would either fail at bind time with
 // a confusing OS error or leak the first listener).

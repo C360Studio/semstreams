@@ -36,9 +36,9 @@
     `WithTimeout(WithoutCancel(parent), 5s)`. Legacy `lifecyclejoin.RunPartialStartRollback` remains unchanged for
     unmigrated owners because it cannot receive a parent. Each migrated wave uses the final helper; N1 deletes the
     legacy package and proves old imports/calls zero.
-  - Wave readiness is dependency-based: R1/SM1/ML1 are roots; I1→S1 is the shared native-handle spine; unchanged
-    independent waves reuse the global inventory/design pass and may proceed concurrently. Failure blocks descendants
-    only.
+  - Wave readiness is dependency-based: R1/ML1 are roots; SM1 and I1 depend on R1, and I1→S1 is the shared
+    native-handle spine. Unchanged independent waves reuse the global inventory/design pass and may proceed
+    concurrently. Failure blocks descendants only.
   - 2026-08-19 corrected-design checkpoint: independent review returned `DESIGN APPROVE`, and the owner stated
     “agree - continue with recommendation.” Acceptance is limited to rejecting standalone F0/shared Wait, accepting
     parent-aware `RollbackFailedStart(parent, rollback)` born with R1, and selecting R1 as the first wave. Unrelated
@@ -52,6 +52,21 @@
     rollback 20→15, and final helper calls 0→5; Cancel 4, StopWithQuiesce 8, and NewOperation 3 were unchanged. The
     ledger records RED evidence and exact source identities. Task 2.3 and every Gate A/B/C, runtime, proof, release,
     archive, and tag requirement remain unchecked and incomplete.
+  - 2026-08-19 SM1 design correction: architect binding interpretation makes SM1 depend on R1. `Manager.StartAll`
+    must locally attempt bounded parent-aware rollback before returning child Start, main bind, or publisher failure;
+    process-root `StopAll` is defense-in-depth only. Planned owner -1, NewGeneration -3, and StopWithQuiesce -3 deltas
+    are unchanged; final helper calls move 5→6 and old rollback calls do not move. At this correction checkpoint,
+    independent design re-review and SM1 implementation review were still pending; it granted no credit.
+  - 2026-08-19 SM1 implementation checkpoint: independent narrow corrected-design verdict `DESIGN APPROVE` and final
+    independent implementation verdict `APPROVE` grant owner-migrated credit only to
+    `service/service_manager.go`. Adjacent tests and the process-root comment receive no owner credit. Focused service
+    race passed in 6.772s, the lifecycle matrix passed 20 repetitions in 1.845s, and lint/diff-check/strict OpenSpec
+    validation passed. Census moved owners 31→30, NewGeneration 33→30, and StopWithQuiesce 8→5; Generation.Stop 38,
+    Cancel 4, NewOperation 3, and old rollback 15 were unchanged; final helper calls moved 5→6. Full repository race
+    is not claimed green: two user-owned `.claude/worktrees` entered repository-wide scanners, causing duplicate census
+    and old graph-ingest target failures; separately, stale policy-baseline entries still expect two removed sleeps in
+    root `service/base_test.go`. Task 2.3 and every Gate A/B/C, runtime, proof, release, archive, and tag requirement
+    remain unchecked and incomplete; unrelated exported API rulings remain unapproved.
   - 2026-08-18 checkpoint: independent `semstreams-reviewer` verdict `CORRECTIONS CONFIRMED` grants owner-migrated
     credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
     worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.

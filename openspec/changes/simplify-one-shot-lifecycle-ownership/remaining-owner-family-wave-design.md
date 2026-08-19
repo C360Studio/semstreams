@@ -4,7 +4,9 @@
 > “agree - continue with recommendation,” explicitly accepting rejection of Wait/zero-owner F0, the parent-aware
 > helper born with R1, and R1 as the selected first wave. Independent R1 implementation review subsequently returned
 > `APPROVE`; owner-migrated credit is limited to the five frozen research owners. This does not approve unrelated
-> exported API rulings or complete any task or gate.
+> exported API rulings or complete any task or gate. Independent review of the narrow SM1 correction returned
+> `DESIGN APPROVE`, and independent SM1 implementation review returned `APPROVE`; owner-migrated credit is limited to
+> `service/service_manager.go`.
 
 ## Evidence identity
 
@@ -208,8 +210,21 @@ rollback -1. M1 depends on R1.
 ## SM1 — ServiceManager multi-HTTP singleton
 
 Membership: service/service_manager.go. Three server generations owner-local; sync bind/BaseContext/Shutdown/serveDone;
-health publisher cancel/done; StopAll reverse aggregation unchanged; same-instance rebind retires. Proof per
-listener/join/aggregation/budget/repeat/race. Delta owner -1, NG -3, SWQ -3. SM1 is an independent root.
+health publisher cancel/done; StopAll reverse aggregation unchanged; same-instance rebind retires.
+
+Contract correction: SM1 depends on R1 because every migrated owner with a post-acquisition Start failure uses
+`lifecyclecleanup.RollbackFailedStart(parent, rollback)`. `Manager.StartAll` must locally attempt bounded synchronous
+rollback before returning a child Start, main listener bind, or publisher failure. Process-root `StopAll` is
+defense-in-depth, not a substitute for Manager-owned failed-Start cleanup.
+
+Proof per listener/join/aggregation/budget/repeat/race, plus local bounded rollback for each post-acquisition failure.
+Delta owner -1, NG -3, SWQ -3; old lifecyclejoin rollback unchanged; final helper calls 5→6. SM1 depends on R1. No
+membership or exported surface changes.
+
+Implementation status on 2026-08-19: independent narrow corrected-design verdict `DESIGN APPROVE`, followed by
+independent implementation verdict `APPROVE` after all corrections. Owner-migrated credit is limited to
+`service/service_manager.go`; adjacent tests and the process-root comment receive no owner credit. Task 2.3, Gate
+A/B/C, runtime migration, proof, release, archive, and tag readiness remain incomplete.
 
 ## CM1 — ComponentManager singleton
 
@@ -333,13 +348,16 @@ Only final parent-aware `lifecyclecleanup.RollbackFailedStart` may remain. Every
 `lifecyclejoin.RunPartialStartRollback` call migrates with its owner; old calls and every production lifecyclejoin
 import are zero at N1. The final lifecyclecleanup helper is not a failure.
 
+Final-helper call progression is 0→5 in R1 and 5→6 in SM1. SM1 removes no old rollback call; its owner, NG, and SWQ
+deltas remain exactly those in the table.
+
 ## Dependency DAG, concurrency, and review reuse
 
 There is no single global “next wave” after reviewed design lands. A wave is executable when every declared
 prerequisite is complete and frozen membership/contract still matches reviewed global artifacts.
 
-Dependencies: R1/SM1/ML1 none; I1 R1; G1/M1/CM1 R1; S1 I1; OT1 I1; A1/O1/H1/OS1/RU1/GI1 S1; N1 every owner wave +
-API/migration/proof prerequisites. R1 is selected first; SM1/ML1 may run independently after corrected global design
+Dependencies: R1/ML1 none; I1/G1/M1/SM1/CM1 R1; S1 I1; OT1 I1; A1/O1/H1/OS1/RU1/GI1 S1; N1 every owner wave +
+API/migration/proof prerequisites. R1 is selected first; ML1 may run independently after corrected global design
 acceptance. The shared serial spine is R1 → I1 → S1 → N1, and N1 also waits for all owner waves.
 
 Failure blocks only that wave/descendants, not independent reviewed waves. Independent work may proceed concurrently
@@ -374,9 +392,9 @@ evidence required.
 
 Sixteen review units do not mean sixteen serial inventory/design ceremonies: one global inventory and corrected
 global design are reused. Seven family batches cover 28 owners; eight inventory-proven unique owners remain singleton
-implementation reviews; N1 is convergence. R1/SM1/ML1 can begin as independent roots, then the I1/S1 spine unlocks
-the port families. Expected no-split range: approximately 31–49 implementation-review cycles, 7–10 single-lane
-working weeks, or 5–8 elapsed weeks with two isolated implementation lanes and one reviewer.
+implementation reviews; N1 is convergence. R1/ML1 can begin as independent roots; R1 then unlocks SM1 and I1, and the
+I1/S1 spine unlocks the port families. Expected no-split range: approximately 31–49 implementation-review cycles,
+7–10 single-lane working weeks, or 5–8 elapsed weeks with two isolated implementation lanes and one reviewer.
 
 ## Owner rulings required before handoff
 
@@ -395,4 +413,6 @@ Independent corrected-design review returned `DESIGN APPROVE`. The owner’s “
 accepts only rejection of Wait/zero-owner F0, the parent-aware `RollbackFailedStart` born with R1, and R1 as the
 selected first wave. The unrelated exported API rulings above remain unapproved. Independent R1 implementation review
 later returned `APPROVE`, granting owner-migrated credit only to the five frozen research owner files; no broader task
-or gate credit follows.
+or gate credit follows. Independent narrow SM1 design re-review returned `DESIGN APPROVE`, and independent SM1
+implementation review returned `APPROVE`, granting owner-migrated credit only to `service/service_manager.go`. The
+unrelated exported API rulings remain unapproved, and no broader task or gate credit follows.

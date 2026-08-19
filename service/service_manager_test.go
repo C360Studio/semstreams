@@ -7,33 +7,40 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/health"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	shutdownerrs "github.com/c360studio/semstreams/pkg/errs"
 	"github.com/stretchr/testify/require"
 )
 
-type blockingHTTPGeneration struct {
+type blockingHTTPRuntime struct {
 	server          *http.Server
-	generation      *lifecyclejoin.Generation
+	listener        net.Listener
+	cancel          context.CancelFunc
+	serveDone       chan struct{}
 	handlerCtx      <-chan context.Context
 	releaseHandler  chan struct{}
 	shutdownStarted chan struct{}
+	shutdownCalled  chan struct{}
+	shutdownCalls   atomic.Int64
+	releaseOnce     sync.Once
 }
 
-func newBlockingHTTPGeneration(t *testing.T) *blockingHTTPGeneration {
+func newBlockingHTTPRuntime(t *testing.T) *blockingHTTPRuntime {
 	t.Helper()
 	runtimeCtx, cancel := context.WithCancel(t.Context())
 	handlerCtx := make(chan context.Context, 1)
 	releaseHandler := make(chan struct{})
 	shutdownStarted := make(chan struct{})
+	shutdownCalled := make(chan struct{}, 4)
 	var shutdownStartedOnce sync.Once
 	mux := http.NewServeMux()
 	mux.HandleFunc("/block", func(w http.ResponseWriter, r *http.Request) {
@@ -47,10 +54,24 @@ func newBlockingHTTPGeneration(t *testing.T) *blockingHTTPGeneration {
 			return runtimeCtx
 		},
 	}
-	server.RegisterOnShutdown(func() { shutdownStartedOnce.Do(func() { close(shutdownStarted) }) })
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	serveDone := make(chan struct{})
+	runtime := &blockingHTTPRuntime{
+		server:          server,
+		listener:        listener,
+		cancel:          cancel,
+		serveDone:       serveDone,
+		handlerCtx:      handlerCtx,
+		releaseHandler:  releaseHandler,
+		shutdownStarted: shutdownStarted,
+		shutdownCalled:  shutdownCalled,
+	}
+	server.RegisterOnShutdown(func() {
+		runtime.shutdownCalls.Add(1)
+		shutdownCalled <- struct{}{}
+		shutdownStartedOnce.Do(func() { close(shutdownStarted) })
+	})
 	go func() {
 		defer close(serveDone)
 		_ = server.Serve(listener)
@@ -73,13 +94,27 @@ func newBlockingHTTPGeneration(t *testing.T) *blockingHTTPGeneration {
 		<-serveDone
 		<-requestDone
 	})
-	return &blockingHTTPGeneration{
-		server:          server,
-		generation:      lifecyclejoin.NewGeneration(cancel, func() { <-serveDone }),
-		handlerCtx:      handlerCtx,
-		releaseHandler:  releaseHandler,
-		shutdownStarted: shutdownStarted,
-	}
+	return runtime
+}
+
+func (r *blockingHTTPRuntime) release() {
+	r.releaseOnce.Do(func() { close(r.releaseHandler) })
+}
+
+func installMainHTTPRuntime(m *Manager, runtime *blockingHTTPRuntime) {
+	m.httpServer = runtime.server
+	m.httpListener = runtime.listener
+	m.httpCancel = runtime.cancel
+	m.httpServeDone = runtime.serveDone
+	m.httpUsed = true
+}
+
+func installHealthHTTPRuntime(m *Manager, runtime *blockingHTTPRuntime) {
+	m.healthServer = runtime.server
+	m.healthListener = runtime.listener
+	m.healthCancel = runtime.cancel
+	m.healthServeDone = runtime.serveDone
+	m.healthUsed = true
 }
 
 // mockNATSClient provides a mock NATS client for testing
@@ -124,6 +159,183 @@ type stopFailService struct {
 
 func (s *stopFailService) Stop(context.Context) error { return s.err }
 
+type failedStartRollbackService struct {
+	MockService
+	start func(context.Context) error
+	stop  func(context.Context) error
+}
+
+func (s *failedStartRollbackService) Start(ctx context.Context) error { return s.start(ctx) }
+func (s *failedStartRollbackService) Stop(ctx context.Context) error  { return s.stop(ctx) }
+
+type rollbackContextObservation struct {
+	err         error
+	hasDeadline bool
+}
+
+func TestStartAllRollsBackFailedChildStartWithDetachedBoundedContext(t *testing.T) {
+	tests := []struct {
+		name               string
+		firstRollbackFails bool
+	}{
+		{name: "successful rollback makes later StopAll a no-op"},
+		{name: "failed rollback retains authority for later StopAll", firstRollbackFails: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			startErr := errors.New("later Start failed")
+			startOrderErr := errors.New("later service started before earlier service completed Start")
+			rollbackErr := errors.New("later rollback failed")
+			type rollbackContextKey string
+			const key rollbackContextKey = "failed-start"
+			parent, cancelParent := context.WithCancel(context.WithValue(t.Context(), key, "preserved"))
+
+			earlierStarted := make(chan struct{})
+			laterStopped := make(chan context.Context, 2)
+			earlierStopped := make(chan context.Context, 2)
+			releaseEarlierStop := make(chan struct{})
+			var laterStopCalls atomic.Int64
+			var earlierStopCalls atomic.Int64
+
+			earlier := &failedStartRollbackService{
+				MockService: MockService{name: "component-manager", status: StatusRunning, healthy: true},
+				start: func(context.Context) error {
+					close(earlierStarted)
+					return nil
+				},
+				stop: func(ctx context.Context) error {
+					call := earlierStopCalls.Add(1)
+					earlierStopped <- ctx
+					if call == 1 {
+						<-releaseEarlierStop
+					}
+					return nil
+				},
+			}
+			later := &failedStartRollbackService{
+				MockService: MockService{name: "later", status: StatusStarting, healthy: false},
+				start: func(context.Context) error {
+					select {
+					case <-earlierStarted:
+					default:
+						return startOrderErr
+					}
+					cancelParent()
+					return startErr
+				},
+				stop: func(ctx context.Context) error {
+					call := laterStopCalls.Add(1)
+					laterStopped <- ctx
+					if test.firstRollbackFails && call == 1 {
+						return rollbackErr
+					}
+					return nil
+				},
+			}
+
+			manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, createTestServiceDependencies(nil))
+			require.NoError(t, manager.RegisterInstance("component-manager", earlier))
+			require.NoError(t, manager.RegisterInstance("later", later))
+
+			startResult := make(chan error, 1)
+			go func() { startResult <- manager.StartAll(parent) }()
+
+			var laterRollbackCtx context.Context
+			select {
+			case laterRollbackCtx = <-laterStopped:
+			case err := <-startResult:
+				t.Fatalf("StartAll returned without rolling back the failed child Start: %v", err)
+			}
+			require.NoError(t, laterRollbackCtx.Err())
+			_, hasDeadline := laterRollbackCtx.Deadline()
+			require.True(t, hasDeadline)
+			require.Equal(t, "preserved", laterRollbackCtx.Value(key))
+
+			earlierRollbackCtx := <-earlierStopped
+			require.NoError(t, earlierRollbackCtx.Err())
+			_, hasDeadline = earlierRollbackCtx.Deadline()
+			require.True(t, hasDeadline)
+			require.Equal(t, "preserved", earlierRollbackCtx.Value(key))
+			select {
+			case err := <-startResult:
+				t.Fatalf("StartAll returned before rollback joined: %v", err)
+			default:
+			}
+
+			close(releaseEarlierStop)
+			err := <-startResult
+			require.ErrorIs(t, err, startErr)
+			if test.firstRollbackFails {
+				require.ErrorIs(t, err, rollbackErr)
+				_, retained := manager.services["later"]
+				require.True(t, retained)
+				require.Error(t, manager.StartAll(t.Context()))
+				require.NoError(t, manager.StopAll(t.Context()))
+				require.EqualValues(t, 2, laterStopCalls.Load())
+				require.EqualValues(t, 2, earlierStopCalls.Load())
+			} else {
+				require.NotErrorIs(t, err, rollbackErr)
+				require.NoError(t, manager.StopAll(t.Context()))
+				require.EqualValues(t, 1, laterStopCalls.Load())
+				require.EqualValues(t, 1, earlierStopCalls.Load())
+			}
+		})
+	}
+}
+
+func TestStartAllRollsBackStartedServiceAfterMainBindFailure(t *testing.T) {
+	occupied, err := net.Listen("tcp", ":0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = occupied.Close() })
+	port := occupied.Addr().(*net.TCPAddr).Port
+	stopObservation := make(chan rollbackContextObservation, 1)
+	service := &failedStartRollbackService{
+		MockService: MockService{name: "component-manager", status: StatusRunning, healthy: true},
+		start:       func(context.Context) error { return nil },
+		stop: func(ctx context.Context) error {
+			_, hasDeadline := ctx.Deadline()
+			stopObservation <- rollbackContextObservation{err: ctx.Err(), hasDeadline: hasDeadline}
+			return nil
+		},
+	}
+	manager := createTestServiceManager(ManagerConfig{HTTPPort: port}, createTestServiceDependencies(nil))
+	require.NoError(t, manager.RegisterInstance("component-manager", service))
+
+	err = manager.StartAll(t.Context())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bind HTTP listener")
+	observation := <-stopObservation
+	require.NoError(t, observation.err)
+	require.True(t, observation.hasDeadline)
+	require.NoError(t, manager.StopAll(t.Context()))
+}
+
+func TestStartAllRollsBackMainAndPublisherAfterPublisherStartFailure(t *testing.T) {
+	stopObservation := make(chan rollbackContextObservation, 1)
+	service := &failedStartRollbackService{
+		MockService: MockService{name: "component-manager", status: StatusRunning, healthy: true},
+		start:       func(context.Context) error { return nil },
+		stop: func(ctx context.Context) error {
+			_, hasDeadline := ctx.Deadline()
+			stopObservation <- rollbackContextObservation{err: ctx.Err(), hasDeadline: hasDeadline}
+			return nil
+		},
+	}
+	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, createTestServiceDependencies(nil))
+	require.NoError(t, manager.RegisterInstance("component-manager", service))
+	require.NoError(t, manager.startHealthPublisher(t.Context()))
+
+	err := manager.StartAll(t.Context())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "start health publisher")
+	observation := <-stopObservation
+	require.NoError(t, observation.err)
+	require.True(t, observation.hasDeadline)
+	require.True(t, manager.httpTerminal)
+	require.True(t, manager.healthPublisherTerminal)
+	require.NoError(t, manager.StopAll(t.Context()))
+}
+
 func TestStopAllRetainsServiceAuthorityAfterFailure(t *testing.T) {
 	m := NewServiceManager(NewServiceRegistry())
 	wantErr := errors.New("stop failed")
@@ -136,7 +348,7 @@ func TestStopAllRetainsServiceAuthorityAfterFailure(t *testing.T) {
 	require.Equal(t, []string{svc.name}, m.order)
 }
 
-func TestRuntimeServerGenerationCancelsBaseContextWithCanceledStopBudget(t *testing.T) {
+func TestRuntimeServerCanceledStopIsTerminalWithoutResultReplay(t *testing.T) {
 	m := NewServiceManager(NewServiceRegistry())
 	m.httpMux = http.NewServeMux()
 	m.isHTTPManager = true
@@ -149,16 +361,16 @@ func TestRuntimeServerGenerationCancelsBaseContextWithCanceledStopBudget(t *test
 	select {
 	case <-handlerCtx.Done():
 	default:
-		t.Fatal("server generation did not cancel handler BaseContext")
+		t.Fatal("server runtime did not cancel handler BaseContext")
 	}
+	require.True(t, m.httpTerminal)
 	require.NoError(t, m.stopRuntimeServers(context.Background()))
 }
 
 func TestRuntimeServerShutdownKeepsHandlerAuthorityLiveUntilHandlerReturns(t *testing.T) {
-	runtime := newBlockingHTTPGeneration(t)
+	runtime := newBlockingHTTPRuntime(t)
 	m := NewServiceManager(NewServiceRegistry())
-	m.httpServer = runtime.server
-	m.serverGeneration = runtime.generation
+	installMainHTTPRuntime(m, runtime)
 	handlerCtx := <-runtime.handlerCtx
 
 	stopDone := make(chan error, 1)
@@ -169,16 +381,15 @@ func TestRuntimeServerShutdownKeepsHandlerAuthorityLiveUntilHandlerReturns(t *te
 		t.Fatal("HTTP handler authority canceled before listener Shutdown drained it")
 	default:
 	}
-	close(runtime.releaseHandler)
+	runtime.release()
 	require.NoError(t, <-stopDone)
 	require.ErrorIs(t, handlerCtx.Err(), context.Canceled)
 }
 
 func TestHealthListenerShutdownKeepsHandlerAuthorityLiveUntilHandlerReturns(t *testing.T) {
-	runtime := newBlockingHTTPGeneration(t)
+	runtime := newBlockingHTTPRuntime(t)
 	m := NewServiceManager(NewServiceRegistry())
-	m.healthServer = runtime.server
-	m.healthGeneration = runtime.generation
+	installHealthHTTPRuntime(m, runtime)
 	handlerCtx := <-runtime.handlerCtx
 
 	stopDone := make(chan error, 1)
@@ -189,16 +400,15 @@ func TestHealthListenerShutdownKeepsHandlerAuthorityLiveUntilHandlerReturns(t *t
 		t.Fatal("health handler authority canceled before listener Shutdown drained it")
 	default:
 	}
-	close(runtime.releaseHandler)
+	runtime.release()
 	require.NoError(t, <-stopDone)
 	require.ErrorIs(t, handlerCtx.Err(), context.Canceled)
 }
 
 func TestRuntimeServerShutdownDeadlineNamesListenerOwnerAndPhase(t *testing.T) {
-	runtime := newBlockingHTTPGeneration(t)
+	runtime := newBlockingHTTPRuntime(t)
 	m := NewServiceManager(NewServiceRegistry())
-	m.httpServer = runtime.server
-	m.serverGeneration = runtime.generation
+	installMainHTTPRuntime(m, runtime)
 	<-runtime.handlerCtx
 
 	stopCtx, cancelStop := context.WithCancel(t.Context())
@@ -213,8 +423,123 @@ func TestRuntimeServerShutdownDeadlineNamesListenerOwnerAndPhase(t *testing.T) {
 	require.Equal(t, shutdownerrs.PhaseShutdownListener, shutdownErr.Phase)
 	require.ErrorIs(t, err, context.Canceled)
 
-	close(runtime.releaseHandler)
+	runtime.release()
 	require.NoError(t, m.stopRuntimeServers(t.Context()))
+	require.EqualValues(t, 1, runtime.shutdownCalls.Load(), "completed repeated Stop must not replay Shutdown")
+}
+
+func TestManagerRuntimeStopsRejectNilBeforeStateAndUnusedStopIsNoOp(t *testing.T) {
+	m := NewServiceManager(NewServiceRegistry())
+	require.Error(t, m.Stop(nil))
+	require.Error(t, m.StopAll(nil))
+	require.Error(t, m.StopHealthListener(nil))
+	require.False(t, m.httpUsed)
+	require.False(t, m.healthUsed)
+	require.False(t, m.healthPublisherUsed)
+	require.NoError(t, m.stopRuntimeServers(t.Context()))
+	require.NoError(t, m.stopHealthPublisher(t.Context()))
+}
+
+func TestHealthPublisherOwnsCancelAndDoneAndRejectsRestart(t *testing.T) {
+	m := NewServiceManager(NewServiceRegistry())
+	require.NoError(t, m.startHealthPublisher(t.Context()))
+	done := m.healthPublisherDone
+	require.NotNil(t, m.healthPublisherCancel)
+	require.NotNil(t, done)
+
+	require.NoError(t, m.stopHealthPublisher(t.Context()))
+	select {
+	case <-done:
+	default:
+		t.Fatal("health publisher Stop returned before exact done")
+	}
+	require.NoError(t, m.stopHealthPublisher(t.Context()))
+	require.Error(t, m.startHealthPublisher(t.Context()))
+}
+
+func TestHealthPublisherCanceledStopIsHonestAndTerminal(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	m := NewServiceManager(NewServiceRegistry())
+	m.healthPublisherUsed = true
+	m.healthPublisherCancel = func() {}
+	m.healthPublisherDone = done
+
+	stopCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, m.stopHealthPublisher(stopCtx), context.Canceled)
+	require.NoError(t, m.stopHealthPublisher(t.Context()))
+}
+
+func TestFailedStartPublisherCleanupRetainsExactRecordUntilTerminalRetry(t *testing.T) {
+	done := make(chan struct{})
+	cancelCalled := make(chan struct{}, 2)
+	ownedCancel := context.CancelFunc(func() { cancelCalled <- struct{}{} })
+	m := NewServiceManager(NewServiceRegistry())
+	m.healthPublisherUsed = true
+	m.healthPublisherCancel = ownedCancel
+	m.healthPublisherDone = done
+
+	expired, cancelExpired := context.WithCancel(t.Context())
+	cancelExpired()
+	require.ErrorIs(t, m.cleanupFailedStart(expired), context.Canceled)
+	<-cancelCalled
+	require.True(t, m.healthPublisherUsed)
+	require.False(t, m.healthPublisherTerminal)
+	require.False(t, m.healthPublisherStopping)
+	require.Equal(t, reflect.ValueOf(ownedCancel).Pointer(), reflect.ValueOf(m.healthPublisherCancel).Pointer())
+	require.Equal(t, done, m.healthPublisherDone)
+
+	stopResult := make(chan error, 1)
+	go func() { stopResult <- m.StopAll(t.Context()) }()
+	<-cancelCalled
+	select {
+	case err := <-stopResult:
+		t.Fatalf("StopAll returned before the retained publisher completed: %v", err)
+	default:
+	}
+	close(done)
+	require.NoError(t, <-stopResult)
+	require.True(t, m.healthPublisherTerminal)
+	require.Nil(t, m.healthPublisherCancel)
+	require.NoError(t, m.StopAll(t.Context()))
+}
+
+func TestFailedStartHTTPCleanupRetainsExactRecordWithoutForcingConnectionsClosed(t *testing.T) {
+	runtime := newBlockingHTTPRuntime(t)
+	m := NewServiceManager(NewServiceRegistry())
+	installMainHTTPRuntime(m, runtime)
+	handlerCtx := <-runtime.handlerCtx
+	originalCancel := reflect.ValueOf(runtime.cancel).Pointer()
+
+	expired, cancelExpired := context.WithCancel(t.Context())
+	cancelExpired()
+	require.ErrorIs(t, m.cleanupFailedStart(expired), context.Canceled)
+	<-runtime.shutdownCalled
+	require.Same(t, runtime.server, m.httpServer)
+	require.Equal(t, runtime.listener, m.httpListener)
+	require.Equal(t, originalCancel, reflect.ValueOf(m.httpCancel).Pointer())
+	require.Equal(t, runtime.serveDone, m.httpServeDone)
+	require.True(t, m.httpUsed)
+	require.False(t, m.httpTerminal)
+	require.False(t, m.httpStopping)
+	require.ErrorIs(t, handlerCtx.Err(), context.Canceled, "failed-Start cleanup must cancel remaining runtime authority")
+
+	stopResult := make(chan error, 1)
+	go func() { stopResult <- m.StopAll(t.Context()) }()
+	<-runtime.shutdownCalled
+	select {
+	case err := <-stopResult:
+		t.Fatalf("StopAll returned before the retained HTTP handler completed: %v", err)
+	default:
+	}
+	runtime.release()
+	require.NoError(t, <-stopResult)
+	require.True(t, m.httpTerminal)
+	require.Nil(t, m.httpServer)
+	require.Nil(t, m.httpListener)
+	require.Nil(t, m.httpCancel)
+	require.NoError(t, m.StopAll(t.Context()))
 }
 
 func (m *MockService) Name() string { return m.name }
