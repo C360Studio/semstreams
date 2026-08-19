@@ -1,9 +1,10 @@
 # Remaining lifecycle-owner family-wave design
 
-> **Status:** Corrected target design only; pending independent design review. The owner explicitly agreed to reject
-> Wait/zero-owner F0 and continue with the parent-aware helper folded into the first genuine family. This is not
-> approval of unrelated exported API rulings. No implementation, owner, gate, proof, release, archive, or tag credit
-> is granted.
+> **Status:** Independent corrected-design review returned `DESIGN APPROVE`. The owner then stated
+> “agree - continue with recommendation,” explicitly accepting rejection of Wait/zero-owner F0, the parent-aware
+> helper born with R1, and R1 as the selected first wave. Independent R1 implementation review subsequently returned
+> `APPROVE`; owner-migrated credit is limited to the five frozen research owners. This does not approve unrelated
+> exported API rulings or complete any task or gate.
 
 ## Evidence identity
 
@@ -163,6 +164,11 @@ tests Stop vs blocked Start/startDone, partial sub/LLM failure exact rollback, e
 blocked callback drain before cancel, LLM order, repeat nil, restart reject, race. Gates final helper+five package race
 and focused NATS callback integration. Delta owners -5, NG -5, Stop -5, old rollback -5, final helper calls +5; no
 exported surface.
+
+Implementation status on 2026-08-19: independent `semstreams-reviewer` verdict `APPROVE`. Owner-migrated credit is
+limited to the frozen assess, classify, execute, route, and synthesize owner files. The final parent-aware helper was
+born with those five real consumers and receives no separate owner credit. Task 2.3, Gate A/B/C, runtime migration,
+proof, release, archive, and tag readiness remain incomplete.
 
 ## G1 — graph-read serialized Q/F family
 
@@ -385,6 +391,8 @@ working weeks, or 5–8 elapsed weeks with two isolated implementation lanes and
 7. Confirm pprof remains out-of-scope process-lifetime exception.
 8. Accept dependency-only concurrency and global inventory/design review reuse for unchanged waves.
 
-The owner explicitly agreed to reject Wait/zero-owner F0 and continue with the parent-aware helper folded into the
-first genuine family. This does not approve the unrelated exported API rulings above. Do not mark the corrected global
-design approved until it receives independent design review.
+Independent corrected-design review returned `DESIGN APPROVE`. The owner’s “agree - continue with recommendation”
+accepts only rejection of Wait/zero-owner F0, the parent-aware `RollbackFailedStart` born with R1, and R1 as the
+selected first wave. The unrelated exported API rulings above remain unapproved. Independent R1 implementation review
+later returned `APPROVE`, granting owner-migrated credit only to the five frozen research owner files; no broader task
+or gate credit follows.

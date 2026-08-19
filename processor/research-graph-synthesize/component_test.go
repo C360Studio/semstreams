@@ -31,6 +31,24 @@ func TestComponent_OutputPorts(t *testing.T) {
 	}
 }
 
+func TestComponentLifecycleIsOneShot(t *testing.T) {
+	c := newTestComponent(&fakeLoopStore{}, &fakeSynthesizer{})
+	c.inputs = nil
+
+	if err := c.Start(t.Context()); err != nil {
+		t.Fatalf("Start() = %v", err)
+	}
+	if err := c.Stop(t.Context()); err != nil {
+		t.Fatalf("Stop() = %v", err)
+	}
+	if err := c.Stop(t.Context()); err != nil {
+		t.Fatalf("repeated Stop() = %v, want nil", err)
+	}
+	if err := c.Start(t.Context()); err == nil {
+		t.Fatal("Start() after completed Stop returned nil")
+	}
+}
+
 // fakeLoopStore replaces natsLoopStore. Records reads + writes so
 // the test can assert on key ordering, envelope shape, and miss vs
 // hit paths.
@@ -39,6 +57,7 @@ type fakeLoopStore struct {
 	intentEnteredOnce sync.Once
 	intentEntered     chan struct{}
 	intentRelease     chan struct{}
+	intentContext     chan context.Context
 
 	intent    *research.Intent
 	intentErr error
@@ -65,7 +84,10 @@ type fakeLoopStore struct {
 	writeOrder []string
 }
 
-func (s *fakeLoopStore) GetIntent(_ context.Context, _ string) (*research.Intent, error) {
+func (s *fakeLoopStore) GetIntent(ctx context.Context, _ string) (*research.Intent, error) {
+	if s.intentContext != nil {
+		s.intentContext <- ctx
+	}
 	if s.intentEntered != nil {
 		s.intentEnteredOnce.Do(func() { close(s.intentEntered) })
 	}
@@ -99,7 +121,7 @@ func (p *blockingNATSPort) MarshalJSON() ([]byte, error) {
 	return json.Marshal(component.NATSPort{Subject: p.subject})
 }
 
-func TestStartRetainsFailedPartialGenerationForLaterStopRejoin(t *testing.T) {
+func TestStartRetainsFailedPartialCleanupForLaterStop(t *testing.T) {
 	server, err := natsserver.NewServer(&natsserver.Options{
 		Port: -1, NoLog: true, NoSigs: true,
 	})
@@ -143,25 +165,26 @@ func TestStartRetainsFailedPartialGenerationForLaterStopRejoin(t *testing.T) {
 	startErr := <-startResult
 	require.Error(t, startErr)
 	require.ErrorIs(t, startErr, context.DeadlineExceeded)
-	require.NotNil(t, c.generation, "failed rollback must retain exact generation authority")
+	require.True(t, c.cleanupPending, "failed rollback must retain cleanup authority")
+	require.NotNil(t, c.cancel, "failed rollback must retain cancellation authority")
 	require.Len(t, c.subscriptions, 1, "failed rollback must retain the allocated subscription")
-	failedGeneration := c.generation
 
 	retryErr := c.Start(t.Context())
 	require.Error(t, retryErr)
-	require.ErrorContains(t, retryErr, "already started")
-	require.Same(t, failedGeneration, c.generation, "a second Start must not overwrite retained cleanup authority")
+	require.ErrorContains(t, retryErr, "already used")
+	require.True(t, c.cleanupPending, "a second Start must not overwrite retained cleanup authority")
+	require.Len(t, c.subscriptions, 1)
 
 	close(handlerRelease)
 	require.NoError(t, c.Stop(t.Context()))
 	require.Empty(t, c.subscriptions)
-	require.Nil(t, c.generation, "terminal Stop must release the completed generation")
+	require.False(t, c.cleanupPending)
+	require.Nil(t, c.cancel)
+	require.True(t, c.terminal)
 
 	c.inputs = []component.Port{first}
-	require.NoError(t, c.Start(t.Context()), "a new generation may start after exact cleanup reaches terminal success")
-	require.NotNil(t, c.generation)
-	require.NotSame(t, failedGeneration, c.generation)
-	require.NoError(t, c.Stop(t.Context()))
+	require.Error(t, c.Start(t.Context()), "same-instance restart must remain rejected after exact cleanup")
+	require.NoError(t, c.Stop(t.Context()), "completed repeated Stop must be nil")
 }
 
 func (s *fakeLoopStore) GetExecutionOutput(_ context.Context, _ string) (*research.ExecutionOutput, error) {

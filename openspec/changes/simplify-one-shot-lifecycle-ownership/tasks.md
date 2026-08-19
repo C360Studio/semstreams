@@ -39,6 +39,19 @@
   - Wave readiness is dependency-based: R1/SM1/ML1 are roots; I1→S1 is the shared native-handle spine; unchanged
     independent waves reuse the global inventory/design pass and may proceed concurrently. Failure blocks descendants
     only.
+  - 2026-08-19 corrected-design checkpoint: independent review returned `DESIGN APPROVE`, and the owner stated
+    “agree - continue with recommendation.” Acceptance is limited to rejecting standalone F0/shared Wait, accepting
+    parent-aware `RollbackFailedStart(parent, rollback)` born with R1, and selecting R1 as the first wave. Unrelated
+    exported API rulings remain unapproved. At that checkpoint R1 implementation was under review with no verdict or
+    owner-migrated credit.
+  - 2026-08-19 R1 implementation checkpoint: independent `semstreams-reviewer` verdict `APPROVE` grants
+    owner-migrated credit only to the frozen assess, classify, execute, route, and synthesize owner files and records
+    final parent-aware helper birth with five real consumers. All-six race evidence passed in 1.209s/6.488s/6.783s/
+    6.871s/7.424s/7.114s; the new assess/classify/route expiry case passed three times under race; lint, diff-check, and
+    strict OpenSpec validation passed. Census moved owners 36→31, NewGeneration 38→33, Generation.Stop 43→38, old
+    rollback 20→15, and final helper calls 0→5; Cancel 4, StopWithQuiesce 8, and NewOperation 3 were unchanged. The
+    ledger records RED evidence and exact source identities. Task 2.3 and every Gate A/B/C, runtime, proof, release,
+    archive, and tag requirement remain unchecked and incomplete.
   - 2026-08-18 checkpoint: independent `semstreams-reviewer` verdict `CORRECTIONS CONFIRMED` grants owner-migrated
     credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
     worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.

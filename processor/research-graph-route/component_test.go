@@ -13,7 +13,6 @@ import (
 
 	"github.com/c360studio/semstreams/agentic/research"
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/graph/llm"
 	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/model"
 )
@@ -22,7 +21,11 @@ import (
 // tests. Records all reads + writes so the test can assert on key
 // ordering, envelope shape, and miss vs hit paths.
 type fakeLoopStore struct {
-	mu sync.Mutex
+	mu                sync.Mutex
+	intentEnteredOnce sync.Once
+	intentEntered     chan struct{}
+	intentRelease     chan struct{}
+	intentContext     chan context.Context
 
 	intent    *research.Intent
 	intentErr error
@@ -42,7 +45,34 @@ type fakeLoopStore struct {
 	writeOrder []string
 }
 
-func (s *fakeLoopStore) GetIntent(_ context.Context, _ string) (*research.Intent, error) {
+func TestComponentLifecycleIsOneShot(t *testing.T) {
+	c := newTestComponent(&fakeLoopStore{}, &fakeRouter{})
+	c.inputs = nil
+
+	if err := c.Start(t.Context()); err != nil {
+		t.Fatalf("Start() = %v", err)
+	}
+	if err := c.Stop(t.Context()); err != nil {
+		t.Fatalf("Stop() = %v", err)
+	}
+	if err := c.Stop(t.Context()); err != nil {
+		t.Fatalf("repeated Stop() = %v, want nil", err)
+	}
+	if err := c.Start(t.Context()); err == nil {
+		t.Fatal("Start() after completed Stop returned nil")
+	}
+}
+
+func (s *fakeLoopStore) GetIntent(ctx context.Context, _ string) (*research.Intent, error) {
+	if s.intentContext != nil {
+		s.intentContext <- ctx
+	}
+	if s.intentEntered != nil {
+		s.intentEnteredOnce.Do(func() { close(s.intentEntered) })
+	}
+	if s.intentRelease != nil {
+		<-s.intentRelease
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.getIntentCalls++
@@ -403,85 +433,6 @@ func TestComponent_HandleMessage_ConcurrentDispatch(t *testing.T) {
 	if snapshots != n || triggers != n {
 		t.Errorf("snapshot=%d trigger=%d, want %d each", snapshots, triggers, n)
 	}
-}
-
-// fakeLLMClient implements graph/llm.Client with no-op methods for
-// gh#189's concurrent-Start/Stop race test. Tracks Close invocations
-// so the test can assert "Stop saw a non-nil client and closed it"
-// vs "Stop saw a nil-assigned client" across many iterations.
-type fakeLLMClient struct {
-	closeCount atomic.Int64
-}
-
-func (f *fakeLLMClient) ChatCompletion(context.Context, llm.ChatRequest) (*llm.ChatResponse, error) {
-	return &llm.ChatResponse{Content: "test"}, nil
-}
-func (f *fakeLLMClient) Model() string { return "fake-test" }
-func (f *fakeLLMClient) Close() error  { f.closeCount.Add(1); return nil }
-
-// TestComponent_ConcurrentInitAndStop_NoRace empirically validates the
-// gh#189 fix: the c.mu guard around both initRouter's write to
-// c.llmClient/c.router (line ~225) AND Stop's close+nil-assign
-// (line ~314) must serialize so `go test -race` reports no data race
-// across many iterations.
-//
-// Pre-fix: only Stop's nil-assign was under c.mu — initRouter's write
-// at line 221 was unprotected, so concurrent Start+Stop produced a
-// flaggable race on c.llmClient. go-reviewer caught the "narrows the
-// race" framing as dishonest and asked for empirical resolution; this
-// test IS that resolution.
-//
-// Run under -race to validate. Plain `go test` will pass either way;
-// the test's value is the data-race assertion the race detector
-// performs in parallel.
-func TestComponent_ConcurrentInitAndStop_NoRace(t *testing.T) {
-	// The mutex-protected sections we're stressing are short — even
-	// without coordination, 200 iterations gives the race detector
-	// plenty of opportunity to interleave the two goroutines and
-	// observe an unprotected access if the mutex contract is wrong.
-	const iters = 200
-
-	for i := 0; i < iters; i++ {
-		c := &Component{
-			config: DefaultConfig(),
-			logger: quietLogger(),
-		}
-
-		// In-flight initRouter-equivalent: lock c.mu, write the two
-		// fields that the production initRouter writes (c.llmClient +
-		// c.router), release. Race-detector sees these writes;
-		// production fix wraps the SAME writes in the SAME lock.
-		writeDone := make(chan struct{})
-		go func() {
-			defer close(writeDone)
-			client := &fakeLLMClient{}
-			c.mu.Lock()
-			c.llmClient = client
-			c.router = newLLMRouterAdapter(client)
-			c.mu.Unlock()
-		}()
-
-		// Concurrent Stop-equivalent on the same fields. The lock
-		// ordering MUST serialize this against the writer above.
-		go func() {
-			c.mu.Lock()
-			if c.llmClient != nil {
-				_ = c.llmClient.Close()
-				c.llmClient = nil
-			}
-			c.mu.Unlock()
-		}()
-
-		<-writeDone
-		// Drain the Stop goroutine by re-acquiring under lock — this
-		// also blocks until any in-flight Stop completes.
-		c.mu.Lock()
-		c.mu.Unlock() //nolint:staticcheck // intentional drain-by-lock
-	}
-	// The race detector is the assertion; this log line documents the
-	// run for human-readable test output and satisfies linters that
-	// want every test parameter to be used.
-	t.Logf("ran %d concurrent init+stop iterations under c.mu; -race would have flagged any unprotected access", iters)
 }
 
 func TestConfig_ApplyDefaultsFillsZeros(t *testing.T) {

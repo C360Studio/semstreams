@@ -100,6 +100,116 @@ patch is required; after target-exact cleanup the bytes are intentionally discar
 them into R1. If the owner wants recoverability despite rejection, the writer first materializes the actual patch—not
 merely a hash.
 
+### Corrected family-wave design authority checkpoint — 2026-08-19
+
+Independent corrected-design review returned `DESIGN APPROVE` for
+`remaining-owner-family-wave-design.md` at reviewed SHA-256
+`4ceb09c9b98c7d1f5a250d95533814951d367538d9ef863c3116b7e6a97afadf`. The owner then stated
+“agree - continue with recommendation.” That acceptance is limited to rejecting standalone F0 and a shared Wait
+helper, accepting parent-aware `internal/lifecyclecleanup.RollbackFailedStart(parent, rollback)` born with R1, and
+selecting R1 as the first wave.
+
+The unrelated exported API rulings in the reviewed design remain unapproved. At this design-authority checkpoint, R1
+implementation was still under review and no implementation verdict had yet been recorded. This checkpoint grants no
+implementation, owner-migrated, Gate A/B/C, runtime-migration, proof, release, archive, or tag credit. Tasks and gates
+remain unchecked.
+
+### R1 research-five owner-family implementation checkpoint — 2026-08-19
+
+Independent `semstreams-reviewer` verdict `APPROVE` applies to the R1 dirty worktree based on full commit
+`7a14e4ab2c1ce7b9815555d1bd40eb79776a2a09`. Owner-migrated credit is granted only to these five frozen production
+owner files:
+
+- `processor/research-graph-assess/component.go`;
+- `processor/research-graph-classify/component.go`;
+- `processor/research-graph-execute/component.go`;
+- `processor/research-graph-route/component.go`;
+- `processor/research-graph-synthesize/component.go`.
+
+R1 also births final parent-aware `internal/lifecyclecleanup.RollbackFailedStart(parent, rollback)` with five real
+owner consumers. The helper receives no owner credit. The legacy lifecyclejoin implementation is unchanged, and no
+unrelated exported API ruling is approved by this checkpoint.
+
+The developer RED transcript is recorded conservatively as causal TDD evidence, not as a later green result:
+
+1. The first R1 test run failed to build because the accepted parent-aware helper did not yet exist.
+2. After helper compilation, the research packages exposed same-instance restart expectations that fail under the
+   accepted one-shot contract.
+3. The classify fixture required correction to remove unrelated invalid setup before it could test lifecycle behavior.
+4. Each new assess/classify/route expiry test was later mutation-proved RED before the accepted implementation was
+   restored.
+
+Independent all-six race evidence:
+
+| Package | Result | Elapsed |
+|---|---|---:|
+| `./internal/lifecyclecleanup` | PASS | 1.209s |
+| `./processor/research-graph-assess` | PASS | 6.488s |
+| `./processor/research-graph-classify` | PASS | 6.783s |
+| `./processor/research-graph-execute` | PASS | 6.871s |
+| `./processor/research-graph-route` | PASS | 7.424s |
+| `./processor/research-graph-synthesize` | PASS | 7.114s |
+
+The new `TestFailedStartRollbackExpiryRetainsPartialSubscription` case passed three times under the race detector in
+assess, classify, and route, at approximately 17 seconds per package. `task lint`, `git diff --check`, and strict
+OpenSpec validation also passed.
+
+The production-only recovery census moved exactly as reviewed:
+
+| Measurement | HEAD `7a14e4ab` | R1 worktree | Delta |
+|---|---:|---:|---:|
+| Production owner files importing `internal/lifecyclejoin` | 36 | 31 | -5 |
+| `lifecyclejoin.NewGeneration` | 38 | 33 | -5 |
+| `Generation.Stop` | 43 | 38 | -5 |
+| External `RunPartialStartRollback` calls | 20 | 15 | -5 |
+| Final parent-aware `RollbackFailedStart` calls | 0 | 5 | +5 |
+| External `Generation.Cancel` | 4 | 4 | 0 |
+| `Generation.StopWithQuiesce` | 8 | 8 | 0 |
+| `lifecyclejoin.NewOperation` | 3 | 3 | 0 |
+
+`git diff --quiet -- internal/lifecyclejoin` returned success. The unrelated Metrics inventory remained byte-identical
+at SHA-256 `8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`.
+
+Stable R1 source identities for this checkpoint are:
+
+- `internal/lifecyclecleanup/lifecyclecleanup.go`:
+  `c0e93a428a0e1fcf4de670be87aaab08d3b56c5d5b40f23d3e10a9d2b0035001`;
+- `internal/lifecyclecleanup/lifecyclecleanup_test.go`:
+  `ebca025fc6aeb9fe856620c4f4f97e0e5a91f664886a97f0738c9194c51db7b8`;
+- `processor/research-graph-assess/component.go`:
+  `d41c24a88838f7d6bac0517b90e297617d45eba0a19635bac931982ddfeded3e`;
+- `processor/research-graph-assess/component_test.go`:
+  `6ad899332b5016510b6a93af33650dbddbdae8026fbb7c57b7a60a7c821df817`;
+- `processor/research-graph-assess/lifecycle_test.go`:
+  `6c7e3ddd98c351acd0a5f8dd72b7bb48216a8648edcbd688f1c8be63a938975d`;
+- `processor/research-graph-classify/component.go`:
+  `8b2c139b7cb54bf24530b4f7f5a640148f01d00795f3526cd835ccb148899e5a`;
+- `processor/research-graph-classify/component_test.go`:
+  `4e50b7d7ffc13c5464e173eee1717224c4b6f6109c84e27b762679a8a2866958`;
+- `processor/research-graph-classify/lifecycle_test.go`:
+  `7dd9809706ed00ab5d2c7d40a6568d782045ba9a9a7f27e4eb2f5bae642f1c71`;
+- `processor/research-graph-execute/component.go`:
+  `49bb6cc8045847bba95df37937423058e7d9ee8e00fd0245e3e387c2aae85c33`;
+- `processor/research-graph-execute/component_test.go`:
+  `817b88f3234eab260eb3508a62f2a22e2326e9e2bbd33d7fc960e12e1591aceb`;
+- `processor/research-graph-execute/lifecycle_test.go`:
+  `358ecb2b4ad1e24a8f77d35b99e62292156399201b264a53ed0df98f86ecc85d`;
+- `processor/research-graph-route/component.go`:
+  `f1f85d18a4ff662ce6e1a714f6d1869de506f17069e2a8c570d76ec21e1ab550`;
+- `processor/research-graph-route/component_test.go`:
+  `bf853432b79968938ec996f35b6d7842ae38b2853caaee88f3343d57223991d6`;
+- `processor/research-graph-route/lifecycle_test.go`:
+  `49320f99bdd969097aeb9ba345420a84a2e02c76738a43de343c9ed3bf5f4bca`;
+- `processor/research-graph-synthesize/component.go`:
+  `94f838e1680f6de6689df14b98b0f265b749e863d576c0e780f29aff794fe852`;
+- `processor/research-graph-synthesize/component_test.go`:
+  `e9bb57caabc4bc5b16996229e5b23ac4cf311688d2a8f9d7cffb0f02bcbacc7b`;
+- `processor/research-graph-synthesize/lifecycle_test.go`:
+  `3ae02a9ed63fddf5ee194b5194bcf58b4de3abcd0eaa9d4530e9f4e9f41ddb0b`.
+
+Task 2.3 and Gate A/B/C remain unchecked and incomplete. This checkpoint grants no runtime-migration, proof, release,
+archive, or tag credit.
+
 ## Completion vocabulary
 
 Use only these terms in status reports, PR descriptions, and handoffs:

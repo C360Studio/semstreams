@@ -32,6 +32,24 @@ type recordingPublisher struct {
 	addErr error
 }
 
+func TestComponentLifecycleIsOneShot(t *testing.T) {
+	c := newLifecycleTestComponent(t)
+	c.inputs = nil
+
+	if err := c.Start(t.Context()); err != nil {
+		t.Fatalf("Start() = %v", err)
+	}
+	if err := c.Stop(t.Context()); err != nil {
+		t.Fatalf("Stop() = %v", err)
+	}
+	if err := c.Stop(t.Context()); err != nil {
+		t.Fatalf("repeated Stop() = %v, want nil", err)
+	}
+	if err := c.Start(t.Context()); err == nil {
+		t.Fatal("Start() after completed Stop returned nil")
+	}
+}
+
 // Create satisfies llmwrap.TriplePublisher. The classify component only appends
 // onto the already-born pipeline loop entity, so this is present for interface
 // conformance and is not exercised here.
@@ -64,7 +82,11 @@ func (r *recordingPublisher) lastBatch() []message.Triple {
 // tests. Records GetIntent calls and PutClassifierOutput /
 // PutSnapshot writes so the test can assert on key + envelope shape.
 type fakeLoopStore struct {
-	mu sync.Mutex
+	mu                sync.Mutex
+	intentEnteredOnce sync.Once
+	intentEntered     chan struct{}
+	intentRelease     chan struct{}
+	intentContext     chan context.Context
 
 	intent    *research.Intent
 	intentErr error
@@ -82,7 +104,16 @@ type fakeLoopStore struct {
 	writeOrder []string
 }
 
-func (s *fakeLoopStore) GetIntent(_ context.Context, _ string) (*research.Intent, error) {
+func (s *fakeLoopStore) GetIntent(ctx context.Context, _ string) (*research.Intent, error) {
+	if s.intentContext != nil {
+		s.intentContext <- ctx
+	}
+	if s.intentEntered != nil {
+		s.intentEnteredOnce.Do(func() { close(s.intentEntered) })
+	}
+	if s.intentRelease != nil {
+		<-s.intentRelease
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.getCalls++
