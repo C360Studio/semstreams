@@ -1,7 +1,9 @@
 # Remaining lifecycle-owner family-wave design
 
-> **Status:** Target design only. **NOT owner-approved; pending independent design review.** No implementation, owner,
-> gate, proof, release, archive, or tag credit is granted.
+> **Status:** Corrected target design only; pending independent design review. The owner explicitly agreed to reject
+> Wait/zero-owner F0 and continue with the parent-aware helper folded into the first genuine family. This is not
+> approval of unrelated exported API rulings. No implementation, owner, gate, proof, release, archive, or tag credit
+> is granted.
 
 ## Evidence identity
 
@@ -22,22 +24,35 @@ preserves its 36-owner membership and exact census.
 4. One “core-only” wave combining Research and graph-read. Cost: ten owners in one review, but Research is M-primary
    (Start unlocks before acquisition and requires startDone/failed-Start authority) while graph-read is serialized Q/F
    with worker/watcher exceptions. Shared Subscription tests do not make their Start contracts equivalent. Do not
-   combine; run them concurrently after F0 with one shared proof matrix.
-5. Recommended: frozen contract-equivalent family batches plus eight singleton protocol exceptions, one stateless
-   prerequisite, one atomic non-port acquisition/bootstrap wave, and one final NATS retirement wave. This reduces 36
-   owner reviews to 15: seven multi-owner batches cover 28 owners; only the eight genuinely unique owners remain
-   singletons.
+   combine; G1 depends on R1’s final rollback-helper contract.
+5. Recommended: frozen contract-equivalent family batches plus eight singleton protocol exceptions, one atomic
+   non-port acquisition/bootstrap wave, and one final NATS retirement wave. Sixteen review units contain 15 owner
+   waves: seven multi-owner batches cover 28 owners; only the eight genuinely unique owners remain singletons.
 
 ## Recommended rulings for owner adoption
 
 D1. Each of the 36 owners appears in exactly one frozen owner wave below. Moving a member requires an explicit split
 ruling; implementation does not silently reshuffle membership.
 
-D2. F0 is the next prerequisite slice, but the helpers land immediately in their final narrow home: package
-`internal/lifecyclecleanup`, symbols `Wait` and `RollbackFailedStart`. Migrated waves import only that package.
-`internal/lifecyclejoin.RunPartialStartRollback` becomes a temporary forwarding compatibility symbol for unmigrated
-owners; no migrated wave calls it. N1 deletes `internal/lifecyclejoin` in full, so both the package-import and
-old-symbol zero gates are reachable.
+D2. There is no zero-owner helper wave and no shared Wait helper. Exact completion waits remain owner-local `select`
+operations over exact done/Closed channels. The only final shared helper is
+`internal/lifecyclecleanup.RollbackFailedStart(parent, rollback)`, born with the first real owner-family wave R1. It
+synchronously invokes failed-Start cleanup under `context.WithTimeout(context.WithoutCancel(parent), 5*time.Second)`.
+Legacy `internal/lifecyclejoin.RunPartialStartRollback(rollback)` remains byte-for-byte unchanged for unmigrated owners
+because its signature cannot receive the parent; it does not forward to the final helper. Every migrated owner calls
+the final parent-aware helper. N1 deletes the legacy package and old symbol after their call/import censuses reach
+zero.
+
+Exact API: `func RollbackFailedStart(parent context.Context, rollback func(context.Context) error) error`.
+
+Contract: reject nil parent before callback; valid parent+nil rollback nil; only
+`WithTimeout(WithoutCancel(parent), 5s)`; preserve values not cancellation/deadline; synchronous caller goroutine; no
+goroutine/state/cache/rejoin/detached work; rollback honors bound/joins; callback+expiry errors joined. No Wait,
+compatibility forwarder, or lifecyclecleanup package exists before R1.
+
+Adopter seam: the helper is internal, so it creates no adopter bill; a component author knows nothing new and sees no
+outside effect. Discovery is in-repo compile failure only. The five-second budget is fixed, framework-owned, and
+observes completion; it exposes no prediction knob. External NATS and ConsumeDurable surfaces remain unchanged.
 
 D3. Non-port consumption cuts over atomically in I1 because its complete production call-site set can be migrated
 together. Port-backed consumption uses a temporary, target-shaped handle-return bridge born with immediate in-repo
@@ -54,7 +69,7 @@ only inside M1; pprof remains the explicit process-lifetime exception and is out
 D6. Component/service lifecycle interfaces, config, subjects, ports, durable names, and Prometheus endpoint behavior
 remain unchanged. Normal Stop never deletes durable topology.
 
-D7. Only final `lifecyclecleanup.RollbackFailedStart` may remain. Every old
+D7. Only final parent-aware `lifecyclecleanup.RollbackFailedStart` may remain. Every old
 `lifecyclejoin.RunPartialStartRollback` call migrates with its owner; old calls and every production lifecyclejoin
 import are zero at N1.
 
@@ -86,33 +101,6 @@ The user’s batch-process approval does not approve them.
    read-only observation records separated from lifecycle.
 9. No Start/Stop path calls Client Stop/Delete by name. Deletion remains fixture/admin-only.
 
-## F0 — final stateless lifecycle-cleanup primitives
-
-Owner membership: none.
-
-Exact production scope:
-
-- final package `internal/lifecyclecleanup`;
-- `Wait(ctx context.Context, done <-chan struct{}) error`;
-- `RollbackFailedStart(rollback func(context.Context) error) error`;
-- tests in same final package;
-- compatibility-only `internal/lifecyclejoin.RunPartialStartRollback`, forwarding to
-  `lifecyclecleanup.RollbackFailedStart` for unmigrated owners.
-
-`Wait` stores nothing, starts no goroutine, rejects nil context and nil completion, returns nil on exact completion,
-returns `ctx.Err()` otherwise, and deterministically prefers already-observable completion over simultaneous
-cancellation. `RollbackFailedStart` is synchronous, starts no detached work, invokes callback under accepted fixed
-five-second timeout-only cleanup context, accepts nil callback as nil, and returns callback/timeout failure without
-retaining it.
-
-F0 does not add `Wait` to legacy lifecyclejoin. It does not move Generation/Operation. Every later owner wave replaces
-old rollback with final RollbackFailedStart and uses Wait for exact done. N1 deletes forwarding and lifecyclejoin after
-zero imports.
-
-TDD: final-package failures for nil ctx/done, closed completion, cancellation/race, zero goroutine/state, nil rollback,
-callback error, timeout, sync return; compatibility equality test. Gate
-`go test -race ./internal/lifecyclecleanup ./internal/lifecyclejoin`. F0 census zero; old rollback stays 20 until waves.
-
 ## I1 — atomic non-port native ownership + Milestone pair
 
 Frozen owner membership: `service/milestone_service.go`, `agentic/agentrun/agentrun.go`.
@@ -137,7 +125,7 @@ incumbent replacement, maxdelivery Stop, no deletion, failed rollback then later
 Stop nil; race packages `./agentic/agentrun ./service ./internal/maxdelivery ./natsclient ./component` plus relevant
 integration tests.
 
-Delta: owners -2, NG -1, Stop -1, Operation -1; old lifecyclejoin rollback -1.
+Delta: owners -2, NG -1, Stop -1, Operation -1; old lifecyclejoin rollback -1. I1 depends on R1.
 
 ## S1 — serialized fixed-port Q/F batch + port bridge birth
 
@@ -154,83 +142,100 @@ twins; JSON variants; Weather core-only.
 
 Proof: shared lifecycle matrix in all six plus package tests; blocked callback Drain before cancel; second-sub failure
 exact cleanupPending; duplicate integration; race serialization. Delta owners -6, NG -6, Stop -12; old lifecyclejoin
-rollback -6.
+rollback -6. S1 depends on I1.
 
-## R1 — Research core-subscription M family
+## R1 — Research-five owner family and final rollback-helper birth (selected first wave)
 
-Membership (5): assess, classify, execute, route, synthesize. Start publishes startDone/cleanup before unlock; exact
-core subs; Drain once; cancel/join; LLM closes after callbacks. Execute no LLM; classify optional LLM. Common M proof.
-Delta -5 owners/NG/Stop; old lifecyclejoin rollback -5. F0 only; concurrent with G1.
+Frozen owners: assess/classify/execute/route/synthesize component.go files. Supporting scope: new
+internal/lifecyclecleanup containing only parent-aware RollbackFailedStart and tests; no lifecyclejoin changes.
+
+Why first: five real consumers at package birth; one M+Q/F skeleton; five of twenty old rollback calls; no exported
+API/port bridge.
+
+Shared contract: Start retains exact received parent only for deferred call (not state), derives run authority,
+publishes cleanup/startDone before acquisition escapes, drains exact core subs once while callback live, cancels/joins,
+closes LLM. Failed Start calls final helper with exact Start ctx/ownerCleanup. Success clears; failure/expiry retains
+handles cleanupPending, rejects Start, later Stop caller context. Execute no LLM; Classify optional.
+
+TDD: helper nil parent/no callback, nil rollback, canceled/expired parent yields live bounded context with value,
+unexported test budget seam avoids 5s sleep/no production knob, callback+deadline aggregate, sync/no state; every owner
+tests Stop vs blocked Start/startDone, partial sub/LLM failure exact rollback, expiry cleanupPending/reject/later Stop,
+blocked callback drain before cancel, LLM order, repeat nil, restart reject, race. Gates final helper+five package race
+and focused NATS callback integration. Delta owners -5, NG -5, Stop -5, old rollback -5, final helper calls +5; no
+exported surface.
 
 ## G1 — graph-read serialized Q/F family
 
 Membership (5): graph-query, graph-clustering, graph-embedding, spatial, temporal plus adjacent query files. Serialized
 exact incremental subs; rollback; Drain once before cancel; terminal child close. Exceptions as inventoried. Common
-serialized proof. Delta -5 owners/NG/Stop. F0 only; concurrent with R1.
+serialized proof. All five have partial acquisition failures requiring bounded cancellation-independent rollback; old
+rollback delta remains zero; final helper call count is determined by implementation. G1 depends on R1. Do not combine
+R1/G1. Delta -5 owners/NG/Stop.
 
 ## A1 — agentic M+Q/F family
 
 Membership (5): dispatch, governance, loop, model, tools plus adjacent dispatch/loop files. Existing startDone, exact
 bridge handles, no name lifecycle; unique GraphView/observation/sweeper/client/tool-list exceptions. Common M proof +
-exceptions + integration/e2e. Delta owners -5, NG -5, Stop -10; old lifecyclejoin rollback -5. F0+S1; loop closes
-observation separation.
+exceptions + integration/e2e. Delta owners -5, NG -5, Stop -10; old lifecyclejoin rollback -5. A1 depends on S1;
+loop closes observation separation.
 
 ## O1 — static output sinks
 
 Membership: file + httppost. Serialized exact JS/core handles; partial cleanup; callback drain before sink close. File
-flush/close; HTTPPost ACME moved from constructor to Start. Deterministic proof. Delta owners/NG/Stop -2. F0+S1.
+flush/close; HTTPPost ACME moved from constructor to Start. Deterministic proof. Delta owners/NG/Stop -2. O1 depends
+on S1.
 
 ## H1 — standalone HTTP component family
 
 Membership: graph gateway, input websocket, output websocket. Synchronous bind; BaseContext exact Start; fence
 upgrades/requests; Shutdown while context live; await serveDone/callbacks; then cancel/join. No generic provider.
 Unique readiness/connections/output NATS/root exceptions; pprof out. HTTP/NATS proof. Delta owners/NG -3, SWQ -3;
-old lifecyclejoin rollback -1. F0; output also S1.
+old lifecyclejoin rollback -1. H1 depends on S1.
 
 ## M1 — Metrics + metric.Server singleton
 
 Membership service/metrics.go with metric/handler.go. Exact listener/server/serveDone; bind before BaseService commit;
 BaseContext exact Start; caller-bounded Shutdown outside locks; rollback reachable; repeat nil. Existing metric.Server
 signatures become context-bearing, no second surface; owner-gated. Delta owner/NG/Stop/Cancel -1; old lifecyclejoin
-rollback -1. F0.
+rollback -1. M1 depends on R1.
 
 ## SM1 — ServiceManager multi-HTTP singleton
 
 Membership: service/service_manager.go. Three server generations owner-local; sync bind/BaseContext/Shutdown/serveDone;
 health publisher cancel/done; StopAll reverse aggregation unchanged; same-instance rebind retires. Proof per
-listener/join/aggregation/budget/repeat/race. Delta owner -1, NG -3, SWQ -3. F0.
+listener/join/aggregation/budget/repeat/race. Delta owner -1, NG -3, SWQ -3. SM1 is an independent root.
 
 ## CM1 — ComponentManager singleton
 
 Membership service/component_manager.go. Fence callback-borrow admission; wait admitted borrows outside locks; child
 startDone selects running/cleanupPending; caller context; no rejoin. Proof blocked borrow, typed stopping, overlap,
-partial failure, reverse aggregation/race. Delta owner -1, NG -2, Stop -1, SWQ -2. F0.
+partial failure, reverse aggregation/race. Delta owner -1, NG -2, Stop -1, SWQ -2. CM1 depends on R1.
 
 ## ML1 — MessageLogger singleton
 
 Membership service/message_logger.go plus adjacent HTTP/KV watch. Dynamic fence, retry cancel/done, exact core Drain
 once, no retained result; KV Keys/Get request context; watcher separate. Proof dynamic/retry/callback/KV/repeat/race.
-Delta owner/NG/Stop -1. F0.
+Delta owner/NG/Stop -1. ML1 is an independent root.
 
 ## OS1 — ObjectStore singleton
 
 Membership storage/objectstore/component.go. startDone/cleanup, exact JS/core before Store, no name Stop, terminal
 Store, cleanupPending. Proof partial/block/order/later Stop/identity/race/integration. Delta owner/NG -1, Stop -2; old
-lifecyclejoin rollback -1. F0+S1.
+lifecyclejoin rollback -1. OS1 depends on S1.
 
 ## OT1 — OTEL pull-loop singleton
 
 Membership output/otel/component.go. Retain exact Consumer observation/acquisition; duplicate reject not replacement;
 cancel/join fetch; flush/remove observers; context Shutdown; no Operation replay. Does not use ConsumeContext/core
-Drain. Proof duplicate/block/cancel/exporter/cleanup/repeat/race. Delta owner/NG/Stop/Cancel/Operation -1. F0+I1
-identity, not S1.
+Drain. Proof duplicate/block/cancel/exporter/cleanup/repeat/race. Delta owner/NG/Stop/Cancel/Operation -1. OT1 depends
+on I1 identity, not S1.
 
 ## RU1 — Rule package singleton
 
 Owner processor/rule/processor.go, coherent package files from inventory. Exact handles; dynamic fence; remove all
 retained contexts/unauthorized roots; classify bounded persistence exception; no lifecycle lookup/schedule roots. Proof
-hot reload/watchers/evaluation/cron/persistence/ack/context census/integration/e2e. Delta owner/NG/Stop/Cancel -1.
-F0+S1.
+hot reload/watchers/evaluation/cron/persistence/ack/context census/integration/e2e. Delta owner/NG/Stop/Cancel -1. RU1
+depends on S1.
 
 ## GI1 — graph-ingest singleton
 
@@ -238,7 +243,7 @@ Owner component.go plus keyed_ingest/readiness/pool tests. Exact handles; separa
 contexts/roots; fence delivery, Drain/Closed while submission live, cancel submission, stop pool, remaining
 runtime/core cleanup; preserve effect→guard→ACK/poison. Proof callback
 fence/pool/redelivery/guard/ACK/backlog/partial failure/deadline/race/integration/e2e. Delta
-owner/NG/Stop/Cancel/Operation -1. F0+S1+observation separation.
+owner/NG/Stop/Cancel/Operation -1. GI1 depends on S1 and observation separation.
 
 ## ConsumeDurable outward contract and replacement
 
@@ -300,7 +305,6 @@ Owner delta zero.
 
 | Wave | Owners | NG | Stop | Cancel | SWQ | Operation | Old lifecyclejoin rollback calls |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| F0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | I1 | -2 | -1 | -1 | 0 | 0 | -1 | -1 |
 | S1 | -6 | -6 | -12 | 0 | 0 | 0 | -6 |
 | R1 | -5 | -5 | -5 | 0 | 0 | 0 | -5 |
@@ -319,17 +323,18 @@ Owner delta zero.
 | N1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Total | -36 | -38 | -43 | -4 | -8 | -3 | -20 |
 
-Only final `lifecyclecleanup.RollbackFailedStart` may remain. Every old
+Only final parent-aware `lifecyclecleanup.RollbackFailedStart` may remain. Every old
 `lifecyclejoin.RunPartialStartRollback` call migrates with its owner; old calls and every production lifecyclejoin
-import are zero at N1. Final lifecyclecleanup helpers are not failures.
+import are zero at N1. The final lifecyclecleanup helper is not a failure.
 
 ## Dependency DAG, concurrency, and review reuse
 
 There is no single global “next wave” after reviewed design lands. A wave is executable when every declared
 prerequisite is complete and frozen membership/contract still matches reviewed global artifacts.
 
-Dependencies: F0 none; I1 F0; S1 F0+I1; R1/G1/M1/SM1/CM1/ML1 F0; OT1 F0+I1; A1/O1/H1/OS1/RU1/GI1 F0+S1; N1
-every owner wave + API/migration/proof prerequisites.
+Dependencies: R1/SM1/ML1 none; I1 R1; G1/M1/CM1 R1; S1 I1; OT1 I1; A1/O1/H1/OS1/RU1/GI1 S1; N1 every owner wave +
+API/migration/proof prerequisites. R1 is selected first; SM1/ML1 may run independently after corrected global design
+acceptance. The shared serial spine is R1 → I1 → S1 → N1, and N1 also waits for all owner waves.
 
 Failure blocks only that wave/descendants, not independent reviewed waves. Independent work may proceed concurrently
 in isolated worktrees; overlapping natsclient files cannot.
@@ -359,17 +364,18 @@ evidence required.
 6. Race/integration failure, async bind, or callback after cancel blocks; no family-noise waiver.
 7. Split preserves completed members but revised membership needs owner record before continuation.
 
-## Why 17 waves is throughput-oriented
+## Why 16 waves is throughput-oriented
 
-Seventeen review units do not mean seventeen serial inventory/design ceremonies. There is one global inventory review
-and one global design review. Thereafter F0/I1/S1 form the shared serial spine, unchanged independent waves reuse that
-review and can run concurrently, each wave gets one bounded implementation review, and N1 is the final convergence
-review. Seven family batches still cover 28 owners; eight singleton units remain because their protocols are unique.
+Sixteen review units do not mean sixteen serial inventory/design ceremonies: one global inventory and corrected
+global design are reused. Seven family batches cover 28 owners; eight inventory-proven unique owners remain singleton
+implementation reviews; N1 is convergence. R1/SM1/ML1 can begin as independent roots, then the I1/S1 spine unlocks
+the port families. Expected no-split range: approximately 31–49 implementation-review cycles, 7–10 single-lane
+working weeks, or 5–8 elapsed weeks with two isolated implementation lanes and one reviewer.
 
 ## Owner rulings required before handoff
 
-1. Accept/reject final helper home `internal/lifecyclecleanup`, symbols `Wait` and `RollbackFailedStart`, and F0 as
-   dependency root.
+1. Confirm final helper home `internal/lifecyclecleanup`, sole symbol
+   `RollbackFailedStart(parent, rollback)`, and R1 as the selected first helper-birth family.
 2. Approve I1 atomic non-port signature plus Registry.SubscribeCapabilities zero-consumer disposition; ConsumeDurable
    excluded.
 3. Approve temporary no-release port bridge and N1 canonical cutover.
@@ -379,4 +385,6 @@ review. Seven family batches still cover 28 owners; eight singleton units remain
 7. Confirm pprof remains out-of-scope process-lifetime exception.
 8. Accept dependency-only concurrency and global inventory/design review reuse for unchanged waves.
 
-Do not mark approved until materialized with baseline/hash, independent pre-owner design review, and owner acceptance.
+The owner explicitly agreed to reject Wait/zero-owner F0 and continue with the parent-aware helper folded into the
+first genuine family. This does not approve the unrelated exported API rulings above. Do not mark the corrected global
+design approved until it receives independent design review.

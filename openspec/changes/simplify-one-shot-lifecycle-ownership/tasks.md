@@ -31,9 +31,14 @@
     only; any independent reviewed wave with complete prerequisites may proceed concurrently in an isolated worktree.
     This grants no task, owner, Gate A/B/C, proof, release, archive, or tag credit; all existing gates remain unchanged
     and unchecked.
-  - F0 lands final `internal/lifecyclecleanup.Wait` and `RollbackFailedStart`. Unmigrated lifecyclejoin rollback calls
-    may forward temporarily; every migrated wave uses the final package. N1 deletes lifecyclejoin, so old imports and
-    old rollback calls reach zero.
+  - There is no standalone zero-owner helper wave and no shared Wait helper. R1 is the first selected owner-family wave
+    and creates final `internal/lifecyclecleanup.RollbackFailedStart(parent, rollback)` using an immediately bounded
+    `WithTimeout(WithoutCancel(parent), 5s)`. Legacy `lifecyclejoin.RunPartialStartRollback` remains unchanged for
+    unmigrated owners because it cannot receive a parent. Each migrated wave uses the final helper; N1 deletes the
+    legacy package and proves old imports/calls zero.
+  - Wave readiness is dependency-based: R1/SM1/ML1 are roots; I1→S1 is the shared native-handle spine; unchanged
+    independent waves reuse the global inventory/design pass and may proceed concurrently. Failure blocks descendants
+    only.
   - 2026-08-18 checkpoint: independent `semstreams-reviewer` verdict `CORRECTIONS CONFIRMED` grants owner-migrated
     credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
     worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.
@@ -60,8 +65,8 @@
     OpenSpec validation pass; production owner files move 37 to 36. Task 2.3, Gate A, runtime migration, and every
     proof/release/archive/tag gate remain unchecked and incomplete.
 - [ ] 2.4 After every frozen owner wave is implementation-reviewed, delete Generation, Operation, StopWithQuiesce,
-  compatibility forwarding, obsolete tests, and the entire `internal/lifecyclejoin` package; prove old imports/symbols
-  zero while final lifecyclecleanup helpers retain only their reviewed stateless contracts.
+  the unchanged legacy rollback implementation, obsolete tests, and the entire `internal/lifecyclejoin` package; prove
+  old imports/symbols zero while final lifecyclecleanup helpers retain only their reviewed stateless contracts.
 - [ ] 2.5 Remove lifecycle deletion and provide fixture/admin teardown.
 
 ## 3. Client minimal and raw roots

@@ -108,18 +108,27 @@ Primary totals: S=14, F=13, Q=4, P=4, M=7; total=42. The 21 failed-Start call si
 the seven M owners, and Q owner WebSocket output. The eight executable quiesce sites are graph gateway, WebSocket
 input, WebSocket output, two component-manager paths, and three service-manager paths.
 
+### 2026-08-19 owner supersession note
+
+The historical 42-owner census, classifications, and labels above remain unchanged. The owner-approved target and
+complexity-budget statements below are superseded only where they proposed a shared completion-wait helper. Exact
+completion waits are owner-local inline context-bounded selects. The sole final shared helper is parent-aware
+`internal/lifecyclecleanup.RollbackFailedStart(parent, rollback)`, born with R1. The recovery ledger and corrected
+family-wave design remain the execution authority.
+
 ## Owner-local complexity budgets
 
 | Class | Allowed state and exact running-Stop algorithm | Shared mechanism | Explicitly out of budget |
 |---|---|---|---|
-| S | existing lifecycle phase, one cancel, one done/WG: fence local admission, cancel, await done, cleanup | stateless context wait helper | awaiting ctx-driven done before cancel; per-owner `sync.Once`, retained error, resume channel |
-| F | S budget plus `cleanupPending` and retained handles; successful running Stop follows S/Q as owned resources require | one bounded failed-Start rollback helper | clearing handles after timed-out rollback, detached cleanup, allowing another Start |
-| Q | concrete native handles: fence, Drain/Shutdown, await exact native Closed while callbacks remain live, cancel, await done/WG, cleanup | stateless wait helper for Closed and then done | cancel before Closed; generic quiesce registry, catalog rediscovery, later terminal rejoin |
-| P | concrete protocol authority: fence, complete native drain/pool protocol while callback authority is live, cancel, await done/WG, cleanup | direct synchronous native call plus stateless waits | generic executor election, result accumulation, retained replay result |
-| M | first await `startDone`; then choose failed-Start cleanupPending or the owned S/Q/P sequence | stateless wait helper | cleanup before Start finalizes, losing failed-Start authority, a second generation abstraction |
+| S | existing lifecycle phase, one cancel, one done/WG: fence local admission, cancel, await done, cleanup | owner-local inline context-bounded select over exact done, no shared wait | awaiting ctx-driven done before cancel; per-owner `sync.Once`, retained error, resume channel |
+| F | S budget plus `cleanupPending` and retained handles; successful running Stop follows S/Q as owned resources require | only final parent-aware `lifecyclecleanup.RollbackFailedStart`, born R1 | clearing handles after timed-out rollback, detached cleanup, allowing another Start |
+| Q | concrete native handles: fence, Drain/Shutdown, await exact native Closed while callbacks remain live, cancel, await done/WG, cleanup | owner-local inline selects for Closed then done, no shared wait | cancel before Closed; generic quiesce registry, catalog rediscovery, later terminal rejoin |
+| P | concrete protocol authority: fence, complete native drain/pool protocol while callback authority is live, cancel, await done/WG, cleanup | direct native call plus owner-local selects | generic executor election, result accumulation, retained replay result |
+| M | first await `startDone`; then choose failed-Start cleanupPending or the owned S/Q/P sequence | owner-local inline selects for startDone/native/done, no shared wait | cleanup before Start finalizes, losing failed-Start authority, a second generation abstraction |
 
-The shared helper ceiling is one stateless context wait and one bounded failed-Start rollback helper. A helper stores no
-context, operation, once, phase, or result and cannot elect an executor, resume an expired operation, or retain results.
+The only final shared helper is parent-aware `internal/lifecyclecleanup.RollbackFailedStart(parent, rollback)`.
+Completion waits remain owner-local inline context-bounded selects. The helper stores no context, operation, once,
+phase, or result and cannot elect an executor, resume an expired operation, or retain results.
 
 ## Failed-Start authority invariant
 
@@ -136,7 +145,7 @@ context, operation, once, phase, or result and cannot elect an executor, resume 
 
 | Symbol/surface | Disposition | Replacement/home |
 |---|---|---|
-| `lifecyclejoin.Generation`, `NewGeneration`, `Stop`, `StopWithQuiesce`, `Signal`, `Cancel` | remove after owner migration | owner cancel/done/native handles plus stateless wait helper |
+| `lifecyclejoin.Generation`, `NewGeneration`, `Stop`, `StopWithQuiesce`, `Signal`, `Cancel` | remove after owner migration | owner cancel/done/native handles plus owner-local inline context-bounded selects |
 | `lifecyclejoin.Operation`, `NewOperation`, `Operation.Run` | remove | direct synchronous exporter/pool/subscriber protocol call |
 | `lifecyclejoin.RunPartialStartRollback` | retain initially; delete only with equivalent bounded failed-Start helper | failed-Start authority invariant |
 | proposed `natsclient.ManagedConsumer`, `DrainAndDelete`, retained drain/result state | remove from target; never land | native `ConsumeContext` |

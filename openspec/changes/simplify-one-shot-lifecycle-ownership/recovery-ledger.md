@@ -70,11 +70,35 @@ slices when the reviewed inventory cannot establish a genuine family.
 
 ### Reviewed dependency authority
 
-The reviewed global wave artifact records the full DAG. Execution status is dependency-based, not ordinal. F0 has no
-dependency; I1 depends on F0; S1 depends on F0+I1; R1/G1/M1/SM1/CM1/ML1 depend only on F0; OT1 depends on F0+I1;
-A1/O1/H1/OS1/RU1/GI1 depend on F0+S1; N1 depends on all owner waves and all exported/adopter proof. A wave may be
-`blocked`, `ready`, `in progress`, `implementation review`, or `complete`. “Next wave” means only the next unmet
-dependency for a blocked descendant, never an exclusive repository-wide slot.
+The reviewed global wave artifact records the full DAG. Execution status is dependency-based, not ordinal. R1, SM1,
+and ML1 have no implementation dependency. R1 births final
+`internal/lifecyclecleanup.RollbackFailedStart(parent, rollback)`. I1 depends on R1; G1/M1/CM1 depend on R1; S1
+depends on I1; OT1 depends on I1; A1/O1/H1/OS1/RU1/GI1 depend on S1; N1 depends on every owner wave and all
+exported/adopter proof. R1 is the selected first helper-birth family, but selection is not an exclusive repository-wide
+lock: SM1 and ML1 may proceed independently once the global design is finally accepted. A wave may be `blocked`,
+`ready`, `in progress`, `implementation review`, or `complete`.
+
+### Rejected standalone F0 worktree state — 2026-08-19
+
+Owner ruling rejected the zero-owner F0, `lifecyclecleanup.Wait`, Background-root RollbackFailedStart signature, and
+lifecyclejoin forwarding. Current uncommitted evidence is rejected and receives zero task/owner/gate/proof credit:
+
+- untracked `internal/lifecyclecleanup/lifecyclecleanup.go`, SHA-256
+  `fee8993472188a989f9444f5a325cd12366446e3ba73edbe4d760ab8481aac9e`;
+- untracked `internal/lifecyclecleanup/lifecyclecleanup_test.go`, SHA-256
+  `4822f3c209851babd446b03da5548ef8b26ea15c449b9cdd9a6092fb837eff82`;
+- tracked diffs in `internal/lifecyclejoin/rollback.go` and `internal/lifecyclejoin/generation_test.go`, combined
+  binary-diff SHA-256 `ea02c32427ff2ab79a20817e001010854081f106948c4d7ff845ef4a2cd02514`, 16 insertions/22
+  deletions.
+
+After this evidence is durable, cleanup restores only the two tracked lifecyclejoin files to baseline and removes only
+the two untracked lifecyclecleanup files. It must not touch untracked `metrics-http-owner-inventory.md` or any other
+change. No fragment is copied; R1 writes accepted parent-aware helper/tests from contract.
+
+The hashes provide durable provenance only. Because the owner explicitly rejected this experiment, no recoverable
+patch is required; after target-exact cleanup the bytes are intentionally discarded. Do not commit, stash, or copy
+them into R1. If the owner wants recoverability despite rejection, the writer first materializes the actual patch—not
+merely a hash.
 
 ## Completion vocabulary
 
@@ -744,8 +768,9 @@ Migrate the rebased S and F owners, plus only leaf owners proven to have the sam
 - fence real local admission before cancellation when the owner actually has admission;
 - preserve acquired native handles until cleanup succeeds;
 - retain `cleanupPending` and reject Start when bounded failed-Start cleanup expires;
-- use only final `internal/lifecyclecleanup.RollbackFailedStart`; unmigrated compatibility may forward from the old
-  symbol until its owner wave, but no migrated owner imports lifecyclejoin.
+- The only final shared helper is `internal/lifecyclecleanup.RollbackFailedStart(parent, rollback)`, born with R1 and
+  immediately bounded as `WithTimeout(WithoutCancel(parent), 5s)`. Exact completion waits remain owner-local. The old
+  lifecyclejoin rollback implementation remains unchanged only for unmigrated owners; migrated owners never import it.
 
 No generic generation, operation election, retained result, rejoin channel, concurrent-Stop coordinator, detached
 cleanup, or bespoke shutdown state machine is allowed. A leaf does not independently solve shutdown ordering that its
@@ -837,8 +862,9 @@ Removal credit for `ConsumeDurable` belongs only to N1 and requires owner-approv
 heartbeat/AckWait and settlement proof, and a SemStreams migration map for ten sibling production calls. A lower local
 call count without replacement earns zero credit.
 
-The justified helpers are final `internal/lifecyclecleanup.Wait` and `RollbackFailedStart`. The old lifecyclejoin
-package, forwarding symbol, imports, declarations, and calls are all deleted at N1.
+The only justified final helper is `internal/lifecyclecleanup.RollbackFailedStart`. There is no shared Wait helper. N1
+deletes the unchanged legacy rollback implementation and all lifecyclejoin declarations/imports after every owner
+migration.
 
 The five historical `DeleteConsumerOnStop` fields must all be absent; one renamed or generated-schema copy still
 fails the zero gate. Exact-name searches are the first check for the client rows, followed by type-aware inspection for

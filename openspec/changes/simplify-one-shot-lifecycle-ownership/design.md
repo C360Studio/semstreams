@@ -129,7 +129,7 @@ to ADR-095 and `simplify-one-shot-lifecycle-ownership`; its runtime-context capa
 | Surface | Present consumer | Disposition |
 |---|---|---|
 | native `jetstream.ConsumeContext` | every owner starting JetStream delivery | exact returned lifecycle handle |
-| stateless context wait helper | 42 lifecycle owners | internal, no stored context/result |
+| owner-local exact completion waits | each lifecycle owner with an exact done/Closed handle | inline context-bounded select; no shared wait helper |
 | bounded failed-Start rollback | 21 paths | retained with cleanupPending authority |
 | duplicate identity check | sealed local composition | boot validation; reject-only claim only when not derivable |
 | backlog observer | graph readiness and accepted agent-loop inflight | read-only and separate from lifecycle |
