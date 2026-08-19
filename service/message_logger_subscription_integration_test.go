@@ -39,7 +39,7 @@ func TestMessageLoggerExplicitSubscriptionContextLivesUntilStop(t *testing.T) {
 		if subscribeErr != nil {
 			return nil, subscribeErr
 		}
-		return &failFirstMessageLoggerUnsubscribe{subscription: subscription}, nil
+		return &failMessageLoggerDrain{subscription: subscription}, nil
 	}
 
 	require.NoError(t, ml.Start(t.Context()))
@@ -53,30 +53,25 @@ func TestMessageLoggerExplicitSubscriptionContextLivesUntilStop(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond)
 
 	firstStopErr := ml.Stop(context.Background())
-	require.ErrorContains(t, firstStopErr, "injected unsubscribe failure")
+	require.ErrorContains(t, firstStopErr, "injected drain failure")
 	require.NoError(t, testClient.Client.Publish(t.Context(), "logger.explicit", []byte(`{"phase":"stopped"}`)))
 	require.NoError(t, testClient.GetNativeConnection().Flush())
 	require.ErrorIs(t, receiveCallbackContextError(t, callbackCompletions), context.Canceled,
-		"Stop must cancel handler context even when unsubscribe must be retried")
+		"Stop must cancel handler context after the one-shot drain attempt")
 	require.Len(t, ml.GetMessages(), 1, "a stopped logger must not capture later publishes")
-	require.EqualError(t, ml.Stop(context.Background()), firstStopErr.Error(),
-		"a genuine teardown failure is retained and replayed without repeating the side effect")
+	require.NoError(t, ml.Stop(context.Background()),
+		"a completed Stop is a nil no-op and does not replay a prior failure")
 }
 
-type failFirstMessageLoggerUnsubscribe struct {
+type failMessageLoggerDrain struct {
 	mu           sync.Mutex
-	failed       bool
 	subscription messageLoggerSubscription
 }
 
-func (s *failFirstMessageLoggerUnsubscribe) Unsubscribe() error {
+func (s *failMessageLoggerDrain) Drain(context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.failed {
-		s.failed = true
-		return errors.New("injected unsubscribe failure")
-	}
-	return s.subscription.Unsubscribe()
+	return errors.New("injected drain failure")
 }
 
 type messageLoggerCallbackCompletion struct {

@@ -15,9 +15,9 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/internal/componentadmission"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	semerrs "github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go"
 )
 
@@ -164,7 +164,12 @@ type subjectOverlap struct {
 }
 
 type messageLoggerSubscription interface {
-	Unsubscribe() error
+	Drain(context.Context) error
+}
+
+type messageLoggerSubscriptionRecord struct {
+	handle         messageLoggerSubscription
+	drainAttempted bool
 }
 
 type messageLoggerSubscribe func(
@@ -189,7 +194,7 @@ type MessageLogger struct {
 	natsClient        *natsclient.Client
 	componentRegistry *component.Registry
 	subscribe         messageLoggerSubscribe
-	subscriptions     map[string]messageLoggerSubscription
+	subscriptions     map[string]*messageLoggerSubscriptionRecord
 	autoDiscover      bool
 	explicitSubjects  []string
 	resolvedSubjects  []string
@@ -225,16 +230,20 @@ type MessageLogger struct {
 	}
 
 	// Lifecycle management
-	transitionMu       sync.Mutex // Serializes complete Start and Stop transitions.
 	lifecycleMu        sync.Mutex // Protects lifecycle fields and subscription state.
+	lifecycleUsed      bool
+	lifecycleTerminal  bool
+	stopping           bool
+	runtimeCancel      context.CancelFunc
 	subscriptionCancel context.CancelFunc
 	retryCancel        context.CancelFunc
 	retryDone          chan struct{}
-	generation         *lifecyclejoin.Generation
-	teardownOnce       sync.Once
-	teardownErr        error
+	reconcileGateMu    sync.Mutex
+	reconcileClosed    bool
+	reconcileCount     int
+	reconcileDone      chan struct{}
 	logger             *slog.Logger
-	running            bool // Track if service is running (replaces config.Enabled)
+	running            bool
 }
 
 // NewMessageLogger creates a new MessageLogger service
@@ -272,7 +281,7 @@ func NewMessageLogger(
 		) (messageLoggerSubscription, error) {
 			return natsClient.Subscribe(ctx, subject, handler)
 		},
-		subscriptions:    make(map[string]messageLoggerSubscription),
+		subscriptions:    make(map[string]*messageLoggerSubscriptionRecord),
 		autoDiscover:     containsWildcard(loggerConfig.MonitorSubjects),
 		explicitSubjects: explicitMonitorSubjects(loggerConfig.MonitorSubjects),
 		entries:          make([]MessageLogEntry, maxEntries),
@@ -410,12 +419,14 @@ func (ml *MessageLogger) reconcileSubjects(
 	metadata map[string]portMetadata,
 	overlaps []subjectOverlap,
 ) error {
-	ml.lifecycleMu.Lock()
-	defer ml.lifecycleMu.Unlock()
-	return ml.reconcileSubjectsLocked(ctx, desired, metadata, overlaps)
+	if !ml.beginReconciliation() {
+		return semerrs.WrapTransient(errors.New("message logger stopping"), "MessageLogger", "reconcileSubjects", "reconciliation admission fenced")
+	}
+	defer ml.endReconciliation()
+	return ml.reconcileSubjectsAdmitted(ctx, desired, metadata, overlaps)
 }
 
-func (ml *MessageLogger) reconcileSubjectsLocked(
+func (ml *MessageLogger) reconcileSubjectsAdmitted(
 	ctx context.Context,
 	desired []string,
 	metadata map[string]portMetadata,
@@ -426,25 +437,87 @@ func (ml *MessageLogger) reconcileSubjectsLocked(
 		desiredSet[subject] = struct{}{}
 	}
 
-	if !ml.running {
-		return nil
+	ml.lifecycleMu.Lock()
+	if !ml.running || ml.lifecycleTerminal {
+		ml.lifecycleMu.Unlock()
+		return semerrs.WrapTransient(errors.New("message logger stopping"), "MessageLogger", "reconcileSubjects", "logger is not running")
 	}
+	existing := make(map[string]*messageLoggerSubscriptionRecord, len(ml.subscriptions))
+	for subject, record := range ml.subscriptions {
+		existing[subject] = record
+	}
+	ml.lifecycleMu.Unlock()
+
+	reconcileErrors, retainedObsolete := ml.drainObsoleteSubscriptions(ctx, desiredSet, existing)
+	reconcileErrors = append(reconcileErrors, ml.acquireDesiredSubscriptions(ctx, desired, retainedObsolete)...)
+	return ml.commitReconciliationState(metadata, overlaps, reconcileErrors)
+}
+
+func (ml *MessageLogger) drainObsoleteSubscriptions(
+	ctx context.Context,
+	desiredSet map[string]struct{},
+	existing map[string]*messageLoggerSubscriptionRecord,
+) ([]error, map[string]struct{}) {
 	var reconcileErrors []error
 	retainedObsolete := make(map[string]struct{})
-	for subject, subscription := range ml.subscriptions {
+	for subject, record := range existing {
 		if _, keep := desiredSet[subject]; keep {
 			continue
 		}
-		if err := subscription.Unsubscribe(); err != nil {
-			ml.logger.Warn("Failed to unsubscribe", "subject", subject, "error", err)
-			retainedObsolete[subject] = struct{}{}
-			reconcileErrors = append(reconcileErrors, fmt.Errorf("unsubscribe %s: %w", subject, err))
+
+		ml.lifecycleMu.Lock()
+		if current := ml.subscriptions[subject]; current != record {
+			ml.lifecycleMu.Unlock()
 			continue
 		}
-		delete(ml.subscriptions, subject)
+		if record.drainAttempted {
+			ml.lifecycleMu.Unlock()
+			retainedObsolete[subject] = struct{}{}
+			reconcileErrors = append(reconcileErrors, fmt.Errorf("drain %s already attempted or in progress", subject))
+			continue
+		}
+		record.drainAttempted = true
+		handle := record.handle
+		ml.lifecycleMu.Unlock()
+
+		drainErr := handle.Drain(ctx)
+		ml.lifecycleMu.Lock()
+		if current := ml.subscriptions[subject]; current == record {
+			if drainErr == nil {
+				delete(ml.subscriptions, subject)
+			} else {
+				retainedObsolete[subject] = struct{}{}
+			}
+		}
+		ml.lifecycleMu.Unlock()
+		if drainErr != nil {
+			ml.logger.Warn("Failed to drain subscription", "subject", subject, "error", drainErr)
+			reconcileErrors = append(reconcileErrors, fmt.Errorf("drain %s: %w", subject, drainErr))
+		}
 	}
+	return reconcileErrors, retainedObsolete
+}
+
+func (ml *MessageLogger) acquireDesiredSubscriptions(
+	ctx context.Context, desired []string, retainedObsolete map[string]struct{},
+) []error {
+	var reconcileErrors []error
 	for _, subject := range desired {
-		if _, exists := ml.subscriptions[subject]; exists {
+		ml.lifecycleMu.Lock()
+		record := ml.subscriptions[subject]
+		running := ml.running && !ml.lifecycleTerminal
+		drainAttempted := record != nil && record.drainAttempted
+		ml.lifecycleMu.Unlock()
+		if !running {
+			reconcileErrors = append(reconcileErrors, semerrs.WrapTransient(
+				errors.New("message logger stopping"), "MessageLogger", "reconcileSubjects", "logger stopped during reconciliation",
+			))
+			break
+		}
+		if record != nil {
+			if drainAttempted {
+				reconcileErrors = append(reconcileErrors, fmt.Errorf("subject %s retains a previously drained handle", subject))
+			}
 			continue
 		}
 		if retained, ok := retainedAcceptedOverlap(subject, retainedObsolete); ok {
@@ -453,18 +526,51 @@ func (ml *MessageLogger) reconcileSubjectsLocked(
 			reconcileErrors = append(reconcileErrors, err)
 			continue
 		}
-		subscription, err := ml.subscribe(ctx, subject, func(msgCtx context.Context, msg *nats.Msg) {
-			ml.handleMessage(msgCtx, msg.Subject, msg.Data)
-		})
-		if err != nil {
-			ml.logger.Error("Failed to subscribe to subject", "subject", subject, "error", err)
-			reconcileErrors = append(reconcileErrors, fmt.Errorf("subscribe %s: %w", subject, err))
-			continue
-		}
-		ml.subscriptions[subject] = subscription
-		ml.logger.Debug("Subscribed to subject", "subject", subject)
+		reconcileErrors = append(reconcileErrors, ml.acquireSubscription(ctx, subject)...)
+	}
+	return reconcileErrors
+}
+
+func (ml *MessageLogger) acquireSubscription(ctx context.Context, subject string) []error {
+	subscription, err := ml.subscribe(ctx, subject, func(msgCtx context.Context, msg *nats.Msg) {
+		ml.handleMessage(msgCtx, msg.Subject, msg.Data)
+	})
+	if err != nil {
+		ml.logger.Error("Failed to subscribe to subject", "subject", subject, "error", err)
+		return []error{fmt.Errorf("subscribe %s: %w", subject, err)}
 	}
 
+	newRecord := &messageLoggerSubscriptionRecord{handle: subscription}
+	ml.lifecycleMu.Lock()
+	current := ml.subscriptions[subject]
+	if ml.running && !ml.lifecycleTerminal && current == nil {
+		ml.subscriptions[subject] = newRecord
+		ml.lifecycleMu.Unlock()
+		ml.logger.Debug("Subscribed to subject", "subject", subject)
+		return nil
+	}
+	ml.lifecycleMu.Unlock()
+
+	// A late handle is drained by the acquiring goroutine and never published
+	// into terminal state or missed by Stop's snapshot.
+	var acquireErrors []error
+	if drainErr := subscription.Drain(ctx); drainErr != nil {
+		acquireErrors = append(acquireErrors, fmt.Errorf("drain uncommitted %s: %w", subject, drainErr))
+	}
+	if current != nil {
+		acquireErrors = append(acquireErrors, fmt.Errorf("subscribe %s raced an existing subscription", subject))
+	}
+	return acquireErrors
+}
+
+func (ml *MessageLogger) commitReconciliationState(
+	metadata map[string]portMetadata, overlaps []subjectOverlap, reconcileErrors []error,
+) error {
+	ml.lifecycleMu.Lock()
+	defer ml.lifecycleMu.Unlock()
+	if !ml.running || ml.lifecycleTerminal {
+		return errors.Join(reconcileErrors...)
+	}
 	ml.resolvedSubjects = ml.resolvedSubjects[:0]
 	for subject := range ml.subscriptions {
 		ml.resolvedSubjects = append(ml.resolvedSubjects, subject)
@@ -486,6 +592,7 @@ func (ml *MessageLogger) reconcileSubjectsLocked(
 	}
 
 	ml.subjectMu.Lock()
+	defer ml.subjectMu.Unlock()
 	actualMetadata := make(map[string]portMetadata, len(ml.subscriptions))
 	for subject := range ml.subscriptions {
 		if current, ok := metadata[subject]; ok {
@@ -495,8 +602,50 @@ func (ml *MessageLogger) reconcileSubjectsLocked(
 		}
 	}
 	ml.subjectMetadata = actualMetadata
-	ml.subjectMu.Unlock()
 	return reconcileErr
+}
+
+func (ml *MessageLogger) beginReconciliation() bool {
+	ml.reconcileGateMu.Lock()
+	defer ml.reconcileGateMu.Unlock()
+	if ml.reconcileClosed {
+		return false
+	}
+	if ml.reconcileCount == 0 {
+		ml.reconcileDone = make(chan struct{})
+	}
+	ml.reconcileCount++
+	return true
+}
+
+func (ml *MessageLogger) endReconciliation() {
+	ml.reconcileGateMu.Lock()
+	defer ml.reconcileGateMu.Unlock()
+	ml.reconcileCount--
+	if ml.reconcileCount == 0 {
+		close(ml.reconcileDone)
+		ml.reconcileDone = nil
+	}
+}
+
+func (ml *MessageLogger) fenceReconciliation() <-chan struct{} {
+	ml.reconcileGateMu.Lock()
+	ml.reconcileClosed = true
+	done := ml.reconcileDone
+	ml.reconcileGateMu.Unlock()
+	return done
+}
+
+func waitForMessageLoggerShutdown(ctx context.Context, done <-chan struct{}, name string) error {
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("wait for %s shutdown: %w", name, ctx.Err())
+	}
 }
 
 func retainedAcceptedOverlap(subject string, retained map[string]struct{}) (string, bool) {
@@ -545,75 +694,82 @@ func (ml *MessageLogger) Start(ctx context.Context) error {
 	if err := validateLifecycleContext(ctx, "MessageLogger", "Start"); err != nil {
 		return err
 	}
-	ml.transitionMu.Lock()
-	defer ml.transitionMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return semerrs.WrapInvalid(err, "MessageLogger", "Start", "context already canceled")
+	}
 
 	ml.lifecycleMu.Lock()
-	if ml.running {
+	if err := ctx.Err(); err != nil {
 		ml.lifecycleMu.Unlock()
-		return fmt.Errorf("message logger already running")
+		return semerrs.WrapInvalid(err, "MessageLogger", "Start", "context already canceled")
+	}
+	if ml.lifecycleUsed {
+		ml.lifecycleMu.Unlock()
+		return semerrs.WrapFatal(semerrs.ErrAlreadyStarted, "MessageLogger", "Start", "service instance already used")
 	}
 	if ml.autoDiscover && ml.componentRegistry == nil {
 		ml.lifecycleMu.Unlock()
 		return fmt.Errorf("message logger wildcard mode requires component registry")
 	}
-	ml.lifecycleMu.Unlock()
-
 	runCtx, cancel := context.WithCancel(ctx)
-	generation := lifecyclejoin.NewGeneration(cancel, nil)
-	if err := ml.BaseService.Start(runCtx); err != nil {
+	subscriptionCtx, subscriptionCancel := context.WithCancel(runCtx)
+	if !ml.beginReconciliation() {
+		ml.lifecycleMu.Unlock()
+		subscriptionCancel()
 		cancel()
+		return semerrs.WrapTransient(errors.New("message logger stopping"), "MessageLogger", "Start", "reconciliation admission fenced")
+	}
+	ml.lifecycleUsed = true
+	ml.running = true
+	ml.runtimeCancel = cancel
+	ml.subscriptionCancel = subscriptionCancel
+	ml.lifecycleMu.Unlock()
+	defer ml.endReconciliation()
+
+	if err := ml.BaseService.Start(runCtx); err != nil {
+		subscriptionCancel()
+		cancel()
+		ml.lifecycleMu.Lock()
+		ml.running = false
+		ml.lifecycleTerminal = true
+		ml.runtimeCancel = nil
+		ml.subscriptionCancel = nil
+		ml.lifecycleMu.Unlock()
+		ml.fenceReconciliation()
 		return err
 	}
 
 	// MessageLogger is always enabled when running (managed by Manager)
 	ml.logger.Info("MessageLogger starting")
-	ml.lifecycleMu.Lock()
-	ml.running = true
-	ml.generation = generation
-	ml.teardownOnce = sync.Once{}
-	ml.teardownErr = nil
-	ml.lifecycleMu.Unlock()
 
+	var reconcileErr error
 	if ml.autoDiscover {
-		subscriptionCtx, subscriptionCancel := context.WithCancel(runCtx)
-		ml.lifecycleMu.Lock()
-		ml.subscriptionCancel = subscriptionCancel
-		ml.lifecycleMu.Unlock()
 		metadata, subjects, overlaps := ml.registrySubjects()
-		if ml.reconcileSubjects(subscriptionCtx, subjects, metadata, overlaps) != nil {
-			retryCtx, retryCancel := context.WithCancel(runCtx)
-			done := make(chan struct{})
-			ml.lifecycleMu.Lock()
-			ml.retryCancel = retryCancel
-			ml.retryDone = done
-			ml.lifecycleMu.Unlock()
-			go func() {
-				defer retryCancel()
-				ml.runExplicitRetry(retryCtx, subscriptionCtx, done, subjects, metadata, overlaps)
-			}()
+		reconcileErr = ml.reconcileSubjectsAdmitted(subscriptionCtx, subjects, metadata, overlaps)
+		if reconcileErr != nil {
+			ml.startReconciliationRetry(runCtx, subscriptionCtx, subjects, metadata, overlaps)
 		}
 	} else {
-		subscriptionCtx, subscriptionCancel := context.WithCancel(runCtx)
-		ml.lifecycleMu.Lock()
-		ml.subscriptionCancel = subscriptionCancel
-		ml.lifecycleMu.Unlock()
-		retry := ml.reconcileSubjects(subscriptionCtx, ml.explicitSubjects, map[string]portMetadata{}, nil) != nil
-		if retry {
-			retryCtx, retryCancel := context.WithCancel(runCtx)
-			done := make(chan struct{})
-			ml.lifecycleMu.Lock()
-			ml.retryCancel = retryCancel
-			ml.retryDone = done
-			ml.lifecycleMu.Unlock()
-			go func() {
-				defer retryCancel()
-				ml.runExplicitRetry(
-					retryCtx, subscriptionCtx, done, ml.explicitSubjects, map[string]portMetadata{}, nil,
-				)
-			}()
+		reconcileErr = ml.reconcileSubjectsAdmitted(
+			subscriptionCtx, ml.explicitSubjects, map[string]portMetadata{}, nil,
+		)
+		if reconcileErr != nil {
+			ml.startReconciliationRetry(
+				runCtx, subscriptionCtx, ml.explicitSubjects, map[string]portMetadata{}, nil,
+			)
 		}
 	}
+	ml.lifecycleMu.Lock()
+	if !ml.running || ml.lifecycleTerminal {
+		ml.running = false
+		ml.lifecycleMu.Unlock()
+		startErr := runCtx.Err()
+		if startErr == nil {
+			startErr = errors.New("message logger stopped during Start")
+		}
+		return semerrs.WrapTransient(startErr, "MessageLogger", "Start", "terminal Stop won Start linearization")
+	}
+	ml.lifecycleMu.Unlock()
 
 	subjects, _ := ml.subjectInspection()
 	ml.logger.Info("MessageLogger started",
@@ -624,101 +780,165 @@ func (ml *MessageLogger) Start(ctx context.Context) error {
 	return nil
 }
 
+func (ml *MessageLogger) startReconciliationRetry(
+	runCtx context.Context,
+	subscriptionCtx context.Context,
+	desired []string,
+	metadata map[string]portMetadata,
+	overlaps []subjectOverlap,
+) {
+	retryCtx, retryCancel := context.WithCancel(runCtx)
+	done := make(chan struct{})
+	ml.lifecycleMu.Lock()
+	if !ml.running || ml.lifecycleTerminal {
+		ml.lifecycleMu.Unlock()
+		retryCancel()
+		return
+	}
+	ml.retryCancel = retryCancel
+	ml.retryDone = done
+	ml.lifecycleMu.Unlock()
+	go func() {
+		defer retryCancel()
+		ml.runExplicitRetry(retryCtx, subscriptionCtx, done, desired, metadata, overlaps)
+	}()
+}
+
 // Stop gracefully stops the MessageLogger
 func (ml *MessageLogger) Stop(ctx context.Context) error {
 	if err := validateLifecycleContext(ctx, "MessageLogger", "Stop"); err != nil {
 		return err
 	}
-	ml.transitionMu.Lock()
-	ml.lifecycleMu.Lock()
-	generation := ml.generation
-	ml.lifecycleMu.Unlock()
-	ml.transitionMu.Unlock()
-	if generation == nil {
-		return nil
+	if err := ctx.Err(); err != nil {
+		return semerrs.WrapInvalid(err, "MessageLogger", "Stop", "context already canceled")
 	}
 
-	return generation.Stop(ctx, nil, func(ctx context.Context) error {
+	ml.lifecycleMu.Lock()
+	if err := ctx.Err(); err != nil {
+		ml.lifecycleMu.Unlock()
+		return semerrs.WrapInvalid(err, "MessageLogger", "Stop", "context already canceled")
+	}
+	if ml.stopping {
+		ml.lifecycleMu.Unlock()
+		return semerrs.WrapTransient(errors.New("message logger stop already in progress"), "MessageLogger", "Stop", "concurrent Stop is unsupported")
+	}
+	if ml.lifecycleTerminal {
+		ml.lifecycleMu.Unlock()
+		return nil
+	}
+	ml.lifecycleUsed = true
+	ml.stopping = true
+	ml.lifecycleMu.Unlock()
+
+	reconcileDone := ml.fenceReconciliation()
+	ml.lifecycleMu.Lock()
+	retryCancel := ml.retryCancel
+	ml.lifecycleMu.Unlock()
+	if retryCancel != nil {
+		retryCancel()
+	}
+
+	admissionErr := waitForMessageLoggerShutdown(ctx, reconcileDone, "reconciliation acquisition")
+	if admissionErr != nil {
 		ml.lifecycleMu.Lock()
 		ml.running = false
+		ml.lifecycleTerminal = true
+		retryCancel = ml.retryCancel
+		runtimeCancel := ml.runtimeCancel
 		subscriptionCancel := ml.subscriptionCancel
-		retryCancel := ml.retryCancel
-		retryDone := ml.retryDone
 		ml.lifecycleMu.Unlock()
-
 		if retryCancel != nil {
 			retryCancel()
 		}
 		if subscriptionCancel != nil {
 			subscriptionCancel()
 		}
-		var waitErrors []error
-		if err := waitForMessageLoggerShutdown(ctx, retryDone, "reconciliation retry"); err != nil {
-			waitErrors = append(waitErrors, err)
+		if runtimeCancel != nil {
+			runtimeCancel()
 		}
-		if waitErr := errors.Join(waitErrors...); waitErr != nil {
-			return waitErr
-		}
+		return ml.completeMessageLoggerStop(errors.Join(admissionErr, ml.BaseService.Stop(ctx)))
+	}
 
-		ml.teardownOnce.Do(func() {
-			ml.lifecycleMu.Lock()
-			defer ml.lifecycleMu.Unlock()
-			retainedSubjects := make(map[string]struct{})
-			var teardownErrors []error
-			for subject, subscription := range ml.subscriptions {
-				if err := subscription.Unsubscribe(); err != nil {
-					ml.logger.Warn("Failed to unsubscribe", "subject", subject, "error", err)
-					teardownErrors = append(teardownErrors, fmt.Errorf("unsubscribe %s: %w", subject, err))
-					retainedSubjects[subject] = struct{}{}
-					continue
-				}
-				delete(ml.subscriptions, subject)
-			}
-			ml.resolvedSubjects = ml.resolvedSubjects[:0]
-			for subject := range ml.subscriptions {
-				ml.resolvedSubjects = append(ml.resolvedSubjects, subject)
-			}
-			sort.Strings(ml.resolvedSubjects)
-			ml.subjectOverlaps = nil
-			ml.teardownErr = errors.Join(teardownErrors...)
-			if ml.teardownErr == nil {
-				ml.reconcileError = ""
-			} else {
-				ml.reconcileError = ml.teardownErr.Error()
-			}
-			ml.subjectMu.Lock()
-			for subject := range ml.subjectMetadata {
-				if _, retained := retainedSubjects[subject]; !retained {
-					delete(ml.subjectMetadata, subject)
-				}
-			}
-			ml.subjectMu.Unlock()
-		})
+	// Start may have installed retry authority immediately before releasing its
+	// admitted reconciliation. Snapshot and join it only after that admission
+	// has resolved, and always before the subscription snapshot.
+	ml.lifecycleMu.Lock()
+	retryCancel = ml.retryCancel
+	retryDone := ml.retryDone
+	ml.lifecycleMu.Unlock()
+	if retryCancel != nil {
+		retryCancel()
+	}
+	var stopErrors []error
+	if err := waitForMessageLoggerShutdown(ctx, retryDone, "reconciliation retry"); err != nil {
+		stopErrors = append(stopErrors, err)
+	}
 
-		baseErr := ml.BaseService.Stop(ctx)
-		if ctx.Err() != nil && errors.Is(baseErr, ctx.Err()) {
-			return errors.Join(ml.teardownErr, baseErr)
+	ml.lifecycleMu.Lock()
+	if len(stopErrors) > 0 {
+		ml.lifecycleTerminal = true
+	}
+	ml.running = false
+	runtimeCancel := ml.runtimeCancel
+	subscriptionCancel := ml.subscriptionCancel
+	type drainTarget struct {
+		subject string
+		handle  messageLoggerSubscription
+	}
+	drainTargets := make([]drainTarget, 0, len(ml.subscriptions))
+	for subject, record := range ml.subscriptions {
+		if record.drainAttempted {
+			continue
 		}
-		ml.lifecycleMu.Lock()
-		ml.subscriptionCancel = nil
-		ml.retryCancel = nil
-		ml.retryDone = nil
-		ml.lifecycleMu.Unlock()
-		ml.logger.Info("MessageLogger stopped")
-		return errors.Join(ml.teardownErr, baseErr)
-	})
+		record.drainAttempted = true
+		drainTargets = append(drainTargets, drainTarget{subject: subject, handle: record.handle})
+	}
+	ml.lifecycleMu.Unlock()
+
+	// Drain while the subscription and runtime contexts remain live so admitted
+	// callbacks can finish. Every exact handle is invoked at most once.
+	for _, target := range drainTargets {
+		if err := target.handle.Drain(ctx); err != nil {
+			ml.logger.Warn("Failed to drain subscription", "subject", target.subject, "error", err)
+			stopErrors = append(stopErrors, fmt.Errorf("drain %s: %w", target.subject, err))
+		}
+	}
+
+	if subscriptionCancel != nil {
+		subscriptionCancel()
+	}
+	if runtimeCancel != nil {
+		runtimeCancel()
+	}
+	if err := ml.BaseService.Stop(ctx); err != nil {
+		stopErrors = append(stopErrors, err)
+	}
+
+	return ml.completeMessageLoggerStop(errors.Join(stopErrors...))
 }
 
-func waitForMessageLoggerShutdown(ctx context.Context, done <-chan struct{}, name string) error {
-	if done == nil {
-		return nil
+func (ml *MessageLogger) completeMessageLoggerStop(stopErr error) error {
+	ml.lifecycleMu.Lock()
+	ml.lifecycleTerminal = true
+	ml.stopping = false
+	ml.runtimeCancel = nil
+	ml.subscriptionCancel = nil
+	ml.retryCancel = nil
+	ml.retryDone = nil
+	ml.subscriptions = make(map[string]*messageLoggerSubscriptionRecord)
+	ml.resolvedSubjects = nil
+	ml.subjectOverlaps = nil
+	if stopErr == nil {
+		ml.reconcileError = ""
+	} else {
+		ml.reconcileError = stopErr.Error()
 	}
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("wait for %s shutdown: %w", name, ctx.Err())
-	}
+	ml.lifecycleMu.Unlock()
+	ml.subjectMu.Lock()
+	ml.subjectMetadata = make(map[string]portMetadata)
+	ml.subjectMu.Unlock()
+	ml.logger.Info("MessageLogger stopped")
+	return stopErr
 }
 
 // handleMessage processes incoming messages

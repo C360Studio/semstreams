@@ -87,6 +87,16 @@
     Lifecyclejoin, natsclient, and Metrics inventory were unchanged. Task 2.3 and every Gate A/B/C, runtime, proof,
     release, archive, and tag requirement remain unchecked and incomplete; unrelated exported API rulings remain
     unapproved.
+  - 2026-08-19 ML1 implementation checkpoint: independent `semstreams-reviewer` verdict `APPROVE` grants
+    owner-migrated credit only to `service/message_logger.go`; adjacent `service/message_logger_http.go` and test
+    files are supporting surfaces and receive no owner credit. Three causal RED stages exposed completed-Stop error
+    replay, reconciliation admission/Drain races, and Start committing success after an expired Stop. Independent
+    final service race passed in 6.709s, the MessageLogger matrix passed 10 repetitions in 7.146s, the real-NATS
+    integration surface passed in 3.578s, and gofmt/vet/revive/diff-check passed. Census moved owners 24→23,
+    NewGeneration 23→22, Generation.Stop 32→31, and HTTP KV invented roots 2→0; StopWithQuiesce 3, final helper
+    calls 12, old rollback 15, Cancel 4, and NewOperation 3 were unchanged. Lifecyclejoin, natsclient, the request-owned
+    SSE watcher, and Metrics inventory were unchanged. Task 2.3 and every Gate A/B/C, runtime, proof, release, archive,
+    and tag requirement remain unchecked and incomplete; unrelated exported API rulings remain unapproved.
   - 2026-08-18 checkpoint: independent `semstreams-reviewer` verdict `CORRECTIONS CONFIRMED` grants owner-migrated
     credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
     worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.

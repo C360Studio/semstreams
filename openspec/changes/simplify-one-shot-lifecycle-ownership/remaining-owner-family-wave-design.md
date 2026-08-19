@@ -249,6 +249,11 @@ Membership service/message_logger.go plus adjacent HTTP/KV watch. Dynamic fence,
 once, no retained result; KV Keys/Get request context; watcher separate. Proof dynamic/retry/callback/KV/repeat/race.
 Delta owner/NG/Stop -1. ML1 is an independent root.
 
+Implementation status on 2026-08-19: independent `semstreams-reviewer` verdict `APPROVE`. Owner-migrated credit is
+limited to `service/message_logger.go`; adjacent `service/message_logger_http.go` and test files are supporting
+implementation/evidence surfaces and receive no separate owner credit. The request-owned SSE watcher remains
+unchanged. Task 2.3, Gate A/B/C, runtime migration, proof, release, archive, and tag readiness remain incomplete.
+
 ## OS1 — ObjectStore singleton
 
 Membership storage/objectstore/component.go. startDone/cleanup, exact JS/core before Store, no name Stop, terminal
@@ -431,3 +436,6 @@ implementation review returned `APPROVE`, granting owner-migrated credit only to
 `component.go` owners; query/test support receives no owner credit and no broader task or gate credit follows.
 Independent CM1 implementation review returned `APPROVE`, granting owner-migrated credit only to
 `service/component_manager.go`; supporting tests receive no owner credit and no broader task or gate credit follows.
+Independent ML1 implementation review returned `APPROVE`, granting owner-migrated credit only to
+`service/message_logger.go`; adjacent HTTP and test support receives no owner credit and no broader task or gate credit
+follows. The unrelated exported API rulings remain unapproved.

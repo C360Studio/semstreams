@@ -435,6 +435,72 @@ Stable CM1 source identities for this checkpoint are:
 This checkpoint grants no approval to unrelated exported API rulings. Task 2.3 and Gate A/B/C remain unchecked and
 incomplete, and it grants no runtime-migration, proof, release, archive, or tag credit.
 
+### ML1 MessageLogger implementation checkpoint — 2026-08-19
+
+Independent `semstreams-reviewer` verdict `APPROVE` applies to the ML1 dirty worktree based on full commit
+`c825f0e9e5736201e44dc22329e1cfb6e4a50c81`. Owner-migrated credit is granted only to
+`service/message_logger.go`. Adjacent `service/message_logger_http.go` and test files are supporting
+implementation/evidence surfaces and receive no separate owner credit. `service/message_logger_kv_watch.go` remains
+unchanged; its SSE lifecycle remains request-owned.
+
+The TDD RED sequence is recorded conservatively:
+
+1. The initial one-shot test showed a completed second Stop replaying the first teardown error.
+2. The three-test admission/Drain race run exposed double drain of one obsolete subscription, premature snapshot and
+   drain after reconciliation-admission expiry, and duplicate claim of one obsolete subscription.
+3. The Start/Stop commit-race test showed Stop completing first while Start later logged `MessageLogger started` and
+   returned nil.
+4. The accepted corrections restored the focused lifecycle surface to green without retained Stop-result replay.
+
+Final independent evidence:
+
+| Evidence | Result | Elapsed |
+|---|---|---:|
+| Full service race | PASS | 6.709s |
+| MessageLogger lifecycle/HTTP race matrix, 10 repetitions | PASS | 7.146s |
+| Real-NATS MessageLogger integration | PASS | 3.578s |
+| `gofmt` | PASS | — |
+| `go vet` | PASS | — |
+| `revive` | PASS | — |
+| `git diff --check` | PASS | — |
+| Strict OpenSpec validation | PASS | — |
+
+The production-only recovery census and HTTP-context search moved exactly as reviewed:
+
+| Measurement | HEAD `c825f0e9` | ML1 worktree | Delta |
+|---|---:|---:|---:|
+| Production owner files importing `internal/lifecyclejoin` | 24 | 23 | -1 |
+| `lifecyclejoin.NewGeneration` | 23 | 22 | -1 |
+| `Generation.Stop` | 32 | 31 | -1 |
+| MessageLogger HTTP KV invented roots | 2 | 0 | -2 |
+| `Generation.StopWithQuiesce` | 3 | 3 | 0 |
+| Final parent-aware `RollbackFailedStart` production owner calls | 12 | 12 | 0 |
+| External `RunPartialStartRollback` calls | 15 | 15 | 0 |
+| External `Generation.Cancel` | 4 | 4 | 0 |
+| `lifecyclejoin.NewOperation` | 3 | 3 | 0 |
+
+`git diff --quiet -- internal/lifecyclejoin`, `git diff --quiet -- natsclient`, and
+`git diff --quiet -- service/message_logger_kv_watch.go` all returned success. The unrelated Metrics inventory remained
+byte-identical at SHA-256 `8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`.
+
+Stable ML1 source identities for this checkpoint are:
+
+- `service/message_logger.go`:
+  `40710cb1de84ac543854e08f60445cd20dffb47b7c1bcd84c9aa951d52594316`;
+- `service/message_logger_http.go`:
+  `a2435cb9171f81474a008e33ab447f7932b4a21341250be84b75a2fe9ef267bc`;
+- `service/message_logger_registry_test.go`:
+  `a0ab2689eebf7ecb91f2a2df965622f3eebe2f81b81d4ca74b77ff59bdf87ba9`;
+- `service/message_logger_subscription_integration_test.go`:
+  `a1e351cb02ab4c5e579ea4fe6abf478d54f5a93aa517be46883ae8b0c01a8468`;
+- `service/message_logger_http_kv_query_test.go`:
+  `9698e4b63434254fb3c15e7baba9a9ad9d9764c6c0e0e75cb5addb05fd3582bb`;
+- `service/message_logger_lifecycle_test.go`:
+  `ded9c16bc12d854757f129602c7592f5f4fbb33f9551c2bf253e63470bef4674`.
+
+This checkpoint grants no approval to unrelated exported API rulings. Task 2.3 and Gate A/B/C remain unchecked and
+incomplete, and it grants no runtime-migration, proof, release, archive, or tag credit.
+
 ## Completion vocabulary
 
 Use only these terms in status reports, PR descriptions, and handoffs:
