@@ -38,6 +38,44 @@ Other active changes have narrow, non-overlapping authority:
 Do not create another lifecycle simplification spec or duplicate these tasks. A newly discovered defect may have an
 issue or evidence record, but completion is recorded here. Changing this boundary requires explicit owner approval.
 
+## Archetype-family execution authority — 2026-08-19
+
+On 2026-08-19 the owner approved replacing steady-state one-owner-at-a-time execution with bounded archetype-family
+waves. This changes execution granularity only; it does not change the approved lifecycle target, owner-migrated
+definition, completion vocabulary, or any gate.
+
+A family wave is authorized only when its reviewed inventory and design:
+
+- freeze the exact owner membership, baseline commit, shared lifecycle contract, and member-specific exceptions before
+  implementation;
+- group only genuinely equivalent ownership shapes and make no opportunistic additions after review;
+- isolate owners with distinct native protocols, context/root debt, manager admission, provider boundaries,
+  observation collisions, or unresolved prerequisites into separately reviewed exceptions;
+- preserve per-owner behavior proof, focused race evidence, source identities, and exact per-owner plus wave census
+  movement;
+- inherit the one independently passed global inventory and target-wave design while exact membership, contract,
+  exceptions, API rulings, and measured premises remain unchanged; each wave still requires TDD evidence and
+  independent implementation review before owner-migrated credit;
+- trigger renewed inventory/design review only for a membership split, source/census drift that changes a premise, a
+  new or changed exported surface, a new native/context/observation exception, or a prerequisite API-shape change;
+  ordinary reviewed-ancestor commits are not drift; and
+- withhold completion credit for a failed wave and block only its declared dependents. Any independent reviewed wave
+  whose prerequisites are complete may proceed concurrently in an isolated worktree; there is no single global
+  next-wave lock.
+
+This process approval does not check task 2.1, 2.2, or 2.3; does not grant owner, Gate A, Gate B, Gate C,
+runtime-migration, proof, release, archive, or tag credit; and does not weaken any Gate A/B/C, test-surface,
+positive-proof, archive, or tag requirement. Unique and protocol-specific exceptions remain single coherent owner
+slices when the reviewed inventory cannot establish a genuine family.
+
+### Reviewed dependency authority
+
+The reviewed global wave artifact records the full DAG. Execution status is dependency-based, not ordinal. F0 has no
+dependency; I1 depends on F0; S1 depends on F0+I1; R1/G1/M1/SM1/CM1/ML1 depend only on F0; OT1 depends on F0+I1;
+A1/O1/H1/OS1/RU1/GI1 depend on F0+S1; N1 depends on all owner waves and all exported/adopter proof. A wave may be
+`blocked`, `ready`, `in progress`, `implementation review`, or `complete`. “Next wave” means only the next unmet
+dependency for a blocked descendant, never an exclusive repository-wide slot.
+
 ## Completion vocabulary
 
 Use only these terms in status reports, PR descriptions, and handoffs:
@@ -706,7 +744,8 @@ Migrate the rebased S and F owners, plus only leaf owners proven to have the sam
 - fence real local admission before cancellation when the owner actually has admission;
 - preserve acquired native handles until cleanup succeeds;
 - retain `cleanupPending` and reject Start when bounded failed-Start cleanup expires;
-- keep the single stateless bounded rollback helper only while it has measured callers.
+- use only final `internal/lifecyclecleanup.RollbackFailedStart`; unmigrated compatibility may forward from the old
+  symbol until its owner wave, but no migrated owner imports lifecyclejoin.
 
 No generic generation, operation election, retained result, rejoin channel, concurrent-Stop coordinator, detached
 cleanup, or bespoke shutdown state machine is allowed. A leaf does not independently solve shutdown ordering that its
@@ -794,8 +833,12 @@ following. “Expected,” “covered by another spec,” and “green before th
 | `ConsumeDurable` declarations and calls | 0 |
 | Lifecycle-bound `OutstandingWork` or name-routed backlog calls | 0 |
 
-The obsolete lifecycle helper files and package must be deleted. If a bounded failed-Start helper remains justified, it
-must be stateless, narrowly named and located, independently reviewed, and absent from every old-symbol search above.
+Removal credit for `ConsumeDurable` belongs only to N1 and requires owner-approved `NewDurableHandler`, equivalent
+heartbeat/AckWait and settlement proof, and a SemStreams migration map for ten sibling production calls. A lower local
+call count without replacement earns zero credit.
+
+The justified helpers are final `internal/lifecyclecleanup.Wait` and `RollbackFailedStart`. The old lifecyclejoin
+package, forwarding symbol, imports, declarations, and calls are all deleted at N1.
 
 The five historical `DeleteConsumerOnStop` fields must all be absent; one renamed or generated-schema copy still
 fails the zero gate. Exact-name searches are the first check for the client rows, followed by type-aware inspection for

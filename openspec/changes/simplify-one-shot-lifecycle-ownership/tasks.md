@@ -15,10 +15,25 @@
 ## 2. Owner handles/admission/lifecycle simplification
 
 - [ ] 2.1 Reorder consume commit and retain native handles.
+  - `ConsumeDurable` is not a zero-consumer deletion. N1 alone retires it after an owner-approved stateless
+    `NewDurableHandler` preserves effective-AckWait validation and `ConsumeWithHeartbeat` settlement composition, and
+    migration guidance names ten sibling production calls plus affected interfaces. No earlier wave receives removal
+    credit.
 - [ ] 2.2 Add reject-not-replace identity validation/claim.
 - [ ] 2.3 Migrate every production owner in the rebased recovery census; preserve failed-Start/startDone authority and
   make terminal callback-borrow shutdown fence new borrows, wait for admitted callbacks to return outside manager/gate
   locks, then let outer composition request Stop without callback self-stop.
+  - 2026-08-19 process authority: the independently passed global inventory and target-wave design amortize
+    inventory/design review across every unchanged frozen wave. Each wave still preserves per-owner
+    TDD/race/source-identity/census evidence and passes independent implementation review. Only split membership,
+    premise-changing drift, a new/changed outward surface, a new protocol/context/observation exception, or
+    prerequisite API-shape change returns that wave to inventory/design review. A failed wave blocks its dependents
+    only; any independent reviewed wave with complete prerequisites may proceed concurrently in an isolated worktree.
+    This grants no task, owner, Gate A/B/C, proof, release, archive, or tag credit; all existing gates remain unchanged
+    and unchecked.
+  - F0 lands final `internal/lifecyclecleanup.Wait` and `RollbackFailedStart`. Unmigrated lifecyclejoin rollback calls
+    may forward temporarily; every migrated wave uses the final package. N1 deletes lifecyclejoin, so old imports and
+    old rollback calls reach zero.
   - 2026-08-18 checkpoint: independent `semstreams-reviewer` verdict `CORRECTIONS CONFIRMED` grants owner-migrated
     credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
     worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.
@@ -44,7 +59,9 @@
     one-shot Stop, fresh-instance restart, exact completion status, focused/package race tests, lint, and strict
     OpenSpec validation pass; production owner files move 37 to 36. Task 2.3, Gate A, runtime migration, and every
     proof/release/archive/tag gate remain unchecked and incomplete.
-- [ ] 2.4 Remove Generation/Operation only after focused/race proof.
+- [ ] 2.4 After every frozen owner wave is implementation-reviewed, delete Generation, Operation, StopWithQuiesce,
+  compatibility forwarding, obsolete tests, and the entire `internal/lifecyclejoin` package; prove old imports/symbols
+  zero while final lifecyclecleanup helpers retain only their reviewed stateless contracts.
 - [ ] 2.5 Remove lifecycle deletion and provide fixture/admin teardown.
 
 ## 3. Client minimal and raw roots
