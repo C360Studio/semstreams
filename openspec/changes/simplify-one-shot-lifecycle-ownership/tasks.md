@@ -33,6 +33,12 @@
     `BoundedDispatcher.Stop` return pool/context/join failure and bounds completion-watcher join. Focused, package,
     real-NATS integration, and lint gates pass. Counts are unchanged and this grants zero owner, Gate, proof, release,
     archive, or tag credit; task 2.3 remains unchecked.
+  - 2026-08-18 gated-DAG checkpoint: dirty worktree based on merged `main` `a1a68a78` replaces the executor's
+    `Generation` with owner-local cancel/done/WaitGroup ownership, retains exact dispatcher and goroutine-local KV
+    watcher authority, makes the Component boot-only, and proves fresh-Component recovery against retained NATS.
+    Focused/package and real-NATS integration race tests pass; production owner files move 38 to 37. Owner-migrated
+    credit is limited to `processor/gated-dag/executor.go`; task 2.3, Gate A, runtime migration, and every proof/release
+    gate remain unchecked and incomplete.
 - [ ] 2.4 Remove Generation/Operation only after focused/race proof.
 - [ ] 2.5 Remove lifecycle deletion and provide fixture/admin teardown.
 

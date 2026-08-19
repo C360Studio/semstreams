@@ -3,12 +3,16 @@ package testinfra_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -199,7 +203,7 @@ func TestIntegrationRunner_ImagePullTimeoutIsBounded(t *testing.T) {
 	assertProcessGone(t, readPID(t, pullPIDFile), "timed-out fake image pull")
 }
 
-func TestIntegrationRunner_InterruptReapsPullBeforeReleasingLock(t *testing.T) {
+func TestIntegrationRunner_TerminationReapsPullBeforeReleasingLock(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("integration runner is a bash script")
 	}
@@ -208,13 +212,67 @@ func TestIntegrationRunner_InterruptReapsPullBeforeReleasingLock(t *testing.T) {
 	tempDir := t.TempDir()
 	lockDir := filepath.Join(tempDir, "integration.lock")
 	pullPIDFile := filepath.Join(tempDir, "pull.pid")
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	realDate, err := exec.LookPath("date")
+	if err != nil {
+		t.Fatal(err)
+	}
+	realRmdir, err := exec.LookPath("rmdir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentReadySentinel := filepath.Join(tempDir, "parent-ready.sent")
+	writeExecutable(t, filepath.Join(tools.bin, "date"), `#!/bin/sh
+if [ "${SEMSTREAMS_TEST_PULL_HELPER:-0}" = "1" ] && [ -s "$DOCKER_PULL_PID_FILE" ] && [ ! -e "$SEMSTREAMS_TEST_PARENT_READY_SENTINEL" ]; then
+  : > "$SEMSTREAMS_TEST_PARENT_READY_SENTINEL"
+  printf 'R' >&3
+fi
+exec "$SEMSTREAMS_TEST_REAL_DATE" "$@"
+`)
+	writeExecutable(t, filepath.Join(tools.bin, "rmdir"), `#!/bin/sh
+if [ "${SEMSTREAMS_TEST_PULL_HELPER:-0}" = "1" ] && [ "$#" -eq 1 ] && [ "$1" = "$SEMSTREAMS_TEST_LOCK_DIR" ]; then
+  helper_pid=$(cat "$DOCKER_PULL_PID_FILE")
+  if kill -0 "$helper_pid" 2>/dev/null; then
+    echo "test rmdir refused live or zombie helper $helper_pid" >&2
+    exit 73
+  fi
+  printf 'R' >&6
+fi
+exec "$SEMSTREAMS_TEST_REAL_RMDIR" "$@"
+`)
+
+	parentReadyReader, parentReadyWriter := mustPipe(t)
+	termAckReader, termAckWriter := mustPipe(t)
+	releaseReader, releaseWriter := mustPipe(t)
+	reapAckReader, reapAckWriter := mustPipe(t)
+	allEndpoints := []*os.File{
+		parentReadyReader, parentReadyWriter,
+		termAckReader, termAckWriter,
+		releaseReader, releaseWriter,
+		reapAckReader, reapAckWriter,
+	}
+	t.Cleanup(func() {
+		for _, endpoint := range allEndpoints {
+			_ = endpoint.Close()
+		}
+	})
+
 	command := exec.Command(filepath.Join(repoRoot, "scripts", "run-integration-tests.sh"))
 	command.Dir = repoRoot
+	command.ExtraFiles = []*os.File{parentReadyWriter, termAckWriter, releaseReader, reapAckWriter}
 	command.Env = runnerEnvironment(tools, lockDir, map[string]string{
 		"DOCKER_IMAGE_INSPECT_STATUS":                    "1",
-		"DOCKER_PULL_BLOCK":                              "1",
 		"DOCKER_PULL_PID_FILE":                           pullPIDFile,
 		"SEMSTREAMS_CONTRACT_IMAGE_PULL_TIMEOUT_SECONDS": "30",
+		"SEMSTREAMS_TEST_LOCK_DIR":                       lockDir,
+		"SEMSTREAMS_TEST_PARENT_READY_SENTINEL":          parentReadySentinel,
+		"SEMSTREAMS_TEST_PULL_HELPER":                    "1",
+		"SEMSTREAMS_TEST_REAL_DATE":                      realDate,
+		"SEMSTREAMS_TEST_REAL_RMDIR":                     realRmdir,
+		"SEMSTREAMS_TEST_BINARY":                         testBinary,
 	})
 	var output bytes.Buffer
 	command.Stdout = &output
@@ -223,20 +281,187 @@ func TestIntegrationRunner_InterruptReapsPullBeforeReleasingLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	waiter := newCommandWaiter(command)
-	t.Cleanup(func() { _ = waiter.killAndWait() })
-	waitForFileContent(t, pullPIDFile, "", 3*time.Second)
-	waitForFileContent(t, filepath.Join(lockDir, "owner"), "token=", 3*time.Second)
+	t.Cleanup(func() {
+		// EOF releases the helper on any early failure. killAndWait kills only
+		// when the runner is still live and always joins the sole waiter.
+		_ = releaseWriter.Close()
+		_ = waiter.killAndWait()
+	})
+	for name, endpoint := range map[string]*os.File{
+		"parent-ready writer":  parentReadyWriter,
+		"TERM-ack writer":      termAckWriter,
+		"child-release reader": releaseReader,
+		"reap-check writer":    reapAckWriter,
+	} {
+		if err := endpoint.Close(); err != nil {
+			t.Fatalf("close inherited %s: %v", name, err)
+		}
+	}
+
+	readPipeSignal(t, parentReadyReader, 3*time.Second, "parent retained pull PID")
+	ownerBeforeTermination := readFile(t, filepath.Join(lockDir, "owner"))
+	if !strings.Contains(ownerBeforeTermination, "token=") {
+		t.Fatalf("lock owner has no token before termination:\n%s", ownerBeforeTermination)
+	}
 	pullPID := readPID(t, pullPIDFile)
-	if err := command.Process.Signal(os.Interrupt); err != nil {
-		t.Fatalf("interrupt runner: %v", err)
+	if err := command.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("terminate runner: %v", err)
 	}
-	if err := waiter.wait(3 * time.Second); err == nil {
-		t.Fatalf("interrupted runner unexpectedly succeeded:\n%s", output.String())
+	readPipeSignal(t, termAckReader, 3*time.Second, "pull helper TERM acknowledgement")
+
+	ownerWhileChildBlocked := readFile(t, filepath.Join(lockDir, "owner"))
+	if ownerWhileChildBlocked != ownerBeforeTermination {
+		t.Fatalf("exact token-bearing lock changed while child was blocked:\nbefore:\n%s\nafter:\n%s",
+			ownerBeforeTermination, ownerWhileChildBlocked)
 	}
+	if !processExists(pullPID) {
+		t.Fatalf("TERM-acknowledged pull helper %d exited before release", pullPID)
+	}
+	probe := exec.Command(filepath.Join(tools.bin, "rmdir"), lockDir)
+	probe.Env = command.Env
+	probeOutput, probeErr := probe.CombinedOutput()
+	if probeErr == nil || !strings.Contains(string(probeOutput), "refused live or zombie helper") {
+		t.Fatalf("test-private rmdir did not refuse live helper: err=%v output=%s", probeErr, probeOutput)
+	}
+
+	if _, err := releaseWriter.Write([]byte{'R'}); err != nil {
+		t.Fatalf("release pull helper: %v", err)
+	}
+	if err := releaseWriter.Close(); err != nil {
+		t.Fatalf("close pull-helper release: %v", err)
+	}
+	waitErr := waiter.wait(3 * time.Second)
+	var timeoutErr *commandWaitTimeoutError
+	if errors.As(waitErr, &timeoutErr) {
+		t.Fatalf("runner waiter timed out after child release: %v\n%s", waitErr, output.String())
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(waitErr, &exitErr) {
+		t.Fatalf("runner exit = %v, want *exec.ExitError code 130\n%s", waitErr, output.String())
+	}
+	if exitErr.ExitCode() != 130 {
+		t.Fatalf("runner exit code = %d, want 130\n%s", exitErr.ExitCode(), output.String())
+	}
+	if command.ProcessState == nil || !command.ProcessState.Exited() {
+		t.Fatalf("waiter returned before runner exit: state=%v", command.ProcessState)
+	}
+	readPipeSignal(t, reapAckReader, 3*time.Second, "post-reap lock removal")
+	assertProcessGone(t, pullPID, "terminated fake image pull")
 	if _, err := os.Stat(lockDir); !os.IsNotExist(err) {
-		t.Fatalf("runner released process before host lock: lock remains: %v", err)
+		t.Fatalf("runner retained lock after exact child reap: %v", err)
 	}
-	assertProcessGone(t, pullPID, "interrupted fake image pull")
+}
+
+func TestIntegrationRunnerFakePullHelper(t *testing.T) {
+	if os.Getenv("SEMSTREAMS_TEST_PULL_HELPER") != "1" {
+		return
+	}
+	termAck := os.NewFile(4, "term-ack")
+	release := os.NewFile(5, "child-release")
+	if termAck == nil || release == nil {
+		t.Fatal("inherited helper pipes are unavailable")
+	}
+	defer termAck.Close()
+	defer release.Close()
+
+	termSignal := make(chan os.Signal, 1)
+	signal.Notify(termSignal, syscall.SIGTERM)
+	defer signal.Stop(termSignal)
+	pidFile := os.Getenv("DOCKER_PULL_PID_FILE")
+	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	released := make(chan error, 1)
+	go func() {
+		var signal [1]byte
+		_, err := release.Read(signal[:])
+		if errors.Is(err, io.EOF) {
+			err = nil
+		}
+		released <- err
+	}()
+
+	select {
+	case err := <-released:
+		if err != nil {
+			t.Fatal(err)
+		}
+		return
+	case <-termSignal:
+		if _, err := termAck.Write([]byte{'T'}); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-released; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestIntegrationRunnerFakePullHelper_PreTERMReleaseExits(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("inherited file descriptors and process signals differ on Windows")
+	}
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tempDir := t.TempDir()
+	pullPIDFile := filepath.Join(tempDir, "pull.pid")
+	parentReadyPlaceholder, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	termAckPlaceholder, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		_ = parentReadyPlaceholder.Close()
+		t.Fatal(err)
+	}
+	releaseReader, releaseWriter := mustPipe(t)
+	allEndpoints := []*os.File{
+		parentReadyPlaceholder,
+		termAckPlaceholder,
+		releaseReader, releaseWriter,
+	}
+	t.Cleanup(func() {
+		for _, endpoint := range allEndpoints {
+			_ = endpoint.Close()
+		}
+	})
+
+	command := exec.Command(testBinary, "-test.run=^TestIntegrationRunnerFakePullHelper$")
+	command.Env = append(os.Environ(),
+		"SEMSTREAMS_TEST_PULL_HELPER=1",
+		"DOCKER_PULL_PID_FILE="+pullPIDFile,
+	)
+	command.ExtraFiles = []*os.File{parentReadyPlaceholder, termAckPlaceholder, releaseReader}
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waiter := newCommandWaiter(command)
+	t.Cleanup(func() {
+		_ = releaseWriter.Close()
+		_ = waiter.killAndWait()
+	})
+	for _, endpoint := range []*os.File{parentReadyPlaceholder, termAckPlaceholder, releaseReader} {
+		if err := endpoint.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := releaseWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := waiter.wait(3 * time.Second); err != nil {
+		t.Fatalf("helper did not accept pre-TERM release: %v", err)
+	}
+	if command.ProcessState == nil || !command.ProcessState.Exited() {
+		t.Fatalf("helper waiter returned before exit: state=%v", command.ProcessState)
+	}
+	helperPID := readPID(t, pullPIDFile)
+	if helperPID != command.Process.Pid {
+		t.Fatalf("helper PID = %d, command PID = %d", helperPID, command.Process.Pid)
+	}
+	assertProcessGone(t, helperPID, "pre-TERM-released pull helper")
 }
 
 func TestCommandWaiter_TimeoutCleanupKillsAndReapsThroughOneOwner(t *testing.T) {
@@ -251,7 +476,8 @@ func TestCommandWaiter_TimeoutCleanupKillsAndReapsThroughOneOwner(t *testing.T) 
 	waiter := newCommandWaiter(command)
 	t.Cleanup(func() { _ = waiter.killAndWait() })
 
-	if err := waiter.wait(10 * time.Millisecond); err == nil || !strings.Contains(err.Error(), "did not exit") {
+	var timeoutErr *commandWaitTimeoutError
+	if err := waiter.wait(10 * time.Millisecond); !errors.As(err, &timeoutErr) {
 		t.Fatalf("wait before cleanup = %v, want bounded timeout", err)
 	}
 	if err := waiter.killAndWait(); err == nil {
@@ -460,6 +686,9 @@ if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
   exit "${DOCKER_IMAGE_INSPECT_STATUS:-0}"
 fi
 if [ "$1" = "pull" ]; then
+	if [ "${SEMSTREAMS_TEST_PULL_HELPER:-0}" = "1" ]; then
+		exec "$SEMSTREAMS_TEST_BINARY" -test.run '^TestIntegrationRunnerFakePullHelper$'
+	fi
 	if [ -n "${DOCKER_PULL_PID_FILE:-}" ]; then
 		printf '%s\n' "$$" > "$DOCKER_PULL_PID_FILE"
 	fi
@@ -527,12 +756,40 @@ func waitForFileContent(t *testing.T, path, content string, timeout time.Duratio
 	}
 }
 
+func readPipeSignal(t *testing.T, reader *os.File, timeout time.Duration, description string) {
+	t.Helper()
+	if err := reader.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		t.Fatalf("set %s deadline: %v", description, err)
+	}
+	var signal [1]byte
+	if _, err := reader.Read(signal[:]); err != nil {
+		t.Fatalf("wait for %s: %v", description, err)
+	}
+}
+
+func mustPipe(t *testing.T) (*os.File, *os.File) {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reader, writer
+}
+
 // commandWaiter gives exactly one goroutine ownership of Cmd.Wait. Callers may
 // time out, kill during cleanup, and wait again without racing a second Wait.
 type commandWaiter struct {
 	command *exec.Cmd
 	done    chan struct{}
 	err     error
+}
+
+type commandWaitTimeoutError struct {
+	timeout time.Duration
+}
+
+func (e *commandWaitTimeoutError) Error() string {
+	return fmt.Sprintf("command did not exit within %s", e.timeout)
 }
 
 func newCommandWaiter(command *exec.Cmd) *commandWaiter {
@@ -554,7 +811,7 @@ func (w *commandWaiter) wait(timeout time.Duration) error {
 	case <-w.done:
 		return w.err
 	case <-timer.C:
-		return fmt.Errorf("command did not exit within %s", timeout)
+		return &commandWaitTimeoutError{timeout: timeout}
 	}
 }
 
@@ -614,7 +871,11 @@ func readPID(t *testing.T, path string) int {
 
 func assertProcessGone(t *testing.T, pid int, description string) {
 	t.Helper()
-	if err := exec.Command("kill", "-0", fmt.Sprintf("%d", pid)).Run(); err == nil {
+	if processExists(pid) {
 		t.Fatalf("%s process %d is still alive", description, pid)
 	}
+}
+
+func processExists(pid int) bool {
+	return exec.Command("kill", "-0", fmt.Sprintf("%d", pid)).Run() == nil
 }

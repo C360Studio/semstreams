@@ -357,6 +357,156 @@ a real-NATS pool-timeout injection; channel-synchronized unit proof covers the f
 counts remain unchanged from the baseline: owner files 38, NewGeneration 40, Generation.Stop 45, external Cancel 5,
 StopWithQuiesce 8, NewOperation 3, Operation.Run 3, and old rollback calls 20.
 
+## Gated-DAG one-shot owner worktree checkpoint — 2026-08-18
+
+Dirty worktree baseline: merged `main` `a1a68a784d6f82c5f6cbfb81fe81c86945eeda67`. Runtime/test scope is limited
+to `processor/gated-dag/{executor.go,component.go,executor_lifecycle_test.go,executor_integration_test.go}`; this ledger
+and `tasks.md` are the only task-truth additions. This checkpoint grants owner-migrated credit only to
+`processor/gated-dag/executor.go`; Gate A, runtime migration, proof, release, archive, and tag completion remain
+unchecked and incomplete.
+
+Stable worktree source identities:
+
+- `processor/gated-dag/executor.go`: `b772ebc214679ab8a688b833b17428e1566fae2c83a85058a5aad9c57eded28e`
+- `processor/gated-dag/component.go`: `1b867b93425165b4c7f6a2540fa38ede92465876a182da115b4b1be2e3a5062f`
+- `processor/gated-dag/executor_lifecycle_test.go`:
+  `2ab86ca28c0d78cc4bddaf47d5edd0ab1fade8d89093529e7757bc2a6d93e747`
+- `processor/gated-dag/executor_integration_test.go`:
+  `90f911716bea721046bc60d6a177319212cc143735c92fdaa8fa97dae20d352a`
+
+| Ruling | Exact implementation evidence | Checkpoint result |
+|---|---|---|
+| Owner-local lifecycle only | `processor/gated-dag/executor.go:71-73,188-194` | `Generation` is replaced by one private cancel, one done channel, and the existing WaitGroup; no context is stored. |
+| Exact dispatcher and failed-Watch rollback | `processor/gated-dag/executor.go:95-123`; `processor/gated-dag/executor_lifecycle_test.go:90-104` | The exact dispatcher is retained; failed lifecycle-Watch acquisition returns the joined Watch and dispatcher rollback result. |
+| Goroutine-local KV watcher | `processor/gated-dag/executor.go:374-407` | The exact watcher stays local to its goroutine and LIFO defers stop it before WaitGroup completion; no watcher catalog or field is added. |
+| One-shot Stop order | `processor/gated-dag/executor.go:207-227`; `processor/gated-dag/executor_lifecycle_test.go:14-40` | Stop consumes cancel once, cancels, stops the dispatcher, and bounds the existing done join; later executor Stop is nil/no-op. |
+| Boot-only parent and honest failed Stop | `processor/gated-dag/component.go:136-149,272-274,297-320`; `processor/gated-dag/executor_lifecycle_test.go:42-88` | The successful executor pointer is retained as used-instance evidence; a claimed failed Stop cannot become later Component success or healthy runtime. |
+| Fresh-component restart proof | `processor/gated-dag/executor_integration_test.go:189-218` | Same-instance restart rejects; a fresh Component boots against retained NATS and reconciles authoritative state. |
+| Touched sleep removal | `processor/gated-dag/executor_integration_test.go:34-89,146-184` | Graph-ingest readiness is observed through request/reply and dedup is driven by explicit passes/submission counts; the touched file has no `time.Sleep`. |
+
+TDD red evidence:
+
+```text
+go test -race ./processor/gated-dag -run \
+  'TestExecutorStop|TestComponent(FailedStop|CompletedStop|RejectsSameInstance)|TestExecutorStartWatchFailure' \
+  -count=1 -timeout=120s
+=> build failed: executor had no owner-local cancel/done fields
+
+go test -tags=integration -race ./processor/gated-dag -run TestIntegration_BootReconcile -count=1 -timeout=120s
+=> failed: the old test attempted same-instance Start after completed Stop and received the required boot-only rejection
+```
+
+Green evidence:
+
+```text
+go test -race ./processor/gated-dag -count=1 -timeout=120s
+ok github.com/c360studio/semstreams/processor/gated-dag 1.348s
+
+go test -tags=integration -race ./processor/gated-dag -count=1 -timeout=180s
+ok github.com/c360studio/semstreams/processor/gated-dag 8.869s
+```
+
+The production-only recovery searches report this exact delta from baseline `a1a68a78`:
+
+| Measurement | Baseline | Worktree | Delta |
+|---|---:|---:|---:|
+| Production owner files importing `internal/lifecyclejoin` | 38 | 37 | -1 |
+| `lifecyclejoin.NewGeneration` | 40 | 39 | -1 |
+| `Generation.Stop` | 45 | 44 | -1 |
+| External `Generation.Cancel` | 5 | 4 | -1 |
+| External `Generation.Signal` | 0 | 0 | 0 |
+| `Generation.StopWithQuiesce` | 8 | 8 | 0 |
+| `lifecyclejoin.NewOperation` | 3 | 3 | 0 |
+| `Operation.Run` | 3 | 3 | 0 |
+| External `RunPartialStartRollback` calls | 20 | 20 | 0 |
+
+## PR #1001 integration-runner interrupt prerequisite inventory — 2026-08-19
+
+The repeated CI failure in `TestIntegrationRunner_InterruptReapsPullBeforeReleasingLock` is inventoried at
+[`testinfra-interrupt-inventory.md`](testinfra-interrupt-inventory.md), baseline
+`6d9d754af2f13d0f09145ed34ce81f3d8b013885`, SHA-256
+`b183233d955680d4f00fcb8749b7a4b09370fa24479f79d476f8427093024737`. This is an inventory-only testinfra
+prerequisite. Independent review returned `INVENTORY PASS`. The narrowed D1 target is recorded at
+[`testinfra-interrupt-design.md`](testinfra-interrupt-design.md), SHA-256
+`c0f8754b241741c45523b00b2007a668e16f38b676a1c31138f960f766a3e764`. It grants zero lifecycle migration,
+restart-proof, release, archive, or tag credit. Independent review returned `DESIGN PASS`, and the owner approved the
+narrowed D1 implementation against that exact design hash.
+
+Dirty implementation checkpoint at baseline `6d9d754af2f13d0f09145ed34ce81f3d8b013885` is limited to
+`test/testinfra/integration_runner_contract_test.go`, SHA-256
+`81b04d4bca469dfb6df79d221afd9a0b4fc03f3d51379e4f40814d6a950d995f`. The inventory, design, and this ledger are the
+only test-truth additions. No production script, environment contract, exported API, Docker resource, or sister
+repository changed.
+
+| D1 ruling | Exact evidence | Checkpoint result |
+|---|---|---|
+| Stable termination case and causal helper | `test/testinfra/integration_runner_contract_test.go:206-245,355-399,688-691` | The renamed case re-execs only its fake pull. The helper installs `SIGTERM` notification before publishing its PID and gives the inherited release pipe one reader: pre-TERM release or EOF exits successfully; after TERM, the helper acknowledges TERM and joins that same release read before exit. |
+| Parent-ready follows Bash PID retention | `test/testinfra/integration_runner_contract_test.go:228-234,263-276,301-306` | The private date wrapper signals only after the helper PID marker exists; this runner call occurs after Bash retained `$!`. |
+| Exact four-pipe ownership | `test/testinfra/integration_runner_contract_test.go:247-299,401-465` | The runner case passes parent-ready, TERM-ack, release, and reap-check endpoints. Its waiter and release-first cleanup register immediately after successful Start, before fallible inherited-endpoint closes. The direct pre-TERM case uses only two `/dev/null` descriptor placeholders and the release pipe. |
+| Lock remains while acknowledged child is blocked | `test/testinfra/integration_runner_contract_test.go:307-325` | The runner receives `SIGTERM`; exact lock-owner bytes remain unchanged, `kill -0` proves the PID exists, and the private `rmdir` mutation probe refuses removal. |
+| Reap precedes lock removal | `test/testinfra/integration_runner_contract_test.go:235-245,327-352` | The wrapper refuses exact lock removal while the PID exists, including zombie state; only PID absence emits reap acknowledgement and delegates real `rmdir`. |
+| Actual exit, never timeout-as-success | `test/testinfra/integration_runner_contract_test.go:333-348,441-464,779-830` | The sole waiter returns an actual `*exec.ExitError` code 130 with exited `ProcessState`; typed timeout is a hard failure and no second `Cmd.Wait` exists. The pre-TERM case exact-matches the helper PID and proves it is absent after Wait. |
+| Early cleanup converges on the same waiter | `test/testinfra/integration_runner_contract_test.go:280-299,438-450,795-830` | Cleanup is registered before any post-Start failure can escape, releases the helper first, kills the runner only while still live, and joins the existing waiter. |
+| Adjacent contracts remain intact | `test/testinfra/integration_runner_contract_test.go:401-490,519-574` | The pre-TERM release regression, typed timeout result, and holder's bounded contention/release behavior use the same single-Wait ownership contract. |
+
+TDD red evidence:
+
+```text
+go test -race ./test/testinfra -run TestIntegrationRunner_TerminationReapsPullBeforeReleasingLock \
+  -count=1 -timeout=30s
+=> FAIL after 3.02s: wait for parent retained pull PID: i/o timeout
+```
+
+The failure is the intended missing causal milestone before the helper/date producer was wired. It is not accepted as
+runner completion.
+
+Correction red evidence after independent review found that early cleanup could close release before TERM:
+
+```text
+go test -race ./test/testinfra -run '^TestIntegrationRunnerFakePullHelper_PreTERMReleaseExits$' \
+  -count=1 -timeout=20s
+=> FAIL after 3.01s: helper did not accept pre-TERM release: command did not exit within 3s
+```
+
+The helper previously waited for TERM before reading release, so EOF could not converge early cleanup. The corrected
+helper causally waits for either event and, if TERM wins, joins the same release read after acknowledging TERM.
+
+Green focused evidence:
+
+```text
+go test -race ./test/testinfra -run \
+  '^(TestIntegrationRunner_TerminationReapsPullBeforeReleasingLock|TestIntegrationRunnerFakePullHelper_PreTERMReleaseExits)$' \
+  -count=20 -timeout=180s
+PASS: both causal cases passed 20/20 under the race detector
+
+go test -race ./test/testinfra -run \
+  'TestIntegrationRunner_HostLockHasBoundedContentionDiagnostics|TestCommandWaiter' -count=1 -timeout=60s
+ok github.com/c360studio/semstreams/test/testinfra 2.555s
+
+go test -race ./test/testinfra -skip '^TestInfrastructurePolicyGuard$' -count=1 -timeout=120s
+ok github.com/c360studio/semstreams/test/testinfra 6.964s
+
+go test -race ./test/testinfra -count=1 -timeout=120s
+LOCAL GATE NOT GREEN: TestInfrastructurePolicyGuard reported 742 findings under two excluded, user-owned
+`.claude/worktrees/agent-*` trees. No reported finding points to this test file. The worktrees were not mutated or
+removed; an isolated checkout/CI must run the full package gate.
+
+task lint
+PASS
+
+openspec validate simplify-one-shot-lifecycle-ownership --strict --no-interactive
+Change 'simplify-one-shot-lifecycle-ownership' is valid
+
+git diff --check
+PASS
+```
+
+The twenty termination runs each completed actual runner Wait, exit-code/state validation, post-reap acknowledgement,
+PID absence, and lock absence. The twenty pre-TERM runs each completed the exact helper Wait and PID-absence proof.
+Test cleanup left no owned process or FD endpoint. This prerequisite receives zero owner, lifecycle, Gate,
+runtime-proof, release, archive, or tag credit. The full-package gate remains explicitly unverified until run without
+the excluded user-owned worktrees in the repository scan root.
+
 ## Workspace recovery checkpoint
 
 Authority collisions are inventoried in
