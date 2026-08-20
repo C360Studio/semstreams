@@ -907,19 +907,17 @@ func TestComponent_RespectsContext_Cancellation(t *testing.T) {
 
 func TestComponent_RespectsContext_Timeout(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithDeadline(context.Background(), time.Unix(1, 0))
 	defer cancel()
 
 	require.NoError(t, comp.Initialize())
 
-	// Start with timeout context
+	// An already-expired caller deadline is rejected before lifecycle authority
+	// or connection work is acquired.
 	err := comp.Start(ctx)
-
-	// Should either succeed or handle timeout gracefully
-	if err != nil {
-		// If error, it should be context-related
-		assert.Contains(t, err.Error(), "context")
-	}
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.False(t, comp.lifecycleUsed)
 }
 
 // ====================================================================================

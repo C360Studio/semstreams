@@ -154,6 +154,15 @@
     without adding a name-routed lifecycle surface. RU1, GI1, M1, N1, and every broader gate remain excluded;
     temporary bridges preserve the no-release/no-tag invariant. Task 2.3, Gate A/B/C, runtime migration,
     proof, release, archive, and tag readiness remain unchecked and incomplete.
+  - 2026-08-20 GI1 implementation checkpoint: independent `semstreams-reviewer` verdict `APPROVE` grants
+    owner-migrated credit only to `processor/graph-ingest/component.go`; `keyed_ingest.go`, `readiness.go`, and tests
+    receive no owner credit. The exact-handle shutdown order preserves effect → durable guard → settlement,
+    readiness observation, subjects, configuration, and schema while removing two stored contexts and two unauthorized
+    roots.
+    The causal RED, exact race/integration/core-E2E/contract evidence, census, repository-wide limitations, and live
+    identities are recorded in the ledger. No outward API, name-routed lifecycle, or deletion surface changed. RU1,
+    M1, N1, and every broader gate remain excluded; temporary bridges preserve the no-release/no-tag invariant. Task
+    2.3, Gate A/B/C, runtime migration, proof, release, archive, and tag readiness remain unchecked and incomplete.
   - 2026-08-18 checkpoint: independent `semstreams-reviewer` verdict `CORRECTIONS CONFIRMED` grants owner-migrated
     credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
     worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.

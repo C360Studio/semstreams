@@ -69,25 +69,20 @@ func guardKey(entityID, stream string) string {
 }
 
 // buildIngestPool constructs the keyed-concurrent ingest pool + the in-memory
-// guard shards. Called from Start BEFORE subscriptions (ADR-072 M3). The pool
-// and submit contexts are independent of the consume context, so a consumer-ctx
-// cancel on Stop does not abort in-flight merges; Stop cancels the submit ctx
-// first, then drains, then cancels the pool ctx.
-func (c *Component) buildIngestPool() error {
+// guard shards. Called from Start BEFORE subscriptions (ADR-072 M3). The exact
+// Start-derived pool context is supplied lexically and never retained.
+func (c *Component) buildIngestPool(poolCtx context.Context) error {
 	lanes := c.config.IngestLanes
 	if lanes < 1 {
 		lanes = 1
 	}
-
-	c.ingestPoolCtx, c.ingestPoolCancel = context.WithCancel(context.Background())
-	c.ingestSubmitCtx, c.ingestSubmitCancel = context.WithCancel(context.Background())
 
 	c.ingestGuardMem = make([]*laneGuard, lanes)
 	for i := range c.ingestGuardMem {
 		c.ingestGuardMem[i] = newLaneGuard(ingestGuardMemMaxPerLane)
 	}
 
-	pool, err := dispatch.NewKeyedPool(c.ingestPoolCtx, dispatch.KeyedConfig[ingestWork]{
+	pool, err := dispatch.NewKeyedPool(poolCtx, dispatch.KeyedConfig[ingestWork]{
 		Lanes:      lanes,
 		QueueDepth: ingestLaneQueueDepth,
 		Name:       "graph_ingest",
@@ -106,20 +101,6 @@ func (c *Component) buildIngestPool() error {
 	}
 	c.ingestPool = pool
 	return nil
-}
-
-// teardownIngestPool aborts the keyed ingest pool on a boot-failure path (Start
-// returning an error after buildIngestPool succeeded, where Stop won't run
-// because running is still false). Cancelling the pool ctx makes the lane
-// goroutines + metricsUpdater return; cancelling the submit ctx unblocks any
-// (not-yet-possible) parked submit. Nil-safe.
-func (c *Component) teardownIngestPool() {
-	if c.ingestSubmitCancel != nil {
-		c.ingestSubmitCancel()
-	}
-	if c.ingestPoolCancel != nil {
-		c.ingestPoolCancel()
-	}
 }
 
 // processIngest is the keyed pool's per-item handler, run on lane `lane`'s

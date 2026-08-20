@@ -1089,6 +1089,95 @@ The unrelated Metrics inventory remains byte-identical at SHA-256
 `8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`. Task 2.3, Gate A/B/C, runtime migration,
 proof, release, archive, and tag readiness remain unchecked and incomplete.
 
+### GI1 graph-ingest implementation checkpoint — 2026-08-20
+
+Independent `semstreams-reviewer` first-pass verdict `APPROVE` applies to the GI1 dirty worktree based on full commit
+`f5532e3d4986593c7482e70f754aa9ea82a558f6`. Owner-migrated credit is granted only to
+`processor/graph-ingest/component.go`. `processor/graph-ingest/keyed_ingest.go`,
+`processor/graph-ingest/readiness.go`, and tests are supporting implementation/evidence surfaces and receive no owner
+credit.
+
+The causal TDD RED was:
+
+```text
+go test ./processor/graph-ingest -run TestLifecycleOwner -count=1
+```
+
+It failed to compile before production changed because the owner-local lifecycle fields and exact native binding seams
+did not exist. The accepted implementation publishes cleanup and `startDone` authority before acquisition escapes,
+owns exact core and JetStream handles, and removes both retained production contexts and both unauthorized roots.
+
+Stop preserves the existing settlement boundary in this order: fence new JetStream delivery; issue Drain and await
+exact Closed while submission, keyed-pool, KV/cache, and readiness-label authority remain live; cancel new submission;
+join admitted keyed work; drain remaining core callbacks; cancel runtime/status work; join status publication; then
+close caches. Failed-Start cleanup retains exact handles for a later caller-bounded Stop. Running deadline Stop is
+terminal with no later Drain/result replay.
+
+Final developer and independent evidence:
+
+| Evidence | Developer | Reviewer |
+|---|---:|---:|
+| Lifecycle race, 10 repetitions | PASS, 1.347s | — |
+| Lifecycle + settlement race, 10 repetitions | — | PASS, 1.610s |
+| Full package race | PASS, 1.603s | PASS, 1.568s |
+| Full integration | PASS, 31.900s | PASS, 31.266s |
+| Focused one-shot/failed-Start integration, 3 repetitions | — | PASS, 2.109s |
+| Isolated contract race | — | PASS, 8.025s |
+| `task e2e:core` | PASS, 3/3 | PASS, 3/3 including graph roundtrip |
+
+`task lint`, `task build`, schema generation with zero drift, `git diff --check`, strict change validation, and all
+52/52 strict spec validations passed. Repository-wide race is not claimed green because repository-root scanners
+traverse unrelated user-owned `.claude/worktrees`, and four stale testinfra baseline rows remain. The isolated contract
+scanner passed; isolated testinfra reported only those four known rows. The ordinary graph-ingest package and
+integration surfaces are green.
+
+The authoritative tracked-production census moved exactly as reviewed:
+
+| Measurement | HEAD `f5532e3d` | GI1 worktree | Delta |
+|---|---:|---:|---:|
+| Production owner files importing `internal/lifecyclejoin` | 3 | 2 | -1 |
+| `lifecyclejoin.NewGeneration` | 3 | 2 | -1 |
+| `Generation.Stop` | 3 | 2 | -1 |
+| External `Generation.Cancel` | 3 | 2 | -1 |
+| `lifecyclejoin.NewOperation` / lifecycle `Operation.Run` | 1 | 0 | -1 |
+| External `RunPartialStartRollback` calls | 1 | 1 | 0 |
+| Final parent-aware `RollbackFailedStart` production owner calls | 29 | 30 | +1 |
+| Production stored `context.Context` fields | 2 | 0 | -2 |
+| Unauthorized production `context.Background` roots | 2 | 0 | -2 |
+| `Generation.StopWithQuiesce` | 0 | 0 | 0 |
+
+GI1 preserves the existing subjects, configuration, generated schema, readiness semantics, and read-only bound
+consumer labels. It preserves effect → durable ingest guard → ACK and the existing poison/NAK/Term dispositions. No
+name-routed lifecycle or consumer deletion was added, and no outward surface changed.
+
+Stable GI1 implementation and evidence identities are:
+
+- `processor/graph-ingest/component.go`:
+  `e0948db7c0dbfd97ab9c49370d1d0d6c519775cd3e32037f71845c32d718645f`;
+- `processor/graph-ingest/component_test.go`:
+  `7844499285e133b164bb8a5fa67aebe5863df1117a0fffab9bd6d70a4259773d`;
+- `processor/graph-ingest/keyed_ingest.go`:
+  `8e856ba23498fa38b3b7ac7aa6a5b46a3576847bc3c4ef06d57f7d0ec0371fb3`;
+- `processor/graph-ingest/lifecycle_integration_test.go`:
+  `a0976d5150f22f142682debf49bee9fc931f007370832c5ec2cee0ecf81e3f52`;
+- `processor/graph-ingest/readiness.go`:
+  `fd8a3ae4d716594efa04a7648875471696bfc0732ee0bd8b32491bd20f486bb6`;
+- `processor/graph-ingest/readiness_integration_test.go`:
+  `1edbbf3a1cdc3d214f42b1aab01b94e8d4f234bbd93d450e84392201fd4f369d`;
+- `processor/graph-ingest/lifecycle_owner_test.go`:
+  `648d1ad3ccf27e49fa161a5dce39f01293bd443f3a8a153c5debf53906b368cc`.
+
+`processor/graph-ingest/README.md` and `processor/graph-ingest/doc.go` were inspected and contain no stale
+lifecycle/restart/context-ownership claim directly implicated by GI1, so they remain unchanged at SHA-256
+`6d66c73dc1de2f554b6d2d9166df9b565c60f4be418daa8db91bcc060e0d2cc2` and
+`96d2749b526255e67e12ae91c731029e1598d9496b6304094071a8c0bbfbc4a4` respectively.
+
+GI1 introduces no API, configuration, context, name-routed lifecycle, or consumer-deletion surface. RU1, M1, N1, and
+all broader gate credit remain excluded. Temporary bridges keep the branch under the no-release/no-tag invariant. The
+unrelated Metrics inventory remains byte-identical at SHA-256
+`8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`. Task 2.3, Gate A/B/C, runtime migration,
+proof, release, archive, and tag readiness remain unchecked and incomplete.
+
 ### CM1 ComponentManager implementation checkpoint — 2026-08-19
 
 Independent `semstreams-reviewer` verdict `APPROVE` applies to the CM1 dirty worktree based on full commit

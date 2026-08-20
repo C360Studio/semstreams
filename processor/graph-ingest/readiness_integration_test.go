@@ -379,12 +379,16 @@ func TestIntegration_ReadinessEnvelope_AbsentKeyIsNotAFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	tc, _ := startIngestForReadiness(ctx, t)
+	tc, comp := startIngestForReadiness(ctx, t)
 
 	require.Eventually(t, func() bool {
 		_, _, ok := tryReadEnvelope(ctx, t, tc)
 		return ok
 	}, 30*time.Second, 100*time.Millisecond, "the producer should publish its key")
+	// Fence the producer before the fixture-admin purge. Otherwise the 200ms
+	// heartbeat can legitimately republish between Purge and Get, making this a
+	// scheduler race rather than a test of the absent-key decoder branch.
+	require.NoError(t, comp.Stop(ctx))
 
 	bucket, err := tc.Client.GetKeyValueBucket(ctx, readiness.BucketGraphStatus)
 	require.NoError(t, err)

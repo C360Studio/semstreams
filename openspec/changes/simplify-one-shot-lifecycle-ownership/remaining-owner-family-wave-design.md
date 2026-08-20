@@ -24,6 +24,8 @@
 > output owner files.
 > Independent OS1 implementation review returned `APPROVE`; owner-migrated credit is limited to
 > `storage/objectstore/component.go`.
+> Independent GI1 implementation review returned `APPROVE`; owner-migrated credit is limited to
+> `processor/graph-ingest/component.go`.
 
 ## Evidence identity
 
@@ -359,6 +361,13 @@ runtime/core cleanup; preserve effect→guard→ACK/poison. Proof callback
 fence/pool/redelivery/guard/ACK/backlog/partial failure/deadline/race/integration/e2e. Delta
 owner/NG/Stop/Cancel/Operation -1. GI1 depends on S1 and observation separation.
 
+Implementation status on 2026-08-20: independent `semstreams-reviewer` verdict `APPROVE` grants owner-migrated credit
+only to `processor/graph-ingest/component.go`. `keyed_ingest.go`, `readiness.go`, and tests are supporting surfaces and
+receive no owner credit. Stored production contexts and unauthorized roots are removed while settlement, readiness,
+subjects, configuration, and schema remain unchanged. RU1, M1, N1, and unrelated outward surfaces remain excluded.
+Temporary bridges keep the branch ineligible for release or tag. Task 2.3, Gate A/B/C, runtime migration, proof,
+release, archive, and tag readiness remain incomplete.
+
 ## ConsumeDurable outward contract and replacement
 
 The accepted zero-adopter premise is false. Current sister-repo production has ten concrete calls:
@@ -532,4 +541,6 @@ credit, and no broader task or gate credit follows. Independent O1 implementatio
 owner-migrated credit only to its two frozen output owner files; tests and package documentation receive no owner
 credit, and no broader task or gate credit follows. Independent OS1 implementation review returned `APPROVE`,
 granting owner-migrated credit only to `storage/objectstore/component.go`; tests and package documentation receive no
-owner credit, and no broader task or gate credit follows.
+owner credit, and no broader task or gate credit follows. Independent GI1 implementation review returned `APPROVE`,
+granting owner-migrated credit only to `processor/graph-ingest/component.go`; adjacent implementation and test support
+receive no owner credit, and no broader task or gate credit follows.
