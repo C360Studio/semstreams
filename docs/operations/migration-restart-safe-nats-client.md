@@ -110,6 +110,29 @@ repositories. Independent RU1 implementation review and the final isolated struc
 credit is limited to `processor/rule/processor.go`; this migration map grants no supporting-file, broader task,
 release, or tag credit.
 
+## Metrics HTTP server context migration
+
+The existing `metric.Server` lifecycle methods now take the caller's context directly:
+
+```go
+server := metric.NewServer(port, path, registry, securityConfig)
+if err := server.Start(runtimeCtx); err != nil {
+    return err
+}
+if err := server.Stop(shutdownCtx); err != nil {
+    return err
+}
+```
+
+`Start` binds synchronously and uses its exact context as the HTTP server base context. `Stop` attempts graceful HTTP
+shutdown within the supplied shutdown budget. If that attempt fails or the budget expires, it force-closes the
+server and waits for the exact serving goroutine under a separate fixed one-second bound. A completed repeated Stop
+is a nil no-op; concurrent Stop is unsupported and returns a typed transient error. Each Server is one-shot, so
+restart constructs a fresh instance. The read-only sister-repository census found no direct `metric.NewServer`,
+`service.NewMetrics`, or metrics-server lifecycle callers; external direct users discover the source break at compile
+time and pass their existing runtime and shutdown contexts. Configuration, endpoint paths, and scrape behavior do not
+change.
+
 ## Duplicate durable identity
 
 Two local owners cannot share one `(stream,durable)` identity. Canonically derive and validate every identity knowable

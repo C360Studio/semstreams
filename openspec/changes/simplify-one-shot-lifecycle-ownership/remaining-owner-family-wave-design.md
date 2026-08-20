@@ -28,6 +28,9 @@
 > `processor/graph-ingest/component.go`.
 > The owner approved RU1 rulings R1-R5 only. Independent implementation review and a fresh isolated structural E2E
 > returned green; owner-migrated credit is limited to `processor/rule/processor.go`.
+> The owner approved M1's exact context-bearing `metric.Server.Start(ctx)` / `Stop(ctx)` API and fresh-instance
+> one-shot contract. Independent implementation review returned `APPROVE`; owner-migrated credit is limited to
+> `service/metrics.go`, while `metric/handler.go`, tests, and documentation are supporting surfaces only.
 
 ## Evidence identity
 
@@ -277,9 +280,48 @@ bridges exist. Task 2.3, Gate A/B/C, runtime migration, proof, release, archive,
 ## M1 — Metrics + metric.Server singleton
 
 Membership service/metrics.go with metric/handler.go. Exact listener/server/serveDone; bind before BaseService commit;
-BaseContext exact Start; caller-bounded Shutdown outside locks; rollback reachable; repeat nil. Existing metric.Server
-signatures become context-bearing, no second surface; owner-gated. Delta owner/NG/Stop/Cancel -1; old lifecyclejoin
-rollback -1. M1 depends on R1.
+BaseContext exact Start; graceful Shutdown uses the caller's bound outside locks. Failure or deadline terminally
+force-closes the exact server/listener and joins the exact serveDone under a separate fixed one-second bound. Failed
+Start remains retryable through owner-local cleanupPending authority; running Stop is terminal and completed repeat
+Stop is nil. Existing metric.Server signatures become exactly `Start(context.Context)` and
+`Stop(context.Context)`, with no alias, shim, option, or second surface. Server and Metrics instances are one-shot;
+restart constructs a fresh instance. pprof remains the explicit process-lifetime exception and is excluded. Delta
+owner/NG/Stop/Cancel -1; old lifecyclejoin rollback -1. M1 depends on R1.
+
+Owner approval on 2026-08-20 is limited to that M1 API and lifecycle contract. Independent final
+`semstreams-reviewer` verdict `APPROVE` grants owner-migrated credit only to `service/metrics.go`.
+`metric/handler.go`, tests, package/adopter documentation, and migration guidance are supporting implementation,
+evidence, or discovery surfaces and receive no owner credit. The read-only sister-repository census found zero direct
+metrics-server callers. Temporary port bridges keep the branch ineligible for release or tag. Task 2.3, Gate A/B/C,
+N1, runtime migration, proof, release, archive, and tag readiness remain unchecked and incomplete.
+
+Exact M1 conformance mapping:
+
+| Owner ruling | Result | File:line evidence |
+|---|---|---|
+| Replace existing API; add no second surface | PASS | E1 |
+| One-shot instance; fresh instance restarts | PASS | E2 |
+| Synchronous bind; exact Start `BaseContext` | PASS | E3 |
+| Caller-bounded grace; terminal force/join | PASS | E4 |
+| Owner `startDone`; failed-Start retry authority | PASS | E5 |
+| Repeat nil; concurrent Stop typed transient | PASS | E6 |
+| Retain no `context.Context` | PASS | E7 |
+| Exclude pprof; leave it unchanged | PASS | E8 |
+
+- E1: `metric/handler.go:56` and `metric/handler.go:155` replace the two methods;
+  `service/metrics.go:43-46` consumes only that surface.
+- E2: `metric/handler.go:63-71` enforces use once; `metric/handler_test.go:43-68` proves restart with a new instance.
+- E3: `metric/handler.go:113-146` binds before returning and injects the exact context;
+  `metric/handler_test.go:48-51` proves both facts.
+- E4: `metric/handler.go:151-223` implements graceful shutdown, force-close, and immediate bounded join;
+  `metric/handler_test.go:126-170` proves terminal deadline cleanup.
+- E5: `service/metrics.go:125-180` publishes and finalizes Start; `service/metrics.go:199-276` owns cleanup order and
+  retry; `service/metrics_owner_test.go:73-194` proves failed-Start authority and Start/Stop overlap.
+- E6: `metric/handler.go:159-169` and `service/metrics.go:218-253` define terminal/concurrent behavior;
+  `metric/handler_test.go:70-109` and `service/metrics_owner_test.go:46-70` prove it.
+- E7: the production state records at `metric/handler.go:23-34` and `service/metrics.go:20-40` retain only native
+  handles, phase state, and private cancellation.
+- E8: `service/pprof.go:8-38` records the process-lifetime exception; `git diff -- service/pprof.go` is empty.
 
 ## SM1 — ServiceManager multi-HTTP singleton
 
@@ -556,3 +598,8 @@ granting owner-migrated credit only to `processor/graph-ingest/component.go`; ad
 receive no owner credit, and no broader task or gate credit follows. RU1 owner approval is limited to R1-R5;
 independent implementation review and the fresh isolated 38/38 structural E2E grant owner-migrated credit only to
 `processor/rule/processor.go`, while supporting surfaces receive none and no broader task or gate credit follows.
+The later owner approval explicitly accepts rulings 6 and 7 only for M1: the existing context-bearing
+`metric.Server` API, fresh-instance one-shot reuse, and pprof remaining outside M1 as the process-lifetime exception.
+That approval updates the historical unapproved status recorded above only for M1. The N1 portions of rulings 3-5
+remain unapproved; no N1 canonical cutover, Subscription semantic change, or durable-handler/ConsumeDurable migration
+is authorized.

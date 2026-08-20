@@ -40,7 +40,12 @@ Framework for services to register custom metrics including counters, gauges, an
 ### Basic Example
 
 ```go
-import "github.com/c360/semstreams/metric"
+import (
+    "context"
+    "time"
+
+    "github.com/c360/semstreams/metric"
+)
 
 // Create metrics registry with core platform metrics
 registry := metric.NewMetricsRegistry()
@@ -48,10 +53,17 @@ securityCfg := security.Config{}
 
 // Start metrics HTTP server
 server := metric.NewServer(9090, "/metrics", registry, securityCfg)
-if err := server.Start(); err != nil {
+runtimeCtx := context.Background()
+if err := server.Start(runtimeCtx); err != nil {
     log.Fatalf("Failed to start metrics server: %v", err)
 }
-defer server.Stop()
+defer func() {
+    shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    if err := server.Stop(shutdownCtx); err != nil {
+        log.Printf("Failed to stop metrics server: %v", err)
+    }
+}()
 
 // Record core platform metrics
 coreMetrics := registry.CoreMetrics()
@@ -183,9 +195,9 @@ type Server struct {
 }
 
 func NewServer(port int, path string, registry *MetricsRegistry, security security.Config) *Server
-func (s *Server) Start() error // Bind synchronously, then serve in the background
-func (s *Server) Stop() error  // Close the listener and wait for serving to exit
-func (s *Server) Address() string // Get server address
+func (s *Server) Start(context.Context) error // One-shot synchronous bind; context owns served requests
+func (s *Server) Stop(context.Context) error  // Caller-bounded graceful attempt, then bounded force-close/join
+func (s *Server) Address() string              // Get server address
 ```
 
 ### Interfaces
@@ -289,15 +301,19 @@ if !registry.Unregister("service", "metric") {
 ```go
 // Start server with error handling
 server := metric.NewServer(9090, "/metrics", registry, security.Config{})
-if err := server.Start(); err != nil {
+if err := server.Start(ctx); err != nil {
     log.Fatalf("Metrics server failed: %v", err)
 }
 
 // Graceful shutdown
-if err := server.Stop(); err != nil {
+if err := server.Stop(shutdownCtx); err != nil {
     log.Printf("Error stopping metrics server: %v", err)
 }
 ```
+
+`Stop` uses `shutdownCtx` only for the graceful HTTP shutdown attempt. If that attempt fails or its budget expires,
+the server is force-closed and its exact serving goroutine receives a separate fixed one-second join bound. The
+instance is terminal after that attempt; a completed repeated `Stop` returns nil.
 
 ### Best Practices
 
@@ -532,7 +548,8 @@ func main() {
     // Start metrics server
     server := metric.NewServer(9090, "/metrics", registry, security.Config{})
     log.Printf("Starting metrics server on %s", server.Address())
-    if err := server.Start(); err != nil {
+    runtimeCtx := context.Background()
+    if err := server.Start(runtimeCtx); err != nil {
         log.Fatalf("Failed to start metrics server: %v", err)
     }
 
@@ -542,8 +559,7 @@ func main() {
         log.Fatalf("Failed to create GPS service: %v", err)
     }
 
-    ctx := context.Background()
-    if err := gpsService.Start(ctx); err != nil {
+    if err := gpsService.Start(runtimeCtx); err != nil {
         log.Fatalf("Failed to start GPS service: %v", err)
     }
 
@@ -552,7 +568,11 @@ func main() {
 
     // Cleanup
     gpsService.Stop()
-    server.Stop()
+    shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    if err := server.Stop(shutdownCtx); err != nil {
+        log.Printf("Failed to stop metrics server: %v", err)
+    }
 }
 ```
 
@@ -562,6 +582,7 @@ func main() {
 package main
 
 import (
+    "context"
     "fmt"
     "log"
     "math/rand"
@@ -734,7 +755,8 @@ func main() {
 
     server := metric.NewServer(9090, "/metrics", registry, security.Config{})
     log.Printf("Metrics server running at %s", server.Address())
-    if err := server.Start(); err != nil {
+    runtimeCtx := context.Background()
+    if err := server.Start(runtimeCtx); err != nil {
         log.Fatalf("Failed to start metrics server: %v", err)
     }
 
@@ -766,7 +788,11 @@ func main() {
         service.Stop()
     }
 
-    server.Stop()
+    shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    if err := server.Stop(shutdownCtx); err != nil {
+        log.Printf("Failed to stop metrics server: %v", err)
+    }
     log.Printf("All services stopped")
 }
 ```

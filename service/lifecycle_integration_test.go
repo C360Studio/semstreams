@@ -11,6 +11,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -156,10 +157,13 @@ func TestServiceLifecycleRobustness(t *testing.T) {
 				}()
 			}
 
-			// All stops should succeed (idempotent)
+			// A completed repeat is a nil no-op. A call overlapping the active
+			// teardown is deliberately unsupported and reports typed transient.
 			for j := 0; j < 5; j++ {
 				err := <-stopErrors
-				assert.NoError(t, err, "All Stop calls should succeed")
+				if err != nil {
+					assert.True(t, errs.IsTransient(err), "overlapping Stop must be typed transient: %v", err)
+				}
 			}
 		}
 	})

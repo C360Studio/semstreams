@@ -172,6 +172,23 @@
     is limited to `processor/rule/processor.go`; all adjacent Rule files, composition callers, docs, migration guidance,
     and tests are supporting only. Task 2.3, Gate A/B/C, runtime migration, proof, release, archive, and tag readiness
     remain unchecked and incomplete; temporary bridges preserve the no-release/no-tag invariant.
+  - 2026-08-20 M1 implementation checkpoint: the owner approved exact exported
+    `metric.Server.Start(context.Context)` / `Stop(context.Context)`, no aliases or shims, and fresh-instance one-shot
+    reuse; pprof remains excluded. Independent final `semstreams-reviewer` verdict `APPROVE` grants owner-migrated
+    credit only to `service/metrics.go`. `metric/handler.go`, tests, package/adopter docs, and migration guidance are
+    supporting only. The causal RED and first review exposed non-terminal deadline cleanup; correction force-closes
+    exact HTTP handles and uses a separate fixed one-second serveDone join bound while preserving the caller-bounded
+    graceful attempt. A second HIGH required causal Start/Stop overlap proof; its correction passed 50 race
+    repetitions. Developer focused race matrices passed 10 repetitions in 1.788s for metric and 33.894s for service;
+    Metrics integration passed 10 repetitions in 2.199s; lint, build, schema no-drift, diff-check, strict validation,
+    and core E2E 3/3 passed. Final reviewer focused M1 x10 and full metric+service race, gofmt, vet, and diff-check also
+    passed. Exact census moved lifecyclejoin owner imports, NewGeneration, Generation.Stop, external Cancel, and old
+    rollback calls 1→0 each; final helper calls moved 31→32. Repository-root scans remain limited by unrelated
+    user-owned `.claude/worktrees` and stale policy-baseline rows; the broad integration parent also retains unrelated
+    stale MessageLogger/ComponentManager assertions. The isolated contract surface passed. Read-only sister census
+    found zero direct metrics-server callers, and the Metrics inventory remains byte-identical. Task 2.3, Gate A/B/C,
+    N1, runtime migration, proof, release, archive, and tag readiness remain unchecked and incomplete; temporary
+    bridges preserve the no-release/no-tag invariant.
   - 2026-08-18 checkpoint: independent `semstreams-reviewer` verdict `CORRECTIONS CONFIRMED` grants owner-migrated
     credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
     worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.

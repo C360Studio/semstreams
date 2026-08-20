@@ -9,7 +9,6 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/health"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/storage"
@@ -22,8 +21,8 @@ type failingMetricsServer struct {
 	stopCalls atomic.Int32
 }
 
-func (*failingMetricsServer) Start() error { return nil }
-func (s *failingMetricsServer) Stop() error {
+func (*failingMetricsServer) Start(context.Context) error { return nil }
+func (s *failingMetricsServer) Stop(context.Context) error {
 	s.stopCalls.Add(1)
 	return s.stopErr
 }
@@ -66,7 +65,7 @@ func TestBaseServiceRejectsNilLifecycleContextBeforeState(t *testing.T) {
 	require.Equal(t, StatusRunning, svc.Status())
 }
 
-func TestMetricsStopRetainsAndReplaysFirstTeardownFailure(t *testing.T) {
+func TestMetricsCompletedStopDoesNotReplayFirstTeardownFailure(t *testing.T) {
 	base := NewBaseServiceWithOptions("metrics", nil)
 	runCtx, cancel := context.WithCancel(context.Background())
 	require.NoError(t, base.Start(runCtx))
@@ -75,13 +74,15 @@ func TestMetricsStopRetainsAndReplaysFirstTeardownFailure(t *testing.T) {
 	m := &Metrics{
 		BaseService: base,
 		server:      server,
-		generation:  lifecyclejoin.NewGeneration(cancel, func() {}),
+		used:        true,
+		running:     true,
+		cancel:      cancel,
 	}
 
 	firstErr := m.Stop(context.Background())
 	require.ErrorIs(t, firstErr, serverErr)
 	secondErr := m.Stop(context.Background())
-	require.EqualError(t, secondErr, firstErr.Error())
+	require.NoError(t, secondErr)
 	require.Equal(t, int32(1), server.stopCalls.Load())
 }
 

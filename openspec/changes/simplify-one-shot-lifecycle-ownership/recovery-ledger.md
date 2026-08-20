@@ -1372,6 +1372,133 @@ receive no owner credit. RU1 grants no M1 or N1 credit. Temporary bridges keep t
 invariant. Task 2.3, Gate A/B/C, runtime migration, proof, release, archive, and tag readiness remain unchecked and
 incomplete.
 
+### M1 Metrics HTTP implementation checkpoint — 2026-08-20
+
+The owner approved the exact existing-surface break to `metric.Server.Start(context.Context)` and
+`metric.Server.Stop(context.Context)`, with no aliases, shims, options, or second lifecycle surface. Each Server and
+Metrics service instance is one-shot; restart constructs a fresh instance. pprof remains the explicit
+process-lifetime exception and is outside M1.
+
+Independent final `semstreams-reviewer` verdict `APPROVE` applies to the M1 dirty worktree based on full commit
+`c7ca5d0f8e23c8e2deb516a6e10121705e291e7a`. Owner-migrated credit is granted only to `service/metrics.go`.
+`metric/handler.go`, all tests, package/adopter documentation, and migration guidance are supporting implementation,
+evidence, or discovery surfaces and receive no owner credit.
+
+M1 binds the provider before BaseService commits running state and passes the exact Start-derived context through
+`http.Server.BaseContext`. It stores no context. Owner-local `startDone` and cleanupPending authority make Stop wait
+outside locks for Start finalization and preserve the exact provider after failed-Start cleanup failure. Running Stop
+keeps the runtime context live while invoking the provider, then cancels and joins BaseService work. Only failed-Start
+cleanupPending may retry cleanup; a running Stop attempt is terminal, and a completed repeated Stop returns nil
+without replaying a prior result. Concurrent Stop is unsupported and returns a typed transient error rather than
+sharing a result.
+
+`metric.Server.Stop` attempts graceful `http.Server.Shutdown` within the caller's context. If graceful shutdown fails
+or that budget expires, it force-closes the exact HTTP server and listener, then observes the original serveDone under
+a separately and immediately bounded one-second context. It joins the original graceful, force-close, serve, and join
+errors, clears exact handles once, and makes repeated Stop a nil no-op.
+
+Exact M1 conformance mapping:
+
+| Owner ruling | Result | File:line evidence |
+|---|---|---|
+| Replace existing API; add no second surface | PASS | E1 |
+| One-shot instance; fresh instance restarts | PASS | E2 |
+| Synchronous bind; exact Start `BaseContext` | PASS | E3 |
+| Caller-bounded grace; terminal force/join | PASS | E4 |
+| Owner `startDone`; failed-Start retry authority | PASS | E5 |
+| Repeat nil; concurrent Stop typed transient | PASS | E6 |
+| Retain no `context.Context` | PASS | E7 |
+| Exclude pprof; leave it unchanged | PASS | E8 |
+
+- E1: `metric/handler.go:56` and `metric/handler.go:155` replace the two methods;
+  `service/metrics.go:43-46` consumes only that surface.
+- E2: `metric/handler.go:63-71` enforces use once; `metric/handler_test.go:43-68` proves restart with a new instance.
+- E3: `metric/handler.go:113-146` binds before returning and injects the exact context;
+  `metric/handler_test.go:48-51` proves both facts.
+- E4: `metric/handler.go:151-223` implements graceful shutdown, force-close, and immediate bounded join;
+  `metric/handler_test.go:126-170` proves terminal deadline cleanup.
+- E5: `service/metrics.go:125-180` publishes and finalizes Start; `service/metrics.go:199-276` owns cleanup order and
+  retry; `service/metrics_owner_test.go:73-194` proves failed-Start authority and Start/Stop overlap.
+- E6: `metric/handler.go:159-169` and `service/metrics.go:218-253` define terminal/concurrent behavior;
+  `metric/handler_test.go:70-109` and `service/metrics_owner_test.go:46-70` prove it.
+- E7: the production state records at `metric/handler.go:23-34` and `service/metrics.go:20-40` retain only native
+  handles, phase state, and private cancellation.
+- E8: `service/pprof.go:8-38` records the process-lifetime exception; `git diff -- service/pprof.go` is empty.
+
+The TDD and review correction sequence is recorded conservatively:
+
+1. Initial owner tests failed before the context-bearing one-shot provider and owner-local lifecycle state existed.
+2. The causal deadline RED proved a canceled Stop retained a non-nil server handle and could later rejoin the same
+   serving result.
+3. The first independent review blocked that behavior because Metrics terminalized and discarded the provider after
+   the deadline, allowing the retained server to leak. The correction added terminal force-close and the separate
+   bounded join while preserving failed-Start retry authority only in Metrics.
+4. The second independent review raised HIGH for missing causal Start/Stop overlap proof. The added test blocks Start
+   after exact provider publication but before BaseService commit, proves Stop waits outside `lifecycleMu`, proves a
+   canceled waiter neither steals nor closes provider authority, then releases Start and proves one terminal cleanup.
+
+Final developer and independent evidence is:
+
+| Evidence | Developer | Reviewer |
+|---|---:|---:|
+| Focused metric race matrix, 10 repetitions | PASS, 1.788s | PASS |
+| Focused service M1 race matrix, 10 repetitions | PASS, 33.894s | PASS |
+| Causal Start/Stop overlap race, 50 repetitions | — | PASS |
+| Full metric + service race | PASS | PASS |
+| Metrics lifecycle integration, 10 repetitions | PASS, 2.199s | — |
+| Isolated lifecycle contract race | PASS, 2.135s | — |
+| `task e2e:core` | PASS, 3/3 | — |
+
+`task lint`, `task build`, schema generation with zero drift, `git diff --check`, strict OpenSpec validation, gofmt,
+and vet passed on their recorded developer or reviewer runs. A root independent focused provider/service run passed in
+1.290s/4.672s before the later overlap-only service test addition; final reviewer evidence covers the final service
+identity. Repository-wide race is not claimed green because repository-root scanners traverse unrelated user-owned
+`.claude/worktrees` and stale policy-baseline rows remain. The broad integration parent also retains unrelated stale
+MessageLogger and ComponentManager assertions. The isolated contract surface passed, and ordinary metric/service M1
+race surfaces are green.
+
+The authoritative tracked-production census moved exactly as reviewed:
+
+| Measurement | HEAD `c7ca5d0f` | M1 worktree | Delta |
+|---|---:|---:|---:|
+| Production owner files importing `internal/lifecyclejoin` | 1 | 0 | -1 |
+| `lifecyclejoin.NewGeneration` | 1 | 0 | -1 |
+| `Generation.Stop` | 1 | 0 | -1 |
+| External `Generation.Cancel` | 1 | 0 | -1 |
+| External `RunPartialStartRollback` calls | 1 | 0 | -1 |
+| Final parent-aware `RollbackFailedStart` production owner calls | 31 | 32 | +1 |
+
+The read-only sister-repository census found zero direct `metric.NewServer`, `service.NewMetrics`, or metrics-server
+lifecycle callers. External direct consumers discover the source break at compile time and pass their existing
+runtime and shutdown contexts. Configuration, endpoint paths, scrape behavior, and schemas are unchanged. SemStreams
+made no sister-repository change.
+
+Stable final M1 implementation and evidence identities are:
+
+- `service/metrics.go`:
+  `58987b4066057e2c0e2dd3be52036ee40e20d6079bc5913fadd8282c68295132`;
+- `metric/handler.go`:
+  `6053bdc41483ac0a5bc0b16a17b905e096b3b566abcdfa23beb0af6c366b8ad6`;
+- `service/metrics_owner_test.go`:
+  `a4230d7ab26bc2745c454d34d3863f1fe5dad114e6cd5ef1d1f6f069d8d90a34`;
+- `metric/handler_test.go`:
+  `5851cc90d663ea19bfaaf64134598bf3871297b4e0f0342fd7c3232464aac1aa`;
+- `service/lifecycle_context_contract_test.go`:
+  `e295b48b35218c1d0c9ebd7ef9f4c5f3b8bf9e3f82230190e18558cc7525463a`;
+- `service/lifecycle_integration_test.go`:
+  `0cd2032649e6b0741eb746c936f59168fadaed1d4300db73d5cc588a78690719`;
+- `metric/doc.go`:
+  `3457d31c269cf52a9faca7d5cd705d8ca2028421a35df21a9bcd9c78f2d0b0d0`;
+- `metric/README.md`:
+  `7d3aff2eae369112ecc68c7f6f2d7cc1084aa4b193f5f2a8b9bb104693ed69f3`;
+- `docs/operations/migration-restart-safe-nats-client.md`:
+  `430dec09f7916e9a72b320cd63296851ca4d92db2490f3a2dba6a2277d93143e`.
+
+The M1 inventory is preserved byte-identical at SHA-256
+`8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`; it remains an untracked inventory artifact
+and is not implementation credit. Temporary bridges keep the branch under the no-release/no-tag invariant. Task 2.3,
+Gate A/B/C, N1, runtime migration, proof, release, archive, and tag readiness remain unchecked and incomplete.
+
 ### CM1 ComponentManager implementation checkpoint — 2026-08-19
 
 Independent `semstreams-reviewer` verdict `APPROVE` applies to the CM1 dirty worktree based on full commit
