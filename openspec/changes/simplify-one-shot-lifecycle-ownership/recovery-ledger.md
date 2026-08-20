@@ -552,6 +552,125 @@ Metrics inventory remains byte-identical at SHA-256
 `8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`. Task 2.3, Gate A/B/C, runtime migration,
 proof, release, archive, and tag readiness remain unchecked and incomplete.
 
+### S1 fixed-port six-owner implementation checkpoint — 2026-08-20
+
+The owner explicitly approved only temporary `ConsumeStreamWithConfigHandle` for the five S1 JetStream owners under
+the branch no-release/no-tag invariant. The canonical port method, split-context bridge or method,
+`ConsumeDurable`, `natsclient.Subscription`, Metrics APIs, and N1 retirements remain excluded. The split-context bridge
+is deferred to A1, its first real caller.
+
+Independent `semstreams-reviewer` verdict `APPROVE` applies to the S1 dirty worktree based on full commit
+`1fd214afd32ca5fcbfab5657f3cfdd68fd84afa1`. Owner-migrated credit is granted only to these six frozen production
+owners:
+
+- `examples/processors/document/component.go`;
+- `examples/processors/iot_sensor/component.go`;
+- `examples/processors/weather_station/component.go`;
+- `processor/json_filter/json_filter.go`;
+- `processor/json_generic/json_generic.go`;
+- `processor/json_map/json_map.go`.
+
+Supporting natsclient and test files receive no owner credit.
+
+The bridge review initially returned a blocker because the shared managed-consumer helper called native Consume and
+then checked `setupCtx.Err()`. Cancellation in that post-commit branch could force Stop, forget the consumer, and
+release its claim before native Closed. The corrected bridge-specific commit path completes every fallible observation
+and context check before native Consume, returns the exact handle with no post-commit fallible branch, and releases the
+claim and metrics only after exact Closed. A controlled cancellation-during-Consume test proves that boundary. The
+corrected controlled race passed 10 repetitions in 1.339s; the real-NATS bridge test passed in 2.392s.
+
+The initial proof review returned HIGH because tests manually seeded `cleanupPending`, did not exercise actual
+Start/Stop overlap or a production second-acquisition failure, and lacked JetStream normal-path Closed-before-callback
+cancellation evidence. The correction added owner-private seams that drive actual Start through one exact acquired
+handle, block the second acquisition, overlap Stop while proving unlocked `startDone` waiting, then fail and exercise
+real rollback. All five JetStream owners prove successful Start keeps native Closed and callback contexts live until
+Stop; Weather proves the equivalent real core-NATS path.
+
+The causal RED sequence was:
+
+1. The exported API census failed because the approved temporary handle signature did not exist.
+2. Four untouched Stop-before-Start cases failed against the one-shot terminal contract.
+3. The controlled bridge test did not compile because `startPortConsumerHandle` did not exist.
+4. The causal JSON Map lifecycle tests did not compile because the required private wait/consume seams did not exist.
+
+Final independent evidence:
+
+| Surface | Overlap + native-close race x10 | Full unit race | Full integration race |
+|---|---:|---:|---:|
+| JSON filter | 1.324s | 1.242s | 5.203s |
+| JSON generic | 1.532s | 1.556s | 1.972s |
+| JSON map | 1.793s | 1.384s | 5.715s |
+| Document | 1.856s | 1.722s | 2.711s |
+| IoT | 2.060s | 1.893s | 2.128s |
+| Weather | real-NATS overlap x10: 4.925s | 1.979s | 4.107s |
+
+`task lint`, `git diff --check`, and all 52/52 strict OpenSpec validations passed.
+
+The authoritative tracked-production census moved exactly as reviewed:
+
+| Measurement | HEAD `1fd214af` | S1 worktree | Delta |
+|---|---:|---:|---:|
+| Production owner files importing `internal/lifecyclejoin` | 20 | 14 | -6 |
+| `lifecyclejoin.NewGeneration` | 20 | 14 | -6 |
+| `Generation.Stop` | 29 | 17 | -12 |
+| External `RunPartialStartRollback` calls | 14 | 8 | -6 |
+| Final parent-aware `RollbackFailedStart` production owner calls | 14 | 20 | +6 |
+| `Generation.StopWithQuiesce` | 3 | 3 | 0 |
+| `Client.StopConsumer` production calls | 5 | 0 | -5 |
+| Temporary bridge production owner callers | 0 | 5 | +5 |
+
+Repository-root scanners that traverse user-owned `.claude/worktrees` are polluted and are not ledger evidence. The
+table above is the authoritative tracked-production measurement.
+
+Stable S1 source identities for this checkpoint are:
+
+- `examples/processors/document/component.go`:
+  `d0ec2b817238515cf6172822fb46670d443198228f26b52c6357d6b20890794f`;
+- `examples/processors/document/lifecycle_owner_test.go`:
+  `1402aaee9eb25d611b4c08e8714136fe009e9b2c229ef7f1bf751e508243d2bb`;
+- `examples/processors/iot_sensor/component.go`:
+  `2b04e36a9b714803cd60cf40e29b9cc10726c9ab96d4e09332b851609b9cbf88`;
+- `examples/processors/iot_sensor/lifecycle_owner_test.go`:
+  `4641607e8a472a2f1259ead186c326b8854d7e3d0b3b0dd3473a8199dcb197d9`;
+- `examples/processors/weather_station/component.go`:
+  `0c31902a00260c01988e96126fa3673d83ceebd7937a37242c544c6a9c3546bb`;
+- `examples/processors/weather_station/lifecycle_integration_test.go`:
+  `ccf18ab955a072e7a398726090d508bb1e62ded992d4f29e30f228029cfd9c29`;
+- `examples/processors/weather_station/lifecycle_owner_test.go`:
+  `fccfec1ab953d27d8d7cfdc40576dfcea258a840159f5574678a72a44e40007a`;
+- `natsclient/client.go`: `883fabf1391770035c4245fa41daa6f5c4136a737c3bd2b23b52f5bb529fa154`;
+- `natsclient/consumer_policy_callsite_test.go`:
+  `0f6db12208f7bc03be79a21cbd178681263e795fca26831fade2b6170b1a1429`;
+- `natsclient/internal_consumer_lifecycle_integration_test.go`:
+  `23ab086c70f0eac3332b32f048d665a844f1fb2a7de5840357c0c010690ee58b`;
+- `natsclient/stream.go`: `44d6c6a170e126d2f0753d4ff1f5d984df6e010b273f308f5d627c7ce004f669`;
+- `natsclient/stream_handle_test.go`:
+  `6a50a5c8540723e407f2bae8335b84ee6bba212df6fb6034ac90eed09b30dd5c`;
+- `processor/json_filter/json_filter.go`:
+  `f28b6bd96a74752851374adee9eb2795be18e81cd6b3e950f3fb784396dacd41`;
+- `processor/json_filter/lifecycle_integration_test.go`:
+  `e6e263ad41da6675e52348622802e4c0f368ee7a62a6b7f9e260ce7527a782ce`;
+- `processor/json_filter/lifecycle_owner_test.go`:
+  `d2340aa4a931d2afc6230b87f1ad068f8dcc74f44b64d581b2fc78361a35fa63`;
+- `processor/json_generic/json_generic.go`:
+  `48e57d9d8a2e83c74635e1e6da78d1e561e9f0177178cff0d26fb6f6f745c3fa`;
+- `processor/json_generic/lifecycle_integration_test.go`:
+  `e0c7425143197ecbddd2e7787b1ee6da521554ea2694dd2d6c173743e5990321`;
+- `processor/json_generic/lifecycle_owner_test.go`:
+  `c4e79816158943a8d15fd82582ad3c11c806bfbb2e51f2cc7630b9517edb3046`;
+- `processor/json_map/json_map.go`:
+  `e7fd6c50e279c069667bdb9bd5a497c2f8ed41484ce91c2cf430296f4f35e04e`;
+- `processor/json_map/lifecycle_integration_test.go`:
+  `6323b735a7ee1fc01020cc219243158d1a6f6ac46cad56c74045d6ea8a115857`;
+- `processor/json_map/lifecycle_owner_test.go`:
+  `c5660fdc0d8b3605c50b019b79e68a375344105da82893f93faf135e27eec0ca`.
+
+There is no outward API or configuration change beyond the explicitly approved temporary bridge, no canonical or
+split-context signature change, and no `ConsumeDurable`, `natsclient.Subscription`, Metrics, or consumer-deletion
+drift. The unrelated Metrics inventory remains byte-identical at SHA-256
+`8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`. Task 2.3, Gate A/B/C, runtime migration,
+proof, release, archive, and tag readiness remain unchecked and incomplete.
+
 ### CM1 ComponentManager implementation checkpoint — 2026-08-19
 
 Independent `semstreams-reviewer` verdict `APPROVE` applies to the CM1 dirty worktree based on full commit

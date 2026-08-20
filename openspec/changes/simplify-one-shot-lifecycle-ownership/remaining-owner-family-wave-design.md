@@ -13,6 +13,8 @@
 > credit is limited to `agentic/agentrun/agentrun.go` and `service/milestone_service.go`.
 > Independent OT1 implementation review returned `APPROVE`; owner-migrated credit is limited to
 > `output/otel/component.go`.
+> The owner explicitly approved the temporary no-release/no-tag S1 standard port-handle bridge. Independent S1
+> implementation review returned `APPROVE`; owner-migrated credit is limited to the six frozen S1 owner files.
 
 ## Evidence identity
 
@@ -154,10 +156,12 @@ archive, and tag readiness remain incomplete.
 
 Frozen membership (6): document, IoT, weather, json_filter, json_generic, json_map owner files.
 
-S1 introduces temporary migration-only `ConsumeStreamWithConfigHandle` (and split-context counterpart only with first
-consumer) returning exact `ConsumeContext`. Fallible setup first, duplicate reject, no bridge-path Client catalog.
-Born with five JS members; Weather core-only. Canonical error-only method remains for unmigrated callers until N1. No
-release/tag exposes both as supported public contracts.
+S1 introduces only temporary migration-only `ConsumeStreamWithConfigHandle`, returning exact `ConsumeContext`.
+Fallible observation and context checks precede native Consume; duplicate identity rejects; the exact handle returns
+without Client cataloging or another fallible post-commit branch. Its claim and metrics release only after exact
+Closed. The split-context bridge is deferred to A1, its first caller. Born with five JS members; Weather core-only.
+Canonical error-only and split-context methods remain for unmigrated callers until later reviewed waves. No release or
+tag exposes the temporary bridge as a supported public contract.
 
 Shared contract: serialized Start/Stop; fixed subscription set; exact handle per acquired port; partial acquisition
 retains/cleans handles; core Drain once; JS Drain/Closed; cancel/join; terminal cleanup. Exceptions: Document/IoT
@@ -166,6 +170,15 @@ twins; JSON variants; Weather core-only.
 Proof: shared lifecycle matrix in all six plus package tests; blocked callback Drain before cancel; second-sub failure
 exact cleanupPending; duplicate integration; race serialization. Delta owners -6, NG -6, Stop -12; old lifecyclejoin
 rollback -6. S1 depends on I1.
+
+Owner ruling on 2026-08-20: APPROVE only this temporary standard port-handle bridge and its branch-local
+no-release/no-tag use by the five S1 JetStream owners. The canonical method, split-context bridge or method,
+`ConsumeDurable`, `natsclient.Subscription`, Metrics APIs, and N1 retirements remain excluded.
+
+Implementation status on 2026-08-20: independent `semstreams-reviewer` verdict `APPROVE` grants owner-migrated credit
+only to the frozen document, IoT, Weather, JSON filter, JSON generic, and JSON map owner files. Supporting natsclient
+and test files receive no owner credit. Task 2.3, Gate A/B/C, runtime migration, proof, release, archive, and tag
+readiness remain incomplete.
 
 ## R1 — Research-five owner family and final rollback-helper birth (selected first wave)
 
@@ -468,4 +481,7 @@ granting owner-migrated credit only to `agentic/agentrun/agentrun.go` and `servi
 natsclient, component, and MaxDeliver files receive no owner credit. Other exported API rulings remain unapproved, and
 no broader task or gate credit follows. Independent OT1 implementation review returned `APPROVE`, granting
 owner-migrated credit only to `output/otel/component.go`; supporting tests receive no owner credit and no broader task
-or gate credit follows.
+or gate credit follows. The owner explicitly approved only the temporary standard S1 port-handle bridge under the
+branch no-release/no-tag invariant. Independent S1 implementation review returned `APPROVE`, granting owner-migrated
+credit only to its six frozen owner files; natsclient and test support receive no owner credit, and no broader task or
+gate credit follows.

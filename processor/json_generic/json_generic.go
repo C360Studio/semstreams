@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -58,24 +58,36 @@ var jsonGenericSchema = component.GenerateConfigSchema(reflect.TypeOf(Config{}))
 
 // Processor wraps plain JSON into GenericJSONPayload
 type Processor struct {
-	name             string
-	subjects         []string
-	outputSubj       string
-	config           Config // Store full config for port type checking
-	inputPorts       []component.Port
-	outputPorts      []component.Port
-	jetStreamOutputs map[string]bool
-	natsClient       *natsclient.Client
-	logger           *slog.Logger
+	name               string
+	subjects           []string
+	outputSubj         string
+	config             Config // Store full config for port type checking
+	inputPorts         []component.Port
+	outputPorts        []component.Port
+	jetStreamOutputs   map[string]bool
+	natsClient         *natsclient.Client
+	logger             *slog.Logger
+	waitForStreamInput func(context.Context, string) error
+	consumeStream      func(
+		context.Context,
+		natsclient.PortConsumerContext,
+		natsclient.StreamConsumerConfig,
+		func(context.Context, jetstream.Msg),
+	) (jetstream.ConsumeContext, error)
 
 	// Lifecycle management
-	running       bool
-	startTime     time.Time
-	mu            sync.RWMutex
-	lifecycleMu   sync.Mutex
-	generation    *lifecyclejoin.Generation
-	subscriptions []*natsclient.Subscription
-	consumers     []streamConsumerBinding
+	running        bool
+	startTime      time.Time
+	mu             sync.RWMutex
+	lifecycleMu    sync.Mutex
+	lifecycleUsed  bool
+	terminal       bool
+	stopping       bool
+	cleanupPending bool
+	startDone      chan struct{}
+	cancel         context.CancelFunc
+	subscriptions  []*natsclient.Subscription
+	consumers      []streamConsumerBinding
 
 	// Metrics
 	messagesProcessed int64
@@ -85,8 +97,8 @@ type Processor struct {
 }
 
 type streamConsumerBinding struct {
-	streamName   string
-	consumerName string
+	handle      jetstream.ConsumeContext
+	drainIssued bool
 }
 
 // NewProcessor creates a new JSON generic processor from configuration
@@ -174,50 +186,50 @@ func (p *Processor) Initialize() error {
 
 // Start begins wrapping messages
 func (p *Processor) Start(ctx context.Context) (startErr error) {
-	p.lifecycleMu.Lock()
-	defer p.lifecycleMu.Unlock()
-
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "JSONGenericProcessor", "Start", "context cannot be nil")
 	}
 	if err := ctx.Err(); err != nil {
 		return errs.WrapInvalid(err, "JSONGenericProcessor", "Start", "context already cancelled")
 	}
-
-	if p.generation != nil {
+	p.lifecycleMu.Lock()
+	if p.lifecycleUsed {
+		p.lifecycleMu.Unlock()
 		return errs.WrapFatal(errs.ErrAlreadyStarted, "JSONGenericProcessor", "Start", "check running state")
 	}
-
 	if p.natsClient == nil {
+		p.lifecycleMu.Unlock()
 		return errs.WrapFatal(errs.ErrMissingConfig, "JSONGenericProcessor", "Start", "NATS client required")
 	}
-
+	parent := ctx
 	runCtx, cancel := context.WithCancel(ctx)
-	generation := lifecyclejoin.NewGeneration(cancel, nil)
-	p.generation = generation
-	started := false
+	startDone := make(chan struct{})
+	p.lifecycleUsed = true
+	p.cleanupPending = true
+	p.cancel = cancel
+	p.startDone = startDone
+	p.lifecycleMu.Unlock()
+	committed := false
 	defer func() {
-		if !started {
-			rollbackErr := lifecyclejoin.RunPartialStartRollback(func(ctx context.Context) error {
-				return generation.Stop(ctx, nil, func(ctx context.Context) error {
-					stopErr := p.stopInputs(ctx)
-					if ctxErr := ctx.Err(); ctxErr != nil {
-						return errors.Join(stopErr, ctxErr)
-					}
-					p.mu.Lock()
-					p.running = false
-					p.mu.Unlock()
-					return stopErr
-				})
-			})
-			if rollbackErr == nil && p.generation == generation {
-				p.generation = nil
+		if !committed {
+			rollbackErr := lifecyclecleanup.RollbackFailedStart(parent, p.cleanupFailedStart)
+			startErr = errors.Join(startErr, rollbackErr)
+			p.lifecycleMu.Lock()
+			if rollbackErr == nil {
+				p.cleanupPending = false
+				p.terminal = true
+				p.clearLifecycleHandles()
 			}
-			if rollbackErr != nil {
-				startErr = errors.Join(startErr, rollbackErr)
-				p.logger.Error("Failed to roll back input subscriptions", "error", rollbackErr)
-			}
+			close(startDone)
+			p.startDone = nil
+			p.lifecycleMu.Unlock()
+			return
 		}
+		p.lifecycleMu.Lock()
+		p.cleanupPending = false
+		close(startDone)
+		p.startDone = nil
+		p.lifecycleMu.Unlock()
 	}()
 
 	// Subscribe to input ports based on port type
@@ -229,7 +241,7 @@ func (p *Processor) Start(ctx context.Context) (startErr error) {
 	p.running = true
 	p.startTime = time.Now()
 	p.mu.Unlock()
-	started = true
+	committed = true
 
 	p.logger.Info("JSON generic processor started",
 		"component", p.name,
@@ -291,7 +303,11 @@ func (p *Processor) setupJetStreamConsumer(ctx context.Context, port component.P
 	subject := facts.NATSSubjects()[0]
 	streamName := stream.Name()
 
-	if err := p.waitForStream(ctx, streamName); err != nil {
+	waitForStream := p.waitForStream
+	if p.waitForStreamInput != nil {
+		waitForStream = p.waitForStreamInput
+	}
+	if err := waitForStream(ctx, streamName); err != nil {
 		return errs.WrapTransient(err, "JSONGenericProcessor", "setupJetStreamConsumer",
 			fmt.Sprintf("stream %s availability", streamName))
 	}
@@ -323,7 +339,11 @@ func (p *Processor) setupJetStreamConsumer(ctx context.Context, port component.P
 		AutoCreate:    false,
 	}
 
-	err = p.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: p.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	consumeStream := p.natsClient.ConsumeStreamWithConfigHandle
+	if p.consumeStream != nil {
+		consumeStream = p.consumeStream
+	}
+	handle, err := consumeStream(ctx, natsclient.PortConsumerContext{Component: p.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		p.handleMessage(msgCtx, msg.Data())
 		if ackErr := msg.Ack(); ackErr != nil {
 			p.logger.Error("Failed to ack JetStream message", "error", ackErr)
@@ -333,7 +353,9 @@ func (p *Processor) setupJetStreamConsumer(ctx context.Context, port component.P
 		return errs.WrapTransient(err, "JSONGenericProcessor", "setupJetStreamConsumer",
 			fmt.Sprintf("consumer setup for stream %s", streamName))
 	}
-	p.consumers = append(p.consumers, streamConsumerBinding{streamName: streamName, consumerName: consumerName})
+	p.lifecycleMu.Lock()
+	p.consumers = append(p.consumers, streamConsumerBinding{handle: handle})
+	p.lifecycleMu.Unlock()
 
 	p.logger.Debug("JSON generic subscribed (JetStream)", "subject", subject, "stream", streamName)
 	return nil
@@ -374,47 +396,89 @@ func (p *Processor) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-	p.lifecycleMu.Lock()
-	generation := p.generation
-	if generation == nil {
-		p.lifecycleMu.Unlock()
-		return nil
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	p.lifecycleMu.Unlock()
-
-	stopErr := generation.Stop(ctx, nil, func(ctx context.Context) error {
-		stopErr := p.stopInputs(ctx)
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return errors.Join(stopErr, ctxErr)
+	for {
+		p.lifecycleMu.Lock()
+		if !p.lifecycleUsed {
+			p.lifecycleUsed = true
+			p.terminal = true
+			p.lifecycleMu.Unlock()
+			return nil
 		}
+		if p.terminal {
+			p.lifecycleMu.Unlock()
+			return nil
+		}
+		if p.startDone != nil {
+			startDone := p.startDone
+			p.lifecycleMu.Unlock()
+			select {
+			case <-startDone:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if p.stopping {
+			p.lifecycleMu.Unlock()
+			return errs.WrapTransient(errors.New("stop already in progress"), "JSONGenericProcessor", "Stop", "concurrent Stop is unsupported")
+		}
+		retryable := p.cleanupPending
+		p.stopping = true
+		p.lifecycleMu.Unlock()
+
+		stopErr := p.cleanup(ctx)
+		p.lifecycleMu.Lock()
+		p.stopping = false
+		if retryable && stopErr != nil {
+			p.lifecycleMu.Unlock()
+			return stopErr
+		}
+		p.cleanupPending = false
+		p.terminal = true
+		p.clearLifecycleHandles()
+		p.lifecycleMu.Unlock()
 		p.mu.Lock()
 		p.running = false
 		p.mu.Unlock()
 		return stopErr
-	})
-	if stopErr == nil {
-		p.lifecycleMu.Lock()
-		if p.generation == generation {
-			p.generation = nil
-		}
-		p.lifecycleMu.Unlock()
 	}
-	return stopErr
 }
 
-func (p *Processor) stopInputs(ctx context.Context) error {
+func (p *Processor) cleanupFailedStart(ctx context.Context) error { return p.cleanup(ctx) }
+
+func (p *Processor) cleanup(ctx context.Context) error {
 	var stopErr error
 	for _, sub := range p.subscriptions {
 		stopErr = errors.Join(stopErr, sub.Drain(ctx))
 	}
-	for _, binding := range p.consumers {
-		stopErr = errors.Join(stopErr, p.natsClient.StopConsumer(ctx, binding.streamName, binding.consumerName))
+	for index := range p.consumers {
+		binding := &p.consumers[index]
+		if !binding.drainIssued {
+			binding.handle.Drain()
+			binding.drainIssued = true
+		}
+		select {
+		case <-binding.handle.Closed():
+		case <-ctx.Done():
+			stopErr = errors.Join(stopErr, ctx.Err())
+		}
 	}
-	if ctx.Err() == nil {
-		p.subscriptions = nil
-		p.consumers = nil
+	if p.cancel != nil {
+		p.cancel()
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		stopErr = errors.Join(stopErr, ctxErr)
 	}
 	return stopErr
+}
+
+func (p *Processor) clearLifecycleHandles() {
+	p.subscriptions = nil
+	p.consumers = nil
+	p.cancel = nil
 }
 
 // IsStarted returns whether the processor is running

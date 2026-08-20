@@ -113,6 +113,14 @@
     replay RED, race/integration/stress evidence, exact census, and source hashes are recorded in the ledger. No
     outward API, configuration, natsclient, consumer-deletion, or Metrics surface changed. Task 2.3, Gate A/B/C,
     runtime migration, proof, release, archive, and tag readiness remain unchecked and incomplete.
+  - 2026-08-20 S1 implementation checkpoint: the owner approved only the temporary standard port-handle bridge under
+    the branch no-release/no-tag invariant; the split-context bridge is deferred to A1. Independent
+    `semstreams-reviewer` verdict `APPROVE` grants owner-migrated credit only to the frozen document, IoT, Weather,
+    JSON filter, JSON generic, and JSON map owner files. Supporting natsclient and test files receive no owner credit.
+    The bridge blocker/correction, proof HIGH/correction, causal REDs, exact race/integration timings, authoritative
+    census, scanner pollution, and all source hashes are recorded in the ledger. The canonical port method,
+    split-context method, `ConsumeDurable`, `natsclient.Subscription`, Metrics APIs, and N1 retirements remain excluded.
+    Task 2.3, Gate A/B/C, runtime migration, proof, release, archive, and tag readiness remain unchecked and incomplete.
   - 2026-08-18 checkpoint: independent `semstreams-reviewer` verdict `CORRECTIONS CONFIRMED` grants owner-migrated
     credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
     worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.

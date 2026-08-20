@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -54,22 +54,32 @@ var weatherStationSchema = component.GenerateConfigSchema(reflect.TypeOf(Compone
 
 // Component wraps the domain processor with component lifecycle.
 type Component struct {
-	name       string
-	subjects   []string
-	outputSubj string
-	inputs     []component.Port
-	outputs    []component.Port
-	config     ComponentConfig
-	natsClient *natsclient.Client
-	logger     *slog.Logger
-	processor  *Processor
+	name           string
+	subjects       []string
+	outputSubj     string
+	inputs         []component.Port
+	outputs        []component.Port
+	config         ComponentConfig
+	natsClient     *natsclient.Client
+	logger         *slog.Logger
+	processor      *Processor
+	subscribeInput func(
+		context.Context,
+		string,
+		func(context.Context, *nats.Msg),
+	) (*natsclient.Subscription, error)
 
-	running       bool
-	startTime     time.Time
-	mu            sync.RWMutex
-	lifecycleMu   sync.Mutex
-	generation    *lifecyclejoin.Generation
-	subscriptions []*natsclient.Subscription
+	running        bool
+	startTime      time.Time
+	mu             sync.RWMutex
+	lifecycleMu    sync.Mutex
+	lifecycleUsed  bool
+	terminal       bool
+	stopping       bool
+	cleanupPending bool
+	startDone      chan struct{}
+	cancel         context.CancelFunc
+	subscriptions  []*natsclient.Subscription
 
 	messagesProcessed int64
 	errors            int64
@@ -162,34 +172,55 @@ func (c *Component) Start(ctx context.Context) (startErr error) {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "WeatherStationComponent", "Start", "context cannot be nil")
 	}
+	if err := ctx.Err(); err != nil {
+		return errs.WrapInvalid(err, "WeatherStationComponent", "Start", "context already cancelled")
+	}
 	c.lifecycleMu.Lock()
-	defer c.lifecycleMu.Unlock()
-
-	if c.generation != nil {
+	if c.lifecycleUsed {
+		c.lifecycleMu.Unlock()
 		return errs.WrapFatal(errs.ErrAlreadyStarted, "WeatherStationComponent", "Start", "already running")
 	}
-
 	if c.natsClient == nil {
+		c.lifecycleMu.Unlock()
 		return errs.WrapFatal(errs.ErrMissingConfig, "WeatherStationComponent", "Start", "NATS client required")
 	}
+	parent := ctx
 	runCtx, cancel := context.WithCancel(ctx)
-	generation := lifecyclejoin.NewGeneration(cancel, nil)
-	c.generation = generation
-	started := false
+	startDone := make(chan struct{})
+	c.lifecycleUsed = true
+	c.cleanupPending = true
+	c.cancel = cancel
+	c.startDone = startDone
+	c.lifecycleMu.Unlock()
+	committed := false
 	defer func() {
-		if !started {
-			rollbackErr := lifecyclejoin.RunPartialStartRollback(func(ctx context.Context) error {
-				return generation.Stop(ctx, nil, c.stopSubscriptions)
-			})
-			if rollbackErr == nil && c.generation == generation {
-				c.generation = nil
-			}
+		if !committed {
+			rollbackErr := lifecyclecleanup.RollbackFailedStart(parent, c.cleanupFailedStart)
 			startErr = errors.Join(startErr, rollbackErr)
+			c.lifecycleMu.Lock()
+			if rollbackErr == nil {
+				c.cleanupPending = false
+				c.terminal = true
+				c.clearLifecycleHandles()
+			}
+			close(startDone)
+			c.startDone = nil
+			c.lifecycleMu.Unlock()
+			return
 		}
+		c.lifecycleMu.Lock()
+		c.cleanupPending = false
+		close(startDone)
+		c.startDone = nil
+		c.lifecycleMu.Unlock()
 	}()
 
 	for _, subject := range c.subjects {
-		sub, err := c.natsClient.Subscribe(runCtx, subject, func(ctx context.Context, msg *nats.Msg) {
+		subscribeInput := c.natsClient.Subscribe
+		if c.subscribeInput != nil {
+			subscribeInput = c.subscribeInput
+		}
+		sub, err := subscribeInput(runCtx, subject, func(ctx context.Context, msg *nats.Msg) {
 			c.handleMessage(ctx, msg.Data)
 		})
 		if err != nil {
@@ -203,7 +234,7 @@ func (c *Component) Start(ctx context.Context) (startErr error) {
 	c.running = true
 	c.startTime = time.Now()
 	c.mu.Unlock()
-	started = true
+	committed = true
 
 	c.logger.Info("Weather station processor started",
 		"component", c.name,
@@ -218,38 +249,76 @@ func (c *Component) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-	c.lifecycleMu.Lock()
-	generation := c.generation
-	if generation == nil {
-		c.lifecycleMu.Unlock()
-		return nil
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	c.lifecycleMu.Unlock()
-
-	stopErr := generation.Stop(ctx, nil, c.stopSubscriptions)
-	if stopErr == nil {
+	for {
 		c.lifecycleMu.Lock()
-		if c.generation == generation {
-			c.generation = nil
+		if !c.lifecycleUsed {
+			c.lifecycleUsed = true
+			c.terminal = true
+			c.lifecycleMu.Unlock()
+			return nil
 		}
+		if c.terminal {
+			c.lifecycleMu.Unlock()
+			return nil
+		}
+		if c.startDone != nil {
+			startDone := c.startDone
+			c.lifecycleMu.Unlock()
+			select {
+			case <-startDone:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if c.stopping {
+			c.lifecycleMu.Unlock()
+			return errs.WrapTransient(errors.New("stop already in progress"), "WeatherStationComponent", "Stop", "concurrent Stop is unsupported")
+		}
+		retryable := c.cleanupPending
+		c.stopping = true
 		c.lifecycleMu.Unlock()
+
+		stopErr := c.cleanup(ctx)
+		c.lifecycleMu.Lock()
+		c.stopping = false
+		if retryable && stopErr != nil {
+			c.lifecycleMu.Unlock()
+			return stopErr
+		}
+		c.cleanupPending = false
+		c.terminal = true
+		c.clearLifecycleHandles()
+		c.lifecycleMu.Unlock()
+		c.mu.Lock()
+		c.running = false
+		c.mu.Unlock()
+		return stopErr
 	}
-	return stopErr
 }
 
-func (c *Component) stopSubscriptions(ctx context.Context) error {
+func (c *Component) cleanupFailedStart(ctx context.Context) error { return c.cleanup(ctx) }
+
+func (c *Component) cleanup(ctx context.Context) error {
 	var drainErr error
 	for _, sub := range c.subscriptions {
 		drainErr = errors.Join(drainErr, sub.Drain(ctx))
 	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return errors.Join(drainErr, ctxErr)
+	if c.cancel != nil {
+		c.cancel()
 	}
-	c.subscriptions = nil
-	c.mu.Lock()
-	c.running = false
-	c.mu.Unlock()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		drainErr = errors.Join(drainErr, ctxErr)
+	}
 	return drainErr
+}
+
+func (c *Component) clearLifecycleHandles() {
+	c.subscriptions = nil
+	c.cancel = nil
 }
 
 // handleMessage processes incoming weather JSON messages.

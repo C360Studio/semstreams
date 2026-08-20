@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -68,26 +68,38 @@ var iotSensorSchema = component.GenerateConfigSchema(reflect.TypeOf(ComponentCon
 // It bridges the gap between the stateless domain processor and the stateful
 // component framework that handles NATS messaging and lifecycle management.
 type Component struct {
-	name        string
-	subjects    []string
-	outputSubj  string
-	inputPorts  []component.Port
-	outputPorts []component.Port
-	config      ComponentConfig // Store full config for port type checking
-	natsClient  *natsclient.Client
-	logger      *slog.Logger
+	name               string
+	subjects           []string
+	outputSubj         string
+	inputPorts         []component.Port
+	outputPorts        []component.Port
+	config             ComponentConfig // Store full config for port type checking
+	natsClient         *natsclient.Client
+	logger             *slog.Logger
+	waitForStreamInput func(context.Context, string) error
+	consumeStream      func(
+		context.Context,
+		natsclient.PortConsumerContext,
+		natsclient.StreamConsumerConfig,
+		func(context.Context, jetstream.Msg),
+	) (jetstream.ConsumeContext, error)
 
 	// Domain processor (stateless, pure business logic)
 	processor *Processor
 
 	// Lifecycle management
-	running       bool
-	startTime     time.Time
-	mu            sync.RWMutex
-	lifecycleMu   sync.Mutex
-	generation    *lifecyclejoin.Generation
-	subscriptions []*natsclient.Subscription
-	consumers     []streamConsumerBinding
+	running        bool
+	startTime      time.Time
+	mu             sync.RWMutex
+	lifecycleMu    sync.Mutex
+	lifecycleUsed  bool
+	terminal       bool
+	stopping       bool
+	cleanupPending bool
+	startDone      chan struct{}
+	cancel         context.CancelFunc
+	subscriptions  []*natsclient.Subscription
+	consumers      []streamConsumerBinding
 
 	// Metrics
 	messagesProcessed int64
@@ -97,8 +109,8 @@ type Component struct {
 }
 
 type streamConsumerBinding struct {
-	streamName   string
-	consumerName string
+	handle      jetstream.ConsumeContext
+	drainIssued bool
 }
 
 // NewComponent creates a new IoT sensor processor component from configuration.
@@ -197,42 +209,47 @@ func (c *Component) Start(ctx context.Context) (startErr error) {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "IoTSensorComponent", "Start", "context cannot be nil")
 	}
+	if err := ctx.Err(); err != nil {
+		return errs.WrapInvalid(err, "IoTSensorComponent", "Start", "context already cancelled")
+	}
 	c.lifecycleMu.Lock()
-	defer c.lifecycleMu.Unlock()
-
-	if c.generation != nil {
+	if c.lifecycleUsed {
+		c.lifecycleMu.Unlock()
 		return errs.WrapFatal(errs.ErrAlreadyStarted, "IoTSensorComponent", "Start", "check running state")
 	}
-
 	if c.natsClient == nil {
+		c.lifecycleMu.Unlock()
 		return errs.WrapFatal(errs.ErrMissingConfig, "IoTSensorComponent", "Start", "NATS client required")
 	}
+	parent := ctx
 	runCtx, cancel := context.WithCancel(ctx)
-	generation := lifecyclejoin.NewGeneration(cancel, nil)
-	c.generation = generation
-	started := false
+	startDone := make(chan struct{})
+	c.lifecycleUsed = true
+	c.cleanupPending = true
+	c.cancel = cancel
+	c.startDone = startDone
+	c.lifecycleMu.Unlock()
+	committed := false
 	defer func() {
-		if !started {
-			rollbackErr := lifecyclejoin.RunPartialStartRollback(func(ctx context.Context) error {
-				return generation.Stop(ctx, nil, func(ctx context.Context) error {
-					stopErr := c.stopInputs(ctx)
-					if ctxErr := ctx.Err(); ctxErr != nil {
-						return errors.Join(stopErr, ctxErr)
-					}
-					c.mu.Lock()
-					c.running = false
-					c.mu.Unlock()
-					return stopErr
-				})
-			})
-			if rollbackErr == nil && c.generation == generation {
-				c.generation = nil
+		if !committed {
+			rollbackErr := lifecyclecleanup.RollbackFailedStart(parent, c.cleanupFailedStart)
+			startErr = errors.Join(startErr, rollbackErr)
+			c.lifecycleMu.Lock()
+			if rollbackErr == nil {
+				c.cleanupPending = false
+				c.terminal = true
+				c.clearLifecycleHandles()
 			}
-			if rollbackErr != nil {
-				startErr = errors.Join(startErr, rollbackErr)
-				c.logger.Error("Failed to roll back input subscriptions", "error", rollbackErr)
-			}
+			close(startDone)
+			c.startDone = nil
+			c.lifecycleMu.Unlock()
+			return
 		}
+		c.lifecycleMu.Lock()
+		c.cleanupPending = false
+		close(startDone)
+		c.startDone = nil
+		c.lifecycleMu.Unlock()
 	}()
 
 	// Subscribe to input subjects - check port type for each
@@ -287,7 +304,7 @@ func (c *Component) Start(ctx context.Context) (startErr error) {
 	c.running = true
 	c.startTime = time.Now()
 	c.mu.Unlock()
-	started = true
+	committed = true
 
 	c.logger.Info("IoT sensor processor started",
 		"component", c.name,
@@ -302,47 +319,89 @@ func (c *Component) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-	c.lifecycleMu.Lock()
-	generation := c.generation
-	if generation == nil {
-		c.lifecycleMu.Unlock()
-		return nil
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	c.lifecycleMu.Unlock()
-
-	stopErr := generation.Stop(ctx, nil, func(ctx context.Context) error {
-		stopErr := c.stopInputs(ctx)
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return errors.Join(stopErr, ctxErr)
+	for {
+		c.lifecycleMu.Lock()
+		if !c.lifecycleUsed {
+			c.lifecycleUsed = true
+			c.terminal = true
+			c.lifecycleMu.Unlock()
+			return nil
 		}
+		if c.terminal {
+			c.lifecycleMu.Unlock()
+			return nil
+		}
+		if c.startDone != nil {
+			startDone := c.startDone
+			c.lifecycleMu.Unlock()
+			select {
+			case <-startDone:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if c.stopping {
+			c.lifecycleMu.Unlock()
+			return errs.WrapTransient(errors.New("stop already in progress"), "IoTSensorComponent", "Stop", "concurrent Stop is unsupported")
+		}
+		retryable := c.cleanupPending
+		c.stopping = true
+		c.lifecycleMu.Unlock()
+
+		stopErr := c.cleanup(ctx)
+		c.lifecycleMu.Lock()
+		c.stopping = false
+		if retryable && stopErr != nil {
+			c.lifecycleMu.Unlock()
+			return stopErr
+		}
+		c.cleanupPending = false
+		c.terminal = true
+		c.clearLifecycleHandles()
+		c.lifecycleMu.Unlock()
 		c.mu.Lock()
 		c.running = false
 		c.mu.Unlock()
 		return stopErr
-	})
-	if stopErr == nil {
-		c.lifecycleMu.Lock()
-		if c.generation == generation {
-			c.generation = nil
-		}
-		c.lifecycleMu.Unlock()
 	}
-	return stopErr
 }
 
-func (c *Component) stopInputs(ctx context.Context) error {
+func (c *Component) cleanupFailedStart(ctx context.Context) error { return c.cleanup(ctx) }
+
+func (c *Component) cleanup(ctx context.Context) error {
 	var stopErr error
 	for _, sub := range c.subscriptions {
 		stopErr = errors.Join(stopErr, sub.Drain(ctx))
 	}
-	for _, binding := range c.consumers {
-		stopErr = errors.Join(stopErr, c.natsClient.StopConsumer(ctx, binding.streamName, binding.consumerName))
+	for index := range c.consumers {
+		binding := &c.consumers[index]
+		if !binding.drainIssued {
+			binding.handle.Drain()
+			binding.drainIssued = true
+		}
+		select {
+		case <-binding.handle.Closed():
+		case <-ctx.Done():
+			stopErr = errors.Join(stopErr, ctx.Err())
+		}
 	}
-	if ctx.Err() == nil {
-		c.subscriptions = nil
-		c.consumers = nil
+	if c.cancel != nil {
+		c.cancel()
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		stopErr = errors.Join(stopErr, ctxErr)
 	}
 	return stopErr
+}
+
+func (c *Component) clearLifecycleHandles() {
+	c.subscriptions = nil
+	c.consumers = nil
+	c.cancel = nil
 }
 
 // IsStarted returns whether the component is running
@@ -400,7 +459,11 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.P
 	subject := stream.Subjects()[0]
 
 	// Wait for stream to be available
-	if err := c.waitForStream(ctx, streamName); err != nil {
+	waitForStream := c.waitForStream
+	if c.waitForStreamInput != nil {
+		waitForStream = c.waitForStreamInput
+	}
+	if err := waitForStream(ctx, streamName); err != nil {
 		return fmt.Errorf("stream %s not available: %w", streamName, err)
 	}
 
@@ -430,13 +493,19 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.P
 		AutoCreate:    false,
 	}
 
-	err = c.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	consumeStream := c.natsClient.ConsumeStreamWithConfigHandle
+	if c.consumeStream != nil {
+		consumeStream = c.consumeStream
+	}
+	handle, err := consumeStream(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		c.handleJetStreamMessage(msgCtx, msg)
 	})
 	if err != nil {
 		return fmt.Errorf("consumer setup failed for stream %s: %w", streamName, err)
 	}
-	c.consumers = append(c.consumers, streamConsumerBinding{streamName: streamName, consumerName: consumerName})
+	c.lifecycleMu.Lock()
+	c.consumers = append(c.consumers, streamConsumerBinding{handle: handle})
+	c.lifecycleMu.Unlock()
 
 	return nil
 }
