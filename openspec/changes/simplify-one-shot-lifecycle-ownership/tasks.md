@@ -104,9 +104,15 @@
     contract, package/race/integration evidence, exact census, hashes, and scanner limitations are recorded in the
     ledger. Required breaking-change runs `task e2e:agentic` and `task e2e:core` both exited 0. Owner-migrated credit is
     granted only to `agentic/agentrun/agentrun.go` and `service/milestone_service.go`; supporting natsclient,
-    component, and MaxDeliver files receive no owner credit. I1 is eligible to commit after final task-truth review but
-    remains uncommitted. Task 2.3, Gate A/B/C, runtime migration, proof, release, archive, and tag readiness remain
-    unchecked and incomplete.
+    component, and MaxDeliver files receive no owner credit. I1 is committed at
+    `07c37f7319a65c5109fe31bc36136661bc6e9243`. Task 2.3, Gate A/B/C, runtime migration, proof, release, archive, and
+    tag readiness remain unchecked and incomplete.
+  - 2026-08-20 OT1 implementation checkpoint: independent `semstreams-reviewer` verdict `APPROVE` grants
+    owner-migrated credit only to `output/otel/component.go`; supporting unit and lifecycle-integration tests receive
+    no owner credit. The process-global opaque `(stream, durable)` claim, pull-loop one-shot shutdown, causal Operation
+    replay RED, race/integration/stress evidence, exact census, and source hashes are recorded in the ledger. No
+    outward API, configuration, natsclient, consumer-deletion, or Metrics surface changed. Task 2.3, Gate A/B/C,
+    runtime migration, proof, release, archive, and tag readiness remain unchecked and incomplete.
   - 2026-08-18 checkpoint: independent `semstreams-reviewer` verdict `CORRECTIONS CONFIRMED` grants owner-migrated
     credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
     worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.

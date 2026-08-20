@@ -11,6 +11,8 @@
 > `APPROVE`; owner-migrated credit is limited to `service/component_manager.go`.
 > Independent I1 implementation review and both required breaking-change E2E tiers returned green; owner-migrated
 > credit is limited to `agentic/agentrun/agentrun.go` and `service/milestone_service.go`.
+> Independent OT1 implementation review returned `APPROVE`; owner-migrated credit is limited to
+> `output/otel/component.go`.
 
 ## Evidence identity
 
@@ -145,8 +147,8 @@ Metrics APIs, or any later N1 retirement.
 Implementation status on 2026-08-20: independent `semstreams-reviewer` verdict `APPROVE`, `task e2e:agentic` exit 0,
 and `task e2e:core` exit 0 grant owner-migrated credit only to `agentic/agentrun/agentrun.go` and
 `service/milestone_service.go`. Supporting natsclient, component, and MaxDeliver files receive no owner credit. I1 is
-eligible to commit after final task-truth review, but remains uncommitted at this checkpoint. Task 2.3, Gate A/B/C,
-runtime migration, proof, release, archive, and tag readiness remain incomplete.
+committed at `07c37f7319a65c5109fe31bc36136661bc6e9243`. Task 2.3, Gate A/B/C, runtime migration, proof, release,
+archive, and tag readiness remain incomplete.
 
 ## S1 — serialized fixed-port Q/F batch + port bridge birth
 
@@ -278,10 +280,17 @@ lifecyclejoin rollback -1. OS1 depends on S1.
 
 ## OT1 — OTEL pull-loop singleton
 
-Membership output/otel/component.go. Retain exact Consumer observation/acquisition; duplicate reject not replacement;
-cancel/join fetch; flush/remove observers; context Shutdown; no Operation replay. Does not use ConsumeContext/core
-Drain. Proof duplicate/block/cancel/exporter/cleanup/repeat/race. Delta owner/NG/Stop/Cancel/Operation -1. OT1 depends
-on I1 identity, not S1.
+Membership `output/otel/component.go`. Retain exact Consumer observation/acquisition; a process-global opaque
+`(stream, durable)` claim rejects duplicate local ownership without replacing the incumbent. Fence new fetch, cancel
+and join pull loops, flush the exporter, remove observers, run context-bound exporter Shutdown, then release the exact
+claims; completed repeated Stop is nil with no Operation replay. Does not use ConsumeContext/core Drain. Proof
+duplicate/block/cancel/exporter/cleanup/repeat/race. Delta owner/NG/Stop/Cancel/Operation -1. OT1 depends on I1
+identity, not S1.
+
+Implementation status on 2026-08-20: independent `semstreams-reviewer` verdict `APPROVE` grants owner-migrated credit
+only to `output/otel/component.go`. `output/otel/component_test.go` and
+`output/otel/component_lifecycle_integration_test.go` are supporting evidence and receive no owner credit. Task 2.3,
+Gate A/B/C, runtime migration, proof, release, archive, and tag readiness remain incomplete.
 
 ## RU1 — Rule package singleton
 
@@ -457,4 +466,6 @@ Independent ML1 implementation review returned `APPROVE`, granting owner-migrate
 follows. Independent I1 implementation review returned `APPROVE`, and both required breaking-change E2E tiers passed,
 granting owner-migrated credit only to `agentic/agentrun/agentrun.go` and `service/milestone_service.go`; supporting
 natsclient, component, and MaxDeliver files receive no owner credit. Other exported API rulings remain unapproved, and
-no broader task or gate credit follows.
+no broader task or gate credit follows. Independent OT1 implementation review returned `APPROVE`, granting
+owner-migrated credit only to `output/otel/component.go`; supporting tests receive no owner credit and no broader task
+or gate credit follows.

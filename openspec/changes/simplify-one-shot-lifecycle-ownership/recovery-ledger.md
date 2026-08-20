@@ -493,8 +493,64 @@ After explicit elevation approval, both required breaking-change E2E tiers passe
 | Core storage path | PASS | ObjectStore/raw path evidence present |
 
 The disposable review copy `/private/tmp/semstreams-i1-review.2COr7F` was removed and independently verified absent.
-I1 is now eligible to commit after final task-truth review, but remains uncommitted at this checkpoint. Task 2.3,
-Gate A/B/C, runtime migration, proof, release, archive, and tag readiness remain unchecked and incomplete.
+I1 landed as commit `07c37f7319a65c5109fe31bc36136661bc6e9243`. Task 2.3, Gate A/B/C, runtime migration,
+proof, release, archive, and tag readiness remain unchecked and incomplete.
+
+### OT1 OTEL pull-loop implementation checkpoint — 2026-08-20
+
+Independent `semstreams-reviewer` verdict `APPROVE` applies to the OT1 dirty worktree based on full commit
+`07c37f7319a65c5109fe31bc36136661bc6e9243`. Owner-migrated credit is granted only to
+`output/otel/component.go`. `output/otel/component_test.go` and the new
+`output/otel/component_lifecycle_integration_test.go` are supporting evidence surfaces and receive no owner credit.
+
+OT1 binds process-global lifecycle identity with an opaque `(stream, durable)` claim. A duplicate local owner is
+rejected without replacement or disturbance of the incumbent. The owner fences new fetches, cancels and joins its
+pull loops, flushes the exporter, removes policy observers, performs context-bound exporter Shutdown, and only then
+releases its exact claims. Completed repeated Stop returns nil without replay; no native Consumer deletion is part of
+the contract.
+
+The causal TDD RED replaced the legacy `lifecyclejoin.Operation` replay expectation: after exporter Shutdown returned
+an injected error, the new one-shot test expected a completed second Stop to return nil, but the old Operation replayed
+the prior error. The accepted implementation removes that retained-result behavior.
+
+Final independent evidence:
+
+| Evidence | Result | Elapsed |
+|---|---|---:|
+| Full OTEL package race | PASS | 1.378s |
+| Real-NATS lifecycle integration | PASS | 3.948s |
+| Blocked Start/Stop overlap, 5 repetitions | PASS | 3.264s |
+| Focused lifecycle matrix, 10 repetitions | PASS | 1.306s |
+| `task lint` | PASS | — |
+| `git diff --check` | PASS | — |
+| Strict OpenSpec validations | PASS, 52/52 | — |
+
+The production-only recovery census moved exactly as reviewed:
+
+| Measurement | HEAD `07c37f73` | OT1 worktree | Delta |
+|---|---:|---:|---:|
+| Production owner files importing `internal/lifecyclejoin` | 21 | 20 | -1 |
+| `lifecyclejoin.NewGeneration` | 21 | 20 | -1 |
+| `Generation.Stop` | 30 | 29 | -1 |
+| External `Generation.Cancel` | 4 | 3 | -1 |
+| `lifecyclejoin.NewOperation` / lifecycle `Operation.Run` | 2 | 1 | -1 |
+| `Generation.StopWithQuiesce` | 3 | 3 | 0 |
+| External `RunPartialStartRollback` calls | 14 | 14 | 0 |
+| Final parent-aware `RollbackFailedStart` production owner calls | 14 | 14 | 0 |
+
+Stable OT1 source identities for this checkpoint are:
+
+- `output/otel/component.go`:
+  `e1235cc252e6194269c762f5d727914995a48ddfe31b81bc3dd491e164004c19`;
+- `output/otel/component_test.go`:
+  `c109d81e80108cb3d8853a267c1ac5ea943ef6874308bc752eb4617ca4ea38eb`;
+- `output/otel/component_lifecycle_integration_test.go`:
+  `f7d00429c4bae897f8b6f40ee91b90984a54fe2c0747a13477482fbf6e9a4987`.
+
+OT1 introduces no outward API or configuration change and no natsclient or consumer-deletion drift. The unrelated
+Metrics inventory remains byte-identical at SHA-256
+`8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`. Task 2.3, Gate A/B/C, runtime migration,
+proof, release, archive, and tag readiness remain unchecked and incomplete.
 
 ### CM1 ComponentManager implementation checkpoint — 2026-08-19
 
