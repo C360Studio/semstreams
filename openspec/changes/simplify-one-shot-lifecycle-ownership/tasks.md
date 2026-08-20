@@ -137,6 +137,14 @@
     change was introduced. M1, ServiceManager HTTP, and pprof remain excluded; temporary bridges keep the branch under
     the no-release/no-tag invariant. Task 2.3, Gate A/B/C, runtime migration, proof, release, archive, and tag readiness
     remain unchecked and incomplete.
+  - 2026-08-20 O1 implementation checkpoint: independent `semstreams-reviewer` verdict `APPROVE` grants
+    owner-migrated credit only to `output/file/file.go` and `output/httppost/httppost.go`; tests and package
+    documentation receive no owner credit. Adopter docs now state one-shot instances, serialized lifecycle
+    transitions, caller-bounded Stop, completed repeat Stop nil, and fresh-instance reuse without changing public
+    signatures or configuration. The causal REDs, HTTP idle-connection blocker/correction, exact evidence, census, and
+    source identities are recorded in the ledger. M1, OS1, RU1, GI1, N1, unrelated APIs, and every broader gate remain
+    excluded; temporary bridges keep the branch under the no-release/no-tag invariant. Task 2.3, Gate A/B/C, runtime
+    migration, proof, release, archive, and tag readiness remain unchecked and incomplete.
   - 2026-08-18 checkpoint: independent `semstreams-reviewer` verdict `CORRECTIONS CONFIRMED` grants owner-migrated
     credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
     worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.

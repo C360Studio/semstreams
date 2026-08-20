@@ -20,6 +20,8 @@
 > owner-migrated credit is limited to the five frozen A1 owner files.
 > Independent H1 implementation review returned `APPROVE`; owner-migrated credit is limited to the graph gateway,
 > input WebSocket, and output WebSocket owner files.
+> Independent O1 implementation review returned `APPROVE`; owner-migrated credit is limited to the file and HTTP POST
+> output owner files.
 
 ## Evidence identity
 
@@ -242,8 +244,16 @@ archive, and tag readiness remain incomplete.
 ## O1 — static output sinks
 
 Membership: file + httppost. Serialized exact JS/core handles; partial cleanup; callback drain before sink close. File
-flush/close; HTTPPost ACME moved from constructor to Start. Deterministic proof. Delta owners/NG/Stop -2. O1 depends
-on S1.
+flush/close; HTTPPost ACME moved from constructor to Start, joined before exact-once idle-connection close.
+Component instances are one-shot; fresh construction is the reuse boundary. Lifecycle transitions are serialized and
+Stop is caller-bounded; there is no concurrent-Stop coordination contract. Public signatures and configuration remain
+unchanged. Deterministic proof. Delta owners/NG/Stop -2. O1 depends on S1.
+
+Implementation status on 2026-08-20: independent `semstreams-reviewer` verdict `APPROVE` grants owner-migrated credit
+only to `output/file/file.go` and `output/httppost/httppost.go`. Tests and package documentation are supporting
+evidence/adopter surfaces and receive no owner credit. M1, OS1, RU1, GI1, N1, and unrelated APIs remain excluded. The
+temporary port bridges keep the branch ineligible for release or tag. Task 2.3, Gate A/B/C, runtime migration, proof,
+release, archive, and tag readiness remain incomplete.
 
 ## H1 — standalone HTTP component family
 
@@ -509,4 +519,6 @@ same no-release/no-tag invariant. Independent A1 implementation review returned 
 credit only to its five frozen owner files; natsclient, adjacent implementation, and test support receive no owner
 credit, and no broader task or gate credit follows. Independent H1 implementation review returned `APPROVE`, granting
 owner-migrated credit only to its three frozen standalone HTTP owner files; readiness and test support receive no owner
+credit, and no broader task or gate credit follows. Independent O1 implementation review returned `APPROVE`, granting
+owner-migrated credit only to its two frozen output owner files; tests and package documentation receive no owner
 credit, and no broader task or gate credit follows.

@@ -105,9 +105,15 @@
 //	_ = output.Stop(shutdownCtx)
 //
 // During shutdown:
-//  1. Stop accepting new messages
-//  2. Wait for in-flight requests to complete
-//  3. Close HTTP client connections
+//  1. Drain exact NATS subscriptions and JetStream consumers
+//  2. Cancel callback authority after native consumers close
+//  3. Join ACME cleanup when configured
+//  4. Close idle pooled HTTP connections after successful terminal cleanup
+//
+// A component instance is one-shot. Start it once and serialize lifecycle
+// transitions at the composition boundary. A completed repeated Stop is a nil
+// no-op; same-instance restart is rejected. Construct a fresh component
+// instance to restart a flow.
 //
 // # Observability
 //
@@ -168,11 +174,12 @@
 //
 // # Thread Safety
 //
-// The component is fully thread-safe:
+// HTTP delivery is safe while the component is running:
 //
 //   - HTTP client is thread-safe (shared across goroutines)
-//   - Start/Stop can be called from any goroutine
 //   - Metrics updates use atomic operations
+//   - Lifecycle Start/Stop transitions must be serialized by the owner
+//   - Stop waits only within its caller-provided context; concurrent Stop has no coordination guarantee
 //
 // # Testing
 //

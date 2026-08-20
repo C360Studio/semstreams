@@ -143,8 +143,8 @@ The component does **not** include built-in file rotation. Use external tools:
 }
 ```
 
-**Manual rotation:** Stop component, move file, restart component. With `append: true`, the component
-creates a new file on restart.
+**Manual rotation:** Stop the component, move the file, then construct and Start a fresh component instance. With
+`append: true`, the fresh instance creates or reopens the configured file.
 
 ## Buffering and Flushing
 
@@ -159,6 +159,16 @@ The component buffers messages in memory before writing to disk:
 - Larger `buffer_size` improves throughput but increases memory usage
 - Smaller `buffer_size` reduces latency but increases disk I/O
 - Automatic 1-second flush prevents unbounded latency for low-volume streams
+
+## Lifecycle and Concurrency
+
+Each component instance is one-shot. Call Start once, then call Stop with a caller-bounded context. A completed repeat
+Stop is a nil no-op, but the same instance rejects restart. Construct a fresh component instance when restarting a
+flow or completing manual file rotation.
+
+Lifecycle transitions must be serialized by the composition owner; concurrent Start or Stop calls are not a supported
+coordination contract. Message delivery and buffered writes remain safe while the component is running. Stop drains
+the exact NATS subscriptions and JetStream consumers, joins the flush loop, flushes buffered data, and closes the file.
 
 ## Example Use Cases
 

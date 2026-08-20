@@ -915,6 +915,95 @@ no-release/no-tag invariant. The unrelated Metrics inventory remains byte-identi
 `8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`. Task 2.3, Gate A/B/C, runtime migration,
 proof, release, archive, and tag readiness remain unchecked and incomplete.
 
+### O1 static output two-owner implementation checkpoint — 2026-08-20
+
+Independent `semstreams-reviewer` verdict `APPROVE` applies to the O1 dirty worktree based on full commit
+`29d4e1706a59dee037d764cf2cd6aa2ced26565d`. Owner-migrated credit is granted only to:
+
+- `output/file/file.go`;
+- `output/httppost/httppost.go`.
+
+Lifecycle tests and package documentation are supporting evidence/adopter surfaces and receive no owner credit.
+
+The initial TDD RED was compile-time causal evidence: the new lifecycle tests could not compile while owner-local
+one-shot state, exact native handle seams, and HTTPPost Start-owned ACME authority were absent. The accepted
+implementation serializes Start/Stop, drains exact core and JetStream callback authority before cancellation, retains
+bounded failed-Start cleanup authority, makes completed repeated Stop nil without replay, and rejects same-instance
+restart.
+
+Independent review then found a blocker in HTTP transport cleanup. Terminal cleanup omitted
+`CloseIdleConnections`, allowing pooled TCP connections to survive component Stop. The reviewer-correction RED was:
+
+```text
+go test ./output/httppost \
+  -run TestLifecycleOwnerClosesHTTPIdleConnectionsAfterCallbacksAndACMEJoinOnce \
+  -count=1
+```
+
+It failed with terminal order `acme-join`, wanted `acme-join,idle-close`. The correction waits for native callbacks to
+close, cancels runtime work, joins ACME cleanup, then closes idle connections exactly once after successful cleanup.
+It does not close them while cleanup remains pending, and completed repeated Stop does not replay the close.
+
+Final developer and independent evidence:
+
+| Evidence | File output | HTTP POST output |
+|---|---:|---:|
+| Causal lifecycle race, 10 repetitions | PASS, 1.309s | PASS, 1.360s |
+| Full package race | PASS, 1.247s | PASS, 3.355s |
+| Integration race | PASS, 15.154s | PASS, 10.801s |
+| Reviewer corrected HTTP causal, 20 repetitions | — | PASS, 1.352s |
+| Reviewer full HTTP race | — | PASS, 3.251s |
+| Reviewer HTTP integration race | — | PASS, 11.219s |
+
+`task lint`, `task build`, `git diff --check`, and strict OpenSpec validation passed. Repository-wide race is not
+claimed fully green because repository-root scanners traverse user-owned `.claude/worktrees`; that known scanner
+pollution is not behavioral O1 evidence. The focused, full-package, and integration O1 surfaces above are green.
+
+The authoritative tracked-production census moved exactly as reviewed:
+
+| Measurement | HEAD `29d4e170` | O1 worktree | Delta |
+|---|---:|---:|---:|
+| Production owner files importing `internal/lifecyclejoin` | 6 | 4 | -2 |
+| `lifecyclejoin.NewGeneration` | 6 | 4 | -2 |
+| `Generation.Stop` | 7 | 5 | -2 |
+| External `RunPartialStartRollback` calls | 2 | 2 | 0 |
+| Final parent-aware `RollbackFailedStart` production owner calls | 26 | 28 | +2 |
+| `Generation.StopWithQuiesce` | 0 | 0 | 0 |
+| External `Generation.Cancel` | 3 | 3 | 0 |
+| `lifecyclejoin.NewOperation` / lifecycle `Operation.Run` | 1 | 1 | 0 |
+
+Stable O1 implementation and evidence identities are:
+
+- `output/file/file.go`:
+  `2e63b349ee7b6e88efaf6916c97c779355c343c00da2568a32a4c0c5a6e6197c`;
+- `output/file/lifecycle_integration_test.go`:
+  `3b0274d8f70163a897c0463200bfdd0e80f057a08e5964e616e2f9d9095fad11`;
+- `output/file/lifecycle_owner_test.go`:
+  `cb991b1508bd5db47d3a3198a13e0cf6cb10009003b2a34d4e6d4c8e6aeae528`;
+- `output/httppost/httppost.go`:
+  `9f85d95ca9d50518a01b4f1fe2b630c805d48a5ffb7f86f1ed99282438d2414c`;
+- `output/httppost/lifecycle_integration_test.go`:
+  `ab0d8e39794c1534a6c28bf8592bdf5540999c0b7bcac4ab669223e2ef779c98`;
+- `output/httppost/lifecycle_owner_test.go`:
+  `1660385565bf76079572a8370d2571e70cd266195992691345b3eb96c8b93b5f`.
+
+The adopter-facing package documentation now states the existing lifecycle contract without changing signatures or
+configuration: each instance is one-shot, lifecycle transitions are serialized, Stop is caller-bounded, a completed
+repeat Stop is nil, and reuse requires a fresh component instance. Stable package-document identities are:
+
+- `output/file/README.md`: `bb6f13fb866b1944ecb54e6818e259f56f42f2d6e193e53fb950de51920b2ee3`;
+- `output/file/doc.go`: `f7c73d9fcf6e8f3f099e2c2cd6c7d552a7e7d6ee3c14bf81df27a1d77eaf889b`;
+- `output/httppost/README.md`:
+  `9661503aa7ba9b7bea45abc01a57ed38218d328c96f164a5e5805efc61ee9ed2`;
+- `output/httppost/doc.go`:
+  `652c401f0b4b9ae4c0bf65ef2f8900ebc8427926b5799f94c242d5d3e9679bf1`.
+
+O1 introduces no public signature or configuration change and no context, name-routed lifecycle, or consumer-deletion
+surface. M1, OS1, RU1, GI1, N1, unrelated API, and broader gate credit remain excluded. The temporary port bridges keep
+the branch under the no-release/no-tag invariant. The unrelated Metrics inventory remains byte-identical at SHA-256
+`8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`. Task 2.3, Gate A/B/C, runtime migration,
+proof, release, archive, and tag readiness remain unchecked and incomplete.
+
 ### CM1 ComponentManager implementation checkpoint — 2026-08-19
 
 Independent `semstreams-reviewer` verdict `APPROVE` applies to the CM1 dirty worktree based on full commit

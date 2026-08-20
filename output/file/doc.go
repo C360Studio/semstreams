@@ -87,10 +87,15 @@
 //	_ = output.Stop(shutdownCtx)
 //
 // During shutdown:
-//  1. Stop accepting new messages
-//  2. Flush buffered data to disk
-//  3. Close file handle
-//  4. Wait for flush goroutine to complete
+//  1. Drain exact NATS subscriptions and JetStream consumers
+//  2. Cancel and join the flush goroutine
+//  3. Flush buffered data to disk
+//  4. Close the file handle
+//
+// A component instance is one-shot. Start it once and serialize lifecycle
+// transitions at the composition boundary. A completed repeated Stop is a nil
+// no-op; same-instance restart is rejected. Construct a fresh component
+// instance to restart a flow.
 //
 // # Observability
 //
@@ -150,18 +155,19 @@
 //
 // # Thread Safety
 //
-// The component is fully thread-safe:
+// Message delivery is safe while the component is running:
 //
 //   - File writes protected by sync.Mutex
-//   - Start/Stop can be called from any goroutine
 //   - Metrics updates use atomic operations
+//   - Lifecycle Start/Stop transitions must be serialized by the owner
+//   - Stop waits only within its caller-provided context; concurrent Stop has no coordination guarantee
 //
 // # File Rotation
 //
 // Current version does not include built-in file rotation. Recommended approaches:
 //
 //   - Use logrotate or similar system tool
-//   - Stop component, rotate file, restart component
+//   - Stop the component, rotate the file, then construct and Start a fresh instance
 //   - External rotation with Append: true works safely
 //
 // # Testing

@@ -332,12 +332,18 @@ Current version does not support:
 
 ## Thread Safety
 
-The component is fully thread-safe:
+HTTP delivery is safe while the component is running:
 
 - HTTP client can be used from multiple goroutines
-- Start/Stop can be called from any goroutine
 - Metrics updates use atomic operations
 - Proper mutex protection for shared state
+
+Lifecycle transitions must be serialized by the composition owner. Each component instance is one-shot: call Start
+once, then Stop with a caller-bounded context. A completed repeat Stop is a nil no-op; same-instance restart is
+rejected, and concurrent Stop has no coordination guarantee. Construct a fresh component instance to restart a flow.
+
+Stop drains exact NATS subscriptions and JetStream consumers before canceling callback authority, joins ACME cleanup
+when configured, and closes idle pooled HTTP connections after successful terminal cleanup.
 
 ## Error Reporting
 

@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/acme"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -104,19 +104,40 @@ type Output struct {
 	httpClient  *http.Client
 
 	// Lifecycle management
-	running       bool
-	startTime     time.Time
-	mu            sync.RWMutex
-	lifecycleMu   sync.Mutex
-	generation    *lifecyclejoin.Generation
-	subscriptions []*natsclient.Subscription
-	tlsCleanup    func() // TLS cleanup function (ACME renewal loop)
+	running        bool
+	startTime      time.Time
+	mu             sync.RWMutex
+	lifecycleMu    sync.Mutex
+	lifecycleUsed  bool
+	terminal       bool
+	stopping       bool
+	cleanupPending bool
+	cancel         context.CancelFunc
+	subscriptions  []coreSubscription
+	consumers      []streamConsumerBinding
+	tlsCleanup     func() // TLS cleanup function (ACME renewal loop)
+	idleClosed     bool
+
+	waitForStreamInput          func(context.Context, string) error
+	subscribeCore               func(context.Context, string, func(context.Context, *nats.Msg)) (coreSubscription, error)
+	consumeStream               func(context.Context, natsclient.PortConsumerContext, natsclient.StreamConsumerConfig, func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error)
+	waitConsumerClosed          func(context.Context, <-chan struct{}) error
+	loadClientTLSConfigWithACME func(context.Context, security.ClientTLSConfig) (*tls.Config, func(), error)
 
 	// Metrics
 	messagesSent    int64
 	messagesRetried int64
 	errors          int64
 	lastActivity    time.Time
+}
+
+type coreSubscription interface {
+	Drain(context.Context) error
+}
+
+type streamConsumerBinding struct {
+	handle      jetstream.ConsumeContext
+	drainIssued bool
 }
 
 // NewOutput creates a new HTTP POST output from configuration
@@ -171,8 +192,6 @@ func NewOutput(rawConfig json.RawMessage, deps component.Dependencies) (componen
 		Timeout: timeout,
 	}
 
-	var tlsCleanup func()
-
 	// Configure TLS if client TLS is configured at platform level
 	if len(deps.Security.TLS.Client.CAFiles) > 0 ||
 		deps.Security.TLS.Client.InsecureSkipVerify ||
@@ -184,20 +203,7 @@ func NewOutput(rawConfig json.RawMessage, deps component.Dependencies) (componen
 		var err error
 
 		// Check if ACME mode is enabled for client
-		if deps.Security.TLS.Client.Mode == "acme" && deps.Security.TLS.Client.ACME.Enabled {
-			// Create lifecycle context for ACME operations
-			// Note: Using background context as httppost doesn't have explicit lifecycle context yet
-			ctx := context.Background()
-
-			tlsConfig, tlsCleanup, err = tlsutil.LoadClientTLSConfigWithACME(
-				ctx,
-				deps.Security.TLS.Client,
-			)
-			if err != nil {
-				return nil, errs.WrapFatal(err, "httppost-output", "NewOutput",
-					"load TLS config with ACME")
-			}
-		} else {
+		if deps.Security.TLS.Client.Mode != "acme" || !deps.Security.TLS.Client.ACME.Enabled {
 			// Use manual TLS configuration
 			tlsConfig, err = tlsutil.LoadClientTLSConfigWithMTLS(
 				deps.Security.TLS.Client,
@@ -207,10 +213,7 @@ func NewOutput(rawConfig json.RawMessage, deps component.Dependencies) (componen
 				return nil, errs.WrapFatal(err, "httppost-output", "NewOutput",
 					"load TLS config with mTLS")
 			}
-		}
-
-		httpClient.Transport = &http.Transport{
-			TLSClientConfig: tlsConfig,
+			httpClient.Transport = &http.Transport{TLSClientConfig: tlsConfig}
 		}
 	}
 
@@ -228,7 +231,6 @@ func NewOutput(rawConfig json.RawMessage, deps component.Dependencies) (componen
 		logger:      deps.GetLogger(),
 		security:    deps.Security,
 		httpClient:  httpClient,
-		tlsCleanup:  tlsCleanup,
 	}, nil
 }
 
@@ -238,7 +240,7 @@ func (h *Output) Initialize() error {
 }
 
 // Start begins sending messages via HTTP POST
-func (h *Output) Start(ctx context.Context) error {
+func (h *Output) Start(ctx context.Context) (startErr error) {
 	// Validate context
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Output", "Start", "context cannot be nil")
@@ -250,7 +252,7 @@ func (h *Output) Start(ctx context.Context) error {
 	h.lifecycleMu.Lock()
 	defer h.lifecycleMu.Unlock()
 
-	if h.running {
+	if h.lifecycleUsed {
 		return errs.WrapFatal(errs.ErrAlreadyStarted, "Output", "Start", "check running state")
 	}
 
@@ -258,19 +260,50 @@ func (h *Output) Start(ctx context.Context) error {
 		return errs.WrapFatal(errs.ErrMissingConfig, "Output", "Start", "NATS client required")
 	}
 
+	parent := ctx
 	runCtx, cancel := context.WithCancel(ctx)
+	h.lifecycleUsed = true
+	h.cleanupPending = true
+	h.cancel = cancel
+	committed := false
+	defer func() {
+		if committed {
+			h.cleanupPending = false
+			return
+		}
+		rollbackErr := lifecyclecleanup.RollbackFailedStart(parent, h.cleanup)
+		startErr = errors.Join(startErr, rollbackErr)
+		if rollbackErr == nil {
+			h.cleanupPending = false
+			h.terminal = true
+			h.clearLifecycleHandles()
+		}
+	}()
+
+	clientTLS := h.security.TLS.Client
+	if clientTLS.Mode == "acme" && clientTLS.ACME.Enabled {
+		loadTLS := tlsutil.LoadClientTLSConfigWithACME
+		if h.loadClientTLSConfigWithACME != nil {
+			loadTLS = h.loadClientTLSConfigWithACME
+		}
+		tlsConfig, cleanup, err := loadTLS(runCtx, clientTLS)
+		if err != nil {
+			return errs.WrapFatal(err, "httppost-output", "Start", "load TLS config with ACME")
+		}
+		h.tlsCleanup = cleanup
+		h.httpClient.Transport = &http.Transport{TLSClientConfig: tlsConfig}
+	}
 
 	// Subscribe to input ports based on port type
 	if err := h.setupSubscriptions(runCtx); err != nil {
-		cancel()
 		return err
 	}
-	h.generation = lifecyclejoin.NewGeneration(cancel, nil)
 
 	h.mu.Lock()
 	h.running = true
 	h.startTime = time.Now()
 	h.mu.Unlock()
+	committed = true
 
 	return nil
 }
@@ -292,7 +325,13 @@ func (h *Output) setupSubscriptions(ctx context.Context) error {
 			}
 
 		case component.PortKindNATS:
-			sub, err := h.natsClient.Subscribe(ctx, subject, func(ctx context.Context, msg *nats.Msg) {
+			subscribe := func(ctx context.Context, subject string, handler func(context.Context, *nats.Msg)) (coreSubscription, error) {
+				return h.natsClient.Subscribe(ctx, subject, handler)
+			}
+			if h.subscribeCore != nil {
+				subscribe = h.subscribeCore
+			}
+			sub, err := subscribe(ctx, subject, func(ctx context.Context, msg *nats.Msg) {
 				h.handleMessage(ctx, msg.Data)
 			})
 			if err != nil {
@@ -325,7 +364,11 @@ func (h *Output) setupJetStreamConsumer(ctx context.Context, port component.Port
 	subject := facts.NATSSubjects()[0]
 	streamName := stream.Name()
 
-	if err := h.waitForStream(ctx, streamName); err != nil {
+	waitForStream := h.waitForStream
+	if h.waitForStreamInput != nil {
+		waitForStream = h.waitForStreamInput
+	}
+	if err := waitForStream(ctx, streamName); err != nil {
 		return errs.WrapTransient(err, "Output", "setupJetStreamConsumer",
 			fmt.Sprintf("stream %s not available", streamName))
 	}
@@ -357,7 +400,11 @@ func (h *Output) setupJetStreamConsumer(ctx context.Context, port component.Port
 		AutoCreate:    false,
 	}
 
-	err = h.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: h.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	consumeStream := h.natsClient.ConsumeStreamWithConfigHandle
+	if h.consumeStream != nil {
+		consumeStream = h.consumeStream
+	}
+	handle, err := consumeStream(ctx, natsclient.PortConsumerContext{Component: h.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		h.handleMessage(msgCtx, msg.Data())
 		if ackErr := msg.Ack(); ackErr != nil {
 			h.logger.Error("Failed to ack JetStream message", "error", ackErr)
@@ -367,6 +414,7 @@ func (h *Output) setupJetStreamConsumer(ctx context.Context, port component.Port
 		return errs.WrapTransient(err, "Output", "setupJetStreamConsumer",
 			fmt.Sprintf("consumer setup for stream %s", streamName))
 	}
+	h.consumers = append(h.consumers, streamConsumerBinding{handle: handle})
 
 	h.logger.Debug("HTTP POST output subscribed (JetStream)", "subject", subject, "stream", streamName)
 	return nil
@@ -410,33 +458,87 @@ func (h *Output) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	h.lifecycleMu.Lock()
-	generation := h.generation
-	if generation == nil {
+	if !h.lifecycleUsed {
+		h.lifecycleUsed = true
+		h.terminal = true
 		h.lifecycleMu.Unlock()
 		return nil
 	}
-	h.lifecycleMu.Unlock()
-
-	return generation.Stop(ctx, func() error {
-		var stopErr error
-		for _, sub := range h.subscriptions {
-			if err := sub.Unsubscribe(); err != nil {
-				h.logger.Warn("Failed to unsubscribe", "error", err)
-				stopErr = errors.Join(stopErr, err)
-			}
-		}
-		h.subscriptions = nil
-		return stopErr
-	}, func(context.Context) error {
-		if h.tlsCleanup != nil {
-			h.tlsCleanup()
-		}
-		h.mu.Lock()
-		h.running = false
-		h.mu.Unlock()
+	if h.terminal {
+		h.lifecycleMu.Unlock()
 		return nil
-	})
+	}
+	if h.stopping {
+		h.lifecycleMu.Unlock()
+		return errs.WrapTransient(errors.New("stop already in progress"), "Output", "Stop", "concurrent Stop is unsupported")
+	}
+	retryable := h.cleanupPending
+	h.stopping = true
+	h.lifecycleMu.Unlock()
+	stopErr := h.cleanup(ctx)
+	h.lifecycleMu.Lock()
+	h.stopping = false
+	if retryable && stopErr != nil {
+		h.lifecycleMu.Unlock()
+		return stopErr
+	}
+	h.cleanupPending = false
+	h.terminal = true
+	h.clearLifecycleHandles()
+	h.mu.Lock()
+	h.running = false
+	h.mu.Unlock()
+	h.lifecycleMu.Unlock()
+	return stopErr
+}
+
+func (h *Output) cleanup(ctx context.Context) error {
+	var cleanupErr error
+	for index := range h.consumers {
+		binding := &h.consumers[index]
+		if !binding.drainIssued {
+			binding.handle.Drain()
+			binding.drainIssued = true
+		}
+	}
+	for _, sub := range h.subscriptions {
+		cleanupErr = errors.Join(cleanupErr, sub.Drain(ctx))
+	}
+	for index := range h.consumers {
+		closed := h.consumers[index].handle.Closed()
+		if h.waitConsumerClosed != nil {
+			cleanupErr = errors.Join(cleanupErr, h.waitConsumerClosed(ctx, closed))
+			continue
+		}
+		select {
+		case <-closed:
+		case <-ctx.Done():
+			cleanupErr = errors.Join(cleanupErr, ctx.Err())
+		}
+	}
+	if h.cancel != nil {
+		h.cancel()
+	}
+	if h.tlsCleanup != nil {
+		h.tlsCleanup()
+		h.tlsCleanup = nil
+	}
+	if cleanupErr == nil && ctx.Err() == nil && !h.idleClosed && h.httpClient != nil {
+		h.httpClient.CloseIdleConnections()
+		h.idleClosed = true
+	}
+	return errors.Join(cleanupErr, ctx.Err())
+}
+
+func (h *Output) clearLifecycleHandles() {
+	h.cancel = nil
+	h.subscriptions = nil
+	h.consumers = nil
+	h.tlsCleanup = nil
 }
 
 // handleMessage processes incoming messages
