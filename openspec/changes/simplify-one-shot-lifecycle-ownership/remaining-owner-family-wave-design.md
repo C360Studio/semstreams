@@ -22,6 +22,8 @@
 > input WebSocket, and output WebSocket owner files.
 > Independent O1 implementation review returned `APPROVE`; owner-migrated credit is limited to the file and HTTP POST
 > output owner files.
+> Independent OS1 implementation review returned `APPROVE`; owner-migrated credit is limited to
+> `storage/objectstore/component.go`.
 
 ## Evidence identity
 
@@ -321,6 +323,13 @@ Membership storage/objectstore/component.go. startDone/cleanup, exact JS/core be
 Store, cleanupPending. Proof partial/block/order/later Stop/identity/race/integration. Delta owner/NG -1, Stop -2; old
 lifecyclejoin rollback -1. OS1 depends on S1.
 
+Implementation status on 2026-08-20: independent `semstreams-reviewer` verdict `APPROVE` grants owner-migrated credit
+only to `storage/objectstore/component.go`. Tests and the narrowly corrected package concurrency documentation are
+supporting surfaces and receive no owner credit. Durable topology, StoreProvider availability during drain, and
+effect-before-ACK settlement remain unchanged. RU1, GI1, M1, N1, and unrelated API/configuration surfaces remain
+excluded. Temporary bridges keep the branch ineligible for release or tag. Task 2.3, Gate A/B/C, runtime migration,
+proof, release, archive, and tag readiness remain incomplete.
+
 ## OT1 — OTEL pull-loop singleton
 
 Membership `output/otel/component.go`. Retain exact Consumer observation/acquisition; a process-global opaque
@@ -521,4 +530,6 @@ credit, and no broader task or gate credit follows. Independent H1 implementatio
 owner-migrated credit only to its three frozen standalone HTTP owner files; readiness and test support receive no owner
 credit, and no broader task or gate credit follows. Independent O1 implementation review returned `APPROVE`, granting
 owner-migrated credit only to its two frozen output owner files; tests and package documentation receive no owner
-credit, and no broader task or gate credit follows.
+credit, and no broader task or gate credit follows. Independent OS1 implementation review returned `APPROVE`,
+granting owner-migrated credit only to `storage/objectstore/component.go`; tests and package documentation receive no
+owner credit, and no broader task or gate credit follows.

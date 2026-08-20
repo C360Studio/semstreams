@@ -1004,6 +1004,91 @@ the branch under the no-release/no-tag invariant. The unrelated Metrics inventor
 `8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`. Task 2.3, Gate A/B/C, runtime migration,
 proof, release, archive, and tag readiness remain unchecked and incomplete.
 
+### OS1 ObjectStore implementation checkpoint — 2026-08-20
+
+Independent `semstreams-reviewer` verdict `APPROVE` applies to the OS1 dirty worktree based on full commit
+`5cd94cee2addd02677f1dc048a200020f0af2776`. Owner-migrated credit is granted only to
+`storage/objectstore/component.go`; lifecycle tests and package documentation are supporting surfaces and receive no
+owner credit.
+
+The TDD RED was exact:
+
+```text
+go test ./storage/objectstore -run '^TestLifecycleOwner' -count=1
+```
+
+It failed to compile because the owner-local exact-handle seams `newStore`, `closeStore`, `subscribeCore`,
+`consumeStream`, and `waitConsumerClosed` did not exist. The accepted implementation publishes `startDone` before
+fallible acquisition, owns each exact core subscription and JetStream handle, drains callbacks while Store authority
+remains live, cancels only after native closure, then closes the Store. Failed-Start cleanup retains exact handles and
+Store authority for a later caller-bounded Stop; completed repeated Stop is nil without replay.
+
+Final developer and independent evidence:
+
+| Evidence | Developer | Reviewer |
+|---|---:|---:|
+| Lifecycle race, 10 repetitions | PASS, 1.367s | — |
+| Lifecycle race, 100 repetitions | — | PASS, 1.452s |
+| Full package race | PASS, 1.315s | PASS, 1.237s |
+| Full integration race | PASS, 65.033s | PASS, 65.248s |
+| Real-NATS one-shot lifecycle, 3 repetitions | — | PASS, 1.891s |
+| Stable-consumer integration, one run | — | PASS, 1.962s |
+
+`task lint`, `task build`, schema generation, `git diff --check`, and strict OpenSpec validation passed. A combined
+integration `count=3` run that included the pre-existing stable-consumer test failed on later repetitions because its
+fixture deliberately retains the same durable identity and does not reset the namespace. The stable-consumer test is
+green at `count=1`, consistent with the no-delete contract. The repeated-fixture failure earns no regression or
+repeated-run claim.
+
+Repository-wide race is not claimed fully green because repository-root scanners traverse unrelated user-owned
+`.claude/worktrees`, and four stale testinfra baseline rows remain. The ordinary ObjectStore package race is green.
+
+The authoritative tracked-production census moved exactly as reviewed:
+
+| Measurement | HEAD `5cd94cee` | OS1 worktree | Delta |
+|---|---:|---:|---:|
+| Production owner files importing `internal/lifecyclejoin` | 4 | 3 | -1 |
+| `lifecyclejoin.NewGeneration` | 4 | 3 | -1 |
+| `Generation.Stop` | 5 | 3 | -2 |
+| External `RunPartialStartRollback` calls | 2 | 1 | -1 |
+| Final parent-aware `RollbackFailedStart` production owner calls | 28 | 29 | +1 |
+| `Generation.StopWithQuiesce` | 0 | 0 | 0 |
+| External `Generation.Cancel` | 3 | 3 | 0 |
+| `lifecyclejoin.NewOperation` / lifecycle `Operation.Run` | 1 | 1 | 0 |
+| ObjectStore owner-side `Client.StopConsumer` calls | 1 | 0 | -1 |
+
+OS1 preserves the configured ObjectStore bucket and durable consumer identity; Stop does not delete either. The live
+StoreProvider remains available until admitted callbacks drain, then terminal cleanup clears local Store authority.
+JetStream writes retain their existing settlement contract: ACK only after the store commit and required
+StorageReference publication succeed; transient/cancellation failures retain their existing NAK behavior and
+structurally invalid work retains its existing Term behavior.
+
+Stable OS1 implementation and evidence identities are:
+
+- `storage/objectstore/component.go`:
+  `b095db2546a9e8bc8e0cdab17d42199c721ad949c0754ead930f4920c230097f`;
+- `storage/objectstore/lifecycle_integration_test.go`:
+  `b39028f55da8fabe8721e8bf900627ca98b5568aeab0762efb57414bafd061c6`;
+- `storage/objectstore/lifecycle_owner_test.go`:
+  `9ce6d9a51892ccbbab7d008f215096de042953d1bfef74618bd2a7e0c388d384`.
+
+The package README and doc comment said all operations were concurrent, which overbroadly included lifecycle
+transitions. Their narrow correction preserves the Store/data/handler concurrency claim while stating serialized
+one-shot lifecycle, nil completed repeat Stop, and fresh-instance reuse. Stable package-document identities are:
+
+- `storage/objectstore/README.md`:
+  `c9d341ec3fb0ea79145ba4d167b87a1b12fee5a243b4afdef448ed07af0691aa`;
+- `storage/objectstore/doc.go`:
+  `4356b0296df47e08ae0966b955181b3c4731a14c3b91516aae590ccd61a8d54c`.
+
+OS1 introduces no outward API, configuration, context, or consumer-deletion surface. It removes the internal
+name-routed `Client.StopConsumer` lifecycle call in favor of the exact native handle; no name-routed lifecycle API was
+added. RU1, GI1, M1, N1, and all broader gate credit remain excluded. Temporary bridges keep the branch under the
+no-release/no-tag invariant.
+The unrelated Metrics inventory remains byte-identical at SHA-256
+`8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`. Task 2.3, Gate A/B/C, runtime migration,
+proof, release, archive, and tag readiness remain unchecked and incomplete.
+
 ### CM1 ComponentManager implementation checkpoint — 2026-08-19
 
 Independent `semstreams-reviewer` verdict `APPROVE` applies to the CM1 dirty worktree based on full commit

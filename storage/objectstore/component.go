@@ -18,7 +18,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -44,11 +44,15 @@ type Component struct {
 	enabled      bool
 
 	// Mutex to protect concurrent access to state fields
-	mu          sync.RWMutex
-	lifecycleMu sync.Mutex
-	generation  *lifecyclejoin.Generation
-	starting    bool
-	started     bool
+	mu             sync.RWMutex
+	lifecycleMu    sync.Mutex
+	lifecycleUsed  bool
+	terminal       bool
+	stopping       bool
+	cleanupPending bool
+	startDone      chan struct{}
+	cancel         context.CancelFunc
+	started        bool
 
 	// core dependencies
 	store           *Store
@@ -64,11 +68,17 @@ type Component struct {
 	portSubjects    map[string]string
 	inputBindings   []objectStoreInputBinding
 
-	// Active write-input bindings. Core NATS subscriptions belong to this
-	// component and must all be unsubscribed on rollback/Stop. JetStream consume
-	// contexts are owned by natsclient and are stopped by their durable identity.
-	writeSubs      []*natsclient.Subscription
+	// Active write-input bindings. The component owns every exact native handle
+	// and keeps callback authority and the Store live until those handles close.
+	writeSubs      []objectStoreCoreSubscription
 	writeConsumers []objectStoreConsumerBinding
+
+	newStore           func(context.Context) (*Store, error)
+	closeStore         func(*Store) error
+	subscribeCore      func(context.Context, string, func(context.Context, *nats.Msg)) (objectStoreCoreSubscription, error)
+	waitForStreamInput func(context.Context, string) error
+	consumeStream      func(context.Context, natsclient.PortConsumerContext, natsclient.StreamConsumerConfig, func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error)
+	waitConsumerClosed func(context.Context, <-chan struct{}) error
 
 	// Metrics tracking
 	messagesReceived uint64
@@ -77,8 +87,12 @@ type Component struct {
 }
 
 type objectStoreConsumerBinding struct {
-	streamName   string
-	consumerName string
+	handle      jetstream.ConsumeContext
+	drainIssued bool
+}
+
+type objectStoreCoreSubscription interface {
+	Drain(context.Context) error
 }
 
 type objectStoreInputBinding struct {
@@ -387,39 +401,46 @@ func (c *Component) Start(ctx context.Context) (startErr error) {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "Start", "context cannot be nil")
 	}
+	if err := ctx.Err(); err != nil {
+		return errs.WrapInvalid(err, "Component", "Start", "context already cancelled")
+	}
 	c.lifecycleMu.Lock()
-	if c.generation != nil {
+	if c.lifecycleUsed {
 		c.lifecycleMu.Unlock()
 		return errs.WrapFatal(errs.ErrAlreadyStarted, "Component", "Start", "already started")
 	}
+	if c.natsClient == nil {
+		c.lifecycleMu.Unlock()
+		return errs.WrapFatal(errs.ErrNoConnection, "Component", "Start", "NATS client is required")
+	}
+	parent := ctx
 	runCtx, cancel := context.WithCancel(ctx)
 	startDone := make(chan struct{})
-	generation := lifecyclejoin.NewGeneration(cancel, func() { <-startDone })
-	var finishStart sync.Once
-	finish := func() { finishStart.Do(func() { close(startDone) }) }
-	c.generation = generation
-	c.starting = true
+	c.lifecycleUsed, c.cleanupPending = true, true
+	c.cancel = cancel
+	c.startDone = startDone
 	c.lifecycleMu.Unlock()
 	committed := false
 	defer func() {
-		finish()
-		c.lifecycleMu.Lock()
-		c.starting = false
-		c.lifecycleMu.Unlock()
-		if committed {
+		if !committed {
+			rollbackErr := lifecyclecleanup.RollbackFailedStart(parent, c.cleanup)
+			startErr = errors.Join(startErr, rollbackErr)
+			c.lifecycleMu.Lock()
+			if rollbackErr == nil {
+				c.cleanupPending = false
+				c.terminal = true
+				c.clearLifecycleHandles()
+			}
+			close(startDone)
+			c.startDone = nil
+			c.lifecycleMu.Unlock()
 			return
 		}
-		rollbackErr := lifecyclejoin.RunPartialStartRollback(func(ctx context.Context) error {
-			return generation.Stop(ctx, nil, c.cleanup)
-		})
-		if rollbackErr == nil {
-			c.lifecycleMu.Lock()
-			if c.generation == generation {
-				c.generation = nil
-			}
-			c.lifecycleMu.Unlock()
-		}
-		startErr = errors.Join(startErr, rollbackErr)
+		c.lifecycleMu.Lock()
+		c.cleanupPending = false
+		close(startDone)
+		c.startDone = nil
+		c.lifecycleMu.Unlock()
 	}()
 
 	c.logger.Debug("Creating ObjectStore", "name", c.instanceName, "bucket", c.config.BucketName)
@@ -429,14 +450,18 @@ func (c *Component) Start(ctx context.Context) (startErr error) {
 	// StoredMessage emit path (which already uses c.instanceName). Without this
 	// the store would fall back to the bucket name and the two write paths would
 	// disagree, leaving a resolver unable to resolve one of them.
-	c.config.InstanceName = c.instanceName
-
 	// Thread this component's logger so the D2 retention-reconcile guard (#600)
 	// attributes its boot WARN to this store rather than the process default.
-	c.config.Logger = c.logger
+	c.config.InstanceName, c.config.Logger = c.instanceName, c.logger
 
 	// Create the underlying ObjectStore with metrics support
-	store, err := NewStoreWithConfigAndMetrics(runCtx, c.natsClient, c.config, c.metricsRegistry)
+	createStore := func(ctx context.Context) (*Store, error) {
+		return NewStoreWithConfigAndMetrics(ctx, c.natsClient, c.config, c.metricsRegistry)
+	}
+	if c.newStore != nil {
+		createStore = c.newStore
+	}
+	store, err := createStore(runCtx)
 	if store != nil {
 		store.SetDecoder(c.decoder)
 		c.mu.Lock()
@@ -480,7 +505,13 @@ func (c *Component) Start(ctx context.Context) (startErr error) {
 			continue
 		}
 
-		writeSub, subscribeErr := c.natsClient.Subscribe(runCtx, writeSubject, c.handleWriteRequest)
+		subscribe := func(ctx context.Context, subject string, handler func(context.Context, *nats.Msg)) (objectStoreCoreSubscription, error) {
+			return c.natsClient.Subscribe(ctx, subject, handler)
+		}
+		if c.subscribeCore != nil {
+			subscribe = c.subscribeCore
+		}
+		writeSub, subscribeErr := subscribe(runCtx, writeSubject, c.handleWriteRequest)
 		if subscribeErr != nil {
 			c.logger.Error(
 				"Failed to subscribe to write subject",
@@ -515,66 +546,106 @@ func (c *Component) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-	c.lifecycleMu.Lock()
-	generation := c.generation
-	c.lifecycleMu.Unlock()
-	if generation == nil {
-		return nil
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	stopErr := generation.Stop(ctx, nil, c.cleanup)
-	if stopErr == nil {
+	for {
 		c.lifecycleMu.Lock()
-		if c.generation == generation {
-			c.generation = nil
+		if !c.lifecycleUsed {
+			c.lifecycleUsed = true
+			c.terminal = true
+			c.lifecycleMu.Unlock()
+			return nil
 		}
+		if c.terminal {
+			c.lifecycleMu.Unlock()
+			return nil
+		}
+		if c.startDone != nil {
+			startDone := c.startDone
+			c.lifecycleMu.Unlock()
+			select {
+			case <-startDone:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if c.stopping {
+			c.lifecycleMu.Unlock()
+			return errs.WrapTransient(errors.New("stop already in progress"), "Component", "Stop", "concurrent Stop is unsupported")
+		}
+		retryable := c.cleanupPending
+		c.stopping = true
 		c.lifecycleMu.Unlock()
+		stopErr := c.cleanup(ctx)
+		c.lifecycleMu.Lock()
+		c.stopping = false
+		if retryable && stopErr != nil {
+			c.lifecycleMu.Unlock()
+			return stopErr
+		}
+		c.cleanupPending = false
+		c.terminal = true
+		c.clearLifecycleHandles()
+		c.lifecycleMu.Unlock()
+		return stopErr
 	}
-	return stopErr
 }
 
 func (c *Component) cleanup(ctx context.Context) error {
-	stopErr := c.stopWriteInputs(ctx)
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return errors.Join(stopErr, ctxErr)
+	var cleanupErr error
+	for index := range c.writeConsumers {
+		binding := &c.writeConsumers[index]
+		if !binding.drainIssued {
+			binding.handle.Drain()
+			binding.drainIssued = true
+		}
 	}
+	for _, sub := range c.writeSubs {
+		cleanupErr = errors.Join(cleanupErr, sub.Drain(ctx))
+	}
+	for index := range c.writeConsumers {
+		closed := c.writeConsumers[index].handle.Closed()
+		if c.waitConsumerClosed != nil {
+			cleanupErr = errors.Join(cleanupErr, c.waitConsumerClosed(ctx, closed))
+			continue
+		}
+		select {
+		case <-closed:
+		case <-ctx.Done():
+			cleanupErr = errors.Join(cleanupErr, ctx.Err())
+		}
+	}
+	if c.cancel != nil {
+		c.cancel()
+	}
+	cleanupErr = errors.Join(cleanupErr, ctx.Err())
+
 	c.mu.Lock()
 	store := c.store
 	c.mu.Unlock()
-	if store != nil {
-		stopErr = errors.Join(stopErr, store.Close())
+	if cleanupErr == nil && store != nil {
+		closeStore := func(store *Store) error { return store.Close() }
+		if c.closeStore != nil {
+			closeStore = c.closeStore
+		}
+		cleanupErr = errors.Join(cleanupErr, closeStore(store))
 	}
-	c.mu.Lock()
-	if c.store == store {
-		c.store = nil
-	}
-	c.started = false
-	c.mu.Unlock()
-	if stopErr != nil {
-		return errs.WrapTransient(stopErr, "Component", "Stop", "stop write inputs")
+	if cleanupErr != nil {
+		return errs.WrapTransient(cleanupErr, "Component", "Stop", "stop write inputs and close Store")
 	}
 	return nil
 }
 
-func (c *Component) stopWriteInputs(ctx context.Context) error {
-	var stopErrs []error
-	for _, binding := range c.writeConsumers {
-		if err := c.natsClient.StopConsumer(ctx, binding.streamName, binding.consumerName); err != nil {
-			stopErrs = append(stopErrs, err)
-		}
-	}
-
-	var unsubscribeErrs []error
-	for _, sub := range c.writeSubs {
-		if err := sub.Drain(ctx); err != nil {
-			unsubscribeErrs = append(unsubscribeErrs, err)
-		}
-	}
-	if ctx.Err() == nil {
-		c.writeConsumers = nil
-		c.writeSubs = nil
-	}
-	stopErrs = append(stopErrs, unsubscribeErrs...)
-	return errors.Join(stopErrs...)
+func (c *Component) clearLifecycleHandles() {
+	c.cancel = nil
+	c.writeSubs = nil
+	c.writeConsumers = nil
+	c.mu.Lock()
+	c.store = nil
+	c.started = false
+	c.mu.Unlock()
 }
 
 // IsStarted returns whether the component is running
@@ -824,7 +895,11 @@ func (c *Component) setupJetStreamConsumer(
 		AutoCreate:    false,
 	}
 
-	consumeErr := c.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	consume := c.natsClient.ConsumeStreamWithConfigHandle
+	if c.consumeStream != nil {
+		consume = c.consumeStream
+	}
+	handle, consumeErr := consume(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		c.handleJetStreamWriteRequest(msgCtx, msg)
 	})
 	if consumeErr != nil {
@@ -832,11 +907,14 @@ func (c *Component) setupJetStreamConsumer(
 			consumeErr, "Component", "setupJetStreamConsumer", fmt.Sprintf("consumer setup failed for stream %s", streamName))
 	}
 
-	return objectStoreConsumerBinding{streamName: streamName, consumerName: consumerName}, nil
+	return objectStoreConsumerBinding{handle: handle}, nil
 }
 
 // waitForStream waits for a JetStream stream to be available
 func (c *Component) waitForStream(ctx context.Context, streamName string) error {
+	if c.waitForStreamInput != nil {
+		return c.waitForStreamInput(ctx, streamName)
+	}
 	js, err := c.natsClient.JetStream()
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "waitForStream", "get JetStream context")

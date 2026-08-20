@@ -145,6 +145,15 @@
     source identities are recorded in the ledger. M1, OS1, RU1, GI1, N1, unrelated APIs, and every broader gate remain
     excluded; temporary bridges keep the branch under the no-release/no-tag invariant. Task 2.3, Gate A/B/C, runtime
     migration, proof, release, archive, and tag readiness remain unchecked and incomplete.
+  - 2026-08-20 OS1 implementation checkpoint: independent `semstreams-reviewer` verdict `APPROVE` grants
+    owner-migrated credit only to `storage/objectstore/component.go`; tests and narrowly corrected package concurrency
+    docs receive no owner credit. Exact-handle lifecycle ownership preserves durable topology, StoreProvider
+    availability during callback drain, and store/reference-before-ACK semantics. The causal RED, exact evidence,
+    integration repeat caveat, census, and live identities are recorded in the ledger. No outward API, configuration,
+    context, or consumer-deletion surface changed; OS1 removes its internal name-routed `Client.StopConsumer` call
+    without adding a name-routed lifecycle surface. RU1, GI1, M1, N1, and every broader gate remain excluded;
+    temporary bridges preserve the no-release/no-tag invariant. Task 2.3, Gate A/B/C, runtime migration,
+    proof, release, archive, and tag readiness remain unchecked and incomplete.
   - 2026-08-18 checkpoint: independent `semstreams-reviewer` verdict `CORRECTIONS CONFIRMED` grants owner-migrated
     credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
     worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.
