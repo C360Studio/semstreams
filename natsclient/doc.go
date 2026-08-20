@@ -126,9 +126,13 @@
 //	    msg.Ack()
 //	})
 //
-//	// Framework-internal consumers with no JetStreamPort contract use the
-//	// explicitly unobserved operation with one complete consumer config.
-//	err = client.ConsumeInternalStreamWithConfig(ctx, internalConfig, internalHandler)
+//	// Framework-internal consumers with no JetStreamPort contract retain exact
+//	// native ownership. Drain and await Closed before canceling handler authority.
+//	internalHandle, err := client.ConsumeInternalStreamWithConfig(ctx, internalConfig, internalHandler)
+//	if err == nil {
+//	    internalHandle.Drain()
+//	    <-internalHandle.Closed()
+//	}
 //
 // # Key-Value Store
 //

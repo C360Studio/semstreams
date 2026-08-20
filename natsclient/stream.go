@@ -285,13 +285,158 @@ func (c *Client) ConsumeStreamWithConfig(
 }
 
 // ConsumeInternalStreamWithConfig consumes a stream for framework-internal users
-// that make no JetStreamPort configuration claim.
+// that make no JetStreamPort configuration claim. The caller owns the exact
+// returned native handle and must Drain it and await Closed before canceling
+// callback authority. Client.Close does not manage internal consumer children.
 func (c *Client) ConsumeInternalStreamWithConfig(
 	ctx context.Context,
 	cfg StreamConsumerConfig,
 	handler func(ctx context.Context, msg jetstream.Msg),
-) error {
-	return c.consumeStreamWithConfigContexts(ctx, ctx, PortConsumerContext{}, cfg, handler, false)
+) (jetstream.ConsumeContext, error) {
+	if ctx == nil {
+		return nil, errs.WrapInvalid(errors.New("nil context"),
+			"Client", "ConsumeInternalStreamWithConfig", "missing operation context")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errs.WrapInvalid(err,
+			"Client", "ConsumeInternalStreamWithConfig", "operation context already ended")
+	}
+	if cfg.StreamName == "" {
+		return nil, errs.WrapInvalid(errors.New("stream name is required"),
+			"Client", "ConsumeInternalStreamWithConfig", "missing stream name")
+	}
+	if c.Status() == StatusCircuitOpen {
+		return nil, ErrCircuitOpen
+	}
+	if c.Status() != StatusConnected {
+		return nil, ErrNotConnected
+	}
+
+	js, err := c.JetStream()
+	if err != nil {
+		return nil, err
+	}
+	if cfg.AutoCreate {
+		if err := c.ensureStreamForConsumer(ctx, js, cfg); err != nil {
+			return nil, err
+		}
+	}
+	stream, err := js.Stream(ctx, cfg.StreamName)
+	if err != nil {
+		c.recordFailure()
+		return nil, errs.WrapTransient(err, "Client", "ConsumeInternalStreamWithConfig",
+			"failed to get stream "+cfg.StreamName)
+	}
+
+	identity := internalConsumerIdentity{stream: cfg.StreamName, durable: cfg.ConsumerName}
+	claim, err := c.reserveInternalConsumer(identity)
+	if err != nil {
+		return nil, err
+	}
+	releaseClaim := func() { c.releaseInternalConsumer(identity, claim) }
+	committed := false
+	defer func() {
+		if !committed {
+			releaseClaim()
+		}
+	}()
+
+	consumerCfg := c.buildConsumerConfig(cfg)
+	consumer, err := stream.CreateOrUpdateConsumer(ctx, consumerCfg)
+	if err != nil {
+		c.recordFailure()
+		return nil, ClassifyConsumerPolicyError(err, "ConsumeInternalStreamWithConfig")
+	}
+	guarded := &guardedConsumer{Consumer: consumer}
+	observed, err := c.observeInternalConsumer(ctx, guarded)
+	if err != nil {
+		return nil, err
+	}
+	if identity.durable != "" && observed != identity {
+		return nil, errs.WrapInvalid(
+			fmt.Errorf("configured identity %s:%s observed as %s:%s",
+				identity.stream, identity.durable, observed.stream, observed.durable),
+			"Client", "ConsumeInternalStreamWithConfig", "consumer identity changed during setup")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errs.WrapTransient(err, "Client", "ConsumeInternalStreamWithConfig",
+			"setup context ended before starting consumer")
+	}
+
+	if c.jsMetrics != nil {
+		c.jsMetrics.trackConsumer(observed.stream, observed.durable, guarded)
+	}
+	forgetObservation := func() {
+		if c.jsMetrics != nil {
+			c.jsMetrics.forgetConsumer(observed.stream, observed.durable)
+		}
+	}
+	consumeCtx, err := guarded.Consume(func(msg jetstream.Msg) {
+		msgCtx := ctx
+		if tc := ExtractTraceFromJetStream(msg.Headers()); tc != nil {
+			msgCtx = ContextWithTrace(ctx, tc)
+		}
+		messageTimeout := cfg.MessageTimeout
+		if messageTimeout <= 0 {
+			messageTimeout = 30 * time.Second
+		}
+		msgCtx, cancel := messageHandlerContext(msgCtx, messageTimeout, cfg.DisableMessageTimeout)
+		defer cancel()
+		c.safeHandleMessage(msgCtx, msg, handler)
+	})
+	if err != nil {
+		forgetObservation()
+		c.recordFailure()
+		return nil, errs.WrapTransient(err, "Client", "ConsumeInternalStreamWithConfig",
+			"failed to start consuming from stream "+cfg.StreamName)
+	}
+
+	committed = true
+	c.resetCircuit()
+	closed := consumeCtx.Closed()
+	go func() {
+		<-closed
+		forgetObservation()
+		releaseClaim()
+	}()
+	return consumeCtx, nil
+}
+
+type internalConsumerIdentity struct {
+	stream  string
+	durable string
+}
+
+type internalConsumerClaim struct{}
+
+func (c *Client) reserveInternalConsumer(identity internalConsumerIdentity) (*internalConsumerClaim, error) {
+	if identity.durable == "" {
+		return nil, nil
+	}
+	c.internalClaimsMu.Lock()
+	defer c.internalClaimsMu.Unlock()
+	if c.internalClaims == nil {
+		c.internalClaims = make(map[internalConsumerIdentity]*internalConsumerClaim)
+	}
+	if _, exists := c.internalClaims[identity]; exists {
+		return nil, errs.WrapInvalid(
+			fmt.Errorf("internal consumer %s:%s already has a local owner", identity.stream, identity.durable),
+			"Client", "ConsumeInternalStreamWithConfig", "duplicate local durable identity")
+	}
+	claim := &internalConsumerClaim{}
+	c.internalClaims[identity] = claim
+	return claim, nil
+}
+
+func (c *Client) releaseInternalConsumer(identity internalConsumerIdentity, claim *internalConsumerClaim) {
+	if claim == nil {
+		return
+	}
+	c.internalClaimsMu.Lock()
+	if c.internalClaims[identity] == claim {
+		delete(c.internalClaims, identity)
+	}
+	c.internalClaimsMu.Unlock()
 }
 
 // ConsumeStreamWithConfigContexts separates bounded setup I/O from callback

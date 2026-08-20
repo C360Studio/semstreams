@@ -382,7 +382,7 @@ func TestJetStreamMethods(t *testing.T) {
 		err = client.PublishToStream(ctx, "test.subject", []byte("data"))
 		assert.Equal(t, ErrNotConnected, err)
 
-		err = client.ConsumeInternalStreamWithConfig(ctx, StreamConsumerConfig{
+		_, err = client.ConsumeInternalStreamWithConfig(ctx, StreamConsumerConfig{
 			StreamName: "test", FilterSubject: "test.*",
 		}, func(context.Context, jetstream.Msg) {})
 		assert.Equal(t, ErrNotConnected, err)

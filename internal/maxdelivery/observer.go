@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
+	semerrs "github.com/c360studio/semstreams/pkg/errs"
 )
 
 const (
@@ -233,6 +235,12 @@ func Start(
 }
 
 func start(ctx context.Context, client *natsclient.Client, telemetry telemetry) (func(context.Context) error, error) {
+	if ctx == nil {
+		return nil, errors.New("max-delivery observer requires a context")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("max-delivery observer context ended: %w", err)
+	}
 	if client == nil {
 		return nil, errors.New("max-delivery observer requires a NATS client")
 	}
@@ -240,13 +248,51 @@ func start(ctx context.Context, client *natsclient.Client, telemetry telemetry) 
 		return nil, errors.New("max-delivery observer requires telemetry")
 	}
 	cfg := observerConsumerConfig()
-	if err := client.ConsumeInternalStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	runCtx, cancel := context.WithCancel(ctx)
+	handle, err := client.ConsumeInternalStreamWithConfig(runCtx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		handleMessage(msgCtx, msg, telemetry)
-	}); err != nil {
+	})
+	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("start MaxDeliver observer: %w", err)
 	}
+	var stopMu sync.Mutex
+	stopping := false
+	stopped := false
 	return func(stopCtx context.Context) error {
-		return client.StopConsumer(stopCtx, captureStreamName, observerConsumerName)
+		if stopCtx == nil {
+			return errors.New("stop MaxDeliver observer: nil context")
+		}
+		if err := stopCtx.Err(); err != nil {
+			return err
+		}
+		stopMu.Lock()
+		if stopped {
+			stopMu.Unlock()
+			return nil
+		}
+		if stopping {
+			stopMu.Unlock()
+			return semerrs.WrapTransient(errors.New("MaxDeliver observer stop already in progress"),
+				"MaxDeliveryObserver", "Stop", "concurrent Stop is unsupported")
+		}
+		stopping = true
+		stopMu.Unlock()
+
+		handle.Drain()
+		var stopErr error
+		select {
+		case <-handle.Closed():
+		case <-stopCtx.Done():
+			stopErr = fmt.Errorf("wait for MaxDeliver observer Closed: %w", stopCtx.Err())
+			handle.Stop()
+		}
+		cancel()
+		stopMu.Lock()
+		stopping = false
+		stopped = true
+		stopMu.Unlock()
+		return stopErr
 	}, nil
 }
 

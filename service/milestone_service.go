@@ -8,8 +8,9 @@ import (
 	"sync"
 
 	"github.com/c360studio/semstreams/agentic/agentrun"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/natsclient"
+	semerrs "github.com/c360studio/semstreams/pkg/errs"
 )
 
 // milestoneStarter is the subscriber seam MilestoneService drives. The production
@@ -42,13 +43,18 @@ type milestoneStarter interface {
 // captured stop func, so delivery halts regardless of ctx.
 type MilestoneService struct {
 	*BaseService
-	logger     *slog.Logger
-	subscriber milestoneStarter
-	client     *natsclient.Client          // live NATS conn (Phase A), passed to subscriber.Start.
-	cfg        agentrun.StartConfig        // StreamName: agentrun.AgentStreamName.
-	mu         sync.Mutex                  // serializes Start/Stop so the re-entrancy guard is atomic.
-	stop       func(context.Context) error // captured stop func from subscriber.Start; nil until started / after Stop.
-	stopOp     *lifecyclejoin.Operation
+	logger         *slog.Logger
+	subscriber     milestoneStarter
+	client         *natsclient.Client   // live NATS conn (Phase A), passed to subscriber.Start.
+	cfg            agentrun.StartConfig // StreamName: agentrun.AgentStreamName.
+	mu             sync.Mutex
+	used           bool
+	running        bool
+	stopping       bool
+	terminal       bool
+	cleanupPending bool
+	startDone      chan struct{}
+	stop           func(context.Context) error
 }
 
 // NewMilestoneService builds the MilestoneService over a pre-built subscriber.
@@ -77,58 +83,123 @@ func (s *MilestoneService) Start(ctx context.Context) error {
 	if err := validateLifecycleContext(ctx, "MilestoneService", "Start"); err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return semerrs.WrapInvalid(err, "MilestoneService", "Start", "context already ended")
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.Status() == StatusRunning {
-		return fmt.Errorf("milestone service already running")
+	if s.used {
+		s.mu.Unlock()
+		return semerrs.WrapFatal(semerrs.ErrAlreadyStarted,
+			"MilestoneService", "Start", "service instance already used")
 	}
-	if s.stop != nil {
-		return fmt.Errorf("milestone subscriber cleanup still pending")
-	}
+	s.used = true
+	s.startDone = make(chan struct{})
+	startDone := s.startDone
+	s.mu.Unlock()
+	defer close(startDone)
+
 	if err := s.BaseService.Start(ctx); err != nil {
+		s.mu.Lock()
+		s.terminal = true
+		s.mu.Unlock()
 		return err
 	}
 	stop, err := s.subscriber.Start(ctx, s.client, s.cfg)
+	s.mu.Lock()
 	if stop != nil {
 		s.stop = stop
-		s.stopOp = lifecyclejoin.NewOperation()
 	}
-	if err != nil {
-		// Forward the error so StartAll does not report an observer with no
-		// consumers. A non-nil stop alongside the error owns partial durable
-		// acquisition and remains available to the later service Stop.
-		baseErr := s.BaseService.Stop(ctx)
-		return errors.Join(fmt.Errorf("milestone subscriber start: %w", err), baseErr)
+	if err == nil {
+		s.running = true
+		s.mu.Unlock()
+		return nil
 	}
-	return nil
+	s.cleanupPending = stop != nil
+	s.mu.Unlock()
+
+	rollbackErr := lifecyclecleanup.RollbackFailedStart(ctx, func(cleanupCtx context.Context) error {
+		var subscriberErr error
+		if stop != nil {
+			subscriberErr = stop(cleanupCtx)
+		}
+		return errors.Join(subscriberErr, s.BaseService.Stop(cleanupCtx))
+	})
+	s.mu.Lock()
+	if rollbackErr == nil {
+		s.stop = nil
+		s.cleanupPending = false
+		s.terminal = true
+	} else {
+		s.cleanupPending = true
+	}
+	s.mu.Unlock()
+	return errors.Join(fmt.Errorf("milestone subscriber start: %w", err), rollbackErr)
 }
 
 // Stop cancels the subscriber's local consumption (durable offsets persist in
-// NATS for restart recovery). The wrapper spawns no goroutine of its own; Stop
-// instead joins the subscriber's native shutdown operation. Later callers
-// rejoin or replay that operation's result. Stop before Start is a no-op.
+// NATS for restart recovery). Running Stop is terminal and completed repeats
+// are nil no-ops. Only failed-Start cleanupPending may retry its retained opaque
+// cleanup closure under a later manager Stop context. Stop before Start is a no-op.
 func (s *MilestoneService) Stop(ctx context.Context) error {
 	if err := validateLifecycleContext(ctx, "MilestoneService", "Stop"); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	stop := s.stop
-	stopOp := s.stopOp
-	s.mu.Unlock()
-	var subscriberErr error
-	if stopOp != nil {
-		nativeErr := stopOp.Run(ctx, stop)
-		if nativeErr == nil {
-			s.mu.Lock()
-			if s.stopOp == stopOp {
-				s.stop = nil
-				s.stopOp = nil
+	for {
+		s.mu.Lock()
+		startDone := s.startDone
+		if startDone != nil {
+			select {
+			case <-startDone:
+			default:
+				s.mu.Unlock()
+				select {
+				case <-startDone:
+					continue
+				case <-ctx.Done():
+					return fmt.Errorf("wait for MilestoneService Start: %w", ctx.Err())
+				}
 			}
+		}
+		if s.stopping {
 			s.mu.Unlock()
+			return semerrs.WrapTransient(errors.New("milestone service stop already in progress"),
+				"MilestoneService", "Stop", "concurrent Stop is unsupported")
 		}
-		if nativeErr != nil {
-			subscriberErr = fmt.Errorf("stop milestone subscriber: %w", nativeErr)
+		if s.terminal {
+			s.mu.Unlock()
+			return nil
 		}
+		if !s.used {
+			s.used = true
+			s.terminal = true
+			s.mu.Unlock()
+			return s.BaseService.Stop(ctx)
+		}
+		failedStart := s.cleanupPending
+		stop := s.stop
+		s.stopping = true
+		s.mu.Unlock()
+
+		var subscriberErr error
+		if stop != nil {
+			subscriberErr = stop(ctx)
+		}
+		stopErr := errors.Join(subscriberErr, s.BaseService.Stop(ctx))
+		s.mu.Lock()
+		if failedStart && stopErr != nil {
+			s.stopping = false
+			s.mu.Unlock()
+			return fmt.Errorf("stop milestone subscriber cleanup: %w", stopErr)
+		}
+		s.stop = nil
+		s.running = false
+		s.cleanupPending = false
+		s.stopping = false
+		s.terminal = true
+		s.mu.Unlock()
+		if stopErr != nil {
+			return fmt.Errorf("stop milestone subscriber: %w", stopErr)
+		}
+		return nil
 	}
-	return errors.Join(subscriberErr, s.BaseService.Stop(ctx))
 }

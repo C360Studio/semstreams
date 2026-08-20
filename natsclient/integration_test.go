@@ -214,13 +214,14 @@ func TestIntegration_JetStream(t *testing.T) {
 
 	// Create consumer and receive message
 	received := make(chan string, 1)
-	err = manager.ConsumeInternalStreamWithConfig(ctx, StreamConsumerConfig{
+	consumeCtx, err := manager.ConsumeInternalStreamWithConfig(ctx, StreamConsumerConfig{
 		StreamName: streamName, FilterSubject: "test.*",
 	}, func(_ context.Context, msg jetstream.Msg) {
 		received <- string(msg.Data())
 		msg.Ack()
 	})
 	require.NoError(t, err)
+	t.Cleanup(consumeCtx.Stop)
 
 	// Verify message
 	select {
@@ -334,7 +335,7 @@ func TestIntegration_JetStreamMetrics(t *testing.T) {
 
 	// Create a consumer
 	received := make(chan bool, 5)
-	err = client.ConsumeInternalStreamWithConfig(ctx, StreamConsumerConfig{
+	consumeCtx, err := client.ConsumeInternalStreamWithConfig(ctx, StreamConsumerConfig{
 		StreamName: "TEST_METRICS", FilterSubject: "test.metrics.>",
 	}, func(_ context.Context, msg jetstream.Msg) {
 		select {
@@ -344,6 +345,7 @@ func TestIntegration_JetStreamMetrics(t *testing.T) {
 		msg.Ack()
 	})
 	require.NoError(t, err)
+	t.Cleanup(consumeCtx.Stop)
 
 	// Wait for messages to be delivered
 	time.Sleep(500 * time.Millisecond)
@@ -384,4 +386,16 @@ func TestIntegration_JetStreamMetrics(t *testing.T) {
 	consumerDelivered := metricsByName["semstreams_jetstream_consumer_delivered_total"]
 	require.NotNil(t, consumerDelivered, "consumer delivered metric should exist")
 	assert.GreaterOrEqual(t, *consumerDelivered.Metric[0].Counter.Value, float64(0))
+
+	client.jsMetrics.mu.Lock()
+	var observationKey string
+	for key := range client.jsMetrics.consumers {
+		observationKey = key
+		break
+	}
+	client.jsMetrics.mu.Unlock()
+	require.NotEmpty(t, observationKey)
+	consumeCtx.Drain()
+	<-consumeCtx.Closed()
+	waitForConsumerObservationRemoval(t, client.jsMetrics, observationKey)
 }

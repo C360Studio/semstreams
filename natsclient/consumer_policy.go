@@ -45,6 +45,18 @@ type consumerPolicyInfoReader interface {
 	Info(context.Context) (*jetstream.ConsumerInfo, error)
 }
 
+func (c *Client) observeInternalConsumer(
+	ctx context.Context, consumer consumerPolicyInfoReader,
+) (internalConsumerIdentity, error) {
+	info, err := consumer.Info(ctx)
+	if err != nil {
+		c.recordFailure()
+		return internalConsumerIdentity{}, errs.WrapTransient(
+			err, "Client", "ConsumeInternalStreamWithConfig", "initial consumer observation unavailable")
+	}
+	return internalConsumerIdentity{stream: info.Stream, durable: info.Name}, nil
+}
+
 func validatePortConsumerContext(owner PortConsumerContext, operation string) error {
 	if strings.TrimSpace(owner.Component) != "" && strings.TrimSpace(owner.Port) != "" {
 		return nil

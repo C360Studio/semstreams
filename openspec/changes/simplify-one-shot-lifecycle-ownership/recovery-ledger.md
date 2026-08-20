@@ -378,6 +378,124 @@ Stable G1 source identities for this checkpoint are:
 This checkpoint grants no approval to unrelated exported API rulings. Task 2.3 and Gate A/B/C remain unchecked and
 incomplete, and it grants no runtime-migration, proof, release, archive, or tag credit.
 
+### I1 native non-port reviewed owner-wave checkpoint — 2026-08-20
+
+The owner explicitly approved only this breaking I1 surface: change canonical
+`ConsumeInternalStreamWithConfig` to return its exact `jetstream.ConsumeContext`, reject duplicate live ownership of a
+fixed internal durable, and remove zero-present-consumer `Registry.SubscribeCapabilities`. The approval does not
+include `ConsumeDurable`, either port consumption method, `natsclient.Subscription`, Metrics APIs, or any later N1
+retirement. Known sister repositories have no current caller of the changed internal method or removed Registry
+method; unknown adopters receive a compile error instead of silently retaining hidden lifecycle ownership.
+
+Independent `semstreams-reviewer` verdict `APPROVE I1 IMPLEMENTATION` applies to the dirty worktree based on full
+commit `4b01d09e`. It confirms exact native ownership for `service/milestone_service.go` and
+`agentic/agentrun/agentrun.go`, the supporting MaxDeliver observer, and atomic natsclient/Registry changes. With both
+required breaking-change E2E tiers green, owner-migrated credit is granted exactly to
+`agentic/agentrun/agentrun.go` and `service/milestone_service.go`. Supporting natsclient, component, and MaxDeliver
+files receive no owner credit.
+
+The TDD RED sequence is exact:
+
+1. `go test ./natsclient -run '^TestConsumerPolicyExportedClientAPICensus$' -count=1` failed because the test expected
+   the approved `(jetstream.ConsumeContext, error)` return while production still exposed the legacy error-only
+   signature. The corrected test passed in 1.367s.
+2. `go test ./service -run '^TestMilestoneServiceStartRejectsInvalidContextWithoutConsumingAuthority$' -count=1
+   -timeout=20s -v` passed the nil subcase but failed the pre-canceled subcase at
+   `service/milestone_service_test.go:83`: `svc.used` became true even though the subscriber was not called. The
+   corrected implementation rejects nil and pre-canceled Start before consuming one-shot authority.
+
+The corrected MaxDeliver contract is explicit: only agentrun may treat its missing optional `AGENT` stream as a
+no-op. MaxDeliver requires the provisioned capture stream and fails loud when it is absent, returning a nil stop
+closure and an error satisfying `errors.Is(err, jetstream.ErrStreamNotFound)`. The new real-NATS
+`TestStartFailsLoudlyWhenCaptureStreamIsMissing` passed with package elapsed 2.027s and test elapsed 0.68s.
+
+Final developer and independent-review evidence:
+
+| Evidence | Result | Elapsed |
+|---|---|---:|
+| Focused I1 lifecycle race | PASS | 1.497s |
+| Full service race | PASS | 6.766s |
+| Real-NATS service integration | PASS | 2.228s |
+| Real-NATS agentrun integration | PASS | 3.690s |
+| Behavioral natsclient race excluding repository scanners | PASS | 3.217s |
+| Focused lifecycle race, 20 repetitions | PASS | reviewer-confirmed |
+| Real-NATS I1 matrix | PASS | reviewer-confirmed |
+| Causal stress, 5 repetitions | PASS | reviewer-confirmed |
+| `task lint` | PASS | — |
+| `git diff --check` | PASS | — |
+| Strict change validation and all 48 strict spec validations | PASS | — |
+
+The full natsclient race is not claimed green. Its only failures were three repository-scanner tests that traversed
+two user-owned `.claude/worktrees`; the behavioral natsclient race excluding those scanners passed. The reviewer also
+confirmed that `ConsumeDurable`, `internal/lifecyclejoin`, and `metric` were unchanged.
+
+The production-only recovery census moved exactly as reviewed in the dirty worktree. The two-owner delta is credited
+only to the two frozen I1 owner files:
+
+| Measurement | HEAD `4b01d09e` | I1 worktree | Delta |
+|---|---:|---:|---:|
+| Production owner files importing `internal/lifecyclejoin` | 23 | 21 | -2 |
+| `lifecyclejoin.NewGeneration` | 22 | 21 | -1 |
+| `Generation.Stop` | 31 | 30 | -1 |
+| `lifecyclejoin.NewOperation` / lifecycle `Operation.Run` | 3 | 2 | -1 |
+| External `RunPartialStartRollback` calls | 15 | 14 | -1 |
+| Final parent-aware `RollbackFailedStart` production owner calls | 12 | 14 | +2 |
+| `Generation.StopWithQuiesce` | 3 | 3 | 0 |
+| External `Generation.Cancel` | 4 | 4 | 0 |
+
+Stable I1 source identities for this reviewed checkpoint are:
+
+- `agentic/agentrun/agentrun.go`:
+  `e8d26f3b43843897c889c90d56966ed921928c7caed0fe8d7d83acb1765ab864`;
+- `agentic/agentrun/agentrun_integration_test.go`:
+  `bdff5bb78e1e5125c70f620d1fd8901e9ffa7ad2e352125b872f125e8cbea1c7`;
+- `component/registry.go`: `ddb96938afb194aa185647e04e07728deb69e126a662656ce0947b6196e45a08`;
+- `component/registry_integration_test.go`:
+  `3052762be61eba32b202bc7e0b122cac8ffb2455da460a4842dc4334ff773bab`;
+- `internal/maxdelivery/observer.go`:
+  `319f55b0a8d64d60cfc5bb051b953aca801ee6b1e2b6863f7d7bbf3a8c401669`;
+- `internal/maxdelivery/observer_integration_test.go`:
+  `8dcd94cb33d7c80fbdd5701f5ec46ed8e1d4363dcb6ea5c848f9360ab6153b6f`;
+- `internal/maxdelivery/observer_test.go`:
+  `4ee284b93a5365ced973f7a79414819b2e1441bc5b7d2374933dafc4260e057c`;
+- `natsclient/client.go`: `e46585cf32227b3d8eddd23e63ae5f6108037951f198d88f49c39707351be0d1`;
+- `natsclient/client_integration_test.go`:
+  `090bc022d15f6c056279aad9d8b977e0699f7c243f00f9f5d17cd8e8e4fe474f`;
+- `natsclient/client_test.go`:
+  `cecd3a19133b905e85a26509746593c0b7f294a36f9b006d60a73d4c7eef9f93`;
+- `natsclient/consumer_policy.go`:
+  `3c2732be1ef02ccad882a45608800983246cdab418822f262f4506043f52cd1a`;
+- `natsclient/consumer_policy_callsite_test.go`:
+  `73a0fe33d501e0f8b29066ef3dcec781c992c3f9c25d33f31e3e23b7c5af510a`;
+- `natsclient/doc.go`: `843d7fcfcbdfc49b714fc48376b62cc733af2088ef8a2d7b24a0ec886230f9d6`;
+- `natsclient/integration_test.go`:
+  `dba5b71b492cf16983bfc6e4ea537e518da20214dd489acd82a9d4444504ec38`;
+- `natsclient/jetstream_metrics.go`:
+  `a48a40f6e0e594c472b045cf1d3e6417b071224f31e75fb75ea85a89d87a31b8`;
+- `natsclient/jetstream_metrics_test.go`:
+  `a91948d51e7c02acbb0d3cc41f8b37aa2fa63dc4dc0e00c1497d40fe7299a6e0`;
+- `natsclient/stream.go`: `10bf4a494daf7c65f966e9978f333e9a7ee8dd258a84a246067a8b596ac0b431`;
+- `natsclient/internal_consumer_lifecycle_integration_test.go`:
+  `8c0d9776178ade6c09d3879ebd26bc060e71b48a20350504913ec40b7720cb7c`;
+- `service/milestone_service.go`:
+  `6dd3bf7e47e75503714ab0803c900598d14f67db75bccffa9b2ac4ab6ad851fd`;
+- `service/milestone_service_test.go`:
+  `2418da58894ae9e4df238e75f203b2f4b3615733016ee003f52ed895d3f298f3`.
+
+After explicit elevation approval, both required breaking-change E2E tiers passed:
+
+| Evidence | Result | Exact outcome |
+|---|---|---|
+| `task e2e:agentic` | PASS, exit 0 | Scenario success in 45.149536625s |
+| Durable tool replay | PASS | executor invocations 1; tool executions 1; trajectory facts 10 |
+| `task e2e:core` | PASS, exit 0 | 3/3 scenarios: health, dataflow, graph roundtrip |
+| Core dataflow settlement | PASS | `max_delivery_deliveries=1` |
+| Core storage path | PASS | ObjectStore/raw path evidence present |
+
+The disposable review copy `/private/tmp/semstreams-i1-review.2COr7F` was removed and independently verified absent.
+I1 is now eligible to commit after final task-truth review, but remains uncommitted at this checkpoint. Task 2.3,
+Gate A/B/C, runtime migration, proof, release, archive, and tag readiness remain unchecked and incomplete.
+
 ### CM1 ComponentManager implementation checkpoint — 2026-08-19
 
 Independent `semstreams-reviewer` verdict `APPROVE` applies to the CM1 dirty worktree based on full commit

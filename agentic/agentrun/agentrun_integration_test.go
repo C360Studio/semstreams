@@ -9,6 +9,7 @@ package agentrun_test
 import (
 	"context"
 	"encoding/json"
+	"runtime"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	semerrs "github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,6 +28,21 @@ import (
 
 type integrationMilestoneHandler struct {
 	events chan agentrun.LoopTerminalEvent
+}
+
+type blockingIntegrationMilestoneHandler struct {
+	entered chan struct{}
+	release chan struct{}
+	ctxErr  chan error
+}
+
+func (h *blockingIntegrationMilestoneHandler) OnLoopTerminal(
+	ctx context.Context, _ agentrun.LoopTerminalEvent, _ *agentrun.AgentRun,
+) error {
+	close(h.entered)
+	<-h.release
+	h.ctxErr <- ctx.Err()
+	return nil
 }
 
 func (h *integrationMilestoneHandler) OnLoopTerminal(_ context.Context, event agentrun.LoopTerminalEvent, _ *agentrun.AgentRun) error {
@@ -169,6 +186,115 @@ func TestIntegration_MilestoneSubscriber_StartsWhenStreamPresent(t *testing.T) {
 	require.NoError(t, err, "Start must succeed when the AGENT stream is present")
 	require.NotNil(t, stop)
 	require.NoError(t, stop(ctx))
+}
+
+func TestIntegration_MilestoneSubscriberDrainsBothHandlesBeforeWaiting(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithStreams(
+		natsclient.TestStreamConfig{Name: agentrun.AgentStreamName, Subjects: []string{"agent.>"}},
+	))
+	defer tc.Terminate()
+	mgr := lifecycle.NewManager(tc.Client, nil)
+	require.NoError(t, agentrun.Register(mgr))
+	sub := agentrun.NewMilestoneSubscriber(mgr, nil, "acme", "ops", nil)
+	handler := &blockingIntegrationMilestoneHandler{
+		entered: make(chan struct{}), release: make(chan struct{}), ctxErr: make(chan error, 1),
+	}
+	sub.AddHandler(handler)
+	stop, err := sub.Start(t.Context(), tc.Client, agentrun.StartConfig{
+		StreamName: agentrun.AgentStreamName, ConsumerNameSuffix: "drain-order",
+	})
+	require.NoError(t, err)
+
+	payload := &agentic.LoopCompletedEvent{
+		LoopID: "blocked-run", TaskID: "blocked-task", Outcome: agentic.OutcomeSuccess,
+		CompletedAt: time.Now().UTC(), RunEntityID: "missing-blocked-run",
+	}
+	data, err := json.Marshal(message.NewBaseMessage(payload.Schema(), payload, "agentic-loop"))
+	require.NoError(t, err)
+	require.NoError(t, tc.Client.PublishToStream(
+		t.Context(), "agent.complete."+payload.Schema().Category, data,
+	))
+	<-handler.entered
+
+	stopResult := make(chan error, 1)
+	go func() { stopResult <- stop(t.Context()) }()
+	type acquireResult struct {
+		handle jetstream.ConsumeContext
+		err    error
+	}
+	reacquired := make(chan acquireResult, 1)
+	go func() {
+		cfg := natsclient.StreamConsumerConfig{
+			StreamName: agentrun.AgentStreamName, ConsumerName: "agentrun-milestone-failed-drain-order",
+			FilterSubject: "agent.failed.*", AckPolicy: "explicit", DeliverPolicy: "new",
+			MaxDeliver: 5, AckWait: 30 * time.Second,
+		}
+		for {
+			handle, acquireErr := tc.Client.ConsumeInternalStreamWithConfig(
+				t.Context(), cfg, func(context.Context, jetstream.Msg) {},
+			)
+			if acquireErr == nil || !semerrs.IsInvalid(acquireErr) {
+				reacquired <- acquireResult{handle: handle, err: acquireErr}
+				return
+			}
+			runtime.Gosched()
+		}
+	}()
+	acquired := <-reacquired
+	require.NoError(t, acquired.err,
+		"failed handle must close even while the complete callback keeps Stop waiting")
+	select {
+	case stopErr := <-stopResult:
+		t.Fatalf("Stop returned before the admitted complete callback: %v", stopErr)
+	default:
+	}
+	close(handler.release)
+	require.NoError(t, <-handler.ctxErr, "callback authority must remain live through native Closed")
+	require.NoError(t, <-stopResult)
+	acquired.handle.Drain()
+	<-acquired.handle.Closed()
+}
+
+func TestIntegration_MilestoneSubscriberSecondFailureRollsBackFirstHandle(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithStreams(
+		natsclient.TestStreamConfig{Name: agentrun.AgentStreamName, Subjects: []string{"agent.>"}},
+	))
+	defer tc.Terminate()
+	failedCfg := natsclient.StreamConsumerConfig{
+		StreamName: agentrun.AgentStreamName, ConsumerName: "agentrun-milestone-failed-partial",
+		FilterSubject: "agent.failed.*", AckPolicy: "explicit", DeliverPolicy: "new",
+	}
+	incumbent, err := tc.Client.ConsumeInternalStreamWithConfig(
+		t.Context(), failedCfg, func(context.Context, jetstream.Msg) {},
+	)
+	require.NoError(t, err)
+	mgr := lifecycle.NewManager(tc.Client, nil)
+	require.NoError(t, agentrun.Register(mgr))
+	sub := agentrun.NewMilestoneSubscriber(mgr, nil, "acme", "ops", nil)
+	cleanup, startErr := sub.Start(t.Context(), tc.Client, agentrun.StartConfig{
+		StreamName: agentrun.AgentStreamName, ConsumerNameSuffix: "partial",
+	})
+	require.Error(t, startErr)
+	require.Nil(t, cleanup, "successful bounded rollback clears partial cleanup authority")
+
+	completeCfg := failedCfg
+	completeCfg.ConsumerName = "agentrun-milestone-complete-partial"
+	completeCfg.FilterSubject = "agent.complete.*"
+	var complete jetstream.ConsumeContext
+	for {
+		complete, err = tc.Client.ConsumeInternalStreamWithConfig(
+			t.Context(), completeCfg, func(context.Context, jetstream.Msg) {},
+		)
+		if err == nil {
+			break
+		}
+		require.True(t, semerrs.IsInvalid(err), "unexpected reacquisition failure: %v", err)
+		runtime.Gosched()
+	}
+	complete.Drain()
+	<-complete.Closed()
+	incumbent.Drain()
+	<-incumbent.Closed()
 }
 
 func TestIntegration_MilestoneSubscriberProductionEnvelopeCallbacks(t *testing.T) {

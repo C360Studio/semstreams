@@ -80,6 +80,11 @@ type Client struct {
 	consumers   map[string]consumerBinding
 	consumersMu sync.RWMutex
 
+	// Internal consumer claims reject duplicate fixed durable ownership without
+	// retaining lifecycle handles or giving Client.Close child authority.
+	internalClaimsMu sync.Mutex
+	internalClaims   map[internalConsumerIdentity]*internalConsumerClaim
+
 	// Circuit breaker
 	lastFailure      atomic.Value // stores time.Time
 	backoff          atomic.Value // stores time.Duration

@@ -55,7 +55,6 @@ func TestConsumerPolicyProductionCallsiteCensus(t *testing.T) {
 
 	wantInternal := map[string]int{
 		"agentic/agentrun/agentrun.go":     2,
-		"component/registry.go":            1,
 		"internal/maxdelivery/observer.go": 1,
 	}
 	if !reflect.DeepEqual(internalCallers, wantInternal) {
@@ -87,7 +86,7 @@ func TestConsumerPolicyExportedClientAPICensus(t *testing.T) {
 
 	want := map[string]string{
 		"ConsumeDurable":                  "func(ctx context.Context, owner PortConsumerContext, cfg StreamConsumerConfig, heartbeat time.Duration, handler func(context.Context, []byte) error) error",
-		"ConsumeInternalStreamWithConfig": "func(ctx context.Context, cfg StreamConsumerConfig, handler func(ctx context.Context, msg jetstream.Msg)) error",
+		"ConsumeInternalStreamWithConfig": "func(ctx context.Context, cfg StreamConsumerConfig, handler func(ctx context.Context, msg jetstream.Msg)) (jetstream.ConsumeContext, error)",
 		"ConsumeStreamWithConfig":         "func(ctx context.Context, owner PortConsumerContext, cfg StreamConsumerConfig, handler func(ctx context.Context, msg jetstream.Msg)) error",
 		"ConsumeStreamWithConfigContexts": "func(setupCtx context.Context, handlerCtx context.Context, owner PortConsumerContext, cfg StreamConsumerConfig, handler func(ctx context.Context, msg jetstream.Msg)) error",
 		"ObserveDirectPortConsumerPolicy": "func(ctx context.Context, owner PortConsumerContext, finalConfig jetstream.ConsumerConfig, consumer jetstream.Consumer) (func(), error)",
@@ -120,7 +119,7 @@ func TestConsumerPolicyDirectCreationCallCensus(t *testing.T) {
 	}
 
 	want := map[string]int{
-		"natsclient/stream.go:CreateOrUpdateConsumer/args=2":                       1,
+		"natsclient/stream.go:CreateOrUpdateConsumer/args=2":                       2,
 		"output/otel/component.go:CreateOrUpdateConsumer/args=3":                   1,
 		"test/e2e/scenarios/core_objectstore_raw.go:CreateOrUpdateConsumer/args=2": 1,
 	}

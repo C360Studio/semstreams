@@ -73,6 +73,16 @@ func ensureFrameworkStreams(t *testing.T, ctx context.Context, client *natsclien
 	require.NoError(t, manager.EnsureStreams(ctx, &config.Config{}))
 }
 
+func TestStartFailsLoudlyWhenCaptureStreamIsMissing(t *testing.T) {
+	tc, ctx := integrationClient(t)
+	telemetry := newIntegrationTelemetry(false)
+
+	stop, err := start(ctx, tc.Client, telemetry)
+	require.Nil(t, stop)
+	require.Error(t, err)
+	require.ErrorIs(t, err, jetstream.ErrStreamNotFound)
+}
+
 // TestCaptureBeforeObserverRestart proves why this is a Stream rather than KV
 // or a core subscriber: the server occurrence is retained while no observer is
 // running, then delivered when the fixed durable binds later.
@@ -103,6 +113,10 @@ func TestCaptureBeforeObserverRestart(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, -1, consumerInfo.Config.MaxDeliver,
 		"observer must be unlimited so its own telemetry outage cannot recurse into MaxDeliver exhaustion")
+	require.NoError(t, stopObserver(ctx))
+	require.NoError(t, stopObserver(ctx), "completed observer Stop is a nil no-op")
+	_, err = js.Consumer(ctx, captureStreamName, observerConsumerName)
+	require.NoError(t, err, "observer lifecycle must preserve the durable consumer")
 }
 
 func TestObserverEmissionFailureRedelivers(t *testing.T) {
@@ -158,6 +172,27 @@ func TestTwoObserversShareOneLogicalDelivery(t *testing.T) {
 	attempts, successes := telemetry.counts()
 	assert.Equal(t, 1, attempts)
 	assert.Equal(t, 1, successes)
+}
+
+func TestDuplicateLocalObserverRejectsWithoutStoppingIncumbent(t *testing.T) {
+	tc, ctx := integrationClient(t)
+	ensureFrameworkStreams(t, ctx, tc.Client)
+	telemetry := newIntegrationTelemetry(false)
+	stop, err := start(ctx, tc.Client, telemetry)
+	require.NoError(t, err)
+	duplicateStop, duplicateErr := start(ctx, tc.Client, telemetry)
+	require.Nil(t, duplicateStop)
+	require.Error(t, duplicateErr)
+
+	want := forceMaxDeliveryAdvisory(t, ctx, tc.Client, "LOCAL_DUPLICATE", "local.duplicate")
+	select {
+	case got := <-telemetry.events:
+		require.Equal(t, want.StreamSequence, got.StreamSequence,
+			"duplicate rejection must leave the incumbent observer live")
+	case <-ctx.Done():
+		t.Fatal("incumbent observer stopped after duplicate rejection")
+	}
+	require.NoError(t, stop(ctx))
 }
 
 func TestCaptureStreamIsBoundedDiscardOldOnFreshServer(t *testing.T) {

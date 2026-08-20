@@ -9,6 +9,8 @@
 > `service/service_manager.go`. Independent G1 implementation review returned `APPROVE`; owner-migrated credit is
 > limited to its five frozen graph-read `component.go` owners. Independent CM1 implementation review returned
 > `APPROVE`; owner-migrated credit is limited to `service/component_manager.go`.
+> Independent I1 implementation review and both required breaking-change E2E tiers returned green; owner-migrated
+> credit is limited to `agentic/agentrun/agentrun.go` and `service/milestone_service.go`.
 
 ## Evidence identity
 
@@ -122,8 +124,10 @@ root-facing stop closure but captures the exact handle. SemTeams still knows no 
 zero present consumers, `Registry.SubscribeCapabilities` is removed rather than preserved as an error-only phantom
 lifecycle surface. That exported removal and the signature change are owner-gated.
 
-Exceptions: missing MaxDeliver stream remains existing no-op Start; second agentrun consumer failure cleans first or
-retains it in cleanupPending. Maxdelivery policy observation remains separate.
+Exceptions: only agentrun treats a missing optional `AGENT` stream as a no-op. MaxDeliver observation requires its
+provisioned capture stream and fails loud when it is absent, returning a nil stop closure and an error satisfying
+`errors.Is(err, jetstream.ErrStreamNotFound)`. Second agentrun consumer failure cleans first or retains it in
+cleanupPending. Maxdelivery policy observation remains separate.
 
 Proof: NATS integration for two-handle partial failure, exact Drain/Closed, duplicate fixed durable rejection without
 incumbent replacement, maxdelivery Stop, no deletion, failed rollback then later Milestone Stop, repeated completed
@@ -131,6 +135,18 @@ Stop nil; race packages `./agentic/agentrun ./service ./internal/maxdelivery ./n
 integration tests.
 
 Delta: owners -2, NG -1, Stop -1, Operation -1; old lifecyclejoin rollback -1. I1 depends on R1.
+
+Owner ruling on 2026-08-19: APPROVE only the I1 breaking surface described above. The canonical internal-consumption
+method returns its exact native handle, rejects duplicate live durable ownership, and
+`Registry.SubscribeCapabilities` is removed because it has no present repository or known sister-repository
+consumer. This approval does not include `ConsumeDurable`, either port consumption method, `natsclient.Subscription`,
+Metrics APIs, or any later N1 retirement.
+
+Implementation status on 2026-08-20: independent `semstreams-reviewer` verdict `APPROVE`, `task e2e:agentic` exit 0,
+and `task e2e:core` exit 0 grant owner-migrated credit only to `agentic/agentrun/agentrun.go` and
+`service/milestone_service.go`. Supporting natsclient, component, and MaxDeliver files receive no owner credit. I1 is
+eligible to commit after final task-truth review, but remains uncommitted at this checkpoint. Task 2.3, Gate A/B/C,
+runtime migration, proof, release, archive, and tag readiness remain incomplete.
 
 ## S1 — serialized fixed-port Q/F batch + port bridge birth
 
@@ -438,4 +454,7 @@ Independent CM1 implementation review returned `APPROVE`, granting owner-migrate
 `service/component_manager.go`; supporting tests receive no owner credit and no broader task or gate credit follows.
 Independent ML1 implementation review returned `APPROVE`, granting owner-migrated credit only to
 `service/message_logger.go`; adjacent HTTP and test support receives no owner credit and no broader task or gate credit
-follows. The unrelated exported API rulings remain unapproved.
+follows. Independent I1 implementation review returned `APPROVE`, and both required breaking-change E2E tiers passed,
+granting owner-migrated credit only to `agentic/agentrun/agentrun.go` and `service/milestone_service.go`; supporting
+natsclient, component, and MaxDeliver files receive no owner credit. Other exported API rulings remain unapproved, and
+no broader task or gate credit follows.

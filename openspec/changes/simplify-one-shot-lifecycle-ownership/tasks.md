@@ -97,6 +97,16 @@
     calls 12, old rollback 15, Cancel 4, and NewOperation 3 were unchanged. Lifecyclejoin, natsclient, the request-owned
     SSE watcher, and Metrics inventory were unchanged. Task 2.3 and every Gate A/B/C, runtime, proof, release, archive,
     and tag requirement remain unchecked and incomplete; unrelated exported API rulings remain unapproved.
+  - 2026-08-20 I1 reviewed owner-wave checkpoint: the owner approved only the breaking I1 native-handle return,
+    duplicate-live-durable rejection, and zero-consumer `Registry.SubscribeCapabilities` removal. `ConsumeDurable`,
+    port consumption methods, `natsclient.Subscription`, Metrics APIs, and later N1 retirements remain excluded.
+    Independent implementation review returned `APPROVE`; both causal REDs, the corrected MaxDeliver fail-loud
+    contract, package/race/integration evidence, exact census, hashes, and scanner limitations are recorded in the
+    ledger. Required breaking-change runs `task e2e:agentic` and `task e2e:core` both exited 0. Owner-migrated credit is
+    granted only to `agentic/agentrun/agentrun.go` and `service/milestone_service.go`; supporting natsclient,
+    component, and MaxDeliver files receive no owner credit. I1 is eligible to commit after final task-truth review but
+    remains uncommitted. Task 2.3, Gate A/B/C, runtime migration, proof, release, archive, and tag readiness remain
+    unchecked and incomplete.
   - 2026-08-18 checkpoint: independent `semstreams-reviewer` verdict `CORRECTIONS CONFIRMED` grants owner-migrated
     credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
     worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.

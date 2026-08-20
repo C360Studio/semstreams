@@ -1236,45 +1236,6 @@ func portsToCapabilities(ports []Port, facts []PortFacts) ([]PortCapability, err
 	return capabilities, nil
 }
 
-// SubscribeCapabilities subscribes to capability announcements from NATS.
-// If no patterns provided, defaults to "*.capabilities.*" (all components).
-func (r *Registry) SubscribeCapabilities(ctx context.Context, patterns ...string) error {
-	r.mu.RLock()
-	natsClient := r.natsClient
-	nodeID := r.nodeID
-	r.mu.RUnlock()
-
-	if natsClient == nil {
-		return errs.WrapInvalid(
-			fmt.Errorf("NATS client not initialized"),
-			"Registry", "SubscribeCapabilities", "check NATS client")
-	}
-
-	if len(patterns) == 0 {
-		// Default: subscribe to all component types
-		patterns = []string{"processor.capabilities.>"}
-	}
-
-	// Use natsclient's consumer management
-	// Note: Currently using first pattern only. For multiple patterns, we would need
-	// to create multiple consumers or use a more complex filter.
-	err := natsClient.ConsumeInternalStreamWithConfig(ctx, natsclient.StreamConsumerConfig{
-		StreamName:    "COMPONENT_CAPABILITIES",
-		ConsumerName:  fmt.Sprintf("cap-registry-%s", nodeID),
-		FilterSubject: patterns[0],
-		DeliverPolicy: "all",
-		AckPolicy:     "explicit",
-	}, func(_ context.Context, msg jetstream.Msg) {
-		var ann CapabilityAnnouncement
-		if err := json.Unmarshal(msg.Data(), &ann); err == nil {
-			r.updateCapabilityCache(&ann)
-		}
-		msg.Ack()
-	})
-
-	return err
-}
-
 // StartHeartbeat starts periodic republishing of all component capabilities.
 func (r *Registry) StartHeartbeat(ctx context.Context, interval time.Duration) {
 	// Create cancelable context

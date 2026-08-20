@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -40,48 +41,123 @@ func (f *fakeStarter) Start(_ context.Context, _ *natsclient.Client, _ agentrun.
 func TestMilestoneServiceStartRetainsPartialCleanupReturnedWithError(t *testing.T) {
 	startErr := errors.New("second durable consumer failed")
 	f := &fakeStarter{startErr: startErr}
-	f.stop = func(ctx context.Context) error {
+	rollbackErr := errors.New("partial cleanup still pending")
+	f.stop = func(context.Context) error {
 		f.stopCalls++
-		return ctx.Err()
+		if f.stopCalls == 1 {
+			return rollbackErr
+		}
+		return nil
 	}
 	svc := newTestMilestoneService(f)
 
-	require.ErrorIs(t, svc.Start(context.Background()), startErr)
+	startResult := svc.Start(context.Background())
+	require.ErrorIs(t, startResult, startErr)
+	require.ErrorIs(t, startResult, rollbackErr)
 	require.NotNil(t, svc.stop, "partial Start cleanup authority must remain reachable")
-
-	canceled, cancel := context.WithCancel(context.Background())
-	cancel()
-	require.ErrorIs(t, svc.Stop(canceled), context.Canceled)
-
-	f.stop = func(context.Context) error {
-		f.stopCalls++
-		return nil
-	}
+	require.Error(t, svc.Start(context.Background()), "cleanupPending rejects another Start")
 	require.NoError(t, svc.Stop(context.Background()))
 	require.Nil(t, svc.stop, "terminal cleanup clears the native stop function")
 	require.NoError(t, svc.Stop(context.Background()))
 	require.Equal(t, 2, f.stopCalls)
 }
 
-func TestMilestoneServiceCanceledStopRetainsSubscriberAuthorityForRejoin(t *testing.T) {
+func TestMilestoneServiceStartRejectsInvalidContextWithoutConsumingAuthority(t *testing.T) {
+	tests := []struct {
+		name string
+		ctx  func() context.Context
+	}{
+		{name: "nil", ctx: func() context.Context { return nil }},
+		{name: "pre-canceled", ctx: func() context.Context {
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			return ctx
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			starter := &fakeStarter{}
+			svc := newTestMilestoneService(starter)
+
+			require.Error(t, svc.Start(tt.ctx()))
+			require.False(t, svc.used, "invalid Start must preserve unused authority")
+			require.Nil(t, svc.startDone)
+			require.False(t, svc.running)
+			require.False(t, svc.terminal)
+			require.Equal(t, StatusStopped, svc.Status())
+			require.Equal(t, 0, starter.startCalls)
+		})
+	}
+}
+
+func TestMilestoneServiceRunningStopFailureIsTerminalWithoutReplay(t *testing.T) {
 	f := &fakeStarter{}
-	f.stop = func(ctx context.Context) error {
+	stopErr := errors.New("native closure failed")
+	f.stop = func(context.Context) error {
 		f.stopCalls++
-		return ctx.Err()
+		return stopErr
 	}
 	svc := newTestMilestoneService(f)
 	require.NoError(t, svc.Start(context.Background()))
-	canceled, cancel := context.WithCancel(context.Background())
-	cancel()
-	require.ErrorIs(t, svc.Stop(canceled), context.Canceled)
+	require.ErrorIs(t, svc.Stop(context.Background()), stopErr)
+	require.NoError(t, svc.Stop(context.Background()))
+	require.Equal(t, 1, f.stopCalls, "running Stop failure is terminal and never replayed")
+}
 
-	f.stop = func(context.Context) error {
-		f.stopCalls++
+type blockingMilestoneStarter struct {
+	startEntered chan struct{}
+	releaseStart chan struct{}
+	stopCalled   chan struct{}
+}
+
+type observedMilestoneContext struct {
+	context.Context
+	observed chan struct{}
+	once     sync.Once
+}
+
+func (c *observedMilestoneContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.observed) })
+	return c.Context.Done()
+}
+
+func (f *blockingMilestoneStarter) Start(
+	context.Context, *natsclient.Client, agentrun.StartConfig,
+) (func(context.Context) error, error) {
+	close(f.startEntered)
+	<-f.releaseStart
+	return func(context.Context) error {
+		close(f.stopCalled)
 		return nil
+	}, nil
+}
+
+func TestMilestoneServiceStopWaitsForStartFinalizationOutsideLocks(t *testing.T) {
+	f := &blockingMilestoneStarter{
+		startEntered: make(chan struct{}),
+		releaseStart: make(chan struct{}),
+		stopCalled:   make(chan struct{}),
 	}
-	require.NoError(t, svc.Stop(context.Background()))
-	require.NoError(t, svc.Stop(context.Background()))
-	require.Equal(t, 2, f.stopCalls)
+	svc := NewMilestoneService(f, nil, agentrun.StartConfig{StreamName: agentrun.AgentStreamName}, nil)
+	startResult := make(chan error, 1)
+	go func() { startResult <- svc.Start(t.Context()) }()
+	<-f.startEntered
+	stopCtx := &observedMilestoneContext{Context: t.Context(), observed: make(chan struct{})}
+	stopResult := make(chan error, 1)
+	go func() { stopResult <- svc.Stop(stopCtx) }()
+	<-stopCtx.observed
+
+	require.True(t, svc.mu.TryLock(), "Stop must not hold the service lock while waiting for startDone")
+	svc.mu.Unlock()
+	select {
+	case <-f.stopCalled:
+		t.Fatal("subscriber cleanup ran before Start finalized")
+	default:
+	}
+	close(f.releaseStart)
+	require.NoError(t, <-startResult)
+	require.NoError(t, <-stopResult)
+	<-f.stopCalled
 }
 
 func newTestMilestoneService(f *fakeStarter) *MilestoneService {
