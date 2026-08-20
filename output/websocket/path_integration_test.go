@@ -32,6 +32,10 @@ func TestCreateOutputCustomPathServesProductionMux(t *testing.T) {
 	// it proves routing without changing or claiming Output listener binding.
 	output.wg = &sync.WaitGroup{}
 	require.NoError(t, output.setupHTTPServer(t.Context()))
+	t.Cleanup(func() { require.NoError(t, output.listener.Close()) })
+	output.requestMu.Lock()
+	output.requestOpen = true
+	output.requestMu.Unlock()
 
 	server := httptest.NewServer(output.server.Handler)
 	var connection *websocket.Conn

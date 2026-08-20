@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/buffer"
@@ -139,21 +139,40 @@ type Output struct {
 
 	// WebSocket server
 	server    *http.Server
+	listener  net.Listener
+	serveDone chan error
 	upgrader  websocket.Upgrader
 	clients   map[*websocket.Conn]*clientInfo
 	clientsMu sync.RWMutex
 
 	// NATS subscriptions for cleanup
-	subscriptions []*natsclient.Subscription
+	subscriptions []coreSubscription
+	consumers     []streamConsumerBinding
 
 	// Lifecycle management
-	running      bool
-	startTime    time.Time
-	mu           sync.RWMutex
-	wg           *sync.WaitGroup
-	generation   *lifecyclejoin.Generation
-	tlsCleanup   func()     // ACME cleanup function (stops renewal loop)
-	tlsCleanupMu sync.Mutex // Protects tlsCleanup
+	running        bool
+	startTime      time.Time
+	mu             sync.RWMutex
+	lifecycleMu    sync.Mutex
+	lifecycleUsed  bool
+	terminal       bool
+	stopping       bool
+	cleanupPending bool
+	startDone      chan struct{}
+	cancel         context.CancelFunc
+	wg             *sync.WaitGroup
+	runtimeDone    chan struct{}
+	tlsCleanup     func()     // ACME cleanup function (stops renewal loop)
+	tlsCleanupMu   sync.Mutex // Protects tlsCleanup
+	requestMu      sync.Mutex
+	requestOpen    bool
+	requestCount   int
+	requestZero    chan struct{}
+	requestHook    func(context.Context)
+	subscribeCore  func(context.Context, string, func(context.Context, *natspkg.Msg)) (coreSubscription, error)
+	waitForInput   func(context.Context, string) error
+	consumeStream  func(context.Context, natsclient.PortConsumerContext, natsclient.StreamConsumerConfig, func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error)
+	waitJSClosed   func(context.Context, <-chan struct{}) error
 
 	// Message ID generation
 	messageIDCounter atomic.Uint64
@@ -169,6 +188,15 @@ type Output struct {
 
 	// Logging
 	logger *slog.Logger
+}
+
+type streamConsumerBinding struct {
+	handle      jetstream.ConsumeContext
+	drainIssued bool
+}
+
+type coreSubscription interface {
+	Drain(context.Context) error
 }
 
 // MessageEnvelope wraps all WebSocket messages with type discrimination
@@ -587,64 +615,82 @@ func (w *Output) Initialize() error {
 }
 
 // Start begins the WebSocket server and NATS subscription
-func (w *Output) Start(ctx context.Context) error {
+func (w *Output) Start(ctx context.Context) (startErr error) {
 	// Validate before locking or inspecting lifecycle state.
 	if err := w.validateContext(ctx); err != nil {
 		return err
 	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	if w.generation != nil {
+	w.lifecycleMu.Lock()
+	if w.lifecycleUsed {
+		w.lifecycleMu.Unlock()
 		return errs.WrapFatal(errs.ErrAlreadyStarted, "Output", "Start", "cleanup authority already active")
 	}
-
-	// Derive the generation lifetime from Start; only cancellation and join
-	// authority are retained. Publish the exact authority before acquisition so
-	// a failed Start and every later Stop rejoin the same operations.
+	parent := ctx
 	runtimeCtx, runtimeCancel := context.WithCancel(ctx)
 	runtimeWG := &sync.WaitGroup{}
-	startReady := make(chan struct{})
-	generation := lifecyclejoin.NewGeneration(runtimeCancel, func() {
-		<-startReady
-		runtimeWG.Wait()
-	})
+	startDone := make(chan struct{})
+	w.lifecycleUsed = true
+	w.cleanupPending = true
+	w.cancel = runtimeCancel
+	w.startDone = startDone
 	w.wg = runtimeWG
-	w.generation = generation
-	rollback := func() error {
-		close(startReady)
-		subscriptions := append([]*natsclient.Subscription(nil), w.subscriptions...)
-		rollbackErr := lifecyclejoin.RunPartialStartRollback(func(ctx context.Context) error {
-			return w.stopRuntime(ctx, generation, w.server, subscriptions)
-		})
-		if rollbackErr == nil {
-			w.clearRuntime(generation)
+	w.lifecycleMu.Unlock()
+	committed := false
+	defer func() {
+		if committed {
+			w.lifecycleMu.Lock()
+			w.cleanupPending = false
+			close(startDone)
+			w.startDone = nil
+			w.lifecycleMu.Unlock()
+			return
 		}
-		return rollbackErr
-	}
+		rollbackErr := lifecyclecleanup.RollbackFailedStart(parent, w.cleanup)
+		startErr = errors.Join(startErr, rollbackErr)
+		w.lifecycleMu.Lock()
+		if rollbackErr == nil {
+			w.cleanupPending = false
+			w.terminal = true
+			w.clearRuntime()
+		}
+		close(startDone)
+		w.startDone = nil
+		w.lifecycleMu.Unlock()
+	}()
 
 	// Set up HTTP server with WebSocket endpoint
 	if err := w.setupHTTPServer(runtimeCtx); err != nil {
-		return errors.Join(err, rollback())
+		return err
 	}
+	w.requestMu.Lock()
+	w.requestOpen = true
+	w.requestMu.Unlock()
+	serveDone := make(chan error, 1)
+	w.serveDone = serveDone
+	go w.runServer(w.server, w.listener, serveDone)
 
 	// Subscribe to NATS subjects for graph updates
 	if err := w.setupSubscriptions(runtimeCtx); err != nil {
-		return errors.Join(
-			errs.Wrap(err, "Output", "Start", fmt.Sprintf("subscribe to NATS subjects %v", w.subjects)),
-			rollback(),
-		)
+		return errs.Wrap(err, "Output", "Start", fmt.Sprintf("subscribe to NATS subjects %v", w.subjects))
 	}
 
-	goroutineCount := 2 // runServer + maintainClients
+	goroutineCount := 1 // maintainClients
 	if w.metrics != nil {
 		goroutineCount++
 	}
 	runtimeWG.Add(goroutineCount)
+	runtimeDone := make(chan struct{})
+	w.runtimeDone = runtimeDone
+	go func() {
+		runtimeWG.Wait()
+		close(runtimeDone)
+	}()
+	w.mu.Lock()
 	w.running = true
 	w.startTime = time.Now()
-	close(startReady)
+	w.mu.Unlock()
 	w.startBackgroundGoroutines(runtimeCtx, runtimeWG)
+	committed = true
 
 	return nil
 }
@@ -670,7 +716,17 @@ func (w *Output) setupHTTPServer(ctx context.Context) error {
 	}
 	// Set up HTTP server with WebSocket endpoint
 	mux := http.NewServeMux()
-	mux.HandleFunc(w.path, w.handleWebSocket)
+	mux.HandleFunc(w.path, func(wr http.ResponseWriter, r *http.Request) {
+		if !w.admitRequest() {
+			http.Error(wr, "service stopping", http.StatusServiceUnavailable)
+			return
+		}
+		defer w.releaseRequest()
+		if w.requestHook != nil {
+			w.requestHook(r.Context())
+		}
+		w.handleWebSocket(wr, r)
+	})
 
 	w.server = &http.Server{
 		Addr:    net.JoinHostPort(w.host, strconv.Itoa(w.port)),
@@ -717,6 +773,11 @@ func (w *Output) setupHTTPServer(ctx context.Context) error {
 			w.server.TLSConfig = tlsConfig
 		}
 	}
+	listener, err := net.Listen("tcp", w.server.Addr)
+	if err != nil {
+		return errs.WrapFatal(err, "websocket_output", "setupHTTPServer", "bind HTTP listener")
+	}
+	w.listener = listener
 
 	return nil
 }
@@ -727,9 +788,6 @@ func (w *Output) startBackgroundGoroutines(ctx context.Context, runtimeWG *sync.
 	if w.metrics != nil {
 		go w.trackUptime(ctx, runtimeWG)
 	}
-
-	// Start the HTTP server in a goroutine
-	go w.runServer(runtimeWG)
 
 	// Start client maintenance in a goroutine
 	go w.maintainClients(ctx, runtimeWG)
@@ -760,59 +818,49 @@ func (w *Output) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-	w.mu.RLock()
-	generation := w.generation
-	server := w.server
-	subscriptions := append([]*natsclient.Subscription(nil), w.subscriptions...)
-	w.mu.RUnlock()
-	if generation == nil {
-		return nil
-	}
-
-	stopErr := w.stopRuntime(ctx, generation, server, subscriptions)
-	if stopErr != nil {
-		return stopErr
-	}
-
-	w.mu.Lock()
-	w.clearRuntime(generation)
-	w.mu.Unlock()
-	return nil
-}
-
-func (w *Output) stopRuntime(
-	ctx context.Context,
-	generation *lifecyclejoin.Generation,
-	server *http.Server,
-	subscriptions []*natsclient.Subscription,
-) error {
-	stopErr := generation.StopWithQuiesce(ctx, func() error {
-		w.closeAllClients()
-		w.tlsCleanupMu.Lock()
-		defer w.tlsCleanupMu.Unlock()
-		if w.tlsCleanup != nil {
-			w.tlsCleanup()
-		}
-		return nil
-	}, func(ctx context.Context) error {
-		if server == nil {
+	for {
+		w.lifecycleMu.Lock()
+		if !w.lifecycleUsed {
+			w.lifecycleUsed = true
+			w.terminal = true
+			w.lifecycleMu.Unlock()
 			return nil
 		}
-		return errs.NewShutdownError("websocket-output", errs.PhaseShutdownListener, server.Shutdown(ctx))
-	}, func(ctx context.Context) error {
-		var drainErr error
-		for _, sub := range subscriptions {
-			if sub != nil {
-				drainErr = errors.Join(drainErr, errs.NewShutdownError(
-					"websocket-output/subscriptions",
-					errs.PhaseDrainSubscriptions,
-					sub.Drain(ctx),
-				))
+		if w.terminal {
+			w.lifecycleMu.Unlock()
+			return nil
+		}
+		if w.startDone != nil {
+			done := w.startDone
+			w.lifecycleMu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 		}
-		return drainErr
-	})
-	return attributeComponentShutdownError("websocket-output", errs.PhaseJoinRuntime, stopErr)
+		if w.stopping {
+			w.lifecycleMu.Unlock()
+			return errs.WrapTransient(errors.New("stop already in progress"), "Output", "Stop", "concurrent Stop")
+		}
+		retryable := w.cleanupPending
+		w.stopping = true
+		w.lifecycleMu.Unlock()
+
+		stopErr := w.cleanup(ctx)
+		w.lifecycleMu.Lock()
+		w.stopping = false
+		if retryable && stopErr != nil {
+			w.lifecycleMu.Unlock()
+			return stopErr
+		}
+		w.cleanupPending = false
+		w.terminal = true
+		w.clearRuntime()
+		w.lifecycleMu.Unlock()
+		return attributeComponentShutdownError("websocket-output", errs.PhaseJoinRuntime, stopErr)
+	}
 }
 
 func attributeComponentShutdownError(owner string, phase errs.ShutdownPhase, err error) error {
@@ -826,20 +874,170 @@ func attributeComponentShutdownError(owner string, phase errs.ShutdownPhase, err
 	return errs.NewShutdownError(owner, phase, err)
 }
 
-// clearRuntime requires w.mu write ownership and clears only the exact cleanly
-// completed generation. Genuine terminal errors deliberately retain authority.
-func (w *Output) clearRuntime(generation *lifecyclejoin.Generation) {
-	if w.generation != generation {
-		return
+func (w *Output) cleanup(ctx context.Context) error {
+	w.lifecycleMu.Lock()
+	server := w.server
+	serveDone := w.serveDone
+	cancel := w.cancel
+	runtimeDone := w.runtimeDone
+	coreSubscriptions := append([]coreSubscription(nil), w.subscriptions...)
+	consumers := append([]streamConsumerBinding(nil), w.consumers...)
+	w.lifecycleMu.Unlock()
+
+	requestZero := w.fenceRequests()
+	var cleanupErr error
+	serverComplete := server == nil
+	if server != nil {
+		shutdownErr := server.Shutdown(ctx)
+		cleanupErr = errors.Join(cleanupErr, errs.NewShutdownError("websocket-output", errs.PhaseShutdownListener, shutdownErr))
+		serverComplete = shutdownErr == nil
 	}
+	if serveDone != nil {
+		select {
+		case err := <-serveDone:
+			cleanupErr = errors.Join(cleanupErr, err)
+			serverComplete = serverComplete && err == nil
+		case <-ctx.Done():
+			cleanupErr = errors.Join(cleanupErr, ctx.Err())
+			serverComplete = false
+		}
+	}
+	if serverComplete {
+		w.lifecycleMu.Lock()
+		if w.server == server {
+			w.mu.Lock()
+			w.server = nil
+			w.mu.Unlock()
+			w.listener = nil
+			w.serveDone = nil
+		}
+		w.lifecycleMu.Unlock()
+	}
+
+	retainedCore := make([]coreSubscription, 0, len(coreSubscriptions))
+	for _, sub := range coreSubscriptions {
+		if sub == nil {
+			continue
+		}
+		if err := sub.Drain(ctx); err != nil {
+			cleanupErr = errors.Join(cleanupErr, errs.NewShutdownError("websocket-output/subscriptions", errs.PhaseDrainSubscriptions, err))
+			retainedCore = append(retainedCore, sub)
+		}
+	}
+	retainedConsumers := make([]streamConsumerBinding, 0, len(consumers))
+	for _, binding := range consumers {
+		if !binding.drainIssued {
+			binding.handle.Drain()
+			binding.drainIssued = true
+		}
+		closed := binding.handle.Closed()
+		var waitErr error
+		if w.waitJSClosed != nil {
+			waitErr = w.waitJSClosed(ctx, closed)
+		} else {
+			select {
+			case <-closed:
+			case <-ctx.Done():
+				waitErr = ctx.Err()
+			}
+		}
+		if waitErr != nil {
+			cleanupErr = errors.Join(cleanupErr, waitErr)
+			retainedConsumers = append(retainedConsumers, binding)
+		}
+	}
+	w.lifecycleMu.Lock()
+	w.subscriptions = retainedCore
+	w.consumers = retainedConsumers
+	w.lifecycleMu.Unlock()
+
+	w.closeAllClients()
+	select {
+	case <-requestZero:
+	case <-ctx.Done():
+		cleanupErr = errors.Join(cleanupErr, ctx.Err())
+	}
+	if cancel != nil {
+		cancel()
+	}
+	runtimeComplete := runtimeDone == nil
+	if runtimeDone != nil {
+		select {
+		case <-runtimeDone:
+			runtimeComplete = true
+		case <-ctx.Done():
+			cleanupErr = errors.Join(cleanupErr, ctx.Err())
+		}
+	}
+	if runtimeComplete {
+		w.lifecycleMu.Lock()
+		if w.runtimeDone == runtimeDone {
+			w.runtimeDone = nil
+			w.cancel = nil
+		}
+		w.lifecycleMu.Unlock()
+	}
+	if cleanup := w.takeTLSCleanup(); cleanup != nil {
+		cleanup()
+	}
+	return cleanupErr
+}
+
+func (w *Output) clearRuntime() {
+	w.mu.Lock()
 	w.running = false
 	w.server = nil
+	w.listener = nil
+	w.serveDone = nil
+	w.mu.Unlock()
 	w.subscriptions = nil
+	w.consumers = nil
 	w.wg = nil
-	w.generation = nil
+	w.runtimeDone = nil
+	w.cancel = nil
+	_ = w.takeTLSCleanup()
+}
+
+func (w *Output) takeTLSCleanup() func() {
 	w.tlsCleanupMu.Lock()
+	cleanup := w.tlsCleanup
 	w.tlsCleanup = nil
 	w.tlsCleanupMu.Unlock()
+	return cleanup
+}
+
+func (w *Output) admitRequest() bool {
+	w.requestMu.Lock()
+	defer w.requestMu.Unlock()
+	if !w.requestOpen {
+		return false
+	}
+	if w.requestCount == 0 {
+		w.requestZero = make(chan struct{})
+	}
+	w.requestCount++
+	return true
+}
+
+func (w *Output) releaseRequest() {
+	w.requestMu.Lock()
+	defer w.requestMu.Unlock()
+	w.requestCount--
+	if w.requestCount == 0 {
+		close(w.requestZero)
+	}
+}
+
+func (w *Output) fenceRequests() <-chan struct{} {
+	w.requestMu.Lock()
+	defer w.requestMu.Unlock()
+	w.requestOpen = false
+	if w.requestCount == 0 {
+		done := make(chan struct{})
+		close(done)
+		return done
+	}
+	return w.requestZero
 }
 
 // setupSubscriptions creates subscriptions for all resolved input ports.
@@ -867,14 +1065,22 @@ func (w *Output) setupSubscriptions(ctx context.Context) error {
 			}
 
 		case component.PortKindNATS:
-			sub, err := w.natsClient.Subscribe(ctx, subject, func(msgCtx context.Context, msg *natspkg.Msg) {
+			subscribe := func(ctx context.Context, subject string, handler func(context.Context, *natspkg.Msg)) (coreSubscription, error) {
+				return w.natsClient.Subscribe(ctx, subject, handler)
+			}
+			if w.subscribeCore != nil {
+				subscribe = w.subscribeCore
+			}
+			sub, err := subscribe(ctx, subject, func(msgCtx context.Context, msg *natspkg.Msg) {
 				w.handleNATSMessageData(msgCtx, msg.Data, msg.Subject)
 			})
 			if err != nil {
 				return errs.Wrap(err, "Output", "setupSubscriptions",
 					fmt.Sprintf("subscribe to NATS subject %s", subject))
 			}
+			w.lifecycleMu.Lock()
 			w.subscriptions = append(w.subscriptions, sub)
+			w.lifecycleMu.Unlock()
 		default:
 			return errs.WrapInvalid(fmt.Errorf("input port %q kind %q is not nats or jetstream", port.Name, facts.Kind()), "Output", "setupSubscriptions", "validate input port")
 		}
@@ -897,7 +1103,11 @@ func (w *Output) setupJetStreamConsumer(ctx context.Context, port component.Port
 	subject := facts.NATSSubjects()[0]
 	streamName := stream.Name()
 
-	if err := w.waitForStream(ctx, streamName); err != nil {
+	waitForStream := w.waitForStream
+	if w.waitForInput != nil {
+		waitForStream = w.waitForInput
+	}
+	if err := waitForStream(ctx, streamName); err != nil {
 		return errs.WrapTransient(err, "Output", "setupJetStreamConsumer",
 			fmt.Sprintf("wait for stream %s", streamName))
 	}
@@ -928,7 +1138,11 @@ func (w *Output) setupJetStreamConsumer(ctx context.Context, port component.Port
 		AutoCreate:    false,
 	}
 
-	err = w.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: w.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	consume := w.natsClient.ConsumeStreamWithConfigHandle
+	if w.consumeStream != nil {
+		consume = w.consumeStream
+	}
+	handle, err := consume(ctx, natsclient.PortConsumerContext{Component: w.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		w.handleNATSMessageData(msgCtx, msg.Data(), msg.Subject())
 		if ackErr := msg.Ack(); ackErr != nil {
 			w.logger.Error("Failed to ack JetStream message", "error", ackErr)
@@ -938,6 +1152,9 @@ func (w *Output) setupJetStreamConsumer(ctx context.Context, port component.Port
 		return errs.WrapTransient(err, "Output", "setupJetStreamConsumer",
 			fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
+	w.lifecycleMu.Lock()
+	w.consumers = append(w.consumers, streamConsumerBinding{handle: handle})
+	w.lifecycleMu.Unlock()
 
 	w.logger.Debug("WebSocket output subscribed (JetStream)", "subject", subject, "stream", streamName)
 	return nil
@@ -1098,33 +1315,27 @@ func (w *Output) transformPayload(subject string, data []byte) []byte {
 }
 
 // runServer runs the HTTP server
-func (w *Output) runServer(runtimeWG *sync.WaitGroup) {
-	defer runtimeWG.Done()
-
-	w.mu.RLock()
-	server := w.server
-	tlsEnabled := w.security.TLS.Server.Enabled
-	w.mu.RUnlock()
-
+func (w *Output) runServer(server *http.Server, listener net.Listener, serveDone chan<- error) {
 	if server == nil {
+		serveDone <- nil
+		close(serveDone)
 		return
 	}
 
-	// ListenAndServe/ListenAndServeTLS blocks until Shutdown is called
-	var err error
-	if tlsEnabled {
-		// ListenAndServeTLS with empty cert/key files since TLSConfig is already set
-		err = server.ListenAndServeTLS("", "")
+	var serveErr error
+	if w.security.TLS.Server.Enabled {
+		serveErr = server.ServeTLS(listener, "", "")
 	} else {
-		err = server.ListenAndServe()
+		serveErr = server.Serve(listener)
 	}
-
-	if err != nil && err != http.ErrServerClosed {
-		// Only log real errors, not graceful shutdown
-		fmt.Printf("[ERROR] HTTP server failed: %v\n", err)
+	if errors.Is(serveErr, http.ErrServerClosed) {
+		serveErr = nil
+	}
+	if serveErr != nil {
 		w.errors.Add(1)
 	}
-	// http.ErrServerClosed is expected during graceful shutdown
+	serveDone <- serveErr
+	close(serveDone)
 }
 
 // handleWebSocket handles new WebSocket connections
@@ -1174,21 +1385,12 @@ func (w *Output) handleWebSocket(wr http.ResponseWriter, r *http.Request) {
 		w.metrics.clientsConnected.Set(float64(clientCount))
 	}
 
-	// Handle client in a goroutine
-	w.mu.RLock()
-	runtimeWG := w.wg
-	w.mu.RUnlock()
-	if runtimeWG == nil {
-		w.removeClient(conn, clientInfo)
-		return
-	}
-	runtimeWG.Add(1)
-	go w.handleClient(conn, clientInfo, runtimeWG)
+	// Keep the hijacked upgrade request admitted until its client exits.
+	w.handleClient(r.Context(), conn, clientInfo)
 }
 
 // handleClient manages a single WebSocket client connection
-func (w *Output) handleClient(conn *websocket.Conn, info *clientInfo, runtimeWG *sync.WaitGroup) {
-	defer runtimeWG.Done()
+func (w *Output) handleClient(ctx context.Context, conn *websocket.Conn, info *clientInfo) {
 	defer w.removeClient(conn, info)
 
 	// Set up ping/pong handling for connection health
@@ -1199,6 +1401,11 @@ func (w *Output) handleClient(conn *websocket.Conn, info *clientInfo, runtimeWG 
 
 	// Read messages from client (control messages: ack, nack, slow)
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		// Set read deadline
 		_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 
@@ -1328,7 +1535,7 @@ func (w *Output) broadcastToClients(ctx context.Context, subject string, data []
 		}
 
 		wg.Add(1)
-		go w.sendToSingleClient(&wg, conn, info, messageID, subject, envelopeData)
+		go w.sendToSingleClient(ctx, &wg, conn, info, messageID, subject, envelopeData)
 	}
 
 	// Wait for all concurrent sends to complete
@@ -1385,32 +1592,30 @@ func (w *Output) buildClientSnapshot() ([]*websocket.Conn, map[*websocket.Conn]*
 }
 
 // sendToSingleClient handles sending a message to one client with timeout and ack handling
-func (w *Output) sendToSingleClient(wg *sync.WaitGroup, c *websocket.Conn, i *clientInfo, messageID, subject string, envelopeData []byte) {
+func (w *Output) sendToSingleClient(ctx context.Context, wg *sync.WaitGroup, c *websocket.Conn, i *clientInfo, messageID, subject string, envelopeData []byte) {
 	defer wg.Done()
 
 	// Setup at-least-once delivery tracking if needed
 	ackChan := w.setupPendingMessage(i, messageID, subject, envelopeData)
 
 	// Create timeout context for this send operation
-	sendCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	// Send with timeout using goroutine + channel pattern
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- w.sendToClient(c, i, envelopeData)
-	}()
-
-	select {
-	case err := <-errChan:
-		if err != nil {
-			w.handleSendError(c, i, messageID)
-		} else {
-			w.handleSendSuccess(i, messageID, subject, envelopeData, ackChan)
+	sendCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	err := w.sendToClient(sendCtx, c, i, envelopeData)
+	sendCtxErr := sendCtx.Err()
+	cancel()
+	if err != nil {
+		if sendCtxErr != nil {
+			w.handleSendTimeout(c, i, messageID)
+			return
 		}
-	case <-sendCtx.Done():
-		w.handleSendTimeout(c, i, messageID)
+		w.handleSendError(c, i, messageID)
+		return
 	}
+	if sendCtxErr != nil {
+		w.handleSendTimeout(c, i, messageID)
+		return
+	}
+	w.handleSendSuccess(ctx, i, messageID, subject, envelopeData, ackChan)
 }
 
 // setupPendingMessage creates pending message tracking for at-least-once delivery
@@ -1459,7 +1664,7 @@ func (w *Output) handleSendError(c *websocket.Conn, i *clientInfo, messageID str
 }
 
 // handleSendSuccess processes successful message sends and waits for acks
-func (w *Output) handleSendSuccess(i *clientInfo, messageID, subject string, envelopeData []byte, ackChan chan bool) {
+func (w *Output) handleSendSuccess(ctx context.Context, i *clientInfo, messageID, subject string, envelopeData []byte, ackChan chan bool) {
 	// Success - update counters atomically
 	w.messagesSent.Add(1)
 	w.bytesSent.Add(int64(len(envelopeData)))
@@ -1471,13 +1676,13 @@ func (w *Output) handleSendSuccess(i *clientInfo, messageID, subject string, env
 
 	// For at-least-once, wait for ack with timeout
 	if w.deliveryMode == DeliveryAtLeastOnce && ackChan != nil {
-		w.waitForAck(i, messageID, ackChan)
+		w.waitForAck(ctx, i, messageID, ackChan)
 	}
 }
 
 // waitForAck waits for acknowledgment from client with timeout
-func (w *Output) waitForAck(i *clientInfo, messageID string, ackChan chan bool) {
-	ackCtx, ackCancel := context.WithTimeout(context.Background(), w.ackTimeout)
+func (w *Output) waitForAck(ctx context.Context, i *clientInfo, messageID string, ackChan chan bool) {
+	ackCtx, ackCancel := context.WithTimeout(ctx, w.ackTimeout)
 	defer ackCancel()
 
 	select {
@@ -1516,14 +1721,18 @@ func (w *Output) handleSendTimeout(c *websocket.Conn, i *clientInfo, messageID s
 }
 
 // sendToClient sends data to a specific WebSocket client with proper locking
-func (w *Output) sendToClient(conn *websocket.Conn, info *clientInfo, data []byte) error {
+func (w *Output) sendToClient(ctx context.Context, conn *websocket.Conn, info *clientInfo, data []byte) error {
 	// Lock to prevent concurrent writes to the same connection
 	// The gorilla/websocket library panics on concurrent writes
 	info.writeMutex.Lock()
 	defer info.writeMutex.Unlock()
 
 	// Set write deadline
-	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	deadline := time.Now().Add(10 * time.Second)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	_ = conn.SetWriteDeadline(deadline)
 
 	// Send as text message
 	return conn.WriteMessage(websocket.TextMessage, data)

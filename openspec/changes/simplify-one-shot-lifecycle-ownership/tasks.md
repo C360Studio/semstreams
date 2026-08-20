@@ -129,6 +129,14 @@
     hashes are recorded in the ledger. No name-routed lifecycle, deletion, or outward change beyond the conditionally
     approved split bridge was introduced. Task 2.3, Gate A/B/C, runtime migration, proof, release, archive, and tag
     readiness remain unchecked and incomplete.
+  - 2026-08-20 H1 implementation checkpoint: independent `semstreams-reviewer` verdict `APPROVE` grants
+    owner-migrated credit only to `gateway/graph-gateway/component.go`, `input/websocket/websocket_input.go`, and
+    `output/websocket/websocket.go`; readiness and test files receive no owner credit. The occupied-bind RED, all five
+    causal review corrections, focused/full/integration race evidence, core E2E, census, and exact source identities
+    are recorded in the ledger. No outward API, configuration, context surface, name-routed lifecycle, or deletion
+    change was introduced. M1, ServiceManager HTTP, and pprof remain excluded; temporary bridges keep the branch under
+    the no-release/no-tag invariant. Task 2.3, Gate A/B/C, runtime migration, proof, release, archive, and tag readiness
+    remain unchecked and incomplete.
   - 2026-08-18 checkpoint: independent `semstreams-reviewer` verdict `CORRECTIONS CONFIRMED` grants owner-migrated
     credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
     worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.

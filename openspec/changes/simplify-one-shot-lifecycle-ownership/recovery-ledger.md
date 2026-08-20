@@ -816,6 +816,105 @@ split bridge. The unrelated Metrics inventory remains byte-identical at SHA-256
 `8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`. Task 2.3, Gate A/B/C, runtime migration,
 proof, release, archive, and tag readiness remain unchecked and incomplete.
 
+### H1 standalone HTTP three-owner implementation checkpoint — 2026-08-20
+
+Independent `semstreams-reviewer` verdict `APPROVE` applies to the H1 dirty worktree based on full commit
+`e7f58aa1807e258793cf0015d5b2433ac619764d`. Owner-migrated credit is granted only to these three frozen production
+owners:
+
+- `gateway/graph-gateway/component.go`;
+- `input/websocket/websocket_input.go`;
+- `output/websocket/websocket.go`.
+
+`gateway/graph-gateway/readiness_surface.go` and all test files are supporting implementation/evidence surfaces and
+receive no owner credit.
+
+The causal RED occupied each configured listen address before Start. The old asynchronous bind path returned success
+before `Serve` reported the collision. The corrected owners bind synchronously, install exact Start-derived
+`http.Server.BaseContext`, publish no readiness before successful setup, and retain the exact listener/server/serveDone
+authority for caller-bounded Shutdown and join.
+
+Independent review required five causal correction stages:
+
+1. **Gateway inference registration and admission fence — HIGH.** Inference was prepared after the standalone handler
+   registered, so the route could be absent, while shared handlers mounted directly and bypassed admission. The
+   correction prepares a private inference submux before Serve and mounts it only through `admittedHTTP`. A causal
+   shared admitted request blocks, Stop waits, a late request receives 503, and release precedes context cancellation.
+2. **Input client-mode proof — MEDIUM.** The initial evidence did not exercise a real steady-state client socket. The
+   corrected local-peer test proves the exact socket closes before callback cancellation and both client loops join.
+3. **Output failed-Start/startDone proof — MEDIUM.** The initial failed-Start test did not overlap Stop. The
+   correction gates the Nth real acquisition, proves incremental exact handles and `startDone`/`cleanupPending`, and
+   proves Stop waits outside lifecycle locks. It exercises real helper retention, later retry, and no Drain replay.
+4. **Gateway late-success resurrection — HIGH.** Start closed `startDone` before publishing `running`, `startTime`,
+   and its success log, allowing Stop to terminalize before late Start success resurrected the owner. Success
+   publication and logging now precede `startDone` close. A pre-close seam proves Stop waits and the final state remains
+   terminal.
+5. **Input reconnect late dial — HIGH.** A non-context Dial could publish a reconnect after Stop snapshotted client
+   authority. The correction fences `clientOpen` before the snapshot, uses `DialContext`, atomically rejects and
+   self-closes a post-dial socket, and suppresses reconnect. A real late-dial test proves no publication, peer close,
+   Stop join, and final authority clear.
+
+Final independent evidence:
+
+| Package | Focused six-test lifecycle race x10 | Full race | Integration race |
+|---|---:|---:|---:|
+| graph gateway | 1.774s | 1.456s | 3.318s |
+| input WebSocket | 1.525s | 1.461s | 5.108s |
+| output WebSocket | 1.334s | 3.372s | 18.690s |
+
+`gofmt`, `go vet`, `git diff --check`, and strict OpenSpec validation passed. Developer `task e2e:core` passed all
+3/3 scenarios. This is H1 wave evidence only; it does not complete a broader proof or gate.
+
+The authoritative tracked-production census moved exactly as reviewed:
+
+| Measurement | HEAD `e7f58aa1` | H1 worktree | Delta |
+|---|---:|---:|---:|
+| Production owner files importing `internal/lifecyclejoin` | 9 | 6 | -3 |
+| `lifecyclejoin.NewGeneration` | 9 | 6 | -3 |
+| `Generation.Stop` | 7 | 7 | 0 |
+| `Generation.StopWithQuiesce` | 3 | 0 | -3 |
+| External `RunPartialStartRollback` calls | 3 | 2 | -1 |
+| Final parent-aware `RollbackFailedStart` production owner calls | 25 | 26 | +1 |
+| External `Generation.Cancel` | 3 | 3 | 0 |
+| `lifecyclejoin.NewOperation` / lifecycle `Operation.Run` | 1 | 1 | 0 |
+
+Stable H1 source identities for this checkpoint are:
+
+- `gateway/graph-gateway/component.go`:
+  `030096155f44e80d95af9317f2c99a618e04f95f58a0989c623b1928d35fa8a4`;
+- `gateway/graph-gateway/component_test.go`:
+  `e6d81e897ce2095372f4b401d2b8d13d56209b9c42c9ef4df5363e6fe70f8c5f`;
+- `gateway/graph-gateway/readiness_surface.go`:
+  `50d6c43cef1a9791eb95a0311a74de1623486469f180a8de1e96a9987acb4627`;
+- `gateway/graph-gateway/lifecycle_owner_test.go`:
+  `4c13bb533ce99c2ef10b359ebb97c1d4ed1263bf994c4eba1e33d6305c9ce765`;
+- removed supporting `gateway/graph-gateway/lifecycle_integration_test.go`, baseline identity:
+  `da8312b658cc45a2438e61fec4db4010649d5d6cd262ab1cb33ed4599945ab93`;
+- `input/websocket/websocket_input.go`:
+  `973d99294ef789e1d0d32b3a7fce4beac29e79d1e2ba57fe4fadb9ca597e0112`;
+- `input/websocket/websocket_input_lifecycle_test.go`:
+  `db88a35c6d5764e31e6a830505050bbc21ea6cf7a5e449e9bfdd844e115f1cb4`;
+- `input/websocket/lifecycle_owner_test.go`:
+  `717179780f05e6947878ef1575f6df7ed277f316219dad386854b362e14bfb41`;
+- `output/websocket/constructor_test.go`:
+  `36561ac7f3a10580c0752aa17c0c9e5f180896ab26008e2710a0e9c8b85910b1`;
+- `output/websocket/lifecycle_authority_test.go`:
+  `2257ec39b30122041beb8f1acc71aec3fe2c474bf74ef7e4769a7be2c0986e00`;
+- `output/websocket/path_integration_test.go`:
+  `cd63949c25f6dfd98fc4ff4d261c257cfb927450622874979284d6718679098e`;
+- `output/websocket/websocket.go`:
+  `87acf98df590a41c02c9ce41d89a3837b1e048ce56f39ddd7cdb8b76de5a0810`;
+- `output/websocket/websocket_test.go`:
+  `7ed43d2ea58e8f6082a0c06093eaff2383a1d853c55b2f68a234fc4b7282ce62`;
+- `output/websocket/lifecycle_owner_test.go`:
+  `29c54503853dc6a948c14a9bb609be80cf3387cf6449f3077be5a90038123e66`.
+
+H1 introduces no outward API, configuration, or context surface change and no name-routed lifecycle or consumer
+deletion. M1, ServiceManager HTTP, and pprof remain excluded. The temporary port bridges keep the branch under the
+no-release/no-tag invariant. The unrelated Metrics inventory remains byte-identical at SHA-256
+`8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`. Task 2.3, Gate A/B/C, runtime migration,
+proof, release, archive, and tag readiness remain unchecked and incomplete.
+
 ### CM1 ComponentManager implementation checkpoint — 2026-08-19
 
 Independent `semstreams-reviewer` verdict `APPROVE` applies to the CM1 dirty worktree based on full commit

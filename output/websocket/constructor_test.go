@@ -2,6 +2,8 @@ package websocket
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
@@ -48,6 +50,10 @@ func TestNewOutputFromConfigRejectsMissingOrFalseDeclarations(t *testing.T) {
 }
 
 func TestNewOutputFromConfigUsesCanonicalNetworkAndStreamFacts(t *testing.T) {
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := probe.Addr().(*net.TCPAddr).Port
+	require.NoError(t, probe.Close())
 	config := DefaultConstructorConfig()
 	config.InputPorts = []component.PortDefinition{{
 		Name: "events",
@@ -56,16 +62,17 @@ func TestNewOutputFromConfigUsesCanonicalNetworkAndStreamFacts(t *testing.T) {
 		},
 	}}
 	config.OutputPorts = []component.PortDefinition{{
-		Name: "socket", Config: component.NetworkPort{Protocol: "http", Host: "127.0.0.1", Port: 9191},
+		Name: "socket", Config: component.NetworkPort{Protocol: "http", Host: "127.0.0.1", Port: port},
 	}}
 	output, err := NewOutputFromConfig(config)
 	require.NoError(t, err)
 	require.Equal(t, "127.0.0.1", output.host)
-	require.Equal(t, 9191, output.port)
+	require.Equal(t, port, output.port)
 	require.Equal(t, []string{"events.>"}, output.subjects)
 	require.NoError(t, output.Initialize())
 	require.NoError(t, output.setupHTTPServer(context.Background()))
-	require.Equal(t, "127.0.0.1:9191", output.server.Addr)
+	t.Cleanup(func() { require.NoError(t, output.listener.Close()) })
+	require.Equal(t, net.JoinHostPort("127.0.0.1", fmt.Sprint(port)), output.server.Addr)
 	facts, err := output.InputPorts()[0].Facts()
 	require.NoError(t, err)
 	require.Equal(t, component.PortKindJetStream, facts.Kind())

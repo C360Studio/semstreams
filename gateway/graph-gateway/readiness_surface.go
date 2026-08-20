@@ -50,7 +50,9 @@ func (c *Component) startReadinessSet(ctx context.Context) error {
 	// which is what the caller's log promises and what the spec's
 	// quiet-feed-vs-not-ready scenario needs. Dropping the Set on error would instead
 	// serve an EMPTY list, defeating the one distinction the surface exists to make.
+	c.mu.Lock()
 	c.readinessSet = set
+	c.mu.Unlock()
 	return set.Start(ctx)
 }
 

@@ -2,12 +2,12 @@ package websocket
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/security"
 	"github.com/stretchr/testify/require"
@@ -33,11 +33,6 @@ func createTestComponent() component.LifecycleComponent {
 	return input
 }
 
-// TestWebSocketInput_ComprehensiveLifecycle runs the complete lifecycle test suite
-func TestWebSocketInput_ComprehensiveLifecycle(t *testing.T) {
-	component.StandardLifecycleTests(t, createTestComponent)
-}
-
 func TestWebSocketInputServerShutdownKeepsHandlerAuthorityLiveUntilHandlerReturns(t *testing.T) {
 	runtimeCtx, cancel := context.WithCancel(t.Context())
 	handlerCtx := make(chan context.Context, 1)
@@ -56,10 +51,14 @@ func TestWebSocketInputServerShutdownKeepsHandlerAuthorityLiveUntilHandlerReturn
 	server.RegisterOnShutdown(func() { close(shutdownStarted) })
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	serveDone := make(chan struct{})
+	serveDone := make(chan error, 1)
 	go func() {
-		defer close(serveDone)
-		_ = server.Serve(listener)
+		err := server.Serve(listener)
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
+		}
+		serveDone <- err
+		close(serveDone)
 	}()
 	requestDone := make(chan error, 1)
 	go func() {
@@ -73,7 +72,9 @@ func TestWebSocketInputServerShutdownKeepsHandlerAuthorityLiveUntilHandlerReturn
 
 	input := createTestComponent().(*Input)
 	input.httpServer = server
-	input.generation = lifecyclejoin.NewGeneration(cancel, func() { <-serveDone })
+	input.serveDone = serveDone
+	input.cancel = cancel
+	input.lifecycleUsed = true
 	input.started.Store(true)
 	stopDone := make(chan error, 1)
 	go func() { stopDone <- input.Stop(t.Context()) }()

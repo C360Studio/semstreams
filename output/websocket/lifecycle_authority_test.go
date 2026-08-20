@@ -6,57 +6,10 @@ import (
 	"net"
 	"net/http"
 	"testing"
-	"time"
 
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
-	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 )
-
-func TestRetainedPartialStartAuthorityRejectsRestartAndReplaysGenuineError(t *testing.T) {
-	runCtx, cancel := context.WithCancel(t.Context())
-	cancelObserved := make(chan struct{})
-	releaseWait := make(chan struct{})
-	generation := lifecyclejoin.NewGeneration(cancel, func() {
-		<-runCtx.Done()
-		close(cancelObserved)
-		<-releaseWait
-	})
-	wantShutdownErr := errors.New("shutdown failed")
-	seedCtx, cancelSeed := context.WithCancel(t.Context())
-	require.ErrorIs(t, generation.StopWithQuiesce(seedCtx, nil, func(ctx context.Context) error {
-		cancelSeed()
-		return errors.Join(wantShutdownErr, ctx.Err())
-	}, nil), wantShutdownErr)
-
-	w := &Output{
-		clients:    make(map[*websocket.Conn]*clientInfo),
-		generation: generation,
-	}
-	firstCtx, cancelFirst := context.WithTimeout(t.Context(), 10*time.Millisecond)
-	defer cancelFirst()
-	firstErr := w.Stop(firstCtx)
-	require.ErrorIs(t, firstErr, context.DeadlineExceeded)
-	require.ErrorIs(t, firstErr, wantShutdownErr)
-	select {
-	case <-cancelObserved:
-	default:
-		t.Fatal("Stop must cancel the generation before waiting for completion")
-	}
-
-	restartErr := w.Start(t.Context())
-	require.Error(t, restartErr)
-	require.ErrorIs(t, restartErr, errs.ErrAlreadyStarted)
-	require.Same(t, generation, w.generation)
-
-	close(releaseWait)
-	rejoinedErr := w.Stop(t.Context())
-	require.ErrorIs(t, rejoinedErr, wantShutdownErr)
-	require.NotErrorIs(t, rejoinedErr, context.DeadlineExceeded)
-	require.Same(t, generation, w.generation, "genuine terminal failure must retain replay authority")
-	require.ErrorIs(t, w.Stop(t.Context()), wantShutdownErr)
-}
 
 func TestWebSocketOutputServerShutdownKeepsHandlerAuthorityLiveUntilHandlerReturns(t *testing.T) {
 	runtimeCtx, cancel := context.WithCancel(t.Context())
@@ -76,10 +29,14 @@ func TestWebSocketOutputServerShutdownKeepsHandlerAuthorityLiveUntilHandlerRetur
 	server.RegisterOnShutdown(func() { close(shutdownStarted) })
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	serveDone := make(chan struct{})
+	serveDone := make(chan error, 1)
 	go func() {
-		defer close(serveDone)
-		_ = server.Serve(listener)
+		err := server.Serve(listener)
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
+		}
+		serveDone <- err
+		close(serveDone)
 	}()
 	requestDone := make(chan error, 1)
 	go func() {
@@ -92,9 +49,11 @@ func TestWebSocketOutputServerShutdownKeepsHandlerAuthorityLiveUntilHandlerRetur
 	requestCtx := <-handlerCtx
 
 	output := &Output{
-		clients:    make(map[*websocket.Conn]*clientInfo),
-		server:     server,
-		generation: lifecyclejoin.NewGeneration(cancel, func() { <-serveDone }),
+		clients:       make(map[*websocket.Conn]*clientInfo),
+		server:        server,
+		serveDone:     serveDone,
+		cancel:        cancel,
+		lifecycleUsed: true,
 	}
 	stopDone := make(chan error, 1)
 	go func() { stopDone <- output.Stop(t.Context()) }()

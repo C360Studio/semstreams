@@ -44,7 +44,6 @@ import (
 	"github.com/c360studio/semstreams/graph/inference"
 	"github.com/c360studio/semstreams/graph/query"
 	"github.com/c360studio/semstreams/graph/readiness"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	semtypes "github.com/c360studio/semstreams/pkg/types"
@@ -279,14 +278,29 @@ type Component struct {
 	// HTTP server for GraphQL endpoint
 	httpServer *http.Server
 	httpMux    *http.ServeMux
+	listener   net.Listener
+	serveDone  chan error
 
 	// Lifecycle state
-	mu          sync.RWMutex
-	running     bool
-	initialized bool
-	startTime   time.Time
-	wg          sync.WaitGroup
-	generation  *lifecyclejoin.Generation
+	mu                   sync.RWMutex
+	lifecycleMu          sync.Mutex
+	running              bool
+	initialized          bool
+	startTime            time.Time
+	lifecycleUsed        bool
+	terminal             bool
+	stopping             bool
+	cleanupPending       bool
+	startDone            chan struct{}
+	cancel               context.CancelFunc
+	requestMu            sync.Mutex
+	requestOpen          bool
+	requestCount         int
+	requestZero          chan struct{}
+	requestHook          func(context.Context)
+	prepareInference     func(context.Context) (*inference.HTTPHandler, error)
+	beforeRuntimeCancel  func()
+	beforeStartDoneClose func()
 
 	// Metrics (atomic)
 	messagesProcessed int64
@@ -657,83 +671,128 @@ func (c *Component) Start(ctx context.Context) error {
 		return errs.WrapInvalid(err, "Component", "Start", "context already cancelled")
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Check initialization
-	if !c.initialized {
+	c.mu.RLock()
+	initialized := c.initialized
+	c.mu.RUnlock()
+	if !initialized {
 		return errs.WrapFatal(fmt.Errorf("component not initialized"), "Component", "Start", "initialization check")
 	}
 
-	// Idempotent - already running
-	if c.running {
-		return nil
+	c.lifecycleMu.Lock()
+	if c.lifecycleUsed {
+		c.lifecycleMu.Unlock()
+		return errs.WrapFatal(errs.ErrAlreadyStarted, "Component", "Start", "cleanup authority already active")
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	startDone := make(chan struct{})
+	c.lifecycleUsed = true
+	c.cleanupPending = true
+	c.cancel = cancel
+	c.startDone = startDone
+	c.lifecycleMu.Unlock()
+
+	var listener net.Listener
+	var server *http.Server
+	var mux *http.ServeMux
+	if c.config.StandaloneServer {
+		mux = http.NewServeMux()
+		server = &http.Server{
+			Addr:         c.config.BindAddress,
+			Handler:      mux,
+			BaseContext:  func(net.Listener) context.Context { return runCtx },
+			ReadTimeout:  30 * time.Second,
+			WriteTimeout: 60 * time.Second,
+			IdleTimeout:  120 * time.Second,
+		}
+		var err error
+		listener, err = net.Listen("tcp", c.config.BindAddress)
+		if err != nil {
+			cancel()
+			c.lifecycleMu.Lock()
+			c.cleanupPending = false
+			c.terminal = true
+			c.cancel = nil
+			close(startDone)
+			c.startDone = nil
+			c.lifecycleMu.Unlock()
+			return errs.WrapFatal(err, "Component", "Start", "bind standalone HTTP listener")
+		}
 	}
 
-	// Create the component lifetime. Runtime resources are resolved below using
-	// this context; no context is retained on the component.
-	ctx, cancel := context.WithCancel(ctx)
+	c.requestMu.Lock()
+	c.requestOpen = true
+	c.requestMu.Unlock()
 
 	// Readiness watchers for the read-only operator surface. A failure here is
 	// NON-FATAL: this gateway's job is serving queries, and losing an observability
 	// surface must not take the query path down with it. The route reports the keys
 	// as unknown, which is the honest reading.
 	if c.natsClient != nil {
-		if err := c.startReadinessSet(ctx); err != nil {
+		if err := c.startReadinessSet(runCtx); err != nil {
 			c.logger.Warn("readiness surface watchers unavailable; "+
 				"the surface will report its keys as unknown", slog.Any("error", err))
 		}
 	}
-	if c.config.EnableInferenceAPI {
-		handler, err := c.prepareInferenceHandler(ctx)
-		if err != nil {
-			c.logger.Warn("inference handlers unavailable", slog.Any("error", err))
-		} else {
-			c.inferenceHandler = handler
-		}
+	c.prepareInferenceAPI(runCtx)
+	if mux != nil {
+		c.RegisterHTTPHandlers("", mux)
 	}
 
-	// Standalone mode: create our own HTTP server for tests/development.
-	// In production (StandaloneServer=false), ServiceManager calls
-	// RegisterHTTPHandlers() on its shared mux — no server needed here.
-	if c.config.StandaloneServer {
-		c.httpMux = http.NewServeMux()
-		c.RegisterHTTPHandlers("", c.httpMux)
-
-		c.httpServer = &http.Server{
-			Addr:         c.config.BindAddress,
-			Handler:      c.httpMux,
-			BaseContext:  func(net.Listener) context.Context { return ctx },
-			ReadTimeout:  30 * time.Second,
-			WriteTimeout: 60 * time.Second,
-			IdleTimeout:  120 * time.Second,
-		}
-
-		c.wg.Add(1)
+	var serveDone chan error
+	if server != nil {
+		serveDone = make(chan error, 1)
 		go func() {
-			defer c.wg.Done()
-			c.logger.Info("starting standalone HTTP server",
-				slog.String("bind_address", c.config.BindAddress))
-
-			if err := c.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				c.logger.Error("HTTP server error",
-					slog.Any("error", err))
+			c.logger.Info("starting standalone HTTP server", slog.String("bind_address", c.config.BindAddress))
+			err := server.Serve(listener)
+			if errors.Is(err, http.ErrServerClosed) {
+				err = nil
 			}
+			serveDone <- err
+			close(serveDone)
 		}()
 	}
-	c.generation = lifecyclejoin.NewGeneration(cancel, c.wg.Wait)
 
-	// Mark as running
+	startTime := time.Now()
+	c.mu.Lock()
+	c.httpMux = mux
+	c.httpServer = server
+	c.listener = listener
+	c.serveDone = serveDone
 	c.running = true
-	c.startTime = time.Now()
+	c.startTime = startTime
+	c.mu.Unlock()
 
 	c.logger.Info("component started",
 		slog.String("component", "graph-gateway"),
 		slog.Bool("standalone_server", c.config.StandaloneServer),
 		slog.String("bind_address", c.config.BindAddress),
-		slog.Time("start_time", c.startTime))
+		slog.Time("start_time", startTime))
+	if c.beforeStartDoneClose != nil {
+		c.beforeStartDoneClose()
+	}
+	c.lifecycleMu.Lock()
+	c.cleanupPending = false
+	close(startDone)
+	c.startDone = nil
+	c.lifecycleMu.Unlock()
 
 	return nil
+}
+
+func (c *Component) prepareInferenceAPI(ctx context.Context) {
+	if !c.config.EnableInferenceAPI {
+		return
+	}
+	prepare := c.prepareInferenceHandler
+	if c.prepareInference != nil {
+		prepare = c.prepareInference
+	}
+	handler, err := prepare(ctx)
+	if err != nil {
+		c.logger.Warn("inference handlers unavailable", slog.Any("error", err))
+		return
+	}
+	c.inferenceHandler = handler
 }
 
 // Stop gracefully shuts down the component
@@ -741,40 +800,133 @@ func (c *Component) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-	c.mu.Lock()
-	generation := c.generation
-	readinessSet := c.readinessSet
-	server := c.httpServer
-	if generation == nil {
-		c.mu.Unlock()
-		return nil
-	}
-	c.mu.Unlock()
-
-	stopErr := generation.StopWithQuiesce(ctx, nil, func(ctx context.Context) error {
-		if server == nil {
+	for {
+		c.lifecycleMu.Lock()
+		if !c.lifecycleUsed {
+			c.lifecycleUsed = true
+			c.terminal = true
+			c.lifecycleMu.Unlock()
 			return nil
 		}
-		c.logger.Info("shutting down HTTP server")
-		err := server.Shutdown(ctx)
-		if err != nil {
-			c.logger.Warn("HTTP server shutdown error", slog.Any("error", err))
+		if c.terminal {
+			c.lifecycleMu.Unlock()
+			return nil
 		}
-		return errs.NewShutdownError("graph-gateway", errs.PhaseShutdownListener, err)
-	}, func(context.Context) error {
+		if c.startDone != nil {
+			done := c.startDone
+			c.lifecycleMu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if c.stopping {
+			c.lifecycleMu.Unlock()
+			return errs.WrapTransient(errors.New("stop already in progress"), "Component", "Stop", "concurrent Stop")
+		}
+		c.stopping = true
+		cancel := c.cancel
+		c.lifecycleMu.Unlock()
+		c.mu.RLock()
+		server := c.httpServer
+		serveDone := c.serveDone
+		readinessSet := c.readinessSet
+		c.mu.RUnlock()
+
+		requestZero := c.fenceRequests()
+		var stopErr error
+		if server != nil {
+			stopErr = errors.Join(stopErr, errs.NewShutdownError("graph-gateway", errs.PhaseShutdownListener, server.Shutdown(ctx)))
+		}
+		if serveDone != nil {
+			select {
+			case err := <-serveDone:
+				stopErr = errors.Join(stopErr, err)
+			case <-ctx.Done():
+				stopErr = errors.Join(stopErr, ctx.Err())
+			}
+		}
+		select {
+		case <-requestZero:
+		case <-ctx.Done():
+			stopErr = errors.Join(stopErr, ctx.Err())
+		}
+		if c.beforeRuntimeCancel != nil {
+			c.beforeRuntimeCancel()
+		}
+		if cancel != nil {
+			cancel()
+		}
 		if readinessSet != nil {
 			readinessSet.Stop()
 		}
+
+		c.lifecycleMu.Lock()
+		c.stopping = false
+		c.terminal = true
+		c.cleanupPending = false
+		c.cancel = nil
+		c.lifecycleMu.Unlock()
 		c.mu.Lock()
-		if c.generation == generation {
-			c.readinessSet = nil
-		}
 		c.running = false
+		c.httpServer = nil
+		c.httpMux = nil
+		c.listener = nil
+		c.serveDone = nil
+		c.readinessSet = nil
 		c.mu.Unlock()
-		c.logger.Info("component stopped gracefully", slog.String("component", "graph-gateway"))
-		return nil
-	})
-	return attributeComponentShutdownError("graph-gateway", errs.PhaseJoinRuntime, stopErr)
+		return attributeComponentShutdownError("graph-gateway", errs.PhaseJoinRuntime, stopErr)
+	}
+}
+
+func (c *Component) admitRequest() bool {
+	c.requestMu.Lock()
+	defer c.requestMu.Unlock()
+	if !c.requestOpen {
+		return false
+	}
+	if c.requestCount == 0 {
+		c.requestZero = make(chan struct{})
+	}
+	c.requestCount++
+	return true
+}
+
+func (c *Component) releaseRequest() {
+	c.requestMu.Lock()
+	defer c.requestMu.Unlock()
+	c.requestCount--
+	if c.requestCount == 0 {
+		close(c.requestZero)
+	}
+}
+
+func (c *Component) fenceRequests() <-chan struct{} {
+	c.requestMu.Lock()
+	defer c.requestMu.Unlock()
+	c.requestOpen = false
+	if c.requestCount == 0 {
+		done := make(chan struct{})
+		close(done)
+		return done
+	}
+	return c.requestZero
+}
+
+func (c *Component) admittedHTTP(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !c.admitRequest() {
+			http.Error(w, "service stopping", http.StatusServiceUnavailable)
+			return
+		}
+		defer c.releaseRequest()
+		if c.requestHook != nil {
+			c.requestHook(r.Context())
+		}
+		next(w, r)
+	}
 }
 
 func attributeComponentShutdownError(owner string, phase errs.ShutdownPhase, err error) error {
@@ -818,7 +970,7 @@ func (c *Component) RegisterHTTPHandlers(prefix string, mux *http.ServeMux) {
 			i--
 		}
 	}
-	mux.HandleFunc(graphqlPath, c.handleGraphQL)
+	mux.HandleFunc(graphqlPath, c.admittedHTTP(c.handleGraphQL))
 
 	// Register MCP handler
 	mcpPath := prefix + c.config.MCPPath
@@ -832,7 +984,7 @@ func (c *Component) RegisterHTTPHandlers(prefix string, mux *http.ServeMux) {
 			i--
 		}
 	}
-	mux.HandleFunc(mcpPath, c.handleMCP)
+	mux.HandleFunc(mcpPath, c.admittedHTTP(c.handleMCP))
 
 	// Read-only readiness surface. Registered only when the operator configured keys:
 	// a route that watches nothing is a phantom, and its absence is a clearer signal
@@ -843,7 +995,7 @@ func (c *Component) RegisterHTTPHandlers(prefix string, mux *http.ServeMux) {
 			readinessPath = defaultReadinessPath
 		}
 		readinessPath = joinGatewayPath(prefix, readinessPath)
-		mux.HandleFunc(readinessPath, c.handleReadiness)
+		mux.HandleFunc(readinessPath, c.admittedHTTP(c.handleReadiness))
 		c.logger.Info("readiness surface registered",
 			slog.String("path", readinessPath),
 			slog.Any("keys", c.config.ReadinessKeys))
@@ -859,7 +1011,7 @@ func (c *Component) RegisterHTTPHandlers(prefix string, mux *http.ServeMux) {
 		if playgroundPath[len(playgroundPath)-1] != '/' {
 			playgroundPath = playgroundPath + "/"
 		}
-		mux.HandleFunc(playgroundPath, c.handlePlayground)
+		mux.HandleFunc(playgroundPath, c.admittedHTTP(c.handlePlayground))
 	}
 
 	// Register inference API handlers if enabled
@@ -905,18 +1057,11 @@ func (c *Component) prepareInferenceHandler(ctx context.Context) (*inference.HTT
 }
 
 func (c *Component) registerInferenceHandlers(prefix string, mux *http.ServeMux) {
-	inferencePath := prefix + "/inference"
-	if inferencePath[0] != '/' {
-		inferencePath = "/" + inferencePath
-	}
-	// Clean double slashes
-	for i := 0; i < len(inferencePath)-1; i++ {
-		if inferencePath[i] == '/' && inferencePath[i+1] == '/' {
-			inferencePath = inferencePath[:i] + inferencePath[i+1:]
-			i--
-		}
-	}
-	c.inferenceHandler.RegisterHTTPHandlers(inferencePath, mux)
+	inferencePath := strings.TrimSuffix(joinGatewayPath(prefix, "/inference"), "/")
+	inferenceMux := http.NewServeMux()
+	c.inferenceHandler.RegisterHTTPHandlers("", inferenceMux)
+	mounted := http.StripPrefix(inferencePath, inferenceMux)
+	mux.Handle(inferencePath+"/", c.admittedHTTP(mounted.ServeHTTP))
 
 	c.logger.Debug("inference API handlers registered",
 		slog.String("inference_path", inferencePath))

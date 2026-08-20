@@ -18,6 +18,8 @@
 > S1's conditional approval permits the split-context bridge when its first real caller arrives. It is born with A1
 > Loop under the same no-release/no-tag invariant. Independent A1 implementation review returned `APPROVE`;
 > owner-migrated credit is limited to the five frozen A1 owner files.
+> Independent H1 implementation review returned `APPROVE`; owner-migrated credit is limited to the graph gateway,
+> input WebSocket, and output WebSocket owner files.
 
 ## Evidence identity
 
@@ -249,6 +251,12 @@ Membership: graph gateway, input websocket, output websocket. Synchronous bind; 
 upgrades/requests; Shutdown while context live; await serveDone/callbacks; then cancel/join. No generic provider.
 Unique readiness/connections/output NATS/root exceptions; pprof out. HTTP/NATS proof. Delta owners/NG -3, SWQ -3;
 old lifecyclejoin rollback -1. H1 depends on S1.
+
+Implementation status on 2026-08-20: independent `semstreams-reviewer` verdict `APPROVE` grants owner-migrated credit
+only to `gateway/graph-gateway/component.go`, `input/websocket/websocket_input.go`, and
+`output/websocket/websocket.go`. Readiness and test files are supporting evidence and receive no owner credit. M1,
+ServiceManager HTTP, and pprof remain excluded. The branch remains ineligible for release or tag while temporary port
+bridges exist. Task 2.3, Gate A/B/C, runtime migration, proof, release, archive, and tag readiness remain incomplete.
 
 ## M1 — Metrics + metric.Server singleton
 
@@ -499,4 +507,6 @@ credit only to its six frozen owner files; natsclient and test support receive n
 gate credit follows. S1's conditional split-bridge approval is exercised by A1 Loop, its first real caller, under the
 same no-release/no-tag invariant. Independent A1 implementation review returned `APPROVE`, granting owner-migrated
 credit only to its five frozen owner files; natsclient, adjacent implementation, and test support receive no owner
+credit, and no broader task or gate credit follows. Independent H1 implementation review returned `APPROVE`, granting
+owner-migrated credit only to its three frozen standalone HTTP owner files; readiness and test support receive no owner
 credit, and no broader task or gate credit follows.
