@@ -17,7 +17,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/llm"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/persona"
@@ -47,12 +47,16 @@ type Component struct {
 	messageTimeout time.Duration
 
 	// Lifecycle state
-	mu          sync.RWMutex
-	lifecycleMu sync.Mutex
-	generation  *lifecyclejoin.Generation
-	starting    bool
-	started     bool
-	startTime   time.Time
+	mu             sync.RWMutex
+	lifecycleMu    sync.Mutex
+	lifecycleUsed  bool
+	terminal       bool
+	stopping       bool
+	cleanupPending bool
+	startDone      chan struct{}
+	cancel         context.CancelFunc
+	started        bool
+	startTime      time.Time
 
 	// KV buckets
 	loopsBucket           jetstream.KeyValue
@@ -67,10 +71,16 @@ type Component struct {
 
 	// Track consumers for cleanup
 	consumerInfos []consumerInfo
+	consumers     []streamConsumerBinding
 
 	// Query subscription for trajectory requests
-	trajectorySub *natsclient.Subscription
-	inflightSub   *natsclient.Subscription
+	trajectorySub            requestSubscription
+	inflightSub              requestSubscription
+	initializeKVBucketsInput func(context.Context) error
+	waitForStreamInput       func(context.Context, string) error
+	consumeStream            func(context.Context, context.Context, natsclient.PortConsumerContext, natsclient.StreamConsumerConfig, func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error)
+	subscribeRequests        func(context.Context, string, func(context.Context, []byte) ([]byte, error)) (requestSubscription, error)
+	waitConsumerClosed       func(context.Context, <-chan struct{}) error
 
 	// Approval-timeout sweeper lifecycle. cancel is called from Stop
 	// to terminate the goroutine; done is closed by the goroutine on
@@ -100,6 +110,12 @@ type Component struct {
 	// nil in production.
 	testLineageWriteHook func(context.Context, string, map[string]any) error
 }
+
+type streamConsumerBinding struct {
+	handle      jetstream.ConsumeContext
+	drainIssued bool
+}
+type requestSubscription interface{ Drain(context.Context) error }
 
 type inputHandler func(context.Context, []byte) error
 
@@ -438,45 +454,48 @@ func (c *Component) Start(ctx context.Context) (startErr error) {
 	}
 
 	c.lifecycleMu.Lock()
-	if c.generation != nil {
+	if c.lifecycleUsed {
 		c.lifecycleMu.Unlock()
 		return errs.ErrAlreadyStarted
 	}
+	parent := ctx
 	runCtx, cancel := context.WithCancel(ctx)
 	startDone := make(chan struct{})
-	generation := lifecyclejoin.NewGeneration(cancel, func() { <-startDone })
-	var finishStart sync.Once
-	finish := func() { finishStart.Do(func() { close(startDone) }) }
-	c.generation = generation
-	c.starting = true
+	c.lifecycleUsed = true
+	c.cleanupPending = true
+	c.cancel = cancel
+	c.startDone = startDone
 	c.lifecycleMu.Unlock()
 	committed := false
 	defer func() {
-		finish()
-		c.lifecycleMu.Lock()
-		c.starting = false
-		c.lifecycleMu.Unlock()
-		if committed {
+		if !committed {
+			rollbackErr := lifecyclecleanup.RollbackFailedStart(parent, c.cleanup)
+			startErr = errors.Join(startErr, rollbackErr)
+			c.lifecycleMu.Lock()
+			if rollbackErr == nil {
+				c.cleanupPending = false
+				c.terminal = true
+				c.clearLifecycleHandles()
+			}
+			close(startDone)
+			c.startDone = nil
+			c.lifecycleMu.Unlock()
 			return
 		}
-		rollbackErr := lifecyclejoin.RunPartialStartRollback(func(ctx context.Context) error {
-			return generation.Stop(ctx, nil, func(ctx context.Context) error {
-				return c.cleanup(ctx, false)
-			})
-		})
-		if rollbackErr == nil {
-			c.lifecycleMu.Lock()
-			if c.generation == generation {
-				c.generation = nil
-			}
-			c.lifecycleMu.Unlock()
-		}
-		startErr = errors.Join(startErr, rollbackErr)
+		c.lifecycleMu.Lock()
+		c.cleanupPending = false
+		close(startDone)
+		c.startDone = nil
+		c.lifecycleMu.Unlock()
 	}()
 
 	// Initialize KV buckets if NATS client available
 	if c.natsClient != nil {
-		if err := c.initializeKVBuckets(runCtx); err != nil {
+		initialize := c.initializeKVBuckets
+		if c.initializeKVBucketsInput != nil {
+			initialize = c.initializeKVBucketsInput
+		}
+		if err := initialize(runCtx); err != nil {
 			return errs.Wrap(err, "agentic-loop", "Start", "initialize KV buckets")
 		}
 
@@ -490,20 +509,30 @@ func (c *Component) Start(ctx context.Context) (startErr error) {
 		if err != nil {
 			return errs.Wrap(err, "agentic-loop", "Start", "resolve trajectory query input")
 		}
-		sub, err := c.natsClient.SubscribeForRequests(runCtx, querySubject, c.handleTrajectoryQuery)
+		subscribe := func(ctx context.Context, subject string, handler func(context.Context, []byte) ([]byte, error)) (requestSubscription, error) {
+			return c.natsClient.SubscribeForRequests(ctx, subject, handler)
+		}
+		if c.subscribeRequests != nil {
+			subscribe = c.subscribeRequests
+		}
+		sub, err := subscribe(runCtx, querySubject, c.handleTrajectoryQuery)
 		if err != nil {
 			return errs.Wrap(err, "agentic-loop", "Start", "subscribe to trajectory query")
 		}
+		c.lifecycleMu.Lock()
 		c.trajectorySub = sub
+		c.lifecycleMu.Unlock()
 
 		// Set up in-flight query handler (gh#733). Same wire as the trajectory
 		// query: the answer is served, never the consumer name it is derived from.
-		inflightSub, err := c.natsClient.SubscribeForRequests(runCtx,
+		inflightSub, err := subscribe(runCtx,
 			InFlightQuerySubjectFor(c.config.ConsumerNameSuffix), c.handleInFlightQuery)
 		if err != nil {
 			return errs.Wrap(err, "agentic-loop", "Start", "subscribe to in-flight query")
 		}
+		c.lifecycleMu.Lock()
 		c.inflightSub = inflightSub
+		c.lifecycleMu.Unlock()
 	}
 
 	c.mu.Lock()
@@ -590,71 +619,132 @@ func (c *Component) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-	c.lifecycleMu.Lock()
-	generation := c.generation
-	c.lifecycleMu.Unlock()
-	if generation == nil {
-		return nil
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	stopErr := generation.Stop(ctx, nil, func(ctx context.Context) error {
-		return c.cleanup(ctx, c.config.DeleteConsumerOnStop)
-	})
-	if stopErr == nil {
+	for {
 		c.lifecycleMu.Lock()
-		if c.generation == generation {
-			c.generation = nil
+		if !c.lifecycleUsed {
+			c.lifecycleUsed, c.terminal = true, true
+			c.lifecycleMu.Unlock()
+			return nil
 		}
+		if c.terminal {
+			c.lifecycleMu.Unlock()
+			return nil
+		}
+		if c.startDone != nil {
+			done := c.startDone
+			c.lifecycleMu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if c.stopping {
+			c.lifecycleMu.Unlock()
+			return errs.WrapTransient(errors.New("stop already in progress"), "agentic-loop", "Stop", "concurrent Stop")
+		}
+		retryable := c.cleanupPending
+		c.stopping = true
 		c.lifecycleMu.Unlock()
+		stopErr := c.cleanup(ctx)
+		c.lifecycleMu.Lock()
+		c.stopping = false
+		if retryable && stopErr != nil {
+			c.lifecycleMu.Unlock()
+			return stopErr
+		}
+		c.cleanupPending, c.terminal = false, true
+		c.clearLifecycleHandles()
+		c.lifecycleMu.Unlock()
+		c.mu.Lock()
+		c.started = false
+		c.mu.Unlock()
+		return stopErr
 	}
-	return stopErr
 }
 
-func (c *Component) cleanup(ctx context.Context, deleteDurable bool) error {
+func (c *Component) cleanup(ctx context.Context) error {
 	c.mu.RLock()
 	cancelSweep := c.sweeperCancel
 	done := c.sweeperDone
+	c.mu.RUnlock()
+	c.lifecycleMu.Lock()
 	trajectorySub := c.trajectorySub
 	inflightSub := c.inflightSub
-	infos := append([]consumerInfo(nil), c.consumerInfos...)
-	c.mu.RUnlock()
+	c.lifecycleMu.Unlock()
+	var cleanupErr error
+	if trajectorySub != nil {
+		if err := trajectorySub.Drain(ctx); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		} else {
+			c.lifecycleMu.Lock()
+			if c.trajectorySub == trajectorySub {
+				c.trajectorySub = nil
+			}
+			c.lifecycleMu.Unlock()
+		}
+	}
+	if inflightSub != nil {
+		if err := inflightSub.Drain(ctx); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		} else {
+			c.lifecycleMu.Lock()
+			if c.inflightSub == inflightSub {
+				c.inflightSub = nil
+			}
+			c.lifecycleMu.Unlock()
+		}
+	}
+	for i := range c.consumers {
+		binding := &c.consumers[i]
+		if !binding.drainIssued {
+			binding.handle.Drain()
+			binding.drainIssued = true
+		}
+		closed := binding.handle.Closed()
+		if c.waitConsumerClosed != nil {
+			cleanupErr = errors.Join(cleanupErr, c.waitConsumerClosed(ctx, closed))
+		} else {
+			select {
+			case <-closed:
+			case <-ctx.Done():
+				cleanupErr = errors.Join(cleanupErr, ctx.Err())
+			}
+		}
+	}
 	if cancelSweep != nil {
 		cancelSweep()
+	}
+	if c.cancel != nil {
+		c.cancel()
 	}
 	if done != nil {
 		select {
 		case <-done:
 		case <-ctx.Done():
-			return fmt.Errorf("wait for approval-timeout sweeper: %w", ctx.Err())
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("wait for approval-timeout sweeper: %w", ctx.Err()))
 		}
-	}
-	var cleanupErr error
-	if trajectorySub != nil {
-		cleanupErr = errors.Join(cleanupErr, trajectorySub.Drain(ctx))
-	}
-	if inflightSub != nil {
-		cleanupErr = errors.Join(cleanupErr, inflightSub.Drain(ctx))
-	}
-	for _, info := range infos {
-		var err error
-		if deleteDurable {
-			err = c.natsClient.StopAndDeleteConsumer(ctx, info.streamName, info.consumerName)
-		} else {
-			err = c.natsClient.StopConsumer(ctx, info.streamName, info.consumerName)
-		}
-		cleanupErr = errors.Join(cleanupErr, err)
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return errors.Join(cleanupErr, ctxErr)
+		cleanupErr = errors.Join(cleanupErr, ctxErr)
 	}
+	return cleanupErr
+}
+
+func (c *Component) clearLifecycleHandles() {
+	c.consumers = nil
+	c.cancel = nil
+	c.trajectorySub = nil
+	c.inflightSub = nil
 	c.mu.Lock()
 	c.sweeperCancel = nil
 	c.sweeperDone = nil
-	c.trajectorySub = nil
-	c.inflightSub = nil
 	c.consumerInfos = nil
-	c.started = false
 	c.mu.Unlock()
-	return cleanupErr
 }
 
 // initializeKVBuckets initializes the KV buckets for loop and trajectory storage
@@ -814,7 +904,11 @@ func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port co
 	streamName := stream.Name()
 
 	// Wait for stream to be available
-	if err := c.waitForStream(setupCtx, streamName); err != nil {
+	waitForStream := c.waitForStream
+	if c.waitForStreamInput != nil {
+		waitForStream = c.waitForStreamInput
+	}
+	if err := waitForStream(setupCtx, streamName); err != nil {
 		return errs.WrapTransient(err, "agentic-loop", "setupConsumer", fmt.Sprintf("wait for stream %s", streamName))
 	}
 
@@ -918,17 +1012,26 @@ func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port co
 		}
 	}
 
-	err = c.natsClient.ConsumeStreamWithConfigContexts(setupCtx, consumerCtx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name, ComponentOwned: true}, cfg, handlerFn)
+	consume := c.natsClient.ConsumeStreamWithConfigContextsHandle
+	if c.consumeStream != nil {
+		consume = c.consumeStream
+	}
+	handle, err := consume(setupCtx, consumerCtx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name, ComponentOwned: true}, cfg, handlerFn)
 	if err != nil {
 		return errs.Wrap(err, "agentic-loop", "setupConsumer", fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
 
 	// Track consumer for cleanup in Stop()
+	c.lifecycleMu.Lock()
+	c.consumers = append(c.consumers, streamConsumerBinding{handle: handle})
+	c.lifecycleMu.Unlock()
+	c.mu.Lock()
 	c.consumerInfos = append(c.consumerInfos, consumerInfo{
 		streamName:   streamName,
 		consumerName: consumerName,
 		subject:      subject,
 	})
+	c.mu.Unlock()
 
 	c.logger.Info("Subscribed (JetStream)",
 		"subject", subject,

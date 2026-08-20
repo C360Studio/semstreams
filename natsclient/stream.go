@@ -432,7 +432,9 @@ func (c *Client) reserveInternalConsumer(
 }
 
 func (c *Client) startPortConsumerHandle(
-	ctx context.Context,
+	setupCtx context.Context,
+	handlerCtx context.Context,
+	operation string,
 	owner PortConsumerContext,
 	cfg StreamConsumerConfig,
 	consumer *guardedConsumer,
@@ -440,8 +442,7 @@ func (c *Client) startPortConsumerHandle(
 	claim *internalConsumerClaim,
 	handler func(context.Context, jetstream.Msg),
 ) (jetstream.ConsumeContext, error) {
-	const operation = "ConsumeStreamWithConfigHandle"
-	policyKey, err := c.observePortConsumerPolicy(ctx, owner, cfg, consumer)
+	policyKey, err := c.observePortConsumerPolicy(setupCtx, owner, cfg, consumer)
 	if err != nil {
 		return nil, err
 	}
@@ -450,10 +451,15 @@ func (c *Client) startPortConsumerHandle(
 			c.jsMetrics.forgetPolicy(policyKey)
 		}
 	}
-	if err := ctx.Err(); err != nil {
+	if err := setupCtx.Err(); err != nil {
 		forgetPolicy()
 		return nil, errs.WrapTransient(err, "Client", operation,
 			"setup context ended before starting consumer")
+	}
+	if err := handlerCtx.Err(); err != nil {
+		forgetPolicy()
+		return nil, errs.WrapInvalid(err, "Client", operation,
+			"handler context ended before starting consumer")
 	}
 
 	messageTimeout := cfg.MessageTimeout
@@ -461,9 +467,9 @@ func (c *Client) startPortConsumerHandle(
 		messageTimeout = 30 * time.Second
 	}
 	consumeCtx, err := consumer.Consume(func(msg jetstream.Msg) {
-		msgCtx := ctx
+		msgCtx := handlerCtx
 		if tc := ExtractTraceFromJetStream(msg.Headers()); tc != nil {
-			msgCtx = ContextWithTrace(ctx, tc)
+			msgCtx = ContextWithTrace(handlerCtx, tc)
 		}
 		msgCtx, cancel := messageHandlerContext(msgCtx, messageTimeout, cfg.DisableMessageTimeout)
 		defer cancel()
@@ -568,12 +574,92 @@ func (c *Client) ConsumeStreamWithConfigHandle(
 		return nil, ClassifyConsumerPolicyError(err, operation)
 	}
 	guarded := &guardedConsumer{Consumer: consumer}
-	consumeCtx, err := c.startPortConsumerHandle(ctx, owner, cfg, guarded, identity, claim, handler)
+	consumeCtx, err := c.startPortConsumerHandle(ctx, ctx, operation, owner, cfg, guarded, identity, claim, handler)
 	if err != nil {
 		return nil, err
 	}
 	committed = true
 	return consumeCtx, nil
+}
+
+// ConsumeStreamWithConfigContextsHandle creates a port-backed JetStream
+// consumer with separate setup and delivered-message authority and returns
+// its exact native lifecycle handle. The caller owns Drain and Closed.
+func (c *Client) ConsumeStreamWithConfigContextsHandle(
+	setupCtx context.Context,
+	handlerCtx context.Context,
+	owner PortConsumerContext,
+	cfg StreamConsumerConfig,
+	handler func(ctx context.Context, msg jetstream.Msg),
+) (jetstream.ConsumeContext, error) {
+	const operation = "ConsumeStreamWithConfigContextsHandle"
+	if setupCtx == nil || handlerCtx == nil {
+		return nil, errs.WrapInvalid(errors.New("nil context"),
+			"Client", operation, "missing operation context")
+	}
+	if err := setupCtx.Err(); err != nil {
+		return nil, errs.WrapInvalid(err, "Client", operation, "setup context already ended")
+	}
+	if err := handlerCtx.Err(); err != nil {
+		return nil, errs.WrapInvalid(err, "Client", operation, "handler context already ended")
+	}
+	owner.Component = strings.TrimSpace(owner.Component)
+	owner.Port = strings.TrimSpace(owner.Port)
+	if err := validatePortConsumerContext(owner, operation); err != nil {
+		return nil, err
+	}
+	if cfg.StreamName == "" {
+		return nil, errs.WrapInvalid(errors.New("stream name is required"),
+			"Client", operation, "missing stream name")
+	}
+	if c.Status() == StatusCircuitOpen {
+		return nil, ErrCircuitOpen
+	}
+	if c.Status() != StatusConnected {
+		return nil, ErrNotConnected
+	}
+
+	js, err := c.JetStream()
+	if err != nil {
+		return nil, err
+	}
+	if cfg.AutoCreate {
+		if err := c.ensureStreamForConsumer(setupCtx, js, cfg); err != nil {
+			return nil, err
+		}
+	}
+	stream, err := js.Stream(setupCtx, cfg.StreamName)
+	if err != nil {
+		c.recordFailure()
+		return nil, errs.WrapTransient(err, "Client", operation,
+			"failed to get stream "+cfg.StreamName)
+	}
+
+	identity := internalConsumerIdentity{stream: cfg.StreamName, durable: cfg.ConsumerName}
+	claim, err := c.reserveInternalConsumer(identity, operation)
+	if err != nil {
+		return nil, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			c.releaseInternalConsumer(identity, claim)
+		}
+	}()
+	consumer, err := stream.CreateOrUpdateConsumer(setupCtx, c.buildConsumerConfig(cfg))
+	if err != nil {
+		c.recordFailure()
+		return nil, ClassifyConsumerPolicyError(err, operation)
+	}
+	handle, err := c.startPortConsumerHandle(
+		setupCtx, handlerCtx, operation, owner, cfg,
+		&guardedConsumer{Consumer: consumer}, identity, claim, handler,
+	)
+	if err != nil {
+		return nil, err
+	}
+	committed = true
+	return handle, nil
 }
 
 func (c *Client) releaseInternalConsumer(identity internalConsumerIdentity, claim *internalConsumerClaim) {

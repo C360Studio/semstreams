@@ -671,6 +671,151 @@ drift. The unrelated Metrics inventory remains byte-identical at SHA-256
 `8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`. Task 2.3, Gate A/B/C, runtime migration,
 proof, release, archive, and tag readiness remain unchecked and incomplete.
 
+### A1 agentic five-owner implementation checkpoint — 2026-08-20
+
+S1's owner-approved conditional split bridge is exercised now by Loop, its first real caller. Temporary
+`ConsumeStreamWithConfigContextsHandle` preserves the exact setup context for fallible setup and the exact handler
+context for delivery, returns the exact native handle, and retains the opaque claim and metrics until exact Closed.
+It remains branch-only under the no-release/no-tag invariant.
+
+Independent `semstreams-reviewer` verdict `APPROVE` applies to the A1 dirty worktree based on full commit
+`34caf623f0074b9aa2b50e5d4d76d0cf6ccca865`. Owner-migrated credit is granted only to these five frozen production
+owners:
+
+- `processor/agentic-dispatch/component.go`;
+- `processor/agentic-governance/component.go`;
+- `processor/agentic-loop/component.go`;
+- `processor/agentic-model/component.go`;
+- `processor/agentic-tools/component.go`.
+
+Supporting natsclient, `http_activity`, `inflight`, and test files receive no owner credit.
+
+The initial implementation review returned HIGH because the submitted tests did not causally drive real Start/Stop
+overlap and production acquisition failures through the five owners. The correction introduced private owner seams,
+blocked real acquisition after an exact first handle, overlapped Stop while proving unlocked `startDone` waiting, and
+exercised real failed-Start rollback and later cleanup. Five owner causal tests also prove Drain, exact Closed, and
+callback-context cancellation order rather than manually seeding terminal state.
+
+A later review returned HIGH on core-NATS rejoin authority. A core Drain can return a caller-context error while its
+native drain remains in progress. The correction retains the exact request subscription in `cleanupPending`; a later
+Stop retries the wrapper wait and clears it only after the same native drain completes. This is retained acquired
+cleanup authority, not running Stop result replay. The corrected core retry/rejoin test passed 10 race repetitions in
+1.304s.
+
+The causal RED sequence included the missing split-context handle API, missing private owner seams, and missing core
+cleanup retry. The split API census failed before the bridge existed; causal owner tests did not compile until their
+private wait/consume seams existed; and the core cleanup case failed until the exact request subscription remained
+reachable for a later bounded cleanup attempt.
+
+Owner-specific corrections preserve these orders and boundaries:
+
+- Dispatch starts its lazy GraphView under the Start-derived control goroutine instead of
+  `context.Background`, and terminal Stop prevents recreation.
+- Loop reads `Consumer.Info` directly for outstanding-work observation rather than using Client lifecycle authority;
+  its core trajectory/inflight subscriptions drain before JetStream Closed, then the sweeper and run context stop.
+- Model drains JetStream and awaits Closed, cancels runtime work, then closes cached clients outside `clientMu`.
+- Tools drains and retains the exact core tool-list subscription as needed, drains JetStream and awaits Closed, then
+  cancels callback contexts.
+
+Final independent focused and full-package race evidence:
+
+| Evidence | Result | Elapsed |
+|---|---|---:|
+| Loop lifecycle matrix, 10 repetitions | PASS | 1.657s |
+| Tools lifecycle matrix, 10 repetitions | PASS | 1.414s |
+| Core-NATS cleanup retry/rejoin, 10 repetitions | PASS | 1.304s |
+| Full dispatch race | PASS | 1.820s |
+| Full governance race | PASS | 1.666s |
+| Full loop race | PASS | 3.338s |
+| Full model race | PASS | 8.444s |
+| Full tools race | PASS | 2.051s |
+
+Developer sequential real-NATS integration evidence:
+
+| Package | Result | Elapsed |
+|---|---|---:|
+| dispatch | PASS | 41.776s |
+| governance | PASS | 2.949s |
+| loop | PASS | 28.523s |
+| model | PASS | 14.896s |
+| tools | PASS | 59.292s |
+
+An earlier combined Loop/Tools command timed out in pre-test reaper cleanup before either package test began; it earns
+no test result claim. The sequential package runs above are the integration evidence. Final `task e2e:agentic` passed
+in 45.155538667s. `task lint`, `git diff --check`, and strict OpenSpec validation passed.
+
+The authoritative tracked-production census moved exactly as reviewed:
+
+| Measurement | HEAD `34caf623` | A1 worktree | Delta |
+|---|---:|---:|---:|
+| Production owner files importing `internal/lifecyclejoin` | 14 | 9 | -5 |
+| `lifecyclejoin.NewGeneration` | 14 | 9 | -5 |
+| `Generation.Stop` | 17 | 7 | -10 |
+| External `RunPartialStartRollback` calls | 8 | 3 | -5 |
+| Final parent-aware `RollbackFailedStart` production owner calls | 20 | 25 | +5 |
+| `Generation.StopWithQuiesce` | 3 | 3 | 0 |
+| External `Generation.Cancel` | 3 | 3 | 0 |
+| `lifecyclejoin.NewOperation` / lifecycle `Operation.Run` | 1 | 1 | 0 |
+
+Stable A1 source identities for this checkpoint are:
+
+- `natsclient/consumer_policy_callsite_test.go`:
+  `bb033d1dda8ab26201ecbd93da4e6ecbaa10ae22ba1970711a9f193e42e197b3`;
+- `natsclient/stream.go`: `2826ecc3d9e8aed5f280204b4fa3c268ccde8d71f3d647d74059ec4a3a7548bf`;
+- `natsclient/stream_handle_test.go`:
+  `1377f013904a859c8faca5d3bc2363ecce28192711a704a1412349b815923d50`;
+- `processor/agentic-dispatch/component.go`:
+  `dbd9764ee9bed8feec46f0162249f9748179e9c77ccbcbc57d288c7b784e3737`;
+- `processor/agentic-dispatch/http_activity.go`:
+  `3da64397a7746feac46eeebc27103b735fe0a73ad53cc31a8bda3a50c68488c0`;
+- `processor/agentic-dispatch/http_activity_test.go`:
+  `85033e03dc5c7e09beb124b53976132231a96a6ef73bfc23987dcf4c7efaa776`;
+- `processor/agentic-dispatch/lifecycle_integration_test.go`:
+  `2c66844c969f4e3920fc2cd5f8f977a4b77cfa0f36be16ce5ba588f50200f46c`;
+- `processor/agentic-dispatch/terminal_settlement_integration_test.go`:
+  `d71e26d32561e8cac7a3d7fc7d38e18534f3cd672d2adb6f8af4839b30cc161e`;
+- `processor/agentic-dispatch/lifecycle_causal_test.go`:
+  `1921e4a709ac8c7267c5b9edc40c669aeed1e9b11c577c6a225d54874f43df81`;
+- `processor/agentic-governance/component.go`:
+  `95a67516381f50e9249289dccd9e14711d709f62a0769b9519fe152939ae070c`;
+- `processor/agentic-governance/lifecycle_integration_test.go`:
+  `ed577c9387e6e6b65c26fc6993aa6c15299456151b77ff1f13b6e63d9204e1fb`;
+- `processor/agentic-governance/lifecycle_causal_test.go`:
+  `c38d123726cb0c1d9f46f2bc9c92dec2f578ef40b0b094f497f45d86b96f638d`;
+- `processor/agentic-loop/component.go`:
+  `1bc9565cd676675a5882e6fae6abb1cd606648a21d3eff2ba27bb7dabe7848e7`;
+- `processor/agentic-loop/inflight.go`:
+  `4158b23af3070474f5ea3752787d69694ffeb55a4e9df10bc5a2ac404a76fe1e`;
+- `processor/agentic-loop/inflight_test.go`:
+  `ec9ee0358faa62b0b62abccc5026ea55ed5bce90fc34353b09d4e7a57af4d4b2`;
+- `processor/agentic-loop/lifecycle_integration_test.go`:
+  `2bd3cbb041548f1c3f5cf5d4f6184efc1c91a5a5360e0f289cf0a53de74b1d5b`;
+- `processor/agentic-loop/spawn_identity_failure_test.go`:
+  `69e337a6e0352ff6626a4741d4a681642406f4ccd37a39360050e72ccbb7fec0`;
+- `processor/agentic-loop/lifecycle_causal_test.go`:
+  `a66ede0027f2c74bae49a5d2046226bbd8a01cfa26bfe26f664febaaa81d377c`;
+- `processor/agentic-model/component.go`:
+  `3c7f605d196602af518f8443312b9a5f1d283b1e1bbfcb1a0e4a352e4de3a485`;
+- `processor/agentic-model/lifecycle_integration_test.go`:
+  `7f307ea84a870109feb474721b0f2d738f505b41b9e1d63b9473cae07658c1b2`;
+- `processor/agentic-model/lifecycle_causal_test.go`:
+  `e70ff139786653af1f4170bd6749923da68c50a401ff6bab5ef6ff38e2ea065f`;
+- `processor/agentic-tools/component.go`:
+  `3f5f68dcd9f232da93e61c680b9fcf14a613cf37b19a6a8ed6b08893184807f6`;
+- `processor/agentic-tools/lifecycle_integration_test.go`:
+  `37051abec8ecd213e950abd435bca3eec4d52a0c98dd75db67f920705bc5fe06`;
+- `processor/agentic-tools/startup_atomic_integration_test.go`:
+  `c06c1bcb1370495a7e16ee2aff26fee03ddec597835c540858ab67a96b630da4`;
+- `processor/agentic-tools/lifecycle_causal_test.go`:
+  `7009296c1baa3ae58e7006e757620a26d4c492bc334ad9e33dae0db722e05b2c`.
+
+A1 removes the Dispatch GraphView invented context root and preserves read-only Loop observation separate from native
+lifecycle authority. It preserves the reviewed Model client and Tools core/JetStream ordering. No name-routed
+lifecycle or consumer deletion was added, and there is no outward change beyond the conditionally approved temporary
+split bridge. The unrelated Metrics inventory remains byte-identical at SHA-256
+`8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`. Task 2.3, Gate A/B/C, runtime migration,
+proof, release, archive, and tag readiness remain unchecked and incomplete.
+
 ### CM1 ComponentManager implementation checkpoint — 2026-08-19
 
 Independent `semstreams-reviewer` verdict `APPROVE` applies to the CM1 dirty worktree based on full commit

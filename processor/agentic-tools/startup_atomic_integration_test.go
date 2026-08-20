@@ -49,15 +49,11 @@ func TestStartDiscoverySubscriptionFailureIsTransientAndRestartable(t *testing.T
 	assertAtomicStartResourcesCleared(t, comp)
 
 	testClient.Client.SetConnection(nativeConnection)
-	if err := comp.Start(t.Context()); err != nil {
-		t.Fatalf("Start() after restoring the connection: %v", err)
-	}
-	if !comp.running || comp.toolListSub == nil || len(comp.consumerInfos) != 1 {
-		t.Fatalf("successful restart resources: running=%t toolListSub=%v consumers=%v",
-			comp.running, comp.toolListSub != nil, comp.consumerInfos)
+	if err := comp.Start(t.Context()); !errors.Is(err, errs.ErrAlreadyStarted) {
+		t.Fatalf("Start() after failed one-shot start = %v, want ErrAlreadyStarted", err)
 	}
 	if err := comp.Stop(context.Background()); err != nil {
-		t.Fatalf("Stop() after successful restart: %v", err)
+		t.Fatalf("Stop() after completed rollback: %v", err)
 	}
 }
 
@@ -107,15 +103,11 @@ func TestStartLaterConsumerFailureRollsBackLocallyPreservesDurableAndRestarts(t 
 	if _, err := testClient.CreateStream(t.Context(), "LATE_AGENT", []string{"late.tool.execute.>"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := comp.Start(t.Context()); err != nil {
-		t.Fatalf("Start() after provisioning the later stream: %v", err)
-	}
-	if !comp.running || comp.toolListSub == nil || len(comp.consumerInfos) != 2 {
-		t.Fatalf("successful restart resources: running=%t toolListSub=%v consumers=%v",
-			comp.running, comp.toolListSub != nil, comp.consumerInfos)
+	if err := comp.Start(t.Context()); !errors.Is(err, errs.ErrAlreadyStarted) {
+		t.Fatalf("Start() after failed one-shot start = %v, want ErrAlreadyStarted", err)
 	}
 	if err := comp.Stop(context.Background()); err != nil {
-		t.Fatalf("Stop() after successful restart: %v", err)
+		t.Fatalf("Stop() after completed rollback: %v", err)
 	}
 }
 
@@ -141,9 +133,9 @@ func newAtomicStartTestComponent(t *testing.T, client *natsclient.Client, suffix
 
 func assertAtomicStartResourcesCleared(t *testing.T, comp *Component) {
 	t.Helper()
-	if comp.running || comp.toolListSub != nil || len(comp.consumerInfos) != 0 {
+	if comp.running || comp.toolListSub != nil || len(comp.consumers) != 0 {
 		t.Fatalf("failed Start() leaked resources: running=%t toolListSub=%v consumers=%v",
-			comp.running, comp.toolListSub != nil, comp.consumerInfos)
+			comp.running, comp.toolListSub != nil, comp.consumers)
 	}
 	if comp.Health().Healthy {
 		t.Error("failed Start() reported healthy")

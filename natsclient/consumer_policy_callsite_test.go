@@ -23,6 +23,7 @@ func TestConsumerPolicyProductionCallsiteCensus(t *testing.T) {
 	files := parseProductionGoFiles(t, filepath.Clean(".."))
 	internalCallers := map[string]int{}
 	handleCallers := map[string]int{}
+	contextsHandleCallers := map[string]int{}
 	portConfigCallers := map[string]struct{}{}
 	portBackedInternalCallers := map[string]struct{}{}
 	for _, parsed := range files {
@@ -45,6 +46,8 @@ func TestConsumerPolicyProductionCallsiteCensus(t *testing.T) {
 				internalCallers[parsed.rel]++
 			case "ConsumeStreamWithConfigHandle":
 				handleCallers[parsed.rel]++
+			case "ConsumeStreamWithConfigContextsHandle":
+				contextsHandleCallers[parsed.rel]++
 			}
 			return true
 		})
@@ -64,14 +67,17 @@ func TestConsumerPolicyProductionCallsiteCensus(t *testing.T) {
 		t.Fatalf("internal consumer census = %#v, want %#v", internalCallers, wantInternal)
 	}
 	wantHandle := map[string]int{
-		"examples/processors/document/component.go":   1,
-		"examples/processors/iot_sensor/component.go": 1,
-		"processor/json_filter/json_filter.go":        1,
-		"processor/json_generic/json_generic.go":      1,
-		"processor/json_map/json_map.go":              1,
+		"processor/agentic-dispatch/component.go":   5,
+		"processor/agentic-governance/component.go": 1,
+		"processor/agentic-model/component.go":      1,
+		"processor/agentic-tools/component.go":      1,
 	}
 	if !reflect.DeepEqual(handleCallers, wantHandle) {
 		t.Fatalf("native port consumer handle census = %#v, want %#v", handleCallers, wantHandle)
+	}
+	wantContextsHandle := map[string]int{"processor/agentic-loop/component.go": 1}
+	if !reflect.DeepEqual(contextsHandleCallers, wantContextsHandle) {
+		t.Fatalf("split-context native handle census = %#v, want %#v", contextsHandleCallers, wantContextsHandle)
 	}
 	if len(portConfigCallers) != 17 {
 		t.Fatalf("GetConsumerConfig production files = %d, want 17: %#v", len(portConfigCallers), portConfigCallers)
@@ -98,12 +104,13 @@ func TestConsumerPolicyExportedClientAPICensus(t *testing.T) {
 	}
 
 	want := map[string]string{
-		"ConsumeDurable":                  "func(ctx context.Context, owner PortConsumerContext, cfg StreamConsumerConfig, heartbeat time.Duration, handler func(context.Context, []byte) error) error",
-		"ConsumeInternalStreamWithConfig": "func(ctx context.Context, cfg StreamConsumerConfig, handler func(ctx context.Context, msg jetstream.Msg)) (jetstream.ConsumeContext, error)",
-		"ConsumeStreamWithConfig":         "func(ctx context.Context, owner PortConsumerContext, cfg StreamConsumerConfig, handler func(ctx context.Context, msg jetstream.Msg)) error",
-		"ConsumeStreamWithConfigHandle":   "func(ctx context.Context, owner PortConsumerContext, cfg StreamConsumerConfig, handler func(ctx context.Context, msg jetstream.Msg)) (jetstream.ConsumeContext, error)",
-		"ConsumeStreamWithConfigContexts": "func(setupCtx context.Context, handlerCtx context.Context, owner PortConsumerContext, cfg StreamConsumerConfig, handler func(ctx context.Context, msg jetstream.Msg)) error",
-		"ObserveDirectPortConsumerPolicy": "func(ctx context.Context, owner PortConsumerContext, finalConfig jetstream.ConsumerConfig, consumer jetstream.Consumer) (func(), error)",
+		"ConsumeDurable":                        "func(ctx context.Context, owner PortConsumerContext, cfg StreamConsumerConfig, heartbeat time.Duration, handler func(context.Context, []byte) error) error",
+		"ConsumeInternalStreamWithConfig":       "func(ctx context.Context, cfg StreamConsumerConfig, handler func(ctx context.Context, msg jetstream.Msg)) (jetstream.ConsumeContext, error)",
+		"ConsumeStreamWithConfig":               "func(ctx context.Context, owner PortConsumerContext, cfg StreamConsumerConfig, handler func(ctx context.Context, msg jetstream.Msg)) error",
+		"ConsumeStreamWithConfigHandle":         "func(ctx context.Context, owner PortConsumerContext, cfg StreamConsumerConfig, handler func(ctx context.Context, msg jetstream.Msg)) (jetstream.ConsumeContext, error)",
+		"ConsumeStreamWithConfigContextsHandle": "func(setupCtx context.Context, handlerCtx context.Context, owner PortConsumerContext, cfg StreamConsumerConfig, handler func(ctx context.Context, msg jetstream.Msg)) (jetstream.ConsumeContext, error)",
+		"ConsumeStreamWithConfigContexts":       "func(setupCtx context.Context, handlerCtx context.Context, owner PortConsumerContext, cfg StreamConsumerConfig, handler func(ctx context.Context, msg jetstream.Msg)) error",
+		"ObserveDirectPortConsumerPolicy":       "func(ctx context.Context, owner PortConsumerContext, finalConfig jetstream.ConsumerConfig, consumer jetstream.Consumer) (func(), error)",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("exported Client consumer API census = %#v, want %#v", got, want)
@@ -133,7 +140,7 @@ func TestConsumerPolicyDirectCreationCallCensus(t *testing.T) {
 	}
 
 	want := map[string]int{
-		"natsclient/stream.go:CreateOrUpdateConsumer/args=2":                       3,
+		"natsclient/stream.go:CreateOrUpdateConsumer/args=2":                       4,
 		"output/otel/component.go:CreateOrUpdateConsumer/args=3":                   1,
 		"test/e2e/scenarios/core_objectstore_raw.go:CreateOrUpdateConsumer/args=2": 1,
 	}

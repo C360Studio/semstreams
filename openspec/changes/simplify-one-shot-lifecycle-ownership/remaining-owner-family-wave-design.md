@@ -15,6 +15,9 @@
 > `output/otel/component.go`.
 > The owner explicitly approved the temporary no-release/no-tag S1 standard port-handle bridge. Independent S1
 > implementation review returned `APPROVE`; owner-migrated credit is limited to the six frozen S1 owner files.
+> S1's conditional approval permits the split-context bridge when its first real caller arrives. It is born with A1
+> Loop under the same no-release/no-tag invariant. Independent A1 implementation review returned `APPROVE`;
+> owner-migrated credit is limited to the five frozen A1 owner files.
 
 ## Evidence identity
 
@@ -220,10 +223,19 @@ Task 2.3, Gate A/B/C, runtime migration, proof, release, archive, and tag readin
 
 ## A1 — agentic M+Q/F family
 
-Membership (5): dispatch, governance, loop, model, tools plus adjacent dispatch/loop files. Existing startDone, exact
-bridge handles, no name lifecycle; unique GraphView/observation/sweeper/client/tool-list exceptions. Common M proof +
-exceptions + integration/e2e. Delta owners -5, NG -5, Stop -10; old lifecyclejoin rollback -5. A1 depends on S1;
-loop closes observation separation.
+Membership (5): dispatch, governance, loop, model, tools owner `component.go` files. Supporting adjacent files and
+tests receive no owner credit. Existing startDone; exact standard handles; Loop is the first real caller of temporary
+`ConsumeStreamWithConfigContextsHandle`, which preserves exact setup and handler contexts and retains claim/metrics
+until exact Closed. No name-routed lifecycle or deletion. Dispatch moves its GraphView from an invented root onto the
+Start-derived controller lifetime. Loop separates read-only consumer observation from lifecycle authority. Owner
+exceptions preserve sweeper, Model-client, and Tools tool-list shutdown ordering. Common M proof plus exceptions,
+integration, and agentic E2E. Delta owners -5, NG -5, Stop -10; old lifecyclejoin rollback -5. A1 depends on S1.
+
+Implementation status on 2026-08-20: independent `semstreams-reviewer` verdict `APPROVE` grants owner-migrated credit
+only to the five frozen dispatch, governance, loop, model, and tools owner `component.go` files. Supporting natsclient,
+`http_activity`, `inflight`, and test files receive no owner credit. The split bridge remains temporary and branch-only;
+no release or tag may expose it as a supported contract. Task 2.3, Gate A/B/C, runtime migration, proof, release,
+archive, and tag readiness remain incomplete.
 
 ## O1 — static output sinks
 
@@ -484,4 +496,7 @@ owner-migrated credit only to `output/otel/component.go`; supporting tests recei
 or gate credit follows. The owner explicitly approved only the temporary standard S1 port-handle bridge under the
 branch no-release/no-tag invariant. Independent S1 implementation review returned `APPROVE`, granting owner-migrated
 credit only to its six frozen owner files; natsclient and test support receive no owner credit, and no broader task or
-gate credit follows.
+gate credit follows. S1's conditional split-bridge approval is exercised by A1 Loop, its first real caller, under the
+same no-release/no-tag invariant. Independent A1 implementation review returned `APPROVE`, granting owner-migrated
+credit only to its five frozen owner files; natsclient, adjacent implementation, and test support receive no owner
+credit, and no broader task or gate credit follows.

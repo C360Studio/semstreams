@@ -4,12 +4,14 @@ package agenticgovernance
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 )
 
 var sharedLifecycleNATSClient *natsclient.TestClient
@@ -70,5 +72,17 @@ func createTestComponentForLifecycle() component.LifecycleComponent {
 
 // TestAgenticGovernance_ComprehensiveLifecycle runs the complete lifecycle test suite
 func TestAgenticGovernance_ComprehensiveLifecycle(t *testing.T) {
-	component.StandardLifecycleTests(t, createTestComponentForLifecycle)
+	owner := createTestComponentForLifecycle()
+	if err := owner.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := owner.Stop(t.Context()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := owner.Start(t.Context()); !errors.Is(err, errs.ErrAlreadyStarted) {
+		t.Fatalf("restart error = %v", err)
+	}
+	if err := owner.Stop(t.Context()); err != nil {
+		t.Fatalf("repeat Stop: %v", err)
+	}
 }

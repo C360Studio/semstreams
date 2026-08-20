@@ -145,8 +145,8 @@ func (c *Component) consumerForSubject(subject string) (streamName, consumerName
 
 // outstandingForSubject answers the in-flight question for one subject.
 //
-// Sourced from natsclient.OutstandingWork (NumPending + NumAckPending) and NEVER
-// from AckFloor. AckFloor was measured against both deployed NATS versions and
+// Sourced from the server consumer identified by the owner's read-only binding
+// (NumPending + NumAckPending) and NEVER from AckFloor. AckFloor was measured against both deployed NATS versions and
 // misreports in both directions — it stalls behind a MaxDeliver-exhausted message
 // while idle, then leaps past that never-applied message on the next unrelated ack,
 // so it never means "everything at or below this is durably handled" (ADR-088).
@@ -161,10 +161,29 @@ func (c *Component) outstandingForSubject(ctx context.Context, subject string) (
 			fmt.Sprintf("subject %q (this deployment binds no agentic-loop consumer for it)", subject), nil)
 	}
 
-	outstanding, err := c.natsClient.OutstandingWork(ctx, streamName, consumerName)
+	js, err := c.natsClient.JetStream()
 	if err != nil {
 		return 0, errUnknownInFlight(InFlightUnknownUnreadable,
 			fmt.Sprintf("subject %q", subject), err)
+	}
+	stream, err := js.Stream(ctx, streamName)
+	if err != nil {
+		return 0, errUnknownInFlight(InFlightUnknownUnreadable,
+			fmt.Sprintf("subject %q", subject), err)
+	}
+	consumer, err := stream.Consumer(ctx, consumerName)
+	if err != nil {
+		return 0, errUnknownInFlight(InFlightUnknownUnreadable,
+			fmt.Sprintf("subject %q", subject), err)
+	}
+	info, err := consumer.Info(ctx)
+	if err != nil {
+		return 0, errUnknownInFlight(InFlightUnknownUnreadable,
+			fmt.Sprintf("subject %q", subject), err)
+	}
+	outstanding := info.NumPending
+	if info.NumAckPending > 0 {
+		outstanding += uint64(info.NumAckPending)
 	}
 	return outstanding, nil
 }

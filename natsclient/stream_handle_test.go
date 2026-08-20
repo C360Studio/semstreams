@@ -75,7 +75,8 @@ func TestPortConsumerHandleCommitIgnoresCancellationAfterNativeConsumeBegins(t *
 	resultCh := make(chan result, 1)
 	go func() {
 		returned, startErr := client.startPortConsumerHandle(
-			ctx, owner, cfg, guarded, identity, claim, func(context.Context, jetstream.Msg) {},
+			ctx, ctx, "ConsumeStreamWithConfigHandle", owner, cfg, guarded, identity, claim,
+			func(context.Context, jetstream.Msg) {},
 		)
 		resultCh <- result{handle: returned, err: startErr}
 	}()
@@ -120,4 +121,19 @@ func TestPortConsumerHandleCommitIgnoresCancellationAfterNativeConsumeBegins(t *
 		}
 	}()
 	<-released
+}
+
+func TestConsumeStreamWithConfigContextsHandleRejectsInvalidContextsBeforeSetup(t *testing.T) {
+	client := &Client{}
+	cfg := StreamConsumerConfig{StreamName: "A1", ConsumerName: "a1"}
+	owner := PortConsumerContext{Component: "agentic-loop", Port: "agent.task"}
+	handler := func(context.Context, jetstream.Msg) {}
+	if handle, err := client.ConsumeStreamWithConfigContextsHandle(nil, t.Context(), owner, cfg, handler); err == nil || handle != nil {
+		t.Fatalf("nil setup context = (%v, %v), want nil handle/error", handle, err)
+	}
+	ended, cancel := context.WithCancel(t.Context())
+	cancel()
+	if handle, err := client.ConsumeStreamWithConfigContextsHandle(t.Context(), ended, owner, cfg, handler); err == nil || handle != nil {
+		t.Fatalf("ended handler context = (%v, %v), want nil handle/error", handle, err)
+	}
 }

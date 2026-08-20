@@ -371,6 +371,11 @@ func newActivityTestComponent(t *testing.T, src graphview.WatcherSource, extra g
 	comp.activityViewSource = src
 	comp.activityViewOpts = []graphview.Option{graphview.WithTickInterval(2 * time.Millisecond)}
 	comp.activityTestHooks = extra
+	activityCtx, cancel := context.WithCancel(t.Context())
+	comp.activityCommands = make(chan activityViewCommand)
+	comp.activityDone = make(chan struct{})
+	comp.activityCancel = cancel
+	go comp.runActivityViewControl(activityCtx, comp.activityCommands, comp.activityDone)
 	t.Cleanup(comp.stopActivityView)
 	return comp
 }
@@ -865,13 +870,11 @@ func TestComponentStopStopsActivityView(t *testing.T) {
 	cl.rec.waitFor(t, "Watcher closed unexpectedly")
 	cl.waitDone(t)
 
-	// A fresh attach after stop lazily rebuilds the view.
+	// The one-shot owner never rebuilds the view after terminal stop.
 	c2 := startActivityClient(t, comp)
-	w2 := src.waitWatcher(t, 2)
-	w2.updates <- nil
-	hooks.waitCaughtUp(t)
-	c2.rec.waitFor(t, "sync_complete")
-	require.Equal(t, 2, src.calls())
+	c2.rec.waitFor(t, "Failed to access AGENT_LOOPS bucket")
+	c2.waitDone(t)
+	require.Equal(t, 1, src.calls())
 }
 
 // TestActivityStreamCoalescesToViewRate: multiple revisions of one key
@@ -887,6 +890,11 @@ func TestActivityStreamCoalescesToViewRate(t *testing.T) {
 	// A long tick guarantees every write lands in ONE window.
 	comp.activityViewOpts = []graphview.Option{graphview.WithTickInterval(200 * time.Millisecond)}
 	comp.activityTestHooks = hooks.hooks()
+	activityCtx, cancel := context.WithCancel(t.Context())
+	comp.activityCommands = make(chan activityViewCommand)
+	comp.activityDone = make(chan struct{})
+	comp.activityCancel = cancel
+	go comp.runActivityViewControl(activityCtx, comp.activityCommands, comp.activityDone)
 	t.Cleanup(comp.stopActivityView)
 
 	cl := startActivityClient(t, comp)

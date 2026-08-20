@@ -39,6 +39,62 @@ type activityRecord struct {
 	createdAt time.Time
 }
 
+type activityViewCommand struct {
+	source graphview.WatcherSource
+	stop   bool
+	result chan activityViewResult
+}
+
+type activityViewResult struct {
+	view *graphview.View[activityRecord]
+	err  error
+}
+
+func (c *Component) runActivityViewControl(
+	runCtx context.Context,
+	commands <-chan activityViewCommand,
+	done chan<- struct{},
+) {
+	defer close(done)
+	var view *graphview.View[activityRecord]
+	defer func() {
+		if view != nil {
+			view.Stop()
+		}
+	}()
+	for {
+		select {
+		case <-runCtx.Done():
+			return
+		case command := <-commands:
+			if command.stop {
+				if view != nil {
+					view.Stop()
+					view = nil
+				}
+				command.result <- activityViewResult{}
+				return
+			}
+			if view == nil {
+				opts := append([]graphview.Option{graphview.WithHooks(c.activityViewHooks())}, c.activityViewOpts...)
+				created, err := graphview.New[activityRecord](command.source, c.decodeActivityRecord, opts...)
+				if err == nil {
+					err = created.Start(runCtx)
+				}
+				if err != nil {
+					if created != nil {
+						created.Stop()
+					}
+					command.result <- activityViewResult{err: fmt.Errorf("%w: %w", errActivityViewStart, err)}
+					continue
+				}
+				view = created
+			}
+			command.result <- activityViewResult{view: view}
+		}
+	}
+}
+
 // decodeActivityRecord is the shared view's validating DecodeFunc (G6).
 // COMPLETE_<id> keys decode terminal completion payloads (loopFromCompletion);
 // every other key decodes live agentic.LoopEntity state (loopFromEntity) —
@@ -123,18 +179,16 @@ func (c *Component) activityViewHooks() graphview.Hooks {
 // pre-view contract: bucket absence degrades the /activity endpoint per
 // request instead of failing component boot (the unconditional-resource-
 // wiring footgun) — the old handler resolved the bucket per request too.
-// Lifecycle contract: this is a lazy singleton for a RESTARTABLE component —
-// a request arriving after Stop intentionally rebuilds the view (Stop nils
-// it; the next attach re-creates). Terminal-stop-while-still-routed (HTTP
-// traffic after a final Stop with handlers still registered) is out of
-// contract; production teardown unregisters routing before or with Stop.
+// Lifecycle contract: this is a lazy singleton owned by the component's
+// one-shot control goroutine. A request after terminal Stop receives the
+// existing per-request error path and cannot rebuild lifecycle authority.
 func (c *Component) ensureActivityView(ctx context.Context) (*graphview.View[activityRecord], error) {
-	c.activityViewMu.Lock()
-	view := c.activityView
+	c.lifecycleMu.Lock()
+	commands := c.activityCommands
 	source := c.activityViewSource
-	c.activityViewMu.Unlock()
-	if view != nil {
-		return view, nil
+	c.lifecycleMu.Unlock()
+	if commands == nil {
+		return nil, errors.New("activity view lifecycle is not running")
 	}
 	// Resolve the bucket handle OUTSIDE the mutex (double-checked init): a
 	// hung NATS API call must not serialize first-attaches behind one caller
@@ -150,25 +204,18 @@ func (c *Component) ensureActivityView(ctx context.Context) (*graphview.View[act
 		source = kv
 	}
 
-	c.activityViewMu.Lock()
-	defer c.activityViewMu.Unlock()
-	if c.activityView != nil {
-		// Another attach won the construction race; its view serves us too.
-		return c.activityView, nil
+	result := make(chan activityViewResult, 1)
+	select {
+	case commands <- activityViewCommand{source: source, result: result}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
-	opts := append([]graphview.Option{graphview.WithHooks(c.activityViewHooks())}, c.activityViewOpts...)
-	view, err := graphview.New[activityRecord](source, c.decodeActivityRecord, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", errActivityViewStart, err)
+	select {
+	case got := <-result:
+		return got.view, got.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
-	// The view outlives requests: it is component-owned (stopActivityView),
-	// so its watcher binds to a background context, never the request's.
-	if err := view.Start(context.Background()); err != nil {
-		view.Stop()
-		return nil, fmt.Errorf("%w: %w", errActivityViewStart, err)
-	}
-	c.activityView = view
-	return view, nil
 }
 
 // stopActivityView stops the shared view if the lazy first /activity request
@@ -176,18 +223,33 @@ func (c *Component) ensureActivityView(ctx context.Context) (*graphview.View[act
 // close and the single bucket watcher shuts down. Idempotent; called from
 // Component.Stop.
 //
-// Restartable-component assumption: stopping nils the singleton, so a
-// request arriving AFTER Stop lazily rebuilds the view — intended for
-// components that Stop/Start in place. Terminal stop while HTTP routing
-// still delivers requests to this component is out of contract.
+// Terminal stop while HTTP routing still delivers requests cannot recreate
+// the view; the endpoint degrades through its existing SSE error response.
 func (c *Component) stopActivityView() {
-	c.activityViewMu.Lock()
-	view := c.activityView
-	c.activityView = nil
-	c.activityViewMu.Unlock()
-	if view != nil {
-		view.Stop()
+	c.lifecycleMu.Lock()
+	cancel := c.activityCancel
+	done := c.activityDone
+	commands := c.activityCommands
+	c.lifecycleMu.Unlock()
+	if cancel != nil {
+		result := make(chan activityViewResult, 1)
+		select {
+		case commands <- activityViewCommand{stop: true, result: result}:
+			<-result
+		case <-done:
+		}
+		cancel()
 	}
+	if done != nil {
+		<-done
+	}
+	c.lifecycleMu.Lock()
+	if c.activityDone == done {
+		c.activityCommands = nil
+		c.activityDone = nil
+		c.activityCancel = nil
+	}
+	c.lifecycleMu.Unlock()
 }
 
 // attachActivityView gates the SSE attach on view readiness (G5) bounded by

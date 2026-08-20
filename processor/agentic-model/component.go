@@ -15,7 +15,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
@@ -51,15 +51,21 @@ type Component struct {
 	messageTimeout time.Duration
 
 	// Lifecycle management
-	running     bool
-	startTime   time.Time
-	mu          sync.RWMutex
-	lifecycleMu sync.Mutex
-	generation  *lifecyclejoin.Generation
-	starting    bool
-
-	// Track consumers for cleanup
-	consumerInfos []consumerInfo
+	running            bool
+	startTime          time.Time
+	mu                 sync.RWMutex
+	lifecycleMu        sync.Mutex
+	lifecycleUsed      bool
+	terminal           bool
+	stopping           bool
+	cleanupPending     bool
+	startDone          chan struct{}
+	cancel             context.CancelFunc
+	consumers          []streamConsumerBinding
+	waitForStreamInput func(context.Context, string) error
+	consumeStream      func(context.Context, natsclient.PortConsumerContext, natsclient.StreamConsumerConfig, func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error)
+	waitConsumerClosed func(context.Context, <-chan struct{}) error
+	closeModelClient   func(*Client) error
 
 	// Metrics
 	requestsProcessed int64
@@ -92,9 +98,9 @@ func WithHealthPolicy(p model.HealthPolicy) Option {
 func (c *Component) HealthPolicy() model.HealthPolicy { return c.healthPolicy }
 
 // consumerInfo tracks JetStream consumer details for cleanup
-type consumerInfo struct {
-	streamName   string
-	consumerName string
+type streamConsumerBinding struct {
+	handle      jetstream.ConsumeContext
+	drainIssued bool
 }
 
 // NewComponent creates a new agentic-model processor component
@@ -258,7 +264,7 @@ func (c *Component) Start(ctx context.Context) (startErr error) {
 	}
 
 	c.lifecycleMu.Lock()
-	if c.generation != nil {
+	if c.lifecycleUsed {
 		c.lifecycleMu.Unlock()
 		return errs.ErrAlreadyStarted
 	}
@@ -267,36 +273,35 @@ func (c *Component) Start(ctx context.Context) (startErr error) {
 		c.lifecycleMu.Unlock()
 		return errs.WrapFatal(errs.ErrNoConnection, "Component", "Start", "check NATS client")
 	}
+	parent := ctx
 	runCtx, cancel := context.WithCancel(ctx)
 	startDone := make(chan struct{})
-	generation := lifecyclejoin.NewGeneration(cancel, func() { <-startDone })
-	var finishStart sync.Once
-	finish := func() { finishStart.Do(func() { close(startDone) }) }
-	c.generation = generation
-	c.starting = true
+	c.lifecycleUsed = true
+	c.cleanupPending = true
+	c.cancel = cancel
+	c.startDone = startDone
 	c.lifecycleMu.Unlock()
 	committed := false
 	defer func() {
-		finish()
-		c.lifecycleMu.Lock()
-		c.starting = false
-		c.lifecycleMu.Unlock()
-		if committed {
+		if !committed {
+			rollbackErr := lifecyclecleanup.RollbackFailedStart(parent, c.cleanup)
+			startErr = errors.Join(startErr, rollbackErr)
+			c.lifecycleMu.Lock()
+			if rollbackErr == nil {
+				c.cleanupPending = false
+				c.terminal = true
+				c.clearLifecycleHandles()
+			}
+			close(startDone)
+			c.startDone = nil
+			c.lifecycleMu.Unlock()
 			return
 		}
-		rollbackErr := lifecyclejoin.RunPartialStartRollback(func(ctx context.Context) error {
-			return generation.Stop(ctx, nil, func(ctx context.Context) error {
-				return c.cleanup(ctx, false)
-			})
-		})
-		if rollbackErr == nil {
-			c.lifecycleMu.Lock()
-			if c.generation == generation {
-				c.generation = nil
-			}
-			c.lifecycleMu.Unlock()
-		}
-		startErr = errors.Join(startErr, rollbackErr)
+		c.lifecycleMu.Lock()
+		c.cleanupPending = false
+		close(startDone)
+		c.startDone = nil
+		c.lifecycleMu.Unlock()
 	}()
 
 	// Set up consumers for input ports
@@ -334,7 +339,11 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port) erro
 	streamName := stream.Name()
 
 	// Wait for stream to be available
-	if err := c.waitForStream(ctx, streamName); err != nil {
+	waitForStream := c.waitForStream
+	if c.waitForStreamInput != nil {
+		waitForStream = c.waitForStreamInput
+	}
+	if err := waitForStream(ctx, streamName); err != nil {
 		return errs.WrapTransient(err, "Component", "setupConsumer", fmt.Sprintf("wait for stream %s", streamName))
 	}
 
@@ -396,7 +405,11 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port) erro
 		MessageTimeout: 30 * time.Minute,
 	}
 
-	err = c.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name, ComponentOwned: true}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	consume := c.natsClient.ConsumeStreamWithConfigHandle
+	if c.consumeStream != nil {
+		consume = c.consumeStream
+	}
+	handle, err := consume(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name, ComponentOwned: true}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		if hbErr := natsclient.ConsumeWithHeartbeat(msgCtx, msg, heartbeatInterval,
 			func(workCtx context.Context) error {
 				c.handleRequest(workCtx, msg.Data())
@@ -410,11 +423,9 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port) erro
 		return errs.WrapTransient(err, "Component", "setupConsumer", fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
 
-	// Track consumer for cleanup in Stop()
-	c.consumerInfos = append(c.consumerInfos, consumerInfo{
-		streamName:   streamName,
-		consumerName: consumerName,
-	})
+	c.lifecycleMu.Lock()
+	c.consumers = append(c.consumers, streamConsumerBinding{handle: handle})
+	c.lifecycleMu.Unlock()
 
 	c.logger.Info("Subscribed to agent requests (JetStream)",
 		"subject", subject,
@@ -478,68 +489,109 @@ func (c *Component) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-	c.lifecycleMu.Lock()
-	generation := c.generation
-	c.lifecycleMu.Unlock()
-	if generation == nil {
-		return nil
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	stopErr := generation.Stop(ctx, nil, func(ctx context.Context) error {
-		return c.cleanup(ctx, c.config.DeleteConsumerOnStop)
-	})
-	if stopErr == nil {
+	for {
 		c.lifecycleMu.Lock()
-		if c.generation == generation {
-			c.generation = nil
+		if !c.lifecycleUsed {
+			c.lifecycleUsed, c.terminal = true, true
+			c.lifecycleMu.Unlock()
+			return nil
 		}
+		if c.terminal {
+			c.lifecycleMu.Unlock()
+			return nil
+		}
+		if c.startDone != nil {
+			done := c.startDone
+			c.lifecycleMu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if c.stopping {
+			c.lifecycleMu.Unlock()
+			return errs.WrapTransient(errors.New("stop already in progress"), "Component", "Stop", "concurrent Stop")
+		}
+		retryable := c.cleanupPending
+		c.stopping = true
 		c.lifecycleMu.Unlock()
+		stopErr := c.cleanup(ctx)
+		c.lifecycleMu.Lock()
+		c.stopping = false
+		if retryable && stopErr != nil {
+			c.lifecycleMu.Unlock()
+			return stopErr
+		}
+		c.cleanupPending, c.terminal = false, true
+		c.clearLifecycleHandles()
+		c.lifecycleMu.Unlock()
+		return stopErr
 	}
-	return stopErr
 }
 
-func (c *Component) cleanup(ctx context.Context, deleteDurable bool) error {
-	c.mu.RLock()
-	infos := append([]consumerInfo(nil), c.consumerInfos...)
-	c.mu.RUnlock()
+func (c *Component) cleanup(ctx context.Context) error {
 	var cleanupErr error
-	for _, info := range infos {
-		if deleteDurable {
-			// Delete consumer from server (for test cleanup)
-			if err := c.natsClient.StopAndDeleteConsumer(ctx, info.streamName, info.consumerName); err != nil {
-				c.logger.Debug("Failed to delete consumer", "stream", info.streamName, "consumer", info.consumerName, "error", err)
-				cleanupErr = errors.Join(cleanupErr, err)
-			} else {
-				c.logger.Debug("Stopped and deleted consumer", "stream", info.streamName, "consumer", info.consumerName)
-			}
-		} else {
-			// Just stop local consumption (keep durable consumer for resume)
-			if err := c.natsClient.StopConsumer(ctx, info.streamName, info.consumerName); err != nil {
-				c.logger.Debug("Failed to stop consumer", "stream", info.streamName, "consumer", info.consumerName, "error", err)
-				cleanupErr = errors.Join(cleanupErr, err)
-			}
-			c.logger.Debug("Stopped consumer", "stream", info.streamName, "consumer", info.consumerName)
+	for i := range c.consumers {
+		binding := &c.consumers[i]
+		if !binding.drainIssued {
+			binding.handle.Drain()
+			binding.drainIssued = true
 		}
+		closed := binding.handle.Closed()
+		if c.waitConsumerClosed != nil {
+			cleanupErr = errors.Join(cleanupErr, c.waitConsumerClosed(ctx, closed))
+		} else {
+			select {
+			case <-closed:
+			case <-ctx.Done():
+				cleanupErr = errors.Join(cleanupErr, ctx.Err())
+			}
+		}
+	}
+	if c.cancel != nil {
+		c.cancel()
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return errors.Join(cleanupErr, ctxErr)
+		cleanupErr = errors.Join(cleanupErr, ctxErr)
 	}
 
-	// Close all cached clients
+	// Close cached clients outside clientMu. Native client shutdown is child
+	// lifecycle work and may block or re-enter component state.
 	c.clientMu.Lock()
+	clients := make(map[string]*Client, len(c.clientCache))
 	for key, client := range c.clientCache {
-		if err := client.Close(); err != nil {
-			c.logger.Warn("Failed to close client", "key", key, "error", err)
-		}
+		clients[key] = client
 	}
-	c.clientCache = make(map[string]*Client)
 	c.clientMu.Unlock()
+	for key, client := range clients {
+		closeClient := client.Close
+		if c.closeModelClient != nil {
+			closeClient = func() error { return c.closeModelClient(client) }
+		}
+		if err := closeClient(); err != nil {
+			c.logger.Warn("Failed to close client", "key", key, "error", err)
+			cleanupErr = errors.Join(cleanupErr, err)
+			continue
+		}
+		c.clientMu.Lock()
+		if c.clientCache[key] == client {
+			delete(c.clientCache, key)
+		}
+		c.clientMu.Unlock()
+	}
 
 	c.mu.Lock()
-	c.consumerInfos = nil
 	c.running = false
 	c.mu.Unlock()
 	return cleanupErr
 }
+
+func (c *Component) clearLifecycleHandles() { c.consumers = nil; c.cancel = nil }
 
 // handleRequest processes an agent request
 func (c *Component) handleRequest(ctx context.Context, data []byte) {

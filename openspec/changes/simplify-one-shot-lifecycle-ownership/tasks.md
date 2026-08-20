@@ -121,6 +121,14 @@
     census, scanner pollution, and all source hashes are recorded in the ledger. The canonical port method,
     split-context method, `ConsumeDurable`, `natsclient.Subscription`, Metrics APIs, and N1 retirements remain excluded.
     Task 2.3, Gate A/B/C, runtime migration, proof, release, archive, and tag readiness remain unchecked and incomplete.
+  - 2026-08-20 A1 implementation checkpoint: S1's conditional split-bridge approval is exercised by Loop, its first
+    real caller, under the same branch no-release/no-tag invariant. Independent `semstreams-reviewer` verdict
+    `APPROVE` grants owner-migrated credit only to the frozen dispatch, governance, loop, model, and tools owner
+    `component.go` files. Supporting natsclient, `http_activity`, `inflight`, and test files receive no owner credit.
+    The two HIGH findings and corrections, causal REDs, exact race/integration/E2E evidence, census, and all source
+    hashes are recorded in the ledger. No name-routed lifecycle, deletion, or outward change beyond the conditionally
+    approved split bridge was introduced. Task 2.3, Gate A/B/C, runtime migration, proof, release, archive, and tag
+    readiness remain unchecked and incomplete.
   - 2026-08-18 checkpoint: independent `semstreams-reviewer` verdict `CORRECTIONS CONFIRMED` grants owner-migrated
     credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
     worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.

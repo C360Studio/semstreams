@@ -273,7 +273,7 @@ func TestIntegrationProductionCallbackShutdownDelayedNAK(t *testing.T) {
 	entered := make(chan struct{})
 	deliveryDone := make(chan error, 1)
 	var enteredOnce sync.Once
-	_ = startProductionTerminalDispatch(
+	comp := startProductionTerminalDispatch(
 		t, ctx, tc, "CALLBACK_SHUTDOWN", "CALLBACK_SHUTDOWN_USER", "MISSING", "shutdown",
 		func(c *Component) {
 			c.terminalDeliveryDoneFn = func(err error) { deliveryDone <- err }
@@ -306,7 +306,7 @@ func TestIntegrationProductionCallbackShutdownDelayedNAK(t *testing.T) {
 	}
 	cleanupCtx, cleanupCancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cleanupCancel()
-	require.NoError(t, tc.Client.StopConsumer(cleanupCtx, "CALLBACK_SHUTDOWN", "agentic-dispatch-agent-complete-shutdown"))
+	require.NoError(t, comp.Stop(cleanupCtx))
 	redelivery, err := consumer.Fetch(1, jetstream.FetchMaxWait(10*time.Second))
 	require.NoError(t, err)
 	redelivered := <-redelivery.Messages()

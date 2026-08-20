@@ -296,9 +296,10 @@ func TestCleanupAfterStartFailureResetsState(t *testing.T) {
 		consumerInfos: []consumerInfo{{streamName: "AGENT", consumerName: "partial-start"}},
 	}
 
-	if err := c.cleanup(context.Background(), false); err != nil {
+	if err := c.cleanup(context.Background()); err != nil {
 		t.Fatalf("cleanup consumers: %v", err)
 	}
+	c.clearLifecycleHandles()
 
 	if c.consumerInfos != nil {
 		t.Fatalf("partial-start consumer state not reset: infos=%v", c.consumerInfos)
