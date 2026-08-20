@@ -363,7 +363,7 @@ func TestAction_VariableSubstitution(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ec := &ExecutionContext{EntityID: tt.entityID, RelatedID: tt.relatedID}
-			result := ec.SubstituteVariables(tt.template)
+			result := ec.SubstituteVariables(context.Background(), tt.template)
 			assert.Equal(t, tt.want, result)
 		})
 	}
@@ -2583,7 +2583,7 @@ func TestExecutionContext_SubstituteVariables(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := tt.ec.SubstituteVariables(tt.template)
+			result := tt.ec.SubstituteVariables(context.Background(), tt.template)
 			assert.Equal(t, tt.want, result)
 		})
 	}
@@ -2653,7 +2653,7 @@ func TestExecutionContext_SubstituteVariables_WarnsOnUnresolved(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			buf.Reset()
-			_ = tc.ec.SubstituteVariables(tc.template)
+			_ = tc.ec.SubstituteVariables(context.Background(), tc.template)
 			logged := buf.String()
 			assert.Contains(t, logged, "Unresolved template variables", "expected warning in log output:\n%s", logged)
 			for _, want := range tc.wantLeftovers {
@@ -2686,7 +2686,7 @@ func TestExecutionContext_SubstituteVariables_NoWarnOnClean(t *testing.T) {
 		},
 	}
 
-	got := ec.SubstituteVariables("$entity.id|$related.id|$state.iteration|$entity.triple.test.agent.role")
+	got := ec.SubstituteVariables(context.Background(), "$entity.id|$related.id|$state.iteration|$entity.triple.test.agent.role")
 	assert.Equal(t, entityID+"|"+relatedID+"|2|architect", got)
 	assert.Empty(t, buf.String(), "clean substitution should not log")
 }
@@ -2939,7 +2939,7 @@ func TestSubstitutePayloadVariables_Nested(t *testing.T) {
 		},
 	}
 
-	result := substitutePayloadVariables(payload, ec)
+	result := substitutePayloadVariablesContext(context.Background(), payload, ec)
 
 	assert.Equal(t, entityID, result["entity"])
 	assert.Equal(t, relatedID, result["related"])
@@ -2965,7 +2965,7 @@ func TestSubstitutePayloadVariables_ArrayValues(t *testing.T) {
 		"mixed":   []any{"$entity.id", 42, true},
 	}
 
-	result := substitutePayloadVariables(payload, ec)
+	result := substitutePayloadVariablesContext(context.Background(), payload, ec)
 
 	tags := result["tags"].([]any)
 	assert.Equal(t, entityID, tags[0])

@@ -26,6 +26,8 @@
 > `storage/objectstore/component.go`.
 > Independent GI1 implementation review returned `APPROVE`; owner-migrated credit is limited to
 > `processor/graph-ingest/component.go`.
+> The owner approved RU1 rulings R1-R5 only. Independent implementation review and a fresh isolated structural E2E
+> returned green; owner-migrated credit is limited to `processor/rule/processor.go`.
 
 ## Evidence identity
 
@@ -353,6 +355,14 @@ retained contexts/unauthorized roots; classify bounded persistence exception; no
 hot reload/watchers/evaluation/cron/persistence/ack/context census/integration/e2e. Delta owner/NG/Stop/Cancel -1. RU1
 depends on S1.
 
+Owner approval on 2026-08-20 is limited to the coherent R1-R5 source contract: context-first Rule APIs, immediate
+context-bearing KV initialization, an internal cron dispatcher, nil-context rejection by `Matches`, and shutdown
+barriers ordered before snapshots or native teardown. Independent implementation review returned `APPROVE`, and the
+reviewer ran a fresh isolated structural E2E from the final production identity with 38/38 passing. Owner-migrated
+credit is limited to `processor/rule/processor.go`. Supporting Rule package files, composition callers, package docs,
+migration guidance, and tests receive no owner credit. Temporary bridges keep the branch ineligible for release or
+tag. Task 2.3, Gate A/B/C, runtime migration, proof, release, archive, and tag readiness remain incomplete.
+
 ## GI1 — graph-ingest singleton
 
 Owner component.go plus keyed_ingest/readiness/pool tests. Exact handles; separate backlog labels; remove stored
@@ -543,4 +553,6 @@ credit, and no broader task or gate credit follows. Independent OS1 implementati
 granting owner-migrated credit only to `storage/objectstore/component.go`; tests and package documentation receive no
 owner credit, and no broader task or gate credit follows. Independent GI1 implementation review returned `APPROVE`,
 granting owner-migrated credit only to `processor/graph-ingest/component.go`; adjacent implementation and test support
-receive no owner credit, and no broader task or gate credit follows.
+receive no owner credit, and no broader task or gate credit follows. RU1 owner approval is limited to R1-R5;
+independent implementation review and the fresh isolated 38/38 structural E2E grant owner-migrated credit only to
+`processor/rule/processor.go`, while supporting surfaces receive none and no broader task or gate credit follows.

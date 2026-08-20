@@ -131,7 +131,7 @@ func runOnEnter(t *testing.T, def Definition, entity *gtypes.EntityState) (*mock
 	t.Helper()
 	rule, err := NewExpressionRule("direct-expression-test", def)
 	require.NoError(t, err)
-	require.True(t, rule.EvaluateEntityState(entity),
+	require.True(t, rule.EvaluateEntityState(context.Background(), entity),
 		"rule %s EvaluateEntityState must match (production wire)", def.ID)
 
 	pub := &mockPublisher{}
@@ -142,7 +142,7 @@ func runOnEnter(t *testing.T, def Definition, entity *gtypes.EntityState) (*mock
 	for _, action := range def.OnEnter {
 		if len(action.When) > 0 {
 			expr := expression.LogicalExpression{
-				Conditions: SubstituteConditionValues(action.When, ec),
+				Conditions: SubstituteConditionValues(context.Background(), action.When, ec),
 				Logic:      expression.LogicAnd,
 			}
 			match, whenErr := evaluator.EvaluateWithStateAndMessage(entity, nil, nil, expr)
@@ -186,7 +186,7 @@ func TestResearchGraphPipeline_R0_DoesNotFireOnNonResearchLoops(t *testing.T) {
 	}
 	rule, err := NewExpressionRule("direct-expression-test", r0)
 	require.NoError(t, err)
-	assert.False(t, rule.EvaluateEntityState(entity),
+	assert.False(t, rule.EvaluateEntityState(context.Background(), entity),
 		"R0 must not fire on coordinator/investigator loops — loop.role scoping is the safety net")
 }
 
@@ -338,7 +338,7 @@ func TestResearchGraphPipeline_R4_AssessDecision_BothBranches(t *testing.T) {
 
 		rule, err := NewExpressionRule("direct-expression-test", r4)
 		require.NoError(t, err)
-		require.True(t, rule.EvaluateEntityState(entity))
+		require.True(t, rule.EvaluateEntityState(context.Background(), entity))
 
 		pub := &mockPublisher{}
 		mut := &mockTripleMutator{}
@@ -366,7 +366,7 @@ func TestResearchGraphPipeline_R4_AssessDecision_BothBranches(t *testing.T) {
 			}
 			if len(action.When) > 0 {
 				expr := expression.LogicalExpression{
-					Conditions: SubstituteConditionValues(action.When, ec),
+					Conditions: SubstituteConditionValues(context.Background(), action.When, ec),
 					Logic:      expression.LogicAnd,
 				}
 				match, whenErr := evaluator.EvaluateWithStateAndMessage(entity, stateFields, nil, expr)

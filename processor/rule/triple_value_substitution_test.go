@@ -2,6 +2,7 @@ package rule
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"strings"
 	"testing"
@@ -111,7 +112,7 @@ func TestTripleValueSubstitution_TruthTable(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ec := &ExecutionContext{Entity: tc.entity}
-			got := ec.SubstituteVariables(tc.template)
+			got := ec.SubstituteVariables(context.Background(), tc.template)
 			assert.Equal(t, tc.want, got)
 		})
 	}
@@ -124,7 +125,7 @@ func TestTripleValueSubstitution_TruthTable(t *testing.T) {
 // log either): the entire point of .value is warn-free absence.
 func TestTripleValueSubstitution_NilEntityResolvesToEmpty(t *testing.T) {
 	ec := &ExecutionContext{} // Entity nil
-	got := ec.SubstituteVariables("$entity.triple.openspec.change.revision.value")
+	got := ec.SubstituteVariables(context.Background(), "$entity.triple.openspec.change.revision.value")
 	assert.Equal(t, "", got)
 }
 
@@ -138,7 +139,7 @@ func TestTripleValueSubstitution_RelatedNamespace(t *testing.T) {
 			},
 		},
 	}
-	got := ec.SubstituteVariables("$related.triple.test.fixture.tag.value")
+	got := ec.SubstituteVariables(context.Background(), "$related.triple.test.fixture.tag.value")
 	assert.Equal(t, "primary", got)
 }
 
@@ -166,7 +167,7 @@ func TestTripleValueSubstitution_AbsenceDoesNotWarn(t *testing.T) {
 		},
 	}
 
-	got := ec.SubstituteVariables("$entity.triple.openspec.change.revision.value")
+	got := ec.SubstituteVariables(context.Background(), "$entity.triple.openspec.change.revision.value")
 	assert.Equal(t, "", got)
 	assert.Empty(t, buf.String(), "absent .value predicate must not log the unresolved-template warning")
 }
@@ -198,7 +199,7 @@ func TestTripleValueSubstitution_LiteralFallbackAbsenceStillWarns(t *testing.T) 
 		},
 	}
 
-	got := ec.SubstituteVariables("$entity.triple.a.b.value")
+	got := ec.SubstituteVariables(context.Background(), "$entity.triple.a.b.value")
 	assert.Equal(t, "$entity.triple.a.b.value", got, "non-3-part prefix must not be treated as a .value suffix")
 	assert.Contains(t, buf.String(), "Unresolved template variables")
 }
@@ -219,7 +220,7 @@ func TestTripleValueSubstitution_SuffixIsTheFinalDotValue(t *testing.T) {
 			},
 		},
 	}
-	got := ec.SubstituteVariables("$entity.triple.a.value.b.value")
+	got := ec.SubstituteVariables(context.Background(), "$entity.triple.a.value.b.value")
 	assert.Equal(t, "resolved", got)
 }
 
@@ -236,7 +237,7 @@ func TestTripleValueSubstitution_RunsBeforeGenericSubstitution(t *testing.T) {
 			},
 		},
 	}
-	got := ec.SubstituteVariables("plain=$entity.triple.openspec.change.revision value=$entity.triple.openspec.change.revision.value")
+	got := ec.SubstituteVariables(context.Background(), "plain=$entity.triple.openspec.change.revision value=$entity.triple.openspec.change.revision.value")
 	assert.Equal(t, "plain=r42 value=r42", got)
 }
 
@@ -252,7 +253,7 @@ func TestTripleValueSubstitution_MultipleTokensInOneTemplate(t *testing.T) {
 		},
 	}
 	tmpl := "rev=$entity.triple.openspec.change.revision.value missing=$entity.triple.openspec.change.author.value"
-	got := ec.SubstituteVariables(tmpl)
+	got := ec.SubstituteVariables(context.Background(), tmpl)
 	assert.Equal(t, "rev=r42 missing=", got)
 }
 
@@ -277,7 +278,7 @@ func TestTripleValueSubstitution_BareFormUnchanged(t *testing.T) {
 		},
 	}
 
-	got := ec.SubstituteVariables("$entity.triple.openspec.change.revision")
+	got := ec.SubstituteVariables(context.Background(), "$entity.triple.openspec.change.revision")
 	assert.Equal(t, "$entity.triple.openspec.change.revision", got)
 	if !strings.Contains(buf.String(), "Unresolved template variables") {
 		t.Errorf("expected bare-form absence to still warn, got log: %s", buf.String())

@@ -1,6 +1,7 @@
 package rule
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -119,7 +120,7 @@ func TestTripleTriplesSubstitution_TruthTable(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ec := &ExecutionContext{Entity: tc.entity}
-			got := ec.SubstituteVariables(tc.template)
+			got := ec.SubstituteVariables(context.Background(), tc.template)
 			assert.Equal(t, tc.want, got)
 		})
 	}
@@ -130,7 +131,7 @@ func TestTripleTriplesSubstitution_TruthTable(t *testing.T) {
 // rather than tripping the unresolved-template warning.
 func TestTripleTriplesSubstitution_NilEntityResolvesToEmpty(t *testing.T) {
 	ec := &ExecutionContext{} // Entity nil
-	got := ec.SubstituteVariables("$entity.triple.test.fixture.anything.triples")
+	got := ec.SubstituteVariables(context.Background(), "$entity.triple.test.fixture.anything.triples")
 	assert.Equal(t, "[]", got)
 }
 
@@ -145,7 +146,7 @@ func TestTripleTriplesSubstitution_RelatedNamespace(t *testing.T) {
 			},
 		},
 	}
-	got := ec.SubstituteVariables("$related.triple.test.fixture.tags.triples")
+	got := ec.SubstituteVariables(context.Background(), "$related.triple.test.fixture.tags.triples")
 	assert.Equal(t, `["x","y"]`, got)
 }
 
@@ -165,7 +166,7 @@ func TestTripleTriplesSubstitution_RunsBeforeGenericSubstitution(t *testing.T) {
 	// Template uses both the plain triple reference AND the .triples
 	// suffix. If the generic substitution ran first, the .triples
 	// suffix would be orphaned on the stringified `[a b c]` value.
-	got := ec.SubstituteVariables("plain=$entity.triple.test.fixture.subtopics triples=$entity.triple.test.fixture.subtopics.triples")
+	got := ec.SubstituteVariables(context.Background(), "plain=$entity.triple.test.fixture.subtopics triples=$entity.triple.test.fixture.subtopics.triples")
 	// Plain reference stringifies the list (existing behavior);
 	// .triples renders as JSON array.
 	assert.Contains(t, got, `triples=["a","b","c"]`)
@@ -193,7 +194,7 @@ func TestTripleTriplesSubstitution_MultipleTokensInOneTemplate(t *testing.T) {
 		},
 	}
 	prompt := "Sibling IDs: $entity.triple.test.fixture.first.triples; Subtopics: $entity.triple.test.fixture.second.triples"
-	got := ec.SubstituteVariables(prompt)
+	got := ec.SubstituteVariables(context.Background(), prompt)
 	assert.Equal(t, `Sibling IDs: ["a","b"]; Subtopics: ["x"]`, got)
 }
 
@@ -205,6 +206,6 @@ func TestTripleTriplesSubstitution_CanonicalHyphenatedPredicate(t *testing.T) {
 		{Predicate: semantictest.Predicate(t, "gather", "child", "completed"), Object: "child-b"},
 	}}}
 
-	got := ec.SubstituteVariables("$entity.triple.gather.child.completed.triples")
+	got := ec.SubstituteVariables(context.Background(), "$entity.triple.gather.child.completed.triples")
 	assert.Equal(t, `["child-a","child-b"]`, got)
 }

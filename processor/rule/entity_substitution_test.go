@@ -1,6 +1,7 @@
 package rule
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -90,7 +91,7 @@ func TestSubstituteVariables_EntityParts_FullPipeline(t *testing.T) {
 	in := "loop=$entity.instance full=$entity.id rel.type=$related.type"
 	want := "loop=c1e90237 full=c360.osh-demo-001.agent.agentic-loop.execution.c1e90237 rel.type=sedan"
 
-	if got := ec.SubstituteVariables(in); got != want {
+	if got := ec.SubstituteVariables(context.Background(), in); got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
 }
@@ -123,7 +124,7 @@ func TestSubstituteVariables_EntityParts_NoCollisionWithIDOrTriple(t *testing.T)
 
 	in := "part=$entity.org triple=$entity.triple.test.fixture.org id=$entity.id instance=$entity.instance"
 	want := "part=acme triple=triple-derived-org id=acme.ops.robotics.gcs.drone.001 instance=001"
-	if got := ec.SubstituteVariables(in); got != want {
+	if got := ec.SubstituteVariables(context.Background(), in); got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
 }
@@ -184,7 +185,7 @@ func TestSubstituteVariables_TriplePrefixCollision_LongestMatchFirst(t *testing.
 			in := "subject=$entity.triple.test.lineage.researcher-plan-entity short=$entity.triple.test.lineage.researcher-plan"
 			want := "subject=" + planEntity + " short=" + planUUID
 
-			if got := ec.SubstituteVariables(in); got != want {
+			if got := ec.SubstituteVariables(context.Background(), in); got != want {
 				t.Errorf("got  %q\nwant %q", got, want)
 			}
 		})

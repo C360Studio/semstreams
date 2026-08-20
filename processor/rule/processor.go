@@ -14,7 +14,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph/readiness"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	message "github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -96,8 +96,20 @@ type Processor struct {
 
 	// Runtime state
 	running            bool // Tracks if processor is running (protected by mu)
-	generation         *lifecyclejoin.Generation
-	ready              chan struct{} // Closed when run() completes initialization
+	lifecycleMu        sync.Mutex
+	lifecycleUsed      bool
+	terminal           bool
+	stopping           bool
+	cleanupPending     bool
+	startDone          chan struct{}
+	cancel             context.CancelFunc
+	runtimeDone        chan struct{}
+	runtimeWG          *sync.WaitGroup
+	commandMu          sync.Mutex
+	commandFenced      bool
+	commands           []ruleRuntimeCommand
+	commandWake        chan struct{}
+	coordinatorDone    chan struct{}
 	startTime          time.Time
 	messagesEvaluated  int64
 	rulesTriggered     int64
@@ -153,15 +165,16 @@ type Processor struct {
 	// Maps pattern string to watcher for dynamic management
 	entityWatchers        []jetstream.KeyWatcher
 	entityWatcherMap      map[string]jetstream.KeyWatcher
-	entityWatcherCancels  map[string]context.CancelFunc
-	entityWatcherUpdateMu sync.Mutex
 	entityDispatchGate    sync.RWMutex
 	entityDispatchRecords map[string]managedEntityWatcher
 	entityNextGeneration  uint64
+	entityBorrowMu        sync.Mutex
+	entityBorrowFenced    bool
+	entityBorrowCount     int
+	entityBorrowDone      chan struct{}
+	entityWatcherPrepare  entityWatcherFactory
 	entityBeforeDispatch  func()
 	entityBeforeEvalLock  func(string)
-	watcherCtx            context.Context    // Context for watcher goroutines
-	watcherCancelFunc     context.CancelFunc // Cancel function for stopping all watchers
 
 	// Entity coalescer for batched rule evaluation
 	entityCoalescer       *cache.CoalescingSet
@@ -231,6 +244,7 @@ type Processor struct {
 	// See also: cmd/semstreams/main.go buildRuleManager — a second ConfigManager
 	// instance (processor=nil) for agent CRUD tools. Both share the same KV bucket.
 	kvConfigManager *ConfigManager
+	streamConsumers []ruleStreamConsumer
 
 	projectionTargets    *projectionTargetIndex
 	effectiveContracts   []projection.Contract
@@ -292,7 +306,6 @@ func NewProcessorWithMetrics(natsClient *natsclient.Client, config *Config, metr
 		metricsRegistry:       metricsRegistry,
 		entityWatchers:        make([]jetstream.KeyWatcher, 0),
 		entityWatcherMap:      make(map[string]jetstream.KeyWatcher),
-		entityWatcherCancels:  make(map[string]context.CancelFunc),
 		entityDispatchRecords: make(map[string]managedEntityWatcher),
 		graphStateGuardDone:   make(chan struct{}),
 		ownRevisions:          make(map[ruleRevKey]map[uint64]time.Time),
@@ -537,99 +550,98 @@ func (rp *Processor) Initialize() error {
 // watchEntityStates and handleEntityUpdates are in entity_watcher.go
 // loadRuleDefinitionsFromFiles and loadRules are in rule_loader.go
 
-// run is the main background goroutine that handles processor lifecycle
-func (rp *Processor) run(ctx context.Context) {
-	// Use sync.Once to safely close ready channel - handles both happy path
-	// (explicit close after coalescer init) and error paths (defer on early return)
-	var readyOnce sync.Once
-	signalReady := func() { readyOnce.Do(func() { close(rp.ready) }) }
-	defer signalReady() // Ensure ready is closed if run() exits early
+type ruleRuntimeCommand struct {
+	run    func(context.Context) error
+	result chan error
+}
 
-	// Initialize entity coalescer BEFORE spawning watchers to avoid race condition.
-	// Watchers read entityCoalescer, so it must be set before any watcher goroutine starts.
-	// Only create coalescer if debounce delay is non-zero.
-	// When debounce is 0, entities are evaluated immediately without batching.
-	if rp.config.DebounceDelayMs > 0 {
-		rp.entityCoalescer = cache.NewCoalescingSet(ctx, rp.config.DebounceDelayMs, func(entityIDs []string) {
-			rp.evaluateEntitiesInBatch(ctx, entityIDs)
-		})
-	}
+type ruleStreamConsumer struct {
+	handle      jetstream.ConsumeContext
+	drainIssued bool
+}
 
-	// Signal that initialization is complete - entityCoalescer is now safe to read
-	signalReady()
-
-	// Start KV watchers for entity state changes FIRST
-	if err := rp.watchEntityStates(ctx); err != nil {
-		rp.logger.Warn("Failed to start entity state watching", "error", err)
-		// Don't fail - rules can still process semantic messages
-	}
-
-	// Subscribe to input subjects
-	if err := rp.setupSubscriptions(ctx); err != nil {
-		rp.logger.Error("Failed to setup subscriptions", "error", err)
-		return
-	}
-
-	// Start the cron scheduler now that watchers and subscriptions are up.
-	// Doing this after setupSubscriptions guarantees the publisher's NATS
-	// subjects are ready before the first cron tick can dispatch a publish
-	// action. The deferred Stop drains in-flight fires when run() returns
-	// (either via shutdown or ctx cancellation) before the rest of the
-	// processor's resources are torn down in Stop().
-	if rp.cronScheduler != nil {
-		if err := rp.cronScheduler.Start(ctx); err != nil {
-			rp.logger.Warn("Failed to start cron scheduler", "error", err)
-			// Drop the scheduler reference so RegisteredCount and any
-			// future metrics gauge cannot read a stale never-started
-			// instance. Subsequent hot-reload Register/Deregister calls
-			// fall through their `!= nil` guards and become no-ops, which
-			// matches the "scheduler unavailable" semantics.
-			rp.mu.Lock()
-			rp.cronScheduler = nil
-			rp.mu.Unlock()
-		} else {
-			defer rp.drainCronScheduler()
+func (rp *Processor) runRuntimeCoordinator(ctx context.Context) {
+	defer close(rp.coordinatorDone)
+	for {
+		select {
+		case <-ctx.Done():
+			rp.failQueuedRuntimeCommands(ctx.Err())
+			return
+		case <-rp.commandWake:
+			for {
+				rp.commandMu.Lock()
+				if len(rp.commands) == 0 {
+					rp.commandMu.Unlock()
+					break
+				}
+				command := rp.commands[0]
+				rp.commands = rp.commands[1:]
+				rp.commandMu.Unlock()
+				command.result <- command.run(ctx)
+				close(command.result)
+			}
 		}
-	}
-
-	// Readiness publisher. Started AFTER watchEntityStates so the first tick sees
-	// the registered generations rather than reporting a vacuous complete over an
-	// empty record set.
-	if err := rp.createStatusBucket(ctx); err != nil {
-		// Non-fatal: a rule processor that cannot publish readiness still evaluates
-		// rules. Consumers fail closed on the absent key, which is the correct
-		// reading — it is genuinely unknown.
-		rp.logger.Warn("rule readiness publisher unavailable; "+
-			"consumers will read this producer as unknown", "error", err)
-	} else {
-		rp.statusLoopDone = make(chan struct{})
-		go rp.statusMetricsLoop(ctx)
-	}
-
-	// NOW mark healthy - watchers established, subscriptions ready
-	rp.mu.Lock()
-	rp.health.Healthy = true
-	rp.health.LastCheck = time.Now()
-	rp.mu.Unlock()
-	rp.logger.Info("Rule processor ready - watchers and subscriptions established")
-
-	<-ctx.Done()
-	rp.logger.Info("Rule processor context cancelled", "error", ctx.Err())
-	if rp.statusLoopDone != nil {
-		<-rp.statusLoopDone
 	}
 }
 
-// drainCronScheduler stops the scheduler and joins every in-flight fire. The
-// owning Generation applies the Stop caller's budget to this join; the
-// scheduler is never abandoned behind a fixed internal timeout.
-func (rp *Processor) drainCronScheduler() {
-	if rp.cronScheduler == nil {
-		return
+func (rp *Processor) failQueuedRuntimeCommands(err error) {
+	rp.commandMu.Lock()
+	commands := rp.commands
+	rp.commands = nil
+	rp.commandMu.Unlock()
+	for _, command := range commands {
+		command.result <- err
+		close(command.result)
 	}
-	stopCtx := rp.cronScheduler.Stop()
-	<-stopCtx.Done()
-	rp.logger.Debug("Cron scheduler drained cleanly")
+}
+
+func (rp *Processor) submitRuntimeCommand(run func(context.Context) error) error {
+	command := ruleRuntimeCommand{run: run, result: make(chan error, 1)}
+	rp.commandMu.Lock()
+	if rp.commandFenced || rp.commandWake == nil {
+		rp.commandMu.Unlock()
+		return errs.WrapInvalid(errors.New("runtime command admission is closed"), "RuleProcessor", "runtimeCommand", "processor is not accepting runtime updates")
+	}
+	if rp.coordinatorDone != nil {
+		select {
+		case <-rp.coordinatorDone:
+			rp.commandMu.Unlock()
+			return errs.WrapInvalid(errors.New("runtime coordinator stopped"), "RuleProcessor", "runtimeCommand", "processor runtime has ended")
+		default:
+		}
+	}
+	rp.commands = append(rp.commands, command)
+	wake := rp.commandWake
+	rp.commandMu.Unlock()
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+	return <-command.result
+}
+
+func (rp *Processor) fenceRuntimeCommands() <-chan error {
+	barrier := ruleRuntimeCommand{run: func(context.Context) error { return nil }, result: make(chan error, 1)}
+	rp.commandMu.Lock()
+	rp.commandFenced = true
+	if rp.coordinatorDone != nil {
+		select {
+		case <-rp.coordinatorDone:
+			rp.commandMu.Unlock()
+			barrier.result <- nil
+			close(barrier.result)
+			return barrier.result
+		default:
+		}
+	}
+	rp.commands = append(rp.commands, barrier)
+	wake := rp.commandWake
+	rp.commandMu.Unlock()
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+	return barrier.result
 }
 
 // initializeStateTracker creates the RULE_STATE KV bucket and initializes state tracking components.
@@ -850,25 +862,35 @@ func (rp *Processor) initializeCronScheduler() error {
 }
 
 // Start begins processing messages through rules
-func (rp *Processor) Start(ctx context.Context) error {
-	// Validate context
-	if ctx == nil {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "RuleProcessor", "Start", "context cannot be nil")
+func (rp *Processor) Start(ctx context.Context) (startErr error) {
+	runCtx, startDone, err := rp.beginStartAuthority(ctx)
+	if err != nil {
+		return err
 	}
-	if err := ctx.Err(); err != nil {
-		return errs.WrapInvalid(err, "RuleProcessor", "Start", "context already cancelled")
-	}
+	committed := false
+	defer func() {
+		startErr = rp.finishStartAttempt(ctx, startDone, committed, startErr)
+	}()
+
+	// Publish the coordinator before any fallible startup work so failed-Start
+	// rollback can always fence and join the same exact authority record.
+	rp.runtimeWG.Add(1)
+	go func() {
+		defer rp.runtimeWG.Done()
+		rp.runRuntimeCoordinator(runCtx)
+	}()
+	go func(wg *sync.WaitGroup, done chan struct{}) {
+		wg.Wait()
+		close(done)
+	}(rp.runtimeWG, rp.runtimeDone)
 
 	rp.mu.Lock()
-	defer rp.mu.Unlock()
-
-	if rp.running {
-		return errs.WrapInvalid(errs.ErrAlreadyStarted, "RuleProcessor", "Start", "check processor state")
-	}
 	if err := rp.prepareInitialRules(); err != nil {
+		rp.mu.Unlock()
 		return errs.WrapInvalid(err, "RuleProcessor", "Start", "preflight mutation projection")
 	}
 	if len(rp.effectiveContracts) > 0 && !rp.reconcilerConfigured {
+		rp.mu.Unlock()
 		return errs.WrapInvalid(
 			fmt.Errorf("rule pack %q has projection contracts but no owned replacer", rp.config.PackID),
 			"RuleProcessor",
@@ -876,6 +898,7 @@ func (rp *Processor) Start(ctx context.Context) error {
 			"validate mutation composition",
 		)
 	}
+	rp.mu.Unlock()
 
 	// Initialize message cache with context and metrics
 	msgCache, err := cache.NewFromConfig[message.Message](ctx, rp.config.MessageCache,
@@ -912,76 +935,52 @@ func (rp *Processor) Start(ctx context.Context) error {
 		rp.logger.Warn("Failed to initialize cron scheduler, cron rules will be disabled", "error", err)
 	}
 
-	// Note: entityCoalescer is initialized in run() before spawning watchers
-	// to avoid race between Start() setting it and watcher goroutines reading it
-
-	// Create one Start-owned runtime generation. Its fixed join set covers every
-	// goroutine launched by Start; Stop only signals cancellation and joins it.
-	runCtx, runCancel := context.WithCancel(ctx)
-	var runtimeWG sync.WaitGroup
-	runtimeWG.Add(2)
-	reserveHotReload := rp.natsClient != nil
-	if reserveHotReload {
-		runtimeWG.Add(1)
+	if rp.config.DebounceDelayMs > 0 {
+		rp.entityCoalescer = cache.NewCoalescingSet(runCtx, rp.config.DebounceDelayMs, func(entityIDs []string) {
+			rp.evaluateEntitiesInBatch(runCtx, entityIDs)
+		})
 	}
-	rp.generation = lifecyclejoin.NewGeneration(runCancel, runtimeWG.Wait)
-	rp.ready = make(chan struct{})
-	rp.running = true
-	rp.statusFenced.Store(false)
-	rp.startTime = time.Now()
-	// Note: health.Healthy is set in run() after watchers and subscriptions are established
-
-	// Start background goroutine with context
+	if err := rp.watchEntityStates(runCtx); err != nil {
+		rp.logger.Warn("Failed to start entity state watching", "error", err)
+	}
+	if err := rp.setupSubscriptions(runCtx); err != nil {
+		return err
+	}
+	if rp.cronScheduler != nil {
+		if err := rp.cronScheduler.Start(runCtx); err != nil {
+			return fmt.Errorf("start cron scheduler: %w", err)
+		}
+	}
+	if err := rp.createStatusBucket(runCtx); err != nil {
+		rp.logger.Warn("rule readiness publisher unavailable; consumers will read this producer as unknown", "error", err)
+	} else {
+		rp.statusLoopDone = make(chan struct{})
+		go rp.statusMetricsLoop(runCtx)
+	}
+	if rp.natsClient != nil {
+		rcm := NewConfigManager(rp, nil, rp.logger)
+		if err := rcm.InitializeKVStore(runCtx, rp.natsClient); err != nil {
+			rp.logger.Warn("Failed to initialize KV store for rule hot-reload; running with file rules only", slog.Any("error", err))
+		} else if err := rcm.Start(runCtx); err != nil {
+			rp.logger.Warn("Failed to start rule hot-reload watcher; running with file rules only", slog.Any("error", err))
+		} else {
+			rp.kvConfigManager = rcm
+		}
+	}
+	rp.runtimeWG.Add(1)
 	go func() {
-		defer runtimeWG.Done()
-		rp.run(runCtx)
-	}()
-
-	// Start the revision tracker sweeper so tracked self-writes that the
-	// watcher never delivers (unwatched entities, cross-bucket writes,
-	// watcher downtime) don't leak memory.
-	go func() {
-		defer runtimeWG.Done()
+		defer rp.runtimeWG.Done()
 		rp.runRevisionSweeper(runCtx, revisionSweepInterval, rp.revisionTTL)
 	}()
 
-	// Wait for run() to signal that the COALESCER is initialized. This does NOT
-	// mean watchers have started: run() closes `ready` immediately after building
-	// the coalescer and only then calls watchEntityStates, so a watcher's initial
-	// replay is still in flight — usually — when Start returns. The previous comment
-	// here claimed "watchers started" and was simply false; asserting either
-	// ordering asserts a race (gh#732 measured the interval as not even consistently
-	// positive). Consumers that need "replay finished" read bootstrap_complete off
-	// the rule GRAPH_STATUS key; there is no ordering to sleep on.
-	select {
-	case <-rp.ready:
-		// Initialization complete
-	case <-ctx.Done():
-		// Context cancelled during startup. The exact generation remains retained
-		// so Stop can rejoin any cleanup that outlives this caller.
-		if reserveHotReload {
-			runtimeWG.Done()
-		}
-		rp.generation.Cancel()
-		return ctx.Err()
-	}
-
+	rp.mu.Lock()
+	rp.running = true
 	rp.isSubscribed = true
-
-	// Wire hot-reload: component-internal ConfigManager owns a KV watcher on
-	// semstreams_config:rules.* and applies changes without restart. This is
-	// distinct from the Pattern-B CRUD manager in cmd/semstreams/main.go
-	// (buildRuleManager, processor=nil) which handles agent tool writes.
-	//
-	// Launched as a goroutine so that InitializeKVStore and Watch run after
-	// Start() returns and releases rp.mu. reconcileFromKV (debounced 250ms)
-	// will only fire after the lock is free.
-	if reserveHotReload {
-		go func() {
-			defer runtimeWG.Done()
-			rp.startHotReloadManager(runCtx)
-		}()
-	}
+	rp.statusFenced.Store(false)
+	rp.startTime = time.Now()
+	rp.health.Healthy = true
+	rp.health.LastCheck = time.Now()
+	rp.mu.Unlock()
 
 	// Count subjects for logging
 	subjectCount := 0
@@ -993,41 +992,64 @@ func (rp *Processor) Start(ctx context.Context) error {
 	}
 
 	rp.logger.Info("Rule processor started", "subject_count", subjectCount)
+	committed = true
 	return nil
 }
 
-// startHotReloadManager constructs and starts the component-internal KV
-// hot-reload manager. It is called as a goroutine from Start() so that
-// InitializeKVStore, SeedFromRuntime, and Watch run after rp.mu is released
-// (all three ultimately call rp.mu.RLock or rp.mu.Lock). reconcileFromKV
-// fires after a 250ms debounce, well past the point where Start() returns.
-//
-// If Stop() races with this goroutine and the processor is no longer running
-// by the time we store the manager, we immediately stop the manager so it
-// does not outlive the processor.
-func (rp *Processor) startHotReloadManager(ctx context.Context) {
-	rcm := NewConfigManager(rp, nil, rp.logger)
-	if err := rcm.InitializeKVStore(rp.natsClient); err != nil {
-		rp.logger.Warn("Failed to initialize KV store for rule hot-reload; running with file rules only",
-			slog.Any("error", err))
-		return
+func (rp *Processor) beginStartAuthority(ctx context.Context) (context.Context, chan struct{}, error) {
+	if ctx == nil {
+		return nil, nil, errs.WrapInvalid(errs.ErrInvalidConfig, "RuleProcessor", "Start", "context cannot be nil")
 	}
-	if err := rcm.Start(ctx); err != nil {
-		rp.logger.Warn("Failed to start rule hot-reload watcher; running with file rules only",
-			slog.Any("error", err))
-		return
+	if err := ctx.Err(); err != nil {
+		return nil, nil, errs.WrapInvalid(err, "RuleProcessor", "Start", "context already cancelled")
 	}
-	rp.mu.Lock()
-	if rp.running {
-		rp.kvConfigManager = rcm
-		rp.mu.Unlock()
-	} else {
-		// Processor already stopped — clean up the manager we just started.
-		rp.mu.Unlock()
-		if err := rcm.Stop(); err != nil {
-			rp.logger.Debug("Hot-reload manager stop after race with Stop() (ignored)", slog.Any("error", err))
+
+	rp.lifecycleMu.Lock()
+	if rp.lifecycleUsed {
+		rp.lifecycleMu.Unlock()
+		return nil, nil, errs.WrapInvalid(errs.ErrAlreadyStarted, "RuleProcessor", "Start", "cleanup authority already active")
+	}
+	rp.lifecycleUsed = true
+	rp.cleanupPending = true
+	rp.startDone = make(chan struct{})
+	startDone := rp.startDone
+	runCtx, cancel := context.WithCancel(ctx)
+	rp.cancel = cancel
+	rp.runtimeWG = &sync.WaitGroup{}
+	rp.runtimeDone = make(chan struct{})
+	rp.commandWake = make(chan struct{}, 1)
+	rp.coordinatorDone = make(chan struct{})
+	rp.commandFenced = false
+	rp.entityBorrowMu.Lock()
+	rp.entityBorrowFenced = false
+	rp.entityBorrowCount = 0
+	rp.entityBorrowDone = nil
+	rp.entityBorrowMu.Unlock()
+	rp.lifecycleMu.Unlock()
+	return runCtx, startDone, nil
+}
+
+func (rp *Processor) finishStartAttempt(ctx context.Context, startDone chan struct{}, committed bool, startErr error) error {
+	if !committed {
+		rollbackErr := lifecyclecleanup.RollbackFailedStart(ctx, rp.cleanup)
+		startErr = errors.Join(startErr, rollbackErr)
+		rp.lifecycleMu.Lock()
+		if rollbackErr == nil {
+			rp.cleanupPending = false
+			rp.terminal = true
+			rp.clearLifecycleHandles()
 		}
+		close(startDone)
+		rp.startDone = nil
+		rp.lifecycleMu.Unlock()
+		return startErr
 	}
+	rp.lifecycleMu.Lock()
+	rp.cleanupPending = false
+	close(startDone)
+	rp.startDone = nil
+	rp.lifecycleMu.Unlock()
+	return startErr
 }
 
 // setupSubscriptions creates subscriptions for input subjects based on port type
@@ -1130,7 +1152,7 @@ func (rp *Processor) setupJetStreamConsumer(ctx context.Context, port component.
 		AutoCreate:    false,
 	}
 
-	err = rp.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: rp.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	handle, err := rp.natsClient.ConsumeStreamWithConfigHandle(ctx, natsclient.PortConsumerContext{Component: rp.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		rp.handleMessage(msgCtx, subject, msg.Data())
 		if ackErr := msg.Ack(); ackErr != nil {
 			rp.logger.Error("Failed to ack JetStream message", "error", ackErr)
@@ -1139,6 +1161,9 @@ func (rp *Processor) setupJetStreamConsumer(ctx context.Context, port component.
 	if err != nil {
 		return fmt.Errorf("consumer setup failed for stream %s: %w", streamName, err)
 	}
+	rp.lifecycleMu.Lock()
+	rp.streamConsumers = append(rp.streamConsumers, ruleStreamConsumer{handle: handle})
+	rp.lifecycleMu.Unlock()
 
 	rp.logger.Info("Rule processor subscribed (JetStream)", "subject", subject, "stream", streamName)
 	return nil
@@ -1183,93 +1208,261 @@ func (rp *Processor) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-	rp.mu.RLock()
-	generation := rp.generation
-	rp.mu.RUnlock()
-	if generation == nil {
-		return nil
-	}
+	for {
+		rp.lifecycleMu.Lock()
+		if !rp.lifecycleUsed {
+			rp.lifecycleUsed, rp.terminal = true, true
+			rp.lifecycleMu.Unlock()
+			return nil
+		}
+		if rp.terminal {
+			rp.lifecycleMu.Unlock()
+			return nil
+		}
+		if rp.startDone != nil {
+			done := rp.startDone
+			rp.lifecycleMu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if rp.stopping {
+			rp.lifecycleMu.Unlock()
+			return errs.WrapTransient(errors.New("stop already in progress"), "RuleProcessor", "Stop", "concurrent Stop")
+		}
+		retryable := rp.cleanupPending
+		rp.stopping = true
+		rp.lifecycleMu.Unlock()
 
-	stopErr := generation.Stop(ctx, func() error {
-		// Fence readiness before cancellation can release a tick blocked on the
-		// dispatch gate. No post-teardown envelope may publish.
-		rp.statusFenced.Store(true)
-		return nil
-	}, func(ctx context.Context) error {
-		rp.mu.RLock()
-		hotReloadMgr := rp.kvConfigManager
-		watcherCancel := rp.watcherCancelFunc
-		watchers := append([]jetstream.KeyWatcher(nil), rp.entityWatchers...)
-		subscriptions := append([]*natsclient.Subscription(nil), rp.subscriptions...)
-		messageCache := rp.messageCache
-		rp.mu.RUnlock()
-
-		var stopErrors []error
-		if hotReloadMgr != nil {
-			if err := hotReloadMgr.Stop(); err != nil {
-				stopErrors = append(stopErrors, fmt.Errorf("stop rule hot-reload manager: %w", err))
-			}
+		stopErr := rp.cleanup(ctx)
+		rp.lifecycleMu.Lock()
+		rp.stopping = false
+		if retryable && stopErr != nil {
+			rp.lifecycleMu.Unlock()
+			return stopErr
 		}
-		if watcherCancel != nil {
-			watcherCancel()
-		}
-		for _, watcher := range watchers {
-			// Each KV watcher was created with watcherCtx. The cancellation
-			// above may therefore close its native subscription before this
-			// explicit Stop reaches it; ErrBadSubscription is terminal only in
-			// this post-cancel loop. Preserve every other watcher failure.
-			if err := watcher.Stop(); err != nil && !errors.Is(err, nats.ErrBadSubscription) {
-				stopErrors = append(stopErrors, fmt.Errorf("stop entity watcher: %w", err))
-			}
-		}
-		// Close outside rp.mu: an in-flight debounce callback snapshots rules
-		// under rp.mu.RLock, and Close waits for that callback to finish.
-		if err := rp.closeEntityEvaluationQueue(); err != nil {
-			stopErrors = append(stopErrors, fmt.Errorf("close entity evaluation queue: %w", err))
-		}
-
-		for _, sub := range subscriptions {
-			if sub != nil {
-				stopErrors = append(stopErrors, sub.Drain(ctx))
-			}
-		}
-		if messageCache != nil {
-			if err := messageCache.Close(); err != nil {
-				stopErrors = append(stopErrors, fmt.Errorf("close message cache: %w", err))
-			}
-		}
-		return errors.Join(stopErrors...)
-	})
-	if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(stopErr, ctxErr) {
+		rp.cleanupPending, rp.terminal = false, true
+		rp.clearLifecycleHandles()
+		rp.lifecycleMu.Unlock()
+		rp.mu.Lock()
+		rp.running = false
+		rp.isSubscribed = false
+		rp.health.Healthy = false
+		rp.mu.Unlock()
+		rp.logger.Info("Rule processor stopped")
 		return stopErr
 	}
+}
 
-	// Generation.Stop has committed the retained result. Only now retire its
-	// exact handles; a caller deadline after cleanup can no longer orphan them.
-	rp.entityWatcherUpdateMu.Lock()
-	rp.entityDispatchGate.Lock()
-	rp.mu.Lock()
-	if rp.generation == generation {
-		rp.running = false
-		rp.kvConfigManager = nil
-		rp.entityWatchers = nil
-		rp.entityWatcherMap = nil
-		rp.entityWatcherCancels = nil
-		rp.entityDispatchRecords = nil
-		rp.watcherCtx = nil
-		rp.watcherCancelFunc = nil
-		rp.subscriptions = nil
-		rp.rules = nil
-		rp.isSubscribed = false
-		rp.messageCache = nil
-		rp.health.Healthy = false
+func (rp *Processor) cleanup(ctx context.Context) error {
+	// 1. Fence readiness and contextless runtime mutation admission.
+	rp.statusFenced.Store(true)
+	barrier := rp.fenceRuntimeCommands()
+
+	rp.lifecycleMu.Lock()
+	cancel := rp.cancel
+	coordinatorDone := rp.coordinatorDone
+	rp.lifecycleMu.Unlock()
+
+	stopErrors := []error{settleRuntimeCommandFence(ctx, barrier, cancel, coordinatorDone)}
+
+	// Every admitted runtime mutation has now settled. Resource snapshots taken
+	// below are therefore final for this owner lifetime.
+	rp.lifecycleMu.Lock()
+	cronScheduler := rp.cronScheduler
+	hotReloadMgr := rp.kvConfigManager
+	consumers := rp.streamConsumers
+	subscriptions := append([]*natsclient.Subscription(nil), rp.subscriptions...)
+	runtimeDone := rp.runtimeDone
+	statusLoopDone := rp.statusLoopDone
+	rp.lifecycleMu.Unlock()
+
+	// 2. Fence cron scheduling and obtain the native in-flight completion.
+	var cronDone <-chan struct{}
+	if cronScheduler != nil {
+		cronDone = cronScheduler.Stop().Done()
 	}
-	rp.mu.Unlock()
-	rp.entityDispatchGate.Unlock()
-	rp.entityWatcherUpdateMu.Unlock()
 
-	rp.logger.Info("Rule processor stopped")
-	return stopErr
+	// 3. Fence every message input while its callback authority is still live.
+	for i := range consumers {
+		if !consumers[i].drainIssued {
+			consumers[i].handle.Drain()
+			consumers[i].drainIssued = true
+		}
+	}
+	for _, subscription := range subscriptions {
+		if subscription != nil {
+			stopErrors = append(stopErrors, subscription.Drain(ctx))
+		}
+	}
+
+	// 4. Deactivate watcher generations before stopping exact native watchers.
+	watchers, watcherRecords, entityBorrowDone := rp.fenceAndSnapshotEntityWatchers()
+	for _, watcher := range watchers {
+		if err := watcher.Stop(); err != nil && !errors.Is(err, nats.ErrBadSubscription) {
+			stopErrors = append(stopErrors, fmt.Errorf("stop entity watcher: %w", err))
+		}
+	}
+
+	// 5. Join every admitted callback, reconcile, and cron fire before
+	// canceling the run authority they still need to finish cleanly.
+	for i := range consumers {
+		select {
+		case <-consumers[i].handle.Closed():
+		case <-ctx.Done():
+			stopErrors = append(stopErrors, ctx.Err())
+		}
+	}
+	for _, record := range watcherRecords {
+		if record.done == nil {
+			continue
+		}
+		select {
+		case <-record.done:
+		case <-ctx.Done():
+			stopErrors = append(stopErrors, ctx.Err())
+		}
+	}
+	if err := awaitEntityBorrowSettlement(ctx, entityBorrowDone, cancel); err != nil {
+		stopErrors = append(stopErrors, err)
+	}
+	if hotReloadMgr != nil {
+		stopErrors = append(stopErrors, hotReloadMgr.Stop())
+	}
+	for _, done := range []<-chan struct{}{cronDone} {
+		if done == nil {
+			continue
+		}
+		select {
+		case <-done:
+		case <-ctx.Done():
+			stopErrors = append(stopErrors, ctx.Err())
+		}
+	}
+	// 6. Watcher admission is closed; now no new work can enter the coalescer.
+	if err := rp.closeEntityEvaluationQueue(); err != nil {
+		stopErrors = append(stopErrors, fmt.Errorf("close entity evaluation queue: %w", err))
+	}
+
+	// 7-8. Signal all continuing loops and join the exact owner runtime.
+	if cancel != nil {
+		cancel()
+	}
+	for _, done := range []<-chan struct{}{statusLoopDone, runtimeDone} {
+		if done == nil {
+			continue
+		}
+		select {
+		case <-done:
+		case <-ctx.Done():
+			stopErrors = append(stopErrors, ctx.Err())
+		}
+	}
+
+	// 9. Terminal resources are closed only after all users have joined.
+	rp.mu.RLock()
+	messageCache := rp.messageCache
+	rp.mu.RUnlock()
+	if messageCache != nil {
+		if err := messageCache.Close(); err != nil {
+			stopErrors = append(stopErrors, fmt.Errorf("close message cache: %w", err))
+		}
+	}
+	rp.lifecycleMu.Lock()
+	rp.streamConsumers = consumers
+	rp.lifecycleMu.Unlock()
+	return errors.Join(stopErrors...)
+}
+
+func (rp *Processor) fenceAndSnapshotEntityWatchers() (
+	[]jetstream.KeyWatcher,
+	[]managedEntityWatcher,
+	<-chan struct{},
+) {
+	rp.entityDispatchGate.Lock()
+	defer rp.entityDispatchGate.Unlock()
+	entityBorrowDone := rp.fenceEntityBorrowsLocked()
+	rp.mu.Lock()
+	defer rp.mu.Unlock()
+	watchers := append([]jetstream.KeyWatcher(nil), rp.entityWatchers...)
+	watcherRecords := make([]managedEntityWatcher, 0, len(rp.entityDispatchRecords))
+	for key, record := range rp.entityDispatchRecords {
+		watcherRecords = append(watcherRecords, record)
+		if record.cancel != nil {
+			record.cancel()
+		}
+		delete(rp.entityDispatchRecords, key)
+	}
+	rp.entityWatchers = nil
+	rp.entityWatcherMap = make(map[string]jetstream.KeyWatcher)
+	return watchers, watcherRecords, entityBorrowDone
+}
+
+func awaitEntityBorrowSettlement(
+	ctx context.Context,
+	done <-chan struct{},
+	cancel context.CancelFunc,
+) error {
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		// An admitted evaluation owns the Start authority, not the expired Stop
+		// context. Cancel it so context-aware fetches and actions can unwind;
+		// terminal Stop never waits on an owner mutex.
+		if cancel != nil {
+			cancel()
+		}
+		return ctx.Err()
+	}
+}
+
+func settleRuntimeCommandFence(
+	ctx context.Context,
+	barrier <-chan error,
+	cancel context.CancelFunc,
+	coordinatorDone <-chan struct{},
+) error {
+	select {
+	case barrierErr := <-barrier:
+		return barrierErr
+	case <-ctx.Done():
+		// A runtime command already admitted before the fence owns the Start
+		// context. If the Stop deadline wins, cancel that authority and join the
+		// coordinator before taking any teardown snapshot; otherwise the command
+		// could publish a watcher or cron registration after the snapshot.
+		if cancel != nil {
+			cancel()
+		}
+		barrierErr := <-barrier
+		if coordinatorDone != nil {
+			<-coordinatorDone
+		}
+		if errors.Is(barrierErr, context.Canceled) {
+			barrierErr = nil
+		}
+		return errors.Join(ctx.Err(), barrierErr)
+	}
+}
+
+func (rp *Processor) clearLifecycleHandles() {
+	rp.cancel = nil
+	rp.runtimeDone = nil
+	rp.runtimeWG = nil
+	rp.commandWake = nil
+	rp.coordinatorDone = nil
+	rp.streamConsumers = nil
+	rp.kvConfigManager = nil
+	rp.subscriptions = nil
+	rp.cronScheduler = nil
+	rp.statusLoopDone = nil
+	rp.messageCache = nil
 }
 
 // publishGraphEvents and publishRuleEvent are in publisher.go
@@ -1499,7 +1692,7 @@ func (rp *Processor) trackedRevisionCount() int {
 	return total
 }
 
-// runRevisionSweeper prunes stale revision entries until its generation ends.
+// runRevisionSweeper prunes stale revision entries until its runtime ends.
 func (rp *Processor) runRevisionSweeper(ctx context.Context, interval, maxAge time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

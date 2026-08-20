@@ -1,6 +1,7 @@
 package rule
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -108,7 +109,7 @@ func TestTripleLengthSubstitution_TruthTable(t *testing.T) {
 				EntityID: semantictest.EntityID(t, "test", "rule", "fixture", "substitution", "entity", "001"),
 				Entity:   tc.entity,
 			}
-			got := ec.SubstituteVariables(tc.template)
+			got := ec.SubstituteVariables(context.Background(), tc.template)
 			assert.Equal(t, tc.want, got)
 		})
 	}
@@ -139,7 +140,7 @@ func TestTripleLengthSubstitution_NonListShapeEmitsErrorSentinel(t *testing.T) {
 			},
 		},
 	}
-	got := ec.SubstituteVariables("$entity.triple.test.agent.role.length")
+	got := ec.SubstituteVariables(context.Background(), "$entity.triple.test.agent.role.length")
 	assert.Equal(t, "[ERROR_LENGTH_NOT_LIST:test.agent.role]", got,
 		"non-list Object must replace the .length token with the error sentinel so author errors don't silently parse as 0 downstream")
 }
@@ -157,7 +158,7 @@ func TestTripleLengthSubstitution_RelatedNamespace(t *testing.T) {
 			},
 		},
 	}
-	got := ec.SubstituteVariables("$related.triple.test.fixture.items.length")
+	got := ec.SubstituteVariables(context.Background(), "$related.triple.test.fixture.items.length")
 	assert.Equal(t, "2", got)
 }
 
@@ -177,7 +178,7 @@ func TestTripleLengthSubstitution_NotInterferingWithOrdinarySubstitution(t *test
 	}
 	// Both forms in one template: ordinary triple substitution AND
 	// .length substitution. Both must resolve.
-	got := ec.SubstituteVariables("role=$entity.triple.test.agent.role count=$entity.triple.test.fixture.subtopics.length")
+	got := ec.SubstituteVariables(context.Background(), "role=$entity.triple.test.agent.role count=$entity.triple.test.fixture.subtopics.length")
 	assert.Equal(t, "role=coordinator count=3", got)
 }
 
@@ -188,6 +189,6 @@ func TestTripleLengthSubstitution_CanonicalHyphenatedPredicate(t *testing.T) {
 		{Predicate: semantictest.Predicate(t, "coordinator", "decision", "next-actions"), Object: []string{"review", "merge"}},
 	}}}
 
-	got := ec.SubstituteVariables("$entity.triple.coordinator.decision.next-actions.length")
+	got := ec.SubstituteVariables(context.Background(), "$entity.triple.coordinator.decision.next-actions.length")
 	assert.Equal(t, "2", got)
 }

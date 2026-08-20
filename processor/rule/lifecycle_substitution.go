@@ -161,7 +161,7 @@ func init() {
 // applyLifecycleSubstitutions resolves $entity.lifecycle.* tokens in
 // template. Short-circuits when the template doesn't reference any of
 // the supported paths.
-func (ec *ExecutionContext) applyLifecycleSubstitutions(template string) string {
+func (ec *ExecutionContext) applyLifecycleSubstitutions(ctx context.Context, template string) string {
 	if !strings.Contains(template, lifecycleSubstitutionPrefix) {
 		return template
 	}
@@ -171,7 +171,7 @@ func (ec *ExecutionContext) applyLifecycleSubstitutions(template string) string 
 		return template
 	}
 
-	participant, err := ec.lookupLifecycleParticipant()
+	participant, err := ec.lookupLifecycleParticipant(ctx)
 	if err != nil {
 		// Negative lookup is cached on ec; no need to re-log per
 		// substitution call. The unresolved-template warning will
@@ -218,7 +218,7 @@ func (ec *ExecutionContext) applyLifecycleSubstitutions(template string) string 
 // lookupLifecycleParticipant memoizes Manager.LookupByEntityID on ec
 // so multi-template rules don't pay the linear-scan cost more than
 // once. Negative results are also cached.
-func (ec *ExecutionContext) lookupLifecycleParticipant() (lifecycleParticipantSnapshot, error) {
+func (ec *ExecutionContext) lookupLifecycleParticipant(ctx context.Context) (lifecycleParticipantSnapshot, error) {
 	if ec.lifecycleParticipantCache != nil {
 		c := ec.lifecycleParticipantCache
 		if c.err != nil {
@@ -226,7 +226,7 @@ func (ec *ExecutionContext) lookupLifecycleParticipant() (lifecycleParticipantSn
 		}
 		return participantSnapshot(c.participant), nil
 	}
-	p, err := ec.Lifecycle.LookupByEntityID(context.Background(), ec.EntityID)
+	p, err := ec.Lifecycle.LookupByEntityID(ctx, ec.EntityID)
 	ec.lifecycleParticipantCache = &lifecycleLookupResult{
 		participant: p,
 		err:         err,

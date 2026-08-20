@@ -17,11 +17,12 @@ const (
 	entityEvaluationFenceIdleTTL = 15 * time.Minute
 )
 
-// entityEvaluationFence serializes state fetch, rule evaluation, and delete
-// cleanup for one entity. Active entries are reference-counted and never
-// evicted. When the last queued/in-flight reference leaves, the lock and its
-// revision watermark move to a bounded TTL+LRU cache so sequential overlapping
-// watcher deliveries remain ordered without creating an unbounded index.
+// entityEvaluationFence serializes only revision admission for one entity.
+// Fetch, rule evaluation, actions, and delete cleanup run without holding its
+// mutex. Active entries are reference-counted and never evicted. When the last
+// queued/in-flight reference leaves, its revision watermark moves to a bounded
+// TTL+LRU cache so overlapping watcher deliveries remain deduplicated without
+// creating an unbounded index.
 type entityEvaluationFence struct {
 	mu      sync.Mutex
 	entries map[string]*entityEvaluationFenceEntry

@@ -2,6 +2,7 @@ package rule
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"testing"
@@ -642,7 +643,7 @@ func TestExpressionRuleEvaluateEntityState(t *testing.T) {
 			// Create EntityState with triples - use graph types
 			entityState := createTestEntityState("test.entity.id", tt.triples)
 
-			result := rule.EvaluateEntityState(entityState)
+			result := rule.EvaluateEntityState(context.Background(), entityState)
 
 			if result != tt.want {
 				t.Errorf("EvaluateEntityState() = %v, want %v", result, tt.want)
@@ -719,7 +720,7 @@ func TestExpressionRuleEvaluateEntityState_TripleValueSubstitution(t *testing.T)
 			}
 
 			entityState := createTestEntityState("test.entity.id", tt.triples)
-			result := rule.EvaluateEntityState(entityState)
+			result := rule.EvaluateEntityState(context.Background(), entityState)
 
 			if result != tt.want {
 				t.Errorf("EvaluateEntityState() = %v, want %v", result, tt.want)

@@ -152,7 +152,7 @@ func (r *ExpressionRule) Evaluate(messages []message.Message) bool {
 	// (loud Warn via the unresolved-template path).
 	ec := &ExecutionContext{MessageData: data}
 	expr := r.buildLogicalExpression()
-	expr.Conditions = SubstituteConditionValues(expr.Conditions, ec)
+	expr.Conditions = substituteConditionValues(nil, expr.Conditions, ec)
 	result, err := r.evaluator.EvaluateWithStateAndMessage(nil, nil, expression.MessageFields(data), expr)
 	if err != nil {
 		slog.Debug("ExpressionRule: message-path evaluation error",
@@ -167,7 +167,7 @@ func (r *ExpressionRule) Evaluate(messages []message.Message) bool {
 // EvaluateEntityState evaluates the rule directly against EntityState triples.
 // This bypasses the message transformation layer and evaluates conditions
 // directly against triple predicates (e.g., "sensor.measurement.fahrenheit").
-func (r *ExpressionRule) EvaluateEntityState(entityState *gtypes.EntityState) bool {
+func (r *ExpressionRule) EvaluateEntityState(ctx context.Context, entityState *gtypes.EntityState) bool {
 	if !r.enabled || entityState == nil {
 		return false
 	}
@@ -178,7 +178,7 @@ func (r *ExpressionRule) EvaluateEntityState(entityState *gtypes.EntityState) bo
 	}
 
 	result, err := evaluateConditionsAgainstEntity(
-		context.Background(), r.evaluator, r.conditions, r.logic, entityState, r.lifecycleManager)
+		ctx, r.evaluator, r.conditions, r.logic, entityState, r.lifecycleManager)
 	if err != nil {
 		slog.Debug("ExpressionRule: evaluation error",
 			"rule", r.name,
@@ -230,7 +230,7 @@ func evaluateConditionsAgainstEntity(
 	// firing; Matches takes the strict disposition over the same steps.
 	stateFields := expression.StateFields{}
 	_ = populateLifecycleStateFields(ctx, lifecycleLookup, entityState.ID, stateFields)
-	expr := substituteConditionsForEntity(conditions, logic, entityState, lifecycleLookup)
+	expr := substituteConditionsForEntity(ctx, conditions, logic, entityState, lifecycleLookup)
 	return dispatchEvaluation(evaluator, entityState, stateFields, expr)
 }
 
@@ -243,6 +243,7 @@ func evaluateConditionsAgainstEntity(
 // compare the literal token as an ordinary string and return a confident verdict.
 // Both paths run this exact function, so the substitution itself cannot diverge.
 func substituteConditionsForEntity(
+	ctx context.Context,
 	conditions []expression.ConditionExpression,
 	logic string,
 	entityState *gtypes.EntityState,
@@ -254,7 +255,7 @@ func substituteConditionsForEntity(
 		Lifecycle: lifecycleLookup,
 	}
 	return expression.LogicalExpression{
-		Conditions: SubstituteConditionValues(conditions, ec),
+		Conditions: SubstituteConditionValues(ctx, conditions, ec),
 		Logic:      logic,
 	}
 }

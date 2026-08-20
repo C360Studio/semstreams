@@ -397,7 +397,7 @@ func TestProcessor_RemoveRule_DeletesScheduleRecord(t *testing.T) {
 		scheduleTracker: tracker,
 	}
 
-	rp.removeRule(ruleID)
+	rp.removeRuleContext(ctx, ruleID)
 
 	if _, err := tracker.LastFiredAt(ctx, ruleID); !errors.Is(err, ErrScheduleRecordNotFound) {
 		t.Errorf("LastFiredAt after removeRule = %v, want ErrScheduleRecordNotFound", err)
@@ -428,7 +428,7 @@ func TestProcessor_TypeSwap_DeletesScheduleRecord(t *testing.T) {
 		scheduleTracker: tracker,
 	}
 
-	rp.deleteScheduleRecord(ruleID)
+	rp.deleteScheduleRecordContext(ctx, ruleID)
 
 	if _, err := tracker.LastFiredAt(ctx, ruleID); !errors.Is(err, ErrScheduleRecordNotFound) {
 		t.Errorf("LastFiredAt after type-swap delete = %v, want ErrScheduleRecordNotFound", err)

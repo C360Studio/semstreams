@@ -67,6 +67,49 @@ succeeds. If rollback fails or expires, retain cancel, done, and every exact acq
 reject another Start; and permit later manager `Stop(ctx)` to retry cleanup using its caller context. Keep
 `RunPartialStartRollback` or an exactly equivalent bounded helper until all 21 measured paths prove this invariant.
 
+## Rule context API migration
+
+The owner-approved RU1 source target makes five Rule APIs context-first. The source break deliberately requires callers
+to propagate explicit cancellation and operation authority instead of relying on retained or invented roots. It does
+not change rule configuration, subjects, persisted state, or schemas:
+
+```go
+// Before
+configManager.InitializeKVStore(natsClient)
+executionContext.SubstituteVariables(template)
+executionContext.SubstituteVariablesWithIterVar(template, varName, value)
+rule.SubstituteConditionValues(conditions, executionContext)
+evaluator.EvaluateEntityState(entityState)
+
+// After
+configManager.InitializeKVStore(ctx, natsClient)
+executionContext.SubstituteVariables(ctx, template)
+executionContext.SubstituteVariablesWithIterVar(ctx, template, varName, value)
+rule.SubstituteConditionValues(ctx, conditions, executionContext)
+evaluator.EvaluateEntityState(ctx, entityState)
+```
+
+Pass the exact composition, watcher, evaluation, or action context that owns the operation. Implementations must not
+retain that context or replace it with a new root. `EntityStateEvaluator` implementations should treat nil context as
+invalid caller input; framework call paths provide a non-nil operation context.
+
+The time-bounded read-only sister census for this source break is exact:
+
+- SemTeams has one call in `cmd/semteams/main.go`; change it to
+  `rcm.InitializeKVStore(ctx, natsClient)` using the function's existing `ctx` parameter.
+- SemSpec has two `ExecutionContext.SubstituteVariables` calls in
+  `workflow/execrules/rulepack_test.go`; pass the test context as the new first argument.
+- The read-only sister census found zero calls to `SubstituteVariablesWithIterVar` or `SubstituteConditionValues`.
+  External adopters calling either exported method must still pass their exact operation context as the new first
+  argument.
+- SemSpec has 15 `EvaluateEntityState` calls in `workflow/intakerules/rulepack_test.go`; pass a non-nil test context as
+  the new first argument.
+
+SemStreams does not edit those repositories. Their owners make and validate the source migrations in their own
+repositories. Independent RU1 implementation review and the final isolated structural E2E are green. Owner-migrated
+credit is limited to `processor/rule/processor.go`; this migration map grants no supporting-file, broader task,
+release, or tag credit.
+
 ## Duplicate durable identity
 
 Two local owners cannot share one `(stream,durable)` identity. Canonically derive and validate every identity knowable

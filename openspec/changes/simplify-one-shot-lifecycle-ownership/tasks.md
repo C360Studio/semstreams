@@ -163,6 +163,15 @@
     identities are recorded in the ledger. No outward API, name-routed lifecycle, or deletion surface changed. RU1,
     M1, N1, and every broader gate remain excluded; temporary bridges preserve the no-release/no-tag invariant. Task
     2.3, Gate A/B/C, runtime migration, proof, release, archive, and tag readiness remain unchecked and incomplete.
+  - 2026-08-20 RU1 implementation checkpoint: the owner's `approved` applies only to coherent rulings R1-R5:
+    context-first Rule APIs, immediate context-bearing KV initialization, an internal cron dispatcher, nil-context
+    rejection by `Matches`, and barrier-before-snapshot shutdown ordering. Implementation and re-review code findings
+    are cleared, and the ledger records REDs, exact evidence, census, hashes, migration impact, and repository-wide
+    limitations. Independent implementation review returned `APPROVE`; a reviewer-run isolated structural E2E from
+    the final production identity passed 38/38, then removed only its isolated stack and volume. Owner-migrated credit
+    is limited to `processor/rule/processor.go`; all adjacent Rule files, composition callers, docs, migration guidance,
+    and tests are supporting only. Task 2.3, Gate A/B/C, runtime migration, proof, release, archive, and tag readiness
+    remain unchecked and incomplete; temporary bridges preserve the no-release/no-tag invariant.
   - 2026-08-18 checkpoint: independent `semstreams-reviewer` verdict `CORRECTIONS CONFIRMED` grants owner-migrated
     credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
     worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.

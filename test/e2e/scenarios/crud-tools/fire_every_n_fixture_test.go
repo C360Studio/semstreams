@@ -1,6 +1,7 @@
 package crudtools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -75,11 +76,11 @@ func TestFireEveryNRuleDefinitionScopesOnlySeededProbeEntities(t *testing.T) {
 		}
 	}
 
-	require.True(t, evaluator.EvaluateEntityState(probeEntity(
+	require.True(t, evaluator.EvaluateEntityState(context.Background(), probeEntity(
 		"org.platform.test.probe.e2e.001",
 		fireEveryNEntityType,
 	)))
-	assert.False(t, evaluator.EvaluateEntityState(probeEntity(
+	assert.False(t, evaluator.EvaluateEntityState(context.Background(), probeEntity(
 		"org.platform.test.probe.e2e.002",
 		"other-probe-type",
 	)), "in-scope entity with a mismatched type must not evaluate")

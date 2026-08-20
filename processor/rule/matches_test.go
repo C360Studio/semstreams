@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -125,7 +126,7 @@ func TestMatches_AgreesWithStatefulPath(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewExpressionRule: %v", err)
 			}
-			wantStateful := stateful.EvaluateEntityState(entity)
+			wantStateful := stateful.EvaluateEntityState(context.Background(), entity)
 
 			got, err := Matches(context.Background(), def, createTestEntityState("test.entity.id", c.triples))
 			if err != nil {
@@ -240,7 +241,7 @@ func TestMatches_EvaluationErrorPropagatesRatherThanBecomingFalse(t *testing.T) 
 	if err != nil {
 		t.Fatalf("NewExpressionRule: %v", err)
 	}
-	if stateful.EvaluateEntityState(createTestEntityState("test.entity.id", triples)) {
+	if stateful.EvaluateEntityState(context.Background(), createTestEntityState("test.entity.id", triples)) {
 		t.Fatal("precondition failed: the engine should not fire on an absent required field")
 	}
 
@@ -291,7 +292,7 @@ func TestMatches_CooldownIsNotAppliedAndNotRefused(t *testing.T) {
 		t.Fatalf("NewExpressionRule: %v", err)
 	}
 	stateful.lastTriggered = time.Now()
-	if stateful.EvaluateEntityState(createTestEntityState("test.entity.id", triples)) {
+	if stateful.EvaluateEntityState(context.Background(), createTestEntityState("test.entity.id", triples)) {
 		t.Fatal("precondition failed: the engine should be cooling down and answer false")
 	}
 
@@ -366,7 +367,7 @@ func TestMatches_DisabledDefinitionOwesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExpressionRule: %v", err)
 	}
-	if stateful.EvaluateEntityState(createTestEntityState("test.entity.id", triples)) {
+	if stateful.EvaluateEntityState(context.Background(), createTestEntityState("test.entity.id", triples)) {
 		t.Error("precondition: the engine must also refuse a disabled rule")
 	}
 }
@@ -492,6 +493,24 @@ func (blockingLookup) LookupByEntityID(ctx context.Context, _ string) (lifecycle
 	return nil, ctx.Err()
 }
 
+// secondLookupBlocks lets the answerability pass resolve lifecycle state, then
+// blocks the separate condition-value substitution lookup until its exact caller
+// context is canceled.
+type secondLookupBlocks struct {
+	*fakeLifecycleManager
+	calls         atomic.Int64
+	secondStarted chan struct{}
+}
+
+func (m *secondLookupBlocks) LookupByEntityID(ctx context.Context, entityID string) (lifecycle.Participant, error) {
+	if m.calls.Add(1) == 1 {
+		return m.fakeLifecycleManager.LookupByEntityID(ctx, entityID)
+	}
+	close(m.secondStarted)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
 // TestMatches_SuppliedManagerThatFailsIsNotResolvedState — Codex finding 2.
 // "A manager was supplied" and "lifecycle state resolved" are different facts.
 func TestMatches_SuppliedManagerThatFailsIsNotResolvedState(t *testing.T) {
@@ -593,6 +612,56 @@ func TestMatches_HonoursContextCancellation(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Matches did not observe context cancellation — a degraded backend would " +
 			"wedge the caller indefinitely")
+	}
+}
+
+func TestMatches_RejectsNilContext(t *testing.T) {
+	t.Parallel()
+	state := createTestEntityState("test.entity.id", nil)
+	if _, err := Matches(nil, Definition{ID: "nil-context", Enabled: true}, state); err == nil {
+		t.Fatal("Matches accepted a nil context")
+	}
+}
+
+func TestMatches_ConditionSubstitutionSecondLookupHonoursCallerCancellation(t *testing.T) {
+	entityID := "test.entity.id"
+	base := newFakeManager()
+	base.seed("mission", &fakeParticipant{EntityIDF: entityID, PhaseF: "flying"})
+	lookup := &secondLookupBlocks{
+		fakeLifecycleManager: base,
+		secondStarted:        make(chan struct{}),
+	}
+	def := Definition{
+		ID: "ctx-second-lookup", Type: "expression", Name: "CtxSecondLookup", Enabled: true, Logic: "and",
+		Conditions: []expression.ConditionExpression{
+			{Field: "$entity.lifecycle.phase", Operator: "eq", Value: "$entity.lifecycle.phase"},
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := matchesWithLookup(ctx, "MatchesWithLifecycle", def,
+			createTestEntityState(entityID, nil), lookup)
+		done <- err
+	}()
+
+	select {
+	case <-lookup.secondStarted:
+		cancel()
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("condition substitution did not reach its lifecycle lookup")
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("canceled second lookup returned a confident verdict")
+		}
+		if got := lookup.calls.Load(); got != 2 {
+			t.Fatalf("lifecycle lookup count = %d, want 2", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("condition substitution did not observe caller cancellation")
 	}
 }
 

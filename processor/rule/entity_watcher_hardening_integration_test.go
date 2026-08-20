@@ -136,7 +136,7 @@ func (r *watcherIntegrationCounterRule) Evaluate([]message.Message) bool {
 func (r *watcherIntegrationCounterRule) ExecuteEvents([]message.Message) ([]Event, error) {
 	return nil, nil
 }
-func (r *watcherIntegrationCounterRule) EvaluateEntityState(*graph.EntityState) bool {
+func (r *watcherIntegrationCounterRule) EvaluateEntityState(context.Context, *graph.EntityState) bool {
 	r.evaluated.Add(1)
 	return false
 }

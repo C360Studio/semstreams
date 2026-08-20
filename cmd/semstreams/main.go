@@ -691,12 +691,11 @@ func printHelp() {
 // unavailability.
 func buildRuleManager(ctx context.Context, natsClient *natsclient.Client, configMgr *config.Manager, logger *slog.Logger) executors.RuleManager {
 	rcm := rulepkg.NewConfigManager(nil, configMgr, logger)
-	if err := rcm.InitializeKVStore(natsClient); err != nil {
+	if err := rcm.InitializeKVStore(ctx, natsClient); err != nil {
 		logger.Warn("rule CRUD tools disabled: could not initialise rules KV store",
 			slog.Any("error", err))
 		return nil
 	}
-	_ = ctx // reserved for future use if KV init needs a context
 	return rcm
 }
 

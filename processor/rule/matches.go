@@ -129,6 +129,9 @@ func matchesWithLookup(
 	ctx context.Context, caller string, def Definition,
 	state *gtypes.EntityState, lifecycle LifecycleManager,
 ) (bool, error) {
+	if ctx == nil {
+		return false, fmt.Errorf("rule.%s: context is nil", caller)
+	}
 	if state == nil {
 		return false, fmt.Errorf("rule.%s: entity state is nil", caller)
 	}
@@ -186,7 +189,7 @@ func matchesWithLookup(
 		logic = "and"
 	}
 
-	expr := substituteConditionsForEntity(def.Conditions, logic, state, lifecycle)
+	expr := substituteConditionsForEntity(ctx, def.Conditions, logic, state, lifecycle)
 
 	// A template that survived substitution is a "could not resolve", and it must
 	// not reach an operator. eq/contains do not error on a leftover token — they

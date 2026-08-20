@@ -55,11 +55,13 @@ For rules that evaluate directly against entity triples (more efficient):
 ```go
 type EntityStateEvaluator interface {
     // EvaluateEntityState evaluates the rule directly against EntityState triples.
-    EvaluateEntityState(entityState *gtypes.EntityState) bool
+    EvaluateEntityState(ctx context.Context, entityState *gtypes.EntityState) bool
 }
 ```
 
-Implement this interface for rules triggered by KV watch.
+Implement this interface for rules triggered by KV watch. The processor passes the
+exact watcher operation context. Custom evaluators must thread it into any lifecycle
+lookup or other context-aware work and must not retain it on the rule.
 
 ### Event Interface
 
@@ -137,6 +139,8 @@ type Schema struct {
 package rule
 
 import (
+	"context"
+
     gtypes "github.com/c360/semstreams/graph"
     "github.com/c360/semstreams/message"
 )
@@ -208,7 +212,7 @@ func (r *ThresholdRule) ExecuteEvents(messages []message.Message) ([]Event, erro
 ### Step 3: Implement EntityStateEvaluator (Optional)
 
 ```go
-func (r *ThresholdRule) EvaluateEntityState(entityState *gtypes.EntityState) bool {
+func (r *ThresholdRule) EvaluateEntityState(ctx context.Context, entityState *gtypes.EntityState) bool {
     if !r.enabled || entityState == nil {
         return false
     }
@@ -451,7 +455,7 @@ func TestThresholdRule(t *testing.T) {
         },
     }
 
-    result := rule.EvaluateEntityState(entityState)
+    result := rule.EvaluateEntityState(context.Background(), entityState)
     assert.True(t, result)
 }
 

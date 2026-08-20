@@ -165,7 +165,7 @@ func (e *StatefulEvaluator) Evaluate(ctx context.Context, ev Evaluation) (Transi
 	// match evaluation runs without $prev.* state fields, so transition-operator
 	// conditions always return false there; we re-check here with the previous
 	// field values available.
-	currentlyMatching := e.reEvaluateTransitions(ev.Rule, ev.EntityID, ev.Entity, prevState, ev.CurrentlyMatching)
+	currentlyMatching := e.reEvaluateTransitions(ctx, ev.Rule, ev.EntityID, ev.Entity, prevState, ev.CurrentlyMatching)
 
 	transition := DetectTransition(wasMatching, currentlyMatching)
 
@@ -262,6 +262,7 @@ func (e *StatefulEvaluator) Evaluate(ctx context.Context, ev Evaluation) (Transi
 // always return false there. This method re-evaluates the full condition set with
 // previous field values from the state tracker.
 func (e *StatefulEvaluator) reEvaluateTransitions(
+	ctx context.Context,
 	ruleDef Definition,
 	entityID string,
 	entity *gtypes.EntityState,
@@ -279,7 +280,7 @@ func (e *StatefulEvaluator) reEvaluateTransitions(
 	// ADR-047: surface $entity.lifecycle.* keys to the evaluator on
 	// the transition-re-eval path so a rule conditioning on phase
 	// can fire its `On: enter/exit` transitions correctly.
-	PopulateLifecycleStateFields(context.Background(), e.lifecycleManager, entityID, prevFields)
+	PopulateLifecycleStateFields(ctx, e.lifecycleManager, entityID, prevFields)
 
 	// #149: substitute $-prefixed string Values in conditions
 	// against the entity before evaluation. Without this, a condition
@@ -287,7 +288,7 @@ func (e *StatefulEvaluator) reEvaluateTransitions(
 	// the literal template and coerce-errors at runtime.
 	ec := &ExecutionContext{EntityID: entityID, Entity: entity, Lifecycle: e.lifecycleManager}
 	expr := expression.LogicalExpression{
-		Conditions: SubstituteConditionValues(ruleDef.Conditions, ec),
+		Conditions: SubstituteConditionValues(ctx, ruleDef.Conditions, ec),
 		Logic:      ruleDef.Logic,
 	}
 	if expr.Logic == "" {
@@ -376,7 +377,7 @@ func (e *StatefulEvaluator) runActions(
 ) {
 	for _, action := range actions {
 		if len(action.When) > 0 {
-			match, whenErr := e.evaluateWhen(action.When, entity, stateFields, messageFields)
+			match, whenErr := e.evaluateWhen(ctx, action.When, entity, stateFields, messageFields)
 			if whenErr != nil {
 				e.logger.Warn("When clause evaluation failed, skipping action",
 					"rule_id", ruleDef.ID,
@@ -532,6 +533,7 @@ func captureTransitionFields(ruleDef Definition, entity *gtypes.EntityState) map
 // `Evaluator.EvaluateWithStateAndMessage` for the full precedence rule
 // and ADR-041 for the unification rationale.
 func (e *StatefulEvaluator) evaluateWhen(
+	ctx context.Context,
 	conditions []expression.ConditionExpression,
 	entity *gtypes.EntityState,
 	stateFields expression.StateFields,
@@ -552,7 +554,7 @@ func (e *StatefulEvaluator) evaluateWhen(
 		Lifecycle:   e.lifecycleManager,
 	}
 	expr := expression.LogicalExpression{
-		Conditions: SubstituteConditionValues(conditions, ec),
+		Conditions: SubstituteConditionValues(ctx, conditions, ec),
 		Logic:      expression.LogicAnd,
 	}
 	return e.exprEvaluator.EvaluateWithStateAndMessage(entity, stateFields, messageFields, expr)

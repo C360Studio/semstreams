@@ -1,6 +1,7 @@
 package rule
 
 import (
+	"context"
 	"testing"
 )
 
@@ -74,7 +75,7 @@ func TestSubstituteVariables_CallerNamespace(t *testing.T) {
 
 	in := "entity=$entity.id caller=$caller.id role=$caller.role org=$caller.org"
 	want := "entity=acme.ops.robotics.gcs.drone.001 caller=alice role=viewer org=acme"
-	if got := ec.SubstituteVariables(in); got != want {
+	if got := ec.SubstituteVariables(context.Background(), in); got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
 }
@@ -92,7 +93,7 @@ func TestSubstituteVariables_CallerNilTokenSurvives(t *testing.T) {
 	}
 
 	in := "$caller.id"
-	out := ec.SubstituteVariables(in)
+	out := ec.SubstituteVariables(context.Background(), in)
 	if out != in {
 		t.Errorf("got %q, want unchanged %q (caller-only $caller.* must not silently empty in non-caller-aware path)", out, in)
 	}

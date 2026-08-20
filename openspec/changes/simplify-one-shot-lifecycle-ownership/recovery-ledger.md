@@ -1178,6 +1178,200 @@ unrelated Metrics inventory remains byte-identical at SHA-256
 `8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`. Task 2.3, Gate A/B/C, runtime migration,
 proof, release, archive, and tag readiness remain unchecked and incomplete.
 
+### RU1 Rule package implementation checkpoint — 2026-08-20
+
+The owner's `approved` is binding only for the coherent R1-R5 source contract:
+
+1. Rule lifecycle-dependent public methods become context-first, with no compatibility overload.
+2. Rule KV initialization is immediate and receives the owning context.
+3. Standalone cron work enters one internal Start-owned dispatcher rather than inventing callback roots.
+4. `Matches` rejects nil context instead of silently accepting contextless evaluation.
+5. Stop closes update, watcher-borrow, entity-dispatch, and cron admission before snapshot or native teardown.
+
+Independent `semstreams-reviewer` verdict `APPROVE` applies to the final RU1 dirty worktree based on full commit
+`049cbbced433738620247c99aab7a48309b6e418`. Owner-migrated credit is granted only to
+`processor/rule/processor.go`; every adjacent Rule file, composition caller, package document, migration note, and test
+is supporting only.
+
+The causal RED sequence was:
+
+1. Initial reflection tests found retained production contexts and `Generation` lifecycle ownership.
+2. Context-first Rule API and `InitializeKVStore` call-site tests failed to compile before the signatures changed.
+3. `Matches` accepted nil context.
+4. A watcher prepared late enough to escape the Stop snapshot.
+5. Entity dispatch made Stop exceed its one-second caller deadline.
+6. Cron `Register` succeeded and mutated state after Stop.
+7. A duplicate `ConfigManager.Start` succeeded.
+8. The production update seam was absent and its causal test failed to compile.
+9. A mutated ConfigManager Stop path failed to acquire its cancel authority.
+
+The first independent review blocked late command ordering, contextless behavior, lazy KV initialization, and
+standalone cron callbacks that could silently fire outside lifecycle authority. After R1-R5 approval and correction,
+the second review blocked a lifecycle gate held across I/O, terminal cron registration, and duplicate/racing
+ConfigManager Start. It also required HIGH causal proof of the actual update-watch path and exact migration guidance,
+plus a MEDIUM correction to stale `ENTITY_STATES` bucket ownership documentation. Those code findings are now cleared:
+barriers precede snapshots, fallible I/O runs outside lifecycle gates, cron registration is terminally fenced,
+ConfigManager Start is one-shot/race-safe, actual update-watch work is joined, and contexts remain lexical.
+
+The final review then found one more ConfigManager late-Watch defect: a context-insensitive watcher acquisition could
+return a successful native watcher after Stop canceled and snapshotted the published acquisition authority. The
+correction checks the exact run context immediately after Watch returns, stops a successful late handle exactly once,
+never publishes it as running state, joins Start before Stop completes, and leaves terminal one-shot state. The causal
+test blocks acquisition until Stop has canceled it, returns the late handle, proves Stop waits while that handle's Stop
+is blocked, then proves exact-once disposal, no running publication, terminal state, rejected restart, and nil repeated
+Stop.
+
+Final developer and independent evidence is:
+
+| Evidence | Developer | Reviewer |
+|---|---:|---:|
+| Full Rule package race | PASS, 4.791s | PASS, 5.977s |
+| Focused corrected lifecycle race, 50 repetitions | — | PASS, 5.033s |
+| Full Rule integration | PASS, 41.945s | PASS, 43.823s |
+| Fresh isolated structural E2E from final production identity | — | PASS, 38/38 |
+
+`task lint`, `task build`, schema generation with zero drift, strict change/spec validation, and `git diff --check`
+passed. The reviewer ran the fresh structural E2E in an isolated environment from the final production-file identity;
+all 38 scenarios passed, and cleanup removed only that isolated stack and volume. Repository-wide race is not claimed
+green because repository-root scanners traverse two unrelated user-owned `.claude/worktrees`, and four stale testinfra
+baseline rows remain. The ordinary RU1 package and integration surfaces are green.
+
+The authoritative tracked-production census moved exactly as reviewed:
+
+| Measurement | HEAD `049cbbce` | RU1 worktree | Delta |
+|---|---:|---:|---:|
+| Production owner files importing `internal/lifecyclejoin` | 2 | 1 | -1 |
+| `lifecyclejoin.NewGeneration` | 2 | 1 | -1 |
+| `Generation.Stop` | 2 | 1 | -1 |
+| External `Generation.Cancel` | 2 | 1 | -1 |
+| External `RunPartialStartRollback` calls | 1 | 1 | 0 |
+| Final parent-aware `RollbackFailedStart` production owner calls | 30 | 31 | +1 |
+| `lifecyclejoin.NewOperation` / lifecycle `Operation.Run` | 0 | 0 | 0 |
+| `Generation.StopWithQuiesce` | 0 | 0 | 0 |
+| Rule production stored contexts | 3 | 0 | -3 |
+| Unauthorized Rule production roots | 9 | 0 | -9 |
+| Bounded durability `WithoutCancel` exception | 1 | 1 | 0 |
+
+The sole retained `WithoutCancel` use remains the bounded persistence/finalization exception; it is not a continuing
+runtime root. Rule settlement, readiness, subjects, configuration, schemas, dedicated rule hot reload, and effect/ACK
+semantics remain unchanged. Graph-ingest exclusively creates and owns `ENTITY_STATES` with history 1 and no TTL; Rule
+waits for and opens that bucket read-only without applying retention. No name-routed lifecycle or consumer deletion was
+added.
+
+The exact downstream source migration is recorded only in the SemStreams-owned
+`docs/operations/migration-restart-safe-nats-client.md`, SHA-256
+`5992afa019fb6bb4508cf5167fe67bc67718b968fa176fd9bdcca0568eb496b5`. Read-only census found one SemTeams
+`cmd/semteams/main.go` call requiring `InitializeKVStore(ctx, natsClient)`, two SemSpec
+`workflow/execrules/rulepack_test.go` calls requiring `SubstituteVariables(ctx, template)`, and 15 SemSpec
+`workflow/intakerules/rulepack_test.go` calls requiring `EvaluateEntityState(ctx, entityState)`. SemStreams made no
+sister-repository change.
+
+Stable final RU1 implementation and evidence identities are:
+
+- `cmd/e2e-semstreams/main.go`:
+  `ff942d8511ac576cd753480138713169ab20e93b75e0eaec71abd127e3108336`;
+- `cmd/semstreams/main.go`:
+  `49124d9769ee339d961273221e2fb192fec03486dc3c2c18908743206e8a24f9`;
+- `processor/rule/actions.go`:
+  `d059b66ce07f12f2d3e7a0bff7c5edf05e23b46aebffec95b26beea7e7f35f37`;
+- `processor/rule/actions_lifecycle.go`:
+  `bf80de4ef8284274f3a7f8f96bb9fc442186d57e73d834fd15f26b7ce8fc051d`;
+- `processor/rule/actions_subject_override_test.go`:
+  `6baeb69f010b15e506e967a324f5f6b5544f6b919fe58e80ceb196062fe75206`;
+- `processor/rule/actions_test.go`:
+  `5c67f00c1d2eb6f7fe220c40d923f9f8b7d86a05c742f2c6274232367344182c`;
+- `processor/rule/caller_substitution_test.go`:
+  `44c56b00e73c3c48037b79a3765944f2a2a344c27f977dfb32726039a92c7214`;
+- `processor/rule/cron_scheduler.go`:
+  `be11067f3e49b0e0e79ca5271b34411f4b6f0b165a911ee55424d7f8f15a8f8d`;
+- `processor/rule/cron_scheduler_test.go`:
+  `cee9d706683e7000ccc63f854ed870bc598c289bc39d9617d373e7f8c2088659`;
+- `processor/rule/cron_substitution_test.go`:
+  `f79f70cb6365dbccfc4d7e9d00dd5d7a778d6b6cb70b5d331d7cb34f7ca5079f`;
+- `processor/rule/docs/custom-rules.md`:
+  `9367e7a252e484cb2e253cdb6e24dedcfd4b5a224ed53df8c9c3a0b212162beb`;
+- `processor/rule/docs/entity-watching.md`:
+  `8d5d5ba590b5c13905788655aaa5b5f8149869f1719b01e5d1d6a3d558bd243b`;
+- `processor/rule/entity_evaluation_fence.go`:
+  `ea28d0a98a2718a3ccdf9f20b1e08057fedaec1f391092a134e2ca80bc6b0fe3`;
+- `processor/rule/entity_rule_pattern_selection_test.go`:
+  `b3cb78821249bdb37e2cde207773bef2b97e606f1eda23e2343f5543737c4646`;
+- `processor/rule/entity_substitution_test.go`:
+  `bcfd7f00e607fbd2a81b11262c0cd3a075a8ea1d1e42239e95d9349112b65a48`;
+- `processor/rule/entity_watcher.go`:
+  `1cae91c2e357e676d3c89a27605f2b20918835fdc882800563779bcff795a36a`;
+- `processor/rule/entity_watcher_generation_test.go`:
+  `b5a459a66c7c641e185a008669ded53c28627134fd356640f0ff7dab1be0a7d6`;
+- `processor/rule/entity_watcher_hardening_integration_test.go`:
+  `9d1e58990536d0550aecd8343595c34a136f85c2bbb207a0bd360e0f636ec356`;
+- `processor/rule/example_fan_out_integration_test.go`:
+  `6dfd97d34f992d950b53525aa99c5079e2d436936a08955984eae3ca44161abf`;
+- `processor/rule/execution_context.go`:
+  `b8d834bc268a9d0b36c1036c42439c018791f4b2c1b4fb48d85c08546df0879b`;
+- `processor/rule/expression_factory.go`:
+  `7ca9507b97a03bbfef5b1e76365221f27338dcb335620dff2307c796f1c5d867`;
+- `processor/rule/expression_factory_test.go`:
+  `d545c2cc57836d7ec2a0052e9f5e5d91d7d85febdf77934ae074f47a0339baa5`;
+- `processor/rule/for_each_substitution_test.go`:
+  `60e017748de24424b6a7ed42169034388a9699cf8b08eba99b3804eabb6cb4fe`;
+- `processor/rule/interfaces.go`:
+  `f9c9d759f949e92ced8e9ef17444802bcd730ff678e1f796f3f5c70a416e2d49`;
+- `processor/rule/kv_config_integration.go`:
+  `920c8c8369569286880b6991a22dbfe0b3e8b5fb7c2279f4ff4a6ee20ada78f8`;
+- `processor/rule/kv_config_list_test.go`:
+  `989b5c88c9d1cabbbc36c6c9e51f049e904789b80a737e38025cb0e9bf89a774`;
+- `processor/rule/kv_hot_reload_integration_test.go`:
+  `110c6fa86301483be59c56d1eee3c950518bf7ba689a30484f82c7f96f1f23ea`;
+- `processor/rule/lifecycle_substitution.go`:
+  `4614926fc1f8c91a37663072c8064c3e49438b74942632330fb5cc47710fb0a2`;
+- `processor/rule/lifecycle_substitution_test.go`:
+  `6b5ca94bdf23e7a0a6014cce663400e7b561a1773567431d6589fcfa3b36c241`;
+- `processor/rule/matches.go`:
+  `70a12cb17e0d8ac013e6b7833eb4d4bfb5efbcefeaa1b6cfccad117f87ec982c`;
+- `processor/rule/matches_test.go`:
+  `23294ee2d58803a21c32c745111a6e137e1989623fe3b09fb5c398082ec45568`;
+- `processor/rule/message_handler.go`:
+  `f4cad9705b03388cda3c70ebeb2f657bd773ed9e4e58b696f3a903801e1122db`;
+- `processor/rule/message_substitution_test.go`:
+  `c083ccd8bc5c68216fd1b0169f19c2ff2bdcc921fbbd132ea22e023045788d4e`;
+- `processor/rule/processor.go`:
+  `1d1dc7cad6f0af470753a1d59f2f7fe3ad93dd59c3723d6a43d4bda4635496f1`;
+- `processor/rule/research_graph_pipeline_integration_test.go`:
+  `e69fd1d3ae88365d16323a3b48b5ef2fee9f35681fc04ab26110e0724579c1af`;
+- `processor/rule/rule_lifecycle_test.go`:
+  `ab8857509634514e8aa7e9cc5f1d218082edefaf4fb522a52eb05808b607406a`;
+- `processor/rule/runtime_config.go`:
+  `a649914a93b3ba82a9daf0b60a1421f9afd80990531378f4f6efa45db0ebd402`;
+- `processor/rule/runtime_config_lifecycle_test.go`:
+  `7d83593ff8574c79ccfd28da9d5a26ef0df4dd9b718fa3b207b411960b545625`;
+- `processor/rule/schedule_tracker_test.go`:
+  `e5c7a98f9caf5bc542cd9ce08d2c054ecfb5272f4fe4ca5538e59e128123d2c3`;
+- `processor/rule/stateful_evaluator.go`:
+  `125741e9571b64d7c7b1d26b586040ea0339ccffb60076c4ff60dc0faaced0f3`;
+- `processor/rule/stateful_evaluator_persist_test.go`:
+  `9706addb2f888a170b296ce942398bf4b6406a2bdbbdd3f5d80bfaf0c2a5b8aa`;
+- `processor/rule/test_rule_factory.go`:
+  `d90def898c89c7e7cab7d43607e9b9fde9e9567b62b2b6c0f04244a930afdb75`;
+- `processor/rule/triple_length_substitution_test.go`:
+  `17aa3766e43f1f87f4a74ba0da48d25f41d6896346b11eac655a72a159d2a37d`;
+- `processor/rule/triple_triples_substitution_test.go`:
+  `69309fd4373c613d9a7af8fa854cb21cd56c5c29dca1de6d90d0ea8e0ed65de4`;
+- `processor/rule/triple_value_substitution_test.go`:
+  `4c074966134ae23516c21840d7c151eb8c3a030da1fda0a1649d85d6afa81b4d`;
+- `processor/rule/typed_substitution_test.go`:
+  `4c01c86691d166b95fa03a8ccf36ca8fb6d0e58cce3e5790b3fc382a316ae6e9`;
+- `test/e2e/scenarios/crud-tools/fire_every_n_fixture_test.go`:
+  `144774e99b866ea67a042490baafb8cb9357dcd3c0cd919e066f248977a38f8d`;
+- `processor/rule/lifecycle_owner_test.go`:
+  `626dd1534c8a0cc63f5ba92b9e80e963fbf7a4af2a41b206c6002c9aa44ccd02`.
+
+The unrelated Metrics inventory remains byte-identical at SHA-256
+`8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`. RU1 owner-migrated credit remains limited to
+`processor/rule/processor.go`; supporting production files, composition callers, docs, migration guidance, and tests
+receive no owner credit. RU1 grants no M1 or N1 credit. Temporary bridges keep the branch under the no-release/no-tag
+invariant. Task 2.3, Gate A/B/C, runtime migration, proof, release, archive, and tag readiness remain unchecked and
+incomplete.
+
 ### CM1 ComponentManager implementation checkpoint — 2026-08-19
 
 Independent `semstreams-reviewer` verdict `APPROVE` applies to the CM1 dirty worktree based on full commit

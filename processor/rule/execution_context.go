@@ -2,6 +2,7 @@
 package rule
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -247,8 +248,8 @@ func (ec *ExecutionContext) RuleID() string {
 // logged so the author sees the silent-pass. Downstream callers that
 // feed the result into an identifier (KV key, NATS subject) will then
 // get a loud failure instead of mysteriously wrong behaviour.
-func (ec *ExecutionContext) SubstituteVariables(template string) string {
-	return ec.substituteVariablesWith(template, nil)
+func (ec *ExecutionContext) SubstituteVariables(ctx context.Context, template string) string {
+	return ec.substituteVariablesWith(ctx, template, nil)
 }
 
 // SubstituteVariablesWithIterVar runs substitution with an extra
@@ -258,11 +259,11 @@ func (ec *ExecutionContext) SubstituteVariables(template string) string {
 // template. Other namespaces ($entity, $message, $state, etc.) resolve
 // as usual. Empty varName degenerates to SubstituteVariables — useful
 // for callers that conditionally bind a var.
-func (ec *ExecutionContext) SubstituteVariablesWithIterVar(template, varName, value string) string {
+func (ec *ExecutionContext) SubstituteVariablesWithIterVar(ctx context.Context, template, varName, value string) string {
 	if varName == "" {
-		return ec.SubstituteVariables(template)
+		return ec.SubstituteVariables(ctx, template)
 	}
-	return ec.substituteVariablesWith(template, map[string]string{varName: value})
+	return ec.substituteVariablesWith(ctx, template, map[string]string{varName: value})
 }
 
 // substituteVariablesWith is the shared implementation under
@@ -279,7 +280,7 @@ func (ec *ExecutionContext) SubstituteVariablesWithIterVar(template, varName, va
 // here becomes load-bearing for prefix-shadowing cases ($i vs $item
 // would collide). Phase 2 must either sort keys longest-first before
 // substitution or namespace its overlay keys to avoid the foot.
-func (ec *ExecutionContext) substituteVariablesWith(template string, overlay map[string]string) string {
+func (ec *ExecutionContext) substituteVariablesWith(ctx context.Context, template string, overlay map[string]string) string {
 	result := template
 
 	// Time substitutions
@@ -348,7 +349,7 @@ func (ec *ExecutionContext) substituteVariablesWith(template string, overlay map
 	// when ec.Lifecycle is nil or the entity isn't registered with
 	// any workflow — surviving tokens trip the unresolved-template
 	// warning below.
-	result = ec.applyLifecycleSubstitutions(result)
+	result = ec.applyLifecycleSubstitutions(ctx, result)
 
 	// Schedule substitutions (cron rules only). No-op when ec.Schedule
 	// is nil; unknown $schedule.* tokens will then trip the
@@ -408,7 +409,11 @@ func (ec *ExecutionContext) substituteVariablesWith(template string, overlay map
 // transition rule needs `from: "$entity.triple.X"` semantics in
 // the future, extend this helper to also substitute string-typed
 // From values — the change is local.
-func SubstituteConditionValues(conds []expression.ConditionExpression, ec *ExecutionContext) []expression.ConditionExpression {
+func SubstituteConditionValues(ctx context.Context, conds []expression.ConditionExpression, ec *ExecutionContext) []expression.ConditionExpression {
+	return substituteConditionValues(ctx, conds, ec)
+}
+
+func substituteConditionValues(ctx context.Context, conds []expression.ConditionExpression, ec *ExecutionContext) []expression.ConditionExpression {
 	if ec == nil || len(conds) == 0 {
 		return conds
 	}
@@ -419,7 +424,7 @@ func SubstituteConditionValues(conds []expression.ConditionExpression, ec *Execu
 		if !ok || !strings.Contains(s, "$") {
 			continue
 		}
-		out[i].Value = ec.SubstituteVariables(s)
+		out[i].Value = ec.SubstituteVariables(ctx, s)
 	}
 	return out
 }
