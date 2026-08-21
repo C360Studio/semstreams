@@ -18,13 +18,10 @@ import (
 type KVTestHelper struct {
 	t       *testing.T
 	kvStore *natsclient.KVStore // Use the new KVStore from KV-000
-	bucket  string
-	ctx     context.Context
 }
 
 // NewKVTestHelper creates an isolated test KV bucket
 func NewKVTestHelper(t *testing.T, nc *natsclient.Client) *KVTestHelper {
-	ctx := context.Background()
 	js, err := nc.JetStream()
 	require.NoError(t, err)
 
@@ -41,7 +38,7 @@ func NewKVTestHelper(t *testing.T, nc *natsclient.Client) *KVTestHelper {
 	}
 
 	// Create KV bucket with proper config
-	kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+	kv, err := js.CreateKeyValue(t.Context(), jetstream.KeyValueConfig{
 		Bucket:      bucketName,
 		Description: "Test configuration bucket",
 		History:     5,
@@ -54,14 +51,14 @@ func NewKVTestHelper(t *testing.T, nc *natsclient.Client) *KVTestHelper {
 
 	// Register cleanup
 	t.Cleanup(func() {
-		js.DeleteKeyValue(ctx, bucketName)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = js.DeleteKeyValue(cleanupCtx, bucketName)
 	})
 
 	return &KVTestHelper{
 		t:       t,
 		kvStore: kvStore,
-		bucket:  bucketName,
-		ctx:     ctx,
 	}
 }
 
@@ -71,7 +68,7 @@ func (h *KVTestHelper) WriteServiceConfig(service string, config map[string]any)
 	require.NoError(h.t, err)
 
 	key := fmt.Sprintf("services.%s", service)
-	rev, err := h.kvStore.Put(h.ctx, key, data)
+	rev, err := h.kvStore.Put(h.t.Context(), key, data)
 	require.NoError(h.t, err)
 
 	return rev
@@ -82,13 +79,13 @@ func (h *KVTestHelper) UpdateServiceConfig(service string, updateFn func(config 
 	key := fmt.Sprintf("services.%s", service)
 
 	// Use KVStore's UpdateJSON method from KV-000
-	return h.kvStore.UpdateJSON(h.ctx, key, updateFn)
+	return h.kvStore.UpdateJSON(h.t.Context(), key, updateFn)
 }
 
 // GetServiceConfig reads current service configuration
 func (h *KVTestHelper) GetServiceConfig(service string) (map[string]any, uint64, error) {
 	key := fmt.Sprintf("services.%s", service)
-	entry, err := h.kvStore.Get(h.ctx, key)
+	entry, err := h.kvStore.Get(h.t.Context(), key)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -109,12 +106,12 @@ func (h *KVTestHelper) SimulateConcurrentUpdate(service string) error {
 	// Someone else updates (simulated)
 	config["concurrent"] = true
 	data, _ := json.Marshal(config)
-	h.kvStore.Put(h.ctx, fmt.Sprintf("services.%s", service), data)
+	h.kvStore.Put(h.t.Context(), fmt.Sprintf("services.%s", service), data)
 
 	// Try to update with old revision (should fail)
 	config["enabled"] = false
 	data, _ = json.Marshal(config)
-	_, err = h.kvStore.Update(h.ctx, fmt.Sprintf("services.%s", service), data, rev)
+	_, err = h.kvStore.Update(h.t.Context(), fmt.Sprintf("services.%s", service), data, rev)
 	return err // Expect ErrKVRevisionMismatch
 }
 
@@ -142,7 +139,7 @@ func (h *KVTestHelper) WriteComponentConfig(componentType, name string, config m
 	require.NoError(h.t, err)
 
 	key := fmt.Sprintf("components.%s.%s", componentType, name)
-	rev, err := h.kvStore.Put(h.ctx, key, data)
+	rev, err := h.kvStore.Put(h.t.Context(), key, data)
 	require.NoError(h.t, err)
 
 	return rev
