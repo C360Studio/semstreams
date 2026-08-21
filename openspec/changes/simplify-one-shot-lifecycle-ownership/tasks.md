@@ -19,7 +19,15 @@
     `NewDurableHandler` preserves effective-AckWait validation and `ConsumeWithHeartbeat` settlement composition, and
     migration guidance names ten sibling production calls plus affected interfaces. No earlier wave receives removal
     credit.
-- [ ] 2.2 Add reject-not-replace identity validation/claim.
+  - N1b changes `ConsumeStreamWithConfig` and `ConsumeStreamWithConfigContexts` to return exact
+    `jetstream.ConsumeContext`, migrates SemStreams bridge callers, and deletes both temporary `*Handle` methods in the
+    same commit. `Subscription.Drain(context.Context)` semantics and tests remain unchanged and are deferred.
+  - `NewDurableHandler` rejects nil work and nonpositive heartbeat. Nonempty BackOff rejects each nonpositive entry
+    with index/value evidence and uses the minimum interval regardless of order; otherwise positive AckWait or the
+    30-second default is effective. Overflow-safe `heartbeat > effectiveAckWait/2` validation permits equality and
+    reports heartbeat and ceiling. Every nonnil handler result preserves the exact WARN message
+    `ConsumeDurable handler error` with `stream`, `consumer`, and `error` fields. Focused and real-NATS tests prove
+    validation, Ack/Nak/Term/InProgress, cancellation, heartbeat failure, work join, and observability before removal.
 - [ ] 2.3 Migrate every production owner in the rebased recovery census; preserve failed-Start/startDone authority and
   make terminal callback-borrow shutdown fence new borrows, wait for admitted callbacks to return outside manager/gate
   locks, then let outer composition request Stop without callback self-stop.
@@ -189,6 +197,24 @@
     found zero direct metrics-server callers, and the Metrics inventory remains byte-identical. Task 2.3, Gate A/B/C,
     N1, runtime migration, proof, release, archive, and tag readiness remain unchecked and incomplete; temporary
     bridges preserve the no-release/no-tag invariant.
+  - 2026-08-20 refreshed N1 inventory/design checkpoint: a prior six-ruling owner approval occurred before the
+    inventory gate and remains historical only. The current inventory at baseline `2f974bdb`, SHA-256
+    `2a95a0f5fd6683aeed585c8dca43d65ff662f32b2b046ce2262f6b97f74612e9`, received independent `INVENTORY PASS`.
+    Corrected design now incorporates ADR-095 precedence, the gated-DAG durable-consume contract, BackOff minimum and
+    stable WARN requirements, independent observation/claim preservation, and complete downstream configuration
+    impact. Independent pre-owner review returned `DESIGN APPROVE` with no findings and left the inventory identity
+    unchanged. At that historical checkpoint owner reconfirmation was the sole design-authority blocker; the later
+    working-system-first reset below supersedes it. This checkpoint checks no task; N1
+    implementation, Gate A/B/C, runtime proof, release, archive, and tag readiness remain unchecked and incomplete.
+  - 2026-08-20 working-system-first reset: the owner directed the project to restore a system that works and can be
+    understood before deciding whether further lifecycle improvements are needed. This supersedes the six-ruling
+    execution target and withdraws its Subscription semantic change. N1a landed as reviewed `APPROVE` commit
+    `8da1b83ae9c2f323bf484dc28e0574d81504bef9`: four lifecyclejoin files deleted plus one diagnostic-only test change,
+    1 insertion/749 deletions, net -748, zero production additions. Remaining work is exact-handle port convergence,
+    hidden Client authority removal, five inert field/schema removals with private exact-identity fixture cleanup, and
+    stateless durable-handler composition. No remaining N1, proof, release, archive, or tag credit follows.
+    The remaining budget is seven exports deleted and one added (net -6), five fields/schema properties removed,
+    catalogs/state deleted, and zero new lifecycle structs, interfaces, maps, mutexes, goroutines, contexts, or config.
   - 2026-08-18 checkpoint: independent `semstreams-reviewer` verdict `CORRECTIONS CONFIRMED` grants owner-migrated
     credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
     worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.
@@ -214,16 +240,46 @@
     one-shot Stop, fresh-instance restart, exact completion status, focused/package race tests, lint, and strict
     OpenSpec validation pass; production owner files move 37 to 36. Task 2.3, Gate A, runtime migration, and every
     proof/release/archive/tag gate remain unchecked and incomplete.
-- [ ] 2.4 After every frozen owner wave is implementation-reviewed, delete Generation, Operation, StopWithQuiesce,
-  the unchanged legacy rollback implementation, obsolete tests, and the entire `internal/lifecyclejoin` package; prove
-  old imports/symbols zero while final lifecyclecleanup helpers retain only their reviewed stateless contracts.
-- [ ] 2.5 Remove lifecycle deletion and provide fixture/admin teardown.
+- [x] 2.4 N1a: reviewed commit `8da1b83a` deletes Generation, Operation, StopWithQuiesce, the unchanged legacy
+  rollback implementation, obsolete tests, and the entire unused `internal/lifecyclejoin` package. Production/test
+  imports, qualified symbols, declarations, and the package directory are zero/empty; lifecyclecleanup is unchanged.
+  The diff is net -748 with zero production additions. Independent implementation and merge review returned
+  `APPROVE` with no findings.
+- [ ] 2.5 N1b: remove lifecycle deletion, all five accepted configuration fields and generated-schema properties, and
+  provide only private exact-identity fixture teardown. Treat the field/schema removal as breaking. Document the
+  read-only generated-copy migrations for SemStreams UI, SemSpec, and SemTeams, plus SemDragon questtools and the
+  active questbridge field/read/direct-delete path and tests. Sister owners perform and validate those changes.
 
 ## 3. Client minimal and raw roots
 
-- [ ] 3.1 Remove child lifecycle catalogs and same-name replacement; retain read-only observation.
+- [ ] 3.1 N1b: make canonical port methods return exact native handles; remove both temporary bridges, Client consumer
+  and subscription child catalogs, same-name replacement, name-routed Stop/delete, and unused `OutstandingWork`.
+  Retain Client-scoped handle-free internal claims, consumer-policy and direct-port observation, existing metrics and
+  OTEL claims, internal consumer creation, graph-ingest readiness, and agentic-loop inflight as independently owned
+  mechanisms. Preserve unknown-not-zero observation and do not silently resolve known cross-Client metric collision.
 - [ ] 3.2 Make Close terminal transport-only.
 - [ ] 3.3 Execute every approved native-surface RETIRE/NARROW row.
+
+### N1 candidate gate
+
+- [x] N1a proves exact production/test import and symbol zeros. Focused rule race passed in 5.915s; targeted ownership
+  tests passed ten race repetitions in 1.836s; lint, Task build, `go build ./...`, diff check, strict change validation,
+  and all OpenSpec strict validation (52/52) passed. Full race/contract failures reproduce on the clean baseline due to
+  user-owned worktree scanner pollution, stale natsclient census, and four stale testinfra rows; they are not claimed
+  green. Commit `8da1b83a` remains unreleased.
+- [ ] N1b passes affected and full repository race, integration race, contracts, lint, build, intended-only schema
+  generation, strict change and all-spec validation, `task e2e:core`, `task e2e:structural`, `task e2e:agentic`,
+  `task e2e:semantic`, and independent implementation review. Record a coverage gap if structural E2E does not
+  exercise `NewDurableHandler`; do not treat that tier as builder evidence.
+
+### Deferred beyond N1
+
+- [ ] Reconsider `Subscription.Drain(context.Context)` only after the working system is green and a concrete defect or
+  adopter requirement demonstrates that changing its current semantics/tests is worthwhile.
+- [ ] Former task 2.2: add canonical sealed pre-Start duplicate-durable validation and an error naming both owners only
+  if later evidence justifies it. Current N1 preserves the landed Client-local `internalClaims` behavior: reject rather
+  than replace, opaque pointer token, precommit/exact-Closed release, and absent owner labels. It adds no fifth
+  boundary and does not claim complete ADR-095 conformance.
 
 ## 4. Controlled and dirty proof
 

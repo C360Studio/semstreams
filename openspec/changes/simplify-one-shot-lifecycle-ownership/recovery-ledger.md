@@ -63,7 +63,8 @@ A family wave is authorized only when its reviewed inventory and design:
   whose prerequisites are complete may proceed concurrently in an isolated worktree; there is no single global
   next-wave lock.
 
-This process approval does not check task 2.1, 2.2, or 2.3; does not grant owner, Gate A, Gate B, Gate C,
+This historical process approval did not check the then-numbered tasks 2.1, 2.2, or 2.3; it did not grant owner,
+Gate A, Gate B, Gate C,
 runtime-migration, proof, release, archive, or tag credit; and does not weaken any Gate A/B/C, test-surface,
 positive-proof, archive, or tag requirement. Unique and protocol-specific exceptions remain single coherent owner
 slices when the reviewed inventory cannot establish a genuine family.
@@ -1498,6 +1499,97 @@ The M1 inventory is preserved byte-identical at SHA-256
 `8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`; it remains an untracked inventory artifact
 and is not implementation credit. Temporary bridges keep the branch under the no-release/no-tag invariant. Task 2.3,
 Gate A/B/C, N1, runtime migration, proof, release, archive, and tag readiness remain unchecked and incomplete.
+
+### Pre-inventory N1 approval checkpoint — 2026-08-20
+
+After M1 completed the 36th production owner migration, the owner approved a six-ruling N1 package: separate N1a
+lifecyclejoin deletion; canonical exact-handle port methods and bridge removal; same-signature one-shot Subscription
+Drain; a stateless durable handler and unaliased ConsumeDurable removal; Client child/name/OutstandingWork removal; and
+five-field/schema removal with private exact-identity fixture cleanup.
+
+That approval preceded the refreshed inventory gate and corrected design review. It remains historical evidence of
+owner intent but is superseded for execution. In particular, it did not yet account completely for BackOff minimum
+semantics, stable WARN observability, ADR-095 precedence, the binding gated-DAG durable-consume contract, every
+preserved claim/observation authority, or complete downstream generated configuration impact.
+
+This historical checkpoint marked no task and granted no implementation, Gate A/B/C, runtime-proof, release, archive,
+or tag credit. It did not authorize SemStreams to edit sister repositories.
+
+### Accepted N1 inventory and corrected-design checkpoint — 2026-08-20
+
+The inventory-only artifact [`n1-convergence-inventory.md`](n1-convergence-inventory.md) was measured at baseline
+`2f974bdb7f22efb39ac5136e9c0b719b711249c2`, has SHA-256
+`2a95a0f5fd6683aeed585c8dca43d65ff662f32b2b046ce2262f6b97f74612e9`, and received independent verdict
+`INVENTORY PASS`. It selects no target.
+
+The corrected design records genuine do-nothing, incumbent-extension, and recommended options for six rulings. It
+binds ADR-095 over ADR-094's superseded lifecycle mechanics and retains
+`openspec/specs/gated-dag-dispatch/spec.md:43-77` as current durable-consume/heartbeat authority. It adds BackOff
+minimum-positive validation, overflow-safe heartbeat arithmetic, stable WARN fields, separately preserved
+claims/metrics/observation/internal-creator/readiness/inflight mechanisms, and complete local/downstream
+configuration impact.
+
+Independent review returned pre-owner `DESIGN APPROVE` with no findings for reviewed design SHA-256
+`a9de5bd5cd86c484466eadee0947b8afe3d5dffb17249c2a8a48eeeba42faa0a`. The accepted N1 inventory identity remains
+byte-identical. At this historical checkpoint owner reconfirmation of all six rulings was the sole design-authority
+blocker; the working-system-first checkpoint below supersedes it. Tasks 2.1, 2.4, 2.5, 3.1, and 3.2 remained
+unchecked. N1 implementation, Gate A/B/C, runtime-proof,
+release, archive, and tag credit remain absent. N1a and N1b share the no-release/no-tag invariant.
+
+### Working-system-first reset and N1a landed checkpoint — 2026-08-20
+
+This checkpoint supersedes the six-ruling N1 execution target immediately above while preserving it as historical
+evidence. The owner directed the project to restore a system that works well and can be understood, then decide from
+evidence whether further improvement is needed. That direction approves the simplification reset; it does not approve
+speculative `Subscription.Drain` semantics. Current Drain behavior and tests remain unchanged and deferred.
+
+N1a landed as commit `8da1b83ae9c2f323bf484dc28e0574d81504bef9`
+(`refactor(lifecycle): remove unused lifecyclejoin`) from baseline
+`2f974bdb7f22efb39ac5136e9c0b719b711249c2`. Its exact scope is:
+
+- deleted `internal/lifecyclejoin/generation.go` (baseline SHA prefix `2de9a3c`);
+- deleted `internal/lifecyclejoin/generation_test.go` (`495c27f`);
+- deleted `internal/lifecyclejoin/operation.go` (`afdc25e`);
+- deleted `internal/lifecyclejoin/rollback.go` (`a814efe`); and
+- replaced one diagnostic-only string in `processor/rule/lifecycle_owner_test.go`.
+
+The commit contains 1 insertion and 749 deletions, net -748, with zero production additions. Production and test
+imports, qualified symbols, and declarations are zero; the package directory is empty; and
+`internal/lifecyclecleanup` has no diff. Independent implementation and merge review returned `APPROVE` with no
+findings.
+
+| Check | Result |
+|---|---|
+| Focused `processor/rule` race | PASS, 5.915s |
+| Targeted ownership tests, ten race repetitions | PASS, 1.836s |
+| `task lint` | PASS |
+| `task build` and `go build ./...` | PASS |
+| `git diff --check` | PASS |
+| Strict change validation | PASS |
+| All OpenSpec strict validation | PASS, 52/52 |
+
+Repository-wide race and contract are not claimed green. User-owned `.claude/worktrees` scanner pollution, stale
+natsclient census, and four stale testinfra rows reproduce on the clean baseline; candidate packages are green. This
+is a baseline limitation, not broader N1 proof.
+
+Protected evidence remained byte-identical: Metrics inventory SHA-256
+`8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`, N1 inventory SHA-256
+`2a95a0f5fd6683aeed585c8dca43d65ff662f32b2b046ce2262f6b97f74612e9`.
+
+N1a receives task 2.4 and its mechanical gate credit only. The remaining sequence is canonical exact-handle port
+convergence; hidden Client catalog/name/OutstandingWork removal; five inert Go/schema field removals with private
+exact-identity fixture cleanup; and `ConsumeDurable` replacement by stateless `NewDurableHandler` while preserving
+`ConsumeWithHeartbeat` settlement, redelivery, and WARN behavior. The hard remaining budget is seven exports deleted,
+one added (net -6), five fields/schema properties removed, catalogs/state deleted, and zero new lifecycle structs,
+interfaces, maps, mutexes, goroutines, contexts, or configuration.
+
+The existing Client-local `internalClaims` implementation remains unchanged: reject rather than replace, use an
+opaque pointer token, release on precommit failure or exact native Closed, and retain no owner label. Canonical sealed
+pre-Start validation and an error naming both owners move out of current N1 to deferred future improvements. This adds
+no fifth boundary or claim state, and N1 does not claim complete ADR-095 conformance.
+
+All remaining N1 tasks, Gate A/B/C, controlled/dirty proof, release, archive, and tag readiness remain unchecked. The
+branch remains under the no-release/no-tag invariant.
 
 ### CM1 ComponentManager implementation checkpoint — 2026-08-19
 

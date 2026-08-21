@@ -2,20 +2,39 @@
 
 ## Status and scope
 
-This guide records the owner-approved pre-v1 target from ADR-095 and
-`simplify-one-shot-lifecycle-ownership`. Contract application does not claim that runtime migration, controlled proof,
-dirty proof, or settlement proof is complete. Do not use the target signatures until their ordered implementation
-lands and its checks pass.
+This guide records the working-system-first pre-v1 target from ADR-095 and
+`simplify-one-shot-lifecycle-ownership`. The refreshed N1 inventory at baseline
+`2f974bdb7f22efb39ac5136e9c0b719b711249c2`, SHA-256
+`2a95a0f5fd6683aeed585c8dca43d65ff662f32b2b046ce2262f6b97f74612e9`, remains accepted evidence, not a mandate to
+redesign every inventoried surface.
+
+N1a is complete and independently reviewed `APPROVE` at commit
+`8da1b83ae9c2f323bf484dc28e0574d81504bef9`: four `internal/lifecyclejoin` package files were deleted and one
+test-only diagnostic changed, for 1 insertion, 749 deletions, net -748, and zero production additions. Remaining N1
+work is deliberately limited to exact native handles, Client catalog/API removal, inert configuration removal, and a
+stateless durable handler. The earlier six-ruling execution package is superseded. In particular,
+`Subscription.Drain` semantics and tests do not change in this pass.
+
+This narrowed N1 does not claim complete ADR-095 conformance. It preserves the already-landed Client-local
+reject-not-replace durable claim and defers ADR-095's stronger sealed pre-Start validation and error naming both owners.
+
+The remaining cutover must be visibly net-negative: seven exports deleted and one added (net -6), five Go
+fields/schema properties removed, child catalogs/state deleted, and zero new lifecycle structs, interfaces, maps,
+mutexes, goroutines, contexts, or configuration switches.
 
 The landed caller-owned context signature prerequisite is documented in
 [Migrate to caller-owned lifecycle contexts](migration-restore-go-lifecycle-ownership.md). Execution status and sole
 lifecycle completion authority are recorded in the OpenSpec
 [`recovery-ledger.md`](../../openspec/changes/simplify-one-shot-lifecycle-ownership/recovery-ledger.md).
 
-ADR-095 supersedes PR #984's proposed stateful `ManagedConsumer`, `DrainAndDelete`, lifecycle-local backlog,
+ADR-095 is binding and supersedes PR #984's proposed stateful `ManagedConsumer`, `DrainAndDelete`, lifecycle-local
+backlog,
 running-generation rejoin, name-routed child catalog, and retained Close-result mechanics. ADR-094 remains immutable
 history. Its boot-only composition, dedicated rule-definition hot reload, raw-root retirement, always-exit controlled
 shutdown, dirty recovery, and proof gates remain accepted.
+
+The current `openspec/specs/gated-dag-dispatch/spec.md:43-77` contract also remains binding: gated-DAG uses typed
+durable consumption and validates heartbeat against acknowledgement timing.
 
 ADR-095 and `simplify-one-shot-lifecycle-ownership` supersede PR #984's managed-consumer, lifecycle deletion,
 concurrent/rejoin, and retained-result mechanics and own the complete `restart-safe-shutdown` and
@@ -26,20 +45,90 @@ runtime or proof task is completed by delegation.
 
 ## Native owner migration
 
-The three retained consume constructors change from error-only setup to exact native ownership:
+The three retained consume constructors return exact native ownership. The two port-backed signatures are exactly:
 
 ```go
-func (c *Client) ConsumeStreamWithConfig(...) (jetstream.ConsumeContext, error)
-func (c *Client) ConsumeStreamWithConfigContexts(...) (jetstream.ConsumeContext, error)
-func (c *Client) ConsumeInternalStreamWithConfig(...) (jetstream.ConsumeContext, error)
+func (c *Client) ConsumeStreamWithConfig(
+    ctx context.Context,
+    owner PortConsumerContext,
+    cfg StreamConsumerConfig,
+    handler func(context.Context, jetstream.Msg),
+) (jetstream.ConsumeContext, error)
+
+func (c *Client) ConsumeStreamWithConfigContexts(
+    setupCtx context.Context,
+    handlerCtx context.Context,
+    owner PortConsumerContext,
+    cfg StreamConsumerConfig,
+    handler func(context.Context, jetstream.Msg),
+) (jetstream.ConsumeContext, error)
 ```
 
 All fallible stream, consumer, policy, and observation setup must finish before `Consumer.Consume`. Successful Consume
 is the delivery commit point; no fallible setup follows it. The caller retains that exact native handle through Closed.
-There is no SemStreams managed lifecycle wrapper.
+There is no SemStreams managed lifecycle wrapper. SemStreams' temporary `ConsumeStreamWithConfigHandle` and
+`ConsumeStreamWithConfigContextsHandle` bridges disappear in the same breaking cutover; do not migrate to those names.
+All 16 local bridge callers move to the canonical names and retain the returned exact handle. The internal
+`ConsumeInternalStreamWithConfig` method is unchanged by N1.
 
-`ConsumeDurable` retires because its measured production-adopter census is zero. Durable owners use a retained native
-handle plus the existing heartbeat and settlement primitives. ADR-070 remains historical context.
+The authoritative read-only old-signature port census is nine production calls across three sister repositories:
+SemSpec has six in `cmd/sandbox/qa_subscriber.go`, `processor/plan-decision-handler/component.go`,
+`processor/researcher-manager/component.go`, `processor/structural-validator/component.go`,
+`processor/qa-reviewer/qa_completed.go`, and `processor/lesson-decomposer/component.go`. SemDev has two in
+`internal/conversationchannel/component.go` and `internal/intake/component.go`. SemDragon has one in
+`processor/questtools/handler.go`. A raw checkout scan reports 27 because it also traverses nine corresponding calls in
+each of the `semspec-ui-bmad` and `semspec-ui-run-visibility` SemSpec worktrees. Those 18 copies are not additional
+authoritative adopters. SemStreams does not edit any of those repositories.
+
+`ConsumeDurable` also retires, but its measured production-adopter census is ten calls, not zero: eight in SemMachina,
+one in SemSpec, and one in SemDragon. The exact production call map is:
+
+- SemMachina: `internal/stage/loopfailure.go`, `internal/stage/runner.go`, `internal/knowledge/consumer.go`,
+  `internal/ledger/writer.go`, `internal/accusation/consumer.go`, `internal/caseflow/consumer.go`,
+  `internal/turn/intake.go`, and `internal/egress/notifier.go`;
+- SemSpec: `processor/execution-bridge/gated_dag_dispatch.go`; and
+- SemDragon: `questdag/component.go`.
+
+SemMachina has seven interfaces shaped around the old method in stage runner, knowledge consumer, ledger writer,
+accusation consumer, caseflow consumer, turn intake, and egress notifier. Its boot engine also calls
+`StopAllConsumers`. Migrate each owner to the stateless builder and canonical handle-return method:
+
+```go
+handler, err := natsclient.NewDurableHandler(cfg, heartbeat, work)
+if err != nil {
+    return err // invalid configuration; no consumer has been acquired
+}
+
+consumeHandle, err := client.ConsumeStreamWithConfig(ctx, owner, cfg, handler)
+if err != nil {
+    return err
+}
+```
+
+The exact builder signature is:
+
+```go
+func NewDurableHandler(
+    cfg StreamConsumerConfig,
+    heartbeat time.Duration,
+    work func(context.Context, []byte) error,
+) (func(context.Context, jetstream.Msg), error)
+```
+
+The builder is stateless. It rejects nil work and nonpositive heartbeat. When BackOff is nonempty, every interval must
+be positive and the minimum interval is the effective AckWait regardless of order; an invalid interval error names its
+index and value. Without BackOff, positive AckWait is effective and nonpositive AckWait uses the 30-second default.
+Heartbeat equal to half the effective AckWait is valid; a larger value fails with heartbeat and ceiling evidence. The
+comparison uses division because the old `heartbeat*2` expression can overflow.
+
+The returned handler delegates Ack, Nak, Term, InProgress, cancellation, heartbeat failure, and work join to
+`ConsumeWithHeartbeat`; work code does not settle the message itself. Every nonnil result remains operator-visible as
+a WARN with exact message `ConsumeDurable handler error` and fields `stream`, `consumer`, and `error`. Do not suppress,
+sample, or downgrade that event.
+
+SemMachina interfaces must return the exact `jetstream.ConsumeContext`, their owners must retain it, and boot shutdown
+must stop those handles rather than call `StopAllConsumers`. SemSpec keeps its retry policy around acquisition.
+SemDragon passes its owning Start context instead of inventing a Background root. `ConsumeDurable` has no alias.
 
 For a successfully running owner, `Stop(ctx)` uses one direct order:
 
@@ -55,6 +144,10 @@ For a successfully running owner, `Stop(ctx)` uses one direct order:
 A class with no native callback resource omits Drain/Closed but cancels ctx-driven work before awaiting its WaitGroup.
 Deadline expiry is a failed process result. It does not create authority for later running-generation rejoin. Completed
 repeated Stop is nil/no-op; concurrent Stop and replay of the first result are not supported contracts.
+
+Retain a returned Subscription and terminate it from its owner. N1 removes Client's hidden subscription catalog and
+Close-time child cleanup, but it does not change `Subscription.Drain(context.Context)` behavior or tests. Any future
+Drain simplification requires a concrete defect or adopter requirement after the working system is green.
 
 ## Failed-Start cleanup migration
 
@@ -135,19 +228,22 @@ change.
 
 ## Duplicate durable identity
 
-Two local owners cannot share one `(stream,durable)` identity. Canonically derive and validate every identity knowable
-from sealed composition before the parallel Start barrier. If an identity is genuinely unknowable before acquisition,
-use only a minimal active identity-plus-opaque-owner-token claim.
+Preserve the existing Client-local internal claim exactly. For a nonempty durable name it reserves
+`(stream,durable)` with an opaque pointer token before acquisition, rejects a second live local claim without stopping,
+draining, deleting, or replacing the incumbent, rolls back precommit failure, and releases only after the exact native
+handle closes. It is not a child-handle catalog and stores no owner label or lifecycle result.
 
-A duplicate names both owners and fails boot. It never stops, drains, deletes, or replaces the incumbent. The fallback
-claim is not a handle catalog and stores no lifecycle, observation, deletion, generation, or result authority.
+N1 does not add sealed pre-Start validation or change the error to name both owners. Those are deferred future
+improvements to evaluate after the working system is green; callers continue to receive the existing duplicate local
+durable identity error at acquisition.
 
 ## Backlog observation and topology deletion
 
-Outstanding-work observation remains an independent, concurrency-guarded exact-consumer read. Graph-ingest readiness
-and the accepted agent-loop inflight API keep their current semantics. The observer exposes no Stop, Drain, deletion,
-or child cleanup. Unknown observation remains an error, not zero. `NumPending + NumAckPending == 0` means no currently
-outstanding deliverable work; it is not semantic completion and does not prove the absence of MaxDeliver-parked work.
+The exported name-routed `Client.OutstandingWork(stream,name)` method is removed; its production caller census is now
+zero. Graph-ingest readiness and the accepted agent-loop inflight API keep their current semantics through independent
+owner-bound observation. That observation exposes no Stop, Drain, deletion, or child cleanup. Unknown remains an
+error, not zero. `NumPending + NumAckPending == 0` means no currently outstanding deliverable work; it is not semantic
+completion and does not prove the absence of MaxDeliver-parked work.
 
 Production owner Stop and Client Close never delete durable consumers. Retire without aliases:
 
@@ -156,8 +252,25 @@ Production owner Stop and Client Close never delete durable consumers. Retire wi
 - `Client.StopAllConsumers`; and
 - the five production `DeleteConsumerOnStop` fields.
 
-A namespace-scoped fixture/admin helper records exact test-created stream/durable identities, drains local owners, and
-deletes only those recorded identities. It is not a production Stop option and Client Close never calls it.
+The five removed Go fields are in the OTEL exporter, agentic dispatch, agentic loop, agentic model, and agentic tools
+configuration. Their five `delete_consumer_on_stop` generated-schema properties are removed with them. This is a
+breaking configuration migration even though the fields are now inert: delete the property from configuration before
+validating against the new schema.
+
+Read-only downstream inventory found generated copies that their repository owners must migrate:
+
+- SemStreams UI: five copied schemas and `src/lib/types/api.generated.ts`;
+- SemSpec: `ui/src/lib/types/semstreams.generated.ts`;
+- SemTeams: four copied schemas and `ui/src/lib/types/api.generated.ts`; and
+- SemDragon: an inert questtools field with three tests, plus an active questbridge field/read/direct-delete path and
+  three tests.
+
+SemConnect and the other inventoried sisters have no affected configuration consumer. SemStreams does not edit any
+sister repository; each owner removes or regenerates its copies and runs its own validation.
+
+Private fixture-owned cleanup records exact test-created stream/durable identities, drains local owners, and deletes
+only those recorded identities. It is not a production Stop option or exported Client method; it never uses a wildcard
+or discovers neighboring names, and Client Close never calls it.
 
 ## Settlement and poison boundaries
 
@@ -182,7 +295,7 @@ DoubleAck timeout or failure remains replay-safe and non-clean.
 
 After all owner Stops, Client Close rejects new work, initiates native connection Drain, observes exact CLOSED, cancels
 remaining Client-owned health/metrics runtime, awaits those workers, performs terminal credential/transport cleanup,
-and returns the observed aggregate. Client never enumerates, rediscover, drains, stops, deletes, or waits for
+and returns the observed aggregate. Client never enumerates, rediscovers, drains, stops, deletes, or waits for
 component-owned consumers or subscriptions. Preclosed transport, native LastError, and deadline-forced close remain
 non-clean. Completed repeated Close is nil/no-op; concurrent Close and retained result replay are not contracts.
 
@@ -203,13 +316,25 @@ The authoritative per-symbol disposition remains
 1. **Contract supersession** — ADR-095, new OpenSpec change/deltas, PR #984 supersession, task truth, and this guide.
 2. **Owner handles, admission, lifecycle simplification** — native handles, fallible-before-Consume setup, duplicate
    rejection, all 42 owner migrations, failed-Start authority, fixture deletion, and removal of stateful helpers.
-3. **Client minimal** — remove child catalogs and same-name replacement; retain independent observation; make Close
+3. **N1a mechanical deletion — complete** — reviewed commit `8da1b83a` removed the unused lifecyclejoin package with
+   net -748 lines and zero production additions.
+4. **N1b working-system convergence** — cut over canonical handles, remove hidden Client child/name APIs and inert
+   configuration, add the stateless durable handler, and keep Subscription Drain unchanged.
+5. **Client minimal** — retain independent observation and the handle-free reject-only identity claim; make Close
    terminal transport-only.
-4. **Raw-root narrowing** — execute every approved RETIRE/NARROW disposition.
-5. **Controlled proof** — real SIGTERM/SIGINT ordering, cleanupPending, duplicate rejection, aggregate exit truth,
+6. **Raw-root narrowing** — execute every approved RETIRE/NARROW disposition.
+7. **Controlled proof** — real SIGTERM/SIGINT ordering, cleanupPending, duplicate rejection, aggregate exit truth,
    listener release, and fresh boot.
-6. **Dirty and settlement proof** — deterministic kill at delivery/effect/guard/publication/pre-ACK boundaries,
+8. **Dirty and settlement proof** — deterministic kill at delivery/effect/guard/publication/pre-ACK boundaries,
    redelivery/convergence, effect guarantees, and the declared DoubleAck decision.
 
-The breaking tag remains blocked until runtime migrations, focused/race/integration/contract checks, schema no-drift,
-and relevant controlled, dirty, and E2E gates are green. This contract-only application checks none of those tasks.
+N1a proved production and test import/symbol zeros, an empty package directory, and no lifecyclecleanup diff. Focused
+rule race and ten repeated ownership race runs, lint, both builds, diff check, and strict OpenSpec 52/52 passed.
+Independent review approved the landed commit. Full race/contract failures are not claimed green: the same failures
+reproduce on the clean baseline because of user-owned worktree scanner pollution, stale natsclient census, and four
+stale testinfra rows. Before N1b can land, its final candidate must pass affected and full repository
+race, integration race, contracts, lint, build, intended-only schema generation, strict change and all-spec validation,
+`task e2e:core`, `task e2e:structural`, `task e2e:agentic`, and `task e2e:semantic`, plus independent implementation
+review. If structural E2E does not exercise `NewDurableHandler`, record that coverage gap rather than count the tier as
+builder evidence. The breaking tag remains blocked until broader controlled-process restart, dirty recovery,
+settlement, latest-desired-state, and CI gates are green. The branch remains under the no-release/no-tag invariant.

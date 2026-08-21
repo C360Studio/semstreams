@@ -31,6 +31,12 @@
 > The owner approved M1's exact context-bearing `metric.Server.Start(ctx)` / `Stop(ctx)` API and fresh-instance
 > one-shot contract. Independent implementation review returned `APPROVE`; owner-migrated credit is limited to
 > `service/metrics.go`, while `metric/handler.go`, tests, and documentation are supporting surfaces only.
+> The refreshed N1 inventory received independent `INVENTORY PASS`. N1a then landed at reviewed commit `8da1b83a`,
+> deleting the unused lifecyclejoin package for net -748 lines and zero production additions. The later
+> working-system-first reset supersedes the six-ruling N1 execution package: `Subscription.Drain` is unchanged and
+> deferred; remaining work is limited to canonical native handles, hidden Client authority removal, inert
+> configuration removal, and the stateless durable handler. No remaining N1, proof, release, archive, or tag credit
+> exists.
 
 ## Evidence identity
 
@@ -86,9 +92,8 @@ together. Port-backed consumption uses a temporary, target-shaped handle-return 
 consumers in S1, then the bridge is removed during N1’s canonical signature cutover. The branch must not tag/release
 the temporary bridge.
 
-D4. Existing core `Subscription.Drain(ctx)` remains mechanically callable during owner migration, but every migrated
-owner calls it exactly once. Its stored once/result/rejoin state retires only in N1 after all 25 remaining owners have
-left resumable running Stop. Changing it early would break current retry/rejoin paths rather than unlock them.
+D4. Existing core `Subscription.Drain(ctx)` remains mechanically callable with its current behavior and tests. The
+working-system-first reset defers any state or semantic change until a concrete defect or adopter requirement exists.
 
 D5. HTTP has no new generic provider. Each native server stays with its measured owner. `metric.Server` is repaired
 only inside M1; pprof remains the explicit process-lifetime exception and is out of owner waves.
@@ -420,61 +425,127 @@ subjects, configuration, and schema remain unchanged. RU1, M1, N1, and unrelated
 Temporary bridges keep the branch ineligible for release or tag. Task 2.3, Gate A/B/C, runtime migration, proof,
 release, archive, and tag readiness remain incomplete.
 
-## ConsumeDurable outward contract and replacement
+## Superseded six-ruling N1 convergence boundary
 
-The accepted zero-adopter premise is false. Current sister-repo production has ten concrete calls:
+N1 now depends on the accepted inventory at baseline
+`2f974bdb7f22efb39ac5136e9c0b719b711249c2`, artifact
+[`n1-convergence-inventory.md`](n1-convergence-inventory.md), SHA-256
+`2a95a0f5fd6683aeed585c8dca43d65ff662f32b2b046ce2262f6b97f74612e9`, independent verdict
+`INVENTORY PASS`. ADR-095 supersedes ADR-094's managed-consumer, resumable Stop, drain/delete, name-catalog, and
+retained-result mechanics. The current gated-DAG durable-consume and heartbeat specification remains binding.
 
-- SemDragon (1): `semdragon/questdag/component.go:294`.
-- SemMachina (8): `internal/stage/loopfailure.go:337`, `internal/stage/runner.go:217`,
-  `internal/knowledge/consumer.go:92`, `internal/ledger/writer.go:218`, `internal/accusation/consumer.go:75`,
-  `internal/caseflow/consumer.go:65`, `internal/turn/intake.go:216`, `internal/egress/notifier.go:161`.
-- SemSpec (1): `semspec/processor/execution-bridge/gated_dag_dispatch.go:36`.
+The earlier six-ruling owner approval occurred before that gate. It remains historical. Independent pre-owner review
+of the corrected package also remains historical evidence. The working-system-first reset below supersedes this whole
+execution package and withdraws its `Subscription.Drain` redesign.
 
-SemMachina also has interface seams at `internal/stage/runner.go:48-57`, `internal/knowledge/consumer.go:28-32`,
-`internal/ledger/writer.go:58-67`, `internal/accusation/consumer.go:28-32`,
-`internal/caseflow/consumer.go:26-30`, `internal/turn/intake.go:57-69`, `internal/egress/notifier.go:82-91`.
+### N1a mechanical deletion
 
-Current ConsumeDurable owns: zero/nonpositive AckWait→30-second server effective default; positive heartbeat <=
-effectiveAckWait/2 with overflow-safe comparison; ConsumeWithHeartbeat exclusive
-InProgress/Ack/Term/transient-or-cancel Nak/heartbeat failure/work join.
+N1a deletes only the unused `internal/lifecyclejoin` package and obsolete tests after exact production and test imports,
+calls, and declarations are zero. It introduces no facade, alias, replacement state machine, or N1b surface. N1a and
+N1b share one no-release/no-tag boundary.
 
-Recommended final stateless exported adapter:
-`NewDurableHandler(cfg StreamConsumerConfig, heartbeat time.Duration, work func(context.Context, []byte) error)
-(func(context.Context, jetstream.Msg), error)`. It validates before acquisition, rejects nil work, delegates
-settlement exclusively to ConsumeWithHeartbeat, and owns no Consumer/ConsumeContext/context/goroutine beyond sync
-invocation/identity/catalog/Stop/deletion/replay.
+### N1b canonical exact-handle consumption
 
-Migration: build handler once and treat validation as config failure; call canonical handle-return
-ConsumeStreamWithConfig with explicit PortConsumerContext/config/handler; retain exact ConsumeContext; Stop via
-Drain/Closed while handler live, then cancel/join; never name Stop/Delete or Ack/Nak in work. SemSpec retry acquisition
-only; SemDragon replace Background with Start context; SemMachina interfaces adopt handle-return and owners store/stop
-handle. SemStreams migration doc; sisters read-only.
+The two canonical port methods return exact `jetstream.ConsumeContext` ownership. All 16 local bridge callers move to
+the canonical names; both temporary `*Handle` methods and the error-only/catalog path disappear without aliases.
+Validation, creation, policy observation, identity claim, and final context checks precede `Consumer.Consume`.
+Successful Consume is the commit point. The internal consumption method does not change.
 
-Adopter seam: know build handler + retain exact handle; do nothing compile-fails; discovery compiler+guide+release; no
-arithmetic/settlement/name/catalog/rejoin knowledge.
+The authoritative downstream port census remains nine production calls: SemSpec 6, SemDev 2, and SemDragon 1. The 27
+raw hits include 18 copies in two SemSpec worktrees. Sisters are read-only to SemStreams.
 
-`NewDurableHandler` plus removal is one explicit owner API ruling; batch approval does not approve it.
+### Superseded N1b Subscription proposal
 
-## N1 — final NATS/lifecycle retirement and breaking proof gate
+`Subscription.Drain(context.Context) error` keeps its signature, rejects nil before action, invokes native Drain once
+by owner convention, preserves native failure, and awaits native closure under the caller context. It stores no once,
+result, completion, election, replay, or rejoin authority; concurrent callers do not share a result and no public
+Closed surface is added. Client neither tracks nor closes subscriptions.
 
-Depends all owner waves. No owner membership. Canonical port helpers become exact-handle signatures; bridge callers
-mechanically renamed; bridge deleted same commit; error-only APIs/Client lifecycle catalog/replacement/name
-Stop/Delete removed; observation retained; Subscription once/error/rejoin stripped while one-shot
-Drain/Closed/Unsubscribe preserved; unused Generation/Operation and the complete lifecyclejoin package deleted;
-migration guidance covers 27 sister helper callers and external Subscription holders. Canonical callers compile-fail
-and retain handle; Subscription semantic change needs explicit migration note. No service/config change.
+This paragraph is not an execution contract. Current Drain semantics and tests remain unchanged.
 
-N1 is the sole ConsumeDurable removal wave. The same breaking boundary adds owner-approved `NewDurableHandler`;
-preserves effective AckWait/heartbeat/settlement proof; removes the old file, declaration, and tests only after adapter
-equivalence; updates the ten-call/seven-interface migration map; and keeps local zeros truthful. No earlier wave may
-delete, alias, or hollow ConsumeDurable.
+### N1b stateless durable composition
 
-Proof: table tests cover heartbeat relation, zero AckWait, nonpositive values, equality, and overflow; real NATS tests
-cover ACK, Nak redelivery, Term, cancellation Nak, InProgress, heartbeat failure, and work join; adapter proof covers
-stateless composition and the canonical exact handle; the guide names all sites. N1 rulings include canonical cutover,
-Subscription semantic change, and `NewDurableHandler`/ConsumeDurable removal distinctly. Whole
-census/integration/race/lint/schema/contracts plus task e2e:core, agentic, semantic run before breaking commit/tag.
-Owner delta zero.
+`ConsumeDurable` is removed without an alias. Its exact replacement is:
+
+```go
+func NewDurableHandler(
+    cfg StreamConsumerConfig,
+    heartbeat time.Duration,
+    work func(context.Context, []byte) error,
+) (func(context.Context, jetstream.Msg), error)
+```
+
+The builder rejects nil work and nonpositive heartbeat. Nonempty BackOff rejects every nonpositive entry with
+index/value evidence and uses the minimum interval regardless of order. Without BackOff, positive AckWait is effective;
+otherwise the default is 30 seconds. Heartbeat may equal, but not exceed, half the effective wait. Division-only
+validation reports heartbeat and ceiling and remains safe at overflow-scale durations.
+
+`ConsumeWithHeartbeat` exclusively owns Ack, Nak, Term, InProgress, cancellation, heartbeat failure, and work join.
+Every nonnil result emits WARN message `ConsumeDurable handler error` with `stream`, `consumer`, and `error` fields,
+without suppression, sampling, or downgrade. The builder retains no context or lifecycle authority.
+
+The downstream migration remains ten production calls: SemMachina 8, SemSpec 1, SemDragon 1; seven SemMachina
+interfaces; and SemMachina boot's `StopAllConsumers` coupling. Owners build the handler, call the canonical method,
+retain exact handles, and stop them.
+
+### N1b minimal Client with preserved independent authorities
+
+Remove Client consumer and subscription child catalogs, shared drain/replacement state, name-routed Stop/delete,
+`OutstandingWork`, and Client Close child enumeration. Client Close owns transport and Client workers only.
+
+Preserve separately: Client-scoped handle-free `internalClaims` with precommit/exact-Closed release; generic and port
+policy observation including `ObserveDirectPortConsumerPolicy`; existing metrics and known unresolved cross-Client
+label collision; OTEL process claims/cleanup/deadline retention; internal consumer creation; graph-ingest readiness;
+and agentic-loop recorded-binding observation with unknown distinct from zero. None becomes lifecycle authority.
+
+### N1b breaking configuration removal
+
+Remove the five local `DeleteConsumerOnStop` Go fields and generated-schema properties with no replacement. Stale
+configuration fails visibly. Fixture cleanup is private and deletes only exact identities created by that fixture.
+
+Downstream owners must remove or regenerate five SemStreams UI schema copies plus `api.generated.ts`, the SemSpec
+generated type, four SemTeams schema copies plus `api.generated.ts`, and SemDragon questtools/questbridge fields and
+tests. Questbridge includes the active read/direct-delete path. SemConnect and other inventoried sisters have zero
+affected configuration consumers. SemStreams makes no sister write.
+
+### N1 proof boundary
+
+N1a runs exact-zero, focused/repository race, lint, build, diff, and strict OpenSpec gates before its mechanical
+unreleasable commit. N1b uses causal TDD for exact handles, fallible-before-commit, Subscription state removal, BackOff
+and heartbeat boundaries, real-NATS settlement and WARN, minimal Client plus preserved authorities, schema failure, and
+identity-scoped fixture cleanup. Synchronization uses channels/listeners, never sleeps.
+
+The final N1b candidate runs affected and full race, integration race, contracts, lint, build, intended-only schema
+generation, strict change/all validation, core, structural, agentic, and semantic E2E, plus independent implementation
+review. Structural E2E is not builder evidence if it does not exercise the builder; record that coverage gap. Broader
+process restart, dirty recovery, settlement, latest-desired-state, and CI remain release blockers.
+
+## Current working-system-first N1 boundary
+
+N1a is complete at independently reviewed commit `8da1b83ae9c2f323bf484dc28e0574d81504bef9`. It deleted four
+`internal/lifecyclejoin` files and changed one diagnostic-only test string: 1 insertion, 749 deletions, net -748, zero
+production additions. Imports, qualified symbols, declarations, and the package directory are zero/empty, while
+`internal/lifecyclecleanup` is unchanged.
+
+Remaining work has four boundaries only:
+
+1. make canonical port methods return exact `jetstream.ConsumeContext`, migrate local callers, and delete temporary
+   `*Handle` bridges without aliases;
+2. delete Client child catalogs, same-name/name-routed lifecycle APIs, `OutstandingWork`, and Close child cleanup while
+   preserving independent claims, metrics, observation, internal consumption, readiness, and inflight ownership;
+3. remove five inert `DeleteConsumerOnStop` Go fields and schema properties, with private exact-identity fixture
+   cleanup and read-only sister migration notes; and
+4. replace `ConsumeDurable` with stateless `NewDurableHandler`, preserving existing
+   `ConsumeWithHeartbeat` Ack/Nak/Term/InProgress/redelivery/join/WARN behavior and using BackOff-correct validation.
+
+`Subscription.Drain` behavior and tests are explicitly deferred. The remaining complexity budget is seven exports
+deleted and one added (net -6), five fields/schema properties removed, catalogs/state deleted, and zero new lifecycle
+structs, interfaces, maps, mutexes, goroutines, contexts, or configuration.
+
+The landed Client-local `internalClaims` behavior is preserved exactly: duplicate live acquisition rejects rather than
+replaces, the opaque pointer token releases on precommit failure or exact Closed, and no owner label is stored. Stronger
+sealed pre-Start validation and an error naming both owners are deferred. They are not a fifth N1 boundary, and current
+N1 does not claim complete ADR-095 conformance.
 
 ## Exact census movement
 
@@ -557,7 +628,7 @@ I1/S1 spine unlocks the port families. Expected no-split range: approximately 31
 2. Approve I1 atomic non-port signature plus Registry.SubscribeCapabilities zero-consumer disposition; ConsumeDurable
    excluded.
 3. Approve temporary no-release port bridge and N1 canonical cutover.
-4. Approve same-signature one-shot Subscription semantics in N1.
+4. Historical only: the proposed Subscription semantic change is withdrawn and deferred.
 5. Approve final `NewDurableHandler` and N1-only ConsumeDurable removal with ten-caller migration contract.
 6. Approve context-bearing existing metric.Server Start/Stop signatures.
 7. Confirm pprof remains out-of-scope process-lifetime exception.
@@ -600,6 +671,11 @@ independent implementation review and the fresh isolated 38/38 structural E2E gr
 `processor/rule/processor.go`, while supporting surfaces receive none and no broader task or gate credit follows.
 The later owner approval explicitly accepts rulings 6 and 7 only for M1: the existing context-bearing
 `metric.Server` API, fresh-instance one-shot reuse, and pprof remaining outside M1 as the process-lifetime exception.
-That approval updates the historical unapproved status recorded above only for M1. The N1 portions of rulings 3-5
-remain unapproved; no N1 canonical cutover, Subscription semantic change, or durable-handler/ConsumeDurable migration
-is authorized.
+That approval updated the historical unapproved status recorded above only for M1.
+
+On 2026-08-20 the owner approved a pre-inventory six-ruling N1 package. That approval and the later corrected-design
+review remain historical. The owner's subsequent direction—restore a system that works and can be understood, then
+decide whether further improvement is needed—supersedes them for execution. N1a landed and received independent
+`APPROVE` at `8da1b83a`. The remaining four-boundary simplification above is current; Subscription semantics are
+deferred. Remaining N1, Gate A/B/C, runtime proof, release, archive, and tag readiness remain unchecked and incomplete;
+the branch remains under the no-release/no-tag invariant.

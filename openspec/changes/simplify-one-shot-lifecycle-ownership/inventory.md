@@ -173,3 +173,25 @@ the record of the 42-owner design review and must not be rewritten to resemble l
 The current `main` checkpoint, definitions, workspace state, and zero-count exit gates are maintained in
 [`recovery-ledger.md`](recovery-ledger.md). At the pinned recovery baseline `9fcc841e`, 41 production owner files still
 imported `internal/lifecyclejoin`; only one of the historical 42 owners had been migrated.
+
+## Refreshed N1 inventory authority — 2026-08-20
+
+The sole current N1 census is the separate inventory-only artifact
+[`n1-convergence-inventory.md`](n1-convergence-inventory.md), measured at baseline
+`2f974bdb7f22efb39ac5136e9c0b719b711249c2`, SHA-256
+`2a95a0f5fd6683aeed585c8dca43d65ff662f32b2b046ce2262f6b97f74612e9`, independent verdict
+`INVENTORY PASS`. It owns current code, test, schema, downstream, observation, authority-precedence, and collision
+evidence; the historical inventory above remains immutable.
+
+The accepted inventory selects no target. Its bytes remain unchanged while the execution design is allowed to choose a
+smaller subset. The earlier six-ruling design review is historical; the current working-system-first reset explicitly
+defers `Subscription.Drain` semantics and uses this artifact only as evidence for the remaining exact-handle, Client,
+configuration, and durable-handler surfaces.
+
+N1a subsequently landed as reviewed commit `8da1b83ae9c2f323bf484dc28e0574d81504bef9`, deleting the four
+`internal/lifecyclejoin` files plus one test diagnostic for net -748 lines and zero production additions. That grants
+N1a implementation credit only; remaining N1, proof, release, archive, and tag work is incomplete.
+
+The current target chooses the inventory's landed-claim option: preserve Client-local reject-not-replace
+`internalClaims` exactly. The stronger sealed pre-Start validation and error naming both owners are deferred; the
+current N1 does not claim complete ADR-095 conformance and adds no owner-label claim state or fifth boundary.
