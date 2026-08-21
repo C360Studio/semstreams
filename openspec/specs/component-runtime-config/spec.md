@@ -3,209 +3,6 @@
 ## Purpose
 TBD - created by archiving change component-runtime-reconfig-http. Update Purpose after archive.
 ## Requirements
-### Requirement: A runtime config change is applied via any supported reconfig contract
-
-The ComponentManager config API MUST hot-apply a `PUT config/<component>` update to a running component that
-implements either supported component-side contract: `UpdateConfig(ctx, json.RawMessage)` or the anonymous method pair
-`ValidateConfigUpdate(map[string]any)` plus `ApplyConfigUpdate(map[string]any)`.
-
-The manager MUST probe the anonymous method pair directly and MUST NOT require or consult any service runtime-config
-interface. A component implementing only the method pair, including rule processor, MUST be reached rather than
-silently skipped. When a component implements both contracts, `UpdateConfig` MUST be used.
-
-#### Scenario: a method-pair component is hot-applied over HTTP
-
-- **GIVEN** a running component that implements the reconfig method pair but not `UpdateConfig`
-- **WHEN** a valid `PUT config/<component>` request is received
-- **THEN** the manager calls the component's `ValidateConfigUpdate` then `ApplyConfigUpdate`
-- **AND** the running component reflects the change without a restart
-
-#### Scenario: an UpdateConfig component keeps its existing path
-
-- **GIVEN** a running component that implements `UpdateConfig(ctx, json.RawMessage)`
-- **WHEN** a valid `PUT config/<component>` request is received
-- **THEN** the manager applies the change via `UpdateConfig`
-- **AND** it does not additionally invoke the anonymous method pair
-
-### Requirement: The config-update response honestly reports whether it was applied
-
-A `PUT config/<component>` response MUST report, via an `applied` boolean, whether
-the change was applied to the running component live (`applied: true` only when a
-reconfig contract accepted the change). A component with no runtime-reconfig hook
-MUST return `applied: false` and MUST NOT return a response implying a live apply.
-
-The response MUST NOT promise that the change survives a restart: this endpoint
-updates only the manager's in-memory view and does not durably persist to the
-config store (durable persistence is out of scope — gh#388), so it MUST NOT emit
-a `restart_required: true`-style field that a restart would not honor.
-
-#### Scenario: hot-applied change reports applied
-
-- **GIVEN** a component that supports runtime reconfiguration
-- **WHEN** a valid config update is hot-applied
-- **THEN** the response reports `applied: true`
-
-#### Scenario: no-hook component reports not applied
-
-- **GIVEN** a component that implements no runtime-reconfig contract
-- **WHEN** a valid config update is received
-- **THEN** the response reports `applied: false`
-- **AND** does not report an unconditional success that implies a live apply
-- **AND** does not promise a restart-time apply the endpoint cannot durably keep
-
-### Requirement: A rejected update does not become a stored-but-unapplied config
-
-The manager MUST validate a config update before storing it, so a rejected update
-leaves the component's stored config unchanged and cannot be silently loaded on
-the next restart. A `ValidateConfigUpdate` (or schema) failure returns a
-structured error response and mutates neither the running component nor the stored
-config.
-
-#### Scenario: validation failure changes nothing
-
-- **GIVEN** a component that supports runtime reconfiguration
-- **WHEN** a `PUT config/<component>` request fails validation
-- **THEN** the response is a structured validation error
-- **AND** the running component is unchanged
-- **AND** the stored config is unchanged (a subsequent restart does not load it)
-
-### Requirement: Runtime component add/remove via the engine write methods drives a reconcile
-
-The Manager SHALL, on a runtime component add (`PutComponentToKV`) or remove
-(`DeleteComponentFromKV`), apply the change to the in-memory config synchronously
-AND notify subscribers, so the `ComponentManager` reconciles it — spawning the
-added component and tearing down the removed one — without requiring the
-heavyweight `PushToKV` path. This holds even when the add/remove is interleaved
-with other engine writes that raise the engine high-water revision.
-
-#### Scenario: a component added at runtime is spawned
-
-- **GIVEN** a running system watching config, with no `components.doc-source-003`
-- **WHEN** a caller invokes `PutComponentToKV("doc-source-003", cfg)`
-- **THEN** `doc-source-003` is present in the Manager's in-memory config
-- **AND** subscribers to `components.*` are notified
-- **AND** the `ComponentManager` spawns `doc-source-003`
-
-#### Scenario: a component removed at runtime is torn down
-
-- **GIVEN** a running system with a spawned `components.doc-source-003`
-- **WHEN** a caller invokes `DeleteComponentFromKV("doc-source-003")`
-- **THEN** `doc-source-003` is absent from the Manager's in-memory config
-- **AND** subscribers to `components.*` are notified
-- **AND** the `ComponentManager` tears down `doc-source-003`
-
-#### Scenario: a delete interleaved under the engine high-water still reconciles
-
-- **GIVEN** a runtime `DeleteComponentFromKV("doc-source-003")` at KV revision N
-- **AND** a subsequent engine write raises the high-water revision above N
-- **WHEN** the watcher processes the delete event (now classified engine-owned)
-- **THEN** subscribers are still notified and the removal reconciles (the event is
-  not silently skipped)
-
-### Requirement: The engine-owned-revision skip suppresses only the in-memory re-apply
-
-The config watcher SHALL, for an engine-owned revision (`revision <=
-engineHighWaterRev`), suppress only the redundant in-memory re-apply of the value
-and still notify matching subscribers — for both engine-owned and external events.
-An engine-owned revision MUST NOT cause the notification to be dropped.
-
-#### Scenario: an engine-owned event notifies subscribers
-
-- **GIVEN** the Manager has just written a component and bumped its high-water revision
-- **WHEN** the watcher delivers that event (revision at/below the high-water)
-- **THEN** the in-memory config is not re-applied from the event
-- **AND** subscribers matching the event key are still notified
-
-### Requirement: Runtime config-map mutations are serialized so a concurrent add/remove is never lost
-
-The shared configuration store MUST serialize each read-modify-write so that two
-concurrent mutations cannot drop one another's change. Every site that reads the
-current config, mutates it, and swaps it back — the KV-watcher apply path
-(`config.Manager.updateConfig`, reached by `PutComponentToKV` / `DeleteComponentFromKV`)
-AND the engine caller-goroutine sites (`enableComponent`, `disableComponent`,
-`deleteComponentConfig`, `writeComponentConfigs`, `writeToKV`) that share the same
-`SafeConfig` instance — MUST perform the whole `read → mutate → swap` under the store's
-write lock (e.g. a `SafeConfig.Mutate(fn)` primitive), NOT as a lock-free clone-then-swap.
-A component add applied on the caller goroutine concurrently with an unrelated component
-change applied by the watcher goroutine MUST NOT lose either change (last-writer-wins on
-the whole map is forbidden).
-
-#### Scenario: concurrent add and remove both take effect
-
-- **GIVEN** a config with components A and B
-- **WHEN** one goroutine adds component C and another concurrently removes B, interleaving their read-modify-write sequences
-- **THEN** the resulting config contains A and C and does not contain B
-- **AND** neither mutation is silently dropped
-
-#### Scenario: watcher apply and caller add do not clobber
-
-- **WHEN** the KV watcher applies an external `components.X` update while a caller invokes `PutComponentToKV("Y", ...)` concurrently
-- **THEN** the final in-memory config contains both X's update and Y
-- **AND** subscribers are notified for both keys
-
-### Requirement: A component's effective config has one source of truth that GET config reflects
-
-The ComponentManager MUST expose a single authoritative source for a component's
-effective config, and the config read API (`GET /config/<component>`) MUST derive
-its response from that source so it reflects what the component is actually running
-— including after a KV-watch-driven restart, not only after a live `PUT`. A second
-retained config copy that is refreshed on only some write paths MUST NOT back the
-read API; the source of truth is the field refreshed on every write path (create,
-KV-restart, and live-PUT).
-
-#### Scenario: GET config after a KV-driven restart returns the new body
-
-- **GIVEN** a running component created with config C
-- **WHEN** a KV-watch config change restarts it with config C'
-- **THEN** `GET /config/<component>` returns C' (not the stale C)
-
-#### Scenario: GET config after a live PUT returns the applied body
-
-- **GIVEN** a running component that supports live runtime reconfiguration
-- **WHEN** a `PUT /config/<component>` applies config C' live
-- **THEN** `GET /config/<component>` returns C'
-
-### Requirement: A no-op runtime config update does not restart a running component
-
-The ComponentManager MUST restart an existing enabled component on a per-component
-runtime config update ONLY when the component's effective `ComponentConfig` differs
-from the config it is currently running. A per-component update whose effective
-config is unchanged MUST be a skipped no-op — no `Stop`/`Start` cycle, no store
-deregistration, no port re-acquisition, and no HTTP-handler re-registration — so
-that a full-config sync or a repeated identical write cannot churn a healthy
-running component. This idempotency protects components that own external
-resources, hold subscriptions or long-lived connections, or register handlers into
-a one-shot mux (where re-registration would panic). To compare, the manager MUST
-retain each managed component's effective `ComponentConfig`.
-
-A changed effective config MUST still drive exactly one restart via the existing
-graceful `restartComponentWithNewConfig` path. Creating a missing enabled component
-and stopping a disabled or removed one are unaffected. The bulk
-`reconcileComponents` path remains conservative (it already does not restart
-already-running components) and is unchanged.
-
-#### Scenario: an identical config update is a no-op
-
-- **GIVEN** a running enabled component with effective config C
-- **WHEN** a per-component config update with an effective config equal to C is received
-- **THEN** the component is not stopped and not started
-- **AND** no store deregistration, port re-acquisition, or handler re-registration occurs
-- **AND** the manager logs the update as a skipped no-op
-
-#### Scenario: a changed config update restarts exactly once
-
-- **GIVEN** a running enabled component with effective config C
-- **WHEN** a per-component config update with an effective config C' ≠ C is received
-- **THEN** the component is restarted exactly once via the graceful restart path
-- **AND** the manager retains C' as the component's effective config
-
-#### Scenario: bulk reconcile with unchanged configs restarts nothing
-
-- **GIVEN** a set of running enabled components whose effective configs are unchanged
-- **WHEN** a bulk `components.*` reconcile is processed against the full config
-- **THEN** no running component is restarted
-- **AND** missing enabled components are still created and disabled/removed ones still stopped
-
 ### Requirement: Request-port interface identity survives effective configuration
 
 A `nats-request` port SHALL be decoded and resolved only through the canonical nested `config.kind` envelope. Its
@@ -462,68 +259,6 @@ partial merge behavior.
 - **THEN** `AGENT_CONTENT` appears on the ObjectStore component
 - **AND** agentic-loop refers only to logical Store instance `objectstore`
 
-### Requirement: Declarations are immutable within a generation
-
-Before any component or retained-config mutation, a declaration-neutral live update SHALL prove exact normalized-fact
-equality with the retained generation. A neutral update SHALL retain the current generation.
-
-A declaration-affecting update SHALL either return typed `declaration_change_requires_replacement` before mutation or
-prepare a complete replacement generation off-Registry. No path SHALL mutate a live component and then recapture its
-declaration.
-
-#### Scenario: Declaration-neutral update retains generation
-
-- **GIVEN** a proposed live update whose normalized port facts equal the retained generation
-- **WHEN** validation and application succeed
-- **THEN** the component may update
-- **AND** the retained generation identity and declaration remain unchanged
-
-#### Scenario: Port change refuses before mutation
-
-- **GIVEN** a proposed live update whose normalized port facts differ
-- **WHEN** no prepared replacement path is used
-- **THEN** the update returns `declaration_change_requires_replacement`
-- **AND** the component and retained config remain unchanged
-
-#### Scenario: Mutate then recapture is forbidden
-
-- **GIVEN** a declaration-affecting update
-- **WHEN** the runtime evaluates it
-- **THEN** no path first mutates the live component and later recaptures ports
-
-### Requirement: Replacement publishes one atomic generation
-
-A failed replacement preparation SHALL leave the old component, retained configuration, generation record, and
-resource projections unchanged and SHALL expose no partial new record.
-
-A successful replacement SHALL assign a new local generation and atomically replace component, factory identity,
-declaration, and resource projections as one Registry-visible mutation.
-
-#### Scenario: Failed prepared replacement changes nothing
-
-- **GIVEN** a current admitted generation and a replacement that fails preparation or conflict validation
-- **WHEN** replacement is attempted
-- **THEN** every read still returns the old complete generation
-- **AND** no new resource fact is visible
-
-#### Scenario: Successful replacement is observed as one set
-
-- **GIVEN** a valid prepared replacement
-- **WHEN** Registry commits it
-- **THEN** readers and observers see either the old complete generation or the new complete generation
-- **AND** no mixed component/declaration/resource state is visible
-
-### Requirement: Removal deletes one complete generation record
-
-Removal SHALL delete the component reference, factory identity, declaration, normalized facts, and resource
-projections together.
-
-#### Scenario: Removal has no residual declaration
-
-- **GIVEN** an admitted component generation
-- **WHEN** it is removed
-- **THEN** the component and every declaration/resource view disappear in the same Registry mutation
-
 ### Requirement: Canonical port-field constraints govern runtime and generated schemas
 
 The canonical port binding catalog SHALL own numeric minima and allowed directions through `PortFieldInfo`. Runtime port
@@ -569,3 +304,101 @@ remain valid.
 - **WHEN** canonical resolution runs
 - **THEN** the output remains valid
 - **AND** no consumer-policy observation is created
+
+### Requirement: Component configuration activates only during process construction
+
+ComponentManager SHALL read the existing configuration once during construction. That captured configuration SHALL
+define the complete component set for the process lifetime. Configuration written after construction SHALL be durable
+for a later process boot and SHALL NOT create, start, stop, remove, reconfigure, restart, reconcile, or replace a
+component in the running process.
+
+ComponentManager SHALL NOT subscribe to component or model-registry configuration changes. The generic runtime
+component-config HTTP write and `watch_config` tool SHALL NOT exist. No alternate watcher, interface probe, or direct
+KV operation SHALL bypass the boot boundary.
+
+Config Manager persistence, version arbitration, watchers, reads, writes, and shutdown behavior SHALL remain
+unchanged after successful Start. If the shared configuration bucket contains a foreign platform identity, Start SHALL
+fail before arbitration, watchers, writes, or dependent construction; detached running mode SHALL NOT exist.
+
+#### Scenario: Foreign platform identity fails before publication is available
+
+- **GIVEN** the shared configuration bucket contains another platform identity
+- **WHEN** Config Manager starts
+- **THEN** Start returns the identity mismatch
+- **AND** no configuration watcher, write, or dependent component construction begins
+
+#### Scenario: Post-construction edit leaves runtime unchanged
+
+- **GIVEN** ComponentManager constructed component A from configuration C
+- **WHEN** configuration C' for A is persisted
+- **THEN** the running A and its effective configuration remain unchanged
+- **AND** C' is available to a later process boot
+
+#### Scenario: Post-construction membership change waits for reboot
+
+- **GIVEN** ComponentManager constructed a fixed component set
+- **WHEN** later configuration adds B or disables or removes A
+- **THEN** no running component is created, stopped, removed, restarted, or replaced
+- **AND** a later process boot selects from the then-current persisted configuration
+
+#### Scenario: Model-registry write is not a lifecycle command
+
+- **GIVEN** a running process
+- **WHEN** model-registry configuration changes
+- **THEN** ComponentManager does not restart or replace a component
+
+### Requirement: Explicit Flow publication reports persistence without activation
+
+The explicit Flow component-configuration publication operation SHALL report the component instance names actually
+persisted. Successful publication SHALL report that the running process is unchanged and reboot is required.
+
+Write success SHALL NOT be described as runtime activation. SemStreams SHALL NOT automatically restart the process.
+
+#### Scenario: Publication succeeds for the next boot
+
+- **GIVEN** a running process and a valid saved Flow
+- **WHEN** explicit publication persists all compiled component configuration
+- **THEN** the response reports the exact persisted component names
+- **AND** it reports the running process unchanged and reboot required
+
+#### Scenario: Publication validation fails before writes
+
+- **WHEN** the saved Flow fails the existing validation or compilation contract
+- **THEN** no compiled component configuration is persisted
+- **AND** the running process remains unchanged
+
+### Requirement: The engine-owned-revision skip suppresses only the in-memory re-apply
+
+The config watcher SHALL, for a Manager-owned revision (`revision <= engineHighWaterRev`), suppress only the redundant
+in-memory re-apply of the value and still notify matching subscribers. A Manager-owned revision MUST NOT cause the
+durable desired-state notification to be dropped.
+
+#### Scenario: an engine-owned event notifies subscribers
+
+- **GIVEN** Config Manager has written a component and raised its high-water revision
+- **WHEN** the watcher delivers that event at or below the high-water revision
+- **THEN** the in-memory desired state is not re-applied from the event
+- **AND** subscribers matching the event key are still notified
+
+### Requirement: Runtime config-map mutations are serialized so a concurrent add/remove is never lost
+
+`SafeConfig` SHALL serialize each read-modify-write across clone, mutation, validation, and swap. Config Manager's KV
+watcher apply path and synchronous desired-state write paths SHALL use that serialized mutation boundary so concurrent
+component configuration changes cannot clobber one another. Last-writer-wins replacement of the whole component map
+from independently cloned snapshots is forbidden.
+
+This requirement governs Config Manager's in-memory durable desired-state view. It does not authorize ComponentManager
+to reconcile or mutate the running component set.
+
+#### Scenario: concurrent add and remove both take effect
+
+- **GIVEN** desired configuration with components A and B
+- **WHEN** one goroutine adds component C while another removes B
+- **THEN** the resulting desired configuration contains A and C and does not contain B
+- **AND** neither mutation is silently dropped
+
+#### Scenario: watcher apply and caller add do not clobber
+
+- **WHEN** the KV watcher applies an external `components.X` update while `PutComponentToKV("Y", ...)` runs concurrently
+- **THEN** the final in-memory desired configuration contains both X's update and Y
+- **AND** subscribers are notified for both keys

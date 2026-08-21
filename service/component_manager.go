@@ -465,8 +465,7 @@ func (cm *ComponentManager) startAllComponents(ctx context.Context) error {
 // startComponentsBarrier starts the named components with barrier semantics:
 // existing StoreProvider components first, then all remaining consumers. Each
 // phase launches concurrently and completes before the next begins. It is the
-// shared core of the cold-boot batch AND the boot-boundary config drain, so
-// drain-created components get the same fail-closed ordering.
+// shared core of the constructor-captured cold-boot batch.
 func (cm *ComponentManager) startComponentsBarrier(ctx context.Context, names []string) error {
 	cm.mu.RLock()
 	providers := make([]string, 0, len(names))

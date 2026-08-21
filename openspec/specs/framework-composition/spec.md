@@ -149,73 +149,17 @@ MUST NOT remain in the framework retention ledger after their producer leaves th
 - **THEN** the product's capability contract declares cleanup and storage bounds for that state
 - **AND** the framework retention contract contains only the generic mechanism and actual framework-owned stores
 
-### Requirement: Component start failures fail boot closed and surface in health
+### Requirement: Component starts form a fail-closed boot barrier
 
-A lifecycle component whose `Start` returns an error MUST fail composition-root boot when the
-failure occurs during `Manager.StartAll`, and MUST be reported unhealthy — never silently
-absorbed — when the failure occurs after boot. `ComponentManager.Start` is a
-**component-start barrier**: it launches component `Start` calls concurrently but returns only
-after every launched `Start` has returned, and returns the joined errors of all that failed.
-There is no fire-and-forget component launch at boot, and no compatibility variant that
-preserves one. A component-level fail-closed assertion (e.g. the bucket acquisition seam
-refusing an unreconcilable retention divergence inside an owner's `Start`) is thereby a
-process-level refusal: the process MUST NOT bring up its HTTP surface or report service health
-while boot-time component starts are outstanding or failed. The barrier exists for fail-closed
-boot; retention coverage is held by the bucket acquisition seam at each acquisition, not by
-boot ordering.
+A lifecycle component whose `Start` returns an error during `Manager.StartAll` MUST fail composition-root boot.
+`ComponentManager.Start` is a component-start barrier: it launches component `Start` calls concurrently, returns
+only after every launched call has returned, and joins the errors of every component that failed. There is no
+fire-and-forget component launch at boot and no compatibility variant that preserves one.
 
-Post-boot component starts (dynamic configuration add or restart) MUST NOT crash the process;
-they record the component as failed with its error, and the component manager's health check
-MUST report a failed component by name with its last error until it recovers. Health MUST NOT
-ignore the failed state.
-
-Configuration changes that become locally visible during boot join the **boot transaction**:
-after the component-start barrier and before returning, `ComponentManager.Start` synchronously
-drains pending configuration state against the LIVE local configuration (so a dropped
-bounded-buffer notification cannot lose a change) — new components are created and started
-under the same barrier semantics (their failures join the boot failure), edits to existing
-components are applied, removals are honored, and model-registry dependents are rebuilt when
-the live registry's content differs from what they were built against. A component whose
-CREATE (not `Start`) fails during boot-boundary reconciliation is logged and excluded from the
-boot set — matching Initialize's existing best-effort creation posture — while `Start`
-failures remain fail-closed; a rebuild failure applying an edit fails boot (the old instance
-is already stopped). The drain loops until quiescent (a pass that consumes no pending events
-and applies no change), bounded by the lifecycle context: cancellation fails boot with the
-context error. The **cutoff** is the final drain pass: updates whose local application lands
-after it — component ADDS and EDITS alike — are post-boot dynamic changes, microsecond-class
-identical to ones arriving just after `Start` returns, handled by the config watcher with the
-dynamic paths. Post-cutoff bucket acquisition is CLOSED by the acquisition seam: a dynamic
-add or edit that re-acquires framework buckets reconciles them to their declared catalog
-policy at that acquisition — the class formerly named here as a forward reference is
-discharged, and no boot sweep is involved. A registry change landing between the final drain
-pass and the watcher starting MUST still be applied, not discarded: the watcher's entry
-backlog check applies the pending event when the registry content differs from the
-last-applied baseline.
-
-#### Scenario: a configuration update arriving during boot joins the boot transaction
-
-- **GIVEN** a configuration change — a new component, an edit to an existing component, or a
-  model-registry change — that becomes locally visible while boot-time component starts are
-  still in flight
-- **WHEN** `ComponentManager.Start` completes its cold-boot barrier
-- **THEN** it synchronously applies the pending configuration state before returning: created
-  components are started (or fail boot) under barrier semantics, edits are applied to their
-  components, and model-registry dependents are rebuilt against the new registry — so
-  post-start boot steps (the legacy-drift backstop having already run pre-start, and HTTP
-  setup) observe them before the HTTP surface comes up
-- **AND** an update whose local application lands after the final drain pass — a component
-  ADD or EDIT alike — is a post-boot dynamic change, processed by the config watcher with
-  `started == true`
-
-#### Scenario: a post-boot acquisition reconciles bucket policy at the seam
-
-- **GIVEN** a fully booted process and a framework bucket dirtied out-of-band (a foreign
-  `MaxAge` applied to its backing stream after boot)
-- **WHEN** a post-boot dynamic configuration edit restarts the owning component, whose `Start`
-  re-acquires the bucket through the ensure seam
-- **THEN** the divergence is reconciled to the declared catalog policy (stripped, with a WARN
-  naming the bucket) at that acquisition — with no boot sweep involved — proving the seam
-  closes the post-cutoff class the boot transaction defers
+While a managed component is retained in failed state with a last error, the component manager's health projection
+MUST report that state by component name rather than treating it as healthy. Successful failed-Start rollback MAY
+transition the component to stopped state and clear that error. The process MUST NOT bring up its HTTP surface or
+report service health while boot-time component starts are outstanding or failed.
 
 #### Scenario: a boot-time component start failure fails StartAll
 
@@ -237,13 +181,12 @@ last-applied baseline.
 - **WHEN** `ComponentManager.Start` joins the results
 - **THEN** the returned error names each failed component and its error, not only the first
 
-#### Scenario: a post-boot start failure is visible in health
+#### Scenario: a failed component state is visible in health
 
-- **GIVEN** a running process in which a dynamically added or restarted component's `Start`
-  returns an error
+- **GIVEN** a managed component whose state is failed and whose last error is recorded
 - **WHEN** the component manager's health check runs
-- **THEN** the health check returns an error naming the failed component and its last error,
-  and the process's service health reflects the failure until the component recovers
+- **THEN** the health check returns an error naming the failed component and its last error
+- **AND** the health check clears only after the component no longer has failed state
 
 #### Scenario: no unconsumed error hook survives
 
@@ -299,7 +242,7 @@ flat port fields, or hard-coded subjects.
 - **THEN** that declaration cannot satisfy graph-mutation topology
 - **AND** no compatibility shim, interface restoration, or subject fallback is applied
 
-### Requirement: Store providers start and register before subscribing consumers
+### Requirement: Cold-boot Store providers register before subscribing consumers
 
 `ComponentManager` SHALL partition the cold-boot component set using the existing `component.StoreProvider`
 interface. All StoreProvider components SHALL start concurrently in a provider barrier, and each provider's stores
@@ -308,8 +251,7 @@ remaining components start concurrently in the existing consumer barrier.
 
 Invalid, empty, nil, or duplicate claimed `StorageInstance` registration SHALL be that provider's startup error and
 SHALL fail the cold-boot barrier. The first registered provider SHALL remain the incumbent; a rival SHALL become failed
-and SHALL NOT clobber it. Dynamic provider start SHALL propagate the same registration error and failed state.
-Provider stop or reconfiguration SHALL continue to deregister before Close through existing lifecycle hooks.
+and SHALL NOT clobber it. Provider stop SHALL deregister its tracked stores before the provider closes them.
 
 A non-provider, or a StoreProvider that legitimately returns no stores, SHALL remain a no-op for registration.
 This phase SHALL NOT introduce sleep, polling, an arbitrary readiness deadline, port-derived dependency edges, or a
@@ -344,15 +286,39 @@ general topological scheduler.
 - **AND** the rival provider becomes failed and cold boot fails with the duplicate error
 - **AND** the error is not logged and skipped
 
-#### Scenario: dynamic duplicate registration is a failed component start
-
-- **GIVEN** a running composition with one registered Store provider
-- **WHEN** a dynamically added provider claims the same instance
-- **THEN** its registration error propagates and its component state is failed
-- **AND** component-manager Health names the rival and its error
-
 #### Scenario: provider ordering uses no guessed readiness mechanism
 
 - **WHEN** the lifecycle implementation is inspected and exercised under delayed provider starts
 - **THEN** the provider barrier supplies ordering directly
 - **AND** no sleep, polling loop, readiness timeout, port-derived dependency graph, or topological scheduler exists
+
+### Requirement: Composition consumes one captured component configuration
+
+The composition root SHALL construct ComponentManager from one read of the existing configuration. ComponentManager
+SHALL use that captured value to select, construct, validate, and admit the complete enabled component set for the
+process.
+
+A configuration write committed after construction begins SHALL NOT join or mutate the current composition. There
+SHALL be no late configuration drain or post-construction dynamic component admission path.
+
+This requirement defines composition selection only. It SHALL NOT define component or service `Start` and `Stop`
+mechanics, failed-Start handling, shutdown ordering, ACK ordering, transport shutdown, or recovery behavior.
+
+#### Scenario: Later component write waits for a later process
+
+- **GIVEN** ComponentManager captured configuration C during construction
+- **WHEN** component configuration C' commits before or after component Start
+- **THEN** the process composes only from C
+- **AND** C' does not create, remove, restart, or replace a component in that process
+
+#### Scenario: Later model-registry write waits for a later process
+
+- **GIVEN** ComponentManager captured configuration and resolved boot factories
+- **WHEN** model-registry configuration changes
+- **THEN** the running component set and instances remain unchanged
+
+#### Scenario: Existing lifecycle behavior is not redesigned
+
+- **WHEN** the fixed boot composition starts or stops
+- **THEN** existing owner lifecycle mechanics govern the operation
+- **AND** this capability claims no shutdown, restart, recovery, or lifecycle proof credit

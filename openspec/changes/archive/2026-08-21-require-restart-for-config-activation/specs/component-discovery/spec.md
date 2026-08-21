@@ -74,8 +74,18 @@ Registry SHALL validate declaration conflicts and exclusive-resource facts durin
 declaration consumers SHALL read the retained defensive values rather than call component port methods or resolve
 factory definitions again.
 
+ComponentManager SHALL NOT retain a parallel resources map, conflict classifier, registration/unregistration
+bookkeeping, or component port re-read path.
+
 Asynchronous consumers SHALL capture their defensive snapshot before starting work. The captured boot declaration
 set SHALL remain valid for the process lifetime.
+
+#### Scenario: Conflict is rejected by one owner
+
+- **GIVEN** an admitted boot declaration already claims an exclusive resource
+- **WHEN** another boot declaration declares the conflicting resource
+- **THEN** Registry rejects the admission
+- **AND** neither Registry nor ComponentManager exposes any partial second claim
 
 #### Scenario: Asynchronous publication uses captured boot declarations
 
@@ -115,3 +125,10 @@ runtime replacement identity survives.
 **Reason**: shared consumers use the sealed boot declaration set; no runtime replacement identity is required.
 
 **Migration**: capture defensive boot declarations before asynchronous use.
+
+### Requirement: Registry reads and observation expose defensive complete snapshots
+
+**Reason**: the process-local observer and its add/replacement/removal event model retired with runtime composition
+mutation. Defensive single and complete reads are covered by the boot declaration-value requirement above.
+
+**Migration**: call `Snapshot` or `Snapshots` for defensive current boot declarations; no observation stream exists.

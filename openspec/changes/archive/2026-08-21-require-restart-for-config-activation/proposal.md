@@ -28,8 +28,8 @@ published configuration becomes active.
   failed name so retry is safe.
 - Successful publication reports that the running process is unchanged and reboot is required.
 - Flow runtime lifecycle state, routes, tools, metrics, timestamps, logs, and streams retire without aliases.
-- Rule code, storage, watchers, and current Rule behavior do not change. The separate Rule hot-reload target is not
-  advanced by this reconstruction.
+- Rule code, storage, watchers, and behavior are outside this change. No Rule or readiness capability delta is retained
+  or promoted by this archive.
 
 Existing Config Manager behavior is preserved except for one owner-approved prerequisite: a foreign shared-bucket
 platform identity fails Config Manager Start instead of entering detached mode. Validator/factories, lifecycle
@@ -52,11 +52,6 @@ prerequisites.
 - `component-discovery`: Registry admission is boot-owned, sealed, defensive, and handle-free.
 - `framework-composition`: boot consumes one captured component configuration and has no later dynamic admission path.
 
-### Unadvanced capabilities
-
-- `rule-hot-reload`, `graph-index-readiness`, and `rule-entity-watching` remain separate target-state work. Their
-  existing artifacts are unchanged and receive no implementation or completion credit here.
-
 ## Impact
 
 - **Breaking API and behavior:** generic runtime component mutation and Flow lifecycle surfaces retire without
@@ -68,7 +63,8 @@ prerequisites.
 - **Rule author contract:** no behavior or API change.
 - **Migration:** sister repositories remain read-only. SemStreams records exact downstream impact and migration steps;
   downstream owners implement and validate their own changes.
-- **Credit:** this reconstruction receives no lifecycle, shutdown, recovery, release, archive, or tag-readiness credit.
+- **Credit:** this change records only the boot-composition and Flow-authoring behavior landed in PR #997. It claims no
+  lifecycle, shutdown, recovery, release, or tag-readiness evidence.
 
 The binding implementation disposition is
 [`pr990-boot-only-disposition.md`](pr990-boot-only-disposition.md), SHA-256
