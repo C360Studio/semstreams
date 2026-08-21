@@ -12,13 +12,12 @@ import (
 
 // Config holds configuration for agentic-tools processor component
 type Config struct {
-	Ports                *component.PortConfig `json:"ports"                schema:"type:ports,description:Port configuration,category:basic"`
-	StreamName           string                `json:"stream_name"          schema:"type:string,description:JetStream stream name for agentic messages,category:basic,default:AGENT"`
-	ConsumerNameSuffix   string                `json:"consumer_name_suffix" schema:"type:string,description:Suffix appended to consumer names for uniqueness,category:advanced"`
-	DeleteConsumerOnStop bool                  `json:"delete_consumer_on_stop,omitempty" schema:"type:bool,description:Delete durable consumers on Stop (use for tests only),category:advanced,default:false"`
-	Timeout              string                `json:"timeout"              schema:"type:string,description:Tool execution timeout,category:advanced,default:60s"`
-	AllowedTools         []string              `json:"allowed_tools"        schema:"type:array,description:List of allowed tools (nil/empty allows all),category:advanced"`
-	ApprovalRequired     []string              `json:"approval_required,omitempty" schema:"type:array,description:Tool names requiring human approval before execution,category:advanced"`
+	Ports              *component.PortConfig `json:"ports"                schema:"type:ports,description:Port configuration,category:basic"`
+	StreamName         string                `json:"stream_name"          schema:"type:string,description:JetStream stream name for agentic messages,category:basic,default:AGENT"`
+	ConsumerNameSuffix string                `json:"consumer_name_suffix" schema:"type:string,description:Suffix appended to consumer names for uniqueness,category:advanced"`
+	Timeout            string                `json:"timeout"              schema:"type:string,description:Tool execution timeout,category:advanced,default:60s"`
+	AllowedTools       []string              `json:"allowed_tools"        schema:"type:array,description:List of allowed tools (nil/empty allows all),category:advanced"`
+	ApprovalRequired   []string              `json:"approval_required,omitempty" schema:"type:array,description:Tool names requiring human approval before execution,category:advanced"`
 	// RestrictedDecideActions is the deployment-level decide-action
 	// restriction policy (gh#239): decide action names barred for every
 	// coordinator task — front-door and rule-spawned — composing with and

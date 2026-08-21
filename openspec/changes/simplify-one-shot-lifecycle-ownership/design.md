@@ -341,10 +341,11 @@ Options:
 1. **Do nothing.** Keep five local no-op knobs and the active sister delete path.
 2. **Extend the incumbent.** Deprecate the fields, make them functional, or add a replacement production knob.
 3. **Recommend.** Remove five local Go fields and generated-schema properties with no replacement: OTEL exporter,
-   agentic dispatch, agentic loop, agentic model, and agentic tools. Stale configuration fails visibly.
+   agentic dispatch, agentic loop, agentic model, and agentic tools. Published schema/discovery is the migration signal;
+   runtime unknown-field behavior is unchanged.
 
-Test cleanup is private and deletes only exact identities created by that fixture. It never discovers neighbors, uses
-a wildcard, or becomes a production Client method.
+No current SemStreams fixture requires deletion, so this change adds no private cleanup helper. Exact-identity cleanup
+remains guidance for a future fixture that actually owns topology; it is not a current implementation requirement.
 
 Read-only downstream impact is complete:
 
@@ -380,13 +381,15 @@ lifecycle.
 
 #### Configuration author
 
-Removes `delete_consumer_on_stop`. Doing nothing fails schema validation visibly. Discovery is generated schema and
-migration guidance. There is no replacement deletion policy.
+Removes `delete_consumer_on_stop` from generated discovery. OTEL rejects the stale unknown field through its existing
+`DisallowUnknownFields` decoder; dispatch, loop, model, and tools currently ignore it through existing lenient JSON
+decoding. This change adds no strictness and makes no universal fail-fast claim. There is no replacement deletion
+policy.
 
 #### Test author
 
-Records and deletes exact identities the fixture created. Discovery-based cleanup is unavailable. The private fixture
-contract is the discovery surface; no production cleanup knob is required.
+No current fixture requires deletion, so there is no new helper or test-author API. Future cleanup remains locally
+owned and exact-identity-scoped; no production cleanup knob is required.
 
 #### Metrics and inflight caller
 
@@ -459,11 +462,12 @@ Keep independently owned mechanisms exactly separate: duplicate identity claims,
 observation, `ObserveDirectPortConsumerPolicy`, OTEL claims, internal consumption, graph-ingest readiness, and
 agent-loop inflight observation. None receives Stop, delete, replay, or Client Close authority.
 
-### Remaining boundary 3: remove inert deletion configuration
+### Completed boundary 3: remove inert deletion configuration
 
 Delete the five local `DeleteConsumerOnStop` Go fields and their generated-schema properties with no production
-replacement. Private test fixtures may record and delete only exact stream/durable identities that they created.
-There is no wildcard, discovery-by-name, or production cleanup switch.
+replacement. No current SemStreams fixture requires deletion, so add no helper. There is no wildcard,
+discovery-by-name, or production cleanup switch. Preserve current decoding: OTEL rejects the stale unknown field;
+dispatch, loop, model, and tools ignore it.
 
 Downstream copied schemas and generated types remain read-only migration obligations for their repository owners:
 SemStreams UI, SemSpec, SemTeams, and SemDragon. SemDragon's active questbridge read/direct-delete path is called out
@@ -516,8 +520,8 @@ plan.
   native handle and temporary bridges retire.
 - **Minimal Client:** `n1-convergence-inventory.md:241-447,828-845`, `natsclient/client.go`, and
   `natsclient/stream.go`; child catalogs, name lifecycle APIs, `OutstandingWork`, and Close child cleanup retire.
-- **Configuration:** `n1-convergence-inventory.md:674-827`; five inert Go/schema fields retire and fixture cleanup is
-  private and exact-identity-scoped.
+- **Configuration:** `n1-convergence-inventory.md:674-827`; five inert Go/schema fields retire with no new cleanup
+  mechanism. Published discovery is the migration signal; decoder strictness does not change.
 - **Durable handler:** `n1-convergence-inventory.md:552-673`, `natsclient/consume_durable.go`, and the gated-DAG spec
   `:43-77`; the stateless builder preserves settlement, redelivery, and WARN behavior.
 
@@ -535,8 +539,11 @@ introducing an adapter.
 The implementation ratchets down measured complexity: production changes 23 files by +102/-570 (net -468); tests
 change 12 files by +292/-415 (net -123); total net is -591. `NewDurableHandler` is the sole replacement export and
 retains no lifecycle state. `Subscription.Drain` is byte-for-byte outside the change. Inside this four-boundary map,
-the five configuration/schema fields and private fixture cleanup remain the only unimplemented boundary. Tasks 2.3
-and 3.3 remain unchecked, receive no credit here, and sit outside this narrowed map.
+the configuration/schema boundary is now independently reviewed `APPROVE`: +57/-72 (net -15) before the
+reviewer-requested lifecycle integration comment replacement and +58/-73 (net -15) finally. The 17-file slice is 16
+tracked implementation paths at +26/-73 plus the new 32-line regression at +32/0; production is net -7, schemas net
+-30, and there is no new production mechanism. The tracked-path diff SHA excludes the untracked regression; the
+ledger's per-file hashes close all 17 identities. Task 2.5 is complete. Tasks 2.3 and 3.3 remain unchecked.
 
 The landed Client-local `internalClaims` map keeps its exact reject-not-replace behavior, opaque pointer token,
 precommit rollback, and exact-Closed release. N1 does not add owner labels or another claim map. Canonical sealed
@@ -548,13 +555,16 @@ conformance. It implements the simpler lifecycle subset above and preserves the 
 ### Minimal TDD and verification
 
 Use focused causal tests only for changed behavior: exact returned handles and fallible-before-commit ordering;
-owner-held shutdown after Client catalog removal; preserved independent observers/claims; schema rejection and
-identity-scoped fixture cleanup; and durable validation plus existing settlement/redelivery/WARN behavior. Use real
+owner-held shutdown after Client catalog removal; preserved independent observers/claims; published-schema removal;
+and durable validation plus existing settlement/redelivery/WARN behavior. Use real
 NATS where settlement semantics require it and channels/listeners rather than arbitrary sleeps.
 
 Run affected and repository race tests, integration race, contract tests, lint, build, intended-only schema generation,
 strict change/all-spec validation, and the relevant core/structural/agentic/semantic E2E tiers before release. Known
 baseline scanner/census failures must be recorded rather than misreported as candidate regressions or green proof.
 
-N1a and the atomic exact-handle/minimal-Client/durable-handler cutover have implementation credit. Configuration/schema
-removal, full candidate proof, controlled/dirty recovery proof, release, archive, and tag readiness remain incomplete.
+The published-schema regression covers the five schemas emitted by `registerPublishedComposition`; it does not scan
+sister copies or prove runtime unknown-field rejection. Affected race/integration, schema regeneration, lint, build,
+diff, and strict validation passed. N1a, the atomic exact-handle/minimal-Client/durable-handler cutover, and task 2.5
+have implementation credit. Full candidate proof, the 36-hit downstream migration, controlled/dirty recovery proof,
+release, archive, and tag readiness remain incomplete.

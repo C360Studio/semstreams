@@ -34,9 +34,9 @@
 > The refreshed N1 inventory received independent `INVENTORY PASS`. N1a then landed at reviewed commit `8da1b83a`,
 > deleting the unused lifecyclejoin package for net -748 lines and zero production additions. The later
 > working-system-first reset supersedes the six-ruling N1 execution package: `Subscription.Drain` is unchanged and
-> deferred; remaining work is limited to canonical native handles, hidden Client authority removal, inert
-> configuration removal, and the stateless durable handler. No remaining N1, proof, release, archive, or tag credit
-> exists.
+> deferred. Canonical native handles, hidden Client authority removal, inert configuration removal, and the stateless
+> durable handler are now independently reviewed `APPROVE`. Full N1 proof, downstream migration, release, archive, and
+> tag credit remain outstanding.
 
 ## Evidence identity
 
@@ -500,8 +500,11 @@ and agentic-loop recorded-binding observation with unknown distinct from zero. N
 
 ### N1b breaking configuration removal
 
-Remove the five local `DeleteConsumerOnStop` Go fields and generated-schema properties with no replacement. Stale
-configuration fails visibly. Fixture cleanup is private and deletes only exact identities created by that fixture.
+Remove the five local `DeleteConsumerOnStop` Go fields and generated-schema properties with no replacement. Generated
+schema/discovery is the migration signal. Existing decoder behavior remains: OTEL rejects the stale unknown key via
+`DisallowUnknownFields`; agentic dispatch, loop, model, and tools ignore it through lenient JSON decoding. No new
+strictness or universal fail-fast contract is added. No current SemStreams fixture requires deletion, so add no
+private cleanup helper.
 
 Downstream owners must remove or regenerate five SemStreams UI schema copies plus `api.generated.ts`, the SemSpec
 generated type, four SemTeams schema copies plus `api.generated.ts`, and SemDragon questtools/questbridge fields and
@@ -511,9 +514,9 @@ affected configuration consumers. SemStreams makes no sister write.
 ### N1 proof boundary
 
 N1a runs exact-zero, focused/repository race, lint, build, diff, and strict OpenSpec gates before its mechanical
-unreleasable commit. N1b uses causal TDD for exact handles, fallible-before-commit, Subscription state removal, BackOff
-and heartbeat boundaries, real-NATS settlement and WARN, minimal Client plus preserved authorities, schema failure, and
-identity-scoped fixture cleanup. Synchronization uses channels/listeners, never sleeps.
+unreleasable commit. N1b uses causal TDD for exact handles, fallible-before-commit, BackOff and heartbeat boundaries,
+real-NATS settlement and WARN, minimal Client plus preserved authorities, and published-schema property removal.
+Synchronization uses channels/listeners, never sleeps. `Subscription.Drain` is not part of N1.
 
 The final N1b candidate runs affected and full race, integration race, contracts, lint, build, intended-only schema
 generation, strict change/all validation, core, structural, agentic, and semantic E2E, plus independent implementation
@@ -527,14 +530,15 @@ N1a is complete at independently reviewed commit `8da1b83ae9c2f323bf484dc28e0574
 production additions. Imports, qualified symbols, declarations, and the package directory are zero/empty, while
 `internal/lifecyclecleanup` is unchanged.
 
-The atomic N1b code cutover has completed three of the four boundaries:
+The atomic N1b code cutover completed boundaries 1, 2, and 4; the later configuration/schema slice completed boundary
+3:
 
 1. make canonical port methods return exact `jetstream.ConsumeContext`, migrate local callers, and delete temporary
    `*Handle` bridges without aliases;
 2. delete Client child catalogs, same-name/name-routed lifecycle APIs, `OutstandingWork`, and Close child cleanup while
    preserving independent claims, metrics, observation, internal consumption, readiness, and inflight ownership;
-3. **outstanding:** remove five inert `DeleteConsumerOnStop` Go fields and schema properties, with private
-   exact-identity fixture cleanup and read-only sister migration notes; and
+3. remove five inert `DeleteConsumerOnStop` Go fields and schema properties with no new cleanup helper, plus record
+   read-only sister migration notes; and
 4. replace `ConsumeDurable` with stateless `NewDurableHandler`, preserving existing
    `ConsumeWithHeartbeat` Ack/Nak/Term/InProgress/redelivery/join/WARN behavior and using BackOff-correct validation.
 
@@ -554,6 +558,15 @@ combined direct `ConsumeDurable` acquisition with `StopAllConsumers` shutdown. F
 natsclient race, race coverage for all 16 changed owners, and real-NATS natsclient runtime except three
 worktree-scanner tests, plus graph-ingest/agentic-loop integration, lint, build, diff-check, and strict validation.
 Full repository/service baseline limitations remain scoped and are not claimed green.
+
+Boundary 3 is independently reviewed `APPROVE` as a 17-file slice. Before the reviewer-requested lifecycle integration
+comment replacement it was +57/-72 (net -15), with production net -7 and schemas net -30; final live bytes are
++58/-73 (net -15). The 16 tracked implementation paths are +26/-73 and the new 32-line regression is +32/0. The
+tracked-path SHA excludes the untracked regression; per-file ledger hashes close all 17 identities. The new
+published-composition regression checks all five emitted schemas, but does not validate sister copies or runtime
+unknown-field behavior. Affected race/integration, schema regeneration, lint, build, diff, and strict validation
+passed. Task 2.5 is complete. The 36-hit downstream read-only obligation and full candidate/release/tag gates remain
+unchecked.
 
 The landed Client-local `internalClaims` behavior is preserved exactly: duplicate live acquisition rejects rather than
 replaces, the opaque pointer token releases on precommit failure or exact Closed, and no owner label is stored. Stronger
@@ -690,7 +703,7 @@ On 2026-08-20 the owner approved a pre-inventory six-ruling N1 package. That app
 review remain historical. The owner's subsequent direction—restore a system that works and can be understood, then
 decide whether further improvement is needed—supersedes them for execution. N1a landed and received independent
 `APPROVE` at `8da1b83a`. The four-boundary simplification above is current; the atomic N1b code cutover completed
-boundaries 1, 2, and 4, while configuration/schema boundary 3 remains open. Subscription semantics are deferred.
-This implementation credits tasks 2.1, 3.1, and 3.2 only. Tasks 2.3 and 3.3 remain unchecked and outside the narrowed
-four-boundary subset. Full N1, Gate A/B/C, runtime proof, release, archive, and tag readiness remain incomplete;
-the branch remains under the no-release/no-tag invariant.
+boundaries 1, 2, and 4, and the reviewed configuration/schema slice completed boundary 3. Subscription semantics are
+deferred. This implementation credits tasks 2.1, 2.5, 3.1, and 3.2. Tasks 2.3 and 3.3 remain unchecked and outside the
+narrowed four-boundary subset. Full N1, Gate A/B/C, runtime proof, release, archive, and tag readiness remain
+incomplete; the branch remains under the no-release/no-tag invariant.

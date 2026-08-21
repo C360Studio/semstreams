@@ -21,9 +21,8 @@ func createTestComponentForLifecycle() component.LifecycleComponent {
 	}
 
 	config := agenticmodel.DefaultConfig()
-	// Use unique consumer suffix and delete on stop for test isolation
+	// Use a unique consumer suffix for test isolation.
 	config.ConsumerNameSuffix = "lifecycle"
-	config.DeleteConsumerOnStop = true
 
 	registry := &model.Registry{
 		Endpoints: map[string]*model.EndpointConfig{

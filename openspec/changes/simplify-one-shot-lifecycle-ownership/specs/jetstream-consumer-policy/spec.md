@@ -4,10 +4,13 @@ The independently approved, commit-authorized atomic N1b code diff on baseline
 `18cd4fcefeaa6e10780776dc0450b5b1dd877a46` implements the exact-handle, stateless durable-handler, and minimal-Client
 requirements below without changing `Subscription.Drain`. Its 35-file implementation SHA-256 is
 `887ffc0a3b61d52c7497b889756bd02b36e269be64919cdbe606bde40062fe60`; production is net -468 lines and the total is
-net -591. The five field/schema removals and exact-identity fixture cleanup remain unimplemented, so the complete
-convergence requirement and full N1 candidate gate are not yet satisfied. This checkpoint credits tasks 2.1, 3.1,
-and 3.2 only; tasks 2.3 and 3.3 remain unchecked and outside the narrowed four-boundary subset. No release or tag is
-authorized.
+net -591. A later independently reviewed `APPROVE` slice removes the five fields and five published-schema properties
+with no production deletion mechanism or private helper. Before the reviewer-requested lifecycle integration comment
+replacement it was +57/-72 (net -15), with production net -7 and schemas net -30; final live bytes are +58/-73 (net
+-15). The 17-file slice is 16 tracked implementation paths at +26/-73 plus the new 32-line regression at +32/0. The
+tracked-path SHA excludes the untracked regression; per-file ledger hashes close all 17 identities. This completes task
+2.5. Tasks 2.3 and 3.3, the 36-hit read-only downstream migration, the full N1 candidate gate, release, and tag
+remain unchecked.
 
 ## MODIFIED Requirements
 
@@ -198,24 +201,30 @@ be reported as zero, and current cross-Client metric-label collision debt SHALL 
 - **THEN** policy metrics, direct-port observation, graph readiness, and agent-loop inflight remain available
 - **AND** none gains Stop, deletion, replacement, or Client Close authority
 
-### Requirement: Fixture deletion is private and identity-scoped
+### Requirement: Lifecycle deletion configuration is absent without a replacement mechanism
 
 The five production `DeleteConsumerOnStop` fields and corresponding generated-schema properties for OTEL exporter,
-agentic dispatch, agentic loop, agentic model, and agentic tools SHALL NOT exist. Test cleanup SHALL use private
-fixture-owned state that records and deletes only exact stream and durable identities created by that fixture.
-Production configuration, exported Client deletion methods, wildcard cleanup, and discovered-name cleanup SHALL NOT
-replace the removed fields.
+agentic dispatch, agentic loop, agentic model, and agentic tools SHALL NOT exist. No production configuration, exported
+Client deletion method, wildcard cleanup, discovered-name cleanup, or private fixture helper SHALL replace them. No
+current SemStreams fixture requires consumer deletion; future fixture cleanup SHALL remain local and exact-identity
+scoped if a concrete need arises.
 
-#### Scenario: Removed configuration fails visibly
-- **GIVEN** configuration still contains `delete_consumer_on_stop`
-- **WHEN** it is validated against the converged schema
-- **THEN** the breaking migration is visible rather than silently restoring lifecycle deletion
+#### Scenario: Discovery advertises no lifecycle deletion knob
+- **WHEN** the published component schemas are generated
+- **THEN** none advertises `delete_consumer_on_stop`
+- **AND** the regression covers OTEL exporter, agentic dispatch, agentic loop, agentic model, and agentic tools
 
-#### Scenario: Fixture deletes only its own identity
-- **GIVEN** a test fixture created an exact stream and durable identity
-- **WHEN** fixture cleanup runs
-- **THEN** it deletes only that recorded identity
-- **AND** it does not enumerate or infer neighboring consumers
+#### Scenario: Existing decoder behavior is preserved
+- **GIVEN** stale configuration contains `delete_consumer_on_stop`
+- **WHEN** a component decodes it
+- **THEN** OTEL rejects it through its existing `DisallowUnknownFields` behavior
+- **AND** agentic dispatch, agentic loop, agentic model, and agentic tools ignore it through existing lenient decoding
+- **AND** N1 adds no decoder strictness or universal fail-fast guarantee
+
+#### Scenario: Contract scanner scope is honest
+- **WHEN** the published-schema regression passes
+- **THEN** it proves the five schemas emitted by `registerPublishedComposition` omit the property
+- **AND** it does not claim to validate sister-repository copies or runtime unknown-field behavior
 
 ### Requirement: Duplicate local durable identity fails rather than replaces
 

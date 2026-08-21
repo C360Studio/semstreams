@@ -26,11 +26,14 @@ incoherent outward API while downstream durable owners still combine direct `Con
 Client-wide `StopAllConsumers`; it was not required by a SemStreams production caller. It preserves independent claims
 and observation, and it leaves `Subscription.Drain` unchanged.
 
-This checkpoint completes only tasks 2.1, 3.1, and 3.2. Inside the working-system-first four-boundary subset, the five
-configuration fields and generated-schema properties plus private identity-scoped fixture cleanup are the only
-remaining implementation boundary. Task 2.3, task 3.3, read-only sister migrations, candidate
-E2E/controlled/dirty proof, release, and tag work remain unchecked and outside this checkpoint's completed boundaries.
-No release or tag is authorized.
+The local configuration/schema boundary is also independently reviewed `APPROVE`. It removes five Go fields and five
+published-schema properties without adding a production cleanup mechanism or private helper; no current SemStreams
+fixture requires one. The pre-comment-correction diff was +57/-72 (net -15), including production net -7 and schemas
+net -30. Replacing the lifecycle integration comment makes the final 17-file slice +58/-73 (net -15): 16 tracked
+implementation paths are +26/-73 and the new 32-line regression is +32/0. The tracked-path SHA excludes the untracked
+regression; per-file ledger hashes identify all 17 files. This completes task 2.5. Task 2.3,
+task 3.3, the 36-hit read-only sister migration obligation, candidate E2E/controlled/dirty proof, release, and tag work
+remain unchecked. No release or tag is authorized.
 
 The accepted read-only N1 inventory remains evidence at baseline
 `2f974bdb7f22efb39ac5136e9c0b719b711249c2`, SHA-256
@@ -54,8 +57,8 @@ claim owner-label state is added.
   temporary `*Handle` bridges after local callers migrate.
 - Remove Client-owned consumer/subscription child catalogs, same-name lifecycle operations, name-routed Stop/delete,
   `OutstandingWork`, and Close-time child cleanup. Client Close owns transport and Client workers only.
-- Remove the five inert `DeleteConsumerOnStop` Go fields and generated-schema properties. Test cleanup is private and
-  deletes only exact identities created by its fixture.
+- Remove the five inert `DeleteConsumerOnStop` Go fields and generated-schema properties. Add no cleanup helper because
+  no current SemStreams fixture requires one.
 - Replace `ConsumeDurable` with stateless `NewDurableHandler`, preserving the existing
   `ConsumeWithHeartbeat` ACK/NAK/Term/InProgress, cancellation, redelivery, work-join, and WARN behavior. Validate
   heartbeat against the minimum positive BackOff interval, or AckWait/default when BackOff is absent.
@@ -86,10 +89,14 @@ structs, interfaces, maps, mutexes, goroutines, contexts, or configuration switc
 - **Port adopters:** the two canonical methods gain a returned native handle; downstream owners retain and stop it.
 - **Durable adopters:** callers compose `NewDurableHandler` with the canonical handle-return method; ACK semantics and
   operator-visible failures remain unchanged.
-- **Configuration:** five inert local fields/schema properties disappear without a production replacement.
+- **Configuration:** five inert local fields/schema properties disappear without a production replacement. Published
+  discovery is the migration signal. OTEL's existing strict decoder rejects the stale key; dispatch, loop, model, and
+  tools retain their existing lenient unknown-field behavior.
 - **Subscriptions:** no semantic or test change; further simplification is explicitly deferred.
-- **Tests:** fixture cleanup becomes private and exact-identity-scoped.
+- **Tests:** a new regression checks the five schemas emitted by the published composition; it does not validate
+  downstream copies or change runtime decoder strictness.
 - **Repository boundary:** SemStreams documents downstream impact but does not edit sister repositories.
-- **Release:** N1a and the atomic N1b code cutover are reviewed but unreleased; configuration/schema removal,
-  controlled/dirty proof, and relevant E2E gates remain incomplete. No release or tag is authorized.
+- **Release:** N1a, the atomic N1b code cutover, and local configuration/schema removal are reviewed but unreleased;
+  downstream migrations, controlled/dirty proof, and relevant E2E gates remain incomplete. No release or tag is
+  authorized.
 - **Recovery authority:** [`recovery-ledger.md`](recovery-ledger.md) remains the durable execution record.

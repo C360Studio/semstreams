@@ -51,7 +51,6 @@ type Config struct {
 	Timeout                           string                   `json:"timeout" schema:"type:string,description:Timeout duration for loop execution (e.g. 120s or 5m),default:120s,category:basic,required"`
 	StreamName                        string                   `json:"stream_name" schema:"type:string,description:JetStream stream name,default:AGENT,category:advanced"`
 	ConsumerNameSuffix                string                   `json:"consumer_name_suffix" schema:"type:string,description:Suffix for consumer names,category:advanced"`
-	DeleteConsumerOnStop              bool                     `json:"delete_consumer_on_stop,omitempty" schema:"type:bool,description:Delete durable consumers on Stop (use for tests only),category:advanced,default:false"`
 	LoopsBucket                       string                   `json:"loops_bucket" schema:"type:string,description:NATS KV bucket name for storing loop state,default:AGENT_LOOPS,category:advanced,required"`
 	ToolResultMaxBytes                int                      `json:"tool_result_max_bytes,omitempty" schema:"type:int,description:Maximum bytes for tool result content before truncation. 0 means no limit,default:32768,category:advanced"`
 	TrajectoryEvidenceStorageInstance string                   `json:"trajectory_evidence_storage_instance,omitempty" schema:"type:string,description:Logical registered storage instance for full trajectory evidence,default:objectstore,category:advanced"`

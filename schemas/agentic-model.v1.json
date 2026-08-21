@@ -10,12 +10,6 @@
       "description": "Suffix appended to consumer names for uniqueness",
       "category": "advanced"
     },
-    "delete_consumer_on_stop": {
-      "type": "boolean",
-      "description": "Delete durable consumers on Stop (use for tests only)",
-      "default": false,
-      "category": "advanced"
-    },
     "ports": {
       "type": "object",
       "description": "Port configuration",

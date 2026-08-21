@@ -1505,7 +1505,8 @@ Gate A/B/C, N1, runtime migration, proof, release, archive, and tag readiness re
 After M1 completed the 36th production owner migration, the owner approved a six-ruling N1 package: separate N1a
 lifecyclejoin deletion; canonical exact-handle port methods and bridge removal; same-signature one-shot Subscription
 Drain; a stateless durable handler and unaliased ConsumeDurable removal; Client child/name/OutstandingWork removal; and
-five-field/schema removal with private exact-identity fixture cleanup.
+five-field/schema removal with then-proposed private exact-identity fixture cleanup. The later implementation found no
+current SemStreams fixture requiring such a helper and added none.
 
 That approval preceded the refreshed inventory gate and corrected design review. It remains historical evidence of
 owner intent but is superseded for execution. In particular, it did not yet account completely for BackOff minimum
@@ -1576,10 +1577,10 @@ Protected evidence remained byte-identical: Metrics inventory SHA-256
 `8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5`, N1 inventory SHA-256
 `2a95a0f5fd6683aeed585c8dca43d65ff662f32b2b046ce2262f6b97f74612e9`.
 
-N1a receives task 2.4 and its mechanical gate credit only. The remaining sequence is canonical exact-handle port
-convergence; hidden Client catalog/name/OutstandingWork removal; five inert Go/schema field removals with private
-exact-identity fixture cleanup; and `ConsumeDurable` replacement by stateless `NewDurableHandler` while preserving
-`ConsumeWithHeartbeat` settlement, redelivery, and WARN behavior. The hard remaining budget is seven exports deleted,
+N1a receives task 2.4 and its mechanical gate credit only. The then-remaining sequence was canonical exact-handle port
+convergence; hidden Client catalog/name/OutstandingWork removal; five inert Go/schema field removals without a new
+cleanup helper; and `ConsumeDurable` replacement by stateless `NewDurableHandler` while preserving
+`ConsumeWithHeartbeat` settlement, redelivery, and WARN behavior. The hard budget was seven exports deleted,
 one added (net -6), five fields/schema properties removed, catalogs/state deleted, and zero new lifecycle structs,
 interfaces, maps, mutexes, goroutines, contexts, or configuration.
 
@@ -1623,8 +1624,8 @@ not edit that repository and adds no compatibility bridge.
 Independent claims, consumer-policy and metrics observation, `ObserveDirectPortConsumerPolicy`, OTEL claims, internal
 consumer creation, graph-ingest readiness, and agentic-loop inflight observation remain in their existing ownership
 domains. `Subscription` and `Subscription.Drain(context.Context)` are unchanged. The five
-`DeleteConsumerOnStop` configuration fields and generated-schema properties are also unchanged by this diff; their
-removal, private exact-identity fixture cleanup, and read-only sister migrations remain task 2.5.
+`DeleteConsumerOnStop` configuration fields and generated-schema properties were unchanged by this atomic diff and
+completed later in the separately reviewed task 2.5 checkpoint below.
 
 | Evidence | Result |
 |---|---|
@@ -1642,10 +1643,9 @@ baseline assertions remain outside this atomic review surface. No core, structur
 controlled-process restart, dirty recovery, settlement proof, latest-desired-state proof, release, archive, or tag
 credit follows from this checkpoint.
 
-Task 2.1, task 3.1, and task 3.2 receive implementation credit. Within the narrowed four-boundary subset, task 2.5 is
-the only remaining implementation boundary. Tasks 2.3 and 3.3 remain unchecked, receive no credit here, and are
-outside that subset. The complete N1 candidate gate remains unchecked. The branch remains no-release/no-tag, and every
-sister repository remains read-only.
+Task 2.1, task 3.1, and task 3.2 receive implementation credit at this checkpoint. Task 2.5 receives credit only from
+the later checkpoint below. Tasks 2.3 and 3.3 remain unchecked. The complete N1 candidate gate remains unchecked. The
+branch remains no-release/no-tag, and every sister repository remains read-only.
 
 #### Atomic implementation path identities
 
@@ -1706,6 +1706,83 @@ deleted; they have no live-file identity.
 
 The recovery ledger cannot embed its own final hash without changing it. Its final SHA-256 is reported with the
 handoff evidence after documentation validation.
+
+### N1b configuration/schema checkpoint — 2026-08-20
+
+Independent `semstreams-reviewer` verdict `APPROVE` applies to the final 17-file local configuration/schema slice.
+It removes exactly five `DeleteConsumerOnStop` Go fields and five corresponding published-schema properties. It adds
+no production deletion mechanism, lifecycle primitive, or private cleanup helper because no current SemStreams
+fixture requires one. Existing unique consumer suffixes remain the affected tests' isolation mechanism.
+
+Before the reviewer-requested comment correction, the implementation was +57/-72 (net -15): production net -7 and
+schemas net -30. The correction replaced the stale lifecycle integration comment with the accurate unique-suffix
+explanation; it did not merely remove the comment. Final live bytes are +58/-73 (net -15). The 16 tracked
+implementation paths are +26/-73; the new 32-line published-schema regression contributes +32/0. SHA-256
+`0ff355e2d6e358096d4558399fd2d670b697211d1cfd306321f667253566209a` identifies only the 16 tracked-path diff and
+excludes the untracked regression file. The per-file table below closes the complete 17-file identity.
+
+The migration signal is absence from generated schema/discovery, not newly universal runtime rejection. Existing
+decoder behavior is preserved: OTEL already calls `DisallowUnknownFields` and rejects the stale key; agentic dispatch,
+loop, model, and tools use lenient JSON unmarshalling and ignore it. N1 adds no strictness and claims no cross-component
+fail-fast contract.
+
+The new `TestPublishedSchemasDoNotAdvertiseLifecycleConsumerDeletion` regression checks all five schemas emitted by
+`registerPublishedComposition`. This contract scanner cannot validate copied/generated artifacts in sister
+repositories and does not prove runtime unknown-field behavior. The downstream census remains 36 read-only hits; each
+sister owner must remove/regenerate and validate its own copies. SemStreams made no sister write.
+
+| Evidence | Result |
+|---|---|
+| Affected race and integration suites | PASS |
+| `task schema:generate` and intended-only/no-drift inspection | PASS |
+| New published-schema regression | PASS |
+| Lint and build | PASS |
+| Diff check and strict OpenSpec validation | PASS |
+| Independent implementation review | `APPROVE` |
+
+Task 2.5 receives implementation credit. Full N1 candidate proof, tasks 2.3 and 3.3, downstream migrations, E2E,
+controlled/dirty proof, release, archive, and tag readiness remain unchecked. The branch remains no-release/no-tag.
+
+#### Configuration/schema implementation path identities
+
+Hashes below are exact live bytes after the developer's comment replacement. Together they identify the 16 tracked
+implementation paths and the untracked 32-line regression file.
+
+| Path | SHA-256 |
+|---|---|
+| `output/otel/config.go` | `e5e5344f5782a9cd7cd4c0dc9d1c4060030211c707964a7cdc0dc19fd5bc13c8` |
+| `processor/agentic-dispatch/config.go` | `17538279214f3249dca744693d4321e8a2a48fa9414d01c9049f289861ede3d6` |
+| `processor/agentic-loop/config.go` | `1a59f7badf2323977ba7f3560cd050fb4effdbd2bc5b5cbc5f1997ae07b06e21` |
+| `processor/agentic-model/config.go` | `44c37f6f2f1cf51ca78ba275fc2697b48d4f067b862b3b1c969678436e89e81b` |
+| `processor/agentic-tools/config.go` | `380ce31133c5e13af172d8af0283a1c1a93b392c265b35208e5272c6bb663475` |
+| `schemas/agentic-dispatch.v1.json` | `7ec7cf47b910b7fb444671dc6e226c9a7afd256cd4b06c79ccd2c973aa325a6e` |
+| `schemas/agentic-loop.v1.json` | `727f08950b041c26d4a968ee5a9a2033d33df0bfb89ac93fed2a31614c96c61c` |
+| `schemas/agentic-model.v1.json` | `befba46c3ab504d1b6ff3ba4f26cd268b9dcb24a7a434afb77c1fe091efb993d` |
+| `schemas/agentic-tools.v1.json` | `6261188bc04e9ca37d7563d160d785c06c7e87fd359184cbe8d306c4a00a96c0` |
+| `schemas/otel-exporter.v1.json` | `5b3f7e89ebd9b4cb1562241c5dc76e3c1d7621c0afb2108c06b1488766854b14` |
+| `processor/agentic-loop/loop_integration_test.go` | `b1c4bf6dddee9fe12049e38c3f0f025fbf809164a1808eb95d90b7557afc5b33` |
+| `processor/agentic-loop/recovery_integration_test.go` | `a994747c57fc24e03a713954690f2f903b1870ff1c6af1c7bd51de66f1d41e9c` |
+| `processor/agentic-model/lifecycle_integration_test.go` | `ac4fe72984459b56ebc1c331459df8b05e675b10c58405df135f55f3fe60db12` |
+| `processor/agentic-model/model_integration_test.go` | `9ea7b5ff24e7368efbc856995924ea37c1509556d89e8e7e330ffedfecb6100f` |
+| `processor/agentic-tools/slice_f2_integration_test.go` | `9e7812a618a344576dfc8a76c8e88d8ee11ff64eb0e09b34fe7f10798bec6627` |
+| `processor/agentic-tools/startup_atomic_integration_test.go` | `ecd673f1d1f42483d488e8fca4046871a67821140209685bb0345ab325300587` |
+| `test/contract/retired_consumer_deletion_config_test.go` | `fc4a040c7fbabc08de1ea7ced7417122470e34e6335107d5f498d68afe1a8828` |
+| Protected `n1-convergence-inventory.md` | `2a95a0f5fd6683aeed585c8dca43d65ff662f32b2b046ce2262f6b97f74612e9` |
+| Protected `metrics-http-owner-inventory.md` | `8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5` |
+
+#### Configuration checkpoint document identities
+
+| Document | SHA-256 |
+|---|---|
+| `docs/operations/migration-restart-safe-nats-client.md` | `8d1bfb5b4c2e70a95480ee829b1535a85cedd0f96cb20e7f283bb5915aaf3fc5` |
+| `proposal.md` | `1f55454b4552f8ee4462c594e3b54ce354134b5015c95d0eda49828568b1f8de` |
+| `design.md` | `64769e6a787e55c7189de330075ef4c84dd88562c44f9e16ce684b577adbff8f` |
+| `inventory.md` | `1d20cf40d9ea04464ad14b35464c28062f37c95aae43a22b868e81af26d8eb9a` |
+| `remaining-owner-family-wave-design.md` | `b61c20deb67b96ff416138cfd988dda068710111444671f4d6a59870641a86c8` |
+| `tasks.md` | `41ca27c23ab53de591793f456899f286b58238f0273efee60edf6c27dd531dc2` |
+| `specs/jetstream-consumer-policy/spec.md` | `c227226dd53efee1b87ac687fe01bec53658e16471140d51a06d7631d8577d84` |
+
+The recovery ledger cannot embed its own final hash without changing it; report it with the final handoff.
 
 ### CM1 ComponentManager implementation checkpoint — 2026-08-19
 

@@ -46,9 +46,6 @@ type Config struct {
 
 	// ConsumerNameSuffix adds a suffix to consumer names for uniqueness in tests.
 	ConsumerNameSuffix string `json:"consumer_name_suffix" schema:"type:string,description:Suffix for consumer names,category:advanced"`
-
-	// DeleteConsumerOnStop enables consumer cleanup on stop (for testing).
-	DeleteConsumerOnStop bool `json:"delete_consumer_on_stop,omitempty" schema:"type:bool,description:Delete consumers on Stop,category:advanced,default:false"`
 }
 
 // DefaultConfig returns the default configuration.

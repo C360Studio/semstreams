@@ -211,7 +211,7 @@
     execution target and withdraws its Subscription semantic change. N1a landed as reviewed `APPROVE` commit
     `8da1b83ae9c2f323bf484dc28e0574d81504bef9`: four lifecyclejoin files deleted plus one diagnostic-only test change,
     1 insertion/749 deletions, net -748, zero production additions. Remaining work is exact-handle port convergence,
-    hidden Client authority removal, five inert field/schema removals with private exact-identity fixture cleanup, and
+    hidden Client authority removal, five inert field/schema removals without a replacement cleanup mechanism, and
     stateless durable-handler composition. No remaining N1, proof, release, archive, or tag credit follows.
     The remaining budget is seven exports deleted and one added (net -6), five fields/schema properties removed,
     catalogs/state deleted, and zero new lifecycle structs, interfaces, maps, mutexes, goroutines, contexts, or config.
@@ -233,6 +233,19 @@
     combines direct `ConsumeDurable` acquisition with `StopAllConsumers` shutdown. This checkpoint completes tasks
     2.1, 3.1, and 3.2 only. Task 2.5, task 2.3, task 3.3, full N1 candidate proof, release, archive, and tag readiness
     remain unchecked.
+  - 2026-08-20 N1b configuration/schema checkpoint: independent implementation review returned `APPROVE` for exactly
+    five Go-field removals, five published-schema property removals, affected fixture call-site cleanup, and one new
+    published-schema regression. No production deletion mechanism or private helper was added because no current
+    SemStreams fixture requires one. Before the reviewer-requested lifecycle integration comment replacement, the
+    slice was +57/-72 (net -15), with production net -7 and schemas net -30; final live bytes are +58/-73 (net -15).
+    The 16 tracked implementation paths are +26/-73 and the new 32-line regression is +32/0. SHA-256
+    `0ff355e2d6e358096d4558399fd2d670b697211d1cfd306321f667253566209a` identifies only the tracked-path diff and
+    excludes the untracked regression; per-file ledger hashes close the 17-file identity.
+    OTEL preserves its existing unknown-field rejection; dispatch, loop, model, and tools preserve lenient decoding.
+    Affected race/integration, schema regeneration, lint, build, diff, and strict OpenSpec validation passed. The new
+    regression scans the five schemas emitted by the published composition; it does not validate downstream copies or
+    runtime decoder behavior. Task 2.5 is complete. The 36-hit read-only sister obligation, task 2.3, task 3.3, full N1
+    candidate proof, release, archive, and tag readiness remain unchecked.
   - 2026-08-18 checkpoint: independent `semstreams-reviewer` verdict `CORRECTIONS CONFIRMED` grants owner-migrated
     credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
     worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.
@@ -263,10 +276,11 @@
   imports, qualified symbols, declarations, and the package directory are zero/empty; lifecyclecleanup is unchanged.
   The diff is net -748 with zero production additions. Independent implementation and merge review returned
   `APPROVE` with no findings.
-- [ ] 2.5 N1b: remove lifecycle deletion, all five accepted configuration fields and generated-schema properties, and
-  provide only private exact-identity fixture teardown. Treat the field/schema removal as breaking. Document the
-  read-only generated-copy migrations for SemStreams UI, SemSpec, and SemTeams, plus SemDragon questtools and the
-  active questbridge field/read/direct-delete path and tests. Sister owners perform and validate those changes.
+- [x] 2.5 N1b: remove all five accepted configuration fields and generated-schema properties without adding a
+  production deletion mechanism or private helper; no current SemStreams fixture requires one. Preserve current
+  decoder behavior rather than adding strictness. The published-schema regression is green. The read-only generated
+  copy migrations for SemStreams UI, SemSpec, SemTeams, and SemDragon's questtools/active questbridge path remain
+  downstream owner obligations and do not block local implementation credit.
 
 ## 3. Client minimal and raw roots
 

@@ -197,9 +197,21 @@ The next atomic N1b code diff is independently reviewed `APPROVE` and commit-aut
 `887ffc0a3b61d52c7497b889756bd02b36e269be64919cdbe606bde40062fe60`; production is 23 files, +102/-570, net -468,
 and tests are 12 files, +292/-415, net -123. It implements the exact-handle, durable-handler, and minimal-Client
 inventory dispositions atomically while preserving the independent authorities and leaving `Subscription.Drain`
-unchanged. The five configuration/schema dispositions are the only open boundary inside the narrowed four-boundary
-subset. Tasks 2.3 and 3.3 remain unchecked and outside that subset. This status note does not rewrite the accepted
-inventory artifact or grant full N1, proof, release, archive, or tag credit.
+unchanged. The five configuration/schema dispositions subsequently completed in a separate independently reviewed
+`APPROVE` slice. Five Go fields and five published-schema properties were removed with no new production mechanism and
+no cleanup helper because no current SemStreams fixture requires one. Before the reviewer-requested lifecycle
+integration comment replacement, the diff was +57/-72 (net -15); final live bytes are +58/-73 (net -15), with
+production net -7 and schemas net -30. The 17-file slice is 16 tracked implementation paths at +26/-73 plus the new
+32-line regression at +32/0. The tracked-path SHA excludes the untracked regression; the per-file ledger table closes
+all 17 identities. Task 2.5 is complete. Tasks 2.3 and 3.3 remain unchecked and outside that subset. This status note
+does not rewrite the accepted inventory artifact or grant full N1, proof, release, archive, or tag credit.
+
+The schema/discovery removal is the migration signal; decoder behavior was not redesigned. OTEL's existing
+`DisallowUnknownFields` rejects the retired property, while agentic dispatch, loop, model, and tools keep lenient JSON
+decoding and ignore it. The new regression checks the five schemas published by `registerPublishedComposition`; its
+scanner does not validate sister-repository copies or prove runtime unknown-field behavior. Affected race/integration,
+schema regeneration, lint, build, diff, and strict OpenSpec validation passed. The accepted downstream census remains
+a 36-hit read-only migration obligation.
 
 The current target chooses the inventory's landed-claim option: preserve Client-local reject-not-replace
 `internalClaims` exactly. The stronger sealed pre-Start validation and error naming both owners are deferred; the

@@ -16,12 +16,6 @@
       "description": "Suffix for consumer names",
       "category": "advanced"
     },
-    "delete_consumer_on_stop": {
-      "type": "boolean",
-      "description": "Delete consumers on Stop",
-      "default": false,
-      "category": "advanced"
-    },
     "endpoint": {
       "type": "string",
       "description": "OTLP HTTP collector base URL",

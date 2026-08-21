@@ -115,7 +115,6 @@ func newAtomicStartTestComponent(t *testing.T, client *natsclient.Client, suffix
 	t.Helper()
 	config := DefaultConfig()
 	config.ConsumerNameSuffix = suffix
-	config.DeleteConsumerOnStop = true
 	rawConfig, err := json.Marshal(config)
 	if err != nil {
 		t.Fatal(err)

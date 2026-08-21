@@ -24,18 +24,18 @@ temporary bridges, the error-only path, `ConsumeDurable`, Client child catalogs/
 Stop/delete APIs, `StopAllConsumers`, `OutstandingWork`, and Close-time child enumeration are absent. Claims, metrics,
 policy/OTEL observation, internal creation, graph-ingest readiness, and agentic-loop inflight observation remain.
 
-The five Go fields and generated-schema properties have not been removed by this atomic cutover. Their fixture work is
-the only remaining implementation boundary inside the working-system-first four-boundary subset. Tasks 2.3 and 3.3,
-read-only sister migrations, candidate E2E, controlled/dirty proof, release, and tag gates remain unchecked and
-outside that completed subset.
+The final local configuration/schema boundary is now implemented and independently reviewed `APPROVE`: five inert Go
+fields and the corresponding five published-schema properties are absent, and no production cleanup mechanism was
+added. No current SemStreams fixture requires a replacement cleanup helper. Task 2.5 is complete. Tasks 2.3 and 3.3,
+the 36-hit read-only sister migration obligation, candidate E2E, controlled/dirty proof, release, and tag gates remain
+unchecked.
 
 This narrowed N1 does not claim complete ADR-095 conformance. It preserves the already-landed Client-local
 reject-not-replace durable claim and defers ADR-095's stronger sealed pre-Start validation and error naming both owners.
 
-The complete convergence budget remains visibly net-negative: seven exports deleted and one added (net -6), five Go
+The complete convergence remains visibly net-negative: seven exports deleted and one added (net -6), five Go
 fields/schema properties removed, child catalogs/state deleted, and zero new lifecycle structs, interfaces, maps,
-mutexes, goroutines, contexts, or configuration switches. The atomic code cutover has met the export/catalog/state
-portion; only the five field/schema removals and fixture cleanup remain.
+mutexes, goroutines, contexts, configuration switches, or cleanup helpers.
 
 The landed caller-owned context signature prerequisite is documented in
 [Migrate to caller-owned lifecycle contexts](migration-restore-go-lifecycle-ownership.md). Execution status and sole
@@ -269,8 +269,10 @@ Production owner Stop and Client Close never delete durable consumers. Retire wi
 
 The five removed Go fields are in the OTEL exporter, agentic dispatch, agentic loop, agentic model, and agentic tools
 configuration. Their five `delete_consumer_on_stop` generated-schema properties are removed with them. This is a
-breaking configuration migration even though the fields are now inert: delete the property from configuration before
-validating against the new schema.
+breaking discovery/schema migration even though the fields were inert: generated discovery no longer advertises the
+property. Runtime decoding deliberately keeps its existing behavior. OTEL already uses `DisallowUnknownFields` and
+rejects the stale key; agentic dispatch, loop, model, and tools use lenient JSON decoding and ignore it. N1 neither
+claims universal fail-fast behavior nor adds decoder strictness.
 
 Read-only downstream inventory found generated copies that their repository owners must migrate:
 
@@ -283,9 +285,9 @@ Read-only downstream inventory found generated copies that their repository owne
 SemConnect and the other inventoried sisters have no affected configuration consumer. SemStreams does not edit any
 sister repository; each owner removes or regenerates its copies and runs its own validation.
 
-Private fixture-owned cleanup records exact test-created stream/durable identities, drains local owners, and deletes
-only those recorded identities. It is not a production Stop option or exported Client method; it never uses a wildcard
-or discovers neighboring names, and Client Close never calls it.
+No current SemStreams fixture requires a consumer-deletion helper, so N1 adds none. Existing unique consumer suffixes
+continue to isolate the affected integration tests. If a future fixture creates topology that it must delete, that
+fixture must own the exact identities; this is guidance, not a mechanism introduced by N1.
 
 ## Settlement and poison boundaries
 
@@ -330,13 +332,14 @@ The authoritative per-symbol disposition remains
 
 1. **Contract supersession** — ADR-095, new OpenSpec change/deltas, PR #984 supersession, task truth, and this guide.
 2. **Owner handles, admission, lifecycle simplification** — native handles, fallible-before-Consume setup, duplicate
-   rejection, all 42 owner migrations, failed-Start authority, fixture deletion, and removal of stateful helpers.
+   rejection, all 42 owner migrations, failed-Start authority, and removal of stateful helpers.
 3. **N1a mechanical deletion — complete** — reviewed commit `8da1b83a` removed the unused lifecyclejoin package with
    net -748 lines and zero production additions.
 4. **N1b atomic code convergence — independently approved, commit authorized** — canonical handles, hidden Client
    child/name APIs, and the stateless durable handler are implemented together; Subscription Drain is unchanged.
-5. **N1 configuration/schema completion — outstanding** — remove the five inert fields/schema properties and add
-   private exact-identity fixture cleanup; sister repositories remain read-only migration obligations.
+5. **N1 configuration/schema completion — reviewed `APPROVE`** — five inert fields/schema properties are removed,
+   the published-schema regression is present, no cleanup helper was needed, and sister repositories remain read-only
+   migration obligations.
 6. **Client minimal** — retain independent observation and the handle-free reject-only identity claim; make Close
    terminal transport-only.
 7. **Raw-root narrowing** — execute every approved RETIRE/NARROW disposition.
@@ -357,6 +360,18 @@ SemStreams production calls to `OutstandingWork` or `StopAllConsumers`; agentic-
 directly and lost only a comment reference. Atomic packaging instead avoids publishing an incoherent outward API while
 SemMachina's authoritative downstream owners still combine direct `ConsumeDurable` acquisition with
 `StopAllConsumers` shutdown.
+
+The configuration/schema implementation covered 17 files. Before the reviewer-requested comment replacement it was
++57/-72 (net -15); production was net -7 and the five schemas were net -30. The replacement changes the old lifecycle
+integration comment to the accurate unique-suffix explanation, so the final 17-file slice is +58/-73 (net -15). Its
+16 tracked implementation paths are +26/-73; the new 32-line regression file contributes +32/0. The tracked-path
+diff SHA-256 `0ff355e2d6e358096d4558399fd2d670b697211d1cfd306321f667253566209a` excludes that untracked
+regression; the ledger's per-file hash table closes the complete 17-file identity. The new contract regression verifies
+that the five schemas
+published by `registerPublishedComposition` do not advertise `delete_consumer_on_stop`. That scanner does not prove
+runtime unknown-field behavior or validate copied schemas in sister repositories. Affected race and integration
+tests, schema regeneration/no-drift, lint, build, diff check, and strict OpenSpec validation passed. Independent review
+returned `APPROVE`. Full N1 candidate/release/tag proof and the 36 downstream read-only hits remain incomplete.
 
 Full repository/service green is not claimed: known scanner and stale-baseline failures remain outside the approved
 atomic surface. Full race/contract failures are not claimed green: the same failures
