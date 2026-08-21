@@ -31,8 +31,7 @@ var (
 func TestTrajectoryFactBucketIsImmutableHistoryWithoutTTL(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 	raw, err := json.Marshal(map[string]any{
-		"consumer_name_suffix":    "trajectory-fact-bucket-contract",
-		"delete_consumer_on_stop": true,
+		"consumer_name_suffix": "trajectory-fact-bucket-contract",
 	})
 	require.NoError(t, err)
 	discoverable, err := agenticloop.NewComponent(raw, component.Dependencies{
@@ -75,8 +74,7 @@ func TestExistingIncompatibleTrajectoryBucketDisablesAuditAndDegradesHealth(t *t
 	require.NoError(t, err)
 
 	raw, err := json.Marshal(map[string]any{
-		"consumer_name_suffix":    "trajectory-incompatible-contract",
-		"delete_consumer_on_stop": true,
+		"consumer_name_suffix": "trajectory-incompatible-contract",
 	})
 	require.NoError(t, err)
 	discoverable, err := agenticloop.NewComponent(raw, component.Dependencies{

@@ -118,9 +118,8 @@ func TestIntegration_ModelCompleteResponse(t *testing.T) {
 				},
 			},
 		},
-		ConsumerNameSuffix:   "test-" + t.Name(),
-		DeleteConsumerOnStop: true,
-		Timeout:              "5s",
+		ConsumerNameSuffix: "test-" + t.Name(),
+		Timeout:            "5s",
 	}
 
 	registry := &model.Registry{
@@ -261,9 +260,8 @@ func TestIntegration_ModelToolCallResponse(t *testing.T) {
 				},
 			},
 		},
-		ConsumerNameSuffix:   "test-" + t.Name(),
-		DeleteConsumerOnStop: true,
-		Timeout:              "5s",
+		ConsumerNameSuffix: "test-" + t.Name(),
+		Timeout:            "5s",
 	}
 
 	registry := &model.Registry{
@@ -435,9 +433,8 @@ func TestIntegration_ModelEndpointResolution(t *testing.T) {
 				},
 			},
 		},
-		ConsumerNameSuffix:   "test-" + t.Name(),
-		DeleteConsumerOnStop: true,
-		Timeout:              "5s",
+		ConsumerNameSuffix: "test-" + t.Name(),
+		Timeout:            "5s",
 	}
 
 	registry := &model.Registry{
@@ -580,9 +577,8 @@ func TestIntegration_InlineThinkExtraction(t *testing.T) {
 				{Name: "agent.response", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.*"}}},
 			},
 		},
-		ConsumerNameSuffix:   "test-" + t.Name(),
-		DeleteConsumerOnStop: true,
-		Timeout:              "5s",
+		ConsumerNameSuffix: "test-" + t.Name(),
+		Timeout:            "5s",
 	}
 
 	registry := &model.Registry{

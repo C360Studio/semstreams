@@ -23,7 +23,7 @@ import (
 	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/graph/structural"
 	"github.com/c360studio/semstreams/internal/graphmutation"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
@@ -601,15 +601,15 @@ type Component struct {
 	// Readiness gate (ADR-083 §3). statusWatcher holds graph-index's last-known
 	// ADR-066 envelope from the GRAPH_STATUS KV bucket, so a detection tick decides
 	// against held state instead of a per-tick request/reply that dies under exactly
-	// the load that makes readiness interesting (gh#590). It is rebuilt on every
-	// Start: a stopped Watcher cannot be restarted.
+	// the load that makes readiness interesting (gh#590). It is constructed during
+	// the owner's sole Start because a stopped Watcher cannot be restarted.
 	statusWatcher *readiness.Watcher
 	// embeddingStatusWatcher holds graph-embedding's last-known readiness envelope
 	// from the SAME GRAPH_STATUS bucket (KeyGraphEmbedding), and is bound ONLY when
 	// enable_semantic_edges is true — the second axis of the detection gate
 	// (B2 §4). It never DEFERS a cycle: a cold embedding index degrades the cycle
 	// to structural-only (semantic_edges_applied=false), it never withholds the
-	// always-committing structural floor. Rebuilt on every Start like statusWatcher.
+	// always-committing structural floor. Constructed during the owner's sole Start.
 	embeddingStatusWatcher *readiness.Watcher
 	// statusHeartbeat declares the producer's publish interval, which sets the
 	// freshness window (readiness.FreshnessMultiplier x heartbeat). Zero means
@@ -637,12 +637,19 @@ type Component struct {
 	lastSemanticApplied *bool
 
 	// Lifecycle state
-	mu          sync.RWMutex
-	running     bool
-	initialized bool
-	startTime   time.Time
-	wg          sync.WaitGroup
-	generation  *lifecyclejoin.Generation
+	mu                sync.RWMutex
+	lifecycleMu       sync.Mutex
+	running           bool
+	initialized       bool
+	startTime         time.Time
+	wg                sync.WaitGroup
+	lifecycleUsed     bool
+	cleanupPending    bool
+	lifecycleTerminal bool
+	stopping          bool
+	startDone         chan struct{}
+	cancel            context.CancelFunc
+	runtimeDone       chan struct{}
 
 	// Metrics (atomic)
 	messagesProcessed int64
@@ -653,7 +660,8 @@ type Component struct {
 	metrics           *clusteringMetrics
 
 	// Query subscriptions (for cleanup)
-	querySubscriptions []*natsclient.Subscription
+	querySubscriptions   []*natsclient.Subscription
+	subscribeForRequests func(context.Context, string, func(context.Context, []byte) ([]byte, error)) (*natsclient.Subscription, error)
 }
 
 // CreateGraphClustering is the factory function for creating graph-clustering components
@@ -896,6 +904,8 @@ func (c *Component) DataFlow() component.FlowMetrics {
 
 // Initialize validates configuration and sets up ports (no I/O)
 func (c *Component) Initialize() error {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -915,7 +925,7 @@ func (c *Component) Initialize() error {
 }
 
 // Start begins processing (must be initialized first)
-func (c *Component) Start(ctx context.Context) error {
+func (c *Component) Start(ctx context.Context) (startErr error) {
 	// Validate before inspecting lifecycle state.
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "Start", "context cannot be nil")
@@ -923,25 +933,38 @@ func (c *Component) Start(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return errs.WrapInvalid(err, "Component", "Start", "context already cancelled")
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
+	c.lifecycleMu.Lock()
+	c.mu.RLock()
+	initialized := c.initialized
+	c.mu.RUnlock()
 	// Check initialization
-	if !c.initialized {
+	if !initialized {
+		c.lifecycleMu.Unlock()
 		return errs.WrapFatal(errs.ErrInvalidConfig, "Component", "Start", "component not initialized")
 	}
 
-	// Idempotent - already running
-	if c.running {
-		return nil
+	if c.lifecycleUsed {
+		c.lifecycleMu.Unlock()
+		return errs.WrapFatal(errs.ErrInvalidConfig, "Component", "Start", "component instance already used")
 	}
 
 	// Create cancellable context
+	parent := ctx
 	ctx, cancel := context.WithCancel(ctx)
+	startDone := make(chan struct{})
+	c.lifecycleUsed = true
+	c.cancel = cancel
+	c.startDone = startDone
+	c.cleanupPending = true
+	c.lifecycleMu.Unlock()
+
+	committed := false
+	defer func() {
+		startErr = c.finishStart(parent, startDone, committed, startErr)
+	}()
 
 	// Check context before proceeding
 	if err := ctx.Err(); err != nil {
-		cancel()
 		return errs.Wrap(err, "Component", "Start", "context cancelled")
 	}
 
@@ -955,22 +978,22 @@ func (c *Component) Start(ctx context.Context) error {
 	// content-addressed, so it never carries reachability-blind eviction.
 	summaryBucket, err := graph.EnsureCatalogBucket(ctx, c.natsClient, graph.BucketCommunitySummaries)
 	if err != nil {
-		cancel()
+		startErr := errs.Wrap(err, "Component", "Start", fmt.Sprintf("KV bucket creation: %s", graph.BucketCommunitySummaries))
 		if ctx.Err() != nil {
-			return errs.Wrap(ctx.Err(), "Component", "Start", "context cancelled during bucket creation")
+			startErr = errs.Wrap(ctx.Err(), "Component", "Start", "context cancelled during bucket creation")
 		}
-		return errs.Wrap(err, "Component", "Start", fmt.Sprintf("KV bucket creation: %s", graph.BucketCommunitySummaries))
+		return startErr
 	}
 	c.summaryBucket = summaryBucket
 
 	// COMMUNITY_INDEX bucket (we are the WRITER)
 	communityBucket, err := graph.EnsureCatalogBucket(ctx, c.natsClient, graph.BucketCommunityIndex)
 	if err != nil {
-		cancel()
+		startErr := errs.Wrap(err, "Component", "Start", fmt.Sprintf("KV bucket creation: %s", graph.BucketCommunityIndex))
 		if ctx.Err() != nil {
-			return errs.Wrap(ctx.Err(), "Component", "Start", "context cancelled during bucket creation")
+			startErr = errs.Wrap(ctx.Err(), "Component", "Start", "context cancelled during bucket creation")
 		}
-		return errs.Wrap(err, "Component", "Start", fmt.Sprintf("KV bucket creation: %s", graph.BucketCommunityIndex))
+		return startErr
 	}
 	c.communityBucket = communityBucket
 
@@ -983,12 +1006,10 @@ func (c *Component) Start(ctx context.Context) error {
 	// graph-index is a legitimate shape whose readiness is simply unknown, and
 	// allow_ungated_reads — not a fabricated envelope — is what covers it.
 	if err := c.startStatusWatcher(ctx); err != nil {
-		cancel()
 		return errs.Wrap(err, "Component", "Start", "readiness status watcher")
 	}
 
 	if err := c.waitForDependencies(ctx); err != nil {
-		cancel()
 		return err
 	}
 
@@ -998,15 +1019,13 @@ func (c *Component) Start(ctx context.Context) error {
 	// dedicated ENTITY_STATES contract watcher and no per-write fan-out to
 	// clustering.
 	if err := c.setupQueryHandlers(ctx); err != nil {
-		cancel()
 		return errs.Wrap(err, "Component", "Start", "setup query handlers")
 	}
 
 	// Create graph provider and detector. The sticky poison latch survives a
-	// same-instance Stop/Start (only a process restart clears it): a poisoned
-	// component restarts its query surface so it can return the typed reset
-	// requirement, but no detector/enhancement/action worker may run against
-	// incompatible state.
+	// owner lifetime (only a process restart clears it): a poisoned component keeps
+	// its query surface available so it can return the typed reset requirement, but
+	// no detector/enhancement/action worker may run against incompatible state.
 	c.initProviderAndDetector()
 	poisoned := c.graphStatePoison.Load() != nil
 
@@ -1044,19 +1063,27 @@ func (c *Component) Start(ctx context.Context) error {
 	}
 
 	// Mark as running
+	c.mu.Lock()
 	c.running = true
 	c.startTime = time.Now()
+	startTime := c.startTime
+	c.mu.Unlock()
 
 	// Start detection loop goroutine
 	if !poisoned {
 		c.wg.Add(1)
 		go c.runDetectionLoop(ctx)
 	}
-	c.generation = lifecyclejoin.NewGeneration(cancel, c.wg.Wait)
+	c.runtimeDone = make(chan struct{})
+	go func(done chan struct{}) {
+		c.wg.Wait()
+		close(done)
+	}(c.runtimeDone)
+	committed = true
 
 	c.logger.Info("component started",
 		slog.String("component", "graph-clustering"),
-		slog.Time("start_time", c.startTime),
+		slog.Time("start_time", startTime),
 		slog.Duration("detection_interval", c.config.DetectionInterval()),
 		slog.Bool("enable_llm", c.config.EnableLLM),
 		slog.Bool("enable_anomaly_detection", c.config.EnableAnomalyDetection))
@@ -1064,63 +1091,173 @@ func (c *Component) Start(ctx context.Context) error {
 	return nil
 }
 
+func (c *Component) finishStart(parent context.Context, startDone chan struct{}, committed bool, startErr error) error {
+	if !committed {
+		rollbackErr := lifecyclecleanup.RollbackFailedStart(parent, c.cleanupFailedStart)
+		c.lifecycleMu.Lock()
+		if rollbackErr == nil {
+			c.cleanupPending = false
+			c.lifecycleTerminal = true
+			c.clearLifecycleHandles()
+		}
+		close(startDone)
+		c.startDone = nil
+		c.lifecycleMu.Unlock()
+		c.mu.Lock()
+		c.running = false
+		c.mu.Unlock()
+		return errors.Join(startErr, rollbackErr)
+	}
+	c.lifecycleMu.Lock()
+	c.cleanupPending = false
+	close(startDone)
+	c.startDone = nil
+	c.lifecycleMu.Unlock()
+	return startErr
+}
+
 // Stop gracefully shuts down the component
 func (c *Component) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-	c.mu.Lock()
-	generation := c.generation
-	if generation == nil {
-		c.mu.Unlock()
-		return nil // Already stopped
-	}
-
-	c.mu.Unlock()
-
-	return generation.Stop(ctx, func() error {
-		var stopErr error
-		for _, sub := range c.querySubscriptions {
-			if sub != nil {
-				if err := sub.Unsubscribe(); err != nil {
-					c.logger.Warn("query subscription unsubscribe error", slog.Any("error", err))
-					stopErr = errors.Join(stopErr, err)
-				}
+	for {
+		c.lifecycleMu.Lock()
+		if !c.lifecycleUsed {
+			c.lifecycleUsed = true
+			c.lifecycleTerminal = true
+			c.lifecycleMu.Unlock()
+			return nil
+		}
+		if c.lifecycleTerminal {
+			c.lifecycleMu.Unlock()
+			return nil
+		}
+		startDone := c.startDone
+		if startDone != nil {
+			c.lifecycleMu.Unlock()
+			select {
+			case <-startDone:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 		}
-		c.querySubscriptions = nil
-		if c.reviewWorker != nil {
-			stopErr = errors.Join(stopErr, c.reviewWorker.Stop())
+		if c.stopping {
+			c.lifecycleMu.Unlock()
+			return errs.WrapTransient(errors.New("stop already in progress"), "Component", "Stop", "concurrent Stop is unsupported")
 		}
-		if c.enhancementWorker != nil {
-			stopErr = errors.Join(stopErr, c.enhancementWorker.Stop())
+		retryable := c.cleanupPending
+		c.stopping = true
+		c.lifecycleMu.Unlock()
+
+		stopErr := c.cleanup(ctx, retryable)
+		c.lifecycleMu.Lock()
+		c.stopping = false
+		if retryable && stopErr != nil {
+			c.lifecycleMu.Unlock()
+			return stopErr
 		}
-		if c.llmClient != nil {
-			stopErr = errors.Join(stopErr, c.llmClient.Close())
-		}
-		if c.reviewLLMClient != nil {
-			stopErr = errors.Join(stopErr, c.reviewLLMClient.Close())
-		}
-		c.mu.Lock()
-		statusWatcher := c.statusWatcher
-		c.statusWatcher = nil
-		embeddingStatusWatcher := c.embeddingStatusWatcher
-		c.embeddingStatusWatcher = nil
-		c.mu.Unlock()
-		if statusWatcher != nil {
-			statusWatcher.Stop()
-		}
-		if embeddingStatusWatcher != nil {
-			embeddingStatusWatcher.Stop()
-		}
-		return stopErr
-	}, func(context.Context) error {
+		c.cleanupPending = false
+		c.lifecycleTerminal = true
+		c.clearLifecycleHandles()
+		c.lifecycleMu.Unlock()
 		c.mu.Lock()
 		c.running = false
 		c.mu.Unlock()
 		c.logger.Info("component stopped gracefully", slog.String("component", "graph-clustering"))
-		return nil
-	})
+		return stopErr
+	}
+}
+
+func (c *Component) cleanupFailedStart(ctx context.Context) error {
+	return c.cleanup(ctx, true)
+}
+
+func (c *Component) cleanup(ctx context.Context, retryable bool) error {
+	var cleanupErr error
+	unresolved := c.querySubscriptions[:0]
+	for _, sub := range c.querySubscriptions {
+		if sub == nil {
+			continue
+		}
+		if err := sub.Drain(ctx); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+			unresolved = append(unresolved, sub)
+		}
+	}
+	if retryable {
+		c.querySubscriptions = unresolved
+	} else {
+		c.querySubscriptions = nil
+	}
+	if c.cancel != nil {
+		c.cancel()
+	}
+	if c.runtimeDone != nil {
+		select {
+		case <-c.runtimeDone:
+			if retryable {
+				c.runtimeDone = nil
+				c.cancel = nil
+			}
+		case <-ctx.Done():
+			cleanupErr = errors.Join(cleanupErr, ctx.Err())
+		}
+	}
+	if c.reviewWorker != nil {
+		if err := c.reviewWorker.Stop(); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		} else if retryable {
+			c.reviewWorker = nil
+		}
+	}
+	if c.enhancementWorker != nil {
+		if err := c.enhancementWorker.Stop(); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		} else if retryable {
+			c.enhancementWorker = nil
+		}
+	}
+	if c.llmClient != nil {
+		if err := c.llmClient.Close(); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		} else if retryable {
+			c.llmClient = nil
+		}
+	}
+	if c.reviewLLMClient != nil {
+		if err := c.reviewLLMClient.Close(); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		} else if retryable {
+			c.reviewLLMClient = nil
+		}
+	}
+	if c.statusWatcher != nil {
+		c.statusWatcher.Stop()
+		if retryable {
+			c.statusWatcher = nil
+		}
+	}
+	if c.embeddingStatusWatcher != nil {
+		c.embeddingStatusWatcher.Stop()
+		if retryable {
+			c.embeddingStatusWatcher = nil
+		}
+	}
+	return cleanupErr
+}
+
+func (c *Component) clearLifecycleHandles() {
+	c.querySubscriptions = nil
+	c.cancel = nil
+	c.runtimeDone = nil
+	c.reviewWorker = nil
+	c.enhancementWorker = nil
+	c.llmClient = nil
+	c.reviewLLMClient = nil
+	c.statusWatcher = nil
+	c.embeddingStatusWatcher = nil
 }
 
 // waitForDependencies waits for all required KV buckets and stores references.

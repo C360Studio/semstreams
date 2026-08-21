@@ -41,14 +41,14 @@ func (e *ActionExecutor) executeLifecycleTransition(ctx context.Context, action 
 	if entityID == "" {
 		return errors.New("lifecycle_transition: ec.EntityID is empty; rule must fire with an entity context")
 	}
-	phase, err := resolveLifecycleString(ec, action.Phase, "phase")
+	phase, err := resolveLifecycleString(ctx, ec, action.Phase, "phase")
 	if err != nil {
 		return fmt.Errorf("lifecycle_transition: %w", err)
 	}
 	if phase == "" {
 		return errors.New("lifecycle_transition: phase is required (resolved to empty after substitution)")
 	}
-	workflow, err := e.resolveLifecycleWorkflow(ec, mgr, action, entityID)
+	workflow, err := e.resolveLifecycleWorkflow(ctx, ec, mgr, action, entityID)
 	if err != nil {
 		return fmt.Errorf("lifecycle_transition: %w", err)
 	}
@@ -74,7 +74,7 @@ func (e *ActionExecutor) executeLifecycleTransition(ctx context.Context, action 
 		// mutator closure captures already-resolved values. Capture
 		// a snapshot to avoid CAS-retry seeing concurrently-mutated
 		// callsite maps.
-		resolved := substituteSetMap(action.Set, ec)
+		resolved := substituteSetMap(ctx, action.Set, ec)
 		mutator = func(p lifecycle.Participant) error {
 			return applyLifecycleSet(p, resolved)
 		}
@@ -106,7 +106,7 @@ func (e *ActionExecutor) executeLifecycleComplete(ctx context.Context, action Ac
 	if entityID == "" {
 		return errors.New("lifecycle_complete: ec.EntityID is empty; rule must fire with an entity context")
 	}
-	workflow, err := e.resolveLifecycleWorkflow(ec, mgr, action, entityID)
+	workflow, err := e.resolveLifecycleWorkflow(ctx, ec, mgr, action, entityID)
 	if err != nil {
 		return fmt.Errorf("lifecycle_complete: %w", err)
 	}
@@ -134,14 +134,14 @@ func (e *ActionExecutor) executeLifecycleFail(ctx context.Context, action Action
 	if entityID == "" {
 		return errors.New("lifecycle_fail: ec.EntityID is empty; rule must fire with an entity context")
 	}
-	reason, err := resolveLifecycleString(ec, action.Reason, "reason")
+	reason, err := resolveLifecycleString(ctx, ec, action.Reason, "reason")
 	if err != nil {
 		return fmt.Errorf("lifecycle_fail: %w", err)
 	}
 	if reason == "" {
 		return errors.New("lifecycle_fail: reason is required (resolved to empty after substitution) — Manager.Fail rejects empty reasons since operators need the failure cause in the audit trail")
 	}
-	workflow, err := e.resolveLifecycleWorkflow(ec, mgr, action, entityID)
+	workflow, err := e.resolveLifecycleWorkflow(ctx, ec, mgr, action, entityID)
 	if err != nil {
 		return fmt.Errorf("lifecycle_fail: %w", err)
 	}
@@ -175,9 +175,9 @@ func (e *ActionExecutor) requireLifecycleManager(actionType string) (LifecycleMa
 // loud-fail on surviving framework tokens — same discipline as
 // resolveTripleSubject in actions.go for $entity.triple.* references).
 // Falls back to Manager.LookupByEntityID when omitted.
-func (e *ActionExecutor) resolveLifecycleWorkflow(ec *ExecutionContext, mgr LifecycleManager, action Action, entityID string) (string, error) {
+func (e *ActionExecutor) resolveLifecycleWorkflow(ctx context.Context, ec *ExecutionContext, mgr LifecycleManager, action Action, entityID string) (string, error) {
 	if action.Workflow != "" {
-		workflow, err := resolveLifecycleString(ec, action.Workflow, "workflow")
+		workflow, err := resolveLifecycleString(ctx, ec, action.Workflow, "workflow")
 		if err != nil {
 			return "", err
 		}
@@ -186,7 +186,7 @@ func (e *ActionExecutor) resolveLifecycleWorkflow(ec *ExecutionContext, mgr Life
 		}
 		return workflow, nil
 	}
-	p, err := mgr.LookupByEntityID(context.Background(), entityID)
+	p, err := mgr.LookupByEntityID(ctx, entityID)
 	if err != nil {
 		return "", fmt.Errorf("resolve workflow for entity_id=%q: %w (set action.Workflow explicitly when ambiguous)", entityID, err)
 	}
@@ -209,8 +209,8 @@ func (e *ActionExecutor) resolveLifecycleWorkflow(ec *ExecutionContext, mgr Life
 // rejected here — callers handle empty-string semantics for their
 // own field (Manager.Fail rejects empty reason; lifecycle_transition
 // requires non-empty phase).
-func resolveLifecycleString(ec *ExecutionContext, raw string, fieldName string) (string, error) {
-	resolved := strings.TrimSpace(ec.SubstituteVariables(raw))
+func resolveLifecycleString(ctx context.Context, ec *ExecutionContext, raw string, fieldName string) (string, error) {
+	resolved := strings.TrimSpace(ec.SubstituteVariables(ctx, raw))
 	if leftovers := unresolvedTemplateVarRe.FindAllString(resolved, -1); len(leftovers) > 0 {
 		return "", fmt.Errorf("%s %q has unresolved template variables %v after substitution (likely a typo or a reference that the trigger didn't carry at fire time)",
 			fieldName, raw, leftovers)
@@ -222,25 +222,25 @@ func resolveLifecycleString(ec *ExecutionContext, raw string, fieldName string) 
 // applying string substitution to literal-string values and to
 // typed-op `value` fields. Non-string values are passed through
 // untouched.
-func substituteSetMap(set map[string]any, ec *ExecutionContext) map[string]any {
+func substituteSetMap(ctx context.Context, set map[string]any, ec *ExecutionContext) map[string]any {
 	out := make(map[string]any, len(set))
 	for k, raw := range set {
-		out[k] = substituteSetValue(raw, ec)
+		out[k] = substituteSetValue(ctx, raw, ec)
 	}
 	return out
 }
 
-func substituteSetValue(raw any, ec *ExecutionContext) any {
+func substituteSetValue(ctx context.Context, raw any, ec *ExecutionContext) any {
 	switch v := raw.(type) {
 	case string:
-		return ec.SubstituteVariables(v)
+		return ec.SubstituteVariables(ctx, v)
 	case map[string]any:
 		// Typed op — substitute inside `value` only; op stays literal.
 		out := make(map[string]any, len(v))
 		for k, inner := range v {
 			if k == "value" {
 				if s, ok := inner.(string); ok {
-					out[k] = ec.SubstituteVariables(s)
+					out[k] = ec.SubstituteVariables(ctx, s)
 					continue
 				}
 			}

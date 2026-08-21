@@ -2,6 +2,7 @@ package rule
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"strings"
 	"testing"
@@ -166,7 +167,7 @@ func TestSubstituteVariables_Message_FullPipeline(t *testing.T) {
 	in := "rule fired on $entity.id for loop=$message.loop_id call=$message.call_id cmd=$message.tool_args.command"
 	want := "rule fired on c360.osh.agent.agentic-loop.execution.uuid-001 for loop=loop-abc call=call-001 cmd=ls /tmp"
 
-	if got := ec.SubstituteVariables(in); got != want {
+	if got := ec.SubstituteVariables(context.Background(), in); got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
 }
@@ -187,7 +188,7 @@ func TestSubstituteVariables_Message_VerdictSubject(t *testing.T) {
 	in := "agent.toolcall.rejected.$message.loop_id.$message.call_id"
 	want := "agent.toolcall.rejected.loop-abc.call-001"
 
-	if got := ec.SubstituteVariables(in); got != want {
+	if got := ec.SubstituteVariables(context.Background(), in); got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
 }
@@ -217,7 +218,7 @@ func TestSubstituteVariables_Message_UnresolvedFieldWarns(t *testing.T) {
 	in := "loop=$message.loop_id missing=$message.absent_field"
 	want := "loop=loop-abc missing=$message.absent_field"
 
-	got := ec.SubstituteVariables(in)
+	got := ec.SubstituteVariables(context.Background(), in)
 	if got != want {
 		t.Errorf("substitution: got %q, want %q", got, want)
 	}
@@ -250,7 +251,7 @@ func TestSubstituteVariables_Message_CoexistsWithOtherNamespaces(t *testing.T) {
 	in := "caller=$caller.id role=$caller.role entity=$entity.instance tool=$message.tool_name"
 	want := "caller=alice role=operator entity=uuid-001 tool=bash"
 
-	if got := ec.SubstituteVariables(in); got != want {
+	if got := ec.SubstituteVariables(context.Background(), in); got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
 }

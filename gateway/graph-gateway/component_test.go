@@ -7,6 +7,7 @@ package graphgateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +15,6 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -557,10 +557,14 @@ func TestStandaloneServerShutdownKeepsHandlerAuthorityLiveUntilHandlerReturns(t 
 	server.RegisterOnShutdown(func() { close(shutdownStarted) })
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	serveDone := make(chan struct{})
+	serveDone := make(chan error, 1)
 	go func() {
-		defer close(serveDone)
-		_ = server.Serve(listener)
+		err := server.Serve(listener)
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
+		}
+		serveDone <- err
+		close(serveDone)
 	}()
 	requestDone := make(chan error, 1)
 	go func() {
@@ -575,7 +579,9 @@ func TestStandaloneServerShutdownKeepsHandlerAuthorityLiveUntilHandlerReturns(t 
 	comp := createTestComponent(t)
 	comp.running = true
 	comp.httpServer = server
-	comp.generation = lifecyclejoin.NewGeneration(cancel, func() { <-serveDone })
+	comp.serveDone = serveDone
+	comp.cancel = cancel
+	comp.lifecycleUsed = true
 	stopDone := make(chan error, 1)
 	go func() { stopDone <- comp.Stop(t.Context()) }()
 	<-shutdownStarted

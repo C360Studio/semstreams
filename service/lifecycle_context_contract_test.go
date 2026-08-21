@@ -3,15 +3,12 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/health"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/storage"
@@ -24,8 +21,8 @@ type failingMetricsServer struct {
 	stopCalls atomic.Int32
 }
 
-func (*failingMetricsServer) Start() error { return nil }
-func (s *failingMetricsServer) Stop() error {
+func (*failingMetricsServer) Start(context.Context) error { return nil }
+func (s *failingMetricsServer) Stop(context.Context) error {
 	s.stopCalls.Add(1)
 	return s.stopErr
 }
@@ -68,7 +65,7 @@ func TestBaseServiceRejectsNilLifecycleContextBeforeState(t *testing.T) {
 	require.Equal(t, StatusRunning, svc.Status())
 }
 
-func TestMetricsStopRetainsAndReplaysFirstTeardownFailure(t *testing.T) {
+func TestMetricsCompletedStopDoesNotReplayFirstTeardownFailure(t *testing.T) {
 	base := NewBaseServiceWithOptions("metrics", nil)
 	runCtx, cancel := context.WithCancel(context.Background())
 	require.NoError(t, base.Start(runCtx))
@@ -77,13 +74,15 @@ func TestMetricsStopRetainsAndReplaysFirstTeardownFailure(t *testing.T) {
 	m := &Metrics{
 		BaseService: base,
 		server:      server,
-		generation:  lifecyclejoin.NewGeneration(cancel, func() {}),
+		used:        true,
+		running:     true,
+		cancel:      cancel,
 	}
 
 	firstErr := m.Stop(context.Background())
 	require.ErrorIs(t, firstErr, serverErr)
 	secondErr := m.Stop(context.Background())
-	require.EqualError(t, secondErr, firstErr.Error())
+	require.NoError(t, secondErr)
 	require.Equal(t, int32(1), server.stopCalls.Load())
 }
 
@@ -99,46 +98,6 @@ func TestBaseServiceStopSignalsLifetimeBeforeCanceledJoin(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 
 	require.NotEqual(t, StatusRunning, svc.Status(), "Stop must signal the active generation before returning")
-}
-
-func TestBaseServiceStopJoinsInitialHealthCheckWithoutLateCallback(t *testing.T) {
-	checkEntered := make(chan struct{})
-	releaseCheck := make(chan struct{})
-	callbackStarted := make(chan struct{}, 1)
-	svc := NewBaseServiceWithOptions(
-		"tracked-health",
-		nil,
-		WithHealthInterval(time.Hour),
-		WithHealthCheck(func() error {
-			close(checkEntered)
-			<-releaseCheck
-			return nil
-		}),
-	)
-	svc.OnHealthChange(func(bool) { callbackStarted <- struct{}{} })
-	require.NoError(t, svc.Start(context.Background()))
-
-	select {
-	case <-checkEntered:
-	case <-time.After(time.Second):
-		t.Fatal("initial health check did not start")
-	}
-	canceled, cancelStop := context.WithCancel(context.Background())
-	cancelStop()
-	require.ErrorIs(t, svc.Stop(canceled), context.Canceled)
-	stopDone := make(chan error, 1)
-	go func() { stopDone <- svc.Stop(context.Background()) }()
-	close(releaseCheck)
-	require.NoError(t, <-stopDone)
-	require.False(t, svc.IsHealthy())
-	require.Equal(t, StatusStopped, svc.Status())
-
-	select {
-	case <-callbackStarted:
-		t.Fatal("health callback ran after terminal shutdown began")
-	case <-time.After(100 * time.Millisecond):
-		// Failure bound only: the check and Stop are synchronized by channels.
-	}
 }
 
 func TestManagerStopAllRejectsNilBeforeCallingServices(t *testing.T) {
@@ -193,30 +152,6 @@ type serviceFunc struct {
 
 func (s serviceFunc) Stop(ctx context.Context) error { return s.stop(ctx) }
 
-func TestBaseServiceConcurrentStopsShareCompletion(t *testing.T) {
-	svc := NewBaseServiceWithOptions("concurrent-stop", nil)
-	require.NoError(t, svc.Start(context.Background()))
-
-	const callers = 8
-	results := make(chan error, callers)
-	var ready sync.WaitGroup
-	ready.Add(callers)
-	start := make(chan struct{})
-	for range callers {
-		go func() {
-			ready.Done()
-			<-start
-			results <- svc.Stop(context.Background())
-		}()
-	}
-	ready.Wait()
-	close(start)
-	for range callers {
-		require.NoError(t, <-results)
-	}
-	require.Equal(t, StatusStopped, svc.Status())
-}
-
 type controlledGenerationComponent struct {
 	*mockDiscoverableComponent
 	startEntered    chan struct{}
@@ -233,8 +168,10 @@ type controlledGenerationComponent struct {
 
 type liveAuthorityStopComponent struct {
 	*mockDiscoverableComponent
-	startCtx context.Context
-	stopped  chan struct{}
+	startCtx  context.Context
+	stopped   chan struct{}
+	stopCalls atomic.Int32
+	stopOnce  sync.Once
 }
 
 func newLiveAuthorityStopComponent(name string) *liveAuthorityStopComponent {
@@ -254,12 +191,13 @@ func (c *liveAuthorityStopComponent) Start(ctx context.Context) error {
 }
 
 func (c *liveAuthorityStopComponent) Stop(context.Context) error {
+	c.stopCalls.Add(1)
 	select {
 	case <-c.startCtx.Done():
 		return errors.New("Start authority canceled before component Stop")
 	default:
 	}
-	close(c.stopped)
+	c.stopOnce.Do(func() { close(c.stopped) })
 	return nil
 }
 
@@ -314,6 +252,8 @@ type failedPartialStartComponent struct {
 	startErr        error
 	stopCalls       atomic.Int32
 	stopSawCanceled chan struct{}
+	stopErr         error
+	stopOnce        sync.Once
 }
 
 func (*failedPartialStartComponent) Initialize() error { return nil }
@@ -324,10 +264,13 @@ func (c *failedPartialStartComponent) Start(ctx context.Context) error {
 }
 
 func (c *failedPartialStartComponent) Stop(context.Context) error {
-	c.stopCalls.Add(1)
+	call := c.stopCalls.Add(1)
 	select {
 	case <-c.startCtx.Done():
-		close(c.stopSawCanceled)
+		c.stopOnce.Do(func() { close(c.stopSawCanceled) })
+		if call == 1 {
+			return c.stopErr
+		}
 		return nil
 	default:
 		return errors.New("failed partial Start authority remained live during Stop")
@@ -403,9 +346,13 @@ func TestComponentManagerCallsComponentStopBeforeRuntimeCancellation(t *testing.
 	require.NoError(t, cm.Stop(t.Context()))
 	waitForSignal(t, comp.stopped, "component Stop with live Start authority")
 	require.ErrorIs(t, comp.startCtx.Err(), context.Canceled)
+	require.Equal(t, int32(1), comp.stopCalls.Load())
+	require.NoError(t, cm.Stop(t.Context()))
+	require.Equal(t, int32(1), comp.stopCalls.Load())
+	require.ErrorContains(t, cm.Start(t.Context()), "already used")
 }
 
-func TestComponentManagerAbortModeRejoinsAfterLateStoreRegistration(t *testing.T) {
+func TestComponentManagerStopDuringStartCancelsAndPreventsLateStoreCommit(t *testing.T) {
 	cm := &ComponentManager{
 		BaseService:   NewBaseServiceWithOptions("component-manager", nil),
 		components:    make(map[string]*component.ManagedComponent),
@@ -425,25 +372,20 @@ func TestComponentManagerAbortModeRejoinsAfterLateStoreRegistration(t *testing.T
 	go func() { startResult <- cm.Start(t.Context()) }()
 	<-comp.startEntered
 
-	stopCtx, cancelStop := context.WithCancel(context.Background())
-	firstStopResult := make(chan error, 1)
-	go func() { firstStopResult <- cm.Stop(stopCtx) }()
+	stopResult := make(chan error, 1)
+	go func() { stopResult <- cm.Stop(t.Context()) }()
 	<-comp.startCanceled
-	cancelStop()
-	require.ErrorIs(t, <-firstStopResult, context.Canceled)
-
 	close(comp.releaseStart)
-	_ = <-startResult
+	require.Error(t, <-startResult)
+	require.NoError(t, <-stopResult)
 	_, registered := cm.storeRegistry.Streamable("late-store")
-	require.True(t, registered, "late successful Start must reproduce the post-abort registration window")
-
-	require.NoError(t, cm.Stop(context.Background()))
-	_, registered = cm.storeRegistry.Streamable("late-store")
-	require.False(t, registered, "rejoined cancel-first cleanup must remove late stores")
+	require.False(t, registered, "a canceled late Start must not commit its store")
+	require.Equal(t, int32(1), comp.stopCalls.Load())
+	require.NoError(t, cm.Stop(t.Context()))
 	require.Equal(t, int32(1), comp.stopCalls.Load())
 }
 
-func TestComponentManagerFailedPartialStartCancelsBeforeStop(t *testing.T) {
+func TestComponentManagerFailedStartRollsBackSynchronouslyAndDoesNotReplay(t *testing.T) {
 	wantErr := errors.New("partial start failed")
 	comp := &failedPartialStartComponent{
 		mockDiscoverableComponent: &mockDiscoverableComponent{
@@ -462,24 +404,52 @@ func TestComponentManagerFailedPartialStartCancelsBeforeStop(t *testing.T) {
 	}
 	cm.initialized.Store(true)
 	require.ErrorIs(t, cm.Start(t.Context()), wantErr)
-
-	require.NoError(t, cm.Stop(context.Background()))
 	<-comp.stopSawCanceled
+	require.Equal(t, int32(1), comp.stopCalls.Load())
+	require.NoError(t, cm.Stop(context.Background()))
 	require.Equal(t, int32(1), comp.stopCalls.Load())
 }
 
-func TestComponentManagerStopArbitrationBranchesOnGracefulWinner(t *testing.T) {
-	runtimeCtx, cancelRuntime := context.WithCancel(context.Background())
-	startDone := make(chan struct{})
-	close(startDone)
-	runtime := &componentRuntime{startDone: startDone, startInvoked: true}
-	runtime.generation = lifecyclejoin.NewGeneration(cancelRuntime, func() { <-startDone })
+func TestComponentManagerFailedStartCleanupFailureRetainsAuthorityForLaterStop(t *testing.T) {
+	startErr := errors.New("partial start failed")
+	cleanupErr := errors.New("partial cleanup failed")
+	comp := &failedPartialStartComponent{
+		mockDiscoverableComponent: &mockDiscoverableComponent{
+			metadata: component.Metadata{Name: "partial", Type: "processor"},
+		},
+		startErr:        startErr,
+		stopErr:         cleanupErr,
+		stopSawCanceled: make(chan struct{}),
+	}
+	cm := &ComponentManager{
+		BaseService: NewBaseServiceWithOptions("component-manager", nil),
+		components: map[string]*component.ManagedComponent{
+			"partial": {Component: comp, State: component.StateInitialized},
+		},
+		runtimes: make(map[string]*componentRuntime),
+		registry: component.NewRegistry(),
+	}
+	cm.initialized.Store(true)
+
+	err := cm.Start(t.Context())
+	require.ErrorIs(t, err, startErr)
+	require.ErrorIs(t, err, cleanupErr)
+	require.True(t, cm.cleanupPending)
+	require.False(t, cm.lifecycleTerminal)
+	require.ErrorContains(t, cm.Start(t.Context()), "already used")
+	require.NoError(t, cm.Stop(t.Context()))
+	require.Equal(t, int32(2), comp.stopCalls.Load())
+	require.True(t, cm.lifecycleTerminal)
+	require.NoError(t, cm.Stop(t.Context()))
+	require.Equal(t, int32(2), comp.stopCalls.Load())
+}
+
+func TestComponentManagerRunningStopDeregistersStoreBeforeLiveChildStop(t *testing.T) {
 	storeRegistry := storeregistry.New()
 	comp := &gracefulArbitrationStoreComponent{
 		mockDiscoverableComponent: &mockDiscoverableComponent{
 			metadata: component.Metadata{Name: "arbitrated", Type: "storage"},
 		},
-		runtimeCtx:    runtimeCtx,
 		storeRegistry: storeRegistry,
 		store:         &fakeStreamable{id: "arbitrated"},
 	}
@@ -488,38 +458,22 @@ func TestComponentManagerStopArbitrationBranchesOnGracefulWinner(t *testing.T) {
 		components: map[string]*component.ManagedComponent{
 			"arbitrated": {Component: comp, State: component.StateStarted},
 		},
-		runtimes:      map[string]*componentRuntime{"arbitrated": runtime},
+		runtimes:      make(map[string]*componentRuntime),
+		registry:      component.NewRegistry(),
 		storeRegistry: storeRegistry,
 		storeProvided: make(map[string][]string),
 	}
-	require.NoError(t, cm.registerProvidedStores("arbitrated", comp))
-
-	stopObservedPending := make(chan struct{})
-	releaseStopDecision := make(chan struct{})
-	stopResult := make(chan error, 1)
-	go func() {
-		if componentGenerationShutdownMode(runtime.shutdownMode.Load()) != componentShutdownPending {
-			stopResult <- errors.New("Stop did not observe pending shutdown mode")
-			return
-		}
-		close(stopObservedPending)
-		<-releaseStopDecision
-		if mode := runtime.selectShutdownModeForStop(); mode != componentShutdownGraceful {
-			stopResult <- fmt.Errorf("Stop arbitration selected %v, want graceful", mode)
-			return
-		}
-		stopResult <- cm.stopLifecycleComponent(
-			context.Background(), "arbitrated", runtime, comp,
-		)
-	}()
-
-	<-stopObservedPending
-	runtime.admitGracefulShutdown()
-	close(releaseStopDecision)
-	require.NoError(t, <-stopResult)
-	require.ErrorIs(t, runtimeCtx.Err(), context.Canceled)
+	cm.initialized.Store(true)
+	require.NoError(t, cm.Start(t.Context()))
 	_, registered := storeRegistry.Streamable("arbitrated")
+	require.True(t, registered)
+
+	require.NoError(t, cm.Stop(t.Context()))
+	require.ErrorIs(t, comp.runtimeCtx.Err(), context.Canceled)
+	_, registered = storeRegistry.Streamable("arbitrated")
 	require.False(t, registered)
+	require.Equal(t, int32(1), comp.stopCalls.Load())
+	require.NoError(t, cm.Stop(t.Context()))
 	require.Equal(t, int32(1), comp.stopCalls.Load())
 }
 

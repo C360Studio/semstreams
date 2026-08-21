@@ -31,7 +31,7 @@ func (r *patternSelectionRule) Evaluate([]message.Message) bool {
 func (r *patternSelectionRule) ExecuteEvents([]message.Message) ([]Event, error) {
 	return nil, nil
 }
-func (r *patternSelectionRule) EvaluateEntityState(*graph.EntityState) bool {
+func (r *patternSelectionRule) EvaluateEntityState(context.Context, *graph.EntityState) bool {
 	r.evaluated.Add(1)
 	return r.triggered
 }
@@ -291,7 +291,7 @@ func (e *orderedEntityActionExecutor) snapshot() []string {
 	return append([]string(nil), e.subjects...)
 }
 
-func TestBlockedBatchFetchCompletesBeforeConcurrentDelete(t *testing.T) {
+func TestConcurrentDeleteDoesNotWaitForBlockedBatchFetch(t *testing.T) {
 	t.Parallel()
 
 	processor, executor := newOrderedEntityProcessor()
@@ -325,8 +325,8 @@ func TestBlockedBatchFetchCompletesBeforeConcurrentDelete(t *testing.T) {
 
 	select {
 	case <-deleteDone:
-		t.Fatal("delete completed while the earlier batch still owned the entity fence")
-	case <-time.After(25 * time.Millisecond):
+	case <-time.After(time.Second):
+		t.Fatal("delete waited on the blocked batch fetch")
 	}
 	close(releaseFetch)
 	select {
@@ -334,13 +334,11 @@ func TestBlockedBatchFetchCompletesBeforeConcurrentDelete(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("batch did not complete")
 	}
-	select {
-	case <-deleteDone:
-	case <-time.After(time.Second):
-		t.Fatal("delete did not complete")
-	}
 
-	require.Equal(t, []string{"test.update", "test.delete"}, executor.snapshot())
+	// The delete records revision 11 while the older revision-10 fetch is
+	// blocked. No matching state existed yet, so the delete has no OnExit action;
+	// when the fetch returns, revision admission drops its stale update action.
+	require.Empty(t, executor.snapshot())
 	requireFenceCounts(t, &processor.entityEvaluationFence, 0, 1)
 }
 

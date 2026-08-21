@@ -86,6 +86,18 @@ func TestDecodeAdvisory(t *testing.T) {
 	}
 }
 
+func TestStartRejectsNilAndCanceledContextBeforeAcquisition(t *testing.T) {
+	stop, err := start(nil, nil, nil)
+	require.Nil(t, stop)
+	require.Error(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	stop, err = start(ctx, nil, nil)
+	require.Nil(t, stop)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 type recordingMsg struct {
 	jetstream.Msg
 	subject string

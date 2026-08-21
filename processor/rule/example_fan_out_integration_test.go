@@ -172,7 +172,7 @@ func phase1SpawnInvestigators(
 
 	rule, err := NewExpressionRule("direct-expression-test", rule01)
 	require.NoError(t, err)
-	require.True(t, rule.EvaluateEntityState(coordinator),
+	require.True(t, rule.EvaluateEntityState(context.Background(), coordinator),
 		"rule 01 EvaluateEntityState must match a coordinator with next_action=fan_out (drives the production wire including SubstituteConditionValues)")
 
 	publisher := &mockPublisher{}
@@ -224,7 +224,7 @@ func phase2StampCompletions(
 		}
 		ec := &ExecutionContext{EntityID: invID, Entity: investigator}
 
-		require.True(t, rule.EvaluateEntityState(investigator),
+		require.True(t, rule.EvaluateEntityState(context.Background(), investigator),
 			"rule 02 EvaluateEntityState must match a successful investigator (child %d)", i)
 
 		for _, action := range rule02.OnEnter {
@@ -262,7 +262,7 @@ func phase3FireJoin(
 	coordinator.ID = coordinatorEntityID
 	rule, err := NewExpressionRule("direct-expression-test", rule03)
 	require.NoError(t, err)
-	require.True(t, rule.EvaluateEntityState(coordinator),
+	require.True(t, rule.EvaluateEntityState(context.Background(), coordinator),
 		"rule 03 EvaluateEntityState must match when len(gather.child.completed) == .length(coordinator.decision.subtopics) — drives the production wire including SubstituteConditionValues + #149 .length substitution + #147 array operator wiring")
 
 	publisher := &mockPublisher{}
@@ -362,7 +362,7 @@ func TestExampleFanOutPack_EndToEnd_PartialCompletionDoesNotFireJoin(t *testing.
 	coordinator.ID = "acme.research.agent.agentic-loop.execution.coord-x"
 	rule, err := NewExpressionRule("direct-expression-test", rule03)
 	require.NoError(t, err)
-	assert.False(t, rule.EvaluateEntityState(coordinator),
+	assert.False(t, rule.EvaluateEntityState(context.Background(), coordinator),
 		"rule 03 EvaluateEntityState must NOT match at N-1 completions — premature synthesis would lose the slowest child's findings. Drives the production wire so a future refactor that removes the substitution helper from EvaluateEntityState fails this test rather than silently shipping broken.")
 }
 

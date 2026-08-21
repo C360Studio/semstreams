@@ -49,18 +49,37 @@ type CronScheduler struct {
 	mu      sync.Mutex
 	entries map[string]*cronEntry
 
-	// parentCtx is captured by Start and used by every fire callback so
-	// long-running actions inherit the processor's lifecycle context.
-	// Nil before Start; nil-checked in fire so Register-then-fire-before-Start
-	// (impossible in current usage but cheap to defend) cannot panic.
-	//
-	// Single-shot per scheduler instance: a Stop+Start sequence is
-	// rejected by the started guard, so parentCtx never needs to be
-	// replaced mid-lifetime. A processor restart constructs a fresh
-	// CronScheduler in initializeCronScheduler, which gets its own ctx.
-	parentCtx context.Context
-	started   bool
+	lifecycleMu   sync.Mutex
+	lifecycleUsed bool
+	startDone     chan struct{}
+	stopDone      chan struct{}
+	cancel        context.CancelFunc
+	registerFence bool
+	dispatchMu    sync.Mutex
+	dispatchQueue []cronDispatch
+	dispatchWake  chan struct{}
+	dispatchDone  chan struct{}
+	dispatchFence bool
 }
+
+type cronDispatch struct {
+	run    func(context.Context) error
+	result chan error
+}
+
+type cronStopContext struct{ done <-chan struct{} }
+
+func (c cronStopContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c cronStopContext) Done() <-chan struct{}       { return c.done }
+func (c cronStopContext) Err() error {
+	select {
+	case <-c.done:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+func (cronStopContext) Value(any) any { return nil }
 
 // cronEntry is the per-registered-rule state held by the scheduler.
 //
@@ -154,15 +173,21 @@ func (s *CronScheduler) Register(rule *CronRule) error {
 	if rule == nil {
 		return errors.New("cron scheduler: nil rule")
 	}
+	s.lifecycleMu.Lock()
+	if s.registerFence || s.stopDone != nil {
+		s.lifecycleMu.Unlock()
+		return errors.New("cron scheduler: registration admission is closed")
+	}
 	if !rule.Enabled() {
+		s.lifecycleMu.Unlock()
 		s.logger.Debug("Skipping disabled cron rule", "rule_id", rule.ID())
 		return nil
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if _, exists := s.entries[rule.ID()]; exists {
+		s.mu.Unlock()
+		s.lifecycleMu.Unlock()
 		return fmt.Errorf("cron rule %s already registered", rule.ID())
 	}
 
@@ -175,6 +200,8 @@ func (s *CronScheduler) Register(rule *CronRule) error {
 
 	entry.entryID = s.cron.Schedule(rule.Schedule(), job)
 	s.entries[ruleID] = entry
+	s.mu.Unlock()
+	s.lifecycleMu.Unlock()
 
 	s.metrics.recordRuleRegistered()
 	s.metrics.recordNextFire(ruleID, float64(rule.Schedule().Next(time.Now()).Unix()))
@@ -221,21 +248,121 @@ func (s *CronScheduler) Start(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("cron scheduler: Start requires a non-nil context")
 	}
-	s.mu.Lock()
-	if s.started {
-		s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("cron scheduler: Start context already canceled: %w", err)
+	}
+	s.lifecycleMu.Lock()
+	if s.lifecycleUsed {
+		s.lifecycleMu.Unlock()
 		return errors.New("cron scheduler: already started")
 	}
-	s.parentCtx = ctx
-	s.started = true
-	s.mu.Unlock()
+	s.lifecycleUsed = true
+	s.startDone = make(chan struct{})
+	runCtx, cancel := context.WithCancel(ctx)
+	s.cancel = cancel
+	s.dispatchWake = make(chan struct{}, 1)
+	s.dispatchDone = make(chan struct{})
+	s.dispatchFence = false
+	s.lifecycleMu.Unlock()
+
+	go s.runDispatcher(runCtx)
 
 	s.restoreFromTracker(ctx)
 
 	s.cron.Start()
 	s.metrics.recordSchedulerRunning(true)
 	s.logger.Info("Cron scheduler started", "registered_rules", s.RegisteredCount())
+	s.lifecycleMu.Lock()
+	close(s.startDone)
+	s.startDone = nil
+	s.lifecycleMu.Unlock()
 	return nil
+}
+
+func (s *CronScheduler) runDispatcher(ctx context.Context) {
+	defer close(s.dispatchDone)
+	for {
+		select {
+		case <-ctx.Done():
+			s.failDispatchQueue(ctx.Err())
+			return
+		case <-s.dispatchWake:
+			for {
+				s.dispatchMu.Lock()
+				if len(s.dispatchQueue) == 0 {
+					s.dispatchMu.Unlock()
+					break
+				}
+				dispatch := s.dispatchQueue[0]
+				s.dispatchQueue = s.dispatchQueue[1:]
+				s.dispatchMu.Unlock()
+				dispatch.result <- dispatch.run(ctx)
+				close(dispatch.result)
+			}
+		}
+	}
+}
+
+func (s *CronScheduler) failDispatchQueue(err error) {
+	s.dispatchMu.Lock()
+	queue := s.dispatchQueue
+	s.dispatchQueue = nil
+	s.dispatchMu.Unlock()
+	for _, dispatch := range queue {
+		dispatch.result <- err
+		close(dispatch.result)
+	}
+}
+
+func (s *CronScheduler) submitDispatch(run func(context.Context) error) error {
+	dispatch := cronDispatch{run: run, result: make(chan error, 1)}
+	s.dispatchMu.Lock()
+	if s.dispatchFence || s.dispatchWake == nil {
+		s.dispatchMu.Unlock()
+		return errors.New("cron scheduler: dispatch admission is closed")
+	}
+	select {
+	case <-s.dispatchDone:
+		s.dispatchMu.Unlock()
+		return errors.New("cron scheduler: dispatcher stopped")
+	default:
+	}
+	s.dispatchQueue = append(s.dispatchQueue, dispatch)
+	wake := s.dispatchWake
+	s.dispatchMu.Unlock()
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+	return <-dispatch.result
+}
+
+func (s *CronScheduler) fenceDispatch() <-chan error {
+	barrier := cronDispatch{run: func(context.Context) error { return nil }, result: make(chan error, 1)}
+	s.dispatchMu.Lock()
+	s.dispatchFence = true
+	if s.dispatchDone == nil {
+		s.dispatchMu.Unlock()
+		barrier.result <- nil
+		close(barrier.result)
+		return barrier.result
+	}
+	select {
+	case <-s.dispatchDone:
+		s.dispatchMu.Unlock()
+		barrier.result <- nil
+		close(barrier.result)
+		return barrier.result
+	default:
+	}
+	s.dispatchQueue = append(s.dispatchQueue, barrier)
+	wake := s.dispatchWake
+	s.dispatchMu.Unlock()
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+	return barrier.result
 }
 
 // restoreFromTracker walks the registered rules, looks up each rule's
@@ -338,26 +465,52 @@ func (s *CronScheduler) restoreFromTracker(ctx context.Context) {
 	}
 }
 
-// Stop signals the scheduler to halt. It returns the context returned by
-// robfig's Cron.Stop, which closes when all in-flight fires have
-// completed. Callers should select on the returned context with their
-// shutdown deadline. Calling Stop on a never-started scheduler is safe.
+// Stop signals the scheduler to halt. Its returned settlement context closes
+// after robfig callbacks and every admitted dispatcher action have completed.
+// Callers should select on it with their shutdown deadline. Calling Stop on a
+// never-started scheduler is safe.
 func (s *CronScheduler) Stop() context.Context {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	var settlement <-chan struct{}
+	for {
+		s.lifecycleMu.Lock()
+		if s.startDone != nil {
+			startDone := s.startDone
+			s.lifecycleMu.Unlock()
+			<-startDone
+			continue
+		}
+		if s.stopDone != nil {
+			stopDone := s.stopDone
+			s.lifecycleMu.Unlock()
+			return cronStopContext{done: stopDone}
+		}
+		s.lifecycleUsed = true
+		s.stopDone = make(chan struct{})
+		s.registerFence = true
+		stopDone := s.stopDone
+		settlement = stopDone
+		cancel := s.cancel
+		dispatchDone := s.dispatchDone
+		s.lifecycleMu.Unlock()
 
-	if !s.started {
-		// Return a closed context so callers can wait safely without
-		// special-casing the never-started branch.
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		return ctx
+		barrier := s.fenceDispatch()
+		nativeStop := s.cron.Stop()
+		go func() {
+			<-nativeStop.Done()
+			<-barrier
+			if cancel != nil {
+				cancel()
+			}
+			if dispatchDone != nil {
+				<-dispatchDone
+			}
+			close(stopDone)
+		}()
+		break
 	}
-	s.started = false
-	stopCtx := s.cron.Stop()
 	s.metrics.recordSchedulerRunning(false)
 	s.logger.Info("Cron scheduler stopping")
-	return stopCtx
+	return cronStopContext{done: settlement}
 }
 
 // RegisteredCount returns the number of rules currently registered. Used
@@ -378,19 +531,12 @@ func (s *CronScheduler) fire(ruleID string) {
 	}
 	s.mu.Lock()
 	entry, ok := s.entries[ruleID]
-	parentCtx := s.parentCtx
 	s.mu.Unlock()
 	if !ok {
 		// Rule was deregistered between the tick scheduling and now;
 		// dropping silently is correct — robfig will not deliver future
 		// ticks for the removed entry.
 		return
-	}
-	if parentCtx == nil {
-		// Defensive: should be impossible because Start sets parentCtx
-		// before Cron starts walking the schedule. Falling back to
-		// Background keeps a misordered call from panicking.
-		parentCtx = context.Background()
 	}
 
 	tick := entry.tickCount.Add(1)
@@ -445,7 +591,12 @@ func (s *CronScheduler) fire(ruleID string) {
 	}
 	defer entry.inflight.Store(false)
 
-	s.dispatchAndRecord(parentCtx, ruleID, entry, previousFiredNanos)
+	if err := s.submitDispatch(func(ctx context.Context) error {
+		s.dispatchAndRecord(ctx, ruleID, entry, previousFiredNanos)
+		return nil
+	}); err != nil {
+		s.logger.Debug("Cron rule fire rejected by runtime coordinator", "rule_id", ruleID, "error", err)
+	}
 }
 
 // dispatchAndRecord is the post-gates portion of fire(). Extracted from
@@ -464,7 +615,7 @@ func (s *CronScheduler) fire(ruleID string) {
 // in this tick — the next scheduled tick will retry from the top. The
 // caller's deferred inflight reset runs after this recover (LIFO) so
 // the next tick is not gated by the panicker.
-func (s *CronScheduler) dispatchAndRecord(parentCtx context.Context, ruleID string, entry *cronEntry, previousFiredNanos int64) {
+func (s *CronScheduler) dispatchAndRecord(ctx context.Context, ruleID string, entry *cronEntry, previousFiredNanos int64) {
 	dispatchStart := time.Now()
 	status := cronFireStatusSuccess
 
@@ -506,7 +657,7 @@ func (s *CronScheduler) dispatchAndRecord(parentCtx context.Context, ruleID stri
 
 	dispatchedOK := true
 	for i, action := range actions {
-		if err := s.executor.Execute(parentCtx, action, ec); err != nil {
+		if err := s.executor.Execute(ctx, action, ec); err != nil {
 			if errors.Is(err, ErrDenyVerdict) {
 				// Deny is terminal for the fire cycle: subsequent actions do not run.
 				// "denied" is operator-distinct from "error" — "a rule said no" vs
@@ -550,7 +701,7 @@ func (s *CronScheduler) dispatchAndRecord(parentCtx context.Context, ruleID stri
 		// concern. Worst case across a restart: missed-fire detection thinks
 		// the rule fired one tick earlier than it did → at most one stray
 		// Warn log on next startup, no dispatch impact.
-		if err := s.tracker.RecordFire(parentCtx, ruleID, rule.ScheduleString(), firedAt); err != nil {
+		if err := s.tracker.RecordFire(ctx, ruleID, rule.ScheduleString(), firedAt); err != nil {
 			s.logger.Warn("Failed to persist cron rule fire timestamp",
 				"rule_id", ruleID,
 				"error", err)

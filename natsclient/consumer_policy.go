@@ -45,6 +45,18 @@ type consumerPolicyInfoReader interface {
 	Info(context.Context) (*jetstream.ConsumerInfo, error)
 }
 
+func (c *Client) observeInternalConsumer(
+	ctx context.Context, consumer consumerPolicyInfoReader,
+) (internalConsumerIdentity, error) {
+	info, err := consumer.Info(ctx)
+	if err != nil {
+		c.recordFailure()
+		return internalConsumerIdentity{}, errs.WrapTransient(
+			err, "Client", "ConsumeInternalStreamWithConfig", "initial consumer observation unavailable")
+	}
+	return internalConsumerIdentity{stream: info.Stream, durable: info.Name}, nil
+}
+
 func validatePortConsumerContext(owner PortConsumerContext, operation string) error {
 	if strings.TrimSpace(owner.Component) != "" && strings.TrimSpace(owner.Port) != "" {
 		return nil
@@ -122,53 +134,6 @@ func (c *Client) observePortConsumerPolicy(
 		c.jsMetrics.trackPolicy(key, record, info.Config.MaxAckPending)
 	}
 	return key, nil
-}
-
-type managedPolicyConsumer interface {
-	consumerPolicyInfoReader
-	Consume(jetstream.MessageHandler, ...jetstream.PullConsumeOpt) (jetstream.ConsumeContext, error)
-}
-
-func (c *Client) observeAndStartManagedConsumer(
-	setupCtx context.Context,
-	owner PortConsumerContext,
-	cfg StreamConsumerConfig,
-	consumer managedPolicyConsumer,
-	handler jetstream.MessageHandler,
-	observePolicy bool,
-) (jetstream.ConsumeContext, consumerPolicyKey, error) {
-	policyKey := consumerPolicyKey{}
-	var err error
-	if observePolicy {
-		policyKey, err = c.observePortConsumerPolicy(setupCtx, owner, cfg, consumer)
-		if err != nil {
-			return nil, consumerPolicyKey{}, err
-		}
-	}
-	forget := func() {
-		if c.jsMetrics != nil {
-			c.jsMetrics.forgetPolicy(policyKey)
-		}
-	}
-	if err := setupCtx.Err(); err != nil {
-		forget()
-		return nil, consumerPolicyKey{}, errs.WrapTransient(err, "Client", "ConsumeStreamWithConfig",
-			"setup context ended before starting consumer")
-	}
-	consumeCtx, err := consumer.Consume(handler)
-	if err != nil {
-		forget()
-		c.recordFailure()
-		return nil, consumerPolicyKey{}, errs.WrapTransient(err, "Client", "ConsumeStreamWithConfig",
-			"failed to start consuming from stream "+cfg.StreamName)
-	}
-	if err := setupCtx.Err(); err != nil {
-		consumeCtx.Stop()
-		forget()
-		return nil, consumerPolicyKey{}, errs.WrapTransient(err, "Client", "ConsumeStreamWithConfig",
-			"setup context ended while starting consumer")
-	}
-	return consumeCtx, policyKey, nil
 }
 
 // ObserveDirectPortConsumerPolicy observes an OTEL-owned direct consumer and

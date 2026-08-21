@@ -25,8 +25,8 @@ func (s *stopSpyService) Stop(context.Context) error {
 }
 
 // TestServiceManager_StopAll_Idempotency covers the coordinated-shutdown contract:
-// an already-stopped/stopping service is clean success, a genuine stop failure is
-// still surfaced, and a fully clean shutdown returns nil (gh#520).
+// a service whose Stop exactly completed is clean success; StatusStopping alone is
+// not completion evidence. Genuine failures surface and a clean shutdown returns nil (gh#520).
 func TestServiceManager_StopAll_Idempotency(t *testing.T) {
 	t.Run("already-stopped service is not aggregated as fatal", func(t *testing.T) {
 		manager := createTestServiceManager(ManagerConfig{}, nil)
@@ -122,22 +122,15 @@ func TestServiceManager_StopAll_CancellationBeforeStopAll(t *testing.T) {
 		"services already stopped by parent-context cancellation are a clean shutdown (gh#520/gh#549)")
 }
 
-// TestBaseService_StopIdempotent locks the per-service half of the contract:
-// invoking Stop on an already-stopped/stopping service returns nil and does not
-// re-run teardown (gh#520). BaseService is the framework contract holder.
-func TestBaseService_StopIdempotent(t *testing.T) {
-	svc := NewBaseServiceWithOptions("idempotent-stop", nil)
-
-	// Simulate a running service that is then stopped, then stopped again.
-	svc.status.Store(StatusRunning)
-
-	require.NoError(t, svc.Stop(context.Background()), "first Stop succeeds")
+// TestBaseService_CompletedStopIsIdempotent locks the per-service half of the
+// contract: after exact owner completion, another Stop returns nil without
+// repeating teardown (gh#520).
+func TestBaseService_CompletedStopIsIdempotent(t *testing.T) {
+	svc := NewBaseServiceWithOptions("idempotent-stop", nil, WithHealthInterval(0))
+	require.NoError(t, svc.Start(context.Background()))
+	require.NoError(t, svc.Stop(context.Background()), "first Stop completes")
 	assert.Equal(t, StatusStopped, svc.Status())
 
-	require.NoError(t, svc.Stop(context.Background()), "second Stop on an already-stopped service returns nil")
+	require.NoError(t, svc.Stop(context.Background()), "second Stop after exact completion returns nil")
 	assert.Equal(t, StatusStopped, svc.Status())
-
-	// A service that observed self-transition to stopping also stops cleanly.
-	svc.status.Store(StatusStopping)
-	require.NoError(t, svc.Stop(context.Background()), "Stop while stopping returns nil")
 }

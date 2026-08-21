@@ -702,7 +702,7 @@ func assertGoTargetCompleteness(t *testing.T, root string, plan *Plan) {
 		}
 		if entry.IsDir() {
 			switch entry.Name() {
-			case ".git", "node_modules", "vendor":
+			case ".git", ".claude", "node_modules", "vendor":
 				return filepath.SkipDir
 			default:
 				return nil

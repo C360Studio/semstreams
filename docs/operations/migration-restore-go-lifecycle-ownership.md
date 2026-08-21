@@ -4,9 +4,9 @@ This guide covers the landed atomic prerequisite that replaced duration-based co
 caller-owned contexts. It intentionally fails compilation at adopter call sites instead of preserving detached work
 through compatibility overloads.
 
-The later [native one-shot lifecycle migration target](migration-restart-safe-nats-client.md) is still pending until
-the `simplify-one-shot-lifecycle-ownership` runtime and proof gates pass. Temporary `internal/lifecyclejoin` and
-name-routed NATS lifecycle APIs are implementation debt, not migration destinations.
+The later [native one-shot lifecycle migration](migration-restart-safe-nats-client.md) removed
+`internal/lifecyclejoin`, Client child catalogs, and name-routed NATS lifecycle APIs. It did not adopt the broader
+Client shutdown or restart-proof design that was considered during that work.
 
 ## BREAKING prerequisite
 
@@ -47,7 +47,7 @@ if err := manager.StartAll(runCtx); err != nil {
 }
 
 // After a signal or another terminal process event, keep runCtx live while
-// owners perform the lifecycle ordering specified by the pending target.
+// owners perform their terminal cleanup.
 shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 30*time.Second)
 defer cancelShutdown()
 if err := manager.StopAll(shutdownCtx); err != nil {
@@ -59,8 +59,8 @@ if err := manager.StopAll(shutdownCtx); err != nil {
 the shutdown context from their caller and do not create a replacement root. Do not derive Stop authority from an
 already-canceled run context.
 
-The exact drain/cancel/join order is not defined by this prerequisite guide. Follow the pending native one-shot guide
-when its implementation and proof land.
+The exact drain/cancel/join order is owned by each concrete service or component and is not generalized by this
+prerequisite guide.
 
 ## Component and service migration
 
@@ -73,13 +73,12 @@ The context-ownership rules are:
 - retain only private synchronized cancellation and join state;
 - use the Stop argument only to bound the separately specified terminal operation;
 - do not launch continuing work from the Stop context;
-- do not replace cancellation or deadline expiry with Background, TODO, or WithoutCancel;
 - reject nil at exported error-returning context boundaries before state inspection or action; and
 - pass the caller's context through `Manager.StopAll` without creating or extending a deadline.
 
 This guide does not define exact Start finalization, failed-Start cleanup, callback-borrow fencing, drain ordering,
-concurrent Stop, result replay, settlement, or restart proof. ADR-095 and `simplify-one-shot-lifecycle-ownership` own
-those lifecycle facts.
+concurrent Stop, result replay, settlement, or restart proof. Those behaviors require their own current capability
+contract; this migration does not infer them from the context-bearing signature.
 
 ## Streaming handler context
 
@@ -117,8 +116,8 @@ Do not migrate live component removal or replacement to another lifecycle API. P
 and restart the process. Runtime composition remains the sealed boot set; only rule definitions have a dedicated live
 activation capability.
 
-Similarly, do not adopt temporary name-routed consumer cleanup, rejoin, result-replay, or lifecycle helper APIs. The
-pending native target requires each owner to retain the exact native handle returned at resource birth.
+Similarly, do not adopt name-routed consumer cleanup, rejoin, result-replay, or lifecycle helper APIs. Port-backed
+consumer owners retain the exact native handle returned at resource birth.
 
 ## Sister repositories
 
@@ -145,5 +144,5 @@ The integrated prerequisite passed:
 - `task e2e:semantic` (48/48); and
 - independent `semstreams-reviewer` approval.
 
-This evidence proves the landed source prerequisite only. It does not satisfy the current runtime, controlled/dirty,
-settlement, E2E, or breaking-tag gates tracked by `simplify-one-shot-lifecycle-ownership`.
+This evidence proves the landed source prerequisite only. It does not claim repository-wide root-context cleanup,
+Client shutdown redesign, controlled/dirty restart proof, or next-tag readiness.

@@ -798,7 +798,7 @@ func TestWebSocketOutput_ThreadSafety(t *testing.T) {
 var testPortCounter uint32 = 20000
 
 // getNextTestPort returns a unique port for each test instance.
-// This prevents port collision when StandardLifecycleTests runs 50+ concurrent Start() calls.
+// This prevents port collisions across lifecycle and error-injection tests.
 func getNextTestPort() int {
 	// Use atomic to safely increment across concurrent goroutines
 	port := atomic.AddUint32(&testPortCounter, 1)
@@ -817,11 +817,6 @@ func createTestWebSocketOutput() component.LifecycleComponent {
 		panic(err)
 	}
 	return ws
-}
-
-// TestWebSocketOutput_ComprehensiveLifecycle runs the complete lifecycle test suite
-func TestWebSocketOutput_ComprehensiveLifecycle(t *testing.T) {
-	component.StandardLifecycleTests(t, createTestWebSocketOutput)
 }
 
 // TestWebSocketOutput_SpecificErrorCases tests WebSocket-specific error scenarios

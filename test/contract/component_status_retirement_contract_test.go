@@ -58,7 +58,7 @@ func TestComponentStatusPlaneRemainsRetired(t *testing.T) {
 		rel = filepath.ToSlash(rel)
 		if entry.IsDir() {
 			switch rel {
-			case ".git", "vendor", "node_modules", "docs/adr", "docs/proposals", "openspec/changes/archive":
+			case ".git", ".claude", "vendor", "node_modules", "docs/adr", "docs/proposals", "openspec/changes/archive":
 				return filepath.SkipDir
 			}
 			return nil

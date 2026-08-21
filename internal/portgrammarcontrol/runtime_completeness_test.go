@@ -67,7 +67,7 @@ func TestRuntimePortGrammarCompleteness(t *testing.T) {
 		}
 		if entry.IsDir() {
 			switch entry.Name() {
-			case ".git", "node_modules", "vendor":
+			case ".git", ".claude", "node_modules", "vendor":
 				return filepath.SkipDir
 			default:
 				return nil
@@ -106,7 +106,7 @@ func TestRuntimePortGrammarCompleteness(t *testing.T) {
 		}
 		if entry.IsDir() {
 			switch entry.Name() {
-			case ".git", "node_modules", "vendor":
+			case ".git", ".claude", "node_modules", "vendor":
 				return filepath.SkipDir
 			default:
 				return nil

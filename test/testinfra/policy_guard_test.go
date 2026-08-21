@@ -68,6 +68,49 @@ func TestInfrastructurePolicyGuard(t *testing.T) {
 	assertBaselineMatches(t, findings, approved)
 }
 
+func TestInfrastructurePolicyGuardIgnoresClaudeWorktrees(t *testing.T) {
+	root := t.TempDir()
+	kept, err := os.CreateTemp(root, "kept-*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := kept.WriteString("package fixture\nfunc kept() {}\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := kept.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	worktree := filepath.Join(root, ".claude", "worktrees", "agent-test")
+	if err := os.MkdirAll(worktree, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	contamination, err := os.CreateTemp(worktree, "contamination-*_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := contamination.WriteString(`package contamination
+import "testing"
+func bad() { _ = &testing.T{} }
+`); err != nil {
+		t.Fatal(err)
+	}
+	if err := contamination.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	findings, stats, err := scanRepository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf(".claude worktree contaminated policy findings: %+v", findings)
+	}
+	if stats.GoFiles != 1 {
+		t.Fatalf("policy scan GoFiles = %d, want 1 root file", stats.GoFiles)
+	}
+}
+
 func TestInfrastructurePolicyBaselineHasNoWritePath(t *testing.T) {
 	t.Parallel()
 
@@ -263,7 +306,7 @@ func scanRepository(root string) ([]finding, scanStats, error) {
 		}
 		if entry.IsDir() {
 			switch entry.Name() {
-			case ".git", "node_modules", "vendor":
+			case ".git", ".claude", "node_modules", "vendor":
 				return filepath.SkipDir
 			}
 			return nil

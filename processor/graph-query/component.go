@@ -17,7 +17,7 @@ import (
 	"github.com/c360studio/semstreams/graph/clustering"
 	"github.com/c360studio/semstreams/graph/llm"
 	"github.com/c360studio/semstreams/graph/query"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -169,11 +169,18 @@ type Component struct {
 	summaryViewStopped     func(*graphview.View[clustering.CommunitySummaryRecord])
 
 	// Lifecycle state
-	mu          sync.RWMutex
-	wg          sync.WaitGroup
-	initialized bool
-	started     bool
-	generation  *lifecyclejoin.Generation
+	mu                sync.RWMutex
+	lifecycleMu       sync.Mutex
+	wg                sync.WaitGroup
+	initialized       bool
+	started           bool
+	lifecycleUsed     bool
+	cleanupPending    bool
+	lifecycleTerminal bool
+	stopping          bool
+	startDone         chan struct{}
+	cancel            context.CancelFunc
+	runtimeDone       chan struct{}
 
 	// Health tracking
 	healthMu   sync.RWMutex
@@ -191,7 +198,8 @@ type Component struct {
 	promMetrics *queryMetrics
 
 	// Query subscriptions (for cleanup)
-	querySubscriptions []*natsclient.Subscription
+	querySubscriptions   []*natsclient.Subscription
+	subscribeForRequests func(context.Context, string, func(context.Context, []byte) ([]byte, error)) (*natsclient.Subscription, error)
 }
 
 // Ensure Component implements required interfaces
@@ -372,6 +380,8 @@ func (c *Component) DataFlow() component.FlowMetrics {
 
 // Initialize initializes the component
 func (c *Component) Initialize() error {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -450,7 +460,7 @@ func (c *Component) initAnswerSynthesizer() {
 }
 
 // Start starts the component
-func (c *Component) Start(ctx context.Context) error {
+func (c *Component) Start(ctx context.Context) (startErr error) {
 	// Validate context
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "graph-query", "Start", "context cannot be nil")
@@ -459,23 +469,58 @@ func (c *Component) Start(ctx context.Context) error {
 		return errs.WrapInvalid(err, "graph-query", "Start", "context already cancelled")
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if !c.initialized {
+	c.lifecycleMu.Lock()
+	c.mu.RLock()
+	initialized := c.initialized
+	c.mu.RUnlock()
+	if !initialized {
+		c.lifecycleMu.Unlock()
 		return errors.New("component not initialized")
 	}
 
-	if c.started {
-		return nil // Already started - idempotent
+	if c.lifecycleUsed {
+		c.lifecycleMu.Unlock()
+		return errors.New("component instance already used")
 	}
 
 	// Create component context for lifecycle management
+	parent := ctx
 	componentCtx, cancel := context.WithCancel(ctx)
+	startDone := make(chan struct{})
+	c.lifecycleUsed = true
+	c.cancel = cancel
+	c.startDone = startDone
+	c.cleanupPending = true
+	c.lifecycleMu.Unlock()
+
+	committed := false
+	defer func() {
+		if !committed {
+			rollbackErr := lifecyclecleanup.RollbackFailedStart(parent, c.cleanupFailedStart)
+			startErr = errors.Join(startErr, rollbackErr)
+			c.lifecycleMu.Lock()
+			if rollbackErr == nil {
+				c.cleanupPending = false
+				c.lifecycleTerminal = true
+				c.clearLifecycleHandles()
+			}
+			close(startDone)
+			c.startDone = nil
+			c.lifecycleMu.Unlock()
+			c.mu.Lock()
+			c.started = false
+			c.mu.Unlock()
+			return
+		}
+		c.lifecycleMu.Lock()
+		c.cleanupPending = false
+		close(startDone)
+		c.startDone = nil
+		c.lifecycleMu.Unlock()
+	}()
 
 	// Wait for NATS connection
 	if err := c.natsClient.WaitForConnection(componentCtx); err != nil {
-		cancel()
 		return fmt.Errorf("wait for NATS connection: %w", err)
 	}
 
@@ -497,7 +542,6 @@ func (c *Component) Start(ctx context.Context) error {
 
 	// Subscribe to query subjects
 	if err := c.setupQueryHandlers(componentCtx); err != nil {
-		cancel()
 		return fmt.Errorf("subscribe to queries: %w", err)
 	}
 
@@ -517,9 +561,16 @@ func (c *Component) Start(ctx context.Context) error {
 		defer c.wg.Done()
 		c.superviseSummaryView(componentCtx)
 	}()
-	c.generation = lifecyclejoin.NewGeneration(cancel, c.wg.Wait)
+	c.runtimeDone = make(chan struct{})
+	go func(done chan struct{}) {
+		c.wg.Wait()
+		close(done)
+	}(c.runtimeDone)
 
+	c.mu.Lock()
 	c.started = true
+	c.mu.Unlock()
+	committed = true
 
 	c.logger.Info("graph-query coordinator started")
 	return nil
@@ -530,42 +581,113 @@ func (c *Component) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-	c.mu.Lock()
-	generation := c.generation
-	if generation == nil {
-		c.mu.Unlock()
-		return nil // Not started - safe to stop
-	}
+	for {
+		c.lifecycleMu.Lock()
+		if !c.lifecycleUsed {
+			c.lifecycleUsed = true
+			c.lifecycleTerminal = true
+			c.lifecycleMu.Unlock()
+			return nil
+		}
+		if c.lifecycleTerminal {
+			c.lifecycleMu.Unlock()
+			return nil
+		}
+		startDone := c.startDone
+		if startDone != nil {
+			c.lifecycleMu.Unlock()
+			select {
+			case <-startDone:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if c.stopping {
+			c.lifecycleMu.Unlock()
+			return errs.WrapTransient(errors.New("stop already in progress"), "graph-query", "Stop", "concurrent Stop is unsupported")
+		}
+		retryable := c.cleanupPending
+		c.stopping = true
+		c.lifecycleMu.Unlock()
 
-	c.mu.Unlock()
-
-	return generation.Stop(ctx, func() error {
-		for _, sub := range c.querySubscriptions {
-			if sub != nil {
-				if err := sub.Unsubscribe(); err != nil {
-					c.logger.Warn("query subscription unsubscribe error", slog.Any("error", err))
-				}
-			}
+		stopErr := c.cleanup(ctx, retryable)
+		c.lifecycleMu.Lock()
+		c.stopping = false
+		if retryable && stopErr != nil {
+			c.lifecycleMu.Unlock()
+			return stopErr
 		}
-		c.querySubscriptions = nil
-		if c.llmClient != nil {
-			if err := c.llmClient.Close(); err != nil {
-				c.logger.Warn("LLM client close error", slog.Any("error", err))
-			}
-		}
-		if c.answerSynthesizer != nil {
-			if err := c.answerSynthesizer.Close(); err != nil {
-				c.logger.Warn("answer synthesizer close error", slog.Any("error", err))
-			}
-		}
-		return nil
-	}, func(context.Context) error {
+		c.cleanupPending = false
+		c.lifecycleTerminal = true
+		c.clearLifecycleHandles()
+		c.lifecycleMu.Unlock()
 		c.mu.Lock()
 		c.started = false
 		c.mu.Unlock()
 		c.logger.Info("graph-query coordinator stopped")
-		return nil
-	})
+		return stopErr
+	}
+}
+
+func (c *Component) cleanupFailedStart(ctx context.Context) error {
+	return c.cleanup(ctx, true)
+}
+
+func (c *Component) cleanup(ctx context.Context, retryable bool) error {
+	var cleanupErr error
+	unresolved := c.querySubscriptions[:0]
+	for _, sub := range c.querySubscriptions {
+		if sub == nil {
+			continue
+		}
+		if err := sub.Drain(ctx); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+			unresolved = append(unresolved, sub)
+		}
+	}
+	if retryable {
+		c.querySubscriptions = unresolved
+	} else {
+		c.querySubscriptions = nil
+	}
+	if c.cancel != nil {
+		c.cancel()
+	}
+	if c.runtimeDone != nil {
+		select {
+		case <-c.runtimeDone:
+			if retryable {
+				c.runtimeDone = nil
+				c.cancel = nil
+			}
+		case <-ctx.Done():
+			cleanupErr = errors.Join(cleanupErr, ctx.Err())
+		}
+	}
+	if c.llmClient != nil {
+		if err := c.llmClient.Close(); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		} else if retryable {
+			c.llmClient = nil
+		}
+	}
+	if c.answerSynthesizer != nil {
+		if err := c.answerSynthesizer.Close(); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		} else if retryable {
+			c.answerSynthesizer = nil
+		}
+	}
+	return cleanupErr
+}
+
+func (c *Component) clearLifecycleHandles() {
+	c.querySubscriptions = nil
+	c.cancel = nil
+	c.runtimeDone = nil
+	c.llmClient = nil
+	c.answerSynthesizer = nil
 }
 
 func (c *Component) superviseCommunityGenerations(ctx context.Context) {

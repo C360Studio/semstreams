@@ -3,6 +3,7 @@
 package file_test
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -57,7 +58,19 @@ func createTestComponent() component.LifecycleComponent {
 	return lifecycleComp
 }
 
-// TestFileOutput_ComprehensiveLifecycle runs the complete lifecycle test suite
-func TestFileOutput_ComprehensiveLifecycle(t *testing.T) {
-	component.StandardLifecycleTests(t, createTestComponent)
+// TestFileOutput_OneShotLifecycle exercises the assembled core-NATS owner.
+func TestFileOutput_OneShotLifecycle(t *testing.T) {
+	owner := createTestComponent()
+	if err := owner.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.Stop(context.Background()); err != nil {
+		t.Fatalf("repeated terminal Stop: %v", err)
+	}
 }

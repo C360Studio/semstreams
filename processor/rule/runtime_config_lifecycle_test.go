@@ -10,6 +10,7 @@
 package rule
 
 import (
+	"context"
 	"log/slog"
 	"testing"
 
@@ -87,8 +88,8 @@ func TestApplyConfigUpdate_LifecycleManagerReachesReconciledRules(t *testing.T) 
 	// (message_handler.go: entityEval.EvaluateEntityState). Positive: an entity
 	// in phase "posted" fires. Control: an entity in "claimed" does not — proves
 	// the phase is resolved and compared, not treated as always-true.
-	assert.True(t, er.EvaluateEntityState(&gtypes.EntityState{ID: postedEntry}),
+	assert.True(t, er.EvaluateEntityState(context.Background(), &gtypes.EntityState{ID: postedEntry}),
 		"phase-gated rule should fire for an entity in phase 'posted'")
-	assert.False(t, er.EvaluateEntityState(&gtypes.EntityState{ID: claimedEnt}),
+	assert.False(t, er.EvaluateEntityState(context.Background(), &gtypes.EntityState{ID: claimedEnt}),
 		"phase-gated rule must not fire for an entity in phase 'claimed'")
 }

@@ -35,7 +35,6 @@ func TestSliceF2ApprovalRequiredFormerNameInterceptsBeforeRegistryMiss(t *testin
 	formerNames := []string{"search_graph", "summarize_graph"}
 	config := agentictools.DefaultConfig()
 	config.ConsumerNameSuffix = "slice-f2-approval"
-	config.DeleteConsumerOnStop = true
 	config.AllowedTools = formerNames
 	config.ApprovalRequired = formerNames
 	rawConfig, err := json.Marshal(config)

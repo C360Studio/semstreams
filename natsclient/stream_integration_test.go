@@ -39,7 +39,7 @@ func TestIntegration_ConsumeStreamWithConfigContexts_CancelledSetupDoesNotStartC
 	handlerCtx, cancelHandler := context.WithCancel(ctx)
 	defer cancelHandler()
 
-	err = client.ConsumeStreamWithConfigContexts(setupCtx, handlerCtx,
+	handle, err := client.ConsumeStreamWithConfigContexts(setupCtx, handlerCtx,
 		PortConsumerContext{Component: "integration", Port: "input"}, StreamConsumerConfig{
 			StreamName:    "CONTEXT_SPLIT_STREAM",
 			ConsumerName:  "cancelled-setup",
@@ -49,6 +49,7 @@ func TestIntegration_ConsumeStreamWithConfigContexts_CancelledSetupDoesNotStartC
 		}, func(context.Context, jetstream.Msg) {
 			t.Error("handler ran despite cancelled consumer setup")
 		})
+	require.Nil(t, handle)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, context.Canceled), "setup error = %v, want context cancellation", err)
 	select {
@@ -57,10 +58,6 @@ func TestIntegration_ConsumeStreamWithConfigContexts_CancelledSetupDoesNotStartC
 	default:
 	}
 
-	client.consumersMu.Lock()
-	_, started := client.consumers["CONTEXT_SPLIT_STREAM:cancelled-setup"]
-	client.consumersMu.Unlock()
-	assert.False(t, started, "cancelled setup registered a live consumer")
 }
 
 // TestIntegration_EnsureStream tests stream creation
@@ -200,12 +197,13 @@ func TestIntegration_ConsumeStreamWithConfig(t *testing.T) {
 		AckPolicy:     "explicit",
 	}
 
-	err = client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, cfg, func(_ context.Context, msg jetstream.Msg) {
+	handle, err := client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, cfg, func(_ context.Context, msg jetstream.Msg) {
 		received.Add(1)
 		msg.Ack()
 		wg.Done()
 	})
 	require.NoError(t, err)
+	defer drainNativeConsume(t, handle)
 
 	// Wait for messages to be received
 	done := make(chan struct{})
@@ -259,11 +257,12 @@ func TestIntegration_ConsumeStreamWithConfig_AutoCreate(t *testing.T) {
 	}
 
 	var received atomic.Int32
-	err = client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, cfg, func(_ context.Context, msg jetstream.Msg) {
+	handle, err := client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, cfg, func(_ context.Context, msg jetstream.Msg) {
 		received.Add(1)
 		msg.Ack()
 	})
 	require.NoError(t, err)
+	defer drainNativeConsume(t, handle)
 
 	// Verify stream was created
 	js, err := client.JetStream()
@@ -366,11 +365,12 @@ func TestIntegration_ConsumeStreamWithConfig_DeliverPolicies(t *testing.T) {
 				AckPolicy:     "explicit",
 			}
 
-			err = client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, cfg, func(_ context.Context, msg jetstream.Msg) {
+			handle, consumeErr := client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, cfg, func(_ context.Context, msg jetstream.Msg) {
 				received.Add(1)
 				msg.Ack()
 			})
-			require.NoError(t, err)
+			require.NoError(t, consumeErr)
+			defer drainNativeConsume(t, handle)
 
 			// Small delay for consumer to be ready
 			time.Sleep(100 * time.Millisecond)
@@ -427,12 +427,13 @@ func TestIntegration_ConsumeStreamWithConfig_AckPolicies(t *testing.T) {
 		AckPolicy:     "explicit",
 	}
 
-	err = client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, cfg, func(_ context.Context, msg jetstream.Msg) {
+	handle, err := client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, cfg, func(_ context.Context, msg jetstream.Msg) {
 		received.Add(1)
 		// Explicitly ack
 		msg.Ack()
 	})
 	require.NoError(t, err)
+	defer drainNativeConsume(t, handle)
 
 	// Publish and verify
 	js, err := client.JetStream()
@@ -483,7 +484,7 @@ func TestIntegration_ConsumeStreamWithConfig_Nak(t *testing.T) {
 		AckWait:       100 * time.Millisecond,
 	}
 
-	err = client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, cfg, func(_ context.Context, msg jetstream.Msg) {
+	handle, err := client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, cfg, func(_ context.Context, msg jetstream.Msg) {
 		count := deliveryCount.Add(1)
 		if count == 1 {
 			// First delivery - Nak for redelivery
@@ -494,6 +495,7 @@ func TestIntegration_ConsumeStreamWithConfig_Nak(t *testing.T) {
 		}
 	})
 	require.NoError(t, err)
+	defer drainNativeConsume(t, handle)
 
 	// Publish message
 	js, err := client.JetStream()
@@ -529,7 +531,8 @@ func TestIntegration_ConsumeStreamWithConfig_MissingStreamName(t *testing.T) {
 		ConsumerName: "test-consumer",
 	}
 
-	err = client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, cfg, func(_ context.Context, _ jetstream.Msg) {})
+	handle, err := client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, cfg, func(_ context.Context, _ jetstream.Msg) {})
+	assert.Nil(t, handle)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "stream name is required")
 }
@@ -545,12 +548,13 @@ func TestIntegration_ConsumeStreamWithConfig_NotConnected(t *testing.T) {
 		ConsumerName: "test-consumer",
 	}
 
-	err = client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, cfg, func(_ context.Context, _ jetstream.Msg) {})
+	handle, err := client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, cfg, func(_ context.Context, _ jetstream.Msg) {})
+	assert.Nil(t, handle)
 	assert.Equal(t, ErrNotConnected, err)
 }
 
-// TestIntegration_StopConsumer tests stopping a specific consumer
-func TestIntegration_StopConsumer(t *testing.T) {
+// TestIntegration_NativeHandleStopsConsumer tests stopping an exact owned consumer.
+func TestIntegration_NativeHandleStopsConsumer(t *testing.T) {
 	ctx := context.Background()
 
 	// Start NATS container with JetStream
@@ -584,20 +588,16 @@ func TestIntegration_StopConsumer(t *testing.T) {
 		AckPolicy:     "explicit",
 	}
 
-	err = client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, cfg, func(_ context.Context, msg jetstream.Msg) {
+	handle, err := client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, cfg, func(_ context.Context, msg jetstream.Msg) {
 		msg.Ack()
 	})
 	require.NoError(t, err)
 
-	// Stop consumer - should not panic
-	require.NoError(t, client.StopConsumer(ctx, "STOP_STREAM", "stop-consumer"))
-
-	// Stop again - should be no-op
-	require.NoError(t, client.StopConsumer(ctx, "STOP_STREAM", "stop-consumer"))
+	drainNativeConsume(t, handle)
 }
 
-// TestIntegration_StopAllConsumers tests stopping all consumers
-func TestIntegration_StopAllConsumers(t *testing.T) {
+// TestIntegration_NativeHandlesStopMultipleConsumers tests stopping multiple exact owned consumers.
+func TestIntegration_NativeHandlesStopMultipleConsumers(t *testing.T) {
 	ctx := context.Background()
 
 	// Start NATS container with JetStream
@@ -623,6 +623,7 @@ func TestIntegration_StopAllConsumers(t *testing.T) {
 	require.NoError(t, err)
 
 	// Start multiple consumers
+	handles := make([]jetstream.ConsumeContext, 0, 3)
 	for i := 0; i < 3; i++ {
 		cfg := StreamConsumerConfig{
 			StreamName:    "STOPALL_STREAM",
@@ -632,17 +633,27 @@ func TestIntegration_StopAllConsumers(t *testing.T) {
 			AckPolicy:     "explicit",
 		}
 
-		err = client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, cfg, func(_ context.Context, msg jetstream.Msg) {
+		handle, consumeErr := client.ConsumeStreamWithConfig(ctx, PortConsumerContext{Component: "integration", Port: "input"}, cfg, func(_ context.Context, msg jetstream.Msg) {
 			msg.Ack()
 		})
-		require.NoError(t, err)
+		require.NoError(t, consumeErr)
+		handles = append(handles, handle)
 	}
 
-	// Stop all consumers - should not panic
-	client.StopAllConsumers()
+	for _, handle := range handles {
+		drainNativeConsume(t, handle)
+	}
+}
 
-	// Stop again - should be no-op
-	client.StopAllConsumers()
+func drainNativeConsume(t *testing.T, handle jetstream.ConsumeContext) {
+	t.Helper()
+	require.NotNil(t, handle)
+	handle.Drain()
+	select {
+	case <-handle.Closed():
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for native consumer handle to close")
+	}
 }
 
 // TestIntegration_PublishToStreamWithAck tests publishing with acknowledgment

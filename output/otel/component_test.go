@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/natsclient"
+	semerrs "github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
 )
@@ -51,21 +51,135 @@ func TestNewComponent(t *testing.T) {
 	}
 }
 
-func TestStopRetainsExporterShutdownErrorAcrossRepeatedCallers(t *testing.T) {
+func TestStopExporterShutdownErrorIsTerminalWithoutReplay(t *testing.T) {
 	wantErr := errors.New("shutdown failed")
 	exporter := &MockExporter{ShutdownErr: wantErr}
 	runtimeDone := make(chan struct{})
 	close(runtimeDone)
 	c := &Component{
-		running:    true,
-		generation: lifecyclejoin.NewGeneration(func() {}, func() { <-runtimeDone }),
-		shutdownOp: lifecyclejoin.NewOperation(),
-		exporter:   exporter,
-		logger:     slog.Default(),
+		running:       true,
+		lifecycleUsed: true,
+		cancel:        func() {},
+		runtimeDone:   runtimeDone,
+		exporter:      exporter,
+		logger:        slog.Default(),
 	}
 	require.ErrorIs(t, c.Stop(context.Background()), wantErr)
-	require.ErrorIs(t, c.Stop(context.Background()), wantErr)
+	require.NoError(t, c.Stop(context.Background()))
 	require.Equal(t, 1, exporter.shutdownCalls)
+}
+
+func TestConcurrentStopIsTransientWhileRuntimeJoinIsBlocked(t *testing.T) {
+	runtimeDone := make(chan struct{})
+	cancelCalled := make(chan struct{})
+	c := &Component{
+		running:       true,
+		lifecycleUsed: true,
+		cancel:        func() { close(cancelCalled) },
+		runtimeDone:   runtimeDone,
+		exporter:      &MockExporter{},
+		logger:        slog.Default(),
+	}
+	firstResult := make(chan error, 1)
+	go func() { firstResult <- c.Stop(t.Context()) }()
+	<-cancelCalled
+
+	secondErr := c.Stop(t.Context())
+	require.Error(t, secondErr)
+	require.True(t, semerrs.IsTransient(secondErr))
+	close(runtimeDone)
+	require.NoError(t, <-firstResult)
+}
+
+func TestStopJoinDeadlineIsTerminalWithoutLaterCleanupReplay(t *testing.T) {
+	runtimeDone := make(chan struct{})
+	cancelCalled := make(chan struct{})
+	cleanupCalled := make(chan struct{}, 1)
+	exporter := &MockExporter{}
+	c := &Component{
+		running:        true,
+		lifecycleUsed:  true,
+		cancel:         func() { close(cancelCalled) },
+		runtimeDone:    runtimeDone,
+		policyCleanups: []func(){func() { cleanupCalled <- struct{}{} }},
+		exporter:       exporter,
+		logger:         slog.Default(),
+	}
+	stopCtx, expireStop := context.WithCancel(t.Context())
+	stopResult := make(chan error, 1)
+	go func() { stopResult <- c.Stop(stopCtx) }()
+	<-cancelCalled
+	expireStop()
+	require.ErrorIs(t, <-stopResult, context.Canceled)
+	close(runtimeDone)
+
+	require.NoError(t, c.Stop(t.Context()))
+	require.Equal(t, 0, exporter.shutdownCalls)
+	select {
+	case <-cleanupCalled:
+		t.Fatal("terminal deadline must not replay cleanup after an incomplete join")
+	default:
+	}
+}
+
+func TestStopRejectsInvalidContextWithoutConsumingAuthority(t *testing.T) {
+	contexts := []struct {
+		name string
+		ctx  func() context.Context
+	}{
+		{name: "nil", ctx: func() context.Context { return nil }},
+		{name: "pre-canceled", ctx: func() context.Context {
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			return ctx
+		}},
+	}
+	for _, tt := range contexts {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Component{logger: slog.Default()}
+			require.Error(t, c.Stop(tt.ctx()))
+			require.False(t, c.lifecycleUsed)
+			require.False(t, c.lifecycleDone)
+		})
+	}
+}
+
+func TestStopBeforeStartIsTerminalAndStillRejectsNilContext(t *testing.T) {
+	c := &Component{natsClient: &natsclient.Client{}, logger: slog.Default()}
+	require.NoError(t, c.Stop(t.Context()))
+	require.Error(t, c.Stop(nil), "context validation precedes terminal repeat handling")
+	restartErr := c.Start(t.Context())
+	require.Error(t, restartErr)
+	require.True(t, semerrs.IsFatal(restartErr))
+}
+
+func TestStopReleasesConsumerClaimOnlyAfterExporterShutdownCompletes(t *testing.T) {
+	claim, err := reserveOTELConsumerClaim("OT1_TEST", "terminal-claim")
+	require.NoError(t, err)
+	runtimeDone := make(chan struct{})
+	close(runtimeDone)
+	exporter := &blockingShutdownExporter{entered: make(chan struct{}), release: make(chan struct{})}
+	c := &Component{
+		running:       true,
+		lifecycleUsed: true,
+		cancel:        func() {},
+		runtimeDone:   runtimeDone,
+		claims:        []otelConsumerClaim{claim},
+		exporter:      exporter,
+		logger:        slog.Default(),
+	}
+	stopResult := make(chan error, 1)
+	go func() { stopResult <- c.Stop(t.Context()) }()
+	<-exporter.entered
+	duplicate, duplicateErr := reserveOTELConsumerClaim("OT1_TEST", "terminal-claim")
+	require.Error(t, duplicateErr)
+	require.Nil(t, duplicate.token)
+	close(exporter.release)
+	require.NoError(t, <-stopResult)
+
+	reacquired, err := reserveOTELConsumerClaim("OT1_TEST", "terminal-claim")
+	require.NoError(t, err)
+	releaseOTELConsumerClaim(reacquired)
 }
 
 func TestNewComponentInvalidConfig(t *testing.T) {
@@ -175,6 +289,8 @@ func TestComponentStartNilContext(t *testing.T) {
 	if err == nil {
 		t.Error("expected error when starting with nil context")
 	}
+	require.False(t, otelComp.lifecycleUsed)
+	require.Nil(t, otelComp.startDone)
 }
 
 func TestComponentStartCancelledContext(t *testing.T) {
@@ -198,6 +314,8 @@ func TestComponentStartCancelledContext(t *testing.T) {
 	if err == nil {
 		t.Error("expected error when starting with cancelled context")
 	}
+	require.False(t, otelComp.lifecycleUsed)
+	require.Nil(t, otelComp.startDone)
 }
 
 func TestComponentMeta(t *testing.T) {
@@ -335,12 +453,19 @@ func TestComponentStopWhenNotRunning(t *testing.T) {
 	}
 }
 
-func TestDirectPolicyObservationPrecedesFetchAndCleanupFollowsFetchExit(t *testing.T) {
-	events := make(chan string, 4)
+func TestStopOrdersFetchJoinFlushPolicyCleanupAndExporterShutdown(t *testing.T) {
+	events := make(chan string, 8)
 	ctx, cancel := context.WithCancel(context.Background())
+	collector := NewSpanCollector("test", "1.0.0", 1)
+	collector.mu.Lock()
+	collector.completedSpans = append(collector.completedSpans, &SpanData{Name: "pending"})
+	collector.mu.Unlock()
 	comp := &Component{
-		running: true,
-		logger:  slog.Default(),
+		config:        Config{ExportTraces: true, ExportTimeout: "1s"},
+		spanCollector: collector,
+		exporter:      &orderedExporter{events: events},
+		running:       true,
+		logger:        slog.Default(),
 		observePolicy: func(
 			context.Context,
 			natsclient.PortConsumerContext,
@@ -365,15 +490,22 @@ func TestDirectPolicyObservationPrecedesFetchAndCleanupFollowsFetchExit(t *testi
 	}
 	assertOTELPolicyEvent(t, events, "observe")
 	comp.startObservedSubscription(ctx, observed)
-	comp.generation = lifecyclejoin.NewGeneration(cancel, comp.wg.Wait)
-	comp.shutdownOp = lifecyclejoin.NewOperation()
+	comp.lifecycleUsed = true
+	comp.cancel = cancel
+	comp.runtimeDone = make(chan struct{})
+	go func() {
+		comp.wg.Wait()
+		close(comp.runtimeDone)
+	}()
 	assertOTELPolicyEvent(t, events, "fetch-start")
 
 	if err := comp.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	assertOTELPolicyEvent(t, events, "fetch-exit")
+	assertOTELPolicyEvent(t, events, "flush")
 	assertOTELPolicyEvent(t, events, "cleanup")
+	assertOTELPolicyEvent(t, events, "shutdown")
 }
 
 func assertOTELPolicyEvent(t *testing.T, events <-chan string, want string) {
@@ -598,6 +730,36 @@ type MockExporter struct {
 type exportCall struct {
 	hasDeadline       bool
 	initiallyCanceled bool
+}
+
+type orderedExporter struct {
+	events chan<- string
+}
+
+func (e *orderedExporter) ExportSpans(context.Context, []*SpanData) error {
+	e.events <- "flush"
+	return nil
+}
+
+func (*orderedExporter) ExportMetrics(context.Context, []*MetricData) error { return nil }
+
+func (e *orderedExporter) Shutdown(context.Context) error {
+	e.events <- "shutdown"
+	return nil
+}
+
+type blockingShutdownExporter struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (*blockingShutdownExporter) ExportSpans(context.Context, []*SpanData) error     { return nil }
+func (*blockingShutdownExporter) ExportMetrics(context.Context, []*MetricData) error { return nil }
+
+func (e *blockingShutdownExporter) Shutdown(context.Context) error {
+	close(e.entered)
+	<-e.release
+	return nil
 }
 
 type hangingExporter struct {

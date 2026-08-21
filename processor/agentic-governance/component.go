@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
@@ -44,18 +44,31 @@ type Component struct {
 	metrics *governanceMetrics
 
 	// Lifecycle management
-	running       bool
-	startTime     time.Time
-	consumerInfos []natsclient.StreamConsumerConfig
-	mu            sync.RWMutex
-	lifecycleMu   sync.Mutex
-	generation    *lifecyclejoin.Generation
+	running            bool
+	startTime          time.Time
+	mu                 sync.RWMutex
+	lifecycleMu        sync.Mutex
+	lifecycleUsed      bool
+	terminal           bool
+	stopping           bool
+	cleanupPending     bool
+	startDone          chan struct{}
+	cancel             context.CancelFunc
+	consumers          []streamConsumerBinding
+	waitForStreamInput func(context.Context, string) error
+	consumeStream      func(context.Context, natsclient.PortConsumerContext, natsclient.StreamConsumerConfig, func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error)
+	waitConsumerClosed func(context.Context, <-chan struct{}) error
 
 	// Counters
 	messagesProcessed int64
 	violationsCount   int64
 	errors            int64
 	lastActivity      time.Time
+}
+
+type streamConsumerBinding struct {
+	handle      jetstream.ConsumeContext
+	drainIssued bool
 }
 
 // NewComponent creates a new agentic-governance processor component
@@ -215,33 +228,39 @@ func (c *Component) Start(ctx context.Context) (startErr error) {
 	}
 
 	c.lifecycleMu.Lock()
-	if c.generation != nil {
+	if c.lifecycleUsed {
 		c.lifecycleMu.Unlock()
 		return errs.ErrAlreadyStarted
 	}
+	parent := ctx
 	runCtx, cancel := context.WithCancel(ctx)
 	startDone := make(chan struct{})
-	generation := lifecyclejoin.NewGeneration(cancel, func() { <-startDone })
-	var finishStart sync.Once
-	finish := func() { finishStart.Do(func() { close(startDone) }) }
-	c.generation = generation
+	c.lifecycleUsed = true
+	c.cleanupPending = true
+	c.cancel = cancel
+	c.startDone = startDone
 	c.lifecycleMu.Unlock()
+	committed := false
 	defer func() {
-		finish()
-		if startErr == nil {
+		if !committed {
+			rollbackErr := lifecyclecleanup.RollbackFailedStart(parent, c.cleanup)
+			startErr = errors.Join(startErr, rollbackErr)
+			c.lifecycleMu.Lock()
+			if rollbackErr == nil {
+				c.cleanupPending = false
+				c.terminal = true
+				c.clearLifecycleHandles()
+			}
+			close(startDone)
+			c.startDone = nil
+			c.lifecycleMu.Unlock()
 			return
 		}
-		rollbackErr := lifecyclejoin.RunPartialStartRollback(func(ctx context.Context) error {
-			return generation.Stop(ctx, nil, c.stopConsumers)
-		})
-		if rollbackErr == nil {
-			c.lifecycleMu.Lock()
-			if c.generation == generation {
-				c.generation = nil
-			}
-			c.lifecycleMu.Unlock()
-		}
-		startErr = errors.Join(startErr, rollbackErr)
+		c.lifecycleMu.Lock()
+		c.cleanupPending = false
+		close(startDone)
+		c.startDone = nil
+		c.lifecycleMu.Unlock()
 	}()
 
 	// NATS client is optional for unit tests
@@ -255,6 +274,7 @@ func (c *Component) Start(ctx context.Context) (startErr error) {
 	c.running = true
 	c.startTime = time.Now()
 	c.mu.Unlock()
+	committed = true
 
 	c.logger.Info("Agentic governance component started",
 		"filters", len(c.chain.Filters),
@@ -416,7 +436,11 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port, hand
 	subject := stream.Subjects()[0]
 
 	// Wait for stream to be available
-	if err := c.waitForStream(ctx, streamName); err != nil {
+	waitForStream := c.waitForStream
+	if c.waitForStreamInput != nil {
+		waitForStream = c.waitForStreamInput
+	}
+	if err := waitForStream(ctx, streamName); err != nil {
 		return errs.WrapTransient(err, "Component", "setupConsumer", fmt.Sprintf("wait for stream %s", streamName))
 	}
 
@@ -450,7 +474,11 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port, hand
 		AutoCreate:    false,
 	}
 
-	err = c.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	consume := c.natsClient.ConsumeStreamWithConfig
+	if c.consumeStream != nil {
+		consume = c.consumeStream
+	}
+	handle, err := consume(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		handler(msgCtx, msg.Data())
 		if ackErr := msg.Ack(); ackErr != nil {
 			c.logger.Error("Failed to ack JetStream message", "error", ackErr)
@@ -459,9 +487,9 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port, hand
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupConsumer", fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
-	c.mu.Lock()
-	c.consumerInfos = append(c.consumerInfos, cfg)
-	c.mu.Unlock()
+	c.lifecycleMu.Lock()
+	c.consumers = append(c.consumers, streamConsumerBinding{handle: handle})
+	c.lifecycleMu.Unlock()
 
 	c.logger.Info("Subscribed (JetStream)",
 		"subject", subject,
@@ -513,45 +541,85 @@ func (c *Component) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-	c.lifecycleMu.Lock()
-	generation := c.generation
-	c.lifecycleMu.Unlock()
-	if generation == nil {
-		return nil
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	stopErr := generation.Stop(ctx, nil, c.stopConsumers)
-	if stopErr == nil {
+	for {
 		c.lifecycleMu.Lock()
-		if c.generation == generation {
-			c.generation = nil
+		if !c.lifecycleUsed {
+			c.lifecycleUsed = true
+			c.terminal = true
+			c.lifecycleMu.Unlock()
+			return nil
 		}
+		if c.terminal {
+			c.lifecycleMu.Unlock()
+			return nil
+		}
+		if c.startDone != nil {
+			done := c.startDone
+			c.lifecycleMu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if c.stopping {
+			c.lifecycleMu.Unlock()
+			return errs.WrapTransient(errors.New("stop already in progress"), "Component", "Stop", "concurrent Stop")
+		}
+		retryable := c.cleanupPending
+		c.stopping = true
+		c.lifecycleMu.Unlock()
+		stopErr := c.cleanup(ctx)
+		c.lifecycleMu.Lock()
+		c.stopping = false
+		if retryable && stopErr != nil {
+			c.lifecycleMu.Unlock()
+			return stopErr
+		}
+		c.cleanupPending = false
+		c.terminal = true
+		c.clearLifecycleHandles()
 		c.lifecycleMu.Unlock()
 		c.mu.Lock()
 		c.running = false
 		c.mu.Unlock()
-		c.logger.Info("Agentic governance component stopped")
+		return stopErr
 	}
-	return stopErr
 }
 
-func (c *Component) stopConsumers(ctx context.Context) error {
-	c.mu.RLock()
-	infos := append([]natsclient.StreamConsumerConfig(nil), c.consumerInfos...)
-	c.mu.RUnlock()
-
+func (c *Component) cleanup(ctx context.Context) error {
 	var stopErr error
-	for _, info := range infos {
-		if err := c.natsClient.StopConsumer(ctx, info.StreamName, info.ConsumerName); err != nil {
-			stopErr = errors.Join(stopErr, err)
+	for i := range c.consumers {
+		binding := &c.consumers[i]
+		if !binding.drainIssued {
+			binding.handle.Drain()
+			binding.drainIssued = true
+		}
+		closed := binding.handle.Closed()
+		if c.waitConsumerClosed != nil {
+			stopErr = errors.Join(stopErr, c.waitConsumerClosed(ctx, closed))
+		} else {
+			select {
+			case <-closed:
+			case <-ctx.Done():
+				stopErr = errors.Join(stopErr, ctx.Err())
+			}
 		}
 	}
-	if stopErr == nil {
-		c.mu.Lock()
-		c.consumerInfos = nil
-		c.mu.Unlock()
+	if c.cancel != nil {
+		c.cancel()
+	}
+	if err := ctx.Err(); err != nil {
+		stopErr = errors.Join(stopErr, err)
 	}
 	return stopErr
 }
+
+func (c *Component) clearLifecycleHandles() { c.consumers = nil; c.cancel = nil }
 
 // Discoverable interface implementation
 

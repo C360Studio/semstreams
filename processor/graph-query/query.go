@@ -71,6 +71,10 @@ func graphQueryInterface() *component.InterfaceContract {
 
 // setupQueryHandlers subscribes to all query request subjects
 func (c *Component) setupQueryHandlers(ctx context.Context) error {
+	subscribe := c.subscribeForRequests
+	if subscribe == nil {
+		subscribe = c.natsClient.SubscribeForRequests
+	}
 	subjects := make([]string, 0, len(graphQueryOperations))
 	for _, operation := range graphQueryOperations {
 		subject, err := component.ResolveSubject([]component.PortDefinition{{
@@ -80,7 +84,7 @@ func (c *Component) setupQueryHandlers(ctx context.Context) error {
 		if err != nil {
 			return errs.WrapInvalid(err, "GraphQuery", "setupQueryHandlers", "resolve "+operation.operation)
 		}
-		sub, err := c.natsClient.SubscribeForRequests(ctx, subject, operation.handler(c))
+		sub, err := subscribe(ctx, subject, operation.handler(c))
 		if err != nil {
 			return errs.WrapTransient(err, "GraphQuery", "setupQueryHandlers", "subscribe to "+subject)
 		}

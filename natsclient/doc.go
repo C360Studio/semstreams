@@ -115,7 +115,8 @@
 //
 //	// A port-backed consumer supplies bounded owner context. The client observes
 //	// requested versus effective acknowledgement admission before delivery.
-//	err = client.ConsumeStreamWithConfig(ctx,
+//	ownerCtx, cancelOwner := context.WithCancel(ctx)
+//	consumeHandle, err := client.ConsumeStreamWithConfig(ownerCtx,
 //	    natsclient.PortConsumerContext{Component: "example", Port: "events"},
 //	    natsclient.StreamConsumerConfig{
 //	        StreamName: "EVENTS", ConsumerName: "example-events",
@@ -125,10 +126,30 @@
 //	    processEvent(msg.Subject(), msg.Data())
 //	    msg.Ack()
 //	})
+//	if err != nil {
+//	    cancelOwner()
+//	    return err
+//	}
+//	// The owner retains consumeHandle and cancelOwner while running. During Stop,
+//	// drain and await exact native completion before canceling callback authority.
+//	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
+//	defer cancelShutdown()
+//	consumeHandle.Drain()
+//	select {
+//	case <-consumeHandle.Closed():
+//	case <-shutdownCtx.Done():
+//	    cancelOwner()
+//	    return shutdownCtx.Err()
+//	}
+//	cancelOwner()
 //
-//	// Framework-internal consumers with no JetStreamPort contract use the
-//	// explicitly unobserved operation with one complete consumer config.
-//	err = client.ConsumeInternalStreamWithConfig(ctx, internalConfig, internalHandler)
+//	// Framework-internal consumers with no JetStreamPort contract retain exact
+//	// native ownership. Drain and await Closed before canceling handler authority.
+//	internalHandle, err := client.ConsumeInternalStreamWithConfig(ctx, internalConfig, internalHandler)
+//	if err == nil {
+//	    internalHandle.Drain()
+//	    <-internalHandle.Closed()
+//	}
 //
 // # Key-Value Store
 //

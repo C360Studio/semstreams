@@ -84,12 +84,6 @@
         }
       }
     },
-    "delete_consumer_on_stop": {
-      "type": "boolean",
-      "description": "Delete durable consumers on Stop (use for tests only)",
-      "default": false,
-      "category": "advanced"
-    },
     "loops_bucket": {
       "type": "string",
       "description": "NATS KV bucket name for storing loop state",

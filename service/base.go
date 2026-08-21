@@ -14,17 +14,17 @@ import (
 
 	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/health"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
-// ErrAlreadyStopped signals that a Stop was invoked on a service already in a
-// stopped or stopping terminal state. It is an idempotent, non-fatal outcome:
-// Manager.StopAll treats it as a successful stop and does not aggregate it as a
-// shutdown error (gh#520). A Stop that reaches an already-stopped state MAY
-// return nil (the BaseService.Stop default) OR this sentinel; both are success.
+// ErrAlreadyStopped signals that Stop was invoked after exact owner completion
+// was already observed. It is an idempotent, non-fatal outcome: Manager.StopAll
+// treats it as successful and does not aggregate it as a shutdown error
+// (gh#520). A Stop that observes completed teardown MAY return nil (the
+// BaseService.Stop default) or this sentinel; both are success. StatusStopping
+// alone is not completion evidence.
 var ErrAlreadyStopped = errors.New("service already stopped")
 
 func validateLifecycleContext(ctx context.Context, owner, operation string) error {
@@ -108,9 +108,10 @@ type BaseService struct {
 	onHealthChange func(bool)
 
 	// Lifecycle management
-	mu          sync.RWMutex
-	generation  *lifecyclejoin.Generation
-	terminalErr error
+	mu     sync.RWMutex
+	cancel context.CancelFunc
+	done   chan struct{}
+	wg     sync.WaitGroup
 }
 
 // NewBaseServiceWithOptions creates a new base service using functional options pattern
@@ -232,11 +233,17 @@ func (s *BaseService) Start(ctx context.Context) error {
 	if err := validateLifecycleContext(ctx, "BaseService", "Start"); err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return errs.WrapInvalid(err, "BaseService", "Start", "context already canceled")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return errs.WrapInvalid(err, "BaseService", "Start", "context already canceled")
+	}
 
-	if s.generation != nil {
-		return errs.WrapFatal(errs.ErrAlreadyStarted, "BaseService", "Start", "prior generation is still active")
+	if s.done != nil {
+		return errs.WrapFatal(errs.ErrAlreadyStarted, "BaseService", "Start", "service instance already used")
 	}
 
 	s.status.Store(StatusStarting)
@@ -244,13 +251,13 @@ func (s *BaseService) Start(ctx context.Context) error {
 		s.metricsRegistry.CoreMetrics().RecordServiceStatus(s.name, int(StatusStarting))
 	}
 
-	// Create generation-scoped lifecycle state. Stop retains cancellation and
-	// completion authority, never the context itself.
 	runtimeCtx, runtimeCancel := context.WithCancel(ctx)
-	var runtimeWG sync.WaitGroup
-	runtimeWG.Add(2)
-	s.generation = lifecyclejoin.NewGeneration(runtimeCancel, runtimeWG.Wait)
-	s.terminalErr = nil
+	done := make(chan struct{})
+	// Publish cancellation and join authority before any owned goroutine can
+	// escape Start. The service is one-shot; done also records prior use.
+	s.cancel = runtimeCancel
+	s.done = done
+	s.wg.Add(2)
 
 	// Record start time
 	startTime := time.Now()
@@ -264,74 +271,82 @@ func (s *BaseService) Start(ctx context.Context) error {
 	// Start health monitoring
 	if s.healthInterval > 0 {
 		s.healthTicker = time.NewTicker(s.healthInterval)
-		go s.healthMonitor(runtimeCtx, &runtimeWG)
+		go s.healthMonitor(runtimeCtx, &s.wg)
 	} else {
-		runtimeWG.Done()
+		s.wg.Done()
 	}
 
 	// Start context monitor for graceful shutdown
-	go s.contextMonitor(runtimeCtx, &runtimeWG)
-
-	return nil
-}
-
-// Stop stops the service gracefully. Idempotent per the Service contract
-// (gh#520): an already-stopped/stopping service returns nil. Goroutine
-// signaling and draining still run on the already-terminal path because
-// parent-context cancellation (performGracefulShutdown) transitions status
-// without closing done, which would otherwise leave healthMonitor parked
-// forever (gh#549).
-func (s *BaseService) Stop(ctx context.Context) error {
-	if err := validateLifecycleContext(ctx, "BaseService", "Stop"); err != nil {
-		return err
-	}
-
-	s.mu.RLock()
-	generation := s.generation
-	terminalErr := s.terminalErr
-	s.mu.RUnlock()
-	if generation == nil {
-		// A never-started service has no generation to stop. Preserve the
-		// longstanding idempotent contract for a caller that already observed a
-		// terminal/stopping transition without an installed runtime generation.
+	go s.contextMonitor(runtimeCtx, &s.wg)
+	go func() {
+		s.wg.Wait()
 		s.mu.Lock()
-		if s.status.Load() != StatusStopped {
-			s.status.Store(StatusStopped)
-		}
-		s.mu.Unlock()
-		return terminalErr
-	}
-
-	stopErr := generation.Stop(ctx, func() error {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		s.status.Store(StatusStopping)
-		if s.metricsRegistry != nil {
-			s.metricsRegistry.CoreMetrics().RecordServiceStatus(s.name, int(StatusStopping))
-		}
-		if s.healthTicker != nil {
-			s.healthTicker.Stop()
-		}
-		return nil
-	}, func(context.Context) error {
-		s.mu.Lock()
-		defer s.mu.Unlock()
 		s.status.Store(StatusStopped)
 		if s.metricsRegistry != nil {
 			s.metricsRegistry.CoreMetrics().RecordServiceStatus(s.name, int(StatusStopped))
 		}
 		s.healthy.Store(false)
-		return nil
-	})
-	if ctx.Err() == nil {
-		s.mu.Lock()
-		if s.generation == generation {
-			s.generation = nil
-			s.terminalErr = stopErr
+		s.mu.Unlock()
+		close(done)
+	}()
+
+	return nil
+}
+
+// Stop stops the service gracefully. The first call claims the one-shot
+// cancellation authority and bounds the owner join with ctx. Later calls are
+// nil/no-op; they neither wait again nor replay a prior result.
+func (s *BaseService) Stop(ctx context.Context) error {
+	if err := validateLifecycleContext(ctx, "BaseService", "Stop"); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	cancel := s.cancel
+	if cancel == nil {
+		if s.done == nil {
+			done := make(chan struct{})
+			close(done)
+			s.done = done
+			if s.status.Load() != StatusStopped {
+				s.status.Store(StatusStopped)
+			}
 		}
 		s.mu.Unlock()
+		return nil
 	}
-	return stopErr
+	done := s.done
+	select {
+	case <-done:
+		// Parent cancellation already drove every owned goroutine to exact
+		// completion. Consume the stale cancellation handle without reopening
+		// terminal teardown or changing the observed stopped state.
+		s.cancel = nil
+		cancel()
+		s.mu.Unlock()
+		return nil
+	default:
+	}
+	s.cancel = nil
+	s.status.Store(StatusStopping)
+	if s.metricsRegistry != nil {
+		s.metricsRegistry.CoreMetrics().RecordServiceStatus(s.name, int(StatusStopping))
+	}
+	if s.healthTicker != nil {
+		s.healthTicker.Stop()
+	}
+	cancel()
+	s.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("wait for BaseService runtime: %w", err)
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("wait for BaseService runtime: %w", ctx.Err())
+	}
 }
 
 // SetHealthCheck sets a custom health check function
@@ -445,7 +460,9 @@ func (s *BaseService) contextMonitor(ctx context.Context, wg *sync.WaitGroup) {
 	s.performGracefulShutdown()
 }
 
-// performGracefulShutdown atomically transitions service to stopped state
+// performGracefulShutdown fences health activity after parent cancellation.
+// Exact stopped state is published by the owner-join observer after both
+// lifecycle goroutines have returned.
 func (s *BaseService) performGracefulShutdown() {
 	if !s.status.CompareAndSwap(StatusRunning, StatusStopping) {
 		return
@@ -458,25 +475,17 @@ func (s *BaseService) performGracefulShutdown() {
 	if s.healthTicker != nil {
 		s.healthTicker.Stop()
 	}
-
-	// Set final status
-	s.status.Store(StatusStopped)
-	if s.metricsRegistry != nil {
-		s.metricsRegistry.CoreMetrics().RecordServiceStatus(s.name, int(StatusStopped))
-	}
-	s.healthy.Store(false)
 }
 
 // Service interface defines the contract for all services
 type Service interface {
 	Name() string
 	Start(ctx context.Context) error
-	// Stop stops the service gracefully. Stop MUST be idempotent: invoking it
-	// on a service already stopped or stopping returns success (nil or
-	// ErrAlreadyStopped) and does not re-run teardown side effects. During
-	// coordinated shutdown a service may reach a terminal state via
-	// parent-context cancellation before the manager calls Stop; that ordering
-	// is clean, not an error (gh#520).
+	// Stop stops the service gracefully. After exact owner completion, another
+	// invocation returns success (nil or ErrAlreadyStopped) without repeating
+	// teardown. Parent cancellation can complete the owner before coordinated
+	// shutdown reaches it; StatusStopping alone does not prove that completion
+	// or authorize the manager to infer success (gh#520).
 	Stop(ctx context.Context) error
 	Status() Status
 	IsHealthy() bool       // Keep for compatibility during migration

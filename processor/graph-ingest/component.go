@@ -19,7 +19,7 @@ import (
 	"github.com/c360studio/semstreams/graph/inference"
 	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/internal/graphmutation"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -487,6 +487,15 @@ type Component struct {
 	decoder    *message.Decoder
 	natsClient *natsclient.Client
 	logger     *slog.Logger
+	// Test-only acquisition seams. Production falls through to the exact Client
+	// methods; no exported or adopter-facing lifecycle surface is introduced.
+	waitForStreamInput func(context.Context, string) error
+	consumeStream      func(
+		context.Context,
+		natsclient.PortConsumerContext,
+		natsclient.StreamConsumerConfig,
+		func(context.Context, jetstream.Msg),
+	) (jetstream.ConsumeContext, error)
 
 	// Domain resources
 	entityBucket *natsclient.KVStore            // authoritative KV operations, snapshot watch, and CAS support
@@ -502,9 +511,14 @@ type Component struct {
 	running                 bool
 	initialized             bool
 	startTime               time.Time
-	wg                      sync.WaitGroup
-	generation              *lifecyclejoin.Generation
-	poolStop                *lifecyclejoin.Operation
+	lifecycleMu             sync.Mutex
+	lifecycleUsed           bool
+	terminal                bool
+	stopping                bool
+	cleanupPending          bool
+	startDone               chan struct{}
+	statusDone              chan struct{}
+	cancel                  context.CancelFunc
 	entityWatchLost         atomic.Bool
 	entityBootstrapStarted  atomic.Bool
 	entityBootstrapComplete atomic.Bool
@@ -595,14 +609,11 @@ type Component struct {
 	// Keyed-concurrent entity ingest (ADR-072, gh#480). The pool partitions
 	// ingest by entity ID so same-entity updates stay ordered while different
 	// entities ingest in parallel. Built in Start BEFORE subscriptions (M3);
-	// drained in Stop with submit-ctx cancelled first. ingestPoolCtx is the
-	// Process run ctx (independent of the consume ctx so a consumer-ctx cancel
-	// does not abort in-flight merges); ingestSubmitCtx is cancelled first on
-	// Stop so a consume callback parked in SubmitBlocking unblocks and Naks.
+	// drained in Stop after every native consumer reports Closed. The pool and
+	// submission contexts are lexical children of Start; only their cancel
+	// functions are retained so no production struct stores context authority.
 	ingestPool         *dispatch.KeyedPool[ingestWork]
-	ingestPoolCtx      context.Context
 	ingestPoolCancel   context.CancelFunc
-	ingestSubmitCtx    context.Context
 	ingestSubmitCancel context.CancelFunc
 
 	// Redelivery guard (ADR-072 B1/B2/B3), two-tier. ingestGuardMem is the
@@ -614,8 +625,19 @@ type Component struct {
 	ingestGuardMem    []*laneGuard
 	ingestGuardBucket *natsclient.KVStore
 
-	// Query and mutation subscriptions (for cleanup)
-	subscriptions []*natsclient.Subscription
+	// Exact callback resources retained for terminal cleanup. boundConsumers is
+	// observation-only readiness state and is deliberately not a lifecycle handle.
+	consumers     []graphIngestConsumerBinding
+	subscriptions []graphIngestCoreSubscription
+}
+
+type graphIngestConsumerBinding struct {
+	handle      jetstream.ConsumeContext
+	drainIssued bool
+}
+
+type graphIngestCoreSubscription interface {
+	Drain(context.Context) error
 }
 
 // CreateGraphIngest is the factory function for creating graph-ingest components
@@ -854,200 +876,246 @@ func (c *Component) Initialize() error {
 	return nil
 }
 
-// Start begins processing (must be initialized first)
-func (c *Component) Start(ctx context.Context) error {
-	// Validate before inspecting lifecycle state.
+// Start begins processing (must be initialized first).
+func (c *Component) Start(ctx context.Context) (startErr error) {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "Start", "context cannot be nil")
 	}
 	if err := ctx.Err(); err != nil {
 		return errs.WrapInvalid(err, "Component", "Start", "context already cancelled")
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 
-	// Check initialization
-	if !c.initialized {
+	c.lifecycleMu.Lock()
+	if c.lifecycleUsed {
+		c.lifecycleMu.Unlock()
+		return errs.WrapFatal(errs.ErrAlreadyStarted, "Component", "Start", "component lifecycle already used")
+	}
+	c.mu.RLock()
+	initialized := c.initialized
+	c.mu.RUnlock()
+	if !initialized {
+		c.lifecycleMu.Unlock()
 		return errs.WrapFatal(fmt.Errorf("component not initialized"), "Component", "Start", "initialization check")
 	}
-
-	// Idempotent - already running
-	if c.running {
-		return nil
+	if c.natsClient == nil {
+		c.lifecycleMu.Unlock()
+		return errs.WrapFatal(errs.ErrNoConnection, "Component", "Start", "NATS client is required")
 	}
 
-	// Create cancellable context
-	ctx, cancel := context.WithCancel(ctx)
+	parent := ctx
+	runCtx, cancel := context.WithCancel(ctx)
+	poolCtx, poolCancel := context.WithCancel(runCtx)
+	submitCtx, submitCancel := context.WithCancel(runCtx)
+	startDone := make(chan struct{})
+	c.lifecycleUsed, c.cleanupPending = true, true
+	c.cancel = cancel
+	c.ingestPoolCancel = poolCancel
+	c.ingestSubmitCancel = submitCancel
+	c.startDone = startDone
+	c.lifecycleMu.Unlock()
+	committed := false
+	defer func() {
+		if !committed {
+			rollbackErr := lifecyclecleanup.RollbackFailedStart(parent, c.cleanup)
+			startErr = errors.Join(startErr, rollbackErr)
+			c.lifecycleMu.Lock()
+			if rollbackErr == nil {
+				c.cleanupPending = false
+				c.terminal = true
+				c.clearLifecycleHandles()
+			}
+			close(startDone)
+			c.startDone = nil
+			c.lifecycleMu.Unlock()
+			return
+		}
+		c.lifecycleMu.Lock()
+		c.cleanupPending = false
+		close(startDone)
+		c.startDone = nil
+		c.lifecycleMu.Unlock()
+	}()
 
-	// Check context before proceeding
-	if err := ctx.Err(); err != nil {
-		cancel()
-		return errs.Wrap(err, "Component", "Start", "context cancelled")
-	}
-
-	// Ensure NATS client is connected
 	if c.natsClient.Status() != natsclient.StatusConnected {
-		if err := c.natsClient.Connect(ctx); err != nil {
-			cancel()
-			// Check if this is a context-related error
-			if ctx.Err() != nil {
-				return errs.Wrap(ctx.Err(), "Component", "Start", "context cancelled during NATS connection")
+		if err := c.natsClient.Connect(runCtx); err != nil {
+			if runCtx.Err() != nil {
+				return errs.Wrap(runCtx.Err(), "Component", "Start", "context cancelled during NATS connection")
 			}
 			return errs.Wrap(err, "Component", "Start", "NATS connection failed")
 		}
-		if err := c.natsClient.WaitForConnection(ctx); err != nil {
-			cancel()
-			if ctx.Err() != nil {
-				return errs.Wrap(ctx.Err(), "Component", "Start", "context cancelled waiting for NATS")
+		if err := c.natsClient.WaitForConnection(runCtx); err != nil {
+			if runCtx.Err() != nil {
+				return errs.Wrap(runCtx.Err(), "Component", "Start", "context cancelled waiting for NATS")
 			}
 			return errs.Wrap(err, "Component", "Start", "wait for NATS connection")
 		}
 	}
 
-	// Initialize storage buckets and query caches
-	if err := c.initStorage(ctx); err != nil {
-		cancel()
+	if err := c.initStorage(runCtx); err != nil {
 		return err
 	}
-
-	// Query safety is independent from graph-ingest's write role. Drain the
-	// authoritative snapshot synchronously into the per-entity poison
-	// inventory, then STOP the watcher — graph-ingest holds no steady-state
-	// self-watch on ENTITY_STATES (poison-response-scoping D1). A transport
-	// failure degrades only queries; ingest writers still boot so operators
-	// can repair state through canonical writes before restart.
-	c.startEntityStateGuard(ctx, c.entityBucket)
-
-	// Initialize hierarchy inference if enabled (synchronous - no Start/Stop)
+	c.startEntityStateGuard(runCtx, c.entityBucket)
 	c.initHierarchyInference()
-
-	// Readiness bucket BEFORE any consumer binds. It is fatal to Start, and the
-	// teardown available after setupSubscriptions does NOT stop bound JetStream
-	// consumers — teardownIngestPool only cancels contexts, so every delivered
-	// message would Nak on a cancelled submit ctx until MaxDeliver exhausted it, and
-	// this change's own D0 measurement shows a parked message leaves BOTH counters
-	// invisibly. Provisioning first means a failure costs nothing on the live stream.
-	// It needs nothing from the consumers: boundConsumers is read only by the tick,
-	// which starts below. Matches graph-index, which also provisions before binding.
-	if err := c.createStatusBucket(ctx); err != nil {
-		cancel()
+	if err := c.createStatusBucket(runCtx); err != nil {
 		return errs.Wrap(err, "Component", "Start", "readiness status bucket")
 	}
-
-	// Build the keyed-concurrent ingest pool BEFORE subscriptions start (ADR-072
-	// M3: else the first delivered message submits to a nil pool).
-	if err := c.buildIngestPool(); err != nil {
-		cancel()
+	if err := c.buildIngestPool(poolCtx); err != nil {
 		return errs.Wrap(err, "Component", "Start", "keyed ingest pool")
 	}
-
-	// Set up subscriptions for input ports. On any boot failure past
-	// buildIngestPool, tear down the pool too: Stop early-returns when
-	// !running, so without this the lane goroutines + metricsUpdater leak.
-	if err := c.setupSubscriptions(ctx); err != nil {
-		c.teardownIngestPool()
-		cancel()
+	if err := c.setupSubscriptions(runCtx, submitCtx); err != nil {
 		return errs.Wrap(err, "Component", "Start", "subscription setup")
 	}
-
-	// Set up query handler subscriptions
-	if err := c.setupQueryHandlers(ctx); err != nil {
-		c.teardownIngestPool()
-		cancel()
+	if err := c.setupQueryHandlers(runCtx); err != nil {
 		return errs.Wrap(err, "Component", "Start", "query handler setup")
 	}
-
-	// Set up mutation handler subscriptions (for rule processor actions)
-	if err := c.setupMutationHandlers(ctx); err != nil {
-		c.teardownIngestPool()
-		cancel()
+	if err := c.setupMutationHandlers(runCtx); err != nil {
 		return errs.Wrap(err, "Component", "Start", "mutation handler setup")
 	}
 
-	c.wg.Add(1)
-	go c.statusMetricsLoop(ctx)
-	c.generation = lifecyclejoin.NewGeneration(cancel, c.wg.Wait)
-	c.poolStop = lifecyclejoin.NewOperation()
-
-	// Mark as running
+	c.startStatusMetricsLoop(runCtx)
+	c.mu.Lock()
 	c.running = true
 	c.startTime = time.Now()
-
+	startTime := c.startTime
+	c.mu.Unlock()
+	committed = true
 	c.logger.Info("component started",
 		slog.String("component", "graph-ingest"),
-		slog.Time("start_time", c.startTime))
-
+		slog.Time("start_time", startTime))
 	return nil
 }
 
-// Stop gracefully shuts down the component
+func (c *Component) startStatusMetricsLoop(ctx context.Context) {
+	statusDone := make(chan struct{})
+	c.lifecycleMu.Lock()
+	c.statusDone = statusDone
+	c.lifecycleMu.Unlock()
+	go func() {
+		defer close(statusDone)
+		c.statusMetricsLoop(ctx)
+	}()
+}
+
+// Stop gracefully shuts down the component.
 func (c *Component) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-	c.mu.Lock()
-	generation := c.generation
-	poolStop := c.poolStop
-	if generation == nil {
-		c.mu.Unlock()
-		return nil
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	pool := c.ingestPool
-	submitCancel := c.ingestSubmitCancel
-	poolCancel := c.ingestPoolCancel
-	c.mu.Unlock()
-	generation.Cancel()
-
-	// ADR-072 M3 shutdown ordering, BEFORE tearing down KV/NATS:
-	//  1. cancel the submit ctx so a consume callback parked in SubmitBlocking
-	//     unblocks and Naks (else the synchronous consumer callback wedges
-	//     teardown until timeout);
-	//  2. stop the consumer so no new work is submitted;
-	//  3. drain the pool — Process still runs on the live, independent pool ctx;
-	//  4. release the pool ctx.
-	if submitCancel != nil {
-		submitCancel()
-	}
-	poolErr := poolStop.Run(ctx, func(ctx context.Context) error {
-		if pool == nil {
+	for {
+		c.lifecycleMu.Lock()
+		if !c.lifecycleUsed {
+			c.lifecycleUsed = true
+			c.terminal = true
+			c.lifecycleMu.Unlock()
 			return nil
 		}
-		return pool.Stop(ctx)
-	})
-	if errors.Is(poolErr, context.Canceled) || errors.Is(poolErr, context.DeadlineExceeded) {
-		return poolErr
-	}
-	if poolCancel != nil {
-		poolCancel()
-	}
-
-	return generation.Stop(ctx, func() error {
-		stopErr := poolErr
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		for _, sub := range c.subscriptions {
-			if sub != nil {
-				if err := sub.Unsubscribe(); err != nil {
-					c.logger.Warn("subscription unsubscribe error", slog.Any("error", err))
-					stopErr = errors.Join(stopErr, err)
-				}
+		if c.terminal {
+			c.lifecycleMu.Unlock()
+			return nil
+		}
+		if c.startDone != nil {
+			startDone := c.startDone
+			c.lifecycleMu.Unlock()
+			select {
+			case <-startDone:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 		}
-		c.subscriptions = nil
-		if c.entityCache != nil {
-			stopErr = errors.Join(stopErr, c.entityCache.Close())
+		if c.stopping {
+			c.lifecycleMu.Unlock()
+			return errs.WrapTransient(errors.New("stop already in progress"), "Component", "Stop", "concurrent Stop is unsupported")
 		}
-		if c.suffixCache != nil {
-			stopErr = errors.Join(stopErr, c.suffixCache.Close())
+		retryable := c.cleanupPending
+		c.stopping = true
+		c.lifecycleMu.Unlock()
+
+		stopErr := c.cleanup(ctx)
+		c.lifecycleMu.Lock()
+		c.stopping = false
+		if retryable && stopErr != nil {
+			c.lifecycleMu.Unlock()
+			return stopErr
 		}
-		return stopErr
-	}, func(context.Context) error {
+		c.cleanupPending = false
+		c.terminal = true
+		c.clearLifecycleHandles()
+		c.lifecycleMu.Unlock()
 		c.mu.Lock()
 		c.running = false
 		c.mu.Unlock()
 		c.logger.Info("component stopped gracefully", slog.String("component", "graph-ingest"))
-		return nil
-	})
+		return stopErr
+	}
+}
+
+// cleanup preserves effect -> durable guard -> settlement by keeping callback,
+// submission, pool, KV, and cache authority live until exact native closure.
+func (c *Component) cleanup(ctx context.Context) error {
+	var cleanupErr error
+	for index := range c.consumers {
+		binding := &c.consumers[index]
+		if !binding.drainIssued {
+			binding.handle.Drain()
+			binding.drainIssued = true
+		}
+	}
+	for index := range c.consumers {
+		select {
+		case <-c.consumers[index].handle.Closed():
+		case <-ctx.Done():
+			cleanupErr = errors.Join(cleanupErr, ctx.Err())
+		}
+	}
+	if c.ingestSubmitCancel != nil {
+		c.ingestSubmitCancel()
+	}
+	if c.ingestPool != nil {
+		cleanupErr = errors.Join(cleanupErr, c.ingestPool.Stop(ctx))
+	}
+	if c.ingestPoolCancel != nil {
+		c.ingestPoolCancel()
+	}
+	for _, sub := range c.subscriptions {
+		if sub != nil {
+			cleanupErr = errors.Join(cleanupErr, sub.Drain(ctx))
+		}
+	}
+	if c.cancel != nil {
+		c.cancel()
+	}
+	if c.statusDone != nil {
+		select {
+		case <-c.statusDone:
+		case <-ctx.Done():
+			cleanupErr = errors.Join(cleanupErr, ctx.Err())
+		}
+	}
+	if c.entityCache != nil {
+		cleanupErr = errors.Join(cleanupErr, c.entityCache.Close())
+	}
+	if c.suffixCache != nil {
+		cleanupErr = errors.Join(cleanupErr, c.suffixCache.Close())
+	}
+	return errors.Join(cleanupErr, ctx.Err())
+}
+
+func (c *Component) clearLifecycleHandles() {
+	c.cancel = nil
+	c.ingestPoolCancel = nil
+	c.ingestSubmitCancel = nil
+	c.ingestPool = nil
+	c.statusDone = nil
+	c.consumers = nil
+	c.subscriptions = nil
+	c.entityCache = nil
+	c.suffixCache = nil
+	c.statusPublisher = nil
+	c.clearBoundConsumers()
 }
 
 // initStorage initializes KV buckets and query caches. Every bucket this
@@ -1313,7 +1381,7 @@ func (c *Component) initHierarchyInference() {
 // ============================================================================
 
 // setupSubscriptions sets up JetStream consumers for input ports
-func (c *Component) setupSubscriptions(ctx context.Context) error {
+func (c *Component) setupSubscriptions(ctx, submitCtx context.Context) error {
 	for _, port := range c.inputs {
 		facts, err := port.Facts()
 		if err != nil {
@@ -1323,7 +1391,7 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 			continue
 		}
 
-		if err := c.setupJetStreamConsumer(ctx, port); err != nil {
+		if err := c.setupJetStreamConsumer(ctx, submitCtx, port); err != nil {
 			return errs.Wrap(err, "Component", "setupSubscriptions",
 				fmt.Sprintf("JetStream consumer for %s", port.Name))
 		}
@@ -1332,7 +1400,7 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 }
 
 // setupJetStreamConsumer creates a JetStream consumer for an input port
-func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.Port) error {
+func (c *Component) setupJetStreamConsumer(ctx, submitCtx context.Context, port component.Port) error {
 	facts, err := port.Facts()
 	if err != nil {
 		return err
@@ -1345,7 +1413,11 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.P
 	streamName := stream.Name()
 
 	// Wait for stream to be available
-	if err := c.waitForStream(ctx, streamName); err != nil {
+	waitForStream := c.waitForStream
+	if c.waitForStreamInput != nil {
+		waitForStream = c.waitForStreamInput
+	}
+	if err := waitForStream(ctx, streamName); err != nil {
 		return fmt.Errorf("stream %s not available: %w", streamName, err)
 	}
 
@@ -1385,7 +1457,11 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.P
 		AutoCreate:    false,
 	}
 
-	err = c.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name}, cfg, func(_ context.Context, msg jetstream.Msg) {
+	consumeStream := c.natsClient.ConsumeStreamWithConfig
+	if c.consumeStream != nil {
+		consumeStream = c.consumeStream
+	}
+	handle, err := consumeStream(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name}, cfg, func(_ context.Context, msg jetstream.Msg) {
 		// ADR-072: the consume closure decodes ONCE and submits to the keyed pool;
 		// the redelivery guard, apply, and ack move into processIngest (run on a
 		// pool lane, not this consumer goroutine). Metadata carries the stream name
@@ -1430,7 +1506,7 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.P
 			seq:         meta.Sequence.Stream,
 			deliveredAt: meta.Timestamp,
 		}
-		if serr := c.ingestPool.SubmitBlocking(c.ingestSubmitCtx, work); serr != nil {
+		if serr := c.ingestPool.SubmitBlocking(submitCtx, work); serr != nil {
 			if nakErr := msg.Nak(); nakErr != nil {
 				c.logger.Error("Failed to Nak after submit failure", slog.Any("error", nakErr))
 			}
@@ -1439,6 +1515,9 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.P
 	if err != nil {
 		return fmt.Errorf("consumer setup failed for stream %s: %w", streamName, err)
 	}
+	c.lifecycleMu.Lock()
+	c.consumers = append(c.consumers, graphIngestConsumerBinding{handle: handle})
+	c.lifecycleMu.Unlock()
 
 	// Record the consumer for the readiness tick ONLY after the bind committed, so
 	// the backlog sum never asks about a consumer that failed to bind (which would

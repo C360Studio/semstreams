@@ -174,11 +174,13 @@ When an entity is deleted, its canonical KV key is matched against each rule's
 which allows `on_exit` to fire before tracked state is removed. The deleted
 value itself is never decoded or passed to condition evaluation.
 
-Fetch, evaluation, delete transition, and cleanup are serialized per entity and
-fenced by KV revision. This prevents an already-extracted debounce batch from
-evaluating an older snapshot after a completed delete and deduplicates the same
-delete revision delivered by overlapping watchers. Fence entries are retained
-while work is queued or in flight and cannot be evicted in that state. After
+Revision admission is serialized per entity; fetch, evaluation, delete transition,
+and cleanup may proceed concurrently. Revision and watcher-generation admission
+suppress stale completion: a newer delete can complete without waiting for a
+blocked older fetch, and that older fetch cannot publish a stale transition after
+release. The same delete revision delivered by overlapping watchers is deduplicated.
+Fence entries are retained while work is queued or in flight and cannot be evicted
+in that state. After
 the last active reference leaves, the revision watermark remains in a bounded
 recent-watermark cache for 15 minutes, capped at 65,536 idle entities with LRU
 eviction. These constants establish a fixed memory ceiling while covering
@@ -200,7 +202,7 @@ func (rp *Processor) evaluateRulesForEntityState(ctx context.Context, entityKey,
     for ruleName, ruleInstance := range rp.rules {
         // Direct EntityState evaluation (preferred)
         if entityEval, ok := ruleInstance.(EntityStateEvaluator); ok {
-            triggered := entityEval.EvaluateEntityState(entityState)
+            triggered := entityEval.EvaluateEntityState(ctx, entityState)
             // Handle state transitions...
         }
     }
@@ -211,9 +213,12 @@ Rules must implement `EntityStateEvaluator` interface:
 
 ```go
 type EntityStateEvaluator interface {
-    EvaluateEntityState(entityState *gtypes.EntityState) bool
+    EvaluateEntityState(ctx context.Context, entityState *gtypes.EntityState) bool
 }
 ```
+
+The context is the exact watcher operation context. Implementations may use it for
+lifecycle-backed condition resolution, but must not retain it after evaluation.
 
 ## Bootstrap Recovery and `on_recovery`-Only Rules
 
@@ -357,17 +362,15 @@ For high-update-rate entities, consider:
 
 ## Watch Buckets
 
-Entity watching uses the `ENTITY_STATES` bucket by default. The bucket is created if it doesn't exist:
+Graph-ingest exclusively creates and owns the authoritative `ENTITY_STATES`
+bucket. Its catalog contract is current state with history 1 and no TTL. The Rule
+processor is a read-only consumer: during Start it waits for the existing bucket,
+opens it without changing its configuration, and fails that watcher acquisition if
+the owner does not provision the bucket within the configured startup budget.
 
-```go
-entityBucket, err := rp.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-    Bucket:      "ENTITY_STATES",
-    Description: "Entity state storage",
-    History:     10,
-    TTL:         7 * 24 * time.Hour,
-    MaxBytes:    -1,
-})
-```
+Do not create, update, or apply alternate retention to `ENTITY_STATES` from Rule
+configuration or custom rule code. Start graph-ingest before Rule, and treat a
+missing bucket as an owner-provisioning or startup-order failure.
 
 Rule-level declarations may repeat the typed bucket explicitly:
 
@@ -387,19 +390,21 @@ not offer an untyped multi-bucket fallback.
 
 ## Graceful Shutdown
 
-Shutdown first retires every watcher generation under the dispatch gate, then stops the physical transports. This
-ordering means a failed transport `Stop` cannot leave its old generation authoritative. The processor then closes and
-drains the coalescer, releases every queued fence reference, and clears idle revision watermarks. Cleanup reports an
-error if an active fence reference remains rather than silently leaking ordering state.
+Shutdown first closes runtime-update admission and settles every update already
+admitted. Only then does it snapshot, retire, and stop watcher generations. This
+prevents a late `ApplyConfigUpdate` from publishing a watcher after the teardown
+snapshot. The processor then drains admitted evaluations before canceling the Start
+authority and clearing terminal state.
 
-Watcher goroutines also observe the processor shutdown signal:
+Watcher goroutines observe their Start-derived context:
 
 ```go
-case <-rp.shutdown:
+case <-ctx.Done():
     return // Exit goroutine
 ```
 
-The `shutdown` channel signals all watcher goroutines to exit cleanly.
+Each watcher retains only its cancel function, native handle, and completion signal;
+the context itself remains lexical to the goroutine.
 
 ## Debugging
 

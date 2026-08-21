@@ -28,12 +28,6 @@ type entityStatesWatcher interface {
 // dedicated ENTITY_STATES contract-guard watcher — with zero configured
 // entity-watch patterns the processor holds no ENTITY_STATES watcher at all.
 func (rp *Processor) watchEntityStates(ctx context.Context) error {
-	// Store the watcher context for dynamic management
-	rp.mu.Lock()
-	rp.watcherCtx, rp.watcherCancelFunc = context.WithCancel(ctx)
-	watcherCtx := rp.watcherCtx
-	rp.mu.Unlock()
-
 	// Read the configured ENTITY_STATES patterns.
 	bucketPatterns := rp.getEffectiveBucketPatterns()
 
@@ -45,7 +39,7 @@ func (rp *Processor) watchEntityStates(ctx context.Context) error {
 	// Start watchers for all configured buckets and patterns
 	for bucketName, patterns := range bucketPatterns {
 		for _, pattern := range patterns {
-			if err := rp.startWatcherForBucketPattern(watcherCtx, bucketName, pattern); err != nil {
+			if err := rp.startWatcherForBucketPattern(ctx, bucketName, pattern); err != nil {
 				rp.markGraphStateGuardDegraded(fmt.Errorf("start %s pattern %q: %w", bucketName, pattern, err))
 				return errs.ClassifiedCode(errs.ErrorTransient, gtypes.ErrorCodeIndexNotReady, err)
 			}
@@ -140,9 +134,6 @@ func (rp *Processor) getEntityStatesBucket(ctx context.Context, bucketName strin
 // startWatcherForBucketPattern starts a KV watcher for a specific bucket and pattern.
 // Returns an error if the watcher cannot be started.
 func (rp *Processor) startWatcherForBucketPattern(ctx context.Context, bucketName, pattern string) error {
-	rp.entityWatcherUpdateMu.Lock()
-	defer rp.entityWatcherUpdateMu.Unlock()
-
 	if err := validateEntityWatchPattern(bucketName, pattern); err != nil {
 		return err
 	}
@@ -174,7 +165,7 @@ func (rp *Processor) startWatcherForBucketPattern(ctx context.Context, bucketNam
 	rp.mu.Unlock()
 	rp.entityDispatchGate.Unlock()
 
-	go rp.handleManagedEntityUpdates(watcherCtx, watcher, key, generation)
+	rp.startManagedEntityWatcher(watcherCtx, watcher, key, generation)
 	rp.logger.Info("Started KV watcher", "bucket", bucketName, "pattern", pattern)
 	return nil
 }
@@ -195,6 +186,8 @@ type entityWatcherFactory func(context.Context, string, string) (jetstream.KeyWa
 type managedEntityWatcher struct {
 	watcher    jetstream.KeyWatcher
 	generation uint64
+	cancel     context.CancelFunc
+	done       chan struct{}
 	// bootstrap tracks THIS generation's replay progress. It is a pointer so the
 	// watcher goroutine can record progress without taking the dispatch write lock,
 	// while the readiness reader still sees it through the authoritative record.
@@ -243,12 +236,8 @@ func (rp *Processor) registerEntityWatcherLocked(
 	watcher jetstream.KeyWatcher,
 ) (context.Context, uint64) {
 	watcherCtx, cancel := context.WithCancel(parent)
-	if rp.entityWatcherCancels == nil {
-		rp.entityWatcherCancels = make(map[string]context.CancelFunc)
-	}
 	rp.entityWatchers = append(rp.entityWatchers, watcher)
 	rp.entityWatcherMap[key] = watcher
-	rp.entityWatcherCancels[key] = cancel
 	if rp.entityDispatchRecords == nil {
 		rp.entityDispatchRecords = make(map[string]managedEntityWatcher)
 	}
@@ -257,6 +246,8 @@ func (rp *Processor) registerEntityWatcherLocked(
 	rp.entityDispatchRecords[key] = managedEntityWatcher{
 		watcher:    watcher,
 		generation: generation,
+		cancel:     cancel,
+		done:       make(chan struct{}),
 		bootstrap:  &entityBootstrapProgress{},
 	}
 	return watcherCtx, generation
@@ -265,10 +256,9 @@ func (rp *Processor) registerEntityWatcherLocked(
 // deactivateEntityWatcherLocked retires a watcher while both
 // entityDispatchGate and mu are write-locked by the caller.
 func (rp *Processor) deactivateEntityWatcherLocked(key string, watcher jetstream.KeyWatcher) {
-	if cancel := rp.entityWatcherCancels[key]; cancel != nil {
-		cancel()
+	if record := rp.entityDispatchRecords[key]; record.cancel != nil {
+		record.cancel()
 	}
-	delete(rp.entityWatcherCancels, key)
 	delete(rp.entityWatcherMap, key)
 	delete(rp.entityDispatchRecords, key)
 	for index, candidate := range rp.entityWatchers {
@@ -281,9 +271,6 @@ func (rp *Processor) deactivateEntityWatcherLocked(key string, watcher jetstream
 
 // stopWatcherForBucketPattern stops a KV watcher for a specific bucket and pattern.
 func (rp *Processor) stopWatcherForBucketPattern(bucketName, pattern string) error {
-	rp.entityWatcherUpdateMu.Lock()
-	defer rp.entityWatcherUpdateMu.Unlock()
-
 	key := watcherKey(bucketName, pattern)
 	rp.entityDispatchGate.Lock()
 	rp.mu.Lock()
@@ -308,12 +295,29 @@ func (rp *Processor) stopWatcherForBucketPattern(bucketName, pattern string) err
 
 // UpdateWatchBuckets atomically replaces the configured ENTITY_STATES patterns.
 func (rp *Processor) UpdateWatchBuckets(newBuckets map[string][]string) error {
-	rp.entityWatcherUpdateMu.Lock()
-	defer rp.entityWatcherUpdateMu.Unlock()
-	return rp.updateWatchBucketsWithFactory(newBuckets, rp.prepareEntityWatcher)
+	if err := validateEntityWatchBuckets(newBuckets); err != nil {
+		return err
+	}
+	rp.mu.RLock()
+	running := rp.running
+	rp.mu.RUnlock()
+	if !running {
+		rp.mu.Lock()
+		rp.config.EntityWatchBuckets = cloneEntityWatchBuckets(newBuckets)
+		rp.mu.Unlock()
+		return nil
+	}
+	prepare := rp.entityWatcherPrepare
+	if prepare == nil {
+		prepare = rp.prepareEntityWatcher
+	}
+	return rp.submitRuntimeCommand(func(ctx context.Context) error {
+		return rp.updateWatchBucketsWithFactory(ctx, newBuckets, prepare)
+	})
 }
 
 func (rp *Processor) updateWatchBucketsWithFactory(
+	watcherCtx context.Context,
 	newBuckets map[string][]string,
 	prepare entityWatcherFactory,
 ) error {
@@ -321,17 +325,6 @@ func (rp *Processor) updateWatchBucketsWithFactory(
 		return err
 	}
 	rp.mu.RLock()
-	watcherCtx := rp.watcherCtx
-
-	// If no watcher context, processor not started yet - just update config
-	if watcherCtx == nil {
-		rp.mu.RUnlock()
-		rp.mu.Lock()
-		rp.config.EntityWatchBuckets = cloneEntityWatchBuckets(newBuckets)
-		rp.mu.Unlock()
-		rp.logger.Info("Updated entity watch buckets (processor not running)", "buckets", newBuckets)
-		return nil
-	}
 
 	// Build set of current watcher keys (bucket:pattern)
 	currentKeys := make(map[string]bool)
@@ -397,7 +390,7 @@ func (rp *Processor) updateWatchBucketsWithFactory(
 	rp.entityDispatchGate.Unlock()
 
 	for _, addition := range prepared {
-		go rp.handleManagedEntityUpdates(
+		rp.startManagedEntityWatcher(
 			additionContexts[addition.key],
 			addition.watcher,
 			addition.key,
@@ -454,6 +447,27 @@ func (rp *Processor) handleManagedEntityUpdates(
 	generation uint64,
 ) {
 	rp.handleEntityUpdatesForKey(ctx, watcher, key, generation)
+}
+
+func (rp *Processor) startManagedEntityWatcher(ctx context.Context, watcher jetstream.KeyWatcher, key string, generation uint64) {
+	rp.mu.RLock()
+	done := rp.entityDispatchRecords[key].done
+	rp.mu.RUnlock()
+	rp.lifecycleMu.Lock()
+	wg := rp.runtimeWG
+	rp.lifecycleMu.Unlock()
+	if wg != nil {
+		wg.Add(1)
+	}
+	go func() {
+		if done != nil {
+			defer close(done)
+		}
+		if wg != nil {
+			defer wg.Done()
+		}
+		rp.handleManagedEntityUpdates(ctx, watcher, key, generation)
+	}()
 }
 
 func (rp *Processor) handleEntityUpdatesForKey(
@@ -573,25 +587,16 @@ func (rp *Processor) entityWatcherCloseExpected(
 		return !rp.entityWatcherIsActive(managedKey, watcher, managedGeneration)
 	}
 
-	// Unmanaged test/legacy handlers use the config map as their ownership
-	// source. Managed handlers use the exact generation record above.
-	rp.mu.RLock()
-	defer rp.mu.RUnlock()
-	if rp.watcherCtx == nil {
-		return false
-	}
-	for _, active := range rp.entityWatcherMap {
-		if active == watcher {
-			return false
-		}
-	}
-	return true
+	// Production handlers are always managed. An unmanaged handler has no
+	// owner-side retirement record, so only its exact context cancellation can
+	// make a transport close expected.
+	return false
 }
 
-// dispatchManagedEntityWatchUpdate holds the generation read gate through the
-// final rule-selection and dispatch seam. A configuration writer retires the
-// generation under the corresponding write gate before physical watcher Stop,
-// so an already-decoded stale callback cannot evaluate after retirement.
+// dispatchManagedEntityWatchUpdate borrows evaluation authority while the
+// generation read gate proves the watcher is still current. The gate is
+// released before fetch, evaluation, or actions; Stop fences new borrows under
+// the write gate and waits for every admitted borrow separately.
 func (rp *Processor) dispatchManagedEntityWatchUpdate(
 	ctx context.Context,
 	update entityWatchUpdate,
@@ -603,15 +608,77 @@ func (rp *Processor) dispatchManagedEntityWatchUpdate(
 	if rp.entityBeforeDispatch != nil {
 		rp.entityBeforeDispatch()
 	}
-	rp.entityDispatchGate.RLock()
-	defer rp.entityDispatchGate.RUnlock()
-	if !rp.entityWatcherIsActiveLocked(key, watcher, generation) {
+	release, admitted := rp.borrowManagedEntityEvaluation(key, watcher, generation)
+	if !admitted {
 		return
 	}
+	defer release()
 	rp.dispatchEntityWatchUpdateWithProvenance(ctx, update, bootstrap, &entityWatchProvenance{
 		key:        key,
 		generation: generation,
 	})
+}
+
+func (rp *Processor) borrowManagedEntityEvaluation(
+	key string,
+	watcher jetstream.KeyWatcher,
+	generation uint64,
+) (func(), bool) {
+	rp.entityDispatchGate.RLock()
+	defer rp.entityDispatchGate.RUnlock()
+	if !rp.entityWatcherIsActiveLocked(key, watcher, generation) {
+		return nil, false
+	}
+	return rp.borrowEntityEvaluationLocked()
+}
+
+func (rp *Processor) borrowPendingEntityEvaluation(work *entityPendingWork) (func(), bool) {
+	rp.entityDispatchGate.RLock()
+	defer rp.entityDispatchGate.RUnlock()
+	if !rp.entityPendingWorkAuthorizedLocked(work) {
+		return nil, false
+	}
+	return rp.borrowEntityEvaluationLocked()
+}
+
+// borrowEntityEvaluationLocked is called with the dispatch gate read-locked.
+// Stop takes the write lock before fencing, so admission and the terminal fence
+// have one total order without keeping that gate across component work.
+func (rp *Processor) borrowEntityEvaluationLocked() (func(), bool) {
+	rp.entityBorrowMu.Lock()
+	defer rp.entityBorrowMu.Unlock()
+	if rp.entityBorrowFenced {
+		return nil, false
+	}
+	if rp.entityBorrowCount == 0 {
+		rp.entityBorrowDone = make(chan struct{})
+	}
+	rp.entityBorrowCount++
+	return rp.releaseEntityEvaluationBorrow, true
+}
+
+func (rp *Processor) releaseEntityEvaluationBorrow() {
+	rp.entityBorrowMu.Lock()
+	defer rp.entityBorrowMu.Unlock()
+	if rp.entityBorrowCount == 0 {
+		return
+	}
+	rp.entityBorrowCount--
+	if rp.entityBorrowCount == 0 && rp.entityBorrowDone != nil {
+		close(rp.entityBorrowDone)
+	}
+}
+
+// fenceEntityBorrowsLocked is called with the dispatch gate write-locked.
+// The returned channel represents exactly the work admitted before the fence.
+func (rp *Processor) fenceEntityBorrowsLocked() <-chan struct{} {
+	rp.entityBorrowMu.Lock()
+	defer rp.entityBorrowMu.Unlock()
+	rp.entityBorrowFenced = true
+	if rp.entityBorrowCount == 0 {
+		return nil
+	}
+	return rp.entityBorrowDone
 }
 
 type entityWatchProvenance struct {
@@ -711,9 +778,7 @@ func (rp *Processor) dispatchEntityWatchUpdateWithProvenance(
 		if rp.entityBeforeEvalLock != nil {
 			rp.entityBeforeEvalLock(update.entityKey)
 		}
-		entry.mu.Lock()
-		if !entry.admits(update.snapshot) {
-			entry.mu.Unlock()
+		if !admitEntitySnapshot(entry, update.snapshot) {
 			rp.entityEvaluationFence.release(update.entityKey, entry)
 			return
 		}
@@ -724,8 +789,7 @@ func (rp *Processor) dispatchEntityWatchUpdateWithProvenance(
 			}
 			removedPending += rp.entityCoalescer.RemovePrefix(update.entityKey + entityWatchPendingSeparator)
 		}
-		rp.evaluateAdmittedEntitySnapshotLocked(ctx, update.entityKey, update.snapshot, bootstrap, entry)
-		entry.mu.Unlock()
+		rp.evaluateAdmittedEntitySnapshot(ctx, update.entityKey, update.snapshot, bootstrap)
 		rp.entityEvaluationFence.releaseRetained(update.entityKey, removedPending)
 		rp.entityEvaluationFence.release(update.entityKey, entry)
 		return
@@ -739,9 +803,9 @@ func (rp *Processor) dispatchEntityWatchUpdateWithProvenance(
 		if rp.entityBeforeEvalLock != nil {
 			rp.entityBeforeEvalLock(update.entityKey)
 		}
-		entry.mu.Lock()
-		rp.evaluateEntitySnapshotLocked(ctx, update.entityKey, update.snapshot, bootstrap, entry)
-		entry.mu.Unlock()
+		if admitEntitySnapshot(entry, update.snapshot) {
+			rp.evaluateAdmittedEntitySnapshot(ctx, update.entityKey, update.snapshot, bootstrap)
+		}
 		rp.entityEvaluationFence.release(update.entityKey, entry)
 		return
 	}
@@ -761,25 +825,21 @@ func (rp *Processor) dispatchEntityWatchUpdateWithProvenance(
 	rp.entityEvaluationFence.release(update.entityKey, entry)
 }
 
-func (rp *Processor) evaluateEntitySnapshotLocked(
-	ctx context.Context,
-	entityID string,
-	snapshot entitySnapshot,
-	bootstrap bool,
-	entry *entityEvaluationFenceEntry,
-) {
+func admitEntitySnapshot(entry *entityEvaluationFenceEntry, snapshot entitySnapshot) bool {
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
 	if !entry.admits(snapshot) {
-		return
+		return false
 	}
-	rp.evaluateAdmittedEntitySnapshotLocked(ctx, entityID, snapshot, bootstrap, entry)
+	entry.record(snapshot)
+	return true
 }
 
-func (rp *Processor) evaluateAdmittedEntitySnapshotLocked(
+func (rp *Processor) evaluateAdmittedEntitySnapshot(
 	ctx context.Context,
 	entityID string,
 	snapshot entitySnapshot,
 	bootstrap bool,
-	entry *entityEvaluationFenceEntry,
 ) {
 	rp.evaluateRulesForEntityState(ctx, entityID, snapshot, bootstrap)
 	if snapshot.Action == "DELETED" && rp.stateTracker != nil {
@@ -788,7 +848,6 @@ func (rp *Processor) evaluateAdmittedEntitySnapshotLocked(
 				"entity", entityID, "error", err)
 		}
 	}
-	entry.record(snapshot)
 }
 
 // evaluateEntitiesInBatch fetches current state and evaluates rules for a batch of entities.
@@ -861,24 +920,18 @@ func (rp *Processor) evaluateEntitiesInBatchInternal(
 		if !rp.graphRuleEvaluationReady() {
 			return
 		}
-		// The dispatch gate prevents watcher retirement from authorizing stale
-		// queued work. Lock ordering is dispatch gate then entity fence on every
-		// managed path, so dynamic watcher changes cannot deadlock with deletes.
-		rp.entityDispatchGate.RLock()
-		if !rp.entityPendingWorkAuthorizedLocked(workByEntity[entityID]) {
-			rp.entityDispatchGate.RUnlock()
+		releaseBorrow, admitted := rp.borrowPendingEntityEvaluation(workByEntity[entityID])
+		if !admitted {
 			continue
 		}
 		entry := rp.entityEvaluationFence.retain(entityID)
 		if rp.entityBeforeEvalLock != nil {
 			rp.entityBeforeEvalLock(entityID)
 		}
-		entry.mu.Lock()
 		snap, err := fetch(ctx, entityID)
 		if err != nil {
-			entry.mu.Unlock()
 			rp.entityEvaluationFence.release(entityID, entry)
-			rp.entityDispatchGate.RUnlock()
+			releaseBorrow()
 			if rp.markGraphStateResetRequired(entityID, err) {
 				return
 			}
@@ -887,14 +940,13 @@ func (rp *Processor) evaluateEntitiesInBatchInternal(
 			continue
 		}
 
-		// Coalesced paths only run after bootstrap completes. The entity fence is
-		// held across fetch and evaluation, so a concurrent delete is totally
-		// ordered with this snapshot; its revision watermark also drops stale
-		// work when the delete acquired the fence first.
-		rp.evaluateEntitySnapshotLocked(ctx, entityID, snap, false, entry)
-		entry.mu.Unlock()
+		// Coalesced paths only run after bootstrap completes. Revision admission
+		// is serialized briefly, then fetch/evaluation/action work runs lock-free.
+		if admitEntitySnapshot(entry, snap) {
+			rp.evaluateAdmittedEntitySnapshot(ctx, entityID, snap, false)
+		}
 		rp.entityEvaluationFence.release(entityID, entry)
-		rp.entityDispatchGate.RUnlock()
+		releaseBorrow()
 	}
 }
 

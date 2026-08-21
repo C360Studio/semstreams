@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go"
@@ -106,22 +106,38 @@ type Output struct {
 	bufferMu sync.Mutex
 
 	// Lifecycle management
-	shutdown      chan struct{}
-	done          chan struct{}
-	closeOnce     sync.Once
-	running       bool
-	startTime     time.Time
-	mu            sync.RWMutex
-	lifecycleMu   sync.Mutex
-	wg            *sync.WaitGroup
-	generation    *lifecyclejoin.Generation
-	subscriptions []*natsclient.Subscription
+	running        bool
+	startTime      time.Time
+	mu             sync.RWMutex
+	lifecycleMu    sync.Mutex
+	lifecycleUsed  bool
+	terminal       bool
+	stopping       bool
+	cleanupPending bool
+	cancel         context.CancelFunc
+	flushDone      chan struct{}
+	subscriptions  []coreSubscription
+	consumers      []streamConsumerBinding
+
+	waitForStreamInput func(context.Context, string) error
+	subscribeCore      func(context.Context, string, func(context.Context, *nats.Msg)) (coreSubscription, error)
+	consumeStream      func(context.Context, natsclient.PortConsumerContext, natsclient.StreamConsumerConfig, func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error)
+	waitConsumerClosed func(context.Context, <-chan struct{}) error
 
 	// Metrics
 	messagesWritten int64
 	bytesWritten    int64
 	errors          int64
 	lastActivity    time.Time
+}
+
+type coreSubscription interface {
+	Drain(context.Context) error
+}
+
+type streamConsumerBinding struct {
+	handle      jetstream.ConsumeContext
+	drainIssued bool
 }
 
 // NewOutput creates a new file output from configuration
@@ -189,9 +205,6 @@ func NewOutput(rawConfig json.RawMessage, deps component.Dependencies) (componen
 		natsClient:  deps.NATSClient,
 		logger:      deps.GetLogger(),
 		buffer:      make([][]byte, 0, config.BufferSize),
-		shutdown:    make(chan struct{}),
-		done:        make(chan struct{}),
-		wg:          &sync.WaitGroup{},
 	}, nil
 }
 
@@ -206,7 +219,7 @@ func (f *Output) Initialize() error {
 }
 
 // Start begins writing messages to files
-func (f *Output) Start(ctx context.Context) error {
+func (f *Output) Start(ctx context.Context) (startErr error) {
 	// Validate context
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Output", "Start", "context cannot be nil")
@@ -225,7 +238,7 @@ func (f *Output) Start(ctx context.Context) error {
 	f.lifecycleMu.Lock()
 	defer f.lifecycleMu.Unlock()
 
-	if f.running {
+	if f.lifecycleUsed {
 		return errs.WrapFatal(errs.ErrAlreadyStarted, "Output", "Start", "check running state")
 	}
 
@@ -233,12 +246,25 @@ func (f *Output) Start(ctx context.Context) error {
 		return errs.WrapFatal(errs.ErrMissingConfig, "Output", "Start", "NATS client required")
 	}
 
-	// Recreate shutdown/done channels for restart support
-	f.shutdown = make(chan struct{})
-	f.done = make(chan struct{})
-	f.closeOnce = sync.Once{}
-	f.wg = &sync.WaitGroup{}
+	parent := ctx
 	runCtx, cancel := context.WithCancel(ctx)
+	f.lifecycleUsed = true
+	f.cleanupPending = true
+	f.cancel = cancel
+	committed := false
+	defer func() {
+		if committed {
+			f.cleanupPending = false
+			return
+		}
+		rollbackErr := lifecyclecleanup.RollbackFailedStart(parent, f.cleanup)
+		startErr = errors.Join(startErr, rollbackErr)
+		if rollbackErr == nil {
+			f.cleanupPending = false
+			f.terminal = true
+			f.clearLifecycleHandles()
+		}
+	}()
 
 	// Open output file
 	var err error
@@ -249,27 +275,28 @@ func (f *Output) Start(ctx context.Context) error {
 		flags |= os.O_TRUNC
 	}
 
-	f.file, err = os.OpenFile(f.filePath, flags, 0644)
+	openedFile, err := os.OpenFile(f.filePath, flags, 0644)
 	if err != nil {
-		cancel()
 		return errs.WrapFatal(err, "Output", "Start", "open output file")
 	}
+	f.fileMu.Lock()
+	f.file = openedFile
+	f.fileMu.Unlock()
 
 	// Subscribe to input ports based on port type
 	if err := f.setupSubscriptions(runCtx); err != nil {
-		cancel()
 		return err
 	}
 
 	// Start flush goroutine
-	f.wg.Add(1)
-	go f.flushLoop()
-	f.generation = lifecyclejoin.NewGeneration(cancel, f.wg.Wait)
+	f.flushDone = make(chan struct{})
+	go f.flushLoop(runCtx, f.flushDone)
 
 	f.mu.Lock()
 	f.running = true
 	f.startTime = time.Now()
 	f.mu.Unlock()
+	committed = true
 
 	f.logger.Info("File output started",
 		"component", f.name,
@@ -299,7 +326,13 @@ func (f *Output) setupSubscriptions(ctx context.Context) error {
 			}
 
 		case component.PortKindNATS:
-			sub, err := f.natsClient.Subscribe(ctx, subject, func(ctx context.Context, msg *nats.Msg) {
+			subscribe := func(ctx context.Context, subject string, handler func(context.Context, *nats.Msg)) (coreSubscription, error) {
+				return f.natsClient.Subscribe(ctx, subject, handler)
+			}
+			if f.subscribeCore != nil {
+				subscribe = f.subscribeCore
+			}
+			sub, err := subscribe(ctx, subject, func(ctx context.Context, msg *nats.Msg) {
 				f.handleMessage(ctx, msg.Data)
 			})
 			if err != nil {
@@ -332,7 +365,11 @@ func (f *Output) setupJetStreamConsumer(ctx context.Context, port component.Port
 	subject := facts.NATSSubjects()[0]
 	streamName := stream.Name()
 
-	if err := f.waitForStream(ctx, streamName); err != nil {
+	waitForStream := f.waitForStream
+	if f.waitForStreamInput != nil {
+		waitForStream = f.waitForStreamInput
+	}
+	if err := waitForStream(ctx, streamName); err != nil {
 		return errs.WrapTransient(err, "Output", "setupJetStreamConsumer",
 			fmt.Sprintf("wait for stream %s", streamName))
 	}
@@ -364,7 +401,11 @@ func (f *Output) setupJetStreamConsumer(ctx context.Context, port component.Port
 		AutoCreate:    false,
 	}
 
-	err = f.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: f.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	consumeStream := f.natsClient.ConsumeStreamWithConfig
+	if f.consumeStream != nil {
+		consumeStream = f.consumeStream
+	}
+	handle, err := consumeStream(ctx, natsclient.PortConsumerContext{Component: f.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		f.handleMessage(msgCtx, msg.Data())
 		if ackErr := msg.Ack(); ackErr != nil {
 			f.logger.Error("Failed to ack JetStream message", "error", ackErr)
@@ -374,6 +415,7 @@ func (f *Output) setupJetStreamConsumer(ctx context.Context, port component.Port
 		return errs.WrapTransient(err, "Output", "setupJetStreamConsumer",
 			fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
+	f.consumers = append(f.consumers, streamConsumerBinding{handle: handle})
 
 	f.logger.Debug("File output subscribed (JetStream)", "subject", subject, "stream", streamName)
 	return nil
@@ -413,45 +455,101 @@ func (f *Output) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f.lifecycleMu.Lock()
-	generation := f.generation
-	if generation == nil {
+	if !f.lifecycleUsed {
+		f.lifecycleUsed = true
+		f.terminal = true
 		f.lifecycleMu.Unlock()
 		return nil
 	}
+	if f.terminal {
+		f.lifecycleMu.Unlock()
+		return nil
+	}
+	if f.stopping {
+		f.lifecycleMu.Unlock()
+		return errs.WrapTransient(errors.New("stop already in progress"), "Output", "Stop", "concurrent Stop is unsupported")
+	}
+	retryable := f.cleanupPending
+	f.stopping = true
 	f.lifecycleMu.Unlock()
-
-	return generation.Stop(ctx, func() error {
-		close(f.shutdown)
-		var stopErr error
-		for _, sub := range f.subscriptions {
-			if err := sub.Unsubscribe(); err != nil {
-				f.logger.Warn("Failed to unsubscribe", "error", err)
-				stopErr = errors.Join(stopErr, err)
-			}
-		}
-		f.subscriptions = nil
+	stopErr := f.cleanup(ctx)
+	f.lifecycleMu.Lock()
+	f.stopping = false
+	if retryable && stopErr != nil {
+		f.lifecycleMu.Unlock()
 		return stopErr
-	}, func(context.Context) error {
-		f.flush()
+	}
+	f.cleanupPending = false
+	f.terminal = true
+	f.clearLifecycleHandles()
+	f.mu.Lock()
+	f.running = false
+	f.mu.Unlock()
+	f.lifecycleMu.Unlock()
+	return stopErr
+}
 
-		var closeErr error
+func (f *Output) cleanup(ctx context.Context) error {
+	var cleanupErr error
+	for index := range f.consumers {
+		binding := &f.consumers[index]
+		if !binding.drainIssued {
+			binding.handle.Drain()
+			binding.drainIssued = true
+		}
+	}
+	for _, sub := range f.subscriptions {
+		cleanupErr = errors.Join(cleanupErr, sub.Drain(ctx))
+	}
+	for index := range f.consumers {
+		closed := f.consumers[index].handle.Closed()
+		if f.waitConsumerClosed != nil {
+			cleanupErr = errors.Join(cleanupErr, f.waitConsumerClosed(ctx, closed))
+			continue
+		}
+		select {
+		case <-closed:
+		case <-ctx.Done():
+			cleanupErr = errors.Join(cleanupErr, ctx.Err())
+		}
+	}
+	if f.cancel != nil {
+		f.cancel()
+	}
+	joined := true
+	if f.flushDone != nil {
+		select {
+		case <-f.flushDone:
+		case <-ctx.Done():
+			joined = false
+			cleanupErr = errors.Join(cleanupErr, ctx.Err())
+		}
+	}
+	if cleanupErr == nil && joined {
+		f.flush()
 		f.fileMu.Lock()
 		if f.file != nil {
 			if err := f.file.Close(); err != nil {
 				f.logger.Warn("failed to close output file", "error", err, "path", f.file.Name())
-				closeErr = err
+				cleanupErr = errors.Join(cleanupErr, err)
+			} else {
+				f.file = nil
 			}
-			f.file = nil
 		}
 		f.fileMu.Unlock()
+	}
+	return errors.Join(cleanupErr, ctx.Err())
+}
 
-		f.mu.Lock()
-		f.running = false
-		f.mu.Unlock()
-		f.closeOnce.Do(func() { close(f.done) })
-		return closeErr
-	})
+func (f *Output) clearLifecycleHandles() {
+	f.cancel = nil
+	f.flushDone = nil
+	f.subscriptions = nil
+	f.consumers = nil
 }
 
 // handleMessage processes incoming messages
@@ -493,15 +591,15 @@ func (f *Output) handleMessage(ctx context.Context, msgData []byte) {
 }
 
 // flushLoop periodically flushes the buffer
-func (f *Output) flushLoop() {
-	defer f.wg.Done()
+func (f *Output) flushLoop(ctx context.Context, done chan<- struct{}) {
+	defer close(done)
 
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-f.shutdown:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			f.flush()
@@ -618,13 +716,18 @@ func (f *Output) ConfigSchema() component.ConfigSchema {
 // Health returns the current health status
 func (f *Output) Health() component.HealthStatus {
 	f.mu.RLock()
-	defer f.mu.RUnlock()
+	running := f.running
+	startTime := f.startTime
+	f.mu.RUnlock()
+	f.fileMu.Lock()
+	fileOpen := f.file != nil
+	f.fileMu.Unlock()
 
 	return component.HealthStatus{
-		Healthy:    f.running && f.file != nil,
+		Healthy:    running && fileOpen,
 		LastCheck:  time.Now(),
 		ErrorCount: int(atomic.LoadInt64(&f.errors)),
-		Uptime:     time.Since(f.startTime),
+		Uptime:     time.Since(startTime),
 	}
 }
 

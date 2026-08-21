@@ -167,13 +167,14 @@ func TestIntegration_JetStreamMethods_RealServer(t *testing.T) {
 
 	// Test consume from stream
 	received := make(chan []byte, 1)
-	err = client.ConsumeInternalStreamWithConfig(ctx, StreamConsumerConfig{
+	consumeCtx, err := client.ConsumeInternalStreamWithConfig(ctx, StreamConsumerConfig{
 		StreamName: "UNIT_TEST", FilterSubject: "unit.test.*",
 	}, func(_ context.Context, msg jetstream.Msg) {
 		received <- msg.Data()
 		msg.Ack()
 	})
 	require.NoError(t, err)
+	t.Cleanup(consumeCtx.Stop)
 
 	// Verify message received
 	select {

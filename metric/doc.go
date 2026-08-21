@@ -26,10 +26,10 @@
 //	securityCfg := security.Config{} // Platform security config
 //	server := metric.NewServer(9090, "/metrics", registry, securityCfg)
 //
-//	if err := server.Start(); err != nil {
+//	if err := server.Start(ctx); err != nil {
 //	    log.Fatalf("Failed to start metrics server: %v", err)
 //	}
-//	defer server.Stop()
+//	defer server.Stop(shutdownCtx)
 //
 //	// Record core platform metrics
 //	coreMetrics := registry.CoreMetrics()
@@ -153,12 +153,12 @@
 //	server := metric.NewServer(8080, "/prometheus", registry, securityCfg)
 //
 //	// Start server (binds synchronously, then serves in the background)
-//	if err := server.Start(); err != nil {
+//	if err := server.Start(ctx); err != nil {
 //	    log.Fatalf("Failed to start metrics server: %v", err)
 //	}
 //
 //	// Stop server and wait for its serving goroutine to exit
-//	if err := server.Stop(); err != nil {
+//	if err := server.Stop(shutdownCtx); err != nil {
 //	    log.Printf("Error stopping server: %v", err)
 //	}
 //
@@ -248,9 +248,9 @@
 //	    }
 //	}
 //
-// The Server.Start() method returns errors for:
+// The Server.Start(ctx) method returns errors for:
 //
-//   - Server already running
+//   - Server instance already used (Server is one-shot)
 //   - Nil registry
 //   - HTTP server failures (port in use, permission denied)
 //
@@ -322,8 +322,11 @@
 // abstraction to leverage native features, avoid wrapper overhead, and ensure
 // compatibility with Prometheus ecosystem.
 //
-// Synchronous Bind in Server.Start(): Start reports listener ownership or bind
-// failure before returning, while Stop closes the listener and joins serving.
+// Synchronous Bind in Server.Start(ctx): Start reports listener ownership or bind
+// failure before returning. Server instances are one-shot. Stop(ctx) attempts
+// graceful shutdown within the caller's budget; failure or expiry triggers a
+// force-close and a separate fixed one-second join bound for the exact serving
+// goroutine. Restart uses a freshly constructed Server.
 //
 // # Examples
 //
@@ -332,6 +335,7 @@
 //	package main
 //
 //	import (
+//	    "context"
 //	    "log"
 //	    "time"
 //
@@ -346,10 +350,17 @@
 //	    // Start metrics server
 //	    securityCfg := security.Config{} // Platform security config
 //	    server := metric.NewServer(9090, "/metrics", registry, securityCfg)
-//	    if err := server.Start(); err != nil {
+//	    runtimeCtx := context.Background()
+//	    if err := server.Start(runtimeCtx); err != nil {
 //	        log.Fatalf("Failed to start metrics server: %v", err)
 //	    }
-//	    defer server.Stop()
+//	    defer func() {
+//	        shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+//	        defer cancel()
+//	        if err := server.Stop(shutdownCtx); err != nil {
+//	            log.Printf("Failed to stop metrics server: %v", err)
+//	        }
+//	    }()
 //
 //	    // Get core metrics
 //	    coreMetrics := registry.CoreMetrics()

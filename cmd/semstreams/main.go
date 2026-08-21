@@ -574,7 +574,7 @@ func runUntilShutdown(
 	// Optional dedicated health-port listener (#100). Binds /health and
 	// /healthz on a port independent of the service-manager UI's
 	// HTTPPort — convenience for Docker / k8s probes. Zero is a no-op
-	// (the default). Bind failure logs at Warn level inside the manager;
+	// (the default). Bind failure is logged here at Warn level;
 	// boot continues since the service-manager's main /health is the
 	// authoritative health surface.
 	if err := manager.StartHealthListener(runtimeCtx, healthPort); err != nil {
@@ -691,12 +691,11 @@ func printHelp() {
 // unavailability.
 func buildRuleManager(ctx context.Context, natsClient *natsclient.Client, configMgr *config.Manager, logger *slog.Logger) executors.RuleManager {
 	rcm := rulepkg.NewConfigManager(nil, configMgr, logger)
-	if err := rcm.InitializeKVStore(natsClient); err != nil {
+	if err := rcm.InitializeKVStore(ctx, natsClient); err != nil {
 		logger.Warn("rule CRUD tools disabled: could not initialise rules KV store",
 			slog.Any("error", err))
 		return nil
 	}
-	_ = ctx // reserved for future use if KV init needs a context
 	return rcm
 }
 

@@ -19,15 +19,19 @@ const spatialFetchConcurrency = 10
 
 // setupQueryHandlers sets up NATS request/reply subscriptions for query handlers
 func (c *Component) setupQueryHandlers(ctx context.Context) error {
+	subscribe := c.subscribeForRequests
+	if subscribe == nil {
+		subscribe = c.natsClient.SubscribeForRequests
+	}
 	// Subscribe to spatial bounds query
-	boundsSub, err := c.natsClient.SubscribeForRequests(ctx, "graph.spatial.query.bounds", c.handleQueryBoundsNATS)
+	boundsSub, err := subscribe(ctx, "graph.spatial.query.bounds", c.handleQueryBoundsNATS)
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupQueryHandlers", "subscribe bounds query")
 	}
 	c.querySubscriptions = append(c.querySubscriptions, boundsSub)
 
 	// Subscribe to spatial polygon-containment query (ADR-044 Phase 3).
-	polySub, err := c.natsClient.SubscribeForRequests(ctx, "graph.spatial.query.polygon", c.handleQueryPolygonNATS)
+	polySub, err := subscribe(ctx, "graph.spatial.query.polygon", c.handleQueryPolygonNATS)
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupQueryHandlers", "subscribe polygon query")
 	}

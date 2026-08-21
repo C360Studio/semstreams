@@ -57,26 +57,22 @@ func TestUpdateWatchBucketsCommitsDesiredSetWhenOldStopFails(t *testing.T) {
 		gtypes.BucketEntityStates: {oldPatternOne, oldPatternTwo},
 	}
 	processor := &Processor{
-		logger:     slog.Default(),
-		config:     &cfg,
-		watcherCtx: context.Background(),
+		logger: slog.Default(),
+		config: &cfg,
 		entityWatcherMap: map[string]jetstream.KeyWatcher{
 			oldOneKey: oldOne,
 			oldTwoKey: oldTwo,
 		},
-		entityWatcherCancels: map[string]context.CancelFunc{
-			oldOneKey: cancelOldOne,
-			oldTwoKey: cancelOldTwo,
-		},
 		entityDispatchRecords: map[string]managedEntityWatcher{
-			oldOneKey: {watcher: oldOne, generation: 1},
-			oldTwoKey: {watcher: oldTwo, generation: 2},
+			oldOneKey: {watcher: oldOne, generation: 1, cancel: cancelOldOne},
+			oldTwoKey: {watcher: oldTwo, generation: 2, cancel: cancelOldTwo},
 		},
 		entityNextGeneration: 2,
 		entityWatchers:       []jetstream.KeyWatcher{oldOne, oldTwo},
 	}
 
 	err := processor.updateWatchBucketsWithFactory(
+		context.Background(),
 		map[string][]string{gtypes.BucketEntityStates: {newPattern}},
 		func(_ context.Context, _, _ string) (jetstream.KeyWatcher, error) { return newWatcher, nil },
 	)
@@ -84,9 +80,9 @@ func TestUpdateWatchBucketsCommitsDesiredSetWhenOldStopFails(t *testing.T) {
 	require.Contains(t, err.Error(), "injected physical stop failure")
 	require.Equal(t, map[string][]string{gtypes.BucketEntityStates: {newPattern}}, processor.config.EntityWatchBuckets)
 	require.Equal(t, map[string]jetstream.KeyWatcher{newKey: newWatcher}, processor.entityWatcherMap)
-	require.NotNil(t, processor.entityWatcherCancels[newKey])
-	require.NotContains(t, processor.entityWatcherCancels, oldOneKey)
-	require.NotContains(t, processor.entityWatcherCancels, oldTwoKey)
+	require.NotNil(t, processor.entityDispatchRecords[newKey].cancel)
+	require.NotContains(t, processor.entityDispatchRecords, oldOneKey)
+	require.NotContains(t, processor.entityDispatchRecords, oldTwoKey)
 	require.True(t, oldOne.stopped.Load())
 	require.True(t, oldTwo.stopped.Load())
 
@@ -106,7 +102,7 @@ func TestUpdateWatchBucketsCommitsDesiredSetWhenOldStopFails(t *testing.T) {
 	}
 	require.Zero(t, processor.messagesEvaluated)
 
-	processor.entityWatcherCancels[newKey]()
+	processor.entityDispatchRecords[newKey].cancel()
 }
 
 func TestUpdateWatchBucketsRollsBackPreparedAdditions(t *testing.T) {
@@ -121,7 +117,6 @@ func TestUpdateWatchBucketsRollsBackPreparedAdditions(t *testing.T) {
 	processor := &Processor{
 		logger:           slog.Default(),
 		config:           &cfg,
-		watcherCtx:       context.Background(),
 		entityWatcherMap: map[string]jetstream.KeyWatcher{watcherKey(gtypes.BucketEntityStates, oldPattern): oldWatcher},
 		entityWatchers:   []jetstream.KeyWatcher{oldWatcher},
 	}
@@ -138,7 +133,7 @@ func TestUpdateWatchBucketsRollsBackPreparedAdditions(t *testing.T) {
 		return nil, errors.New("injected second watcher failure")
 	}
 
-	err := processor.updateWatchBucketsWithFactory(map[string][]string{
+	err := processor.updateWatchBucketsWithFactory(context.Background(), map[string][]string{
 		gtypes.BucketEntityStates: {"acme.new.*.*.*.*", "acme.second.*.*.*.*"},
 	}, prepare)
 	require.Error(t, err)
@@ -172,15 +167,13 @@ func TestRetiredGenerationCannotDispatchDecodedUpdate(t *testing.T) {
 	oldKey := watcherKey(gtypes.BucketEntityStates, oldPattern)
 	newKey := watcherKey(gtypes.BucketEntityStates, newPattern)
 	oldCtx, oldCancel := context.WithCancel(context.Background())
-	processor.watcherCtx = context.Background()
 	processor.config.EntityWatchBuckets = map[string][]string{
 		gtypes.BucketEntityStates: {oldPattern},
 	}
 	processor.entityWatchers = []jetstream.KeyWatcher{oldWatcher}
 	processor.entityWatcherMap = map[string]jetstream.KeyWatcher{oldKey: oldWatcher}
-	processor.entityWatcherCancels = map[string]context.CancelFunc{oldKey: oldCancel}
 	processor.entityDispatchRecords = map[string]managedEntityWatcher{
-		oldKey: {watcher: oldWatcher, generation: 1},
+		oldKey: {watcher: oldWatcher, generation: 1, cancel: oldCancel},
 	}
 	processor.entityNextGeneration = 1
 
@@ -206,6 +199,7 @@ func TestRetiredGenerationCannotDispatchDecodedUpdate(t *testing.T) {
 	updateDone := make(chan error, 1)
 	go func() {
 		updateDone <- processor.updateWatchBucketsWithFactory(
+			context.Background(),
 			map[string][]string{gtypes.BucketEntityStates: {newPattern}},
 			func(_ context.Context, _, _ string) (jetstream.KeyWatcher, error) {
 				return newWatcher, nil
@@ -229,7 +223,7 @@ func TestRetiredGenerationCannotDispatchDecodedUpdate(t *testing.T) {
 	}
 	require.Zero(t, rule.evaluated.Load(), "retired decoded update must not reach rule evaluation")
 
-	processor.entityWatcherCancels[newKey]()
+	processor.entityDispatchRecords[newKey].cancel()
 	require.NoError(t, newWatcher.Stop())
 }
 
@@ -290,13 +284,11 @@ func TestUpdateWatchBucketsToZeroPatternsRetiresAllWatchers(t *testing.T) {
 	cfg := mustTestConfig(t, "watcher-zero-pattern-test")
 	cfg.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {oldPattern}}
 	processor := &Processor{
-		logger:               slog.Default(),
-		config:               &cfg,
-		watcherCtx:           context.Background(),
-		entityWatcherMap:     map[string]jetstream.KeyWatcher{oldKey: oldWatcher},
-		entityWatcherCancels: map[string]context.CancelFunc{oldKey: cancelOld},
+		logger:           slog.Default(),
+		config:           &cfg,
+		entityWatcherMap: map[string]jetstream.KeyWatcher{oldKey: oldWatcher},
 		entityDispatchRecords: map[string]managedEntityWatcher{
-			oldKey: {watcher: oldWatcher, generation: 1},
+			oldKey: {watcher: oldWatcher, generation: 1, cancel: cancelOld},
 		},
 		entityNextGeneration: 1,
 		entityWatchers:       []jetstream.KeyWatcher{oldWatcher},
@@ -304,6 +296,7 @@ func TestUpdateWatchBucketsToZeroPatternsRetiresAllWatchers(t *testing.T) {
 
 	factoryCalls := 0
 	err := processor.updateWatchBucketsWithFactory(
+		context.Background(),
 		map[string][]string{},
 		func(context.Context, string, string) (jetstream.KeyWatcher, error) {
 			factoryCalls++
@@ -327,11 +320,11 @@ func TestUpdateWatchBucketsRejectsDuplicatePatternsBeforePrepare(t *testing.T) {
 	processor := &Processor{
 		logger:           slog.Default(),
 		config:           &cfg,
-		watcherCtx:       context.Background(),
 		entityWatcherMap: make(map[string]jetstream.KeyWatcher),
 	}
 	prepareCalls := 0
 	err := processor.updateWatchBucketsWithFactory(
+		context.Background(),
 		map[string][]string{
 			gtypes.BucketEntityStates: {
 				"acme.new.*.*.*.*",
@@ -348,6 +341,5 @@ func TestUpdateWatchBucketsRejectsDuplicatePatternsBeforePrepare(t *testing.T) {
 	require.Zero(t, prepareCalls)
 	require.Equal(t, original, processor.config.EntityWatchBuckets)
 	require.Empty(t, processor.entityWatcherMap)
-	require.Empty(t, processor.entityWatcherCancels)
 	require.Empty(t, processor.entityWatchers)
 }

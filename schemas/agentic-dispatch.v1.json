@@ -30,12 +30,6 @@
       },
       "category": "advanced"
     },
-    "delete_consumer_on_stop": {
-      "type": "boolean",
-      "description": "Delete durable consumers on Stop (use for tests only)",
-      "default": false,
-      "category": "advanced"
-    },
     "enable_intent_classification": {
       "type": "boolean",
       "description": "Enable LLM-assisted intent classification for ambiguous messages",

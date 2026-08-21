@@ -146,6 +146,44 @@ type blockingPolicyInfo struct {
 	release chan struct{}
 }
 
+type blockingTrackedConsumer struct {
+	jetstream.Consumer
+	started chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingTrackedConsumer) Info(context.Context) (*jetstream.ConsumerInfo, error) {
+	close(b.started)
+	<-b.release
+	return &jetstream.ConsumerInfo{Stream: "EVENTS", Name: "internal-events"}, nil
+}
+
+func TestJetStreamConsumerClosedCannotBeUndoneByInflightRefresh(t *testing.T) {
+	metrics, err := newJetStreamMetrics(metric.NewMetricsRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle := &blockingTrackedConsumer{started: make(chan struct{}), release: make(chan struct{})}
+	metrics.trackConsumer("EVENTS", "internal-events", handle)
+	done := make(chan struct{})
+	go func() {
+		metrics.updateStats(context.Background())
+		close(done)
+	}()
+	<-handle.started
+	metrics.forgetConsumer("EVENTS", "internal-events")
+	close(handle.release)
+	<-done
+
+	count := testutil.CollectAndCount(metrics.consumerPending) +
+		testutil.CollectAndCount(metrics.consumerDelivered) +
+		testutil.CollectAndCount(metrics.consumerAcked) +
+		testutil.CollectAndCount(metrics.consumerRedelivered)
+	if count != 0 {
+		t.Fatalf("in-flight refresh recreated %d Closed consumer series", count)
+	}
+}
+
 func (b *blockingPolicyInfo) Info(context.Context) (*jetstream.ConsumerInfo, error) {
 	close(b.started)
 	<-b.release

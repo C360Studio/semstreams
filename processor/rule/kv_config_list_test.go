@@ -30,7 +30,11 @@ func TestListRules_KVStorePath(t *testing.T) {
 	// usage from cmd/semstreams/main.go:buildRuleManager takes this
 	// exact shape so the test mirrors production.
 	rcm := NewConfigManager(nil, nil, nil)
-	require.NoError(t, rcm.InitializeKVStore(tc.Client))
+	require.NoError(t, rcm.InitializeKVStore(ctx, tc.Client))
+	rcm.mu.RLock()
+	kvStore := rcm.kvStore
+	rcm.mu.RUnlock()
+	require.NotNil(t, kvStore, "successful InitializeKVStore must publish immediate KV capability")
 
 	// Seed two rule definitions + one non-rule key in the same bucket.
 	// The non-rule key (config.other) proves the namespace filter works.
@@ -53,7 +57,7 @@ func TestListRules_KVStorePath(t *testing.T) {
 
 	// Poison the bucket with a non-rules key. Manager's ListRules must
 	// skip it (StringPrefix check on "rules.").
-	_, err := rcm.kvStore.Put(ctx, "config.unrelated", []byte(`{"junk": true}`))
+	_, err := kvStore.Put(ctx, "config.unrelated", []byte(`{"junk": true}`))
 	require.NoError(t, err)
 
 	rules, err := rcm.ListRules(ctx)
@@ -84,8 +88,7 @@ func TestListRules_EmptyBucketReturnsEmptyMap(t *testing.T) {
 	defer cancel()
 
 	rcm := NewConfigManager(nil, nil, nil)
-	require.NoError(t, rcm.InitializeKVStore(tc.Client))
-
+	require.NoError(t, rcm.InitializeKVStore(context.Background(), tc.Client))
 	rules, err := rcm.ListRules(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, rules)
@@ -104,13 +107,15 @@ func TestListRules_SkipsUnmarshalFailures(t *testing.T) {
 	defer cancel()
 
 	rcm := NewConfigManager(nil, nil, nil)
-	require.NoError(t, rcm.InitializeKVStore(tc.Client))
+	require.NoError(t, rcm.InitializeKVStore(context.Background(), tc.Client))
+	kvStore, err := rcm.ensureKVStore(ctx)
+	require.NoError(t, err)
 
 	// Write a valid rule + a corrupt one.
 	require.NoError(t, rcm.SaveRule(ctx, "good", Definition{
 		ID: "good", Type: "expression", Name: "Good", Enabled: true,
 	}))
-	_, err := rcm.kvStore.Put(ctx, "rules.bad", []byte("{not valid json"))
+	_, err = kvStore.Put(ctx, "rules.bad", []byte("{not valid json"))
 	require.NoError(t, err)
 
 	rules, err := rcm.ListRules(ctx)

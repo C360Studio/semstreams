@@ -17,7 +17,7 @@ import (
 	"github.com/c360studio/semstreams/agentic/research"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph/llm"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
@@ -45,10 +45,15 @@ type Component struct {
 
 	llmClient llm.Client
 
-	mu         sync.RWMutex
-	started    bool
-	startTime  time.Time
-	generation *lifecyclejoin.Generation
+	mu             sync.RWMutex
+	started        bool
+	startTime      time.Time
+	cancel         context.CancelFunc
+	startDone      chan struct{}
+	cleanupPending bool
+	stopping       bool
+	terminal       bool
+	used           bool
 
 	subscriptions []*natsclient.Subscription
 
@@ -129,20 +134,38 @@ func (c *Component) Start(ctx context.Context) (startErr error) {
 	}
 
 	c.mu.Lock()
-	if c.generation != nil {
+	if c.used {
 		c.mu.Unlock()
-		return errs.WrapFatal(errs.ErrAlreadyStarted, ComponentName, "Start", "already started")
+		return errs.WrapFatal(errs.ErrAlreadyStarted, ComponentName, "Start", "component instance already used")
 	}
 	runCtx, cancel := context.WithCancel(ctx)
-	generation := lifecyclejoin.NewGeneration(cancel, nil)
-	c.generation = generation
+	startDone := make(chan struct{})
+	c.used = true
+	c.cancel = cancel
+	c.startDone = startDone
+	c.cleanupPending = true
 	c.mu.Unlock()
 	committed := false
 	defer func() {
-		if committed {
+		if !committed {
+			rollbackErr := lifecyclecleanup.RollbackFailedStart(ctx, c.cleanupResources)
+			startErr = errors.Join(startErr, rollbackErr)
+			c.mu.Lock()
+			if rollbackErr == nil {
+				c.cleanupPending = false
+				c.cancel = nil
+				c.terminal = true
+			}
+			close(startDone)
+			c.startDone = nil
+			c.mu.Unlock()
 			return
 		}
-		startErr = errors.Join(startErr, lifecyclejoin.RunPartialStartRollback(c.Stop))
+		c.mu.Lock()
+		c.cleanupPending = false
+		close(startDone)
+		c.startDone = nil
+		c.mu.Unlock()
 	}()
 
 	if err := c.openLoopsBucket(runCtx); err != nil {
@@ -246,43 +269,82 @@ func (c *Component) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-	c.mu.Lock()
-	generation := c.generation
-	if generation == nil {
-		c.mu.Unlock()
-		return nil
-	}
-	c.mu.Unlock()
-
-	stopErr := generation.Stop(ctx, nil, func(ctx context.Context) error {
-		var drainErr error
-		for _, sub := range c.subscriptions {
-			if sub != nil {
-				drainErr = errors.Join(drainErr, sub.Drain(ctx))
+	for {
+		c.mu.Lock()
+		if !c.used {
+			c.used = true
+			c.terminal = true
+			c.mu.Unlock()
+			return nil
+		}
+		if c.terminal {
+			c.mu.Unlock()
+			return nil
+		}
+		startDone := c.startDone
+		if startDone == nil {
+			if c.stopping {
+				c.mu.Unlock()
+				return errs.WrapTransient(errors.New("stop already in progress"), ComponentName, "Stop", "concurrent Stop is unsupported")
 			}
+			cleanupPending := c.cleanupPending
+			c.stopping = true
+			c.mu.Unlock()
+
+			stopErr := c.cleanupResources(ctx)
+			c.mu.Lock()
+			c.stopping = false
+			c.started = false
+			if cleanupPending {
+				if stopErr == nil {
+					c.cleanupPending = false
+					c.cancel = nil
+					c.terminal = true
+				}
+			} else {
+				c.cancel = nil
+				c.terminal = true
+			}
+			c.mu.Unlock()
+			return stopErr
 		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return errors.Join(drainErr, ctxErr)
-		}
-		c.subscriptions = nil
-		var closeErr error
-		if c.llmClient != nil {
-			closeErr = c.llmClient.Close()
-			c.llmClient = nil
-		}
-		c.mu.Lock()
-		c.started = false
 		c.mu.Unlock()
-		return errors.Join(drainErr, closeErr)
-	})
-	if stopErr == nil {
-		c.mu.Lock()
-		if c.generation == generation {
-			c.generation = nil
+		select {
+		case <-startDone:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-		c.mu.Unlock()
 	}
-	return stopErr
+}
+
+func (c *Component) cleanupResources(ctx context.Context) error {
+	var drainErr error
+	for _, sub := range c.subscriptions {
+		if sub != nil {
+			drainErr = errors.Join(drainErr, sub.Drain(ctx))
+		}
+	}
+	c.mu.RLock()
+	cancel := c.cancel
+	client := c.llmClient
+	c.mu.RUnlock()
+	if cancel != nil {
+		cancel()
+	}
+
+	var closeErr error
+	if drainErr == nil && client != nil {
+		closeErr = client.Close()
+	}
+	cleanupErr := errors.Join(drainErr, closeErr, ctx.Err())
+	c.mu.Lock()
+	if cleanupErr == nil {
+		c.subscriptions = nil
+		c.llmClient = nil
+	}
+	c.started = false
+	c.mu.Unlock()
+	return cleanupErr
 }
 
 // handleMessage is the per-message hot path. Loads upstream Intent +

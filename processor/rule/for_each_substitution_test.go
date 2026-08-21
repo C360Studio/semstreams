@@ -1,6 +1,7 @@
 package rule
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -20,7 +21,7 @@ import (
 func TestSubstituteVariablesWithIterVar_BindsOverlay(t *testing.T) {
 	ec := &ExecutionContext{EntityID: "acme.ops.robot.gcs.drone.001"}
 
-	got := ec.SubstituteVariablesWithIterVar("subtopic=$subtopic for $entity.id", "subtopic", "hydraulics")
+	got := ec.SubstituteVariablesWithIterVar(context.Background(), "subtopic=$subtopic for $entity.id", "subtopic", "hydraulics")
 	assert.Equal(t, "subtopic=hydraulics for acme.ops.robot.gcs.drone.001", got)
 }
 
@@ -31,7 +32,7 @@ func TestSubstituteVariablesWithIterVar_BindsOverlay(t *testing.T) {
 func TestSubstituteVariablesWithIterVar_EmptyVarNameDegenerates(t *testing.T) {
 	ec := &ExecutionContext{EntityID: "acme.ops.robot.gcs.drone.001"}
 
-	got := ec.SubstituteVariablesWithIterVar("hello $entity.id", "", "ignored")
+	got := ec.SubstituteVariablesWithIterVar(context.Background(), "hello $entity.id", "", "ignored")
 	assert.Equal(t, "hello acme.ops.robot.gcs.drone.001", got)
 }
 

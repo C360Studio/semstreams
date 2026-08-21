@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -20,6 +21,51 @@ type recordingKVProvider struct {
 	createCalls []string
 	getErr      error
 }
+
+type exactContextKVProvider struct {
+	want context.Context
+	kv   *exactContextKV
+}
+
+func (p *exactContextKVProvider) GetKeyValueBucket(
+	ctx context.Context, _ string,
+) (jetstream.KeyValue, error) {
+	if ctx != p.want {
+		return nil, errors.New("bucket lookup did not receive exact request context")
+	}
+	return p.kv, nil
+}
+
+type exactContextKV struct {
+	jetstream.KeyValue
+	want     context.Context
+	keysSeen bool
+	getSeen  bool
+}
+
+func (kv *exactContextKV) Keys(ctx context.Context, _ ...jetstream.WatchOpt) ([]string, error) {
+	if ctx != kv.want {
+		return nil, errors.New("Keys did not receive exact request context")
+	}
+	kv.keysSeen = true
+	return []string{"entity.one"}, nil
+}
+
+func (kv *exactContextKV) Get(ctx context.Context, _ string) (jetstream.KeyValueEntry, error) {
+	if ctx != kv.want {
+		return nil, errors.New("Get did not receive exact request context")
+	}
+	kv.getSeen = true
+	return exactContextKVEntry{}, nil
+}
+
+type exactContextKVEntry struct {
+	jetstream.KeyValueEntry
+}
+
+func (exactContextKVEntry) Value() []byte      { return []byte(`{"status":"ready"}`) }
+func (exactContextKVEntry) Revision() uint64   { return 1 }
+func (exactContextKVEntry) Created() time.Time { return time.Unix(1, 0) }
 
 func (p *recordingKVProvider) GetKeyValueBucket(_ context.Context, name string) (jetstream.KeyValue, error) {
 	p.getCalls = append(p.getCalls, name)
@@ -154,5 +200,24 @@ func TestHandleKVQuery_LookupFailureReturns500(t *testing.T) {
 
 	if len(provider.createCalls) != 0 {
 		t.Errorf("endpoint created bucket(s) %v on a transport failure", provider.createCalls)
+	}
+}
+
+func TestHandleKVQueryPassesExactRequestContextToKeysAndGet(t *testing.T) {
+	ml := newKVQueryTestLogger()
+	type requestContextKey struct{}
+	requestCtx := context.WithValue(t.Context(), requestContextKey{}, "request-value")
+	kv := &exactContextKV{want: requestCtx}
+	provider := &exactContextKVProvider{want: requestCtx, kv: kv}
+	req := httptest.NewRequest(http.MethodGet, "/message-logger/kv/ENTITY_STATES", nil).WithContext(requestCtx)
+	rec := httptest.NewRecorder()
+
+	ml.handleKVQueryWith(rec, req, provider)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	if !kv.keysSeen || !kv.getSeen {
+		t.Fatalf("request context calls: Keys=%t Get=%t, want both", kv.keysSeen, kv.getSeen)
 	}
 }

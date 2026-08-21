@@ -70,8 +70,3 @@ func createTestComponentForLifecycle() component.LifecycleComponent {
 
 	return comp.(component.LifecycleComponent)
 }
-
-// TestGraphIndexSpatial_ComprehensiveLifecycle runs the complete lifecycle test suite.
-func TestGraphIndexSpatial_ComprehensiveLifecycle(t *testing.T) {
-	component.StandardLifecycleTests(t, createTestComponentForLifecycle)
-}

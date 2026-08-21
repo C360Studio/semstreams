@@ -1,6 +1,7 @@
 package rule
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -108,7 +109,7 @@ func TestExecutionContext_ScheduleAndEntityCoexist(t *testing.T) {
 
 	in := "rule=$schedule.id entity=$entity.id role=$entity.triple.test.agent.role last=$schedule.last_fired_at"
 	want := "rule=weekly entity=" + entityID + " role=scout last=2026-04-27T09:00:00Z"
-	if got := ec.SubstituteVariables(in); got != want {
+	if got := ec.SubstituteVariables(context.Background(), in); got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
 }
@@ -126,7 +127,7 @@ func TestExecutionContext_ScheduleTokenInExpressionRuleSurvives(t *testing.T) {
 	}
 
 	in := "$schedule.id"
-	out := ec.SubstituteVariables(in)
+	out := ec.SubstituteVariables(context.Background(), in)
 	if out != in {
 		t.Errorf("got %q, want unchanged %q (cron-only $schedule.* must not silently empty in expression-rule path)", out, in)
 	}
@@ -192,7 +193,7 @@ func TestExecutionContext_SubstituteVariables_ScheduleNamespace(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tt.ec.SubstituteVariables(tt.template)
+			got := tt.ec.SubstituteVariables(context.Background(), tt.template)
 			if got != tt.want {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
@@ -223,7 +224,7 @@ func TestSubstituteVariables_AgentRunTripleResolves(t *testing.T) {
 		},
 	}
 
-	got := ec.SubstituteVariables("$entity.triple.agent.loop.run")
+	got := ec.SubstituteVariables(context.Background(), "$entity.triple.agent.loop.run")
 	if got != "root-loop-uuid" {
 		t.Errorf("$entity.triple.agent.loop.run resolved to %q, want %q", got, "root-loop-uuid")
 	}
@@ -231,7 +232,7 @@ func TestSubstituteVariables_AgentRunTripleResolves(t *testing.T) {
 	// ADR-053 follow-up: the 6-part run entity ID is the rule-addressable upsert
 	// subject. $entity.triple.agent.run.entity-id must resolve to the full ID so a
 	// rule can use it as an add_triple/update_triple Subject.
-	gotEntity := ec.SubstituteVariables("$entity.triple.agent.run.entity-id")
+	gotEntity := ec.SubstituteVariables(context.Background(), "$entity.triple.agent.run.entity-id")
 	if want := "acme.ops.agent.chain.execution.root-loop-uuid"; gotEntity != want {
 		t.Errorf("$entity.triple.agent.run.entity-id resolved to %q, want %q", gotEntity, want)
 	}
@@ -245,7 +246,7 @@ func TestSubstituteVariables_AgentRunTripleResolves(t *testing.T) {
 			Triples: []message.Triple{},
 		},
 	}
-	absent := ecNoTriple.SubstituteVariables("$entity.triple.agent.loop.run")
+	absent := ecNoTriple.SubstituteVariables(context.Background(), "$entity.triple.agent.loop.run")
 	if absent == "root-loop-uuid" {
 		t.Errorf("absent agent.loop.run triple must not resolve to a value, got %q", absent)
 	}

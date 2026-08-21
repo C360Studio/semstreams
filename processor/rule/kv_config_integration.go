@@ -39,16 +39,25 @@ const hotReloadDebounce = 250 * time.Millisecond
 type ConfigManager struct {
 	// processor is nil for the Pattern-B CRUD-only path. When non-nil, the
 	// ConfigManager drives hot-reload via SeedFromRuntime + reconcileFromKV.
-	processor *Processor
-	kvStore   *natsclient.KVStore
+	processor  *Processor
+	kvStore    *natsclient.KVStore
+	natsClient *natsclient.Client
 	// configMgr is retained for callers that pass it; no longer used for the
 	// watch subscription (rules.* is not in config.Manager's watch list).
 	configMgr *config.Manager
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
 	logger    *slog.Logger
 	mu        sync.RWMutex
+
+	lifecycleMu    sync.Mutex
+	lifecycleUsed  bool
+	terminal       bool
+	stopping       bool
+	cleanupPending bool
+	startDone      chan struct{}
+	cancel         context.CancelFunc
+	watcher        jetstream.KeyWatcher
+	done           chan struct{}
+	watchRules     func(context.Context, *natsclient.KVStore) (jetstream.KeyWatcher, error)
 
 	// reconcileCount is incremented each time reconcileFromKV completes. It is
 	// only meaningful in test scenarios; production code should not depend on it.
@@ -62,13 +71,9 @@ func NewConfigManager(processor *Processor, configMgr *config.Manager, logger *s
 		logger = slog.Default()
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-
 	return &ConfigManager{
 		processor: processor,
 		configMgr: configMgr,
-		ctx:       ctx,
-		cancel:    cancel,
 		logger:    logger.With("component", "rule-config-manager"),
 	}
 }
@@ -83,54 +88,165 @@ func NewConfigManager(processor *Processor, configMgr *config.Manager, logger *s
 //  2. Opens a KV watcher on "rules.*".
 //  3. Spawns a goroutine that debounces watcher events and calls
 //     reconcileFromKV on each coalesced burst.
-func (rcm *ConfigManager) Start(_ context.Context) error {
+func (rcm *ConfigManager) Start(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "ConfigManager", "Start", "context cannot be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return errs.WrapInvalid(err, "ConfigManager", "Start", "context already cancelled")
+	}
+	rcm.lifecycleMu.Lock()
+	if rcm.lifecycleUsed {
+		rcm.lifecycleMu.Unlock()
+		return errs.WrapInvalid(errs.ErrAlreadyStarted, "ConfigManager", "Start", "cleanup authority already active")
+	}
+	rcm.lifecycleUsed = true
+	rcm.cleanupPending = true
+	rcm.startDone = make(chan struct{})
+	startDone := rcm.startDone
+	runCtx, cancel := context.WithCancel(ctx)
+	rcm.cancel = cancel
+	rcm.lifecycleMu.Unlock()
+
+	finish := func(committed bool) {
+		rcm.lifecycleMu.Lock()
+		if committed {
+			rcm.cleanupPending = false
+		} else {
+			cancel()
+			rcm.cleanupPending = false
+			rcm.terminal = true
+			rcm.cancel = nil
+		}
+		close(startDone)
+		rcm.startDone = nil
+		rcm.lifecycleMu.Unlock()
+	}
 	// Guard: CRUD-only manager (processor nil) — no watcher needed.
-	if rcm.processor == nil || rcm.kvStore == nil {
+	if rcm.processor == nil {
 		rcm.logger.Debug("Rule config manager started in CRUD-only mode (no hot-reload watcher)")
+		finish(true)
 		return nil
+	}
+	if _, err := rcm.ensureKVStore(ctx); err != nil {
+		finish(false)
+		return err
 	}
 
 	// Seed any file-loaded rules idempotently before opening the watcher.
-	if err := rcm.SeedFromRuntime(rcm.ctx); err != nil {
+	if err := rcm.SeedFromRuntime(runCtx); err != nil {
 		// Non-fatal: component runs with whatever is already in KV.
 		rcm.logger.Warn("SeedFromRuntime completed with errors; some file rules may not be in KV",
 			"error", err)
 	}
 
-	watcher, err := rcm.kvStore.Watch(rcm.ctx, "rules.*")
+	rcm.mu.RLock()
+	kvStore := rcm.kvStore
+	rcm.mu.RUnlock()
+	watchRules := rcm.watchRules
+	if watchRules == nil {
+		watchRules = func(watchCtx context.Context, store *natsclient.KVStore) (jetstream.KeyWatcher, error) {
+			return store.Watch(watchCtx, "rules.*")
+		}
+	}
+	watcher, err := watchRules(runCtx, kvStore)
 	if err != nil {
 		// Hot-reload silently disabled; processor still runs with file rules.
 		rcm.logger.Warn("Failed to open KV watcher for rules.*, hot-reload disabled", "error", err)
+		finish(true)
 		return nil
 	}
+	if err := runCtx.Err(); err != nil {
+		// Stop may cancel an in-flight acquisition whose implementation still
+		// returns a handle. The acquiring goroutine owns that late handle: stop it
+		// before terminalizing, and never publish it as running state that Stop's
+		// already-taken acquisition fence could miss.
+		stopErr := watcher.Stop()
+		finish(false)
+		return errors.Join(err, stopErr)
+	}
+	done := make(chan struct{})
+	rcm.lifecycleMu.Lock()
+	rcm.cancel = cancel
+	rcm.watcher = watcher
+	rcm.done = done
+	rcm.lifecycleMu.Unlock()
 
-	rcm.wg.Add(1)
-	go rcm.processKVUpdates(watcher)
+	go rcm.processKVUpdates(runCtx, watcher, done)
 
 	rcm.logger.Info("Rule configuration hot-reload watcher started", "pattern", "rules.*")
+	finish(true)
 	return nil
 }
 
 // Stop stops the configuration manager and waits for the watcher goroutine
 // to exit cleanly.
 func (rcm *ConfigManager) Stop() error {
-	rcm.cancel()
-	rcm.wg.Wait()
-	rcm.logger.Info("Rule configuration manager stopped")
-	return nil
+	for {
+		rcm.lifecycleMu.Lock()
+		if !rcm.lifecycleUsed {
+			rcm.lifecycleUsed = true
+			rcm.terminal = true
+			rcm.lifecycleMu.Unlock()
+			return nil
+		}
+		if rcm.terminal {
+			rcm.lifecycleMu.Unlock()
+			return nil
+		}
+		if rcm.startDone != nil {
+			startDone := rcm.startDone
+			cancel := rcm.cancel
+			rcm.lifecycleMu.Unlock()
+			// Cleanup authority is published before watcher acquisition. A Stop
+			// racing Start cancels that exact attempt, then joins startDone before
+			// selecting the acquired-watcher or no-watcher cleanup path.
+			if cancel != nil {
+				cancel()
+			}
+			<-startDone
+			continue
+		}
+		if rcm.stopping {
+			rcm.lifecycleMu.Unlock()
+			return errors.New("rule configuration manager: concurrent Stop")
+		}
+		rcm.stopping = true
+		cancel := rcm.cancel
+		watcher := rcm.watcher
+		done := rcm.done
+		rcm.lifecycleMu.Unlock()
+
+		var stopErr error
+		if watcher != nil {
+			stopErr = watcher.Stop()
+		}
+		if cancel != nil {
+			cancel()
+		}
+		if done != nil {
+			<-done
+		}
+
+		rcm.lifecycleMu.Lock()
+		rcm.stopping = false
+		rcm.cleanupPending = false
+		rcm.terminal = true
+		rcm.cancel = nil
+		rcm.watcher = nil
+		rcm.done = nil
+		rcm.lifecycleMu.Unlock()
+		rcm.logger.Info("Rule configuration manager stopped")
+		return stopErr
+	}
 }
 
 // processKVUpdates is the watcher goroutine. It applies a 250 ms debounce:
 // successive events within the window are collapsed into a single
 // reconcileFromKV call. All reconcile work runs inside this goroutine so
 // the WaitGroup correctly gates Stop().
-func (rcm *ConfigManager) processKVUpdates(watcher jetstream.KeyWatcher) {
-	defer rcm.wg.Done()
-	defer func() {
-		if err := watcher.Stop(); err != nil && !errors.Is(err, context.Canceled) {
-			rcm.logger.Debug("KV watcher stop error (expected on shutdown)", "error", err)
-		}
-	}()
+func (rcm *ConfigManager) processKVUpdates(ctx context.Context, watcher jetstream.KeyWatcher, done chan<- struct{}) {
+	defer close(done)
 
 	// pendingReconcile is a timer channel; nil means no pending reconcile.
 	var timerCh <-chan time.Time
@@ -152,7 +268,7 @@ func (rcm *ConfigManager) processKVUpdates(watcher jetstream.KeyWatcher) {
 
 	for {
 		select {
-		case <-rcm.ctx.Done():
+		case <-ctx.Done():
 			if timer != nil {
 				timer.Stop()
 			}
@@ -172,7 +288,7 @@ func (rcm *ConfigManager) processKVUpdates(watcher jetstream.KeyWatcher) {
 		case <-timerCh:
 			timerCh = nil
 			timer = nil
-			if err := rcm.reconcileFromKV(rcm.ctx); err != nil {
+			if err := rcm.reconcileFromKV(ctx); err != nil {
 				rcm.logger.Error("Rule hot-reload reconcile failed", "error", err)
 			}
 		}
@@ -244,7 +360,13 @@ func (rcm *ConfigManager) ReconcileCount() int {
 // Partial failures are logged but do not abort seeding. The method returns nil
 // even when individual writes fail so that hot-reload startup is not blocked.
 func (rcm *ConfigManager) SeedFromRuntime(ctx context.Context) error {
-	if rcm.processor == nil || rcm.kvStore == nil {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "ConfigManager", "SeedFromRuntime", "context cannot be nil")
+	}
+	rcm.mu.RLock()
+	kvStore := rcm.kvStore
+	rcm.mu.RUnlock()
+	if rcm.processor == nil || kvStore == nil {
 		return nil
 	}
 
@@ -268,7 +390,7 @@ func (rcm *ConfigManager) SeedFromRuntime(ctx context.Context) error {
 			continue
 		}
 		key := fmt.Sprintf("rules.%s", ruleID)
-		if _, err := rcm.kvStore.Create(ctx, key, data); err != nil {
+		if _, err := kvStore.Create(ctx, key, data); err != nil {
 			if errors.Is(err, natsclient.ErrKVKeyExists) {
 				// Operator edit in KV — preserve it.
 				rcm.logger.Debug("SeedFromRuntime: rule already in KV, preserving operator edit",
@@ -287,8 +409,9 @@ func (rcm *ConfigManager) SeedFromRuntime(ctx context.Context) error {
 
 // SaveRule saves a rule configuration to NATS KV.
 func (rcm *ConfigManager) SaveRule(ctx context.Context, ruleID string, ruleDef Definition) error {
-	if rcm.kvStore == nil {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "ConfigManager", "SaveRule", "kvStore not initialised")
+	kvStore, err := rcm.ensureKVStore(ctx)
+	if err != nil {
+		return err
 	}
 	if err := ValidateDefinition(ruleDef); err != nil {
 		return errs.WrapInvalid(err, "ConfigManager", "SaveRule", "validate rule authoring contract")
@@ -298,26 +421,28 @@ func (rcm *ConfigManager) SaveRule(ctx context.Context, ruleID string, ruleDef D
 	if err != nil {
 		return errs.WrapInvalid(err, "ConfigManager", "SaveRule", "marshal rule definition")
 	}
-	_, err = rcm.kvStore.Put(ctx, key, data)
+	_, err = kvStore.Put(ctx, key, data)
 	return err
 }
 
 // DeleteRule removes a rule configuration from NATS KV.
 func (rcm *ConfigManager) DeleteRule(ctx context.Context, ruleID string) error {
-	if rcm.kvStore == nil {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "ConfigManager", "DeleteRule", "kvStore not initialised")
+	kvStore, err := rcm.ensureKVStore(ctx)
+	if err != nil {
+		return err
 	}
 	key := fmt.Sprintf("rules.%s", ruleID)
-	return rcm.kvStore.Delete(ctx, key)
+	return kvStore.Delete(ctx, key)
 }
 
 // GetRule retrieves a rule configuration from NATS KV.
 func (rcm *ConfigManager) GetRule(ctx context.Context, ruleID string) (*Definition, error) {
-	if rcm.kvStore == nil {
-		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "ConfigManager", "GetRule", "kvStore not initialised")
+	kvStore, ensureErr := rcm.ensureKVStore(ctx)
+	if ensureErr != nil {
+		return nil, ensureErr
 	}
 	key := fmt.Sprintf("rules.%s", ruleID)
-	entry, err := rcm.kvStore.Get(ctx, key)
+	entry, err := kvStore.Get(ctx, key)
 	if err != nil {
 		if err == jetstream.ErrKeyNotFound {
 			return nil, errs.WrapInvalid(errs.ErrKeyNotFound, "ConfigManager", "GetRule", fmt.Sprintf("rule not found: %s", ruleID))
@@ -343,8 +468,15 @@ func (rcm *ConfigManager) GetRule(ctx context.Context, ruleID string) (*Definiti
 func (rcm *ConfigManager) ListRules(ctx context.Context) (map[string]Definition, error) {
 	rules := make(map[string]Definition)
 
-	if rcm.kvStore != nil {
-		keys, err := rcm.kvStore.Keys(ctx)
+	rcm.mu.RLock()
+	hasKVAuthority := rcm.natsClient != nil || rcm.kvStore != nil
+	rcm.mu.RUnlock()
+	if hasKVAuthority {
+		kvStore, err := rcm.ensureKVStore(ctx)
+		if err != nil {
+			return nil, err
+		}
+		keys, err := kvStore.Keys(ctx)
 		if err != nil {
 			return nil, errs.WrapTransient(err, "ConfigManager", "ListRules", "list keys from KV")
 		}
@@ -355,7 +487,7 @@ func (rcm *ConfigManager) ListRules(ctx context.Context) (map[string]Definition,
 				continue
 			}
 			ruleID := strings.TrimPrefix(key, "rules.")
-			entry, err := rcm.kvStore.Get(ctx, key)
+			entry, err := kvStore.Get(ctx, key)
 			if err != nil {
 				rcm.logger.Warn("Failed to load rule during ListRules; skipping",
 					"rule_id", ruleID, "error", err)
@@ -404,27 +536,56 @@ func (rcm *ConfigManager) WatchRules(_ context.Context, _ func(ruleID string, ru
 }
 
 // InitializeKVStore initializes the KVStore for direct KV operations
-func (rcm *ConfigManager) InitializeKVStore(natsClient *natsclient.Client) error {
+func (rcm *ConfigManager) InitializeKVStore(ctx context.Context, natsClient *natsclient.Client) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "ConfigManager", "InitializeKVStore", "context cannot be nil")
+	}
 	rcm.mu.Lock()
-	defer rcm.mu.Unlock()
-
 	if natsClient == nil {
+		rcm.mu.Unlock()
 		return errs.WrapInvalid(errs.ErrMissingConfig, "ConfigManager", "InitializeKVStore", "NATS client is required")
 	}
+	rcm.natsClient = natsClient
+	rcm.mu.Unlock()
 
-	// Get or create the config KV bucket
-	kv, err := natsClient.CreateKeyValueBucket(context.Background(), jetstream.KeyValueConfig{
+	_, err := rcm.ensureKVStore(ctx)
+	return err
+}
+
+func (rcm *ConfigManager) ensureKVStore(ctx context.Context) (*natsclient.KVStore, error) {
+	if ctx == nil {
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "ConfigManager", "ensureKVStore", "context cannot be nil")
+	}
+	rcm.mu.RLock()
+	if rcm.kvStore != nil {
+		kvStore := rcm.kvStore
+		rcm.mu.RUnlock()
+		return kvStore, nil
+	}
+	natsClient := rcm.natsClient
+	rcm.mu.RUnlock()
+	if natsClient == nil {
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "ConfigManager", "ensureKVStore", "kvStore not initialised")
+	}
+
+	// Remote acquisition is retryable. Publish only the successful handle;
+	// concurrent creators converge on the one authoritative bucket.
+	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
 		Bucket:      "semstreams_config",
 		Description: "SemStreams runtime configuration",
 		History:     5,
 	})
 	if err != nil {
-		return errs.WrapTransient(err, "ConfigManager", "InitializeKVStore", "create/get KV bucket")
+		return nil, errs.WrapTransient(err, "ConfigManager", "ensureKVStore", "create/get KV bucket")
 	}
-
-	// Create KVStore for the config bucket
-	rcm.kvStore = natsClient.NewKVStore(kv)
+	created := natsClient.NewKVStore(kv)
+	rcm.mu.Lock()
+	if rcm.kvStore == nil {
+		rcm.kvStore = created
+	}
+	kvStore := rcm.kvStore
+	rcm.mu.Unlock()
 
 	rcm.logger.Info("Initialized KVStore for rule configuration")
-	return nil
+	return kvStore, nil
 }

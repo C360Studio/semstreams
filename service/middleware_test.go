@@ -152,7 +152,7 @@ func TestManager_UseHTTPMiddleware_IgnoredAfterServerStarts(t *testing.T) {
 	m.logger = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
 	// Simulate "HTTP server already started" — the same guard
-	// startHTTPServer / completeHTTPSetup use.
+	// completeHTTPSetup uses.
 	m.httpServer = &http.Server{}
 
 	called := false
@@ -192,7 +192,7 @@ func TestManager_BuildHTTPHandler_AppliesRegisteredMiddleware(t *testing.T) {
 
 	// This is the wired-path regression guard. It catches the case
 	// where `Handler: m.buildHTTPHandler()` at the http.Server
-	// construction sites in completeHTTPSetup and startHTTPServer
+	// construction site in completeHTTPSetup
 	// gets typo'd back to a bare m.httpMux and silently drops the
 	// chain. The only way we observe the wiring is by routing a
 	// real request through the wrapped handler.

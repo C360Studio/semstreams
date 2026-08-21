@@ -32,9 +32,13 @@ type jetstreamMetrics struct {
 
 	// Tracked resources (only what we create/use)
 	mu        sync.RWMutex
-	streams   map[string]jetstream.Stream   // Streams we've created/accessed
-	consumers map[string]jetstream.Consumer // Consumers we've created
+	streams   map[string]jetstream.Stream // Streams we've created/accessed
+	consumers map[string]*trackedConsumer // Consumers we've created
 	policies  map[consumerPolicyKey]*consumerPolicyRecord
+}
+
+type trackedConsumer struct {
+	handle jetstream.Consumer
 }
 
 // newJetStreamMetrics creates and registers JetStream metrics with the provided registry.
@@ -116,7 +120,7 @@ func newJetStreamMetrics(registry *metric.MetricsRegistry) (*jetstreamMetrics, e
 		}, []string{"operation"}),
 
 		streams:   make(map[string]jetstream.Stream),
-		consumers: make(map[string]jetstream.Consumer),
+		consumers: make(map[string]*trackedConsumer),
 		policies:  make(map[consumerPolicyKey]*consumerPolicyRecord),
 	}
 
@@ -220,7 +224,22 @@ func (m *jetstreamMetrics) trackConsumer(streamName, consumerName string, consum
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := streamName + ":" + consumerName
-	m.consumers[key] = consumer
+	m.consumers[key] = &trackedConsumer{handle: consumer}
+}
+
+// forgetConsumer removes generic observation only after the exact native
+// ConsumeContext reports Closed. It has no lifecycle authority over the handle.
+func (m *jetstreamMetrics) forgetConsumer(streamName, consumerName string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.consumers, streamName+":"+consumerName)
+	m.consumerPending.DeleteLabelValues(streamName, consumerName)
+	m.consumerDelivered.DeleteLabelValues(streamName, consumerName)
+	m.consumerAcked.DeleteLabelValues(streamName, consumerName)
+	m.consumerRedelivered.DeleteLabelValues(streamName, consumerName)
 }
 
 // recordError records a JetStream operation error.
@@ -239,7 +258,7 @@ func (m *jetstreamMetrics) updateStats(ctx context.Context) {
 
 	m.mu.RLock()
 	streams := make(map[string]jetstream.Stream, len(m.streams))
-	consumers := make(map[string]jetstream.Consumer, len(m.consumers))
+	consumers := make(map[string]*trackedConsumer, len(m.consumers))
 	policies := make(map[consumerPolicyKey]*consumerPolicyRecord, len(m.policies))
 	for k, v := range m.streams {
 		streams[k] = v
@@ -267,8 +286,8 @@ func (m *jetstreamMetrics) updateStats(ctx context.Context) {
 	}
 
 	// Update consumer stats
-	for _, consumer := range consumers {
-		info, err := consumer.Info(ctx)
+	for key, consumer := range consumers {
+		info, err := consumer.handle.Info(ctx)
 		if err != nil {
 			// Consumer might be deleted or unavailable - fail gracefully
 			continue
@@ -277,10 +296,16 @@ func (m *jetstreamMetrics) updateStats(ctx context.Context) {
 		streamName := info.Stream
 		consumerName := info.Name
 
+		m.mu.Lock()
+		if m.consumers[key] != consumer {
+			m.mu.Unlock()
+			continue
+		}
 		m.consumerPending.WithLabelValues(streamName, consumerName).Set(float64(info.NumPending))
 		m.consumerDelivered.WithLabelValues(streamName, consumerName).Add(float64(info.Delivered.Stream))
 		m.consumerAcked.WithLabelValues(streamName, consumerName).Add(float64(info.AckFloor.Stream))
 		m.consumerRedelivered.WithLabelValues(streamName, consumerName).Add(float64(info.NumRedelivered))
+		m.mu.Unlock()
 	}
 	for _, record := range policies {
 		info, err := record.handle.Info(ctx)

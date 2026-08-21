@@ -343,7 +343,7 @@ func TestNumericCompare_AfterStringifiedObject_UsesNumericSemantics(t *testing.T
 				{Subject: entityID, Predicate: semantictest.Predicate(t, "test", "metric", "value"), Object: tt.objectVal},
 			})
 
-			got := rule.EvaluateEntityState(entity)
+			got := rule.EvaluateEntityState(context.Background(), entity)
 			assert.Equal(t, tt.want, got,
 				"compareValues with toFloat64 string-widening must produce numeric semantics for parsable strings")
 		})

@@ -24,16 +24,18 @@ import (
 	"log/slog"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/internal/agentterminal"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
+	semerrs "github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/vocabulary"
 )
@@ -581,6 +583,92 @@ type StartConfig struct {
 	ConsumerNameSuffix string
 }
 
+type milestoneConsumerOwner struct {
+	mu              sync.Mutex
+	complete        jetstream.ConsumeContext
+	failed          jetstream.ConsumeContext
+	completeDrained bool
+	failedDrained   bool
+	running         bool
+	stopping        bool
+	completed       bool
+	cancel          context.CancelFunc
+}
+
+func (o *milestoneConsumerOwner) stop(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("agentrun: milestone consumer stop: nil context")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	o.mu.Lock()
+	if o.completed {
+		o.mu.Unlock()
+		return nil
+	}
+	if o.stopping {
+		o.mu.Unlock()
+		return semerrs.WrapTransient(errors.New("milestone consumer stop already in progress"),
+			"MilestoneSubscriber", "Stop", "concurrent Stop is unsupported")
+	}
+	o.stopping = true
+	complete := o.complete
+	failed := o.failed
+	running := o.running
+	drainComplete := complete != nil && !o.completeDrained
+	drainFailed := failed != nil && !o.failedDrained
+	o.completeDrained = o.completeDrained || drainComplete
+	o.failedDrained = o.failedDrained || drainFailed
+	o.mu.Unlock()
+
+	// Both running handles begin Drain before either exact Closed wait.
+	if drainComplete {
+		complete.Drain()
+	}
+	if drainFailed {
+		failed.Drain()
+	}
+	var stopErrors []error
+	if complete != nil {
+		stopErrors = append(stopErrors, waitMilestoneConsumerClosed(ctx, complete.Closed(), "complete"))
+	}
+	if failed != nil {
+		stopErrors = append(stopErrors, waitMilestoneConsumerClosed(ctx, failed.Closed(), "failed"))
+	}
+	stopErr := errors.Join(stopErrors...)
+	if stopErr != nil && running {
+		// Running Stop is terminal. Force local closure best-effort and never
+		// manufacture later rejoin authority for this generation.
+		if complete != nil {
+			complete.Stop()
+		}
+		if failed != nil {
+			failed.Stop()
+		}
+	}
+	o.cancel()
+
+	o.mu.Lock()
+	if running || stopErr == nil {
+		o.complete = nil
+		o.failed = nil
+		o.completed = true
+	}
+	o.stopping = false
+	o.mu.Unlock()
+	return stopErr
+}
+
+func waitMilestoneConsumerClosed(ctx context.Context, closed <-chan struct{}, name string) error {
+	select {
+	case <-closed:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("wait for %s milestone consumer Closed: %w", name, ctx.Err())
+	}
+}
+
 // Start wires the MilestoneSubscriber to the live NATS connection using DURABLE
 // JetStream consumers. agent.complete.* and agent.failed.* are published into the
 // AGENT JetStream stream by the agentic-loop component; core Subscribe would drop
@@ -590,14 +678,14 @@ type StartConfig struct {
 // subscriber restarts and resume from the last-acked message.
 //
 // cfg.StreamName must be non-empty (use AgentStreamName as the default).
-// The ctx controls the consumers' lifetime; Stop cancels consumption but preserves
-// the durable consumer offsets in NATS for restart recovery.
+// The ctx controls callback authority. Stop Drains both native handles, awaits
+// both exact Closed signals while that authority remains live, and then cancels
+// it. Durable consumer offsets remain in NATS for restart recovery.
 //
-// Returns a stop func that cancels consumption — call it on shutdown. If Start
-// acquires one durable consumer and a later acquisition fails, it returns both
-// a non-nil stop and a non-nil error. The caller must retain and invoke that
-// stop: it owns the partial acquisition and may need a later context budget to
-// finish or replay cleanup.
+// If the second acquisition fails, Start synchronously rolls back the first.
+// Successful rollback returns no cleanup closure. Failed rollback returns one
+// opaque closure that retains the exact handle and may re-await Closed later,
+// but never initiates Drain more than once.
 func (s *MilestoneSubscriber) Start(
 	ctx context.Context,
 	client *natsclient.Client,
@@ -640,28 +728,8 @@ func (s *MilestoneSubscriber) Start(
 	completeConsumer := makeDurable("complete")
 	failedConsumer := makeDurable("failed")
 	runCtx, cancel := context.WithCancel(ctx)
-	generation := lifecyclejoin.NewGeneration(cancel, nil)
-	completeStarted := false
-	failedStarted := false
-	stop = func(stopCtx context.Context) error {
-		return generation.Stop(stopCtx, nil, func(cleanupCtx context.Context) error {
-			var cleanupErr error
-			if completeStarted {
-				cleanupErr = errors.Join(cleanupErr,
-					client.StopConsumer(cleanupCtx, cfg.StreamName, completeConsumer))
-			}
-			if failedStarted {
-				cleanupErr = errors.Join(cleanupErr,
-					client.StopConsumer(cleanupCtx, cfg.StreamName, failedConsumer))
-			}
-			if ctxErr := cleanupCtx.Err(); ctxErr != nil {
-				return errors.Join(cleanupErr, ctxErr)
-			}
-			completeStarted = false
-			failedStarted = false
-			return cleanupErr
-		})
-	}
+	owner := &milestoneConsumerOwner{cancel: cancel}
+	stop = owner.stop
 
 	handleMsg := func(subject string) func(ctx context.Context, msg jetstream.Msg) {
 		return func(msgCtx context.Context, msg jetstream.Msg) {
@@ -688,11 +756,16 @@ func (s *MilestoneSubscriber) Start(
 		MaxDeliver:    5,
 		AckWait:       30 * time.Second,
 	}
-	if err := client.ConsumeInternalStreamWithConfig(runCtx, completeCfg, handleMsg("agent.complete.*")); err != nil {
+	completeHandle, err := client.ConsumeInternalStreamWithConfig(
+		runCtx, completeCfg, handleMsg("agent.complete.*"),
+	)
+	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("agentrun: MilestoneSubscriber: start durable consumer agent.complete.*: %w", err)
 	}
-	completeStarted = true
+	owner.mu.Lock()
+	owner.complete = completeHandle
+	owner.mu.Unlock()
 
 	failedCfg := natsclient.StreamConsumerConfig{
 		StreamName:    cfg.StreamName,
@@ -703,12 +776,21 @@ func (s *MilestoneSubscriber) Start(
 		MaxDeliver:    5,
 		AckWait:       30 * time.Second,
 	}
-	if err := client.ConsumeInternalStreamWithConfig(runCtx, failedCfg, handleMsg("agent.failed.*")); err != nil {
-		rollbackErr := lifecyclejoin.RunPartialStartRollback(stop)
+	failedHandle, err := client.ConsumeInternalStreamWithConfig(
+		runCtx, failedCfg, handleMsg("agent.failed.*"),
+	)
+	if err != nil {
+		rollbackErr := lifecyclecleanup.RollbackFailedStart(ctx, stop)
 		startErr := fmt.Errorf("agentrun: MilestoneSubscriber: start durable consumer agent.failed.*: %w", err)
+		if rollbackErr == nil {
+			return nil, startErr
+		}
 		return stop, errors.Join(startErr, rollbackErr)
 	}
-	failedStarted = true
+	owner.mu.Lock()
+	owner.failed = failedHandle
+	owner.running = true
+	owner.mu.Unlock()
 
 	// Stop cancels local consumption; durable state is preserved in NATS for restart recovery.
 	return stop, nil

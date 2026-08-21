@@ -491,7 +491,7 @@ func (ml *MessageLogger) queryKVBucket(
 	}
 
 	// List keys matching pattern
-	keys, err := kv.Keys(context.Background(), jetstream.IgnoreDeletes())
+	keys, err := kv.Keys(ctx, jetstream.IgnoreDeletes())
 	if err != nil {
 		// Handle empty bucket as a valid state, not an error
 		if strings.Contains(err.Error(), "no keys found") {
@@ -521,7 +521,7 @@ func (ml *MessageLogger) queryKVBucket(
 		}
 
 		// Get entry
-		entry, err := kv.Get(context.Background(), key)
+		entry, err := kv.Get(ctx, key)
 		if err != nil {
 			ml.logger.Warn("Failed to get KV entry", "key", key, "error", err)
 			continue

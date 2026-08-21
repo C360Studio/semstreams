@@ -39,6 +39,12 @@ silently stop matching the code. Two rules make that real:
    ambient "Proposed" documents — that status ambiguity is its own drift problem.
    On archive, durable requirements are promoted into the baseline `specs/`.
 
+OpenSpec changes are contract deltas, not program backlogs. Keep sequencing,
+discovery, and proof campaigns in issues; split a change when it crosses distinct
+owners or independently reviewable behavior. If implementation changes the target,
+reconcile or supersede the change immediately instead of appending another wave.
+See [OpenSpec change discipline](../docs/contributing/06-openspec-change-discipline.md).
+
 ## Relationship to `docs/`
 
 - `docs/adr/` — genuine **decisions** only (irreversible choices, cross-repo

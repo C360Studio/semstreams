@@ -1,12 +1,14 @@
 package metric
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -14,6 +16,8 @@ import (
 	"github.com/c360studio/semstreams/pkg/security"
 	"github.com/c360studio/semstreams/pkg/tlsutil"
 )
+
+const forcedServeJoinTimeout = time.Second
 
 // Server represents the metrics HTTP server
 type Server struct {
@@ -25,6 +29,8 @@ type Server struct {
 	registry  *MetricsRegistry
 	security  security.Config
 	mu        sync.Mutex // serializes server lifecycle fields
+	used      bool
+	stopping  bool
 }
 
 // NewServer creates a new metrics server with the provided registry
@@ -44,19 +50,25 @@ func NewServer(port int, path string, registry *MetricsRegistry, securityCfg sec
 	}
 }
 
-// Start starts the metrics HTTP server. It binds synchronously and returns only
-// after this Server owns its listener; request serving continues in a managed
-// goroutine until Stop is called.
-func (s *Server) Start() error {
+// Start starts the one-shot metrics HTTP server. It binds synchronously and
+// returns only after this Server owns its listener. ctx is the exact base
+// context for served requests. Restart requires a freshly constructed Server.
+func (s *Server) Start(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "Server", "Start", "nil context")
+	}
+	if err := ctx.Err(); err != nil {
+		return errs.WrapInvalid(err, "Server", "Start", "context already ended")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Check if server is already running
-	if s.server != nil {
+	if s.used {
 		return errs.WrapInvalid(
-			fmt.Errorf("server already running"),
-			"Server", "Start", "cannot start server that is already running")
+			errs.ErrAlreadyStarted,
+			"Server", "Start", "server instance already used")
 	}
+	s.used = true
 
 	// Validate that we have a registry
 	if s.registry == nil {
@@ -99,8 +111,9 @@ func (s *Server) Start() error {
 
 	// Create the server
 	s.server = &http.Server{
-		Addr:    fmt.Sprintf(":%d", s.port),
-		Handler: mux,
+		Addr:        fmt.Sprintf(":%d", s.port),
+		Handler:     mux,
+		BaseContext: func(net.Listener) context.Context { return ctx },
 	}
 
 	// Configure TLS if enabled at platform level
@@ -135,35 +148,86 @@ func (s *Server) Start() error {
 	return nil
 }
 
-// Stop stops the metrics server
-func (s *Server) Stop() error {
+// Stop attempts graceful shutdown within ctx. If that budget ends or graceful
+// shutdown fails, Stop force-closes the server and gives the exact serving
+// goroutine a separate fixed one-second join bound. A completed repeat is a nil
+// no-op. Concurrent Stop is unsupported and returns a typed transient error.
+func (s *Server) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "Server", "Stop", "nil context")
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.stopping {
+		s.mu.Unlock()
+		return errs.WrapTransient(errors.New("metrics server stop already in progress"),
+			"Server", "Stop", "concurrent Stop is unsupported")
+	}
 	if s.server == nil {
+		s.used = true
+		s.mu.Unlock()
 		return nil
 	}
 
 	httpServer := s.server
 	listener := s.listener
 	serveDone := s.serveDone
+	s.stopping = true
+	s.mu.Unlock()
 
 	var stopErr error
-	if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-		stopErr = errors.Join(stopErr, errs.WrapTransient(err, "Server", "Stop",
-			"failed to close metrics listener"))
+	shutdownErr := httpServer.Shutdown(ctx)
+	if shutdownErr != nil {
+		stopErr = errors.Join(stopErr, errs.WrapTransient(shutdownErr, "Server", "Stop",
+			"gracefully shut down metrics server"))
 	}
-	if err := httpServer.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
-		stopErr = errors.Join(stopErr, errs.WrapTransient(err, "Server", "Stop",
-			"failed to stop HTTP server"))
+	completed := false
+	if shutdownErr == nil {
+		select {
+		case err := <-serveDone:
+			completed = true
+			stopErr = errors.Join(stopErr, classifyServeError(err))
+		case <-ctx.Done():
+			stopErr = errors.Join(stopErr, ctx.Err())
+		}
 	}
-	if err := <-serveDone; err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
-		stopErr = errors.Join(stopErr, errs.WrapTransient(err, "Server", "Stop",
-			"metrics server exited with an error"))
+
+	if shutdownErr != nil || !completed {
+		if err := httpServer.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			stopErr = errors.Join(stopErr, errs.WrapTransient(err, "Server", "Stop",
+				"force close metrics HTTP server"))
+		}
+		if listener != nil {
+			if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				stopErr = errors.Join(stopErr, errs.WrapTransient(err, "Server", "Stop",
+					"force close metrics listener"))
+			}
+		}
+
+		joinCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), forcedServeJoinTimeout)
+		select {
+		case err := <-serveDone:
+			stopErr = errors.Join(stopErr, classifyServeError(err))
+		case <-joinCtx.Done():
+			stopErr = errors.Join(stopErr,
+				fmt.Errorf("wait for forced metrics serve completion: %w", joinCtx.Err()))
+		}
+		cancel()
 	}
+
+	s.mu.Lock()
 	s.server = nil
 	s.listener = nil
 	s.serveDone = nil
+	s.stopping = false
+	s.mu.Unlock()
 	return stopErr
+}
+
+func classifyServeError(err error) error {
+	if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return errs.WrapTransient(err, "Server", "Stop", "metrics server exited with an error")
 }
 
 // Address returns the server address

@@ -288,46 +288,8 @@ func TestService_FailingHealthCheck(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// Test concurrent starts and stops
-func TestService_ConcurrentOperations(t *testing.T) {
-	cfg := &config.Config{
-		Services: types.ServiceConfigs{
-			"test": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"default_timeout": "100ms"}`)},
-		},
-	}
-
-	natsClient := createTestNATSClientForBase(t)
-	service := NewBaseServiceWithOptions("test-service", cfg,
-		WithNATS(natsClient),
-		WithMetrics(metric.NewMetricsRegistry()))
-
-	ctx := context.Background()
-
-	// Start service multiple times concurrently
-	for i := 0; i < 10; i++ {
-		go func() {
-			_ = service.Start(ctx)
-		}()
-	}
-
-	time.Sleep(50 * time.Millisecond)
-
-	// Stop service multiple times concurrently
-	for i := 0; i < 10; i++ {
-		go func() {
-			_ = service.Stop(context.Background())
-		}()
-	}
-
-	time.Sleep(50 * time.Millisecond)
-
-	// Should be in a consistent state
-	status := service.Status()
-	assert.True(t, status == StatusRunning || status == StatusStopped)
-}
-
-// Test service restart
-func TestService_Restart(t *testing.T) {
+// Test fresh-instance restart
+func TestService_FreshInstanceRestart(t *testing.T) {
 	cfg := &config.Config{
 		Services: types.ServiceConfigs{
 			"test": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"default_timeout": "100ms"}`)},
@@ -351,12 +313,18 @@ func TestService_Restart(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StatusStopped, service.Status())
 
-	// Restart service
+	// The stopped instance is terminal; process composition creates a fresh one.
 	err = service.Start(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, StatusRunning, service.Status())
+	require.Error(t, err)
 
-	err = service.Stop(context.Background())
+	restarted := NewBaseServiceWithOptions("test-service", cfg,
+		WithNATS(natsClient),
+		WithMetrics(metric.NewMetricsRegistry()))
+	err = restarted.Start(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, StatusRunning, restarted.Status())
+
+	err = restarted.Stop(context.Background())
 	require.NoError(t, err)
 }
 

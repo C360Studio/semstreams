@@ -308,7 +308,7 @@ func TestResolveTripleSubject_TruthTable(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := resolveTripleSubject(tc.action, tc.ec)
+			got, err := resolveTripleSubjectContext(context.Background(), tc.action, tc.ec)
 			if tc.wantError {
 				require.Error(t, err)
 				return

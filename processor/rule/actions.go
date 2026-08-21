@@ -693,11 +693,11 @@ func (e *ActionExecutor) Execute(ctx context.Context, action Action, ec *Executi
 // "$subtopic". Either broaden the regex when that lands or have the
 // for_each-on-triple-writes path validate iter-var presence
 // upstream.
-func resolveTripleSubject(action Action, ec *ExecutionContext) (string, error) {
+func resolveTripleSubjectContext(ctx context.Context, action Action, ec *ExecutionContext) (string, error) {
 	if action.Subject == "" {
 		return ec.EntityID, nil
 	}
-	resolved := ec.SubstituteVariables(action.Subject)
+	resolved := ec.SubstituteVariables(ctx, action.Subject)
 	if resolved == "" {
 		return "", fmt.Errorf("action.subject %q resolved to empty after substitution; refusing to fall back to trigger entity (likely a typo or a $entity.triple.* reference that the trigger entity didn't carry at fire time)", action.Subject)
 	}
@@ -718,7 +718,7 @@ func resolveTripleSubject(action Action, ec *ExecutionContext) (string, error) {
 // Returns the created triple and any error that occurred.
 // If a TripleMutator is configured, the triple is persisted via NATS request/response.
 func (e *ActionExecutor) ExecuteAddTriple(ctx context.Context, action Action, ec *ExecutionContext) (message.Triple, error) {
-	entityID, err := resolveTripleSubject(action, ec)
+	entityID, err := resolveTripleSubjectContext(ctx, action, ec)
 	if err != nil {
 		return message.Triple{}, fmt.Errorf("resolve add_triple subject: %w", err)
 	}
@@ -737,12 +737,12 @@ func (e *ActionExecutor) ExecuteAddTriple(ctx context.Context, action Action, ec
 	// templates, literal strings, and unrecognized tokens — those
 	// require string-concat semantics, and the destination Triple.Object
 	// being `any` accepts string Objects without loss.
-	predicate := ec.SubstituteVariables(action.Predicate)
+	predicate := ec.SubstituteVariables(ctx, action.Predicate)
 	var object any
 	if typed, ok := ec.SubstituteVariablesTyped(action.Object); ok {
 		object = typed
 	} else {
-		object = ec.SubstituteVariables(action.Object)
+		object = ec.SubstituteVariables(ctx, action.Object)
 	}
 
 	// Parse TTL
@@ -802,7 +802,7 @@ func (e *ActionExecutor) ExecuteAddTriple(ctx context.Context, action Action, ec
 // ExecuteRemoveTriple executes a remove_triple action, removing a semantic triple.
 // If a TripleMutator is configured, the triple is removed via NATS request/response.
 func (e *ActionExecutor) ExecuteRemoveTriple(ctx context.Context, action Action, ec *ExecutionContext) error {
-	entityID, err := resolveTripleSubject(action, ec)
+	entityID, err := resolveTripleSubjectContext(ctx, action, ec)
 	if err != nil {
 		return fmt.Errorf("resolve remove_triple subject: %w", err)
 	}
@@ -812,8 +812,8 @@ func (e *ActionExecutor) ExecuteRemoveTriple(ctx context.Context, action Action,
 		return errors.New("predicate is required for remove_triple action")
 	}
 
-	predicate := ec.SubstituteVariables(action.Predicate)
-	object := ec.SubstituteVariables(action.Object)
+	predicate := ec.SubstituteVariables(ctx, action.Predicate)
+	object := ec.SubstituteVariables(ctx, action.Object)
 
 	if e.logger != nil {
 		e.logger.Debug("Removing triple",
@@ -854,14 +854,14 @@ func (e *ActionExecutor) ExecuteRemoveTriple(ctx context.Context, action Action,
 // — that's a separate behaviour contract and warrants its own
 // substitution-warning story. Returns nil unchanged so callers don't
 // have to special-case empty maps.
-func substituteStringProperties(props map[string]any, ec *ExecutionContext) map[string]any {
+func substituteStringPropertiesContext(ctx context.Context, props map[string]any, ec *ExecutionContext) map[string]any {
 	if props == nil {
 		return nil
 	}
 	out := make(map[string]any, len(props))
 	for k, v := range props {
 		if s, ok := v.(string); ok {
-			out[k] = ec.SubstituteVariables(s)
+			out[k] = ec.SubstituteVariables(ctx, s)
 			continue
 		}
 		out[k] = v
@@ -878,7 +878,7 @@ func (e *ActionExecutor) executePublish(ctx context.Context, action Action, ec *
 		return errors.New("subject is required for publish action")
 	}
 
-	subject := ec.SubstituteVariables(action.Subject)
+	subject := ec.SubstituteVariables(ctx, action.Subject)
 	if targetsReservedUserResponseSubject(subject) {
 		return errs.WrapInvalid(
 			fmt.Errorf("%s action resolved subject %q targets reserved family %q", action.Type, subject, reservedUserResponseSubjectFamily),
@@ -891,7 +891,7 @@ func (e *ActionExecutor) executePublish(ctx context.Context, action Action, ec *
 	// VerdictPayload.EffectiveCallID (falls back to Properties when
 	// top-level CallID is empty). Pre-fix, the literal template string
 	// reached the wire and broke enforce-mode routing.
-	properties := substituteStringProperties(action.Properties, ec)
+	properties := substituteStringPropertiesContext(ctx, action.Properties, ec)
 
 	// Build the message payload
 	payload := map[string]any{
@@ -944,7 +944,7 @@ func (e *ActionExecutor) executePublish(ctx context.Context, action Action, ec *
 // since triples are identified by (subject, predicate, object) - changing any of those
 // creates a different triple.
 func (e *ActionExecutor) executeUpdateTriple(ctx context.Context, action Action, ec *ExecutionContext) error {
-	entityID, err := resolveTripleSubject(action, ec)
+	entityID, err := resolveTripleSubjectContext(ctx, action, ec)
 	if err != nil {
 		return fmt.Errorf("resolve update_triple subject: %w", err)
 	}
@@ -960,12 +960,12 @@ func (e *ActionExecutor) executeUpdateTriple(ctx context.Context, action Action,
 	// literal Objects, mixed templates, and unrecognized tokens. Same
 	// dispatch shape as ExecuteAddTriple — both actions land their
 	// Object in a `message.Triple{Object: any}`, so symmetry is correct.
-	predicate := ec.SubstituteVariables(action.Predicate)
+	predicate := ec.SubstituteVariables(ctx, action.Predicate)
 	var object any
 	if typed, ok := ec.SubstituteVariablesTyped(action.Object); ok {
 		object = typed
 	} else {
-		object = ec.SubstituteVariables(action.Object)
+		object = ec.SubstituteVariables(ctx, action.Object)
 	}
 
 	if e.logger != nil {
@@ -1050,7 +1050,7 @@ func (e *ActionExecutor) executeUpdateTriple(ctx context.Context, action Action,
 // numeric / bool values round-trip their source type. Ownership identity and
 // fencing remain encapsulated by projection.MutationClient.
 func (e *ActionExecutor) executeReconcilePredicates(ctx context.Context, action Action, ec *ExecutionContext) error {
-	entityID, err := resolveTripleSubject(action, ec)
+	entityID, err := resolveTripleSubjectContext(ctx, action, ec)
 	if err != nil {
 		return fmt.Errorf("resolve reconcile subject: %w", err)
 	}
@@ -1077,7 +1077,7 @@ func (e *ActionExecutor) executeReconcilePredicates(ctx context.Context, action 
 		if typed, ok := ec.SubstituteVariablesTyped(action.Object); ok {
 			object = typed
 		} else {
-			object = ec.SubstituteVariables(action.Object)
+			object = ec.SubstituteVariables(ctx, action.Object)
 		}
 
 		ttl, err := action.ParseTTL()
@@ -1209,7 +1209,7 @@ func (e *ActionExecutor) resolveToolNames(names []string) []agentic.ToolDefiniti
 // String-to-string by design — see agentic.MetadataKeyRelatedLoops.
 // Empty/nil RelatedLoops is a no-op (back-compat: pre-existing flows
 // that don't opt in see no Metadata change).
-func stampRelatedLoops(task *agentic.TaskMessage, related map[string]string, ec *ExecutionContext, iterVarName, iterVarValue string) error {
+func stampRelatedLoops(ctx context.Context, task *agentic.TaskMessage, related map[string]string, ec *ExecutionContext, iterVarName, iterVarValue string) error {
 	if len(related) == 0 {
 		return nil
 	}
@@ -1218,7 +1218,7 @@ func stampRelatedLoops(task *agentic.TaskMessage, related map[string]string, ec 
 		if _, err := agentic.LineageTriplePredicate(label); err != nil {
 			return fmt.Errorf("related_loops role key %q: %w", label, err)
 		}
-		resolvedLoopID := ec.SubstituteVariablesWithIterVar(loopID, iterVarName, iterVarValue)
+		resolvedLoopID := ec.SubstituteVariablesWithIterVar(ctx, loopID, iterVarName, iterVarValue)
 		if resolvedLoopID == "" {
 			return fmt.Errorf("related_loops role key %q resolved to an empty loop ID", label)
 		}
@@ -1267,7 +1267,7 @@ func isReservedTaskMetadataKey(key string) bool {
 // for_each dispatches can vary metadata per item; non-strings pass
 // through unchanged (shallow-only). Empty/nil leaves task.Metadata
 // untouched — opt-in, so non-using flows see no change.
-func (e *ActionExecutor) stampAuthorMetadata(task *agentic.TaskMessage, action Action, ec *ExecutionContext, iterVarName, iterVarValue string) {
+func (e *ActionExecutor) stampAuthorMetadata(ctx context.Context, task *agentic.TaskMessage, action Action, ec *ExecutionContext, iterVarName, iterVarValue string) {
 	for k, v := range action.Properties {
 		if isReservedTaskMetadataKey(k) {
 			if e.logger != nil {
@@ -1282,7 +1282,7 @@ func (e *ActionExecutor) stampAuthorMetadata(task *agentic.TaskMessage, action A
 			task.Metadata = map[string]any{}
 		}
 		if s, ok := v.(string); ok {
-			task.Metadata[k] = ec.SubstituteVariablesWithIterVar(s, iterVarName, iterVarValue)
+			task.Metadata[k] = ec.SubstituteVariablesWithIterVar(ctx, s, iterVarName, iterVarValue)
 		} else {
 			task.Metadata[k] = v
 		}
@@ -1349,11 +1349,11 @@ func stampPerSpawnLLMKnobs(task *agentic.TaskMessage, action Action) {
 // silently skipping the field or falling back to the default budget;
 // the caller aborts the publish entirely (gh#529 loudness discipline,
 // matching stampRelatedLoops's role-key validation).
-func stampLoopMaxIterations(task *agentic.TaskMessage, action Action, ec *ExecutionContext, iterVarName, iterVarValue string) error {
+func stampLoopMaxIterations(ctx context.Context, task *agentic.TaskMessage, action Action, ec *ExecutionContext, iterVarName, iterVarValue string) error {
 	if action.LoopMaxIterations == "" {
 		return nil
 	}
-	resolved := strings.TrimSpace(ec.SubstituteVariablesWithIterVar(action.LoopMaxIterations, iterVarName, iterVarValue))
+	resolved := strings.TrimSpace(ec.SubstituteVariablesWithIterVar(ctx, action.LoopMaxIterations, iterVarName, iterVarValue))
 	n, convErr := strconv.Atoi(resolved)
 	if convErr != nil || n < 1 {
 		return fmt.Errorf("loop_max_iterations %q resolved to %q, which is not a positive integer", action.LoopMaxIterations, resolved)
@@ -1488,14 +1488,14 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 	// triggering entity (e.g., `$entity.triple.research.parent.role`).
 	// Existing rule packs that hardcode role values are unaffected —
 	// strings without `$`-prefixed tokens pass through unchanged.
-	subject := ec.SubstituteVariablesWithIterVar(action.Subject, iterVarName, iterVarValue)
+	subject := ec.SubstituteVariablesWithIterVar(ctx, action.Subject, iterVarName, iterVarValue)
 	if targetsReservedUserResponseSubject(subject) {
 		return errs.WrapInvalid(
 			fmt.Errorf("%s action resolved subject %q targets reserved family %q", action.Type, subject, reservedUserResponseSubjectFamily),
 			"RuleActionExecutor", "publishAgentOnce", "reject reserved publish subject")
 	}
-	prompt := ec.SubstituteVariablesWithIterVar(action.Prompt, iterVarName, iterVarValue)
-	role := ec.SubstituteVariablesWithIterVar(action.Role, iterVarName, iterVarValue)
+	prompt := ec.SubstituteVariablesWithIterVar(ctx, action.Prompt, iterVarName, iterVarValue)
+	role := ec.SubstituteVariablesWithIterVar(ctx, action.Role, iterVarName, iterVarValue)
 
 	// Generate a unique task ID
 	taskID := fmt.Sprintf("rule-%s-%d", entityID, time.Now().UnixNano())
@@ -1506,8 +1506,8 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 		Role:         role,
 		Model:        action.Model,
 		Prompt:       prompt,
-		WorkflowSlug: ec.SubstituteVariablesWithIterVar(action.WorkflowSlug, iterVarName, iterVarValue),
-		WorkflowStep: ec.SubstituteVariablesWithIterVar(action.WorkflowStep, iterVarName, iterVarValue),
+		WorkflowSlug: ec.SubstituteVariablesWithIterVar(ctx, action.WorkflowSlug, iterVarName, iterVarValue),
+		WorkflowStep: ec.SubstituteVariablesWithIterVar(ctx, action.WorkflowStep, iterVarName, iterVarValue),
 	}
 
 	// Inherit ParentLoopID when the trigger entity is a loop execution. Without
@@ -1632,7 +1632,7 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 	// remain authoritative; reserved `agent.*` keys are skipped inside
 	// the helper. This is the rule-side path to TaskMessage.Metadata that
 	// component-dispatched agents reach directly in Go.
-	e.stampAuthorMetadata(&task, action, ec, iterVarName, iterVarValue)
+	e.stampAuthorMetadata(ctx, &task, action, ec, iterVarName, iterVarValue)
 
 	// Per-spawn action_allowlist for the decide tool. The agentic-loop
 	// propagates TaskMessage.Metadata onto each ToolCall.Metadata; the
@@ -1659,7 +1659,7 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 
 	// Per-spawn cross-arc loop-ID lineage. Mirrors the ActionAllowlist
 	// Metadata stamping pattern. See stampRelatedLoops for the why.
-	if err := stampRelatedLoops(&task, action.RelatedLoops, ec, iterVarName, iterVarValue); err != nil {
+	if err := stampRelatedLoops(ctx, &task, action.RelatedLoops, ec, iterVarName, iterVarValue); err != nil {
 		return errs.WrapInvalid(err, "RuleActionExecutor", "publishAgentOnce", "validate substituted related_loops")
 	}
 
@@ -1671,7 +1671,7 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 	// a bad substitution — before task.Validate() below, which also
 	// enforces the >= 1 floor as defense-in-depth for any other caller of
 	// TaskMessage.Validate.
-	if err := stampLoopMaxIterations(&task, action, ec, iterVarName, iterVarValue); err != nil {
+	if err := stampLoopMaxIterations(ctx, &task, action, ec, iterVarName, iterVarValue); err != nil {
 		return errs.WrapInvalid(err, "RuleActionExecutor", "publishAgentOnce", "validate substituted loop_max_iterations")
 	}
 	if err := task.Validate(); err != nil {
@@ -1795,7 +1795,7 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 // see the silent audit gap) and executeDeny still returns *DenyVerdict. Callers
 // must not retry the action on *DenyVerdict — denial is intentional and terminal.
 func (e *ActionExecutor) executeDeny(ctx context.Context, action Action, ec *ExecutionContext) error {
-	reason := ec.SubstituteVariables(action.Reason)
+	reason := ec.SubstituteVariables(ctx, action.Reason)
 	ruleID := ec.RuleID()
 
 	// Best-effort governance audit (ADR-055 §3a): emit a registered verdict event
@@ -1862,13 +1862,13 @@ func (e *ActionExecutor) executeApprove(ctx context.Context, action Action, ec *
 		return errors.New("subject is required for approve action")
 	}
 
-	subject := ec.SubstituteVariables(action.Subject)
+	subject := ec.SubstituteVariables(ctx, action.Subject)
 	if targetsReservedUserResponseSubject(subject) {
 		return errs.WrapInvalid(
 			fmt.Errorf("%s action resolved subject %q targets reserved family %q", action.Type, subject, reservedUserResponseSubjectFamily),
 			"RuleActionExecutor", "executeApprove", "reject reserved publish subject")
 	}
-	reason := ec.SubstituteVariables(action.Reason)
+	reason := ec.SubstituteVariables(ctx, action.Reason)
 	ruleID := ec.RuleID()
 	entityID := ec.EntityID
 
@@ -1949,9 +1949,9 @@ func (e *ActionExecutor) executeUpdateKV(ctx context.Context, action Action, ec 
 		return errors.New("key is required for update_kv action")
 	}
 
-	bucket := ec.SubstituteVariables(action.Bucket)
-	key := ec.SubstituteVariables(action.Key)
-	payload := substitutePayloadVariables(action.Payload, ec)
+	bucket := ec.SubstituteVariables(ctx, action.Bucket)
+	key := ec.SubstituteVariables(ctx, action.Key)
+	payload := substitutePayloadVariablesContext(ctx, action.Payload, ec)
 	if gtypes.IsFrameworkOwnedBucket(bucket) {
 		return fmt.Errorf("update_kv cannot write framework-owned graph bucket %q (owned by %s); use graph mutation APIs",
 			bucket, gtypes.OwnerOf(bucket))
@@ -2000,29 +2000,29 @@ func (e *ActionExecutor) executeUpdateKV(ctx context.Context, action Action, ec 
 
 // substitutePayloadVariables performs deep variable substitution on string values
 // within a payload map, including nested maps.
-func substitutePayloadVariables(payload map[string]any, ec *ExecutionContext) map[string]any {
+func substitutePayloadVariablesContext(ctx context.Context, payload map[string]any, ec *ExecutionContext) map[string]any {
 	if payload == nil {
 		return nil
 	}
 	result := make(map[string]any, len(payload))
 	for k, v := range payload {
-		result[k] = substituteValue(v, ec)
+		result[k] = substituteValueContext(ctx, v, ec)
 	}
 	return result
 }
 
 // substituteValue recursively substitutes template variables in strings,
 // maps, and slices. Non-string leaf values are passed through unchanged.
-func substituteValue(v any, ec *ExecutionContext) any {
+func substituteValueContext(ctx context.Context, v any, ec *ExecutionContext) any {
 	switch val := v.(type) {
 	case string:
-		return ec.SubstituteVariables(val)
+		return ec.SubstituteVariables(ctx, val)
 	case map[string]any:
-		return substitutePayloadVariables(val, ec)
+		return substitutePayloadVariablesContext(ctx, val, ec)
 	case []any:
 		result := make([]any, len(val))
 		for i, item := range val {
-			result[i] = substituteValue(item, ec)
+			result[i] = substituteValueContext(ctx, item, ec)
 		}
 		return result
 	default:

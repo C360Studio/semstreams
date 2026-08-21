@@ -19,7 +19,11 @@ import (
 // Records reads + writes so the test can assert key ordering,
 // envelope shape, and miss vs hit paths.
 type fakeLoopStore struct {
-	mu sync.Mutex
+	mu                sync.Mutex
+	intentEnteredOnce sync.Once
+	intentEntered     chan struct{}
+	intentRelease     chan struct{}
+	intentContext     chan context.Context
 
 	intent           *research.Intent
 	intentErr        error
@@ -40,7 +44,34 @@ type fakeLoopStore struct {
 	writeOrder []string
 }
 
-func (s *fakeLoopStore) GetIntent(_ context.Context, _ string) (*research.Intent, error) {
+func TestComponentLifecycleIsOneShot(t *testing.T) {
+	c := newTestComponent(&fakeLoopStore{}, &fakeGraphQuery{})
+	c.inputs = nil
+
+	if err := c.Start(t.Context()); err != nil {
+		t.Fatalf("Start() = %v", err)
+	}
+	if err := c.Stop(t.Context()); err != nil {
+		t.Fatalf("Stop() = %v", err)
+	}
+	if err := c.Stop(t.Context()); err != nil {
+		t.Fatalf("repeated Stop() = %v, want nil", err)
+	}
+	if err := c.Start(t.Context()); err == nil {
+		t.Fatal("Start() after completed Stop returned nil")
+	}
+}
+
+func (s *fakeLoopStore) GetIntent(ctx context.Context, _ string) (*research.Intent, error) {
+	if s.intentContext != nil {
+		s.intentContext <- ctx
+	}
+	if s.intentEntered != nil {
+		s.intentEnteredOnce.Do(func() { close(s.intentEntered) })
+	}
+	if s.intentRelease != nil {
+		<-s.intentRelease
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.getIntentCalls++

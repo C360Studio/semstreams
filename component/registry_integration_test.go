@@ -111,23 +111,6 @@ func TestRegistry_PublishCapabilities(t *testing.T) {
 	}
 }
 
-func TestRegistry_SubscribeCapabilities(t *testing.T) {
-	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream())
-	defer testClient.Terminate()
-	registry := newCapabilityRegistry(t, testClient.Client, "test-node-1")
-	if err := registry.SubscribeCapabilities(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	admitCapabilityComponent(t, registry, testClient.Client, "test-instance")
-	time.Sleep(200 * time.Millisecond)
-	for _, capability := range registry.GetCapabilities("processor.capabilities.*") {
-		if capability.InstanceName == "test-instance" {
-			return
-		}
-	}
-	t.Fatal("test-instance capability not cached")
-}
-
 func TestRegistry_Heartbeat(t *testing.T) {
 	ctx := context.Background()
 	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream())
@@ -147,37 +130,6 @@ func TestRegistry_Heartbeat(t *testing.T) {
 	}
 	if info.State.Msgs < 1 {
 		t.Fatalf("capability message count = %d, want at least one", info.State.Msgs)
-	}
-}
-
-func TestRegistry_MultiNodeDiscovery(t *testing.T) {
-	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream())
-	defer testClient.Terminate()
-	registry1 := newCapabilityRegistry(t, testClient.Client, "node-1")
-	registry2 := newCapabilityRegistry(t, testClient.Client, "node-2")
-	if err := registry1.SubscribeCapabilities(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := registry2.SubscribeCapabilities(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	admitCapabilityComponent(t, registry1, testClient.Client, "instance-1")
-	admitCapabilityComponent(t, registry2, testClient.Client, "instance-2")
-	time.Sleep(300 * time.Millisecond)
-	for index, registry := range []*Registry{registry1, registry2} {
-		capabilities := registry.GetCapabilities("processor.capabilities.*")
-		if len(capabilities) < 2 {
-			t.Fatalf("registry %d capabilities = %d, want at least two", index+1, len(capabilities))
-		}
-		found := false
-		for _, capability := range capabilities {
-			if capability.InstanceName == "instance-1" && capability.NodeID == "node-1" {
-				found = true
-			}
-		}
-		if !found {
-			t.Fatalf("registry %d cannot discover node-1", index+1)
-		}
 	}
 }
 

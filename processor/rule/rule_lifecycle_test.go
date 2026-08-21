@@ -1,34 +1,29 @@
 package rule
 
 import (
+	"context"
 	"testing"
-
-	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/natsclient"
 )
 
-// createTestRuleComponent creates a test instance for lifecycle testing.
-func createTestRuleComponent() component.LifecycleComponent {
-	// Create unconnected NATS client (won't actually connect)
-	natsClient, err := natsclient.NewClient("nats://localhost:4222")
-	if err != nil {
-		panic("failed to create NATS client: " + err.Error())
+// The shared lifecycle suite asserts concurrent Stop rejoin and retained
+// terminal-result replay. RU1 intentionally implements the corrected one-shot
+// contract, so this package pins only the interface invariants that still apply.
+func TestRuleLifecycleNilContextsFailBeforeAction(t *testing.T) {
+	processor := &Processor{}
+	if err := processor.Start(nil); err == nil {
+		t.Fatal("Start(nil) succeeded")
 	}
-
-	config, err := NewConfig("rule-lifecycle-test")
-	if err != nil {
-		panic("failed to create rule config: " + err.Error())
+	if err := processor.Stop(nil); err == nil {
+		t.Fatal("Stop(nil) succeeded")
 	}
-
-	comp, err := NewProcessor(natsClient, &config)
-	if err != nil {
-		panic("failed to create component: " + err.Error())
-	}
-
-	return comp
 }
 
-// TestRule_ComprehensiveLifecycle runs the complete lifecycle test suite
-func TestRule_ComprehensiveLifecycle(t *testing.T) {
-	component.StandardLifecycleTests(t, createTestRuleComponent)
+func TestRuleLifecycleCompletedStopIsNilNoop(t *testing.T) {
+	processor := &Processor{}
+	if err := processor.Stop(context.Background()); err != nil {
+		t.Fatalf("first Stop: %v", err)
+	}
+	if err := processor.Stop(context.Background()); err != nil {
+		t.Fatalf("repeated completed Stop: %v", err)
+	}
 }

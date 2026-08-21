@@ -302,7 +302,7 @@ func (rp *Processor) evaluateRulesForEntityState(ctx context.Context, entityKey 
 					"rule_name", ruleName)
 				continue
 			}
-			triggered = entityEval.EvaluateEntityState(snap.State)
+			triggered = entityEval.EvaluateEntityState(ctx, snap.State)
 		}
 
 		evaluationDuration := time.Since(start)

@@ -281,13 +281,17 @@
 //
 // # Thread Safety
 //
-// All operations are safe for concurrent use:
+// Store and message-processing operations are safe for concurrent use:
 //   - Store methods: Thread-safe via NATS ObjectStore and cache concurrency
 //   - Component handlers: Each NATS message processed in separate goroutine
 //   - Metrics: Atomic counters (atomic.AddUint64)
 //   - Cache: Thread-safe by cache implementation contract
 //
-// No explicit locks required in application code.
+// No explicit locks are required for Store calls or message handling.
+// Lifecycle transitions are different: the composition owner must serialize
+// Start and Stop. Each component instance is one-shot; a completed repeated
+// Stop is a nil no-op, same-instance restart is rejected, and reuse requires a
+// fresh component instance.
 //
 // # Error Handling
 //

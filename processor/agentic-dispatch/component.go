@@ -12,7 +12,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
@@ -90,26 +90,31 @@ type Component struct {
 	modelRegistry model.RegistryReader // Unified model registry for model selection
 
 	// Lifecycle state
-	mu          sync.RWMutex
-	lifecycleMu sync.Mutex
-	generation  *lifecyclejoin.Generation
-	starting    bool
-	started     bool
-	startTime   time.Time
+	mu             sync.RWMutex
+	lifecycleMu    sync.Mutex
+	lifecycleUsed  bool
+	terminal       bool
+	stopping       bool
+	cleanupPending bool
+	startDone      chan struct{}
+	cancel         context.CancelFunc
+	started        bool
+	startTime      time.Time
 
 	// Ports
 	inputPorts  []component.Port
 	outputPorts []component.Port
 
 	// Track consumers for cleanup
-	consumerInfos []consumerInfo
+	consumers []streamConsumerBinding
 
 	// Shared AGENT_LOOPS read view (ADR-081): ONE graphview.View serves every
 	// /activity SSE client. Lazily created on the first request — bucket
 	// absence stays a per-request condition, never a boot failure — and
 	// stopped with the component (stopActivityView).
-	activityViewMu sync.Mutex
-	activityView   *graphview.View[activityRecord]
+	activityCommands chan activityViewCommand
+	activityDone     chan struct{}
+	activityCancel   context.CancelFunc
 	// activityViewSource overrides the AGENT_LOOPS bucket handle in tests;
 	// production leaves it nil (resolved via natsClient.GetKeyValueBucket).
 	activityViewSource graphview.WatcherSource
@@ -128,12 +133,15 @@ type Component struct {
 	sendTerminalResponseFn func(context.Context, agentic.UserResponse, string) error
 	loadPersistedLoopFn    func(context.Context, string) (*agentic.LoopEntity, error)
 	terminalDeliveryDoneFn func(error)
+	waitForStreamInput     func(context.Context, string) error
+	consumeStream          func(context.Context, natsclient.PortConsumerContext, natsclient.StreamConsumerConfig, func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error)
+	waitConsumerClosed     func(context.Context, <-chan struct{}) error
 }
 
 // consumerInfo tracks JetStream consumer details for cleanup
-type consumerInfo struct {
-	streamName   string
-	consumerName string
+type streamConsumerBinding struct {
+	handle      jetstream.ConsumeContext
+	drainIssued bool
 }
 
 type subscriptionInputBinding struct {
@@ -314,37 +322,46 @@ func (c *Component) Start(ctx context.Context) (startErr error) {
 	}
 
 	c.lifecycleMu.Lock()
-	if c.generation != nil {
+	if c.lifecycleUsed {
 		c.lifecycleMu.Unlock()
 		return errs.ErrAlreadyStarted
 	}
+	parent := ctx
 	runCtx, cancel := context.WithCancel(ctx)
 	startDone := make(chan struct{})
-	generation := lifecyclejoin.NewGeneration(cancel, func() { <-startDone })
-	var finishStart sync.Once
-	finish := func() { finishStart.Do(func() { close(startDone) }) }
-	c.generation = generation
-	c.starting = true
+	activityCtx, activityCancel := context.WithCancel(runCtx)
+	activityCommands := make(chan activityViewCommand)
+	activityDone := make(chan struct{})
+	c.lifecycleUsed = true
+	c.cleanupPending = true
+	c.cancel = cancel
+	c.startDone = startDone
+	c.activityCommands = activityCommands
+	c.activityDone = activityDone
+	c.activityCancel = activityCancel
 	c.lifecycleMu.Unlock()
+	go c.runActivityViewControl(activityCtx, activityCommands, activityDone)
+	committed := false
 	defer func() {
-		finish()
-		c.lifecycleMu.Lock()
-		c.starting = false
-		c.lifecycleMu.Unlock()
-		if startErr == nil {
+		if !committed {
+			rollbackErr := lifecyclecleanup.RollbackFailedStart(parent, c.cleanup)
+			startErr = errors.Join(startErr, rollbackErr)
+			c.lifecycleMu.Lock()
+			if rollbackErr == nil {
+				c.cleanupPending = false
+				c.terminal = true
+				c.clearLifecycleHandles()
+			}
+			close(startDone)
+			c.startDone = nil
+			c.lifecycleMu.Unlock()
 			return
 		}
-		rollbackErr := lifecyclejoin.RunPartialStartRollback(func(ctx context.Context) error {
-			return generation.Stop(ctx, nil, c.stopConsumers)
-		})
-		if rollbackErr == nil {
-			c.lifecycleMu.Lock()
-			if c.generation == generation {
-				c.generation = nil
-			}
-			c.lifecycleMu.Unlock()
-		}
-		startErr = errors.Join(startErr, rollbackErr)
+		c.lifecycleMu.Lock()
+		c.cleanupPending = false
+		close(startDone)
+		c.startDone = nil
+		c.lifecycleMu.Unlock()
 	}()
 
 	c.logger.Info("Starting router component")
@@ -357,6 +374,7 @@ func (c *Component) Start(ctx context.Context) (startErr error) {
 	c.started = true
 	c.startTime = time.Now()
 	c.mu.Unlock()
+	committed = true
 
 	c.logger.Info("Router component started",
 		slog.Int("commands", c.registry.Count()))
@@ -369,75 +387,108 @@ func (c *Component) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-	// Stop the shared activity view first (if the lazy first /activity
-	// request created it): attached SSE subscriptions receive the explicit
-	// terminal close and the single AGENT_LOOPS watcher shuts down. Runs
-	// before the started check so a component that served HTTP without
-	// Start (unit harnesses) still releases the watcher.
-	c.stopActivityView()
-
-	c.lifecycleMu.Lock()
-	generation := c.generation
-	c.lifecycleMu.Unlock()
-	if generation == nil {
-		return nil
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	stopErr := generation.Stop(ctx, nil, func(ctx context.Context) error {
-		stopErr := c.stopConsumers(ctx)
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return errors.Join(stopErr, ctxErr)
+	for {
+		c.lifecycleMu.Lock()
+		if !c.lifecycleUsed {
+			c.lifecycleUsed, c.terminal = true, true
+			c.lifecycleMu.Unlock()
+			return nil
 		}
+		if c.terminal {
+			c.lifecycleMu.Unlock()
+			return nil
+		}
+		if c.startDone != nil {
+			done := c.startDone
+			c.lifecycleMu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if c.stopping {
+			c.lifecycleMu.Unlock()
+			return errs.WrapTransient(errors.New("stop already in progress"), "Component", "Stop", "concurrent Stop")
+		}
+		retryable := c.cleanupPending
+		c.stopping = true
+		c.lifecycleMu.Unlock()
+		stopErr := c.cleanup(ctx)
+		c.lifecycleMu.Lock()
+		c.stopping = false
+		if retryable && stopErr != nil {
+			c.lifecycleMu.Unlock()
+			return stopErr
+		}
+		c.cleanupPending, c.terminal = false, true
+		c.clearLifecycleHandles()
+		c.lifecycleMu.Unlock()
 		c.mu.Lock()
 		c.started = false
 		c.mu.Unlock()
-		c.logger.Info("Router component stopped")
 		return stopErr
-	})
-	if stopErr == nil {
-		c.lifecycleMu.Lock()
-		if c.generation == generation {
-			c.generation = nil
+	}
+}
+
+func (c *Component) cleanup(ctx context.Context) error {
+	var stopErr error
+	for i := range c.consumers {
+		binding := &c.consumers[i]
+		if !binding.drainIssued {
+			binding.handle.Drain()
+			binding.drainIssued = true
 		}
-		c.lifecycleMu.Unlock()
+		stopErr = errors.Join(stopErr, c.awaitConsumerClosed(ctx, binding.handle.Closed()))
+	}
+	c.stopActivityView()
+	if c.cancel != nil {
+		c.cancel()
+	}
+	if err := ctx.Err(); err != nil {
+		stopErr = errors.Join(stopErr, err)
 	}
 	return stopErr
 }
 
-func (c *Component) stopConsumers(ctx context.Context) error {
-	c.mu.RLock()
-	infos := append([]consumerInfo(nil), c.consumerInfos...)
-	deleteConsumer := c.config.DeleteConsumerOnStop
-	c.mu.RUnlock()
-	var stopErr error
-	for _, info := range infos {
-		if deleteConsumer {
-			// Delete consumer from server (for test cleanup)
-			if err := c.natsClient.StopAndDeleteConsumer(ctx, info.streamName, info.consumerName); err != nil {
-				c.logger.Debug("Failed to delete consumer", "stream", info.streamName, "consumer", info.consumerName, "error", err)
-				stopErr = errors.Join(stopErr, err)
-			} else {
-				c.logger.Debug("Stopped and deleted consumer", "stream", info.streamName, "consumer", info.consumerName)
-			}
-		} else {
-			// Just stop local consumption (keep durable consumer for resume)
-			if err := c.natsClient.StopConsumer(ctx, info.streamName, info.consumerName); err != nil {
-				c.logger.Debug("Failed to stop consumer", "stream", info.streamName, "consumer", info.consumerName, "error", err)
-				stopErr = errors.Join(stopErr, err)
-			}
-			c.logger.Debug("Stopped consumer", "stream", info.streamName, "consumer", info.consumerName)
-		}
+func (c *Component) awaitConsumerClosed(ctx context.Context, closed <-chan struct{}) error {
+	if c.waitConsumerClosed != nil {
+		return c.waitConsumerClosed(ctx, closed)
 	}
-	if ctx.Err() == nil {
-		c.mu.Lock()
-		c.consumerInfos = nil
-		c.mu.Unlock()
+	select {
+	case <-closed:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	return stopErr
+}
+
+func (c *Component) consumeStreamHandle(ctx context.Context, owner natsclient.PortConsumerContext, cfg natsclient.StreamConsumerConfig, handler func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
+	if c.consumeStream != nil {
+		return c.consumeStream(ctx, owner, cfg, handler)
+	}
+	return c.natsClient.ConsumeStreamWithConfig(ctx, owner, cfg, handler)
+}
+
+func (c *Component) clearLifecycleHandles() {
+	c.consumers = nil
+	c.cancel = nil
+	c.activityCommands = nil
+	c.activityDone = nil
+	c.activityCancel = nil
 }
 
 // setupSubscriptions sets up JetStream consumers for durable messaging
 func (c *Component) setupSubscriptions(ctx context.Context) error {
-	bindings, err := c.resolveAndWaitForSubscriptionBindings(ctx, c.waitForStream)
+	waitForStream := c.waitForStream
+	if c.waitForStreamInput != nil {
+		waitForStream = c.waitForStreamInput
+	}
+	bindings, err := c.resolveAndWaitForSubscriptionBindings(ctx, waitForStream)
 	if err != nil {
 		return err
 	}
@@ -454,7 +505,7 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		MaxAckPending: bindings.userMessage.consumerConfig.MaxAckPending,
 		AutoCreate:    false,
 	}
-	err = c.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.userMessage.portName}, userMsgCfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	handle, err := c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.userMessage.portName}, userMsgCfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		c.handleUserMessage(msgCtx, msg.Data())
 		if ackErr := msg.Ack(); ackErr != nil {
 			c.logger.Error("Failed to ack user message", slog.String("error", ackErr.Error()))
@@ -463,10 +514,9 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupSubscriptions", "subscribe to user.message")
 	}
-	c.consumerInfos = append(c.consumerInfos, consumerInfo{
-		streamName:   userMsgCfg.StreamName,
-		consumerName: userMsgCfg.ConsumerName,
-	})
+	c.lifecycleMu.Lock()
+	c.consumers = append(c.consumers, streamConsumerBinding{handle: handle})
+	c.lifecycleMu.Unlock()
 
 	// Subscribe to agent completions via JetStream
 	agentCompleteCfg := natsclient.StreamConsumerConfig{
@@ -479,7 +529,7 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		MaxAckPending: bindings.agentComplete.consumerConfig.MaxAckPending,
 		AutoCreate:    false,
 	}
-	err = c.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.agentComplete.portName}, agentCompleteCfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	handle, err = c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.agentComplete.portName}, agentCompleteCfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		handleErr := c.handleTerminalDelivery(msgCtx, msg)
 		c.observeTerminalDelivery(handleErr)
 		if handleErr != nil {
@@ -489,10 +539,9 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupSubscriptions", "subscribe to agent.complete")
 	}
-	c.consumerInfos = append(c.consumerInfos, consumerInfo{
-		streamName:   agentCompleteCfg.StreamName,
-		consumerName: agentCompleteCfg.ConsumerName,
-	})
+	c.lifecycleMu.Lock()
+	c.consumers = append(c.consumers, streamConsumerBinding{handle: handle})
+	c.lifecycleMu.Unlock()
 
 	// Subscribe to loop created events for workflow context sync
 	agentCreatedCfg := natsclient.StreamConsumerConfig{
@@ -505,7 +554,7 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		MaxAckPending: bindings.agentCreated.consumerConfig.MaxAckPending,
 		AutoCreate:    false,
 	}
-	err = c.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.agentCreated.portName}, agentCreatedCfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	handle, err = c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.agentCreated.portName}, agentCreatedCfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		c.handleAgentCreated(msgCtx, msg.Data())
 		if ackErr := msg.Ack(); ackErr != nil {
 			c.logger.Error("Failed to ack agent created message", slog.String("error", ackErr.Error()))
@@ -514,10 +563,9 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupSubscriptions", "subscribe to agent.created")
 	}
-	c.consumerInfos = append(c.consumerInfos, consumerInfo{
-		streamName:   agentCreatedCfg.StreamName,
-		consumerName: agentCreatedCfg.ConsumerName,
-	})
+	c.lifecycleMu.Lock()
+	c.consumers = append(c.consumers, streamConsumerBinding{handle: handle})
+	c.lifecycleMu.Unlock()
 
 	// Subscribe to loop failed events
 	agentFailedCfg := natsclient.StreamConsumerConfig{
@@ -530,7 +578,7 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		MaxAckPending: bindings.agentFailed.consumerConfig.MaxAckPending,
 		AutoCreate:    false,
 	}
-	err = c.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.agentFailed.portName}, agentFailedCfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	handle, err = c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.agentFailed.portName}, agentFailedCfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		handleErr := c.handleTerminalDelivery(msgCtx, msg)
 		c.observeTerminalDelivery(handleErr)
 		if handleErr != nil {
@@ -540,10 +588,9 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupSubscriptions", "subscribe to agent.failed")
 	}
-	c.consumerInfos = append(c.consumerInfos, consumerInfo{
-		streamName:   agentFailedCfg.StreamName,
-		consumerName: agentFailedCfg.ConsumerName,
-	})
+	c.lifecycleMu.Lock()
+	c.consumers = append(c.consumers, streamConsumerBinding{handle: handle})
+	c.lifecycleMu.Unlock()
 
 	// Subscribe to approval-pending events so the HTTP approval
 	// handler has the loop's CallID + tool args available locally
@@ -569,7 +616,7 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		MaxAckPending: bindings.approvalPending.consumerConfig.MaxAckPending,
 		AutoCreate:    false,
 	}
-	err = c.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.approvalPending.portName}, agentApprovalPendingCfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	handle, err = c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.approvalPending.portName}, agentApprovalPendingCfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		c.handleAgentApprovalPending(msgCtx, msg.Data())
 		if ackErr := msg.Ack(); ackErr != nil {
 			c.logger.Error("Failed to ack agent approval-pending message", slog.String("error", ackErr.Error()))
@@ -578,10 +625,9 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupSubscriptions", "subscribe to agent.approval_pending")
 	}
-	c.consumerInfos = append(c.consumerInfos, consumerInfo{
-		streamName:   agentApprovalPendingCfg.StreamName,
-		consumerName: agentApprovalPendingCfg.ConsumerName,
-	})
+	c.lifecycleMu.Lock()
+	c.consumers = append(c.consumers, streamConsumerBinding{handle: handle})
+	c.lifecycleMu.Unlock()
 
 	return nil
 }

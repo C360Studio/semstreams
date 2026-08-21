@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -57,11 +56,17 @@ type Component struct {
 	startTime time.Time
 	mu        sync.RWMutex
 
-	// Private generation cancellation and Start-owned join state.
-	lifecycleMu sync.Mutex
-	generation  *lifecyclejoin.Generation
-	shutdownOp  *lifecyclejoin.Operation
-	wg          sync.WaitGroup
+	// Private one-shot lifecycle authority. Stop waits for startDone before
+	// reading the exact cancel/join records published by Start.
+	lifecycleMu   sync.Mutex
+	lifecycleUsed bool
+	lifecycleDone bool
+	stopping      bool
+	startDone     chan struct{}
+	cancel        context.CancelFunc
+	runtimeDone   chan struct{}
+	claims        []otelConsumerClaim
+	wg            sync.WaitGroup
 
 	// Metrics tracking
 	eventsProcessed int64
@@ -74,7 +79,23 @@ type Component struct {
 type observedSubscription struct {
 	consumer jetstream.Consumer
 	cleanup  func()
+	claim    otelConsumerClaim
 }
+
+type otelConsumerIdentity struct {
+	stream  string
+	durable string
+}
+
+type otelConsumerClaim struct {
+	identity otelConsumerIdentity
+	token    *struct{}
+}
+
+var localOTELConsumerClaims = struct {
+	sync.Mutex
+	active map[otelConsumerIdentity]*struct{}
+}{active: make(map[otelConsumerIdentity]*struct{})}
 
 // Exporter defines the interface for OTEL export operations.
 type Exporter interface {
@@ -175,37 +196,55 @@ func (c *Component) Start(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return errs.WrapInvalid(err, "Component", "Start", "context already cancelled")
 	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.running {
-		return errs.WrapFatal(errs.ErrAlreadyStarted, "Component", "Start", "check running state")
-	}
-
 	if c.natsClient == nil {
 		return errs.WrapFatal(errs.ErrNoConnection, "Component", "Start", "check NATS client")
 	}
+	c.lifecycleMu.Lock()
+	if c.lifecycleUsed {
+		c.lifecycleMu.Unlock()
+		return errs.WrapFatal(errs.ErrAlreadyStarted, "Component", "Start", "component instance already used")
+	}
+	c.lifecycleUsed = true
+	startDone := make(chan struct{})
+	c.startDone = startDone
+	c.lifecycleMu.Unlock()
 
-	// Derive background work from Start and retain only generation authority.
+	finishStart := func(terminal bool) {
+		c.lifecycleMu.Lock()
+		c.lifecycleDone = terminal
+		close(startDone)
+		c.startDone = nil
+		c.lifecycleMu.Unlock()
+	}
+
+	// Derive background work from Start and retain only private cancellation.
 	runtimeCtx, cancel := context.WithCancel(ctx)
 
 	// Subscribe to agent events
 	if err := c.subscribeToEvents(runtimeCtx); err != nil {
 		cancel()
+		finishStart(true)
 		return errs.Wrap(err, "Component", "Start", "subscribe to events")
 	}
 
 	// Start export loop
 	c.wg.Add(1)
 	go c.exportLoop(runtimeCtx)
+	runtimeDone := make(chan struct{})
+	go func() {
+		c.wg.Wait()
+		close(runtimeDone)
+	}()
+	c.mu.Lock()
 	c.lifecycleMu.Lock()
-	c.generation = lifecyclejoin.NewGeneration(cancel, c.wg.Wait)
-	c.shutdownOp = lifecyclejoin.NewOperation()
-	c.lifecycleMu.Unlock()
-
 	c.running = true
 	c.startTime = time.Now()
+	c.cancel = cancel
+	c.runtimeDone = runtimeDone
+	close(startDone)
+	c.startDone = nil
+	c.lifecycleMu.Unlock()
+	c.mu.Unlock()
 
 	c.logger.Info("OTEL exporter started",
 		slog.String("endpoint", c.config.Endpoint),
@@ -231,8 +270,10 @@ func (c *Component) subscribeToEvents(ctx context.Context) error {
 
 	subscriptions := make([]observedSubscription, 0, len(c.inputs))
 	rollback := func() {
-		for _, created := range subscriptions {
+		for i := len(subscriptions) - 1; i >= 0; i-- {
+			created := subscriptions[i]
 			created.cleanup()
+			releaseOTELConsumerClaim(created.claim)
 		}
 	}
 
@@ -273,18 +314,30 @@ func (c *Component) subscribeToEvents(ctx context.Context) error {
 			DeliverPolicy: jetstream.DeliverNewPolicy,
 			MaxAckPending: consumerConfig.MaxAckPending,
 		}
+		claim, err := reserveOTELConsumerClaim(streamName, consumerName)
+		if err != nil {
+			rollback()
+			return err
+		}
 		consumer, err := js.CreateOrUpdateConsumer(ctx, streamName, finalConfig)
 		if err != nil {
+			releaseOTELConsumerClaim(claim)
 			rollback()
 			return natsclient.ClassifyConsumerPolicyError(err, "otel.CreateOrUpdateConsumer")
 		}
 		observed, err := c.prepareObservedSubscription(ctx,
 			natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name}, finalConfig, consumer)
 		if err != nil {
+			releaseOTELConsumerClaim(claim)
 			rollback()
 			return err
 		}
+		observed.claim = claim
 		subscriptions = append(subscriptions, observed)
+	}
+	if err := ctx.Err(); err != nil {
+		rollback()
+		return err
 	}
 
 	for _, created := range subscriptions {
@@ -313,6 +366,7 @@ func (c *Component) prepareObservedSubscription(
 
 func (c *Component) startObservedSubscription(ctx context.Context, subscription observedSubscription) {
 	c.policyCleanups = append(c.policyCleanups, subscription.cleanup)
+	c.claims = append(c.claims, subscription.claim)
 	if c.consumer == nil {
 		c.consumer = subscription.consumer
 	}
@@ -325,6 +379,31 @@ func (c *Component) startObservedSubscription(ctx context.Context, subscription 
 		defer c.wg.Done()
 		runner(ctx, subscription.consumer)
 	}()
+}
+
+func reserveOTELConsumerClaim(stream, durable string) (otelConsumerClaim, error) {
+	identity := otelConsumerIdentity{stream: stream, durable: durable}
+	localOTELConsumerClaims.Lock()
+	defer localOTELConsumerClaims.Unlock()
+	if _, exists := localOTELConsumerClaims.active[identity]; exists {
+		return otelConsumerClaim{}, errs.WrapInvalid(
+			fmt.Errorf("OTEL consumer %s:%s already has a local owner", stream, durable),
+			"Component", "Start", "duplicate local durable identity")
+	}
+	token := &struct{}{}
+	localOTELConsumerClaims.active[identity] = token
+	return otelConsumerClaim{identity: identity, token: token}, nil
+}
+
+func releaseOTELConsumerClaim(claim otelConsumerClaim) {
+	if claim.token == nil {
+		return
+	}
+	localOTELConsumerClaims.Lock()
+	if localOTELConsumerClaims.active[claim.identity] == claim.token {
+		delete(localOTELConsumerClaims.active, claim.identity)
+	}
+	localOTELConsumerClaims.Unlock()
 }
 
 // consumeEventsFromConsumer processes incoming agent events from a specific consumer.
@@ -497,37 +576,95 @@ func (c *Component) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-	c.lifecycleMu.Lock()
-	generation := c.generation
-	shutdownOp := c.shutdownOp
-	c.lifecycleMu.Unlock()
-	if generation == nil {
-		return nil
+	if err := ctx.Err(); err != nil {
+		return errs.WrapInvalid(err, "LifecycleComponent", "Stop", "context already cancelled")
 	}
-	generation.Cancel()
-	return generation.Stop(ctx, nil, func(ctx context.Context) error {
-		return shutdownOp.Run(ctx, func(ctx context.Context) error {
-			c.exportData(ctx)
-			for _, cleanup := range c.policyCleanups {
-				cleanup()
-			}
-			c.policyCleanups = nil
-			exporter := c.getExporter()
-			if exporter != nil {
-				if err := exporter.Shutdown(ctx); err != nil {
-					return fmt.Errorf("shutdown OTEL exporter: %w", err)
-				}
-			}
-			c.mu.Lock()
-			c.running = false
-			c.mu.Unlock()
-			c.logger.Info("OTEL exporter stopped",
-				slog.Int64("events_processed", c.eventsProcessed),
-				slog.Int64("spans_exported", c.spansExported),
-				slog.Int64("metrics_exported", c.metricsExported))
+	for {
+		c.lifecycleMu.Lock()
+		if !c.lifecycleUsed {
+			c.lifecycleUsed = true
+			c.lifecycleDone = true
+			c.lifecycleMu.Unlock()
 			return nil
-		})
-	})
+		}
+		if c.lifecycleDone {
+			c.lifecycleMu.Unlock()
+			return nil
+		}
+		startDone := c.startDone
+		if startDone != nil {
+			c.lifecycleMu.Unlock()
+			select {
+			case <-startDone:
+				continue
+			case <-ctx.Done():
+				return fmt.Errorf("wait for OTEL Start completion: %w", ctx.Err())
+			}
+		}
+		if c.stopping {
+			c.lifecycleMu.Unlock()
+			return errs.WrapTransient(fmt.Errorf("OTEL Stop already in progress"),
+				"Component", "Stop", "concurrent Stop is unsupported")
+		}
+		c.stopping = true
+		cancel := c.cancel
+		runtimeDone := c.runtimeDone
+		policyCleanups := append([]func(){}, c.policyCleanups...)
+		claims := append([]otelConsumerClaim(nil), c.claims...)
+		c.lifecycleMu.Unlock()
+
+		cancel()
+		select {
+		case <-runtimeDone:
+		case <-ctx.Done():
+			c.finishTerminalStop(false)
+			return fmt.Errorf("join OTEL runtime: %w", ctx.Err())
+		}
+
+		// Flush only after the pull loop and exporter loop have joined. Policy
+		// observation then retires before exporter shutdown.
+		c.exportData(ctx)
+		for _, cleanup := range policyCleanups {
+			cleanup()
+		}
+		exporter := c.getExporter()
+		var shutdownErr error
+		if exporter != nil {
+			if err := exporter.Shutdown(ctx); err != nil {
+				shutdownErr = fmt.Errorf("shutdown OTEL exporter: %w", err)
+			}
+		}
+		for _, claim := range claims {
+			releaseOTELConsumerClaim(claim)
+		}
+		c.finishTerminalStop(true)
+		return shutdownErr
+	}
+}
+
+func (c *Component) finishTerminalStop(clearResources bool) {
+	c.lifecycleMu.Lock()
+	c.stopping = false
+	c.lifecycleDone = true
+	c.cancel = nil
+	c.runtimeDone = nil
+	if clearResources {
+		c.policyCleanups = nil
+		c.claims = nil
+		c.consumer = nil
+	}
+	c.lifecycleMu.Unlock()
+
+	c.mu.Lock()
+	c.running = false
+	eventsProcessed := c.eventsProcessed
+	spansExported := c.spansExported
+	metricsExported := c.metricsExported
+	c.mu.Unlock()
+	c.logger.Info("OTEL exporter stopped",
+		slog.Int64("events_processed", eventsProcessed),
+		slog.Int64("spans_exported", spansExported),
+		slog.Int64("metrics_exported", metricsExported))
 }
 
 // Discoverable interface implementation

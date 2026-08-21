@@ -167,10 +167,10 @@ func TestStartFailure_TearsDownRequestSubscriptions(t *testing.T) {
 	// Idempotent and nil-safe: both cleanup paths call it, and a Start that fails
 	// before either subscription exists must not panic.
 	c := &Component{}
-	if err := c.cleanup(context.Background(), false); err != nil {
+	if err := c.cleanup(context.Background()); err != nil {
 		t.Fatalf("first cleanup: %v", err)
 	}
-	if err := c.cleanup(context.Background(), false); err != nil {
+	if err := c.cleanup(context.Background()); err != nil {
 		t.Fatalf("second cleanup: %v", err)
 	}
 	if c.trajectorySub != nil || c.inflightSub != nil {

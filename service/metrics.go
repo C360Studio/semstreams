@@ -9,9 +9,10 @@ import (
 	"sync"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/security"
 )
 
@@ -19,19 +20,29 @@ import (
 type Metrics struct {
 	*BaseService
 
-	config       MetricsConfig           // Consistent config field
-	server       metricsServer           // Runtime state
-	registry     *metric.MetricsRegistry // Dependency
-	natsClient   *natsclient.Client      // For JetStream metrics publishing
-	security     security.Config         // Platform security config
-	generation   *lifecyclejoin.Generation
-	teardownOnce sync.Once
-	teardownErr  error
+	config         MetricsConfig           // Consistent config field
+	server         metricsServer           // Runtime state
+	registry       *metric.MetricsRegistry // Dependency
+	natsClient     *natsclient.Client      // For JetStream metrics publishing
+	security       security.Config         // Platform security config
+	lifecycleMu    sync.Mutex
+	used           bool
+	running        bool
+	stopping       bool
+	terminal       bool
+	cleanupPending bool
+	startDone      chan struct{}
+	cancel         context.CancelFunc
+
+	// Owner-local causal observation points used only by lifecycle tests.
+	testServerPublished   chan<- struct{}
+	testStartRelease      <-chan struct{}
+	testStartWaitUnlocked chan<- struct{}
 }
 
 type metricsServer interface {
-	Start() error
-	Stop() error
+	Start(context.Context) error
+	Stop(context.Context) error
 }
 
 // MetricsConfig holds configuration for the metrics service
@@ -108,39 +119,65 @@ func (m *Metrics) Start(ctx context.Context) error {
 	if err := validateLifecycleContext(ctx, "Metrics", "Start"); err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return errs.WrapInvalid(err, "Metrics", "Start", "context already ended")
+	}
+	m.lifecycleMu.Lock()
+	if m.used {
+		m.lifecycleMu.Unlock()
+		return errs.WrapFatal(errs.ErrAlreadyStarted, "Metrics", "Start", "service instance already used")
+	}
 	runCtx, cancel := context.WithCancel(ctx)
-	generation := lifecyclejoin.NewGeneration(cancel, nil)
-	// Call BaseService Start first
-	if err := m.BaseService.Start(runCtx); err != nil {
-		cancel()
-		return err
-	}
+	startDone := make(chan struct{})
+	m.used = true
+	m.cleanupPending = true
+	m.startDone = startDone
+	m.cancel = cancel
+	m.lifecycleMu.Unlock()
 
-	m.mu.Lock()
-
-	if m.server != nil {
-		m.mu.Unlock()
-		return fmt.Errorf("metrics server already started")
-	}
-
-	// Bind synchronously while holding lifecycle exclusion. Stop cannot overtake
-	// an unstarted server, and a bind failure cannot be reported as success.
 	server := metric.NewServer(m.config.Port, m.config.Path, m.registry, m.security)
 	slog.Info("Starting metrics server", "port", m.config.Port, "path", m.config.Path)
-	if err := server.Start(); err != nil {
-		m.mu.Unlock()
-		generation.Cancel()
-		if stopErr := lifecyclejoin.RunPartialStartRollback(m.BaseService.Stop); stopErr != nil {
-			return errors.Join(fmt.Errorf("start metrics server: %w", err), stopErr)
-		}
+	if err := server.Start(runCtx); err != nil {
+		cancel()
+		m.lifecycleMu.Lock()
+		m.cleanupPending = false
+		m.terminal = true
+		m.cancel = nil
+		close(startDone)
+		m.startDone = nil
+		m.lifecycleMu.Unlock()
 		return fmt.Errorf("start metrics server: %w", err)
 	}
+	m.lifecycleMu.Lock()
 	m.server = server
-	m.generation = generation
-	m.teardownOnce = sync.Once{}
-	m.teardownErr = nil
+	m.lifecycleMu.Unlock()
+	if m.testServerPublished != nil {
+		close(m.testServerPublished)
+		<-m.testStartRelease
+	}
 
-	m.mu.Unlock()
+	// The listener is owned before BaseService publishes running state. A base
+	// failure therefore retains the exact provider handle for bounded rollback.
+	if err := m.BaseService.Start(runCtx); err != nil {
+		rollbackErr := lifecyclecleanup.RollbackFailedStart(ctx, m.cleanupFailedStart)
+		m.lifecycleMu.Lock()
+		if rollbackErr == nil {
+			m.server = nil
+			m.cancel = nil
+			m.cleanupPending = false
+			m.terminal = true
+		}
+		close(startDone)
+		m.startDone = nil
+		m.lifecycleMu.Unlock()
+		return errors.Join(fmt.Errorf("start metrics base service: %w", err), rollbackErr)
+	}
+	m.lifecycleMu.Lock()
+	m.running = true
+	m.cleanupPending = false
+	close(startDone)
+	m.startDone = nil
+	m.lifecycleMu.Unlock()
 	scheme := "http"
 	if m.security.TLS.Server.Enabled {
 		scheme = "https"
@@ -159,39 +196,90 @@ func (m *Metrics) Stop(ctx context.Context) error {
 	if err := validateLifecycleContext(ctx, "Metrics", "Stop"); err != nil {
 		return err
 	}
-	m.mu.Lock()
-	generation := m.generation
-	m.mu.Unlock()
-	if generation == nil {
-		return nil
-	}
-
-	return generation.Stop(ctx, nil, func(ctx context.Context) error {
-		m.teardownOnce.Do(func() {
-			m.mu.Lock()
-			defer m.mu.Unlock()
-			if m.server != nil {
-				if err := m.server.Stop(); err != nil {
-					m.teardownErr = fmt.Errorf("failed to stop metrics server: %w", err)
-					slog.Error("Error stopping metrics server", "error", err)
-				} else {
-					m.server = nil
+	for {
+		m.lifecycleMu.Lock()
+		startDone := m.startDone
+		if startDone != nil {
+			select {
+			case <-startDone:
+			default:
+				m.lifecycleMu.Unlock()
+				if m.testStartWaitUnlocked != nil {
+					m.testStartWaitUnlocked <- struct{}{}
+				}
+				select {
+				case <-startDone:
+					continue
+				case <-ctx.Done():
+					return fmt.Errorf("wait for Metrics Start: %w", ctx.Err())
 				}
 			}
-		})
-		baseErr := m.BaseService.Stop(ctx)
-		if ctx.Err() != nil && errors.Is(baseErr, ctx.Err()) {
-			return errors.Join(m.teardownErr, baseErr)
 		}
+		if m.stopping {
+			m.lifecycleMu.Unlock()
+			return errs.WrapTransient(errors.New("metrics service stop already in progress"),
+				"Metrics", "Stop", "concurrent Stop is unsupported")
+		}
+		if m.terminal {
+			m.lifecycleMu.Unlock()
+			return nil
+		}
+		if !m.used {
+			m.used = true
+			m.terminal = true
+			m.lifecycleMu.Unlock()
+			return m.BaseService.Stop(ctx)
+		}
+		failedStart := m.cleanupPending
+		m.stopping = true
+		m.lifecycleMu.Unlock()
+
+		stopErr := m.cleanup(ctx)
+		m.lifecycleMu.Lock()
+		if failedStart && stopErr != nil {
+			m.stopping = false
+			m.cleanupPending = true
+			m.lifecycleMu.Unlock()
+			return fmt.Errorf("stop metrics failed-Start cleanup: %w", stopErr)
+		}
+		m.server = nil
+		m.cancel = nil
+		m.running = false
+		m.cleanupPending = false
+		m.stopping = false
+		m.terminal = true
+		m.lifecycleMu.Unlock()
 		slog.Info("Metrics service stopped")
-		return errors.Join(m.teardownErr, baseErr)
-	})
+		return stopErr
+	}
+}
+
+func (m *Metrics) cleanupFailedStart(ctx context.Context) error { return m.cleanup(ctx) }
+
+func (m *Metrics) cleanup(ctx context.Context) error {
+	m.lifecycleMu.Lock()
+	server := m.server
+	cancel := m.cancel
+	m.lifecycleMu.Unlock()
+
+	var serverErr error
+	if server != nil {
+		serverErr = server.Stop(ctx)
+	}
+	if cancel != nil {
+		cancel()
+	}
+	baseErr := m.BaseService.Stop(ctx)
+	if serverErr != nil {
+		slog.Error("Error stopping metrics server", "error", serverErr)
+	}
+	return errors.Join(serverErr, baseErr)
 }
 
 // healthCheck performs health check for metrics service
 func (m *Metrics) healthCheck() error {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
 
 	// Simple health check - verify server is accessible
 	if m.server == nil {

@@ -3,6 +3,7 @@
 package httppost_test
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -57,7 +58,19 @@ func createTestComponent() component.LifecycleComponent {
 	return lifecycleComp
 }
 
-// TestHTTPPostOutput_ComprehensiveLifecycle runs the complete lifecycle test suite
-func TestHTTPPostOutput_ComprehensiveLifecycle(t *testing.T) {
-	component.StandardLifecycleTests(t, createTestComponent)
+// TestHTTPPostOutput_OneShotLifecycle exercises the assembled core-NATS owner.
+func TestHTTPPostOutput_OneShotLifecycle(t *testing.T) {
+	owner := createTestComponent()
+	if err := owner.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.Stop(context.Background()); err != nil {
+		t.Fatalf("repeated terminal Stop: %v", err)
+	}
 }

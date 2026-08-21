@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/internal/lifecyclejoin"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/acme"
@@ -42,6 +41,8 @@ type Input struct {
 
 	// Server mode
 	httpServer *http.Server
+	listener   net.Listener
+	serveDone  chan error
 	upgrader   websocket.Upgrader
 	clients    map[string]*websocket.Conn
 	clientsMu  sync.RWMutex
@@ -49,8 +50,10 @@ type Input struct {
 	// Client mode
 	wsClient          *websocket.Conn
 	clientMu          sync.Mutex
+	clientOpen        bool
 	writeMu           sync.Mutex // Protects all conn.WriteMessage calls (gorilla requires exclusive write access)
 	reconnectAttempts atomic.Int32
+	dialClient        func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
 	// Message buffer for backpressure (CircularBuffer with atomic overflow policies)
 	messageBuffer buffer.Buffer[*queuedMessage]
@@ -66,16 +69,26 @@ type Input struct {
 	jetStreamOutputs map[string]bool
 
 	// Lifecycle management
-	shutdown     chan struct{}
-	shutdownOnce sync.Once
-	done         chan struct{}
-	doneOnce     sync.Once
-	started      atomic.Bool
-	startTime    time.Time
-	wg           sync.WaitGroup
-	generation   *lifecyclejoin.Generation
-	lifecycleMu  sync.Mutex
-	tlsCleanup   func() // TLS cleanup function (ACME renewal loop)
+	started             atomic.Bool
+	startTime           time.Time
+	wg                  sync.WaitGroup
+	runtimeDone         chan struct{}
+	lifecycleMu         sync.Mutex
+	lifecycleUsed       bool
+	terminal            bool
+	stopping            bool
+	cleanupPending      bool
+	startDone           chan struct{}
+	cancel              context.CancelFunc
+	tlsCleanup          func() // TLS cleanup function (ACME renewal loop)
+	tlsCleanupMu        sync.Mutex
+	admissionMu         sync.Mutex
+	requestOpen         bool
+	requestCount        int
+	requestZero         chan struct{}
+	requestHook         func(context.Context)
+	clientPublished     func(*websocket.Conn)
+	beforeRuntimeCancel func()
 
 	// Statistics
 	messagesReceived  int64
@@ -376,8 +389,6 @@ func NewInput(
 		controlSubject:   controlSubject,
 		outputPorts:      outputPorts,
 		jetStreamOutputs: jetStreamOutputs,
-		shutdown:         make(chan struct{}),
-		done:             make(chan struct{}),
 		metrics:          newMetrics(metricsRegistry, name),
 	}
 
@@ -521,40 +532,81 @@ func (i *Input) Start(ctx context.Context) error {
 	}
 
 	i.lifecycleMu.Lock()
-	defer i.lifecycleMu.Unlock()
-
-	if i.started.Load() {
+	if i.lifecycleUsed {
+		i.lifecycleMu.Unlock()
 		return errs.WrapFatal(
-			fmt.Errorf("component already started"),
+			errs.ErrAlreadyStarted,
 			"websocket_input",
 			"Start",
-			"check started state",
+			"cleanup authority already active",
 		)
 	}
-
-	// Create component context (local variable, not stored)
-	componentCtx, cancel := context.WithCancel(ctx)
-
-	// Start message processor goroutine (captures componentCtx)
-	i.wg.Add(1)
-	go i.processMessages(componentCtx)
+	runCtx, cancel := context.WithCancel(ctx)
+	startDone := make(chan struct{})
+	i.lifecycleUsed = true
+	i.cleanupPending = true
+	i.cancel = cancel
+	i.startDone = startDone
+	i.lifecycleMu.Unlock()
 
 	// Start mode-specific logic
 	var err error
 	if i.mode == ModeServer {
-		err = i.startServer(componentCtx)
+		err = i.startServer(runCtx)
 	} else {
-		err = i.startClient(componentCtx)
+		err = nil
 	}
 
 	if err != nil {
 		cancel()
+		if cleanup := i.takeTLSCleanup(); cleanup != nil {
+			cleanup()
+		}
+		i.lifecycleMu.Lock()
+		i.cleanupPending = false
+		i.terminal = true
+		i.cancel = nil
+		close(startDone)
+		i.startDone = nil
+		i.httpServer = nil
+		i.listener = nil
+		i.serveDone = nil
+		i.lifecycleMu.Unlock()
 		return err
 	}
-	i.generation = lifecyclejoin.NewGeneration(cancel, i.wg.Wait)
+
+	i.admissionMu.Lock()
+	i.requestOpen = true
+	i.admissionMu.Unlock()
+	if i.mode == ModeClient {
+		i.clientMu.Lock()
+		i.clientOpen = true
+		i.clientMu.Unlock()
+	}
+
+	workers := 1 // processMessages
+	if i.mode == ModeClient {
+		workers++
+	}
+	i.wg.Add(workers)
+	go i.processMessages(runCtx)
+	if i.mode == ModeClient {
+		go i.clientConnectLoop(runCtx)
+	}
+	runtimeDone := make(chan struct{})
+	i.runtimeDone = runtimeDone
+	go func() {
+		i.wg.Wait()
+		close(runtimeDone)
+	}()
 
 	i.startTime = time.Now()
 	i.started.Store(true)
+	i.lifecycleMu.Lock()
+	i.cleanupPending = false
+	close(startDone)
+	i.startDone = nil
+	i.lifecycleMu.Unlock()
 	return nil
 }
 
@@ -563,32 +615,93 @@ func (i *Input) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-	i.lifecycleMu.Lock()
-	generation := i.generation
-	if generation == nil {
+	for {
+		i.lifecycleMu.Lock()
+		if !i.lifecycleUsed {
+			i.lifecycleUsed = true
+			i.terminal = true
+			i.lifecycleMu.Unlock()
+			return nil
+		}
+		if i.terminal {
+			i.lifecycleMu.Unlock()
+			return nil
+		}
+		if i.startDone != nil {
+			done := i.startDone
+			i.lifecycleMu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if i.stopping {
+			i.lifecycleMu.Unlock()
+			return errs.WrapTransient(errors.New("stop already in progress"), "websocket_input", "Stop", "concurrent Stop")
+		}
+		i.stopping = true
+		server := i.httpServer
+		serveDone := i.serveDone
+		cancel := i.cancel
+		runtimeDone := i.runtimeDone
 		i.lifecycleMu.Unlock()
-		return nil
-	}
-	i.lifecycleMu.Unlock()
-	stopErr := generation.StopWithQuiesce(ctx, nil, func(ctx context.Context) error {
-		var quiesceErr error
+
+		requestZero := i.fenceRequests()
+		var stopErr error
 		if i.mode == ModeServer {
-			quiesceErr = errs.NewShutdownError("websocket-input", errs.PhaseShutdownListener, i.stopServer(ctx))
+			if server != nil {
+				stopErr = errors.Join(stopErr, errs.NewShutdownError("websocket-input", errs.PhaseShutdownListener, server.Shutdown(ctx)))
+			}
+			if serveDone != nil {
+				select {
+				case err := <-serveDone:
+					stopErr = errors.Join(stopErr, err)
+				case <-ctx.Done():
+					stopErr = errors.Join(stopErr, ctx.Err())
+				}
+			}
+			i.closeServerClients()
+			select {
+			case <-requestZero:
+			case <-ctx.Done():
+				stopErr = errors.Join(stopErr, ctx.Err())
+			}
 		} else {
 			i.stopClient()
 		}
-		i.shutdownOnce.Do(func() { close(i.shutdown) })
-		return quiesceErr
-	}, func(context.Context) error {
-		if i.tlsCleanup != nil {
-			i.tlsCleanup()
+		if i.beforeRuntimeCancel != nil {
+			i.beforeRuntimeCancel()
 		}
-		closeErr := i.messageBuffer.Close()
-		i.doneOnce.Do(func() { close(i.done) })
+		if cancel != nil {
+			cancel()
+		}
+		if runtimeDone != nil {
+			select {
+			case <-runtimeDone:
+			case <-ctx.Done():
+				stopErr = errors.Join(stopErr, ctx.Err())
+			}
+		}
+		if cleanup := i.takeTLSCleanup(); cleanup != nil {
+			cleanup()
+		}
+		stopErr = errors.Join(stopErr, i.messageBuffer.Close())
+
+		i.lifecycleMu.Lock()
+		i.stopping = false
+		i.terminal = true
+		i.cleanupPending = false
+		i.cancel = nil
+		i.runtimeDone = nil
+		i.httpServer = nil
+		i.listener = nil
+		i.serveDone = nil
+		i.lifecycleMu.Unlock()
 		i.started.Store(false)
-		return closeErr
-	})
-	return attributeComponentShutdownError("websocket-input", errs.PhaseJoinRuntime, stopErr)
+		return attributeComponentShutdownError("websocket-input", errs.PhaseJoinRuntime, stopErr)
+	}
 }
 
 func attributeComponentShutdownError(owner string, phase errs.ShutdownPhase, err error) error {
@@ -600,6 +713,58 @@ func attributeComponentShutdownError(owner string, phase errs.ShutdownPhase, err
 		return err
 	}
 	return errs.NewShutdownError(owner, phase, err)
+}
+
+func (i *Input) admitRequest() bool {
+	i.admissionMu.Lock()
+	defer i.admissionMu.Unlock()
+	if !i.requestOpen {
+		return false
+	}
+	if i.requestCount == 0 {
+		i.requestZero = make(chan struct{})
+	}
+	i.requestCount++
+	return true
+}
+
+func (i *Input) releaseRequest() {
+	i.admissionMu.Lock()
+	defer i.admissionMu.Unlock()
+	i.requestCount--
+	if i.requestCount == 0 {
+		close(i.requestZero)
+	}
+}
+
+func (i *Input) fenceRequests() <-chan struct{} {
+	i.admissionMu.Lock()
+	defer i.admissionMu.Unlock()
+	i.requestOpen = false
+	if i.requestCount == 0 {
+		done := make(chan struct{})
+		close(done)
+		return done
+	}
+	return i.requestZero
+}
+
+func (i *Input) setTLSCleanup(cleanup func()) {
+	i.tlsCleanupMu.Lock()
+	previous := i.tlsCleanup
+	i.tlsCleanup = cleanup
+	i.tlsCleanupMu.Unlock()
+	if previous != nil {
+		previous()
+	}
+}
+
+func (i *Input) takeTLSCleanup() func() {
+	i.tlsCleanupMu.Lock()
+	cleanup := i.tlsCleanup
+	i.tlsCleanup = nil
+	i.tlsCleanupMu.Unlock()
+	return cleanup
 }
 
 // Process implements component.LifecycleComponent (not used for input components)
@@ -617,14 +782,22 @@ func (i *Input) startServer(ctx context.Context) error {
 	cfg := i.config.ServerConfig
 
 	mux := http.NewServeMux()
-	// Wrap handleWebSocket in closure to pass context
 	mux.HandleFunc(cfg.Path, func(w http.ResponseWriter, r *http.Request) {
-		i.handleWebSocket(ctx, w, r)
+		if !i.admitRequest() {
+			http.Error(w, "service stopping", http.StatusServiceUnavailable)
+			return
+		}
+		defer i.releaseRequest()
+		if i.requestHook != nil {
+			i.requestHook(r.Context())
+		}
+		i.handleWebSocket(r.Context(), w, r)
 	})
 
 	i.httpServer = &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.HTTPPort),
-		Handler: mux,
+		Addr:        fmt.Sprintf(":%d", cfg.HTTPPort),
+		Handler:     mux,
+		BaseContext: func(net.Listener) context.Context { return ctx },
 	}
 
 	// Configure TLS if enabled at platform level
@@ -646,7 +819,7 @@ func (i *Input) startServer(ctx context.Context) error {
 
 			// Store cleanup function for Stop()
 			if tlsCleanup != nil {
-				i.tlsCleanup = tlsCleanup
+				i.setTLSCleanup(tlsCleanup)
 			}
 		} else {
 			// Use manual TLS configuration
@@ -663,58 +836,52 @@ func (i *Input) startServer(ctx context.Context) error {
 		i.httpServer.TLSConfig = tlsConfig
 	}
 
-	// Start HTTP/HTTPS server in goroutine
-	i.wg.Add(1)
+	listener, err := net.Listen("tcp", i.httpServer.Addr)
+	if err != nil {
+		return errs.WrapFatal(err, "websocket_input", "startServer", "bind HTTP listener")
+	}
+	i.listener = listener
+	serveDone := make(chan error, 1)
+	i.serveDone = serveDone
 	go func() {
-		defer i.wg.Done()
-		var err error
+		var serveErr error
 		if i.security.TLS.Server.Enabled {
-			// ListenAndServeTLS with empty cert/key files since TLSConfig is already set
-			err = i.httpServer.ListenAndServeTLS("", "")
+			serveErr = i.httpServer.ServeTLS(listener, "", "")
 		} else {
-			err = i.httpServer.ListenAndServe()
+			serveErr = i.httpServer.Serve(listener)
 		}
-		if err != nil && err != http.ErrServerClosed {
-			// Log error but don't crash
+		if errors.Is(serveErr, http.ErrServerClosed) {
+			serveErr = nil
+		}
+		if serveErr != nil {
 			i.trackError("server_error")
 		}
+		serveDone <- serveErr
+		close(serveDone)
 	}()
 
 	return nil
 }
 
-// stopServer stops the WebSocket server
-func (i *Input) stopServer(ctx context.Context) error {
-	var shutdownErr error
-	if i.httpServer != nil {
-		shutdownErr = i.httpServer.Shutdown(ctx)
-	}
-
-	// Close all client connections
+func (i *Input) closeServerClients() {
 	i.clientsMu.Lock()
 	for _, conn := range i.clients {
-		conn.Close()
+		_ = conn.Close()
 	}
 	i.clients = make(map[string]*websocket.Conn)
 	i.clientsMu.Unlock()
-	return shutdownErr
-}
-
-// startClient starts the WebSocket client (Mode: client)
-func (i *Input) startClient(ctx context.Context) error {
-	i.wg.Add(1)
-	go i.clientConnectLoop(ctx)
-	return nil
 }
 
 // stopClient stops the WebSocket client
 func (i *Input) stopClient() {
 	i.clientMu.Lock()
-	if i.wsClient != nil {
-		i.wsClient.Close()
-		i.wsClient = nil
-	}
+	i.clientOpen = false
+	client := i.wsClient
+	i.wsClient = nil
 	i.clientMu.Unlock()
+	if client != nil {
+		_ = client.Close()
+	}
 }
 
 // handleWebSocket handles incoming WebSocket connections (server mode)
@@ -746,9 +913,8 @@ func (i *Input) handleWebSocket(ctx context.Context, w http.ResponseWriter, r *h
 		i.metrics.connectionsTotal.Inc()
 	}
 
-	// Handle client connection (captures ctx from closure)
-	i.wg.Add(1)
-	go i.handleClient(ctx, clientID, conn)
+	// Keep the upgraded request admitted until the hijacked connection exits.
+	i.handleClient(ctx, clientID, conn)
 }
 
 // authenticateRequest validates the authentication credentials in the HTTP request
@@ -831,7 +997,6 @@ func (i *Input) trackError(errorType string) {
 
 // handleClient handles messages from a connected client
 func (i *Input) handleClient(ctx context.Context, clientID string, conn *websocket.Conn) {
-	defer i.wg.Done()
 	defer func() {
 		conn.Close()
 		i.clientsMu.Lock()
@@ -847,8 +1012,6 @@ func (i *Input) handleClient(ctx context.Context, clientID string, conn *websock
 
 	for {
 		select {
-		case <-i.shutdown:
-			return
 		case <-ctx.Done():
 			return
 		default:
@@ -923,7 +1086,7 @@ func (i *Input) clientConnectLoop(ctx context.Context) {
 
 			// Store cleanup function for Stop()
 			if tlsCleanup != nil {
-				i.tlsCleanup = tlsCleanup
+				i.setTLSCleanup(tlsCleanup)
 			}
 		} else {
 			// Use manual TLS configuration
@@ -941,18 +1104,21 @@ func (i *Input) clientConnectLoop(ctx context.Context) {
 	}
 
 	for {
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil || !i.clientAdmissionOpen() {
 			return
-		case <-i.shutdown:
-			return
-		default:
 		}
 
 		// Connect to server with authentication headers
 		headers := i.buildAuthHeaders()
-		conn, _, err := dialer.Dial(cfg.URL, headers)
+		dial := dialer.DialContext
+		if i.dialClient != nil {
+			dial = i.dialClient
+		}
+		conn, _, err := dial(ctx, cfg.URL, headers)
 		if err != nil {
+			if ctx.Err() != nil || !i.clientAdmissionOpen() {
+				return
+			}
 			i.trackError("connect_error")
 
 			// Handle reconnection
@@ -961,7 +1127,15 @@ func (i *Input) clientConnectLoop(ctx context.Context) {
 			}
 
 			delay := i.calculateReconnectDelay()
-			time.Sleep(delay)
+			timer := time.NewTimer(delay)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return
+			}
 			continue
 		}
 
@@ -969,8 +1143,16 @@ func (i *Input) clientConnectLoop(ctx context.Context) {
 		i.reconnectAttempts.Store(0)
 
 		i.clientMu.Lock()
+		if !i.clientOpen || ctx.Err() != nil {
+			i.clientMu.Unlock()
+			_ = conn.Close()
+			return
+		}
 		i.wsClient = conn
 		i.clientMu.Unlock()
+		if i.clientPublished != nil {
+			i.clientPublished(conn)
+		}
 
 		if i.metrics != nil {
 			i.metrics.connectionsActive.Set(1)
@@ -978,11 +1160,15 @@ func (i *Input) clientConnectLoop(ctx context.Context) {
 		}
 
 		// Read messages until disconnect
-		i.clientReadLoop(conn)
+		i.clientReadLoop(ctx, conn)
+		_ = conn.Close()
 
 		// Connection closed
 		i.clientMu.Lock()
-		i.wsClient = nil
+		if i.wsClient == conn {
+			i.wsClient = nil
+		}
+		clientOpen := i.clientOpen
 		i.clientMu.Unlock()
 
 		if i.metrics != nil {
@@ -990,17 +1176,24 @@ func (i *Input) clientConnectLoop(ctx context.Context) {
 		}
 
 		// Check if we should reconnect
-		if !i.shouldReconnect() {
+		if !clientOpen || ctx.Err() != nil || !i.shouldReconnect() {
 			return
 		}
 	}
 }
 
+func (i *Input) clientAdmissionOpen() bool {
+	i.clientMu.Lock()
+	open := i.clientOpen
+	i.clientMu.Unlock()
+	return open
+}
+
 // clientReadLoop reads messages from WebSocket connection (client mode)
-func (i *Input) clientReadLoop(conn *websocket.Conn) {
+func (i *Input) clientReadLoop(ctx context.Context, conn *websocket.Conn) {
 	for {
 		select {
-		case <-i.shutdown:
+		case <-ctx.Done():
 			return
 		default:
 			_, message, err := conn.ReadMessage()
@@ -1129,8 +1322,6 @@ func (i *Input) processMessages(ctx context.Context) {
 
 	for {
 		select {
-		case <-i.shutdown:
-			return
 		case <-ctx.Done():
 			return
 		case <-ticker.C:

@@ -2,6 +2,7 @@
 package rule
 
 import (
+	"context"
 	"fmt"
 
 	gtypes "github.com/c360studio/semstreams/graph"
@@ -93,7 +94,7 @@ func (r *TestRule) Evaluate(messages []message.Message) bool {
 // EvaluateEntityState evaluates the rule against entity triples via the
 // unified evaluator. Implements the EntityStateEvaluator interface for
 // KV watch-based evaluation.
-func (r *TestRule) EvaluateEntityState(entityState *gtypes.EntityState) bool {
+func (r *TestRule) EvaluateEntityState(_ context.Context, entityState *gtypes.EntityState) bool {
 	if !r.enabled || entityState == nil {
 		return false
 	}

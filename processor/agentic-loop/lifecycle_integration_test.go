@@ -4,9 +4,11 @@ package agenticloop_test
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/pkg/errs"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
 )
 
@@ -43,5 +45,17 @@ func createTestComponentForLifecycle() component.LifecycleComponent {
 
 // TestAgenticLoop_ComprehensiveLifecycle runs the complete lifecycle test suite
 func TestAgenticLoop_ComprehensiveLifecycle(t *testing.T) {
-	component.StandardLifecycleTests(t, createTestComponentForLifecycle)
+	owner := createTestComponentForLifecycle()
+	if err := owner.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := owner.Stop(t.Context()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := owner.Start(t.Context()); !errors.Is(err, errs.ErrAlreadyStarted) {
+		t.Fatalf("restart error = %v", err)
+	}
+	if err := owner.Stop(t.Context()); err != nil {
+		t.Fatalf("repeat Stop: %v", err)
+	}
 }

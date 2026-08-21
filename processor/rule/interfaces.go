@@ -2,6 +2,8 @@
 package rule
 
 import (
+	"context"
+
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 )
@@ -45,5 +47,5 @@ type Rule interface {
 type EntityStateEvaluator interface {
 	// EvaluateEntityState evaluates the rule directly against EntityState triples.
 	// Rule conditions should use full predicate paths (e.g., "sensor.measurement.fahrenheit").
-	EvaluateEntityState(entityState *gtypes.EntityState) bool
+	EvaluateEntityState(ctx context.Context, entityState *gtypes.EntityState) bool
 }

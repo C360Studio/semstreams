@@ -13,11 +13,16 @@ import (
 // gh#557 shutdown window from unit tests.
 type ctxHonoringBucket struct {
 	jetstream.KeyValue
+	valueKey any
+	value    any
 }
 
 func (b ctxHonoringBucket) Put(ctx context.Context, key string, value []byte) (uint64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
+	}
+	if b.valueKey != nil && ctx.Value(b.valueKey) != b.value {
+		return 0, context.Canceled
 	}
 	return b.KeyValue.Put(ctx, key, value)
 }
@@ -46,10 +51,12 @@ func (e *cancellingExecutor) Execute(context.Context, Action, *ExecutionContext)
 func TestEvaluatePersistsMatchStateWhenCtxCancelledMidAction(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	type contextKey string
+	key := contextKey("durability-value")
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), key, "preserved"))
 	defer cancel()
 
-	tracker := NewStateTracker(ctxHonoringBucket{KeyValue: newMockKVBucket()}, nil)
+	tracker := NewStateTracker(ctxHonoringBucket{KeyValue: newMockKVBucket(), valueKey: key, value: "preserved"}, nil)
 	executor := &cancellingExecutor{cancel: cancel}
 	evaluator := NewStatefulEvaluator(tracker, executor, nil)
 

@@ -331,11 +331,12 @@ func TestIntegration_StartAll_BootFailsClosedOnComponentStartFailure(t *testing.
 	assert.ErrorIs(t, err, errSimulatedStartFailure,
 		"the component's own Start error must survive the propagation chain unwrapped-able")
 
-	// The failed component is recorded with its failure.
+	// The returned boot error retains the component failure, while successful
+	// synchronous rollback leaves the acquired component record stopped.
 	status := cm.GetComponentStatus()
 	require.Contains(t, status, "doomed-component")
-	assert.Equal(t, component.StateFailed, status["doomed-component"].State)
-	assert.Error(t, status["doomed-component"].LastError)
+	assert.Equal(t, component.StateStopped, status["doomed-component"].State)
+	assert.NoError(t, status["doomed-component"].LastError)
 
 	// HTTP was never brought up: completeHTTPSetup (which creates the server)
 	// is only reached after every service Start succeeds.

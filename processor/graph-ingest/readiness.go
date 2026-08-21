@@ -58,12 +58,19 @@ func (c *Component) boundConsumerSnapshot() []boundConsumer {
 	return out
 }
 
+// clearBoundConsumers forgets readiness observation labels only after owner
+// cleanup. These records never carry Stop, Drain, or deletion authority.
+func (c *Component) clearBoundConsumers() {
+	c.boundConsumersMu.Lock()
+	c.boundConsumers = nil
+	c.boundConsumersMu.Unlock()
+}
+
 // statusMetricsLoop republishes the readiness envelope on the shared heartbeat.
 // Mirrors graph-index's loop (processor/graph-index/component.go:1119-1160): the
 // write doubles as a liveness heartbeat, so it is unconditional rather than
 // on-change.
 func (c *Component) statusMetricsLoop(ctx context.Context) {
-	defer c.wg.Done()
 	// Publish once up front so the key is populated before the first tick rather
 	// than reading absent (which consumers correctly treat as unknown) for a whole
 	// interval after start.
@@ -128,7 +135,7 @@ func (c *Component) computeBacklogStatus(ctx context.Context) graph.IndexStatusR
 	observationFailed := false
 
 	for _, bc := range consumers {
-		work, err := c.natsClient.OutstandingWork(ctx, bc.stream, bc.name)
+		work, err := c.observeOutstandingWork(ctx, bc.stream, bc.name)
 		if err != nil {
 			if ctx.Err() != nil {
 				// Shutdown, not a fault.
@@ -172,7 +179,7 @@ func (c *Component) computeBacklogStatus(ctx context.Context) graph.IndexStatusR
 // A failed read leaves the capture unclaimed so the first successful tick still fills
 // it in — a late scope beats a fabricated zero.
 func (c *Component) recordBindBacklog(ctx context.Context, stream, name string) {
-	work, err := c.natsClient.OutstandingWork(ctx, stream, name)
+	work, err := c.observeOutstandingWork(ctx, stream, name)
 	if err != nil {
 		// A PARTIAL capture is worse than none: with several bound consumers, one
 		// success would otherwise mark the aggregate "known" and permanently omit the
@@ -192,6 +199,33 @@ func (c *Component) recordBindBacklog(ctx context.Context, stream, name string) 
 		return
 	}
 	c.bootBacklog.Add(work)
+}
+
+// observeOutstandingWork performs one read-only lookup by durable identity. It
+// deliberately retains no Consumer or ConsumeContext and exposes no lifecycle
+// authority; the owning Start/Stop path separately retains the exact native
+// ConsumeContext. Unknown observation remains an error, never a fabricated zero.
+func (c *Component) observeOutstandingWork(ctx context.Context, streamName, consumerName string) (uint64, error) {
+	js, err := c.natsClient.JetStream()
+	if err != nil {
+		return 0, errs.WrapTransient(err, "Component", "observeOutstandingWork", "get JetStream")
+	}
+	stream, err := js.Stream(ctx, streamName)
+	if err != nil {
+		return 0, errs.WrapTransient(err, "Component", "observeOutstandingWork", "look up stream "+streamName)
+	}
+	consumer, err := stream.Consumer(ctx, consumerName)
+	if err != nil {
+		return 0, errs.WrapTransient(err, "Component", "observeOutstandingWork", "look up consumer "+consumerName)
+	}
+	info, err := consumer.Info(ctx)
+	if err != nil {
+		return 0, errs.WrapTransient(err, "Component", "observeOutstandingWork", "read consumer info "+consumerName)
+	}
+	if info.NumAckPending < 0 {
+		return info.NumPending, nil
+	}
+	return info.NumPending + uint64(info.NumAckPending), nil
 }
 
 // latchBootstrap maintains the two bootstrap facts and returns (scope, complete).

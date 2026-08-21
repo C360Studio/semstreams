@@ -55,12 +55,11 @@ func TestIntegration_CancelMidExecution_NoOrphanToolCalls(t *testing.T) {
 				{Name: "agent.complete", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.complete.*"}}},
 			},
 		},
-		MaxIterations:        10,
-		Timeout:              "60s",
-		StreamName:           "AGENT",
-		ConsumerNameSuffix:   "cancel-mid-test",
-		DeleteConsumerOnStop: true,
-		LoopsBucket:          "AGENT_LOOPS",
+		MaxIterations:      10,
+		Timeout:            "60s",
+		StreamName:         "AGENT",
+		ConsumerNameSuffix: "cancel-mid-test",
+		LoopsBucket:        "AGENT_LOOPS",
 	}
 
 	rawConfig, err := json.Marshal(config)

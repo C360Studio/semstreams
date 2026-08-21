@@ -16,29 +16,33 @@ import (
 
 // setupQueryHandlers sets up NATS request/reply subscriptions for query handlers
 func (c *Component) setupQueryHandlers(ctx context.Context) error {
+	subscribe := c.subscribeForRequests
+	if subscribe == nil {
+		subscribe = c.natsClient.SubscribeForRequests
+	}
 	// Subscribe to community query
-	sub1, err := c.natsClient.SubscribeForRequests(ctx, "graph.clustering.query.community", c.handleQueryCommunityNATS)
+	sub1, err := subscribe(ctx, "graph.clustering.query.community", c.handleQueryCommunityNATS)
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupQueryHandlers", "subscribe community query")
 	}
 	c.querySubscriptions = append(c.querySubscriptions, sub1)
 
 	// Subscribe to members query
-	sub2, err := c.natsClient.SubscribeForRequests(ctx, "graph.clustering.query.members", c.handleQueryMembersNATS)
+	sub2, err := subscribe(ctx, "graph.clustering.query.members", c.handleQueryMembersNATS)
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupQueryHandlers", "subscribe members query")
 	}
 	c.querySubscriptions = append(c.querySubscriptions, sub2)
 
 	// Subscribe to entity community query
-	sub3, err := c.natsClient.SubscribeForRequests(ctx, "graph.clustering.query.entity", c.handleQueryEntityNATS)
+	sub3, err := subscribe(ctx, "graph.clustering.query.entity", c.handleQueryEntityNATS)
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupQueryHandlers", "subscribe entity query")
 	}
 	c.querySubscriptions = append(c.querySubscriptions, sub3)
 
 	// Subscribe to level query
-	sub4, err := c.natsClient.SubscribeForRequests(ctx, "graph.clustering.query.level", c.handleQueryLevelNATS)
+	sub4, err := subscribe(ctx, "graph.clustering.query.level", c.handleQueryLevelNATS)
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupQueryHandlers", "subscribe level query")
 	}
