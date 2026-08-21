@@ -1,15 +1,13 @@
 # Tasks — semantic-tier-split
 
-> **SUSPENDED AND FROZEN.** Every task state below is historical and
-> non-executable until the
-> [ADR-090 program](../../../docs/proposals/graph-state-read-write-program.md)
-> explicitly releases this change. Do not implement, archive, or promote it.
+> **WITHDRAWN by owner disposition on 2026-08-21.** Every unchecked task below is
+> historical and will not be executed from this package. No task is completed, no
+> implementation credit is granted, and archive uses `--skip-specs`.
 >
-> **Post-G premise status — 2026-08-11.** The graph-state foundation and
-> post-G closeout may have changed the measurements and dependencies assumed by
-> these historical tasks. #829 now belongs to the Semantic Summary
-> Content/Quality Program. No task below is reopened or completed by that
-> disposition; reactivation requires a fresh inventory and owner ruling.
+> #769 retains scheduled semantic/agentic E2E execution, #823 retains the
+> agent-facing result-shape defect, and #829 retains content-grounded community
+> summaries. #811, #819, and #830 are closed. Future tier-topology work requires a
+> fresh current-tree inventory; this task list must not be reactivated.
 
 **Amend a task line when the work HAPPENS, not only when it succeeds.** A gate that
 ran and was never recorded is indistinguishable from one that was skipped — that

@@ -1,8 +1,7 @@
-> **SUSPENDED PREMISE STATUS — 2026-08-11.** This delta remains frozen. Its
-> resource assumptions and proposed tier boundaries have not been revalidated
-> after the graph-state foundation and post-G closeout. #829 is owned by the
-> separate Semantic Summary Content/Quality Program. These requirements are not
-> active release authority and no task is completed by this annotation.
+> **WITHDRAWN — 2026-08-21.** This proposed delta is historical design evidence.
+> Its resource assumptions and tier boundaries were not revalidated after the
+> graph-state foundation, no implementation landed from it, and none of these
+> requirements are promoted to current truth. Archive uses `--skip-specs`.
 
 ## ADDED Requirements
 
