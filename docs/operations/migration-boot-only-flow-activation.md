@@ -110,4 +110,4 @@ This failure is intentional: a detached writer could return success without an
 observable write, so explicit Flow publication could not report exact persisted
 names. See the [implementation conformance ledger][c].
 
-[c]: ../../openspec/changes/require-restart-for-config-activation/pr990-boot-only-implementation-conformance.md
+[c]: ../../openspec/changes/archive/2026-08-21-require-restart-for-config-activation/pr990-boot-only-implementation-conformance.md

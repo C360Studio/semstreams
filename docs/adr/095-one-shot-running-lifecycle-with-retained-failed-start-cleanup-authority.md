@@ -62,4 +62,4 @@ and honest external-effect guarantees remain release gates; this decision does n
 
 - [ADR-094: Boot-Only Composition and Observable Rule Activation](094-boot-only-composition-and-observable-rule-activation.md)
 - `openspec/changes/simplify-one-shot-lifecycle-ownership/`
-- `openspec/changes/require-restart-for-config-activation/`
+- `openspec/changes/archive/2026-08-21-require-restart-for-config-activation/`

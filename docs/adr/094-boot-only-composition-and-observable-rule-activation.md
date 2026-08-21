@@ -179,4 +179,4 @@ hot activate only through the bounded, observable rule capability defined here.
 
 - [ADR-026: Coordinator Agent](026-coordinator-agent-dynamic-flow-composition.md)
 - [ADR-028: Orchestration Architecture](028-orchestration-architecture.md)
-- `openspec/changes/require-restart-for-config-activation/`
+- `openspec/changes/archive/2026-08-21-require-restart-for-config-activation/`

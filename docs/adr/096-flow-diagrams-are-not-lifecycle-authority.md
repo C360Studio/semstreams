@@ -58,6 +58,6 @@ downstream impact, but sister repositories remain read-only and their owners per
 
 - [ADR-094](094-boot-only-composition-and-observable-rule-activation.md)
 - [ADR-095](095-one-shot-running-lifecycle-with-retained-failed-start-cleanup-authority.md)
-- [Disposition](../../openspec/changes/require-restart-for-config-activation/pr990-boot-only-disposition.md)
-- [Active change](../../openspec/changes/require-restart-for-config-activation/)
+- [Disposition](../../openspec/changes/archive/2026-08-21-require-restart-for-config-activation/pr990-boot-only-disposition.md)
+- [Archived change](../../openspec/changes/archive/2026-08-21-require-restart-for-config-activation/)
 - [Migration guide](../operations/migration-boot-only-flow-activation.md)
