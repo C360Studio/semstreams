@@ -11,8 +11,76 @@ tasks:
       - defer: docker compose -f docker/compose/e2e.yml down -v --timeout 15
       - docker compose -f docker/compose/e2e.yml up -d --wait --build
       - echo "[OK] All services are healthy"
+      - |
+        fail() {
+          echo "[FAIL] $1"
+          docker logs semstreams-e2e-app 2>&1 || true
+          exit 1
+        }
+
+        ready=$(curl --max-time 5 -fsS http://localhost:38080/readyz) || fail "readiness endpoint unavailable"
+        [ "$ready" = "READY" ] || fail "readiness body was not exact READY"
+
+        health=$(curl --max-time 5 -fsS http://localhost:38080/components/health) || fail "component health unavailable"
+        total=$(printf '%s' "$health" | jq -er '.total | select(type == "number" and . > 0)') || fail "component health total is missing or zero"
+        healthy=$(printf '%s' "$health" | jq -er '[.components[] | select(.healthy == true)] | length') || fail "component health entries are malformed"
+        overall=$(printf '%s' "$health" | jq -er '.overall.status') || fail "overall component health is missing"
+        [ "$overall" = "healthy" ] || fail "selected core fixture is not fully healthy"
+        [ "$healthy" -eq "$total" ] || fail "selected core fixture reports unhealthy components"
+
+        attempt=0
+        matched=false
+        while [ "$attempt" -lt 20 ]; do
+          if docker logs semstreams-e2e-app 2>&1 | jq -Re \
+            'fromjson? | select(.msg == "System heartbeat" and .components_total == 0 and .components_healthy == 0)' >/dev/null; then
+            fail "heartbeat reported 0/0 while runtime component health was non-empty"
+          fi
+          heartbeat=$(docker logs semstreams-e2e-app 2>&1 | jq -Rc 'fromjson? | select(.msg == "System heartbeat")' | tail -n 1)
+          if [ -n "$heartbeat" ] && printf '%s' "$heartbeat" | jq -e --argjson total "$total" --argjson healthy "$healthy" \
+            '.components_total == $total and .components_healthy == $healthy' >/dev/null; then
+            matched=true
+            break
+          fi
+          attempt=$((attempt + 1))
+          sleep 0.5
+        done
+        [ "$matched" = "true" ] || fail "heartbeat totals did not match runtime component health within 10s"
+        echo "[OK] Readiness and heartbeat report $healthy/$total healthy components"
       - echo "[E2E] Running core tests (health + dataflow + graph round-trip)..."
       - cd cmd/e2e && ./e2e --scenario all
+      - |
+        fail() {
+          echo "[FAIL] $1"
+          docker logs semstreams-e2e-app 2>&1 || true
+          exit 1
+        }
+
+        echo "[E2E] Sending SIGTERM to the SemStreams application..."
+        docker compose -f docker/compose/e2e.yml stop --timeout 35 semstreams || fail "application stop command failed"
+
+        exit_code=$(docker inspect semstreams-e2e-app | jq -er '.[0].State.ExitCode') || fail "application exit code unavailable"
+        [ "$exit_code" -eq 0 ] || fail "application exited with code $exit_code"
+
+        docker logs semstreams-e2e-app 2>&1 | jq -Re 'fromjson? | select(.msg == "SemStreams shutdown complete")' >/dev/null \
+          || fail "shutdown-complete record missing"
+
+        if curl --connect-timeout 1 --max-time 2 -sS http://localhost:38080/readyz >/dev/null 2>&1; then
+          api_status=0
+        else
+          api_status=$?
+        fi
+        [ "$api_status" -eq 7 ] || fail "API listener probe exited $api_status after application exit, want connection failure 7"
+
+        if curl --connect-timeout 1 --max-time 2 -sS http://localhost:39090/metrics >/dev/null 2>&1; then
+          metrics_status=0
+        else
+          metrics_status=$?
+        fi
+        [ "$metrics_status" -eq 7 ] || fail "metrics listener probe exited $metrics_status after application exit, want connection failure 7"
+
+        curl --max-time 5 -fsS http://localhost:38222/healthz >/dev/null \
+          || fail "external NATS did not remain healthy after application exit"
+        echo "[OK] SIGTERM exited 0, released listeners, completed shutdown, and left NATS healthy"
 
   debug:
     desc: Start E2E environment for debugging (leaves containers running)

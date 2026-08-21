@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -101,11 +102,15 @@ func TestServiceManager_StopAll_Idempotency(t *testing.T) {
 func TestServiceManager_StopAll_CancellationBeforeStopAll(t *testing.T) {
 	manager := createTestServiceManager(ManagerConfig{}, nil)
 
-	hb, err := newHeartbeatServiceForTest(&HeartbeatConfig{Interval: "1s"}, nil)
+	require.NoError(t, manager.RegisterInstance("component-manager", &mockComponentHealthGetter{
+		MockService: MockService{name: "component-manager", status: StatusRunning, healthy: true},
+	}))
+	require.NoError(t, manager.registry.Register("heartbeat", NewHeartbeatService))
+	heartbeat, err := manager.CreateService("heartbeat", json.RawMessage(`{"interval":"1s"}`), &Dependencies{})
 	require.NoError(t, err)
+	hb := heartbeat.(*HeartbeatService)
 	mf := createTestMetricsForwarder(t, "1s", &metricsForwarderMockNATS{}, metric.NewMetricsRegistry())
 
-	manager.RegisterInstance("heartbeat", hb)
 	manager.RegisterInstance("metrics-forwarder", mf)
 
 	ctx, cancel := context.WithCancel(context.Background())

@@ -16,6 +16,12 @@
       "enabled": true,
       "config": {}
     },
+    "heartbeat": {
+      "enabled": true,
+      "config": {
+        "interval": "1s"
+      }
+    },
     "metrics": {
       "enabled": true,
       "config": {

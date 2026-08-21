@@ -1,20 +1,59 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/c360studio/semstreams/component"
 )
 
 // mockComponentHealthGetter implements componentHealthGetter for testing
 type mockComponentHealthGetter struct {
-	health map[string]bool
+	MockService
+	health map[string]component.HealthStatus
 }
 
-func (m *mockComponentHealthGetter) GetComponentHealth() map[string]bool {
+func (m *mockComponentHealthGetter) GetComponentHealth() map[string]component.HealthStatus {
 	return m.health
+}
+
+var _ componentHealthGetter = (*ComponentManager)(nil)
+
+type heartbeatLogWriter struct {
+	records chan []byte
+}
+
+func (w *heartbeatLogWriter) Write(p []byte) (int, error) {
+	record := bytes.Clone(p)
+	w.records <- record
+	return len(p), nil
+}
+
+func newManagedHeartbeatForTest(t *testing.T, health map[string]component.HealthStatus) *HeartbeatService {
+	t.Helper()
+	registry := NewServiceRegistry()
+	manager := NewServiceManager(registry)
+	getter := &mockComponentHealthGetter{
+		MockService: MockService{name: "component-manager"},
+		health:      health,
+	}
+	if err := manager.RegisterInstance("component-manager", getter); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register("heartbeat", NewHeartbeatService); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := manager.CreateService("heartbeat", json.RawMessage(`{"interval":"1s"}`), &Dependencies{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return svc.(*HeartbeatService)
 }
 
 func TestHeartbeatConfig_Validate(t *testing.T) {
@@ -118,10 +157,7 @@ func TestNewHeartbeatService(t *testing.T) {
 }
 
 func TestHeartbeatService_StartStop(t *testing.T) {
-	hb, err := newHeartbeatServiceForTest(&HeartbeatConfig{Interval: "100ms"}, nil)
-	if err != nil {
-		t.Fatalf("newHeartbeatServiceForTest() error = %v", err)
-	}
+	hb := newManagedHeartbeatForTest(t, nil)
 
 	ctx := context.Background()
 
@@ -139,9 +175,6 @@ func TestHeartbeatService_StartStop(t *testing.T) {
 		t.Error("startTime should be set after Start()")
 	}
 
-	// Wait for at least one heartbeat tick
-	time.Sleep(150 * time.Millisecond)
-
 	// Stop service
 	if err := hb.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop() error = %v", err)
@@ -153,10 +186,7 @@ func TestHeartbeatService_StartStop(t *testing.T) {
 }
 
 func TestHeartbeatService_StartAlreadyRunning(t *testing.T) {
-	hb, err := newHeartbeatServiceForTest(&HeartbeatConfig{Interval: "1s"}, nil)
-	if err != nil {
-		t.Fatalf("newHeartbeatServiceForTest() error = %v", err)
-	}
+	hb := newManagedHeartbeatForTest(t, nil)
 
 	ctx := context.Background()
 
@@ -167,7 +197,7 @@ func TestHeartbeatService_StartAlreadyRunning(t *testing.T) {
 	defer hb.Stop(context.Background())
 
 	// Try to start again
-	err = hb.Start(ctx)
+	err := hb.Start(ctx)
 	if err == nil {
 		t.Error("Start() should return error when already running")
 	}
@@ -190,10 +220,7 @@ func TestHeartbeatService_StopNotRunning(t *testing.T) {
 // TestHeartbeatService_StopIdempotent covers gh#549: repeated Stop calls are
 // safe (no double-close of stopChan) and every call reports success.
 func TestHeartbeatService_StopIdempotent(t *testing.T) {
-	hb, err := newHeartbeatServiceForTest(&HeartbeatConfig{Interval: "1s"}, nil)
-	if err != nil {
-		t.Fatalf("newHeartbeatServiceForTest() error = %v", err)
-	}
+	hb := newManagedHeartbeatForTest(t, nil)
 
 	if err := hb.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -214,10 +241,7 @@ func TestHeartbeatService_StopIdempotent(t *testing.T) {
 // has run teardown, Start must fail loudly rather than report Running with a
 // dead heartbeat loop.
 func TestHeartbeatService_StartAfterStop(t *testing.T) {
-	hb, err := newHeartbeatServiceForTest(&HeartbeatConfig{Interval: "1s"}, nil)
-	if err != nil {
-		t.Fatalf("newHeartbeatServiceForTest() error = %v", err)
-	}
+	hb := newManagedHeartbeatForTest(t, nil)
 
 	if err := hb.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -232,41 +256,96 @@ func TestHeartbeatService_StartAfterStop(t *testing.T) {
 }
 
 func TestHeartbeatService_WithComponentManager(t *testing.T) {
-	mockHealth := &mockComponentHealthGetter{
-		health: map[string]bool{
-			"component1": true,
-			"component2": true,
-			"component3": false,
-		},
+	health := map[string]component.HealthStatus{
+		"component1": {Healthy: true},
+		"component2": {Healthy: true},
+		"component3": {Healthy: false},
 	}
+	hb := newManagedHeartbeatForTest(t, health)
 
-	hb, err := newHeartbeatServiceForTest(&HeartbeatConfig{Interval: "100ms"}, mockHealth)
-	if err != nil {
-		t.Fatalf("newHeartbeatServiceForTest() error = %v", err)
-	}
-
-	ctx := context.Background()
-
-	if err := hb.Start(ctx); err != nil {
+	if err := hb.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-
-	// Let it emit a heartbeat
-	time.Sleep(150 * time.Millisecond)
-
+	if hb.componentManager == nil {
+		t.Fatal("Start() did not resolve component-manager")
+	}
 	if err := hb.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
+}
 
-	// The test verifies no panics occur when component manager is present
-	// Actual log output would need to be captured for verification
+func TestHeartbeatService_StartRejectsInvalidManagedDependency(t *testing.T) {
+	tests := []struct {
+		name    string
+		build   func(t *testing.T) *HeartbeatService
+		wantErr string
+	}{
+		{
+			name: "missing owner",
+			build: func(t *testing.T) *HeartbeatService {
+				t.Helper()
+				svc, err := NewHeartbeatService(json.RawMessage(`{"interval":"1s"}`), nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return svc.(*HeartbeatService)
+			},
+			wantErr: "service manager",
+		},
+		{
+			name: "missing component manager",
+			build: func(t *testing.T) *HeartbeatService {
+				t.Helper()
+				registry := NewServiceRegistry()
+				if err := registry.Register("heartbeat", NewHeartbeatService); err != nil {
+					t.Fatal(err)
+				}
+				manager := NewServiceManager(registry)
+				svc, err := manager.CreateService("heartbeat", json.RawMessage(`{"interval":"1s"}`), &Dependencies{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return svc.(*HeartbeatService)
+			},
+			wantErr: "component-manager",
+		},
+		{
+			name: "wrong component manager contract",
+			build: func(t *testing.T) *HeartbeatService {
+				t.Helper()
+				registry := NewServiceRegistry()
+				if err := registry.Register("heartbeat", NewHeartbeatService); err != nil {
+					t.Fatal(err)
+				}
+				manager := NewServiceManager(registry)
+				if err := manager.RegisterInstance("component-manager", &MockService{name: "component-manager"}); err != nil {
+					t.Fatal(err)
+				}
+				service, err := manager.CreateService("heartbeat", json.RawMessage(`{"interval":"1s"}`), &Dependencies{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return service.(*HeartbeatService)
+			},
+			wantErr: "component health",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			hb := test.build(t)
+			err := hb.Start(t.Context())
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("Start() error = %v, want containing %q", err, test.wantErr)
+			}
+			if hb.Status() != StatusStopped {
+				t.Fatalf("Status() = %v, want stopped after rejected Start", hb.Status())
+			}
+		})
+	}
 }
 
 func TestHeartbeatService_ContextCancellation(t *testing.T) {
-	hb, err := newHeartbeatServiceForTest(&HeartbeatConfig{Interval: "1s"}, nil)
-	if err != nil {
-		t.Fatalf("newHeartbeatServiceForTest() error = %v", err)
-	}
+	hb := newManagedHeartbeatForTest(t, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -299,11 +378,11 @@ func TestHeartbeatService_ContextCancellation(t *testing.T) {
 
 func TestHeartbeatService_EmitHeartbeat(t *testing.T) {
 	mockHealth := &mockComponentHealthGetter{
-		health: map[string]bool{
-			"comp1": true,
-			"comp2": true,
-			"comp3": false,
-			"comp4": true,
+		health: map[string]component.HealthStatus{
+			"comp1": {Healthy: true},
+			"comp2": {Healthy: true},
+			"comp3": {Healthy: false},
+			"comp4": {Healthy: true},
 		},
 	}
 
@@ -313,9 +392,20 @@ func TestHeartbeatService_EmitHeartbeat(t *testing.T) {
 	}
 
 	hb.startTime = time.Now()
+	var logs bytes.Buffer
+	hb.logger = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	// Call emitHeartbeat directly - should not panic
 	hb.emitHeartbeat()
+	var record map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &record); err != nil {
+		t.Fatalf("decode heartbeat log: %v\n%s", err, logs.String())
+	}
+	if got := int(record["components_healthy"].(float64)); got != 3 {
+		t.Fatalf("components_healthy = %d, want 3", got)
+	}
+	if got := int(record["components_total"].(float64)); got != 4 {
+		t.Fatalf("components_total = %d, want 4", got)
+	}
 
 	// Test with nil component manager
 	hb2, err := newHeartbeatServiceForTest(&HeartbeatConfig{Interval: "1s"}, nil)
@@ -323,7 +413,49 @@ func TestHeartbeatService_EmitHeartbeat(t *testing.T) {
 		t.Fatalf("newHeartbeatServiceForTest() error = %v", err)
 	}
 	hb2.startTime = time.Now()
-	hb2.emitHeartbeat() // Should not panic with nil componentManager
+	hb2.emitHeartbeat()
+}
+
+func TestHeartbeatService_StartEmitsResolvedComponentHealth(t *testing.T) {
+	hb := newManagedHeartbeatForTest(t, map[string]component.HealthStatus{
+		"healthy":   {Healthy: true},
+		"unhealthy": {Healthy: false},
+	})
+	writer := &heartbeatLogWriter{records: make(chan []byte, 8)}
+	hb.logger = slog.New(slog.NewJSONHandler(writer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	if err := hb.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := hb.Stop(context.Background()); err != nil {
+			t.Errorf("Stop() error = %v", err)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	for {
+		select {
+		case encoded := <-writer.records:
+			var record map[string]any
+			if err := json.Unmarshal(bytes.TrimSpace(encoded), &record); err != nil {
+				t.Fatalf("decode heartbeat log: %v", err)
+			}
+			if record["msg"] != "System heartbeat" {
+				continue
+			}
+			if got := int(record["components_healthy"].(float64)); got != 1 {
+				t.Fatalf("components_healthy = %d, want 1", got)
+			}
+			if got := int(record["components_total"].(float64)); got != 2 {
+				t.Fatalf("components_total = %d, want 2", got)
+			}
+			return
+		case <-ctx.Done():
+			t.Fatalf("initial System heartbeat not observed: %v", ctx.Err())
+		}
+	}
 }
 
 func TestHeartbeatService_Name(t *testing.T) {
