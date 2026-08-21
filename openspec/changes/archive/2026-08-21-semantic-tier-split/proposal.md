@@ -1,25 +1,23 @@
 ## Why
 
-> **Status: SUSPENDED AND FROZEN by the ADR-090 graph-state program.**
-> This change preserves historical design truth but is non-executable until the
-> [canonical program](../../../docs/proposals/graph-state-read-write-program.md)
-> explicitly releases it. Do not implement, archive, or promote it.
+> **Status: WITHDRAWN by owner disposition on 2026-08-21.**
+> The earlier ADR-090 freeze is superseded for archival only. No task was completed,
+> no implementation landed from this change, and no proposed requirement is promoted.
+> Archive this package with `--skip-specs` as historical design evidence.
 >
-> **Post-G premise status — 2026-08-11.** None of the resource measurements,
-> tier-boundary assumptions, issue dependencies, or proposed CI wiring below
-> was revalidated after the graph-state foundation and post-G closeout. #829 is
-> deferred to the Semantic Summary Content/Quality Program. This historical
-> change does not own that program, the stable-tag candidate, or a current E2E
-> roadmap. A future owner must inventory the then-current tier topology before
-> deciding whether any proposal below remains useful.
+> **Remaining issue ownership.** #769 retains scheduled semantic/agentic E2E execution,
+> #823 retains the agent-facing result-shape defect, and #829 retains content-grounded
+> community summaries. #811, #819, and #830 are closed. Any future tier-topology work
+> starts from current repository evidence and those live issues, not this stale 31-task
+> plan. This change does not own a stable-tag candidate or current E2E roadmap.
 
 **The `semantic` e2e tier tests two unrelated capabilities, so its red light cannot
 tell you which one broke.** gh#830 is the proof: a `globalSearch` probe failed
-intermittently, and it took five full tier runs and two disproved hypotheses to
-establish that the retrieval path was fine (the batch load it blamed takes
-**2.7ms** against a 5s budget) and the host was simply saturated by three
-co-located LLM services. A tier that had separated the two would have answered
-that on run one.
+intermittently, and five full tier runs disproved two proposed causes. The measured
+entity fetch took **2.7ms** against a 5s budget and the same combined tier recorded
+heavy LLM timeout pressure, but responder reply publication was not captured on the
+failing runs and therefore was not ruled out. The combined red light could not
+attribute the failure without further instrumentation and repeated runs.
 
 The confusion is not incidental — it is baked into the tier's name. "Semantic"
 in this repo means two different things depending on who is speaking:
