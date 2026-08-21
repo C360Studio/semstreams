@@ -35,6 +35,15 @@ regression; per-file ledger hashes identify all 17 files. This completes task 2.
 task 3.3, the 36-hit read-only sister migration obligation, candidate E2E/controlled/dirty proof, release, and tag work
 remain unchecked. No release or tag is authorized.
 
+Exact-candidate verification was subsequently recorded against clean tracked commit
+`2e879304613a8ce09b812b1a92f2dc97a835e5c2`. Affected runtime race tests, changed real-NATS tests, lint, build,
+twice-run schema generation with no drift, diff/strict validation, core E2E 3/3, and agentic E2E all passed. The
+agentic tier exercised durable replay exactly once plus governance, terminal, graph, and trajectory behavior. Broad
+repository race and contract parents remain red only from repository scanners entering `.claude` plus four stale
+baseline rows; those gates are not claimed green. Structural E2E was deliberately not run because it does not cover
+this N1 surface, and semantic E2E, broader CI, controlled/dirty proof, the complete N1 candidate gate, release,
+archive, and tag readiness remain unchecked. This verification grants no additional implementation or task credit.
+
 The accepted read-only N1 inventory remains evidence at baseline
 `2f974bdb7f22efb39ac5136e9c0b719b711249c2`, SHA-256
 `2a95a0f5fd6683aeed585c8dca43d65ff662f32b2b046ce2262f6b97f74612e9`. It does not force every inventoried surface

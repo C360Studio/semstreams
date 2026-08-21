@@ -303,6 +303,20 @@
   generation, strict change and all-spec validation, `task e2e:core`, `task e2e:structural`, `task e2e:agentic`,
   `task e2e:semantic`, and independent implementation review. Record a coverage gap if structural E2E does not
   exercise `NewDurableHandler`; do not treat that tier as builder evidence.
+  - 2026-08-20 exact-candidate verification checkpoint at clean tracked commit `2e879304`: affected runtime race
+    passed in 24.1s apart from scanner tests whose matches were exclusively under `.claude`; the full natsclient
+    integration parent ran in 101.1s with only the three known worktree scanners failing, while the changed real-NATS
+    surface passed in 16.8s. Full repository race ran for about 61s and remains red only in natsclient,
+    portgrammarcontrol, contract, and testinfra from scanner pollution plus four stale baseline rows; the independent
+    service race surface is green. Contract ran in 5.4s and remains red only from `.claude` scanner matches. Lint
+    passed in 9.7s, build in 6.2s, schema generation ran twice in 1.2s with no drift, and diff check plus strict change
+    and all-spec validation passed 52/52. Core E2E passed 3/3 in 36.3s. Agentic E2E passed in 45.1s and proved durable
+    replay exactly once plus governance, terminal, graph, and trajectory behavior. Structural E2E was not run because
+    it does not cover this surface; semantic E2E and broader CI were not run. Test stacks and volumes were removed.
+    Before this documentation-only recording the tracked tree was clean and its only untracked files were the two
+    protected inventories at their accepted exact hashes. Full repository race, contract, the complete N1 candidate
+    gate, tasks 2.3 and 3.3, controlled/dirty proof, release, archive, and tag readiness remain unchecked. This
+    checkpoint grants no additional implementation or task credit.
 
 ### Deferred beyond N1
 

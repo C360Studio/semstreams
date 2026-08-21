@@ -1784,6 +1784,45 @@ implementation paths and the untracked 32-line regression file.
 
 The recovery ledger cannot embed its own final hash without changing it; report it with the final handoff.
 
+### Exact N1 candidate verification checkpoint — 2026-08-20
+
+The verifier ran the final local candidate at exact commit
+`2e879304613a8ce09b812b1a92f2dc97a835e5c2`. Before this documentation-only evidence recording, the tracked tree was
+clean. Its only untracked files were the protected inventories, unchanged at these accepted identities:
+
+| Protected artifact | SHA-256 |
+|---|---|
+| `n1-convergence-inventory.md` | `2a95a0f5fd6683aeed585c8dca43d65ff662f32b2b046ce2262f6b97f74612e9` |
+| `metrics-http-owner-inventory.md` | `8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5` |
+
+Final exact-candidate evidence is:
+
+| Evidence | Result | Elapsed |
+|---|---|---:|
+| Affected runtime packages under race | PASS; scanner failures matched only `.claude` | 24.1s |
+| Full natsclient integration parent | Runtime PASS; only three known repository-worktree scanners failed | 101.1s |
+| Changed real-NATS surface | PASS | 16.8s |
+| Full repository race parent | NOT GREEN; scanner/stale-baseline failures only; service green | about 61s |
+| Contract parent | NOT GREEN; only `.claude` scanner matches failed | 5.4s |
+| Lint | PASS | 9.7s |
+| Build | PASS | 6.2s |
+| Schema generation twice and drift inspection | PASS; no drift | 1.2s |
+| Diff check, strict change validation, all-spec validation | PASS; all specs 52/52 | — |
+| Core E2E | PASS; 3/3 | 36.3s runtime |
+| Agentic E2E | PASS; durable replay exactly once, governance, terminal, graph, and trajectory | 45.1s runtime |
+| Structural E2E | NOT RUN; non-covering for this N1 surface | — |
+| Semantic E2E and broader CI | NOT RUN | — |
+| Test infrastructure teardown | PASS; stacks and volumes removed | — |
+
+The affected and changed real-NATS passes are valid runtime evidence. Scanner-only failures are recorded honestly and
+do not become green parent gates. Core and agentic E2E receive evidence credit only for the behavior they exercised;
+the unrun structural tier is not treated as durable-handler evidence.
+
+Full repository race, contract, the complete N1 candidate gate, tasks 2.3 and 3.3, controlled-process and dirty
+recovery proof, downstream migration, semantic/broader E2E and CI, release, archive, and tag readiness remain
+unchecked. This checkpoint expands no implementation, owner, or task credit and preserves the no-release/no-tag
+boundary.
+
 ### CM1 ComponentManager implementation checkpoint — 2026-08-19
 
 Independent `semstreams-reviewer` verdict `APPROVE` applies to the CM1 dirty worktree based on full commit
