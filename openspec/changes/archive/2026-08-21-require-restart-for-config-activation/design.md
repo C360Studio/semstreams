@@ -11,9 +11,9 @@ The passed surface inventory is
 The durable architecture decision is
 [`ADR-096`](../../../docs/adr/096-flow-diagrams-are-not-lifecycle-authority.md).
 
-Historical PR #990 is evidence only. It must not be merged, rebased, replayed, or cherry-picked as a unit. The accepted
-behavior is reconstructed narrowly against current main. This change receives zero implementation credit until each
-ruling is mapped to the current implementation and independently reviewed.
+Historical PR #990 remains evidence only and is not a merge, rebase, replay, or cherry-pick source. The accepted
+behavior was reconstructed and landed in commit `8117858367e1cc9d1dc434d211989e7a2ed1e552` through PR #997. This design
+is reconciled to current main solely so the implemented boot-composition and Flow-authoring truth can be archived.
 
 ## Goals
 
@@ -59,8 +59,8 @@ replace a component in that process.
 The generic component-config HTTP write and `watch_config` tool retire. No alternate subscription, direct KV write,
 or interface probe reintroduces live component mutation.
 
-This decision changes composition authority only. Existing `Start` and `Stop` mechanics, lifecyclejoin use, component
-shutdown, transport shutdown, and recovery semantics are preserved and receive no completion credit.
+This decision changes composition authority only. It claims no lifecycle, shutdown, transport, recovery, release, or
+tag-readiness behavior.
 
 ### D3. Registry admits declarations at boot and then seals
 
@@ -99,22 +99,12 @@ Flow lifecycle state, operations, tools, metrics, timestamps, logs, and streams 
 is introduced. Existing Flow health, metrics, and message observations may remain only where they report current
 component observations by name; they do not establish Flow ownership of component lifecycle or runtime activation.
 
-### D7. Rule behavior remains separate and unchanged
+### D7. Rule behavior is outside scope
 
-Rule code, Rule storage, Rule watchers, and current Rule behavior are unchanged by this reconstruction. Existing
-target-state artifacts for Rule hot reload, graph-index readiness, and Rule entity watching remain separate,
-unimplemented work. This change neither completes nor advances them.
+PR #997 did not implement or claim Rule hot-reload, Rule readiness, or Rule entity-watching target state. No Rule or
+readiness delta is retained by this change, and archive promotes no Rule requirement.
 
-### D8. Deferred findings do not expand the reconstruction
-
-Historical findings about multi-key configuration atomicity, partial watcher creation/version arbitration, and
-validator constructor effects remain recorded findings. They are not prerequisites for boot-only composition and are
-not repaired opportunistically in this change.
-
-An implementation need outside the binding disposition stops work for owner review. It does not silently broaden the
-change.
-
-### D9. Breaking migration stays clean
+### D8. Breaking migration stays clean
 
 Retired pre-v1 surfaces have no aliases, deprecated parallel paths, or compatibility shims. SemStreams migration
 documentation names the removals and the save/validate/publish/reboot sequence. Sister repositories are read-only;
@@ -131,20 +121,26 @@ their owners apply and verify their migrations.
 - **Operator:** successful publication does not restart the process. Doing nothing leaves the existing runtime under
   normal process supervision. Response fields and the migration guide expose the reboot requirement. The operator
   should not manage extra comparison metadata or a reconciliation state machine.
-- **Rule author:** nothing changes. Existing Rule behavior continues, and separate target-state artifacts contain any
-  future work.
+- **Rule author:** nothing changes. Existing Rule behavior continues, and this archive promotes no Rule or readiness
+  requirement.
 
-## Verification and credit
+## Archive proof
 
 Implementation conformance is recorded in
-[`pr990-boot-only-implementation-conformance.md`](pr990-boot-only-implementation-conformance.md). Every binding ruling
-must map to current file-and-line evidence or an explicit deviation requiring owner signature.
+[`pr990-boot-only-implementation-conformance.md`](pr990-boot-only-implementation-conformance.md).
 
-Required gates are focused boot-only and authoring-only tests, the foreign-identity fatal-start proof, race tests,
-repository lint/race checks, schema/no-drift, contract tests, and relevant core/CRUD E2E. The final diff must leave
-Config Manager unchanged except for the owner-approved fatal foreign-identity rejection and removal of detached mode.
-It must leave model watcher, Rule, lifecyclejoin, CronScheduler, ACK/NATS/recovery, and the E2E WebSocket client
-untouched.
+Archive requires:
 
-Passing those gates grants only this change's composition and Flow-authoring credit. Lifecycle migration, controlled
-restart, dirty recovery, effect-before-ACK proof, release readiness, archive, and tag readiness remain owned elsewhere.
+- focused unit and integration race proof for fixed boot composition, sealed Registry declarations, authoring-only Flow
+  CRUD, explicit publication, exact partial progress, and retired-surface absence;
+- one real process-boundary proof using durable NATS state: process A commits desired component configuration and remains
+  unchanged; process A exits; process B starts against the same desired state and composes those candidates;
+- repository lint, race, contract, schema/no-drift, strict OpenSpec, and relevant core/CRUD E2E results;
+- independent review of the final conformance ledger and archive diff.
+
+PR #997 was already merged as a breaking change. No durable repository artifact proves that its relevant E2E ran before
+merge, so this change does not and cannot retroactively claim that timing. E2E recorded during reconciliation is
+post-merge evidence for archive and tag confidence only.
+
+Passing these gates grants only boot-composition and Flow-authoring current-truth credit. No lifecycle, shutdown,
+recovery, release, or tag-readiness credit is implied.

@@ -112,135 +112,31 @@ SHALL remain the runtime routing authority.
 - **THEN** startup fails
 - **AND** `bind_address` does not cause an input port to be synthesized
 
-### Requirement: Registry retains one accepted declaration per component generation
-
-For each successful component admission, Registry SHALL retain one immutable generation record containing validated
-factory identity, component reference, cloned effective input ports, cloned effective output ports, normalized facts
-derived from those exact clones, exclusive-resource facts, and a process-local generation identifier.
-
-Registry SHALL call `InputPorts` and `OutputPorts` exactly once for that generation and SHALL publish no generation for
-an absent or disabled component, failed declaration validation, conflict, or other admission failure.
-
-A later component Start failure MAY leave the honestly admitted shape inspectable, but declaration presence SHALL NOT
-imply readiness.
-
-#### Scenario: Successful admission captures ports once
-
-- **GIVEN** an enabled component factory whose declaration is valid and conflict-free
-- **WHEN** Registry admits the component
-- **THEN** Registry calls each port method exactly once
-- **AND** the retained component, factory identity, cloned ports, normalized facts, resources, and generation describe
-  that one admission
-
-#### Scenario: Failed admission publishes no record
-
-- **GIVEN** a disabled component or a component with invalid or conflicting declarations
-- **WHEN** admission is attempted
-- **THEN** Registry exposes no component generation or partial declaration/resource projection
-
-#### Scenario: Start failure does not imply readiness
-
-- **GIVEN** a component was admitted successfully and its later Start fails
-- **WHEN** a reader inspects Registry
-- **THEN** the admitted declaration remains honest process-local shape
-- **AND** no Registry field or presence claim reports the component ready
-
 ### Requirement: Registry is the sole declaration-derived resource admission owner
 
-Registry SHALL validate declaration-derived exclusive-resource conflicts and SHALL publish component and resource
-state as one admission mutation.
+Registry SHALL validate declaration conflicts and exclusive-resource facts during boot admission. All shared
+declaration consumers SHALL read the retained defensive values rather than call component port methods or resolve
+factory definitions again.
 
 ComponentManager SHALL NOT retain a parallel resources map, conflict classifier, registration/unregistration
 bookkeeping, or component port re-read path.
 
+Asynchronous consumers SHALL capture their defensive snapshot before starting work. The captured boot declaration
+set SHALL remain valid for the process lifetime.
+
 #### Scenario: Conflict is rejected by one owner
 
-- **GIVEN** an admitted generation already claims an exclusive resource
-- **WHEN** another generation declares the conflicting resource
+- **GIVEN** an admitted boot declaration already claims an exclusive resource
+- **WHEN** another boot declaration declares the conflicting resource
 - **THEN** Registry rejects the admission
 - **AND** neither Registry nor ComponentManager exposes any partial second claim
 
-### Requirement: Registry reads and observation expose defensive complete snapshots
+#### Scenario: Asynchronous publication uses captured boot declarations
 
-Registry SHALL return defensive clones for individual and complete-set reads. Its process-local observer SHALL deliver
-one complete current set initially, including an empty set, and SHALL deliver the newest complete set after successful
-add, replacement, or removal.
-
-Observation SHALL be latest-state and coalescing, SHALL NOT block Registry mutation, and SHALL release observer
-resources on cancellation.
-
-The observer SHALL be an internal framework-only API. It SHALL NOT establish an accepted cross-repo API or contract
-and SHALL NOT imply an ADR commitment. Observation SHALL remain in process memory and SHALL NOT use KV, JetStream, or
-other durable storage, nor provide durable replay or recovery.
-
-#### Scenario: Reader mutation cannot alter Registry
-
-- **GIVEN** a reader receives a generation snapshot
-- **WHEN** the reader mutates its returned ports or facts
-- **THEN** a subsequent Registry read remains unchanged
-
-#### Scenario: Observer starts empty and coalesces latest state
-
-- **GIVEN** an empty Registry and a new observer
-- **WHEN** generations are added, replaced, or removed faster than the observer consumes notifications
-- **THEN** the observer first receives the complete empty set
-- **AND** later receives a complete newest set rather than an event-log guarantee
-- **AND** Registry mutation does not block
-
-#### Scenario: Observer cancellation releases resources
-
-- **WHEN** an observer is cancelled
-- **THEN** Registry releases its delivery resources
-- **AND** no further delivery is required
-
-#### Scenario: Observation remains an internal process-local view
-
-- **WHEN** a framework consumer observes Registry generations
-- **THEN** delivery uses only the internal process-local observer
-- **AND** no KV, JetStream, durable store, durable replay, cross-repo contract, or ADR promise is created
-
-### Requirement: Every admitted generation has validated factory identity
-
-`CreateComponent` SHALL be the sole production component-admission path. Any internal prepared-replacement or test
-helper SHALL require validated factory identity and SHALL perform the same declaration capture, validation, conflict,
-and atomic-admission checks.
-
-No identity-free admission alias, inference, deprecated path, or compatibility shim SHALL exist.
-
-#### Scenario: Identity-free admission is unavailable
-
-- **GIVEN** a caller has only an instance name and component reference
-- **WHEN** it attempts production admission without validated factory identity
-- **THEN** no supported Registry API admits the generation
-
-### Requirement: Admission snapshots are group-neutral shape
-
-A Registry generation SHALL contain no enabled, started, healthy, ready, provider-phase, group, cohort, or
-orchestration field. A complete Registry snapshot set SHALL be an admission census, not an inferred atomic cohort.
-
-Independently valid subsets SHALL remain visible. Capability-specific completeness SHALL remain at the capability's
-composition boundary.
-
-#### Scenario: Independent subset remains visible
-
-- **GIVEN** one valid component generation is admitted while a related capability member is absent
-- **WHEN** the Registry complete set is read
-- **THEN** the valid generation is visible
-- **AND** Registry does not withhold it or infer capability completeness
-
-### Requirement: Shared runtime consumers use the retained generation
-
-Conflict reporting, capability publication, flowgraph, management responses, and message-logger declaration discovery
-SHALL consume defensive Registry snapshots and SHALL NOT call component port methods or resolve definitions again.
-
-Asynchronous capability publication SHALL capture its defensive snapshot before starting the goroutine.
-
-#### Scenario: Asynchronous publication survives replacement
-
-- **GIVEN** capability publication captures generation N and the instance is then replaced by generation N+1
-- **WHEN** the asynchronous publication runs
-- **THEN** it publishes the internally consistent captured generation N snapshot
-- **AND** it does not re-read the replaced component
+- **GIVEN** a consumer captures the sealed declaration set
+- **WHEN** desired component configuration changes before asynchronous publication completes
+- **THEN** the consumer publishes the internally consistent captured set
+- **AND** it does not resolve or recapture next-boot declarations
 
 ### Requirement: Graph query request composition uses one versioned operation family
 
@@ -292,3 +188,69 @@ their already-admitted exact graph-query outputs.
   research-execute, and nine agentic-tools instances with the exact declarations above
 - **AND** raw counts are `395/243/54`, effective counts are `571/378/69`, and the raw-to-effective delta remains
   `176/135/15`
+
+### Requirement: Registry admission is boot-owned and seals
+
+Registry SHALL admit validated component declarations only while ComponentManager constructs the fixed boot
+composition. ComponentManager SHALL seal Registry when that composition is complete. After sealing, no supported API
+SHALL admit, replace, remove, or mutate a declaration in response to configuration, model-registry, Flow, Rule, HTTP,
+or direct KV changes.
+
+Registry SHALL NOT own component lifecycle. ComponentManager SHALL remain the sole owner of concrete runtime component
+handles.
+
+#### Scenario: Boot admission succeeds before sealing
+
+- **GIVEN** an enabled component with validated factory identity and valid declarations
+- **WHEN** ComponentManager constructs the boot composition
+- **THEN** Registry admits one complete declaration value for that component
+- **AND** ComponentManager retains the concrete runtime handle
+
+#### Scenario: Post-seal admission is rejected
+
+- **GIVEN** ComponentManager has sealed Registry
+- **WHEN** any caller attempts to admit another component or replace an admitted declaration
+- **THEN** Registry rejects the operation
+- **AND** the running component set remains unchanged
+
+#### Scenario: Later configuration write does not mutate Registry
+
+- **GIVEN** Registry contains the sealed boot declarations
+- **WHEN** component or model-registry configuration changes
+- **THEN** Registry continues to expose the same boot declarations
+- **AND** it publishes no replacement or removal transition
+
+### Requirement: Registry exposes defensive declaration values without handles
+
+Registry SHALL expose immutable defensive copies of admitted declaration values. A declaration value MAY contain
+validated factory identity, cloned input and output ports, normalized facts, and exclusive-resource facts. It SHALL
+NOT contain or return a runtime component handle, lifecycle authority, readiness, or availability.
+
+Registry SHALL capture each component's declaration once during successful boot admission. Failed, disabled, invalid,
+or conflicting components SHALL publish no partial declaration. Declaration presence SHALL NOT imply successful
+component Start.
+
+#### Scenario: Reader mutation cannot alter Registry
+
+- **GIVEN** a reader receives a declaration snapshot
+- **WHEN** the reader mutates returned ports or facts
+- **THEN** a later Registry read is unchanged
+
+#### Scenario: No supported read returns a component handle
+
+- **WHEN** a caller reads one declaration or the complete Registry snapshot
+- **THEN** the result contains declaration values only
+- **AND** no supported Registry API returns the runtime component
+
+#### Scenario: Failed admission publishes nothing
+
+- **GIVEN** a disabled component or a component with invalid or conflicting declarations
+- **WHEN** ComponentManager attempts boot admission
+- **THEN** Registry contains no partial record for that component
+
+#### Scenario: Start failure does not imply readiness
+
+- **GIVEN** declaration admission succeeded and the later component Start fails
+- **WHEN** a reader inspects Registry
+- **THEN** the admitted declaration remains an honest description of boot shape
+- **AND** no Registry field or presence claim reports the component ready

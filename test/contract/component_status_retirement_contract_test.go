@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	nativeSurfaceInventoryPath = "openspec/changes/require-restart-for-config-activation/native-surface-inventory.md"
+	nativeSurfaceInventoryPath = "openspec/changes/archive/2026-08-21-require-restart-for-config-activation/native-surface-inventory.md"
 	nativeSurfaceInventorySHA  = "d79df592e7049d4f0e3412bf41e8c61d44ea0829a6fddc2734cff40ceb966617"
 )
 

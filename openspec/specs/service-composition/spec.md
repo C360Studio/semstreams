@@ -1,30 +1,9 @@
 # service-composition Specification
 
 ## Purpose
-Defines process-local service composition and durable next-boot desired service configuration. It does not govern
-component hot updates or service health/readiness semantics.
+Defines process-local service and component composition, durable next-boot desired configuration, and the fixed boot
+boundary. It does not govern service health or readiness semantics.
 ## Requirements
-### Requirement: Running service composition is immutable while components remain runtime-configurable
-
-`services.*` edits SHALL be durable desired next-boot configuration and SHALL NOT create, start, stop, remove, or
-reconfigure a service in the running process.
-
-Component runtime configuration through its existing validation/application method pair and `UpdateConfig` contract
-SHALL remain available.
-
-#### Scenario: Desired service edit does not mutate runtime
-
-- **GIVEN** a running process with sealed service composition
-- **WHEN** a `services.*` entry is added, enabled, disabled, removed, or reconfigured
-- **THEN** the running service identities and instances remain unchanged
-
-#### Scenario: Component hot update remains independent
-
-- **GIVEN** a running component supporting the existing hot-update contract
-- **WHEN** a declaration-neutral component update is applied
-- **THEN** the update is evaluated through the component contract
-- **AND** service restart-only semantics do not disable that path
-
 ### Requirement: Boot consumes effective desired service state after unchanged version arbitration
 
 Config Manager SHALL preserve accepted version arbitration: a newer file version SHALL push file state, while an equal
@@ -271,3 +250,30 @@ Service health, `/services/health`, readiness, and `GRAPH_STATUS` semantics SHAL
 - **GIVEN** a sealed running process
 - **WHEN** desired service config changes
 - **THEN** runtime rows, routes, OpenAPI contributors, health, and readiness continue describing the sealed process
+
+### Requirement: Running service and component composition is fixed at boot
+
+The process SHALL select its service and component composition during boot. Later edits to `services.*`,
+`components.*`, `platform`, `nats`, or `model_registry` SHALL NOT create, start, stop, remove, reconfigure, restart,
+reconcile, or replace a service or component in that process.
+
+The selected service and component identities, declarations, dependencies, ports, and concrete instances SHALL remain
+fixed until process shutdown. Existing service and component lifecycle mechanics SHALL remain unchanged.
+
+#### Scenario: Service configuration edit does not mutate runtime
+
+- **GIVEN** a running process with its boot-selected service composition
+- **WHEN** a `services.*` entry is added, enabled, disabled, removed, or reconfigured
+- **THEN** running service identities and instances remain unchanged
+
+#### Scenario: Component configuration edit does not mutate runtime
+
+- **GIVEN** a running process with its boot-selected component composition
+- **WHEN** a `components.*` entry is added, enabled, disabled, removed, or reconfigured
+- **THEN** running component identities, declarations, and instances remain unchanged
+
+#### Scenario: Rule behavior is outside this composition change
+
+- **WHEN** existing Rule storage or watchers process a Rule change
+- **THEN** this capability adds no Rule behavior or completion claim
+- **AND** any future Rule hot-reload contract remains separate work

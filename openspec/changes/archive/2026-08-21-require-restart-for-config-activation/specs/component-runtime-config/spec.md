@@ -62,6 +62,44 @@ Write success SHALL NOT be described as runtime activation. SemStreams SHALL NOT
 - **THEN** no compiled component configuration is persisted
 - **AND** the running process remains unchanged
 
+## MODIFIED Requirements
+
+### Requirement: The engine-owned-revision skip suppresses only the in-memory re-apply
+
+The config watcher SHALL, for a Manager-owned revision (`revision <= engineHighWaterRev`), suppress only the redundant
+in-memory re-apply of the value and still notify matching subscribers. A Manager-owned revision MUST NOT cause the
+durable desired-state notification to be dropped.
+
+#### Scenario: an engine-owned event notifies subscribers
+
+- **GIVEN** Config Manager has written a component and raised its high-water revision
+- **WHEN** the watcher delivers that event at or below the high-water revision
+- **THEN** the in-memory desired state is not re-applied from the event
+- **AND** subscribers matching the event key are still notified
+
+### Requirement: Runtime config-map mutations are serialized so a concurrent add/remove is never lost
+
+`SafeConfig` SHALL serialize each read-modify-write across clone, mutation, validation, and swap. Config Manager's KV
+watcher apply path and synchronous desired-state write paths SHALL use that serialized mutation boundary so concurrent
+component configuration changes cannot clobber one another. Last-writer-wins replacement of the whole component map
+from independently cloned snapshots is forbidden.
+
+This requirement governs Config Manager's in-memory durable desired-state view. It does not authorize ComponentManager
+to reconcile or mutate the running component set.
+
+#### Scenario: concurrent add and remove both take effect
+
+- **GIVEN** desired configuration with components A and B
+- **WHEN** one goroutine adds component C while another removes B
+- **THEN** the resulting desired configuration contains A and C and does not contain B
+- **AND** neither mutation is silently dropped
+
+#### Scenario: watcher apply and caller add do not clobber
+
+- **WHEN** the KV watcher applies an external `components.X` update while `PutComponentToKV("Y", ...)` runs concurrently
+- **THEN** the final in-memory desired configuration contains both X's update and Y
+- **AND** subscribers are notified for both keys
+
 ## REMOVED Requirements
 
 The headings below quote the exact legacy requirement names being removed so OpenSpec can match the baseline. Their
@@ -92,18 +130,6 @@ reboot requirement without claiming activation.
 **Reason**: Flow compilation no longer commands a runtime reconcile.
 
 **Migration**: explicitly publish compiled configuration when desired and reboot.
-
-### Requirement: The engine-owned-revision skip suppresses only the in-memory re-apply
-
-**Reason**: ComponentManager has no configuration subscription or in-memory re-apply path.
-
-**Migration**: remove revision routing whose only purpose was runtime re-application.
-
-### Requirement: Runtime config-map mutations are serialized so a concurrent add/remove is never lost
-
-**Reason**: the runtime component map does not reconcile with later configuration writes.
-
-**Migration**: preserve existing Config Manager persistence behavior without a runtime-map mutation protocol.
 
 ### Requirement: A component's effective config has one source of truth that GET config reflects
 
