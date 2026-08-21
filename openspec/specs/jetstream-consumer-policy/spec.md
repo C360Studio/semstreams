@@ -287,8 +287,11 @@ goroutine, identity, catalog, Stop, deletion, or replay authority.
 ### Requirement: Client owns no consumer or subscription children
 
 Client SHALL NOT retain consumer or subscription child catalogs and SHALL NOT expose `StopConsumer`,
-`StopAndDeleteConsumer`, `StopAllConsumers`, or `OutstandingWork`. Client Close SHALL be transport-and-worker-only and
-SHALL NOT enumerate, drain, stop, delete, or await owner-held consumers or subscriptions.
+`StopAndDeleteConsumer`, `StopAllConsumers`, or `OutstandingWork`. Client Close SHALL own only native connection
+transport drain completion: it MUST initiate and await `nats.Conn` drain completion, but SHALL NOT enumerate,
+name-route, or retain lifecycle authority over owner-held consumer or subscription handles, nor directly invoke their
+lifecycle methods. Native connection drain waiting for its own subscription callbacks does not grant Client child
+lifecycle ownership.
 
 `Subscription.Drain(context.Context)` behavior remains unchanged by this capability.
 
@@ -302,6 +305,7 @@ be reported as zero, and current cross-Client metric-label collision debt SHALL 
 - **GIVEN** composition has owner-held consumers or subscriptions
 - **WHEN** Client Close begins after owner Stops
 - **THEN** it performs no child enumeration or name-routed lifecycle action
+- **AND** it awaits native connection drain completion before returning
 
 #### Scenario: Name-routed lifecycle APIs are absent
 - **WHEN** the Client lifecycle surface is enumerated
@@ -356,4 +360,3 @@ This local claim does not assert complete ADR-095 conformance.
 - **WHEN** acquisition fails before commit or the committed exact native handle closes
 - **THEN** the opaque claim is released by its existing path
 - **AND** no owner label, lifecycle handle, or additional lifecycle boundary is added
-

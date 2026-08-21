@@ -580,16 +580,24 @@ func (m *Client) Close(ctx context.Context) error {
 		m.metricsCancel()
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	conn := m.conn
+	drainTimeout := m.drainTimeout
+	m.mu.RUnlock()
 
 	// Drain and close connection
-	closeErr := m.drainAndCloseConnection(ctx)
+	closeErr := m.drainAndCloseConnection(ctx, conn, drainTimeout)
+
+	m.mu.Lock()
+	if m.conn == conn {
+		m.conn = nil
+	}
 
 	// Clear sensitive credentials from memory
 	m.username = ""
 	m.password = ""
 	m.token = ""
+	m.mu.Unlock()
 
 	m.setStatus(StatusDisconnected)
 
@@ -653,46 +661,57 @@ func isBenignDrainError(err error) bool {
 }
 
 // drainAndCloseConnection drains and closes the NATS connection.
-func (m *Client) drainAndCloseConnection(ctx context.Context) error {
-	if m.conn == nil {
+func (m *Client) drainAndCloseConnection(ctx context.Context, conn *nats.Conn, drainTimeout time.Duration) error {
+	if conn == nil {
 		return nil
 	}
 
 	// Use context deadline for drain timeout if available
-	drainTimeout := m.drainTimeout
 	if deadline, ok := ctx.Deadline(); ok {
 		if remaining := time.Until(deadline); remaining > 0 && remaining < drainTimeout {
 			drainTimeout = remaining
 		}
 	}
 
-	// Drain connection with timeout
-	drainDone := make(chan error, 1)
-	go func() {
-		drainDone <- m.conn.Drain()
-	}()
+	closed := conn.StatusChanged(nats.CLOSED)
+	defer conn.RemoveStatusListener(closed)
 
-	var drainErr error
-	select {
-	case err := <-drainDone:
-		if err != nil && !isBenignDrainError(err) {
-			drainErr = errs.Wrap(err, "Client", "Close", "drain connection")
-			m.logger.Error("Drain error", slog.Any("error", err))
+	if err := conn.Drain(); err != nil {
+		if isBenignDrainError(err) {
+			return nil
 		}
-	case <-time.After(drainTimeout):
-		drainErr = errs.WrapTransient(
+		drainErr := errs.Wrap(err, "Client", "Close", "drain connection")
+		m.logger.Error("Drain error", slog.Any("error", err))
+		if !conn.IsClosed() {
+			conn.Close()
+		}
+		return drainErr
+	}
+
+	drainTimer := time.NewTimer(drainTimeout)
+	defer drainTimer.Stop()
+
+	select {
+	case <-closed:
+		return nil
+	case <-drainTimer.C:
+		drainErr := errs.WrapTransient(
 			fmt.Errorf("drain timeout after %v", drainTimeout),
 			"Client", "Close", "drain timeout",
 		)
 		m.logger.Error("Drain timeout, force closing", slog.Duration("drain_timeout", drainTimeout))
+		if !conn.IsClosed() {
+			conn.Close()
+		}
+		return drainErr
 	case <-ctx.Done():
-		drainErr = errs.Wrap(ctx.Err(), "Client", "Close", "context cancelled during drain")
+		drainErr := errs.Wrap(ctx.Err(), "Client", "Close", "context cancelled during drain")
 		m.logger.Error("Context cancelled during drain, force closing")
+		if !conn.IsClosed() {
+			conn.Close()
+		}
+		return drainErr
 	}
-
-	m.conn.Close()
-	m.conn = nil
-	return drainErr
 }
 
 // RTT returns the round-trip time to the NATS server
