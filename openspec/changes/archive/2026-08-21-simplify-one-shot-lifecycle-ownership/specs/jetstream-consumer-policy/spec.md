@@ -1,17 +1,3 @@
-## Implementation checkpoint
-
-The independently approved, commit-authorized atomic N1b code diff on baseline
-`18cd4fcefeaa6e10780776dc0450b5b1dd877a46` implements the exact-handle, stateless durable-handler, and minimal-Client
-requirements below without changing `Subscription.Drain`. Its 35-file implementation SHA-256 is
-`887ffc0a3b61d52c7497b889756bd02b36e269be64919cdbe606bde40062fe60`; production is net -468 lines and the total is
-net -591. A later independently reviewed `APPROVE` slice removes the five fields and five published-schema properties
-with no production deletion mechanism or private helper. Before the reviewer-requested lifecycle integration comment
-replacement it was +57/-72 (net -15), with production net -7 and schemas net -30; final live bytes are +58/-73 (net
--15). The 17-file slice is 16 tracked implementation paths at +26/-73 plus the new 32-line regression at +32/0. The
-tracked-path SHA excludes the untracked regression; per-file ledger hashes close all 17 identities. This completes task
-2.5. Tasks 2.3 and 3.3, the 36-hit read-only downstream migration, the full N1 candidate gate, release, and tag
-remain unchecked.
-
 ## MODIFIED Requirements
 
 ### Requirement: Every exported port-backed consumption operation requires policy context
@@ -67,7 +53,7 @@ handler to the canonical port-backed operation, and retain the exact native hand
 - **AND** the owner receives the exact native handle
 
 #### Scenario: Temporary bridge is absent
-- **WHEN** canonical handle-return migration completes
+- **WHEN** the canonical consumption surface is enumerated
 - **THEN** neither temporary `*Handle` method exists
 - **AND** every SemStreams caller uses the canonical method and retains its result
 
@@ -111,17 +97,6 @@ replacement, Stop-by-name, delete-by-name, or Client Close path SHALL masquerade
 - **AND** no replacement, name-routed lifecycle, or Client Close path performs that cleanup
 
 ## ADDED Requirements
-
-### Requirement: NATS lifecycle convergence decreases framework surface
-
-The completed convergence SHALL delete seven exports and add only `NewDurableHandler`, for a net reduction of six
-exports. It SHALL remove the five deletion fields and schema properties and the Client child catalogs and lifecycle
-state. It SHALL add no lifecycle struct, interface, map, mutex, goroutine, retained context, or configuration switch.
-
-#### Scenario: Implementation exceeds the complexity budget
-- **WHEN** the candidate requires a new lifecycle abstraction or state holder
-- **THEN** implementation stops for a separate design decision
-- **AND** the old six-ruling package does not authorize that addition
 
 ### Requirement: Durable settlement composition is stateless
 
@@ -178,8 +153,7 @@ Client SHALL NOT retain consumer or subscription child catalogs and SHALL NOT ex
 `StopAndDeleteConsumer`, `StopAllConsumers`, or `OutstandingWork`. Client Close SHALL be transport-and-worker-only and
 SHALL NOT enumerate, drain, stop, delete, or await owner-held consumers or subscriptions.
 
-This change SHALL NOT alter `Subscription.Drain(context.Context)` behavior or tests. Subscription lifecycle semantics
-remain deferred until a concrete defect or adopter requirement supports a separate change.
+`Subscription.Drain(context.Context)` behavior remains unchanged by this capability.
 
 Client-scoped internal identity claims SHALL remain handle-free and release on precommit failure or exact Closed,
 never Client Close. Consumer-policy observation and metrics, `ObserveDirectPortConsumerPolicy`, OTEL process claims,
@@ -193,11 +167,11 @@ be reported as zero, and current cross-Client metric-label collision debt SHALL 
 - **THEN** it performs no child enumeration or name-routed lifecycle action
 
 #### Scenario: Name-routed lifecycle APIs are absent
-- **WHEN** N1 convergence completes
+- **WHEN** the Client lifecycle surface is enumerated
 - **THEN** Client has no consumer Stop, delete, stop-all, or outstanding-work lookup by name
 
 #### Scenario: Independent observation survives child-catalog removal
-- **WHEN** N1 removes Client lifecycle children
+- **WHEN** the current observation surface is enumerated
 - **THEN** policy metrics, direct-port observation, graph readiness, and agent-loop inflight remain available
 - **AND** none gains Stop, deletion, replacement, or Client Close authority
 
@@ -219,7 +193,7 @@ scoped if a concrete need arises.
 - **WHEN** a component decodes it
 - **THEN** OTEL rejects it through its existing `DisallowUnknownFields` behavior
 - **AND** agentic dispatch, agentic loop, agentic model, and agentic tools ignore it through existing lenient decoding
-- **AND** N1 adds no decoder strictness or universal fail-fast guarantee
+- **AND** the removal adds no decoder strictness or universal fail-fast guarantee
 
 #### Scenario: Contract scanner scope is honest
 - **WHEN** the published-schema regression passes
@@ -233,9 +207,8 @@ SHALL reserve `(stream,durable)` with an opaque pointer token, reject a second l
 draining, deleting, or replacing the incumbent, roll back every precommit failure, and release only after the exact
 native consume handle closes. The claim SHALL NOT store an owner label or become a child-handle catalog.
 
-This change SHALL NOT add sealed pre-Start identity validation or require the duplicate error to name both owners.
-Those stronger ADR-095 admission mechanics are deferred to a future change. N1 therefore SHALL NOT claim complete
-ADR-095 conformance.
+The Client does not provide sealed pre-Start identity validation or require the duplicate error to name both owners.
+This local claim does not assert complete ADR-095 conformance.
 
 #### Scenario: duplicate identity is rejected
 - **GIVEN** two local owners resolve to one stream and durable identity
@@ -245,4 +218,4 @@ ADR-095 conformance.
 #### Scenario: claim lifecycle remains handle-free
 - **WHEN** acquisition fails before commit or the committed exact native handle closes
 - **THEN** the opaque claim is released by its existing path
-- **AND** no owner label, lifecycle handle, or fifth N1 boundary is added
+- **AND** no owner label, lifecycle handle, or additional lifecycle boundary is added

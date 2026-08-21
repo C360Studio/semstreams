@@ -1,5 +1,22 @@
 # Lifecycle simplification recovery ledger
 
+> Historical execution record. Issue #1011 supersedes the broader completion and archive gates below. The reconciled
+> change promotes only landed `jetstream-consumer-policy` and `service-shutdown` behavior. Raw-root cleanup,
+> restart-safe client redesign, settlement/process proof, and other unfinished work are not part of this archive.
+
+## Issue #1011 closeout evidence — 2026-08-21
+
+- `go test -race ./...` passed.
+- `task test:integration` passed with the integration tag and race detector after two stale pre-one-shot assertions
+  were reconciled to current failed-Start and typed double-Start behavior.
+- `task schema:generate` produced no schema or OpenAPI diff.
+- Both narrowed changes and the throwaway promoted baseline passed strict OpenSpec validation; the sequential archive
+  promoted 3 context requirements and 6 added/5 modified lifecycle requirements, with 51/51 items valid.
+- `task e2e:core` passed 3/3 scenarios and `task e2e:agentic` passed its scenario.
+- Independent `semstreams-reviewer` review returned `APPROVE` with no blocking findings.
+- Deferred context-root and Client transport work moved to bounded issues #1012 and #1013. No new lifecycle spec was
+  opened.
+
 This is the durable execution authority for `simplify-one-shot-lifecycle-ownership`. It exists because design approval,
 a merged contract PR, strict OpenSpec validation, green tests for the old machinery, and runtime migration were
 previously conflated. Compaction, a new agent session, or a later PR summary must start here rather than infer state

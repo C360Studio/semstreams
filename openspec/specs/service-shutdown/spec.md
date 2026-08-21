@@ -15,53 +15,113 @@ running framework service safely, more than once.
 ## Requirements
 ### Requirement: Coordinated shutdown treats an already-stopped service as clean success
 
-`Manager.StopAll` MUST treat a service that is already in a stopped or stopping
-terminal state as a successful stop, not aggregate it as a fatal error. During
-coordinated shutdown a service may observe parent-context cancellation and
-transition itself to stopped/stopping before `StopAll` reaches its explicit `Stop`
-call; in that ordering "already stopped" is the intended terminal state. `StopAll`
-MUST continue to stop every registered service in reverse registration order and
-MUST still surface genuine stop failures, but MUST return `nil` when the only
-non-success outcomes are services that were already stopped or stopping.
+`Manager.StopAll(ctx context.Context)` MUST reject nil before action, pass the caller-owned shutdown context to every
+registered service in reverse registration order, continue after every error, and aggregate every genuine Stop
+failure. A service whose Stop already completed is clean success. A service merely marked stopping MUST NOT be
+promoted to completed or clean unless exact owner completion was observed. The production root invokes each owner Stop
+once; concurrent Stop is not a supported contract. StopAll MUST NOT invent a replacement context.
+
+#### Scenario: Completed service is visited again
+
+- **GIVEN** a service whose Stop completed
+- **WHEN** StopAll visits it
+- **THEN** it returns nil without repeating teardown
+
+#### Scenario: Stopping is not predicted completion
+
+- **GIVEN** a service marked stopping whose exact owner completion is not observed
+- **WHEN** StopAll evaluates the result
+- **THEN** it does not infer clean completion from the phase label
+
+#### Scenario: Reverse-order aggregation continues
+
+- **GIVEN** one service returns a genuine Stop error
+- **WHEN** StopAll continues the reverse-order pass
+- **THEN** every remaining service receives the caller context
+- **AND** the final result preserves every genuine error
 
 #### Scenario: a service already stopped before StopAll visits it
 
-- **GIVEN** a registered service that has already reached stopped/stopping via parent-context cancellation
+- **GIVEN** a registered service whose exact Stop completion was observed
 - **WHEN** `Manager.StopAll` visits that service
-- **THEN** `StopAll` treats it as a successful stop
-- **AND** does not include it in the aggregated stop error
+- **THEN** `StopAll` treats it as successful
+- **AND** it does not infer completion merely from a stopping phase
 
 #### Scenario: a genuine stop failure is still surfaced
 
-- **GIVEN** a registered service whose `Stop` returns a real (non-already-stopped) error
+- **GIVEN** a registered service whose Stop returns a genuine error
 - **WHEN** `Manager.StopAll` visits that service
-- **THEN** `StopAll` aggregates that error and returns non-nil
-- **AND** still attempts to stop the remaining services
+- **THEN** `StopAll` aggregates the error
+- **AND** it still attempts every remaining service
 
 #### Scenario: a fully clean shutdown returns nil
 
-- **GIVEN** a set of registered services that all stop cleanly or are already stopped
+- **GIVEN** every registered service completes Stop cleanly or had exact completion observed
 - **WHEN** `Manager.StopAll` runs
-- **THEN** it returns `nil`
+- **THEN** it returns nil
 
 ### Requirement: A framework service Stop is idempotent on repeated invocation
 
-A framework service's `Stop` MUST be idempotent: invoking `Stop` on a service that
-is already stopped or stopping MUST return `nil` and MUST NOT re-run teardown side
-effects (closing an already-closed channel, double-releasing resources). This is
-the per-service half of the coordinated-shutdown contract that lets `StopAll`
-treat already-stopped services as clean.
+`Stop(ctx)` MUST reject nil before inspecting state or acting. After Stop completed, another Stop MUST return nil and
+MUST NOT repeat teardown. The contract MUST NOT promise concurrent executor election, later rejoin of a successfully
+running generation, or replay of a prior Stop error. Stop context bounds shutdown phases and never becomes runtime
+authority or a detached cleanup root.
+
+#### Scenario: Completed Stop is called again
+
+- **GIVEN** a framework service completed Stop, clean or failed
+- **WHEN** Stop is called again with a valid context
+- **THEN** it returns nil and performs no teardown side effect
+
+#### Scenario: Concurrent Stop is outside the contract
+
+- **GIVEN** one Stop is in progress
+- **WHEN** another caller attempts Stop
+- **THEN** no requirement promises shared execution, shared result, or retained-result replay
 
 #### Scenario: Stop called twice returns nil the second time
 
-- **GIVEN** a running framework service
-- **WHEN** `Stop` is called and completes, then `Stop` is called again
-- **THEN** the second call returns `nil`
-- **AND** no teardown side effect is run a second time
+- **GIVEN** a framework service completed Stop
+- **WHEN** Stop is called again with a valid context
+- **THEN** the second call returns nil without repeating teardown
 
 #### Scenario: Stop after self-transition to stopping returns nil
 
-- **GIVEN** a service that transitioned itself to stopping on parent-context cancellation
-- **WHEN** the manager subsequently calls `Stop`
-- **THEN** the call returns `nil`
+- **GIVEN** a service self-transitioned to stopping and exact Stop completion was subsequently observed
+- **WHEN** the manager calls Stop again
+- **THEN** it returns nil without replaying a prior result
+
+### Requirement: Terminal ComponentManager shutdown fences callback borrows
+
+ComponentManager MUST close callback-borrow admission before stopping child components. A callback admitted before the
+fence MUST return before child Stop begins; a callback ordered after the fence MUST receive typed `stopping` without
+being invoked. Waiting and component callbacks MUST run without the manager or borrow mutex held.
+
+#### Scenario: Admitted callback completes before child Stop
+
+- **GIVEN** a callback borrow admitted before terminal shutdown
+- **WHEN** ComponentManager begins cleanup
+- **THEN** it fences new admission and waits outside its locks
+- **AND** child Stop begins only after the admitted callback releases its borrow
+
+#### Scenario: New callback is rejected after the fence
+
+- **GIVEN** terminal shutdown has fenced callback admission
+- **WHEN** another callback is requested
+- **THEN** it receives typed `stopping`
+- **AND** the callback is not invoked
+
+### Requirement: ComponentManager failed Start retains cleanup authority
+
+ComponentManager MUST publish cancellation and `startDone` authority before child acquisition can escape. If Start
+fails, it MUST finalize Start and attempt bounded synchronous rollback. Successful rollback clears lifecycle handles.
+Failed or expired rollback retains cleanup authority, rejects another Start on the same instance, and permits a later
+Stop with caller context to retry cleanup.
+
+#### Scenario: Failed rollback is retried by Stop
+
+- **GIVEN** ComponentManager Start acquired a child and rollback returned an error
+- **WHEN** another Start is attempted
+- **THEN** it is rejected while cleanup remains pending
+- **AND** a later Stop may complete cleanup and make repeated Stop a no-op
 

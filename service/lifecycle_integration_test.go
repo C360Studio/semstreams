@@ -116,7 +116,7 @@ func TestServiceLifecycleRobustness(t *testing.T) {
 		// Start again - should error
 		err = msgLogger.Start(ctx)
 		assert.Error(t, err, "Double start should return error")
-		assert.Contains(t, err.Error(), "already running")
+		assert.ErrorIs(t, err, errs.ErrAlreadyStarted)
 	})
 
 	t.Run("Concurrent start/stop stress test", func(t *testing.T) {
