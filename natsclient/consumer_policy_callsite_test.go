@@ -96,6 +96,25 @@ func TestConsumerPolicyProductionCallsiteCensus(t *testing.T) {
 	}
 }
 
+func TestParseProductionGoFilesIgnoresClaudeWorktrees(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "kept.go"), []byte("package fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	worktree := filepath.Join(root, ".claude", "worktrees", "agent-test")
+	if err := os.MkdirAll(worktree, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, "contamination.go"), []byte("package contamination\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	files := parseProductionGoFiles(t, root)
+	if len(files) != 1 || files[0].rel != "kept.go" {
+		t.Fatalf("production scan files = %#v, want only kept.go", files)
+	}
+}
+
 func TestConsumerPolicyExportedClientAPICensus(t *testing.T) {
 	files := parseProductionGoFiles(t, ".")
 	got := map[string]string{}
@@ -226,7 +245,7 @@ func parseProductionGoFiles(t *testing.T, root string) []productionGoFile {
 			return walkErr
 		}
 		if entry.IsDir() {
-			if entry.Name() == ".git" || entry.Name() == "vendor" {
+			if entry.Name() == ".git" || entry.Name() == ".claude" || entry.Name() == "vendor" {
 				return filepath.SkipDir
 			}
 			return nil

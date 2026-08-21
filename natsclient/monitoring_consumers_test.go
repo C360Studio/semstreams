@@ -32,7 +32,7 @@ func TestMonitoringURLConsumersExplicitlyEnableMonitoring(t *testing.T) {
 			return walkErr
 		}
 		if entry.IsDir() {
-			if entry.Name() == ".git" || entry.Name() == "vendor" {
+			if entry.Name() == ".git" || entry.Name() == ".claude" || entry.Name() == "vendor" {
 				return filepath.SkipDir
 			}
 			return nil
