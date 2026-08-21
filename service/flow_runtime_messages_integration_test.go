@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/flowstore"
 	"github.com/c360studio/semstreams/types"
 	"github.com/stretchr/testify/assert"
@@ -344,19 +346,14 @@ func TestRuntimeMessagesIntegration(t *testing.T) {
 	})
 }
 
-// TestRuntimeMessagesLoggerUnavailable tests graceful degradation when message logger is not available
+// TestRuntimeMessagesLoggerUnavailable proves the production-composed flow
+// route degrades gracefully when the optional message logger is absent.
 func TestRuntimeMessagesLoggerUnavailable(t *testing.T) {
-
-	// Setup NATS client
 	natsClient := getSharedNATSClient(t)
-
-	// Create flow store
 	flowStore, err := flowstore.NewManager(natsClient)
 	require.NoError(t, err)
 
-	ctx := context.Background()
-
-	// Create a test flow
+	ctx := t.Context()
 	testFlow := &flowstore.Flow{
 		ID:   "no-logger-flow",
 		Name: "No Logger Flow",
@@ -375,57 +372,54 @@ func TestRuntimeMessagesLoggerUnavailable(t *testing.T) {
 
 	err = flowStore.Create(ctx, testFlow)
 	require.NoError(t, err)
-
 	defer func() {
 		_ = flowStore.Delete(ctx, testFlow.ID)
 	}()
 
-	// Create service manager WITHOUT message logger
 	logger := slog.Default()
-	serviceMgr := NewServiceManager(NewServiceRegistry())
-	// Intentionally NOT adding message logger service
-
-	// Create FlowService
-	baseService := NewBaseServiceWithOptions(
-		"flow-builder-test",
-		nil,
-		WithLogger(logger),
-	)
-
-	fs := &FlowService{
-		BaseService: baseService,
-		flowStore:   flowStore,
-		serviceMgr:  serviceMgr,
-		config: FlowServiceConfig{
-			PrometheusURL: "http://localhost:9090",
-			FallbackToRaw: true,
+	bootConfig := &config.Config{
+		Version:  "1.0.0",
+		Platform: config.PlatformConfig{Org: "c360", ID: "runtime-messages-test", Type: "test"},
+		Services: types.ServiceConfigs{
+			"flow-builder": {Enabled: true},
+			"metrics":      {Enabled: false},
 		},
 	}
+	configManager, err := config.NewConfigManager(bootConfig, natsClient, logger)
+	require.NoError(t, err)
 
-	// Test graceful degradation
-	t.Run("GracefulDegradation", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/flowbuilder/flows/no-logger-flow/observations/messages", nil)
-		req.SetPathValue("id", "no-logger-flow")
-		w := httptest.NewRecorder()
+	serviceRegistry := NewServiceRegistry()
+	require.NoError(t, RegisterAll(serviceRegistry))
+	manager := NewServiceManager(serviceRegistry)
+	require.NoError(t, manager.ConfigureFromServices(bootConfig.Services, &Dependencies{
+		NATSClient:        natsClient,
+		Manager:           configManager,
+		ComponentRegistry: component.NewRegistry(),
+		Logger:            logger,
+	}))
 
-		fs.handleRuntimeMessages(w, req)
+	_, loggerExists := manager.GetService("message-logger")
+	require.False(t, loggerExists, "message-logger must remain optional and absent")
+	flowServiceInstance, exists := manager.GetService("flow-builder")
+	require.True(t, exists, "production composition must create flow-builder")
+	flowService, ok := flowServiceInstance.(*FlowService)
+	require.True(t, ok, "flow-builder type = %T, want *FlowService", flowServiceInstance)
 
-		// Should still return 200 OK
-		assert.Equal(t, http.StatusOK, w.Code)
+	mux := http.NewServeMux()
+	flowService.RegisterHTTPHandlers("/flowbuilder", mux)
+	req := httptest.NewRequest(http.MethodGet, "/flowbuilder/flows/no-logger-flow/observations/messages", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
 
-		var response RuntimeMessagesResponse
-		err = json.NewDecoder(w.Body).Decode(&response)
-		require.NoError(t, err)
-
-		// Should have empty messages array
-		assert.Equal(t, 0, len(response.Messages))
-		assert.Equal(t, 0, response.Total)
-		assert.Equal(t, 100, response.Limit)
-
-		// Should have a note explaining why
-		assert.NotEmpty(t, response.Note)
-		assert.Contains(t, response.Note, "not available")
-	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var response RuntimeMessagesResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&response))
+	require.NotEmpty(t, response.Timestamp)
+	require.NotNil(t, response.Messages)
+	require.Empty(t, response.Messages)
+	require.Zero(t, response.Total)
+	require.Equal(t, 100, response.Limit)
+	require.Equal(t, "Message logger service is not available", response.Note)
 }
 
 // TestRuntimeMessagesWithActualNATSFlow tests integration with real NATS message flow
