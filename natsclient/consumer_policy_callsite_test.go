@@ -22,19 +22,15 @@ type productionGoFile struct {
 func TestConsumerPolicyProductionCallsiteCensus(t *testing.T) {
 	files := parseProductionGoFiles(t, filepath.Clean(".."))
 	internalCallers := map[string]int{}
-	handleCallers := map[string]int{}
-	contextsHandleCallers := map[string]int{}
+	portCallers := map[string]int{}
+	contextsPortCallers := map[string]int{}
 	portConfigCallers := map[string]struct{}{}
 	portBackedInternalCallers := map[string]struct{}{}
 	for _, parsed := range files {
 		usesPortConfig := false
 		usesInternal := false
 		ast.Inspect(parsed.file, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			selector, ok := call.Fun.(*ast.SelectorExpr)
+			selector, ok := node.(*ast.SelectorExpr)
 			if !ok {
 				return true
 			}
@@ -44,10 +40,10 @@ func TestConsumerPolicyProductionCallsiteCensus(t *testing.T) {
 			case "ConsumeInternalStreamWithConfig":
 				usesInternal = true
 				internalCallers[parsed.rel]++
-			case "ConsumeStreamWithConfigHandle":
-				handleCallers[parsed.rel]++
-			case "ConsumeStreamWithConfigContextsHandle":
-				contextsHandleCallers[parsed.rel]++
+			case "ConsumeStreamWithConfig":
+				portCallers[parsed.rel]++
+			case "ConsumeStreamWithConfigContexts":
+				contextsPortCallers[parsed.rel]++
 			}
 			return true
 		})
@@ -66,18 +62,31 @@ func TestConsumerPolicyProductionCallsiteCensus(t *testing.T) {
 	if !reflect.DeepEqual(internalCallers, wantInternal) {
 		t.Fatalf("internal consumer census = %#v, want %#v", internalCallers, wantInternal)
 	}
-	wantHandle := map[string]int{
-		"processor/agentic-dispatch/component.go":   5,
-		"processor/agentic-governance/component.go": 1,
-		"processor/agentic-model/component.go":      1,
-		"processor/agentic-tools/component.go":      1,
+	wantPort := map[string]int{
+		"examples/processors/document/component.go":   1,
+		"examples/processors/iot_sensor/component.go": 1,
+		"output/file/file.go":                         1,
+		"output/httppost/httppost.go":                 1,
+		"output/websocket/websocket.go":               1,
+		"processor/agentic-dispatch/component.go":     1,
+		"processor/agentic-governance/component.go":   1,
+		"processor/agentic-model/component.go":        1,
+		"processor/agentic-tools/component.go":        1,
+		"processor/graph-ingest/component.go":         1,
+		"processor/json_filter/json_filter.go":        1,
+		"processor/json_generic/json_generic.go":      1,
+		"processor/json_map/json_map.go":              1,
+		"processor/rule/processor.go":                 1,
+		"storage/objectstore/component.go":            1,
 	}
-	if !reflect.DeepEqual(handleCallers, wantHandle) {
-		t.Fatalf("native port consumer handle census = %#v, want %#v", handleCallers, wantHandle)
+	if !reflect.DeepEqual(portCallers, wantPort) {
+		t.Fatalf("canonical port consumer census = %#v, want %#v", portCallers, wantPort)
 	}
-	wantContextsHandle := map[string]int{"processor/agentic-loop/component.go": 1}
-	if !reflect.DeepEqual(contextsHandleCallers, wantContextsHandle) {
-		t.Fatalf("split-context native handle census = %#v, want %#v", contextsHandleCallers, wantContextsHandle)
+	wantContextsPort := map[string]int{
+		"processor/agentic-loop/component.go": 1,
+	}
+	if !reflect.DeepEqual(contextsPortCallers, wantContextsPort) {
+		t.Fatalf("split-context canonical port census = %#v, want %#v", contextsPortCallers, wantContextsPort)
 	}
 	if len(portConfigCallers) != 17 {
 		t.Fatalf("GetConsumerConfig production files = %d, want 17: %#v", len(portConfigCallers), portConfigCallers)
@@ -104,16 +113,75 @@ func TestConsumerPolicyExportedClientAPICensus(t *testing.T) {
 	}
 
 	want := map[string]string{
-		"ConsumeDurable":                        "func(ctx context.Context, owner PortConsumerContext, cfg StreamConsumerConfig, heartbeat time.Duration, handler func(context.Context, []byte) error) error",
-		"ConsumeInternalStreamWithConfig":       "func(ctx context.Context, cfg StreamConsumerConfig, handler func(ctx context.Context, msg jetstream.Msg)) (jetstream.ConsumeContext, error)",
-		"ConsumeStreamWithConfig":               "func(ctx context.Context, owner PortConsumerContext, cfg StreamConsumerConfig, handler func(ctx context.Context, msg jetstream.Msg)) error",
-		"ConsumeStreamWithConfigHandle":         "func(ctx context.Context, owner PortConsumerContext, cfg StreamConsumerConfig, handler func(ctx context.Context, msg jetstream.Msg)) (jetstream.ConsumeContext, error)",
-		"ConsumeStreamWithConfigContextsHandle": "func(setupCtx context.Context, handlerCtx context.Context, owner PortConsumerContext, cfg StreamConsumerConfig, handler func(ctx context.Context, msg jetstream.Msg)) (jetstream.ConsumeContext, error)",
-		"ConsumeStreamWithConfigContexts":       "func(setupCtx context.Context, handlerCtx context.Context, owner PortConsumerContext, cfg StreamConsumerConfig, handler func(ctx context.Context, msg jetstream.Msg)) error",
-		"ObserveDirectPortConsumerPolicy":       "func(ctx context.Context, owner PortConsumerContext, finalConfig jetstream.ConsumerConfig, consumer jetstream.Consumer) (func(), error)",
+		"ConsumeInternalStreamWithConfig": "func(ctx context.Context, cfg StreamConsumerConfig, handler func(ctx context.Context, msg jetstream.Msg)) (jetstream.ConsumeContext, error)",
+		"ConsumeStreamWithConfig":         "func(ctx context.Context, owner PortConsumerContext, cfg StreamConsumerConfig, handler func(ctx context.Context, msg jetstream.Msg)) (jetstream.ConsumeContext, error)",
+		"ConsumeStreamWithConfigContexts": "func(setupCtx context.Context, handlerCtx context.Context, owner PortConsumerContext, cfg StreamConsumerConfig, handler func(ctx context.Context, msg jetstream.Msg)) (jetstream.ConsumeContext, error)",
+		"ObserveDirectPortConsumerPolicy": "func(ctx context.Context, owner PortConsumerContext, finalConfig jetstream.ConsumerConfig, consumer jetstream.Consumer) (func(), error)",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("exported Client consumer API census = %#v, want %#v", got, want)
+	}
+}
+
+func TestDurableHandlerExportedAPICensus(t *testing.T) {
+	files := parseProductionGoFiles(t, ".")
+	got := map[string]string{}
+	for _, parsed := range files {
+		for _, declaration := range parsed.file.Decls {
+			fn, ok := declaration.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil || fn.Name.Name != "NewDurableHandler" {
+				continue
+			}
+			got[fn.Name.Name] = compactNode(t, fn.Type)
+		}
+	}
+	want := map[string]string{
+		"NewDurableHandler": "func(cfg StreamConsumerConfig, heartbeat time.Duration, work func(context.Context, []byte) error) (func(context.Context, jetstream.Msg), error)",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("durable handler API census = %#v, want %#v", got, want)
+	}
+}
+
+func TestClientHasNoChildLifecycleSurfaceOrCatalog(t *testing.T) {
+	files := parseProductionGoFiles(t, ".")
+	forbiddenMethods := map[string]struct{}{
+		"ConsumeDurable": {}, "StopConsumer": {}, "StopAndDeleteConsumer": {},
+		"StopAllConsumers": {}, "OutstandingWork": {},
+	}
+	forbiddenFields := map[string]struct{}{
+		"consumers": {}, "consumersMu": {}, "subs": {},
+	}
+	for _, parsed := range files {
+		for _, declaration := range parsed.file.Decls {
+			fn, ok := declaration.(*ast.FuncDecl)
+			if ok && fn.Recv != nil && receiverIsClientPointer(fn.Recv) {
+				if _, forbidden := forbiddenMethods[fn.Name.Name]; forbidden {
+					t.Fatalf("forbidden Client lifecycle method remains: %s", fn.Name.Name)
+				}
+			}
+			gen, ok := declaration.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				typeSpec, ok := spec.(*ast.TypeSpec)
+				if !ok || typeSpec.Name.Name != "Client" {
+					continue
+				}
+				structType, ok := typeSpec.Type.(*ast.StructType)
+				if !ok {
+					continue
+				}
+				for _, field := range structType.Fields.List {
+					for _, name := range field.Names {
+						if _, forbidden := forbiddenFields[name.Name]; forbidden {
+							t.Fatalf("forbidden Client child catalog remains: %s", name.Name)
+						}
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -140,7 +208,7 @@ func TestConsumerPolicyDirectCreationCallCensus(t *testing.T) {
 	}
 
 	want := map[string]int{
-		"natsclient/stream.go:CreateOrUpdateConsumer/args=2":                       4,
+		"natsclient/stream.go:CreateOrUpdateConsumer/args=2":                       2,
 		"output/otel/component.go:CreateOrUpdateConsumer/args=3":                   1,
 		"test/e2e/scenarios/core_objectstore_raw.go:CreateOrUpdateConsumer/args=2": 1,
 	}

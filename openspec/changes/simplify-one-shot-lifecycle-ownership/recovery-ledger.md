@@ -1591,6 +1591,122 @@ no fifth boundary or claim state, and N1 does not claim complete ADR-095 conform
 All remaining N1 tasks, Gate A/B/C, controlled/dirty proof, release, archive, and tag readiness remain unchecked. The
 branch remains under the no-release/no-tag invariant.
 
+### Atomic N1b code convergence checkpoint — 2026-08-20
+
+Independent final `semstreams-reviewer` verdict `APPROVE` authorizes commit of the exact implementation diff on
+baseline `18cd4fcefeaa6e10780776dc0450b5b1dd877a46`. The canonical binary diff across its 35 tracked paths has SHA-256
+`887ffc0a3b61d52c7497b889756bd02b36e269be64919cdbe606bde40062fe60`. Production changes 23 files by +102/-570,
+net -468; tests change 12 files by +292/-415, net -123; the complete implementation is +394/-985, net -591.
+
+The change executed these coupled boundaries atomically:
+
+- both canonical port methods return exact `jetstream.ConsumeContext`; all 16 local owners retain that exact handle;
+  both temporary bridges and the error-only/catalog route are removed;
+- `NewDurableHandler` replaces `ConsumeDurable` without an alias, delegates settlement and work join to
+  `ConsumeWithHeartbeat`, preserves exact WARN message `ConsumeDurable handler error` and fields `stream`, `consumer`,
+  and `error`, and validates against the minimum positive BackOff interval with overflow-safe heartbeat comparison;
+- Client consumer/subscription child catalogs, bindings, same-name replacement, `StopConsumer`,
+  `StopAndDeleteConsumer`, `StopAllConsumers`, `OutstandingWork`, and Close-time child enumeration are removed; and
+- the package documentation describes exact caller ownership and transport-only Client Close.
+
+The exact-handle intermediate made catalog-backed natsclient integration tests fail after their expected Client
+catalog authority disappeared. Baseline `18cd4fce` had zero SemStreams production call expressions for
+`OutstandingWork` or `StopAllConsumers`; those expressions existed only in natsclient integration-test code removed
+by the diff. Agentic-loop already used direct JetStream observation and lost only a comment reference to
+`OutstandingWork`.
+
+Atomic packaging therefore was not required to migrate a local production caller. It was selected to avoid publishing
+an incoherent outward API while authoritative downstream SemMachina still combined direct `ConsumeDurable`
+acquisition with `StopAllConsumers` shutdown. Its owner migration must replace both halves coherently; SemStreams does
+not edit that repository and adds no compatibility bridge.
+
+Independent claims, consumer-policy and metrics observation, `ObserveDirectPortConsumerPolicy`, OTEL claims, internal
+consumer creation, graph-ingest readiness, and agentic-loop inflight observation remain in their existing ownership
+domains. `Subscription` and `Subscription.Drain(context.Context)` are unchanged. The five
+`DeleteConsumerOnStop` configuration fields and generated-schema properties are also unchanged by this diff; their
+removal, private exact-identity fixture cleanup, and read-only sister migrations remain task 2.5.
+
+| Evidence | Result |
+|---|---|
+| Focused and full `natsclient` race | PASS |
+| Race coverage for all 16 changed owners | PASS |
+| Full real-NATS `natsclient` runtime | PASS except three repository-worktree scanner tests |
+| Graph-ingest and agentic-loop integration | PASS |
+| Lint and build | PASS |
+| Diff check and strict OpenSpec validation | PASS |
+| Independent implementation review | `APPROVE`; commit authorized |
+
+The three excluded real-NATS tests traverse user-owned worktrees and are a known scanner limitation, not candidate
+runtime evidence. Full repository and service green is not claimed; previously recorded scanner pollution and stale
+baseline assertions remain outside this atomic review surface. No core, structural, agentic, or semantic E2E tier,
+controlled-process restart, dirty recovery, settlement proof, latest-desired-state proof, release, archive, or tag
+credit follows from this checkpoint.
+
+Task 2.1, task 3.1, and task 3.2 receive implementation credit. Within the narrowed four-boundary subset, task 2.5 is
+the only remaining implementation boundary. Tasks 2.3 and 3.3 remain unchecked, receive no credit here, and are
+outside that subset. The complete N1 candidate gate remains unchecked. The branch remains no-release/no-tag, and every
+sister repository remains read-only.
+
+#### Atomic implementation path identities
+
+Hashes below are exact live bytes after the approved diff. Deleted tests use their exact baseline bytes and are marked
+deleted; they have no live-file identity.
+
+| Path | SHA-256 / disposition |
+|---|---|
+| `examples/processors/document/component.go` | `3c5f3bfff2d1b76af5d04b542b0aea57b9d862fb9be11418330b62ccf9b6ac15` |
+| `examples/processors/iot_sensor/component.go` | `73721dc2c0f6550217fc4547e66dfd6980bd327b56e3374fe99366390cc86c32` |
+| `natsclient/client.go` | `02ee475aa708754316ed5fed3d3350eb5d3f87145fc31ab509f565b78643c718` |
+| `natsclient/consume_durable.go` | `3a544f9570a41dc869542fa666fe0ff0b15889d78713492ccb2d2dd52b4e2a94` |
+| `natsclient/consume_durable_integration_test.go` | `e4b20b9ce4e779a37303896a289a6615fd1438f4dfcb514b94ef7dba4139a639` |
+| `natsclient/consume_durable_test.go` | `5fd81e9e66635c32ff0b80bfa56f0fa177b39849f2615fce68409a86bea4d061` |
+| `natsclient/consumer_handle_integration_test.go` | deleted; baseline `8e690da7184b6c3cd6a76ec48bbdd0573f5dadabee593ca8bbee85454defc698` |
+| `natsclient/consumer_policy.go` | `e2ed1308e17fcb1914dfeba64748e10056cb44fd6e70ded9307b5273fb4a0719` |
+| `natsclient/consumer_policy_callsite_test.go` | `47b28c8c053631c385bfc6f40d784394025c0e5ecbd8727176ea9e4ba4df1f72` |
+| `natsclient/consumer_policy_integration_test.go` | `609997fdaef886de06ebb8c1dbe44c30b0cd5b062f26737ebeee7f6216423374` |
+| `natsclient/consumer_policy_test.go` | `987772160c6b431634c2a26e25a6d03634c836284aa9222f75089491c0e4db6e` |
+| `natsclient/consumer_stop_test.go` | deleted; baseline `cf3e909a1c89302ec3b606c9e60424f608bd9b569c4b7c0515d4184b891adde7` |
+| `natsclient/doc.go` | `ed2fb93c645f0d0fd750576c71f1b5dbf5d35d466c3aa50ca8c01dcd326a9418` |
+| `natsclient/internal_consumer_lifecycle_integration_test.go` | `347e315cd0373d6487aed7fb2268c77db10f3ab70490f36e94d5e1bf1c0e067b` |
+| `natsclient/publish_async_integration_test.go` | `09f574a0cc80135d97e26fe2d2400d64596c03134f5c4f6271a5db1316442396` |
+| `natsclient/request.go` | `54fef888a54d690c72f0a6ded377e901694df89e70d5fc446c701a8704fa13a8` |
+| `natsclient/stream.go` | `915be227d38b1828303e486999ee0dcc68b4ca35e65148be4b5f22a94d3f1711` |
+| `natsclient/stream_handle_test.go` | `5ef8aa926229a0ca05fc992b56f461c2c1ab6767812e6d371d47d6d98cc48d77` |
+| `natsclient/stream_integration_test.go` | `93c4670711199b3bf7448a4a451493aebef5d40745ee84c3875d6396f584c59f` |
+| `output/file/file.go` | `f58fddca34d14373f29ded2e9dac7f85c6044dc34f7861bfaa359ea7a092f488` |
+| `output/httppost/httppost.go` | `2abf10fdc65c6f0bfae657d737420eeae9ac37e4c3b51b54716431b2b7f9279b` |
+| `output/websocket/websocket.go` | `cc95cd1326f72dac6700ddc4cd14c27924719f92466267ef9ec97917206db12d` |
+| `processor/agentic-dispatch/component.go` | `ad87d39bbef1be4eac168d56b96f991f4d936249f4bd7f2dce9463665a2017c0` |
+| `processor/agentic-governance/component.go` | `4c663d994689bdbe416287806c861cbe04ee0d9fe6737729ead1962d4f3b2ccd` |
+| `processor/agentic-loop/component.go` | `6b011742f58d9deda304cac1cf14468e7b2551317bbc4403de4cd116b2eb9ec8` |
+| `processor/agentic-loop/inflight.go` | `c1696ad78c36ad86c899bab880687b5cee760e06867d7717bea7f6d93cb4c88a` |
+| `processor/agentic-model/component.go` | `678f02edac2f793c3fad3914e0396078faed0cb5995007b27cdcc59a54c4655a` |
+| `processor/agentic-tools/component.go` | `1a6085c8f8a873b9f4cf5259ca899c1816a89d6b319bb56078b7ea6c13a00415` |
+| `processor/graph-ingest/component.go` | `c67dfd9e0462c7c855a23e8cb9248809d62e7e9c3dd29faf90986c87b9605c63` |
+| `processor/graph-ingest/lifecycle_integration_test.go` | `f98fab49902120c3102136c6e9ae73cd1042a0a67276e3251e51f44bc46090d2` |
+| `processor/json_filter/json_filter.go` | `bf6404da74609ddd3ed3f08d9a0d7c224c99a05860e6acc5c68200855b823255` |
+| `processor/json_generic/json_generic.go` | `2c41a406fb7e58047ca6560f300472d23dab1aa7ee6a0f4a839a7e38e11eb6f5` |
+| `processor/json_map/json_map.go` | `19228f9719ee10375eef13b4bf3fb65b592529ecca9796dec1317225aff813eb` |
+| `processor/rule/processor.go` | `8a2b4599d91823514d8d7544cff4b9247f3e5154e2211969b09a2fd7e61c0559` |
+| `storage/objectstore/component.go` | `fc9944573449ff06754a1c7d37f9fc3e20a7c7c70e7bede11a39627bf77a87d4` |
+
+#### Atomic checkpoint document identities
+
+| Document | SHA-256 |
+|---|---|
+| `docs/operations/migration-restart-safe-nats-client.md` | `3b85262e3bea670c76f7a61ced4db7e5389542d3cc5e6ab12e898b5924199dc3` |
+| `proposal.md` | `a9c8aa5a8917243301953d8dd0eff3376a93b24fa2492fec961d51a15be395a8` |
+| `design.md` | `f943a8225170ffb995c5cb3ac946a837724f64165f2bafbf76c6f205e072c44d` |
+| `inventory.md` | `2b185cbcfeb34667c25bedff7a0c5b30b9bb8b7a353e92607c17967a352c3990` |
+| `remaining-owner-family-wave-design.md` | `96cf83571ec3e8ff105a2a0d02b6f7220da03a49263da6ef842196e328078e8f` |
+| `tasks.md` | `976986ee06d478e19ebd99714c4d4640e884b604b176792d1c81b4e0f6f6ccc6` |
+| `specs/jetstream-consumer-policy/spec.md` | `db3c8e0fcc84508935cd1bfd8cbeb3812ea3c9b3c3be646abdab89553a8dec3c` |
+| Protected `n1-convergence-inventory.md` | `2a95a0f5fd6683aeed585c8dca43d65ff662f32b2b046ce2262f6b97f74612e9` |
+| Protected `metrics-http-owner-inventory.md` | `8a3b74786df6098aa053edd5c5c5e68f42f817ebd44008cdb75b8dece9eb2fc5` |
+
+The recovery ledger cannot embed its own final hash without changing it. Its final SHA-256 is reported with the
+handoff evidence after documentation validation.
+
 ### CM1 ComponentManager implementation checkpoint — 2026-08-19
 
 Independent `semstreams-reviewer` verdict `APPROVE` applies to the CM1 dirty worktree based on full commit

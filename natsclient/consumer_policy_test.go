@@ -26,6 +26,7 @@ func (f *fakePolicyConsumeContext) Drain()                  { f.Stop() }
 func (f *fakePolicyConsumeContext) Closed() <-chan struct{} { return f.closed }
 
 type fakeManagedPolicyConsumer struct {
+	jetstream.Consumer
 	info          *jetstream.ConsumerInfo
 	infoErr       error
 	events        *[]string
@@ -71,7 +72,7 @@ func (h *policyLogHandler) Handle(_ context.Context, record slog.Record) error {
 	return nil
 }
 
-func TestManagedConsumerObservesBeforeDeliveryAndLogsOnce(t *testing.T) {
+func TestPortConsumerObservesBeforeDeliveryAndLogsOnce(t *testing.T) {
 	events := []string{}
 	consumer := &fakeManagedPolicyConsumer{events: &events, info: &jetstream.ConsumerInfo{
 		Stream: "EVENTS", Name: "worker-events",
@@ -82,8 +83,10 @@ func TestManagedConsumerObservesBeforeDeliveryAndLogsOnce(t *testing.T) {
 	owner := PortConsumerContext{Component: "worker", Port: "events"}
 	cfg := StreamConsumerConfig{StreamName: "EVENTS", ConsumerName: "worker-events", MaxAckPending: 5}
 
-	consumeCtx, key, err := client.observeAndStartManagedConsumer(
-		context.Background(), owner, cfg, consumer, func(jetstream.Msg) {}, true)
+	identity := internalConsumerIdentity{stream: cfg.StreamName, durable: cfg.ConsumerName}
+	consumeCtx, err := client.startPortConsumer(
+		context.Background(), context.Background(), "ConsumeStreamWithConfig", owner, cfg,
+		&guardedConsumer{Consumer: consumer}, identity, nil, func(context.Context, jetstream.Msg) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,10 +94,6 @@ func TestManagedConsumerObservesBeforeDeliveryAndLogsOnce(t *testing.T) {
 	if !reflect.DeepEqual(events, []string{"info", "consume"}) {
 		t.Fatalf("event order = %v, want observation before consume", events)
 	}
-	if key != (consumerPolicyKey{component: "worker", port: "events", stream: "EVENTS", consumer: "worker-events", policySource: policySourcePort}) {
-		t.Fatalf("policy key = %#v", key)
-	}
-
 	logs.mu.Lock()
 	defer logs.mu.Unlock()
 	if len(logs.records) != 1 {
@@ -113,20 +112,22 @@ func TestManagedConsumerObservesBeforeDeliveryAndLogsOnce(t *testing.T) {
 	}
 }
 
-func TestManagedConsumerInitialInfoFailureIsTransientAndPreventsDelivery(t *testing.T) {
+func TestPortConsumerInitialInfoFailureIsTransientAndPreventsDelivery(t *testing.T) {
 	events := []string{}
 	cause := errors.New("consumer info unavailable")
 	consumer := &fakeManagedPolicyConsumer{events: &events, infoErr: cause}
 	client := &Client{logger: slog.Default()}
-	_, key, err := client.observeAndStartManagedConsumer(
-		context.Background(), PortConsumerContext{Component: "worker", Port: "events"},
-		StreamConsumerConfig{StreamName: "EVENTS", ConsumerName: "worker-events"},
-		consumer, func(jetstream.Msg) {}, true)
+	owner := PortConsumerContext{Component: "worker", Port: "events"}
+	cfg := StreamConsumerConfig{StreamName: "EVENTS", ConsumerName: "worker-events"}
+	identity := internalConsumerIdentity{stream: cfg.StreamName, durable: cfg.ConsumerName}
+	handle, err := client.startPortConsumer(
+		context.Background(), context.Background(), "ConsumeStreamWithConfig", owner, cfg,
+		&guardedConsumer{Consumer: consumer}, identity, nil, func(context.Context, jetstream.Msg) {})
 	if !errs.IsTransient(err) || !errors.Is(err, cause) {
 		t.Fatalf("error = %v, want transient preserving Info cause", err)
 	}
-	if key != (consumerPolicyKey{}) {
-		t.Fatalf("policy key installed after Info failure: %#v", key)
+	if handle != nil {
+		t.Fatalf("handle = %v, want nil after Info failure", handle)
 	}
 	if consumer.consumeCalled || !reflect.DeepEqual(events, []string{"info"}) {
 		t.Fatalf("delivery started after Info failure: called=%v events=%v", consumer.consumeCalled, events)
@@ -141,13 +142,12 @@ func TestPortBackedConsumerOperationsRejectMissingOwnerBeforeIO(t *testing.T) {
 		call func() error
 	}{
 		{name: "ordinary", call: func() error {
-			return client.ConsumeStreamWithConfig(context.Background(), PortConsumerContext{}, cfg, nil)
+			_, err := client.ConsumeStreamWithConfig(context.Background(), PortConsumerContext{}, cfg, nil)
+			return err
 		}},
 		{name: "split contexts", call: func() error {
-			return client.ConsumeStreamWithConfigContexts(context.Background(), context.Background(), PortConsumerContext{}, cfg, nil)
-		}},
-		{name: "durable", call: func() error {
-			return client.ConsumeDurable(context.Background(), PortConsumerContext{}, cfg, 10, nil)
+			_, err := client.ConsumeStreamWithConfigContexts(context.Background(), context.Background(), PortConsumerContext{}, cfg, nil)
+			return err
 		}},
 	}
 	for _, tt := range tests {

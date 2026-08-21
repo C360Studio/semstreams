@@ -13,11 +13,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestIntegration_ConsumeDurable_ReceivesAndAcks drives the ASSEMBLED durable
+// TestIntegration_NewDurableHandler_ReceivesAndAcks drives the assembled durable
 // consume path against a real server: publish via PublishToStreamWithMsgID, and
-// assert ConsumeDurable's func(ctx,[]byte)error handler receives the payload and
+// asserts the func(ctx,[]byte)error work handler receives the payload and
 // (returning nil) acks it — closing the "tests the pieces, not the system" gap.
-func TestIntegration_ConsumeDurable_ReceivesAndAcks(t *testing.T) {
+func TestIntegration_NewDurableHandler_ReceivesAndAcks(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	natsContainer, natsURL := startTestNATSContainerWithJS(ctx, t)
@@ -37,13 +37,19 @@ func TestIntegration_ConsumeDurable_ReceivesAndAcks(t *testing.T) {
 	require.NoError(t, err)
 
 	got := make(chan []byte, 1)
-	err = client.ConsumeDurable(ctx, PortConsumerContext{Component: "integration", Port: "input"}, StreamConsumerConfig{
+	cfg := StreamConsumerConfig{
 		StreamName: "CD_RECV", ConsumerName: "cd-recv", FilterSubject: subject, AckWait: 2 * time.Second,
-	}, 500*time.Millisecond, func(_ context.Context, data []byte) error {
+	}
+	handler, err := NewDurableHandler(cfg, 500*time.Millisecond, func(_ context.Context, data []byte) error {
 		got <- data
 		return nil
 	})
 	require.NoError(t, err)
+	handle, err := client.ConsumeStreamWithConfig(
+		ctx, PortConsumerContext{Component: "integration", Port: "input"}, cfg, handler,
+	)
+	require.NoError(t, err)
+	defer drainNativeConsume(t, handle)
 
 	require.NoError(t, client.PublishToStreamWithMsgID(ctx, subject, []byte("hello-durable"), "id1"))
 
@@ -79,13 +85,19 @@ func TestIntegration_ConsumeDurable_MsgIDDedup(t *testing.T) {
 	require.NoError(t, err)
 
 	var deliveries int32
-	err = client.ConsumeDurable(ctx, PortConsumerContext{Component: "integration", Port: "input"}, StreamConsumerConfig{
+	cfg := StreamConsumerConfig{
 		StreamName: "CD_DEDUP", ConsumerName: "cd-dedup", FilterSubject: subject, AckWait: 2 * time.Second,
-	}, 500*time.Millisecond, func(_ context.Context, _ []byte) error {
+	}
+	handler, err := NewDurableHandler(cfg, 500*time.Millisecond, func(_ context.Context, _ []byte) error {
 		atomic.AddInt32(&deliveries, 1)
 		return nil
 	})
 	require.NoError(t, err)
+	handle, err := client.ConsumeStreamWithConfig(
+		ctx, PortConsumerContext{Component: "integration", Port: "input"}, cfg, handler,
+	)
+	require.NoError(t, err)
+	defer drainNativeConsume(t, handle)
 
 	// Same msg-id twice (the ack-timeout re-dispatch shape).
 	require.NoError(t, client.PublishToStreamWithMsgID(ctx, subject, []byte("unit-a"), "unit-a"))

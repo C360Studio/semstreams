@@ -107,9 +107,8 @@ type InFlightResponse struct {
 // One rule, three instances — no bound consumer, unreadable consumer state, and
 // (client-side, via natsclient.IsNoResponders) a component that is not answering.
 // They are one invariant, not three coincidences: AN ABSENT MEASUREMENT MUST NEVER
-// RENDER AS A MEASUREMENT OF ABSENCE. The same rule already shaped
-// natsclient.OutstandingWork's error-rather-than-(0, nil) return for an unbound
-// consumer, and it is the reason this function returns an error instead of an
+// RENDER AS A MEASUREMENT OF ABSENCE. The exact consumer observer below applies
+// that rule directly, and it is the reason this function returns an error instead of an
 // InFlightResponse with Outstanding: 0.
 //
 // Funnelling every unknown path through one constructor is what keeps a fourth

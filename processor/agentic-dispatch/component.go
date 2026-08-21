@@ -471,7 +471,7 @@ func (c *Component) consumeStreamHandle(ctx context.Context, owner natsclient.Po
 	if c.consumeStream != nil {
 		return c.consumeStream(ctx, owner, cfg, handler)
 	}
-	return c.natsClient.ConsumeStreamWithConfigHandle(ctx, owner, cfg, handler)
+	return c.natsClient.ConsumeStreamWithConfig(ctx, owner, cfg, handler)
 }
 
 func (c *Component) clearLifecycleHandles() {

@@ -474,7 +474,7 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port, hand
 		AutoCreate:    false,
 	}
 
-	consume := c.natsClient.ConsumeStreamWithConfigHandle
+	consume := c.natsClient.ConsumeStreamWithConfig
 	if c.consumeStream != nil {
 		consume = c.consumeStream
 	}

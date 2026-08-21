@@ -192,6 +192,15 @@ N1a subsequently landed as reviewed commit `8da1b83ae9c2f323bf484dc28e0574d81504
 `internal/lifecyclejoin` files plus one test diagnostic for net -748 lines and zero production additions. That grants
 N1a implementation credit only; remaining N1, proof, release, archive, and tag work is incomplete.
 
+The next atomic N1b code diff is independently reviewed `APPROVE` and commit-authorized on baseline
+`18cd4fcefeaa6e10780776dc0450b5b1dd877a46`. Its 35 tracked implementation paths have diff SHA-256
+`887ffc0a3b61d52c7497b889756bd02b36e269be64919cdbe606bde40062fe60`; production is 23 files, +102/-570, net -468,
+and tests are 12 files, +292/-415, net -123. It implements the exact-handle, durable-handler, and minimal-Client
+inventory dispositions atomically while preserving the independent authorities and leaving `Subscription.Drain`
+unchanged. The five configuration/schema dispositions are the only open boundary inside the narrowed four-boundary
+subset. Tasks 2.3 and 3.3 remain unchecked and outside that subset. This status note does not rewrite the accepted
+inventory artifact or grant full N1, proof, release, archive, or tag credit.
+
 The current target chooses the inventory's landed-claim option: preserve Client-local reject-not-replace
 `internalClaims` exactly. The stronger sealed pre-Start validation and error naming both owners are deferred; the
 current N1 does not claim complete ADR-095 conformance and adds no owner-label claim state or fifth boundary.

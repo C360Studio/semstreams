@@ -425,7 +425,6 @@ func (c *Client) SubscribeForRequests(
 	}
 
 	wrappedSub := newSubscription(sub)
-	c.subs = append(c.subs, sub)
 	return wrappedSub, nil
 }
 

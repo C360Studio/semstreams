@@ -895,7 +895,7 @@ func (c *Component) setupJetStreamConsumer(
 		AutoCreate:    false,
 	}
 
-	consume := c.natsClient.ConsumeStreamWithConfigHandle
+	consume := c.natsClient.ConsumeStreamWithConfig
 	if c.consumeStream != nil {
 		consume = c.consumeStream
 	}

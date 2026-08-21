@@ -17,6 +17,21 @@ All 36 production owner migrations are complete. N1a landed as reviewed commit
 `internal/lifecyclejoin` package files and changed one test-only diagnostic: 1 insertion, 749 deletions, net -748, with
 zero production additions. Independent implementation and merge review returned `APPROVE` with no findings.
 
+The atomic N1b code cutover is independently reviewed `APPROVE` and commit-authorized on baseline
+`18cd4fcefeaa6e10780776dc0450b5b1dd877a46`. Its 35-file implementation diff has SHA-256
+`887ffc0a3b61d52c7497b889756bd02b36e269be64919cdbe606bde40062fe60`: production is 23 files, +102/-570, net -468;
+tests are 12 files, +292/-415, net -123; total is net -591. It atomically completes exact-handle port convergence,
+the stateless durable handler, and Client child/catalog/name-lifecycle removal. Atomic packaging avoids publishing an
+incoherent outward API while downstream durable owners still combine direct `ConsumeDurable` acquisition with
+Client-wide `StopAllConsumers`; it was not required by a SemStreams production caller. It preserves independent claims
+and observation, and it leaves `Subscription.Drain` unchanged.
+
+This checkpoint completes only tasks 2.1, 3.1, and 3.2. Inside the working-system-first four-boundary subset, the five
+configuration fields and generated-schema properties plus private identity-scoped fixture cleanup are the only
+remaining implementation boundary. Task 2.3, task 3.3, read-only sister migrations, candidate
+E2E/controlled/dirty proof, release, and tag work remain unchecked and outside this checkpoint's completed boundaries.
+No release or tag is authorized.
+
 The accepted read-only N1 inventory remains evidence at baseline
 `2f974bdb7f22efb39ac5136e9c0b719b711249c2`, SHA-256
 `2a95a0f5fd6683aeed585c8dca43d65ff662f32b2b046ce2262f6b97f74612e9`. It does not force every inventoried surface
@@ -75,6 +90,6 @@ structs, interfaces, maps, mutexes, goroutines, contexts, or configuration switc
 - **Subscriptions:** no semantic or test change; further simplification is explicitly deferred.
 - **Tests:** fixture cleanup becomes private and exact-identity-scoped.
 - **Repository boundary:** SemStreams documents downstream impact but does not edit sister repositories.
-- **Release:** N1a is reviewed but unreleased; remaining N1 work, controlled/dirty proof, and relevant E2E gates remain
-  incomplete. No release or tag is authorized.
+- **Release:** N1a and the atomic N1b code cutover are reviewed but unreleased; configuration/schema removal,
+  controlled/dirty proof, and relevant E2E gates remain incomplete. No release or tag is authorized.
 - **Recovery authority:** [`recovery-ledger.md`](recovery-ledger.md) remains the durable execution record.

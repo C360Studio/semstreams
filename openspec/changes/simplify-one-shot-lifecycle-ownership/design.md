@@ -500,7 +500,7 @@ adopter requirement demonstrates value.
 
 ### Complexity budget
 
-The remaining implementation must:
+The complete convergence must:
 
 - delete seven exported APIs and add only `NewDurableHandler`, net -6 exports;
 - remove five Go fields and five generated-schema properties;
@@ -521,6 +521,23 @@ plan.
 - **Durable handler:** `n1-convergence-inventory.md:552-673`, `natsclient/consume_durable.go`, and the gated-DAG spec
   `:43-77`; the stateless builder preserves settlement, redelivery, and WARN behavior.
 
+The exact-handle, minimal-Client, and durable-handler boundaries now exist as one atomic implementation diff on
+baseline `18cd4fcefeaa6e10780776dc0450b5b1dd877a46`, SHA-256
+`887ffc0a3b61d52c7497b889756bd02b36e269be64919cdbe606bde40062fe60`. Independent final review returned `APPROVE`
+and authorized commit. They were executed together because the honest RED intermediate—removing `OutstandingWork`
+and `StopAllConsumers` during exact-handle cutover—made catalog-backed natsclient integration tests fail. Baseline
+`18cd4fce` had zero SemStreams production calls to either method; agentic-loop already used direct JetStream
+observation and lost only a comment reference. Atomic packaging was selected to avoid publishing an incoherent outward
+API while SemMachina's downstream design still paired direct `ConsumeDurable` acquisition with `StopAllConsumers`.
+The final state gives all 16 local owners exact native handles and deletes the superseded Client authority without
+introducing an adapter.
+
+The implementation ratchets down measured complexity: production changes 23 files by +102/-570 (net -468); tests
+change 12 files by +292/-415 (net -123); total net is -591. `NewDurableHandler` is the sole replacement export and
+retains no lifecycle state. `Subscription.Drain` is byte-for-byte outside the change. Inside this four-boundary map,
+the five configuration/schema fields and private fixture cleanup remain the only unimplemented boundary. Tasks 2.3
+and 3.3 remain unchecked, receive no credit here, and sit outside this narrowed map.
+
 The landed Client-local `internalClaims` map keeps its exact reject-not-replace behavior, opaque pointer token,
 precommit rollback, and exact-Closed release. N1 does not add owner labels or another claim map. Canonical sealed
 pre-Start validation and an error naming both owners are deferred future improvements, not a fifth boundary.
@@ -539,5 +556,5 @@ Run affected and repository race tests, integration race, contract tests, lint, 
 strict change/all-spec validation, and the relevant core/structural/agentic/semantic E2E tiers before release. Known
 baseline scanner/census failures must be recorded rather than misreported as candidate regressions or green proof.
 
-N1a alone has implementation credit. Every remaining item above is unchecked; controlled/dirty recovery proof,
-release, archive, and tag readiness remain incomplete.
+N1a and the atomic exact-handle/minimal-Client/durable-handler cutover have implementation credit. Configuration/schema
+removal, full candidate proof, controlled/dirty recovery proof, release, archive, and tag readiness remain incomplete.

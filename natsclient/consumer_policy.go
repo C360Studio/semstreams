@@ -136,53 +136,6 @@ func (c *Client) observePortConsumerPolicy(
 	return key, nil
 }
 
-type managedPolicyConsumer interface {
-	consumerPolicyInfoReader
-	Consume(jetstream.MessageHandler, ...jetstream.PullConsumeOpt) (jetstream.ConsumeContext, error)
-}
-
-func (c *Client) observeAndStartManagedConsumer(
-	setupCtx context.Context,
-	owner PortConsumerContext,
-	cfg StreamConsumerConfig,
-	consumer managedPolicyConsumer,
-	handler jetstream.MessageHandler,
-	observePolicy bool,
-) (jetstream.ConsumeContext, consumerPolicyKey, error) {
-	policyKey := consumerPolicyKey{}
-	var err error
-	if observePolicy {
-		policyKey, err = c.observePortConsumerPolicy(setupCtx, owner, cfg, consumer)
-		if err != nil {
-			return nil, consumerPolicyKey{}, err
-		}
-	}
-	forget := func() {
-		if c.jsMetrics != nil {
-			c.jsMetrics.forgetPolicy(policyKey)
-		}
-	}
-	if err := setupCtx.Err(); err != nil {
-		forget()
-		return nil, consumerPolicyKey{}, errs.WrapTransient(err, "Client", "ConsumeStreamWithConfig",
-			"setup context ended before starting consumer")
-	}
-	consumeCtx, err := consumer.Consume(handler)
-	if err != nil {
-		forget()
-		c.recordFailure()
-		return nil, consumerPolicyKey{}, errs.WrapTransient(err, "Client", "ConsumeStreamWithConfig",
-			"failed to start consuming from stream "+cfg.StreamName)
-	}
-	if err := setupCtx.Err(); err != nil {
-		consumeCtx.Stop()
-		forget()
-		return nil, consumerPolicyKey{}, errs.WrapTransient(err, "Client", "ConsumeStreamWithConfig",
-			"setup context ended while starting consumer")
-	}
-	return consumeCtx, policyKey, nil
-}
-
 // ObserveDirectPortConsumerPolicy observes an OTEL-owned direct consumer and
 // returns opaque cleanup for its canonical policy record.
 func (c *Client) ObserveDirectPortConsumerPolicy(

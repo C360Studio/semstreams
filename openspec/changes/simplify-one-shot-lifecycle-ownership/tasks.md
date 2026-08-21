@@ -14,7 +14,7 @@
 
 ## 2. Owner handles/admission/lifecycle simplification
 
-- [ ] 2.1 Reorder consume commit and retain native handles.
+- [x] 2.1 Reorder consume commit and retain native handles.
   - `ConsumeDurable` is not a zero-consumer deletion. N1 alone retires it after an owner-approved stateless
     `NewDurableHandler` preserves effective-AckWait validation and `ConsumeWithHeartbeat` settlement composition, and
     migration guidance names ten sibling production calls plus affected interfaces. No earlier wave receives removal
@@ -215,6 +215,24 @@
     stateless durable-handler composition. No remaining N1, proof, release, archive, or tag credit follows.
     The remaining budget is seven exports deleted and one added (net -6), five fields/schema properties removed,
     catalogs/state deleted, and zero new lifecycle structs, interfaces, maps, mutexes, goroutines, contexts, or config.
+  - 2026-08-20 atomic N1b code checkpoint: independent final review returned `APPROVE` and authorized commit for the
+    exact 35-file diff on baseline `18cd4fce`, SHA-256
+    `887ffc0a3b61d52c7497b889756bd02b36e269be64919cdbe606bde40062fe60`. Production is 23 files, +102/-570, net -468;
+    tests are 12 files, +292/-415, net -123; total net is -591. Both canonical methods return exact native handles;
+    all 16 local owners migrated; bridges/error-only paths, `ConsumeDurable`, Client child catalogs/bindings,
+    replacement, name-routed Stop/delete, `StopAllConsumers`, and `OutstandingWork` were removed together.
+    `NewDurableHandler` preserves settlement and exact WARN behavior with BackOff-correct validation. Independent
+    claims/metrics/policy/OTEL/internal creation/readiness/inflight remain, and `Subscription.Drain` is unchanged.
+    Focused/full natsclient race, race coverage for all 16 changed owners, and real-NATS natsclient runtime except
+    three worktree-scanner tests passed, as did graph-ingest/agentic-loop integration, lint, build, diff-check, and
+    strict validation. During exact-handle cutover, catalog-backed natsclient integration tests failed after their
+    expected Client catalog authority disappeared. Baseline `18cd4fce` had zero SemStreams production calls to
+    `OutstandingWork` or `StopAllConsumers`; their call expressions existed only in natsclient integration-test code
+    removed by the diff. Agentic-loop lost only a comment reference because it already used direct JetStream
+    observation. Atomic packaging avoids publishing an incoherent outward API while downstream SemMachina still
+    combines direct `ConsumeDurable` acquisition with `StopAllConsumers` shutdown. This checkpoint completes tasks
+    2.1, 3.1, and 3.2 only. Task 2.5, task 2.3, task 3.3, full N1 candidate proof, release, archive, and tag readiness
+    remain unchecked.
   - 2026-08-18 checkpoint: independent `semstreams-reviewer` verdict `CORRECTIONS CONFIRMED` grants owner-migrated
     credit to `input/file` and `input/http` only for focused owner-local implementation and race evidence at dirty
     worktree base `cd6f570ec9fc8e0fed43eabb2c353b4de36a6d29`. Task 2.3 and Gate A remain unchecked and incomplete.
@@ -252,12 +270,12 @@
 
 ## 3. Client minimal and raw roots
 
-- [ ] 3.1 N1b: make canonical port methods return exact native handles; remove both temporary bridges, Client consumer
+- [x] 3.1 N1b: make canonical port methods return exact native handles; remove both temporary bridges, Client consumer
   and subscription child catalogs, same-name replacement, name-routed Stop/delete, and unused `OutstandingWork`.
   Retain Client-scoped handle-free internal claims, consumer-policy and direct-port observation, existing metrics and
   OTEL claims, internal consumer creation, graph-ingest readiness, and agentic-loop inflight as independently owned
   mechanisms. Preserve unknown-not-zero observation and do not silently resolve known cross-Client metric collision.
-- [ ] 3.2 Make Close terminal transport-only.
+- [x] 3.2 Make Close terminal transport-only.
 - [ ] 3.3 Execute every approved native-surface RETIRE/NARROW row.
 
 ### N1 candidate gate

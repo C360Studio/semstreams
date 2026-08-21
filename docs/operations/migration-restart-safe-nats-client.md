@@ -11,16 +11,31 @@ redesign every inventoried surface.
 N1a is complete and independently reviewed `APPROVE` at commit
 `8da1b83ae9c2f323bf484dc28e0574d81504bef9`: four `internal/lifecyclejoin` package files were deleted and one
 test-only diagnostic changed, for 1 insertion, 749 deletions, net -748, and zero production additions. Remaining N1
-work is deliberately limited to exact native handles, Client catalog/API removal, inert configuration removal, and a
-stateless durable handler. The earlier six-ruling execution package is superseded. In particular,
+work was deliberately limited to exact native handles, Client catalog/API removal, inert configuration removal, and a
+stateless durable handler. The exact-handle, Client, and durable-handler work now exists as one independently approved,
+commit-authorized atomic diff on baseline `18cd4fcefeaa6e10780776dc0450b5b1dd877a46`; its implementation SHA-256 is
+`887ffc0a3b61d52c7497b889756bd02b36e269be64919cdbe606bde40062fe60`. The earlier six-ruling execution package is
+superseded. In particular,
 `Subscription.Drain` semantics and tests do not change in this pass.
+
+The atomic diff changes 35 tracked files and removes 591 net lines: production is 23 files at +102/-570 (net -468),
+and tests are 12 files at +292/-415 (net -123). All 16 local port owners use the canonical exact-handle methods;
+temporary bridges, the error-only path, `ConsumeDurable`, Client child catalogs/bindings/replacement, name-routed
+Stop/delete APIs, `StopAllConsumers`, `OutstandingWork`, and Close-time child enumeration are absent. Claims, metrics,
+policy/OTEL observation, internal creation, graph-ingest readiness, and agentic-loop inflight observation remain.
+
+The five Go fields and generated-schema properties have not been removed by this atomic cutover. Their fixture work is
+the only remaining implementation boundary inside the working-system-first four-boundary subset. Tasks 2.3 and 3.3,
+read-only sister migrations, candidate E2E, controlled/dirty proof, release, and tag gates remain unchecked and
+outside that completed subset.
 
 This narrowed N1 does not claim complete ADR-095 conformance. It preserves the already-landed Client-local
 reject-not-replace durable claim and defers ADR-095's stronger sealed pre-Start validation and error naming both owners.
 
-The remaining cutover must be visibly net-negative: seven exports deleted and one added (net -6), five Go
+The complete convergence budget remains visibly net-negative: seven exports deleted and one added (net -6), five Go
 fields/schema properties removed, child catalogs/state deleted, and zero new lifecycle structs, interfaces, maps,
-mutexes, goroutines, contexts, or configuration switches.
+mutexes, goroutines, contexts, or configuration switches. The atomic code cutover has met the export/catalog/state
+portion; only the five field/schema removals and fixture cleanup remain.
 
 The landed caller-owned context signature prerequisite is documented in
 [Migrate to caller-owned lifecycle contexts](migration-restore-go-lifecycle-ownership.md). Execution status and sole
@@ -318,22 +333,36 @@ The authoritative per-symbol disposition remains
    rejection, all 42 owner migrations, failed-Start authority, fixture deletion, and removal of stateful helpers.
 3. **N1a mechanical deletion — complete** — reviewed commit `8da1b83a` removed the unused lifecyclejoin package with
    net -748 lines and zero production additions.
-4. **N1b working-system convergence** — cut over canonical handles, remove hidden Client child/name APIs and inert
-   configuration, add the stateless durable handler, and keep Subscription Drain unchanged.
-5. **Client minimal** — retain independent observation and the handle-free reject-only identity claim; make Close
+4. **N1b atomic code convergence — independently approved, commit authorized** — canonical handles, hidden Client
+   child/name APIs, and the stateless durable handler are implemented together; Subscription Drain is unchanged.
+5. **N1 configuration/schema completion — outstanding** — remove the five inert fields/schema properties and add
+   private exact-identity fixture cleanup; sister repositories remain read-only migration obligations.
+6. **Client minimal** — retain independent observation and the handle-free reject-only identity claim; make Close
    terminal transport-only.
-6. **Raw-root narrowing** — execute every approved RETIRE/NARROW disposition.
-7. **Controlled proof** — real SIGTERM/SIGINT ordering, cleanupPending, duplicate rejection, aggregate exit truth,
+7. **Raw-root narrowing** — execute every approved RETIRE/NARROW disposition.
+8. **Controlled proof** — real SIGTERM/SIGINT ordering, cleanupPending, duplicate rejection, aggregate exit truth,
    listener release, and fresh boot.
-8. **Dirty and settlement proof** — deterministic kill at delivery/effect/guard/publication/pre-ACK boundaries,
+9. **Dirty and settlement proof** — deterministic kill at delivery/effect/guard/publication/pre-ACK boundaries,
    redelivery/convergence, effect guarantees, and the declared DoubleAck decision.
 
 N1a proved production and test import/symbol zeros, an empty package directory, and no lifecyclecleanup diff. Focused
 rule race and ten repeated ownership race runs, lint, both builds, diff check, and strict OpenSpec 52/52 passed.
-Independent review approved the landed commit. Full race/contract failures are not claimed green: the same failures
+Independent review approved the landed commit. The atomic N1b code cutover also passed focused and full natsclient
+race, race coverage for all 16 changed owners, and the full real-NATS natsclient runtime except three
+worktree-scanner tests,
+graph-ingest and agentic-loop integration, lint, build, diff check, and strict validation. Independent final review
+returned `APPROVE` and authorized commit. The exact-handle intermediate made catalog-backed natsclient integration
+tests fail; their call expressions were deleted with the obsolete catalog contract. Baseline `18cd4fce` had zero
+SemStreams production calls to `OutstandingWork` or `StopAllConsumers`; agentic-loop already observed JetStream
+directly and lost only a comment reference. Atomic packaging instead avoids publishing an incoherent outward API while
+SemMachina's authoritative downstream owners still combine direct `ConsumeDurable` acquisition with
+`StopAllConsumers` shutdown.
+
+Full repository/service green is not claimed: known scanner and stale-baseline failures remain outside the approved
+atomic surface. Full race/contract failures are not claimed green: the same failures
 reproduce on the clean baseline because of user-owned worktree scanner pollution, stale natsclient census, and four
-stale testinfra rows. Before N1b can land, its final candidate must pass affected and full repository
-race, integration race, contracts, lint, build, intended-only schema generation, strict change and all-spec validation,
+stale testinfra rows. Before full N1 can land, the remaining candidate must complete intended-only schema generation
+and pass affected/full repository race, integration race, contracts, lint, build, strict change and all-spec validation,
 `task e2e:core`, `task e2e:structural`, `task e2e:agentic`, and `task e2e:semantic`, plus independent implementation
 review. If structural E2E does not exercise `NewDurableHandler`, record that coverage gap rather than count the tier as
 builder evidence. The breaking tag remains blocked until broader controlled-process restart, dirty recovery,

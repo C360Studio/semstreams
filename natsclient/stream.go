@@ -71,7 +71,7 @@ type StreamConsumerConfig struct {
 	DisableMessageTimeout bool
 }
 
-// PortConsumerContext identifies the component port that owns a managed consumer.
+// PortConsumerContext identifies the component port that owns a consumer.
 // Stream, consumer, and policy values are derived from the final configuration and NATS.
 type PortConsumerContext struct {
 	Component      string
@@ -272,16 +272,19 @@ func (c *Client) reportBindDivergence(declared jetstream.StreamConfig, stream je
 	)
 }
 
-// ConsumeStreamWithConfig creates a JetStream consumer with full configuration.
-// The handler receives the raw jetstream.Msg which includes Ack(), Nak(), and Term() methods.
-// Handler MUST call one of these methods to acknowledge the message.
+// ConsumeStreamWithConfig creates a port-backed JetStream consumer with full
+// configuration. The caller owns the exact returned native handle and must
+// Drain it and await Closed before canceling callback authority. The handler
+// receives the raw jetstream.Msg and must settle it with Ack, Nak, or Term.
 func (c *Client) ConsumeStreamWithConfig(
 	ctx context.Context,
 	owner PortConsumerContext,
 	cfg StreamConsumerConfig,
 	handler func(ctx context.Context, msg jetstream.Msg),
-) error {
-	return c.ConsumeStreamWithConfigContexts(ctx, ctx, owner, cfg, handler)
+) (jetstream.ConsumeContext, error) {
+	return c.consumePortStreamWithConfigContexts(
+		ctx, ctx, "ConsumeStreamWithConfig", owner, cfg, handler,
+	)
 }
 
 // ConsumeInternalStreamWithConfig consumes a stream for framework-internal users
@@ -431,7 +434,7 @@ func (c *Client) reserveInternalConsumer(
 	return claim, nil
 }
 
-func (c *Client) startPortConsumerHandle(
+func (c *Client) startPortConsumer(
 	setupCtx context.Context,
 	handlerCtx context.Context,
 	operation string,
@@ -501,98 +504,30 @@ func (c *Client) startPortConsumerHandle(
 	return consumeCtx, nil
 }
 
-// ConsumeStreamWithConfigHandle creates a port-backed JetStream consumer and
-// returns its exact native lifecycle handle. The caller owns Drain and Closed;
-// the handle is intentionally absent from Client's lifecycle catalog.
-//
-// This migration bridge uses ctx for both setup and delivered-message
-// authority. Callers must keep it live until the returned handle is closed.
-func (c *Client) ConsumeStreamWithConfigHandle(
-	ctx context.Context,
-	owner PortConsumerContext,
-	cfg StreamConsumerConfig,
-	handler func(ctx context.Context, msg jetstream.Msg),
-) (jetstream.ConsumeContext, error) {
-	const operation = "ConsumeStreamWithConfigHandle"
-	if ctx == nil {
-		return nil, errs.WrapInvalid(errors.New("nil context"),
-			"Client", operation, "missing operation context")
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, errs.WrapInvalid(err,
-			"Client", operation, "operation context already ended")
-	}
-	owner.Component = strings.TrimSpace(owner.Component)
-	owner.Port = strings.TrimSpace(owner.Port)
-	if err := validatePortConsumerContext(owner, operation); err != nil {
-		return nil, err
-	}
-	if cfg.StreamName == "" {
-		return nil, errs.WrapInvalid(errors.New("stream name is required"),
-			"Client", operation, "missing stream name")
-	}
-	if c.Status() == StatusCircuitOpen {
-		return nil, ErrCircuitOpen
-	}
-	if c.Status() != StatusConnected {
-		return nil, ErrNotConnected
-	}
-
-	js, err := c.JetStream()
-	if err != nil {
-		return nil, err
-	}
-	if cfg.AutoCreate {
-		if err := c.ensureStreamForConsumer(ctx, js, cfg); err != nil {
-			return nil, err
-		}
-	}
-	stream, err := js.Stream(ctx, cfg.StreamName)
-	if err != nil {
-		c.recordFailure()
-		return nil, errs.WrapTransient(err, "Client", operation,
-			"failed to get stream "+cfg.StreamName)
-	}
-
-	identity := internalConsumerIdentity{stream: cfg.StreamName, durable: cfg.ConsumerName}
-	claim, err := c.reserveInternalConsumer(identity, operation)
-	if err != nil {
-		return nil, err
-	}
-	releaseClaim := func() { c.releaseInternalConsumer(identity, claim) }
-	committed := false
-	defer func() {
-		if !committed {
-			releaseClaim()
-		}
-	}()
-
-	consumerCfg := c.buildConsumerConfig(cfg)
-	consumer, err := stream.CreateOrUpdateConsumer(ctx, consumerCfg)
-	if err != nil {
-		c.recordFailure()
-		return nil, ClassifyConsumerPolicyError(err, operation)
-	}
-	guarded := &guardedConsumer{Consumer: consumer}
-	consumeCtx, err := c.startPortConsumerHandle(ctx, ctx, operation, owner, cfg, guarded, identity, claim, handler)
-	if err != nil {
-		return nil, err
-	}
-	committed = true
-	return consumeCtx, nil
-}
-
-// ConsumeStreamWithConfigContextsHandle creates a port-backed JetStream
-// consumer with separate setup and delivered-message authority and returns
-// its exact native lifecycle handle. The caller owns Drain and Closed.
-func (c *Client) ConsumeStreamWithConfigContextsHandle(
+// ConsumeStreamWithConfigContexts creates a port-backed JetStream consumer with
+// separate setup and delivered-message authority. The caller owns the exact
+// returned native handle and must Drain it and await Closed before canceling
+// callback authority.
+func (c *Client) ConsumeStreamWithConfigContexts(
 	setupCtx context.Context,
 	handlerCtx context.Context,
 	owner PortConsumerContext,
 	cfg StreamConsumerConfig,
 	handler func(ctx context.Context, msg jetstream.Msg),
 ) (jetstream.ConsumeContext, error) {
-	const operation = "ConsumeStreamWithConfigContextsHandle"
+	return c.consumePortStreamWithConfigContexts(
+		setupCtx, handlerCtx, "ConsumeStreamWithConfigContexts", owner, cfg, handler,
+	)
+}
+
+func (c *Client) consumePortStreamWithConfigContexts(
+	setupCtx context.Context,
+	handlerCtx context.Context,
+	operation string,
+	owner PortConsumerContext,
+	cfg StreamConsumerConfig,
+	handler func(ctx context.Context, msg jetstream.Msg),
+) (jetstream.ConsumeContext, error) {
 	if setupCtx == nil || handlerCtx == nil {
 		return nil, errs.WrapInvalid(errors.New("nil context"),
 			"Client", operation, "missing operation context")
@@ -651,7 +586,7 @@ func (c *Client) ConsumeStreamWithConfigContextsHandle(
 		c.recordFailure()
 		return nil, ClassifyConsumerPolicyError(err, operation)
 	}
-	handle, err := c.startPortConsumerHandle(
+	handle, err := c.startPortConsumer(
 		setupCtx, handlerCtx, operation, owner, cfg,
 		&guardedConsumer{Consumer: consumer}, identity, claim, handler,
 	)
@@ -671,137 +606,6 @@ func (c *Client) releaseInternalConsumer(identity internalConsumerIdentity, clai
 		delete(c.internalClaims, identity)
 	}
 	c.internalClaimsMu.Unlock()
-}
-
-// ConsumeStreamWithConfigContexts separates bounded setup I/O from callback
-// lifetime. setupCtx governs stream lookup and consumer creation; handlerCtx is
-// only the parent for delivered-message contexts after setup succeeds.
-func (c *Client) ConsumeStreamWithConfigContexts(
-	setupCtx context.Context,
-	handlerCtx context.Context,
-	owner PortConsumerContext,
-	cfg StreamConsumerConfig,
-	handler func(ctx context.Context, msg jetstream.Msg),
-) error {
-	return c.consumeStreamWithConfigContexts(setupCtx, handlerCtx, owner, cfg, handler, true)
-}
-
-func (c *Client) consumeStreamWithConfigContexts(
-	setupCtx context.Context,
-	handlerCtx context.Context,
-	owner PortConsumerContext,
-	cfg StreamConsumerConfig,
-	handler func(ctx context.Context, msg jetstream.Msg),
-	observePolicy bool,
-) error {
-	if observePolicy {
-		owner.Component = strings.TrimSpace(owner.Component)
-		owner.Port = strings.TrimSpace(owner.Port)
-		if err := validatePortConsumerContext(owner, "ConsumeStreamWithConfig"); err != nil {
-			return err
-		}
-	}
-	if cfg.StreamName == "" {
-		return errs.WrapInvalid(
-			fmt.Errorf("stream name is required"),
-			"Client", "ConsumeStreamWithConfig", "missing stream name")
-	}
-
-	if c.Status() == StatusCircuitOpen {
-		return ErrCircuitOpen
-	}
-
-	if c.Status() != StatusConnected {
-		return ErrNotConnected
-	}
-
-	js, err := c.JetStream()
-	if err != nil {
-		return err
-	}
-
-	// Auto-create stream if enabled
-	if cfg.AutoCreate {
-		if err := c.ensureStreamForConsumer(setupCtx, js, cfg); err != nil {
-			return err
-		}
-	}
-
-	// Get the stream
-	stream, err := js.Stream(setupCtx, cfg.StreamName)
-	if err != nil {
-		c.recordFailure()
-		return errs.WrapTransient(err, "Client", "ConsumeStreamWithConfig",
-			"failed to get stream "+cfg.StreamName)
-	}
-
-	// Stop any existing consumer context for this key BEFORE creating new one
-	consumerKey := cfg.StreamName + ":" + cfg.ConsumerName
-	c.consumersMu.Lock()
-	if c.consumers != nil {
-		if existing, exists := c.consumers[consumerKey]; exists {
-			existing.consumeCtx.Stop()
-			if c.jsMetrics != nil {
-				c.jsMetrics.forgetPolicy(existing.policyKey)
-			}
-			delete(c.consumers, consumerKey)
-			c.logger.Debug("Stopped existing consumer before recreation", slog.String("consumer_key", consumerKey))
-		}
-	}
-	c.consumersMu.Unlock()
-
-	// Build consumer configuration
-	consumerCfg := c.buildConsumerConfig(cfg)
-
-	// Create or update consumer
-	consumer, err := stream.CreateOrUpdateConsumer(setupCtx, consumerCfg)
-	if err != nil {
-		c.recordFailure()
-		return ClassifyConsumerPolicyError(err, "ConsumeStreamWithConfig")
-	}
-	guarded := &guardedConsumer{Consumer: consumer}
-
-	// Determine message timeout (default 30s if not specified).
-	messageTimeout := cfg.MessageTimeout
-	if messageTimeout <= 0 {
-		messageTimeout = 30 * time.Second
-	}
-
-	consumeCtx, policyKey, err := c.observeAndStartManagedConsumer(setupCtx, owner, cfg, guarded, func(msg jetstream.Msg) {
-		// Extract trace from JetStream message headers
-		msgCtx := handlerCtx
-		if tc := ExtractTraceFromJetStream(msg.Headers()); tc != nil {
-			msgCtx = ContextWithTrace(handlerCtx, tc)
-		}
-
-		msgCtx, cancel := messageHandlerContext(msgCtx, messageTimeout, cfg.DisableMessageTimeout)
-		defer cancel()
-
-		// Wrap handler with panic recovery and default Nak
-		c.safeHandleMessage(msgCtx, msg, handler)
-	}, observePolicy)
-	if err != nil {
-		return err
-	}
-
-	// Wrap ONCE and share the wrapper: the metrics registry and the consumer
-	// bookkeeping below hold the same handle under different keys, so the Info()
-	// guard has to live on the handle itself (see guardedConsumer).
-	// Track consumer for JetStream metrics only after setup committed.
-	if c.jsMetrics != nil {
-		c.jsMetrics.trackConsumer(cfg.StreamName, consumerCfg.Durable, guarded)
-	}
-
-	// Track consumer for cleanup
-	c.consumersMu.Lock()
-	if c.consumers == nil {
-		c.consumers = make(map[string]consumerBinding)
-	}
-	c.consumers[consumerKey] = newConsumerBinding(consumeCtx, guarded, policyKey)
-	c.consumersMu.Unlock()
-
-	c.resetCircuit()
-	return nil
 }
 
 func messageHandlerContext(parent context.Context, timeout time.Duration, disabled bool) (context.Context, context.CancelFunc) {
@@ -1063,78 +867,4 @@ func (c *Client) PublishToStreamWithAck(
 
 	c.resetCircuit()
 	return ack, nil
-}
-
-// StopConsumer gracefully stops a local consumer without deleting its durable
-// server state. It drains buffered callbacks and waits for authoritative native
-// completion under ctx. A later call rejoins the same drain after caller expiry.
-func (c *Client) StopConsumer(ctx context.Context, streamName, consumerName string) error {
-	if ctx == nil {
-		return errors.New("natsclient: nil StopConsumer context")
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	key := streamName + ":" + consumerName
-	c.consumersMu.RLock()
-	binding, ok := c.consumers[key]
-	c.consumersMu.RUnlock()
-	if !ok {
-		return nil
-	}
-
-	binding.drain.once.Do(binding.consumeCtx.Drain)
-	select {
-	case <-binding.drain.closed:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-	c.consumersMu.Lock()
-	current, stillBound := c.consumers[key]
-	if stillBound && current.drain == binding.drain {
-		if c.jsMetrics != nil {
-			c.jsMetrics.forgetPolicy(binding.policyKey)
-		}
-		delete(c.consumers, key)
-	}
-	c.consumersMu.Unlock()
-	return nil
-}
-
-// StopAndDeleteConsumer stops a specific consumer and deletes the durable consumer from the server.
-// WARNING: This permanently removes the consumer's position. Use only for test cleanup
-// or when you intentionally want to reset consumer state.
-func (c *Client) StopAndDeleteConsumer(ctx context.Context, streamName, consumerName string) error {
-	// First stop the local consume context
-	if err := c.StopConsumer(ctx, streamName, consumerName); err != nil {
-		return err
-	}
-
-	// Then delete the durable consumer from the server
-	js, err := c.JetStream()
-	if err != nil {
-		return err
-	}
-
-	stream, err := js.Stream(ctx, streamName)
-	if err != nil {
-		return err
-	}
-
-	return stream.DeleteConsumer(ctx, consumerName)
-}
-
-// StopAllConsumers stops all active consumers.
-func (c *Client) StopAllConsumers() {
-	c.consumersMu.Lock()
-	defer c.consumersMu.Unlock()
-
-	for key, binding := range c.consumers {
-		binding.consumeCtx.Stop()
-		if c.jsMetrics != nil {
-			c.jsMetrics.forgetPolicy(binding.policyKey)
-		}
-		delete(c.consumers, key)
-	}
 }

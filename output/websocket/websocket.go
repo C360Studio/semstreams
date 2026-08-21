@@ -1138,7 +1138,7 @@ func (w *Output) setupJetStreamConsumer(ctx context.Context, port component.Port
 		AutoCreate:    false,
 	}
 
-	consume := w.natsClient.ConsumeStreamWithConfigHandle
+	consume := w.natsClient.ConsumeStreamWithConfig
 	if w.consumeStream != nil {
 		consume = w.consumeStream
 	}

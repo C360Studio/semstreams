@@ -405,7 +405,7 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port) erro
 		MessageTimeout: 30 * time.Minute,
 	}
 
-	consume := c.natsClient.ConsumeStreamWithConfigHandle
+	consume := c.natsClient.ConsumeStreamWithConfig
 	if c.consumeStream != nil {
 		consume = c.consumeStream
 	}

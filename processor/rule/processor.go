@@ -1152,7 +1152,7 @@ func (rp *Processor) setupJetStreamConsumer(ctx context.Context, port component.
 		AutoCreate:    false,
 	}
 
-	handle, err := rp.natsClient.ConsumeStreamWithConfigHandle(ctx, natsclient.PortConsumerContext{Component: rp.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	handle, err := rp.natsClient.ConsumeStreamWithConfig(ctx, natsclient.PortConsumerContext{Component: rp.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		rp.handleMessage(msgCtx, subject, msg.Data())
 		if ackErr := msg.Ack(); ackErr != nil {
 			rp.logger.Error("Failed to ack JetStream message", "error", ackErr)

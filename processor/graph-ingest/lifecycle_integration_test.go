@@ -162,7 +162,7 @@ func TestGraphIngest_FailedStartRollbackOwnsExactConsumerAndPreservesDurable(t *
 		handler func(context.Context, jetstream.Msg),
 	) (jetstream.ConsumeContext, error) {
 		if calls.Add(1) == 1 {
-			handle, consumeErr := comp.natsClient.ConsumeStreamWithConfigHandle(ctx, owner, cfg, handler)
+			handle, consumeErr := comp.natsClient.ConsumeStreamWithConfig(ctx, owner, cfg, handler)
 			if consumeErr != nil {
 				return nil, consumeErr
 			}

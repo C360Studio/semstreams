@@ -527,20 +527,33 @@ N1a is complete at independently reviewed commit `8da1b83ae9c2f323bf484dc28e0574
 production additions. Imports, qualified symbols, declarations, and the package directory are zero/empty, while
 `internal/lifecyclecleanup` is unchanged.
 
-Remaining work has four boundaries only:
+The atomic N1b code cutover has completed three of the four boundaries:
 
 1. make canonical port methods return exact `jetstream.ConsumeContext`, migrate local callers, and delete temporary
    `*Handle` bridges without aliases;
 2. delete Client child catalogs, same-name/name-routed lifecycle APIs, `OutstandingWork`, and Close child cleanup while
    preserving independent claims, metrics, observation, internal consumption, readiness, and inflight ownership;
-3. remove five inert `DeleteConsumerOnStop` Go fields and schema properties, with private exact-identity fixture
-   cleanup and read-only sister migration notes; and
+3. **outstanding:** remove five inert `DeleteConsumerOnStop` Go fields and schema properties, with private
+   exact-identity fixture cleanup and read-only sister migration notes; and
 4. replace `ConsumeDurable` with stateless `NewDurableHandler`, preserving existing
    `ConsumeWithHeartbeat` Ack/Nak/Term/InProgress/redelivery/join/WARN behavior and using BackOff-correct validation.
 
 `Subscription.Drain` behavior and tests are explicitly deferred. The remaining complexity budget is seven exports
 deleted and one added (net -6), five fields/schema properties removed, catalogs/state deleted, and zero new lifecycle
 structs, interfaces, maps, mutexes, goroutines, contexts, or configuration.
+
+Boundaries 1, 2, and 4 are independently reviewed `APPROVE` and commit-authorized as one 35-file diff on baseline
+`18cd4fcefeaa6e10780776dc0450b5b1dd877a46`, SHA-256
+`887ffc0a3b61d52c7497b889756bd02b36e269be64919cdbe606bde40062fe60`. Production is +102/-570 across 23 files (net
+-468); tests are +292/-415 across 12 files (net -123); total is net -591. During the atomic cutover, the exact-handle
+intermediate made catalog-backed natsclient integration tests fail after their expected Client
+catalog authority disappeared. Baseline `18cd4fce` had zero SemStreams production calls to `OutstandingWork` or
+`StopAllConsumers`; agentic-loop already used direct JetStream observation and lost only a comment reference. Atomic
+packaging was chosen to avoid publishing an incoherent outward API while authoritative downstream SemMachina still
+combined direct `ConsumeDurable` acquisition with `StopAllConsumers` shutdown. Final evidence covers focused/full
+natsclient race, race coverage for all 16 changed owners, and real-NATS natsclient runtime except three
+worktree-scanner tests, plus graph-ingest/agentic-loop integration, lint, build, diff-check, and strict validation.
+Full repository/service baseline limitations remain scoped and are not claimed green.
 
 The landed Client-local `internalClaims` behavior is preserved exactly: duplicate live acquisition rejects rather than
 replaces, the opaque pointer token releases on precommit failure or exact Closed, and no owner label is stored. Stronger
@@ -676,6 +689,8 @@ That approval updated the historical unapproved status recorded above only for M
 On 2026-08-20 the owner approved a pre-inventory six-ruling N1 package. That approval and the later corrected-design
 review remain historical. The owner's subsequent direction—restore a system that works and can be understood, then
 decide whether further improvement is needed—supersedes them for execution. N1a landed and received independent
-`APPROVE` at `8da1b83a`. The remaining four-boundary simplification above is current; Subscription semantics are
-deferred. Remaining N1, Gate A/B/C, runtime proof, release, archive, and tag readiness remain unchecked and incomplete;
+`APPROVE` at `8da1b83a`. The four-boundary simplification above is current; the atomic N1b code cutover completed
+boundaries 1, 2, and 4, while configuration/schema boundary 3 remains open. Subscription semantics are deferred.
+This implementation credits tasks 2.1, 3.1, and 3.2 only. Tasks 2.3 and 3.3 remain unchecked and outside the narrowed
+four-boundary subset. Full N1, Gate A/B/C, runtime proof, release, archive, and tag readiness remain incomplete;
 the branch remains under the no-release/no-tag invariant.

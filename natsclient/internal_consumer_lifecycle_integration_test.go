@@ -31,12 +31,6 @@ func TestInternalConsumerReturnsNativeHandleAndRejectsDuplicateIncumbent(t *test
 	require.NoError(t, err)
 	require.NotNil(t, handle)
 
-	key := cfg.StreamName + ":" + cfg.ConsumerName
-	testClient.Client.consumersMu.RLock()
-	_, cataloged := testClient.Client.consumers[key]
-	testClient.Client.consumersMu.RUnlock()
-	require.False(t, cataloged, "internal native ownership must not enter the Client lifecycle catalog")
-
 	duplicate, duplicateErr := testClient.Client.ConsumeInternalStreamWithConfig(
 		t.Context(), cfg, func(context.Context, jetstream.Msg) {},
 	)
@@ -96,7 +90,7 @@ func TestInternalConsumerSetupFailureReleasesReservationWithoutDelivery(t *testi
 	})
 }
 
-func TestPortConsumerHandleReturnsNativeOwnershipWithoutClientCatalog(t *testing.T) {
+func TestPortConsumerReturnsNativeOwnershipWithoutClientCatalog(t *testing.T) {
 	testClient := NewTestClient(t, WithJetStream(), WithStreams(
 		TestStreamConfig{Name: "S1_PORT", Subjects: []string{"s1.port.>"}},
 	))
@@ -107,7 +101,7 @@ func TestPortConsumerHandleReturnsNativeOwnershipWithoutClientCatalog(t *testing
 	}
 	owner := PortConsumerContext{Component: "s1-owner", Port: "input"}
 	delivered := make(chan struct{}, 1)
-	handle, err := testClient.Client.ConsumeStreamWithConfigHandle(
+	handle, err := testClient.Client.ConsumeStreamWithConfig(
 		t.Context(), owner, cfg, func(_ context.Context, msg jetstream.Msg) {
 			delivered <- struct{}{}
 			_ = msg.Ack()
@@ -116,13 +110,7 @@ func TestPortConsumerHandleReturnsNativeOwnershipWithoutClientCatalog(t *testing
 	require.NoError(t, err)
 	require.NotNil(t, handle)
 
-	key := cfg.StreamName + ":" + cfg.ConsumerName
-	testClient.Client.consumersMu.RLock()
-	_, cataloged := testClient.Client.consumers[key]
-	testClient.Client.consumersMu.RUnlock()
-	require.False(t, cataloged, "native bridge ownership must not enter the Client lifecycle catalog")
-
-	duplicate, duplicateErr := testClient.Client.ConsumeStreamWithConfigHandle(
+	duplicate, duplicateErr := testClient.Client.ConsumeStreamWithConfig(
 		t.Context(), owner, cfg, func(context.Context, jetstream.Msg) {},
 	)
 	require.Nil(t, duplicate)
@@ -137,7 +125,7 @@ func TestPortConsumerHandleReturnsNativeOwnershipWithoutClientCatalog(t *testing
 		stream: cfg.StreamName, durable: cfg.ConsumerName,
 	})
 
-	reacquired, err := testClient.Client.ConsumeStreamWithConfigHandle(
+	reacquired, err := testClient.Client.ConsumeStreamWithConfig(
 		t.Context(), owner, cfg, func(context.Context, jetstream.Msg) {},
 	)
 	require.NoError(t, err)
@@ -148,7 +136,7 @@ func TestPortConsumerHandleReturnsNativeOwnershipWithoutClientCatalog(t *testing
 	})
 }
 
-func TestPortConsumerHandleSetupFailureReleasesReservationWithoutDelivery(t *testing.T) {
+func TestPortConsumerSetupFailureReleasesReservationWithoutDelivery(t *testing.T) {
 	testClient := NewTestClient(t, WithJetStream(), WithStreams(
 		TestStreamConfig{Name: "S1_PORT_SETUP", Subjects: []string{"s1.port.setup.>"}},
 	))
@@ -159,7 +147,7 @@ func TestPortConsumerHandleSetupFailureReleasesReservationWithoutDelivery(t *tes
 	}
 	owner := PortConsumerContext{Component: "s1-owner", Port: "input"}
 	delivered := make(chan struct{}, 1)
-	handle, err := testClient.Client.ConsumeStreamWithConfigHandle(
+	handle, err := testClient.Client.ConsumeStreamWithConfig(
 		t.Context(), owner, cfg, func(context.Context, jetstream.Msg) { delivered <- struct{}{} },
 	)
 	require.Nil(t, handle)
@@ -171,7 +159,7 @@ func TestPortConsumerHandleSetupFailureReleasesReservationWithoutDelivery(t *tes
 	}
 
 	cfg.FilterSubject = "s1.port.setup.>"
-	handle, err = testClient.Client.ConsumeStreamWithConfigHandle(
+	handle, err = testClient.Client.ConsumeStreamWithConfig(
 		t.Context(), owner, cfg, func(context.Context, jetstream.Msg) {},
 	)
 	require.NoError(t, err, "failed setup must release the exact local reservation")

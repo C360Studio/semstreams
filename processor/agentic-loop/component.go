@@ -1012,7 +1012,7 @@ func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port co
 		}
 	}
 
-	consume := c.natsClient.ConsumeStreamWithConfigContextsHandle
+	consume := c.natsClient.ConsumeStreamWithConfigContexts
 	if c.consumeStream != nil {
 		consume = c.consumeStream
 	}

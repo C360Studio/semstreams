@@ -400,7 +400,7 @@ func (h *Output) setupJetStreamConsumer(ctx context.Context, port component.Port
 		AutoCreate:    false,
 	}
 
-	consumeStream := h.natsClient.ConsumeStreamWithConfigHandle
+	consumeStream := h.natsClient.ConsumeStreamWithConfig
 	if h.consumeStream != nil {
 		consumeStream = h.consumeStream
 	}

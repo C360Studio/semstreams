@@ -1,3 +1,14 @@
+## Implementation checkpoint
+
+The independently approved, commit-authorized atomic N1b code diff on baseline
+`18cd4fcefeaa6e10780776dc0450b5b1dd877a46` implements the exact-handle, stateless durable-handler, and minimal-Client
+requirements below without changing `Subscription.Drain`. Its 35-file implementation SHA-256 is
+`887ffc0a3b61d52c7497b889756bd02b36e269be64919cdbe606bde40062fe60`; production is net -468 lines and the total is
+net -591. The five field/schema removals and exact-identity fixture cleanup remain unimplemented, so the complete
+convergence requirement and full N1 candidate gate are not yet satisfied. This checkpoint credits tasks 2.1, 3.1,
+and 3.2 only; tasks 2.3 and 3.3 remain unchecked and outside the narrowed four-boundary subset. No release or tag is
+authorized.
+
 ## MODIFIED Requirements
 
 ### Requirement: Every exported port-backed consumption operation requires policy context

@@ -401,7 +401,7 @@ func (c *Component) setupConsumer(ctx context.Context, setup consumerSetup) erro
 	// potential duplicate publishes. ConsumeWithHeartbeat owns ack/nak;
 	// The handler's error is the delivery disposition contract: nil ACKs,
 	// transient failures delayed-NAK, and PermanentDeliveryError Terms.
-	consume := c.natsClient.ConsumeStreamWithConfigHandle
+	consume := c.natsClient.ConsumeStreamWithConfig
 	if c.consumeStream != nil {
 		consume = c.consumeStream
 	}

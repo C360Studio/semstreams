@@ -14,68 +14,61 @@ import (
 // the same effective value.
 const defaultConsumerAckWait = 30 * time.Second
 
-// ConsumeDurable runs a durable at-least-once consumer over a stream with a
-// plain handler: func(ctx, []byte) error — acked on nil, nak-with-delay on error,
-// and held past AckWait by an InProgress heartbeat while the handler runs (see
-// ConsumeWithHeartbeat). The consumer NEVER handles a raw jetstream.Msg for ack
-// semantics; the []byte is the raw message data and envelope decoding
-// (payload-registry BaseMessage, etc.) stays ABOVE natsclient — natsclient does
-// not depend on the message package.
-//
-// The framework owns the at-least-once ack/heartbeat/redelivery pattern here once,
-// so a durable consumer (e.g. gated-DAG dispatch — ADR-070) does not re-hand-roll
-// ConsumeStreamWithConfig + ConsumeWithHeartbeat + ack per call site.
-//
-// heartbeat MUST be safely below the effective AckWait: a heartbeat that first
-// fires only after AckWait has already expired lets the server redeliver a
-// still-running unit (duplicate work). ConsumeDurable ENFORCES this (heartbeat*2
-// <= effective AckWait) and returns an error on a violating config, rather than
-// merely documenting it (ADR-070 B3).
-func (c *Client) ConsumeDurable(
-	ctx context.Context,
-	owner PortConsumerContext,
+// NewDurableHandler builds the stateless settlement callback used by a durable
+// consumer. The caller starts consumption through a canonical handle-returning
+// operation and owns that exact native handle. ConsumeWithHeartbeat remains the
+// sole owner of Ack, Nak, Term, InProgress, cancellation, and synchronous work
+// completion semantics.
+func NewDurableHandler(
 	cfg StreamConsumerConfig,
 	heartbeat time.Duration,
-	handler func(context.Context, []byte) error,
-) error {
-	if err := validatePortConsumerContext(owner, "ConsumeDurable"); err != nil {
-		return err
+	work func(context.Context, []byte) error,
+) (func(context.Context, jetstream.Msg), error) {
+	if work == nil {
+		return nil, fmt.Errorf("durable work handler is required")
 	}
-	if err := validateHeartbeatBelowAckWait(heartbeat, cfg.AckWait); err != nil {
-		return err
+	if err := validateDurableHeartbeat(cfg, heartbeat); err != nil {
+		return nil, err
 	}
-	return c.ConsumeStreamWithConfig(ctx, owner, cfg, func(mctx context.Context, msg jetstream.Msg) {
+	streamName := cfg.StreamName
+	consumerName := cfg.ConsumerName
+	return func(mctx context.Context, msg jetstream.Msg) {
 		data := msg.Data()
 		// ConsumeWithHeartbeat owns Ack/Nak; a returned error is already handled
 		// (nak'd) — log for operator visibility only.
 		if err := ConsumeWithHeartbeat(mctx, msg, heartbeat, func(wctx context.Context) error {
-			return handler(wctx, data)
+			return work(wctx, data)
 		}); err != nil {
 			slog.Warn("ConsumeDurable handler error",
-				slog.String("stream", cfg.StreamName),
-				slog.String("consumer", cfg.ConsumerName),
+				slog.String("stream", streamName),
+				slog.String("consumer", consumerName),
 				slog.String("error", err.Error()))
 		}
-	})
+	}, nil
 }
 
-// validateHeartbeatBelowAckWait enforces the ADR-070 B3 invariant: the heartbeat
-// must be able to fire (with margin) before AckWait expires, or a live unit gets
-// redelivered. A zero AckWait resolves to the 30s server default. Called by
-// ConsumeDurable so the check fails fast at consumer Start; kept unexported —
-// callers enforce it via ConsumeDurable, not by reaching in.
-func validateHeartbeatBelowAckWait(heartbeat, ackWait time.Duration) error {
+func validateDurableHeartbeat(cfg StreamConsumerConfig, heartbeat time.Duration) error {
 	if heartbeat <= 0 {
 		return fmt.Errorf("heartbeat interval must be positive, got %s", heartbeat)
 	}
-	effAckWait := ackWait
-	if effAckWait <= 0 {
-		effAckWait = defaultConsumerAckWait
+	effectiveAckWait := cfg.AckWait
+	if len(cfg.BackOff) > 0 {
+		for index, interval := range cfg.BackOff {
+			if interval <= 0 {
+				return fmt.Errorf("back_off[%d] must be positive, got %s", index, interval)
+			}
+			if index == 0 || interval < effectiveAckWait {
+				effectiveAckWait = interval
+			}
+		}
+	} else if effectiveAckWait <= 0 {
+		effectiveAckWait = defaultConsumerAckWait
 	}
-	if heartbeat*2 > effAckWait {
+	ceiling := effectiveAckWait / 2
+	if heartbeat > ceiling {
 		return fmt.Errorf(
-			"heartbeat interval %s must be <= half of ack_wait %s (a heartbeat that first fires after ack_wait redelivers a live unit)",
-			heartbeat, effAckWait)
+			"heartbeat interval %s exceeds computed ceiling %s for effective acknowledgement wait %s",
+			heartbeat, ceiling, effectiveAckWait)
 	}
 	return nil
 }

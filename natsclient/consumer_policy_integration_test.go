@@ -35,14 +35,14 @@ func TestIntegration_MaxAckPendingEffectivePolicy(t *testing.T) {
 			})
 			require.NoError(t, ensureErr)
 
-			consumeErr := client.ConsumeStreamWithConfig(ctx,
+			handle, consumeErr := client.ConsumeStreamWithConfig(ctx,
 				PortConsumerContext{Component: "integration", Port: subject},
 				StreamConsumerConfig{
 					StreamName: streamName, ConsumerName: consumerName, FilterSubject: subject,
 					AckPolicy: "explicit", MaxAckPending: requested,
 				}, func(context.Context, jetstream.Msg) {})
 			require.NoError(t, consumeErr)
-			t.Cleanup(func() { require.NoError(t, client.StopConsumer(ctx, streamName, consumerName)) })
+			t.Cleanup(func() { drainNativeConsume(t, handle) })
 
 			consumer, consumerErr := js.Consumer(ctx, streamName, consumerName)
 			require.NoError(t, consumerErr)
@@ -80,16 +80,18 @@ func TestIntegration_MaxAckPendingUpdatesDurableInPlace(t *testing.T) {
 	require.NoError(t, err)
 
 	acked := make(chan struct{}, 1)
-	start := func(maxAckPending int, handler func(context.Context, jetstream.Msg)) {
+	start := func(maxAckPending int, handler func(context.Context, jetstream.Msg)) jetstream.ConsumeContext {
 		t.Helper()
-		require.NoError(t, client.ConsumeStreamWithConfig(ctx,
+		handle, consumeErr := client.ConsumeStreamWithConfig(ctx,
 			PortConsumerContext{Component: "integration", Port: "input"},
 			StreamConsumerConfig{
 				StreamName: streamName, ConsumerName: consumerName, FilterSubject: subject,
 				DeliverPolicy: "all", AckPolicy: "explicit", MaxAckPending: maxAckPending,
-			}, handler))
+			}, handler)
+		require.NoError(t, consumeErr)
+		return handle
 	}
-	start(3, func(messageCtx context.Context, msg jetstream.Msg) {
+	firstHandle := start(3, func(messageCtx context.Context, msg jetstream.Msg) {
 		if ackErr := msg.DoubleAck(messageCtx); ackErr != nil {
 			return
 		}
@@ -115,9 +117,10 @@ func TestIntegration_MaxAckPendingUpdatesDurableInPlace(t *testing.T) {
 	require.Equal(t, 3, before.Config.MaxAckPending)
 	require.Positive(t, before.AckFloor.Stream)
 
-	require.NoError(t, client.StopConsumer(ctx, streamName, consumerName))
-	start(9, func(_ context.Context, msg jetstream.Msg) { _ = msg.Ack() })
-	defer func() { require.NoError(t, client.StopConsumer(ctx, streamName, consumerName)) }()
+	drainNativeConsume(t, firstHandle)
+	waitForInternalClaimRelease(t, client, internalConsumerIdentity{stream: streamName, durable: consumerName})
+	secondHandle := start(9, func(_ context.Context, msg jetstream.Msg) { _ = msg.Ack() })
+	defer drainNativeConsume(t, secondHandle)
 
 	consumer, err = js.Consumer(ctx, streamName, consumerName)
 	require.NoError(t, err)

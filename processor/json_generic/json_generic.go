@@ -339,7 +339,7 @@ func (p *Processor) setupJetStreamConsumer(ctx context.Context, port component.P
 		AutoCreate:    false,
 	}
 
-	consumeStream := p.natsClient.ConsumeStreamWithConfigHandle
+	consumeStream := p.natsClient.ConsumeStreamWithConfig
 	if p.consumeStream != nil {
 		consumeStream = p.consumeStream
 	}
