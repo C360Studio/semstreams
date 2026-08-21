@@ -102,7 +102,7 @@ func TestRuleProcessorRetiresGenerationAuthority(t *testing.T) {
 	t.Parallel()
 
 	if _, ok := reflect.TypeOf(Processor{}).FieldByName("generation"); ok {
-		t.Fatal("Processor still retains lifecyclejoin.Generation")
+		t.Fatal("Processor still retains shared Generation state")
 	}
 }
 
