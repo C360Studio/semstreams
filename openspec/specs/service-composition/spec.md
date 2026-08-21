@@ -109,6 +109,10 @@ owner. The existing named public `service.LogForwarderConfig` type and runtime i
 duplicates and SHALL return a typed error after seal. No void wrapper, overwrite behavior, alias, or compatibility shim
 SHALL remain.
 
+Manager SHALL pass each service constructor a shallow copy of the caller dependencies whose `ServiceManager` is the
+exact invoking Manager, without mutating the caller dependency record. Constructor callbacks SHALL execute without the
+Manager lock held. `CreateService` SHALL revalidate seal and duplicate state before committing a constructed service.
+
 `StartAll` SHALL verify every enabled configured optional service and mandatory `component-manager` is present,
 creating the mandatory service before seal if needed. It SHALL retain the sorted actual full identity set and SHALL
 seal before any service Start, route binding, or OpenAPI exposure.
@@ -126,6 +130,14 @@ SHALL NOT mutate the sealed identity set.
 - **WHEN** a caller invokes `CreateService` or `RegisterInstance`
 - **THEN** the call returns a typed sealed-composition error
 - **AND** the identity set is unchanged
+
+#### Scenario: Constructor receives its composition owner
+
+- **GIVEN** a caller dependency record with no ServiceManager or a different ServiceManager
+- **WHEN** a Manager invokes a configured or explicit service constructor
+- **THEN** the constructor receives a shallow dependency copy containing the exact invoking Manager
+- **AND** the caller dependency record is unchanged
+- **AND** the constructor can read already committed services without deadlocking on the Manager lock
 
 #### Scenario: Configured failure has no partial startup
 

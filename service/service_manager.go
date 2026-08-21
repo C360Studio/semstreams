@@ -92,6 +92,15 @@ func NewServiceManager(registry *Registry) *Manager {
 	return m
 }
 
+func (m *Manager) bindConstructorDependencies(deps *Dependencies) *Dependencies {
+	if deps == nil {
+		return &Dependencies{ServiceManager: m}
+	}
+	bound := *deps
+	bound.ServiceManager = m
+	return &bound
+}
+
 // ConfigureFromServices configures Manager directly from services config
 // This replaces the old pattern where Manager was a service itself
 func (m *Manager) ConfigureFromServices(services map[string]types.ServiceConfig, deps *Dependencies) error {
@@ -173,7 +182,7 @@ func (m *Manager) ConfigureFromServices(services map[string]types.ServiceConfig,
 		if !exists {
 			return fmt.Errorf("create configured service %s: no constructor registered for service %s", name, name)
 		}
-		instance, err := constructor(serviceConfig.Config, deps)
+		instance, err := constructor(serviceConfig.Config, m.bindConstructorDependencies(deps))
 		if err != nil {
 			return fmt.Errorf("create configured service %s: %w", name, err)
 		}
@@ -198,14 +207,17 @@ func (m *Manager) ConfigureFromServices(services map[string]types.ServiceConfig,
 	}
 
 	m.config = cfg
+	retainedDeps := m.bindConstructorDependencies(deps)
 	if deps != nil {
-		m.dependencies = deps
-		if deps.NATSClient != nil {
-			m.natsClient = deps.NATSClient
+		m.dependencies = retainedDeps
+		if retainedDeps.NATSClient != nil {
+			m.natsClient = retainedDeps.NATSClient
 		}
-		if deps.Manager != nil {
-			m.configManager = deps.Manager
+		if retainedDeps.Manager != nil {
+			m.configManager = retainedDeps.Manager
 		}
+	} else {
+		m.dependencies = retainedDeps
 	}
 	m.bootServiceConfigs = cloneResolvedServiceConfigs(resolved)
 	for _, admitted := range constructed {
@@ -224,25 +236,38 @@ func (m *Manager) ConfigureFromServices(services map[string]types.ServiceConfig,
 
 // CreateService creates a service instance using the registered constructor
 func (m *Manager) CreateService(name string, rawConfig json.RawMessage, deps *Dependencies) (Service, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
 	if m.sealed {
+		m.mu.RUnlock()
 		return nil, &CompositionSealedError{Operation: "create", Name: name}
 	}
 
 	// Check if service already exists
 	if _, exists := m.services[name]; exists {
+		m.mu.RUnlock()
 		return nil, &DuplicateServiceError{Name: name}
 	}
+	m.mu.RUnlock()
 
 	constructor, exists := m.registry.Constructor(name)
 	if !exists {
 		return nil, fmt.Errorf("no constructor registered for service %s", name)
 	}
 
-	service, err := constructor(rawConfig, deps)
+	service, err := constructor(rawConfig, m.bindConstructorDependencies(deps))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create service %s: %w", name, err)
+	}
+
+	// Revalidate after construction because other pre-start writers may have
+	// sealed composition or committed the same identity while the callback ran.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sealed {
+		return nil, &CompositionSealedError{Operation: "create", Name: name}
+	}
+	if _, exists := m.services[name]; exists {
+		return nil, &DuplicateServiceError{Name: name}
 	}
 
 	// Store the service instance and track order

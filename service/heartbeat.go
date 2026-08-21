@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/c360studio/semstreams/component"
 )
 
 // HeartbeatConfig holds configuration for the Heartbeat service
@@ -41,7 +43,7 @@ func (c HeartbeatConfig) Validate() error {
 
 // componentHealthGetter defines the interface for getting component health
 type componentHealthGetter interface {
-	GetComponentHealth() map[string]bool
+	GetComponentHealth() map[string]component.HealthStatus
 }
 
 // HeartbeatService emits periodic system heartbeat logs
@@ -53,6 +55,7 @@ type HeartbeatService struct {
 	startTime time.Time
 
 	// Dependencies for gathering health info
+	serviceManager   *Manager
 	componentManager componentHealthGetter
 
 	// Ticker for periodic heartbeat
@@ -115,13 +118,8 @@ func NewHeartbeatService(rawConfig json.RawMessage, deps *Dependencies) (Service
 		logger:      slog.Default().With("source", "heartbeat"),
 	}
 
-	// Try to get component manager from dependencies for health info
-	if deps != nil && deps.ServiceManager != nil {
-		if cm, ok := deps.ServiceManager.GetService("component-manager"); ok {
-			if getter, ok := cm.(componentHealthGetter); ok {
-				hb.componentManager = getter
-			}
-		}
+	if deps != nil {
+		hb.serviceManager = deps.ServiceManager
 	}
 
 	return hb, nil
@@ -143,6 +141,18 @@ func (hb *HeartbeatService) Start(ctx context.Context) error {
 		return fmt.Errorf("heartbeat service instance already stopped; create a new instance")
 	default:
 	}
+	if hb.serviceManager == nil {
+		return fmt.Errorf("heartbeat requires service manager")
+	}
+	componentService, exists := hb.serviceManager.GetService("component-manager")
+	if !exists {
+		return fmt.Errorf("heartbeat requires component-manager service")
+	}
+	componentManager, ok := componentService.(componentHealthGetter)
+	if !ok {
+		return fmt.Errorf("heartbeat component-manager does not provide component health")
+	}
+	hb.componentManager = componentManager
 
 	if err := hb.BaseService.Start(ctx); err != nil {
 		return err
@@ -228,8 +238,8 @@ func (hb *HeartbeatService) emitHeartbeat() {
 	if hb.componentManager != nil {
 		health := hb.componentManager.GetComponentHealth()
 		totalCount = len(health)
-		for _, healthy := range health {
-			if healthy {
+		for _, status := range health {
+			if status.Healthy {
 				healthyCount++
 			}
 		}

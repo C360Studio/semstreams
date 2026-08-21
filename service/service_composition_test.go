@@ -2,15 +2,219 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/c360studio/semstreams/types"
 )
+
+func TestConfigureFromServicesBindsExactManagerWithoutMutatingCallerDependencies(t *testing.T) {
+	registry := NewServiceRegistry()
+	manager := NewServiceManager(registry)
+	differentManager := NewServiceManager(NewServiceRegistry())
+	platform := types.PlatformMeta{Org: "owner-test", Platform: "composition"}
+	callerDeps := &Dependencies{Platform: platform, ServiceManager: differentManager}
+
+	var constructorDeps *Dependencies
+	for _, name := range []string{"component-manager", "probe"} {
+		serviceName := name
+		if err := registry.Register(serviceName, func(_ json.RawMessage, deps *Dependencies) (Service, error) {
+			if serviceName == "probe" {
+				constructorDeps = deps
+			}
+			return &MockService{name: serviceName}, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	err := manager.ConfigureFromServices(types.ServiceConfigs{
+		"metrics": {Enabled: false, Config: json.RawMessage(`{}`)},
+		"probe":   {Enabled: true, Config: json.RawMessage(`{}`)},
+	}, callerDeps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if constructorDeps == nil || constructorDeps.ServiceManager != manager {
+		t.Fatalf("constructor ServiceManager = %p, want exact receiver %p", constructorDeps.ServiceManager, manager)
+	}
+	if constructorDeps == callerDeps {
+		t.Fatal("constructor received caller dependency record instead of a shallow copy")
+	}
+	if constructorDeps.Platform != platform {
+		t.Fatalf("constructor Platform = %#v, want preserved identity %#v", constructorDeps.Platform, platform)
+	}
+	if manager.dependencies == callerDeps || manager.dependencies.ServiceManager != manager {
+		t.Fatalf("retained dependencies = %#v, want a manager-bound shallow copy", manager.dependencies)
+	}
+	if callerDeps.ServiceManager != differentManager || callerDeps.Platform != platform {
+		t.Fatalf("caller dependencies mutated: %#v", callerDeps)
+	}
+}
+
+func TestCreateServiceConstructorCanReadOwningManager(t *testing.T) {
+	registry := NewServiceRegistry()
+	manager := NewServiceManager(registry)
+	existing := &MockService{name: "existing"}
+	if err := manager.RegisterInstance("existing", existing); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register("reader", func(_ json.RawMessage, deps *Dependencies) (Service, error) {
+		if deps.ServiceManager != manager {
+			return nil, errors.New("constructor did not receive owning manager")
+		}
+		got, ok := deps.ServiceManager.GetService("existing")
+		if !ok || got != existing {
+			return nil, errors.New("constructor could not read existing service")
+		}
+		return &MockService{name: "reader"}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := manager.CreateService("reader", json.RawMessage(`{}`), &Dependencies{})
+		done <- err
+	}()
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("constructor did not complete while reading Manager: %v", ctx.Err())
+	}
+}
+
+func TestCreateServiceRevalidatesConcurrentDuplicateBeforeCommit(t *testing.T) {
+	registry := NewServiceRegistry()
+	manager := NewServiceManager(registry)
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+
+	if err := registry.Register("duplicate", func(_ json.RawMessage, deps *Dependencies) (Service, error) {
+		if deps.ServiceManager != manager {
+			return nil, errors.New("constructor did not receive owning manager")
+		}
+		entered <- struct{}{}
+		<-release
+		return &MockService{name: "duplicate"}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	results := make(chan error, 2)
+	for range 2 {
+		go func() {
+			_, err := manager.CreateService("duplicate", json.RawMessage(`{}`), &Dependencies{})
+			results <- err
+		}()
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	for range 2 {
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatalf("constructors did not execute concurrently outside Manager lock: %v", ctx.Err())
+		}
+	}
+	releaseOnce.Do(func() { close(release) })
+
+	successes := 0
+	duplicates := 0
+	for range 2 {
+		select {
+		case err := <-results:
+			if err == nil {
+				successes++
+				continue
+			}
+			var duplicate *DuplicateServiceError
+			if errors.As(err, &duplicate) {
+				duplicates++
+				continue
+			}
+			t.Fatalf("CreateService error = %T %v", err, err)
+		case <-ctx.Done():
+			t.Fatalf("CreateService calls did not complete: %v", ctx.Err())
+		}
+	}
+	if successes != 1 || duplicates != 1 {
+		t.Fatalf("results: successes=%d duplicates=%d, want 1 and 1", successes, duplicates)
+	}
+	if got := manager.GetAllServices(); len(got) != 1 || got["duplicate"] == nil {
+		t.Fatalf("committed services = %#v, want exactly duplicate", got)
+	}
+}
+
+func TestCreateServiceRejectsCommitWhenCompositionSealsDuringConstructor(t *testing.T) {
+	registry := NewServiceRegistry()
+	manager := NewServiceManager(registry)
+	if err := manager.RegisterInstance("component-manager", &MockService{name: "component-manager"}); err != nil {
+		t.Fatal(err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	if err := registry.Register("late", func(_ json.RawMessage, deps *Dependencies) (Service, error) {
+		if deps.ServiceManager != manager {
+			return nil, errors.New("constructor did not receive owning manager")
+		}
+		close(entered)
+		<-release
+		return &MockService{name: "late"}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := manager.CreateService("late", json.RawMessage(`{}`), &Dependencies{})
+		result <- err
+	}()
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatalf("constructor did not reach synchronized admission point: %v", ctx.Err())
+	}
+	if _, err := manager.sealComposition(); err != nil {
+		t.Fatalf("seal composition while constructor blocked: %v", err)
+	}
+	releaseOnce.Do(func() { close(release) })
+
+	select {
+	case err := <-result:
+		var sealed *CompositionSealedError
+		if !errors.As(err, &sealed) {
+			t.Fatalf("CreateService error = %T %v, want CompositionSealedError", err, err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("CreateService did not return after seal: %v", ctx.Err())
+	}
+	if _, exists := manager.GetService("late"); exists {
+		t.Fatal("service committed after composition sealed")
+	}
+}
 
 type compositionHTTPService struct {
 	MockService
