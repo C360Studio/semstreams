@@ -17,15 +17,16 @@ in `projection_contracts`:
 | `agent.lesson.superseded-by` | entity ID of the replacing lesson |
 | `agent.lesson.retired-at` | retirement timestamp |
 
-These three are **mutable** and single-valued, so they belong in a
-`reconcile` group. This mirrors the `agentic.lesson-record` contract declared in
-`internal/builtinprojection/contracts.go` (`builtinprojection.Contracts()`), the
-single authoritative declaration both framework binaries register at boot. The
+These three are **mutable** and single-valued, so they belong in this local
+`reconcile` group. This mirrors the canonical built-in source declaration in
+`internal/builtinprojection/contracts.go` (`builtinprojection.Contracts()`),
+which the standard constructor consumes directly. The
 **birth predicates** — `agent.lesson.created-at`,
 `category`, `polarity`, `severity`, `summary`, `detail`, `injection-form`,
-`evidence`, `applies-to`, `observed-role` — are stamped once at emit and are
-deliberately **absent** from the reconcile group, so a `reconcile_predicates` action can
-never overwrite a lesson's identity or evidence.
+`evidence`, `applies-to`, `observed-role`, and `agent.action.executed-by` — are
+stamped once at emit and deliberately **absent** from this group. Actions using
+this unchanged local group cannot select those predicates for removal; another
+locally authored contract receives no global protection from this declaration.
 
 ## Lane 1 — VALIDATED promotion (evidence-existence-resolved)
 
@@ -42,6 +43,12 @@ graph. Use the reference writer
 Promotion is **operator/product-invoked**, not an agent tool (ADR-080 makes
 operator/product review the default gate; there is no `promote_lesson` tool). A
 product wraps `Promote` in a curation UI or an explicit auto-promotion policy.
+
+Go products include `LessonProjectionContract()` in their composition-root-local
+mutation client and inject that client's narrow reconcile/read capabilities through
+`NewLessonCurator`. They do not reproduce the built-in contract literals. This rule
+pack's local `projection_contracts` entry is a separate config-authored mechanical
+rule surface and does not construct the validated curator.
 
 `Retire` (status → `retired` + `retired-at`) and `Supersede` (status →
 `superseded` + `superseded-by`) live on the same writer; retirement requires no

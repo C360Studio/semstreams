@@ -2,12 +2,14 @@ package agentictools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/builtinprojection"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/projection"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
@@ -119,6 +121,72 @@ const (
 
 func statusTriple(entityID, status string) message.Triple {
 	return message.Triple{Subject: entityID, Predicate: agvocab.LessonStatus, Object: status, Confidence: 1.0}
+}
+
+func TestLessonProjectionContractMatchesCanonicalAndReturnsIndependentSnapshots(t *testing.T) {
+	canonicalJSON := marshalProjectionContract(t, builtinprojection.LessonContract())
+	assertContractJSON(t, "initial public snapshot", canonicalJSON, LessonProjectionContract())
+
+	publicSnapshot := LessonProjectionContract()
+	mutateProjectionContractSlices(t, &publicSnapshot)
+	assertContractJSON(t, "public snapshot after public mutation", canonicalJSON, LessonProjectionContract())
+	assertContractJSON(t, "internal aggregate after public mutation", canonicalJSON, lessonContractFromAggregate(t))
+
+	internalAggregateSnapshot := lessonContractFromAggregate(t)
+	mutateProjectionContractSlices(t, &internalAggregateSnapshot)
+	assertContractJSON(t, "public snapshot after aggregate mutation", canonicalJSON, LessonProjectionContract())
+
+	internalCanonicalSnapshot := builtinprojection.LessonContract()
+	mutateProjectionContractSlices(t, &internalCanonicalSnapshot)
+	assertContractJSON(t, "public snapshot after canonical-helper mutation", canonicalJSON, LessonProjectionContract())
+}
+
+func marshalProjectionContract(t *testing.T, contract projection.Contract) string {
+	t.Helper()
+	encoded, err := json.Marshal(contract)
+	if err != nil {
+		t.Fatalf("marshal projection contract: %v", err)
+	}
+	return string(encoded)
+}
+
+func assertContractJSON(t *testing.T, name, want string, got projection.Contract) {
+	t.Helper()
+	if encoded := marshalProjectionContract(t, got); encoded != want {
+		t.Fatalf("%s = %s, want immutable canonical %s", name, encoded, want)
+	}
+}
+
+func lessonContractFromAggregate(t *testing.T) projection.Contract {
+	t.Helper()
+	for _, contract := range builtinprojection.Contracts() {
+		if contract.Name == builtinprojection.LessonRecordContractName {
+			return contract
+		}
+	}
+	t.Fatal("built-in aggregate has no canonical lesson contract")
+	return projection.Contract{}
+}
+
+func mutateProjectionContractSlices(t *testing.T, contract *projection.Contract) {
+	t.Helper()
+	if len(contract.BirthPredicates) == 0 || len(contract.Groups) == 0 {
+		t.Fatalf("contract lacks mutable top-level slices: %#v", contract)
+	}
+	contract.BirthPredicates[0] = "mutated.birth.predicate"
+	contract.BirthPredicates = append(contract.BirthPredicates, "mutated.birth.appended")
+	for index := range contract.Groups {
+		if len(contract.Groups[index].Predicates) == 0 {
+			t.Fatalf("group[%d] lacks nested predicate slice: %#v", index, contract.Groups[index])
+		}
+		contract.Groups[index].Predicates[0] = "mutated.group.predicate"
+		contract.Groups[index].Predicates = append(
+			contract.Groups[index].Predicates,
+			"mutated.group.appended",
+		)
+	}
+	contract.Groups[0].Name = "mutated-group"
+	contract.Groups = append(contract.Groups, projection.PredicateGroup{Name: "mutated-appended-group"})
 }
 
 // --- Promotion happy path: proposed→active when all evidence exists ---
