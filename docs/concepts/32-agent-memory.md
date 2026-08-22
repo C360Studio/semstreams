@@ -45,9 +45,9 @@ The three-layer taxonomy (episodic / semantic / procedural) is the industry-conv
 
 | Layer | Answers | Framework surface | Access |
 |---|---|---|---|
-| **Episodic** — what happened | `AGENT_LOOPS` KV (`COMPLETE_{loopID}`, full text) + `agent.complete.*` JetStream stream + `AGENT_TRAJECTORIES` KV | `read_loop_result` dereferences a handed loop ID within the retention window |
-| **Semantic** — what's true | The knowledge graph, with BM25 (Tier 1) and neural (Tier 2) embeddings for text content | Per-role-allowlisted direct `query_*` graph-read tools; worker roles conventionally excluded |
-| **Procedural** — what to do | `agent.lesson.*` predicates + `emit_lesson` writer + `LessonCurator` promotion lane + `lessonmatch` matcher | Pushed into the system prompt at brief assembly — never a tool call |
+| **Episodic** | what happened | `AGENT_LOOPS` KV (`COMPLETE_{loopID}`, full text) + `agent.complete.*` JetStream stream + `AGENT_TRAJECTORIES` KV | `read_loop_result` dereferences a handed loop ID within the retention window |
+| **Semantic** | what's true | The knowledge graph, with BM25 (Tier 1) and neural (Tier 2) embeddings for text content | Per-role-allowlisted direct `query_*` graph-read tools; worker roles conventionally excluded |
+| **Procedural** | what to do | `agent.lesson.*` predicates + `emit_lesson` writer + `LessonCurator` promotion lane + `lessonmatch` matcher | Pushed into the system prompt at brief assembly — never a tool call |
 
 Episodic content is not durable: `AGENT_LOOPS` defaults to a 24-hour KV TTL and the
 `agent.complete.*` stream retains 7 days. That cliff is precisely why lesson distillation is
@@ -151,6 +151,20 @@ enums, and nothing in SemStreams enforces or special-cases them:
 A product is free to invent its own set, mix taxonomies, or use none at all — `emit_lesson`
 accepts any non-empty string.
 
+## Standalone Product-Lane Gate
+
+Run `task e2e:lessons` for the assembled regression gate covering the direct product writer shape. The task reuses the
+production-target core stack and proves direct `LessonStore.CreateLesson` birth, evidence-resolved curator promotion,
+production `LessonReader` retrieval, deterministic `lessonmatch` eligibility, identical-create convergence, and exact
+fixture cleanup.
+
+This gate runs no agent loop, mock LLM, user message, role, prompt, or persona. It does not assemble a later loop brief
+and must not be cited as proof that a lesson reached one. Its boundary is the production reader plus matcher; existing
+unit coverage separately proves that an eligible matcher result is rendered into a brief.
+
+The configured agent example and the current ops scenario remain separate from this product-lane gate. The disposition
+of `task e2e:ops`—retire, rename, or repurpose—remains undecided and is not changed by the lessons task.
+
 ## Worked Example
 
 This walks the full lesson lifecycle — configure → emit → query → promote →
@@ -162,10 +176,10 @@ Every subject, predicate, endpoint, and API below is grep-verified against the
 shipped code. The template's role is `lesson-example` (org `c360`, platform
 `lesson-example`); substitute your own identity when you copy it.
 
-The automated end-to-end proof of this exact round-trip is the ops e2e scenario
-([`test/e2e/scenarios/ops/scenario.go`](../../test/e2e/scenarios/ops/scenario.go),
-stages `verify-lesson-proposed → promote-lesson → inject-and-verify-lesson`); run
-it with `task e2e:agentic` when you want the whole path exercised in CI.
+This configured-agent example is illustrative; it is not the standalone direct-product regression gate above. The
+current ops scenario separately exercises its configured agent path through stages
+`verify-lesson-proposed → promote-lesson → inject-and-verify-lesson` under `task e2e:ops`. That task's future
+disposition remains undecided.
 
 ### 1. Configure the emitting + receiving agent
 

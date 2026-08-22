@@ -60,6 +60,8 @@ includes:
     taskfile: ./taskfiles/e2e/semantic.yml
   e2e:agentic:
     taskfile: ./taskfiles/e2e/agentic.yml
+  e2e:lessons:
+    taskfile: ./taskfiles/e2e/lessons.yml
   e2e:research-graph:
     taskfile: ./taskfiles/e2e/research-graph.yml
   e2e:deep-research:
