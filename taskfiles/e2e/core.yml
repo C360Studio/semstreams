@@ -81,6 +81,93 @@ tasks:
         curl --max-time 5 -fsS http://localhost:38222/healthz >/dev/null \
           || fail "external NATS did not remain healthy after application exit"
         echo "[OK] SIGTERM exited 0, released listeners, completed shutdown, and left NATS healthy"
+      - |
+        early_suffix=$$
+        early_network="semstreams-early-sigterm-net-$early_suffix"
+        early_blackhole="semstreams-early-sigterm-blackhole-$early_suffix"
+        early_app="semstreams-early-sigterm-app-$early_suffix"
+
+        cleanup_early_boot() {
+          docker rm -f "$early_app" "$early_blackhole" >/dev/null 2>&1 || true
+          docker network rm "$early_network" >/dev/null 2>&1 || true
+        }
+        fail_early_boot() {
+          echo "[FAIL] $1"
+          docker logs "$early_app" 2>&1 || true
+          docker logs "$early_blackhole" 2>&1 || true
+          exit 1
+        }
+        trap cleanup_early_boot EXIT
+
+        echo "[E2E] Verifying SIGTERM during blocked production bootstrap..."
+        docker network create "$early_network" >/dev/null \
+          || fail_early_boot "could not create isolated early-boot network"
+        docker run -d --name "$early_blackhole" --network "$early_network" alpine:3.22 \
+          sh -c 'tail -f /dev/null | nc -l -p 4222' >/dev/null \
+          || fail_early_boot "could not start NATS blackhole listener"
+        docker run -d --name "$early_app" --network "$early_network" \
+          -e "SEMSTREAMS_NATS_URLS=nats://$early_blackhole:4222" \
+          -e SEMSTREAMS_LOG_LEVEL=debug \
+          c360studio/semstreams:e2e-production \
+          --config /app/configs/protocol-flow.json >/dev/null \
+          || fail_early_boot "could not start production application"
+
+        attempt=0
+        connecting=false
+        while [ "$attempt" -lt 50 ]; do
+          if docker logs "$early_app" 2>&1 | grep -F '"msg":"Connecting to NATS"' >/dev/null; then
+            connecting=true
+            break
+          fi
+          running=$(docker inspect "$early_app" | jq -r '.[0].State.Running') \
+            || fail_early_boot "early-boot application state unavailable"
+          [ "$running" = "true" ] || fail_early_boot "application exited before entering NATS Connect"
+          attempt=$((attempt + 1))
+          sleep 0.1
+        done
+        [ "$connecting" = "true" ] || fail_early_boot "Connecting to NATS evidence absent"
+
+        attempt=0
+        accepted=false
+        while [ "$attempt" -lt 50 ]; do
+          if docker exec "$early_blackhole" netstat -tn 2>/dev/null | grep -q ESTABLISHED; then
+            accepted=true
+            break
+          fi
+          attempt=$((attempt + 1))
+          sleep 0.1
+        done
+        [ "$accepted" = "true" ] || fail_early_boot "blackhole did not accept the NATS TCP connection"
+
+        docker kill --signal=TERM "$early_app" >/dev/null \
+          || fail_early_boot "could not send SIGTERM to early-boot application"
+
+        attempt=0
+        exited=false
+        while [ "$attempt" -lt 100 ]; do
+          running=$(docker inspect "$early_app" | jq -r '.[0].State.Running') \
+            || fail_early_boot "early-boot application state unavailable after SIGTERM"
+          if [ "$running" = "false" ]; then
+            exited=true
+            break
+          fi
+          attempt=$((attempt + 1))
+          sleep 0.1
+        done
+        [ "$exited" = "true" ] || fail_early_boot "application did not exit within 10s of SIGTERM"
+
+        exit_code=$(docker inspect "$early_app" | jq -er '.[0].State.ExitCode') \
+          || fail_early_boot "early-boot exit code unavailable"
+        [ "$exit_code" -eq 1 ] \
+          || fail_early_boot "early SIGTERM exited $exit_code, want controlled failed-boot exit 1 (not default 143)"
+
+        early_logs=$(docker logs "$early_app" 2>&1)
+        printf '%s\n' "$early_logs" | grep -F "context canceled" >/dev/null \
+          || fail_early_boot "context-cancellation evidence missing after early SIGTERM"
+        if printf '%s\n' "$early_logs" | grep -F "Starting all services" >/dev/null; then
+          fail_early_boot "services started after early SIGTERM"
+        fi
+        echo "[OK] Early SIGTERM canceled blocked NATS boot, exited 1, and fenced service startup"
 
   debug:
     desc: Start E2E environment for debugging (leaves containers running)
