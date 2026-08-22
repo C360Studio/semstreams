@@ -295,7 +295,7 @@ func TestWriteLoopCompletion_Integration(t *testing.T) {
 		CompletedAt:  time.Now(),
 	}
 
-	w.WriteLoopCompletion(ctx, event)
+	w.WriteLoopCompletion(ctx, event, false)
 
 	triples := collector.getTriples()
 	preds := collector.predicateSet()
@@ -398,7 +398,7 @@ func TestWriteLoopCompletion_Integration_CapabilityResolves(t *testing.T) {
 		CompletedAt: time.Now(),
 	}
 
-	w.WriteLoopCompletion(ctx, event)
+	w.WriteLoopCompletion(ctx, event, false)
 
 	var modelUsed string
 	var costStamped bool
@@ -451,7 +451,7 @@ func TestWriteLoopFailure_Integration(t *testing.T) {
 		FailedAt:   time.Now(),
 	}
 
-	w.WriteLoopFailure(ctx, event)
+	w.WriteLoopFailure(ctx, event, false)
 
 	// gh#159: failure stamp is atomic-batch of 5 always-on + model_used
 	// (nil registry → cost omitted) = 6 predicates.
@@ -676,7 +676,7 @@ func TestWriteLoopCancellation_Integration(t *testing.T) {
 		CancelledAt: time.Now(),
 	}
 
-	w.WriteLoopCancellation(ctx, event)
+	w.WriteLoopCancellation(ctx, event, false)
 
 	preds := collector.predicateSet()
 	// gh#159: cancellation stamp is the minimal transition signal
@@ -713,7 +713,7 @@ func TestWriteLoopCompletion_NilClient_NoOp(t *testing.T) {
 	}
 
 	// Should not panic.
-	w.WriteLoopCompletion(context.Background(), event)
+	w.WriteLoopCompletion(context.Background(), event, false)
 }
 
 func TestWriteModelEndpoints_MissingPlatform_NoOp(t *testing.T) {

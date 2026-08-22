@@ -50,6 +50,14 @@ const (
 	// truncationMarker is appended to a truncated prompt so consumers can
 	// tell at a glance that the triple is not the full text.
 	truncationMarker = "…[truncated]"
+
+	// evidenceIntegrityIncomplete is the ONLY value ever written for
+	// agvocab.LoopEvidenceIntegrity, and this constant is its only home so
+	// "does any path write a completeness claim?" is answerable by grep.
+	// The framework can observe the audit failures it saw and nothing more,
+	// so there is no "complete" counterpart: absence of the triple means
+	// only that no loss was observed (ADR-084).
+	evidenceIntegrityIncomplete = "incomplete"
 )
 
 // truncateForTriple returns s capped at maxBytes bytes total (including
@@ -261,7 +269,7 @@ func (w *graphWriter) WriteModelEndpoints(ctx context.Context) {
 // substituted any other completion-path triple in its action would evaluate
 // against a partial snapshot and bail. gh#159 + ADR-046 Phase 1 reference
 // fan-out pattern depends on this atomicity.
-func (w *graphWriter) WriteLoopCompletion(ctx context.Context, event *agentic.LoopCompletedEvent) {
+func (w *graphWriter) WriteLoopCompletion(ctx context.Context, event *agentic.LoopCompletedEvent, evidenceIncomplete bool) {
 	if w.natsClient == nil {
 		return
 	}
@@ -276,7 +284,7 @@ func (w *graphWriter) WriteLoopCompletion(ctx context.Context, event *agentic.Lo
 	modelEntityID, cost := resolveModelAccounting(
 		w.modelRegistry, w.platform.Org, w.platform.Platform, event.Model, event.TokensIn, event.TokensOut)
 
-	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, cost)
+	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, cost, evidenceIncomplete)
 	if err := w.writeBatch(ctx, triples); err != nil {
 		w.logger.Warn("graph_writer: failed to write loop completion batch",
 			"loop_id", event.LoopID, "predicate_count", len(triples), "error", err)
@@ -287,7 +295,7 @@ func (w *graphWriter) WriteLoopCompletion(ctx context.Context, event *agentic.Lo
 //
 // Atomic-batch stamp shape mirrors WriteLoopCompletion — see its godoc for
 // the race-fix rationale (gh#159).
-func (w *graphWriter) WriteLoopFailure(ctx context.Context, event *agentic.LoopFailedEvent) {
+func (w *graphWriter) WriteLoopFailure(ctx context.Context, event *agentic.LoopFailedEvent, evidenceIncomplete bool) {
 	if w.natsClient == nil {
 		return
 	}
@@ -302,7 +310,7 @@ func (w *graphWriter) WriteLoopFailure(ctx context.Context, event *agentic.LoopF
 	modelEntityID, cost := resolveModelAccounting(
 		w.modelRegistry, w.platform.Org, w.platform.Platform, event.Model, event.TokensIn, event.TokensOut)
 
-	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, cost)
+	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, cost, evidenceIncomplete)
 	if err := w.writeBatch(ctx, triples); err != nil {
 		w.logger.Warn("graph_writer: failed to write loop failure batch",
 			"loop_id", event.LoopID, "predicate_count", len(triples), "error", err)
@@ -478,7 +486,7 @@ func (w *graphWriter) WriteSpawnIdentity(ctx context.Context, loopID string, tas
 // Atomic-batch stamp shape mirrors WriteLoopCompletion — see its godoc for
 // the race-fix rationale (gh#159). Cancellation isn't a common rule join
 // point today but the same race shape would apply if one is added.
-func (w *graphWriter) WriteLoopCancellation(ctx context.Context, event *agentic.LoopCancelledEvent) {
+func (w *graphWriter) WriteLoopCancellation(ctx context.Context, event *agentic.LoopCancelledEvent, evidenceIncomplete bool) {
 	if w.natsClient == nil {
 		return
 	}
@@ -489,7 +497,7 @@ func (w *graphWriter) WriteLoopCancellation(ctx context.Context, event *agentic.
 	}
 
 	loopEntityID := agentic.LoopExecutionEntityID(w.platform.Org, w.platform.Platform, event.LoopID)
-	triples := buildLoopCancellationTriples(loopEntityID, event)
+	triples := buildLoopCancellationTriples(loopEntityID, event, evidenceIncomplete)
 	if err := w.writeBatch(ctx, triples); err != nil {
 		w.logger.Warn("graph_writer: failed to write loop cancellation batch",
 			"loop_id", event.LoopID, "predicate_count", len(triples), "error", err)
@@ -538,6 +546,33 @@ func buildModelEndpointTriples(entityID string, ep model.EndpointConfig) []messa
 	return triples
 }
 
+// appendEvidenceIntegrity stamps the observed-audit-loss condition onto a
+// terminal triple set when, and only when, the component observed at least
+// one trajectory audit failure for this loop.
+//
+// evidenceIncomplete arrives from the component's per-loop marker, which
+// reportTrajectoryAuditFailure sets from the same trajectoryAuditFailure
+// value that feeds the Health latch, the metric, and the ERROR log. Nothing
+// here re-derives it from the counter or re-evaluates a predicate.
+//
+// The condition rides the caller's slice so it lands on the SAME graph
+// mutation as agent.loop.outcome. The failures most worth reporting
+// (evidence_put, fact_create) happen when the substrate is unhealthy, so a
+// dedicated write at failure time would be the least likely to land.
+//
+// One triple, unqualified, or none. A loop may lose evidence at several
+// stages; electing one would manufacture a claim about which mattered, and
+// the full {stage,kind,reason} set already lives in the ERROR log and the
+// bounded counter.
+func appendEvidenceIntegrity(triples []message.Triple, triple func(string, any) message.Triple,
+	evidenceIncomplete bool,
+) []message.Triple {
+	if !evidenceIncomplete {
+		return triples
+	}
+	return append(triples, triple(agvocab.LoopEvidenceIntegrity, evidenceIntegrityIncomplete))
+}
+
 // buildLoopCompletionTriples constructs triples for a successfully completed loop.
 // cost should be pre-computed via computeCost; pass 0.0 to omit the cost triple.
 //
@@ -551,6 +586,7 @@ func buildLoopCompletionTriples(
 	event *agentic.LoopCompletedEvent,
 	modelEntityID string,
 	cost float64,
+	evidenceIncomplete bool,
 ) []message.Triple {
 	now := time.Now()
 	triple := func(predicate string, object any) message.Triple {
@@ -579,7 +615,7 @@ func buildLoopCompletionTriples(
 		triples = append(triples, triple(agvocab.LoopCostUSD, cost))
 	}
 
-	return triples
+	return appendEvidenceIntegrity(triples, triple, evidenceIncomplete)
 }
 
 // buildLoopFailureTriples constructs triples for a loop that terminated with an error.
@@ -595,6 +631,7 @@ func buildLoopFailureTriples(
 	event *agentic.LoopFailedEvent,
 	modelEntityID string,
 	cost float64,
+	evidenceIncomplete bool,
 ) []message.Triple {
 	now := time.Now()
 	triple := func(predicate string, object any) message.Triple {
@@ -633,7 +670,7 @@ func buildLoopFailureTriples(
 		triples = append(triples, triple(agvocab.LoopCostUSD, cost))
 	}
 
-	return triples
+	return appendEvidenceIntegrity(triples, triple, evidenceIncomplete)
 }
 
 // buildLoopCancellationTriples constructs the minimal set of triples for a cancelled loop.
@@ -642,7 +679,7 @@ func buildLoopFailureTriples(
 // Spawn-known triples (task, workflow, workflow_step) live on the loop
 // entity from WriteSpawnIdentity (gh#159); cancellation only writes the
 // transition signals.
-func buildLoopCancellationTriples(loopEntityID string, event *agentic.LoopCancelledEvent) []message.Triple {
+func buildLoopCancellationTriples(loopEntityID string, event *agentic.LoopCancelledEvent, evidenceIncomplete bool) []message.Triple {
 	now := time.Now()
 	triple := func(predicate string, object any) message.Triple {
 		return message.Triple{
@@ -655,10 +692,12 @@ func buildLoopCancellationTriples(loopEntityID string, event *agentic.LoopCancel
 		}
 	}
 
-	return []message.Triple{
+	triples := []message.Triple{
 		triple(agvocab.LoopOutcome, event.Outcome),
 		triple(agvocab.LoopEndedAt, event.CancelledAt.Format(time.RFC3339)),
 	}
+
+	return appendEvidenceIntegrity(triples, triple, evidenceIncomplete)
 }
 
 // resolveModelAccounting maps modelName — a CAPABILITY for spawned loops

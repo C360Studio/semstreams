@@ -2,6 +2,7 @@ package agenticloop
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -165,7 +166,7 @@ func TestBuildLoopCompletionTriples_RequiredFields(t *testing.T) {
 		CompletedAt: time.Now(),
 	}
 
-	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0)
+	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0, false)
 
 	for _, tr := range triples {
 		if tr.Subject != loopEntityID {
@@ -237,7 +238,7 @@ func TestBuildLoopCompletionTriples_CostCalculation(t *testing.T) {
 
 	// (1000 * 3.0 + 500 * 15.0) / 1_000_000 = 0.0105
 	cost := float64(event.TokensIn)*3.0/1_000_000 + float64(event.TokensOut)*15.0/1_000_000
-	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, cost)
+	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, cost, false)
 
 	facts := predicateSet(triples)
 	if !facts[agvocab.LoopCostUSD] {
@@ -269,7 +270,7 @@ func TestBuildLoopCompletionTriples_ZeroCostOmitted(t *testing.T) {
 		CompletedAt: time.Now(),
 	}
 
-	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0)
+	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0, false)
 	facts := predicateSet(triples)
 
 	if facts[agvocab.LoopCostUSD] {
@@ -292,7 +293,7 @@ func TestBuildLoopCompletionTriples_OptionalFieldsOmittedWhenEmpty(t *testing.T)
 		// ParentLoopID, WorkflowSlug, WorkflowStep, UserID all empty
 	}
 
-	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0)
+	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0, false)
 	facts := predicateSet(triples)
 
 	optional := []string{
@@ -327,7 +328,7 @@ func TestBuildLoopCompletionTriples_DescriptionNotInCompletion(t *testing.T) {
 		CompletedAt: time.Now(),
 	}
 
-	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0)
+	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0, false)
 
 	if predicateSet(triples)[agvocab.LoopDescription] {
 		t.Errorf("%s leaked into completion stamp; should be spawn-only", agvocab.LoopDescription)
@@ -351,7 +352,7 @@ func TestBuildLoopFailureTriples_DescriptionNotInFailure(t *testing.T) {
 		FailedAt:   time.Now(),
 	}
 
-	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0)
+	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0, false)
 
 	if predicateSet(triples)[agvocab.LoopDescription] {
 		t.Errorf("%s leaked into failure stamp; should be spawn-only", agvocab.LoopDescription)
@@ -424,7 +425,7 @@ func TestBuildLoopCompletionTriples_SpawnFieldsNotInCompletion(t *testing.T) {
 		CompletedAt:  time.Now(),
 	}
 
-	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0)
+	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0, false)
 	facts := predicateSet(triples)
 
 	spawnOnly := []string{
@@ -460,7 +461,7 @@ func TestBuildLoopFailureTriples_RequiredFields(t *testing.T) {
 		FailedAt:   time.Now(),
 	}
 
-	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0)
+	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0, false)
 	facts := predicateSet(triples)
 
 	required := []string{
@@ -508,7 +509,7 @@ func TestBuildLoopFailureTriples_OptionalFieldsOmittedWhenEmpty(t *testing.T) {
 		FailedAt:   time.Now(),
 	}
 
-	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0)
+	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0, false)
 	facts := predicateSet(triples)
 
 	// ParentLoopID belongs to the optional set — when empty (failure on a
@@ -545,7 +546,7 @@ func TestBuildLoopFailureTriples_ParentNotInFailure(t *testing.T) {
 		FailedAt:     time.Now(),
 	}
 
-	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0)
+	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0, false)
 	if predicateSet(triples)[agvocab.LoopParent] {
 		t.Errorf("%s leaked into failure stamp; should be spawn-only", agvocab.LoopParent)
 	}
@@ -574,7 +575,7 @@ func TestBuildLoopFailureTriples_SpawnFieldsNotInFailure(t *testing.T) {
 	}
 
 	cost := 0.005
-	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, cost)
+	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, cost, false)
 	facts := predicateSet(triples)
 
 	spawnOnly := []string{
@@ -614,7 +615,7 @@ func TestBuildLoopFailureTriples_EmptyModelOmitsModelUsed(t *testing.T) {
 		FailedAt:   time.Now(),
 	}
 
-	triples := buildLoopFailureTriples(loopEntityID, event, "", 0)
+	triples := buildLoopFailureTriples(loopEntityID, event, "", 0, false)
 	facts := predicateSet(triples)
 
 	if facts[agvocab.LoopModelUsed] {
@@ -634,7 +635,7 @@ func TestBuildLoopCompletionTriples_EmptyModelOmitsModelUsed(t *testing.T) {
 		CompletedAt: time.Now(),
 	}
 
-	triples := buildLoopCompletionTriples(loopEntityID, event, "", 0)
+	triples := buildLoopCompletionTriples(loopEntityID, event, "", 0, false)
 	facts := predicateSet(triples)
 
 	if facts[agvocab.LoopModelUsed] {
@@ -655,7 +656,7 @@ func TestBuildLoopCancellationTriples_RequiredFields(t *testing.T) {
 		CancelledAt: time.Now(),
 	}
 
-	triples := buildLoopCancellationTriples(loopEntityID, event)
+	triples := buildLoopCancellationTriples(loopEntityID, event, false)
 	facts := predicateSet(triples)
 
 	required := []string{agvocab.LoopOutcome, agvocab.LoopEndedAt}
@@ -689,7 +690,7 @@ func TestBuildLoopCancellationTriples_SpawnFieldsNotInCancellation(t *testing.T)
 		CancelledAt:  time.Now(),
 	}
 
-	triples := buildLoopCancellationTriples(loopEntityID, event)
+	triples := buildLoopCancellationTriples(loopEntityID, event, false)
 	facts := predicateSet(triples)
 
 	spawnOnly := []string{
@@ -1038,7 +1039,7 @@ func TestBuildLoopFailureTriples_TerminalReasonDistinguishesFailureClasses(t *te
 			Outcome:  "failed",
 			Reason:   reason,
 			FailedAt: time.Now(),
-		}, "", 0)
+		}, "", 0, false)
 	}
 
 	exhausted := failedWith("max_iterations")
@@ -1064,5 +1065,143 @@ func TestBuildLoopFailureTriples_TerminalReasonDistinguishesFailureClasses(t *te
 	unclassified := failedWith("")
 	if predicateSet(unclassified)[agvocab.LoopTerminalReason] {
 		t.Errorf("%s must be absent when the event carries no classified reason", agvocab.LoopTerminalReason)
+	}
+}
+
+// --- agent.loop.evidence-integrity (observed audit loss) ---
+
+// terminalTripleBuilders names the three terminal paths that carry
+// agent.loop.outcome. Every one of them must be able to report observed
+// audit loss: a loop that FAILED or was CANCELLED can have lost evidence
+// exactly as a completed one can, and the completion path alone would
+// leave two thirds of terminal loops silently unclassifiable.
+func terminalTripleBuilders(loopEntityID string) map[string]func(evidenceIncomplete bool) []message.Triple {
+	now := time.Now()
+	return map[string]func(bool) []message.Triple{
+		"completion": func(evidenceIncomplete bool) []message.Triple {
+			return buildLoopCompletionTriples(loopEntityID, &agentic.LoopCompletedEvent{
+				LoopID: "loop123", Outcome: "success", Iterations: 2, CompletedAt: now,
+			}, "", 0, evidenceIncomplete)
+		},
+		"failure": func(evidenceIncomplete bool) []message.Triple {
+			return buildLoopFailureTriples(loopEntityID, &agentic.LoopFailedEvent{
+				LoopID: "loop123", Outcome: "failed", Reason: "model_error", FailedAt: now,
+			}, "", 0, evidenceIncomplete)
+		},
+		"cancellation": func(evidenceIncomplete bool) []message.Triple {
+			return buildLoopCancellationTriples(loopEntityID, &agentic.LoopCancelledEvent{
+				LoopID: "loop123", Outcome: agentic.OutcomeCancelled, CancelledAt: now,
+			}, evidenceIncomplete)
+		},
+	}
+}
+
+// Spec: "a loop with observed audit loss is machine-readable as incomplete"
+// — on EVERY terminal path, and on the same mutation that carries outcome.
+func TestBuildLoopTerminalTriples_ObservedAuditLossStampsIncomplete(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.loop123"
+
+	for name, build := range terminalTripleBuilders(loopEntityID) {
+		t.Run(name, func(t *testing.T) {
+			triples := build(true)
+
+			var conditions []message.Triple
+			for _, tr := range triples {
+				if tr.Predicate == agvocab.LoopEvidenceIntegrity {
+					conditions = append(conditions, tr)
+				}
+			}
+			if len(conditions) != 1 {
+				t.Fatalf("got %d %s triples, want exactly 1", len(conditions), agvocab.LoopEvidenceIntegrity)
+			}
+			// Literal, not the constant: a silent value change is the
+			// fabrication risk this predicate exists to avoid.
+			if conditions[0].Object != "incomplete" {
+				t.Errorf("object = %v, want %q", conditions[0].Object, "incomplete")
+			}
+			if conditions[0].Subject != loopEntityID {
+				t.Errorf("subject = %q, want the loop execution entity %q", conditions[0].Subject, loopEntityID)
+			}
+
+			// "written on the same mutation that carries agent.loop.outcome,
+			// not a separate write" — one slice reaches writeBatch as one
+			// append request, so co-membership IS the atomicity assertion.
+			if !predicateSet(triples)[agvocab.LoopOutcome] {
+				t.Errorf("condition is not in the triple set carrying %s", agvocab.LoopOutcome)
+			}
+		})
+	}
+}
+
+// Spec: "a loop with no observed audit loss carries no claim" — absence,
+// never a positive completeness assertion.
+func TestBuildLoopTerminalTriples_NoObservedLossCarriesNoClaim(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.loop123"
+
+	for name, build := range terminalTripleBuilders(loopEntityID) {
+		t.Run(name, func(t *testing.T) {
+			triples := build(false)
+
+			for _, tr := range triples {
+				if tr.Predicate == agvocab.LoopEvidenceIntegrity {
+					t.Errorf("unobserved loss stamped %s = %v; absence is the contract",
+						agvocab.LoopEvidenceIntegrity, tr.Object)
+				}
+			}
+		})
+	}
+}
+
+// The framework never writes a completeness claim on ANY path, with or
+// without observed loss. "complete" is the value ADR-084 forbids: the
+// component can only know the failures it saw.
+func TestBuildLoopTerminalTriples_NeverWritesComplete(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.loop123"
+
+	for name, build := range terminalTripleBuilders(loopEntityID) {
+		for _, observed := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/observed=%v", name, observed), func(t *testing.T) {
+				for _, tr := range build(observed) {
+					if tr.Predicate != agvocab.LoopEvidenceIntegrity {
+						continue
+					}
+					if tr.Object == "complete" {
+						t.Errorf("%s = \"complete\" written; the framework never asserts completeness",
+							agvocab.LoopEvidenceIntegrity)
+					}
+				}
+			})
+		}
+	}
+}
+
+// The condition is unqualified: no stage, kind, reason, or attempt rides
+// the triple. Electing one of several failed stages would manufacture a
+// claim about which mattered.
+func TestBuildLoopTerminalTriples_ConditionCarriesNoQualifier(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.loop123"
+	qualifiers := []string{
+		string(trajectoryStageEvidencePut), string(trajectoryStageFactCreate),
+		string(trajectoryReasonBackend), string(trajectoryReasonTimeout),
+		string(agentic.TrajectoryKindLoopTerminal),
+	}
+
+	for name, build := range terminalTripleBuilders(loopEntityID) {
+		t.Run(name, func(t *testing.T) {
+			for _, tr := range build(true) {
+				if tr.Predicate != agvocab.LoopEvidenceIntegrity {
+					continue
+				}
+				object, ok := tr.Object.(string)
+				if !ok {
+					t.Fatalf("object type = %T, want string", tr.Object)
+				}
+				for _, qualifier := range qualifiers {
+					if strings.Contains(object, qualifier) {
+						t.Errorf("condition object %q carries qualifier %q", object, qualifier)
+					}
+				}
+			}
+		})
 	}
 }

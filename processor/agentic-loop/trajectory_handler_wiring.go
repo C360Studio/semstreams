@@ -32,6 +32,19 @@ func appendTrajectoryObservation(result *HandlerResult, observation trajectoryOb
 	result.trajectoryObservations = append(result.trajectoryObservations, observation)
 }
 
+// releaseLoopTransientState releases every per-loop in-memory aggregate the
+// component holds once a loop has no more active execution consumers: the
+// trajectory step aggregate and the observed-audit-loss marker.
+//
+// It is the single terminal-release point so a future terminal path cannot
+// release one and leak the other. Callers defer it (or call it on an early
+// terminal return) AFTER the loop's terminal observation and terminal graph
+// write, both of which read the state this releases. Idempotent.
+func (c *Component) releaseLoopTransientState(loopID string) {
+	c.handler.trajectoryManager.discardTrajectory(loopID)
+	c.trajectoryAuditLoss.release(loopID)
+}
+
 func (c *Component) recordTrajectoryObservations(ctx context.Context, result HandlerResult) {
 	c.recordTrajectoryBatch(ctx, result.trajectoryObservations)
 }
