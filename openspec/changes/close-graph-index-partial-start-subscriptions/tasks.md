@@ -27,5 +27,7 @@
 - [x] 10. Run `openspec validate close-graph-index-partial-start-subscriptions --strict`.
 - [x] 11. Obtain independent SemStreams implementation and recorded-verification approval before integration
       (`FINAL APPROVE`, no findings).
-- [ ] 12. Merge the integrating PR with `Closes #989`; claim only the accepted graph-index partial-Start completion
-      boundary and no adjacent lifecycle, manager, sibling-owner, or adopter work.
+- [x] 12. PR #1040 at the current reviewed implementation is fully CI-green and merge-ready; its `Closes #989`
+      linkage will close the issue atomically on merge. This does not claim that the PR has merged yet or that any
+      adjacent lifecycle, manager, sibling-owner, adopter, LLM, persona, prompt, model, or runtime-agent work is
+      complete.
