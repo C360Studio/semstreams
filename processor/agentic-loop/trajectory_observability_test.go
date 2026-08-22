@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/storage/storeregistry"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
@@ -372,5 +373,107 @@ func TestOnTimeAuditFailureMarksAndReachesEverySink(t *testing.T) {
 	}
 	if health := c.Health(); health.Healthy || health.ErrorCount != 1 {
 		t.Errorf("Health() = %#v, want degraded", health)
+	}
+}
+
+// The POSITIVE converse of the late-report prohibition, and the guard whose
+// absence let "always Late" pass the entire suite.
+//
+// `Late` is load-bearing on the mark, so a prohibition alone is not enough:
+// something must fail when the flag is set where it should not be. The
+// failure that hides behind an unconditional Late is the worst one this
+// change has — an ObjectStore Put rejected at T+10ms, WELL inside the
+// budget. The batch completes, so recordTrajectoryBatchWithin takes
+// <-done with ctx.Err()==nil and returns WITHOUT reporting; the recorder's
+// own emit is the ONLY report of that failure. Flag it Late and the loop's
+// terminal write stamps nothing despite a real, observed, in-budget audit
+// failure — precisely the defect this change exists to prevent, arriving
+// silently.
+//
+// Driven through recordTrajectoryBatchWithin (the production path) rather
+// than reportTrajectoryAuditFailure, because the classification happens in
+// emit and a direct fan-out call cannot see it. Table covers both emit
+// families — evidence capture and immutable fact create — so the guard
+// holds the class, not the one site that motivated it.
+func TestInBudgetAuditFailureMarksItsLoopThroughEmit(t *testing.T) {
+	const loopID = "loop-in-budget"
+
+	tests := []struct {
+		name       string
+		recorder   func(*Component) *trajectoryRecorder
+		evidence   any
+		wantStage  trajectoryAuditStage
+		wantReason trajectoryAuditReason
+	}{
+		{
+			name: "evidence put rejected by the backend",
+			recorder: func(c *Component) *trajectoryRecorder {
+				registry := storeregistry.New()
+				if err := registry.Register("objectstore",
+					&trajectoryTestStore{values: make(map[string][]byte), putErrBefore: true}); err != nil {
+					t.Fatal(err)
+				}
+				return newTrajectoryRecorder(&trajectoryTestBucket{values: make(map[string][]byte)},
+					registry, "objectstore", c.reportTrajectoryAuditFailure)
+			},
+			evidence:   map[string]string{"response": "full"},
+			wantStage:  trajectoryStageEvidencePut,
+			wantReason: trajectoryReasonBackend,
+		},
+		{
+			name: "immutable fact create rejected by the backend",
+			recorder: func(c *Component) *trajectoryRecorder {
+				return newTrajectoryRecorder(
+					&trajectoryTestBucket{values: make(map[string][]byte), createErrBefore: true},
+					nil, "objectstore", c.reportTrajectoryAuditFailure)
+			},
+			wantStage:  trajectoryStageFactCreate,
+			wantReason: trajectoryReasonBackend,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			c := &Component{
+				logger:    slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelError})),
+				metrics:   getMetrics(nil),
+				started:   true,
+				startTime: time.Now(),
+			}
+			c.trajectoryRecorder = tt.recorder(c)
+
+			// A budget far larger than the failure takes: this is the
+			// in-budget path, not the abandoned one.
+			c.recordTrajectoryBatchWithin(context.Background(), []trajectoryObservation{{
+				LoopID: loopID, Kind: agentic.TrajectoryKindModelCompleted,
+				CausalPhase: agentic.TrajectoryPhaseModelResult, Evidence: tt.evidence,
+			}}, 5*time.Second)
+
+			// THE guard: an in-budget failure MUST mark its loop.
+			if !c.trajectoryAuditLoss.observed(loopID) {
+				t.Fatalf("an in-budget %s/%s failure did not mark its loop; the terminal write will "+
+					"stamp nothing and a real observed audit failure becomes invisible",
+					tt.wantStage, tt.wantReason)
+			}
+
+			// The recorder's own emit was the ONLY report — the batch
+			// completed inside the budget, so the timeout branch never fired.
+			// Without this, the assertion above could be satisfied by a
+			// synthetic timeout report instead of the real classification.
+			if health := c.Health(); health.ErrorCount != 1 {
+				t.Errorf("Health().ErrorCount = %d, want exactly 1 (the recorder's own in-budget report)",
+					health.ErrorCount)
+			}
+			line := logs.String()
+			for _, want := range []string{string(tt.wantStage), string(tt.wantReason), "late=false"} {
+				if !strings.Contains(line, want) {
+					t.Errorf("ERROR line missing %q; got: %s", want, line)
+				}
+			}
+			if strings.Contains(line, string(trajectoryReasonTimeout)) {
+				t.Errorf("budget branch fired on the in-budget path; got: %s", line)
+			}
+		})
 	}
 }

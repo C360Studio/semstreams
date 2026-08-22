@@ -175,3 +175,35 @@ AND a note in the spec delta, because `[~]` stops the implementer but not the ar
       structural, not policy — a policy can be revised, a compile-visible guard cannot be evaded.
       Captured in `observeAllLoops`' doc comment, demoting the policy reason to the weaker of the
       two.
+
+## 9. Review round 4 (APPROVE-scoped; one MEDIUM, one NIT)
+
+- [x] 9.1 **MEDIUM — `Late` had a prohibition with no positive guard.** Mutation C4 (unconditional
+      `failure.Late = true` at `trajectory_recorder.go:320-322`) passed the ENTIRE suite, unit and
+      integration. Reproduced independently before fixing: `go test -race -count=1
+      ./processor/agentic-loop/...` all `ok`; `go test -race -count=1 -tags=integration
+      ./processor/agentic-loop/` `ok` in 31.7s. The failure hiding behind it is the worst one this
+      change has — an ObjectStore `Put` rejected at T+10ms, well inside the budget: the batch
+      completes, `recordTrajectoryBatchWithin` takes `<-done` with `ctx.Err()==nil` and returns
+      WITHOUT reporting, so the recorder's own emit is the ONLY report. Flagged Late it skips the
+      mark and the terminal write stamps nothing despite a real, observed, in-budget audit failure.
+      Fixed with `TestInBudgetAuditFailureMarksItsLoopThroughEmit`, driven through
+      `recordTrajectoryBatchWithin` (the classification happens in `emit`; a direct fan-out call
+      cannot see it) and tabled over BOTH emit families — evidence capture and immutable fact
+      create — so the guard holds the class. Extends the existing `trajectoryTestStore` with
+      `putErrBefore` (rejects the write and stores nothing, so lost-reply re-verification does not
+      recover it), mirroring the bucket fake's `createErrBefore`/`createErrAfter` naming.
+- [x] 9.2 Why the suite went blind, recorded so the shape is recognisable: round 3 made `Late`
+      load-bearing on the mark and simultaneously invisible to the tests that had guarded this
+      seam. The recorder tests that caught round-2's blanket drop worked because the report stopped
+      firing at all; after the narrowing the report still fires and only the flag differs, so they
+      pass. `TestOnTimeAuditFailureMarksAndReachesEverySink` calls `reportTrajectoryAuditFailure`
+      directly and so pins the fan-out, never the classification. The house shape applies:
+      MUST NOT needs a POSITIVE guard, and the guard must run through the code that SETS the flag.
+- [x] 9.3 **NIT — eighth stale claim, one layer further out.** `graph_writer.go`'s
+      `appendEvidenceIntegrity` doc and `loopAuditLoss`' type doc both still described the mark as
+      an ungated fourth sibling "fed by the same `trajectoryAuditFailure` value". After round 3 it
+      is the one sink of the four gated on `!Late`. Both now say so, and both state the converse
+      (an in-budget failure is often the only report of itself). `appendEvidenceIntegrity` also now
+      records what absence means precisely: no loss observed IN TIME — still never a completeness
+      claim.

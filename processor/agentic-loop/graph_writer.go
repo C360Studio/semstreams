@@ -558,6 +558,14 @@ func buildModelEndpointTriples(entityID string, ep model.EndpointConfig) []messa
 // failure can ever be observed because nothing is attempted. Nothing here
 // re-derives it from the counter or re-evaluates a predicate.
 //
+// The per-loop scope is not fed by EVERY audit failure: a failure flagged
+// Late — discovered after this loop's terminal write, from an abandoned
+// attempt unwinding past its budget — reaches the log, the counter, and
+// Health, but not the mark, because by then marking could only corrupt a
+// released loop or the next loop reusing its ID. So a condition absent here
+// means no loss was observed IN TIME, which is the strongest claim the
+// framework can make and still never a claim that evidence is complete.
+//
 // The condition rides the caller's slice so it lands on the SAME graph
 // mutation as agent.loop.outcome. The failures most worth reporting
 // (evidence_put, fact_create) happen when the substrate is unhealthy, so a

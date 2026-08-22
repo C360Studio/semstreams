@@ -35,6 +35,16 @@ func (h *trajectoryAuditHealth) snapshot() (int, string) {
 // same trajectoryAuditFailure value, never re-derived from the counter or
 // by re-evaluating any predicate.
 //
+// It is the one sink of the four that is GATED: a failure flagged Late
+// (discovered after the context owning its attempt was done, so after its
+// loop's terminal write) still reaches the other three, because it is real
+// and its stage and reason are new information, but it does not mark. A
+// late mark can only re-mark a loop that already released its state. The
+// converse is equally load-bearing and equally tested: an IN-BUDGET failure
+// is often the ONLY report of itself — recordTrajectoryBatchWithin returns
+// without reporting when its batch completes — so failing to mark one makes
+// a real audit failure invisible.
+//
 // Whole component: when Start determines it cannot record trajectory
 // evidence AT ALL (see observeAllLoops), no loop in the process will ever
 // produce a per-loop failure to observe, because nothing is ever attempted.
