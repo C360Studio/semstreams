@@ -40,11 +40,16 @@ func (cs State) String() string {
 	}
 }
 
-// LifecycleComponent defines components that support full lifecycle management
-// following the unified Pattern A:
-//   - Initialize() error                     // Setup/create only, NO context
-//   - Start(ctx context.Context) error      // Start with context passed through
-//   - Stop(ctx context.Context) error       // Cancel Start lifetime, then bound join/cleanup
+// LifecycleComponent defines the portable lifecycle contract for components.
+// Initialize performs setup without runtime authority. Start accepts the context
+// that owns continuing work. Stop uses its exact caller context to bound the
+// component's terminal admission fence, cancellation, join, and cleanup; the
+// resource owner determines that sequence's protocol-specific ordering.
+//
+// Nil Start and Stop contexts are rejected before action. A completed repeated
+// Stop is a no-op. Concurrent lifecycle calls, result replay, later rejoin after
+// a Stop bound wins, reinitialization, and same-instance restart are not portable
+// guarantees.
 type LifecycleComponent interface {
 	Discoverable
 	Initialize() error
