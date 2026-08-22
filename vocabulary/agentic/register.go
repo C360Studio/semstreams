@@ -444,7 +444,7 @@ func registerLoopPredicates() {
 	// able to branch on (decline to cite a loop whose audit trail is not
 	// there), not LLM-authored prose. Absence is not a completeness claim.
 	vocabulary.Register(LoopEvidenceIntegrity,
-		vocabulary.WithDescription("Observed trajectory audit loss for this loop (incomplete); absent when no loss was observed, which is not a claim that evidence is complete"),
+		vocabulary.WithDescription("Observed trajectory audit loss for this loop (incomplete), whether observed while recording this loop or determined at startup for every loop; absent when no loss was observed, which is not a claim that evidence is complete"),
 		vocabulary.WithDataType("string"))
 
 	vocabulary.Register(LoopRole,

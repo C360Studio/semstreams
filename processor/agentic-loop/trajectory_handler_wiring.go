@@ -40,6 +40,15 @@ func appendTrajectoryObservation(result *HandlerResult, observation trajectoryOb
 // release one and leak the other. Callers defer it (or call it on an early
 // terminal return) AFTER the loop's terminal observation and terminal graph
 // write, both of which read the state this releases. Idempotent.
+//
+// HandleTask's own rollback (handlers.go:854-858) still discards only the
+// trajectory, and correctly so: MessageHandler holds no *Component and no
+// trajectoryRecorder, so reportTrajectoryAuditFailure is unreachable from
+// inside HandleTask, and the loop ID it rolls back was created a few lines
+// earlier (handlers.go:834/:839). There is no audit-loss marker for it to
+// release. Note the deferred discard IS live on every error return in
+// HandleTask — it is unreachability of the reporter, not deadness of the
+// branch, that makes trajectory-only release correct there.
 func (c *Component) releaseLoopTransientState(loopID string) {
 	c.handler.trajectoryManager.discardTrajectory(loopID)
 	c.trajectoryAuditLoss.release(loopID)

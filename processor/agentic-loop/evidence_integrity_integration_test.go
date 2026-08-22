@@ -16,6 +16,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/types"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
 )
 
@@ -230,4 +231,66 @@ func TestTerminalStampOmitsConditionWithoutObservedLoss_Integration(t *testing.T
 	outcome, withCondition, _ := collector.outcomeRequests()
 	require.Equal(t, 1, outcome, "expected exactly one terminal append carrying agent.loop.outcome")
 	require.Zero(t, withCondition, "clean loop was stamped with an audit-loss condition")
+}
+
+// Total evidence loss is the severest form of the state this predicate
+// exists to make readable, and it is the one form that produces NO per-loop
+// audit failure: when Start finds the trajectory fact bucket unusable it
+// leaves the component with no recorder, so nothing is ever attempted and
+// nothing can fail per loop. The Start-time report carries no loop ID and
+// cannot mark anything either.
+//
+// Without the component-wide latch, a process in which not one trajectory
+// fact is recorded for any loop emits a graph byte-identical to a perfectly
+// healthy one. This drives the real Start path against real NATS holding a
+// bucket that violates the AGENT_TRAJECTORIES contract.
+func TestStartWithoutUsableTrajectoryBucketMarksEveryLoop_Integration(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithKV())
+	ctx := context.Background()
+	collector := &appendCollector{}
+	collector.subscribe(t, ctx, tc.Client)
+
+	// Retained state that violates the contract: history must be 1.
+	js, err := tc.Client.JetStream()
+	require.NoError(t, err)
+	_, err = js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket:  agentic.TrajectoryBucketName,
+		History: 5,
+	})
+	require.NoError(t, err)
+
+	c := newStampTestComponent(t, tc.Client, DefaultConfig())
+	c.natsClient = tc.Client
+
+	// Start must NOT fail on unusable audit state — that contract is
+	// unchanged, and it is exactly why the condition is needed.
+	require.NoError(t, c.initializeKVBuckets(ctx))
+	require.Nil(t, c.trajectoryRecorder, "incompatible bucket should leave no recorder")
+
+	// No loop has been seen, and none ever will produce a failure.
+	require.True(t, c.trajectoryAuditLoss.observed("loop-never-seen"),
+		"component-wide loss does not cover loops the marker has never seen")
+
+	const loopID = "loop-total-loss"
+	_, err = c.handler.trajectoryManager.startTrajectory(loopID)
+	require.NoError(t, err)
+
+	c.persistHandlerResult(ctx, HandlerResult{
+		LoopID: loopID,
+		State:  agentic.LoopStateComplete,
+		CompletionState: &agentic.LoopCompletedEvent{
+			LoopID: loopID, Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now(),
+		},
+	})
+
+	outcome, withCondition, values := collector.outcomeRequests()
+	require.Equal(t, 1, outcome, "expected exactly one terminal append carrying agent.loop.outcome")
+	require.Equal(t, 1, withCondition,
+		"a loop in a process that records no trajectory evidence at all was stamped as if healthy")
+	require.Equal(t, []any{"incomplete"}, values)
+
+	// The latch is not per-loop state: the loop's terminal release must not
+	// clear it for the loops that follow.
+	require.True(t, c.trajectoryAuditLoss.observed("loop-after-terminal"),
+		"a loop terminal cleared the component-wide latch")
 }

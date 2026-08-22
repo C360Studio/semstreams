@@ -799,6 +799,13 @@ func (c *Component) initializeKVBuckets(ctx context.Context) error {
 	} else {
 		c.trajectoryRecorder = nil
 		c.trajectoryReader = nil
+		// No recorder means nothing is ever attempted, so no loop can
+		// produce a per-loop audit failure to observe — while every loop's
+		// evidence is in fact missing. Latch the loss for every loop this
+		// process will terminate, or total evidence loss would emit a graph
+		// byte-identical to a healthy one. The report below carries no
+		// LoopID and cannot do this job.
+		c.trajectoryAuditLoss.observeAllLoops()
 	}
 	if trajectoryErr != nil {
 		c.reportTrajectoryAuditFailure(trajectoryAuditFailure{
@@ -1615,14 +1622,15 @@ func (c *Component) stampLoopCompletionWithBudget(ctx context.Context, loopID st
 	if c.graphWriter == nil {
 		return
 	}
-	// Read the observed-audit-loss marker HERE, on the component that owns
-	// it, and hand the writer the answer. The marker was set by
-	// reportTrajectoryAuditFailure from the same failure value that fed the
-	// Health latch, the metric, and the log; nothing re-derives it from the
-	// counter. Every terminal observation for this loop has already been
+	// Read the observed-audit-loss answer HERE, on the component that owns
+	// it, and hand the writer the result. loopAuditLoss answers for both
+	// scopes at once — this loop's own observed failures, and the
+	// component-wide latch for a process that cannot record evidence at all
+	// — so this seam cannot honour half the fact. Nothing re-derives it from
+	// the counter. Every terminal observation for this loop has already been
 	// recorded (recordHandlerResultTrajectory returns only after its batch
-	// goroutine joins or its budget expires and reports), so the answer is
-	// final by the time the stamp is built.
+	// goroutine joins or its budget expires and reports synchronously), so
+	// the answer is final by the time the stamp is built.
 	evidenceIncomplete := c.trajectoryAuditLoss.observed(loopID)
 	timedOut := runWithBudget(ctx, graphWritePublishBudget, func(bctx context.Context) {
 		c.graphWriter.WriteLoopCompletion(bctx, completion, evidenceIncomplete)

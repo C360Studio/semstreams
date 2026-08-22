@@ -53,15 +53,27 @@ and source ACK SHALL proceed with their original work result.
 
 ### Requirement: Observed audit loss MUST be readable from the loop entity as a classified condition
 
-A loop for which at least one trajectory audit failure was observed SHALL carry
-`agent.loop.evidence-integrity` with the value `incomplete` on its loop execution entity, stamped on the same terminal
-graph write that carries `agent.loop.outcome`. The predicate SHALL be absent on every other loop, and its absence SHALL
-mean only that no audit loss was observed — never that evidence is complete. The predicate SHALL NOT carry a stage,
-kind, reason, attempt, or any reconstruction of the lost evidence; those remain in the `ERROR` log and the bounded
-counter.
+A loop for which audit loss was observed SHALL carry `agent.loop.evidence-integrity` with the value `incomplete` on its
+loop execution entity, stamped on the same terminal graph write that carries `agent.loop.outcome`. Audit loss counts as
+observed for a loop when at least one trajectory audit failure was observed while recording that loop's evidence, OR
+when the component determined at startup that it cannot record trajectory evidence at all. The predicate SHALL be
+absent on every other loop, and its absence SHALL mean only that no audit loss was observed — never that evidence is
+complete. The predicate SHALL NOT carry a stage, kind, reason, attempt, or any reconstruction of the lost evidence;
+those remain in the `ERROR` log and the bounded counter.
+
+A component that cannot record trajectory evidence at all produces no per-loop failure to observe, because nothing is
+attempted, and its startup failure report has no loop subject. Such a component SHALL stamp the condition on every loop
+it terminates. Without this, the most complete evidence loss the component can suffer would be the one state
+indistinguishable from a healthy one.
 
 The condition SHALL be derived from the same observed failure value that already feeds the Health latch, the metric,
-and the log, and SHALL NOT be derived by re-evaluating any predicate or by reading the counter.
+and the log, or from the component's own startup determination that recording is unavailable, and SHALL NOT be derived
+by re-evaluating any predicate or by reading the counter.
+
+An observation SHALL NOT mark a loop after that loop's terminal write. A late report from an abandoned audit attempt
+SHALL NOT re-mark a released loop, so per-loop marking cannot outlive the loop and a later loop reusing the same loop
+ID never inherits another loop's condition. Suppressing such a late report loses nothing, because the component already
+reported that loss on the path that abandoned the attempt, in time for the terminal write.
 
 #### Scenario: a loop with observed audit loss is machine-readable as incomplete
 
@@ -83,6 +95,22 @@ and the log, and SHALL NOT be derived by re-evaluating any predicate or by readi
 - **WHEN** the loop reaches its terminal graph write
 - **THEN** exactly one `agent.loop.evidence-integrity` triple with value `incomplete` is written
 - **AND** no stage or reason is elected onto the triple
+
+#### Scenario: a component that records no trajectory evidence marks every loop
+
+- **GIVEN** agentic-loop determines at startup that the trajectory fact bucket is unusable and starts with no recorder
+- **WHEN** any loop in that process reaches its terminal graph write
+- **THEN** that loop's execution entity carries `agent.loop.evidence-integrity` with value `incomplete`
+- **AND** this holds for loops for which no per-loop audit failure was ever reported, because none is ever attempted
+- **AND** no loop in that process is stamped as though its evidence were intact
+
+#### Scenario: a late report from an abandoned audit attempt does not re-mark a released loop
+
+- **GIVEN** an audit attempt is abandoned when its framework budget expires, and the loss is reported on that path
+- **WHEN** the abandoned attempt later reaches its own failure report, after the loop reached its terminal write
+- **THEN** the late report does not mark the loop again
+- **AND** the loop's condition remains the one derived before its terminal write
+- **AND** a later loop reusing the same loop ID does not inherit the earlier loop's condition
 
 #### Scenario: a failed condition write does not fail agent work
 

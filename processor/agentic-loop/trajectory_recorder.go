@@ -178,17 +178,17 @@ func (r *trajectoryRecorder) record(ctx context.Context, observation trajectoryO
 
 	key, err := agentic.TrajectoryFactKey(observation.LoopID, attempt.ID)
 	if err != nil {
-		r.fail(observation, attempt.ID, trajectoryStageFactEncode, trajectoryReasonEncode, err)
+		r.fail(ctx, observation, attempt.ID, trajectoryStageFactEncode, trajectoryReasonEncode, err)
 		return trajectoryRecordResult{Fact: fact}
 	}
 	encoded, err := fact.CanonicalBytes()
 	if err != nil {
-		r.fail(observation, attempt.ID, trajectoryStageFactEncode, trajectoryReasonEncode, err)
+		r.fail(ctx, observation, attempt.ID, trajectoryStageFactEncode, trajectoryReasonEncode, err)
 		return trajectoryRecordResult{Key: key, Fact: fact}
 	}
 	result := trajectoryRecordResult{Key: key, Bytes: encoded, Fact: fact}
 	if r.bucket == nil {
-		r.fail(observation, attempt.ID, trajectoryStageFactCreate, trajectoryReasonProviderUnavailable,
+		r.fail(ctx, observation, attempt.ID, trajectoryStageFactCreate, trajectoryReasonProviderUnavailable,
 			fmt.Errorf("trajectory fact bucket unavailable"))
 		return result
 	}
@@ -210,7 +210,7 @@ func (r *trajectoryRecorder) record(ctx context.Context, observation trajectoryO
 		return result
 	}
 	if getErr == nil {
-		r.fail(observation, attempt.ID, trajectoryStageFactVerify, trajectoryReasonIntegrity,
+		r.fail(ctx, observation, attempt.ID, trajectoryStageFactVerify, trajectoryReasonIntegrity,
 			fmt.Errorf("immutable fact key contains different canonical bytes"))
 		return result
 	}
@@ -218,7 +218,7 @@ func (r *trajectoryRecorder) record(ctx context.Context, observation trajectoryO
 	if errors.Is(createErr, jetstream.ErrKeyExists) {
 		stage = trajectoryStageFactVerify
 	}
-	r.fail(observation, attempt.ID, stage, trajectoryReasonBackend,
+	r.fail(ctx, observation, attempt.ID, stage, trajectoryReasonBackend,
 		fmt.Errorf("create failed: %v; verification failed: %w", createErr, getErr))
 	return result
 }
@@ -231,7 +231,7 @@ func (r *trajectoryRecorder) allocateAttempt(ctx context.Context, loopID string,
 	if !state.initialized {
 		maxOrdinal, err := maximumVisibleAttemptOrdinal(ctx, r.bucket, loopID)
 		if err != nil {
-			r.emit(trajectoryAuditFailure{
+			r.emit(ctx, trajectoryAuditFailure{
 				Stage: trajectoryStageFactVerify, Kind: kind, Reason: trajectoryReasonBackend,
 				LoopID: loopID, AttemptID: attempt.ID, Err: fmt.Errorf("initialize attempt ordinal: %w", err),
 			})
@@ -267,14 +267,38 @@ func (r *trajectoryRecorder) acquireLoopBatch(ctx context.Context, loopID string
 	}
 }
 
-func (r *trajectoryRecorder) fail(observation trajectoryObservation, attemptID string, stage trajectoryAuditStage, reason trajectoryAuditReason, err error) {
-	r.emit(trajectoryAuditFailure{
+func (r *trajectoryRecorder) fail(ctx context.Context, observation trajectoryObservation, attemptID string, stage trajectoryAuditStage, reason trajectoryAuditReason, err error) {
+	r.emit(ctx, trajectoryAuditFailure{
 		Stage: stage, Kind: observation.Kind, Reason: reason,
 		LoopID: observation.LoopID, AttemptID: attemptID, Err: err,
 	})
 }
 
-func (r *trajectoryRecorder) emit(failure trajectoryAuditFailure) {
+// emit reports one observed audit failure to the component's fan-out, and
+// drops it when the context that owns this recording attempt is already
+// done.
+//
+// The drop completes a discipline this file already applies at every other
+// checkpoint in record (:133, :174, :196, :204 return without emitting once
+// ctx is done); these emit sites were the gaps in it. It closes the class,
+// not three instances: the only production caller of record is
+// recordTrajectoryBatchWithin, which abandons its goroutine ONLY after
+// ctx.Done fires and ALWAYS reports the loss synchronously on that same
+// path before returning. So every emit an abandoned goroutine could still
+// make is a duplicate of a loss already reported — and reported in time to
+// reach the terminal graph write, which the late one is not.
+//
+// Without the drop, an abandoned attempt unwinding after the loop's
+// terminal release re-inserts that loop's marker with nothing left to free
+// it, and a later loop reusing the same loop ID (deterministic product-
+// supplied IDs; CreateLoopWithID overwrites) inherits a condition that is
+// not its own — violating "absent on every other loop".
+//
+// A healthy attempt is unaffected: ctx.Err() is nil for its whole life.
+func (r *trajectoryRecorder) emit(ctx context.Context, failure trajectoryAuditFailure) {
+	if ctx.Err() != nil {
+		return
+	}
 	if r.report != nil {
 		r.report(failure)
 	}

@@ -53,8 +53,12 @@ it.
 
 ## What Changes
 
-- **`agent.loop.evidence-integrity`**, a new predicate stamped on the loop execution entity when a
-  trajectory audit failure was observed for that loop.
+- **`agent.loop.evidence-integrity`**, a new predicate stamped on the loop execution entity when the
+  component observed that the loop's evidence is not there — either a trajectory audit failure
+  observed while recording that loop, or a startup determination that it cannot record trajectory
+  evidence at all, which marks every loop in the process. The second scope is not an extra: it is
+  the severest loss and the only one that produces no per-loop failure to observe, so without it
+  total evidence loss would be the one state indistinguishable from a healthy one.
 - **Stamped only on incompleteness; absent otherwise** — mirroring `agent.loop.terminal-reason`
   ("Stamped only on failure; absent on success"). This is the load-bearing design decision: the
   framework never asserts evidence is *complete*, because it can only observe failures it saw. An

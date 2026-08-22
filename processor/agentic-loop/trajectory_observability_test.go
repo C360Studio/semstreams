@@ -1,6 +1,7 @@
 package agenticloop
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 func TestTrajectoryAuditFailureLatchesDegradedHealth(t *testing.T) {
@@ -123,5 +125,137 @@ func TestLoopAuditLossReleaseIsIdempotent(t *testing.T) {
 
 	if loss.observed("loop-release") {
 		t.Error("marker survived release")
+	}
+}
+
+// A component that determines at Start it cannot record trajectory
+// evidence at all will never observe a per-loop failure, because nothing is
+// ever attempted. The component-wide latch is what keeps that case from
+// emitting a graph byte-identical to a healthy one — it answers for loops
+// the marker has never seen, including ones that do not exist yet.
+func TestLoopAuditLossAllLoopsCoversUnseenLoops(t *testing.T) {
+	var loss loopAuditLoss
+
+	if loss.observed("loop-a") {
+		t.Fatal("clean loss set reported an observation")
+	}
+
+	loss.observeAllLoops()
+
+	for _, loopID := range []string{"loop-a", "loop-never-seen", "loop-not-yet-created"} {
+		if !loss.observed(loopID) {
+			t.Errorf("component-wide loss did not cover %q", loopID)
+		}
+	}
+}
+
+// Releasing a loop clears that loop's marker and nothing else. The
+// component-wide latch is not a per-loop fact, and the condition it records
+// is never repaired in-process, so a terminal must not be able to clear it
+// for the loops that follow.
+func TestLoopAuditLossReleaseDoesNotClearAllLoops(t *testing.T) {
+	var loss loopAuditLoss
+
+	loss.observeAllLoops()
+	loss.observe("loop-a")
+	loss.release("loop-a")
+
+	if !loss.observed("loop-a") {
+		t.Error("release cleared the component-wide latch for the released loop")
+	}
+	if !loss.observed("loop-b") {
+		t.Error("release cleared the component-wide latch for a later loop")
+	}
+}
+
+// orphanUnwindBucket blocks the recorder's restart scan until the batch
+// budget expires, then holds the ABANDONED goroutine inside the scan until
+// the test releases it. That makes the orphan's own emit attempt land
+// strictly after the loop's terminal release instead of racing it, which is
+// what turns this from a flaky repro into a proof.
+type orphanUnwindBucket struct {
+	entered chan struct{}
+	unwind  chan struct{}
+}
+
+func (b *orphanUnwindBucket) Create(context.Context, string, []byte, ...jetstream.KVCreateOpt) (uint64, error) {
+	return 0, errors.New("orphanUnwindBucket: Create not reached")
+}
+
+func (b *orphanUnwindBucket) Get(context.Context, string) (jetstream.KeyValueEntry, error) {
+	return nil, errors.New("orphanUnwindBucket: Get not reached")
+}
+
+func (b *orphanUnwindBucket) ListKeysFiltered(ctx context.Context, _ ...string) (jetstream.KeyLister, error) {
+	select {
+	case b.entered <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	<-b.unwind
+	return nil, ctx.Err()
+}
+
+// recordTrajectoryBatchWithin abandons its goroutine when the budget
+// expires. If that goroutine can still reach the fan-out afterwards, it
+// re-inserts the loop's marker AFTER the loop's only release point has run:
+// the marker then leaks for the process lifetime, and a later loop reusing
+// the same loop ID (deterministic product-supplied IDs — CreateLoopWithID
+// overwrites rather than rejects) inherits an `incomplete` that is not its
+// own, breaking "absent on every other loop".
+//
+// The loss itself is not lost by suppressing the orphan: the budget branch
+// already reported it synchronously, in time to reach the terminal write,
+// which the late report is not.
+func TestOrphanedAuditAttemptDoesNotRemarkReleasedLoop(t *testing.T) {
+	const loopID = "loop-orphan"
+	bucket := &orphanUnwindBucket{entered: make(chan struct{}, 1), unwind: make(chan struct{})}
+	c := &Component{
+		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		handler:   NewMessageHandler(DefaultConfig()),
+		metrics:   getMetrics(nil),
+		started:   true,
+		startTime: time.Now(),
+	}
+	c.trajectoryRecorder = newTrajectoryRecorder(bucket, nil, "objectstore", c.reportTrajectoryAuditFailure)
+
+	c.recordTrajectoryBatchWithin(context.Background(), []trajectoryObservation{{
+		LoopID: loopID, Kind: agentic.TrajectoryKindLoopTerminal, CausalPhase: agentic.TrajectoryPhaseTerminal,
+	}}, 25*time.Millisecond)
+
+	// The budget branch observed the loss on the caller's goroutine, before
+	// the terminal write. This is the observation the condition is built from.
+	if !c.trajectoryAuditLoss.observed(loopID) {
+		t.Fatal("budget-expiry report did not mark the loop")
+	}
+	select {
+	case <-bucket.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("restart scan never entered; the goroutine was never abandoned")
+	}
+
+	// Terminal: the loop is stamped, then its transient state is released.
+	c.releaseLoopTransientState(loopID)
+	if c.trajectoryAuditLoss.observed(loopID) {
+		t.Fatal("release did not clear the marker")
+	}
+
+	// Only now let the abandoned goroutine unwind and attempt its own report.
+	close(bucket.unwind)
+
+	// Fence: the goroutine returns the loop's batch token from a defer that
+	// runs strictly AFTER its emit attempt, so acquiring that token is a
+	// happens-after for the whole orphan — no sleep, no polling.
+	fenceCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	release, acquired := c.trajectoryRecorder.acquireLoopBatch(fenceCtx, loopID)
+	if !acquired {
+		t.Fatal("abandoned goroutine never released the loop batch token")
+	}
+	release()
+
+	if c.trajectoryAuditLoss.observed(loopID) {
+		t.Fatal("an abandoned audit attempt re-marked a released loop: the marker now leaks for the " +
+			"process lifetime and a later loop reusing this ID inherits a false incomplete")
 	}
 }

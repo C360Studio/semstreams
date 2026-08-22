@@ -26,7 +26,10 @@ AND a note in the spec delta, because `[~]` stops the implementer but not the ar
       (spec: derived from the same observed failure value). Cross-check against the defect in
       gh#1033 for the shape to avoid.
 - [x] 2.3 Bound the marker's lifetime to the loop. It must not leak across loops or grow without
-      limit in a long-running process; clear it when the loop reaches terminal.
+      limit in a long-running process; clear it when the loop reaches terminal. Enforced, not just
+      asserted (review round 2, Finding B): `releaseLoopTransientState` clears it at every terminal,
+      AND the recorder's `emit` chokepoint now drops reports issued on a done context, so an
+      abandoned audit attempt cannot re-insert a marker after that release. See 7.2.
 
 ## 3. Terminal write
 
@@ -84,6 +87,41 @@ AND a note in the spec delta, because `[~]` stops the implementer but not the ar
       `processor/rule/actions.go:46` (`reconcile_predicates`), both arity violations present at the
       base commit `7b6ff1e1`. `task predicate:audit` is not a CI gate (`.github/workflows/ci.yml`
       runs vet/fmt/revive/port-guard/request-guard, tests, build, schema); left as found.
+
+## 7. Review round 2 (APPROVE with two MEDIUM findings)
+
+- [x] 7.1 **Finding A — total evidence loss produced no condition on any loop.** When Start finds
+      the trajectory fact bucket unusable it nils the recorder (`component.go:785-800`); the
+      Start-time report carries no `LoopID`, `trajectoryProviderAvailable()` returns `true` while
+      the recorder is nil, and `recordTrajectoryBatchWithin` returns before any per-loop report. A
+      process recording NOT ONE trajectory fact emitted a graph byte-identical to a healthy one —
+      verbatim the state the proposal opens by naming. Fixed with a component-wide latch on
+      `loopAuditLoss` (`observeAllLoops`), set at the single site that nils the recorder and
+      consulted through the SAME `observed()` reader, so no stamp site can honour half the fact.
+      One bool, set at most once, never released, no map growth.
+- [x] 7.2 **Finding B — an abandoned audit attempt could re-mark a released loop.**
+      `recordTrajectoryBatchWithin` abandons its goroutine on budget expiry; three emit paths were
+      not `ctx.Err()`-guarded. Fixed at the recorder's single `emit` chokepoint (ctx threaded
+      through `fail` and `evidenceFailure`) rather than at the three instances, which closes the
+      class: EVERY emit an abandoned attempt could make is now dropped. This completes a discipline
+      the file already applies at `record`'s other checkpoints (`:133`, `:174`, `:196`, `:204`
+      return without emitting once ctx is done) — those emit sites were the gaps in it. Nothing is
+      lost: the budget branch already reports the loss synchronously, in time for the terminal
+      write, which the late report is not.
+- [x] 7.3 Spec delta widened for both findings — the ADDED requirement now covers the startup
+      determination as observed loss and states the release-wins rule, with a scenario for each.
+      Recorded in the DELTA, not as a `[~]` note, because `[~]` stops the implementer and not the
+      archiver.
+- [x] 7.4 Corrected the recorded justification for the handler's own discard site. The prior reason
+      ("`startTrajectory` never errors so the branch is dead") described `handlers.go:849-852`, a
+      different branch; the deferred discard at `:854-858` is LIVE on every error return in
+      `HandleTask`. The correct reason — `MessageHandler` holds no `*Component` and no
+      `trajectoryRecorder`, so `reportTrajectoryAuditFailure` is unreachable from inside
+      `HandleTask` and the loop ID is created a few lines earlier — now lives in the
+      `releaseLoopTransientState` doc comment where a future reader will look.
+- [x] 7.5 Correction-propagation sweep: the widened semantics invalidated the narrower claim in the
+      predicate doc comment, the registry description, `appendEvidenceIntegrity`'s doc, the
+      component stamp comment, and the proposal's What Changes bullet. All five re-synced.
 
 ## 6. Not in scope (recorded so the archiver does not infer completion)
 

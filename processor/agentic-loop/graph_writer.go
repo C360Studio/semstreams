@@ -547,13 +547,16 @@ func buildModelEndpointTriples(entityID string, ep model.EndpointConfig) []messa
 }
 
 // appendEvidenceIntegrity stamps the observed-audit-loss condition onto a
-// terminal triple set when, and only when, the component observed at least
-// one trajectory audit failure for this loop.
+// terminal triple set when, and only when, the component observed that this
+// loop's evidence is not there.
 //
-// evidenceIncomplete arrives from the component's per-loop marker, which
-// reportTrajectoryAuditFailure sets from the same trajectoryAuditFailure
-// value that feeds the Health latch, the metric, and the ERROR log. Nothing
-// here re-derives it from the counter or re-evaluates a predicate.
+// evidenceIncomplete arrives from the component's loopAuditLoss, which
+// answers at two scopes: per loop, set by reportTrajectoryAuditFailure from
+// the same trajectoryAuditFailure value that feeds the Health latch, the
+// metric, and the ERROR log; and component-wide, latched by the Start path
+// that finds it cannot record trajectory evidence at all, where no per-loop
+// failure can ever be observed because nothing is attempted. Nothing here
+// re-derives it from the counter or re-evaluates a predicate.
 //
 // The condition rides the caller's slice so it lands on the SAME graph
 // mutation as agent.loop.outcome. The failures most worth reporting
