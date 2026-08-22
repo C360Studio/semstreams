@@ -28,8 +28,9 @@ AND a note in the spec delta, because `[~]` stops the implementer but not the ar
 - [x] 2.3 Bound the marker's lifetime to the loop. It must not leak across loops or grow without
       limit in a long-running process; clear it when the loop reaches terminal. Enforced, not just
       asserted (review round 2, Finding B): `releaseLoopTransientState` clears it at every terminal,
-      AND the recorder's `emit` chokepoint now drops reports issued on a done context, so an
-      abandoned audit attempt cannot re-insert a marker after that release. See 7.2.
+      AND the recorder's `emit` chokepoint flags reports issued on a done context as `Late`, which
+      `reportTrajectoryAuditFailure` honours by skipping the MARK only, so an abandoned audit
+      attempt cannot re-insert a marker after that release. See 7.2 and 8.1.
 
 ## 3. Terminal write
 
@@ -88,6 +89,20 @@ AND a note in the spec delta, because `[~]` stops the implementer but not the ar
       base commit `7b6ff1e1`. `task predicate:audit` is not a CI gate (`.github/workflows/ci.yml`
       runs vet/fmt/revive/port-guard/request-guard, tests, build, schema); left as found.
 
+## 6. Not in scope (recorded so the archiver does not infer completion)
+
+- [~] 6.1 The other three candidate agentic-loop conditions — input fidelity, graph visibility,
+      governance coverage. Deliberately deferred; this change proves the pattern on one.
+- [~] 6.2 Any governance condition. BLOCKED: `Message`/`Violation`
+      (`processor/agentic-governance/filter.go:37-58`, `violation.go:18`) carry no entity or loop
+      ID and the package has zero `Graphable` implementations, so there is no addressable subject.
+- [~] 6.3 A general reportable-conditions capability spec or ADR. Gated on a product naming a
+      condition it will branch on — writing the contract before a consumer exists is the shape that
+      produced `COMPONENT_CAPABILITIES`, retired at `8dfb0d7c`.
+- [~] 6.4 A closed-value-set declaration on `PredicateMetadata` (`vocabulary/predicates.go:351-366`
+      has free-text `Range` only). Real gap, but a framework-wide surface change that should not
+      ride this change.
+
 ## 7. Review round 2 (APPROVE with two MEDIUM findings)
 
 - [x] 7.1 **Finding A — total evidence loss produced no condition on any loop.** When Start finds
@@ -103,11 +118,13 @@ AND a note in the spec delta, because `[~]` stops the implementer but not the ar
       `recordTrajectoryBatchWithin` abandons its goroutine on budget expiry; three emit paths were
       not `ctx.Err()`-guarded. Fixed at the recorder's single `emit` chokepoint (ctx threaded
       through `fail` and `evidenceFailure`) rather than at the three instances, which closes the
-      class: EVERY emit an abandoned attempt could make is now dropped. This completes a discipline
-      the file already applies at `record`'s other checkpoints (`:133`, `:174`, `:196`, `:204`
-      return without emitting once ctx is done) — those emit sites were the gaps in it. Nothing is
-      lost: the budget branch already reports the loss synchronously, in time for the terminal
-      write, which the late report is not.
+      class: EVERY emit an abandoned attempt could make is classified, not just the three that
+      motivated the finding. SUPERSEDED IN PART by 8.1 — round 2 suppressed the whole report at this
+      chokepoint, which also swallowed the ERROR line, the counter increment, and the Health latch.
+      Round 3 narrowed it to the mark alone. The surviving claim is the one that matters: the budget
+      branch already reports the LOSS synchronously, in time for the terminal write, which the late
+      report is not — so the late MARK adds nothing and can only do harm. It does NOT follow that
+      the late report adds nothing; its classification is new information (see 8.2).
 - [x] 7.3 Spec delta widened for both findings — the ADDED requirement now covers the startup
       determination as observed loss and states the release-wins rule, with a scenario for each.
       Recorded in the DELTA, not as a `[~]` note, because `[~]` stops the implementer and not the
@@ -123,16 +140,38 @@ AND a note in the spec delta, because `[~]` stops the implementer but not the ar
       predicate doc comment, the registry description, `appendEvidenceIntegrity`'s doc, the
       component stamp comment, and the proposal's What Changes bullet. All five re-synced.
 
-## 6. Not in scope (recorded so the archiver does not infer completion)
+## 8. Review round 3 (APPROVE; one MEDIUM ruled, two LOW, one NIT)
 
-- [~] 6.1 The other three candidate agentic-loop conditions — input fidelity, graph visibility,
-      governance coverage. Deliberately deferred; this change proves the pattern on one.
-- [~] 6.2 Any governance condition. BLOCKED: `Message`/`Violation`
-      (`processor/agentic-governance/filter.go:37-58`, `violation.go:18`) carry no entity or loop
-      ID and the package has zero `Graphable` implementations, so there is no addressable subject.
-- [~] 6.3 A general reportable-conditions capability spec or ADR. Gated on a product naming a
-      condition it will branch on — writing the contract before a consumer exists is the shape that
-      produced `COMPONENT_CAPABILITIES`, retired at `8dfb0d7c`.
-- [~] 6.4 A closed-value-set declaration on `PredicateMetadata` (`vocabulary/predicates.go:351-366`
-      has free-text `Range` only). Real gap, but a framework-wide surface change that should not
-      ride this change.
+- [x] 8.1 **MEDIUM — the round-2 drop was too wide; narrowed to the marker sink.** `emit` returned
+      before `r.report`, so a late discovery lost its ERROR line, its `{stage,kind,reason}`
+      increment, AND its Health latch — not just its marker. The MODIFIED requirement's unamended
+      opening sentence ("Every trajectory audit failure SHALL emit `ERROR` ... increment ... and
+      latch") was therefore literally false. Owner ruled AGAINST the cheaper spec amendment: a late
+      ERROR, counter increment, and Health latch are all still TRUE; only the MARK is wrong when
+      late, because only it can re-mark a released loop. Implemented with `Late bool` on
+      `trajectoryAuditFailure`, set at the `emit` chokepoint and honoured by
+      `reportTrajectoryAuditFailure`, which now skips ONLY
+      `c.trajectoryAuditLoss.observe(...)`. Concrete case this restores: a `store.Put` backend
+      error at T+240ms is reported as `evidence_put/backend_error` instead of being replaced by the
+      synthetic `fact_create/timeout`, so a payload-size rejection is not diagnosed as latency. No
+      spec amendment was needed — the ADDED requirement only ever forbade MARKING.
+- [x] 8.2 Corrected the doc overstatement that made the wide drop look safe. A late report
+      duplicates the LOSS; it never duplicated the CLASSIFICATION. `emit`'s doc now says so
+      explicitly, which is the sentence that keeps the narrowing from being "simplified" back.
+- [x] 8.3 **LOW — sixth stale claim, the one Finding A refuted.**
+      `TestTrajectoryAuditFailureWithoutLoopIDMarksNothing`'s comment still asserted that bucket
+      acquisition failure "belongs to the other three sinks: there is no entity to stamp". Post-fix
+      it marks every loop via `observeAllLoops`. Re-scoped the comment to the case the test body
+      actually exercises (`provider_resolve` with a recorder present) and pointed at the
+      integration test that proves the other one. The one-directional correction loop caught in the
+      act: the type doc got the right framing in round 2 and this did not inherit it.
+- [x] 8.4 **LOW — seventh stale claim.** `proposal.md` Impact still said "(per-loop latch, terminal
+      write)"; re-synced to name the component-wide latch and the `Late` threading.
+- [x] 8.5 **NIT** — section order fixed: deliberate not-dones (6) now precede the review-round
+      records, so an archiver reading top-to-bottom hits them first.
+- [x] 8.6 Recorded the STRONGER reason the one-way latch is sound, supplied by the re-review:
+      `Start` is one-shot (`component.go:458-465`, `lifecycleUsed` → `ErrAlreadyStarted`), so
+      `initializeKVBuckets` cannot re-run and the latch cannot be re-evaluated in-process. That is
+      structural, not policy — a policy can be revised, a compile-visible guard cannot be evaded.
+      Captured in `observeAllLoops`' doc comment, demoting the policy reason to the weaker of the
+      two.

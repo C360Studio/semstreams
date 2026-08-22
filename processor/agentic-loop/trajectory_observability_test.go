@@ -1,15 +1,18 @@
 package agenticloop
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestTrajectoryAuditFailureLatchesDegradedHealth(t *testing.T) {
@@ -91,10 +94,18 @@ func TestTrajectoryAuditFailureMultipleStagesMarkOnce(t *testing.T) {
 	}
 }
 
-// Bucket acquisition and provider resolution fail at Start with no loop
-// subject. Those failures belong to the other three sinks: there is no
-// entity to stamp, and an entry keyed on "" would never be released by any
-// loop terminal — an unbounded leak in a long-running process.
+// A Start-time failure carries no loop subject, so it cannot mark THROUGH
+// THE PER-LOOP SET: there is no entity to key on, and an entry keyed on ""
+// would never be released by any loop terminal — an unbounded leak.
+//
+// This is emphatically NOT the claim that such failures mark nothing. When
+// Start ends up with no recorder at all, observeAllLoops latches the loss
+// for every loop in the process; that is the whole of Finding A, and the
+// path is proven by
+// TestStartWithoutUsableTrajectoryBucketMarksEveryLoop_Integration. This
+// case is the OTHER Start-time failure — provider_resolve with a recorder
+// still present, where per-loop evidence failures do carry a loop ID and
+// mark normally as they occur.
 func TestTrajectoryAuditFailureWithoutLoopIDMarksNothing(t *testing.T) {
 	c := &Component{logger: slog.New(slog.NewTextHandler(io.Discard, nil)), metrics: getMetrics(nil), started: true, startTime: time.Now()}
 
@@ -210,8 +221,9 @@ func (b *orphanUnwindBucket) ListKeysFiltered(ctx context.Context, _ ...string) 
 func TestOrphanedAuditAttemptDoesNotRemarkReleasedLoop(t *testing.T) {
 	const loopID = "loop-orphan"
 	bucket := &orphanUnwindBucket{entered: make(chan struct{}, 1), unwind: make(chan struct{})}
+	var logs bytes.Buffer
 	c := &Component{
-		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		logger:    slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelError})),
 		handler:   NewMessageHandler(DefaultConfig()),
 		metrics:   getMetrics(nil),
 		started:   true,
@@ -257,5 +269,108 @@ func TestOrphanedAuditAttemptDoesNotRemarkReleasedLoop(t *testing.T) {
 	if c.trajectoryAuditLoss.observed(loopID) {
 		t.Fatal("an abandoned audit attempt re-marked a released loop: the marker now leaks for the " +
 			"process lifetime and a later loop reusing this ID inherits a false incomplete")
+	}
+
+	// ...and the late report was NOT swallowed. Suppression is scoped to the
+	// mark: through the real recorder path the orphan's own classification
+	// still reaches Health and the ERROR log, alongside the budget branch's
+	// synthetic one. Two distinct reports, two Health errors.
+	if health := c.Health(); health.ErrorCount != 2 {
+		t.Errorf("Health().ErrorCount = %d, want 2 (budget report + late report); "+
+			"a late discovery must still degrade Health", health.ErrorCount)
+	}
+	line := logs.String()
+	if !strings.Contains(line, string(trajectoryReasonTimeout)) {
+		t.Errorf("budget branch's synthetic report missing from the log: %s", line)
+	}
+	if !strings.Contains(line, "late=true") {
+		t.Errorf("the abandoned attempt's own late classification never reached the log: %s", line)
+	}
+}
+
+// The narrowing, stated as a test so the next person cannot "simplify" it
+// back into a blanket drop.
+//
+// A late failure is a REAL failure: a store.Put that returned a backend
+// error at T+240ms is a genuine evidence_put/backend_error. The budget
+// branch already reported the LOSS, but it could only classify it as the
+// synthetic fact_create/timeout — so dropping the late report outright
+// would leave an operator diagnosing a payload-size rejection as a latency
+// problem, and would make the MODIFIED requirement's "Every trajectory
+// audit failure SHALL emit ERROR ... increment ... and latch Health"
+// literally false.
+//
+// Lateness therefore suppresses exactly one sink: the mark, which is the
+// only one for which "late" makes the answer WRONG rather than tardy.
+func TestLateAuditFailureReachesEverySinkExceptTheMark(t *testing.T) {
+	var logs bytes.Buffer
+	c := &Component{
+		logger:    slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelError})),
+		metrics:   getMetrics(nil),
+		started:   true,
+		startTime: time.Now(),
+	}
+
+	counter := c.metrics.trajectoryAuditFailures.WithLabelValues(
+		string(trajectoryStageEvidencePut),
+		string(agentic.TrajectoryKindToolCompleted),
+		string(trajectoryReasonBackend))
+	before := testutil.ToFloat64(counter)
+
+	late := newAuditFailure("loop-late", trajectoryStageEvidencePut, trajectoryReasonBackend)
+	late.Late = true
+	c.reportTrajectoryAuditFailure(late)
+
+	// Sink 1 — Health still degrades. A late discovery is still a
+	// discovery that this component lost audit state.
+	if health := c.Health(); health.Healthy || health.ErrorCount != 1 || health.LastError == "" {
+		t.Errorf("Health() = %#v, want degraded on a late failure", health)
+	}
+
+	// Sink 2 — the bounded counter still increments, under the failure's
+	// OWN stage and reason, not the budget branch's synthetic pair.
+	if got := testutil.ToFloat64(counter) - before; got != 1 {
+		t.Errorf("evidence_put/backend_error counter delta = %v, want 1", got)
+	}
+
+	// Sink 3 — the ERROR line still carries the real classification, and
+	// says the report was late so an operator can tell why no condition
+	// landed on the loop.
+	line := logs.String()
+	for _, want := range []string{
+		string(trajectoryStageEvidencePut),
+		string(trajectoryReasonBackend),
+		"loop-late",
+		"late=true",
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("ERROR line missing %q; got: %s", want, line)
+		}
+	}
+
+	// Sink 4 — and ONLY this one is suppressed.
+	if c.trajectoryAuditLoss.observed("loop-late") {
+		t.Error("a late failure marked the loop; it can only re-mark a loop that already terminated")
+	}
+}
+
+// The same failure arriving on time marks normally — the flag, not the
+// stage or reason, is what suppresses the mark.
+func TestOnTimeAuditFailureMarksAndReachesEverySink(t *testing.T) {
+	c := &Component{
+		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		metrics:   getMetrics(nil),
+		started:   true,
+		startTime: time.Now(),
+	}
+
+	onTime := newAuditFailure("loop-on-time", trajectoryStageEvidencePut, trajectoryReasonBackend)
+	c.reportTrajectoryAuditFailure(onTime)
+
+	if !c.trajectoryAuditLoss.observed("loop-on-time") {
+		t.Error("an on-time failure did not mark its loop")
+	}
+	if health := c.Health(); health.Healthy || health.ErrorCount != 1 {
+		t.Errorf("Health() = %#v, want degraded", health)
 	}
 }

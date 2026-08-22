@@ -45,6 +45,24 @@ type trajectoryAuditFailure struct {
 	LoopID    string
 	AttemptID string
 	Err       error
+
+	// Late marks a failure discovered after the context owning its
+	// recording attempt was already done — an abandoned batch goroutine
+	// unwinding past its framework budget.
+	//
+	// The failure is no less REAL for being late: a store.Put that returned
+	// a backend error at T+240ms is a genuine evidence_put/backend_error and
+	// the operator needs its stage and reason, not just the synthetic
+	// fact_create/timeout the budget branch reports. So a late failure still
+	// logs, still increments the bounded counter, and still latches Health.
+	//
+	// What it must NOT do is MARK the loop. The loop reached its terminal
+	// write and released its per-loop state before this report existed;
+	// marking now re-inserts a marker nothing will free, and a later loop
+	// reusing the same loop ID inherits a condition that is not its own.
+	// The mark is the one sink for which "late" makes the answer wrong
+	// rather than merely tardy, and it is the only sink Late suppresses.
+	Late bool
 }
 
 type trajectoryFactBucket interface {
@@ -274,30 +292,33 @@ func (r *trajectoryRecorder) fail(ctx context.Context, observation trajectoryObs
 	})
 }
 
-// emit reports one observed audit failure to the component's fan-out, and
-// drops it when the context that owns this recording attempt is already
-// done.
+// emit reports one observed audit failure to the component's fan-out,
+// flagging it Late when the context that owns this recording attempt is
+// already done.
 //
-// The drop completes a discipline this file already applies at every other
-// checkpoint in record (:133, :174, :196, :204 return without emitting once
-// ctx is done); these emit sites were the gaps in it. It closes the class,
-// not three instances: the only production caller of record is
-// recordTrajectoryBatchWithin, which abandons its goroutine ONLY after
-// ctx.Done fires and ALWAYS reports the loss synchronously on that same
-// path before returning. So every emit an abandoned goroutine could still
-// make is a duplicate of a loss already reported — and reported in time to
-// reach the terminal graph write, which the late one is not.
+// This is the single classification point for lateness, so every emit site
+// in the recorder inherits it — the class, not the instances that motivated
+// it. The only production caller of record is recordTrajectoryBatchWithin,
+// which abandons its goroutine ONLY after ctx.Done fires, so an abandoned
+// attempt's ctx is done for its whole remaining life and every report it
+// makes is flagged.
 //
-// Without the drop, an abandoned attempt unwinding after the loop's
-// terminal release re-inserts that loop's marker with nothing left to free
-// it, and a later loop reusing the same loop ID (deterministic product-
-// supplied IDs; CreateLoopWithID overwrites) inherits a condition that is
-// not its own — violating "absent on every other loop".
+// Note precisely what the budget branch already reported and what it did
+// not. It reported the LOSS, synchronously, in time for the terminal graph
+// write — which is why a late report must not mark the loop again. It did
+// NOT report this failure's CLASSIFICATION: the budget branch can only
+// say fact_create/timeout, because at that moment nothing more specific is
+// known. A late evidence_put/backend_error is new and true information, and
+// dropping it would let a payload-size rejection be diagnosed as a latency
+// problem. So lateness suppresses the mark alone; the ERROR line, the
+// bounded {stage,kind,reason} counter, and the Health latch all still fire
+// (see reportTrajectoryAuditFailure).
 //
-// A healthy attempt is unaffected: ctx.Err() is nil for its whole life.
+// A healthy attempt is unaffected: ctx.Err() is nil for its whole life, so
+// Late stays false and the fan-out behaves exactly as before.
 func (r *trajectoryRecorder) emit(ctx context.Context, failure trajectoryAuditFailure) {
 	if ctx.Err() != nil {
-		return
+		failure.Late = true
 	}
 	if r.report != nil {
 		r.report(failure)

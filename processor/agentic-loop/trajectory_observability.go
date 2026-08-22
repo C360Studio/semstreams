@@ -88,9 +88,14 @@ func (l *loopAuditLoss) observe(loopID string) {
 // is the honest reading — it reports what the component observed about
 // itself, and still never claims any loop IS complete.
 //
-// Deliberately one-way. The Start path's own policy is that an unusable
-// bucket is never reconciled in-process; a latch that could clear would
-// let loops run unmarked after a repair that does not happen.
+// Deliberately one-way, and safely so for a structural reason rather than
+// a policy one: Start is one-shot (component.go:458-465 rejects a second
+// Start with ErrAlreadyStarted once lifecycleUsed is set), so
+// initializeKVBuckets cannot re-run and this latch cannot be re-evaluated
+// within the process. A policy can be revised; that guard cannot be evaded
+// without a compile-visible change. The Start path's stated policy — an
+// unusable bucket is never reconciled in-process — agrees, but is the
+// weaker of the two reasons.
 func (l *loopAuditLoss) observeAllLoops() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -123,7 +128,17 @@ func (c *Component) reportTrajectoryAuditFailure(failure trajectoryAuditFailure)
 	diagnostic := fmt.Sprintf("trajectory audit %s/%s/%s failed: %v",
 		failure.Stage, failure.Kind, failure.Reason, failure.Err)
 	c.trajectoryAuditHealth.latch(diagnostic)
-	c.trajectoryAuditLoss.observe(failure.LoopID)
+	// A late failure is REAL and still degrades Health, still increments the
+	// bounded counter, and still logs its own stage and reason — the
+	// operator needs to know a backend rejected an evidence Put, not just
+	// that a budget expired. Only the MARK is suppressed: the loop already
+	// reached its terminal write and released its per-loop state, so marking
+	// now would re-insert a marker nothing will free and leak a false
+	// condition onto a later loop reusing the same ID. Lateness makes the
+	// mark wrong; it makes the other three sinks merely tardy.
+	if !failure.Late {
+		c.trajectoryAuditLoss.observe(failure.LoopID)
+	}
 	if c.metrics != nil {
 		c.metrics.recordTrajectoryAuditFailure(failure.Stage, failure.Kind, failure.Reason)
 	}
@@ -137,6 +152,11 @@ func (c *Component) reportTrajectoryAuditFailure(failure trajectoryAuditFailure)
 		slog.String("kind", string(failure.Kind)),
 		slog.String("stage", string(failure.Stage)),
 		slog.String("reason", string(failure.Reason)),
+		// Late says this classification arrived after its loop's terminal
+		// write, so it is absent from that loop's evidence-integrity
+		// condition. Without it an operator cannot tell why a real backend
+		// error left no condition on the loop.
+		slog.Bool("late", failure.Late),
 		slog.Any("error", failure.Err))
 }
 

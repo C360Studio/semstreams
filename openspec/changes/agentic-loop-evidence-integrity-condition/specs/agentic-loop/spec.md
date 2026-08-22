@@ -72,8 +72,10 @@ by re-evaluating any predicate or by reading the counter.
 
 An observation SHALL NOT mark a loop after that loop's terminal write. A late report from an abandoned audit attempt
 SHALL NOT re-mark a released loop, so per-loop marking cannot outlive the loop and a later loop reusing the same loop
-ID never inherits another loop's condition. Suppressing such a late report loses nothing, because the component already
-reported that loss on the path that abandoned the attempt, in time for the terminal write.
+ID never inherits another loop's condition. Withholding the late MARK loses nothing, because the component already
+reported that loss on the path that abandoned the attempt, in time for the terminal write. The late failure itself is
+still a trajectory audit failure and SHALL still emit `ERROR`, increment the bounded counter, and latch Health per the
+requirement above; only the mark is withheld.
 
 #### Scenario: a loop with observed audit loss is machine-readable as incomplete
 
@@ -109,6 +111,8 @@ reported that loss on the path that abandoned the attempt, in time for the termi
 - **GIVEN** an audit attempt is abandoned when its framework budget expires, and the loss is reported on that path
 - **WHEN** the abandoned attempt later reaches its own failure report, after the loop reached its terminal write
 - **THEN** the late report does not mark the loop again
+- **AND** the late report still emits `ERROR` with its own stage and reason, increments the bounded counter under that
+  same stage and reason, and latches Health degraded
 - **AND** the loop's condition remains the one derived before its terminal write
 - **AND** a later loop reusing the same loop ID does not inherit the earlier loop's condition
 

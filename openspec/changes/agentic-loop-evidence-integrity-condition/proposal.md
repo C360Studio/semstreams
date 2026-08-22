@@ -78,7 +78,9 @@ it.
 
 - **Affected spec:** `agentic-loop` — one MODIFIED requirement, one ADDED requirement.
 - **Affected code:** `vocabulary/agentic/` (predicate + registration),
-  `processor/agentic-loop/` (per-loop latch, terminal write).
+  `processor/agentic-loop/` (per-loop marker, component-wide total-loss latch, terminal write, and
+  a `Late` flag threaded through the recorder's emit chokepoint so a report arriving after its
+  loop's terminal write still logs/counts/degrades Health but does not mark).
 - **No breaking change.** Additive predicate; absence is the existing behaviour and remains
   meaningful.
 - **Not in scope:** the other three candidate agentic-loop conditions (input fidelity, graph
