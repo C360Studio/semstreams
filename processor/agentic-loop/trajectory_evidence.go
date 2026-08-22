@@ -27,7 +27,7 @@ func (r *trajectoryRecorder) captureEvidence(
 ) trajectoryEvidenceCapture {
 	encoded, digest, key, err := agentic.CanonicalTrajectoryEvidence(kind, body)
 	if err != nil {
-		r.emit(trajectoryAuditFailure{
+		r.emit(ctx, trajectoryAuditFailure{
 			Stage: trajectoryStageFactEncode, Kind: kind, Reason: trajectoryReasonEncode,
 			LoopID: loopID, AttemptID: attemptID, Err: err,
 		})
@@ -38,14 +38,14 @@ func (r *trajectoryRecorder) captureEvidence(
 	}
 	if r.stores == nil {
 		capture.failure = agentic.TrajectoryEvidenceFailureProviderUnavailable
-		r.evidenceFailure(loopID, attemptID, kind, trajectoryStageProviderResolve, trajectoryReasonProviderUnavailable,
+		r.evidenceFailure(ctx, loopID, attemptID, kind, trajectoryStageProviderResolve, trajectoryReasonProviderUnavailable,
 			fmt.Errorf("store registry unavailable"))
 		return capture
 	}
 	store, ok := r.stores.Store(r.storageInstance)
 	if !ok {
 		capture.failure = agentic.TrajectoryEvidenceFailureProviderUnavailable
-		r.evidenceFailure(loopID, attemptID, kind, trajectoryStageProviderResolve, trajectoryReasonProviderUnavailable,
+		r.evidenceFailure(ctx, loopID, attemptID, kind, trajectoryStageProviderResolve, trajectoryReasonProviderUnavailable,
 			fmt.Errorf("storage instance %q unavailable", r.storageInstance))
 		return capture
 	}
@@ -58,12 +58,12 @@ func (r *trajectoryRecorder) captureEvidence(
 		return capture
 	case getErr == nil:
 		capture.failure = agentic.TrajectoryEvidenceFailureIntegrity
-		r.evidenceFailure(loopID, attemptID, kind, trajectoryStageEvidenceVerify, trajectoryReasonIntegrity,
+		r.evidenceFailure(ctx, loopID, attemptID, kind, trajectoryStageEvidenceVerify, trajectoryReasonIntegrity,
 			fmt.Errorf("digest-addressed evidence contains different canonical bytes"))
 		return capture
 	case !errors.Is(getErr, storage.ErrObjectNotFound):
 		capture.failure = agentic.TrajectoryEvidenceFailureRead
-		r.evidenceFailure(loopID, attemptID, kind, trajectoryStageEvidenceGet, trajectoryReasonBackend, getErr)
+		r.evidenceFailure(ctx, loopID, attemptID, kind, trajectoryStageEvidenceGet, trajectoryReasonBackend, getErr)
 		return capture
 	}
 
@@ -86,24 +86,25 @@ func (r *trajectoryRecorder) captureEvidence(
 		}
 		if verifyErr == nil {
 			capture.failure = agentic.TrajectoryEvidenceFailureIntegrity
-			r.evidenceFailure(loopID, attemptID, kind, trajectoryStageEvidenceVerify, trajectoryReasonIntegrity,
+			r.evidenceFailure(ctx, loopID, attemptID, kind, trajectoryStageEvidenceVerify, trajectoryReasonIntegrity,
 				fmt.Errorf("lost-reply verification found different canonical bytes"))
 			return capture
 		}
 	}
 	capture.failure = agentic.TrajectoryEvidenceFailureWrite
-	r.evidenceFailure(loopID, attemptID, kind, trajectoryStageEvidencePut, trajectoryReasonBackend, putErr)
+	r.evidenceFailure(ctx, loopID, attemptID, kind, trajectoryStageEvidencePut, trajectoryReasonBackend, putErr)
 	return capture
 }
 
 func (r *trajectoryRecorder) evidenceFailure(
+	ctx context.Context,
 	loopID, attemptID string,
 	kind agentic.TrajectoryKind,
 	stage trajectoryAuditStage,
 	reason trajectoryAuditReason,
 	err error,
 ) {
-	r.emit(trajectoryAuditFailure{
+	r.emit(ctx, trajectoryAuditFailure{
 		Stage: stage, Kind: kind, Reason: reason,
 		LoopID: loopID, AttemptID: attemptID, Err: err,
 	})

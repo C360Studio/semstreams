@@ -64,6 +64,7 @@ type Component struct {
 	trajectoryRecorder    *trajectoryRecorder
 	trajectoryReader      *trajectoryReader
 	trajectoryAuditHealth trajectoryAuditHealth
+	trajectoryAuditLoss   loopAuditLoss
 
 	// Ports (merged from config)
 	inputPorts  []component.Port
@@ -798,6 +799,13 @@ func (c *Component) initializeKVBuckets(ctx context.Context) error {
 	} else {
 		c.trajectoryRecorder = nil
 		c.trajectoryReader = nil
+		// No recorder means nothing is ever attempted, so no loop can
+		// produce a per-loop audit failure to observe — while every loop's
+		// evidence is in fact missing. Latch the loss for every loop this
+		// process will terminate, or total evidence loss would emit a graph
+		// byte-identical to a healthy one. The report below carries no
+		// LoopID and cannot do this job.
+		c.trajectoryAuditLoss.observeAllLoops()
 	}
 	if trajectoryErr != nil {
 		c.reportTrajectoryAuditFailure(trajectoryAuditFailure{
@@ -1415,7 +1423,7 @@ func (c *Component) extractAgentResponse(data []byte) (*agentic.AgentResponse, s
 func (c *Component) handleLoopFailure(ctx context.Context, loopID string, entity agentic.LoopEntity, reason string, err error) {
 	// Failure-event construction reads token totals twice below. Release the
 	// active aggregate only after those terminal consumers have returned.
-	defer c.handler.trajectoryManager.discardTrajectory(loopID)
+	defer c.releaseLoopTransientState(loopID)
 
 	c.logger.Error("Loop processing failed", "error", err, "loop_id", loopID, "reason", reason)
 
@@ -1581,7 +1589,7 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 		// MessageHandler has already extracted terminal token/step data into
 		// result. Keep the aggregate alive through persistence/publication, then
 		// release it even when an adjacent terminal side effect degrades.
-		defer c.handler.trajectoryManager.discardTrajectory(result.LoopID)
+		defer c.releaseLoopTransientState(result.LoopID)
 	}
 
 	c.recordHandlerResultTrajectory(ctx, result)
@@ -1614,8 +1622,18 @@ func (c *Component) stampLoopCompletionWithBudget(ctx context.Context, loopID st
 	if c.graphWriter == nil {
 		return
 	}
+	// Read the observed-audit-loss answer HERE, on the component that owns
+	// it, and hand the writer the result. loopAuditLoss answers for both
+	// scopes at once — this loop's own observed failures, and the
+	// component-wide latch for a process that cannot record evidence at all
+	// — so this seam cannot honour half the fact. Nothing re-derives it from
+	// the counter. Every terminal observation for this loop has already been
+	// recorded (recordHandlerResultTrajectory returns only after its batch
+	// goroutine joins or its budget expires and reports synchronously), so
+	// the answer is final by the time the stamp is built.
+	evidenceIncomplete := c.trajectoryAuditLoss.observed(loopID)
 	timedOut := runWithBudget(ctx, graphWritePublishBudget, func(bctx context.Context) {
-		c.graphWriter.WriteLoopCompletion(bctx, completion)
+		c.graphWriter.WriteLoopCompletion(bctx, completion, evidenceIncomplete)
 	})
 	if timedOut {
 		c.logger.Warn("graph write budget expired before completion stamp returned; publishing agent.complete anyway",
@@ -1662,8 +1680,9 @@ func (c *Component) stampLoopFailureWithBudget(ctx context.Context, loopID strin
 	if c.graphWriter == nil {
 		return
 	}
+	evidenceIncomplete := c.trajectoryAuditLoss.observed(loopID)
 	timedOut := runWithBudget(ctx, graphWritePublishBudget, func(bctx context.Context) {
-		c.graphWriter.WriteLoopFailure(bctx, failure)
+		c.graphWriter.WriteLoopFailure(bctx, failure, evidenceIncomplete)
 	})
 	if timedOut {
 		c.logger.Warn("graph write budget expired before failure stamp returned; publishing agent.complete anyway",
@@ -1770,7 +1789,7 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) {
 			// The handler has already built terminal failure state (including
 			// token totals). This error branch bypasses persistHandlerResult, so
 			// release the active aggregate after its terminal audit completes.
-			c.handler.trajectoryManager.discardTrajectory(loopID)
+			c.releaseLoopTransientState(loopID)
 		}
 		c.logger.Error("Failed to handle tool result", "error", err, "loop_id", loopID)
 		return
@@ -2085,7 +2104,7 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 	// Cancellation has no aggregate token/step consumer. Defer cleanup so all
 	// terminal observation and publication work sees a stable active-loop
 	// lifetime, including early-return degradation paths below.
-	defer c.handler.trajectoryManager.discardTrajectory(loopID)
+	defer c.releaseLoopTransientState(loopID)
 
 	// Persist loop state to KV
 	c.persistLoopState(ctx, loopID)
@@ -2135,8 +2154,10 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 	}
 
 	// Emit cancellation entity to graph (non-fatal)
+	// A cancelled loop can have lost evidence too — the terminal
+	// observation above runs before this write.
 	if c.graphWriter != nil {
-		c.graphWriter.WriteLoopCancellation(ctx, &completion)
+		c.graphWriter.WriteLoopCancellation(ctx, &completion, c.trajectoryAuditLoss.observed(loopID))
 	}
 
 	// Persist cancellation to KV so watchers detect it

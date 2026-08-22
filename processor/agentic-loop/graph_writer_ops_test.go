@@ -90,7 +90,7 @@ func TestOpsQuery_LoopOutcomeByRole(t *testing.T) {
 				Iterations:  r.iterations,
 				CompletedAt: time.Now(),
 			}
-			allTriples = append(allTriples, buildLoopCompletionTriples(entityID, event, "", 0)...)
+			allTriples = append(allTriples, buildLoopCompletionTriples(entityID, event, "", 0, false)...)
 		} else {
 			event := &agentic.LoopFailedEvent{
 				LoopID:     r.loopID,
@@ -100,7 +100,7 @@ func TestOpsQuery_LoopOutcomeByRole(t *testing.T) {
 				Iterations: r.iterations,
 				FailedAt:   time.Now(),
 			}
-			allTriples = append(allTriples, buildLoopFailureTriples(entityID, event, "", 0)...)
+			allTriples = append(allTriples, buildLoopFailureTriples(entityID, event, "", 0, false)...)
 		}
 	}
 
@@ -163,7 +163,7 @@ func TestOpsQuery_IterationDistribution(t *testing.T) {
 			Iterations:  r.iterations,
 			CompletedAt: time.Now(),
 		}
-		allTriples = append(allTriples, buildLoopCompletionTriples(entityID, event, "", 0)...)
+		allTriples = append(allTriples, buildLoopCompletionTriples(entityID, event, "", 0, false)...)
 	}
 
 	// Ops agent query: iteration counts for researcher role
@@ -262,7 +262,7 @@ func TestOpsQuery_CostByModel(t *testing.T) {
 			CompletedAt: time.Now(),
 		}
 
-		triples := buildLoopCompletionTriples(entityID, event, modelEntityID, cost)
+		triples := buildLoopCompletionTriples(entityID, event, modelEntityID, cost, false)
 
 		modelUsed, _ := objectFor(triples, agvocab.LoopModelUsed).(string)
 		loopCost, _ := objectFor(triples, agvocab.LoopCostUSD).(float64)

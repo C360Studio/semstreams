@@ -125,15 +125,24 @@ func (b *trajectoryTestBucket) ListKeysFiltered(ctx context.Context, filters ...
 }
 
 type trajectoryTestStore struct {
-	mu          sync.Mutex
-	values      map[string][]byte
-	putErrAfter bool
-	blockGet    bool
+	mu     sync.Mutex
+	values map[string][]byte
+	// putErrBefore rejects the write and stores NOTHING, so the lost-reply
+	// re-verification finds no object and the evidence_put failure stands.
+	// Distinct from putErrAfter, which stores the value and then reports a
+	// lost reply — that one is recovered by re-verification and emits no
+	// failure. Mirrors createErrBefore/createErrAfter on the bucket fake.
+	putErrBefore bool
+	putErrAfter  bool
+	blockGet     bool
 }
 
 func (s *trajectoryTestStore) Put(_ context.Context, key string, value []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.putErrBefore {
+		return errors.New("object store rejected the write")
+	}
 	s.values[key] = append([]byte(nil), value...)
 	if s.putErrAfter {
 		return errors.New("lost put reply")

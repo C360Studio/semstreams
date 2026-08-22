@@ -71,14 +71,20 @@ func (g *GraphWriterForTest) SetLogger(logger *slog.Logger) {
 }
 
 func (g *GraphWriterForTest) WriteModelEndpoints(ctx context.Context) { g.w.WriteModelEndpoints(ctx) }
-func (g *GraphWriterForTest) WriteLoopCompletion(ctx context.Context, e *agentic.LoopCompletedEvent) {
-	g.w.WriteLoopCompletion(ctx, e)
+func (g *GraphWriterForTest) WriteLoopCompletion(
+	ctx context.Context, e *agentic.LoopCompletedEvent, evidenceIncomplete bool,
+) {
+	g.w.WriteLoopCompletion(ctx, e, evidenceIncomplete)
 }
-func (g *GraphWriterForTest) WriteLoopFailure(ctx context.Context, e *agentic.LoopFailedEvent) {
-	g.w.WriteLoopFailure(ctx, e)
+func (g *GraphWriterForTest) WriteLoopFailure(
+	ctx context.Context, e *agentic.LoopFailedEvent, evidenceIncomplete bool,
+) {
+	g.w.WriteLoopFailure(ctx, e, evidenceIncomplete)
 }
-func (g *GraphWriterForTest) WriteLoopCancellation(ctx context.Context, e *agentic.LoopCancelledEvent) {
-	g.w.WriteLoopCancellation(ctx, e)
+func (g *GraphWriterForTest) WriteLoopCancellation(
+	ctx context.Context, e *agentic.LoopCancelledEvent, evidenceIncomplete bool,
+) {
+	g.w.WriteLoopCancellation(ctx, e, evidenceIncomplete)
 }
 func (g *GraphWriterForTest) WriteLineageTriples(ctx context.Context, loopID string, related map[string]any) error {
 	return g.w.WriteLineageTriples(ctx, loopID, related)

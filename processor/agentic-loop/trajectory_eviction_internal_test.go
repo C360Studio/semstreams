@@ -162,3 +162,78 @@ func withoutPort(ports []component.PortDefinition, name string) []component.Port
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
+
+// The observed-audit-loss marker is per-loop state with a bounded
+// lifetime: every terminal path that evicts the trajectory aggregate must
+// also release the marker, or a long-running process accumulates one entry
+// per audit-losing loop forever. releaseLoopTransientState is the single
+// release point precisely so a terminal path cannot free one and leak the
+// other — these subtests hold it to that on all three.
+func TestTerminalPathsReleaseObservedAuditLoss(t *testing.T) {
+	observe := func(t *testing.T, c *Component, loopID string) {
+		t.Helper()
+		c.reportTrajectoryAuditFailure(trajectoryAuditFailure{
+			Stage:  trajectoryStageEvidencePut,
+			Kind:   agentic.TrajectoryKindToolCompleted,
+			Reason: trajectoryReasonBackend,
+			LoopID: loopID,
+			Err:    errors.New("boom"),
+		})
+		require.True(t, c.trajectoryAuditLoss.observed(loopID), "marker was not set before the terminal path ran")
+	}
+
+	t.Run("completed result", func(t *testing.T) {
+		handler := NewMessageHandler(DefaultConfig())
+		loopID := "completed-loop-audit"
+		_, err := handler.trajectoryManager.startTrajectory(loopID)
+		require.NoError(t, err)
+
+		component := &Component{handler: handler, logger: discardLogger()}
+		observe(t, component, loopID)
+		component.persistHandlerResult(context.Background(), HandlerResult{
+			LoopID: loopID,
+			State:  agentic.LoopStateComplete,
+		})
+
+		require.False(t, component.trajectoryAuditLoss.observed(loopID),
+			"completed loop retained its audit-loss marker")
+	})
+
+	t.Run("failed result", func(t *testing.T) {
+		handler := NewMessageHandler(DefaultConfig())
+		loopID, err := handler.loopManager.CreateLoopWithID("failed-loop-audit", "task", "role", "model")
+		require.NoError(t, err)
+		_, err = handler.trajectoryManager.startTrajectory(loopID)
+		require.NoError(t, err)
+		entity, err := handler.loopManager.GetLoop(loopID)
+		require.NoError(t, err)
+
+		component := &Component{handler: handler, config: DefaultConfig(), logger: discardLogger()}
+		observe(t, component, loopID)
+		component.handleLoopFailure(context.Background(), loopID, entity, "test_failure", errors.New("boom"))
+
+		require.False(t, component.trajectoryAuditLoss.observed(loopID),
+			"failed loop retained its audit-loss marker")
+	})
+
+	t.Run("cancelled result", func(t *testing.T) {
+		config := DefaultConfig()
+		config.Ports.Outputs = withoutPort(config.Ports.Outputs, "agent.complete")
+		handler := NewMessageHandler(config)
+		loopID, err := handler.loopManager.CreateLoopWithID("cancelled-loop-audit", "task", "role", "model")
+		require.NoError(t, err)
+		_, err = handler.trajectoryManager.startTrajectory(loopID)
+		require.NoError(t, err)
+
+		component := &Component{handler: handler, config: config, logger: discardLogger()}
+		observe(t, component, loopID)
+		component.handleCancelSignal(context.Background(), agentic.UserSignal{
+			LoopID: loopID,
+			Type:   agentic.SignalCancel,
+			UserID: "operator",
+		})
+
+		require.False(t, component.trajectoryAuditLoss.observed(loopID),
+			"cancelled loop retained its audit-loss marker")
+	})
+}

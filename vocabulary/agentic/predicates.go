@@ -407,6 +407,26 @@ const (
 	// DataType: string
 	LoopTerminalReason = "agent.loop.terminal-reason"
 
+	// LoopEvidenceIntegrity classifies the loop's OWN trajectory audit
+	// trail: the component observed that this loop's required evidence was
+	// not recorded — either it attempted the write and watched it fail, or
+	// it determined at startup that it cannot record trajectory evidence at
+	// all, in which case every loop it runs carries the condition. It is a
+	// reportable condition, not a reconstruction — it names nothing about
+	// what was lost, elects no stage or reason (those stay in the ERROR log
+	// and the bounded {stage,kind,reason} counter), and asserts no repair.
+	//
+	// Stamped only on observed incompleteness; absent otherwise. Absence
+	// means ONLY that no audit loss was observed — never that the evidence
+	// IS complete. The framework can observe failures it saw and nothing
+	// more, so it never writes a completeness claim (ADR-084: absence
+	// licenses nothing).
+	//
+	// Closed value set: "incomplete". No other value is ever written.
+	// Example: "incomplete"
+	// DataType: string
+	LoopEvidenceIntegrity = "agent.loop.evidence-integrity"
+
 	// LoopRole is the role used during this loop execution.
 	// Example: "architect", "editor", "reviewer"
 	// DataType: string
