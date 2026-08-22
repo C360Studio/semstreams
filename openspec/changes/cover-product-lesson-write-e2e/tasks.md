@@ -90,5 +90,7 @@
 - [x] 33. Run `task e2e:lessons`; require success, `AssertionsRun == 3`, all authoritative and matcher evidence,
       nonzero failure propagation, exact-ID cleanup, and compose teardown.
 - [x] 34. Obtain independent SemStreams implementation review approval before integration (`FINAL APPROVE`).
-- [ ] 35. Close #1030 only within the corrected completion boundary; make no ops-agent, deep-research,
-      `task e2e:ops`, diagnosis, reportable-condition, #979, #1029-adoption, CI/nightly, or sister-work completion claim.
+- [x] 35. PR #1038 is fully green and merge-ready; its `Closes #1030` linkage will close the issue atomically on
+      merge. This makes no claim or decision about ops-agent or ops-scenario retirement, deep-research retirement,
+      ADR-027 diagnosis, reportable conditions, the fate of `task e2e:ops`, #979, #1029 completion, sister-repository
+      adoption, or broader CI/nightly scope.
