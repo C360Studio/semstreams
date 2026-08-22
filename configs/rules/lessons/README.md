@@ -18,8 +18,10 @@ in `projection_contracts`:
 | `agent.lesson.retired-at` | retirement timestamp |
 
 These three are **mutable** and single-valued, so they belong in a
-`reconcile` group. This mirrors `lessonRecordProjectionContract()` in both
-`cmd/semstreams/main.go` and `cmd/e2e-semstreams/main.go`. The **birth predicates** — `agent.lesson.created-at`,
+`reconcile` group. This mirrors the `agentic.lesson-record` contract declared in
+`internal/builtinprojection/contracts.go` (`builtinprojection.Contracts()`), the
+single authoritative declaration both framework binaries register at boot. The
+**birth predicates** — `agent.lesson.created-at`,
 `category`, `polarity`, `severity`, `summary`, `detail`, `injection-form`,
 `evidence`, `applies-to`, `observed-role` — are stamped once at emit and are
 deliberately **absent** from the reconcile group, so a `reconcile_predicates` action can

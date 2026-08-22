@@ -1,7 +1,39 @@
 # agentic-lessons Specification
 
 ## Purpose
-TBD - created by archiving change agent-memory-lesson-substrate. Update Purpose after archive.
+
+`agentic-lessons` governs **procedural memory**: how completed agent work is distilled into
+durable, reusable guidance, and how that guidance reaches later loops. A lesson is a
+first-class graph entity (`{org}.{platform}.agent.lesson.record.{id}`), not a document — it
+lives in the same substrate as every other agent artifact, under the same mutation and
+projection contracts.
+
+One interface decision binds the whole capability: **memory is pushed, never queried.** The
+framework registers no memory search tools; active lessons are assembled into a loop's brief by
+the substrate before the agent runs, and the only memory-specific agent read is dereferencing a
+reference it was already handed. This is the irreversible lesson of the prior attempt, where
+memory exposed as agent-invoked query tools was ignored in favour of training-corpus habits and
+then removed as friction (ADR-080).
+
+Three invariants carry the weight:
+
+- **Evidence or nothing.** A lesson cannot be created without at least one well-formed evidence
+  citation, and cannot be promoted until every cited entity resolves in the graph. Resolving
+  evidence is what makes a promotion honest; refusal leaves the lesson `proposed`.
+- **Injectability is earned.** Lessons are born `proposed`, and only `active` lessons reach a
+  brief. The lifecycle gate is operator/product review — the framework ships no agent-facing
+  promotion tool.
+- **Delivery is bounded and replay-stable.** Selection is a pure function of the candidate set
+  and the loop's scope, ordered on the lesson's immutable birth timestamp rather than any
+  revision or re-stamped update time, and truncated to a ranked prefix under explicit count and
+  byte bounds. The same graph yields the same brief, including across an ADR-073 from-zero
+  reingest.
+
+Bounds are contract, not hygiene: an oversized injection form is rejected with an error naming
+the bound rather than silently truncated, because that form is rendered verbatim into every
+future brief. Relatedly, the authored-text predicates (`summary`, `detail`, `injection-form`)
+register rule-opaque, so rules cannot predicate on model-sampled prose.
+
 ## Requirements
 ### Requirement: A lesson is an evidence-cited first-class graph entity with content-derived identity
 The framework SHALL persist each lesson as a first-class graph entity

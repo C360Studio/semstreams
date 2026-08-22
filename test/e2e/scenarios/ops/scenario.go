@@ -769,7 +769,8 @@ func (s *Scenario) promoteLesson(ctx context.Context, result *scenarios.Result) 
 	}
 	return fmt.Errorf(
 		"lesson %s status did not flip to active within %v (last seen %q) — "+
-			"check LessonCurator.Promote and the lessonRecordProjectionContract replace lane",
+			"check LessonCurator.Promote and the agentic.lesson-record reconcile lane "+
+			"(internal/builtinprojection/contracts.go)",
 		s.lessonEntityID, s.config.CompleteTimeout, lastSeen)
 }
 
