@@ -66,45 +66,57 @@ tokens, cost) and the *content the run produced* in `AGENT_LOOPS`, retrieved by 
 key the graph handed you. That is not a violation — it is "rules carry references,
 not payloads" working as designed.
 
-## Consumption: rules read two typed planes, and neither is operational KV
+## Consumption: what can read the fact once it is stored
 
-Placement decides storage. It does **not** decide consumability, and you cannot
-fix a placement problem by widening what rules watch.
+Placement decides storage. Consumability is a *separate* question, and this section
+records what is true today rather than prescribing a workaround — the design is
+under active review.
 
-Rules evaluate over exactly two typed planes:
+**What rules evaluate today.** Two typed sources: authoritative `EntityState`
+(decoded triples — `$entity.triple.*`, `.length`, `.triples`) and messages
+(dotted-path over an arbitrary payload, `$message.*`, ADR-039).
 
-- **Authoritative `EntityState`** — decoded triples. `$entity.triple.*`,
-  `.length`, `.triples`. The watch grammar IS the six-position entity-ID grammar
-  (`ValidateEntityIDPattern`), which is why a bucket key like `COMPLETE_rg_abc123`
-  or `graph-index` cannot be watched — it is not an entity ID.
-- **Messages** — dotted-path access into an arbitrary payload
-  (`$message.*`, ADR-039).
+**Why operational KV is not among them — and what the reason is NOT.** The rule
+processor declares `KVWatchPort{Bucket: ENTITY_STATES}` (`processor/rule/config.go:225`)
+and its evaluator is typed on `*graph.EntityState` (`processor/rule/interfaces.go:50`).
+The watch pattern must satisfy `ValidateEntityIDPattern`, so a key like
+`COMPLETE_rg_abc123` cannot be expressed as a watch pattern.
 
-Operational KV is a third plane with **no condition grammar**. The evaluator itself
-is not the obstacle — it already accepts arbitrary payload fields — but nothing
-decodes a bucket value into them, and per-revision watch semantics have no
-counterpart to a rule's `on_enter`.
+Three things are commonly assumed to be the obstacle and are NOT:
 
-**So: needing a fact to be rule-readable is a reason to place it well, never a
-reason to widen the watch allowlist.** ADR-049 makes this explicit — "multiple
-consumer surfaces (rules, ...) need to read the same state" is item 4 on the
-*live-in-`ENTITY_STATES`* list. Rules-readability is a placement INPUT.
+- **Not transport.** A KV bucket IS a JetStream stream (`KV_<bucket>`,
+  `natsclient/backing_stream_prefix.go:22-23`). Every KV write is already a message
+  on a stream; the bucket is not a dead end.
+- **Not the port abstraction.** `component.KVWatchPort` (`component/port_kv.go:6-11`)
+  is a general port type carrying `Bucket`, `Keys`, `History`, and an
+  `InterfaceContract`. Six components declare one. The rule processor's is pinned by
+  its own declaration, not by a framework limit.
+- **Not trigger semantics.** Transition state is keyed `(rule ID, entityKey)`
+  (`processor/rule/stateful_evaluator.go:136`) and `DetectTransition` is a pure
+  boolean over the previous and current match, with revision-based replay protection
+  at `:155`. None of that is entity-specific. A rewrite whose *classification* did
+  not change yields `TransitionNone` and does not fire — which is why a condition
+  should carry a classification rather than a raw measurement.
 
-### When a bucket ground genuinely applies AND rules need to see it
+**The actual gap is a typed decoder.** A `StorageResource` or a readiness envelope is
+not triples, so `$entity.triple.*` has no referent. That is precisely what
+`processor/rule/entity_pattern_contract.go:17` names: *"typed operational-KV rule
+adapters require a separately designed decoder and evaluator."* Work not done, not a
+prohibition.
 
-This is real — `GRAPH_STATUS` cannot live in the graph (ground 6) yet gating rules
-on index readiness would be useful. The answer is **not** a third watch lane:
+**What NOT to do while that is undecided.** Do not have the owning component watch its
+own bucket and materialize a message stream of "interesting" changes. That puts the
+PRODUCER in charge of predicting which transitions a consumer cares about, which is a
+framework-declared threshold in disguise — the thing ADR-088 rules against
+(*"declaring a key you do not depend on defers you on someone else's outage"*). It is
+also strictly lossier than the report it summarizes. The consumer declaring what it
+depends on is the shape this framework already uses for readiness, and it is the shape
+any future lane should keep.
 
-- **Publish the condition as a message.** Rules already read that lane with the
-  generic path grammar. One publish, no new machinery, no second definition of
-  what a condition means.
-- **Or emit a companion triple** on an entity that legitimately exists, alongside
-  the operational store.
-
-Either way the operational bucket keeps its ground and the fact becomes readable.
-Adding a third watch lane would mean a per-bucket decoder, undesigned trigger
-semantics, and a second home for condition meaning — the parallel-channel shape
-this repo retires rather than builds.
+**Meanwhile**, placement is the lever you do control. If a fact has no strong bucket
+ground and something needs to react to it, that is ADR-049's item 4 — *"multiple
+consumer surfaces (rules, GraphQL, dashboards, inference) need to read the same
+state"* — and it belongs in the graph as triples.
 
 ## Before you propose a new bucket
 
