@@ -1,7 +1,7 @@
 # Implementation conformance: Align StandardLifecycleTests
 
-Status: independent implementation re-review round 2 returned `APPROVE` with no findings on 2026-08-22. Hosted CI
-and integration/issue closure are pending.
+Status: independent implementation re-review round 2 returned `APPROVE` with no findings on 2026-08-22. Reviewed
+implementation commit `97a3ea23` is fully hosted-CI green on PR #1048. Merge and issue closure have not occurred.
 
 Accepted architecture:
 
@@ -112,6 +112,23 @@ After the review corrections and round-2 `APPROVE`, root reran the local final c
 The final-candidate integration package timings were UDP 9.736s, graph-index 95.217s, graph-ingest 88.338s,
 agentic-tools 78.549s, rule 85.123s, and service 69.579s.
 
+## Hosted CI on the reviewed implementation
+
+PR #1048 reported the following hosted checks green on implementation commit `97a3ea23`:
+
+| Check | Duration | Job | Result |
+|---|---:|---:|---|
+| Build | 22s | `97103350529` | PASS |
+| Lint | 1m18s | `97103350418` | PASS |
+| Schema Validation | 45s | `97103350462` | PASS |
+| Test | 7m50s | `97103350289` | PASS |
+| e2e slow consumer attribution | 1m37s | `97103350279` | PASS |
+| e2e statistical | 2m10s | `97103350280` | PASS |
+| CI Status Check | 3s | `97104210385` | PASS |
+
+This task-truth-only evidence follow-up changes no implementation. Its current-head branch-protection CI rerun is
+pending and must pass before merge.
+
 ## Independent implementation re-review
 
 Round 2 returned `APPROVE` with no findings. The independent reviewer recorded:
@@ -128,4 +145,5 @@ Graph-index integration was unavailable in round 2 because the review sandbox co
 recorded as a round-2 pass. The same graph-index lifecycle integration passed independently in review round 1 and in
 the developer and technical-writer evidence recorded above.
 
-Hosted CI remains pending and unverified. Integration and issue closure remain pending.
+PR #1048 has not merged and #1022 is not yet closed. Its `Closes #1022` linkage is configured to close the issue
+atomically on merge. No adjacent completion claim is made.

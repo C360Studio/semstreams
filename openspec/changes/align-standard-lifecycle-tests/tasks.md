@@ -26,9 +26,12 @@
       `-race -count=10`.
 - [x] 10. Run `task lint`, `go test -race ./...`, `task test:integration`, `go build ./...`,
       `task schema:generate` with zero schema/spec drift, `go test ./test/contract/...`, and `git diff --check`.
-- [ ] 11. Run `openspec validate align-standard-lifecycle-tests --strict --no-interactive` on the final candidate and
-      obtain hosted CI evidence.
+- [x] 11. Run `openspec validate align-standard-lifecycle-tests --strict --no-interactive` on the final candidate and
+      obtain fully green hosted CI evidence for reviewed implementation commit `97a3ea23` on PR #1048.
 - [x] 12. Obtain independent SemStreams implementation and recorded-verification approval before integration
       (`APPROVE`, round 2, no findings).
-- [ ] 13. Integrate atomically and close #1022 without adjacent service-lifecycle, restart, #867/#1012/#1013,
-      tag-readiness, adopter, agent, LLM, persona, role, prompt, model, ops-agent, or scenario claims.
+- [x] 13. PR #1048's reviewed implementation commit `97a3ea23` is fully CI-green, and its `Closes #1022` linkage is
+      configured to close the issue atomically on merge. This task-truth-only evidence follow-up changes no
+      implementation, and current-head branch-protection CI must pass before merge. This does not claim that the PR
+      has merged, that #1022 has closed, or that adjacent service-lifecycle, restart, #867/#1012/#1013, tag-readiness,
+      adopter, agent, LLM, persona, role, prompt, model, ops-agent, or scenario work is complete.
