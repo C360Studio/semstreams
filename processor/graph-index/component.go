@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/readiness"
+	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -34,8 +35,7 @@ var (
 )
 
 const (
-	maxGraphIndexWorkers      = 16
-	failedStartCleanupTimeout = 5 * time.Second
+	maxGraphIndexWorkers = 16
 )
 
 // Config holds configuration for graph-index component
@@ -358,7 +358,12 @@ type Component struct {
 	namePredicates map[string]int
 
 	// Query subscriptions (for cleanup)
-	querySubscriptions []*natsclient.Subscription
+	querySubscriptions   []*natsclient.Subscription
+	subscribeForRequests func(
+		context.Context,
+		string,
+		func(context.Context, []byte) ([]byte, error),
+	) (*natsclient.Subscription, error)
 }
 
 type entityIndexWork struct {
@@ -608,7 +613,8 @@ func (c *Component) Start(ctx context.Context) (startErr error) {
 	// Publish failed-Start cleanup authority before any worker, coalescer,
 	// watcher, or subscription can escape Start. The closer is launched only
 	// after all c.wg.Add calls are sealed.
-	ctx, cancel := context.WithCancel(ctx)
+	parent := ctx
+	ctx, cancel := context.WithCancel(parent)
 	runDone := make(chan struct{})
 	c.runCancel = cancel
 	c.runDone = runDone
@@ -629,16 +635,16 @@ func (c *Component) Start(ctx context.Context) (startErr error) {
 			return
 		}
 		sealRunDone()
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), failedStartCleanupTimeout)
-		defer cleanupCancel()
-		cleanupErr := c.stopOwnedRuntime(
-			cleanupCtx,
-			cancel,
-			runDone,
-			c.indexPool,
-			c.entityCoalescer,
-			c.querySubscriptions,
-		)
+		cleanupErr := lifecyclecleanup.RollbackFailedStart(parent, func(cleanupCtx context.Context) error {
+			return c.stopOwnedRuntime(
+				cleanupCtx,
+				cancel,
+				runDone,
+				c.indexPool,
+				c.entityCoalescer,
+				c.querySubscriptions,
+			)
+		})
 		if cleanupErr == nil {
 			c.runCancel = nil
 			c.runDone = nil

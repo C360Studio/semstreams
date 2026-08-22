@@ -22,57 +22,62 @@ import (
 
 // setupQueryHandlers sets up NATS request/reply subscriptions for query handlers
 func (c *Component) setupQueryHandlers(ctx context.Context) error {
+	subscribeForRequests := c.subscribeForRequests
+	if subscribeForRequests == nil {
+		subscribeForRequests = c.natsClient.SubscribeForRequests
+	}
+
 	// Subscribe to outgoing query
-	sub, err := c.natsClient.SubscribeForRequests(ctx, "graph.index.query.outgoing", c.handleQueryOutgoingNATS)
+	sub, err := subscribeForRequests(ctx, "graph.index.query.outgoing", c.handleQueryOutgoingNATS)
 	if err != nil {
 		return errs.Wrap(err, "Component", "setupQueryHandlers", "subscribe outgoing query")
 	}
 	c.querySubscriptions = append(c.querySubscriptions, sub)
 
 	// Subscribe to incoming query
-	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.index.query.incoming", c.handleQueryIncomingNATS)
+	sub, err = subscribeForRequests(ctx, "graph.index.query.incoming", c.handleQueryIncomingNATS)
 	if err != nil {
 		return errs.Wrap(err, "Component", "setupQueryHandlers", "subscribe incoming query")
 	}
 	c.querySubscriptions = append(c.querySubscriptions, sub)
 
 	// Subscribe to alias query
-	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.index.query.alias", c.handleQueryAliasNATS)
+	sub, err = subscribeForRequests(ctx, "graph.index.query.alias", c.handleQueryAliasNATS)
 	if err != nil {
 		return errs.Wrap(err, "Component", "setupQueryHandlers", "subscribe alias query")
 	}
 	c.querySubscriptions = append(c.querySubscriptions, sub)
 
 	// Subscribe to predicate query
-	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.index.query.predicate", c.handleQueryPredicateNATS)
+	sub, err = subscribeForRequests(ctx, "graph.index.query.predicate", c.handleQueryPredicateNATS)
 	if err != nil {
 		return errs.Wrap(err, "Component", "setupQueryHandlers", "subscribe predicate query")
 	}
 	c.querySubscriptions = append(c.querySubscriptions, sub)
 
 	// Subscribe to predicate list query
-	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.index.query.predicateList", c.handleQueryPredicateListNATS)
+	sub, err = subscribeForRequests(ctx, "graph.index.query.predicateList", c.handleQueryPredicateListNATS)
 	if err != nil {
 		return errs.Wrap(err, "Component", "setupQueryHandlers", "subscribe predicateList query")
 	}
 	c.querySubscriptions = append(c.querySubscriptions, sub)
 
 	// Subscribe to predicate stats query
-	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.index.query.predicateStats", c.handleQueryPredicateStatsNATS)
+	sub, err = subscribeForRequests(ctx, "graph.index.query.predicateStats", c.handleQueryPredicateStatsNATS)
 	if err != nil {
 		return errs.Wrap(err, "Component", "setupQueryHandlers", "subscribe predicateStats query")
 	}
 	c.querySubscriptions = append(c.querySubscriptions, sub)
 
 	// Subscribe to compound predicate query
-	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.index.query.predicateCompound", c.handleQueryPredicateCompoundNATS)
+	sub, err = subscribeForRequests(ctx, "graph.index.query.predicateCompound", c.handleQueryPredicateCompoundNATS)
 	if err != nil {
 		return errs.Wrap(err, "Component", "setupQueryHandlers", "subscribe predicateCompound query")
 	}
 	c.querySubscriptions = append(c.querySubscriptions, sub)
 
 	// Subscribe to name query (gh#376 — deterministic name→ranked-IDs)
-	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.index.query.byName", c.handleQueryByNameNATS)
+	sub, err = subscribeForRequests(ctx, "graph.index.query.byName", c.handleQueryByNameNATS)
 	if err != nil {
 		return errs.Wrap(err, "Component", "setupQueryHandlers", "subscribe byName query")
 	}
