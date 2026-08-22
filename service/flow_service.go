@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -44,9 +45,11 @@ type FlowService struct {
 	configMgr  componentConfigPublisher
 	bootConfig *config.Config
 
-	overrideExpiry *streamOverrideExpiryReporter
-	serviceMgr     *Manager
-	config         FlowServiceConfig
+	overrideExpiry       *streamOverrideExpiryReporter
+	overrideExpiryCancel context.CancelFunc
+	overrideExpiryDone   chan struct{}
+	serviceMgr           *Manager
+	config               FlowServiceConfig
 }
 
 // NewFlowServiceFromConfig creates a saved-flow service.
@@ -109,7 +112,10 @@ func (fs *FlowService) Start(ctx context.Context) error {
 	if err := fs.ensureDefaultFlowFromConfig(ctx); err != nil {
 		fs.logger.Warn("Failed to create default flow diagram from boot config", "error", err)
 	}
-	fs.startOverrideExpiryReporter(ctx)
+	fs.ensureOverrideExpiryReporter()
+	if fs.overrideExpiry != nil {
+		fs.startOverrideExpiryReporter(ctx, fs.overrideExpiry.run)
+	}
 	fs.logger.Info("Flow service started")
 	return nil
 }
@@ -155,7 +161,25 @@ func (fs *FlowService) Stop(ctx context.Context) error {
 	if err := validateLifecycleContext(ctx, "FlowService", "Stop"); err != nil {
 		return err
 	}
-	return fs.BaseService.Stop(ctx)
+
+	reporterCancel := fs.overrideExpiryCancel
+	reporterDone := fs.overrideExpiryDone
+	fs.overrideExpiryCancel = nil
+	fs.overrideExpiryDone = nil
+	if reporterCancel != nil {
+		reporterCancel()
+	}
+
+	baseErr := fs.BaseService.Stop(ctx)
+	if reporterDone == nil {
+		return baseErr
+	}
+	select {
+	case <-reporterDone:
+		return baseErr
+	case <-ctx.Done():
+		return errors.Join(baseErr, fmt.Errorf("wait for stream override expiry reporter: %w", ctx.Err()))
+	}
 }
 
 // RegisterHTTPHandlers registers diagram CRUD, validation, publication, and
@@ -459,12 +483,15 @@ func (fs *FlowService) writeJSONError(w http.ResponseWriter, message string, sta
 
 func generateFlowID() string { return uuid.New().String() }
 
-func (fs *FlowService) startOverrideExpiryReporter(ctx context.Context) {
-	if fs.configMgr == nil {
-		return
-	}
-	fs.ensureOverrideExpiryReporter()
-	go fs.overrideExpiry.run(ctx)
+func (fs *FlowService) startOverrideExpiryReporter(ctx context.Context, run func(context.Context)) {
+	reporterCtx, reporterCancel := context.WithCancel(ctx)
+	reporterDone := make(chan struct{})
+	fs.overrideExpiryCancel = reporterCancel
+	fs.overrideExpiryDone = reporterDone
+	go func() {
+		defer close(reporterDone)
+		run(reporterCtx)
+	}()
 }
 
 func (fs *FlowService) ensureOverrideExpiryReporter() {
