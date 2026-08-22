@@ -129,13 +129,14 @@ type Input struct {
 	retryConfig retry.Config
 
 	// Lifecycle management
-	shutdown  chan struct{}
-	done      chan struct{}
-	running   atomic.Bool
-	startTime time.Time
-	mu        sync.RWMutex
-	wg        sync.WaitGroup
-	conn      *net.UDPConn
+	cancel     context.CancelFunc
+	completion chan struct{}
+	running    atomic.Bool
+	startTime  time.Time
+	mu         sync.RWMutex
+	wg         sync.WaitGroup
+	conn       *net.UDPConn
+	socketOpen bool
 
 	// Metrics (atomic for thread safety)
 	messagesReceived atomic.Int64
@@ -354,7 +355,7 @@ func (u *Input) ConfigSchema() component.ConfigSchema {
 func (u *Input) Health() component.HealthStatus {
 	u.mu.RLock()
 	running := u.running.Load()
-	connected := u.conn != nil
+	connected := u.conn != nil && u.socketOpen
 	u.mu.RUnlock()
 
 	errorCount := u.errors.Load()
@@ -438,10 +439,6 @@ func (u *Input) Start(ctx context.Context) error {
 		return nil // Already running, idempotent
 	}
 
-	// Create shutdown channels for coordinated shutdown
-	u.shutdown = make(chan struct{})
-	u.done = make(chan struct{})
-
 	// Use retry for socket binding
 	bindOperation := func() error {
 		return u.bindSocket()
@@ -452,25 +449,38 @@ func (u *Input) Start(ctx context.Context) error {
 		return errs.WrapTransient(err, "udp-input", "Start", "socket binding")
 	}
 
+	runCtx, cancel := context.WithCancel(ctx)
+	completion := make(chan struct{})
+	u.cancel = cancel
+	u.completion = completion
 	u.running.Store(true)
 	u.startTime = time.Now()
+	conn := u.conn
 
-	// Start the read loop in a goroutine with WaitGroup
+	// Publish cancellation and completion authority before launching the owner.
 	u.wg.Add(1)
 	go func() {
-		defer u.wg.Done()
 		defer func() {
+			// Release the parent linkage even when owner work exits without Stop.
+			cancel()
 			u.mu.Lock()
-			defer u.mu.Unlock()
-			if u.done != nil {
-				select {
-				case <-u.done:
-				default:
-					close(u.done)
+			if u.conn == conn {
+				if u.socketOpen {
+					_ = conn.Close()
+					u.socketOpen = false
 				}
+				u.conn = nil
 			}
+			u.running.Store(false)
+			u.mu.Unlock()
+
+			if u.buffer != nil {
+				_ = u.buffer.Close()
+			}
+			u.wg.Done()
+			close(completion)
 		}()
-		u.readLoop(ctx)
+		u.readLoop(runCtx)
 	}()
 
 	return nil
@@ -501,6 +511,7 @@ func (u *Input) bindSocket() error {
 	}
 
 	u.conn = conn
+	u.socketOpen = true
 	return nil
 }
 
@@ -509,73 +520,45 @@ func (u *Input) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "LifecycleComponent", "Stop", "nil context")
 	}
-	// Signal shutdown to goroutines
 	u.mu.Lock()
-	if !u.running.Load() && u.done == nil {
+	cancel := u.cancel
+	if cancel == nil {
 		u.mu.Unlock()
 		return nil
 	}
-	done := u.done
-	if u.shutdown != nil {
-		select {
-		case <-u.shutdown:
-		default:
-			close(u.shutdown)
-		}
-	}
-	// Close UDP connection to unblock readLoop
-	if u.conn != nil {
+	u.cancel = nil
+	completion := u.completion
+	u.completion = nil
+	if u.conn != nil && u.socketOpen {
 		_ = u.conn.Close()
+		u.socketOpen = false
 	}
+	cancel()
 	u.mu.Unlock()
 
-	// An already-ended caller still signals shutdown, but it does not gain
-	// cleanup authority. A later Stop may rejoin the same completion.
-	if err := ctx.Err(); err != nil {
-		return errs.WrapTransient(fmt.Errorf("stop timeout: %w", err),
-			"udp-input", "Stop", "graceful shutdown")
-	}
-
-	// Wait for graceful shutdown under caller authority.
 	select {
-	case <-done:
-		// Goroutine finished cleanly
+	case <-completion:
+		return nil
 	case <-ctx.Done():
 		return errs.WrapTransient(fmt.Errorf("stop timeout: %w", ctx.Err()),
 			"udp-input", "Stop", "graceful shutdown")
 	}
-
-	// Clean up resources
-	u.running.Store(false)
-	u.cleanup()
-	return nil
-}
-
-// cleanup cleans up resources
-func (u *Input) cleanup() {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	u.cleanupUnlocked()
 }
 
 // cleanupUnlocked cleans up resources without acquiring the mutex
 // This is used when the mutex is already held (e.g., in Start method)
 func (u *Input) cleanupUnlocked() {
-	if u.shutdown != nil {
-		select {
-		case <-u.shutdown:
-		default:
-			close(u.shutdown)
-		}
-		u.shutdown = nil
+	if u.cancel != nil {
+		u.cancel()
+		u.cancel = nil
 	}
-	if u.done != nil {
-		u.done = nil
-	}
-	if u.conn != nil {
+	u.completion = nil
+	if u.conn != nil && u.socketOpen {
 		_ = u.conn.Close()
-		u.conn = nil
+		u.socketOpen = false
 	}
+	u.conn = nil
+	u.running.Store(false)
 	if u.buffer != nil {
 		_ = u.buffer.Close()
 	}
@@ -586,11 +569,8 @@ func (u *Input) readLoop(ctx context.Context) {
 	udpBuffer := make([]byte, 65536) // Larger buffer to handle any UDP packet size
 
 	for u.running.Load() {
-		// Check if we should stop
 		select {
 		case <-ctx.Done():
-			return
-		case <-u.shutdown:
 			return
 		default:
 		}
@@ -614,11 +594,8 @@ func (u *Input) readLoop(ctx context.Context) {
 				continue
 			}
 
-			// Check if stopped
 			select {
 			case <-ctx.Done():
-				return
-			case <-u.shutdown:
 				return
 			default:
 				// Handle network errors gracefully - no panics
