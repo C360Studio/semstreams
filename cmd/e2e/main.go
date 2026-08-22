@@ -23,6 +23,7 @@ import (
 	"github.com/c360studio/semstreams/test/e2e/scenarios/agentic"
 	crudtools "github.com/c360studio/semstreams/test/e2e/scenarios/crud-tools"
 	deepresearch "github.com/c360studio/semstreams/test/e2e/scenarios/deep-research"
+	lessonsscenario "github.com/c360studio/semstreams/test/e2e/scenarios/lessons"
 	lifecyclescenario "github.com/c360studio/semstreams/test/e2e/scenarios/lifecycle"
 	opsscenario "github.com/c360studio/semstreams/test/e2e/scenarios/ops"
 	researchgraph "github.com/c360studio/semstreams/test/e2e/scenarios/research-graph"
@@ -127,7 +128,7 @@ func parseCommandLineFlags() *cliFlags {
 	flags := &cliFlags{}
 
 	flag.StringVar(&flags.scenarioName, "scenario", "",
-		"Run specific scenario (core-health, core-dataflow, core-graph-roundtrip, core-federation, or 'all')")
+		"Run specific scenario (core-health, core-dataflow, core-graph-roundtrip, lessons, core-federation, or 'all')")
 	flag.BoolVar(&flags.verbose, "verbose", false, "Enable verbose logging")
 	flag.StringVar(&flags.baseURL, "base-url", config.DefaultEndpoints.HTTP, "SemStreams HTTP endpoint (edge)")
 	flag.StringVar(&flags.cloudURL, "cloud-url", "http://localhost:8081",
@@ -221,6 +222,7 @@ func handleListCommand(listScenarios bool) bool {
 	fmt.Println("  e2e:statistical - BM25 + community detection (~60s)")
 	fmt.Println("  e2e:semantic    - Neural embeddings + LLM (~90s)")
 	fmt.Println("  e2e:agentic     - Agent loop + tools with mock LLM (~30s)")
+	fmt.Println("  e2e:lessons     - Direct product lesson birth/lifecycle/reader-matcher gate")
 	fmt.Println("  e2e:research-graph - ADR-045 direct + walk_seeds R0-R6 paths (~60s)")
 	fmt.Println("")
 	fmt.Println("Individual Scenarios:")
@@ -246,6 +248,9 @@ func handleListCommand(listScenarios bool) bool {
 	fmt.Println("    research-graph  - ADR-045 Phase 1 R0-R6 chain end-to-end")
 	fmt.Println("                      Mock LLM scripted with synthesize_directly happy path")
 	fmt.Println("    research-graph-execute - ADR-045 walk_seeds execute/fusion proof")
+	fmt.Println("")
+	fmt.Println("  Lessons:")
+	fmt.Println("    lessons         - Direct product birth, promotion, matcher eligibility, and recreate convergence")
 	fmt.Println("")
 	fmt.Println("  Lifecycle (ADR-047):")
 	fmt.Println("    lifecycle       - Lifecycle-gateway + rule-engine + Manager round-trip")
@@ -443,6 +448,10 @@ func createScenario(
 		cfg := crudtools.DefaultConfig()
 		cfg.MetricsURL = flags.metricsURL
 		return crudtools.NewScenario(edgeClient, cfg)
+
+	// Direct-product lesson scenario (no agent loop or mock LLM)
+	case "lessons":
+		return lessonsscenario.NewScenario()
 
 	// Ops scenario (ADR-027 Phase 1 ops agent observable)
 	case "ops":

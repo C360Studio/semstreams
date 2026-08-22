@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,6 +17,37 @@ import (
 type assertionReportingScenario struct {
 	result *scenarios.Result
 	err    error
+}
+
+func TestLessonsScenarioIsDispatchedAndListed(t *testing.T) {
+	got := createScenario(nil, nil, &cliFlags{scenarioName: "lessons"})
+	if got == nil || got.Name() != "lessons" {
+		t.Fatalf("createScenario(lessons) = %v", got)
+	}
+
+	original := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	t.Cleanup(func() { os.Stdout = original })
+	if !handleListCommand(true) {
+		t.Fatal("handleListCommand returned false")
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = original
+	output, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assert.Contains(t, string(output), "e2e:lessons")
+	assert.Contains(t, string(output), "lessons         - Direct product birth")
 }
 
 func (s assertionReportingScenario) Name() string                { return "assertion-reporting" }
