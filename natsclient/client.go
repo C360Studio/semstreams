@@ -469,6 +469,16 @@ func (m *Client) GetStatus() *Status {
 
 // Connect establishes connection to NATS server
 func (m *Client) Connect(ctx context.Context) error {
+	return m.connectWith(ctx, nats.Connect)
+}
+
+// connectWith keeps the native connection candidate private until Connect wins
+// admission against terminal Close. dial is a test seam; production uses
+// nats.Connect synchronously with the timeout in buildConnectionOptions.
+func (m *Client) connectWith(
+	ctx context.Context,
+	dial func(string, ...nats.Option) (*nats.Conn, error),
+) error {
 	// Check circuit breaker first
 	if m.Status() == StatusCircuitOpen {
 		m.logger.Debug("Circuit breaker is open, skipping connection attempt")
@@ -481,60 +491,66 @@ func (m *Client) Connect(ctx context.Context) error {
 	// Build connection options
 	opts := m.buildConnectionOptions()
 
-	// Attempt connection with context timeout
-	connectDone := make(chan error, 1)
-	go func() {
-		conn, err := nats.Connect(m.urls, opts...)
-		if err != nil {
-			connectDone <- err
-			return
+	conn, err := dial(m.urls, opts...)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		if conn != nil {
+			conn.Close()
 		}
-
-		m.mu.Lock()
-		m.conn = conn
-		m.mu.Unlock()
-
-		// Initialize JetStream with new API. The async publish error handler
-		// bridges failed async acks into the circuit breaker so a broken ack
-		// path opens the breaker exactly as a failed synchronous publish does
-		// (see PublishToStreamAsync).
-		if js, err := jetstream.New(conn, jetstream.WithPublishAsyncErrHandler(m.asyncPublishErrHandler)); err == nil {
-			m.mu.Lock()
-			m.js = js
-			m.mu.Unlock()
-		}
-
-		connectDone <- nil
-	}()
-
-	// Wait for connection or context cancellation
-	select {
-	case err := <-connectDone:
-		if err != nil {
-			m.recordFailure()
-
-			// Only set to disconnected if circuit didn't open
-			if m.Status() != StatusCircuitOpen {
-				m.setStatus(StatusDisconnected)
-			}
-
-			// Check if circuit opened after this failure
-			if m.Status() == StatusCircuitOpen {
-				return ErrCircuitOpen
-			}
-
-			return errs.WrapTransient(err, "Client", "Connect", "establish connection")
-		}
-	case <-ctx.Done():
 		m.recordFailure()
 		if m.Status() != StatusCircuitOpen {
 			m.setStatus(StatusDisconnected)
 		}
-		return errs.WrapTransient(ctx.Err(), "Client", "Connect", "connection cancelled")
+		return errs.WrapTransient(ctxErr, "Client", "Connect", "connection cancelled")
 	}
+	if err != nil {
+		m.recordFailure()
+
+		// Only set to disconnected if circuit didn't open
+		if m.Status() != StatusCircuitOpen {
+			m.setStatus(StatusDisconnected)
+		}
+
+		// Check if circuit opened after this failure
+		if m.Status() == StatusCircuitOpen {
+			return ErrCircuitOpen
+		}
+
+		return errs.WrapTransient(err, "Client", "Connect", "establish connection")
+	}
+
+	// Initialize JetStream with new API. The async publish error handler
+	// bridges failed async acks into the circuit breaker so a broken ack
+	// path opens the breaker exactly as a failed synchronous publish does
+	// (see PublishToStreamAsync). Keep both candidates local until admission.
+	js, _ := jetstream.New(conn, jetstream.WithPublishAsyncErrHandler(m.asyncPublishErrHandler))
+
+	// Close owns terminal admission. Once Close sets closed, no native
+	// connection produced by an in-flight dial may become Client state.
+	m.closeMu.Lock()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		conn.Close()
+		m.recordFailure()
+		if m.Status() != StatusCircuitOpen {
+			m.setStatus(StatusDisconnected)
+		}
+		m.closeMu.Unlock()
+		return errs.WrapTransient(ctxErr, "Client", "Connect", "connection cancelled")
+	}
+	if m.closed.Load() {
+		conn.Close()
+		m.setStatus(StatusDisconnected)
+		m.closeMu.Unlock()
+		return errs.Wrap(nats.ErrConnectionClosed, "Client", "Connect", "admit connection")
+	}
+
+	m.mu.Lock()
+	m.conn = conn
+	m.js = js
+	m.mu.Unlock()
 
 	m.setStatus(StatusConnected)
 	m.resetCircuit()
+	m.closeMu.Unlock()
 
 	m.logger.Info("Successfully connected to NATS", slog.String("urls", m.urls))
 
