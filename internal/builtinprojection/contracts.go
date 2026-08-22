@@ -44,32 +44,37 @@ func Contracts() []projection.Contract {
 				},
 			}},
 		},
-		{
-			Name:          LessonRecordContractName,
-			MessageType:   agentic.AgentLessonMessageType().Key(),
-			EntityPattern: "*.*.agent.lesson.record.*",
-			BirthPredicates: []string{
-				agvocab.LessonCategory,
-				agvocab.LessonPolarity,
-				agvocab.LessonSeverity,
-				agvocab.LessonCreatedAt,
-				agvocab.LessonSummary,
-				agvocab.LessonDetail,
-				agvocab.LessonInjectionForm,
-				agvocab.LessonEvidence,
-				agvocab.LessonAppliesTo,
-				agvocab.LessonObservedRole,
-				agvocab.ActionExecutedBy,
-			},
-			Groups: []projection.PredicateGroup{{
-				Name: LessonLifecycleGroupName,
-				Mode: projection.ModeReconcile,
-				Predicates: []string{
-					agvocab.LessonStatus,
-					agvocab.LessonSupersededBy,
-					agvocab.LessonRetiredAt,
-				},
-			}},
+		LessonContract(),
+	}
+}
+
+// LessonContract returns a fresh canonical lesson-record projection contract.
+func LessonContract() projection.Contract {
+	return projection.Contract{
+		Name:          LessonRecordContractName,
+		MessageType:   agentic.AgentLessonMessageType().Key(),
+		EntityPattern: "*.*.agent.lesson.record.*",
+		BirthPredicates: []string{
+			agvocab.LessonCategory,
+			agvocab.LessonPolarity,
+			agvocab.LessonSeverity,
+			agvocab.LessonCreatedAt,
+			agvocab.LessonSummary,
+			agvocab.LessonDetail,
+			agvocab.LessonInjectionForm,
+			agvocab.LessonEvidence,
+			agvocab.LessonAppliesTo,
+			agvocab.LessonObservedRole,
+			agvocab.ActionExecutedBy,
 		},
+		Groups: []projection.PredicateGroup{{
+			Name: LessonLifecycleGroupName,
+			Mode: projection.ModeReconcile,
+			Predicates: []string{
+				agvocab.LessonStatus,
+				agvocab.LessonSupersededBy,
+				agvocab.LessonRetiredAt,
+			},
+		}},
 	}
 }

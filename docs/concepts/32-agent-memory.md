@@ -305,18 +305,25 @@ evidence entity exists in the graph before flipping the status via the
 single-valued reconcile operation (`graph.mutation.entity.reconcile`):
 
 ```go
-// mutations is the application-configured *projection.MutationClient.
-var lessonReconciler projection.PredicateReconciler = mutations
-var lessonReader projection.AuthoritativeReader = mutations
+contracts := append(productContracts, agentictools.LessonProjectionContract())
+mutations, err := projection.NewMutationClient(projection.MutationClientConfig{
+    NATS:      natsClient,
+    Contracts: contracts,
+})
+if err != nil {
+    return fmt.Errorf("build graph mutation client: %w", err)
+}
 
-curator := agentictools.NewLessonCurator(lessonReconciler, lessonReader, logger)
+curator := agentictools.NewLessonCurator(mutations, mutations, logger)
 if err := curator.Promote(ctx, lessonEntityID); err != nil {
     // refused: a cited evidence entity is absent — the lesson stays proposed
 }
 ```
 
-The composition root constructs the client from copied local projection contracts.
-The curator receives only the narrow reconcile and exact-read capabilities it needs.
+The composition root includes the framework-owned lesson contract snapshot in its
+local client without copying contract literals. `LessonCurator` still receives only
+the narrow reconcile and exact-read capabilities it needs. Every snapshot is
+independent; products retain their own contracts alongside it.
 
 If any citation is missing, `Promote` **refuses** and the lesson stays
 `proposed`. `Retire` writes `retired` plus `retired-at`, while `Supersede` writes

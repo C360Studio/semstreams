@@ -50,6 +50,19 @@ if err != nil {
 Give components the narrow interface they need: `EntityCreator`, `PredicateReconciler`, `TripleAppender`,
 `EntityDeleter`, or `AuthoritativeReader`. Do not pass raw NATS subjects or graph KV handles.
 
+### Framework-owned built-in writers
+
+Local contracts remain the generic product rule. When SemStreams exposes an owned
+purpose-scoped contract snapshot for a first-party built-in writer, include that
+snapshot in the composition-root client instead of copying its
+`internal/builtinprojection` declaration. For example,
+`agentictools.LessonProjectionContract()` returns an independent canonical lesson
+contract snapshot.
+
+The snapshot removes a private predicate-set prediction while preserving one local
+client and narrow capability injection. It does not make local contracts globally
+authoritative or change graph-ingest enforcement.
+
 ## Create
 
 `Create` births one absent entity. `CreateMutation.Triples` is the sole initial-fact source; `Entity.Triples` must be

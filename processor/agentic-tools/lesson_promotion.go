@@ -47,8 +47,13 @@ type LessonCurator struct {
 	logger *slog.Logger
 }
 
-// NewLessonCurator builds a curator over an explicit write + read surface
-// (testable with fakes). A nil logger falls back to slog.Default().
+// LessonProjectionContract returns an independent snapshot of the canonical
+// projection contract required by LessonCurator lifecycle mutations.
+func LessonProjectionContract() projection.Contract { return builtinprojection.LessonContract() }
+
+// NewLessonCurator builds a curator over explicitly supplied write and read
+// capabilities for tests and specialized composition. A nil logger uses
+// slog.Default().
 func NewLessonCurator(writer projection.PredicateReconciler, reader projection.AuthoritativeReader, logger *slog.Logger) *LessonCurator {
 	if logger == nil {
 		logger = slog.Default()

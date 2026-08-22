@@ -185,6 +185,11 @@ func (s *Scenario) Teardown(ctx context.Context) error {
 	return nil
 }
 
+type opsStage struct {
+	name string
+	fn   func(context.Context, *scenarios.Result) error
+}
+
 // Execute runs the scenario stages in order.
 func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 	result := &scenarios.Result{
@@ -202,10 +207,7 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 	// from a clean baseline.
 	defer s.cleanup(ctx, result)
 
-	stages := []struct {
-		name string
-		fn   func(context.Context, *scenarios.Result) error
-	}{
+	stages := []opsStage{
 		{"verify-components", s.verifyComponents},
 		{"verify-registered-tools", s.verifyRegisteredTools},
 		{"seed-synthetic-loops", s.seedSyntheticLoops},
@@ -218,22 +220,31 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 		{"inject-and-verify-lesson", s.injectAndVerifyLesson},
 	}
 
-	for _, stage := range stages {
-		stageStart := time.Now()
-		if err := stage.fn(ctx, result); err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", stage.name, err))
-			result.Error = fmt.Sprintf("%s failed: %v", stage.name, err)
-			result.EndTime = time.Now()
-			result.Duration = result.EndTime.Sub(result.StartTime)
-			return result, nil
-		}
-		result.Metrics[fmt.Sprintf("%s_duration_ms", stage.name)] = time.Since(stageStart).Milliseconds()
+	failedStage, err := runOpsStages(ctx, result, stages)
+	if err != nil {
+		result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", failedStage, err))
+		result.Error = fmt.Sprintf("%s failed: %v", failedStage, err)
+		result.EndTime = time.Now()
+		result.Duration = result.EndTime.Sub(result.StartTime)
+		return result, nil
 	}
 
 	result.Success = true
 	result.EndTime = time.Now()
 	result.Duration = result.EndTime.Sub(result.StartTime)
 	return result, nil
+}
+
+func runOpsStages(ctx context.Context, result *scenarios.Result, stages []opsStage) (string, error) {
+	for _, stage := range stages {
+		stageStart := time.Now()
+		if err := stage.fn(ctx, result); err != nil {
+			return stage.name, err
+		}
+		result.Metrics[fmt.Sprintf("%s_duration_ms", stage.name)] = time.Since(stageStart).Milliseconds()
+		result.AssertionsRun++
+	}
+	return "", nil
 }
 
 // verifyComponents checks that all required ops-agent components are healthy.
@@ -748,17 +759,23 @@ func (s *Scenario) promoteLesson(ctx context.Context, result *scenarios.Result) 
 	}
 	result.Details["lesson_promoted"] = true
 
-	// Assert the flip landed and is single-valued: exactly one status triple for
-	// this lesson, now "active".
+	// Assert the flip landed and is single-valued, then prove promotion retained
+	// all four predicate families that determine the content-derived identity.
 	deadline := time.Now().Add(s.config.CompleteTimeout)
 	var lastSeen string
 	for time.Now().Before(deadline) {
 		triples, err := s.queryTriples(ctx, agvocab.LessonStatus, "")
 		if err == nil {
-			lastSeen = lessonStatusFor(triples, s.lessonEntityID)
-			if lastSeen == "active" {
-				result.Details["lesson_status_after_promotion"] = "active"
-				return nil
+			statuses := lessonObjectsFor(triples, s.lessonEntityID)
+			lastSeen = strings.Join(statuses, ",")
+			if len(statuses) == 1 && statuses[0] == "active" {
+				if identityErr := s.assertPromotedLessonIdentity(ctx); identityErr != nil {
+					lastSeen = "active; " + identityErr.Error()
+				} else {
+					result.Details["lesson_status_after_promotion"] = "active"
+					result.Details["lesson_identity_after_promotion_retained"] = true
+					return nil
+				}
 			}
 		}
 		select {
@@ -772,6 +789,24 @@ func (s *Scenario) promoteLesson(ctx context.Context, result *scenarios.Result) 
 			"check LessonCurator.Promote and the agentic.lesson-record reconcile lane "+
 			"(internal/builtinprojection/contracts.go)",
 		s.lessonEntityID, s.config.CompleteTimeout, lastSeen)
+}
+
+func (s *Scenario) assertPromotedLessonIdentity(ctx context.Context) error {
+	checks := []struct {
+		predicate string
+		object    string
+	}{
+		{predicate: agvocab.LessonCategory, object: LessonCategory},
+		{predicate: agvocab.LessonSummary, object: LessonSummary},
+		{predicate: agvocab.LessonEvidence, object: SeedLoop1ID},
+		{predicate: agvocab.LessonAppliesTo, object: LessonAppliesToTag},
+	}
+	for _, check := range checks {
+		if err := s.assertLessonObject(ctx, check.predicate, check.object); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // injectAndVerifyLesson is stage 4: dispatch a SUBSEQUENT ops loop and prove the
@@ -874,16 +909,6 @@ func tripleSubjects(triples []message.Triple) []string {
 		out = append(out, t.Subject)
 	}
 	return out
-}
-
-// lessonStatusFor returns the object of the status triple for entityID, or "".
-func lessonStatusFor(triples []message.Triple, entityID string) string {
-	for _, t := range triples {
-		if t.Subject == entityID {
-			return fmt.Sprintf("%v", t.Object)
-		}
-	}
-	return ""
 }
 
 // lessonObjectsFor lists the objects of triples whose subject is entityID.
