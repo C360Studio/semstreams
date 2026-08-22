@@ -73,6 +73,7 @@ func main() {
 	}
 }
 
+//revive:disable-next-line:function-length // Keep process ownership and boot ordering visible in one composition root.
 func run() (runErr error) {
 	// Register first-party semantic names before config/rule/workflow
 	// validation. Import side effects are not an authoring contract.
@@ -128,25 +129,41 @@ func run() (runErr error) {
 	}
 	slog.SetDefault(phaseLogging.Process)
 
-	// 5. Connect to NATS (required - semstreams cannot operate without NATS).
-	ctx := context.Background()
-	natsClient, err := connectToNATSWithSpinner(ctx, cfg, phaseLogging.Client, metricsRegistry)
+	// 5. Observe shutdown before the first context-aware NATS root acquisition. Boot
+	// cancellation stays separate from the live runtime authority used by
+	// continuing owners during ordered shutdown.
+	runtimeCtx := context.Background()
+	bootCtx, stopSignals := signal.NotifyContext(runtimeCtx, syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+
+	// NATS is required. Publish the inert client to root ownership before
+	// connection/readiness so every partial acquisition reaches bounded cleanup.
+	natsClient, err := createNATSClient(cfg, phaseLogging.Client, metricsRegistry)
 	if err != nil {
-		return err
+		return fmt.Errorf("create NATS client: %w", err)
 	}
 	rootResources := &semstreamsRootResources{natsClient: natsClient}
 	defer rootResources.abortOnReturn(cliCfg.ShutdownTimeout, &runErr)
+	if err := connectNATSWithSpinner(bootCtx, natsClient, phaseLogging.Client); err != nil {
+		return err
+	}
 
 	// 6. Complete config arbitration before any final composition decision.
+	if err := bootCtx.Err(); err != nil {
+		return fmt.Errorf("bootstrap canceled before config manager start: %w", err)
+	}
 	configManager, effectiveConfig, err := bootstrapobservability.StartValidatedConfigManager(
-		ctx, cfg, natsClient, phaseLogging.ConfigManager,
+		runtimeCtx, cfg, natsClient, phaseLogging.ConfigManager,
 	)
 	if err != nil {
 		return err
 	}
 	rootResources.configManager = configManager
+	if err := bootCtx.Err(); err != nil {
+		return fmt.Errorf("bootstrap canceled after config manager start: %w", err)
+	}
 	// 7. Effective streams, including LOGS, exist before forwarding is built.
-	if err := ensureStreamsWithSpinner(ctx, effectiveConfig, natsClient, phaseLogging.ConfigManager); err != nil {
+	if err := ensureStreamsWithSpinner(bootCtx, effectiveConfig, natsClient, phaseLogging.ConfigManager); err != nil {
 		return err
 	}
 
@@ -158,9 +175,15 @@ func run() (runErr error) {
 	}
 	logger := phaseLogging.Steady(forwardingHandler)
 	slog.SetDefault(logger)
-	rootResources.stopMaxDeliveryObserver, err = maxdelivery.Start(ctx, natsClient, metricsRegistry, logger)
+	if err := bootCtx.Err(); err != nil {
+		return fmt.Errorf("bootstrap canceled before MaxDeliver observer start: %w", err)
+	}
+	rootResources.stopMaxDeliveryObserver, err = maxdelivery.Start(runtimeCtx, natsClient, metricsRegistry, logger)
 	if err != nil {
 		return fmt.Errorf("start MaxDeliver observer: %w", err)
+	}
+	if err := bootCtx.Err(); err != nil {
+		return fmt.Errorf("bootstrap canceled after MaxDeliver observer start: %w", err)
 	}
 
 	slog.Info("SemStreams ready",
@@ -195,7 +218,7 @@ func run() (runErr error) {
 
 	lifecycleManager := lifecycle.NewManager(natsClient, logger)
 	mutationClient, err := service.WireGraphRuntime(
-		ctx, natsClient, logger, builtinprojection.Contracts()...,
+		bootCtx, natsClient, logger, builtinprojection.Contracts()...,
 	)
 	if err != nil {
 		return fmt.Errorf("wire graph runtime: %w", err)
@@ -208,17 +231,17 @@ func run() (runErr error) {
 	// stateful tools that need them resolve at registration.
 	personaMgr := buildPersonaManagerConcrete(natsClient, logger)
 	if personaMgr != nil {
-		if err := persona.LoadFromDirectory(ctx, "configs/personas/fragments", personaMgr, logger); err != nil {
+		if err := persona.LoadFromDirectory(bootCtx, "configs/personas/fragments", personaMgr, logger); err != nil {
 			logger.Warn("persona file loader encountered errors", slog.Any("error", err))
 		}
 	}
 	toolRegistry := agentictools.NewExecutorRegistry()
-	if err := executors.RegisterBuiltins(ctx, toolRegistry, executors.ToolDependencies{
+	if err := executors.RegisterBuiltins(bootCtx, toolRegistry, executors.ToolDependencies{
 		NATSClient:              natsClient,
 		MutationClient:          mutationClient,
 		Platform:                platform,
 		Logger:                  logger,
-		RuleManager:             buildRuleManager(ctx, natsClient, configManager, logger),
+		RuleManager:             buildRuleManager(bootCtx, natsClient, configManager, logger),
 		FlowManager:             buildFlowManager(natsClient, logger),
 		PersonaManager:          personaMgr,
 		FlowTemplateManager:     buildFlowTemplateManager(natsClient, logger),
@@ -229,7 +252,7 @@ func run() (runErr error) {
 		return fmt.Errorf("register builtin tools: %w", err)
 	}
 	if graphresearch.Selected(cfg) {
-		if err := graphresearch.RegisterTool(ctx, toolRegistry, natsClient, platform, logger, graphresearch.LoopsBucket(cfg)); err != nil {
+		if err := graphresearch.RegisterTool(bootCtx, toolRegistry, natsClient, platform, logger, graphresearch.LoopsBucket(cfg)); err != nil {
 			return fmt.Errorf("register graph research tool: %w", err)
 		}
 	}
@@ -299,9 +322,9 @@ func run() (runErr error) {
 		return fmt.Errorf("validate rule-pack composition: %w", err)
 	}
 
-	// 12. Run application with signal handling
-	return runWithSignalHandling(
-		ctx, manager, cliCfg.ShutdownTimeout, cliCfg.HealthPort, rootResources.close,
+	// 12. Admit the fixed boot composition only while shutdown remains absent.
+	return runUntilShutdown(
+		runtimeCtx, bootCtx.Done(), manager, cliCfg.ShutdownTimeout, cliCfg.HealthPort, rootResources.close,
 	)
 }
 
@@ -357,34 +380,28 @@ func parseCLI() (*CLIConfig, bool, error) {
 	return cliCfg, false, nil
 }
 
-// connectToNATSWithSpinner connects to NATS with a spinner for user feedback.
+// connectNATSWithSpinner connects an already-owned NATS client with a spinner
+// for user feedback.
 // NATS is a hard requirement - semstreams cannot operate without it.
-func connectToNATSWithSpinner(
+func connectNATSWithSpinner(
 	ctx context.Context,
-	cfg *config.Config,
+	natsClient *natsclient.Client,
 	logger *slog.Logger,
-	metricsRegistry *metric.MetricsRegistry,
-) (*natsclient.Client, error) {
+) error {
 	spinner := NewSpinner("Connecting to NATS...")
 	spinner.Start()
 
-	natsClient, err := createNATSClient(cfg, logger, metricsRegistry)
-	if err != nil {
-		spinner.StopWithError(err)
-		return nil, fmt.Errorf("create NATS client: %w", err)
-	}
-
 	if err := bootstrapobservability.ConnectClient(ctx, natsClient, logger); err != nil {
 		spinner.StopWithError(err)
-		return nil, err
+		return err
 	}
 	if err := runSlowConsumerProbe(ctx, natsClient); err != nil {
 		spinner.StopWithError(err)
-		return nil, fmt.Errorf("run slow-consumer E2E probe: %w", err)
+		return fmt.Errorf("run slow-consumer E2E probe: %w", err)
 	}
 
 	spinner.Stop()
-	return natsClient, nil
+	return nil
 }
 
 // ensureStreamsWithSpinner creates JetStream streams with a spinner for user feedback.
@@ -531,23 +548,6 @@ func configureAndCreateServices(
 	return nil
 }
 
-// runWithSignalHandling starts services and handles shutdown signals.
-// healthPort is the optional dedicated health-port listener (#100); 0
-// disables it. The listener is bound AFTER StartAll succeeds so it never
-// reports "healthy" while services are still spinning up.
-func runWithSignalHandling(
-	ctx context.Context,
-	manager *service.Manager,
-	shutdownTimeout time.Duration,
-	healthPort int,
-	closeTransport func(context.Context) error,
-) error {
-	slog.Debug("Setting up signal handling")
-	signalCtx, signalCancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-	defer signalCancel()
-	return runUntilShutdown(ctx, signalCtx.Done(), manager, shutdownTimeout, healthPort, closeTransport)
-}
-
 type runtimeManager interface {
 	StartAll(context.Context) error
 	StartHealthListener(context.Context, int) error
@@ -562,6 +562,11 @@ func runUntilShutdown(
 	healthPort int,
 	closeTransport func(context.Context) error,
 ) error {
+	select {
+	case <-shutdownRequested:
+		return errors.New("shutdown requested before service startup")
+	default:
+	}
 
 	slog.Info("Starting all services")
 	if err := manager.StartAll(runtimeCtx); err != nil {

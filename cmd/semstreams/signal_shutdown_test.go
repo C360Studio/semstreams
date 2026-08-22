@@ -30,6 +30,29 @@ func (m *signalTestManager) StartAll(ctx context.Context) error {
 	return m.startErr
 }
 
+func TestRunUntilShutdownDoesNotStartAfterShutdownRequested(t *testing.T) {
+	manager := &signalTestManager{started: make(chan struct{})}
+	shutdownRequested := make(chan struct{})
+	close(shutdownRequested)
+	transportClosed := false
+
+	err := runUntilShutdown(
+		t.Context(), shutdownRequested, manager, time.Second, 0,
+		func(context.Context) error {
+			transportClosed = true
+			return nil
+		},
+	)
+
+	require.ErrorContains(t, err, "shutdown requested before service startup")
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	require.Empty(t, manager.operations)
+	require.Nil(t, manager.startCtx)
+	require.Nil(t, manager.stopCtx)
+	require.False(t, transportClosed)
+}
+
 func TestRunUntilShutdownStartFailureUsesBoundedAbortCleanup(t *testing.T) {
 	wantErr := errors.New("start failed")
 	manager := &signalTestManager{started: make(chan struct{}), startErr: wantErr}

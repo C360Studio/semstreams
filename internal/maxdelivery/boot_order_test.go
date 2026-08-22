@@ -16,6 +16,8 @@ import (
 // complete the shared Phase-A client, effective-config, and stream-provisioning
 // chain before starting the MaxDeliver observer or handing control to the
 // function whose first action is Manager.StartAll.
+//
+//revive:disable-next-line:function-length // One guard compares the complete production and E2E composition roots.
 func TestBinaryBootOrder(t *testing.T) {
 	t.Parallel()
 
@@ -24,7 +26,10 @@ func TestBinaryBootOrder(t *testing.T) {
 	productionCalls := functionCalls(t, productionPath, "run")
 	requireCallOrder(t, productionCalls,
 		"bootstrapobservability.NewProductionPhaseA",
-		"connectToNATSWithSpinner",
+		"context.Background",
+		"signal.NotifyContext",
+		"createNATSClient",
+		"connectNATSWithSpinner",
 		"bootstrapobservability.StartValidatedConfigManager",
 		"ensureStreamsWithSpinner",
 		"bootstrapobservability.NewForwardingHandler",
@@ -32,21 +37,63 @@ func TestBinaryBootOrder(t *testing.T) {
 		"maxdelivery.Start",
 		"setupRegistriesAndManager",
 		"configureAndCreateServices",
-		"runWithSignalHandling",
+		"runUntilShutdown",
 	)
+	requireCallOrder(t, productionCalls,
+		"connectNATSWithSpinner",
+		"bootCtx.Err",
+		"bootstrapobservability.StartValidatedConfigManager",
+		"bootCtx.Err",
+		"ensureStreamsWithSpinner",
+		"bootstrapobservability.NewForwardingHandler",
+		"phaseLogging.Steady",
+		"bootCtx.Err",
+		"maxdelivery.Start",
+		"bootCtx.Err",
+		"setupRegistriesAndManager",
+	)
+	require.NotContains(t, productionCalls, "runWithSignalHandling")
 	require.NotContains(t, productionCalls, "bootstrapobservability.NewE2EPhaseA")
 	productionPhase, err := assignedCallResult(productionRun, "bootstrapobservability.NewProductionPhaseA", 1)
 	require.NoError(t, err)
 	productionMetrics, err := siblingAssignedResult(productionRun, productionPhase, 0)
 	require.NoError(t, err)
-	require.NoError(t, checkBootstrapDataflow(productionRun, productionPhase, productionMetrics,
-		"connectToNATSWithSpinner", "bootstrapobservability.StartValidatedConfigManager", "ensureStreamsWithSpinner"))
-	productionClient, err := assignedCallResult(productionRun, "connectToNATSWithSpinner", 0)
+	productionRuntimeCtx, err := assignedCallResult(productionRun, "context.Background", 0)
 	require.NoError(t, err)
+	productionBootCtx, err := assignedCallResult(productionRun, "signal.NotifyContext", 0)
+	require.NoError(t, err)
+	require.NoError(t, requireIdentArgument(productionRun, "signal.NotifyContext", 0, productionRuntimeCtx))
+	productionClient, err := assignedCallResult(productionRun, "createNATSClient", 0)
+	require.NoError(t, err)
+	require.NoError(t, requireSelectorArgument(productionRun, "createNATSClient", 1, productionPhase, "Client"))
+	require.NoError(t, requireIdentArgument(productionRun, "createNATSClient", 2, productionMetrics))
+	require.NoError(t, requireIdentArgument(productionRun, "connectNATSWithSpinner", 0, productionBootCtx))
+	require.NoError(t, requireIdentArgument(productionRun, "connectNATSWithSpinner", 1, productionClient))
+	require.NoError(t, requireSelectorArgument(productionRun, "connectNATSWithSpinner", 2, productionPhase, "Client"))
+	ownedClient, err := compositeFieldIdentifier(productionRun, "semstreamsRootResources", "natsClient")
+	require.NoError(t, err)
+	require.Equal(t, productionClient, ownedClient)
+	requireCallOrder(t, productionCalls, "rootResources.abortOnReturn", "connectNATSWithSpinner")
+	require.NoError(t, requireIdentArgument(
+		productionRun, "bootstrapobservability.StartValidatedConfigManager", 0, productionRuntimeCtx,
+	))
 	productionEffective, err := assignedCallResult(
 		productionRun, "bootstrapobservability.StartValidatedConfigManager", 1,
 	)
 	require.NoError(t, err)
+	require.NoError(t, requireIdentArgument(productionRun, "ensureStreamsWithSpinner", 0, productionBootCtx))
+	require.NoError(t, requireIdentArgument(productionRun, "maxdelivery.Start", 0, productionRuntimeCtx))
+	for _, call := range []string{
+		"service.WireGraphRuntime",
+		"persona.LoadFromDirectory",
+		"executors.RegisterBuiltins",
+		"buildRuleManager",
+		"graphresearch.RegisterTool",
+	} {
+		require.NoError(t, requireIdentArgument(productionRun, call, 0, productionBootCtx), call)
+	}
+	require.NoError(t, requireIdentArgument(productionRun, "runUntilShutdown", 0, productionRuntimeCtx))
+	require.NoError(t, requireMethodCallArgument(productionRun, "runUntilShutdown", 1, productionBootCtx, "Done"))
 	require.NoError(t, requireSelectorArgument(productionRun,
 		"bootstrapobservability.NewForwardingHandler", 0, productionEffective, "Services"))
 	require.NoError(t, requireIdentArgument(productionRun,
@@ -56,10 +103,10 @@ func TestBinaryBootOrder(t *testing.T) {
 	forwarding, err := assignedCallResult(productionRun, "bootstrapobservability.NewForwardingHandler", 0)
 	require.NoError(t, err)
 	require.NoError(t, requireIdentArgument(productionRun, "phaseLogging.Steady", 0, forwarding))
-	requireConnectionChain(t, productionPath)
+	requireProductionConnectionChain(t, productionPath)
 	requireStreamWrapper(t, productionPath)
 	requireCompositionConstructors(t, productionPath)
-	requireStartsManager(t, productionPath)
+	require.Contains(t, functionCalls(t, productionPath, "runUntilShutdown"), "manager.StartAll")
 
 	e2ePath := filepath.Join("..", "..", "cmd", "e2e-semstreams", "main.go")
 	e2eRun := functionDecl(t, e2ePath, "run")
@@ -99,7 +146,8 @@ func TestBinaryBootOrder(t *testing.T) {
 	requireConnectionChain(t, e2ePath)
 	requireStreamWrapper(t, e2ePath)
 	requireCompositionConstructors(t, e2ePath)
-	requireStartsManager(t, e2ePath)
+	require.Contains(t, functionCalls(t, e2ePath, "runWithSignalHandling"), "runUntilShutdown")
+	require.Contains(t, functionCalls(t, e2ePath, "runUntilShutdown"), "manager.StartAll")
 
 	sharedPath := filepath.Join("..", "bootstrapobservability", "bootstrap.go")
 	requireCallOrder(t, functionCalls(t, sharedPath, "NewProductionPhaseA"),
@@ -269,6 +317,13 @@ func requireConnectionChain(t *testing.T, path string) {
 	require.Contains(t, functionCalls(t, path, "createNATSClient"), "bootstrapobservability.NewClient")
 }
 
+func requireProductionConnectionChain(t *testing.T, path string) {
+	t.Helper()
+	requireCallOrder(t, functionCalls(t, path, "connectNATSWithSpinner"),
+		"bootstrapobservability.ConnectClient", "runSlowConsumerProbe")
+	require.Contains(t, functionCalls(t, path, "createNATSClient"), "bootstrapobservability.NewClient")
+}
+
 func requireStreamWrapper(t *testing.T, path string) {
 	t.Helper()
 	ensureCalls := functionCalls(t, path, "ensureStreamsWithSpinner")
@@ -282,12 +337,6 @@ func requireCompositionConstructors(t *testing.T, path string) {
 	require.Contains(t, registryCalls, "component.NewRegistry")
 	require.Contains(t, registryCalls, "service.NewServiceManager")
 	require.Contains(t, functionCalls(t, path, "configureAndCreateServices"), "manager.ConfigureFromServices")
-}
-
-func requireStartsManager(t *testing.T, path string) {
-	t.Helper()
-	require.Contains(t, functionCalls(t, path, "runWithSignalHandling"), "runUntilShutdown")
-	require.Contains(t, functionCalls(t, path, "runUntilShutdown"), "manager.StartAll")
 }
 
 func checkBootstrapDataflow(
@@ -324,6 +373,62 @@ func checkBootstrapDataflow(
 		return fmt.Errorf("stream logger: %w", err)
 	}
 	return nil
+}
+
+func requireMethodCallArgument(
+	fn *ast.FuncDecl,
+	target string,
+	index int,
+	base, method string,
+) error {
+	argument, err := callArgument(fn, target, index)
+	if err != nil {
+		return err
+	}
+	call, ok := argument.(*ast.CallExpr)
+	if !ok {
+		return fmt.Errorf("argument %d to %s is not %s.%s()", index, target, base, method)
+	}
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || len(call.Args) != 0 {
+		return fmt.Errorf("argument %d to %s is not %s.%s()", index, target, base, method)
+	}
+	ident, ok := selector.X.(*ast.Ident)
+	if !ok || ident.Name != base || selector.Sel.Name != method {
+		return fmt.Errorf("argument %d to %s is not %s.%s()", index, target, base, method)
+	}
+	return nil
+}
+
+func compositeFieldIdentifier(fn *ast.FuncDecl, typeName, field string) (string, error) {
+	var result string
+	ast.Inspect(fn.Body, func(node ast.Node) bool {
+		literal, ok := node.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		ident, ok := literal.Type.(*ast.Ident)
+		if !ok || ident.Name != typeName {
+			return true
+		}
+		for _, element := range literal.Elts {
+			pair, pairOK := element.(*ast.KeyValueExpr)
+			if !pairOK {
+				continue
+			}
+			key, keyOK := pair.Key.(*ast.Ident)
+			assigned, assignedOK := pair.Value.(*ast.Ident)
+			if keyOK && assignedOK && key.Name == field {
+				result = assigned.Name
+				return false
+			}
+		}
+		return true
+	})
+	if result == "" {
+		return "", fmt.Errorf("%s.%s is not assigned an identifier", typeName, field)
+	}
+	return result, nil
 }
 
 func siblingAssignedResult(fn *ast.FuncDecl, sibling string, index int) (string, error) {
