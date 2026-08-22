@@ -14,9 +14,9 @@ import (
 
 // The bounds requirement is declared by the configuration path. These tests are
 // about the OTHER door: a direct EnsureStream caller must not be the supported
-// route around it. One was, in this repository — COMPONENT_CAPABILITIES was
-// created here with no MaxBytes and no discard policy, and the live server chose
-// both.
+// route around it. The retired COMPONENT_CAPABILITIES stream was the historical
+// in-repository example: it was created here with no MaxBytes and no discard
+// policy, and the live server chose both.
 
 func TestCheckStreamBounds(t *testing.T) {
 	bounded := jetstream.StreamConfig{

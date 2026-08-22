@@ -147,7 +147,7 @@ func runConfigBootProcessRole(ctx context.Context, url, role string) (result err
 		result = errors.Join(result, configManager.Stop(5*time.Second))
 	}()
 
-	registry := component.NewRegistry(component.WithLogger(logger))
+	registry := component.NewRegistry()
 	if err := registry.RegisterWithConfig(component.RegistrationConfig{
 		Name: configBootProcessFactory,
 		Type: string(types.ComponentTypeProcessor),

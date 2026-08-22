@@ -1,11 +1,32 @@
 package component
 
 import (
-	"bytes"
 	"encoding/json"
-	"log/slog"
+	"reflect"
 	"testing"
 )
+
+func TestRegistryDoesNotExposeRemoteCapabilityDiscovery(t *testing.T) {
+	t.Parallel()
+
+	registryType := reflect.TypeOf((*Registry)(nil))
+	for _, methodName := range []string{
+		"InitNATS",
+		"GetCapabilities",
+		"WaitForCapabilities",
+		"StartHeartbeat",
+		"StopHeartbeat",
+		"SubscribeCapabilities",
+	} {
+		if _, exists := registryType.MethodByName(methodName); exists {
+			t.Errorf("Registry still exports retired remote capability method %s", methodName)
+		}
+	}
+
+	if got := reflect.TypeOf(NewRegistry).NumIn(); got != 0 {
+		t.Errorf("NewRegistry accepts %d options, want a no-option constructor", got)
+	}
+}
 
 // TestListFactories_PreservesSchemaAndName verifies that ListFactories copies
 // the Name and Schema fields. This is critical for schema generation tooling.
@@ -189,47 +210,5 @@ func TestRegisterWithConfig_NoDependencies(t *testing.T) {
 	reg := factories["reg-no-deps"]
 	if len(reg.Dependencies) != 0 {
 		t.Errorf("Registration.Dependencies for no-deps component: got %v, want empty", reg.Dependencies)
-	}
-}
-
-// TestNewRegistry_WithLogger verifies that the logger can be customized.
-func TestNewRegistry_WithLogger(t *testing.T) {
-	// Create a buffer to capture log output
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
-
-	// Create registry with custom logger
-	registry := NewRegistry(WithLogger(logger))
-
-	// Verify logger was set
-	if registry.logger == nil {
-		t.Fatal("Logger should not be nil")
-	}
-
-	// Verify it's not the default logger
-	if registry.logger == slog.Default() {
-		t.Error("Expected custom logger, got default logger")
-	}
-}
-
-// TestNewRegistry_DefaultLogger verifies that the default logger is used when none provided.
-func TestNewRegistry_DefaultLogger(t *testing.T) {
-	registry := NewRegistry()
-
-	// Verify logger was set to default
-	if registry.logger == nil {
-		t.Fatal("Logger should not be nil")
-	}
-}
-
-// TestWithLogger_NilLogger verifies that nil logger is handled safely.
-func TestWithLogger_NilLogger(t *testing.T) {
-	// Should not panic and should fall back to default
-	registry := NewRegistry(WithLogger(nil))
-
-	if registry.logger == nil {
-		t.Fatal("Logger should not be nil even when WithLogger(nil) is called")
 	}
 }

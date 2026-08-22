@@ -100,9 +100,10 @@ enforce.
 
 The framework MUST hold its own stream declarations to this requirement, and MUST keep them reachable
 by a test rather than buried in a boot path. A framework that exempts itself cannot ask a sister repo
-to comply, and the exemption is not hypothetical: `COMPONENT_CAPABILITIES` was created through the
-ensure-stream seam with a finite age, no byte bound, and no discard policy, so a running server chose
-both on the framework's behalf.
+to comply. The historical violation was the now-retired `COMPONENT_CAPABILITIES` stream: it was created
+through the ensure-stream seam with a finite age, no byte bound, and no discard policy, so a running
+server chose both on the framework's behalf. That provenance remains evidence for the general guard;
+it does not describe a stream the framework currently provisions.
 
 Operator-reachable stream declarations MUST expose every required bound as operator configuration. A
 component that lets an operator name a stream while fixing its bounds in code has moved the
