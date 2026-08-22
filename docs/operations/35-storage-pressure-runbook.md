@@ -116,7 +116,7 @@ which failure they get.
 **`discard: old`** (the framework default for observability and audit streams) — at the ceiling
 JetStream **evicts the oldest messages** to make room. The write always succeeds. The loss is silent
 and at the tail. Correct where the newest data is what matters and stale data is worthless: health,
-metrics, flow status, capability announcements.
+metrics, and flow status.
 
 **`discard: new`** — at the ceiling JetStream **refuses the write**. The producer sees
 `503 err_code=10077 "maximum bytes exceeded"` on every publish until something is deleted. Nothing is

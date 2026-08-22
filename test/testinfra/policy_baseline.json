@@ -2,11 +2,6 @@
   "version": 1,
   "entries": [
     {
-      "key": "integration-time-sleep|component/registry_integration_test.go|TestRegistry_Heartbeat|time.Sleep(250 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
       "key": "integration-time-sleep|config/manager_integration_test.go|SetupTest|time.Sleep(50 * time.Millisecond)|1",
       "kind": "migration-debt",
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"

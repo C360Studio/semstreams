@@ -365,9 +365,6 @@ func (cm *ComponentManager) Start(ctx context.Context) (startErr error) {
 	cm.startOrder = make([]string, 0)
 	cm.mu.Unlock()
 
-	// Initialize NATS-backed capability discovery
-	cm.initCapabilityDiscovery(runtimeCtx)
-
 	// Start all components through the provider-first barriers. Providers launch
 	// concurrently and register before the concurrent consumer phase begins;
 	// each phase joins all of its failures. A failure is returned only after the
@@ -422,25 +419,6 @@ func (cm *ComponentManager) finishStart(
 func (cm *ComponentManager) supervise(ctx context.Context, done chan<- struct{}) {
 	defer close(done)
 	cm.publishHealthLoop(ctx)
-}
-
-// initCapabilityDiscovery initializes NATS-backed capability discovery if available.
-func (cm *ComponentManager) initCapabilityDiscovery(ctx context.Context) {
-	if cm.natsClient == nil {
-		return
-	}
-
-	nodeID := fmt.Sprintf("%s.%s", cm.platform.Org, cm.platform.Platform)
-	if nodeID == "." {
-		nodeID = "default-node"
-	}
-	if err := cm.registry.InitNATS(ctx, cm.natsClient, nodeID); err != nil {
-		cm.logger.Warn("Failed to initialize capability discovery, continuing without it",
-			"error", err)
-		return
-	}
-	cm.logger.Info("Capability discovery initialized", "node_id", nodeID)
-	cm.registry.StartHeartbeat(ctx, 30*time.Second)
 }
 
 // componentToStart holds component info for the parallel launch batch.
@@ -717,9 +695,6 @@ func (cm *ComponentManager) cleanup(ctx context.Context, retryable bool) error {
 		return attributeShutdownError("component-manager", errs.PhaseJoinRuntime, err)
 	}
 
-	if cm.registry != nil {
-		cm.registry.StopHeartbeat()
-	}
 	cleanupErr := errors.Join(cm.stopAllComponents(ctx)...)
 	cm.cancelRuntimeAuthority()
 	if err := cm.waitSupervisor(ctx, retryable); err != nil {

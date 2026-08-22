@@ -3,14 +3,11 @@
 package component
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semstreams/internal/componentadmission"
 	"github.com/c360studio/semstreams/natsclient"
@@ -24,113 +21,6 @@ type MockComponent struct {
 	inputPorts    []Port
 	outputPorts   []Port
 	healthy       bool
-}
-
-func newCapabilityRegistry(t *testing.T, client *natsclient.Client, nodeID string) *Registry {
-	t.Helper()
-	registry := NewRegistry()
-	if err := registry.InitNATS(context.Background(), client, nodeID); err != nil {
-		t.Fatalf("InitNATS: %v", err)
-	}
-	if err := registry.RegisterFactory("test-component", &Registration{
-		Name: "test-component", Factory: createMockComponent, Type: "processor",
-		Protocol: "test", Description: "Test component", Version: "1.0.0",
-	}); err != nil {
-		t.Fatalf("RegisterFactory: %v", err)
-	}
-	return registry
-}
-
-func admitCapabilityComponent(t *testing.T, registry *Registry, client *natsclient.Client, name string) {
-	t.Helper()
-	_, err := registry.CreateComponent(componentadmission.Access{}, name, types.ComponentConfig{
-		Type: types.ComponentTypeProcessor, Name: "test-component", Enabled: true,
-		Config: json.RawMessage(fmt.Sprintf(`{"name":%q}`, name)),
-	}, Dependencies{NATSClient: client, Platform: PlatformMeta{Org: "test", Platform: "test-platform"}}, nil)
-	if err != nil {
-		t.Fatalf("CreateComponent(%s): %v", name, err)
-	}
-}
-
-// NATS integration coverage for the preserved capability-discovery surface.
-func TestRegistry_InitNATS(t *testing.T) {
-	ctx := context.Background()
-	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream())
-	defer testClient.Terminate()
-	registry := newCapabilityRegistry(t, testClient.Client, "test-node-1")
-	if registry.nodeID != "test-node-1" || registry.remoteCapabilities == nil {
-		t.Fatalf("NATS state not initialized: node=%q capabilities=%v", registry.nodeID, registry.remoteCapabilities)
-	}
-	stream, err := testClient.Client.GetStream(ctx, "COMPONENT_CAPABILITIES")
-	if err != nil {
-		t.Fatal(err)
-	}
-	info, err := stream.Info(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Config.Storage != jetstream.MemoryStorage {
-		t.Fatalf("storage = %v, want memory", info.Config.Storage)
-	}
-}
-
-func TestRegistry_PublishCapabilities(t *testing.T) {
-	ctx := context.Background()
-	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream())
-	defer testClient.Terminate()
-	registry := newCapabilityRegistry(t, testClient.Client, "test-node-1")
-	admitCapabilityComponent(t, registry, testClient.Client, "test-instance")
-
-	stream, err := testClient.Client.GetStream(ctx, "COMPONENT_CAPABILITIES")
-	if err != nil {
-		t.Fatal(err)
-	}
-	consumer, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
-		FilterSubjects: []string{"processor.capabilities.test-instance"},
-		DeliverPolicy:  jetstream.DeliverLastPolicy,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	messages, err := consumer.Messages()
-	if err != nil {
-		t.Fatal(err)
-	}
-	message, err := messages.Next()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var announcement CapabilityAnnouncement
-	if err := json.Unmarshal(message.Data(), &announcement); err != nil {
-		t.Fatal(err)
-	}
-	if announcement.InstanceName != "test-instance" || announcement.Component != "test-component" ||
-		announcement.Type != "processor" || announcement.Version != "1.0.0" || announcement.NodeID != "test-node-1" ||
-		announcement.TTL != 60*time.Second {
-		t.Fatalf("unexpected announcement: %+v", announcement)
-	}
-}
-
-func TestRegistry_Heartbeat(t *testing.T) {
-	ctx := context.Background()
-	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream())
-	defer testClient.Terminate()
-	registry := newCapabilityRegistry(t, testClient.Client, "test-node-1")
-	admitCapabilityComponent(t, registry, testClient.Client, "test-instance")
-	registry.StartHeartbeat(ctx, 100*time.Millisecond)
-	defer registry.StopHeartbeat()
-	time.Sleep(250 * time.Millisecond)
-	stream, err := testClient.Client.GetStream(ctx, "COMPONENT_CAPABILITIES")
-	if err != nil {
-		t.Fatal(err)
-	}
-	info, err := stream.Info(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.State.Msgs < 1 {
-		t.Fatalf("capability message count = %d, want at least one", info.State.Msgs)
-	}
 }
 
 func NewMockComponent(name, componentType string) *MockComponent {
