@@ -65,7 +65,9 @@ concern, and it is live: `Violation.OriginalContent` carries up to 500 character
   implements neither surface currently evaluates to `false` forever in silence. It must surface —
   once per rule/type pair, not per message.
 
-- **All 16 framework-owned payloads implement it**, not a lazy subset. `Locatable` and `Timeable`
+- **The 15 agentic payloads plus `GenericJSONPayload` implement it**, not a lazy subset. (These
+  are not every framework-owned registered type — the registry holds 21; the five residuals
+  are recorded in `tasks.md` 8.5 and now fail loudly rather than silently.) `Locatable` and `Timeable`
   are adopter-owned: a product implements them on its own struct. The agentic payloads are
   framework-owned, so an adopter who wants a rule on `ToolCall` cannot add a method — they file a
   framework PR and wait for a release. Every payload skipped today is that PR tomorrow.

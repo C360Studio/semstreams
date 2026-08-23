@@ -54,9 +54,14 @@ Structural facts only. For each, decide what a rule may match on and withhold au
       withholds `arguments` (MODEL-AUTHORED) and `metadata`. `ToolResult` (`rule_fields.go:305`):
       `call_id`, `name`, `loop_id`, `trace_id`, `error_kind`, `result_hint`, `stop_loop`;
       withholds `content` (the result body), `error` (free prose) and `metadata`. Outcome is
-      `error_kind`, resolved to `ToolErrorUnknown` when `Error` is set but `ErrorKind` is not —
-      the default `tools.go:ToolErrorUnknown` already documents — so presence of the key means
-      "this call failed" without a rule string-matching an error message.
+      `error_kind`, DERIVED through the new `ToolResult.EffectiveErrorKind()`
+      (`agentic/tools.go:587`) rather than re-implemented, so presence of the key means "this call
+      failed" without a rule string-matching an error message. Review round: the projection
+      originally inlined the `ErrorKind`→`ToolErrorUnknown` default, which would have been the
+      THIRD copy (`processor/agentic-tools/component.go:891,907` and
+      `processor/agentic-loop/handlers.go:2296-2300` predate it). Lifting it onto the type stops
+      the count at two, in our own package; migrating the two older call sites is filed separately
+      because `processor/agentic-tools/` is adjacent to active work.
 - [x] 4.4 `UserMessage` (`rule_fields.go:329`): routing/threading ids and timestamp; withholds
       `content`, `attachments`, `metadata`. `UserResponse` (`rule_fields.go:352`): ids, `type`;
       withholds `content`, `blocks`, and `actions` (their `Label` is human-authored).
@@ -94,7 +99,8 @@ Structural facts only. For each, decide what a rule may match on and withhold au
       `result`/`prompt` did not reach the projection.
 - [x] 5.4 Done. The pre-implementation run was itself the fails-without-fix evidence (the new
       tests failed with the unreadable WARN naming `agentic.loop_completed.v1`); the post-commit
-      mutations used `cp` + `md5 -q`. `git stash list` confirms 3 unrelated entries — untouched.
+      mutations used `cp` + `md5 -q`. `git stash list` shows 5 unrelated entries (oldest
+      2026-07-16, newest 2026-08-17), unchanged at start and end — none created, none dropped.
 - [x] 5.5 Committed before mutating; `[applied]` printed between each mutation and its test run.
 
 ## 6. Consequences to confirm, not to fix here
@@ -141,8 +147,11 @@ Structural facts only. For each, decide what a rule may match on and withhold au
       real hole — file it rather than leaving it implicit. NOT FILED by this slice: issue filing is
       the owner's, and the developer contract's "a filed issue does not discharge an in-PR
       guarantee" cuts the other way too. Carried in the handoff as follow-up. Partly narrowed in
-      practice: an explicit projection is now the only way content reaches `$message.*`, and the
-      15 framework projections withhold it, so the hole is adopter-authored projections only.
+      practice, but NOT closed: content still reaches `$message.*` verbatim through
+      `GenericJSONPayload.RuleFields()`, which returns its caller-supplied `Data` map unfiltered.
+      What narrowed is the typed lane — the 15 framework projections withhold content by
+      construction — so the remaining hole is generic payloads and adopter-authored projections,
+      neither of which the engine enforces opacity on.
 - [~] 8.4 Adopter-owned payloads outside this repo. They implement the interface when they want the
       capability; that is the correct pressure.
 
@@ -154,3 +163,45 @@ Structural facts only. For each, decide what a rule may match on and withhold au
       payloads" reads on its own terms as broader than the 15 the tasks enumerate; this slice
       implemented exactly the 15 named. They now FAIL LOUDLY (the once-per-pairing report) instead of
       silently, which is the change's own remedy for the gap.
+
+## 9. Review-round remediation (approved with four required fixes)
+
+- [x] 9.1 `configs/agentic.json` — the `governance-approve-all-audit` description claimed the
+      `tool_name` condition scopes a `>`-subscribed rule. False after this change:
+      `ApprovalPendingEvent` exposes `tool_name` AND `call_id` (`agentic/rule_fields.go:267-268`),
+      `ApprovalResponse` and `ToolResult` expose `call_id` (`:289`, `:339`). Replaced with the
+      truth — scoped by the component's `agent.toolcall.proposed.>` INPUT PORT — plus the
+      escalation: widening that component's inputs makes the rule emit an approve verdict whose
+      `$message.call_id` is a REAL GATED call id, and verdicts correlate on payload `call_id`
+      (`processor/agentic-loop/component.go:2287-2288`, demuxed to per-call waiters by `call_id`),
+      so in enforce mode that is a human-approval-gate bypass. This is the shipped reference
+      config (`README.md:215`, `docker/compose/agentic.yml:70`,
+      `docs/basics/07-agentic-quickstart.md:81`), not an e2e
+      fixture. COMMENT ONLY — rule and ports unchanged (1 line, `git diff --stat` = 1 insertion,
+      1 deletion; JSON re-validated).
+- [x] 9.2 Discoverability: the pointer at `behaviors.go:19` is not the catalogue. Added a
+      `## Rule Interfaces` entry to `message/doc.go:99` (same shape as its siblings: methods,
+      "Use when", example) plus a `RuleReadable` arm in the Runtime Discovery Pattern block
+      (`doc.go:137-141`), and a table row + explanatory paragraph in
+      `docs/basics/03-graphable-interface.md:246,250`. Both state the load-bearing fact: ABSENCE means
+      the engine cannot read the payload at all.
+- [x] 9.3 `ToolResult.EffectiveErrorKind()` added on the type (`agentic/tools.go:587`); the
+      projection calls it (`agentic/rule_fields.go:344`). Empty return is the third state ("did not
+      fail"), documented as the reason to branch on emptiness rather than compare a member.
+      `TestEffectiveErrorKind` covers all four states. Pre-existing call sites deliberately NOT
+      migrated.
+- [x] 9.4 Attestation and doc corrections: `5.4` said "3 unrelated entries" where `5.2` said 5 —
+      corrected to 5 (measured at start and end, oldest 2026-07-16, newest 2026-08-17). `8.3`
+      overclaimed that explicit projection is now the only way content reaches `$message.*` —
+      tightened, because `GenericJSONPayload.RuleFields()` still returns `Data` verbatim; what
+      narrowed is the typed lane. `proposal.md:68` "all 16 framework-owned payloads" corrected to
+      "the 15 agentic payloads plus `GenericJSONPayload`" — measured: the registry holds 21
+      framework-owned types, 16 readable, 5 residual, matching `8.5` exactly.
+      `message/rule_readable.go:40` gained an adopter-guidance paragraph on the three sharp edges:
+      booleans mirror `omitempty` so `stop_loop` is absent-when-false and a rule must test absence;
+      `$message.type` is polysemous across `ContextEvent`/`UserSignal`/`UserResponse`; and
+      projected values feed NATS subject templates, so dotted values and RFC3339Nano timestamps are
+      now reliably available where they were previously incidental.
+- [x] 9.5 NEW EXPORTED SYMBOL, recorded because the exported-surface gate re-runs when the surface
+      grows: `agentic.ToolResult.EffectiveErrorKind() ToolErrorKind`. On `agentic/`, not one of the
+      framework packages requiring owner design review, and directed by the review.

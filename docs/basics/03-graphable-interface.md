@@ -243,8 +243,16 @@ Graphable is the foundation of a composable interface hierarchy:
 | `Timeable` | Timestamp | Temporal indexing |
 | `Observable` | Observation semantics | Sensor processing |
 | `Correlatable` | Correlation ID | Distributed tracing |
+| `RuleReadable` | Declared rule-readable fields | Rule conditions and `$message.*` substitution |
 
 Implement only what you need. Services discover capabilities at runtime via type assertions.
+
+`RuleReadable` is the one whose ABSENCE is load-bearing: a payload that does not
+implement it cannot be read by the rule engine at all, so every `$message.*`
+condition against it is false forever. The engine reports the rule/payload-type
+pairing once rather than failing silently. Expose structural facts; withhold
+LLM-authored and user content (ADR-036). See `message.RuleReadable` for the full
+contract.
 
 ## Common Patterns
 

@@ -267,7 +267,7 @@
             "id": "governance-approve-all-audit",
             "type": "expression",
             "name": "ADR-039 audit-mode approve-all (E2E coverage)",
-            "description": "Approves every proposed tool call so the e2e:agentic scenario can verify the governance flow fires (metric increments). Audit-mode means dispatch is not gated; this rule's verdict is observability only. Required `tool_name` condition filters out non-tool-call messages — the rule's default subscription is `>` (match-all), so this condition is what scopes it.",
+            "description": "Approves every proposed tool call so the e2e:agentic scenario can verify the governance flow fires (metric increments). Audit-mode means dispatch is not gated; this rule's verdict is observability only. SCOPING: this rule is scoped by the component's `agent.toolcall.proposed.>` INPUT PORT, not by its conditions. Its own subscription is `>` (match-all), and `tool_name`/`call_id` do NOT discriminate payload type — agent.approval_pending exposes both, agent.approval_response and tool.result expose call_id, all via message.RuleReadable. Widening this component's inputs to any of those subjects makes this rule emit an approve verdict whose `$message.call_id` is a real gated call id; verdicts correlate on payload call_id, so in enforce mode that is a human-approval-gate bypass. Narrow the conditions before widening the ports.",
             "enabled": true,
             "conditions": [
               {

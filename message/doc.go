@@ -96,6 +96,22 @@
 //   - Use when: Messages need to be grouped by deployment context
 //   - Example: Multi-tenant systems, A/B testing, staging environments
 //
+// ## Rule Interfaces
+//
+// RuleReadable: Declares the fields rule conditions and `$message.*`
+// substitutions may read from this payload
+//   - RuleFields() map[string]any - Returns the payload's declared projection
+//   - Use when: A rule should be able to condition or substitute on this
+//     payload. WITHOUT it the rule engine cannot read the payload at all:
+//     every `$message.*` condition against it is false forever, and the engine
+//     reports the rule/payload-type pairing once rather than failing silently.
+//   - Expose structural facts (ids, roles, outcomes, states, counts, routing);
+//     withhold LLM-authored and user content and open caller-populated maps.
+//     There is no reflective default, by design — a field reaches a rule only
+//     because its author exposed it.
+//   - Example: Loop outcome events, tool-call identity, approval decisions.
+//     GenericJSONPayload implements it by returning its whole Data map.
+//
 // ## Runtime Discovery Pattern
 //
 // Services discover capabilities at runtime through type assertions:
@@ -117,6 +133,12 @@
 //	if timeable, ok := msg.Payload().(Timeable); ok {
 //	    timestamp := timeable.Timestamp()
 //	    // Index by time, build time-series queries, etc.
+//	}
+//
+//	// Check for rule-readable fields
+//	if readable, ok := msg.Payload().(RuleReadable); ok {
+//	    fields := readable.RuleFields()
+//	    // Evaluate conditions, resolve $message.* substitutions, etc.
 //	}
 //
 // This pattern enables services to process any message type without prior knowledge

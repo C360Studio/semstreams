@@ -389,3 +389,27 @@ func TestZeroPayloadProjectionCoversMandatoryWireFields(t *testing.T) {
 		})
 	}
 }
+
+// TestEffectiveErrorKind pins the three states the ErrorKind default has to
+// distinguish. The empty return is the one that matters: reading ErrorKind
+// directly to answer "did this call fail" reads empty for an unclassified
+// executor error, which is the fail-open shape this method exists to close.
+func TestEffectiveErrorKind(t *testing.T) {
+	tests := []struct {
+		name   string
+		result ToolResult
+		want   ToolErrorKind
+	}{
+		{"classified failure keeps its kind", ToolResult{CallID: "c", Error: "boom", ErrorKind: ToolErrorTimeout}, ToolErrorTimeout},
+		{"unclassified failure resolves to unknown", ToolResult{CallID: "c", Error: "boom"}, ToolErrorUnknown},
+		{"kind without error message still classifies", ToolResult{CallID: "c", ErrorKind: ToolErrorPermission}, ToolErrorPermission},
+		{"success is the empty third state", ToolResult{CallID: "c", Content: "fine"}, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.result.EffectiveErrorKind(); got != tc.want {
+				t.Errorf("EffectiveErrorKind() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

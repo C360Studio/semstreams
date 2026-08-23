@@ -316,12 +316,18 @@ func (t *ToolCall) RuleFields() map[string]any {
 
 // RuleFields implements message.RuleReadable.
 //
-// Call identity, tool name and OUTCOME. The outcome is `error_kind`, resolved
-// the way ToolErrorUnknown documents it: a result carrying an Error but no
-// ErrorKind still reports the failure, classified as unknown. So the presence
-// of `error_kind` means "this call failed" and its value is the framework's
-// own classification — a rule never has to string-match an error message to
-// learn that much.
+// Call identity, tool name and OUTCOME. The outcome is `error_kind`, derived
+// through ToolResult.EffectiveErrorKind rather than copied: a result carrying
+// an Error but no ErrorKind is still a failure, classified as unknown. So the
+// presence of `error_kind` means "this call failed" and its value is the
+// framework's own classification — a rule never has to string-match an error
+// message to learn that much.
+//
+// This is the one deliberate break from the mirror-the-wire convention on a
+// non-time field: the wire omits `error_kind` for an unclassified failure and
+// the projection does not. Deriving it is the point; a rule that had to spell
+// `error_kind != "" OR error != ""` would be reading the content field the
+// projection withholds.
 //
 // Withheld: Content (THE RESULT BODY — arbitrary size, arbitrary origin, and
 // the field the rules-carry-references discipline exists for), Error (free-form
@@ -335,11 +341,8 @@ func (t *ToolResult) RuleFields() map[string]any {
 	putString(fields, "name", t.Name)
 	putString(fields, "loop_id", t.LoopID)
 	putString(fields, "trace_id", t.TraceID)
-	switch {
-	case t.ErrorKind != "":
-		fields["error_kind"] = string(t.ErrorKind)
-	case t.Error != "":
-		fields["error_kind"] = string(ToolErrorUnknown)
+	if kind := t.EffectiveErrorKind(); kind != "" {
+		fields["error_kind"] = string(kind)
 	}
 	putString(fields, "result_hint", string(t.ResultHint))
 	if t.StopLoop {

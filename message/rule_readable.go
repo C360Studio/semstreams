@@ -36,6 +36,26 @@ package message
 //
 // Keys are dotted-path addressable: a nested map[string]any value is reachable
 // as `$message.parent.child`.
+//
+// Three sharp edges to know before you write a rule against a projection:
+//
+//   - ABSENCE IS THE FALSE CASE FOR BOOLEANS. A projection that mirrors
+//     `omitempty` omits a false bool entirely, so `stop_loop` is absent rather
+//     than present-and-false. Test for absence (or condition on the true case);
+//     a condition comparing it to `false` matches nothing, silently. The same
+//     applies to any zero-valued `omitempty` field.
+//   - FIELD NAMES ARE NOT GLOBALLY UNIQUE. `$message.type` means the context
+//     event kind on ContextEvent, the control-signal verb on UserSignal, and
+//     the response kind on UserResponse. A rule subscribed to more than one
+//     subject must pin the payload with a second condition, because the engine
+//     resolves the path, not the type.
+//   - PROJECTED VALUES FEED SUBJECT TEMPLATES. `$message.*` resolves in action
+//     subjects and reasons as well as in conditions, so anything exposed here
+//     can end up as a NATS subject token. Dotted values (`model`) and RFC3339
+//     nano timestamps are now reliably available where they used to arrive only
+//     by accident — which also means an exposed field with a `.` or a space in
+//     it becomes a malformed subject. Prefer exposing tokens a subject can
+//     carry.
 type RuleReadable interface {
 	// RuleFields returns this payload's declared rule-readable fields.
 	// A nil or empty map is a valid answer meaning "nothing to match on" —
