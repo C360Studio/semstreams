@@ -115,3 +115,15 @@ func (g *GenericJSONPayload) UnmarshalJSON(data []byte) error {
 	type Alias GenericJSONPayload
 	return json.Unmarshal(data, (*Alias)(g))
 }
+
+// RuleFields implements RuleReadable: the whole data map IS this payload's
+// declared projection.
+//
+// core.json.v1 exists to carry arbitrary caller-supplied JSON with no schema
+// of its own, so there is no narrower honest answer — the payload's author is
+// the caller, and the caller already chose every key. It is also the behavior
+// every rule written before RuleReadable existed depends on, which is why
+// exposing Data verbatim keeps them all valid.
+func (g *GenericJSONPayload) RuleFields() map[string]any {
+	return g.Data
+}

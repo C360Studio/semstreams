@@ -99,10 +99,10 @@ type Evaluation struct {
 
 	// MessageData carries the payload of the inbound message that
 	// triggered evaluation, as a generic map for dotted-path access.
-	// Populated by `evaluateRulesForMessage` from
-	// `GenericJSONPayload.Data` for message-path (NATS-subscribed)
-	// rules. Nil for entity-state-driven and cron-fired evaluations.
-	// Plumbed through to `ExecutionContext.MessageData` so
+	// Populated by `evaluateRulesForMessage` from the payload's declared
+	// message.RuleReadable fields (see `ruleFields`) for message-path
+	// (NATS-subscribed) rules. Nil for entity-state-driven and cron-fired
+	// evaluations. Plumbed through to `ExecutionContext.MessageData` so
 	// `$message.*` substitution can resolve.
 	MessageData map[string]any
 }
