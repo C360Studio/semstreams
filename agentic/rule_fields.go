@@ -39,6 +39,32 @@ import "time"
 //     that no payload author ever declared. Withholding is the fail-closed
 //     answer for a surface whose contents cannot be classified in advance.
 //
+// THE TEST FOR "IS THIS STRUCTURAL", and it is not the obvious one:
+//
+//	Is this field constrained by a VALIDATOR or a CLOSED TYPE, or merely by
+//	its current callers?
+//
+// Enumerating producers and finding closed literals proves a property of
+// today's callers. It is not a contract, and a projection is a contract. A
+// field whose semantic is an EXPLANATION — reason, description, note, summary,
+// label — attracts prose by its nature, so unless something rejects prose
+// before publish, assume prose will arrive. LoopFailedEvent.Reason is the
+// worked example: closed in practice, unconstrained in contract, settable
+// through exported builders, therefore withheld.
+//
+// Identifier-, classification-, measurement- and address-shaped fields are the
+// ones that survive this test: a caller who puts prose in `role` or `user_id`
+// has broken the field's meaning, not merely its constraint.
+//
+// A SECOND-TIER CAVEAT worth knowing when you write a rule: several exposed
+// classification fields carry a documented vocabulary that nothing ENFORCES —
+// `outcome` (constants, no validator), ContextEvent `type` (constants, only a
+// non-empty check), `result_hint` and `error_kind` (named types, no Known()),
+// and AgentResponse `finish_reason` (raw from the provider). They are exposed
+// because they are classification-shaped, not because they are validated. Only
+// UserSignal `type`, UserResponse `type` and AgentResponse `status` are
+// enforced against a closed set by Validate.
+//
 // WHEN YOU ADD A FIELD to one of these payloads, decide here whether a rule
 // may match on it. A field that is absent from a projection and unexplained
 // reads as an oversight; the omission comments below exist so it does not.
@@ -117,20 +143,36 @@ func (e *LoopCompletedEvent) RuleFields() map[string]any {
 
 // RuleFields implements message.RuleReadable.
 //
-// `reason` IS exposed and `error` is not, and the distinction is the whole
-// policy in one payload: Reason is a closed classification the framework
-// assigns ("model_error", "length_truncated", "timeout"), which is exactly
-// what a rule can branch on; Error is the underlying free-form string from a
-// provider, a tool, or a transport, which routinely quotes model or user text
-// back at us. A rule that wants to know WHY reads reason.
+// REASON IS WITHHELD, AND DO NOT RESTORE IT BY ENUMERATING ITS PRODUCERS.
+// An earlier round exposed `reason` after finding that every in-tree caller
+// passes a closed literal ("model_error", "length_truncated", "timeout"). That
+// enumeration establishes a property of TODAY'S CALLERS, not a contract, and
+// the contract is what a projection may rely on:
 //
-// Withheld: Error, Prompt (the user's task text), Metadata (open map).
+//   - LoopFailedEvent.Validate (events.go) constrains LoopID and TaskID only.
+//     NOTHING constrains Reason — not a validator, not a named type, not a
+//     closed set.
+//   - MessageHandler.BuildFailureEvent and BuildFailureMessages
+//     (processor/agentic-loop/handlers.go) are EXPORTED and take `reason` as a
+//     free string.
+//
+// So an adopter can legally place user or model prose in Reason using only
+// exported API, and exposing it would route that prose into `$message.reason`,
+// into action templates, and into NATS subject tokens — contradicting the
+// structural-only guarantee this whole file exists to keep. Withholding is the
+// answer that does not depend on who happens to call it.
+//
+// Making `reason` rule-matchable is a TYPED-CONTRACT change, not a projection
+// change: it needs a validated enum, rejection before publish side effects, and
+// a migration for the two exported builders. That is its own proposal.
+//
+// Withheld: Reason, Error, Prompt (the user's task text), Metadata (open map).
+// `outcome` carries the failure signal a rule can act on today.
 func (e *LoopFailedEvent) RuleFields() map[string]any {
 	fields := map[string]any{
 		"loop_id":    e.LoopID,
 		"task_id":    e.TaskID,
 		"outcome":    e.Outcome,
-		"reason":     e.Reason,
 		"role":       e.Role,
 		"model":      e.Model,
 		"iterations": e.Iterations,

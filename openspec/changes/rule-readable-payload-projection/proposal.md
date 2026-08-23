@@ -47,8 +47,11 @@ concern, and it is live: `Violation.OriginalContent` carries up to 500 character
 
 ## What Changes
 
-- **`message.RuleReadable`** — a new optional behavior interface in `message/behaviors.go`
-  alongside its ten siblings:
+- **`message.RuleReadable`** — a new optional behavior interface joining the ten siblings in
+  `message/behaviors.go`. It ships in `message/rule_readable.go` rather than beside them: revive's
+  `max-public-structs` caps a FILE at 10 (`revive.toml:55-59`), `behaviors.go` was at exactly 10, and
+  `message/` is not in the rule's exclude list, so an 11th type there fails `task lint` and CI. The
+  catalogue entry in `message/doc.go` is what makes it discoverable, not the file it sits in.
 
   ```go
   type RuleReadable interface {
@@ -56,10 +59,14 @@ concern, and it is live: `Violation.OriginalContent` carries up to 500 character
   }
   ```
 
-- **One projection helper** replacing three hand-rolled type switches
-  (`expression_factory.go:130`, `message_handler.go:445`, `message_handler.go:412`): assert
-  `RuleReadable`, fall back to `GenericJSONPayload.Data`, otherwise report unreadable. One home for
-  interpreting a shared type.
+- **One projection helper** replacing FOUR hand-rolled type switches — `expression_factory.go:130`,
+  `message_handler.go:444` (`extractMessageData`), `message_handler.go:412` (`extractEntityID`), and
+  `test_rule_factory.go:66` (`TestRule.Evaluate`), which the original scoping missed and the
+  verification grep found. The helper asserts `RuleReadable` and reports unreadable otherwise; there is
+  no separate `GenericJSONPayload` fallback, because `GenericJSONPayload` implements the interface and
+  only `*GenericJSONPayload` satisfies `message.Payload`, making such a branch provably unreachable.
+  Generic payloads stay readable through `GenericJSONPayload.RuleFields()`. One home for interpreting a
+  shared type.
 
 - **An unreadable payload becomes observable.** A rule with `$message.*` conditions whose payload
   implements neither surface currently evaluates to `false` forever in silence. It must surface —
@@ -86,7 +93,12 @@ concern, and it is live: `Violation.OriginalContent` carries up to 500 character
 - **Not breaking.** Additive interface; a payload that does not implement it behaves exactly as
   today. `GenericJSONPayload.RuleFields()` returns `Data`, so every rule that works today keeps
   working.
-- **Fixes by consequence:** the dead `architect-editor` rule, and the first barrier of #1045.
+- **Removes a barrier, which is not the same as fixing a rule:** the `architect-editor` rule's
+  conditions become readable, and #1045's first barrier is cleared. The rule itself is NOT thereby
+  working — no flow config references the pack, and its `on_enter` templates use `$entity.task_id` /
+  `$entity.model` / `$entity.result`, which are not valid substitution tokens (the entity namespace is
+  `$entity.id` and `$entity.triple.<predicate>`), in a mid-template position the token grammar does not
+  resolve anyway. See `tasks.md` 6.1.
 - **Not in scope:** the governance verdict payload itself (#1045 — depends on this landing first);
   retiring the `verdictPayloadFromMap` type-erasure round trip; extending rule-opacity enforcement
   to `$message.*` paths and action templates (a separate `predicate-contract` question).

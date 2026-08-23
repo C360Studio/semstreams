@@ -205,3 +205,51 @@ Structural facts only. For each, decide what a rule may match on and withhold au
 - [x] 9.5 NEW EXPORTED SYMBOL, recorded because the exported-surface gate re-runs when the surface
       grows: `agentic.ToolResult.EffectiveErrorKind() ToolErrorKind`. On `agentic/`, not one of the
       framework packages requiring owner design review, and directed by the review.
+
+## 10. Codex review round (PR #1052) — four required changes
+
+- [x] 10.1 WITHHELD `LoopFailedEvent.Reason` (`agentic/rule_fields.go`). Round 2 exposed it after my
+      reviewer enumerated producers and found closed literals; Codex correctly identified that as a
+      property of today's callers, not a contract. Measured: `LoopFailedEvent.Validate`
+      (`agentic/events.go:155-163`) constrains `LoopID`/`TaskID` only — nothing constrains `Reason` —
+      and `MessageHandler.BuildFailureEvent` / `BuildFailureMessages`
+      (`processor/agentic-loop/handlers.go:2594-2602`) are EXPORTED and take it as a free string, so an
+      adopter can legally put prose there. No closed vocabulary introduced: that is a typed-contract
+      change (validated enum, rejection before publish side effects, migration for two exported
+      builders) and belongs to its own proposal. The method comment leads with "DO NOT RESTORE IT BY
+      ENUMERATING ITS PRODUCERS" so the next reader does not repeat the round-2 conclusion. `outcome`
+      still carries the failure signal a rule can act on. Mutation H proves the withhold-list test
+      catches a restored `reason`.
+- [x] 10.1a Re-audited EVERY other exposed field against the same test — constrained by a validator or
+      closed type, or merely by its callers? `reason` was the only explanation-shaped unconstrained
+      field in the exposed set; full result in the handoff. The test itself is now a standing rule in
+      the `agentic/rule_fields.go` header, together with a second-tier caveat naming the exposed
+      classification fields whose vocabulary is documented but NOT enforced (`outcome`, ContextEvent
+      `type`, `result_hint`, `error_kind`, `finish_reason`) versus the three that are (UserSignal
+      `type`, UserResponse `type`, AgentResponse `status`).
+- [x] 10.2 PRODUCTION-SEAM PROOF for action substitution:
+      `TestMessagePathSubstitutesTypedPayloadFieldsIntoActions`
+      (`processor/rule/payload_projection_test.go`) drives typed payload → `BaseMessage` wire bytes →
+      production decoder → `Processor.handleSemanticMessage` → `evaluateRulesForMessage` →
+      `StatefulEvaluator` (OnEnter) → `ActionExecutor` substitution → observable publish, asserting the
+      substituted subject token, three substituted body values, absence of unresolved templates, and
+      absence of withheld content. Mutations I and J prove it detects both an unwired projection and a
+      dropped `MessageData` wire. No e2e coverage-gap issue needed; `test/e2e/` untouched.
+- [x] 10.3 EXPORTED-SURFACE DESIGN GATE materialized as `design.md` in this directory: repository-first
+      surface inventory (18 interfaces in `message/`, the ten-member behavior family, the four baseline
+      assertion sites) re-derived with `git grep <pattern> 774c85dc`, adopter-seam inventory answering
+      all five questions, five options including do-nothing and reusing `Measurable`, the three owner
+      decisions, and both accepted deviations. `conformance.md` carries the ruling-to-`file:line` table
+      (9 rulings, all CONFORMS, no DEVIATION) and the ten-mutation record. Decision recorded, not
+      re-litigated.
+- [x] 10.4 Propagated the review corrections into `proposal.md`: interface file location and why; four
+      switches not three; no `GenericJSONPayload` fallback and why it is unreachable; and
+      "Fixes by consequence" narrowed to "Removes a barrier, which is not the same as fixing a rule".
+- [x] 10.5 THIRD defect on the shipped `architect-editor` rule, found by 10.2 and recorded not fixed:
+      beyond being unwired and using invalid `$entity.*` tokens (6.1), its action subject
+      `agent.task.$entity.task_id.editor` puts the token MID-TEMPLATE. The substitution grammar
+      (`message_substitution.go:54`, `typed_substitution.go:79`) is greedy over dotted paths, so the
+      literal `.editor` suffix is swallowed into the path, resolution fails, and the token is left
+      verbatim with a loud unresolved-template warning. Reproduced during 10.2 development before the
+      test was retargeted at the supported trailing-token shape. Config unchanged.
+

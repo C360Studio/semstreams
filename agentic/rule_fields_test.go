@@ -116,8 +116,14 @@ func projectionCases() []projectionCase {
 				Error: "provider said: <echoed prompt>", Role: "editor", Prompt: "user text",
 				Model: "m", FailedAt: now, Metadata: map[string]any{"secret": "x"},
 			},
-			expose:   map[string]any{"reason": "model_error", "outcome": OutcomeFailed},
-			withhold: []string{"error", "prompt", "metadata"},
+			expose: map[string]any{"outcome": OutcomeFailed, "role": "editor"},
+			// `reason` is WITHHELD, not missing: nothing in the contract
+			// constrains it (LoopFailedEvent.Validate checks LoopID/TaskID
+			// only) and the exported BuildFailureEvent/BuildFailureMessages
+			// take it as a free string, so an adopter can legally put prose
+			// there. Restoring it needs a validated enum, not an enumeration
+			// of today's callers.
+			withhold: []string{"reason", "error", "prompt", "metadata"},
 		},
 		{
 			name: "LoopCancelledEvent",

@@ -2,10 +2,12 @@ package rule
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -294,6 +296,125 @@ func TestShippedArchitectEditorRuleFiresOnLoopCompletedEvent(t *testing.T) {
 	for _, withheld := range []string{"result", "prompt"} {
 		if _, present := fields[withheld]; present {
 			t.Errorf("content field %q reached rule projection", withheld)
+		}
+	}
+}
+
+// TestMessagePathSubstitutesTypedPayloadFieldsIntoActions is the production-seam
+// proof for the spec's second clause: a declared value must reach `$message.*`
+// SUBSTITUTION IN THE RULE'S ACTIONS, not merely a condition.
+//
+// The other tests in this file drive `Evaluate` or call `extractMessageData`
+// directly, which proves the projection but not the wire. This one runs the
+// whole message lane on the real Processor:
+//
+//	typed payload -> BaseMessage wire bytes -> production decoder
+//	  -> Processor.handleSemanticMessage -> evaluateRulesForMessage
+//	  -> ExpressionRule.Evaluate -> StatefulEvaluator (OnEnter transition)
+//	  -> ActionExecutor substitution -> observable publish
+//
+// Every `$message.*` token in the action comes ONLY from
+// LoopCompletedEvent.RuleFields — before this change the payload was
+// unreadable, so the subject would have published with the literal tokens
+// unresolved.
+func TestMessagePathSubstitutesTypedPayloadFieldsIntoActions(t *testing.T) {
+	def := Definition{
+		ID:      "typed-payload-action-substitution",
+		Type:    "expression",
+		Name:    "typed-payload-action-substitution",
+		Enabled: true,
+		Logic:   "and",
+		Conditions: []expression.ConditionExpression{
+			{Field: "$message.role", Operator: "eq", Value: "architect"},
+			{Field: "$message.outcome", Operator: "eq", Value: "success"},
+		},
+		OnEnter: []Action{{
+			Type: ActionTypePublish,
+			// Token LAST, deliberately. `messageTokenRe`
+			// (message_substitution.go:54) is greedy over dotted paths, so a
+			// mid-template token followed by a literal suffix — the shipped
+			// architect-editor rule's `agent.task.$entity.task_id.editor`
+			// shape — has the suffix swallowed into the path, resolves to
+			// nothing, and is left literal with a loud warning. That is
+			// existing engine behaviour this change does not touch; testing
+			// the supported shape is what proves the projection reaches
+			// substitution.
+			Subject: "agent.task.editor.$message.task_id",
+			Properties: map[string]any{
+				"upstream_loop": "$message.loop_id",
+				"model":         "$message.model",
+				"iterations":    "$message.iterations",
+			},
+		}},
+	}
+
+	rule, err := NewExpressionRule("test-pack", def)
+	if err != nil {
+		t.Fatalf("NewExpressionRule: %v", err)
+	}
+
+	publisher := &mockPublisher{}
+	tracker := NewStateTracker(newMockKVBucket(), nil)
+	processor := &Processor{
+		logger:            slog.Default(),
+		decoder:           payloadbuiltins.NewTestDecoder(t),
+		rules:             map[string]Rule{def.ID: rule},
+		ruleDefinitions:   map[string]Definition{def.ID: def},
+		matchCounters:     map[string]*atomic.Int64{def.ID: {}},
+		stateTracker:      tracker,
+		statefulEvaluator: NewStatefulEvaluator(tracker, NewActionExecutorFull(slog.Default(), nil, publisher), nil),
+	}
+
+	event := &agentic.LoopCompletedEvent{
+		LoopID:      "loop-architect-7",
+		TaskID:      "task-42",
+		Outcome:     agentic.OutcomeSuccess,
+		Role:        "architect",
+		Model:       "test-model",
+		Iterations:  3,
+		Result:      "spec body the action template must not be able to splice",
+		Prompt:      "user task text the action template must not be able to splice",
+		CompletedAt: time.Now().UTC(),
+	}
+	wire, err := json.Marshal(message.NewBaseMessage(event.Schema(), event, "agentic-loop"))
+	if err != nil {
+		t.Fatalf("marshal BaseMessage: %v", err)
+	}
+
+	processor.handleSemanticMessage(context.Background(), "agent.complete.loop-architect-7", wire)
+
+	if len(publisher.published) != 1 {
+		t.Fatalf("action published %d messages, want 1 (rule did not fire through the production message lane)", len(publisher.published))
+	}
+	got := publisher.published[0]
+
+	// The subject token came from the typed payload's projection.
+	if got.subject != "agent.task.editor.task-42" {
+		t.Errorf("published subject = %q, want %q — $message.task_id did not substitute from the typed payload",
+			got.subject, "agent.task.editor.task-42")
+	}
+
+	body := string(got.data)
+	for token, want := range map[string]string{
+		"$message.loop_id":    "loop-architect-7",
+		"$message.model":      "test-model",
+		"$message.iterations": "3",
+	} {
+		if strings.Contains(body, token) {
+			t.Errorf("action body still carries the unresolved template %q: %s", token, body)
+		}
+		if !strings.Contains(body, want) {
+			t.Errorf("action body missing substituted value %q for %s: %s", want, token, body)
+		}
+	}
+
+	// Content stays out of the action template as well as out of conditions.
+	for _, withheld := range []string{
+		"spec body the action template must not be able to splice",
+		"user task text the action template must not be able to splice",
+	} {
+		if strings.Contains(body, withheld) {
+			t.Errorf("withheld content reached the published action body: %s", body)
 		}
 	}
 }
