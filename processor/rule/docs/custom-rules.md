@@ -173,10 +173,22 @@ func (r *ThresholdRule) Evaluate(messages []message.Message) bool {
     }
 
     msg := messages[len(messages)-1]
-    payload := msg.Payload()
 
-    // Extract value from payload
-    value, ok := r.extractValue(payload, r.field)
+    // Read the payload's DECLARED rule-readable fields.
+    //
+    // A payload is readable by a rule only if it implements
+    // message.RuleReadable — the framework never derives fields
+    // reflectively, so a field reaches a rule only because its author
+    // exposed it. A payload that does not implement it exposes nothing,
+    // and that is a deliberate refusal rather than an empty result.
+    readable, ok := msg.Payload().(message.RuleReadable)
+    if !ok {
+        return false
+    }
+
+    // JSON numbers decode as float64, so a numeric field arrives as
+    // float64 regardless of the producer's Go type.
+    value, ok := readable.RuleFields()[r.field].(float64)
     if !ok {
         return false
     }
@@ -208,6 +220,32 @@ func (r *ThresholdRule) ExecuteEvents(messages []message.Message) ([]Event, erro
     return []Event{event}, nil
 }
 ```
+
+### Reading payloads: `message.RuleReadable`
+
+`Evaluate` above reads the message through `message.RuleReadable`
+(`message/rule_readable.go`), the optional behavior interface a payload
+implements to declare which of its fields a rule may match on:
+
+```go
+type RuleReadable interface {
+    RuleFields() map[string]any
+}
+```
+
+Two things follow that are easy to get wrong:
+
+- **Absence is a refusal, not an empty map.** A payload that does not
+  implement the interface is not rule-readable at all. If you are writing
+  both a payload and a rule over it, the payload must implement this or
+  every condition against it is false forever.
+- **Only declared fields are visible.** The projection is explicit, so a
+  struct field the author omitted is unreachable — including from
+  `$message.*` substitution in actions. Payloads deliberately withhold
+  LLM-authored and user content this way.
+
+The framework's own payloads implement it in `agentic/rule_fields.go`;
+`message.GenericJSONPayload` returns its data map verbatim.
 
 ### Step 3: Implement EntityStateEvaluator (Optional)
 
