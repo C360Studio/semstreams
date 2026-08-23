@@ -37,7 +37,7 @@ func TestManagerHTTPServeDoneDoesNotCompleteBeforeServeReturns(t *testing.T) {
 	port := freePort(t)
 	manager := createTestServiceManager(ManagerConfig{HTTPPort: port}, deps)
 	require.NoError(t, manager.initializeHTTPInfrastructure())
-	require.NoError(t, manager.completeHTTPSetup(t.Context()))
+	require.NoError(t, manager.startHTTPRuntime(t.Context()))
 	t.Cleanup(func() { _ = manager.stopRuntimeServers(context.Background()) })
 	waitForListener(t, fmt.Sprintf("http://127.0.0.1:%d/healthz", port), 10*time.Second)
 
@@ -57,7 +57,7 @@ func TestListenerBaseContextsPreserveExactStartValues(t *testing.T) {
 
 	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, createTestServiceDependencies(nil))
 	require.NoError(t, manager.initializeHTTPInfrastructure())
-	require.NoError(t, manager.completeHTTPSetup(startCtx))
+	require.NoError(t, manager.startHTTPRuntime(startCtx))
 	t.Cleanup(func() { _ = manager.stopRuntimeServers(context.Background()) })
 	require.Equal(t, "exact-parent", manager.httpServer.BaseContext(manager.httpListener).Value(key))
 
@@ -73,7 +73,7 @@ func TestListenerStartsRejectCanceledContextBeforeAcquisition(t *testing.T) {
 
 	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, createTestServiceDependencies(nil))
 	require.NoError(t, manager.initializeHTTPInfrastructure())
-	require.ErrorIs(t, manager.completeHTTPSetup(canceled), context.Canceled)
+	require.ErrorIs(t, manager.startHTTPRuntime(canceled), context.Canceled)
 	require.False(t, manager.httpUsed)
 	require.Nil(t, manager.httpListener)
 
@@ -184,7 +184,7 @@ func TestStartHealthListenerReportsBindFailureSynchronously(t *testing.T) {
 	require.Contains(t, err.Error(), "bind")
 }
 
-func TestCompleteHTTPSetupReportsBindFailureSynchronously(t *testing.T) {
+func TestStartHTTPRuntimeReportsBindFailureSynchronously(t *testing.T) {
 	listener, err := net.Listen("tcp", ":0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = listener.Close() })
@@ -192,7 +192,7 @@ func TestCompleteHTTPSetupReportsBindFailureSynchronously(t *testing.T) {
 
 	manager := createTestServiceManager(ManagerConfig{HTTPPort: port}, createTestServiceDependencies(nil))
 	require.NoError(t, manager.initializeHTTPInfrastructure())
-	err = manager.completeHTTPSetup(t.Context())
+	err = manager.startHTTPRuntime(t.Context())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "bind")
 }

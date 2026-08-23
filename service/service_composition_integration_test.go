@@ -60,8 +60,8 @@ func TestServiceCompositionDesiredStateProductionSeam(t *testing.T) {
 	}
 
 	manager.httpMux = http.NewServeMux()
-	manager.registerSystemEndpoints()
-	if err := manager.registerServiceHandlers(); err != nil {
+	manager.registerSystemEndpoints(manager.httpMux)
+	if err := manager.registerServiceHandlers(manager.httpMux); err != nil {
 		t.Fatal(err)
 	}
 	assertCompositionProbeRoute(t, manager.httpMux)

@@ -296,6 +296,15 @@ post-boot reconfiguration is not a ComponentManager concern; published changes b
 - Integrates with component package for connectivity validation
 - Enables boot-composition observation and debugging without runtime mutation
 
+**Startup observability**: After composition seals, Manager binds the shared
+HTTP diagnostics and the configured built-in Prometheus listener before service
+startup without changing registration-order lifecycle. `/readyz` returns exact
+`NOT READY` until all fallible boot work succeeds, Manager commits the complete
+route set, and current service/component health is ready. The existing
+`/services` response includes additive `startup` counts; Prometheus exposes the
+same progress as `semstreams_startup_units{owner,stage}`. Stop clears commitment
+before child cleanup. Treat TCP reachability as liveness only, not readiness.
+
 ### Integration Points
 
 - **Dependencies**: NATS client (required), MetricsRegistry (optional), Logger (optional), Manager (optional)
