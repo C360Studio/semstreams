@@ -1,15 +1,29 @@
 # Implementation conformance: rule-readable payload projection
 
 Status: independent review round 1 returned `APPROVE` with four required fixes (round 2, all applied);
-Codex review of PR #1052 returned `REQUEST CHANGES` with four items (round 3, all applied). Merge and
-issue closure have not occurred.
+Codex review of PR #1052 returned `REQUEST CHANGES` with four items (round 3, all applied); Codex
+re-review at head `54995742` returned four further items (round 4, all applied). Merge and issue closure
+have not occurred.
 
-Baseline: `774c85dc`. Accepted design: `design.md` in this directory.
+THE DESIGN GATE IS OPEN. `inventory.md` and `design.md` in this directory are UNSIGNED: neither
+`INVENTORY PASS` nor `DESIGN REVIEW PASS` has been issued, and no owner acceptance is recorded. This file
+maps rulings to implementation evidence; it does not certify that the rulings were gated. A conformance
+table over an ungated design is exactly as strong as the design behind it, and no stronger.
 
-CI note: the `Test` job on #1052 is red on the 30s drain timeout in `graph-clustering` / `graph-embedding`.
-That failure reproduces on `main` (four of eight consecutive runs; the PR's own base `774c85dc` failed on
-main before this branch ran) and is tracked as **#1054**. It is not attributable to this change, which
-touches neither package. Local gate results are recorded below.
+Baseline: `774c85dc`. Design under review (unsigned): `design.md`, referencing `inventory.md` at sha256
+`c65bc53ac2df892d44703cf26e2645fdd8b9c0ab836f42ce7a33a93e0c3ffbf7`.
+
+CI note, current as of head `54995742`: the `Test` job is red in `internal/maxdelivery`
+(`TestThreeNodeClusterReplicasOneRetainsAndHandlesOccurrenceOnce`, a NATS 404 stream-not-found). This is a
+DIFFERENT failure from the one an earlier round of this artifact recorded — that was the 30s drain timeout
+in `graph-clustering` / `graph-embedding`, tracked as **#1054**, which reproduced on `main` in four of
+eight consecutive runs.
+
+Neither is attributable to this change. It touches none of those three packages, and the local integration
+suite below runs ALL THREE to green on this exact tree — `internal/maxdelivery` 11.4s,
+`processor/graph-clustering` 33.8s, `processor/graph-embedding` 17.6s. The branch base was independently
+red before this branch ran. No re-run-to-green was attempted and no test in those packages was modified;
+a locally-green package that is red in CI is evidence of environment-dependent flake, not of a fix.
 
 ## Ruling-to-implementation map
 
@@ -23,7 +37,7 @@ touches neither package. Local gate results are recorded below.
 | S2 — unreadable is observable, bounded per rule/type | The engine surfaces the pairing once per rule and payload type, never per message. | `ExpressionRule.reportUnreadablePayload` at `processor/rule/expression_factory.go:62`, bounded by the per-rule `sync.Map` at `:52` keyed on the wire type. `TestExpressionRuleReportsUnreadablePayloadOncePerPairing` asserts the report identifies rule and type, that a repeat of 50 adds zero reports, and that a neighbour rule evaluates independently. | CONFORMS |
 | S3 — evaluation semantics unchanged | The rule does not fire, the engine does not halt, other rules are unaffected, and a legitimately-false condition produces no new signal. | The unreadable branch still returns `false`. `TestExpressionRuleLegitimateFalseProducesNoSignal` covers the quiet path; the neighbour assertion in the report test covers isolation. `len(r.conditions) == 0` was moved ahead of projection so a rule that cannot fire never reports. | CONFORMS |
 | S4 — generic payloads keep working | Every rule valid before the change is valid after it. | `GenericJSONPayload.RuleFields()` returns `Data` (`message/generic_json.go:127`). `TestExpressionRuleGenericJSONPayloadUnchanged` covers match and non-match. Mutation B (swap the helper back to the pre-change generic-only assertion) leaves these green while failing only the typed-payload tests. | CONFORMS |
-| S5 — declared values reach action substitution, not only conditions | A projected field resolves in the rule's action templates through the running processor. | `TestMessagePathSubstitutesTypedPayloadFieldsIntoActions` drives typed payload → wire bytes → production decoder → `Processor.handleSemanticMessage` → `StatefulEvaluator` → `ActionExecutor` → observable publish, and asserts the subject token and three body values substituted from the projection while withheld content did not appear. | CONFORMS |
+| S5 — declared values reach action substitution, not only conditions | A projected field resolves in the rule's action templates, proven below the component lifecycle. | `TestMessagePathSubstitutesTypedPayloadFieldsIntoActions` covers decode → projection → evaluation → substitution → publish: it wire-encodes a typed payload, decodes through the production `payloadbuiltins` decoder, and calls the unexported `handleSemanticMessage` on a HAND-ASSEMBLED `Processor` struct, asserting the substituted subject token and three body values while withheld content stays absent. NOT covered, and NOT claimed: the production component factory, `Initialize`/`Start`, real NATS delivery, and real KV state storage — the test supplies `newMockKVBucket` and `mockPublisher`. That remaining lifecycle gap is filed as **#1058**. | CONFORMS (below the lifecycle seam; #1058 tracks the rest) |
 
 No `DEVIATION` is recorded. Two design deviations were raised, escalated, and accepted at review; both are
 recorded in `design.md` rather than here because they changed the design, not the ruling.

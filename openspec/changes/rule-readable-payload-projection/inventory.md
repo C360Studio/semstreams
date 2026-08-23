@@ -1,0 +1,94 @@
+# Surface inventory: rule-readable payload projection
+
+Status: **UNSIGNED.** `INVENTORY PASS` is owner-issued and has not been granted. This artifact exists to be
+reviewed, not to certify itself.
+
+Baseline: `774c85dc`. Every figure below was re-derived against that commit with `git show <rev>:<path>` or
+`git grep <pattern> 774c85dc -- <path>`. Nothing is carried forward from an earlier scoping pass.
+
+Scope: this file records WHAT EXISTS at the baseline on the surface the change touches. It contains no
+target state, no options, no recommendation, and no acceptance. Those live in `design.md`, which references
+this file by the hash printed at the end.
+
+## Interfaces declared in `message/`
+
+`git grep "^type .* interface {" 774c85dc -- message/` returns 18. Ten form the optional behavior family
+that is discovered by type assertion:
+
+| Interface | `file:line` at baseline | Returns |
+|---|---|---|
+| `Locatable` | `message/behaviors.go:23` | two floats |
+| `Timeable` | `message/behaviors.go:34` | `time.Time` |
+| `Observable` | `message/behaviors.go:44` | four scalars |
+| `Correlatable` | `message/behaviors.go:66` | string |
+| `Measurable` | `message/behaviors.go:79` | `map[string]any` + unit lookup |
+| `Deployable` | `message/behaviors.go:91` | string |
+| `Processable` | `message/behaviors.go:99` | int + `time.Time` |
+| `Traceable` | `message/behaviors.go:112` | three strings |
+| `Expirable` | `message/behaviors.go:127` | `time.Time` + `time.Duration` |
+| `IndexingProfiler` | `message/behaviors.go:152` | string |
+
+The other eight are structural or semantic contracts rather than optional capabilities:
+`ContentStorable` (`message/content_storable.go:44`), `BinaryStorable` (`:134`), `FederationMeta`
+(`message/federation.go:22`), `Message` (`message/message.go:20`), `Meta` (`message/meta.go:13`),
+`Payload` (`message/payload.go:50`), `Storable` (`message/storable.go:64`), `TripleGenerator`
+(`message/triple.go:123`).
+
+Exactly one of the ten returns a map: `Measurable`, whose map is measurements paired with
+`Unit(measurement string) string`.
+
+## Existing owner for "what may a rule read from this payload"
+
+`git grep "RuleReadable\|RuleFields" 774c85dc` returns no matches. No type represents the responsibility at
+the baseline.
+
+The behaviour is instead hard-coded as a concrete-type assertion at four sites:
+
+| Site | `file:line` at baseline |
+|---|---|
+| `ExpressionRule.Evaluate` | `processor/rule/expression_factory.go:130` |
+| `extractEntityID` | `processor/rule/message_handler.go:412` |
+| `extractMessageData` | `processor/rule/message_handler.go:444` |
+| `TestRule.Evaluate` | `processor/rule/test_rule_factory.go:66` |
+
+The enumeration is complete for the rule lane: `git grep "\.Payload()" 774c85dc -- processor/rule/`
+returns exactly those four production reads plus one prose mention at
+`processor/rule/docs/custom-rules.md:176`.
+
+## Payload registry census
+
+`payloadbuiltins.Register` (`payloadbuiltins/register.go` at baseline) aggregates six registrars:
+`message`, `agentic`, `agenticdispatch`, `gateddagexec`, `objectstore`, `governance`.
+
+`agentic.RegisterPayloads` registers 15 payload types
+(`git show 774c85dc:agentic/payload_registry.go | grep -c "Domain: Domain, Category:"`). Measured against
+the assembled registry at implementation time, the full first-party set is 21 types.
+
+## Existing consumers affected
+
+`configs/rules/agentic-workflow/architect-editor.json` at baseline: `id=architect_complete_spawn_editor`,
+`enabled=true`, conditions on `$message.role` and `$message.outcome`. Those names match
+`LoopCompletedEvent.Role` and `.Outcome` (`agentic/events.go`), and `agent.complete.*` carries
+`LoopCompletedEvent`, a registered typed payload.
+
+The framework's existing workaround for the same constraint is visible in two places:
+`payloadToBaseMessageBytes` (`processor/agentic-loop/governance_dispatcher.go`) marshals a typed
+`ProposedToolCallPayload` into a `map[string]any`, and `verdictPayloadFromMap`
+(`processor/agentic-loop/component.go`) converts it back.
+
+## Content-exposure surfaces present at baseline
+
+Fields a projection would have to make an explicit decision about, recorded because they bound the risk:
+`AgentRequest.Messages` (full prompt), `AgentResponse.Message` (model output), `ToolResult.Content` (result
+body), `ToolCall.Arguments` (model-authored), `UserMessage.Content` (user text), and the open
+caller-populated `Metadata` maps on the loop events, `TaskMessage`, `ToolCall` and `ToolResult`.
+
+## Identity
+
+Content hash of this file, excluding this Identity section, over the exact bytes above:
+
+    sha256 = c65bc53ac2df892d44703cf26e2645fdd8b9c0ab836f42ce7a33a93e0c3ffbf7
+
+Recompute with:
+
+    sed '/^## Identity$/,$d' inventory.md | shasum -a 256

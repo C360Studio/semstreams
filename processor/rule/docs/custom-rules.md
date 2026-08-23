@@ -140,6 +140,7 @@ package rule
 
 import (
 	"context"
+	"encoding/json"
 
     gtypes "github.com/c360/semstreams/graph"
     "github.com/c360/semstreams/message"
@@ -186,9 +187,10 @@ func (r *ThresholdRule) Evaluate(messages []message.Message) bool {
         return false
     }
 
-    // JSON numbers decode as float64, so a numeric field arrives as
-    // float64 regardless of the producer's Go type.
-    value, ok := readable.RuleFields()[r.field].(float64)
+    // RuleFields() returns the payload's own Go values, so a numeric
+    // field arrives as whatever type the projection declared. Coerce;
+    // do NOT assert a single type. See the note below.
+    value, ok := asFloat(readable.RuleFields()[r.field])
     if !ok {
         return false
     }
@@ -202,6 +204,41 @@ func (r *ThresholdRule) Evaluate(messages []message.Message) bool {
     }
 
     return r.triggered
+}
+
+// asFloat coerces any numeric value a projection may hand back. A typed
+// payload returns real Go types (int, int64, float64, ...); a
+// GenericJSONPayload has been through a JSON decode and returns float64;
+// a decoder configured with UseNumber() yields json.Number. A rule that
+// handles only one of those is silently false against the others.
+//
+// This mirrors the engine's own coercion — expression-based rules get it
+// for free from processor/rule/expression/evaluator.go. Custom rules that
+// read RuleFields() directly are outside that path and must do it here.
+func asFloat(v any) (float64, bool) {
+    switch n := v.(type) {
+    case float64:
+        return n, true
+    case float32:
+        return float64(n), true
+    case int:
+        return float64(n), true
+    case int32:
+        return float64(n), true
+    case int64:
+        return float64(n), true
+    case uint:
+        return float64(n), true
+    case uint32:
+        return float64(n), true
+    case uint64:
+        return float64(n), true
+    case json.Number:
+        f, err := n.Float64()
+        return f, err == nil
+    default:
+        return 0, false
+    }
 }
 
 func (r *ThresholdRule) ExecuteEvents(messages []message.Message) ([]Event, error) {
@@ -233,7 +270,7 @@ type RuleReadable interface {
 }
 ```
 
-Two things follow that are easy to get wrong:
+Three things follow that are easy to get wrong:
 
 - **Absence is a refusal, not an empty map.** A payload that does not
   implement the interface is not rule-readable at all. If you are writing
@@ -243,6 +280,16 @@ Two things follow that are easy to get wrong:
   struct field the author omitted is unreachable — including from
   `$message.*` substitution in actions. Payloads deliberately withhold
   LLM-authored and user content this way.
+- **Values keep the projection's Go types — do not assume `float64`.**
+  `RuleFields()` runs *after* decode and returns the payload's own values,
+  so `LoopCompletedEvent.Iterations` (an `int`) arrives as `int`, not
+  `float64`. Only `GenericJSONPayload` yields `float64` for every number,
+  because its map came straight from a JSON decode. A rule that
+  type-asserts `.(float64)` compiles, runs, and is **silently false**
+  against every typed payload — the exact failure mode `RuleReadable`
+  exists to end. Coerce over the numeric types (`asFloat` above) instead.
+  The same care applies to any field whose projection may declare a named
+  string type.
 
 The framework's own payloads implement it in `agentic/rule_fields.go`;
 `message.GenericJSONPayload` returns its data map verbatim.

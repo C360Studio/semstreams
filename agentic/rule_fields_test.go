@@ -249,8 +249,15 @@ func projectionCases() []projectionCase {
 				Error:      "provider prose",
 				TokenUsage: TokenUsage{PromptTokens: 11, CompletionTokens: 22},
 			},
-			expose:   map[string]any{"status": StatusComplete, "finish_reason": "stop"},
-			withhold: []string{"message", "error"},
+			expose: map[string]any{"status": StatusComplete, "request_id": "req1"},
+			// `finish_reason` is WITHHELD: it carries the provider's raw
+			// value, and the two in-repo client lanes already write different
+			// vocabularies into it (chat-completions writes stop/length/
+			// tool_calls, responses writes completed/incomplete), so a rule
+			// matching on it breaks on a config-only endpoint switch. Both
+			// lanes feed the same switch that produces `status`, which IS
+			// validated against a closed set, so nothing is lost.
+			withhold: []string{"finish_reason", "message", "error"},
 		},
 	}
 

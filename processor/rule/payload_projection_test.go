@@ -300,18 +300,26 @@ func TestShippedArchitectEditorRuleFiresOnLoopCompletedEvent(t *testing.T) {
 	}
 }
 
-// TestMessagePathSubstitutesTypedPayloadFieldsIntoActions is the production-seam
-// proof for the spec's second clause: a declared value must reach `$message.*`
-// SUBSTITUTION IN THE RULE'S ACTIONS, not merely a condition.
+// TestMessagePathSubstitutesTypedPayloadFieldsIntoActions proves the spec's
+// second clause: a declared value must reach `$message.*` SUBSTITUTION IN THE
+// RULE'S ACTIONS, not merely a condition.
 //
 // The other tests in this file drive `Evaluate` or call `extractMessageData`
-// directly, which proves the projection but not the wire. This one runs the
-// whole message lane on the real Processor:
+// directly, which proves the projection but not the substitution wire. This one
+// runs the message lane:
 //
 //	typed payload -> BaseMessage wire bytes -> production decoder
 //	  -> Processor.handleSemanticMessage -> evaluateRulesForMessage
 //	  -> ExpressionRule.Evaluate -> StatefulEvaluator (OnEnter transition)
 //	  -> ActionExecutor substitution -> observable publish
+//
+// SCOPE, stated because an earlier draft of this comment overclaimed it as "the
+// real Processor": the decoder is the production one and every stage from
+// decode through substitution is production code, but the Processor here is
+// HAND-ASSEMBLED as a struct literal and driven through the unexported
+// handleSemanticMessage. It does NOT exercise the component factory,
+// Initialize/Start, real NATS delivery, or real KV state — newMockKVBucket and
+// mockPublisher stand in for those. The real-lifecycle gap is filed as #1058.
 //
 // Every `$message.*` token in the action comes ONLY from
 // LoopCompletedEvent.RuleFields — before this change the payload was

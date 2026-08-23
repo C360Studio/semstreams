@@ -59,11 +59,18 @@ import "time"
 // A SECOND-TIER CAVEAT worth knowing when you write a rule: several exposed
 // classification fields carry a documented vocabulary that nothing ENFORCES —
 // `outcome` (constants, no validator), ContextEvent `type` (constants, only a
-// non-empty check), `result_hint` and `error_kind` (named types, no Known()),
-// and AgentResponse `finish_reason` (raw from the provider). They are exposed
-// because they are classification-shaped, not because they are validated. Only
+// non-empty check), and `result_hint` / `error_kind` (named types, no Known()).
+// They are exposed because they are classification-shaped and FRAMEWORK-OWNED:
+// one vocabulary, written in one place, unenforced but not contested. Only
 // UserSignal `type`, UserResponse `type` and AgentResponse `status` are
 // enforced against a closed set by Validate.
+//
+// A classification field is DIFFERENT, and gets withheld, when its vocabulary
+// is not ours to define. AgentResponse `finish_reason` is the worked example:
+// it is the provider's raw value, and two supported in-repo client lanes
+// already write different vocabularies into it, so a rule matching on it breaks
+// on a config-only endpoint switch. Classification-shaped is necessary, not
+// sufficient — ask who OWNS the vocabulary.
 //
 // WHEN YOU ADD A FIELD to one of these payloads, decide here whether a rule
 // may match on it. A field that is absent from a projection and unexplained
@@ -466,14 +473,34 @@ func (r *AgentRequest) RuleFields() map[string]any {
 
 // RuleFields implements message.RuleReadable.
 //
-// `status` and `finish_reason` are the structural outcome: whether the model
-// completed, asked for a tool, errored, or ran out of length. Token usage is
-// exposed nested, as it is on the wire, so `$message.token_usage.prompt_tokens`
-// resolves — a budget rule needs the numbers, not the text they paid for.
+// `status` is the structural outcome — completed, asked for a tool, errored, or
+// ran out of length — and it is the ONLY outcome field a rule gets. Token usage
+// is exposed nested, as it is on the wire, so
+// `$message.token_usage.prompt_tokens` resolves: a budget rule needs the
+// numbers, not the text they paid for.
 //
-// Withheld: Message — MODEL OUTPUT, the content this whole payload exists to
-// deliver — and Error, which is free-form provider prose (`status` is its
-// structural counterpart).
+// FINISH_REASON IS WITHHELD, AND ITS VOCABULARY IS NOT A CONTRACT. The field
+// carries the provider's raw value verbatim, and TWO SUPPORTED IN-REPO LANES
+// ALREADY DISAGREE about what that value looks like:
+//
+//   - the chat-completions lane writes the OpenAI chat vocabulary — stop,
+//     length, tool_calls (processor/agentic-model/client.go)
+//   - the responses lane writes the Responses API status — completed,
+//     incomplete (processor/agentic-model/client_responses.go)
+//
+// So a rule matching `finish_reason == "length"` breaks on a CONFIG-ONLY
+// endpoint-mode switch inside this repository, before any third-party provider
+// is involved. That is a stability property of the field itself, not an
+// observation about who happens to call it today.
+//
+// Nothing is lost. Both lanes feed the same switch that produces Status, so the
+// normalised framework classification a rule actually needs is already exposed
+// as `status` — and unlike finish_reason it is validated against a closed set
+// by AgentResponse.Validate. Normalising finish_reason instead is a separately
+// reviewed change (#1056), not a projection decision.
+//
+// Withheld: FinishReason, Message — MODEL OUTPUT, the content this whole
+// payload exists to deliver — and Error, which is free-form provider prose.
 func (r *AgentResponse) RuleFields() map[string]any {
 	fields := map[string]any{
 		"request_id": r.RequestID,
@@ -483,7 +510,6 @@ func (r *AgentResponse) RuleFields() map[string]any {
 			"completion_tokens": r.TokenUsage.CompletionTokens,
 		},
 	}
-	putString(fields, "finish_reason", r.FinishReason)
 	if r.RetryCount != 0 {
 		fields["retry_count"] = r.RetryCount
 	}

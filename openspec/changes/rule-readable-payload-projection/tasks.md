@@ -227,21 +227,26 @@ Structural facts only. For each, decide what a rule may match on and withhold au
       classification fields whose vocabulary is documented but NOT enforced (`outcome`, ContextEvent
       `type`, `result_hint`, `error_kind`, `finish_reason`) versus the three that are (UserSignal
       `type`, UserResponse `type`, AgentResponse `status`).
-- [x] 10.2 PRODUCTION-SEAM PROOF for action substitution:
+- [x] 10.2 Action-substitution proof BELOW THE LIFECYCLE SEAM:
       `TestMessagePathSubstitutesTypedPayloadFieldsIntoActions`
-      (`processor/rule/payload_projection_test.go`) drives typed payload → `BaseMessage` wire bytes →
-      production decoder → `Processor.handleSemanticMessage` → `evaluateRulesForMessage` →
-      `StatefulEvaluator` (OnEnter) → `ActionExecutor` substitution → observable publish, asserting the
-      substituted subject token, three substituted body values, absence of unresolved templates, and
-      absence of withheld content. Mutations I and J prove it detects both an unwired projection and a
-      dropped `MessageData` wire. No e2e coverage-gap issue needed; `test/e2e/` untouched.
-- [x] 10.3 EXPORTED-SURFACE DESIGN GATE materialized as `design.md` in this directory: repository-first
-      surface inventory (18 interfaces in `message/`, the ten-member behavior family, the four baseline
-      assertion sites) re-derived with `git grep <pattern> 774c85dc`, adopter-seam inventory answering
-      all five questions, five options including do-nothing and reusing `Measurable`, the three owner
-      decisions, and both accepted deviations. `conformance.md` carries the ruling-to-`file:line` table
-      (9 rulings, all CONFORMS, no DEVIATION) and the ten-mutation record. Decision recorded, not
-      re-litigated.
+      (`processor/rule/payload_projection_test.go`) wire-encodes a typed payload, decodes it through
+      the production `payloadbuiltins` decoder, and calls the unexported `handleSemanticMessage` on a
+      HAND-ASSEMBLED `Processor` → `evaluateRulesForMessage` → `StatefulEvaluator` (OnEnter) →
+      `ActionExecutor` substitution → publish, asserting the substituted subject token, three
+      substituted body values, absence of unresolved templates, and absence of withheld content.
+      Mutations I and J prove it detects both an unwired projection and a dropped `MessageData` wire.
+      WHAT IT DOES NOT PROVE, corrected from an earlier overclaim of "the running processor": the
+      production component factory, `Initialize`/`Start`, real NATS delivery, and real KV state — the
+      test supplies `newMockKVBucket` and `mockPublisher`. That real-lifecycle gap is filed as
+      **#1058**; the review explicitly permits filing it rather than building it here, and
+      `test/e2e/` is another agent's active area.
+- [~] 10.3 SUPERSEDED BY SECTION 12. This line previously read "EXPORTED-SURFACE DESIGN GATE materialized"
+      and was marked complete. That was wrong twice over: an after-the-fact reconstruction by the
+      implementer is not the gate, and marking it complete is worse than leaving it open because it
+      removes the prompt to run it. The artifacts were split into `inventory.md` (inventory only, hashed)
+      and `design.md` (target state, options, adopter seam), both left UNSIGNED. See section 12.
+      `conformance.md` still carries the ruling-to-`file:line` table and the mutation record; those are
+      implementation evidence and stand on their own.
 - [x] 10.4 Propagated the review corrections into `proposal.md`: interface file location and why; four
       switches not three; no `GenericJSONPayload` fallback and why it is unreachable; and
       "Fixes by consequence" narrowed to "Removes a barrier, which is not the same as fixing a rule".
@@ -253,3 +258,73 @@ Structural facts only. For each, decide what a rule may match on and withhold au
       verbatim with a loud unresolved-template warning. Reproduced during 10.2 development before the
       test was retargeted at the supported trailing-token shape. Config unchanged.
 
+## 11. Codex re-review round (PR #1052 at head `54995742`)
+
+- [x] 11.1 WITHHELD `AgentResponse.FinishReason` (`agentic/rule_fields.go`). The field carries the
+      provider's raw value and TWO SUPPORTED IN-REPO LANES ALREADY DISAGREE about its vocabulary:
+      `processor/agentic-model/client.go:790` writes the OpenAI chat vocabulary
+      (`stop`/`length`/`tool_calls`) while `processor/agentic-model/client_responses.go:94` writes the
+      Responses API status (`completed`/`incomplete`). A rule matching `finish_reason == "length"`
+      therefore breaks on a config-only endpoint-mode switch inside this repository, before any
+      third-party provider is involved — a stability property of the field, not an observation about
+      callers. Nothing is lost: both lanes feed the same switch that produces `Status`, so the
+      normalised framework classification is already exposed as `status`, and `status` IS validated
+      against a closed set by `AgentResponse.Validate`. No normalisation introduced here (#1056 holds
+      that option). Mutation K proves the withhold-list test catches a restored `finish_reason`.
+- [x] 11.1a Sharpened the header rule this exposed: classification-shaped is NECESSARY, NOT SUFFICIENT
+      — the question is who OWNS the vocabulary. Framework-owned-but-unenforced fields (`outcome`,
+      ContextEvent `type`, `result_hint`, `error_kind`) stay exposed; a field whose vocabulary is the
+      provider's does not. `finish_reason` is now the worked example for that distinction, as `reason`
+      is for the contract-vs-callers one.
+- [x] 11.2 CORRECTED the numeric-type guidance in `processor/rule/docs/custom-rules.md`. The guide said
+      JSON numbers arrive as `float64` and type-asserted `.(float64)`. That is true only for
+      `GenericJSONPayload`, whose map came straight from a decode; a typed projection runs AFTER decode
+      and returns real Go types. MEASURED: `LoopCompletedEvent.Iterations` is `int`
+      (`agentic/events.go:68`), `rule_fields.go` puts it in the map as `int`, and a scratch test
+      printed `iterations int=3`. A custom rule following the old guide is SILENTLY FALSE on
+      `iterations` — the exact class this change exists to end. The example now coerces via an
+      `asFloat` numeric type switch covering `float32/64`, the signed and unsigned ints, and
+      `json.Number` (real here: `types/component.go:79` configures `UseNumber`, and the engine's own
+      `expression/evaluator.go:797` handles it). The helper was extracted and compiled standalone to
+      verify the published example builds. A third bullet in the interface section states the type rule.
+- [x] 11.3 CITED **#1058** and REMOVED THE OVERCLAIM. `TestMessagePathSubstitutesTypedPayloadFieldsIntoActions`
+      was described in `conformance.md`, `tasks.md` 10.2 and its own doc comment as exercising "the
+      running processor" / "the real Processor". It does not: it hand-assembles a `Processor` struct
+      literal, calls the unexported `handleSemanticMessage`, and supplies `newMockKVBucket` and
+      `mockPublisher`. All three sites now state what it proves (production decoder, then production
+      code from decode through projection, evaluation, substitution and publish) and what it does not
+      (component factory, `Initialize`/`Start`, real NATS, real KV). The real-lifecycle gap is #1058.
+- [x] 11.4 RE-SYNCED the artifacts to head: `design.md`'s "Identified but not taken" section claimed the
+      custom-rule guide was deliberately excluded, which commit `54995742` and 11.2 falsified — it now
+      records the reversal rather than the stale exclusion; `conformance.md`'s CI note now names the
+      CURRENT failure (`internal/maxdelivery`, NATS 404) as distinct from #1054's drain timeout, with
+      both marked unattributable and neither chased; and the trailing blank line at EOF is fixed.
+- [x] 11.5 Entry for commit `54995742` (`docs(rule): replace the custom-rules payload hand-wave with
+      RuleReadable`), which had no task or conformance record: it rewrote the `ThresholdRule.Evaluate`
+      example in `processor/rule/docs/custom-rules.md` to read through `message.RuleReadable` instead of
+      an undefined `extractValue` helper, and added a "Reading payloads" section covering
+      absence-is-refusal and declared-fields-only. 11.2 corrects that same example's numeric guidance.
+- [x] 11.6 SPLIT the combined gate artifact and UN-SIGNED it, per the round-4 blocking item. `inventory.md`
+      is new and holds inventory only — baseline `774c85dc`, every figure re-derived with `git show`/
+      `git grep` against that commit, and a content hash (`sha256`
+      `c65bc53ac2df892d44703cf26e2645fdd8b9c0ab836f42ce7a33a93e0c3ffbf7`) with the recompute command
+      in-file so its identity is fixed. `design.md` was rewritten to hold only target state, the five
+      options, the adopter-seam inventory and the two deviations, and references the inventory by hash.
+      Both carry `Status: UNSIGNED`. `conformance.md` no longer says "Accepted design" and now states
+      that the design gate is open. Task 10.3 is demoted to `[~]` and superseded by section 12. Neither
+      `INVENTORY PASS` nor `DESIGN REVIEW PASS` is written anywhere except as a NOT-GRANTED statement.
+
+## 12. Exported-surface design gate — OPEN, owner-issued
+
+- [ ] 12.1 `INVENTORY PASS` — NOT GRANTED. `inventory.md` records the repository-first surface inventory
+      only, with its baseline commit and a content hash fixing its identity. It deliberately contains no
+      target state, no options, and no recommendation. Issuing this token is the owner's, not the
+      implementer's.
+- [ ] 12.2 `DESIGN REVIEW PASS` — NOT GRANTED. `design.md` records the target state, the five options
+      including do-nothing and reuse, the adopter-seam inventory, and the two deviations raised during
+      implementation. It references `inventory.md` by hash. Issuing this token is the owner's.
+- [ ] 12.3 Owner acceptance of the three design decisions is NOT recorded in these artifacts. The
+      decisions were made by the owner before implementation and the implementation conforms to them
+      (`conformance.md`), but an after-the-fact reconstruction by the implementer is not the gate, and
+      self-certifying it would be worse than leaving it open. Sequencing with the owner is the
+      coordinator's.
