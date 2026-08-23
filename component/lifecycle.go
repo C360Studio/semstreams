@@ -44,7 +44,17 @@ func (cs State) String() string {
 // Initialize performs setup without runtime authority. Start accepts the context
 // that owns continuing work. Stop uses its exact caller context to bound the
 // component's terminal admission fence, cancellation, join, and cleanup; the
-// resource owner determines that sequence's protocol-specific ordering.
+// resource owner determines that sequence's protocol-specific ordering. Exact
+// resource ordering preserves admitted callback authority where native drain
+// requires it; no universal cancel-before-drain order is implied.
+//
+// During controlled shutdown, callers keep the accepted Start context live until
+// a separately bounded Stop drains, joins, and finalizes the owner and returns nil.
+// Ending the Start context first is abort cancellation. Stop then makes bounded
+// best-effort progress under its exact caller authority and may return accurate
+// native cleanup or deadline errors. Abort cleanup does not invent replacement
+// authority, detach cleanup, or promise a second rejoin; if the bound wins, the
+// portable contract makes no complete-join or leak-freedom claim.
 //
 // Nil Start and Stop contexts are rejected before action. A completed repeated
 // Stop is a no-op. Concurrent lifecycle calls, result replay, later rejoin after
