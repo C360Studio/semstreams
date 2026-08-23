@@ -13,12 +13,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/health"
 	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
+	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/types"
@@ -37,10 +39,16 @@ type Manager struct {
 
 	bootServiceConfigs types.ServiceConfigs
 	sealedServices     []string
+	serviceOutcomes    map[string]*serviceInvocationOutcome
+	startupMetrics     *startupMetricWriter
+	bootCommitted      atomic.Bool
+	stopping           bool
 
 	// HTTP server infrastructure
 	httpServer     *http.Server
 	httpMux        *http.ServeMux
+	diagnosticMux  *http.ServeMux
+	httpRoutes     atomic.Pointer[http.ServeMux]
 	httpMiddleware []HTTPMiddleware // applied outermost-first; see ADR-030 Phase 1
 	config         ManagerConfig
 
@@ -70,6 +78,14 @@ type Manager struct {
 	healthPublisherUsed     bool
 	healthPublisherStopping bool
 	healthPublisherTerminal bool
+	startupMetricsServer    *metric.Server
+	startupMetricsService   *Metrics
+
+	// Causal observation points used only by startup-boundary tests.
+	testCommitPrepared     chan<- struct{}
+	testCommitRelease      <-chan struct{}
+	testSharedHTTPBound    chan<- struct{}
+	testMetricsBindRelease <-chan struct{}
 
 	// Track if we're the instance managing HTTP
 	isHTTPManager bool
@@ -78,6 +94,37 @@ type Manager struct {
 	natsClient    *natsclient.Client
 	configManager *config.Manager
 	dependencies  *Dependencies // Store full dependencies for mandatory services
+}
+
+type serviceInvocationOutcome struct {
+	service        Service
+	startInvoked   bool
+	startCompleted bool
+	startErr       error
+	stopInvoked    bool
+	stopCompleted  bool
+	stopErr        error
+}
+
+type startupUnitCounts struct {
+	Admitted              int `json:"admitted"`
+	LifecycleParticipants int `json:"lifecycle_participants"`
+	StartsInvoked         int `json:"starts_invoked"`
+	StartsCompleted       int `json:"starts_completed"`
+	StartsFailed          int `json:"starts_failed"`
+}
+
+type serviceStartupCounts struct {
+	Admitted        int `json:"admitted"`
+	StartsInvoked   int `json:"starts_invoked"`
+	StartsCompleted int `json:"starts_completed"`
+	StartsFailed    int `json:"starts_failed"`
+}
+
+type startupSnapshot struct {
+	Status     string               `json:"status"`
+	Services   serviceStartupCounts `json:"services"`
+	Components startupUnitCounts    `json:"components"`
 }
 
 // NewServiceManager creates a new service manager
@@ -364,11 +411,26 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		return err
 	}
 
-	// No route or OpenAPI surface is built until the complete identity set is
-	// fixed. A later Start failure changes lifecycle state, not composition.
+	// The sealed identity set is fixed before the startup diagnostic surface is
+	// built. A later Start failure changes lifecycle state, not composition.
 	logger.Debug("Manager.StartAll: Initializing HTTP infrastructure")
 	if err := m.initializeHTTPInfrastructure(); err != nil {
 		return fmt.Errorf("initialize HTTP infrastructure: %w", err)
+	}
+	if err := m.initializeStartupMetricWriter(); err != nil {
+		return fmt.Errorf("initialize startup metrics: %w", err)
+	}
+	if err := m.startHTTPRuntime(ctx); err != nil {
+		cleanupErr := m.stopStartupMetricsServer(ctx)
+		return stderrors.Join(fmt.Errorf("start HTTP diagnostics: %w", err), cleanupErr)
+	}
+	if m.testSharedHTTPBound != nil {
+		close(m.testSharedHTTPBound)
+		<-m.testMetricsBindRelease
+	}
+	if err := m.startStartupMetricsServer(ctx); err != nil {
+		cleanupErr := m.cleanupDiagnosticBindFailure(ctx)
+		return stderrors.Join(fmt.Errorf("start metrics diagnostics: %w", err), cleanupErr)
 	}
 
 	logger.Debug("Manager.StartAll: Beginning service startup sequence", "service_count", len(services))
@@ -377,9 +439,12 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	for _, admitted := range services {
 		name, service := admitted.name, admitted.service
 		logger.Debug("Manager.StartAll: Starting service", "name", name, "type", fmt.Sprintf("%T", service))
-		if err := service.Start(ctx); err != nil {
-			logger.Error("Manager.StartAll: Failed to start service", "name", name, "error", err)
-			return m.rollbackFailedStart(ctx, fmt.Errorf("failed to start service %s: %w", name, err))
+		m.recordServiceStartInvoked(name)
+		startErr := service.Start(ctx)
+		m.recordServiceStartCompleted(name, startErr)
+		if startErr != nil {
+			logger.Error("Manager.StartAll: Failed to start service", "name", name, "error", startErr)
+			return m.rollbackFailedStart(ctx, fmt.Errorf("failed to start service %s: %w", name, startErr))
 		}
 		logger.Debug("Manager.StartAll: Service started successfully", "name", name)
 	}
@@ -390,21 +455,24 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	// bucket acquisition seam (natsclient.EnsureFrameworkBucket), earlier and
 	// more precisely than a sweep could; a seam failure fails that component's
 	// Start, which the component-start barrier turns into a failed boot before
-	// completeHTTPSetup brings the surface up. The one class the seam cannot
+	// boot commitment exposes the complete route set. The one class the seam cannot
 	// reach (a catalog bucket unused by this composition) is
 	// covered by the pre-start legacy-drift backstop in WireGraphRuntime.
 
-	// Now that all services are started, register their HTTP handlers and start the server
-	logger.Debug("Manager.StartAll: Completing HTTP setup with service handlers")
-	if err := m.completeHTTPSetup(ctx); err != nil {
+	// Build the complete route set off-path. The dispatcher remains pinned to
+	// diagnostics until every later fallible Manager acquisition succeeds.
+	logger.Debug("Manager.StartAll: Preparing complete HTTP route set")
+	fullMux, err := m.prepareCompleteHTTPMux(ctx)
+	if err != nil {
 		return m.rollbackFailedStart(ctx, fmt.Errorf("complete HTTP setup: %w", err))
 	}
-	logger.Info("Manager HTTP server started", "port", m.config.HTTPPort)
 
 	// Start health publishing loop (publishes to health.service.{name}).
 	if err := m.startHealthPublisher(ctx); err != nil {
 		return m.rollbackFailedStart(ctx, fmt.Errorf("start health publisher: %w", err))
 	}
+	m.commitStartup(fullMux)
+	logger.Info("Manager HTTP server started", "port", m.config.HTTPPort)
 
 	logger.Info("Manager.StartAll: All services started", "count", len(services))
 	return nil
@@ -458,6 +526,11 @@ func (m *Manager) sealComposition() ([]admittedService, error) {
 	m.sealedServices = append([]string(nil), identities...)
 	m.sealed = true
 
+	m.serviceOutcomes = make(map[string]*serviceInvocationOutcome, len(m.order))
+	for _, name := range m.order {
+		m.serviceOutcomes[name] = &serviceInvocationOutcome{service: m.services[name]}
+	}
+
 	services := make([]admittedService, 0, len(m.order))
 	for _, name := range m.order {
 		service, exists := m.services[name]
@@ -466,6 +539,132 @@ func (m *Manager) sealComposition() ([]admittedService, error) {
 		}
 	}
 	return services, nil
+}
+
+func (m *Manager) recordServiceStartInvoked(name string) {
+	m.mu.Lock()
+	if outcome := m.serviceOutcomes[name]; outcome != nil {
+		outcome.startInvoked = true
+	}
+	writer := m.startupMetrics
+	m.mu.Unlock()
+	writer.publishServices()
+}
+
+func (m *Manager) recordServiceStartCompleted(name string, startErr error) {
+	m.mu.Lock()
+	if outcome := m.serviceOutcomes[name]; outcome != nil {
+		outcome.startCompleted = true
+		outcome.startErr = startErr
+	}
+	writer := m.startupMetrics
+	m.mu.Unlock()
+	writer.publishServices()
+}
+
+func (m *Manager) serviceStartupCountsLocked() serviceStartupCounts {
+	counts := serviceStartupCounts{Admitted: len(m.serviceOutcomes)}
+	for _, outcome := range m.serviceOutcomes {
+		if outcome.startInvoked {
+			counts.StartsInvoked++
+		}
+		if outcome.startCompleted {
+			counts.StartsCompleted++
+		}
+		if outcome.startErr != nil {
+			counts.StartsFailed++
+		}
+	}
+	return counts
+}
+
+func (m *Manager) serviceStartupCounts() serviceStartupCounts {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.serviceStartupCountsLocked()
+}
+
+func (m *Manager) initializeStartupMetricWriter() error {
+	m.mu.RLock()
+	var registry *metric.MetricsRegistry
+	if m.dependencies != nil {
+		registry = m.dependencies.MetricsRegistry
+	}
+	componentManager, _ := m.services["component-manager"].(*ComponentManager)
+	metricsService, _ := m.services["metrics"].(*Metrics)
+	if registry == nil && metricsService != nil {
+		registry = metricsService.registry
+	}
+	m.mu.RUnlock()
+
+	if registry != nil {
+		componentSnapshot := func() startupUnitCounts { return startupUnitCounts{} }
+		if componentManager != nil {
+			componentSnapshot = componentManager.startupSnapshot
+		}
+		writer, err := newStartupMetricWriter(registry, m.serviceStartupCounts, componentSnapshot)
+		if err != nil {
+			return err
+		}
+		m.mu.Lock()
+		m.startupMetrics = writer
+		m.mu.Unlock()
+		if componentManager != nil {
+			componentManager.setStartupMetricWriter(writer)
+		}
+	}
+
+	if metricsService == nil {
+		return nil
+	}
+	server, err := metricsService.claimManagerServer()
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.startupMetricsServer = server
+	m.startupMetricsService = metricsService
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *Manager) startStartupMetricsServer(ctx context.Context) error {
+	m.mu.RLock()
+	server := m.startupMetricsServer
+	service := m.startupMetricsService
+	m.mu.RUnlock()
+	if server == nil {
+		return nil
+	}
+	if err := server.Start(ctx); err != nil {
+		return err
+	}
+	service.setManagerServerHealthy(true)
+	return nil
+}
+
+func (m *Manager) stopStartupMetricsServer(ctx context.Context) error {
+	m.mu.Lock()
+	server := m.startupMetricsServer
+	service := m.startupMetricsService
+	m.startupMetricsServer = nil
+	m.startupMetricsService = nil
+	m.mu.Unlock()
+	if service != nil {
+		service.setManagerServerHealthy(false)
+	}
+	if server == nil {
+		return nil
+	}
+	return server.Stop(ctx)
+}
+
+func (m *Manager) cleanupDiagnosticBindFailure(ctx context.Context) error {
+	m.beginStopping("")
+	return stderrors.Join(
+		m.stopRuntimeServersMode(ctx, managerCleanupFailedStart),
+		m.stopStartupMetricsServer(ctx),
+	)
 }
 
 // publishHealthLoop publishes service health to JetStream every 5s.
@@ -651,19 +850,24 @@ func (m *Manager) stopAll(ctx context.Context, mode managerCleanupMode) error {
 	}
 	logger = logger.With("operation", "services-shutdown")
 
-	m.mu.Lock()
-	// Create reverse order slice for shutdown
-	reverseOrder := make([]string, len(m.order))
-	for i := len(m.order) - 1; i >= 0; i-- {
-		reverseOrder[len(m.order)-1-i] = m.order[i]
+	m.mu.RLock()
+	order := append([]string(nil), m.order...)
+	m.mu.RUnlock()
+	// Stop in exact reverse registration order.
+	reverseOrder := make([]string, len(order))
+	for i := len(order) - 1; i >= 0; i-- {
+		reverseOrder[len(order)-1-i] = order[i]
 	}
 
-	// Copy services map for safe access
+	m.beginStopping(firstServiceName(reverseOrder))
+
+	m.mu.RLock()
+	// Copy services map for safe access.
 	services := make(map[string]Service, len(m.services))
 	for name, service := range m.services {
 		services[name] = service
 	}
-	m.mu.Unlock()
+	m.mu.RUnlock()
 
 	logger.Debug("Starting service shutdown sequence",
 		"count", len(services),
@@ -675,16 +879,19 @@ func (m *Manager) stopAll(ctx context.Context, mode managerCleanupMode) error {
 	// Stop services in reverse order of registration
 	for _, name := range reverseOrder {
 		if service, exists := services[name]; exists {
+			m.recordServiceStopInvoked(name)
 			serviceStart := time.Now()
 			logger.Debug("Stopping service", "service", name)
 
-			if err := service.Stop(ctx); err != nil && !stderrors.Is(err, ErrAlreadyStopped) {
+			stopErr := service.Stop(ctx)
+			m.recordServiceStopCompleted(name, stopErr)
+			if stopErr != nil && !stderrors.Is(stopErr, ErrAlreadyStopped) {
 				logger.Error("Service stop failed",
 					"service", name,
 					"duration_ms", time.Since(serviceStart).Milliseconds(),
-					"error", err,
+					"error", stopErr,
 				)
-				errors = append(errors, fmt.Errorf("failed to stop service %s: %w", name, err))
+				errors = append(errors, fmt.Errorf("failed to stop service %s: %w", name, stopErr))
 			} else {
 				logger.Debug("Service stopped successfully",
 					"service", name,
@@ -704,6 +911,10 @@ func (m *Manager) stopAll(ctx context.Context, mode managerCleanupMode) error {
 		logger.Error("HTTP listeners stop failed", "error", err)
 		errors = append(errors, err)
 	}
+	if err := m.stopStartupMetricsServer(ctx); err != nil {
+		logger.Error("Prometheus listener stop failed", "error", err)
+		errors = append(errors, err)
+	}
 
 	logger.Debug("Service shutdown sequence completed",
 		"duration_ms", time.Since(overallStart).Milliseconds(),
@@ -721,13 +932,51 @@ func (m *Manager) stopAll(ctx context.Context, mode managerCleanupMode) error {
 	return nil
 }
 
+func (m *Manager) recordServiceStopInvoked(name string) {
+	m.mu.Lock()
+	if outcome := m.serviceOutcomes[name]; outcome != nil {
+		outcome.stopInvoked = true
+	}
+	m.mu.Unlock()
+}
+
+func firstServiceName(order []string) string {
+	if len(order) == 0 {
+		return ""
+	}
+	return order[0]
+}
+
+func (m *Manager) beginStopping(firstService string) {
+	m.mu.Lock()
+	m.stopping = true
+	m.bootCommitted.Store(false)
+	if outcome := m.serviceOutcomes[firstService]; outcome != nil {
+		outcome.stopInvoked = true
+	}
+	m.mu.Unlock()
+}
+
+func (m *Manager) recordServiceStopCompleted(name string, stopErr error) {
+	m.mu.Lock()
+	if outcome := m.serviceOutcomes[name]; outcome != nil {
+		outcome.stopCompleted = true
+		outcome.stopErr = stopErr
+	}
+	m.mu.Unlock()
+}
+
 // GetHealthyServices returns a list of healthy services
 func (m *Manager) GetHealthyServices() []string {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	services := make(map[string]Service, len(m.services))
+	for name, service := range m.services {
+		services[name] = service
+	}
+	m.mu.RUnlock()
 
 	var healthy []string
-	for name, service := range m.services {
+	for name, service := range services {
 		if service.IsHealthy() {
 			healthy = append(healthy, name)
 		}
@@ -738,10 +987,14 @@ func (m *Manager) GetHealthyServices() []string {
 // GetUnhealthyServices returns a list of unhealthy services
 func (m *Manager) GetUnhealthyServices() []string {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	services := make(map[string]Service, len(m.services))
+	for name, service := range m.services {
+		services[name] = service
+	}
+	m.mu.RUnlock()
 
 	var unhealthy []string
-	for name, service := range m.services {
+	for name, service := range services {
 		if !service.IsHealthy() {
 			unhealthy = append(unhealthy, name)
 		}
@@ -765,10 +1018,14 @@ func (m *Manager) GetServiceStatus(name string) (any, error) {
 // GetAllServiceStatus returns the status of all services
 func (m *Manager) GetAllServiceStatus() map[string]any {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	services := make(map[string]Service, len(m.services))
+	for name, service := range m.services {
+		services[name] = service
+	}
+	m.mu.RUnlock()
 
 	result := make(map[string]any)
-	for name, service := range m.services {
+	for name, service := range services {
 		result[name] = service.Status()
 	}
 	return result
@@ -831,8 +1088,8 @@ func (m *Manager) UseHTTPMiddleware(mws ...HTTPMiddleware) {
 		return
 	}
 	// Lock protects against late registration racing concurrent boot
-	// completion (completeHTTPSetup takes the same mutex when reading
-	// m.httpMiddleware to build the wrapped handler).
+	// completion (startHTTPRuntime takes the same mutex while freezing
+	// m.httpMiddleware into the server handler).
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.httpServer != nil || m.httpUsed {
@@ -847,16 +1104,28 @@ func (m *Manager) UseHTTPMiddleware(mws ...HTTPMiddleware) {
 	m.httpMiddleware = append(m.httpMiddleware, mws...)
 }
 
-// buildHTTPHandler returns the framework's HTTP mux wrapped with
-// the product-supplied middleware chain. completeHTTPSetup calls this when
+// buildHTTPHandler returns the framework's HTTP dispatcher wrapped with
+// the product-supplied middleware chain. startHTTPRuntime calls this when
 // assigning http.Server.Handler so tests can assert the wired chain without
 // booting a real listener. Caller must hold m.mu.
 func (m *Manager) buildHTTPHandler() http.Handler {
-	return chainMiddleware(m.httpMux, m.httpMiddleware)
+	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mux := m.diagnosticMux
+		if m.bootCommitted.Load() {
+			mux = m.httpRoutes.Load()
+		}
+		if mux == nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("NOT READY"))
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
+	return chainMiddleware(dispatch, m.httpMiddleware)
 }
 
-// initializeHTTPInfrastructure creates the HTTP mux and registers system endpoints only
-// This is called early in StartAll before services are created
+// initializeHTTPInfrastructure creates the diagnostic mux after composition is
+// sealed and before either Manager-owned diagnostic listener binds.
 func (m *Manager) initializeHTTPInfrastructure() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -867,29 +1136,37 @@ func (m *Manager) initializeHTTPInfrastructure() error {
 		return nil
 	}
 
-	// Create HTTP mux
-	m.httpMux = http.NewServeMux()
-
-	// Register system endpoints (health, liveness, readiness)
-	// These don't depend on services being created
-	m.registerSystemEndpoints()
+	startupMux := http.NewServeMux()
+	m.registerDiagnosticEndpoints(startupMux)
+	if service, exists := m.services["component-manager"]; exists {
+		if cm, ok := service.(*ComponentManager); ok {
+			cm.registerStartupHTTPHandlers("/components", startupMux)
+		}
+	}
+	startupMux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("NOT READY"))
+	})
+	m.httpMux = startupMux
+	m.diagnosticMux = startupMux
 
 	return nil
 }
 
-// completeHTTPSetup registers service handlers and starts the HTTP server
-// This is called after all services have been started
-func (m *Manager) completeHTTPSetup(ctx context.Context) error {
+// startHTTPRuntime synchronously binds the shared listener while the startup
+// mux is active. Service and gateway routes remain unreachable until the
+// complete mux is atomically promoted.
+func (m *Manager) startHTTPRuntime(ctx context.Context) error {
 	if ctx == nil {
-		return errs.WrapInvalid(errs.ErrInvalidData, "Manager", "completeHTTPSetup", "nil context")
+		return errs.WrapInvalid(errs.ErrInvalidData, "Manager", "startHTTPRuntime", "nil context")
 	}
 	if err := ctx.Err(); err != nil {
-		return errs.WrapInvalid(err, "Manager", "completeHTTPSetup", "context already canceled")
+		return errs.WrapInvalid(err, "Manager", "startHTTPRuntime", "context already canceled")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.httpMux == nil {
+	if m.httpMux == nil || m.diagnosticMux == nil {
 		return fmt.Errorf("HTTP infrastructure not initialized")
 	}
 
@@ -900,15 +1177,6 @@ func (m *Manager) completeHTTPSetup(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("bind HTTP listener: %w", err)
 	}
-
-	// Register service handlers (services now exist and are started!)
-	if err := m.registerServiceHandlers(); err != nil {
-		_ = listener.Close()
-		return fmt.Errorf("failed to register service handlers: %w", err)
-	}
-
-	// Register OpenAPI endpoints
-	m.registerOpenAPIEndpoints()
 
 	serverCtx, serverCancel := context.WithCancel(ctx)
 	serveDone := make(chan struct{})
@@ -945,6 +1213,55 @@ func (m *Manager) completeHTTPSetup(ctx context.Context) error {
 	}()
 
 	return nil
+}
+
+// prepareCompleteHTTPMux constructs the complete route set off-path. The
+// caller commits it only after every fallible boot operation succeeds.
+func (m *Manager) prepareCompleteHTTPMux(ctx context.Context) (*http.ServeMux, error) {
+	if ctx == nil {
+		return nil, errs.WrapInvalid(errs.ErrInvalidData, "Manager", "prepareCompleteHTTPMux", "nil context")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errs.WrapInvalid(err, "Manager", "prepareCompleteHTTPMux", "context already canceled")
+	}
+	m.mu.RLock()
+	started := m.httpUsed && m.httpServer != nil
+	m.mu.RUnlock()
+	if !started {
+		return nil, fmt.Errorf("HTTP diagnostics not started")
+	}
+
+	fullMux := http.NewServeMux()
+	m.registerSystemEndpoints(fullMux)
+	if err := m.registerServiceHandlers(fullMux); err != nil {
+		return nil, fmt.Errorf("failed to register service handlers: %w", err)
+	}
+	m.registerOpenAPIEndpoints(fullMux)
+	return fullMux, nil
+}
+
+func (m *Manager) completeHTTPSetup(ctx context.Context) error {
+	mux, err := m.prepareCompleteHTTPMux(ctx)
+	if err != nil {
+		return err
+	}
+	m.commitStartup(mux)
+	return nil
+}
+
+func (m *Manager) commitStartup(mux *http.ServeMux) {
+	if mux == nil {
+		return
+	}
+	if m.testCommitPrepared != nil {
+		close(m.testCommitPrepared)
+		<-m.testCommitRelease
+	}
+	m.httpRoutes.Store(mux)
+	m.mu.Lock()
+	m.httpMux = mux
+	m.mu.Unlock()
+	m.bootCommitted.Store(true)
 }
 
 // StartHealthListener binds a dedicated /health + /healthz listener on
@@ -1109,6 +1426,7 @@ func (m *Manager) stopHTTPRuntimeMode(ctx context.Context, mode managerCleanupMo
 		m.httpCancel = nil
 		m.httpServeDone = nil
 		m.httpMux = nil
+		m.httpRoutes.Store(nil)
 	}
 	m.mu.Unlock()
 	return stopErr
@@ -1177,21 +1495,30 @@ func attributeShutdownError(owner string, phase errs.ShutdownPhase, err error) e
 }
 
 // registerServiceHandlers registers HTTP handlers for all services that implement HTTPHandler
-func (m *Manager) registerServiceHandlers() error {
-	for _, name := range m.sealedServices {
-		service, exists := m.services[name]
+func (m *Manager) registerServiceHandlers(mux *http.ServeMux) error {
+	m.mu.RLock()
+	identities := append([]string(nil), m.sealedServices...)
+	services := make(map[string]Service, len(m.serviceOutcomes))
+	for name, outcome := range m.serviceOutcomes {
+		if outcome != nil && outcome.service != nil {
+			services[name] = outcome.service
+		}
+	}
+	m.mu.RUnlock()
+	for _, name := range identities {
+		service, exists := services[name]
 		if !exists {
 			continue
 		}
 		if handler, ok := service.(HTTPHandler); ok {
 			// Convert service name to URL prefix (e.g., "component-manager" -> "/components")
 			prefix := "/" + m.serviceNameToPrefix(name)
-			handler.RegisterHTTPHandlers(prefix, m.httpMux)
+			handler.RegisterHTTPHandlers(prefix, mux)
 		}
 	}
 
 	// Also register gateway component handlers
-	if err := m.registerComponentHandlers(); err != nil {
+	if err := m.registerComponentHandlers(mux); err != nil {
 		return fmt.Errorf("failed to register component handlers: %w", err)
 	}
 
@@ -1199,9 +1526,11 @@ func (m *Manager) registerServiceHandlers() error {
 }
 
 // registerComponentHandlers registers HTTP handlers for gateway components
-func (m *Manager) registerComponentHandlers() error {
+func (m *Manager) registerComponentHandlers(mux *http.ServeMux) error {
 	// Get ComponentManager from services
+	m.mu.RLock()
 	cmService, exists := m.services["component-manager"]
+	m.mu.RUnlock()
 	if !exists {
 		// ComponentManager not started yet, skip gateway registration
 		return nil
@@ -1219,7 +1548,7 @@ func (m *Manager) registerComponentHandlers() error {
 				RegisterHTTPHandlers(prefix string, mux *http.ServeMux)
 			}); ok {
 				prefix := "/" + name
-				gateway.RegisterHTTPHandlers(prefix, m.httpMux)
+				gateway.RegisterHTTPHandlers(prefix, mux)
 				m.logger.Debug("Registered gateway component HTTP handlers",
 					"component", name,
 					"prefix", prefix)
@@ -1230,13 +1559,13 @@ func (m *Manager) registerComponentHandlers() error {
 }
 
 // registerOpenAPIEndpoints registers OpenAPI documentation endpoints
-func (m *Manager) registerOpenAPIEndpoints() {
+func (m *Manager) registerOpenAPIEndpoints(mux *http.ServeMux) {
 	// Serve OpenAPI JSON specification
-	m.httpMux.HandleFunc("/openapi.json", m.handleOpenAPISpec)
+	mux.HandleFunc("/openapi.json", m.handleOpenAPISpec)
 
 	// Serve Swagger UI if enabled
 	if m.config.SwaggerUI {
-		m.httpMux.HandleFunc("/docs", m.handleSwaggerUI)
+		mux.HandleFunc("/docs", m.handleSwaggerUI)
 	}
 }
 
@@ -1369,18 +1698,22 @@ func (m *Manager) serviceNameToPrefix(serviceName string) string {
 }
 
 // registerSystemEndpoints registers system-wide health endpoints
-func (m *Manager) registerSystemEndpoints() {
+func (m *Manager) registerDiagnosticEndpoints(mux *http.ServeMux) {
 	// System-wide health endpoints
-	m.httpMux.HandleFunc("/health", m.handleSystemHealth)
-	m.httpMux.HandleFunc("/healthz", m.handleLiveness)
-	m.httpMux.HandleFunc("/readyz", m.handleReadiness)
+	mux.HandleFunc("/health", m.handleSystemHealth)
+	mux.HandleFunc("/healthz", m.handleLiveness)
+	mux.HandleFunc("/readyz", m.handleReadiness)
 
 	// Service discovery endpoints
-	m.httpMux.HandleFunc("/services", m.handleServiceList)
-	m.httpMux.HandleFunc("/services/health", m.handleServicesHealth)
+	mux.HandleFunc("/services", m.handleServiceList)
+	mux.HandleFunc("/services/health", m.handleServicesHealth)
+}
+
+func (m *Manager) registerSystemEndpoints(mux *http.ServeMux) {
+	m.registerDiagnosticEndpoints(mux)
 
 	// Graph query endpoints (operator-facing, read-only)
-	m.httpMux.HandleFunc("/graph/triples", m.handleGraphTriples)
+	mux.HandleFunc("/graph/triples", m.handleGraphTriples)
 }
 
 // Removed buildServiceHealthMap and writeHealthResponse - using health.Status directly now
@@ -1388,19 +1721,24 @@ func (m *Manager) registerSystemEndpoints() {
 // handleSystemHealth returns aggregated system health
 func (m *Manager) handleSystemHealth(w http.ResponseWriter, _ *http.Request) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	services := make([]Service, 0, len(m.services))
+	for _, service := range m.services {
+		services = append(services, service)
+	}
+	natsClient := m.natsClient
+	m.mu.RUnlock()
 
 	// Collect health status from all services
 	var subStatuses []health.Status
 
 	// Add service health statuses
-	for _, service := range m.services {
+	for _, service := range services {
 		subStatuses = append(subStatuses, service.Health())
 	}
 
 	// Add NATS health as a sub-status
-	if m.natsClient != nil {
-		natsStatus := m.natsClient.GetStatus()
+	if natsClient != nil {
+		natsStatus := natsClient.GetStatus()
 		if natsStatus.Status == natsclient.StatusConnected {
 			subStatuses = append(subStatuses, health.NewHealthy("nats",
 				fmt.Sprintf("Connected (RTT: %v)", natsStatus.RTT)))
@@ -1435,27 +1773,92 @@ func (m *Manager) handleLiveness(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("OK"))
 }
 
-// handleReadiness checks if all critical services are ready
+// handleReadiness reports the direct process-local manager observation. The
+// exact response bodies are compatibility-frozen for existing probes.
 func (m *Manager) handleReadiness(w http.ResponseWriter, _ *http.Request) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	// Check if all services are running
-	ready := true
-	for _, service := range m.services {
-		if service.Status() != StatusRunning || !service.IsHealthy() {
-			ready = false
-			break
-		}
-	}
-
-	if ready {
+	if m.currentStartupSnapshot().Status == "ready" {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("READY"))
 	} else {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = w.Write([]byte("NOT READY"))
 	}
+}
+
+func (m *Manager) currentStartupSnapshot() startupSnapshot {
+	m.mu.RLock()
+	sealed := m.sealed
+	committed := m.bootCommitted.Load()
+	stopping := m.stopping
+	serviceCounts := m.serviceStartupCountsLocked()
+	services := make(map[string]Service, len(m.serviceOutcomes))
+	serviceStopInvoked := false
+	for name, outcome := range m.serviceOutcomes {
+		if outcome != nil && outcome.service != nil {
+			services[name] = outcome.service
+		}
+		if outcome != nil && outcome.stopInvoked {
+			serviceStopInvoked = true
+		}
+	}
+	m.mu.RUnlock()
+
+	var componentCounts startupUnitCounts
+	componentManagerService, hasComponentManager := services["component-manager"]
+	componentManager, concreteComponentManager := componentManagerService.(*ComponentManager)
+	if concreteComponentManager {
+		componentCounts = componentManager.startupSnapshot()
+	}
+
+	snapshot := startupSnapshot{Services: serviceCounts, Components: componentCounts}
+	servicesComplete := sealed && hasComponentManager && serviceCounts.Admitted > 0 &&
+		serviceCounts.StartsInvoked == serviceCounts.Admitted &&
+		serviceCounts.StartsCompleted == serviceCounts.Admitted
+	componentsComplete := !concreteComponentManager ||
+		(componentCounts.StartsInvoked == componentCounts.LifecycleParticipants &&
+			componentCounts.StartsCompleted == componentCounts.LifecycleParticipants)
+	if serviceCounts.StartsFailed > 0 || componentCounts.StartsFailed > 0 {
+		snapshot.Status = "failed"
+		return snapshot
+	}
+	if stopping || serviceStopInvoked || (concreteComponentManager && componentManager.startupStopBegun()) {
+		snapshot.Status = "stopping"
+		return snapshot
+	}
+	if !servicesComplete || !componentsComplete {
+		snapshot.Status = "starting"
+		return snapshot
+	}
+	if !committed {
+		snapshot.Status = "not_ready"
+		return snapshot
+	}
+
+	for _, service := range services {
+		if service.Status() != StatusRunning || !service.IsHealthy() {
+			snapshot.Status = "not_ready"
+			return snapshot
+		}
+	}
+	if concreteComponentManager {
+		healthByName := componentManager.GetComponentHealth()
+		if len(healthByName) != componentCounts.Admitted {
+			snapshot.Status = "not_ready"
+			return snapshot
+		}
+		for _, status := range healthByName {
+			if !status.Healthy {
+				snapshot.Status = "not_ready"
+				return snapshot
+			}
+		}
+	}
+	if !m.bootCommitted.Load() {
+		snapshot.Status = "stopping"
+		return snapshot
+	}
+	snapshot.Status = "ready"
+	return snapshot
 }
 
 // handleServiceList returns a list of all registered services
@@ -1504,6 +1907,7 @@ func (m *Manager) handleServiceList(w http.ResponseWriter, _ *http.Request) {
 	response := map[string]any{
 		"services":                services,
 		"count":                   len(services),
+		"startup":                 m.currentStartupSnapshot(),
 		"restart_required":        len(pending) > 0,
 		"pending_service_changes": pending,
 	}
@@ -1517,11 +1921,15 @@ func (m *Manager) handleServiceList(w http.ResponseWriter, _ *http.Request) {
 // handleServicesHealth returns detailed health information for all services
 func (m *Manager) handleServicesHealth(w http.ResponseWriter, _ *http.Request) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	services := make([]Service, 0, len(m.services))
+	for _, service := range m.services {
+		services = append(services, service)
+	}
+	m.mu.RUnlock()
 
 	// Collect all service health statuses
 	var serviceStatuses []health.Status
-	for _, service := range m.services {
+	for _, service := range services {
 		serviceStatuses = append(serviceStatuses, service.Health())
 	}
 

@@ -28,6 +28,36 @@ tasks:
         [ "$overall" = "healthy" ] || fail "selected core fixture is not fully healthy"
         [ "$healthy" -eq "$total" ] || fail "selected core fixture reports unhealthy components"
 
+        startup_metrics=$(curl --max-time 5 -fsS http://localhost:39090/metrics) \
+          || fail "startup metrics unavailable"
+        startup_series=$(printf '%s\n' "$startup_metrics" | grep '^semstreams_startup_units{') \
+          || fail "startup metric family missing"
+        series_count=$(printf '%s\n' "$startup_series" | wc -l | tr -d ' ')
+        [ "$series_count" -eq 9 ] || fail "startup metric family did not contain exactly nine fixed series"
+        startup_value() {
+          printf '%s\n' "$startup_series" \
+            | awk -v owner="$1" -v stage="$2" \
+              '$0 ~ "owner=\\\"" owner "\\\"" && $0 ~ "stage=\\\"" stage "\\\"" {print $2}'
+        }
+        services_admitted=$(startup_value services admitted)
+        services_invoked=$(startup_value services starts_invoked)
+        services_completed=$(startup_value services starts_completed)
+        services_failed=$(startup_value services starts_failed)
+        components_admitted=$(startup_value components admitted)
+        components_participants=$(startup_value components lifecycle_participants)
+        components_invoked=$(startup_value components starts_invoked)
+        components_completed=$(startup_value components starts_completed)
+        components_failed=$(startup_value components starts_failed)
+        [ "$services_admitted" -gt 0 ] || fail "no admitted services in startup metrics"
+        [ "$services_invoked" = "$services_admitted" ] || fail "service Starts invoked did not match admission"
+        [ "$services_completed" = "$services_admitted" ] || fail "service Starts completed did not match admission"
+        [ "$services_failed" = "0" ] || fail "normal boot reported failed service Starts"
+        [ "$components_admitted" -gt 0 ] || fail "no admitted components in startup metrics"
+        [ "$components_participants" -gt 0 ] || fail "no lifecycle components in startup metrics"
+        [ "$components_invoked" = "$components_participants" ] || fail "component Starts invoked did not match participants"
+        [ "$components_completed" = "$components_participants" ] || fail "component Starts completed did not match participants"
+        [ "$components_failed" = "0" ] || fail "normal boot reported failed component Starts"
+
         attempt=0
         matched=false
         while [ "$attempt" -lt 20 ]; do

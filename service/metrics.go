@@ -33,6 +33,8 @@ type Metrics struct {
 	cleanupPending bool
 	startDone      chan struct{}
 	cancel         context.CancelFunc
+	managerClaimed bool
+	managerHealthy bool
 
 	// Owner-local causal observation points used only by lifecycle tests.
 	testServerPublished   chan<- struct{}
@@ -133,27 +135,30 @@ func (m *Metrics) Start(ctx context.Context) error {
 	m.cleanupPending = true
 	m.startDone = startDone
 	m.cancel = cancel
+	managerClaimed := m.managerClaimed
 	m.lifecycleMu.Unlock()
 
-	server := metric.NewServer(m.config.Port, m.config.Path, m.registry, m.security)
-	slog.Info("Starting metrics server", "port", m.config.Port, "path", m.config.Path)
-	if err := server.Start(runCtx); err != nil {
-		cancel()
+	if !managerClaimed {
+		server := metric.NewServer(m.config.Port, m.config.Path, m.registry, m.security)
+		slog.Info("Starting metrics server", "port", m.config.Port, "path", m.config.Path)
+		if err := server.Start(runCtx); err != nil {
+			cancel()
+			m.lifecycleMu.Lock()
+			m.cleanupPending = false
+			m.terminal = true
+			m.cancel = nil
+			close(startDone)
+			m.startDone = nil
+			m.lifecycleMu.Unlock()
+			return fmt.Errorf("start metrics server: %w", err)
+		}
 		m.lifecycleMu.Lock()
-		m.cleanupPending = false
-		m.terminal = true
-		m.cancel = nil
-		close(startDone)
-		m.startDone = nil
+		m.server = server
 		m.lifecycleMu.Unlock()
-		return fmt.Errorf("start metrics server: %w", err)
-	}
-	m.lifecycleMu.Lock()
-	m.server = server
-	m.lifecycleMu.Unlock()
-	if m.testServerPublished != nil {
-		close(m.testServerPublished)
-		<-m.testStartRelease
+		if m.testServerPublished != nil {
+			close(m.testServerPublished)
+			<-m.testStartRelease
+		}
 	}
 
 	// The listener is owned before BaseService publishes running state. A base
@@ -281,13 +286,39 @@ func (m *Metrics) healthCheck() error {
 	m.lifecycleMu.Lock()
 	defer m.lifecycleMu.Unlock()
 
-	// Simple health check - verify server is accessible
+	// A composed production instance observes the Manager-owned diagnostic
+	// server; a standalone instance retains its direct server ownership.
+	if m.managerClaimed {
+		if !m.managerHealthy {
+			return fmt.Errorf("manager-owned metrics server not running")
+		}
+		return nil
+	}
 	if m.server == nil {
 		return fmt.Errorf("metrics server not running")
 	}
 
 	// Could add HTTP health check here if needed
 	return nil
+}
+
+func (m *Metrics) claimManagerServer() (*metric.Server, error) {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	if m.used || m.managerClaimed || m.server != nil {
+		return nil, errs.WrapFatal(
+			errs.ErrAlreadyStarted,
+			"Metrics", "claimManagerServer", "metrics runtime already owned",
+		)
+	}
+	m.managerClaimed = true
+	return metric.NewServer(m.config.Port, m.config.Path, m.registry, m.security), nil
+}
+
+func (m *Metrics) setManagerServerHealthy(healthy bool) {
+	m.lifecycleMu.Lock()
+	m.managerHealthy = healthy
+	m.lifecycleMu.Unlock()
 }
 
 // Port returns the port the metrics server is listening on

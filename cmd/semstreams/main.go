@@ -186,7 +186,7 @@ func run() (runErr error) {
 		return fmt.Errorf("bootstrap canceled after MaxDeliver observer start: %w", err)
 	}
 
-	slog.Info("SemStreams ready",
+	slog.Info("SemStreams bootstrap infrastructure initialized",
 		"version", Version,
 		"git_commit", GitCommit,
 		"build_time", BuildTime)

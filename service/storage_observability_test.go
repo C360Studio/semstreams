@@ -305,7 +305,17 @@ func TestStorageObservabilityReadiness_IsUnmovedByCriticalPressure(t *testing.T)
 	t.Cleanup(func() { _ = svc.BaseService.Stop(context.Background()) })
 
 	manager := NewServiceManager(NewServiceRegistry())
-	manager.RegisterInstance(StorageObservabilityServiceName, svc)
+	require.NoError(t, manager.RegisterInstance("component-manager", &MockService{
+		name: "component-manager", status: StatusRunning, healthy: true,
+	}))
+	require.NoError(t, manager.RegisterInstance(StorageObservabilityServiceName, svc))
+	services, err := manager.sealComposition()
+	require.NoError(t, err)
+	for _, admitted := range services {
+		manager.recordServiceStartInvoked(admitted.name)
+		manager.recordServiceStartCompleted(admitted.name, nil)
+	}
+	manager.commitStartup(http.NewServeMux())
 
 	ready := httptest.NewRecorder()
 	manager.handleReadiness(ready, httptest.NewRequest(http.MethodGet, "/readyz", nil))
@@ -319,9 +329,14 @@ func TestStorageObservabilityReadiness_IsUnmovedByCriticalPressure(t *testing.T)
 	var payload health.Status
 	require.NoError(t, json.Unmarshal(systemHealth.Body.Bytes(), &payload))
 	assert.True(t, payload.IsHealthy())
-	require.Len(t, payload.SubStatuses, 1)
-	assert.Contains(t, payload.SubStatuses[0].Message, "critical=1",
-		"the state an operator needs is still in the payload")
+	require.Len(t, payload.SubStatuses, 2)
+	var storageMessage string
+	for _, subStatus := range payload.SubStatuses {
+		if subStatus.Component == StorageObservabilityServiceName {
+			storageMessage = subStatus.Message
+		}
+	}
+	assert.Contains(t, storageMessage, "critical=1", "the state an operator needs is still in the payload")
 }
 
 // TestStorageObservabilityHealth_NeverCarriesANonHealthySubStatus stops the

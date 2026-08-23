@@ -331,7 +331,7 @@ func TestOmittedOrDisabledMessageLoggerCreatesNoRuntimeSurface(t *testing.T) {
 				t.Fatal(err)
 			}
 			manager.httpMux = http.NewServeMux()
-			if err := manager.registerServiceHandlers(); err != nil {
+			if err := manager.registerServiceHandlers(manager.httpMux); err != nil {
 				t.Fatal(err)
 			}
 			response := httptest.NewRecorder()
@@ -538,7 +538,7 @@ func TestCompositionSealUsesFullSetAndHTTPSubset(t *testing.T) {
 	}
 
 	manager.httpMux = http.NewServeMux()
-	if err := manager.registerServiceHandlers(); err != nil {
+	if err := manager.registerServiceHandlers(manager.httpMux); err != nil {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
