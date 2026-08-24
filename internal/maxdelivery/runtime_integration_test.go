@@ -16,6 +16,7 @@ import (
 
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	natstest "github.com/nats-io/nats-server/v2/test"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -181,8 +182,8 @@ func TestThreeNodeClusterReplicasOneRetainsAndHandlesOccurrenceOnce(t *testing.T
 	require.NoError(t, config.NewStreamsManager(clients[0], discardLogger()).EnsureStreams(ctx, &config.Config{}))
 	js, err := clients[0].JetStream()
 	require.NoError(t, err)
-	capture, err := js.Stream(ctx, captureStreamName)
-	require.NoError(t, err)
+	capture := retryWhileStreamNotFound(ctx, t, "look up "+captureStreamName,
+		func(opCtx context.Context) (jetstream.Stream, error) { return js.Stream(opCtx, captureStreamName) })
 	info, err := capture.Info(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 1, info.Config.Replicas, "the fixed declaration intentionally remains R=1")
