@@ -375,14 +375,22 @@ Structural facts only. For each, decide what a rule may match on and withhold au
       MEDIUM corrections; the delta round REFUSED transfer after catching a reviewer-introduced
       census figure (54→53) and a self-inconsistent Identity block; round-2 amendments were
       re-derived and the verdict RE-AFFIRMED bound to identity sha256
-      `20efdcbb8d50757d3b88971bfa0a1a82962ec18616e42d6a8ba232b5f8b18d67` (recompute command in-file).
+      `20efdcbb8d50757d3b88971bfa0a1a82962ec18616e42d6a8ba232b5f8b18d67` (round 2). Round 3
+      (2026-08-24, triggered by the Codex header-contradiction MEDIUM at head `4d904585`): headers
+      reworded to locate grant-state solely in this record; body byte-identical; RE-AFFIRMED bound to
+      identity sha256 `3e86e3e38e9bf3c4421c3b8033d2e05b2690f5c7f2a436238f071ea37e0918dd`
+      (recompute command in-file). Round-2 binding is history honored at `4d904585`.
 - [x] 12.2 `DESIGN REVIEW PASS` — GRANTED 2026-08-24 by the same independent reviewer, verified
       design↔code conformance at head, the adopter do-nothing path, and hash linkage; RE-AFFIRMED
       after the round-2 amendments, bound to `design.md` whole-file sha256
-      `0ffbb691b80f6b40d43db4e9014b7811f79a56fc6190cbbd6624e35248fe2972`.
+      `0ffbb691b80f6b40d43db4e9014b7811f79a56fc6190cbbd6624e35248fe2972` (round 2); round 3
+      RE-AFFIRMED on the headers-only delta, bound to whole-file sha256
+      `e2ca2fe35d02032012afbf5d78b33db31617d52edd029da12fb1a58b4650f2ce`.
 - [x] 12.3 OWNER ACCEPTANCE — GRANTED 2026-08-24 by the owner, explicitly and interactively, bound
       to the two identities above: the three design decisions plus the two refined structural tests
       (validator/closed-type constraint; framework-owned vocabulary) under which `FinishReason` and
-      `LoopFailedEvent.Reason` remain withheld. Recorded here and in the PR #1052 gate comment. The
+      `LoopFailedEvent.Reason` remain withheld — and CARRIED FORWARD explicitly by the owner on
+      2026-08-24 to the round-3 identities (`3e86e3e3…` / `e2ca2fe3…`; headers-only delta, body
+      byte-identical to the accepted round-2 content). Recorded here and in the PR #1052 gate comment. The
       reviewed artifacts are byte-exact as reviewed: any future edit to either voids the bindings and
       re-runs the sequence (recompute both hashes at any commit that touches them).

@@ -1,7 +1,9 @@
 # Surface inventory: rule-readable payload projection
 
-Status: **UNSIGNED.** `INVENTORY PASS` is owner-issued and has not been granted. This artifact exists to be
-reviewed, not to certify itself.
+Status: this artifact does not self-certify. `INVENTORY PASS` is issued by an independent reviewer, and
+owner acceptance is a distinct, separate gate; whether either has been granted — and to which exact
+identity — is recorded ONLY in the bound gate record (`tasks.md` §12), keyed to the content hash printed
+in this file's Identity section. Nothing in this file's body asserts or implies a verdict.
 
 Baseline: `774c85dc`. Every figure below was re-derived against that commit with `git show <rev>:<path>` or
 `git grep <pattern> 774c85dc -- <path>`. Nothing is carried forward from an earlier scoping pass.
@@ -92,7 +94,7 @@ caller-populated `Metadata` maps on the loop events, `TaskMessage`, `ToolCall` a
 
 Content hash of this file, excluding this Identity section, over the exact bytes above:
 
-    sha256 = 20efdcbb8d50757d3b88971bfa0a1a82962ec18616e42d6a8ba232b5f8b18d67
+    sha256 = 3e86e3e38e9bf3c4421c3b8033d2e05b2690f5c7f2a436238f071ea37e0918dd
 
 Recompute with:
 

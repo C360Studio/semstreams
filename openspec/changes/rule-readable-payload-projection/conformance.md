@@ -6,16 +6,17 @@ re-review at head `54995742` returned four further items (round 4, all applied).
 have not occurred.
 
 THE DESIGN GATE IS CLOSED (2026-08-24). An independent reviewer session granted `INVENTORY PASS`
-(inventory identity sha256 `20efdcbb8d50757d3b88971bfa0a1a82962ec18616e42d6a8ba232b5f8b18d67`, baseline
+(inventory identity sha256 `3e86e3e38e9bf3c4421c3b8033d2e05b2690f5c7f2a436238f071ea37e0918dd`, baseline
 `774c85dc`) and `DESIGN REVIEW PASS` (design.md whole-file sha256
-`0ffbb691b80f6b40d43db4e9014b7811f79a56fc6190cbbd6624e35248fe2972`) across two delta rounds — the first
+`e2ca2fe35d02032012afbf5d78b33db31617d52edd029da12fb1a58b4650f2ce`) across three delta rounds — the first
 delta REFUSED re-affirmation over a census figure and a self-inconsistent identity block, both corrected
-and re-verified. OWNER ACCEPTANCE was granted explicitly on 2026-08-24, bound to those identities.
+and re-verified. OWNER ACCEPTANCE was granted explicitly on 2026-08-24 and carried forward by the owner to the round-3
+identities (headers-only delta; body byte-identical).
 The full record is tasks.md §12; the reviewed artifacts remain byte-exact as reviewed. This file maps
 rulings to implementation evidence; the gate record above is what certifies they were gated.
 
 Baseline: `774c85dc`. Accepted design: `design.md`, referencing `inventory.md` at sha256
-`20efdcbb8d50757d3b88971bfa0a1a82962ec18616e42d6a8ba232b5f8b18d67`.
+`3e86e3e38e9bf3c4421c3b8033d2e05b2690f5c7f2a436238f071ea37e0918dd`.
 
 CI note, current as of head `54995742`: the `Test` job is red in `internal/maxdelivery`
 (`TestThreeNodeClusterReplicasOneRetainsAndHandlesOccurrenceOnce`, a NATS 404 stream-not-found). This is a

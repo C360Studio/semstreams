@@ -1,17 +1,19 @@
 # Design: `message.RuleReadable` exported surface
 
-Status: **UNSIGNED.** `DESIGN REVIEW PASS` is owner-issued and has not been granted. No owner acceptance is
-recorded in this file.
+Status: this artifact does not self-certify. `DESIGN REVIEW PASS` is issued by an independent reviewer,
+and owner acceptance is a distinct, separate gate; whether either has been granted — and to which exact
+whole-file hash — is recorded ONLY in the bound gate record (`tasks.md` §12). Nothing in this file asserts
+or implies a verdict or an acceptance.
 
 What this artifact is, stated plainly because the distinction matters: the three decisions in
 "Decisions requiring a ruling" were made by the owner before implementation, and the implementation
 conforms to them (`conformance.md`). But this document is an IMPLEMENTER'S RECONSTRUCTION written after the
 code, not the checkpoint that produced those decisions. A reconstruction is not the gate. It is offered so
-the gate can be run against something reviewable, and it is left unsigned so that running it remains
-necessary.
+the gate can be run against something reviewable; the gate's outcome, whenever and however it runs, lives
+in the bound gate record, never here.
 
 Inventory: `inventory.md` in this directory, baseline `774c85dc`,
-sha256 `20efdcbb8d50757d3b88971bfa0a1a82962ec18616e42d6a8ba232b5f8b18d67`
+sha256 `3e86e3e38e9bf3c4421c3b8033d2e05b2690f5c7f2a436238f071ea37e0918dd`
 (recompute: `sed '/^## Identity$/,$d' inventory.md | shasum -a 256`).
 
 Why a gate at all: `message` is a framework package and `RuleReadable` is reachable by payload authors
