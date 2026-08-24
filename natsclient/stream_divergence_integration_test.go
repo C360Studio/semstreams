@@ -142,9 +142,9 @@ func TestEnsureStream_BindDivergence(t *testing.T) {
 	// the same discard, through a seam whose name says "create".
 	//
 	// Its sibling, a create that loses the race and is answered 10058, reports
-	// through this same call after resolving the live handle. That race is not
-	// reproducible on one node, so what is pinned here is the report; the 10058
-	// branch is pinned by the unit test that proves setup continues past it.
+	// through this same call after resolving the live handle; it is pinned by
+	// "a create refused because the stream exists" below, which reaches that
+	// branch with firstStreamLookupAbsent.
 	t.Run("a consumer auto-create bind reports what it discarded", func(t *testing.T) {
 		logs.Reset()
 
@@ -249,6 +249,65 @@ func TestEnsureStream_BindDivergence(t *testing.T) {
 		assert.NotContains(t, logs.String(), "diverges",
 			"a declaration the caller never made cannot be a divergence, and the silence it "+
 				"replaces was not a defect")
+	})
+
+	// The name guard sits in front of BOTH reports. A KV or ObjectStore backing
+	// stream is unbounded by construction and belongs to the bucket catalog, so
+	// the unboundedness report's remedy — "set finite limits on it" — is the exact
+	// opposite of what CheckOrdinaryStreamName exists to say about it, and the
+	// two-owners remedy is nonsense for a bucket nobody declared as a stream.
+	t.Run("a backing stream is reported on neither footing", func(t *testing.T) {
+		_, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: "GUARDEDBIND"})
+		require.NoError(t, err)
+		logs.Reset()
+
+		err = client.ensureStreamForConsumer(ctx, js, StreamConsumerConfig{
+			StreamName:    KVStreamPrefix + "GUARDEDBIND",
+			FilterSubject: "$KV.GUARDEDBIND.>",
+			AutoCreate:    true,
+			AutoCreateConfig: &StreamAutoCreateConfig{
+				Subjects: []string{"$KV.GUARDEDBIND.>"},
+				MaxAge:   time.Hour,
+				MaxBytes: 1 << 20,
+				Discard:  jetstream.DiscardOld,
+			},
+		})
+		require.NoError(t, err, "binding an existing backing stream is not this seam's refusal to make")
+
+		logged := logs.String()
+		assert.NotContains(t, logged, "creating it today would be refused",
+			"a backing stream's remedy is never 'set finite limits on it'")
+		assert.NotContains(t, logged, "diverges",
+			"nobody declares a bucket's backing stream as an ordinary stream")
+	})
+
+	// The two reports are gated differently, because only one of them needs a
+	// declaration. An under-declared caller — AutoCreate and nothing else — is
+	// precisely the caller stream_bounds.go designates the unboundedness report
+	// for, so silencing it along with the comparison would remove the coverage
+	// from the caller it exists to cover.
+	t.Run("an undeclared caller still hears that the live stream is unbounded", func(t *testing.T) {
+		_, err := js.CreateStream(ctx, jetstream.StreamConfig{
+			Name:     "LEGACY_CONSUMER_BIND",
+			Subjects: []string{"legacyconsumerbind.>"},
+			Storage:  jetstream.MemoryStorage,
+		})
+		require.NoError(t, err)
+		logs.Reset()
+
+		err = client.ensureStreamForConsumer(ctx, js, StreamConsumerConfig{
+			StreamName:    "LEGACY_CONSUMER_BIND",
+			FilterSubject: "legacyconsumerbind.work",
+			AutoCreate:    true,
+		})
+		require.NoError(t, err)
+
+		logged := logs.String()
+		assert.Contains(t, logged, "declares no finite bounds",
+			"this report reads the LIVE stream and needs no declaration to be true")
+		assert.Contains(t, logged, "LEGACY_CONSUMER_BIND")
+		assert.NotContains(t, logged, "diverges from this caller's declaration",
+			"the derived subject is not a declaration this caller made")
 	})
 
 	// The bind path's OTHER report, which exists because the one above cannot see

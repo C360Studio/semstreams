@@ -86,12 +86,14 @@
 // reporting a deployment shape — is decided by cluster timing, and it fails in the
 // worst direction: boot SUCCEEDS and the work silently never happens.
 //
-// Take that decision from the guarded consumer setup instead. ConsumeStreamWithConfig,
-// ConsumeStreamWithConfigContexts and ConsumeInternalStreamWithConfig wait out the
-// propagation window, and the error they return carries ErrStreamNotVisible only when
-// the stream stayed absent for the framework's whole visibility budget. Branch on that sentinel — never on a bare
-// jetstream.ErrStreamNotFound, which those same operations also return for a
-// consumer-creation or consumer-observation fault against a stream that is present.
+// Take that decision from the guarded consumer setup instead.
+// ConsumeStreamWithConfig, ConsumeStreamWithConfigContexts and
+// ConsumeInternalStreamWithConfig wait out the propagation window, and the error
+// they return carries ErrStreamNotVisible only when the stream stayed absent for
+// the framework's whole visibility budget. Branch on that sentinel — never on a
+// bare jetstream.ErrStreamNotFound, which those same operations also return for
+// a consumer-creation or consumer-observation fault against a stream that is
+// present.
 //
 // This is not style. EnsureStream is get-or-create: a reader that calls it with
 // its own configuration either creates the stream with limits it does not own, or

@@ -220,13 +220,29 @@ func (c *Client) EnsureStream(ctx context.Context, cfg jetstream.StreamConfig) (
 // It reports and returns. No field is written, no error is produced, and the
 // caller receives the same stream it would have received before.
 func (c *Client) reportBindDivergence(declared jetstream.StreamConfig, stream jetstream.Stream) {
+	c.reportUnboundedLiveStream(declared.Name, stream)
+	c.reportDeclaredDivergence(declared, stream)
+}
+
+// liveStreamConfig is what a bind report compares against, or nil when there is
+// nothing to report from. Silence on a nil is right: claiming a divergence we
+// could not measure would be worse than not measuring it.
+func (c *Client) liveStreamConfig(stream jetstream.Stream) *jetstream.StreamInfo {
 	if c.logger == nil || stream == nil {
-		return
+		return nil
 	}
-	info := stream.CachedInfo()
+	return stream.CachedInfo()
+}
+
+// reportUnboundedLiveStream reports a bound stream that declares no finite
+// bounds. It takes NO declaration, and that is the point: this is a property of
+// the LIVE stream, so it is reportable for any caller that binds an ordinary
+// stream — including the under-declared caller the create-versus-bind split sends
+// down that path, who has nothing to compare and is exactly the caller
+// stream_bounds.go designates this coverage for.
+func (c *Client) reportUnboundedLiveStream(name string, stream jetstream.Stream) {
+	info := c.liveStreamConfig(stream)
 	if info == nil {
-		// Nothing to compare against. Silence is right here: claiming a divergence
-		// we could not measure would be worse than not measuring it.
 		return
 	}
 
@@ -242,7 +258,7 @@ func (c *Client) reportBindDivergence(declared jetstream.StreamConfig, stream je
 		c.logger.Warn(
 			"bound an existing ORDINARY stream that declares no finite bounds; creating it today would be "+
 				"refused, and binding it does not repair it",
-			slog.String("stream", declared.Name),
+			slog.String("stream", name),
 			slog.String("observed_max_age", unlimitedOr(info.Config.MaxAge)),
 			slog.String("observed_max_bytes", unlimitedOrBytes(info.Config.MaxBytes)),
 			slog.String("remedy",
@@ -251,6 +267,16 @@ func (c *Client) reportBindDivergence(declared jetstream.StreamConfig, stream je
 					"provisioner reconciles it. An archive whose contract is permanence belongs in "+
 					"archival_streams instead"),
 		)
+	}
+}
+
+// reportDeclaredDivergence reports a declaration this caller made and the bind
+// discarded. It requires a declaration the caller actually WROTE: comparing
+// framework-substituted defaults would name "two owners" for values nobody chose.
+func (c *Client) reportDeclaredDivergence(declared jetstream.StreamConfig, stream jetstream.Stream) {
+	info := c.liveStreamConfig(stream)
+	if info == nil {
+		return
 	}
 
 	divergences := DiffDeclaredStream(declared, info.Config)
@@ -816,14 +842,31 @@ func (c *Client) buildConsumerConfig(cfg StreamConsumerConfig) jetstream.Consume
 	return consumerCfg
 }
 
+// autoCreateBindSource names this seam in the name guard, on the bind path and on
+// the create path. One constant because the two calls must stay identical: the
+// create path's refusal is what proves the 10058 bind below needs no gate.
+const autoCreateBindSource = "natsclient consumer auto-create"
+
 // ensureStreamForConsumer auto-creates a stream if it doesn't exist.
 //
-// Both of its BIND paths — the stream already existed, and the create lost the
-// race for it — report what binding discarded, but ONLY for a caller that wrote
-// an explicit AutoCreateConfig. That caller declared a whole stream and has the
-// declaration silently dropped in favour of the live one; that is the correct
-// outcome (a non-owner does not restamp another owner's stream) and the one
-// nothing else will ever mention. See reportBindDivergence.
+// Its two BIND paths report what binding discarded, on different terms.
+//
+// The pre-check bind is reachable by ANY caller, so it gates each report on what
+// that report actually needs. The live stream's unboundedness is a property of
+// the stream, reportable for any ordinary-named stream. Declared-versus-observed
+// needs a declaration the caller WROTE: with no AutoCreateConfig the compared
+// values are the framework's own DefaultStreamConfig and a subject derived from
+// the filter, so reporting would tell an adopter "two owners are declaring one
+// stream" about a declaration they never made — a false alarm replacing silence.
+// Both stay behind the name guard, because a KV or ObjectStore backing stream
+// must not be told to "set finite limits on it"; that is the opposite of what
+// that guard exists to say.
+//
+// The 10058 bind — the create lost the race — needs no gate at all. Reaching the
+// create requires the declaration to have built, the name to have passed
+// CheckOrdinaryStreamName, and the bounds to have passed CheckStreamBounds, which
+// DefaultStreamConfig cannot do because it declares neither. A caller there
+// provably wrote an explicit configuration for an ordinary stream.
 func (c *Client) ensureStreamForConsumer(ctx context.Context, js jetstream.JetStream, cfg StreamConsumerConfig) error {
 	// What this caller declares, computed BEFORE the existence check so the bind
 	// path can say what it discarded. declErr is deliberately not returned here:
@@ -831,26 +874,13 @@ func (c *Client) ensureStreamForConsumer(ctx context.Context, js jetstream.JetSt
 	// caller's right to bind a stream that already exists.
 	declared, declErr := autoCreateStreamConfig(cfg)
 
-	// Whether a bind here has anything to report, decided once for both bind
-	// paths.
-	//
-	// An absent AutoCreateConfig disqualifies it: the values compared would then
-	// be the framework's own DefaultStreamConfig and a subject derived from the
-	// filter, so an adopter who wrote AutoCreate and nothing else would be told
-	// on every boot that "two owners are declaring one stream" about a
-	// declaration they never wrote. A report for a claim the caller did not make
-	// is a false alarm, and silence is the prior behavior it would replace.
-	//
-	// The name guard disqualifies it too, ahead of the create path's own check:
-	// a KV or ObjectStore backing stream must not be told to "set finite limits
-	// on it", which is the exact opposite of what that guard exists to say.
-	reportBind := cfg.AutoCreateConfig != nil && declErr == nil &&
-		CheckOrdinaryStreamName(declared.Name, "natsclient consumer auto-create") == nil
-
 	stream, err := js.Stream(ctx, cfg.StreamName)
 	if err == nil {
-		if reportBind {
-			c.reportBindDivergence(declared, stream)
+		if CheckOrdinaryStreamName(declared.Name, autoCreateBindSource) == nil {
+			c.reportUnboundedLiveStream(declared.Name, stream)
+			if cfg.AutoCreateConfig != nil && declErr == nil {
+				c.reportDeclaredDivergence(declared, stream)
+			}
 		}
 		return nil // Stream exists
 	}
@@ -875,7 +905,7 @@ func (c *Client) ensureStreamForConsumer(ctx context.Context, js jetstream.JetSt
 	// to recreate them through here with no bounds at all — silently replacing the
 	// 5m/10MB the framework declares for them. The contract's own observability
 	// streams were its counterexample.
-	if err := CheckOrdinaryStreamName(declared.Name, "natsclient consumer auto-create"); err != nil {
+	if err := CheckOrdinaryStreamName(declared.Name, autoCreateBindSource); err != nil {
 		return errs.WrapFatal(err, "Client", "ensureStreamForConsumer",
 			"validate stream name "+declared.Name)
 	}
@@ -910,11 +940,6 @@ func (c *Client) ensureStreamForConsumer(ctx context.Context, js jetstream.JetSt
 		// this one, so this branch IS the two-declarers condition, and it reports
 		// with observed and declared values rather than a bare line saying the
 		// stream was there.
-		if !reportBind {
-			c.logger.Info("stream already exists; bound by name",
-				slog.String("stream", cfg.StreamName))
-			return nil
-		}
 		live, lookupErr := js.Stream(ctx, declared.Name)
 		if lookupErr != nil {
 			c.logger.Info("stream already exists; bound by name without comparing declarations",
@@ -995,8 +1020,12 @@ func autoCreateStreamConfig(cfg StreamConsumerConfig) (jetstream.StreamConfig, e
 		streamCfg.Replicas = autoConfig.Replicas
 	}
 	// Carried through unclamped: the clamp is a property of CREATING this stream,
-	// and this function is also what the bind paths compare against.
-	streamCfg.Duplicates = autoConfig.Duplicates
+	// and this function is also what the bind paths compare against. The > 0 guard
+	// stays, so a negative window keeps being dropped here rather than newly
+	// reaching the server.
+	if autoConfig.Duplicates > 0 {
+		streamCfg.Duplicates = autoConfig.Duplicates
+	}
 
 	return streamCfg, nil
 }
