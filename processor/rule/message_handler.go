@@ -405,9 +405,29 @@ func (rp *Processor) matchesRuleSubject(r Rule, subject string) bool {
 	return false
 }
 
-// extractEntityID extracts the entity ID from a message for state tracking
+// extractEntityID extracts the durable state-tracking identity for a
+// message-path stateful evaluation: it becomes Evaluation.EntityID and,
+// through StatefulEvaluator.entityKey, the RULE_STATE key.
+//
+// TWO RESPONSIBILITIES MEET AT THIS SEAM AND ONLY ONE BELONGS TO THE
+// PROJECTION. `ruleFields` (message.RuleReadable) is the condition-visibility
+// and `$message.*` substitution contract — it decides what a rule may match
+// on and template in, and extractMessageData rightly reads it. Durable state
+// IDENTITY is deliberately NOT derived from it: a typed-payload author who
+// exposes `entity_id` for matching would otherwise silently collapse every
+// message carrying that value onto one RULE_STATE record, so the second
+// false→true evaluation becomes TransitionNone and on_enter is suppressed —
+// a state-machine defect the author could neither see nor opt out of.
+//
+// The split below is the exact pre-projection baseline (774c85dc):
+//
+//   - *message.GenericJSONPayload keeps its legacy Data["entity_id"] state
+//     identity, unchanged since before RuleReadable existed.
+//   - Every other payload type uses the wire message ID, whatever its
+//     projection exposes. A typed-payload state-identity contract, if one
+//     is ever wanted, is a separately reviewed design — not a side effect
+//     of a projection gaining an `entity_id` key.
 func extractEntityID(msg message.Message) string {
-	// Try to get entity_id from payload data
 	if payload := msg.Payload(); payload != nil {
 		if genericPayload, ok := payload.(*message.GenericJSONPayload); ok {
 			if entityID, exists := genericPayload.Data["entity_id"]; exists {
@@ -422,29 +442,20 @@ func extractEntityID(msg message.Message) string {
 	return msg.ID()
 }
 
-// extractMessageData returns the inbound message's payload as a generic
-// map for `$message.*` substitution. Mirrors the path the expression
-// evaluator uses at `expression_factory.go:97` — only
-// `GenericJSONPayload` exposes its data as a generic map, so other
-// payload types yield nil and the substitution layer falls back to
-// silent-pass + warning per the unresolvedTemplateVarRe contract.
+// extractMessageData returns the inbound message's rule-readable fields for
+// `$message.*` substitution. Same projection the expression evaluator matches
+// on (`ruleFields`), so a condition and an action template can never disagree
+// about what the payload exposes.
 //
 // nil is a valid return: it signals "no message-data scope for this
-// evaluation" to downstream substitution. Authors who reach for
-// $message.* in templates fired by entity-state or cron rules will see
-// the unresolved-template warning, which is the correct surfacing.
+// evaluation" to downstream substitution, and covers both a payload with
+// nothing to expose and one the engine cannot read. Authors who reach for
+// $message.* in templates fired by entity-state or cron rules will see the
+// unresolved-template warning, which is the correct surfacing. The unreadable
+// case additionally gets the once-per-pairing report from rule evaluation.
 func extractMessageData(msg message.Message) map[string]any {
-	if msg == nil {
-		return nil
-	}
-	payload := msg.Payload()
-	if payload == nil {
-		return nil
-	}
-	if generic, ok := payload.(*message.GenericJSONPayload); ok {
-		return generic.Data
-	}
-	return nil
+	fields, _ := ruleFields(msg)
+	return fields
 }
 
 // recordError records an error and updates health status

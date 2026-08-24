@@ -570,6 +570,30 @@ func (t ToolResult) Validate() error {
 	return nil
 }
 
+// EffectiveErrorKind returns the failure classification a consumer should act
+// on, applying the default ToolErrorUnknown documents: a result carrying an
+// Error but no ErrorKind is still a failure, classified as unknown.
+//
+// The empty return is the THIRD state and the load-bearing one: it means the
+// call did not fail at all, which is why callers must branch on emptiness
+// rather than comparing against a member. Do not read ErrorKind directly to
+// answer "did this fail" — an unclassified executor error reads as empty on
+// the raw field and that is the fail-open shape.
+//
+// This is the home for the normalisation. Two older copies predate it
+// (processor/agentic-tools/component.go and processor/agentic-loop/handlers.go
+// buildToolTrajectoryStep); they agree today and their migration is filed
+// separately. New readers call this.
+func (t ToolResult) EffectiveErrorKind() ToolErrorKind {
+	if t.ErrorKind != "" {
+		return t.ErrorKind
+	}
+	if t.Error != "" {
+		return ToolErrorUnknown
+	}
+	return ""
+}
+
 // Schema implements message.Payload
 func (t *ToolResult) Schema() message.Type {
 	return message.Type{Domain: Domain, Category: CategoryToolResult, Version: SchemaVersion}

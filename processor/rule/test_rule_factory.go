@@ -61,14 +61,15 @@ func (r *TestRule) Evaluate(messages []message.Message) bool {
 	// For test purposes, evaluate the last message
 	msg := messages[len(messages)-1]
 
-	// Get payload data — only GenericJSONPayload supports field-keyed matching.
-	payload := msg.Payload()
-	genericPayload, ok := payload.(*message.GenericJSONPayload)
-	if !ok {
+	// Same projection as production rules (`ruleFields`) — this was a fourth
+	// hand-rolled copy of the GenericJSONPayload assertion, and a test double
+	// that reads payloads differently from the rule it stands in for is worse
+	// than no double at all. No unreadable report here: TestRule has no
+	// operator surface, and the production report belongs to ExpressionRule.
+	data, readable := ruleFields(msg)
+	if !readable {
 		return false
 	}
-
-	data := genericPayload.Data
 	if data == nil {
 		return false
 	}

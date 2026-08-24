@@ -151,9 +151,10 @@ type ExecutionContext struct {
 
 	// MessageData carries the payload of the inbound message that
 	// triggered rule evaluation, as a generic map for dotted-path
-	// access. Populated on the message-path (NATS-subscribed rules)
-	// from `GenericJSONPayload.Data`. Nil for entity-state-driven and
-	// cron-fired evaluations — those have no inbound message in scope.
+	// access. Populated on the message-path (NATS-subscribed rules) from
+	// the payload's declared message.RuleReadable fields (see
+	// `ruleFields`). Nil for entity-state-driven and cron-fired
+	// evaluations — those have no inbound message in scope.
 	// The `$message.*` substitution layer reads this; see
 	// message_substitution.go for the namespace contract.
 	//

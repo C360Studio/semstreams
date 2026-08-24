@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	gtypes "github.com/c360studio/semstreams/graph"
@@ -34,6 +35,40 @@ type ExpressionRule struct {
 	// fields like `$entity.lifecycle.phase` evaluate at initial-match
 	// time. ADR-047.
 	lifecycleManager LifecycleManager
+
+	// unreadableReported holds the payload types already reported
+	// unreadable for THIS rule (set semantics; the value is unused). It
+	// bounds the report to one per rule/payload-type pairing so a
+	// high-rate subject cannot flood the log with a fact that does not
+	// change between messages.
+	//
+	// sync.Map rather than a plain map because message-path evaluation
+	// runs concurrently across NATS deliveries. Per-rule rather than
+	// package-level so the set dies with the rule: a config reload builds
+	// new rule instances and re-reports once against the new definition,
+	// which is the right behaviour when an operator has just changed the
+	// thing that might have fixed it. Bounded by the payload registry's
+	// type count, not by traffic.
+	unreadableReported sync.Map
+}
+
+// reportUnreadablePayload surfaces a rule/payload-type pairing whose payload
+// declares no rule-readable fields, exactly once per pairing.
+//
+// This is the observability half of the projection change. Evaluation
+// semantics are unchanged — the rule does not fire, no other rule is affected,
+// and the engine does not halt — but "this rule can never fire for this
+// payload type" is now visible instead of arriving as an ordinary false.
+func (r *ExpressionRule) reportUnreadablePayload(msg message.Message) {
+	payloadType := payloadTypeLabel(msg)
+	if _, reported := r.unreadableReported.LoadOrStore(payloadType, struct{}{}); reported {
+		return
+	}
+	slog.Warn("Rule payload is not rule-readable: every $message.* condition on it is false and the rule can never fire for this payload type",
+		"rule", r.name,
+		"rule_id", r.id,
+		"payload_type", payloadType,
+		"remedy", "implement message.RuleReadable on the payload type")
 }
 
 // SetLifecycleManager installs the Lifecycle harness Manager used by
@@ -105,11 +140,15 @@ func (r *ExpressionRule) Subscribe() []string {
 // Evaluate evaluates the rule against messages.
 //
 // Routes through the unified expression.Evaluator with `messageFields`
-// populated from the payload's GenericJSONPayload data. Bare field names
-// resolve via the same precedence rule documented on
-// `Evaluator.EvaluateWithStateAndMessage`. ADR-041 unified this with the
-// action-When path so rule-level conditions and action guards share the
-// same field-resolution semantics — no more two-evaluator split.
+// populated by `ruleFields` — any payload declaring message.RuleReadable,
+// core.json.v1 included. Bare field names resolve via the same precedence
+// rule documented on `Evaluator.EvaluateWithStateAndMessage`. ADR-041 unified
+// this with the action-When path so rule-level conditions and action guards
+// share the same field-resolution semantics — no more two-evaluator split.
+//
+// A payload the engine cannot read is REPORTED, not silently false: such a
+// rule can never fire, which is a different fact from "the condition did not
+// match" and used to be indistinguishable from it.
 func (r *ExpressionRule) Evaluate(messages []message.Message) bool {
 	if !r.enabled || len(messages) == 0 {
 		return false
@@ -123,19 +162,20 @@ func (r *ExpressionRule) Evaluate(messages []message.Message) bool {
 	// For expression rules, evaluate the last message
 	msg := messages[len(messages)-1]
 
-	// Get payload data — only GenericJSONPayload is supported for
-	// expression matching because conditions are field-keyed maps.
-	payload := msg.Payload()
-	var data map[string]any
-	if genericPayload, ok := payload.(*message.GenericJSONPayload); ok {
-		data = genericPayload.Data
-	}
-
-	if len(data) == 0 {
+	// Checked before projection: a rule with no conditions cannot fire on the
+	// message path whatever the payload holds, so reporting its payload as
+	// unreadable would be noise about a rule that was never going to match.
+	if len(r.conditions) == 0 {
 		return false
 	}
 
-	if len(r.conditions) == 0 {
+	data, readable := ruleFields(msg)
+	if !readable {
+		r.reportUnreadablePayload(msg)
+		return false
+	}
+
+	if len(data) == 0 {
 		return false
 	}
 

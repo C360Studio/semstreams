@@ -195,3 +195,27 @@ func TestGenericJSON_NestedStructures(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "warehouse-1", metadata["location"])
 }
+
+// TestGenericJSONPayloadRuleFields pins the one behavior every rule written
+// before RuleReadable existed depends on: core.json.v1 exposes its whole data
+// map, so the rule engine needs no special case for it.
+func TestGenericJSONPayloadRuleFields(t *testing.T) {
+	data := map[string]any{"role": "architect", "outcome": "success"}
+	payload := message.NewGenericJSON(data)
+
+	var readable message.RuleReadable = payload
+	fields := readable.RuleFields()
+
+	if len(fields) != len(data) {
+		t.Fatalf("RuleFields() returned %d keys, want %d: %v", len(fields), len(data), fields)
+	}
+	for key, want := range data {
+		if got := fields[key]; got != want {
+			t.Errorf("RuleFields()[%q] = %v, want %v", key, got, want)
+		}
+	}
+
+	if nilFields := (&message.GenericJSONPayload{}).RuleFields(); nilFields != nil {
+		t.Errorf("RuleFields() on an empty payload = %v, want nil", nilFields)
+	}
+}

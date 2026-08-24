@@ -16,6 +16,8 @@ import "time"
 //	}
 //
 // Semantic interfaces (Graphable, Storable) are defined in separate files.
+// RuleReadable is a member of this family too; it lives in rule_readable.go
+// only because revive's max-public-structs cap (10) is per file.
 
 // Locatable provides geographic coordinates for spatial indexing.
 // Payloads implementing this interface can be indexed by location
