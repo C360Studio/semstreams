@@ -272,6 +272,99 @@ func (c *Client) reportBindDivergence(declared jetstream.StreamConfig, stream je
 	)
 }
 
+// Bounds on how long a consumer setup tolerates a stream that the node serving
+// the request has not applied yet. Fixed package constants in the style of the
+// readiness bounds in request.go (DefaultReadinessProbeTimeout /
+// DefaultReadinessBudget): sized once by the framework, never configured, never
+// predicted by a caller.
+//
+// A clustered JetStream answers stream creation from the meta leader while every
+// other node applies that assignment from the meta Raft log asynchronously. A
+// process whose connection lands on a lagging node — cold start on freshly
+// provisioned storage, or a node rejoining after a partition — is answered
+// 404/10059 for a stream that provably exists, moments after EnsureStreams
+// proved it. That window is a fact the framework can observe and the operator
+// cannot, so the framework absorbs it here rather than exporting a wait-first
+// method to remember or a timeout to guess.
+const (
+	// streamVisibilityProbeInterval spaces re-observations of the serving node's
+	// own view. Metadata apply completes in milliseconds on a healthy cluster, so
+	// probing is frequent enough to add no perceptible boot latency, and the
+	// budget still caps the pathological case at ~100 lightweight STREAM.INFO
+	// requests.
+	streamVisibilityProbeInterval = 50 * time.Millisecond
+	// streamVisibilityBudget bounds the TOTAL wait before an absent stream is
+	// reported as absent. It matches the propagation budget the clustered test
+	// fixture already uses (internal/maxdelivery: streamAssignmentBudget), so one
+	// number answers "how long may a node lag the meta layer" everywhere, and it
+	// stays small so a genuinely missing stream still fails boot promptly.
+	streamVisibilityBudget = 5 * time.Second
+)
+
+// awaitStreamVisible resolves a stream handle, tolerating ONLY the
+// not-yet-applied window above. Every other failure — permission denial,
+// transport fault, cancelled caller — is the server's real answer and is
+// returned on first observation, so this stays a bounded propagation tolerance
+// and never becomes retry-until-green.
+//
+// The wait is bounded by the caller's context AND the budget, whichever ends
+// first, and completes before returning: no goroutine outlives the call.
+// Whichever way it ends, jetstream.ErrStreamNotFound stays reachable through
+// errors.Is so the call site's existing transient wrap still classifies the
+// failure as an absent stream.
+func (c *Client) awaitStreamVisible(
+	ctx context.Context, js jetstream.JetStream, name string,
+) (jetstream.Stream, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, streamVisibilityBudget)
+	defer cancel()
+
+	probe := time.NewTicker(streamVisibilityProbeInterval)
+	defer probe.Stop()
+
+	started := time.Now()
+	var absent error
+	for {
+		stream, err := js.Stream(waitCtx, name)
+		switch {
+		case err == nil:
+			if absent != nil {
+				// The only report of a wait that succeeded. Logged once on
+				// completion, never per probe: a multi-second stall at boot is
+				// otherwise invisible, while per-probe logging would bury it.
+				c.logger.Info("stream became visible after waiting for cluster metadata propagation",
+					slog.String("stream", name),
+					slog.Duration("waited", time.Since(started)))
+			}
+			return stream, nil
+		case errors.Is(err, jetstream.ErrStreamNotFound):
+			absent = err
+		case absent != nil && waitCtx.Err() != nil:
+			// The wait ended mid-request, so this error reports that ending rather
+			// than the stream. Report what every completed observation measured.
+			return nil, streamNotVisible(ctx, absent)
+		default:
+			return nil, err
+		}
+
+		select {
+		case <-waitCtx.Done():
+			return nil, streamNotVisible(ctx, absent)
+		case <-probe.C:
+		}
+	}
+}
+
+// streamNotVisible explains which bound ended the wait while keeping the absent
+// classification — and, when the caller ended it, the caller's own cause —
+// reachable through errors.Is.
+func streamNotVisible(ctx context.Context, absent error) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("operation context ended while waiting for stream visibility: %w",
+			errors.Join(err, absent))
+	}
+	return fmt.Errorf("stream visibility budget %s exhausted: %w", streamVisibilityBudget, absent)
+}
+
 // ConsumeStreamWithConfig creates a port-backed JetStream consumer with full
 // configuration. The caller owns the exact returned native handle and must
 // Drain it and await Closed before canceling callback authority. The handler
@@ -324,7 +417,7 @@ func (c *Client) ConsumeInternalStreamWithConfig(
 			return nil, err
 		}
 	}
-	stream, err := js.Stream(ctx, cfg.StreamName)
+	stream, err := c.awaitStreamVisible(ctx, js, cfg.StreamName)
 	if err != nil {
 		c.recordFailure()
 		return nil, errs.WrapTransient(err, "Client", "ConsumeInternalStreamWithConfig",
@@ -563,7 +656,7 @@ func (c *Client) consumePortStreamWithConfigContexts(
 			return nil, err
 		}
 	}
-	stream, err := js.Stream(setupCtx, cfg.StreamName)
+	stream, err := c.awaitStreamVisible(setupCtx, js, cfg.StreamName)
 	if err != nil {
 		c.recordFailure()
 		return nil, errs.WrapTransient(err, "Client", operation,

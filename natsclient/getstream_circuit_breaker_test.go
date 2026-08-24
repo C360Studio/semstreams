@@ -15,6 +15,7 @@ package natsclient
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,10 +30,14 @@ import (
 type fakeJetStream struct {
 	streamErr error // returned by Stream()
 	kvErr     error // returned by KeyValue()
+	// streamCalls counts Stream() observations so a test can assert how many
+	// times a caller looked, not how long it took to give up looking.
+	streamCalls atomic.Int64
 }
 
 // Stream is the only method exercised by GetStream.
 func (f *fakeJetStream) Stream(_ context.Context, _ string) (jetstream.Stream, error) {
+	f.streamCalls.Add(1)
 	return nil, f.streamErr
 }
 
