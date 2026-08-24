@@ -68,7 +68,7 @@ memory. Each question has one home, and each home is a `gh` or `task` query.
 | What gates the next tag | GitHub milestone named for the intended version | Membership is the gate: in or out; an unruled item is out. `horizon:pre-v1` means before v1.0.0, not before the next tag. |
 | An epic | A tracking issue labeled `type:epic` whose body carries a task list of `#n` children | GitHub renders the progress; there is no separate epic document. |
 | Who has claimed what | A **draft PR** opened at the start of the work, `Closes #n` in its body; the branch prefix names the agent (`claude/…`, `codex/…`) | No draft PR, no claim. Design-phase work claims the same way — the OpenSpec proposal is its first commit. A stop-point goes in the PR description. |
-| Target state and task truth | The OpenSpec change inside that PR; `task openspec:queue` reads its holds | Archiving the change is part of the landing PR, not a follow-up. |
+| Target state and task truth | The OpenSpec change inside that PR; `task openspec:queue` reads its holds | The archive (`openspec archive <id>` + spec sync) is the landing PR's last commit, reviewed with the code; the ruleset-enforced merge is the CI-green proof. No task may assert a post-merge fact ("CI green", "merge-ready") — such a task strands the change. |
 | Why | An ADR, or the owner's ruling comment on the issue | — |
 
 Rituals:

@@ -34,10 +34,23 @@ silently stop matching the code. Two rules make that real:
    capability, distilling what is still true from the code and existing docs. Do
    NOT backfill everything up front — pre-writing specs for areas that may change
    is dead work, and an unverified spec is just another drifting doc.
-2. **Archive changes on completion.** A change is `proposal → tasks → deltas →
-   implement → archive`. Do not let completed or abandoned changes accumulate as
-   ambient "Proposed" documents — that status ambiguity is its own drift problem.
-   On archive, durable requirements are promoted into the baseline `specs/`.
+2. **Archive changes in the PR that completes them.** A change is `proposal →
+   tasks → deltas → implement → archive`, and the archive is the **last commit of
+   the landing PR**, never a follow-up PR: `openspec archive <id>` moves the change
+   and promotes its durable requirements into the baseline `specs/`, and that sync
+   is reviewed alongside the code it describes. The merge under the branch ruleset
+   (required checks, no bypass) is the proof that the archived state is CI-green —
+   an archive cannot reach `main` any other way, so nothing has to be assumed.
+   Where a change lands over several PRs, the last one archives. Do not let
+   completed or abandoned changes accumulate as ambient "Proposed" documents — that
+   status ambiguity is its own drift problem.
+
+   Corollary: **no task may assert a post-merge fact.** "CI green", "merged",
+   "merge-ready", "hosted CI approval obtained" cannot be ticked before the merge,
+   so such a task strands the change unarchived. Write tasks that are checkable on
+   the branch — "PR #n open with `Closes #n`", "reviewer verdict recorded in
+   `conformance.md`", "focused gates run: <commands + results>" — and let the merge
+   gate own CI. CI runs `openspec validate --all --strict` on every PR.
 
 OpenSpec changes are contract deltas, not program backlogs. Keep sequencing,
 discovery, and proof campaigns in issues; split a change when it crosses distinct
