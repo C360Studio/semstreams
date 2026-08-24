@@ -1,11 +1,58 @@
 package rule
 
 import (
+	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestAwaitEntityBorrowSettlement_CallerCancellationCancelsStartAuthority(t *testing.T) {
+	borrowDone := make(chan struct{})
+	var releaseBorrow sync.Once
+	release := func() {
+		releaseBorrow.Do(func() { close(borrowDone) })
+	}
+	stopCtx, endStop := context.WithCancel(context.Background())
+	var cancelCalls atomic.Int32
+	result := make(chan error, 1)
+	helperDone := make(chan struct{})
+
+	go func() {
+		defer close(helperDone)
+		result <- awaitEntityBorrowSettlement(stopCtx, borrowDone, func() {
+			cancelCalls.Add(1)
+		})
+	}()
+
+	t.Cleanup(func() {
+		endStop()
+		release()
+		containment := time.NewTimer(2 * time.Second)
+		defer containment.Stop()
+		select {
+		case <-helperDone:
+		case <-containment.C:
+			t.Errorf("awaitEntityBorrowSettlement test goroutine did not join after releasing held borrow")
+		}
+	})
+
+	endStop()
+	containment := time.NewTimer(2 * time.Second)
+	defer containment.Stop()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled,
+			"awaitEntityBorrowSettlement must return the exact caller cancellation")
+	case <-containment.C:
+		t.Fatal("awaitEntityBorrowSettlement did not return after caller cancellation within 2s containment")
+	}
+	require.EqualValues(t, 1, cancelCalls.Load(),
+		"caller cancellation must cancel Start authority exactly once")
+}
 
 func TestEntityEvaluationFenceIdleCapacityEvictsLeastRecentWatermark(t *testing.T) {
 	t.Parallel()

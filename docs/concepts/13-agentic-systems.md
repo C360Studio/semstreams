@@ -288,34 +288,40 @@ This separation enables:
 The handoff is managed via the `COMPLETE_{loopID}` KV key pattern, which the rules engine can watch to
 spawn the editor when the architect completes.
 
-### Parallel Tool Execution
+### Multiple Tool Result Aggregation
 
-When an agent needs multiple independent pieces of information, tools can execute concurrently:
+When a model requests several tools that are not intercepted for approval, each logical call that reaches execution or
+terminal policy rejection produces a durable terminal result correlated by call ID. The loop orchestrator tracks the
+pending calls and aggregates their results before continuing:
 
 ```text
-                    ┌─────────────┐
-                    │    Model    │
-                    │  requests   │
-                    │  3 tools    │
-                    └──────┬──────┘
-                           │
-           ┌───────────────┼───────────────┐
-           ▼               ▼               ▼
-      ┌─────────┐    ┌─────────┐    ┌─────────┐
-      │ Tool A  │    │ Tool B  │    │ Tool C  │
-      │ (file)  │    │ (search)│    │ (query) │
-      └────┬────┘    └────┬────┘    └────┬────┘
-           │              │              │
-           └──────────────┼──────────────┘
-                          ▼
-                    ┌─────────────┐
-                    │    Model    │
-                    │  receives   │
-                    │ all results │
-                    └─────────────┘
+Model requests three tools
+        │
+        ▼
+three calls with distinct call IDs
+        │
+        ▼
+none is intercepted for approval
+        │
+        ▼
+agentic-tools settles one correlated durable terminal result per call
+        │
+        ▼
+loop aggregates all results before the next model call
 ```
 
-The loop orchestrator tracks pending tools and aggregates results before continuing to the next model call.
+The agentic-tools wire contract promises neither serialized execution nor execution overlap. Its current implementation
+uses one native callback through outcome persistence, result publication, and delivery settlement, but that is an
+implementation detail rather than a stable serialization guarantee. `MaxAckPending=3` controls only how many delivered
+messages may remain unacknowledged at NATS.
+
+An `approval_required` response is instead a correlated nonterminal pause. It creates no COMPLETED outcome and leaves
+the same CallID eligible for approved re-dispatch; the re-dispatch enters the terminal guarantee only if it reaches
+execution or terminal policy rejection.
+
+Tool-call source ordinal remains trajectory and audit evidence derived from the model's tool-call order. It does not
+define delivery, completion, or result-aggregation order. Consumers correlate results by CallID and must not infer an
+aggregation-order contract from source ordinal or arrival timing.
 
 ### Hierarchical Delegation
 
