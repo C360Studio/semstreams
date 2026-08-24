@@ -52,8 +52,8 @@ The behaviour is instead hard-coded as a concrete-type assertion at four sites:
 | `TestRule.Evaluate` | `processor/rule/test_rule_factory.go:66` |
 
 The enumeration is complete for the rule lane: `git grep "\.Payload()" 774c85dc -- processor/rule/`
-returns exactly those four production reads plus one prose mention at
-`processor/rule/docs/custom-rules.md:176`.
+returns 53 hits: the four production (non-test) reads above, 48 hits in `*_test.go` files, and one prose
+mention at `processor/rule/docs/custom-rules.md:176`.
 
 ## Payload registry census
 
@@ -61,8 +61,13 @@ returns exactly those four production reads plus one prose mention at
 `message`, `agentic`, `agenticdispatch`, `gateddagexec`, `objectstore`, `governance`.
 
 `agentic.RegisterPayloads` registers 15 payload types
-(`git show 774c85dc:agentic/payload_registry.go | grep -c "Domain: Domain, Category:"`). Measured against
-the assembled registry at implementation time, the full first-party set is 21 types.
+(`git show 774c85dc:agentic/payload_registry.go | grep -c "Domain: Domain, Category:"`). At the baseline
+the six registrars total 21 types (1+15+1+2+1+1). One further first-party family exists OUTSIDE
+payloadbuiltins: the capability-gated `agentic/research` registrar adds 6 types, wired via
+`graphresearch.RegisterPayloads` in both framework binaries (`cmd/semstreams/main.go:767`,
+`cmd/e2e-semstreams/main.go:373`); it is rule-lane-reachable when that capability is selected and is
+recorded HERE as a deliberate exclusion from the projection set (`tasks.md` 8.5 records the non-agentic
+registrar exclusions).
 
 ## Existing consumers affected
 
@@ -87,7 +92,7 @@ caller-populated `Metadata` maps on the loop events, `TaskMessage`, `ToolCall` a
 
 Content hash of this file, excluding this Identity section, over the exact bytes above:
 
-    sha256 = c65bc53ac2df892d44703cf26e2645fdd8b9c0ab836f42ce7a33a93e0c3ffbf7
+    sha256 = 20efdcbb8d50757d3b88971bfa0a1a82962ec18616e42d6a8ba232b5f8b18d67
 
 Recompute with:
 

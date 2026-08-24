@@ -162,7 +162,11 @@ Structural facts only. For each, decide what a rule may match on and withhold au
       `objectstore` (`storage/objectstore/stored_message.go:94`). The proposal's "all framework-owned
       payloads" reads on its own terms as broader than the 15 the tasks enumerate; this slice
       implemented exactly the 15 named. They now FAIL LOUDLY (the once-per-pairing report) instead of
-      silently, which is the change's own remedy for the gap.
+      silently, which is the change's own remedy for the gap. The capability-gated `agentic/research`
+      registrar (6 further first-party types, wired via `graphresearch.RegisterPayloads` in
+      `cmd/semstreams/main.go` and `cmd/e2e-semstreams/main.go`) is the same class of recorded
+      exclusion — rule-lane-reachable when the capability is selected, landing loud, not silent
+      (added at gate round 2; see the inventory's registry census).
 
 ## 9. Review-round remediation (approved with four required fixes)
 
@@ -311,8 +315,9 @@ Structural facts only. For each, decide what a rule may match on and withhold au
       in-file so its identity is fixed. `design.md` was rewritten to hold only target state, the five
       options, the adopter-seam inventory and the two deviations, and references the inventory by hash.
       Both carry `Status: UNSIGNED`. `conformance.md` no longer says "Accepted design" and now states
-      that the design gate is open. Task 10.3 is demoted to `[~]` and superseded by section 12. Neither
-      `INVENTORY PASS` nor `DESIGN REVIEW PASS` is written anywhere except as a NOT-GRANTED statement.
+      that the design gate is open. Task 10.3 is demoted to `[~]` and superseded by section 12. (State as of head `6c5865ab`:
+      neither token was written except as NOT-GRANTED; §12 records the subsequent grants and the
+      round-2 amendment identities.)
 - [x] 11.7 PRODUCTION-SEAM half of the round-4 HIGH remediated in-tree (the e2e-TIER half stays #1058):
       `TestIntegration_RuleReadableProjectionProductionLifecycle`
       (`processor/rule/payload_projection_integration_test.go`, `-tags=integration`, testcontainers
@@ -338,17 +343,22 @@ Structural facts only. For each, decide what a rule may match on and withhold au
       state storage, and observable transport output; the DEPLOYED-FLOW e2e tier assertion remains
       #1058's scope.
 
-## 12. Exported-surface design gate — OPEN, owner-issued
+## 12. Exported-surface design gate — CLOSED 2026-08-24
 
-- [ ] 12.1 `INVENTORY PASS` — NOT GRANTED. `inventory.md` records the repository-first surface inventory
-      only, with its baseline commit and a content hash fixing its identity. It deliberately contains no
-      target state, no options, and no recommendation. Issuing this token is the owner's, not the
-      implementer's.
-- [ ] 12.2 `DESIGN REVIEW PASS` — NOT GRANTED. `design.md` records the target state, the five options
-      including do-nothing and reuse, the adopter-seam inventory, and the two deviations raised during
-      implementation. It references `inventory.md` by hash. Issuing this token is the owner's.
-- [ ] 12.3 Owner acceptance of the three design decisions is NOT recorded in these artifacts. The
-      decisions were made by the owner before implementation and the implementation conforms to them
-      (`conformance.md`), but an after-the-fact reconstruction by the implementer is not the gate, and
-      self-certifying it would be worse than leaving it open. Sequencing with the owner is the
-      coordinator's.
+- [x] 12.1 `INVENTORY PASS` — GRANTED 2026-08-24 by an independent reviewer session under
+      `.agents/contracts/semstreams-reviewer.md`, after full re-derivation of the census against
+      baseline `774c85dc`. Initial pass at commit `6c5865ab` (identity `c65bc53a…`) returned two
+      MEDIUM corrections; the delta round REFUSED transfer after catching a reviewer-introduced
+      census figure (54→53) and a self-inconsistent Identity block; round-2 amendments were
+      re-derived and the verdict RE-AFFIRMED bound to identity sha256
+      `20efdcbb8d50757d3b88971bfa0a1a82962ec18616e42d6a8ba232b5f8b18d67` (recompute command in-file).
+- [x] 12.2 `DESIGN REVIEW PASS` — GRANTED 2026-08-24 by the same independent reviewer, verified
+      design↔code conformance at head, the adopter do-nothing path, and hash linkage; RE-AFFIRMED
+      after the round-2 amendments, bound to `design.md` whole-file sha256
+      `0ffbb691b80f6b40d43db4e9014b7811f79a56fc6190cbbd6624e35248fe2972`.
+- [x] 12.3 OWNER ACCEPTANCE — GRANTED 2026-08-24 by the owner, explicitly and interactively, bound
+      to the two identities above: the three design decisions plus the two refined structural tests
+      (validator/closed-type constraint; framework-owned vocabulary) under which `FinishReason` and
+      `LoopFailedEvent.Reason` remain withheld. Recorded here and in the PR #1052 gate comment. The
+      reviewed artifacts are byte-exact as reviewed: any future edit to either voids the bindings and
+      re-runs the sequence (recompute both hashes at any commit that touches them).

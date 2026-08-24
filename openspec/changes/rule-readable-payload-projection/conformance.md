@@ -5,13 +5,17 @@ Codex review of PR #1052 returned `REQUEST CHANGES` with four items (round 3, al
 re-review at head `54995742` returned four further items (round 4, all applied). Merge and issue closure
 have not occurred.
 
-THE DESIGN GATE IS OPEN. `inventory.md` and `design.md` in this directory are UNSIGNED: neither
-`INVENTORY PASS` nor `DESIGN REVIEW PASS` has been issued, and no owner acceptance is recorded. This file
-maps rulings to implementation evidence; it does not certify that the rulings were gated. A conformance
-table over an ungated design is exactly as strong as the design behind it, and no stronger.
+THE DESIGN GATE IS CLOSED (2026-08-24). An independent reviewer session granted `INVENTORY PASS`
+(inventory identity sha256 `20efdcbb8d50757d3b88971bfa0a1a82962ec18616e42d6a8ba232b5f8b18d67`, baseline
+`774c85dc`) and `DESIGN REVIEW PASS` (design.md whole-file sha256
+`0ffbb691b80f6b40d43db4e9014b7811f79a56fc6190cbbd6624e35248fe2972`) across two delta rounds — the first
+delta REFUSED re-affirmation over a census figure and a self-inconsistent identity block, both corrected
+and re-verified. OWNER ACCEPTANCE was granted explicitly on 2026-08-24, bound to those identities.
+The full record is tasks.md §12; the reviewed artifacts remain byte-exact as reviewed. This file maps
+rulings to implementation evidence; the gate record above is what certifies they were gated.
 
-Baseline: `774c85dc`. Design under review (unsigned): `design.md`, referencing `inventory.md` at sha256
-`c65bc53ac2df892d44703cf26e2645fdd8b9c0ab836f42ce7a33a93e0c3ffbf7`.
+Baseline: `774c85dc`. Accepted design: `design.md`, referencing `inventory.md` at sha256
+`20efdcbb8d50757d3b88971bfa0a1a82962ec18616e42d6a8ba232b5f8b18d67`.
 
 CI note, current as of head `54995742`: the `Test` job is red in `internal/maxdelivery`
 (`TestThreeNodeClusterReplicasOneRetainsAndHandlesOccurrenceOnce`, a NATS 404 stream-not-found). This is a

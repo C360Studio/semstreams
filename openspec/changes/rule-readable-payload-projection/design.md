@@ -11,7 +11,7 @@ the gate can be run against something reviewable, and it is left unsigned so tha
 necessary.
 
 Inventory: `inventory.md` in this directory, baseline `774c85dc`,
-sha256 `c65bc53ac2df892d44703cf26e2645fdd8b9c0ab836f42ce7a33a93e0c3ffbf7`
+sha256 `20efdcbb8d50757d3b88971bfa0a1a82962ec18616e42d6a8ba232b5f8b18d67`
 (recompute: `sed '/^## Identity$/,$d' inventory.md | shasum -a 256`).
 
 Why a gate at all: `message` is a framework package and `RuleReadable` is reachable by payload authors
@@ -108,7 +108,11 @@ NOT an acceptance — see Status.
 
 1. Explicit projection, never reflective. No `reflect`, no marshal round trip to build the map.
 2. All 15 framework-owned agentic payloads implement it now, not a lazy subset — an adopter cannot add a
-   method to a framework type, so every one skipped is a framework PR they must wait on.
+   method to a framework type, so every one skipped is a framework PR they must wait on. The remaining
+   first-party types outside this set are deliberate exclusions — the five non-agentic registrar types
+   (recorded in `tasks.md` 8.5) and the capability-gated `agentic/research` family (recorded in the
+   inventory's registry census). Decision 2's own rationale applies to them, and each lands loud
+   (once-per-pairing unreadable report), not silent.
 3. Structural facts only; authored and user content withheld (ADR-036). Where the call is not obvious, the
    omission is recorded in a comment so a future reader can tell it from an oversight.
 
