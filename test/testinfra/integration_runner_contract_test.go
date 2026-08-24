@@ -212,63 +212,47 @@ func TestIntegrationRunner_TerminationReapsPullBeforeReleasingLock(t *testing.T)
 	tempDir := t.TempDir()
 	lockDir := filepath.Join(tempDir, "integration.lock")
 	pullPIDFile := filepath.Join(tempDir, "pull.pid")
-	testBinary, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	realDate, err := exec.LookPath("date")
-	if err != nil {
-		t.Fatal(err)
-	}
-	realRmdir, err := exec.LookPath("rmdir")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testBinary := mustExecutable(t)
+	realDate := mustLookPath(t, "date")
+	realRmdir := mustLookPath(t, "rmdir")
 	parentReadySentinel := filepath.Join(tempDir, "parent-ready.sent")
-	writeExecutable(t, filepath.Join(tools.bin, "date"), `#!/bin/sh
-if [ "${SEMSTREAMS_TEST_PULL_HELPER:-0}" = "1" ] && [ -s "$DOCKER_PULL_PID_FILE" ] && [ ! -e "$SEMSTREAMS_TEST_PARENT_READY_SENTINEL" ]; then
-  : > "$SEMSTREAMS_TEST_PARENT_READY_SENTINEL"
-  printf 'R' >&3
-fi
-exec "$SEMSTREAMS_TEST_REAL_DATE" "$@"
-`)
-	writeExecutable(t, filepath.Join(tools.bin, "rmdir"), `#!/bin/sh
-if [ "${SEMSTREAMS_TEST_PULL_HELPER:-0}" = "1" ] && [ "$#" -eq 1 ] && [ "$1" = "$SEMSTREAMS_TEST_LOCK_DIR" ]; then
-  helper_pid=$(cat "$DOCKER_PULL_PID_FILE")
-  if kill -0 "$helper_pid" 2>/dev/null; then
-    echo "test rmdir refused live or zombie helper $helper_pid" >&2
-    exit 73
-  fi
-  printf 'R' >&6
-fi
-exec "$SEMSTREAMS_TEST_REAL_RMDIR" "$@"
-`)
+	termReceivedSentinel := filepath.Join(tempDir, "term-received.sent")
+	gracePauseClaim := filepath.Join(tempDir, "grace-pause.claim")
+	writeTerminationToolWrappers(t, tools.bin)
 
 	parentReadyReader, parentReadyWriter := mustPipe(t)
 	termAckReader, termAckWriter := mustPipe(t)
 	releaseReader, releaseWriter := mustPipe(t)
 	reapAckReader, reapAckWriter := mustPipe(t)
-	allEndpoints := []*os.File{
+	gracePauseReader, gracePauseWriter := mustPipe(t)
+	graceReleaseReader, graceReleaseWriter := mustPipe(t)
+	closeFilesOnCleanup(t,
 		parentReadyReader, parentReadyWriter,
 		termAckReader, termAckWriter,
 		releaseReader, releaseWriter,
 		reapAckReader, reapAckWriter,
-	}
-	t.Cleanup(func() {
-		for _, endpoint := range allEndpoints {
-			_ = endpoint.Close()
-		}
-	})
+		gracePauseReader, gracePauseWriter,
+		graceReleaseReader, graceReleaseWriter,
+	)
 
 	command := exec.Command(filepath.Join(repoRoot, "scripts", "run-integration-tests.sh"))
 	command.Dir = repoRoot
-	command.ExtraFiles = []*os.File{parentReadyWriter, termAckWriter, releaseReader, reapAckWriter}
+	command.ExtraFiles = []*os.File{
+		parentReadyWriter,
+		termAckWriter,
+		releaseReader,
+		reapAckWriter,
+		gracePauseWriter,
+		graceReleaseReader,
+	}
 	command.Env = runnerEnvironment(tools, lockDir, map[string]string{
 		"DOCKER_IMAGE_INSPECT_STATUS":                    "1",
 		"DOCKER_PULL_PID_FILE":                           pullPIDFile,
 		"SEMSTREAMS_CONTRACT_IMAGE_PULL_TIMEOUT_SECONDS": "30",
 		"SEMSTREAMS_TEST_LOCK_DIR":                       lockDir,
 		"SEMSTREAMS_TEST_PARENT_READY_SENTINEL":          parentReadySentinel,
+		"SEMSTREAMS_TEST_TERM_RECEIVED_SENTINEL":         termReceivedSentinel,
+		"SEMSTREAMS_TEST_GRACE_PAUSE_CLAIM":              gracePauseClaim,
 		"SEMSTREAMS_TEST_PULL_HELPER":                    "1",
 		"SEMSTREAMS_TEST_REAL_DATE":                      realDate,
 		"SEMSTREAMS_TEST_REAL_RMDIR":                     realRmdir,
@@ -285,18 +269,17 @@ exec "$SEMSTREAMS_TEST_REAL_RMDIR" "$@"
 		// EOF releases the helper on any early failure. killAndWait kills only
 		// when the runner is still live and always joins the sole waiter.
 		_ = releaseWriter.Close()
+		_ = graceReleaseWriter.Close()
 		_ = waiter.killAndWait()
 	})
-	for name, endpoint := range map[string]*os.File{
+	closeInheritedFiles(t, map[string]*os.File{
 		"parent-ready writer":  parentReadyWriter,
 		"TERM-ack writer":      termAckWriter,
 		"child-release reader": releaseReader,
 		"reap-check writer":    reapAckWriter,
-	} {
-		if err := endpoint.Close(); err != nil {
-			t.Fatalf("close inherited %s: %v", name, err)
-		}
-	}
+		"grace-pause writer":   gracePauseWriter,
+		"grace-release reader": graceReleaseReader,
+	})
 
 	readPipeSignal(t, parentReadyReader, 3*time.Second, "parent retained pull PID")
 	ownerBeforeTermination := readFile(t, filepath.Join(lockDir, "owner"))
@@ -308,6 +291,7 @@ exec "$SEMSTREAMS_TEST_REAL_RMDIR" "$@"
 		t.Fatalf("terminate runner: %v", err)
 	}
 	readPipeSignal(t, termAckReader, 3*time.Second, "pull helper TERM acknowledgement")
+	readPipeSignal(t, gracePauseReader, 3*time.Second, "cleanup grace paused")
 
 	ownerWhileChildBlocked := readFile(t, filepath.Join(lockDir, "owner"))
 	if ownerWhileChildBlocked != ownerBeforeTermination {
@@ -320,7 +304,9 @@ exec "$SEMSTREAMS_TEST_REAL_RMDIR" "$@"
 	probe := exec.Command(filepath.Join(tools.bin, "rmdir"), lockDir)
 	probe.Env = command.Env
 	probeOutput, probeErr := probe.CombinedOutput()
-	if probeErr == nil || !strings.Contains(string(probeOutput), "refused live or zombie helper") {
+	var probeExitErr *exec.ExitError
+	if !errors.As(probeErr, &probeExitErr) || probeExitErr.ExitCode() != 73 ||
+		!strings.Contains(string(probeOutput), "refused live or zombie helper") {
 		t.Fatalf("test-private rmdir did not refuse live helper: err=%v output=%s", probeErr, probeOutput)
 	}
 
@@ -329,6 +315,12 @@ exec "$SEMSTREAMS_TEST_REAL_RMDIR" "$@"
 	}
 	if err := releaseWriter.Close(); err != nil {
 		t.Fatalf("close pull-helper release: %v", err)
+	}
+	if _, err := graceReleaseWriter.Write([]byte{'R'}); err != nil {
+		t.Fatalf("release cleanup grace clock: %v", err)
+	}
+	if err := graceReleaseWriter.Close(); err != nil {
+		t.Fatalf("close cleanup-grace release: %v", err)
 	}
 	waitErr := waiter.wait(3 * time.Second)
 	var timeoutErr *commandWaitTimeoutError
@@ -389,6 +381,10 @@ func TestIntegrationRunnerFakePullHelper(t *testing.T) {
 		}
 		return
 	case <-termSignal:
+		termReceivedSentinel := os.Getenv("SEMSTREAMS_TEST_TERM_RECEIVED_SENTINEL")
+		if err := os.WriteFile(termReceivedSentinel, []byte("TERM\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := termAck.Write([]byte{'T'}); err != nil {
 			t.Fatal(err)
 		}
@@ -828,6 +824,68 @@ func (w *commandWaiter) killAndWait() error {
 		return w.err
 	}
 	return killErr
+}
+
+func writeTerminationToolWrappers(t *testing.T, bin string) {
+	t.Helper()
+	writeExecutable(t, filepath.Join(bin, "date"), `#!/bin/sh
+if [ "${SEMSTREAMS_TEST_PULL_HELPER:-0}" = "1" ] && [ -s "$DOCKER_PULL_PID_FILE" ] && [ ! -e "$SEMSTREAMS_TEST_PARENT_READY_SENTINEL" ]; then
+  : > "$SEMSTREAMS_TEST_PARENT_READY_SENTINEL"
+  printf 'R' >&3
+fi
+if [ "${SEMSTREAMS_TEST_PULL_HELPER:-0}" = "1" ] && [ -e "$SEMSTREAMS_TEST_TERM_RECEIVED_SENTINEL" ] && mkdir "$SEMSTREAMS_TEST_GRACE_PAUSE_CLAIM" 2>/dev/null; then
+  printf 'P' >&7
+  dd bs=1 count=1 2>/dev/null <&8 >/dev/null || true
+fi
+exec "$SEMSTREAMS_TEST_REAL_DATE" "$@"
+`)
+	writeExecutable(t, filepath.Join(bin, "rmdir"), `#!/bin/sh
+if [ "${SEMSTREAMS_TEST_PULL_HELPER:-0}" = "1" ] && [ "$#" -eq 1 ] && [ "$1" = "$SEMSTREAMS_TEST_LOCK_DIR" ]; then
+  helper_pid=$(cat "$DOCKER_PULL_PID_FILE")
+  if kill -0 "$helper_pid" 2>/dev/null; then
+    echo "test rmdir refused live or zombie helper $helper_pid" >&2
+    exit 73
+  fi
+  printf 'R' >&6
+fi
+exec "$SEMSTREAMS_TEST_REAL_RMDIR" "$@"
+`)
+}
+
+func closeFilesOnCleanup(t *testing.T, files ...*os.File) {
+	t.Helper()
+	t.Cleanup(func() {
+		for _, file := range files {
+			_ = file.Close()
+		}
+	})
+}
+
+func closeInheritedFiles(t *testing.T, files map[string]*os.File) {
+	t.Helper()
+	for name, file := range files {
+		if err := file.Close(); err != nil {
+			t.Fatalf("close inherited %s: %v", name, err)
+		}
+	}
+}
+
+func mustExecutable(t *testing.T) string {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return executable
+}
+
+func mustLookPath(t *testing.T, name string) string {
+	t.Helper()
+	path, err := exec.LookPath(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func writeExecutable(t *testing.T, path, content string) {

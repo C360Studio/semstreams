@@ -5,6 +5,7 @@ package agentictools_test
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -541,8 +542,9 @@ func TestIntegration_ToolTimeout(t *testing.T) {
 	assert.Contains(t, result.Error, "cancelled")
 }
 
-// TestIntegration_ToolConcurrentExecution tests that multiple tools can execute in parallel
-func TestIntegration_ToolConcurrentExecution(t *testing.T) {
+// TestIntegration_MultipleToolCallsProduceAllResults proves that each admitted
+// call produces its exact correlated result without inferring execution overlap.
+func TestIntegration_MultipleToolCallsProduceAllResults(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
 	config := agentictools.Config{
@@ -559,7 +561,7 @@ func TestIntegration_ToolConcurrentExecution(t *testing.T) {
 			},
 		},
 		StreamName:         "AGENT",
-		ConsumerNameSuffix: "concurrent-test",
+		ConsumerNameSuffix: "multiple-results-test",
 		Timeout:            "5s",
 	}
 
@@ -574,32 +576,27 @@ func TestIntegration_ToolConcurrentExecution(t *testing.T) {
 	comp, err := agentictools.NewComponent(rawConfig, deps)
 	require.NoError(t, err)
 
-	// Register multiple tools
 	toolsComp, ok := comp.(*agentictools.Component)
 	require.True(t, ok)
 
-	tool1 := &integrationMockExecutor{
-		toolName:      "tool1",
-		resultContent: "Result 1",
-		delay:         200 * time.Millisecond,
+	testCases := []struct {
+		callID  string
+		name    string
+		content string
+	}{
+		{callID: "call_multiple_1", name: "multiple_tool_1", content: "Result 1"},
+		{callID: "call_multiple_2", name: "multiple_tool_2", content: "Result 2"},
+		{callID: "call_multiple_3", name: "multiple_tool_3", content: "Result 3"},
 	}
-	tool2 := &integrationMockExecutor{
-		toolName:      "tool2",
-		resultContent: "Result 2",
-		delay:         200 * time.Millisecond,
+	expected := make(map[string]string, len(testCases))
+	for _, testCase := range testCases {
+		expected[testCase.callID] = testCase.content
+		err = toolsComp.RegisterToolExecutor(&integrationMockExecutor{
+			toolName:      testCase.name,
+			resultContent: testCase.content,
+		})
+		require.NoError(t, err)
 	}
-	tool3 := &integrationMockExecutor{
-		toolName:      "tool3",
-		resultContent: "Result 3",
-		delay:         200 * time.Millisecond,
-	}
-
-	err = toolsComp.RegisterToolExecutor(tool1)
-	require.NoError(t, err)
-	err = toolsComp.RegisterToolExecutor(tool2)
-	require.NoError(t, err)
-	err = toolsComp.RegisterToolExecutor(tool3)
-	require.NoError(t, err)
 
 	lc, ok := comp.(component.LifecycleComponent)
 	require.True(t, ok)
@@ -612,61 +609,58 @@ func TestIntegration_ToolConcurrentExecution(t *testing.T) {
 
 	err = lc.Start(ctx)
 	require.NoError(t, err)
-	defer lc.Stop(context.Background())
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stopCancel()
+		assert.NoError(t, lc.Stop(stopCtx), "stop agentic-tools after multiple-result proof")
+	})
 
-	time.Sleep(200 * time.Millisecond)
-
-	// Subscribe to tool results
-	receivedResults := make([]agentic.ToolResult, 0)
-	var receiveMu sync.Mutex
+	results := make(chan agentic.ToolResult, len(expected))
 
 	dec := payloadbuiltins.NewTestDecoder(t)
-	_, err = natsClient.Subscribe(ctx, "tool.result.>", func(_ context.Context, msg *nats.Msg) {
+	subscription, err := natsClient.Subscribe(ctx, "tool.result.>", func(_ context.Context, msg *nats.Msg) {
 		if baseMsg, decErr := dec.Decode(msg.Data); decErr == nil {
 			if result, ok := baseMsg.Payload().(*agentic.ToolResult); ok {
-				receiveMu.Lock()
-				receivedResults = append(receivedResults, *result)
-				receiveMu.Unlock()
+				results <- *result
 			}
 		}
 	})
 	require.NoError(t, err)
+	defer subscription.Unsubscribe()
 
-	time.Sleep(100 * time.Millisecond)
-
-	// Execute all tools concurrently
-	startTime := time.Now()
-
-	calls := []*agentic.ToolCall{
-		{ID: "call_1", Name: "tool1", Arguments: map[string]any{"input": "1"}},
-		{ID: "call_2", Name: "tool2", Arguments: map[string]any{"input": "2"}},
-		{ID: "call_3", Name: "tool3", Arguments: map[string]any{"input": "3"}},
-	}
-
-	for _, call := range calls {
+	for index, testCase := range testCases {
+		call := &agentic.ToolCall{
+			ID:        testCase.callID,
+			Name:      testCase.name,
+			Arguments: map[string]any{"input": index + 1},
+		}
 		publishToolCallMessage(t, natsClient, "tool.execute."+call.Name, call)
 	}
 
-	// Wait for all results - should complete faster than sequential time
-	// 3 tools x 200ms each = 600ms sequential, but parallel should be ~200ms + overhead
-	require.Eventually(t, func() bool {
-		receiveMu.Lock()
-		defer receiveMu.Unlock()
-		return len(receivedResults) >= 3
-	}, 2*time.Second, 50*time.Millisecond, "Should receive all results")
-
-	elapsed := time.Since(startTime)
-
-	// Verify all results received
-	receiveMu.Lock()
-	resultCount := len(receivedResults)
-	receiveMu.Unlock()
-
-	assert.Equal(t, 3, resultCount, "Should receive three results")
-
-	// Verify parallel execution (should be ~200ms + overhead, not 600ms sequential)
-	// Allow generous overhead for test infrastructure
-	assert.Less(t, elapsed, 800*time.Millisecond, "Tools should execute in parallel (not 600ms+ sequential)")
+	livenessCtx, livenessCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer livenessCancel()
+	received := make(map[string]struct{}, len(expected))
+	for len(received) < len(expected) {
+		select {
+		case result := <-results:
+			wantContent, known := expected[result.CallID]
+			require.True(t, known, "unexpected tool result call_id %q", result.CallID)
+			_, duplicate := received[result.CallID]
+			require.False(t, duplicate, "duplicate tool result for call_id %q", result.CallID)
+			require.Empty(t, result.Error, "tool result for call_id %q carried an error", result.CallID)
+			require.Equal(t, wantContent, result.Content, "tool result content for call_id %q", result.CallID)
+			received[result.CallID] = struct{}{}
+		case <-livenessCtx.Done():
+			missing := make([]string, 0, len(expected)-len(received))
+			for callID := range expected {
+				if _, ok := received[callID]; !ok {
+					missing = append(missing, callID)
+				}
+			}
+			sort.Strings(missing)
+			require.FailNow(t, "missing correlated tool results", "missing call_ids=%v: %v", missing, livenessCtx.Err())
+		}
+	}
 }
 
 // TestIntegration_ToolListRequestReply tests tool.list request/reply for tool discovery

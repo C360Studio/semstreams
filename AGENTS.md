@@ -29,7 +29,8 @@ Events → Graphable Interface → Knowledge Graph → Queries
 - The technical writer owns durable documentation and conservative OpenSpec task truth.
 - Canonical role contracts live in `.agents/contracts/`; platform adapters must remain thin.
 - Canonical shared decision skills live in `.agents/skills/` — kv-or-stream (KV Watch vs JetStream
-  Stream, 4-test heuristic), orchestration-check (rule vs component vs lifecycle boundary),
+  Stream, 4-test heuristic), entity-or-bucket (graph triples vs private/operational KV, and how a
+  rule reads it), orchestration-check (rule vs component vs lifecycle boundary),
   new-payload (payload-registry checklist), query-pattern (admitted remote operation vs
   operation-specific typed adapter; MCP graph access is unavailable). Read the
   canonical `.agents/skills/<name>/SKILL.md` directly; the `.claude/skills/` entries of the same

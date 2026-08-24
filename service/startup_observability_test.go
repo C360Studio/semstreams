@@ -188,6 +188,8 @@ func TestStartupReadinessAndAtomicPromotion(t *testing.T) {
 }
 
 func TestReadinessIncludesHealthyNonLifecycleDiscoverables(t *testing.T) {
+	const testSafetyBound = 2 * time.Second
+
 	lifecycleComponent := newBarrierTestComponent("lifecycle")
 	plain := newStartupDiscoverable()
 	cm := &ComponentManager{
@@ -202,8 +204,25 @@ func TestReadinessIncludesHealthyNonLifecycleDiscoverables(t *testing.T) {
 	}
 	cm.components["plain"] = &component.ManagedComponent{Component: plain, State: component.StateCreated}
 	cm.initialized.Store(true)
+	healthyObserved := make(chan struct{})
+	var healthyObservedOnce sync.Once
+	cm.OnHealthChange(func(healthy bool) {
+		if healthy {
+			healthyObservedOnce.Do(func() { close(healthyObserved) })
+		}
+	})
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), testSafetyBound)
+		defer stopCancel()
+		require.NoError(t, cm.Stop(stopCtx))
+	})
 	require.NoError(t, cm.Start(t.Context()))
-	t.Cleanup(func() { _ = cm.Stop(context.Background()) })
+	select {
+	case <-healthyObserved:
+	case <-time.After(testSafetyBound):
+		t.Fatal("component-manager did not publish its initial healthy observation")
+	}
+	require.True(t, cm.IsHealthy())
 
 	manager := createTestServiceManager(ManagerConfig{}, nil)
 	require.NoError(t, manager.RegisterInstance("component-manager", cm))
@@ -223,6 +242,81 @@ func TestReadinessIncludesHealthyNonLifecycleDiscoverables(t *testing.T) {
 	notReady := httptest.NewRecorder()
 	manager.handleReadiness(notReady, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	require.Equal(t, http.StatusServiceUnavailable, notReady.Code)
+}
+
+func TestReadinessWaitsForInitialServiceHealthObservation(t *testing.T) {
+	const testSafetyBound = 2 * time.Second
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cm := &ComponentManager{
+		BaseService: NewBaseServiceWithOptions(
+			"component-manager", nil, WithLogger(logger),
+		),
+		components:    make(map[string]*component.ManagedComponent),
+		registry:      component.NewRegistry(),
+		storeRegistry: storeregistry.New(),
+		storeProvided: make(map[string][]string),
+	}
+	cm.initialized.Store(true)
+
+	healthCheckEntered := make(chan struct{})
+	healthCheckRelease := make(chan struct{})
+	healthyObserved := make(chan struct{})
+	var enteredOnce sync.Once
+	var releaseOnce sync.Once
+	var healthyObservedOnce sync.Once
+	cm.SetHealthCheck(func() error {
+		enteredOnce.Do(func() { close(healthCheckEntered) })
+		<-healthCheckRelease
+		return cm.healthCheck()
+	})
+	cm.OnHealthChange(func(healthy bool) {
+		if healthy {
+			healthyObservedOnce.Do(func() { close(healthyObserved) })
+		}
+	})
+
+	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, nil)
+	manager.BaseService = NewBaseServiceWithOptions(
+		"service-manager", nil, WithLogger(logger),
+	)
+	require.NoError(t, manager.RegisterInstance("component-manager", cm))
+
+	lifecycleCtx, lifecycleCancel := context.WithCancel(t.Context())
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(healthCheckRelease) })
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), testSafetyBound)
+		stopErr := manager.StopAll(stopCtx)
+		stopCancel()
+		lifecycleCancel()
+		require.NoError(t, stopErr)
+	})
+
+	require.NoError(t, manager.StartAll(lifecycleCtx))
+	require.True(t, manager.bootCommitted.Load())
+	select {
+	case <-healthCheckEntered:
+	case <-time.After(testSafetyBound):
+		t.Fatal("component-manager initial health check did not enter")
+	}
+
+	notReady := httptest.NewRecorder()
+	manager.handleReadiness(notReady, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	require.Equal(t, http.StatusServiceUnavailable, notReady.Code)
+	require.Equal(t, "NOT READY", notReady.Body.String())
+
+	releaseOnce.Do(func() { close(healthCheckRelease) })
+	select {
+	case <-healthyObserved:
+	case <-time.After(testSafetyBound):
+		t.Fatal("component-manager did not publish health after the initial check completed")
+	}
+	require.True(t, cm.IsHealthy())
+
+	ready := httptest.NewRecorder()
+	manager.handleReadiness(ready, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	require.Equal(t, http.StatusOK, ready.Code)
+	require.Equal(t, "READY", ready.Body.String())
 }
 
 func TestServicesResponseIncludesStartupCounts(t *testing.T) {

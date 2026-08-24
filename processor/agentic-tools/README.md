@@ -4,7 +4,9 @@ Tool execution component for the agentic processing system.
 
 ## Overview
 
-The `agentic-tools` component executes tool calls from the agentic loop orchestrator. It receives `ToolCall` messages, dispatches them to registered tool executors, and publishes `ToolResult` messages back. Supports tool registration, allowlist filtering, per-execution timeouts, and concurrent execution.
+The `agentic-tools` component executes tool calls from the agentic loop orchestrator. It receives `ToolCall` messages,
+dispatches them to registered tool executors, and publishes correlated `ToolResult` messages back. It supports tool
+registration, allowlist filtering, per-execution timeouts, and durable completion.
 
 ## Architecture
 
@@ -23,8 +25,18 @@ The `agentic-tools` component executes tool calls from the agentic loop orchestr
 - **Tool Registration**: Register custom tool executors at runtime
 - **Allowlist Filtering**: Restrict which tools can execute
 - **Timeout Handling**: Per-execution timeout with context cancellation
-- **Concurrent Execution**: Multiple tools can run in parallel
+- **Correlated Results**: Every wire response carries its call ID
 - **Durable Completion**: Completed calls replay their authoritative result without re-running the executor
+
+An initial `approval_required` response is a correlated nonterminal pause. It creates no COMPLETED outcome and leaves
+the same CallID eligible for approved re-dispatch. A logical call that reaches execution or terminal policy rejection
+receives a correlated durable terminal result; an approved re-dispatch enters that guarantee at the same boundary.
+
+The wire contract promises neither serialized execution nor execution overlap. The current implementation processes
+the wire path through one native callback and joins outcome persistence, result publication, and delivery settlement
+before that callback returns. That is an implementation detail, not a stable serialization contract. Likewise,
+`MaxAckPending=3` bounds delivered-but-unacknowledged admission at NATS; it is not an executor thread-safety or local
+dispatch guarantee. Direct callers of the thread-safe registry may still overlap executor calls.
 
 ## Configuration
 
@@ -311,11 +323,11 @@ Blocked tools return an error result (not a Go error):
 - Set `allowed_tools: null` to allow all
 - Verify tool name spelling
 
-### Concurrent execution issues
+### Execution-safety issues
 
-- Ensure tool executor is thread-safe
-- Don't share mutable state between calls
-- Use proper synchronization if needed
+- Do not infer local executor overlap from the wire consumer's `MaxAckPending` value
+- If an application calls the registry concurrently, make its executor safe for those calls
+- Keep mutable executor state synchronized according to the application's own calling pattern
 
 ## Related Components
 

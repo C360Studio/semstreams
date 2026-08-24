@@ -5,6 +5,8 @@ package rule_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -60,11 +62,10 @@ func TestIntegration_EmptyPatternStillDeliversTheNilSentinel(t *testing.T) {
 // publish bootstrap_complete with scope 0 — the exact distinction gh#732 asked for and
 // which was not recoverable from the wire before this change.
 func TestIntegration_RuleReadiness_EmptyReplayIsAuthoritativelyNothingToDo(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-
 	tc := natsclient.NewTestClient(t, natsclient.WithKV())
-	defer func() { _ = tc.Terminate() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	t.Cleanup(cancel)
 
 	_, err := tc.CreateKVBucket(ctx, gtypes.BucketEntityStates)
 	require.NoError(t, err)
@@ -79,7 +80,19 @@ func TestIntegration_RuleReadiness_EmptyReplayIsAuthoritativelyNothingToDo(t *te
 	require.NoError(t, err)
 	require.NoError(t, processor.Initialize())
 	require.NoError(t, processor.Start(ctx))
-	t.Cleanup(func() { _ = processor.Stop(context.Background()) })
+	t.Cleanup(func() {
+		if err := ctx.Err(); err != nil {
+			t.Errorf("controlled shutdown ordering: accepted Start parent ended before Processor.Stop: %v", err)
+		}
+		if !tc.IsReady() {
+			t.Errorf("rule processor cleanup ownership: NATS TestClient substrate is not live before Processor.Stop")
+		}
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stopCancel()
+		if err := processor.Stop(stopCtx); err != nil {
+			t.Errorf("stop rule processor within 5s terminal cleanup bound: %v", err)
+		}
+	})
 
 	require.Eventually(t, func() bool {
 		status, ok := readRuleEnvelope(ctx, t, tc)
@@ -99,11 +112,10 @@ func TestIntegration_RuleReadiness_EmptyReplayIsAuthoritativelyNothingToDo(t *te
 // distinction: a pattern that matches existing entities must report a NON-zero scope,
 // so a consumer can tell "there was nothing to do" from "there was work and it is done".
 func TestIntegration_RuleReadiness_NonEmptyReplayReportsScope(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-
 	tc := natsclient.NewTestClient(t, natsclient.WithKV())
-	defer func() { _ = tc.Terminate() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	t.Cleanup(cancel)
 
 	bucket, err := tc.CreateKVBucket(ctx, gtypes.BucketEntityStates)
 	require.NoError(t, err)
@@ -129,7 +141,19 @@ func TestIntegration_RuleReadiness_NonEmptyReplayReportsScope(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, processor.Initialize())
 	require.NoError(t, processor.Start(ctx))
-	t.Cleanup(func() { _ = processor.Stop(context.Background()) })
+	t.Cleanup(func() {
+		if err := ctx.Err(); err != nil {
+			t.Errorf("controlled shutdown ordering: accepted Start parent ended before Processor.Stop: %v", err)
+		}
+		if !tc.IsReady() {
+			t.Errorf("rule processor cleanup ownership: NATS TestClient substrate is not live before Processor.Stop")
+		}
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stopCancel()
+		if err := processor.Stop(stopCtx); err != nil {
+			t.Errorf("stop rule processor within 5s terminal cleanup bound: %v", err)
+		}
+	})
 
 	require.Eventually(t, func() bool {
 		status, ok := readRuleEnvelope(ctx, t, tc)
@@ -139,6 +163,53 @@ func TestIntegration_RuleReadiness_NonEmptyReplayReportsScope(t *testing.T) {
 	status, _ := readRuleEnvelope(ctx, t, tc)
 	require.EqualValues(t, seeded, status.BootstrapScope,
 		"scope must count the values replayed before the sentinel")
+}
+
+func TestIntegration_RuleStopAfterAcceptedStartParentCancellation(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithKV())
+
+	startCtx, cancelStart := context.WithCancel(context.Background())
+	t.Cleanup(cancelStart)
+	_, err := tc.CreateKVBucket(startCtx, gtypes.BucketEntityStates)
+	require.NoError(t, err)
+
+	config, err := rule.NewConfig("accepted-parent-cancellation")
+	require.NoError(t, err)
+	config.EntityWatchBuckets = map[string][]string{
+		gtypes.BucketEntityStates: {"c360.lifecycle.abort.*.*.*"},
+	}
+	processor, err := rule.NewProcessorWithMetrics(tc.Client, &config, nil)
+	require.NoError(t, err)
+	var (
+		stopOnce sync.Once
+		stopErr  error
+	)
+	stopProcessor := func() {
+		stopOnce.Do(func() {
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer stopCancel()
+			require.NotPanics(t, func() {
+				stopErr = processor.Stop(stopCtx)
+			}, "abort Stop must remain a synchronous bounded lifecycle call")
+			require.True(t, tc.IsReady(), "NATS must remain live throughout Processor.Stop")
+			if stopErr != nil {
+				t.Logf("abort Stop accurately reported terminal cleanup: %v", stopErr)
+			}
+			if stopCtx.Err() != nil {
+				require.True(t, errors.Is(stopErr, stopCtx.Err()),
+					"abort Stop must preserve its exact caller-context error when the bound wins")
+			}
+		})
+	}
+	t.Cleanup(stopProcessor)
+	require.NoError(t, processor.Initialize())
+	require.NoError(t, processor.Start(startCtx))
+	require.True(t, tc.IsReady(), "NATS must be live before accepted Start parent cancellation")
+
+	cancelStart()
+	require.ErrorIs(t, startCtx.Err(), context.Canceled,
+		"test must enter the accepted-parent abort lane before Processor.Stop")
+	stopProcessor()
 }
 
 func readRuleEnvelope(
