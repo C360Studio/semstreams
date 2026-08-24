@@ -237,3 +237,60 @@ func TestConsumerSetupDoesNotReclassifyALaterProbeFailureAsAbsence(t *testing.T)
 		})
 	}
 }
+
+// absentThenLostReply answers the FIRST Stream() with the absent classification,
+// then never replies: the next probe blocks until the context it was given ends
+// and returns that context's own error, which is what nats.go's request path
+// produces when no reply arrives before the deadline.
+type absentThenLostReply struct {
+	*fakeJetStream
+}
+
+func (f *absentThenLostReply) Stream(ctx context.Context, _ string) (jetstream.Stream, error) {
+	if f.streamCalls.Add(1) == 1 {
+		return nil, jetstream.ErrStreamNotFound
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// TestConsumerSetupDoesNotMintTheSentinelForALostReply is the sentinel's second
+// scope guard, and the sharper one: the failing probe's error IS a context error,
+// so a wait that decided "the budget ended, therefore absent" could not tell this
+// apart from a spent budget. It must, because a probe that got no reply measured
+// nothing — and agentrun would read the sentinel as "no agentic components in
+// this deployment" and disable itself for the process lifetime over a lost reply.
+//
+// Absence is what COMPLETED probes said; the sentinel is minted only when the
+// budget runs out between them.
+func TestConsumerSetupDoesNotMintTheSentinelForALostReply(t *testing.T) {
+	for _, entry := range consumeEntryPoints() {
+		t.Run(entry.name, func(t *testing.T) {
+			fake := &absentThenLostReply{fakeJetStream: &fakeJetStream{}}
+			client := newConnectedClientWithFakeJS(t, fake)
+
+			// The caller's context is deliberately NOT bounded here, so the probe
+			// ends on the BUDGET while the caller is still alive. That is the only
+			// arrangement in which the two endings are distinguishable: bound the
+			// caller instead and its cancellation ends both at once, which any
+			// implementation reports identically. The cost is one budget per entry
+			// point, and it buys the only assertion that can fail if the sentinel
+			// is minted from an unfinished probe.
+			handle, err := entry.consume(t.Context(), client, StreamConsumerConfig{
+				StreamName:    "LOST_REPLY",
+				ConsumerName:  "lost-reply",
+				FilterSubject: "lost.reply.>",
+				AckPolicy:     "explicit",
+				DeliverPolicy: "all",
+			}, func(context.Context, jetstream.Msg) {})
+
+			require.Nil(t, handle)
+			require.ErrorIs(t, err, context.DeadlineExceeded,
+				"the probe ended on its own context, and that is the answer")
+			require.ErrorIs(t, err, jetstream.ErrStreamNotFound,
+				"the last completed observation stays reachable for classification")
+			require.NotErrorIs(t, err, ErrStreamNotVisible,
+				"a probe that observed nothing cannot be evidence of absence")
+		})
+	}
+}

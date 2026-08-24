@@ -325,28 +325,47 @@ var ErrStreamNotVisible = errors.New("stream not visible for the whole stream-vi
 
 // awaitStreamVisible resolves a stream handle, tolerating ONLY the
 // not-yet-applied window above. Every other failure — permission denial,
-// transport fault, cancelled caller — is the server's real answer and is
-// returned on first observation, so this stays a bounded propagation tolerance
-// and never becomes retry-until-green.
+// transport fault, cancelled caller, a probe that never got a reply — is a real
+// answer and is returned on first observation, so this stays a bounded
+// propagation tolerance and never becomes retry-until-green.
+//
+// Absence is what COMPLETED probes said, never what an incomplete one implies.
+// ErrStreamNotVisible is minted at exactly one place: the budget running out
+// BETWEEN probes that all answered not-found. A probe that ends on its own
+// context — the budget or the caller cutting it short, or a lost reply —
+// observed nothing, so its error is returned joined with the last completed
+// absence and carries no sentinel. Treating that as evidence would convert loss
+// of observability into a durable claim, which is the failure the sentinel
+// exists to prevent.
 //
 // The wait is bounded by the caller's context AND the budget, whichever ends
-// first, and completes before returning: no goroutine outlives the call.
-// Whichever way it ends, jetstream.ErrStreamNotFound stays reachable through
-// errors.Is so the call site's existing transient wrap still classifies the
-// failure as an absent stream.
+// first, and completes before returning: no goroutine outlives the call. Every
+// ending keeps jetstream.ErrStreamNotFound reachable through errors.Is once a
+// probe has seen it, so the call site's existing transient wrap still classifies
+// the failure as an absent stream.
 func (c *Client) awaitStreamVisible(
 	ctx context.Context, js jetstream.JetStream, name string,
 ) (jetstream.Stream, error) {
-	waitCtx, cancel := context.WithTimeout(ctx, streamVisibilityBudget)
-	defer cancel()
+	started := time.Now()
+	deadline := started.Add(streamVisibilityBudget)
 
 	probe := time.NewTicker(streamVisibilityProbeInterval)
 	defer probe.Stop()
 
-	started := time.Now()
 	var absent error
 	for {
-		stream, err := js.Stream(waitCtx, name)
+		// Checked before probing, never after: a probe is never STARTED with less
+		// than one interval of budget left, so the budget cannot expire under an
+		// in-flight request and this exit — not a mid-request deadline — is how a
+		// genuinely absent stream ends the wait, on every run.
+		if absent != nil && time.Until(deadline) < streamVisibilityProbeInterval {
+			return nil, streamNotVisible(ctx, absent)
+		}
+
+		probeCtx, cancelProbe := context.WithDeadline(ctx, deadline)
+		stream, err := js.Stream(probeCtx, name)
+		cancelProbe()
+
 		switch {
 		case err == nil:
 			if absent != nil {
@@ -360,25 +379,22 @@ func (c *Client) awaitStreamVisible(
 			return stream, nil
 		case errors.Is(err, jetstream.ErrStreamNotFound):
 			absent = err
-		case absent != nil && waitCtx.Err() != nil && errors.Is(err, waitCtx.Err()):
-			// This probe failed BECAUSE the wait ended, so its error reports the
-			// ending rather than the stream. Report what every completed
-			// observation measured instead.
-			//
-			// The errors.Is on the wait context's own cause is load-bearing: a
-			// transport or permission failure that happens to arrive as the budget
-			// expires is a real answer about this probe, not evidence of absence,
-			// and reclassifying it here would hand a caller ErrStreamNotVisible for
-			// a fault the stream had nothing to do with. It falls through to the
-			// default and is returned unchanged, which is what "any other failure
-			// is returned on first observation" already promises.
-			return nil, streamNotVisible(ctx, absent)
 		default:
+			// Everything else, INCLUDING this probe's own deadline or cancellation.
+			// A probe that got no reply observed nothing, so it cannot contribute
+			// evidence; it is returned as itself, joined with the last completed
+			// absence only so the classification callers already branch on stays
+			// reachable.
+			if absent != nil {
+				return nil, errors.Join(err, absent)
+			}
 			return nil, err
 		}
 
 		select {
-		case <-waitCtx.Done():
+		case <-ctx.Done():
+			// Cancelled between probes: streamNotVisible reports the caller's own
+			// cause, and mints no sentinel.
 			return nil, streamNotVisible(ctx, absent)
 		case <-probe.C:
 		}
