@@ -188,6 +188,17 @@ func TestThreeNodeClusterReplicasOneRetainsAndHandlesOccurrenceOnce(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, 1, info.Config.Replicas, "the fixed declaration intentionally remains R=1")
 
+	// start() below is deliberately not retried: it is the production observer,
+	// and a 404 from it is the boot exposure in #1073. Establishing the cold
+	// nodes' precondition here keeps that tripwire unambiguous instead of
+	// letting fixture propagation lag read as a #1069 regression.
+	for i, cold := range clients[1:] {
+		coldJS, jsErr := cold.JetStream()
+		require.NoError(t, jsErr)
+		retryWhileStreamNotFound(ctx, t, fmt.Sprintf("look up %s on cold node %d", captureStreamName, i+2),
+			func(opCtx context.Context) (jetstream.Stream, error) { return coldJS.Stream(opCtx, captureStreamName) })
+	}
+
 	telemetry := newIntegrationTelemetry(false)
 	stopSecondNode, err := start(ctx, clients[1], telemetry)
 	require.NoError(t, err)
