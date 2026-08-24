@@ -1,17 +1,17 @@
 # Graph state read/write foundation program
 
-**Status:** Active implementation program.
+**Status:** RETIRED 2026-08-24 — historical. See [Program closure](#program-closure) at the end of this file.
 
 **Decision records:** [ADR-090](../adr/090-authoritative-current-state-and-materialized-views.md) and
 [ADR-091](../adr/091-graph-mutation-authority-without-semantic-ownership.md).
 
 **Executable baton:**
-[establish-graph-read-write-foundation](../../openspec/changes/establish-graph-read-write-foundation/).
+[establish-graph-read-write-foundation](../../openspec/changes/archive/2026-08-07-establish-graph-read-write-foundation/).
 
 **Frozen evidence:** [inventory](graph-state-read-write-inventory.md), the accepted change inventory, and the
 content-addressed review/approval records inside the executable baton.
 
-This is the only living program summary. Target mechanics and task truth live in the active OpenSpec change. ADRs record
+This was the program summary while active; it is no longer routing. Task truth lives in the archived changes. ADRs record
 the decisions; archived changes and rejected designs are history, not executable work.
 
 ## Identity and priorities
@@ -133,3 +133,23 @@ Stop implementation and return for a ruling if a slice proposes:
 - a test workaround that hides nondeterminism or spends full-suite wall clock without increasing evidence.
 
 Unrelated defects are recorded and deferred unless they prevent proving an approved foundation requirement.
+
+## Program closure
+
+Retired 2026-08-24. This file stays as the durable statement of identity, priorities, and the binding foundation that
+ADR-090, ADR-091, and the docs linking here cite; nothing above is executable.
+
+- Executable change archived as `openspec/changes/archive/2026-08-07-establish-graph-read-write-foundation/`; cutover
+  commit `dbdc9bd8` (`refactor(graph)!: cut over to typed mutations and exact reads`) deleted `pkg/ownership`
+  (`git log -1 -- pkg/ownership`).
+- Follow-on changes archived: `2026-08-08-foundation-b-port-language`,
+  `2026-08-09-post-foundation-b-declaration-generation`, `2026-08-11-post-foundation-b-graph-query-contract-closure`.
+  Their `tasks.md` hold what actually landed. The post-GS-01 reality audit
+  ([Part I accepted, Part II design](post-gs01-graph-read-derived-foundation-design.md)) re-baselined the work that
+  followed and directed this file to historical status.
+- What this program froze is resolved: `discovery-under-stream-shapes` archived 2026-08-07, `semantic-tier-split`
+  archived 2026-08-21, and the [pre-v1 hardening record](prev1-program.md) retired 2026-08-24. No successor baton file
+  exists: session state lives in the operator's session-memory handoff blocks; shared truth is the issues and
+  `task openspec:queue`.
+- The downstream old-to-new migration notice promised under "Downstream holdout set" is tracked as gh#753
+  (`status:needs-decision`); the holdout set stays hands-off.
