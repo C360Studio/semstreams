@@ -258,6 +258,82 @@ func TestHeldObjectStoreHandleFailsAfterBackingStreamSeal(t *testing.T) {
 	require.Error(t, err)
 }
 
+// streamAssignmentBudget bounds how long a clustered node may lag the meta
+// layer before the fixture treats "stream not found" as a real failure.
+const streamAssignmentBudget = 5 * time.Second
+
+// streamAssignmentRetryInterval spaces observations of the server's own state;
+// it is not the synchronization mechanism, the observation is.
+const streamAssignmentRetryInterval = 10 * time.Millisecond
+
+// retryWhileStreamNotFound runs op until the node serving the request stops
+// reporting the stream as absent.
+//
+// A clustered JetStream answers stream and consumer creation from the meta
+// leader, while every other node applies that assignment from the meta Raft log
+// asynchronously. A request issued immediately after creation therefore reaches
+// a node that may still be behind, which answers 404/10059 for a stream that
+// exists. Only the absent classification is retried; any other failure fails the
+// test immediately so this never becomes a retry-until-green wrapper.
+// The real-wire absent answer is pinned by TestStartFailsLoudlyWhenCaptureStreamIsMissing.
+func retryWhileStreamNotFound[T any](
+	ctx context.Context,
+	t *testing.T,
+	operation string,
+	op func(context.Context) (T, error),
+) T {
+	t.Helper()
+	waitCtx, cancel := context.WithTimeout(ctx, streamAssignmentBudget)
+	defer cancel()
+	retry := time.NewTicker(streamAssignmentRetryInterval)
+	defer retry.Stop()
+	for {
+		value, err := op(waitCtx)
+		if err == nil {
+			return value
+		}
+		// The budget is diagnosed before the classification: once it expires the
+		// call fails with the context error, and classifying that would report an
+		// exhausted wait as a wrong-error failure.
+		if waitCtx.Err() != nil {
+			t.Fatalf("%s did not become visible (budget %s, ctx: %v; last error: %v)",
+				operation, streamAssignmentBudget, waitCtx.Err(), err)
+		}
+		require.ErrorIs(t, err, jetstream.ErrStreamNotFound,
+			"%s failed for a reason other than cluster metadata propagation", operation)
+		<-retry.C
+	}
+}
+
+// TestRetryWhileStreamNotFoundToleratesARawAPIError pins the retry loop and one
+// tolerance, not the wire shape. nats.go v1.52.0 maps err_code 10059 to the
+// ErrStreamNotFound sentinel itself (CreateOrUpdateConsumer at
+// jetstream/consumer.go:328-330, Stream at jetstream/jetstream.go:816-817), so
+// today both guarded call sites return that sentinel by identity. errors.Is is
+// chosen anyway because APIError.Is (jetstream/errors.go:498-509) also resolves
+// a raw or wrapped *APIError, so the barrier survives a future path that returns
+// one; the hand-built error below is that future path, not a shape the wire
+// emits. The real-wire pin, that an absent stream satisfies
+// errors.Is(err, jetstream.ErrStreamNotFound) through the production path, is
+// TestStartFailsLoudlyWhenCaptureStreamIsMissing.
+func TestRetryWhileStreamNotFoundToleratesARawAPIError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+	absent := &jetstream.APIError{
+		Code: 404, ErrorCode: jetstream.JSErrCodeStreamNotFound, Description: "stream not found",
+	}
+	attempts := 0
+	visible := retryWhileStreamNotFound(ctx, t, "probe", func(context.Context) (string, error) {
+		attempts++
+		if attempts < 3 {
+			return "", absent
+		}
+		return "applied", nil
+	})
+	assert.Equal(t, "applied", visible)
+	assert.Equal(t, 3, attempts, "the fixture observes the server again instead of accepting the first answer")
+}
+
 func forceMaxDeliveryAdvisory(
 	t *testing.T,
 	ctx context.Context,
@@ -275,11 +351,13 @@ func forceMaxDeliveryAdvisory(
 	})
 	require.NoError(t, err)
 	consumerName := "exhaust-once"
-	consumer, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
-		Durable: consumerName, FilterSubject: subject, AckPolicy: jetstream.AckExplicitPolicy,
-		DeliverPolicy: jetstream.DeliverAllPolicy, MaxDeliver: 1, AckWait: 50 * time.Millisecond,
-	})
-	require.NoError(t, err)
+	consumer := retryWhileStreamNotFound(ctx, t, "create consumer "+consumerName+" on "+streamName,
+		func(opCtx context.Context) (jetstream.Consumer, error) {
+			return stream.CreateOrUpdateConsumer(opCtx, jetstream.ConsumerConfig{
+				Durable: consumerName, FilterSubject: subject, AckPolicy: jetstream.AckExplicitPolicy,
+				DeliverPolicy: jetstream.DeliverAllPolicy, MaxDeliver: 1, AckWait: 50 * time.Millisecond,
+			})
+		})
 	consumeCtx, err := consumer.Consume(func(msg jetstream.Msg) { _ = msg.Nak() })
 	require.NoError(t, err)
 	t.Cleanup(consumeCtx.Stop)

@@ -16,6 +16,7 @@ import (
 
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	natstest "github.com/nats-io/nats-server/v2/test"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -181,11 +182,22 @@ func TestThreeNodeClusterReplicasOneRetainsAndHandlesOccurrenceOnce(t *testing.T
 	require.NoError(t, config.NewStreamsManager(clients[0], discardLogger()).EnsureStreams(ctx, &config.Config{}))
 	js, err := clients[0].JetStream()
 	require.NoError(t, err)
-	capture, err := js.Stream(ctx, captureStreamName)
-	require.NoError(t, err)
+	capture := retryWhileStreamNotFound(ctx, t, "look up "+captureStreamName,
+		func(opCtx context.Context) (jetstream.Stream, error) { return js.Stream(opCtx, captureStreamName) })
 	info, err := capture.Info(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 1, info.Config.Replicas, "the fixed declaration intentionally remains R=1")
+
+	// start() below is deliberately not retried: it is the production observer,
+	// and a 404 from it is the boot exposure in #1073. Establishing the cold
+	// nodes' precondition here keeps that tripwire unambiguous instead of
+	// letting fixture propagation lag read as a #1069 regression.
+	for i, cold := range clients[1:] {
+		coldJS, jsErr := cold.JetStream()
+		require.NoError(t, jsErr)
+		retryWhileStreamNotFound(ctx, t, fmt.Sprintf("look up %s on cold node %d", captureStreamName, i+2),
+			func(opCtx context.Context) (jetstream.Stream, error) { return coldJS.Stream(opCtx, captureStreamName) })
+	}
 
 	telemetry := newIntegrationTelemetry(false)
 	stopSecondNode, err := start(ctx, clients[1], telemetry)
