@@ -263,7 +263,17 @@ func TestIntegration_StorageObservability_CollectPublishConsume(t *testing.T) {
 		assert.Contains(t, status.Message, "collected")
 
 		manager := NewServiceManager(NewServiceRegistry())
-		manager.RegisterInstance(StorageObservabilityServiceName, storage)
+		require.NoError(t, manager.RegisterInstance("component-manager", &MockService{
+			name: "component-manager", status: StatusRunning, healthy: true,
+		}))
+		require.NoError(t, manager.RegisterInstance(StorageObservabilityServiceName, storage))
+		services, err := manager.sealComposition()
+		require.NoError(t, err)
+		for _, admitted := range services {
+			manager.recordServiceStartInvoked(admitted.name)
+			manager.recordServiceStartCompleted(admitted.name, nil)
+		}
+		manager.commitStartup(http.NewServeMux())
 
 		ready := httptest.NewRecorder()
 		manager.handleReadiness(ready, httptest.NewRequest(http.MethodGet, "/readyz", nil))

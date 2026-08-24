@@ -111,19 +111,25 @@
 //
 // # HTTP Server Management
 //
-// Manager coordinates HTTP server lifecycle with two-phase initialization:
+// Manager coordinates HTTP server lifecycle with startup diagnostics and
+// atomic route promotion:
 //
-//  1. Early Phase (initializeHTTPInfrastructure):
-//     - System endpoints registered: /health, /readyz, /metrics
-//     - HTTP server created but not started
+//  1. Startup phase, after composition is sealed:
+//     - The shared listener binds before any service Start
+//     - Only /health, /healthz, /readyz, /services,
+//     /services/health, and read-only component diagnostics are served
+//     - Other routes return 503 with the exact body NOT READY
+//     - Manager binds the configured built-in Prometheus listener without
+//     changing service lifecycle order
 //
-//  2. Late Phase (completeHTTPSetup):
-//     - Service endpoints registered after services start
-//     - OpenAPI documentation aggregated
-//     - HTTP server starts listening
+//  2. Commitment phase, after every fallible boot step succeeds:
+//     - Service, gateway, graph, and OpenAPI routes are built off-path
+//     - Manager starts its remaining runtime owners, stores the complete mux,
+//     and commits boot as the final non-failing transition
 //
-// This prevents race conditions and ensures system endpoints are available
-// before service-specific endpoints.
+// Requests therefore see either startup diagnostics or the complete route set,
+// never a partially registered mux. TCP reachability is not readiness; callers
+// use the /readyz status code. Its exact bodies remain READY and NOT READY.
 //
 // # Health Monitoring
 //
@@ -139,12 +145,14 @@
 //
 // Health status is aggregated by Manager:
 //   - /health - Returns 200 if any service is healthy
-//   - /readyz - Returns 200 if all services are healthy
+//   - /readyz - Returns 200 only after boot commitment, successful Starts,
+//     no Stop observation, and current health for every admitted unit
 //
 // # Metrics Integration
 //
-// Services automatically register metrics with CoreMetrics:
+// CoreMetrics and Manager-owned startup observation expose:
 //   - semstreams_service_status - Current service status (gauge)
+//   - semstreams_startup_units - Process-local admitted/invoked/completed/failed counts
 //   - semstreams_messages_received_total - Message counter
 //   - semstreams_messages_processed_total - Processing counter
 //   - semstreams_health_checks_total - Health check counter

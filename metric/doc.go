@@ -188,6 +188,10 @@
 //   - semstreams_nats_connection_status
 //
 // Service-specific metrics use the metric name as provided during registration.
+// A composed service.Manager privately registers semstreams_startup_units in
+// this registry before binding the configured Prometheus listener. It is not a
+// CoreMetrics recording API and is absent from a standalone registry until the
+// Manager claims it for a boot.
 //
 // # MetricsRegistrar Interface
 //

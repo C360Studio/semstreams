@@ -90,6 +90,8 @@ type ComponentManager struct {
 	startDone         chan struct{}
 	cancel            context.CancelFunc
 	supervisorDone    chan struct{}
+	startupMetrics    *startupMetricWriter
+	stopStarted       atomic.Bool
 
 	// Callback borrows are admitted under borrowMu, but component callbacks and
 	// terminal waiting always run without borrowMu or cm.mu held. borrowDone is
@@ -104,6 +106,9 @@ type componentRuntime struct {
 	mu             sync.Mutex
 	cancel         context.CancelFunc
 	startDone      chan struct{}
+	startInvoked   bool
+	startCompleted bool
+	startErr       error
 	cleanupPending bool
 	terminal       bool
 	stopping       bool
@@ -355,6 +360,7 @@ func (cm *ComponentManager) Start(ctx context.Context) (startErr error) {
 	cm.startDone = startDone
 	cm.cancel = cancel
 	cm.lifecycleMu.Unlock()
+	cm.recordComponentStartupMetrics()
 
 	committed := false
 	defer func() {
@@ -364,6 +370,7 @@ func (cm *ComponentManager) Start(ctx context.Context) (startErr error) {
 	cm.mu.Lock()
 	cm.startOrder = make([]string, 0)
 	cm.mu.Unlock()
+	cm.recordComponentStartupMetrics()
 
 	// Start all components through the provider-first barriers. Providers launch
 	// concurrently and register before the concurrent consumer phase begins;
@@ -472,6 +479,10 @@ func (cm *ComponentManager) startComponentsBarrier(ctx context.Context, names []
 // The WaitGroup is deliberately scoped here rather than reusing cm.wg, which
 // tracks long-lived loops that outlive a launch batch.
 func (cm *ComponentManager) startComponentsPhase(ctx context.Context, names []string) error {
+	return cm.launchComponentsPhase(cm.prepareComponentsPhase(ctx, names))
+}
+
+func (cm *ComponentManager) prepareComponentsPhase(ctx context.Context, names []string) []componentToStart {
 	cm.mu.Lock()
 	componentsToStart := make([]componentToStart, 0, len(names))
 	for _, name := range names {
@@ -507,7 +518,11 @@ func (cm *ComponentManager) startComponentsPhase(ctx context.Context, names []st
 		}
 	}
 	cm.mu.Unlock()
+	cm.recordComponentStartupMetrics()
+	return componentsToStart
+}
 
+func (cm *ComponentManager) launchComponentsPhase(componentsToStart []componentToStart) error {
 	var (
 		batch     sync.WaitGroup
 		errMu     sync.Mutex
@@ -537,11 +552,19 @@ func (cm *ComponentManager) startComponent(
 	mc *component.ManagedComponent,
 	runtime *componentRuntime,
 	lc component.LifecycleComponent,
-) error {
+) (startErr error) {
+	runtime.mu.Lock()
+	runtime.startInvoked = true
+	runtime.mu.Unlock()
+	cm.recordComponentStartupMetrics()
+
 	defer func() {
 		runtime.mu.Lock()
-		close(runtime.startDone)
+		runtime.startCompleted = true
+		runtime.startErr = startErr
 		runtime.mu.Unlock()
+		cm.recordComponentStartupMetrics()
+		close(runtime.startDone)
 	}()
 	cm.logger.Debug("Starting component", "name", name, "type", mc.Component.Meta().Type)
 
@@ -568,6 +591,55 @@ func (cm *ComponentManager) startComponent(
 	runtime.mu.Unlock()
 	cm.logger.Debug("Component started successfully", "name", name, "type", mc.Component.Meta().Type)
 	return nil
+}
+
+func (cm *ComponentManager) startupSnapshot() startupUnitCounts {
+	cm.mu.RLock()
+	counts := startupUnitCounts{Admitted: len(cm.components)}
+	runtimes := make([]*componentRuntime, 0, len(cm.runtimes))
+	for _, managed := range cm.components {
+		if managed != nil {
+			if _, ok := component.AsLifecycleComponent(managed.Component); ok {
+				counts.LifecycleParticipants++
+			}
+		}
+	}
+	for _, runtime := range cm.runtimes {
+		runtimes = append(runtimes, runtime)
+	}
+	cm.mu.RUnlock()
+
+	for _, runtime := range runtimes {
+		runtime.mu.Lock()
+		if runtime.startInvoked {
+			counts.StartsInvoked++
+		}
+		if runtime.startCompleted {
+			counts.StartsCompleted++
+		}
+		if runtime.startErr != nil {
+			counts.StartsFailed++
+		}
+		runtime.mu.Unlock()
+	}
+	return counts
+}
+
+func (cm *ComponentManager) recordComponentStartupMetrics() {
+	cm.lifecycleMu.Lock()
+	writer := cm.startupMetrics
+	cm.lifecycleMu.Unlock()
+	writer.publishComponents()
+}
+
+func (cm *ComponentManager) setStartupMetricWriter(writer *startupMetricWriter) {
+	cm.lifecycleMu.Lock()
+	cm.startupMetrics = writer
+	cm.lifecycleMu.Unlock()
+}
+
+func (cm *ComponentManager) startupStopBegun() bool {
+	return cm.stopStarted.Load()
 }
 
 // Stop gracefully stops all components in reverse order of startup.
@@ -606,6 +678,7 @@ func (cm *ComponentManager) Stop(ctx context.Context) error {
 		}
 		retryable := cm.cleanupPending
 		cm.stopping = true
+		cm.stopStarted.Store(true)
 		cm.lifecycleMu.Unlock()
 
 		stopErr := cm.cleanup(ctx, retryable)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"runtime"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,39 +15,36 @@ import (
 // LifecycleFactory creates a new instance of a LifecycleComponent for testing
 type LifecycleFactory func() LifecycleComponent
 
-// StandardLifecycleTests runs comprehensive lifecycle tests for any component that implements LifecycleComponent
-// This ensures consistent testing standards across all components in the semstreams system
+// StandardLifecycleTests verifies the portable LifecycleComponent floor.
+// Resource-specific drain ordering, blocked joins, and partial-acquisition
+// rollback remain the responsibility of focused owner tests.
 func StandardLifecycleTests(t *testing.T, factory LifecycleFactory) {
-	t.Run("Compliance", func(t *testing.T) {
-		testLifecycleCompliance(t, factory)
+	t.Run("PortableFloor", func(t *testing.T) {
+		testPortableLifecycleFloor(t, factory)
 	})
 	t.Run("ErrorPaths", func(t *testing.T) {
-		testErrorPaths(t, factory)
+		testPortableErrorPaths(t, factory)
 	})
-	t.Run("Concurrent", func(t *testing.T) {
-		testConcurrentLifecycle(t, factory)
+	t.Run("ParallelFreshInstances", func(t *testing.T) {
+		testParallelFreshInstances(t, factory)
 	})
 	t.Run("NoLeaks", func(t *testing.T) {
 		testNoResourceLeaks(t, factory)
 	})
 }
 
-// testLifecycleCompliance tests standard lifecycle state transitions
-func testLifecycleCompliance(t *testing.T, factory LifecycleFactory) {
+func testPortableLifecycleFloor(t *testing.T, factory LifecycleFactory) {
 	tests := []struct {
 		name string
 		test func(t *testing.T, comp LifecycleComponent)
 	}{
 		{"Initialize", testInitialize},
-		{"Start", testStart},
-		{"Stop", testStop},
-		{"DoubleStart", testDoubleStart},
-		{"DoubleStop", testDoubleStop},
+		{"ControlledStopWithLiveStartAuthority", testControlledStopWithLiveStartAuthority},
+		{"AcceptedStartParentCancellation", testAcceptedStartParentCancellation},
+		{"CompletedRepeatedStop", testCompletedRepeatedStop},
 		{"NilStartContext", testNilStartContext},
 		{"NilStopContext", testNilStopContext},
-		{"StartWithoutInit", testStartWithoutInit},
-		{"StopWithoutStart", testStopWithoutStart},
-		{"InitializeAfterStop", testInitializeAfterStop},
+		{"StopBeforeStart", testStopBeforeStart},
 	}
 
 	for _, tt := range tests {
@@ -61,64 +57,53 @@ func testLifecycleCompliance(t *testing.T, factory LifecycleFactory) {
 }
 
 func testInitialize(t *testing.T, comp LifecycleComponent) {
-	err := comp.Initialize()
-	assert.NoError(t, err, "Initialize should succeed on fresh component")
+	require.NoError(t, comp.Initialize(), "Initialize should succeed on a fresh component")
 }
 
-func testStart(t *testing.T, comp LifecycleComponent) {
-	err := comp.Initialize()
-	require.NoError(t, err, "Initialize must succeed before Start")
+func testControlledStopWithLiveStartAuthority(t *testing.T, comp LifecycleComponent) {
+	require.NoError(t, comp.Initialize())
+	startCtx, cancelStart := context.WithCancel(context.Background())
+	defer cancelStart()
+	require.NoError(t, comp.Start(startCtx))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	err = comp.Start(ctx)
-	assert.NoError(t, err, "Start should succeed after Initialize")
-
-	// Clean shutdown
-	err = comp.Stop(context.Background())
-	assert.NoError(t, err, "Stop should succeed after Start")
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelStop()
+	require.NoError(t, comp.Stop(stopCtx))
+	require.NoError(t, startCtx.Err(), "the parent Start authority must remain live during controlled Stop")
 }
 
-func testStop(t *testing.T, comp LifecycleComponent) {
-	// Stop without start should not error
-	err := comp.Stop(context.Background())
-	assert.NoError(t, err, "Stop should succeed even without Start")
+func testAcceptedStartParentCancellation(t *testing.T, comp LifecycleComponent) {
+	require.NoError(t, comp.Initialize())
+	startCtx, cancelStart := context.WithCancel(context.Background())
+	require.NoError(t, comp.Start(startCtx))
+	cancelStart()
+
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelStop()
+	var stopErr error
+	require.NotPanics(t, func() {
+		stopErr = comp.Stop(stopCtx)
+	}, "abort Stop must remain a synchronous bounded lifecycle call")
+	if stopErr != nil {
+		t.Logf("abort Stop accurately reported terminal cleanup: %v", stopErr)
+	}
+	if stopCtx.Err() != nil {
+		require.ErrorIs(t, stopErr, stopCtx.Err(), "Stop must preserve its exact caller-context error when the bound wins")
+	}
 }
 
-func testDoubleStart(t *testing.T, comp LifecycleComponent) {
-	err := comp.Initialize()
-	require.NoError(t, err, "Initialize must succeed")
+func testCompletedRepeatedStop(t *testing.T, comp LifecycleComponent) {
+	require.NoError(t, comp.Initialize())
+	startCtx, cancelStart := context.WithCancel(context.Background())
+	defer cancelStart()
+	require.NoError(t, comp.Start(startCtx))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	err = comp.Start(ctx)
-	require.NoError(t, err, "First Start should succeed")
-
-	// Second start should be handled gracefully (either no-op or error)
-	err = comp.Start(ctx)
-	// We don't require this to error - implementation can choose to be idempotent
-
-	err = comp.Stop(context.Background())
-	assert.NoError(t, err, "Stop should succeed")
-}
-
-func testDoubleStop(t *testing.T, comp LifecycleComponent) {
-	err := comp.Initialize()
-	require.NoError(t, err, "Initialize must succeed")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	err = comp.Start(ctx)
-	require.NoError(t, err, "Start must succeed")
-
-	err = comp.Stop(context.Background())
-	assert.NoError(t, err, "First Stop should succeed")
-
-	err = comp.Stop(context.Background())
-	assert.NoError(t, err, "Second Stop should be idempotent")
+	firstCtx, cancelFirst := context.WithTimeout(context.Background(), 5*time.Second)
+	require.NoError(t, comp.Stop(firstCtx))
+	cancelFirst()
+	secondCtx, cancelSecond := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelSecond()
+	require.NoError(t, comp.Stop(secondCtx), "completed repeated Stop should be a no-op")
 }
 
 func testNilStartContext(t *testing.T, comp LifecycleComponent) {
@@ -130,289 +115,86 @@ func testNilStopContext(t *testing.T, comp LifecycleComponent) {
 	assert.Error(t, comp.Stop(nil), "Stop must reject a nil context")
 }
 
-func testStartWithoutInit(t *testing.T, comp LifecycleComponent) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	err := comp.Start(ctx)
-	// This should either succeed (if Start does implicit Initialize) or fail gracefully
-	if err != nil {
-		assert.Contains(t, err.Error(), "not initialized", "Error should indicate component not initialized")
-	}
+func testStopBeforeStart(t *testing.T, comp LifecycleComponent) {
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelStop()
+	require.NoError(t, comp.Stop(stopCtx), "Stop should be safe before Start")
 }
 
-func testStopWithoutStart(t *testing.T, comp LifecycleComponent) {
-	err := comp.Stop(context.Background())
-	assert.NoError(t, err, "Stop should be safe to call without Start")
-}
-
-func testInitializeAfterStop(t *testing.T, comp LifecycleComponent) {
-	err := comp.Initialize()
-	require.NoError(t, err, "First Initialize should succeed")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	err = comp.Start(ctx)
-	require.NoError(t, err, "Start should succeed")
-
-	err = comp.Stop(context.Background())
-	require.NoError(t, err, "Stop should succeed")
-
-	// Re-initialize after stop
-	err = comp.Initialize()
-	assert.NoError(t, err, "Initialize should succeed after Stop")
-}
-
-// testErrorPaths tests error scenarios and edge cases
-func testErrorPaths(t *testing.T, factory LifecycleFactory) {
-	tests := []struct {
-		name      string
-		setup     func(LifecycleComponent) error
-		operation func(LifecycleComponent) error
-		wantErr   bool
-		errCheck  func(error) bool
-	}{
-		{
-			name:  "cancelled_context_on_start",
-			setup: func(comp LifecycleComponent) error { return comp.Initialize() },
-			operation: func(comp LifecycleComponent) error {
-				ctx, cancel := context.WithCancel(context.Background())
-				cancel() // Cancel immediately
-				return comp.Start(ctx)
-			},
-			wantErr: true,
-			errCheck: func(err error) bool {
-				return strings.Contains(err.Error(), "context") || strings.Contains(err.Error(), "cancel")
-			},
-		},
-		{
-			name:  "timeout_context_on_start",
-			setup: func(comp LifecycleComponent) error { return comp.Initialize() },
-			operation: func(comp LifecycleComponent) error {
-				ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
-				defer cancel()
-				return comp.Start(ctx)
-			},
-			wantErr: true,
-			errCheck: func(err error) bool {
-				return strings.Contains(err.Error(), "context") || strings.Contains(err.Error(), "timeout")
-			},
-		},
-		{
-			name:      "start_without_initialize",
-			setup:     func(_ LifecycleComponent) error { return nil },
-			operation: func(comp LifecycleComponent) error { return comp.Start(context.Background()) },
-			wantErr:   false, // Some components might handle this gracefully
-			errCheck:  func(err error) bool { return err == nil || strings.Contains(err.Error(), "not initialized") },
-		},
-		{
-			name:  "nil_context_on_start",
-			setup: func(comp LifecycleComponent) error { return comp.Initialize() },
-			operation: func(comp LifecycleComponent) error {
-				// Pass nil context (should be handled gracefully or error)
-				return comp.Start(nil)
-			},
-			wantErr:  true,
-			errCheck: func(err error) bool { return err != nil },
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			comp := factory()
-			require.NotNil(t, comp, "Component factory returned nil")
-
-			setupErr := tt.setup(comp)
-			require.NoError(t, setupErr, "Test setup failed")
-
-			err := tt.operation(comp)
-
-			if tt.wantErr {
-				assert.Error(t, err, "Operation should have failed")
-				if err != nil && tt.errCheck != nil {
-					assert.True(t, tt.errCheck(err), "Error should match expected pattern: %v", err)
-				}
-			} else {
-				if err != nil && tt.errCheck != nil {
-					assert.True(t, tt.errCheck(err), "Unexpected error pattern: %v", err)
-				}
-			}
-
-			// Ensure component can still be stopped
-			stopErr := comp.Stop(context.Background())
-			assert.NoError(t, stopErr, "Component should be stoppable after error test")
-		})
-	}
-}
-
-// testConcurrentLifecycle tests concurrent operations on lifecycle methods
-func testConcurrentLifecycle(t *testing.T, factory LifecycleFactory) {
-	t.Run("ConcurrentInitialize", func(t *testing.T) {
-		testConcurrentInitialize(t, factory)
+func testPortableErrorPaths(t *testing.T, factory LifecycleFactory) {
+	t.Run("PreCanceledStart", func(t *testing.T) {
+		comp := factory()
+		require.NotNil(t, comp, "Component factory returned nil")
+		require.NoError(t, comp.Initialize())
+		startCtx, cancelStart := context.WithCancel(context.Background())
+		cancelStart()
+		require.ErrorIs(t, comp.Start(startCtx), context.Canceled)
+		requireSafeStopAfterRejectedStart(t, comp)
 	})
-	t.Run("ConcurrentStopSharesGeneration", func(t *testing.T) {
-		testConcurrentStopSharesGeneration(t, factory)
-	})
-	t.Run("CanceledStopRejoinsGeneration", func(t *testing.T) {
-		testCanceledStopRejoinsGeneration(t, factory)
-	})
-	t.Run("ExpiredDeadlineStopRejoinsGeneration", func(t *testing.T) {
-		testExpiredDeadlineStopRejoinsGeneration(t, factory)
-	})
-	t.Run("StressTest", func(t *testing.T) {
-		testLifecycleStress(t, factory)
+
+	t.Run("PreExpiredStart", func(t *testing.T) {
+		comp := factory()
+		require.NotNil(t, comp, "Component factory returned nil")
+		require.NoError(t, comp.Initialize())
+		startCtx, cancelStart := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancelStart()
+		require.ErrorIs(t, comp.Start(startCtx), context.DeadlineExceeded)
+		requireSafeStopAfterRejectedStart(t, comp)
 	})
 }
 
-func testCanceledStopRejoinsGeneration(t *testing.T, factory LifecycleFactory) {
-	comp := factory()
-	require.NotNil(t, comp, "Component factory returned nil")
-	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	t.Cleanup(func() { _ = comp.Stop(context.Background()) })
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	require.ErrorIs(t, comp.Stop(ctx), context.Canceled,
-		"an already-canceled Stop must signal shutdown and leave the generation available to rejoin")
-	require.NoError(t, comp.Stop(context.Background()),
-		"a later authorized Stop must rejoin and finish the same generation")
+func requireSafeStopAfterRejectedStart(t *testing.T, comp LifecycleComponent) {
+	t.Helper()
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelStop()
+	require.NoError(t, comp.Stop(stopCtx), "pre-action Start rejection must leave Stop safe")
 }
 
-func testExpiredDeadlineStopRejoinsGeneration(t *testing.T, factory LifecycleFactory) {
-	comp := factory()
-	require.NotNil(t, comp, "Component factory returned nil")
-	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	t.Cleanup(func() { _ = comp.Stop(context.Background()) })
-
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
-	defer cancel()
-	require.ErrorIs(t, comp.Stop(ctx), context.DeadlineExceeded,
-		"an expired-deadline Stop must signal shutdown and leave the generation available to rejoin")
-	require.NoError(t, comp.Stop(context.Background()),
-		"a later authorized Stop must rejoin and finish the same generation")
-}
-
-func testConcurrentStopSharesGeneration(t *testing.T, factory LifecycleFactory) {
-	comp := factory()
-	require.NotNil(t, comp, "Component factory returned nil")
-	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-
-	const callers = 8
-	results := make(chan error, callers)
-	var callersDone sync.WaitGroup
-	for range callers {
-		callersDone.Add(1)
-		go func() {
-			defer callersDone.Done()
-			results <- comp.Stop(context.Background())
-		}()
-	}
-	callersDone.Wait()
-	close(results)
-	var first error
-	firstSet := false
-	for err := range results {
-		if !firstSet {
-			first = err
-			firstSet = true
-			continue
-		}
-		require.Equal(t, fmt.Sprint(first), fmt.Sprint(err), "concurrent Stop callers must observe one generation result")
-	}
-	require.Equal(t, fmt.Sprint(first), fmt.Sprint(comp.Stop(context.Background())),
-		"repeated Stop must replay the completed generation result")
-}
-
-func testConcurrentInitialize(t *testing.T, factory LifecycleFactory) {
-	comp := factory()
-	require.NotNil(t, comp, "Component factory returned nil")
-
-	var wg sync.WaitGroup
-	errors := make([]error, 20)
-
-	// 20 goroutines trying to initialize concurrently
-	for i := 0; i < 20; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			errors[idx] = comp.Initialize()
-		}(i)
-	}
-
-	wg.Wait()
-
-	// At least one initialize should succeed
-	successCount := 0
-	for _, err := range errors {
-		if err == nil {
-			successCount++
-		}
-	}
-
-	assert.GreaterOrEqual(t, successCount, 1, "At least one Initialize should succeed")
-
-	// Component should be in a valid state
-	err := comp.Stop(context.Background())
-	assert.NoError(t, err, "Component should be stoppable after concurrent initialize")
-}
-
-func testLifecycleStress(t *testing.T, factory LifecycleFactory) {
+func testParallelFreshInstances(t *testing.T, factory LifecycleFactory) {
 	if testing.Short() {
-		t.Skip("Skipping stress test in short mode")
+		t.Skip("Skipping parallel fresh-instance test in short mode")
 	}
 
-	const iterations = 50
+	const iterations = 20
 	const concurrency = 10
 
 	var wg sync.WaitGroup
+	results := make(chan error, iterations*concurrency)
 
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
-		go func(_ int) {
+		go func() {
 			defer wg.Done()
-
 			for j := 0; j < iterations; j++ {
 				comp := factory()
-				require.NotNil(t, comp, "Component factory returned nil")
-
-				// Random lifecycle operations
-				switch j % 4 {
-				case 0:
-					// Full lifecycle
-					_ = comp.Initialize()
-					ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-					_ = comp.Start(ctx)
-					cancel()
-					_ = comp.Stop(context.Background())
-				case 1:
-					// Initialize only
-					_ = comp.Initialize()
-					_ = comp.Stop(context.Background())
-				case 2:
-					// Start without init
-					ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-					_ = comp.Start(ctx)
-					cancel()
-					_ = comp.Stop(context.Background())
-				case 3:
-					// Stop only
-					_ = comp.Stop(context.Background())
+				if comp == nil {
+					results <- fmt.Errorf("component factory returned nil")
+					continue
 				}
+				if err := comp.Initialize(); err != nil {
+					results <- err
+					continue
+				}
+				startCtx, cancelStart := context.WithCancel(context.Background())
+				if err := comp.Start(startCtx); err != nil {
+					cancelStart()
+					results <- err
+					continue
+				}
+				stopCtx, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
+				err := comp.Stop(stopCtx)
+				cancelStop()
+				cancelStart()
+				results <- err
 			}
-		}(i)
+		}()
 	}
 
 	wg.Wait()
-	t.Logf(
-		"Stress test completed: %d workers × %d iterations = %d total operations",
-		concurrency,
-		iterations,
-		concurrency*iterations,
-	)
+	close(results)
+	for err := range results {
+		require.NoError(t, err)
+	}
 }
 
 // testNoResourceLeaks tests for memory and goroutine leaks
@@ -441,19 +223,20 @@ func testNoResourceLeaks(t *testing.T, factory LifecycleFactory) {
 			continue
 		}
 
-		// Use 5 second timeout - NATS components need time for subscription setup
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		err = comp.Start(ctx)
+		startCtx, cancelStart := context.WithCancel(context.Background())
+		err = comp.Start(startCtx)
 		if err != nil {
 			t.Logf("Start failed on iteration %d: %v", i, err)
 		}
 
-		err = comp.Stop(context.Background())
+		stopCtx, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
+		err = comp.Stop(stopCtx)
+		cancelStop()
 		if err != nil {
 			t.Logf("Stop failed on iteration %d: %v", i, err)
 		}
 
-		cancel()
+		cancelStart()
 
 		// Periodic cleanup check
 		if i%10 == 9 {
@@ -495,34 +278,40 @@ func BenchmarkLifecycleMethods(b *testing.B, factory LifecycleFactory) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			comp := factory()
-			comp.Initialize()
-			comp.Stop(context.Background())
+			_ = comp.Initialize()
+			stopCtx, cancelStop := context.WithTimeout(context.Background(), time.Second)
+			_ = comp.Stop(stopCtx)
+			cancelStop()
 		}
 	})
 
 	b.Run("Start", func(b *testing.B) {
-		comp := factory()
-		comp.Initialize()
-		defer comp.Stop(context.Background())
-
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-			comp.Start(ctx)
-			cancel()
+			comp := factory()
+			_ = comp.Initialize()
+			startCtx, cancelStart := context.WithCancel(context.Background())
+			_ = comp.Start(startCtx)
+			stopCtx, cancelStop := context.WithTimeout(context.Background(), time.Second)
+			_ = comp.Stop(stopCtx)
+			cancelStop()
+			cancelStart()
 		}
 	})
 
 	b.Run("Stop", func(b *testing.B) {
-		comp := factory()
-		comp.Initialize()
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-		comp.Start(ctx)
-		cancel()
-
-		b.ResetTimer()
+		b.StopTimer()
 		for i := 0; i < b.N; i++ {
-			comp.Stop(context.Background())
+			comp := factory()
+			_ = comp.Initialize()
+			startCtx, cancelStart := context.WithCancel(context.Background())
+			_ = comp.Start(startCtx)
+			stopCtx, cancelStop := context.WithTimeout(context.Background(), time.Second)
+			b.StartTimer()
+			_ = comp.Stop(stopCtx)
+			b.StopTimer()
+			cancelStop()
+			cancelStart()
 		}
 	})
 
@@ -530,11 +319,13 @@ func BenchmarkLifecycleMethods(b *testing.B, factory LifecycleFactory) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			comp := factory()
-			comp.Initialize()
-			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-			comp.Start(ctx)
-			cancel()
-			comp.Stop(context.Background())
+			_ = comp.Initialize()
+			startCtx, cancelStart := context.WithCancel(context.Background())
+			_ = comp.Start(startCtx)
+			stopCtx, cancelStop := context.WithTimeout(context.Background(), time.Second)
+			_ = comp.Stop(stopCtx)
+			cancelStop()
+			cancelStart()
 		}
 	})
 }

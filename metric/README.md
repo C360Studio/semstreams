@@ -32,6 +32,10 @@ Pre-defined platform-level metrics covering service status, message processing t
 ### Metrics Server
 HTTP server that exposes collected metrics in Prometheus format with configurable port and path, health endpoints, and OpenMetrics support for integration with monitoring systems.
 
+During composed production boot, `service.Manager` privately registers the
+fixed `semstreams_startup_units` collector and owns the configured server
+listener. A standalone `metric.Server` retains its direct lifecycle behavior.
+
 ### Service Metrics
 Framework for services to register custom metrics including counters, gauges, and histograms with automatic namespacing and conflict prevention for service-specific monitoring needs.
 

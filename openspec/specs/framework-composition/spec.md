@@ -158,15 +158,35 @@ fire-and-forget component launch at boot and no compatibility variant that prese
 
 While a managed component is retained in failed state with a last error, the component manager's health projection
 MUST report that state by component name rather than treating it as healthy. Successful failed-Start rollback MAY
-transition the component to stopped state and clear that error. The process MUST NOT bring up its HTTP surface or
-report service health while boot-time component starts are outstanding or failed.
+transition the component to stopped state and clear that error.
+
+After composition seals and before any service Start, Manager MUST bind its shared startup-diagnostic HTTP surface
+and, when configured, the built-in Prometheus listener as Manager-owned diagnostic infrastructure. Diagnostic binding
+MUST NOT change service Start or reverse-registration Stop order. While boot-time service or component Starts are
+outstanding, the shared surface MUST expose only health, readiness, service startup counts, and read-only component
+health/list/status diagnostics; every other route MUST return 503 `NOT READY`.
+
+Manager MUST keep boot commitment false until every Start, complete-route construction, and remaining fallible
+Manager acquisition has succeeded. It MUST store the complete mux and set commitment true as the final non-failing
+boot transition. Readiness MUST remain 503 with the exact body `NOT READY` until commitment is true and every admitted
+service and component is currently healthy. Failed boot and Stop MUST clear commitment before child cleanup; ordinary
+routes MUST remain gated while commitment is false. Diagnostic listeners MUST be released after child cleanup.
 
 #### Scenario: a boot-time component start failure fails StartAll
 
 - **GIVEN** a registered lifecycle component whose `Start` returns an error
 - **WHEN** `Manager.StartAll` runs
 - **THEN** `ComponentManager.Start` returns an error naming the failed component, `StartAll`
-  fails, the HTTP surface is never brought up, and the process exits non-zero
+  fails, the complete HTTP route set is never promoted, and the process exits non-zero
+- **AND** the diagnostic listeners report not-ready while the Start is outstanding and are released after rollback
+
+#### Scenario: a blocked component start remains observable without weakening the barrier
+
+- **GIVEN** a lifecycle component whose `Start` remains in flight
+- **WHEN** an operator reads the already-bound startup diagnostics
+- **THEN** `/readyz` returns 503 with exact body `NOT READY`
+- **AND** `/services` and `semstreams_startup_units` distinguish admitted, invoked, completed, and failed Starts
+- **AND** non-diagnostic routes remain unavailable until the barrier succeeds
 
 #### Scenario: StartAll waits for every component start before proceeding
 

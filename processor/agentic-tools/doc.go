@@ -5,7 +5,8 @@
 // The agentic-tools processor executes tool calls from the agentic loop orchestrator.
 // It receives ToolCall messages, dispatches them to registered tool executors, and
 // publishes ToolResult messages back. The processor supports tool registration,
-// allowlist filtering, per-execution timeouts, and concurrent execution.
+// allowlist filtering, per-execution timeouts, correlated results, and durable
+// completion.
 //
 // This processor enables agents to interact with external systems (files, APIs,
 // databases, etc.) through a well-defined tool interface.
@@ -265,19 +266,24 @@
 //	    // Agent can try alternative approach
 //	}
 //
-// # Concurrent Execution
+// # Wire Execution
 //
-// The processor handles concurrent tool calls safely:
+// Every wire response remains correlated to its call ID. An initial
+// approval_required response is a nonterminal pause: it creates no COMPLETED
+// outcome and leaves the same CallID eligible for approved re-dispatch. Calls
+// that reach execution or terminal policy rejection receive correlated durable
+// terminal results, and COMPLETED redelivery replays that result without
+// re-invoking the executor.
 //
-//   - ExecutorRegistry uses RWMutex for thread-safe access
-//   - Each tool call gets its own goroutine
-//   - Context cancellation propagates to all active executions
+// The wire contract promises neither serialized execution nor execution
+// overlap. The current implementation uses one native callback and joins
+// outcome persistence, result publication, and delivery settlement before that
+// callback returns. That is implementation detail rather than a stable
+// serialization contract.
 //
-// Multiple tools can execute in parallel when the loop sends concurrent calls:
-//
-//	// agentic-loop sends two tool calls
-//	tool.execute.read_file  → executes
-//	tool.execute.query_db   → executes concurrently
+// MaxAckPending bounds delivered-but-unacknowledged admission at NATS. It does
+// not promise executor overlap or thread safety. Every call receives its own
+// cancellation context.
 //
 // # Built-in Tools
 //
@@ -294,11 +300,11 @@
 //
 // # Thread Safety
 //
-// The Component is safe for concurrent use after Start() is called:
-//
-//   - ExecutorRegistry uses RWMutex for all operations
-//   - Tool registration should complete before Start()
-//   - Multiple tool calls can execute concurrently
+// ExecutorRegistry uses RWMutex for registry lookup and mutation. Tool
+// registration should complete before Start. Direct application callers may
+// invoke executors through the registry concurrently, so executor safety for
+// those calls remains the application's responsibility; no such guarantee is
+// inferred from the wire consumer.
 //
 // # Testing
 //

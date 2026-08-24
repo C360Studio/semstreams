@@ -2,6 +2,13 @@
 
 ## Status
 
+**Phases 2 and 3 superseded by ADR-098 — 2026-08-22.** The framework ships no bespoke ops agent.
+`emit_diagnosis` is not carried forward as a framework capability; products compose their own
+operational agents from framework primitives. Phase 1 shipped and is preserved below as history —
+its reasoning is not retracted, only its continuation. Framework observability of agent execution
+now lands as reportable conditions on the loop entity (ADR-098 decision 2); substrate observability
+is logs and metrics, out of band, and never graph triples (ADR-098 decision 3).
+
 **Accepted (Phase 1)** — refreshed 2026-04-18 with ADR-028 framing; Phase 1 shipped 2026-04-20. The Meta-Harness pattern and the three-phase delivery remain correct; this refresh clarifies that the ops agent is **Layer 4 of the three-layer orchestration architecture** and reuses the coordinator's runtime composition tools, not a parallel control path.
 
 Phase 1 (read-only diagnosis) is complete: the ops agent observes completed loops and graph telemetry, emits structured findings as `ops.diagnosis.*` triples via the `emit_diagnosis` tool, and is e2e-verified via `task e2e:ops`. Phase 2 and Phase 3 remain proposed. The ops seam now carries a second emission tool beside `emit_diagnosis`: `emit_lesson` (ADR-080), which distills completed work into evidence-cited, lifecycle-gated `agent.lesson.*` records injected back into future loops.

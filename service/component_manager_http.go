@@ -77,6 +77,17 @@ func (cm *ComponentManager) RegisterHTTPHandlers(prefix string, mux *http.ServeM
 	mux.HandleFunc(prefix+"paths", cm.handleFlowPaths)
 }
 
+// registerStartupHTTPHandlers registers only read-only component diagnostics.
+// It deliberately omits configuration, type, flowgraph, and gateway routes.
+func (cm *ComponentManager) registerStartupHTTPHandlers(prefix string, mux *http.ServeMux) {
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+	mux.HandleFunc(prefix+"health", cm.handleComponentsHealth)
+	mux.HandleFunc(prefix+"list", cm.handleComponentsList)
+	mux.HandleFunc(prefix+"status/", cm.handleComponentStatus)
+}
+
 // OpenAPISpec returns the OpenAPI specification for ComponentManager endpoints
 func (cm *ComponentManager) OpenAPISpec() *OpenAPISpec {
 	return componentManagerOpenAPISpec()

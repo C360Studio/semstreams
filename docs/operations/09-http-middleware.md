@@ -49,6 +49,19 @@ can't take effect. The warning is the framework's way of
 surfacing operator misuse instead of silently dropping the
 registration.
 
+`StartAll` binds the shared listener before it invokes services. The configured
+middleware chain therefore applies during startup as well as after route
+promotion. During startup, only `/health`, `/healthz`, `/readyz`, `/services`,
+`/services/health`, and the read-only component health/list/status routes are
+available; every other route returns 503 with `NOT READY`. After all fallible
+boot work succeeds, Manager commits the complete route set through the same
+middleware chain. Stop clears that commitment before child cleanup, returning
+the dispatcher to diagnostics-only routing.
+
+Products that protect probes with authentication keep owning that policy during
+startup. TCP reachability is not a readiness signal; use the `/readyz` HTTP
+status. Its response bodies remain exactly `READY` and `NOT READY`.
+
 ## Common patterns
 
 ### Identity-aware middleware (paired with the beta.22 helpers)

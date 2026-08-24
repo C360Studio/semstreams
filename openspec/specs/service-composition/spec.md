@@ -248,7 +248,13 @@ sealed subset implementing `HTTPHandler`. Per-service OpenAPI contributors SHALL
 subset under the actual service interfaces.
 
 Desired config edits SHALL NOT drift those views. Static manager-owned endpoints SHALL NOT invent a service identity.
-Service health, `/services/health`, readiness, and `GRAPH_STATUS` semantics SHALL remain unchanged.
+Service health, `/services/health`, and `GRAPH_STATUS` semantics SHALL remain unchanged. `GET /services` SHALL include
+an additive process-local `startup` projection with derived status and separate admitted, Starts-invoked,
+Starts-completed, and Starts-failed counts for services and components; component counts SHALL additionally distinguish
+lifecycle participants from admitted non-lifecycle Discoverables.
+
+Startup diagnostic binding and route commitment SHALL be Manager infrastructure, not a service-contributed route,
+service lifecycle participant, or exception to registration-order Start and reverse-registration Stop behavior.
 
 #### Scenario: Sealed subsets remain aligned
 
@@ -261,7 +267,7 @@ Service health, `/services/health`, readiness, and `GRAPH_STATUS` semantics SHAL
 
 - **GIVEN** a sealed running process
 - **WHEN** desired service config changes
-- **THEN** runtime rows, routes, OpenAPI contributors, health, and readiness continue describing the sealed process
+- **THEN** runtime rows, routes, OpenAPI contributors, and health continue describing the sealed process
 
 ### Requirement: Running service and component composition is fixed at boot
 

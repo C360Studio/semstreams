@@ -144,9 +144,12 @@ func TestLifecycleOwnerStartRollbackDoesNotHoldComponentLock(t *testing.T) {
 	require.NoError(t, c.Stop(t.Context()))
 }
 
-func TestLifecycleOwnerDrainKeepsCallbackAndChildLiveAndSerializes(t *testing.T) {
+func TestLifecycleOwnerDrainKeepsCallbackAndChildLiveUntilCompletion(t *testing.T) {
 	client := newLifecycleNATSClient(t)
 	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	releaseCallback := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseCallback)
 	callbackCtx := make(chan context.Context, 1)
 	runCtx, cancel := context.WithCancel(t.Context())
 	sub, err := client.SubscribeForRequests(runCtx, "test.graph.query.lifecycle.order", func(ctx context.Context, _ []byte) ([]byte, error) {
@@ -169,22 +172,14 @@ func TestLifecycleOwnerDrainKeepsCallbackAndChildLiveAndSerializes(t *testing.T)
 	go func() { stopResult <- c.Stop(stopCtx) }()
 	<-stopCtx.observed
 	require.NoError(t, handlerCtx.Err())
-	require.ErrorContains(t, c.Stop(t.Context()), "stop already in progress")
 	select {
 	case <-child.closed:
 		t.Fatal("LLM child closed while callback remained live")
 	default:
 	}
-	startResult := make(chan error, 1)
-	go func() { startResult <- c.Start(t.Context()) }()
-	select {
-	case err := <-startResult:
-		t.Fatalf("Start returned before Stop serialized: %v", err)
-	default:
-	}
-	close(release)
+	releaseCallback()
 	require.NoError(t, <-stopResult)
-	require.ErrorContains(t, <-startResult, "already used")
+	require.Error(t, handlerCtx.Err())
 	select {
 	case <-child.closed:
 	default:
@@ -200,6 +195,9 @@ func TestLifecycleOwnerStartRollbackExpiryRetainsAndRetries(t *testing.T) {
 	c := &Component{config: config, queryFamily: "graph.query", natsClient: client, logger: lifecycleLogger(), initialized: true}
 	sentinel := errors.New("later subscription failed")
 	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	releaseCallback := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseCallback)
 	healthDone := make(chan struct{})
 	calls := 0
 	var firstSubject string
@@ -227,7 +225,7 @@ func TestLifecycleOwnerStartRollbackExpiryRetainsAndRetries(t *testing.T) {
 	require.Len(t, c.querySubscriptions, 1)
 	require.False(t, c.lifecycleTerminal)
 	require.ErrorContains(t, c.Start(t.Context()), "already used")
-	close(release)
+	releaseCallback()
 	require.NoError(t, c.Stop(t.Context()))
 	require.True(t, c.lifecycleTerminal)
 	require.Empty(t, c.querySubscriptions)

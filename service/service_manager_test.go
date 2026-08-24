@@ -283,18 +283,21 @@ func TestStartAllRollsBackFailedChildStartWithDetachedBoundedContext(t *testing.
 	}
 }
 
-func TestStartAllRollsBackStartedServiceAfterMainBindFailure(t *testing.T) {
+func TestStartAllMainBindFailureStartsNoService(t *testing.T) {
 	occupied, err := net.Listen("tcp", ":0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = occupied.Close() })
 	port := occupied.Addr().(*net.TCPAddr).Port
-	stopObservation := make(chan rollbackContextObservation, 1)
+	var starts atomic.Int64
+	var stops atomic.Int64
 	service := &failedStartRollbackService{
 		MockService: MockService{name: "component-manager", status: StatusRunning, healthy: true},
-		start:       func(context.Context) error { return nil },
-		stop: func(ctx context.Context) error {
-			_, hasDeadline := ctx.Deadline()
-			stopObservation <- rollbackContextObservation{err: ctx.Err(), hasDeadline: hasDeadline}
+		start: func(context.Context) error {
+			starts.Add(1)
+			return nil
+		},
+		stop: func(context.Context) error {
+			stops.Add(1)
 			return nil
 		},
 	}
@@ -304,10 +307,8 @@ func TestStartAllRollsBackStartedServiceAfterMainBindFailure(t *testing.T) {
 	err = manager.StartAll(t.Context())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "bind HTTP listener")
-	observation := <-stopObservation
-	require.NoError(t, observation.err)
-	require.True(t, observation.hasDeadline)
-	require.NoError(t, manager.StopAll(t.Context()))
+	require.Zero(t, starts.Load(), "shared listener bind failure must start no child")
+	require.Zero(t, stops.Load(), "no acquired child requires rollback")
 }
 
 func TestStartAllRollsBackMainAndPublisherAfterPublisherStartFailure(t *testing.T) {
@@ -350,9 +351,9 @@ func TestStopAllRetainsServiceAuthorityAfterFailure(t *testing.T) {
 
 func TestRuntimeServerCanceledStopIsTerminalWithoutResultReplay(t *testing.T) {
 	m := NewServiceManager(NewServiceRegistry())
-	m.httpMux = http.NewServeMux()
 	m.isHTTPManager = true
-	require.NoError(t, m.completeHTTPSetup(context.Background()))
+	require.NoError(t, m.initializeHTTPInfrastructure())
+	require.NoError(t, m.startHTTPRuntime(context.Background()))
 	require.NotNil(t, m.httpServer.BaseContext)
 	handlerCtx := m.httpServer.BaseContext(nil)
 	canceled, cancel := context.WithCancel(context.Background())
@@ -616,7 +617,14 @@ func createTestServiceManager(config ManagerConfig, deps *Dependencies) *Manager
 		"service-manager",
 		nil,
 		WithLogger(logger),
+		WithMetrics(func() *metric.MetricsRegistry {
+			if deps != nil {
+				return deps.MetricsRegistry
+			}
+			return nil
+		}()),
 	)
+	serviceManager.dependencies = deps
 	if deps != nil && deps.NATSClient != nil {
 		serviceManager.natsClient = deps.NATSClient
 	}

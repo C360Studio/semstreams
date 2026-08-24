@@ -108,6 +108,20 @@ through a writer-authorization metric.
 
 ### Process & Runtime (per-container)
 
+Startup progress is available as a fixed, low-cardinality gauge while a service
+or component `Start` is still in flight:
+
+| Metric | Labels | Description |
+|--------|--------|-------------|
+| `semstreams_startup_units` | `owner`, `stage` | Process-local startup counts. |
+
+`owner` is only `services` or `components`; `stage` is a fixed vocabulary. No
+service or component identity label is emitted. These counts explain startup
+progress, but `/readyz` remains the readiness authority because it also observes
+current health. During composed production boot, Manager privately registers
+this collector before binding the configured Prometheus listener; it is not a
+public `CoreMetrics` recording surface.
+
 These come for free from the Prometheus Go client — no semstreams-specific configuration needed. They describe the process emitting the metrics (one series per scrape target).
 
 | Metric | Description | Useful query |

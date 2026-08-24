@@ -77,7 +77,7 @@ The window the server waits for an ack before marking a message as failed and re
 
 Do not set a giant `AckWait` globally. Use heartbeats for long work instead (see below).
 
-### MaxAckPending — In-Flight Limit and Backpressure
+### MaxAckPending — Acknowledgement Admission and Backpressure
 
 The maximum number of unacknowledged messages across all subscriptions bound to a consumer. When this limit is
 reached the server **stops delivering new messages** — this is NATS giving you backpressure for free.
@@ -85,21 +85,13 @@ reached the server **stops delivering new messages** — this is NATS giving you
 ```text
 Fast Publisher ──► Stream ──► Consumer (MaxAckPending=5)
                                │
-                         Only 5 in flight at a time.
+                         Only 5 delivered and unacknowledged at a time.
                          Server holds the rest until acks arrive.
 ```
 
-For agentic work where each message triggers a goroutine with real resource cost:
-
-| Consumer Type           | `MaxAckPending` |
-|-------------------------|-----------------|
-| Agentic loop (serial)   | `1`             |
-| Agentic loop (parallel) | `worker_count`  |
-| Tool calls              | `concurrency`   |
-| LLM model calls         | `1`–`3`         |
-
-Setting `MaxAckPending: 1` forces serial processing — NATS will not deliver the next message until the current
-one is acked. This is the simplest and most correct approach for single-threaded loop orchestration.
+Choose this value as an acknowledgement-admission budget, not as a worker-count setting. `MaxAckPending: 1` prevents
+NATS from delivering the next message for that consumer while the current delivery remains unacknowledged. Larger
+values permit more outstanding deliveries, but they do not create local goroutines, workers, or executor overlap.
 
 ### MaxDeliver — Retry Limit
 
@@ -204,8 +196,7 @@ For the actual handler, wrap long work with the heartbeat pattern above.
 
 ### agentic-model — LLM Calls
 
-Model calls are the long pole. Serial within the loop context, but you may want light parallelism for parallel
-tool resolution. Heartbeats are essential.
+Model calls are the long pole. Heartbeats are essential while a delivery remains unacknowledged.
 
 ```go
 cfg := natsclient.StreamConsumerConfig{
@@ -225,8 +216,8 @@ With `InProgress` heartbeats every 90 seconds, a 30-minute model call is fully s
 
 ### agentic-tools — Tool Calls
 
-Tool calls are generally faster but highly variable (web fetch vs DB lookup vs external API). Slightly more
-parallelism is acceptable since tool calls are idempotent or can be made idempotent.
+Tool calls are generally faster but highly variable (web fetch vs DB lookup vs external API). Effectful executors use
+the call ID as their downstream idempotency key because redelivery can repeat work before durable completion.
 
 ```go
 cfg := natsclient.StreamConsumerConfig{
@@ -237,7 +228,7 @@ cfg := natsclient.StreamConsumerConfig{
     AckPolicy:     "explicit",
     AckWait:       5 * time.Minute,
     MaxDeliver:    3,
-    MaxAckPending: 3,                   // allow some concurrency for parallel tools
+    MaxAckPending: 3,                   // admit up to three delivered-but-unacknowledged calls
     BackOff: []time.Duration{
         15 * time.Second,
         60 * time.Second,
@@ -245,6 +236,9 @@ cfg := natsclient.StreamConsumerConfig{
     AutoCreate: false,
 }
 ```
+
+The value `3` is the component-owned acknowledgement-admission policy. It promises neither serialized execution nor
+execution overlap and is not an executor thread-safety contract.
 
 ---
 

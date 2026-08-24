@@ -291,9 +291,9 @@ func TestIntegration_StartAll_OwnerSeamReconcilesCreateRaceDirtInsideBoot(t *tes
 // TestIntegration_StartAll_BootFailsClosedOnComponentStartFailure locks the
 // framework-composition fail-closed scenario at the composition-root level: a
 // registered lifecycle component whose Start returns an error must fail
-// Manager.StartAll with an error naming the component, and the HTTP surface
-// must never be brought up. This barrier is what makes a seam failure inside
-// an owner's Start a process-level refusal.
+// Manager.StartAll with an error naming the component. Startup diagnostics bind
+// before the barrier, but failure must never promote full routes or leave the
+// listener behind.
 func TestIntegration_StartAll_BootFailsClosedOnComponentStartFailure(t *testing.T) {
 	ctx := context.Background()
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
@@ -330,6 +330,10 @@ func TestIntegration_StartAll_BootFailsClosedOnComponentStartFailure(t *testing.
 	assert.Contains(t, err.Error(), "doomed-component", "the boot error must name the failed component")
 	assert.ErrorIs(t, err, errSimulatedStartFailure,
 		"the component's own Start error must survive the propagation chain unwrapped-able")
+	startup := manager.currentStartupSnapshot()
+	assert.Equal(t, "failed", startup.Status)
+	assert.Equal(t, 1, startup.Services.StartsFailed)
+	assert.Equal(t, 1, startup.Components.StartsFailed)
 
 	// The returned boot error retains the component failure, while successful
 	// synchronous rollback leaves the acquired component record stopped.
@@ -338,10 +342,14 @@ func TestIntegration_StartAll_BootFailsClosedOnComponentStartFailure(t *testing.
 	assert.Equal(t, component.StateStopped, status["doomed-component"].State)
 	assert.NoError(t, status["doomed-component"].LastError)
 
-	// HTTP was never brought up: completeHTTPSetup (which creates the server)
-	// is only reached after every service Start succeeds.
+	// The diagnostic server was acquired before the component barrier, then
+	// synchronously released without promoting the full route set.
 	manager.mu.RLock()
 	httpServer := manager.httpServer
+	httpUsed := manager.httpUsed
+	httpTerminal := manager.httpTerminal
 	manager.mu.RUnlock()
-	assert.Nil(t, httpServer, "the HTTP surface must never come up when boot fails closed")
+	assert.True(t, httpUsed, "startup diagnostics must bind before component Start")
+	assert.True(t, httpTerminal, "failed boot must terminally clean up startup diagnostics")
+	assert.Nil(t, httpServer, "failed boot must release the shared listener")
 }
