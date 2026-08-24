@@ -100,56 +100,6 @@ func TestConsumerSetupReturnsNonAbsentStreamFailureWithoutProbingAgain(t *testin
 	}
 }
 
-// TestConsumerAutoCreateBindsAStreamThatAlreadyExists covers the seam one step
-// over from the visibility wait. On a lagging node the auto-create pre-check is
-// answered "not found" for a stream that exists, so setup falls through to
-// CreateStream and the server answers 10058. Returning that as transient would
-// fail boot for a stream that is present, one seam away from the window
-// natsclient just absorbed.
-//
-// The answer is to bind by name, matching the pre-check's own success path: a
-// non-owner does not restamp a stream someone else declared. Proof that setup
-// got PAST auto-create is that the failure it ultimately reports is the guarded
-// lookup's absent answer, not the create's already-in-use one.
-func TestConsumerAutoCreateBindsAStreamThatAlreadyExists(t *testing.T) {
-	fake := &fakeJetStream{
-		streamErr:       jetstream.ErrStreamNotFound,
-		createStreamErr: jetstream.ErrStreamNameAlreadyInUse,
-	}
-	client := newConnectedClientWithFakeJS(t, fake)
-	// A caller deadline, not a measurement: the fake never makes the stream
-	// visible, so this bounds the wait that follows the bind. Which branch
-	// auto-create took is what is asserted.
-	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
-	defer cancel()
-
-	handle, err := client.ConsumeInternalStreamWithConfig(ctx, StreamConsumerConfig{
-		StreamName:    "AUTO_CREATE_RACE",
-		ConsumerName:  "auto-create-race",
-		FilterSubject: "auto.create.race.>",
-		AckPolicy:     "explicit",
-		DeliverPolicy: "all",
-		AutoCreate:    true,
-		AutoCreateConfig: &StreamAutoCreateConfig{
-			Subjects: []string{"auto.create.race.>"},
-			MaxAge:   time.Hour,
-			MaxBytes: 64 << 20,
-			Discard:  jetstream.DiscardOld,
-		},
-	}, func(context.Context, jetstream.Msg) {})
-
-	require.Nil(t, handle)
-	require.Error(t, err)
-	require.NotErrorIs(t, err, jetstream.ErrStreamNameAlreadyInUse,
-		"a stream that already exists is not an auto-create failure; the caller binds by name")
-	require.ErrorIs(t, err, jetstream.ErrStreamNotFound,
-		"setup must continue past auto-create into the guarded lookup")
-	require.Equal(t, int64(1), fake.createStreamCalls.Load(),
-		"one create attempt, then bind — never a create loop")
-	require.Greater(t, fake.streamCalls.Load(), int64(1),
-		"the pre-check plus at least one visibility probe")
-}
-
 // TestStreamNotVisibleSeparatesASpentBudgetFromACancelledWait pins the sentinel's
 // contract at the function that owns it: only a spent budget carries
 // ErrStreamNotVisible, both endings keep the absent classification reachable, and
@@ -227,4 +177,63 @@ func TestAbsentClassificationFromConsumerSeamsCarriesNoSentinel(t *testing.T) {
 	require.ErrorIs(t, observeErr, jetstream.ErrStreamNotFound)
 	require.NotErrorIs(t, observeErr, ErrStreamNotVisible,
 		"initial consumer observation never measured the stream's visibility")
+}
+
+// errProbeTransport is a failure that has nothing to do with the stream: the
+// class the wait must never reclassify as absence.
+var errProbeTransport = errors.New("probe transport failure")
+
+// absentThenBlockedTransport answers the FIRST Stream() with the absent
+// classification, then blocks until the wait context ends and returns a
+// transport failure of its own — so the failure and the wait's ending arrive
+// together, which is the only sequence in which a stale absence could overwrite
+// a real answer.
+type absentThenBlockedTransport struct {
+	*fakeJetStream
+	transport error
+}
+
+func (f *absentThenBlockedTransport) Stream(ctx context.Context, _ string) (jetstream.Stream, error) {
+	if f.streamCalls.Add(1) == 1 {
+		return nil, jetstream.ErrStreamNotFound
+	}
+	<-ctx.Done()
+	return nil, f.transport
+}
+
+// TestConsumerSetupDoesNotReclassifyALaterProbeFailureAsAbsence pins the scope of
+// the wait's one tolerance from the other side: an earlier probe's "not found"
+// must not decide what a LATER probe's failure means. A transport or permission
+// fault that lands as the wait ends is an answer about that probe, and returning
+// ErrStreamNotVisible for it would hand a caller durable evidence of absence for
+// a fault the stream had nothing to do with — which agentrun's skip would read as
+// "no agentic components in this deployment".
+func TestConsumerSetupDoesNotReclassifyALaterProbeFailureAsAbsence(t *testing.T) {
+	for _, entry := range consumeEntryPoints() {
+		t.Run(entry.name, func(t *testing.T) {
+			fake := &absentThenBlockedTransport{
+				fakeJetStream: &fakeJetStream{},
+				transport:     errProbeTransport,
+			}
+			client := newConnectedClientWithFakeJS(t, fake)
+			// The caller's deadline ends the wait. The budget is a constant, and
+			// which bound ends it is not what this test is about.
+			ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+			defer cancel()
+
+			handle, err := entry.consume(ctx, client, StreamConsumerConfig{
+				StreamName:    "LATE_PROBE_FAULT",
+				ConsumerName:  "late-probe-fault",
+				FilterSubject: "late.probe.fault.>",
+				AckPolicy:     "explicit",
+				DeliverPolicy: "all",
+			}, func(context.Context, jetstream.Msg) {})
+
+			require.Nil(t, handle)
+			require.ErrorIs(t, err, errProbeTransport,
+				"the failure this probe actually returned is the answer")
+			require.NotErrorIs(t, err, ErrStreamNotVisible,
+				"a probe that failed for its own reason measured no absence")
+		})
+	}
 }

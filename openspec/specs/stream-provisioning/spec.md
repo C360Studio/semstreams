@@ -237,12 +237,6 @@ which is how a convention becomes something each consumer guesses at separately.
 - **THEN** it binds the stream by name without declaring limits
 - **AND** an absent stream is handled as a real condition rather than created by the consumer
 
-#### Scenario: An auto-create loses the race for an already-provisioned stream
-
-- **GIVEN** a consumer auto-create whose pre-check found the stream absent
-- **WHEN** the create is refused because the stream already exists
-- **THEN** the caller binds the live stream instead of failing
-
 #### Scenario: Two declarers of one stream are diagnosable
 
 - **GIVEN** two components that both declare the same stream with different limits

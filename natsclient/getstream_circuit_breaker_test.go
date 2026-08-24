@@ -34,15 +34,9 @@ import (
 type fakeJetStream struct {
 	streamErr error // returned by Stream()
 	kvErr     error // returned by KeyValue()
-	// createStreamErr is returned by CreateStream(). Only the failure shapes are
-	// modeled: a nil error would have to hand back a nil jetstream.Stream, which
-	// is a lie no caller should have to tolerate from a fake.
-	createStreamErr error
 	// streamCalls counts Stream() observations so a test can assert how many
 	// times a caller looked, not how long it took to give up looking.
 	streamCalls atomic.Int64
-	// createStreamCalls counts CreateStream() attempts.
-	createStreamCalls atomic.Int64
 }
 
 // Stream is the only method exercised by GetStream.
@@ -98,11 +92,7 @@ func (f *fakeJetStream) CleanupPublisher() {
 // --- StreamManager ---
 
 func (f *fakeJetStream) CreateStream(_ context.Context, _ jetstream.StreamConfig) (jetstream.Stream, error) {
-	if f.createStreamErr == nil {
-		panic("fakeJetStream: CreateStream success is not modeled; set createStreamErr")
-	}
-	f.createStreamCalls.Add(1)
-	return nil, f.createStreamErr
+	panic("fakeJetStream: CreateStream not implemented")
 }
 
 func (f *fakeJetStream) UpdateStream(_ context.Context, _ jetstream.StreamConfig) (jetstream.Stream, error) {

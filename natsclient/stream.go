@@ -360,9 +360,18 @@ func (c *Client) awaitStreamVisible(
 			return stream, nil
 		case errors.Is(err, jetstream.ErrStreamNotFound):
 			absent = err
-		case absent != nil && waitCtx.Err() != nil:
-			// The wait ended mid-request, so this error reports that ending rather
-			// than the stream. Report what every completed observation measured.
+		case absent != nil && waitCtx.Err() != nil && errors.Is(err, waitCtx.Err()):
+			// This probe failed BECAUSE the wait ended, so its error reports the
+			// ending rather than the stream. Report what every completed
+			// observation measured instead.
+			//
+			// The errors.Is on the wait context's own cause is load-bearing: a
+			// transport or permission failure that happens to arrive as the budget
+			// expires is a real answer about this probe, not evidence of absence,
+			// and reclassifying it here would hand a caller ErrStreamNotVisible for
+			// a fault the stream had nothing to do with. It falls through to the
+			// default and is returned unchanged, which is what "any other failure
+			// is returned on first observation" already promises.
 			return nil, streamNotVisible(ctx, absent)
 		default:
 			return nil, err
@@ -919,14 +928,6 @@ func (c *Client) ensureStreamForConsumer(ctx context.Context, js jetstream.JetSt
 
 	// Create the stream
 	_, err = js.CreateStream(ctx, streamCfg)
-	if errors.Is(err, jetstream.ErrStreamNameAlreadyInUse) {
-		// The pre-check missed a stream that exists: a node that had not applied
-		// the meta assignment, or a peer that created it in between. Returning
-		// this as transient would fail boot for a stream that is present.
-		c.logger.Info("stream already exists (created concurrently or on another node); binding it",
-			slog.String("stream", cfg.StreamName))
-		return nil
-	}
 	if err != nil {
 		c.recordFailure()
 		return errs.WrapTransient(err, "Client", "ensureStreamForConsumer",
