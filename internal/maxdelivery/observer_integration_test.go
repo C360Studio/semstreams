@@ -275,6 +275,7 @@ const streamAssignmentRetryInterval = 10 * time.Millisecond
 // a node that may still be behind, which answers 404/10059 for a stream that
 // exists. Only the absent classification is retried; any other failure fails the
 // test immediately so this never becomes a retry-until-green wrapper.
+// The real-wire absent answer is pinned by TestStartFailsLoudlyWhenCaptureStreamIsMissing.
 func retryWhileStreamNotFound[T any](
 	ctx context.Context,
 	t *testing.T,
@@ -295,7 +296,8 @@ func retryWhileStreamNotFound[T any](
 		// call fails with the context error, and classifying that would report an
 		// exhausted wait as a wrong-error failure.
 		if waitCtx.Err() != nil {
-			t.Fatalf("%s still reported the stream absent after %s: %v", operation, streamAssignmentBudget, err)
+			t.Fatalf("%s did not become visible (budget %s, ctx: %v; last error: %v)",
+				operation, streamAssignmentBudget, waitCtx.Err(), err)
 		}
 		require.ErrorIs(t, err, jetstream.ErrStreamNotFound,
 			"%s failed for a reason other than cluster metadata propagation", operation)
@@ -307,11 +309,13 @@ func retryWhileStreamNotFound[T any](
 // tolerance, not the wire shape. nats.go v1.52.0 maps err_code 10059 to the
 // ErrStreamNotFound sentinel itself (CreateOrUpdateConsumer at
 // jetstream/consumer.go:328-330, Stream at jetstream/jetstream.go:816-817), so
-// today both guarded call sites return that sentinel by identity. errors.Is is chosen anyway because APIError.Is
-// (jetstream/errors.go:498-509) also resolves a raw or wrapped *APIError, so the
-// barrier survives a future path that returns one; the hand-built error below is
-// that future path, not a shape the wire emits.
-// TestRetryWhileStreamNotFoundMatchesTheWireAbsentError drives the real wire.
+// today both guarded call sites return that sentinel by identity. errors.Is is
+// chosen anyway because APIError.Is (jetstream/errors.go:498-509) also resolves
+// a raw or wrapped *APIError, so the barrier survives a future path that returns
+// one; the hand-built error below is that future path, not a shape the wire
+// emits. The real-wire pin, that an absent stream satisfies
+// errors.Is(err, jetstream.ErrStreamNotFound) through the production path, is
+// TestStartFailsLoudlyWhenCaptureStreamIsMissing.
 func TestRetryWhileStreamNotFoundToleratesARawAPIError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
@@ -328,19 +332,6 @@ func TestRetryWhileStreamNotFoundToleratesARawAPIError(t *testing.T) {
 	})
 	assert.Equal(t, "applied", visible)
 	assert.Equal(t, 3, attempts, "the fixture observes the server again instead of accepting the first answer")
-}
-
-// TestRetryWhileStreamNotFoundMatchesTheWireAbsentError drives the production
-// wire for the shape the barrier actually sees: a bare jetstream lookup of an
-// absent stream, which is exactly what the cluster fixture asks of a cold node.
-func TestRetryWhileStreamNotFoundMatchesTheWireAbsentError(t *testing.T) {
-	tc, ctx := integrationClient(t)
-	js, err := tc.Client.JetStream()
-	require.NoError(t, err)
-
-	_, err = js.Stream(ctx, "MAX_DELIVERY_NO_SUCH_STREAM")
-	require.ErrorIs(t, err, jetstream.ErrStreamNotFound,
-		"the barrier retries on exactly this error; if the wire stops matching it the barrier stops waiting")
 }
 
 func forceMaxDeliveryAdvisory(
