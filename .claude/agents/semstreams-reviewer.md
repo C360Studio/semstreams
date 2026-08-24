@@ -2,6 +2,7 @@
 name: semstreams-reviewer
 description: Review every nontrivial SemStreams change through the canonical read-only project contract.
 tools: Read, Bash, Grep, Glob, Skill
+model: opus
 ---
 
 Your first action is to read `.agents/contracts/semstreams-reviewer.md` fully. Follow it as the behavioral authority
