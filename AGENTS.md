@@ -36,6 +36,35 @@ Events → Graphable Interface → Knowledge Graph → Queries
   canonical `.agents/skills/<name>/SKILL.md` directly; the `.claude/skills/` entries of the same
   names are thin adapters to it.
 
+## Shared work protocol (Claude and Codex)
+
+State that both agents must see lives in the repository's tools — never in a prose document or either agent's private
+memory. Each question has one home, and each home is a `gh` or `task` query.
+
+| Question | Home | Rule |
+|---|---|---|
+| What is wanted, what kind, is it decided | GitHub issue + labels (`type:` / `area:` / `class:` / `status:` / `horizon:`) | `status:needs-decision` is the owner's docket; a ruling is posted as an issue comment and the label removed. `status:blocked` names its blocker in a comment. |
+| What gates the next tag | GitHub milestone named for the intended version | Membership is the gate: in or out; an unruled item is out. `horizon:pre-v1` means before v1.0.0, not before the next tag. |
+| An epic | A tracking issue labeled `type:epic` whose body carries a task list of `#n` children | GitHub renders the progress; there is no separate epic document. |
+| Who has claimed what | A **draft PR** opened at the start of the work, `Closes #n` in its body; the branch prefix names the agent (`claude/…`, `codex/…`) | No draft PR, no claim. Design-phase work claims the same way — the OpenSpec proposal is its first commit. A stop-point goes in the PR description. |
+| Target state and task truth | The OpenSpec change inside that PR; `task openspec:queue` reads its holds | Archiving the change is part of the landing PR, not a follow-up. |
+| Why | An ADR, or the owner's ruling comment on the issue | — |
+
+Rituals:
+
+- **Start:** `gh issue list --milestone <m> --state open` · `gh pr list` (drafts are claims — skip them) ·
+  `task openspec:queue` · `gh run list --branch main --limit 3` · `gh issue list --label status:needs-decision`.
+- **Take work:** an unclaimed milestone issue → branch → push → draft PR with `Closes #n` → then work.
+- **Land:** undraft → the repo's reviewer role, plus the owner-run cross-agent round where the owner asks for it →
+  CI green with **no known unfixed flake in a required job** (a fresh green over a known flake is rerun-to-green:
+  fix it, or file it and obtain an explicit owner waiver recorded as a PR comment) → squash merge closes the issue.
+  State `implemented-by: <model>` in the PR body.
+- **Close:** no issue closes without the owner's explicit CONFIRM-CLOSE.
+- **Tag:** milestone at 100% → candidate selection per `openspec/specs/release-candidate-proof/spec.md`. The
+  milestone never names the candidate SHA.
+
+There is no program baton document; `docs/proposals/*-program.md` files are retired history.
+
 ## Repository ownership boundary (HARD RULE)
 
 SemStreams agents mutate only the SemStreams repository. Sister repositories are read-only inventory sources: agents
