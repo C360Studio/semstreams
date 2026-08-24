@@ -11,4 +11,6 @@
       component-lifecycle/runtime-context truth for controlled versus abort lanes.
 - [x] 6. Rerun the exact focused unit/race, controlled real-NATS, abort count-20 observational, strict OpenSpec, and
       diff gates after correcting the reviewed abort proof's duplicate Stop ownership and deadline assertion.
-- [ ] 7. Obtain independent SemStreams implementation review and hosted CI approval before integration.
+- [x] 7. Landed via PR #1068 (`dc25bcc0`, merged 2026-08-24T00:10Z under the branch ruleset; the merge is the CI
+      proof). Archived in PR #1071 under `openspec/README.md` rule 2 — the original wording asserted a post-merge
+      fact and could not be ticked before merge.

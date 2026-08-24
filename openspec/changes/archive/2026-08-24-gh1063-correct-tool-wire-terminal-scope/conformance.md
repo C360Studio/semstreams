@@ -140,3 +140,6 @@ Both files were restored from their backups. Post-restoration SHA-256 values exa
 the policy guard returned GREEN and the prohibited-claim search returned no match.
 
 No deviation is recorded. Independent SemStreams reviewer approval remains required before archive or integration.
+
+Landing: PR #1068 (`dc25bcc0`, 2026-08-24). Archived in PR #1071; spec sync: agentic-tools requirement already
+identical in baseline.

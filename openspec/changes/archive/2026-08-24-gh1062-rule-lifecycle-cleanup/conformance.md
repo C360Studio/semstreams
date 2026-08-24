@@ -101,3 +101,6 @@ All replacement commands below passed on their first attempt after the mandatory
    Result: PASS with no output in less than 0.001 s. A final post-ledger rerun also passed with no output.
 
 No repository-wide Go gate, hosted-CI, tag-readiness, or merge-readiness claim is made.
+
+Landing: PR #1068 (`dc25bcc0`, 2026-08-24). Archived in PR #1071; spec sync: component-lifecycle already
+identical in baseline, runtime-context-ownership requirement appended.

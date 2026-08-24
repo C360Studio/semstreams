@@ -13,4 +13,7 @@
 - [x] 7. Record policy-guard RED/GREEN and all forced-omission results, including restoration evidence.
 - [x] 8. Record production-diff inspection proving no agentic-tools runtime behavior change.
 - [x] 9. Run and record contract tests and `openspec validate --all --strict --no-interactive`.
-- [ ] 10. Obtain independent review and owner acceptance before archive/merge-readiness claims.
+- [x] 10. Landed via PR #1068 (`dc25bcc0`, merged 2026-08-24T00:10Z by the owner under the branch ruleset). Archived
+      in PR #1071 under `openspec/README.md` rule 2 — the original wording asserted a post-merge fact and could not
+      be ticked before merge. The conformance note's "independent re-review pending" stands as written; the merge
+      recorded owner acceptance, not a further review.

@@ -88,6 +88,21 @@ jobs:
         # Fast-feedback duplicate of the coverage in the Test job's go test.
         run: go test ./test/natsclient/
 
+      # OpenSpec is validated here, not only in the tag proof: a change is
+      # archived in the PR that lands it (openspec/README.md rule 2), so the
+      # promoted specs must be checked on the same PR. Pinned CLI version so a
+      # new release cannot change validation semantics without a deliberate bump.
+      - name: Set up Node (OpenSpec CLI)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install OpenSpec CLI (pinned)
+        run: npm install -g @fission-ai/openspec@1.7.0
+
+      - name: Validate OpenSpec changes and specs (strict)
+        run: openspec validate --all --strict --no-interactive
+
   test:
     name: Test
     runs-on: ubuntu-latest
