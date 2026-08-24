@@ -35,13 +35,10 @@ silently stop matching the code. Two rules make that real:
    NOT backfill everything up front — pre-writing specs for areas that may change
    is dead work, and an unverified spec is just another drifting doc.
 2. **Archive changes in the PR that completes them.** A change is `proposal →
-   tasks → deltas → implement → review → owner cross-agent review → fixes/re-review
-   → archive`, and the archive is the **final content commit of the landing PR**,
-   never a follow-up PR. `openspec archive <id>` moves the change and promotes its
-   durable requirements into the baseline `specs/`; a narrow final review checks
-   that sync against the reviewed implementation before integration. Any correction
-   after archive re-enters reconciliation and final review—no later content commit
-   bypasses the archive/spec-sync check. The merge under the branch ruleset
+   tasks → deltas → implement → archive`, and the archive is the **last commit of
+   the landing PR**, never a follow-up PR: `openspec archive <id>` moves the change
+   and promotes its durable requirements into the baseline `specs/`, and that sync
+   is reviewed alongside the code it describes. The merge under the branch ruleset
    (required checks, no bypass) is the proof that the archived state is CI-green —
    an archive cannot reach `main` any other way, so nothing has to be assumed.
    Where a change lands over several PRs, the last one archives. Do not let

@@ -11,3 +11,5 @@
       downstream migration guide to the snapshot design.
 - [x] 8. Run unit, integration, race, lint, schema-drift, strict OpenSpec, and `task e2e:ops` verification.
 - [x] 9. Obtain SemStreams reviewer approval before integration.
+- [ ] 10. After release, communicate the migration to semdev and semteams owners without modifying either repository.
+- [ ] 11. Record downstream semdev adoption evidence before claiming the external copied-contract risk is retired.

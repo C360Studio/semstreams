@@ -111,10 +111,8 @@ until the owner explicitly accepts the reviewed design.
 - Confirm checked tasks are fully complete as worded. Split mixed tasks instead of treating partial evidence as done.
 - A task that asserts a post-merge fact — "CI green", "merged", "merge-ready", "hosted CI approval" — is a
   finding: it cannot be ticked before merge and strands the change unarchived. Require it rewritten as a
-  branch-checkable fact (PR number, recorded verdict, commands run). Run implementation review before archive. After
-  the owner-run cross-agent round and all fixes/re-review, narrowly check that the archive (`openspec archive <id>` +
-  spec sync) is the PR's final content commit and matches the reviewed implementation. A correction after archive
-  re-enters reconciliation and final review; no later content commit may bypass this check or defer it to a follow-up.
+  branch-checkable fact (PR number, recorded verdict, commands run). When the diff completes the change, confirm
+  the archive (`openspec archive <id>` + spec sync) is in this PR, not deferred to a follow-up.
 - Trace applicable paths end to end:
   producer -> graph-ingest -> `ENTITY_STATES` -> KV watchers -> derived indexes -> query/search/clustering.
 - Verify caller/callee behavior, error classes, state/readiness transitions, and operator-visible results with evidence.

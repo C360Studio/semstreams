@@ -26,9 +26,7 @@ Events → Graphable Interface → Knowledge Graph → Queries
   to role agents. There is no "don't spawn agents unless asked" rule in this repo.)
 - Generic Go agents are only an isolated idiom, concurrency, or runtime second pass; they do not replace any of the
   three roles.
-- The technical writer owns durable documentation and conservative OpenSpec task truth. When a platform has no mapped
-  technical-writer profile, the owner/root session materializes reviewed handoffs and reconciles task truth directly;
-  developer and reviewer roles do not absorb that authority.
+- The technical writer owns durable documentation and conservative OpenSpec task truth.
 - Canonical role contracts live in `.agents/contracts/`; platform adapters must remain thin.
 - Canonical shared decision skills live in `.agents/skills/` — kv-or-stream (KV Watch vs JetStream
   Stream, 4-test heuristic), entity-or-bucket (graph triples vs private/operational KV, and how a
@@ -57,14 +55,11 @@ Rituals:
 - **Start:** `gh issue list --milestone <m> --state open` · `gh pr list` (drafts are claims — skip them) ·
   `task openspec:queue` · `gh run list --branch main --limit 3` · `gh issue list --label status:needs-decision`.
 - **Take work:** an unclaimed milestone issue → branch → push → draft PR with `Closes #n` → then work.
-- **Land:** implementation review → the owner-run cross-agent round where the owner asks for it → fixes and re-review →
-  archive as the final content commit → narrow reviewer check of the archive/spec sync → undraft → CI green with
-  **no known unfixed flake in a required job** (a fresh green over a known flake is rerun-to-green: fix it, or file it
-  and obtain an explicit owner waiver recorded as a PR comment) → squash merge closes the issue. A correction after
-  archive re-enters reconciliation and final review; no later content commit bypasses the archive/spec-sync check.
-  State `implemented-by: <persona>` in the PR body; Codex uses `Sol`.
-- **Close:** no issue closes without the owner's explicit `CONFIRM-CLOSE` visible in the issue or PR. A chat-only signal
-  is not shared durable state and does not authorize a `Closes #n` merge.
+- **Land:** undraft → the repo's reviewer role, plus the owner-run cross-agent round where the owner asks for it →
+  CI green with **no known unfixed flake in a required job** (a fresh green over a known flake is rerun-to-green:
+  fix it, or file it and obtain an explicit owner waiver recorded as a PR comment) → squash merge closes the issue.
+  State `implemented-by: <model>` in the PR body.
+- **Close:** no issue closes without the owner's explicit CONFIRM-CLOSE.
 - **Tag:** milestone at 100% → candidate selection per `openspec/specs/release-candidate-proof/spec.md`. The
   milestone never names the candidate SHA.
 

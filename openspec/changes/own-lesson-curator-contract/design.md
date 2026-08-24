@@ -1,6 +1,6 @@
 # Issue #1029 Historical Constructor Correction
 
-Status: owner-accepted, independently reviewed, and implemented in PR #1036.
+Status: accepted owner correction pending independent design review.
 
 Baseline: `7b6ff1e1a2718b4dd3087904748c296cb73215d2`.
 
@@ -158,5 +158,5 @@ SemStreams publishes migration instructions but does not edit sister repositorie
 | Preserve identity through lifecycle mutation | `processor/agentic-tools/lesson_promotion_integration_test.go` records all 11 birth-predicate object sets, exercises promote, supersede, retire, and sibling cleanup, and verifies an identical strict re-emission. |
 | Count ops stages and assert identity evidence | `test/e2e/scenarios/ops/scenario.go` requires retained lesson identity facts and increments the assertion count once per completed load-bearing stage; `scenario_test.go` proves success and early-failure accounting. |
 | Keep generic semantics and #818 unchanged | The change touches no graph-ingest mutation policy, lifecycle producer contract, rule producer, gated-DAG producer, Graphable replacement path, wire type, subject, bucket, or stream. |
-| Do not claim external retirement prematurely | `docs/operations/migration-owned-lesson-curator-contract.md` gives adopter-owned migration steps; Issue #1029 owns release communication and downstream adoption evidence. |
+| Do not claim external retirement prematurely | `docs/operations/migration-owned-lesson-curator-contract.md` gives adopter-owned migration steps; tasks 10 and 11 remain open until release communication and semdev adoption evidence exist. |
 | Add no bespoke agent/persona/role | The production delta is a projection-contract accessor plus existing curator composition; it adds no prompt, persona, role registry, agent type, or LLM behavior. |
