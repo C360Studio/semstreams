@@ -56,7 +56,10 @@ Rituals:
 
 - **Start:** `gh issue list --milestone <m> --state open` · `gh pr list` (drafts are claims — skip them) ·
   `task openspec:queue` · `gh run list --branch main --limit 3` · `gh issue list --label status:needs-decision`.
-- **Take work:** an unclaimed milestone issue → branch → push → draft PR with `Closes #n` → then work.
+- **Take work:** an unclaimed milestone issue → dedicated worktree on an agent-prefixed branch → push → draft PR with
+  `Closes #n` → then work. One claimed PR owns one worktree. When multiple agents share a host, the primary checkout is
+  discovery-only; no agent commits from it. Immediately before every commit and push, verify that the worktree's
+  current branch is the draft PR head; a mismatch stops the operation.
 - **Land:** implementation review → the owner-run cross-agent round where the owner asks for it → fixes and re-review →
   archive as the final content commit → narrow reviewer check of the archive/spec sync → undraft → CI green with
   **no known unfixed flake in a required job** (a fresh green over a known flake is rerun-to-green: fix it, or file it
