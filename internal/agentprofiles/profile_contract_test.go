@@ -111,6 +111,14 @@ func TestProfileContract(t *testing.T) {
 		}
 	})
 
+	t.Run("shared work protocol is symmetric", func(t *testing.T) {
+		agents := markdownSection(t, readProfileFile(t, root, "AGENTS.md"), "## Shared work protocol (Claude and Codex)")
+		claude := markdownSection(t, readProfileFile(t, root, "CLAUDE.md"), "## Shared work protocol (Claude and Codex)")
+		if agents != claude {
+			t.Error("AGENTS.md and CLAUDE.md must have identical Shared work protocol sections")
+		}
+	})
+
 	t.Run("shared contracts are tracked", func(t *testing.T) {
 		body := readProfileFile(t, root, ".gitignore")
 		if strings.Contains(body, ".agents/") {

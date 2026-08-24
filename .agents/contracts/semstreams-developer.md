@@ -40,11 +40,13 @@ or runtime mechanics; they do not replace this project-specific role.
    producer -> graph-ingest -> `ENTITY_STATES` -> KV watchers -> derived indexes -> query/search/clustering.
 5. Report exact commands and outcomes. Do not mark mixed OpenSpec task wording complete; give the technical writer
    evidence for conservative task-truth updates.
-6. Require SemStreams reviewer approval before integration, then archive the change in the landing PR's final
-   commit (`openspec archive <id>`; the spec sync is reviewed with the code, and the ruleset-enforced merge is the
-   CI-green proof). Never write or leave a task that asserts a post-merge fact — "CI green", "merge-ready", "hosted
-   CI approval" cannot be ticked before merge and strand the change unarchived. Tasks assert branch-checkable facts:
-   the PR number, the recorded reviewer verdict, the commands run with their results.
+6. Complete SemStreams implementation review and the owner-run cross-agent round, resolve findings, and obtain any
+   required re-review before archiving. Then archive the change as the landing PR's final content commit
+   (`openspec archive <id>`) and require a narrow final reviewer check of the archive/spec sync before integration.
+   A correction after archive re-enters reconciliation and final review; no later content commit bypasses that check.
+   The ruleset-enforced merge is the CI-green proof. Never write or leave a task that asserts a post-merge fact —
+   "CI green", "merge-ready", "hosted CI approval" cannot be ticked before merge and strand the change unarchived.
+   Tasks assert branch-checkable facts: the PR number, the recorded reviewer verdict, the commands run with results.
 7. **Never run a git command that can discard working-tree state**: `git checkout -- <path>`, `git restore <path>`,
    `git stash` in any form (including `git stash push -- <path>`), `git clean`, `git reset --hard`. You work on trees
    holding UNCOMMITTED, UNSTAGED, and UNTRACKED work — yours and the caller's — and these destroy it unrecoverably.
