@@ -313,6 +313,30 @@ Structural facts only. For each, decide what a rule may match on and withhold au
       Both carry `Status: UNSIGNED`. `conformance.md` no longer says "Accepted design" and now states
       that the design gate is open. Task 10.3 is demoted to `[~]` and superseded by section 12. Neither
       `INVENTORY PASS` nor `DESIGN REVIEW PASS` is written anywhere except as a NOT-GRANTED statement.
+- [x] 11.7 PRODUCTION-SEAM half of the round-4 HIGH remediated in-tree (the e2e-TIER half stays #1058):
+      `TestIntegration_RuleReadableProjectionProductionLifecycle`
+      (`processor/rule/payload_projection_integration_test.go`, `-tags=integration`, testcontainers
+      NATS) drives `rule.CreateRuleProcessor` from operator-shaped JSON config through
+      `component.AsLifecycleComponent` → `Initialize` → `Start` (real NATS core subscription on the
+      declared input port) → production-registry decode → projection → `StatefulEvaluator` OnEnter
+      against the real `RULE_STATE` KV bucket → `ActionExecutor` substitution → observable publish on
+      a real NATS output subject → bounded-context `Stop`. Asserts the substituted subject token
+      (`$message.task_id`) and three substituted properties, absence of withheld `Result`/`Prompt`
+      and of unresolved `$message.*` templates, persisted `MatchState` for both lanes (positive
+      `entered`/matching, negative not-matching), and that the negative lane fires nothing — proven
+      causally (single-connection publish ordering plus the negative's persisted state), not by
+      sleeping. Mutation L (revert `ruleFields` to the pre-change generic-only read) makes it fail
+      with "rule action output never arrived on the real output subject" while the S2 unreadable
+      report fires for `agentic.loop_completed.v1`; `cp`+`md5 -q` backup/restore with `[applied]`
+      printed between mutation and test, no git-destructive commands. Suite evidence on this
+      pre-#1068 base: isolated run green (1.03s); full
+      `go test -race -tags=integration -p 2 ./processor/rule/...` run 1 hit the 10m binary timeout
+      with the goroutine dump in an EXISTING test's `CronScheduler.Stop` drain wait (this branch
+      predates main's dc25bcc0 lifecycle-drain fixes; not investigated, per owner directive), run 2
+      green in 43.0s with 700 passes including this test. Of #1058's four unproven bullets this
+      discharges the component factory + `Initialize`/`Start`, real NATS delivery, real KV-backed
+      state storage, and observable transport output; the DEPLOYED-FLOW e2e tier assertion remains
+      #1058's scope.
 
 ## 12. Exported-surface design gate — OPEN, owner-issued
 
