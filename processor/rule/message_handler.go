@@ -405,16 +405,35 @@ func (rp *Processor) matchesRuleSubject(r Rule, subject string) bool {
 	return false
 }
 
-// extractEntityID extracts the entity ID from a message for state tracking.
+// extractEntityID extracts the durable state-tracking identity for a
+// message-path stateful evaluation: it becomes Evaluation.EntityID and,
+// through StatefulEvaluator.entityKey, the RULE_STATE key.
 //
-// Reads the projection from `ruleFields`, so a typed payload that declares an
-// `entity_id` field is tracked by it exactly as a core.json.v1 payload always
-// was. An unreadable payload falls through to the message ID, as before.
+// TWO RESPONSIBILITIES MEET AT THIS SEAM AND ONLY ONE BELONGS TO THE
+// PROJECTION. `ruleFields` (message.RuleReadable) is the condition-visibility
+// and `$message.*` substitution contract — it decides what a rule may match
+// on and template in, and extractMessageData rightly reads it. Durable state
+// IDENTITY is deliberately NOT derived from it: a typed-payload author who
+// exposes `entity_id` for matching would otherwise silently collapse every
+// message carrying that value onto one RULE_STATE record, so the second
+// false→true evaluation becomes TransitionNone and on_enter is suppressed —
+// a state-machine defect the author could neither see nor opt out of.
+//
+// The split below is the exact pre-projection baseline (774c85dc):
+//
+//   - *message.GenericJSONPayload keeps its legacy Data["entity_id"] state
+//     identity, unchanged since before RuleReadable existed.
+//   - Every other payload type uses the wire message ID, whatever its
+//     projection exposes. A typed-payload state-identity contract, if one
+//     is ever wanted, is a separately reviewed design — not a side effect
+//     of a projection gaining an `entity_id` key.
 func extractEntityID(msg message.Message) string {
-	if fields, readable := ruleFields(msg); readable {
-		if entityID, exists := fields["entity_id"]; exists {
-			if id, ok := entityID.(string); ok {
-				return id
+	if payload := msg.Payload(); payload != nil {
+		if genericPayload, ok := payload.(*message.GenericJSONPayload); ok {
+			if entityID, exists := genericPayload.Data["entity_id"]; exists {
+				if id, ok := entityID.(string); ok {
+					return id
+				}
 			}
 		}
 	}

@@ -216,8 +216,8 @@ func TestIntegration_RuleReadableProjectionProductionLifecycle(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(first.data, &body))
 	require.Equal(t, "rule_engine", body.Source)
-	// Message-path state identity: no entity_id in the projection, so the
-	// engine falls back to the wire message ID.
+	// Message-path state identity for a typed payload is the wire message
+	// ID — never the projection, whatever fields it exposes.
 	require.Equal(t, posMsg.ID(), body.EntityID)
 	require.Equal(t, "loop-architect-7", body.Properties["upstream_loop"],
 		"$message.loop_id did not substitute into the action properties")

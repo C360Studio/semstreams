@@ -66,7 +66,11 @@ concern, and it is live: `Violation.OriginalContent` carries up to 500 character
   no separate `GenericJSONPayload` fallback, because `GenericJSONPayload` implements the interface and
   only `*GenericJSONPayload` satisfies `message.Payload`, making such a branch provably unreachable.
   Generic payloads stay readable through `GenericJSONPayload.RuleFields()`. One home for interpreting a
-  shared type.
+  shared type. (Round-5 correction: `extractEntityID` was subsequently EXCLUDED from the helper again —
+  it answers durable state identity, not field visibility, and routing it through the projection let a
+  typed payload exposing `entity_id` collapse distinct messages onto one `RULE_STATE` record. It reads
+  the generic payload's legacy `entity_id` directly, exactly as at baseline; the helper's callers are
+  the three visibility sites. See conformance S6.)
 
 - **An unreadable payload becomes observable.** A rule with `$message.*` conditions whose payload
   implements neither surface currently evaluates to `false` forever in silence. It must surface —

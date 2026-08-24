@@ -343,6 +343,30 @@ Structural facts only. For each, decide what a rule may match on and withhold au
       state storage, and observable transport output; the DEPLOYED-FLOW e2e tier assertion remains
       #1058's scope.
 
+- [x] 11.8 ROUND-5 BLOCKING finding fixed: `extractEntityID` no longer derives durable state identity
+      from the projection. Baseline measured first (`git show 774c85dc:processor/rule/message_handler.go`):
+      generic payloads read `Data["entity_id"]` (string) for state identity, every other payload type
+      used the wire message ID. The projection change had silently widened that to any RuleReadable
+      payload exposing `entity_id`, so a typed-payload author exposing it for MATCHING would collapse
+      distinct messages onto one `RULE_STATE` record — second false→true evaluation becomes
+      `TransitionNone`, `on_enter` suppressed. Fix restores the exact baseline split with a seam
+      comment naming the two responsibilities (condition visibility + `$message.*` substitution vs
+      durable state identity) and why the projection is excluded from the latter; no new typed-payload
+      identity mechanism invented (deferred to a separately reviewed contract, per the review).
+      `extractMessageData` keeps reading `ruleFields` (substitution data, not identity). Propagation:
+      `payload_projection.go` header now lists THREE callers and names `extractEntityID` as
+      deliberately not one; conformance S1 grep claim corrected (the fix reintroduces one non-test
+      `GenericJSONPayload` assertion, at the identity seam); `proposal.md` four-switches bullet carries
+      the round-5 correction; integration-test comment updated. Tests in
+      `processor/rule/entity_state_identity_test.go` (see conformance S6): the acceptance test failed
+      pre-fix with "OnEnter fired 1 times, want 2", passed post-fix; mutation M (re-couple to
+      `ruleFields`) re-fails it; `cp`+`md5 -q` backup/restore with `[applied]` printed between
+      mutation and test. Gates: `go test -race ./processor/rule/...` green; isolated
+      `TestIntegration_RuleReadableProjectionProductionLifecycle` run green (2.2s); full integration
+      suite deferred to the post-landing run per owner directive. No existing test had pinned the
+      generic `entity_id` state-identity behavior (verified by grep); it is now pinned by
+      `TestGenericPayloadEntityIDStateIdentityUnchanged` and `TestExtractEntityIDSeam`.
+
 ## 12. Exported-surface design gate — CLOSED 2026-08-24
 
 - [x] 12.1 `INVENTORY PASS` — GRANTED 2026-08-24 by an independent reviewer session under
