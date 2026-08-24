@@ -70,3 +70,5 @@ testing. No `git stash` at any point — the stack held 5 unrelated entries at s
 
 (K — the restored-`finish_reason` mutation — is cited at `tasks.md` 11.1 from the round-4 remediation but
 was never entered in this table; it is not re-run or reconstructed here.)
+
+Landing: PR #1052 (`e3a91dff`, 2026-08-24). Archived in PR #1071; spec sync: two rule-engine requirements appended.

@@ -82,3 +82,5 @@ graph-index causal tests, repository race suite, lint, diff check, and strict Op
 
 This evidence closes only the accepted graph-index partial-Start subscription boundary. It makes no adjacent
 lifecycle, manager, sibling-owner, adopter, LLM, persona, prompt, model-call, or runtime-agent completion claim.
+
+Landing: PR #1040 (`43dbf6fb`, 2026-08-22). Archived in PR #1071; spec sync: graph-index requirement appended.
