@@ -1228,7 +1228,13 @@ func (m *Client) PublishBatchToStream(ctx context.Context, subject string, msgs 
 		failed, len(msgs), ackFailures, stderrors.Join(errsList...))
 }
 
-// GetStream gets an existing JetStream stream
+// GetStream gets an existing JetStream stream.
+//
+// Its jetstream.ErrStreamNotFound means "not on this connection, now" — it is a
+// point-in-time probe, not durable evidence of absence, because a clustered node
+// that has not applied the meta assignment answers it for a stream that exists.
+// A caller deciding something for the process lifetime wants ErrStreamNotVisible
+// out of the guarded consumer setup instead; see that sentinel and the package doc.
 func (m *Client) GetStream(ctx context.Context, name string) (jetstream.Stream, error) {
 	// Check circuit breaker first
 	if m.Status() == StatusCircuitOpen {
@@ -1247,12 +1253,18 @@ func (m *Client) GetStream(ctx context.Context, name string) (jetstream.Stream, 
 
 	stream, err := js.Stream(ctx, name)
 	if err != nil {
-		// ErrStreamNotFound is a successful probe result (the stream is absent),
-		// not a transport or availability failure.  Counting it as a failure
-		// would trip the circuit breaker on legitimate existence probes — e.g.
-		// the agentrun MilestoneSubscriber that skips setup when no AGENT stream
-		// exists.  Only genuine failures (timeout, no-responders, etc.) should
-		// move the breaker.
+		// ErrStreamNotFound is a successful probe result (the stream is absent on
+		// this connection right now), not a transport or availability failure.
+		// Counting it as a failure would trip the circuit breaker on legitimate
+		// existence probes — a component checking whether an optional stream is
+		// present, a diagnostic sweep, a caller deciding whether to provision.
+		// Only genuine failures (timeout, no-responders, etc.) should move the
+		// breaker.
+		//
+		// The exemption is why this seam is deliberately NOT wired to the
+		// consumer setup path's stream-visibility wait: a cheap probe stays
+		// cheap. It is also why its answer is not evidence of absence — see the
+		// package doc, and ErrStreamNotVisible for the answer that is.
 		if !stderrors.Is(err, jetstream.ErrStreamNotFound) {
 			m.recordFailure()
 			m.jsMetrics.recordError("get_stream")

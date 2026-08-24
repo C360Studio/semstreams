@@ -72,12 +72,28 @@
 //
 //	if _, err := client.GetStream(ctx, streamName); err != nil {
 //	    if errors.Is(err, jetstream.ErrStreamNotFound) {
-//	        // A real answer: the declaring component is not deployed here.
-//	        // Handle it — do not create the stream to make the error go away.
+//	        // The stream is not there RIGHT NOW. Handle that — and do not create
+//	        // the stream to make the error go away.
 //	        return nil
 //	    }
 //	    return err
 //	}
+//
+// One probe's not-found is NOT durable evidence that the declaring component is
+// absent. On a clustered deployment it is equally what a node that has not applied
+// the meta assignment says about a stream that exists. So a decision taken for the
+// PROCESS LIFETIME on that answer — disabling a subscriber, skipping a component,
+// reporting a deployment shape — is decided by cluster timing, and it fails in the
+// worst direction: boot SUCCEEDS and the work silently never happens.
+//
+// Take that decision from the guarded consumer setup instead.
+// ConsumeStreamWithConfig, ConsumeStreamWithConfigContexts and
+// ConsumeInternalStreamWithConfig wait out the propagation window, and the error
+// they return carries ErrStreamNotVisible only when the stream stayed absent for
+// the framework's whole visibility budget. Branch on that sentinel — never on a
+// bare jetstream.ErrStreamNotFound, which those same operations also return for
+// a consumer-creation or consumer-observation fault against a stream that is
+// present.
 //
 // This is not style. EnsureStream is get-or-create: a reader that calls it with
 // its own configuration either creates the stream with limits it does not own, or

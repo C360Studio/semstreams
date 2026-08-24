@@ -701,23 +701,6 @@ func (s *MilestoneSubscriber) Start(
 		return nil, fmt.Errorf("agentrun: MilestoneSubscriber.Start: StreamName must not be empty")
 	}
 
-	// Graceful no-op when the target stream is absent (gh#246). The
-	// agent-run milestone subscriber only matters when agentic components
-	// run — they create the AGENT stream and publish agent.complete.* /
-	// agent.failed.*. A deployment without them (graph- or lifecycle-only)
-	// has nothing to subscribe to and must still BOOT; before this, the
-	// consumer start surfaced "stream not found" and both binaries
-	// returned it from run() → os.Exit(1). The returned no-op stop is safe
-	// to defer at the call site.
-	if _, streamErr := client.GetStream(ctx, cfg.StreamName); streamErr != nil {
-		if errors.Is(streamErr, jetstream.ErrStreamNotFound) {
-			s.logger.Info("agentrun: MilestoneSubscriber disabled — stream not present",
-				slog.String("stream", cfg.StreamName),
-				slog.String("hint", "likely no agentic components in this deployment (or the stream isn't created yet at boot); agent.complete/failed milestones will not be processed"))
-			return func(context.Context) error { return nil }, nil
-		}
-		return nil, fmt.Errorf("agentrun: MilestoneSubscriber.Start: check stream %q: %w", cfg.StreamName, streamErr)
-	}
 	makeDurable := func(suffix string) string {
 		name := "agentrun-milestone-" + suffix
 		if cfg.ConsumerNameSuffix != "" {
@@ -761,6 +744,37 @@ func (s *MilestoneSubscriber) Start(
 	)
 	if err != nil {
 		cancel()
+		// Graceful no-op when the target stream is absent (gh#246). The
+		// agent-run milestone subscriber only matters when agentic components
+		// run — they create the AGENT stream and publish agent.complete.* /
+		// agent.failed.*. A deployment without them (graph- or lifecycle-only)
+		// has nothing to subscribe to and must still BOOT; before this, the
+		// consumer start surfaced "stream not found" and both binaries
+		// returned it from run() → os.Exit(1). The returned no-op stop is safe
+		// to defer at the call site.
+		//
+		// The decision reads natsclient.ErrStreamNotVisible, NOT a bare
+		// jetstream.ErrStreamNotFound. Three seams inside consumer setup can put
+		// the absent classification into this chain — the guarded stream lookup,
+		// consumer creation, and the initial consumer observation — and only the
+		// first is a statement about whether the stream exists. Branching on the
+		// bare classification disabled this subscriber for the process lifetime
+		// when consumer CREATION answered not-found with the stream present, and
+		// boot still reported success.
+		//
+		// The sentinel is produced only when the framework spent its entire
+		// visibility budget re-observing a stream reported absent, and never when
+		// the caller's context ended that wait — so an unguarded probe's 404 on a
+		// lagging node (gh#1073) and a cancelled boot both fail closed here,
+		// by construction rather than by the order of this if.
+		if errors.Is(err, natsclient.ErrStreamNotVisible) {
+			s.logger.Info("agentrun: MilestoneSubscriber disabled — stream not present",
+				slog.String("stream", cfg.StreamName),
+				slog.String("hint", "likely no agentic components in this deployment; the stream stayed "+
+					"absent for the framework's whole stream-visibility budget, which is also why this "+
+					"boot took that budget longer; agent.complete/failed milestones will not be processed"))
+			return func(context.Context) error { return nil }, nil
+		}
 		return nil, fmt.Errorf("agentrun: MilestoneSubscriber: start durable consumer agent.complete.*: %w", err)
 	}
 	owner.mu.Lock()
@@ -780,6 +794,10 @@ func (s *MilestoneSubscriber) Start(
 		runCtx, failedCfg, handleMsg("agent.failed.*"),
 	)
 	if err != nil {
+		// Deliberately NOT graceful, including for a not-found: the complete
+		// consumer bound to this stream moments ago, so an absent stream here is
+		// an inconsistency to surface, not a deployment without agentic
+		// components.
 		rollbackErr := lifecyclecleanup.RollbackFailedStart(ctx, stop)
 		startErr := fmt.Errorf("agentrun: MilestoneSubscriber: start durable consumer agent.failed.*: %w", err)
 		if rollbackErr == nil {
