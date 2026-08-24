@@ -184,6 +184,13 @@ Only the absent classification SHALL be re-observed; every other lookup failure 
 observation. The budget SHALL be framework-owned, with no operator configuration and no caller-supplied wait, so no
 adopter predicts a propagation delay the framework observes. A returned absent classification therefore means the
 stream was absent continuously for at least the budget, and a setup that fails this way carries the budget's latency.
+The auto-create pre-check is exempt from the wait: an absent answer there is the trigger to create the stream, not a
+failure to report.
+
+A caller deciding anything durable from absence — disabling a subscriber, skipping a component, reporting a deployment
+shape — MUST branch on the framework's exported not-visible sentinel rather than on the absent classification alone,
+because consumer creation and initial consumer observation can also answer with the absent classification for a stream
+that is present.
 
 #### Scenario: The stream becomes visible within the budget
 
@@ -203,6 +210,20 @@ stream was absent continuously for at least the budget, and a setup that fails t
 - **GIVEN** the stream lookup fails with a permission, transport, or cancellation error
 - **WHEN** setup observes that failure
 - **THEN** it is returned without any further observation of the stream
+
+#### Scenario: A spent budget is durable evidence of absence
+
+- **GIVEN** consumer setup re-observed a stream reported absent until the budget was spent
+- **WHEN** the failure reaches the caller
+- **THEN** the returned error carries the framework's exported not-visible sentinel
+- **AND** it carries the absent classification on the same error
+
+#### Scenario: The caller ends the wait before the budget
+
+- **GIVEN** the caller's context ends while setup is still re-observing an absent stream
+- **WHEN** the failure reaches the caller
+- **THEN** the returned error carries the caller's own cause and the absent classification
+- **AND** it does NOT carry the not-visible sentinel, because a wait cut short measured nothing
 
 ### Requirement: Metric registration returns one canonical collector
 

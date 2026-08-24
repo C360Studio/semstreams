@@ -1247,12 +1247,18 @@ func (m *Client) GetStream(ctx context.Context, name string) (jetstream.Stream, 
 
 	stream, err := js.Stream(ctx, name)
 	if err != nil {
-		// ErrStreamNotFound is a successful probe result (the stream is absent),
-		// not a transport or availability failure.  Counting it as a failure
-		// would trip the circuit breaker on legitimate existence probes — e.g.
-		// the agentrun MilestoneSubscriber that skips setup when no AGENT stream
-		// exists.  Only genuine failures (timeout, no-responders, etc.) should
-		// move the breaker.
+		// ErrStreamNotFound is a successful probe result (the stream is absent on
+		// this connection right now), not a transport or availability failure.
+		// Counting it as a failure would trip the circuit breaker on legitimate
+		// existence probes — a component checking whether an optional stream is
+		// present, a diagnostic sweep, a caller deciding whether to provision.
+		// Only genuine failures (timeout, no-responders, etc.) should move the
+		// breaker.
+		//
+		// The exemption is why this seam is deliberately NOT wired to the
+		// consumer setup path's stream-visibility wait: a cheap probe stays
+		// cheap. It is also why its answer is not evidence of absence — see the
+		// package doc, and ErrStreamNotVisible for the answer that is.
 		if !stderrors.Is(err, jetstream.ErrStreamNotFound) {
 			m.recordFailure()
 			m.jsMetrics.recordError("get_stream")

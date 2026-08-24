@@ -5,9 +5,13 @@ package natsclient
 // Background (gh#248): GetStream previously called recordFailure() on ANY
 // error, including the benign jetstream.ErrStreamNotFound.  An existence
 // probe that gets "stream not found" is a successful probe — the answer is
-// "no" — not a transport failure.  Counting it as a failure can trip the
-// circuit breaker on deployments that routinely probe for an absent stream
-// (e.g. the agentrun MilestoneSubscriber).
+// "not here, now" — not a transport failure.  Counting it as a failure can
+// trip the circuit breaker on deployments that routinely probe for an absent
+// stream: an optional-stream check, a diagnostic sweep, a caller deciding
+// whether to provision.  (The original exemplar, agentrun's MilestoneSubscriber
+// precondition, is gone: gh#1073 moved that decision onto the guarded consumer
+// setup, because one probe's answer is not evidence of absence.  The exemption
+// stays — it is what keeps a cheap probe cheap.)
 //
 // Fix: ErrStreamNotFound is now exempt from recordFailure(); all other errors
 // still trip the breaker.

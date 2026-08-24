@@ -111,6 +111,8 @@ func TestConsumerSetupFailsLoudlyWhenStreamNeverBecomesVisible(t *testing.T) {
 			require.Nil(t, handle)
 			require.ErrorIs(t, err, jetstream.ErrStreamNotFound,
 				"an exhausted visibility budget must still report the stream as absent")
+			require.ErrorIs(t, err, ErrStreamNotVisible,
+				"a spent budget is the durable evidence of absence callers branch on")
 			require.True(t, errs.IsTransient(err),
 				"the failure keeps its existing transient classification")
 

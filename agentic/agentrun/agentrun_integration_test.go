@@ -278,10 +278,16 @@ func TestIntegration_MilestoneSubscriberCancelledBootIsNotAGracefulSkip(t *testi
 
 // TestIntegration_MilestoneSubscriber_StartsWhenStreamPresent confirms the normal
 // path is unchanged by the gh#246 graceful-skip: with the AGENT stream present,
-// Start wires the durable consumers and returns a real stop.
+// Start wires the durable consumers and the subscriber is LIVE.
+//
+// Liveness is asserted on the wire, by a handled milestone. A nil error plus a
+// non-nil stop is NOT the assertion to make here: the graceful-skip path returns
+// exactly that shape, so this test passed while the subscriber had silently
+// disabled itself — which is how a not-found from consumer CREATION, with the
+// stream present, went unnoticed.
 func TestIntegration_MilestoneSubscriber_StartsWhenStreamPresent(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(graph.BucketEntityStates))
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err := tc.CreateStream(ctx, agentrun.AgentStreamName, []string{"agent.>"})
 	require.NoError(t, err, "create AGENT stream")
@@ -289,6 +295,8 @@ func TestIntegration_MilestoneSubscriber_StartsWhenStreamPresent(t *testing.T) {
 	mgr := lifecycle.NewManager(tc.Client, nil)
 	require.NoError(t, agentrun.Register(mgr))
 	sub := agentrun.NewMilestoneSubscriber(mgr, nil, "acme", "ops", nil)
+	handler := &integrationMilestoneHandler{events: make(chan agentrun.LoopTerminalEvent, 1)}
+	sub.AddHandler(handler)
 
 	stop, err := sub.Start(ctx, tc.Client, agentrun.StartConfig{
 		StreamName:         agentrun.AgentStreamName,
@@ -296,7 +304,22 @@ func TestIntegration_MilestoneSubscriber_StartsWhenStreamPresent(t *testing.T) {
 	})
 	require.NoError(t, err, "Start must succeed when the AGENT stream is present")
 	require.NotNil(t, stop)
-	require.NoError(t, stop(ctx))
+	defer func() { require.NoError(t, stop(ctx)) }()
+
+	payload := &agentic.LoopCompletedEvent{
+		LoopID: "run-present", TaskID: "task-present", Outcome: agentic.OutcomeSuccess,
+		CompletedAt: time.Now().UTC(), RunEntityID: "missing-run-present",
+	}
+	data, marshalErr := json.Marshal(message.NewBaseMessage(payload.Schema(), payload, "agentic-loop"))
+	require.NoError(t, marshalErr)
+	require.NoError(t, tc.Client.PublishToStream(ctx, "agent.complete."+payload.Schema().Category, data))
+
+	select {
+	case event := <-handler.events:
+		assert.Equal(t, "run-present", event.LoopID)
+	case <-time.After(10 * time.Second):
+		t.Fatal("a subscriber reported as started did not handle a milestone")
+	}
 }
 
 func TestIntegration_MilestoneSubscriberDrainsBothHandlesBeforeWaiting(t *testing.T) {

@@ -135,6 +135,53 @@ func TestEnsureStream_BindDivergence(t *testing.T) {
 			"omitting a field is not declaring zero, and reporting it would drown the real signal")
 	})
 
+	// The THIRD bind path, and the one that was still silent after #730: consumer
+	// auto-create. A caller that reaches it declares an entire stream, and when the
+	// stream already exists that declaration is dropped in favour of the live one —
+	// the same discard, through a seam whose name says "create".
+	//
+	// Its sibling, a create that loses the race and is answered 10058, reports
+	// through this same call after resolving the live handle. That race is not
+	// reproducible on one node, so what is pinned here is the report; the 10058
+	// branch is pinned by the unit test that proves setup continues past it.
+	t.Run("a consumer auto-create bind reports what it discarded", func(t *testing.T) {
+		logs.Reset()
+
+		_, err := js.CreateStream(ctx, jetstream.StreamConfig{
+			Name:     "AUTOBIND",
+			Subjects: []string{"autobind.>"},
+			Storage:  jetstream.MemoryStorage,
+			MaxAge:   48 * time.Hour,
+			MaxBytes: 16 << 20,
+		})
+		require.NoError(t, err)
+
+		handle, err := client.ConsumeInternalStreamWithConfig(ctx, StreamConsumerConfig{
+			StreamName:    "AUTOBIND",
+			ConsumerName:  "autobind-consumer",
+			FilterSubject: "autobind.work",
+			AckPolicy:     "explicit",
+			DeliverPolicy: "all",
+			AutoCreate:    true,
+			AutoCreateConfig: &StreamAutoCreateConfig{
+				Subjects: []string{"autobind.>"},
+				MaxAge:   time.Hour,
+				MaxBytes: 1 << 20,
+				Discard:  jetstream.DiscardOld,
+			},
+		}, func(context.Context, jetstream.Msg) {})
+		require.NoError(t, err, "binding is not the moment to enforce a declaration")
+		t.Cleanup(func() {
+			handle.Drain()
+			<-handle.Closed()
+		})
+
+		logged := logs.String()
+		assert.Contains(t, logged, "diverges from this caller's declaration")
+		assert.Contains(t, logged, "AUTOBIND")
+		assert.Contains(t, logged, "MaxAge")
+	})
+
 	// The bind path's OTHER report, which exists because the one above cannot see
 	// this case. An under-declared caller — the shape the create-versus-bind split
 	// sends here — declares nothing to compare, so the declared-versus-observed

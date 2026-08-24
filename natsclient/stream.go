@@ -301,6 +301,28 @@ const (
 	streamVisibilityBudget = 5 * time.Second
 )
 
+// ErrStreamNotVisible reports that a stream this connection was told did not
+// exist stayed absent for the framework's entire stream-visibility budget.
+//
+// It is the only durable evidence of absence natsclient produces, and a caller
+// deciding anything for the process lifetime — disabling a subscriber, skipping
+// a component, reporting a deployment shape — branches on THIS. A bare
+// jetstream.ErrStreamNotFound is not evidence of absence: on a clustered
+// deployment it is equally what a node that has not applied the meta assignment
+// says about a stream that exists, and it also reaches a consumer-setup caller
+// from consumer CREATION and consumer OBSERVATION, neither of which is a
+// statement about the stream's existence at all.
+//
+// The contract, in three parts:
+//   - Produced only when the visibility budget was spent re-observing a stream
+//     reported absent on this connection.
+//   - Always joined with the absent classification, so
+//     errors.Is(err, jetstream.ErrStreamNotFound) holds on the same error.
+//   - NEVER produced when the caller's context ended the wait. That error
+//     carries the caller's own cause joined with the absent classification,
+//     because a wait the caller cut short measured nothing.
+var ErrStreamNotVisible = errors.New("stream not visible for the whole stream-visibility budget")
+
 // awaitStreamVisible resolves a stream handle, tolerating ONLY the
 // not-yet-applied window above. Every other failure — permission denial,
 // transport fault, cancelled caller — is the server's real answer and is
@@ -358,17 +380,18 @@ func (c *Client) awaitStreamVisible(
 // classification — and, when the caller ended it, the caller's own cause —
 // reachable through errors.Is.
 //
-// Note for callers branching on the result: when the caller's context ended the
-// wait, the returned error satisfies BOTH errors.Is(err, ctx.Err()) and
-// errors.Is(err, jetstream.ErrStreamNotFound), so an if/else chain over it
-// decides by ORDER, not by exclusivity. Test the cancellation first if
-// "shutting down" must win over "stream is absent".
+// The two endings are told apart by ErrStreamNotVisible, which only the spent
+// budget carries — see that sentinel for the caller-facing contract. Both
+// endings keep the absent classification reachable, so an if/else chain that
+// tests jetstream.ErrStreamNotFound decides by ORDER, not by exclusivity;
+// branching on the sentinel is what makes the distinction by construction.
 func streamNotVisible(ctx context.Context, absent error) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("operation context ended while waiting for stream visibility: %w",
 			errors.Join(err, absent))
 	}
-	return fmt.Errorf("stream visibility budget %s exhausted: %w", streamVisibilityBudget, absent)
+	return fmt.Errorf("stream visibility budget %s exhausted: %w",
+		streamVisibilityBudget, errors.Join(ErrStreamNotVisible, absent))
 }
 
 // ConsumeStreamWithConfig creates a port-backed JetStream consumer with full
@@ -794,10 +817,25 @@ func (c *Client) buildConsumerConfig(cfg StreamConsumerConfig) jetstream.Consume
 }
 
 // ensureStreamForConsumer auto-creates a stream if it doesn't exist.
+//
+// Both of its BIND paths — the stream already existed, and the create lost the
+// race for it — report what binding discarded. A caller that reaches this seam
+// declares a full stream configuration and, on either path, has that declaration
+// silently dropped in favour of the live one; that is the correct outcome (a
+// non-owner does not restamp another owner's stream) and the one nothing else
+// will ever mention. See reportBindDivergence.
 func (c *Client) ensureStreamForConsumer(ctx context.Context, js jetstream.JetStream, cfg StreamConsumerConfig) error {
-	// Check if stream exists
-	_, err := js.Stream(ctx, cfg.StreamName)
+	// What this caller declares, computed BEFORE the existence check so the bind
+	// path can say what it discarded. declErr is deliberately not returned here:
+	// an undeclarable auto-create config refuses CREATION, and must not refuse a
+	// caller's right to bind a stream that already exists.
+	declared, declErr := c.autoCreateStreamConfig(cfg)
+
+	stream, err := js.Stream(ctx, cfg.StreamName)
 	if err == nil {
+		if declErr == nil {
+			c.reportBindDivergence(declared, stream)
+		}
 		return nil // Stream exists
 	}
 
@@ -805,8 +843,69 @@ func (c *Client) ensureStreamForConsumer(ctx context.Context, js jetstream.JetSt
 		return errs.WrapTransient(err, "Client", "ensureStreamForConsumer",
 			"failed to check stream "+cfg.StreamName)
 	}
+	if declErr != nil {
+		return declErr
+	}
 
-	// Stream doesn't exist, create it
+	// THE SAME TWO GUARDS AS EVERY OTHER PROVISIONING SEAM. This is a third one:
+	// consumer auto-create is stream CREATION, whatever it is called, and it was
+	// the last unguarded route to an unbounded ordinary stream.
+	//
+	// The bounds guard matters most on the path that reaches here. When a caller
+	// supplies an AutoCreateConfig, DefaultStreamConfig is skipped entirely, so a
+	// config naming only Subjects and Storage produced MaxAge 0 and MaxBytes 0 —
+	// unlimited on both. The framework's own HEALTH, METRICS and FLOWS streams are
+	// memory-backed, so a NATS restart destroys them, and the next reconnect used
+	// to recreate them through here with no bounds at all — silently replacing the
+	// 5m/10MB the framework declares for them. The contract's own observability
+	// streams were its counterexample.
+	if err := CheckOrdinaryStreamName(declared.Name, "natsclient consumer auto-create"); err != nil {
+		return errs.WrapFatal(err, "Client", "ensureStreamForConsumer",
+			"validate stream name "+declared.Name)
+	}
+	if err := CheckStreamBounds(declared, "natsclient consumer auto-create (StreamConsumerConfig.AutoCreate)"); err != nil {
+		return errs.WrapFatal(err, "Client", "ensureStreamForConsumer",
+			"validate stream bounds for "+declared.Name)
+	}
+
+	// Create the stream
+	_, err = js.CreateStream(ctx, declared)
+	if errors.Is(err, jetstream.ErrStreamNameAlreadyInUse) {
+		// The stream exists after all: the pre-check above was answered by a node
+		// that had not applied the assignment yet, or a peer created it in the
+		// meantime. Binding by name is the answer, exactly as on the pre-check's
+		// success path — a non-owner must not restamp a stream someone else
+		// declared. Returning it as transient would fail boot one seam over from
+		// the window natsclient just absorbed.
+		//
+		// The server answers 10058 ONLY when the live configuration differs from
+		// this one, so this branch IS the two-declarers condition, and it reports
+		// with observed and declared values rather than a bare line saying the
+		// stream was there.
+		live, lookupErr := js.Stream(ctx, declared.Name)
+		if lookupErr != nil {
+			c.logger.Info("stream already exists; bound by name without comparing declarations",
+				slog.String("stream", cfg.StreamName), slog.Any("lookup_error", lookupErr))
+			return nil
+		}
+		c.reportBindDivergence(declared, live)
+		return nil
+	}
+	if err != nil {
+		c.recordFailure()
+		return errs.WrapTransient(err, "Client", "ensureStreamForConsumer",
+			"failed to auto-create stream "+cfg.StreamName)
+	}
+
+	c.logger.Info("Auto-created stream",
+		slog.String("stream", cfg.StreamName), slog.Any("subjects", declared.Subjects))
+	return nil
+}
+
+// autoCreateStreamConfig builds the stream declaration a consumer's AutoCreate
+// would create. It is pure — no I/O, no guard, no logging — so the bind paths can
+// ask what this caller declared without inheriting the create path's refusals.
+func (c *Client) autoCreateStreamConfig(cfg StreamConsumerConfig) (jetstream.StreamConfig, error) {
 	autoConfig := cfg.AutoCreateConfig
 	if autoConfig == nil {
 		autoConfig = DefaultStreamConfig()
@@ -819,7 +918,7 @@ func (c *Client) ensureStreamForConsumer(ctx context.Context, js jetstream.JetSt
 		subjects = []string{deriveStreamSubject(cfg.FilterSubject)}
 	}
 	if len(subjects) == 0 {
-		return errs.WrapInvalid(
+		return jetstream.StreamConfig{}, errs.WrapInvalid(
 			fmt.Errorf("cannot auto-create stream without subjects"),
 			"Client", "ensureStreamForConsumer", "no subjects for stream "+cfg.StreamName)
 	}
@@ -873,49 +972,7 @@ func (c *Client) ensureStreamForConsumer(ctx context.Context, js jetstream.JetSt
 		streamCfg.Duplicates = dup
 	}
 
-	// THE SAME TWO GUARDS AS EVERY OTHER PROVISIONING SEAM. This is a third one:
-	// consumer auto-create is stream CREATION, whatever it is called, and it was
-	// the last unguarded route to an unbounded ordinary stream.
-	//
-	// The bounds guard matters most on the path that reaches here. When a caller
-	// supplies an AutoCreateConfig, DefaultStreamConfig is skipped entirely, so a
-	// config naming only Subjects and Storage produced MaxAge 0 and MaxBytes 0 —
-	// unlimited on both. The framework's own HEALTH, METRICS and FLOWS streams are
-	// memory-backed, so a NATS restart destroys them, and the next reconnect used
-	// to recreate them through here with no bounds at all — silently replacing the
-	// 5m/10MB the framework declares for them. The contract's own observability
-	// streams were its counterexample.
-	if err := CheckOrdinaryStreamName(streamCfg.Name, "natsclient consumer auto-create"); err != nil {
-		return errs.WrapFatal(err, "Client", "ensureStreamForConsumer",
-			"validate stream name "+streamCfg.Name)
-	}
-	if err := CheckStreamBounds(streamCfg, "natsclient consumer auto-create (StreamConsumerConfig.AutoCreate)"); err != nil {
-		return errs.WrapFatal(err, "Client", "ensureStreamForConsumer",
-			"validate stream bounds for "+streamCfg.Name)
-	}
-
-	// Create the stream
-	_, err = js.CreateStream(ctx, streamCfg)
-	if errors.Is(err, jetstream.ErrStreamNameAlreadyInUse) {
-		// The stream exists after all: the pre-check above was answered by a node
-		// that had not applied the assignment yet, or a peer created it in the
-		// meantime. Binding by name is the answer, exactly as on the pre-check's
-		// success path — a non-owner must not restamp a stream someone else
-		// declared, and 10058 arrives precisely when this caller's config differs
-		// from the live one. Returning it as transient would fail boot one seam
-		// over from the window natsclient just absorbed.
-		c.logger.Info("stream already exists; binding by name instead of auto-creating",
-			slog.String("stream", cfg.StreamName))
-		return nil
-	}
-	if err != nil {
-		c.recordFailure()
-		return errs.WrapTransient(err, "Client", "ensureStreamForConsumer",
-			"failed to auto-create stream "+cfg.StreamName)
-	}
-
-	c.logger.Info("Auto-created stream", slog.String("stream", cfg.StreamName), slog.Any("subjects", subjects))
-	return nil
+	return streamCfg, nil
 }
 
 // deriveStreamSubject converts a filter subject to a stream subject pattern.

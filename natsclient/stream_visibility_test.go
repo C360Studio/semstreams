@@ -150,3 +150,82 @@ func TestConsumerAutoCreateBindsAStreamThatAlreadyExists(t *testing.T) {
 	require.Greater(t, fake.streamCalls.Load(), int64(1),
 		"the pre-check plus at least one visibility probe")
 }
+
+// TestStreamNotVisibleSeparatesASpentBudgetFromACancelledWait pins the sentinel's
+// contract at the function that owns it: only a spent budget carries
+// ErrStreamNotVisible, both endings keep the absent classification reachable, and
+// a wait the caller cut short carries the caller's own cause instead — because it
+// measured nothing about the stream.
+func TestStreamNotVisibleSeparatesASpentBudgetFromACancelledWait(t *testing.T) {
+	spent := streamNotVisible(context.Background(), jetstream.ErrStreamNotFound)
+	require.ErrorIs(t, spent, ErrStreamNotVisible)
+	require.ErrorIs(t, spent, jetstream.ErrStreamNotFound)
+
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	cut := streamNotVisible(ended, jetstream.ErrStreamNotFound)
+	require.ErrorIs(t, cut, context.Canceled)
+	require.ErrorIs(t, cut, jetstream.ErrStreamNotFound)
+	require.NotErrorIs(t, cut, ErrStreamNotVisible,
+		"a wait the caller cut short is not evidence that the stream is absent")
+}
+
+// TestConsumerSetupCancelledWaitCarriesNoAbsenceEvidence is the same fact through
+// the production entry points: a caller whose context ends the wait gets both
+// causes and NOT the sentinel, so a lifetime decision branching on the sentinel
+// fails closed on a cancelled boot without needing to order its conditions.
+func TestConsumerSetupCancelledWaitCarriesNoAbsenceEvidence(t *testing.T) {
+	for _, entry := range consumeEntryPoints() {
+		t.Run(entry.name, func(t *testing.T) {
+			fake := &fakeJetStream{streamErr: jetstream.ErrStreamNotFound}
+			client := newConnectedClientWithFakeJS(t, fake)
+			// The caller's deadline ends the wait long before the budget does.
+			ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+			defer cancel()
+
+			handle, err := entry.consume(ctx, client, StreamConsumerConfig{
+				StreamName:    "CANCELLED_WAIT",
+				ConsumerName:  "cancelled-wait",
+				FilterSubject: "cancelled.wait.>",
+				AckPolicy:     "explicit",
+				DeliverPolicy: "all",
+			}, func(context.Context, jetstream.Msg) {})
+
+			require.Nil(t, handle)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.ErrorIs(t, err, jetstream.ErrStreamNotFound)
+			require.NotErrorIs(t, err, ErrStreamNotVisible,
+				"the budget was never spent, so nothing durable was measured")
+		})
+	}
+}
+
+// notFoundConsumerInfo is a consumer whose initial observation answers with the
+// absent classification — the third seam that can put jetstream.ErrStreamNotFound
+// into a consumer-setup error chain.
+type notFoundConsumerInfo struct{}
+
+func (notFoundConsumerInfo) Info(context.Context) (*jetstream.ConsumerInfo, error) {
+	return nil, jetstream.ErrStreamNotFound
+}
+
+// TestAbsentClassificationFromConsumerSeamsCarriesNoSentinel is why the sentinel
+// exists. Consumer CREATION and the initial consumer OBSERVATION both preserve
+// their cause through a transient wrap, so both can hand a caller
+// jetstream.ErrStreamNotFound for a stream that is present — a consumer-level
+// answer, not a statement about the stream. Neither may carry the sentinel, or a
+// caller branching on absence disables itself for the process lifetime on a
+// consumer fault.
+func TestAbsentClassificationFromConsumerSeamsCarriesNoSentinel(t *testing.T) {
+	created := ClassifyConsumerPolicyError(jetstream.ErrStreamNotFound, "ConsumeInternalStreamWithConfig")
+	require.ErrorIs(t, created, jetstream.ErrStreamNotFound,
+		"the cause is preserved for diagnosis")
+	require.NotErrorIs(t, created, ErrStreamNotVisible,
+		"consumer creation never measured the stream's visibility")
+
+	client := newConnectedClientWithFakeJS(t, &fakeJetStream{})
+	_, observeErr := client.observeInternalConsumer(t.Context(), notFoundConsumerInfo{})
+	require.ErrorIs(t, observeErr, jetstream.ErrStreamNotFound)
+	require.NotErrorIs(t, observeErr, ErrStreamNotVisible,
+		"initial consumer observation never measured the stream's visibility")
+}

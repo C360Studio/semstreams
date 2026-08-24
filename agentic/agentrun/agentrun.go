@@ -753,26 +753,26 @@ func (s *MilestoneSubscriber) Start(
 		// returned it from run() → os.Exit(1). The returned no-op stop is safe
 		// to defer at the call site.
 		//
-		// This branches on the GUARDED setup rather than on a cheap GetStream
-		// precondition, and that is the whole point: natsclient waits out cluster
-		// metadata propagation, so a not-found here means absent CONTINUOUSLY for
-		// the visibility budget — the gh#246 fact. An unguarded precondition
-		// answered the same 404 for a node that was merely lagging, which
-		// disabled the subscriber for the process lifetime while boot reported
-		// success (gh#1073).
+		// The decision reads natsclient.ErrStreamNotVisible, NOT a bare
+		// jetstream.ErrStreamNotFound. Three seams inside consumer setup can put
+		// the absent classification into this chain — the guarded stream lookup,
+		// consumer creation, and the initial consumer observation — and only the
+		// first is a statement about whether the stream exists. Branching on the
+		// bare classification disabled this subscriber for the process lifetime
+		// when consumer CREATION answered not-found with the stream present, and
+		// boot still reported success.
 		//
-		// Order matters here. When the caller's context ends the visibility wait,
-		// natsclient's error satisfies BOTH errors.Is(err, ctx.Err()) and
-		// errors.Is(err, jetstream.ErrStreamNotFound) — see streamNotVisible. A
-		// cancelled boot is not evidence that the stream is absent, and reporting
-		// it as a graceful skip would return "nothing to subscribe to" for a fact
-		// never established. Cancellation loses the branch and surfaces as an
-		// error, so this path fails closed.
-		if errors.Is(err, jetstream.ErrStreamNotFound) && ctx.Err() == nil {
+		// The sentinel is produced only when the framework spent its entire
+		// visibility budget re-observing a stream reported absent, and never when
+		// the caller's context ended that wait — so an unguarded probe's 404 on a
+		// lagging node (gh#1073) and a cancelled boot both fail closed here,
+		// by construction rather than by the order of this if.
+		if errors.Is(err, natsclient.ErrStreamNotVisible) {
 			s.logger.Info("agentrun: MilestoneSubscriber disabled — stream not present",
 				slog.String("stream", cfg.StreamName),
-				slog.String("hint", "likely no agentic components in this deployment; "+
-					"agent.complete/failed milestones will not be processed"))
+				slog.String("hint", "likely no agentic components in this deployment; the stream stayed "+
+					"absent for the framework's whole stream-visibility budget, which is also why this "+
+					"boot took that budget longer; agent.complete/failed milestones will not be processed"))
 			return func(context.Context) error { return nil }, nil
 		}
 		return nil, fmt.Errorf("agentrun: MilestoneSubscriber: start durable consumer agent.complete.*: %w", err)
