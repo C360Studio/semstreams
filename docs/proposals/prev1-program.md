@@ -1,25 +1,25 @@
-# Pre-v1 core hardening — program entry point
+# Pre-v1 core hardening — program entry point (RETIRED)
 
-**Status: SUSPENDED AND FROZEN.** ADR-090 graph-state foundation work owns
-program execution. This pre-v1 record is retained as evidence and is not a second
-baton.
+**Status: RETIRED 2026-08-24 — historical record only.** The graph-state foundation that
+suspended this program on 2026-08-04 has closed (its executable change archived 2026-08-07).
+No document in this repository is a program baton any more: session state is carried by the
+operator's session-memory handoff blocks, and the shared truth is the issues plus
+`task openspec:queue`. Do not execute any `NEXT`, `Next Action`, `WIP`, `active`, priority,
+or imperative text below; it belongs to the historical program. The issues its last NEXT
+block names were re-triaged on the issues themselves — measured 2026-08-24: 14 closed, 6 open:
 
-Do not execute any `NEXT`, `Next Action`, `WIP`, `active`, priority, or imperative
-text below. Every such occurrence belongs to the historical suspended program.
-Suspension ends only when the
-[graph-state program](graph-state-read-write-program.md) explicitly records that
-the GS foundation has released this program.
+```sh
+for i in 869 870 871 689 860 844 843 830 769 848 767 821 842 822 859 862 810 861 807 802
+do gh issue view $i --json number,state -q '"\(.number) \(.state)"'; done
+```
 
-Opened 2026-07-21 · baseline `v1.0.0-beta.157`
+Opened 2026-07-21 · baseline `v1.0.0-beta.157` · retired 2026-08-24 at main `e3a91dff`
 
 ---
 
-## Suspended program pointer
+## Retired program pointer
 
-There is no executable Next Action in this file. Read the
-[graph-state program](graph-state-read-write-program.md) and perform only its
-single `## Next Action` until that program explicitly releases this suspended
-record.
+There is no executable Next Action in this file and no successor baton file.
 
 ## Historical pre-v1 record (non-executable)
 
