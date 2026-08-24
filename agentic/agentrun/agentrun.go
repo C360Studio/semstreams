@@ -701,23 +701,6 @@ func (s *MilestoneSubscriber) Start(
 		return nil, fmt.Errorf("agentrun: MilestoneSubscriber.Start: StreamName must not be empty")
 	}
 
-	// Graceful no-op when the target stream is absent (gh#246). The
-	// agent-run milestone subscriber only matters when agentic components
-	// run — they create the AGENT stream and publish agent.complete.* /
-	// agent.failed.*. A deployment without them (graph- or lifecycle-only)
-	// has nothing to subscribe to and must still BOOT; before this, the
-	// consumer start surfaced "stream not found" and both binaries
-	// returned it from run() → os.Exit(1). The returned no-op stop is safe
-	// to defer at the call site.
-	if _, streamErr := client.GetStream(ctx, cfg.StreamName); streamErr != nil {
-		if errors.Is(streamErr, jetstream.ErrStreamNotFound) {
-			s.logger.Info("agentrun: MilestoneSubscriber disabled — stream not present",
-				slog.String("stream", cfg.StreamName),
-				slog.String("hint", "likely no agentic components in this deployment (or the stream isn't created yet at boot); agent.complete/failed milestones will not be processed"))
-			return func(context.Context) error { return nil }, nil
-		}
-		return nil, fmt.Errorf("agentrun: MilestoneSubscriber.Start: check stream %q: %w", cfg.StreamName, streamErr)
-	}
 	makeDurable := func(suffix string) string {
 		name := "agentrun-milestone-" + suffix
 		if cfg.ConsumerNameSuffix != "" {
@@ -761,6 +744,37 @@ func (s *MilestoneSubscriber) Start(
 	)
 	if err != nil {
 		cancel()
+		// Graceful no-op when the target stream is absent (gh#246). The
+		// agent-run milestone subscriber only matters when agentic components
+		// run — they create the AGENT stream and publish agent.complete.* /
+		// agent.failed.*. A deployment without them (graph- or lifecycle-only)
+		// has nothing to subscribe to and must still BOOT; before this, the
+		// consumer start surfaced "stream not found" and both binaries
+		// returned it from run() → os.Exit(1). The returned no-op stop is safe
+		// to defer at the call site.
+		//
+		// This branches on the GUARDED setup rather than on a cheap GetStream
+		// precondition, and that is the whole point: natsclient waits out cluster
+		// metadata propagation, so a not-found here means absent CONTINUOUSLY for
+		// the visibility budget — the gh#246 fact. An unguarded precondition
+		// answered the same 404 for a node that was merely lagging, which
+		// disabled the subscriber for the process lifetime while boot reported
+		// success (gh#1073).
+		//
+		// Order matters here. When the caller's context ends the visibility wait,
+		// natsclient's error satisfies BOTH errors.Is(err, ctx.Err()) and
+		// errors.Is(err, jetstream.ErrStreamNotFound) — see streamNotVisible. A
+		// cancelled boot is not evidence that the stream is absent, and reporting
+		// it as a graceful skip would return "nothing to subscribe to" for a fact
+		// never established. Cancellation loses the branch and surfaces as an
+		// error, so this path fails closed.
+		if errors.Is(err, jetstream.ErrStreamNotFound) && ctx.Err() == nil {
+			s.logger.Info("agentrun: MilestoneSubscriber disabled — stream not present",
+				slog.String("stream", cfg.StreamName),
+				slog.String("hint", "likely no agentic components in this deployment; "+
+					"agent.complete/failed milestones will not be processed"))
+			return func(context.Context) error { return nil }, nil
+		}
 		return nil, fmt.Errorf("agentrun: MilestoneSubscriber: start durable consumer agent.complete.*: %w", err)
 	}
 	owner.mu.Lock()
@@ -780,6 +794,10 @@ func (s *MilestoneSubscriber) Start(
 		runCtx, failedCfg, handleMsg("agent.failed.*"),
 	)
 	if err != nil {
+		// Deliberately NOT graceful, including for a not-found: the complete
+		// consumer bound to this stream moments ago, so an absent stream here is
+		// an inconsistency to surface, not a deployment without agentic
+		// components.
 		rollbackErr := lifecyclecleanup.RollbackFailedStart(ctx, stop)
 		startErr := fmt.Errorf("agentrun: MilestoneSubscriber: start durable consumer agent.failed.*: %w", err)
 		if rollbackErr == nil {

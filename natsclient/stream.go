@@ -357,6 +357,12 @@ func (c *Client) awaitStreamVisible(
 // streamNotVisible explains which bound ended the wait while keeping the absent
 // classification — and, when the caller ended it, the caller's own cause —
 // reachable through errors.Is.
+//
+// Note for callers branching on the result: when the caller's context ended the
+// wait, the returned error satisfies BOTH errors.Is(err, ctx.Err()) and
+// errors.Is(err, jetstream.ErrStreamNotFound), so an if/else chain over it
+// decides by ORDER, not by exclusivity. Test the cancellation first if
+// "shutting down" must win over "stream is absent".
 func streamNotVisible(ctx context.Context, absent error) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("operation context ended while waiting for stream visibility: %w",
@@ -890,6 +896,18 @@ func (c *Client) ensureStreamForConsumer(ctx context.Context, js jetstream.JetSt
 
 	// Create the stream
 	_, err = js.CreateStream(ctx, streamCfg)
+	if errors.Is(err, jetstream.ErrStreamNameAlreadyInUse) {
+		// The stream exists after all: the pre-check above was answered by a node
+		// that had not applied the assignment yet, or a peer created it in the
+		// meantime. Binding by name is the answer, exactly as on the pre-check's
+		// success path — a non-owner must not restamp a stream someone else
+		// declared, and 10058 arrives precisely when this caller's config differs
+		// from the live one. Returning it as transient would fail boot one seam
+		// over from the window natsclient just absorbed.
+		c.logger.Info("stream already exists; binding by name instead of auto-creating",
+			slog.String("stream", cfg.StreamName))
+		return nil
+	}
 	if err != nil {
 		c.recordFailure()
 		return errs.WrapTransient(err, "Client", "ensureStreamForConsumer",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
@@ -97,4 +98,55 @@ func TestConsumerSetupReturnsNonAbsentStreamFailureWithoutProbingAgain(t *testin
 					"every other lookup failure is the answer and is returned on first observation")
 		})
 	}
+}
+
+// TestConsumerAutoCreateBindsAStreamThatAlreadyExists covers the seam one step
+// over from the visibility wait. On a lagging node the auto-create pre-check is
+// answered "not found" for a stream that exists, so setup falls through to
+// CreateStream and the server answers 10058 — and if this caller's auto-create
+// config differs at all from the live declaration, that is exactly when it does.
+// Returning that as transient would fail boot for a stream that is present, one
+// seam away from the window natsclient just absorbed.
+//
+// The answer is to bind by name, matching the pre-check's own success path: a
+// non-owner does not restamp a stream someone else declared. Proof that setup
+// got PAST auto-create is that the failure it ultimately reports is the guarded
+// lookup's absent answer, not the create's already-in-use one.
+func TestConsumerAutoCreateBindsAStreamThatAlreadyExists(t *testing.T) {
+	fake := &fakeJetStream{
+		streamErr:       jetstream.ErrStreamNotFound,
+		createStreamErr: jetstream.ErrStreamNameAlreadyInUse,
+	}
+	client := newConnectedClientWithFakeJS(t, fake)
+	// A caller deadline, not a measurement: the fake never makes the stream
+	// visible, so this bounds the wait that follows the bind. Which branch
+	// auto-create took is what is asserted.
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+
+	handle, err := client.ConsumeInternalStreamWithConfig(ctx, StreamConsumerConfig{
+		StreamName:    "AUTO_CREATE_RACE",
+		ConsumerName:  "auto-create-race",
+		FilterSubject: "auto.create.race.>",
+		AckPolicy:     "explicit",
+		DeliverPolicy: "all",
+		AutoCreate:    true,
+		AutoCreateConfig: &StreamAutoCreateConfig{
+			Subjects: []string{"auto.create.race.>"},
+			MaxAge:   time.Hour,
+			MaxBytes: 64 << 20,
+			Discard:  jetstream.DiscardOld,
+		},
+	}, func(context.Context, jetstream.Msg) {})
+
+	require.Nil(t, handle)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, jetstream.ErrStreamNameAlreadyInUse,
+		"a stream that already exists is not an auto-create failure; the caller binds by name")
+	require.ErrorIs(t, err, jetstream.ErrStreamNotFound,
+		"setup must continue past auto-create into the guarded lookup")
+	require.Equal(t, int64(1), fake.createStreamCalls.Load(),
+		"one create attempt, then bind — never a create loop")
+	require.Greater(t, fake.streamCalls.Load(), int64(1),
+		"the pre-check plus at least one visibility probe")
 }

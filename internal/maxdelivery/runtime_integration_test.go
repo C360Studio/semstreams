@@ -192,9 +192,11 @@ func TestThreeNodeClusterReplicasOneRetainsAndHandlesOccurrenceOnce(t *testing.T
 	// once across replicas — so it establishes the cold nodes' precondition first
 	// and keeps propagation timing out of its result entirely. natsclient now
 	// absorbs that window inside consumer setup, so a 404 no longer reaches
-	// start(); the #1073 boot exposure is proven by deliberately OMITTING this
-	// precondition, in
-	// TestThreeNodeClusterObserverStartsBeforeColdNodeAppliesAssignment.
+	// start(). The #1073 boot exposure is EXERCISED (not proven) on this topology
+	// by deliberately OMITTING this precondition, in
+	// TestThreeNodeClusterObserverStartsBeforeColdNodeAppliesAssignment; it is
+	// PROVEN by TestConsumerSetupWaitsForStreamThatBecomesVisible in natsclient,
+	// which synchronizes on the production wait's own probes.
 	for i, cold := range clients[1:] {
 		coldJS, jsErr := cold.JetStream()
 		require.NoError(t, jsErr)
@@ -242,9 +244,9 @@ func TestThreeNodeClusterReplicasOneRetainsAndHandlesOccurrenceOnce(t *testing.T
 // TestStartFailsLoudlyWhenCaptureStreamIsMissing.
 //
 // Measured limit, so nobody over-reads this: with the wait removed, this test
-// still passed three of three runs locally — an in-process three-node cluster
-// applies the assignment before a client can issue the next request, and the
-// sample logged below was "current" every time. It is a real-topology tripwire
+// still passed every observed run — an in-process three-node cluster applies the
+// assignment before a client can issue the next request, and the sample logged
+// below was "current" every time. It is a real-topology tripwire
 // that fails whenever the window is actually open, which is the condition the
 // field report describes; it is not the deterministic proof. That is
 // TestConsumerSetupWaitsForStreamThatBecomesVisible in natsclient, which
