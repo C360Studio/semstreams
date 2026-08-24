@@ -819,21 +819,37 @@ func (c *Client) buildConsumerConfig(cfg StreamConsumerConfig) jetstream.Consume
 // ensureStreamForConsumer auto-creates a stream if it doesn't exist.
 //
 // Both of its BIND paths — the stream already existed, and the create lost the
-// race for it — report what binding discarded. A caller that reaches this seam
-// declares a full stream configuration and, on either path, has that declaration
-// silently dropped in favour of the live one; that is the correct outcome (a
-// non-owner does not restamp another owner's stream) and the one nothing else
-// will ever mention. See reportBindDivergence.
+// race for it — report what binding discarded, but ONLY for a caller that wrote
+// an explicit AutoCreateConfig. That caller declared a whole stream and has the
+// declaration silently dropped in favour of the live one; that is the correct
+// outcome (a non-owner does not restamp another owner's stream) and the one
+// nothing else will ever mention. See reportBindDivergence.
 func (c *Client) ensureStreamForConsumer(ctx context.Context, js jetstream.JetStream, cfg StreamConsumerConfig) error {
 	// What this caller declares, computed BEFORE the existence check so the bind
 	// path can say what it discarded. declErr is deliberately not returned here:
 	// an undeclarable auto-create config refuses CREATION, and must not refuse a
 	// caller's right to bind a stream that already exists.
-	declared, declErr := c.autoCreateStreamConfig(cfg)
+	declared, declErr := autoCreateStreamConfig(cfg)
+
+	// Whether a bind here has anything to report, decided once for both bind
+	// paths.
+	//
+	// An absent AutoCreateConfig disqualifies it: the values compared would then
+	// be the framework's own DefaultStreamConfig and a subject derived from the
+	// filter, so an adopter who wrote AutoCreate and nothing else would be told
+	// on every boot that "two owners are declaring one stream" about a
+	// declaration they never wrote. A report for a claim the caller did not make
+	// is a false alarm, and silence is the prior behavior it would replace.
+	//
+	// The name guard disqualifies it too, ahead of the create path's own check:
+	// a KV or ObjectStore backing stream must not be told to "set finite limits
+	// on it", which is the exact opposite of what that guard exists to say.
+	reportBind := cfg.AutoCreateConfig != nil && declErr == nil &&
+		CheckOrdinaryStreamName(declared.Name, "natsclient consumer auto-create") == nil
 
 	stream, err := js.Stream(ctx, cfg.StreamName)
 	if err == nil {
-		if declErr == nil {
+		if reportBind {
 			c.reportBindDivergence(declared, stream)
 		}
 		return nil // Stream exists
@@ -868,6 +884,18 @@ func (c *Client) ensureStreamForConsumer(ctx context.Context, js jetstream.JetSt
 			"validate stream bounds for "+declared.Name)
 	}
 
+	// The duplicates clamp belongs to CREATION only. The server rejects an
+	// explicit window larger than MaxAge, so this keeps auto-create from failing
+	// on a misconfigured window (mirrors config.createStream) — and a caller that
+	// merely BINDS never sends this config anywhere, so warning it about a value
+	// nothing will use is noise. Clamped in place, before the create, so the
+	// 10058 branch below reports exactly what was asked for.
+	if declared.Duplicates > 0 && declared.MaxAge > 0 && declared.Duplicates > declared.MaxAge {
+		c.logger.Warn("duplicates window exceeds max_age; clamping to max_age",
+			"stream", cfg.StreamName, "duplicates", declared.Duplicates, "max_age", declared.MaxAge)
+		declared.Duplicates = declared.MaxAge
+	}
+
 	// Create the stream
 	_, err = js.CreateStream(ctx, declared)
 	if errors.Is(err, jetstream.ErrStreamNameAlreadyInUse) {
@@ -882,6 +910,11 @@ func (c *Client) ensureStreamForConsumer(ctx context.Context, js jetstream.JetSt
 		// this one, so this branch IS the two-declarers condition, and it reports
 		// with observed and declared values rather than a bare line saying the
 		// stream was there.
+		if !reportBind {
+			c.logger.Info("stream already exists; bound by name",
+				slog.String("stream", cfg.StreamName))
+			return nil
+		}
 		live, lookupErr := js.Stream(ctx, declared.Name)
 		if lookupErr != nil {
 			c.logger.Info("stream already exists; bound by name without comparing declarations",
@@ -903,9 +936,10 @@ func (c *Client) ensureStreamForConsumer(ctx context.Context, js jetstream.JetSt
 }
 
 // autoCreateStreamConfig builds the stream declaration a consumer's AutoCreate
-// would create. It is pure — no I/O, no guard, no logging — so the bind paths can
-// ask what this caller declared without inheriting the create path's refusals.
-func (c *Client) autoCreateStreamConfig(cfg StreamConsumerConfig) (jetstream.StreamConfig, error) {
+// would create. It is pure — no I/O, no guard, no logging, no client state — so
+// the bind paths can ask what this caller declared without inheriting the create
+// path's refusals, its clamp, or its diagnostics.
+func autoCreateStreamConfig(cfg StreamConsumerConfig) (jetstream.StreamConfig, error) {
 	autoConfig := cfg.AutoCreateConfig
 	if autoConfig == nil {
 		autoConfig = DefaultStreamConfig()
@@ -960,17 +994,9 @@ func (c *Client) autoCreateStreamConfig(cfg StreamConsumerConfig) (jetstream.Str
 	if autoConfig.Replicas > 0 {
 		streamCfg.Replicas = autoConfig.Replicas
 	}
-	if autoConfig.Duplicates > 0 {
-		dup := autoConfig.Duplicates
-		// Server rejects an explicit window > MaxAge; clamp to keep auto-create
-		// from failing on a misconfigured window (mirrors config.createStream).
-		if streamCfg.MaxAge > 0 && dup > streamCfg.MaxAge {
-			c.logger.Warn("duplicates window exceeds max_age; clamping to max_age",
-				"stream", cfg.StreamName, "duplicates", dup, "max_age", streamCfg.MaxAge)
-			dup = streamCfg.MaxAge
-		}
-		streamCfg.Duplicates = dup
-	}
+	// Carried through unclamped: the clamp is a property of CREATING this stream,
+	// and this function is also what the bind paths compare against.
+	streamCfg.Duplicates = autoConfig.Duplicates
 
 	return streamCfg, nil
 }

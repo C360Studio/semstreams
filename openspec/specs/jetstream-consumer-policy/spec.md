@@ -178,14 +178,15 @@ SHALL be invalid configuration.
 
 ### Requirement: Consumer setup tolerates stream-visibility lag
 
-Consumer setup MUST re-observe a stream reported absent until it becomes visible or a bounded framework-owned budget
-is spent, because a clustered node that has not applied the meta assignment reports a stream that exists as absent.
-Only the absent classification SHALL be re-observed; every other lookup failure SHALL be returned on first
-observation. The budget SHALL be framework-owned, with no operator configuration and no caller-supplied wait, so no
-adopter predicts a propagation delay the framework observes. A returned absent classification therefore means the
-stream was absent continuously for at least the budget, and a setup that fails this way carries the budget's latency.
-The auto-create pre-check is exempt from the wait: an absent answer there is the trigger to create the stream, not a
-failure to report.
+Consumer setup MUST re-observe a stream its guarded lookup reports absent until it becomes visible or a bounded
+framework-owned budget is spent, because a clustered node that has not applied the meta assignment reports a stream
+that exists as absent. Only the absent classification SHALL be re-observed; every other lookup failure SHALL be
+returned on first observation. The budget SHALL be framework-owned, with no operator configuration and no
+caller-supplied wait, so no adopter predicts a propagation delay the framework observes. The guarded lookup therefore
+reports absence only after re-observing it for the whole budget, and a setup that fails that way carries the budget's
+latency; that fact is carried by the not-visible sentinel, NOT by the absent classification, which other seams also
+emit. The auto-create pre-check is exempt from the wait: an absent answer there is the trigger to create the stream,
+not a failure to report.
 
 A caller deciding anything durable from absence — disabling a subscriber, skipping a component, reporting a deployment
 shape — MUST branch on the framework's exported not-visible sentinel rather than on the absent classification alone,

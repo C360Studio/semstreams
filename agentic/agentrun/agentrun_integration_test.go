@@ -249,11 +249,15 @@ func TestIntegration_MilestoneSubscriberBindsAStreamThatAppearsDuringStart(t *te
 }
 
 // TestIntegration_MilestoneSubscriberCancelledBootIsNotAGracefulSkip pins the
-// ORDER of the disabled-when-absent branch. natsclient's exhausted-wait error
-// carries both the caller's cancellation and jetstream.ErrStreamNotFound, so a
-// branch that tests absence first would report "no agentic components in this
+// CONSTRUCTION the disabled-when-absent branch relies on: a wait the caller ended
+// never carries natsclient.ErrStreamNotVisible, so the branch's single condition
+// fails closed on a cancelled boot without ordering anything.
+//
+// The error it does carry still has jetstream.ErrStreamNotFound reachable
+// alongside the caller's cause, which is exactly why absence is not decided from
+// that classification: doing so would report "no agentic components in this
 // deployment" for a boot that was merely cancelled — a positive claim about a
-// fact never established. Cancellation must surface as an error.
+// fact never established. If the two endings ever converge, this test fails.
 func TestIntegration_MilestoneSubscriberCancelledBootIsNotAGracefulSkip(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithJetStream())
 	// The AGENT stream is absent, so Start enters the visibility wait; this
@@ -272,7 +276,9 @@ func TestIntegration_MilestoneSubscriberCancelledBootIsNotAGracefulSkip(t *testi
 	require.Error(t, err, "a cancelled boot must not be reported as a graceful skip")
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.ErrorIs(t, err, jetstream.ErrStreamNotFound,
-		"both causes stay reachable; the branch decides by order, not exclusivity")
+		"both causes stay reachable, which is why the branch reads the sentinel instead")
+	require.NotErrorIs(t, err, natsclient.ErrStreamNotVisible,
+		"a wait the caller ended measured nothing, so it carries no evidence of absence")
 	require.Nil(t, stop)
 }
 

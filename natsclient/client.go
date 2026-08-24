@@ -1228,7 +1228,13 @@ func (m *Client) PublishBatchToStream(ctx context.Context, subject string, msgs 
 		failed, len(msgs), ackFailures, stderrors.Join(errsList...))
 }
 
-// GetStream gets an existing JetStream stream
+// GetStream gets an existing JetStream stream.
+//
+// Its jetstream.ErrStreamNotFound means "not on this connection, now" — it is a
+// point-in-time probe, not durable evidence of absence, because a clustered node
+// that has not applied the meta assignment answers it for a stream that exists.
+// A caller deciding something for the process lifetime wants ErrStreamNotVisible
+// out of the guarded consumer setup instead; see that sentinel and the package doc.
 func (m *Client) GetStream(ctx context.Context, name string) (jetstream.Stream, error) {
 	// Check circuit breaker first
 	if m.Status() == StatusCircuitOpen {

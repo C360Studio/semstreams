@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -182,6 +183,74 @@ func TestEnsureStream_BindDivergence(t *testing.T) {
 		assert.Contains(t, logged, "MaxAge")
 	})
 
+	// The seam's other bind: a create refused because the stream is already there.
+	// Reaching it needs a pre-check that misses a stream that exists, which one
+	// node never does on its own — hence the decorator. Everything past the first
+	// lookup is the real server: a real 10058 refusal and a real live handle.
+	t.Run("a create refused because the stream exists reports what it discarded", func(t *testing.T) {
+		logs.Reset()
+
+		_, err := js.CreateStream(ctx, jetstream.StreamConfig{
+			Name:     "RACED",
+			Subjects: []string{"raced.>"},
+			Storage:  jetstream.MemoryStorage,
+			MaxAge:   48 * time.Hour,
+			MaxBytes: 16 << 20,
+		})
+		require.NoError(t, err)
+
+		lagging := &firstStreamLookupAbsent{JetStream: js}
+		err = client.ensureStreamForConsumer(ctx, lagging, StreamConsumerConfig{
+			StreamName:    "RACED",
+			FilterSubject: "raced.work",
+			AutoCreate:    true,
+			AutoCreateConfig: &StreamAutoCreateConfig{
+				Subjects: []string{"raced.>"},
+				MaxAge:   time.Hour,
+				MaxBytes: 1 << 20,
+				Discard:  jetstream.DiscardOld,
+			},
+		})
+		require.NoError(t, err, "a stream that already exists is bound, not a failure")
+		require.Equal(t, int64(2), lagging.lookups.Load(),
+			"the pre-check missed, and the report resolved the live handle after the refusal")
+
+		logged := logs.String()
+		assert.Contains(t, logged, "diverges from this caller's declaration")
+		assert.Contains(t, logged, "RACED")
+		assert.Contains(t, logged, "MaxAge")
+	})
+
+	// The gate on both bind reports. A caller that writes AutoCreate and nothing
+	// else declared nothing: the values a report would compare are the framework's
+	// own defaults and a subject derived from the filter, so telling that adopter
+	// "two owners are declaring one stream" names a declaration they never wrote.
+	// The derived subject here deliberately does NOT match the live one, so the
+	// report would fire if the gate were removed.
+	t.Run("a consumer auto-create with no declaration reports nothing", func(t *testing.T) {
+		logs.Reset()
+
+		_, err := js.CreateStream(ctx, jetstream.StreamConfig{
+			Name:     "UNDECLARED",
+			Subjects: []string{"undeclared.alpha.>"},
+			Storage:  jetstream.MemoryStorage,
+			MaxAge:   48 * time.Hour,
+			MaxBytes: 16 << 20,
+		})
+		require.NoError(t, err)
+
+		err = client.ensureStreamForConsumer(ctx, js, StreamConsumerConfig{
+			StreamName:    "UNDECLARED",
+			FilterSubject: "undeclared.alpha.work",
+			AutoCreate:    true,
+		})
+		require.NoError(t, err)
+
+		assert.NotContains(t, logs.String(), "diverges",
+			"a declaration the caller never made cannot be a divergence, and the silence it "+
+				"replaces was not a defect")
+	})
+
 	// The bind path's OTHER report, which exists because the one above cannot see
 	// this case. An under-declared caller — the shape the create-versus-bind split
 	// sends here — declares nothing to compare, so the declared-versus-observed
@@ -271,4 +340,25 @@ func TestEnsureStream_BindDivergence(t *testing.T) {
 				"bind %d must report; suppressing repeats erases the contested-ownership signal", i)
 		}
 	})
+}
+
+// firstStreamLookupAbsent decorates a REAL jetstream.JetStream so the first
+// Stream() call answers jetstream.ErrStreamNotFound and everything after it —
+// every later lookup and every other method — goes to the real server.
+//
+// It reproduces the one condition that reaches the auto-create seam's 10058
+// branch and cannot be produced on a single node: a pre-check answered by a node
+// that has not applied the meta assignment, a create the server then refuses
+// because the stream is there, and a live handle for the report. Only the missed
+// lookup is simulated; the refusal and the handle are the server's own.
+type firstStreamLookupAbsent struct {
+	jetstream.JetStream
+	lookups atomic.Int64
+}
+
+func (f *firstStreamLookupAbsent) Stream(ctx context.Context, name string) (jetstream.Stream, error) {
+	if f.lookups.Add(1) == 1 {
+		return nil, jetstream.ErrStreamNotFound
+	}
+	return f.JetStream.Stream(ctx, name)
 }
