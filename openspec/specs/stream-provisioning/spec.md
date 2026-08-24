@@ -242,8 +242,6 @@ which is how a convention becomes something each consumer guesses at separately.
 - **GIVEN** a consumer auto-create whose pre-check found the stream absent
 - **WHEN** the create is refused because the stream already exists
 - **THEN** the caller binds the live stream instead of failing
-- **AND** the discarded declaration is reported with observed and declared values, since the refusal
-  occurs only when the live configuration differs
 
 #### Scenario: Two declarers of one stream are diagnosable
 

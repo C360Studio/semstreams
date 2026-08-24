@@ -220,29 +220,13 @@ func (c *Client) EnsureStream(ctx context.Context, cfg jetstream.StreamConfig) (
 // It reports and returns. No field is written, no error is produced, and the
 // caller receives the same stream it would have received before.
 func (c *Client) reportBindDivergence(declared jetstream.StreamConfig, stream jetstream.Stream) {
-	c.reportUnboundedLiveStream(declared.Name, stream)
-	c.reportDeclaredDivergence(declared, stream)
-}
-
-// liveStreamConfig is what a bind report compares against, or nil when there is
-// nothing to report from. Silence on a nil is right: claiming a divergence we
-// could not measure would be worse than not measuring it.
-func (c *Client) liveStreamConfig(stream jetstream.Stream) *jetstream.StreamInfo {
 	if c.logger == nil || stream == nil {
-		return nil
+		return
 	}
-	return stream.CachedInfo()
-}
-
-// reportUnboundedLiveStream reports a bound stream that declares no finite
-// bounds. It takes NO declaration, and that is the point: this is a property of
-// the LIVE stream, so it is reportable for any caller that binds an ordinary
-// stream — including the under-declared caller the create-versus-bind split sends
-// down that path, who has nothing to compare and is exactly the caller
-// stream_bounds.go designates this coverage for.
-func (c *Client) reportUnboundedLiveStream(name string, stream jetstream.Stream) {
-	info := c.liveStreamConfig(stream)
+	info := stream.CachedInfo()
 	if info == nil {
+		// Nothing to compare against. Silence is right here: claiming a divergence
+		// we could not measure would be worse than not measuring it.
 		return
 	}
 
@@ -258,7 +242,7 @@ func (c *Client) reportUnboundedLiveStream(name string, stream jetstream.Stream)
 		c.logger.Warn(
 			"bound an existing ORDINARY stream that declares no finite bounds; creating it today would be "+
 				"refused, and binding it does not repair it",
-			slog.String("stream", name),
+			slog.String("stream", declared.Name),
 			slog.String("observed_max_age", unlimitedOr(info.Config.MaxAge)),
 			slog.String("observed_max_bytes", unlimitedOrBytes(info.Config.MaxBytes)),
 			slog.String("remedy",
@@ -267,16 +251,6 @@ func (c *Client) reportUnboundedLiveStream(name string, stream jetstream.Stream)
 					"provisioner reconciles it. An archive whose contract is permanence belongs in "+
 					"archival_streams instead"),
 		)
-	}
-}
-
-// reportDeclaredDivergence reports a declaration this caller made and the bind
-// discarded. It requires a declaration the caller actually WROTE: comparing
-// framework-substituted defaults would name "two owners" for values nobody chose.
-func (c *Client) reportDeclaredDivergence(declared jetstream.StreamConfig, stream jetstream.Stream) {
-	info := c.liveStreamConfig(stream)
-	if info == nil {
-		return
 	}
 
 	divergences := DiffDeclaredStream(declared, info.Config)
@@ -842,46 +816,11 @@ func (c *Client) buildConsumerConfig(cfg StreamConsumerConfig) jetstream.Consume
 	return consumerCfg
 }
 
-// autoCreateBindSource names this seam in the name guard, on the bind path and on
-// the create path. One constant because the two calls must stay identical: the
-// create path's refusal is what proves the 10058 bind below needs no gate.
-const autoCreateBindSource = "natsclient consumer auto-create"
-
 // ensureStreamForConsumer auto-creates a stream if it doesn't exist.
-//
-// Its two BIND paths report what binding discarded, on different terms.
-//
-// The pre-check bind is reachable by ANY caller, so it gates each report on what
-// that report actually needs. The live stream's unboundedness is a property of
-// the stream, reportable for any ordinary-named stream. Declared-versus-observed
-// needs a declaration the caller WROTE: with no AutoCreateConfig the compared
-// values are the framework's own DefaultStreamConfig and a subject derived from
-// the filter, so reporting would tell an adopter "two owners are declaring one
-// stream" about a declaration they never made — a false alarm replacing silence.
-// Both stay behind the name guard, because a KV or ObjectStore backing stream
-// must not be told to "set finite limits on it"; that is the opposite of what
-// that guard exists to say.
-//
-// The 10058 bind — the create lost the race — needs no gate at all. Reaching the
-// create requires the declaration to have built, the name to have passed
-// CheckOrdinaryStreamName, and the bounds to have passed CheckStreamBounds, which
-// DefaultStreamConfig cannot do because it declares neither. A caller there
-// provably wrote an explicit configuration for an ordinary stream.
 func (c *Client) ensureStreamForConsumer(ctx context.Context, js jetstream.JetStream, cfg StreamConsumerConfig) error {
-	// What this caller declares, computed BEFORE the existence check so the bind
-	// path can say what it discarded. declErr is deliberately not returned here:
-	// an undeclarable auto-create config refuses CREATION, and must not refuse a
-	// caller's right to bind a stream that already exists.
-	declared, declErr := autoCreateStreamConfig(cfg)
-
-	stream, err := js.Stream(ctx, cfg.StreamName)
+	// Check if stream exists
+	_, err := js.Stream(ctx, cfg.StreamName)
 	if err == nil {
-		if CheckOrdinaryStreamName(declared.Name, autoCreateBindSource) == nil {
-			c.reportUnboundedLiveStream(declared.Name, stream)
-			if cfg.AutoCreateConfig != nil && declErr == nil {
-				c.reportDeclaredDivergence(declared, stream)
-			}
-		}
 		return nil // Stream exists
 	}
 
@@ -889,82 +828,8 @@ func (c *Client) ensureStreamForConsumer(ctx context.Context, js jetstream.JetSt
 		return errs.WrapTransient(err, "Client", "ensureStreamForConsumer",
 			"failed to check stream "+cfg.StreamName)
 	}
-	if declErr != nil {
-		return declErr
-	}
 
-	// THE SAME TWO GUARDS AS EVERY OTHER PROVISIONING SEAM. This is a third one:
-	// consumer auto-create is stream CREATION, whatever it is called, and it was
-	// the last unguarded route to an unbounded ordinary stream.
-	//
-	// The bounds guard matters most on the path that reaches here. When a caller
-	// supplies an AutoCreateConfig, DefaultStreamConfig is skipped entirely, so a
-	// config naming only Subjects and Storage produced MaxAge 0 and MaxBytes 0 —
-	// unlimited on both. The framework's own HEALTH, METRICS and FLOWS streams are
-	// memory-backed, so a NATS restart destroys them, and the next reconnect used
-	// to recreate them through here with no bounds at all — silently replacing the
-	// 5m/10MB the framework declares for them. The contract's own observability
-	// streams were its counterexample.
-	if err := CheckOrdinaryStreamName(declared.Name, autoCreateBindSource); err != nil {
-		return errs.WrapFatal(err, "Client", "ensureStreamForConsumer",
-			"validate stream name "+declared.Name)
-	}
-	if err := CheckStreamBounds(declared, "natsclient consumer auto-create (StreamConsumerConfig.AutoCreate)"); err != nil {
-		return errs.WrapFatal(err, "Client", "ensureStreamForConsumer",
-			"validate stream bounds for "+declared.Name)
-	}
-
-	// The duplicates clamp belongs to CREATION only. The server rejects an
-	// explicit window larger than MaxAge, so this keeps auto-create from failing
-	// on a misconfigured window (mirrors config.createStream) — and a caller that
-	// merely BINDS never sends this config anywhere, so warning it about a value
-	// nothing will use is noise. Clamped in place, before the create, so the
-	// 10058 branch below reports exactly what was asked for.
-	if declared.Duplicates > 0 && declared.MaxAge > 0 && declared.Duplicates > declared.MaxAge {
-		c.logger.Warn("duplicates window exceeds max_age; clamping to max_age",
-			"stream", cfg.StreamName, "duplicates", declared.Duplicates, "max_age", declared.MaxAge)
-		declared.Duplicates = declared.MaxAge
-	}
-
-	// Create the stream
-	_, err = js.CreateStream(ctx, declared)
-	if errors.Is(err, jetstream.ErrStreamNameAlreadyInUse) {
-		// The stream exists after all: the pre-check above was answered by a node
-		// that had not applied the assignment yet, or a peer created it in the
-		// meantime. Binding by name is the answer, exactly as on the pre-check's
-		// success path — a non-owner must not restamp a stream someone else
-		// declared. Returning it as transient would fail boot one seam over from
-		// the window natsclient just absorbed.
-		//
-		// The server answers 10058 ONLY when the live configuration differs from
-		// this one, so this branch IS the two-declarers condition, and it reports
-		// with observed and declared values rather than a bare line saying the
-		// stream was there.
-		live, lookupErr := js.Stream(ctx, declared.Name)
-		if lookupErr != nil {
-			c.logger.Info("stream already exists; bound by name without comparing declarations",
-				slog.String("stream", cfg.StreamName), slog.Any("lookup_error", lookupErr))
-			return nil
-		}
-		c.reportBindDivergence(declared, live)
-		return nil
-	}
-	if err != nil {
-		c.recordFailure()
-		return errs.WrapTransient(err, "Client", "ensureStreamForConsumer",
-			"failed to auto-create stream "+cfg.StreamName)
-	}
-
-	c.logger.Info("Auto-created stream",
-		slog.String("stream", cfg.StreamName), slog.Any("subjects", declared.Subjects))
-	return nil
-}
-
-// autoCreateStreamConfig builds the stream declaration a consumer's AutoCreate
-// would create. It is pure — no I/O, no guard, no logging, no client state — so
-// the bind paths can ask what this caller declared without inheriting the create
-// path's refusals, its clamp, or its diagnostics.
-func autoCreateStreamConfig(cfg StreamConsumerConfig) (jetstream.StreamConfig, error) {
+	// Stream doesn't exist, create it
 	autoConfig := cfg.AutoCreateConfig
 	if autoConfig == nil {
 		autoConfig = DefaultStreamConfig()
@@ -977,7 +842,7 @@ func autoCreateStreamConfig(cfg StreamConsumerConfig) (jetstream.StreamConfig, e
 		subjects = []string{deriveStreamSubject(cfg.FilterSubject)}
 	}
 	if len(subjects) == 0 {
-		return jetstream.StreamConfig{}, errs.WrapInvalid(
+		return errs.WrapInvalid(
 			fmt.Errorf("cannot auto-create stream without subjects"),
 			"Client", "ensureStreamForConsumer", "no subjects for stream "+cfg.StreamName)
 	}
@@ -1019,15 +884,57 @@ func autoCreateStreamConfig(cfg StreamConsumerConfig) (jetstream.StreamConfig, e
 	if autoConfig.Replicas > 0 {
 		streamCfg.Replicas = autoConfig.Replicas
 	}
-	// Carried through unclamped: the clamp is a property of CREATING this stream,
-	// and this function is also what the bind paths compare against. The > 0 guard
-	// stays, so a negative window keeps being dropped here rather than newly
-	// reaching the server.
 	if autoConfig.Duplicates > 0 {
-		streamCfg.Duplicates = autoConfig.Duplicates
+		dup := autoConfig.Duplicates
+		// Server rejects an explicit window > MaxAge; clamp to keep auto-create
+		// from failing on a misconfigured window (mirrors config.createStream).
+		if streamCfg.MaxAge > 0 && dup > streamCfg.MaxAge {
+			c.logger.Warn("duplicates window exceeds max_age; clamping to max_age",
+				"stream", cfg.StreamName, "duplicates", dup, "max_age", streamCfg.MaxAge)
+			dup = streamCfg.MaxAge
+		}
+		streamCfg.Duplicates = dup
 	}
 
-	return streamCfg, nil
+	// THE SAME TWO GUARDS AS EVERY OTHER PROVISIONING SEAM. This is a third one:
+	// consumer auto-create is stream CREATION, whatever it is called, and it was
+	// the last unguarded route to an unbounded ordinary stream.
+	//
+	// The bounds guard matters most on the path that reaches here. When a caller
+	// supplies an AutoCreateConfig, DefaultStreamConfig is skipped entirely, so a
+	// config naming only Subjects and Storage produced MaxAge 0 and MaxBytes 0 —
+	// unlimited on both. The framework's own HEALTH, METRICS and FLOWS streams are
+	// memory-backed, so a NATS restart destroys them, and the next reconnect used
+	// to recreate them through here with no bounds at all — silently replacing the
+	// 5m/10MB the framework declares for them. The contract's own observability
+	// streams were its counterexample.
+	if err := CheckOrdinaryStreamName(streamCfg.Name, "natsclient consumer auto-create"); err != nil {
+		return errs.WrapFatal(err, "Client", "ensureStreamForConsumer",
+			"validate stream name "+streamCfg.Name)
+	}
+	if err := CheckStreamBounds(streamCfg, "natsclient consumer auto-create (StreamConsumerConfig.AutoCreate)"); err != nil {
+		return errs.WrapFatal(err, "Client", "ensureStreamForConsumer",
+			"validate stream bounds for "+streamCfg.Name)
+	}
+
+	// Create the stream
+	_, err = js.CreateStream(ctx, streamCfg)
+	if errors.Is(err, jetstream.ErrStreamNameAlreadyInUse) {
+		// The pre-check missed a stream that exists: a node that had not applied
+		// the meta assignment, or a peer that created it in between. Returning
+		// this as transient would fail boot for a stream that is present.
+		c.logger.Info("stream already exists (created concurrently or on another node); binding it",
+			slog.String("stream", cfg.StreamName))
+		return nil
+	}
+	if err != nil {
+		c.recordFailure()
+		return errs.WrapTransient(err, "Client", "ensureStreamForConsumer",
+			"failed to auto-create stream "+cfg.StreamName)
+	}
+
+	c.logger.Info("Auto-created stream", slog.String("stream", cfg.StreamName), slog.Any("subjects", subjects))
+	return nil
 }
 
 // deriveStreamSubject converts a filter subject to a stream subject pattern.

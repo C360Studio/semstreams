@@ -103,10 +103,9 @@ func TestConsumerSetupReturnsNonAbsentStreamFailureWithoutProbingAgain(t *testin
 // TestConsumerAutoCreateBindsAStreamThatAlreadyExists covers the seam one step
 // over from the visibility wait. On a lagging node the auto-create pre-check is
 // answered "not found" for a stream that exists, so setup falls through to
-// CreateStream and the server answers 10058 — and if this caller's auto-create
-// config differs at all from the live declaration, that is exactly when it does.
-// Returning that as transient would fail boot for a stream that is present, one
-// seam away from the window natsclient just absorbed.
+// CreateStream and the server answers 10058. Returning that as transient would
+// fail boot for a stream that is present, one seam away from the window
+// natsclient just absorbed.
 //
 // The answer is to bind by name, matching the pre-check's own success path: a
 // non-owner does not restamp a stream someone else declared. Proof that setup
