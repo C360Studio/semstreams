@@ -200,6 +200,10 @@ restore with `cp` + checksum (no git checkout/stash of any kind).
   FAIL
   FAIL	github.com/c360studio/semstreams/flowstore	1.003s
   ```
+  Repeat-run stability of the barrier (no sleeps, so it should be deterministic):
+  `go test -race -tags=integration -count=5 -run 'TestManagerUpdateTwoManagersExactlyOneWins|TestManagerUpdateSuccessMutatesInputAfterCommit' ./flowstore/`
+  → `ok  	github.com/c360studio/semstreams/flowstore	4.031s`.
+
   (`marshal_failure` fails too: without the copy, the version/timestamp stamp lands on the caller's value before
   the marshal that rejects it.)
 - [x] 4.3 M3 — drop the `CreatedAt` restore: `TestManagerUpdatePreservesStoredCreatedAt` and
