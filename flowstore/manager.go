@@ -20,7 +20,6 @@ import (
 // definitions need; the ADR's canonical "Save" collapses into the
 // existing Create/Update pair here.
 type Manager struct {
-	bucket  jetstream.KeyValue  // Raw bucket for operations like Keys()
 	kvStore *natsclient.KVStore // KVStore wrapper for CAS operations
 
 	// beforeUpdateWrite is a package-private synchronization seam: Update calls
@@ -58,7 +57,6 @@ func NewManager(natsClient *natsclient.Client) (*Manager, error) {
 	}
 
 	return &Manager{
-		bucket:  bucket,
 		kvStore: natsClient.NewKVStore(bucket),
 	}, nil
 }
@@ -217,9 +215,28 @@ func (s *Manager) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// List retrieves all flows
+// List returns the Flows currently saved in the bucket.
+//
+// It reads CURRENT STATE. Keys are enumerated through KVStore.Keys, so an
+// empty bucket is a successful non-nil empty result, and a key whose read
+// reports typed absence — errors.Is(err, natsclient.ErrKVKeyNotFound), which
+// KVStore.Get returns for a never-created and for a tombstoned key — is
+// omitted rather than failing the list. One client deleting a Flow between
+// another client's enumeration and its read is ordinary churn, not that
+// caller's error.
+//
+// Every other per-key failure (transport, permission, deadline or
+// cancellation, a stored record that does not decode) aborts the list with a
+// nil result — never a partial list reported as success — and is returned
+// carrying the classification Get assigned it. The wrap is a plain %w for
+// exactly that reason: errs.IsFatal and errs.IsTransient resolve the FIRST
+// classified error in the chain, so an outer errs.Wrap* here would re-stamp a
+// fatal decode failure as transient. No message text is inspected anywhere on
+// this path.
+//
+// The result is in whatever order the bucket enumerated; List promises none.
 func (s *Manager) List(ctx context.Context) ([]*Flow, error) {
-	keys, err := s.bucket.Keys(ctx)
+	keys, err := s.kvStore.Keys(ctx)
 	if err != nil {
 		return nil, errs.WrapTransient(err, "flowstore", "List", "list KV keys")
 	}
@@ -231,8 +248,10 @@ func (s *Manager) List(ctx context.Context) ([]*Flow, error) {
 		}
 		flow, err := s.Get(ctx, key)
 		if err != nil {
-			return nil, errs.WrapTransient(err, "flowstore", "List",
-				fmt.Sprintf("get flow %s", key))
+			if errors.Is(err, natsclient.ErrKVKeyNotFound) {
+				continue
+			}
+			return nil, fmt.Errorf("flowstore.List: get flow %s: %w", key, err)
 		}
 		flows = append(flows, flow)
 	}

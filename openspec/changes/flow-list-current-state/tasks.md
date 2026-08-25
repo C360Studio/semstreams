@@ -184,28 +184,81 @@ flow list scenario (`grep -rn 'list_flows\|flowbuilder/flows' test/` → only th
 
 ## 3. GREEN — implement Slice B
 
-- [ ] 3.1 `flowstore/manager.go` `List`: `keys, err := s.kvStore.Keys(ctx)` (a Keys failure stays
+- [x] 3.1 `flowstore/manager.go` `List`: `keys, err := s.kvStore.Keys(ctx)` (a Keys failure stays
       `errs.WrapTransient` as today); `flows := make([]*Flow, 0, len(keys))`; per key: seam, then `s.Get`; on
       `errors.Is(err, natsclient.ErrKVKeyNotFound)` → `continue`; on any other error →
       `return nil, fmt.Errorf("flowstore.List: get flow %s: %w", key, err)` — a plain `%w` wrap, no `errs.Wrap*`, so
       the class Get assigned is the first one `errs.IsFatal`/`errs.IsTransient` resolve. Doc comment states: current
       state, typed-absence omission, abort with the read's class, no ordering promise.
-- [ ] 3.2 Remove `Manager.bucket` and its comment once `grep -n 's\.bucket' flowstore/*.go` returns nothing
+      `flowstore/manager.go:218-260` — doc comment `:218-236` (current state, typed-absence omission, abort with
+      the read's class and WHY the wrap is a plain `%w`, no ordering promise); `s.kvStore.Keys` at `:239`; the
+      `errs.WrapTransient` on a Keys failure is unchanged at `:240-242`; `make([]*Flow, 0, len(keys))` at `:244`;
+      the seam at `:246-248`; `errors.Is(err, natsclient.ErrKVKeyNotFound)` → `continue` at `:251-253`; the plain
+      abort `return nil, fmt.Errorf("flowstore.List: get flow %s: %w", key, err)` at `:254`.
+      `grep -n 'errs.Wrap' flowstore/manager.go` shows no `errs.Wrap*` inside the per-key loop.
+- [x] 3.2 Remove `Manager.bucket` and its comment once `grep -n 's\.bucket' flowstore/*.go` returns nothing
       (`NewManager` keeps its local `bucket` for `natsClient.NewKVStore(bucket)`). If another reader exists, record
       it here and keep the field.
-- [ ] 3.3 `service/flow_service.go`: `handleListFlows` — on error keep the existing opaque `500` (Slice C owns the
+      Measured, not assumed: `grep -n 's\.bucket' flowstore/*.go` → no matches (exit 1) after 3.1, so the field had
+      exactly one reader and it is gone. `Manager` is now one field (`flowstore/manager.go:22-23`); the stale
+      comment `// Raw bucket for operations like Keys()` went with it. `Watch` already read through
+      `s.kvStore.Watch` (`:264`), so nothing else lost a path. `NewManager` keeps its local `bucket` for
+      `natsClient.NewKVStore(bucket)` and the `jetstream` import is still needed there and by `Watch`'s return type.
+- [x] 3.3 `service/flow_service.go`: `handleListFlows` — on error keep the existing opaque `500` (Slice C owns the
       projection); on success `fs.writeJSON(w, newFlowListResponse(flows))`. `ensureDefaultFlowFromConfig` —
       `if err != nil { return fmt.Errorf("list flows: %w", err) }`; delete the substring branch.
       `grep -n 'no keys found' service/flow_service.go` → 0.
-- [ ] 3.4 `service/flow_service.go`: `FlowListResponse` (exported; `Flows []flowstore.Flow` tagged `json:"flows"`;
+      `service/flow_service.go:267-274` (`handleListFlows`: the opaque 500 is byte-identical to baseline; success
+      is `fs.writeJSON(w, newFlowListResponse(flows))`) and `:127-130` (`ensureDefaultFlowFromConfig`, now a plain
+      `if err != nil`). `grep -n 'no keys found' service/flow_service.go` → no matches (exit 1). The remaining
+      `strings.` uses in the file are `:189` (`HasSuffix` on the route prefix) and `:463,:478` (the metric-name
+      helper) — no substring branch on an error survives.
+- [x] 3.4 `service/flow_service.go`: `FlowListResponse` (exported; `Flows []flowstore.Flow` tagged `json:"flows"`;
       doc comment: present and non-null, `[]` when empty) and one unexported builder
       `newFlowListResponse(flows []*flowstore.Flow) FlowListResponse` that allocates
       `make([]flowstore.Flow, 0, len(flows))` and appends `*f` in the Manager's order. Register the type in
       `ResponseTypes`; set `GET /flows` `200` `SchemaRef` to `#/components/schemas/FlowListResponse`.
-- [ ] 3.5 All §2 tests green: the four focused commands from 2.6, then
+      `service/flow_service.go:276-284` (`FlowListResponse`, `Flows []flowstore.Flow` tagged `json:"flows"` with no
+      `omitempty`, so `schema.go:106-109` derives it required), `:286-294` (`newFlowListResponse`, the ONE builder;
+      `grep -n 'newFlowListResponse' service/*.go` → its definition plus the single call at `:273`), `:245`
+      (`ResponseTypes`), `:221` (the `GET /flows` `200` `SchemaRef`).
+- [x] 3.5 All §2 tests green: the four focused commands from 2.6, then
       `go test -race -count=1 ./flowstore/... ./service/... ./processor/agentic-tools/...` and
       `go test -race -tags=integration -p 2 -count=1 ./flowstore/... ./service/... ./processor/agentic-tools/executors/...`.
       Record output shape here. Commit GREEN before §4.
+
+  ```
+  $ go test -race -tags=integration -count=1 -v -run 'TestManagerList' ./flowstore/
+  --- PASS: TestManagerListEmptyBucketReturnsNonNilEmpty (0.40s)
+  --- PASS: TestManagerListSkipsOnlyVanishedKey (0.23s)
+  --- PASS: TestManagerListPreservesPerKeyTransientFailure (0.24s)
+  --- PASS: TestManagerListPreservesCorruptRecordFailure (0.24s)
+  ok  	github.com/c360studio/semstreams/flowstore	2.418s
+  $ go test -race -tags=integration -count=1 -v -run 'TestFlowExecutorListFlowsRealManagerEmpty' ./processor/agentic-tools/executors/
+  --- PASS: TestFlowExecutorListFlowsRealManagerEmpty (0.41s)
+  ok  	github.com/c360studio/semstreams/processor/agentic-tools/executors	1.816s
+  $ go test -race -tags=integration -count=1 -v -run 'TestHandleListFlowsEmptyResponseIsNonNullArray|TestEnsureDefaultFlowEmptyListUsesTypedOutcome|TestFlowCRUDDoesNotPublish' ./service/
+  --- PASS: TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager (0.25s)
+  --- PASS: TestHandleListFlowsEmptyResponseIsNonNullArray (0.28s)
+  --- PASS: TestEnsureDefaultFlowEmptyListUsesTypedOutcome (0.30s)
+  ok  	github.com/c360studio/semstreams/service	2.785s
+  $ go test -race -count=1 -v -run 'TestFlowOpenAPIPreservesFlowCRUDWireSchema' ./service/
+  --- PASS: TestFlowOpenAPIPreservesFlowCRUDWireSchema (0.00s)
+  ok  	github.com/c360studio/semstreams/service	1.442s
+  $ go test -race -count=1 ./flowstore/... ./service/... ./processor/agentic-tools/...
+  ok  	github.com/c360studio/semstreams/flowstore	1.271s
+  ok  	github.com/c360studio/semstreams/service	6.371s
+  ok  	github.com/c360studio/semstreams/processor/agentic-tools	2.124s
+  ok  	github.com/c360studio/semstreams/processor/agentic-tools/executors	2.603s
+  ok  	github.com/c360studio/semstreams/processor/agentic-tools/runner	1.538s
+  $ go test -race -tags=integration -p 2 -count=1 ./flowstore/... ./service/... ./processor/agentic-tools/executors/...
+  ok  	github.com/c360studio/semstreams/flowstore	3.920s
+  ok  	github.com/c360studio/semstreams/service	42.019s
+  ok  	github.com/c360studio/semstreams/processor/agentic-tools/executors	4.321s
+  ```
+
+  The four focused commands were re-run with `-v` so the PASS lines name the tests: an `ok` alone cannot
+  distinguish a green suite from a `-run` that matched nothing.
 
 ## 4. Forced omissions — each guard must be load-bearing
 
