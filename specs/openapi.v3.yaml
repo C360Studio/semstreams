@@ -122,7 +122,7 @@ paths:
                     content:
                         application/json:
                             schema:
-                                type: object
+                                $ref: '#/components/schemas/FlowListResponse'
         post:
             summary: Create a saved flow diagram
             description: Saves a diagram without changing runtime configuration.
@@ -1445,6 +1445,98 @@ components:
                 - name
                 - nodes
                 - connections
+            type: object
+        FlowListResponse:
+            properties:
+                flows:
+                    items:
+                        properties:
+                            connections:
+                                items:
+                                    properties:
+                                        id:
+                                            type: string
+                                        source_node_id:
+                                            type: string
+                                        source_port:
+                                            type: string
+                                        target_node_id:
+                                            type: string
+                                        target_port:
+                                            type: string
+                                    required:
+                                        - id
+                                        - source_node_id
+                                        - source_port
+                                        - target_node_id
+                                        - target_port
+                                    type: object
+                                type: array
+                            created_at:
+                                format: date-time
+                                type: string
+                            created_by:
+                                type: string
+                            description:
+                                type: string
+                            id:
+                                type: string
+                            last_modified:
+                                format: date-time
+                                type: string
+                            name:
+                                type: string
+                            nodes:
+                                items:
+                                    properties:
+                                        component:
+                                            type: string
+                                        config:
+                                            additionalProperties: {}
+                                            type: object
+                                        id:
+                                            type: string
+                                        name:
+                                            type: string
+                                        position:
+                                            properties:
+                                                x:
+                                                    type: number
+                                                "y":
+                                                    type: number
+                                            required:
+                                                - x
+                                                - "y"
+                                            type: object
+                                        type:
+                                            type: string
+                                    required:
+                                        - id
+                                        - component
+                                        - type
+                                        - name
+                                        - position
+                                        - config
+                                    type: object
+                                type: array
+                            updated_at:
+                                format: date-time
+                                type: string
+                            version:
+                                type: integer
+                        required:
+                            - id
+                            - name
+                            - version
+                            - nodes
+                            - connections
+                            - created_at
+                            - updated_at
+                            - last_modified
+                        type: object
+                    type: array
+            required:
+                - flows
             type: object
         FlowUpdateRequest:
             properties:
