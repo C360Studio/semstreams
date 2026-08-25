@@ -110,24 +110,61 @@ an inner code); `service/flow_service.go:221,225` (request `SchemaRef` Flow), `:
 
 ## 3. GREEN — implement Slice A
 
-- [ ] 3.1 `flowstore/manager.go` `Update`: validate → `s.kvStore.Get` (value + revision) → decode stored → logical
+- [x] 3.1 `flowstore/manager.go` `Update`: validate → `s.kvStore.Get` (value + revision) → decode stored → logical
       compare → copy candidate → `candidate.CreatedAt = stored.CreatedAt`, `candidate.Version = stored.Version + 1`,
       one `now` for `UpdatedAt` and `LastModified`, `CreatedBy` from the request → marshal →
       `s.kvStore.Update(ctx, id, data, entry.Revision)` → on `natsclient.ErrKVRevisionMismatch` return the typed
       conflict → on success `*flow = candidate`. Every failure returns before any assignment to `*flow`.
-- [ ] 3.2 The typed conflict for BOTH the logical mismatch and the fence loss carries the existing ADR-060 code
+      `flowstore/manager.go:132-187`. The sequence is exactly as written; `*flow = candidate` is the last statement
+      before `return nil` (`:185`) and is the only assignment to `*flow` in the function.
+- [x] 3.2 The typed conflict for BOTH the logical mismatch and the fence loss carries the existing ADR-060 code
       (e.g. `errs.WrapInvalid(errs.ClassifiedCode(errs.ErrorInvalid, errs.ErrRevisionMismatch.Code, cause),
       "flowstore", "Update", ...)`); assert `errors.Is(err, errs.ErrRevisionMismatch)` in the tests. No new exported
       sentinel. Non-conflict failure classifications (missing key → transient, corrupt JSON → fatal) are unchanged.
-- [ ] 3.3 `service/`: add `FlowCreateRequest` and `FlowUpdateRequest` (HTTP boundary types; `omitempty` on the
+      One helper, `flowstore/manager.go:189-197` `versionConflict`, serves both sites (`:157` logical, `:180` fence);
+      `errs.WrapInvalid` inherits the inner `ClassifiedCode`'s machine contract (`pkg/errs/errs.go:296-307,443`), so
+      the wrapped error carries `Code == "revision_mismatch"` and `errors.Is(err, errs.ErrRevisionMismatch)` is true.
+      Asserted in `TestManagerUpdateTwoManagersExactlyOneWins`,
+      `TestManagerUpdateFailedWriteDoesNotMutateInput/{logical_version_mismatch,lost_revision_fence}` and
+      `TestManagerDiagramCRUDAndVersioning`.
+      **Measured correction to this task's parenthetical.** "corrupt JSON → fatal" is what the new code does
+      (`:151` `WrapFatal`) but it is NOT unchanged: at baseline `Update` read through `Manager.Get`, whose inner
+      `WrapFatal` (`manager.go:109`) was re-wrapped by `WrapTransient` at `manager.go:122`, and `errs.IsFatal` reads
+      the OUTERMOST `*ClassifiedError` — so corrupt stored JSON surfaced as **transient** before this change. The RED
+      run records that (`decode_failure_on_a_corrupt_record`). The parenthetical was implemented as written and the
+      baseline mismatch is recorded here rather than silently resolved either way. Missing key stays transient
+      (`:147`), as both readings agree.
+- [x] 3.3 `service/`: add `FlowCreateRequest` and `FlowUpdateRequest` (HTTP boundary types; `omitempty` on the
       optional fields so `schema.go:107` derives the required sets) with a helper that builds a `flowstore.Flow`;
       decode POST/PUT into them; register both in `RequestBodyTypes`; point the POST/PUT `SchemaRef`s at them.
       Do not call `DisallowUnknownFields` — legacy full-`Flow` bodies must keep decoding.
-- [ ] 3.4 `handleUpdateFlow`: replace `strings.Contains(err.Error(), "conflict")` with
+      `service/flow_service.go:278-330` (both types plus their unexported `flow()` builders), decode at `:332-337`
+      (POST) and `:362-368` (PUT), `RequestBodyTypes` at `:246-250`, `SchemaRef`s at `:222` (POST) and `:226` (PUT).
+      `grep -n "DisallowUnknownFields" service/flow_service.go` → no match.
+- [x] 3.4 `handleUpdateFlow`: replace `strings.Contains(err.Error(), "conflict")` with
       `errors.Is(err, errs.ErrRevisionMismatch)` → 409. Leave every other status and body as it is (Slice C owns the
       mapper and the exact messages).
-- [ ] 3.5 All tests from §2 green: the two focused commands from 2.5, then `go test -race ./flowstore/... ./service/...`
+      `service/flow_service.go:374` — `if errors.Is(err, errs.ErrRevisionMismatch)`. The 500 branch, both bodies and
+      every other status are byte-identical to baseline; `grep -n 'strings.Contains' service/flow_service.go` no
+      longer hits `handleUpdateFlow` (remaining hits are the List "no keys found" branches at `:128`/`:269` and the
+      metric-name helpers at `:445`/`:460`, all Slice B/other work).
+- [x] 3.5 All tests from §2 green: the two focused commands from 2.5, then `go test -race ./flowstore/... ./service/...`
       and `go test -race -tags=integration -p 2 -count=1 ./flowstore/... ./service/...`. Record output shape here.
+
+  ```
+  $ go test -race -tags=integration -count=1 -run 'TestManagerUpdate' ./flowstore/
+  ok  	github.com/c360studio/semstreams/flowstore	2.694s
+  $ go test -race -count=1 -run 'TestFlow(UpdateRequestSchema|OpenAPIPreserves)' ./service/
+  ok  	github.com/c360studio/semstreams/service	1.519s
+  $ go test -race -tags=integration -count=1 -run 'TestFlowCRUDDoesNotPublish' ./service/
+  ok  	github.com/c360studio/semstreams/service	2.237s
+  $ go test -race -count=1 ./flowstore/... ./service/...
+  ok  	github.com/c360studio/semstreams/flowstore	1.289s
+  ok  	github.com/c360studio/semstreams/service	6.484s
+  $ go test -race -tags=integration -p 2 -count=1 ./flowstore/... ./service/...
+  ok  	github.com/c360studio/semstreams/flowstore	2.983s
+  ok  	github.com/c360studio/semstreams/service	33.206s
+  ```
 
 ## 4. Forced omissions — the fence and the copy must each be load-bearing
 
