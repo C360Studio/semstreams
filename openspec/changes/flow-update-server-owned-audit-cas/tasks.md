@@ -249,28 +249,76 @@ restore with `cp` + checksum (no git checkout/stash of any kind).
 
 ## 5. Schema regeneration — Slice A rows only
 
-- [ ] 5.1 `task schema:generate`; `git diff --stat schemas/ specs/openapi.v3.yaml` shows only the
+- [x] 5.1 `task schema:generate`; `git diff --stat schemas/ specs/openapi.v3.yaml` shows only the
       `FlowCreateRequest`/`FlowUpdateRequest` schemas and the two request-body refs (no rows from Slices B–D).
-      Commit the delta.
-- [ ] 5.2 Regenerate once more; `task schema:check-changes` (i.e. `git diff --exit-code schemas/
-      specs/openapi.v3.yaml`) passes — no drift.
-- [ ] 5.3 `go test ./test/contract/...` green (`TestCommittedOpenAPISpecValid`, `TestOpenAPISchemaReferences`).
+      Commit the delta. Committed as `de6f23fa`.
+
+  ```
+  $ git diff --stat schemas/ specs/openapi.v3.yaml
+   specs/openapi.v3.yaml | 146 +++++++++++++++++++++++++++++++++++++++++++++++++-
+   1 file changed, 144 insertions(+), 2 deletions(-)
+  ```
+  Content of the delta: `paths./flows.post.requestBody` `$ref` Flow → FlowCreateRequest;
+  `paths./flows/{id}.put.requestBody` `$ref` Flow → FlowUpdateRequest; and the two new `components.schemas` entries
+  (`FlowCreateRequest` required `name,nodes,connections`; `FlowUpdateRequest` required
+  `id,version,name,nodes,connections`; neither declares `created_at`, `updated_at` or `last_modified`, and
+  `FlowCreateRequest` declares no `version`). No `schemas/` file changed and no other path or schema moved.
+- [x] 5.2 Regenerate once more; `task schema:check-changes` (i.e. `git diff --exit-code schemas/
+      specs/openapi.v3.yaml`) passes — no drift. Ran `task schema:generate` again after the commit;
+      `task schema:check-changes` exited 0 with no diff output, and `git status --porcelain` was empty.
+- [x] 5.3 `go test ./test/contract/...` green (`TestCommittedOpenAPISpecValid`, `TestOpenAPISchemaReferences`).
+
+  ```
+  $ go test ./test/contract/...
+  ok  	github.com/c360studio/semstreams/test/contract	3.033s
+  $ go test -v -count=1 -run 'TestCommittedOpenAPISpecValid|TestOpenAPISchemaReferences' ./test/contract/...
+  --- PASS: TestCommittedOpenAPISpecValid (0.00s)
+  --- PASS: TestOpenAPISchemaReferences (0.00s)
+  ok  	github.com/c360studio/semstreams/test/contract	0.383s
+  ```
 
 ## 6. Standard gates — record each command and its result
 
-- [ ] 6.1 `task lint` — 0 warnings (revive warnings fail CI).
-- [ ] 6.2 `go test -race ./...` — no `^FAIL` lines.
-- [ ] 6.3 `go test -race -tags=integration -p 2 -count=1 ./...` — no `^FAIL` lines (Docker required).
-- [ ] 6.4 `task build` — Linux cross-compile green.
-- [ ] 6.5 `go vet -tags=integration ./...` clean (tagged tests compile).
-- [ ] 6.6 `openspec validate flow-update-server-owned-audit-cas --strict` — pass.
+- [x] 6.1 `task lint` — 0 warnings (revive warnings fail CI). `go vet ./...`, `go fmt ./...`,
+      `go tool revive -config revive.toml -formatter friendly ./...`, the fixed-port guard and the request guard all
+      ran; revive printed no findings; `ok github.com/c360studio/semstreams/test/natsclient 0.515s`;
+      `git status --porcelain` empty afterwards (nothing reformatted).
+- [x] 6.2 `go test -race ./...` — no `^FAIL` lines. exit=0; `grep -E "^FAIL|^--- FAIL"` over the full output
+      returned nothing.
+- [x] 6.3 `go test -race -tags=integration -p 2 -count=1 ./...` — no `^FAIL` lines (Docker required). exit=0,
+      543s wall; `grep -E "^FAIL|^--- FAIL"` over the full output returned nothing.
+- [x] 6.4 `task build` — Linux cross-compile green. `task build` → `Built bin/semstreams`; and the exact CI
+      invocation `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o semstreams-linux-amd64
+      ./cmd/semstreams` (`.github/workflows/ci.yml:137-141`) produced a 29671586-byte linux/amd64 binary.
+- [x] 6.5 `go vet -tags=integration ./...` clean (tagged tests compile). No output.
+- [x] 6.6 `openspec validate flow-update-server-owned-audit-cas --strict` — pass.
+      `Change 'flow-update-server-owned-audit-cas' is valid`
 
 ## 7. Review and archive (inside the landing PR)
 
 - [ ] 7.1 `semstreams-reviewer` review requested on the undrafted PR; verdict and every finding's disposition recorded
       as PR comments (or `conformance.md` in this change). A finding on an unused path is filed, not fixed here.
-- [ ] 7.2 Reconcile: every scenario in `specs/flow-authoring/spec.md` names the test that verifies it and that test
-      exists and is green; any deliberate not-done is `[~]` here AND noted in the delta.
+- [x] 7.2 Reconcile: every scenario in `specs/flow-authoring/spec.md` names the test that verifies it and that test
+      exists and is green; any deliberate not-done is `[~]` here AND noted in the delta. No `[~]` — every scenario
+      is verified by a test that exists and passed in the 6.2/6.3 runs. Mapping:
+
+  | Scenario | Test | Location |
+  |---|---|---|
+  | omitted created_at restored | `TestManagerUpdatePreservesStoredCreatedAt` | `flowstore/manager_integration_test.go:124` |
+  | supplied created_at ignored | `TestManagerUpdateIgnoresForgedCreatedAt` | `:161` |
+  | update timestamps are one server instant | `TestManagerUpdateSuccessMutatesInputAfterCommit` | `:413` |
+  | stale logical version rejected without a write | `TestManagerDiagramCRUDAndVersioning` + `TestManagerUpdateFailedWriteDoesNotMutateInput` | `:18`, `:280` |
+  | created_by caller-preserved | `TestManagerUpdatePreservesStoredCreatedAt` | `:124` |
+  | two Managers, exactly one wins | `TestManagerUpdateTwoManagersExactlyOneWins` | `:188` |
+  | logical + revision mismatch are one typed conflict | `TestManagerUpdateTwoManagersExactlyOneWins` + `TestManagerDiagramCRUDAndVersioning` | `:188`, `:18` |
+  | HTTP 409 by classification | `TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager` | `service/flow_service_test.go:91` |
+  | failed write does not mutate the input | `TestManagerUpdateFailedWriteDoesNotMutateInput` | `flowstore/manager_integration_test.go:280` |
+  | loser keeps its input | `TestManagerUpdateTwoManagersExactlyOneWins` | `:188` |
+  | success mutates the input only after commit | `TestManagerUpdateSuccessMutatesInputAfterCommit` | `:413` |
+  | update request schema omits audit fields | `TestFlowUpdateRequestSchemaOmitsServerAuditFields` | `service/flow_surface_test.go:79` |
+  | create request schema omits version/timestamps | `TestFlowUpdateRequestSchemaOmitsServerAuditFields` | `service/flow_surface_test.go:79` |
+  | legacy full-Flow update body decodes | `TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager` | `service/flow_service_test.go:91` |
+  | Flow response schema unchanged | `TestFlowOpenAPIPreservesFlowCRUDWireSchema` | `service/flow_surface_test.go:43` |
 - [ ] 7.3 Last commit of the landing PR: `openspec archive flow-update-server-owned-audit-cas` with the spec sync,
       reviewed alongside the code.
 
