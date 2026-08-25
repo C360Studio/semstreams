@@ -24,13 +24,13 @@ an inner code); `service/flow_service.go:221,225` (request `SchemaRef` Flow), `:
       `natsclient.NewTestClient`): add `TestManagerUpdatePreservesStoredCreatedAt` (omitted `created_at`; also asserts
       `created_by` stored verbatim), `TestManagerUpdateIgnoresForgedCreatedAt`,
       `TestManagerUpdateTwoManagersExactlyOneWins` (two `NewManager` over one client/bucket; both read the same
-      revision; explicit hold/release; assert exactly one nil, one typed conflict, version +1 once, stored content is
+      revision; an explicit pause/release barrier; assert exactly one nil, one typed conflict, version +1 once, stored content is
       the winner's, loser input deeply equal, winner input unchanged until commit — no sleeps),
       `TestManagerUpdateFailedWriteDoesNotMutateInput` (a deterministic failed persist: the losing side of the fence
-      or a context cancelled at the hold point; `reflect.DeepEqual` against a pre-call copy),
-      `TestManagerUpdateSuccessMutatesInputAfterCommit` (input unchanged at the hold point; after commit equals the
+      or a context cancelled at the pause seam; `reflect.DeepEqual` against a pre-call copy),
+      `TestManagerUpdateSuccessMutatesInputAfterCommit` (input unchanged at the pause seam; after commit equals the
       stored record; `UpdatedAt == LastModified`).
-- [ ] 2.2 The hold point is an unexported package-private seam on `Manager` (nil in production, set only from
+- [ ] 2.2 The pause seam is an unexported package-private seam on `Manager` (nil in production, set only from
       `package flowstore` tests). No exported field, option, or constructor parameter.
 - [ ] 2.3 `service/flow_surface_test.go`: add `TestFlowUpdateRequestSchemaOmitsServerAuditFields` — uses
       `SchemaFromType` on `FlowUpdateRequest` and `FlowCreateRequest`, asserts absent timestamp/version properties,
