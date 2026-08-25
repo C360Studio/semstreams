@@ -323,6 +323,10 @@ restore with `cp` + checksum (no git checkout/stash of any kind).
       seam COMPLIANT with the context rule. Assessments i/ii/iii are in the PR body for the owner. FILE: nothing
       beyond the implementer's list. The reviewer re-ran the focused suites and M1–M4 itself; the full-suite §6
       lines are the implementer's record, not re-run by the reviewer.
+      Owner-run Codex round on `674461bf`: **APPROVE**, no BLOCKING/HIGH; two MEDIUM → FIXED in the commit after
+      `674461bf`: (1) delta scenario "update timestamps are one server instant" promised monotonicity against a prior
+      stored value that Update does not enforce (Codex proved it with a future-dated prior) → narrowed to the accepted
+      one-server-instant guarantee; (2) this table had 15 rows for 16 scenarios → corrupt-record row added.
 - [x] 7.2 Reconcile: every scenario in `specs/flow-authoring/spec.md` names the test that verifies it and that test
       exists and is green; any deliberate not-done is `[~]` here AND noted in the delta. No `[~]` — every scenario
       is verified by a test that exists and passed in the 6.2/6.3 runs. Mapping:
@@ -344,8 +348,10 @@ restore with `cp` + checksum (no git checkout/stash of any kind).
   | create request schema omits version/timestamps | `TestFlowUpdateRequestSchemaOmitsServerAuditFields` | `service/flow_surface_test.go:79` |
   | legacy full-Flow update body decodes | `TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager` | `service/flow_service_test.go:91` |
   | Flow response schema unchanged | `TestFlowOpenAPIPreservesFlowCRUDWireSchema` | `service/flow_surface_test.go:43` |
-- [ ] 7.3 Last commit of the landing PR: `openspec archive flow-update-server-owned-audit-cas` with the spec sync,
-      reviewed alongside the code.
+  | stored record does not decode: fatal, input untouched | `TestManagerUpdateFailedWriteDoesNotMutateInput/decode_failure_on_a_corrupt_record` | `flowstore/manager_integration_test.go:364` |
+- [x] 7.3 Last commit of the landing PR: `openspec archive flow-update-server-owned-audit-cas` with the spec sync,
+      reviewed alongside the code. Archived 2026-08-25 (`openspec archive --yes`); the narrow reviewer check of the
+      archive/spec sync follows as a PR comment.
 
 ## 8. Not in scope (recorded so the archiver does not infer completion)
 

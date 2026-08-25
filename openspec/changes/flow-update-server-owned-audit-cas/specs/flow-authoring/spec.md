@@ -29,7 +29,8 @@ record.
 - **GIVEN** a saved Flow
 - **WHEN** an Update commits
 - **THEN** the stored `updated_at` and `last_modified` are equal to each other
-- **AND** both are later than the stored record's previous values regardless of what the request carried
+- **AND** that instant is server-observed: the `updated_at`/`last_modified` values the request carried are not what was
+  stored (one server instant is the accepted guarantee; monotonicity against a prior stored value is not promised)
 - **AND** the test that verifies this is `TestManagerUpdateSuccessMutatesInputAfterCommit`
 
 #### Scenario: a stale logical version is rejected without a write
