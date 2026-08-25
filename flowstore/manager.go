@@ -21,6 +21,15 @@ import (
 type Manager struct {
 	bucket  jetstream.KeyValue  // Raw bucket for operations like Keys()
 	kvStore *natsclient.KVStore // KVStore wrapper for CAS operations
+
+	// beforeUpdateWrite is a package-private synchronization seam: Update calls
+	// it (when non-nil) after it has read the stored record and built its
+	// candidate, immediately before the revision-fenced write. It is nil in
+	// production — nothing outside package flowstore can reach it — and exists
+	// so the concurrency proof in this package can hold two Managers at the same
+	// observed revision without sleeping. Never make it exported, an option, or
+	// a constructor parameter.
+	beforeUpdateWrite func(ctx context.Context)
 }
 
 // NewManager creates a new flow store
@@ -138,6 +147,10 @@ func (s *Manager) Update(ctx context.Context, flow *Flow) error {
 	data, err := json.Marshal(flow)
 	if err != nil {
 		return errs.WrapFatal(err, "flowstore", "Update", "marshal flow")
+	}
+
+	if s.beforeUpdateWrite != nil {
+		s.beforeUpdateWrite(ctx)
 	}
 
 	if _, err := s.kvStore.Put(ctx, flow.ID, data); err != nil {

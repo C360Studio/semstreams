@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/componentregistry"
@@ -121,12 +122,28 @@ func TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager
 	require.Equal(t, "preserved-client-field", flow.CreatedBy)
 	require.Empty(t, configManager.GetConfig().Get().Components, "CRUD create must not publish component config")
 
+	createdAt := flow.CreatedAt
+	require.False(t, createdAt.IsZero(), "create must stamp created_at")
+
+	// A legacy full-Flow body, with a forged created_at: it decodes, the server
+	// ignores the client's audit timestamps, and provenance survives the save.
 	flow.Description = "updated authoring metadata"
+	flow.CreatedAt = time.Date(1999, time.January, 2, 3, 4, 5, 0, time.UTC)
+	flow.UpdatedAt = flow.CreatedAt
+	flow.LastModified = flow.CreatedAt
+	stale := flow
 	updated := doJSON(http.MethodPut, "/flowbuilder/flows/authoring-contract", flow)
 	require.Equal(t, http.StatusOK, updated.Code, updated.Body.String())
 	require.NoError(t, json.Unmarshal(updated.Body.Bytes(), &flow))
 	require.Equal(t, int64(2), flow.Version)
+	require.True(t, flow.CreatedAt.Equal(createdAt), "forged created_at was stored: %v", flow.CreatedAt)
+	require.True(t, flow.UpdatedAt.Equal(flow.LastModified), "update timestamps must be one server instant")
 	require.Empty(t, configManager.GetConfig().Get().Components, "CRUD update must not publish component config")
+
+	// The now-stale body loses the optimistic-concurrency precondition; 409 is
+	// decided by the error's classification, not by its message text.
+	conflicted := doJSON(http.MethodPut, "/flowbuilder/flows/authoring-contract", stale)
+	require.Equal(t, http.StatusConflict, conflicted.Code, conflicted.Body.String())
 
 	for attempt := 1; attempt <= 2; attempt++ {
 		published := doJSON(http.MethodPost, "/flowbuilder/flows/authoring-contract/publish-component-configs", nil)

@@ -15,12 +15,14 @@ an inner code); `service/flow_service.go:221,225` (request `SchemaRef` Flow), `:
 
 ## 1. Claim
 
-- [ ] 1.1 Branch `claude/gh1009-flowstore-update-timestamps` pushed; draft PR open with `Closes #1009` and
+- [x] 1.1 Branch `claude/gh1009-flowstore-update-timestamps` pushed; draft PR open with `Closes #1009` and
       `implemented-by: <model>` in the body; this change directory is its first commit.
+      Draft PR **#1083** (`Closes #1009`); first commit `a7856040 docs(openspec): flow-update-server-owned-audit-cas
+      — Slice A target state for #1009`.
 
 ## 2. RED — write the named tests first and capture the baseline failures
 
-- [ ] 2.1 `flowstore/manager_integration_test.go` (`//go:build integration`, real NATS via
+- [x] 2.1 `flowstore/manager_integration_test.go` (`//go:build integration`, real NATS via
       `natsclient.NewTestClient`): add `TestManagerUpdatePreservesStoredCreatedAt` (omitted `created_at`; also asserts
       `created_by` stored verbatim), `TestManagerUpdateIgnoresForgedCreatedAt`,
       `TestManagerUpdateTwoManagersExactlyOneWins` (two `NewManager` over one client/bucket; both read the same
@@ -30,21 +32,81 @@ an inner code); `service/flow_service.go:221,225` (request `SchemaRef` Flow), `:
       or a context cancelled at the pause seam; `reflect.DeepEqual` against a pre-call copy),
       `TestManagerUpdateSuccessMutatesInputAfterCommit` (input unchanged at the pause seam; after commit equals the
       stored record; `UpdatedAt == LastModified`).
-- [ ] 2.2 The pause seam is an unexported package-private seam on `Manager` (nil in production, set only from
+- [x] 2.2 The pause seam is an unexported package-private seam on `Manager` (nil in production, set only from
       `package flowstore` tests). No exported field, option, or constructor parameter.
-- [ ] 2.3 `service/flow_surface_test.go`: add `TestFlowUpdateRequestSchemaOmitsServerAuditFields` — uses
+      `flowstore/manager.go:25-33` — `beforeUpdateWrite func(ctx context.Context)`, nil in production, invoked at
+      `manager.go:155-157` immediately before the fenced write. Grep proof that nothing outside the package can
+      reach it: `grep -rn "beforeUpdateWrite" . --include='*.go'` → 5 hits, all in `flowstore/manager.go` and
+      `flowstore/manager_integration_test.go` (`package flowstore`). It was added in the RED commit rather than the
+      GREEN one so the §2.1 tests fail behaviourally (a compile error is not the intended failure); baseline
+      `Update` is otherwise untouched at RED.
+- [x] 2.3 `service/flow_surface_test.go`: add `TestFlowUpdateRequestSchemaOmitsServerAuditFields` — uses
       `SchemaFromType` on `FlowUpdateRequest` and `FlowCreateRequest`, asserts absent timestamp/version properties,
       the exact required sets, that `RequestBodyTypes` carries both types, and the POST/PUT `SchemaRef`s. Update
       `TestFlowOpenAPIPreservesFlowCRUDWireSchema` so it pins POST → `FlowCreateRequest`, PUT → `FlowUpdateRequest`,
       validate → `Flow`, responses → `Flow`.
-- [ ] 2.4 `service/flow_service_test.go` `TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager`:
+- [x] 2.4 `service/flow_service_test.go` `TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager`:
       extend with (a) a PUT of the full `Flow` body carrying a forged `created_at` → 200 and `created_at` equal to
       the created value; (b) a re-PUT of the now-stale body → 409.
-- [ ] 2.5 RED capture on baseline code, recorded here verbatim (package + test name + failing assertion):
+      Added at `service/flow_service_test.go:124-146`. Its RED is the same build failure as 2.3 — `package service`
+      and `package service_test` compile into one test binary, so the undefined request types fail both.
+- [x] 2.5 RED capture on baseline code, recorded here verbatim (package + test name + failing assertion):
       `go test -race -tags=integration -count=1 -run 'TestManagerUpdate' ./flowstore/` and
       `go test -race -count=1 -run 'TestFlow(UpdateRequestSchema|OpenAPIPreserves)' ./service/` (the schema test is
       expected to fail to compile until 3.3 — record that as its RED). Expected shape: created_at zero / forged
       value stored; both writers succeed; input mutated before the failed Put.
+
+  RED at `9d23f2cd` + the §2 tests + the 2.2 seam only (production `Update` logic untouched):
+
+  ```
+  $ go test -race -tags=integration -count=1 -run 'TestManagerUpdate' ./flowstore/
+  --- FAIL: TestManagerUpdatePreservesStoredCreatedAt (0.41s)
+      manager_integration_test.go:150: stored created_at = 0001-01-01 00:00:00 +0000 UTC, want 2026-08-25 07:13:36.389156 -0500 CDT (restored from the stored record)
+      manager_integration_test.go:153: returned created_at = 0001-01-01 00:00:00 +0000 UTC, want 2026-08-25 07:13:36.389156 -0500 CDT
+  --- FAIL: TestManagerUpdateIgnoresForgedCreatedAt (0.25s)
+      manager_integration_test.go:180: stored created_at = 1999-01-02 03:04:05 +0000 UTC, want 2026-08-25 07:13:36.625323 -0500 CDT (forged value must be ignored)
+  --- FAIL: TestManagerUpdateTwoManagersExactlyOneWins (0.25s)
+      manager_integration_test.go:224: A mutated its input before commit:
+           got flowstore.Flow{... Version:2, ... UpdatedAt:time.Date(2026, time.August, 25, 7, 13, 36, 877272000, time.Local) ...}
+          want flowstore.Flow{... Version:1, ... UpdatedAt:time.Date(2026, time.August, 25, 7, 13, 36, 875085000, time.Local) ...}
+      manager_integration_test.go:227: B mutated its input before commit:
+           got flowstore.Flow{... Version:2, ...}
+          want flowstore.Flow{... Version:1, ...}
+      manager_integration_test.go:262: want exactly one winner, got 2 (A=<nil> B=<nil>)
+  --- FAIL: TestManagerUpdateFailedWriteDoesNotMutateInput (0.25s)
+      --- FAIL: TestManagerUpdateFailedWriteDoesNotMutateInput/logical_version_mismatch (0.00s)
+          manager_integration_test.go:298: error is not the typed conflict: flowstore.Update: conflict: flow was modified by another user failed: version mismatch: expected 1, got 0
+      --- FAIL: TestManagerUpdateFailedWriteDoesNotMutateInput/lost_revision_fence (0.00s)
+          manager_integration_test.go:333: update committed over a foreign write
+      --- FAIL: TestManagerUpdateFailedWriteDoesNotMutateInput/decode_failure_on_a_corrupt_record (0.00s)
+          manager_integration_test.go:378: corrupt stored JSON must be fatal: flowstore.Update: get current version failed: flowstore.Get: unmarshal flow failed: invalid character 'n' looking for beginning of object key string
+  --- FAIL: TestManagerUpdateSuccessMutatesInputAfterCommit (0.25s)
+      manager_integration_test.go:436: input mutated before commit:
+           got flowstore.Flow{... Version:2, ... UpdatedAt:time.Date(2026, time.August, 25, 7, 13, 37, 378629000, time.Local) ...}
+          want flowstore.Flow{... Version:1, ... UpdatedAt:time.Date(1, time.January, 1, 0, 0, 0, 0, time.UTC) ...}
+      manager_integration_test.go:449: created_at: input=0001-01-01 00:00:00 +0000 UTC stored=0001-01-01 00:00:00 +0000 UTC, want 2026-08-25 07:13:37.37711 -0500 CDT
+      manager_integration_test.go:452: input updated_at=2026-08-25 07:13:37.378629 -0500 CDT m=+1.323868168 last_modified=2026-08-25 07:13:37.378629 -0500 CDT m=+1.323868293, want one server instant
+  FAIL
+  FAIL	github.com/c360studio/semstreams/flowstore	1.722s
+  FAIL
+
+  $ go test -race -count=1 -run 'TestFlow(UpdateRequestSchema|OpenAPIPreserves)' ./service/
+  # github.com/c360studio/semstreams/service [github.com/c360studio/semstreams/service.test]
+  service/flow_surface_test.go:111:48: undefined: FlowUpdateRequest
+  service/flow_surface_test.go:127:48: undefined: FlowCreateRequest
+  service/flow_surface_test.go:149:18: undefined: FlowCreateRequest
+  service/flow_surface_test.go:150:18: undefined: FlowUpdateRequest
+  FAIL	github.com/c360studio/semstreams/service [build failed]
+  FAIL
+  ```
+
+  Notes on the capture: (a) the `:452` line is the two-`time.Now()` defect — the two values print alike but carry
+  different monotonic readings (`m=+1.323868168` vs `m=+1.323868293`), and `time.Equal` compares the monotonic
+  readings when both have them; (b) `logical_version_mismatch` proves the baseline conflict is untyped, reachable
+  only by its message text; (c) the three immutability sub-cases that already held at baseline
+  (`read failure on a missing key`, `marshal failure`, `structural validation failure`) are recorded as passing at
+  RED — they guard the delta's full failure-path list, not a baseline defect; (d) `decode_failure_on_a_corrupt_record`
+  is a RED against task 3.2's parenthetical, not against baseline "unchanged" behaviour — see the note under 3.2.
 
 ## 3. GREEN — implement Slice A
 
