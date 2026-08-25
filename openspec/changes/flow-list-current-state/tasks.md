@@ -266,26 +266,173 @@ Commit §3 first. For each mutation: apply, print `[applied]`, run the named tes
 restore with `cp` from a pre-mutation copy and confirm `shasum` equals the committed file (no git checkout / stash /
 restore of any kind).
 
-- [ ] 4.1 M1 — remove the typed-absence `continue` (every per-key error aborts): `TestManagerListSkipsOnlyVanishedKey`
+- [x] 4.1 M1 — remove the typed-absence `continue` (every per-key error aborts): `TestManagerListSkipsOnlyVanishedKey`
       MUST fail.
-- [ ] 4.2 M2 — `continue` on every per-key error (the persona/flowtemplate shape):
+
+  ```
+  [applied] M1 — typed-absence continue removed
+  $ go test -race -tags=integration -count=1 -run 'TestManagerListSkipsOnlyVanishedKey' ./flowstore/
+  --- FAIL: TestManagerListSkipsOnlyVanishedKey (0.43s)
+      manager_integration_test.go:529: List with a key deleted at the seam returned an error: flowstore.List: get flow flow-b: flowstore.Get: get from KV failed: kv: key not found
+  FAIL
+  FAIL	github.com/c360studio/semstreams/flowstore	0.801s
+  ```
+
+  Restored by `cp` from the pre-mutation copy; `shasum flowstore/manager.go` →
+  `2540ac674486fd1d6ba66b18a2b6f48aa5d21b92`, equal to the committed file.
+- [x] 4.2 M2 — `continue` on every per-key error (the persona/flowtemplate shape):
       `TestManagerListPreservesPerKeyTransientFailure` and `TestManagerListPreservesCorruptRecordFailure` MUST fail.
-- [ ] 4.3 M3 — the empty bucket becomes an error again with the old text
+
+  ```
+  [applied] M2 — continue on every per-key error
+  $ go test -race -tags=integration -count=1 -run 'TestManagerListPreservesPerKeyTransientFailure|TestManagerListPreservesCorruptRecordFailure' ./flowstore/
+  --- FAIL: TestManagerListPreservesPerKeyTransientFailure (0.40s)
+      manager_integration_test.go:569: List under a cancelled read returned no error (flows=[flow-a])
+  --- FAIL: TestManagerListPreservesCorruptRecordFailure (0.24s)
+      manager_integration_test.go:597: List over a record that does not decode returned no error (flows=[flow-a])
+  FAIL
+  FAIL	github.com/c360studio/semstreams/flowstore	0.985s
+  ```
+
+  This is the mutation that makes `TestManagerListPreservesPerKeyTransientFailure` load-bearing: it PASSED at RED
+  (2.6) because baseline `List` aborted on everything, so M2 is its only proof. Restored by `cp`;
+  `shasum flowstore/manager.go` → `2540ac674486fd1d6ba66b18a2b6f48aa5d21b92`.
+- [x] 4.3 M3 — the empty bucket becomes an error again with the old text
       (`if len(keys) == 0 { return nil, errs.WrapTransient(jetstream.ErrNoKeysFound, "flowstore", "List",
       "list KV keys") }`), consumers untouched: `TestManagerListEmptyBucketReturnsNonNilEmpty`,
       `TestFlowExecutorListFlowsRealManagerEmpty`, `TestHandleListFlowsEmptyResponseIsNonNullArray` (500), and
       `TestEnsureDefaultFlowEmptyListUsesTypedOutcome` MUST fail. A consumer that still matched the substring would
       pass here; the required FAIL is what proves it branches on the typed outcome.
-- [ ] 4.4 M4 — non-null → null: (a) the builder uses `var out []flowstore.Flow` (nil when empty) →
+
+  ```
+  [applied] M3 — empty bucket is an error again, with the old text
+  $ go test -race -tags=integration -count=1 -run 'TestManagerListEmptyBucketReturnsNonNilEmpty' ./flowstore/
+  --- FAIL: TestManagerListEmptyBucketReturnsNonNilEmpty (0.41s)
+      manager_integration_test.go:493: List over an empty bucket returned an error: flowstore.List: list KV keys failed: nats: no keys found
+  FAIL
+  FAIL	github.com/c360studio/semstreams/flowstore	0.752s
+
+  $ go test -race -tags=integration -count=1 -run 'TestFlowExecutorListFlowsRealManagerEmpty' ./processor/agentic-tools/executors/
+  --- FAIL: TestFlowExecutorListFlowsRealManagerEmpty (0.41s)
+          	            	expected: ""
+          	            	actual  : "list failed: flowstore.List: list KV keys failed: nats: no keys found"
+          	            	expected: "No flows configured."
+          	            	actual  : ""
+  FAIL
+  FAIL	github.com/c360studio/semstreams/processor/agentic-tools/executors	0.817s
+
+  $ go test -race -tags=integration -count=1 -run 'TestHandleListFlowsEmptyResponseIsNonNullArray|TestEnsureDefaultFlowEmptyListUsesTypedOutcome' ./service/
+  --- FAIL: TestHandleListFlowsEmptyResponseIsNonNullArray (0.26s)
+      flow_service_test.go:491:
+          	Error:      	Not equal:
+          	            	expected: 200
+          	            	actual  : 500
+          	Messages:   	{"error":"Internal server error"}
+  --- FAIL: TestEnsureDefaultFlowEmptyListUsesTypedOutcome (0.26s)
+      flow_service_test.go:549:
+          	Error:      	"time=... level=WARN msg=\"Failed to create default flow diagram from boot config\" error=\"list flows: flowstore.List: list KV keys failed: nats: no keys found\"\ntime=... level=INFO msg=\"Flow service started\"\n" should not contain "Failed to create default flow diagram"
+          	Messages:   	an empty store is ordinary state, not a default-flow import failure
+  FAIL
+  FAIL	github.com/c360studio/semstreams/service	1.153s
+  ```
+
+  **Correction made under this mutation, and re-run.** The first M3 run failed
+  `TestEnsureDefaultFlowEmptyListUsesTypedOutcome` at a fixture pre-check (`flowStore.List` asserted empty BEFORE
+  `Start`) rather than at the startup assertion — a guard upstream of the mechanism proves the guard, not the
+  mechanism. The pre-check was deleted (commit `a46001e5`), the test re-verified green on unmutated code, and M3
+  re-applied; the capture above is the re-run, which lands on the warning assertion. Consumers were untouched by
+  the mutation, so all four FAILs prove they branch on the typed outcome and not on the message text. Restored by
+  `cp`; `shasum flowstore/manager.go` → `2540ac674486fd1d6ba66b18a2b6f48aa5d21b92`.
+- [x] 4.4 M4 — non-null → null: (a) the builder uses `var out []flowstore.Flow` (nil when empty) →
       `TestHandleListFlowsEmptyResponseIsNonNullArray` MUST fail on `"flows":null`; (b) `Manager.List` returns
       `nil, nil` for no keys → `TestManagerListEmptyBucketReturnsNonNilEmpty` MUST fail.
-- [ ] 4.5 M5 — the builder drops elements (returns the empty slice for any input): the populated-list assertion in
+
+  ```
+  [applied] M4(a) — builder returns a nil slice when empty
+  $ go test -race -tags=integration -count=1 -run 'TestHandleListFlowsEmptyResponseIsNonNullArray' ./service/
+  --- FAIL: TestHandleListFlowsEmptyResponseIsNonNullArray (0.27s)
+      flow_service_test.go:498:
+          	Error:      	Not equal:
+          	            	expected: "[]"
+          	            	actual  : "null"
+          	Messages:   	an empty store must serialise as [], never null
+  FAIL
+  FAIL	github.com/c360studio/semstreams/service	1.180s
+
+  [applied] M4(b) — List returns nil, nil for no keys
+  $ go test -race -tags=integration -count=1 -run 'TestManagerListEmptyBucketReturnsNonNilEmpty' ./flowstore/
+  --- FAIL: TestManagerListEmptyBucketReturnsNonNilEmpty (0.42s)
+      manager_integration_test.go:496: List over an empty bucket returned a nil slice, want a non-nil empty slice
+  FAIL
+  FAIL	github.com/c360studio/semstreams/flowstore	0.757s
+  ```
+
+  Restored by `cp` after each half; `shasum service/flow_service.go` → `be645e88587dca0d9d63b3beb0d816f30a56d1d8`
+  and `shasum flowstore/manager.go` → `2540ac674486fd1d6ba66b18a2b6f48aa5d21b92`, both equal to the committed
+  files.
+- [x] 4.5 M5 — the builder drops elements (returns the empty slice for any input): the populated-list assertion in
       `TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager` MUST fail.
-- [ ] 4.6 M6 — re-apply an outer `errs.WrapTransient` to the per-key abort:
+
+  ```
+  [applied] M5 — builder drops every element
+  $ go test -race -tags=integration -count=1 -run 'TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager' ./service/
+  --- FAIL: TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager (0.26s)
+      flow_service_test.go:142:
+          	Error:      	"[]" should have 1 item(s), but has 0
+          	Messages:   	list must carry exactly the created flow: {"flows":[]}
+  FAIL
+  FAIL	github.com/c360studio/semstreams/service	1.165s
+  ```
+
+  Restored by `cp`; `shasum service/flow_service.go` → `be645e88587dca0d9d63b3beb0d816f30a56d1d8`.
+- [x] 4.6 M6 — re-apply an outer `errs.WrapTransient` to the per-key abort:
       `TestManagerListPreservesCorruptRecordFailure` MUST fail (`IsFatal` false).
-- [ ] 4.7 Post-restore: `shasum` of every mutated file equals its committed hash; `git status --porcelain` empty; the
+
+  ```
+  [applied] M6 — outer errs.WrapTransient re-applied to the per-key abort
+  $ go test -race -tags=integration -count=1 -run 'TestManagerListPreservesCorruptRecordFailure' ./flowstore/
+  --- FAIL: TestManagerListPreservesCorruptRecordFailure (0.43s)
+      manager_integration_test.go:600: a stored record that does not decode is not classified fatal: flowstore.List: get flow corrupt-flow failed: flowstore.List: get flow corrupt-flow: flowstore.Get: unmarshal flow failed: invalid character 'n' looking for beginning of object key string
+      manager_integration_test.go:603: a stored record that does not decode is classified transient: flowstore.List: get flow corrupt-flow failed: flowstore.List: get flow corrupt-flow: flowstore.Get: unmarshal flow failed: invalid character 'n' looking for beginning of object key string
+  FAIL
+  FAIL	github.com/c360studio/semstreams/flowstore	0.769s
+  ```
+
+  The plain `%w` is therefore load-bearing, not stylistic. Restored by `cp`; `shasum flowstore/manager.go` →
+  `2540ac674486fd1d6ba66b18a2b6f48aa5d21b92`.
+- [x] 4.7 Post-restore: `shasum` of every mutated file equals its committed hash; `git status --porcelain` empty; the
       3.5 commands green again. Repeat-run stability of the seam tests (no sleeps, so deterministic):
       `go test -race -tags=integration -count=5 -run 'TestManagerListSkipsOnlyVanishedKey|TestManagerListPreservesPerKeyTransientFailure' ./flowstore/`.
+
+  ```
+  $ shasum flowstore/manager.go service/flow_service.go
+  2540ac674486fd1d6ba66b18a2b6f48aa5d21b92  flowstore/manager.go
+  be645e88587dca0d9d63b3beb0d816f30a56d1d8  service/flow_service.go
+  $ git status --porcelain
+  (no output)
+  $ go test -race -tags=integration -count=1 -v -run 'TestManagerList' ./flowstore/
+  --- PASS: TestManagerListEmptyBucketReturnsNonNilEmpty (0.41s)
+  --- PASS: TestManagerListSkipsOnlyVanishedKey (0.24s)
+  --- PASS: TestManagerListPreservesPerKeyTransientFailure (0.23s)
+  --- PASS: TestManagerListPreservesCorruptRecordFailure (0.24s)
+  ok  	github.com/c360studio/semstreams/flowstore	2.460s
+  $ go test -race -tags=integration -count=1 -v -run 'TestFlowExecutorListFlowsRealManagerEmpty' ./processor/agentic-tools/executors/
+  --- PASS: TestFlowExecutorListFlowsRealManagerEmpty (0.42s)
+  ok  	github.com/c360studio/semstreams/processor/agentic-tools/executors	1.823s
+  $ go test -race -tags=integration -count=1 -v -run 'TestHandleListFlowsEmptyResponseIsNonNullArray|TestEnsureDefaultFlowEmptyListUsesTypedOutcome|TestFlowCRUDDoesNotPublish' ./service/
+  --- PASS: TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager (0.26s)
+  --- PASS: TestHandleListFlowsEmptyResponseIsNonNullArray (0.29s)
+  --- PASS: TestEnsureDefaultFlowEmptyListUsesTypedOutcome (0.31s)
+  ok  	github.com/c360studio/semstreams/service	2.780s
+  $ go test -race -count=1 -v -run 'TestFlowOpenAPIPreservesFlowCRUDWireSchema' ./service/
+  --- PASS: TestFlowOpenAPIPreservesFlowCRUDWireSchema (0.00s)
+  ok  	github.com/c360studio/semstreams/service	1.475s
+  $ go test -race -tags=integration -count=5 -run 'TestManagerListSkipsOnlyVanishedKey|TestManagerListPreservesPerKeyTransientFailure' ./flowstore/
+  ok  	github.com/c360studio/semstreams/flowstore	3.947s
+  ```
+
+  Both mutated files were restored by `cp` from a pre-mutation copy taken before the first mutation; no
+  `git checkout`, `git restore`, or `git stash` was used at any point.
 
 ## 5. Schema regeneration — Slice B rows only
 
