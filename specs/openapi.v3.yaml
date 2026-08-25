@@ -134,7 +134,7 @@ paths:
                 content:
                     application/json:
                         schema:
-                            $ref: '#/components/schemas/Flow'
+                            $ref: '#/components/schemas/FlowCreateRequest'
             responses:
                 "201":
                     description: Diagram created
@@ -184,7 +184,7 @@ paths:
                 content:
                     application/json:
                         schema:
-                            $ref: '#/components/schemas/Flow'
+                            $ref: '#/components/schemas/FlowUpdateRequest'
             responses:
                 "200":
                     description: Diagram updated
@@ -1376,6 +1376,148 @@ components:
                 - created_at
                 - updated_at
                 - last_modified
+            type: object
+        FlowCreateRequest:
+            properties:
+                connections:
+                    items:
+                        properties:
+                            id:
+                                type: string
+                            source_node_id:
+                                type: string
+                            source_port:
+                                type: string
+                            target_node_id:
+                                type: string
+                            target_port:
+                                type: string
+                        required:
+                            - id
+                            - source_node_id
+                            - source_port
+                            - target_node_id
+                            - target_port
+                        type: object
+                    type: array
+                created_by:
+                    type: string
+                description:
+                    type: string
+                id:
+                    type: string
+                name:
+                    type: string
+                nodes:
+                    items:
+                        properties:
+                            component:
+                                type: string
+                            config:
+                                additionalProperties: {}
+                                type: object
+                            id:
+                                type: string
+                            name:
+                                type: string
+                            position:
+                                properties:
+                                    x:
+                                        type: number
+                                    "y":
+                                        type: number
+                                required:
+                                    - x
+                                    - "y"
+                                type: object
+                            type:
+                                type: string
+                        required:
+                            - id
+                            - component
+                            - type
+                            - name
+                            - position
+                            - config
+                        type: object
+                    type: array
+            required:
+                - name
+                - nodes
+                - connections
+            type: object
+        FlowUpdateRequest:
+            properties:
+                connections:
+                    items:
+                        properties:
+                            id:
+                                type: string
+                            source_node_id:
+                                type: string
+                            source_port:
+                                type: string
+                            target_node_id:
+                                type: string
+                            target_port:
+                                type: string
+                        required:
+                            - id
+                            - source_node_id
+                            - source_port
+                            - target_node_id
+                            - target_port
+                        type: object
+                    type: array
+                created_by:
+                    type: string
+                description:
+                    type: string
+                id:
+                    type: string
+                name:
+                    type: string
+                nodes:
+                    items:
+                        properties:
+                            component:
+                                type: string
+                            config:
+                                additionalProperties: {}
+                                type: object
+                            id:
+                                type: string
+                            name:
+                                type: string
+                            position:
+                                properties:
+                                    x:
+                                        type: number
+                                    "y":
+                                        type: number
+                                required:
+                                    - x
+                                    - "y"
+                                type: object
+                            type:
+                                type: string
+                        required:
+                            - id
+                            - component
+                            - type
+                            - name
+                            - position
+                            - config
+                        type: object
+                    type: array
+                version:
+                    type: integer
+            required:
+                - id
+                - version
+                - name
+                - nodes
+                - connections
             type: object
         GraphQLRequest:
             properties:
