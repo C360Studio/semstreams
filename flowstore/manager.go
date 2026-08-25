@@ -31,6 +31,14 @@ type Manager struct {
 	// observed revision without sleeping. Never make it exported, an option, or
 	// a constructor parameter.
 	beforeUpdateWrite func(ctx context.Context)
+
+	// beforeListGet is a package-private synchronization seam: List calls it
+	// (when non-nil) for each enumerated key immediately before that key's
+	// read. It is nil in production — nothing outside package flowstore can
+	// reach it — and exists so the vanished-key and per-key-failure proofs in
+	// this package can act on a key between enumeration and its read without
+	// sleeping. Never make it exported, an option, or a constructor parameter.
+	beforeListGet func(ctx context.Context, key string)
 }
 
 // NewManager creates a new flow store
@@ -218,6 +226,9 @@ func (s *Manager) List(ctx context.Context) ([]*Flow, error) {
 
 	flows := make([]*Flow, 0, len(keys))
 	for _, key := range keys {
+		if s.beforeListGet != nil {
+			s.beforeListGet(ctx, key)
+		}
 		flow, err := s.Get(ctx, key)
 		if err != nil {
 			return nil, errs.WrapTransient(err, "flowstore", "List",

@@ -70,6 +70,52 @@ func TestFlowOpenAPIPreservesFlowCRUDWireSchema(t *testing.T) {
 			t.Errorf("Flow schema lost preserved field %q", name)
 		}
 	}
+
+	// GET /flows declares its response body: the list is a required, non-null
+	// array of the Flow object schema.
+	if got := spec.Paths["/flows"].GET.Responses["200"].SchemaRef; got != "#/components/schemas/FlowListResponse" {
+		t.Errorf("list response schema ref = %q, want FlowListResponse", got)
+	}
+	registeredResponse := make(map[reflect.Type]bool, len(spec.ResponseTypes))
+	for _, responseType := range spec.ResponseTypes {
+		registeredResponse[responseType] = true
+	}
+	if !registeredResponse[reflect.TypeOf(FlowListResponse{})] {
+		t.Error("ResponseTypes does not carry FlowListResponse — its SchemaRef would dangle")
+	}
+
+	listSchema := SchemaFromType(reflect.TypeOf(FlowListResponse{}))
+	required, _ := listSchema["required"].([]string)
+	if len(required) != 1 || required[0] != "flows" {
+		t.Errorf("FlowListResponse required = %v, want exactly [flows]", listSchema["required"])
+	}
+	listProperties, ok := listSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("FlowListResponse schema has no properties: %#v", listSchema)
+	}
+	flowsSchema, ok := listProperties["flows"].(map[string]any)
+	if !ok {
+		t.Fatalf("FlowListResponse has no flows property: %#v", listProperties)
+	}
+	if got := flowsSchema["type"]; got != "array" {
+		t.Errorf("flows type = %v, want array", got)
+	}
+	items, ok := flowsSchema["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("flows has no items schema: %#v", flowsSchema)
+	}
+	if _, nullable := items["anyOf"]; nullable {
+		t.Errorf("flows items declare a null alternative: %#v", items)
+	}
+	itemProperties, ok := items["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("flows items is not an object schema: %#v", items)
+	}
+	for _, name := range []string{"id", "name", "version", "nodes", "connections"} {
+		if _, ok := itemProperties[name]; !ok {
+			t.Errorf("flows item schema lost field %q", name)
+		}
+	}
 }
 
 // TestFlowUpdateRequestSchemaOmitsServerAuditFields pins the request/response

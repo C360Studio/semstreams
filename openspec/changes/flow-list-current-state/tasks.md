@@ -27,18 +27,25 @@ flow list scenario (`grep -rn 'list_flows\|flowbuilder/flows' test/` → only th
 
 ## 1. Claim
 
-- [ ] 1.1 Branch `claude/gh1010-flowstore-list-current-state` pushed; draft PR open with `Closes #1010` and
+- [x] 1.1 Branch `claude/gh1010-flowstore-list-current-state` pushed; draft PR open with `Closes #1010` and
       `implemented-by: <persona>` in the body; this change directory is its first commit.
+      Draft PR **#1085** (`Closes #1010`, `implemented-by: opus`); first commit `a2f7620d docs(openspec):
+      flow-list-current-state — Slice B target state for #1010`, whose only content is this change directory.
 
 ## 2. Baseline capture — write the named tests first
 
-- [ ] 2.1 `flowstore/manager.go`: add the pause seam `beforeListGet func(ctx context.Context, key string)` on
+- [x] 2.1 `flowstore/manager.go`: add the pause seam `beforeListGet func(ctx context.Context, key string)` on
       `Manager` (nil in production; doc comment mirrors `beforeUpdateWrite`; never exported, never an option or
       constructor parameter), invoked in `List` immediately before each per-key `Get`. Nothing else in `List`
       changes in this commit, so the §2 tests fail behaviourally rather than at compile. Grep proof after:
       `grep -rn "beforeListGet" . --include='*.go'` → hits only in `flowstore/manager.go` and
       `flowstore/manager_integration_test.go` (`package flowstore`).
-- [ ] 2.2 `flowstore/manager_integration_test.go` (`//go:build integration`; real NATS via `newTestManager`):
+      `flowstore/manager.go:35-41` (the field and its doc comment, mirroring `beforeUpdateWrite`), invoked at
+      `:229-231` immediately before `s.Get(ctx, key)`. Nothing else in `List` changed in the RED commit.
+      `grep -rn "beforeListGet" . --include='*.go'` → 7 hits: 4 in `flowstore/manager.go`, 3 in
+      `flowstore/manager_integration_test.go` (`package flowstore`). No exported field, option, constructor
+      parameter, or build tag.
+- [x] 2.2 `flowstore/manager_integration_test.go` (`//go:build integration`; real NATS via `newTestManager`):
       - `TestManagerListEmptyBucketReturnsNonNilEmpty` — fresh bucket; assert `err == nil`, `flows != nil`,
         `len(flows) == 0`.
       - `TestManagerListSkipsOnlyVanishedKey` — create A and B; seam: when `key == B.ID`, count the call and
@@ -52,7 +59,11 @@ flow list scenario (`grep -rn 'list_flows\|flowbuilder/flows' test/` → only th
       - `TestManagerListPreservesCorruptRecordFailure` — create A; `store.kvStore.Put(ctx, "corrupt-flow",
         []byte("{not json"))`; assert `err != nil`, `errs.IsFatal(err)`, `!errs.IsTransient(err)`,
         `!errors.Is(err, natsclient.ErrKVKeyNotFound)`, `flows == nil`.
-- [ ] 2.3 `processor/agentic-tools/executors/flows_integration_test.go` (new; `//go:build integration`;
+
+      `flowstore/manager_integration_test.go:488` (`TestManagerListEmptyBucketReturnsNonNilEmpty`), `:503`
+      (`TestManagerListSkipsOnlyVanishedKey`), `:548` (`TestManagerListPreservesPerKeyTransientFailure`), `:585`
+      (`TestManagerListPreservesCorruptRecordFailure`), over real NATS via `newTestManager`.
+- [x] 2.3 `processor/agentic-tools/executors/flows_integration_test.go` (new; `//go:build integration`;
       `package executors`): `TestFlowExecutorListFlowsRealManagerEmpty` —
       `natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())` → `flowstore.NewManager` →
       `RegisterBuiltins(ctx, registry, ToolDependencies{NATSClient: client, FlowManager: mgr,
@@ -61,7 +72,11 @@ flow list scenario (`grep -rn 'list_flows\|flowbuilder/flows' test/` → only th
       `result.Content == "No flows configured."` (exact `==`, not `Contains`; the period is part of the literal).
       If `RegisterBuiltins` needs unrelated dependencies to admit the flows gate, record that here and drive
       `NewFlowExecutor(mgr).Execute` directly instead.
-- [ ] 2.4 `service/flow_service_test.go` (`//go:build integration`, `package service_test`):
+      `processor/agentic-tools/executors/flows_integration_test.go:23`. `RegisterBuiltins` admitted the flows gate
+      with `NATSClient` + `FlowManager` alone (`register.go:201` gates on nothing but a non-nil `deps.FlowManager`),
+      so the production wire is driven as written — no direct `NewFlowExecutor` fallback was needed. The test also
+      asserts `registry.GetTool("list_flows") != nil` so a silent registration skip cannot masquerade as a pass.
+- [x] 2.4 `service/flow_service_test.go` (`//go:build integration`, `package service_test`):
       - `TestHandleListFlowsEmptyResponseIsNonNullArray` — `createTestFlowService` (fresh, empty bucket);
         `GET /flowbuilder/flows`; assert `200`, `Content-Type` `application/json`, the raw body's `flows` member is
         exactly `[]` (decode into `map[string]json.RawMessage`; `string(raw["flows"]) == "[]"`), and decoding into a
@@ -77,14 +92,22 @@ flow list scenario (`grep -rn 'list_flows\|flowbuilder/flows' test/` → only th
         `GET /flowbuilder/flows` → decode into a FRESH `service.FlowListResponse` (never into a value the test still
         holds); assert exactly one Flow with the created `id`, `name`, `version` 1 and `created_by`. This guards the
         `[]*Flow → []Flow` builder (4.5).
-- [ ] 2.5 `service/flow_surface_test.go` `TestFlowOpenAPIPreservesFlowCRUDWireSchema`: extend — `GET /flows` `200`
+
+      `service/flow_service_test.go:484` (`TestHandleListFlowsEmptyResponseIsNonNullArray`), `:506`
+      (`TestEnsureDefaultFlowEmptyListUsesTypedOutcome`), and the list assertion inside
+      `TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager` at `:133-144`. The startup test
+      logs through a mutex-guarded sink (`lockedBuffer`, `:464-481`) because `Start` spawns the stream-override
+      expiry reporter with a logger derived from the same handler — an unguarded `bytes.Buffer` is a data race
+      under `-race`, not a flake.
+- [x] 2.5 `service/flow_surface_test.go` `TestFlowOpenAPIPreservesFlowCRUDWireSchema`: extend — `GET /flows` `200`
       `SchemaRef == "#/components/schemas/FlowListResponse"`; `ResponseTypes` carries
       `reflect.TypeOf(FlowListResponse{})`; `SchemaFromType(reflect.TypeOf(FlowListResponse{}))` has `required`
       exactly `["flows"]`, `properties.flows.type == "array"`, and `properties.flows.items` is an object whose
       `properties` include `id`, `name`, `version`, `nodes`, `connections` and which has no `anyOf` key. Until 3.4
       the `service` test binary does not compile (`undefined: FlowListResponse`) — that is the baseline capture of
       2.4 and 2.5 together, as in Slice A.
-- [ ] 2.6 RED capture on baseline code (§2 tests + the 2.1 seam only; production `List` untouched), recorded here
+      `service/flow_surface_test.go:76-121` inside `TestFlowOpenAPIPreservesFlowCRUDWireSchema`.
+- [x] 2.6 RED capture on baseline code (§2 tests + the 2.1 seam only; production `List` untouched), recorded here
       verbatim (package + test name + failing assertion):
 
   ```
@@ -93,6 +116,63 @@ flow list scenario (`grep -rn 'list_flows\|flowbuilder/flows' test/` → only th
   go test -race -tags=integration -count=1 -run 'TestHandleListFlowsEmptyResponseIsNonNullArray|TestEnsureDefaultFlowEmptyListUsesTypedOutcome|TestFlowCRUDDoesNotPublish' ./service/
   go test -race -count=1 -run 'TestFlowOpenAPIPreservesFlowCRUDWireSchema' ./service/
   ```
+
+  RED at `a2f7620d` + the §2 tests + the 2.1 seam only (production `List` logic untouched). NATS `INFO` lines
+  elided; every `--- FAIL` / build-failure line is verbatim.
+
+  ```
+  $ go test -race -tags=integration -count=1 -run 'TestManagerList' ./flowstore/
+  --- FAIL: TestManagerListEmptyBucketReturnsNonNilEmpty (0.41s)
+      manager_integration_test.go:493: List over an empty bucket returned an error: flowstore.List: list KV keys failed: nats: no keys found
+  --- FAIL: TestManagerListSkipsOnlyVanishedKey (0.23s)
+      manager_integration_test.go:529: List with a key deleted at the seam returned an error: flowstore.List: get flow flow-b failed: flowstore.Get: get from KV failed: kv: key not found
+  --- FAIL: TestManagerListPreservesCorruptRecordFailure (0.24s)
+      manager_integration_test.go:600: a stored record that does not decode is not classified fatal: flowstore.List: get flow corrupt-flow failed: flowstore.Get: unmarshal flow failed: invalid character 'n' looking for beginning of object key string
+      manager_integration_test.go:603: a stored record that does not decode is classified transient: flowstore.List: get flow corrupt-flow failed: flowstore.Get: unmarshal flow failed: invalid character 'n' looking for beginning of object key string
+  FAIL
+  FAIL	github.com/c360studio/semstreams/flowstore	1.479s
+  FAIL
+
+  $ go test -race -tags=integration -count=1 -run 'TestFlowExecutorListFlowsRealManagerEmpty' ./processor/agentic-tools/executors/
+  --- FAIL: TestFlowExecutorListFlowsRealManagerEmpty (0.41s)
+      flows_integration_test.go:40:
+          	Error:      	Not equal:
+          	            	expected: ""
+          	            	actual  : "list failed: flowstore.List: list KV keys failed: nats: no keys found"
+          	Messages:   	an empty store must carry no error attachment
+      flows_integration_test.go:42:
+          	Error:      	Not equal:
+          	            	expected: "No flows configured."
+          	            	actual  : ""
+  FAIL
+  FAIL	github.com/c360studio/semstreams/processor/agentic-tools/executors	0.793s
+  FAIL
+
+  $ go test -race -tags=integration -count=1 -run 'TestHandleListFlowsEmptyResponseIsNonNullArray|TestEnsureDefaultFlowEmptyListUsesTypedOutcome|TestFlowCRUDDoesNotPublish' ./service/
+  # github.com/c360studio/semstreams/service [github.com/c360studio/semstreams/service.test]
+  service/flow_surface_test.go:83:40: undefined: FlowListResponse
+  service/flow_surface_test.go:87:46: undefined: FlowListResponse
+  FAIL	github.com/c360studio/semstreams/service [build failed]
+  FAIL
+
+  $ go test -race -count=1 -run 'TestFlowOpenAPIPreservesFlowCRUDWireSchema' ./service/
+  # github.com/c360studio/semstreams/service [github.com/c360studio/semstreams/service.test]
+  service/flow_surface_test.go:83:40: undefined: FlowListResponse
+  service/flow_surface_test.go:87:46: undefined: FlowListResponse
+  FAIL	github.com/c360studio/semstreams/service [build failed]
+  FAIL
+  ```
+
+  Notes on the capture: (a) no `[no tests to run]` line appeared on any command — the tagged runs each stood up
+  their own NATS server (four separate `Connecting to NATS` lines on the `./flowstore/` run, one per test), so
+  every named test executed; (b) `TestManagerListPreservesPerKeyTransientFailure` PASSED at baseline, as the task
+  predicted — baseline `List` aborts on every per-key error, so it is a regression guard here and 4.2 is what makes
+  it fail; its `errors.Is(err, context.Canceled)` and `errs.IsTransient` assertions both held at baseline, so the
+  cancellation cause does survive `Manager.Get`'s wrap; (c) the corrupt-record failure names both class assertions —
+  `IsFatal` false AND `IsTransient` true — which is exactly the outer `WrapTransient` masking `Get`'s `WrapFatal`;
+  (d) both `./service/` commands fail identically because `package service` (`flow_surface_test.go`) and
+  `package service_test` (`flow_service_test.go`) compile into one test binary, so the internal-package build error
+  masks the external one, as in Slice A.
 
   Expected shape: `TestManagerListEmptyBucketReturnsNonNilEmpty` failed with a transient error carrying
   `nats: no keys found`; `TestManagerListSkipsOnlyVanishedKey` failed with a transient abort `get flow <B>` carrying
