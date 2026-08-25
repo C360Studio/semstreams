@@ -200,7 +200,7 @@ flow list scenario (`grep -rn 'list_flows\|flowbuilder/flows' test/` → only th
       (`NewManager` keeps its local `bucket` for `natsClient.NewKVStore(bucket)`). If another reader exists, record
       it here and keep the field.
       Measured, not assumed: `grep -n 's\.bucket' flowstore/*.go` → no matches (exit 1) after 3.1, so the field had
-      exactly one reader and it is gone. `Manager` is now one field (`flowstore/manager.go:22-23`); the stale
+      exactly one reader and it is gone. `Manager` now has one production field, `kvStore`, plus the two test-only seams (`flowstore/manager.go:22-33`); the stale
       comment `// Raw bucket for operations like Keys()` went with it. `Watch` already read through
       `s.kvStore.Watch` (`:264`), so nothing else lost a path. `NewManager` keeps its local `bucket` for
       `natsClient.NewKVStore(bucket)` and the `jetstream` import is still needed there and by `Watch`'s return type.
@@ -504,8 +504,16 @@ restore of any kind).
 
 ## 7. Review and archive (inside the landing PR; the `AGENTS.md` Land order)
 
-- [ ] 7.1 Implementation review by `semstreams-reviewer` on the GREEN + §4 head; every finding's disposition recorded
-      here with its commit. A finding on a path nothing reads is filed as an issue, not fixed in this PR.
+- [x] 7.1 `semstreams-reviewer` (Fable) on `7e393a2b`: **APPROVE**, no BLOCKING/HIGH. Dispositions: MEDIUM (FILE)
+      `natsclient/kv.go:494-508` `KVStore.Keys` has no post-collection `ctx.Err()` guard (a cancelled context could
+      read as empty) → filed with the `==` sentinel compare and the adjacent `"no keys found"` spellings, not Slice B;
+      NIT "one field" wording here → FIXED (this commit); NIT combined-candidate e2e obligation has no `gh` home →
+      filed as an issue for the owner to place. Rulings: (a) `newFlowListResponse` nil-deref acceptable — the only
+      producer is `(*Manager).List`, a nil element is impossible by construction; (b) the `context.Canceled` clause in
+      `TestManagerListPreservesPerKeyTransientFailure` is a documented nats.go contract and Slice C's deadline→504
+      early guard — keep; (c) `GET /flows` vs `{prefix}flows` consistent with the existing spec. Owner items (i) tool
+      literal period, (ii) filing — assessed in the PR body. Reviewer re-ran the focused suites and M1/M2/M4a/M6;
+      full-suite §6 lines are the implementer's record.
 - [ ] 7.2 The owner-run cross-agent round where the owner asks for it; fixes and re-review recorded here.
 - [ ] 7.3 Reconcile: every scenario in `specs/flow-authoring/spec.md` names the test that verifies it, and that test
       exists and passed in 6.2/6.3. Any `[~]` in this file is ALSO written into the delta before archiving.
