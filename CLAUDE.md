@@ -81,6 +81,11 @@ Rituals:
   `Closes #n` → then work. One claimed PR owns one worktree. When multiple agents share a host, the primary checkout is
   discovery-only; no agent commits from it. Immediately before every commit and push, verify that the worktree's
   current branch is the draft PR head; a mismatch stops the operation.
+- **Worktree hygiene:** the claim's worktree lives at a durable sibling path — `git worktree add ../semstreams-wt/<branch>
+  -b <branch> origin/main` — never under `/private/tmp`, which a reboot purges (22 dead entries were pruned on
+  2026-08-25); `git worktree remove` it when the PR merges. Heavy local gates (the full integration suite, an e2e tier)
+  run one agent at a time on a shared host: worktrees fix the git collision, not the CPU one (#736). CI is the arbiter;
+  a local red under contention is not a finding.
 - **Land:** implementation review → the owner-run cross-agent round where the owner asks for it → fixes and re-review →
   archive as the final content commit → narrow reviewer check of the archive/spec sync → undraft → CI green with
   **no known unfixed flake in a required job** (a fresh green over a known flake is rerun-to-green: fix it, or file it
