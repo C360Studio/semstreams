@@ -36,7 +36,7 @@ an inner code); `service/flow_service.go:221,225` (request `SchemaRef` Flow), `:
       `package flowstore` tests). No exported field, option, or constructor parameter.
       `flowstore/manager.go:25-33` — `beforeUpdateWrite func(ctx context.Context)`, nil in production, invoked at
       `manager.go:155-157` immediately before the fenced write. Grep proof that nothing outside the package can
-      reach it: `grep -rn "beforeUpdateWrite" . --include='*.go'` → 5 hits, all in `flowstore/manager.go` and
+      reach it: `grep -rn "beforeUpdateWrite" . --include='*.go'` → 10 hits, all in `flowstore/manager.go` and
       `flowstore/manager_integration_test.go` (`package flowstore`). It was added in the RED commit rather than the
       GREEN one so the §2.1 tests fail behaviourally (a compile error is not the intended failure); baseline
       `Update` is otherwise untouched at RED.
@@ -147,7 +147,7 @@ an inner code); `service/flow_service.go:221,225` (request `SchemaRef` Flow), `:
       `service/flow_service.go:374` — `if errors.Is(err, errs.ErrRevisionMismatch)`. The 500 branch, both bodies and
       every other status are byte-identical to baseline; `grep -n 'strings.Contains' service/flow_service.go` no
       longer hits `handleUpdateFlow` (remaining hits are the List "no keys found" branches at `:128`/`:269` and the
-      metric-name helpers at `:445`/`:460`, all Slice B/other work).
+      metric-name helper at `:460`, all Slice B/other work).
 - [x] 3.5 All tests from §2 green: the two focused commands from 2.5, then `go test -race ./flowstore/... ./service/...`
       and `go test -race -tags=integration -p 2 -count=1 ./flowstore/... ./service/...`. Record output shape here.
 

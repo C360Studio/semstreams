@@ -61,7 +61,9 @@ the message-parsing shape `openspec/specs/nats-kv-keys/spec.md` forbids for clas
 
 - #1010 current-state List (Slice B), #1008 invalid-handling vocabulary, exact HTTP error messages, must-exist DELETE,
   404 for a missing Update target (Slice C), and the six Get projections (Slice D). Slice A leaves every non-conflict
-  Update failure with its current classification and status.
+  Update failure at its current HTTP status. The one classification change: a stored record that does not decode is
+  now classified fatal on Update (`errs.IsFatal`), as `Manager.Get` already classifies it; at baseline an outer
+  transient wrap masked that class.
 - No ADR: Slice A conforms to ADR-096's existing CAS promise. Weakening CAS would need a superseding ADR.
 - No NATS migration, bucket change, or stored-record shape change. Records already persisted with a zero `created_at`
   are not repaired (pre-v1 fresh-state policy).

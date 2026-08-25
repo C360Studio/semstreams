@@ -99,7 +99,16 @@ response body remains a JSON object with an `error` string; its exact text is no
 empty-ID input, structural validation, read failure, decode failure, logical version mismatch, marshal failure, or a
 failed fenced write — the caller's value SHALL be deeply equal to its pre-call value. Only after the fenced write
 succeeds SHALL Update assign the committed record to the caller's value, so the caller observes the restored
-`CreatedAt`, the incremented `Version`, and the server timestamps exactly when the store does.
+`CreatedAt`, the incremented `Version`, and the server timestamps exactly when the store does. A stored record that
+does not decode SHALL be classified fatal (`errs.IsFatal`), never transient, matching `Manager.Get`.
+
+#### Scenario: a stored record that does not decode is fatal and does not mutate the input
+
+- **GIVEN** a saved Flow whose stored bytes are not valid Flow JSON
+- **WHEN** an author updates it
+- **THEN** Update returns an error for which `errs.IsFatal` is true and `errs.IsTransient` is false
+- **AND** the caller's `*Flow` is deeply equal to the value passed in
+- **AND** the test that verifies this is `TestManagerUpdateFailedWriteDoesNotMutateInput/decode_failure_on_a_corrupt_record`
 
 #### Scenario: a failed write does not mutate the input
 
@@ -132,7 +141,7 @@ The saved-flow HTTP contract SHALL declare `FlowCreateRequest` as the `POST /flo
 `name`, `nodes`, and `connections`, SHALL allow optional `id`, `description`, and `created_by`, and SHALL declare no
 `version` and no timestamp properties. `FlowUpdateRequest` SHALL require `id`, `version`, `name`, `nodes`, and
 `connections`, SHALL allow optional `description` and `created_by`, and SHALL declare no timestamp properties. `Flow`
-SHALL remain the response schema for create, get, and update and the request schema for the validate draft.
+SHALL remain the response schema for create and update and the request schema for the validate draft.
 
 Both handlers SHALL continue to decode a legacy full-`Flow` body: unknown fields are ignored, create ignores
 `version` and timestamps, and update uses `version` only as the precondition and ignores timestamps.

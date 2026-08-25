@@ -92,7 +92,8 @@ func TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager
 	mux, _, _, configManager := createTestFlowServiceWithConfigManager(t)
 	flow := flowstore.Flow{
 		ID: "authoring-contract", Name: "Authoring contract",
-		CreatedBy: "preserved-client-field",
+		CreatedBy:   "preserved-client-field",
+		Description: "authoring description",
 		Nodes: []flowstore.FlowNode{{
 			ID: "node-1", Component: "udp", Type: types.ComponentTypeInput,
 			Name: "published-input", Config: map[string]any{"port": 14550},
@@ -116,10 +117,15 @@ func TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager
 
 	created := doJSON(http.MethodPost, "/flowbuilder/flows", flow)
 	require.Equal(t, http.StatusCreated, created.Code, created.Body.String())
-	require.NoError(t, json.Unmarshal(created.Body.Bytes(), &flow))
+	// Decode into a fresh value: omitempty fields absent from the response must not
+	// be back-filled by the request struct the test still holds.
+	var createdFlow flowstore.Flow
+	require.NoError(t, json.Unmarshal(created.Body.Bytes(), &createdFlow))
+	flow = createdFlow
 	require.Equal(t, "authoring-contract", flow.ID)
 	require.Equal(t, int64(1), flow.Version)
 	require.Equal(t, "preserved-client-field", flow.CreatedBy)
+	require.Equal(t, "authoring description", flow.Description, "create must carry the request description")
 	require.Empty(t, configManager.GetConfig().Get().Components, "CRUD create must not publish component config")
 
 	createdAt := flow.CreatedAt
@@ -134,10 +140,14 @@ func TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager
 	stale := flow
 	updated := doJSON(http.MethodPut, "/flowbuilder/flows/authoring-contract", flow)
 	require.Equal(t, http.StatusOK, updated.Code, updated.Body.String())
-	require.NoError(t, json.Unmarshal(updated.Body.Bytes(), &flow))
+	var updatedFlow flowstore.Flow
+	require.NoError(t, json.Unmarshal(updated.Body.Bytes(), &updatedFlow))
+	flow = updatedFlow
 	require.Equal(t, int64(2), flow.Version)
 	require.True(t, flow.CreatedAt.Equal(createdAt), "forged created_at was stored: %v", flow.CreatedAt)
 	require.True(t, flow.UpdatedAt.Equal(flow.LastModified), "update timestamps must be one server instant")
+	require.Equal(t, "updated authoring metadata", flow.Description, "update must carry the request description")
+	require.Equal(t, "preserved-client-field", flow.CreatedBy, "update must carry the caller's created_by")
 	require.Empty(t, configManager.GetConfig().Get().Components, "CRUD update must not publish component config")
 
 	// The now-stale body loses the optimistic-concurrency precondition; 409 is
