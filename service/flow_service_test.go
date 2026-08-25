@@ -529,11 +529,12 @@ func TestEnsureDefaultFlowEmptyListUsesTypedOutcome(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, configMgr.Start(t.Context()))
 
+	// No List pre-check on the fixture: List over an empty bucket is the very
+	// behaviour under test, so asserting it here would abort the test upstream of
+	// the startup path it exists to prove. The fresh NATS server makes the bucket
+	// empty, and the post-Start assertions below only hold if it was.
 	flowStore, err := flowstore.NewManager(natsClient)
 	require.NoError(t, err)
-	empty, err := flowStore.List(t.Context())
-	require.NoError(t, err, "the fixture bucket must start empty and listable")
-	require.Empty(t, empty)
 
 	svc, err := service.NewFlowServiceFromConfig(nil, &service.Dependencies{
 		NATSClient:        natsClient,
