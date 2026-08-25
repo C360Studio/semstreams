@@ -3,6 +3,7 @@ package flowstore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -21,6 +22,15 @@ import (
 type Manager struct {
 	bucket  jetstream.KeyValue  // Raw bucket for operations like Keys()
 	kvStore *natsclient.KVStore // KVStore wrapper for CAS operations
+
+	// beforeUpdateWrite is a package-private synchronization seam: Update calls
+	// it (when non-nil) after it has read the stored record and built its
+	// candidate, immediately before the revision-fenced write. It is nil in
+	// production — nothing outside package flowstore can reach it — and exists
+	// so the concurrency proof in this package can hold two Managers at the same
+	// observed revision without sleeping. Never make it exported, an option, or
+	// a constructor parameter.
+	beforeUpdateWrite func(ctx context.Context)
 }
 
 // NewManager creates a new flow store
@@ -102,7 +112,23 @@ func (s *Manager) Get(ctx context.Context, id string) (*Flow, error) {
 	return &flow, nil
 }
 
-// Update updates an existing flow with optimistic concurrency control
+// Update updates an existing flow with optimistic concurrency control.
+//
+// The server owns the audit fields: the persisted record keeps the stored
+// CreatedAt, takes the stored version plus one, and carries one server-observed
+// instant in both UpdatedAt and LastModified, whatever the request supplied.
+// CreatedBy is persisted exactly as the caller sent it. The request's Version is
+// a precondition, never a stored value.
+//
+// The write is revision-fenced against the revision the stored record was read
+// at, so concurrent Updates through any number of Managers over one bucket
+// commit exactly once. A stale request version and a lost fence are the same
+// typed conflict: a classified invalid error carrying the ADR-060
+// revision_mismatch code, so callers branch with
+// errors.Is(err, errs.ErrRevisionMismatch) rather than on message text.
+//
+// flow is left untouched on every failure path and is assigned the committed
+// record only after the fenced write succeeds.
 func (s *Manager) Update(ctx context.Context, flow *Flow) error {
 	if flow == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "flowstore", "Update", "flow cannot be nil")
@@ -116,35 +142,58 @@ func (s *Manager) Update(ctx context.Context, flow *Flow) error {
 		return err
 	}
 
-	// Get current version from KV
-	current, err := s.Get(ctx, flow.ID)
+	// Read the stored record together with the KV revision the write will fence on
+	entry, err := s.kvStore.Get(ctx, flow.ID)
 	if err != nil {
 		return errs.WrapTransient(err, "flowstore", "Update", "get current version")
 	}
-
-	// Check version for optimistic concurrency
-	if current.Version != flow.Version {
-		return errs.WrapInvalid(
-			fmt.Errorf("version mismatch: expected %d, got %d", current.Version, flow.Version),
-			"flowstore", "Update", "conflict: flow was modified by another user")
+	var stored Flow
+	if err := json.Unmarshal(entry.Value, &stored); err != nil {
+		return errs.WrapFatal(err, "flowstore", "Update", "unmarshal stored flow")
 	}
 
-	// Increment version
-	flow.Version++
-	flow.UpdatedAt = time.Now()
-	flow.LastModified = time.Now()
+	// Check version for optimistic concurrency
+	if stored.Version != flow.Version {
+		return versionConflict(fmt.Errorf("version mismatch: expected %d, got %d", stored.Version, flow.Version))
+	}
+
+	// The candidate is a copy: the caller's value stays untouched until the write commits
+	candidate := *flow
+	candidate.CreatedAt = stored.CreatedAt
+	candidate.Version = stored.Version + 1
+	now := time.Now()
+	candidate.UpdatedAt = now
+	candidate.LastModified = now
 
 	// Marshal and store
-	data, err := json.Marshal(flow)
+	data, err := json.Marshal(&candidate)
 	if err != nil {
 		return errs.WrapFatal(err, "flowstore", "Update", "marshal flow")
 	}
 
-	if _, err := s.kvStore.Put(ctx, flow.ID, data); err != nil {
-		return errs.WrapTransient(err, "flowstore", "Update", "put to KV")
+	if s.beforeUpdateWrite != nil {
+		s.beforeUpdateWrite(ctx)
 	}
 
+	if _, err := s.kvStore.Update(ctx, candidate.ID, data, entry.Revision); err != nil {
+		if errors.Is(err, natsclient.ErrKVRevisionMismatch) {
+			return versionConflict(fmt.Errorf("revision mismatch: flow %s was modified concurrently", candidate.ID))
+		}
+		return errs.WrapTransient(err, "flowstore", "Update", "update in KV")
+	}
+
+	*flow = candidate
 	return nil
+}
+
+// versionConflict is the one typed optimistic-concurrency failure of Update: a
+// classified invalid error carrying the ADR-060 revision_mismatch code, so a
+// logical version mismatch and a lost revision fence are indistinguishable to a
+// caller branching on errors.Is(err, errs.ErrRevisionMismatch).
+func versionConflict(cause error) error {
+	return errs.WrapInvalid(
+		errs.ClassifiedCode(errs.ErrorInvalid, errs.ErrRevisionMismatch.Code, cause),
+		"flowstore", "Update", "conflict: flow was modified by another user")
 }
 
 // Delete removes a flow by ID

@@ -15,6 +15,7 @@ import (
 	flowengine "github.com/c360studio/semstreams/engine"
 	"github.com/c360studio/semstreams/flowstore"
 	"github.com/c360studio/semstreams/metric"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/types"
 	"github.com/google/uuid"
 )
@@ -218,11 +219,11 @@ func flowServiceOpenAPISpec() *OpenAPISpec {
 		Paths: map[string]PathSpec{
 			"/flows": {
 				GET:  &OperationSpec{Summary: "List saved flow diagrams", Description: "Lists saved diagrams; no runtime lifecycle state is implied.", Tags: []string{"Flows"}, Responses: map[string]ResponseSpec{"200": {Description: "Saved flow diagrams", ContentType: "application/json"}}},
-				POST: &OperationSpec{Summary: "Create a saved flow diagram", Description: "Saves a diagram without changing runtime configuration.", Tags: []string{"Flows"}, RequestBody: &RequestBodySpec{Description: "Flow definition", Required: true, SchemaRef: "#/components/schemas/Flow"}, Responses: map[string]ResponseSpec{"201": {Description: "Diagram created", ContentType: "application/json", SchemaRef: "#/components/schemas/Flow"}, "400": {Description: "Invalid request"}}},
+				POST: &OperationSpec{Summary: "Create a saved flow diagram", Description: "Saves a diagram without changing runtime configuration.", Tags: []string{"Flows"}, RequestBody: &RequestBodySpec{Description: "Flow definition", Required: true, SchemaRef: "#/components/schemas/FlowCreateRequest"}, Responses: map[string]ResponseSpec{"201": {Description: "Diagram created", ContentType: "application/json", SchemaRef: "#/components/schemas/Flow"}, "400": {Description: "Invalid request"}}},
 			},
 			"/flows/{id}": {
 				GET:    &OperationSpec{Summary: "Get a saved flow diagram", Description: "Returns diagram metadata, nodes, connections, and audit fields.", Tags: []string{"Flows"}, Parameters: idParam, Responses: map[string]ResponseSpec{"200": {Description: "Saved diagram", ContentType: "application/json"}, "404": {Description: "Saved diagram not found"}}},
-				PUT:    &OperationSpec{Summary: "Update a saved flow diagram", Description: "Updates a diagram with optimistic concurrency. Runtime configuration is unchanged.", Tags: []string{"Flows"}, Parameters: idParam, RequestBody: &RequestBodySpec{Description: "Updated flow definition", Required: true, SchemaRef: "#/components/schemas/Flow"}, Responses: map[string]ResponseSpec{"200": {Description: "Diagram updated", ContentType: "application/json", SchemaRef: "#/components/schemas/Flow"}, "400": {Description: "Invalid request"}, "409": {Description: "Version conflict"}}},
+				PUT:    &OperationSpec{Summary: "Update a saved flow diagram", Description: "Updates a diagram with optimistic concurrency. Runtime configuration is unchanged.", Tags: []string{"Flows"}, Parameters: idParam, RequestBody: &RequestBodySpec{Description: "Updated flow definition", Required: true, SchemaRef: "#/components/schemas/FlowUpdateRequest"}, Responses: map[string]ResponseSpec{"200": {Description: "Diagram updated", ContentType: "application/json", SchemaRef: "#/components/schemas/Flow"}, "400": {Description: "Invalid request"}, "409": {Description: "Version conflict"}}},
 				DELETE: &OperationSpec{Summary: "Delete a saved flow diagram", Description: "Deletes only the diagram; runtime configuration is unchanged.", Tags: []string{"Flows"}, Parameters: idParam, Responses: map[string]ResponseSpec{"204": {Description: "Diagram deleted"}}},
 			},
 			"/flows/{id}/validate":                  {POST: &OperationSpec{Summary: "Validate a flow diagram", Description: "Validates a saved diagram or optional request-body draft without changing configuration.", Tags: []string{"Flows"}, Parameters: idParam, RequestBody: &RequestBodySpec{Description: "Optional flow definition", SchemaRef: "#/components/schemas/Flow"}, Responses: map[string]ResponseSpec{"200": {Description: "Validation result", ContentType: "application/json"}, "400": {Description: "Invalid request"}}}},
@@ -242,7 +243,11 @@ func flowServiceOpenAPISpec() *OpenAPISpec {
 			reflect.TypeOf(publishComponentConfigsResponse{}),
 			reflect.TypeOf(flowstore.Flow{}),
 		},
-		RequestBodyTypes: []reflect.Type{reflect.TypeOf(flowstore.Flow{})},
+		RequestBodyTypes: []reflect.Type{
+			reflect.TypeOf(flowstore.Flow{}),
+			reflect.TypeOf(FlowCreateRequest{}),
+			reflect.TypeOf(FlowUpdateRequest{}),
+		},
 	}
 }
 
@@ -271,12 +276,66 @@ func (fs *FlowService) handleListFlows(w http.ResponseWriter, r *http.Request) {
 	fs.writeJSON(w, map[string]any{"flows": flows})
 }
 
+// FlowCreateRequest is the POST /flows request body. The server owns the
+// version and every audit timestamp, so an author cannot send them: they are
+// absent from this type and therefore from the generated schema. A legacy
+// full-Flow body still decodes — the extra fields are simply ignored.
+type FlowCreateRequest struct {
+	ID          string                     `json:"id,omitempty"`
+	Name        string                     `json:"name"`
+	Description string                     `json:"description,omitempty"`
+	Nodes       []flowstore.FlowNode       `json:"nodes"`
+	Connections []flowstore.FlowConnection `json:"connections"`
+	CreatedBy   string                     `json:"created_by,omitempty"`
+}
+
+// FlowUpdateRequest is the PUT /flows/{id} request body. Version is the
+// optimistic-concurrency precondition, not a stored value; the audit timestamps
+// are the server's and are absent here for the same reason as on create.
+type FlowUpdateRequest struct {
+	ID          string                     `json:"id"`
+	Version     int64                      `json:"version"`
+	Name        string                     `json:"name"`
+	Description string                     `json:"description,omitempty"`
+	Nodes       []flowstore.FlowNode       `json:"nodes"`
+	Connections []flowstore.FlowConnection `json:"connections"`
+	CreatedBy   string                     `json:"created_by,omitempty"`
+}
+
+// flow builds the store record this request asks for. Create stamps the version
+// and all three timestamps itself.
+func (r *FlowCreateRequest) flow() flowstore.Flow {
+	return flowstore.Flow{
+		ID:          r.ID,
+		Name:        r.Name,
+		Description: r.Description,
+		Nodes:       r.Nodes,
+		Connections: r.Connections,
+		CreatedBy:   r.CreatedBy,
+	}
+}
+
+// flow builds the store record this request asks for. Version rides along as the
+// precondition Manager.Update compares against the stored record.
+func (r *FlowUpdateRequest) flow() flowstore.Flow {
+	return flowstore.Flow{
+		ID:          r.ID,
+		Name:        r.Name,
+		Description: r.Description,
+		Version:     r.Version,
+		Nodes:       r.Nodes,
+		Connections: r.Connections,
+		CreatedBy:   r.CreatedBy,
+	}
+}
+
 func (fs *FlowService) handleCreateFlow(w http.ResponseWriter, r *http.Request) {
-	var flow flowstore.Flow
-	if err := json.NewDecoder(r.Body).Decode(&flow); err != nil {
+	var request FlowCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		fs.writeJSONError(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+	flow := request.flow()
 	if flow.ID == "" {
 		flow.ID = generateFlowID()
 	}
@@ -301,17 +360,18 @@ func (fs *FlowService) handleGetFlow(w http.ResponseWriter, r *http.Request, flo
 }
 
 func (fs *FlowService) handleUpdateFlow(w http.ResponseWriter, r *http.Request, flowID string) {
-	var flow flowstore.Flow
-	if err := json.NewDecoder(r.Body).Decode(&flow); err != nil {
+	var request FlowUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		fs.writeJSONError(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	if flow.ID != flowID {
+	if request.ID != flowID {
 		fs.writeJSONError(w, "ID mismatch", http.StatusBadRequest)
 		return
 	}
+	flow := request.flow()
 	if err := fs.flowStore.Update(r.Context(), &flow); err != nil {
-		if strings.Contains(err.Error(), "conflict") {
+		if errors.Is(err, errs.ErrRevisionMismatch) {
 			fs.writeJSONError(w, err.Error(), http.StatusConflict)
 			return
 		}
