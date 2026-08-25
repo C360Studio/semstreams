@@ -204,6 +204,12 @@ flow list scenario (`grep -rn 'list_flows\|flowbuilder/flows' test/` → only th
       comment `// Raw bucket for operations like Keys()` went with it. `Watch` already read through
       `s.kvStore.Watch` (`:264`), so nothing else lost a path. `NewManager` keeps its local `bucket` for
       `natsClient.NewKVStore(bucket)` and the `jetstream` import is still needed there and by `Watch`'s return type.
+      Context-ownership re-check on the touched seam (repo HARD RULE): `Manager` retains no `context.Context` —
+      `beforeListGet` and `beforeUpdateWrite` RECEIVE one per call and store nothing — and this change adds no
+      `context.Background()`/`TODO()`. The one `context.Background()` in the file is pre-existing, at
+      `flowstore/manager.go:49` inside `NewManager`; it is out of this slice's scope and was left untouched.
+      `grep -n 'context.Background()\|context.TODO()' flowstore/manager.go service/flow_service.go
+      processor/agentic-tools/executors/flows.go` → that one hit only.
 - [x] 3.3 `service/flow_service.go`: `handleListFlows` — on error keep the existing opaque `500` (Slice C owns the
       projection); on success `fs.writeJSON(w, newFlowListResponse(flows))`. `ensureDefaultFlowFromConfig` —
       `if err != nil { return fmt.Errorf("list flows: %w", err) }`; delete the substring branch.
@@ -436,24 +442,65 @@ restore of any kind).
 
 ## 5. Schema regeneration — Slice B rows only
 
-- [ ] 5.1 `task schema:generate`; `git diff --stat schemas/ specs/openapi.v3.yaml` shows only
+- [x] 5.1 `task schema:generate`; `git diff --stat schemas/ specs/openapi.v3.yaml` shows only
       `paths./flows.get.responses.200` gaining the `FlowListResponse` ref and the new
       `components.schemas.FlowListResponse` entry (required `flows`; `flows.items` an inline Flow object schema; no
       `anyOf`/null on the items; no rows from Slices C–D). Commit the delta.
-- [ ] 5.2 Regenerate once more; `task schema:check-changes` (`git diff --exit-code schemas/ specs/openapi.v3.yaml`)
+
+  ```
+  $ git diff --stat schemas/ specs/openapi.v3.yaml
+   specs/openapi.v3.yaml | 94 ++++++++++++++++++++++++++++++++++++++++++++++++++-
+   1 file changed, 93 insertions(+), 1 deletion(-)
+  ```
+
+  Exactly two rows, and nothing under `schemas/`. (a) `paths./flows.get.responses.200` — the single deletion is
+  its bare `type: object` becoming `$ref: '#/components/schemas/FlowListResponse'`. (b) the new
+  `components.schemas.FlowListResponse`: `required: [flows]`, `flows.type: array`, and `flows.items` an INLINE
+  Flow object schema (`id`, `name`, `version`, `nodes`, `connections`, `created_at`, `updated_at`, `last_modified`
+  required; `description`/`created_by` optional) with no `anyOf` and no `type: null` anywhere in the added block —
+  the value element type is what buys that. Committed as `e38b5a4c`.
+- [x] 5.2 Regenerate once more; `task schema:check-changes` (`git diff --exit-code schemas/ specs/openapi.v3.yaml`)
       exits 0 — no drift.
-- [ ] 5.3 `go test ./test/contract/...` green (`TestCommittedOpenAPISpecValid`, `TestOpenAPISchemaReferences`).
+      Re-ran `task schema:generate` on the committed tree, then
+      `task schema:check-changes` → `git diff --exit-code schemas/ specs/openapi.v3.yaml`, exit 0;
+      `git status --porcelain` empty.
+- [x] 5.3 `go test ./test/contract/...` green (`TestCommittedOpenAPISpecValid`, `TestOpenAPISchemaReferences`).
+
+  ```
+  $ go test ./test/contract/...
+  ok  	github.com/c360studio/semstreams/test/contract	2.871s
+  $ go test -count=1 -v -run 'TestCommittedOpenAPISpecValid|TestOpenAPISchemaReferences' ./test/contract/...
+  --- PASS: TestCommittedOpenAPISpecValid (0.00s)
+  --- PASS: TestOpenAPISchemaReferences (0.00s)
+  ok  	github.com/c360studio/semstreams/test/contract	0.379s
+  ```
+
+  The `-v -run` re-run names both tests, so the package `ok` is not standing in for a filter that matched nothing.
 
 ## 6. Standard gates — record each command and its result
 
-- [ ] 6.1 `task lint` — 0 warnings (revive warnings fail CI).
-- [ ] 6.2 `go test -race ./...` — no `^FAIL` lines.
-- [ ] 6.3 `go test -race -tags=integration -p 2 -count=1 ./...` — no `^FAIL` lines (Docker required; one agent at a
+- [x] 6.1 `task lint` — 0 warnings (revive warnings fail CI).
+      Exit 0. `go vet ./...`, `go fmt ./...`, `go tool revive -config revive.toml -formatter friendly ./...`, the
+      fixed-port guard (`scripts/lint-test-ports.sh`), and `go test ./test/natsclient/` (`ok`, 0.532s) all ran.
+      Zero `file.go:line` diagnostic lines in the output and zero occurrences of `warning`/`error`;
+      `git status --porcelain` empty afterwards, so `go fmt` rewrote nothing.
+- [x] 6.2 `go test -race ./...` — no `^FAIL` lines.
+      Exit 0 in 1m08.9s wall. `grep -c '^FAIL'` → 0 and `grep -c '^--- FAIL'` → 0; 153 `ok` packages, 19
+      `no test files`.
+- [x] 6.3 `go test -race -tags=integration -p 2 -count=1 ./...` — no `^FAIL` lines (Docker required; one agent at a
       time on a shared host per `AGENTS.md`; CI is the arbiter of a local result under contention).
-- [ ] 6.4 `task build`, plus the CI cross-compile invocation
+      Exit 0 in 9m00.7s wall (this agent was the only heavy suite running). `grep -c '^FAIL'` → 0 and
+      `grep -c '^--- FAIL'` → 0; 153 `ok` packages, 19 `no test files` — the same package counts as the untagged
+      run, so the tag did not silently drop a package. The three touched packages:
+      `ok flowstore 4.515s`, `ok service 42.543s`, `ok processor/agentic-tools/executors 4.106s`.
+- [x] 6.4 `task build`, plus the CI cross-compile invocation
       `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o semstreams-linux-amd64 ./cmd/semstreams`.
-- [ ] 6.5 `go vet -tags=integration ./...` clean (tagged tests compile).
-- [ ] 6.6 `openspec validate flow-list-current-state --strict` — pass.
+      `task build` → `Built bin/semstreams`, exit 0. The CI cross-compile produced a 29,671,586-byte
+      linux/amd64 binary, exit 0 (written outside the tree so it cannot dirty the worktree).
+- [x] 6.5 `go vet -tags=integration ./...` clean (tagged tests compile).
+      Exit 0, no output.
+- [x] 6.6 `openspec validate flow-list-current-state --strict` — pass.
+      `Change 'flow-list-current-state' is valid`.
 
 ## 7. Review and archive (inside the landing PR; the `AGENTS.md` Land order)
 
