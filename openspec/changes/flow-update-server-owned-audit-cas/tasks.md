@@ -251,6 +251,19 @@ restore with `cp` + checksum (no git checkout/stash of any kind).
   ok  	github.com/c360studio/semstreams/service	33.029s
   ```
 
+- [x] 4.6 M5 (reviewer-found gap, not in the design's list) — drop `Description`/`CreatedBy` from the
+      `FlowUpdateRequest.flow()` builder, and M5b — drop `Description` from `FlowCreateRequest.flow()`. Before
+      `9ba719e6` both passed: the request→Flow builders were unguarded. The first fix attempt ALSO passed under M5
+      because `TestFlowCRUD…` decoded each response into the still-populated request struct and both fields are
+      `omitempty` — the test reconstructed its own input. Fixed by decoding into fresh values
+      (`createdFlow`/`updatedFlow`) and asserting `description`/`created_by` after POST and PUT. Evidence
+      (`go test -race -tags=integration -count=1 -run 'TestFlowCRUDDoesNotPublish' ./service/`):
+      M5 → `--- FAIL: TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager (0.30s)`
+      `flow_service_test.go:149` `expected: "updated authoring metadata" actual: ""`;
+      M5b → same test, `flow_service_test.go:128` `expected: "authoring description" actual: ""`.
+      Restored by `cp`; `shasum service/flow_service.go` = `8e301938c65777f5ac911a143ef99f6ce5a8bcaf` before and
+      after; test `ok` after restore.
+
 ## 5. Schema regeneration — Slice A rows only
 
 - [x] 5.1 `task schema:generate`; `git diff --stat schemas/ specs/openapi.v3.yaml` shows only the
@@ -300,8 +313,16 @@ restore with `cp` + checksum (no git checkout/stash of any kind).
 
 ## 7. Review and archive (inside the landing PR)
 
-- [ ] 7.1 `semstreams-reviewer` review requested on the undrafted PR; verdict and every finding's disposition recorded
-      as PR comments (or `conformance.md` in this change). A finding on an unused path is filed, not fixed here.
+- [x] 7.1 `semstreams-reviewer` (Fable) on `5af43945`: **APPROVE WITH CHANGES**, no BLOCKING/HIGH. Dispositions
+      (all in `9ba719e6` unless noted): MEDIUM-1 unguarded request→Flow builders → FIXED (4.6); MEDIUM-2 stale
+      proposal claim "current classification" for corrupt stored JSON → FIXED (proposal Non-goals + delta req. 3
+      sentence and a scenario naming `…/decode_failure_on_a_corrupt_record`); NIT "get" in the response-schema
+      sentence → FIXED; NIT stale grep counts in 2.2/3.4 → FIXED; NIT PR-body justification for 409-in-A → FIXED in
+      the PR body (ground is `openspec/specs/nats-kv-keys/spec.md:167`, not "would regress"). Rulings: (a) corrupt
+      JSON → fatal RATIFIED; (b) strengthened `TestManagerDiagramCRUDAndVersioning` CONFIRMED; (c) `beforeUpdateWrite`
+      seam COMPLIANT with the context rule. Assessments i/ii/iii are in the PR body for the owner. FILE: nothing
+      beyond the implementer's list. The reviewer re-ran the focused suites and M1–M4 itself; the full-suite §6
+      lines are the implementer's record, not re-run by the reviewer.
 - [x] 7.2 Reconcile: every scenario in `specs/flow-authoring/spec.md` names the test that verifies it and that test
       exists and is green; any deliberate not-done is `[~]` here AND noted in the delta. No `[~]` — every scenario
       is verified by a test that exists and passed in the 6.2/6.3 runs. Mapping:
