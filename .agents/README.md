@@ -20,10 +20,11 @@ thin and must point to exactly one canonical contract.
 
 ## Shared decision skills
 
-The files in `skills/` are the tracked, platform-neutral canonical instructions for the four shared decision
+The files in `skills/` are the tracked, platform-neutral canonical instructions for the five shared decision
 heuristics. The `.claude/skills/` entries of the same names are thin adapters (frontmatter for Claude discovery +
 a one-line pointer); Codex reads the canonical SKILL.md paths directly via `AGENTS.md`.
 
+- `.agents/skills/entity-or-bucket/SKILL.md` — graph entity triples vs private/operational KV
 - `.agents/skills/kv-or-stream/SKILL.md` — KV Watch vs JetStream Stream (4-test heuristic)
 - `.agents/skills/new-payload/SKILL.md` — payload-registry checklist
 - `.agents/skills/orchestration-check/SKILL.md` — rule vs component vs lifecycle boundary
@@ -45,9 +46,10 @@ Run this procedure after changing a contract, adapter, or repository routing rul
 5. Confirm `AGENTS.md` and `CLAUDE.md` route the same logical roles.
 6. Inspect adapter size with `wc -l .claude/agents/semstreams-*.md .codex/agents/semstreams-*.toml`; adapters should
    remain short and contain no copied checklist.
-7. Confirm each of the four shared-skill adapters in `.claude/skills/{kv-or-stream,new-payload,orchestration-check,query-pattern}/SKILL.md`
+7. Confirm each of the five shared-skill adapters in
+   `.claude/skills/{entity-or-bucket,kv-or-stream,new-payload,orchestration-check,query-pattern}/SKILL.md`
    names exactly its matching `.agents/skills/...` path, says to read it fully first, and contains no copied body
-   (`wc -l` ≈ 8). Confirm `AGENTS.md` lists the same four canonical skill paths.
+   (`wc -l` ≈ 8). Confirm `AGENTS.md` lists the same five canonical skill paths.
 
 Use these semantic fixtures when reading the routing text:
 
