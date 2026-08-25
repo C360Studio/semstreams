@@ -188,10 +188,15 @@ func TestThreeNodeClusterReplicasOneRetainsAndHandlesOccurrenceOnce(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, 1, info.Config.Replicas, "the fixed declaration intentionally remains R=1")
 
-	// start() below is deliberately not retried: it is the production observer,
-	// and a 404 from it is the boot exposure in #1073. Establishing the cold
-	// nodes' precondition here keeps that tripwire unambiguous instead of
-	// letting fixture propagation lag read as a #1069 regression.
+	// This test's subject is delivery — one clustered occurrence handled exactly
+	// once across replicas — so it establishes the cold nodes' precondition first
+	// and keeps propagation timing out of its result entirely. natsclient now
+	// absorbs that window inside consumer setup, so a 404 no longer reaches
+	// start(). The #1073 boot exposure is EXERCISED (not proven) on this topology
+	// by deliberately OMITTING this precondition, in
+	// TestThreeNodeClusterObserverStartsBeforeColdNodeAppliesAssignment; it is
+	// PROVEN by TestConsumerSetupWaitsForStreamThatBecomesVisible in natsclient,
+	// which synchronizes on the production wait's own probes.
 	for i, cold := range clients[1:] {
 		coldJS, jsErr := cold.JetStream()
 		require.NoError(t, jsErr)
@@ -223,6 +228,58 @@ func TestThreeNodeClusterReplicasOneRetainsAndHandlesOccurrenceOnce(t *testing.T
 	info, err = capture.Info(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(1), info.State.Msgs, "one server advisory is retained once in the R=1 ledger")
+}
+
+// TestThreeNodeClusterObserverStartsBeforeColdNodeAppliesAssignment is the
+// production-delegate proof for #1073, on the topology that produced it: the
+// capture stream is created through the meta leader's node and the PRODUCTION
+// observer starts immediately on a different node, with no fixture barrier
+// establishing that the second node has applied the meta assignment yet.
+//
+// Before natsclient waited for stream visibility, that start returned
+// 404/10059 — classified transient, returned fatally — and failed process boot
+// after EnsureStreams had already proved the stream exists. It passes now
+// because consumer setup absorbs the propagation window itself. Nothing here
+// retries start(); the loud failure after the budget is still pinned by
+// TestStartFailsLoudlyWhenCaptureStreamIsMissing.
+//
+// Measured limit, so nobody over-reads this: with the wait removed, this test
+// still passed every observed run — an in-process three-node cluster applies the
+// assignment before a client can issue the next request, and the sample logged
+// below was "current" every time. It is a real-topology tripwire
+// that fails whenever the window is actually open, which is the condition the
+// field report describes; it is not the deterministic proof. That is
+// TestConsumerSetupWaitsForStreamThatBecomesVisible in natsclient, which
+// synchronizes on the production wait's own probes instead of on luck.
+func TestThreeNodeClusterObserverStartsBeforeColdNodeAppliesAssignment(t *testing.T) {
+	servers := runThreeNodeCluster(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// Both connections are established BEFORE the stream exists so that nothing
+	// between its creation and the observer's start gives the cold node time to
+	// catch up.
+	clients := make([]*natsclient.Client, 0, 2)
+	for _, srv := range servers[:2] {
+		client, err := natsclient.NewClient(srv.ClientURL())
+		require.NoError(t, err)
+		require.NoError(t, client.Connect(ctx))
+		t.Cleanup(func() { _ = client.Close(context.Background()) })
+		clients = append(clients, client)
+	}
+
+	require.NoError(t, config.NewStreamsManager(clients[0], discardLogger()).EnsureStreams(ctx, &config.Config{}))
+	// Read from the server object rather than the wire: a JetStream API round
+	// trip would itself hand the cold node time to apply. This records whether
+	// the propagation window was actually open, and asserts nothing — the fix
+	// must hold whether or not this particular run caught the node behind.
+	t.Logf("cold node meta layer current at observer start: %t", servers[1].JetStreamIsCurrent())
+
+	telemetry := newIntegrationTelemetry(false)
+	stop, err := start(ctx, clients[1], telemetry)
+	require.NoError(t, err,
+		"consumer setup must absorb a cold node's metadata propagation window instead of failing boot")
+	require.NoError(t, stop(ctx))
 }
 
 func runAuthorizedServer(t *testing.T, publish, subscribe []string) *natsserver.Server {

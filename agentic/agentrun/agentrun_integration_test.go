@@ -9,6 +9,7 @@ package agentrun_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"runtime"
 	"testing"
 	"time"
@@ -140,6 +141,12 @@ func TestIntegration_D1_ProjectionRoundTrip(t *testing.T) {
 // + nil error instead of the "stream not found" error that previously propagated out
 // of run() in both binaries → os.Exit(1) (the silent-red e2e:lifecycle/structural
 // tiers and the latent production boot failure).
+//
+// Since gh#1073 this decision is read off the GUARDED consumer setup rather than
+// an unguarded GetStream precondition, so the absence it asserts is now "absent
+// continuously for natsclient's stream-visibility budget", not "absent on one
+// probe". That is what makes the graceful skip safe on a clustered node that is
+// merely lagging, and it is why this test pays one budget in wall clock.
 func TestIntegration_MilestoneSubscriber_GracefulSkipWhenStreamAbsent(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(graph.BucketEntityStates))
 	ctx := context.Background()
@@ -165,12 +172,128 @@ func TestIntegration_MilestoneSubscriber_GracefulSkipWhenStreamAbsent(t *testing
 		"a read-only consumer must bind by name, never provision the stream it reads")
 }
 
+// TestIntegration_MilestoneSubscriberBindsAStreamThatAppearsDuringStart is the
+// agentrun half of gh#1073. Start no longer gates on a cheap unguarded
+// GetStream, so a stream that is not visible yet — a clustered node that has not
+// applied the meta assignment — no longer disables the subscriber for the
+// process lifetime behind a successful boot. The stream appears while Start is
+// still inside the guarded setup, and the subscriber ends up LIVE.
+//
+// Liveness is proven on the wire, not from the returned stop: the disabled path
+// also returns a non-nil stop, so a stop-shaped assertion would pass for exactly
+// the failure this test exists to catch. Synchronization is the production
+// wait's own traffic — a second $JS.API.STREAM.INFO.<stream> probe exists only
+// because the first was answered "stream not found" — so no delay stands in for
+// the proof.
+func TestIntegration_MilestoneSubscriberBindsAStreamThatAppearsDuringStart(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithJetStream())
+	// A deadline, not a delay: nats.Conn.FlushWithContext refuses a
+	// deadline-free context. Every wait below ends on its own synchronization
+	// long before this expires.
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancel()
+
+	_, getErr := tc.GetStream(ctx, agentrun.AgentStreamName)
+	require.ErrorIs(t, getErr, jetstream.ErrStreamNotFound,
+		"precondition: the AGENT stream must be absent when Start begins")
+
+	conn := tc.GetNativeConnection()
+	probes, err := conn.SubscribeSync("$JS.API.STREAM.INFO." + agentrun.AgentStreamName)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = probes.Unsubscribe() })
+	require.NoError(t, conn.FlushWithContext(ctx))
+
+	created := make(chan error, 1)
+	go func() {
+		probeCtx, probeCancel := context.WithTimeout(ctx, 2*time.Second)
+		defer probeCancel()
+		for range 2 {
+			if _, waitErr := probes.NextMsgWithContext(probeCtx); waitErr != nil {
+				created <- fmt.Errorf("Start stopped probing for the absent stream: %w", waitErr)
+				return
+			}
+		}
+		_, createErr := tc.CreateStream(ctx, agentrun.AgentStreamName, []string{"agent.>"})
+		created <- createErr
+	}()
+
+	mgr := lifecycle.NewManager(tc.Client, nil)
+	require.NoError(t, agentrun.Register(mgr))
+	sub := agentrun.NewMilestoneSubscriber(mgr, nil, "acme", "ops", nil)
+	handler := &integrationMilestoneHandler{events: make(chan agentrun.LoopTerminalEvent, 1)}
+	sub.AddHandler(handler)
+
+	stop, err := sub.Start(ctx, tc.Client, agentrun.StartConfig{
+		StreamName: agentrun.AgentStreamName, ConsumerNameSuffix: "late-visible",
+	})
+	require.NoError(t, <-created)
+	require.NoError(t, err, "Start must bind a stream that becomes visible while it is waiting")
+	require.NotNil(t, stop)
+	defer func() { require.NoError(t, stop(ctx)) }()
+
+	payload := &agentic.LoopCompletedEvent{
+		LoopID: "run-late-visible", TaskID: "task-late-visible", Outcome: agentic.OutcomeSuccess,
+		CompletedAt: time.Now().UTC(), RunEntityID: "missing-run-late-visible",
+	}
+	data, marshalErr := json.Marshal(message.NewBaseMessage(payload.Schema(), payload, "agentic-loop"))
+	require.NoError(t, marshalErr)
+	require.NoError(t, tc.Client.PublishToStream(ctx, "agent.complete."+payload.Schema().Category, data))
+
+	select {
+	case event := <-handler.events:
+		assert.Equal(t, "run-late-visible", event.LoopID)
+		assert.Equal(t, agentic.CategoryLoopCompleted, event.Category)
+	case <-ctx.Done():
+		t.Fatal("a subscriber that bound a late-appearing stream did not handle its milestone")
+	}
+}
+
+// TestIntegration_MilestoneSubscriberCancelledBootIsNotAGracefulSkip pins the
+// CONSTRUCTION the disabled-when-absent branch relies on: a wait the caller ended
+// never carries natsclient.ErrStreamNotVisible, so the branch's single condition
+// fails closed on a cancelled boot without ordering anything.
+//
+// The error it does carry still has jetstream.ErrStreamNotFound reachable
+// alongside the caller's cause, which is exactly why absence is not decided from
+// that classification: doing so would report "no agentic components in this
+// deployment" for a boot that was merely cancelled — a positive claim about a
+// fact never established. If the two endings ever converge, this test fails.
+func TestIntegration_MilestoneSubscriberCancelledBootIsNotAGracefulSkip(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithJetStream())
+	// The AGENT stream is absent, so Start enters the visibility wait; this
+	// deadline ends that wait before the framework's budget does, which is what a
+	// boot cancelled mid-wait looks like from inside Start.
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+
+	mgr := lifecycle.NewManager(tc.Client, nil)
+	require.NoError(t, agentrun.Register(mgr))
+	sub := agentrun.NewMilestoneSubscriber(mgr, nil, "acme", "ops", nil)
+
+	stop, err := sub.Start(ctx, tc.Client, agentrun.StartConfig{
+		StreamName: agentrun.AgentStreamName, ConsumerNameSuffix: "cancelled-boot",
+	})
+	require.Error(t, err, "a cancelled boot must not be reported as a graceful skip")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorIs(t, err, jetstream.ErrStreamNotFound,
+		"both causes stay reachable, which is why the branch reads the sentinel instead")
+	require.NotErrorIs(t, err, natsclient.ErrStreamNotVisible,
+		"a wait the caller ended measured nothing, so it carries no evidence of absence")
+	require.Nil(t, stop)
+}
+
 // TestIntegration_MilestoneSubscriber_StartsWhenStreamPresent confirms the normal
 // path is unchanged by the gh#246 graceful-skip: with the AGENT stream present,
-// Start wires the durable consumers and returns a real stop.
+// Start wires the durable consumers and the subscriber is LIVE.
+//
+// Liveness is asserted on the wire, by a handled milestone. A nil error plus a
+// non-nil stop is NOT the assertion to make here: the graceful-skip path returns
+// exactly that shape, so this test passed while the subscriber had silently
+// disabled itself — which is how a not-found from consumer CREATION, with the
+// stream present, went unnoticed.
 func TestIntegration_MilestoneSubscriber_StartsWhenStreamPresent(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(graph.BucketEntityStates))
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err := tc.CreateStream(ctx, agentrun.AgentStreamName, []string{"agent.>"})
 	require.NoError(t, err, "create AGENT stream")
@@ -178,6 +301,8 @@ func TestIntegration_MilestoneSubscriber_StartsWhenStreamPresent(t *testing.T) {
 	mgr := lifecycle.NewManager(tc.Client, nil)
 	require.NoError(t, agentrun.Register(mgr))
 	sub := agentrun.NewMilestoneSubscriber(mgr, nil, "acme", "ops", nil)
+	handler := &integrationMilestoneHandler{events: make(chan agentrun.LoopTerminalEvent, 1)}
+	sub.AddHandler(handler)
 
 	stop, err := sub.Start(ctx, tc.Client, agentrun.StartConfig{
 		StreamName:         agentrun.AgentStreamName,
@@ -185,7 +310,22 @@ func TestIntegration_MilestoneSubscriber_StartsWhenStreamPresent(t *testing.T) {
 	})
 	require.NoError(t, err, "Start must succeed when the AGENT stream is present")
 	require.NotNil(t, stop)
-	require.NoError(t, stop(ctx))
+	defer func() { require.NoError(t, stop(ctx)) }()
+
+	payload := &agentic.LoopCompletedEvent{
+		LoopID: "run-present", TaskID: "task-present", Outcome: agentic.OutcomeSuccess,
+		CompletedAt: time.Now().UTC(), RunEntityID: "missing-run-present",
+	}
+	data, marshalErr := json.Marshal(message.NewBaseMessage(payload.Schema(), payload, "agentic-loop"))
+	require.NoError(t, marshalErr)
+	require.NoError(t, tc.Client.PublishToStream(ctx, "agent.complete."+payload.Schema().Category, data))
+
+	select {
+	case event := <-handler.events:
+		assert.Equal(t, "run-present", event.LoopID)
+	case <-time.After(10 * time.Second):
+		t.Fatal("a subscriber reported as started did not handle a milestone")
+	}
 }
 
 func TestIntegration_MilestoneSubscriberDrainsBothHandlesBeforeWaiting(t *testing.T) {

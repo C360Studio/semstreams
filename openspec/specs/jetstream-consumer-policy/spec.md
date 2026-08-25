@@ -176,6 +176,56 @@ SHALL be invalid configuration.
 - **THEN** startup returns typed invalid configuration
 - **AND** delivery and policy tracking do not start
 
+### Requirement: Consumer setup tolerates stream-visibility lag
+
+Consumer setup MUST re-observe a stream its guarded lookup reports absent until it becomes visible or a bounded
+framework-owned budget is spent, because a clustered node that has not applied the meta assignment reports a stream
+that exists as absent. Only the absent classification SHALL be re-observed; every other lookup failure SHALL be
+returned on first observation. The budget SHALL be framework-owned, with no operator configuration and no
+caller-supplied wait, so no adopter predicts a propagation delay the framework observes. The guarded lookup therefore
+reports absence only after re-observing it for the whole budget, and a setup that fails that way carries the budget's
+latency; that fact is carried by the not-visible sentinel, NOT by the absent classification, which other seams also
+emit. The auto-create pre-check is exempt from the wait: an absent answer there is the trigger to create the stream,
+not a failure to report.
+
+A caller deciding anything durable from absence — disabling a subscriber, skipping a component, reporting a deployment
+shape — MUST branch on the framework's exported not-visible sentinel rather than on the absent classification alone,
+because consumer creation and initial consumer observation can also answer with the absent classification for a stream
+that is present.
+
+#### Scenario: The stream becomes visible within the budget
+
+- **GIVEN** consumer setup is answered "stream not found" by the node serving the request
+- **WHEN** the stream becomes visible before the budget is spent
+- **THEN** setup proceeds and the consumer is created
+
+#### Scenario: The stream never becomes visible
+
+- **GIVEN** consumer setup is answered "stream not found" for the whole budget
+- **WHEN** the budget is spent
+- **THEN** setup fails with the established transient classification
+- **AND** `jetstream.ErrStreamNotFound` remains reachable through `errors.Is` on the returned error
+
+#### Scenario: A lookup fails for a reason other than absence
+
+- **GIVEN** the stream lookup fails with a permission, transport, or cancellation error
+- **WHEN** setup observes that failure
+- **THEN** it is returned without any further observation of the stream
+
+#### Scenario: A spent budget is durable evidence of absence
+
+- **GIVEN** consumer setup re-observed a stream reported absent until the budget was spent
+- **WHEN** the failure reaches the caller
+- **THEN** the returned error carries the framework's exported not-visible sentinel
+- **AND** it carries the absent classification on the same error
+
+#### Scenario: The caller ends the wait before the budget
+
+- **GIVEN** the caller's context ends while setup is still re-observing an absent stream
+- **WHEN** the failure reaches the caller
+- **THEN** the returned error carries the caller's own cause and the absent classification
+- **AND** it does NOT carry the not-visible sentinel, because a wait cut short measured nothing
+
 ### Requirement: Metric registration returns one canonical collector
 
 Compatible repeated GaugeVec registration SHALL return the identical registered collector. Incompatible collector type
