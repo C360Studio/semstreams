@@ -171,17 +171,81 @@ an inner code); `service/flow_service.go:221,225` (request `SchemaRef` Flow), `:
 Commit §3 first. For each mutation: apply, print `[applied]`, run the named test, record the FAIL line verbatim,
 restore with `cp` + checksum (no git checkout/stash of any kind).
 
-- [ ] 4.1 M1 — replace the fenced `kvStore.Update` with `kvStore.Put`: `TestManagerUpdateTwoManagersExactlyOneWins`
+- [x] 4.1 M1 — replace the fenced `kvStore.Update` with `kvStore.Put`: `TestManagerUpdateTwoManagersExactlyOneWins`
       MUST fail (both succeed / version advanced twice / loser content stored).
-- [ ] 4.2 M2 — remove copy-on-write (stamp the caller's `*Flow` in place before persisting):
+
+  ```
+  [applied] M1 — fenced kvStore.Update replaced by kvStore.Put
+  $ go test -race -tags=integration -count=1 -run 'TestManagerUpdateTwoManagersExactlyOneWins' ./flowstore/
+  --- FAIL: TestManagerUpdateTwoManagersExactlyOneWins (0.42s)
+      manager_integration_test.go:262: want exactly one winner, got 2 (A=<nil> B=<nil>)
+  FAIL
+  FAIL	github.com/c360studio/semstreams/flowstore	0.788s
+  ```
+- [x] 4.2 M2 — remove copy-on-write (stamp the caller's `*Flow` in place before persisting):
       `TestManagerUpdateFailedWriteDoesNotMutateInput` MUST fail; the loser-unchanged assertion in
       `TestManagerUpdateTwoManagersExactlyOneWins` MUST fail.
-- [ ] 4.3 M3 — drop the `CreatedAt` restore: `TestManagerUpdatePreservesStoredCreatedAt` and
+
+  ```
+  [applied] M2 — copy-on-write removed; caller's *Flow stamped in place
+  $ go test -race -tags=integration -count=1 -run 'TestManagerUpdateFailedWriteDoesNotMutateInput|TestManagerUpdateTwoManagersExactlyOneWins' ./flowstore/
+  --- FAIL: TestManagerUpdateTwoManagersExactlyOneWins (0.42s)
+      manager_integration_test.go:224: A mutated its input before commit:
+      manager_integration_test.go:227: B mutated its input before commit:
+      manager_integration_test.go:265: loser input mutated:
+  --- FAIL: TestManagerUpdateFailedWriteDoesNotMutateInput (0.25s)
+      --- FAIL: TestManagerUpdateFailedWriteDoesNotMutateInput/lost_revision_fence (0.00s)
+          manager_integration_test.go:339: input mutated by a failed write:
+      --- FAIL: TestManagerUpdateFailedWriteDoesNotMutateInput/marshal_failure (0.00s)
+  FAIL
+  FAIL	github.com/c360studio/semstreams/flowstore	1.003s
+  ```
+  (`marshal_failure` fails too: without the copy, the version/timestamp stamp lands on the caller's value before
+  the marshal that rejects it.)
+- [x] 4.3 M3 — drop the `CreatedAt` restore: `TestManagerUpdatePreservesStoredCreatedAt` and
       `TestManagerUpdateIgnoresForgedCreatedAt` MUST fail.
-- [ ] 4.4 M4 — restore the substring branch in `handleUpdateFlow` and make the conflict message omit `conflict`:
+
+  ```
+  [applied] M3 — CreatedAt no longer restored from the stored record
+  $ go test -race -tags=integration -count=1 -run 'TestManagerUpdatePreservesStoredCreatedAt|TestManagerUpdateIgnoresForgedCreatedAt' ./flowstore/
+  --- FAIL: TestManagerUpdatePreservesStoredCreatedAt (0.42s)
+      manager_integration_test.go:150: stored created_at = 0001-01-01 00:00:00 +0000 UTC, want 2026-08-25 07:19:39.66714 -0500 CDT (restored from the stored record)
+      manager_integration_test.go:153: returned created_at = 0001-01-01 00:00:00 +0000 UTC, want 2026-08-25 07:19:39.66714 -0500 CDT
+  --- FAIL: TestManagerUpdateIgnoresForgedCreatedAt (0.24s)
+      manager_integration_test.go:180: stored created_at = 1999-01-02 03:04:05 +0000 UTC, want 2026-08-25 07:19:39.912526 -0500 CDT (forged value must be ignored)
+  FAIL
+  FAIL	github.com/c360studio/semstreams/flowstore	0.995s
+  ```
+- [x] 4.4 M4 — restore the substring branch in `handleUpdateFlow` and make the conflict message omit `conflict`:
       the 409 assertion in 2.4(b) MUST fail (proves classification, not text, decides the status).
-- [ ] 4.5 Post-restore checksum matches the committed file for every mutated file; the full §3.5 commands are green
-      again after restoration.
+
+  ```
+  [applied] M4 — handleUpdateFlow back on strings.Contains(err, "conflict"); conflict message no longer contains the word
+  [applied] M4 (cont) — errs import blanked so the mutation compiles
+  $ go test -race -tags=integration -count=1 -run 'TestFlowCRUDDoesNotPublish' ./service/
+  --- FAIL: TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager (0.28s)
+          	Error Trace:	service/flow_service_test.go:146
+          	Error:      	Not equal:
+          	            	expected: 409
+          	            	actual  : 500
+  FAIL
+  FAIL	github.com/c360studio/semstreams/service	1.221s
+  ```
+- [x] 4.5 Post-restore checksum matches the committed file for every mutated file; the full §3.5 commands are green
+      again after restoration. Restored with `cp` from the pre-mutation copies (no git checkout/stash at any point).
+
+  ```
+  $ shasum flowstore/manager.go service/flow_service.go     # after every restore, == the pre-mutation capture
+  edf8372169b66129f2c8262762d60541f4f88012  flowstore/manager.go
+  8e301938c65777f5ac911a143ef99f6ce5a8bcaf  service/flow_service.go
+  $ git status --porcelain                                  # (empty)
+  $ go test -race -count=1 ./flowstore/... ./service/...
+  ok  	github.com/c360studio/semstreams/flowstore	1.236s
+  ok  	github.com/c360studio/semstreams/service	6.427s
+  $ go test -race -tags=integration -p 2 -count=1 ./flowstore/... ./service/...
+  ok  	github.com/c360studio/semstreams/flowstore	2.887s
+  ok  	github.com/c360studio/semstreams/service	33.029s
+  ```
 
 ## 5. Schema regeneration — Slice A rows only
 
