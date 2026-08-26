@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
@@ -143,6 +144,14 @@ func (c *MutationClient) Create(ctx context.Context, request CreateMutation) (Mu
 			errors.New("entity.triples must be empty; CreateMutation.Triples is the sole fact source"))
 	}
 	entity := request.Entity.Clone()
+	// O-17: the bound contract is the only spelling of the type a caller needs.
+	// An empty stamp is filled from it before validation and before the request
+	// is built; a non-empty stamp that differs is rejected below.
+	if entity.MessageType == (message.Type{}) && binding.contract.MessageType != "" {
+		if filled, ok := parseMessageTypeKey(binding.contract.MessageType); ok {
+			entity.MessageType = filled
+		}
+	}
 	if err := validateEntity(binding.contract, entity); err != nil {
 		return notCommitted(), invalidMutationError(MutationOperationCreate, err)
 	}
@@ -323,9 +332,20 @@ func validateEntity(contract Contract, entity *graph.EntityState) error {
 		return errors.New("entity message type is required")
 	}
 	if contract.MessageType != "" && entity.MessageType.Key() != contract.MessageType {
-		return fmt.Errorf("entity message type %q does not match contract %q", entity.MessageType.Key(), contract.Name)
+		return fmt.Errorf("entity message type %q does not match contract %q message type %q",
+			entity.MessageType.Key(), contract.Name, contract.MessageType)
 	}
 	return nil
+}
+
+// parseMessageTypeKey splits a registered key ("domain.category.version")
+// into its Type; ok is false when the key is not three non-empty parts.
+func parseMessageTypeKey(key string) (message.Type, bool) {
+	parts := strings.Split(key, ".")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return message.Type{}, false
+	}
+	return message.Type{Domain: parts[0], Category: parts[1], Version: parts[2]}, true
 }
 
 func canonicalizeTriples(

@@ -1,6 +1,7 @@
 package payloadregistry
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -36,4 +37,29 @@ func NewWithSubset(tb testing.TB, regs ...func(*Registry) error) *Registry {
 		}
 	}
 	return reg
+}
+
+// testStubPayload is the schema-less stub RegisterTestType registers. It
+// carries no Schema(), so validateSchemaConsistency skips it; it can never be
+// decoded on the fact lane — it exists only so a unit test can stamp the key
+// at graph-ingest's create seam without owning a payload type.
+type testStubPayload struct{}
+
+// RegisterTestType registers key ("domain.category.version") with a
+// schema-less stub factory and no floor. tb.Fatalf on a malformed key or a
+// registration error, so a test terminates at the fixture rather than at the
+// first rejected create.
+func RegisterTestType(tb testing.TB, reg *Registry, key string) {
+	tb.Helper()
+	parts := strings.Split(key, ".")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		tb.Fatalf("payloadregistry.RegisterTestType: key %q is not domain.category.version", key)
+	}
+	if err := reg.Register(&Registration{
+		Domain: parts[0], Category: parts[1], Version: parts[2],
+		Description: "test stub type " + key,
+		Factory:     func() any { return &testStubPayload{} },
+	}); err != nil {
+		tb.Fatalf("payloadregistry.RegisterTestType(%q): %v", key, err)
+	}
 }

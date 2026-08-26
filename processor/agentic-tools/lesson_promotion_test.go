@@ -8,9 +8,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/internal/builtinprojection"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/projection"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
@@ -395,4 +397,18 @@ func TestLessonCurator_Retire_MustExistSurfaces(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), graph.ErrorCodeEntityNotFound) {
 		t.Fatalf("retire of an un-born lesson must surface entity_not_found, got: %v", err)
 	}
+}
+
+// TestLessonProjectionContractIsTheRegisteredContract: the public snapshot is
+// the contract the registry holds for agentic.agent_lesson.v1 — one table.
+func TestLessonProjectionContractIsTheRegisteredContract(t *testing.T) {
+	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads)
+	registered, ok := reg.GetRegistration(agentic.AgentLessonMessageType().Key())
+	if !ok {
+		t.Fatal("agentic.agent_lesson.v1 is not registered")
+	}
+	if len(registered.Contracts) != 1 {
+		t.Fatalf("registered lesson contracts = %d, want 1", len(registered.Contracts))
+	}
+	assertContractJSON(t, "registered lesson contract", marshalProjectionContract(t, registered.Contracts[0]), LessonProjectionContract())
 }

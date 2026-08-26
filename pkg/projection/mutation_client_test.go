@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -321,4 +322,90 @@ func projectionJSON(t *testing.T, value any) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// TestCreateFillsMessageTypeFromContract (owner ruling O-17): an entity with an
+// empty MessageType is stamped from the bound contract before validation and
+// before the request is built — the caller predicts nothing the contract holds.
+func TestCreateFillsMessageTypeFromContract(t *testing.T) {
+	contract := projectionTestContract(t)
+	requester := &projectionRequester{handle: func(string, []byte) ([]byte, error) {
+		return projectionJSON(t, graph.CreateEntityResponse{
+			Outcome: graph.MutationApplied, Entity: projectionTestState(), KVRevision: 1,
+		}), nil
+	}}
+	client, err := newMutationClient(requester, []Contract{contract}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := client.Create(context.Background(), CreateMutation{
+		Contract: contract.Name,
+		Entity:   &graph.EntityState{ID: projectionTestEntity, Version: 1},
+		Triples: []message.Triple{{
+			Subject: projectionTestEntity, Predicate: "test.identity.name", Object: "widget",
+		}},
+		Metadata: MutationMetadata{RequestID: "create-fill", Source: "test-projector"},
+	})
+	if err != nil {
+		t.Fatalf("Create with an empty stamp: %v", err)
+	}
+	if receipt.Commit != CommitVerified {
+		t.Fatalf("receipt = %#v, want verified commit", receipt)
+	}
+	if len(requester.requests) != 1 {
+		t.Fatalf("requests = %d, want 1", len(requester.requests))
+	}
+	var sent graph.CreateEntityRequest
+	if err := json.Unmarshal(requester.requests[0].payload, &sent); err != nil {
+		t.Fatal(err)
+	}
+	if sent.Entity == nil || sent.Entity.MessageType.Key() != contract.MessageType {
+		t.Fatalf("request entity message type = %#v, want %q from the contract", sent.Entity, contract.MessageType)
+	}
+
+	t.Run("no contract type and no stamp is still rejected", func(t *testing.T) {
+		untyped := contract
+		untyped.MessageType = ""
+		requester := &projectionRequester{handle: func(string, []byte) ([]byte, error) { return nil, nil }}
+		client, err := newMutationClient(requester, []Contract{untyped}, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		receipt, err := client.Create(context.Background(), CreateMutation{
+			Contract: untyped.Name,
+			Entity:   &graph.EntityState{ID: projectionTestEntity, Version: 1},
+			Triples: []message.Triple{{
+				Subject: projectionTestEntity, Predicate: "test.identity.name", Object: "widget",
+			}},
+			Metadata: MutationMetadata{RequestID: "create-untyped", Source: "test-projector"},
+		})
+		assertProjectionRejectedBeforeRequest(t, receipt, err, MutationOperationCreate, requester)
+	})
+}
+
+// TestCreateRejectsConflictingMessageType pins the conflict branch: a non-empty
+// stamp that differs from the bound contract's key is a classified invalid
+// error naming both keys, and no request is sent.
+func TestCreateRejectsConflictingMessageType(t *testing.T) {
+	contract := projectionTestContract(t)
+	requester := &projectionRequester{handle: func(string, []byte) ([]byte, error) { return nil, nil }}
+	client, err := newMutationClient(requester, []Contract{contract}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflicting := message.Type{Domain: "test", Category: "other", Version: "v1"}
+	receipt, err := client.Create(context.Background(), CreateMutation{
+		Contract: contract.Name,
+		Entity:   &graph.EntityState{ID: projectionTestEntity, MessageType: conflicting, Version: 1},
+		Triples: []message.Triple{{
+			Subject: projectionTestEntity, Predicate: "test.identity.name", Object: "widget",
+		}},
+		Metadata: MutationMetadata{RequestID: "create-conflict", Source: "test-projector"},
+	})
+	assertProjectionRejectedBeforeRequest(t, receipt, err, MutationOperationCreate, requester)
+	for _, key := range []string{conflicting.Key(), contract.MessageType} {
+		if !strings.Contains(err.Error(), key) {
+			t.Errorf("error does not name %s: %v", key, err)
+		}
+	}
 }
