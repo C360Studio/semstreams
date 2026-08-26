@@ -57,13 +57,13 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
 
       Claimed 2026-08-26 on branch `claude/gh1100-single-type-authority-impl` (worktree `../semstreams-wt/…`) off `main` after
       PR #1102 merged; the draft PR carries `Closes #1100`; this tick is its first commit; `implemented-by` in the PR body.
-- [ ] 2.1 `payloadregistry/attributes_test.go`: `TestRegisterRejectsInvalidIndexingProfile` (`"prose"` → error naming the value);
+- [x] 2.1 `payloadregistry/attributes_test.go`: `TestRegisterRejectsInvalidIndexingProfile` (`"prose"` → error naming the value);
       `TestRegisterFillsAndChecksContractMessageType` (empty → filled with the key; a different key → error naming both);
       `TestGetRegistrationCopiesAttributes` (profile present; mutating the returned contract slice does not change a later read);
       `TestContractsReturnsIndependentSortedCopies`; `TestIndexingProfileFor` (registered+floor, registered+empty, unregistered);
       `TestRegisterRejectsSchemaMismatch` (a factory whose `Schema()` disagrees — GREEN at baseline, names the existing check at
       `registry.go:261-300` for the delta). Does not compile at baseline (new fields and methods).
-- [ ] 2.2 `pkg/projection/contract/contract_test.go`: `TestContractValidateUsesVocabularyProfiles` — every value in
+- [x] 2.2 `pkg/projection/contract/contract_test.go`: `TestContractValidateUsesVocabularyProfiles` — every value in
       `vocabulary.{Content,Control,Signal,Trace}` validates and `"prose"` does not; `pkg/projection/contract_test.go` unchanged
       and GREEN at baseline, plus two documenting tests there: `TestContractLiteralCompilesAgainstAliases` (a literal using
       `projection.Contract`, `projection.PredicateGroup`, `projection.ModeReconcile` validates) and
@@ -73,7 +73,7 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       baseline (`validateEntity :322-323` rejects the empty stamp). `TestCreateRejectsConflictingMessageType` — a non-empty
       stamp that differs from the contract is rejected with a classified invalid error naming both keys; GREEN at baseline
       (the existing `:325-326` check), kept as the conflict-branch pin.
-- [ ] 2.3 `agentic/entity_payloads_test.go`: `TestAgentLessonEntity_RoundTrip`, `TestOpsDiagnosisEntity_RoundTrip`,
+- [x] 2.3 `agentic/entity_payloads_test.go`: `TestAgentLessonEntity_RoundTrip`, `TestOpsDiagnosisEntity_RoundTrip`,
       `TestModelEndpointEntity_RoundTrip`, `TestWebObservationEntity_RoundTrip`, `TestLoopExecutionEntity_RoundTrip` — marshal
       a fully populated entity, decode through `message.NewDecoder(payloadregistry.NewWithSubset(t, agentic.RegisterPayloads))`
       into a fresh value, assert concrete type, field equality, `EntityID()` equality, and predicate-set equality of `Triples()`.
@@ -87,7 +87,7 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       objects). `TestOpsDiagnosisEntityMatchesBuilder` — golden literal captured from `emit_diagnosis.go:249-291`: the full set,
       the `fmt.Sprintf("%g")` confidence object (`:262`), and the entity's `Confidence` on every triple. Does not compile at
       baseline.
-- [ ] 2.4 `pkg/lifecycle/harness_entity_test.go`: `TestHarnessEntity_RoundTrip` (verbatim triples survive decode).
+- [x] 2.4 `pkg/lifecycle/harness_entity_test.go`: `TestHarnessEntity_RoundTrip` (verbatim triples survive decode).
       `payloadbuiltins/single_type_authority_test.go`: `TestPayloadRegistryIsTheSingleTypeAuthority` — six keys registered with
       non-empty floors; loop execution and lesson carry a contract whose `MessageType` equals the key (the three others only under
       O-4 = mint); `Contracts()` names unique and equal to `{agentic.loop-execution, agentic.lesson-record}` (plus the three
@@ -95,7 +95,7 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       profile empty or valid. `processor/agentic-tools/lesson_promotion_test.go`: `TestLessonProjectionContractIsTheRegisteredContract`
       — `LessonProjectionContract()` equals the contract the builtin registry holds for `agentic.agent_lesson.v1`. Does not
       compile at baseline.
-- [ ] 2.5 `processor/graph-ingest/registered_type_gate_integration_test.go` (`//go:build integration`; the package's real NATS
+- [x] 2.5 `processor/graph-ingest/registered_type_gate_integration_test.go` (`//go:build integration`; the package's real NATS
       test client): `TestCreateRejectsUnregisteredMessageType` — registry from `payloadbuiltins.Register`; send `entity.create`
       stamping `test.unknown.v1`; decode the reply into a fresh value; assert code `message_type_unregistered`,
       `detail.message_type == "test.unknown.v1"`, no `ENTITY_STATES` key, `mutation_rejections_total{reason="message_type_unregistered"}`
@@ -106,7 +106,7 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       `graph.hierarchy_container.v1` and `indexing_profile_default_total{message_type="unknown"}` unchanged (under O-16 (b): the
       empty stamp and the `unknown` label instead). MUST fail at baseline (the gate does not exist; the floor is table-driven;
       the container has no stamp).
-- [ ] 2.6 `processor/graph-ingest/factory_registry_test.go`: `TestFactoryRejectsNilPayloadRegistry` — construction with
+- [x] 2.6 `processor/graph-ingest/factory_registry_test.go`: `TestFactoryRejectsNilPayloadRegistry` — construction with
       `PayloadRegistry: nil` returns an error naming the dependency. MUST fail at baseline (only `NATSClient` is checked).
       `TestCreateSeamRejectsWhenRegistryMissing` — a `&Component{}` literal with no registry receives an `entity.create`; the
       reply decodes into a fresh value with code `internal`, nothing is written, no panic. `TestInProcessCreateRejectsUnregisteredType`
@@ -119,42 +119,91 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       — put an entity with `message_type` `legacy.gone.v1` directly into the test bucket; boot; assert no poison inventory
       entry, exact read returns the stamp, and a `triple.append` to it reports `applied`. GREEN at baseline (documents §10 of
       the design; a barrier against a later registry-consulting codec).
-- [ ] 2.7 `processor/agentic-tools/emit_lesson_entity_test.go`: `TestEmitLessonBuildsEntityTriples` — for the same args,
+- [x] 2.7 `processor/agentic-tools/emit_lesson_entity_test.go`: `TestEmitLessonBuildsEntityTriples` — for the same args,
       the predicate/object multiset from `AgentLessonEntity.Triples()` equals the multiset the baseline builder produces
       (capture the baseline output as a golden literal in the test before 4.2 moves the builder). Does not compile at baseline.
       `processor/agentic-tools/executors/web_observation_integration_test.go` (`//go:build integration`):
       `TestWebObservationBirthIsRegistered` — `publishWebObservation` against a graph-ingest with the builtin set; assert the
       entity exists with `message_type` `agentic.web_observation.v1`. MUST fail at baseline once 5.2 lands without 4.4; GREEN
       before 5.2 (records the coverage the missing e2e tier would give — O-10).
-- [ ] 2.8 `cmd/e2e-semstreams/fixtures/register_test.go`: `TestFixturesRegisterEveryE2EStamp` — the six e2e keys register into
+- [x] 2.8 `cmd/e2e-semstreams/fixtures/register_test.go`: `TestFixturesRegisterEveryE2EStamp` — the six e2e keys register into
       a fresh registry with floor `control` and round-trip as verbatim carriers. Does not compile at baseline.
-- [ ] 2.9 RED capture on baseline code (§2 tests only), recorded here verbatim (package + test name + failing assertion or
-      build error):
+- [x] 2.9 RED capture on baseline code `29a8779e` (§2 tests only; run 2026-08-26 before any non-test edit), recorded
+      verbatim (first compiler line per package, or the failing assertion). Every "does not compile" test failed at build;
+      the two `pkg/projection` tests failed at their assertion; the one documenting integration test compiled and passed.
+      Deviation from the 2.2 prediction: `TestCreateRejectsConflictingMessageType` is RED at baseline, not GREEN — the
+      baseline `:325-326` message names the contract NAME, not the contract's key, and the delta requires "naming both
+      keys"; 3.4 rewrites the message. `TestResidentUnregisteredStampIsNotPoison` (GREEN by design) could not run at
+      baseline because its package's other new files do not compile; it is exercised at §5.
 
   ```
-  go test -race -count=1 -run 'TestRegisterRejectsInvalidIndexingProfile|TestRegisterFillsAndChecksContractMessageType|TestGetRegistrationCopiesAttributes|TestContractsReturnsIndependentSortedCopies|TestIndexingProfileFor' ./payloadregistry/
-  go test -race -count=1 -run 'TestContractValidateUsesVocabularyProfiles' ./pkg/projection/contract/
-  go test -race -count=1 -run 'TestCreateFillsMessageTypeFromContract|TestCreateRejectsConflictingMessageType' ./pkg/projection/
-  go test -race -count=1 -run '_RoundTrip|TestRegisteredContractMatchesTriples|TestWebObservationEntityMatchesToolBuilders|TestModelEndpointEntityMatchesBuilder|TestOpsDiagnosisEntityMatchesBuilder' ./agentic/ ./pkg/lifecycle/
-  go test -race -count=1 -run 'TestPayloadRegistryIsTheSingleTypeAuthority' ./payloadbuiltins/
-  go test -race -tags=integration -count=1 -p 2 -run 'TestCreateRejectsUnregisteredMessageType|TestCreateAcceptsRegisteredMessageType|TestFloorComesFromRegistration|TestResidentUnregisteredStampIsNotPoison|TestHierarchyContainerBirthCarriesRegisteredType' ./processor/graph-ingest/
-  go test -race -count=1 -run 'TestFactoryRejectsNilPayloadRegistry|TestCreateSeamRejectsWhenRegistryMissing|TestInProcessCreateRejectsUnregisteredType|TestFactoryRejectsHierarchyWithoutContainerType' ./processor/graph-ingest/
-  go test -race -count=1 -run 'TestLessonProjectionContractIsTheRegisteredContract' ./processor/agentic-tools/
-  go test -race -count=1 -run 'TestEmitLessonBuildsEntityTriples' ./processor/agentic-tools/
-  go test -race -tags=integration -count=1 -run 'TestWebObservationBirthIsRegistered' ./processor/agentic-tools/executors/
-  go test -race -count=1 -run 'TestFixturesRegisterEveryE2EStamp' ./cmd/e2e-semstreams/fixtures/
+  $ go test -race -count=1 -run 'TestRegisterRejectsInvalidIndexingProfile|TestRegisterFillsAndChecksContractMessageType|TestGetRegistrationCopiesAttributes|TestContractsReturnsIndependentSortedCopies|TestIndexingProfileFor' ./payloadregistry/
+  github.com/c360studio/semstreams/pkg/projection/contract: no non-test Go files in .../pkg/projection/contract
+  FAIL	github.com/c360studio/semstreams/payloadregistry [build failed]
+  $ go test -race -count=1 -run 'TestContractValidateUsesVocabularyProfiles' ./pkg/projection/contract/
+  pkg/projection/contract/contract_test.go:13:10: undefined: Contract
+  pkg/projection/contract/contract_test.go:32:42: undefined: ErrInvalidContract
+  FAIL	github.com/c360studio/semstreams/pkg/projection/contract [build failed]
+  $ go test -race -count=1 -run 'TestCreateFillsMessageTypeFromContract|TestCreateRejectsConflictingMessageType' ./pkg/projection/
+  --- FAIL: TestCreateFillsMessageTypeFromContract (0.00s)
+      mutation_client_test.go:350: Create with an empty stamp: projection mutation create failed (invalid, not-committed): entity message type is required
+  --- FAIL: TestCreateRejectsConflictingMessageType (0.00s)
+      mutation_client_test.go:408: error does not name test.fixture.v1: projection mutation create failed (invalid, not-committed): entity message type "test.other.v1" does not match contract "test"
+  FAIL	github.com/c360studio/semstreams/pkg/projection	0.288s
+  $ go test -race -count=1 -run '_RoundTrip|TestRegisteredContractMatchesTriples|TestWebObservationEntityMatchesToolBuilders|TestModelEndpointEntityMatchesBuilder|TestOpsDiagnosisEntityMatchesBuilder' ./agentic/ ./pkg/lifecycle/
+  pkg/lifecycle/harness_entity_test.go:21:25: undefined: lifecycle.HarnessEntity
+  pkg/lifecycle/harness_entity_test.go:30:28: undefined: lifecycle.HarnessMessageType
+  pkg/lifecycle/harness_entity_test.go:35:80: undefined: lifecycle.RegisterPayloads
+  agentic/entity_payloads_test.go:64:28: undefined: agentic.AgentLessonEntity
+  agentic/entity_payloads_test.go:76:31: undefined: agentic.OpsDiagnosisEntity
+  agentic/entity_payloads_test.go:85:35: undefined: agentic.ModelEndpointEntity
+  agentic/entity_payloads_test.go:94:38: undefined: agentic.WebObservationTool
+  agentic/entity_payloads_test.go:94:67: undefined: agentic.WebObservationEntity
+  FAIL	github.com/c360studio/semstreams/agentic [build failed]
+  FAIL	github.com/c360studio/semstreams/pkg/lifecycle [build failed]
+  $ go test -race -count=1 -run 'TestPayloadRegistryIsTheSingleTypeAuthority' ./payloadbuiltins/
+  payloadbuiltins/single_type_authority_test.go:46:43: registration.IndexingProfile undefined (type *payloadregistry.Registration has no field or method IndexingProfile)
+  payloadbuiltins/single_type_authority_test.go:48:29: reg.IndexingProfileFor undefined (type *payloadregistry.Registry has no field or method IndexingProfileFor)
+  payloadbuiltins/single_type_authority_test.go:61:34: registration.Contracts undefined (type *payloadregistry.Registration has no field or method Contracts)
+  payloadbuiltins/single_type_authority_test.go:72:31: reg.Contracts undefined (type *payloadregistry.Registry has no field or method Contracts)
+  FAIL	github.com/c360studio/semstreams/payloadbuiltins [build failed]
+  $ go test -race -tags=integration -count=1 -p 2 -run 'TestCreateRejectsUnregisteredMessageType|TestCreateAcceptsRegisteredMessageType|TestFloorComesFromRegistration|TestResidentUnregisteredStampIsNotPoison|TestHierarchyContainerBirthCarriesRegisteredType' ./processor/graph-ingest/
+  processor/graph-ingest/factory_registry_test.go:88:100: undefined: graph.ErrorCodeMessageTypeUnregistered
+  processor/graph-ingest/registered_type_gate_integration_test.go:75:87: undefined: graph.ErrorCodeMessageTypeUnregistered
+  processor/graph-ingest/registered_type_gate_integration_test.go:115:18: undefined: payloadregistry.RegisterTestType
+  processor/graph-ingest/registered_type_gate_integration_test.go:159:28: undefined: inference.HierarchyContainerMessageType
+  FAIL	github.com/c360studio/semstreams/processor/graph-ingest [build failed]
+  $ go test -race -count=1 -run 'TestFactoryRejectsNilPayloadRegistry|TestCreateSeamRejectsWhenRegistryMissing|TestInProcessCreateRejectsUnregisteredType|TestFactoryRejectsHierarchyWithoutContainerType' ./processor/graph-ingest/
+  processor/graph-ingest/factory_registry_test.go:88:100: undefined: graph.ErrorCodeMessageTypeUnregistered
+  processor/graph-ingest/factory_registry_test.go:101:24: undefined: graph.ErrorCodeMessageTypeUnregistered
+  FAIL	github.com/c360studio/semstreams/processor/graph-ingest [build failed]
+  $ go test -race -count=1 -run 'TestLessonProjectionContractIsTheRegisteredContract' ./processor/agentic-tools/
+  processor/agentic-tools/emit_lesson_entity_test.go:41:21: undefined: agentic.AgentLessonEntity
+  processor/agentic-tools/lesson_promotion_test.go:410:20: registered.Contracts undefined (type *payloadregistry.Registration has no field or method Contracts)
+  FAIL	github.com/c360studio/semstreams/processor/agentic-tools [build failed]
+  $ go test -race -count=1 -run 'TestEmitLessonBuildsEntityTriples' ./processor/agentic-tools/
+  processor/agentic-tools/emit_lesson_entity_test.go:41:21: undefined: agentic.AgentLessonEntity
+  FAIL	github.com/c360studio/semstreams/processor/agentic-tools [build failed]
+  $ go test -race -tags=integration -count=1 -run 'TestWebObservationBirthIsRegistered' ./processor/agentic-tools/executors/
+  ok  	github.com/c360studio/semstreams/processor/agentic-tools/executors	1.915s
+  $ go test -race -count=1 -run 'TestFixturesRegisterEveryE2EStamp' ./cmd/e2e-semstreams/fixtures/
+  github.com/c360studio/semstreams/cmd/e2e-semstreams/fixtures: no non-test Go files in .../cmd/e2e-semstreams/fixtures
+  FAIL	github.com/c360studio/semstreams/cmd/e2e-semstreams/fixtures [build failed]
   ```
 
 ## 3. Registry — attributes registered with the type
 
-- [ ] 3.1 Create `pkg/projection/contract` (package `contract`): move `Contract`, `PredicateGroup`, `WriteMode`, `ModeReconcile`,
+- [x] 3.1 Create `pkg/projection/contract` (package `contract`): move `Contract`, `PredicateGroup`, `WriteMode`, `ModeReconcile`,
       `ModeAppend`, `ErrInvalidContract`, `Validate`, `ValidateContracts`, `validateGroupName` from `pkg/projection/contract.go`
       and `errors.go:6`; replace `validIndexingProfiles` with `vocabulary.IsValidIndexingProfile`; add `ValidateShape()` (everything
       `Validate` does except `vocabulary.RequireDeclaredPredicate`). In `pkg/projection` keep `type Contract = contract.Contract`,
       `type PredicateGroup = contract.PredicateGroup`, `type WriteMode = contract.WriteMode`, `const ModeReconcile = contract.ModeReconcile`,
       `ModeAppend`, `var ErrInvalidContract = contract.ErrInvalidContract`, `func ValidateContracts(...) = contract.ValidateContracts`.
       `go build ./... && go vet ./...` clean; `grep -rn 'validIndexingProfiles' --include='*.go' .` → 0.
-- [ ] 3.2 `payloadregistry.Registration` gains `IndexingProfile string` and `Contracts []contract.Contract`; `Register` validates
+      Done 2026-08-26: `go build ./...` → ok; `go vet ./payloadregistry/ ./pkg/projection/...` → ok; the grep → 0;
+      `pkg/projection/contract_test.go` unchanged and GREEN (`ok  pkg/projection 1.376s`). `pkg/projection/errors.go`
+      deleted (the sentinel moved with the types).
+- [x] 3.2 `payloadregistry.Registration` gains `IndexingProfile string` and `Contracts []contract.Contract`; `Register` validates
       per the payload-registry delta (profile via `vocabulary.IsValidIndexingProfile`; contract key fill/check; unique contract
       names; `ValidateShape()`); `GetRegistration`/`List`/`ListByDomain` copy both (deep-copy contracts); add
       `IndexingProfileFor(key) (string, bool)` and `Contracts() []contract.Contract` (fresh copies, sorted by key then name).
@@ -163,13 +212,25 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       `vocabulary` itself (five `init()`s — `hierarchy.go:17`, `labels.go:16`, `lifecycle.go:16`, `relationships.go:7`,
       `rulepacks/predicates.go:37` — and a global predicate registry); `pkg/platform` is already reached through `message`. Name
       the edge `payloadregistry → pkg/projection/contract → vocabulary` and that `message` inherits it.
-- [ ] 3.3 `payloadregistry/testing.go`: `RegisterTestType(tb testing.TB, reg *Registry, key string)` — parses the key, registers a
+      Done 2026-08-26: `go list -deps ./payloadregistry | grep semstreams` →
+      `pkg/retry pkg/errs pkg/types pkg/platform vocabulary pkg/projection/contract payloadregistry` (the edge exactly as
+      named; no `message`, no component package). Package comment rewritten (`registry.go:1-20`). O-13 agreement check
+      (contract profile vs floor) implemented in `bindContracts` and pinned by the subtest of
+      `TestRegisterRejectsInvalidIndexingProfile`.
+- [x] 3.3 `payloadregistry/testing.go`: `RegisterTestType(tb testing.TB, reg *Registry, key string)` — parses the key, registers a
       schema-less stub factory with no floor; `tb.Fatalf` on error. 2.1 GREEN.
-- [ ] 3.4 (O-17) `pkg/projection/mutation_client.go` `Create` (`:133`): before `validateEntity` (`:146`) and before the request
+      Done 2026-08-26: `go test -race -count=1 -run 'TestRegisterRejectsInvalidIndexingProfile|TestRegisterFillsAndChecksContractMessageType|TestGetRegistrationCopiesAttributes|TestContractsReturnsIndependentSortedCopies|TestIndexingProfileFor|TestRegisterRejectsSchemaMismatch' ./payloadregistry/`
+      → six `--- PASS`, `ok  payloadregistry 1.246s`.
+- [x] 3.4 (O-17) `pkg/projection/mutation_client.go` `Create` (`:133`): before `validateEntity` (`:146`) and before the request
       is built (`:164`), fill an empty `entity.MessageType` from `binding.contract.MessageType` when the contract has one; keep
       the `:325-326` equality check as the conflict branch (classified invalid error naming both keys); an empty stamp with a
       contract that has no `MessageType` stays rejected (`:322-323`). Do the same in the exact-read validation at `:188` only
       for the conflict branch (a stored entity always carries a stamp). 2.2 fill test GREEN; conflict test stays GREEN.
+      Done 2026-08-26: `go test -race -count=1 -run 'TestCreateFillsMessageTypeFromContract|TestCreateRejectsConflictingMessageType|TestContractLiteralCompilesAgainstAliases|TestOverlappingLocalContractsConstruct' ./pkg/projection/`
+      → four `--- PASS`; `go test -race -count=1 -run 'TestContractValidateUsesVocabularyProfiles|TestValidateShapeSkipsPredicateDeclaration' ./pkg/projection/contract/`
+      → two `--- PASS`. The conflict message now names both keys (see 2.9: it was RED at baseline on that assertion).
+      The fill parses the contract key with an unexported three-part splitter in `pkg/projection` (no parser exists in
+      `pkg/types`; adding one is a `pkg/*` export outside O-2).
 
 ## 4. The six framework types
 
