@@ -43,8 +43,8 @@ func TestEmitLessonBuildsEntityTriples(t *testing.T) {
 		Category: "retention-policy", Polarity: "avoid", Severity: "warning", Status: lessonBornStatus,
 		CreatedAt: now,
 		Summary:   "cap retention sweeps", Detail: "the detail", InjectionForm: "Cap sweeps.",
-		Evidence:  []string{"acme.ops.agent.agentic-loop.execution.loop-1", "acme.ops.agent.agentic-loop.execution.loop-2"},
-		AppliesTo: []string{"tag:go", "id:acme.ops.agent"},
+		Evidence:     []string{"acme.ops.agent.agentic-loop.execution.loop-1", "acme.ops.agent.agentic-loop.execution.loop-2"},
+		AppliesTo:    []string{"tag:go", "id:acme.ops.agent"},
 		ObservedRole: "ops", ExecutedBy: loopID,
 	}
 	if got := entity.EntityID(); got != lessonID {

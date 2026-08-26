@@ -78,13 +78,13 @@ func TestCreateEntity_UnicodeID(t *testing.T) {
 
 // entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone.🚁001" line=46 column=15 surface=go-field:.entityID entity_id_invalid:first_byte Unicode instance rejection fixture
 // entity-id-audit:classify intentional-malformed "c360.platform.робот.mav1.drone.001" line=52 column=15 surface=go-field:.entityID entity_id_invalid:first_byte Unicode domain rejection fixture
-// entity-id-audit:classify intentional-malformed "" line=136 column=14 surface=go-field:.entityID entity_id_invalid:empty empty ID rejection fixture
-// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone" line=141 column=14 surface=go-field:.entityID entity_id_invalid:arity five-part ID rejection fixture
-// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone.001.extra" line=146 column=14 surface=go-field:.entityID entity_id_invalid:arity seven-part ID rejection fixture
-// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav 1.drone.001" line=151 column=14 surface=go-field:.entityID entity_id_invalid:alphabet whitespace rejection fixture
-// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone.001!" line=156 column=14 surface=go-field:.entityID entity_id_invalid:alphabet punctuation rejection fixture
-// entity-id-audit:classify intentional-malformed "" line=253 column=15 surface=go-field:.entityID entity_id_invalid:empty empty validation fixture
-// entity-id-audit:classify intentional-malformed "" line=450 column=9 surface=go-return:EntityID entity_id_invalid:empty empty Graphable ID rejection fixture
+// entity-id-audit:classify intentional-malformed "" line=138 column=14 surface=go-field:.entityID entity_id_invalid:empty empty ID rejection fixture
+// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone" line=143 column=14 surface=go-field:.entityID entity_id_invalid:arity five-part ID rejection fixture
+// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone.001.extra" line=148 column=14 surface=go-field:.entityID entity_id_invalid:arity seven-part ID rejection fixture
+// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav 1.drone.001" line=153 column=14 surface=go-field:.entityID entity_id_invalid:alphabet whitespace rejection fixture
+// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone.001!" line=158 column=14 surface=go-field:.entityID entity_id_invalid:alphabet punctuation rejection fixture
+// entity-id-audit:classify intentional-malformed "" line=256 column=15 surface=go-field:.entityID entity_id_invalid:empty empty validation fixture
+// entity-id-audit:classify intentional-malformed "" line=456 column=9 surface=go-return:EntityID entity_id_invalid:empty empty Graphable ID rejection fixture
 
 func TestCreateEntity_LargeTripleSet(t *testing.T) {
 	// Test entity creation with large number of triples (performance test)

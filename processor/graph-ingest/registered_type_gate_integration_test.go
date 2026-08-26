@@ -126,6 +126,17 @@ func TestFloorComesFromRegistration(t *testing.T) {
 		assert.InDelta(t, before, testutil.ToFloat64(counter), 0.0001, "a registered floor is not a gap")
 	})
 
+	t.Run("a framework mutation-lane type takes its registered floor", func(t *testing.T) {
+		counter := getIndexingProfileDefaultMetric(nil).WithLabelValues(agentic.AgentLessonMessageType().Key())
+		before := testutil.ToFloat64(counter)
+		const id = "c360.test.gate.agent.lesson.floor"
+		_, err := client.Create(ctx, gateCreateRequest(id, agentic.AgentLessonMessageType()))
+		require.NoError(t, err)
+		assert.Equal(t, []string{vocabulary.IndexingProfileContent}, profileValues(storedEntity(t, c, id)),
+			"a lesson is born with the content floor registered with agentic.agent_lesson.v1")
+		assert.InDelta(t, before, testutil.ToFloat64(counter), 0.0001, "a registered floor is not a gap")
+	})
+
 	t.Run("registered type with no floor is metered", func(t *testing.T) {
 		counter := getIndexingProfileDefaultMetric(nil).WithLabelValues("test.nofloor.v1")
 		before := testutil.ToFloat64(counter)
