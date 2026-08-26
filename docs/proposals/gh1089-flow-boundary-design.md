@@ -9,8 +9,9 @@
   reproduced; the two divergences (ten OpenAPI operations, not twelve; semteams already broken on `main` for non-flow
   reasons) and the line-number mis-cites are corrected in this revision.** The design was drafted in the same pass as
   the inventory at the caller's direction.
-- Status: **DRAFT — awaiting independent pre-owner design review and the owner's ruling on #1089.** Nothing here is
-  approved. Binding rulings stay with the owner.
+- Status: **ACCEPTED — owner ruled 2026-08-26 on #1089: "C, ADR-100 accepted"; the nine §7 defaults stood without
+  override.** Implementation: two PRs per §7 item 5 — substrate first, retirement second — each claimed by its own
+  child issue of #1089.
 - Companion artifacts: `docs/adr/100-compositions-are-validated-diagrams-are-projections.md` (Proposed),
   `openspec/changes/composition-validation-substrate/` (proposal, tasks, conformance, three spec deltas;
   `openspec validate composition-validation-substrate --strict` output is in the handoff).

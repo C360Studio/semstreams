@@ -2,7 +2,8 @@
 
 ## Status
 
-**Proposed — awaiting owner ruling on #1089.** Drafted 2026-08-26 from the architect package
+**Accepted (2026-08-26).** Owner ruling on #1089: "C, ADR-100 accepted." The nine design defaults in
+`docs/proposals/gh1089-flow-boundary-design.md` §7 stood without override. Drafted 2026-08-26 from the architect package
 (`docs/proposals/gh1089-flow-boundary-inventory.md`, `docs/proposals/gh1089-flow-boundary-design.md`). If accepted it
 supersedes the named clauses of ADR-096 and ADR-026 below; ADR-094 and ADR-095 remain the authority for boot-only
 composition and lifecycle mechanics. Mechanics live in `openspec/specs/composition-validation/spec.md` (new) and the
