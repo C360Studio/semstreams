@@ -201,3 +201,37 @@ func TestHandleCompleteResponseLeavesDecisionNilWhenDecideMetadataIsUnusable(t *
 		})
 	}
 }
+
+// TestHandleCompleteResponseLeavesDecisionNilForSynthesizedDecide pins the
+// delta scenario "synthesized decision does not populate the field": the
+// framework's needs_clarification recovery (#133/gh#158) is a GRAPH TRIPLE
+// written after completion, never a tool result, so a text-only coordinator
+// completion still decodes with a nil Decision and keeps today's
+// route-ownership behaviour. Making it user-facing would publish a prompt for
+// every text-only coordinator completion.
+func TestHandleCompleteResponseLeavesDecisionNilForSynthesizedDecide(t *testing.T) {
+	config := createTestConfig()
+	config.SynthesizeTerminalOnCompletion = true
+	handler := agenticloop.NewMessageHandler(config)
+	ctx := context.Background()
+	loopID := startDecisionTestLoop(t, handler)
+
+	// Text-only completion: no terminal tool call at all.
+	result, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+		RequestID: "req-text",
+		Status:    "complete",
+		Message: agentic.ChatMessage{
+			Role:    "assistant",
+			Content: "I need more information about the airframe.",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, agentic.LoopStateComplete, result.State)
+	require.NotNil(t, result.SyntheticDecide,
+		"the synthesis path must actually fire, or this test proves nothing")
+	require.Equal(t, loopID, result.SyntheticDecide.LoopID)
+
+	completion := decodeCompletionEvent(t, result.PublishedMessages)
+	require.Nil(t, completion.Decision, "a synthesized decision never rides the completion event")
+	require.Equal(t, "I need more information about the airframe.", completion.Result)
+}

@@ -9,6 +9,10 @@ tracked name for the call ID first, then the tool result's own `Name` — so a p
 demote a decide terminal. When the terminal tool is any other tool, or the loop completes on model text, `Decision`
 SHALL be nil. The loop SHALL NOT infer a decision from the shape of `Result`. `LoopCompletedEvent.Validate` SHALL
 reject a present `Decision` whose `Action` or `Reason` is empty; an unknown but nonempty `Action` SHALL remain valid.
+When the terminal tool IS the decide tool but its typed metadata cannot supply both a nonempty `Action` and a
+nonempty `Reason` — absent, empty, or not a string — the loop SHALL leave `Decision` nil and SHALL warn, rather than
+stamp a half-decision: a present `Decision` with an empty field fails validation and is permanently rejected, which
+would lose the terminal entirely instead of degrading it to the existing route-ownership behaviour.
 
 #### Scenario: decide terminal carries its decision
 
@@ -36,6 +40,15 @@ reject a present `Decision` whose `Action` or `Reason` is empty; an unknown but 
 - **GIVEN** a loop that completes on model text with `decide` in its tool set
 - **WHEN** the framework synthesizes a `needs_clarification` decision triple after completion
 - **THEN** the published completion event still decodes with a nil `Decision`
+
+#### Scenario: unusable decide metadata leaves the field nil rather than half-stamped
+
+- **GIVEN** a terminal `StopLoop` tool result named for the decide tool
+- **AND** its typed metadata has no `action`/`reason`, an empty one, or a non-string one
+- **WHEN** the loop completes
+- **THEN** the published completion event decodes with a nil `Decision`
+- **AND** the completion still validates, so the terminal is delivered under the existing route-ownership behaviour
+- **AND** the loop warns that the decide terminal carried no usable typed decision
 
 #### Scenario: present decision with an empty field fails validation
 

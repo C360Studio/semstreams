@@ -15,6 +15,12 @@ package agentic_test
 
 import (
 	"encoding/json"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,4 +148,57 @@ func TestLoopCompletedEventValidateRejectsPresentDecisionWithEmptyActionOrReason
 		ev := base()
 		require.NoError(t, ev.Validate())
 	})
+}
+
+// TestDecideToolNameHasOneDefinitionInNonTestSources pins the delta scenario
+// "one tool-name home" as a source read rather than a claim: exactly one
+// non-test Go source may DEFINE the decide tool-name literal, and it must be
+// this package. Precedent: the port-grammar census reads sources the same way.
+//
+// Only `const … = "decide"` definitions count. Operation labels passed to
+// errs.Wrap*, executor registration group keys, and e2e mock fixtures are a
+// different vocabulary and are deliberately out of scope.
+func TestDecideToolNameHasOneDefinitionInNonTestSources(t *testing.T) {
+	t.Parallel()
+
+	root, err := filepath.Abs("..")
+	require.NoError(t, err)
+	definition := regexp.MustCompile(`(?m)^\s*(?:const\s+)?\w+\s*(?:=|:=)\s*"decide"\s*$`)
+
+	var definitions []string
+	require.NoError(t, filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", "node_modules", "bin", "worktrees":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		for index, line := range strings.Split(string(data), "\n") {
+			if definition.MatchString(line) {
+				relative, relErr := filepath.Rel(root, path)
+				if relErr != nil {
+					relative = path
+				}
+				definitions = append(definitions, fmt.Sprintf("%s:%d", relative, index+1))
+			}
+		}
+		return nil
+	}))
+
+	require.Len(t, definitions, 1, "the decide tool name must have exactly one definition: %v", definitions)
+	require.True(t, strings.HasPrefix(definitions[0], "agentic/tools.go:"),
+		"the one definition must live in agentic, got %s", definitions[0])
+	require.Equal(t, "decide", agentic.DecideToolName)
 }

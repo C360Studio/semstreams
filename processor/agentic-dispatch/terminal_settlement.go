@@ -210,7 +210,12 @@ func (c *Component) settleAgentTerminal(ctx context.Context, data []byte) (settl
 	if decision := event.Decision; decision != nil && !agentic.IsUserFacingDecideAction(decision.Action) {
 		c.metrics.recordCompletionReceived(event.Outcome)
 		reason = reasonHandoffSettled
-		c.logger.Debug("agent terminal settled as a handoff",
+		// INFO, not Debug: this is one line per workflow and the only
+		// log-visible trace of gh#1094's one behaviour change — a product
+		// whose answer action is not one of the two reserved names sees its
+		// answer settle here instead of reaching the user, and the metric
+		// reason alone does not name the action.
+		c.logger.Info("agent terminal settled as a handoff",
 			slog.String("loop_id", event.LoopID),
 			slog.String("action", decision.Action))
 		return nil

@@ -69,7 +69,8 @@ therefore selects by the terminal's typed decision:
 
 `respond_direct` and `ask_user` are framework-reserved action names. A product
 that answers under a different action name settles `handoff_settled` — visible
-as that metric reason and a Debug line naming the loop and the action. The
+as that metric reason and an INFO line naming the loop and the action — one line per workflow, and the only
+log-visible trace of this behaviour change. The
 `decide` tool description stays vocabulary-agnostic, and
 `restricted_decide_actions` can still bar either reserved name.
 

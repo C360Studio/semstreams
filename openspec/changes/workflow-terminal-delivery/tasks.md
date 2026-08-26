@@ -304,6 +304,63 @@ body is a published layer and states `implemented-by: <model>`.
     → `--- FAIL: … Received unexpected error:` (the bucket cannot be resolved, so nothing is published).
     The accessor is load-bearing on both the grammar side and the delivery side.
 
+## 5b. Fable review round on PR #1098 at `00fbdbd2` — APPROVE WITH CHANGES
+
+Verdict recorded: nothing BLOCKING; `component.PortFacts.KVReadBucket` passes the exported-surface gate; omission
+A's miss accepted. Every item below is addressed in this worktree with evidence.
+
+- [x] 5b.1 HIGH (1) — the walk-end DELTA TEXT still said `route_less_settled` for a walk that had already seen an
+  absent link. Amended in `specs/agentic-terminal-events/spec.md`: "…is the walk end; it settles
+  `route_less_settled` only when no link on the walk resolved to an absent key, otherwise `origin_unresolvable`",
+  plus the new scenario "absent run anchor followed by a linkless walk end is origin-unresolvable".
+- [x] 5b.2 HIGH (2) — the shape had NO test: the reviewer mutated `settle()` to Reading A and the suite stayed
+  green. Added
+  `TestResolveOriginRouteSettlesOriginUnresolvableOnlyAfterParentAndRunIDExhausted/absent_run_anchor_then_linkless_end`
+  (terminal `RunID` absent, no `ParentLoopID` → 0 responses, reason `origin_unresolvable`, load sequence
+  `[terminal-loop, evicted-root]`, Warn contains `evicted-root` and `no further link`), and forced omission I.
+- [x] 5b.3 HIGH (3) — `conformance.md`'s "One interpretation the implementer had to make" is now a recorded
+  ruling row citing owner item 8, naming the amended delta sentence and the test + omission that pin it.
+- [x] 5b.4 MEDIUM-1 — `TestSettleAgentTerminalRouteLessRunRootContinuesToRoutedAncestor`, two subtests:
+  the routed-ancestor case (sequence `[terminal-loop, run-root, front-door]`, delivered to `front-door`) and the
+  severed variant (`severed-hop` linkless → `route_less_settled`), which is the DESCENDANT-side proof of the
+  "severed ancestry" scenario. Forced omission J.
+- [x] 5b.5 MEDIUM-2 — `TestHandleCompleteResponseLeavesDecisionNilForSynthesizedDecide`
+  (`SynthesizeTerminalOnCompletion` on, text-only completion): asserts `result.SyntheticDecide != nil` FIRST, so a
+  synthesis path that silently stopped firing cannot make the test vacuous, then that the decoded completion's
+  `Decision` is nil.
+- [x] 5b.6 MEDIUM-3 — `TestSettleAgentTerminalMalformedPresentDecisionIsRejectedNeverAHandoff` (3 subtests:
+  empty action, empty reason, absent fields): permanent error, reason `payload_validation`, ZERO increments of
+  `handoff_settled` and `route_less_settled`, and no routing read at all.
+  **The review's premise about the fixture is measured FALSE and the fixture is stronger for it:**
+  `completionPayload` CANNOT emit a malformed decision, because `BaseMessage.MarshalJSON` validates its payload
+  (`marshal completion: json: error calling MarshalJSON …: decision.action required when decision is present`).
+  The framework therefore cannot put this shape on the wire at all; only a foreign producer can. The fixture
+  splices the raw `decision` object into the marshalled envelope
+  (`completionEnvelopeWithRawDecision`, `terminal_origin_test.go`) so the decode-side guard is exercised by the
+  bytes a foreign producer would actually send.
+- [x] 5b.7 MEDIUM-4 — the loop's unusable-metadata fail-safe reached the delta: a sentence under the decide-terminal
+  requirement plus the scenario "unusable decide metadata leaves the field nil rather than half-stamped"
+  (`specs/agentic-loop/spec.md`), naming the behaviour
+  `TestHandleCompleteResponseLeavesDecisionNilWhenDecideMetadataIsUnusable` already pins.
+- [x] 5b.8 MEDIUM-5 — the handoff log line is now `Info`, not `Debug`
+  (`processor/agentic-dispatch/terminal_settlement.go:218`), propagated to `design.md:75` and
+  `docs/operations/38-agent-terminal-settlement.md:72`. RECOMMENDATION FOR THE OWNER TO CONFIRM AT THE ROUND: one
+  INFO line per workflow, on the ground that it is the only log-visible trace of the single behaviour change this
+  change makes (a product whose answer action is not one of the two reserved names). If the owner prefers Debug,
+  it is a one-word revert in three places.
+- [x] 5b.9 NITs — `design.md:81` no longer lists schema regeneration as in-scope (it names the declared port and
+  the canonical port projection instead, with the 2.5/3.5 measurement inline);
+  `TestDecideToolNameHasOneDefinitionInNonTestSources` (`agentic/coordinator_decision_test.go`) reads every
+  non-test `.go` source and requires exactly ONE `= "decide"` definition, in `agentic/tools.go`;
+  `TestSettleAgentTerminalAskUserOnRoutedLoopPublishesPromptToItsOwnRoute` covers the front-door `ask_user` shape
+  (prompt to its own route, no ancestry read).
+- [x] 5b.10 Omission A's miss is CLOSED in process, since there is no import cycle (agentic-loop does not import
+  agentic-dispatch): `TestSettleAgentTerminalConsumesARealLoopDecideCompletion`
+  (`processor/agentic-dispatch/terminal_loop_seam_test.go`) drives a REAL `agenticloop.MessageHandler` to a decide
+  terminal and settles the exact envelope it published — reply delivered to the resolved origin, handoff publishes
+  nothing. A carrier defect on either side of the seam now fails a dispatch test. It does not replace #1105, which
+  additionally covers ingest, rules, and the NATS wire.
+
 ## 6. Gates (run what CI runs, both suites)
 
 - [x] 6.1 `task lint`.

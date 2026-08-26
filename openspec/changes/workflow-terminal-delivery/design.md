@@ -72,12 +72,16 @@ and best-effort-persistence origin horizon.
 
 A product that submits over HTTP and chains with `publish_agent` must know: the two reserved reply action names.
 If it does nothing and already uses them (SemTeams), delivery is correct with no configuration. If it uses other
-names for its answers, its answers settle `handoff_settled` — observable as a metric reason and a Warn naming the
-loop id and action. The rule author never marks a terminal. An operator running a non-default loops bucket binds
+names for its answers, its answers settle `handoff_settled` — observable as a metric reason and an INFO line
+naming the loop id and action (one line per workflow; it is the only log-visible trace of the one behaviour change
+this change makes, so Debug would hide it behind a level nobody runs in production — implementer's recommendation,
+for the owner to confirm at the round). The rule author never marks a terminal. An operator running a non-default loops bucket binds
 the same name on dispatch's `agent_loops` port instead of discovering, after the fact, that a constant ignored it.
 
 ## Boundaries
 
 In: agentic types, loop completion event, decide constant home, terminal normalizer projection, dispatch
-settlement, schema regeneration, docs named in tasks. Out: `publish_agent`, AgentRun, lifecycle, progress
+settlement, the declared `agent_loops` read port and the canonical port projection it needs, docs named in tasks.
+(Schema regeneration was listed here at design time and is NOT in scope after measurement: neither the additive
+payload field nor a declared port instance has a generated-schema surface — tasks 2.5 and 3.5.) Out: `publish_agent`, AgentRun, lifecycle, progress
 signals, #1090's non-decision rendering, e2e chain scenario (filed as a coverage gap).

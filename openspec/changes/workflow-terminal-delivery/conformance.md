@@ -52,32 +52,30 @@ Accepted authority:
 Status wording: MET means the named evidence exists and was run at this head. It is not a merge-readiness or
 review claim; §7 is untouched.
 
-## One interpretation the implementer had to make (FLAGGED, not a licence)
+## Recorded ruling: the walk-end shape (owner item 8)
 
-The delta's walk-end rule and its `origin_unresolvable` rule can be read as disagreeing in exactly one shape, and
-the implementation had to choose:
+**Ruling applied:** owner item 8 as ruled on 2026-08-26 — `origin_unresolvable` is settled only after the parent
+chain AND every encountered run anchor are exhausted, and it stays **distinct from** `route_less_settled`.
 
-- Delta step 2: *"A record with no `ParentLoopID`, no untried `RunID`, and no route is the walk end and settles
-  `route_less_settled`."*
-- Delta, same requirement: *"`route_less_settled` SHALL remain distinct: the walk ended at a record with no links
-  and no route"*, and the design's principle that `route_less_settled` *"is never used when a link pointed at
-  something unobservable"* (R4′).
+**The shape it decides.** The delta's step 2 previously ended "…is the walk end and settles
+`route_less_settled`", which read literally would also cover a walk whose durable `RunID` link resolved to an
+ABSENT key before running out of parent links. That reading collapses the two reasons back together in exactly
+the case item 8 separated: "there was no origin" (expected; not an alert) versus "the origin could not be
+observed" (a retention/persistence alert).
 
-The shape: the terminal carries a `RunID` whose key is ABSENT (step 1 notes it and walks on) and the walk then
-reaches a record with no parent link and no untried anchor. Read the first way it is `route_less_settled`; read
-the second way it is `origin_unresolvable`, because a durable link DID point at something unobservable.
+**Implementation (Reading B).** `processor/agentic-dispatch/terminal_settlement.go:458-475`
+(`originExhaustion.settle`): a walk that followed every link it had and simply ran out of links settles
+`route_less_settled`; a walk in which ANY link resolved to an absent key settles `origin_unresolvable` and its
+Warn names both exhaustions.
 
-**Implemented the second way** (`processor/agentic-dispatch/terminal_settlement.go:458-475`,
-`originExhaustion.settle`): a walk that followed every link it had and simply ran out of links settles
-`route_less_settled`; a walk where ANY link resolved to an absent key settles `origin_unresolvable` and names both
-exhaustions. Rationale: the two reasons exist to separate "there was no origin" (expected; not an alert) from "the
-origin could not be observed" (a retention/persistence alert), and the second reading is the only one that keeps
-that separation true. `TestSettleAgentTerminalReplyDecisionWithRouteLessRootSettlesRouteLess`
-(`terminal_origin_test.go:361`, a record with NO links at all) and
-`TestResolveOriginRouteSettlesOriginUnresolvableOnlyAfterParentAndRunIDExhausted` (`:456`) pin both sides.
+**Delta amended to match** (`specs/agentic-terminal-events/spec.md`): "…is the walk end; it settles
+`route_less_settled` only when no link on the walk resolved to an absent key, otherwise `origin_unresolvable`",
+plus the scenario "absent run anchor followed by a linkless walk end is origin-unresolvable".
 
-If the owner intended the literal first reading, this is a one-line change in `settle()` plus one test fixture —
-raised here rather than settled silently.
+**Pinned by test, not by prose** — the reviewer measured that mutating `settle()` to Reading A left the suite
+green, so the shape now has its own subtest and its own forced omission:
+`TestResolveOriginRouteSettlesOriginUnresolvableOnlyAfterParentAndRunIDExhausted/absent_run_anchor_then_linkless_end`
+(`terminal_origin_test.go`) and omission I below.
 
 ## RED captures (task 2.1, task 2.3)
 

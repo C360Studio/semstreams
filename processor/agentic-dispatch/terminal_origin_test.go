@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/internal/agentterminal"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/payloadregistry"
@@ -476,6 +477,33 @@ func TestResolveOriginRouteSettlesOriginUnresolvableOnlyAfterParentAndRunIDExhau
 		require.Contains(t, logs.String(), "evicted-root", "the warning names the run anchor")
 	})
 
+	t.Run("absent_run_anchor_then_linkless_end", func(t *testing.T) {
+		// The shape the delta's two sentences could be read against each
+		// other (owner item 8: origin_unresolvable is DISTINCT from
+		// route_less_settled). A durable run anchor pointed at a record that
+		// could not be observed, and the walk then ran out of links: there
+		// WAS an origin, it just is not observable, so this is the
+		// retention/persistence alert, never "there was no origin".
+		c, logs := terminalTestComponentWithLog(t)
+		loader := newAncestryLoader(agentic.LoopEntity{
+			ID: "terminal-loop", TaskID: "task-terminal-loop", State: agentic.LoopStateComplete,
+			RunID: "evicted-root",
+		})
+		c.loadPersistedLoopFn = loader.load
+		get := captureResponse(t, c)
+
+		before := terminalReasonSnapshot(c)
+		require.NoError(t, c.settleAgentTerminal(context.Background(),
+			completionPayload(t, decideCompletion("terminal-loop", agentic.DecideActionRespondDirect, "answered"))))
+
+		_, _, count := get()
+		require.Zero(t, count)
+		require.Equal(t, []string{"terminal-loop", "evicted-root"}, loader.sequence)
+		requireOneTerminalReason(t, c, "origin_unresolvable", before)
+		require.Contains(t, logs.String(), "evicted-root", "the warning names the absent run anchor")
+		require.Contains(t, logs.String(), "no further link", "the warning states the parent chain ran out")
+	})
+
 	t.Run("absent_parent_and_no_run_anchor", func(t *testing.T) {
 		c, logs := terminalTestComponentWithLog(t)
 		loader := newAncestryLoader(agentic.LoopEntity{
@@ -549,4 +577,153 @@ func TestResolveOriginRouteMalformedAncestorIsPermanent(t *testing.T) {
 		require.True(t, isPermanentTerminal(err))
 		requireOneTerminalReason(t, c, "routing_malformed", before)
 	})
+}
+
+func TestSettleAgentTerminalRouteLessRunRootContinuesToRoutedAncestor(t *testing.T) {
+	t.Run("routed ancestor above a route-less run root", func(t *testing.T) {
+		// A product-minted run can sit BELOW the loop that owns the channel:
+		// the run root is route-less, and the front door is its parent. The
+		// typed-first lookup must continue the walk from the root instead of
+		// settling on it.
+		c := terminalTestComponent(t)
+		loader := newAncestryLoader(
+			agentic.LoopEntity{
+				ID: "terminal-loop", TaskID: "task-terminal-loop", State: agentic.LoopStateComplete,
+				RunID: "run-root",
+			},
+			agentic.LoopEntity{ID: "run-root", State: agentic.LoopStateComplete, ParentLoopID: "front-door"},
+			agentic.LoopEntity{
+				ID: "front-door", State: agentic.LoopStateComplete,
+				ChannelType: "http", ChannelID: "origin-1", UserID: "user-1",
+			},
+		)
+		c.loadPersistedLoopFn = loader.load
+		get := captureResponse(t, c)
+
+		before := terminalReasonSnapshot(c)
+		require.NoError(t, c.settleAgentTerminal(context.Background(),
+			completionPayload(t, decideCompletion("terminal-loop", agentic.DecideActionRespondDirect, "answered"))))
+
+		response, _, count := get()
+		require.Equal(t, 1, count)
+		require.Equal(t, "http", response.ChannelType)
+		require.Equal(t, "origin-1", response.ChannelID)
+		require.Equal(t, []string{"terminal-loop", "run-root", "front-door"}, loader.sequence,
+			"the walk continues FROM the route-less run root, it does not settle on it")
+		requireOneTerminalReason(t, c, "response_settled", before)
+	})
+
+	t.Run("severed ancestry above a route-less run root", func(t *testing.T) {
+		// Same shape, but the hop above the run root was fired from a
+		// non-loop entity: no parent link, no run anchor, no route. Nothing
+		// pointed at an unobservable record, so the answer is "there was no
+		// origin", not "the origin could not be observed".
+		c := terminalTestComponent(t)
+		loader := newAncestryLoader(
+			agentic.LoopEntity{
+				ID: "terminal-loop", TaskID: "task-terminal-loop", State: agentic.LoopStateComplete,
+				RunID: "run-root",
+			},
+			agentic.LoopEntity{ID: "run-root", State: agentic.LoopStateComplete, ParentLoopID: "severed-hop"},
+			agentic.LoopEntity{ID: "severed-hop", State: agentic.LoopStateComplete},
+		)
+		c.loadPersistedLoopFn = loader.load
+		get := captureResponse(t, c)
+
+		before := terminalReasonSnapshot(c)
+		require.NoError(t, c.settleAgentTerminal(context.Background(),
+			completionPayload(t, decideCompletion("terminal-loop", agentic.DecideActionRespondDirect, "answered"))))
+
+		_, _, count := get()
+		require.Zero(t, count)
+		require.Equal(t, []string{"terminal-loop", "run-root", "severed-hop"}, loader.sequence)
+		requireOneTerminalReason(t, c, "route_less_settled", before)
+	})
+}
+
+func TestSettleAgentTerminalAskUserOnRoutedLoopPublishesPromptToItsOwnRoute(t *testing.T) {
+	// The front-door shape of ask_user: the deciding loop owns the channel,
+	// so no ancestry is walked, and the projection is still a prompt.
+	c := terminalTestComponent(t)
+	loader := newAncestryLoader(agentic.LoopEntity{
+		ID: "front-door", TaskID: "task-front-door", State: agentic.LoopStateComplete,
+		ChannelType: "http", ChannelID: "origin-1", UserID: "user-1",
+	})
+	c.loadPersistedLoopFn = loader.load
+	get := captureResponse(t, c)
+
+	before := terminalReasonSnapshot(c)
+	require.NoError(t, c.settleAgentTerminal(context.Background(),
+		completionPayload(t, decideCompletion("front-door", agentic.DecideActionAskUser, "Which airframe?"))))
+
+	response, _, count := get()
+	require.Equal(t, 1, count)
+	require.Equal(t, agentic.ResponseTypePrompt, response.Type)
+	require.Equal(t, "Which airframe?", response.Content)
+	require.Equal(t, "origin-1", response.ChannelID)
+	require.Equal(t, "front-door", response.InReplyTo)
+	require.Equal(t, []string{"front-door"}, loader.sequence, "an own-routed prompt resolves no ancestry")
+	requireOneTerminalReason(t, c, "response_settled", before)
+}
+
+// completionEnvelopeWithRawDecision builds a terminal envelope whose payload
+// carries an arbitrary `decision` object. It splices the field into the marshalled
+// wire bytes deliberately: BaseMessage.MarshalJSON VALIDATES its payload, so the
+// framework cannot emit a malformed decision at all — only a foreign producer can
+// put one on the wire, and that is the shape the decode-side guard exists for.
+func completionEnvelopeWithRawDecision(t *testing.T, event *agentic.LoopCompletedEvent, decision map[string]any) []byte {
+	t.Helper()
+	valid := *event
+	valid.Decision = &agentic.CoordinatorDecision{Action: agentic.DecideActionRespondDirect, Reason: "placeholder"}
+	data := completionPayload(t, &valid)
+
+	var envelope map[string]any
+	require.NoError(t, json.Unmarshal(data, &envelope))
+	payload, ok := envelope["payload"].(map[string]any)
+	require.True(t, ok, "envelope must carry an object payload")
+	payload["decision"] = decision
+	envelope["payload"] = payload
+	spliced, err := json.Marshal(envelope)
+	require.NoError(t, err)
+	return spliced
+}
+
+func TestSettleAgentTerminalMalformedPresentDecisionIsRejectedNeverAHandoff(t *testing.T) {
+	// A present decision with an empty field must be Termed by the fail-closed
+	// normalizer (C4), never silently classified as a handoff or as route-less.
+	for _, tc := range []struct {
+		name     string
+		decision map[string]any
+	}{
+		{name: "empty action", decision: map[string]any{"action": "", "reason": "answered"}},
+		{name: "empty reason", decision: map[string]any{"action": agentic.DecideActionRespondDirect, "reason": ""}},
+		{name: "absent fields", decision: map[string]any{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := terminalTestComponent(t)
+			loader := newAncestryLoader(agentic.LoopEntity{
+				ID: "loop-bad", TaskID: "task-loop-bad", State: agentic.LoopStateComplete,
+				ChannelType: "http", ChannelID: "origin-1",
+			})
+			c.loadPersistedLoopFn = loader.load
+			get := captureResponse(t, c)
+
+			data := completionEnvelopeWithRawDecision(t,
+				decideCompletion("loop-bad", agentic.DecideActionRespondDirect, "answered"), tc.decision)
+
+			before := terminalReasonSnapshot(c)
+			err := c.settleAgentTerminal(context.Background(), data)
+			require.Error(t, err)
+			require.True(t, isPermanentTerminal(err), "a malformed decision is Termed, not retried")
+
+			_, _, count := get()
+			require.Zero(t, count)
+			require.Empty(t, loader.sequence, "rejection happens at decode, before any routing read")
+			requireOneTerminalReason(t, c, string(agentterminal.ReasonPayload), before)
+			require.Equal(t, before["handoff_settled"], terminalReasonValue(c, "handoff_settled"),
+				"a malformed decision is never a handoff")
+			require.Equal(t, before["route_less_settled"], terminalReasonValue(c, "route_less_settled"),
+				"a malformed decision is never route-less")
+		})
+	}
 }

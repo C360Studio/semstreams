@@ -61,8 +61,9 @@ When a user-facing decision's own reconciled route is empty, dispatch SHALL reso
    otherwise dispatch follows `ParentLoopID`. At every hop whose parent key is absent, dispatch SHALL first try the
    current record's `RunID` when it is nonempty, not the record's own ID, and not yet tried: a routed root is the
    origin; a present route-less root continues the walk from it; an absent root key, or no such `RunID`, settles
-   `origin_unresolvable`. A record with no `ParentLoopID`, no untried `RunID`, and no route is the walk end and
-   settles `route_less_settled`.
+   `origin_unresolvable`. A record with no `ParentLoopID`, no untried `RunID`, and no route is the walk end; it
+   settles `route_less_settled` only when no link on the walk resolved to an absent key, otherwise
+   `origin_unresolvable`.
 3. The walk SHALL be bounded at 32 hops with cycle detection; a cycle or the bound settles `origin_unresolvable`.
 
 The resolver SHALL reuse the existing persisted-loop read and its transient/permanent classification, SHALL introduce
@@ -112,6 +113,16 @@ trigger).
 - **AND** records reason `origin_unresolvable`
 - **AND** the warning names both the absent parent and the run-anchor outcome
 - **AND** acknowledges the terminal
+
+#### Scenario: absent run anchor followed by a linkless walk end is origin-unresolvable
+
+- **GIVEN** a terminal record whose `RunID` names a key absent from `AGENT_LOOPS`
+- **AND** the terminal record carries no `ParentLoopID`
+- **WHEN** the terminal is settled
+- **THEN** it publishes no `UserResponse`
+- **AND** records reason `origin_unresolvable`, not `route_less_settled`, because a durable link pointed at a record
+  that could not be observed
+- **AND** the warning names the absent run anchor and that the parent chain ended with no further link
 
 #### Scenario: route-less root settles route-less
 
