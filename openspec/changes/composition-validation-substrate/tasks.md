@@ -398,14 +398,26 @@ before the omission, and record `shasum -a 256` equality of the restored file.
 
 ## 6. Standard gates — record each command and its result
 
-- [ ] 6.1 `task lint`.
-- [ ] 6.2 `go test -race ./...`.
-- [ ] 6.3 `go test -race -tags=integration -p 2 ./...`.
-- [ ] 6.4 `task build`.
-- [ ] 6.5 `go test ./test/contract/...`.
-- [ ] 6.6 `task e2e:core` for this PR (#1092: step 1 of the design's per-step table is BREAKING for adopter
+- [x] 6.1 `task lint`.
+      DONE on `38155919`+§6 head: `task lint` → exit 0, revive `0 problems` (two `empty-block` warnings fixed at the GREEN head; log: scratchpad `lint_final.log`).
+- [x] 6.2 `go test -race ./...`.
+      DONE at the GREEN head (`aa70317c`, code unchanged since): every package `ok`, `grep -E '^FAIL'` → no FAIL lines (log: scratchpad `unit1.log`, 153 `ok` lines after the two fixes recorded in 3.10 re-ran green).
+- [x] 6.3 `go test -race -tags=integration -p 2 ./...`.
+      DONE on `38155919` (`-count=1`): 155 packages `ok`, `EXIT=0`, `grep -E '^(FAIL|--- FAIL|panic:)'` → no FAIL lines (log: scratchpad `integration_full.log`). The two `[~]` target-state tests report `--- SKIP` naming their tasks.
+- [x] 6.4 `task build`.
+      DONE: `Built bin/semstreams`; CI line `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s -X main.version=local" -o semstreams-linux-amd64 ./cmd/semstreams` → exit 0 (29876386 bytes). `go vet -tags=integration ./...` → clean. `openspec validate composition-validation-substrate --strict` → `Change 'composition-validation-substrate' is valid`.
+- [x] 6.5 `go test ./test/contract/...`.
+      DONE: `ok github.com/c360studio/semstreams/test/contract 2.866s` on the regenerated schemas (5.1).
+- [x] 6.6 `task e2e:core` for this PR (#1092: step 1 of the design's per-step table is BREAKING for adopter
       components; `task e2e:core` is the covering tier it names). `task e2e:crud-tools` and `task e2e:agentic` are
       the retirement PR's (#1093) gate on the head that carries 3.8; paste each tier summary here when it runs.
+      DONE for #1092 on `38155919`: `task e2e:core` → `[OK] Readiness and heartbeat report 12/12 healthy components` ·
+      `msg="Scenario PASSED" name=core-health` · `msg="Scenario PASSED" name=core-dataflow` (duration 36.3s) ·
+      `msg="Scenario PASSED" name=core-graph-roundtrip` · `[OK] SIGTERM exited 0, released listeners, completed shutdown,
+      and left NATS healthy` · `[OK] Early SIGTERM canceled blocked NATS boot, exited 1, and fenced service startup` ·
+      `EXIT=0` (log: scratchpad `e2e_core.log`). Every shipped factory in `configs/protocol-flow.json` passed the P1
+      parity check at boot admission and every tiered `Setup` pre-flight (`CheckFlowHealth`) decoded the new
+      `composition.Result` shape.
 - [ ] 6.7 (#1093) Downstream measurement (read-only): `cd ~/Code/c360/semteams && go vet ./cmd/semteams/` against a
       `replace` to this branch in a scratch module (never edit semteams); record the compile errors as the migration
       document's semteams section. semstreams-ui: record the 15 call sites from inventory §9 in the migration
