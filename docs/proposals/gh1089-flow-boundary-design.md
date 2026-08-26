@@ -4,9 +4,11 @@
 
 - Baseline: `5cc0c7fbe569c6398fc534025218639b4c7e0345` (`main`).
 - Inventory: `docs/proposals/gh1089-flow-boundary-inventory.md`, SHA-256
-  `3f1c587aaa37e55082a4068382be5ebb1b29434e07bc1792747cf4ae3d9a27f5`. **Review state: independent inventory review
-  required; not `INVENTORY PASS`.** This design is drafted in the same pass at the caller's direction and is
-  conditional on that pass; a BLOCKING inventory finding sends it back.
+  `d7134519514f0dd0a04883eceff62acb69d4075e606b2f0e9f9adc60439042a1`. **Review state: `INVENTORY PASS WITH DIVERGENCES`
+  (independent blind re-derivation, Fable, 2026-08-26; table of record linked from PR #1091). Every load-bearing number
+  reproduced; the two divergences (ten OpenAPI operations, not twelve; semteams already broken on `main` for non-flow
+  reasons) and the line-number mis-cites are corrected in this revision.** The design was drafted in the same pass as
+  the inventory at the caller's direction.
 - Status: **DRAFT — awaiting independent pre-owner design review and the owner's ruling on #1089.** Nothing here is
   approved. Binding rulings stay with the owner.
 - Companion artifacts: `docs/adr/100-compositions-are-validated-diagrams-are-projections.md` (Proposed),
@@ -229,7 +231,7 @@ never opened `component/registry.go`.
 | Option | What it is | Cost | Outcome |
 |---|---|---|---|
 | **A/B — baseline** (owner already rejected) | Finish Slices C, D, #1087 on the CRUD/HTTP layer; keep flowstore, engine, tools | ≈3–4k more lines on the diagram surface; `--validate` and boot still check no connections; two interpreters remain; semstreams-ui candidate gate stays a tag blocker | polished authoring of a document the framework compiles for a product to reboot into |
-| **C — as stated** | P1–P7 substrate; retire the diagram surface; no store, no write verb, no alias | 33 factory declarers (mechanical); one new package; BREAKING for semstreams-ui and semteams; two buckets orphaned | one validator, two evidence classes, boot refuses broken compositions; products validate in CI with one call |
+| **C — as stated** | P1–P7 substrate; retire the diagram surface; no store, no write verb, no alias | 33 factory declarers (mechanical); one new package; BREAKING for semstreams-ui; marginal for semteams, which already fails to compile against `main` for two non-flow reasons (inventory §9); two buckets orphaned | one validator, two evidence classes, boot refuses broken compositions; products validate in CI with one call |
 | **C-minus** | C plus a read-only `GET /flows` that serves the running composition as a `flowstore.Flow` document (nodes, connections, positions) so semstreams-ui's list/detail pages keep loading | keeps `flowstore.Flow` alive as a wire type and the grid layout; a legacy-reader shape the pre-v1 policy forbids; the UI's save/publish/observations still break, so its owner rewrites anyway | delays the UI's rewrite by one page |
 | **C-plus** | C plus `POST <components>/validate` accepting a draft configuration body | one handler over `composition.Validate`; zero present consumers once the UI loses the Flow shape (phantom-surface rule) | an HTTP draft validator nobody calls yet |
 | **Do nothing** | keep the surface as-is, pause #1008/#1060/#1087 | the boot composition stays unvalidated; the diagram surface keeps its bill | — |
@@ -314,7 +316,8 @@ analyzes the admitted composition on request · "connection validation exists on
 engine-only · "131 test lines against 1,273 production" → engine 837/131; `flowgraph` 1,245/1,932 · "five `*_flow`
 executors" → eleven tools across two executors · "writes go through the existing Config Manager path" → that path's
 only caller is the removed publication · "semteams' already-broken `engine` import" → compiles at beta.160 and
-beta.161; broken only on unreleased main · "exported by the product's own binary" → needs an exported entry point;
+beta.161; broken only on unreleased main — and there for two non-flow reasons as well (`InitializeKVStore`/`StopAll`
+now take `ctx`), so C's cost to semteams is marginal · "exported by the product's own binary" → needs an exported entry point;
 `internal/bootstrapobservability` is not importable.
 
 ## 8. Decision skills applied

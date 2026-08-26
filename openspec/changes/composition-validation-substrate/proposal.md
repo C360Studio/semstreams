@@ -26,8 +26,8 @@ missing: factory **default** ports are not on `Registration` (`registry.go:52-62
 derivation is not exported, and the two interpreters are not one.
 
 Meanwhile the diagram surface carries about 4.1k production and 5.6k test lines (`flowstore` 547/1,099, `flowtemplate`
-258/314, `engine` 837/131, `service/flow_*` 1,657/3,371, executors 617/635, wiring ≈105), two KV buckets, twelve
-OpenAPI operations, eleven agent tools, and three open milestone items (#1008, #1060, #1087) — all polish on the HTTP
+258/314, `engine` 837/131, `service/flow_*` 1,657/3,371, executors 617/635, wiring ≈105), two KV buckets, ten
+OpenAPI operations (`specs/openapi.v3.yaml:113-305`; `/flowgraph` and `/gaps` are ComponentManager's), eleven agent tools, and three open milestone items (#1008, #1060, #1087) — all polish on the HTTP
 layer of a canvas editor the owner has written off. No e2e tier drives any of it (inventory §11).
 
 ## What Changes
