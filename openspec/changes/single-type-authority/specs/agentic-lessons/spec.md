@@ -18,22 +18,26 @@ lesson has a serializable form as itself and one builder of its triples.
   `agent.lesson.*` triples, the evidence references, attribution to the emitting loop, and
   `agent.lesson.status` of `proposed`
 - **AND** the entity's `message_type` is the registered `agentic.agent_lesson.v1`
+- **AND** the test that verifies this is `TestEmitLessonExecutor_CreatesLesson`
 
 #### Scenario: Re-emitting an identical lesson is idempotent
 - **WHEN** `emit_lesson` is called twice with identical category, scope keys, summary, and
   evidence set
 - **THEN** both calls derive the same entity ID and only one lesson entity exists
+- **AND** the test that verifies this is `TestEmitLessonExecutor_IdempotentReEmit`
 
 #### Scenario: Evidence-free lesson is rejected
 - **WHEN** `emit_lesson` is called with an empty `evidence_entity_ids` list or an entry that
   is not a well-formed 6-part entity ID
 - **THEN** the call fails with an error naming the evidence contract and no graph mutation is
   published
+- **AND** the test that verifies this is `TestEmitLessonExecutor_EvidenceRejects`
 
 #### Scenario: A lesson decodes as itself on the fact lane
 - **GIVEN** the framework builtin payload set is registered
 - **WHEN** a marshalled `AgentLessonEntity` arrives on a Graphable input
 - **THEN** it decodes to `*AgentLessonEntity` and ingests with the same entity ID and predicate set its birth produced
+- **AND** the test that verifies this is `TestAgentLessonEntity_RoundTrip`
 
 ### Requirement: External lesson composition uses the framework-owned contract snapshot
 
@@ -55,16 +59,19 @@ The snapshot path MUST NOT introduce a bespoke agent, LLM persona, prompt role, 
 - **THEN** construction validates the framework-owned canonical lesson contract
 - **AND** the product supplies no copied lesson-contract literals
 - **AND** the product injects only reconciler and authoritative-reader capabilities into `LessonCurator`
+- **AND** the test that verifies this is `TestLessonProjectionContractMatchesCanonicalAndReturnsIndependentSnapshots`
 
 #### Scenario: Contract snapshots are independent
 
 - **WHEN** a caller modifies the contract or nested predicate slices returned by `LessonProjectionContract()`
 - **THEN** a later call returns the unchanged canonical lesson contract
+- **AND** the test that verifies this is `TestLessonProjectionContractMatchesCanonicalAndReturnsIndependentSnapshots`
 
 #### Scenario: The snapshot is the registered contract
 
 - **WHEN** `LessonProjectionContract()` is compared with the contract the builtin registry holds for `agentic.agent_lesson.v1`
 - **THEN** they are equal
+- **AND** the test that verifies this is `TestLessonProjectionContractIsTheRegisteredContract`
 
 #### Scenario: Canonical lifecycle transition preserves birth facts
 
@@ -72,6 +79,7 @@ The snapshot path MUST NOT introduce a bespoke agent, LLM persona, prompt role, 
 - **WHEN** a curator composed from `LessonProjectionContract()` promotes, retires, or supersedes the lesson
 - **THEN** every birth predicate retains its prior object set
 - **AND** the lifecycle predicate group equals the complete desired state for that transition
+- **AND** the test that verifies this is `TestLessonCurator_Promote_HappyPath`
 
 #### Scenario: Retired NATS helper remains absent
 
@@ -79,3 +87,5 @@ The snapshot path MUST NOT introduce a bespoke agent, LLM persona, prompt role, 
 - **THEN** the mutation client is constructed at the product composition root
 - **AND** `LessonCurator` receives only its narrow reconciler and authoritative-reader capabilities
 - **AND** no `NewNATSLessonCurator` production helper is exposed
+- **AND** the check that verifies this is `grep -rn 'NewNATSLessonCurator' --include='*.go' .` → 0 (tasks 7.2)
+

@@ -1,10 +1,12 @@
 # gh#1100 — `message.Type` authority: surface inventory and adopter seam inventory
 
-Baseline: `origin/main` `c3a17741bd8e56520307b68a3ef6fe8d2d159472` (2026-08-26). Read-only architect pass; every claim below is
+Baseline: `origin/main` `c3a17741bd8e56520307b68a3ef6fe8d2d159472` (2026-08-26); revision 3 re-premised at `7e7ea76e`
+(#1099 and #1104 merged; every line cited below re-read there — none moved). Read-only architect pass; every claim below is
 a `file:line` at that head or a search that returned what is stated. Sisters were read at their checked-out heads
 (`semsource 4093d3c`, `semteams 8a70b7e7`, `semmachina 841c45e` 16 dirty, `semmem b909cbf`, `semdev ca3956a`,
-`semdragon 07f4de9`, `semconnect d0d06e0`). Status: **INVENTORY PASS WITH DIVERGENCES** (blind, Fable, 2026-08-26); D1–D3 corrected and L1–L5 added in this
-revision 2; pre-owner design review pending. Nothing below is a target state.
+`semdragon 07f4de9`, `semconnect d0d06e0`). Status: **INVENTORY PASS WITH DIVERGENCES** (blind, Fable, 2026-08-26); D1–D3 corrected and L1–L5 added in revision 2.
+Pre-owner design review round 1 (Fable, adversarial, 2026-08-26): REQUEST CHANGES — revision 3 adds the third birth lane
+(B-1, §2.2/§2.4) and the builder facts behind F-1/F-2 (§2.7); dispositions in the design §18. Nothing below is a target state.
 
 ## 0. Problem statement (as measured)
 
@@ -68,6 +70,7 @@ document + mission + graphresearch). Vocabulary builtins register first (`cmd/se
 | `agentic.web_observation.v1` | `agentic/web_observation_entity.go:25-27` | `processor/agentic-tools/executors/web_emit.go:61` (callers `httprequest.go:267`, `websearch.go:264`) | no |
 | **`lifecycle.harness.v1`** | `pkg/lifecycle/manager.go:24-28` | `pkg/lifecycle/manager.go:400-407` (every `Manager` birth) | **no** — the issue's "five" is six in-tree; `grep -rn '"harness"' --include='*.go'` → the definition only |
 | `entity.state.v1` | `processor/rule/message_handler.go:367-371` | none — an in-memory wrapper for `ExecuteEvents`, never persisted or published | no (not a stamp) |
+| **(empty)** — hierarchy containers | `graph/inference/hierarchy.go:427-437` builds `&gtypes.EntityState{ID, Triples}` with **no `MessageType`** | `hierarchy.go:440` `entityManager.CreateEntity` → adapter `processor/graph-ingest/component.go:451-456` → `Component.CreateEntity` `:1893-1896` → `createEntityWithReceipt` `:2081` (`ValidateEntityStateContract :2093`, `reconcileIndexingProfile :2121`, `entityBucket.Create :2132`) — **never `handleCanonicalCreate`**; every deployment with `enable_hierarchy: true` (`configs/e2e-structural.json:480`, `configs/agentic.json:182`) persists `message_type` `""`, and `indexing_profile_default_total{message_type="unknown"}` fires for each (`component.go:1876-1880`) | **B-1**: a third birth lane, in-process, unstamped |
 
 Test-only stamps (**D3**, re-measured: `grep -rE 'MessageType: *message\.Type\{' --include='*_test.go'` → **42 sites, ≥14 distinct
 keys**): `test.entity.v1` ×26, `test.fixture.v1`, `test.poison.v1`, `boid.telemetry.v1`, `attack.test.v1`, `attack.stress.v1`,
@@ -123,6 +126,13 @@ Registered types that are also stamped on the mutation lane by the framework: no
 - **L2 — constructions that bypass the factory.** 23 `&Component{` literals across six `processor/graph-ingest/*_test.go`
   files (`readiness_test.go` 14, `lifecycle_owner_test.go` 4, `keyed_ingest_test.go` 2, `batch_unit_test.go`, `component_test.go`,
   `query_contract_guard_test.go` 1 each); none sets `decoder` or a registry (`grep -l 'decoder:\|PayloadRegistry'` → 0 files).
+- **B-1 — two disjoint create paths, one of them in-process.** Births reach `ENTITY_STATES` by exactly two code paths:
+  the RPC lane `handleCanonicalCreate` (`canonical_mutations.go:199-243`, writes `c.entityBucket.Create` at `:243`) and the
+  in-process lane `Component.CreateEntity` (`component.go:1893-1896`) → `createEntityWithReceipt` (`:2081-2132`, writes at
+  `:2132`). They share no gate. Enumeration of every direct bucket writer (`git grep 'entityBucket\.(Create|Put|Update)('`
+  non-test): `canonical_mutations.go:243` (create), `:306` (reconcile `Update`), `component.go:2132` (in-process create) — three.
+  Every `CreateEntity(` caller: `graph/inference/hierarchy.go:440` and the adapter `component.go:452` — the hierarchy container
+  is the only in-process birth, and it carries an empty type.
 - **L5 — the import edge a registry-held floor adds.** `go list -deps ./message | grep -c vocabulary` → 0 and the same for
   `./payloadregistry` → 0: neither imports `vocabulary` today; `payloadregistry/registry.go:4` documents "imports only stdlib +
   pkg/errs + pkg/types".
@@ -146,9 +156,13 @@ already Graphable (`EntityID :76`, `Triples :91`) — it lacks only `Schema`/`Va
 - Profile vocabulary: `vocabulary/predicates.go:325-332` (`IsValidIndexingProfile`) **and** `pkg/projection/contract.go:12-14`
   (`validIndexingProfiles`) — two homes.
 - Triple builders for the five live in the writer packages, not beside the type: `emit_lesson.go:693-741`
-  (`buildEmitLessonTriples`, source `:34`), `emit_diagnosis.go:249-291` (`:26`), `graph_writer.go:511-548`
-  (`buildModelEndpointTriples`, source `:24`), `executors/httprequest.go:~267` and `websearch.go:~264` (two web builders),
-  `loop_execution_entity.go:91-151` (the one that is beside its type).
+  (`buildEmitLessonTriples`, source `ops-emit-lesson` `:34`; emits `LessonStatus` at birth, never `LessonSupersededBy`/`LessonRetiredAt`),
+  `emit_diagnosis.go:249-291` (source `ops-emit-diagnosis` `:26`; **`Confidence: args.Confidence` on every triple** `:259-265`),
+  `graph_writer.go:511-548` (`buildModelEndpointTriples`, source `agentic-loop` `:24`), `loop_execution_entity.go:91-151` (beside
+  its type; never emits `TodoRecord`), and **two** web builders with **two sources** and two unconditional sets:
+  `executors/httprequest.go:28` (`agent-http-request`) `:257-266` always emits `WebURL, WebFetchedAt, WebFetchedBy, WebContentType,
+  WebStatusCode, WebText, WebTruncated` (zero values included); `websearch.go:31` (`agent-web-search`) `:255-262` always emits
+  `WebURL, WebTitle, WebSnippet, WebSourceQuery, WebObservedAt, WebObservedBy`.
 - Contract names/groups: `internal/builtinprojection/contracts.go:12-17`; consumers `processor/agentic-tools/lesson_promotion.go:52,170-171`,
   `write_todos.go:196-197`; composition `cmd/semstreams/main.go:221`, `cmd/e2e-semstreams/main.go:154` → `service.WireGraphRuntime`
   (`service/graph_runtime.go:16-21`, variadic `projection.Contract`).
@@ -166,13 +180,20 @@ already Graphable (`EntityID :76`, `Triples :91`) — it lacks only `Schema`/`Va
   `projection-mutation-client/spec.md:9-21` (contracts are local; optional message type and profile); `rule-projection-mutations/spec.md:46-56`
   (non-inferable metadata explicit); `graph-state-contract/spec.md:105-124` (one canonical codec). **No spec exists for the
   payload registry** (`ls openspec/specs` → none; seeded lazily by the change that first touches it).
-- Active/claimed work: PR #1099 (#1095, ADR-102) adds three `graph-ingest` requirements (authority gate at the same
-  `handleCanonicalCreate` seam; hierarchy skip; framework-minted authority) and modifies `agentic-lessons` "Scope keys…";
-  its slice B import lane decodes through the registry — a foreign lesson needs a registered factory (this issue). PR #1101
-  (#1092) touches `component.Registration` (a different registry) and no payload surface. #1093 edits `cmd/semstreams/main.go`.
-  #818 (birth discipline) would consume a contract-per-type.
-- Skill/doc drift: `.agents/skills/new-payload/SKILL.md:51-73,129-134` and `CLAUDE.md:420-422` teach `init()` +
-  `payloadregistry.Register(&…)` / `payloadregistry.Global()`; neither symbol exists (`grep -n '^func Register\|^func Global' payloadregistry/*.go` → 0).
+- Active/claimed work (re-premised at `7e7ea76e`): **PR #1099 is MERGED** as a design package (ADR-102 Accepted; change
+  `entity-id-segment-semantics` 0/51 open). Its change has **no lesson-import scenario**; its implementation tasks 5.1 edit
+  the same five `agentic/*_entity.go` files (ID builders `agent_lesson_entity.go:68,92`, `web_observation_entity.go:79`,
+  `ops_diagnosis_entity.go:56`), the lesson prefix `:85-93`, and `internal/builtinprojection/contracts.go:26,56` (which this
+  change deletes); its inventory row W5 lists the two patterns `*.*.agent.agentic-loop.execution.*` and `*.*.agent.lesson.record.*`
+  as rewrites under the ADR-102 order (`acme.dep1.agentic-loop.agent.execution.<uuid>` in its graph-ingest delta). Its O-6
+  rules hierarchy containers "retire with gh606" (design `:143,365`). **PR #1104 is MERGED**: `.agents/skills/new-payload/SKILL.md`,
+  `docs/concepts/15-payload-registry.md`, `CLAUDE.md`, `AGENTS.md` now teach `RegisterPayloads(reg)` (15/15/2/2 mentions) and
+  mention `IndexingProfile`/`Contracts` 0 times; `.claude/skills/new-payload/SKILL.md` is a thin adapter, not a copy.
+  Milestone `v1.0.0-beta.163` exists and holds #1100. `AGENTS.md` Land bullet is at `:68-73`. PR #1101 (#1092) touches
+  `component.Registration` (a different registry) and no payload surface. #1093 edits `cmd/semstreams/main.go`. #818 (birth
+  discipline) would consume a contract-per-type.
+- Skill/doc drift: closed by #1104 (`b0d65ff0`); what remains is that the rewritten checklist knows no floor, contract, or
+  test-type helper (0 mentions in all four files).
 
 ## 4. The consumer at birth (for every new symbol the design will introduce)
 
@@ -206,7 +227,7 @@ test-registration helper → the 13 test files constructing `CreateEntityRequest
 | semmem (`go.mod:1,6,10`: module `github.com/c360/semmem`, `replace github.com/c360/semstreams => ../semstreams`) | 9 `semmem.entity.*.v1` strings on a pre-rename `EntityState` shape (`entity/types.go:180-192`: `Edges`, `ObjectRef`, `MessageType string`) | **no** (`grep payloadregistry` → 0) | the tree does not build against `github.com/c360studio/semstreams`; the federation MVP that motivated #1100 is not in any local tree (`find … federation-mvp.md` → 0); obligation applies when it rejoins |
 | semdev (beta.160) | `semdev.intake_event.v1` (`internal/intake/record.go:63,91`), `semdev.standards_source.v1` (`internal/standards/sync.go:143,186`) via `graphown.Creator.Create` (`internal/graphown/create.go:60-86`); lessons via the framework type (`contracts.go:444`) | **no** — only `payloadbuiltins.Register` (`internal/boot/runtime.go:623-624`). **D2:** also births `lifecycle.harness.v1` through `lifecycle.NewManager` (`internal/boot/runtime.go:537,656`, `boot.go:361`) | register 2; the harness type is covered by `payloadbuiltins.Register` (`runtime.go:624`) |
 | semdragon (beta.135) | `questdag.unit.v1` (`questdag/unit.go:72,673` on the **pre-ADR-091** subject `graphingest.SubjectEntityCreateWithTriples`); dynamic `semdragons.<event>.v1` written **directly** to `ENTITY_STATES` (`graphclient.go:24,79-95,108`) | **no** (registers `semsource.*` only, `semsource/payload.go:29-50`) | already off the current mutation surface; notice only |
-| semconnect (beta.160) | 11 `c360.csapi-*.v1` types (`gateway/cs-api/projection_contracts.go:29-39`) stamped at `graph_mutations.go:159`; contracts declare `IndexingProfile: "content"` (`:44-64`) | **no** — one OMS type registered (`message/oms/register.go:16-22`) | register 11; the contract profile moves onto the registration |
+| semconnect (beta.160) | 11 `c360.csapi-*.v1` types (`gateway/cs-api/projection_contracts.go:29-39`) stamped at `graph_mutations.go:159`; contracts declare `IndexingProfile: "content"` (`:44-64`) | **no registry at all** — `cmd/cs-api-server` never calls `payloadbuiltins.Register` or `payloadregistry.New` (grep → 0); the OMS `RegisterPayloads` (`message/oms/register.go:16-22`) is exported for a host; the 11 stamps reach the **host's** graph-ingest | export a `RegisterPayloads` from `gateway/cs-api` for the 11 (floor `content` from the contracts) and have the host composition root call it |
 
 ## 7. Adopter seam inventory
 
@@ -271,3 +292,5 @@ Asked for a developer outside this repo who has never opened `payloadregistry/re
    tests may import `payloadbuiltins`; the fixture shape is `payloadbuiltins.Register` + a stub-type helper.
 4. Revision 2 (after the blind pass): D1 (research floors per-binary), D2 (sister lifecycle births), D3 (42-site test census)
    corrected above; L1, L2, L5 added to §2.4; L3/L4 are design statements (design §6, §8, §11).
+5. Revision 3 (after design review round 1): B-1 (the in-process container birth lane) added to §2.2 and §2.4; F-2 builder
+   facts (two web sources, diagnosis confidence) added to §2.7; §3 re-premised at `7e7ea76e`; semconnect row reworded (N-2).

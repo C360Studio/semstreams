@@ -13,8 +13,12 @@ Implementation column at review time is a deviation to record, not a gap to hide
 | D3b | Readers, codec, boot sweep, and the Graphable merge path never consult the registry (d3; L3) | | `specs/graph-state-contract/spec.md` ADDED "The canonical codec and the boot sweep never consult the payload registry" | `TestResidentUnregisteredStampIsNotPoison` |
 | L1 | Premise for option A: the framework's writers call `internal/graphmutation` directly; only the ingest gate covers them | | graph-ingest ADDED (gate requirement) | `TestCreateRejectsUnregisteredMessageType` against a direct `graphmutation` client |
 | L2 | Nil registry at the seam is fail-closed; fixture helper + 23-literal sweep in the same change (O-15) | | graph-ingest ADDED scenario "a create with no registry configured is refused" | `TestCreateSeamRejectsWhenRegistryMissing`; tasks 5.4 |
-| D1 | Floors are per-binary because registrations are (O-14) | | payload-registry ADDED (first requirement, per-binary clause) | `TestIndexingProfileFor` on a registry without research |
+| DV1 | Floors are per-binary because registrations are (O-14; blind-pass divergence D1) | | payload-registry ADDED (first requirement, per-binary clause) | `TestIndexingProfileFor` on a registry without research |
 | L5 | New import edge named in the package comment | | — | `go list -deps ./payloadregistry` recorded in tasks 3.2 |
+| B-1 | The in-process create path (hierarchy containers) is gated by the same helper; containers carry a registered type (O-16 (a)) or an explicit exception (b) | | graph-ingest ADDED (in-process clause + container scenario); payload-registry ADDED (container row under (a)) | `TestInProcessCreateRejectsUnregisteredType`, `TestHierarchyContainerBirthCarriesRegisteredType`; `task e2e:structural` |
+| F-1 | Contract relation: birth ⊆ Triples(full) ⊆ birth ∪ groups | | payload-registry ADDED (fourth requirement) | `TestRegisteredContractMatchesTriples` |
+| F-2 | Builders byte-identical; web observation `Tool` discriminator; diagnosis confidence | | — | `TestWebObservationEntityMatchesToolBuilders`, `TestOpsDiagnosisEntityStampsArgsConfidence`, `TestEmitLessonBuildsEntityTriples` |
+| N-3 | Composition-root wiring `WireGraphRuntime(payloadReg.Contracts()...)` is mutation-checked | | — | tasks 7.1 (i): boot fails `no contracts` |
 | D3c | Floor read from the registered type; metric means "registered type with no floor" | | graph-ingest ADDED "The indexing-profile floor is read from the registered type" | `TestFloorComesFromRegistration`; rewritten `indexing_profile_registry_test.go` |
 | D4 | Framework mutation-lane types are registered Graphable payloads with factories (d4) | | payload-registry ADDED "Framework entity types born on the mutation lane are registered Graphable payloads"; `agentic-lessons` MODIFIED "A lesson is an evidence-cited…"; `lifecycle` ADDED "Harness births carry the registered lifecycle type" | five `_RoundTrip` tests, `TestHarnessEntity_RoundTrip`, `TestRegisteredContractMatchesTriples`, `TestEmitLessonBuildsEntityTriples`, `TestWebObservationBirthIsRegistered` |
 | D4-snap | `LessonProjectionContract()` returns the registered contract | | `agentic-lessons` MODIFIED "External lesson composition uses the framework-owned contract snapshot" | scenario "The snapshot is the registered contract" |
@@ -27,9 +31,9 @@ Implementation column at review time is a deviation to record, not a gap to hide
 | O-3 | Floors (ops diagnosis `content` confirmed or changed) | ruling comment URL | payload-registry ADDED (floor list) | `TestPayloadRegistryIsTheSingleTypeAuthority` |
 | O-4 | Three new birth contracts minted here vs #818 | ruling comment URL | payload-registry ADDED (contract clause) | `TestRegisteredContractMatchesTriples` |
 | O-5 | Empty floor metered (not rejected) | ruling comment URL | payload-registry ADDED scenario "a registered type may declare no floor" | `TestIndexingProfileFor` |
-| O-6 | Milestone / wave placement | ruling comment URL | — | — |
-| O-7 | Order relative to PR #1099 | ruling comment URL | — | — |
-| O-8 | Skill + CLAUDE.md rewrite | tasks 6.3 | — | — |
+| O-6 | BREAKING-tag discipline (milestone placement done) | ruling comment URL | — | tasks 7.3 tier results |
+| O-7 | Wave order: this change first; #1095 slice A rebases | ruling comment URL | — | — |
+| O-8 | Floor + contracts + `RegisterTestType` added to the #1104 checklist (both files) | tasks 6.3 | — | byte-identical checklist diff |
 | O-9 | ops seed key corrected; direct `PutKV` filed | tasks 6.2; issue URL | — | `task e2e:ops` |
 | O-10 | web_observation e2e coverage gap filed | issue URL | — | `TestWebObservationBirthIsRegistered` |
 | O-11 | semteams copied literals — communicated | issue URL | — | — |
@@ -37,4 +41,7 @@ Implementation column at review time is a deviation to record, not a gap to hide
 | O-13 | `Contract.IndexingProfile` retained with agreement check | | payload-registry ADDED (shape validation clause) | `TestRegisterRejectsInvalidIndexingProfile` |
 | O-14 | Per-binary floors intended | ruling comment URL | payload-registry ADDED | — |
 | O-15 | Fail-closed seam on nil registry | ruling comment URL | graph-ingest ADDED | `TestCreateSeamRejectsWhenRegistryMissing` |
+| O-16 | Hierarchy containers: (a) registered `graph.hierarchy_container.v1` (recommended) or (b) explicit exception | ruling comment URL | graph-ingest ADDED; ADR-103 d3 | `TestHierarchyContainerBirthCarriesRegisteredType` |
+| O-17 | Fill an empty client-side stamp from the bound contract (candidate) | ruling comment URL | — | — |
+| O-18 | One registration act vs two (ADR-102 `RegisterEntityDomains`) | ruling comment URL | — | — |
 | DEVIATION | (record any owner-signed deviation here with its comment URL) | | | |

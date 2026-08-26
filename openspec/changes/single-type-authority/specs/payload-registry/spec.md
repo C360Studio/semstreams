@@ -15,17 +15,20 @@ where the type is registered.
 - **WHEN** a second registration with the same domain, category, and version is registered
 - **THEN** `Register` returns an error naming the key
 - **AND** the first registration is unchanged
+- **AND** the test that verifies this is `TestRegistry_RegisterPayload_DuplicateError`
 
 #### Scenario: a type is known only where it is registered
 
 - **GIVEN** a binary that does not select graph research
 - **WHEN** `IndexingProfileFor("research.result.v1")` is read from its registry
 - **THEN** it reports the type as unregistered with no floor
+- **AND** the test that verifies this is `TestIndexingProfileFor`
 
 #### Scenario: a factory that disagrees with its registration is refused
 
 - **WHEN** a registration's factory produces a payload whose `Schema()` returns a different domain, category, or version
 - **THEN** `Register` returns an error naming both tuples
+- **AND** the test that verifies this is `TestRegisterRejectsSchemaMismatch`
 
 ### Requirement: A registration carries the indexing-profile floor and the projection contracts bound to the type
 
@@ -41,22 +44,26 @@ independent contract copies.
 
 - **WHEN** `agentic.agent_lesson.v1` is registered with a contract whose `MessageType` is empty
 - **THEN** the stored contract's `MessageType` is `agentic.agent_lesson.v1`
+- **AND** the test that verifies this is `TestRegisterFillsAndChecksContractMessageType`
 
 #### Scenario: a contract naming another key is refused
 
 - **WHEN** `agentic.agent_lesson.v1` is registered with a contract whose `MessageType` is `agentic.loop_execution.v1`
 - **THEN** `Register` returns an error naming both keys
+- **AND** the test that verifies this is `TestRegisterFillsAndChecksContractMessageType`
 
 #### Scenario: an invalid floor is refused
 
 - **WHEN** a registration declares `IndexingProfile: "prose"`
 - **THEN** `Register` returns an error naming the value
+- **AND** the test that verifies this is `TestRegisterRejectsInvalidIndexingProfile`
 
 #### Scenario: a registered type may declare no floor
 
 - **WHEN** a registration declares no `IndexingProfile`
 - **THEN** `Register` succeeds
 - **AND** `IndexingProfileFor(key)` reports the type as registered with an empty floor
+- **AND** the test that verifies this is `TestIndexingProfileFor`
 
 ### Requirement: The registry exposes floor and contract lookups
 
@@ -71,16 +78,22 @@ framework contracts MAY exist.
 - **WHEN** `Contracts()` is read
 - **THEN** it contains exactly one contract per registered contract name, including the loop-execution and lesson-record contracts
 - **AND** mutating a returned copy does not change a later read
+- **AND** the test that verifies this is `TestContractsReturnsIndependentSortedCopies`
 
 ### Requirement: Framework entity types born on the mutation lane are registered Graphable payloads
 
 Every framework type stamped on `entity.create` MUST be registered by the framework builtin set with a factory producing a
 payload that implements `EntityID()` and `Triples()`, round-trips through `BaseMessage`, and declares its floor:
 `agentic.loop_execution.v1` (`control`), `agentic.agent_lesson.v1` (`content`), `agentic.ops_diagnosis.v1` (`content`),
-`agentic.model_endpoint.v1` (`control`), `agentic.web_observation.v1` (`content`), `lifecycle.harness.v1` (`control`). The five
-`agentic` types MUST register their birth contract with the type; the type's `Triples()` MUST be the only builder of its
-triples, and the registered contract's birth and group predicates MUST equal the predicate set `Triples()` emits for a fully
-populated entity. No framework type MAY be documented as "mutation-only, not registered".
+`agentic.model_endpoint.v1` (`control`), `agentic.web_observation.v1` (`content`), `lifecycle.harness.v1` (`control`). The types that
+hold a projection contract today (`agentic.loop_execution.v1`, `agentic.agent_lesson.v1`) MUST register it with the type;
+whether `ops_diagnosis`, `model_endpoint`, and `web_observation` gain a birth contract in this change is owner item O-4
+(unruled: no contract; #818's lane). The type's `Triples()` MUST be the only builder of its triples and MUST reproduce the
+former writer's triples byte-for-byte except `Timestamp`, and for every registered contract the relation birth ⊆
+predicates(`Triples()` of a fully populated entity) ⊆ birth ∪ groups MUST hold — a group predicate (a todo record, the lesson
+lifecycle) may be absent at birth and a birth-time value of a group predicate (`agent.lesson.status`) is admitted. Under owner
+item O-16 (a) graph-ingest's hierarchy container type `graph.hierarchy_container.v1` (`control`, verbatim carrier) joins the
+builtin set. No framework type MAY be documented as "mutation-only, not registered".
 
 #### Scenario: a lesson round-trips through the production decoder
 
@@ -88,14 +101,19 @@ populated entity. No framework type MAY be documented as "mutation-only, not reg
 - **WHEN** it is marshalled and decoded through `message.NewDecoder(reg)` with the builtin set registered
 - **THEN** the decoded payload is an `*AgentLessonEntity` with equal fields
 - **AND** its `EntityID()` and the predicate set of `Triples()` equal the original's
+- **AND** the test that verifies this is `TestAgentLessonEntity_RoundTrip`
 
 #### Scenario: the builtin set registers every mutation-lane type with a floor
 
 - **WHEN** the builtin set is registered into a fresh registry
 - **THEN** each of the six keys is registered with a non-empty floor
-- **AND** each of the five `agentic` keys carries at least one contract whose `MessageType` equals the key
+- **AND** `agentic.loop_execution.v1` and `agentic.agent_lesson.v1` carry a contract whose `MessageType` equals the key (the
+  other three only under O-4 = mint)
+- **AND** the test that verifies this is `TestPayloadRegistryIsTheSingleTypeAuthority`
 
 #### Scenario: a contract that drifts from its builder is caught
 
 - **WHEN** a predicate is removed from a type's `Triples()` builder but not from its registered contract
 - **THEN** the conformance test for that type fails naming the predicate
+- **AND** the test that verifies this is `TestRegisteredContractMatchesTriples`
+

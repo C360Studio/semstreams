@@ -17,8 +17,11 @@ A contract registered with a payload type inherits that type's key as its messag
 - **WHEN** both clients are constructed
 - **THEN** construction succeeds without global registration
 - **AND** runtime conflicts are observed through Create/CAS outcomes
+- **AND** the test that verifies this is `TestOverlappingLocalContractsConstruct`
 
 #### Scenario: An existing contract literal compiles against the aliases
 
 - **WHEN** a product constructs `projection.Contract{Groups: []projection.PredicateGroup{{Mode: projection.ModeReconcile}}}`
 - **THEN** it compiles and validates exactly as before the leaf split
+- **AND** the test that verifies this is `TestContractLiteralCompilesAgainstAliases`
+

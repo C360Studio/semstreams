@@ -2,13 +2,18 @@
 
 ### Requirement: A mutation-lane birth MUST carry a registered message type
 
-graph-ingest MUST reject an `entity.create` whose `entity.message_type` is not registered in the payload registry it holds,
-after the structural `IsValid` check and before any clone, profile, or KV work. The rejection MUST use the closed code
+graph-ingest MUST reject a birth whose `message_type` is not registered in the payload registry it holds, on both of its
+create paths — the `entity.create` RPC, after the structural `IsValid` check and before any clone, profile, or KV work, and
+its own in-process `CreateEntity` (the hierarchy container birth), before the state-contract check — through one shared
+check. The rejection MUST use the closed code
 `message_type_unregistered`, class invalid, with the key in detail `message_type`; MUST write nothing; MUST be metered once as
 `mutation_rejections_total{reason="message_type_unregistered"}`; and MUST emit a loud log naming the key. The fact lane is
 unchanged: an unregistered type is refused at decode. `entity.reconcile`, `triple.append`, and `entity.delete` carry no type
-and are not affected. graph-ingest MUST refuse to construct without a payload registry, and a create reaching the seam of a
-component that nonetheless holds no registry MUST be refused with code `internal` and an ERROR log — never admitted.
+and are not affected. graph-ingest MUST refuse to construct without a payload registry, and a create reaching either seam
+of a component that nonetheless holds no registry MUST be refused with code `internal` and an ERROR log — never admitted.
+graph-ingest's own hierarchy container births MUST carry the registered framework type `graph.hierarchy_container.v1`
+(owner item O-16 (a); under (b) this sentence is replaced by an explicit exception naming the empty stamp and the `unknown`
+metric label).
 
 #### Scenario: an unregistered stamp never reaches ENTITY_STATES
 
@@ -17,12 +22,29 @@ component that nonetheless holds no registry MUST be refused with code `internal
 - **THEN** the reply carries code `message_type_unregistered` and `detail.message_type` = `test.unknown.v1`
 - **AND** no `ENTITY_STATES` key is created
 - **AND** `mutation_rejections_total{reason="message_type_unregistered"}` increments exactly once
+- **AND** the test that verifies this is `TestCreateRejectsUnregisteredMessageType`
 
 #### Scenario: a registered stamp is born unchanged
 
 - **GIVEN** `agentic.agent_lesson.v1` is registered
 - **WHEN** an `entity.create` request stamps it
 - **THEN** the entity is created with that `message_type` persisted verbatim
+- **AND** the test that verifies this is `TestCreateAcceptsRegisteredMessageType`
+
+#### Scenario: a hierarchy container is born with a registered type
+
+- **GIVEN** `enable_hierarchy: true` and the builtin payload set registered
+- **WHEN** a Graphable arrival causes graph-ingest to birth a container
+- **THEN** the container's `message_type` is `graph.hierarchy_container.v1`
+- **AND** `indexing_profile_default_total{message_type="unknown"}` does not increment
+- **AND** the test that verifies this is `TestHierarchyContainerBirthCarriesRegisteredType`
+
+#### Scenario: an in-process birth with an unregistered type is refused
+
+- **WHEN** `Component.CreateEntity` is called with an entity whose type is not registered
+- **THEN** it returns an invalid error naming the key
+- **AND** nothing is written
+- **AND** the test that verifies this is `TestInProcessCreateRejectsUnregisteredType`
 
 #### Scenario: a create with no registry configured is refused
 
@@ -30,12 +52,14 @@ component that nonetheless holds no registry MUST be refused with code `internal
 - **WHEN** an `entity.create` request reaches the create seam
 - **THEN** the reply carries code `internal`
 - **AND** nothing is written and the process does not panic
+- **AND** the test that verifies this is `TestCreateSeamRejectsWhenRegistryMissing`
 
 #### Scenario: a missing registry is a construction error
 
 - **WHEN** graph-ingest is constructed with a nil `PayloadRegistry`
 - **THEN** construction fails naming the dependency
 - **AND** no subscription is installed
+- **AND** the test that verifies this is `TestFactoryRejectsNilPayloadRegistry`
 
 ### Requirement: The indexing-profile floor is read from the registered type
 
@@ -50,6 +74,7 @@ table MAY exist in graph-ingest.
 - **WHEN** an entity of that type arrives with no declared profile
 - **THEN** `entity.indexing.profile` is `trace`
 - **AND** `indexing_profile_default_total{message_type="agentic.request.v1"}` does not increment
+- **AND** the test that verifies this is `TestFloorComesFromRegistration`
 
 #### Scenario: a registered type with no floor is metered
 
@@ -57,3 +82,5 @@ table MAY exist in graph-ingest.
 - **WHEN** an entity of that type is created with no declared profile
 - **THEN** `entity.indexing.profile` is `control`
 - **AND** `indexing_profile_default_total{message_type="test.nofloor.v1"}` increments exactly once
+- **AND** the test that verifies this is `TestFloorComesFromRegistration`
+

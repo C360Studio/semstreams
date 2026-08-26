@@ -13,9 +13,12 @@ inventoried as poison, and remains mutable through must-exist operations.
 - **WHEN** graph-ingest boots and sweeps
 - **THEN** the entity has no poison inventory entry
 - **AND** an exact read returns it with the stamp unchanged
+- **AND** the test that verifies this is `TestResidentUnregisteredStampIsNotPoison`
 
 #### Scenario: must-exist mutations ignore the stamp
 
 - **GIVEN** the same entity
 - **WHEN** a `triple.append` targets it
 - **THEN** the append is evaluated on the entity's current revision without consulting the registry
+- **AND** the test that verifies this is `TestResidentUnregisteredStampIsNotPoison`
+
