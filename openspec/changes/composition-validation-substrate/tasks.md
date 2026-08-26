@@ -26,9 +26,11 @@ Premises (measured at `5cc0c7fb`; re-measure at the claim head and amend here): 
 
 ## 1. Claim
 
-- [ ] 1.1 Branch `claude/gh1089-composition-validation` in `../semstreams-wt/<branch>`; pushed; draft PR open with
+- [x] 1.1 Branch `claude/gh1089-composition-validation` in `../semstreams-wt/<branch>`; pushed; draft PR open with
       `Closes #1089`, the ADR-100 status line, and `implemented-by: <persona>` in the body; this change directory is
       its first commit. Draft PR #1088 (Slice C) is closed unmerged with a comment pointing here once the owner rules.
+      Claimed 2026-08-26 on branch `claude/gh1092-composition-validation-substrate` (worktree `../semstreams-wt/…`); the
+      draft PR carries `Closes #1092`; this tick is its first commit. `implemented-by` is stated in the PR body.
 - [ ] 1.2 Owner rulings recorded here verbatim (design §7): nil-declarer rejection vs warning; boot refuse vs report;
       next-boot write verb; tool naming; one or two landing PRs; `--validate` flag retention. Each answer that departs
       from the delta is written into the delta before 2.x starts.
