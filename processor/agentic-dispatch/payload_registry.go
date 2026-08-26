@@ -6,6 +6,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/payloadregistry"
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 func buildSignalMessage(fields map[string]any) (any, error) {
@@ -46,5 +47,7 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
 		Description: "Control signal sent to a loop",
 		Factory:     func() any { return &SignalMessage{} },
 		Builder:     buildSignalMessage,
+		// ADR-054 floor: control/telemetry signals embed only summarized rollups.
+		IndexingProfile: vocabulary.IndexingProfileSignal,
 	})
 }

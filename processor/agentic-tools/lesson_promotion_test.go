@@ -10,7 +10,6 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/graph"
-	"github.com/c360studio/semstreams/internal/builtinprojection"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/projection"
@@ -126,7 +125,7 @@ func statusTriple(entityID, status string) message.Triple {
 }
 
 func TestLessonProjectionContractMatchesCanonicalAndReturnsIndependentSnapshots(t *testing.T) {
-	canonicalJSON := marshalProjectionContract(t, builtinprojection.LessonContract())
+	canonicalJSON := marshalProjectionContract(t, agentic.LessonContract())
 	assertContractJSON(t, "initial public snapshot", canonicalJSON, LessonProjectionContract())
 
 	publicSnapshot := LessonProjectionContract()
@@ -138,7 +137,7 @@ func TestLessonProjectionContractMatchesCanonicalAndReturnsIndependentSnapshots(
 	mutateProjectionContractSlices(t, &internalAggregateSnapshot)
 	assertContractJSON(t, "public snapshot after aggregate mutation", canonicalJSON, LessonProjectionContract())
 
-	internalCanonicalSnapshot := builtinprojection.LessonContract()
+	internalCanonicalSnapshot := agentic.LessonContract()
 	mutateProjectionContractSlices(t, &internalCanonicalSnapshot)
 	assertContractJSON(t, "public snapshot after canonical-helper mutation", canonicalJSON, LessonProjectionContract())
 }
@@ -161,12 +160,12 @@ func assertContractJSON(t *testing.T, name, want string, got projection.Contract
 
 func lessonContractFromAggregate(t *testing.T) projection.Contract {
 	t.Helper()
-	for _, contract := range builtinprojection.Contracts() {
-		if contract.Name == builtinprojection.LessonRecordContractName {
+	for _, contract := range payloadregistry.NewWithSubset(t, agentic.RegisterPayloads).Contracts() {
+		if contract.Name == agentic.LessonRecordContractName {
 			return contract
 		}
 	}
-	t.Fatal("built-in aggregate has no canonical lesson contract")
+	t.Fatal("the agentic registry has no canonical lesson contract")
 	return projection.Contract{}
 }
 

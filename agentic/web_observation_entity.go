@@ -3,11 +3,14 @@ package agentic
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/c360studio/semstreams/message"
+	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
 // webObservationInstanceLen is the number of sha256 hex characters used
@@ -20,10 +23,133 @@ const webObservationInstanceLen = 16
 // canonical URL observed by agent tools.
 const CategoryWebObservation = "web_observation"
 
-// WebObservationMessageType returns the mutation-only origin type stamped when
-// a web observation entity is born.
+// WebObservationMessageType returns the message.Type for a web observation
+// entity — key "agentic.web_observation.v1". Registered by RegisterPayloads with
+// floor content (ADR-103): stamped when the web_search / http_request tools
+// birth the entity, and decodes on the fact lane as *WebObservationEntity.
 func WebObservationMessageType() message.Type {
 	return message.Type{Domain: Domain, Category: CategoryWebObservation, Version: SchemaVersion}
+}
+
+// WebObservationTool discriminates which agent tool observed the URL. It
+// selects the triple Source and the unconditional predicate set the entity
+// emits, reproducing the two former inline builders byte for byte.
+type WebObservationTool string
+
+const (
+	// WebObservationToolHTTPRequest marks an observation made by fetching the
+	// URL (http_request): url, fetched-at, fetched-by, content-type,
+	// status-code, text, truncated.
+	WebObservationToolHTTPRequest WebObservationTool = "http_request"
+	// WebObservationToolWebSearch marks an observation made by a search hit
+	// (web_search): url, title, snippet, source-query, observed-at, observed-by.
+	WebObservationToolWebSearch WebObservationTool = "web_search"
+)
+
+const (
+	// webObservationSourceHTTPRequest is the Source on http_request triples.
+	webObservationSourceHTTPRequest = "agent-http-request"
+	// webObservationSourceWebSearch is the Source on web_search triples.
+	webObservationSourceWebSearch = "agent-web-search"
+)
+
+// WebObservationEntity is the registered Graphable payload for one canonical
+// URL observed by an agent tool (ADR-103). Tool selects which fields are
+// emitted; the other tool's fields are carried but ignored. Every triple
+// object is a field; zero values are emitted (each tool's set is
+// unconditional, exactly as the former builders were).
+type WebObservationEntity struct {
+	Org          string             `json:"org"`
+	Platform     string             `json:"platform"`
+	CanonicalURL string             `json:"canonical_url"`
+	Tool         WebObservationTool `json:"tool"`
+	LoopEntityID string             `json:"loop_entity_id"`
+
+	// http_request fields.
+	FetchedAt   string `json:"fetched_at,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	StatusCode  int    `json:"status_code,omitempty"`
+	Text        string `json:"text,omitempty"`
+	Truncated   bool   `json:"truncated,omitempty"`
+
+	// web_search fields.
+	Title       string `json:"title,omitempty"`
+	Snippet     string `json:"snippet,omitempty"`
+	SourceQuery string `json:"source_query,omitempty"`
+	ObservedAt  string `json:"observed_at,omitempty"`
+}
+
+// EntityID returns the canonical observation entity ID derived from the
+// canonical URL, or "" when it cannot be formed (graph-ingest rejects an empty
+// ID; a decoded payload must never panic the consumer).
+func (e *WebObservationEntity) EntityID() string {
+	id, _, err := TryWebObservationEntityID(e.Org, e.Platform, e.CanonicalURL)
+	if err != nil {
+		return ""
+	}
+	return id
+}
+
+// Triples returns the tool's unconditional predicate set with the tool's
+// Source, Confidence 1.0, and a call-time Timestamp. An unknown Tool emits
+// nothing (Validate rejects it).
+func (e *WebObservationEntity) Triples() []message.Triple {
+	entityID := e.EntityID()
+	now := time.Now()
+	switch e.Tool {
+	case WebObservationToolHTTPRequest:
+		source := webObservationSourceHTTPRequest
+		return []message.Triple{
+			{Subject: entityID, Predicate: agvocab.WebURL, Object: e.CanonicalURL, Source: source, Timestamp: now, Confidence: 1.0},
+			{Subject: entityID, Predicate: agvocab.WebFetchedAt, Object: e.FetchedAt, Source: source, Timestamp: now, Confidence: 1.0},
+			{Subject: entityID, Predicate: agvocab.WebFetchedBy, Object: e.LoopEntityID, Source: source, Timestamp: now, Confidence: 1.0},
+			{Subject: entityID, Predicate: agvocab.WebContentType, Object: e.ContentType, Source: source, Timestamp: now, Confidence: 1.0},
+			{Subject: entityID, Predicate: agvocab.WebStatusCode, Object: e.StatusCode, Source: source, Timestamp: now, Confidence: 1.0},
+			{Subject: entityID, Predicate: agvocab.WebText, Object: e.Text, Source: source, Timestamp: now, Confidence: 1.0},
+			{Subject: entityID, Predicate: agvocab.WebTruncated, Object: e.Truncated, Source: source, Timestamp: now, Confidence: 1.0},
+		}
+	case WebObservationToolWebSearch:
+		source := webObservationSourceWebSearch
+		return []message.Triple{
+			{Subject: entityID, Predicate: agvocab.WebURL, Object: e.CanonicalURL, Source: source, Timestamp: now, Confidence: 1.0},
+			{Subject: entityID, Predicate: agvocab.WebTitle, Object: e.Title, Source: source, Timestamp: now, Confidence: 1.0},
+			{Subject: entityID, Predicate: agvocab.WebSnippet, Object: e.Snippet, Source: source, Timestamp: now, Confidence: 1.0},
+			{Subject: entityID, Predicate: agvocab.WebSourceQuery, Object: e.SourceQuery, Source: source, Timestamp: now, Confidence: 1.0},
+			{Subject: entityID, Predicate: agvocab.WebObservedAt, Object: e.ObservedAt, Source: source, Timestamp: now, Confidence: 1.0},
+			{Subject: entityID, Predicate: agvocab.WebObservedBy, Object: e.LoopEntityID, Source: source, Timestamp: now, Confidence: 1.0},
+		}
+	default:
+		return nil
+	}
+}
+
+// Schema implements message.Payload.
+func (e *WebObservationEntity) Schema() message.Type {
+	return WebObservationMessageType()
+}
+
+// Validate implements message.Payload: the tool must be known and the
+// identity fields must form a well-formed observation entity ID.
+func (e *WebObservationEntity) Validate() error {
+	switch e.Tool {
+	case WebObservationToolHTTPRequest, WebObservationToolWebSearch:
+	default:
+		return fmt.Errorf("web observation tool %q is not http_request or web_search", e.Tool)
+	}
+	_, _, err := TryWebObservationEntityID(e.Org, e.Platform, e.CanonicalURL)
+	return err
+}
+
+// MarshalJSON implements json.Marshaler with the alias idiom.
+func (e *WebObservationEntity) MarshalJSON() ([]byte, error) {
+	type alias WebObservationEntity
+	return json.Marshal((*alias)(e))
+}
+
+// UnmarshalJSON implements json.Unmarshaler with the alias idiom.
+func (e *WebObservationEntity) UnmarshalJSON(data []byte) error {
+	type alias WebObservationEntity
+	return json.Unmarshal(data, (*alias)(e))
 }
 
 // TryWebObservationEntityID returns the canonical 6-part entity ID for a

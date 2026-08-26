@@ -170,8 +170,8 @@ func TestEmitDiagnosisExecutor_HappyPath(t *testing.T) {
 
 	// Source must be the ops-emit-diagnosis tag on every triple.
 	for _, tr := range pub.triples {
-		if tr.Source != emitDiagnosisSource {
-			t.Errorf("triple predicate %q has source %q, want %q", tr.Predicate, tr.Source, emitDiagnosisSource)
+		if tr.Source != "ops-emit-diagnosis" {
+			t.Errorf("triple predicate %q has source %q, want %q", tr.Predicate, tr.Source, "ops-emit-diagnosis")
 		}
 	}
 

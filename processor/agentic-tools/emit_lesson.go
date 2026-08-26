@@ -28,11 +28,6 @@ import (
 // observation seam.
 const EmitLessonToolName = "emit_lesson"
 
-// emitLessonSource is the Source field on triples this tool publishes. Lets
-// operators distinguish ops lesson triples from other emitters in the graph at
-// a glance (mirrors emitDiagnosisSource).
-const emitLessonSource = "ops-emit-lesson"
-
 // minEmitLessonEvidence is the minimum number of evidence entity IDs required
 // per lesson. A lesson with no evidence is unverifiable and cannot be promoted
 // (promotion resolves evidence existence, task 4.1). ADR-080 decision 3.
@@ -514,8 +509,17 @@ func (e *EmitLessonExecutor) emitLesson(ctx context.Context, call agentic.ToolCa
 	// metadata), never taken from the caller's arguments.
 	observedRole := deriveObservedRole(call.Metadata)
 
-	now := time.Now()
-	triples := buildEmitLessonTriples(lessonEntityID, loopEntityID, args, observedRole, now)
+	// The registered lesson entity is the one builder of its triples
+	// (ADR-103); every triple object is a field on it.
+	lesson := &agentic.AgentLessonEntity{
+		Org: e.platform.Org, Platform: e.platform.Platform, ID: lessonID,
+		Category: args.Category, Polarity: args.Polarity, Severity: args.Severity,
+		Status: lessonBornStatus, CreatedAt: time.Now(),
+		Summary: args.Summary, Detail: args.Detail, InjectionForm: args.InjectionForm,
+		Evidence: args.Evidence, AppliesTo: args.AppliesTo,
+		ObservedRole: observedRole, ExecutedBy: loopEntityID,
+	}
+	triples := lesson.Triples()
 
 	// BIRTH via entity.create with the typed-origin envelope. Append is
 	// must-exist, so an append to a never-created lesson returns not-found.
@@ -671,76 +675,6 @@ func canonicalLessonContent(args emitLessonArgs) string {
 	b.WriteString("evidence=")
 	b.WriteString(strings.Join(evidence, "\x1e"))
 	return b.String()
-}
-
-// buildEmitLessonTriples assembles the full triple set for a single lesson in
-// deterministic order. All triples share Subject=lessonEntityID (including the
-// agent.action.executed-by back-link FROM the lesson TO the loop), so they
-// belong to the one lesson entity being born:
-//
-//  1. category
-//  2. polarity
-//  3. severity
-//  4. status (proposed)
-//  5. created-at (immutable birth timestamp)
-//  6. summary
-//  7. detail
-//  8. injection-form
-//  9. evidence (one per entry)
-//  10. applies-to (one per entry)
-//  11. observed-role (if derived)
-//  12. agent.action.executed-by back-link to the ops loop
-func buildEmitLessonTriples(lessonEntityID, loopEntityID string, args emitLessonArgs, observedRole string, now time.Time) []message.Triple {
-	triples := make([]message.Triple, 0, 9+len(args.Evidence)+len(args.AppliesTo))
-
-	base := func(pred, obj string) message.Triple {
-		return message.Triple{
-			Subject:    lessonEntityID,
-			Predicate:  pred,
-			Object:     obj,
-			Source:     emitLessonSource,
-			Timestamp:  now,
-			Confidence: 1.0,
-		}
-	}
-
-	triples = append(triples, base(agvocab.LessonCategory, args.Category))
-	triples = append(triples, base(agvocab.LessonPolarity, args.Polarity))
-	triples = append(triples, base(agvocab.LessonSeverity, args.Severity))
-	triples = append(triples, base(agvocab.LessonStatus, lessonBornStatus))
-	// Immutable birth timestamp — the replay-stable ordering key the
-	// brief-assembly matcher sorts on (severity → created-at → entity-ID).
-	// RFC3339 UTC. NOT part of content identity and absent from the lifecycle
-	// reconcile group, so strict create preserves the FIRST emit's created-at
-	// across idempotent re-emits and an ADR-073 from-zero reingest. A triple's
-	// own Timestamp is re-stamped by lifecycle transitions; this object is not.
-	triples = append(triples, base(agvocab.LessonCreatedAt, now.UTC().Format(time.RFC3339)))
-	triples = append(triples, base(agvocab.LessonSummary, args.Summary))
-	triples = append(triples, base(agvocab.LessonDetail, args.Detail))
-	triples = append(triples, base(agvocab.LessonInjectionForm, args.InjectionForm))
-
-	for _, ev := range args.Evidence {
-		triples = append(triples, base(agvocab.LessonEvidence, ev))
-	}
-	for _, scope := range args.AppliesTo {
-		triples = append(triples, base(agvocab.LessonAppliesTo, scope))
-	}
-
-	if observedRole != "" {
-		triples = append(triples, base(agvocab.LessonObservedRole, observedRole))
-	}
-
-	// Back-link from the lesson entity to the ops loop that distilled it.
-	triples = append(triples, message.Triple{
-		Subject:    lessonEntityID,
-		Predicate:  "agent.action.executed-by",
-		Object:     loopEntityID,
-		Source:     emitLessonSource,
-		Timestamp:  now,
-		Confidence: 1.0,
-	})
-
-	return triples
 }
 
 // parseEmitLessonArgs reads the untyped tool arguments into emitLessonArgs and

@@ -78,13 +78,21 @@ func (m *YourMessage) UnmarshalJSON(data []byte) error {
 ## Step 3: Register a RegisterPayloads function in your package
 
 No `init()`. Add an exported `RegisterPayloads(reg *payloadregistry.Registry) error` function that the
-composition root calls explicitly at boot:
+composition root calls explicitly at boot. The registration carries everything the framework knows about
+the type (ADR-103, the registry is the single type authority): the factory, the ADR-054 indexing-profile
+**floor** graph-ingest stamps on an entity born with the type when the producer declares none, and any
+projection **contract** bound to the type. A type you stamp on `entity.create` MUST be registered here —
+graph-ingest refuses a stamp its registry does not hold with `message_type_unregistered`.
 
 ```go
 // yourpackage/payload_registry.go
 package yourpackage
 
-import "github.com/c360studio/semstreams/payloadregistry"
+import (
+    "github.com/c360studio/semstreams/payloadregistry"
+    "github.com/c360studio/semstreams/pkg/projection/contract"
+    "github.com/c360studio/semstreams/vocabulary"
+)
 
 // RegisterPayloads registers YourMessage (yourdomain.your_category.v1) with the
 // supplied registry. Called from payloadbuiltins.Register (or a product's own
@@ -96,14 +104,26 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
         Version:     Version,
         Description: "Description of your message type",
         Factory:     func() any { return &YourMessage{} },
+        // ADR-054 floor for entities born with this type: content, control,
+        // signal, or trace. "" is admitted and metered as a gap
+        // (indexing_profile_default_total{message_type}).
+        IndexingProfile: vocabulary.IndexingProfileControl,
+        // Optional: the projection contract(s) bound to this type. An empty
+        // contract MessageType is filled with this key; a different key is a
+        // registration error.
+        Contracts: []contract.Contract{YourBirthContract()},
     })
 }
 ```
 
 `Register` validates `Domain`/`Category`/`Version`/`Factory` are non-empty, rejects a duplicate
-`domain.category.version`, and checks the factory-produced payload's `Schema()` matches the
-registration — all as a returned `error`, not a panic. Aggregate multiple registrations in one package
+`domain.category.version`, checks the factory-produced payload's `Schema()` matches the
+registration, rejects an `IndexingProfile` outside the vocabulary, and fills or checks each contract's
+`MessageType` — all as a returned `error`, not a panic. Aggregate multiple registrations in one package
 with `errors.Join` (see `agentic/payload_registry.go`) if you're adding more than one type.
+
+In a unit test that only needs a key to pass graph-ingest's create seam (no wire form),
+`payloadregistry.RegisterTestType(t, reg, "test.widget.v1")` registers a schema-less stub with no floor.
 
 ## Step 4: Wire it into the composition root
 
@@ -196,6 +216,9 @@ for a registered-elsewhere type — the fact lane rejects it outright).
 - [ ] Domain/Category/Version constants match between `Schema()` and the `Registration`
 - [ ] `MarshalJSON`/`UnmarshalJSON` use a type alias (`type Alias YourMessage`) — no `BaseMessage` literal
 - [ ] `RegisterPayloads(reg *payloadregistry.Registry) error` exists in the package, no `init()`
+- [ ] The registration declares its `IndexingProfile` floor and any `Contracts` bound to the type (ADR-103)
+- [ ] Every key you stamp on `entity.create` is registered in the binary that hosts graph-ingest (else
+      `message_type_unregistered`); unit tests use `payloadregistry.RegisterTestType`
 - [ ] `RegisterPayloads` is called from `payloadbuiltins.Register` or the product's composition root
 - [ ] Production-decoder round-trip test passes:
       `go test -run TestYourMessage_ProductionDecoderRoundTrip ./yourpackage/...`

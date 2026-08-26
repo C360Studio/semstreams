@@ -38,7 +38,7 @@ func objectFor(triples []message.Triple, predicate string) any {
 	return nil
 }
 
-// --- buildModelEndpointTriples ---
+// --- modelEndpointEntity (the registered ModelEndpointEntity is the builder) ---
 
 func TestBuildModelEndpointTriples_RequiredFields(t *testing.T) {
 	entityID := "acme.ops.agent.model-registry.endpoint.claude"
@@ -48,7 +48,7 @@ func TestBuildModelEndpointTriples_RequiredFields(t *testing.T) {
 		SupportsTools: true,
 	}
 
-	triples := buildModelEndpointTriples(entityID, ep)
+	triples := modelEndpointEntity("acme", "ops", "claude", ep).Triples()
 
 	// All triples must reference the correct entity.
 	for _, tr := range triples {
@@ -84,14 +84,13 @@ func TestBuildModelEndpointTriples_RequiredFields(t *testing.T) {
 }
 
 func TestBuildModelEndpointTriples_OptionalFieldsOmittedWhenZero(t *testing.T) {
-	entityID := "acme.ops.agent.model-registry.endpoint.local"
 	ep := model.EndpointConfig{
 		Provider: "ollama",
 		Model:    "llama3.2",
 		// MaxTokens, pricing, URL, rate limit all zero/empty
 	}
 
-	triples := buildModelEndpointTriples(entityID, ep)
+	triples := modelEndpointEntity("acme", "ops", "local", ep).Triples()
 	facts := predicateSet(triples)
 
 	optional := []string{
@@ -109,7 +108,6 @@ func TestBuildModelEndpointTriples_OptionalFieldsOmittedWhenZero(t *testing.T) {
 }
 
 func TestBuildModelEndpointTriples_OptionalFieldsPresentWhenSet(t *testing.T) {
-	entityID := "acme.ops.agent.model-registry.endpoint.gpt4o"
 	ep := model.EndpointConfig{
 		Provider:               "openai",
 		Model:                  "gpt-4o",
@@ -121,7 +119,7 @@ func TestBuildModelEndpointTriples_OptionalFieldsPresentWhenSet(t *testing.T) {
 		RequestsPerMinute:      60,
 	}
 
-	triples := buildModelEndpointTriples(entityID, ep)
+	triples := modelEndpointEntity("acme", "ops", "gpt4o", ep).Triples()
 	facts := predicateSet(triples)
 
 	optional := []string{

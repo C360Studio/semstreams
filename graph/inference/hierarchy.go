@@ -423,9 +423,11 @@ func (h *HierarchyInference) ensureContainerExists(ctx context.Context, containe
 		return nil
 	}
 
-	// Create minimal container entity
+	// Create minimal container entity, stamped with the registered framework
+	// type so it passes graph-ingest's registered-type gate (ADR-103, O-16 (a)).
 	containerEntity := &gtypes.EntityState{
-		ID: containerID,
+		ID:          containerID,
+		MessageType: HierarchyContainerMessageType(),
 		Triples: []message.Triple{
 			{
 				Subject:    containerID,

@@ -1,9 +1,12 @@
 package agentic
 
 import (
+	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/c360studio/semstreams/message"
+	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
 // CategoryOpsDiagnosis is the message category for the ops-diagnosis-finding
@@ -12,22 +15,121 @@ import (
 // payload. Mirrors CategoryLoopExecution / CategoryModelEndpoint.
 const CategoryOpsDiagnosis = "ops_diagnosis"
 
+// opsDiagnosisSource is the Source on every triple OpsDiagnosisEntity emits —
+// the value the ops agent's emit_diagnosis tool has always stamped.
+const opsDiagnosisSource = "ops-emit-diagnosis"
+
 // OpsDiagnosisMessageType returns the message.Type for the ops-diagnosis-finding
-// entity origin contract — key "agentic.ops_diagnosis.v1".
-//
-// Registry decision (mirrors LoopExecutionMessageType, ADR-056 typed-origin):
-// MUTATION-ONLY. Stamped on CreateEntityRequest.Entity.MessageType
-// when EmitDiagnosisExecutor births a finding entity; NEVER published as a
-// BaseMessage payload, NOT registered in the payload registry, never decoded.
-// Each emit_diagnosis call mints a fresh ops.diagnosis.finding.{uuid} entity
-// that MUST be created with this envelope; append is must-exist and rejects an
-// absent finding entity.
+// entity — key "agentic.ops_diagnosis.v1". Registered by RegisterPayloads with
+// floor content (ADR-103): stamped on CreateEntityRequest.Entity.MessageType
+// when EmitDiagnosisExecutor births a finding entity, and decodes on the fact
+// lane as *OpsDiagnosisEntity. Each emit_diagnosis call mints a fresh
+// ops.diagnosis.finding.{uuid} entity that MUST be created with this envelope;
+// append is must-exist and rejects an absent finding entity.
 func OpsDiagnosisMessageType() message.Type {
 	return message.Type{
 		Domain:   Domain,
 		Category: CategoryOpsDiagnosis,
 		Version:  SchemaVersion,
 	}
+}
+
+// OpsDiagnosisEntity is the registered Graphable payload for an ops diagnosis
+// finding (ADR-027, ADR-103). Confidence is the tool's self-reported
+// confidence: it is the ops.diagnosis.confidence object (rendered with %g) AND
+// the Confidence stamped on every triple, exactly as the emit_diagnosis writer
+// has always done.
+type OpsDiagnosisEntity struct {
+	Org            string   `json:"org"`
+	Platform       string   `json:"platform"`
+	ID             string   `json:"id"`
+	Finding        string   `json:"finding"`
+	Recommendation string   `json:"recommendation"`
+	Confidence     float64  `json:"confidence"`
+	Evidence       []string `json:"evidence"`
+	ObservedRole   string   `json:"observed_role,omitempty"`
+	Severity       string   `json:"severity"`
+	ExecutedBy     string   `json:"executed_by"`
+}
+
+// EntityID returns the canonical finding entity ID, or "" when the identity
+// fields cannot form one (graph-ingest rejects an empty ID; a decoded payload
+// must never panic the consumer).
+func (e *OpsDiagnosisEntity) EntityID() string {
+	id, err := tryOpsDiagnosisEntityID(e.Org, e.Platform, e.ID)
+	if err != nil {
+		return ""
+	}
+	return id
+}
+
+// Triples returns the full finding triple set in the order the emit_diagnosis
+// writer has always produced it:
+//  1. finding
+//  2. recommendation
+//  3. confidence
+//  4. evidence (one per entry)
+//  5. observed_role (if set)
+//  6. severity
+//  7. agent.action.executed-by back-link to the ops loop
+func (e *OpsDiagnosisEntity) Triples() []message.Triple {
+	diagnosisEntityID := e.EntityID()
+	now := time.Now()
+	triples := make([]message.Triple, 0, 6+len(e.Evidence))
+
+	base := func(pred, obj string) message.Triple {
+		return message.Triple{
+			Subject:    diagnosisEntityID,
+			Predicate:  pred,
+			Object:     obj,
+			Source:     opsDiagnosisSource,
+			Timestamp:  now,
+			Confidence: e.Confidence,
+		}
+	}
+
+	triples = append(triples, base(agvocab.OpsDiagnosisFinding, e.Finding))
+	triples = append(triples, base(agvocab.OpsDiagnosisRecommendation, e.Recommendation))
+	triples = append(triples, base(agvocab.OpsDiagnosisConfidence, fmt.Sprintf("%g", e.Confidence)))
+
+	for _, ev := range e.Evidence {
+		triples = append(triples, base(agvocab.OpsDiagnosisEvidence, ev))
+	}
+
+	if e.ObservedRole != "" {
+		triples = append(triples, base(agvocab.OpsDiagnosisObservedRole, e.ObservedRole))
+	}
+
+	triples = append(triples, base(agvocab.OpsDiagnosisSeverity, e.Severity))
+
+	// Back-link from the diagnosis entity to the ops loop that emitted it.
+	triples = append(triples, base(agvocab.ActionExecutedBy, e.ExecutedBy))
+
+	return triples
+}
+
+// Schema implements message.Payload.
+func (e *OpsDiagnosisEntity) Schema() message.Type {
+	return OpsDiagnosisMessageType()
+}
+
+// Validate implements message.Payload: the identity fields must form a
+// well-formed finding entity ID.
+func (e *OpsDiagnosisEntity) Validate() error {
+	_, err := tryOpsDiagnosisEntityID(e.Org, e.Platform, e.ID)
+	return err
+}
+
+// MarshalJSON implements json.Marshaler with the alias idiom.
+func (e *OpsDiagnosisEntity) MarshalJSON() ([]byte, error) {
+	type alias OpsDiagnosisEntity
+	return json.Marshal((*alias)(e))
+}
+
+// UnmarshalJSON implements json.Unmarshaler with the alias idiom.
+func (e *OpsDiagnosisEntity) UnmarshalJSON(data []byte) error {
+	type alias OpsDiagnosisEntity
+	return json.Unmarshal(data, (*alias)(e))
 }
 
 // OpsDiagnosisEntityID returns the canonical entity ID for an ops diagnosis
@@ -43,21 +145,31 @@ func OpsDiagnosisMessageType() message.Type {
 // programming errors — the caller is responsible for supplying well-formed
 // identifiers. The id must be a UUID or equivalent unique token with no dots.
 func OpsDiagnosisEntityID(org, platform, id string) string {
-	if err := validatePart("org", org); err != nil {
+	entityID, err := tryOpsDiagnosisEntityID(org, platform, id)
+	if err != nil {
 		panic(fmt.Sprintf("OpsDiagnosisEntityID: %s", err))
+	}
+	return entityID
+}
+
+// tryOpsDiagnosisEntityID is the error-returning form of OpsDiagnosisEntityID;
+// the decoded-payload path uses it so a malformed identity never panics.
+func tryOpsDiagnosisEntityID(org, platform, id string) (string, error) {
+	if err := validatePart("org", org); err != nil {
+		return "", err
 	}
 	if err := validatePart("platform", platform); err != nil {
-		panic(fmt.Sprintf("OpsDiagnosisEntityID: %s", err))
+		return "", err
 	}
 	if err := validatePart("id", id); err != nil {
-		panic(fmt.Sprintf("OpsDiagnosisEntityID: %s", err))
+		return "", err
 	}
 
 	entityID := fmt.Sprintf("%s.%s.ops.diagnosis.finding.%s", org, platform, id)
 
 	if !message.IsValidEntityID(entityID) {
-		panic(fmt.Sprintf("OpsDiagnosisEntityID: constructed id %q failed IsValidEntityID — check input values", entityID))
+		return "", fmt.Errorf("constructed id %q failed IsValidEntityID — check input values", entityID)
 	}
 
-	return entityID
+	return entityID, nil
 }

@@ -5,25 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/c360studio/semstreams/agentic"
-	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/types"
-	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
 // EmitDiagnosisToolName is the name agents use to invoke the ops agent's
 // diagnosis emission tool.
 const EmitDiagnosisToolName = "emit_diagnosis"
-
-// emitDiagnosisSource is the Source field on triples this tool publishes.
-// Lets operators distinguish ops diagnosis triples from other emitters in
-// the graph at a glance.
-const emitDiagnosisSource = "ops-emit-diagnosis"
 
 // minEmitDiagnosisEvidence is the minimum number of evidence entity IDs
 // required per diagnosis call. An ops finding without evidence is unverifiable.
@@ -187,12 +179,10 @@ func (e *EmitDiagnosisExecutor) emitDiagnosis(ctx context.Context, call agentic.
 		}, errs.WrapInvalid(err, "EmitDiagnosisExecutor", "emitDiagnosis", "construct loop entity ID")
 	}
 
-	now := time.Now()
-
-	// Build the triple set in deterministic order. All triples share
-	// Subject=diagnosisEntityID (including the agent.action.executed_by
-	// back-link FROM the diagnosis TO the loop), so they belong to the one
-	// finding entity being born.
+	// The registered finding entity is the one builder of its triples
+	// (ADR-103). All triples share Subject=diagnosisEntityID (including the
+	// agent.action.executed-by back-link FROM the diagnosis TO the loop), so
+	// they belong to the one finding entity being born.
 	//
 	// gh#390: each call mints a NEW ops.diagnosis.finding.{uuid} entity, so this
 	// is a BIRTH — the entity must be CREATED via entity.create carrying a
@@ -200,7 +190,13 @@ func (e *EmitDiagnosisExecutor) emitDiagnosis(ctx context.Context, call agentic.
 	// append-before-birth path returned not-found and the finding never landed in
 	// the graph (e2e:ops: 0/3 findings). entity.create is atomic
 	// (all-or-nothing), preserving the no-partial-finding contract.
-	triples := buildEmitDiagnosisTriples(diagnosisEntityID, loopEntityID, args, now)
+	finding := &agentic.OpsDiagnosisEntity{
+		Org: e.platform.Org, Platform: e.platform.Platform, ID: diagnosisID,
+		Finding: args.Finding, Recommendation: args.Recommendation, Confidence: args.Confidence,
+		Evidence: args.Evidence, ObservedRole: args.ObservedRole, Severity: args.Severity,
+		ExecutedBy: loopEntityID,
+	}
+	triples := finding.Triples()
 	if err := e.publisher.Create(ctx, diagnosisEntityID, agentic.OpsDiagnosisMessageType(), triples); err != nil {
 		return agentic.ToolResult{
 			CallID:    call.ID,
@@ -235,56 +231,6 @@ func (e *EmitDiagnosisExecutor) emitDiagnosis(ctx context.Context, call agentic.
 			"diagnosis_id": diagnosisEntityID,
 		},
 	}, nil
-}
-
-// buildEmitDiagnosisTriples assembles the full triple set for a single
-// diagnosis emission in deterministic order:
-//  1. finding
-//  2. recommendation
-//  3. confidence
-//  4. evidence (one per entry)
-//  5. observed_role (if set)
-//  6. severity
-//  7. agent.action.executed_by back-link to the ops loop
-func buildEmitDiagnosisTriples(diagnosisEntityID, loopEntityID string, args emitDiagnosisArgs, now time.Time) []message.Triple {
-	triples := make([]message.Triple, 0, 6+len(args.Evidence))
-
-	base := func(pred, obj string) message.Triple {
-		return message.Triple{
-			Subject:    diagnosisEntityID,
-			Predicate:  pred,
-			Object:     obj,
-			Source:     emitDiagnosisSource,
-			Timestamp:  now,
-			Confidence: args.Confidence,
-		}
-	}
-
-	triples = append(triples, base(agvocab.OpsDiagnosisFinding, args.Finding))
-	triples = append(triples, base(agvocab.OpsDiagnosisRecommendation, args.Recommendation))
-	triples = append(triples, base(agvocab.OpsDiagnosisConfidence, fmt.Sprintf("%g", args.Confidence)))
-
-	for _, ev := range args.Evidence {
-		triples = append(triples, base(agvocab.OpsDiagnosisEvidence, ev))
-	}
-
-	if args.ObservedRole != "" {
-		triples = append(triples, base(agvocab.OpsDiagnosisObservedRole, args.ObservedRole))
-	}
-
-	triples = append(triples, base(agvocab.OpsDiagnosisSeverity, args.Severity))
-
-	// Back-link from the diagnosis entity to the ops loop that emitted it.
-	triples = append(triples, message.Triple{
-		Subject:    diagnosisEntityID,
-		Predicate:  "agent.action.executed-by",
-		Object:     loopEntityID,
-		Source:     emitDiagnosisSource,
-		Timestamp:  now,
-		Confidence: args.Confidence,
-	})
-
-	return triples
 }
 
 // parseEmitDiagnosisArgs reads the untyped tool arguments into

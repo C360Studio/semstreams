@@ -1,10 +1,12 @@
 package agentic
 
 import (
+	"encoding/json"
 	"time"
 	"unicode/utf8"
 
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/projection/contract"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
@@ -16,8 +18,9 @@ const (
 	CategoryLoopExecution = "loop_execution"
 
 	// loopExecutionSource is the Source stamped on all origin triples
-	// produced by LoopExecutionEntity.Triples(). Matches graphWriterSource
-	// in processor/agentic-loop so provenance attribution is unchanged.
+	// produced by LoopExecutionEntity.Triples() and ModelEndpointEntity.Triples().
+	// Matches graphWriterSource in processor/agentic-loop so provenance
+	// attribution is unchanged.
 	loopExecutionSource = "agentic-loop"
 
 	// loopExecutionMaxPromptTripleBytes caps the size of the prompt stored
@@ -28,6 +31,13 @@ const (
 	// loopExecutionTruncationMarker is appended to a truncated prompt.
 	// Must match processor/agentic-loop's truncationMarker constant.
 	loopExecutionTruncationMarker = "…[truncated]"
+)
+
+// Contract and group names identify the built-in loop-execution projection
+// schema. The contract is registered with agentic.loop_execution.v1 (ADR-103).
+const (
+	LoopExecutionContractName = "agentic.loop-execution"
+	TodoGroupName             = "todos"
 )
 
 // truncateLoopDescription returns s capped at maxBytes bytes total
@@ -52,24 +62,24 @@ func truncateLoopDescription(s string, maxBytes int) string {
 	return s[:cut] + loopExecutionTruncationMarker
 }
 
-// LoopExecutionEntity is the Graphable origin contract for an agentic loop
-// execution entity (ADR-056 W0 4c-pre-1). It encodes the spawn-identity
-// triples that give the entity its typed origin: role, task, parent,
-// run, reply_to, workflow, workflow_step, user, and description.
+// LoopExecutionEntity is the registered Graphable payload for an agentic loop
+// execution entity (ADR-056 W0 4c-pre-1, ADR-103). It encodes the
+// spawn-identity triples that give the entity its typed origin: role, task,
+// parent, run, reply_to, workflow, workflow_step, user, and description.
 //
 // EntityID() and Triples() together form the typed origin contract — the
 // same data set that processor/agentic-loop's buildSpawnIdentityTriples
 // emitted, now expressed through graph.Graphable so it can be born via the
-// canonical entity-create operation.
+// canonical entity-create operation and arrive on the fact lane as itself.
 //
 // This type lives in the agentic package (below processor/agentic-loop in
 // the import graph) to keep the dependency direction agentic → processor
 // (never the reverse).
 type LoopExecutionEntity struct {
-	Org      string
-	Platform string
-	LoopID   string
-	Task     *TaskMessage
+	Org      string       `json:"org"`
+	Platform string       `json:"platform"`
+	LoopID   string       `json:"loop_id"`
+	Task     *TaskMessage `json:"task,omitempty"`
 }
 
 // EntityID returns the canonical 6-part entity ID for this loop execution.
@@ -150,24 +160,70 @@ func (e *LoopExecutionEntity) Triples() []message.Triple {
 	return triples
 }
 
+// Schema implements message.Payload.
+func (e *LoopExecutionEntity) Schema() message.Type {
+	return LoopExecutionMessageType()
+}
+
+// Validate implements message.Payload: the identity fields must form a
+// well-formed loop-execution entity ID.
+func (e *LoopExecutionEntity) Validate() error {
+	_, err := TryLoopExecutionEntityID(e.Org, e.Platform, e.LoopID)
+	return err
+}
+
+// MarshalJSON implements json.Marshaler with the alias idiom.
+func (e *LoopExecutionEntity) MarshalJSON() ([]byte, error) {
+	type alias LoopExecutionEntity
+	return json.Marshal((*alias)(e))
+}
+
+// UnmarshalJSON implements json.Unmarshaler with the alias idiom.
+func (e *LoopExecutionEntity) UnmarshalJSON(data []byte) error {
+	type alias LoopExecutionEntity
+	return json.Unmarshal(data, (*alias)(e))
+}
+
 // LoopExecutionMessageType returns the message.Type for the loop-execution
-// entity origin contract — key "agentic.loop_execution.v1" (snake_case category,
-// matching the agentic convention: tool_call, loop_created, approval_pending).
-//
-// Registry decision (ADR-056, intentionally pinned — not implicit): this type is
-// MUTATION-ONLY. It is stamped on CreateEntityRequest.Entity.MessageType at
-// birth purely as producer identity; it is NEVER
-// published as a BaseMessage payload and is therefore NOT registered in the
-// payload registry (payload_registry.go) and never round-trips through
-// payload decoding. It is an envelope-bearing graph-origin marker, not a wire
-// payload. If a future producer needs to PUBLISH a loop_execution message over
-// NATS (not merely stamp it at create), that producer must add the init()
-// registration at that point — until then, registering it would advertise a
-// decode path that does not exist.
+// entity — key "agentic.loop_execution.v1" (snake_case category, matching the
+// agentic convention: tool_call, loop_created, approval_pending). Registered
+// by RegisterPayloads with floor control and LoopExecutionContract (ADR-103):
+// it is stamped on CreateEntityRequest.Entity.MessageType at birth and decodes
+// on the fact lane as *LoopExecutionEntity.
 func LoopExecutionMessageType() message.Type {
 	return message.Type{
 		Domain:   Domain,
 		Category: CategoryLoopExecution,
 		Version:  SchemaVersion,
+	}
+}
+
+// LoopExecutionContract returns a fresh copy of the projection contract bound
+// to agentic.loop_execution.v1: the spawn-identity birth predicates and the
+// reconcile-mode todo group (written by the write_todos tool).
+func LoopExecutionContract() contract.Contract {
+	return contract.Contract{
+		Name:          LoopExecutionContractName,
+		MessageType:   LoopExecutionMessageType().Key(),
+		EntityPattern: "*.*.agent.agentic-loop.execution.*",
+		BirthPredicates: []string{
+			agvocab.LoopRole,
+			agvocab.LoopTask,
+			agvocab.LoopParent,
+			agvocab.LoopRun,
+			agvocab.LoopRunEntityID,
+			agvocab.LoopReplyTo,
+			agvocab.LoopWorkflow,
+			agvocab.LoopWorkflowStep,
+			agvocab.LoopUser,
+			agvocab.LoopDescription,
+		},
+		Groups: []contract.PredicateGroup{{
+			Name: TodoGroupName,
+			Mode: contract.ModeReconcile,
+			Predicates: []string{
+				agvocab.TodoRecord,
+			},
+		}},
 	}
 }

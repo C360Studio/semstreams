@@ -11,8 +11,8 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
-	"github.com/c360studio/semstreams/internal/builtinprojection"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/pkg/projection"
 	graphingest "github.com/c360studio/semstreams/processor/graph-ingest"
 	"github.com/c360studio/semstreams/vocabulary/builtins"
@@ -23,7 +23,7 @@ func startGraphIngestForMutationTest(t *testing.T, client *natsclient.Client) *g
 
 	configJSON, err := json.Marshal(graphingest.DefaultConfig())
 	require.NoError(t, err)
-	created, err := graphingest.CreateGraphIngest(configJSON, component.Dependencies{NATSClient: client})
+	created, err := graphingest.CreateGraphIngest(configJSON, component.Dependencies{NATSClient: client, PayloadRegistry: payloadbuiltins.NewTestRegistry(t)})
 	require.NoError(t, err)
 
 	ingest := created.(*graphingest.Component)
@@ -86,7 +86,7 @@ func newTestMutationClient(t *testing.T, client *natsclient.Client) *projection.
 	builtins.Register()
 	mutations, err := projection.NewMutationClient(projection.MutationClientConfig{
 		NATS:      client,
-		Contracts: builtinprojection.Contracts(),
+		Contracts: payloadbuiltins.NewTestRegistry(t).Contracts(),
 	})
 	require.NoError(t, err)
 	return mutations

@@ -14,8 +14,10 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/governance"
+	"github.com/c360studio/semstreams/graph/inference"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/payloadregistry"
+	"github.com/c360studio/semstreams/pkg/lifecycle"
 	agenticdispatch "github.com/c360studio/semstreams/processor/agentic-dispatch"
 	gateddagexec "github.com/c360studio/semstreams/processor/gated-dag"
 	"github.com/c360studio/semstreams/storage/objectstore"
@@ -23,7 +25,9 @@ import (
 
 // Register registers all first-party payload types with the supplied
 // registry. Aggregates errors via errors.Join so a misconfigured
-// deployment sees every collision on a single boot.
+// deployment sees every collision on a single boot — the registry's
+// duplicate-key rejection is the collision detector for every framework
+// type (ADR-103).
 //
 // Called from cmd/semstreams/main.go and cmd/e2e-semstreams/main.go
 // after the registry is constructed but before component lifecycle
@@ -44,6 +48,10 @@ func Register(reg *payloadregistry.Registry) error {
 	track(gateddagexec.RegisterPayloads(reg))
 	track(objectstore.RegisterPayloads(reg))
 	track(governance.RegisterPayloads(reg))
+	// Framework entity types born on the mutation lane (ADR-103): the
+	// lifecycle harness carrier and graph-ingest's hierarchy container.
+	track(lifecycle.RegisterPayloads(reg))
+	track(inference.RegisterPayloads(reg))
 
 	return errors.Join(errs...)
 }

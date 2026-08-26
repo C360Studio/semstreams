@@ -108,28 +108,6 @@ func TestAgentLessonMessageType_Valid(t *testing.T) {
 	}
 }
 
-func TestAgentLessonMessageType_Distinct(t *testing.T) {
-	// Must not collide with any other agentic category constant — a collision
-	// would let two entity kinds share an origin envelope and silently break
-	// typed-origin ownership arbitration.
-	mt := agentic.AgentLessonMessageType()
-	others := []string{
-		agentic.CategoryOpsDiagnosis,
-		agentic.CategoryLoopExecution,
-		agentic.CategoryModelEndpoint,
-		agentic.CategoryLoopCreated,
-		agentic.CategoryLoopCompleted,
-		agentic.CategoryLoopFailed,
-		agentic.CategoryLoopCancelled,
-		agentic.CategoryTask,
-	}
-	for _, cat := range others {
-		if mt.Category == cat {
-			t.Errorf("CategoryAgentLesson collides with existing category %q", cat)
-		}
-	}
-}
-
 func TestAgentLessonMessageType_KeyFormat(t *testing.T) {
 	key := agentic.AgentLessonMessageType().Key()
 	want := "agentic.agent_lesson.v1"

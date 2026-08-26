@@ -334,23 +334,6 @@ func TestLoopExecutionMessageType_Valid(t *testing.T) {
 	}
 }
 
-func TestLoopExecutionMessageType_Distinct(t *testing.T) {
-	// Must not collide with any other category constant.
-	mt := agentic.LoopExecutionMessageType()
-	others := []string{
-		agentic.CategoryLoopCreated,
-		agentic.CategoryLoopCompleted,
-		agentic.CategoryLoopFailed,
-		agentic.CategoryLoopCancelled,
-		agentic.CategoryTask,
-	}
-	for _, cat := range others {
-		if mt.Category == cat {
-			t.Errorf("CategoryLoopExecution collides with existing category %q", cat)
-		}
-	}
-}
-
 func TestLoopExecutionMessageType_KeyFormat(t *testing.T) {
 	key := agentic.LoopExecutionMessageType().Key()
 	want := "agentic.loop_execution.v1"

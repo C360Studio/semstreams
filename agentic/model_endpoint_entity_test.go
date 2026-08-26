@@ -24,26 +24,6 @@ func TestModelEndpointMessageType_Valid(t *testing.T) {
 	}
 }
 
-func TestModelEndpointMessageType_Distinct(t *testing.T) {
-	// Must not collide with any other agentic category constant — a collision
-	// would let two entity kinds share an origin envelope and silently break
-	// typed-origin ownership arbitration.
-	mt := agentic.ModelEndpointMessageType()
-	others := []string{
-		agentic.CategoryLoopExecution,
-		agentic.CategoryLoopCreated,
-		agentic.CategoryLoopCompleted,
-		agentic.CategoryLoopFailed,
-		agentic.CategoryLoopCancelled,
-		agentic.CategoryTask,
-	}
-	for _, cat := range others {
-		if mt.Category == cat {
-			t.Errorf("CategoryModelEndpoint collides with existing category %q", cat)
-		}
-	}
-}
-
 func TestModelEndpointMessageType_KeyFormat(t *testing.T) {
 	key := agentic.ModelEndpointMessageType().Key()
 	want := "agentic.model_endpoint.v1"

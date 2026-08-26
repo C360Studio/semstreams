@@ -21,10 +21,10 @@ type graphable interface {
 }
 
 const (
-	payloadTestOrg      = "acme"
-	payloadTestPlatform = "ops"
-	payloadTestLoopID   = "acme.ops.agent.agentic-loop.execution.loop-ops-abc"
-	payloadTestEvidence = "acme.ops.agent.agentic-loop.execution.loop-1"
+	payloadTestOrg       = "acme"
+	payloadTestPlatform  = "ops"
+	payloadTestLoopID    = "acme.ops.agent.agentic-loop.execution.loop-ops-abc"
+	payloadTestEvidence  = "acme.ops.agent.agentic-loop.execution.loop-1"
 	payloadTestEvidence2 = "acme.ops.agent.agentic-loop.execution.loop-2"
 )
 
@@ -67,8 +67,8 @@ func fullLesson() *agentic.AgentLessonEntity {
 		Category: "retention-policy", Polarity: "avoid", Severity: "warning", Status: "proposed",
 		CreatedAt: payloadTestTime,
 		Summary:   "cap retention sweeps", Detail: "the detail", InjectionForm: "Cap sweeps.",
-		Evidence:  []string{payloadTestEvidence, payloadTestEvidence2},
-		AppliesTo: []string{"tag:go", "id:acme.ops.agent"},
+		Evidence:     []string{payloadTestEvidence, payloadTestEvidence2},
+		AppliesTo:    []string{"tag:go", "id:acme.ops.agent"},
 		ObservedRole: "ops", ExecutedBy: payloadTestLoopID,
 	}
 }
@@ -104,7 +104,7 @@ func fullWebObservation(tool agentic.WebObservationTool) *agentic.WebObservation
 
 func assertRoundTrip[T any](t *testing.T, original *T, decoded message.Payload) {
 	t.Helper()
-	got, ok := decoded.(*T)
+	got, ok := any(decoded).(*T)
 	require.Truef(t, ok, "decoded payload must be %T, got %T", original, decoded)
 	require.Equal(t, *original, *got, "fields must survive the production decoder")
 	og, ok := any(original).(graphable)
