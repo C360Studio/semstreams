@@ -25,6 +25,10 @@ rejects a stamp the registry does not know. ADR-103 records it; this change carr
   new closed code `message_type_unregistered`, and refuses to construct without a payload registry.
 - `indexing_profile_default_total{message_type}` changes meaning: a registered type with no declared floor.
 - Test and e2e fixtures register the keys they stamp; a stub-type helper joins `payloadregistry/testing.go`.
+- `pkg/projection.MutationClient.Create` fills an empty `entity.MessageType` from the bound contract and rejects a
+  conflicting one (owner ruling O-17): a product using `CreateMutation` may omit the stamp entirely.
+- `docs/operations/migration-beta162-to-beta163.md` (new, SemStreams-owned) records every sister's impact and obligation;
+  sister repositories are not edited (owner ruling O-11/O-12).
 - **BREAKING** for sisters that stamp unregistered types on `entity.create`: semmachina (4), semdev (2), semconnect (11).
 
 ## Non-goals
@@ -32,7 +36,8 @@ rejects a stamp the registry does not know. ADR-103 records it; this change carr
 - Birth-predicate enforcement at ingest (#818) — this change gives it a home, it does not implement it.
 - Retiring `Contract.IndexingProfile` or `Contract.MessageType` (owner item O-13).
 - Any reader filtering by `message_type`; any migration of stored entities (none is needed — readers never consult the registry).
-- Editing sisters; the migration list is communicated in the PR body.
+- Editing sisters or filing anything in a sister repository — they are read-only; obligations live in
+  `docs/operations/migration-beta162-to-beta163.md`.
 - Amending ADR-054/056/076/091 text (history).
 
 ## Consumers
@@ -42,5 +47,6 @@ registry), semmachina and semconnect (register their birth types), semsource (no
 
 ## Sequencing
 
-Prerequisite for the lesson-import scenario of #1095 slice B (PR #1099). Merge-order overlap only with #1093 at
-`cmd/semstreams/main.go` and with PR #1099 at `handleCanonicalCreate`.
+Lands first in the beta.163 wave; #1095's implementation (its tasks 5.1 and 5.3) rebases onto the contracts this change moves
+into `agentic`. Merge-order overlap with #1093 at `cmd/semstreams/main.go`. The breaking commit lands only behind the complete
+eight-tier e2e union plus `TestWebObservationBirthIsRegistered` (owner ruling O-6). Sister migration: `docs/operations/migration-beta162-to-beta163.md`.

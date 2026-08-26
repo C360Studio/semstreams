@@ -3,17 +3,21 @@
 Baseline `origin/main` `c3a17741` (2026-08-26); revision 3 re-premised at `7e7ea76e`. Companion inventory: `docs/proposals/gh1100-type-authority-inventory.md`
 (awaiting independent `INVENTORY PASS`; the design is conditional on it). ADR draft:
 `docs/adr/103-payload-registry-is-the-single-type-authority.md`. Target state: `openspec/changes/single-type-authority/`.
-Status: **draft for pre-owner design review; not approved.**
+Status: **ACCEPTED** — owner ruling on #1100, 2026-08-26 (recorded on the issue): O-1…O-18 as recommended, with three
+overrides (O-6, O-11/O-12, O-17) and explicit acceptances; revision 5 applies them (§18, owner ruling).
 
 ## 1. The decision (as the owner stated it, 2026-08-26)
 
 - Inventory: `docs/proposals/gh1100-type-authority-inventory.md`, SHA-256
-  `6437c971d8f117a15c17c7c1b0d8519242733325530f06e084532e4f9849c48c` (revision 4). Review state: **INVENTORY PASS WITH DIVERGENCES** (blind, Fable, 2026-08-26);
+  `59eb4ac2f7a089751ea9363ef69c10f6e7bdcbd6bd1d3bf282314c9adc82a517` (revision 5). Review state: **INVENTORY PASS WITH DIVERGENCES** (blind, Fable, 2026-08-26);
   D1–D3 corrected, L1–L5 added in revision 2. **Pre-owner design review round 1 (Fable, adversarial, 2026-08-26): REQUEST
   CHANGES** — revision 3 folds B-1 (→ O-16), F-1…F-6, N-1…N-8 and the nits; every item has a disposition in §18. Re-premised
   against `origin/main` `7e7ea76e` (#1099 and #1104 merged; milestone `v1.0.0-beta.163` holds #1100). **Narrow re-review round 2
-  (2026-08-26): APPROVE WITH CHANGES** — B-1 mechanically closed; revision 4 folds F1–F7 and the notes (§18, round 2); owner
-  ruling on O-1…O-18 pending.
+  (2026-08-26): APPROVE WITH CHANGES** — B-1 mechanically closed; revision 4 folds F1–F7 and the notes (§18, round 2). **Owner ruling 2026-08-26:** O-1…O-18 as
+  recommended; overrides O-6 (complete eight-tier gate + the web-observation integration test), O-11/O-12 (sisters read-only;
+  obligations in `docs/operations/migration-beta162-to-beta163.md`), O-17 (fill the stamp from the contract, now); explicit
+  acceptances O-16 (a) with the factory check, O-14, O-15, O-18, and #1095's permanent hierarchy foreign-authority skip — **r5
+  applies** (§18, owner ruling).
 
 > The payload registry is the single type authority; a projection contract and an indexing-profile floor are attributes
 > registered WITH the type, not parallel tables; `EntityState.MessageType` is therefore always a registered key, and ingest
@@ -170,6 +174,13 @@ if _, ok := c.payloadRegistry.GetRegistration(key); !ok {
     births carry no stamp; the `unknown` label names them") and exempt the empty type on the in-process lane for the hierarchy
     caller only. Cheaper by a type, but the invariant is false at archive, the in-process helper grows a caller-specific branch,
     and the exception must be remembered when gh606 lands.
+- **The contract-bound client fills the stamp (O-17, ruled DO NOW).** `pkg/projection.MutationClient.Create` (`mutation_client.go:133`)
+  fills an empty `entity.MessageType` from `binding.contract.MessageType` before `validateEntity` (`:146` → `:308-327`) and
+  before the request is built (`:164`); the existing equality check (`:325-326`) becomes the conflict branch — a non-empty
+  stamp that differs from the contract is rejected with a classified invalid error naming both keys; a contract with no
+  `MessageType` and an entity with no stamp stays rejected (`:322-323`). Adopter-seam consequence: a product using
+  `CreateMutation` may omit the stamp entirely — the contract it already bound is the only spelling of the type. Tests
+  `TestCreateFillsMessageTypeFromContract`, `TestCreateRejectsConflictingMessageType`; forced omission (n).
 - **Nil registry at the seam is fail-closed (L2).** `c.payloadRegistry == nil` at the create seam → `rejectInternal`
   (`mutation_runtime.go:206-208`, code `internal`) with an ERROR log naming the missing dependency; never a pass-through
   (fail-open would be a zero standing in for UNKNOWN). 23 `&Component{` literals in six ingest test files bypass the factory
@@ -273,23 +284,25 @@ imports `vocabulary` today (measured 0/0), and `message` inherits the edge throu
 semmachina and semdev also birth `lifecycle.harness.v1` from inside their binaries (inventory §6, D2); registering it in
 `payloadbuiltins.Register` covers them because both call it.
 
-Covering tiers (each exercises a mutation-lane birth the gate now guards; the e2e-only keys in parentheses are registered by
-`cmd/e2e-semstreams/fixtures`, tasks 6.1): `e2e:agentic` (`loop_execution`, `model_endpoint`), `e2e:lessons` (`agent_lesson`,
+**Tag gate (O-6, owner override): the complete union.** `task e2e:agentic`, `task e2e:lessons`, `task e2e:structural`, `task e2e:ops`, `task e2e:research-graph`, `task e2e:lifecycle`, `task e2e:crud-tools`, `task e2e:core` — all eight green, each as a provenance-complete row (exact command, runner identity, UTC start/end) in the candidate-proof record per `openspec/specs/release-candidate-proof/spec.md`; and, until the web-observation tier exists (O-10), `go test -race -tags=integration -count=1 -run TestWebObservationBirthIsRegistered ./processor/agentic-tools/executors/` recorded as a row of its own. Per tier, what it exercises (the e2e-only keys in
+parentheses are registered by `cmd/e2e-semstreams/fixtures`, tasks 6.1): `e2e:agentic` (`loop_execution`, `model_endpoint`), `e2e:lessons` (`agent_lesson`,
 `test.fixture.v1`), `e2e:ops` (`ops_diagnosis`; the direct-KV seed is unaffected), `e2e:research-graph` (`loop_execution` via
 llmwrap, `research.e2e_search_seed.v1`), `e2e:lifecycle` (`lifecycle.harness`), `e2e:crud-tools` (`e2e.probe.v1`), `e2e:core`
 (`test.fixture.v1` roundtrip), `e2e:structural` (`e2e.eventtime.v1`, `e2e.canonical_create_contract.v1`, `e2e.relationship_contract.v1`;
 also hierarchy containers, `configs/e2e-structural.json:480` — the covering tier for O-16 either way). **N-1:** `e2e:agentic`
 asserts the loop execution entity (`test/e2e/scenarios/agentic/scenario.go:786-800`) but records a missing model endpoint only
-as a **warning** (`:838-848`); tasks 6.4 promotes it to a failure so the tier covers `model_endpoint` for real. Minimum green before the BREAKING commit lands: `e2e:agentic` and
+as a **warning** (`:838-848`); tasks 6.4 promotes it to a failure so the tier covers `model_endpoint` for real. There is no
+"minimum" subset: the BREAKING commit lands only behind all eight rows and the integration-test row. Minimum green before the BREAKING commit lands: `e2e:agentic` and
 `e2e:lessons`; the full union runs in tasks §7. `web_observation` has no tier (inventory §9.1) — coverage gap filed (O-10);
 its gate is the integration test `TestWebObservationBirthIsRegistered`.
 
-Sister migration (communicate-only, carried in the PR body as a published layer): "register every type you stamp on
-`entity.create` with `IndexingProfile` and, where you hold a birth contract, `Contracts`; a create with an unregistered type
-returns `message_type_unregistered` with the key in `detail.message_type`; `projection.Contract` literals keep compiling."
-**semconnect (N-2)** has no registry of its own (`cmd/cs-api-server` never calls `payloadbuiltins.Register` or
-`payloadregistry.New`); its 11 stamps reach the host's graph-ingest, so its obligation is "export a `RegisterPayloads` from
-`gateway/cs-api` for the 11 (floor `content`, from its contracts) and have the host composition root call it".
+Sister obligations (O-11/O-12, owner override: sister repositories stay **read-only** — no issues, comments, or edits) are
+recorded in the SemStreams-owned `docs/operations/migration-beta162-to-beta163.md` (part of this package; one `##` per
+landing so #1095's re-slot and reorder append their own), linked from `proposal.md` and the PR body: per sister the types
+stamped at the pinned SHA, day-one breakage, the exact `RegisterPayloads` obligation with a template copied from
+`storage/objectstore/stored_message.go:88-103` (semconnect: the host composition root, since `cmd/cs-api-server` holds no
+registry), floor and contract to declare, and the decoder round-trip verification; semmem's finding is there marked for
+downstream-owner validation.
 
 ## 12. Sequencing
 
@@ -336,7 +349,9 @@ including source and zero-valued triples), `TestModelEndpointEntityMatchesBuilde
 five zero-gates `:529-542` and the `bool`/`int`/`float64` objects — a dropped `if ep.MaxTokens > 0` fails it),
 `TestOpsDiagnosisEntityMatchesBuilder` (golden from `emit_diagnosis.go:249-291`: the full set, the `fmt.Sprintf("%g")` confidence
 object `:262`, and `Confidence` on every triple), `TestFactoryRejectsHierarchyWithoutContainerType` (unit; `EnableHierarchy`
-with a registry lacking `graph.hierarchy_container.v1` does not construct),
+with a registry lacking `graph.hierarchy_container.v1` does not construct), `pkg/projection`: `TestCreateFillsMessageTypeFromContract`
+(empty stamp → the request carries the contract's key; MUST fail at baseline: `validateEntity :322-323` rejects the empty stamp),
+`TestCreateRejectsConflictingMessageType` (GREEN at baseline — the existing `:325-326` check, now the conflict branch),
 `TestWebObservationBirthIsRegistered`. `processor/agentic-tools`: `TestEmitLessonBuildsEntityTriples` (equality with the former builder's output).
 
 ## 14. Forced omissions (one per new registration path, check, or builder)
@@ -353,9 +368,9 @@ lesson registration → `TestFloorComesFromRegistration`; delete one predicate l
 helper call on the in-process lane → `TestInProcessCreateRejectsUnregisteredType`; delete `inference.RegisterPayloads` from
 `payloadbuiltins.Register` → `TestHierarchyContainerBirthCarriesRegisteredType`; delete the hierarchy factory check →
 `TestFactoryRejectsHierarchyWithoutContainerType`; delete one `if ep.X > 0` gate in `ModelEndpointEntity.Triples()` →
-`TestModelEndpointEntityMatchesBuilder`.
+`TestModelEndpointEntityMatchesBuilder`; drop the fill in `MutationClient.Create` → `TestCreateFillsMessageTypeFromContract`.
 
-## 15. Owner items
+## 15. Owner items — RULED 2026-08-26 (O-1…O-18 as recommended unless marked OVERRIDE)
 
 - **O-1** Accept ADR-103 as worded (§1); flip Status.
 - **O-2** Every new export, for owner design review (contract rule; F-6): `pkg/projection/contract` (package: `Contract`,
@@ -375,8 +390,7 @@ helper call on the in-process lane → `TestInProcessCreateRejectsUnregisteredTy
 - **O-4** The three birth contracts that do not exist today: architect r2 = mint here; reviewer and r3 = **defer to #818**
   (§7); unruled = defer.
 - **O-5** A registered type without a floor: meter (recommended) or reject at `Register`.
-- **O-6** Milestone `v1.0.0-beta.163` exists and holds #1100 (measured at `7e7ea76e`); what remains is the BREAKING-tag
-  discipline (CLAUDE.md "Breaking changes — E2E required"): which tiers are green before the tag.
+- **O-6** **OVERRIDE.** The tag gate is the complete §7.3 union — `task e2e:agentic`, `task e2e:lessons`, `task e2e:structural`, `task e2e:ops`, `task e2e:research-graph`, `task e2e:lifecycle`, `task e2e:crud-tools`, `task e2e:core` — all eight green, each as a provenance-complete row (exact command, runner identity, UTC start/end) in the candidate-proof record per `openspec/specs/release-candidate-proof/spec.md`; and, until the web-observation tier exists (O-10), `go test -race -tags=integration -count=1 -run TestWebObservationBirthIsRegistered ./processor/agentic-tools/executors/` recorded as a row of its own (§11, tasks 7.3, conformance).
 - **O-7** Wave order: this change lands first; #1095 slice A rebases its 5.1 and **5.3** onto the moved contracts (§12). Confirm.
 - **O-8** (premise closed by #1104) The rewritten checklist knows no floor, contract, or `RegisterTestType`; tasks 6.3 adds
   them to `.agents/skills/new-payload/SKILL.md` and `docs/concepts/15-payload-registry.md` (the checklist block byte-identical
@@ -384,25 +398,27 @@ helper call on the in-process lane → `TestInProcessCreateRejectsUnregisteredTy
 - **O-9** `test/e2e/scenarios/ops/scenario.go:459-470` seeds `ENTITY_STATES` by direct `PutKV` with a mis-spelled key — fix the
   key here; the direct write is a separate hygiene issue.
 - **O-10** `web_observation` births have no e2e tier — file the coverage gap.
-- **O-11** semteams re-declares the framework contract structure with the framework's key builders (`cmd/semteams/main.go:971,998`)
-  against `agentic-lessons/spec.md:193-206` — communicate-only.
-- **O-12** semmem's local tree is pre-rename; the federation MVP that motivated #1100 is not in any local tree — where is the
-  sister's finding recorded?
+- **O-11 / O-12** **OVERRIDE.** Sister repositories remain read-only — no sister issues or comments, ever. Every sister impact
+  and migration instruction (semmachina, semdev, semconnect, semteams, semmem; semsource and semdragon as not affected) is
+  recorded in `docs/operations/migration-beta162-to-beta163.md`; semmem's finding is there marked "for downstream-owner
+  validation".
 - **O-13** `Contract.IndexingProfile` retained; when both it and the type's floor are set they must agree (validated at
   `Register`). Retire later or keep?
 - **O-14** Floors are per-binary because registrations are (§5, D1): the six `research.*` floors exist only where graph research
-  is selected. Confirm this is intended.
+  is selected. **Explicitly accepted.**
 - **O-15** Nil registry at the create seam is fail-closed (`internal`, ERROR log) with the test-fixture sweep in the same
-  change (§6, L2). Confirm, or rule fail-open with the reason recorded.
+  change (§6, L2). **Explicitly accepted.**
 - **O-16** Hierarchy containers (B-1): **(a) recommended** — stamp `graph.hierarchy_container.v1`, registered, floor `control`,
   transitional until gh606 retires containers, **with the factory check** (hierarchy on + registry lacking the type = construction
   error) and the dependency cost named in §6; **(b)** carve the exception in ADR-103 d3 and the `graph-state-contract` delta.
-- **O-17** (N-5) `pkg/projection/mutation_client.go:322-327` asks the caller to stamp `entity.MessageType` and then checks it
-  against the bound contract — prediction-shaped. Observation-shaped alternative: fill an empty stamp from the contract's
-  `MessageType` and reject only a conflicting one. Candidate for this change or a follow-up.
+  **Explicitly accepted: (a) with the factory check.**
+- **O-17** **OVERRIDE — DO NOW, in this change.** `MutationClient.Create` fills an empty `entity.MessageType` from the bound
+  contract; a non-empty conflicting stamp is rejected (the existing equality check becomes the conflict branch). §6, the
+  `projection-mutation-client` delta, tasks 3.4, omission (n), conformance O-17.
 - **O-18** (N-8) ADR-102's `RegisterEntityDomains` (#1095 design `:174`) is a second boot-time registration surface keyed by
-  entity-ID domain — a different namespace, no contradiction with ADR-103. Does the owner want one registration act per
-  type (domain delegation declared beside the payload registration) or two?
+  entity-ID domain — a different namespace, no contradiction with ADR-103. **Explicitly accepted: two distinct registration
+  acts** (payload types; entity-ID domains). Also accepted from #1095: the permanent hierarchy-inference skip for
+  foreign-authority entities.
 
 ## 16. PREMISE FAILED (claims in the issue or comments that do not survive measurement)
 
@@ -470,3 +486,13 @@ Context ownership: graph-ingest retains a registry, not a context; no new gorout
 | F6 grep named at tasks 7.2 was absent | **Accepted.** Added to 7.2 |
 | F7 O-16 (a) do-nothing path unstated; caller description wrong | **Accepted.** `hierarchy.go:440-451` returns without logging; callers WARN and continue (`component.go:1971`, `:2108`); the guard is a factory error (task 4.8, `TestFactoryRejectsHierarchyWithoutContainerType`, omission (l)); named as an (a) cost with the dependency weight |
 | Notes: ADR chatter; "six keys"; O-2 web constants; (a) closure weight; F-1 over-claim; omission lettering | **Accepted.** ADR reduced to decision + consequences (review state and wave order live in §12/§18); "six (seven under O-16 (a))"; `Tool` constants exported, sources unexported; closure delta named; "a **birth** predicate"; N-3 is (i) |
+
+### Owner ruling (2026-08-26, recorded on #1100) — r5 applies
+
+| Ruling | Applied in revision 5 |
+|---|---|
+| O-1…O-18 as recommended (unless overridden below) | §15 marked RULED; ADR-103 Status → Accepted with the compact ruling list |
+| OVERRIDE O-6 — the tag gate is the complete §7.3 union (eight tiers) plus `TestWebObservationBirthIsRegistered` until O-10's tier exists | tasks 7.3 rewritten (no "minimum"); §11 tier table; conformance O-6; candidate-proof rows named |
+| OVERRIDE O-11/O-12 — sisters read-only; obligations recorded in a SemStreams-owned migration doc | `docs/operations/migration-beta162-to-beta163.md` written (one `##` per landing); linked from `proposal.md` and the PR body; every "notice"/"communicate" instruction replaced (tasks 7.5, §11, inventory §6, proposal) |
+| OVERRIDE O-17 — fill an empty stamp from the bound contract, now | §6 mechanics; `projection-mutation-client` delta requirement + two scenarios; tasks 2.2/3.4; omission (n); conformance O-17; adopter-seam consequence stated |
+| Explicitly accepted: O-16 (a) with the factory check; O-14 per-binary floors; O-15 fail-closed nil registry; O-18 two registration acts; #1095's permanent hierarchy foreign-authority skip | marked in §15; no text change beyond marking |

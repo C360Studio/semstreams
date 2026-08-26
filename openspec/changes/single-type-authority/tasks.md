@@ -49,8 +49,9 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       `Closes #1100` and `implemented-by: <persona>` in the body; this change directory,
       `docs/adr/103-payload-registry-is-the-single-type-authority.md`, and the two `docs/proposals/gh1100-*` documents are
       its first commit (`9899d71d`). Rebase onto `7e7ea76e` or later before implementation begins. The PR body is a published
-      layer: it carries the sister migration list (design §11), the new outcome code and its detail key, the metric's new
-      meaning, and the owner rulings on O-1…O-18 as they land.
+      layer: it links `docs/operations/migration-beta162-to-beta163.md` (the sister obligations), names the new outcome code
+      and its detail key and the metric's new meaning, and carries the owner ruling of 2026-08-26 (O-1…O-18 as recommended;
+      overrides O-6, O-11/O-12, O-17; the explicit acceptances).
 
 ## 2. Baseline capture — write the named tests first
 
@@ -65,7 +66,11 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       and GREEN at baseline, plus two documenting tests there: `TestContractLiteralCompilesAgainstAliases` (a literal using
       `projection.Contract`, `projection.PredicateGroup`, `projection.ModeReconcile` validates) and
       `TestOverlappingLocalContractsConstruct` (two clients with overlapping contracts both construct). Does not compile at
-      baseline (new package).
+      baseline (new package). `pkg/projection/mutation_client_test.go`: `TestCreateFillsMessageTypeFromContract` — a
+      `CreateMutation` whose entity has an empty `MessageType` produces a request carrying the bound contract's key; MUST fail at
+      baseline (`validateEntity :322-323` rejects the empty stamp). `TestCreateRejectsConflictingMessageType` — a non-empty
+      stamp that differs from the contract is rejected with a classified invalid error naming both keys; GREEN at baseline
+      (the existing `:325-326` check), kept as the conflict-branch pin.
 - [ ] 2.3 `agentic/entity_payloads_test.go`: `TestAgentLessonEntity_RoundTrip`, `TestOpsDiagnosisEntity_RoundTrip`,
       `TestModelEndpointEntity_RoundTrip`, `TestWebObservationEntity_RoundTrip`, `TestLoopExecutionEntity_RoundTrip` — marshal
       a fully populated entity, decode through `message.NewDecoder(payloadregistry.NewWithSubset(t, agentic.RegisterPayloads))`
@@ -127,6 +132,7 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
   ```
   go test -race -count=1 -run 'TestRegisterRejectsInvalidIndexingProfile|TestRegisterFillsAndChecksContractMessageType|TestGetRegistrationCopiesAttributes|TestContractsReturnsIndependentSortedCopies|TestIndexingProfileFor' ./payloadregistry/
   go test -race -count=1 -run 'TestContractValidateUsesVocabularyProfiles' ./pkg/projection/contract/
+  go test -race -count=1 -run 'TestCreateFillsMessageTypeFromContract|TestCreateRejectsConflictingMessageType' ./pkg/projection/
   go test -race -count=1 -run '_RoundTrip|TestRegisteredContractMatchesTriples|TestWebObservationEntityMatchesToolBuilders|TestModelEndpointEntityMatchesBuilder|TestOpsDiagnosisEntityMatchesBuilder' ./agentic/ ./pkg/lifecycle/
   go test -race -count=1 -run 'TestPayloadRegistryIsTheSingleTypeAuthority' ./payloadbuiltins/
   go test -race -tags=integration -count=1 -p 2 -run 'TestCreateRejectsUnregisteredMessageType|TestCreateAcceptsRegisteredMessageType|TestFloorComesFromRegistration|TestResidentUnregisteredStampIsNotPoison|TestHierarchyContainerBirthCarriesRegisteredType' ./processor/graph-ingest/
@@ -157,6 +163,11 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       the edge `payloadregistry → pkg/projection/contract → vocabulary` and that `message` inherits it.
 - [ ] 3.3 `payloadregistry/testing.go`: `RegisterTestType(tb testing.TB, reg *Registry, key string)` — parses the key, registers a
       schema-less stub factory with no floor; `tb.Fatalf` on error. 2.1 GREEN.
+- [ ] 3.4 (O-17) `pkg/projection/mutation_client.go` `Create` (`:133`): before `validateEntity` (`:146`) and before the request
+      is built (`:164`), fill an empty `entity.MessageType` from `binding.contract.MessageType` when the contract has one; keep
+      the `:325-326` equality check as the conflict branch (classified invalid error naming both keys); an empty stamp with a
+      contract that has no `MessageType` stays rejected (`:322-323`). Do the same in the exact-read validation at `:188` only
+      for the conflict branch (a stored entity always carries a stamp). 2.2 fill test GREEN; conflict test stays GREEN.
 
 ## 4. The six framework types
 
@@ -199,7 +210,7 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       `graph/inference/container_entity.go`: `ContainerEntity{ID string; Facts []message.Triple}` (Graphable, Payload, MarshalJSON),
       `HierarchyContainerMessageType()` = `graph.hierarchy_container.v1`, `RegisterPayloads(reg)` with floor `control`;
       `payloadbuiltins.Register` calls it; `hierarchy.go:428` stamps `MessageType: HierarchyContainerMessageType()`. Factory check
-      (F7): in graph-ingest's factory, `EnableHierarchy` with a registry that lacks `graph.hierarchy_container.v1` →
+      (F7, accepted with O-16 (a)): in graph-ingest's factory, `EnableHierarchy` with a registry that lacks `graph.hierarchy_container.v1` →
       `errs.WrapInvalid` naming the type, before any subscription — the observation-shaped guard for a composition root that did
       not call `payloadbuiltins.Register`. 2.6 factory test GREEN.
 
@@ -247,6 +258,9 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       → empty); `.claude/skills/new-payload/SKILL.md` is a thin adapter and is untouched (technical writer; O-8).
 - [ ] 6.4 `test/e2e/scenarios/agentic/scenario.go:838-848`: the missing-model-endpoint branch becomes a failure, not a
       warning, so `e2e:agentic` covers `model_endpoint` (N-1).
+- [ ] 6.5 `docs/operations/migration-beta162-to-beta163.md` (part of this package, section "Single type authority (ADR-103)"):
+      keep every sister section's `file:line` pinned to the named SHA; if a sister's obligation changes during implementation
+      (e.g. a floor value), amend the section — never a sister repository. `proposal.md` and the PR body link it.
 
 ## 7. Gates — in the `AGENTS.md:63-68` Land order
 
@@ -265,25 +279,22 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       helper call on the in-process lane → `TestInProcessCreateRejectsUnregisteredType` MUST fail; (k) delete
       `inference.RegisterPayloads` from `payloadbuiltins.Register` → `TestHierarchyContainerBirthCarriesRegisteredType` MUST
       fail; (l) delete the hierarchy factory check → `TestFactoryRejectsHierarchyWithoutContainerType` MUST fail; (m) delete the
-      `if ep.MaxTokens > 0` gate in `ModelEndpointEntity.Triples()` → `TestModelEndpointEntityMatchesBuilder` MUST fail. Record
-      each command and its output line here.
+      `if ep.MaxTokens > 0` gate in `ModelEndpointEntity.Triples()` → `TestModelEndpointEntityMatchesBuilder` MUST fail; (n) drop
+      the fill in `MutationClient.Create` → `TestCreateFillsMessageTypeFromContract` MUST fail. Record each command and its output
+      line here.
 - [ ] 7.2 `task lint` (revive warnings = failure); `go test -race -count=1 ./...`; `go test -race -tags=integration -count=1 -p 2 ./...`;
       `task schema:generate && git diff --exit-code schemas/ specs/`; `go test ./test/contract/...`;
       `grep -rn 'NewNATSLessonCurator' --include='*.go' .` → 0 (the retired helper stays absent); `grep -rn builtinprojection
       --include='*.go' .` → 0. Record outputs.
-- [ ] 7.3 BREAKING tiers, one agent at a time on the host, results recorded verbatim: `task e2e:agentic` (loop execution,
-      model endpoint after 6.4, containers), `task e2e:lessons` (minimum before the breaking commit lands on main), then
-      `task e2e:structural` (containers, three `e2e.*` keys), `task e2e:ops`, `task e2e:research-graph`, `task e2e:lifecycle`,
-      `task e2e:crud-tools`, `task e2e:core`.
+- [ ] 7.3 Tag gate (owner override O-6): `task e2e:agentic`, `task e2e:lessons`, `task e2e:structural`, `task e2e:ops`, `task e2e:research-graph`, `task e2e:lifecycle`, `task e2e:crud-tools`, `task e2e:core` — all eight green, each as a provenance-complete row (exact command, runner identity, UTC start/end) in the candidate-proof record per `openspec/specs/release-candidate-proof/spec.md`; and, until the web-observation tier exists (O-10), `go test -race -tags=integration -count=1 -run TestWebObservationBirthIsRegistered ./processor/agentic-tools/executors/` recorded as a row of its own. One agent at a time on the host; the BREAKING commit lands on main
+      only behind all of these; results recorded here verbatim.
 - [ ] 7.4 Fill `conformance.md` Implementation and Test columns with `file:line` at the head that carries the last change to
       any `.go` file or spec delta on the branch; an empty cell at review time is a deviation to record.
-- [ ] 7.5 Sister notices (communicate-only, no sister edits): semmachina (4 types, `internal/payload/constants.go:60-147`,
-      `internal/projectioncontract/contracts.go:77-109`), semdev (`internal/intake/record.go:63`, `internal/standards/sync.go:143`),
-      semconnect (no registry of its own — `cmd/cs-api-server` calls neither `payloadbuiltins.Register` nor `payloadregistry.New`;
-      the obligation is "export a `RegisterPayloads` from `gateway/cs-api` for the 11 `c360.csapi-*.v1` types, floor `content`,
-      and have the host composition root call it", `gateway/cs-api/projection_contracts.go:29-64`), plus the informational notes
-      for semteams (`cmd/semteams/main.go:971,998`) and semmem — each as an issue in that repo referencing #1100 and ADR-103;
-      links recorded in the PR body.
+- [ ] 7.5 Sister obligations are recorded in `docs/operations/migration-beta162-to-beta163.md` (owner override O-11/O-12:
+      sister repositories stay read-only — no sister issues, comments, or edits): semmachina (4 types), semdev (2), semconnect
+      (11, host-side registration), semteams (none; recommendation), semmem (for downstream-owner validation), semsource and
+      semdragon (not affected). Verify at landing that every sister section's pinned SHA and `file:line` still read as written;
+      the PR body links the document.
 - [ ] 7.6 Implementation review by `semstreams-reviewer`, the owner-run cross-agent round where asked, fixes and re-review;
       `openspec archive single-type-authority` + spec sync as the final content commit; narrow reviewer check of the archive;
       undraft. The merge gate owns CI.

@@ -1,3 +1,27 @@
+## ADDED Requirements
+
+### Requirement: Create fills an empty entity message type from the bound contract
+
+`MutationClient.Create` MUST fill an empty `entity.MessageType` from the bound contract's `MessageType` before validation and
+before the request is built, and MUST reject a non-empty stamp that differs from the contract's with a classified invalid
+error naming both keys. A contract that declares no `MessageType` together with an entity that carries no stamp MUST still be
+rejected — the type is required at birth. The caller predicts nothing the contract already holds: a product using
+`CreateMutation` may omit the stamp entirely.
+
+#### Scenario: an empty stamp is filled from the contract
+
+- **GIVEN** a contract bound to `agentic.agent_lesson.v1`
+- **WHEN** `Create` receives an entity whose `MessageType` is empty
+- **THEN** the `entity.create` request carries `agentic.agent_lesson.v1`
+- **AND** the test that verifies this is `TestCreateFillsMessageTypeFromContract`
+
+#### Scenario: a conflicting stamp is rejected
+
+- **GIVEN** the same contract
+- **WHEN** `Create` receives an entity stamped `agentic.loop_execution.v1`
+- **THEN** the client returns a classified invalid error naming both keys and sends no request
+- **AND** the test that verifies this is `TestCreateRejectsConflictingMessageType`
+
 ## MODIFIED Requirements
 
 ### Requirement: Projection contracts are local schemas

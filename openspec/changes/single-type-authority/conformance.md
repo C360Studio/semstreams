@@ -25,26 +25,25 @@ Implementation column at review time is a deviation to record, not a gap to hide
 | D3c | Floor read from the registered type; metric means "registered type with no floor" | | graph-ingest ADDED "The indexing-profile floor is read from the registered type" | `TestFloorComesFromRegistration`; rewritten `indexing_profile_registry_test.go` |
 | D4 | Framework mutation-lane types are registered Graphable payloads with factories (d4) | | payload-registry ADDED "Framework entity types born on the mutation lane are registered Graphable payloads"; `agentic-lessons` MODIFIED "A lesson is an evidence-cited…"; `lifecycle` ADDED "Harness births carry the registered lifecycle type" | five `_RoundTrip` tests, `TestHarnessEntity_RoundTrip`, `TestRegisteredContractMatchesTriples`, `TestEmitLessonBuildsEntityTriples`, `TestWebObservationBirthIsRegistered` |
 | D4-snap | `LessonProjectionContract()` returns the registered contract | | `agentic-lessons` MODIFIED "External lesson composition uses the framework-owned contract snapshot" | scenario "The snapshot is the registered contract" |
-| D5 | Sister obligation; BREAKING; covering tiers (d5, Consequences) | N/A in-tree — PR body migration list; sister issues (tasks 7.5) | — | tasks 7.3 tier results |
+| D5 | Sister obligation; BREAKING; tag gate (d5, Consequences) | `docs/operations/migration-beta162-to-beta163.md` (tasks 6.5, 7.5); no sister edits | — | tasks 7.3: eight tier rows + the web-observation integration-test row |
 | C1 | `_Distinct` tests replaced by registry collision detection | | payload-registry ADDED (first requirement, collision scenario) | `payloadbuiltins/register_test.go`; the four functions absent |
 | C2 | One-table test | | — | `TestPayloadRegistryIsTheSingleTypeAuthority` |
 | C3 | e2e and unit fixtures register what they stamp | | — | `TestFixturesRegisterEveryE2EStamp`; tasks 5.3 |
-| O-1 | ADR-103 accepted as worded | ruling comment URL | — | — |
-| O-2 | `pkg/projection/contract` leaf + aliases approved | ruling comment URL | projection-mutation-client MODIFIED | `pkg/projection/contract_test.go` GREEN unchanged |
-| O-3 | Floors (ops diagnosis `content` confirmed or changed) | ruling comment URL | payload-registry ADDED (floor list) | `TestPayloadRegistryIsTheSingleTypeAuthority` |
-| O-4 | Three new birth contracts minted here vs #818 | ruling comment URL | payload-registry ADDED (contract clause) | `TestRegisteredContractMatchesTriples` |
-| O-5 | Empty floor metered (not rejected) | ruling comment URL | payload-registry ADDED scenario "a registered type may declare no floor" | `TestIndexingProfileFor` |
-| O-6 | BREAKING-tag discipline (milestone placement done) | ruling comment URL | — | tasks 7.3 tier results |
-| O-7 | Wave order: this change first; #1095 slice A rebases its 5.1 and 5.3 | ruling comment URL | — | — |
+| O-1 | ADR-103 accepted as worded | owner ruling on #1100, 2026-08-26 | — | — |
+| O-2 | `pkg/projection/contract` leaf + aliases approved | owner ruling on #1100, 2026-08-26 | projection-mutation-client MODIFIED | `pkg/projection/contract_test.go` GREEN unchanged |
+| O-3 | Floors (ops diagnosis `content` confirmed or changed) | owner ruling on #1100, 2026-08-26 | payload-registry ADDED (floor list) | `TestPayloadRegistryIsTheSingleTypeAuthority` |
+| O-4 | Three new birth contracts minted here vs #818 | owner ruling on #1100, 2026-08-26 | payload-registry ADDED (contract clause) | `TestRegisteredContractMatchesTriples` |
+| O-5 | Empty floor metered (not rejected) | owner ruling on #1100, 2026-08-26 | payload-registry ADDED scenario "a registered type may declare no floor" | `TestIndexingProfileFor` |
+| O-6 | OVERRIDE — the tag gate is the complete union: `e2e:agentic`, `e2e:lessons`, `e2e:structural`, `e2e:ops`, `e2e:research-graph`, `e2e:lifecycle`, `e2e:crud-tools`, `e2e:core`, plus `TestWebObservationBirthIsRegistered` until O-10's tier exists | owner ruling on #1100, 2026-08-26 | — | one provenance-complete candidate-proof row per tier + one for the integration test (tasks 7.3) |
+| O-7 | Wave order: this change first; #1095 slice A rebases its 5.1 and 5.3 | owner ruling on #1100, 2026-08-26 | — | — |
 | O-8 | Floor + contracts + `RegisterTestType` added to the #1104 checklist (both files) | tasks 6.3 | — | byte-identical checklist diff |
 | O-9 | ops seed key corrected; direct `PutKV` filed | tasks 6.2; issue URL | — | `task e2e:ops` |
 | O-10 | web_observation e2e coverage gap filed | issue URL | — | `TestWebObservationBirthIsRegistered` |
-| O-11 | semteams copied literals — communicated | issue URL | — | — |
-| O-12 | semmem finding location | pointer | — | — |
+| O-11 / O-12 | OVERRIDE — sisters read-only; every impact and instruction recorded in `docs/operations/migration-beta162-to-beta163.md` (semmachina, semdev, semconnect, semteams, semmem; semsource/semdragon not affected) | owner ruling on #1100, 2026-08-26; tasks 6.5, 7.5 | — | the document's per-sister sections; PR body link |
 | O-13 | `Contract.IndexingProfile` retained with agreement check | | payload-registry ADDED (shape validation clause) | `TestRegisterRejectsInvalidIndexingProfile` |
-| O-14 | Per-binary floors intended | ruling comment URL | payload-registry ADDED | — |
-| O-15 | Fail-closed seam on nil registry | ruling comment URL | graph-ingest ADDED | `TestCreateSeamRejectsWhenRegistryMissing` |
-| O-16 | Hierarchy containers: (a) registered `graph.hierarchy_container.v1` (recommended) or (b) explicit exception | ruling comment URL | graph-ingest ADDED; ADR-103 d3 | `TestHierarchyContainerBirthCarriesRegisteredType` |
-| O-17 | Fill an empty client-side stamp from the bound contract (candidate) | ruling comment URL | — | — |
-| O-18 | One registration act vs two (ADR-102 `RegisterEntityDomains`) | ruling comment URL | — | — |
+| O-14 | Per-binary floors — explicitly accepted | owner ruling on #1100, 2026-08-26 | payload-registry ADDED | `TestIndexingProfileFor` |
+| O-15 | Fail-closed seam on nil registry — explicitly accepted | owner ruling on #1100, 2026-08-26 | graph-ingest ADDED | `TestCreateSeamRejectsWhenRegistryMissing` |
+| O-16 | Hierarchy containers: (a) registered `graph.hierarchy_container.v1` with the factory check — explicitly accepted | owner ruling on #1100, 2026-08-26 | graph-ingest ADDED; ADR-103 d3 | `TestHierarchyContainerBirthCarriesRegisteredType`, `TestFactoryRejectsHierarchyWithoutContainerType` |
+| O-17 | OVERRIDE — DO NOW: `MutationClient.Create` fills an empty stamp from the bound contract; a conflicting stamp is rejected | owner ruling on #1100, 2026-08-26; tasks 3.4 | `projection-mutation-client` ADDED "Create fills an empty entity message type from the bound contract" | `TestCreateFillsMessageTypeFromContract`, `TestCreateRejectsConflictingMessageType`; omission (n) |
+| O-18 | Two distinct registration acts (payload types; entity-ID domains) — explicitly accepted; #1095's permanent hierarchy foreign-authority skip also accepted | owner ruling on #1100, 2026-08-26 | — | — |
 | DEVIATION | (record any owner-signed deviation here with its comment URL) | | | |
