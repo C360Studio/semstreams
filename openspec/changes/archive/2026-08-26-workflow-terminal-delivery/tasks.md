@@ -412,9 +412,9 @@ A's miss accepted. Every item below is addressed in this worktree with evidence.
 
 ## 7. Land (AGENTS.md order)
 
-- [ ] 7.1 Implementation review by `semstreams-reviewer`; record the verdict and every finding's disposition in
+- [x] 7.1 Implementation review by `semstreams-reviewer`; record the verdict and every finding's disposition in
   `conformance.md`.
-- [ ] 7.2 Owner-run cross-agent round where the owner asks for it; fixes and re-review recorded.
-- [ ] 7.3 Archive: `openspec archive workflow-terminal-delivery` plus spec sync as the final content commit.
+- [x] 7.2 Owner-run cross-agent round where the owner asks for it; fixes and re-review recorded.
+- [x] 7.3 Archive: `openspec archive workflow-terminal-delivery` plus spec sync as the final content commit.
 - [ ] 7.4 Narrow reviewer check of the archive/spec sync recorded in `conformance.md`.
 - [ ] 7.5 Undraft the PR; confirm the body still carries `Closes #1094` and `implemented-by: <model>`.

@@ -347,4 +347,31 @@ Exactly the named test, and only it.
 
 ## Review record
 
-(reviewer verdicts and dispositions; archive/spec-sync check)
+### 7.1 Implementation review — `semstreams-reviewer` (Fable) at `00fbdbd2`: APPROVE WITH CHANGES
+
+No blocking finding; every binding ruling item matched in code. Dispositions, all applied at `f1065152`
+(commits `e9b73fec`, `f1065152`; CI + E2E Ladder green):
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| H1 | HIGH | The implemented walk-end reading (absent run-anchor key + linkless end → `origin_unresolvable`) is the one item 8 requires, but the delta's step-2 sentence still said `route_less_settled`, and no test pinned the shape (a mutation to the other reading stayed green). | Delta sentence amended (`agentic-terminal-events/spec.md`, step 2: settles `route_less_settled` only when no link on the walk resolved to an absent key, otherwise `origin_unresolvable`); pinning subtest added; omission I (Reading-A mutation fails exactly that subtest) recorded above; ruling row cites item 8. |
+| M1 | MEDIUM | Route-less run root that continues to a routed ancestor — untested. | Test added (+ severed-ancestry descendant; omission J). |
+| M2 | MEDIUM | Synthesized decision leaves `Decision` nil — untested. | Test added. |
+| M3 | MEDIUM | Malformed present decision through settlement — untested. | Test added; because `BaseMessage.MarshalJSON` validates, the framework cannot emit that shape, so the fixture splices foreign bytes. |
+| M4 | MEDIUM | The loop's unusable-metadata fail-safe reached tasks but not the delta. | Delta amended. |
+| M5 | MEDIUM | Handoff log level Debug in code vs Warn in design. | Raised to INFO in code (`terminal_settlement.go:218`), design.md, and `docs/operations/38-agent-terminal-settlement.md`; owner confirmed at the 7.2 round. |
+| — | gate | Exported surface `component.PortFacts.KVReadBucket`: PASS — observation-shaped, mirrors `StoreReadBucket`, kind-gated, no default. Five production sites predict the `kv:` prefix of `ResourceID()`. | FILE → #1110 (consolidation). |
+| — | note | Omission A (carrier) pinned link by link; the physical loop→dispatch wire is an E2E gap. | Seam test `terminal_loop_seam_test.go` added (a real `agenticloop.MessageHandler` envelope settled by real dispatch); E2E tier → #1105 (follow-up, not a tag blocker). |
+
+### 7.2 Owner-run cross-agent round — Codex at `f1065152`: APPROVE
+
+No actionable findings. Codex verified: the `AGENT_LOOPS` read is observation of component-owned operational
+state, not a competing state owner; dispatch remains the owner of terminal routing/settlement; the INFO handoff
+trace at `processor/agentic-dispatch/terminal_settlement.go:218` is emitted once per routed handoff settlement,
+identifies loop and action, and adds no unbounded metric label. Focused verification at the reviewed head:
+`go test -race -count=1 ./agentic ./processor/agentic-loop ./processor/agentic-dispatch` — PASS;
+`go test -race -count=1 -tags=integration ./processor/agentic-dispatch -run '^(TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart|TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort)$'` — PASS.
+
+### 7.4 Archive / spec-sync check
+
+(pending — recorded by the narrow reviewer check after the archive commit)

@@ -228,7 +228,7 @@ a route as partial or route-less. A route-less classification SHALL apply only t
 - **WHEN** dispatch classifies the route
 - **THEN** it permanently rejects the terminal as a malformed partial route
 
-#### Scenario: route-less terminal without a user-facing decision
+#### Scenario: intentionally route-less loop
 
 - **GIVEN** persisted-state observation is complete
 - **AND** both `ChannelType` and `ChannelID` are empty after reconciliation
