@@ -402,6 +402,14 @@ before the omission, and record `shasum -a 256` equality of the restored file.
       `--- FAIL: TestValidateSuppressesOrphanOnlyForExternallyFedInput (0.00s)` (`TestValidateReportsRequiredStreamInputWithoutPublisher`
       still PASS, so unmarked orphans are guarded independently); `composition/analyze.go` restored, sha256
       `66fb8a8a…fa24` before and after. Log: scratchpad `mutations3.log`; tree clean and `go build ./...` OK after.
+- [x] 4.19 (review round 2, M3) Drop the stream-NAME check so any explicit stream may satisfy a subscriber →
+      `[applied]` → `--- FAIL: TestValidateStreamRequirementNeedsTheNamedStream (0.00s)` (`…SatisfiedByExplicitStream`
+      still PASS); `composition/analyze.go` restored, sha256 `859e22a1…26f9` before and after.
+- [x] 4.20 (review round 2, M3) Overlap (`SubjectMatches`) instead of cover (`SubjectCovers`) → `[applied]` →
+      `--- FAIL: TestValidateStreamRequirementNeedsCoverNotOverlap (0.00s)`; `composition/analyze.go` restored, same sha.
+- [x] 4.21 (review round 2, M4) Drop the output rejection of `external` → `[applied]` →
+      `--- FAIL: TestPortDefinitionExternalRoundTrip (0.00s)`; `component/port_resolver.go` restored, sha256
+      `e875f491…166e` before and after. Log: scratchpad `mutations4.log`; tree clean and `go build ./...` OK after.
 
 ## 5. Schema regeneration
 
