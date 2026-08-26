@@ -47,6 +47,7 @@ func resolveAndProjectPort(def PortDefinition, direction Direction) (Port, PortF
 		Direction:   direction,
 		Required:    def.Required,
 		Description: def.Description,
+		External:    def.External,
 		Config:      config,
 	}
 	return port, binding.facts(config), nil
@@ -129,11 +130,6 @@ func directionFieldEmpty(value any) bool {
 
 // Facts revalidates the current Port value and returns its immutable semantic projection.
 func (p Port) Facts() (PortFacts, error) {
-	_, facts, err := resolveAndProjectPort(PortDefinition{
-		Name:        p.Name,
-		Required:    p.Required,
-		Description: p.Description,
-		Config:      p.Config,
-	}, p.Direction)
+	_, facts, err := resolveAndProjectPort(definitionFromPort(p), p.Direction)
 	return facts, err
 }

@@ -285,3 +285,45 @@ func TestValidateStreamRequirementSatisfiedByExplicitStream(t *testing.T) {
 		t.Fatalf("stream_requirement findings = %d with a non-covering stream, want 1: %+v", len(findings), result.Errors)
 	}
 }
+
+// TestValidateSuppressesOrphanOnlyForExternallyFedInput — the external marker
+// suppresses exactly the no-publisher orphan finding of THAT input: an
+// unmarked required orphan in the same composition is still an error, and a
+// marked input that is fed but interface-mismatched still gets that finding.
+func TestValidateSuppressesOrphanOnlyForExternallyFedInput(t *testing.T) {
+	externalIn := component.PortDefinition{Name: "in", Required: true, External: true, Config: component.JetStreamPort{StreamName: "USER", Subjects: []string{"user.message.>"}}}
+	registry := fakeRegistry(t,
+		fakeSpec{name: "ui-fed", typ: "processor", inputs: []component.PortDefinition{externalIn}},
+		fakeSpec{name: "needy", typ: "processor", inputs: []component.PortDefinition{jetStreamIn("in", "NOBODY", "nobody.streams", true)}},
+		fakeSpec{name: "typed-src", typ: "input", outputs: []component.PortDefinition{natsOut("out", "typed.raw", &component.InterfaceContract{Type: "a.v1"})}},
+		fakeSpec{name: "typed-external-sink", typ: "output", inputs: []component.PortDefinition{{
+			Name: "in", Required: true, External: true, Config: component.NATSPort{Subject: "typed.raw", Interface: &component.InterfaceContract{Type: "b.v1"}},
+		}}},
+	)
+	result := validateRoundTrip(t, registry, compositionOf(config.ComponentConfigs{
+		"dispatch": instance("ui-fed", types.ComponentTypeProcessor),
+		"orphan":   instance("needy", types.ComponentTypeProcessor),
+		"src":      instance("typed-src", types.ComponentTypeInput),
+		"sink":     instance("typed-external-sink", types.ComponentTypeOutput),
+	}))
+
+	for _, finding := range append(append([]composition.Finding(nil), result.Errors...), result.Warnings...) {
+		if finding.Type == composition.TypeOrphanedPort && finding.Component == "dispatch" {
+			t.Fatalf("marked external input still reported as orphaned: %+v", finding)
+		}
+	}
+	orphans := findingsOfType(result.Errors, composition.TypeOrphanedPort)
+	if len(orphans) != 1 || orphans[0].Component != "orphan" || orphans[0].Port != "in" {
+		t.Fatalf("unmarked required orphan must stay an error: %+v", orphans)
+	}
+	mismatch := findingsOfType(result.Errors, composition.TypeInterfaceMismatch)
+	if len(mismatch) != 1 || !strings.Contains(mismatch[0].Component, "sink") {
+		t.Fatalf("interface_mismatch on the marked, fed input must be unaffected: %+v", mismatch)
+	}
+	// The marker is visible in the projection.
+	for _, node := range result.Graph.Nodes {
+		if node.Instance == "dispatch" && (len(node.Inputs) != 1 || !node.Inputs[0].External) {
+			t.Fatalf("projection lost the external marker: %+v", node.Inputs)
+		}
+	}
+}

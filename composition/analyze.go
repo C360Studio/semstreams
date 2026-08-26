@@ -57,6 +57,7 @@ func Analyze(declarations []component.Declaration, streams config.StreamConfigs)
 	}
 
 	analysis := graph.AnalyzeConnectivity()
+	external := externalInputs(sorted)
 	for _, node := range analysis.DisconnectedNodes {
 		result.add(Finding{
 			Type: TypeDisconnectedNode, Severity: severityOf(TypeDisconnectedNode, nil),
@@ -67,6 +68,13 @@ func Analyze(declarations []component.Declaration, streams config.StreamConfigs)
 	}
 	for _, port := range analysis.OrphanedPorts {
 		port := port
+		if port.Issue == flowgraph.IssueNoPublishers && external[portKey{port.ComponentName, port.PortName}] {
+			// The operator declared this input fed from outside the composition
+			// (PortDefinition.External): no in-graph publisher is expected, so
+			// the no-publisher orphan is not a finding. Every other finding on
+			// the port — stream requirement, interface contracts — is unaffected.
+			continue
+		}
 		result.add(orphanedPortFinding(port))
 	}
 	for _, warning := range graph.ValidateStreamRequirements() {
@@ -121,6 +129,21 @@ func explicitStreamCovers(streams config.StreamConfigs, subjects []string) bool 
 		}
 	}
 	return true
+}
+
+type portKey struct{ instance, port string }
+
+// externalInputs indexes the inputs declared fed from outside the composition.
+func externalInputs(declarations []component.Declaration) map[portKey]bool {
+	external := map[portKey]bool{}
+	for _, declaration := range declarations {
+		for _, port := range declaration.InputPorts {
+			if port.External {
+				external[portKey{declaration.InstanceName, port.Name}] = true
+			}
+		}
+	}
+	return external
 }
 
 func orphanedPortFinding(port flowgraph.OrphanedPort) Finding {

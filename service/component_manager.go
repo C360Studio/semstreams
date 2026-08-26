@@ -342,7 +342,7 @@ func (cm *ComponentManager) Initialize() error {
 
 	// ADR-100 P5: validate the admitted composition at the real boundary with
 	// the same interpreter the offline verb runs, over what was actually
-	// admitted. Findings are logged and retained for the HTTP projections.
+	// admitted; an error-severity finding refuses boot before the seal.
 	if err := cm.analyzeBootComposition(); err != nil {
 		return err
 	}
@@ -353,19 +353,12 @@ func (cm *ComponentManager) Initialize() error {
 }
 
 // analyzeBootComposition runs composition.Analyze over the admitted Registry
-// declarations, logs every finding, and retains the result for the HTTP
-// projections.
-//
-// The error-severity REFUSE is deliberately not flipped here. The design's
-// precondition (P3 before P5: measure every shipped configuration first) came
-// back red — 12 of 22 shipped configurations carry error findings from two
-// validator-rule classes the composition cannot observe (required stream
-// inputs fed from outside the composition by a UI or a rule action; JetStream
-// subscribers on subjects an explicit `streams` declaration already covers).
-// Flipping the refuse would make every agentic configuration unbootable.
-// Recorded as a `[~]` in openspec/changes/composition-validation-substrate/
-// tasks.md (3.5/3.6) for the owner's ruling; the refuse is one error return
-// away once the severity classes are ruled.
+// declarations and the boot configuration's explicit streams, logs every
+// finding, retains the result for the HTTP projections, and returns an error
+// — refusing boot — when the result has an error-severity finding. The
+// precondition the owner set for the refuse (every shipped configuration
+// measured clean, ADR-100 default 3) holds since the external-boundary marker
+// ruling of 2026-08-26.
 func (cm *ComponentManager) analyzeBootComposition() error {
 	snapshots := cm.registry.Snapshots(componentadmission.Access{})
 	declarations := make([]component.Declaration, 0, len(snapshots))
@@ -389,7 +382,16 @@ func (cm *ComponentManager) analyzeBootComposition() error {
 	cm.logger.Info("composition validated at boot",
 		"status", result.Status, "errors", len(result.Errors), "warnings", len(result.Warnings),
 		"components", len(result.Graph.Nodes), "edges", len(result.Graph.Edges))
-	return nil
+
+	if len(result.Errors) == 0 {
+		return nil
+	}
+	descriptions := make([]string, 0, len(result.Errors))
+	for _, finding := range result.Errors {
+		descriptions = append(descriptions, fmt.Sprintf("%s on %s/%s: %s", finding.Type, finding.Component, finding.Port, finding.Message))
+	}
+	return fmt.Errorf("composition validation refused boot with %d error finding(s): %s",
+		len(result.Errors), strings.Join(descriptions, "; "))
 }
 
 // BootFindings returns the composition result retained at Initialize, or nil

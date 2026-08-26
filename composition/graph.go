@@ -30,6 +30,7 @@ type PortView struct {
 	Direction    string `json:"direction"`
 	Type         string `json:"type"` // interface contract type, empty when undeclared
 	Required     bool   `json:"required"`
+	External     bool   `json:"external,omitempty"` // fed from outside the composition (component.PortDefinition.External)
 	ConnectionID string `json:"connection_id"`
 	Pattern      string `json:"pattern"`
 	Description  string `json:"description"`
@@ -54,6 +55,7 @@ func portViews(ports []component.Port, facts []component.PortFacts) []PortView {
 			Name:        port.Name,
 			Direction:   string(port.Direction),
 			Required:    port.Required,
+			External:    port.External,
 			Description: port.Description,
 		}
 		if index < len(facts) {

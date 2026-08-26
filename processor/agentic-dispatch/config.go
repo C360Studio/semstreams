@@ -61,7 +61,11 @@ func DefaultConfig() Config {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name: "user.message", Config: component.JetStreamPort{Subjects: []string{"user.message.>"}, StreamName: "USER"}, Required: true,
+					// External: the UI publishes user.message.> from outside the
+					// composition; no in-graph publisher is expected (ADR-100 owner
+					// ruling, 2026-08-26). A named override must restate it — a
+					// named merge is a complete replacement.
+					Name: "user.message", Config: component.JetStreamPort{Subjects: []string{"user.message.>"}, StreamName: "USER"}, Required: true, External: true,
 					Description: "User messages from all channels",
 				},
 				{

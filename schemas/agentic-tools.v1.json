@@ -499,6 +499,9 @@
               "description": {
                 "type": "string"
               },
+              "external": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               },
@@ -804,6 +807,9 @@
               },
               "description": {
                 "type": "string"
+              },
+              "external": {
+                "type": "boolean"
               },
               "name": {
                 "type": "string"

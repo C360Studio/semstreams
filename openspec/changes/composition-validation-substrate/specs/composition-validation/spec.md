@@ -12,8 +12,8 @@ required, kind, resource identity, NATS subjects, interface contract, in order) 
 constructed component; any difference SHALL fail admission with a classified invalid error that names the factory,
 the instance, and the first differing port. The generated catalog (`schemas/<factory>.v1.json`, the `types` HTTP
 operations, and the `list_components` tool) SHALL carry the declarer's output for an empty configuration as
-`default_ports`, or `ports_require_config: true` with the declarer's error text when an empty configuration does not
-declare.
+`default_ports` (each resolved port with its `external` marker when declared), or `ports_require_config: true` with
+the declarer's error text when an empty configuration does not declare.
 
 > `[~]` DEVIATION (tasks 3.1a, 2026-08-26): `objectstore`'s declarer does not honour the instance-name parameter of the
 > declarer contract above. Its factory has no instance name to give the constructor (`component.Factory` and
@@ -75,7 +75,9 @@ array non-nil; each finding SHALL carry `type`, `severity`, a non-empty `compone
 that set. Severity SHALL be error for `config_invalid`, `unknown_component`, `component_type_mismatch`,
 `component_config_invalid`, `port_declaration_error`, `exclusive_resource_conflict`, `connection_pattern_error`,
 `stream_requirement`, `interface_mismatch`, and for an `orphaned_port` that is a required stream input with no
-publisher; warning otherwise. Components SHALL be visited in instance-name order and edges SHALL be emitted in a
+publisher; warning otherwise. An input declared `external` (`component.PortDefinition.External` — fed from outside the
+composition, an operator statement) SHALL raise no `orphaned_port` finding for its missing in-graph publisher; every
+other finding on that port, and every unmarked required orphan, is unaffected. Components SHALL be visited in instance-name order and edges SHALL be emitted in a
 stable order, so two runs over equal inputs produce byte-equal JSON.
 
 #### Scenario: the vocabulary is closed
@@ -100,6 +102,16 @@ stable order, so two runs over equal inputs produce byte-equal JSON.
 - **THEN** the result carries one `orphaned_port` error naming the component and the port
 - **AND** an optional unfed input in the same composition is an `orphaned_port` warning
 - **AND** the test that verifies this is `TestValidateReportsRequiredStreamInputWithoutPublisher`
+
+#### Scenario: an externally fed required input is not an orphan
+
+- **GIVEN** a required stream input declared `external: true` with no publisher in the composition, an unmarked
+  required stream input with no publisher, and an `external` input whose in-graph publisher's interface differs
+- **WHEN** the composition is validated
+- **THEN** the marked input raises no `orphaned_port` finding, the unmarked orphan is still an `orphaned_port` error,
+  and the marked, fed input still carries its `interface_mismatch` error
+- **AND** the projection shows the marker on the port
+- **AND** the test that verifies this is `TestValidateSuppressesOrphanOnlyForExternallyFedInput`
 
 #### Scenario: interface contracts are checked on every derived edge
 
@@ -201,12 +213,6 @@ the result has an error, and SHALL retain the result as the boot composition's f
 SHALL serve that retained result verbatim and SHALL NOT compute a status of its own; `GET <components>/flowgraph`
 SHALL serve the retained result's `graph`, as JSON by default and as Mermaid when `format=mermaid` is requested.
 
-> `[~]` DEFERRED (tasks 3.6, 2026-08-26): the refuse is not flipped in PR #1101. The P3-before-P5 measurement (tasks 3.5,
-> re-measured after review round 1) leaves 9 of 22 shipped configurations with one error finding each, all
-> `orphaned_port` on `agentic-dispatch/user.message` — a required stream input the UI feeds from outside the
-> composition. Boot runs the analysis, logs and retains the result, and serves it; the "SHALL fail `Initialize`" clause
-> waits for the owner's ruling on that class.
-
 #### Scenario: an error finding refuses boot
 
 - **GIVEN** a boot configuration whose admitted composition yields a `stream_requirement` error
@@ -260,11 +266,6 @@ of the three SHALL require a NATS client, write anything, or carry a new payload
 Every checked-in composition the framework ships or tests with (`configs/**/*.json`, the e2e compose configurations
 under `docker/` and `test/e2e`) SHALL validate with no error finding against the registry its binary composes, and
 that assertion SHALL be a unit test so a configuration change that introduces an error is caught before boot.
-
-> `[~]` DEFERRED (tasks 3.5, 2026-08-26, re-measured after review round 1): 9 of 22 shipped configurations carry exactly
-> one error finding each — `orphaned_port` on `agentic-dispatch/user.message`, a required stream input the UI feeds from
-> outside the composition (owner ruling pending, tasks 3.5); the test exists and is skipped naming the task until the
-> owner rules.
 
 #### Scenario: the shipped configurations validate clean
 

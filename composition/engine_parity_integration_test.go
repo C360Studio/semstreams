@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
@@ -113,9 +114,27 @@ func TestValidateMatchesEngineFindingsForShippedConfigs(t *testing.T) {
 			for _, finding := range append(append([]composition.Finding(nil), result.Errors...), result.Warnings...) {
 				compositionSet[findingKey{finding.Type, finding.Component, finding.Port}] = finding.Message
 			}
+			// Inputs declared fed from outside the composition (the external-
+			// boundary marker, owner ruling 2026-08-26) raise no no-publisher
+			// orphan in the new validator; the engine predates the marker and
+			// still reports one. That is the one ruled departure from the
+			// oracle, recorded in tasks 3.2, and it is scoped to exactly that
+			// finding on exactly those ports.
+			external := map[findingKey]bool{}
+			for _, node := range result.Graph.Nodes {
+				for _, input := range node.Inputs {
+					if input.External {
+						external[findingKey{composition.TypeOrphanedPort, node.Instance, input.Name}] = true
+					}
+				}
+			}
 
 			for key, message := range engineSet {
 				if _, ok := compositionSet[key]; ok {
+					continue
+				}
+				if external[key] && strings.Contains(message, "no_publishers") {
+					t.Logf("disposition external-boundary marker: engine %s (%s) is suppressed by ruling", key, message)
 					continue
 				}
 				t.Errorf("engine emitted %s (%s); composition did not", key, message)

@@ -427,6 +427,8 @@ func portDifference(declared Port, declaredFacts PortFacts, constructed Port, co
 		return fmt.Sprintf("declared direction %q, constructed %q", declared.Direction, constructed.Direction)
 	case declared.Required != constructed.Required:
 		return fmt.Sprintf("declared required=%v, constructed %v", declared.Required, constructed.Required)
+	case declared.External != constructed.External:
+		return fmt.Sprintf("declared external=%v, constructed %v", declared.External, constructed.External)
 	case declaredFacts.Kind() != constructedFacts.Kind():
 		return fmt.Sprintf("declared kind %q, constructed %q", declaredFacts.Kind(), constructedFacts.Kind())
 	case declaredFacts.ResourceID() != constructedFacts.ResourceID():
@@ -773,12 +775,7 @@ func cloneAndProjectPorts(ports []Port) ([]Port, []PortFacts, error) {
 	cloned := make([]Port, len(ports))
 	facts := make([]PortFacts, len(ports))
 	for index, port := range ports {
-		resolved, projected, err := resolveAndProjectPort(PortDefinition{
-			Name:        port.Name,
-			Required:    port.Required,
-			Description: port.Description,
-			Config:      port.Config,
-		}, port.Direction)
+		resolved, projected, err := resolveAndProjectPort(definitionFromPort(port), port.Direction)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -881,9 +878,7 @@ func cloneComponentDeclaration(declaration Declaration) Declaration {
 func cloneResolvedPorts(ports []Port) []Port {
 	cloned := make([]Port, len(ports))
 	for index, port := range ports {
-		resolved, _, err := resolveAndProjectPort(PortDefinition{
-			Name: port.Name, Required: port.Required, Description: port.Description, Config: port.Config,
-		}, port.Direction)
+		resolved, _, err := resolveAndProjectPort(definitionFromPort(port), port.Direction)
 		if err != nil {
 			panic(fmt.Sprintf("clone retained port %q: %v", port.Name, err))
 		}

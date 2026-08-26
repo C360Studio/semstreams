@@ -135,6 +135,7 @@
                   "user.message.>"
                 ]
               },
+              "external": true,
               "name": "user.message",
               "required": true
             },
