@@ -417,8 +417,12 @@ See [ADR-028](docs/adr/028-orchestration-architecture.md) for the full rule-skel
 
 Polymorphic JSON deserialization via type-discriminated envelopes. Every new message type needs:
 
-1. `init()` registration in `payload_registry.go` with domain/category/version/factory
-2. `MarshalJSON` method wrapping payload in `BaseMessage` (use type alias to avoid recursion)
-3. Package import (blank import if needed) so `init()` runs
+1. `RegisterPayloads(reg *payloadregistry.Registry) error` in `payload_registry.go` — no `init()`, no global
+   singleton
+2. `MarshalJSON`/`UnmarshalJSON` marshal the payload's own fields via a type alias — never construct a
+   `BaseMessage` literal (its fields are unexported)
+3. An explicit `RegisterPayloads` call from `payloadbuiltins.Register` or the binary's own composition root
+   — nothing runs it automatically
 
-Use `/new-payload` for the step-by-step checklist with code templates. See [Payload Registry Guide](docs/concepts/15-payload-registry.md).
+Use `/new-payload` (Claude) or read `.agents/skills/new-payload/SKILL.md` for the step-by-step checklist
+with code templates. See [Payload Registry Guide](docs/concepts/15-payload-registry.md).

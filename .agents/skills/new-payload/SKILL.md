@@ -12,10 +12,19 @@ $ARGUMENTS
 
 ## Step 1: Define the Type
 
-Create your message struct with JSON tags and domain constants:
+Create your message struct implementing `message.Payload` (`Schema() message.Type`, `Validate() error`,
+`json.Marshaler`, `json.Unmarshaler`):
 
 ```go
 // yourpackage/types.go
+package yourpackage
+
+import (
+    "fmt"
+
+    "github.com/c360studio/semstreams/message"
+)
+
 const (
     Domain          = "yourdomain"
     CategoryYourCat = "your_category"
@@ -27,30 +36,49 @@ type YourMessage struct {
     Content string `json:"content"`
     // ... your fields
 }
+
+func (m *YourMessage) Schema() message.Type {
+    return message.Type{Domain: Domain, Category: CategoryYourCat, Version: Version}
+}
+
+func (m *YourMessage) Validate() error {
+    if m.ID == "" {
+        return fmt.Errorf("id is required")
+    }
+    return nil
+}
 ```
 
-## Step 2: Implement MarshalJSON
+If the payload is a graph fact (not just a transport envelope), also implement `Graphable`
+(`EntityID() string`, `Triples() []message.Triple`) — see
+`examples/processors/iot_sensor/payload.go` for a worked example with a federated entity ID and
+domain-specific predicates.
 
-**MUST wrap in BaseMessage. MUST use type alias to avoid infinite recursion.**
+## Step 2: Implement MarshalJSON / UnmarshalJSON
+
+`BaseMessage` has unexported fields — a payload's own `MarshalJSON` does **not** construct or wrap a
+`BaseMessage` literal. It marshals only its own data; `BaseMessage.MarshalJSON` (invoked via
+`message.NewBaseMessage(...)`, see Step 5) builds the `{"type":...,"payload":...}` envelope around it.
+
+**MUST use a type alias** so `json.Marshal`/`json.Unmarshal` don't recurse back into these same methods:
 
 ```go
 // yourpackage/types.go
 func (m *YourMessage) MarshalJSON() ([]byte, error) {
     type Alias YourMessage
-    return json.Marshal(&message.BaseMessage{
-        Type: message.MessageType{
-            Domain:   Domain,
-            Category: CategoryYourCat,
-            Version:  Version,
-        },
-        Payload: (*Alias)(m),
-    })
+    return json.Marshal((*Alias)(m))
+}
+
+func (m *YourMessage) UnmarshalJSON(data []byte) error {
+    type Alias YourMessage
+    return json.Unmarshal(data, (*Alias)(m))
 }
 ```
 
-## Step 3: Register in init()
+## Step 3: Register a RegisterPayloads function in your package
 
-Create a `payload_registry.go` file in your package:
+No `init()`. Add an exported `RegisterPayloads(reg *payloadregistry.Registry) error` function that the
+composition root calls explicitly at boot:
 
 ```go
 // yourpackage/payload_registry.go
@@ -58,85 +86,146 @@ package yourpackage
 
 import "github.com/c360studio/semstreams/payloadregistry"
 
-func init() {
-    err := payloadregistry.Register(&payloadregistry.Registration{
+// RegisterPayloads registers YourMessage (yourdomain.your_category.v1) with the
+// supplied registry. Called from payloadbuiltins.Register (or a product's own
+// composition root) at process bootstrap.
+func RegisterPayloads(reg *payloadregistry.Registry) error {
+    return reg.Register(&payloadregistry.Registration{
         Domain:      Domain,
         Category:    CategoryYourCat,
         Version:     Version,
         Description: "Description of your message type",
         Factory:     func() any { return &YourMessage{} },
     })
-    if err != nil {
-        panic("failed to register YourMessage: " + err.Error())
+}
+```
+
+`Register` validates `Domain`/`Category`/`Version`/`Factory` are non-empty, rejects a duplicate
+`domain.category.version`, and checks the factory-produced payload's `Schema()` matches the
+registration — all as a returned `error`, not a panic. Aggregate multiple registrations in one package
+with `errors.Join` (see `agentic/payload_registry.go`) if you're adding more than one type.
+
+## Step 4: Wire it into the composition root
+
+A `RegisterPayloads` function that nothing calls never runs. First-party framework payloads are wired
+into `payloadbuiltins.Register` (`payloadbuiltins/register.go`), which every binary calls at boot:
+
+```go
+// payloadbuiltins/register.go
+func Register(reg *payloadregistry.Registry) error {
+    var errs []error
+    track := func(err error) {
+        if err != nil {
+            errs = append(errs, err)
+        }
     }
+
+    track(message.RegisterPayloads(reg))
+    track(agentic.RegisterPayloads(reg))
+    // ... add yours here if it's first-party and always-on
+    track(yourpackage.RegisterPayloads(reg))
+
+    return errors.Join(errs...)
 }
 ```
 
-## Step 4: Import the Package
+Example/domain-specific or config-gated payloads (not first-party framework types) register directly at
+each binary's own composition root instead — see `cmd/e2e-semstreams/main.go`'s `buildPayloadRegistry`
+(calls `iotsensor.RegisterPayloads`, `document.RegisterPayloads`, `mission.RegisterPayloads` alongside
+`payloadbuiltins.Register`) and `cmd/semstreams/main.go`'s `registerPayloads`, which conditionally adds
+`graphresearch.RegisterPayloads` only `if graphresearch.Selected(cfg)`. Downstream products (semspec,
+semdragon) call `payloadbuiltins.Register(reg)` and layer their own `reg.Register(...)` calls on top.
 
-Ensure the package is imported somewhere so `init()` runs:
+**A type registered in one binary but not another silently half-migrates the deployment** — see the
+beta.18 case study in `CLAUDE.md`/`AGENTS.md` ("Breaking changes — E2E required before merge"). Check
+every binary explicitly (Step 7).
+
+## Step 5: Write a production-decoder round-trip test
+
+Drive the real publish wrap (`message.NewBaseMessage`) through the real decode path
+(`message.NewDecoder`/`payloadbuiltins.NewTestDecoder`) — never a hand-rolled shape cast against an
+anonymous struct. Example, `processor/gated-dag/payload_roundtrip_test.go:19`
+(`TestDispatchMessage_ProductionDecoderRoundTrip`):
 
 ```go
-import _ "github.com/c360studio/semstreams/yourpackage"
-```
+func TestYourMessage_ProductionDecoderRoundTrip(t *testing.T) {
+    msg := &yourpackage.YourMessage{ID: "test-1", Content: "hello"}
+    base := message.NewBaseMessage(msg.Schema(), msg, "test")
 
-Check existing blank imports in `cmd/` or `service/` entry points for the pattern.
-
-## Step 5: Write Round-Trip Test
-
-```go
-func TestYourMessage_RoundTrip(t *testing.T) {
-    original := &YourMessage{ID: "test-1", Content: "hello"}
-
-    data, err := json.Marshal(original)
+    data, err := json.Marshal(base)
     require.NoError(t, err)
 
-    // Verify JSON has type wrapper
-    require.Contains(t, string(data), `"domain":"yourdomain"`)
-
-    var base message.BaseMessage
-    err = json.Unmarshal(data, &base)
+    decoded, err := payloadbuiltins.NewTestDecoder(t).Decode(data)
     require.NoError(t, err)
 
-    result, ok := base.Payload.(*YourMessage)
-    require.True(t, ok, "expected *YourMessage, got %T", base.Payload)
-    assert.Equal(t, original.ID, result.ID)
-    assert.Equal(t, original.Content, result.Content)
+    got, ok := decoded.Payload().(*yourpackage.YourMessage)
+    require.Truef(t, ok, "decoded payload must be *YourMessage, got %T", decoded.Payload())
+    require.Equal(t, "test-1", got.ID)
 }
 ```
+
+If your package isn't in `payloadbuiltins.Register`, build a per-test registry instead:
+`reg := payloadbuiltins.NewTestRegistry(t); require.NoError(t, yourpackage.RegisterPayloads(reg))`, then
+`message.NewDecoder(reg)`.
+
+## Step 6: Run task schema:generate if it affects schemas
+
+`task schema:generate` (`cmd/openapi-generator`) walks `component.Registry` — component config schemas
+and the OpenAPI spec. It does not read `payloadregistry` at all, so registering a new payload type by
+itself produces no schema diff. Run it only if this change also touches a component's config surface
+(a new allowed-type enum value, a new `component.PropertySchema` field, etc.):
+
+```bash
+task schema:generate
+git diff schemas/ specs/openapi.v3.yaml   # must be empty, or commit the diff
+```
+
+## Step 7: Grep every binary that should carry this type
+
+```bash
+grep -rn "yourpackage\." cmd/
+```
+
+If a binary that should execute your `RegisterPayloads` call doesn't show up, its registry is
+half-migrated — messages of this type will fail to decode there with `unregistered payload type:
+domain.category.version` (see `message/base_message.go`'s `UnmarshalJSON`; there is no silent fallback
+for a registered-elsewhere type — the fact lane rejects it outright).
 
 ## Verification Checklist
 
-- [ ] Domain/Category/Version constants match between registration and MarshalJSON
-- [ ] MarshalJSON uses type alias (`type Alias YourMessage`) to prevent recursion
-- [ ] `payload_registry.go` exists with `init()` function
-- [ ] Package is imported (blank import if needed) in an entry point
-- [ ] Round-trip test passes: `go test -run TestYourMessage_RoundTrip ./yourpackage/...`
-- [ ] `task schema:generate` produces no diff (commit schemas if changed)
+- [ ] Domain/Category/Version constants match between `Schema()` and the `Registration`
+- [ ] `MarshalJSON`/`UnmarshalJSON` use a type alias (`type Alias YourMessage`) — no `BaseMessage` literal
+- [ ] `RegisterPayloads(reg *payloadregistry.Registry) error` exists in the package, no `init()`
+- [ ] `RegisterPayloads` is called from `payloadbuiltins.Register` or the product's composition root
+- [ ] Production-decoder round-trip test passes:
+      `go test -run TestYourMessage_ProductionDecoderRoundTrip ./yourpackage/...`
+- [ ] `task schema:generate` produces no diff (commit `schemas/`/`specs/openapi.v3.yaml` if it does)
+- [ ] `grep -rn "yourpackage\." cmd/` shows the registration call in every binary that needs it
 
 ## Common Mistakes
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| JSON missing `"type"` wrapper | Missing MarshalJSON | Implement MarshalJSON wrapping in BaseMessage |
-| Deserializes as `*message.GenericPayload` | Domain/Category/Version mismatch | Ensure constants match between registration and MarshalJSON |
-| Payload never appears in registry | Package not imported | Add blank import in entry point |
-| Stack overflow on Marshal | No type alias in MarshalJSON | Add `type Alias YourMessage` before marshal call |
-| Schema validation fails in CI | Forgot `task schema:generate` | Run it and commit the generated files |
+| `unregistered payload type: domain.category.version` at decode | Package's `RegisterPayloads` never called | Wire it into `payloadbuiltins.Register` or the binary's composition root |
+| Stack overflow on Marshal/Unmarshal | No type alias in `MarshalJSON`/`UnmarshalJSON` | Add `type Alias YourMessage` before the call |
+| `Register` returns a schema-consistency error | `Schema()` domain/category/version don't match the `Registration` | Use the same constants in both places |
+| `Register` returns "already registered" | Duplicate `domain.category.version` | Pick a distinct triple, or check you're not registering twice |
+| Works in `cmd/e2e-semstreams`, fails in `cmd/semstreams` (or vice versa) | Registered in one binary's composition root, not the other | Grep every binary (Step 7) |
 
 ## Debugging
 
 ```go
-// List all registered payloads
-payloads := payloadregistry.Global().List()
-for msgType, reg := range payloads {
+// List all registered payloads on a *payloadregistry.Registry instance
+// (deps.PayloadRegistry in a component, or a test registry)
+for msgType, reg := range registry.List() {
     fmt.Printf("%s: %s\n", msgType, reg.Description)
 }
 
-// Verify JSON structure
-data, _ := json.MarshalIndent(msg, "", "  ")
+// Verify the wire shape a BaseMessage produces
+base := message.NewBaseMessage(msg.Schema(), msg, "debug")
+data, _ := json.MarshalIndent(base, "", "  ")
 fmt.Println(string(data))
-// Should show: {"type":{"domain":"...","category":"...","version":"..."},"payload":{...}}
+// {"id":"...","type":{"domain":"...","category":"...","version":"..."},"payload":{...},"meta":{...}}
 ```
 
 Read `docs/concepts/15-payload-registry.md` for full documentation.
