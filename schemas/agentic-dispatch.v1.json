@@ -933,6 +933,16 @@
           "pattern": "stream",
           "description": "Approval-pending events used to populate the dispatch HTTP approval handler's CallID lookup",
           "kind": "jetstream"
+        },
+        {
+          "name": "agent_loops",
+          "direction": "input",
+          "type": "",
+          "required": false,
+          "connection_id": "kv:AGENT_LOOPS",
+          "pattern": "read",
+          "description": "Persisted loop records read for terminal route reconciliation, workflow origin resolution, and the /activity stream",
+          "kind": "kv-read"
         }
       ],
       "outputs": [
