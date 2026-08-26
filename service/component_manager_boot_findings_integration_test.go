@@ -64,7 +64,8 @@ func registerDeclaredFactory(t *testing.T, registry *component.Registry, name st
 }
 
 func bootComponentManager(
-	t *testing.T, testClient *natsclient.TestClient, registry *component.Registry, components config.ComponentConfigs,
+	t *testing.T, testClient *natsclient.TestClient, registry *component.Registry,
+	components config.ComponentConfigs, streams config.StreamConfigs,
 ) (*ComponentManager, error) {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -72,6 +73,7 @@ func bootComponentManager(
 		Version:    "1.0.0",
 		Platform:   config.PlatformConfig{Org: "test", ID: "boot-findings", Environment: "test"},
 		Components: components,
+		Streams:    streams,
 	}, testClient.Client, logger)
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +102,7 @@ func processorInstance(factory string) types.ComponentConfig {
 // Registry is not sealed as a running composition.
 func TestComponentManagerRefusesBootOnErrorFinding(t *testing.T) {
 	t.Skip("[~] composition-validation-substrate tasks 3.6: the boot refuse is not flipped — the P3-before-P5 " +
-		"measurement found error findings in 12 of 22 shipped configurations from two validator classes " +
+		"measurement leaves 9 of 22 shipped configurations with an orphaned_port error on agentic-dispatch/user.message " +
 		"pending the owner's ruling (tasks 3.5); the test stays as the target state")
 	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
 	registry := component.NewRegistry()
@@ -114,7 +116,7 @@ func TestComponentManagerRefusesBootOnErrorFinding(t *testing.T) {
 	_, err := bootComponentManager(t, testClient, registry, config.ComponentConfigs{
 		"pub": processorInstance("core-publisher"),
 		"sub": processorInstance("stream-consumer"),
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("NewComponentManager booted a composition with a stream_requirement error")
 	}
@@ -142,7 +144,7 @@ func TestComponentManagerExposesBootFindings(t *testing.T) {
 	})
 	manager, err := bootComponentManager(t, testClient, registry, config.ComponentConfigs{
 		"alone": processorInstance("lonely"),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("boot: %v", err)
 	}
@@ -188,7 +190,7 @@ func TestGraphProjectionMatchesAdmittedComposition(t *testing.T) {
 	manager, err := bootComponentManager(t, testClient, registry, config.ComponentConfigs{
 		"pub": processorInstance("js-publisher"),
 		"sub": processorInstance("js-consumer"),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("boot: %v", err)
 	}
@@ -240,6 +242,41 @@ func TestGraphProjectionMatchesAdmittedComposition(t *testing.T) {
 	}
 	if strings.Count(rendered, "-->") != 1 {
 		t.Fatalf("Mermaid renders %d edges, want 1:\n%s", strings.Count(rendered, "-->"), rendered)
+	}
+}
+
+// TestComponentManagerBootFindingsHonourExplicitStreams — at the real
+// boundary too, a JetStream input fed by a core-NATS output is not a
+// stream_requirement finding when the boot configuration's explicit `streams`
+// cover its subjects: the boot analysis receives the configuration's streams,
+// not only its components.
+func TestComponentManagerBootFindingsHonourExplicitStreams(t *testing.T) {
+	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
+	registry := component.NewRegistry()
+	registerDeclaredFactory(t, registry, "core-publisher", component.PortConfig{
+		Outputs: []component.PortDefinition{{Name: "out", Required: true, Config: component.NATSPort{Subject: "boot.data"}}},
+	})
+	registerDeclaredFactory(t, registry, "stream-consumer", component.PortConfig{
+		Inputs: []component.PortDefinition{{Name: "in", Required: true, Config: component.JetStreamPort{StreamName: "BOOT", Subjects: []string{"boot.data"}}}},
+	})
+	manager, err := bootComponentManager(t, testClient, registry, config.ComponentConfigs{
+		"pub": processorInstance("core-publisher"),
+		"sub": processorInstance("stream-consumer"),
+	}, config.StreamConfigs{"BOOT": {Subjects: []string{"boot.>"}}})
+	if err != nil {
+		t.Fatalf("boot: %v", err)
+	}
+	retained := manager.bootFindings
+	if retained == nil {
+		t.Fatal("ComponentManager retained no boot findings")
+	}
+	for _, finding := range retained.Errors {
+		if finding.Type == composition.TypeStreamRequirement {
+			t.Fatalf("boot analysis reported stream_requirement although streams.BOOT covers boot.data: %+v", finding)
+		}
+	}
+	if len(retained.Graph.Edges) != 1 {
+		t.Fatalf("edges = %d, want the pub→sub edge", len(retained.Graph.Edges))
 	}
 }
 

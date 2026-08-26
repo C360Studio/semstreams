@@ -65,7 +65,7 @@ func Validate(catalog *component.Registry, cfg *config.Config) (*Result, error) 
 		declarations = append(declarations, declaration)
 	}
 
-	analysis := Analyze(declarations)
+	analysis := Analyze(declarations, working.Streams)
 	result.Errors = append(result.Errors, analysis.Errors...)
 	result.Warnings = append(result.Warnings, analysis.Warnings...)
 	result.Graph = analysis.Graph

@@ -315,8 +315,9 @@ func (c *ObservabilityClient) ValidateFlowGraph(ctx context.Context) (*compositi
 // CheckFlowHealth reads the boot composition findings and returns an error on
 // any error-severity finding or on a disconnected node that is not one of the
 // gateway/request-driven components expected to have no stream edges. Boot
-// already refuses error findings (ADR-100 P5), so a running process reports
-// none; the disconnected-node filter is the e2e tier's stricter local rule.
+// logs and retains the findings (ADR-100 P5; whether an error refuses boot is
+// the owner's pending ruling), so this pre-flight is where an error finding
+// stops a tier; the disconnected-node filter is the tier's stricter local rule.
 func (c *ObservabilityClient) CheckFlowHealth(ctx context.Context) error {
 	result, err := c.ValidateFlowGraph(ctx)
 	if err != nil {

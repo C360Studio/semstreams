@@ -172,12 +172,13 @@ Premises (measured at `5cc0c7fb`; re-measure at the claim head and amend here): 
       `"objectstore"` to `resolveObjectStorePorts` (now the named constant `constructedInstanceName`, `:143`); the factory
       signature carries no instance name and `component.Dependencies` has no such field, so the ADMITTED declaration NEVER
       carries the real instance name — its `store-provide` port is `store:objectstore` for every instance. Every shipped
-      instance is named `objectstore` (17 configs, `grep -rn '"name": "objectstore"' configs/`), so shipped compositions
+      instance is named `objectstore` (16 configs, `grep -rl '"name": "objectstore"' configs/`), so shipped compositions
       cannot observe the difference. The declarer (`:154`) therefore ignores its `instanceName` parameter and mirrors the
       constructor, so parity holds and nothing changes at runtime; the spec's "pure function of ... the instance name"
       is NOT honoured for this one factory. Threading the real instance name into the constructor would change the
       store-provide resource identity (`store:<instance>`) at runtime for any adopter naming the instance differently —
       an owner ruling (FILE: objectstore constant instance name, inventory §12.2). Neither side is codified in a test.
+      Written into the delta as a `[~]` note under "Port declarations are static facts of a registration" (review H3).
 - [x] 3.2 **P2 + P6.** `composition/` package: constants, `Finding`, `Result`, `Graph`, `Validate`, `Analyze`,
       `Mermaid`; `flowgraph.BuildFromDeclarations`. Move `engine/validator.go:300-623` logic in (severity table in
       one function; interface compatibility exact-match preserved). `TestValidateMatchesEngineFindingsForShippedConfigs`
@@ -194,7 +195,10 @@ Premises (measured at `5cc0c7fb`; re-measure at the claim head and amend here): 
       `TestValidateIsDeterministic`/`TestMermaidIsDeterministic` could not hold. Engine parity (dropped-step detector):
       `go test -race -tags=integration ./composition/ -run TestValidateMatchesEngineFindingsForShippedConfigs -v` →
       `--- PASS: TestValidateMatchesEngineFindingsForShippedConfigs (1.29s)` / `ok github.com/c360studio/semstreams/composition 2.737s`
-      over all 22 shipped configs, two-way on the engine's vocabulary. Differences surfaced and their dispositions:
+      over all 22 shipped configs, two-way on the engine's vocabulary — of which the shipped configs exhibit only
+      `disconnected_node`, `orphaned_port`, `missing_interface`, and `empty_composition`; `interface_mismatch`,
+      `unknown_component`, and `port_declaration_error` are exercised by the unit tests (`TestValidateReportsInterfaceMismatch`
+      caught the 4.4 omission; the oracle did not), not by the oracle (review M5). Differences surfaced and their dispositions:
       (1) with only a NATS client the engine could not construct `agentic-dispatch`/`agentic-model` (ModelRegistry) and
       `lifecycle-gateway` (LifecycleManager), and `engine/validator.go:120-133` returns build errors only and SKIPS
       connectivity when any node fails — an oracle that bails is no oracle; disposition: added
@@ -222,68 +226,62 @@ Premises (measured at `5cc0c7fb`; re-measure at the claim head and amend here): 
 - [~] 3.5 **Measure shipped compositions.** Run `go run ./cmd/semstreams validate <path>` over every file 2.4 walks;
       paste the error findings here. Fix each shipped configuration or record it as FILED #n with the owner's
       disposition. 2.4 MUST be green before 3.6 flips the boot refuse.
-      MEASURED (`TestValidateShippedConfigsHaveNoErrorFindings` over the union registry core + graph-research + OTEL +
-      the e2e examples, 22 `config.Config` documents under `configs/`; `docker/` and `test/e2e/` hold no JSON configs),
-      verbatim per file:
-      ../configs/agentic.json: status=errors errors=1 warnings=11 nodes=7 edges=117
-        error finding orphaned_port on agentic-dispatch/user.message: input port 'user.message' (stream): no_publishers
-      ../configs/cloud-federation.json: status=warnings errors=0 warnings=1 nodes=2 edges=1
-      ../configs/e2e-structural.json: status=warnings errors=0 warnings=10 nodes=17 edges=16
-      ../configs/edge-federation.json: status=valid errors=0 warnings=0 nodes=3 edges=2
-      ../configs/examples/research-graph-pipeline.json: status=errors errors=6 warnings=10 nodes=13 edges=95
-        error finding orphaned_port on agentic-dispatch/user.message: input port 'user.message' (stream): no_publishers
-        error finding orphaned_port on research-graph-assess/assess_trigger: input port 'assess_trigger' (stream): no_publishers
-        error finding orphaned_port on research-graph-classify/classify_trigger: input port 'classify_trigger' (stream): no_publishers
-        error finding orphaned_port on research-graph-execute/execute_trigger: input port 'execute_trigger' (stream): no_publishers
-        error finding orphaned_port on research-graph-route/route_trigger: input port 'route_trigger' (stream): no_publishers
-        error finding orphaned_port on research-graph-synthesize/synthesize_trigger: input port 'synthesize_trigger' (stream): no_publishers
-      ../configs/flows/crud-tools-test.json: status=errors errors=1 warnings=9 nodes=7 edges=85
-        error finding orphaned_port on agentic-dispatch/user.message: input port 'user.message' (stream): no_publishers
-      ../configs/flows/deep-research-test.json: status=errors errors=1 warnings=9 nodes=7 edges=86
-        error finding orphaned_port on agentic-dispatch/user.message: input port 'user.message' (stream): no_publishers
-      ../configs/flows/deep-research.json: status=errors errors=1 warnings=9 nodes=8 edges=166
-        error finding orphaned_port on agentic-dispatch/user.message: input port 'user.message' (stream): no_publishers
-      ../configs/flows/lesson-example.json: status=errors errors=1 warnings=9 nodes=6 edges=72
-        error finding orphaned_port on agentic-dispatch/user.message: input port 'user.message' (stream): no_publishers
-      ../configs/flows/ops-agent-test.json: status=errors errors=1 warnings=9 nodes=6 edges=72
-        error finding orphaned_port on agentic-dispatch/user.message: input port 'user.message' (stream): no_publishers
-      ../configs/flows/ops-agent.json: status=errors errors=1 warnings=9 nodes=6 edges=72
-        error finding orphaned_port on agentic-dispatch/user.message: input port 'user.message' (stream): no_publishers
-      ../configs/gemini-example.json: status=warnings errors=0 warnings=1 nodes=0 edges=0
-      ../configs/graph-backend.json: status=warnings errors=0 warnings=9 nodes=5 edges=3
-      ../configs/hello-world.json: status=warnings errors=0 warnings=7 nodes=6 edges=4
-      ../configs/lifecycle-flow.json: status=errors errors=1 warnings=1 nodes=5 edges=4
-        error finding stream_requirement on graph-ingest/mission_in: JetStream subscriber expects a stream for subjects [mission.processed.entity] but its publishers [mission-command] use core NATS (no stream will be created)
-      ../configs/protocol-flow.json: status=warnings errors=0 warnings=11 nodes=12 edges=9
-      ../configs/research-graph-e2e.json: status=errors errors=6 warnings=10 nodes=13 edges=95
-        error finding orphaned_port on agentic-dispatch/user.message: input port 'user.message' (stream): no_publishers
-        error finding orphaned_port on research-graph-assess/assess_trigger: input port 'assess_trigger' (stream): no_publishers
-        error finding orphaned_port on research-graph-classify/classify_trigger: input port 'classify_trigger' (stream): no_publishers
-        error finding orphaned_port on research-graph-execute/execute_trigger: input port 'execute_trigger' (stream): no_publishers
-        error finding orphaned_port on research-graph-route/route_trigger: input port 'route_trigger' (stream): no_publishers
-        error finding orphaned_port on research-graph-synthesize/synthesize_trigger: input port 'synthesize_trigger' (stream): no_publishers
-      ../configs/semantic-8b.json: status=warnings errors=0 warnings=12 nodes=19 edges=20
-      ../configs/semantic-frontier.json: status=warnings errors=0 warnings=12 nodes=19 edges=20
-      ../configs/semantic.json: status=warnings errors=0 warnings=12 nodes=19 edges=20
-      ../configs/statistical.json: status=warnings errors=0 warnings=12 nodes=19 edges=20
-      ../configs/structural.json: status=warnings errors=0 warnings=10 nodes=17 edges=17
-      Twelve configs carry error findings, ALL from two validator classes the composition cannot observe — none is a
-      configuration defect a config edit should absorb:
-      (a) `orphaned_port` error = required stream input with no publisher IN THE COMPOSITION, where the publisher is
-          external by design: `agentic-dispatch/user.message` (the UI publishes `user.message.>`; 9 configs) and the
-          five research-graph `*_trigger` inputs (rule-processor `publish_message` actions publish
-          `component.<stage>.<loop>`; rules are not ports; 2 configs). The severity rule is the engine's, moved
-          verbatim as the delta specifies; the engine judged saved diagrams, never a boot gate.
-      (b) `stream_requirement` on `lifecycle-flow.json` `graph-ingest/mission_in`: the config declares an explicit
-          `streams.MISSION` on `mission.>`, so the core-NATS publish lands in that stream and the JetStream subscriber
-          is fed; `flowgraph.ValidateStreamRequirements` (moved from `component_manager_http.go`) cannot see explicit
-          `streams` declarations. The lifecycle e2e tier does not call `CheckFlowHealth`, which is why the pre-existing
-          "critical" verdict never bit. `mission-command` requires core-NATS kinds, so the config cannot be "fixed" to
-          jetstream.
-      Disposition needed from the owner (FILE: both): rule (a) → warning, or a port-grammar way to say "fed externally";
-      rule (b) → explicit-streams-aware. Neither the severity table nor the factory defaults were changed here (the
-      delta binds both); the test stays as the target state and is `t.Skip`ped naming this task
-      (`composition/shipped_configs_test.go:69`).
+      MEASURED, review round 1 (H1 + H2 landed; `go build ./cmd/e2e-semstreams && e2e-semstreams validate <path>` over
+      the 22 `config.Config` documents under `configs/` against the union registry core + graph-research + OTEL + the
+      e2e examples; `docker/` and `test/e2e/` hold no JSON configs), verbatim per file:
+      configs/agentic.json: exit=1 status=errors errors=1 warnings=11 nodes=7 edges=117
+        error orphaned_port agentic-dispatch/user.message: input port 'user.message' (stream): no_publishers
+      configs/cloud-federation.json: exit=0 status=warnings errors=0 warnings=1 nodes=2 edges=1
+      configs/e2e-structural.json: exit=0 status=warnings errors=0 warnings=10 nodes=17 edges=16
+      configs/edge-federation.json: exit=0 status=valid errors=0 warnings=0 nodes=3 edges=2
+      configs/examples/research-graph-pipeline.json: exit=1 status=errors errors=1 warnings=9 nodes=13 edges=100
+        error orphaned_port agentic-dispatch/user.message: input port 'user.message' (stream): no_publishers
+      configs/flows/crud-tools-test.json: exit=1 status=errors errors=1 warnings=9 nodes=7 edges=85
+        error orphaned_port agentic-dispatch/user.message: input port 'user.message' (stream): no_publishers
+      configs/flows/deep-research-test.json: exit=1 status=errors errors=1 warnings=9 nodes=7 edges=86
+        error orphaned_port agentic-dispatch/user.message: input port 'user.message' (stream): no_publishers
+      configs/flows/deep-research.json: exit=1 status=errors errors=1 warnings=9 nodes=8 edges=166
+        error orphaned_port agentic-dispatch/user.message: input port 'user.message' (stream): no_publishers
+      configs/flows/lesson-example.json: exit=1 status=errors errors=1 warnings=9 nodes=6 edges=72
+        error orphaned_port agentic-dispatch/user.message: input port 'user.message' (stream): no_publishers
+      configs/flows/ops-agent-test.json: exit=1 status=errors errors=1 warnings=9 nodes=6 edges=72
+        error orphaned_port agentic-dispatch/user.message: input port 'user.message' (stream): no_publishers
+      configs/flows/ops-agent.json: exit=1 status=errors errors=1 warnings=9 nodes=6 edges=72
+        error orphaned_port agentic-dispatch/user.message: input port 'user.message' (stream): no_publishers
+      configs/gemini-example.json: exit=0 status=warnings errors=0 warnings=1 nodes=0 edges=0
+      configs/graph-backend.json: exit=0 status=warnings errors=0 warnings=9 nodes=5 edges=3
+      configs/hello-world.json: exit=0 status=warnings errors=0 warnings=7 nodes=6 edges=4
+      configs/lifecycle-flow.json: exit=0 status=warnings errors=0 warnings=1 nodes=5 edges=4
+      configs/protocol-flow.json: exit=0 status=warnings errors=0 warnings=11 nodes=12 edges=9
+      configs/research-graph-e2e.json: exit=1 status=errors errors=1 warnings=9 nodes=13 edges=100
+        error orphaned_port agentic-dispatch/user.message: input port 'user.message' (stream): no_publishers
+      configs/semantic-8b.json: exit=0 status=warnings errors=0 warnings=12 nodes=19 edges=20
+      configs/semantic-frontier.json: exit=0 status=warnings errors=0 warnings=12 nodes=19 edges=20
+      configs/semantic.json: exit=0 status=warnings errors=0 warnings=12 nodes=19 edges=20
+      configs/statistical.json: exit=0 status=warnings errors=0 warnings=12 nodes=19 edges=20
+      configs/structural.json: exit=0 status=warnings errors=0 warnings=10 nodes=17 edges=17
+      TOTAL 22 configs; 9 with error findings
+      Dispositions:
+      (a) FIXED, config defect (review H1): `configs/research-graph-e2e.json` and `configs/examples/research-graph-pipeline.json`
+          declared the rule-processor's `component.dispatch` output on the 2-token subject `component.*` while the five
+          `*_trigger` inputs subscribe on 3-token `component.<stage>.>`; `flowgraph.matchTokens` never overlaps those,
+          so the declared publisher never reached its own subscribers, and the rule-pack subjects
+          (`configs/rules/research-graph/*.json:24`) are 3-token. Changed the one token to `component.>` in both files
+          (runtime-inert: `processor/rule/publisher.go` uses output ports only for an exact single-subject match).
+          Both configs: 6 errors → 1; edges 95 → 100.
+      (b) FIXED, validator model gap (review H2): `stream_requirement` now consults the configuration's explicit
+          `streams` at both evidence classes — `composition.Analyze(declarations, streams config.StreamConfigs)`
+          (`composition/analyze.go`; coverage through `flowgraph.SubjectMatches`, the same matcher edge derivation uses),
+          `Validate` passes `cfg.Streams`, boot passes the boot configuration's `Streams` (`ComponentManager.bootStreams`,
+          captured in `NewComponentManager`). `configs/lifecycle-flow.json`: 1 error → 0.
+      (c) PENDING OWNER (review H4 — not acted on): the 9 remaining errors are one class, `agentic-dispatch/user.message`
+          — a required JetStream input the UI feeds from outside the composition (dispatch's own HTTP path publishes
+          `agent.task`/`agent.approval_response`, never `user.message.>`; every agentic config declares `streams.USER`).
+          Options for the owner: (i) `Required: false` on the port default (`processor/agentic-dispatch/config.go:64`),
+          (ii) an "externally fed" port marker (new grammar surface), (iii) a severity downgrade. When ruled, the refuse
+          flips (3.6) and `TestValidateShippedConfigsHaveNoErrorFindings` / `TestComponentManagerRefusesBootOnErrorFinding`
+          un-skip. Neither the severity table nor the factory defaults were changed here; the test stays as the target
+          state and is `t.Skip`ped naming this task.
 - [~] 3.6 **P5.** `ComponentManager.Initialize`: `Analyze(registry.Snapshots)` before `SealComposition`; log; refuse
       on error (per the 1.2 ruling); retain the result; `handleFlowValidation`/`handleFlowGraph` become projections of
       the retained result (delete `component_manager_http.go:677-683` status logic). Update
@@ -298,7 +296,8 @@ Premises (measured at `5cc0c7fb`; re-measure at the claim head and amend here): 
       `TestComponentManagerExposesBootFindings`, `TestGraphProjectionMatchesAdmittedComposition`,
       `TestFlowValidationHandlerProjectsLibraryResult`.
       NOT DONE — the REFUSE (`Initialize` returning an error on an error-severity finding): 3.5's measurement is red for
-      12 of 22 shipped configs; flipping the refuse would make every agentic configuration unbootable. The owner's
+      9 of 22 shipped configs (one class, `agentic-dispatch/user.message`, owner ruling pending — review H4); flipping
+      the refuse would make every agentic configuration unbootable. The owner's
       default (3) makes the measurement the precondition, so the refuse waits for the 3.5 ruling; it is one error
       return in `analyzeBootComposition` (`component_manager.go:365`, comment names this task).
       `TestComponentManagerRefusesBootOnErrorFinding` stays as the target state and is `t.Skip`ped naming this task
@@ -427,6 +426,20 @@ before the omission, and record `shasum -a 256` equality of the restored file.
 
 - [ ] 7.1 `semstreams-reviewer` on the GREEN + §4 + §5 head: verdict, every finding and its disposition (FIXED /
       FILED #n / ruling) recorded here. Findings on unused paths are FILED, not fixed.
+      Round 1 (Fable, at `0b00749d`): REQUEST CHANGES — nothing BLOCKING, 4 HIGH, 6 MEDIUM. Dispositions:
+      H1 FIXED (3.5a: research-graph configs `component.*` → `component.>`); H2 FIXED (3.5b: `Analyze(declarations,
+      streams config.StreamConfigs)` — the second parameter is the type the framework already owns for explicit
+      streams, both evidence classes hold it, and nil means none; `flowgraph.SubjectMatches` exported so coverage uses
+      the edge matcher; scenario "an explicit stream declaration satisfies a JetStream subscriber" + tests
+      `TestValidateStreamRequirementSatisfiedByExplicitStream` (unit) and `TestComponentManagerBootFindingsHonourExplicitStreams`
+      (integration) PASS; omissions 4.15/4.16 below); H3 FIXED (objectstore `[~]` written under the P1 requirement;
+      conformance D2/DEVIATION corrected); H4 PENDING OWNER (3.5c; not acted on); M1 FIXED (`composition/doc.go`,
+      `CheckFlowHealth` comment, "17" → 16 configs); M2 FIXED (`docs/basics/05-first-processor.md` and
+      `.claude/skills/semstreams-dev/SKILL.md` registration snippets carry `Ports`/`DeclarePorts`); M4 PENDING OWNER
+      (full-catalog verbs vs `Selected(cfg)` boot gating); M5 FIXED (3.2 names the exercised oracle subset); Q8 FIXED
+      (delta GIVEN reworded: KV writers → `connection_pattern_error`, same network address → `exclusive_resource_conflict`);
+      NITs FIXED (`cli.IsVerb` exported and used by both binaries instead of a duplicated verb switch; Mermaid edge sort
+      tie-breaks on Pattern and ConnectionID). Whether the 38 `DeclarePorts` exports stay exported: PENDING OWNER.
 - [ ] 7.2 Owner-run Codex round where the owner asks for it: verdict and dispositions recorded here; each fix
       re-enters 7.1 and re-runs the focused commands of 2.11 with `-v`.
 - [ ] 7.3 `conformance.md`: replace every `__` placeholder with the measured `file:line` at the head that carries the

@@ -392,6 +392,15 @@ func (g *FlowGraph) buildSubscriberMap() map[component.InteractionPattern]map[st
 	return subscribers
 }
 
+// SubjectMatches reports whether two NATS subject expressions overlap under
+// NATS wildcard semantics (`*` one token, `>` one or more), in either
+// direction. It is the same matcher edge derivation uses, exported so
+// composition validation judges explicit stream coverage with the interpreter
+// that judges connections.
+func SubjectMatches(subject, pattern string) bool {
+	return matchNATSPattern(subject, pattern)
+}
+
 // matchNATSPattern checks if a subject matches a NATS pattern
 // Following NATS subject matching semantics:
 // * matches exactly one token

@@ -254,3 +254,34 @@ func TestValidateIsDeterministic(t *testing.T) {
 		t.Fatalf("nodes are not in instance-name order: %v", instances)
 	}
 }
+
+// TestValidateStreamRequirementSatisfiedByExplicitStream — a JetStream
+// subscriber fed only by core-NATS publishers is NOT a stream_requirement
+// finding when an explicit `streams` declaration covers its subjects: the
+// stream exists and captures the core-NATS publishes, so the subscriber is fed.
+func TestValidateStreamRequirementSatisfiedByExplicitStream(t *testing.T) {
+	registry := fakeRegistry(t,
+		fakeSpec{name: "core-src", typ: "input", outputs: []component.PortDefinition{natsOut("out", "data.raw", nil)}},
+		fakeSpec{name: "js-sink", typ: "output", inputs: []component.PortDefinition{jetStreamIn("in", "DATA", "data.raw", true)}},
+	)
+	cfg := compositionOf(config.ComponentConfigs{
+		"pub": instance("core-src", types.ComponentTypeInput),
+		"sub": instance("js-sink", types.ComponentTypeOutput),
+	})
+	cfg.Streams = config.StreamConfigs{"DATA": {Subjects: []string{"data.>"}}}
+
+	result := validateRoundTrip(t, registry, cfg)
+	if findings := findingsOfType(result.Errors, composition.TypeStreamRequirement); len(findings) != 0 {
+		t.Fatalf("stream_requirement reported although streams.DATA covers data.raw: %+v", findings)
+	}
+	if len(result.Graph.Edges) != 1 {
+		t.Fatalf("edges = %d, want the pub→sub edge to still be derived", len(result.Graph.Edges))
+	}
+
+	// A stream that does not cover the subscriber's subjects does not satisfy it.
+	cfg.Streams = config.StreamConfigs{"OTHER": {Subjects: []string{"other.>"}}}
+	result = validateRoundTrip(t, registry, cfg)
+	if findings := findingsOfType(result.Errors, composition.TypeStreamRequirement); len(findings) != 1 {
+		t.Fatalf("stream_requirement findings = %d with a non-covering stream, want 1: %+v", len(findings), result.Errors)
+	}
+}

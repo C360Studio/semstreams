@@ -28,22 +28,33 @@ const (
 	VerbGraph    = "graph"
 )
 
+// IsVerb reports whether arg names a composition verb, so a binary whose
+// registry is expensive to build can decide before building it:
+//
+//	if len(os.Args) > 1 && cli.IsVerb(os.Args[1]) {
+//		os.Exit(cli.Main(os.Args[1:], buildRegistry(), os.Stdout, os.Stderr))
+//	}
+func IsVerb(arg string) bool {
+	switch arg {
+	case VerbCatalog, VerbValidate, VerbGraph:
+		return true
+	default:
+		return false
+	}
+}
+
 // Dispatch serves args when args[0] is a composition verb and reports whether
-// it did, so a binary can fall through to its own flags otherwise:
+// it did, so a binary with a ready registry can fall through to its own flags
+// otherwise:
 //
 //	if code, ok := cli.Dispatch(os.Args[1:], registry, os.Stdout, os.Stderr); ok {
 //		os.Exit(code)
 //	}
 func Dispatch(args []string, registry *component.Registry, stdout, stderr io.Writer) (int, bool) {
-	if len(args) == 0 {
+	if len(args) == 0 || !IsVerb(args[0]) {
 		return ExitOK, false
 	}
-	switch args[0] {
-	case VerbCatalog, VerbValidate, VerbGraph:
-		return Main(args, registry, stdout, stderr), true
-	default:
-		return ExitOK, false
-	}
+	return Main(args, registry, stdout, stderr), true
 }
 
 // Main serves one verb against the given registry and returns the exit code.

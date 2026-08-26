@@ -15,6 +15,13 @@ operations, and the `list_components` tool) SHALL carry the declarer's output fo
 `default_ports`, or `ports_require_config: true` with the declarer's error text when an empty configuration does not
 declare.
 
+> `[~]` DEVIATION (tasks 3.1a, 2026-08-26): `objectstore`'s declarer does not honour the instance-name parameter of the
+> declarer contract above. Its factory has no instance name to give the constructor (`component.Factory` and
+> `Dependencies` carry none) and stamps the literal `objectstore` into its `store-provide` port, so the admitted
+> declaration never carries the real instance name either; the declarer mirrors the constructor so parity holds.
+> Threading the real name through changes the store-provide resource identity at runtime — an owner ruling; neither
+> side is codified in a test. Every shipped instance is named `objectstore`.
+
 #### Scenario: a registration without a port declarer is rejected at registration
 
 - **GIVEN** a `RegistrationConfig` with a valid `Factory` and `Schema` and a nil `Ports`
@@ -54,8 +61,11 @@ declare.
 
 `composition.Validate(catalog, cfg)` SHALL be a pure, deterministic function of a `*component.Registry` and a
 `*config.Config` that performs no I/O, opens no connection, and constructs no component, and
-`composition.Analyze(declarations)` SHALL be the graph-level half of the same function over admitted declarations, so
-that the offline and the boot-time judgments share one interpreter. The result SHALL carry `status`
+`composition.Analyze(declarations, streams)` SHALL be the graph-level half of the same function over admitted
+declarations and the configuration's explicit `streams` declarations, so that the offline and the boot-time judgments
+share one interpreter. A JetStream input whose subjects an explicit stream covers SHALL NOT be a `stream_requirement`
+finding even when its only publishers use core NATS: stream provisioning creates that stream from the declaration and
+core-NATS publishes on its subjects land in it, so the subscriber is fed. The result SHALL carry `status`
 (`valid` | `warnings` | `errors`, derived errors → warnings → valid), `errors`, `warnings`, and `graph`, with every
 array non-nil; each finding SHALL carry `type`, `severity`, a non-empty `component`, optional `port`, a non-empty
 `message`, and a non-nil `suggestions`. `type` SHALL be one of the exported constants `config_invalid`,
@@ -102,14 +112,24 @@ stable order, so two runs over equal inputs produce byte-equal JSON.
 
 #### Scenario: a JetStream subscriber fed only by core-NATS publishers is an error
 
-- **GIVEN** a JetStream input port whose only publishers are core NATS outputs
+- **GIVEN** a JetStream input port whose only publishers are core NATS outputs, and no explicit stream covering its subjects
 - **WHEN** the composition is validated
 - **THEN** the result carries one `stream_requirement` error naming the subscriber port and every publisher
 - **AND** the test that verifies this is `TestValidateReportsStreamRequirement`
 
+#### Scenario: an explicit stream declaration satisfies a JetStream subscriber
+
+- **GIVEN** the same ports and a `streams` declaration whose subjects cover the subscriber's subjects
+- **WHEN** the composition is validated offline, and when the same composition boots with the same `streams`
+- **THEN** neither result carries a `stream_requirement` finding and the edge is still derived
+- **AND** a stream whose subjects do not cover the subscriber's does not satisfy it
+- **AND** the tests that verify this are `TestValidateStreamRequirementSatisfiedByExplicitStream` and
+  `TestComponentManagerBootFindingsHonourExplicitStreams` (`-tags=integration`)
+
 #### Scenario: pattern conflicts and exclusive resources are findings
 
-- **GIVEN** two components that bind the same network address, and two that claim the same exclusive resource
+- **GIVEN** two components that write the same KV bucket, and two that bind the same network address (an exclusive
+  resource, refused at admission before any graph is built)
 - **WHEN** the composition is validated
 - **THEN** the result carries one `connection_pattern_error` and one `exclusive_resource_conflict`, both errors
 - **AND** validation returns a result, not an error
@@ -175,17 +195,17 @@ helpers.
 
 ### Requirement: Boot validates the admitted composition at the real boundary
 
-ComponentManager SHALL run `composition.Analyze` over the admitted Registry declarations after the fixed boot set is
-constructed and before the Registry seals, SHALL log every finding, SHALL fail `Initialize` (and therefore boot) when
+ComponentManager SHALL run `composition.Analyze` over the admitted Registry declarations and the boot configuration's
+explicit `streams` after the fixed boot set is constructed and before the Registry seals, SHALL log every finding, SHALL fail `Initialize` (and therefore boot) when
 the result has an error, and SHALL retain the result as the boot composition's findings. `GET <components>/validate`
 SHALL serve that retained result verbatim and SHALL NOT compute a status of its own; `GET <components>/flowgraph`
 SHALL serve the retained result's `graph`, as JSON by default and as Mermaid when `format=mermaid` is requested.
 
-> `[~]` DEFERRED (tasks 3.6, 2026-08-26): the refuse is not flipped in PR #1101. The P3-before-P5 measurement (tasks 3.5)
-> found error findings in 12 of 22 shipped configurations from two validator classes (required stream inputs fed from
-> outside the composition; JetStream subscribers on subjects an explicit `streams` declaration covers). Boot runs the
-> analysis, logs and retains the result, and serves it; the "SHALL fail `Initialize`" clause waits for the owner's
-> ruling on those classes.
+> `[~]` DEFERRED (tasks 3.6, 2026-08-26): the refuse is not flipped in PR #1101. The P3-before-P5 measurement (tasks 3.5,
+> re-measured after review round 1) leaves 9 of 22 shipped configurations with one error finding each, all
+> `orphaned_port` on `agentic-dispatch/user.message` — a required stream input the UI feeds from outside the
+> composition. Boot runs the analysis, logs and retains the result, and serves it; the "SHALL fail `Initialize`" clause
+> waits for the owner's ruling on that class.
 
 #### Scenario: an error finding refuses boot
 
@@ -241,8 +261,10 @@ Every checked-in composition the framework ships or tests with (`configs/**/*.js
 under `docker/` and `test/e2e`) SHALL validate with no error finding against the registry its binary composes, and
 that assertion SHALL be a unit test so a configuration change that introduces an error is caught before boot.
 
-> `[~]` DEFERRED (tasks 3.5, 2026-08-26): measured red — 12 of 22 shipped configurations carry error findings from the
-> two validator classes named in tasks 3.5; the test exists and is skipped naming the task until the owner rules.
+> `[~]` DEFERRED (tasks 3.5, 2026-08-26, re-measured after review round 1): 9 of 22 shipped configurations carry exactly
+> one error finding each — `orphaned_port` on `agentic-dispatch/user.message`, a required stream input the UI feeds from
+> outside the composition (owner ruling pending, tasks 3.5); the test exists and is skipped naming the task until the
+> owner rules.
 
 #### Scenario: the shipped configurations validate clean
 

@@ -89,10 +89,9 @@ func shippedConfigs(t *testing.T) map[string]*config.Config {
 // P5 precondition: every shipped composition validates with no error finding
 // against the registry its binary composes.
 func TestValidateShippedConfigsHaveNoErrorFindings(t *testing.T) {
-	t.Skip("[~] composition-validation-substrate tasks 3.5: 12 of 22 shipped configurations carry error findings " +
-		"from two validator classes (required stream inputs fed from outside the composition; JetStream " +
-		"subscribers on subjects an explicit `streams` declaration covers) pending the owner's ruling; " +
-		"the measurement is recorded verbatim in tasks 3.5 and the test stays as the target state")
+	t.Skip("[~] composition-validation-substrate tasks 3.5: 9 of 22 shipped configurations carry one error finding, " +
+		"orphaned_port on agentic-dispatch/user.message — a required stream input fed from outside the composition — " +
+		"pending the owner's ruling; the measurement is recorded verbatim in tasks 3.5 and the test stays as the target state")
 	registry := shippedRegistry(t)
 	configs := shippedConfigs(t)
 	paths := make([]string, 0, len(configs))

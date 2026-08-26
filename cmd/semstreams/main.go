@@ -84,12 +84,7 @@ func main() {
 // this binary can compose (core, graph-research, OTEL) and reports whether the
 // arguments named one.
 func dispatchCompositionVerb(args []string) (int, bool) {
-	if len(args) == 0 {
-		return 0, false
-	}
-	switch args[0] {
-	case compositioncli.VerbCatalog, compositioncli.VerbValidate, compositioncli.VerbGraph:
-	default:
+	if len(args) == 0 || !compositioncli.IsVerb(args[0]) {
 		return 0, false
 	}
 	builtins.Register()
@@ -98,7 +93,7 @@ func dispatchCompositionVerb(args []string) (int, bool) {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1, true
 	}
-	return compositioncli.Dispatch(args, registry, os.Stdout, os.Stderr)
+	return compositioncli.Main(args, registry, os.Stdout, os.Stderr), true
 }
 
 // fullComponentRegistry registers everything this binary can compose. Boot

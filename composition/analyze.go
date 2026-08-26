@@ -7,13 +7,20 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/component/flowgraph"
+	"github.com/c360studio/semstreams/config"
 )
 
 // Analyze is the graph-level half of composition validation: it connects the
 // declarations, analyzes connectivity, stream requirements, and interface
 // contracts, and projects the graph. It is what ComponentManager runs at boot
 // over the admitted declarations and what Validate runs over declared ones.
-func Analyze(declarations []component.Declaration) *Result {
+//
+// streams is the configuration's explicit `streams` block (nil when it has
+// none). Stream provisioning derives streams from JetStream OUTPUT ports and
+// from this block; a JetStream subscriber whose subjects an explicit stream
+// covers is fed even when its publishers use core NATS, so it is not a
+// stream_requirement finding.
+func Analyze(declarations []component.Declaration, streams config.StreamConfigs) *Result {
 	result := newResult()
 	sorted := append([]component.Declaration(nil), declarations...)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].InstanceName < sorted[j].InstanceName })
@@ -63,6 +70,9 @@ func Analyze(declarations []component.Declaration) *Result {
 		result.add(orphanedPortFinding(port))
 	}
 	for _, warning := range graph.ValidateStreamRequirements() {
+		if explicitStreamCovers(streams, warning.Subjects) {
+			continue // an explicit stream captures the core-NATS publishes; the subscriber is fed
+		}
 		publishers := append([]string(nil), warning.PublisherComps...)
 		sort.Strings(publishers)
 		result.add(Finding{
@@ -84,6 +94,33 @@ func Analyze(declarations []component.Declaration) *Result {
 	result.Graph = graphOf(sorted, graph)
 	result.finalize()
 	return result
+}
+
+// explicitStreamCovers reports whether every subscriber subject overlaps a
+// subject of some explicitly declared stream. An empty subject list is not
+// covered: a subscriber with no subjects has nothing a stream could feed.
+func explicitStreamCovers(streams config.StreamConfigs, subjects []string) bool {
+	if len(subjects) == 0 || len(streams) == 0 {
+		return false
+	}
+	for _, subject := range subjects {
+		covered := false
+		for _, stream := range streams {
+			for _, declared := range stream.Subjects {
+				if flowgraph.SubjectMatches(subject, declared) {
+					covered = true
+					break
+				}
+			}
+			if covered {
+				break
+			}
+		}
+		if !covered {
+			return false
+		}
+	}
+	return true
 }
 
 func orphanedPortFinding(port flowgraph.OrphanedPort) Finding {

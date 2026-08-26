@@ -32,7 +32,13 @@ func Mermaid(graph Graph) string {
 		if a.To != b.To {
 			return a.To < b.To
 		}
-		return a.ToPort < b.ToPort
+		if a.ToPort != b.ToPort {
+			return a.ToPort < b.ToPort
+		}
+		if a.Pattern != b.Pattern {
+			return a.Pattern < b.Pattern
+		}
+		return a.ConnectionID < b.ConnectionID
 	})
 	for _, edge := range edges {
 		from, ok := ids[edge.From]

@@ -70,6 +70,7 @@ type ComponentManager struct {
 	natsClient        *natsclient.Client
 	bootSecurity      security.Config
 	bootModelRegistry model.RegistryReader
+	bootStreams       config.StreamConfigs // explicit `streams` of the boot configuration, for composition analysis
 
 	// FlowGraph caching for thread-safe analysis
 	graphCache flowGraphCache
@@ -151,6 +152,7 @@ func NewComponentManager(rawConfig json.RawMessage, deps *Dependencies) (Service
 	var componentsConfig config.ComponentConfigs
 	var bootSecurity security.Config
 	var bootModelRegistry model.RegistryReader
+	var bootStreams config.StreamConfigs
 	currentConfig := deps.Manager.GetConfig()
 	if currentConfig == nil {
 		return nil, fmt.Errorf("component-manager config manager has no config")
@@ -158,6 +160,7 @@ func NewComponentManager(rawConfig json.RawMessage, deps *Dependencies) (Service
 	bootConfig := currentConfig.Get()
 	componentsConfig = bootConfig.Components
 	bootSecurity = bootConfig.Security
+	bootStreams = bootConfig.Streams
 	if bootConfig.ModelRegistry != nil {
 		bootModelRegistry = bootConfig.ModelRegistry
 	}
@@ -214,6 +217,7 @@ func NewComponentManager(rawConfig json.RawMessage, deps *Dependencies) (Service
 		storeProvided:     make(map[string][]string),
 		bootSecurity:      bootSecurity,
 		bootModelRegistry: bootModelRegistry,
+		bootStreams:       bootStreams,
 	}
 
 	// Store NATS client if available
@@ -368,7 +372,7 @@ func (cm *ComponentManager) analyzeBootComposition() error {
 	for _, snapshot := range snapshots {
 		declarations = append(declarations, snapshot.Declaration())
 	}
-	result := composition.Analyze(declarations)
+	result := composition.Analyze(declarations, cm.bootStreams)
 
 	cm.mu.Lock()
 	cm.bootFindings = result
