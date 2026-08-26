@@ -3,8 +3,12 @@
 ## Accepted evidence and owner decisions
 
 - Inventory checkpoint: `INVENTORY PASS WITH DIVERGENCES` (independent blind review of revision 1, PR #1098 at
-  `01b0f37f`); every divergence corrected in revision 2 (design §I.6). Body SHA-256 of the accepted revision of
-  `docs/proposals/gh1094-workflow-terminal-delivery-design.md` to be recorded here by the caller.
+  `01b0f37f`); every divergence corrected in revision 2 (design §I.6). Body SHA-256 of revision 3 of
+  `docs/proposals/gh1094-workflow-terminal-delivery-design.md`, MEASURED on this branch — `awk 'f{print}
+  /^## Complete handoff body$/{f=1}' docs/proposals/gh1094-workflow-terminal-delivery-design.md | shasum -a 256`:
+  `27d44cb16e708888e15a90ac67c930ba1742932f5df427930564f21a264d8018`, equal to the value the document records at
+  its head (line 11). This records WHICH bytes were implemented; it is not, and cannot be, the owner's acceptance
+  signature — acceptance of the revision as a whole remains PENDING and stays with the owner.
 - Owner ruling 2026-08-26 (owner-run Codex round on PR #1098, recorded on the issue): items 1–7 and 9–10 accepted
   as recommended; 8 accepted conditionally (C2); 11 — AGENT_LOOPS plane accepted, traversal corrected (C1, R4′);
   binding corrections C1–C4 folded in revision 3. Acceptance of the revision as a whole: PENDING.

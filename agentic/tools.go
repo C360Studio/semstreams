@@ -247,6 +247,80 @@ func (t *ToolCall) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*Alias)(t))
 }
 
+// DecideToolName is the name agents use to invoke the coordinator's
+// terminal decision tool. It lives here — beside the decide metadata
+// contract and the reply vocabulary — because agentic-tools (the
+// executor), agentic-loop (the terminal observer), and any future
+// reader must all spell the same name; before gh#1094 the literal was
+// spelled in three places.
+const DecideToolName = "decide"
+
+// Reserved decide actions with framework-owned user-facing semantics
+// (ADR-101, gh#1094). Every OTHER decide action is a handoff to a rule
+// chain and is never delivered to a user channel.
+//
+// The decide tool stays vocabulary-agnostic: its description enumerates
+// no action, products name their own actions in persona prose, and the
+// deployment-level restricted_decide_actions policy may still bar
+// either reserved name (an autonomous deployment bars ask_user).
+const (
+	// DecideActionRespondDirect is the coordinator's answer to the
+	// user. Delivered as a UserResponse of type result carrying the
+	// decision's reason.
+	DecideActionRespondDirect = "respond_direct"
+
+	// DecideActionAskUser is the coordinator's clarification request.
+	// Delivered as a UserResponse of type prompt carrying the
+	// decision's reason.
+	DecideActionAskUser = "ask_user"
+)
+
+// MetadataKeyDecideAction and MetadataKeyDecideReason are the
+// ToolResult.Metadata keys under which the decide executor returns its
+// typed decision to the loop. The loop reads them to populate
+// LoopCompletedEvent.Decision; nothing parses the Content JSON for the
+// same facts (Content stays the canonical payload for read_loop_result).
+const (
+	// MetadataKeyDecideAction carries the resolved (allowlist-canonical
+	// when an allowlist applies) action string.
+	MetadataKeyDecideAction = "action"
+
+	// MetadataKeyDecideReason carries the coordinator's reason, which is
+	// the user-facing content of a reply decision.
+	MetadataKeyDecideReason = "reason"
+)
+
+// CoordinatorDecision is the typed decision of a `decide` terminal,
+// observed by agentic-loop at completion and carried on
+// LoopCompletedEvent (ADR-101 D2). It is populated ONLY when the loop's
+// terminal StopLoop tool result came from the decide tool; a
+// synthesized needs_clarification decision (a graph triple written
+// after completion) never populates it, and no consumer infers a
+// decision from the shape of Result.
+//
+// Both fields are required when the decision is present: an empty
+// Action or Reason fails LoopCompletedEvent.Validate so a malformed
+// decision is permanently rejected rather than silently classified as
+// a handoff.
+type CoordinatorDecision struct {
+	Action string `json:"action"`
+	Reason string `json:"reason"`
+}
+
+// IsUserFacingDecideAction reports whether a decide action is one of
+// the reserved reply actions — the ONE classifier of the reply
+// vocabulary (ADR-101 D1). Comparison is exact: no case folding, no
+// separator coercion, no trimming (owner item 7). Any other action,
+// including the empty string, is a handoff.
+func IsUserFacingDecideAction(action string) bool {
+	switch action {
+	case DecideActionRespondDirect, DecideActionAskUser:
+		return true
+	default:
+		return false
+	}
+}
+
 // MetadataKeyDecideActionAllowlist is the TaskMessage.Metadata /
 // ToolCall.Metadata key under which a closed action vocabulary for
 // the decide tool flows from the spawning rule down to the executor.

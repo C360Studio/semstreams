@@ -7,11 +7,18 @@ body is a published layer and states `implemented-by: <model>`.
 
 ## 0. Accepted records
 
-- [ ] 0.1 Record the `INVENTORY PASS` and owner-accepted design body SHA-256 values in `design.md`.
-- [ ] 0.2 Record the owner ruling of 2026-08-26 (1–7, 9–10 accepted; 8 conditional; 11 corrected — R4′) and the
+- [x] 0.1 Record the `INVENTORY PASS` and owner-accepted design body SHA-256 values in `design.md`.
+  - MEASURED revision-3 body SHA-256 `27d44cb16e708888e15a90ac67c930ba1742932f5df427930564f21a264d8018`
+    (`awk 'f{print} /^## Complete handoff body$/{f=1}' docs/proposals/gh1094-workflow-terminal-delivery-design.md |
+    shasum -a 256`), equal to the value at the document head. Recorded in `design.md` as a measurement of the
+    implemented bytes; owner acceptance of the revision as a whole stays PENDING and is NOT self-certified here.
+- [x] 0.2 Record the owner ruling of 2026-08-26 (1–7, 9–10 accepted; 8 conditional; 11 corrected — R4′) and the
   C1–C4 corrections in `conformance.md`; implement the ruled shape.
-- [ ] 0.3 Record the `INVENTORY PASS WITH DIVERGENCES` review and its seven corrections (design §I.6) in
+  - The ruling and C1–C4 are recorded in `conformance.md` (Accepted authority) and per item in `design.md`; the
+    implementation rows below carry the `file:line` for each of C1–C4.
+- [x] 0.3 Record the `INVENTORY PASS WITH DIVERGENCES` review and its seven corrections (design §I.6) in
   `conformance.md`.
+  - All seven enumerated inline in `conformance.md` (Accepted authority), not by pointer.
 
 ## 1. Claim
 
@@ -21,7 +28,7 @@ body is a published layer and states `implemented-by: <model>`.
 
 ## 2. Slice A — typed decision on the completion event (agentic, agentic-loop, agentic-tools)
 
-- [ ] 2.1 RED: add `TestLoopCompletedEventDecisionRoundTrip` (agentic) decoding a marshalled event with
+- [x] 2.1 RED: add `TestLoopCompletedEventDecisionRoundTrip` (agentic) decoding a marshalled event with
   `decision` through the production registry into a fresh `message.BaseMessage`; add
   `TestIsUserFacingDecideActionTable` (agentic) covering `respond_direct`, `ask_user`, `autoresearch`,
   `research`, `needs_clarification`, `""`, and case variants; add
@@ -29,24 +36,55 @@ body is a published layer and states `implemented-by: <model>`.
   `empty_reason`, `unknown_nonempty_action_valid`); run
   `go test -race -count=1 ./agentic -run '^(TestLoopCompletedEventDecisionRoundTrip|TestIsUserFacingDecideActionTable|TestLoopCompletedEventValidateRejectsPresentDecisionWithEmptyActionOrReason)$'`
   and record the compile/assert output verbatim in `conformance.md` (this is the RED-capture task).
-- [ ] 2.2 GREEN: add `agentic.CoordinatorDecision`, `agentic.DecideToolName`, `agentic.DecideActionRespondDirect`,
+  - RED captured (compile failure — the type, field, and constants do not exist); verbatim in `conformance.md`
+    under "Forced omissions / RED captures".
+- [x] 2.2 GREEN: add `agentic.CoordinatorDecision`, `agentic.DecideToolName`, `agentic.DecideActionRespondDirect`,
   `agentic.DecideActionAskUser`, `agentic.IsUserFacingDecideAction`; add `Decision *CoordinatorDecision
   \`json:"decision,omitempty"\`` to `LoopCompletedEvent`; make `LoopCompletedEvent.Validate` reject a present
   `Decision` with empty `Action` or `Reason`; re-run 2.1's command to GREEN.
-- [ ] 2.3 Add `TestHandleCompleteResponseStampsTypedDecisionFromDecideTerminal`,
+  - `agentic/tools.go:250-322`: `DecideToolName` (`:256`), `DecideActionRespondDirect`/`DecideActionAskUser`
+    (`:270`, `:275`), `MetadataKeyDecideAction`/`MetadataKeyDecideReason` (`:286`, `:290`),
+    `CoordinatorDecision` (`:305`), `IsUserFacingDecideAction` (`:315`); `agentic/events.go:90` (field),
+    `:107-114` (Validate guard).
+    `go test -race -count=1 ./agentic -run '^(TestLoopCompletedEventDecisionRoundTrip|TestIsUserFacingDecideActionTable|TestLoopCompletedEventValidateRejectsPresentDecisionWithEmptyActionOrReason)$'`
+    → `ok github.com/c360studio/semstreams/agentic 1.367s`.
+- [x] 2.3 Add `TestHandleCompleteResponseStampsTypedDecisionFromDecideTerminal`,
   `TestHandleCompleteResponseStampsDecisionFromToolResultNameWhenTrackedNameAbsent` (no tracked name for the
   CallID; `toolResult.Name == "decide"`), and `TestHandleCompleteResponseLeavesDecisionNilForNonDecideTerminal`
   (agentic-loop) driving `StopLoop` tool results (metadata `action`/`reason` present for decide; `submit_work` for the
   nil case); assert the published completion envelope decodes into a fresh `LoopCompletedEvent` with `Decision`
   set / set / nil. Command:
   `go test -race -count=1 ./processor/agentic-loop -run '^(TestHandleCompleteResponseStampsTypedDecisionFromDecideTerminal|TestHandleCompleteResponseStampsDecisionFromToolResultNameWhenTrackedNameAbsent|TestHandleCompleteResponseLeavesDecisionNilForNonDecideTerminal)$'`.
-- [ ] 2.4 Implement 2.3: thread the terminal tool result (name via `GetToolName`, metadata) into
+  - RED (before 2.4): both decide tests failed on the assertion, the nil test passed —
+    `--- FAIL: TestHandleCompleteResponseStampsTypedDecisionFromDecideTerminal (0.00s)` /
+    `Error: Expected value not to be nil.` / `Messages: decide terminal must carry a typed decision`, and
+    `--- FAIL: TestHandleCompleteResponseStampsDecisionFromToolResultNameWhenTrackedNameAbsent (0.00s)` /
+    `Messages: tracked-name loss must not demote a decide terminal`. Verbatim in `conformance.md`.
+    After 2.4: `ok github.com/c360studio/semstreams/processor/agentic-loop 1.367s`.
+    Tests: `processor/agentic-loop/coordinator_decision_test.go`.
+- [x] 2.4 Implement 2.3: thread the terminal tool result (name via `GetToolName`, metadata) into
   `handleCompleteResponse`; resolve the tool name with the existing chain `GetToolName(callID)` →
   `toolResult.Name` (`handlers.go:2241-2245`); populate `completion.Decision`; replace the `"decide"` literals at
   `handlers.go:1921` and `:1935` and `agentictools.DecideToolName` with `agentic.DecideToolName`; copy `Decision`
   onto `agentterminal.Event`.
-- [ ] 2.5 Run `task schema:generate`; commit the regenerated `schemas/agentic-loop.v1.json` with the code; record
+  - `processor/agentic-loop/handlers.go:1964-1976` `resolveToolName` — ONE home for the tracked-name →
+    `toolResult.Name` chain, now also used by `gateForApproval` (`:2287`) which spelled it inline before;
+    `:1982-2005` `decisionFromTerminalTool`; `:2040` stamps `completion.Decision`; the terminal tool result is
+    threaded into `handleCompleteResponse` at `:2214` (StopLoop) and explicitly `nil` at `:1194` (model text).
+  - Literals replaced: `hasDecideToolCall` and `decideToolAvailable` now compare `agentic.DecideToolName`;
+    `processor/agentic-tools/decide.go:76` is now `const DecideToolName = agentic.DecideToolName` (the exported
+    agentic-tools spelling is kept as an alias so no adopter symbol is removed); `decide.go:436-437` writes the
+    decide result metadata under the shared key constants.
+  - `internal/agentterminal/terminal.go:97` carries `Decision`; `:144` copies it on the succeeded lane only.
+- [~] 2.5 Run `task schema:generate`; commit the regenerated `schemas/agentic-loop.v1.json` with the code; record
   `git diff --stat schemas/ specs/` in `conformance.md`.
+  - RUN, but the premise measures FALSE: `task schema:generate` produced NO diff —
+    `git diff --stat schemas/ specs/` is EMPTY. `schemas/agentic-loop.v1.json` is the component CONFIG schema
+    emitted by `cmd/openapi-generator`, not a payload schema; `LoopCompletedEvent` appears in neither `schemas/`
+    nor `specs/openapi.v3.yaml` (`grep -n LoopCompletedEvent specs/openapi.v3.yaml` → 0 hits). The additive
+    `decision` field therefore has NO generated-schema surface to regenerate. Its wire contract is pinned instead
+    by the production-decoder round-trip `TestLoopCompletedEventDecisionRoundTrip`. Nothing is committed because
+    nothing changed; the no-drift gate is task 6.4.
 - [ ] 2.6 Commit Slice A GREEN before any mutation check; record the commit SHA in `conformance.md`.
 
 ## 3. Slice B — selection and origin resolution (agentic-dispatch)
