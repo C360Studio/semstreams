@@ -583,12 +583,12 @@ func TestComponent_Initialize_InvalidConfig(t *testing.T) {
 	natsClient, err := natsclient.NewClient("nats://localhost:4222")
 	require.NoError(t, err)
 
-	comp := &Component{
+	comp := withTestRegistry(t, &Component{
 		config: Config{
 			Ports: nil, // Invalid - missing ports
 		},
 		natsClient: natsClient,
-	}
+	})
 
 	err = comp.Initialize()
 
@@ -683,7 +683,8 @@ func TestCreateGraphIngest_ValidConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: newTestPayloadRegistry(t),
 	}
 
 	comp, err := CreateGraphIngest(configJSON, deps)
@@ -702,7 +703,8 @@ func TestCreateGraphIngest_InvalidConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: newTestPayloadRegistry(t),
 	}
 
 	comp, err := CreateGraphIngest(invalidJSON, deps)
@@ -718,7 +720,8 @@ func TestCreateGraphIngest_MissingDependencies(t *testing.T) {
 
 	// Missing NATSClient dependency
 	deps := component.Dependencies{
-		NATSClient: nil,
+		NATSClient:      nil,
+		PayloadRegistry: newTestPayloadRegistry(t),
 	}
 
 	comp, err := CreateGraphIngest(configJSON, deps)
@@ -749,7 +752,8 @@ func TestComponent_CreateEntity_ValidEntity(t *testing.T) {
 	ctx := context.Background()
 
 	entity := &graph.EntityState{
-		ID: "c360.platform.robotics.mav1.drone.001",
+		ID:          "c360.platform.robotics.mav1.drone.001",
+		MessageType: testEntityType(),
 		Triples: []message.Triple{
 			{
 				Subject:   "c360.platform.robotics.mav1.drone.001",
@@ -772,10 +776,11 @@ func TestComponent_CreateEntity_EmptyID(t *testing.T) {
 	ctx := context.Background()
 
 	entity := &graph.EntityState{
-		ID:        "", // Empty ID - invalid
-		Triples:   []message.Triple{},
-		Version:   1,
-		UpdatedAt: time.Now(),
+		ID:          "",
+		MessageType: testEntityType(), // Empty ID - invalid
+		Triples:     []message.Triple{},
+		Version:     1,
+		UpdatedAt:   time.Now(),
 	}
 
 	err := comp.CreateEntity(ctx, entity)
@@ -789,7 +794,8 @@ func TestComponent_CreateEntity_TriggersHierarchy(t *testing.T) {
 	ctx := context.Background()
 
 	entity := &graph.EntityState{
-		ID: "c360.platform.robotics.mav1.drone.001",
+		ID:          "c360.platform.robotics.mav1.drone.001",
+		MessageType: testEntityType(),
 		Triples: []message.Triple{
 			{
 				Subject:   "c360.platform.robotics.mav1.drone.001",
@@ -815,10 +821,11 @@ func TestComponent_DeleteEntity_ValidID(t *testing.T) {
 
 	// Create entity first
 	entity := &graph.EntityState{
-		ID:        "c360.platform.robotics.mav1.drone.001",
-		Triples:   []message.Triple{},
-		Version:   1,
-		UpdatedAt: time.Now(),
+		ID:          "c360.platform.robotics.mav1.drone.001",
+		MessageType: testEntityType(),
+		Triples:     []message.Triple{},
+		Version:     1,
+		UpdatedAt:   time.Now(),
 	}
 	require.NoError(t, comp.CreateEntity(ctx, entity))
 
@@ -840,10 +847,11 @@ func TestComponent_CanonicalAppend_ValidTriple(t *testing.T) {
 
 	// Create entity first
 	entity := &graph.EntityState{
-		ID:        "c360.platform.robotics.mav1.drone.001",
-		Triples:   []message.Triple{},
-		Version:   1,
-		UpdatedAt: time.Now(),
+		ID:          "c360.platform.robotics.mav1.drone.001",
+		MessageType: testEntityType(),
+		Triples:     []message.Triple{},
+		Version:     1,
+		UpdatedAt:   time.Now(),
 	}
 	require.NoError(t, comp.CreateEntity(ctx, entity))
 
@@ -934,7 +942,8 @@ func createTestComponent(t *testing.T) *Component {
 
 	config := DefaultConfig()
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: newTestPayloadRegistry(t),
 	}
 
 	configJSON, err := json.Marshal(config)
@@ -964,7 +973,8 @@ func createTestComponentWithMockKVBucket(t *testing.T) (*Component, *mockKVBucke
 
 	config := DefaultConfig()
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: newTestPayloadRegistry(t),
 	}
 
 	configJSON, err := json.Marshal(config)

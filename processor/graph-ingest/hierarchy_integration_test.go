@@ -67,7 +67,8 @@ func createHierarchyComponentOnClient(t *testing.T, natsClient *natsclient.Clien
 	config.EnableHierarchy = enableHierarchy
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: newTestPayloadRegistry(t),
 	}
 
 	configJSON, err := json.Marshal(config)

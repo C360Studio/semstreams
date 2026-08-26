@@ -34,7 +34,7 @@ func startPrefixTestComponent(t *testing.T) (*Component, *natsclient.Client) {
 	nc := testClient.Client
 
 	config := DefaultConfig()
-	deps := component.Dependencies{NATSClient: nc}
+	deps := component.Dependencies{NATSClient: nc, PayloadRegistry: newTestPayloadRegistry(t)}
 	configJSON, err := json.Marshal(config)
 	require.NoError(t, err)
 
@@ -56,7 +56,8 @@ func startPrefixTestComponent(t *testing.T) (*Component, *natsclient.Client) {
 func seedPrefixEntity(t *testing.T, ctx context.Context, c *Component, id string) {
 	t.Helper()
 	entity := &graph.EntityState{
-		ID: id,
+		ID:          id,
+		MessageType: testEntityType(),
 		Triples: []message.Triple{
 			{Subject: id, Predicate: "test.entity.attribute", Object: "val", Timestamp: time.Now()},
 		},
@@ -172,7 +173,8 @@ func TestIntegration_PrefixQuery_IndivisibleEntityTooLarge(t *testing.T) {
 	require.NoError(t, err)
 	const id = "oversize.ops.dom.sys.type.entity-001"
 	entity := &graph.EntityState{
-		ID: id,
+		ID:          id,
+		MessageType: testEntityType(),
 		Triples: []message.Triple{{
 			Subject:   id,
 			Predicate: "test.entity.attribute",

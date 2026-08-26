@@ -151,8 +151,8 @@ func TestHierarchyContainerBirthCarriesRegisteredType(t *testing.T) {
 	now := time.Now()
 	require.NoError(t, c.CreateEntity(ctx, &graph.EntityState{
 		ID: id, MessageType: message.Type{Domain: "test", Category: "entity", Version: "v1"},
-		Triples:   []message.Triple{{Subject: id, Predicate: "entity.type.class", Object: "test.entity", Timestamp: now, Confidence: 1}},
-		Version:   1, UpdatedAt: now,
+		Triples: []message.Triple{{Subject: id, Predicate: "entity.type.class", Object: "test.entity", Timestamp: now, Confidence: 1}},
+		Version: 1, UpdatedAt: now,
 	}))
 
 	container := storedEntity(t, c, "c360.platform.robotics.mav1.drone.group")

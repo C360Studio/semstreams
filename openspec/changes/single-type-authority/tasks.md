@@ -234,42 +234,49 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
 
 ## 4. The six framework types
 
-- [ ] 4.1 `agentic/loop_execution_entity.go`: JSON tags on `LoopExecutionEntity`, `Schema()`, `Validate()`, `MarshalJSON` (alias
+- [x] 4.1 `agentic/loop_execution_entity.go`: JSON tags on `LoopExecutionEntity`, `Schema()`, `Validate()`, `MarshalJSON` (alias
       idiom); move `LoopExecutionContract()` and the constants `LoopExecutionContractName`, `TodoGroupName` from
       `internal/builtinprojection/contracts.go:12-46` beside the type.
-- [ ] 4.2 `agentic/agent_lesson_entity.go`: `AgentLessonEntity` (design §7 fields; `CreatedAt time.Time`; `Status` born
+      Done 2026-08-26: JSON tags, `Schema`, `Validate`, alias `MarshalJSON`/`UnmarshalJSON` on `LoopExecutionEntity`; `LoopExecutionContractName`, `TodoGroupName`, `LoopExecutionContract()` in `agentic/loop_execution_entity.go`. `TestLoopExecutionEntity_RoundTrip` PASS.
+- [x] 4.2 `agentic/agent_lesson_entity.go`: `AgentLessonEntity` (design §7 fields; `CreatedAt time.Time`; `Status` born
       `proposed`), `EntityID()` via `AgentLessonEntityID`, `Triples()` = the builder from `emit_lesson.go:693-741` with source
       constant `LessonSource = "ops-emit-lesson"` beside the type; `LessonContract()` + `LessonRecordContractName`,
       `LessonLifecycleGroupName` moved from `contracts.go:52-80`. `emit_lesson.go:518,527` constructs the entity and passes
       `entity.Triples()`; `buildEmitLessonTriples` deleted. 2.7 `TestEmitLessonBuildsEntityTriples` GREEN.
-- [ ] 4.3 `agentic/ops_diagnosis_entity.go`: `OpsDiagnosisEntity`, `Triples()` from `emit_diagnosis.go:249-291` (source
+      Done 2026-08-26: `AgentLessonEntity` + `Triples()` (builder moved from `emit_lesson.go`), unexported `lessonSource`, `LessonContract()` + names in `agentic/agent_lesson_entity.go`; `emit_lesson.go` constructs the entity and passes `lesson.Triples()`; `buildEmitLessonTriples` deleted. `TestEmitLessonBuildsEntityTriples` PASS, `TestAgentLessonEntity_RoundTrip` PASS.
+- [x] 4.3 `agentic/ops_diagnosis_entity.go`: `OpsDiagnosisEntity`, `Triples()` from `emit_diagnosis.go:249-291` (source
       `"ops-emit-diagnosis"`; `Confidence` = the entity's field on every triple, `:259-265`); `OpsDiagnosisContract()` only if O-4
       = mint. `emit_diagnosis.go:203-204` uses the entity.
       `agentic/model_endpoint_entity.go`: `ModelEndpointEntity` with plain fields, `Triples()` from `graph_writer.go:511-548`
       (source `"agentic-loop"`), `ModelEndpointContract()`; `graph_writer.go:245-258` constructs the entity; `buildModelEndpointTriples` deleted.
-- [ ] 4.4 `agentic/web_observation_entity.go`: `WebObservationEntity` with a `Tool` discriminator (`WebObservationTool`:
+      Done 2026-08-26: `OpsDiagnosisEntity` (`Confidence` on every triple, `%g` object) and `ModelEndpointEntity` (plain fields, five zero-gates, source `agentic-loop`) written; `emit_diagnosis.go` and `graph_writer.go` construct the entities (`modelEndpointEntity` is the one mapping helper); both builders deleted. O-4 = defer: no diagnosis / model-endpoint contract. `TestOpsDiagnosisEntityMatchesBuilder`, `TestModelEndpointEntityMatchesBuilder` PASS against the goldens captured from the former builders at `08660fc5`.
+- [x] 4.4 `agentic/web_observation_entity.go`: `WebObservationEntity` with a `Tool` discriminator (`WebObservationTool`:
       `http_request` \| `web_search`) that selects the source constant (`agent-http-request` from `httprequest.go:28`,
       `agent-web-search` from `websearch.go:31`) and the unconditional emitted set (`:257-266` / `:255-262`, zero values
       included); `EntityID()` via `TryWebObservationEntityID` returning `""` on error; `Validate()` requires a known `Tool`.
       `httprequest.go:267` and `websearch.go:264` construct the entity and pass `entity.Triples()`; the two inline builders are
       deleted. `WebObservationContract()` only if O-4 = mint. `web_emit.go:55-73` unchanged in shape (create, then append on exists).
-- [ ] 4.5 `agentic/payload_registry.go`: add the five registrations with `IndexingProfile` (loop_execution `control`, agent_lesson
+      Done 2026-08-26: `WebObservationEntity` with `WebObservationTool` discriminator selecting source and set; `httprequest.go`/`websearch.go` construct the entity and pass `observation.Triples()` (the backlink keeps the executors' existing source constants); `web_emit.go` unchanged. `TestWebObservationEntityMatchesToolBuilders` PASS (both tools, zero values included). No web-observation contract (O-4 = defer).
+- [x] 4.5 `agentic/payload_registry.go`: add the five registrations with `IndexingProfile` (loop_execution `control`, agent_lesson
       `content`, ops_diagnosis `content`, model_endpoint `control`, web_observation `content`) and `Contracts` (loop execution
       and lesson; the three others only if O-4 = mint); add `IndexingProfile:`
       to the existing 15 rows with the values from `indexing_profile_registry.go:32-60` verbatim; same for
       `processor/agentic-dispatch/payload_registry.go:42` (`signal`) and `agentic/research/register.go:16-58` (6 rows — these
       floors exist only in a binary that selects graph research, `cmd/semstreams/main.go:766-770`; design §5, O-14). Delete the
       `MUTATION-ONLY … NOT registered` paragraphs in the five entity files.
-- [ ] 4.6 `pkg/lifecycle/harness_entity.go`: `HarnessEntity{ID string; Facts []message.Triple}` (Graphable, Payload, MarshalJSON),
+      Done 2026-08-26: five registrations with floors and (loop execution, lesson) contracts added; `IndexingProfile:` on the 15 existing rows, on `agentic-dispatch` (`signal`) and on the 6 research rows, values verbatim from the retired table; the MUTATION-ONLY paragraphs deleted. Forced by #1052's contract (`agentic/rule_fields_test.go` enumerates the registry): the five entity types implement `message.RuleReadable` in `agentic/rule_fields.go` with rows in the projection table (prose withheld: summary/detail/injection-form, finding/recommendation, text/title/snippet/source-query, nested task). `go test -race ./agentic/` → ok.
+- [x] 4.6 `pkg/lifecycle/harness_entity.go`: `HarnessEntity{ID string; Facts []message.Triple}` (Graphable, Payload, MarshalJSON),
       `RegisterPayloads(reg)` registering `lifecycle.harness.v1` with floor `control`; `lifecycleMessageType` (`manager.go:24-28`)
       becomes `HarnessMessageType()` beside it; `payloadbuiltins.Register` calls `lifecycle.RegisterPayloads`. 2.3, 2.4 GREEN.
-- [ ] 4.7 Delete `internal/builtinprojection/` (both files); re-point all seven consumer files: `lesson_promotion.go:52` returns
+      Done 2026-08-26: `pkg/lifecycle/harness_entity.go` (`HarnessEntity`, `HarnessMessageType`, `RegisterPayloads`, floor control); `manager.go` stamps `HarnessMessageType()`; wired into `payloadbuiltins.Register`. `TestHarnessEntity_RoundTrip` PASS.
+- [x] 4.7 Delete `internal/builtinprojection/` (both files); re-point all seven consumer files: `lesson_promotion.go:52` returns
       `agentic.LessonContract()`; `lesson_promotion.go:170-171`, `write_todos.go:196-197` use the `agentic` constants;
       `cmd/semstreams/main.go:220-222` and `cmd/e2e-semstreams/main.go:153-155` pass `payloadReg.Contracts()...` to
       `service.WireGraphRuntime` (the registry is built at `:214` / `:147`, before the call); `test/e2e/scenarios/ops/scenario.go`,
       `processor/agentic-tools/graph_mutation_integration_helpers_test.go`, `lesson_promotion_test.go` use the `agentic` symbols.
       Delete the four `_Distinct` tests. `grep -rn builtinprojection --include='*.go' .` → 0.
-- [ ] 4.8 (O-16 (a); under (b) this task becomes the explicit exemption on the in-process lane and a spec-delta note)
+      Done 2026-08-26: `internal/builtinprojection/` deleted; `lesson_promotion.go`, `write_todos.go`, both `main.go` (`payloadReg.Contracts()...`), `ops/scenario.go`, `graph_mutation_integration_helpers_test.go`, `lesson_promotion_test.go` re-pointed; four `_Distinct` tests deleted. `grep -rn builtinprojection --include='*.go' .` → 1 hit, the assertion message in `payloadbuiltins/single_type_authority_test.go` naming the retired set. `TestPayloadRegistryIsTheSingleTypeAuthority`, `TestLessonProjectionContractIsTheRegisteredContract` PASS.
+- [x] 4.8 (O-16 (a); under (b) this task becomes the explicit exemption on the in-process lane and a spec-delta note)
       `graph/inference/container_entity.go`: `ContainerEntity{ID string; Facts []message.Triple}` (Graphable, Payload, MarshalJSON),
       `HierarchyContainerMessageType()` = `graph.hierarchy_container.v1`, `RegisterPayloads(reg)` with floor `control`;
       `payloadbuiltins.Register` calls it; `hierarchy.go:428` stamps `MessageType: HierarchyContainerMessageType()`. Factory check
@@ -277,15 +284,17 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       `errs.WrapInvalid` naming the type, before any subscription — the observation-shaped guard for a composition root that did
       not call `payloadbuiltins.Register`. 2.6 factory test GREEN.
 
+      Done 2026-08-26: `graph/inference/container_entity.go` (`ContainerEntity`, `HierarchyContainerMessageType`, `RegisterPayloads`, floor control); `hierarchy.go` stamps the container; wired into `payloadbuiltins.Register`; factory check in `CreateGraphIngest` (`enable_hierarchy` + registry lacking the type → `errs.WrapInvalid` naming `graph.hierarchy_container.v1`, before any subscription). `TestFactoryRejectsHierarchyWithoutContainerType` PASS.
 ## 5. graph-ingest — floor from the type, gate at the seam
 
-- [ ] 5.1 Retain `payloadRegistry *payloadregistry.Registry` on the component beside `decoder` (`component.go:487,692`); the
+- [x] 5.1 Retain `payloadRegistry *payloadregistry.Registry` on the component beside `decoder` (`component.go:487,692`); the
       factory (`:646`) returns `errs.WrapInvalid(..., "payload registry is required")` on nil. Delete
       `indexing_profile_registry.go`; `reconcileIndexingProfile` (`:1864`) calls `c.payloadRegistry.IndexingProfileFor(mt.Key())`;
       update the comment block at `:1836-1842` and the metric help at `:113-117` to the new meaning. Rewrite
       `indexing_profile_registry_test.go` against a registry from `payloadregistry.NewWithSubset(t, agentic.RegisterPayloads,
       research.RegisterPayloads, agenticdispatch.RegisterPayloads)` keeping all 22 expectations. 2.6 unit test GREEN.
-- [ ] 5.2 `graph/mutation_responses.go`: `ErrorCodeMessageTypeUnregistered = "message_type_unregistered"` with the closed-set
+      Done 2026-08-26: `payloadRegistry` field beside `decoder` (`component.go`), set from `deps.PayloadRegistry`; factory rejects nil (`PayloadRegistry required`); `indexing_profile_registry.go` deleted; `reconcileIndexingProfile` reads `c.registeredIndexingProfile` → `IndexingProfileFor(mt.Key())`; comment block and metric help rewritten to the new meaning. `indexing_profile_registry_test.go` rewritten against `NewWithSubset(agentic, research, agenticdispatch)` keeping all 22 expectations (`require.Len(cases, 22)`); `TestIndexingProfile_RegistryFloor_UnregisteredFiresMetric` became `..._RegisteredNoFloorFiresMetric` (an unregistered type is now refused before the floor runs). `TestFactoryRejectsNilPayloadRegistry` PASS.
+- [x] 5.2 `graph/mutation_responses.go`: `ErrorCodeMessageTypeUnregistered = "message_type_unregistered"` with the closed-set
       comment. `canonical_mutations.go:207`: after `IsValid`, `GetRegistration(key)` miss → `rejectInvalidDetail(code,
       {"message_type": key}, err)`, metered through the existing rejection path as `reason="message_type_unregistered"`, WARN log
       naming the key. Implement the lookup as one helper `requireRegisteredMessageType(entity) error` and call it on BOTH create
@@ -294,33 +303,40 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       metered — `hierarchy.go:440-451` returns it without logging and both graph-ingest callers already WARN and continue,
       `component.go:1971`, `:2108`). A nil `c.payloadRegistry` at either seam → `rejectInternal` (`mutation_runtime.go:206-208`) with
       an ERROR log, never a pass-through. 2.5 GREEN; 2.6 GREEN; 2.7 integration GREEN.
-- [ ] 5.3 Unit fixtures: `metrics_test.go:147-156` `newTestDependencies` sets `PayloadRegistry` from `payloadbuiltins.Register`
+      Done 2026-08-26: `graph.ErrorCodeMessageTypeUnregistered` added to the closed set; `requireRegisteredMessageType` in `canonical_mutations.go` called at `handleCanonicalCreate` after `IsValid` and at the top of `createEntityWithReceipt` after the nil check; nil registry → `rejectInternal` + ERROR log; the RPC lane meters through `meteredMutation` (reason = the code) and WARNs with the key in the error text. `go test -race -tags=integration -count=1 -p 2 ./processor/graph-ingest/` → `ok 27.815s` (includes `TestCreateRejectsUnregisteredMessageType`, `TestCreateAcceptsRegisteredMessageType`, `TestFloorComesFromRegistration`, `TestHierarchyContainerBirthCarriesRegisteredType`, `TestResidentUnregisteredStampIsNotPoison`); unit `go test -race -count=1 ./processor/graph-ingest/` → ok (includes `TestCreateSeamRejectsWhenRegistryMissing`, `TestInProcessCreateRejectsUnregisteredType`).
+- [x] 5.3 Unit fixtures: `metrics_test.go:147-156` `newTestDependencies` sets `PayloadRegistry` from `payloadbuiltins.Register`
       plus `RegisterTestType` for `test.widget.v1` and `test.fixture.v1`; sweep the other 12 files listed in the premises
       (`grep -rln 'CreateEntityRequest{' --include='*_test.go' .`) so every stamped key is registered in that test's registry.
       Sweep the 42 `_test.go` stamp sites (≥14 distinct keys, inventory §2.2) so every key that reaches the create seam is
       registered in that test's registry.
       `go test -race -count=1 ./processor/graph-ingest/ ./graph/ ./internal/graphmutation/ ./pkg/lifecycle/ ./processor/graph-index/ ./processor/rule/`
       and the same with `-tags=integration -p 2` GREEN.
-- [ ] 5.4 `processor/graph-ingest/component_fixture_test.go`: `withTestRegistry(t, c *Component) *Component` sets
+      Done 2026-08-26: `component_fixture_test.go`: `newTestPayloadRegistry` (builtins + research + 19 test-only stub keys) and `mustTestPayloadRegistry`; `newTestDependencies` and every `component.Dependencies{NATSClient: …}` in the package (15 files) carry the registry; the 7 out-of-package graph-ingest constructions (`agentic-tools` ×2, `agentic-loop`, `graph-index`, `rule`, `gated-dag` ×2) carry builtins plus their own stub keys (`test.revision.v1`, `test.revision-claim.v1`, `test.unit.v1`). Census beyond the 42 stamped sites: 50 entity literals passed to the in-process `CreateEntity` carried NO stamp at all (15 graph-ingest files + 2 gated-dag files) and were stamped `test.entity.v1` / `test.unit.v1`. Suites: see 5.2 and the §7.2 record.
+- [x] 5.4 `processor/graph-ingest/component_fixture_test.go`: `withTestRegistry(t, c *Component) *Component` sets
       `payloadRegistry` (builtins + `RegisterTestType` for the keys that file stamps) and `decoder`; apply it to the 23 `&Component{`
       literals in the six files named in the premises. `go test -race -count=1 ./processor/graph-ingest/` GREEN with the
       fail-closed seam in place.
 
+      Done 2026-08-26: `withTestRegistry(tb, c)` applied to the 23 `&Component{` literals (`readiness_test.go` 14, `lifecycle_owner_test.go` 4, `keyed_ingest_test.go` 2, `batch_unit_test.go` 1, `component_test.go` 1; `query_contract_guard_test.go` injects `mustTestPayloadRegistry()` in its no-`t` helper). `go test -race -count=1 ./processor/graph-ingest/` → ok with the fail-closed seam in place.
 ## 6. e2e fixtures and the composition roots
 
-- [ ] 6.1 `cmd/e2e-semstreams/fixtures/register.go`: `RegisterPayloads(reg)` for `test.fixture.v1`, `e2e.probe.v1`,
+- [x] 6.1 `cmd/e2e-semstreams/fixtures/register.go`: `RegisterPayloads(reg)` for `test.fixture.v1`, `e2e.probe.v1`,
       `e2e.eventtime.v1`, `e2e.canonical_create_contract.v1`, `e2e.relationship_contract.v1`, `research.e2e_search_seed.v1`
       (verbatim carriers, floor `control`); called from `buildPayloadRegistry` (`main.go:358-378`). Tier → keys: `core` and
       `lessons` → `test.fixture.v1`; `crud-tools` → `e2e.probe.v1`; `structural` → `e2e.eventtime.v1`, `e2e.canonical_create_contract.v1`,
       `e2e.relationship_contract.v1`; `research-graph` → `research.e2e_search_seed.v1`. 2.8 GREEN.
-- [ ] 6.2 `test/e2e/scenarios/ops/scenario.go:462`: stamp the registered `agentic.loop_completed.v1` instead of
+      Done 2026-08-26: `cmd/e2e-semstreams/fixtures/register.go` (`Carrier` verbatim payload, six keys, floor control) called from `buildPayloadRegistry` after `mission.RegisterPayloads`. `go test -race -count=1 -run TestFixturesRegisterEveryE2EStamp ./cmd/e2e-semstreams/fixtures/` → ok.
+- [x] 6.2 `test/e2e/scenarios/ops/scenario.go:462`: stamp the registered `agentic.loop_completed.v1` instead of
       `agentic.loop-completed.1` (the direct `PutKV` seed stays; O-9 files the write-path hygiene separately).
-- [ ] 6.3 Docs owned by this change (#1104 already rewrote both to `RegisterPayloads`): add floor (`IndexingProfile`),
+      Done 2026-08-26: `ops/scenario.go` seeds `agentic.loop_completed.v1` from the agentic constants; the direct `PutKV` stays.
+- [x] 6.3 Docs owned by this change (#1104 already rewrote both to `RegisterPayloads`): add floor (`IndexingProfile`),
       `Contracts`, and `RegisterTestType` to the rewritten checklist in BOTH `.agents/skills/new-payload/SKILL.md` and
       `docs/concepts/15-payload-registry.md`, the checklist block byte-identical between them (`diff <(sed -n '/^## Step/,/^## Verification/p' …)`
       → empty); `.claude/skills/new-payload/SKILL.md` is a thin adapter and is untouched (technical writer; O-8).
-- [ ] 6.4 `test/e2e/scenarios/agentic/scenario.go:838-848`: the missing-model-endpoint branch becomes a failure, not a
+      Done 2026-08-26: Step 3 of both checklists now carries `IndexingProfile`, `Contracts`, and `RegisterTestType`; the Verification Checklist in the skill gained the two ADR-103 items. The Step 3 block is byte-identical between the two files apart from heading level (`diff <(sed -n '/^## Step 3/,/^## Step 4/p' SKILL.md | sed '1d;$d') <(sed -n '/^### Step 3/,/^### Step 4/p' docs/concepts/15 | sed '1d;$d')` → empty). The invocation written in this task (`/^## Step/,/^## Verification/`) matches nothing in `docs/concepts/15-payload-registry.md`, which has always used `### Step 1–4` under `## Registering a New Payload Type` and has no Verification section — recorded, not restructured (technical writer).
+- [x] 6.4 `test/e2e/scenarios/agentic/scenario.go:838-848`: the missing-model-endpoint branch becomes a failure, not a
       warning, so `e2e:agentic` covers `model_endpoint` (N-1).
+      Done 2026-08-26: `agentic/scenario.go` returns an error when the model endpoint entity is absent.
 - [ ] 6.5 `docs/operations/migration-beta162-to-beta163.md` (part of this package, section "Single type authority (ADR-103)"):
       keep every sister section's `file:line` pinned to the named SHA; if a sister's obligation changes during implementation
       (e.g. a floor value), amend the section — never a sister repository. `proposal.md` and the PR body link it.

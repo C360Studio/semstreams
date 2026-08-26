@@ -23,6 +23,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/dispatch"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -111,7 +112,7 @@ func getIndexingProfileDefaultMetric(registry *metric.MetricsRegistry) *promethe
 			Namespace: "semstreams",
 			Subsystem: "graph_ingest",
 			Name:      "indexing_profile_default_total",
-			Help:      "Entities whose message type was unclassified (no producer declaration AND not in the indexing-profile registry) and defaulted to control — a registry gap",
+			Help:      "Entities born with no producer-declared indexing profile whose registered message type declares no floor and defaulted to control — edit the type's Registration.IndexingProfile",
 		}, []string{"message_type"})
 		if registry != nil {
 			_ = registry.RegisterCounterVec("graph-ingest", "indexing_profile_default_total", indexingProfileDefaultVec)
@@ -484,9 +485,13 @@ type Component struct {
 	outputs []component.Port
 
 	// Dependencies
-	decoder    *message.Decoder
-	natsClient *natsclient.Client
-	logger     *slog.Logger
+	decoder *message.Decoder
+	// payloadRegistry is the binary's single type authority (ADR-103): the
+	// create seams refuse a stamp it does not hold and the indexing-profile
+	// floor is read from the registered type. It is a registry, not a context.
+	payloadRegistry *payloadregistry.Registry
+	natsClient      *natsclient.Client
+	logger          *slog.Logger
 	// Test-only acquisition seams. Production falls through to the exact Client
 	// methods; no exported or adopter-facing lifecycle surface is introduced.
 	waitForStreamInput func(context.Context, string) error
@@ -647,6 +652,11 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "CreateGraphIngest", "factory", "NATSClient required")
 	}
 	natsClient := deps.NATSClient
+	// A nil registry would make the decoder fail at the first fact-lane message
+	// and, under ADR-103, every create fail closed — so it is a boot error.
+	if deps.PayloadRegistry == nil {
+		return nil, errs.WrapInvalid(errors.New("payload registry is required"), "CreateGraphIngest", "factory", "PayloadRegistry required")
+	}
 
 	// Parse configuration
 	var config Config
@@ -662,6 +672,18 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 	config.ApplyDefaults()
 	if err := config.Validate(); err != nil {
 		return nil, errs.Wrap(err, "CreateGraphIngest", "factory", "config validation")
+	}
+	// O-16 (a): hierarchy containers are born with a registered framework type.
+	// A registry that lacks it would refuse every container birth per arrival
+	// (WARN and skip — hierarchy edges silently absent), so the composition
+	// root learns at construction instead.
+	if config.EnableHierarchy {
+		containerType := inference.HierarchyContainerMessageType().Key()
+		if _, ok := deps.PayloadRegistry.GetRegistration(containerType); !ok {
+			return nil, errs.WrapInvalid(
+				fmt.Errorf("enable_hierarchy requires %s in the payload registry (register it with payloadbuiltins.Register)", containerType),
+				"CreateGraphIngest", "factory", "hierarchy container type")
+		}
 	}
 
 	// Create logger with component context
@@ -690,6 +712,7 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 		inputs:                        inputs,
 		outputs:                       outputs,
 		decoder:                       message.NewDecoder(deps.PayloadRegistry),
+		payloadRegistry:               deps.PayloadRegistry,
 		natsClient:                    natsClient,
 		logger:                        logger,
 		entitiesUpdated:               getEntitiesUpdatedMetric(deps.MetricsRegistry),
@@ -1833,10 +1856,11 @@ func stampExplicitIndexingProfile(entity *graph.EntityState, profile string) {
 //   - ≥1 profile triple present (an explicit declaration was stamped upstream,
 //     or an incoming producer is supplying one to an existing unprofiled entity): keep the FIRST and
 //     drop any duplicates. No floor, no metric.
-//   - 0 profile triples present: apply the registry floor
-//     (indexingProfileFloorFor) and append it; increment
-//     indexing_profile_default_total{message_type} ONLY when the type was not in
-//     the registry (an unclassified gap, not a deliberate registered floor).
+//   - 0 profile triples present: apply the floor registered with the type
+//     (Registration.IndexingProfile, ADR-103) and append it; increment
+//     indexing_profile_default_total{message_type} ONLY when the registered type
+//     declares no floor (control is the fail-safe default). The create seams
+//     refuse an unregistered type before this runs.
 func (c *Component) reconcileIndexingProfile(entity *graph.EntityState) {
 	if entity == nil {
 		return
@@ -1856,16 +1880,33 @@ func (c *Component) reconcileIndexingProfile(entity *graph.EntityState) {
 	if kept {
 		return
 	}
-	// No explicit declaration → apply the registry floor (ADR-054 channel c).
-	// The default-fallback metric fires ONLY on a registry MISS — a type that is
-	// neither producer-declared nor classified in the seed and silently took the
-	// control default. A registered floor (e.g. agentic.request → trace) is a
-	// deliberate classification, not an operator gap.
-	profile, registered := indexingProfileFloorFor(entity.MessageType)
+	// No explicit declaration → apply the floor registered with the type
+	// (ADR-054 channel c, ADR-103). The default-fallback metric fires ONLY when
+	// the registered type declares no floor and silently took the control
+	// default. A registered floor (e.g. agentic.request → trace) is a deliberate
+	// classification, not an operator gap; the label now points at a
+	// Registration literal.
+	profile, floored := c.registeredIndexingProfile(entity.MessageType)
 	appendIndexingProfileTriple(entity, profile)
-	if !registered && c.indexingProfileDefault != nil {
+	if !floored && c.indexingProfileDefault != nil {
 		c.indexingProfileDefault.WithLabelValues(indexingProfileMetricLabel(entity.MessageType)).Inc()
 	}
+}
+
+// registeredIndexingProfile returns the floor registered with mt and whether
+// the type declared one. A registered type with an empty floor and a type the
+// registry does not hold both fall to control (fail-safe toward keeping the
+// substrate reachable) with floored=false, which fires the default metric; a
+// component holding no registry answers the same way rather than guessing.
+func (c *Component) registeredIndexingProfile(mt message.Type) (profile string, floored bool) {
+	if c.payloadRegistry == nil {
+		return vocabulary.IndexingProfileControl, false
+	}
+	floor, registered := c.payloadRegistry.IndexingProfileFor(mt.Key())
+	if !registered || floor == "" {
+		return vocabulary.IndexingProfileControl, false
+	}
+	return floor, true
 }
 
 // indexingProfileMetricLabel renders a message.Type as a stable, low-cardinality
@@ -2084,6 +2125,12 @@ func (c *Component) createEntityWithReceipt(
 ) (*graph.EntityState, uint64, error) {
 	if entity == nil {
 		return nil, 0, errs.WrapInvalid(errs.ErrInvalidData, "Component", "CreateEntity", "entity cannot be nil")
+	}
+	// ADR-103 d3: the in-process birth passes the same registered-type gate as
+	// the RPC lane. The classified error goes back to the caller (the hierarchy
+	// container path WARNs and continues); it is not metered here.
+	if err := c.requireRegisteredMessageType(entity); err != nil {
+		return nil, 0, err
 	}
 
 	// Validate entity ID format

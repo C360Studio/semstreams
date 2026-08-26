@@ -33,7 +33,8 @@ func TestIntegration_QueryHandlers(t *testing.T) {
 	// Create component
 	config := DefaultConfig()
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: newTestPayloadRegistry(t),
 	}
 
 	configJSON, err := json.Marshal(config)
@@ -55,7 +56,8 @@ func TestIntegration_QueryHandlers(t *testing.T) {
 	// Create test entities
 	entities := []*graph.EntityState{
 		{
-			ID: "c360.platform.robotics.mav1.drone.001",
+			ID:          "c360.platform.robotics.mav1.drone.001",
+			MessageType: testEntityType(),
 			Triples: []message.Triple{
 				{
 					Subject:   "c360.platform.robotics.mav1.drone.001",
@@ -68,7 +70,8 @@ func TestIntegration_QueryHandlers(t *testing.T) {
 			UpdatedAt: time.Now(),
 		},
 		{
-			ID: "c360.platform.robotics.mav1.drone.002",
+			ID:          "c360.platform.robotics.mav1.drone.002",
+			MessageType: testEntityType(),
 			Triples: []message.Triple{
 				{
 					Subject:   "c360.platform.robotics.mav1.drone.002",

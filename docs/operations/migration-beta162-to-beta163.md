@@ -17,7 +17,11 @@ key). Reads, `entity.reconcile`, `triple.append`, `entity.delete`, and entities 
 of an unknown type are refused. `projection.Contract` literals keep compiling (the contract types move to
 `pkg/projection/contract` with aliases). A product that creates through `pkg/projection.MutationClient.Create` may omit
 `entity.MessageType`: the client fills it from the bound contract (owner ruling O-17); a non-empty stamp that conflicts with
-the contract is rejected. Full mechanics: `openspec/specs/payload-registry/spec.md`, `openspec/specs/graph-ingest/spec.md`.
+the contract is rejected. Two boot-time consequences for a composition root that builds its own graph-ingest: the
+graph-ingest factory refuses to construct without a payload registry (`Dependencies.PayloadRegistry`), and with
+`enable_hierarchy: true` it refuses to construct unless that registry holds `graph.hierarchy_container.v1` — both are
+registered by `payloadbuiltins.Register`, so a root that calls it (semmachina, semdev do) sees no change. Full mechanics:
+`openspec/specs/payload-registry/spec.md`, `openspec/specs/graph-ingest/spec.md`.
 
 ### The one obligation
 

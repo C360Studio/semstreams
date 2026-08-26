@@ -32,7 +32,7 @@ func startBatchTestComponent(t *testing.T) (context.Context, *Component) {
 	natsClient := testClient.Client
 
 	config := DefaultConfig()
-	deps := component.Dependencies{NATSClient: natsClient}
+	deps := component.Dependencies{NATSClient: natsClient, PayloadRegistry: newTestPayloadRegistry(t)}
 
 	configJSON, err := json.Marshal(config)
 	require.NoError(t, err)

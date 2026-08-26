@@ -73,7 +73,8 @@ func createTestComponentForLifecycle() *Component {
 
 	config := DefaultConfig()
 	deps := component.Dependencies{
-		NATSClient: tc.Client,
+		NATSClient:      tc.Client,
+		PayloadRegistry: mustTestPayloadRegistry(),
 	}
 
 	configJSON, err := json.Marshal(config)
@@ -141,7 +142,7 @@ func TestGraphIngest_FailedStartRollbackOwnsExactConsumerAndPreservesDurable(t *
 	if err != nil {
 		t.Fatalf("marshal config: %v", err)
 	}
-	created, err := CreateGraphIngest(configJSON, component.Dependencies{NATSClient: getSharedNATSClient(t).Client})
+	created, err := CreateGraphIngest(configJSON, component.Dependencies{NATSClient: getSharedNATSClient(t).Client, PayloadRegistry: newTestPayloadRegistry(t)})
 	if err != nil {
 		t.Fatalf("CreateGraphIngest: %v", err)
 	}

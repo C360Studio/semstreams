@@ -41,7 +41,7 @@ func TestIntegration_QueryEntityNATS_WireContract(t *testing.T) {
 	natsClient := testClient.Client
 
 	config := DefaultConfig()
-	deps := component.Dependencies{NATSClient: natsClient}
+	deps := component.Dependencies{NATSClient: natsClient, PayloadRegistry: newTestPayloadRegistry(t)}
 
 	configJSON, err := json.Marshal(config)
 	require.NoError(t, err)
