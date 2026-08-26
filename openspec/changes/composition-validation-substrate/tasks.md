@@ -383,6 +383,13 @@ before the omission, and record `shasum -a 256` equality of the restored file.
       `--- FAIL: TestComponentManagerBootFindingsHonourExplicitStreams (0.26s)` (integration; `TestComponentManagerExposesBootFindings`
       still PASS); `service/component_manager.go` restored, sha256 `99f95458…cb8c` before and after. Log: scratchpad
       `mutations2.log`; tree clean and `go build ./...` OK after.
+- [x] 4.17 (4.5 re-enabled after the H4 ruling) Delete the boot refuse, keep the log → `[applied]` →
+      `--- FAIL: TestComponentManagerRefusesBootOnErrorFinding (0.28s)` (integration; `TestComponentManagerExposesBootFindings`
+      still PASS); `service/component_manager.go` restored, sha256 `298ed7e4…20ee` before and after.
+- [x] 4.18 (owner ruling H4) Drop the external-boundary marker check in `composition.Analyze` → `[applied]` →
+      `--- FAIL: TestValidateSuppressesOrphanOnlyForExternallyFedInput (0.00s)` (`TestValidateReportsRequiredStreamInputWithoutPublisher`
+      still PASS, so unmarked orphans are guarded independently); `composition/analyze.go` restored, sha256
+      `66fb8a8a…fa24` before and after. Log: scratchpad `mutations3.log`; tree clean and `go build ./...` OK after.
 
 ## 5. Schema regeneration
 
@@ -445,7 +452,10 @@ before the omission, and record `shasum -a 256` equality of the restored file.
       (full-catalog verbs vs `Selected(cfg)` boot gating); M5 FIXED (3.2 names the exercised oracle subset); Q8 FIXED
       (delta GIVEN reworded: KV writers → `connection_pattern_error`, same network address → `exclusive_resource_conflict`);
       NITs FIXED (`cli.IsVerb` exported and used by both binaries instead of a duplicated verb switch; Mermaid edge sort
-      tie-breaks on Pattern and ConnectionID). Whether the 38 `DeclarePorts` exports stay exported: PENDING OWNER.
+      tie-breaks on Pattern and ConnectionID).
+      Owner ruling on H4 (2026-08-26, #1092/#1101): option (ii), an explicit external-boundary marker — IMPLEMENTED
+      (3.5c, 3.6, 4.17, 4.18; the two grammar-control amendments). Ruled unchanged: the 38 `DeclarePorts` exports stay
+      exported (default keep); #1107 (verbs vs boot catalog) stays filed — no registry-builder parameter added.
 - [ ] 7.2 Owner-run Codex round where the owner asks for it: verdict and dispositions recorded here; each fix
       re-enters 7.1 and re-runs the focused commands of 2.11 with `-v`.
 - [ ] 7.3 `conformance.md`: replace every `__` placeholder with the measured `file:line` at the head that carries the
