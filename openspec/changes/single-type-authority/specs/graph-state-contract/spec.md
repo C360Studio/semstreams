@@ -3,8 +3,8 @@
 ### Requirement: The canonical codec and the boot sweep never consult the payload registry
 
 `message_type` on a stored entity MUST be recorded from a registered key at write time and MUST be interpreted as provenance
-only: the canonical decoder, `ValidateEntityStateContract`, the boot snapshot sweep, and every authoritative reader MUST NOT
-consult the payload registry, so an entity persisted under a key that is later unregistered stays readable, is never
+only: the canonical decoder, `ValidateEntityStateContract`, the boot snapshot sweep, the Graphable merge path, and every
+authoritative reader MUST NOT consult the payload registry, so an entity persisted under a key that is later unregistered stays readable, is never
 inventoried as poison, and remains mutable through must-exist operations.
 
 #### Scenario: a resident entity with an unregistered stamp is not poison

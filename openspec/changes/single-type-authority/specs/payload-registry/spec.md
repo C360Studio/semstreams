@@ -5,7 +5,9 @@
 The payload registry MUST be the single authority for which `message.Type` keys (`domain.category.version`) exist in a
 deployment. `Register` MUST reject a nil registration, a nil factory, an empty domain, category, or version, a factory whose
 payload `Schema()` disagrees with the registration, and a key already registered; there MUST be no second catalogue of
-types, and no global registry — each binary constructs its own and injects it through `Dependencies.PayloadRegistry`.
+types, and no global registry — each binary constructs its own and injects it through `Dependencies.PayloadRegistry`. A type
+registered in one binary is not thereby a type of another: the attributes registered with it (floor, contracts) exist only
+where the type is registered.
 
 #### Scenario: a colliding key is refused at registration
 
@@ -13,6 +15,12 @@ types, and no global registry — each binary constructs its own and injects it 
 - **WHEN** a second registration with the same domain, category, and version is registered
 - **THEN** `Register` returns an error naming the key
 - **AND** the first registration is unchanged
+
+#### Scenario: a type is known only where it is registered
+
+- **GIVEN** a binary that does not select graph research
+- **WHEN** `IndexingProfileFor("research.result.v1")` is read from its registry
+- **THEN** it reports the type as unregistered with no floor
 
 #### Scenario: a factory that disagrees with its registration is refused
 

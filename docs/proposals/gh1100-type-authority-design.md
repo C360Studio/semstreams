@@ -8,8 +8,8 @@ Status: **draft for pre-owner design review; not approved.**
 ## 1. The decision (as the owner stated it, 2026-08-26)
 
 - Inventory: `docs/proposals/gh1100-type-authority-inventory.md`, SHA-256
-  `286ce1d0bf83878d9a8f2623a993b843e5de9873152cbb43ed767358a09ea194`. Review state: independent inventory pass PENDING; this design was drafted in the same pass at the
-  caller's direction and is conditional on that pass.
+  `4c8f0171817159c6bca4be86293ddb34ba547fc92cce821a5717fe66b4feeba3` (revision 2). Review state: **INVENTORY PASS WITH DIVERGENCES** (blind, Fable, 2026-08-26);
+  D1–D3 corrected, L1–L5 added in this revision 2; pre-owner design review pending.
 
 > The payload registry is the single type authority; a projection contract and an indexing-profile floor are attributes
 > registered WITH the type, not parallel tables; `EntityState.MessageType` is therefore always a registered key, and ingest
@@ -27,6 +27,12 @@ owner items (§15).
 | C | `Registration.ContractName string` referencing a contract held elsewhere | tiny | rejected — a linkage by naming coincidence (`.agents/contracts/semstreams-architect.md:156-158`) |
 | D | Retire `Contract.MessageType` and key every contract from the registry only | removes one spelling | rejected for this wave — five sisters set the field (§11); nothing in the ruling needs it; see owner item O-13 |
 | E | Do nothing | — | the issue's consequences stand; #1095 slice B cannot import a lesson |
+
+Premise for A (**L1**): `pkg/projection.MutationClient.Create` has zero production callers in-tree (only e2e
+`graph_roundtrip.go:105`, `lessons/scenario.go:388`); the six framework stampers call `internal/graphmutation/client.go:89`
+directly, so the client-side check at `mutation_client.go:322-326` protects only sisters using `CreateMutation` (semmachina,
+semdev) and e2e. An ingest-side gate is the **only** check that covers the framework's own writers; a client-side-only design
+would leave every in-tree birth unchecked.
 
 Extending an existing surface (A) rather than adding a channel beside it: the registry already exists per binary
 (`component/dependencies.go:74`), graph-ingest already holds it (`component.go:692`), and every one of the 22 floor keys is
@@ -93,6 +99,11 @@ decoder (a registry, not a context). Meaning of `indexing_profile_default_total{
 declares no floor received an entity with no producer declaration" — the label now points at a `Registration` literal. The
 help string and `docs/adr/054` are not amended (history); the `graph-ingest` spec delta carries the new meaning.
 
+**Floors are per-binary because registrations are (D1).** The six `research.*` floors exist only in a binary that selects
+graph research (`cmd/semstreams/main.go:766-770`; `agentic/research/register.go:10-14`). This is intended, not a loss: a
+binary that does not register a type can neither decode it on the fact lane nor birth it on the mutation lane (§6), so a
+floor for it would be dead. The table it replaces was global text that described types some binaries never see. Owner item O-14.
+
 ## 6. The ingest check
 
 Seam: `processor/graph-ingest/canonical_mutations.go:207`, immediately after `IsValid` and before any clone or profile work:
@@ -109,12 +120,20 @@ if _, ok := c.payloadRegistry.GetRegistration(key); !ok {
 
 - New closed code `graph.ErrorCodeMessageTypeUnregistered = "message_type_unregistered"` (`graph/mutation_responses.go:10-52`;
   class `errs.ErrorInvalid` — the caller registers the type, it does not retry).
-- Mutation lane only: the fact lane already rejects at decode (`message/base_message.go:301-306`); `reconcile`/`append`/`delete`
-  carry no type (`graph/mutation_requests.go:17-70`).
+- Mutation lane only: the fact lane already rejects at decode (`message/base_message.go:301-307`); `reconcile`/`append`/`delete`
+  carry no type (`graph/mutation_requests.go:17-41`).
 - A loud log names the key (a type key is not identity bytes).
 - The factory (`component.go:646`) rejects a nil `deps.PayloadRegistry` at construction — today a nil registry surfaces at the
   first message (`message/decoder.go:39-44`); after ADR-103 it would also silently make every create fail, so it must be a boot error.
 - `pkg/projection/mutation_client.go:322-327` is unchanged: the client does not predict registration; ingest observes it.
+- **Nil registry at the seam is fail-closed (L2).** `c.payloadRegistry == nil` at the create seam → `rejectInternal`
+  (`mutation_runtime.go:206-208`, code `internal`) with an ERROR log naming the missing dependency; never a pass-through
+  (fail-open would be a zero standing in for UNKNOWN). 23 `&Component{` literals in six ingest test files bypass the factory
+  (inventory §2.4); a fixture helper sets the registry on each and lands in the same change (tasks 5.4). Owner item O-15.
+- **The gate is create-only and touches no read or merge path (L3).** The Graphable merge branch (`component.go:2036`)
+  assigns the arrival's decoded — therefore registered — type and consults nothing; the boot sweep, codec, exact reads, and
+  must-exist operations never validate the type (§10). A running deployment holding the six stamps needs no migration, and
+  this is not a pre-v1 storage cutover under the fresh-state rules.
 
 ## 7. The six framework types as registered Graphable payloads
 
@@ -158,8 +177,9 @@ is owner item O-4; the design mints them because the conformance test is their c
   `go list -deps ./payloadbuiltins | grep -c processor/graph-ingest` → 0, so `package graphingest` tests may build their registry
   from `payloadbuiltins.Register` plus the stub helper; `newTestDependencies` (`processor/graph-ingest/metrics_test.go:147-156`)
   gains a `PayloadRegistry`. 13 test files construct `CreateEntityRequest{` (inventory §2.2).
-- e2e: `cmd/e2e-semstreams/fixtures.RegisterPayloads(reg)` registers the six test keys as verbatim carriers with floor `control`
-  from `buildPayloadRegistry` (`main.go:358-378`); the ops seed's `agentic.loop-completed.1` (`ops/scenario.go:462`) becomes the
+- e2e (**L4**): `cmd/e2e-semstreams/fixtures.RegisterPayloads(reg)` registers the six e2e keys as verbatim carriers with floor
+  `control` from `buildPayloadRegistry` (`main.go:358-378`) — without it every scenario that stamps them through the real wire is
+  rejected (tier map §11); the ops direct-`PutKV` seed is unaffected; the ops seed's `agentic.loop-completed.1` (`ops/scenario.go:462`) becomes the
   registered `agentic.loop_completed.v1` (a mis-spelled key today; the direct `PutKV` remains — O-9).
 
 ## 9. ADR-076 families
@@ -184,12 +204,18 @@ mutations unaffected; a fact-lane re-arrival overwrites the stamp with its regis
 types, semdev 2, semconnect 11, before adopting the tag; semsource and semteams stamp only registered or framework types;
 semdragon (beta.135) and semmem (pre-rename module) are off the current wire. Exported surface grows only additively
 (`Registration` fields, `pkg/projection/contract` + aliases, one error code, six payload types, `lifecycle.RegisterPayloads`,
-`RegisterTestType`); `internal/builtinprojection` was never importable by sisters.
+`RegisterTestType`); `internal/builtinprojection` was never importable by sisters. **New import edge (L5):**
+`payloadregistry → pkg/projection/contract → {pkg/types, vocabulary → pkg/platform}`; neither `payloadregistry` nor `message`
+imports `vocabulary` today (measured 0/0), and `message` inherits the edge through `payloadregistry`. The package comment at
+`payloadregistry/registry.go:1-16` ("imports only stdlib + pkg/errs + pkg/types") is rewritten to name it (tasks 3.2).
+semmachina and semdev also birth `lifecycle.harness.v1` from inside their binaries (inventory §6, D2); registering it in
+`payloadbuiltins.Register` covers them because both call it.
 
-Covering tiers (each exercises a mutation-lane birth the gate now guards): `e2e:agentic` (`loop_execution`, `model_endpoint`),
-`e2e:lessons` (`agent_lesson`, `test.fixture`), `e2e:ops` (`ops_diagnosis`), `e2e:research-graph` (`loop_execution` via
-llmwrap, `research.e2e_search_seed`), `e2e:lifecycle` (`lifecycle.harness`), `e2e:crud-tools` (`e2e.probe`), `e2e:core`
-(`test.fixture` roundtrip), `e2e:structural` (three `e2e.*`). Minimum green before the BREAKING commit lands: `e2e:agentic` and
+Covering tiers (each exercises a mutation-lane birth the gate now guards; the e2e-only keys in parentheses are registered by
+`cmd/e2e-semstreams/fixtures`, tasks 6.1): `e2e:agentic` (`loop_execution`, `model_endpoint`), `e2e:lessons` (`agent_lesson`,
+`test.fixture.v1`), `e2e:ops` (`ops_diagnosis`; the direct-KV seed is unaffected), `e2e:research-graph` (`loop_execution` via
+llmwrap, `research.e2e_search_seed.v1`), `e2e:lifecycle` (`lifecycle.harness`), `e2e:crud-tools` (`e2e.probe.v1`), `e2e:core`
+(`test.fixture.v1` roundtrip), `e2e:structural` (`e2e.eventtime.v1`, `e2e.canonical_create_contract.v1`, `e2e.relationship_contract.v1`). Minimum green before the BREAKING commit lands: `e2e:agentic` and
 `e2e:lessons`; the full union runs in tasks §7. `web_observation` has no tier (inventory §9.1) — coverage gap filed (O-10);
 its gate is the integration test `TestWebObservationBirthIsRegistered`.
 
@@ -218,6 +244,7 @@ documents the alias). `agentic`: `TestAgentLessonEntity_RoundTrip`, `TestOpsDiag
 `processor/graph-ingest` (`-tags=integration`): `TestCreateRejectsUnregisteredMessageType` (decode the reply into a fresh value;
 code `message_type_unregistered`, `detail.message_type` = key; no `ENTITY_STATES` key; `mutation_rejections_total{reason}` +1),
 `TestCreateAcceptsRegisteredMessageType`, `TestFloorComesFromRegistration`, `TestFactoryRejectsNilPayloadRegistry` (unit),
+`TestCreateSeamRejectsWhenRegistryMissing` (unit; a `&Component{}` literal without a registry answers `internal`, no panic),
 `TestWebObservationBirthIsRegistered`. `processor/agentic-tools`: `TestEmitLessonBuildsEntityTriples` (equality with the former builder's output).
 
 ## 14. Forced omissions (one per new registration path, check, or builder)
@@ -227,7 +254,8 @@ Delete `agentic.RegisterPayloads`'s lesson row → `TestPayloadRegistryIsTheSing
 delete the registry lookup at the create seam → `TestCreateRejectsUnregisteredMessageType`; delete `IndexingProfile:` on the
 lesson registration → `TestFloorComesFromRegistration`; delete one predicate line in `AgentLessonEntity.Triples()` →
 `TestRegisteredContractMatchesTriples` and `TestEmitLessonBuildsEntityTriples`; delete the nil-registry guard in the factory →
-`TestFactoryRejectsNilPayloadRegistry`; delete the e2e fixtures registration → `e2e:core` and `e2e:structural`.
+`TestFactoryRejectsNilPayloadRegistry`; delete the nil-registry guard at the seam → `TestCreateSeamRejectsWhenRegistryMissing`
+(panic or pass-through); delete the e2e fixtures registration → `e2e:core` and `e2e:structural`.
 
 ## 15. Owner items
 
@@ -246,12 +274,16 @@ lesson registration → `TestFloorComesFromRegistration`; delete one predicate l
 - **O-9** `test/e2e/scenarios/ops/scenario.go:459-470` seeds `ENTITY_STATES` by direct `PutKV` with a mis-spelled key — fix the
   key here; the direct write is a separate hygiene issue.
 - **O-10** `web_observation` births have no e2e tier — file the coverage gap.
-- **O-11** semteams reproduces framework contract literals (`cmd/semteams/main.go:971,998`) against `agentic-lessons/spec.md:193-206` —
-  communicate-only.
+- **O-11** semteams re-declares the framework contract structure with the framework's key builders (`cmd/semteams/main.go:971,998`)
+  against `agentic-lessons/spec.md:193-206` — communicate-only.
 - **O-12** semmem's local tree is pre-rename; the federation MVP that motivated #1100 is not in any local tree — where is the
   sister's finding recorded?
 - **O-13** `Contract.IndexingProfile` retained; when both it and the type's floor are set they must agree (validated at
   `Register`). Retire later or keep?
+- **O-14** Floors are per-binary because registrations are (§5, D1): the six `research.*` floors exist only where graph research
+  is selected. Confirm this is intended.
+- **O-15** Nil registry at the create seam is fail-closed (`internal`, ERROR log) with the test-fixture sweep in the same
+  change (§6, L2). Confirm, or rule fail-open with the reason recorded.
 
 ## 16. PREMISE FAILED (claims in the issue or comments that do not survive measurement)
 
@@ -259,10 +291,11 @@ lesson registration → `TestFloorComesFromRegistration`; delete one predicate l
   seven test-only keys and one mis-spelled direct-KV seed (inventory §2.2).
 - **P2** "ADR-076 … families are registered — compare" — they are entity-ID families, not types; `graph/events.go` mints no
   `message.Type`; `graph.events.entity.create` has no consumer.
-- **P3** The registry's "unknown types … falling back to GenericPayload" (`payloadregistry/registry.go:135-137`) is a stale
-  comment: `message/base_message.go:301-306` rejects. The fact lane already enforces the ruling; this change extends it.
+- **P3** The registry's "unknown types … falling back to GenericPayload" (`payloadregistry/registry.go:134-137`) is a stale
+  comment: `message/base_message.go:301-307` rejects. The fact lane already enforces the ruling; this change extends it.
 - **P4** "Three of five have no birth contract" — count holds; the two that have one hold it in an **internal** package, and
-  two sisters re-type the literals (`semteams/cmd/semteams/main.go:971,998`, `semdev/internal/graphown/contracts.go:444`).
+  two sisters re-declare the structure with the framework's key builders (`semteams/cmd/semteams/main.go:971,998`,
+  `semdev/internal/graphown/contracts.go:444`).
 - **P5** "`emit_lesson.go:236` … the only place the stamp does semantic work" — also `pkg/projection/mutation_client.go:322-327`
   and semdragon `questdag/unit.go:599`; no query-side reader exists.
 - **P6** "Independent of the #1095 rulings … ahead of slice B" — PR #1099 lands slices A and B in one PR; its lesson-import path

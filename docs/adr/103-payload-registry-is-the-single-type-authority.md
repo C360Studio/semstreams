@@ -19,7 +19,8 @@ indexing-profile floor. Six framework entity types are born on the mutation lane
 `_Distinct` tests hand-compare category strings because there is no registry to compare against. Each table is locally
 coherent; the residue is a durable type identifier no authority can resolve to a schema, a floor, or a wire form — which is
 why a lesson cannot cross a federation boundary as itself. The fact lane already rejects an unregistered type at decode
-(`message/base_message.go:301-306`); the mutation lane accepts any three non-empty parts.
+(`message/base_message.go:301-307`); the mutation lane accepts any three non-empty parts. The framework's own writers call the mutation client directly
+(`internal/graphmutation/client.go:89`), so an ingest-side gate is the only check that can cover them.
 
 ## Decision
 
@@ -48,6 +49,9 @@ why a lesson cannot cross a federation boundary as itself. The fact lane already
   rejection at the first write, not a silent `control` and a metric nobody scrapes.
 - `indexing_profile_default_total{message_type}` now names a registration whose floor is empty — an editable literal —
   rather than a key that exists in no file.
+- Floors and contracts exist per binary, because registrations do: a type a binary does not register can neither be decoded
+  nor born there, so the floor table it replaces was describing types some binaries never see.
+- The gate is create-only; no read, merge, codec, or boot-sweep path consults the registry, so retained state needs no migration.
 - Birth discipline (#818) has a home to read from without inventing another table.
 - **BREAKING** for semmachina (4 types), semdev (2), semconnect (11); none for semsource and semteams. Covering tiers before
   the breaking commit lands: `e2e:agentic` and `e2e:lessons` at minimum; the full union in the change's tasks.

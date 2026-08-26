@@ -7,7 +7,8 @@ after the structural `IsValid` check and before any clone, profile, or KV work. 
 `message_type_unregistered`, class invalid, with the key in detail `message_type`; MUST write nothing; MUST be metered once as
 `mutation_rejections_total{reason="message_type_unregistered"}`; and MUST emit a loud log naming the key. The fact lane is
 unchanged: an unregistered type is refused at decode. `entity.reconcile`, `triple.append`, and `entity.delete` carry no type
-and are not affected. graph-ingest MUST refuse to construct without a payload registry.
+and are not affected. graph-ingest MUST refuse to construct without a payload registry, and a create reaching the seam of a
+component that nonetheless holds no registry MUST be refused with code `internal` and an ERROR log — never admitted.
 
 #### Scenario: an unregistered stamp never reaches ENTITY_STATES
 
@@ -22,6 +23,13 @@ and are not affected. graph-ingest MUST refuse to construct without a payload re
 - **GIVEN** `agentic.agent_lesson.v1` is registered
 - **WHEN** an `entity.create` request stamps it
 - **THEN** the entity is created with that `message_type` persisted verbatim
+
+#### Scenario: a create with no registry configured is refused
+
+- **GIVEN** a graph-ingest component constructed without a payload registry
+- **WHEN** an `entity.create` request reaches the create seam
+- **THEN** the reply carries code `internal`
+- **AND** nothing is written and the process does not panic
 
 #### Scenario: a missing registry is a construction error
 
