@@ -16,9 +16,6 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// agentLoopsBucket is the KV bucket the /activity SSE stream serves.
-const agentLoopsBucket = "AGENT_LOOPS"
-
 // completeKeyPrefix marks terminal AGENT_LOOPS keys (COMPLETE_<loopID>)
 // carrying completion event payloads rather than live LoopEntity state.
 const completeKeyPrefix = "COMPLETE_"
@@ -197,9 +194,13 @@ func (c *Component) ensureActivityView(ctx context.Context) (*graphview.View[act
 		if c.natsClient == nil {
 			return nil, ErrNATSClientNil
 		}
-		kv, err := c.natsClient.GetKeyValueBucket(ctx, agentLoopsBucket)
+		bucket, bucketErr := c.loopsBucketName()
+		if bucketErr != nil {
+			return nil, fmt.Errorf("resolve activity bucket: %w", bucketErr)
+		}
+		kv, err := c.natsClient.GetKeyValueBucket(ctx, bucket)
 		if err != nil {
-			return nil, fmt.Errorf("get %s bucket: %w", agentLoopsBucket, err)
+			return nil, fmt.Errorf("get %s bucket: %w", bucket, err)
 		}
 		source = kv
 	}

@@ -23,8 +23,37 @@ func TestDefaultConfig(t *testing.T) {
 
 	// Check ports
 	require.NotNil(t, config.Ports)
-	assert.Len(t, config.Ports.Inputs, 5)
+	assert.Len(t, config.Ports.Inputs, 6)
 	assert.Len(t, config.Ports.Outputs, 4)
+
+	// gh#1094 R8: the loops bucket is declared, so every persisted-loop
+	// reader observes the name instead of predicting it.
+	bucket, err := loopsBucketFromPorts(config.Ports)
+	require.NoError(t, err)
+	assert.Equal(t, "AGENT_LOOPS", bucket)
+}
+
+func TestLoopsBucketFromPortsObservesTheDeclaredBinding(t *testing.T) {
+	t.Run("bound to a non-default bucket", func(t *testing.T) {
+		ports := *DefaultConfig().Ports
+		inputs := append([]component.PortDefinition(nil), ports.Inputs...)
+		for index, definition := range inputs {
+			if definition.Name == agentLoopsPortName {
+				inputs[index].Config = component.KVReadPort{Bucket: "LOOPS_ALT"}
+			}
+		}
+		ports.Inputs = inputs
+		bucket, err := loopsBucketFromPorts(&ports)
+		require.NoError(t, err)
+		assert.Equal(t, "LOOPS_ALT", bucket)
+	})
+
+	t.Run("undeclared port is an error, never a default", func(t *testing.T) {
+		_, err := loopsBucketFromPorts(&component.PortConfig{})
+		require.Error(t, err)
+		_, err = loopsBucketFromPorts(nil)
+		require.Error(t, err)
+	})
 }
 
 func TestConfig_Validate(t *testing.T) {

@@ -3833,3 +3833,41 @@ func TestAction_PublishAgent_NoFilesystemPolicy(t *testing.T) {
 		assert.False(t, hasScratch, "no scratch_paths must be stamped when unset")
 	}
 }
+
+// TestAction_PublishAgent_CarriesNoChannelFields pins the rejected baseline of
+// gh#1094: a rule-spawned task carries NO channel route. Copying the trigger
+// loop's ChannelType/ChannelID/UserID onto every spawn would make each
+// internal phase (baseline, gather, reviewer) a routed loop whose result is
+// delivered to the user, which is strictly worse than the defect it would be
+// fixing. The framework instead OBSERVES the origin from persisted ancestry
+// at settlement time (ADR-101 D3), so this must stay empty.
+func TestAction_PublishAgent_CarriesNoChannelFields(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.coordinator",
+		Role:    "coordinator",
+		Model:   "mock-model",
+		Prompt:  "wake up and answer",
+	}
+
+	// A loop-entity trigger: the richest spawn shape, carrying ancestry and a
+	// run anchor. Even here no channel field rides along.
+	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agent", "agentic-loop", "execution", "loop-root-abc")
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: loopEntityID}))
+	require.Len(t, mock.published, 1)
+
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+
+	assert.Empty(t, task.ChannelType, "a rule-spawned task must carry no channel type")
+	assert.Empty(t, task.ChannelID, "a rule-spawned task must carry no channel id")
+	assert.Empty(t, task.UserID, "a rule-spawned task must carry no user id")
+	assert.Equal(t, "loop-root-abc", task.ParentLoopID, "ancestry, not routing, is what the spawn carries")
+}

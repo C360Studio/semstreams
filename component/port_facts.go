@@ -12,6 +12,7 @@ type PortFacts struct {
 	stream            *StreamFacts
 	network           *NetworkFacts
 	storeReadBucket   string
+	kvReadBucket      string
 }
 
 // StreamFacts is the immutable JetStream-specific portion of PortFacts.
@@ -89,6 +90,22 @@ func (f PortFacts) StoreReadBucket() (string, bool) {
 		return "", false
 	}
 	return f.storeReadBucket, true
+}
+
+// KVReadBucket returns the declared KV bucket for a kv-read port, so a
+// component OBSERVES the bucket it was bound to instead of predicting the
+// name with a constant. Reports false for every other port kind: the second
+// return is the whole answer to "is this a KV read port", and a caller must
+// never treat an empty bucket as a default.
+//
+// This is the projection route for the bucket; concrete port config types are
+// only interpreted by the canonical projection owners (this file and
+// port_codec.go).
+func (f PortFacts) KVReadBucket() (string, bool) {
+	if f.kind != PortKindKVRead || f.kvReadBucket == "" {
+		return "", false
+	}
+	return f.kvReadBucket, true
 }
 
 // Name returns the declared stream name.
@@ -238,6 +255,7 @@ func kvReadPortFacts(config Portable) PortFacts {
 	port := config.(KVReadPort)
 	facts := basePortFacts(port, PatternRead, port.ResourceID())
 	facts.interfaceContract = cloneInterfaceContract(port.Interface)
+	facts.kvReadBucket = port.Bucket
 	return facts
 }
 

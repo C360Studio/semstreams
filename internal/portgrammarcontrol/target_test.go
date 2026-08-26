@@ -20,6 +20,7 @@ import (
 	"github.com/c360studio/semstreams/internal/componentadmission"
 	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/natsclient"
+	agenticdispatch "github.com/c360studio/semstreams/processor/agentic-dispatch"
 )
 
 type targetConfigItem struct {
@@ -339,6 +340,63 @@ func TestPostFoundationBToolDiscoveryCutoverAmendmentIsExact(t *testing.T) {
 	if len(postFoundationBToolDiscoveryGoIdentityRetirements) != len(additions) {
 		t.Fatalf("tool-discovery Go additions=%d, retirements=%d; cutover must remain one-for-one",
 			len(additions), len(postFoundationBToolDiscoveryGoIdentityRetirements))
+	}
+}
+
+// TestPostFoundationBWorkflowTerminalAmendmentIsExact keeps gh#1094's port
+// amendment from becoming a general licence: exactly one file, exactly one
+// KV read identity, and it must be the agentic-dispatch config that declares
+// the agent_loops port whose bucket the settlement and /activity readers
+// resolve.
+func TestPostFoundationBWorkflowTerminalAmendmentIsExact(t *testing.T) {
+	t.Parallel()
+
+	if len(postFoundationBWorkflowTerminalGoIdentityAdditions) != 1 {
+		t.Fatalf("workflow-terminal Go additions cover %d files, want exactly 1: %v",
+			len(postFoundationBWorkflowTerminalGoIdentityAdditions),
+			postFoundationBWorkflowTerminalGoIdentityAdditions)
+	}
+	additions := postFoundationBWorkflowTerminalGoIdentityAdditions["processor/agentic-dispatch/config.go"]
+	if !slices.Equal(additions, []string{"<dynamic>|KVReadPort"}) {
+		t.Fatalf("workflow-terminal Go additions=%v, want exactly the dispatch KVReadPort addition", additions)
+	}
+
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := agenticdispatch.DefaultConfig()
+	if config.Ports == nil {
+		t.Fatal("dispatch default config declares no ports")
+	}
+	declared := 0
+	for _, definition := range config.Ports.Inputs {
+		port, resolveErr := definition.Resolve(component.DirectionInput)
+		if resolveErr != nil {
+			t.Fatalf("resolve dispatch input %q: %v", definition.Name, resolveErr)
+		}
+		facts, factsErr := port.Facts()
+		if factsErr != nil {
+			t.Fatalf("project dispatch input %q: %v", definition.Name, factsErr)
+		}
+		if bucket, ok := facts.KVReadBucket(); ok {
+			declared++
+			if bucket != "AGENT_LOOPS" {
+				t.Fatalf("dispatch kv-read input %q bucket=%q, want AGENT_LOOPS", definition.Name, bucket)
+			}
+		}
+	}
+	if declared != len(additions) {
+		t.Fatalf("dispatch declares %d kv-read inputs, want %d", declared, len(additions))
+	}
+	// The amendment exists because the constant is gone; if a constant comes
+	// back the amendment is no longer describing this repository.
+	source, err := os.ReadFile(filepath.Join(root, "processor", "agentic-dispatch", "http_activity.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(source), "agentLoopsBucket") {
+		t.Fatal("processor/agentic-dispatch/http_activity.go reintroduced a predicted loops-bucket constant")
 	}
 }
 
@@ -758,6 +816,14 @@ func assertGoTargetCompleteness(t *testing.T, root string, plan *Plan) {
 			wantByPath[path][identity]++
 		}
 	}
+	for path, additions := range postFoundationBWorkflowTerminalGoIdentityAdditions {
+		if wantByPath[path] == nil {
+			wantByPath[path] = map[string]int{}
+		}
+		for _, identity := range additions {
+			wantByPath[path][identity]++
+		}
+	}
 
 	gotByPath := map[string]map[string]int{}
 	total := 0
@@ -865,6 +931,9 @@ func assertGoTargetCompleteness(t *testing.T, root string, plan *Plan) {
 		wantTotal += len(additions)
 	}
 	wantTotal -= len(postFoundationBUserResponseGoIdentityRetirements)
+	for _, additions := range postFoundationBWorkflowTerminalGoIdentityAdditions {
+		wantTotal += len(additions)
+	}
 	if total != wantTotal {
 		t.Fatalf("canonical Go PortDefinition identities=%d, want %d after post-Foundation-B amendments",
 			total, wantTotal)
@@ -1255,6 +1324,22 @@ var postFoundationBToolDiscoveryGoIdentityRetirements = map[string]struct{}{
 // identity that replaces the frozen tool.list row.
 var postFoundationBToolDiscoveryGoIdentityAdditions = map[string][]string{
 	"processor/agentic-tools/config.go": {"tool.list|NATSRequestPort"},
+}
+
+// postFoundationBWorkflowTerminalGoIdentityAdditions records the ONE port
+// identity gh#1094 adds: agentic-dispatch's declared agent_loops KV read
+// port (owner item 10 / R8). Dispatch previously read AGENT_LOOPS with a
+// hardcoded constant while every sibling reader observed the name from
+// configuration, so a deployment on a non-default loops bucket lost every
+// terminal route silently. The identity is `<dynamic>` because the port name
+// is declared through the agentLoopsPortName constant — one spelling shared
+// with the resolver — which the literal-only AST census cannot read; the
+// binding itself is proven by production resolution tests
+// (processor/agentic-dispatch/config_test.go and the declared-port
+// integration test). This is an ADDITION with no retirement: no existing
+// identity is replaced.
+var postFoundationBWorkflowTerminalGoIdentityAdditions = map[string][]string{
+	"processor/agentic-dispatch/config.go": {"<dynamic>|KVReadPort"},
 }
 
 // postFoundationBUserResponseGoIdentityRetirements records the governance
