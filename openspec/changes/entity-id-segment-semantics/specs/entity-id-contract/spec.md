@@ -73,9 +73,8 @@ deployment's own `org.platform`; a fixed framework literal in positions 1–2 is
 ### Requirement: Entity-domain authority is delegated on the predicate-namespace pattern
 
 `pkg/types` MUST export an `EntityDomainAuthority` built from explicit `EntityDomainDelegation{Producer, Domain,
-Type}` values, mirroring `vocabulary.PredicateAuthority`: a framework-reserved domain (`agent`, `ops`, `graph`, and
-`gateddag` only while the gated-DAG family is not re-slotted under `agent` — owner item O-9) MUST pass for every
-producer; an unreserved domain MUST require a non-empty producer with an exact matching
+Type}` values, mirroring `vocabulary.PredicateAuthority`: a framework-reserved domain (`agent`, `ops`, `graph`; the
+gated-DAG family is re-slotted under `agent`) MUST pass for every producer; an unreserved domain MUST require a non-empty producer with an exact matching
 `domain` or `domain.type` delegation; producer identity MUST come from the trusted composition boundary and MUST NOT
 be inferred from `Triple.Source` or a payload type. Authorization MUST run at declaration surfaces (framework
 builders, entity-ID pattern declarations, projection contracts, lifecycle workflows) and MUST NOT run on the

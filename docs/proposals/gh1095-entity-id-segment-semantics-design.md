@@ -1,12 +1,14 @@
 # gh#1095 — entity-ID segment semantics: options, contract, break wave, owner items
 
-**Baseline:** `origin/main` `5cc0c7fb`; committed as draft PR #1099 (`b6b4b024`). Row ids (S1, K3, W2, H1, …)
-refer to the inventory.
+**Baseline:** `origin/main` `5cc0c7fb`; committed as draft PR #1099 (`b6b4b024`). **Status: ACCEPTED** — owner ruling
+2026-08-26, applied in this revision. Row ids (S1, K3, W2, H1, …) refer to the inventory.
 
-## Checkpoint (revision 4)
+## Checkpoint (revision 5)
 
-- Inventory: `docs/proposals/gh1095-entity-id-segment-semantics-inventory.md` revision 4, SHA-256
-  `eae1366186ba0c7299da539d05f493c9918b3c432b3fb2a9d246652a26035d3b` (r3 `b6e1e9e2…`, r2 `ba2131bc…`, r1 `0e511e91…`).
+- **Owner ruling 2026-08-26 (comment on #1095): O-1 through O-11, O-13, O-14 accepted as recommended; **O-12 overridden to option (a) — foreign-authority imports are read-only mirrors**; the permanent hierarchy-inference skip for all foreign-authority entities explicitly accepted, on every lane.** Revision 5 applies it: ADR-102 → Accepted; O-12(a) in §C.3, §B.4, §F, the graph-ingest
+  delta, tasks, and conformance; the #1096 imported-firing-entity path redesigned as a local linkage (§C.3).
+- Inventory: `docs/proposals/gh1095-entity-id-segment-semantics-inventory.md` revision 5, SHA-256
+  `1667c3266dc6022b3d0ffc9325e835516bd9fec61727610095ecafb878fe60c8` (r4 `eae13661…`, r3 `b6e1e9e2…`, r2 `ba2131bc…`, r1 `0e511e91…`).
 - Inventory review: independent blind pass on r1 → **INVENTORY PASS WITH DIVERGENCES**; D1–D5 corrected and
   R-A–R-D added in r2.
 - Design review round 1 (Fable, adversarial, at `3226c220`) → **REQUEST CHANGES**. Dispositions in this revision:
@@ -38,8 +40,8 @@ refer to the inventory.
   6 unnamed are MODIFIED carry-overs (4 byte-identical, 2 in `agentic-lessons` with pre-r3 wording edits).
 - Owner-item renumbering after removing O-9: review letters O-12/O-13/O-14/O-15 are **O-11/O-12/O-13/O-14** here;
   former O-10/O-11 are **O-9/O-10**.
-- This design, ADR-102, and the spec deltas have had design review round 1 only; round 2 and owner acceptance are
-  pending. Binding rulings stay with the owner.
+- Design review rounds 1 and 2 are complete and the owner has ruled; this design, ADR-102 (Accepted), and the spec
+  deltas are the accepted target state for the `entity-id-segment-semantics` change.
 
 ## B. Reorder options
 
@@ -130,16 +132,15 @@ A third defect is order-independent (H6, B-2): containers and inverse sibling ed
 entity's own prefix through in-process direct persistence, so for an imported entity the framework mints under
 foreign authority — which ruling 2 forbids by construction. The contract, whichever option below is chosen:
 **hierarchy inference skips foreign-authority entities** (no container birth, no membership triple, no inverse
-sibling edge for an entity whose `org.platform` is not the deployment's). This is not interim; it holds until
-containers leave the tree.
+sibling edge for an entity whose `org.platform` is not the deployment's). Accepted by ruling on every lane; it
+holds until containers leave the tree.
 
 Options: **(1) retire containers** (type/system/domain container entities and `hierarchy.*.member` edges) inside the
 gh606 change, keeping only sibling edges if the structural tier still needs them; **(2) keep padding, declare the
 tokens** (`group`, `container`, `level` reserved in position 6 by contract; the audit rejects any producer instance
 equal to them; the byte overflow becomes a coded rejection at mint; the two predicates renamed to
 `hierarchy.taxonomy.member` / `hierarchy.source.member`); **(3) digest family** (fixes H2/H3, keeps two homes).
-Recommendation: (1), landed by gh606 in the same wave; (2) as the fallback contract if gh606 slips a tag (priced
-in §D). Owner item O-6.
+Ruled (O-6): (1), landed by gh606 in the same wave; (2) only as the priced fallback if gh606 slips a tag (§D).
 
 ## C. The segment-semantics contract (draft, O-B order)
 
@@ -148,7 +149,7 @@ in §D). Owner item O-6.
 | 1 | `org` | organization namespace; the tenancy root (ADR-032) | operator config `platform.org` (`config/config.go:225-238`, lowercased at load) | operator-declared |
 | 2 | `platform` | **minting deployment authority** — the composition root that produced the entity | `platform.id` (see C.4) via `deps.Platform`; never from a payload, a constant, or a firing entity | operator-declared; unique within org by declaration |
 | 3 | `system` | **source** — the subsystem, feed, repo, world, board, API, or framework component that produced the entity | the producer; stable per source; MUST NOT be the product name (product = provenance: `Triple.Source`, envelope `source`) | producer-chosen, unregistered |
-| 4 | `domain` | **delegated taxonomy** — the subject-matter category | a registered delegation per producer (C.2); framework reserves `agent`, `ops`, `graph` (and `gateddag` only if O-9 declines the gated-DAG re-slot) | registered at the composition root |
+| 4 | `domain` | **delegated taxonomy** — the subject-matter category | a registered delegation per producer (C.2); framework reserves `agent`, `ops`, `graph`; the gated-DAG family re-slots under `agent` (O-9) | registered at the composition root |
 | 5 | `type` | entity type within the domain (`EntityType{Domain,Type}`, `vocabulary.EntityTypeIRI`) | same delegation as `domain` | registered with its domain |
 | 6 | `instance` | leaf identifier; families: UUID, conventional name, content hash | producer | never registered; high cardinality; last |
 
@@ -165,8 +166,8 @@ It transfers with one substitution — the unit is `domain` or `domain.type` ins
 
 - `pkg/types.EntityDomainDelegation{Producer, Domain, Type}` (empty `Type` = domain-wide) and
   `EntityDomainAuthority.Authorize(producer, domain, entityType) error`.
-- Framework-reserved set declared in-tree (`agent`, `ops`, `graph`; `gateddag` only while O-9 keeps that family
-  outside `agent`); every framework builder in §1.14
+- Framework-reserved set declared in-tree (`agent`, `ops`, `graph`; the gated-DAG family re-slots under `agent`,
+  O-9); every framework builder in §1.14
   authorizes at construction (boot-time builders) or returns the coded error (Try* builders).
 - A product registers its delegations where it installs its payload registry today (`RegisterPayloads`, the
   composition root — the same trusted boundary the predicate authority uses). Registration shape:
@@ -178,8 +179,7 @@ It transfers with one substitution — the unit is `domain` or `domain.type` ins
 
 What it does not do: it cannot stop a product from choosing a colliding domain with another product in the same
 deployment; registration makes the collision visible at boot (two producers delegating the same domain is a
-composition rejection, the ADR-076 d4 "duplicate PackID" shape). Owner item O-3: is `system` also registered?
-Recommendation: no — `system` values are runtime-derived (repo slugs, world namespaces) and unbounded; registering
+composition rejection, the ADR-076 d4 "duplicate PackID" shape). Ruled (O-3): `system` is not registered — `system` values are runtime-derived (repo slugs, world namespaces) and unbounded; registering
 them would make every new repo a config change. The audit checks that a builder's system position is not a product
 name literal.
 
@@ -195,15 +195,28 @@ name literal.
   imported loop — the federation purpose. On an import lane a subject whose positions 1–2 EQUAL the local authority
   is rejected (a peer cannot mint as this deployment); foreign subjects are accepted unchanged (never rewritten,
   ADR-076 d6).
-- **Mutating an existing foreign subject from a local lane** (the run anchor R3, inverse sibling edges H6, semmem
-  curation status) is undecided — owner item O-12. Until ruled, the gate's default rejects it, meters it as
-  `mutation_rejections{reason="authority_foreign"}`, and the rule engine warns (`actions.go:1702`); every
-  `run_scope=new` fire on an imported loop entity would hit that path, so O-12 gates whether `Closes #1096` is
-  complete for imported firing entities and is pre-landing — the reject-and-meter state never ships. The
-  recommendation in O-12 makes the run-anchor pair land; product annotations use a local overlay entity that
-  references the import (B-1), never an in-place write.
+- **An import is a read-only mirror (ruled, O-12 option (a)).** No local lane mutates a foreign subject: the gate
+  rejects any non-import-lane mutation whose subject is an already-persisted foreign-authority entity with
+  `foreign_authority`. Local facts about an import — the run linkage, semmem curation status, any product
+  annotation — live on a local overlay or a local entity that references the import through `@id` (B-1).
+- **#1096 on an imported firing entity (binding):** the run mint under `deps.Platform` stands. The run-anchor pair
+  (`agvocab.LoopRun` = `agent.loop.run`, `agvocab.LoopRunEntityID` = `agent.run.entity-id`, `actions.go:1710-1712`)
+  is written only when the firing loop carries the deployment's own authority. For an imported firing loop the rule
+  action detects the foreign authority BEFORE `stampRun` (`pkg/types.ValidateEntityIDAuthority(entityID, org,
+  platform, false) != nil`), skips both anchor writes deliberately — no mutation request targets the foreign subject,
+  not even a rejected one — and records the skip as `rule_run_anchor_skipped_total{reason="foreign_authority"}` with
+  an Info log naming the rule and the lane; it is a counted skip, never a rejection. The linkage moves to the LOCAL
+  run entity: `agent.run.origin-entity-id` (`@id`; `agvocab.RunOriginEntityID`, declared beside `LoopRunEntityID` in `vocabulary/agentic/predicates.go:502`) as a birth predicate of the local run entity (`AgentRun.OriginEntityID`, lifecycle tag `predicate=agent.run.origin-entity-id`, set by `agentrun.Mint` at creation), set for every run, local or imported origin, so the run→loop pointer has one home that
+  never depends on writing the loop. The run entity today carries only `agent.run.phase` and
+  `agent.run.parent-entity-id` (`agentrun.go:114-124`; ADR-053) — the parent RUN, not the originating loop — so no
+  existing predicate fits and the new one is required. Walk behaviour: from the local side, run →
+  `agent.run.origin-entity-id` → the mirrored loop (a read; the mirror is local state) → its mirrored
+  `agent.loop.parent` chain, so ancestry resolves; child loops the task spawns are local and carry `agent.loop.run`
+  through `task.RunID`, so descendants resolve; a chained rule that reads `$entity.triple.agent.run.entity-id` off
+  the imported firing loop finds nothing by design and must trigger on the local run entity or its local children.
+  **#1096 is complete only when this path is implemented and tested** (tasks 2.6, 6.3; omissions M6a–M6c).
 - **Hierarchy inference skips foreign-authority entities** (§B.4) — the only satisfiable reading of ruling 2 for
-  containers; the skip stands regardless of O-12, which governs the run anchor and product annotations only. The
+  containers; accepted by ruling on every lane. The
   authority pair reaches `inference.NewHierarchyInference` (which carries none today, `graph/inference/hierarchy.go:109-114`)
   through `HierarchyConfig` from the `deps.Platform` read graph-ingest adds.
 - **Import lane declaration:** a boolean on the JetStream input port (`"import": true`) — an operator statement of
@@ -223,12 +236,12 @@ name literal.
   `ruleTriggerEntityID` gain `org, platform` parameters (no sister caller, P8); the rule processor gains a
   `platform` field plumbed from `deps.Platform` at construction — new plumbing, since it holds none today (R3).
   New exported surface on `graph/` and `pkg/types` requires owner design review per the architect contract.
-- **#1096** folds in: `actions.go:1575-1583` mints from the new `platform` field; the firing entity stays the parent
-  reference. #1096 is live today for any semsource-fed deployment (a rule firing on an imported entity mints under
-  `acme.semsource`).
+- **#1096** folds in: `actions.go:1575-1583` mints from the new `platform` field; the firing entity stays the origin
+  reference on the local run. #1096 is live today for any semsource-fed deployment (a rule firing on an imported
+  entity mints under `acme.semsource`).
 - **Imported lessons are invisible to the framework's own reader (r3, F-10):** `processor/agentic-loop/handlers.go:721`
-  scans only the local `AgentLessonRecordPrefix`; whether an imported lesson applies locally by default is owner item
-  O-13.
+  scans only the local `AgentLessonRecordPrefix`; ruled (O-13): an imported lesson does not apply locally by
+  default — a loop opts in by naming the imported source in its scope.
 - **What "provenance" can mean today:** the declared lane + envelope `source` + `Triple.Source`. Typed origin is a
   separate proposal (ADR-057 withdrawn); semmem's derivation-chain needs are product-side.
 
@@ -243,12 +256,12 @@ name literal.
 ### C.5 `platform.id` / `instance_id` precedence
 
 Today `instance_id` silently wins (`config/config.go:772-778`; copied into semdev, semteams, semboids, semmem,
-`cmd/*/main.go`). Two fields, one identity. ADR-102 d2 names `platform.id` and is conditional on this item. Options: (a) keep both, reject at load when both are set and differ;
+`cmd/*/main.go`). Two fields, one identity. Ruled (O-2): option (b); ADR-102 d2 names `platform.id`. Options: (a) keep both, reject at load when both are set and differ;
 (b) one field. Recommendation: **(b)** — `platform.id` is the authority (already required and validated,
 `:240-241`); `platform.instance_id` is removed from identity and its presence fails config load with replacement
 guidance (`removedConfigFields` precedent, `processor/graph-clustering/component.go:239-269`). Cost: every shipped
 config's minted platform value changes (fresh state anyway); every sister's `extractPlatformMeta` drops two lines.
-Owner item O-2.
+Ruled (O-2): (b).
 
 ### C.6 The authority pair is bounded at configuration load (r3, F-1)
 
@@ -261,8 +274,7 @@ constant, so the number is never hand-copied — and config load derives the bud
 family, `rules.graph.trigger.` + 64 hex + two separators, the longest fixed suffix) = **170 bytes for `len(org) +
 len(platform)`** — and rejects a configuration that exceeds it, naming the family that binds. No operator predicts
 a byte count; the alert/trigger constructors keep their fail-closed validation as the second layer. ADR-102 amends
-d2 accordingly. Owner item O-14 is decide-from-evidence: the number falls out of the family table; what the owner
-rules is that the bound lives at config load.
+d2 accordingly. Ruled (O-14): the bound lives at config load; the number falls out of the family table.
 
 ## D. The break wave (beta.163), batched with #1093
 
@@ -276,16 +288,16 @@ because the contract (A) and the boundary that enforces it (B) are one system un
 |---|---|---|---|
 | 1 | #1093 flow retirement (independent; smaller tree for the sweep) | yes | `task e2e:core`, `e2e:crud-tools`, `e2e:agentic` (per #1093) |
 | 2 | #1095 — slice A (`pkg/types` order + names + prefix levels + domain authority + coded rejection + authority-pair bound; builder/pattern/config/doc/example sweep; audit extension + CI wiring) and slice B (boundary gate on the subject identity + import-lane port flag + hierarchy foreign-skip + #1096), one PR | yes | union: `e2e:core`, `e2e:structural` (hierarchy, rules), `e2e:statistical` and `e2e:semantic` (the only tiers asserting `EntityTypeSummary`, `tiered.go:350`), `e2e:agentic`, `e2e:lessons`, `e2e:lifecycle` (mission minted from wire authority, `mission/command.go:59-66`; lifecycle Manager on the mutation lane), `e2e:ops`, `e2e:crud-tools` (CRUD tools over `graph.mutation.>`), `e2e:research-graph` (seed builder `scenario.go:201-203`). Excluded with reason: `slow-consumer`, `throughput`, `openai-responses`, `deep-research` carry no position literal (`configs/rules/deep-research/*` use `*.*.*.*.*.*`) |
-| 3 | gh606 / ADR-099 on the new cut points, container retirement (O-6), served level per O-11 | yes | `e2e:statistical`, `e2e:semantic` (ADR-099) |
+| 3 | gh606 / ADR-099 on the new cut points, container retirement (O-6), level 1 served by default and summaries gated there (O-11) | yes | `e2e:statistical`, `e2e:semantic` (ADR-099) |
 | 4 | Sister re-slots (post-publication; communicate, do not modify) | — | each sister's own gates on fresh storage |
 
 gh606 amendment list (r3, F-2) — the design must be **restated**, not annotated, before `/opsx:new
 gh606-derived-communities`: `docs/proposals/gh606-derived-communities-design.md:24-25` (P4 "production reads level 0
-only" — decide the served level, O-11), `:29` (P6 symbol names after tasks 3.2: `SourcePrefix`/`TaxonomyPrefix`/
+only" — ruled O-11: level 1 is served), `:29` (P6 symbol names after tasks 3.2: `SourcePrefix`/`TaxonomyPrefix`/
 `DeploymentPrefix`), `:65-71` (level table: 0 = `TaxonomyPrefix` 4 parts = source×taxonomy, 1 = `SourcePrefix` 3
 parts = source, 2 = `DeploymentPrefix`), `:76-79` ("Level 0 = system" is false under O-B — the measured system
 filter is level 1), `:90` (group-by calls), `:126` (record example), `:271` (GraphQL `level` docs), `:334-335`
-(Q8 re-rule: which level LLM summarisation gates to). `docs/adr/099:25-27` is amended by ADR-102, not edited.
+(Q8 re-ruled: summaries gate to level 1). `docs/adr/099:25-27` is amended by ADR-102, not edited.
 
 Sequencing window (r2, C3): between rows 2 and 3 the LPA provider (`graph/clustering/entityid_provider.go:231-236`,
 live via `processor/graph-clustering/component.go:1331`) and the summarizer's domain grouping
@@ -318,7 +330,7 @@ Per-sister migration list (values → after):
 | semconnect | `semconnect` platform → config; `SystemEventIDPrefix` shape; register `systems` |
 | semspec | order swap in `agentgraph/entities.go:54-60`; 10k fixtures importing semsource IDs re-generated after semsource re-slots |
 | semsage | `OrgDefault`/`PlatformDefault` constants → config; `_` placeholder fixture |
-| semmem | 5-part fixtures → six-part; PR #2 negative cases (`federation-mvp.md:46-55`) become the import-lane scenarios; imported-lesson applicability per O-13 |
+| semmem | 5-part fixtures → six-part; PR #2 negative cases (`federation-mvp.md:46-55`) become the import-lane scenarios; imported lessons opt-in by scope (O-13); curation status on an imported lesson lives on a local overlay entity (O-12) |
 
 Enforcement: `cmd/entity-id-audit` extended (slice A) with two segment rules over production Go and configs —
 `authority_literal` (a literal, non-`*`, non-template value in positions 1–2 of a builder, pattern, or prefix
@@ -335,11 +347,15 @@ Tag consequence and the priced fallback (r3, O-7): one tag is enough **only if**
 Fallback if gh606 slips: tag rows 1–2 as beta.163 with the padding contract (B.4 option 2: reserved tokens declared,
 the two predicates renamed, foreign-skip in force) — that costs one vocabulary rename that gh606 then deletes, one
 extra audit rule, and a second fresh-state break at the gh606 tag: every sister provisions storage twice and every
-downstream announcement is written twice. Recommendation stands: hold the tag until row 3 lands.
+downstream announcement is written twice. Ruled (O-7): one tag holding rows 1–3; the fallback stays on record only.
 
-## F. Owner items
+## F. Owner items — RULED 2026-08-26
 
-| # | Decision | Evidence | Recommendation |
+All items were ruled by the owner on #1095 (2026-08-26): O-1 through O-11, O-13, and O-14 accepted as recommended
+below; **O-12 overridden to option (a)**; the hierarchy-inference skip explicitly accepted. The table is kept as the
+record of what was put to the owner.
+
+| # | Decision | Evidence | Recommendation / ruling |
 |---|---|---|---|
 | O-1 | Order: O-A or O-B | §B; inventory W2–W6, C1–C4 | O-B |
 | O-2 | `platform.id` vs `instance_id` (ADR-102 d2 is conditional on this) | C.5 | one field: `id`; `instance_id` removed with load-time guidance |
@@ -352,6 +368,6 @@ downstream announcement is written twice. Recommendation stands: hold the tag un
 | O-9 | `gateddag` family re-slot (`gateddag.fanout.instance` → `gated-dag.agent.fanout`); the framework-reserved domain set is `{agent, ops, graph}` plus `gateddag` only if this is declined | inventory §1.14 | re-slot in slice A; reserved set `{agent, ops, graph}` |
 | O-10 | Export IRI path order: `vocabulary/export/export.go:123-126` publishes `<base>/entities/{org}/{platform}/{domain}/{system}/{type}/{instance}` outside the graph; fresh state does not re-mint published artifacts | inventory P5 | follow the canonical order (one home for position order); announce it as a published-artifact break in the PR body; pinning a private exporter order would create a second interpreter of the shared type |
 | O-11 (review O-12) | Which ADR-099 level is served by default after the reorder, and which level LLM summarisation gates to (re-rules gh606 Q8) | inventory C4: the ruling's "same system" is the system value = level 1 under O-B; gh606 P4/Q8 serve level 0 = source×taxonomy | serve level 1 (source) by default and gate summaries to level 1; level 0 stays available by request — the served partition should be the one the ruling measured |
-| O-12 (review O-13) | May a local lane mutate (annotate) a foreign-authority entity, or is an import a read-only mirror? Live paths: run anchor (R3), inverse sibling edges (H6), semmem curation status on an imported lesson | C.3; `graph/helpers.go:104-108` (`MergeTriples` is arrival-order full-set-replace per predicate; a predicate absent from an arrival is preserved, `graph-ingest/spec.md:54`) | **(c)** annotate a foreign subject only with the closed framework run-anchor pair — `agvocab.LoopRun` and `agvocab.LoopRunEntityID`, the two predicates `stampRun` writes (`actions.go:1710-1712`) — checked as constant-set membership at the gate (not a delegation lookup, so the no-authorization-on-the-hot-path principle, C.2, is untouched); never create, replace, or delete a foreign subject; `hierarchy.*` is excluded because the skip stands regardless; product annotations (semmem curation) go on a local overlay entity that references the import. Options: (a) read-only mirror — the anchor is dropped and chained rules on imported triggers cannot find the run; (b) unrestricted annotate — a peer re-export silently reverts any shared predicate (`MergeTriples` full-set-replace per predicate, `graph/helpers.go:98-107`); (c) survives re-export by construction because a peer never writes the framework pair; **(d), costed:** (c) plus namespaces delegated to a local producer — requires a per-predicate namespace check on the graph-ingest hot path for every foreign-subject mutation, and the guarantee fails when the peer runs the same product (semsource↔semsource both write `git.*`; a re-export replaces them). O-12 is pre-landing: it gates `Closes #1096` for imported firing entities (N9) |
+| O-12 (review O-13) | May a local lane mutate (annotate) a foreign-authority entity, or is an import a read-only mirror? Live paths: run anchor (R3), inverse sibling edges (H6), semmem curation status on an imported lesson | C.3; `graph/helpers.go:98-107` | **RULED (a): read-only mirror** — no local lane mutates a foreign subject; local facts about an import live on a local overlay or a local entity referencing it; the run linkage moves to the local run entity (§C.3). Options (c) closed framework run-anchor pair and (d) delegated local namespaces were the recommendation and its costed variant; both considered and rejected by ruling |
 | O-13 (review O-14) | Do imported lessons apply to local loops by default? | inventory L5: `handlers.go:721` scans the local prefix only | no by default; a loop's scope may name an imported source (`id:<peer-org.peer-platform.src>`) to opt in — applicability stays a declared scope, not an ambient effect |
 | O-14 (review O-15) | The authority-pair byte bound: where it is enforced and that ADR-076 d2 is amended | §C.6, inventory P7 | enforce at config load, budget derived from the longest fixed-suffix framework family (170 bytes for `org`+`platform` today); constructors keep fail-closed validation as the second layer |
