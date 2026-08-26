@@ -187,6 +187,21 @@ GREEN after 3.2: `ok  	github.com/c360studio/semstreams/processor/agentic-dispat
   of the generated component schema).
 - E18 `grep -n agentLoopsBucket processor/agentic-dispatch/*.go` → 0 hits (the predicted-name constant is gone).
 
+### §6 gates (run on the branch head that carries this file)
+
+| Gate | Command | Result |
+|---|---|---|
+| 6.1 | `task lint` | clean — vet, fmt, revive (0 warnings), fixed-port guard, `test/natsclient` ok |
+| 6.2 | `go test -race -count=1 ./...` | exit 0 — 153 packages ok, 0 FAIL, 0 race reports |
+| 6.3 | `go test -race -count=1 -p 2 -tags=integration ./processor/agentic-dispatch/... ./processor/agentic-loop/... ./agentic/...` | exit 0 after fixing this change's own break in `startProductionTerminalDispatch` (see tasks 6.3) |
+| 6.3b | `go test -race -count=1 -tags=integration ./internal/portgrammarcontrol/` | `ok 6.723s` |
+| 6.3c | `go vet -tags=integration ./...` | clean |
+| 6.4 | `task schema:generate && git diff --exit-code schemas/ specs/` | no drift |
+| 6.5 | `go test -count=1 ./test/contract/...` | `ok 2.673s` |
+| 6.6 | `task e2e:agentic` | GREEN — `Scenario completed successfully duration=45.11225975s`, wallclock `1:16.13` |
+| build | `task build`; `GOOS=linux GOARCH=amd64 go build ./cmd/semstreams` | both OK |
+| 4.5 | `openspec validate workflow-terminal-delivery --strict --no-interactive` | `Change 'workflow-terminal-delivery' is valid` |
+
 ## Forced omissions
 
 Applied to the committed GREEN tree at `53177dfd`, one at a time, each restored by `cp` from a checksummed copy

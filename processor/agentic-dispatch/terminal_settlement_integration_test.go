@@ -328,7 +328,12 @@ func startProductionTerminalDispatch(
 	config := DefaultConfig()
 	config.ConsumerNameSuffix = suffix
 	for i := range config.Ports.Inputs {
-		port := config.Ports.Inputs[i].Config.(component.JetStreamPort)
+		// Only the JetStream lanes are rebound to the test streams; the
+		// declared agent_loops KV read port keeps its bucket.
+		port, isStream := config.Ports.Inputs[i].Config.(component.JetStreamPort)
+		if !isStream {
+			continue
+		}
 		if config.Ports.Inputs[i].Name == "user.message" {
 			port.StreamName = inputUserStream
 		} else {

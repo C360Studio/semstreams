@@ -282,15 +282,48 @@ body is a published layer and states `implemented-by: <model>`.
   restore; re-checksum.
   - APPLIED and RESTORED (checksum equal). Exactly that test failed (`empty_action`, `empty_reason`); the
     round-trip and classifier tests passed.
+- [x] 5.9 Omission H (projection, added with task 3.7): delete the kv-read bucket projection in
+  `component/port_facts.go`'s `kvReadPortFacts`, so `PortFacts.KVReadBucket` always reports false; run the
+  amendment exactness test and 3.4's command; restore; re-checksum.
+  - APPLIED and RESTORED (`shasum -a 256 component/port_facts.go` =
+    `3c4f0433eacce39c9e3465255d97c2ca87c6df40e83efd6e70768defaf242a1b` before and after).
+    `go test -count=1 ./internal/portgrammarcontrol/ -run '^TestPostFoundationBWorkflowTerminalAmendmentIsExact$'`
+    → `--- FAIL: TestPostFoundationBWorkflowTerminalAmendmentIsExact (0.00s)` /
+    `target_test.go:325: dispatch declares 0 kv-read inputs, want 1`.
+    `go test -race -count=1 -tags=integration ./processor/agentic-dispatch -run '^TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort$'`
+    → `--- FAIL: … Received unexpected error:` (the bucket cannot be resolved, so nothing is published).
+    The accessor is load-bearing on both the grammar side and the delivery side.
 
 ## 6. Gates (run what CI runs, both suites)
 
-- [ ] 6.1 `task lint`.
-- [ ] 6.2 `go test -race -count=1 ./...`.
-- [ ] 6.3 `go test -race -count=1 -p 2 -tags=integration ./processor/agentic-dispatch/... ./processor/agentic-loop/... ./agentic/...`.
-- [ ] 6.4 `task schema:generate && git diff --exit-code schemas/ specs/`.
-- [ ] 6.5 `go test -count=1 ./test/contract/...`.
-- [ ] 6.6 `task e2e:agentic` (touches the terminal delivery wire); record duration and result.
+- [x] 6.1 `task lint`.
+  - Clean: `go vet ./...`, `go fmt ./...`, `go tool revive -config revive.toml -formatter friendly ./...` (0
+    warnings), the fixed-port guard, and `go test ./test/natsclient/` → `ok`. Working tree unchanged by `go fmt`.
+- [x] 6.2 `go test -race -count=1 ./...`.
+  - exit 0; 153 packages `ok`, zero `FAIL`, zero race reports.
+- [x] 6.3 `go test -race -count=1 -p 2 -tags=integration ./processor/agentic-dispatch/... ./processor/agentic-loop/... ./agentic/...`.
+  - FIRST RUN FAILED, and the failure was this change's: `TestIntegrationInvalidTerminalIsTerminated` panicked with
+    `interface conversion: component.Portable is component.KVReadPort, not component.JetStreamPort`
+    (`terminal_settlement_integration_test.go:331`). `startProductionTerminalDispatch` rebinds every declared input
+    to a test stream through an unchecked type assertion, and R8 added the first non-JetStream input. Fixed in the
+    helper (comma-ok; the KV port keeps its bucket) — a second grammar-collision the unit suite could not see,
+    because the helper is integration-tagged.
+  - RERUN exit 0: `ok processor/agentic-dispatch 40.844s`, `ok processor/agentic-loop 28.535s`,
+    `ok agentic 1.341s`, `ok agentic/agentrun 9.456s` (+ lessonmatch, prompt, identity, research).
+  - Also run: `go test -race -count=1 -tags=integration ./internal/portgrammarcontrol/` → `ok 6.723s`;
+    `go vet -tags=integration ./...` → clean.
+- [x] 6.4 `task schema:generate && git diff --exit-code schemas/ specs/`.
+  - No drift (exit 0, empty diff). Neither the additive `decision` payload field nor the declared `agent_loops`
+    port has a generated-schema surface — see tasks 2.5 and 3.5.
+- [x] 6.5 `go test -count=1 ./test/contract/...`.
+  - `ok github.com/c360studio/semstreams/test/contract 2.673s`.
+- [x] 6.6 `task e2e:agentic` (touches the terminal delivery wire); record duration and result.
+  - GREEN. `Scenario completed successfully duration=45.11225975s`; total wallclock `1:16.13`. The tier's
+    `verify-terminal-response` step (4ms) exercises the unchanged no-decision branch end to end
+    (`user.response.e2e.<taskID>` + `terminal-user-response:<source id>`), which is the regression this gate is
+    for; it does NOT cover a rule-spawned chain terminal — that gap is #1105.
+  - Build gates alongside it: `task build` → `Built bin/semstreams`; CI cross-compile
+    `GOOS=linux GOARCH=amd64 go build ./cmd/semstreams` → OK (42 MB binary).
 
 ## 7. Land (AGENTS.md order)
 
