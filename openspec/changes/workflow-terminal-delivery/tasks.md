@@ -90,7 +90,7 @@ body is a published layer and states `implemented-by: <model>`.
 
 ## 3. Slice B — selection and origin resolution (agentic-dispatch)
 
-- [ ] 3.1 Add unit tests, each decoding the captured response into a fresh `agentic.UserResponse` value:
+- [x] 3.1 Add unit tests, each decoding the captured response into a fresh `agentic.UserResponse` value:
   `TestSettleAgentTerminalHandoffDecisionOnRoutedLoopPublishesNothing`,
   `TestSettleAgentTerminalHandoffDecisionOnRouteLessLoopPublishesNothing`,
   `TestSettleAgentTerminalRespondDirectOnRoutedLoopPublishesResultWithReason`,
@@ -112,7 +112,22 @@ body is a published layer and states `implemented-by: <model>`.
   extend `requireOneTerminalReason`/`terminalReasonSnapshot` and
   `TestSettleAgentTerminalRecordsExactlyOneFixedDisposition` with `handoff_settled` and `origin_unresolvable`.
   Command: `go test -race -count=1 ./processor/agentic-dispatch -run '^(TestSettleAgentTerminal.*|TestResolveOriginRoute.*)$'`.
-- [ ] 3.2 Implement `resolveOriginRoute` over `loadPersistedLoop` in the ruled order: typed-first `RunID` → run root
+  - All in `processor/agentic-dispatch/terminal_origin_test.go`; the closed reason list gains `handoff_settled`
+    and `origin_unresolvable` in both `requireOneTerminalReason` and `terminalReasonSnapshot`, and
+    `TestSettleAgentTerminalRecordsExactlyOneFixedDisposition` gains the `handoff` and `origin unresolvable`
+    cases (`terminal_settlement_test.go`).
+  - RED before 3.2: 12 tests / 21 subtests failed on assertions (verbatim in `conformance.md`), e.g.
+    `--- FAIL: TestSettleAgentTerminalHandoffDecisionOnRoutedLoopPublishesNothing` /
+    `Error: Should be zero, but was 1` / `Messages: a routed handoff decision must publish nothing`.
+    `TestSettleAgentTerminalNoDecisionRouteLessLoopStaysRouteLess` and
+    `…ReplyDecisionWithRouteLessRootSettlesRouteLess` passed at RED (today's behaviour); their discriminating
+    power is proven by the forced omissions, not by this run.
+  - GREEN after 3.2: `ok github.com/c360studio/semstreams/processor/agentic-dispatch 1.428s`.
+  - ADDITION beyond the named subtests: `TestSettleAgentTerminalMissingParentFallsBackToRunID` carries a FOURTH
+    subtest `intermediate_run_anchor_after_absent_parent` — without it the C1 retry *inside* the walk (an
+    intermediate record carrying a run anchor the terminal did not) has no test at all; the three named subtests
+    only exercise the typed-first lookup. Same test, so omission E's "only that test fails" still holds.
+- [x] 3.2 Implement `resolveOriginRoute` over `loadPersistedLoop` in the ruled order: typed-first `RunID` → run root
   (routed → origin; present route-less → walk parents from the root; absent → walk from the terminal); parent walk
   to the nearest routed ancestor; at an absent parent key try the current record's untried `RunID` before settling;
   32 hops, visited set; walk end with no links and no route → `route_less_settled`; parent chain AND run anchor
@@ -120,21 +135,41 @@ body is a published layer and states `implemented-by: <model>`.
   <loopID>; run anchor <RunID> absent | none`. Then the decision-driven selection in `settleAgentTerminal`, the
   `prompt` projection for `ask_user`, `Content = Decision.Reason` for reply decisions, and the two new bounded
   reasons; re-run 3.1 to GREEN.
-- [ ] 3.3 Add `TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart` (`//go:build
+  - `processor/agentic-dispatch/terminal_settlement.go` — `resolveOriginRoute` (`:347`), `recordRoute` (`:302`),
+    `isLoopRecordAbsent` (`:295`), `originExhaustion.settle` (`:458`), `maxOriginHops` (`:265`), and the bounded
+    reason constants (`:274`, `:281`, `:287`). Selection is at `:210` (`handoff_settled` first) and `:219-245`
+    (origin resolution for a route-less reply decision); the `prompt`/reason projection is at `:122-129`.
+- [x] 3.3 Add `TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart` (`//go:build
   integration`): write root (routed, `http`/`origin-1`), intermediate, and terminal records to `AGENT_LOOPS` with
   `ParentLoopID` links; empty tracker; settle a `respond_direct` completion twice; assert `USER_TERMINAL` contains
   exactly one message on `user.response.http.origin-1` whose `Nats-Msg-Id` is `terminal-user-response:<source id>`
   and whose payload decodes into a fresh `agentic.UserResponse` with `Type=result`, `Content=<reason>`,
   `InReplyTo=<terminal loop id>`. Command:
-  `go test -race -count=1 -tags=integration ./processor/agentic-dispatch -run '^TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart$'`.
-- [ ] 3.4 Add `TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort` (`//go:build integration`):
+  `go test -race -count=1 -tags=integration ./processor/agentic-dispatch -run '^TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart$'`
+  → `ok github.com/c360studio/semstreams/processor/agentic-dispatch 2.097s`
+  (`processor/agentic-dispatch/terminal_origin_integration_test.go:63`).
+- [x] 3.4 Add `TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort` (`//go:build integration`):
   bind dispatch's `agent_loops` input port to bucket `AGENT_LOOPS_ALT`, write a routed loop record there only,
   settle its completion, and assert the response decodes into a fresh `agentic.UserResponse` on the record's route.
   Command:
-  `go test -race -count=1 -tags=integration ./processor/agentic-dispatch -run '^TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort$'`.
-- [ ] 3.5 Implement the declared `agent_loops` `KVReadPort` in `config.go`; resolve the bucket from the port in
+  `go test -race -count=1 -tags=integration ./processor/agentic-dispatch -run '^TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort$'`
+  → `ok github.com/c360studio/semstreams/processor/agentic-dispatch 2.116s`
+  (`terminal_origin_integration_test.go:145`; the port is bound through the production JSON override + merge path,
+  `:33-44`).
+- [~] 3.5 Implement the declared `agent_loops` `KVReadPort` in `config.go`; resolve the bucket from the port in
   `loadPersistedLoop` and the `/activity` reader; delete the constant at `http_activity.go:20`; run
   `task schema:generate` and commit `schemas/agentic-dispatch.v1.json` with it; re-run 3.4 to GREEN.
+  - DONE: port declared at `processor/agentic-dispatch/config.go:119-122`; `agentLoopsPortName` (`:45`) and
+    `loopsBucketFromPorts` (`:50`) are the one resolver, reached through `c.loopsBucketName()` (`:72`);
+    `loadPersistedLoop` resolves the bucket at `terminal_settlement.go:90` and the `/activity` reader at
+    `http_activity.go:197`; the constant at the old `http_activity.go:20` is DELETED —
+    `grep -n agentLoopsBucket processor/agentic-dispatch/*.go` → 0 hits. Guard: `config_test.go:24-33` and
+    `TestLoopsBucketFromPortsObservesTheDeclaredBinding` (undeclared is an error, never a default).
+  - NOT DONE, and cannot be: `task schema:generate` produced NO diff, so there is no
+    `schemas/agentic-dispatch.v1.json` change to commit. Declared PORT INSTANCES are not part of the generated
+    component schema — it emits the generic port-kind `oneOf`, never the default port list
+    (`grep -c "agent.complete" schemas/agentic-dispatch.v1.json` → 0 at the baseline, i.e. no existing port
+    instance appears either). Same measurement as task 2.5.
 - [ ] 3.6 Commit Slice B GREEN before any mutation check; record the commit SHA in `conformance.md`.
 
 ## 4. Slice C — guards, docs, spec truth

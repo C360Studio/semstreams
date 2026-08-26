@@ -34,6 +34,7 @@ func terminalTestComponent(t *testing.T) *Component {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads, RegisterPayloads)
 	return &Component{
+		config:      DefaultConfig(),
 		logger:      logger,
 		loopTracker: NewLoopTrackerWithLogger(logger),
 		metrics:     getMetrics(metric.NewMetricsRegistry()),
@@ -53,6 +54,7 @@ func requireOneTerminalReason(t *testing.T, c *Component, want string, before ma
 		string(agentterminal.ReasonCollision), "routing_malformed", "routing_read_transient",
 		"routing_collision_or_malformed", "tracker_projection_collision",
 		"response_publish_transient", "route_less_settled", "response_settled", "accepted",
+		"handoff_settled", "origin_unresolvable",
 	}
 	var increments int
 	for _, reason := range reasons {
@@ -73,6 +75,7 @@ func terminalReasonSnapshot(c *Component) map[string]float64 {
 		string(agentterminal.ReasonCollision), "routing_malformed", "routing_read_transient",
 		"routing_collision_or_malformed", "tracker_projection_collision",
 		"response_publish_transient", "route_less_settled", "response_settled", "accepted",
+		"handoff_settled", "origin_unresolvable",
 	}
 	values := make(map[string]float64, len(reasons))
 	for _, reason := range reasons {
@@ -289,6 +292,27 @@ func TestSettleAgentTerminalRecordsExactlyOneFixedDisposition(t *testing.T) {
 			}
 			c.sendTerminalResponseFn = func(context.Context, agentic.UserResponse, string) error { return nil }
 			return completionPayload(t, valid)
+		}},
+		{"handoff", "handoff_settled", func(c *Component) []byte {
+			c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
+				return &agentic.LoopEntity{ID: "loop-m", ChannelType: "http", ChannelID: "id"}, nil
+			}
+			c.sendTerminalResponseFn = func(context.Context, agentic.UserResponse, string) error { return nil }
+			handoff := *valid
+			handoff.Decision = &agentic.CoordinatorDecision{Action: "autoresearch", Reason: "hand off"}
+			return completionPayload(t, &handoff)
+		}},
+		{"origin unresolvable", "origin_unresolvable", func(c *Component) []byte {
+			c.loadPersistedLoopFn = func(_ context.Context, loopID string) (*agentic.LoopEntity, error) {
+				if loopID != "loop-m" {
+					return nil, loopRecordAbsent(loopID)
+				}
+				return &agentic.LoopEntity{ID: "loop-m", ParentLoopID: "evicted-parent"}, nil
+			}
+			c.sendTerminalResponseFn = func(context.Context, agentic.UserResponse, string) error { return nil }
+			reply := *valid
+			reply.Decision = &agentic.CoordinatorDecision{Action: agentic.DecideActionRespondDirect, Reason: "answered"}
+			return completionPayload(t, &reply)
 		}},
 	}
 	for _, tt := range tests {

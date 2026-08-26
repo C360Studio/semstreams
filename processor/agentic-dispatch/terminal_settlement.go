@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
@@ -86,23 +87,27 @@ func (c *Component) loadPersistedLoop(ctx context.Context, loopID string) (*agen
 	if c.natsClient == nil {
 		return nil, fmt.Errorf("AGENT_LOOPS client unavailable")
 	}
-	kv, err := c.natsClient.GetKeyValueBucket(ctx, agentLoopsBucket)
+	bucket, err := c.loopsBucketName()
 	if err != nil {
-		return nil, fmt.Errorf("access AGENT_LOOPS: %w", err)
+		return nil, permanentTerminal("resolve agent loops bucket: %w", err)
+	}
+	kv, err := c.natsClient.GetKeyValueBucket(ctx, bucket)
+	if err != nil {
+		return nil, fmt.Errorf("access %s: %w", bucket, err)
 	}
 	entry, err := kv.Get(ctx, loopID)
 	if err != nil {
-		if errors.Is(err, jetstream.ErrKeyNotFound) || errors.Is(err, jetstream.ErrKeyDeleted) {
+		if isLoopRecordAbsent(err) {
 			return nil, fmt.Errorf("loop state %q not yet observable: %w", loopID, err)
 		}
-		return nil, fmt.Errorf("read AGENT_LOOPS/%s: %w", loopID, err)
+		return nil, fmt.Errorf("read %s/%s: %w", bucket, loopID, err)
 	}
 	var persisted agentic.LoopEntity
 	if err := json.Unmarshal(entry.Value(), &persisted); err != nil {
-		return nil, permanentTerminal("malformed AGENT_LOOPS/%s: %w", loopID, err)
+		return nil, permanentTerminal("malformed %s/%s: %w", bucket, loopID, err)
 	}
 	if persisted.ID != loopID {
-		return nil, permanentTerminal("AGENT_LOOPS/%s contains loop id %q", loopID, persisted.ID)
+		return nil, permanentTerminal("%s/%s contains loop id %q", bucket, loopID, persisted.ID)
 	}
 	return &persisted, nil
 }
@@ -114,6 +119,14 @@ func terminalResponse(event agentterminal.Event, route terminalRoute) agentic.Us
 	case agentterminal.ClassSucceeded:
 		responseType = agentic.ResponseTypeResult
 		content = event.Result
+		if decision := event.Decision; decision != nil && agentic.IsUserFacingDecideAction(decision.Action) {
+			// ADR-101: a reply decision's user-facing content IS its reason;
+			// Result keeps the full decision JSON for read_loop_result.
+			content = decision.Reason
+			if decision.Action == agentic.DecideActionAskUser {
+				responseType = agentic.ResponseTypePrompt
+			}
+		}
 		if content == "" {
 			content = fmt.Sprintf("Loop %s completed.", event.LoopID)
 		}
@@ -189,10 +202,47 @@ func (c *Component) settleAgentTerminal(ctx context.Context, data []byte) (settl
 	if trackerChanged {
 		c.metrics.recordLoopEnded()
 	}
-	if route.ChannelType == "" {
+	// Terminal selection follows the typed decision, never route ownership
+	// (ADR-101 D2). A decision that is not a reserved reply action is a
+	// handoff to a rule chain: it publishes nothing, even when the deciding
+	// loop owns a channel — that root handoff being delivered as the user's
+	// answer is the defect gh#1094 fixes.
+	if decision := event.Decision; decision != nil && !agentic.IsUserFacingDecideAction(decision.Action) {
 		c.metrics.recordCompletionReceived(event.Outcome)
-		reason = "route_less_settled"
+		reason = reasonHandoffSettled
+		c.logger.Debug("agent terminal settled as a handoff",
+			slog.String("loop_id", event.LoopID),
+			slog.String("action", decision.Action))
 		return nil
+	}
+
+	if route.ChannelType == "" {
+		userFacing := event.Decision != nil && agentic.IsUserFacingDecideAction(event.Decision.Action)
+		if !userFacing {
+			c.metrics.recordCompletionReceived(event.Outcome)
+			reason = reasonRouteLessSettled
+			return nil
+		}
+		resolved, resolveErr := c.resolveOriginRoute(ctx, persisted)
+		if resolveErr != nil {
+			if isPermanentTerminal(resolveErr) {
+				reason = "routing_malformed"
+			} else {
+				reason = "routing_read_transient"
+			}
+			return resolveErr
+		}
+		if resolved.reason != "" {
+			c.metrics.recordCompletionReceived(event.Outcome)
+			reason = resolved.reason
+			if resolved.reason == reasonOriginUnresolvable {
+				c.logger.Warn("origin_unresolvable: "+resolved.detail,
+					slog.String("loop_id", event.LoopID),
+					slog.String("action", event.Decision.Action))
+			}
+			return nil
+		}
+		route = resolved.route
 	}
 
 	response := terminalResponse(event, route)
@@ -207,4 +257,219 @@ func (c *Component) settleAgentTerminal(ctx context.Context, data []byte) (settl
 	c.metrics.recordCompletionReceived(event.Outcome)
 	reason = "response_settled"
 	return nil
+}
+
+// maxOriginHops bounds the ancestry walk. Mirrors agentrun.maxAncestryHops:
+// the two walkers observe the same ancestry on two planes and must agree on
+// how deep a legitimate chain can be.
+const maxOriginHops = 32
+
+// Terminal settlement reasons owned by origin resolution (gh#1094). Both are
+// fixed labels; the decision action, loop IDs, and run anchors appear only in
+// log lines.
+const (
+	// reasonHandoffSettled: the terminal carried a decision that is not a
+	// reserved reply action. It is a handoff to a rule chain, so nothing is
+	// published to any channel — including a channel the loop owns.
+	reasonHandoffSettled = "handoff_settled"
+
+	// reasonOriginUnresolvable: a durable ancestry link pointed at a record
+	// that could not be observed (expired 24h key, or a best-effort Put that
+	// never succeeded), or the walk hit a cycle or the hop bound. Recorded
+	// ONLY after the parent chain AND every encountered run anchor are
+	// exhausted. A retention/persistence alert, unlike route_less_settled.
+	reasonOriginUnresolvable = "origin_unresolvable"
+
+	// reasonRouteLessSettled: there was no origin. Pre-existing label, now
+	// also the answer for a reply decision whose walk ended at a record with
+	// no links and no route (a route-less bus-submitted root, or ancestry
+	// severed by a non-loop-entity trigger).
+	reasonRouteLessSettled = "route_less_settled"
+)
+
+// isLoopRecordAbsent reports whether an AGENT_LOOPS read failed because the
+// key is not there — expired after the 24h TTL, or never written because
+// persistLoopState is best-effort. Absence is a WALK signal (try the other
+// durable link, then settle); every other read failure is transient and is
+// redelivered.
+func isLoopRecordAbsent(err error) bool {
+	return errors.Is(err, jetstream.ErrKeyNotFound) || errors.Is(err, jetstream.ErrKeyDeleted)
+}
+
+// recordRoute projects a persisted loop record's route. A record carrying
+// exactly one of ChannelType/ChannelID is malformed and is permanently
+// rejected, exactly as a partial route on the terminal's own record is.
+func recordRoute(record *agentic.LoopEntity) (terminalRoute, bool, error) {
+	if record == nil {
+		return terminalRoute{}, false, nil
+	}
+	if (record.ChannelType == "") != (record.ChannelID == "") {
+		return terminalRoute{}, false, permanentTerminal("malformed partial route on AGENT_LOOPS/%s", record.ID)
+	}
+	if record.ChannelType == "" {
+		return terminalRoute{}, false, nil
+	}
+	return terminalRoute{ChannelType: record.ChannelType, ChannelID: record.ChannelID, UserID: record.UserID}, true, nil
+}
+
+// originResolution is the outcome of an ancestry walk: either a publishable
+// route, or the bounded reason the walk produced instead, with the detail the
+// log line needs. Exactly one of route/reason is meaningful.
+type originResolution struct {
+	route  terminalRoute
+	reason string
+	detail string
+}
+
+// resolveOriginRoute finds the channel a route-less reply decision belongs to
+// by observing persisted ancestry in AGENT_LOOPS — the plane that already
+// holds both the ancestry and the origin route (ADR-101 D3). It reads only
+// persisted records: the process-local tracker is never consulted for an
+// ancestor, so a restarted process resolves the same origin.
+//
+// Order (R4′, mirroring agentrun.ResolveRun's typed-first shape), and it never
+// settles while an untried durable link remains:
+//
+//  1. Typed-first. When the terminal record names a RunID other than itself,
+//     read that run root's record: routed -> origin; present but route-less ->
+//     continue the parent walk FROM THE ROOT (a routed loop may sit above a
+//     product-minted run); absent -> note it and walk from the terminal.
+//  2. Parent walk to the nearest routed ancestor. At every hop whose parent
+//     key is ABSENT, try the current record's RunID first when it is nonempty,
+//     not self, and not yet tried — an intermediate record can carry a run
+//     anchor the terminal did not.
+//  3. Bounded at maxOriginHops with a visited set.
+//
+// Walk end with no links, no untried run anchor, and nothing absent is
+// route_less_settled — there was no origin. If any durable link pointed at an
+// absent record, the answer is origin_unresolvable and the detail names both
+// exhaustions.
+func (c *Component) resolveOriginRoute(ctx context.Context, terminal *agentic.LoopEntity) (originResolution, error) {
+	if terminal == nil {
+		return originResolution{reason: reasonRouteLessSettled}, nil
+	}
+
+	exhausted := originExhaustion{}
+	tried := map[string]struct{}{terminal.ID: {}}
+	current := terminal
+
+	// Step 1 — typed-first through the terminal's run anchor.
+	if anchor := terminal.RunID; anchor != "" && anchor != terminal.ID {
+		tried[anchor] = struct{}{}
+		root, err := c.loadPersistedLoop(ctx, anchor)
+		switch {
+		case err != nil && !isLoopRecordAbsent(err):
+			return originResolution{}, err
+		case err != nil:
+			exhausted.runAnchor = anchor
+			exhausted.runAnchorAbsent = true
+		default:
+			route, routed, routeErr := recordRoute(root)
+			if routeErr != nil {
+				return originResolution{}, routeErr
+			}
+			if routed {
+				return originResolution{route: route}, nil
+			}
+			current = root
+		}
+	}
+
+	// Steps 2 and 3 — parent walk from the start record.
+	visited := make(map[string]struct{}, maxOriginHops)
+	for hop := 0; hop <= maxOriginHops; hop++ {
+		if hop == maxOriginHops {
+			return originResolution{
+				reason: reasonOriginUnresolvable,
+				detail: fmt.Sprintf("ancestry exceeded %d hops at %s", maxOriginHops, current.ID),
+			}, nil
+		}
+		if _, seen := visited[current.ID]; seen {
+			return originResolution{
+				reason: reasonOriginUnresolvable,
+				detail: fmt.Sprintf("ancestry cycles at %s", current.ID),
+			}, nil
+		}
+		visited[current.ID] = struct{}{}
+
+		route, routed, routeErr := recordRoute(current)
+		if routeErr != nil {
+			return originResolution{}, routeErr
+		}
+		if routed {
+			return originResolution{route: route}, nil
+		}
+
+		if parentID := current.ParentLoopID; parentID != "" {
+			parent, err := c.loadPersistedLoop(ctx, parentID)
+			if err == nil {
+				current = parent
+				continue
+			}
+			if !isLoopRecordAbsent(err) {
+				return originResolution{}, err
+			}
+			exhausted.parentID = parentID
+			exhausted.parentAbsent = true
+		}
+
+		// The parent link is empty or its key is absent: try this record's
+		// own run anchor before anything settles.
+		anchor := current.RunID
+		if anchor == "" || anchor == current.ID {
+			return exhausted.settle(), nil
+		}
+		if _, alreadyTried := tried[anchor]; alreadyTried {
+			return exhausted.settle(), nil
+		}
+		tried[anchor] = struct{}{}
+		root, err := c.loadPersistedLoop(ctx, anchor)
+		if err != nil {
+			if !isLoopRecordAbsent(err) {
+				return originResolution{}, err
+			}
+			exhausted.runAnchor = anchor
+			exhausted.runAnchorAbsent = true
+			return exhausted.settle(), nil
+		}
+		rootRoute, rootRouted, rootErr := recordRoute(root)
+		if rootErr != nil {
+			return originResolution{}, rootErr
+		}
+		if rootRouted {
+			return originResolution{route: rootRoute}, nil
+		}
+		current = root
+	}
+	// Unreachable: the loop returns at hop == maxOriginHops.
+	return originResolution{reason: reasonOriginUnresolvable, detail: "ancestry walk did not terminate"}, nil
+}
+
+// originExhaustion accumulates what the walk could not observe, so the
+// settling reason distinguishes "there was no origin" from "the origin could
+// not be observed", and the log line names both exhaustions (C2).
+type originExhaustion struct {
+	parentID        string
+	parentAbsent    bool
+	runAnchor       string
+	runAnchorAbsent bool
+}
+
+func (e originExhaustion) settle() originResolution {
+	if !e.parentAbsent && !e.runAnchorAbsent {
+		// Every link the walk followed resolved; it simply ran out of links.
+		return originResolution{reason: reasonRouteLessSettled}
+	}
+	parentClause := "parent chain ended with no further link"
+	if e.parentAbsent {
+		parentClause = "parent chain ended at absent " + e.parentID
+	}
+	anchorClause := "run anchor none"
+	if e.runAnchorAbsent {
+		anchorClause = "run anchor " + e.runAnchor + " absent"
+	}
+	return originResolution{
+		reason: reasonOriginUnresolvable,
+		detail: parentClause + "; " + anchorClause,
+	}
 }

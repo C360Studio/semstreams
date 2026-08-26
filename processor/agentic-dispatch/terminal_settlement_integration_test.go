@@ -23,7 +23,7 @@ import (
 func TestIntegrationTerminalSettlementRestartRouteStableDedupAndUnlimitedAttempts(t *testing.T) {
 	ctx := t.Context()
 	tc := natsclient.NewTestClient(t,
-		natsclient.WithKVBuckets(agentLoopsBucket),
+		natsclient.WithKVBuckets(defaultAgentLoopsBucket(t)),
 		natsclient.WithStreams(
 			natsclient.TestStreamConfig{Name: "AGENT_TERMINAL", Subjects: []string{"agent.>"}},
 			natsclient.TestStreamConfig{Name: "USER_TERMINAL", Subjects: []string{"user.>"}},
@@ -39,7 +39,7 @@ func TestIntegrationTerminalSettlementRestartRouteStableDedupAndUnlimitedAttempt
 	// subject contract.
 	c.config.Ports.Outputs[2].Config = component.JetStreamPort{Subjects: []string{"user.response.>"}, StreamName: "USER_TERMINAL"}
 
-	kv, err := tc.GetKVBucket(ctx, agentLoopsBucket)
+	kv, err := tc.GetKVBucket(ctx, defaultAgentLoopsBucket(t))
 	require.NoError(t, err)
 	loop := agentic.LoopEntity{
 		ID: "restart-loop", TaskID: "restart-task", State: agentic.LoopStateComplete, MaxIterations: 3,
@@ -121,10 +121,10 @@ func TestIntegrationUnlimitedAttemptsDoNotPreventAgeOrCapacityEviction(t *testin
 
 func TestIntegrationPersistedLoopMalformedJSONAndIDMismatchArePermanent(t *testing.T) {
 	ctx := t.Context()
-	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(agentLoopsBucket))
+	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(defaultAgentLoopsBucket(t)))
 	c := terminalTestComponent(t)
 	c.natsClient = tc.Client
-	kv, err := tc.GetKVBucket(ctx, agentLoopsBucket)
+	kv, err := tc.GetKVBucket(ctx, defaultAgentLoopsBucket(t))
 	require.NoError(t, err)
 
 	_, err = kv.Put(ctx, "malformed-loop", []byte(`{"not valid"`))
@@ -147,7 +147,7 @@ func TestIntegrationPersistedLoopMalformedJSONAndIDMismatchArePermanent(t *testi
 func TestIntegrationInvalidTerminalIsTerminated(t *testing.T) {
 	ctx := t.Context()
 	tc := natsclient.NewTestClient(t,
-		natsclient.WithKVBuckets(agentLoopsBucket),
+		natsclient.WithKVBuckets(defaultAgentLoopsBucket(t)),
 		natsclient.WithStreams(
 			natsclient.TestStreamConfig{Name: "INVALID_TERMINAL", Subjects: []string{"agent.>"}},
 			natsclient.TestStreamConfig{Name: "INVALID_TERMINAL_USER", Subjects: []string{"user.message.>"}},
@@ -175,7 +175,7 @@ func TestIntegrationInvalidTerminalIsTerminated(t *testing.T) {
 func TestIntegrationProductionCallbackRetriesKVAndPublishThenAcksAfterPubAck(t *testing.T) {
 	ctx := t.Context()
 	tc := natsclient.NewTestClient(t,
-		natsclient.WithKVBuckets(agentLoopsBucket),
+		natsclient.WithKVBuckets(defaultAgentLoopsBucket(t)),
 		natsclient.WithStreams(
 			natsclient.TestStreamConfig{Name: "CALLBACK_AGENT", Subjects: []string{"agent.>"}},
 			natsclient.TestStreamConfig{Name: "CALLBACK_INPUT_USER", Subjects: []string{"user.message.>"}},
@@ -190,7 +190,7 @@ func TestIntegrationProductionCallbackRetriesKVAndPublishThenAcksAfterPubAck(t *
 	responsePublishBefore := terminalReasonValue(c, "response_publish_transient")
 	responseSettledBefore := terminalReasonValue(c, "response_settled")
 
-	kv, err := tc.GetKVBucket(ctx, agentLoopsBucket)
+	kv, err := tc.GetKVBucket(ctx, defaultAgentLoopsBucket(t))
 	require.NoError(t, err)
 	persist := func(loopID, taskID, channelID string) {
 		data, marshalErr := json.Marshal(agentic.LoopEntity{
@@ -264,7 +264,7 @@ func TestIntegrationProductionCallbackRetriesKVAndPublishThenAcksAfterPubAck(t *
 func TestIntegrationProductionCallbackShutdownDelayedNAK(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	tc := natsclient.NewTestClient(t,
-		natsclient.WithKVBuckets(agentLoopsBucket),
+		natsclient.WithKVBuckets(defaultAgentLoopsBucket(t)),
 		natsclient.WithStreams(
 			natsclient.TestStreamConfig{Name: "CALLBACK_SHUTDOWN", Subjects: []string{"agent.>"}},
 			natsclient.TestStreamConfig{Name: "CALLBACK_SHUTDOWN_USER", Subjects: []string{"user.message.>"}},

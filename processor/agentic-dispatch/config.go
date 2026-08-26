@@ -37,6 +37,42 @@ type PermissionConfig struct {
 	Approve    []string `json:"approve"`     // Who can approve results
 }
 
+// agentLoopsPortName is the declared KV read port whose bucket dispatch
+// OBSERVES for every persisted-loop read. agentic-tools declares the same
+// port name for the same bucket; before gh#1094 dispatch predicted the name
+// with a constant, so a deployment running a non-default loops bucket lost
+// every terminal route without saying so.
+const agentLoopsPortName = "agent_loops"
+
+// loopsBucketFromPorts resolves the loops bucket from a declared port
+// set. It is the ONLY place the name is obtained; readers never carry a
+// default of their own.
+func loopsBucketFromPorts(ports *component.PortConfig) (string, error) {
+	if ports == nil {
+		return "", fmt.Errorf("port %q not declared", agentLoopsPortName)
+	}
+	for _, definition := range ports.Inputs {
+		if definition.Name != agentLoopsPortName {
+			continue
+		}
+		switch config := definition.Config.(type) {
+		case component.KVReadPort:
+			return config.Bucket, nil
+		case *component.KVReadPort:
+			if config != nil {
+				return config.Bucket, nil
+			}
+		}
+		return "", fmt.Errorf("port %q is not a KV read port", agentLoopsPortName)
+	}
+	return "", fmt.Errorf("port %q not declared", agentLoopsPortName)
+}
+
+// loopsBucketName resolves the loops bucket for this component's ports.
+func (c *Component) loopsBucketName() (string, error) {
+	return loopsBucketFromPorts(c.config.Ports)
+}
+
 // Validate validates the configuration
 func (c Config) Validate() error {
 	if c.DefaultRole == "" {
@@ -79,6 +115,10 @@ func DefaultConfig() Config {
 				{
 					Name: "agent.approval_pending", Config: component.JetStreamPort{Subjects: []string{"agent.approval_pending.*"}, StreamName: "AGENT"}, Required: false,
 					Description: "Approval-pending events used to populate the dispatch HTTP approval handler's CallID lookup",
+				},
+				{
+					Name: agentLoopsPortName, Config: component.KVReadPort{Bucket: "AGENT_LOOPS"}, Required: false,
+					Description: "Persisted loop records read for terminal route reconciliation, workflow origin resolution, and the /activity stream",
 				},
 			},
 			Outputs: []component.PortDefinition{

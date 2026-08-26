@@ -99,6 +99,72 @@ discriminating power is proven by forced omission A, not by this run.
 
 GREEN after 2.4: `ok  	github.com/c360studio/semstreams/processor/agentic-loop	1.367s`.
 
+### 3.1 — `processor/agentic-dispatch` (assertion RED: no selector, no resolver)
+
+Full run in the branch history; the FAIL headers and assertion lines verbatim:
+
+```
+$ go test -race -count=1 ./processor/agentic-dispatch -run '^(TestSettleAgentTerminal.*|TestResolveOriginRoute.*)$'
+--- FAIL: TestSettleAgentTerminalHandoffDecisionOnRoutedLoopPublishesNothing (0.00s)
+        	Error:      	Should be zero, but was 1
+        	Messages:   	a routed handoff decision must publish nothing
+--- FAIL: TestSettleAgentTerminalHandoffDecisionOnRouteLessLoopPublishesNothing (0.00s)
+        	Error:      	Not equal:
+--- FAIL: TestSettleAgentTerminalRespondDirectOnRoutedLoopPublishesResultWithReason (0.00s)
+        	Error:      	Not equal:
+        	Messages:   	content is the decision reason, not the decision JSON
+--- FAIL: TestSettleAgentTerminalAskUserDecisionPublishesPromptToOrigin (0.00s)
+        	Error:      	Not equal:
+--- FAIL: TestSettleAgentTerminalUserFacingDecisionResolvesOriginByAncestry (0.00s)
+        	Error:      	Not equal:
+--- FAIL: TestSettleAgentTerminalMissingParentFallsBackToRunID (0.01s)
+    --- FAIL: TestSettleAgentTerminalMissingParentFallsBackToRunID/parent_key_absent (0.00s)
+            	Error:      	Not equal:
+            	Messages:   	an absent parent key must not settle while a durable RunID is in hand
+    --- FAIL: TestSettleAgentTerminalMissingParentFallsBackToRunID/parent_link_empty (0.00s)
+            	Error:      	Not equal:
+            	Messages:   	a severed parent link must not settle while a durable RunID is in hand
+    --- FAIL: TestSettleAgentTerminalMissingParentFallsBackToRunID/typed_lookup_precedes_parent_walk (0.00s)
+            	Error:      	Not equal:
+    --- FAIL: TestSettleAgentTerminalMissingParentFallsBackToRunID/intermediate_run_anchor_after_absent_parent (0.00s)
+            	Error:      	Not equal:
+--- FAIL: TestSettleAgentTerminalUserFacingDecisionKeepsStableIdentityOnRedelivery (0.00s)
+        	Error:      	Not equal:
+--- FAIL: TestResolveOriginRouteBoundsHopsAndDetectsCycles (0.00s)
+    --- FAIL: TestResolveOriginRouteBoundsHopsAndDetectsCycles/cycle (0.00s)
+            	Error:      	Not equal:
+    --- FAIL: TestResolveOriginRouteBoundsHopsAndDetectsCycles/hop_bound (0.00s)
+            	Error:      	Not equal:
+--- FAIL: TestResolveOriginRouteSettlesOriginUnresolvableOnlyAfterParentAndRunIDExhausted (0.00s)
+    --- FAIL: TestResolveOriginRouteSettlesOriginUnresolvableOnlyAfterParentAndRunIDExhausted/absent_parent_and_absent_run_anchor (0.00s)
+            	Error:      	[]string{"terminal-loop"} does not contain "evicted-root"
+            	Messages:   	the run anchor must be tried
+    --- FAIL: TestResolveOriginRouteSettlesOriginUnresolvableOnlyAfterParentAndRunIDExhausted/absent_parent_and_no_run_anchor (0.00s)
+            	Error:      	Not equal:
+--- FAIL: TestResolveOriginRouteTransientReadDelaysNak (0.00s)
+        	Error:      	An error is expected but got nil.
+--- FAIL: TestResolveOriginRouteMalformedAncestorIsPermanent (0.00s)
+    --- FAIL: TestResolveOriginRouteMalformedAncestorIsPermanent/malformed_record (0.00s)
+            	Error:      	An error is expected but got nil.
+    --- FAIL: TestResolveOriginRouteMalformedAncestorIsPermanent/partial_route_on_ancestor (0.00s)
+            	Error:      	An error is expected but got nil.
+--- FAIL: TestSettleAgentTerminalRecordsExactlyOneFixedDisposition (0.01s)
+    --- FAIL: TestSettleAgentTerminalRecordsExactlyOneFixedDisposition/handoff (0.00s)
+            	Error:      	Not equal:
+    --- FAIL: TestSettleAgentTerminalRecordsExactlyOneFixedDisposition/origin_unresolvable (0.00s)
+            	Error:      	Not equal:
+FAIL
+FAIL	github.com/c360studio/semstreams/processor/agentic-dispatch	0.337s
+FAIL
+```
+
+Two of the named tests — `TestSettleAgentTerminalNoDecisionRouteLessLoopStaysRouteLess` and
+`TestSettleAgentTerminalReplyDecisionWithRouteLessRootSettlesRouteLess` — PASSED at RED, because
+`route_less_settled` is today's behaviour for both. They are not evidence on their own; forced omissions A and C
+are what prove they discriminate.
+
+GREEN after 3.2: `ok  	github.com/c360studio/semstreams/processor/agentic-dispatch	1.428s`.
+
 ## Exact gate evidence
 
 (filled per task; commands are the ones spelled in `tasks.md`)
@@ -106,6 +172,13 @@ GREEN after 2.4: `ok  	github.com/c360studio/semstreams/processor/agentic-loop	1
 - Task 2.5 `task schema:generate` → `git diff --stat schemas/ specs/` EMPTY (no generated-schema surface exists for
   a payload field; see tasks.md 2.5 for the measurement).
 - Task 2.6 Slice A GREEN commit: `704b67ee`.
+- Task 3.3 `go test -race -count=1 -tags=integration ./processor/agentic-dispatch -run '^TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart$'`
+  → `ok  	github.com/c360studio/semstreams/processor/agentic-dispatch	2.097s`.
+- Task 3.4 `go test -race -count=1 -tags=integration ./processor/agentic-dispatch -run '^TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort$'`
+  → `ok  	github.com/c360studio/semstreams/processor/agentic-dispatch	2.116s`.
+- Task 3.5 `task schema:generate` → `git diff --stat schemas/ specs/` EMPTY (declared port instances are not part
+  of the generated component schema).
+- E18 `grep -n agentLoopsBucket processor/agentic-dispatch/*.go` → 0 hits (the predicted-name constant is gone).
 
 ## Forced omissions
 
