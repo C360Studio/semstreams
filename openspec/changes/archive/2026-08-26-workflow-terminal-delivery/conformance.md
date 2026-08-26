@@ -263,6 +263,11 @@ FAIL	github.com/c360studio/semstreams/processor/agentic-loop	0.329s
 `LoopCompletedEvent` payload directly, so deleting the loop-side carrier cannot reach them. No in-repo test
 crosses the loop → dispatch seam; only an e2e tier would, and none does — the gap filed as #1105.
 
+**Addendum (narrow archive check, `ed9b0709`):** superseded by 5b.10. `terminal_loop_seam_test.go` now settles a
+real `agenticloop.MessageHandler` envelope through real dispatch; omission A re-applied at `ed9b0709`
+(`handlers.go:2040` → `Decision: nil`) fails `TestSettleAgentTerminalConsumesARealLoopDecideCompletion` on both
+subtests (`:71`, `:101`) plus the `…WhenTrackedNameAbsent` control; restored, md5 `3a60f7b7…` equal, porcelain 0.
+
 ### B — selector: `IsUserFacingDecideAction` returns `true` for every action (`agentic/tools.go:315`)
 
 ```
@@ -372,6 +377,19 @@ identifies loop and action, and adds no unbounded metric label. Focused verifica
 `go test -race -count=1 ./agentic ./processor/agentic-loop ./processor/agentic-dispatch` — PASS;
 `go test -race -count=1 -tags=integration ./processor/agentic-dispatch -run '^(TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart|TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort)$'` — PASS.
 
-### 7.4 Archive / spec-sync check
+### 7.4 Archive / spec-sync check — `semstreams-reviewer` (Fable) at `ed9b0709`: ARCHIVE OK
 
-(pending — recorded by the narrow reviewer check after the archive commit)
+Scope: the archive commit only (10 files under `openspec/`; no code, schemas, or docs). Independent derivation:
+header sets before/after for the three synced specs — agentic-loop 58→66, agentic-terminal-events 39→62,
+agentic-tools 52→57; dropped 0, duplicated 0; the four MODIFIED headers pre-existed and were replaced. All nine delta
+blocks (5 ADDED, 4 MODIFIED) byte-identical to the synced spec text. The renamed scenario sits once, under its
+original header "intentionally route-less loop", with the narrowed body; `terminal_settlement.go:224-230` implements
+exactly that; zero repo-wide references to the discarded header. `openspec validate --all --strict` 51/51; queue
+empty; no post-merge-fact task. §7.1/§7.2 match the PR comments verbatim. Findings: MEDIUM — 5.2's `[~]` rationale
+was a surviving pre-correction claim contradicted by 5b.10 (fixed above: closure recorded, mutation re-measured RED);
+NIT — 5.6 "three" → "four" subtests; NIT — 5.2 named `completion.Decision`, the site is the `Decision:` field at
+`handlers.go:2040`. Both fixed in this commit; nothing under `openspec/specs/` touched.
+
+### 7.5 Undraft
+
+PR #1098 undrafted at this commit; body carries `Closes #1094` and `implemented-by: opus`.

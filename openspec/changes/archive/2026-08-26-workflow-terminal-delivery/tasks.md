@@ -255,13 +255,17 @@ body is a published layer and states `implemented-by: <model>`.
   - Done at the GREEN commit `53177dfd`. The fifth file is `processor/agentic-dispatch/config.go`, NOT
     `http_activity.go`: R8 moved the bucket resolution there, and `http_activity.go` now only calls
     `c.loopsBucketName()`. All five sums recorded in `conformance.md`; before == after for every one.
-- [~] 5.2 Omission A (carrier): remove the `completion.Decision` assignment; run 2.3's and 3.1's commands; record
+- [x] 5.2 Omission A (carrier): remove the `Decision:` field assignment (`processor/agentic-loop/handlers.go:2040`); run 2.3's and 3.1's commands; record
   the assertion output verbatim (the named tests must not pass); restore by `cp`; re-checksum equal.
   - APPLIED and RESTORED (checksum equal). 2.3's two decide tests failed as required. But 3.1 stayed GREEN:
     the design named `TestSettleAgentTerminalUserFacingDecisionResolvesOriginByAncestry` as an omission-A
     detector and it is NOT one — the dispatch unit tests construct the completion payload directly, so no
     in-repo test crosses the loop → dispatch seam. Recorded as a measured MISS, not smoothed over; the seam is
     exactly the e2e gap filed as #1105. Verbatim output in `conformance.md`.
+  - CLOSED at `f1065152` by 5b.10 (`terminal_loop_seam_test.go`): the narrow archive check re-applied omission A
+    at `ed9b0709` and `TestSettleAgentTerminalConsumesARealLoopDecideCompletion` failed on both subtests (`:71`,
+    `:101`, "the loop must stamp the decision at its own end of the seam"); restored, md5 equal. The in-process
+    seam is detected; #1105 remains the physical (e2e) wire only.
 - [x] 5.3 Omission B (selector): make `IsUserFacingDecideAction` return `true`; run 3.1's command; record the
   assertion output for `TestSettleAgentTerminalHandoffDecisionOnRoutedLoopPublishesNothing` (it must not pass); restore; re-checksum.
   - APPLIED and RESTORED (checksum equal). The named test failed (`Should be zero, but was 1`), together with
@@ -276,7 +280,7 @@ body is a published layer and states `implemented-by: <model>`.
     failed: reading the predicted bucket errors, so settlement returns instead of publishing.
 - [~] 5.6 Omission E (mapper, C1): delete the `RunID` path of the resolver (typed-first lookup and the retry at an
   absent parent), keeping the parent walk; run 3.1's command; record that
-  `TestSettleAgentTerminalMissingParentFallsBackToRunID` (all three subtests) does not pass and every other 3.1
+  `TestSettleAgentTerminalMissingParentFallsBackToRunID` (all four subtests) does not pass and every other 3.1
   test does; restore; re-checksum.
   - APPLIED and RESTORED (checksum equal). All four subtests of the named test failed. The "every other 3.1 test
     passes" half does NOT hold: `TestResolveOriginRouteSettlesOriginUnresolvableOnlyAfterParentAndRunIDExhausted/absent_parent_and_absent_run_anchor`
@@ -416,5 +420,5 @@ A's miss accepted. Every item below is addressed in this worktree with evidence.
   `conformance.md`.
 - [x] 7.2 Owner-run cross-agent round where the owner asks for it; fixes and re-review recorded.
 - [x] 7.3 Archive: `openspec archive workflow-terminal-delivery` plus spec sync as the final content commit.
-- [ ] 7.4 Narrow reviewer check of the archive/spec sync recorded in `conformance.md`.
-- [ ] 7.5 Undraft the PR; confirm the body still carries `Closes #1094` and `implemented-by: <model>`.
+- [x] 7.4 Narrow reviewer check of the archive/spec sync recorded in `conformance.md`.
+- [x] 7.5 Undraft the PR; confirm the body still carries `Closes #1094` and `implemented-by: <model>`.
