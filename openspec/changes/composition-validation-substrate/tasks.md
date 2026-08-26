@@ -418,14 +418,35 @@ before the omission, and record `shasum -a 256` equality of the restored file.
 ## 6. Standard gates — record each command and its result
 
 - [x] 6.1 `task lint`.
+      RE-RUN on the owner-round head (`11cfd7ff`, after merging `origin/main` `e95c27b3` = PR #1098): `task lint` →
+      exit 0, revive printed no problem, `go fmt ./...` changed nothing (`git status --porcelain` → 0 lines after).
       DONE on `38155919`+§6 head: `task lint` → exit 0, revive `0 problems` (two `empty-block` warnings fixed at the GREEN head; log: scratchpad `lint_final.log`).
 - [x] 6.2 `go test -race ./...`.
+      RE-RUN on `11cfd7ff` with `-count=1`: `EXIT=0`, 155 `ok` lines, `grep -E '^FAIL|^--- FAIL|^panic:'` → no lines
+      (log: scratchpad `unit_r5.log`).
       DONE at the GREEN head (`aa70317c`, code unchanged since): every package `ok`, `grep -E '^FAIL'` → no FAIL lines (log: scratchpad `unit1.log`, 153 `ok` lines after the two fixes recorded in 3.10 re-ran green).
 - [x] 6.3 `go test -race -tags=integration -p 2 ./...`.
+      RE-RUN on `11cfd7ff` with `-count=1`: `EXIT=0`, 155 `ok` lines, `grep -E '^FAIL|^--- FAIL|^panic:'` → no lines
+      (log: scratchpad `integration_r5.log`). Focused after the #1098 merge, before the full suites:
+      `go test -race -count=1 -tags=integration ./internal/portgrammarcontrol/ -run 'TestPostFoundationBExternalBoundaryAmendmentIsExact|TestPostFoundationBWorkflowTerminalAmendmentIsExact|TestPostFoundationBResearchDispatchSubjectAmendmentIsExact' -v`
+      → all three `--- PASS` (both amendment lists survived the merge; `wantTotal` is 137 on main, on the pre-merge
+      branch, and after the merge — not relaxed);
+      `go test -race -count=1 -tags=integration ./componentregistry/ -run TestDeclaredPortsMatchConstructedPortsForEveryRegisteredFactory -v`
+      → `--- PASS` (dispatch's sixth input is declared and constructed alike);
+      `go test -race -count=1 -tags=integration ./composition/ -run 'TestValidateShippedConfigsHaveNoErrorFindings|TestValidateMatchesEngineFindingsForShippedConfigs' -v`
+      → both `--- PASS`.
       DONE on `38155919` (`-count=1`): 155 packages `ok`, `EXIT=0`, `grep -E '^(FAIL|--- FAIL|panic:)'` → no FAIL lines (log: scratchpad `integration_full.log`). The two `[~]` target-state tests report `--- SKIP` naming their tasks.
 - [x] 6.4 `task build`.
+      RE-RUN on `11cfd7ff`: `task build` → `Built bin/semstreams`; CI cross-compile line → exit 0 (29860002 bytes);
+      `go build ./...` and `go vet -tags=integration ./...` → clean; `openspec validate --all --strict` →
+      `Totals: 55 passed, 0 failed (55 items)`; `task openspec:queue` → `flow-authoring-retirement` ok,
+      `composition-validation-substrate` reports only the deliberate `[~]` 3.1a.
       DONE: `Built bin/semstreams`; CI line `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s -X main.version=local" -o semstreams-linux-amd64 ./cmd/semstreams` → exit 0 (29876386 bytes). `go vet -tags=integration ./...` → clean. `openspec validate composition-validation-substrate --strict` → `Change 'composition-validation-substrate' is valid`.
 - [x] 6.5 `go test ./test/contract/...`.
+      RE-RUN on `11cfd7ff`: `ok github.com/c360studio/semstreams/test/contract 2.618s`. `task schema:generate` after the
+      #1098 merge produced one expected change — `schemas/agentic-dispatch.v1.json` gains the `agent_loops` kv-read
+      entry under `default_ports`, the catalog export this change added picking up #1098's new port — committed as
+      `11cfd7ff`; the second `task schema:generate` left `git diff --stat schemas/ specs/` empty.
       DONE: `ok github.com/c360studio/semstreams/test/contract 2.866s` on the regenerated schemas (5.1).
 - [x] 6.6 `task e2e:core` for this PR (#1092: step 1 of the design's per-step table is BREAKING for adopter
       components, and the `/gaps` removal in 9.1 is BREAKING for its clients; `task e2e:core` is the covering tier the
@@ -606,3 +627,37 @@ document it for migration by downstream at this stage." Both findings are theref
       out of `specs/composition-validation/spec.md`. This change keeps only what this PR performs — including the
       `/gaps` removal requirement of 9.1 — and 1.1, 2.5, 3.2, 6.6, 7.4, 7.5 are rewritten to say so. The
       `composition-validation` capability delta gained a real `## Purpose`.
+- [x] 9.5 **Gates on the owner-round head `11cfd7ff`** (each also appended to its own 6.x line). Host coordination: the
+      beta.162 candidate proof shares this machine, so before each tier `task e2e:check-ports` → `[OK] All ports
+      available`, `docker ps` showed no e2e container, and `/private/tmp/claude-501/e2e-lock-proof` was absent;
+      `/private/tmp/claude-501/e2e-lock-gh1101` was held for the duration of both tiers and removed after teardown.
+      `task lint` → exit 0, revive no problem · `go build ./...` OK · `go vet -tags=integration ./...` clean ·
+      `go test -race -count=1 ./...` → EXIT=0, 155 `ok`, no FAIL lines ·
+      `go test -race -count=1 -tags=integration -p 2 ./...` → EXIT=0, 155 `ok`, no FAIL lines ·
+      `task schema:generate` + second run → `git diff --stat schemas/ specs/` empty ·
+      `go test ./test/contract/...` → `ok … 2.618s` · `openspec validate --all --strict` → 55 passed, 0 failed ·
+      `task openspec:queue` → both changes clean apart from the deliberate `[~]` 3.1a ·
+      `task e2e:core` → `EXIT=0`, `[OK] All ports available` · `[OK] E2E environment cleaned` · `[OK] All services are
+      healthy` · `[OK] Readiness and heartbeat report 12/12 healthy components` · `msg="Scenario PASSED"
+      name=core-health` · `msg="Scenario PASSED" name=core-dataflow` · `msg="Scenario PASSED" name=core-graph-roundtrip`
+      · `[OK] SIGTERM exited 0, released listeners, completed shutdown, and left NATS healthy` · `[OK] Early SIGTERM
+      canceled blocked NATS boot, exited 1, and fenced service startup` (log: scratchpad `e2e_core_r5.log`) ·
+      `task e2e:agentic` (the merge brought #1098's agentic-dispatch changes, and this is the only tier that boots
+      `External: true` through a real boot with the refuse live) → `EXIT=0`, `[OK] Services are healthy (NATS +
+      mock-llm + semstreams)` · `msg="Scenario completed successfully" duration=45.150619917s` with
+      `tool_executions:1 graph_loop_triples:10 graph_model_triples:6 verify-terminal-response_duration_ms:7 …` ·
+      compose down clean (log: scratchpad `e2e_agentic_r5.log`).
+      Focused commands for the two tests added in 9.1 (both unit, no build tag needed):
+      `go test -race -count=1 ./service/ -run 'TestComponentGapsOperationIsAbsent|TestExternalInputIsNeverACriticalOrphanOnAnyComponentOperation' -v`
+      → both `--- PASS`; under the integration tag the same package and selector also pass:
+      `go test -race -count=1 -tags=integration ./service/ -run 'TestComponentGapsOperationIsAbsent|TestExternalInputIsNeverACriticalOrphanOnAnyComponentOperation' -v`.
+- [x] 9.6 **`origin/main` integrated twice.** First at `483ffc05` (merge of `08660fc5`: #1099, #1102, #1104 — no `.go`
+      file changed, `git diff bad4a1af 483ffc05 --stat -- '*.go'` empty). Second at `650c7b96` (merge of `e95c27b3`,
+      PR #1098 / #1094), which git resolved with NO conflict; both sides were verified present rather than assumed:
+      `processor/agentic-dispatch/config.go` carries #1098's `agent_loops` `KVReadPort` on `AGENT_LOOPS` AND this
+      change's `Required: true, External: true` on `user.message`; `internal/portgrammarcontrol/target_test.go` carries
+      #1098's `postFoundationBWorkflowTerminalGoIdentityAdditions` + `TestPostFoundationBWorkflowTerminalAmendmentIsExact`
+      AND this change's `postFoundationBExternalBoundaryAmendments` + `postFoundationBResearchDispatchSubjectAmendments`
+      with their exactness tests; `wantTotal := 137 - len(postFoundationBGraphQueryGoIdentityRetirements)` is identical
+      on `origin/main`, on the pre-merge branch head, and after the merge — no count relaxed. Schema consequence
+      committed as `11cfd7ff`.
