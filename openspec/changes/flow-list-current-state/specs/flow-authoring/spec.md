@@ -9,8 +9,10 @@ for a never-created and for a tombstoned key — SHALL be omitted from the resul
 other per-key failure (transport, permission, deadline or cancellation, a stored record that does not decode) SHALL
 abort the list with a nil result and SHALL be returned with the classification `Manager.Get` assigned: a record that
 does not decode stays `errs.IsFatal`, a read that cannot complete stays `errs.IsTransient`; List SHALL NOT re-wrap
-the failure under a different class. No message text SHALL be inspected anywhere on the List path, and List SHALL
-promise no ordering.
+the failure under a different class. A context that is done when the key enumeration RETURNS SHALL likewise abort the
+list — whether or not the enumeration reported any key — with a nil result and a transient error carrying the
+cancellation cause, so a cancellation that raced the key watcher is never reported as an authoritative empty list. No
+message text SHALL be inspected anywhere on the List path, and List SHALL promise no ordering.
 
 #### Scenario: an empty bucket is a successful empty list
 
@@ -48,6 +50,19 @@ promise no ordering.
 - **THEN** it returns a non-nil error for which `errs.IsFatal` is true and `errs.IsTransient` is false
 - **AND** the result is nil
 - **AND** the test that verifies this is `TestManagerListPreservesCorruptRecordFailure`
+
+#### Scenario: cancellation during enumeration aborts
+
+- **GIVEN** a context that is cancelled while the keys are being enumerated, whether or not any key was reported —
+  `natsclient.KVStore.Keys` maps the SDK's `jetstream.ErrNoKeysFound` to `(nil, nil)`, and a cancelled key watcher
+  produces that same `(nil, nil)` shape
+- **WHEN** List returns
+- **THEN** the result is nil, never an empty success
+- **AND** the error is `errs.IsTransient` and `errors.Is(err, context.Canceled)` is true
+- **AND** the guard runs before any empty result is built, so `GET /flows` cannot answer `{"flows":[]}` and
+  `list_flows` cannot answer `No flows configured.` for an enumeration that never completed
+- **AND** the test that verifies this is `TestManagerListRejectsCancellationDuringEnumeration` (subtests
+  `empty bucket` and `populated bucket`)
 
 ### Requirement: Empty saved-flow state is a normal outcome for every List consumer
 

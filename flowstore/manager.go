@@ -38,6 +38,15 @@ type Manager struct {
 	// this package can act on a key between enumeration and its read without
 	// sleeping. Never make it exported, an option, or a constructor parameter.
 	beforeListGet func(ctx context.Context, key string)
+
+	// afterListKeys is a package-private synchronization seam: List calls it
+	// (when non-nil) immediately after the key enumeration returns and before
+	// the enumeration-time context check. It is nil in production — nothing
+	// outside package flowstore can reach it — and exists so the proof that a
+	// context cancelled DURING enumeration cannot read as an authoritative
+	// empty list is deterministic. Never make it exported, an option, or a
+	// constructor parameter.
+	afterListKeys func(ctx context.Context)
 }
 
 // NewManager creates a new flow store
@@ -234,11 +243,21 @@ func (s *Manager) Delete(ctx context.Context, id string) error {
 // fatal decode failure as transient. No message text is inspected anywhere on
 // this path.
 //
+// A context that is done when the enumeration returns aborts the list even
+// when the enumeration itself reported nothing, so a cancellation that raced
+// the key watcher can never be reported as an authoritative empty result.
+//
 // The result is in whatever order the bucket enumerated; List promises none.
 func (s *Manager) List(ctx context.Context) ([]*Flow, error) {
 	keys, err := s.kvStore.Keys(ctx)
 	if err != nil {
 		return nil, errs.WrapTransient(err, "flowstore", "List", "list KV keys")
+	}
+	if s.afterListKeys != nil {
+		s.afterListKeys(ctx)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errs.WrapTransient(err, "flowstore", "List", "list KV keys: context done during enumeration")
 	}
 
 	flows := make([]*Flow, 0, len(keys))

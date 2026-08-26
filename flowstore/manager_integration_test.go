@@ -609,3 +609,81 @@ func TestManagerListPreservesCorruptRecordFailure(t *testing.T) {
 		t.Errorf("List returned a partial result %v with an error, want nil", listIDs(flows))
 	}
 }
+
+// TestManagerListRejectsCancellationDuringEnumeration pins the enumeration-time
+// half of the abort contract. natsclient.KVStore.Keys maps the SDK's
+// jetstream.ErrNoKeysFound to (nil, nil), and nats.go's KeyValue.Keys drains a
+// watcher whose channel cancellation closes — so a context cancelled after the
+// subscription is created but before the first entry arrives produces exactly
+// the (nil, nil) shape an empty bucket produces. Without the enumeration-time
+// ctx.Err() guard that UNKNOWN reads as an authoritative empty list.
+//
+// The seam reproduces that shape deterministically: it fires immediately after
+// Keys returns, cancels the context List is running under, and the assertions
+// then hold whether the bucket was empty (Keys legitimately returned nil, nil)
+// or populated (Keys returned a key that must never be read).
+func TestManagerListRejectsCancellationDuringEnumeration(t *testing.T) {
+	assertAborted := func(t *testing.T, flows []*Flow, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("List with a context cancelled during enumeration returned no error (flows=%v)", listIDs(flows))
+		}
+		if flows != nil {
+			t.Errorf("List returned %v with an error, want a nil result", listIDs(flows))
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("List error lost the cancellation cause: %v", err)
+		}
+		if !errs.IsTransient(err) {
+			t.Errorf("List error is not classified transient: %v", err)
+		}
+		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
+			t.Errorf("a cancelled enumeration was reported as typed absence: %v", err)
+		}
+	}
+
+	t.Run("empty bucket", func(t *testing.T) {
+		store, _ := newTestManager(t)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		seamHits := 0
+		store.afterListKeys = func(_ context.Context) {
+			seamHits++
+			cancel()
+		}
+
+		flows, err := store.List(ctx)
+		assertAborted(t, flows, err)
+		if seamHits != 1 {
+			t.Errorf("the enumeration seam fired %d times, want exactly 1", seamHits)
+		}
+	})
+
+	t.Run("populated bucket", func(t *testing.T) {
+		store, _ := newTestManager(t)
+		flowA := listTestFlow("flow-a")
+		if err := store.Create(t.Context(), &flowA); err != nil {
+			t.Fatal(err)
+		}
+
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		seamHits := 0
+		store.afterListKeys = func(_ context.Context) {
+			seamHits++
+			cancel()
+		}
+
+		flows, err := store.List(ctx)
+		assertAborted(t, flows, err)
+		for _, f := range flows {
+			if f.ID == flowA.ID {
+				t.Errorf("List returned the saved flow %s despite the cancelled enumeration", flowA.ID)
+			}
+		}
+		if seamHits != 1 {
+			t.Errorf("the enumeration seam fired %d times, want exactly 1", seamHits)
+		}
+	})
+}
