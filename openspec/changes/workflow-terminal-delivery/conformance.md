@@ -52,6 +52,33 @@ Accepted authority:
 Status wording: MET means the named evidence exists and was run at this head. It is not a merge-readiness or
 review claim; §7 is untouched.
 
+## One interpretation the implementer had to make (FLAGGED, not a licence)
+
+The delta's walk-end rule and its `origin_unresolvable` rule can be read as disagreeing in exactly one shape, and
+the implementation had to choose:
+
+- Delta step 2: *"A record with no `ParentLoopID`, no untried `RunID`, and no route is the walk end and settles
+  `route_less_settled`."*
+- Delta, same requirement: *"`route_less_settled` SHALL remain distinct: the walk ended at a record with no links
+  and no route"*, and the design's principle that `route_less_settled` *"is never used when a link pointed at
+  something unobservable"* (R4′).
+
+The shape: the terminal carries a `RunID` whose key is ABSENT (step 1 notes it and walks on) and the walk then
+reaches a record with no parent link and no untried anchor. Read the first way it is `route_less_settled`; read
+the second way it is `origin_unresolvable`, because a durable link DID point at something unobservable.
+
+**Implemented the second way** (`processor/agentic-dispatch/terminal_settlement.go:458-475`,
+`originExhaustion.settle`): a walk that followed every link it had and simply ran out of links settles
+`route_less_settled`; a walk where ANY link resolved to an absent key settles `origin_unresolvable` and names both
+exhaustions. Rationale: the two reasons exist to separate "there was no origin" (expected; not an alert) from "the
+origin could not be observed" (a retention/persistence alert), and the second reading is the only one that keeps
+that separation true. `TestSettleAgentTerminalReplyDecisionWithRouteLessRootSettlesRouteLess`
+(`terminal_origin_test.go:361`, a record with NO links at all) and
+`TestResolveOriginRouteSettlesOriginUnresolvableOnlyAfterParentAndRunIDExhausted` (`:456`) pin both sides.
+
+If the owner intended the literal first reading, this is a one-line change in `settle()` plus one test fixture —
+raised here rather than settled silently.
+
 ## RED captures (task 2.1, task 2.3)
 
 ### 2.1 — `agentic` (compile RED: the type, field, and constants did not exist)
