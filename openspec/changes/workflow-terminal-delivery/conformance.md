@@ -189,7 +189,118 @@ GREEN after 3.2: `ok  	github.com/c360studio/semstreams/processor/agentic-dispat
 
 ## Forced omissions
 
-(one block per omission: file, checksum before, RED output, `cp` restore, checksum after)
+Applied to the committed GREEN tree at `53177dfd`, one at a time, each restored by `cp` from a checksummed copy
+before the next. `shasum -a 256` before == after for all five mutated files:
+
+```
+12c2257bc27b5fa1401e9fba699e5390cfcd5da5bc219bdebbc76dc4687f934b  processor/agentic-loop/handlers.go
+3ccd1e2dddea00ea549b1b4094c961131e04f0be404062949109a232cf2afe8e  agentic/tools.go
+5c55d6c62d7370c982c8f2aba621133caf551782b8b1dbdde258a9b1d551c893  agentic/events.go
+4c5b802f56079b50c3c57f509032fa662cd60db8efb8697d039abd17874c7fd9  processor/agentic-dispatch/terminal_settlement.go
+d162ec0ec54898ef17634c9d449b4dd1c9ad547bbb3c1fcbbf53280999760d91  processor/agentic-dispatch/config.go
+```
+
+`git status --porcelain` after the last restore: empty.
+
+### A — carrier: `completion.Decision` assignment removed (`handlers.go:2040`)
+
+```
+--- FAIL: TestHandleCompleteResponseStampsTypedDecisionFromDecideTerminal (0.00s)
+        	Error:      	Expected value not to be nil.
+        	Messages:   	decide terminal must carry a typed decision
+--- FAIL: TestHandleCompleteResponseStampsDecisionFromToolResultNameWhenTrackedNameAbsent (0.00s)
+        	Error:      	Expected value not to be nil.
+        	Messages:   	tracked-name loss must not demote a decide terminal
+FAIL	github.com/c360studio/semstreams/processor/agentic-loop	0.329s
+```
+
+**The design's predicted RED set for A is half wrong, and this is the finding, not a pass:** it also named
+`TestSettleAgentTerminalUserFacingDecisionResolvesOriginByAncestry`, which stayed GREEN
+(`ok  	github.com/c360studio/semstreams/processor/agentic-dispatch	1.376s`). The dispatch unit tests build the
+`LoopCompletedEvent` payload directly, so deleting the loop-side carrier cannot reach them. No in-repo test
+crosses the loop → dispatch seam; only an e2e tier would, and none does — the gap filed as #1105.
+
+### B — selector: `IsUserFacingDecideAction` returns `true` for every action (`agentic/tools.go:315`)
+
+```
+--- FAIL: TestSettleAgentTerminalHandoffDecisionOnRoutedLoopPublishesNothing (0.00s)
+        	Error:      	Should be zero, but was 1
+        	Messages:   	a routed handoff decision must publish nothing
+--- FAIL: TestSettleAgentTerminalHandoffDecisionOnRouteLessLoopPublishesNothing (0.00s)
+        	Error:      	Should be zero, but was 1
+        	Messages:   	a handoff decision never borrows an origin
+--- FAIL: TestSettleAgentTerminalRecordsExactlyOneFixedDisposition/handoff (0.00s)
+FAIL	github.com/c360studio/semstreams/processor/agentic-dispatch	0.356s
+```
+
+The named test failed; the two extra failures are the same class (every handoff assertion).
+
+### C — mapper: `resolveOriginRoute` skips the walk (returns `route_less_settled`)
+
+```
+--- FAIL: TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart (0.27s)
+        	Error Trace:	.../processor/agentic-dispatch/terminal_origin_integration_test.go:120
+        	Error:      	Not equal:
+        	Messages:   	two deliveries must leave one response identity
+FAIL	github.com/c360studio/semstreams/processor/agentic-dispatch	1.009s
+```
+
+(`go vet` additionally reported `terminal_settlement.go:349:2: unreachable code` for the mutation itself.)
+
+### D — carrier: the loops bucket is predicted again (`return "AGENT_LOOPS", nil`)
+
+```
+--- FAIL: TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort (0.30s)
+        	Error Trace:	.../processor/agentic-dispatch/terminal_origin_integration_test.go:175
+        	Error:      	Received unexpected error:
+FAIL	github.com/c360studio/semstreams/processor/agentic-dispatch	1.100s
+```
+
+### E — mapper (C1): the `RunID` path is deleted, the parent walk kept
+
+```
+--- FAIL: TestSettleAgentTerminalMissingParentFallsBackToRunID (0.01s)
+    --- FAIL: .../parent_key_absent (0.00s)
+            	Messages:   	an absent parent key must not settle while a durable RunID is in hand
+    --- FAIL: .../parent_link_empty (0.00s)
+            	Messages:   	a severed parent link must not settle while a durable RunID is in hand
+    --- FAIL: .../typed_lookup_precedes_parent_walk (0.00s)
+            	Messages:   	the run anchor is read first; the parent key is never read
+    --- FAIL: .../intermediate_run_anchor_after_absent_parent (0.00s)
+--- FAIL: TestResolveOriginRouteSettlesOriginUnresolvableOnlyAfterParentAndRunIDExhausted/absent_parent_and_absent_run_anchor (0.00s)
+            	Error:      	[]string{"terminal-loop", "evicted-parent"} does not contain "evicted-root"
+            	Messages:   	the run anchor must be tried
+FAIL	github.com/c360studio/semstreams/processor/agentic-dispatch	0.386s
+```
+
+**Deviation from the design's "and only that test":** a second test also detects the omission, because C2's
+"only after the parent chain AND every encountered run anchor are exhausted" is asserted by checking that the
+run anchor was READ. That is the C2 requirement doing its job, not an over-broad test; every other test in the
+3.1 command stayed green.
+
+### F — selector (C3): the terminal tool is resolved from the tracked name only
+
+```
+--- FAIL: TestHandleCompleteResponseStampsDecisionFromToolResultNameWhenTrackedNameAbsent (0.00s)
+        	Error:      	Expected value not to be nil.
+        	Messages:   	tracked-name loss must not demote a decide terminal
+FAIL	github.com/c360studio/semstreams/processor/agentic-loop	0.346s
+```
+
+Exactly the named test, and only it.
+
+### G — guard (C4): the present-decision completeness check is removed from `Validate`
+
+```
+--- FAIL: TestLoopCompletedEventValidateRejectsPresentDecisionWithEmptyActionOrReason (0.00s)
+    --- FAIL: .../empty_action (0.00s)
+            	Error:      	An error is expected but got nil.
+    --- FAIL: .../empty_reason (0.00s)
+            	Error:      	An error is expected but got nil.
+FAIL	github.com/c360studio/semstreams/agentic	0.301s
+```
+
+Exactly the named test, and only it.
 
 ## Review record
 

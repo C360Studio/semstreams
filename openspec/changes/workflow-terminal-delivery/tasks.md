@@ -209,27 +209,49 @@ body is a published layer and states `implemented-by: <model>`.
 
 ## 5. Forced omissions (after the GREEN commits of 2.6 and 3.6)
 
-- [ ] 5.1 Checksum `processor/agentic-loop/handlers.go`, `agentic/tools.go` (or wherever the classifier lands),
+- [x] 5.1 Checksum `processor/agentic-loop/handlers.go`, `agentic/tools.go` (or wherever the classifier lands),
   `agentic/events.go`, `processor/agentic-dispatch/terminal_settlement.go`, and
   `processor/agentic-dispatch/http_activity.go` with `shasum -a 256`; keep `cp` copies in the scratchpad.
-- [ ] 5.2 Omission A (carrier): remove the `completion.Decision` assignment; run 2.3's and 3.1's commands; record
+  - Done at the GREEN commit `53177dfd`. The fifth file is `processor/agentic-dispatch/config.go`, NOT
+    `http_activity.go`: R8 moved the bucket resolution there, and `http_activity.go` now only calls
+    `c.loopsBucketName()`. All five sums recorded in `conformance.md`; before == after for every one.
+- [~] 5.2 Omission A (carrier): remove the `completion.Decision` assignment; run 2.3's and 3.1's commands; record
   the assertion output verbatim (the named tests must not pass); restore by `cp`; re-checksum equal.
-- [ ] 5.3 Omission B (selector): make `IsUserFacingDecideAction` return `true`; run 3.1's command; record the
+  - APPLIED and RESTORED (checksum equal). 2.3's two decide tests failed as required. But 3.1 stayed GREEN:
+    the design named `TestSettleAgentTerminalUserFacingDecisionResolvesOriginByAncestry` as an omission-A
+    detector and it is NOT one — the dispatch unit tests construct the completion payload directly, so no
+    in-repo test crosses the loop → dispatch seam. Recorded as a measured MISS, not smoothed over; the seam is
+    exactly the e2e gap filed as #1105. Verbatim output in `conformance.md`.
+- [x] 5.3 Omission B (selector): make `IsUserFacingDecideAction` return `true`; run 3.1's command; record the
   assertion output for `TestSettleAgentTerminalHandoffDecisionOnRoutedLoopPublishesNothing` (it must not pass); restore; re-checksum.
-- [ ] 5.4 Omission C (mapper): make `resolveOriginRoute` return an empty route; run 3.3's command; record the
+  - APPLIED and RESTORED (checksum equal). The named test failed (`Should be zero, but was 1`), together with
+    the route-less handoff test and the `handoff` disposition subtest — the same assertion class.
+- [x] 5.4 Omission C (mapper): make `resolveOriginRoute` return an empty route; run 3.3's command; record the
   assertion output (it must not pass); restore; re-checksum.
-- [ ] 5.5 Omission D (carrier): resolve the bucket from a hardcoded `"AGENT_LOOPS"` again; run 3.4's command; record
+  - APPLIED and RESTORED (checksum equal). `TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart`
+    failed at the single-identity assertion (no response was published at all).
+- [x] 5.5 Omission D (carrier): resolve the bucket from a hardcoded `"AGENT_LOOPS"` again; run 3.4's command; record
   the assertion output (it must not pass); restore; re-checksum.
-- [ ] 5.6 Omission E (mapper, C1): delete the `RunID` path of the resolver (typed-first lookup and the retry at an
+  - APPLIED and RESTORED (checksum equal). `TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort`
+    failed: reading the predicted bucket errors, so settlement returns instead of publishing.
+- [~] 5.6 Omission E (mapper, C1): delete the `RunID` path of the resolver (typed-first lookup and the retry at an
   absent parent), keeping the parent walk; run 3.1's command; record that
   `TestSettleAgentTerminalMissingParentFallsBackToRunID` (all three subtests) does not pass and every other 3.1
   test does; restore; re-checksum.
-- [ ] 5.7 Omission F (selector, C3): resolve the terminal tool from the tracked name only; run 2.3's command; record
+  - APPLIED and RESTORED (checksum equal). All four subtests of the named test failed. The "every other 3.1 test
+    passes" half does NOT hold: `TestResolveOriginRouteSettlesOriginUnresolvableOnlyAfterParentAndRunIDExhausted/absent_parent_and_absent_run_anchor`
+    also failed, because C2's "only after the parent chain AND every encountered run anchor are exhausted" is
+    asserted by checking the run anchor was READ — deleting the `RunID` path removes that read. Reported rather
+    than papered over; the extra detector is the C2 requirement, not an over-broad test.
+- [x] 5.7 Omission F (selector, C3): resolve the terminal tool from the tracked name only; run 2.3's command; record
   that `TestHandleCompleteResponseStampsDecisionFromToolResultNameWhenTrackedNameAbsent` alone does not pass;
   restore; re-checksum.
-- [ ] 5.8 Omission G (guard, C4): remove the `Decision` check from `LoopCompletedEvent.Validate`; run 2.1's command;
+  - APPLIED and RESTORED (checksum equal). Exactly that test failed; the other two in the 2.3 command passed.
+- [x] 5.8 Omission G (guard, C4): remove the `Decision` check from `LoopCompletedEvent.Validate`; run 2.1's command;
   record that `TestLoopCompletedEventValidateRejectsPresentDecisionWithEmptyActionOrReason` alone does not pass;
   restore; re-checksum.
+  - APPLIED and RESTORED (checksum equal). Exactly that test failed (`empty_action`, `empty_reason`); the
+    round-trip and classifier tests passed.
 
 ## 6. Gates (run what CI runs, both suites)
 
