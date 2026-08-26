@@ -175,17 +175,37 @@ body is a published layer and states `implemented-by: <model>`.
 
 ## 4. Slice C — guards, docs, spec truth
 
-- [ ] 4.1 Add `TestAction_PublishAgent_CarriesNoChannelFields` (rule) asserting the published `TaskMessage`
+- [x] 4.1 Add `TestAction_PublishAgent_CarriesNoChannelFields` (rule) asserting the published `TaskMessage`
   decodes into a fresh value with empty `ChannelType`, `ChannelID`, `UserID` for a loop-entity-triggered spawn.
-  Command: `go test -race -count=1 ./processor/rule -run '^TestAction_PublishAgent_CarriesNoChannelFields$'`.
-- [ ] 4.2 Update `docs/operations/38-agent-terminal-settlement.md`, `processor/agentic-dispatch/README.md`
+  Command: `go test -race -count=1 ./processor/rule -run '^TestAction_PublishAgent_CarriesNoChannelFields$'`
+  → `--- PASS: TestAction_PublishAgent_CarriesNoChannelFields (0.00s)` /
+  `ok github.com/c360studio/semstreams/processor/rule 1.395s`. `processor/rule/actions_test.go` (end of file);
+  it also pins that the spawn DOES carry ancestry (`ParentLoopID`), which is what origin resolution reads.
+  `git diff --stat processor/rule/actions.go` → empty (no production change).
+- [x] 4.2 Update `docs/operations/38-agent-terminal-settlement.md`, `processor/agentic-dispatch/README.md`
   (settlement paragraph and reason table), and `docs/concepts/25-phased-agentic-chains.md` (one sentence naming
   the reserved reply actions); add the release-note paragraph naming the routed-handoff behaviour change.
-- [ ] 4.3 If owner item 1 is ruled "reserved names", set `docs/adr/101-coordinator-reply-vocabulary-and-workflow-terminal-delivery.md`
+  - `docs/operations/38-agent-terminal-settlement.md`: release-note paragraph naming the behaviour change (top of
+    the file), a new "Which terminal is the user's answer" section with the selection table and the origin-
+    resolution order, the `route_less_settled` vs `origin_unresolvable` operational distinction, the declared
+    `agent_loops` port, and the AGENT_LOOPS horizon added to the bounded-guarantee section.
+  - `processor/agentic-dispatch/README.md`: settlement paragraph rewritten for decision-driven selection plus the
+    full closed reason table.
+  - `docs/concepts/25-phased-agentic-chains.md`: the reserved-vocabulary paragraph after the chain-encapsulation
+    passage.
+- [x] 4.3 If owner item 1 is ruled "reserved names", set `docs/adr/101-coordinator-reply-vocabulary-and-workflow-terminal-delivery.md`
   to status Accepted; otherwise delete the draft and record the ruling in `design.md`.
-- [ ] 4.4 File the e2e coverage-gap issue "no e2e drives a rule-spawned chain's user-facing terminal" and record
+  - Owner item 1 was ruled "reserved names", so the ADR stays and its Status is Accepted (2026-08-26). Two stale
+    sentences from the draft were corrected in the same pass: the self-contradicting "Status flips to Accepted
+    when the change lands", and the Consequences bullet that still put the walker's plane to the owner (ruled:
+    the AGENT_LOOPS plane).
+- [x] 4.4 File the e2e coverage-gap issue "no e2e drives a rule-spawned chain's user-facing terminal" and record
   its number in `conformance.md`.
-- [ ] 4.5 Run `openspec validate workflow-terminal-delivery --strict --no-interactive` and record the output.
+  - **#1105** — "e2e: no tier drives a rule-spawned chain's user-facing terminal to user.response"
+    (`area:e2e`, `area:agentic`, `type:test`, `class:e2e-gap`). Filing records the gap; it does not discharge
+    #1094's guarantee.
+- [x] 4.5 Run `openspec validate workflow-terminal-delivery --strict --no-interactive` and record the output.
+  - `Change 'workflow-terminal-delivery' is valid` (re-run at the head that carries the §6 gate results).
 
 ## 5. Forced omissions (after the GREEN commits of 2.6 and 3.6)
 

@@ -2,12 +2,13 @@
 
 ## Status
 
-**Accepted (2026-08-26).** Owner ruling on #1094 via the owner-run round on PR #1098 (recorded on the issue): items 1–7 and 9–10 accepted; 8 conditional on exhaustive ancestry fallback; 11 accepted on the AGENT_LOOPS plane with the missing-parent→`RunID` correction. The reserved reply vocabulary (`respond_direct`, `ask_user`) is a cross-repo contract from this date. Owner ruling on #1094 (2026-08-26, owner-run Codex round on PR #1098): the reserved
-reply vocabulary, component-observed terminal selection, no new durable authority, no graph routing metadata, and the
-AGENT_LOOPS resolution plane are accepted; the traversal is corrected to typed-first `RunID` with parent fallback
-(revision 3). Status flips to Accepted when the change lands. Records a cross-repo
-contract; the mechanics live in `openspec/specs/agentic-terminal-events`, `agentic-loop`, and `agentic-tools`
-via change `workflow-terminal-delivery`.
+**Accepted (2026-08-26).** Owner ruling on #1094 via the owner-run round on PR #1098, recorded on the issue: items
+1–7 and 9–10 accepted as recommended; 8 accepted conditionally (an `origin_unresolvable` disposition only after the
+parent chain AND every encountered run anchor are exhausted); 11 accepted on the AGENT_LOOPS plane with the
+traversal corrected to typed-first `RunID` and a missing-parent → `RunID` fallback. The reserved reply vocabulary
+(`respond_direct`, `ask_user`) is a cross-repo contract from this date. This ADR records the contract only; the
+mechanics live in `openspec/specs/agentic-terminal-events`, `agentic-loop`, and `agentic-tools` via change
+`workflow-terminal-delivery`.
 
 ## Context
 
@@ -48,8 +49,10 @@ completion, never a tool result.
   routed front-door coordinator that ends in a non-reply decision stops receiving that decision as `result`.
 - The typed decision is an additive `LoopCompletedEvent` field; `Result` is unchanged for `read_loop_result`.
 - ADR-053 D3 stands: the run's lifecycle phase remains product-declared; this ADR does not infer run completion.
-- The owner rules which plane the ancestry walk runs on (AGENT_LOOPS, or the existing graph walk in
-  `agentrun.ResolveRun` plus one AGENT_LOOPS read of the root); the route itself is on AGENT_LOOPS either way.
+- The ancestry walk runs on the AGENT_LOOPS plane (ruled): dispatch takes no graph read and no readiness coupling
+  to the graph plane, and every hop inherits the bucket's 24h key TTL. The rejected alternative — reusing
+  `agentrun.ResolveRun`'s graph walk plus one AGENT_LOOPS read of the root — would narrow that horizon to one key
+  at the cost of a graph dependency; the route itself is on AGENT_LOOPS either way.
 - Rejected alternatives: carrying the origin on the `AgentRun` entity (second home for a bucket fact; unsolvable
   root-handoff ordering), a rule-side terminal marker (author prediction), copying channel fields onto every spawn
   (leaks every internal phase).

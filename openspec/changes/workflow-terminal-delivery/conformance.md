@@ -173,6 +173,12 @@ GREEN after 3.2: `ok  	github.com/c360studio/semstreams/processor/agentic-dispat
   a payload field; see tasks.md 2.5 for the measurement).
 - Task 2.6 Slice A GREEN commit: `704b67ee`.
 - Task 3.6 Slice B GREEN commit: `31ef6b55`.
+- Task 4.1 `go test -race -count=1 ./processor/rule -run '^TestAction_PublishAgent_CarriesNoChannelFields$'`
+  → `--- PASS` / `ok  	github.com/c360studio/semstreams/processor/rule	1.395s`;
+  `git diff --stat processor/rule/actions.go` empty.
+- Task 4.4 e2e coverage gap filed as **#1105**.
+- Task 4.5 `openspec validate workflow-terminal-delivery --strict --no-interactive`
+  → `Change 'workflow-terminal-delivery' is valid`.
 - Task 3.3 `go test -race -count=1 -tags=integration ./processor/agentic-dispatch -run '^TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart$'`
   → `ok  	github.com/c360studio/semstreams/processor/agentic-dispatch	2.097s`.
 - Task 3.4 `go test -race -count=1 -tags=integration ./processor/agentic-dispatch -run '^TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort$'`

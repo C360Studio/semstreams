@@ -61,6 +61,17 @@ within (a component knows only its inputs and outputs). This layered
 encapsulation is what lets a chain evolve its internal phase graph
 without touching upstream or downstream callers.
 
+Two of those category names are reserved by the framework (ADR-101):
+`respond_direct` means "this decision is the answer to the user" and
+`ask_user` means "this decision is a question for the user". Dispatch
+delivers those two — a `result` and a `prompt` respectively, carrying the
+decision's `reason` — to the channel the chain originated on, walking
+persisted ancestry to find it when the deciding loop is rule-spawned and
+owns no channel of its own. Every other decide action is a handoff between
+phases and is never delivered to a user. A chain therefore names its own
+transitions freely, and only has to spell its ANSWER with one of the two
+reserved names.
+
 ## Two-layer dispatch
 
 Every phased agentic chain has two routing layers:
