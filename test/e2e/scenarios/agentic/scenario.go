@@ -845,31 +845,30 @@ func (s *Scenario) verifyGraphTriples(ctx context.Context, result *scenarios.Res
 		// the birth was refused or never happened, so this tier fails rather
 		// than warns (ADR-103, N-1).
 		return fmt.Errorf("model endpoint entity %s not found: %w", modelEntityID, err)
-	} else {
-		modelPreds := make(map[string]bool, len(modelEntity.Triples))
-		for _, t := range modelEntity.Triples {
-			modelPreds[t.Predicate] = true
-		}
-
-		requiredModelPreds := []string{
-			agvocab.ModelProvider,
-			agvocab.ModelName,
-			agvocab.ModelSupportsTools,
-		}
-		modelMissing := []string{}
-		for _, pred := range requiredModelPreds {
-			if !modelPreds[pred] {
-				modelMissing = append(modelMissing, pred)
-			}
-		}
-		if len(modelMissing) > 0 {
-			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("model entity %s missing predicates: %v", modelEntityID, modelMissing))
-		}
-
-		result.Metrics["graph_model_triples"] = len(modelEntity.Triples)
-		result.Details["graph_model_entity_id"] = modelEntityID
 	}
+	modelPreds := make(map[string]bool, len(modelEntity.Triples))
+	for _, t := range modelEntity.Triples {
+		modelPreds[t.Predicate] = true
+	}
+
+	requiredModelPreds := []string{
+		agvocab.ModelProvider,
+		agvocab.ModelName,
+		agvocab.ModelSupportsTools,
+	}
+	modelMissing := []string{}
+	for _, pred := range requiredModelPreds {
+		if !modelPreds[pred] {
+			modelMissing = append(modelMissing, pred)
+		}
+	}
+	if len(modelMissing) > 0 {
+		result.Warnings = append(result.Warnings,
+			fmt.Sprintf("model entity %s missing predicates: %v", modelEntityID, modelMissing))
+	}
+
+	result.Metrics["graph_model_triples"] = len(modelEntity.Triples)
+	result.Details["graph_model_entity_id"] = modelEntityID
 
 	// --- Verify loop→model relationship ---
 	if loopPreds[agvocab.LoopModelUsed] {
