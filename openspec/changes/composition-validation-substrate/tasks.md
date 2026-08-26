@@ -460,6 +460,21 @@ before the omission, and record `shasum -a 256` equality of the restored file.
       `task e2e:core` with the refuse live → `[OK] Readiness and heartbeat report 12/12 healthy components` ·
       `Scenario PASSED` core-health · core-dataflow · core-graph-roundtrip · `[OK] SIGTERM exited 0 …` · `[OK] Early
       SIGTERM canceled blocked NATS boot …` · `EXIT=0` (`e2e_core_r3.log`).
+      `task e2e:agentic` on `96814e04` (review round 2 accepted; the only tier that boots `External: true` —
+      `configs/flows/crud-tools-test.json`'s `agentic-dispatch/user.message` — through a real boot with the refuse
+      live), verbatim: `[OK] All ports available` · `[OK] E2E environment cleaned` · `[AGENTIC] Starting agentic tier
+      E2E test...` · `[OK] Services are healthy (NATS + mock-llm + semstreams)` (the tier's health gate is compose
+      `--wait`; this tier prints no per-component count — the scenario's `verify-components` step covers it) ·
+      `[AGENTIC] Running agentic tier scenario...` · `msg="Running scenario" name=agentic` · `msg="Executing scenario"
+      name=agentic` · `msg="Scenario completed successfully" duration=45.167551125s metrics="map[capture-baseline_duration_ms:6
+      durable_tool_replay_executor_invocations:1 governance_verdicts_approved_audit:1 governance_verdicts_total:1
+      graph_loop_triples:10 graph_model_triples:6 inject-task_duration_ms:1 stream_chunks_total:5 stream_ttft_count:1
+      tool_executions:1 trajectory_elapsed_ms:39 trajectory_facts:10 trajectory_tokens_in:336 trajectory_tokens_out:189
+      validate-results_duration_ms:0 validate-trajectory_duration_ms:5 verify-components_duration_ms:2
+      verify-durable-tool-replay_duration_ms:44586 verify-graph-triples_duration_ms:3 verify-streaming-metrics_duration_ms:15
+      verify-terminal-response_duration_ms:5 verify-tool-call-governance_duration_ms:17 verify-tool-execution_duration_ms:10
+      wait-for-completion_duration_ms:513]" assertions_run=0` · compose down clean · `EXIT=0 WALL=75s`
+      (log: scratchpad `e2e_agentic.log`).
 - [ ] 6.7 (#1093) Downstream measurement (read-only): `cd ~/Code/c360/semteams && go vet ./cmd/semteams/` against a
       `replace` to this branch in a scratch module (never edit semteams); record the compile errors as the migration
       document's semteams section. semstreams-ui: record the 15 call sites from inventory §9 in the migration
