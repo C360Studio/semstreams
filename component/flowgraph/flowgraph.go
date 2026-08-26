@@ -392,21 +392,14 @@ func (g *FlowGraph) buildSubscriberMap() map[component.InteractionPattern]map[st
 	return subscribers
 }
 
-// SubjectMatches reports whether two NATS subject expressions overlap under
-// NATS wildcard semantics (`*` one token, `>` one or more), in either
-// direction. It is the same matcher edge derivation uses, exported so
-// composition validation judges explicit stream coverage with the interpreter
-// that judges connections.
-func SubjectMatches(subject, pattern string) bool {
-	return matchNATSPattern(subject, pattern)
-}
-
 // SubjectCovers reports whether filter COVERS pattern: every concrete subject
 // that matches pattern also matches filter under NATS wildcard semantics. It
-// is directional, unlike SubjectMatches (overlap): `data.>` covers `data.*`,
-// `data.*` does not cover `data.>`, and `data.raw` does not cover `data.*`.
-// Composition validation uses it to decide whether an explicit stream's
-// subjects feed a JetStream subscriber's subjects.
+// is directional: `data.>` covers `data.*`, `data.*` does not cover `data.>`,
+// and `data.raw` does not cover `data.*`. Composition validation uses it to
+// decide whether an explicit stream's subjects feed a JetStream subscriber's
+// subjects. Edge derivation's unexported direct-match test is a different
+// question and is not exported: it answers "may these two ports be connected",
+// not "does this filter deliver every subject that one".
 func SubjectCovers(filter, pattern string) bool {
 	patternTokens := strings.Split(pattern, ".")
 	filterTokens := strings.Split(filter, ".")

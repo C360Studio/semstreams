@@ -28,8 +28,13 @@ func TestSubjectCoversIsDirectionalCover(t *testing.T) {
 			t.Errorf("SubjectCovers(%q, %q) = %v, want %v", c.filter, c.pattern, got, c.want)
 		}
 	}
-	// Overlap is symmetric where cover is not.
-	if !SubjectMatches("data.*", "data.raw") || SubjectCovers("data.raw", "data.*") {
-		t.Fatal("cover must be stricter than overlap")
+	// Cover is stricter than the direct match edge derivation uses: the two
+	// agree that `data.*` reaches `data.raw`, and only cover refuses the
+	// reverse.
+	if !matchNATSPattern("data.*", "data.raw") || !matchNATSPattern("data.raw", "data.*") {
+		t.Fatal("direct match is symmetric on this pair")
+	}
+	if SubjectCovers("data.raw", "data.*") {
+		t.Fatal("cover must be stricter than the direct match")
 	}
 }

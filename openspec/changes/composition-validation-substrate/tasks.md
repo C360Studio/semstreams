@@ -405,7 +405,8 @@ before the omission, and record `shasum -a 256` equality of the restored file.
 - [x] 4.19 (review round 2, M3) Drop the stream-NAME check so any explicit stream may satisfy a subscriber →
       `[applied]` → `--- FAIL: TestValidateStreamRequirementNeedsTheNamedStream (0.00s)` (`…SatisfiedByExplicitStream`
       still PASS); `composition/analyze.go` restored, sha256 `859e22a1…26f9` before and after.
-- [x] 4.20 (review round 2, M3) Overlap (`SubjectMatches`) instead of cover (`SubjectCovers`) → `[applied]` →
+- [x] 4.20 (review round 2, M3) Overlap (the unexported direct match `matchNATSPattern`) instead of cover
+      (`SubjectCovers`) → `[applied]` →
       `--- FAIL: TestValidateStreamRequirementNeedsCoverNotOverlap (0.00s)`; `composition/analyze.go` restored, same sha.
 - [x] 4.21 (review round 2, M4) Drop the output rejection of `external` → `[applied]` →
       `--- FAIL: TestPortDefinitionExternalRoundTrip (0.00s)`; `component/port_resolver.go` restored, sha256
@@ -487,8 +488,8 @@ before the omission, and record `shasum -a 256` equality of the restored file.
       Round 1 (Fable, at `0b00749d`): REQUEST CHANGES — nothing BLOCKING, 4 HIGH, 6 MEDIUM. Dispositions:
       H1 FIXED (3.5a: research-graph configs `component.*` → `component.>`); H2 FIXED (3.5b: `Analyze(declarations,
       streams config.StreamConfigs)` — the second parameter is the type the framework already owns for explicit
-      streams, both evidence classes hold it, and nil means none; `flowgraph.SubjectMatches` exported so coverage uses
-      the edge matcher; scenario "an explicit stream declaration satisfies a JetStream subscriber" + tests
+      streams, both evidence classes hold it, and nil means none; coverage first reused the edge matcher through an
+      exported `flowgraph.SubjectMatches`, superseded by M3 below and removed entirely in the owner round (9.2); scenario "an explicit stream declaration satisfies a JetStream subscriber" + tests
       `TestValidateStreamRequirementSatisfiedByExplicitStream` (unit) and `TestComponentManagerBootFindingsHonourExplicitStreams`
       (integration) PASS; omissions 4.15/4.16 below); H3 FIXED (objectstore `[~]` written under the P1 requirement;
       conformance D2/DEVIATION corrected); H4 PENDING OWNER (3.5c; not acted on); M1 FIXED (`composition/doc.go`,
@@ -507,7 +508,7 @@ before the omission, and record `shasum -a 256` equality of the restored file.
       `grep -rn "pending ruling\|owner's ruling recorded\|REFUSE is"` → 0 outside tasks); M2 FIXED (remedy suggestion on
       the required no-publisher orphan; the refusal prints each finding's suggestions; seam recorded in 3.5c);
       M3 FIXED (`flowgraph.SubjectCovers` — the test-only `subjectPatternCoveredByFilter` promoted to a production
-      owner beside `SubjectMatches`; `explicitStreamCovers(streams, streamName, subjects)` keys on the subscriber's
+      owner; the `SubjectMatches` export H2 had added became a phantom at that moment and is removed in 9.2; `explicitStreamCovers(streams, streamName, subjects)` keys on the subscriber's
       declared stream name from `StreamFacts.Name()` via `subscriberStreamNames` and requires cover per subject; tests
       `TestValidateStreamRequirementNeedsTheNamedStream`, `TestValidateStreamRequirementNeedsCoverNotOverlap`,
       `TestSubjectCoversIsDirectionalCover`; omissions 4.19/4.20); M4 FIXED (`resolveAndProjectPort` refuses
