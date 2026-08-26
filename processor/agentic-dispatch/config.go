@@ -44,9 +44,11 @@ type PermissionConfig struct {
 // every terminal route without saying so.
 const agentLoopsPortName = "agent_loops"
 
-// loopsBucketFromPorts resolves the loops bucket from a declared port
-// set. It is the ONLY place the name is obtained; readers never carry a
-// default of their own.
+// loopsBucketFromPorts resolves the loops bucket from a declared port set
+// through the canonical port projection, so the name is OBSERVED from
+// configuration. It is the only place the bucket is obtained; readers carry
+// no default of their own, and an undeclared or non-KV-read port is an error
+// rather than a silent fallback to the default name.
 func loopsBucketFromPorts(ports *component.PortConfig) (string, error) {
 	if ports == nil {
 		return "", fmt.Errorf("port %q not declared", agentLoopsPortName)
@@ -55,15 +57,19 @@ func loopsBucketFromPorts(ports *component.PortConfig) (string, error) {
 		if definition.Name != agentLoopsPortName {
 			continue
 		}
-		switch config := definition.Config.(type) {
-		case component.KVReadPort:
-			return config.Bucket, nil
-		case *component.KVReadPort:
-			if config != nil {
-				return config.Bucket, nil
-			}
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return "", fmt.Errorf("resolve port %q: %w", agentLoopsPortName, err)
 		}
-		return "", fmt.Errorf("port %q is not a KV read port", agentLoopsPortName)
+		facts, err := port.Facts()
+		if err != nil {
+			return "", fmt.Errorf("project port %q: %w", agentLoopsPortName, err)
+		}
+		bucket, ok := facts.KVReadBucket()
+		if !ok {
+			return "", fmt.Errorf("port %q does not declare a KV read bucket", agentLoopsPortName)
+		}
+		return bucket, nil
 	}
 	return "", fmt.Errorf("port %q not declared", agentLoopsPortName)
 }

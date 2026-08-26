@@ -172,6 +172,36 @@ body is a published layer and states `implemented-by: <model>`.
     instance appears either). Same measurement as task 2.5.
 - [x] 3.6 Commit Slice B GREEN before any mutation check; record the commit SHA in `conformance.md`.
   - `31ef6b55` — `feat(agentic-dispatch): deliver a workflow's answer to its origin, never its handoff (#1094)`.
+- [x] 3.7 GRAMMAR-COLLISION AUDIT for R8's new port token (added mid-flight; CI-found, not designed).
+  The design's file map did not name `internal/portgrammarcontrol`, and CI went red on the Slice B commits —
+  runs `33003490848` @ `e7148acc` and `33003744544` @ `53177dfd` — with
+  `go test -race -tags=integration -count=1 ./internal/portgrammarcontrol/` failing twice:
+  - `TestRuntimePortGrammarCompleteness` (`runtime_completeness_test.go:219`):
+    `processor/agentic-dispatch/config.go:58 type-switches a port Config projection`. Only
+    `component/port_codec.go` and `component/port_facts.go` may interpret a concrete port config
+    (`canonicalPortProjectionOwners`, `runtime_completeness_test.go:45-48`). FIXED by extending the canonical
+    owner rather than exempting dispatch: `component/port_facts.go` gains the `kvReadBucket` projection field,
+    `kvReadPortFacts` populates it, and `PortFacts.KVReadBucket() (string, bool)` is the accessor —
+    the `StoreReadBucket` precedent exactly. `loopsBucketFromPorts` now goes
+    `definition.Resolve(DirectionInput)` → `port.Facts()` → `facts.KVReadBucket()`.
+    **NOTE for the exported-surface gate: `component.PortFacts.KVReadBucket` is NEW exported framework surface
+    that the accepted design never named.** It has one consumer at birth (dispatch's two persisted-loop readers)
+    and no default: `ok=false` is an error at the call site, never a fallback to `AGENT_LOOPS`.
+    The coordinator's suggestion to mirror how agentic-tools reads its own `agent_loops` bucket does NOT apply —
+    MEASURED: agentic-tools declares the port but never reads it; the name reaches the executor from a separate
+    config key with its own default (`processor/agentic-tools/config.go:31`, `executors/register.go:60,145`).
+    There was no accessor to mirror, which is why one had to be added to the canonical owner.
+  - `TestFoundationBTargetCompleteness` (`target_test.go:137`):
+    `processor/agentic-dispatch/config.go target Go identities differ: <dynamic>|KVReadPort=1/0` and
+    `canonical Go PortDefinition identities=136, want 135`. The census is frozen and amended only through named
+    `postFoundationB*` variables. FIXED with `postFoundationBWorkflowTerminalGoIdentityAdditions`
+    (`target_test.go`), one file, one identity, no retirement, plus
+    `TestPostFoundationBWorkflowTerminalAmendmentIsExact` so the amendment cannot become a general licence: it
+    pins the file, the single identity, that dispatch declares exactly one kv-read input bound to `AGENT_LOOPS`
+    through the accessor, and that `http_activity.go` never regrows a predicted constant. The count was NOT
+    relaxed and the port was NOT deleted (R8 is owner-ruled, item 10).
+  - `go test -race -count=1 -tags=integration ./internal/portgrammarcontrol/`
+    → `ok github.com/c360studio/semstreams/internal/portgrammarcontrol 6.723s`; `task lint` clean.
 
 ## 4. Slice C — guards, docs, spec truth
 
