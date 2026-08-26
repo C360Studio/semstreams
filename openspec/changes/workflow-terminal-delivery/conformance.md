@@ -5,7 +5,8 @@ command run on the claimed branch; a row without recorded output is not evidence
 
 Accepted authority:
 
-- Inventory checkpoint: `INVENTORY PASS` SHA-256 `<pending>`.
+- Inventory checkpoint: `INVENTORY PASS WITH DIVERGENCES` on revision 1 (PR #1098, `01b0f37f`); revision 2
+  corrections listed in design §I.6; accepted revision SHA-256 `<pending>`.
 - Owner-accepted design: SHA-256 `<pending>`.
 - Owner rulings on design §II.9 items 1–9: recorded in `design.md`.
 
@@ -29,6 +30,8 @@ Accepted authority:
 | Schema no-drift | E14: task 6.4 output | PENDING |
 | e2e | E15: task 6.6 output | PENDING |
 | Strict validation | E16: task 4.5 output | PENDING |
+| Route-less root / severed chain settles `route_less_settled` | E17: `TestSettleAgentTerminalReplyDecisionWithRouteLessRootSettlesRouteLess` | PENDING |
+| Bucket name observed from the declared `agent_loops` port | E18: `TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort`; `grep -n agentLoopsBucket processor/agentic-dispatch/*.go` empty | PENDING |
 
 ## Exact gate evidence
 

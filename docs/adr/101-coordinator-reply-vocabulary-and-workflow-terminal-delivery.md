@@ -2,7 +2,8 @@
 
 ## Status
 
-**Proposed — unsigned architect draft (2026-08-26), pending owner ruling on #1094.** Records a cross-repo
+**Proposed — unsigned architect draft, revision 2 (2026-08-26; inventory review `INVENTORY PASS WITH DIVERGENCES`,
+corrected), pending owner ruling on #1094.** Records a cross-repo
 contract; the mechanics live in `openspec/specs/agentic-terminal-events`, `agentic-loop`, and `agentic-tools`
 via change `workflow-terminal-delivery`.
 
@@ -18,7 +19,8 @@ the framework cannot tell an answer from a handoff.
 Two facts must be held somewhere: the route a workflow's answer belongs to, and which decision is an answer. The
 first is already durable on the run root's loop record in `AGENT_LOOPS` together with the ancestry to reach it
 (`agentic/state.go:56-59,81-84`). The second has no framework home; the only framework-owned decide action today is
-the synthesized `needs_clarification` (`processor/agentic-loop/graph_writer.go:181`).
+the synthesized `needs_clarification` (`processor/agentic-loop/graph_writer.go:182`), a graph triple written after
+completion, never a tool result.
 
 ## Decision
 
@@ -33,7 +35,9 @@ the synthesized `needs_clarification` (`processor/agentic-loop/graph_writer.go:1
 3. **Origin correlation is observed, not carried.** Dispatch resolves a route-less user-facing decision's channel by
    walking the persisted loop ancestry (`ParentLoopID`, then `RunID`) in `AGENT_LOOPS` to the nearest routed
    ancestor. No new field rides `TaskMessage`, no run-entity predicate is added, and no second durable authority is
-   created. The 24h `AGENT_LOOPS` key TTL is the documented horizon of this resolution.
+   created. The 24h `AGENT_LOOPS` key TTL and its best-effort persistence are the documented horizon of this
+   resolution; a walk that ends at a record with no link and no route (a route-less bus-submitted root, or a hop
+   fired from a non-loop entity) settles route-less — a stated limit, not a product obligation.
 
 ## Consequences
 
@@ -41,6 +45,8 @@ the synthesized `needs_clarification` (`processor/agentic-loop/graph_writer.go:1
   routed front-door coordinator that ends in a non-reply decision stops receiving that decision as `result`.
 - The typed decision is an additive `LoopCompletedEvent` field; `Result` is unchanged for `read_loop_result`.
 - ADR-053 D3 stands: the run's lifecycle phase remains product-declared; this ADR does not infer run completion.
+- The owner rules which plane the ancestry walk runs on (AGENT_LOOPS, or the existing graph walk in
+  `agentrun.ResolveRun` plus one AGENT_LOOPS read of the root); the route itself is on AGENT_LOOPS either way.
 - Rejected alternatives: carrying the origin on the `AgentRun` entity (second home for a bucket fact; unsolvable
   root-handoff ordering), a rule-side terminal marker (author prediction), copying channel fields onto every spawn
   (leaks every internal phase).

@@ -49,7 +49,10 @@ When a user-facing decision's own reconciled route is empty, dispatch SHALL reso
 when nonempty and not the current loop; the first record carrying a complete `ChannelType`/`ChannelID` pair is the
 origin. The walk SHALL be bounded at 32 hops with cycle detection, SHALL reuse the existing persisted-loop read and
 its transient/permanent classification, and SHALL introduce no new field on `TaskMessage`, no run-entity predicate,
-and no second durable authority.
+and no second durable authority. A walk that ends at a record with neither link and no complete route SHALL settle
+`route_less_settled` (there was no origin: a route-less root, or ancestry severed by a non-loop-entity trigger). A walk
+that cannot complete — an absent ancestor key (expired or never persisted), a cycle, or the hop bound — SHALL settle
+`origin_unresolvable`.
 
 #### Scenario: ancestry walk resolves the HTTP root
 
@@ -65,12 +68,27 @@ and no second durable authority.
 - **WHEN** the terminal is settled
 - **THEN** the response is published to that route
 
+#### Scenario: route-less root settles route-less
+
+- **GIVEN** a reply-decision terminal whose persisted record has empty `ParentLoopID` and `RunID` and no route
+- **WHEN** the terminal is settled
+- **THEN** it publishes no `UserResponse`
+- **AND** records reason `route_less_settled`, not `origin_unresolvable`
+- **AND** acknowledges the terminal
+
+#### Scenario: severed ancestry is indistinguishable from a route-less root
+
+- **GIVEN** a chain hop that was fired from a non-loop entity carrying no `agent.loop.run` triple
+- **AND** the terminal descends from that hop
+- **WHEN** the terminal is settled
+- **THEN** the walk ends at the severed record and records reason `route_less_settled`
+
 #### Scenario: missing ancestor settles origin-unresolvable
 
 - **GIVEN** a reply-decision terminal whose next ancestor key is absent from `AGENT_LOOPS`
 - **WHEN** the terminal is settled
 - **THEN** it publishes no `UserResponse`
-- **AND** records reason `origin_unresolvable` with a warning naming the absent loop ID
+- **AND** records reason `origin_unresolvable` with a warning naming the absent loop ID as expired or never persisted
 - **AND** acknowledges the terminal
 
 #### Scenario: transient ancestor read is retried
@@ -92,6 +110,18 @@ and no second durable authority.
 - **WHEN** the terminal is settled
 - **THEN** it records reason `origin_unresolvable`
 - **AND** does not loop indefinitely
+
+### Requirement: Persisted-state observation SHALL use a declared KV read port
+
+Dispatch SHALL declare an `agent_loops` KV read port whose bucket defaults to `AGENT_LOOPS` and SHALL resolve the
+bucket for terminal settlement and the `/activity` reader from that port. Dispatch SHALL NOT hardcode the bucket name.
+
+#### Scenario: non-default bucket name is observed
+
+- **GIVEN** dispatch's `agent_loops` port is bound to a non-default bucket
+- **AND** a routed loop record exists only in that bucket
+- **WHEN** its terminal is settled
+- **THEN** dispatch reads the record from the bound bucket and publishes to the record's route
 
 ## MODIFIED Requirements
 
@@ -221,14 +251,16 @@ settlement. Loop IDs, user IDs, channel IDs, actions, and subjects SHALL NOT be 
 ### Requirement: Delivery declaration SHALL remain bounded and honest
 
 The framework SHALL describe terminal-derived `UserResponse` publication as at-least-once within bounded AGENT
-retention and USER duplicate-detection mechanisms. It SHALL NOT claim exactly-once, indefinite retry, per-message
-eviction proof, or post-eviction response delivery. It SHALL additionally document that origin resolution reads
-`AGENT_LOOPS`, whose keys expire 24h after their last write, and SHALL NOT claim delivery of a workflow answer whose
-routed ancestor record has expired.
+retention and USER duplicate-detection mechanisms, where the duplicate window is the USER `duplicates` declaration as
+clamped to the USER MaxAge. It SHALL NOT claim exactly-once, indefinite retry, per-message eviction proof, or
+post-eviction response delivery. It SHALL additionally document that origin resolution reads `AGENT_LOOPS`, whose keys
+expire 24h after their last write and whose writes are best-effort, and SHALL NOT claim delivery of a workflow answer
+whose routed ancestor record is not observable.
 
 #### Scenario: operator inspects the contract
 
 - **WHEN** an operator evaluates recovery guarantees
 - **THEN** the documented AGENT age/capacity horizon and visibility gap are explicit
 - **AND** the finite-MaxDeliver advisory is not described as an eviction signal for these consumers
-- **AND** the `AGENT_LOOPS` 24h origin horizon is explicit
+- **AND** the `AGENT_LOOPS` 24h and best-effort-persistence origin horizon is explicit
+- **AND** the USER duplicate window is stated as the declared `duplicates` clamped to MaxAge

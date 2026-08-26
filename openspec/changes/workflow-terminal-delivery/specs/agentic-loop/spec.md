@@ -21,6 +21,12 @@ loop completes on model text, `Decision` SHALL be nil. The loop SHALL NOT infer 
 - **WHEN** the loop completes
 - **THEN** the published completion event decodes with a nil `Decision`
 
+#### Scenario: synthesized decision does not populate the field
+
+- **GIVEN** a loop that completes on model text with `decide` in its tool set
+- **WHEN** the framework synthesizes a `needs_clarification` decision triple after completion
+- **THEN** the published completion event still decodes with a nil `Decision`
+
 #### Scenario: additive wire field round-trips
 
 - **GIVEN** a marshalled `agentic.loop_completed.v1` envelope carrying `decision`

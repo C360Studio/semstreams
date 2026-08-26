@@ -8,8 +8,10 @@ body is a published layer and states `implemented-by: <model>`.
 ## 0. Accepted records
 
 - [ ] 0.1 Record the `INVENTORY PASS` and owner-accepted design body SHA-256 values in `design.md`.
-- [ ] 0.2 Record each owner ruling on design §II.9 items 1–9 in the `design.md` table; implement the recommended
+- [ ] 0.2 Record each owner ruling on design §II.9 items 1–11 in the `design.md` table; implement the recommended
   default for any item ruled "as recommended".
+- [ ] 0.3 Record the `INVENTORY PASS WITH DIVERGENCES` review and its seven corrections (design §I.6) in
+  `conformance.md`.
 
 ## 1. Claim
 
@@ -52,6 +54,8 @@ body is a published layer and states `implemented-by: <model>`.
   `loadPersistedLoopFn`, tracker empty),
   `TestSettleAgentTerminalUserFacingDecisionResolvesOriginByRunIDWhenParentAbsent`,
   `TestSettleAgentTerminalNoDecisionRouteLessLoopStaysRouteLess`,
+  `TestSettleAgentTerminalReplyDecisionWithRouteLessRootSettlesRouteLess` (terminal record with empty
+  `ParentLoopID` and `RunID` and no route → reason `route_less_settled`, no origin walk reason),
   `TestSettleAgentTerminalUserFacingDecisionKeepsStableIdentityOnRedelivery`,
   `TestResolveOriginRouteBoundsHopsAndDetectsCycles`,
   `TestResolveOriginRouteMissingAncestorSettlesOriginUnresolvable`,
@@ -61,8 +65,10 @@ body is a published layer and states `implemented-by: <model>`.
   `TestSettleAgentTerminalRecordsExactlyOneFixedDisposition` with `handoff_settled` and `origin_unresolvable`.
   Command: `go test -race -count=1 ./processor/agentic-dispatch -run '^(TestSettleAgentTerminal.*|TestResolveOriginRoute.*)$'`.
 - [ ] 3.2 Implement `resolveOriginRoute` over `loadPersistedLoop` (next = `ParentLoopID`, else `RunID` ≠ self;
-  32 hops; visited set), the decision-driven selection in `settleAgentTerminal`, the `prompt` projection for
-  `ask_user`, `Content = Decision.Reason` for reply decisions, and the two new bounded reasons; re-run 3.1 to GREEN.
+  32 hops; visited set; walk end with no route → `route_less_settled`; absent key, cycle, or bound →
+  `origin_unresolvable` with the Warn `origin ancestor <loopID> not observable in AGENT_LOOPS (expired or never
+  persisted)`), the decision-driven selection in `settleAgentTerminal`, the `prompt` projection for `ask_user`,
+  `Content = Decision.Reason` for reply decisions, and the two new bounded reasons; re-run 3.1 to GREEN.
 - [ ] 3.3 Add `TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart` (`//go:build
   integration`): write root (routed, `http`/`origin-1`), intermediate, and terminal records to `AGENT_LOOPS` with
   `ParentLoopID` links; empty tracker; settle a `respond_direct` completion twice; assert `USER_TERMINAL` contains
@@ -70,7 +76,15 @@ body is a published layer and states `implemented-by: <model>`.
   and whose payload decodes into a fresh `agentic.UserResponse` with `Type=result`, `Content=<reason>`,
   `InReplyTo=<terminal loop id>`. Command:
   `go test -race -count=1 -tags=integration ./processor/agentic-dispatch -run '^TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart$'`.
-- [ ] 3.4 Commit Slice B GREEN before any mutation check; record the commit SHA in `conformance.md`.
+- [ ] 3.4 Add `TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort` (`//go:build integration`):
+  bind dispatch's `agent_loops` input port to bucket `AGENT_LOOPS_ALT`, write a routed loop record there only,
+  settle its completion, and assert the response decodes into a fresh `agentic.UserResponse` on the record's route.
+  Command:
+  `go test -race -count=1 -tags=integration ./processor/agentic-dispatch -run '^TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort$'`.
+- [ ] 3.5 Implement the declared `agent_loops` `KVReadPort` in `config.go`; resolve the bucket from the port in
+  `loadPersistedLoop` and the `/activity` reader; delete the constant at `http_activity.go:20`; run
+  `task schema:generate` and commit `schemas/agentic-dispatch.v1.json` with it; re-run 3.4 to GREEN.
+- [ ] 3.6 Commit Slice B GREEN before any mutation check; record the commit SHA in `conformance.md`.
 
 ## 4. Slice C — guards, docs, spec truth
 
@@ -80,23 +94,25 @@ body is a published layer and states `implemented-by: <model>`.
 - [ ] 4.2 Update `docs/operations/38-agent-terminal-settlement.md`, `processor/agentic-dispatch/README.md`
   (settlement paragraph and reason table), and `docs/concepts/25-phased-agentic-chains.md` (one sentence naming
   the reserved reply actions); add the release-note paragraph naming the routed-handoff behaviour change.
-- [ ] 4.3 If owner item 1 is ruled "reserved names", move `docs/adr/100-…` from the design stage into `docs/adr/`
-  with status Accepted; otherwise delete the draft and record the ruling in `design.md`.
+- [ ] 4.3 If owner item 1 is ruled "reserved names", set `docs/adr/101-coordinator-reply-vocabulary-and-workflow-terminal-delivery.md`
+  to status Accepted; otherwise delete the draft and record the ruling in `design.md`.
 - [ ] 4.4 File the e2e coverage-gap issue "no e2e drives a rule-spawned chain's user-facing terminal" and record
   its number in `conformance.md`.
 - [ ] 4.5 Run `openspec validate workflow-terminal-delivery --strict --no-interactive` and record the output.
 
-## 5. Forced omissions (after the GREEN commits of 2.6 and 3.4)
+## 5. Forced omissions (after the GREEN commits of 2.6 and 3.6)
 
 - [ ] 5.1 Checksum `processor/agentic-loop/handlers.go`, `agentic/tools.go` (or wherever the classifier lands),
-  and `processor/agentic-dispatch/terminal_settlement.go` with `shasum -a 256`; keep `cp` copies in the
-  scratchpad.
+  `processor/agentic-dispatch/terminal_settlement.go`, and `processor/agentic-dispatch/http_activity.go` with
+  `shasum -a 256`; keep `cp` copies in the scratchpad.
 - [ ] 5.2 Omission A (carrier): remove the `completion.Decision` assignment; run 2.3's and 3.1's commands; record
   the assertion output verbatim (the named tests must not pass); restore by `cp`; re-checksum equal.
 - [ ] 5.3 Omission B (selector): make `IsUserFacingDecideAction` return `true`; run 3.1's command; record the
   assertion output for `TestSettleAgentTerminalHandoffDecisionOnRoutedLoopPublishesNothing` (it must not pass); restore; re-checksum.
 - [ ] 5.4 Omission C (mapper): make `resolveOriginRoute` return an empty route; run 3.3's command; record the
   assertion output (it must not pass); restore; re-checksum.
+- [ ] 5.5 Omission D (carrier): resolve the bucket from a hardcoded `"AGENT_LOOPS"` again; run 3.4's command; record
+  the assertion output (it must not pass); restore; re-checksum.
 
 ## 6. Gates (run what CI runs, both suites)
 

@@ -26,22 +26,32 @@ The accepted design will be recorded in `docs/proposals/gh1094-workflow-terminal
   `RunID`) in `AGENT_LOOPS` to the nearest routed ancestor, bounded at 32 hops; a missing ancestor settles
   `origin_unresolvable`.
 - Response identity, PubAck-before-ACK, `MaxDeliver=0`, and the bounded at-least-once declaration are unchanged.
+- A walk that ends at a record with neither link and no route (a route-less bus-submitted root, or a hop severed by
+  a non-loop-entity trigger) settles `route_less_settled`; a walk that cannot complete (absent key, cycle, bound)
+  settles `origin_unresolvable`.
+- Dispatch declares an `agent_loops` KV read port (mirroring agentic-tools) and resolves the bucket from it in the
+  settlement and `/activity` readers, replacing the hardcoded constant.
 - `publish_agent` is unchanged; a guard test pins that spawned tasks carry no channel fields.
 
 ## Bounded guarantee
 
 Origin resolution reads `AGENT_LOOPS`, whose keys expire 24h after their last write
-(`processor/agentic-loop/component.go:761-766`). A workflow whose routed ancestor record has expired settles
-`origin_unresolvable`; no delivery is guaranteed past that horizon, matching the existing AGENT 24h source
-posture. Deduplication remains bounded by the USER stream duplicate window; this change claims at most one response
-identity per terminal, not exactly-once delivery.
+(`processor/agentic-loop/component.go:761-766`) and whose writes are best-effort (`:1985-1987`). A workflow whose
+routed ancestor record is not observable settles `origin_unresolvable`; no delivery is guaranteed past that horizon,
+matching the existing AGENT 24h source posture. A workflow whose root never had a route, or whose ancestry was
+severed by a non-loop-entity trigger, settles `route_less_settled` — the two are indistinguishable from the bucket.
+Deduplication remains bounded by the USER `duplicates` window as clamped to the USER MaxAge
+(`config/stream_drift.go:276-283`); this change claims at most one response identity per terminal, not exactly-once
+delivery.
 
 ## Impact
 
 - Modified capabilities: `agentic-terminal-events`, `agentic-loop`, `agentic-tools`.
-- Runtime surfaces: `agentic` (types, one classifier), `processor/agentic-loop` (completion event),
+- Runtime surfaces: `agentic` (types, one classifier), `processor/agentic-loop` (completion event; new plumbing
+  from the terminal tool result into completion),
   `processor/agentic-tools` (constant home), `internal/agentterminal` (projection), `processor/agentic-dispatch`
-  (settlement), `schemas/agentic-loop.v1.json` (regenerated).
+  (settlement, declared `agent_loops` read port), `schemas/agentic-loop.v1.json` and `agentic-dispatch.v1.json`
+  (regenerated).
 - Consumers: SemTeams (autoresearch and research chains; #266, #267 downstream); every product using
   `decide` + `agentic-dispatch`.
 - Behavioural change to name in the release note: a routed loop whose terminal is a non-reply decide action no
