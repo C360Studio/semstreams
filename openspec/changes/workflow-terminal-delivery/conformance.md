@@ -105,6 +105,7 @@ GREEN after 2.4: `ok  	github.com/c360studio/semstreams/processor/agentic-loop	1
 
 - Task 2.5 `task schema:generate` → `git diff --stat schemas/ specs/` EMPTY (no generated-schema surface exists for
   a payload field; see tasks.md 2.5 for the measurement).
+- Task 2.6 Slice A GREEN commit: `704b67ee`.
 
 ## Forced omissions
 

@@ -85,7 +85,8 @@ body is a published layer and states `implemented-by: <model>`.
     `decision` field therefore has NO generated-schema surface to regenerate. Its wire contract is pinned instead
     by the production-decoder round-trip `TestLoopCompletedEventDecisionRoundTrip`. Nothing is committed because
     nothing changed; the no-drift gate is task 6.4.
-- [ ] 2.6 Commit Slice A GREEN before any mutation check; record the commit SHA in `conformance.md`.
+- [x] 2.6 Commit Slice A GREEN before any mutation check; record the commit SHA in `conformance.md`.
+  - `704b67ee` — `feat(agentic): carry a decide terminal's typed decision on the completion event (#1094)`.
 
 ## 3. Slice B — selection and origin resolution (agentic-dispatch)
 
