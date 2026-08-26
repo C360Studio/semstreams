@@ -674,6 +674,15 @@ func TestManagerListRejectsCancellationDuringEnumeration(t *testing.T) {
 			seamHits++
 			cancel()
 		}
+		// The guard aborts BEFORE any result is built, so no per-key read is
+		// attempted at all. Without this counter the subtest would still pass
+		// with the guard deleted, because a per-key read under a cancelled
+		// context aborts on its own — the counter is what makes the guard, and
+		// not the downstream read, the thing under proof here.
+		perKeyReads := 0
+		store.beforeListGet = func(_ context.Context, _ string) {
+			perKeyReads++
+		}
 
 		flows, err := store.List(ctx)
 		assertAborted(t, flows, err)
@@ -681,6 +690,9 @@ func TestManagerListRejectsCancellationDuringEnumeration(t *testing.T) {
 			if f.ID == flowA.ID {
 				t.Errorf("List returned the saved flow %s despite the cancelled enumeration", flowA.ID)
 			}
+		}
+		if perKeyReads != 0 {
+			t.Errorf("List attempted %d per-key reads after a cancelled enumeration, want 0", perKeyReads)
 		}
 		if seamHits != 1 {
 			t.Errorf("the enumeration seam fired %d times, want exactly 1", seamHits)
