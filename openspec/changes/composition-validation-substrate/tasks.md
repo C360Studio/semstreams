@@ -430,6 +430,16 @@ before the omission, and record `shasum -a 256` equality of the restored file.
       `EXIT=0` (log: scratchpad `e2e_core.log`). Every shipped factory in `configs/protocol-flow.json` passed the P1
       parity check at boot admission and every tiered `Setup` pre-flight (`CheckFlowHealth`) decoded the new
       `composition.Result` shape.
+      RE-RUN on the marker/refuse head (`1f7851be`+, owner ruling H4): `task lint` → exit 0; `go test -race ./...` →
+      155 `ok`, exit 0, no FAIL lines (`unit_r3.log`); `go test -race -tags=integration -p 2 -count=1 ./...` → 155 `ok`,
+      `EXIT=0`, no FAIL lines (`integration_r3.log`; `TestValidateShippedConfigsHaveNoErrorFindings` and
+      `TestComponentManagerRefusesBootOnErrorFinding` now PASS, `go test -race -tags=integration -count=1
+      ./internal/portgrammarcontrol/` → `ok`); `task build` → `Built bin/semstreams`; CI cross-compile line → exit 0;
+      `go vet -tags=integration ./...` → clean; second `task schema:generate` → NO-DRIFT, `task schema:check-changes`
+      clean, `go test ./test/contract/...` → `ok`; `openspec validate composition-validation-substrate --strict` → valid;
+      `task e2e:core` with the refuse live → `[OK] Readiness and heartbeat report 12/12 healthy components` ·
+      `Scenario PASSED` core-health · core-dataflow · core-graph-roundtrip · `[OK] SIGTERM exited 0 …` · `[OK] Early
+      SIGTERM canceled blocked NATS boot …` · `EXIT=0` (`e2e_core_r3.log`).
 - [ ] 6.7 (#1093) Downstream measurement (read-only): `cd ~/Code/c360/semteams && go vet ./cmd/semteams/` against a
       `replace` to this branch in a scratch module (never edit semteams); record the compile errors as the migration
       document's semteams section. semstreams-ui: record the 15 call sites from inventory §9 in the migration
