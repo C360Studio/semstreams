@@ -60,7 +60,7 @@ message text SHALL be inspected anywhere on the List path, and List SHALL promis
 - **THEN** the result is nil, never an empty success
 - **AND** the error is `errs.IsTransient` and `errors.Is(err, context.Canceled)` is true
 - **AND** the guard runs before any empty result is built, so `GET /flows` cannot answer `{"flows":[]}` and
-  `list_flows` cannot answer `No flows configured.` for an enumeration that never completed
+  `list_flows` cannot answer `No flows configured.` for an enumeration the caller's context cut short
 - **AND** the test that verifies this is `TestManagerListRejectsCancellationDuringEnumeration` (subtests
   `empty bucket` and `populated bucket`)
 

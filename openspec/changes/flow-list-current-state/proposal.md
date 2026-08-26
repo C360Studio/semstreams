@@ -45,9 +45,11 @@ Message-substring branching on a classified failure is the shape `openspec/specs
   an array of the Flow object schema, with no nullable item. Value elements are what make the items non-nullable: the
   generator renders a pointer element as `anyOf [..., null]` (`service/schema.go:12-20`). The handler builds the
   response from the Manager's `[]*Flow` through one small conversion.
-- **A package-private list seam.** `Manager.beforeListGet` — nil in production, set only from `package flowstore`
+- **Two package-private list seams.** `Manager.beforeListGet` — nil in production, set only from `package flowstore`
   tests — is invoked immediately before each per-key read, so the vanished-key and per-key-failure proofs are
-  deterministic (the Slice A `beforeUpdateWrite` precedent, `flowstore/manager.go:26-33`).
+  deterministic (the Slice A `beforeUpdateWrite` precedent, `flowstore/manager.go:26-33`). A second seam, `Manager.afterListKeys`, pauses between key
+  enumeration and the enumeration-time `ctx.Err()` guard, which aborts on a cancelled or expired caller context before any
+  empty result exists (added after the owner-run Codex round; see `conformance.md` B3).
 - **The raw bucket handle goes.** `Manager.bucket` (`:23`) exists "for operations like Keys()" and List is its only
   reader (`grep -n 's\.bucket' flowstore/*.go` → `:214`); once List reads through `KVStore` the field is removed
   rather than left as a stale claim.

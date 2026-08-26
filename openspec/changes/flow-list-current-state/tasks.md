@@ -209,7 +209,7 @@ flow list scenario (`grep -rn 'list_flows\|flowbuilder/flows' test/` → only th
       (`NewManager` keeps its local `bucket` for `natsClient.NewKVStore(bucket)`). If another reader exists, record
       it here and keep the field.
       Measured, not assumed: `grep -n 's\.bucket' flowstore/*.go` → no matches (exit 1) after 3.1, so the field had
-      exactly one reader and it is gone. `Manager` now has one production field, `kvStore`, plus the two test-only seams (`flowstore/manager.go:22-33`); the stale
+      exactly one reader and it is gone. `Manager` now has one production field, `kvStore`, plus the three test-only seams (`flowstore/manager.go:22-49`; `afterListKeys` added in 3.6 after the Codex round); the stale
       comment `// Raw bucket for operations like Keys()` went with it. `Watch` already read through
       `s.kvStore.Watch` (`:264`), so nothing else lost a path. `NewManager` keeps its local `bucket` for
       `natsClient.NewKVStore(bucket)` and the `jetstream` import is still needed there and by `Watch`'s return type.
