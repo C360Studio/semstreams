@@ -685,7 +685,7 @@ restore of any kind).
   honest asymmetry: 6.2 and 6.3 are pre-correction measurements and cannot cover a test authored afterwards; the
   correction's own gate (6.7) covers it, the full repository integration suite for the corrected head is CI's on
   push, and 4.8 is the proof that the scenario's guard is load-bearing.
-- [ ] 7.4 `openspec archive flow-list-current-state` with the spec sync as the final content commit; the narrow
+- [x] 7.4 `openspec archive flow-list-current-state` with the spec sync as the final content commit; the narrow
       reviewer check of the archive/spec sync follows as a PR comment; then undraft. A correction after archive
       re-enters 7.3 and 7.1.
 
@@ -702,3 +702,7 @@ restore of any kind).
   against the design baseline `774c85dc`, which only the combined proof re-runs.
 - Sibling Pattern-B list semantics; other `"no keys found"` substring spellings; `$ref` reuse in the generator.
 - semstreams-ui candidate validation (owner-run tag gate).
+
+      Archived 2026-08-26 (`openspec archive --yes`) after the Fable re-review of the Codex corrections (APPROVE WITH
+      CHANGES — three doc nits folded in the commit before this one; the PR-body correction lands at undraft). The narrow
+      reviewer check of the archive/spec sync is recorded as a PR comment.
