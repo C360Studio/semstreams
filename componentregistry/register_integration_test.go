@@ -68,7 +68,8 @@ func parityRows() []parityRow {
 		{"research-graph-route", types.ComponentTypeProcessor, `{}`},
 		{"research-graph-synthesize", types.ComponentTypeProcessor, `{}`},
 		{"rule-processor", types.ComponentTypeProcessor, `{"pack_id":"parity-pack"}`},
-		{"udp", types.ComponentTypeInput, `{}`},
+		// udp overrides one named port so a declarer that drops the merge (tasks 4.3) is caught here.
+		{"udp", types.ComponentTypeInput, `{"ports":{"inputs":[{"name":"udp_socket","required":true,"config":{"kind":"network","protocol":"udp","host":"0.0.0.0","port":14551}}]}}`},
 		{"websocket", types.ComponentTypeOutput, `{}`},
 		{"websocket_input", types.ComponentTypeInput, `{}`},
 	}
