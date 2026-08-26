@@ -90,6 +90,11 @@ type Event struct {
 	CancelledBy     string
 	TerminalAt      time.Time
 	Metadata        map[string]any
+	// Decision is the typed decision of a `decide` terminal, carried only
+	// on the succeeded lane (ADR-101, gh#1094). Nil for every other
+	// terminal. Validate has already rejected a present decision with an
+	// empty action or reason, so a non-nil Decision here is complete.
+	Decision *agentic.CoordinatorDecision
 }
 
 // Decode decodes only through the registry-bound production decoder and then
@@ -136,6 +141,7 @@ func Decode(decoder *message.Decoder, data []byte) (Event, error) {
 		event.Iterations, event.TokensIn, event.TokensOut = payload.Iterations, payload.TokensIn, payload.TokensOut
 		event.WorkflowSlug, event.WorkflowStep = payload.WorkflowSlug, payload.WorkflowStep
 		event.TerminalAt, event.Metadata = payload.CompletedAt, payload.Metadata
+		event.Decision = payload.Decision
 
 	case *agentic.LoopFailedEvent:
 		if base.Type().Domain != agentic.Domain || base.Type().Version != agentic.SchemaVersion ||

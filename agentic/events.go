@@ -83,6 +83,11 @@ type LoopCompletedEvent struct {
 	// RunEntityID is the full 6-part chain execution entity ID for the run.
 	// Empty when RunID is empty.
 	RunEntityID string `json:"run_entity_id,omitempty"`
+	// Decision is the typed decision of a `decide` terminal (ADR-101,
+	// gh#1094). Nil for every other terminal — a non-decide StopLoop
+	// tool, a model-text completion, or a synthesized needs_clarification
+	// decision. Result is unchanged either way.
+	Decision *CoordinatorDecision `json:"decision,omitempty"`
 }
 
 // Validate implements message.Payload
@@ -92,6 +97,20 @@ func (e *LoopCompletedEvent) Validate() error {
 	}
 	if e.TaskID == "" {
 		return fmt.Errorf("task_id required")
+	}
+	// A PRESENT decision must be complete. Both fields are load-bearing:
+	// the action selects the terminal's user-facing class and the reason
+	// IS the delivered content. Rejecting here means the fail-closed
+	// terminal normalizer Terms a malformed decision instead of letting
+	// an empty action fall through the classifier as a handoff and
+	// silently drop a workflow's answer.
+	if e.Decision != nil {
+		if e.Decision.Action == "" {
+			return fmt.Errorf("decision.action required when decision is present")
+		}
+		if e.Decision.Reason == "" {
+			return fmt.Errorf("decision.reason required when decision is present")
+		}
 	}
 	return nil
 }
