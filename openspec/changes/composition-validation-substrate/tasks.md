@@ -338,29 +338,63 @@ Premises (measured at `5cc0c7fb`; re-measure at the claim head and amend here): 
 Each: apply the omission, run the named command, record the verbatim failure, restore with `cp` from a copy taken
 before the omission, and record `shasum -a 256` equality of the restored file.
 
-- [ ] 4.1 Delete the parity compare in `prepareComponent` → `go test -race ./component/ -run
+- [x] 4.1 Delete the parity compare in `prepareComponent` → `go test -race ./component/ -run
       TestAdmissionRefusesPortDeclarationMismatch -v` MUST fail.
-- [ ] 4.2 Delete the nil check on `Ports` in `RegisterFactory` → `TestRegisterFactoryRejectsNilPortDeclarer` MUST fail.
-- [ ] 4.3 Replace one factory's declarer body with its defaults only (udp: drop the merge) →
+      DONE: `[applied]` → `--- FAIL: TestAdmissionRefusesPortDeclarationMismatch (0.00s)`; `component/registry.go` restored by `cp`, sha256 `620dc74f…a3dd` before and after.
+- [x] 4.2 Delete the nil check on `Ports` in `RegisterFactory` → `TestRegisterFactoryRejectsNilPortDeclarer` MUST fail.
+      DONE: `[applied]` → `--- FAIL: TestRegisterFactoryRejectsNilPortDeclarer (0.00s)`; `component/registry.go` restored, sha256 `620dc74f…a3dd` before and after.
+- [x] 4.3 Replace one factory's declarer body with its defaults only (udp: drop the merge) →
       `go test -race -tags=integration ./componentregistry/ -run TestDeclaredPortsMatchConstructedPortsForEveryRegisteredFactory -v`
       MUST fail on the udp row with an overridden port.
-- [ ] 4.4 Delete the `interface_mismatch` branch in `composition` → `TestValidateReportsInterfaceMismatch` and
+      DONE (the udp row overrides `udp_socket` to port 14551, commit `c57f5994`, so a defaults-only declarer disagrees with the constructed 14551): `[applied]` → `--- FAIL: TestDeclaredPortsMatchConstructedPortsForEveryRegisteredFactory (0.48s)`; `input/udp/udp.go` restored, sha256 `8fd1db37…a647` before and after.
+- [x] 4.4 Delete the `interface_mismatch` branch in `composition` → `TestValidateReportsInterfaceMismatch` and
       `TestValidateFindingsVocabularyIsClosed` MUST fail.
-- [ ] 4.5 Delete the boot refuse (keep the log) → `go test -race -tags=integration ./service/ -run
+      DONE: `[applied]` → `--- FAIL: TestValidateFindingsVocabularyIsClosed (0.01s)` and `--- FAIL: TestValidateReportsInterfaceMismatch (0.00s)`; `composition/analyze.go` restored, sha256 `b7262f3f…b6c0` before and after.
+- [~] 4.5 Delete the boot refuse (keep the log) → `go test -race -tags=integration ./service/ -run
       TestComponentManagerRefusesBootOnErrorFinding -v` MUST fail.
-- [ ] 4.6 Reintroduce a local status computation in `handleFlowValidation` → `TestFlowValidationHandlerProjectsLibraryResult`
+      NOT RUN: the refuse is not flipped (3.6 `[~]`); there is nothing to omit until the owner rules. 4.12 below covers the boot analysis wiring instead.
+- [x] 4.6 Reintroduce a local status computation in `handleFlowValidation` → `TestFlowValidationHandlerProjectsLibraryResult`
       MUST fail.
+      DONE: `[applied]` (a local errors→warnings→valid derivation in `handleFlowValidation`) → `--- FAIL: TestFlowValidationHandlerProjectsLibraryResult (0.00s)`; `service/component_manager_http.go` restored, sha256 `86551daa…563c` before and after.
 - [ ] 4.7 (#1093) Delete the rehomed reporter registration → `TestStreamOverrideExpiryReporterRegistersWithoutFlowService`
       MUST fail.
-- [ ] 4.8 Delete edge rendering in `Mermaid` → `TestCLIGraphMermaidRendersEveryEdge` MUST fail.
+- [x] 4.8 Delete edge rendering in `Mermaid` → `TestCLIGraphMermaidRendersEveryEdge` MUST fail.
+      DONE: `[applied]` → `--- FAIL: TestCLIGraphMermaidRendersEveryEdge (0.01s)`; `composition/mermaid.go` restored, sha256 `28ed7fa2…2ad2` before and after.
 - [ ] 4.9 (#1093) Re-add `"flow-builder"` to `service/register.go` → `TestServiceRegistryHasNoFlowBuilder` MUST fail.
+- [x] 4.10 Delete the composition-tools registration under the `component_catalog` gate
+      (`register_component_catalog.go:30`) → `[applied]` → `--- FAIL: TestValidateCompositionToolReturnsFindings (0.00s)`,
+      `--- FAIL: TestCompositionGraphToolReturnsMermaid (0.00s)`; restored, sha256 `82377807…3c4f` before and after.
+- [x] 4.11 Delete the `default_ports` assignment in `composition.Catalog` → `[applied]` →
+      `--- FAIL: TestCatalogCarriesDefaultPortsOrRequiresConfig (0.06s)`, `--- FAIL: TestListComponentsCarriesPorts (0.00s)`;
+      `composition/catalog.go` restored, sha256 `a4e8d681…764d` before and after.
+- [x] 4.12 Delete the `analyzeBootComposition()` call before `SealComposition` (`component_manager.go:342`) →
+      `[applied]` → `--- FAIL: TestComponentManagerExposesBootFindings (0.26s)` (integration); `service/component_manager.go`
+      restored, sha256 `1f23b5f9…4017` before and after.
+- [x] 4.13 Not claimed: the sorted iteration in `flowgraph` is exercised by `TestValidateIsDeterministic` and
+      `TestMermaidIsDeterministic` over five runs; a map-iteration mutation can pass those by chance, so no omission is
+      recorded for it (a subtest that can pass under the mutation proves nothing).
+- [x] 4.14 `--validate` prints the old "✓ Configuration is valid" and returns nil → `[applied]` →
+      `--- FAIL: TestValidateFlagReportsCompositionFindings (1.05s)`; `cmd/semstreams/main.go` restored, sha256
+      `e3addbe7…eca0` before and after.
+      All omissions: full log in the session scratchpad `mutations.log`; `git status --porcelain` → 0 lines and
+      `go build ./...` OK after the sequence.
 
 ## 5. Schema regeneration
 
-- [ ] 5.1 `task schema:generate`; commit the `schemas/*.v1.json` `default_ports` rows, the removed `/flows*` rows and
+- [x] 5.1 `task schema:generate`; commit the `schemas/*.v1.json` `default_ports` rows, the removed `/flows*` rows and
       `Flow*` schemas, and the changed `/flowgraph` and `/validate` response schemas; delete
       `schemas/workflow-definition.v1.json` (stale: no factory, `cmd/openapi-generator/main.go:94`) and record it.
       Second `task schema:generate` → `git diff --exit-code schemas/ specs/openapi.v3.yaml` clean.
+      DONE (#1092 half): the regenerated `schemas/*.v1.json` (`x-component-metadata.default_ports` for 23 factories,
+      `ports_require_config` + `ports_error` for 10) and `specs/openapi.v3.yaml` (`/validate` → `#/components/schemas/Result`,
+      `/flowgraph` → `#/components/schemas/Graph`, both schemas emitted from `composition.Result`/`composition.Graph` by
+      reflection; `format` query parameter on `/flowgraph`) landed in the GREEN commit `aa70317c` (34 files,
+      +1416/−41) so that commit's contract tests are green. Second `task schema:generate` on the §4 head →
+      `git diff --exit-code --stat schemas/ specs/openapi.v3.yaml` → NO-DRIFT; `task schema:check-changes` → clean;
+      `go test ./test/contract/...` → `ok github.com/c360studio/semstreams/test/contract 2.866s`.
+      NOT this PR (#1093, the removal surface): the removed `/flows*` rows and `Flow*` schemas;
+      `schemas/workflow-definition.v1.json` (stale, no factory) stays — `test/contract` keeps it in `nonComponentSchemas`
+      and `TestSchemaExportCarriesDefaultPorts` skips it by that map.
 
 ## 6. Standard gates — record each command and its result
 
