@@ -26,65 +26,73 @@ Premises (measured at `5cc0c7fb`; re-measure at the claim head and amend here): 
 
 ## 1. Claim
 
-- [x] 1.1 Branch `claude/gh1089-composition-validation` in `../semstreams-wt/<branch>`; pushed; draft PR open with
-      `Closes #1089`, the ADR-100 status line, and `implemented-by: <persona>` in the body; this change directory is
-      its first commit. Draft PR #1088 (Slice C) is closed unmerged with a comment pointing here once the owner rules.
-      Claimed 2026-08-26 on branch `claude/gh1092-composition-validation-substrate` (worktree `../semstreams-wt/…`); the
-      draft PR carries `Closes #1092`; this tick is its first commit. `implemented-by` is stated in the PR body.
-- [ ] 1.2 Owner rulings recorded here verbatim (design §7): nil-declarer rejection vs warning; boot refuse vs report;
-      next-boot write verb; tool naming; one or two landing PRs; `--validate` flag retention. Each answer that departs
-      from the delta is written into the delta before 2.x starts.
+- [x] 1.1 Claimed 2026-08-26 on branch `claude/gh1092-composition-validation-substrate` (worktree
+      `../semstreams-wt/claude/gh1092-composition-validation-substrate`, base `origin/main` `c3a17741`); draft PR
+      #1101 is open with `Closes #1092` in its body; this change directory's claim tick was its first commit. The
+      earlier wording of this line (`Closes #1089`, branch `claude/gh1089-composition-validation`, PR #1088 closure)
+      predated the owner's two-PR split (design §7 item 5): #1092 is the substrate PR (P1–P7, this PR #1101) and
+      #1093 is the retirement PR. Every task below that belongs to the retirement is annotated `(#1093)` and stays
+      open here until that PR lands; the REMOVED deltas (`specs/flow-authoring`, `specs/component-runtime-config`)
+      and the archive land with #1093.
+- [x] 1.2 Owner ruling on #1089 (2026-08-26), verbatim: "C, ADR-100 accepted." The nine §7 defaults stood without
+      override (ADR-100 Status; restated by the owner at the #1092 claim): (1) no next-boot write verb; (2) a factory
+      without a declarer is REJECTED at `RegisterFactory`; (3) boot REFUSES on an error-severity finding, only after
+      every shipped config has been measured (P3 before P5); (4) tools named `validate_composition` /
+      `composition_graph`, `list_components` kept; (5) TWO landing PRs — #1092 substrate (this PR #1101), #1093
+      retirement; (6) `--validate` stays as an alias; (7) `empty_composition` is a WARNING; (8) the new exported
+      surface is reviewed by the owner inside this PR; (9) PR #1088 closed unmerged. No answer departs from the
+      delta, so no delta edit was needed before 2.x.
 
 ## 2. Baseline capture — write the named tests first
 
-- [ ] 2.1 `component/registry_test.go`: `TestRegisterFactoryRejectsNilPortDeclarer` (does not compile until 3.1 adds
+- [x] 2.1 `component/registry_test.go`: `TestRegisterFactoryRejectsNilPortDeclarer` (does not compile until 3.1 adds
       the field — record the compile error verbatim as the baseline); `TestAdmissionRefusesPortDeclarationMismatch`
       with a package-local fake factory whose declarer returns one output and whose component returns two.
-- [ ] 2.2 `componentregistry/register_integration_test.go` (`//go:build integration`):
+- [x] 2.2 `componentregistry/register_integration_test.go` (`//go:build integration`):
       `TestDeclaredPortsMatchConstructedPortsForEveryRegisteredFactory` — `natsclient.NewTestClient(t,
       natsclient.WithJetStream(), natsclient.WithKV())`, the full registry (core + `graphresearch.RegisterComponents` +
       `optionalotel.Register`), a table of 33 rows each carrying the smallest configuration the factory admits
       (the inventory's nil-deps column names the five that reject `{}`), construct through
       `Registry.CreateComponent` with real deps, evaluate the declarer, compare resolved ports port-for-port. Assert
       `len(rows) == len(registry.ListFactories())` so a new factory cannot be skipped.
-- [ ] 2.3 `composition/validate_test.go`: the eight named P2 tests (`TestValidateFindingsVocabularyIsClosed`,
+- [x] 2.3 `composition/validate_test.go`: the eight named P2 tests (`TestValidateFindingsVocabularyIsClosed`,
       `TestValidateReportsUnknownComponent`, `TestValidateReportsRequiredStreamInputWithoutPublisher`,
       `TestValidateReportsInterfaceMismatch`, `TestValidateReportsStreamRequirement`,
       `TestValidateReportsConnectionPatternConflict`, `TestValidateReportsExclusiveResourceConflict`,
       `TestValidateIsDeterministic`) over hand-built registries of package-local fake factories with declarers only
       (no construction). Decode every result from its JSON into a fresh `composition.Result` before asserting.
-- [ ] 2.4 `composition/shipped_configs_test.go`: `TestValidateShippedConfigsHaveNoErrorFindings` walking
+- [x] 2.4 `composition/shipped_configs_test.go`: `TestValidateShippedConfigsHaveNoErrorFindings` walking
       `configs/**/*.json`, `docker/**/*.json`, `test/e2e/**/*.json` (skip files that are not `config.Config`
       documents by decoding and checking `platform.org`). Record the initial finding counts per file here.
-- [ ] 2.5 `composition/engine_parity_integration_test.go` (`//go:build integration`; DELETED in 3.8 with the engine):
+- [x] 2.5 `composition/engine_parity_integration_test.go` (`//go:build integration`; DELETED in 3.8 with the engine):
       `TestValidateMatchesEngineFindingsForShippedConfigs` — for every shipped config, `flowstore.FromComponentConfigs`
       + `engine.ValidateFlowDefinition` against a real NATS client vs `composition.Validate`; assert equal sets of
       `(type, component, port)` after mapping `empty_flow`→`empty_composition`, `graph_build_error`→
       `port_declaration_error`. This is the dropped-step detector for the move in 3.2; a difference is a finding to
       resolve, not to map away.
-- [ ] 2.6 `composition/cli/main_test.go`: `TestCLIValidateExitsNonZeroOnErrorFindings`,
+- [x] 2.6 `composition/cli/main_test.go`: `TestCLIValidateExitsNonZeroOnErrorFindings`,
       `TestCLICatalogPrintsEveryRegisteredFactory` (asserts 33 against `len(registry.ListFactories())`),
       `TestCLIGraphMermaidRendersEveryEdge`. `cmd/semstreams/main_test.go`:
       `TestValidateFlagReportsCompositionFindings`.
-- [ ] 2.7 `composition/assert_test.go`: `TestAssertValidFailsOnErrorFinding` with a recording `testing.TB`.
-- [ ] 2.8 `service/component_manager_boot_findings_integration_test.go` (`//go:build integration`):
+- [x] 2.7 `composition/assert_test.go`: `TestAssertValidFailsOnErrorFinding` with a recording `testing.TB`.
+- [x] 2.8 `service/component_manager_boot_findings_integration_test.go` (`//go:build integration`):
       `TestComponentManagerRefusesBootOnErrorFinding` (a config with a JetStream input fed only by a core-NATS output),
       `TestComponentManagerExposesBootFindings`, `TestGraphProjectionMatchesAdmittedComposition`;
       `service/component_manager_http_test.go`: `TestFlowValidationHandlerProjectsLibraryResult` (decode into a fresh
       `composition.Result`; assert equality with the retained result). `composition/mermaid_test.go`:
       `TestMermaidIsDeterministic`.
-- [ ] 2.9 `processor/agentic-tools/executors/composition_tools_test.go`: `TestValidateCompositionToolReturnsFindings`,
+- [x] 2.9 `processor/agentic-tools/executors/composition_tools_test.go`: `TestValidateCompositionToolReturnsFindings`,
       `TestCompositionGraphToolReturnsMermaid`, `TestListComponentsCarriesPorts` — through `RegisterBuiltins` with
       `ToolDependencies{ComponentRegistry: reg, SkipBuiltins: skipAllBut("component_catalog")}` so the production
       wire is driven.
-- [ ] 2.10 Removal guards: `service/register_test.go` `TestServiceRegistryHasNoFlowBuilder`;
+- [ ] 2.10 (#1093 for the four removal guards; the two catalog tests are #1092 — see 2.10a) Removal guards: `service/register_test.go` `TestServiceRegistryHasNoFlowBuilder`;
       `processor/agentic-tools/executors/register_test.go` `TestToolRegistryHasNoFlowTools` (asserts each of the
       eleven names is absent after `RegisterBuiltins` with every dependency non-nil);
       `test/contract/openapi_no_flow_routes_test.go` `TestOpenAPIHasNoFlowRoutes`;
       `service/stream_override_expiry_test.go` `TestStreamOverrideExpiryReporterRegistersWithoutFlowService`.
-      `test/contract/schema_export_test.go` `TestSchemaExportCarriesDefaultPorts`;
+- [x] 2.10a `test/contract/schema_export_test.go` `TestSchemaExportCarriesDefaultPorts`;
       `composition/catalog_test.go` `TestCatalogCarriesDefaultPortsOrRequiresConfig`.
-- [ ] 2.11 RED capture: run each §2 file with `-run` and record the verbatim `--- FAIL` / compile-error lines here
+- [x] 2.11 RED capture: run each §2 file with `-run` and record the verbatim `--- FAIL` / compile-error lines here
       (this is the one task where the words red / failed may appear). Commands:
       `go test -race ./component/ -run 'TestRegisterFactoryRejectsNilPortDeclarer|TestAdmissionRefusesPortDeclarationMismatch' -v`;
       `go test -race -tags=integration ./componentregistry/ -run TestDeclaredPortsMatchConstructedPortsForEveryRegisteredFactory -v`;
@@ -96,6 +104,23 @@ Premises (measured at `5cc0c7fb`; re-measure at the claim head and amend here): 
       `go test -race ./cmd/semstreams/ -run TestValidateFlagReportsCompositionFindings -v`;
       `go test ./test/contract/ -run 'TestOpenAPIHasNoFlowRoutes|TestSchemaExportCarriesDefaultPorts' -v`.
       Commit the tests before any implementation (`test(composition): baseline for #1089`).
+      RED captured 2026-08-26 at the claim head (`4f7e678e` + §2 test files), verbatim first lines (log:
+      scratchpad `red.log`; the #1093 test names in the commands above were not run — they land with the retirement PR):
+      1. `component/registry_test.go:262:3: unknown field Ports in struct literal of type RegistrationConfig` /
+         `FAIL	github.com/c360studio/semstreams/component [build failed]`
+      2. `componentregistry/register_integration_test.go:126:30: registry.Declare undefined (type *component.Registry has no field or method Declare)` /
+         `FAIL	github.com/c360studio/semstreams/componentregistry [build failed]`
+      3. `github.com/c360studio/semstreams/composition: build constraints exclude all Go files in .../composition` /
+         `github.com/c360studio/semstreams/composition/cli: no non-test Go files in .../composition/cli` /
+         `FAIL	github.com/c360studio/semstreams/composition [build failed]` / `FAIL	github.com/c360studio/semstreams/composition/cli [build failed]`
+      4. `github.com/c360studio/semstreams/composition: no non-test Go files in .../composition` / `FAIL	github.com/c360studio/semstreams/composition [build failed]`
+      5. `github.com/c360studio/semstreams/composition: no non-test Go files in .../composition` / `FAIL	github.com/c360studio/semstreams/service [build failed]`
+      6. `github.com/c360studio/semstreams/composition: build constraints exclude all Go files in .../composition` / `FAIL	github.com/c360studio/semstreams/service [build failed]`
+      7. `... composition: build constraints exclude all Go files ...` / `FAIL	github.com/c360studio/semstreams/processor/agentic-tools/executors [build failed]`
+      8. `... composition: build constraints exclude all Go files ...` / `FAIL	github.com/c360studio/semstreams/cmd/semstreams [build failed]`
+      9. `schema_export_test.go:52: udp.v1.json: default_ports=false ports_require_config=false ports_error="" — want exactly one shape` (one line per
+         committed component schema) / `--- FAIL: TestSchemaExportCarriesDefaultPorts (0.01s)` / `FAIL	github.com/c360studio/semstreams/test/contract	0.475s`
+      Committed as `test(composition): baseline for #1092` (the issue number in the task's suggested subject predates the split).
 
 ## 3. GREEN — implement in dependency order
 
@@ -124,7 +149,7 @@ Premises (measured at `5cc0c7fb`; re-measure at the claim head and amend here): 
       `test/e2e/client/observability.go:330-400` to decode `composition.Result`.
 - [ ] 3.7 **P7.** `list_components` gains `default_ports`; `validate_composition` and `composition_graph` executors
       under the `component_catalog` gate. `docs/operations/adopter-tool-effect-metadata.md:130` rows updated.
-- [ ] 3.8 **Removal.** Rehome `service/stream_override_expiry.go` (constructor + `RegisterMetrics`) onto
+- [ ] 3.8 (#1093) **Removal.** Rehome `service/stream_override_expiry.go` (constructor + `RegisterMetrics`) onto
       ComponentManager or the metrics service — decided and recorded here — THEN delete: `flowstore/`,
       `flowtemplate/`, `engine/` (and 2.5's parity test), `service/flow_service.go`, `service/flow_runtime_*.go` and
       their tests, the four executor files and their tests, `service/register.go:15`, `configs/protocol-flow.json:39-42`,
@@ -133,7 +158,7 @@ Premises (measured at `5cc0c7fb`; re-measure at the claim head and amend here): 
       gates (`register.go:51,53,114,116,201,203`), `docs/concepts/12-flow-architecture.md`,
       `docs/operations/migration-boot-only-flow-activation.md`. `grep -rn "flowstore\|flowtemplate\|flowengine\|flow-builder\|flowbuilder" --include='*.go' --include='*.json' --include='*.yml' --include='*.md' .` (main tree,
       `docs/adr` and `openspec/changes/archive` excluded) → 0; paste the command and count here.
-- [ ] 3.9 Write `docs/operations/migration-composition-validation-adr100.md`: removed routes, tools, packages,
+- [ ] 3.9 (#1093) Write `docs/operations/migration-composition-validation-adr100.md`: removed routes, tools, packages,
       buckets; per-repo instructions for semstreams-ui and semteams from inventory §9; what the projection and the
       verbs give back. Set ADR-100 Status to Accepted with the ruling date only after 1.2 records the ruling.
 - [ ] 3.10 Commit GREEN (`feat(composition)!: …` with a BREAKING footer) before §4.
@@ -155,10 +180,10 @@ before the omission, and record `shasum -a 256` equality of the restored file.
       TestComponentManagerRefusesBootOnErrorFinding -v` MUST fail.
 - [ ] 4.6 Reintroduce a local status computation in `handleFlowValidation` → `TestFlowValidationHandlerProjectsLibraryResult`
       MUST fail.
-- [ ] 4.7 Delete the rehomed reporter registration → `TestStreamOverrideExpiryReporterRegistersWithoutFlowService`
+- [ ] 4.7 (#1093) Delete the rehomed reporter registration → `TestStreamOverrideExpiryReporterRegistersWithoutFlowService`
       MUST fail.
 - [ ] 4.8 Delete edge rendering in `Mermaid` → `TestCLIGraphMermaidRendersEveryEdge` MUST fail.
-- [ ] 4.9 Re-add `"flow-builder"` to `service/register.go` → `TestServiceRegistryHasNoFlowBuilder` MUST fail.
+- [ ] 4.9 (#1093) Re-add `"flow-builder"` to `service/register.go` → `TestServiceRegistryHasNoFlowBuilder` MUST fail.
 
 ## 5. Schema regeneration
 
@@ -174,9 +199,10 @@ before the omission, and record `shasum -a 256` equality of the restored file.
 - [ ] 6.3 `go test -race -tags=integration -p 2 ./...`.
 - [ ] 6.4 `task build`.
 - [ ] 6.5 `go test ./test/contract/...`.
-- [ ] 6.6 `task e2e:core`, `task e2e:crud-tools`, `task e2e:agentic` — BREAKING commit; all three green on the exact
-      head that carries 3.8; paste the tier summaries here.
-- [ ] 6.7 Downstream measurement (read-only): `cd ~/Code/c360/semteams && go vet ./cmd/semteams/` against a
+- [ ] 6.6 `task e2e:core` for this PR (#1092: step 1 of the design's per-step table is BREAKING for adopter
+      components; `task e2e:core` is the covering tier it names). `task e2e:crud-tools` and `task e2e:agentic` are
+      the retirement PR's (#1093) gate on the head that carries 3.8; paste each tier summary here when it runs.
+- [ ] 6.7 (#1093) Downstream measurement (read-only): `cd ~/Code/c360/semteams && go vet ./cmd/semteams/` against a
       `replace` to this branch in a scratch module (never edit semteams); record the compile errors as the migration
       document's semteams section. semstreams-ui: record the 15 call sites from inventory §9 in the migration
       document; the owner runs its suite.
@@ -193,7 +219,7 @@ before the omission, and record `shasum -a 256` equality of the restored file.
       6.2/6.3/6.5; every REMOVED requirement in `specs/flow-authoring/spec.md` and
       `specs/component-runtime-config/spec.md` names tests that no longer exist; table recorded here. Any `[~]` in
       this file is ALSO written into the delta before archiving.
-- [ ] 7.5 `openspec archive composition-validation-substrate` with the spec sync as the final content commit; the
+- [ ] 7.5 (#1093) `openspec archive composition-validation-substrate` with the spec sync as the final content commit; the
       narrow reviewer check of the archive/spec sync follows as a PR comment; then undraft. The PR body is a
       published layer: re-read it at undraft and correct any claim the branch no longer supports.
 

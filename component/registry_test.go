@@ -3,7 +3,11 @@ package component
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/c360studio/semstreams/internal/componentadmission"
+	"github.com/c360studio/semstreams/pkg/errs"
 )
 
 func TestRegistryDoesNotExposeRemoteCapabilityDiscovery(t *testing.T) {
@@ -210,5 +214,72 @@ func TestRegisterWithConfig_NoDependencies(t *testing.T) {
 	reg := factories["reg-no-deps"]
 	if len(reg.Dependencies) != 0 {
 		t.Errorf("Registration.Dependencies for no-deps component: got %v, want empty", reg.Dependencies)
+	}
+}
+
+// TestRegisterFactoryRejectsNilPortDeclarer — a registration without a Ports
+// declarer is refused exactly as a registration without a Factory is: a
+// classified invalid error naming the factory, and no factory left behind.
+func TestRegisterFactoryRejectsNilPortDeclarer(t *testing.T) {
+	registry := NewRegistry()
+	err := registry.RegisterWithConfig(RegistrationConfig{
+		Name: "undeclared", Type: "processor",
+		Factory: func(json.RawMessage, Dependencies) (Discoverable, error) {
+			return &SimpleMockComponent{name: "undeclared"}, nil
+		},
+		Schema: ConfigSchema{Properties: map[string]PropertySchema{"port": {Type: "int"}}},
+	})
+	if err == nil {
+		t.Fatal("RegisterWithConfig admitted a registration with a nil Ports declarer")
+	}
+	if !errs.IsInvalid(err) {
+		t.Fatalf("nil declarer error is not classified invalid: %v", err)
+	}
+	if !strings.Contains(err.Error(), "undeclared") {
+		t.Fatalf("nil declarer error does not name the factory: %v", err)
+	}
+	if _, exists := registry.ListFactories()["undeclared"]; exists {
+		t.Fatal("registry retained a factory whose registration was refused")
+	}
+}
+
+// TestAdmissionRefusesPortDeclarationMismatch — a declarer that returns one
+// output while the constructed component reports two fails admission with a
+// classified invalid error naming the factory, the instance, and the first
+// differing port; the Registry retains no declaration for the instance.
+func TestAdmissionRefusesPortDeclarationMismatch(t *testing.T) {
+	registry := NewRegistry()
+	built := &declarationTestComponent{outputs: []Port{
+		declarationTestPort("events.created"),
+		{
+			Name: "more", Direction: DirectionOutput, Required: true,
+			Config: JetStreamPort{Subjects: []string{"events.more"}},
+		},
+	}}
+	requireNoError(t, registry.RegisterWithConfig(RegistrationConfig{
+		Name: "liar", Type: "processor",
+		Factory: func(json.RawMessage, Dependencies) (Discoverable, error) { return built, nil },
+		Ports: func(json.RawMessage, string) (PortConfig, error) {
+			return PortConfig{Outputs: []PortDefinition{{
+				Name: "events", Required: true, Config: JetStreamPort{Subjects: []string{"events.created"}},
+			}}}, nil
+		},
+	}))
+
+	_, err := registry.CreateComponent(
+		componentadmission.Access{}, "worker", declarationTestConfig("liar", `{}`), declarationTestDeps(), nil)
+	if err == nil {
+		t.Fatal("CreateComponent admitted a component whose constructed ports differ from its declaration")
+	}
+	if !errs.IsInvalid(err) {
+		t.Fatalf("parity error is not classified invalid: %v", err)
+	}
+	for _, want := range []string{"liar", "worker", "more"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("parity error %q does not name %q", err.Error(), want)
+		}
+	}
+	if _, ok := registry.Snapshot(componentadmission.Access{}, "worker"); ok {
+		t.Fatal("Registry retained a declaration for an instance that failed the parity check")
 	}
 }
