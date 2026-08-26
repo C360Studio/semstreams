@@ -1,14 +1,17 @@
 ## ADDED Requirements
 
-### Requirement: A mutation-lane birth MUST carry a registered message type
+### Requirement: A birth MUST carry a registered message type
 
 graph-ingest MUST reject a birth whose `message_type` is not registered in the payload registry it holds, on both of its
 create paths — the `entity.create` RPC, after the structural `IsValid` check and before any clone, profile, or KV work, and
 its own in-process `CreateEntity` (the hierarchy container birth), before the state-contract check — through one shared
-check. The rejection MUST use the closed code
-`message_type_unregistered`, class invalid, with the key in detail `message_type`; MUST write nothing; MUST be metered once as
-`mutation_rejections_total{reason="message_type_unregistered"}`; and MUST emit a loud log naming the key. The fact lane is
-unchanged: an unregistered type is refused at decode. `entity.reconcile`, `triple.append`, and `entity.delete` carry no type
+check that writes nothing and yields one classified error (class invalid, closed code `message_type_unregistered`, the key in
+detail `message_type`). On the RPC lane that error MUST be the reply, MUST be metered once as
+`mutation_rejections_total{reason="message_type_unregistered"}`, and MUST be accompanied by a loud log naming the key. On the
+in-process lane the same error MUST be returned to the caller and MUST NOT be metered (the counter is labelled by RPC subject
+and an in-process birth has none); the caller's existing WARN is the observable. The fact lane is unchanged: an unregistered
+type is refused at decode, and the Graphable merge birth is therefore registered by construction and needs no check. When
+hierarchy is enabled, graph-ingest MUST refuse to construct if its registry lacks `graph.hierarchy_container.v1` (O-16 (a)). `entity.reconcile`, `triple.append`, and `entity.delete` carry no type
 and are not affected. graph-ingest MUST refuse to construct without a payload registry, and a create reaching either seam
 of a component that nonetheless holds no registry MUST be refused with code `internal` and an ERROR log — never admitted.
 graph-ingest's own hierarchy container births MUST carry the registered framework type `graph.hierarchy_container.v1`
@@ -42,9 +45,17 @@ metric label).
 #### Scenario: an in-process birth with an unregistered type is refused
 
 - **WHEN** `Component.CreateEntity` is called with an entity whose type is not registered
-- **THEN** it returns an invalid error naming the key
-- **AND** nothing is written
+- **THEN** it returns the classified `message_type_unregistered` error naming the key
+- **AND** nothing is written and `mutation_rejections_total` does not increment
 - **AND** the test that verifies this is `TestInProcessCreateRejectsUnregisteredType`
+
+#### Scenario: hierarchy enabled without the container type is a construction error
+
+- **GIVEN** `enable_hierarchy: true` and a registry that does not hold `graph.hierarchy_container.v1`
+- **WHEN** graph-ingest is constructed
+- **THEN** construction fails naming the type
+- **AND** no subscription is installed and no container birth is ever attempted
+- **AND** the test that verifies this is `TestFactoryRejectsHierarchyWithoutContainerType`
 
 #### Scenario: a create with no registry configured is refused
 

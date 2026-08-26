@@ -19,6 +19,9 @@ Implementation column at review time is a deviation to record, not a gap to hide
 | F-1 | Contract relation: birth ⊆ Triples(full) ⊆ birth ∪ groups | | payload-registry ADDED (fourth requirement) | `TestRegisteredContractMatchesTriples` |
 | F-2 | Builders byte-identical; web observation `Tool` discriminator; diagnosis confidence | | — | `TestWebObservationEntityMatchesToolBuilders`, `TestOpsDiagnosisEntityStampsArgsConfidence`, `TestEmitLessonBuildsEntityTriples` |
 | N-3 | Composition-root wiring `WireGraphRuntime(payloadReg.Contracts()...)` is mutation-checked | | — | tasks 7.1 (i): boot fails `no contracts` |
+| F1 | Writer census: six `entityBucket` writers, four birth-capable, one decode-gated (`:1985`), two helper-gated | | graph-ingest ADDED (gate requirement) | premises in tasks; `TestInProcessCreateRejectsUnregisteredType`, `TestCreateRejectsUnregisteredMessageType` |
+| F4 | Every moved builder has a golden test | | payload-registry ADDED scenario "moved builders are byte-identical" | `TestModelEndpointEntityMatchesBuilder`, `TestOpsDiagnosisEntityMatchesBuilder`, `TestWebObservationEntityMatchesToolBuilders`, `TestEmitLessonBuildsEntityTriples` |
+| F7 | Hierarchy on + registry lacking the container type is a construction error (O-16 (a)) | | graph-ingest ADDED scenario | `TestFactoryRejectsHierarchyWithoutContainerType`; omission (l) |
 | D3c | Floor read from the registered type; metric means "registered type with no floor" | | graph-ingest ADDED "The indexing-profile floor is read from the registered type" | `TestFloorComesFromRegistration`; rewritten `indexing_profile_registry_test.go` |
 | D4 | Framework mutation-lane types are registered Graphable payloads with factories (d4) | | payload-registry ADDED "Framework entity types born on the mutation lane are registered Graphable payloads"; `agentic-lessons` MODIFIED "A lesson is an evidence-cited…"; `lifecycle` ADDED "Harness births carry the registered lifecycle type" | five `_RoundTrip` tests, `TestHarnessEntity_RoundTrip`, `TestRegisteredContractMatchesTriples`, `TestEmitLessonBuildsEntityTriples`, `TestWebObservationBirthIsRegistered` |
 | D4-snap | `LessonProjectionContract()` returns the registered contract | | `agentic-lessons` MODIFIED "External lesson composition uses the framework-owned contract snapshot" | scenario "The snapshot is the registered contract" |
@@ -32,7 +35,7 @@ Implementation column at review time is a deviation to record, not a gap to hide
 | O-4 | Three new birth contracts minted here vs #818 | ruling comment URL | payload-registry ADDED (contract clause) | `TestRegisteredContractMatchesTriples` |
 | O-5 | Empty floor metered (not rejected) | ruling comment URL | payload-registry ADDED scenario "a registered type may declare no floor" | `TestIndexingProfileFor` |
 | O-6 | BREAKING-tag discipline (milestone placement done) | ruling comment URL | — | tasks 7.3 tier results |
-| O-7 | Wave order: this change first; #1095 slice A rebases | ruling comment URL | — | — |
+| O-7 | Wave order: this change first; #1095 slice A rebases its 5.1 and 5.3 | ruling comment URL | — | — |
 | O-8 | Floor + contracts + `RegisterTestType` added to the #1104 checklist (both files) | tasks 6.3 | — | byte-identical checklist diff |
 | O-9 | ops seed key corrected; direct `PutKV` filed | tasks 6.2; issue URL | — | `task e2e:ops` |
 | O-10 | web_observation e2e coverage gap filed | issue URL | — | `TestWebObservationBirthIsRegistered` |

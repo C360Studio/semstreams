@@ -7,7 +7,6 @@
 `c3a17741`. If accepted it re-homes the one premise ADR-091 let lapse when it superseded ADR-056 in full: ADR-056 `:281-284`
 ("producer identity for the gate **IS the registered `MessageType`** — the payload-registry key already on `EntityState`")
 gave the stamp its meaning; ADR-091 deleted the gate and said nothing about what the stamp is. This page says what it is.
-Pre-owner design review round 1 (2026-08-26): REQUEST CHANGES, folded in the package's revision 3 (owner items O-16–O-18 added).
 Mechanics live in `openspec/specs/payload-registry/spec.md` (new) and the `graph-ingest`, `agentic-lessons`,
 `graph-state-contract`, `lifecycle`, and `projection-mutation-client` capabilities; this page records only the decision.
 
@@ -58,8 +57,7 @@ why a lesson cannot cross a federation boundary as itself. The fact lane already
 - The gate is create-only; no read, merge, codec, or boot-sweep path consults the registry, so retained state needs no migration.
 - Birth discipline (#818) has a home to read from without inventing another table.
 - **BREAKING** for semmachina (4 types), semdev (2), semconnect (11 — exported from `gateway/cs-api` and registered by the
-  host, which holds the only registry); none for semsource and semteams. This change lands first in the beta.163 wave;
-  #1095's implementation rebases onto the contracts it moves into `agentic`. Covering tiers before
+  host, which holds the only registry); none for semsource and semteams. Covering tiers before
   the breaking commit lands: `e2e:agentic` and `e2e:lessons` at minimum; the full union in the change's tasks.
 - The contract data types move to a leaf package with aliases in `pkg/projection` (new `pkg/*` surface — owner design review).
 

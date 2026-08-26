@@ -106,14 +106,23 @@ builtin set. No framework type MAY be documented as "mutation-only, not register
 #### Scenario: the builtin set registers every mutation-lane type with a floor
 
 - **WHEN** the builtin set is registered into a fresh registry
-- **THEN** each of the six keys is registered with a non-empty floor
+- **THEN** each of the six keys (seven under O-16 (a)) is registered with a non-empty floor
 - **AND** `agentic.loop_execution.v1` and `agentic.agent_lesson.v1` carry a contract whose `MessageType` equals the key (the
   other three only under O-4 = mint)
 - **AND** the test that verifies this is `TestPayloadRegistryIsTheSingleTypeAuthority`
 
 #### Scenario: a contract that drifts from its builder is caught
 
-- **WHEN** a predicate is removed from a type's `Triples()` builder but not from its registered contract
+- **WHEN** a birth predicate is removed from a type's `Triples()` builder but not from its registered contract
 - **THEN** the conformance test for that type fails naming the predicate
 - **AND** the test that verifies this is `TestRegisteredContractMatchesTriples`
+
+#### Scenario: moved builders are byte-identical to the writers they replace
+
+- **GIVEN** a golden literal captured from each former builder for a fully populated entity and for one with every optional
+  field zero
+- **WHEN** the registered type's `Triples()` runs on the same inputs
+- **THEN** predicate, object (type and value), `Source`, and `Confidence` match triple-for-triple, and only `Timestamp` differs
+- **AND** the test that verifies this is `TestModelEndpointEntityMatchesBuilder` (also `TestOpsDiagnosisEntityMatchesBuilder`,
+  `TestWebObservationEntityMatchesToolBuilders`, `TestEmitLessonBuildsEntityTriples`)
 

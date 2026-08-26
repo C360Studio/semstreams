@@ -8,10 +8,12 @@ Status: **draft for pre-owner design review; not approved.**
 ## 1. The decision (as the owner stated it, 2026-08-26)
 
 - Inventory: `docs/proposals/gh1100-type-authority-inventory.md`, SHA-256
-  `4677e356279e80ec4ff05d892ebc01ee987cb3400f483d53bc1a6f5468f99d80` (revision 3). Review state: **INVENTORY PASS WITH DIVERGENCES** (blind, Fable, 2026-08-26);
+  `6437c971d8f117a15c17c7c1b0d8519242733325530f06e084532e4f9849c48c` (revision 4). Review state: **INVENTORY PASS WITH DIVERGENCES** (blind, Fable, 2026-08-26);
   D1–D3 corrected, L1–L5 added in revision 2. **Pre-owner design review round 1 (Fable, adversarial, 2026-08-26): REQUEST
   CHANGES** — revision 3 folds B-1 (→ O-16), F-1…F-6, N-1…N-8 and the nits; every item has a disposition in §18. Re-premised
-  against `origin/main` `7e7ea76e` (#1099 and #1104 merged; milestone `v1.0.0-beta.163` holds #1100); pre-owner review round 2 pending.
+  against `origin/main` `7e7ea76e` (#1099 and #1104 merged; milestone `v1.0.0-beta.163` holds #1100). **Narrow re-review round 2
+  (2026-08-26): APPROVE WITH CHANGES** — B-1 mechanically closed; revision 4 folds F1–F7 and the notes (§18, round 2); owner
+  ruling on O-1…O-18 pending.
 
 > The payload registry is the single type authority; a projection contract and an indexing-profile floor are attributes
 > registered WITH the type, not parallel tables; `EntityState.MessageType` is therefore always a registered key, and ingest
@@ -142,9 +144,11 @@ if _, ok := c.payloadRegistry.GetRegistration(key); !ok {
   own writer unchecked and the owner's clause false at archive. The gate is therefore ONE helper,
   `(c *Component) requireRegisteredMessageType(entity *graph.EntityState) error`, called at `canonical_mutations.go:207` (RPC
   lane: wrapped as the coded rejection above) and at the top of `createEntityWithReceipt` before `ValidateEntityStateContract`
-  (in-process lane: returned as `errs.WrapInvalid`; the hierarchy caller logs and does not cache the container). Every birth
-  passes the same check. Direct bucket writers are exactly three (`canonical_mutations.go:243,306`; `component.go:2132`) and
-  `:306` is the must-exist reconcile — no other path is left. What the container then carries is owner item **O-16**:
+  (in-process lane: the **same** `*errs.ClassifiedError` — class invalid, code `message_type_unregistered`, detail
+  `message_type` — returned to the caller; **not metered**, because `mutation_rejections_total` is labelled by RPC subject and an
+  in-process birth has none; the observable is the caller's existing WARN: `hierarchy.go:440-451` returns the error without
+  logging, and both graph-ingest callers WARN and continue without the container, `component.go:1971`, `:2108`). Every birth
+  passes the same check. Births and mutations reach `ENTITY_STATES` through **six** `entityBucket` writers (`git grep -nE 'entityBucket\.[A-Z]\w*\('`, non-test — the earlier `Create|Put|Update` filter could not match `UpdateWithRetry`): `canonical_mutations.go:243` (RPC create), `:306` (RPC reconcile, must-exist), `component.go:1985` (`MergeEntity`, **birth-capable** through the `len(current)==0` branch `:1993-2000`), `:2132` (in-process create), `:2311` and `:2495` (`AddTriple`/batch, must-exist); plus `:2174` `DeleteAtRevision`. **Four are birth-capable, and one of those is decode-gated:** `MergeEntity`'s sole caller is `ingestEntity` `:1633`, reached only through `c.decoder.Decode` `:1599` → `extractEntityFromMessage` `:1704` (`MessageType: msg.Type()` `:1732`), so a fact-lane birth carries a registered key by construction (ADR-103 d3) and `:1985` needs no helper. The two births that need the helper are `canonical_mutations.go:243` and `component.go:2132`. What the container then carries is owner item **O-16**:
   - **(a) — recommended.** Stamp containers with a registered framework type `graph.hierarchy_container.v1`: a verbatim
     carrier `graph/inference.ContainerEntity{ID string; Facts []message.Triple}` with `HierarchyContainerMessageType()`, floor
     `control` (ADR-054 §7 machinery), `inference.RegisterPayloads` wired into `payloadbuiltins.Register` (import direction
@@ -153,7 +157,15 @@ if _, ok := c.payloadRegistry.GetRegistration(key); !ok {
     meaning needs the framework's own writer to stop emitting `unknown`; containers are ruled to retire with gh606 (#1095 O-6,
     its design `:143,365`) so the type retires with them — one registration to delete — whereas an exception written into an
     ADR outlives the code it excused; cost ≈ 20 lines. Covering tiers: `e2e:structural` (`configs/e2e-structural.json:480`)
-    and `e2e:agentic` (`configs/agentic.json:182`), both with hierarchy on.
+    and `e2e:agentic` (`configs/agentic.json:182`), both with hierarchy on. **Two costs of (a), stated (F7):** *(1) the do-nothing
+    path.* A hierarchy-on graph-ingest whose registry lacks `graph.hierarchy_container.v1` — any registry not built by
+    `payloadbuiltins.Register`, i.e. every sister composition root that builds its own — would have every Graphable birth's
+    container refused, WARNed, and skipped (`component.go:1971`, `:2108`): hierarchy edges silently absent, query-visible. The
+    component holds both facts at construction (`EnableHierarchy` and the registry), so the guard is a **factory error**, not a
+    per-arrival WARN: construction fails naming `graph.hierarchy_container.v1` when hierarchy is on and the registry lacks it
+    (`TestFactoryRejectsHierarchyWithoutContainerType`; forced omission (l)). *(2) dependency weight.* `payloadbuiltins →
+    graph/inference` is not a cycle (measured 0/0) but drags `graph/inference`'s closure into every `payloadbuiltins` importer;
+    the packages not already reached are: graph/inference graph/llm graph/structural.
   - **(b).** Carve the exception explicitly in ADR-103 d3 and the `graph-state-contract` delta ("framework-internal container
     births carry no stamp; the `unknown` label names them") and exempt the empty type on the in-process lane for the hierarchy
     caller only. Cheaper by a type, but the invariant is false at archive, the in-process helper grows a caller-specific branch,
@@ -184,7 +196,8 @@ entity) ⊆ birth(C) ∪ groups(C). Equality is unsatisfiable and was wrong in r
 (`loop_execution_entity.go:91-151`) never emits `TodoRecord` (the `todos` group), and the lesson builder
 (`emit_lesson.go:693-741`) never emits `LessonSupersededBy`/`LessonRetiredAt` (the lifecycle group) but does emit
 `LessonStatus` at birth, which sits in the group. `TestRegisteredContractMatchesTriples` asserts the two inclusions; the drift
-scenario it keeps is "a predicate removed from the builder but not from the contract is caught".
+scenario it keeps is "a **birth** predicate removed from the builder but not from the contract is caught" (a group predicate
+absent at birth is admitted by design).
 
 | Key | Struct (package `agentic` unless noted) | Identity → `EntityID()` | `Triples()` moved from | Floor | Contract on the registration |
 |---|---|---|---|---|---|
@@ -215,7 +228,8 @@ conformance test runs on those two, and the payload-registry delta makes the cla
   by `payloadbuiltins/register_test.go:10-13` on the full builtin set: a colliding category fails that test and the boot.
 - One-table test `payloadbuiltins/single_type_authority_test.go` `TestPayloadRegistryIsTheSingleTypeAuthority`: builds the
   builtin registry; for each of the six keys (seven under O-16 (a)) asserts registered, non-empty floor, and — for loop
-  execution and lesson, plus the three others only if O-4 = mint — a contract whose `MessageType` equals the key; asserts `reg.Contracts()` names are unique and equal the retired `builtinprojection` set plus the three new;
+  execution and lesson, plus the three others only if O-4 = mint — a contract whose `MessageType` equals the key; asserts `reg.Contracts()` names are unique and equal the retired `builtinprojection` set (plus the three new only under O-4 =
+  mint);
   asserts every registration's profile is empty or valid. The other two tables are gone at compile time (`indexingProfileDefaults`,
   `internal/builtinprojection`).
 - `processor/graph-ingest/indexing_profile_registry_test.go` re-targets `IndexingProfileFor` on a registry built from
@@ -281,13 +295,14 @@ returns `message_type_unregistered` with the key in `detail.message_type`; `proj
 
 - **#1095 (PR #1099, MERGED at `7e7ea76e` as a design package; ADR-102 Accepted; change 0/51 open).** Its change carries
   **no lesson-import scenario** — the lesson-factory dependency is semmem's federation MVP, not #1099's. The real overlap is
-  with #1095's *implementation*: its tasks 5.1 edit the same five `agentic/*_entity.go` files (the ID builders
-  `agent_lesson_entity.go:68,92`, `web_observation_entity.go:79`, `ops_diagnosis_entity.go:56`, the lesson prefix `:85-93`) and
-  `internal/builtinprojection/contracts.go:26,56`, which this change deletes; ADR-102's order rewrites every entity pattern
-  (its inventory W5). **This change lands FIRST in the wave; #1095 slice A rebases onto it.** The moved contracts carry the
+  with #1095's *implementation*: its tasks 5.1 (`:210-218`, the builder files — `agent_lesson_entity.go:68,92`,
+  `web_observation_entity.go:79`, `ops_diagnosis_entity.go:56`) and 5.3 (`:223-229`, declaration patterns —
+  `internal/builtinprojection/contracts.go:26,56`, which this change deletes, and the lesson prefix `:85-93`) edit the same five
+  `agentic/*_entity.go` files; ADR-102's order rewrites every entity pattern (its inventory W5). **This change lands FIRST in the wave; #1095 slice A rebases onto it.** The moved contracts carry the
   **current** patterns verbatim — `*.*.agent.agentic-loop.execution.*` and `*.*.agent.lesson.record.*` — now in
-  `agentic/loop_execution_entity.go` and `agentic/agent_lesson_entity.go`; #1095's 5.1 pointer re-targets there and rewrites
-  them under the new order (loop execution → `*.*.agentic-loop.agent.execution.*`, per its graph-ingest scenario
+  `agentic/loop_execution_entity.go` and `agentic/agent_lesson_entity.go`; #1095's **5.3** pointer re-targets to
+  `agentic.LoopExecutionContract().EntityPattern` and `agentic.LessonContract().EntityPattern` (and its inventory line-13 line
+  numbers shift once this change adds structs and `Triples()` to those files) and rewrites them under the new order (loop execution → `*.*.agentic-loop.agent.execution.*`, per its graph-ingest scenario
   `acme.dep1.agentic-loop.agent.execution.<uuid>`; lesson, diagnosis, and observation forms follow ADR-102 §1 positions 3–4
   `<component>.<reserved-domain>` — #1095 mints those literals, this design does not). In the five files the two changes touch
   disjoint functions (this: structs, `Triples()`, contracts, registrations; #1095: `EntityID` builders and prefixes), so the
@@ -317,7 +332,11 @@ no write), `TestHierarchyContainerBirthCarriesRegisteredType` (`-tags=integratio
 created with `message_type` `graph.hierarchy_container.v1` and `indexing_profile_default_total{message_type="unknown"}` does not
 increment — under O-16 (b) the same test asserts the empty stamp and the `unknown` label instead), `agentic`:
 `TestWebObservationEntityMatchesToolBuilders` (per tool, byte-identity with the former `httprequest.go`/`websearch.go` sets
-including source and zero-valued triples), `TestOpsDiagnosisEntityStampsArgsConfidence`,
+including source and zero-valued triples), `TestModelEndpointEntityMatchesBuilder` (golden from `graph_writer.go:511-548`: the
+five zero-gates `:529-542` and the `bool`/`int`/`float64` objects — a dropped `if ep.MaxTokens > 0` fails it),
+`TestOpsDiagnosisEntityMatchesBuilder` (golden from `emit_diagnosis.go:249-291`: the full set, the `fmt.Sprintf("%g")` confidence
+object `:262`, and `Confidence` on every triple), `TestFactoryRejectsHierarchyWithoutContainerType` (unit; `EnableHierarchy`
+with a registry lacking `graph.hierarchy_container.v1` does not construct),
 `TestWebObservationBirthIsRegistered`. `processor/agentic-tools`: `TestEmitLessonBuildsEntityTriples` (equality with the former builder's output).
 
 ## 14. Forced omissions (one per new registration path, check, or builder)
@@ -332,7 +351,9 @@ lesson registration → `TestFloorComesFromRegistration`; delete one predicate l
 `payloadReg.Contracts()...` spread from `service.WireGraphRuntime` at a composition root (N-3, the wiring, not the primitive)
 → boot MUST fail with `projection: invalid contract: no contracts` (`contract.go:102-104`) and `e2e:core` MUST fail; delete the
 helper call on the in-process lane → `TestInProcessCreateRejectsUnregisteredType`; delete `inference.RegisterPayloads` from
-`payloadbuiltins.Register` → `TestHierarchyContainerBirthCarriesRegisteredType`.
+`payloadbuiltins.Register` → `TestHierarchyContainerBirthCarriesRegisteredType`; delete the hierarchy factory check →
+`TestFactoryRejectsHierarchyWithoutContainerType`; delete one `if ep.X > 0` gate in `ModelEndpointEntity.Triples()` →
+`TestModelEndpointEntityMatchesBuilder`.
 
 ## 15. Owner items
 
@@ -342,8 +363,11 @@ helper call on the in-process lane → `TestInProcessCreateRejectsUnregisteredTy
   `ValidateContracts`) with aliases in `pkg/projection`; `payloadregistry.Registration.{IndexingProfile, Contracts}`,
   `(*Registry).IndexingProfileFor`, `(*Registry).Contracts`, `RegisterTestType`; `graph.ErrorCodeMessageTypeUnregistered`;
   `pkg/lifecycle.{HarnessEntity, HarnessMessageType, RegisterPayloads}`; `agentic.{AgentLessonEntity, OpsDiagnosisEntity,
-  ModelEndpointEntity, WebObservationEntity, WebObservationTool, LoopExecutionContract, LessonContract, LoopExecutionContractName,
-  TodoGroupName, LessonRecordContractName, LessonLifecycleGroupName, LessonSource, DiagnosisSource}`; under O-16 (a)
+  ModelEndpointEntity, WebObservationEntity, WebObservationTool, WebObservationToolHTTPRequest, WebObservationToolWebSearch,
+  LoopExecutionContract, LessonContract, LoopExecutionContractName, TodoGroupName, LessonRecordContractName,
+  LessonLifecycleGroupName}` (the `Tool` constants are exported because `processor/agentic-tools/executors` sets them; the four
+  source constants — `ops-emit-lesson`, `ops-emit-diagnosis`, `agent-http-request`, `agent-web-search` — move into `agentic`
+  **unexported** beside their types, selected inside `Triples()`); under O-16 (a)
   `graph/inference.{ContainerEntity, HierarchyContainerMessageType, RegisterPayloads}`; under O-4 = mint
   `agentic.{OpsDiagnosisContract, ModelEndpointContract, WebObservationContract}`.
 - **O-3** Floors: lesson `content`, web observation `content`, ops diagnosis `content`, loop execution `control`, model endpoint
@@ -353,7 +377,7 @@ helper call on the in-process lane → `TestInProcessCreateRejectsUnregisteredTy
 - **O-5** A registered type without a floor: meter (recommended) or reject at `Register`.
 - **O-6** Milestone `v1.0.0-beta.163` exists and holds #1100 (measured at `7e7ea76e`); what remains is the BREAKING-tag
   discipline (CLAUDE.md "Breaking changes — E2E required"): which tiers are green before the tag.
-- **O-7** Wave order: this change lands first; #1095 slice A rebases its 5.1 onto the moved contracts (§12). Confirm.
+- **O-7** Wave order: this change lands first; #1095 slice A rebases its 5.1 and **5.3** onto the moved contracts (§12). Confirm.
 - **O-8** (premise closed by #1104) The rewritten checklist knows no floor, contract, or `RegisterTestType`; tasks 6.3 adds
   them to `.agents/skills/new-payload/SKILL.md` and `docs/concepts/15-payload-registry.md` (the checklist block byte-identical
   between the two; `.claude/skills/new-payload/SKILL.md` is a thin adapter and is untouched).
@@ -371,7 +395,8 @@ helper call on the in-process lane → `TestInProcessCreateRejectsUnregisteredTy
 - **O-15** Nil registry at the create seam is fail-closed (`internal`, ERROR log) with the test-fixture sweep in the same
   change (§6, L2). Confirm, or rule fail-open with the reason recorded.
 - **O-16** Hierarchy containers (B-1): **(a) recommended** — stamp `graph.hierarchy_container.v1`, registered, floor `control`,
-  transitional until gh606 retires containers; **(b)** carve the exception in ADR-103 d3 and the `graph-state-contract` delta.
+  transitional until gh606 retires containers, **with the factory check** (hierarchy on + registry lacking the type = construction
+  error) and the dependency cost named in §6; **(b)** carve the exception in ADR-103 d3 and the `graph-state-contract` delta.
 - **O-17** (N-5) `pkg/projection/mutation_client.go:322-327` asks the caller to stamp `entity.MessageType` and then checks it
   against the bound contract — prediction-shaped. Observation-shaped alternative: fill an empty stamp from the contract's
   `MessageType` and reject only a conflicting one. Candidate for this change or a follow-up.
@@ -432,3 +457,16 @@ Context ownership: graph-ingest retains a registry, not a context; no new gorout
 | N-7 the truly new edge is `vocabulary` itself | **Accepted.** Tasks 3.2: the package comment names `vocabulary` (five `init()`s, a global predicate registry); `message` already imports `pkg/platform` |
 | N-8 ADR-102's `RegisterEntityDomains` | **Accepted as O-18** (one line for the owner) |
 | Nits: two D1 rows; "O-1…O-13"; "once it is CLOSED" | **Accepted.** Conformance second row renamed DV1; tasks header O-1…O-18; wording: the RED task is flagged while OPEN by design |
+
+### Round 2 — narrow re-review (2026-08-26): APPROVE WITH CHANGES
+
+| Item | Disposition in revision 4 |
+|---|---|
+| F1 writer enumeration was a broken-filter claim (`UpdateWithRetry` unmatched) | **Accepted, re-measured.** Six writers, four birth-capable, one decode-gated — stated in §6, inventory §2.4, tasks premises, with why `:1985` needs no helper |
+| F2 #1095 pointer is in its 5.3, not 5.1 | **Accepted.** §12 and O-7 say 5.1 and 5.3; the re-target is to `LoopExecutionContract().EntityPattern` / `LessonContract().EntityPattern`; line-13 shift noted |
+| F3 §8 still said "plus the three new" | **Accepted.** Made O-4-conditional |
+| F4 byte-identity clause had no scenario; model endpoint and diagnosis had no golden test | **Accepted.** Scenario added in the payload-registry delta; `TestModelEndpointEntityMatchesBuilder` and `TestOpsDiagnosisEntityMatchesBuilder` (full set, `%g` object) added; forced omission for a dropped zero-gate |
+| F5 two readings of the gate MUST (RPC vs in-process) | **Accepted.** Code/detail/metric/log scoped to the RPC lane; in-process outcome stated: same classified error to the caller, not metered, caller's WARN is the observable; requirement header renamed "A birth MUST…" |
+| F6 grep named at tasks 7.2 was absent | **Accepted.** Added to 7.2 |
+| F7 O-16 (a) do-nothing path unstated; caller description wrong | **Accepted.** `hierarchy.go:440-451` returns without logging; callers WARN and continue (`component.go:1971`, `:2108`); the guard is a factory error (task 4.8, `TestFactoryRejectsHierarchyWithoutContainerType`, omission (l)); named as an (a) cost with the dependency weight |
+| Notes: ADR chatter; "six keys"; O-2 web constants; (a) closure weight; F-1 over-claim; omission lettering | **Accepted.** ADR reduced to decision + consequences (review state and wave order live in §12/§18); "six (seven under O-16 (a))"; `Tool` constants exported, sources unexported; closure delta named; "a **birth** predicate"; N-3 is (i) |

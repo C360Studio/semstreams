@@ -129,10 +129,10 @@ Registered types that are also stamped on the mutation lane by the framework: no
 - **B-1 — two disjoint create paths, one of them in-process.** Births reach `ENTITY_STATES` by exactly two code paths:
   the RPC lane `handleCanonicalCreate` (`canonical_mutations.go:199-243`, writes `c.entityBucket.Create` at `:243`) and the
   in-process lane `Component.CreateEntity` (`component.go:1893-1896`) → `createEntityWithReceipt` (`:2081-2132`, writes at
-  `:2132`). They share no gate. Enumeration of every direct bucket writer (`git grep 'entityBucket\.(Create|Put|Update)('`
-  non-test): `canonical_mutations.go:243` (create), `:306` (reconcile `Update`), `component.go:2132` (in-process create) — three.
+  `:2132`). They share no gate. Births and mutations reach `ENTITY_STATES` through **six** `entityBucket` writers (`git grep -nE 'entityBucket\.[A-Z]\w*\('`, non-test — the earlier `Create|Put|Update` filter could not match `UpdateWithRetry`): `canonical_mutations.go:243` (RPC create), `:306` (RPC reconcile, must-exist), `component.go:1985` (`MergeEntity`, **birth-capable** through the `len(current)==0` branch `:1993-2000`), `:2132` (in-process create), `:2311` and `:2495` (`AddTriple`/batch, must-exist); plus `:2174` `DeleteAtRevision`. **Four are birth-capable, and one of those is decode-gated:** `MergeEntity`'s sole caller is `ingestEntity` `:1633`, reached only through `c.decoder.Decode` `:1599` → `extractEntityFromMessage` `:1704` (`MessageType: msg.Type()` `:1732`), so a fact-lane birth carries a registered key by construction (ADR-103 d3) and `:1985` needs no helper. The two births that need the helper are `canonical_mutations.go:243` and `component.go:2132`.
   Every `CreateEntity(` caller: `graph/inference/hierarchy.go:440` and the adapter `component.go:452` — the hierarchy container
-  is the only in-process birth, and it carries an empty type.
+  is the only in-process birth, and it carries an empty type. `hierarchy.go:440-451` returns the create error without logging;
+  both graph-ingest callers WARN and continue without the container (`component.go:1971`, `:2108`).
 - **L5 — the import edge a registry-held floor adds.** `go list -deps ./message | grep -c vocabulary` → 0 and the same for
   `./payloadregistry` → 0: neither imports `vocabulary` today; `payloadregistry/registry.go:4` documents "imports only stdlib +
   pkg/errs + pkg/types".
@@ -158,7 +158,9 @@ already Graphable (`EntityID :76`, `Triples :91`) — it lacks only `Schema`/`Va
 - Triple builders for the five live in the writer packages, not beside the type: `emit_lesson.go:693-741`
   (`buildEmitLessonTriples`, source `ops-emit-lesson` `:34`; emits `LessonStatus` at birth, never `LessonSupersededBy`/`LessonRetiredAt`),
   `emit_diagnosis.go:249-291` (source `ops-emit-diagnosis` `:26`; **`Confidence: args.Confidence` on every triple** `:259-265`),
-  `graph_writer.go:511-548` (`buildModelEndpointTriples`, source `agentic-loop` `:24`), `loop_execution_entity.go:91-151` (beside
+  `graph_writer.go:511-548` (`buildModelEndpointTriples`, source `agentic-loop` `:24`; **five zero-gates** `:529-542` — `MaxTokens`,
+  `InputPricePer1MTokens`, `OutputPricePer1MTokens`, `URL`, `RequestsPerMinute` — and `bool`/`int`/`float64` objects; the diagnosis
+  confidence object is `fmt.Sprintf("%g", …)` at `emit_diagnosis.go:262`), `loop_execution_entity.go:91-151` (beside
   its type; never emits `TodoRecord`), and **two** web builders with **two sources** and two unconditional sets:
   `executors/httprequest.go:28` (`agent-http-request`) `:257-266` always emits `WebURL, WebFetchedAt, WebFetchedBy, WebContentType,
   WebStatusCode, WebText, WebTruncated` (zero values included); `websearch.go:31` (`agent-web-search`) `:255-262` always emits
@@ -181,10 +183,10 @@ already Graphable (`EntityID :76`, `Triples :91`) — it lacks only `Schema`/`Va
   (non-inferable metadata explicit); `graph-state-contract/spec.md:105-124` (one canonical codec). **No spec exists for the
   payload registry** (`ls openspec/specs` → none; seeded lazily by the change that first touches it).
 - Active/claimed work (re-premised at `7e7ea76e`): **PR #1099 is MERGED** as a design package (ADR-102 Accepted; change
-  `entity-id-segment-semantics` 0/51 open). Its change has **no lesson-import scenario**; its implementation tasks 5.1 edit
-  the same five `agentic/*_entity.go` files (ID builders `agent_lesson_entity.go:68,92`, `web_observation_entity.go:79`,
-  `ops_diagnosis_entity.go:56`), the lesson prefix `:85-93`, and `internal/builtinprojection/contracts.go:26,56` (which this
-  change deletes); its inventory row W5 lists the two patterns `*.*.agent.agentic-loop.execution.*` and `*.*.agent.lesson.record.*`
+  `entity-id-segment-semantics` 0/51 open). Its change has **no lesson-import scenario**; its implementation tasks 5.1 (`:210-218`, the builder
+  files: `agent_lesson_entity.go:68,92`, `web_observation_entity.go:79`, `ops_diagnosis_entity.go:56`) and 5.3 (`:223-229`,
+  declaration patterns: `internal/builtinprojection/contracts.go:26,56`, which this change deletes, and the lesson prefix
+  `:85-93`) edit the same five `agentic/*_entity.go` files; its inventory row W5 lists the two patterns `*.*.agent.agentic-loop.execution.*` and `*.*.agent.lesson.record.*`
   as rewrites under the ADR-102 order (`acme.dep1.agentic-loop.agent.execution.<uuid>` in its graph-ingest delta). Its O-6
   rules hierarchy containers "retire with gh606" (design `:143,365`). **PR #1104 is MERGED**: `.agents/skills/new-payload/SKILL.md`,
   `docs/concepts/15-payload-registry.md`, `CLAUDE.md`, `AGENTS.md` now teach `RegisterPayloads(reg)` (15/15/2/2 mentions) and
@@ -292,5 +294,8 @@ Asked for a developer outside this repo who has never opened `payloadregistry/re
    tests may import `payloadbuiltins`; the fixture shape is `payloadbuiltins.Register` + a stub-type helper.
 4. Revision 2 (after the blind pass): D1 (research floors per-binary), D2 (sister lifecycle births), D3 (42-site test census)
    corrected above; L1, L2, L5 added to §2.4; L3/L4 are design statements (design §6, §8, §11).
+6. Revision 4 (narrow re-review, APPROVE WITH CHANGES): the writer census corrected to six writers / four birth-capable / one
+   decode-gated (§2.4); model-endpoint gates and the diagnosis `%g` object added (§2.7); #1095 pointer is its 5.3 (§3); the
+   hierarchy callers' WARN-and-continue behaviour recorded (§2.4).
 5. Revision 3 (after design review round 1): B-1 (the in-process container birth lane) added to §2.2 and §2.4; F-2 builder
    facts (two web sources, diagnosis confidence) added to §2.7; §3 re-premised at `7e7ea76e`; semconnect row reworded (N-2).
