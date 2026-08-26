@@ -361,6 +361,24 @@ A's miss accepted. Every item below is addressed in this worktree with evidence.
   nothing. A carrier defect on either side of the seam now fails a dispatch test. It does not replace #1105, which
   additionally covers ingest, rules, and the NATS wire.
 
+- [x] 5b.11 Forced omissions I and J, applied to the GREEN commit `e9b73fec`, one at a time, restored by `cp`.
+  `shasum -a 256 processor/agentic-dispatch/terminal_settlement.go` =
+  `3d2de6b359c0f014d0f6579b8f56213e01163b9dd5ca80f05dd037f539546cc9` before and after both; working tree clean.
+  - **Omission I (Reading A, HIGH (2)):** `originExhaustion.settle` drops the `runAnchorAbsent` half of its guard,
+    i.e. exactly the literal delta sentence the review flagged — an absent PARENT key still settles
+    `origin_unresolvable`, an absent RUN ANCHOR no longer taints a linkless walk end.
+    `--- FAIL: TestResolveOriginRouteSettlesOriginUnresolvableOnlyAfterParentAndRunIDExhausted/absent_run_anchor_then_linkless_end`
+    / `expected: "origin_unresolvable"` / `actual  : "route_less_settled"` — **and only that subtest**; the other
+    two exhaustion subtests and every other 3.1 test stayed green.
+    (First attempt made `settle()` return route-less unconditionally, which failed four subtests; that is a
+    DIFFERENT mutation, not Reading A, and was discarded — the recorded omission is the isolated one.)
+  - **Omission J (MEDIUM-1):** both `current = root` continuations are replaced by an immediate settle, so a
+    route-less run root ends the walk instead of continuing above it.
+    `--- FAIL: TestSettleAgentTerminalRouteLessRunRootContinuesToRoutedAncestor/routed_ancestor_above_a_route-less_run_root`
+    / `expected: 1` / `actual  : 0` (nothing delivered), and
+    `.../severed_ancestry_above_a_route-less_run_root` / `expected: []string{"terminal-loop","run-root","severed-hop"}`
+    / `actual  : []string{"terminal-loop","run-root"}` (the walk stopped early). Only that test failed.
+
 ## 6. Gates (run what CI runs, both suites)
 
 - [x] 6.1 `task lint`.
