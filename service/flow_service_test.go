@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -130,6 +131,19 @@ func TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager
 
 	createdAt := flow.CreatedAt
 	require.False(t, createdAt.IsZero(), "create must stamp created_at")
+
+	// The saved Flow appears in the list. Decode into a FRESH FlowListResponse:
+	// decoding into a value the test still holds lets omitempty fields back-fill
+	// and the assertion then reconstructs its own input.
+	listed := doJSON(http.MethodGet, "/flowbuilder/flows", nil)
+	require.Equal(t, http.StatusOK, listed.Code, listed.Body.String())
+	var listResponse service.FlowListResponse
+	require.NoError(t, json.Unmarshal(listed.Body.Bytes(), &listResponse))
+	require.Len(t, listResponse.Flows, 1, "list must carry exactly the created flow: %s", listed.Body.String())
+	require.Equal(t, "authoring-contract", listResponse.Flows[0].ID)
+	require.Equal(t, "Authoring contract", listResponse.Flows[0].Name)
+	require.Equal(t, int64(1), listResponse.Flows[0].Version)
+	require.Equal(t, "preserved-client-field", listResponse.Flows[0].CreatedBy)
 
 	// A legacy full-Flow body, with a forged created_at: it decodes, the server
 	// ignores the client's audit timestamps, and provenance survives the save.
@@ -445,4 +459,99 @@ func TestHandleValidateFlow_WithBodyNoID(t *testing.T) {
 	assert.Contains(t, result, "nodes")
 
 	t.Logf("Validation result: %+v", result)
+}
+
+// lockedBuffer is a mutex-guarded log sink: FlowService.Start spawns the
+// stream-override expiry reporter with a logger derived from the same handler,
+// so the test goroutine and the reporter goroutine both touch this writer.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestHandleListFlowsEmptyResponseIsNonNullArray(t *testing.T) {
+	mux, _, _ := createTestFlowService(t)
+
+	request := httptest.NewRequest(http.MethodGet, "/flowbuilder/flows", nil)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
+
+	// The raw member, before any Go decoding can turn null into a nil slice.
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &raw))
+	require.Contains(t, raw, "flows", "the list response must always carry a flows member")
+	require.Equal(t, "[]", string(raw["flows"]), "an empty store must serialise as [], never null")
+
+	var response service.FlowListResponse
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	require.NotNil(t, response.Flows, "decoding an empty list must yield a non-nil slice")
+	require.Len(t, response.Flows, 0)
+}
+
+func TestEnsureDefaultFlowEmptyListUsesTypedOutcome(t *testing.T) {
+	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
+	natsClient := testClient.Client
+
+	logs := &lockedBuffer{}
+	logger := slog.New(slog.NewTextHandler(logs, nil))
+
+	registry := component.NewRegistry()
+	require.NoError(t, componentregistry.Register(registry))
+
+	baseConfig := &config.Config{
+		Version:  "1.0.0",
+		Platform: config.PlatformConfig{Org: "c360", ID: "flow-default-import-test", Type: "test"},
+		Components: config.ComponentConfigs{
+			"udp": types.ComponentConfig{
+				Type:    types.ComponentTypeInput,
+				Name:    "udp",
+				Enabled: true,
+				Config:  json.RawMessage(`{"port":14550}`),
+			},
+		},
+	}
+	configMgr, err := config.NewConfigManager(baseConfig, natsClient, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	require.NoError(t, err)
+	require.NoError(t, configMgr.Start(t.Context()))
+
+	// No List pre-check on the fixture: List over an empty bucket is the very
+	// behaviour under test, so asserting it here would abort the test upstream of
+	// the startup path it exists to prove. The fresh NATS server makes the bucket
+	// empty, and the post-Start assertions below only hold if it was.
+	flowStore, err := flowstore.NewManager(natsClient)
+	require.NoError(t, err)
+
+	svc, err := service.NewFlowServiceFromConfig(nil, &service.Dependencies{
+		NATSClient:        natsClient,
+		Manager:           configMgr,
+		ComponentRegistry: registry,
+		Logger:            logger,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, svc.Stop(context.Background())) })
+
+	require.NoError(t, svc.Start(t.Context()))
+	require.NotContains(t, logs.String(), "Failed to create default flow diagram",
+		"an empty store is ordinary state, not a default-flow import failure")
+
+	flows, err := flowStore.List(t.Context())
+	require.NoError(t, err)
+	require.Len(t, flows, 1, "startup must import exactly one default flow")
+	require.Equal(t, "default", flows[0].Name)
+	require.Len(t, flows[0].Nodes, 1, "the default flow carries the one enabled boot component")
 }

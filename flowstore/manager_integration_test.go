@@ -465,3 +465,237 @@ func TestManagerUpdateSuccessMutatesInputAfterCommit(t *testing.T) {
 		t.Errorf("stored name = %q, want %q", stored.Name, "committed name")
 	}
 }
+
+// listTestFlow returns a valid Flow with the supplied ID so a List test can
+// hold more than one saved record over a single bucket.
+func listTestFlow(id string) Flow {
+	flow := validTestFlow()
+	flow.ID = id
+	flow.Name = "Flow " + id
+	return flow
+}
+
+// listIDs returns the IDs of a List result in the order List produced them.
+// List promises no ordering, so assertions compare sets or single elements.
+func listIDs(flows []*Flow) []string {
+	ids := make([]string, 0, len(flows))
+	for _, f := range flows {
+		ids = append(ids, f.ID)
+	}
+	return ids
+}
+
+func TestManagerListEmptyBucketReturnsNonNilEmpty(t *testing.T) {
+	store, _ := newTestManager(t)
+
+	flows, err := store.List(t.Context())
+	if err != nil {
+		t.Fatalf("List over an empty bucket returned an error: %v", err)
+	}
+	if flows == nil {
+		t.Error("List over an empty bucket returned a nil slice, want a non-nil empty slice")
+	}
+	if len(flows) != 0 {
+		t.Errorf("List over an empty bucket returned %d flows (%v), want 0", len(flows), listIDs(flows))
+	}
+}
+
+func TestManagerListSkipsOnlyVanishedKey(t *testing.T) {
+	store, _ := newTestManager(t)
+	flowA := listTestFlow("flow-a")
+	flowB := listTestFlow("flow-b")
+	if err := store.Create(t.Context(), &flowA); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Create(t.Context(), &flowB); err != nil {
+		t.Fatal(err)
+	}
+
+	// Explicit synchronization: B is deleted through the seam between the key
+	// enumeration and B's own read. No sleep and no retry probability.
+	seamHitsForB := 0
+	store.beforeListGet = func(ctx context.Context, key string) {
+		if key != flowB.ID {
+			return
+		}
+		seamHitsForB++
+		if err := store.kvStore.Delete(ctx, flowB.ID); err != nil {
+			t.Errorf("seam delete of %s: %v", flowB.ID, err)
+		}
+	}
+
+	flows, err := store.List(t.Context())
+	if err != nil {
+		t.Fatalf("List with a key deleted at the seam returned an error: %v", err)
+	}
+	if len(flows) != 1 || flows[0].ID != flowA.ID {
+		t.Fatalf("List returned %v, want exactly [%s]", listIDs(flows), flowA.ID)
+	}
+	if seamHitsForB != 1 {
+		t.Errorf("seam fired %d times for %s, want exactly 1", seamHitsForB, flowB.ID)
+	}
+
+	store.beforeListGet = nil
+	after, err := store.List(t.Context())
+	if err != nil {
+		t.Fatalf("List after the deletion returned an error: %v", err)
+	}
+	if len(after) != 1 || after[0].ID != flowA.ID {
+		t.Fatalf("List after the deletion returned %v, want exactly [%s]", listIDs(after), flowA.ID)
+	}
+}
+
+func TestManagerListPreservesPerKeyTransientFailure(t *testing.T) {
+	store, _ := newTestManager(t)
+	flowA := listTestFlow("flow-a")
+	flowB := listTestFlow("flow-b")
+	if err := store.Create(t.Context(), &flowA); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Create(t.Context(), &flowB); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	store.beforeListGet = func(_ context.Context, key string) {
+		if key == flowB.ID {
+			cancel()
+		}
+	}
+
+	flows, err := store.List(ctx)
+	if err == nil {
+		t.Fatalf("List under a cancelled read returned no error (flows=%v)", listIDs(flows))
+	}
+	if !errs.IsTransient(err) {
+		t.Errorf("List error is not classified transient: %v", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("List error lost the cancellation cause: %v", err)
+	}
+	if errors.Is(err, natsclient.ErrKVKeyNotFound) {
+		t.Errorf("a read that could not complete was reported as typed absence: %v", err)
+	}
+	if flows != nil {
+		t.Errorf("List returned a partial result %v with an error, want nil", listIDs(flows))
+	}
+}
+
+func TestManagerListPreservesCorruptRecordFailure(t *testing.T) {
+	store, _ := newTestManager(t)
+	flowA := listTestFlow("flow-a")
+	if err := store.Create(t.Context(), &flowA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.kvStore.Put(t.Context(), "corrupt-flow", []byte("{not json")); err != nil {
+		t.Fatal(err)
+	}
+
+	flows, err := store.List(t.Context())
+	if err == nil {
+		t.Fatalf("List over a record that does not decode returned no error (flows=%v)", listIDs(flows))
+	}
+	if !errs.IsFatal(err) {
+		t.Errorf("a stored record that does not decode is not classified fatal: %v", err)
+	}
+	if errs.IsTransient(err) {
+		t.Errorf("a stored record that does not decode is classified transient: %v", err)
+	}
+	if errors.Is(err, natsclient.ErrKVKeyNotFound) {
+		t.Errorf("a decode failure was reported as typed absence: %v", err)
+	}
+	if flows != nil {
+		t.Errorf("List returned a partial result %v with an error, want nil", listIDs(flows))
+	}
+}
+
+// TestManagerListRejectsCancellationDuringEnumeration pins the enumeration-time
+// half of the abort contract. natsclient.KVStore.Keys maps the SDK's
+// jetstream.ErrNoKeysFound to (nil, nil), and nats.go's KeyValue.Keys drains a
+// watcher whose channel cancellation closes — so a context cancelled after the
+// subscription is created but before the first entry arrives produces exactly
+// the (nil, nil) shape an empty bucket produces. Without the enumeration-time
+// ctx.Err() guard that UNKNOWN reads as an authoritative empty list.
+//
+// The seam reproduces that shape deterministically: it fires immediately after
+// Keys returns, cancels the context List is running under, and the assertions
+// then hold whether the bucket was empty (Keys legitimately returned nil, nil)
+// or populated (Keys returned a key that must never be read).
+func TestManagerListRejectsCancellationDuringEnumeration(t *testing.T) {
+	assertAborted := func(t *testing.T, flows []*Flow, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("List with a context cancelled during enumeration returned no error (flows=%v)", listIDs(flows))
+		}
+		if flows != nil {
+			t.Errorf("List returned %v with an error, want a nil result", listIDs(flows))
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("List error lost the cancellation cause: %v", err)
+		}
+		if !errs.IsTransient(err) {
+			t.Errorf("List error is not classified transient: %v", err)
+		}
+		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
+			t.Errorf("a cancelled enumeration was reported as typed absence: %v", err)
+		}
+	}
+
+	t.Run("empty bucket", func(t *testing.T) {
+		store, _ := newTestManager(t)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		seamHits := 0
+		store.afterListKeys = func(_ context.Context) {
+			seamHits++
+			cancel()
+		}
+
+		flows, err := store.List(ctx)
+		assertAborted(t, flows, err)
+		if seamHits != 1 {
+			t.Errorf("the enumeration seam fired %d times, want exactly 1", seamHits)
+		}
+	})
+
+	t.Run("populated bucket", func(t *testing.T) {
+		store, _ := newTestManager(t)
+		flowA := listTestFlow("flow-a")
+		if err := store.Create(t.Context(), &flowA); err != nil {
+			t.Fatal(err)
+		}
+
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		seamHits := 0
+		store.afterListKeys = func(_ context.Context) {
+			seamHits++
+			cancel()
+		}
+		// The guard aborts BEFORE any result is built, so no per-key read is
+		// attempted at all. Without this counter the subtest would still pass
+		// with the guard deleted, because a per-key read under a cancelled
+		// context aborts on its own — the counter is what makes the guard, and
+		// not the downstream read, the thing under proof here.
+		perKeyReads := 0
+		store.beforeListGet = func(_ context.Context, _ string) {
+			perKeyReads++
+		}
+
+		flows, err := store.List(ctx)
+		assertAborted(t, flows, err)
+		for _, f := range flows {
+			if f.ID == flowA.ID {
+				t.Errorf("List returned the saved flow %s despite the cancelled enumeration", flowA.ID)
+			}
+		}
+		if perKeyReads != 0 {
+			t.Errorf("List attempted %d per-key reads after a cancelled enumeration, want 0", perKeyReads)
+		}
+		if seamHits != 1 {
+			t.Errorf("the enumeration seam fired %d times, want exactly 1", seamHits)
+		}
+	})
+}

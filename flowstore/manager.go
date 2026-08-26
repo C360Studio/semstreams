@@ -20,7 +20,6 @@ import (
 // definitions need; the ADR's canonical "Save" collapses into the
 // existing Create/Update pair here.
 type Manager struct {
-	bucket  jetstream.KeyValue  // Raw bucket for operations like Keys()
 	kvStore *natsclient.KVStore // KVStore wrapper for CAS operations
 
 	// beforeUpdateWrite is a package-private synchronization seam: Update calls
@@ -31,6 +30,23 @@ type Manager struct {
 	// observed revision without sleeping. Never make it exported, an option, or
 	// a constructor parameter.
 	beforeUpdateWrite func(ctx context.Context)
+
+	// beforeListGet is a package-private synchronization seam: List calls it
+	// (when non-nil) for each enumerated key immediately before that key's
+	// read. It is nil in production — nothing outside package flowstore can
+	// reach it — and exists so the vanished-key and per-key-failure proofs in
+	// this package can act on a key between enumeration and its read without
+	// sleeping. Never make it exported, an option, or a constructor parameter.
+	beforeListGet func(ctx context.Context, key string)
+
+	// afterListKeys is a package-private synchronization seam: List calls it
+	// (when non-nil) immediately after the key enumeration returns and before
+	// the enumeration-time context check. It is nil in production — nothing
+	// outside package flowstore can reach it — and exists so the proof that a
+	// context cancelled DURING enumeration cannot read as an authoritative
+	// empty list is deterministic. Never make it exported, an option, or a
+	// constructor parameter.
+	afterListKeys func(ctx context.Context)
 }
 
 // NewManager creates a new flow store
@@ -50,7 +66,6 @@ func NewManager(natsClient *natsclient.Client) (*Manager, error) {
 	}
 
 	return &Manager{
-		bucket:  bucket,
 		kvStore: natsClient.NewKVStore(bucket),
 	}, nil
 }
@@ -209,19 +224,53 @@ func (s *Manager) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// List retrieves all flows
+// List returns the Flows currently saved in the bucket.
+//
+// It reads CURRENT STATE. Keys are enumerated through KVStore.Keys, so an
+// empty bucket is a successful non-nil empty result, and a key whose read
+// reports typed absence — errors.Is(err, natsclient.ErrKVKeyNotFound), which
+// KVStore.Get returns for a never-created and for a tombstoned key — is
+// omitted rather than failing the list. One client deleting a Flow between
+// another client's enumeration and its read is ordinary churn, not that
+// caller's error.
+//
+// Every other per-key failure (transport, permission, deadline or
+// cancellation, a stored record that does not decode) aborts the list with a
+// nil result — never a partial list reported as success — and is returned
+// carrying the classification Get assigned it. The wrap is a plain %w for
+// exactly that reason: errs.IsFatal and errs.IsTransient resolve the FIRST
+// classified error in the chain, so an outer errs.Wrap* here would re-stamp a
+// fatal decode failure as transient. No message text is inspected anywhere on
+// this path.
+//
+// A context that is done when the enumeration returns aborts the list even
+// when the enumeration itself reported nothing, so a cancellation that raced
+// the key watcher can never be reported as an authoritative empty result.
+//
+// The result is in whatever order the bucket enumerated; List promises none.
 func (s *Manager) List(ctx context.Context) ([]*Flow, error) {
-	keys, err := s.bucket.Keys(ctx)
+	keys, err := s.kvStore.Keys(ctx)
 	if err != nil {
 		return nil, errs.WrapTransient(err, "flowstore", "List", "list KV keys")
+	}
+	if s.afterListKeys != nil {
+		s.afterListKeys(ctx)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errs.WrapTransient(err, "flowstore", "List", "list KV keys: context done during enumeration")
 	}
 
 	flows := make([]*Flow, 0, len(keys))
 	for _, key := range keys {
+		if s.beforeListGet != nil {
+			s.beforeListGet(ctx, key)
+		}
 		flow, err := s.Get(ctx, key)
 		if err != nil {
-			return nil, errs.WrapTransient(err, "flowstore", "List",
-				fmt.Sprintf("get flow %s", key))
+			if errors.Is(err, natsclient.ErrKVKeyNotFound) {
+				continue
+			}
+			return nil, fmt.Errorf("flowstore.List: get flow %s: %w", key, err)
 		}
 		flows = append(flows, flow)
 	}

@@ -125,7 +125,7 @@ func (fs *FlowService) Start(ctx context.Context) error {
 // first-run diagram. It does not make that diagram runtime authority.
 func (fs *FlowService) ensureDefaultFlowFromConfig(ctx context.Context) error {
 	flows, err := fs.flowStore.List(ctx)
-	if err != nil && !strings.Contains(err.Error(), "no keys found") {
+	if err != nil {
 		return fmt.Errorf("list flows: %w", err)
 	}
 	if len(flows) > 0 || fs.bootConfig == nil || len(fs.bootConfig.Components) == 0 {
@@ -218,7 +218,7 @@ func flowServiceOpenAPISpec() *OpenAPISpec {
 	return &OpenAPISpec{
 		Paths: map[string]PathSpec{
 			"/flows": {
-				GET:  &OperationSpec{Summary: "List saved flow diagrams", Description: "Lists saved diagrams; no runtime lifecycle state is implied.", Tags: []string{"Flows"}, Responses: map[string]ResponseSpec{"200": {Description: "Saved flow diagrams", ContentType: "application/json"}}},
+				GET:  &OperationSpec{Summary: "List saved flow diagrams", Description: "Lists saved diagrams; no runtime lifecycle state is implied.", Tags: []string{"Flows"}, Responses: map[string]ResponseSpec{"200": {Description: "Saved flow diagrams", ContentType: "application/json", SchemaRef: "#/components/schemas/FlowListResponse"}}},
 				POST: &OperationSpec{Summary: "Create a saved flow diagram", Description: "Saves a diagram without changing runtime configuration.", Tags: []string{"Flows"}, RequestBody: &RequestBodySpec{Description: "Flow definition", Required: true, SchemaRef: "#/components/schemas/FlowCreateRequest"}, Responses: map[string]ResponseSpec{"201": {Description: "Diagram created", ContentType: "application/json", SchemaRef: "#/components/schemas/Flow"}, "400": {Description: "Invalid request"}}},
 			},
 			"/flows/{id}": {
@@ -242,6 +242,7 @@ func flowServiceOpenAPISpec() *OpenAPISpec {
 			reflect.TypeOf(RuntimeMessagesResponse{}),
 			reflect.TypeOf(publishComponentConfigsResponse{}),
 			reflect.TypeOf(flowstore.Flow{}),
+			reflect.TypeOf(FlowListResponse{}),
 		},
 		RequestBodyTypes: []reflect.Type{
 			reflect.TypeOf(flowstore.Flow{}),
@@ -266,14 +267,31 @@ func (fs *FlowService) handleDeleteFlowWrapper(w http.ResponseWriter, r *http.Re
 func (fs *FlowService) handleListFlows(w http.ResponseWriter, r *http.Request) {
 	flows, err := fs.flowStore.List(r.Context())
 	if err != nil {
-		if strings.Contains(err.Error(), "no keys found") {
-			fs.writeJSON(w, map[string]any{"flows": []any{}})
-			return
-		}
 		fs.writeJSONError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	fs.writeJSON(w, map[string]any{"flows": flows})
+	fs.writeJSON(w, newFlowListResponse(flows))
+}
+
+// FlowListResponse is the GET /flows response body. Its flows member is always
+// present and is never null: an empty store serialises as [], so a client never
+// has to tell "no saved flows" apart from "the field is missing". The elements
+// are values rather than pointers because the schema generator renders a
+// pointer element type as anyOf [..., null] (schema.go:12-20), and a saved Flow
+// inside the list is never null.
+type FlowListResponse struct {
+	Flows []flowstore.Flow `json:"flows"`
+}
+
+// newFlowListResponse projects the Manager's []*Flow onto the wire type, in the
+// Manager's order. The slice is always allocated so the encoder emits [] rather
+// than null for an empty store.
+func newFlowListResponse(flows []*flowstore.Flow) FlowListResponse {
+	out := make([]flowstore.Flow, 0, len(flows))
+	for _, flow := range flows {
+		out = append(out, *flow)
+	}
+	return FlowListResponse{Flows: out}
 }
 
 // FlowCreateRequest is the POST /flows request body. The server owns the
