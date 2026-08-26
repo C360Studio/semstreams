@@ -154,3 +154,50 @@ func TestHandleCompleteResponseLeavesDecisionNilForNonDecideTerminal(t *testing.
 	require.Nil(t, completion.Decision, "only a decide terminal carries a typed decision")
 	require.Equal(t, `{"action":"respond_direct","reason":"not a decision"}`, completion.Result)
 }
+
+// TestHandleCompleteResponseLeavesDecisionNilWhenDecideMetadataIsUnusable pins
+// the fail-safe branch of the stamping guard: a decide terminal whose typed
+// metadata is missing or empty leaves Decision nil rather than stamping a
+// half-decision. A present Decision with an empty field fails
+// LoopCompletedEvent.Validate (C4) and would be Termed by the terminal
+// normalizer — losing the terminal entirely — so the loop declines to stamp
+// and the terminal keeps the pre-gh#1094 route-ownership behaviour.
+func TestHandleCompleteResponseLeavesDecisionNilWhenDecideMetadataIsUnusable(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		metadata map[string]any
+	}{
+		{name: "no metadata", metadata: nil},
+		{name: "empty action", metadata: map[string]any{
+			agentic.MetadataKeyDecideAction: "",
+			agentic.MetadataKeyDecideReason: "a reason",
+		}},
+		{name: "empty reason", metadata: map[string]any{
+			agentic.MetadataKeyDecideAction: agentic.DecideActionRespondDirect,
+			agentic.MetadataKeyDecideReason: "",
+		}},
+		{name: "non-string action", metadata: map[string]any{
+			agentic.MetadataKeyDecideAction: 7,
+			agentic.MetadataKeyDecideReason: "a reason",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := agenticloop.NewMessageHandler(createTestConfig())
+			ctx := context.Background()
+			loopID := startDecisionTestLoop(t, handler)
+
+			result, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
+				CallID:   "call-decide-unusable",
+				Name:     agentic.DecideToolName,
+				Content:  `{"action":"respond_direct"}`,
+				StopLoop: true,
+				Metadata: tc.metadata,
+			})
+			require.NoError(t, err)
+
+			completion := decodeCompletionEvent(t, result.PublishedMessages)
+			require.Nil(t, completion.Decision, "an unusable decide payload must not stamp a half-decision")
+			require.NoError(t, completion.Validate(), "the completion must stay deliverable")
+		})
+	}
+}

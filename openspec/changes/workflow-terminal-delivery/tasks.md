@@ -65,6 +65,13 @@ body is a published layer and states `implemented-by: <model>`.
     `Messages: tracked-name loss must not demote a decide terminal`. Verbatim in `conformance.md`.
     After 2.4: `ok github.com/c360studio/semstreams/processor/agentic-loop 1.367s`.
     Tests: `processor/agentic-loop/coordinator_decision_test.go`.
+  - ADDITION beyond the named tests:
+    `TestHandleCompleteResponseLeavesDecisionNilWhenDecideMetadataIsUnusable` (4 subtests — absent metadata,
+    empty action, empty reason, non-string action). The stamping guard has a fail-safe branch the design does not
+    name: a decide result whose typed metadata is unusable leaves `Decision` nil instead of stamping a
+    half-decision, because a PRESENT decision with an empty field fails `Validate` (C4) and would Term the
+    terminal — losing it entirely rather than degrading to today's behaviour. Untested branches are where the
+    next defect hides, so it is pinned.
 - [x] 2.4 Implement 2.3: thread the terminal tool result (name via `GetToolName`, metadata) into
   `handleCompleteResponse`; resolve the tool name with the existing chain `GetToolName(callID)` →
   `toolResult.Name` (`handlers.go:2241-2245`); populate `completion.Decision`; replace the `"decide"` literals at
