@@ -88,7 +88,9 @@ asserted only by `test/e2e/scenarios/tiered.go:350` (statistical, semantic); `gr
       gate exists: the foreign write lands and the container is minted under `acme.dep2`).
 - [ ] 2.6 `processor/rule/actions_run_scope_integration_test.go` (`//go:build integration`):
       `TestRunScopeNewMintsUnderDeploymentAuthority` — deployment `acme.dep1`; a rule with `run_scope=new` fires on
-      `foreign.dep9.src.agent.execution.<uuid>`; assert the stamped `agvocab.LoopRunEntityID` begins with
+      `foreign.dep9.agentic-loop.agent.execution.<uuid>` — a peer deployment's own loop execution, because
+      `LoopIDFromExecutionEntityID` (`actions.go:1554`, `entity_ids.go:167`) admits only that family and any other
+      entity takes the warn-and-inherit fallback (`:1555-1570`); assert the stamped `agvocab.LoopRunEntityID` begins with
       `acme.dep1.` and the firing entity is referenced as parent. MUST fail at baseline (#1096).
       `processor/rule/entity_substitution_test.go`: `TestSegmentTokensResolveByName` — `$entity.system` and
       `$entity.domain` resolve to positions 3 and 4 of the NEW order; `TestSegmentTokensUnresolvedOnInvalidID` — a
@@ -96,6 +98,8 @@ asserted only by `test/e2e/scenarios/tiered.go:350` (statistical, semantic); `gr
       GREEN at baseline (second; forced omission 4.5 covers it).
       `processor/agentic-tools/emit_lesson_test.go`: `TestAppliesToThreeSegmentsIsSourceScope` — a lesson with
       `id:acme.dep1.src` matches a loop scoped to `acme.dep1.src.git.commit.a1` and not `acme.dep1.other.git.commit.a1`.
+      GREEN at baseline (segment-boundary matching is order-agnostic, inventory L2): a documenting test, outside the
+      2.9 baseline capture; it pins the meaning the spec delta assigns to three positions.
 - [ ] 2.7 `processor/graph-query/summary_test.go`: `TestGraphSummaryTypeKeyFollowsCanonicalOrder` — the
       `EntityTypeSummary.Type` for `acme.dep1.src.git.commit.a1` is `src.git.commit`, built from named fields.
       `graph/clustering/entityid_provider_test.go`: `TestEntityIDEdgesReadPositionsByName` — sibling prefix and
@@ -116,7 +120,7 @@ asserted only by `test/e2e/scenarios/tiered.go:350` (statistical, semantic); `gr
   go test -race -count=1 -run 'Semantics' ./agentic/ ./graph/ ./processor/rule/
   go test -race -tags=integration -count=1 -run 'TestAuthorityGate|TestImportLane|TestHierarchySkipsForeignAuthority' ./processor/graph-ingest/
   go test -race -tags=integration -count=1 -run 'TestRunScopeNewMintsUnderDeploymentAuthority' ./processor/rule/
-  go test -race -count=1 -run 'TestSegmentTokens|TestAppliesToThreeSegmentsIsSourceScope' ./processor/rule/ ./processor/agentic-tools/
+  go test -race -count=1 -run 'TestSegmentTokens' ./processor/rule/
   go test -race -count=1 -run 'TestGraphSummaryTypeKeyFollowsCanonicalOrder' ./processor/graph-query/
   go test -race -count=1 -run 'TestEntityIDEdgesReadPositionsByName|TestSummaryGroupsByNamedDomain' ./graph/clustering/
   go test -race -count=1 -run 'TestSubjectToIRIFollowsCanonicalOrder' ./vocabulary/export/
@@ -146,9 +150,13 @@ asserted only by `test/e2e/scenarios/tiered.go:350` (statistical, semantic); `gr
       `ValidateEntityID` unchanged (lexical); the audit (5.6) and `graph/inference/hierarchy.go` consume the constant.
 - [ ] 3.6 `internal/semantictest.EntityID` positional args follow the new order; `message.ParseEntityID` delegator
       unchanged (alias).
-- [ ] 3.7 Authority-pair bound at config load (`config/config.go:225-241`): export the family table's longest fixed
-      suffix (`agentic`/`graph` constants; the rule trigger family = 86 bytes today) and `MaxAuthorityPairBytes = 256 −
-      86 = 170`; `Validate` rejects `len(org)+len(id) > 170` naming the binding family. Amends ADR-076 d2.
+- [ ] 3.7 Authority-pair bound at config load (`config/config.go:225-241`): declare the framework identity family
+      table in `pkg/types` (`FrameworkIdentityFamilies`, each family's fixed suffix; the rule trigger family = 86 bytes
+      today) and `MaxAuthorityPairBytes = 256 − longest = 170` there — `config` imports neither `graph` nor
+      `processor/rule` and the trigger prefix is unexported (`graph_event_identity.go:14`); `graph/events.go:20` and
+      `ruleTriggerEntityID` build their prefixes from the `pkg/types` family entries so the number is never
+      hand-copied; `Validate` rejects `len(org)+len(id) > MaxAuthorityPairBytes` naming the binding family. Amends
+      ADR-076 d2.
 
 ## 4. Forced omissions — one per new parser/builder/mapper (commit GREEN first; restore by `cp` + `shasum`)
 
@@ -174,6 +182,7 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       and `TestSummaryGroupsByNamedDomain` MUST fail.
 - [ ] 4.13 M13 hierarchy foreign-skip: delete the authority check in `GetHierarchyTriples` → `TestHierarchySkipsForeignAuthority` MUST fail.
 - [ ] 4.14 M14 config-load bound: delete the `MaxAuthorityPairBytes` check → `TestConfigRejectsOversizedAuthorityPair` MUST fail.
+- [ ] 4.15 M15 `ParseZoneEntityID`: restore `parts[2] != "facility" || parts[3] != "zone"` → `TestParseZoneEntityIDReadsNamedPositions` MUST fail.
 
 ## 5. Sweep — builders, patterns, configs, docs, examples, audit
 
@@ -227,7 +236,7 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
 
 - [ ] 6.1 graph-ingest reads `deps.Platform` at construction (`CreateGraphIngest`, `component.go:644`); the structural
       gate calls `ValidateEntityIDAuthority` for the candidate SUBJECT identity only — never for `@id` objects, which
-      keep structural validation and must-exist semantics — on the fact lane, every `graph.mutation.>` operation, and
+      keep structural validation; no stub is created and an absent object is permitted (`graph-ingest/spec.md:776-780`) — on the fact lane, every `graph.mutation.>` operation, and
       direct persistence, before KV I/O; metered once as `mutation_rejections{reason="authority_foreign"|"authority_claimed"}`;
       loud log names lane and segment index, never the identity. Mutation of an existing foreign subject: the default
       rejects until owner item O-12 is ruled; the ruling is applied here and in the delta.
@@ -237,9 +246,14 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
 - [ ] 6.3 `processor/rule`: add a `platform` field to the action executor plumbed from `deps.Platform` at construction
       (the processor holds none today); `actions.go:1575-1583` mints from it; the firing entity remains the parent
       reference; delete the `SplitN` read-back. The run anchor at `:1697-1700` keeps writing to the firing entity;
-      for an imported firing entity it is rejected by the gate and logged until O-12 is ruled.
+      for an imported firing entity it is rejected by the gate, metered `mutation_rejections{reason="authority_foreign"}`,
+      and logged until O-12 is ruled — O-12 is pre-landing (it gates `Closes #1096` for imported firing entities), so
+      the ruling is applied here before 7.1 and the reject-and-meter state never ships.
 - [ ] 6.4 `graph/inference/hierarchy.go`: `GetHierarchyTriples` returns `nil, nil` for an entity whose positions 1–2
-      differ from the deployment authority (no container, no membership, no inverse sibling edge, no warning);
+      differ from the deployment authority (no container, no membership, no inverse sibling edge, no warning) — the
+      pair reaches `NewHierarchyInference` (which carries none today, `hierarchy.go:109-114`;
+      `processor/graph-ingest/component.go:1371-1376`) through `HierarchyConfig` from the `deps.Platform` read 6.1
+      adds; the skip stands regardless of O-12;
       containers use `ReservedInstanceTokens`; a container whose ID would exceed 256 bytes returns the coded
       structural error instead of a padded overflow.
 

@@ -5,8 +5,9 @@
 graph-ingest MUST read the deployment authority from `deps.Platform` at construction and MUST validate positions 1–2
 of every final candidate **subject** entity ID through `pkg/types.ValidateEntityIDAuthority` on every lane —
 Graphable fact arrival, every `graph.mutation.>` operation, and direct persistence — before any KV I/O and after
-structural validation. `@id` objects MUST NOT be authority-checked; they keep canonical structural validation and
-must-exist semantics, so a local subject may reference an imported entity. Mutation of an already-persisted
+structural validation. `@id` objects MUST NOT be authority-checked; they keep canonical structural validation; no stub is created and an absent object is permitted
+(the unmodified requirement "Relationship target absence creates no entity"), so a local subject may reference an
+imported entity. Mutation of an already-persisted
 foreign-authority subject from a non-import lane follows owner item O-12; until it is ruled, this requirement's
 rejection applies to it. On a lane whose input port is not declared `"import": true`, a candidate whose
 positions 1–2 differ from the deployment's MUST be rejected. On a declared import lane, a candidate whose positions
@@ -73,7 +74,8 @@ related-loop linkage), never as the minting authority.
 
 #### Scenario: a rule firing on an imported entity mints local runtime state locally
 
-- **GIVEN** a deployment with authority `acme`/`dep1` and an imported entity `foreign.dep9.src.agent.execution.<uuid>`
+- **GIVEN** a deployment with authority `acme`/`dep1` and an imported entity `foreign.dep9.agentic-loop.agent.execution.<uuid>` (a peer deployment's own loop
+  execution — `run_scope=new` requires the loop-execution family)
 - **WHEN** a rule with `run_scope=new` fires on it
 - **THEN** the stamped run entity ID begins with `acme.dep1.`
 - **AND** the imported entity is referenced as the run's parent
