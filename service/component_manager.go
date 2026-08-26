@@ -1495,7 +1495,6 @@ type subscriberInfo struct {
 type flowGraphCache struct {
 	mu           sync.RWMutex
 	currentGraph *flowgraph.FlowGraph
-	lastAnalysis *flowgraph.FlowAnalysisResult
 	cacheValid   bool
 	lastUpdate   time.Time
 }
@@ -1546,35 +1545,6 @@ func (cm *ComponentManager) invalidateFlowGraph() {
 
 	cm.graphCache.cacheValid = false
 	cm.graphCache.currentGraph = nil
-	cm.graphCache.lastAnalysis = nil
-}
-
-// ValidateFlowConnectivity performs FlowGraph connectivity analysis with caching.
-func (cm *ComponentManager) ValidateFlowConnectivity() (*flowgraph.FlowAnalysisResult, error) {
-	// Check if we have a cached analysis
-	cm.graphCache.mu.RLock()
-	if cm.graphCache.cacheValid && cm.graphCache.lastAnalysis != nil {
-		analysis := cm.graphCache.lastAnalysis
-		cm.graphCache.mu.RUnlock()
-		return analysis, nil
-	}
-	cm.graphCache.mu.RUnlock()
-
-	// Get graph (may trigger rebuild)
-	graph, err := cm.GetFlowGraph()
-	if err != nil {
-		return nil, err
-	}
-
-	// Perform analysis
-	analysis := graph.AnalyzeConnectivity()
-
-	// Cache the analysis result
-	cm.graphCache.mu.Lock()
-	cm.graphCache.lastAnalysis = analysis
-	cm.graphCache.mu.Unlock()
-
-	return analysis, nil
 }
 
 // GetFlowPaths returns data paths from input components to all reachable components
@@ -1596,38 +1566,6 @@ func (cm *ComponentManager) GetFlowPaths() (map[string][]string, error) {
 	}
 
 	return paths, nil
-}
-
-// DetectObjectStoreGaps identifies disconnected storage components
-func (cm *ComponentManager) DetectObjectStoreGaps() ([]ComponentGap, error) {
-	graph, err := cm.GetFlowGraph()
-	if err != nil {
-		return nil, err
-	}
-	var gaps []ComponentGap
-
-	nodes := graph.GetNodes()
-
-	for componentName, node := range nodes {
-		// Check if this is a storage component
-		if cm.isStorageComponent(componentName, node) {
-			// Check if storage component has input connections
-			if !cm.hasIncomingEdges(graph, componentName) {
-				gaps = append(gaps, ComponentGap{
-					ComponentName: componentName,
-					Issue:         "no_input_connections",
-					Description:   "Storage component configured but not receiving data",
-					Suggestions: []string{
-						"Configure input ports to subscribe to data streams",
-						"Verify subject routing from processors to storage",
-						"Check component configuration and port subjects",
-					},
-				})
-			}
-		}
-	}
-
-	return gaps, nil
 }
 
 // Helper methods for FlowGraph analysis
@@ -1671,35 +1609,6 @@ func (cm *ComponentManager) isInputComponent(componentName string, node *flowgra
 	return false
 }
 
-// isStorageComponent determines if a component is a storage component
-func (cm *ComponentManager) isStorageComponent(componentName string, _ *flowgraph.ComponentNode) bool {
-	// Check component configuration for type
-	if cm.componentConfigs != nil {
-		if compCfg, ok := cm.componentConfigs[componentName]; ok {
-			if compCfg.Type == "storage" || compCfg.Type == "output" {
-				return true
-			}
-		}
-	}
-
-	// Check for storage-related component names
-	return strings.Contains(strings.ToLower(componentName), "store") ||
-		strings.Contains(strings.ToLower(componentName), "storage")
-}
-
-// hasIncomingEdges checks if a component has any incoming edges
-func (cm *ComponentManager) hasIncomingEdges(graph *flowgraph.FlowGraph, componentName string) bool {
-	edges := graph.GetEdges()
-
-	for _, edge := range edges {
-		if edge.To.ComponentName == componentName {
-			return true
-		}
-	}
-
-	return false
-}
-
 // depthFirstTraversal performs DFS to find all reachable components from a starting component
 func (cm *ComponentManager) depthFirstTraversal(graph *flowgraph.FlowGraph, start string) []string {
 	visited := make(map[string]bool)
@@ -1731,14 +1640,6 @@ func (cm *ComponentManager) dfsVisit(node string, adj map[string][]string, visit
 			cm.dfsVisit(neighbor, adj, visited, result)
 		}
 	}
-}
-
-// ComponentGap represents a connectivity gap in the component flow
-type ComponentGap struct {
-	ComponentName string   `json:"component_name"`
-	Issue         string   `json:"issue"`
-	Description   string   `json:"description"`
-	Suggestions   []string `json:"suggestions,omitempty"`
 }
 
 // publishHealthLoop publishes component health to JetStream every 5s.

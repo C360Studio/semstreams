@@ -249,6 +249,45 @@ SHALL serve the retained result's `graph`, as JSON by default and as Mermaid whe
 - **AND** the tests that verify this are `TestGraphProjectionMatchesAdmittedComposition` (`-tags=integration`) and
   `TestMermaidIsDeterministic`
 
+### Requirement: The framework serves one composition judgment and no second gap analysis
+
+The framework SHALL serve exactly one operation that judges the running composition — `GET <components>/validate`,
+which serves the retained boot `composition.Result` verbatim — and SHALL serve no second connectivity, gap, or orphan
+analysis that applies a severity vocabulary of its own. `GET <components>/gaps` and its response body
+(`disconnected_nodes`, `orphaned_ports`, `objectstore_gaps`, and the `summary` object carrying `total_gaps`,
+`critical_gaps`, `optional_gaps`, `critical_port_count`, and `has_issues`) SHALL be absent from the routed surface and
+from the generated OpenAPI document, with no alias; the Go surface it reached — `ComponentManager.ValidateFlowConnectivity`,
+`ComponentManager.DetectObjectStoreGaps`, and the `ComponentGap` type — SHALL be absent too. That operation classified a
+required input declared `external` as a critical orphan (`no_publishers`, `critical_port_count: 1`, `has_issues: true`)
+while the canonical judgment raised no finding for the same port; a second interpreter of one analysis is refused rather
+than re-projected. Pre-v1 fresh-state policy applies: no compatibility view and no legacy reader. A projection that
+derives no severity is not a judgment and is unaffected.
+
+> `[~]` DELIBERATE NOT-DONE (2026-08-26, this change): the shared primitives under the retired operation are RETAINED
+> because callers outside this change still reach them. `flowgraph.FlowGraph.AnalyzeConnectivity` is the analysis
+> `composition.Analyze` itself runs (`composition/analyze.go`) and the `engine` oracle still calls it;
+> `ComponentManager.GetFlowGraph` and `GET <components>/paths` (reachability from input components — a projection with no
+> severity) still build a graph from the admitted registry. The `engine` caller leaves with #1093; whether `/paths`
+> should serve the retained `composition.Result.Graph` instead of rebuilding is #1093's scope, not this change's, and is
+> recorded there. Only the judging operation is removed here.
+
+#### Scenario: the gap operation is absent from the routed and advertised surface
+
+- **GIVEN** the ComponentManager HTTP handlers registered on a fresh mux
+- **WHEN** `<components>/gaps` is requested with GET, POST, and DELETE
+- **THEN** each request is unrouted (404) or refused (405), and the ComponentManager OpenAPI document — the source the
+  generated `specs/openapi.v3.yaml` is emitted from — advertises no `/gaps` operation
+- **AND** the test that verifies this is `TestComponentGapsOperationIsAbsent`
+
+#### Scenario: an externally fed input is never a critical orphan on any component operation
+
+- **GIVEN** an admitted component whose only input is a required JetStream port declared `external: true` with no
+  publisher in the composition
+- **WHEN** every operation the ComponentManager OpenAPI document advertises is requested
+- **THEN** no response body carries `no_publishers`, `orphaned_port`, `critical`, or `has_issues` for that port, the
+  retained boot result has no error finding, and the projection shows the marker on the port
+- **AND** the test that verifies this is `TestExternalInputIsNeverACriticalOrphanOnAnyComponentOperation`
+
 ### Requirement: Agents read the catalog, validate, and project through read-only tools
 
 The agentic-tools registry SHALL register, under the existing component-catalog gate that requires only a

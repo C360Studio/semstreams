@@ -335,20 +335,6 @@ paths:
                                 type: object
                 "400":
                     description: Invalid request
-    /gaps:
-        get:
-            summary: Get component flow gaps
-            description: Returns disconnected nodes and orphaned ports in the component flow
-            tags:
-                - Components
-                - FlowGraph
-            responses:
-                "200":
-                    description: Component flow gaps and disconnected nodes
-                    content:
-                        application/json:
-                            schema:
-                                type: object
     /graphql:
         post:
             summary: Execute GraphQL query

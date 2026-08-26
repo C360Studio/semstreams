@@ -107,7 +107,6 @@ func TestComponentManagerFlowReportingUsesRetainedPortsAfterComponentMutation(t 
 	handlers := map[string]http.HandlerFunc{
 		"graph":      manager.handleFlowGraph,
 		"validation": manager.handleFlowValidation,
-		"gaps":       manager.handleFlowGaps,
 		"paths":      manager.handleFlowPaths,
 	}
 	for name, handler := range handlers {

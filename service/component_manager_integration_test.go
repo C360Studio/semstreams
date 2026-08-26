@@ -155,10 +155,6 @@ func TestComponentManagerWithRealNATS(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, flowGraph)
 
-	validation, err := cm.ValidateFlowConnectivity()
-	assert.NoError(t, err)
-	assert.NotNil(t, validation)
-
 	// Stop should work
 	err = cm.Stop(context.Background())
 	assert.NoError(t, err, "Stop should succeed")
@@ -212,20 +208,6 @@ func TestComponentManagerFlowGraphValidation(t *testing.T) {
 
 		edges := graph.GetEdges()
 		assert.NotNil(t, edges, "Edges slice should exist")
-	})
-
-	t.Run("ValidateFlowConnectivity", func(t *testing.T) {
-		result, err := cm.ValidateFlowConnectivity()
-		require.NoError(t, err)
-		assert.NotNil(t, result, "Validation result should not be nil")
-		assert.NotNil(t, result.ConnectedComponents, "ConnectedComponents should be initialized")
-		assert.NotNil(t, result.DisconnectedNodes, "DisconnectedNodes should be initialized")
-		assert.NotNil(t, result.OrphanedPorts, "OrphanedPorts should be initialized")
-
-		// With no components, validation should show healthy but empty
-		if len(cm.GetComponentStatus()) == 0 {
-			assert.Equal(t, "healthy", result.ValidationStatus, "Empty system should be healthy")
-		}
 	})
 
 	t.Run("GetFlowPaths", func(t *testing.T) {

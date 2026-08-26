@@ -75,7 +75,6 @@ func (cm *ComponentManager) RegisterHTTPHandlers(prefix string, mux *http.ServeM
 	// FlowGraph endpoints
 	mux.HandleFunc(prefix+"flowgraph", cm.handleFlowGraph)
 	mux.HandleFunc(prefix+"validate", cm.handleFlowValidation)
-	mux.HandleFunc(prefix+"gaps", cm.handleFlowGaps)
 	mux.HandleFunc(prefix+"paths", cm.handleFlowPaths)
 }
 
@@ -247,19 +246,6 @@ func componentManagerOpenAPISpec() *OpenAPISpec {
 							Description: "Composition validation result",
 							ContentType: "application/json",
 							SchemaRef:   "#/components/schemas/Result",
-						},
-					},
-				},
-			},
-			"/gaps": {
-				GET: &OperationSpec{
-					Summary:     "Get component flow gaps",
-					Description: "Returns disconnected nodes and orphaned ports in the component flow",
-					Tags:        []string{"Components", "FlowGraph"},
-					Responses: map[string]ResponseSpec{
-						"200": {
-							Description: "Component flow gaps and disconnected nodes",
-							ContentType: "application/json",
 						},
 					},
 				},
@@ -623,79 +609,6 @@ func (cm *ComponentManager) writeJSON(w http.ResponseWriter, value any, what str
 	w.Header().Set("Content-Type", "application/json")
 	if _, err := w.Write(buf.Bytes()); err != nil {
 		cm.logger.Error("Failed to write "+what, "error", err)
-	}
-}
-
-// handleFlowGaps returns disconnected nodes and orphaned ports
-func (cm *ComponentManager) handleFlowGaps(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	analysis, err := cm.ValidateFlowConnectivity()
-	if err != nil {
-		cm.logger.Error("Failed to validate FlowGraph gaps", "error", err)
-		http.Error(w, "Failed to validate flow graph", http.StatusInternalServerError)
-		return
-	}
-	objectStoreGaps, err := cm.DetectObjectStoreGaps()
-	if err != nil {
-		cm.logger.Error("Failed to inspect object-store flow gaps", "error", err)
-		http.Error(w, "Failed to inspect flow gaps", http.StatusInternalServerError)
-		return
-	}
-
-	// Categorize orphaned ports by severity
-	criticalPorts := 0
-	optionalPorts := 0
-	for _, port := range analysis.OrphanedPorts {
-		switch port.Issue {
-		case "no_publishers", "no_subscribers":
-			// Stream connections are critical only if required
-			if port.Pattern == component.PatternStream && port.Required {
-				criticalPorts++
-			} else {
-				optionalPorts++
-			}
-		case "optional_api_unused", "optional_index_unwatched", "optional_interface_unused":
-			// These are always optional
-			optionalPorts++
-		}
-	}
-
-	// Only count critical issues as true gaps
-	criticalGaps := len(analysis.DisconnectedNodes) + criticalPorts
-
-	response := map[string]any{
-		"timestamp":          time.Now().UTC(),
-		"disconnected_nodes": analysis.DisconnectedNodes,
-		"orphaned_ports":     analysis.OrphanedPorts,
-		"objectstore_gaps":   objectStoreGaps,
-		"summary": map[string]any{
-			"total_gaps":          criticalGaps, // Only critical issues
-			"critical_gaps":       criticalGaps,
-			"optional_gaps":       optionalPorts,
-			"disconnected_count":  len(analysis.DisconnectedNodes),
-			"orphaned_port_count": len(analysis.OrphanedPorts),
-			"critical_port_count": criticalPorts,
-			"optional_port_count": optionalPorts,
-			"objectstore_gaps":    len(objectStoreGaps),
-			"has_issues":          criticalGaps > 0 || len(objectStoreGaps) > 0, // Only critical issues
-		},
-	}
-
-	// Buffer JSON encoding to catch errors before writing response
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		cm.logger.Error("Failed to encode flow gaps response", "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if _, err := w.Write(buf.Bytes()); err != nil {
-		cm.logger.Error("Failed to write flow gaps response", "error", err)
 	}
 }
 
