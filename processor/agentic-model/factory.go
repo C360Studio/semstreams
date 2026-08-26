@@ -14,6 +14,7 @@ func Register(registry RegistryInterface) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
 		Name:         "agentic-model",
 		Factory:      NewComponent,
+		Ports:        DeclarePorts,
 		Schema:       agenticModelSchema,
 		Type:         "processor",
 		Protocol:     "openai",

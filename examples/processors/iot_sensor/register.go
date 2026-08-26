@@ -16,6 +16,7 @@ func Register(registry *component.Registry) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
 		Name:        "iot_sensor",
 		Factory:     NewComponent,
+		Ports:       DeclarePorts,
 		Schema:      iotSensorSchema,
 		Type:        "processor",
 		Protocol:    "iot_sensor",

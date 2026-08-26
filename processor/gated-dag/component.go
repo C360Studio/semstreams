@@ -31,6 +31,7 @@ func Register(registry *component.Registry) error {
 		Description: "Gated-DAG dispatch executor (ADR-046 Phase 2): dispatches DAG units in dependency order with restart recovery, failure isolation, and stall detection.",
 		Version:     "1.0.0",
 		Factory:     CreateGatedDag,
+		Ports:       DeclarePorts,
 		Schema:      DefaultConfig().Schema(),
 	})
 }
@@ -57,15 +58,48 @@ func CreateGatedDag(rawConfig json.RawMessage, deps component.Dependencies) (com
 
 // NewComponent parses + validates config and wires dependencies.
 func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (*Component, error) {
+	cfg, outputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
+	}
+	// The dispatch declaration is discovery/flow truth. Start remains the sole
+	// physical provisioner because its bounded work-queue policy also owns
+	// MaxBytes, discard, max-age, and deduplication settings that the generic
+	// port declaration cannot completely represent.
+	return &Component{
+		cfg:        cfg,
+		natsClient: deps.NATSClient,
+		mgr:        deps.LifecycleManager,
+		metricsReg: deps.MetricsRegistry,
+		logger:     deps.GetLoggerWithComponent(componentName),
+		outputs:    outputs,
+	}, nil
+}
+
+// DeclarePorts is the component.PortDeclarer for gated-dag: no inputs (re-eval
+// rides the lifecycle Watch) and the dispatch + graph-mutation outputs
+// NewComponent derives from the configured stream fields.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	_, outputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfigFrom(nil, outputs), nil
+}
+
+// resolveConfig parses rawConfig, applies defaults, validates, and derives the
+// output ports from the dispatch stream fields. It is the one derivation
+// DeclarePorts and NewComponent share.
+func resolveConfig(rawConfig json.RawMessage) (Config, []component.Port, error) {
 	var cfg Config
 	if len(rawConfig) > 0 {
 		if err := json.Unmarshal(rawConfig, &cfg); err != nil {
-			return nil, fmt.Errorf("unmarshal gated-dag config: %w", err)
+			return Config{}, nil, fmt.Errorf("unmarshal gated-dag config: %w", err)
 		}
 	}
 	cfg = cfg.withDefaults()
 	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid gated-dag config: %w", err)
+		return Config{}, nil, fmt.Errorf("invalid gated-dag config: %w", err)
 	}
 	dispatchRetention := "limits"
 	if cfg.DispatchStreamRetention == "workqueue" {
@@ -98,22 +132,11 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (*Comp
 	for index, definition := range outputDefinitions {
 		output, err := definition.Resolve(component.DirectionOutput)
 		if err != nil {
-			return nil, fmt.Errorf("resolve gated-dag output port %q: %w", definition.Name, err)
+			return Config{}, nil, fmt.Errorf("resolve gated-dag output port %q: %w", definition.Name, err)
 		}
 		outputs[index] = output
 	}
-	// The dispatch declaration is discovery/flow truth. Start remains the sole
-	// physical provisioner because its bounded work-queue policy also owns
-	// MaxBytes, discard, max-age, and deduplication settings that the generic
-	// port declaration cannot completely represent.
-	return &Component{
-		cfg:        cfg,
-		natsClient: deps.NATSClient,
-		mgr:        deps.LifecycleManager,
-		metricsReg: deps.MetricsRegistry,
-		logger:     deps.GetLoggerWithComponent(componentName),
-		outputs:    outputs,
-	}, nil
+	return cfg, outputs, nil
 }
 
 // Initialize self-registers the framework FanOut workflow when the config uses

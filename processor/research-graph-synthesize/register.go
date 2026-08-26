@@ -9,6 +9,7 @@ func Register(registry *component.Registry) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
 		Name:        ComponentName,
 		Factory:     NewProcessor,
+		Ports:       DeclarePorts,
 		Schema:      configSchema,
 		Type:        "processor",
 		Protocol:    "synthesize_answer",

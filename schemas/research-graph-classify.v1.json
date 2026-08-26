@@ -809,6 +809,42 @@
     "type": "processor",
     "protocol": "nl_classify",
     "domain": "research",
-    "version": "0.1.0"
+    "version": "0.1.0",
+    "default_ports": {
+      "inputs": [
+        {
+          "name": "trigger",
+          "direction": "input",
+          "type": "",
+          "required": true,
+          "connection_id": "component.nl_classify.\u003e",
+          "pattern": "stream",
+          "description": "R0's publish target. Subject suffix carries the research-pipeline loop_id.",
+          "kind": "nats"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "graph_mutations",
+          "direction": "output",
+          "type": "semstreams.graph.mutation",
+          "required": true,
+          "connection_id": "graph.mutation.\u003e",
+          "pattern": "request",
+          "description": "",
+          "kind": "nats-request"
+        },
+        {
+          "name": "searchGraph",
+          "direction": "output",
+          "type": "graph.query",
+          "required": true,
+          "connection_id": "graph.query.searchGraph",
+          "pattern": "request",
+          "description": "",
+          "kind": "nats-request"
+        }
+      ]
+    }
   }
 }

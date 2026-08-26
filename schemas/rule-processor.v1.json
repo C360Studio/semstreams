@@ -2107,6 +2107,8 @@
     "type": "processor",
     "protocol": "rule",
     "domain": "semantic",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "ports_require_config": true,
+    "ports_error": "Registry.Declare: port declaration failed: rule-processor-factory.create: validate config failed: rule config: pack_id is required"
   }
 }

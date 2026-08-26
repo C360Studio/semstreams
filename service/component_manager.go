@@ -15,6 +15,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/component/flowgraph"
+	"github.com/c360studio/semstreams/composition"
 	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/internal/componentadmission"
 	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
@@ -72,6 +73,11 @@ type ComponentManager struct {
 
 	// FlowGraph caching for thread-safe analysis
 	graphCache flowGraphCache
+
+	// bootFindings is the composition analysis of the admitted boot set,
+	// computed once in Initialize before the Registry seals (ADR-100 P5). The
+	// validate and flowgraph HTTP operations project it verbatim. Guarded by mu.
+	bootFindings *composition.Result
 
 	// Thread safety for component operations
 	mu          sync.RWMutex
@@ -240,6 +246,9 @@ func (cm *ComponentManager) Initialize() error {
 
 	if cm.componentConfigs == nil {
 		cm.logger.Debug("ComponentManager.Initialize: No component configs, marking as initialized")
+		if err := cm.analyzeBootComposition(); err != nil {
+			return err
+		}
 		cm.registry.SealComposition(componentadmission.Access{})
 		cm.initialized.Store(true)
 		return nil
@@ -327,9 +336,64 @@ func (cm *ComponentManager) Initialize() error {
 		cm.logger.Debug("ComponentManager.Initialize: No component configs to create")
 	}
 
+	// ADR-100 P5: validate the admitted composition at the real boundary with
+	// the same interpreter the offline verb runs, over what was actually
+	// admitted. Findings are logged and retained for the HTTP projections.
+	if err := cm.analyzeBootComposition(); err != nil {
+		return err
+	}
+
 	cm.registry.SealComposition(componentadmission.Access{})
 	cm.initialized.Store(true)
 	return nil
+}
+
+// analyzeBootComposition runs composition.Analyze over the admitted Registry
+// declarations, logs every finding, and retains the result for the HTTP
+// projections.
+//
+// The error-severity REFUSE is deliberately not flipped here. The design's
+// precondition (P3 before P5: measure every shipped configuration first) came
+// back red — 12 of 22 shipped configurations carry error findings from two
+// validator-rule classes the composition cannot observe (required stream
+// inputs fed from outside the composition by a UI or a rule action; JetStream
+// subscribers on subjects an explicit `streams` declaration already covers).
+// Flipping the refuse would make every agentic configuration unbootable.
+// Recorded as a `[~]` in openspec/changes/composition-validation-substrate/
+// tasks.md (3.5/3.6) for the owner's ruling; the refuse is one error return
+// away once the severity classes are ruled.
+func (cm *ComponentManager) analyzeBootComposition() error {
+	snapshots := cm.registry.Snapshots(componentadmission.Access{})
+	declarations := make([]component.Declaration, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		declarations = append(declarations, snapshot.Declaration())
+	}
+	result := composition.Analyze(declarations)
+
+	cm.mu.Lock()
+	cm.bootFindings = result
+	cm.mu.Unlock()
+
+	for _, finding := range result.Warnings {
+		cm.logger.Warn("composition finding",
+			"type", finding.Type, "component", finding.Component, "port", finding.Port, "message", finding.Message)
+	}
+	for _, finding := range result.Errors {
+		cm.logger.Error("composition finding",
+			"type", finding.Type, "component", finding.Component, "port", finding.Port, "message", finding.Message)
+	}
+	cm.logger.Info("composition validated at boot",
+		"status", result.Status, "errors", len(result.Errors), "warnings", len(result.Warnings),
+		"components", len(result.Graph.Nodes), "edges", len(result.Graph.Edges))
+	return nil
+}
+
+// BootFindings returns the composition result retained at Initialize, or nil
+// before Initialize has run.
+func (cm *ComponentManager) bootCompositionResult() *composition.Result {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	return cm.bootFindings
 }
 
 // Start starts the constructor-captured component set once. Cleanup authority

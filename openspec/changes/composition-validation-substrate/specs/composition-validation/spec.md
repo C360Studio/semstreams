@@ -181,6 +181,12 @@ the result has an error, and SHALL retain the result as the boot composition's f
 SHALL serve that retained result verbatim and SHALL NOT compute a status of its own; `GET <components>/flowgraph`
 SHALL serve the retained result's `graph`, as JSON by default and as Mermaid when `format=mermaid` is requested.
 
+> `[~]` DEFERRED (tasks 3.6, 2026-08-26): the refuse is not flipped in PR #1101. The P3-before-P5 measurement (tasks 3.5)
+> found error findings in 12 of 22 shipped configurations from two validator classes (required stream inputs fed from
+> outside the composition; JetStream subscribers on subjects an explicit `streams` declaration covers). Boot runs the
+> analysis, logs and retains the result, and serves it; the "SHALL fail `Initialize`" clause waits for the owner's
+> ruling on those classes.
+
 #### Scenario: an error finding refuses boot
 
 - **GIVEN** a boot configuration whose admitted composition yields a `stream_requirement` error
@@ -234,6 +240,9 @@ of the three SHALL require a NATS client, write anything, or carry a new payload
 Every checked-in composition the framework ships or tests with (`configs/**/*.json`, the e2e compose configurations
 under `docker/` and `test/e2e`) SHALL validate with no error finding against the registry its binary composes, and
 that assertion SHALL be a unit test so a configuration change that introduces an error is caught before boot.
+
+> `[~]` DEFERRED (tasks 3.5, 2026-08-26): measured red — 12 of 22 shipped configurations carry error findings from the
+> two validator classes named in tasks 3.5; the test exists and is skipped naming the task until the owner rules.
 
 #### Scenario: the shipped configurations validate clean
 

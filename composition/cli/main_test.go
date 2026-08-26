@@ -66,7 +66,7 @@ const configWithEdges = `{
     "udp": {"type": "input", "name": "udp", "enabled": true, "config": {}},
     "wrap": {"type": "processor", "name": "json_generic", "enabled": true, "config": {
       "ports": {
-        "inputs": [{"name": "in", "required": true, "config": {"kind": "jetstream", "subjects": ["input.udp.mavlink"]}}],
+        "inputs": [{"name": "in", "required": true, "config": {"kind": "jetstream", "stream_name": "UDP", "subjects": ["input.udp.mavlink"]}}],
         "outputs": [{"name": "out", "required": true, "config": {"kind": "nats", "subject": "generic.messages"}}]
       }
     }},

@@ -150,6 +150,24 @@ func (p *PortConfig) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// PortConfigFrom returns the configuration-shaped declaration of already
+// resolved ports: the inverse of resolving a PortConfig lane by lane. Factories
+// whose constructor resolves ports use it to expose the same ports as their
+// PortDeclarer without a second derivation.
+func PortConfigFrom(inputs, outputs []Port) PortConfig {
+	config := PortConfig{
+		Inputs:  make([]PortDefinition, len(inputs)),
+		Outputs: make([]PortDefinition, len(outputs)),
+	}
+	for index, port := range inputs {
+		config.Inputs[index] = definitionFromPort(port)
+	}
+	for index, port := range outputs {
+		config.Outputs[index] = definitionFromPort(port)
+	}
+	return config
+}
+
 // MergePortConfig applies complete named replacements to default declarations.
 // Inputs and outputs are independent, ordering is stable, and returned data is cloned.
 func MergePortConfig(defaults, overrides PortConfig) (PortConfig, error) {
@@ -162,6 +180,15 @@ func MergePortConfig(defaults, overrides PortConfig) (PortConfig, error) {
 		return PortConfig{}, err
 	}
 	return PortConfig{Inputs: inputs, Outputs: outputs}, nil
+}
+
+func definitionFromPort(port Port) PortDefinition {
+	return PortDefinition{
+		Name:        port.Name,
+		Required:    port.Required,
+		Description: port.Description,
+		Config:      port.Config,
+	}
 }
 
 func mergePortDirection(defaults, overrides []PortDefinition, direction Direction) ([]PortDefinition, error) {
@@ -204,13 +231,4 @@ func mergePortDirection(defaults, overrides []PortDefinition, direction Directio
 		result[index] = definitionFromPort(port)
 	}
 	return result, nil
-}
-
-func definitionFromPort(port Port) PortDefinition {
-	return PortDefinition{
-		Name:        port.Name,
-		Required:    port.Required,
-		Description: port.Description,
-		Config:      port.Config,
-	}
 }

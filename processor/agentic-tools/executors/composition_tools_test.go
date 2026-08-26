@@ -17,10 +17,10 @@ import (
 	"github.com/c360studio/semstreams/types"
 )
 
-// skipAllBut derives the SkipBuiltins list that leaves exactly one group
+// skipAllExcept derives the SkipBuiltins list that leaves exactly one group
 // registered, so the production wire (RegisterBuiltins) is driven while the
 // dependency-hungry groups stay out of the way.
-func skipAllBut(keep string) []string {
+func skipAllExcept(keep string) []string {
 	var skip []string
 	for _, key := range BuiltinGroupKeys {
 		if key != keep {
@@ -64,7 +64,7 @@ func compositionToolRegistry(t *testing.T, compReg *component.Registry) *agentic
 	if err := RegisterBuiltins(context.Background(), tools, ToolDependencies{
 		ComponentRegistry: compReg,
 		Logger:            slog.Default(),
-		SkipBuiltins:      skipAllBut("component_catalog"),
+		SkipBuiltins:      skipAllExcept("component_catalog"),
 	}); err != nil {
 		t.Fatalf("RegisterBuiltins: %v", err)
 	}

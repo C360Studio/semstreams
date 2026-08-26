@@ -61,6 +61,7 @@ func TestListFactories_PreservesSchemaAndName(t *testing.T) {
 	reg := &Registration{
 		Name:        "test-component",
 		Factory:     mockFactory,
+		Ports:       mockPorts(mockFactory),
 		Type:        "input",
 		Protocol:    "tcp",
 		Domain:      "network",
@@ -130,6 +131,7 @@ func TestListFactories_ReturnsDefensiveMetadataClones(t *testing.T) {
 		Factory: func(_ json.RawMessage, _ Dependencies) (Discoverable, error) {
 			return &SimpleMockComponent{name: "instance"}, nil
 		},
+		Ports:        noPorts,
 		Dependencies: []string{DepModelRegistry},
 		Schema: ConfigSchema{
 			Properties: map[string]PropertySchema{"port": {Type: "int"}},
@@ -168,6 +170,7 @@ func TestRegisterWithConfig_DependenciesMetadata(t *testing.T) {
 	err := registry.RegisterWithConfig(RegistrationConfig{
 		Name:         "reg-with-deps",
 		Factory:      mockFactory,
+		Ports:        noPorts,
 		Type:         "processor",
 		Protocol:     "test",
 		Domain:       "test",
@@ -204,6 +207,7 @@ func TestRegisterWithConfig_NoDependencies(t *testing.T) {
 	err := registry.RegisterWithConfig(RegistrationConfig{
 		Name:    "reg-no-deps",
 		Factory: mockFactory,
+		Ports:   noPorts,
 		Type:    "processor",
 	})
 	if err != nil {

@@ -854,6 +854,72 @@
     "type": "processor",
     "protocol": "tools",
     "domain": "semantic",
-    "version": "0.1.0"
+    "version": "0.1.0",
+    "default_ports": {
+      "inputs": [
+        {
+          "name": "tool.execute",
+          "direction": "input",
+          "type": "",
+          "required": true,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Tool execution requests (JetStream)",
+          "kind": "jetstream"
+        },
+        {
+          "name": "tool.list",
+          "direction": "input",
+          "type": "",
+          "required": false,
+          "connection_id": "discovery.tool.list",
+          "pattern": "request",
+          "description": "Tool discovery request/reply",
+          "kind": "nats-request"
+        },
+        {
+          "name": "entity_states",
+          "direction": "input",
+          "type": "",
+          "required": false,
+          "connection_id": "kv:ENTITY_STATES",
+          "pattern": "read",
+          "description": "",
+          "kind": "kv-read"
+        },
+        {
+          "name": "agent_loops",
+          "direction": "input",
+          "type": "",
+          "required": false,
+          "connection_id": "kv:AGENT_LOOPS",
+          "pattern": "read",
+          "description": "",
+          "kind": "kv-read"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "graph_mutations",
+          "direction": "output",
+          "type": "semstreams.graph.mutation",
+          "required": true,
+          "connection_id": "graph.mutation.\u003e",
+          "pattern": "request",
+          "description": "",
+          "kind": "nats-request"
+        },
+        {
+          "name": "tool.result",
+          "direction": "output",
+          "type": "",
+          "required": true,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Tool execution results (JetStream)",
+          "kind": "jetstream"
+        }
+      ]
+    }
   }
 }

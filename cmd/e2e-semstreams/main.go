@@ -21,6 +21,7 @@ import (
 	"github.com/c360studio/semstreams/cmd/e2e-semstreams/mission"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/componentregistry"
+	compositioncli "github.com/c360studio/semstreams/composition/cli"
 	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/examples/processors/document"
 	iotsensor "github.com/c360studio/semstreams/examples/processors/iot_sensor"
@@ -67,10 +68,54 @@ func main() {
 		}
 	}()
 
+	// Composition verbs serve the catalog this binary can compose and exit;
+	// mirrors cmd/semstreams.
+	if code, handled := dispatchCompositionVerb(os.Args[1:]); handled {
+		os.Exit(code)
+	}
+
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// dispatchCompositionVerb serves a composition verb against the full catalog
+// this binary can compose (core, graph-research, OTEL, the bundled examples).
+func dispatchCompositionVerb(args []string) (int, bool) {
+	if len(args) == 0 {
+		return 0, false
+	}
+	switch args[0] {
+	case compositioncli.VerbCatalog, compositioncli.VerbValidate, compositioncli.VerbGraph:
+	default:
+		return 0, false
+	}
+	builtins.Register()
+	registry, err := fullComponentRegistry()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1, true
+	}
+	return compositioncli.Dispatch(args, registry, os.Stdout, os.Stderr)
+}
+
+// fullComponentRegistry registers everything this binary can compose.
+func fullComponentRegistry() (*component.Registry, error) {
+	registry := component.NewRegistry()
+	if err := componentregistry.Register(registry); err != nil {
+		return nil, fmt.Errorf("register components: %w", err)
+	}
+	if err := graphresearch.RegisterComponents(registry); err != nil {
+		return nil, fmt.Errorf("register graph research components: %w", err)
+	}
+	if err := optionalotel.Register(registry); err != nil {
+		return nil, fmt.Errorf("register optional OTEL adapter: %w", err)
+	}
+	if err := registerExampleComponents(registry); err != nil {
+		return nil, fmt.Errorf("register example components: %w", err)
+	}
+	return registry, nil
 }
 
 func run() (runErr error) {
@@ -105,7 +150,15 @@ func run() (runErr error) {
 	}
 
 	if cliCfg.Validate {
-		fmt.Println("✓ Configuration is valid")
+		registry, err := fullComponentRegistry()
+		if err != nil {
+			return err
+		}
+		if code := compositioncli.Main(
+			[]string{compositioncli.VerbValidate, cliCfg.ConfigPath}, registry, os.Stdout, os.Stderr,
+		); code != compositioncli.ExitOK {
+			return fmt.Errorf("composition validation exited %d", code)
+		}
 		return nil
 	}
 
@@ -546,7 +599,12 @@ Options:
   -c, --config PATH   Configuration file path (default: config.json)
   -v, --version       Show version information
   -h, --help          Show this help message
-  --validate          Validate configuration and exit
+  --validate          Validate the composition and exit (alias of: validate <config-path>)
+
+Verbs:
+  catalog                          print every registered factory with default ports
+  validate <config-path>           print composition findings; exit 1 on errors
+  graph <config-path> [--mermaid]  print the composition graph projection
 
 Environment:
   SEMSTREAMS_CONFIG      Configuration file path

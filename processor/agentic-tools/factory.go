@@ -20,6 +20,7 @@ func Register(registry RegistryInterface) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
 		Name:        "agentic-tools",
 		Factory:     NewComponent,
+		Ports:       DeclarePorts,
 		Schema:      agenticToolsSchema,
 		Type:        "processor",
 		Protocol:    "tools",

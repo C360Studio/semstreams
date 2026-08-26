@@ -825,6 +825,31 @@
     "type": "input",
     "protocol": "websocket",
     "domain": "network",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "default_ports": {
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "ws_data",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "federated.data",
+          "pattern": "stream",
+          "description": "Data messages received via WebSocket",
+          "kind": "nats"
+        },
+        {
+          "name": "ws_control",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "federated.control",
+          "pattern": "stream",
+          "description": "Control messages (requests/replies)",
+          "kind": "nats"
+        }
+      ]
+    }
   }
 }

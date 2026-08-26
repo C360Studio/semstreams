@@ -860,6 +860,31 @@
     "type": "output",
     "protocol": "",
     "domain": "",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "default_ports": {
+      "inputs": [
+        {
+          "name": "agent_events",
+          "direction": "input",
+          "type": "",
+          "required": true,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Agent lifecycle events for span collection",
+          "kind": "jetstream"
+        },
+        {
+          "name": "tool_events",
+          "direction": "input",
+          "type": "",
+          "required": false,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Tool results for tool span creation",
+          "kind": "jetstream"
+        }
+      ],
+      "outputs": []
+    }
   }
 }

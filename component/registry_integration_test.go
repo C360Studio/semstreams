@@ -133,6 +133,9 @@ func admitMockComponent(t *testing.T, registry *Registry, instanceName string, m
 	if err := registry.RegisterFactory(factoryName, &Registration{
 		Name: factoryName, Type: mock.componentType,
 		Factory: func(json.RawMessage, Dependencies) (Discoverable, error) { return mock, nil },
+		Ports: func(json.RawMessage, string) (PortConfig, error) {
+			return PortConfigFrom(mock.InputPorts(), mock.OutputPorts()), nil
+		},
 	}); err != nil {
 		t.Fatalf("register %s: %v", factoryName, err)
 	}
@@ -174,6 +177,7 @@ func TestRegisterFactory(t *testing.T) {
 
 	registration := &Registration{
 		Factory:     createMockComponent,
+		Ports:       mockPorts(createMockComponent),
 		Type:        "input",
 		Protocol:    "test",
 		Description: "Test component",
@@ -248,6 +252,16 @@ func TestRegisterFactoryValidation(t *testing.T) {
 			expectError: true,
 			errorMsg:    "type",
 		},
+		{
+			name:        "nil port declarer",
+			factoryName: "test",
+			registration: &Registration{
+				Factory: createMockComponent,
+				Type:    "input",
+			},
+			expectError: true,
+			errorMsg:    "declares no ports",
+		},
 	}
 
 	for _, tt := range tests {
@@ -275,6 +289,7 @@ func TestCreateComponent(t *testing.T) {
 	// Register a factory
 	registration := &Registration{
 		Factory:     createMockComponent,
+		Ports:       mockPorts(createMockComponent),
 		Type:        "input",
 		Protocol:    "test",
 		Description: "Test component",
@@ -338,6 +353,7 @@ func TestCreateComponentValidation(t *testing.T) {
 	// Register a factory
 	registration := &Registration{
 		Factory: createMockComponent,
+		Ports:   mockPorts(createMockComponent),
 		Type:    "input",
 	}
 	_ = registry.RegisterFactory("test", registration)
@@ -418,6 +434,7 @@ func TestCreateComponentFactoryFailure(t *testing.T) {
 	// Register a failing factory
 	registration := &Registration{
 		Factory: failingFactory,
+		Ports:   mockPorts(failingFactory),
 		Type:    "input",
 	}
 

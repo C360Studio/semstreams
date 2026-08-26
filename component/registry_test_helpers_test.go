@@ -41,6 +41,28 @@ func declarationTestConfig(factory, raw string) types.ComponentConfig {
 	}
 }
 
+// declarePorts is the PortDeclarer for a declarationTestComponent: exactly
+// the ports the component reports, so admission parity holds by construction.
+func (c *declarationTestComponent) declarePorts(json.RawMessage, string) (PortConfig, error) {
+	return PortConfigFrom(c.inputs, c.outputs), nil
+}
+
+// mockPorts declares a dependency-free test mock's ports by constructing it:
+// test mocks take no dependencies, so the declaration is exactly what the
+// factory reports.
+func mockPorts(factory Factory) PortDeclarer {
+	return func(raw json.RawMessage, _ string) (PortConfig, error) {
+		built, err := factory(raw, Dependencies{})
+		if err != nil {
+			return PortConfig{}, err
+		}
+		return PortConfigFrom(built.InputPorts(), built.OutputPorts()), nil
+	}
+}
+
+// noPorts is the PortDeclarer for mocks that report no ports.
+func noPorts(json.RawMessage, string) (PortConfig, error) { return PortConfig{}, nil }
+
 func declarationTestDeps() Dependencies {
 	return Dependencies{NATSClient: new(natsclient.Client)}
 }

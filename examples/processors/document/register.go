@@ -16,6 +16,7 @@ func Register(registry *component.Registry) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
 		Name:        "document_processor",
 		Factory:     NewComponent,
+		Ports:       DeclarePorts,
 		Schema:      documentSchema,
 		Type:        "processor",
 		Protocol:    "document",

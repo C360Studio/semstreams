@@ -377,24 +377,34 @@ func (rp *Processor) SetLifecycleManager(m LifecycleManager) {
 // configuration is validated in the constructor, so config.Ports is
 // guaranteed non-nil.
 func (rp *Processor) setupPorts() error {
-	rp.inputPorts = make([]component.Port, len(rp.config.Ports.Inputs))
-	for i, portDef := range rp.config.Ports.Inputs {
+	inputs, outputs, err := resolvePorts(*rp.config.Ports)
+	if err != nil {
+		return err
+	}
+	rp.inputPorts, rp.outputPorts = inputs, outputs
+	return nil
+}
+
+// resolvePorts resolves the configured port declarations. It is the one port
+// derivation DeclarePorts and setupPorts share.
+func resolvePorts(ports component.PortConfig) ([]component.Port, []component.Port, error) {
+	inputs := make([]component.Port, len(ports.Inputs))
+	for i, portDef := range ports.Inputs {
 		port, err := portDef.Resolve(component.DirectionInput)
 		if err != nil {
-			return fmt.Errorf("resolve input port %q: %w", portDef.Name, err)
+			return nil, nil, fmt.Errorf("resolve input port %q: %w", portDef.Name, err)
 		}
-		rp.inputPorts[i] = port
+		inputs[i] = port
 	}
-
-	rp.outputPorts = make([]component.Port, len(rp.config.Ports.Outputs))
-	for i, portDef := range rp.config.Ports.Outputs {
+	outputs := make([]component.Port, len(ports.Outputs))
+	for i, portDef := range ports.Outputs {
 		port, err := portDef.Resolve(component.DirectionOutput)
 		if err != nil {
-			return fmt.Errorf("resolve output port %q: %w", portDef.Name, err)
+			return nil, nil, fmt.Errorf("resolve output port %q: %w", portDef.Name, err)
 		}
-		rp.outputPorts[i] = port
+		outputs[i] = port
 	}
-	return nil
+	return inputs, outputs, nil
 }
 
 // Meta returns component metadata

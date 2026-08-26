@@ -17,7 +17,7 @@ import (
 // (--validate --config <path>) and observe the exit code and stdout.
 func TestMain(m *testing.M) {
 	if os.Getenv("SEMSTREAMS_TEST_RUN_MAIN") == "1" {
-		os.Args = append([]string{os.Args[0]}, strings.Split(os.Getenv("SEMSTREAMS_TEST_RUN_ARGS"), "\x00")...)
+		os.Args = append([]string{os.Args[0]}, strings.Split(os.Getenv("SEMSTREAMS_TEST_RUN_ARGS"), "\n")...)
 		main()
 		return
 	}
@@ -43,7 +43,7 @@ func TestValidateFlagReportsCompositionFindings(t *testing.T) {
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
 	cmd.Env = append(os.Environ(),
 		"SEMSTREAMS_TEST_RUN_MAIN=1",
-		"SEMSTREAMS_TEST_RUN_ARGS=--validate\x00--config\x00"+path,
+		"SEMSTREAMS_TEST_RUN_ARGS=--validate\n--config\n"+path,
 	)
 	output, err := cmd.Output()
 	exitErr, isExit := err.(*exec.ExitError)

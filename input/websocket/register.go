@@ -11,16 +11,39 @@ import (
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
-// CreateInput is the factory function for creating WebSocket input components
-func CreateInput(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
-	// Start with defaults
-	cfg := DefaultConfig()
+// DeclarePorts is the component.PortDeclarer for websocket_input: no inputs
+// (the socket is the external source) and the configured ws_data/ws_control
+// outputs, resolved exactly as NewInput will resolve them.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	cfg, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	outputs, _, _, _, err := resolveOutputPorts(cfg)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfigFrom(nil, outputs), nil
+}
 
-	// Parse user configuration
+// resolveConfig decodes rawConfig over the defaults. It is the one derivation
+// DeclarePorts and CreateInput share; resolveOutputPorts is the one port
+// derivation.
+func resolveConfig(rawConfig json.RawMessage) (Config, error) {
+	cfg := DefaultConfig()
 	if len(rawConfig) > 0 {
 		if err := decodeInputConfig(rawConfig, &cfg); err != nil {
-			return nil, errs.Wrap(err, "websocket-input-factory", "create", "secure config parsing")
+			return Config{}, errs.Wrap(err, "websocket-input-factory", "create", "secure config parsing")
 		}
+	}
+	return cfg, nil
+}
+
+// CreateInput is the factory function for creating WebSocket input components
+func CreateInput(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+	cfg, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
 	}
 
 	// Validate required dependencies
@@ -129,6 +152,7 @@ func Register(registry *component.Registry) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
 		Name:        "websocket_input",
 		Factory:     CreateInput,
+		Ports:       DeclarePorts,
 		Schema:      websocketInputSchema,
 		Type:        "input",
 		Protocol:    "websocket",

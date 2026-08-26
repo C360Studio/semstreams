@@ -21,6 +21,7 @@ func TestRegistryCapturesPortsOnceAndReturnsDefensiveDeclarationSnapshots(t *tes
 	requireNoError(t, registry.RegisterWithConfig(RegistrationConfig{
 		Name: "declaration-test", Type: "processor",
 		Factory: func(json.RawMessage, Dependencies) (Discoverable, error) { return created, nil },
+		Ports:   created.declarePorts,
 	}))
 
 	got, err := registry.CreateComponent(
@@ -124,6 +125,7 @@ func TestRegistryManagedPreparationFailurePublishesNothing(t *testing.T) {
 		Factory: func(json.RawMessage, Dependencies) (Discoverable, error) {
 			return &declarationTestComponent{}, nil
 		},
+		Ports: noPorts,
 	}))
 	want := errors.New("initialize failed")
 	_, err := registry.CreateComponent(
@@ -147,6 +149,7 @@ func TestRegistrySnapshotReportsCompleteBootSetAndSealRejectsLaterAdmission(t *t
 			factoryCalls++
 			return &declarationTestComponent{}, nil
 		},
+		Ports: noPorts,
 	}))
 	_, err := registry.CreateComponent(
 		componentadmission.Access{}, "worker-a", declarationTestConfig("declaration-test", `{}`), declarationTestDeps(), nil,

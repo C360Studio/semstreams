@@ -874,6 +874,102 @@
     "type": "processor",
     "protocol": "jetstream",
     "domain": "agentic",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "default_ports": {
+      "inputs": [
+        {
+          "name": "user.message",
+          "direction": "input",
+          "type": "",
+          "required": true,
+          "connection_id": "USER",
+          "pattern": "stream",
+          "description": "User messages from all channels",
+          "kind": "jetstream"
+        },
+        {
+          "name": "agent.complete",
+          "direction": "input",
+          "type": "",
+          "required": true,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Agent task completions",
+          "kind": "jetstream"
+        },
+        {
+          "name": "agent.created",
+          "direction": "input",
+          "type": "",
+          "required": false,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Loop creation events",
+          "kind": "jetstream"
+        },
+        {
+          "name": "agent.failed",
+          "direction": "input",
+          "type": "",
+          "required": false,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Loop failure events",
+          "kind": "jetstream"
+        },
+        {
+          "name": "agent.approval_pending",
+          "direction": "input",
+          "type": "",
+          "required": false,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Approval-pending events used to populate the dispatch HTTP approval handler's CallID lookup",
+          "kind": "jetstream"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "agent.task",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Agent task requests",
+          "kind": "jetstream"
+        },
+        {
+          "name": "agent.signal",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Agent control signals",
+          "kind": "jetstream"
+        },
+        {
+          "name": "user.response",
+          "direction": "output",
+          "type": "agentic.user_response",
+          "required": false,
+          "connection_id": "USER",
+          "pattern": "stream",
+          "description": "Typed responses back to users",
+          "kind": "jetstream"
+        },
+        {
+          "name": "agent.approval_response",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Approval responses submitted via the dispatch HTTP /loops/{id}/approval endpoint, consumed by agentic-loop's approval-response handler",
+          "kind": "jetstream"
+        }
+      ]
+    }
   }
 }

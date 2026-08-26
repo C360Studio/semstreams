@@ -7,13 +7,19 @@ import (
 	"io"
 	"log/slog"
 	"sort"
-	"strings"
 	"testing"
 
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/composition"
 	flowengine "github.com/c360studio/semstreams/engine"
 	"github.com/c360studio/semstreams/flowstore"
+	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadbuiltins"
+	"github.com/c360studio/semstreams/payloadregistry"
+	"github.com/c360studio/semstreams/pkg/lifecycle"
+	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
+	"github.com/c360studio/semstreams/types"
 )
 
 // finding identity for the parity comparison: (type, component, port).
@@ -21,23 +27,26 @@ type findingKey struct{ typ, component, port string }
 
 func (k findingKey) String() string { return fmt.Sprintf("%s %s/%s", k.typ, k.component, k.port) }
 
-// engineDependencyGuards are the construction refusals the retiring engine
-// hits because it constructs every node with only a NATS client. The offline
-// validator declares ports without constructing, so it never sees them; the
-// boot parity check (P1) is what covers that seam. Recorded in tasks 3.2.
-var engineDependencyGuards = []string{
-	"ModelRegistry is required",
-	"model registry is required",
-	"LifecycleManager is nil",
-}
-
-func isDependencyGuard(message string) bool {
-	for _, guard := range engineDependencyGuards {
-		if strings.Contains(message, guard) {
-			return true
-		}
+// engineDependencies gives the retiring engine every dependency the shipped
+// factories guard on, so it constructs every node and runs its connectivity
+// pass (engine/validator.go:120-133 returns build errors only and skips
+// connectivity when any node fails to construct — an oracle that bails is no
+// oracle). Recorded in tasks 3.2.
+func engineDependencies(t *testing.T, testClient *natsclient.TestClient, logger *slog.Logger) component.Dependencies {
+	t.Helper()
+	payloads := payloadregistry.New()
+	if err := payloadbuiltins.Register(payloads); err != nil {
+		t.Fatal(err)
 	}
-	return false
+	return component.Dependencies{
+		NATSClient:       testClient.Client,
+		Logger:           logger,
+		Platform:         types.PlatformMeta{Org: "parity", Platform: "engine"},
+		ModelRegistry:    &model.Registry{Endpoints: map[string]*model.EndpointConfig{"parity": {URL: "http://parity.invalid", Model: "parity"}}},
+		ToolRegistry:     agentictools.NewExecutorRegistry(),
+		PayloadRegistry:  payloads,
+		LifecycleManager: lifecycle.NewManager(testClient.Client, logger),
+	}
 }
 
 // TestValidateMatchesEngineFindingsForShippedConfigs is the dropped-step
@@ -52,7 +61,7 @@ func TestValidateMatchesEngineFindingsForShippedConfigs(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	registry := shippedRegistry(t)
-	engine := flowengine.NewEngine(registry, testClient.Client, logger, nil)
+	validator := flowengine.NewValidatorWithDependencies(registry, engineDependencies(t, testClient, logger), logger)
 	rename := map[string]string{
 		"empty_flow":        composition.TypeEmptyComposition,
 		"graph_build_error": composition.TypePortDeclarationError,
@@ -75,9 +84,17 @@ func TestValidateMatchesEngineFindingsForShippedConfigs(t *testing.T) {
 			if err != nil {
 				t.Fatalf("FromComponentConfigs: %v", err)
 			}
-			engineResult, err := engine.ValidateFlowDefinition(flow)
+			engineResult, err := validator.ValidateFlow(flow)
 			if err != nil {
-				t.Fatalf("engine.ValidateFlowDefinition: %v", err)
+				t.Fatalf("engine ValidateFlow: %v", err)
+			}
+			// A build error makes the engine skip connectivity entirely
+			// (validator.go:120-133); parity is then unverifiable, which is a
+			// failure to surface, never a pass.
+			for _, issue := range engineResult.Errors {
+				if issue.Type == "graph_build_error" {
+					t.Errorf("engine could not build %s (%s): connectivity parity unverifiable", issue.ComponentName, issue.Message)
+				}
 			}
 			result, err := composition.Validate(registry, cfg)
 			if err != nil {
@@ -99,10 +116,6 @@ func TestValidateMatchesEngineFindingsForShippedConfigs(t *testing.T) {
 
 			for key, message := range engineSet {
 				if _, ok := compositionSet[key]; ok {
-					continue
-				}
-				if key.typ == composition.TypePortDeclarationError && isDependencyGuard(message) {
-					t.Logf("disposition dependency-guard: engine %s (%s) has no composition counterpart by design", key, message)
 					continue
 				}
 				t.Errorf("engine emitted %s (%s); composition did not", key, message)

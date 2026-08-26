@@ -819,6 +819,8 @@
     "type": "gateway",
     "protocol": "http",
     "domain": "lifecycle",
-    "version": "0.1.0"
+    "version": "0.1.0",
+    "ports_require_config": true,
+    "ports_error": "Registry.Declare: port declaration failed: Component.CreateLifecycleGateway: config unmarshal failed: ConfigValidator.SafeUnmarshal: struct validation failed: Config.Validate: path_prefix must be non-empty after stripping leading/trailing slashes failed: invalid configuration"
   }
 }

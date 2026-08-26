@@ -17,12 +17,18 @@ type recordingTB struct {
 	logs     []string
 }
 
-func (r *recordingTB) Helper()                           {}
-func (r *recordingTB) Errorf(format string, args ...any) { r.failures = append(r.failures, sprintf(format, args...)) }
-func (r *recordingTB) Fatalf(format string, args ...any) { r.failures = append(r.failures, sprintf(format, args...)) }
-func (r *recordingTB) Logf(format string, args ...any)   { r.logs = append(r.logs, sprintf(format, args...)) }
-func (r *recordingTB) Fail()                             { r.failures = append(r.failures, "Fail") }
-func (r *recordingTB) FailNow()                          { r.failures = append(r.failures, "FailNow") }
+func (r *recordingTB) Helper() {}
+func (r *recordingTB) Errorf(format string, args ...any) {
+	r.failures = append(r.failures, sprintf(format, args...))
+}
+func (r *recordingTB) Fatalf(format string, args ...any) {
+	r.failures = append(r.failures, sprintf(format, args...))
+}
+func (r *recordingTB) Logf(format string, args ...any) {
+	r.logs = append(r.logs, sprintf(format, args...))
+}
+func (r *recordingTB) Fail()    { r.failures = append(r.failures, "Fail") }
+func (r *recordingTB) FailNow() { r.failures = append(r.failures, "FailNow") }
 
 func sprintf(format string, args ...any) string {
 	return strings.TrimSpace(strings.ReplaceAll(fmtSprintf(format, args...), "\n", " "))

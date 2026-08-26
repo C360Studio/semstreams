@@ -276,36 +276,12 @@ func CreateLifecycleGateway(rawConfig json.RawMessage, deps component.Dependenci
 			"deps.LifecycleManager is nil — the gateway requires a registered pkg/lifecycle.Manager (build it in main.go, call Manager.Register for each workflow, then pass via Dependencies.LifecycleManager)")
 	}
 
-	var cfg Config
-	if len(rawConfig) > 0 {
-		if err := component.SafeUnmarshal(rawConfig, &cfg); err != nil {
-			return nil, errs.WrapInvalid(err, "Component", "CreateLifecycleGateway",
-				"config unmarshal")
-		}
-	}
-	cfg.ApplyDefaults()
-	if err := cfg.Validate(); err != nil {
-		return nil, errs.Wrap(err, "Component", "CreateLifecycleGateway",
-			"config validation")
+	cfg, inputs, outputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
 	}
 
 	logger := deps.GetLoggerWithComponent(ComponentName)
-	inputs := make([]component.Port, 0, len(cfg.Ports.Inputs))
-	for _, definition := range cfg.Ports.Inputs {
-		port, err := definition.Resolve(component.DirectionInput)
-		if err != nil {
-			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "CreateLifecycleGateway", err.Error())
-		}
-		inputs = append(inputs, port)
-	}
-	outputs := make([]component.Port, 0, len(cfg.Ports.Outputs))
-	for _, definition := range cfg.Ports.Outputs {
-		port, err := definition.Resolve(component.DirectionOutput)
-		if err != nil {
-			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "CreateLifecycleGateway", err.Error())
-		}
-		outputs = append(outputs, port)
-	}
 
 	return &Component{
 		name:    ComponentName,
@@ -318,6 +294,52 @@ func CreateLifecycleGateway(rawConfig json.RawMessage, deps component.Dependenci
 			CheckOrigin: makeOriginCheck(cfg.AllowedOrigins),
 		},
 	}, nil
+}
+
+// DeclarePorts is the component.PortDeclarer for lifecycle-gateway: the
+// configured ports plus the canonical graph-mutation output ApplyDefaults
+// appends, exactly as CreateLifecycleGateway will report them.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	_, inputs, outputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfigFrom(inputs, outputs), nil
+}
+
+// resolveConfig parses rawConfig, applies defaults, validates, and resolves
+// the effective ports. It is the one derivation DeclarePorts and
+// CreateLifecycleGateway share.
+func resolveConfig(rawConfig json.RawMessage) (Config, []component.Port, []component.Port, error) {
+	var cfg Config
+	if len(rawConfig) > 0 {
+		if err := component.SafeUnmarshal(rawConfig, &cfg); err != nil {
+			return Config{}, nil, nil, errs.WrapInvalid(err, "Component", "CreateLifecycleGateway",
+				"config unmarshal")
+		}
+	}
+	cfg.ApplyDefaults()
+	if err := cfg.Validate(); err != nil {
+		return Config{}, nil, nil, errs.Wrap(err, "Component", "CreateLifecycleGateway",
+			"config validation")
+	}
+	inputs := make([]component.Port, 0, len(cfg.Ports.Inputs))
+	for _, definition := range cfg.Ports.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return Config{}, nil, nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "CreateLifecycleGateway", err.Error())
+		}
+		inputs = append(inputs, port)
+	}
+	outputs := make([]component.Port, 0, len(cfg.Ports.Outputs))
+	for _, definition := range cfg.Ports.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return Config{}, nil, nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "CreateLifecycleGateway", err.Error())
+		}
+		outputs = append(outputs, port)
+	}
+	return cfg, inputs, outputs, nil
 }
 
 // makeOriginCheck builds the WebSocket Upgrader's CheckOrigin
@@ -344,6 +366,7 @@ func Register(registry *component.Registry) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
 		Name:        ComponentName,
 		Factory:     CreateLifecycleGateway,
+		Ports:       DeclarePorts,
 		Schema:      schema,
 		Type:        "gateway",
 		Protocol:    "http",

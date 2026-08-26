@@ -821,6 +821,62 @@
     "type": "processor",
     "protocol": "nats",
     "domain": "graph",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "default_ports": {
+      "inputs": [
+        {
+          "name": "entity_watch",
+          "direction": "input",
+          "type": "",
+          "required": false,
+          "connection_id": "kv:ENTITY_STATES",
+          "pattern": "watch",
+          "description": "",
+          "kind": "kv-watch"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "outgoing_index",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "kv:OUTGOING_INDEX",
+          "pattern": "watch",
+          "description": "",
+          "kind": "kv-write"
+        },
+        {
+          "name": "incoming_index",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "kv:INCOMING_INDEX",
+          "pattern": "watch",
+          "description": "",
+          "kind": "kv-write"
+        },
+        {
+          "name": "alias_index",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "kv:ALIAS_INDEX",
+          "pattern": "watch",
+          "description": "",
+          "kind": "kv-write"
+        },
+        {
+          "name": "predicate_index",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "kv:PREDICATE_INDEX",
+          "pattern": "watch",
+          "description": "",
+          "kind": "kv-write"
+        }
+      ]
+    }
   }
 }

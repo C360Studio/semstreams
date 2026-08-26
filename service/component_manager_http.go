@@ -7,10 +7,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/composition"
 	"github.com/c360studio/semstreams/health"
 )
 
@@ -214,26 +216,37 @@ func componentManagerOpenAPISpec() *OpenAPISpec {
 			},
 			"/flowgraph": {
 				GET: &OperationSpec{
-					Summary:     "Get component FlowGraph",
-					Description: "Returns the complete FlowGraph with nodes and edges for all managed components",
+					Summary:     "Get the composition graph projection",
+					Description: "Returns the boot composition's graph projection (nodes with resolved ports, derived edges) as retained at boot; Mermaid when format=mermaid",
 					Tags:        []string{"Components", "FlowGraph"},
+					Parameters: []ParameterSpec{
+						{
+							Name:        "format",
+							In:          "query",
+							Required:    false,
+							Description: "json (default) or mermaid",
+							Schema:      Schema{Type: "string"},
+						},
+					},
 					Responses: map[string]ResponseSpec{
 						"200": {
-							Description: "FlowGraph with nodes and edges",
+							Description: "Composition graph projection",
 							ContentType: "application/json",
+							SchemaRef:   "#/components/schemas/Graph",
 						},
 					},
 				},
 			},
 			"/validate": {
 				GET: &OperationSpec{
-					Summary:     "Validate component flow connectivity",
-					Description: "Performs FlowGraph connectivity analysis for operational validation (used by E2E tests)",
+					Summary:     "Get the boot composition findings",
+					Description: "Returns the composition validation result computed over the admitted composition at boot (ADR-100), verbatim",
 					Tags:        []string{"Components", "FlowGraph"},
 					Responses: map[string]ResponseSpec{
 						"200": {
-							Description: "Flow connectivity analysis results",
+							Description: "Composition validation result",
 							ContentType: "application/json",
+							SchemaRef:   "#/components/schemas/Result",
 						},
 					},
 				},
@@ -275,9 +288,12 @@ func componentManagerOpenAPISpec() *OpenAPISpec {
 				Description: "Component flow analysis and connectivity validation endpoints",
 			},
 		},
-		// Note: ComponentManager uses dynamic map[string]any responses and flowgraph types
-		// Response types from flowgraph package would need separate handling
-		ResponseTypes: nil,
+		// The composition projections have typed responses; the remaining
+		// operations use dynamic map[string]any responses.
+		ResponseTypes: []reflect.Type{
+			reflect.TypeOf(composition.Result{}),
+			reflect.TypeOf(composition.Graph{}),
+		},
 	}
 }
 
@@ -364,53 +380,35 @@ func (cm *ComponentManager) handleComponentsList(w http.ResponseWriter, r *http.
 }
 
 // BuildComponentTypeCatalog returns the list of registered component factory
-// types with their schemas. Both the GET /components/types HTTP handler and
-// the list_components agent tool call this — keep the shape in one place.
+// types with their schemas and default ports. Both the GET /components/types
+// HTTP handler and the list_components agent tool call this; the one home for
+// the shape is composition.Catalog, projected here to the flat map array the
+// OpenAPI contract has always served.
 func BuildComponentTypeCatalog(registry *component.Registry, logger *slog.Logger) []map[string]any {
-	// Get all registered factories from the component registry
-	factories := registry.ListFactories()
-
-	// Map of component IDs to human-readable display names
-	displayNames := map[string]string{
-		"udp":               "UDP Input",
-		"websocket":         "WebSocket Output",
-		"robotics":          "Robotics Processor",
-		"graph-processor":   "Graph Processor",
-		"rule-processor":    "Rule Processor",
-		"context-processor": "Context Processor",
-		"objectstore":       "Object Store",
-	}
-
-	// Convert to a slice of component type metadata (flat array format per OpenAPI contract)
-	componentTypes := make([]map[string]any, 0, len(factories))
-	for id, registration := range factories {
-		// Use display name if available, otherwise use ID
-		displayName := id
-		if name, exists := displayNames[id]; exists {
-			displayName = name
-		}
-
-		// Get component schema from registry
-		schema, err := registry.GetComponentSchema(id)
+	entries := composition.Catalog(registry)
+	componentTypes := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		projected, err := catalogEntryMap(entry)
 		if err != nil {
-			// Log warning but continue - component may not have schema
-			logger.Warn("Failed to get schema for component type", "component_type", id, "error", err)
+			logger.Warn("Failed to project catalog entry", "component_type", entry.ID, "error", err)
+			continue
 		}
-
-		componentTypes = append(componentTypes, map[string]any{
-			"id":          id,                // Component ID (map key)
-			"name":        displayName,       // Human-readable display name
-			"type":        registration.Type, // input, processor, output, storage
-			"protocol":    registration.Protocol,
-			"domain":      registration.Domain, // Business domain (robotics, semantic, network, storage)
-			"description": registration.Description,
-			"version":     registration.Version,
-			"category":    registration.Type, // Map type to category for frontend
-			"schema":      schema,            // Component configuration schema
-		})
+		componentTypes = append(componentTypes, projected)
 	}
-
 	return componentTypes
+}
+
+// catalogEntryMap round-trips one catalog entry through its JSON wire shape.
+func catalogEntryMap(entry composition.CatalogEntry) (map[string]any, error) {
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return nil, err
+	}
+	var projected map[string]any
+	if err := json.Unmarshal(data, &projected); err != nil {
+		return nil, err
+	}
+	return projected, nil
 }
 
 // handleComponentTypes returns available component types from the registry
@@ -442,57 +440,17 @@ func (cm *ComponentManager) handleComponentTypeByID(w http.ResponseWriter, r *ht
 		http.Error(w, "Invalid component type", http.StatusBadRequest)
 		return
 	}
-	// Get all registered factories from the component registry
-	factories := cm.registry.ListFactories()
-
-	// Find the requested component type
-	registration, exists := factories[componentType]
-	if !exists {
-		http.Error(w, fmt.Sprintf(`{"error":"Component type %s not found"}`, componentType), http.StatusNotFound)
+	for _, entry := range composition.Catalog(cm.registry) {
+		if entry.ID != componentType {
+			continue
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(entry); err != nil {
+			cm.logger.Error("Failed to encode component type", "error", err)
+		}
 		return
 	}
-
-	// Map of component IDs to human-readable display names
-	displayNames := map[string]string{
-		"udp":               "UDP Input",
-		"websocket":         "WebSocket Output",
-		"robotics":          "Robotics Processor",
-		"graph-processor":   "Graph Processor",
-		"rule-processor":    "Rule Processor",
-		"context-processor": "Context Processor",
-		"objectstore":       "Object Store",
-	}
-
-	// Use display name if available, otherwise use ID
-	displayName := componentType
-	if name, exists := displayNames[componentType]; exists {
-		displayName = name
-	}
-
-	// Get component schema from registry
-	schema, err := cm.registry.GetComponentSchema(componentType)
-	if err != nil {
-		// Log warning but continue - component may not have schema
-		cm.logger.Warn("Failed to get schema for component type", "component_type", componentType, "error", err)
-	}
-
-	// Return single component type metadata
-	response := map[string]any{
-		"id":          componentType,
-		"name":        displayName,
-		"type":        registration.Type,
-		"protocol":    registration.Protocol,
-		"domain":      registration.Domain, // Business domain (robotics, semantic, network, storage)
-		"description": registration.Description,
-		"version":     registration.Version,
-		"category":    registration.Type,
-		"schema":      schema,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		cm.logger.Error("Failed to encode component type", "error", err)
-	}
+	http.Error(w, fmt.Sprintf(`{"error":"Component type %s not found"}`, componentType), http.StatusNotFound)
 }
 
 // handleComponentStatus returns detailed status for a specific component
@@ -614,115 +572,57 @@ func (cm *ComponentManager) handleGetComponentConfig(w http.ResponseWriter, r *h
 // FlowGraph HTTP Handlers
 // =============================================================================
 
-// handleFlowGraph returns the complete FlowGraph with nodes and edges
+// handleFlowGraph serves the boot composition's graph projection, as JSON by
+// default and as Mermaid when format=mermaid. It is a projection of the result
+// retained at Initialize; nothing is recomputed here.
 func (cm *ComponentManager) handleFlowGraph(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	graph, err := cm.GetFlowGraph()
-	if err != nil {
-		cm.logger.Error("Failed to build FlowGraph", "error", err)
-		http.Error(w, "Failed to build flow graph", http.StatusInternalServerError)
+	result := cm.bootCompositionResult()
+	if result == nil {
+		http.Error(w, "composition not initialized", http.StatusServiceUnavailable)
 		return
 	}
-
-	response := map[string]any{
-		"nodes": graph.GetNodes(),
-		"edges": graph.GetEdges(),
-		"metadata": map[string]any{
-			"timestamp":  time.Now().UTC(),
-			"node_count": len(graph.GetNodes()),
-			"edge_count": len(graph.GetEdges()),
-			"graph_type": "component_flow",
-		},
-	}
-
-	// Buffer JSON encoding to catch errors before writing response
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		cm.logger.Error("Failed to encode FlowGraph response", "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	if r.URL.Query().Get("format") == "mermaid" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if _, err := w.Write([]byte(composition.Mermaid(result.Graph))); err != nil {
+			cm.logger.Error("Failed to write Mermaid projection", "error", err)
+		}
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if _, err := w.Write(buf.Bytes()); err != nil {
-		cm.logger.Error("Failed to write FlowGraph response", "error", err)
-	}
+	cm.writeJSON(w, result.Graph, "composition graph")
 }
 
-// handleFlowValidation performs FlowGraph connectivity analysis for operational validation
+// handleFlowValidation serves the composition result retained at boot
+// verbatim. The status, severities, and ordering are the library's; this
+// handler computes nothing of its own.
 func (cm *ComponentManager) handleFlowValidation(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	graph, err := cm.GetFlowGraph()
-	if err != nil {
-		cm.logger.Error("Failed to build FlowGraph for validation", "error", err)
-		http.Error(w, "Failed to build flow graph", http.StatusInternalServerError)
+	result := cm.bootCompositionResult()
+	if result == nil {
+		http.Error(w, "composition not initialized", http.StatusServiceUnavailable)
 		return
 	}
-	analysis, err := cm.ValidateFlowConnectivity()
-	if err != nil {
-		cm.logger.Error("Failed to validate FlowGraph", "error", err)
-		http.Error(w, "Failed to validate flow graph", http.StatusInternalServerError)
-		return
-	}
+	cm.writeJSON(w, result, "composition result")
+}
 
-	// Check for stream requirement issues (JetStream subscribers connected to NATS publishers)
-	streamWarnings := graph.ValidateStreamRequirements()
-
-	// Determine validation status including stream requirement issues
-	validationStatus := analysis.ValidationStatus
-	if len(streamWarnings) > 0 {
-		validationStatus = "critical" // Stream requirement issues are critical
-	}
-
-	// Add additional metadata for E2E testing
-	response := map[string]any{
-		"timestamp":            time.Now().UTC(),
-		"validation_status":    validationStatus,
-		"connected_components": analysis.ConnectedComponents,
-		"connected_edges":      analysis.ConnectedEdges,
-		"disconnected_nodes":   analysis.DisconnectedNodes,
-		"orphaned_ports":       analysis.OrphanedPorts,
-		"stream_warnings":      streamWarnings,
-		"summary": map[string]any{
-			"total_components":        len(graph.GetNodes()),
-			"total_connections":       len(analysis.ConnectedEdges),
-			"component_groups":        len(analysis.ConnectedComponents),
-			"orphaned_port_count":     len(analysis.OrphanedPorts),
-			"disconnected_node_count": len(analysis.DisconnectedNodes),
-			"stream_warning_count":    len(streamWarnings),
-			"has_stream_issues":       len(streamWarnings) > 0,
-		},
-	}
-
-	// Buffer JSON encoding to catch errors before writing response
+// writeJSON buffers the encoding so an encode failure is a 500, not a
+// half-written body.
+func (cm *ComponentManager) writeJSON(w http.ResponseWriter, value any, what string) {
 	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		cm.logger.Error("Failed to encode flow validation response", "error", err)
+	if err := json.NewEncoder(&buf).Encode(value); err != nil {
+		cm.logger.Error("Failed to encode "+what, "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-
 	w.Header().Set("Content-Type", "application/json")
-
-	// Set appropriate HTTP status based on validation results
-	if analysis.ValidationStatus == "healthy" {
-		w.WriteHeader(http.StatusOK)
-	} else {
-		// Return 200 but indicate warnings in the response
-		// E2E tests can check the validation_status field
-		w.WriteHeader(http.StatusOK)
-	}
-
 	if _, err := w.Write(buf.Bytes()); err != nil {
-		cm.logger.Error("Failed to write flow validation response", "error", err)
+		cm.logger.Error("Failed to write "+what, "error", err)
 	}
 }
 

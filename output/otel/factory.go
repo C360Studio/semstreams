@@ -23,6 +23,7 @@ func Register(registry RegistryInterface) error {
 		Description: "Exports agent telemetry to OpenTelemetry collectors",
 		Version:     "1.0.0",
 		Factory:     NewComponent,
+		Ports:       DeclarePorts,
 		Schema:      componentSchema,
 	})
 }

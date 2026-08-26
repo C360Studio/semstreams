@@ -8,18 +8,44 @@ import (
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
-// CreateInput is the factory function the component registry uses
-// to construct an http input from raw JSON config. NewInput validates
-// the merged effective config during construction.
-func CreateInput(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+// DeclarePorts is the component.PortDeclarer for http_input: the derived
+// schedule and source inputs plus the configured output, exactly as
+// NewInput will report them.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	cfg, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	inputs, outputs, _, err := resolvePorts(cfg)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfigFrom(inputs, outputs), nil
+}
+
+// resolveConfig overlays the user configuration on the defaults. It is the one
+// derivation DeclarePorts and CreateInput share; resolvePorts is the one port
+// derivation.
+func resolveConfig(rawConfig json.RawMessage) (Config, error) {
 	cfg := DefaultConfig()
 	if len(rawConfig) > 0 {
 		type configOverride Config
 		var override configOverride
 		if err := component.SafeUnmarshal(rawConfig, &override); err != nil {
-			return nil, errs.Wrap(err, "http-input-factory", "create", "config parse")
+			return Config{}, errs.Wrap(err, "http-input-factory", "create", "config parse")
 		}
 		cfg = mergeConfig(cfg, Config(override))
+	}
+	return cfg, nil
+}
+
+// CreateInput is the factory function the component registry uses
+// to construct an http input from raw JSON config. NewInput validates
+// the merged effective config during construction.
+func CreateInput(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+	cfg, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
 	}
 
 	if deps.NATSClient == nil {
@@ -81,6 +107,7 @@ func Register(registry *component.Registry) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
 		Name:        "http_input",
 		Factory:     CreateInput,
+		Ports:       DeclarePorts,
 		Schema:      httpInputSchema,
 		Type:        "input",
 		Protocol:    "http",

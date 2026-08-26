@@ -839,6 +839,8 @@
     "type": "gateway",
     "protocol": "http",
     "domain": "graph",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "ports_require_config": true,
+    "ports_error": "Registry.Declare: port declaration failed: CreateGraphGateway.factory: config validation failed: Config.Validate: ports configuration required failed: invalid configuration"
   }
 }

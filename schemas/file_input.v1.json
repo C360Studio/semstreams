@@ -806,6 +806,8 @@
     "type": "input",
     "protocol": "file",
     "domain": "data",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "ports_require_config": true,
+    "ports_error": "Registry.Declare: port declaration failed: Config.Validate: path is required failed: missing required configuration"
   }
 }

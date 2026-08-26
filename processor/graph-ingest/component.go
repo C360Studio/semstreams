@@ -640,19 +640,24 @@ type graphIngestCoreSubscription interface {
 	Drain(context.Context) error
 }
 
-// CreateGraphIngest is the factory function for creating graph-ingest components
-func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
-	// Validate dependencies
-	if deps.NATSClient == nil {
-		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "CreateGraphIngest", "factory", "NATSClient required")
+// DeclarePorts is the component.PortDeclarer for graph-ingest: the ports
+// CreateGraphIngest will report for rawConfig, computed without dependencies.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	_, inputs, outputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
 	}
-	natsClient := deps.NATSClient
+	return component.PortConfigFrom(inputs, outputs), nil
+}
 
-	// Parse configuration
+// resolveConfig parses rawConfig, applies defaults, validates, and resolves
+// the effective ports. It is the one derivation DeclarePorts and
+// CreateGraphIngest share.
+func resolveConfig(rawConfig json.RawMessage) (Config, []component.Port, []component.Port, error) {
 	var config Config
 	if len(rawConfig) > 0 {
 		if err := json.Unmarshal(rawConfig, &config); err != nil {
-			return nil, errs.Wrap(err, "CreateGraphIngest", "factory", "config unmarshal")
+			return Config{}, nil, nil, errs.Wrap(err, "CreateGraphIngest", "factory", "config unmarshal")
 		}
 	} else {
 		config = DefaultConfig()
@@ -661,16 +666,13 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 	// Apply defaults and validate
 	config.ApplyDefaults()
 	if err := config.Validate(); err != nil {
-		return nil, errs.Wrap(err, "CreateGraphIngest", "factory", "config validation")
+		return Config{}, nil, nil, errs.Wrap(err, "CreateGraphIngest", "factory", "config validation")
 	}
-
-	// Create logger with component context
-	logger := deps.GetLoggerWithComponent("graph-ingest")
 	inputs := make([]component.Port, 0, len(config.Ports.Inputs))
 	for _, definition := range config.Ports.Inputs {
 		port, err := definition.Resolve(component.DirectionInput)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "CreateGraphIngest", "factory", "resolve input port")
+			return Config{}, nil, nil, errs.WrapInvalid(err, "CreateGraphIngest", "factory", "resolve input port")
 		}
 		inputs = append(inputs, port)
 	}
@@ -678,10 +680,28 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 	for _, definition := range config.Ports.Outputs {
 		port, err := definition.Resolve(component.DirectionOutput)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "CreateGraphIngest", "factory", "resolve output port")
+			return Config{}, nil, nil, errs.WrapInvalid(err, "CreateGraphIngest", "factory", "resolve output port")
 		}
 		outputs = append(outputs, port)
 	}
+	return config, inputs, outputs, nil
+}
+
+// CreateGraphIngest is the factory function for creating graph-ingest components
+func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+	// Validate dependencies
+	if deps.NATSClient == nil {
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "CreateGraphIngest", "factory", "NATSClient required")
+	}
+	natsClient := deps.NATSClient
+
+	config, inputs, outputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create logger with component context
+	logger := deps.GetLoggerWithComponent("graph-ingest")
 
 	// Create component
 	comp := &Component{
@@ -731,6 +751,7 @@ func Register(registry *component.Registry) error {
 		Version:     "1.0.0",
 		Schema:      schema,
 		Factory:     CreateGraphIngest,
+		Ports:       DeclarePorts,
 	})
 }
 

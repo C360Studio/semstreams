@@ -796,6 +796,32 @@
     "type": "input",
     "protocol": "udp",
     "domain": "network",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "default_ports": {
+      "inputs": [
+        {
+          "name": "udp_socket",
+          "direction": "input",
+          "type": "",
+          "required": true,
+          "connection_id": "udp:0.0.0.0:14550",
+          "pattern": "network",
+          "description": "UDP socket listening for incoming data",
+          "kind": "network"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "nats_output",
+          "direction": "output",
+          "type": "",
+          "required": true,
+          "connection_id": "input.udp.mavlink",
+          "pattern": "stream",
+          "description": "NATS subject for publishing received UDP data",
+          "kind": "jetstream"
+        }
+      ]
+    }
   }
 }

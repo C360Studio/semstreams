@@ -2,12 +2,14 @@ package contract
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/composition"
 	"github.com/google/go-cmp/cmp"
 	"github.com/xeipuuv/gojsonschema"
 )
@@ -50,6 +52,10 @@ func TestCommittedSchemasMatchCode(t *testing.T) {
 	if len(factories) == 0 {
 		t.Fatal("No component factories registered")
 	}
+	catalogEntries := make(map[string]composition.CatalogEntry)
+	for _, entry := range composition.Catalog(registry) {
+		catalogEntries[entry.ID] = entry
+	}
 
 	// Compare each committed schema with generated schema
 	for name := range committedSchemas {
@@ -68,7 +74,7 @@ func TestCommittedSchemasMatchCode(t *testing.T) {
 			}
 
 			// Generate schema from code
-			generatedSchema := extractSchemaFromRegistration(name, registration)
+			generatedSchema := extractSchemaFromRegistration(name, registration, catalogEntries[name])
 
 			// Compare schemas (deep equal)
 			if diff := cmp.Diff(committedSchema, generatedSchema); diff != "" {
@@ -399,7 +405,7 @@ func loadCommittedSchemas(schemasDir string) (map[string]map[string]interface{},
 	return schemas, nil
 }
 
-func extractSchemaFromRegistration(name string, reg *component.Registration) map[string]interface{} {
+func extractSchemaFromRegistration(name string, reg *component.Registration, entry composition.CatalogEntry) map[string]interface{} {
 	schema := make(map[string]interface{})
 
 	schema["$schema"] = "http://json-schema.org/draft-07/schema#"
@@ -512,13 +518,32 @@ func extractSchemaFromRegistration(name string, reg *component.Registration) map
 	}
 	schema["required"] = required
 
-	// Component metadata
+	// Component metadata, including the default ports the generator exports
+	// (ADR-100 P1). The ports round-trip through JSON so the comparison sees
+	// the same wire shape the committed file holds.
 	metadata := map[string]interface{}{
 		"name":     name,
 		"type":     reg.Type,
 		"protocol": reg.Protocol,
 		"domain":   reg.Domain,
 		"version":  reg.Version,
+	}
+	if entry.DefaultPorts != nil {
+		portsJSON, err := json.Marshal(entry.DefaultPorts)
+		if err != nil {
+			panic(fmt.Sprintf("marshal default ports for %s: %v", name, err))
+		}
+		var ports interface{}
+		if err := json.Unmarshal(portsJSON, &ports); err != nil {
+			panic(fmt.Sprintf("decode default ports for %s: %v", name, err))
+		}
+		metadata["default_ports"] = ports
+	}
+	if entry.PortsRequireConfig {
+		metadata["ports_require_config"] = true
+	}
+	if entry.PortsError != "" {
+		metadata["ports_error"] = entry.PortsError
 	}
 	schema["x-component-metadata"] = metadata
 
