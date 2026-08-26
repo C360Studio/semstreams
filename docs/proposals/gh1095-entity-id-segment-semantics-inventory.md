@@ -4,10 +4,11 @@
 that SHA. Sister repositories under `/Users/coby/Code/c360/` were read as checked out on the same day and are
 point-in-time; re-verify before treating any sister row as current. Nothing in this document is a target state.
 
-**Status:** inventory-only deliverable per `.agents/contracts/semstreams-architect.md` §"Required workflow" step 2.
-It has NOT received `INVENTORY PASS`. The design that follows it (`gh1095-entity-id-segment-semantics-design.md`)
-was drafted in the same session at the launching agent's direction and is conditional on this inventory passing
-independent review.
+**Status (revision 2):** inventory-only deliverable per `.agents/contracts/semstreams-architect.md` §"Required
+workflow" step 2. The independent blind inventory pass on revision 1 (commit `b6b4b024`, draft PR #1099) returned
+**INVENTORY PASS WITH DIVERGENCES**; divergences D1–D5 are corrected and rows R-A–R-D added in this revision, each
+marked `(r2)`. The design that follows it (`gh1095-entity-id-segment-semantics-design.md`), ADR-102, and the spec
+deltas have NOT had a pre-owner design review; that review runs after this revision lands.
 
 ## 0. Problem statement (measured)
 
@@ -33,11 +34,11 @@ if positions 3 and 4 swap (the only reorder the design considers; `instance` sta
 |---|---|---|---|
 | S1 | `processor/agentic-loop/component.go:2144` `ResolveSubject(outputs, "agent.complete", loopID)` — the loop entity's **instance** segment is the subject leaf token | P(6) = dot-free leaf identifier | none while instance stays last |
 | S2 | `processor/agentic-loop/component.go:1857` `agent.context.compaction` + `event.LoopID` | P(6) | none |
-| S3 | Rule-authored subjects `user.response.$entity.instance` — `openspec/specs/user-response-subject-ownership/spec.md:51,127`; semdev `configs/rules/coordinator/04-stamp-issue-ref.json:27` (`$entity.instance`) | P(6) via `entity_substitution.go` | none |
+| S3 | Rule-authored subjects (r2): `processor/rule/actions.go:881` (`executePublish`) and `:1865` (`executeApprove`) resolve `action.Subject` through `ec.SubstituteVariables`, so a config-authored subject may carry the **whole ID** — `$entity.id` at `docs/concepts/18-rule-driven-artifacts.md:72` (`output.drone-snapshot.$entity.id`) and `:118` (`output.entity-md.$entity.id`), pinned by `processor/rule/actions_subject_override_test.go:303` — or one segment (`$entity.instance`: `openspec/specs/user-response-subject-ownership/spec.md:51,127`; semdev `configs/rules/coordinator/04-stamp-issue-ref.json:27`) | whole ID → A + O as subject tokens; `$entity.instance` → P(6) | a whole-ID subject reorders its tokens silently; a subscriber matching with position literals (`output.drone-snapshot.c360.*.robotics.>`) keeps matching nothing and reports nothing — the silent-reinterpretation consumer |
 | S4 | AGENT_LOOPS key `COMPLETE_<loopID>` (reader `test/e2e/scenarios/research-graph/scenario.go:647,766`; `read_loop_result` contract in `processor/rule/entity_substitution.go:4-10`) | P(6) = bare loop id | none |
 | S5 | Byte bound vs key contract: entity ID ≤ 256 bytes (`pkg/types/entity_id.go:14`); KV literal key ≤ 1,024 bytes / 64 tokens (`openspec/specs/nats-kv-keys/spec.md:26-30,80`); worst INCOMING key `2E+390 = 902` bytes / 13 tokens (`entity-id-contract/spec.md:359-388`). No production subject carries a whole entity ID | A | none (byte totals are order-independent) |
 
-Searches that closed "a whole entity ID becomes a publish subject": `grep -rn 'Publish[A-Za-z]*\([^)]*(entityID|EntityID\(\)|entity\.ID)' --include='*.go'` (non-test) → 0 production hits; `grep -rn 'ResolveSubject\([^)]*entity'` → 0. The only ID-derived subject tokens are the instance segment (S1–S4).
+Searches: `grep -rn 'Publish[A-Za-z]*\([^)]*(entityID|EntityID\(\)|entity\.ID)' --include='*.go'` (non-test) → 0 production hits; `grep -rn 'ResolveSubject\([^)]*entity'` → 0. Corrected closure (r2): **no shipped Go site or shipped config puts a whole entity ID on a publish subject, but the lane exists** — any rule config may (S3), and those two greps cannot see it. The shipped ID-derived subject tokens are the instance segment (S1, S2, S4).
 
 ### 1.2 KV keys
 
@@ -73,6 +74,7 @@ Prefix length meanings **today** (`pkg/types/entity_id.go:248-301`): 1 = org; 2 
 | W5 | Declaration patterns in Go (audit: 17 declaration-pattern candidates): `*.*.agent.chain.execution.*` (`agentic/agentrun/agentrun.go:100`), `*.*.agent.agentic-loop.execution.*` and `*.*.agent.lesson.record.*` (`internal/builtinprojection/contracts.go:26,56`), `*.*.gateddag.fanout.instance.*` (`processor/gated-dag/participant.go:17`), `*.*.lifecycle.gcs.mission.*` (`cmd/e2e-semstreams/mission/state.go:28`) | O, P(3..5) | every literal in positions 3–5 rewrites |
 | W6 | Config patterns (`grep -rhoE '"(pattern\|entity_id_pattern)"\s*:\s*"[^"]+"' configs`): 33× `*.*.*.*.*.*`; 1× `*.*.agent.lesson.record.*`; watch buckets 6× `["*.*.*.*.*.*"]`, 4× `["c360.*.*.*.*.*"]`, 1× `["*.*.agent.lesson.record.*"]`, 1× `["c360.test.lifecycle.gcs.mission.*"]` | A; 3 files also O | 3 config literals rewrite; 40+ all-wildcard patterns untouched |
 | W7 | `pkg/lifecycle/manager_query.go:59,216,293,523-529` (`matchPattern` over workflow `EntityIDPattern`); `pkg/lifecycle/workflow.go` validates the pattern | A | none |
+| W8 (r2) | e2e assertions pin positions 3–5 by literal: `test/e2e/scenarios/ops/scenario.go:604` (`parts[2..4] == ops.diagnosis.finding`) and `:712` (`agent.lesson.record`); `test/e2e/client/nats.go:965-974` is arity-only (`SplitN 7`) and unaffected by order | O, P(3..5) | the `e2e:ops` and `e2e:lessons` tiers report a literal mismatch the moment the order changes — these assertions are in the rewrite list (design §D) so the mismatch is not misread as a regression |
 
 ### 1.5 ADR-099 partition cut points (unimplemented)
 
@@ -84,15 +86,16 @@ type prefix `org.platform.domain.system.type`.
 |---|---|---|---|
 | C1 | `docs/adr/099:25-27`: level 0 = system (4 parts), 1 = domain (3), 2 = platform (2); design table `gh606-derived-communities-design.md:65-71`, partitioner steps `:84-96`, record key `{level}.{prefix}` `:120-124` | O, P(2..4) | 4-part prefix = the SET {org, platform, position 3, position 4} — identical partition under either order, community-ID string reorders; 2-part unchanged; **3-part changes meaning** (domain-community → source-community) |
 | C2 | What the forthcoming work needs from prefixes: community identity = the prefix string (KV key tokens: level 0 → 5 tokens, 1 → 4, 2 → 3 — arity-distinct per level); member enumeration through `graph.ingest.query.prefix` (`graph/query_prefix_types.go:44-58`); write-on-change records; overlay re-entry independent of the base | A + O | the design's level-1 semantics must be restated under any reorder |
+| C3 (r2) | Sequencing window between the reorder and gh606: `graph/clustering/entityid_provider.go:231-236` `getSystem` takes `parts[3]` as system (rationale `:225-228`) and is live through `NewEntityIDProvider` at `processor/graph-clustering/component.go:1331`; `graph/clustering/summarizer.go:719-731` groups summary-prompt data by `parsed.Domain` (`parseEntityID` by index, `:686-700`); neither has a position test | O, P(3), P(4) | if the reorder lands before gh606 deletes the provider, LPA affinity silently computes on the taxonomy position and the prompt's "domain" groups become source groups — both are named in slice A's rewrite (design §D) and the tag holds until gh606 lands (O-7) |
 
 ### 1.6 Hierarchy containers and their padding
 
 | # | Site | Assumes | Reorder |
 |---|---|---|---|
 | H1 | `graph/inference/hierarchy.go:257-276`: type container = `parts[:5] + ".group"`, system = `parts[:4] + ".group.container"`, domain = `parts[:3] + ".group.container.level"`; `isContainerEntity :129-141` reads `parts[5] ∈ {group, container, level}`; e2e mirror `test/e2e/client/nats.go:1295-1299` | A, O, P(6) reserved literals | the 3-part container becomes a *source* container while its predicate stays `hierarchy.domain.member` |
-| H2 | Reserved-token collision: any real entity whose instance is literally `group`, `container`, or `level` is silently treated as a container (`:129-141`) — a convention with no contract | P(6) | none |
-| H3 | 256-byte overflow: a valid 5-part prefix of up to 255 bytes + `.group` (6 bytes) exceeds 256 and fails at `ensureContainerAndReturnEdge` (contract `entity-id-contract:26`); ADR-076 d1 (`docs/adr/076:18-22`) solved the same class for alerts with a digest family | A + byte bound | none |
-| H4 | Shipped: `enable_hierarchy: true` in 10 of 12 `configs/*.json` (`configs/agentic.json:182`, `structural.json:633`, …; false in `protocol-flow.json:381`, `lifecycle-flow.json:171`) | — | every shipped tier is on the path |
+| H2 | Reserved-token collision (r2): a real entity whose instance is literally `group`, `container`, or `level` is classified as a container (`:129-141`) and **silently skipped** — `GetHierarchyTriples` returns `nil, nil` at `:170-172`, so it receives no membership edges and no warning; a convention with no contract | P(6) | none |
+| H3 | 256-byte overflow (r2): a valid 5-part prefix of up to 255 bytes + `.group` (6 bytes) exceeds 256; the container birth at `hierarchy.go:440` (`CreateEntity`) fails `validateEntityID` (`processor/graph-ingest/component.go:1946`), and graph-ingest **warns and drops the membership triples** — `component.go:1970-1976` (merge path) and `:2107-2111` (create path) log `Failed to get hierarchy triples` and persist the entity without them. Not a hard failure: a silent structural gap. ADR-076 d1 (`docs/adr/076:18-22`) solved the same class for alerts with a digest family | A + byte bound | none |
+| H4 | Shipped (r2): `enable_hierarchy: true` in 10 of the 12 `configs/*.json` that declare it, out of 16 config files (`configs/agentic.json:182`, `structural.json:633`, …; false in `protocol-flow.json:381`, `lifecycle-flow.json:171`) | — | every shipped tier is on the path |
 | H5 | Duplicate spelling: ADR-099 makes `community(entity, level)` the prefix (never stored); containers store the same groups as entities with membership edges. gh606 design `:191-196` names the overlap and puts hierarchy out of that change's scope | — | two homes for one fact |
 
 ### 1.7 Lesson scope keys
@@ -101,7 +104,7 @@ type prefix `org.platform.domain.system.type`.
 |---|---|---|---|
 | L1 | Writer: `processor/agentic-tools/emit_lesson.go:55-57` (`minAppliesToIDSegments`), `:862-885` (`id:` needs ≥ 3 segments); spec `openspec/specs/agentic-lessons/spec.md:78-92` (scenario `id:c360.ops.robotics`) | O, P(3): "3 segments" = deployment + domain today | 3 segments = deployment + **source** |
 | L2 | Reader: `lessonmatch.go:187-231` segment-boundary prefix match | A | none |
-| L3 | In use (`grep -rhoE '"id:[a-zA-Z0-9_.-]+"'` across `/Users/coby/Code/c360`): `id:acme.test.agent`×10, `id:c360.ops.robotics`×8, `id:acme.ops.robotics`×4, `id:acme.ops.agent`×4, plus negatives; **all in 5 semstreams files (tests/e2e/configs); no sister carries an `id:` key** | — | fixtures rewrite |
+| L3 | In use (r2 recount in this repo with `grep -rhoE '"id:[a-zA-Z0-9_.-]+"' --include='*.json' --include='*.go'`; the revision-1 counts double-counted a worktree copy): `id:acme.test.agent`×5, `id:c360.ops.robotics`×4, `id:acme.ops.robotics`×2, `id:acme.ops.agent`×2, plus five negatives — 18 occurrences in 5 files (`processor/agentic-tools/emit_lesson_test.go` 8, `processor/agentic-loop/lessonmatch/lessonmatch_test.go` 6, `processor/agentic-loop/lessons_test.go` 2, `emit_lesson_integration_test.go` 1, `vocabulary/agentic/predicates.go` 1); the same grep over every sister → 0 | — | fixtures rewrite |
 | L4 | `agentic/agent_lesson_entity.go:85-93` `AgentLessonRecordPrefix(org, platform)` = `org.platform.agent.lesson.record` (5-part) — callers `processor/agentic-loop/handlers.go:721`, `test/e2e/scenarios/lessons/scenario.go:341` | O, P(3..5) | literal rewrites |
 
 ### 1.8 Rule substitution
@@ -152,10 +155,12 @@ type prefix `org.platform.domain.system.type`.
 | P2 | `:121-134` `ParseEntityID` assigns fields by index; `:108-111` `EntityType()` = `{Domain, Type}`; `message/types.go:24` `type EntityID = types.EntityID` (alias, one home) | O |
 | P3 | `internal/semantictest/fixtures.go:20-60` builder takes the six positions as positional args in the current order | O |
 | P4 | `vocabulary/iris.go:85-97` `EntityIRI("domain.type", pcfg, localID)`; `vocabulary/export/export.go:123` parses IDs for export | P(3), P(5) |
+| P5 (r2) | `vocabulary/export/export.go:123-126` `subjectToIRI` emits the external IRI `<base>/entities/{org}/{platform}/{domain}/{system}/{type}/{instance}` in wire order — a published JSON-LD/RDF artifact **outside the graph that fresh state does not re-mint** | O (path order); the IRI path reorders with O-B, or the exporter pins its own order — owner item O-11 |
+| P6 (r2) | `processor/graph-query/summary.go:198-202` builds `EntityTypeSummary.Type = segs[2].segs[3].segs[4]` (`domain.system.type`), exposed as an API VALUE through GraphQL `EntityTypeSummary.type` (`gateway/graph-gateway/component.go:1870`); no graph-query requirement pins the value's shape (`grep -n 'entity_types\|EntityTypeSummary\|graphSummary' openspec/specs/graph-query/spec.md` → 0) | O; the value's token order flips under O-B — an API value change for every `graphSummary` consumer, not only an index edit |
 
 ### 1.14 Minting sites — framework and sisters
 
-**Framework (all read authority from `deps.Platform` = `types.PlatformMeta{Org, Platform}`, `types/component.go:134-137`, composed at `cmd/semstreams/main.go:477-484` and `cmd/e2e-semstreams/main.go:628-634` from `cfg.Platform.InstanceID` else `.ID`; same precedence in `config/config.go:772-778`; `Validate` lowercases org and requires `id`, `:225-241`; 96 production reads of `*.Platform.{Org,Platform}` outside `config/` and `cmd/`):**
+**Framework (all read authority from `deps.Platform` = `types.PlatformMeta{Org, Platform}`, `types/component.go:134-137`, composed at `cmd/semstreams/main.go:477-484` and `cmd/e2e-semstreams/main.go:628-634` from `cfg.Platform.InstanceID` else `.ID`; same precedence in `config/config.go:772-778`; `Validate` lowercases org and requires `id`, `:225-241`; authority reads by token, non-test lines, re-measured in r2 — the revision-1 "96" came from a receiver-letter regex that mixed tokens and is withdrawn: `deps.Platform` = 18 lines (17 `processor/`, 1 `service/component_manager.go:183`; 0 in `config/` or `cmd/`), `platform.{Org,Platform}` (the copied unexported field, e.g. `e.platform.Org`) = 62 lines, `.Platform.{Org,Platform}` on any receiver outside `config/`/`cmd/` = 14 lines):**
 
 | Family | Builder | Shape today (`org.platform.` +) |
 |---|---|---|
@@ -204,6 +209,12 @@ corpus, filtered by the canonical regex):**
 | semsage | 0 (+1 `_` placeholder) | 0 | 0 | 0 | 0 | 0 |
 | semconnect | 183 | 3 | 3 | 3 | 4 | 15 |
 | semteams / semmachina / semops | audit aborted on non-JSON/YAML fixtures (`ui/tsconfig.json`, `web/tsconfig.json`, `tickets/COP-003.yaml`) | — | — | — | — | — |
+
+Token per count (r2): "literals" = candidates of language `literal` whose value matches the canonical six-part regex.
+The audit's own totals differ because they include declaration patterns and query prefixes and count findings —
+semsource: 21 candidates (19 literal, 2 query-prefix), 3 findings, 16 valid six-part literals; semspec: 11,257
+candidates (11,248 literal, 2 declaration-pattern, 7 query-prefix), 29 findings, 11,221 valid six-part literals.
+T4's 49-file count reproduces in r2. semteams/semmachina/semops rows stay unmeasured.
 
 Product-name-in-platform, the family ruling 2 retires: semsource (`semsource`), semconnect (`semconnect`), semmachina
 (`semmachina-<world>`), semboids fallback (`semboids`), semspec fixtures (`semsource`), and the framework's own
@@ -268,7 +279,7 @@ Answered for five people who have never opened `pkg/types/entity_id.go`.
 
 | Prediction today | Observation the framework could make instead |
 |---|---|
-| Every builder call re-supplies `org, platform` (96 sites) — a value the composition root owns | graph-ingest compares positions 1–2 of every candidate against `deps.Platform` (F2) and rejects a mismatch on any lane not declared as import |
+| Every builder call re-supplies `org, platform` (18 `deps.Platform` lines + 62 `platform.{Org,Platform}` lines, §1.14) — a value the composition root owns | graph-ingest compares positions 1–2 of every candidate against `deps.Platform` (F2) and rejects a mismatch on any lane not declared as import |
 | An operator predicts that `platform.id` is globally unique | the importing side observes a write claiming *its own* authority on an import lane and rejects it |
 | A product predicts `instance_id` vs `id` precedence | one identity field; config load rejects ambiguity |
 | A rule predicts the firing entity's org/platform is the deployment's own (`actions.go:1575-1583`) | mint from `deps.Platform` (#1096) |
@@ -278,7 +289,7 @@ Answered for five people who have never opened `pkg/types/entity_id.go`.
 ## 4. PREMISE FAILED lines (claims in the issue or ruling that did not survive measurement)
 
 - **PF-1** "Predicate-index composite keys (ADR-065) … hash of the predicate": the live layout is raw `predicate3.entity6` (9 tokens) per ADR-078 (`predicate_index.go:12-16`, `query.go:734-745`; ADR-068 correction `:24-33`). Arity dependence stands; the hashing does not.
-- **PF-2** Issue Evidence A "~29 production sites via `deps.Platform`": 96 production reads of `*.Platform.{Org,Platform}` outside `config/` and `cmd/` (grep in §1.14). Larger, same class.
+- **PF-2 (withdrawn in r2).** Revision 1 set 96 `deps.Platform` production reads against the issue's "~29"; the 96 came from a receiver-letter regex that mixed tokens. Re-measured per token: `deps.Platform` 18 non-test lines — consistent with the issue's own token; `platform.{Org,Platform}` 62 lines; `.Platform.{Org,Platform}` 14 lines. The issue's number stands. The class conclusion stands on the corrected numbers: authority reads far exceed the `deps.Platform` token because most builders read it through a copied `platform` field.
 - **PF-3** Issue Evidence D "hierarchy containers … coherent with ADR-099 — not a finding": the 3/4/5 cuts coincide, but containers are a second, stored spelling of the derived partition (H5), pad with reserved tokens that have no contract (H2), and overflow the byte bound at the edge (H3). It is a finding.
 - **PF-4** `entity-id-contract:321-322` "zero violations" and the issue's "that work is sound": `task entity-id:audit` reports 30 unclassified arity findings at `5cc0c7fb` and is not a CI gate (T2–T3). The lexical contract is sound; its enforcement corpus is not.
 - **PF-5** Ruling constraint "NATS subject token counts … depend on fixed arity": no production publish subject carries a whole entity ID (§1.1); the arity dependence is in KV composite keys and wildcard filters (X1–X3, K3), not in publish subjects. The constraint's conclusion (arity six) is unchanged; its stated mechanism is the KV key contract.

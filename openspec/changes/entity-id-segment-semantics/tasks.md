@@ -18,7 +18,14 @@ Premises (measured at `5cc0c7fb`): `pkg/types/entity_id.go:82-134` (struct, `Key
 index), no `deps.Platform` read in graph-ingest; `config/config.go:772-778` (precedence); `Taskfile.yml:96-99`
 (audit not in `.github/workflows/ci.yml`); `task entity-id:audit` → 30 `entity_id_invalid:arity` findings;
 `vocabulary/namespace_authority.go:28-124` (donor) with one consumer `agentic/tools.go:369-382`;
-`message/base_message.go:234-238` (wire meta = created_at, received_at, source).
+`message/base_message.go:234-238` (wire meta = created_at, received_at, source); `deps.Platform` = 18 non-test lines
+(17 `processor/`, 1 `service/component_manager.go:183`) and `platform.{Org,Platform}` = 62 lines;
+`processor/rule/actions.go:881,1865` (config-authored subject lane, `$entity.id` per
+`docs/concepts/18-rule-driven-artifacts.md:72,118`); `vocabulary/export/export.go:123-126` (export IRI in wire order);
+`processor/graph-query/summary.go:198-202` → GraphQL `EntityTypeSummary.type` (`gateway/graph-gateway/component.go:1870`);
+`graph/clustering/entityid_provider.go:231-236` (live via `processor/graph-clustering/component.go:1331`) and
+`graph/clustering/summarizer.go:719-731` (index reads with no position test); `test/e2e/scenarios/ops/scenario.go:604,712`
+(literal position assertions).
 
 ## 1. Claim
 
@@ -62,6 +69,11 @@ index), no `deps.Platform` read in graph-ingest; `config/config.go:772-778` (pre
       `$entity.domain` resolve to positions 3 and 4 of the NEW order. MUST fail at baseline.
       `processor/agentic-tools/emit_lesson_test.go`: `TestAppliesToThreeSegmentsIsSourceScope` — a lesson with
       `id:acme.dep1.src` matches a loop scoped to `acme.dep1.src.git.commit.a1` and not `acme.dep1.other.git.commit.a1`.
+      `processor/graph-query/summary_test.go`: `TestGraphSummaryTypeKeyFollowsCanonicalOrder` — the
+      `EntityTypeSummary.Type` for `acme.dep1.src.git.commit.a1` is `src.git.commit`, built from named fields. MUST
+      fail at baseline. `graph/clustering/entityid_provider_test.go`: `TestGetSystemReadsNamedField` and
+      `graph/clustering/summarizer_test.go`: `TestSummaryGroupsByNamedDomain` — position reads by name under the new
+      order. MUST fail at baseline.
 - [ ] 2.7 RED capture on baseline code (§2 tests only), recorded here verbatim (package + test name + failing
       assertion or build error):
 
@@ -71,6 +83,8 @@ index), no `deps.Platform` read in graph-ingest; `config/config.go:772-778` (pre
   go test -race -tags=integration -count=1 -run 'TestAuthorityGate|TestImportLane' ./processor/graph-ingest/
   go test -race -tags=integration -count=1 -run 'TestRunScopeNewMintsUnderDeploymentAuthority' ./processor/rule/
   go test -race -count=1 -run 'TestSegmentTokensResolveByName|TestAppliesToThreeSegmentsIsSourceScope' ./processor/rule/ ./processor/agentic-tools/
+  go test -race -count=1 -run 'TestGraphSummaryTypeKeyFollowsCanonicalOrder' ./processor/graph-query/
+  go test -race -count=1 -run 'TestGetSystemReadsNamedField|TestSummaryGroupsByNamedDomain' ./graph/clustering/
   ```
 
 ## 3. Contract — `pkg/types`
@@ -114,24 +128,36 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       `ops_diagnosis_entity.go`, `graph/events.go`, `processor/rule/graph_event_identity.go`, gated-dag participant,
       e2e mission, `examples/processors/iot_sensor/payload.go`) emit `org.platform.<component>.<domain>.<type>.<instance>`
       and authorize their domain; ADR-076 families drop the `semstreams.framework` literal.
-- [ ] 5.2 Index-position readers (inventory W3): `graph/inference/hierarchy.go`, `graph/clustering/entityid_provider.go`,
-      `processor/graph-query/summary.go`, `graphrag.go`, `graph/clustering/summarizer.go`, `agentic/entity_ids.go:161-171`,
+- [ ] 5.2 Index-position readers (inventory W3, C3): `graph/inference/hierarchy.go`,
+      `graph/clustering/entityid_provider.go:231-236` (`getSystem`, live through `NewEntityIDProvider` at
+      `processor/graph-clustering/component.go:1331` — stays correct until gh606 deletes it),
+      `graph/clustering/summarizer.go:719-731` (domain grouping of the summary prompt),
+      `processor/graph-query/summary.go:198-202` (`EntityTypeSummary.Type` = `system.domain.type` by named field — an
+      API value change named in the PR body), `graphrag.go`, `agentic/entity_ids.go:161-171`,
       `agentic/agentrun/agentrun.go:158-170` read by named field via `ParseEntityID`, never by raw index.
 - [ ] 5.3 Declaration patterns and config literals (inventory W5–W6): `agentic/agentrun/agentrun.go:100`,
       `internal/builtinprojection/contracts.go:26,56`, `processor/gated-dag/participant.go:17`,
       `cmd/e2e-semstreams/mission/state.go:28`, `configs/*` three literal patterns; lesson record prefix
-      (`agent_lesson_entity.go:85-93`); `entityPartNames` resolves by name.
+      (`agent_lesson_entity.go:85-93`); `entityPartNames` resolves by name; e2e literal assertions
+      `test/e2e/scenarios/ops/scenario.go:604` and `:712` rewritten in the same commit so the `e2e:ops` and
+      `e2e:lessons` tiers do not report a position-literal mismatch that reads as a regression
+      (`test/e2e/client/nats.go:965-974` is arity-only and stays).
 - [ ] 5.4 `config/config.go`: `GetPlatform()` returns `Platform.ID`; `instance_id` present in a loaded config fails
       load with guidance naming `platform.id` (`removedConfigFields` precedent); `cmd/semstreams/main.go:477-484` and
       `cmd/e2e-semstreams/main.go:628-634` drop the precedence; every `configs/*.json` drops `instance_id`.
 - [ ] 5.5 Docs: `docs/concepts/*`, `docs/basics/*`, `CLAUDE.md`, `AGENTS.md`, `openspec/project.md:91`,
       `openspec/specs/structural-identity/spec.md:6-13` name the new order (29 files, inventory §1.14 list);
+      `docs/concepts/18-rule-driven-artifacts.md:72,118` (whole-ID subject examples) state that a `$entity.id` subject
+      carries the canonical order and that position-literal subscriptions must follow it;
       `docs/proposals/gh606-derived-communities-design.md:65-71` gains a note that level 1 is source.
 - [ ] 5.6 `internal/entityidaudit`: add rules `authority_literal` (literal non-`*`, non-template value in positions
       1–2 of a production builder or declaration) and `domain_unregistered` (literal position-4 value outside the
       reserved set in production Go); classify the 30 existing arity findings at their exact occurrence; fixture test
       for each rule; `task entity-id:audit` added to the CI `Lint` job in `.github/workflows/ci.yml`.
 - [ ] 5.7 `task schema:generate`; `git diff --exit-code schemas/ specs/` → commit any regenerated output.
+- [ ] 5.8 Values that leave the graph (inventory P5–P6; owner item O-11): `vocabulary/export/export.go:123-126` emits
+      the IRI path in the canonical order from named fields; the PR body announces the export IRI path and the
+      `graphSummary` `entity_types[].type` value as published-artifact breaks that fresh state does not re-mint.
 
 ## 6. Boundary enforcement and #1096
 

@@ -25,4 +25,8 @@ gap to hide.
 | A1 | Audit gains segment rules and becomes a CI gate | | ADDED "Segment semantics are enforced by the entity-ID corpus audit" | |
 | L1 | Lesson `id:` three-segment minimum means source scope | | `specs/agentic-lessons/spec.md` MODIFIED | |
 | S1 | `$entity.<name>` resolves by name | | `specs/rule-engine/spec.md` ADDED | |
+| P5 | Export IRI path follows the canonical order (O-11) | | — (published artifact; announced in the PR body) | |
+| P6 | `EntityTypeSummary.type` built from named fields in canonical order | | — (API value; announced in the PR body) | `TestGraphSummaryTypeKeyFollowsCanonicalOrder` |
+| C3 | LPA provider and summarizer read positions by name in slice A; tag holds until gh606 (O-7) | | — | `TestGetSystemReadsNamedField`, `TestSummaryGroupsByNamedDomain` |
+| W8 | e2e position-literal assertions rewritten with slice A | | — | `task e2e:ops`, `task e2e:lessons` results in `tasks.md` 7.2 |
 | DEVIATION | (record any owner-signed deviation here with its comment URL) | | | |

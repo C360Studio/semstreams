@@ -1,14 +1,19 @@
 # gh#1095 — entity-ID segment semantics: options, contract, break wave, owner items
 
-**Baseline:** `origin/main` `5cc0c7fb`. **Status:** design draft, conditional on `INVENTORY PASS` for
-`gh1095-entity-id-segment-semantics-inventory.md`; not reviewed; binding rulings stay with the owner. Row ids (S1,
-K3, W2, H1, …) refer to the inventory.
+**Baseline:** `origin/main` `5cc0c7fb`; committed as draft PR #1099 (`b6b4b024`). Row ids (S1, K3, W2, H1, …)
+refer to the inventory.
+
+## Checkpoint (revision 2)
+
+- Inventory: `docs/proposals/gh1095-entity-id-segment-semantics-inventory.md` revision 2, SHA-256
+  `ba2131bc2f743019728f10202ba149391d3254771ca3843ae94df3e7267dd216` (revision 1 was `0e511e9169b0952ab40cfb6f7dc4135c67e2678076dca6650c1a91cc18360b8f`).
+- Review state: the independent blind inventory pass on revision 1 returned **INVENTORY PASS WITH DIVERGENCES**;
+  D1–D5 are corrected and R-A–R-D added in this revision (marked `(r2)` in the inventory; this design's O-B rows,
+  §D, and §F carry the corresponding changes).
+- This design, ADR-102, and the spec deltas have **NOT** had a pre-owner design review; that review runs after this
+  revision lands. Binding rulings stay with the owner.
 
 ## B. Reorder options
-
-- Inventory: `docs/proposals/gh1095-entity-id-segment-semantics-inventory.md`, SHA-256
-  `0e511e9169b0952ab40cfb6f7dc4135c67e2678076dca6650c1a91cc18360b8f`. Review state: independent inventory pass PENDING; this design is drafted in the same pass at the
-  caller's direction and is conditional on that pass.
 
 Constraints from the ruling: arity six is fixed; reordering is allowed; the design must keep every second-order
 consumer in §1 of the inventory expressible.
@@ -44,10 +49,10 @@ consumer in §1 of the inventory expressible.
 | Deployment / source / taxonomy | deployment: 2; source: 3; taxonomy-within-source: 4; **taxonomy across sources** becomes the filter `org.platform.*.D.>` (legal KV filter and `MatchEntityIDPattern` pattern), or a `tag:` lesson scope |
 | ADR-099 cut points (recomputed) | 0 = 4 parts = `{org, platform, source, domain}` — the SAME set partition as O-A's level 0 (only the ID string reorders); 1 = 3 parts = **source** (new meaning: one repo/feed/world = one community — the partition semsource's field measurement found useful, ADR-099 `:15-17`); 2 = 2 parts = deployment. Levels remain structurally distinct (arity-distinct) |
 | Hierarchy containers | the 3-part container becomes a source container; `hierarchy.domain.member` misnames it → see §B.4 |
-| Wildcard/prefix consequences | 3 in-tree Go patterns and 3 config literals rewrite (W5–W6); all-wildcard patterns untouched; `id:` scope keys with 3 segments now scope to a source |
+| Wildcard/prefix consequences | 5 in-tree Go declaration patterns and 3 config literals rewrite (W5–W6); all-wildcard patterns untouched; `id:` scope keys with 3 segments now scope to a source; a config-authored `$entity.id` subject reorders its tokens (S3) |
 | KV scan locality | `org.platform.` unchanged; `org.platform.system.` is a new selective scan (all of one source) — the unit an import lane, a per-source retention decision (ADR-068), and semmem's "source authority" need |
 | Subject tokens | unchanged |
-| Blast radius | in-tree: `pkg/types` (P1–P3), 9 builders, 10 index-position readers (W3), 3 Go patterns, 3 config literals, 29 docs, `semantictest` builder, `entityPartNames`; sisters: every builder literal that names domain before system (semboids 3, semdev 3, semdragon 4, semops 1, semconnect config, semsage constants, semteams 1 literal, semspec 2) — all files that ruling 2/5 already opens |
+| Blast radius | in-tree: `pkg/types` (P1–P3), 9 builders, 10 index-position readers (W3) including the LPA provider and summarizer (C3), 5 Go declaration patterns (W5: `agentrun.go:100`, `builtinprojection/contracts.go:26,56`, `gated-dag/participant.go:17`, `mission/state.go:28`), 3 config literals, 2 e2e literal assertions (W8), 29 docs naming the order plus `docs/concepts/18-rule-driven-artifacts.md` (whole-ID subject examples, S3), `semantictest` builder, `entityPartNames`; two values that leave the graph: the GraphQL `EntityTypeSummary.type` value (P6) and the vocabulary export IRI path (P5, owner item O-11); sisters: every builder literal that names domain before system (semboids 3, semdev 3, semdragon 4, semops 1, semconnect config, semsage constants, semteams 1 literal, semspec 2) — all files that ruling 2/5 already opens |
 
 ### O-C — `org.system.platform.domain.type.instance` (considered, rejected)
 
@@ -180,6 +185,20 @@ Per `entity-id-contract:319-350`: fresh state, no migration, no alias, no dual c
 | 4 | gh606 / ADR-099 on the new cut points (+ container retirement) | yes | `e2e:statistical`, `e2e:semantic` (ADR-099) |
 | 5 | Sister re-slots (post-publication; communicate, do not modify) | — | each sister's own gates on fresh storage |
 
+Sequencing window (r2, C3): between rows 2 and 4 the LPA provider (`graph/clustering/entityid_provider.go:231-236`,
+live via `processor/graph-clustering/component.go:1331`) and the summarizer's domain grouping
+(`graph/clustering/summarizer.go:719-731`) would otherwise compute on the wrong position with no test. Both are in
+slice A's W3 rewrite explicitly (tasks 5.2) — they read `System` and `Domain` by named field until gh606 deletes
+them — AND the tag holds until row 4 lands (O-7). Both, not either.
+
+e2e rewrite list (r2, W8): `test/e2e/scenarios/ops/scenario.go:604` and `:712` pin positions 3–5 by literal and are
+rewritten in slice A (tasks 5.3); `test/e2e/client/nats.go:965-974` is arity-only and stays. The `e2e:ops` and
+`e2e:lessons` tiers cannot pass slice A without that rewrite, and a literal mismatch there is the expected shape,
+not a regression.
+
+Values that leave the graph (r2, P5–P6): every consumer of `graphSummary` (`entity_types[].type`) and of the
+vocabulary export sees the new token order; neither is re-minted by fresh state. The PR body names both.
+
 Per-sister migration list (values → after):
 
 | Sister | Change |
@@ -222,3 +241,4 @@ O-7).
 | O-8 | ADR-076 d1 supersession (framework namespace → deployment authority for alerts/triggers) | PF-7 | supersede d1; keep d2–d6 |
 | O-9 | Enforcement strictness on non-import lanes: reject (recommended) vs metric-only | C.3; `entity-id-contract:202-203` forbids permissive modes | reject |
 | O-10 | `gateddag` family re-slot (`gateddag.fanout.instance` → `gated-dag.agent.fanout`) | inventory §1.14 | yes, in slice A |
+| O-11 (r2) | Export IRI path order: `vocabulary/export/export.go:123-126` publishes `<base>/entities/{org}/{platform}/{domain}/{system}/{type}/{instance}` outside the graph; fresh state does not re-mint published artifacts | inventory P5 | follow the canonical order (one home for position order); announce it as a published-artifact break in the PR body; pinning a private exporter order would create a second interpreter of the shared type |

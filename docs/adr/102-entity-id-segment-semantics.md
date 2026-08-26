@@ -58,6 +58,9 @@ inventory is `docs/proposals/gh1095-entity-id-segment-semantics-inventory.md`.
   the runtime state they create is local.
 - Hierarchy containers are a second spelling of the ADR-099 partition and are retired with it; until then the
   padding tokens are contract-reserved.
+- Two values leave the graph in wire order and are not re-minted by fresh state: the GraphQL `EntityTypeSummary.type`
+  value and the vocabulary export IRI path (`vocabulary/export/export.go:123-126`); both follow the canonical order
+  (owner item O-11) and are announced as published-artifact breaks.
 
 ## Cross-repo contract
 
