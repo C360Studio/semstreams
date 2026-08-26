@@ -45,7 +45,7 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
 
 ## 1. Claim
 
-- [ ] 1.1 Worktree `../semstreams-wt/claude/gh1100-single-type-authority` from `origin/main`; draft PR #1102 open with
+- [x] 1.1 Worktree `../semstreams-wt/claude/gh1100-single-type-authority` from `origin/main`; draft PR #1102 open with
       `Closes #1100` and `implemented-by: <persona>` in the body; this change directory,
       `docs/adr/103-payload-registry-is-the-single-type-authority.md`, and the two `docs/proposals/gh1100-*` documents are
       its first commit (`9899d71d`). Rebase onto `7e7ea76e` or later before implementation begins. The PR body is a published
@@ -55,6 +55,8 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
 
 ## 2. Baseline capture — write the named tests first
 
+      Claimed 2026-08-26 on branch `claude/gh1100-single-type-authority-impl` (worktree `../semstreams-wt/…`) off `main` after
+      PR #1102 merged; the draft PR carries `Closes #1100`; this tick is its first commit; `implemented-by` in the PR body.
 - [ ] 2.1 `payloadregistry/attributes_test.go`: `TestRegisterRejectsInvalidIndexingProfile` (`"prose"` → error naming the value);
       `TestRegisterFillsAndChecksContractMessageType` (empty → filled with the key; a different key → error naming both);
       `TestGetRegistrationCopiesAttributes` (profile present; mutating the returned contract slice does not change a later read);
