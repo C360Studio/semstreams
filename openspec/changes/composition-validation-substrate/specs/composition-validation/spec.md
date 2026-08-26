@@ -1,3 +1,18 @@
+## Purpose
+
+Defines composition validation as the framework's one judgment of whether a set of components is correctly wired:
+`config.Components` plus the binary's catalog is the composed artifact, connections are derived from static port
+declarations rather than authored, and a diagram is a read-only projection the framework never stores (ADR-100). The
+same pure library produces the same closed findings vocabulary at both boundaries that matter — offline over a
+configuration file, as a prediction of the next boot, and at boot over the admitted composition, as an observation at
+the real boundary, where an error finding refuses to start. No second interpreter of that analysis is admitted: not a
+handler with its own severity table, not a saved-diagram validator, not a caller re-deriving connections. The capability
+owns the findings vocabulary and its severities, the static port-declaration contract and its boot parity check, the
+graph projection and its Mermaid rendering, and the surfaces that carry them — the `catalog` / `validate` / `graph`
+verbs, the `AssertValid` test helper, the ComponentManager read operations, and the read-only agent tools. It owns no
+authoring store, no diagram CRUD, no template store, and no verb that writes a composition: writing a composition is
+writing the product's configuration.
+
 ## ADDED Requirements
 
 ### Requirement: Port declarations are static facts of a registration
@@ -19,8 +34,8 @@ the declarer's error text when an empty configuration does not declare.
 > declarer contract above. Its factory has no instance name to give the constructor (`component.Factory` and
 > `Dependencies` carry none) and stamps the literal `objectstore` into its `store-provide` port, so the admitted
 > declaration never carries the real instance name either; the declarer mirrors the constructor so parity holds.
-> Threading the real name through changes the store-provide resource identity at runtime — an owner ruling; neither
-> side is codified in a test. Every shipped instance is named `objectstore`.
+> Threading the real name through changes the store-provide resource identity at runtime — an owner ruling, FILED
+> #1106; neither side is codified in a test. Every shipped instance is named `objectstore`.
 
 #### Scenario: a registration without a port declarer is rejected at registration
 
@@ -321,26 +336,3 @@ that assertion SHALL be a unit test so a configuration change that introduces an
 - **WHEN** every shipped configuration is validated against the registry its binary composes
 - **THEN** no result has an error finding
 - **AND** the test that verifies this is `TestValidateShippedConfigsHaveNoErrorFindings`
-
-### Requirement: The framework owns no composition authoring store
-
-The framework SHALL register no `flow-builder` service, SHALL serve no `/flowbuilder/*` route, SHALL register no
-`create_flow`, `update_flow`, `delete_flow`, `list_flows`, `get_flow`, `create_flow_template`,
-`update_flow_template`, `delete_flow_template`, `list_flow_templates`, `get_flow_template`, or
-`instantiate_flow_template` tool, SHALL create no `semstreams_flows` or `FLOW_TEMPLATES` bucket, and SHALL provide no
-compatibility alias for any of them. The stream-override expiry metric formerly hosted by the flow-builder service
-SHALL be registered by a retained service so its removal does not remove the metric.
-
-#### Scenario: the removed surfaces are absent
-
-- **WHEN** the service registry, the tool registry, and the generated OpenAPI document are inspected
-- **THEN** none names a flow-builder service, a flow or flow-template tool, or a `/flowbuilder` or `/flows` path
-- **AND** the tests that verify this are `TestServiceRegistryHasNoFlowBuilder`, `TestToolRegistryHasNoFlowTools`, and
-  `TestOpenAPIHasNoFlowRoutes`
-
-#### Scenario: the override-expiry metric survives the removal
-
-- **GIVEN** a boot configuration with a stream override and no flow-builder service
-- **WHEN** the process composes its services
-- **THEN** the stream-override expiry metric is registered and reports the override
-- **AND** the test that verifies this is `TestStreamOverrideExpiryReporterRegistersWithoutFlowService`
