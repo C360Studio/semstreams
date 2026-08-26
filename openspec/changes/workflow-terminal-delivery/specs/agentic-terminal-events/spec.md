@@ -33,6 +33,13 @@ SHALL keep the existing route-ownership behaviour.
 - **THEN** it publishes a `prompt` response carrying `Decision.Reason` to the loop's own route when complete,
   otherwise to the resolved origin
 
+#### Scenario: malformed present decision is rejected, never a handoff
+
+- **GIVEN** a completion whose `decision` is present with an empty `action` or an empty `reason`
+- **WHEN** the terminal is decoded
+- **THEN** payload validation fails and the delivery is permanently rejected
+- **AND** no handoff or route-less settlement is recorded
+
 #### Scenario: internal phase without a decision stays route-less
 
 - **GIVEN** a succeeded terminal with no `Decision`
@@ -42,31 +49,69 @@ SHALL keep the existing route-ownership behaviour.
 - **AND** records reason `route_less_settled`
 - **AND** does not resolve an origin
 
-### Requirement: Origin route resolution SHALL observe persisted ancestry
+### Requirement: Origin route resolution SHALL observe persisted ancestry typed-first, then by parent walk
 
-When a user-facing decision's own reconciled route is empty, dispatch SHALL resolve the origin by walking persisted
-`AGENT_LOOPS` loop records from the terminal loop: the next record is `ParentLoopID` when nonempty, otherwise `RunID`
-when nonempty and not the current loop; the first record carrying a complete `ChannelType`/`ChannelID` pair is the
-origin. The walk SHALL be bounded at 32 hops with cycle detection, SHALL reuse the existing persisted-loop read and
-its transient/permanent classification, and SHALL introduce no new field on `TaskMessage`, no run-entity predicate,
-and no second durable authority. A walk that ends at a record with neither link and no complete route SHALL settle
-`route_less_settled` (there was no origin: a route-less root, or ancestry severed by a non-loop-entity trigger). A walk
-that cannot complete — an absent ancestor key (expired or never persisted), a cycle, or the hop bound — SHALL settle
-`origin_unresolvable`.
+When a user-facing decision's own reconciled route is empty, dispatch SHALL resolve the origin from persisted
+`AGENT_LOOPS` loop records in this order, and SHALL NOT settle while an untried durable link remains:
 
-#### Scenario: ancestry walk resolves the HTTP root
+1. Typed-first: when the terminal record carries a `RunID` other than its own ID, dispatch SHALL read
+   `AGENT_LOOPS/<RunID>` (the run root). A routed root is the origin. A present but route-less root continues at
+   step 2 from the root record. An absent root key continues at step 2 from the terminal record.
+2. Parent walk: from the start record, a record carrying a complete `ChannelType`/`ChannelID` pair is the origin;
+   otherwise dispatch follows `ParentLoopID`. At every hop whose parent key is absent, dispatch SHALL first try the
+   current record's `RunID` when it is nonempty, not the record's own ID, and not yet tried: a routed root is the
+   origin; a present route-less root continues the walk from it; an absent root key, or no such `RunID`, settles
+   `origin_unresolvable`. A record with no `ParentLoopID`, no untried `RunID`, and no route is the walk end and
+   settles `route_less_settled`.
+3. The walk SHALL be bounded at 32 hops with cycle detection; a cycle or the bound settles `origin_unresolvable`.
+
+The resolver SHALL reuse the existing persisted-loop read and its transient/permanent classification, SHALL introduce
+no new field on `TaskMessage`, no run-entity predicate, and no second durable authority. `origin_unresolvable` SHALL
+be recorded only after the parent chain AND every encountered run anchor are exhausted, or on a cycle or the bound;
+its log line SHALL name the exhaustion (`parent chain ended at absent <loopID>; run anchor <RunID> absent | none`);
+the metric reason SHALL remain the bounded `origin_unresolvable`. `route_less_settled` SHALL remain distinct: the
+walk ended at a record with no links and no route (a route-less root, or ancestry severed by a non-loop-entity
+trigger).
+
+#### Scenario: typed run anchor resolves the root before any parent read
 
 - **GIVEN** an empty process-local tracker
-- **AND** `AGENT_LOOPS` holds a routed root record and two rule-spawned descendants linked by `ParentLoopID`
-- **WHEN** the descendant's reply-decision terminal is settled
+- **AND** a terminal record carrying `RunID` whose `AGENT_LOOPS/<RunID>` record is routed
+- **WHEN** the terminal is settled
+- **THEN** the response is published to the root's channel
+- **AND** the terminal's parent key is never read
+
+#### Scenario: missing parent key falls back to the run anchor
+
+- **GIVEN** a terminal record whose `ParentLoopID` names a key absent from `AGENT_LOOPS`
+- **AND** the terminal carries a `RunID` whose root record is observable and routed
+- **WHEN** the terminal is settled
+- **THEN** the response is delivered to the root's channel
+- **AND** the reason is `response_settled`, not `origin_unresolvable`
+
+#### Scenario: unthreaded chain resolves by parent walk
+
+- **GIVEN** a terminal record with no `RunID`
+- **AND** `AGENT_LOOPS` holds a routed root and two descendants linked by `ParentLoopID`
+- **WHEN** the terminal is settled
 - **THEN** the response is published to the root's channel
 
-#### Scenario: run anchor is used when the parent link is absent
+#### Scenario: route-less run root continues to the routed ancestor above it
 
-- **GIVEN** a terminal loop record with empty `ParentLoopID` and a nonempty `RunID`
-- **AND** `AGENT_LOOPS/<RunID>` carries a complete route
+- **GIVEN** a terminal whose `RunID` names a present but route-less run root
+- **AND** that root's `ParentLoopID` names a routed record
 - **WHEN** the terminal is settled
-- **THEN** the response is published to that route
+- **THEN** the response is published to that routed record's channel
+
+#### Scenario: origin-unresolvable only after both paths are exhausted
+
+- **GIVEN** a terminal record whose `ParentLoopID` names an absent key
+- **AND** either the terminal's `RunID` names an absent key or no record on the path carries a `RunID`
+- **WHEN** the terminal is settled
+- **THEN** it publishes no `UserResponse`
+- **AND** records reason `origin_unresolvable`
+- **AND** the warning names both the absent parent and the run-anchor outcome
+- **AND** acknowledges the terminal
 
 #### Scenario: route-less root settles route-less
 
@@ -83,17 +128,9 @@ that cannot complete — an absent ancestor key (expired or never persisted), a 
 - **WHEN** the terminal is settled
 - **THEN** the walk ends at the severed record and records reason `route_less_settled`
 
-#### Scenario: missing ancestor settles origin-unresolvable
-
-- **GIVEN** a reply-decision terminal whose next ancestor key is absent from `AGENT_LOOPS`
-- **WHEN** the terminal is settled
-- **THEN** it publishes no `UserResponse`
-- **AND** records reason `origin_unresolvable` with a warning naming the absent loop ID as expired or never persisted
-- **AND** acknowledges the terminal
-
 #### Scenario: transient ancestor read is retried
 
-- **GIVEN** a transient `AGENT_LOOPS` read failure on an ancestor
+- **GIVEN** a transient `AGENT_LOOPS` read failure on any record of the resolution
 - **WHEN** the terminal is settled
 - **THEN** dispatch delayed-NAKs the terminal
 - **AND** does not classify the origin

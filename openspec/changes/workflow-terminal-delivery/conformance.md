@@ -8,7 +8,9 @@ Accepted authority:
 - Inventory checkpoint: `INVENTORY PASS WITH DIVERGENCES` on revision 1 (PR #1098, `01b0f37f`); revision 2
   corrections listed in design §I.6; accepted revision SHA-256 `<pending>`.
 - Owner-accepted design: SHA-256 `<pending>`.
-- Owner rulings on design §II.9 items 1–9: recorded in `design.md`.
+- Owner ruling 2026-08-26 (owner-run Codex round on PR #1098, recorded on the issue): items 1–7 and 9–10 accepted as
+  recommended; 8 accepted conditionally (C2); 11 — AGENT_LOOPS plane accepted, traversal corrected (C1, R4′);
+  binding corrections C1–C4 folded in revision 3. Recorded per item in `design.md`.
 
 | Acceptance criterion (#1094) | Evidence | Status |
 |---|---|---|
@@ -32,6 +34,10 @@ Accepted authority:
 | Strict validation | E16: task 4.5 output | PENDING |
 | Route-less root / severed chain settles `route_less_settled` | E17: `TestSettleAgentTerminalReplyDecisionWithRouteLessRootSettlesRouteLess` | PENDING |
 | Bucket name observed from the declared `agent_loops` port | E18: `TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort`; `grep -n agentLoopsBucket processor/agentic-dispatch/*.go` empty | PENDING |
+| C1: missing parent key falls back to `RunID`; typed-first order | E19: `TestSettleAgentTerminalMissingParentFallsBackToRunID` (three subtests); omission E (task 5.6) | PENDING |
+| C2: `origin_unresolvable` only after parent chain AND run anchor exhausted; Warn names both | E20: `TestResolveOriginRouteSettlesOriginUnresolvableOnlyAfterParentAndRunIDExhausted` | PENDING |
+| C3: decision stamped through the tracked-name → `ToolResult.Name` chain | E21: `TestHandleCompleteResponseStampsDecisionFromToolResultNameWhenTrackedNameAbsent`; omission F (task 5.7) | PENDING |
+| C4: present `Decision` with empty `Action`/`Reason` fails validation; unknown non-empty is a valid handoff | E22: `TestLoopCompletedEventValidateRejectsPresentDecisionWithEmptyActionOrReason`; omission G (task 5.8) | PENDING |
 
 ## Exact gate evidence
 

@@ -2,12 +2,13 @@
 
 Baseline: `5cc0c7fbe569c6398fc534025218639b4c7e0345` (`origin/main` == `HEAD`, clean working tree, 2026-08-26)
 
-Phase: `pre-owner-design`, revision 2. The independent blind inventory review of revision 1 (materialized as
-PR #1098, worktree commit `01b0f37f`) returned `INVENTORY PASS WITH DIVERGENCES`; every divergence is corrected in
-this revision and listed in §I.6. Part II remains CONTINGENT on owner acceptance — nothing in Part II is approved,
-ruled, or accepted.
+Phase: `pre-owner-design`, revision 3. Inventory review: `INVENTORY PASS WITH DIVERGENCES` on revision 1 (PR #1098
+at `01b0f37f`), corrected in revision 2 (`4995b831`, §I.6). Owner ruling (2026-08-26, owner-run Codex round on PR
+#1098, recorded on the issue): items 1–7 and 9–10 accepted as recommended; 8 accepted conditionally; 11 —
+AGENT_LOOPS plane accepted, traversal corrected — see R4′. Four binding corrections C1–C4 are folded in this
+revision (§I.7). Ruled items are binding; the revision as a whole awaits owner acceptance.
 
-Body SHA-256: `ea89acdf98f501c3b54d049310ab9b16975a0938ae17c944b7ce7953c6174ca9` (computed over every line below the `## Complete handoff body` marker)
+Body SHA-256: `27d44cb16e708888e15a90ac67c930ba1742932f5df427930564f21a264d8018` (computed over every line below the `## Complete handoff body` marker)
 
 Owner acceptance: NONE — unsigned architect draft. Binding rulings stay with the owner (Part II §II.9).
 
@@ -243,7 +244,31 @@ predicted.
 6. The undispositioned walk-end case (route-less root) and the fourth structural case (severed hop) are named in §I.1-H and ruled in R4 with a scenario and a test.
 7. Owner facts added: two-plane walker asymmetry (§II.9-11), completion plumbing is new (P4), synthesized decisions never populate `Decision` (§II.9-2), `ask_user` on the cancelled lane (§II.9-4).
 
-**— end of inventory checkpoint (`INVENTORY PASS WITH DIVERGENCES`, corrected above) —**
+## I.7 Owner ruling and binding corrections folded in revision 3
+
+Ruling (2026-08-26): items 1–7 and 9–10 accepted as recommended; 8 accepted CONDITIONALLY (C2); 11 — the AGENT_LOOPS
+plane accepted, the r2 traversal NOT (C1). Confirmed unchanged: component-observed terminal selection; no new durable
+authority; no graph routing metadata; no new communication path; reserved `respond_direct`/`ask_user` (ADR-101
+Proposed → to be Accepted); synthesized `needs_clarification` never populates `Decision`; routed handoff publishes
+nothing; any in-run `ask_user` is user-facing, cancelled lane unchanged; internal-phase failure silent; #1090's
+reason rendering folded; exact name match; declared `agent_loops` read port (R8) in scope.
+
+- **C1 — resolver order.** r2 chose `ParentLoopID` first and settled `origin_unresolvable` on an absent parent key
+  even when the terminal carried a durable `RunID` naming the root. R4′ is typed-first on `RunID` (mirroring
+  `agentrun.ResolveRun`, `agentrun.go:284-296`), parent walk for unthreaded chains, and a missing parent lookup
+  falls back to `RunID` before anything settles.
+- **C2 — item 8 conditional.** `origin_unresolvable` is recorded only after the parent chain AND every encountered
+  run anchor are exhausted; it stays distinct from `route_less_settled`; the exhaustion order is in the requirement
+  text and in the log reason.
+- **C3 — decision stamping guard.** The loop resolves the terminal tool through its existing name-fallback chain
+  (`GetToolName(callID)`, then `toolResult.Name`; `handlers.go:2241-2245`, synth path `:1370-1378`; agentic-tools
+  stamps `Name` before publishing, `agentic-tools/component.go:680`, `:710-711`), so a restart / cache loss does not
+  turn a decide terminal into a no-decision terminal.
+- **C4 — decision validation guard.** A present `Decision` with an empty `Action` or `Reason` fails
+  `LoopCompletedEvent.Validate()` and is permanently rejected by the fail-closed normalizer; it is never silently a
+  handoff. Unknown non-empty actions remain valid handoffs.
+
+**— end of inventory checkpoint (`INVENTORY PASS WITH DIVERGENCES`, corrected; owner ruling recorded above) —**
 
 # Part II — Design (contingent on `INVENTORY PASS`)
 
@@ -348,10 +373,20 @@ Durable-state ruling (draft, for the owner): **no new durable state; no new buck
 
 ## II.3 The contract (target state)
 
-- **R1 Typed decision.** When a loop's terminal `StopLoop` tool result came from the `decide` tool, agentic-loop
-  sets `LoopCompletedEvent.Decision = &CoordinatorDecision{Action, Reason}` from the tool result's metadata
-  (`decide.go:427-433`); otherwise `Decision` is nil. `Result` keeps its current content (the full decision JSON)
-  so `read_loop_result` and rules are unchanged. `agentterminal.Event` carries `Decision`.
+- **R1 Typed decision (C3, C4).** When a loop's terminal `StopLoop` tool result came from the `decide` tool,
+  agentic-loop sets `LoopCompletedEvent.Decision = &CoordinatorDecision{Action, Reason}` from the tool result's
+  metadata (`decide.go:427-433`); otherwise `Decision` is nil. The terminal tool is identified through the loop's
+  EXISTING name-fallback chain, exactly as approval gating does: `GetToolName(callID)` first, then `toolResult.Name`
+  (`handlers.go:2241-2245` — "when the LoopManager cache has been cleared (e.g., process restart)"; the synth path
+  `:1370-1378` recovers the tracked name the same way). agentic-tools stamps `Name` on every result before publishing
+  (`agentic-tools/component.go:680`, `:710-711`), so the fallback is populated on the wire; a tracked-name-only
+  guard would misclassify every decide terminal settled after a restart. `Result` keeps its current content (the
+  full decision JSON) so `read_loop_result` and rules are unchanged. A PRESENT `Decision` with an empty `Action` or
+  an empty `Reason` FAILS `LoopCompletedEvent.Validate()` (`agentic/events.go:89-97`, which today checks only loop
+  and task IDs); because the normalizer runs `Validate()` (`internal/agentterminal/terminal.go:114`), such a
+  terminal is permanently rejected with `ReasonPayload` and Termed — never silently classified as a handoff. An
+  unknown but non-empty action remains a valid handoff (publishes nothing). `agentterminal.Event` carries
+  `Decision`.
 - **R2 Reply vocabulary.** `agentic.DecideActionRespondDirect = "respond_direct"` and
   `agentic.DecideActionAskUser = "ask_user"` are framework-reserved decide actions with user-facing semantics;
   `agentic.IsUserFacingDecideAction(action)` is the ONE classifier. The decide tool description stays
@@ -366,26 +401,32 @@ Durable-state ruling (draft, for the owner): **no new durable state; no new buck
   - `Decision == nil` → unchanged: own route → `result` with `Result` verbatim; no route → `route_less_settled`.
   - Failed and cancelled terminals: unchanged (own route only). Internal-phase failures do not reach the user
     (owner item §II.9-5).
-- **R4 Origin resolution.** Only for a user-facing decision whose own route is empty. Walk from the persisted
-  terminal record: next = `ParentLoopID` if nonempty, else `RunID` if nonempty and ≠ self, else stop. Load
-  `AGENT_LOOPS/<next>` through the existing `loadPersistedLoop` seam. First record with a complete
-  `ChannelType`+`ChannelID` pair is the origin (`UserID` optional, as today). Bounds: 32 hops, visited set.
-  Walk end: a record with neither link and no complete route is the workflow's root, and a route-less root means
-  there was never anyone to deliver to (a bus `agent.task` submission without channel fields, e.g.
-  `test/e2e/scenarios/research-graph/scenario.go:370-390`) → reason `route_less_settled`, ACK. The same disposition
-  covers a SEVERED chain (§I.1-H case 4): a hop fired from a non-loop entity has no `ParentLoopID` and inherits a
-  `RunID` only if that entity carries `agent.loop.run` (`actions.go:1519-1526`, `:1604-1614`); from the bucket a
-  severed loop is indistinguishable from a route-less root. That is a limit of the walk, stated here, not a product
-  question; the framework-side remedy for a severed hop is `RunID` inheritance through the trigger entity, which
-  exists today. Dispositions: transient KV error → delayed NAK (`routing_read_transient`, unchanged); an ancestor
-  key that is absent → settle route-less with reason `origin_unresolvable` and the Warn `origin ancestor <loopID>
-  not observable in AGENT_LOOPS (expired or never persisted)` — redelivery cannot help because an ancestor's record
-  is written before its child exists, so absence means the key expired (24h TTL) or its best-effort
-  `persistLoopState` Put never succeeded (`agentic-loop/component.go:1985-1987` logs and continues); cycle or hop
-  bound → `origin_unresolvable`; malformed ancestor JSON / id mismatch → permanent (`routing_malformed`, unchanged);
-  partial route on an ancestor → permanent (unchanged). `route_less_settled` answers "there was no origin" (expected
-  for bus-submitted work; not an alert); `origin_unresolvable` answers "the origin could not be observed" (a
-  retention/persistence alert). Two reasons because operators act on them differently.
+- **R4′ Origin resolution (owner-corrected: C1, C2).** Only for a user-facing decision whose own reconciled route
+  is empty. The resolver mirrors `agentrun.ResolveRun` (`agentrun.go:284-296`): typed-first, walk-fallback, and it
+  never settles while an untried durable link remains.
+  1. **Typed-first (`RunID`).** If the terminal record carries `RunID` ≠ its own ID, load `AGENT_LOOPS/<RunID>` — the
+     run root by construction (`actions.go:1578`). Routed → origin. Present but route-less → continue at step 2
+     FROM THE ROOT record (a routed loop may sit above a product-minted run). Absent → note "run anchor absent" and
+     continue at step 2 from the terminal.
+  2. **Parent walk (nearest routed ancestor — unthreaded chains, and above a route-less run root).** From the start
+     record: a complete route → origin; else follow `ParentLoopID`. At every hop whose parent key is ABSENT, before
+     anything settles, try the current record's `RunID` if it is non-empty, not self, and not yet tried (an
+     intermediate record may carry a run anchor the terminal did not): routed → origin; present and route-less →
+     continue the walk from it; absent or none → `origin_unresolvable`. A record with no `ParentLoopID`, no untried
+     `RunID`, and no route is the walk end → `route_less_settled` (there was no origin: a route-less bus-submitted
+     root, `test/e2e/scenarios/research-graph/scenario.go:370-390`, or a hop severed by a non-loop-entity trigger,
+     `actions.go:1519-1526`, `:1604-1614` — indistinguishable from the bucket; a limit of the walk, not a product
+     question).
+  3. **Bounds.** 32 hops, visited set; a cycle or the bound → `origin_unresolvable`.
+  Dispositions: transient KV error on any record → delayed NAK (`routing_read_transient`, unchanged); malformed JSON,
+  ID mismatch, or partial route on any record → permanent (unchanged). `origin_unresolvable` is recorded ONLY after
+  both the parent chain and every encountered run anchor are exhausted (C2), and its Warn names the exhaustion:
+  `origin_unresolvable: parent chain ended at absent <loopID>; run anchor <RunID> absent | none` — the metric reason
+  stays the bounded `origin_unresolvable`; absence means the key expired (24h TTL) or its best-effort
+  `persistLoopState` Put never succeeded (`agentic-loop/component.go:1985-1987`), and redelivery cannot help because
+  an ancestor's record is written before its child exists. `route_less_settled` is the walk-end answer "there was no
+  origin" (expected for bus-submitted work; not an alert) and is never used when a link pointed at something
+  unobservable; `origin_unresolvable` answers "the origin could not be observed" (a retention/persistence alert).
 - **R5 Identity.** Unchanged: `ResponseID` = `Nats-Msg-Id` = `terminal-user-response:<source id>`; timestamp =
   validated terminal timestamp; a redelivery reuses the same route. The guarantee stays "at most one distinct
   response identity per terminal, deduplicated within the USER `duplicates` window as clamped to the USER MaxAge"
@@ -401,13 +442,27 @@ Durable-state ruling (draft, for the owner): **no new durable state; no new buck
   from that port instead of the constant at `http_activity.go:20`, so a non-default bucket name is observed from
   configuration, never predicted. Config-additive; the default name is unchanged.
 
+### Walk-end table (R4′)
+
+| Case | What was observed | Reason | Disposition |
+|---|---|---|---|
+| Terminal carries `RunID`; the run root's record is routed (typed-first) | one read | `response_settled` | publish, ACK after PubAck |
+| A routed record is reached on the parent walk (unthreaded chain, or above a route-less run root) | nearest routed ancestor | `response_settled` | publish, ACK after PubAck |
+| Parent key absent; a not-yet-tried `RunID` on the current record resolves a routed root (C1) | fallback hit | `response_settled` | publish, ACK after PubAck |
+| Parent key absent; `RunID` key absent, or no `RunID` on the path (C2 exhaustion) | parent chain AND run anchor exhausted | `origin_unresolvable` | no publish, Warn names both, ACK |
+| Walk end: no `ParentLoopID`, no untried `RunID`, no route (route-less root; severed hop) | every link resolved; nothing to deliver to | `route_less_settled` | no publish, ACK |
+| Cycle, or 32-hop bound | walk cannot complete | `origin_unresolvable` | no publish, ACK |
+| Transient KV read on any record | not classified | `routing_read_transient` | delayed NAK |
+| Malformed JSON, ID mismatch, or partial route on any record | permanent | `routing_malformed` / `routing_collision_or_malformed` | Term |
+
 ## II.4 Changes by file (implementation map)
 
 | File | Change |
 |---|---|
 | `agentic/types.go` (or `agentic/tools.go`) | `type CoordinatorDecision struct{Action, Reason string}`; consts `DecideToolName`, `DecideActionRespondDirect`, `DecideActionAskUser`; `func IsUserFacingDecideAction(string) bool` |
 | `agentic/events.go:59-86` | `Decision *CoordinatorDecision \`json:"decision,omitempty"\`` on `LoopCompletedEvent` |
-| `processor/agentic-loop/handlers.go:2164-2170,1959-1993` | NEW plumbing: `handleCompleteResponse` receives only `toolResult.Content` today (`:2166`); thread the tool result (name via `GetToolName`, metadata) into it; set `completion.Decision` when the tool is `agentic.DecideToolName`; replace literals at `:1921,:1935` |
+| `processor/agentic-loop/handlers.go:2164-2170,1959-1993` | NEW plumbing: `handleCompleteResponse` receives only `toolResult.Content` today (`:2166`); thread the tool result into it; resolve the tool name with the existing chain `GetToolName(callID)` → `toolResult.Name` (`:2241-2245`); set `completion.Decision` when it equals `agentic.DecideToolName`; replace literals at `:1921,:1935` |
+| `agentic/events.go:89-97` | `LoopCompletedEvent.Validate` rejects a present `Decision` with empty `Action` or `Reason` (C4) |
 | `processor/agentic-tools/decide.go:71` | `DecideToolName = agentic.DecideToolName` |
 | `internal/agentterminal/terminal.go` | `Event.Decision` copied from `LoopCompletedEvent` |
 | `processor/agentic-dispatch/terminal_settlement.go` | selection (R3), `resolveOriginRoute` (R4) over `loadPersistedLoop`, reasons `handoff_settled` / `origin_unresolvable`, `prompt` projection for `ask_user` |
@@ -422,15 +477,16 @@ Durable-state ruling (draft, for the owner): **no new durable state; no new buck
 | Acceptance criterion | Test (package) |
 |---|---|
 | Root handoff (`research`/`autoresearch`) is not emitted as the final result | `TestSettleAgentTerminalHandoffDecisionOnRoutedLoopPublishesNothing` (agentic-dispatch, unit); `TestSettleAgentTerminalHandoffDecisionOnRouteLessLoopPublishesNothing` |
-| Correlation survives a rule-spawned multi-loop workflow | `TestSettleAgentTerminalUserFacingDecisionResolvesOriginByAncestry` (unit; 3-deep `ParentLoopID` chain via `loadPersistedLoopFn`); `TestSettleAgentTerminalUserFacingDecisionResolvesOriginByRunIDWhenParentAbsent` |
+| Correlation survives a rule-spawned multi-loop workflow | `TestSettleAgentTerminalUserFacingDecisionResolvesOriginByAncestry` (unit; unthreaded 3-deep `ParentLoopID` chain via `loadPersistedLoopFn`); `TestSettleAgentTerminalMissingParentFallsBackToRunID` (C1; subtests `parent_key_absent` — the ruled shape: terminal → absent parent key, `terminal.RunID` → observable routed root → delivered; `parent_link_empty`; `typed_lookup_precedes_parent_walk` — the load sequence is `[terminal, root]`, the parent key is never read) |
 | Correlation survives process restart/recovery | `TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart` (agentic-dispatch, `-tags=integration`; empty tracker, chain records only in AGENT_LOOPS) |
 | Published as typed `agentic.user_response/v1` to the originating channel, one identity | same integration test asserts `user.response.http.<origin>` holds exactly one message with `terminal-user-response:<source id>` after two deliveries; `TestSettleAgentTerminalUserFacingDecisionKeepsStableIdentityOnRedelivery` (unit) |
 | Internal phase completions never reach the user channel | `TestSettleAgentTerminalNoDecisionRouteLessLoopStaysRouteLess` (baseline/reviewer text terminal inside a run → nothing) |
 | Direct response (single-loop front door) | `TestSettleAgentTerminalRespondDirectOnRoutedLoopPublishesResultWithReason` |
 | Clarification | `TestSettleAgentTerminalAskUserDecisionPublishesPromptToOrigin` |
-| Loop carries the typed decision only for a decide terminal | `TestHandleCompleteResponseStampsTypedDecisionFromDecideTerminal`, `TestHandleCompleteResponseLeavesDecisionNilForNonDecideTerminal` (agentic-loop); `TestLoopCompletedEventDecisionRoundTrip` (agentic, production decoder) |
+| Loop carries the typed decision only for a decide terminal | `TestHandleCompleteResponseStampsTypedDecisionFromDecideTerminal`, `TestHandleCompleteResponseStampsDecisionFromToolResultNameWhenTrackedNameAbsent` (C3: tracked name absent, `toolResult.Name == "decide"` → stamped), `TestHandleCompleteResponseLeavesDecisionNilForNonDecideTerminal` (agentic-loop); `TestLoopCompletedEventDecisionRoundTrip` (agentic, production decoder) |
+| A present decision with empty fields is rejected, not a handoff | `TestLoopCompletedEventValidateRejectsPresentDecisionWithEmptyActionOrReason` (C4; subtests `empty_action`, `empty_reason`, `unknown_nonempty_action_valid`); the dispatch Term disposition for `ReasonPayload` is already pinned by `TestSettleAgentTerminalDispositionClasses` |
 | One classifier | `TestIsUserFacingDecideActionTable` (agentic) |
-| Walk bounds and dispositions | `TestResolveOriginRouteBoundsHopsAndDetectsCycles`, `TestResolveOriginRouteMissingAncestorSettlesOriginUnresolvable`, `TestResolveOriginRouteTransientReadDelaysNak`, `TestResolveOriginRouteMalformedAncestorIsPermanent` |
+| Walk bounds and dispositions | `TestResolveOriginRouteBoundsHopsAndDetectsCycles`, `TestResolveOriginRouteSettlesOriginUnresolvableOnlyAfterParentAndRunIDExhausted` (C2; fixtures: absent parent + absent `RunID` key; absent parent + no `RunID` on the path), `TestResolveOriginRouteTransientReadDelaysNak`, `TestResolveOriginRouteMalformedAncestorIsPermanent` |
 | Bounded telemetry | `TestSettleAgentTerminalRecordsExactlyOneFixedDisposition` extended with the two new reasons |
 | Route-less root and severed chain settle route-less, never origin-unresolvable | `TestSettleAgentTerminalReplyDecisionWithRouteLessRootSettlesRouteLess` (terminal record with neither link and no route) |
 | Bucket name observed from the declared port, not predicted | `TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort` (`-tags=integration`; port bound to a non-default bucket) |
@@ -446,6 +502,9 @@ Durable-state ruling (draft, for the owner): **no new durable state; no new buck
 | Selector: `IsUserFacingDecideAction` | return `true` for every action | `TestSettleAgentTerminalHandoffDecisionOnRoutedLoopPublishesNothing` |
 | Mapper: `resolveOriginRoute` | skip the walk (return empty) | `TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart` |
 | Carrier: declared `agent_loops` port | resolve the bucket from the constant again | `TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort` |
+| Mapper: the `RunID` path of R4′ (typed-first lookup + retry at an absent parent) | delete the `RunID` path; keep the parent walk | `TestSettleAgentTerminalMissingParentFallsBackToRunID` and only that test (its three subtests) |
+| Selector: `toolResult.Name` fallback in the decision guard (C3) | resolve the tool name from the tracked name only | `TestHandleCompleteResponseStampsDecisionFromToolResultNameWhenTrackedNameAbsent` and only that test |
+| Guard: `Validate` rejection of a present empty-field `Decision` (C4) | remove the check | `TestLoopCompletedEventValidateRejectsPresentDecisionWithEmptyActionOrReason` and only that test |
 
 Each omission is applied to a committed GREEN tree, the RED output captured verbatim, and the file restored by
 `cp` from a checksummed copy (`shasum -a 256` before and after).
@@ -486,6 +545,8 @@ Each omission is applied to a committed GREEN tree, the RED output captured verb
 
 ## II.9 Owner items (decisions only the owner can make)
 
+Owner ruling 2026-08-26: **1–7 and 9–10 accepted as recommended; 8 conditional (C2); 11 corrected — see R4′.**
+
 1. **Home of the reply vocabulary.** (a) Framework-reserved `respond_direct` + `ask_user` as a cross-repo contract
    (recommended; ADR draft staged as `docs/adr/101-…`), or (b) a dispatch config list defaulting to those two
    names (Option 4), or (c) a config list defaulting to empty. (a) and (b) make semteams work with no config; (c)
@@ -513,13 +574,17 @@ Each omission is applied to a committed GREEN tree, the RED output captured verb
    `Result` JSON here and leave #1090 whole.
 7. **Normalisation:** compare reserved names exactly (recommended; the decide tool already canonicalises when an
    `action_allowlist` is present) or SAP-normalise (`decide.go:563-568` would move to `agentic`).
-8. **`origin_unresolvable` disposition:** settle route-less and ACK (recommended — the key cannot reappear) or Term.
+8. **`origin_unresolvable` disposition:** settle route-less and ACK — **ACCEPTED CONDITIONALLY**: only after every
+   available ancestry route (parent chain AND `RunID`) is exhausted, distinct from `route_less_settled`, with the
+   exhaustion order explicit in the requirement text and the log reason (C2, R4′).
 9. **Milestone placement** (beta.162 tag-blocker vs beta.163 first item) — per the triage comment.
 10. **Declared `agent_loops` read port (R8) is now IN this change** — promoted from hygiene by the inventory review:
     a predicted bucket name that the sibling component already observes (`agentic-tools/config.go:134`). The owner
     may pull it back out; the recommendation is to keep it, because origin resolution multiplies the reads that rest
     on the constant today.
-11. **Two walkers of one ancestry on two planes.** `agentrun.ResolveRun` already walks `agent.loop.parent` over
+11. **Two walkers of one ancestry on two planes** — **AGENT_LOOPS plane ACCEPTED; the r2 traversal NOT**: it was
+    parent-first and settled on an absent parent while a durable `RunID` was in hand; corrected to typed-first with
+    parent fallback in R4′ (C1). `agentrun.ResolveRun` already walks `agent.loop.parent` over
     ENTITY_STATES (no TTL, History 1, `maxAncestryHops = 32`, `agentrun.go:282-370`); R4 walks `ParentLoopID`/`RunID`
     over AGENT_LOOPS (24h key TTL). The graph carries no channel predicate — `loop_execution_entity.go:142-143`
     stamps `agent.loop.user` only — so a graph walk can reach the ROOT but can never serve its route; the route exists
@@ -567,6 +632,13 @@ Each omission is applied to a committed GREEN tree, the RED output captured verb
     other reader observes the name; it is a predicted-name seam, now R8.
 13. Revision 1 R4 "absence means eviction" → absence also covers a best-effort Put that never succeeded
     (`component.go:1985-1987`); disposition unchanged, causal claim corrected.
+14. Revision 2 R4 chose `ParentLoopID` first and settled `origin_unresolvable` on an absent parent key while the
+    terminal's durable `RunID` could still resolve the root — contradicting `agentrun.ResolveRun`'s typed-first order
+    (`agentrun.go:284-296`) and this design's own P3; corrected by C1 (R4′).
+15. Revision 2 R1 guarded decision stamping on the tracked tool name only; after a restart or cache loss that name is
+    absent (`handlers.go:2241-2245` exists for exactly that case) and every decide terminal would have settled as a
+    no-decision terminal; corrected by C3. A present `Decision` with empty fields would have classified as a handoff
+    silently; corrected by C4.
 
 ## II.11 Draft ADR
 

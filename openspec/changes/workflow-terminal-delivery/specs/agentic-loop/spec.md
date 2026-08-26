@@ -2,10 +2,13 @@
 
 ### Requirement: A decide terminal SHALL be carried as a typed decision on the completion event
 
-When a loop completes because a `StopLoop` tool result arrived from the tool whose tracked name is the framework
-decide tool, the loop SHALL populate `LoopCompletedEvent.Decision` with the decision's `Action` and `Reason` taken from
-the tool result's typed metadata, and SHALL leave `Result` unchanged. When the terminal tool is any other tool, or the
-loop completes on model text, `Decision` SHALL be nil. The loop SHALL NOT infer a decision from the shape of `Result`.
+When a loop completes because a `StopLoop` tool result arrived from the framework decide tool, the loop SHALL populate
+`LoopCompletedEvent.Decision` with the decision's `Action` and `Reason` taken from the tool result's typed metadata,
+and SHALL leave `Result` unchanged. The loop SHALL identify the tool through its existing name-fallback chain — the
+tracked name for the call ID first, then the tool result's own `Name` — so a process restart or cache loss does not
+demote a decide terminal. When the terminal tool is any other tool, or the loop completes on model text, `Decision`
+SHALL be nil. The loop SHALL NOT infer a decision from the shape of `Result`. `LoopCompletedEvent.Validate` SHALL
+reject a present `Decision` whose `Action` or `Reason` is empty; an unknown but nonempty `Action` SHALL remain valid.
 
 #### Scenario: decide terminal carries its decision
 
@@ -14,6 +17,13 @@ loop completes on model text, `Decision` SHALL be nil. The loop SHALL NOT infer 
 - **WHEN** the loop completes
 - **THEN** the published completion event decodes with `Decision.Action` and `Decision.Reason` equal to that metadata
 - **AND** `Result` equals the tool result content
+
+#### Scenario: tracked name absent, result name identifies decide
+
+- **GIVEN** a loop with no tracked tool name for the terminal call ID
+- **AND** the tool result's `Name` is the decide tool name with `StopLoop=true` and decision metadata
+- **WHEN** the loop completes
+- **THEN** the published completion event decodes with `Decision` populated
 
 #### Scenario: non-decide terminal carries no decision
 
@@ -26,6 +36,13 @@ loop completes on model text, `Decision` SHALL be nil. The loop SHALL NOT infer 
 - **GIVEN** a loop that completes on model text with `decide` in its tool set
 - **WHEN** the framework synthesizes a `needs_clarification` decision triple after completion
 - **THEN** the published completion event still decodes with a nil `Decision`
+
+#### Scenario: present decision with an empty field fails validation
+
+- **GIVEN** a `LoopCompletedEvent` whose `Decision` is present with an empty `Action` or an empty `Reason`
+- **WHEN** the payload is validated
+- **THEN** validation fails
+- **AND** a `Decision` with an unknown but nonempty `Action` and a nonempty `Reason` validates
 
 #### Scenario: additive wire field round-trips
 

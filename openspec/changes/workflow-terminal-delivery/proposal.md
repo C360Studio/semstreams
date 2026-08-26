@@ -22,13 +22,17 @@ The accepted design will be recorded in `docs/proposals/gh1094-workflow-terminal
 - Dispatch selects the user-facing terminal by the typed decision: a reply decision publishes (`respond_direct` →
   `result`, `ask_user` → `prompt`, content = reason); a handoff decision publishes nothing (`handoff_settled`); a
   terminal without a decision keeps today's behaviour.
-- Dispatch resolves a route-less reply decision's origin by walking persisted ancestry (`ParentLoopID`, then
-  `RunID`) in `AGENT_LOOPS` to the nearest routed ancestor, bounded at 32 hops; a missing ancestor settles
-  `origin_unresolvable`.
+- Dispatch resolves a route-less reply decision's origin from persisted `AGENT_LOOPS` records: typed-first through
+  the terminal's `RunID` (the run root), then by walking `ParentLoopID` for unthreaded chains, bounded at 32 hops; a
+  missing parent lookup falls back to `RunID` before anything settles (mirroring `agentrun.ResolveRun`).
+- The loop identifies the `decide` terminal through its existing tool-name fallback chain (tracked name, then
+  `ToolResult.Name`), and `LoopCompletedEvent.Validate` rejects a present `Decision` with an empty `Action` or
+  `Reason`, so a malformed decision is Termed by the fail-closed normalizer rather than classified as a handoff.
 - Response identity, PubAck-before-ACK, `MaxDeliver=0`, and the bounded at-least-once declaration are unchanged.
 - A walk that ends at a record with neither link and no route (a route-less bus-submitted root, or a hop severed by
-  a non-loop-entity trigger) settles `route_less_settled`; a walk that cannot complete (absent key, cycle, bound)
-  settles `origin_unresolvable`.
+  a non-loop-entity trigger) settles `route_less_settled`; `origin_unresolvable` is recorded only after the parent
+  chain AND every encountered run anchor are exhausted (absent key), or on a cycle or the hop bound, and its log
+  reason names what was exhausted.
 - Dispatch declares an `agent_loops` KV read port (mirroring agentic-tools) and resolves the bucket from it in the
   settlement and `/activity` readers, replacing the hardcoded constant.
 - `publish_agent` is unchanged; a guard test pins that spawned tasks carry no channel fields.

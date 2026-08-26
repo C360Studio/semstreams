@@ -2,8 +2,10 @@
 
 ## Status
 
-**Proposed — unsigned architect draft, revision 2 (2026-08-26; inventory review `INVENTORY PASS WITH DIVERGENCES`,
-corrected), pending owner ruling on #1094.** Records a cross-repo
+**Accepted (2026-08-26).** Owner ruling on #1094 via the owner-run round on PR #1098 (recorded on the issue): items 1–7 and 9–10 accepted; 8 conditional on exhaustive ancestry fallback; 11 accepted on the AGENT_LOOPS plane with the missing-parent→`RunID` correction. The reserved reply vocabulary (`respond_direct`, `ask_user`) is a cross-repo contract from this date. Owner ruling on #1094 (2026-08-26, owner-run Codex round on PR #1098): the reserved
+reply vocabulary, component-observed terminal selection, no new durable authority, no graph routing metadata, and the
+AGENT_LOOPS resolution plane are accepted; the traversal is corrected to typed-first `RunID` with parent fallback
+(revision 3). Status flips to Accepted when the change lands. Records a cross-repo
 contract; the mechanics live in `openspec/specs/agentic-terminal-events`, `agentic-loop`, and `agentic-tools`
 via change `workflow-terminal-delivery`.
 
@@ -32,9 +34,10 @@ completion, never a tool result.
 2. **"Terminal" is a property of the decision, observed by the loop — never a rule-declared step.** agentic-loop
    carries the typed decision of a `decide` terminal on the completion event. Neither `publish_agent` nor any rule
    field, metadata key (`wakeup_mode`), or run-lifecycle transition selects the user-facing terminal.
-3. **Origin correlation is observed, not carried.** Dispatch resolves a route-less user-facing decision's channel by
-   walking the persisted loop ancestry (`ParentLoopID`, then `RunID`) in `AGENT_LOOPS` to the nearest routed
-   ancestor. No new field rides `TaskMessage`, no run-entity predicate is added, and no second durable authority is
+3. **Origin correlation is observed, not carried.** Dispatch resolves a route-less user-facing decision's channel from
+   persisted loop records in `AGENT_LOOPS`: typed-first through the terminal's `RunID` (the run root's record), then
+   by walking `ParentLoopID` for unthreaded chains; a missing parent lookup falls back to `RunID` before anything
+   settles, mirroring `agentrun.ResolveRun`. No new field rides `TaskMessage`, no run-entity predicate is added, and no second durable authority is
    created. The 24h `AGENT_LOOPS` key TTL and its best-effort persistence are the documented horizon of this
    resolution; a walk that ends at a record with no link and no route (a route-less bus-submitted root, or a hop
    fired from a non-loop entity) settles route-less — a stated limit, not a product obligation.

@@ -8,8 +8,8 @@ body is a published layer and states `implemented-by: <model>`.
 ## 0. Accepted records
 
 - [ ] 0.1 Record the `INVENTORY PASS` and owner-accepted design body SHA-256 values in `design.md`.
-- [ ] 0.2 Record each owner ruling on design §II.9 items 1–11 in the `design.md` table; implement the recommended
-  default for any item ruled "as recommended".
+- [ ] 0.2 Record the owner ruling of 2026-08-26 (1–7, 9–10 accepted; 8 conditional; 11 corrected — R4′) and the
+  C1–C4 corrections in `conformance.md`; implement the ruled shape.
 - [ ] 0.3 Record the `INVENTORY PASS WITH DIVERGENCES` review and its seven corrections (design §I.6) in
   `conformance.md`.
 
@@ -24,21 +24,27 @@ body is a published layer and states `implemented-by: <model>`.
 - [ ] 2.1 RED: add `TestLoopCompletedEventDecisionRoundTrip` (agentic) decoding a marshalled event with
   `decision` through the production registry into a fresh `message.BaseMessage`; add
   `TestIsUserFacingDecideActionTable` (agentic) covering `respond_direct`, `ask_user`, `autoresearch`,
-  `research`, `needs_clarification`, `""`, and case variants; run
-  `go test -race -count=1 ./agentic -run '^(TestLoopCompletedEventDecisionRoundTrip|TestIsUserFacingDecideActionTable)$'`
+  `research`, `needs_clarification`, `""`, and case variants; add
+  `TestLoopCompletedEventValidateRejectsPresentDecisionWithEmptyActionOrReason` (agentic; subtests `empty_action`,
+  `empty_reason`, `unknown_nonempty_action_valid`); run
+  `go test -race -count=1 ./agentic -run '^(TestLoopCompletedEventDecisionRoundTrip|TestIsUserFacingDecideActionTable|TestLoopCompletedEventValidateRejectsPresentDecisionWithEmptyActionOrReason)$'`
   and record the compile/assert output verbatim in `conformance.md` (this is the RED-capture task).
 - [ ] 2.2 GREEN: add `agentic.CoordinatorDecision`, `agentic.DecideToolName`, `agentic.DecideActionRespondDirect`,
   `agentic.DecideActionAskUser`, `agentic.IsUserFacingDecideAction`; add `Decision *CoordinatorDecision
-  \`json:"decision,omitempty"\`` to `LoopCompletedEvent`; re-run 2.1's command to GREEN.
-- [ ] 2.3 Add `TestHandleCompleteResponseStampsTypedDecisionFromDecideTerminal` and
-  `TestHandleCompleteResponseLeavesDecisionNilForNonDecideTerminal` (agentic-loop) driving a `StopLoop` tool result
-  whose tracked tool name is `decide` (metadata `action`/`reason` present) and one whose name is `submit_work`;
-  assert the published completion envelope decodes into a fresh `LoopCompletedEvent` with `Decision` set / nil.
-  Command: `go test -race -count=1 ./processor/agentic-loop -run '^(TestHandleCompleteResponseStampsTypedDecisionFromDecideTerminal|TestHandleCompleteResponseLeavesDecisionNilForNonDecideTerminal)$'`.
+  \`json:"decision,omitempty"\`` to `LoopCompletedEvent`; make `LoopCompletedEvent.Validate` reject a present
+  `Decision` with empty `Action` or `Reason`; re-run 2.1's command to GREEN.
+- [ ] 2.3 Add `TestHandleCompleteResponseStampsTypedDecisionFromDecideTerminal`,
+  `TestHandleCompleteResponseStampsDecisionFromToolResultNameWhenTrackedNameAbsent` (no tracked name for the
+  CallID; `toolResult.Name == "decide"`), and `TestHandleCompleteResponseLeavesDecisionNilForNonDecideTerminal`
+  (agentic-loop) driving `StopLoop` tool results (metadata `action`/`reason` present for decide; `submit_work` for the
+  nil case); assert the published completion envelope decodes into a fresh `LoopCompletedEvent` with `Decision`
+  set / set / nil. Command:
+  `go test -race -count=1 ./processor/agentic-loop -run '^(TestHandleCompleteResponseStampsTypedDecisionFromDecideTerminal|TestHandleCompleteResponseStampsDecisionFromToolResultNameWhenTrackedNameAbsent|TestHandleCompleteResponseLeavesDecisionNilForNonDecideTerminal)$'`.
 - [ ] 2.4 Implement 2.3: thread the terminal tool result (name via `GetToolName`, metadata) into
-  `handleCompleteResponse`; populate `completion.Decision`; replace the `"decide"` literals at `handlers.go:1921`
-  and `:1935` and `agentictools.DecideToolName` with `agentic.DecideToolName`; copy `Decision` onto
-  `agentterminal.Event`.
+  `handleCompleteResponse`; resolve the tool name with the existing chain `GetToolName(callID)` →
+  `toolResult.Name` (`handlers.go:2241-2245`); populate `completion.Decision`; replace the `"decide"` literals at
+  `handlers.go:1921` and `:1935` and `agentictools.DecideToolName` with `agentic.DecideToolName`; copy `Decision`
+  onto `agentterminal.Event`.
 - [ ] 2.5 Run `task schema:generate`; commit the regenerated `schemas/agentic-loop.v1.json` with the code; record
   `git diff --stat schemas/ specs/` in `conformance.md`.
 - [ ] 2.6 Commit Slice A GREEN before any mutation check; record the commit SHA in `conformance.md`.
@@ -52,23 +58,29 @@ body is a published layer and states `implemented-by: <model>`.
   `TestSettleAgentTerminalAskUserDecisionPublishesPromptToOrigin`,
   `TestSettleAgentTerminalUserFacingDecisionResolvesOriginByAncestry` (3-deep `ParentLoopID` chain served by
   `loadPersistedLoopFn`, tracker empty),
-  `TestSettleAgentTerminalUserFacingDecisionResolvesOriginByRunIDWhenParentAbsent`,
+  `TestSettleAgentTerminalMissingParentFallsBackToRunID` (subtests `parent_key_absent`: terminal → absent parent
+  key, `terminal.RunID` → observable routed root → delivered; `parent_link_empty`; `typed_lookup_precedes_parent_walk`:
+  a sequence-recording `loadPersistedLoopFn` sees `[terminal, root]` and never the parent key),
   `TestSettleAgentTerminalNoDecisionRouteLessLoopStaysRouteLess`,
   `TestSettleAgentTerminalReplyDecisionWithRouteLessRootSettlesRouteLess` (terminal record with empty
   `ParentLoopID` and `RunID` and no route → reason `route_less_settled`, no origin walk reason),
   `TestSettleAgentTerminalUserFacingDecisionKeepsStableIdentityOnRedelivery`,
   `TestResolveOriginRouteBoundsHopsAndDetectsCycles`,
-  `TestResolveOriginRouteMissingAncestorSettlesOriginUnresolvable`,
+  `TestResolveOriginRouteSettlesOriginUnresolvableOnlyAfterParentAndRunIDExhausted` (absent parent + absent `RunID`
+  key; absent parent + no `RunID` on the path; each asserts the Warn names both exhaustions),
   `TestResolveOriginRouteTransientReadDelaysNak`,
   `TestResolveOriginRouteMalformedAncestorIsPermanent`;
   extend `requireOneTerminalReason`/`terminalReasonSnapshot` and
   `TestSettleAgentTerminalRecordsExactlyOneFixedDisposition` with `handoff_settled` and `origin_unresolvable`.
   Command: `go test -race -count=1 ./processor/agentic-dispatch -run '^(TestSettleAgentTerminal.*|TestResolveOriginRoute.*)$'`.
-- [ ] 3.2 Implement `resolveOriginRoute` over `loadPersistedLoop` (next = `ParentLoopID`, else `RunID` ≠ self;
-  32 hops; visited set; walk end with no route → `route_less_settled`; absent key, cycle, or bound →
-  `origin_unresolvable` with the Warn `origin ancestor <loopID> not observable in AGENT_LOOPS (expired or never
-  persisted)`), the decision-driven selection in `settleAgentTerminal`, the `prompt` projection for `ask_user`,
-  `Content = Decision.Reason` for reply decisions, and the two new bounded reasons; re-run 3.1 to GREEN.
+- [ ] 3.2 Implement `resolveOriginRoute` over `loadPersistedLoop` in the ruled order: typed-first `RunID` → run root
+  (routed → origin; present route-less → walk parents from the root; absent → walk from the terminal); parent walk
+  to the nearest routed ancestor; at an absent parent key try the current record's untried `RunID` before settling;
+  32 hops, visited set; walk end with no links and no route → `route_less_settled`; parent chain AND run anchor
+  exhausted, cycle, or bound → `origin_unresolvable` with the Warn `origin_unresolvable: parent chain ended at absent
+  <loopID>; run anchor <RunID> absent | none`. Then the decision-driven selection in `settleAgentTerminal`, the
+  `prompt` projection for `ask_user`, `Content = Decision.Reason` for reply decisions, and the two new bounded
+  reasons; re-run 3.1 to GREEN.
 - [ ] 3.3 Add `TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart` (`//go:build
   integration`): write root (routed, `http`/`origin-1`), intermediate, and terminal records to `AGENT_LOOPS` with
   `ParentLoopID` links; empty tracker; settle a `respond_direct` completion twice; assert `USER_TERMINAL` contains
@@ -103,8 +115,8 @@ body is a published layer and states `implemented-by: <model>`.
 ## 5. Forced omissions (after the GREEN commits of 2.6 and 3.6)
 
 - [ ] 5.1 Checksum `processor/agentic-loop/handlers.go`, `agentic/tools.go` (or wherever the classifier lands),
-  `processor/agentic-dispatch/terminal_settlement.go`, and `processor/agentic-dispatch/http_activity.go` with
-  `shasum -a 256`; keep `cp` copies in the scratchpad.
+  `agentic/events.go`, `processor/agentic-dispatch/terminal_settlement.go`, and
+  `processor/agentic-dispatch/http_activity.go` with `shasum -a 256`; keep `cp` copies in the scratchpad.
 - [ ] 5.2 Omission A (carrier): remove the `completion.Decision` assignment; run 2.3's and 3.1's commands; record
   the assertion output verbatim (the named tests must not pass); restore by `cp`; re-checksum equal.
 - [ ] 5.3 Omission B (selector): make `IsUserFacingDecideAction` return `true`; run 3.1's command; record the
@@ -113,6 +125,16 @@ body is a published layer and states `implemented-by: <model>`.
   assertion output (it must not pass); restore; re-checksum.
 - [ ] 5.5 Omission D (carrier): resolve the bucket from a hardcoded `"AGENT_LOOPS"` again; run 3.4's command; record
   the assertion output (it must not pass); restore; re-checksum.
+- [ ] 5.6 Omission E (mapper, C1): delete the `RunID` path of the resolver (typed-first lookup and the retry at an
+  absent parent), keeping the parent walk; run 3.1's command; record that
+  `TestSettleAgentTerminalMissingParentFallsBackToRunID` (all three subtests) does not pass and every other 3.1
+  test does; restore; re-checksum.
+- [ ] 5.7 Omission F (selector, C3): resolve the terminal tool from the tracked name only; run 2.3's command; record
+  that `TestHandleCompleteResponseStampsDecisionFromToolResultNameWhenTrackedNameAbsent` alone does not pass;
+  restore; re-checksum.
+- [ ] 5.8 Omission G (guard, C4): remove the `Decision` check from `LoopCompletedEvent.Validate`; run 2.1's command;
+  record that `TestLoopCompletedEventValidateRejectsPresentDecisionWithEmptyActionOrReason` alone does not pass;
+  restore; re-checksum.
 
 ## 6. Gates (run what CI runs, both suites)
 
