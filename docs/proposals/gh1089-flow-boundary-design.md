@@ -4,7 +4,7 @@
 
 - Baseline: `5cc0c7fbe569c6398fc534025218639b4c7e0345` (`main`).
 - Inventory: `docs/proposals/gh1089-flow-boundary-inventory.md`, SHA-256
-  `d7134519514f0dd0a04883eceff62acb69d4075e606b2f0e9f9adc60439042a1`. **Review state: `INVENTORY PASS WITH DIVERGENCES`
+  `1a2c1d8e45b43a4247421e7301bf270e9c77f46e9ae368ca4def23d9a9e3178d`. **Review state: `INVENTORY PASS WITH DIVERGENCES`
   (independent blind re-derivation, Fable, 2026-08-26; table of record linked from PR #1091). Every load-bearing number
   reproduced; the two divergences (ten OpenAPI operations, not twelve; semteams already broken on `main` for non-flow
   reasons) and the line-number mis-cites are corrected in this revision.** The design was drafted in the same pass as
