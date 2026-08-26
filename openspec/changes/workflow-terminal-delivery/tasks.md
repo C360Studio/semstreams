@@ -22,9 +22,12 @@ body is a published layer and states `implemented-by: <model>`.
 
 ## 1. Claim
 
-- [ ] 1.1 Create the worktree `git worktree add ../semstreams-wt/claude/gh1094-workflow-terminal-delivery -b
+- [x] 1.1 Create the worktree `git worktree add ../semstreams-wt/claude/gh1094-workflow-terminal-delivery -b
   claude/gh1094-workflow-terminal-delivery origin/main`; commit this change directory as the first commit; push;
   open a draft PR whose body carries `Closes #1094` and `implemented-by: <model>`.
+  - Done before this implementation slice. Verified at this head: branch `claude/gh1094-workflow-terminal-delivery`,
+    draft PR **#1098** (`isDraft: true`), body carries both `Closes #1094` and `implemented-by`
+    (`gh pr view 1098 --json isDraft,headRefName,body`). The PR body was not edited by the implementation.
 
 ## 2. Slice A — typed decision on the completion event (agentic, agentic-loop, agentic-tools)
 
