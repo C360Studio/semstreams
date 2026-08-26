@@ -54,8 +54,19 @@ delivery.
 - Runtime surfaces: `agentic` (types, one classifier), `processor/agentic-loop` (completion event; new plumbing
   from the terminal tool result into completion),
   `processor/agentic-tools` (constant home), `internal/agentterminal` (projection), `processor/agentic-dispatch`
-  (settlement, declared `agent_loops` read port), `schemas/agentic-loop.v1.json` and `agentic-dispatch.v1.json`
-  (regenerated).
+  (settlement, declared `agent_loops` read port), `component` (`PortFacts.KVReadBucket`, added at implementation
+  time — see below).
+- **Two implementation-time corrections to this Impact list, both measured, neither ruled at design time:**
+  1. `schemas/agentic-loop.v1.json` and `agentic-dispatch.v1.json` are NOT regenerated: `task schema:generate`
+     produces no diff for either surface. The generated component schemas carry the config shape and the generic
+     port-kind `oneOf`, never payload fields or declared port instances (`grep -n LoopCompletedEvent
+     specs/openapi.v3.yaml` → 0; `grep -c "agent.complete" schemas/agentic-dispatch.v1.json` → 0 at the baseline).
+     The wire contract is pinned by a production-decoder round-trip test instead (tasks 2.5, 3.5, gate 6.4).
+  2. Two surfaces the design never named had to be touched for R8's new port token: `component/port_facts.go`
+     gains `PortFacts.KVReadBucket` (new exported framework surface — the port grammar forbids any consumer
+     outside the canonical projection owners from interpreting a port config), and
+     `internal/portgrammarcontrol/target_test.go` gains the named census amendment plus its exactness test. Both
+     were found by CI, not by the design (task 3.7).
 - Consumers: SemTeams (autoresearch and research chains; #266, #267 downstream); every product using
   `decide` + `agentic-dispatch`.
 - Behavioural change to name in the release note: a routed loop whose terminal is a non-reply decide action no

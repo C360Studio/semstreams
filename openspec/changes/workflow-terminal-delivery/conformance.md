@@ -22,32 +22,35 @@ Accepted authority:
   recommended; 8 accepted conditionally (C2); 11 — AGENT_LOOPS plane accepted, traversal corrected (C1, R4′);
   binding corrections C1–C4 folded in revision 3. Recorded per item in `design.md`.
 
-| Acceptance criterion (#1094) | Evidence | Status |
+| Acceptance criterion (#1094) | Evidence (`file:line` at this head) | Status |
 |---|---|---|
-| A root handoff (`research`/`autoresearch`) is not emitted as the final user result | E1: `TestSettleAgentTerminalHandoffDecisionOnRoutedLoopPublishesNothing`, `…OnRouteLessLoopPublishesNothing` | PENDING |
-| Reply correlation survives a rule-spawned multi-loop workflow | E2: `TestSettleAgentTerminalUserFacingDecisionResolvesOriginByAncestry`, `…ByRunIDWhenParentAbsent` | PENDING |
-| Reply correlation survives process restart/recovery | E3: `TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart` (empty tracker; AGENT_LOOPS only) | PENDING |
-| The terminal `respond_direct` / `ask_user` is published as typed `agentic.user_response/v1` to the originating channel, one identity | E4: E3's single-message assertion after two deliveries; `TestSettleAgentTerminalUserFacingDecisionKeepsStableIdentityOnRedelivery` | PENDING |
-| Internal phase completions are not published to the user channel | E5: `TestSettleAgentTerminalNoDecisionRouteLessLoopStaysRouteLess` | PENDING |
-| Direct response | E6: `TestSettleAgentTerminalRespondDirectOnRoutedLoopPublishesResultWithReason` | PENDING |
-| Clarification | E7: `TestSettleAgentTerminalAskUserDecisionPublishesPromptToOrigin` | PENDING |
-| Redelivery | E4 | PENDING |
-| Restart-safe settlement | E3 | PENDING |
-| No flat writer, compatibility subject, alias, bridge, or product-local payload | E8: `grep -rn "user.response" processor/rule configs/` output; existing `user-response-subject-ownership` guards; diff inspection | PENDING |
-| Loop carries the typed decision only for a `decide` terminal | E9: `TestHandleCompleteResponseStampsTypedDecisionFromDecideTerminal`, `…LeavesDecisionNilForNonDecideTerminal`, `TestLoopCompletedEventDecisionRoundTrip` | PENDING |
-| One classifier, one tool-name home | E10: `TestIsUserFacingDecideActionTable`; `grep -rn '"decide"' --include='*.go' . \| grep -v _test` shows one definition | PENDING |
-| Bounded telemetry | E11: `TestSettleAgentTerminalRecordsExactlyOneFixedDisposition` with `handoff_settled`, `origin_unresolvable` | PENDING |
-| `publish_agent` unchanged | E12: `TestAction_PublishAgent_CarriesNoChannelFields`; `git diff --stat processor/rule/actions.go` empty | PENDING |
-| Forced omissions | E13: three RED captures with restoration checksums (tasks 5.2–5.4) | PENDING |
-| Schema no-drift | E14: task 6.4 output | PENDING |
-| e2e | E15: task 6.6 output | PENDING |
-| Strict validation | E16: task 4.5 output | PENDING |
-| Route-less root / severed chain settles `route_less_settled` | E17: `TestSettleAgentTerminalReplyDecisionWithRouteLessRootSettlesRouteLess` | PENDING |
-| Bucket name observed from the declared `agent_loops` port | E18: `TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort`; `grep -n agentLoopsBucket processor/agentic-dispatch/*.go` empty | PENDING |
-| C1: missing parent key falls back to `RunID`; typed-first order | E19: `TestSettleAgentTerminalMissingParentFallsBackToRunID` (three subtests); omission E (task 5.6) | PENDING |
-| C2: `origin_unresolvable` only after parent chain AND run anchor exhausted; Warn names both | E20: `TestResolveOriginRouteSettlesOriginUnresolvableOnlyAfterParentAndRunIDExhausted` | PENDING |
-| C3: decision stamped through the tracked-name → `ToolResult.Name` chain | E21: `TestHandleCompleteResponseStampsDecisionFromToolResultNameWhenTrackedNameAbsent`; omission F (task 5.7) | PENDING |
-| C4: present `Decision` with empty `Action`/`Reason` fails validation; unknown non-empty is a valid handoff | E22: `TestLoopCompletedEventValidateRejectsPresentDecisionWithEmptyActionOrReason`; omission G (task 5.8) | PENDING |
+| A root handoff (`research`/`autoresearch`) is not emitted as the final user result | Selector `processor/agentic-dispatch/terminal_settlement.go:210`; `terminal_origin_test.go:121` (`…HandoffDecisionOnRoutedLoopPublishesNothing`), `:139` (route-less); omission B | MET |
+| Reply correlation survives a rule-spawned multi-loop workflow | Resolver `terminal_settlement.go:347`; `terminal_origin_test.go:218` (3-deep parent walk), `:246` (`…MissingParentFallsBackToRunID`, 4 subtests); omission E | MET |
+| Reply correlation survives process restart/recovery | `terminal_origin_integration_test.go:63` — empty tracker, records only in `AGENT_LOOPS`, real NATS; omission C | MET |
+| The terminal `respond_direct` / `ask_user` is published as typed `agentic.user_response/v1` to the originating channel, one identity | `terminal_origin_integration_test.go:120` (one message after two deliveries) + `:130` (`Nats-Msg-Id`); `terminal_origin_test.go:380` (redelivery identity) | MET — one stable identity per terminal, NOT exactly-once |
+| Internal phase completions are not published to the user channel | `terminal_settlement.go:219-224`; `terminal_origin_test.go:337` | MET |
+| Direct response | Projection `terminal_settlement.go:122-129`; `terminal_origin_test.go:164` | MET |
+| Clarification | `terminal_settlement.go:126-128`; `terminal_origin_test.go:189` | MET |
+| Redelivery | `terminal_origin_test.go:380`; identity unchanged at `terminal_settlement.go:125` | MET |
+| Restart-safe settlement | `terminal_origin_integration_test.go:63`; the resolver reads only persisted records (`terminal_settlement.go:347-406`) | MET |
+| No flat writer, compatibility subject, alias, bridge, or product-local payload | `grep -rn "user.response" processor/rule configs/` → only the existing reservation guard (`processor/rule/user_response_subject_reservation.go:5`) and port declarations; `git diff --stat processor/rule/actions.go` empty | MET |
+| Loop carries the typed decision only for a `decide` terminal | `processor/agentic-loop/handlers.go:1982` (`decisionFromTerminalTool`), `:2040`; `processor/agentic-loop/coordinator_decision_test.go:58`, `:123`; `agentic/coordinator_decision_test.go:28` | MET |
+| One classifier, one tool-name home | `agentic/tools.go:315` (`IsUserFacingDecideAction`), `:256` (`DecideToolName`); `agentic/coordinator_decision_test.go:79`; `grep -rn '"decide"' --include='*.go' . \| grep -v _test` → one definition (`agentic/tools.go:256`); the remaining hits are `errs.Wrap` operation labels, executor group keys, and an e2e mock fixture | MET |
+| Bounded telemetry | `terminal_settlement.go:274`, `:281`; `terminal_settlement_test.go:234` extended with `handoff` and `origin unresolvable` | MET |
+| `publish_agent` unchanged | `processor/rule/actions_test.go:3844`; `git diff --stat processor/rule/actions.go` empty | MET |
+| Forced omissions | A–H below, each with verbatim RED and equal before/after checksums | MET, with two measured deviations (A, E) reported |
+| Schema no-drift | Gate 6.4 — `task schema:generate && git diff --exit-code schemas/ specs/` clean | MET |
+| e2e | Gate 6.6 — `task e2e:agentic` GREEN, 45.1s | MET for the unchanged front-door branch; the chain terminal is #1105 |
+| Strict validation | Task 4.5 — `Change 'workflow-terminal-delivery' is valid` | MET |
+| Route-less root / severed chain settles `route_less_settled` | `terminal_settlement.go:458` (`originExhaustion.settle`); `terminal_origin_test.go:361` | MET |
+| Bucket name observed from the declared `agent_loops` port | `processor/agentic-dispatch/config.go:45`, `:50`, `:119`; `component/port_facts.go` `KVReadBucket`; `terminal_origin_integration_test.go:145`; `grep -n agentLoopsBucket processor/agentic-dispatch/*.go` → 0 hits; omissions D and H | MET |
+| C1: missing parent key falls back to `RunID`; typed-first order | `terminal_settlement.go:356-377` (typed-first), `:419-437` (retry at an absent parent); `terminal_origin_test.go:246` (4 subtests incl. the load-sequence assertion); omission E | MET |
+| C2: `origin_unresolvable` only after parent chain AND run anchor exhausted; Warn names both | `terminal_settlement.go:458-475`; Warn at `:238`; `terminal_origin_test.go:456` (both fixtures assert the log names the absent loop and the anchor) | MET |
+| C3: decision stamped through the tracked-name → `ToolResult.Name` chain | `processor/agentic-loop/handlers.go:1964` (`resolveToolName`, shared with `gateForApproval`); `coordinator_decision_test.go:96`; omission F | MET |
+| C4: present `Decision` with empty `Action`/`Reason` fails validation; unknown non-empty is a valid handoff | `agentic/events.go:107-114`; `agentic/coordinator_decision_test.go:111` (`empty_action`, `empty_reason`, `unknown_nonempty_action_valid`); omission G | MET |
+
+Status wording: MET means the named evidence exists and was run at this head. It is not a merge-readiness or
+review claim; §7 is untouched.
 
 ## RED captures (task 2.1, task 2.3)
 
