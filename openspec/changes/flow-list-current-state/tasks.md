@@ -5,8 +5,9 @@ indistinguishable from one that was skipped. A `[~]` is a recorded decision and 
 No task here asserts a post-merge fact; the merge gate owns CI.
 
 Word discipline: `scripts/openspec-queue.sh` reads the words hold / blocked / blocking / halt / red / failed / failing
-in any OPEN task line as a live caveat. Only task 2.6 (the baseline capture) uses them. Everywhere else say "pause
-seam", "barrier", "abort", "does not compile", "MUST fail".
+in any OPEN task line as a live caveat. They appear only in CLOSED tasks — 2.6 (the baseline capture), §4 (the
+forced omissions), and 7.2 (the Codex round's BLOCKING finding, disposed FIXED). The one open task, 7.4, carries
+none of them. Everywhere else say "pause seam", "barrier", "abort", "does not compile", "MUST fail".
 
 Premises (re-measured at `dc2724c4`): `flowstore/manager.go:212-230` (List: raw `s.bucket.Keys` `:214`; empty bucket
 wrapped transient `:215-217`; per-key abort re-wrapped transient `:222-225`); `:214` is the only reader of
@@ -182,6 +183,14 @@ flow list scenario (`grep -rn 'list_flows\|flowbuilder/flows' test/` → only th
   `./service/` commands failed to build (`undefined: FlowListResponse`). A `[no tests to run]` line means the tag or
   `-run` is wrong, not that the suite is green — record it as a broken invocation and fix it.
 
+- [x] 2.7 `TestManagerListRejectsCancellationDuringEnumeration`
+      (`flowstore/manager_integration_test.go:625`; subtests `empty bucket` `:645` and `populated bucket` `:663`)
+      belongs to the named-test set from 3.6 on, but it has **no entry in the 2.6 capture and never will**: it was
+      authored on 2026-08-26, AFTER the owner-run Codex round on `c569f271`, so there is no baseline commit at which
+      it existed. Reconstructing a baseline run for it would be a fabricated artifact. Its guard-less proof is the
+      forced omission instead — 4.8 (M7) deletes the `ctx.Err()` guard on the committed head and records both
+      subtests' verbatim `--- FAIL` lines, which is the same evidence a baseline capture would have produced.
+
 ## 3. GREEN — implement Slice B
 
 - [x] 3.1 `flowstore/manager.go` `List`: `keys, err := s.kvStore.Keys(ctx)` (a Keys failure stays
@@ -265,6 +274,36 @@ flow list scenario (`grep -rn 'list_flows\|flowbuilder/flows' test/` → only th
 
   The four focused commands were re-run with `-v` so the PASS lines name the tests: an `ok` alone cannot
   distinguish a green suite from a `-run` that matched nothing.
+
+- [x] 3.6 **Codex BLOCKING fix — cancellation during key enumeration is no longer an authoritative empty success.**
+      `natsclient.KVStore.Keys` maps the SDK's `jetstream.ErrNoKeysFound` to `(nil, nil)` (`natsclient/kv.go:494-508`)
+      and nats.go's `KeyValue.Keys` drains a watcher whose channel cancellation unsubscribes and closes, so a context
+      cancelled after the subscription is created but before the first entry arrives returns exactly the `(nil, nil)`
+      shape an empty bucket returns. `List` trusted that shape: `GET /flows` answered `200 {"flows":[]}`, `list_flows`
+      answered `No flows configured.`, and the startup import treated UNKNOWN as empty.
+      `flowstore/manager.go:259-261` is the guard — `if err := ctx.Err(); err != nil { return nil,
+      errs.WrapTransient(err, "flowstore", "List", "list KV keys: context done during enumeration") }` — placed
+      immediately after the enumeration and BEFORE `make([]*Flow, 0, len(keys))` at `:263`, so no empty result is ever
+      built on that path. `errs.WrapTransient` wraps through `errs.Wrap`'s `%w` (`pkg/errs/errs.go:398,405`), so
+      `errors.Is(err, context.Canceled)` and `errs.IsTransient(err)` both hold on the returned error; the test
+      asserts both. The `natsclient`-level guard for the other `Keys` callers stays filed as **#1086** and
+      `natsclient/` is untouched by this correction.
+      `flowstore/manager.go:42-49` is the seam `afterListKeys func(ctx context.Context)` — the `beforeListGet` shape,
+      nil in production, no exported field, option, or constructor parameter.
+      `grep -rn "afterListKeys" . --include='*.go'` → 6 hits, all in `package flowstore`: `flowstore/manager.go:42`
+      (doc comment), `:49` (the field), `:256-257` (the call), and `flowstore/manager_integration_test.go:651,673`.
+      Doc comment updated at `flowstore/manager.go:246-248` (one sentence: a context that is done when the
+      enumeration returns aborts even when the enumeration reported nothing).
+      Delta: `specs/flow-authoring/spec.md:12-14` extends the requirement's SHALL sentence and `:54-65` is the new
+      scenario `cancellation during enumeration aborts`.
+      Commit `6755b6f7 fix(flowstore): List aborts when the context is done at enumeration (#1010)`.
+- [x] 3.7 The populated-bucket subtest was strengthened after M7's first run measured it as not load-bearing: with
+      the guard deleted it still passed, because a per-key read under a cancelled context aborts on its own with the
+      same nil-result/transient/`context.Canceled` shape. It now counts per-key reads through `beforeListGet` and
+      requires zero (`flowstore/manager_integration_test.go:682-695`) — the guard aborts before any read is
+      attempted, and that is the fact only the guard produces. Commit
+      `01103ce3 test(flowstore): make the populated cancelled-enumeration subtest load-bearing (#1010)`. M7 in 4.8 is
+      the re-run against this strengthened test.
 
 ## 4. Forced omissions — each guard must be load-bearing
 
@@ -440,6 +479,47 @@ restore of any kind).
   Both mutated files were restored by `cp` from a pre-mutation copy taken before the first mutation; no
   `git checkout`, `git restore`, or `git stash` was used at any point.
 
+- [x] 4.8 M7 — delete the enumeration-time `ctx.Err()` guard added in 3.6 (leaving the `afterListKeys` seam in
+      place): both subtests of `TestManagerListRejectsCancellationDuringEnumeration` MUST fail. Applied to the
+      committed head `01103ce3`, from a `cp` copy taken before the mutation.
+
+  ```
+  [applied] M7 — enumeration-time ctx.Err() guard removed (afterListKeys seam left in place)
+  $ grep -c "ctx.Err()" flowstore/manager.go
+  0
+  $ go test -race -tags=integration -count=1 -run 'TestManagerListRejectsCancellationDuringEnumeration' ./flowstore/
+  --- FAIL: TestManagerListRejectsCancellationDuringEnumeration (0.74s)
+      --- FAIL: TestManagerListRejectsCancellationDuringEnumeration/empty_bucket (0.47s)
+          manager_integration_test.go:657: List with a context cancelled during enumeration returned no error (flows=[])
+      --- FAIL: TestManagerListRejectsCancellationDuringEnumeration/populated_bucket (0.26s)
+          manager_integration_test.go:695: List attempted 1 per-key reads after a cancelled enumeration, want 0
+  FAIL
+  FAIL	github.com/c360studio/semstreams/flowstore	1.070s
+  ```
+
+  The two `--- FAIL` lines name the two halves of the guard's job: `empty_bucket` proves the `(nil, nil)` enumeration
+  is no longer reported as an authoritative empty success (it is the ONLY proof of that — the per-key loop never runs
+  when there are no keys), and `populated_bucket` proves the abort happens BEFORE any per-key read is attempted.
+  M7's first run, against the subtest as originally written, failed only `empty_bucket`; that measurement is what
+  produced the strengthening in 3.7, and this capture is the re-run against the strengthened test.
+
+  Restored by `cp` from the pre-mutation copy; `shasum flowstore/manager.go` →
+  `6e743f16baca4965b46b2dcfd890a9dbeb9247c3`, equal to the pre-mutation copy and to the committed file
+  (`git status --porcelain` empty afterwards). No `git checkout`, `git restore`, or `git stash` at any point.
+  Re-run green after restore:
+
+  ```
+  $ go test -race -tags=integration -count=1 -v -run 'TestManagerList' ./flowstore/
+  --- PASS: TestManagerListEmptyBucketReturnsNonNilEmpty (0.42s)
+  --- PASS: TestManagerListSkipsOnlyVanishedKey (0.24s)
+  --- PASS: TestManagerListPreservesPerKeyTransientFailure (0.24s)
+  --- PASS: TestManagerListPreservesCorruptRecordFailure (0.25s)
+  --- PASS: TestManagerListRejectsCancellationDuringEnumeration (0.54s)
+      --- PASS: TestManagerListRejectsCancellationDuringEnumeration/empty_bucket (0.29s)
+      --- PASS: TestManagerListRejectsCancellationDuringEnumeration/populated_bucket (0.25s)
+  ok  	github.com/c360studio/semstreams/flowstore	3.011s
+  ```
+
 ## 5. Schema regeneration — Slice B rows only
 
 - [x] 5.1 `task schema:generate`; `git diff --stat schemas/ specs/openapi.v3.yaml` shows only
@@ -501,6 +581,53 @@ restore of any kind).
       Exit 0, no output.
 - [x] 6.6 `openspec validate flow-list-current-state --strict` — pass.
       `Change 'flow-list-current-state' is valid`.
+- [x] 6.7 **Correction gates (the 2026-08-26 Codex fix only).** Run one at a time on the corrected head. The full
+      repository integration suite (6.3) was **NOT** re-run for this correction — CI runs it on push, and 6.3's
+      record is the pre-correction measurement. Nothing below implies otherwise.
+
+  ```
+  $ gofmt -l flowstore/manager.go flowstore/manager_integration_test.go
+  (no output; exit 0)
+
+  $ go vet -tags=integration ./flowstore/ ./service/ ./processor/agentic-tools/executors/
+  (no output; exit 0)
+
+  $ task lint
+  exit 0 — go vet ./..., go fmt ./..., go tool revive -config revive.toml -formatter friendly ./...,
+  scripts/lint-test-ports.sh, go test ./test/natsclient/ (ok, 0.512s).
+  grep -icE 'warning|error' over the captured output → 0; grep -cE '^[^ ]+\.go:[0-9]+' → 0 diagnostic lines;
+  git status --porcelain empty afterwards, so go fmt rewrote nothing.
+
+  $ go test -race -count=1 ./flowstore/... ./service/... ./processor/agentic-tools/executors/...
+  ok  	github.com/c360studio/semstreams/flowstore	1.284s
+  ok  	github.com/c360studio/semstreams/service	6.503s
+  ok  	github.com/c360studio/semstreams/processor/agentic-tools/executors	2.867s
+  grep -c '^FAIL' → 0
+
+  $ go test -race -tags=integration -count=1 -v -run 'TestManagerList|TestFlowExecutorListFlowsRealManagerEmpty|TestHandleListFlows|TestEnsureDefaultFlow|TestFlowCRUD' ./flowstore/ ./service/ ./processor/agentic-tools/executors/
+  --- PASS: TestManagerListEmptyBucketReturnsNonNilEmpty (0.47s)
+  --- PASS: TestManagerListSkipsOnlyVanishedKey (0.27s)
+  --- PASS: TestManagerListPreservesPerKeyTransientFailure (0.29s)
+  --- PASS: TestManagerListPreservesCorruptRecordFailure (0.27s)
+  --- PASS: TestManagerListRejectsCancellationDuringEnumeration (0.62s)
+      --- PASS: TestManagerListRejectsCancellationDuringEnumeration/empty_bucket (0.35s)
+      --- PASS: TestManagerListRejectsCancellationDuringEnumeration/populated_bucket (0.27s)
+  ok  	github.com/c360studio/semstreams/flowstore	3.194s
+  --- PASS: TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager (0.30s)
+  --- PASS: TestHandleListFlowsEmptyResponseIsNonNullArray (0.32s)
+  --- PASS: TestEnsureDefaultFlowEmptyListUsesTypedOutcome (0.33s)
+  ok  	github.com/c360studio/semstreams/service	2.816s
+  --- PASS: TestFlowExecutorListFlowsRealManagerEmpty (0.33s)
+  ok  	github.com/c360studio/semstreams/processor/agentic-tools/executors	2.143s
+  grep -c '^FAIL' → 0; grep -c 'no tests to run' → 0
+
+  $ openspec validate flow-list-current-state --strict
+  Change 'flow-list-current-state' is valid
+  ```
+
+  The `-v` on the integration run is deliberate: an `ok` alone cannot distinguish a green suite from a `-run` that
+  matched nothing, and the 0 count on `no tests to run` is the second half of that check.
+  `git diff --stat go.sum` was empty before each commit of this correction; no dependency changed.
 
 ## 7. Review and archive (inside the landing PR; the `AGENTS.md` Land order)
 
@@ -514,9 +641,50 @@ restore of any kind).
       early guard — keep; (c) `GET /flows` vs `{prefix}flows` consistent with the existing spec. Owner items (i) tool
       literal period, (ii) filing — assessed in the PR body. Reviewer re-ran the focused suites and M1/M2/M4a/M6;
       full-suite §6 lines are the implementer's record.
-- [ ] 7.2 The owner-run cross-agent round where the owner asks for it; fixes and re-review recorded here.
-- [ ] 7.3 Reconcile: every scenario in `specs/flow-authoring/spec.md` names the test that verifies it, and that test
-      exists and passed in 6.2/6.3. Any `[~]` in this file is ALSO written into the delta before archiving.
+- [x] 7.2 **Owner-run Codex round on `c569f271`: CHANGES REQUESTED — one BLOCKING, one MEDIUM. Both FIXED.**
+      - **BLOCKING — cancellation during key enumeration became an authoritative empty success.** `List` trusted
+        `s.kvStore.Keys(ctx)` to distinguish empty from failure, but `natsclient/kv.go:494-508` maps
+        `jetstream.ErrNoKeysFound` to `(nil, nil)` and a cancelled key watcher produces that same shape, so an
+        UNKNOWN enumeration surfaced as `GET /flows` `200 {"flows":[]}`, `list_flows` `No flows configured.`, and a
+        startup import over "empty". Disposition **FIXED** — the guard at `flowstore/manager.go:259-261` with the
+        `afterListKeys` seam at `:49`, the delta scenario at `specs/flow-authoring/spec.md:54-65` and the extended
+        SHALL sentence at `:12-14`, and `TestManagerListRejectsCancellationDuringEnumeration`
+        (`flowstore/manager_integration_test.go:625`). Commits `6755b6f7` (guard, seam, test, delta) and `01103ce3`
+        (the populated subtest made load-bearing — see 3.7). Forced omission M7 at 4.8. The `natsclient`-level guard
+        for the other `Keys` callers is out of scope by the reviewer's own disposition and stays filed as **#1086**;
+        `natsclient/` is untouched.
+      - **MEDIUM — no per-ruling conformance table.** Disposition **FIXED** —
+        `openspec/changes/flow-list-current-state/conformance.md`, 26 rows (twelve design rulings, thirteen Slice B
+        contract bullets, one DEVIATION), every `file:line` re-measured at `01103ce3`.
+      - **Owner ruling recorded, no code change:** the tool literal keeps its period. `No flows configured.`
+        (`processor/agentic-tools/executors/flows.go:184`) versus the design text without one
+        (`docs/proposals/gh1008-1010-flow-crud-design.md:109`) — owner comment
+        https://github.com/C360Studio/semstreams/pull/1085#issuecomment-5425495552 (cglusky, 2026-08-26): "keep the
+        `No flows configured.` literal with the period, as the delta pins it." It is the DEVIATION row of
+        `conformance.md`.
+      - Gates for this correction: 6.7. The PR was not undrafted and its body was not edited by this correction.
+- [x] 7.3 Reconcile: every scenario in `specs/flow-authoring/spec.md` names the test that verifies it, and that test
+      exists and is green. Any `[~]` in this file is ALSO written into the delta before archiving.
+      Re-counted at `01103ce3`: **10 scenarios, 10 distinct named tests** — one more of each than the 9/9 recorded
+      before the Codex round, the addition being the new cancellation scenario and its test.
+
+  | # | Scenario (`specs/flow-authoring/spec.md`) | Test | Green in |
+  |---|---|---|---|
+  | 1 | `:17` an empty bucket is a successful empty list | `TestManagerListEmptyBucketReturnsNonNilEmpty` (`flowstore/manager_integration_test.go:488`) | 6.3, 6.7 |
+  | 2 | `:25` a key deleted between enumeration and its read is omitted | `TestManagerListSkipsOnlyVanishedKey` (`:503`) | 6.3, 6.7 |
+  | 3 | `:36` a per-key read that cannot complete aborts the list with its transient class | `TestManagerListPreservesPerKeyTransientFailure` (`:548`) | 6.3, 6.7 |
+  | 4 | `:46` a stored record that does not decode aborts the list as fatal | `TestManagerListPreservesCorruptRecordFailure` (`:585`) | 6.3, 6.7 |
+  | 5 | `:54` cancellation during enumeration aborts | `TestManagerListRejectsCancellationDuringEnumeration` (`:625`, subtests `:645` and `:663`) | 6.7 only — it did not exist at 6.2/6.3; CI on push re-runs the full suite |
+  | 6 | `:76` HTTP list of an empty store is a non-null empty array | `TestHandleListFlowsEmptyResponseIsNonNullArray` (`service/flow_service_test.go:484`) | 6.3, 6.7 |
+  | 7 | `:85` startup imports the default Flow from the typed empty list | `TestEnsureDefaultFlowEmptyListUsesTypedOutcome` (`service/flow_service_test.go:506`) | 6.3, 6.7 |
+  | 8 | `:93` the list_flows tool reports an empty store as a completion | `TestFlowExecutorListFlowsRealManagerEmpty` (`processor/agentic-tools/executors/flows_integration_test.go:23`) | 6.3, 6.7 |
+  | 9 | `:108` the list response schema is generated from the registered type | `TestFlowOpenAPIPreservesFlowCRUDWireSchema` (`service/flow_surface_test.go:43`) | 6.2, 6.7 |
+  | 10 | `:117` a saved Flow appears in the list | `TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager` (`service/flow_service_test.go:92`) | 6.3, 6.7 |
+
+  No `[~]` decision exists in this file, so nothing extra is owed to the delta on that count. Row 5 is the one
+  honest asymmetry: 6.2 and 6.3 are pre-correction measurements and cannot cover a test authored afterwards; the
+  correction's own gate (6.7) covers it, the full repository integration suite for the corrected head is CI's on
+  push, and 4.8 is the proof that the scenario's guard is load-bearing.
 - [ ] 7.4 `openspec archive flow-list-current-state` with the spec sync as the final content commit; the narrow
       reviewer check of the archive/spec sync follows as a PR comment; then undraft. A correction after archive
       re-enters 7.3 and 7.1.
