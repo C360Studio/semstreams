@@ -4,11 +4,11 @@
 that SHA. Sister repositories under `/Users/coby/Code/c360/` were read as checked out on the same day and are
 point-in-time; re-verify before treating any sister row as current. Nothing in this document is a target state.
 
-**Status (revision 2):** inventory-only deliverable per `.agents/contracts/semstreams-architect.md` §"Required
-workflow" step 2. The independent blind inventory pass on revision 1 (commit `b6b4b024`, draft PR #1099) returned
-**INVENTORY PASS WITH DIVERGENCES**; divergences D1–D5 are corrected and rows R-A–R-D added in this revision, each
-marked `(r2)`. The design that follows it (`gh1095-entity-id-segment-semantics-design.md`), ADR-102, and the spec
-deltas have NOT had a pre-owner design review; that review runs after this revision lands.
+**Status (revision 3):** inventory-only deliverable per `.agents/contracts/semstreams-architect.md` §"Required
+workflow" step 2. The independent blind inventory pass on revision 1 (`b6b4b024`, draft PR #1099) returned
+**INVENTORY PASS WITH DIVERGENCES**; D1–D5 corrected and R-A–R-D added in revision 2 (`(r2)`). Pre-owner design
+review round 1 (Fable, adversarial, at `3226c220`) returned **REQUEST CHANGES**; the rows it found missing are added
+in this revision (`(r3)`) and every item's disposition is in the design's checkpoint block.
 
 ## 0. Problem statement (measured)
 
@@ -75,6 +75,8 @@ Prefix length meanings **today** (`pkg/types/entity_id.go:248-301`): 1 = org; 2 
 | W6 | Config patterns (`grep -rhoE '"(pattern\|entity_id_pattern)"\s*:\s*"[^"]+"' configs`): 33× `*.*.*.*.*.*`; 1× `*.*.agent.lesson.record.*`; watch buckets 6× `["*.*.*.*.*.*"]`, 4× `["c360.*.*.*.*.*"]`, 1× `["*.*.agent.lesson.record.*"]`, 1× `["c360.test.lifecycle.gcs.mission.*"]` | A; 3 files also O | 3 config literals rewrite; 40+ all-wildcard patterns untouched |
 | W7 | `pkg/lifecycle/manager_query.go:59,216,293,523-529` (`matchPattern` over workflow `EntityIDPattern`); `pkg/lifecycle/workflow.go` validates the pattern | A | none |
 | W8 (r2) | e2e assertions pin positions 3–5 by literal: `test/e2e/scenarios/ops/scenario.go:604` (`parts[2..4] == ops.diagnosis.finding`) and `:712` (`agent.lesson.record`); `test/e2e/client/nats.go:965-974` is arity-only (`SplitN 7`) and unaffected by order | O, P(3..5) | the `e2e:ops` and `e2e:lessons` tiers report a literal mismatch the moment the order changes — these assertions are in the rewrite list (design §D) so the mismatch is not misread as a regression |
+| W9 (r3) | `examples/processors/iot_sensor/processor.go:278-288` `ParseZoneEntityID` checks `parts[2] != "facility" \|\| parts[3] != "zone"` and returns `"", ""` on mismatch — caller `examples/processors/iot_sensor/component.go:597` proceeds with empty zone values | O, P(3), P(4) | a silent reinterpreter: under O-B every zone reading resolves to an empty zone with no error |
+| W10 (r3) | e2e position literals beyond W8: `test/e2e/scenarios/tiered.go:350` (`validate-gateway-response-shape`, tiers `statistical`+`semantic`) is the only assertion over `EntityTypeSummary` (P6); `test/e2e/scenarios/tiered_structural.go:428-434` builds container IDs with variables named `domain`, `system` in the old order (misleads a sweep); `test/e2e/scenarios/research-graph/scenario.go:201-203` seeds `c360.rg-e2e.research.seed.document.<token>`; `cmd/e2e-semstreams/mission/command.go:59-66,324-328` mints the mission from wire `org`/`platform` with a config fallback | O, P(1..5) | P6 is covered only by the statistical/semantic tiers; the lifecycle tier's mission must carry the deployment authority once the gate exists |
 
 ### 1.5 ADR-099 partition cut points (unimplemented)
 
@@ -87,6 +89,7 @@ type prefix `org.platform.domain.system.type`.
 | C1 | `docs/adr/099:25-27`: level 0 = system (4 parts), 1 = domain (3), 2 = platform (2); design table `gh606-derived-communities-design.md:65-71`, partitioner steps `:84-96`, record key `{level}.{prefix}` `:120-124` | O, P(2..4) | 4-part prefix = the SET {org, platform, position 3, position 4} — identical partition under either order, community-ID string reorders; 2-part unchanged; **3-part changes meaning** (domain-community → source-community) |
 | C2 | What the forthcoming work needs from prefixes: community identity = the prefix string (KV key tokens: level 0 → 5 tokens, 1 → 4, 2 → 3 — arity-distinct per level); member enumeration through `graph.ingest.query.prefix` (`graph/query_prefix_types.go:44-58`); write-on-change records; overlay re-entry independent of the base | A + O | the design's level-1 semantics must be restated under any reorder |
 | C3 (r2) | Sequencing window between the reorder and gh606: `graph/clustering/entityid_provider.go:231-236` `getSystem` takes `parts[3]` as system (rationale `:225-228`) and is live through `NewEntityIDProvider` at `processor/graph-clustering/component.go:1331`; `graph/clustering/summarizer.go:719-731` groups summary-prompt data by `parsed.Domain` (`parseEntityID` by index, `:686-700`); neither has a position test | O, P(3), P(4) | if the reorder lands before gh606 deletes the provider, LPA affinity silently computes on the taxonomy position and the prompt's "domain" groups become source groups — both are named in slice A's rewrite (design §D) and the tag holds until gh606 lands (O-7) |
+| C4 (r3) | The gh#606 ruling's grounding — LPA over same-system edges reduces to the system filter — means "same system" = `getSystem` = `parts[3]` alone (`entityid_provider.go:231-236`) = the system VALUE (semsource's repo). Under today's order that set is `org.platform.*.<repo>`: **not a prefix at any level**; under O-B it is exactly level 1. Yet the gh606 design serves level 0 (`P4 :24-25`, `:76-77`) and gates LLM summaries to level 0 (`Q8 :334-335`) | O, P(3), P(4) | the served level's meaning changes with the order — owner item O-11 |
 
 ### 1.6 Hierarchy containers and their padding
 
@@ -97,6 +100,8 @@ type prefix `org.platform.domain.system.type`.
 | H3 | 256-byte overflow (r2): a valid 5-part prefix of up to 255 bytes + `.group` (6 bytes) exceeds 256; the container birth at `hierarchy.go:440` (`CreateEntity`) fails `validateEntityID` (`processor/graph-ingest/component.go:1946`), and graph-ingest **warns and drops the membership triples** — `component.go:1970-1976` (merge path) and `:2107-2111` (create path) log `Failed to get hierarchy triples` and persist the entity without them. Not a hard failure: a silent structural gap. ADR-076 d1 (`docs/adr/076:18-22`) solved the same class for alerts with a digest family | A + byte bound | none |
 | H4 | Shipped (r2): `enable_hierarchy: true` in 10 of the 12 `configs/*.json` that declare it, out of 16 config files (`configs/agentic.json:182`, `structural.json:633`, …; false in `protocol-flow.json:381`, `lifecycle-flow.json:171`) | — | every shipped tier is on the path |
 | H5 | Duplicate spelling: ADR-099 makes `community(entity, level)` the prefix (never stored); containers store the same groups as entities with membership edges. gh606 design `:191-196` names the overlap and puts hierarchy out of that change's scope | — | two homes for one fact |
+| H6 (r3) | Foreign-authority mint: `GetHierarchyTriples` runs on every fact-lane arrival — merge path `processor/graph-ingest/component.go:1961-1977`, create path `:2105-2116` — including an import lane; container IDs are built from the ingested entity's own prefix (`hierarchy.go:260-276`) and created through `entityManager.CreateEntity` at `:440` (in-process direct persistence, no port); inverse sibling edges are appended to existing siblings through `tripleAdder.AddTriple` (`:315-333`). For an imported entity the container is `foreign.dep9.….group` and the sibling mutation targets foreign subjects | P(1), P(2) | ruling 2 is unsatisfiable for containers by construction: either the gate rejects the container birth and graph-ingest warns-and-drops membership (`:1970-1976`), or the framework mints under foreign authority — design §C.3 contract "hierarchy inference skips foreign-authority entities"; owner item O-12 |
+| H7 (r3) | `hierarchy.system.member` (`vocabulary.HierarchySystemMember`) names the 4-part container, which under O-B is source+taxonomy, and `hierarchy.domain.member` names the 3-part container, which becomes the source — both predicates misname under O-B | O, P(3), P(4) | vocabulary predicate rename or container retirement (design §B.4) |
 
 ### 1.7 Lesson scope keys
 
@@ -106,6 +111,7 @@ type prefix `org.platform.domain.system.type`.
 | L2 | Reader: `lessonmatch.go:187-231` segment-boundary prefix match | A | none |
 | L3 | In use (r2 recount in this repo with `grep -rhoE '"id:[a-zA-Z0-9_.-]+"' --include='*.json' --include='*.go'`; the revision-1 counts double-counted a worktree copy): `id:acme.test.agent`×5, `id:c360.ops.robotics`×4, `id:acme.ops.robotics`×2, `id:acme.ops.agent`×2, plus five negatives — 18 occurrences in 5 files (`processor/agentic-tools/emit_lesson_test.go` 8, `processor/agentic-loop/lessonmatch/lessonmatch_test.go` 6, `processor/agentic-loop/lessons_test.go` 2, `emit_lesson_integration_test.go` 1, `vocabulary/agentic/predicates.go` 1); the same grep over every sister → 0 | — | fixtures rewrite |
 | L4 | `agentic/agent_lesson_entity.go:85-93` `AgentLessonRecordPrefix(org, platform)` = `org.platform.agent.lesson.record` (5-part) — callers `processor/agentic-loop/handlers.go:721`, `test/e2e/scenarios/lessons/scenario.go:341` | O, P(3..5) | literal rewrites |
+| L5 (r3) | `processor/agentic-loop/handlers.go:721` scans only `AgentLessonRecordPrefix(h.platform.Org, h.platform.Platform)`: a lesson imported under a foreign authority is invisible to the framework's own lesson reader — the federation purpose (semmem curated lessons) is unreachable from a local loop by default | P(1), P(2) | owner item O-13 |
 
 ### 1.8 Rule substitution
 
@@ -113,6 +119,7 @@ type prefix `org.platform.domain.system.type`.
 |---|---|---|---|
 | R1 | `processor/rule/entity_substitution.go:43-57` `entityPartNames = [6]string{org, platform, domain, system, type, instance}` indexed by position; `:73-83` resolver; docs `processor/rule/execution_context.go:211-218`, `docs/operations/migration-beta35-to-beta36.md:38-43` | O ↔ name | the name→index table flips for positions 3–4; token NAMES survive |
 | R2 | Consumers: `$entity.instance` — semdev `configs/rules/coordinator/04-stamp-issue-ref.json:27`; `user.response.$entity.instance` (semteams/semdev rules per `user-response-subject-ownership:51,127`). `$entity.platform` / `$entity.domain` / `$entity.system` / `$related.*`: **zero config consumers** in any repo (`grep -rn '\$(entity\|related)\.(org\|platform\|domain\|system\|type)' --include='*.json'` → 0) | P(6) | none for shipped consumers |
+| R3 (r3) | Run anchor: `processor/rule/actions.go:1697-1700` `stampRun` writes `Subject: entityID` — the FIRING entity — through the mutation lane (`tripleMutator.AddTriple`), warn-only on error at `:1702`; the rule processor holds no Platform today (`processor/rule/*.go` non-test: one comment, `caller_substitution.go:48`), so the #1096 fix is new plumbing from `deps.Platform` | P(1), P(2) of the firing entity | for an imported firing entity an authority gate rejects the anchor silently but for the warn — owner item O-12; ADR-102 consequence names what happens |
 
 ### 1.9 Community summary store keys (ADR-087)
 
@@ -146,6 +153,8 @@ type prefix `org.platform.domain.system.type`.
 | T2 | `task entity-id:audit` (`Taskfile.yml:96-99`) is **not** invoked by `.github/workflows/ci.yml` or `scripts/` (`grep -rn 'entity-id-audit\|entity-id:audit' .github scripts` → 0) | the corpus gate is unwired |
 | T3 | Run at `5cc0c7fb`: **30 `entity_id_invalid:arity` unclassified candidates across 1,189** — all in `*_test.go` except `test/e2e/scenarios/agentic/scenario.go:248` (`c360.agentic.sensor.temperature.temp-sensor-001`, a 5-part `query_entity` argument on the live agentic tier) | the "zero-violation corpus" (`entity-id-contract:321-322`) does not hold on main |
 | T4 | Validator callers (`ValidateEntityID`/`IsValidEntityID`/`ParseEntityID`/`ValidateEntityIDPrefix`/`ValidateEntityIDPattern`/`MatchEntityIDPattern`, non-test): 49 files — e.g. `processor/graph-clustering/component.go`×6, `graph/events.go`×3, `pkg/projection/mutation_client.go`×3, `processor/graph-ingest/component.go`, `storage/objectstore/store.go`, `vocabulary/export/export.go` | all lexical; none reads a position |
+| T5 (r3) | Audit surfaces today (`grep -oE '"go-[a-z-]+' internal/entityidaudit/audit.go`): `go-assignment`, `go-call`, `go-constructor`, `go-declaration`, `go-field`, `go-return`, `go-triple-reference`, `go-triple-subject`, plus JSON/YAML/structured text. No `%s`-format-string surface and no dotted-prefix-constant surface: `fmt.Sprintf("%s.%s.agent.…")` builders and the trailing-dot constants `graph/events.go:20` and `processor/rule/graph_event_identity.go:14` are invisible to it | — | an `authority_literal` rule needs two new surfaces: `go-format-prefix` (a `Sprintf` format whose first tokens before a `%s` are literals) and `go-dotted-constant` (a string constant of ≥2 dotted tokens ending in `.`) |
+| T6 (r3) | `configs/cloud-federation.json` and `configs/edge-federation.json` contain no graph-ingest component (`grep -c graph-ingest` → 0/0); `configs/graph-backend.json` and `configs/structural.json` do (2 each) | — | a reference import lane cannot live in the federation configs without adding graph-ingest; it goes in `configs/graph-backend.json` |
 
 ### 1.13 `pkg/types/entity_id.go`
 
@@ -157,6 +166,9 @@ type prefix `org.platform.domain.system.type`.
 | P4 | `vocabulary/iris.go:85-97` `EntityIRI("domain.type", pcfg, localID)`; `vocabulary/export/export.go:123` parses IDs for export | P(3), P(5) |
 | P5 (r2) | `vocabulary/export/export.go:123-126` `subjectToIRI` emits the external IRI `<base>/entities/{org}/{platform}/{domain}/{system}/{type}/{instance}` in wire order — a published JSON-LD/RDF artifact **outside the graph that fresh state does not re-mint** | O (path order); the IRI path reorders with O-B, or the exporter pins its own order — owner item O-11 |
 | P6 (r2) | `processor/graph-query/summary.go:198-202` builds `EntityTypeSummary.Type = segs[2].segs[3].segs[4]` (`domain.system.type`), exposed as an API VALUE through GraphQL `EntityTypeSummary.type` (`gateway/graph-gateway/component.go:1870`); no graph-query requirement pins the value's shape (`grep -n 'entity_types\|EntityTypeSummary\|graphSummary' openspec/specs/graph-query/spec.md` → 0) | O; the value's token order flips under O-B — an API value change for every `graphSummary` consumer, not only an index edit |
+| P7 (r3) | ADR-076 d2 fixes identity lengths (alert 103, trigger 105 bytes; `docs/adr/076:27-28`) on the fixed 20-byte `semstreams.framework` authority; `config.Validate` (`config/config.go:225-241`) bounds neither `platform.org` nor `platform.id`. Under O-B an alert is `len(org)+len(platform)+84` bytes and a trigger `+86` (`rules.graph.trigger.` + 64 hex + two dots) | byte bound × authority length | org+platform > 170 makes every trigger constructor (`graph_event_identity.go:33-35`) and > 172 every alert constructor (`graph/events.go`) fail closed at runtime — owner item O-14 (bound at config load; amend ADR-076 d2) |
+| P8 (r3) | `graph.NewAlertEvent(alertType, sourceEntityID, properties, metadata)` (`graph/events.go:171-175`) takes no authority: ruling 2 forces an exported-signature change on `graph/`; sister callers: `grep -rl NewAlertEvent /Users/coby/Code/c360/*` outside semstreams → 0 | — | exported surface change on `graph/` (owner design review per contract) |
+| P9 (r3) | `types.PlatformMeta` lives in the root `types/component.go:134-137`; `pkg/types` cannot import it without a layering inversion or a duplicate type | — | the authority validator takes `(candidate, org, platform string, importLane bool)` |
 
 ### 1.14 Minting sites — framework and sisters
 
@@ -177,6 +189,7 @@ type prefix `org.platform.domain.system.type`.
 | run-scope mint (bug #1096) | `processor/rule/actions.go:1575-1583,1710-1712` | authority read from the **firing entity** |
 | e2e mission | `cmd/e2e-semstreams/mission/command.go:60-61` | `lifecycle.gcs.mission.<id>` (org/platform from the wire, `:59-66,326-327`) |
 | example | `examples/processors/iot_sensor/payload.go:350` | `ZoneEntityID(orgID, platform, …)` — wire-supplied authority |
+| examples (r3) | `examples/processors/document/payload_document.go:50` (`content.document.%s.%s`), `payload_sensor.go:40` (`sensor.document`), `payload_maintenance.go:41` (`maintenance.work`), `payload_observation.go:41` (`observation.record`), `examples/processors/weather_station/payload.go:100` (`meteorology.station.outdoor.%s`); `document` is wired into `cmd/e2e-semstreams/main.go:25` | wire-supplied `org.platform`; domain/system literals in the old order |
 
 **Sisters (minting site → position values):**
 

@@ -21,3 +21,4 @@ the existing unresolved-template warning fires.
 - **WHEN** substitution runs
 - **THEN** every `$entity.<segment>` token survives unchanged
 - **AND** the unresolved-template warning fires
+- **AND** the test that verifies this is `TestSegmentTokensUnresolvedOnInvalidID`
