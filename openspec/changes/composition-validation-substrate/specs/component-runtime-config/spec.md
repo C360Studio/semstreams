@@ -11,7 +11,8 @@ input declaring that the port is fed from outside the composition (a UI, a peer 
 statement, not a predicted framework value; composition validation (`composition-validation`) treats it as the one
 reason a required stream input may have no in-graph publisher. It travels through the strict envelope codec, port
 resolution, the runtime `Port` view, complete named replacement, the admitted declaration and its boot parity check,
-and the catalog export unchanged.
+and the catalog export unchanged. An output declaring `external` SHALL fail resolution with the port-config error
+naming the field; it is never silently ignored.
 
 Unknown kinds, unknown fields, kinds used in a prohibited direction, duplicate or unknown named ports, malformed
 durations or network ports, and missing required fields SHALL fail before component initialization. The failure SHALL

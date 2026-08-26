@@ -286,4 +286,32 @@ func TestAdmissionRefusesPortDeclarationMismatch(t *testing.T) {
 	if _, ok := registry.Snapshot(componentadmission.Access{}, "worker"); ok {
 		t.Fatal("Registry retained a declaration for an instance that failed the parity check")
 	}
+
+	// The external marker is part of the compared declaration: a declarer that
+	// says external while the constructed port does not is a parity failure
+	// naming the port.
+	unmarked := &declarationTestComponent{inputs: []Port{{
+		Name: "feed", Direction: DirectionInput, Required: true,
+		Config: JetStreamPort{StreamName: "USER", Subjects: []string{"user.message.>"}},
+	}}}
+	requireNoError(t, registry.RegisterWithConfig(RegistrationConfig{
+		Name: "marker-liar", Type: "processor",
+		Factory: func(json.RawMessage, Dependencies) (Discoverable, error) { return unmarked, nil },
+		Ports: func(json.RawMessage, string) (PortConfig, error) {
+			return PortConfig{Inputs: []PortDefinition{{
+				Name: "feed", Required: true, External: true,
+				Config: JetStreamPort{StreamName: "USER", Subjects: []string{"user.message.>"}},
+			}}}, nil
+		},
+	}))
+	_, err = registry.CreateComponent(
+		componentadmission.Access{}, "marked", declarationTestConfig("marker-liar", `{}`), declarationTestDeps(), nil)
+	if err == nil || !errs.IsInvalid(err) {
+		t.Fatalf("external-vs-not declaration was admitted or not classified invalid: %v", err)
+	}
+	for _, want := range []string{"marker-liar", "marked", "feed", "external"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("parity error %q does not name %q", err.Error(), want)
+		}
+	}
 }

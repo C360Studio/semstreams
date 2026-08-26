@@ -1315,11 +1315,11 @@ func targetForConfigItem(item WorkItem, dispositions map[string]Disposition) (ta
 	if err != nil {
 		return targetConfigItem{}, err
 	}
-	return correctExternalBoundaryInput(correctComponentPortName(correctJetStreamInputIdentity(correctMissionCommandPrimitive(targetConfigItem{
+	return correctResearchDispatchSubject(correctExternalBoundaryInput(correctComponentPortName(correctJetStreamInputIdentity(correctMissionCommandPrimitive(targetConfigItem{
 		workItem: item,
 		lane:     lane,
 		row:      canonicalRow(legacy, item.CurrentKind, data),
-	}))))
+	})))))
 }
 
 // correctExternalBoundaryInput applies the owner-approved external-boundary
@@ -1331,6 +1331,15 @@ func correctExternalBoundaryInput(target targetConfigItem, err error) (targetCon
 	}
 	if _, amended := postFoundationBExternalBoundaryAmendments[target.workItem.RecordID]; amended && target.row != nil {
 		target.row["external"] = true
+	}
+	return target, nil
+}
+
+// correctResearchDispatchSubject applies the research-graph dispatch subject
+// amendment: the two frozen `component.*` rows are `component.>` targets.
+func correctResearchDispatchSubject(target targetConfigItem, err error) (targetConfigItem, error) {
+	if err != nil {
+		return targetConfigItem{}, err
 	}
 	if _, amended := postFoundationBResearchDispatchSubjectAmendments[target.workItem.RecordID]; amended && target.row != nil {
 		config, ok := target.row["config"].(map[string]any)

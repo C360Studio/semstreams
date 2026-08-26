@@ -401,6 +401,68 @@ func SubjectMatches(subject, pattern string) bool {
 	return matchNATSPattern(subject, pattern)
 }
 
+// SubjectCovers reports whether filter COVERS pattern: every concrete subject
+// that matches pattern also matches filter under NATS wildcard semantics. It
+// is directional, unlike SubjectMatches (overlap): `data.>` covers `data.*`,
+// `data.*` does not cover `data.>`, and `data.raw` does not cover `data.*`.
+// Composition validation uses it to decide whether an explicit stream's
+// subjects feed a JetStream subscriber's subjects.
+func SubjectCovers(filter, pattern string) bool {
+	patternTokens := strings.Split(pattern, ".")
+	filterTokens := strings.Split(filter, ".")
+	if !validSubjectTokens(patternTokens) || !validSubjectTokens(filterTokens) {
+		return false
+	}
+	filterHasTail := filterTokens[len(filterTokens)-1] == ">"
+	if !filterHasTail {
+		if patternTokens[len(patternTokens)-1] == ">" || len(patternTokens) != len(filterTokens) {
+			return false
+		}
+		for index := range filterTokens {
+			if !tokenCovered(patternTokens[index], filterTokens[index]) {
+				return false
+			}
+		}
+		return true
+	}
+	// A trailing `>` consumes at least one token, so the pattern must reach
+	// the filter's prefix plus one.
+	prefix := len(filterTokens) - 1
+	if len(patternTokens) < prefix+1 {
+		return false
+	}
+	for index := 0; index < prefix; index++ {
+		token := patternTokens[index]
+		if token == ">" {
+			token = "*"
+		}
+		if !tokenCovered(token, filterTokens[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func validSubjectTokens(tokens []string) bool {
+	if len(tokens) == 0 {
+		return false
+	}
+	for index, token := range tokens {
+		if token == "" || (strings.ContainsAny(token, "*>") && token != "*" && token != ">") ||
+			(token == ">" && index != len(tokens)-1) {
+			return false
+		}
+	}
+	return true
+}
+
+func tokenCovered(patternToken, filterToken string) bool {
+	if filterToken == "*" {
+		return true
+	}
+	return patternToken != "*" && patternToken == filterToken
+}
+
 // matchNATSPattern checks if a subject matches a NATS pattern
 // Following NATS subject matching semantics:
 // * matches exactly one token

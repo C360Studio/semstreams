@@ -119,4 +119,13 @@ func TestPortDefinitionExternalRoundTrip(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"name":"in","externl":true,"config":{"kind":"nats","subject":"x"}}`), &definition); err == nil {
 		t.Fatal("strict envelope accepted an unknown field")
 	}
+	// external is an input statement: an output declaring it is refused, never
+	// silently ignored.
+	_, err = (PortDefinition{Name: "out", External: true, Config: NATSPort{Subject: "x"}}).Resolve(DirectionOutput)
+	if err == nil || !strings.Contains(err.Error(), "external") {
+		t.Fatalf("output port with external=true resolved without an error naming the field: %v", err)
+	}
+	if _, err := (PortDefinition{Name: "in", External: true, Config: NATSPort{Subject: "x"}}).Resolve(DirectionInput); err != nil {
+		t.Fatalf("input port with external=true failed to resolve: %v", err)
+	}
 }

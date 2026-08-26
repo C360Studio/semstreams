@@ -327,3 +327,50 @@ func TestValidateSuppressesOrphanOnlyForExternallyFedInput(t *testing.T) {
 		}
 	}
 }
+
+// TestValidateStreamRequirementNeedsTheNamedStream — a JetStream consumer
+// binds by stream NAME: an explicit stream that covers the subjects but is
+// declared under another name does not feed it.
+func TestValidateStreamRequirementNeedsTheNamedStream(t *testing.T) {
+	registry := fakeRegistry(t,
+		fakeSpec{name: "core-src", typ: "input", outputs: []component.PortDefinition{natsOut("out", "boot.data", nil)}},
+		fakeSpec{name: "js-sink", typ: "output", inputs: []component.PortDefinition{jetStreamIn("in", "BOOT", "boot.data", true)}},
+	)
+	cfg := compositionOf(config.ComponentConfigs{
+		"pub": instance("core-src", types.ComponentTypeInput),
+		"sub": instance("js-sink", types.ComponentTypeOutput),
+	})
+	cfg.Streams = config.StreamConfigs{"OTHER": {Subjects: []string{"boot.>"}}}
+	result := validateRoundTrip(t, registry, cfg)
+	if findings := findingsOfType(result.Errors, composition.TypeStreamRequirement); len(findings) != 1 {
+		t.Fatalf("streams.OTHER must not satisfy a subscriber bound to BOOT; stream_requirement findings = %d: %+v", len(findings), result.Errors)
+	}
+	cfg.Streams = config.StreamConfigs{"BOOT": {Subjects: []string{"boot.>"}}}
+	result = validateRoundTrip(t, registry, cfg)
+	if findings := findingsOfType(result.Errors, composition.TypeStreamRequirement); len(findings) != 0 {
+		t.Fatalf("streams.BOOT covering boot.data must satisfy the subscriber: %+v", findings)
+	}
+}
+
+// TestValidateStreamRequirementNeedsCoverNotOverlap — the explicit stream's
+// subjects must COVER the subscriber's subjects; overlap is not enough.
+func TestValidateStreamRequirementNeedsCoverNotOverlap(t *testing.T) {
+	registry := fakeRegistry(t,
+		fakeSpec{name: "core-src", typ: "input", outputs: []component.PortDefinition{natsOut("out", "data.raw", nil)}},
+		fakeSpec{name: "js-sink", typ: "output", inputs: []component.PortDefinition{jetStreamIn("in", "DATA", "data.*", true)}},
+	)
+	cfg := compositionOf(config.ComponentConfigs{
+		"pub": instance("core-src", types.ComponentTypeInput),
+		"sub": instance("js-sink", types.ComponentTypeOutput),
+	})
+	cfg.Streams = config.StreamConfigs{"DATA": {Subjects: []string{"data.raw"}}}
+	result := validateRoundTrip(t, registry, cfg)
+	if findings := findingsOfType(result.Errors, composition.TypeStreamRequirement); len(findings) != 1 {
+		t.Fatalf("streams.DATA [data.raw] only overlaps the subscriber's data.*; stream_requirement findings = %d: %+v", len(findings), result.Errors)
+	}
+	cfg.Streams = config.StreamConfigs{"DATA": {Subjects: []string{"data.>"}}}
+	result = validateRoundTrip(t, registry, cfg)
+	if findings := findingsOfType(result.Errors, composition.TypeStreamRequirement); len(findings) != 0 {
+		t.Fatalf("streams.DATA [data.>] covers data.*: %+v", findings)
+	}
+}

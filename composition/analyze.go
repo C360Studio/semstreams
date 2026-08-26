@@ -77,9 +77,10 @@ func Analyze(declarations []component.Declaration, streams config.StreamConfigs)
 		}
 		result.add(orphanedPortFinding(port))
 	}
+	streamNames := subscriberStreamNames(sorted)
 	for _, warning := range graph.ValidateStreamRequirements() {
-		if explicitStreamCovers(streams, warning.Subjects) {
-			continue // an explicit stream captures the core-NATS publishes; the subscriber is fed
+		if explicitStreamCovers(streams, streamNames[portKey{warning.SubscriberComp, warning.SubscriberPort}], warning.Subjects) {
+			continue // the subscriber's named stream is declared and captures its subjects; it is fed
 		}
 		publishers := append([]string(nil), warning.PublisherComps...)
 		sort.Strings(publishers)
@@ -104,23 +105,25 @@ func Analyze(declarations []component.Declaration, streams config.StreamConfigs)
 	return result
 }
 
-// explicitStreamCovers reports whether every subscriber subject overlaps a
-// subject of some explicitly declared stream. An empty subject list is not
-// covered: a subscriber with no subjects has nothing a stream could feed.
-func explicitStreamCovers(streams config.StreamConfigs, subjects []string) bool {
-	if len(subjects) == 0 || len(streams) == 0 {
+// explicitStreamCovers reports whether the subscriber is fed by an explicit
+// stream declaration: a JetStream consumer binds to its declared stream BY
+// NAME, and provisioning creates only explicit and JetStream-output-derived
+// streams, so the explicit block must declare exactly that name AND one of
+// its subjects must COVER (not merely overlap) each subscriber subject. An
+// empty subject list is not covered: nothing a stream could feed.
+func explicitStreamCovers(streams config.StreamConfigs, streamName string, subjects []string) bool {
+	if len(subjects) == 0 || streamName == "" {
+		return false
+	}
+	stream, declared := streams[streamName]
+	if !declared {
 		return false
 	}
 	for _, subject := range subjects {
 		covered := false
-		for _, stream := range streams {
-			for _, declared := range stream.Subjects {
-				if flowgraph.SubjectMatches(subject, declared) {
-					covered = true
-					break
-				}
-			}
-			if covered {
+		for _, filter := range stream.Subjects {
+			if flowgraph.SubjectCovers(filter, subject) {
+				covered = true
 				break
 			}
 		}
@@ -132,6 +135,23 @@ func explicitStreamCovers(streams config.StreamConfigs, subjects []string) bool 
 }
 
 type portKey struct{ instance, port string }
+
+// subscriberStreamNames indexes every JetStream input by the stream name it
+// binds to (StreamFacts.Name, required on inputs by the port grammar).
+func subscriberStreamNames(declarations []component.Declaration) map[portKey]string {
+	names := map[portKey]string{}
+	for _, declaration := range declarations {
+		for index, port := range declaration.InputPorts {
+			if index >= len(declaration.InputFacts) {
+				continue
+			}
+			if stream, ok := declaration.InputFacts[index].Stream(); ok {
+				names[portKey{declaration.InstanceName, port.Name}] = stream.Name()
+			}
+		}
+	}
+	return names
+}
 
 // externalInputs indexes the inputs declared fed from outside the composition.
 func externalInputs(declarations []component.Declaration) map[portKey]bool {
@@ -155,6 +175,8 @@ func orphanedPortFinding(port flowgraph.OrphanedPort) Finding {
 			suggestions = []string{
 				"Connect an output from another component",
 				"Check that source component is configured correctly",
+				"If this input is fed from outside the composition, declare \"external\": true on the port " +
+					"(a named override replaces the whole port, so restate it there)",
 			}
 		} else {
 			suggestions = []string{"This port is optional and can remain unconnected"}

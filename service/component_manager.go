@@ -388,10 +388,14 @@ func (cm *ComponentManager) analyzeBootComposition() error {
 	}
 	descriptions := make([]string, 0, len(result.Errors))
 	for _, finding := range result.Errors {
-		descriptions = append(descriptions, fmt.Sprintf("%s on %s/%s: %s", finding.Type, finding.Component, finding.Port, finding.Message))
+		description := fmt.Sprintf("%s on %s/%s: %s", finding.Type, finding.Component, finding.Port, finding.Message)
+		if len(finding.Suggestions) > 0 {
+			description += " (" + strings.Join(finding.Suggestions, "; ") + ")"
+		}
+		descriptions = append(descriptions, description)
 	}
 	return fmt.Errorf("composition validation refused boot with %d error finding(s): %s",
-		len(result.Errors), strings.Join(descriptions, "; "))
+		len(result.Errors), strings.Join(descriptions, " | "))
 }
 
 // BootFindings returns the composition result retained at Initialize, or nil

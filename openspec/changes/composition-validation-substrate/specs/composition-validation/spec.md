@@ -63,9 +63,12 @@ the declarer's error text when an empty configuration does not declare.
 `*config.Config` that performs no I/O, opens no connection, and constructs no component, and
 `composition.Analyze(declarations, streams)` SHALL be the graph-level half of the same function over admitted
 declarations and the configuration's explicit `streams` declarations, so that the offline and the boot-time judgments
-share one interpreter. A JetStream input whose subjects an explicit stream covers SHALL NOT be a `stream_requirement`
-finding even when its only publishers use core NATS: stream provisioning creates that stream from the declaration and
-core-NATS publishes on its subjects land in it, so the subscriber is fed. The result SHALL carry `status`
+share one interpreter. A JetStream input SHALL NOT be a `stream_requirement` finding, even when its only publishers use
+core NATS, when the configuration's explicit `streams` block declares the stream the input binds to BY NAME and one of
+that stream's subjects COVERS (every concrete subject of the input's subject also matches it — not merely overlaps) each
+of the input's subjects: provisioning creates exactly the explicit and JetStream-output-derived streams, the consumer
+binds by name, and core-NATS publishes on covered subjects land in it, so the subscriber is fed. A stream declared
+under another name, or one whose subjects only overlap the input's, SHALL NOT satisfy it. The result SHALL carry `status`
 (`valid` | `warnings` | `errors`, derived errors → warnings → valid), `errors`, `warnings`, and `graph`, with every
 array non-nil; each finding SHALL carry `type`, `severity`, a non-empty `component`, optional `port`, a non-empty
 `message`, and a non-nil `suggestions`. `type` SHALL be one of the exported constants `config_invalid`,
@@ -77,7 +80,10 @@ that set. Severity SHALL be error for `config_invalid`, `unknown_component`, `co
 `stream_requirement`, `interface_mismatch`, and for an `orphaned_port` that is a required stream input with no
 publisher; warning otherwise. An input declared `external` (`component.PortDefinition.External` — fed from outside the
 composition, an operator statement) SHALL raise no `orphaned_port` finding for its missing in-graph publisher; every
-other finding on that port, and every unmarked required orphan, is unaffected. Components SHALL be visited in instance-name order and edges SHALL be emitted in a
+other finding on that port, and every unmarked required orphan, is unaffected. The required-orphan finding SHALL
+carry the remedy among its suggestions ("declare `external: true` on the port if it is fed from outside the
+composition"), and the boot refusal SHALL print each error finding with its suggestions, so an operator whose named
+override dropped the marker is told the one-line fix rather than "connect an output". Components SHALL be visited in instance-name order and edges SHALL be emitted in a
 stable order, so two runs over equal inputs produce byte-equal JSON.
 
 #### Scenario: the vocabulary is closed
@@ -134,8 +140,12 @@ stable order, so two runs over equal inputs produce byte-equal JSON.
 - **GIVEN** the same ports and a `streams` declaration whose subjects cover the subscriber's subjects
 - **WHEN** the composition is validated offline, and when the same composition boots with the same `streams`
 - **THEN** neither result carries a `stream_requirement` finding and the edge is still derived
-- **AND** a stream whose subjects do not cover the subscriber's does not satisfy it
-- **AND** the tests that verify this are `TestValidateStreamRequirementSatisfiedByExplicitStream` and
+- **AND** a stream declared under a name other than the one the subscriber binds to does not satisfy it, even when
+  its subjects cover the subscriber's
+- **AND** a stream whose subjects only overlap the subscriber's (`data.raw` against a `data.*` subscriber) does not
+  satisfy it
+- **AND** the tests that verify this are `TestValidateStreamRequirementSatisfiedByExplicitStream`,
+  `TestValidateStreamRequirementNeedsTheNamedStream`, `TestValidateStreamRequirementNeedsCoverNotOverlap`, and
   `TestComponentManagerBootFindingsHonourExplicitStreams` (`-tags=integration`)
 
 #### Scenario: pattern conflicts and exclusive resources are findings

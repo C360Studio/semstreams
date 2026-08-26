@@ -36,6 +36,14 @@ func resolveAndProjectPort(def PortDefinition, direction Direction) (Port, PortF
 			fmt.Errorf("kind %q does not allow direction %q", config.Kind(), direction),
 		)
 	}
+	if def.External && direction != DirectionInput {
+		return Port{}, PortFacts{}, portConfigError(
+			def.Name,
+			config.Kind(),
+			"external",
+			fmt.Errorf("field \"external\" is only meaningful on an input port; direction is %q", direction),
+		)
+	}
 	if field, err := validateDirectionRequirements(config, direction, binding); err != nil {
 		return Port{}, PortFacts{}, portConfigError(def.Name, config.Kind(), field, err)
 	}

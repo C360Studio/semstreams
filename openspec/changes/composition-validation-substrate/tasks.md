@@ -269,7 +269,10 @@ Premises (measured at `5cc0c7fb`; re-measure at the claim head and amend here): 
       (c) FIXED by owner ruling (H4, option ii, 2026-08-26): the external-boundary marker. `component.PortDefinition.External`
           / `component.Port.External` (`component/ports.go`, `component/port.go`; wire `"external": true`, an envelope
           field beside `name`/`required`/`description` — the kind-independent home for a fact about the port's
-          connection, parallel to `required`, and the same shape as #1095 §C.3's `"import": true` operator flag) travels
+          connection, parallel to `required`. #1095 §C.3's `"import": true` is the same KIND of thing — an operator
+          statement, not a predicted framework value — but lives on `JetStreamPort` (kind-specific config, #1095
+          tasks 2.x) because import authority is a JetStream-lane fact; `external` is envelope because any
+          stream-pattern input can be fed from outside. Different homes for a reason) travels
           through the strict codec, `resolveAndProjectPort`, `definitionFromPort`/`MergePortConfig`, the admitted
           declaration, the parity compare (`portDifference`), the schema envelope (`component/schema_tags.go`
           `"external"`, bool, read-only) and the catalog/`default_ports` (`composition.PortView.External`).
@@ -281,6 +284,15 @@ Premises (measured at `5cc0c7fb`; re-measure at the claim head and amend here): 
           `TestPostFoundationBExternalBoundaryAmendmentIsExact`; control record section "Owner-approved external-boundary
           marker amendment"; envelope pin in `TestGeneratePortFieldSchema` raised 4 → 5). Tests:
           `TestValidateSuppressesOrphanOnlyForExternallyFedInput`, `TestPortDefinitionExternalRoundTrip`. 9 → 0.
+          Adopter seam of the marker (review round 2, M2): *must know* — an input fed from outside the composition
+          is declared `"external": true`, and a named override of such a port restates it (a named merge is a complete
+          replacement, exactly as for `required`/`description`); *do nothing* — boot refuses with
+          `orphaned_port on <instance>/<port>: … no_publishers (… If this input is fed from outside the composition,
+          declare "external": true on the port (a named override replaces the whole port, so restate it there))` — the
+          remedy is in the refusal text (`composition/analyze.go` `orphanedPortFinding`, `service/component_manager.go`
+          `analyzeBootComposition`), loud and one line; *find out* — the boot log, `validate <config>`, and the
+          `orphaned_port` finding's suggestions; *should know* — nothing beyond declaring the boundary they already know
+          about. `external` on an output is refused at resolution (`component/port_resolver.go`), never ignored.
       RESULT: 22/22 shipped configurations carry no error finding; `TestValidateShippedConfigsHaveNoErrorFindings` is
       un-skipped and green. The 3.5 deviation no longer exists.
 - [x] 3.6 **P5.** `ComponentManager.Initialize`: `Analyze(registry.Snapshots)` before `SealComposition`; log; refuse
@@ -466,6 +478,21 @@ before the omission, and record `shasum -a 256` equality of the restored file.
       Owner ruling on H4 (2026-08-26, #1092/#1101): option (ii), an explicit external-boundary marker — IMPLEMENTED
       (3.5c, 3.6, 4.17, 4.18; the two grammar-control amendments). Ruled unchanged: the 38 `DeclarePorts` exports stay
       exported (default keep); #1107 (verbs vs boot catalog) stays filed — no registry-builder parameter added.
+      Round 2 (narrow re-review, `0b00749d..be38605a`): APPROVE WITH CHANGES — H4 as ruled, refuse load-bearing, 22/22
+      re-derived, `External` passes the exported-surface gate (PortDefinition/Port/PortView all kept). Dispositions:
+      M1 FIXED (`composition/doc.go`, `CheckFlowHealth` comment, conformance D3 rewritten to the flipped truth;
+      `grep -rn "pending ruling\|owner's ruling recorded\|REFUSE is"` → 0 outside tasks); M2 FIXED (remedy suggestion on
+      the required no-publisher orphan; the refusal prints each finding's suggestions; seam recorded in 3.5c);
+      M3 FIXED (`flowgraph.SubjectCovers` — the test-only `subjectPatternCoveredByFilter` promoted to a production
+      owner beside `SubjectMatches`; `explicitStreamCovers(streams, streamName, subjects)` keys on the subscriber's
+      declared stream name from `StreamFacts.Name()` via `subscriberStreamNames` and requires cover per subject; tests
+      `TestValidateStreamRequirementNeedsTheNamedStream`, `TestValidateStreamRequirementNeedsCoverNotOverlap`,
+      `TestSubjectCoversIsDirectionalCover`; omissions 4.19/4.20); M4 FIXED (`resolveAndProjectPort` refuses
+      `external` on a non-input with `portConfigError(..., "external", ...)`; case added to
+      `TestPortDefinitionExternalRoundTrip`; omission 4.21); M5 FIXED (3.5c wording: same kind of statement, different
+      home for a reason); NITs FIXED (external-vs-not case in `TestAdmissionRefusesPortDeclarationMismatch`;
+      `correctExternalBoundaryInput` / `correctResearchDispatchSubject` split). Before undraft (not yet run):
+      `task e2e:agentic` once — the only tier that boots `External: true` (crud-tools-test.json) through a real boot.
 - [ ] 7.2 Owner-run Codex round where the owner asks for it: verdict and dispositions recorded here; each fix
       re-enters 7.1 and re-runs the focused commands of 2.11 with `-v`.
 - [ ] 7.3 `conformance.md`: replace every `__` placeholder with the measured `file:line` at the head that carries the
@@ -474,9 +501,17 @@ before the omission, and record `shasum -a 256` equality of the restored file.
       6.2/6.3/6.5; every REMOVED requirement in `specs/flow-authoring/spec.md` and
       `specs/component-runtime-config/spec.md` names tests that no longer exist; table recorded here. Any `[~]` in
       this file is ALSO written into the delta before archiving.
-- [ ] 7.5 (#1093) `openspec archive composition-validation-substrate` with the spec sync as the final content commit; the
+- [ ] 7.5 `openspec archive composition-validation-substrate` with the spec sync as the final content commit; the
       narrow reviewer check of the archive/spec sync follows as a PR comment; then undraft. The PR body is a
       published layer: re-read it at undraft and correct any claim the branch no longer supports.
+      ARCHIVE SHAPE (reviewer round 2, understood, NOT executed yet — after the owner round): before archiving, MOVE
+      into a new change `openspec/changes/flow-authoring-retirement/` (proposal = #1093's target state; tasks = the
+      `(#1093)`-annotated 3.8, 3.9, 4.7, 4.9, 6.7, the e2e:crud-tools/e2e:agentic clause of 6.6, the REMOVED clause
+      of 7.4; conformance skeleton) the entire `specs/flow-authoring/spec.md` (REMOVED) and the `## REMOVED
+      Requirements` section of `specs/component-runtime-config/spec.md` (the MODIFIED `external` grammar section
+      stays here). Rewrite 1.1/7.5 so THIS PR archives `composition-validation-substrate` as its final content commit;
+      write a real `## Purpose` for the new `composition-validation` capability in the archive commit;
+      `openspec validate --all --strict` must pass with both changes present.
 
 ## 8. Not in scope (recorded so the archiver does not infer completion)
 
