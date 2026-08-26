@@ -170,7 +170,8 @@ body is a published layer and states `implemented-by: <model>`.
     component schema — it emits the generic port-kind `oneOf`, never the default port list
     (`grep -c "agent.complete" schemas/agentic-dispatch.v1.json` → 0 at the baseline, i.e. no existing port
     instance appears either). Same measurement as task 2.5.
-- [ ] 3.6 Commit Slice B GREEN before any mutation check; record the commit SHA in `conformance.md`.
+- [x] 3.6 Commit Slice B GREEN before any mutation check; record the commit SHA in `conformance.md`.
+  - `31ef6b55` — `feat(agentic-dispatch): deliver a workflow's answer to its origin, never its handoff (#1094)`.
 
 ## 4. Slice C — guards, docs, spec truth
 

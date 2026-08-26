@@ -172,6 +172,7 @@ GREEN after 3.2: `ok  	github.com/c360studio/semstreams/processor/agentic-dispat
 - Task 2.5 `task schema:generate` → `git diff --stat schemas/ specs/` EMPTY (no generated-schema surface exists for
   a payload field; see tasks.md 2.5 for the measurement).
 - Task 2.6 Slice A GREEN commit: `704b67ee`.
+- Task 3.6 Slice B GREEN commit: `31ef6b55`.
 - Task 3.3 `go test -race -count=1 -tags=integration ./processor/agentic-dispatch -run '^TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart$'`
   → `ok  	github.com/c360studio/semstreams/processor/agentic-dispatch	2.097s`.
 - Task 3.4 `go test -race -count=1 -tags=integration ./processor/agentic-dispatch -run '^TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort$'`
