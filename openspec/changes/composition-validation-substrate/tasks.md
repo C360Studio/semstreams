@@ -377,6 +377,14 @@ before the omission, and record `shasum -a 256` equality of the restored file.
       `e3addbe7…eca0` before and after.
       All omissions: full log in the session scratchpad `mutations.log`; `git status --porcelain` → 0 lines and
       `go build ./...` OK after the sequence.
+- [x] 4.15 (review H2) Drop the explicit-stream suppression in `composition.Analyze` → `[applied]` →
+      `--- FAIL: TestValidateStreamRequirementSatisfiedByExplicitStream (0.00s)` (`TestValidateReportsStreamRequirement`
+      still PASS, so the suppression and the finding are distinct guards); `composition/analyze.go` restored, sha256
+      `0f57d23c…300f` before and after.
+- [x] 4.16 (review H2, boot wiring) `analyzeBootComposition` passes `nil` instead of `cm.bootStreams` → `[applied]` →
+      `--- FAIL: TestComponentManagerBootFindingsHonourExplicitStreams (0.26s)` (integration; `TestComponentManagerExposesBootFindings`
+      still PASS); `service/component_manager.go` restored, sha256 `99f95458…cb8c` before and after. Log: scratchpad
+      `mutations2.log`; tree clean and `go build ./...` OK after.
 
 ## 5. Schema regeneration
 
