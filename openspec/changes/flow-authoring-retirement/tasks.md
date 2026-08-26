@@ -56,6 +56,13 @@ Premises were measured at `5cc0c7fb` and are re-measured at the claim head; the 
       a deliberate not-done in the `composition-validation` delta, scoped to this change. Decide: serve
       `Result.Graph`-derived reachability from `/paths`, or record why the rebuild stays. Whichever it is reaches the
       spec delta, not only this line.
+      Also in scope here (PR #1101 review round 3, NIT-3): `AnalyzeConnectivity` still computes `ValidationStatus`
+      through its own `hasCriticalIssues` walk (`component/flowgraph/flowgraph.go:822` sets `"healthy"`, `:858-876`
+      flips it to `"warnings"`), and that walk carries the same latent defect the `/gaps` handler had — it treats every
+      required stream `no_publishers` port as critical with no `External` check. It has NO production reader: the only
+      readers are `component/flowgraph/flowgraph_test.go:258,312`, and `doc.go:35,55,141` teaches consuming it.
+      `composition.Analyze` derives its own status and never reads the field. Delete the field and its computation with
+      the doc paragraphs that teach it, or record why a status nothing reads stays.
 - [ ] 3.4 Write `docs/operations/migration-composition-validation-adr100.md`: removed routes, tools, packages, buckets;
       per-repo instructions for semstreams-ui and semteams from inventory §9; what the projection and the verbs give
       back. The `/gaps` removal already has its section in `docs/operations/migration-beta162-to-beta163.md`; link it

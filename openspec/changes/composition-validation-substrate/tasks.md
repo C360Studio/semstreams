@@ -520,6 +520,17 @@ before the omission, and record `shasum -a 256` equality of the restored file.
       home for a reason); NITs FIXED (external-vs-not case in `TestAdmissionRefusesPortDeclarationMismatch`;
       `correctExternalBoundaryInput` / `correctResearchDispatchSubject` split). Before undraft (not yet run):
       `task e2e:agentic` once — the only tier that boots `External: true` (crud-tools-test.json) through a real boot.
+      Round 3 (Fable, narrow re-review of the owner round at `e67901b9`): APPROVE WITH CHANGES — 0 BLOCKING,
+      0 HIGH, 2 MEDIUM, 3 NIT. Dispositions, all applied in 9.7: M1 FIXED (the migration doc said `/gaps` was
+      mounted at `/component-manager/gaps`; `service/service_manager.go:1683-1686` maps the service name
+      `component-manager` to the prefix `components`, and the generated document's key is the unprefixed
+      `/gaps` — both occurrences corrected, and the generated-vs-served distinction is now stated once);
+      M2 FIXED (the `[~]` understated the retained engine as a test oracle when it is a SERVED second
+      judgment — reworded in the delta and in 9.1 with the route, the call chain, and the measured absence
+      of any `External` check); NIT-1 FIXED (`declaredMethods` walks every method a `PathSpec` declares, so a
+      future non-GET operation's body is searched); NIT-2 FIXED (three wildcard-intersection rows in
+      `TestSubjectCoversIsDirectionalCover`, re-derived independently against the implementation before
+      adding them); NIT-3 RECORDED in `flow-authoring-retirement` 3.3 (dead `ValidationStatus`).
 - [ ] 7.2 Owner-run Codex round where the owner asks for it: verdict and dispositions recorded here; each fix
       re-enters 7.1 and re-runs the focused commands of 2.11 with `-v`.
       Round 1 (owner-run, at `bad4a1af`): REQUEST CHANGES — 1 BLOCKING (`/gaps` bypasses the canonical judgment),
@@ -527,8 +538,12 @@ before the omission, and record `shasum -a 256` equality of the restored file.
       Owner ruling with it: legacy paths are broken and documented for downstream migration, not maintained — so
       both findings were retirements. Every disposition, its evidence, and its mutation record are §9. The §6 gates
       were re-run on the resulting head (see each 6.x line). The reviewer re-read of §9 is 7.1 round 3.
-- [ ] 7.3 `conformance.md`: replace every `__` placeholder with the measured `file:line` at the head that carries the
+- [x] 7.3 `conformance.md`: replace every `__` placeholder with the measured `file:line` at the head that carries the
       last `.go` or delta change. Maintained as part of every commit that moves a line, not at the end.
+      DONE at `e67901b9`+9.7: `grep -n '__' openspec/changes/composition-validation-substrate/conformance.md` →
+      one hit, the sentence in the preamble that DEFINES the placeholder convention; no placeholder remains in
+      any table cell. The rows that carried the retirement's unmeasurable `service/__:__` moved to
+      `flow-authoring-retirement/conformance.md`, where they are still `__` because that work has not run.
 - [ ] 7.4 Reconcile: every scenario in `specs/composition-validation/spec.md` and in the MODIFIED requirement of
       `specs/component-runtime-config/spec.md` names a test that exists and is green in 6.2/6.3/6.5; table recorded
       here. Any `[~]` in this file is ALSO written into the delta before archiving. (The REMOVED-requirement half of
@@ -576,12 +591,22 @@ document it for migration by downstream at this stage." Both findings are theref
       --include='*.go' --include='*.md' --include='*.json' .` → no `handleFlowGaps` or `ValidateFlowConnectivity`
       anywhere outside `docs/proposals/` (historical inventory) and this change's own artifacts.
       RETAINED, deliberate not-done, written into the delta (`[~]` under "The framework serves one composition judgment
-      and no second gap analysis") and into `flow-authoring-retirement` 3.3 + its conformance CARRIED row:
-      `flowgraph.FlowGraph.AnalyzeConnectivity` (production callers `composition/analyze.go:59` — the canonical library
-      itself — and `engine/validator.go:168`, which leaves with #1093), and `ComponentManager.GetFlowGraph` /
-      `buildFlowGraph` / `flowgraph.BuildFromRegistry` / `GET <components>/paths`. `/paths` derives no severity, so it
-      is a projection and not a second judgment; whether it should serve the retained `Result.Graph` instead of
-      rebuilding is #1093's call.
+      and no second gap analysis") and into `flow-authoring-retirement` 3.3 + its conformance CARRIED row.
+      CORRECTION (review round 3, M2): the first wording of this paragraph said the engine was retained because "the
+      oracle still calls it". Measured at this head, that understates it — the engine is a SERVED second judgment, not
+      test scaffolding. `POST <flowbuilder>/flows/{id}/validate` (`service/flow_service.go:197`, handler `:516`) →
+      `engine.ValidateFlowDefinition` (`engine/engine.go:73`) → `engine/validator.go:309` `convertAnalysisToResult`,
+      which owns its own severity table and has no `External` check anywhere (`grep -rn External engine/` → 0 lines):
+      `:328-334` errors every required stream input whose issue is `no_publishers`, so an input declared `external: true`
+      IS reported as an error on that route while boot and `<components>/validate` report nothing. That is the same
+      class the new requirement's SHALL forbids. It is retained solely because ADR-100 D5 deletes the surface that
+      serves it: `flow-authoring-retirement` 3.2 removes `engine/`, `service/flow_service.go`, and that route together,
+      and removing the route here without the store would leave a saved-diagram surface with no validator at all.
+      Separately retained: `flowgraph.FlowGraph.AnalyzeConnectivity` (production callers `composition/analyze.go:59` —
+      the canonical library itself, so the primitive is canonical — and `engine/validator.go:168`, which leaves with
+      #1093), and `ComponentManager.GetFlowGraph` / `buildFlowGraph` / `flowgraph.BuildFromRegistry` /
+      `GET <components>/paths`. `/paths` derives no severity, so it is a projection and not a second judgment; whether
+      it should serve the retained `Result.Graph` instead of rebuilding is #1093's call.
       Tests (RED first, at the pre-removal head): `service/component_manager_gaps_removed_test.go`
       `TestComponentGapsOperationIsAbsent` → `component_manager_gaps_removed_test.go:52: GET /components/gaps = 200,
       want 404 or 405`; `TestExternalInputIsNeverACriticalOrphanOnAnyComponentOperation` →
@@ -661,3 +686,39 @@ document it for migration by downstream at this stage." Both findings are theref
       with their exactness tests; `wantTotal := 137 - len(postFoundationBGraphQueryGoIdentityRetirements)` is identical
       on `origin/main`, on the pre-merge branch head, and after the merge — no count relaxed. Schema consequence
       committed as `11cfd7ff`.
+- [x] 9.7 **Review round 3 dispositions (Fable at `e67901b9`, APPROVE WITH CHANGES).** Each premise was re-measured
+      before the edit, not taken on the finding's word.
+      M1 — `docs/operations/migration-beta162-to-beta163.md:130,166` claimed the retired route was
+      `/component-manager/gaps`. MEASURED: `service/service_manager.go:1683-1686` `serviceNameToPrefix` maps the
+      service name `component-manager` to the URL prefix `components`, and the generated document carries UNPREFIXED
+      keys (`grep -nE '^    /[A-Za-z]' specs/openapi.v3.yaml` → `/flowgraph`, `/list`, `/paths`, … — the prefix is
+      applied at mount, not in the document). So the operation key is `/gaps` and the served path is
+      `/components/gaps`, which is what the regression test and `test/e2e/client/observability.go:290` use. Both
+      occurrences corrected, and the doc now states the generated-key vs served-path distinction once rather than
+      asserting a single wrong path. (This also explains the sister residue: the `"/gaps"` keys in semteams/semspec/
+      semstreams-ui are the document key; `semdragon`'s `/component-manager/gaps` predates this mapping.)
+      M2 — see the CORRECTION paragraph in 9.1 and the reworded `[~]` in the delta. MEASURED at this head:
+      `service/flow_service.go:197` routes `POST <flowbuilder>/flows/{id}/validate` to `:516` `handleValidateFlow` →
+      `engine/engine.go:73` → `engine/validator.go:309` `convertAnalysisToResult`; `:328-334` makes every required
+      stream `no_publishers` port an error; `grep -rn External engine/` → 0 lines. The engine is a served second
+      severity table that ignores the marker, not a test oracle — retained only because
+      `flow-authoring-retirement` 3.2 deletes it with the surface that serves it.
+      NIT-1 — `service/component_manager_gaps_removed_test.go` gains `declaredMethods(PathSpec) []string`, walking
+      GET/POST/PUT/PATCH/DELETE for every non-nil operation and sorting them, so the body of a future non-GET
+      component operation is searched instead of silently skipped. Every advertised operation declares only GET today;
+      the walk is what keeps that true rather than assumed.
+      NIT-2 — `component/flowgraph/subject_cover_test.go` gains `{"foo.*.bar","foo.baz.*",false}`,
+      `{"foo.baz.*","foo.*.bar",false}`, `{"foo.*.bar","foo.baz.bar",true}`. Each was re-derived by hand against
+      `SubjectCovers` before being added (index 2: filter `bar` vs pattern `*` → `tokenCovered` false; index 1: filter
+      `baz` vs pattern `*` → false; the third covers token for token), then confirmed by the run. These are Codex's
+      case: two filters whose concrete subject sets intersect where neither covers the other — the question the retired
+      `SubjectMatches` claimed to answer and got wrong.
+      NIT-3 — recorded, not fixed, per the finding: `flow-authoring-retirement` 3.3 now carries the dead
+      `ValidationStatus`. MEASURED: written at `component/flowgraph/flowgraph.go:822` and `:874` via `hasCriticalIssues`
+      (`:858-876`), which treats every required stream `no_publishers` port as critical with no `External` check; read
+      by nothing in production — `grep -rn ValidationStatus --include='*.go' .` finds only the struct field
+      (`flowgraph_analysis.go:12`), the two writes, `flowgraph_test.go:258,312`, and `doc.go:35,55,141` teaching it.
+      Gates on the 9.7 head: `task lint` → exit 0, revive no problem · `gofmt -l` on both edited test files → no output ·
+      `go test -race -count=1 ./service/ ./component/flowgraph/` → `ok github.com/c360studio/semstreams/service`,
+      `ok github.com/c360studio/semstreams/component/flowgraph` · `openspec validate --all --strict` → 55 passed,
+      0 failed · `task openspec:queue` → both changes clean apart from the deliberate `[~]` 3.1a.

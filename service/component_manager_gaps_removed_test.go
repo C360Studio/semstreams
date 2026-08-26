@@ -3,6 +3,7 @@ package service
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -84,24 +85,27 @@ func TestExternalInputIsNeverACriticalOrphanOnAnyComponentOperation(t *testing.T
 	// searched either way — a 404 body may not carry the vocabulary either.
 	mustAnswer := map[string]bool{"/validate": true, "/flowgraph": true, "/list": true, "/health": true}
 
-	for path := range paths {
+	for path, item := range paths {
 		concrete := strings.NewReplacer("{name}", "consumer", "{id}", "consumer").Replace(path)
-		t.Run(path, func(t *testing.T) {
-			recorder := httptest.NewRecorder()
-			mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/components"+concrete, nil))
-			if mustAnswer[path] && recorder.Code != http.StatusOK {
-				t.Fatalf("GET /components%s = %d, want %d", concrete, recorder.Code, http.StatusOK)
-			}
-			if recorder.Code >= http.StatusInternalServerError {
-				t.Fatalf("GET /components%s = %d: %s", concrete, recorder.Code, recorder.Body.String())
-			}
-			body := recorder.Body.String()
-			for _, word := range banned {
-				if strings.Contains(body, word) {
-					t.Fatalf("GET /components%s reports %q for an external input: %s", concrete, word, body)
+		for _, method := range declaredMethods(item) {
+			t.Run(method+" "+path, func(t *testing.T) {
+				recorder := httptest.NewRecorder()
+				mux.ServeHTTP(recorder, httptest.NewRequest(method, "/components"+concrete, nil))
+				if method == http.MethodGet && mustAnswer[path] && recorder.Code != http.StatusOK {
+					t.Fatalf("%s /components%s = %d, want %d", method, concrete, recorder.Code, http.StatusOK)
 				}
-			}
-		})
+				if recorder.Code >= http.StatusInternalServerError {
+					t.Fatalf("%s /components%s = %d: %s", method, concrete, recorder.Code, recorder.Body.String())
+				}
+				body := recorder.Body.String()
+				for _, word := range banned {
+					if strings.Contains(body, word) {
+						t.Fatalf("%s /components%s reports %q for an external input: %s",
+							method, concrete, word, body)
+					}
+				}
+			})
+		}
 	}
 
 	// The canonical judgment agrees: no error finding, and the port carries its
@@ -114,4 +118,24 @@ func TestExternalInputIsNeverACriticalOrphanOnAnyComponentOperation(t *testing.T
 	if len(node.Inputs) != 1 || !node.Inputs[0].External {
 		t.Fatalf("projection input = %+v, want the external marker", node.Inputs)
 	}
+}
+
+// declaredMethods returns every HTTP method the path item declares, so a future
+// non-GET operation on the component surface is searched too rather than
+// silently skipped by a GET-only walk.
+func declaredMethods(item PathSpec) []string {
+	methods := make([]string, 0, 5)
+	for method, operation := range map[string]*OperationSpec{
+		http.MethodGet:    item.GET,
+		http.MethodPost:   item.POST,
+		http.MethodPut:    item.PUT,
+		http.MethodPatch:  item.PATCH,
+		http.MethodDelete: item.DELETE,
+	} {
+		if operation != nil {
+			methods = append(methods, method)
+		}
+	}
+	slices.Sort(methods)
+	return methods
 }

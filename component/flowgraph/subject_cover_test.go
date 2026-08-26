@@ -22,6 +22,13 @@ func TestSubjectCoversIsDirectionalCover(t *testing.T) {
 		{"data.>", "other.raw", false},
 		{"", "data.raw", false},
 		{"data.>", "data..raw", false},
+		// Two filters whose concrete subject sets intersect (foo.baz.bar
+		// matches both) but where neither covers the other. The retired
+		// SubjectMatches advertised overlap and answered false for this pair;
+		// cover is the question the validator asks, and false is correct here.
+		{"foo.*.bar", "foo.baz.*", false},
+		{"foo.baz.*", "foo.*.bar", false},
+		{"foo.*.bar", "foo.baz.bar", true},
 	}
 	for _, c := range cases {
 		if got := SubjectCovers(c.filter, c.pattern); got != c.want {

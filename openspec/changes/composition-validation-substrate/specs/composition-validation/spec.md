@@ -278,13 +278,22 @@ while the canonical judgment raised no finding for the same port; a second inter
 than re-projected. Pre-v1 fresh-state policy applies: no compatibility view and no legacy reader. A projection that
 derives no severity is not a judgment and is unaffected.
 
-> `[~]` DELIBERATE NOT-DONE (2026-08-26, this change): the shared primitives under the retired operation are RETAINED
-> because callers outside this change still reach them. `flowgraph.FlowGraph.AnalyzeConnectivity` is the analysis
-> `composition.Analyze` itself runs (`composition/analyze.go`) and the `engine` oracle still calls it;
-> `ComponentManager.GetFlowGraph` and `GET <components>/paths` (reachability from input components — a projection with no
-> severity) still build a graph from the admitted registry. The `engine` caller leaves with #1093; whether `/paths`
-> should serve the retained `composition.Result.Graph` instead of rebuilding is #1093's scope, not this change's, and is
-> recorded there. Only the judging operation is removed here.
+> `[~]` DELIBERATE NOT-DONE (2026-08-26, this change): one second judgment of this class SURVIVES at this head, and it
+> is served, not merely test scaffolding. `POST <flowbuilder>/flows/{id}/validate` (`service/flow_service.go:197`,
+> handler `:516`) reaches `engine.ValidateFlowDefinition` (`engine/engine.go:73`) and
+> `engine/validator.go:309` `convertAnalysisToResult`, which applies its OWN severity table over the same
+> `flowgraph` analysis and contains no `External` check at all (`grep -rn External engine/` → 0): `:328-334` makes every
+> required stream input with `no_publishers` an error, so an input this capability's requirement declares externally fed
+> is reported as an error there. That is precisely the class the SHALL above forbids, and it is retained ONLY because
+> ADR-100 D5 deletes the whole authoring surface that serves it — `openspec/changes/flow-authoring-retirement/` task 3.2
+> removes `engine/`, `service/flow_service.go`, and that route together. Removing the route without the surface would
+> leave a saved-diagram store with no validator; removing it here would perform #1093 inside #1092.
+> Retained for the same one-more-PR reason, and separately: `flowgraph.FlowGraph.AnalyzeConnectivity` — the analysis
+> `composition.Analyze` itself runs (`composition/analyze.go:59`), so it is canonical and only its `engine` caller
+> leaves; and `ComponentManager.GetFlowGraph` with `GET <components>/paths` (reachability from input components — a
+> projection that derives no severity, therefore not a judgment), which still build a graph from the admitted registry.
+> Whether `/paths` should serve the retained `composition.Result.Graph` instead of rebuilding is #1093's scope, not this
+> change's, and is recorded there. Only the judging operation ComponentManager itself served is removed here.
 
 #### Scenario: the gap operation is absent from the routed and advertised surface
 

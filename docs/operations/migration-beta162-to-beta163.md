@@ -127,7 +127,9 @@ strings (`entity/types.go:187-365`, `processor/{spec,docs,decision}/processor.go
 
 ### What changes on the wire
 
-`GET <components>/gaps` (mounted at `/component-manager/gaps` in the shipped binaries) is **removed without an alias**,
+`GET <components>/gaps` — the operation key `/gaps` in the generated document, served at `/components/gaps` because
+ComponentManager mounts under the `components` prefix (`service/service_manager.go:1683-1686` maps the service name
+`component-manager` to the URL prefix `components`) — is **removed without an alias**,
 together with its response body (`disconnected_nodes`, `orphaned_ports`, `objectstore_gaps`, and the `summary` object
 carrying `total_gaps` / `critical_gaps` / `optional_gaps` / `critical_port_count` / `has_issues`). The route 404s and the
 operation is gone from `specs/openapi.v3.yaml`. Its Go surface goes with it:
@@ -162,8 +164,8 @@ generated OpenAPI type — `semstreams-ui/src/lib/types/api.generated.ts:703`, `
 `semspec/ui/src/lib/types/{api,semstreams}.generated.ts:600,715`, `semdragon/ui/src/lib/api/generated.d.ts:91` and
 `semdragon/ui/static/openapi.json:58`.
 
-- **Every UI repository**: regenerate types from the new `specs/openapi.v3.yaml`. The `/gaps` (or
-  `/component-manager/gaps`) entry disappears; nothing else in the component surface changes shape except `/flowgraph`
+- **Every UI repository**: regenerate types from the new `specs/openapi.v3.yaml`. The `/gaps`
+  operation key disappears; nothing else in the component surface changes shape except `/flowgraph`
   and `/validate`, which gain typed schemas (`Graph`, `Result`).
 - **Anyone who added a call since that measurement**: replace a `has_issues` check with `result.status !== "valid"` from
   `<components>/validate`, and a `critical_port_count` check with `result.errors.length`. Do not reimplement the severity
