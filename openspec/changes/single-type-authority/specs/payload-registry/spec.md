@@ -9,6 +9,11 @@ types, and no global registry — each binary constructs its own and injects it 
 registered in one binary is not thereby a type of another: the attributes registered with it (floor, contracts) exist only
 where the type is registered.
 
+> Implementation note (2026-08-26, tasks 6.1/7.3 `[~]`): the e2e tiers that stamp scenario-only keys on `entity.create` were
+> assumed to boot `cmd/e2e-semstreams`; measured, core, lessons, crud-tools and research-graph boot the production image
+> (`cmd/semstreams`), whose registry the e2e fixtures cannot reach. Whether those tiers re-target, the scenarios re-stamp, or
+> the production binary registers e2e types is an owner ruling; this requirement is unchanged by it.
+
 #### Scenario: a colliding key is refused at registration
 
 - **GIVEN** a registry holding `agentic.agent_lesson.v1`

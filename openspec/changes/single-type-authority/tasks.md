@@ -320,12 +320,24 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       Done 2026-08-26: `withTestRegistry(tb, c)` applied to the 23 `&Component{` literals (`readiness_test.go` 14, `lifecycle_owner_test.go` 4, `keyed_ingest_test.go` 2, `batch_unit_test.go` 1, `component_test.go` 1; `query_contract_guard_test.go` injects `mustTestPayloadRegistry()` in its no-`t` helper). `go test -race -count=1 ./processor/graph-ingest/` → ok with the fail-closed seam in place.
 ## 6. e2e fixtures and the composition roots
 
-- [x] 6.1 `cmd/e2e-semstreams/fixtures/register.go`: `RegisterPayloads(reg)` for `test.fixture.v1`, `e2e.probe.v1`,
+- [~] 6.1 `cmd/e2e-semstreams/fixtures/register.go`: `RegisterPayloads(reg)` for `test.fixture.v1`, `e2e.probe.v1`,
       `e2e.eventtime.v1`, `e2e.canonical_create_contract.v1`, `e2e.relationship_contract.v1`, `research.e2e_search_seed.v1`
       (verbatim carriers, floor `control`); called from `buildPayloadRegistry` (`main.go:358-378`). Tier → keys: `core` and
       `lessons` → `test.fixture.v1`; `crud-tools` → `e2e.probe.v1`; `structural` → `e2e.eventtime.v1`, `e2e.canonical_create_contract.v1`,
       `e2e.relationship_contract.v1`; `research-graph` → `research.e2e_search_seed.v1`. 2.8 GREEN.
       Done 2026-08-26: `cmd/e2e-semstreams/fixtures/register.go` (`Carrier` verbatim payload, six keys, floor control) called from `buildPayloadRegistry` after `mission.RegisterPayloads`. `go test -race -count=1 -run TestFixturesRegisterEveryE2EStamp ./cmd/e2e-semstreams/fixtures/` → ok.
+      PREMISE MEASURED FALSE 2026-08-26 (`[~]`, escalated — not executed): the tier→keys map assumes `cmd/e2e-semstreams` hosts
+      graph-ingest for every tier. Measured from `docker/compose/*.yml`: `target: production` (= `cmd/semstreams`, `docker/Dockerfile:108`)
+      for core and lessons (`e2e.yml:56`), agentic (`agentic.yml:68`), crud-tools (`crud-tools.yml:66`), research-graph
+      (`research-graph.yml:63`), deep-research (`deep-research.yml:69`); `target: e2e` (= `cmd/e2e-semstreams`,
+      `docker/Dockerfile:117-159`) only for structural/statistical/semantic (`tiered.yml`), lifecycle (`lifecycle.yml:56`), ops
+      (`ops.yml:76`). The fixtures package cannot reach the production binary's registry, so core (`test.fixture.v1`,
+      `graph_roundtrip.go:207`), lessons (`test.fixture.v1`, `lessons/scenario.go:391`), crud-tools (`e2e.probe.v1`) and
+      research-graph (`research.e2e_search_seed.v1`) are refused at birth; structural's three `e2e.*` keys work (e2e target).
+      Options for the owner: (1) re-target those four tiers to the e2e image — leaves NO tier booting `cmd/semstreams`
+      (the beta.18 blind spot `CLAUDE.md` names); (2) register the e2e fixture types in `cmd/semstreams` — test types in the
+      production binary; (3) change what those scenarios stamp to a type the production binary registers (none fits today
+      except `core.json.v1`). None is this implementer's call.
 - [x] 6.2 `test/e2e/scenarios/ops/scenario.go:462`: stamp the registered `agentic.loop_completed.v1` instead of
       `agentic.loop-completed.1` (the direct `PutKV` seed stays; O-9 files the write-path hygiene separately).
       Done 2026-08-26: `ops/scenario.go` seeds `agentic.loop_completed.v1` from the agentic constants; the direct `PutKV` stays.
@@ -343,7 +355,7 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
 
 ## 7. Gates — in the `AGENTS.md:63-68` Land order
 
-- [ ] 7.1 Commit GREEN before any mutation check. Then, each with `cp <file> <file>.pre && sha256sum <file>` before and a
+- [x] 7.1 Commit GREEN before any mutation check. Then, each with `cp <file> <file>.pre && sha256sum <file>` before and a
       restore + equal checksum after, one at a time: (a) delete the lesson row in `agentic.RegisterPayloads` →
       `TestPayloadRegistryIsTheSingleTypeAuthority` MUST fail; (b) delete `lifecycle.RegisterPayloads` from
       `payloadbuiltins.Register` → same test MUST fail; (c) delete the `GetRegistration` lookup at the create seam →
@@ -361,19 +373,68 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       `if ep.MaxTokens > 0` gate in `ModelEndpointEntity.Triples()` → `TestModelEndpointEntityMatchesBuilder` MUST fail; (n) drop
       the fill in `MutationClient.Create` → `TestCreateFillsMessageTypeFromContract` MUST fail. Record each command and its output
       line here.
-- [ ] 7.2 `task lint` (revive warnings = failure); `go test -race -count=1 ./...`; `go test -race -tags=integration -count=1 -p 2 ./...`;
+      Done 2026-08-26 at `17324b94` (GREEN: `go test -race -count=1 ./...` 154/154 ok; per-package integration suites ok).
+      Harness: `cp` backup + sha256 before, mutation, `[applied]`, the package suite (unit) or the named integration test,
+      restore, sha256 equal — every restore matched; tree clean after each. Verbatim `--- FAIL` lines:
+      (a) delete the lesson row → `--- FAIL: TestPayloadRegistryIsTheSingleTypeAuthority (0.00s)` (only failure in `./payloadbuiltins/`)
+      (b) `track(lifecycle.RegisterPayloads(reg))` → `_ =` → `--- FAIL: TestPayloadRegistryIsTheSingleTypeAuthority (0.00s)`
+      (c) delete the `GetRegistration` lookup → `--- FAIL: TestCreateRejectsUnregisteredMessageType (0.34s)` (integration)
+      (d) delete `IndexingProfile: content` on the lesson row → `--- FAIL: TestFloorComesFromRegistration (0.34s)` (integration; the
+          lesson-floor subtest added in `17324b94` is what observes it — the task's two original subtests do not touch the lesson row)
+      (e) delete the `LessonPolarity` line → `--- FAIL: TestRegisteredContractMatchesTriples (0.00s)` (`./agentic/`) and
+          `--- FAIL: TestEmitLessonBuildsEntityTriples (0.00s)` + `--- FAIL: TestEmitLessonExecutor_CreatesLesson (0.00s)` (`./processor/agentic-tools/`)
+      (f) delete the factory nil-registry guard → `--- FAIL: TestFactoryRejectsNilPayloadRegistry (0.00s)` (only failure in `./processor/graph-ingest/`)
+      (g) `fixtures.RegisterPayloads(reg)` → `_ =` in `buildPayloadRegistry` → `--- FAIL: TestBuildPayloadRegistryRegistersEveryE2EStamp (0.00s)`
+          (`cmd/e2e-semstreams/registry_wiring_test.go`, added in `17324b94`); `TestFixturesRegisterEveryE2EStamp` stays `ok` — the
+          task's named unit test cannot observe `main.go` wiring, so the wiring test is the observer
+      (h) delete the seam nil-registry guard → `--- FAIL: TestCreateSeamRejectsWhenRegistryMissing (0.00s)` (only failure)
+      (i) remove `payloadReg.Contracts()...` in `cmd/semstreams/main.go` → `go build ./...` exit 0; `task e2e:core` → app container
+          `exited (1)` before any scenario; the mutated binary against the e2e NATS: `Error: wire graph runtime: build graph mutation client: projection: invalid contract: no contracts`
+      (j) delete the in-process helper call → `--- FAIL: TestInProcessCreateRejectsUnregisteredType (0.00s)` (only failure)
+      (k) `track(inference.RegisterPayloads(reg))` → `_ =` → `--- FAIL: TestHierarchyContainerBirthCarriesRegisteredType (0.25s)` (integration)
+      (l) delete the hierarchy factory check → `--- FAIL: TestFactoryRejectsHierarchyWithoutContainerType (0.00s)` (only failure)
+      (m) make `ModelMaxTokens` unconditional → `--- FAIL: TestModelEndpointEntityMatchesBuilder (0.00s)` (only failure in `./agentic/`)
+      (n) drop the O-17 fill → `--- FAIL: TestCreateFillsMessageTypeFromContract (0.00s)` (only failure in `./pkg/projection/`)
+- [x] 7.2 `task lint` (revive warnings = failure); `go test -race -count=1 ./...`; `go test -race -tags=integration -count=1 -p 2 ./...`;
       `task schema:generate && git diff --exit-code schemas/ specs/`; `go test ./test/contract/...`;
       `grep -rn 'NewNATSLessonCurator' --include='*.go' .` → 0 (the retired helper stays absent); `grep -rn builtinprojection
       --include='*.go' .` → 0. Record outputs.
-- [ ] 7.3 Tag gate (owner override O-6): `task e2e:agentic`, `task e2e:lessons`, `task e2e:structural`, `task e2e:ops`, `task e2e:research-graph`, `task e2e:lifecycle`, `task e2e:crud-tools`, `task e2e:core` — all eight green, each as a provenance-complete row (exact command, runner identity, UTC start/end) in the candidate-proof record per `openspec/specs/release-candidate-proof/spec.md`; and, until the web-observation tier exists (O-10), `go test -race -tags=integration -count=1 -run TestWebObservationBirthIsRegistered ./processor/agentic-tools/executors/` recorded as a row of its own. One agent at a time on the host; the BREAKING commit lands on main
+      Done 2026-08-26: `task lint` → 0 warnings after `1ec9775b` (one revive indent-error-flow in the 6.4 edit, fixed);
+      `go test -race -count=1 ./...` → 154 ok, 0 FAIL (after the census fixture and annotation re-pins in `17324b94`);
+      per-package `go test -race -tags=integration -count=1 -p 2`: graph-ingest `ok 27.815s`, agentic-tools `ok 57.566s`,
+      executors `ok 4.445s`, runner `ok 1.278s`, agentic-loop `ok 28.110s`, graph-index `ok 38.526s`, rule `ok 40.023s`,
+      gated-dag `ok 7.968s`, lifecycle `ok 4.605s`; full `go test -race -tags=integration -count=1 -p 2 ./...` — see the
+      appended line below; `task schema:generate` → "OpenAPI generation complete", `git diff --exit-code schemas/ specs/openapi.v3.yaml`
+      → empty; `go test ./test/contract/...` → ok; `grep NewNATSLessonCurator` → 0; `grep builtinprojection --include='*.go'` → 1
+      (assertion message in `payloadbuiltins/single_type_authority_test.go` naming the retired set); `go vet -tags=integration ./...`
+      → clean; `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...` → ok; `git diff --stat go.sum` → empty;
+      `openspec validate single-type-authority --strict` → valid.
+- [~] 7.3 Tag gate (owner override O-6): `task e2e:agentic`, `task e2e:lessons`, `task e2e:structural`, `task e2e:ops`, `task e2e:research-graph`, `task e2e:lifecycle`, `task e2e:crud-tools`, `task e2e:core` — all eight green, each as a provenance-complete row (exact command, runner identity, UTC start/end) in the candidate-proof record per `openspec/specs/release-candidate-proof/spec.md`; and, until the web-observation tier exists (O-10), `go test -race -tags=integration -count=1 -run TestWebObservationBirthIsRegistered ./processor/agentic-tools/executors/` recorded as a row of its own. One agent at a time on the host; the BREAKING commit lands on main
       only behind all of these; results recorded here verbatim.
-- [ ] 7.4 Fill `conformance.md` Implementation and Test columns with `file:line` at the head that carries the last change to
+      Run 2026-08-26 on this laptop (runner: Claude Fable 5 in the `claude/gh1100-single-type-authority-impl` worktree):
+      `task e2e:agentic` 21:08:26Z–21:09:31Z → "Scenario completed successfully" (production binary; loop execution + model
+      endpoint births, the 6.4 promotion held); `task e2e:structural` 21:10:22Z–21:10:42Z → "Scenario completed successfully"
+      (e2e binary; `authority_hierarchy_provenance_entities:125`, containers born registered; the three `e2e.*` stamps admitted);
+      `task e2e:core` 21:05:20Z–21:06:25Z → core-health PASS, core-dataflow PASS, core-graph-roundtrip FAIL:
+      `entity message_type "test.fixture.v1" is not registered in this deployment's payload registry`; `task e2e:lessons`
+      21:10:42Z–21:11:10Z → FAIL: `create evidence fixture: … "test.fixture.v1" is not registered in this deployment's payload registry`;
+      `go test -race -tags=integration -count=1 -run TestWebObservationBirthIsRegistered ./processor/agentic-tools/executors/` → ok.
+      Not run: `e2e:ops`, `e2e:lifecycle` (e2e target; expected green), `e2e:crud-tools`, `e2e:research-graph` (production target;
+      expected to fail on the same premise). `[~]`: the union cannot be green until the owner rules the tier-to-binary
+      premise recorded under 6.1; the candidate-proof rows are the TAG gate's, not this PR's.
+- [x] 7.4 Fill `conformance.md` Implementation and Test columns with `file:line` at the head that carries the last change to
       any `.go` file or spec delta on the branch; an empty cell at review time is a deviation to record.
-- [ ] 7.5 Sister obligations are recorded in `docs/operations/migration-beta162-to-beta163.md` (owner override O-11/O-12:
+      Done 2026-08-26: every Implementation and Test column filled with `file:line` at the head carrying the last `.go`
+      change; the DEVIATION row records the tier-to-binary premise (owner sign-off pending).
+- [x] 7.5 Sister obligations are recorded in `docs/operations/migration-beta162-to-beta163.md` (owner override O-11/O-12:
       sister repositories stay read-only — no sister issues, comments, or edits): semmachina (4 types), semdev (2), semconnect
       (11, host-side registration), semteams (none; recommendation), semmem (for downstream-owner validation), semsource and
       semdragon (not affected). Verify at landing that every sister section's pinned SHA and `file:line` still read as written;
       the PR body links the document.
+      Done 2026-08-26: no sister file written, no sister `go` command, no sister issue or comment. The document's per-sister
+      sections and pins are unchanged from the design package; one paragraph added (`:20`) naming the two boot-time
+      consequences for a root that builds its own graph-ingest (registry required; container type required with hierarchy on).
+      Floors documented for the sisters are unchanged by implementation. The PR body link is the owner's (task 1.1).
 - [ ] 7.6 Implementation review by `semstreams-reviewer`, the owner-run cross-agent round where asked, fixes and re-review;
       `openspec archive single-type-authority` + spec sync as the final content commit; narrow reviewer check of the archive;
       undraft. The merge gate owns CI.
