@@ -18,9 +18,13 @@ in `projection_contracts`:
 | `agent.lesson.retired-at` | retirement timestamp |
 
 These three are **mutable** and single-valued, so they belong in this local
-`reconcile` group. This mirrors the canonical built-in source declaration in
-`internal/builtinprojection/contracts.go` (`builtinprojection.Contracts()`),
-which the standard constructor consumes directly. The
+`reconcile` group. This mirrors the canonical built-in source declaration
+`agentic.LessonContract()` (`agentic/agent_lesson_entity.go:396`), carried on
+that payload's registration (`agentic/payload_registry.go:53`) and reached at
+boot through `payloadbuiltins.Register`; the composition root passes the
+aggregate to the mutation client as `payloadReg.Contracts()`
+(`cmd/semstreams/main.go:270`). PR #1109 deleted the former
+`internal/builtinprojection` home. The
 **birth predicates** — `agent.lesson.created-at`,
 `category`, `polarity`, `severity`, `summary`, `detail`, `injection-form`,
 `evidence`, `applies-to`, `observed-role`, and `agent.action.executed-by` — are
