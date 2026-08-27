@@ -140,18 +140,40 @@ type streamConsumerBinding struct {
 	drainIssued bool
 }
 
-// NewOutput creates a new file output from configuration
-func NewOutput(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+// DeclarePorts is the component.PortDeclarer for the file output: the
+// configured NATS/JetStream inputs plus the file_output port derived from
+// directory, file_prefix, and format, exactly as NewOutput will report them.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	resolved, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfigFrom(resolved.inputPorts, []component.Port{resolved.fileOutput}), nil
+}
+
+// resolvedConfig is the effective configuration with its resolved ports.
+type resolvedConfig struct {
+	config        Config
+	inputPorts    []component.Port
+	fileOutput    component.Port
+	filePath      string
+	inputSubjects []string
+}
+
+// resolveConfig parses rawConfig (defaults when no ports are configured),
+// validates, resolves the inputs with their subject rule, and derives the file
+// output port. It is the one derivation DeclarePorts and NewOutput share.
+func resolveConfig(rawConfig json.RawMessage) (resolvedConfig, error) {
 	var config Config
 	if err := component.SafeUnmarshal(rawConfig, &config); err != nil {
-		return nil, errs.WrapInvalid(err, "Output", "NewOutput", "config unmarshal")
+		return resolvedConfig{}, errs.WrapInvalid(err, "Output", "NewOutput", "config unmarshal")
 	}
 
 	if config.Ports == nil {
 		config = DefaultConfig()
 	}
 	if err := config.Validate(); err != nil {
-		return nil, errs.WrapInvalid(err, "Output", "NewOutput", "validate config")
+		return resolvedConfig{}, errs.WrapInvalid(err, "Output", "NewOutput", "validate config")
 	}
 
 	inputPorts := make([]component.Port, len(config.Ports.Inputs))
@@ -159,25 +181,25 @@ func NewOutput(rawConfig json.RawMessage, deps component.Dependencies) (componen
 	for index, definition := range config.Ports.Inputs {
 		port, err := definition.Resolve(component.DirectionInput)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "Output", "NewOutput", "resolve input port")
+			return resolvedConfig{}, errs.WrapInvalid(err, "Output", "NewOutput", "resolve input port")
 		}
 		facts, err := port.Facts()
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "Output", "NewOutput", "project input port facts")
+			return resolvedConfig{}, errs.WrapInvalid(err, "Output", "NewOutput", "project input port facts")
 		}
 		if facts.Kind() != component.PortKindNATS && facts.Kind() != component.PortKindJetStream {
-			return nil, errs.WrapInvalid(fmt.Errorf("input port %q kind %q is not nats or jetstream", port.Name, facts.Kind()), "Output", "NewOutput", "validate input port")
+			return resolvedConfig{}, errs.WrapInvalid(fmt.Errorf("input port %q kind %q is not nats or jetstream", port.Name, facts.Kind()), "Output", "NewOutput", "validate input port")
 		}
 		subjects := facts.NATSSubjects()
 		if len(subjects) != 1 {
-			return nil, errs.WrapInvalid(fmt.Errorf("input port %q declares %d subjects, want one", port.Name, len(subjects)), "Output", "NewOutput", "validate input port")
+			return resolvedConfig{}, errs.WrapInvalid(fmt.Errorf("input port %q declares %d subjects, want one", port.Name, len(subjects)), "Output", "NewOutput", "validate input port")
 		}
 		inputPorts[index] = port
 		inputSubjects = append(inputSubjects, subjects[0])
 	}
 
 	if len(inputSubjects) == 0 {
-		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Output", "NewOutput", "no input subjects configured")
+		return resolvedConfig{}, errs.WrapInvalid(errs.ErrInvalidConfig, "Output", "NewOutput", "no input subjects configured")
 	}
 
 	filePath := filepath.Join(config.Directory, fmt.Sprintf("%s.%s", config.FilePrefix, config.Format))
@@ -187,8 +209,21 @@ func NewOutput(rawConfig json.RawMessage, deps component.Dependencies) (componen
 		Description: "File path for output",
 	}).Resolve(component.DirectionOutput)
 	if err != nil {
-		return nil, errs.WrapInvalid(err, "Output", "NewOutput", "resolve file output port")
+		return resolvedConfig{}, errs.WrapInvalid(err, "Output", "NewOutput", "resolve file output port")
 	}
+	return resolvedConfig{
+		config: config, inputPorts: inputPorts, fileOutput: fileOutput, filePath: filePath, inputSubjects: inputSubjects,
+	}, nil
+}
+
+// NewOutput creates a new file output from configuration
+func NewOutput(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+	resolved, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
+	}
+	config, inputPorts, fileOutput := resolved.config, resolved.inputPorts, resolved.fileOutput
+	filePath, inputSubjects := resolved.filePath, resolved.inputSubjects
 
 	return &Output{
 		name:        "file-output",
@@ -757,6 +792,7 @@ func Register(registry *component.Registry) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
 		Name:        "file",
 		Factory:     NewOutput,
+		Ports:       DeclarePorts,
 		Schema:      fileSchema,
 		Type:        "output",
 		Protocol:    "file",

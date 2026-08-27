@@ -664,24 +664,30 @@ type Component struct {
 	subscribeForRequests func(context.Context, string, func(context.Context, []byte) ([]byte, error)) (*natsclient.Subscription, error)
 }
 
-// CreateGraphClustering is the factory function for creating graph-clustering components
-func CreateGraphClustering(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
-	// Validate dependencies
-	if deps.NATSClient == nil {
-		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "CreateGraphClustering", "factory", "NATSClient required")
+// DeclarePorts is the component.PortDeclarer for graph-clustering: the ports
+// CreateGraphClustering will report for rawConfig, computed without dependencies.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	_, inputs, outputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
 	}
-	natsClient := deps.NATSClient
+	return component.PortConfigFrom(inputs, outputs), nil
+}
 
+// resolveConfig parses rawConfig with its no-silent-drop guards, applies
+// defaults, validates, and resolves the effective ports. It is the one
+// derivation DeclarePorts and CreateGraphClustering share.
+func resolveConfig(rawConfig json.RawMessage) (Config, []component.Port, []component.Port, error) {
 	// Parse configuration
 	var config Config
 	if len(rawConfig) > 0 {
 		if err := json.Unmarshal(rawConfig, &config); err != nil {
-			return nil, errs.Wrap(err, "CreateGraphClustering", "factory", "config unmarshal")
+			return Config{}, nil, nil, errs.Wrap(err, "CreateGraphClustering", "factory", "config unmarshal")
 		}
 		// A field removed from the operator surface must fail the load, not be
 		// dropped by encoding/json and silently change the gate (ADR-083 §3.2).
 		if err := rejectRemovedConfigKeys(rawConfig); err != nil {
-			return nil, errs.Wrap(err, "CreateGraphClustering", "factory", "removed config field")
+			return Config{}, nil, nil, errs.Wrap(err, "CreateGraphClustering", "factory", "removed config field")
 		}
 		// Reject phantom keys in anomaly_config that encoding/json silently drops
 		// (ADR-054). Operator configs bypass the strict checked-in-config test, so
@@ -693,7 +699,7 @@ func CreateGraphClustering(rawConfig json.RawMessage, deps component.Dependencie
 		// re-extraction into a RawMessage cannot fail; the guard is purely defensive.
 		if err := json.Unmarshal(rawConfig, &rawAnomaly); err == nil {
 			if err := inference.RejectUnknownKeys(rawAnomaly.AnomalyConfig); err != nil {
-				return nil, errs.Wrap(err, "CreateGraphClustering", "factory", "anomaly_config")
+				return Config{}, nil, nil, errs.Wrap(err, "CreateGraphClustering", "factory", "anomaly_config")
 			}
 		}
 		// Same no-silent-drop guard for entity_id_edges (gh#461): a toggle typo
@@ -703,7 +709,7 @@ func CreateGraphClustering(rawConfig json.RawMessage, deps component.Dependencie
 		}
 		if err := json.Unmarshal(rawConfig, &rawEdges); err == nil {
 			if err := rejectUnknownEntityIDEdgeKeys(rawEdges.EntityIDEdges); err != nil {
-				return nil, errs.Wrap(err, "CreateGraphClustering", "factory", "entity_id_edges")
+				return Config{}, nil, nil, errs.Wrap(err, "CreateGraphClustering", "factory", "entity_id_edges")
 			}
 		}
 		// Same no-silent-drop guard for semantic_edges (ADR-086): an enable-toggle
@@ -713,7 +719,7 @@ func CreateGraphClustering(rawConfig json.RawMessage, deps component.Dependencie
 		}
 		if err := json.Unmarshal(rawConfig, &rawSemantic); err == nil {
 			if err := rejectUnknownSemanticEdgeKeys(rawSemantic.SemanticEdges); err != nil {
-				return nil, errs.Wrap(err, "CreateGraphClustering", "factory", "semantic_edges")
+				return Config{}, nil, nil, errs.Wrap(err, "CreateGraphClustering", "factory", "semantic_edges")
 			}
 		}
 	} else {
@@ -723,16 +729,14 @@ func CreateGraphClustering(rawConfig json.RawMessage, deps component.Dependencie
 	// Apply defaults and validate
 	config.ApplyDefaults()
 	if err := config.Validate(); err != nil {
-		return nil, errs.Wrap(err, "CreateGraphClustering", "factory", "config validation")
+		return Config{}, nil, nil, errs.Wrap(err, "CreateGraphClustering", "factory", "config validation")
 	}
 
-	// Create logger with component context
-	logger := deps.GetLoggerWithComponent("graph-clustering")
 	inputs := make([]component.Port, 0, len(config.Ports.Inputs))
 	for _, definition := range config.Ports.Inputs {
 		port, err := definition.Resolve(component.DirectionInput)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "CreateGraphClustering", "factory", "resolve input port")
+			return Config{}, nil, nil, errs.WrapInvalid(err, "CreateGraphClustering", "factory", "resolve input port")
 		}
 		inputs = append(inputs, port)
 	}
@@ -740,10 +744,28 @@ func CreateGraphClustering(rawConfig json.RawMessage, deps component.Dependencie
 	for _, definition := range config.Ports.Outputs {
 		port, err := definition.Resolve(component.DirectionOutput)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "CreateGraphClustering", "factory", "resolve output port")
+			return Config{}, nil, nil, errs.WrapInvalid(err, "CreateGraphClustering", "factory", "resolve output port")
 		}
 		outputs = append(outputs, port)
 	}
+	return config, inputs, outputs, nil
+}
+
+// CreateGraphClustering is the factory function for creating graph-clustering components
+func CreateGraphClustering(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+	// Validate dependencies
+	if deps.NATSClient == nil {
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "CreateGraphClustering", "factory", "NATSClient required")
+	}
+	natsClient := deps.NATSClient
+
+	config, inputs, outputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create logger with component context
+	logger := deps.GetLoggerWithComponent("graph-clustering")
 
 	// Create component
 	comp := &Component{
@@ -786,6 +808,7 @@ func Register(registry *component.Registry) error {
 		Version:     "1.0.0",
 		Schema:      schema,
 		Factory:     CreateGraphClustering,
+		Ports:       DeclarePorts,
 	})
 }
 

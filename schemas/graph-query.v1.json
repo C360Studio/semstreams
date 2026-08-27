@@ -26,6 +26,8 @@
     "type": "processor",
     "protocol": "nats",
     "domain": "graph",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "ports_require_config": true,
+    "ports_error": "Registry.Declare: port declaration failed: invalid config: ports configuration is required"
   }
 }

@@ -97,6 +97,11 @@ func Register(r *component.Registry) error {
     return r.RegisterWithConfig(component.RegistrationConfig{
         Name:        "your-thing",
         Factory:     func(raw json.RawMessage, deps component.Dependencies) (component.Discoverable, error) { ... },
+        // REQUIRED (ADR-100): a pure port declarer — the ports the Factory will report for raw,
+        // with no deps. Derive it from the same parse+resolve the Factory uses; boot admission
+        // compares declaration and constructed ports and refuses on any difference, and
+        // RegisterFactory refuses a nil Ports outright.
+        Ports:       func(raw json.RawMessage, instance string) (component.PortConfig, error) { ... },
         Schema:      yourSchema,         // from ConfigSchema()
         Type:        "processor",        // input | processor | output | storage
         Protocol:    "...",              // udp, websocket, file, …

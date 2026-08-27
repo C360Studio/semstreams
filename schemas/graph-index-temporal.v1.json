@@ -471,6 +471,9 @@
               "description": {
                 "type": "string"
               },
+              "external": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               },
@@ -777,6 +780,9 @@
               "description": {
                 "type": "string"
               },
+              "external": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               },
@@ -821,6 +827,32 @@
     "type": "processor",
     "protocol": "nats",
     "domain": "graph",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "default_ports": {
+      "inputs": [
+        {
+          "name": "entity_watch",
+          "direction": "input",
+          "type": "",
+          "required": false,
+          "connection_id": "kv:ENTITY_STATES",
+          "pattern": "watch",
+          "description": "",
+          "kind": "kv-watch"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "temporal_index",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "kv:TEMPORAL_INDEX",
+          "pattern": "watch",
+          "description": "",
+          "kind": "kv-write"
+        }
+      ]
+    }
   }
 }

@@ -559,6 +559,9 @@
               "description": {
                 "type": "string"
               },
+              "external": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               },
@@ -865,6 +868,9 @@
               "description": {
                 "type": "string"
               },
+              "external": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               },
@@ -942,6 +948,202 @@
     "type": "processor",
     "protocol": "nats",
     "domain": "agentic",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "default_ports": {
+      "inputs": [
+        {
+          "name": "trajectory_query",
+          "direction": "input",
+          "type": "agentic.query",
+          "required": true,
+          "connection_id": "agentic.query.trajectory",
+          "pattern": "request",
+          "description": "Observed trajectory fact queries",
+          "kind": "nats-request"
+        },
+        {
+          "name": "agent.task",
+          "direction": "input",
+          "type": "",
+          "required": true,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Agent task requests (JetStream)",
+          "kind": "jetstream"
+        },
+        {
+          "name": "agent.response",
+          "direction": "input",
+          "type": "",
+          "required": true,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Agent model responses (JetStream)",
+          "kind": "jetstream"
+        },
+        {
+          "name": "tool.result",
+          "direction": "input",
+          "type": "",
+          "required": true,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Tool execution results (JetStream)",
+          "kind": "jetstream"
+        },
+        {
+          "name": "agent.signal",
+          "direction": "input",
+          "type": "",
+          "required": false,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Control signals for loops (cancel, pause, etc.)",
+          "kind": "jetstream"
+        },
+        {
+          "name": "agent.approval_response",
+          "direction": "input",
+          "type": "",
+          "required": false,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Human approval responses for gated tool calls",
+          "kind": "jetstream"
+        },
+        {
+          "name": "agent.toolcall.approved",
+          "direction": "input",
+          "type": "",
+          "required": false,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Approve verdicts from rule-driven tool-call governance (ADR-039). Wildcard subscription; demuxed per-call by trailing path segments.",
+          "kind": "jetstream"
+        },
+        {
+          "name": "agent.toolcall.rejected",
+          "direction": "input",
+          "type": "",
+          "required": false,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Reject verdicts from rule-driven tool-call governance (ADR-039). Wildcard subscription; demuxed per-call by trailing path segments.",
+          "kind": "jetstream"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "trajectories",
+          "direction": "output",
+          "type": "agentic.trajectory.fact",
+          "required": true,
+          "connection_id": "kv:AGENT_TRAJECTORIES",
+          "pattern": "watch",
+          "description": "Immutable trajectory observations",
+          "kind": "kv-write"
+        },
+        {
+          "name": "loops",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "kv:AGENT_LOOPS",
+          "pattern": "watch",
+          "description": "Loop state storage",
+          "kind": "kv-write"
+        },
+        {
+          "name": "graph_mutations",
+          "direction": "output",
+          "type": "semstreams.graph.mutation",
+          "required": true,
+          "connection_id": "graph.mutation.\u003e",
+          "pattern": "request",
+          "description": "",
+          "kind": "nats-request"
+        },
+        {
+          "name": "agent.request",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Agent model requests (JetStream)",
+          "kind": "jetstream"
+        },
+        {
+          "name": "tool.execute",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Tool execution requests (JetStream)",
+          "kind": "jetstream"
+        },
+        {
+          "name": "agent.complete",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Agent task completions (JetStream)",
+          "kind": "jetstream"
+        },
+        {
+          "name": "agent.created",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Loop-created lifecycle events (JetStream)",
+          "kind": "jetstream"
+        },
+        {
+          "name": "agent.failed",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Loop-failed lifecycle events (JetStream)",
+          "kind": "jetstream"
+        },
+        {
+          "name": "agent.context.compaction",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Context compaction events (JetStream)",
+          "kind": "jetstream"
+        },
+        {
+          "name": "agent.approval_pending",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Tool calls awaiting human approval (JetStream)",
+          "kind": "jetstream"
+        },
+        {
+          "name": "agent.toolcall.proposed",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Proposed tool calls awaiting rule-driven governance verdict (ADR-039). Emitted in audit and enforce modes.",
+          "kind": "jetstream"
+        }
+      ]
+    }
   }
 }

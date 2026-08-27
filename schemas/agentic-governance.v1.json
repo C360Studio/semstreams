@@ -874,6 +874,9 @@
               "description": {
                 "type": "string"
               },
+              "external": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               },
@@ -1180,6 +1183,9 @@
               "description": {
                 "type": "string"
               },
+              "external": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               },
@@ -1243,6 +1249,82 @@
     "type": "processor",
     "protocol": "agentic",
     "domain": "governance",
-    "version": "0.1.0"
+    "version": "0.1.0",
+    "default_ports": {
+      "inputs": [
+        {
+          "name": "task_validation",
+          "direction": "input",
+          "type": "",
+          "required": true,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "User task requests to validate (JetStream)",
+          "kind": "jetstream"
+        },
+        {
+          "name": "request_validation",
+          "direction": "input",
+          "type": "",
+          "required": true,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Outgoing model requests to validate (JetStream)",
+          "kind": "jetstream"
+        },
+        {
+          "name": "response_validation",
+          "direction": "input",
+          "type": "",
+          "required": true,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Incoming model responses to validate (JetStream)",
+          "kind": "jetstream"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "agent.task.validated",
+          "direction": "output",
+          "type": "",
+          "required": true,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Validated task messages",
+          "kind": "jetstream"
+        },
+        {
+          "name": "agent.request.validated",
+          "direction": "output",
+          "type": "",
+          "required": true,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Validated agent requests",
+          "kind": "jetstream"
+        },
+        {
+          "name": "agent.response.validated",
+          "direction": "output",
+          "type": "",
+          "required": true,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Validated agent responses",
+          "kind": "jetstream"
+        },
+        {
+          "name": "violations",
+          "direction": "output",
+          "type": "",
+          "required": true,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Policy violations for audit (JetStream)",
+          "kind": "jetstream"
+        }
+      ]
+    }
   }
 }

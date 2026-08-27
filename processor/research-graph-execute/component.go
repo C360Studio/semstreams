@@ -73,33 +73,41 @@ var (
 	_ component.LifecycleComponent = (*Component)(nil)
 )
 
-// NewProcessor is the component-factory shape registered with the
-// component registry.
-func NewProcessor(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+// DeclarePorts is the component.PortDeclarer for this stage: the ports
+// NewProcessor will report for rawConfig, computed without dependencies.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	_, inputs, outputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfigFrom(inputs, outputs), nil
+}
+
+// resolveConfig parses rawConfig (defaults when no ports are configured),
+// applies defaults, validates, and resolves the effective ports with the
+// one-NATS-subject input rule. It is the one derivation DeclarePorts and
+// NewProcessor share.
+func resolveConfig(rawConfig json.RawMessage) (Config, []component.Port, []component.Port, error) {
 	var config Config
 	if err := json.Unmarshal(rawConfig, &config); err != nil {
-		return nil, errs.WrapInvalid(err, ComponentName, "NewProcessor", "config unmarshal")
+		return Config{}, nil, nil, errs.WrapInvalid(err, ComponentName, "NewProcessor", "config unmarshal")
 	}
 	if config.Ports == nil {
 		config = DefaultConfig()
 	}
 	config.ApplyDefaults()
 	if err := config.Validate(); err != nil {
-		return nil, errs.WrapInvalid(err, ComponentName, "NewProcessor", "config validate")
+		return Config{}, nil, nil, errs.WrapInvalid(err, ComponentName, "NewProcessor", "config validate")
 	}
-	if deps.NATSClient == nil {
-		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, ComponentName, "NewProcessor", "NATSClient required")
-	}
-	logger := deps.GetLoggerWithComponent(ComponentName)
 	inputs := make([]component.Port, 0, len(config.Ports.Inputs))
 	for _, definition := range config.Ports.Inputs {
 		port, err := definition.Resolve(component.DirectionInput)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, ComponentName, "NewProcessor", "resolve input port")
+			return Config{}, nil, nil, errs.WrapInvalid(err, ComponentName, "NewProcessor", "resolve input port")
 		}
 		facts, err := port.Facts()
 		if err != nil || facts.Kind() != component.PortKindNATS || len(facts.NATSSubjects()) != 1 {
-			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, ComponentName, "NewProcessor", "input ports must each declare one NATS subject")
+			return Config{}, nil, nil, errs.WrapInvalid(errs.ErrInvalidConfig, ComponentName, "NewProcessor", "input ports must each declare one NATS subject")
 		}
 		inputs = append(inputs, port)
 	}
@@ -107,10 +115,24 @@ func NewProcessor(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	for _, definition := range config.Ports.Outputs {
 		port, err := definition.Resolve(component.DirectionOutput)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, ComponentName, "NewProcessor", "resolve output port")
+			return Config{}, nil, nil, errs.WrapInvalid(err, ComponentName, "NewProcessor", "resolve output port")
 		}
 		outputs = append(outputs, port)
 	}
+	return config, inputs, outputs, nil
+}
+
+// NewProcessor is the component-factory shape registered with the
+// component registry.
+func NewProcessor(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+	config, inputs, outputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
+	}
+	if deps.NATSClient == nil {
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, ComponentName, "NewProcessor", "NATSClient required")
+	}
+	logger := deps.GetLoggerWithComponent(ComponentName)
 	querySubjects, err := resolveGraphQueryOutputs(outputs)
 	if err != nil {
 		return nil, errs.WrapInvalid(err, ComponentName, "NewProcessor", "resolve graph query outputs")

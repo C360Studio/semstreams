@@ -67,14 +67,16 @@ func newRulePackColdBootManager(
 		probes = append(probes, probe)
 		return probe, nil
 	}
+	noPorts := func(json.RawMessage, string) (component.PortConfig, error) { return component.PortConfig{}, nil }
 	require.NoError(t, registry.RegisterFactory("rule-processor", &component.Registration{
-		Name: "rule-processor", Type: "processor", Factory: ruleFactory,
+		Name: "rule-processor", Type: "processor", Factory: ruleFactory, Ports: noPorts,
 	}))
 	require.NoError(t, registry.RegisterFactory("ordinary-failing", &component.Registration{
 		Name: "ordinary-failing", Type: "processor",
 		Factory: func(json.RawMessage, component.Dependencies) (component.Discoverable, error) {
 			return nil, errors.New("ordinary component failure")
 		},
+		Ports: noPorts,
 	}))
 	return &ComponentManager{
 		BaseService:      NewBaseServiceWithOptions("component-manager", nil),

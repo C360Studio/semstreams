@@ -69,16 +69,34 @@ type Gateway struct {
 	lastActivity    time.Time
 }
 
-// NewGateway creates a new HTTP gateway from configuration
-func NewGateway(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+// DeclarePorts is the component.PortDeclarer for the HTTP gateway: it is
+// request-driven and declares no ports, but the configuration is still parsed
+// and validated so an invalid gateway is refused offline as it is at boot.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	if _, err := resolveConfig(rawConfig); err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfig{}, nil
+}
+
+// resolveConfig parses and validates rawConfig. It is the one derivation
+// DeclarePorts and NewGateway share.
+func resolveConfig(rawConfig json.RawMessage) (gateway.Config, error) {
 	var config gateway.Config
 	if err := component.SafeUnmarshal(rawConfig, &config); err != nil {
-		return nil, errs.WrapInvalid(err, "Gateway", "NewGateway", "config unmarshal")
+		return gateway.Config{}, errs.WrapInvalid(err, "Gateway", "NewGateway", "config unmarshal")
 	}
-
-	// Validate configuration
 	if err := config.Validate(); err != nil {
-		return nil, errs.WrapInvalid(err, "Gateway", "NewGateway", "config validation")
+		return gateway.Config{}, errs.WrapInvalid(err, "Gateway", "NewGateway", "config validation")
+	}
+	return config, nil
+}
+
+// NewGateway creates a new HTTP gateway from configuration
+func NewGateway(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+	config, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
 	}
 
 	if deps.NATSClient == nil {
@@ -486,6 +504,7 @@ func Register(registry *component.Registry) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
 		Name:        "http",
 		Factory:     NewGateway,
+		Ports:       DeclarePorts,
 		Schema:      httpGatewaySchema,
 		Type:        "gateway",
 		Protocol:    "http",

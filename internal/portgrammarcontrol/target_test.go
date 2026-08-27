@@ -236,6 +236,71 @@ func TestPostFoundationBGraphQueryCutoverAmendmentIsExact(t *testing.T) {
 	}
 }
 
+func TestPostFoundationBExternalBoundaryAmendmentIsExact(t *testing.T) {
+	t.Parallel()
+
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := LoadPlan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configItems, err := indexItems(plan.ConfigItems())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(postFoundationBExternalBoundaryAmendments) != 8 {
+		t.Fatalf("external-boundary amendments=%d, want 8", len(postFoundationBExternalBoundaryAmendments))
+	}
+	for id := range postFoundationBExternalBoundaryAmendments {
+		item, ok := configItems[id]
+		if !ok {
+			t.Fatalf("external-boundary amendment %s is not a frozen config identity", id)
+		}
+		if item.Enclosing != "agentic-dispatch" || item.Lane != "inputs" || item.Name != "user.message" {
+			t.Fatalf("external-boundary amendment %s has enclosing/lane/name %s/%s/%s", id, item.Enclosing, item.Lane, item.Name)
+		}
+	}
+	goItems, err := indexItems(plan.GoItems())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item, ok := goItems["go:processor/agentic-dispatch/config.go#L64C5"]; !ok || item.Name != "user.message" {
+		t.Fatalf("agentic-dispatch user.message default is not a frozen Go identity: %+v", item)
+	}
+}
+
+func TestPostFoundationBResearchDispatchSubjectAmendmentIsExact(t *testing.T) {
+	t.Parallel()
+
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := LoadPlan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configItems, err := indexItems(plan.ConfigItems())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(postFoundationBResearchDispatchSubjectAmendments) != 2 {
+		t.Fatalf("research dispatch subject amendments=%d, want 2", len(postFoundationBResearchDispatchSubjectAmendments))
+	}
+	for id := range postFoundationBResearchDispatchSubjectAmendments {
+		item, ok := configItems[id]
+		if !ok {
+			t.Fatalf("research dispatch amendment %s is not a frozen config identity", id)
+		}
+		if item.Enclosing != "rule-processor" || item.Lane != "outputs" || item.Name != "component.dispatch" || item.CurrentKind != "nats" {
+			t.Fatalf("research dispatch amendment %s has enclosing/lane/name/kind %s/%s/%s/%s", id, item.Enclosing, item.Lane, item.Name, item.CurrentKind)
+		}
+	}
+}
+
 func TestPostFoundationBToolDiscoveryCutoverAmendmentIsExact(t *testing.T) {
 	t.Parallel()
 
@@ -1196,6 +1261,37 @@ var postFoundationBGraphGatewayInterfaceAmendments = map[string]struct{}{
 	"config:configs/structural.json#/components/graph-gateway/config/ports/outputs/0":        {},
 }
 
+// postFoundationBExternalBoundaryAmendments records the eight frozen
+// agentic-dispatch user.message input rows that gained the envelope marker
+// `"external": true` under the ADR-100 owner ruling (2026-08-26): the UI feeds
+// user.message.> from outside the composition, so composition validation
+// expects no in-graph publisher for that input. Row count, kind, subject, and
+// stream coverage are unchanged; the immutable worklist is not rewritten. The
+// factory default (`go:processor/agentic-dispatch/config.go#L64C5`) carries
+// the same marker, and a named override is a complete replacement.
+var postFoundationBExternalBoundaryAmendments = map[string]struct{}{
+	"config:configs/examples/research-graph-pipeline.json#/components/agentic-dispatch/config/ports/inputs/0": {},
+	"config:configs/flows/crud-tools-test.json#/components/agentic-dispatch/config/ports/inputs/0":            {},
+	"config:configs/flows/deep-research-test.json#/components/agentic-dispatch/config/ports/inputs/0":         {},
+	"config:configs/flows/deep-research.json#/components/agentic-dispatch/config/ports/inputs/0":              {},
+	"config:configs/flows/lesson-example.json#/components/agentic-dispatch/config/ports/inputs/0":             {},
+	"config:configs/flows/ops-agent-test.json#/components/agentic-dispatch/config/ports/inputs/0":             {},
+	"config:configs/flows/ops-agent.json#/components/agentic-dispatch/config/ports/inputs/0":                  {},
+	"config:configs/research-graph-e2e.json#/components/agentic-dispatch/config/ports/inputs/0":               {},
+}
+
+// postFoundationBResearchDispatchSubjectAmendments records the two frozen
+// rule-processor `component.dispatch` output rows whose subject changed from
+// the 2-token `component.*` to `component.>` (ADR-100 review H1, 2026-08-26):
+// the five research-graph `*_trigger` inputs subscribe on 3-token
+// `component.<stage>.>` and the rule-pack actions publish 3-token subjects, so
+// the 2-token declaration never overlapped its own subscribers. Row count,
+// kind, and name are unchanged; the immutable worklist is not rewritten.
+var postFoundationBResearchDispatchSubjectAmendments = map[string]struct{}{
+	"config:configs/examples/research-graph-pipeline.json#/components/rule-processor/config/ports/outputs/0": {},
+	"config:configs/research-graph-e2e.json#/components/rule-processor/config/ports/outputs/0":               {},
+}
+
 // postFoundationBGraphQueryGoIdentityRetirements replaces four exact-operation
 // defaults with the single versioned provider family. These IDs remain in the
 // immutable Go worklist as historical Foundation B evidence.
@@ -1304,11 +1400,40 @@ func targetForConfigItem(item WorkItem, dispositions map[string]Disposition) (ta
 	if err != nil {
 		return targetConfigItem{}, err
 	}
-	return correctComponentPortName(correctJetStreamInputIdentity(correctMissionCommandPrimitive(targetConfigItem{
+	return correctResearchDispatchSubject(correctExternalBoundaryInput(correctComponentPortName(correctJetStreamInputIdentity(correctMissionCommandPrimitive(targetConfigItem{
 		workItem: item,
 		lane:     lane,
 		row:      canonicalRow(legacy, item.CurrentKind, data),
-	})))
+	})))))
+}
+
+// correctExternalBoundaryInput applies the owner-approved external-boundary
+// marker to the amended user.message rows: the target row carries
+// `"external": true` beside name/required/description, nothing else changes.
+func correctExternalBoundaryInput(target targetConfigItem, err error) (targetConfigItem, error) {
+	if err != nil {
+		return targetConfigItem{}, err
+	}
+	if _, amended := postFoundationBExternalBoundaryAmendments[target.workItem.RecordID]; amended && target.row != nil {
+		target.row["external"] = true
+	}
+	return target, nil
+}
+
+// correctResearchDispatchSubject applies the research-graph dispatch subject
+// amendment: the two frozen `component.*` rows are `component.>` targets.
+func correctResearchDispatchSubject(target targetConfigItem, err error) (targetConfigItem, error) {
+	if err != nil {
+		return targetConfigItem{}, err
+	}
+	if _, amended := postFoundationBResearchDispatchSubjectAmendments[target.workItem.RecordID]; amended && target.row != nil {
+		config, ok := target.row["config"].(map[string]any)
+		if !ok || stringValue(config["kind"]) != "nats" || stringValue(config["subject"]) != "component.*" {
+			return targetConfigItem{}, fmt.Errorf("research dispatch amendment %s is not the frozen nats component.* row", target.workItem.RecordID)
+		}
+		config["subject"] = "component.>"
+	}
+	return target, nil
 }
 
 func correctMissionCommandPrimitive(target targetConfigItem) targetConfigItem {

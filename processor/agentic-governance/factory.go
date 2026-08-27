@@ -14,6 +14,7 @@ func Register(registry RegistryInterface) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
 		Name:        "agentic-governance",
 		Factory:     NewComponent,
+		Ports:       DeclarePorts,
 		Schema:      agenticGovernanceSchema,
 		Type:        "processor",
 		Protocol:    "agentic",

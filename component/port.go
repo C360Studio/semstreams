@@ -53,6 +53,7 @@ type Port struct {
 	Direction   Direction `json:"direction"`
 	Required    bool      `json:"required,omitempty"`
 	Description string    `json:"description,omitempty"`
+	External    bool      `json:"external,omitempty"` // fed from outside the composition; see PortDefinition.External
 	Config      Portable  `json:"config"`
 }
 
@@ -81,12 +82,14 @@ func (p Port) MarshalJSON() ([]byte, error) {
 		Direction   Direction       `json:"direction"`
 		Required    bool            `json:"required,omitempty"`
 		Description string          `json:"description,omitempty"`
+		External    bool            `json:"external,omitempty"`
 		Config      json.RawMessage `json:"config"`
 	}{
 		Name:        p.Name,
 		Direction:   p.Direction,
 		Required:    p.Required,
 		Description: p.Description,
+		External:    p.External,
 		Config:      config,
 	}
 	return json.Marshal(wire)
@@ -99,6 +102,7 @@ func (p *Port) UnmarshalJSON(data []byte) error {
 		Direction   Direction       `json:"direction"`
 		Required    bool            `json:"required,omitempty"`
 		Description string          `json:"description,omitempty"`
+		External    bool            `json:"external,omitempty"`
 		Config      json.RawMessage `json:"config"`
 	}
 	if err := decodeStrict(data, &wire); err != nil {
@@ -112,6 +116,7 @@ func (p *Port) UnmarshalJSON(data []byte) error {
 		Name:        wire.Name,
 		Required:    wire.Required,
 		Description: wire.Description,
+		External:    wire.External,
 		Config:      config,
 	}).Resolve(wire.Direction)
 	if err != nil {

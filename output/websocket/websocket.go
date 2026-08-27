@@ -367,43 +367,56 @@ func NewOutput(port int, path string, subjects []string, natsClient *natsclient.
 	return NewOutputFromConfig(cfg)
 }
 
-// NewOutputFromConfig creates a new WebSocket output component from ConstructorConfig.
-// This is the recommended way to create Output instances with full configuration control.
-func NewOutputFromConfig(cfg ConstructorConfig) (*Output, error) {
-	if err := validateWebSocketPath(cfg.Path); err != nil {
-		return nil, errs.WrapInvalid(err, "Output", "NewOutputFromConfig", "validate path")
+// resolveConstructorPorts validates the path and the port shape and resolves
+// the input and output declarations. It is the one port derivation
+// DeclarePorts and NewOutputFromConfig share.
+func resolveConstructorPorts(
+	path string, inputDefinitions, outputDefinitions []component.PortDefinition,
+) ([]component.Port, []component.Port, []string, error) {
+	if err := validateWebSocketPath(path); err != nil {
+		return nil, nil, nil, errs.WrapInvalid(err, "Output", "NewOutputFromConfig", "validate path")
 	}
-	if len(cfg.InputPorts) == 0 || len(cfg.OutputPorts) != 1 {
-		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Output", "NewOutputFromConfig", "at least one input and exactly one output port are required")
+	if len(inputDefinitions) == 0 || len(outputDefinitions) != 1 {
+		return nil, nil, nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Output", "NewOutputFromConfig", "at least one input and exactly one output port are required")
 	}
-	inputs := make([]component.Port, len(cfg.InputPorts))
-	subjects := make([]string, 0, len(cfg.InputPorts))
-	for index, definition := range cfg.InputPorts {
+	inputs := make([]component.Port, len(inputDefinitions))
+	subjects := make([]string, 0, len(inputDefinitions))
+	for index, definition := range inputDefinitions {
 		port, err := definition.Resolve(component.DirectionInput)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "Output", "NewOutputFromConfig", "resolve input port")
+			return nil, nil, nil, errs.WrapInvalid(err, "Output", "NewOutputFromConfig", "resolve input port")
 		}
 		facts, err := port.Facts()
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "Output", "NewOutputFromConfig", "project input port")
+			return nil, nil, nil, errs.WrapInvalid(err, "Output", "NewOutputFromConfig", "project input port")
 		}
 		if facts.Kind() != component.PortKindNATS && facts.Kind() != component.PortKindJetStream {
-			return nil, errs.WrapInvalid(fmt.Errorf("input port %q kind %q is not nats or jetstream", port.Name, facts.Kind()), "Output", "NewOutputFromConfig", "validate input port")
+			return nil, nil, nil, errs.WrapInvalid(fmt.Errorf("input port %q kind %q is not nats or jetstream", port.Name, facts.Kind()), "Output", "NewOutputFromConfig", "validate input port")
 		}
 		portSubjects := facts.NATSSubjects()
 		if len(portSubjects) != 1 {
-			return nil, errs.WrapInvalid(fmt.Errorf("input port %q declares %d subjects, want one", port.Name, len(portSubjects)), "Output", "NewOutputFromConfig", "validate input port")
+			return nil, nil, nil, errs.WrapInvalid(fmt.Errorf("input port %q declares %d subjects, want one", port.Name, len(portSubjects)), "Output", "NewOutputFromConfig", "validate input port")
 		}
 		inputs[index] = port
 		subjects = append(subjects, portSubjects[0])
 	}
-	outputs := make([]component.Port, len(cfg.OutputPorts))
-	for index, definition := range cfg.OutputPorts {
+	outputs := make([]component.Port, len(outputDefinitions))
+	for index, definition := range outputDefinitions {
 		port, err := definition.Resolve(component.DirectionOutput)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "Output", "NewOutputFromConfig", "resolve output port")
+			return nil, nil, nil, errs.WrapInvalid(err, "Output", "NewOutputFromConfig", "resolve output port")
 		}
 		outputs[index] = port
+	}
+	return inputs, outputs, subjects, nil
+}
+
+// NewOutputFromConfig creates a new WebSocket output component from ConstructorConfig.
+// This is the recommended way to create Output instances with full configuration control.
+func NewOutputFromConfig(cfg ConstructorConfig) (*Output, error) {
+	inputs, outputs, subjects, err := resolveConstructorPorts(cfg.Path, cfg.InputPorts, cfg.OutputPorts)
+	if err != nil {
+		return nil, err
 	}
 	outputFacts, err := outputs[0].Facts()
 	if err != nil {
@@ -1813,6 +1826,7 @@ func Register(registry *component.Registry) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
 		Name:        "websocket",
 		Factory:     CreateOutput,
+		Ports:       DeclarePorts,
 		Schema:      websocketSchema,
 		Type:        "output",
 		Protocol:    "websocket",
@@ -1822,23 +1836,44 @@ func Register(registry *component.Registry) error {
 	})
 }
 
-// CreateOutput creates a WebSocket output component following service pattern
-func CreateOutput(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
-	// Start with defaults
-	cfg := DefaultConfig()
+// DeclarePorts is the component.PortDeclarer for the websocket output: the
+// configured NATS inputs and the network output, resolved exactly as
+// NewOutputFromConfig will resolve them.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	cfg, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	inputs, outputs, _, err := resolveConstructorPorts(cfg.Path, cfg.Ports.Inputs, cfg.Ports.Outputs)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfigFrom(inputs, outputs), nil
+}
 
-	// Parse user config if provided
+// resolveConfig parses rawConfig over the defaults and applies the port-shape
+// rule. It is the one derivation DeclarePorts and CreateOutput share.
+func resolveConfig(rawConfig json.RawMessage) (Config, error) {
+	cfg := DefaultConfig()
 	if len(rawConfig) > 0 {
 		if err := component.SafeUnmarshal(rawConfig, &cfg); err != nil {
-			return nil, errs.WrapInvalid(err, "websocket-output-factory", "create", "parse config")
+			return Config{}, errs.WrapInvalid(err, "websocket-output-factory", "create", "parse config")
 		}
 		if err := rejectRetiredEndpoint(rawConfig); err != nil {
-			return nil, errs.WrapInvalid(err, "websocket-output-factory", "create", "parse config")
+			return Config{}, errs.WrapInvalid(err, "websocket-output-factory", "create", "parse config")
 		}
 	}
-
 	if cfg.Ports == nil || len(cfg.Ports.Inputs) == 0 || len(cfg.Ports.Outputs) != 1 {
-		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "websocket-output-factory", "create", "at least one input and exactly one output port are required")
+		return Config{}, errs.WrapInvalid(errs.ErrInvalidConfig, "websocket-output-factory", "create", "at least one input and exactly one output port are required")
+	}
+	return cfg, nil
+}
+
+// CreateOutput creates a WebSocket output component following service pattern
+func CreateOutput(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+	cfg, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
 	}
 	// Parse delivery mode (default: at-most-once).
 	deliveryMode := DeliveryAtMostOnce

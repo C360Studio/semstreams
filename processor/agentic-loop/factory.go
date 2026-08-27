@@ -19,6 +19,7 @@ func Register(registry *component.Registry) error {
 		Version:      "1.0.0",
 		Schema:       schema,
 		Factory:      NewComponent,
+		Ports:        DeclarePorts,
 		Dependencies: []string{component.DepModelRegistry},
 	}
 

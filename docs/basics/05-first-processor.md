@@ -1085,6 +1085,7 @@ func Register(registry *component.Registry) error {
     return registry.RegisterWithConfig(component.RegistrationConfig{
         Name:        "iot_sensor",
         Factory:     NewComponent,
+        Ports:       DeclarePorts, // required: a registration without it is refused (ADR-100)
         Schema:      iotSensorSchema,
         Type:        "processor",
         Protocol:    "iot_sensor",
@@ -1093,9 +1094,28 @@ func Register(registry *component.Registry) error {
         Version:     "0.1.0",
     })
 }
+
+// DeclarePorts is the component.PortDeclarer: the ports NewComponent will
+// report for rawConfig, computed with no dependencies. It applies the same
+// "config.Ports or DefaultConfig()" rule NewComponent applies, so the two
+// cannot drift — boot admission compares the declaration with the constructed
+// component port for port and refuses the component on any difference. (The
+// shipped example, examples/processors/iot_sensor/component.go, goes one step
+// further and has NewComponent and DeclarePorts share one resolveConfig.)
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+    var config ComponentConfig
+    if err := json.Unmarshal(rawConfig, &config); err != nil {
+        return component.PortConfig{}, err
+    }
+    if config.Ports == nil {
+        config = DefaultConfig()
+    }
+    return *config.Ports, nil
+}
 ```
 
-For built-in processors, add the registration call to your component registry initialization.
+For built-in processors, add the registration call to your component registry initialization. Check the
+declaration offline with `semstreams validate <config>` (or `composition.AssertValid` in your tests) before you boot.
 
 ### Test Your Component
 

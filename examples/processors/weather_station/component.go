@@ -86,13 +86,23 @@ type Component struct {
 	lastActivity      time.Time
 }
 
-// NewComponent creates a new component from configuration.
-func NewComponent(
-	rawConfig json.RawMessage, deps component.Dependencies,
-) (component.Discoverable, error) {
+// DeclarePorts is the component.PortDeclarer for weather_station: the ports
+// NewComponent will report for rawConfig, computed without dependencies.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	_, inputs, outputs, _, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfigFrom(inputs, outputs), nil
+}
+
+// resolveConfig parses rawConfig (defaults when no ports are configured),
+// validates, and resolves the ports with their one-NATS-subject rule. It is
+// the one derivation DeclarePorts and NewComponent share.
+func resolveConfig(rawConfig json.RawMessage) (ComponentConfig, []component.Port, []component.Port, []string, error) {
 	var config ComponentConfig
 	if err := json.Unmarshal(rawConfig, &config); err != nil {
-		return nil, errs.WrapInvalid(err, "WeatherStationComponent", "NewComponent", "config unmarshal")
+		return ComponentConfig{}, nil, nil, nil, errs.WrapInvalid(err, "WeatherStationComponent", "NewComponent", "config unmarshal")
 	}
 
 	if config.Ports == nil {
@@ -100,30 +110,28 @@ func NewComponent(
 	}
 
 	if config.OrgID == "" {
-		return nil, errs.WrapInvalid(
+		return ComponentConfig{}, nil, nil, nil, errs.WrapInvalid(
 			errs.ErrInvalidConfig, "WeatherStationComponent", "NewComponent", "OrgID is required")
 	}
 
 	if config.Platform == "" {
-		return nil, errs.WrapInvalid(
+		return ComponentConfig{}, nil, nil, nil, errs.WrapInvalid(
 			errs.ErrInvalidConfig, "WeatherStationComponent", "NewComponent", "Platform is required")
 	}
 	if len(config.Ports.Outputs) != 1 {
-		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "WeatherStationComponent", "NewComponent", "exactly one output port is required")
+		return ComponentConfig{}, nil, nil, nil, errs.WrapInvalid(errs.ErrInvalidConfig, "WeatherStationComponent", "NewComponent", "exactly one output port is required")
 	}
 
 	var inputSubjects []string
-	var outputSubject string
 	inputs := make([]component.Port, 0, len(config.Ports.Inputs))
-
 	for _, definition := range config.Ports.Inputs {
 		input, err := definition.Resolve(component.DirectionInput)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "WeatherStationComponent", "NewComponent", "resolve input port")
+			return ComponentConfig{}, nil, nil, nil, errs.WrapInvalid(err, "WeatherStationComponent", "NewComponent", "resolve input port")
 		}
 		facts, err := input.Facts()
 		if err != nil || facts.Kind() != component.PortKindNATS || len(facts.NATSSubjects()) != 1 {
-			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "WeatherStationComponent", "NewComponent", "input ports must each declare one NATS subject")
+			return ComponentConfig{}, nil, nil, nil, errs.WrapInvalid(errs.ErrInvalidConfig, "WeatherStationComponent", "NewComponent", "input ports must each declare one NATS subject")
 		}
 		inputs = append(inputs, input)
 		inputSubjects = append(inputSubjects, facts.NATSSubjects()[0])
@@ -133,16 +141,27 @@ func NewComponent(
 	for _, definition := range config.Ports.Outputs {
 		output, err := definition.Resolve(component.DirectionOutput)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "WeatherStationComponent", "NewComponent", "resolve output port")
+			return ComponentConfig{}, nil, nil, nil, errs.WrapInvalid(err, "WeatherStationComponent", "NewComponent", "resolve output port")
 		}
 		facts, err := output.Facts()
 		if err != nil || facts.Kind() != component.PortKindNATS || len(facts.NATSSubjects()) != 1 {
-			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "WeatherStationComponent", "NewComponent", "output ports must each declare one NATS subject")
+			return ComponentConfig{}, nil, nil, nil, errs.WrapInvalid(errs.ErrInvalidConfig, "WeatherStationComponent", "NewComponent", "output ports must each declare one NATS subject")
 		}
 		outputs = append(outputs, output)
 	}
+	return config, inputs, outputs, inputSubjects, nil
+}
+
+// NewComponent creates a new component from configuration.
+func NewComponent(
+	rawConfig json.RawMessage, deps component.Dependencies,
+) (component.Discoverable, error) {
+	config, inputs, outputs, inputSubjects, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
+	}
 	facts, _ := outputs[0].Facts()
-	outputSubject = facts.NATSSubjects()[0]
+	outputSubject := facts.NATSSubjects()[0]
 
 	processor := NewProcessor(Config{
 		OrgID:    config.OrgID,

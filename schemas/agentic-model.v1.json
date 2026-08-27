@@ -471,6 +471,9 @@
               "description": {
                 "type": "string"
               },
+              "external": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               },
@@ -777,6 +780,9 @@
               "description": {
                 "type": "string"
               },
+              "external": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               },
@@ -854,6 +860,42 @@
     "type": "processor",
     "protocol": "openai",
     "domain": "semantic",
-    "version": "0.1.0"
+    "version": "0.1.0",
+    "default_ports": {
+      "inputs": [
+        {
+          "name": "agent.request",
+          "direction": "input",
+          "type": "",
+          "required": true,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Agent request input (JetStream)",
+          "kind": "jetstream"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "agent.response",
+          "direction": "output",
+          "type": "",
+          "required": true,
+          "connection_id": "AGENT",
+          "pattern": "stream",
+          "description": "Agent response output (JetStream)",
+          "kind": "jetstream"
+        },
+        {
+          "name": "agent.stream",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "agent.stream.*",
+          "pattern": "stream",
+          "description": "Streaming delta chunks (core NATS, fire-and-forget)",
+          "kind": "nats"
+        }
+      ]
+    }
   }
 }

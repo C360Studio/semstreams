@@ -48,6 +48,7 @@ func TestComponentManagerPostBootComponentAndModelWritesDoNotChangeRuntimeCompos
 			receivedModelRegistry = deps.ModelRegistry
 			return created, nil
 		},
+		Ports: func(json.RawMessage, string) (component.PortConfig, error) { return component.PortConfig{}, nil },
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/component/flowgraph"
+	"github.com/c360studio/semstreams/composition"
 	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/internal/componentadmission"
 	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
@@ -69,9 +70,15 @@ type ComponentManager struct {
 	natsClient        *natsclient.Client
 	bootSecurity      security.Config
 	bootModelRegistry model.RegistryReader
+	bootStreams       config.StreamConfigs // explicit `streams` of the boot configuration, for composition analysis
 
 	// FlowGraph caching for thread-safe analysis
 	graphCache flowGraphCache
+
+	// bootFindings is the composition analysis of the admitted boot set,
+	// computed once in Initialize before the Registry seals (ADR-100 P5). The
+	// validate and flowgraph HTTP operations project it verbatim. Guarded by mu.
+	bootFindings *composition.Result
 
 	// Thread safety for component operations
 	mu          sync.RWMutex
@@ -145,6 +152,7 @@ func NewComponentManager(rawConfig json.RawMessage, deps *Dependencies) (Service
 	var componentsConfig config.ComponentConfigs
 	var bootSecurity security.Config
 	var bootModelRegistry model.RegistryReader
+	var bootStreams config.StreamConfigs
 	currentConfig := deps.Manager.GetConfig()
 	if currentConfig == nil {
 		return nil, fmt.Errorf("component-manager config manager has no config")
@@ -152,6 +160,7 @@ func NewComponentManager(rawConfig json.RawMessage, deps *Dependencies) (Service
 	bootConfig := currentConfig.Get()
 	componentsConfig = bootConfig.Components
 	bootSecurity = bootConfig.Security
+	bootStreams = bootConfig.Streams
 	if bootConfig.ModelRegistry != nil {
 		bootModelRegistry = bootConfig.ModelRegistry
 	}
@@ -208,6 +217,7 @@ func NewComponentManager(rawConfig json.RawMessage, deps *Dependencies) (Service
 		storeProvided:     make(map[string][]string),
 		bootSecurity:      bootSecurity,
 		bootModelRegistry: bootModelRegistry,
+		bootStreams:       bootStreams,
 	}
 
 	// Store NATS client if available
@@ -240,6 +250,9 @@ func (cm *ComponentManager) Initialize() error {
 
 	if cm.componentConfigs == nil {
 		cm.logger.Debug("ComponentManager.Initialize: No component configs, marking as initialized")
+		if err := cm.analyzeBootComposition(); err != nil {
+			return err
+		}
 		cm.registry.SealComposition(componentadmission.Access{})
 		cm.initialized.Store(true)
 		return nil
@@ -327,9 +340,70 @@ func (cm *ComponentManager) Initialize() error {
 		cm.logger.Debug("ComponentManager.Initialize: No component configs to create")
 	}
 
+	// ADR-100 P5: validate the admitted composition at the real boundary with
+	// the same interpreter the offline verb runs, over what was actually
+	// admitted; an error-severity finding refuses boot before the seal.
+	if err := cm.analyzeBootComposition(); err != nil {
+		return err
+	}
+
 	cm.registry.SealComposition(componentadmission.Access{})
 	cm.initialized.Store(true)
 	return nil
+}
+
+// analyzeBootComposition runs composition.Analyze over the admitted Registry
+// declarations and the boot configuration's explicit streams, logs every
+// finding, retains the result for the HTTP projections, and returns an error
+// — refusing boot — when the result has an error-severity finding. The
+// precondition the owner set for the refuse (every shipped configuration
+// measured clean, ADR-100 default 3) holds since the external-boundary marker
+// ruling of 2026-08-26.
+func (cm *ComponentManager) analyzeBootComposition() error {
+	snapshots := cm.registry.Snapshots(componentadmission.Access{})
+	declarations := make([]component.Declaration, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		declarations = append(declarations, snapshot.Declaration())
+	}
+	result := composition.Analyze(declarations, cm.bootStreams)
+
+	cm.mu.Lock()
+	cm.bootFindings = result
+	cm.mu.Unlock()
+
+	for _, finding := range result.Warnings {
+		cm.logger.Warn("composition finding",
+			"type", finding.Type, "component", finding.Component, "port", finding.Port, "message", finding.Message)
+	}
+	for _, finding := range result.Errors {
+		cm.logger.Error("composition finding",
+			"type", finding.Type, "component", finding.Component, "port", finding.Port, "message", finding.Message)
+	}
+	cm.logger.Info("composition validated at boot",
+		"status", result.Status, "errors", len(result.Errors), "warnings", len(result.Warnings),
+		"components", len(result.Graph.Nodes), "edges", len(result.Graph.Edges))
+
+	if len(result.Errors) == 0 {
+		return nil
+	}
+	descriptions := make([]string, 0, len(result.Errors))
+	for _, finding := range result.Errors {
+		description := fmt.Sprintf("%s on %s/%s: %s", finding.Type, finding.Component, finding.Port, finding.Message)
+		if len(finding.Suggestions) > 0 {
+			description += " (" + strings.Join(finding.Suggestions, "; ") + ")"
+		}
+		descriptions = append(descriptions, description)
+	}
+	return fmt.Errorf("composition validation refused boot with %d error finding(s): %s",
+		len(result.Errors), strings.Join(descriptions, " | "))
+}
+
+// BootFindings returns the composition result retained at Initialize, or nil
+// before Initialize has run.
+func (cm *ComponentManager) bootCompositionResult() *composition.Result {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	return cm.bootFindings
 }
 
 // Start starts the constructor-captured component set once. Cleanup authority
@@ -1421,7 +1495,6 @@ type subscriberInfo struct {
 type flowGraphCache struct {
 	mu           sync.RWMutex
 	currentGraph *flowgraph.FlowGraph
-	lastAnalysis *flowgraph.FlowAnalysisResult
 	cacheValid   bool
 	lastUpdate   time.Time
 }
@@ -1472,35 +1545,6 @@ func (cm *ComponentManager) invalidateFlowGraph() {
 
 	cm.graphCache.cacheValid = false
 	cm.graphCache.currentGraph = nil
-	cm.graphCache.lastAnalysis = nil
-}
-
-// ValidateFlowConnectivity performs FlowGraph connectivity analysis with caching.
-func (cm *ComponentManager) ValidateFlowConnectivity() (*flowgraph.FlowAnalysisResult, error) {
-	// Check if we have a cached analysis
-	cm.graphCache.mu.RLock()
-	if cm.graphCache.cacheValid && cm.graphCache.lastAnalysis != nil {
-		analysis := cm.graphCache.lastAnalysis
-		cm.graphCache.mu.RUnlock()
-		return analysis, nil
-	}
-	cm.graphCache.mu.RUnlock()
-
-	// Get graph (may trigger rebuild)
-	graph, err := cm.GetFlowGraph()
-	if err != nil {
-		return nil, err
-	}
-
-	// Perform analysis
-	analysis := graph.AnalyzeConnectivity()
-
-	// Cache the analysis result
-	cm.graphCache.mu.Lock()
-	cm.graphCache.lastAnalysis = analysis
-	cm.graphCache.mu.Unlock()
-
-	return analysis, nil
 }
 
 // GetFlowPaths returns data paths from input components to all reachable components
@@ -1522,38 +1566,6 @@ func (cm *ComponentManager) GetFlowPaths() (map[string][]string, error) {
 	}
 
 	return paths, nil
-}
-
-// DetectObjectStoreGaps identifies disconnected storage components
-func (cm *ComponentManager) DetectObjectStoreGaps() ([]ComponentGap, error) {
-	graph, err := cm.GetFlowGraph()
-	if err != nil {
-		return nil, err
-	}
-	var gaps []ComponentGap
-
-	nodes := graph.GetNodes()
-
-	for componentName, node := range nodes {
-		// Check if this is a storage component
-		if cm.isStorageComponent(componentName, node) {
-			// Check if storage component has input connections
-			if !cm.hasIncomingEdges(graph, componentName) {
-				gaps = append(gaps, ComponentGap{
-					ComponentName: componentName,
-					Issue:         "no_input_connections",
-					Description:   "Storage component configured but not receiving data",
-					Suggestions: []string{
-						"Configure input ports to subscribe to data streams",
-						"Verify subject routing from processors to storage",
-						"Check component configuration and port subjects",
-					},
-				})
-			}
-		}
-	}
-
-	return gaps, nil
 }
 
 // Helper methods for FlowGraph analysis
@@ -1597,35 +1609,6 @@ func (cm *ComponentManager) isInputComponent(componentName string, node *flowgra
 	return false
 }
 
-// isStorageComponent determines if a component is a storage component
-func (cm *ComponentManager) isStorageComponent(componentName string, _ *flowgraph.ComponentNode) bool {
-	// Check component configuration for type
-	if cm.componentConfigs != nil {
-		if compCfg, ok := cm.componentConfigs[componentName]; ok {
-			if compCfg.Type == "storage" || compCfg.Type == "output" {
-				return true
-			}
-		}
-	}
-
-	// Check for storage-related component names
-	return strings.Contains(strings.ToLower(componentName), "store") ||
-		strings.Contains(strings.ToLower(componentName), "storage")
-}
-
-// hasIncomingEdges checks if a component has any incoming edges
-func (cm *ComponentManager) hasIncomingEdges(graph *flowgraph.FlowGraph, componentName string) bool {
-	edges := graph.GetEdges()
-
-	for _, edge := range edges {
-		if edge.To.ComponentName == componentName {
-			return true
-		}
-	}
-
-	return false
-}
-
 // depthFirstTraversal performs DFS to find all reachable components from a starting component
 func (cm *ComponentManager) depthFirstTraversal(graph *flowgraph.FlowGraph, start string) []string {
 	visited := make(map[string]bool)
@@ -1657,14 +1640,6 @@ func (cm *ComponentManager) dfsVisit(node string, adj map[string][]string, visit
 			cm.dfsVisit(neighbor, adj, visited, result)
 		}
 	}
-}
-
-// ComponentGap represents a connectivity gap in the component flow
-type ComponentGap struct {
-	ComponentName string   `json:"component_name"`
-	Issue         string   `json:"issue"`
-	Description   string   `json:"description"`
-	Suggestions   []string `json:"suggestions,omitempty"`
 }
 
 // publishHealthLoop publishes component health to JetStream every 5s.

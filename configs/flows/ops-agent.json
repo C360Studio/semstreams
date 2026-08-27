@@ -114,6 +114,7 @@
                 ]
               },
               "description": "User messages from any channel (channel.id multi-segment)",
+              "external": true,
               "name": "user.message",
               "required": true
             },

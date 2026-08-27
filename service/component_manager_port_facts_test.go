@@ -88,6 +88,12 @@ func TestComponentManagerFlowReportingUsesRetainedPortsAfterComponentMutation(t 
 	admitTestRegistryComponent(t, registry, "source", instance)
 	manager := newPortOwnershipCM(t, registry)
 	instance.inputs[0].Config = component.NATSPort{}
+	// The validate/flowgraph projections serve the result Initialize retains
+	// (ADR-100 P5); compute it here from the retained declarations, after the
+	// live instance was mutated, so the projections prove the same point.
+	if err := manager.analyzeBootComposition(); err != nil {
+		t.Fatalf("analyzeBootComposition: %v", err)
+	}
 
 	graph, err := manager.GetFlowGraph()
 	if err != nil {
@@ -101,7 +107,6 @@ func TestComponentManagerFlowReportingUsesRetainedPortsAfterComponentMutation(t 
 	handlers := map[string]http.HandlerFunc{
 		"graph":      manager.handleFlowGraph,
 		"validation": manager.handleFlowValidation,
-		"gaps":       manager.handleFlowGaps,
 		"paths":      manager.handleFlowPaths,
 	}
 	for name, handler := range handlers {

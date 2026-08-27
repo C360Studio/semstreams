@@ -235,6 +235,10 @@ func TestIntegration_StartAll_OwnerSeamReconcilesCreateRaceDirtInsideBoot(t *tes
 			adopterMu.Unlock()
 			return c, nil
 		},
+		Ports: func(json.RawMessage, string) (component.PortConfig, error) {
+			probe := &bucketAdopterComponent{bucket: graph.BucketEmbeddingIndex}
+			return component.PortConfigFrom(probe.InputPorts(), probe.OutputPorts()), nil
+		},
 	}))
 	cm := newGuardsTestComponentManager(t, client, compRegistry, config.ComponentConfigs{
 		"embedding-index-adopter": types.ComponentConfig{
@@ -306,6 +310,10 @@ func TestIntegration_StartAll_BootFailsClosedOnComponentStartFailure(t *testing.
 		Type: string(types.ComponentTypeProcessor),
 		Factory: func(_ json.RawMessage, _ component.Dependencies) (component.Discoverable, error) {
 			return &failingStartComponent{}, nil
+		},
+		Ports: func(json.RawMessage, string) (component.PortConfig, error) {
+			probe := &failingStartComponent{}
+			return component.PortConfigFrom(probe.InputPorts(), probe.OutputPorts()), nil
 		},
 	}))
 	cm := newGuardsTestComponentManager(t, client, compRegistry, config.ComponentConfigs{

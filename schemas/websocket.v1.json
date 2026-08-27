@@ -488,6 +488,9 @@
               "description": {
                 "type": "string"
               },
+              "external": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               },
@@ -794,6 +797,9 @@
               "description": {
                 "type": "string"
               },
+              "external": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               },
@@ -818,6 +824,32 @@
     "type": "output",
     "protocol": "websocket",
     "domain": "network",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "default_ports": {
+      "inputs": [
+        {
+          "name": "nats_input",
+          "direction": "input",
+          "type": "",
+          "required": true,
+          "connection_id": "semantic.\u003e",
+          "pattern": "stream",
+          "description": "NATS subjects to listen to",
+          "kind": "nats"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "websocket_server",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "http:0.0.0.0:8081",
+          "pattern": "network",
+          "description": "WebSocket server endpoint",
+          "kind": "network"
+        }
+      ]
+    }
   }
 }

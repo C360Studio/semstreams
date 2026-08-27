@@ -137,16 +137,41 @@ func (c *Component) Initialize() error {
 	return nil
 }
 
-// NewComponent creates a new ObjectStore component factory
-func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
-	// Start with defaults
-	cfg := DefaultConfig()
+// constructedInstanceName is the instance name NewComponent stamps into the
+// store-provide port and every StorageReference it produces. The factory
+// signature carries no instance name, so this literal stands in for it; the
+// declarer below mirrors it so admission parity holds. Whether the real
+// instance name should reach the constructor (changing the store-provide
+// resource identity at runtime) is an owner question recorded as a `[~]` in
+// openspec/changes/composition-validation-substrate/tasks.md (3.1) and
+// inventory §12.2 — neither side is codified here.
+const constructedInstanceName = "objectstore"
 
-	// Parse user config if provided
+// DeclarePorts is the component.PortDeclarer for objectstore: the configured
+// NATS/JetStream ports plus the derived store-provide output, exactly as
+// NewComponent will report them. The instanceName parameter is deliberately
+// not used — see constructedInstanceName.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	cfg, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	inputPorts, outputPorts, _, _, _, err := resolveObjectStorePorts(cfg, constructedInstanceName)
+	if err != nil {
+		return component.PortConfig{}, errs.WrapInvalid(err, "Component", "NewComponent", "resolve ports")
+	}
+	return component.PortConfigFrom(inputPorts, outputPorts), nil
+}
+
+// resolveConfig overlays the user configuration on the defaults. It is the one
+// derivation DeclarePorts and NewComponent share; resolveObjectStorePorts is
+// the one port derivation.
+func resolveConfig(rawConfig json.RawMessage) (Config, error) {
+	cfg := DefaultConfig()
 	if len(rawConfig) > 0 {
 		var userConfig Config
 		if err := json.Unmarshal(rawConfig, &userConfig); err != nil {
-			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "unmarshal config")
+			return Config{}, errs.WrapInvalid(err, "Component", "NewComponent", "unmarshal config")
 		}
 
 		// Apply user overrides
@@ -167,9 +192,17 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 			cfg.MetadataExtractor = userConfig.MetadataExtractor
 		}
 	}
+	return cfg, nil
+}
 
-	// Default instance name - would be provided by ComponentManager
-	instanceName := "objectstore"
+// NewComponent creates a new ObjectStore component factory
+func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+	cfg, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	instanceName := constructedInstanceName
 	inputPorts, outputPorts, portsByName, portKinds, portSubjects, err := resolveObjectStorePorts(cfg, instanceName)
 	if err != nil {
 		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve ports")

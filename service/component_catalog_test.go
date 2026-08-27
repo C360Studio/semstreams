@@ -28,6 +28,7 @@ func registerCatalogFactory(t *testing.T, reg *component.Registry, name, compTyp
 		Description: desc,
 		Version:     version,
 		Factory:     stubFactory,
+		Ports:       func(json.RawMessage, string) (component.PortConfig, error) { return component.PortConfig{}, nil },
 	})
 	if err != nil {
 		t.Fatalf("register %s: %v", name, err)

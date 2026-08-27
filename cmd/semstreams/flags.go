@@ -125,9 +125,12 @@ func printDetailedHelp() {
 	_, _ = fmt.Fprintf(os.Stderr, `%s - Semantic Stream Processing
 
 Usage: %s [options]
+       %s catalog
+       %s validate <config-path>
+       %s graph <config-path> [--mermaid]
 
 Options:
-`, appName, os.Args[0])
+`, appName, os.Args[0], os.Args[0], os.Args[0], os.Args[0])
 	flag.PrintDefaults()
 	_, _ = fmt.Fprintf(os.Stderr, `
 Examples:
@@ -142,12 +145,12 @@ Examples:
   export SEMSTREAMS_LOG_LEVEL=debug
   %s
 
-  # Validate configuration only
-  %s --validate
+  # Validate the composition offline (alias of: %s validate <config-path>)
+  %s --validate --config /path/to/config.json
 
 Version: %s
 Build: %s
-`, os.Args[0], os.Args[0], os.Args[0], os.Args[0], Version, BuildTime)
+`, os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], Version, BuildTime)
 }
 
 // Environment variable helper functions

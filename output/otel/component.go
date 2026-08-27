@@ -109,11 +109,24 @@ type Exporter interface {
 	Shutdown(ctx context.Context) error
 }
 
-// NewComponent creates a new OTEL exporter component.
-func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+// DeclarePorts is the component.PortDeclarer for otel-exporter: the JetStream
+// inputs NewComponent will report for rawConfig (no outputs — it exports to an
+// external collector), computed without dependencies.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	_, inputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfigFrom(inputs, nil), nil
+}
+
+// resolveConfig decodes rawConfig (defaults when no ports are set), validates,
+// and resolves the JetStream inputs. It is the one derivation DeclarePorts and
+// NewComponent share.
+func resolveConfig(rawConfig json.RawMessage) (Config, []component.Port, error) {
 	var config Config
 	if err := decodeConfig(rawConfig, &config); err != nil {
-		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "unmarshal config")
+		return Config{}, nil, errs.WrapInvalid(err, "Component", "NewComponent", "unmarshal config")
 	}
 
 	// Use default config if ports not set
@@ -121,13 +134,13 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		config = DefaultConfig()
 		// Re-unmarshal to get user-provided values
 		if err := decodeConfig(rawConfig, &config); err != nil {
-			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "unmarshal config")
+			return Config{}, nil, errs.WrapInvalid(err, "Component", "NewComponent", "unmarshal config")
 		}
 	}
 
 	// Validate configuration
 	if err := config.Validate(); err != nil {
-		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "validate config")
+		return Config{}, nil, errs.WrapInvalid(err, "Component", "NewComponent", "validate config")
 	}
 	if len(config.Ports.Inputs) == 0 {
 		config.Ports.Inputs = []component.PortDefinition{{
@@ -138,13 +151,22 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	for _, definition := range config.Ports.Inputs {
 		port, err := definition.Resolve(component.DirectionInput)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve input port")
+			return Config{}, nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve input port")
 		}
 		facts, err := port.Facts()
 		if err != nil || facts.Kind() != component.PortKindJetStream {
-			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "NewComponent", "input ports must be JetStream ports")
+			return Config{}, nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "NewComponent", "input ports must be JetStream ports")
 		}
 		inputs = append(inputs, port)
+	}
+	return config, inputs, nil
+}
+
+// NewComponent creates a new OTEL exporter component.
+func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+	config, inputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
 	}
 
 	return &Component{

@@ -13,6 +13,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/componentregistry"
+	"github.com/c360studio/semstreams/composition"
 	optionalotel "github.com/c360studio/semstreams/frameworkadapters/otel"
 	"github.com/c360studio/semstreams/frameworkcapabilities/graphresearch"
 	"github.com/c360studio/semstreams/service"
@@ -68,10 +69,17 @@ func main() {
 		log.Fatalf("Failed to create output directory: %v", err)
 	}
 
+	// Default ports (ADR-100 P1): the declarer's output for `{}`, or the
+	// reason an empty configuration does not declare.
+	catalogEntries := make(map[string]composition.CatalogEntry)
+	for _, entry := range composition.Catalog(registry) {
+		catalogEntries[entry.ID] = entry
+	}
+
 	// Extract and write component configuration schemas
 	var componentSchemas []ComponentSchema
 	for name, registration := range factories {
-		schema := extractSchema(name, registration)
+		schema := extractSchema(name, registration, catalogEntries[name])
 
 		// Validate schema against meta-schema
 		if metaSchemaPath != "" {
@@ -146,6 +154,12 @@ type ComponentMetadata struct {
 	Protocol string `json:"protocol"` // "udp", "tcp", "websocket", etc.
 	Domain   string `json:"domain"`   // "robotics", "semantic", "network", "storage"
 	Version  string `json:"version"`
+	// DefaultPorts is the factory's static port declaration resolved for an
+	// empty configuration; PortsRequireConfig/PortsError carry the declarer's
+	// refusal when an empty configuration does not declare (ADR-100 P1).
+	DefaultPorts       *composition.Ports `json:"default_ports,omitempty"`
+	PortsRequireConfig bool               `json:"ports_require_config,omitempty"`
+	PortsError         string             `json:"ports_error,omitempty"`
 }
 
 // PropertySchema represents a JSON Schema property definition
@@ -169,7 +183,7 @@ type PropertySchema struct {
 }
 
 // extractSchema converts a component registration to a JSON Schema
-func extractSchema(name string, registration *component.Registration) ComponentSchema {
+func extractSchema(name string, registration *component.Registration, entry composition.CatalogEntry) ComponentSchema {
 	// Convert component.PropertySchema to JSON Schema PropertySchema
 	properties := convertProperties(registration.Schema.Properties)
 
@@ -188,11 +202,14 @@ func extractSchema(name string, registration *component.Registration) ComponentS
 		Properties:  properties,
 		Required:    required,
 		Metadata: ComponentMetadata{
-			Name:     name,
-			Type:     registration.Type,
-			Protocol: registration.Protocol,
-			Domain:   registration.Domain,
-			Version:  registration.Version,
+			Name:               name,
+			Type:               registration.Type,
+			Protocol:           registration.Protocol,
+			Domain:             registration.Domain,
+			Version:            registration.Version,
+			DefaultPorts:       entry.DefaultPorts,
+			PortsRequireConfig: entry.PortsRequireConfig,
+			PortsError:         entry.PortsError,
 		},
 	}
 }

@@ -98,18 +98,24 @@ paths:
                                     $ref: '#/components/schemas/MessageLogEntry'
     /flowgraph:
         get:
-            summary: Get component FlowGraph
-            description: Returns the complete FlowGraph with nodes and edges for all managed components
+            summary: Get the composition graph projection
+            description: Returns the boot composition's graph projection (nodes with resolved ports, derived edges) as retained at boot; Mermaid when format=mermaid
             tags:
                 - Components
                 - FlowGraph
+            parameters:
+                - name: format
+                  in: query
+                  description: json (default) or mermaid
+                  schema:
+                    type: string
             responses:
                 "200":
-                    description: FlowGraph with nodes and edges
+                    description: Composition graph projection
                     content:
                         application/json:
                             schema:
-                                type: object
+                                $ref: '#/components/schemas/Graph'
     /flows:
         get:
             summary: List saved flow diagrams
@@ -329,20 +335,6 @@ paths:
                                 type: object
                 "400":
                     description: Invalid request
-    /gaps:
-        get:
-            summary: Get component flow gaps
-            description: Returns disconnected nodes and orphaned ports in the component flow
-            tags:
-                - Components
-                - FlowGraph
-            responses:
-                "200":
-                    description: Component flow gaps and disconnected nodes
-                    content:
-                        application/json:
-                            schema:
-                                type: object
     /graphql:
         post:
             summary: Execute GraphQL query
@@ -815,18 +807,18 @@ paths:
                     description: Component type not found
     /validate:
         get:
-            summary: Validate component flow connectivity
-            description: Performs FlowGraph connectivity analysis for operational validation (used by E2E tests)
+            summary: Get the boot composition findings
+            description: Returns the composition validation result computed over the admitted composition at boot (ADR-100), verbatim
             tags:
                 - Components
                 - FlowGraph
             responses:
                 "200":
-                    description: Flow connectivity analysis results
+                    description: Composition validation result
                     content:
                         application/json:
                             schema:
-                                type: object
+                                $ref: '#/components/schemas/Result'
     /workflows:
         get:
             summary: List registered workflow types
@@ -1611,6 +1603,117 @@ components:
                 - nodes
                 - connections
             type: object
+        Graph:
+            properties:
+                edges:
+                    items:
+                        properties:
+                            connection_id:
+                                type: string
+                            from:
+                                type: string
+                            from_port:
+                                type: string
+                            pattern:
+                                type: string
+                            to:
+                                type: string
+                            to_port:
+                                type: string
+                        required:
+                            - from
+                            - from_port
+                            - to
+                            - to_port
+                            - pattern
+                            - connection_id
+                        type: object
+                    type: array
+                nodes:
+                    items:
+                        properties:
+                            factory:
+                                type: string
+                            inputs:
+                                items:
+                                    properties:
+                                        connection_id:
+                                            type: string
+                                        description:
+                                            type: string
+                                        direction:
+                                            type: string
+                                        external:
+                                            type: boolean
+                                        kind:
+                                            type: string
+                                        name:
+                                            type: string
+                                        pattern:
+                                            type: string
+                                        required:
+                                            type: boolean
+                                        type:
+                                            type: string
+                                    required:
+                                        - name
+                                        - direction
+                                        - type
+                                        - required
+                                        - connection_id
+                                        - pattern
+                                        - description
+                                        - kind
+                                    type: object
+                                type: array
+                            instance:
+                                type: string
+                            outputs:
+                                items:
+                                    properties:
+                                        connection_id:
+                                            type: string
+                                        description:
+                                            type: string
+                                        direction:
+                                            type: string
+                                        external:
+                                            type: boolean
+                                        kind:
+                                            type: string
+                                        name:
+                                            type: string
+                                        pattern:
+                                            type: string
+                                        required:
+                                            type: boolean
+                                        type:
+                                            type: string
+                                    required:
+                                        - name
+                                        - direction
+                                        - type
+                                        - required
+                                        - connection_id
+                                        - pattern
+                                        - description
+                                        - kind
+                                    type: object
+                                type: array
+                            type:
+                                type: string
+                        required:
+                            - instance
+                            - factory
+                            - type
+                            - inputs
+                            - outputs
+                        type: object
+                    type: array
+            required:
+                - nodes
+                - edges
+            type: object
         GraphQLRequest:
             properties:
                 query:
@@ -1832,6 +1935,177 @@ components:
                 - timestamp
                 - subject
                 - summary
+            type: object
+        Result:
+            properties:
+                errors:
+                    items:
+                        properties:
+                            component:
+                                type: string
+                            message:
+                                type: string
+                            port:
+                                type: string
+                            severity:
+                                type: string
+                            suggestions:
+                                items:
+                                    type: string
+                                type: array
+                            type:
+                                type: string
+                        required:
+                            - type
+                            - severity
+                            - component
+                            - message
+                            - suggestions
+                        type: object
+                    type: array
+                graph:
+                    properties:
+                        edges:
+                            items:
+                                properties:
+                                    connection_id:
+                                        type: string
+                                    from:
+                                        type: string
+                                    from_port:
+                                        type: string
+                                    pattern:
+                                        type: string
+                                    to:
+                                        type: string
+                                    to_port:
+                                        type: string
+                                required:
+                                    - from
+                                    - from_port
+                                    - to
+                                    - to_port
+                                    - pattern
+                                    - connection_id
+                                type: object
+                            type: array
+                        nodes:
+                            items:
+                                properties:
+                                    factory:
+                                        type: string
+                                    inputs:
+                                        items:
+                                            properties:
+                                                connection_id:
+                                                    type: string
+                                                description:
+                                                    type: string
+                                                direction:
+                                                    type: string
+                                                external:
+                                                    type: boolean
+                                                kind:
+                                                    type: string
+                                                name:
+                                                    type: string
+                                                pattern:
+                                                    type: string
+                                                required:
+                                                    type: boolean
+                                                type:
+                                                    type: string
+                                            required:
+                                                - name
+                                                - direction
+                                                - type
+                                                - required
+                                                - connection_id
+                                                - pattern
+                                                - description
+                                                - kind
+                                            type: object
+                                        type: array
+                                    instance:
+                                        type: string
+                                    outputs:
+                                        items:
+                                            properties:
+                                                connection_id:
+                                                    type: string
+                                                description:
+                                                    type: string
+                                                direction:
+                                                    type: string
+                                                external:
+                                                    type: boolean
+                                                kind:
+                                                    type: string
+                                                name:
+                                                    type: string
+                                                pattern:
+                                                    type: string
+                                                required:
+                                                    type: boolean
+                                                type:
+                                                    type: string
+                                            required:
+                                                - name
+                                                - direction
+                                                - type
+                                                - required
+                                                - connection_id
+                                                - pattern
+                                                - description
+                                                - kind
+                                            type: object
+                                        type: array
+                                    type:
+                                        type: string
+                                required:
+                                    - instance
+                                    - factory
+                                    - type
+                                    - inputs
+                                    - outputs
+                                type: object
+                            type: array
+                    required:
+                        - nodes
+                        - edges
+                    type: object
+                status:
+                    type: string
+                warnings:
+                    items:
+                        properties:
+                            component:
+                                type: string
+                            message:
+                                type: string
+                            port:
+                                type: string
+                            severity:
+                                type: string
+                            suggestions:
+                                items:
+                                    type: string
+                                type: array
+                            type:
+                                type: string
+                        required:
+                            - type
+                            - severity
+                            - component
+                            - message
+                            - suggestions
+                        type: object
+                    type: array
+            required:
+                - status
+                - errors
+                - warnings
+                - graph
             type: object
         ReviewRequest:
             properties:

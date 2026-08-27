@@ -134,6 +134,7 @@
                   "user.message.>"
                 ]
               },
+              "external": true,
               "name": "user.message",
               "required": true
             },
@@ -663,7 +664,7 @@
             {
               "config": {
                 "kind": "nats",
-                "subject": "component.*"
+                "subject": "component.>"
               },
               "description": "Per-stage dispatch published by R0-R4",
               "name": "component.dispatch"

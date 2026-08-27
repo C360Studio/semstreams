@@ -472,6 +472,9 @@
               "description": {
                 "type": "string"
               },
+              "external": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               },
@@ -778,6 +781,9 @@
               "description": {
                 "type": "string"
               },
+              "external": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               },
@@ -802,6 +808,52 @@
     "type": "storage",
     "protocol": "objectstore",
     "domain": "storage",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "default_ports": {
+      "inputs": [
+        {
+          "name": "write",
+          "direction": "input",
+          "type": "",
+          "required": false,
+          "connection_id": "storage.objectstore.write",
+          "pattern": "stream",
+          "description": "NATS subject for write operations (accepts any message)",
+          "kind": "nats"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "events",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "storage.objectstore.events",
+          "pattern": "stream",
+          "description": "Storage events (stored, retrieved)",
+          "kind": "nats"
+        },
+        {
+          "name": "stored",
+          "direction": "output",
+          "type": "storage.stored.v1",
+          "required": false,
+          "connection_id": "storage.objectstore.stored",
+          "pattern": "stream",
+          "description": "StoredMessage output for ContentStorable pattern",
+          "kind": "nats"
+        },
+        {
+          "name": "store-provide",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "store:objectstore",
+          "pattern": "store",
+          "description": "Owns the store instance addressable as StorageInstance=objectstore",
+          "kind": "store-provide"
+        }
+      ]
+    }
   }
 }

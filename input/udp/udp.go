@@ -733,9 +733,28 @@ func intPtr(i int) *int {
 	return &i
 }
 
-// CreateInput creates a UDP input component following service pattern
-func CreateInput(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
-	// Start with defaults
+// DeclarePorts is the component.PortDeclarer for udp: the defaults with the
+// configured complete named replacements merged in, exactly as CreateInput
+// will report them.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	cfg, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return component.PortConfig{}, err
+	}
+	_, _, _, inputPorts, outputPorts, _, err := cfg.getConfiguredPorts()
+	if err != nil {
+		return component.PortConfig{}, errs.WrapInvalid(err, "udp-input-factory", "create", "resolve configured ports")
+	}
+	return component.PortConfigFrom(inputPorts, outputPorts), nil
+}
+
+// resolveConfig merges the user's complete named port replacements onto the
+// defaults. It is the one derivation DeclarePorts and CreateInput share;
+// getConfiguredPorts is the one port derivation.
+func resolveConfig(rawConfig json.RawMessage) (InputConfig, error) {
 	cfg := DefaultConfig()
 
 	// Validate the raw document before decoding its partial override. The
@@ -744,7 +763,7 @@ func CreateInput(rawConfig json.RawMessage, deps component.Dependencies) (compon
 		type configOverride InputConfig
 		var override configOverride
 		if err := component.SafeUnmarshal(rawConfig, &override); err != nil {
-			return nil, errs.Wrap(err, "udp-input-factory", "create", "secure config parsing")
+			return InputConfig{}, errs.Wrap(err, "udp-input-factory", "create", "secure config parsing")
 		}
 		userConfig := InputConfig(override)
 
@@ -753,10 +772,19 @@ func CreateInput(rawConfig json.RawMessage, deps component.Dependencies) (compon
 		if userConfig.Ports != nil {
 			merged, err := component.MergePortConfig(*cfg.Ports, *userConfig.Ports)
 			if err != nil {
-				return nil, errs.WrapInvalid(err, "udp-input-factory", "create", "merge port overrides")
+				return InputConfig{}, errs.WrapInvalid(err, "udp-input-factory", "create", "merge port overrides")
 			}
 			cfg.Ports = &merged
 		}
+	}
+	return cfg, nil
+}
+
+// CreateInput creates a UDP input component following service pattern
+func CreateInput(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+	cfg, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
 	}
 
 	// Validate required dependencies
@@ -786,6 +814,7 @@ func Register(registry *component.Registry) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
 		Name:        "udp",
 		Factory:     CreateInput,
+		Ports:       DeclarePorts,
 		Schema:      udpSchema,
 		Type:        "input",
 		Protocol:    "udp",

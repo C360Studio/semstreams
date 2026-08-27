@@ -192,18 +192,30 @@ type consumerInfo struct {
 	subject string
 }
 
-// NewComponent creates a new agentic-loop component
-func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+// DeclarePorts is the component.PortDeclarer for agentic-loop: the ports
+// NewComponent will report for rawConfig, computed without dependencies.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	_, inputs, outputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfigFrom(inputs, outputs), nil
+}
+
+// resolveConfig parses rawConfig over the defaults, validates, merges the port
+// overrides, and resolves the effective ports with their per-port kind checks.
+// It is the one derivation DeclarePorts and NewComponent share.
+func resolveConfig(rawConfig json.RawMessage) (Config, []component.Port, []component.Port, error) {
 	// Parse configuration — start from defaults so JSON only overrides
 	// explicitly provided fields. Without this, zero-valued fields like
 	// compact_threshold (0.0) and headroom_tokens (0) cause compaction
 	// to trigger on every iteration regardless of context utilization.
 	config := DefaultConfig()
 	if err := rejectRetiredTrajectoryConfig(rawConfig); err != nil {
-		return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "reject retired trajectory config")
+		return Config{}, nil, nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "reject retired trajectory config")
 	}
 	if err := json.Unmarshal(rawConfig, &config); err != nil {
-		return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "parse config")
+		return Config{}, nil, nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "parse config")
 	}
 	config.Consumer.EnsureDefaults()
 	config.Context.EnsureDefaults()
@@ -211,7 +223,7 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 
 	// Validate configuration
 	if err := config.Validate(); err != nil {
-		return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "validate config")
+		return Config{}, nil, nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "validate config")
 	}
 
 	merged := *DefaultConfig().Ports
@@ -219,7 +231,7 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		var err error
 		merged, err = component.MergePortConfig(merged, *config.Ports)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "merge ports")
+			return Config{}, nil, nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "merge ports")
 		}
 	}
 	config.Ports = &merged
@@ -227,18 +239,18 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	for _, definition := range merged.Inputs {
 		port, err := definition.Resolve(component.DirectionInput)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "resolve input port")
+			return Config{}, nil, nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "resolve input port")
 		}
 		facts, err := port.Facts()
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "inspect input port")
+			return Config{}, nil, nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "inspect input port")
 		}
 		if definition.Name == "trajectory_query" {
 			if err := validateTrajectoryQueryInput(port, facts); err != nil {
-				return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "validate trajectory query input")
+				return Config{}, nil, nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "validate trajectory query input")
 			}
 		} else if facts.Kind() != component.PortKindJetStream {
-			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "agentic-loop", "NewComponent", "work input ports must be JetStream ports")
+			return Config{}, nil, nil, errs.WrapInvalid(errs.ErrInvalidConfig, "agentic-loop", "NewComponent", "work input ports must be JetStream ports")
 		}
 		inputPorts = append(inputPorts, port)
 	}
@@ -246,18 +258,27 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	for _, definition := range merged.Outputs {
 		port, err := definition.Resolve(component.DirectionOutput)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "resolve output port")
+			return Config{}, nil, nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "resolve output port")
 		}
 		if definition.Name == "trajectories" {
 			facts, factsErr := port.Facts()
 			if factsErr != nil {
-				return nil, errs.WrapInvalid(factsErr, "agentic-loop", "NewComponent", "inspect trajectories output")
+				return Config{}, nil, nil, errs.WrapInvalid(factsErr, "agentic-loop", "NewComponent", "inspect trajectories output")
 			}
 			if err := validateTrajectoriesOutput(port, facts); err != nil {
-				return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "validate trajectories output")
+				return Config{}, nil, nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "validate trajectories output")
 			}
 		}
 		outputPorts = append(outputPorts, port)
+	}
+	return config, inputPorts, outputPorts, nil
+}
+
+// NewComponent creates a new agentic-loop component
+func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+	config, inputPorts, outputPorts, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
 	}
 
 	// Parse timeout for message processing

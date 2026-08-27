@@ -275,6 +275,48 @@ func newMetrics(registry *metric.MetricsRegistry, componentName string) *Metrics
 	return metrics
 }
 
+// resolveOutputPorts resolves the ws_data/ws_control outputs with their subject
+// rules. It is the one port derivation DeclarePorts and NewInput share.
+func resolveOutputPorts(config Config) ([]component.Port, map[string]bool, string, string, error) {
+	if config.Ports == nil {
+		return nil, nil, "", "", errs.WrapInvalid(errors.New("ports configuration is required"), "websocket_input", "NewInput", "resolve output ports")
+	}
+	outputPorts := make([]component.Port, len(config.Ports.Outputs))
+	jetStreamOutputs := make(map[string]bool, len(config.Ports.Outputs))
+	var dataSubject, controlSubject string
+	for index, definition := range config.Ports.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return nil, nil, "", "", errs.WrapInvalid(err, "websocket_input", "NewInput", "resolve output port")
+		}
+		facts, err := port.Facts()
+		if err != nil {
+			return nil, nil, "", "", errs.WrapInvalid(err, "websocket_input", "NewInput", "project output port facts")
+		}
+		if facts.Kind() != component.PortKindNATS && facts.Kind() != component.PortKindJetStream {
+			return nil, nil, "", "", errs.WrapInvalid(fmt.Errorf("output port %q kind %q is not nats or jetstream", port.Name, facts.Kind()), "websocket_input", "NewInput", "validate output port")
+		}
+		subjects := facts.NATSSubjects()
+		if len(subjects) != 1 {
+			return nil, nil, "", "", errs.WrapInvalid(fmt.Errorf("output port %q declares %d subjects, want one", port.Name, len(subjects)), "websocket_input", "NewInput", "validate output port")
+		}
+		outputPorts[index] = port
+		jetStreamOutputs[subjects[0]] = facts.Kind() == component.PortKindJetStream
+		switch port.Name {
+		case "ws_data":
+			dataSubject = subjects[0]
+		case "ws_control":
+			controlSubject = subjects[0]
+		default:
+			return nil, nil, "", "", errs.WrapInvalid(fmt.Errorf("unknown output port %q", port.Name), "websocket_input", "NewInput", "validate output port")
+		}
+	}
+	if dataSubject == "" || controlSubject == "" {
+		return nil, nil, "", "", errs.WrapInvalid(errors.New("ws_data and ws_control output ports are required"), "websocket_input", "NewInput", "validate output ports")
+	}
+	return outputPorts, jetStreamOutputs, dataSubject, controlSubject, nil
+}
+
 // NewInput creates a new WebSocket input component
 func NewInput(
 	name string,
@@ -311,41 +353,9 @@ func NewInput(
 		)
 	}
 
-	if config.Ports == nil {
-		return nil, errs.WrapInvalid(errors.New("ports configuration is required"), "websocket_input", "NewInput", "resolve output ports")
-	}
-	outputPorts := make([]component.Port, len(config.Ports.Outputs))
-	jetStreamOutputs := make(map[string]bool, len(config.Ports.Outputs))
-	var dataSubject, controlSubject string
-	for index, definition := range config.Ports.Outputs {
-		port, err := definition.Resolve(component.DirectionOutput)
-		if err != nil {
-			return nil, errs.WrapInvalid(err, "websocket_input", "NewInput", "resolve output port")
-		}
-		facts, err := port.Facts()
-		if err != nil {
-			return nil, errs.WrapInvalid(err, "websocket_input", "NewInput", "project output port facts")
-		}
-		if facts.Kind() != component.PortKindNATS && facts.Kind() != component.PortKindJetStream {
-			return nil, errs.WrapInvalid(fmt.Errorf("output port %q kind %q is not nats or jetstream", port.Name, facts.Kind()), "websocket_input", "NewInput", "validate output port")
-		}
-		subjects := facts.NATSSubjects()
-		if len(subjects) != 1 {
-			return nil, errs.WrapInvalid(fmt.Errorf("output port %q declares %d subjects, want one", port.Name, len(subjects)), "websocket_input", "NewInput", "validate output port")
-		}
-		outputPorts[index] = port
-		jetStreamOutputs[subjects[0]] = facts.Kind() == component.PortKindJetStream
-		switch port.Name {
-		case "ws_data":
-			dataSubject = subjects[0]
-		case "ws_control":
-			controlSubject = subjects[0]
-		default:
-			return nil, errs.WrapInvalid(fmt.Errorf("unknown output port %q", port.Name), "websocket_input", "NewInput", "validate output port")
-		}
-	}
-	if dataSubject == "" || controlSubject == "" {
-		return nil, errs.WrapInvalid(errors.New("ws_data and ws_control output ports are required"), "websocket_input", "NewInput", "validate output ports")
+	outputPorts, jetStreamOutputs, dataSubject, controlSubject, err := resolveOutputPorts(config)
+	if err != nil {
+		return nil, err
 	}
 
 	// Create message buffer with configured size and overflow policy

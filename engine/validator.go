@@ -18,7 +18,7 @@ import (
 // Validator provides flow validation using FlowGraph analysis
 type Validator struct {
 	componentRegistry *component.Registry
-	natsClient        *natsclient.Client
+	deps              component.Dependencies
 	logger            *slog.Logger
 }
 
@@ -26,9 +26,18 @@ type Validator struct {
 // The validator performs structural, type, and semantic validation of flow definitions
 // before deployment to ensure they can be safely executed.
 func NewValidator(registry *component.Registry, natsClient *natsclient.Client, logger *slog.Logger) *Validator {
+	return NewValidatorWithDependencies(registry, component.Dependencies{NATSClient: natsClient}, logger)
+}
+
+// NewValidatorWithDependencies creates a flow validator that constructs each
+// node with the given dependencies, so factories guarded on a model registry,
+// a lifecycle manager, or a payload registry can be validated too. The
+// composition-validation-substrate parity detector uses it to keep this
+// validator a complete oracle until it is retired (#1093).
+func NewValidatorWithDependencies(registry *component.Registry, deps component.Dependencies, logger *slog.Logger) *Validator {
 	return &Validator{
 		componentRegistry: registry,
-		natsClient:        natsClient,
+		deps:              deps,
 		logger:            logger,
 	}
 }
@@ -243,7 +252,7 @@ func (v *Validator) buildFlowGraph(flow *flowstore.Flow) (*flowgraph.FlowGraph, 
 		if admissionErr == nil {
 			_, admissionErr = validationRegistry.CreateComponent(componentadmission.Access{}, node.ID, types.ComponentConfig{
 				Name: node.Component, Type: node.Type, Enabled: true, Config: configJSON,
-			}, component.Dependencies{NATSClient: v.natsClient}, nil)
+			}, v.deps, nil)
 		}
 		if admissionErr != nil {
 			v.logger.Debug("Failed to add component to graph",

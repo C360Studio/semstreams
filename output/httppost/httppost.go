@@ -140,11 +140,24 @@ type streamConsumerBinding struct {
 	drainIssued bool
 }
 
-// NewOutput creates a new HTTP POST output from configuration
-func NewOutput(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+// DeclarePorts is the component.PortDeclarer for httppost: the configured
+// NATS/JetStream inputs NewOutput will report for rawConfig (no outputs — it
+// posts to an external endpoint), computed without dependencies.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	_, inputs, _, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfigFrom(inputs, nil), nil
+}
+
+// resolveConfig parses rawConfig (defaults when no ports are configured) and
+// resolves the inputs with their subject rule. It is the one derivation
+// DeclarePorts and NewOutput share.
+func resolveConfig(rawConfig json.RawMessage) (Config, []component.Port, []string, error) {
 	var config Config
 	if err := component.SafeUnmarshal(rawConfig, &config); err != nil {
-		return nil, errs.WrapInvalid(err, "Output", "NewOutput", "config unmarshal")
+		return Config{}, nil, nil, errs.WrapInvalid(err, "Output", "NewOutput", "config unmarshal")
 	}
 
 	if config.Ports == nil {
@@ -156,25 +169,34 @@ func NewOutput(rawConfig json.RawMessage, deps component.Dependencies) (componen
 	for index, definition := range config.Ports.Inputs {
 		port, err := definition.Resolve(component.DirectionInput)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "Output", "NewOutput", "resolve input port")
+			return Config{}, nil, nil, errs.WrapInvalid(err, "Output", "NewOutput", "resolve input port")
 		}
 		facts, err := port.Facts()
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "Output", "NewOutput", "project input port facts")
+			return Config{}, nil, nil, errs.WrapInvalid(err, "Output", "NewOutput", "project input port facts")
 		}
 		if facts.Kind() != component.PortKindNATS && facts.Kind() != component.PortKindJetStream {
-			return nil, errs.WrapInvalid(fmt.Errorf("input port %q kind %q is not nats or jetstream", port.Name, facts.Kind()), "Output", "NewOutput", "validate input port")
+			return Config{}, nil, nil, errs.WrapInvalid(fmt.Errorf("input port %q kind %q is not nats or jetstream", port.Name, facts.Kind()), "Output", "NewOutput", "validate input port")
 		}
 		subjects := facts.NATSSubjects()
 		if len(subjects) != 1 {
-			return nil, errs.WrapInvalid(fmt.Errorf("input port %q declares %d subjects, want one", port.Name, len(subjects)), "Output", "NewOutput", "validate input port")
+			return Config{}, nil, nil, errs.WrapInvalid(fmt.Errorf("input port %q declares %d subjects, want one", port.Name, len(subjects)), "Output", "NewOutput", "validate input port")
 		}
 		inputPorts[index] = port
 		inputSubjects = append(inputSubjects, subjects[0])
 	}
 
 	if len(inputSubjects) == 0 {
-		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Output", "NewOutput", "no input subjects configured")
+		return Config{}, nil, nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Output", "NewOutput", "no input subjects configured")
+	}
+	return config, inputPorts, inputSubjects, nil
+}
+
+// NewOutput creates a new HTTP POST output from configuration
+func NewOutput(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+	config, inputPorts, inputSubjects, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
 	}
 
 	// Validate URL
@@ -686,6 +708,7 @@ func Register(registry *component.Registry) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
 		Name:        "httppost",
 		Factory:     NewOutput,
+		Ports:       DeclarePorts,
 		Schema:      httpPostSchema,
 		Type:        "output",
 		Protocol:    "httppost",

@@ -39,6 +39,7 @@ func setupCatalogTestRegistry(t *testing.T) *component.Registry {
 			Description: e.desc,
 			Version:     e.version,
 			Factory:     stubComponentFactory,
+			Ports:       func(json.RawMessage, string) (component.PortConfig, error) { return component.PortConfig{}, nil },
 		}); err != nil {
 			t.Fatalf("register %s: %v", e.name, err)
 		}

@@ -7,6 +7,7 @@ func Register(registry *component.Registry) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
 		Name:        "weather_station",
 		Factory:     NewComponent,
+		Ports:       DeclarePorts,
 		Schema:      weatherStationSchema,
 		Type:        "processor",
 		Protocol:    "weather_station",

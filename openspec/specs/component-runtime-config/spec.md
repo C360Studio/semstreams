@@ -43,9 +43,15 @@ ignored compatibility fields.
 
 Port configuration SHALL contain only `inputs` and `outputs`.
 
-Each port SHALL contain the common fields `name`, `required`, and `description`, plus a nested `config` object
-discriminated by exactly one of these kinds: `timer`, `network`, `file`, `http-client`, `nats`, `nats-request`,
-`jetstream`, `kv-watch`, `kv-read`, `kv-write`, `store-read`, `store-provide`.
+Each port SHALL contain the common fields `name`, `required`, `description`, and `external`, plus a nested `config`
+object discriminated by exactly one of these kinds: `timer`, `network`, `file`, `http-client`, `nats`, `nats-request`,
+`jetstream`, `kv-watch`, `kv-read`, `kv-write`, `store-read`, `store-provide`. `external` is an optional boolean on an
+input declaring that the port is fed from outside the composition (a UI, a peer process, a rule action) — an operator
+statement, not a predicted framework value; composition validation (`composition-validation`) treats it as the one
+reason a required stream input may have no in-graph publisher. It travels through the strict envelope codec, port
+resolution, the runtime `Port` view, complete named replacement, the admitted declaration and its boot parity check,
+and the catalog export unchanged. An output declaring `external` SHALL fail resolution with the port-config error
+naming the field; it is never silently ignored.
 
 Unknown kinds, unknown fields, kinds used in a prohibited direction, duplicate or unknown named ports, malformed
 durations or network ports, and missing required fields SHALL fail before component initialization. The failure SHALL
@@ -64,8 +70,9 @@ NOT be accepted.
 
 - **GIVEN** a valid canonical port declaration
 - **WHEN** it is decoded and exposed through runtime configuration
-- **THEN** the definition and runtime views preserve identical direction, kind, required state, description, resource
-  fields, and interface metadata
+- **THEN** the definition and runtime views preserve identical direction, kind, required state, external marker,
+  description, resource fields, and interface metadata
+- **AND** the test that verifies the marker's round trip is `TestPortDefinitionExternalRoundTrip`
 
 #### Scenario: Legacy declaration fails without repair
 
@@ -402,3 +409,4 @@ to reconcile or mutate the running component set.
 - **WHEN** the KV watcher applies an external `components.X` update while `PutComponentToKV("Y", ...)` runs concurrently
 - **THEN** the final in-memory desired configuration contains both X's update and Y
 - **AND** subscribers are notified for both keys
+
