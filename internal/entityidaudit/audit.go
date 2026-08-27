@@ -708,6 +708,13 @@ func languageForName(name, container string) (Language, bool) {
 	switch {
 	case normalized == "entityidpattern" || strings.HasSuffix(normalized, "entityidpattern") || normalized == "targetpattern" || normalized == "ownerpattern":
 		return LanguageDeclarationPattern, true
+	// A projection contract's EntityPattern (pkg/projection/contract.Contract) is
+	// a declaration pattern. It is bound to its owning type because the same
+	// normalized name spells an unrelated vocabulary elsewhere: the query
+	// classifier's Options["entity_pattern"] holds an entity *type* token
+	// (graph/query/classifier.go:80).
+	case normalized == "entitypattern" && strings.Contains(container, "contract"):
+		return LanguageDeclarationPattern, true
 	case normalized == "entityidprefix" || strings.HasSuffix(normalized, "entityidprefix") || normalized == "entityprefix" || normalized == "idprefix":
 		return LanguageQueryPrefix, true
 	case normalized == "prefix" && (strings.Contains(container, "query") || strings.Contains(container, "hierarchy") || strings.Contains(container, "entity")):
@@ -864,6 +871,18 @@ func walkConfigNode(path string, root *yaml.Node, lineOffset int) []Candidate {
 				for i := 0; i+1 < len(entity.Content); i += 2 {
 					if entity.Content[i].Value == "pattern" {
 						addValue("entity.pattern", entity.Content[i+1], LanguageDeclarationPattern, "config:")
+					}
+				}
+			}
+			if contracts, ok := fields["projection_contracts"]; ok && contracts.Kind == yaml.SequenceNode {
+				for _, element := range contracts.Content {
+					if element.Kind != yaml.MappingNode {
+						continue
+					}
+					for i := 0; i+1 < len(element.Content); i += 2 {
+						if normalizeName(element.Content[i].Value) == "entitypattern" {
+							addValue("projection_contracts.entity_pattern", element.Content[i+1], LanguageDeclarationPattern, "config:")
+						}
 					}
 				}
 			}

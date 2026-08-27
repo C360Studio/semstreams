@@ -2,13 +2,14 @@
   "version": 2,
   "roots": ["testdata/corpus"],
   "source_set": "fixture",
-  "summary": {"candidate_count":4,"finding_count":0,"candidates_by_language":[{"name":"declaration-pattern","count":2},{"name":"literal","count":1},{"name":"query-prefix","count":1}],"findings_by_language":[],"findings_by_reason":[]},
+  "summary": {"candidate_count":5,"finding_count":0,"candidates_by_language":[{"name":"declaration-pattern","count":3},{"name":"literal","count":1},{"name":"query-prefix","count":1}],"findings_by_language":[],"findings_by_reason":[]},
   "value_corpus": {
     "candidates": [
     {"file":"testdata/corpus/entities.go","line":3,"column":25,"language":"literal","value":"acme.ops.robotics.gcs.drone.001","surface":"go-field:EntityState.ID","status":"valid"},
     {"file":"testdata/corpus/entities.go","line":4,"column":35,"language":"declaration-pattern","value":"acme.ops.robotics.*.drone.*","surface":"go-field:Workflow.EntityIDPattern","status":"valid"},
     {"file":"testdata/corpus/entities.go","line":5,"column":37,"language":"query-prefix","value":"acme.ops.robotics","surface":"go-field:EntityQuery.EntityIDPrefix","status":"valid"},
-    {"file":"testdata/corpus/entities.go","line":7,"column":25,"language":"declaration-pattern","value":"raw.sensor.\u003e","surface":"go-declaration:entityIDPattern","status":"classified","classification":"unrelated-glob","classification_reason":"entity_id_pattern_invalid:arity NATS subscription filter"}
+    {"file":"testdata/corpus/entities.go","line":7,"column":25,"language":"declaration-pattern","value":"raw.sensor.\u003e","surface":"go-declaration:entityIDPattern","status":"classified","classification":"unrelated-glob","classification_reason":"entity_id_pattern_invalid:arity NATS subscription filter"},
+    {"file":"testdata/corpus/entities.go","line":11,"column":33,"language":"declaration-pattern","value":"acme.ops.robotics.*.drone.*","surface":"go-field:Contract.EntityPattern","status":"valid"}
     ]
   }
 }

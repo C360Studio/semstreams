@@ -380,12 +380,13 @@ part of the supported framework surface, so no downstream-obligation claim is ma
 
 ## Entity-ID segment semantics, slice A (ADR-102, #1095) — the canonical order is `org.platform.system.domain.type.instance`
 
-Added 2026-08-27. The per-sister table below was measured read-only on 2026-08-26 at each sister's pinned SHA. On
-application every pin was re-read and **none had moved**: semsource `4093d3ce`, semmachina `841c45e8`, semdev
-`ca3956af`, semdragon `07f4de9b`, semteams `8a70b7e7`, semconnect `d0d06e00`, semspec `5a9496ee`, semmem `b909cbf1`.
-semboids (`8c03cc53`), semops (`602c619a`), and semsage (`4d28b4dc`) carry no pin anywhere in this document; their rows
-are the 2026-08-26 reading and are **UNPINNED**. Every SemStreams-side claim below was re-verified against this branch
-after merging `#1116`, `#1109`, and `#1130`.
+Added 2026-08-27. The per-sister table below was measured read-only on 2026-08-26. Eight sisters were pinned at that
+reading and every pin was re-read on application without having moved: semsource `4093d3ce`, semmachina `841c45e8`,
+semdev `ca3956af`, semdragon `07f4de9b`, semteams `8a70b7e7`, semconnect `d0d06e00`, semspec `5a9496ee`, semmem
+`b909cbf1`. Three carry a SHA recorded at application rather than at the reading: semboids `8c03cc53`, semops
+`602c619a`, semsage `4d28b4dc`. All eleven resolve to a real commit and were that sister's `HEAD` when this section
+was written, so every row diffs against something. Every SemStreams-side claim below was re-verified against this
+branch after merging `#1116`, `#1109`, and `#1130`.
 
 ### What changes on the wire
 
@@ -396,6 +397,19 @@ delegated taxonomy**. Positions 1-2 are the **minting deployment authority**: th
 `instance` stays last. Arity stays six. There is no accept-both-orders parser, no alias for the retired order, and no
 compatibility knob: a downstream starts on newly provisioned NATS storage after every owned builder, pattern, config,
 fixture, and query is updated (`openspec/specs/entity-id-contract/spec.md` "clean owned-source break").
+
+**Doing nothing here fails silently — this is the one obligation in this section with no loud path.** A sister that
+keeps minting `org.platform.domain.system.type.instance` still emits six lexically valid segments.
+`pkg/types.ValidateEntityID` is arity and alphabet only (`pkg/types/entity_id.go:149`); it has no position semantics,
+so the ID passes, graph-ingest accepts it, and nothing logs. The reinterpretation happens downstream and everywhere at
+once: `graph/inference/hierarchy.go:26-29` cuts containers at the named prefix levels, so the "system" container is
+now the taxonomy and the "domain" container the source; `graph/clustering/entityid_provider.go:224` `getSystem`
+returns the taxonomy as the source; `processor/graph-query/summary.go:197` composes `entityTypes[].type` as
+`System + "." + Domain + "." + Type`; and `vocabulary/export/export.go:129-130` writes the IRI path
+`{org}/{platform}/{system}/{domain}/{type}/{instance}` inverted. Every entity, every query, no error. The only
+detector is running `cmd/entity-id-audit` over your own tree — and it reads statically resolvable values, so a builder
+whose positions are all `%s` verbs carries no literal to judge and is invisible to it. Re-read the two middle
+positions of every builder by hand before trusting a green audit.
 
 Framework families re-slot (`<system>.<domain>.<type>`): loop execution `agentic-loop.agent.execution`, chain
 `chain.agent.execution`, model endpoint `model-registry.agent.endpoint`, lesson `lesson.agent.record` (record prefix
@@ -420,11 +434,22 @@ GraphQL value `entityTypes[].type`, now `system.domain.type`.
 3. **Builders swap positions 3-4 and take authority only from `deps.Platform`.** A product name in `platform`, a fixed
    literal authority in a builder, a `Sprintf` template whose org/platform are literals, or a trailing-dot prefix
    constant is an `authority_literal` finding once the sister runs `cmd/entity-id-audit` over its tree.
-4. **Domains are delegated (ruled O-3/O-5).** A product declares `[]pkg/types.EntityDomainDelegation{{Producer, Domain[,
-   Type]}}` and passes them to `pkg/types.NewEntityDomainAuthority` at its composition root; two producers delegating one
-   domain is a boot-time composition rejection. The framework reserves `agent`, `ops`, `graph`; `system` and `instance`
-   values are never registered. A literal position-4 value in production Go that is neither reserved nor declared is a
-   `domain_unregistered` audit finding.
+4. **Domains are delegated (ruled O-3/O-5) — and the two halves of that have different enforcement.** A product
+   declares `[]pkg/types.EntityDomainDelegation{{Producer, Domain[, Type]}}`. The framework reserves `agent`, `ops`,
+   `graph`; `system` and `instance` values are never registered.
+   *Declared-or-reserved is enforced by the corpus audit.* A literal position-4 value in production Go that is neither
+   reserved nor declared is a `domain_unregistered` finding from `cmd/entity-id-audit`, which reads your
+   `EntityDomainDelegation` literals as the registered set (`internal/entityidaudit/segment_rules.go:152-155`). Every
+   declaration-pattern surface counts, including a projection contract's `EntityPattern` field and a config's
+   `projection_contracts[].entity_pattern`.
+   *Cross-product collision is not.* The audit collects a flat domain set with no producer dimension
+   (`segment_rules.go:206`), so two producers delegating one domain is invisible to it. The single detector is passing
+   every composed product's delegations to `pkg/types.NewEntityDomainAuthority` at your composition root, which then
+   refuses to build; `pkg/types/entity_domain_authority_test.go:72-79` pins that rejection on the exact
+   semsource/semdragon `web` pair the table below cites. That call is yours to make and nothing in the framework
+   requires it — skip it and a collision is reported nowhere, because slice A wires no runtime authority check by
+   design. This repo does not demonstrate it from a composition root either: `cmd/e2e-semstreams` composes only
+   framework examples whose delegations cannot collide, so a check placed there could never fail.
 5. **Prefix levels have fixed meanings (ADR-102 d6):** 2 = deployment (`DeploymentPrefix`), 3 = source
    (`SourcePrefix`, the federation triple; ADR-099 level 1), 4 = taxonomy (`TaxonomyPrefix`; ADR-099 level 0), 5 = type
    (`TypePrefix`), plus `PrefixLevel(n)`. `SystemPrefix`, `DomainPrefix`, `PlatformPrefix`, `IsSameSystem`, `IsSameDomain`
@@ -440,10 +465,11 @@ GraphQL value `entityTypes[].type`, now `system.domain.type`.
 7. **Rule substitution tokens keep their names**: `$entity.system` / `$entity.domain` (and `$related.*`) resolve by the
    named position, so a template written against the names is unchanged; a config-authored subject carrying `$entity.id`
    emits the new token order, and a subscriber pinning position literals follows it.
-8. **Reference configs**: `entity_watch_buckets.ENTITY_STATES` and rule `entity.pattern` values carry no literal
-   authority (`*.*.…`); a literal org/platform in a shipped config pattern is an `authority_literal` audit finding.
+8. **Reference configs**: `entity_watch_buckets.ENTITY_STATES`, rule `entity.pattern`, and
+   `projection_contracts[].entity_pattern` values carry no literal authority (`*.*.…`); a literal org/platform in any
+   of those three in a shipped config is an `authority_literal` audit finding.
 
-### Per-sister list (values → after; measured 2026-08-26 at the SHAs in design §D, read-only)
+### Per-sister list (values → after; measured read-only 2026-08-26, at the eleven SHAs pinned at the top of this section)
 
 | Sister | Change |
 |---|---|
@@ -473,4 +499,7 @@ patterns now live on their payload registrations — `agentic.LessonContract()` 
 `agentic.LoopExecutionContract()` (`agentic/loop_execution_entity.go`). A sister that copied either `entity_pattern`
 literal re-slots it there, not in a projection package. The framework's own `configs/rules/lessons/lesson-lifecycle-rulepack.json`
 carries the re-slotted `*.*.lesson.agent.record.*` beside ADR-103's structured `message_type` object; a product rulepack
-mirroring that contract changes both in one edit.
+mirroring that contract changes both in one edit. Both spellings are inside the audit corpus — the Go field as
+`go-field:Contract.EntityPattern` and the config key as `config:projection_contracts.entity_pattern` — so a
+contract left in the retired order is a `domain_unregistered` finding in production Go, and a contract given a literal
+org/platform is an `authority_literal` finding in either.

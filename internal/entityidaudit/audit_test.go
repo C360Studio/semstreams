@@ -782,3 +782,56 @@ const entityIDPattern = "acme.ops.src.media.*.*"
 		t.Fatalf("candidates = %#v, want three config declaration patterns (ENTITY_STATES watch + two rule entity patterns), never the AGENT_LOOPS key glob", candidates)
 	}
 }
+
+// TestAuditSeesProjectionContractEntityPatterns pins the projection-contract
+// declaration surface named as an ADR-102 enforcement point: the EntityPattern
+// field of a contract.Contract literal in production Go, and
+// projection_contracts[].entity_pattern in a config, are declaration patterns
+// the segment rules see. The query-classifier Options["entity_pattern"] key is
+// a different vocabulary — an entity *type* token, graph/query/classifier.go —
+// and stays out of the corpus.
+func TestAuditSeesProjectionContractEntityPatterns(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeFixture(t, root, "contracts.go", `package fixture
+import "github.com/c360studio/semstreams/pkg/projection/contract"
+
+var _ = contract.Contract{Name: "canonical", EntityPattern: "*.*.agentic-loop.agent.execution.*"}
+var _ = contract.Contract{Name: "retired-order", EntityPattern: "*.*.agent.agentic-loop.execution.*"}
+var _ = map[string]any{"entity_pattern": "shipment"}
+`)
+	writeFixture(t, root, "configs/rulepack.json", `{
+  "projection_contracts": [{"name":"lesson","entity_pattern":"acme.ops.lesson.agent.record.*"}],
+  "examples": [{"intent":"entity_lookup","options":{"entity_pattern":"sensor"}}]
+}`)
+
+	candidates, findings, err := Audit(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Language != LanguageDeclarationPattern {
+			t.Fatalf("candidate = %#v, want every contract pattern classified as a declaration pattern", candidate)
+		}
+		values = append(values, candidate.Surface+"="+candidate.Value)
+	}
+	want := []string{
+		"config:projection_contracts.entity_pattern=acme.ops.lesson.agent.record.*",
+		"go-field:Contract.EntityPattern=*.*.agentic-loop.agent.execution.*",
+		"go-field:Contract.EntityPattern=*.*.agent.agentic-loop.execution.*",
+	}
+	if !reflect.DeepEqual(values, want) {
+		t.Fatalf("candidates = %#v, want %#v — the classifier option key is a different vocabulary", values, want)
+	}
+	reasons := findingReasons(findings)
+	if got := reasons["domain_unregistered"]; len(got) != 1 || !strings.Contains(got[0], "*.*.agent.agentic-loop.execution.*") {
+		t.Fatalf("findings = %#v, want the retired-order contract pattern reported as an unregistered domain", findings)
+	}
+	if got := reasons["authority_literal"]; len(got) != 1 || !strings.Contains(got[0], "acme.ops.lesson.agent.record.*") {
+		t.Fatalf("findings = %#v, want the literal-authority config contract pattern reported", findings)
+	}
+	if len(findings) != 2 {
+		t.Fatalf("findings = %#v, want exactly the retired-order domain and the literal authority", findings)
+	}
+}

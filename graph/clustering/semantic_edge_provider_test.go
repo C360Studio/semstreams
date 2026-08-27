@@ -363,7 +363,7 @@ func TestSemanticEdgeProvider_NoMutualEdges_MatchesEntityIDProvider(t *testing.T
 	// synthesizes virtual edges we must reproduce exactly.
 	base := &stubProvider{
 		entities: []string{
-			"o.p.sys.d.t.a1", "o.p.sys.d.t.a2", // siblings (share o.p.d.sys.t)
+			"o.p.sys.d.t.a1", "o.p.sys.d.t.a2", // siblings (share o.p.sys.d.t)
 			"o.p.sys.d.u.b1", // system-peer (shares system "sys"), different type
 		},
 		neighbors: map[string][]string{},

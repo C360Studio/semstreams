@@ -34,7 +34,7 @@ and `platform.{Org,Platform}` = 62 lines; `vocabulary/export/export.go:123-126` 
 `processor/graph-query/summary.go:198-202` → GraphQL `EntityTypeSummary.type` (`gateway/graph-gateway/component.go:1870`),
 asserted only by `test/e2e/scenarios/tiered.go:350` (statistical, semantic); `graph/clustering/entityid_provider.go:231-236`
 (live via `processor/graph-clustering/component.go:1331`) and `graph/clustering/summarizer.go:719-731`;
-`test/e2e/scenarios/ops/scenario.go:604,712` (now `:607,:715` after the slice-A rewrite),
+`test/e2e/scenarios/ops/scenario.go:604,712` (now `:607` and `:718-719` after the slice-A rewrite),
 `tiered_structural.go:428-434`, `research-graph/scenario.go:201-203`,
 `cmd/e2e-semstreams/mission/command.go:59-66,324-328` (e2e position literals and wire authority);
 `configs/graph-backend.json` composes graph-ingest (`grep -c '"graph-ingest"'` → 2), as do 11 of the 14 shipped
@@ -605,15 +605,18 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
 
 ## 5. Sweep — builders, patterns, configs, docs, examples, audit
 
-**Rows in files PR #1116 (#1093) deletes: none.** Measured, not assumed — `grep -rn 'org\.platform|\*\.\*\.[a-z]|semstreams\.framework' flowstore/ flowtemplate/ engine/ service/flow_*.go` returns one hit,
-`service/flow_runtime_messages_test.go:128` `"*.*.data"`, which is a NATS subject-match fixture and not an entity-ID
-declaration pattern. No inventory row was skipped for the flow retirement, so no such row is owed to the spec delta.
+**Rows in files PR #1116 (#1093) deletes: none.** Measured before the deletion, not assumed — while `flowstore/`,
+`flowtemplate/`, `engine/`, and `service/flow_*.go` still existed,
+`grep -rn 'org\.platform|\*\.\*\.[a-z]|semstreams\.framework'` over them returned one hit,
+`service/flow_runtime_messages_test.go:128` `"*.*.data"`, a NATS subject-match fixture and not an entity-ID
+declaration pattern. #1116 has since merged and all four paths are gone, so the conclusion now holds trivially:
+no inventory row was skipped for the flow retirement, and none is owed to the spec delta.
 
 **Rows formerly paused behind PR #1109 (#1100): RELEASED.** #1109 merged as `62f56d7e`; this branch merged
 `origin/main` (also carrying #1116 `b0a3f0b9` and #1130 `ad153b20`) and finished 5.1–5.3. Two anchors had moved
 and are re-anchored in place: `internal/builtinprojection/contracts.go:26,56` no longer exists (#1109 deleted the
 package; both declarations are now on the payload registrations) and
-`test/e2e/scenarios/ops/scenario.go:604,712` are now `:607,:715`.
+`test/e2e/scenarios/ops/scenario.go:604,712` are now `:607` and `:718-719`.
 
 
 - [x] 5.1 Framework builders (`agentic/entity_ids.go`, `agent_lesson_entity.go`, `web_observation_entity.go`,
@@ -638,7 +641,9 @@ package; both declarations are now on the payload registrations) and
       `weather_station/payload.go`, `iot_sensor/payload.go`) which also declare their domain delegations.
       **Barrier evidence, then and now:** before the #1109 merge `task entity-id:audit` reported exactly seven
       `domain_unregistered` findings, one per un-migrated builder. **After this row: zero** —
-      `go run ./cmd/entity-id-audit .` → `entity ID audit passed: 1289 structured candidates across 1 roots`.
+      `go run ./cmd/entity-id-audit .` → `entity ID audit passed: 1289 structured candidates across 1 roots` when
+      this row was written; 1304 after review finding HIGH-1 widened extraction (`conformance.md`,
+      "Implementation-review round"), still zero findings.
       The zero is load-bearing, proven by mutation: reverting `agentic/ops_diagnosis_entity.go`'s format to the
       retired order re-fires `agentic/ops_diagnosis_entity.go:225: format-builder
       go-format-prefix:tryOpsDiagnosisEntityID: "%s.%s.ops.diagnosis.finding.%s": domain_unregistered`; restore
@@ -676,7 +681,7 @@ package; both declarations are now on the payload registrations) and
 - [x] 5.3 Declaration patterns, config literals, and e2e literals (inventory W5–W6, W8, W10): `agentic/agentrun/agentrun.go:100`,
       `internal/builtinprojection/contracts.go:26,56` (RE-ANCHORED: PR #1109 deleted that package and moved both
       declarations onto the payload registrations — now `agentic/loop_execution_entity.go:224` and
-      `agentic/agent_lesson_entity.go:399`), `processor/gated-dag/participant.go:17`,
+      `agentic/agent_lesson_entity.go:400`), `processor/gated-dag/participant.go:17`,
       `cmd/e2e-semstreams/mission/state.go:28`, `configs/*` three literal patterns; lesson record prefix
       (`agent_lesson_entity.go:85-93`); `entityPartNames` resolves by name; `test/e2e/scenarios/ops/scenario.go:604`
       and `:712`, `test/e2e/scenarios/tiered_structural.go:428-434` (rename the `domain`/`system` variables with the
@@ -685,7 +690,7 @@ package; both declarations are now on the payload registrations) and
       never from the wire) rewritten in the same commit so no tier reports a position-literal mismatch that reads as
       a regression (`test/e2e/client/nats.go:965-974` is arity-only and stays).
       **Done.** After the merge: the two projection `EntityPattern` declarations re-slotted at their new home
-      (`agentic/loop_execution_entity.go:224`, `agentic/agent_lesson_entity.go:399`), the lesson record prefix
+      (`agentic/loop_execution_entity.go:224`, `agentic/agent_lesson_entity.go:400`), the lesson record prefix
       (`agent_lesson_entity.go:487-491`), and `test/e2e/scenarios/ops/scenario.go` `:607`/`:715` — both assertions now
       read positions by name through `ParseEntityID`. The three-part PREDICATE `ops.diagnosis.finding` that the same
       scenario queries is a separate vocabulary name and is deliberately unchanged.
@@ -699,7 +704,7 @@ package; both declarations are now on the payload registrations) and
       **Done after the #1109 merge:** the two projection `EntityPattern` declarations that were
       `internal/builtinprojection/contracts.go:26,56` — that package is deleted and they now live at
       `agentic/loop_execution_entity.go:224` (`*.*.agentic-loop.agent.execution.*`) and
-      `agentic/agent_lesson_entity.go:399` (`*.*.lesson.agent.record.*`), with the lesson record prefix at
+      `agentic/agent_lesson_entity.go:400` (`*.*.lesson.agent.record.*`), with the lesson record prefix at
       `agent_lesson_entity.go:487-491`; and `test/e2e/scenarios/ops/scenario.go` (re-measured `:607` and `:715`,
       both now reading positions by name through `ParseEntityID`).
 
@@ -764,9 +769,9 @@ package; both declarations are now on the payload registrations) and
       `query_entity` argument on the live agentic tier (the stage asserts durable redelivery, not the entity).
       Plus one new deliberate negative from this change classified in place
       (`pkg/types/entity_id_semantics_test.go:76`, the taxonomy-across-sources prefix).
-      **Current state:** `task entity-id:audit` reports 7 findings, all `domain_unregistered` on the seven
-      un-migrated agentic builders that task 5.1 owns — zero lexical findings, and every one of the original 30 is
-      resolved.
+      **Barrier reading before 5.1:** `task entity-id:audit` reported 7 findings, all `domain_unregistered` on
+      the seven un-migrated agentic builders that task 5.1 owns — zero lexical findings, and every one of the
+      original 30 resolved. 5.1 cleared those seven; the reading after 5.1 is recorded on that row.
 
 - [x] 5.7 `task schema:generate`; `git diff --exit-code schemas/ specs/` → commit any regenerated output.
       **Done:** `task schema:generate` produced no diff; `task schema:check-changes` exits 0 (no drift).
@@ -853,6 +858,9 @@ package; both declarations are now on the payload registrations) and
       `processor/agentic-tools/decide_test.go` (an arbitrary self-consistent unit-test platform value).
 - [ ] 7.3 Implementation review by `semstreams-reviewer`; verdict and every finding's disposition recorded in
       `conformance.md`.
+      **Round 1:** verdict CHANGES REQUESTED at `5f66ce37` (0 BLOCKING, 3 HIGH, 7 MEDIUM, 4 NIT); every finding's
+      disposition, the one scoped deviation, and the stated residue are in `conformance.md` §"Implementation-review
+      round". Re-review of the round is outstanding.
 - [ ] 7.4 Owner-run cross-agent round where the owner asks for it; fixes and re-review recorded in `conformance.md`.
 - [ ] 7.5 `openspec archive entity-id-segment-semantics` + spec sync as the final content commit; narrow reviewer
       check of the archive/spec sync recorded.

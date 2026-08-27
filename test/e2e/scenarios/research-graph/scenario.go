@@ -111,8 +111,8 @@ type Config struct {
 	// platform block — used to construct LoopExecutionEntityID for
 	// triple lookup. Hardcoded here rather than read from the config
 	// to keep the scenario self-contained.
-	PlatformOrg      string `json:"platform_org"`
-	PlatformInstance string `json:"platform_instance"`
+	PlatformOrg string `json:"platform_org"`
+	PlatformID  string `json:"platform_id"`
 }
 
 // DefaultConfig returns defaults aligned with docker/compose/research-graph.yml.
@@ -127,7 +127,7 @@ func DefaultConfig() *Config {
 		// configs/research-graph-e2e.json platform.id. platform.instance_id was
 		// removed (ADR-102, ruled O-2), so platform.id IS the authority the binary
 		// mints loop executions under; this must equal it or nothing is ever found.
-		PlatformInstance: "research-graph-e2e",
+		PlatformID: "research-graph-e2e",
 	}
 }
 
@@ -459,7 +459,7 @@ func (s *Scenario) waitForSearchResultStamp(ctx context.Context, result *scenari
 	if !ok || loopID == "" {
 		return fmt.Errorf("research_loop_id not set (waitForResearchPipelineLoop didn't populate it)")
 	}
-	loopEntityID, err := agentic.TryLoopExecutionEntityID(s.config.PlatformOrg, s.config.PlatformInstance, loopID)
+	loopEntityID, err := agentic.TryLoopExecutionEntityID(s.config.PlatformOrg, s.config.PlatformID, loopID)
 	if err != nil {
 		return fmt.Errorf("construct loop entity ID for %s: %w", loopID, err)
 	}
