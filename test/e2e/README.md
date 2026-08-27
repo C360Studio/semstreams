@@ -4,7 +4,8 @@ End-to-end tests for validating SemStreams functionality in realistic deployment
 
 ## Test Philosophy
 
-E2E tests follow the **Observer Pattern**: they run against real services in Docker containers, not mocks. Tests observe system behavior from the outside, just like production monitoring.
+E2E tests follow the **Observer Pattern**: they run against real services in Docker containers, not mocks. Tests
+observe system behavior from the outside, just like production monitoring.
 
 ## Quick Start
 
@@ -80,7 +81,9 @@ Detailed documentation for each scenario is available in [test/e2e/docs/](./docs
 
 ## Directory Structure
 
-```
+Representative subset — `scenarios/`, `client/`, and `taskfiles/e2e/` each hold more files than shown below.
+
+```text
 test/e2e/
 ├── client/
 │   ├── observability.go    # HTTP client for component API
@@ -102,14 +105,11 @@ taskfiles/e2e/
 ├── core.yml                # Core protocol tests
 ├── structural.yml          # Structural tier
 ├── statistical.yml         # Statistical tier
-├── semantic.yml            # Semantic tier
-└── federation.yml          # Federation tests
+└── semantic.yml            # Semantic tier
 
 docker/compose/
 ├── e2e.yml                 # Core E2E tests
-├── structural.yml          # Structural tier
-├── tiered.yml              # Statistical + Semantic (profiles: statistical, semantic)
-└── federation.yml          # Edge-to-cloud
+└── tiered.yml              # Structural + Statistical + Semantic (profiles: structural, statistical, semantic)
 ```
 
 ## Running Tests
@@ -147,11 +147,13 @@ Tests validate actual data storage, not just component health.
 ## External Dependencies
 
 ### SemEmbed (Semantic Tier)
+
 - **Port**: 8081
 - **Model**: BAAI/bge-small-en-v1.5
 - **API**: OpenAI-compatible /v1/embeddings
 
 ### SemInstruct (Semantic Tier)
+
 - **Port**: 8083
 - **Backend**: shimmy or OpenAI
 - **API**: OpenAI-compatible /v1/chat/completions
@@ -167,23 +169,62 @@ docker logs semstreams-tiered-nats # Check NATS logs
 
 ## CI Integration
 
-### PR Checks
-```yaml
-- task e2e:core
-- task e2e:structural
+Two workflows gate a PR to `main`. Neither runs a `core` → `structural` → `statistical` → `semantic` ladder —
+the trigger and job names below come straight from the workflow files.
+
+### `.github/workflows/ci.yml` (push/PR to `main`/`develop`)
+
+Runs `Lint`, `Test` (unit + integration via `scripts/run-integration-tests.sh`), `Build`, and `Schema Validation`,
+gated by a `CI Status Check` job. **No e2e task runs in this workflow.**
+
+### `.github/workflows/e2e-ladder.yml` (`pull_request` + `workflow_dispatch`)
+
+| Job | Task | Required check on `main`? |
+|-----|------|----------------------------|
+| `e2e slow consumer attribution` | `task e2e:slow-consumer` | No |
+| `e2e statistical` | `task e2e:statistical` | **Yes** |
+
+The `statistical` variant of the `tiered` scenario boots the full stack and validates health/dataflow along the
+way, so a separate `core` job would be redundant (see the header comment in `e2e-ladder.yml`). There is no
+`structural` or `semantic` job in this workflow.
+
+### Required checks (branch ruleset on `main`)
+
+`gh api repos/C360Studio/semstreams/rules/branches/main` lists exactly two required status checks: `CI Status
+Check` and `e2e statistical`.
+
+### Tag / release
+
+`.github/workflows/release.yml` (push tags `v*`) builds and publishes binaries and release notes; it runs no e2e
+task. `.github/workflows/container.yml` (`workflow_run` after `CI` succeeds on `main`, or push tags) builds and
+pushes the container image; it also runs no e2e task. Per this repo's own hard rule (`CLAUDE.md`, "Breaking
+changes — E2E required before merge"), a relevant e2e tier must be run **manually** and green before any
+BREAKING commit is tagged — that gate is a documented obligation on the person tagging, not something any
+workflow automates.
+
+### Local-only tiers
+
+`task e2e:core`, `task e2e:structural`, and `task e2e:semantic` (default, `:8b`, `:frontier`) run in no automatic
+workflow:
+
+```bash
+task e2e:core        # Health + dataflow + graph round-trip
+task e2e:structural  # Rules + structural inference
+task e2e:semantic    # Neural embeddings + LLM, small-model CI-shaped default
 ```
 
-### Main Branch
-```yaml
-- task e2e:core
-- task e2e:structural
-- task e2e:statistical
-```
+`task e2e:core` also runs, manually only, as the `semstreams-core` job in `sister-validation.yml`
+(`workflow_dispatch`-only). That job's comment notes "the per-PR statistical gate lives in `e2e-ladder.yml`; this
+dispatch-only workflow is not its owner" — it is diagnostic holdout tooling, not this repo's own gate.
 
-### Release
-```yaml
-- task e2e:semantic
-```
+### Pending: wiring the semantic tier into the ladder
+
+Owner-ruled target (2026-08-27, [#1117](https://github.com/C360Studio/semstreams/issues/1117)): the default
+`semantic` variant — already the CI-shaped small-model configuration in `taskfiles/e2e/semantic.yml` — gets wired
+into `e2e-ladder.yml` as a **per-PR** job, not a nightly one; schedule-triggered runs are reserved for out-of-band
+security scanning, never functional e2e. The open question is which assertions the per-PR gate carries (path vs
+quality), not per-PR-vs-nightly. As of this writing #1117 is **open, not done** — the semantic tier still runs in
+no workflow.
 
 ## References
 
