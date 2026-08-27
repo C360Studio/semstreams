@@ -322,9 +322,46 @@ before the omission, and record `shasum -a 256` equality of the restored file. C
 - [x] 6.5 `go test ./test/contract/...`.
       → `ok github.com/c360studio/semstreams/test/contract 2.670s`. `task schema:check-changes` → clean
       (`git diff --exit-code schemas/ specs/openapi.v3.yaml` passes).
-- [ ] 6.6 **BREAKING e2e gate** (ADR-100 Consequences; the repository rule is that a BREAKING commit has its covering
+- [x] 6.6 **BREAKING e2e gate** (ADR-100 Consequences; the repository rule is that a BREAKING commit has its covering
       tier green BEFORE it lands): `task e2e:core`, `task e2e:crud-tools` (the tool registry boots without the flow
       gates), `task e2e:agentic` (the largest shipped composition through the boot check). Paste each tier summary here.
+
+      All three run on this branch's head `2c5d4add`, one at a time, with the host coordinated
+      (`task e2e:check-ports` clean, no foreign `semstreams|e2e` containers, `/private/tmp/claude-501/e2e-lock-gh1093`
+      held for the sequence and removed after teardown). Every tier tore its compose stack down; `docker ps` after the
+      sequence shows only the unrelated `semdev-nats`.
+
+      **`task e2e:core` → exit=0.**
+      ```
+      [OK] All services are healthy
+      [OK] Readiness and heartbeat report 12/12 healthy components
+      Scenario PASSED name=core-health
+      Scenario PASSED name=core-dataflow          (36.3s; 10 messages sent, 10 file lines, ws output route 101)
+      Scenario PASSED name=core-graph-roundtrip
+      Test suite complete passed=3 failed=0 total=3
+      [OK] SIGTERM exited 0, released listeners, completed shutdown, and left NATS healthy
+      [OK] Early SIGTERM canceled blocked NATS boot, exited 1, and fenced service startup
+      ```
+      This tier boots `configs/protocol-flow.json`, the one shipped config that named the `flow-builder` service; it
+      boots with that block removed and the component count is unchanged (the removal was a service, not a component).
+
+      **`task e2e:crud-tools` → exit=0.** The tool registry boots with the two flow gates gone:
+      ```
+      Scenario completed successfully duration=981.4ms
+        verify-registered-tools_duration_ms:38  verify-tool-effect-catalog_duration_ms:2
+        tool_executions:4  rule_size_bytes:342  hotreload_pickup_latency_ms:329
+        fire_every_n_triggered_delta:9  fire_every_n_gate_passes_delta:3  fire_every_n_not_triggered_delta:0
+      ```
+
+      **`task e2e:agentic` → exit=0.** The largest shipped composition through the boot check:
+      ```
+      [OK] Services are healthy (NATS + mock-llm + semstreams)
+      Scenario completed successfully duration=45.26s
+        graph_loop_triples:10  graph_model_triples:6  trajectory_facts:10
+        governance_verdicts_total:1  governance_verdicts_approved_audit:1
+        durable_tool_replay_executor_invocations:1  stream_chunks_total:5  tool_executions:1
+      ```
+
 - [x] 6.7 Downstream measurement (read-only): `cd ~/Code/c360/semteams && go vet ./cmd/semteams/` against a `replace`
       to this branch in a scratch module (never edit semteams; snapshot its porcelain and use
       `GOFLAGS=-mod=readonly` or a scratch copy so its `go.mod` is not rewritten); record the compile errors as the
@@ -353,12 +390,44 @@ before the omission, and record `shasum -a 256` equality of the restored file. C
       FILED #n / ruling) recorded here. Findings on unused paths are FILED, not fixed.
 - [ ] 7.2 Owner-run cross-agent round where the owner asks for it: verdict and dispositions recorded here; each fix
       re-enters 7.1.
-- [ ] 7.3 `conformance.md`: replace every `__` placeholder with the measured `file:line` at the head that carries the
+- [x] 7.3 `conformance.md`: replace every `__` placeholder with the measured `file:line` at the head that carries the
       last `.go` or delta change. Maintained as part of every commit that moves a line, not at the end.
-- [ ] 7.4 Reconcile: every REMOVED requirement in `specs/flow-authoring/spec.md` and
+
+      DONE at `2c5d4add` + this commit; every `__` in `conformance.md` replaced with a measured `file:line`, each
+      re-read after the last code change on the branch. The CARRIED row now records the 3.3 resolution rather than
+      pointing at an open question.
+- [x] 7.4 Reconcile: every REMOVED requirement in `specs/flow-authoring/spec.md` and
       `specs/component-runtime-config/spec.md` names tests that no longer exist; every scenario in
       `specs/composition-validation/spec.md` names a test that exists and is green in 6.2/6.3/6.5; table recorded here.
       Any `[~]` in this file is ALSO written into the delta before archiving.
+
+      **Table A — every test named by a REMOVED requirement is gone.** Command:
+      `grep -oE "Test[A-Za-z0-9_]+" <the two REMOVED deltas> | sort -u` then `grep -rn "func <name>(" --include='*_test.go' .`
+      All **17** return 0 occurrences: `TestManagerUpdatePreservesStoredCreatedAt`,
+      `TestManagerUpdateIgnoresForgedCreatedAt`, `TestManagerUpdateSuccessMutatesInputAfterCommit`,
+      `TestManagerDiagramCRUDAndVersioning`, `TestManagerUpdateFailedWriteDoesNotMutateInput`,
+      `TestManagerUpdateTwoManagersExactlyOneWins`,
+      `TestFlowCRUDDoesNotPublishAndExplicitPublicationRetriesThroughConfigManager`,
+      `TestFlowUpdateRequestSchemaOmitsServerAuditFields`, `TestFlowOpenAPIPreservesFlowCRUDWireSchema`,
+      `TestManagerListEmptyBucketReturnsNonNilEmpty`, `TestManagerListSkipsOnlyVanishedKey`,
+      `TestManagerListPreservesPerKeyTransientFailure`, `TestManagerListPreservesCorruptRecordFailure`,
+      `TestManagerListRejectsCancellationDuringEnumeration`, `TestHandleListFlowsEmptyResponseIsNonNullArray`,
+      `TestEnsureDefaultFlowEmptyListUsesTypedOutcome`, `TestFlowExecutorListFlowsRealManagerEmpty`.
+
+      **Table B — every test named by the `composition-validation` delta exists and is green in 6.2/6.5.**
+
+      | Test | Location | Gate that ran it |
+      |---|---|---|
+      | `TestComponentGapsOperationIsAbsent` | `service/component_manager_gaps_removed_test.go:45` | 6.2 |
+      | `TestExternalInputIsNeverACriticalOrphanOnAnyComponentOperation` | `service/component_manager_gaps_removed_test.go:68` | 6.2 |
+      | `TestServiceRegistryHasNoFlowBuilder` | `service/register_test.go:29` | 6.2 |
+      | `TestOpenAPIHasNoFlowRoutes` | `test/contract/openapi_no_flow_routes_test.go:41` | 6.5 |
+      | `TestToolRegistryHasNoFlowTools` | `processor/agentic-tools/executors/register_test.go:501` | 6.2 |
+      | `TestStreamOverrideExpiryReporterRegistersWithoutFlowService` | `service/stream_override_expiry_test.go:181` | 6.2 |
+      | `TestComponentManagerFlowReportingUsesRetainedPortsAfterComponentMutation` | `service/component_manager_port_facts_test.go:107` | 6.2 |
+      | `TestComponentManagerProjectionCarriesOnlyAdmittedInstances` | `service/component_manager_port_facts_test.go:90` | 6.2 |
+
+      No `[~]` remains in this file; 3.3's decisions are SHALL clauses in the delta, not deferrals.
 - [ ] 7.5 `openspec archive flow-authoring-retirement` with the spec sync as the final content commit — the
       `flow-authoring` capability directory leaves `openspec/specs/` with it; the narrow reviewer check of the
       archive/spec sync follows as a PR comment; then undraft. The PR body is a published layer: re-read it at undraft
