@@ -24,7 +24,7 @@ Premises were measured at `5cc0c7fb` and are re-measured at the claim head; the 
       starting count here so 3.2's closing count is a measurement and not an assertion.
 
       Claim head `78fe095c`. Worktree `../semstreams-wt/claude/gh1093-flow-authoring-retirement`, branch
-      `claude/gh1093-flow-authoring-retirement`, PR #____ (draft, `Closes #1093`).
+      `claude/gh1093-flow-authoring-retirement`, PR #1116 (draft, `Closes #1093`).
       Command (run from the worktree root):
       `grep -rn "flowstore\|flowtemplate\|flowengine\|flow-builder\|flowbuilder" --include='*.go' --include='*.json'
       --include='*.yml' --include='*.md' .`
@@ -37,17 +37,54 @@ Premises were measured at `5cc0c7fb` and are re-measured at the claim head; the 
 
 ## 2. Baseline capture — write the removal guards first
 
-- [ ] 2.1 Removal guards (carried from `composition-validation-substrate` 2.10): `service/register_test.go`
+- [x] 2.1 Removal guards (carried from `composition-validation-substrate` 2.10): `service/register_test.go`
       `TestServiceRegistryHasNoFlowBuilder`; `processor/agentic-tools/executors/register_test.go`
       `TestToolRegistryHasNoFlowTools` (asserts each of the eleven names is absent after `RegisterBuiltins` with every
       dependency non-nil); `test/contract/openapi_no_flow_routes_test.go` `TestOpenAPIHasNoFlowRoutes`;
       `service/stream_override_expiry_test.go` `TestStreamOverrideExpiryReporterRegistersWithoutFlowService`.
-- [ ] 2.2 Baseline capture: run each §2 file with `-run` and record its verbatim first failure line or compile error
+- [x] 2.2 Baseline capture: run each §2 file with `-run` and record its verbatim first failure line or compile error
       here, before any deletion, so each guard is proven load-bearing at the baseline. Commands:
       `go test -race ./service/ -run 'TestServiceRegistryHasNoFlowBuilder|TestStreamOverrideExpiryReporterRegistersWithoutFlowService' -v`;
       `go test -race ./processor/agentic-tools/executors/ -run TestToolRegistryHasNoFlowTools -v`;
       `go test ./test/contract/ -run TestOpenAPIHasNoFlowRoutes -v`.
       Commit the tests before any deletion.
+
+      **Baseline capture at `e4acbdd4` (pre-deletion), verbatim first failure lines.**
+
+      `go test ./service/ -run 'TestServiceRegistryHasNoFlowBuilder' -v`
+      ```
+      --- FAIL: TestServiceRegistryHasNoFlowBuilder (0.00s)
+          register_test.go:37: service registry still offers "flow-builder"; ADR-100 D5 removes the flow-builder service without an alias
+          register_test.go:43: GetAllOpenAPISpecs still carries the "flow-service" declaration; its init() registration must go with the service
+          register_test.go:51: service "flow-service" still declares retired route "/flows"
+      ```
+      (seven route rows in all, one per retired path.)
+
+      `go test ./service/ -run 'TestStreamOverrideExpiryReporterRegistersWithoutFlowService' -v`
+      ```
+      --- FAIL: TestStreamOverrideExpiryReporterRegistersWithoutFlowService (0.02s)
+          Error: Should be true
+          Messages: metric semstreams_streams_migration_override_expiredmap[owner:team-legacy stream:LAPSED] must be published
+      ```
+
+      `go test ./processor/agentic-tools/executors/ -run TestToolRegistryHasNoFlowTools -v`
+      ```
+      --- FAIL: TestToolRegistryHasNoFlowTools (0.00s)
+          register_test.go:556: BuiltinGroupKeys still carries "flows"; the group it skipped no longer exists
+          register_test.go:556: BuiltinGroupKeys still carries "flow_templates"; the group it skipped no longer exists
+      ```
+      Honest note on this one: at the baseline `ToolDependencies.FlowManager` is left nil, so `registerFlows`
+      SKIPS and the eleven-name assertion passes vacuously; only the `BuiltinGroupKeys` assertion is load-bearing
+      at the baseline. Setting the two managers non-nil here would mean naming `flowstore`/`flowtemplate` types that
+      §3 deletes, i.e. a test that has to be EDITED to go green. The eleven-name assertion is proven load-bearing
+      instead by the forced omission in 4.3, at the final head.
+
+      `go test ./test/contract/ -run TestOpenAPIHasNoFlowRoutes -v`
+      ```
+      --- FAIL: TestOpenAPIHasNoFlowRoutes (0.00s)
+          openapi_no_flow_routes_test.go:46: specs/openapi.v3.yaml still publishes "/flows"; ADR-100 D5 removes it without an alias
+      ```
+      (seven path rows and eight schema rows in all.)
 
 ## 3. GREEN — rehome, then delete
 

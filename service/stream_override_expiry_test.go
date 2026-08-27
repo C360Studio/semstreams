@@ -1,16 +1,20 @@
 package service
 
 import (
+	"context"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
+	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/metric"
+	"github.com/c360studio/semstreams/natsclient"
 )
 
 func expiryReporter(t *testing.T, cfg *config.Config) (*streamOverrideExpiryReporter, *strings.Builder, *metric.MetricsRegistry) {
@@ -111,4 +115,84 @@ func TestOverrideExpiry_RemovedOverrideStopsReporting(t *testing.T) {
 
 	_, ok := gaugeValue(t, registry, "semstreams_streams_migration_override_expired", labels)
 	assert.False(t, ok, "an override the operator deleted must not keep a series standing")
+}
+
+// --- rehome guard (ADR-100 D5, #1093) ---------------------------------------
+
+// composeComponentManagerWithOverride drives the PRODUCTION composition path —
+// embedded NATS, a real config.Manager over a boot config carrying a migration
+// override, and NewComponentManager — because the property under test is the
+// wiring, not the reporter. A helper-only assertion would keep passing after
+// the wiring was dropped, which is the exact failure the rehome must not have.
+func composeComponentManagerWithOverride(
+	t *testing.T, overrides config.StreamMigrationOverrides, logger *slog.Logger,
+) (Service, *metric.MetricsRegistry) {
+	t.Helper()
+
+	server, err := natsserver.NewServer(&natsserver.Options{
+		Port: -1, NoLog: true, NoSigs: true, JetStream: true, StoreDir: t.TempDir(),
+	})
+	require.NoError(t, err)
+	server.Start()
+	t.Cleanup(func() {
+		server.Shutdown()
+		server.WaitForShutdown()
+	})
+	if !server.ReadyForConnections(10 * time.Second) {
+		t.Fatal("embedded NATS server not ready")
+	}
+	client, err := natsclient.NewClient(server.ClientURL())
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	require.NoError(t, client.Connect(ctx))
+	t.Cleanup(func() { _ = client.Close(context.WithoutCancel(ctx)) })
+
+	bootConfig := &config.Config{StreamMigrationOverrides: overrides}
+	configManager, err := config.NewConfigManager(bootConfig, client, logger)
+	require.NoError(t, err)
+
+	registry := metric.NewMetricsRegistry()
+	manager, err := NewComponentManager(json.RawMessage(`{}`), &Dependencies{
+		NATSClient:      client,
+		MetricsRegistry: registry,
+		Logger:          logger,
+		Manager:         configManager,
+	})
+	require.NoError(t, err)
+	return manager, registry
+}
+
+// TestStreamOverrideExpiryReporterRegistersWithoutFlowService is the guard for
+// the one production concern that must not die with the flow-builder service.
+// The reporter was hosted ONLY by FlowService (`flow_service.go:560-585` before
+// removal); ADR-100 D5 deletes that service, so the metric moves to the
+// component-manager — the one service the framework treats as mandatory
+// (`service_manager.go` mandatoryServices; a configuration that disables it is
+// refused with MandatoryServiceDisabledError). Hosting it on an optional
+// service would hand the operator a fact to predict: "also enable X or your
+// bridge lapses silently."
+//
+// It asserts the metric is registered against the registry the /metrics
+// endpoint scrapes, not merely that a RegisterMetrics method exists: nothing in
+// the framework calls Service.RegisterMetrics (see storage_observability.go),
+// so a metric reachable only through it is a phantom.
+func TestStreamOverrideExpiryReporterRegistersWithoutFlowService(t *testing.T) {
+	logs := &strings.Builder{}
+	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	_, registry := composeComponentManagerWithOverride(t, config.StreamMigrationOverrides{
+		"LAPSED": {Owner: "team-legacy", Expires: "2020-01-01", Reason: "sizing study"},
+		"OPEN":   {Owner: "team-current", Expires: "2999-01-01", Reason: "sizing study"},
+	}, logger)
+
+	const metricName = "semstreams_streams_migration_override_expired"
+	assert.Equal(t, 1.0,
+		requireGauge(t, registry, metricName, map[string]string{"stream": "LAPSED", "owner": "team-legacy"}),
+		"a lapsed bridge must still report after the flow-builder service is gone")
+	assert.Equal(t, 0.0,
+		requireGauge(t, registry, metricName, map[string]string{"stream": "OPEN", "owner": "team-current"}),
+		"an open bridge reports zero so the alert series exists before it matters")
+	assert.Contains(t, logs.String(), "EXPIRED",
+		"the WARN half of the report must survive the rehome too")
 }

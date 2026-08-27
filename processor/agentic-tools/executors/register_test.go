@@ -503,3 +503,57 @@ func TestCoreToolGroupsExcludeProductAndCapabilityTools(t *testing.T) {
 		}
 	}
 }
+
+// retiredFlowToolNames is the eleven-tool set ADR-100 decision D5 removes,
+// spelled out rather than derived: a list derived from the registration table
+// that registers them would agree with itself after the table was emptied AND
+// after it was refilled.
+var retiredFlowToolNames = []string{
+	"create_flow", "update_flow", "delete_flow", "list_flows", "get_flow",
+	"create_flow_template", "update_flow_template", "delete_flow_template",
+	"list_flow_templates", "get_flow_template", "instantiate_flow_template",
+}
+
+// TestToolRegistryHasNoFlowTools is the absence guard for ADR-100 D5 on the
+// agent-facing surface. It drives RegisterBuiltins with every dependency the
+// framework still has non-nil, so no gate is skipped for want of a manager and
+// the maximal registration is what gets inspected. Agents reach compositions
+// through the read-only catalog / validate / graph verbs instead
+// (composition-validation).
+func TestToolRegistryHasNoFlowTools(t *testing.T) {
+	t.Parallel()
+	reg := agentictools.NewExecutorRegistry()
+	err := RegisterBuiltins(context.Background(), reg, ToolDependencies{
+		NATSClient:        &natsclient.Client{},
+		MutationClient:    &projection.MutationClient{},
+		Logger:            slog.Default(),
+		RuleManager:       &recordingRuleManager{},
+		PersonaManager:    newMockPersonaManager(),
+		ComponentRegistry: component.NewRegistry(),
+	})
+	if err != nil {
+		t.Fatalf("RegisterBuiltins: %v", err)
+	}
+
+	registered := reg.ListTools()
+	for _, name := range retiredFlowToolNames {
+		if containsName(registered, name) {
+			t.Errorf("tool registry still advertises %q; ADR-100 D5 removes it without an alias", name)
+		}
+	}
+
+	// Name-shaped backstop: a re-entry under a spelling the list above does not
+	// carry is still the retired surface returning.
+	for _, tool := range registered {
+		lowered := strings.ToLower(tool.Name)
+		if strings.Contains(lowered, "_flow") || strings.HasSuffix(lowered, "_flows") {
+			t.Errorf("tool %q names the retired flow-authoring surface", tool.Name)
+		}
+	}
+
+	for _, key := range BuiltinGroupKeys {
+		if key == "flows" || key == "flow_templates" {
+			t.Errorf("BuiltinGroupKeys still carries %q; the group it skipped no longer exists", key)
+		}
+	}
+}
