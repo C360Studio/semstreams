@@ -274,25 +274,18 @@ from the generated OpenAPI document, with no alias; the Go surface it reached �
 `ComponentManager.DetectObjectStoreGaps`, and the `ComponentGap` type — SHALL be absent too. That operation classified a
 required input declared `external` as a critical orphan (`no_publishers`, `critical_port_count: 1`, `has_issues: true`)
 while the canonical judgment raised no finding for the same port; a second interpreter of one analysis is refused rather
-than re-projected. Pre-v1 fresh-state policy applies: no compatibility view and no legacy reader. A projection that
-derives no severity is not a judgment and is unaffected.
+than re-projected. Pre-v1 fresh-state policy applies: no compatibility view and no legacy reader.
 
-> `[~]` DELIBERATE NOT-DONE (2026-08-26, this change): one second judgment of this class SURVIVES at this head, and it
-> is served, not merely test scaffolding. `POST <flowbuilder>/flows/{id}/validate` (`service/flow_service.go:197`,
-> handler `:516`) reaches `engine.ValidateFlowDefinition` (`engine/engine.go:73`) and
-> `engine/validator.go:309` `convertAnalysisToResult`, which applies its OWN severity table over the same
-> `flowgraph` analysis and contains no `External` check at all (`grep -rn External engine/` → 0): `:328-334` makes every
-> required stream input with `no_publishers` an error, so an input this capability's requirement declares externally fed
-> is reported as an error there. That is precisely the class the SHALL above forbids, and it is retained ONLY because
-> ADR-100 D5 deletes the whole authoring surface that serves it — `openspec/changes/flow-authoring-retirement/` task 3.2
-> removes `engine/`, `service/flow_service.go`, and that route together. Removing the route without the surface would
-> leave a saved-diagram store with no validator; removing it here would perform #1093 inside #1092.
-> Retained for the same one-more-PR reason, and separately: `flowgraph.FlowGraph.AnalyzeConnectivity` — the analysis
-> `composition.Analyze` itself runs (`composition/analyze.go:59`), so it is canonical and only its `engine` caller
-> leaves; and `ComponentManager.GetFlowGraph` with `GET <components>/paths` (reachability from input components — a
-> projection that derives no severity, therefore not a judgment), which still build a graph from the admitted registry.
-> Whether `/paths` should serve the retained `composition.Result.Graph` instead of rebuilding is #1093's scope, not this
-> change's, and is recorded there. Only the judging operation ComponentManager itself served is removed here.
+`POST <flowbuilder>/flows/{id}/validate` — the served second severity table, which applied its own error rule to
+required stream inputs with no publisher and performed no `External` check — SHALL be absent, together with the
+`engine` package that computed it. `flowgraph.FlowGraph.AnalyzeConnectivity` SHALL report connected components,
+disconnected nodes, and orphaned ports and SHALL derive no status of its own; `composition.Result.Status` is the one
+status. `flowgraph.BuildFromRegistry` SHALL be absent: `flowgraph.BuildFromDeclarations` is the one construction seam,
+and `composition.Analyze` is its production caller.
+
+A projection that derives no severity is not a judgment and is unaffected, but SHALL be derived from the retained
+`composition.Result` rather than from a second graph build. `GET <components>/paths` SHALL serve reachability computed
+from `composition.Result.Graph`; `ComponentManager.GetFlowGraph` and its Registry rebuild and cache SHALL be absent.
 
 #### Scenario: the gap operation is absent from the routed and advertised surface
 
@@ -310,6 +303,24 @@ derives no severity is not a judgment and is unaffected.
 - **THEN** no response body carries `no_publishers`, `orphaned_port`, `critical`, or `has_issues` for that port, the
   retained boot result has no error finding, and the projection shows the marker on the port
 - **AND** the test that verifies this is `TestExternalInputIsNeverACriticalOrphanOnAnyComponentOperation`
+
+#### Scenario: the saved-diagram validation route is absent with its engine
+
+- **WHEN** the service registry, the generated OpenAPI document, and the Go surface are inspected
+- **THEN** no service named `flow-builder` is registered, no `/flows/{id}/validate` path is advertised, and no `engine`
+  package exists to compute a second severity table
+- **AND** the tests that verify this are `TestServiceRegistryHasNoFlowBuilder` and `TestOpenAPIHasNoFlowRoutes`
+
+#### Scenario: the paths projection serves the retained graph
+
+- **GIVEN** a ComponentManager whose live component instances were mutated after admission
+- **WHEN** `<components>/paths` is requested alongside `<components>/flowgraph` and `<components>/validate`
+- **THEN** all three answer from the composition result retained at Initialize, and no second graph is built from the
+  Registry
+- **AND** the reachability it reports follows the retained graph's derived edges from every origin form — a declared
+  input type, a network-listening port, and an outbound HTTP-client port
+- **AND** the tests that verify this are `TestComponentManagerFlowReportingUsesRetainedPortsAfterComponentMutation`,
+  `TestComponentManagerProjectionCarriesOnlyAdmittedInstances`, and `TestFlowPathsTraverseTheRetainedGraph`
 
 ### Requirement: Agents read the catalog, validate, and project through read-only tools
 
@@ -344,4 +355,49 @@ that assertion SHALL be a unit test so a configuration change that introduces an
 - **WHEN** every shipped configuration is validated against the registry its binary composes
 - **THEN** no result has an error finding
 - **AND** the test that verifies this is `TestValidateShippedConfigsHaveNoErrorFindings`
+
+### Requirement: The framework owns no composition authoring store
+
+The framework SHALL register no `flow-builder` service, SHALL serve no `/flowbuilder/*` route, SHALL register no
+`create_flow`, `update_flow`, `delete_flow`, `list_flows`, `get_flow`, `create_flow_template`,
+`update_flow_template`, `delete_flow_template`, `list_flow_templates`, `get_flow_template`, or
+`instantiate_flow_template` tool, SHALL create no `semstreams_flows` or `FLOW_TEMPLATES` bucket, and SHALL provide no
+compatibility alias for any of them. The framework SHALL publish no schema artifact for the retired surface:
+`schemas/workflow-definition.v1.json` SHALL be absent, and no schema file SHALL be exempt from the schema contract
+guards. The stream-override expiry metric formerly hosted by the flow-builder service SHALL be registered by a
+retained service so its removal does not remove the metric, and the loop that refreshes it SHALL complete before that
+service's `Stop` returns.
+
+#### Scenario: the removed surfaces are absent
+
+- **WHEN** the service registry, the tool registry, and the generated OpenAPI document are inspected
+- **THEN** none names a flow-builder service, a flow or flow-template tool, or a `/flowbuilder` or `/flows` path
+- **AND** the tests that verify this are `TestServiceRegistryHasNoFlowBuilder`, `TestToolRegistryHasNoFlowTools`, and
+  `TestOpenAPIHasNoFlowRoutes`
+
+#### Scenario: the override-expiry metric survives the removal
+
+- **GIVEN** a boot configuration with a stream override and no flow-builder service
+- **WHEN** the process composes its services
+- **THEN** the stream-override expiry metric is registered against the registry the `/metrics` endpoint scrapes, and
+  reports the override
+- **AND** the test that verifies this is `TestStreamOverrideExpiryReporterRegistersWithoutFlowService`
+
+#### Scenario: the refresh loop is joined before Stop returns
+
+- **GIVEN** a running host service whose override-expiry loop is mid-evaluation
+- **WHEN** the service is stopped
+- **THEN** `Stop` does not return until that loop has returned, so no goroutine outlives it
+- **AND** a refused `Start` launches no loop at all
+- **AND** the tests that verify this are `TestSuperviseHoldsDoneUntilTheOverrideExpiryLoopReturns`,
+  `TestComponentManagerStopWaitsForTheOverrideExpiryLoop`, and
+  `TestComponentManagerFailedStartDoesNotLaunchOverrideExpiryLoop`
+
+#### Scenario: the retired schema artifact is absent and nothing is exempt from the guards
+
+- **WHEN** the `schemas/` directory and the schema contract tests are inspected
+- **THEN** `schemas/workflow-definition.v1.json` is absent, the generator does not re-create it, and no exemption list
+  excuses any schema file from the drift, structure, orphan, or default-ports guards
+- **AND** the tests that verify this are `TestCommittedSchemasMatchCode`, `TestCommittedSchemasValidStructure`,
+  `TestNoOrphanedSchemaFiles`, and `TestSchemaExportCarriesDefaultPorts` — all four fail if the artifact is restored
 

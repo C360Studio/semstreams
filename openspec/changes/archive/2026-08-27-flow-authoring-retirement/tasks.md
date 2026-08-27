@@ -640,6 +640,55 @@ before the omission, and record `shasum -a 256` equality of the restored file. C
       `flow-authoring` capability directory leaves `openspec/specs/` with it; the narrow reviewer check of the
       archive/spec sync follows as a PR comment; then undraft. The PR body is a published layer: re-read it at undraft
       and correct any claim the branch no longer supports.
+      ARCHIVE DONE (this commit); the narrow reviewer check and the undraft are the coordinator's, so this line stays
+      open until they happen — it must not assert a fact that is not yet true.
+
+      **The archiver could not express a retired capability, and this is how it was handled.** `openspec archive`
+      1.7.0 rebuilds a spec for every capability that has a delta and then validates it. A delta that REMOVES all
+      eleven requirements rebuilds an empty spec, and the archiver refuses:
+      ```
+      Validation errors in rebuilt spec for flow-authoring (will not write changes):
+        ✗ Spec must have at least one requirement
+      Aborted. No files were changed.
+      ```
+      Deleting `openspec/specs/flow-authoring/` first does not help — the archiver switches to `create` mode, reports
+      `11 REMOVED requirement(s) ignored for new spec (nothing to remove)`, and refuses the same empty result.
+      `--skip-specs` was NOT used: it would have skipped all three spec updates, leaving the `[~]` block and the
+      Flow-publication requirement standing as current truth — the false-evidence class the Codex round had just
+      corrected. There is no precedent in `openspec/changes/archive/` for retiring a live capability
+      (`2026-08-21-semantic-tier-split`'s `e2e-tiers` was a WITHDRAWN proposal that never was current truth), and no
+      delta operation expresses "this capability ceases to exist".
+
+      Mechanics used, each step verifiable:
+      1. `openspec/changes/flow-authoring-retirement/specs/flow-authoring/` moved aside (sha256
+         `1b7a191f6d7639451d8ad9d5a4ef3d936ef49fe360f933540c1ccfdf0a8ad9ed`).
+      2. `openspec archive flow-authoring-retirement --yes` → exit 0:
+         `component-runtime-config` −1 removed; `composition-validation` +1 added, ~1 modified;
+         `Totals: + 1, ~ 1, - 1, → 0`.
+      3. The held delta restored into the archived change at `specs/flow-authoring/spec.md` — same sha256, so the
+         eleven REMOVED requirements survive as the durable record of what was retired and why.
+      4. `git rm -r openspec/specs/flow-authoring` — the retirement of a capability is a file deletion, which is what
+         it actually is; the pre-removal spec was sha256
+         `594f130094395cac2ccb27d74398c284b04ebef522ddb45d5192d82c701e5d4e` and is recoverable from git history and
+         from the archived delta.
+
+      Header-set evidence (`grep -E '^### Requirement|^#### Scenario'`, before vs after), zero dropped and zero
+      duplicated in both:
+      - `component-runtime-config` 47 → 44 headers; the ONLY change is the removal of
+        `### Requirement: Explicit Flow publication reports persistence without activation` with its two scenarios
+        `Publication succeeds for the next boot` and `Publication validation fails before writes`.
+      - `composition-validation` 34 → 41 headers; two scenarios added to the MODIFIED requirement
+        (`the saved-diagram validation route is absent with its engine`, `the paths projection serves the retained
+        graph`) with both of its original scenarios retained verbatim, plus the new requirement
+        `The framework owns no composition authoring store` and its four scenarios.
+      - `sort | uniq -d` over both after-sets → 0 duplicate headers.
+      - The `[~] DELIBERATE NOT-DONE` block is gone from `openspec/specs/composition-validation/spec.md` (grep → 0).
+
+      `openspec validate --all --strict` → 53 passed, 0 failed (55 before: the change left the in-flight set and
+      `flow-authoring` left the spec set). `task openspec:queue` → this change no longer in flight.
+      `flow-authoring` capability directory leaves `openspec/specs/` with it; the narrow reviewer check of the
+      archive/spec sync follows as a PR comment; then undraft. The PR body is a published layer: re-read it at undraft
+      and correct any claim the branch no longer supports.
 
 ## 8. Not in scope (recorded so the archiver does not infer completion)
 
