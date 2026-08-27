@@ -25,6 +25,7 @@ type fakeEmitter struct {
 	mu       sync.Mutex
 	bucket   *fakeBucket
 	requests []*graph.ReconcilePredicatesRequest
+	creates  []*graph.CreateEntityRequest
 	deletes  []*graph.DeleteEntityRequest
 	// deleteErr, when non-nil, makes delete() fail WITHOUT touching the
 	// bucket — used to drive the DespawnWith partial-failure recovery path
@@ -96,6 +97,7 @@ func (f *fakeEmitter) reconcile(_ context.Context, req *graph.ReconcilePredicate
 func (f *fakeEmitter) create(_ context.Context, req *graph.CreateEntityRequest) (*graph.CreateEntityResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.creates = append(f.creates, req)
 	if f.bucket.exists(req.Entity.ID) {
 		// ADR-060: production create() returns (nil, <error wrapping ErrAlreadyExists>).
 		return nil, fmt.Errorf("%w: entity already exists", ErrAlreadyExists)
@@ -351,12 +353,19 @@ func (lifecycle) fixtureWorkflow() Workflow {
 
 func TestManager_RoundTripCreateGetTransition(t *testing.T) {
 	t.Parallel()
-	mgr, _, _ := newTestManager(t)
+	mgr, emitter, _ := newTestManager(t)
 	ctx := context.Background()
 
 	id := "c360.platform1.lifecycle.gcs.mission.001"
 	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning", OwnerOrgID: "acme"}); err != nil {
 		t.Fatalf("Create: %v", err)
+	}
+	// ADR-103: every harness birth is stamped with the registered type.
+	emitter.mu.Lock()
+	creates := append([]*graph.CreateEntityRequest(nil), emitter.creates...)
+	emitter.mu.Unlock()
+	if len(creates) != 1 || creates[0].Entity == nil || creates[0].Entity.MessageType != HarnessMessageType() {
+		t.Fatalf("create request stamp = %#v, want %s", creates, HarnessMessageType().Key())
 	}
 	got, err := mgr.Get(ctx, "fixture", id)
 	if err != nil {

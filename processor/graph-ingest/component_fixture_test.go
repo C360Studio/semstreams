@@ -1,7 +1,7 @@
 package graphingest
 
 import (
-	"strings"
+	"fmt"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic/research"
@@ -41,26 +41,16 @@ func testEntityType() message.Type {
 	return message.Type{Domain: "test", Category: "entity", Version: "v1"}
 }
 
-func registerTestStamps(reg *payloadregistry.Registry) error {
+// registerTestStamps adds graph research and every test-only stamp through
+// payloadregistry.RegisterTestType — the one stub-type spelling.
+func registerTestStamps(tb testing.TB, reg *payloadregistry.Registry) {
+	tb.Helper()
 	if err := research.RegisterPayloads(reg); err != nil {
-		return err
+		tb.Fatalf("register research payloads: %v", err)
 	}
 	for _, key := range testStampKeys {
-		parts := [3]string{}
-		copy(parts[:], splitTypeKey(key))
-		if err := reg.Register(&payloadregistry.Registration{
-			Domain: parts[0], Category: parts[1], Version: parts[2],
-			Description: "graph-ingest test stub type " + key,
-			Factory:     func() any { return &struct{}{} },
-		}); err != nil {
-			return err
-		}
+		payloadregistry.RegisterTestType(tb, reg, key)
 	}
-	return nil
-}
-
-func splitTypeKey(key string) []string {
-	return strings.SplitN(key, ".", 3)
 }
 
 // newTestPayloadRegistry builds the registry graph-ingest tests inject:
@@ -68,23 +58,25 @@ func splitTypeKey(key string) []string {
 func newTestPayloadRegistry(tb testing.TB) *payloadregistry.Registry {
 	tb.Helper()
 	reg := payloadbuiltins.NewTestRegistry(tb)
-	if err := registerTestStamps(reg); err != nil {
-		tb.Fatalf("register test stamps: %v", err)
-	}
+	registerTestStamps(tb, reg)
 	return reg
 }
 
+// panicTB is the panic-shaped testing.TB for helpers that have no test in
+// scope (the shared lifecycle fixture): Fatalf panics, Helper is a no-op,
+// everything else is unreachable from RegisterTestType and NewTestRegistry.
+type panicTB struct{ testing.TB }
+
+func (panicTB) Helper() {}
+
+func (panicTB) Fatalf(format string, args ...any) {
+	panic(fmt.Sprintf("graph-ingest test registry: "+format, args...))
+}
+
 // mustTestPayloadRegistry is newTestPayloadRegistry for helpers that have no
-// testing.TB in scope (the shared lifecycle fixture).
+// testing.TB in scope.
 func mustTestPayloadRegistry() *payloadregistry.Registry {
-	reg := payloadregistry.New()
-	if err := payloadbuiltins.Register(reg); err != nil {
-		panic("register builtin payloads: " + err.Error())
-	}
-	if err := registerTestStamps(reg); err != nil {
-		panic("register test stamps: " + err.Error())
-	}
-	return reg
+	return newTestPayloadRegistry(panicTB{})
 }
 
 // withTestRegistry gives a Component built as a literal (bypassing the

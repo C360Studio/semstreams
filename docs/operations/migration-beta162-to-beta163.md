@@ -92,6 +92,13 @@ through `message.NewDecoder(reg)`, assert the concrete type, `EntityID()`, and t
   type), and have the **host composition root** call it after `payloadbuiltins.Register`. `message/oms.RegisterPayloads` is the
   in-tree model for the shape.
 - **Verification:** round-trip tests in `gateway/cs-api`; one host-side boot that registers both and creates a system resource.
+- **OPEN — owner ruling pending (2026-08-27):** the obligation above is not executable as written. semconnect has no
+  composition root of its own (`semconnect/cmd/` holds only `cs-api-server`); its graph-ingest host is the unmodified
+  framework binary (`semconnect/deploy/compose.yml:19-49`, `conformance/compose.yml:55-73`), which registers only
+  `payloadbuiltins`. Either semconnect builds its own composition root — as semmachina (`cmd/semmachina/main.go:98-99`),
+  semdev (`internal/boot/runtime.go:623-624`), semteams (`cmd/semteams/main.go:872-873`) and semsource
+  (`cmd/semsource/run.go:279-280`) do — and calls its `RegisterPayloads` there, or the framework binary gains a sanctioned
+  registration seam. Until ruled, every CS-API resource birth against a beta.163 framework binary is refused.
 
 ### semteams — pinned `8a70b7e7`
 

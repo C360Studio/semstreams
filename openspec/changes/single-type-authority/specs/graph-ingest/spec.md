@@ -37,10 +37,11 @@ metric label).
 #### Scenario: a hierarchy container is born with a registered type
 
 - **GIVEN** `enable_hierarchy: true` and the builtin payload set registered
-- **WHEN** a Graphable arrival causes graph-ingest to birth a container
+- **WHEN** an entity birth on graph-ingest's in-process lane (`Component.CreateEntity`) causes it to birth a container
 - **THEN** the container's `message_type` is `graph.hierarchy_container.v1`
 - **AND** `indexing_profile_default_total{message_type="unknown"}` does not increment
-- **AND** the test that verifies this is `TestHierarchyContainerBirthCarriesRegisteredType`
+- **AND** the test that verifies this is `TestHierarchyContainerBirthCarriesRegisteredType`; the fact-lane arrival path,
+  which births containers through the same `ensureContainerExists`, is covered by `task e2e:structural`
 
 #### Scenario: an in-process birth with an unregistered type is refused
 

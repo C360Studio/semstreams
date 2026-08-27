@@ -353,3 +353,35 @@ func TestWebObservationEntityMatchesToolBuilders(t *testing.T) {
 		require.Error(t, bad.Validate())
 	})
 }
+
+// TestWebObservationEntityIDAgreesWithRawURLIdentity (review MEDIUM-5): the
+// executors compute the entity ID from the RAW URL and the entity's Triples()
+// compute their Subject from the CANONICAL URL through the same builder; they
+// agree only if canonicalisation is idempotent. Pinned on URLs with a
+// non-trivial path, percent-encoding, a default port, a fragment, userinfo,
+// and a query.
+func TestWebObservationEntityIDAgreesWithRawURLIdentity(t *testing.T) {
+	for _, raw := range []string{
+		"HTTPS://User:Secret@Example.COM:443/Docs/A%20B/c%2Fd/?q=x%26y&z=1#frag",
+		"http://example.com:80/",
+		"https://example.com/path/with%2Fencoded/segment?a=%20b#section-2",
+		"https://example.com/plain",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			rawID, canonical, err := agentic.TryWebObservationEntityID(payloadTestOrg, payloadTestPlatform, raw)
+			require.NoError(t, err)
+			entity := &agentic.WebObservationEntity{
+				Org: payloadTestOrg, Platform: payloadTestPlatform, CanonicalURL: canonical,
+				Tool: agentic.WebObservationToolWebSearch, LoopEntityID: payloadTestLoopID,
+			}
+			require.Equal(t, rawID, entity.EntityID(), "the entity's ID over the canonical URL must equal the executor's ID over the raw URL")
+			for i, triple := range entity.Triples() {
+				assert.Equal(t, rawID, triple.Subject, "triple %d subject", i)
+			}
+			// Canonicalisation is a fixed point: the canonical form canonicalises to itself.
+			_, again, err := agentic.TryWebObservationEntityID(payloadTestOrg, payloadTestPlatform, canonical)
+			require.NoError(t, err)
+			assert.Equal(t, canonical, again)
+		})
+	}
+}
