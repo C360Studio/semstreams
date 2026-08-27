@@ -21,10 +21,9 @@ name: E2E Ladder
 #   - e2e:semantic (neural embeddings + seminstruct, incl. the 8b thematic
 #     gate) is too heavy for per-PR. It stays the pre-tag HARD RULE
 #     (CLAUDE.md: a relevant e2e tier green before any BREAKING tag) + nightly.
-#     TODO (end of pre-v1 mega-plan cleanup): add e2e:semantic here — either a
-#     nightly job or a labeled/opt-in per-PR job — so the neural thematic path
-#     has a standing CI gate, not only the manual pre-tag run. Tracked in the
-#     pre-v1 baton (docs/proposals/prev1-program.md, Epic D).
+#     TODO: add e2e:semantic here — either a nightly job or a labeled/opt-in
+#     per-PR job — so the neural thematic path has a standing CI gate, not only
+#     the manual pre-tag run. Tracked in issue #1117.
 
 on:
   pull_request:

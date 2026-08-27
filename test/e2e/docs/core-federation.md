@@ -93,12 +93,33 @@ type CoreFederationConfig struct {
 
 ## Running
 
-```bash
-# Run federation scenario
-task e2e:federation
+**No task or docker-compose file runs this scenario.** Verified: `task --list | grep e2e:federation` returns
+nothing, and no file under `docker/compose/` mentions federation (`grep -rln federation docker/compose/` is
+empty). The scenario is registered only in `cmd/e2e`'s `--scenario` switch (`cmd/e2e/main.go:383`), and even a
+manual run is missing a prerequisite: `configs/cloud-federation.json`'s WebSocket client dials the literal
+hostname `ws://edge:8082/stream` (`websocket_input.config.client.url`), which resolves only inside a docker
+network that defines an `edge` service — no compose file in this repo defines one, and neither federation config
+sets a distinct HTTP API port, so two instances started from `configs/edge-federation.json` and
+`configs/cloud-federation.json` on the same host will also collide on the default API port.
 
-# Or via CLI
-./cmd/e2e/e2e run core-federation
+To run it manually today you have to supply all of that infrastructure yourself: start two `semstreams`
+instances (`configs/edge-federation.json` and `configs/cloud-federation.json`), give them distinct API ports and
+a way for the cloud instance to resolve `edge` (a shared docker network, an `/etc/hosts` entry, or an edited
+`client.url`), then invoke the CLI with flags — not the `run <scenario>` subcommand form this doc previously
+showed, which the CLI does not support (see the `--scenario` invocations in `test/e2e/README.md`'s "Direct CLI"
+section):
+
+```bash
+cd cmd/e2e
+# --udp-endpoint sends test data into the edge instance (configs/edge-federation.json binds 0.0.0.0:14550).
+# --ws-endpoint is dialed directly BY THE TEST HARNESS as a WebSocket client (test/e2e/scenarios/core_federation.go),
+# so it must point at the edge instance's WS server (configs/edge-federation.json binds 0.0.0.0:8082/stream) —
+# not at the cloud instance.
+./e2e --scenario core-federation \
+  --base-url <edge HTTP API address> \
+  --cloud-url <cloud HTTP API address> \
+  --udp-endpoint <edge UDP address> \
+  --ws-endpoint <edge WS address>
 ```
 
 ## Known Gaps
