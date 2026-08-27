@@ -51,10 +51,17 @@ func appendSubjectSuffix(subject, suffix string) string {
 
 // PortDefinition is a configuration-shaped semantic port declaration.
 type PortDefinition struct {
-	Name        string   `json:"name" schema:"readonly,type:string,description:Port identifier"`
-	Required    bool     `json:"required,omitempty" schema:"readonly,type:bool,description:Whether port connection is required"`
-	Description string   `json:"description,omitempty" schema:"readonly,type:string,description:Human-readable port description"`
-	Config      Portable `json:"config" schema:"editable,type:object,description:Typed semantic port configuration"`
+	Name        string `json:"name" schema:"readonly,type:string,description:Port identifier"`
+	Required    bool   `json:"required,omitempty" schema:"readonly,type:bool,description:Whether port connection is required"`
+	Description string `json:"description,omitempty" schema:"readonly,type:string,description:Human-readable port description"`
+	// External declares that this input is fed from outside the composition
+	// — a UI, a peer process, a rule action — so no publisher in the
+	// composition's graph is expected. It is an operator statement, not a
+	// predicted framework value: composition validation suppresses only the
+	// no-publisher orphan finding for this port and nothing else (ADR-100
+	// owner ruling on user.message, 2026-08-26). Meaningful on inputs.
+	External bool     `json:"external,omitempty" schema:"readonly,type:bool,description:Input is fed from outside the composition; no in-graph publisher is expected"`
+	Config   Portable `json:"config" schema:"editable,type:object,description:Typed semantic port configuration"`
 }
 
 // MarshalJSON writes the canonical common port envelope.
@@ -67,11 +74,13 @@ func (p PortDefinition) MarshalJSON() ([]byte, error) {
 		Name        string          `json:"name"`
 		Required    bool            `json:"required,omitempty"`
 		Description string          `json:"description,omitempty"`
+		External    bool            `json:"external,omitempty"`
 		Config      json.RawMessage `json:"config"`
 	}{
 		Name:        p.Name,
 		Required:    p.Required,
 		Description: p.Description,
+		External:    p.External,
 		Config:      config,
 	}
 	return json.Marshal(wire)
@@ -83,6 +92,7 @@ func (p *PortDefinition) UnmarshalJSON(data []byte) error {
 		Name        string          `json:"name"`
 		Required    bool            `json:"required,omitempty"`
 		Description string          `json:"description,omitempty"`
+		External    bool            `json:"external,omitempty"`
 		Config      json.RawMessage `json:"config"`
 	}
 	if err := decodeStrict(data, &wire); err != nil {
@@ -99,6 +109,7 @@ func (p *PortDefinition) UnmarshalJSON(data []byte) error {
 		Name:        wire.Name,
 		Required:    wire.Required,
 		Description: wire.Description,
+		External:    wire.External,
 		Config:      config,
 	}
 	return nil
@@ -150,6 +161,24 @@ func (p *PortConfig) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// PortConfigFrom returns the configuration-shaped declaration of already
+// resolved ports: the inverse of resolving a PortConfig lane by lane. Factories
+// whose constructor resolves ports use it to expose the same ports as their
+// PortDeclarer without a second derivation.
+func PortConfigFrom(inputs, outputs []Port) PortConfig {
+	config := PortConfig{
+		Inputs:  make([]PortDefinition, len(inputs)),
+		Outputs: make([]PortDefinition, len(outputs)),
+	}
+	for index, port := range inputs {
+		config.Inputs[index] = definitionFromPort(port)
+	}
+	for index, port := range outputs {
+		config.Outputs[index] = definitionFromPort(port)
+	}
+	return config
+}
+
 // MergePortConfig applies complete named replacements to default declarations.
 // Inputs and outputs are independent, ordering is stable, and returned data is cloned.
 func MergePortConfig(defaults, overrides PortConfig) (PortConfig, error) {
@@ -162,6 +191,16 @@ func MergePortConfig(defaults, overrides PortConfig) (PortConfig, error) {
 		return PortConfig{}, err
 	}
 	return PortConfig{Inputs: inputs, Outputs: outputs}, nil
+}
+
+func definitionFromPort(port Port) PortDefinition {
+	return PortDefinition{
+		Name:        port.Name,
+		Required:    port.Required,
+		Description: port.Description,
+		External:    port.External,
+		Config:      port.Config,
+	}
 }
 
 func mergePortDirection(defaults, overrides []PortDefinition, direction Direction) ([]PortDefinition, error) {
@@ -204,13 +243,4 @@ func mergePortDirection(defaults, overrides []PortDefinition, direction Directio
 		result[index] = definitionFromPort(port)
 	}
 	return result, nil
-}
-
-func definitionFromPort(port Port) PortDefinition {
-	return PortDefinition{
-		Name:        port.Name,
-		Required:    port.Required,
-		Description: port.Description,
-		Config:      port.Config,
-	}
 }

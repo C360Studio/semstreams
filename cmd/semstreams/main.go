@@ -20,6 +20,7 @@ import (
 	"github.com/c360studio/semstreams/agentic/agentrun"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/componentregistry"
+	compositioncli "github.com/c360studio/semstreams/composition/cli"
 	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/flowstore"
 	"github.com/c360studio/semstreams/flowtemplate"
@@ -65,11 +66,51 @@ func main() {
 		}
 	}()
 
+	// Composition verbs (catalog, validate <config>, graph <config>) serve
+	// the catalog this binary can compose and exit; no NATS, no banner.
+	if code, handled := dispatchCompositionVerb(os.Args[1:]); handled {
+		os.Exit(code)
+	}
+
 	// Run application with proper error handling
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// dispatchCompositionVerb serves a composition verb against the full catalog
+// this binary can compose (core, graph-research, OTEL) and reports whether the
+// arguments named one.
+func dispatchCompositionVerb(args []string) (int, bool) {
+	if len(args) == 0 || !compositioncli.IsVerb(args[0]) {
+		return 0, false
+	}
+	builtins.Register()
+	registry, err := fullComponentRegistry()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1, true
+	}
+	return compositioncli.Main(args, registry, os.Stdout, os.Stderr), true
+}
+
+// fullComponentRegistry registers everything this binary can compose. Boot
+// gates graph-research and OTEL on the configuration (setupRegistriesAndManager);
+// the catalog and the offline validator judge against the full set so a
+// configuration that selects either capability validates the same way.
+func fullComponentRegistry() (*component.Registry, error) {
+	registry := component.NewRegistry()
+	if err := componentregistry.Register(registry); err != nil {
+		return nil, fmt.Errorf("register components: %w", err)
+	}
+	if err := graphresearch.RegisterComponents(registry); err != nil {
+		return nil, fmt.Errorf("register graph research components: %w", err)
+	}
+	if err := optionalotel.Register(registry); err != nil {
+		return nil, fmt.Errorf("register optional OTEL adapter: %w", err)
+	}
+	return registry, nil
 }
 
 //revive:disable-next-line:function-length // Keep process ownership and boot ordering visible in one composition root.
@@ -109,7 +150,17 @@ func run() (runErr error) {
 	}
 
 	if cliCfg.Validate {
-		fmt.Println("✓ Configuration is valid")
+		// --validate is an alias of the `validate <config>` verb: the same
+		// composition findings, printed the same way, non-zero on errors.
+		registry, err := fullComponentRegistry()
+		if err != nil {
+			return err
+		}
+		if code := compositioncli.Main(
+			[]string{compositioncli.VerbValidate, cliCfg.ConfigPath}, registry, os.Stdout, os.Stderr,
+		); code != compositioncli.ExitOK {
+			return fmt.Errorf("composition validation exited %d", code)
+		}
 		return nil
 	}
 

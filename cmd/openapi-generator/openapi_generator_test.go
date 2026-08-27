@@ -10,6 +10,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/componentregistry"
+	"github.com/c360studio/semstreams/composition"
 	"github.com/c360studio/semstreams/service"
 	"github.com/xeipuuv/gojsonschema"
 	"gopkg.in/yaml.v3"
@@ -149,7 +150,7 @@ func extractAndWriteSchemas(
 	var componentSchemas []ComponentSchema
 
 	for name, registration := range factories {
-		schema := extractSchema(name, registration)
+		schema := extractSchema(name, registration, composition.CatalogEntry{})
 
 		// Validate schema structure
 		if schema.Schema != "http://json-schema.org/draft-07/schema#" {
@@ -253,7 +254,7 @@ func TestSchemaValidationWithMetaSchema(t *testing.T) {
 	factories := registry.ListFactories()
 	for name, registration := range factories {
 		t.Run(name, func(t *testing.T) {
-			schema := extractSchema(name, registration)
+			schema := extractSchema(name, registration, composition.CatalogEntry{})
 
 			// Validate against meta-schema
 			if err := validateSchema(schema, metaSchemaPath); err != nil {
@@ -330,7 +331,7 @@ func TestExtractSchema(t *testing.T) {
 		},
 	}
 
-	schema := extractSchema("test-component", testReg)
+	schema := extractSchema("test-component", testReg, composition.CatalogEntry{})
 
 	// Verify schema structure
 	if schema.Schema != "http://json-schema.org/draft-07/schema#" {
@@ -397,7 +398,7 @@ func TestGatedDAGGeneratedSchemaEntityIDPatterns(t *testing.T) {
 	if registration == nil {
 		t.Fatal("gated-dag registration not found")
 	}
-	schema := extractSchema("gated-dag", registration)
+	schema := extractSchema("gated-dag", registration, composition.CatalogEntry{})
 
 	tests := []struct {
 		name     string

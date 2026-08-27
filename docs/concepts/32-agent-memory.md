@@ -223,8 +223,9 @@ active lesson automatically.
 Validate the config with the real loader before running:
 
 ```bash
-go run ./cmd/semstreams --config configs/flows/lesson-example.json --validate
-# ✓ Configuration is valid
+go run ./cmd/semstreams validate configs/flows/lesson-example.json
+# {"status": "warnings", "errors": [], "warnings": [...], "graph": {...}}   (exit 0; exit 1 on error findings)
+# `--config <path> --validate` is an alias that prints the same findings.
 ```
 
 ### 2. Emit a lesson

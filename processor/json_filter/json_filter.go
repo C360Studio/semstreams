@@ -117,13 +117,31 @@ type streamConsumerBinding struct {
 	drainIssued bool
 }
 
-// NewProcessor creates a new JSON filter processor from configuration
-func NewProcessor(
-	rawConfig json.RawMessage, deps component.Dependencies,
-) (component.Discoverable, error) {
+// DeclarePorts is the component.PortDeclarer for json_filter: the ports
+// NewProcessor will report for rawConfig, computed without dependencies.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	resolved, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfigFrom(resolved.inputPorts, resolved.outputPorts), nil
+}
+
+type resolvedConfig struct {
+	config         Config
+	inputPorts     []component.Port
+	outputPorts    []component.Port
+	inputSubjects  []string
+	outputSubjects []string
+}
+
+// resolveConfig parses rawConfig (defaults when no ports are configured) and
+// resolves the message ports. It is the one derivation DeclarePorts and
+// NewProcessor share.
+func resolveConfig(rawConfig json.RawMessage) (resolvedConfig, error) {
 	var config Config
 	if err := json.Unmarshal(rawConfig, &config); err != nil {
-		return nil, errs.WrapInvalid(err, "JSONFilterProcessor", "NewProcessor", "config unmarshal")
+		return resolvedConfig{}, errs.WrapInvalid(err, "JSONFilterProcessor", "NewProcessor", "config unmarshal")
 	}
 
 	if config.Ports == nil {
@@ -132,18 +150,34 @@ func NewProcessor(
 
 	inputPorts, inputSubjects, err := resolveMessagePorts(config.Ports.Inputs, component.DirectionInput)
 	if err != nil {
-		return nil, errs.WrapInvalid(err, "JSONFilterProcessor", "NewProcessor", "resolve input ports")
+		return resolvedConfig{}, errs.WrapInvalid(err, "JSONFilterProcessor", "NewProcessor", "resolve input ports")
 	}
 	outputPorts, outputSubjects, err := resolveMessagePorts(config.Ports.Outputs, component.DirectionOutput)
 	if err != nil {
-		return nil, errs.WrapInvalid(err, "JSONFilterProcessor", "NewProcessor", "resolve output ports")
+		return resolvedConfig{}, errs.WrapInvalid(err, "JSONFilterProcessor", "NewProcessor", "resolve output ports")
 	}
 
 	if len(inputSubjects) == 0 {
-		return nil, errs.WrapInvalid(
+		return resolvedConfig{}, errs.WrapInvalid(
 			errs.ErrInvalidConfig, "JSONFilterProcessor", "NewProcessor",
 			"no input subjects configured")
 	}
+	return resolvedConfig{
+		config: config, inputPorts: inputPorts, outputPorts: outputPorts,
+		inputSubjects: inputSubjects, outputSubjects: outputSubjects,
+	}, nil
+}
+
+// NewProcessor creates a new JSON filter processor from configuration
+func NewProcessor(
+	rawConfig json.RawMessage, deps component.Dependencies,
+) (component.Discoverable, error) {
+	resolved, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
+	}
+	config, inputPorts, outputPorts := resolved.config, resolved.inputPorts, resolved.outputPorts
+	inputSubjects, outputSubjects := resolved.inputSubjects, resolved.outputSubjects
 	jetStreamOutputs := make(map[string]bool, len(outputPorts))
 	for _, port := range outputPorts {
 		facts, factsErr := port.Facts()
@@ -801,6 +835,7 @@ func Register(registry *component.Registry) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
 		Name:        "json_filter",
 		Factory:     NewProcessor,
+		Ports:       DeclarePorts,
 		Schema:      jsonFilterSchema,
 		Type:        "processor",
 		Protocol:    "json_filter",

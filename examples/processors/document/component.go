@@ -114,13 +114,23 @@ type streamConsumerBinding struct {
 	drainIssued bool
 }
 
-// NewComponent creates a new document processor component from configuration.
-func NewComponent(
-	rawConfig json.RawMessage, deps component.Dependencies,
-) (component.Discoverable, error) {
+// DeclarePorts is the component.PortDeclarer for this processor: the ports
+// NewComponent will report for rawConfig, computed without dependencies.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	_, inputs, outputs, _, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfigFrom(inputs, outputs), nil
+}
+
+// resolveConfig parses rawConfig (defaults when no ports are configured),
+// validates, and resolves the ports with their one-subject rule. It is the one
+// derivation DeclarePorts and NewComponent share.
+func resolveConfig(rawConfig json.RawMessage) (ComponentConfig, []component.Port, []component.Port, []string, error) {
 	var config ComponentConfig
 	if err := json.Unmarshal(rawConfig, &config); err != nil {
-		return nil, errs.WrapInvalid(err, "DocumentComponent", "NewComponent", "config unmarshal")
+		return ComponentConfig{}, nil, nil, nil, errs.WrapInvalid(err, "DocumentComponent", "NewComponent", "config unmarshal")
 	}
 
 	if config.Ports == nil {
@@ -129,32 +139,31 @@ func NewComponent(
 
 	// Validate configuration
 	if config.OrgID == "" {
-		return nil, errs.WrapInvalid(
+		return ComponentConfig{}, nil, nil, nil, errs.WrapInvalid(
 			errs.ErrInvalidConfig, "DocumentComponent", "NewComponent",
 			"OrgID is required")
 	}
 
 	if config.Platform == "" {
-		return nil, errs.WrapInvalid(
+		return ComponentConfig{}, nil, nil, nil, errs.WrapInvalid(
 			errs.ErrInvalidConfig, "DocumentComponent", "NewComponent",
 			"Platform is required")
 	}
 	if len(config.Ports.Outputs) != 1 {
-		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "DocumentComponent", "NewComponent", "exactly one output port is required")
+		return ComponentConfig{}, nil, nil, nil, errs.WrapInvalid(errs.ErrInvalidConfig, "DocumentComponent", "NewComponent", "exactly one output port is required")
 	}
 
 	// Extract subjects from port configuration
 	var inputSubjects []string
-	var outputSubject string
 	inputPorts := make([]component.Port, 0, len(config.Ports.Inputs))
 	for _, definition := range config.Ports.Inputs {
 		input, err := definition.Resolve(component.DirectionInput)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "DocumentComponent", "NewComponent", "resolve input port")
+			return ComponentConfig{}, nil, nil, nil, errs.WrapInvalid(err, "DocumentComponent", "NewComponent", "resolve input port")
 		}
 		facts, err := input.Facts()
 		if err != nil || len(facts.NATSSubjects()) != 1 {
-			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "DocumentComponent", "NewComponent", "input port must declare one NATS subject")
+			return ComponentConfig{}, nil, nil, nil, errs.WrapInvalid(errs.ErrInvalidConfig, "DocumentComponent", "NewComponent", "input port must declare one NATS subject")
 		}
 		inputPorts = append(inputPorts, input)
 		inputSubjects = append(inputSubjects, facts.NATSSubjects()[0])
@@ -163,22 +172,33 @@ func NewComponent(
 	for _, definition := range config.Ports.Outputs {
 		output, err := definition.Resolve(component.DirectionOutput)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "DocumentComponent", "NewComponent", "resolve output port")
+			return ComponentConfig{}, nil, nil, nil, errs.WrapInvalid(err, "DocumentComponent", "NewComponent", "resolve output port")
 		}
 		facts, err := output.Facts()
 		if err != nil || len(facts.NATSSubjects()) != 1 {
-			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "DocumentComponent", "NewComponent", "output port must declare one NATS subject")
+			return ComponentConfig{}, nil, nil, nil, errs.WrapInvalid(errs.ErrInvalidConfig, "DocumentComponent", "NewComponent", "output port must declare one NATS subject")
 		}
 		outputPorts = append(outputPorts, output)
 	}
-	facts, _ := outputPorts[0].Facts()
-	outputSubject = facts.NATSSubjects()[0]
 
 	if len(inputSubjects) == 0 {
-		return nil, errs.WrapInvalid(
+		return ComponentConfig{}, nil, nil, nil, errs.WrapInvalid(
 			errs.ErrInvalidConfig, "DocumentComponent", "NewComponent",
 			"no input subjects configured")
 	}
+	return config, inputPorts, outputPorts, inputSubjects, nil
+}
+
+// NewComponent creates a new document processor component from configuration.
+func NewComponent(
+	rawConfig json.RawMessage, deps component.Dependencies,
+) (component.Discoverable, error) {
+	config, inputPorts, outputPorts, inputSubjects, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
+	}
+	outputFacts, _ := outputPorts[0].Facts()
+	outputSubject := outputFacts.NATSSubjects()[0]
 
 	// Create domain processor with organizational context
 	processor := NewProcessor(Config{

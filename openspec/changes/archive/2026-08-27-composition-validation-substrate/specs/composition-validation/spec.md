@@ -1,3 +1,18 @@
+## Purpose
+
+Defines composition validation as the framework's one judgment of whether a set of components is correctly wired:
+`config.Components` plus the binary's catalog is the composed artifact, connections are derived from static port
+declarations rather than authored, and a diagram is a read-only projection the framework never stores (ADR-100). The
+same pure library produces the same closed findings vocabulary at both boundaries that matter — offline over a
+configuration file, as a prediction of the next boot, and at boot over the admitted composition, as an observation at
+the real boundary, where an error finding refuses to start. No second interpreter of that analysis is admitted: not a
+handler with its own severity table, not a saved-diagram validator, not a caller re-deriving connections. The capability
+owns the findings vocabulary and its severities, the static port-declaration contract and its boot parity check, the
+graph projection and its Mermaid rendering, and the surfaces that carry them — the `catalog` / `validate` / `graph`
+verbs, the `AssertValid` test helper, the ComponentManager read operations, and the read-only agent tools. It owns no
+authoring store, no diagram CRUD, no template store, and no verb that writes a composition: writing a composition is
+writing the product's configuration.
+
 ## ADDED Requirements
 
 ### Requirement: Port declarations are static facts of a registration
@@ -12,8 +27,15 @@ required, kind, resource identity, NATS subjects, interface contract, in order) 
 constructed component; any difference SHALL fail admission with a classified invalid error that names the factory,
 the instance, and the first differing port. The generated catalog (`schemas/<factory>.v1.json`, the `types` HTTP
 operations, and the `list_components` tool) SHALL carry the declarer's output for an empty configuration as
-`default_ports`, or `ports_require_config: true` with the declarer's error text when an empty configuration does not
-declare.
+`default_ports` (each resolved port with its `external` marker when declared), or `ports_require_config: true` with
+the declarer's error text when an empty configuration does not declare.
+
+> `[~]` DEVIATION (tasks 3.1a, 2026-08-26): `objectstore`'s declarer does not honour the instance-name parameter of the
+> declarer contract above. Its factory has no instance name to give the constructor (`component.Factory` and
+> `Dependencies` carry none) and stamps the literal `objectstore` into its `store-provide` port, so the admitted
+> declaration never carries the real instance name either; the declarer mirrors the constructor so parity holds.
+> Threading the real name through changes the store-provide resource identity at runtime — an owner ruling, FILED
+> #1106; neither side is codified in a test. Every shipped instance is named `objectstore`.
 
 #### Scenario: a registration without a port declarer is rejected at registration
 
@@ -54,8 +76,14 @@ declare.
 
 `composition.Validate(catalog, cfg)` SHALL be a pure, deterministic function of a `*component.Registry` and a
 `*config.Config` that performs no I/O, opens no connection, and constructs no component, and
-`composition.Analyze(declarations)` SHALL be the graph-level half of the same function over admitted declarations, so
-that the offline and the boot-time judgments share one interpreter. The result SHALL carry `status`
+`composition.Analyze(declarations, streams)` SHALL be the graph-level half of the same function over admitted
+declarations and the configuration's explicit `streams` declarations, so that the offline and the boot-time judgments
+share one interpreter. A JetStream input SHALL NOT be a `stream_requirement` finding, even when its only publishers use
+core NATS, when the configuration's explicit `streams` block declares the stream the input binds to BY NAME and one of
+that stream's subjects COVERS (every concrete subject of the input's subject also matches it — not merely overlaps) each
+of the input's subjects: provisioning creates exactly the explicit and JetStream-output-derived streams, the consumer
+binds by name, and core-NATS publishes on covered subjects land in it, so the subscriber is fed. A stream declared
+under another name, or one whose subjects only overlap the input's, SHALL NOT satisfy it. The result SHALL carry `status`
 (`valid` | `warnings` | `errors`, derived errors → warnings → valid), `errors`, `warnings`, and `graph`, with every
 array non-nil; each finding SHALL carry `type`, `severity`, a non-empty `component`, optional `port`, a non-empty
 `message`, and a non-nil `suggestions`. `type` SHALL be one of the exported constants `config_invalid`,
@@ -65,7 +93,12 @@ array non-nil; each finding SHALL carry `type`, `severity`, a non-empty `compone
 that set. Severity SHALL be error for `config_invalid`, `unknown_component`, `component_type_mismatch`,
 `component_config_invalid`, `port_declaration_error`, `exclusive_resource_conflict`, `connection_pattern_error`,
 `stream_requirement`, `interface_mismatch`, and for an `orphaned_port` that is a required stream input with no
-publisher; warning otherwise. Components SHALL be visited in instance-name order and edges SHALL be emitted in a
+publisher; warning otherwise. An input declared `external` (`component.PortDefinition.External` — fed from outside the
+composition, an operator statement) SHALL raise no `orphaned_port` finding for its missing in-graph publisher; every
+other finding on that port, and every unmarked required orphan, is unaffected. The required-orphan finding SHALL
+carry the remedy among its suggestions ("declare `external: true` on the port if it is fed from outside the
+composition"), and the boot refusal SHALL print each error finding with its suggestions, so an operator whose named
+override dropped the marker is told the one-line fix rather than "connect an output". Components SHALL be visited in instance-name order and edges SHALL be emitted in a
 stable order, so two runs over equal inputs produce byte-equal JSON.
 
 #### Scenario: the vocabulary is closed
@@ -91,6 +124,16 @@ stable order, so two runs over equal inputs produce byte-equal JSON.
 - **AND** an optional unfed input in the same composition is an `orphaned_port` warning
 - **AND** the test that verifies this is `TestValidateReportsRequiredStreamInputWithoutPublisher`
 
+#### Scenario: an externally fed required input is not an orphan
+
+- **GIVEN** a required stream input declared `external: true` with no publisher in the composition, an unmarked
+  required stream input with no publisher, and an `external` input whose in-graph publisher's interface differs
+- **WHEN** the composition is validated
+- **THEN** the marked input raises no `orphaned_port` finding, the unmarked orphan is still an `orphaned_port` error,
+  and the marked, fed input still carries its `interface_mismatch` error
+- **AND** the projection shows the marker on the port
+- **AND** the test that verifies this is `TestValidateSuppressesOrphanOnlyForExternallyFedInput`
+
 #### Scenario: interface contracts are checked on every derived edge
 
 - **GIVEN** an output whose interface type differs from the input it feeds, and a second edge whose source declares
@@ -102,14 +145,28 @@ stable order, so two runs over equal inputs produce byte-equal JSON.
 
 #### Scenario: a JetStream subscriber fed only by core-NATS publishers is an error
 
-- **GIVEN** a JetStream input port whose only publishers are core NATS outputs
+- **GIVEN** a JetStream input port whose only publishers are core NATS outputs, and no explicit stream covering its subjects
 - **WHEN** the composition is validated
 - **THEN** the result carries one `stream_requirement` error naming the subscriber port and every publisher
 - **AND** the test that verifies this is `TestValidateReportsStreamRequirement`
 
+#### Scenario: an explicit stream declaration satisfies a JetStream subscriber
+
+- **GIVEN** the same ports and a `streams` declaration whose subjects cover the subscriber's subjects
+- **WHEN** the composition is validated offline, and when the same composition boots with the same `streams`
+- **THEN** neither result carries a `stream_requirement` finding and the edge is still derived
+- **AND** a stream declared under a name other than the one the subscriber binds to does not satisfy it, even when
+  its subjects cover the subscriber's
+- **AND** a stream whose subjects only overlap the subscriber's (`data.raw` against a `data.*` subscriber) does not
+  satisfy it
+- **AND** the tests that verify this are `TestValidateStreamRequirementSatisfiedByExplicitStream`,
+  `TestValidateStreamRequirementNeedsTheNamedStream`, `TestValidateStreamRequirementNeedsCoverNotOverlap`, and
+  `TestComponentManagerBootFindingsHonourExplicitStreams` (`-tags=integration`)
+
 #### Scenario: pattern conflicts and exclusive resources are findings
 
-- **GIVEN** two components that bind the same network address, and two that claim the same exclusive resource
+- **GIVEN** two components that write the same KV bucket, and two that bind the same network address (an exclusive
+  resource, refused at admission before any graph is built)
 - **WHEN** the composition is validated
 - **THEN** the result carries one `connection_pattern_error` and one `exclusive_resource_conflict`, both errors
 - **AND** validation returns a result, not an error
@@ -175,8 +232,8 @@ helpers.
 
 ### Requirement: Boot validates the admitted composition at the real boundary
 
-ComponentManager SHALL run `composition.Analyze` over the admitted Registry declarations after the fixed boot set is
-constructed and before the Registry seals, SHALL log every finding, SHALL fail `Initialize` (and therefore boot) when
+ComponentManager SHALL run `composition.Analyze` over the admitted Registry declarations and the boot configuration's
+explicit `streams` after the fixed boot set is constructed and before the Registry seals, SHALL log every finding, SHALL fail `Initialize` (and therefore boot) when
 the result has an error, and SHALL retain the result as the boot composition's findings. `GET <components>/validate`
 SHALL serve that retained result verbatim and SHALL NOT compute a status of its own; `GET <components>/flowgraph`
 SHALL serve the retained result's `graph`, as JSON by default and as Mermaid when `format=mermaid` is requested.
@@ -206,6 +263,54 @@ SHALL serve the retained result's `graph`, as JSON by default and as Mermaid whe
   Mermaid output renders the same node and edge set
 - **AND** the tests that verify this are `TestGraphProjectionMatchesAdmittedComposition` (`-tags=integration`) and
   `TestMermaidIsDeterministic`
+
+### Requirement: The framework serves one composition judgment and no second gap analysis
+
+The framework SHALL serve exactly one operation that judges the running composition — `GET <components>/validate`,
+which serves the retained boot `composition.Result` verbatim — and SHALL serve no second connectivity, gap, or orphan
+analysis that applies a severity vocabulary of its own. `GET <components>/gaps` and its response body
+(`disconnected_nodes`, `orphaned_ports`, `objectstore_gaps`, and the `summary` object carrying `total_gaps`,
+`critical_gaps`, `optional_gaps`, `critical_port_count`, and `has_issues`) SHALL be absent from the routed surface and
+from the generated OpenAPI document, with no alias; the Go surface it reached — `ComponentManager.ValidateFlowConnectivity`,
+`ComponentManager.DetectObjectStoreGaps`, and the `ComponentGap` type — SHALL be absent too. That operation classified a
+required input declared `external` as a critical orphan (`no_publishers`, `critical_port_count: 1`, `has_issues: true`)
+while the canonical judgment raised no finding for the same port; a second interpreter of one analysis is refused rather
+than re-projected. Pre-v1 fresh-state policy applies: no compatibility view and no legacy reader. A projection that
+derives no severity is not a judgment and is unaffected.
+
+> `[~]` DELIBERATE NOT-DONE (2026-08-26, this change): one second judgment of this class SURVIVES at this head, and it
+> is served, not merely test scaffolding. `POST <flowbuilder>/flows/{id}/validate` (`service/flow_service.go:197`,
+> handler `:516`) reaches `engine.ValidateFlowDefinition` (`engine/engine.go:73`) and
+> `engine/validator.go:309` `convertAnalysisToResult`, which applies its OWN severity table over the same
+> `flowgraph` analysis and contains no `External` check at all (`grep -rn External engine/` → 0): `:328-334` makes every
+> required stream input with `no_publishers` an error, so an input this capability's requirement declares externally fed
+> is reported as an error there. That is precisely the class the SHALL above forbids, and it is retained ONLY because
+> ADR-100 D5 deletes the whole authoring surface that serves it — `openspec/changes/flow-authoring-retirement/` task 3.2
+> removes `engine/`, `service/flow_service.go`, and that route together. Removing the route without the surface would
+> leave a saved-diagram store with no validator; removing it here would perform #1093 inside #1092.
+> Retained for the same one-more-PR reason, and separately: `flowgraph.FlowGraph.AnalyzeConnectivity` — the analysis
+> `composition.Analyze` itself runs (`composition/analyze.go:59`), so it is canonical and only its `engine` caller
+> leaves; and `ComponentManager.GetFlowGraph` with `GET <components>/paths` (reachability from input components — a
+> projection that derives no severity, therefore not a judgment), which still build a graph from the admitted registry.
+> Whether `/paths` should serve the retained `composition.Result.Graph` instead of rebuilding is #1093's scope, not this
+> change's, and is recorded there. Only the judging operation ComponentManager itself served is removed here.
+
+#### Scenario: the gap operation is absent from the routed and advertised surface
+
+- **GIVEN** the ComponentManager HTTP handlers registered on a fresh mux
+- **WHEN** `<components>/gaps` is requested with GET, POST, and DELETE
+- **THEN** each request is unrouted (404) or refused (405), and the ComponentManager OpenAPI document — the source the
+  generated `specs/openapi.v3.yaml` is emitted from — advertises no `/gaps` operation
+- **AND** the test that verifies this is `TestComponentGapsOperationIsAbsent`
+
+#### Scenario: an externally fed input is never a critical orphan on any component operation
+
+- **GIVEN** an admitted component whose only input is a required JetStream port declared `external: true` with no
+  publisher in the composition
+- **WHEN** every operation the ComponentManager OpenAPI document advertises is requested
+- **THEN** no response body carries `no_publishers`, `orphaned_port`, `critical`, or `has_issues` for that port, the
+  retained boot result has no error finding, and the projection shows the marker on the port
+- **AND** the test that verifies this is `TestExternalInputIsNeverACriticalOrphanOnAnyComponentOperation`
 
 ### Requirement: Agents read the catalog, validate, and project through read-only tools
 
@@ -240,26 +345,3 @@ that assertion SHALL be a unit test so a configuration change that introduces an
 - **WHEN** every shipped configuration is validated against the registry its binary composes
 - **THEN** no result has an error finding
 - **AND** the test that verifies this is `TestValidateShippedConfigsHaveNoErrorFindings`
-
-### Requirement: The framework owns no composition authoring store
-
-The framework SHALL register no `flow-builder` service, SHALL serve no `/flowbuilder/*` route, SHALL register no
-`create_flow`, `update_flow`, `delete_flow`, `list_flows`, `get_flow`, `create_flow_template`,
-`update_flow_template`, `delete_flow_template`, `list_flow_templates`, `get_flow_template`, or
-`instantiate_flow_template` tool, SHALL create no `semstreams_flows` or `FLOW_TEMPLATES` bucket, and SHALL provide no
-compatibility alias for any of them. The stream-override expiry metric formerly hosted by the flow-builder service
-SHALL be registered by a retained service so its removal does not remove the metric.
-
-#### Scenario: the removed surfaces are absent
-
-- **WHEN** the service registry, the tool registry, and the generated OpenAPI document are inspected
-- **THEN** none names a flow-builder service, a flow or flow-template tool, or a `/flowbuilder` or `/flows` path
-- **AND** the tests that verify this are `TestServiceRegistryHasNoFlowBuilder`, `TestToolRegistryHasNoFlowTools`, and
-  `TestOpenAPIHasNoFlowRoutes`
-
-#### Scenario: the override-expiry metric survives the removal
-
-- **GIVEN** a boot configuration with a stream override and no flow-builder service
-- **WHEN** the process composes its services
-- **THEN** the stream-override expiry metric is registered and reports the override
-- **AND** the test that verifies this is `TestStreamOverrideExpiryReporterRegistersWithoutFlowService`

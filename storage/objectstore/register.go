@@ -22,6 +22,7 @@ func Register(registry *component.Registry) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
 		Name:        "objectstore",
 		Factory:     NewComponent,
+		Ports:       DeclarePorts,
 		Schema:      objectstoreSchema,
 		Type:        "storage",
 		Protocol:    "objectstore",

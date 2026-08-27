@@ -98,13 +98,25 @@ type consumerSetup struct {
 	consumerConfig component.ConsumerConfig
 }
 
-// NewComponent creates a new agentic-tools processor component
-func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+// DeclarePorts is the component.PortDeclarer for agentic-tools: the ports
+// NewComponent will report for rawConfig, computed without dependencies.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	_, inputs, outputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfigFrom(inputs, outputs), nil
+}
+
+// resolveConfig parses rawConfig over the defaults, merges the port
+// overrides, validates, and resolves the effective ports. It is the one
+// derivation DeclarePorts and NewComponent share.
+func resolveConfig(rawConfig json.RawMessage) (Config, []component.Port, []component.Port, error) {
 	defaults := DefaultConfig()
 	config := DefaultConfig()
 	if len(rawConfig) > 0 {
 		if err := json.Unmarshal(rawConfig, &config); err != nil {
-			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "unmarshal config")
+			return Config{}, nil, nil, errs.WrapInvalid(err, "Component", "NewComponent", "unmarshal config")
 		}
 	}
 	if config.Ports == nil {
@@ -112,19 +124,19 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	}
 	mergedPorts, err := component.MergePortConfig(*defaults.Ports, *config.Ports)
 	if err != nil {
-		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "merge port overrides")
+		return Config{}, nil, nil, errs.WrapInvalid(err, "Component", "NewComponent", "merge port overrides")
 	}
 	config.Ports = &mergedPorts
 
 	// Validate configuration
 	if err := config.Validate(); err != nil {
-		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "validate config")
+		return Config{}, nil, nil, errs.WrapInvalid(err, "Component", "NewComponent", "validate config")
 	}
 	inputs := make([]component.Port, 0, len(config.Ports.Inputs))
 	for _, definition := range config.Ports.Inputs {
 		port, err := definition.Resolve(component.DirectionInput)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve input port")
+			return Config{}, nil, nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve input port")
 		}
 		inputs = append(inputs, port)
 	}
@@ -132,9 +144,18 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	for _, definition := range config.Ports.Outputs {
 		port, err := definition.Resolve(component.DirectionOutput)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve output port")
+			return Config{}, nil, nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve output port")
 		}
 		outputs = append(outputs, port)
+	}
+	return config, inputs, outputs, nil
+}
+
+// NewComponent creates a new agentic-tools processor component
+func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+	config, inputs, outputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
 	}
 
 	comp := &Component{

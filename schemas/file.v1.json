@@ -496,6 +496,9 @@
               "description": {
                 "type": "string"
               },
+              "external": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               },
@@ -802,6 +805,9 @@
               "description": {
                 "type": "string"
               },
+              "external": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               },
@@ -826,6 +832,8 @@
     "type": "output",
     "protocol": "file",
     "domain": "storage",
-    "version": "0.1.0"
+    "version": "0.1.0",
+    "ports_require_config": true,
+    "ports_error": "Registry.Declare: port declaration failed: Output.NewOutput: config unmarshal failed: ConfigValidator.SafeUnmarshal: struct validation failed: Config.Validate: directory is required failed: invalid configuration"
   }
 }

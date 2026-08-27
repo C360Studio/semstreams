@@ -52,8 +52,27 @@ Terminal responses are projected from the registered production envelope, not
 from the physical subject name. Success becomes a `result`, failure an `error`,
 and cancellation a `status`. Dispatch merges `ChannelType`, `ChannelID`, and
 optional `UserID` independently from the terminal event, the local tracker, and
-`AGENT_LOOPS/<loopID>`. A response requires the channel type and channel ID;
-`UserID` is optional metadata.
+the persisted loop record. A response requires the channel type and channel ID;
+`UserID` is optional metadata. The loops bucket comes from the declared
+`agent_loops` KV read port (default `AGENT_LOOPS`), so a non-default bucket is
+bound in configuration rather than assumed.
+
+Which terminal is the USER's answer follows the typed decision, not route
+ownership (ADR-101). A `decide` terminal whose action is `respond_direct` is
+published as a `result` and `ask_user` as a `prompt`, each carrying the
+decision's reason as content; any other decide action is a handoff to a rule
+chain and publishes nothing, even when the deciding loop owns a route. A
+terminal with no decision keeps the route-ownership behaviour above. When a
+reply decision's own loop owns no route — the rule-spawned case — dispatch
+resolves the origin from persisted ancestry (typed-first through `RunID`, then
+the `ParentLoopID` chain, bounded at 32 hops), never from the process tracker.
+
+Settlement reasons: `response_settled`, `route_less_settled` (no origin
+existed), `handoff_settled` (a non-reply decision), `origin_unresolvable` (a
+durable link pointed at an unobservable record; parent chain AND run anchors
+exhausted), `routing_read_transient`, `response_publish_transient`,
+`routing_malformed`, `routing_collision_or_malformed`,
+`tracker_projection_collision`, plus the decode-rejection reasons.
 
 Dispatch ACKs a terminal only after any required `UserResponse` receives a
 synchronous JetStream PubAck. Its response ID and `Nats-Msg-Id` are both

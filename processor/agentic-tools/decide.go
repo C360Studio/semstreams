@@ -68,7 +68,12 @@ var decideActionRestrictedTotal = promauto.NewCounterVec(
 
 // DecideToolName is the name agents use to invoke the coordinator's
 // terminal decision tool.
-const DecideToolName = "decide"
+//
+// The name itself is framework vocabulary owned by agentic (gh#1094):
+// agentic-loop must recognise a decide terminal by the same name this
+// executor registers under, so the literal has exactly one definition.
+// This alias keeps the established agentic-tools spelling for callers.
+const DecideToolName = agentic.DecideToolName
 
 // decideMutationTimeout bounds each per-triple append request.
 const decideMutationTimeout = 5 * time.Second
@@ -425,11 +430,14 @@ func (e *DecideExecutor) decide(ctx context.Context, call agentic.ToolCall) (age
 	}
 
 	resultMetadata := map[string]any{
-		"action":         args.Action,
-		"reason":         args.Reason,
-		"loop_entity_id": loopEntityID,
-		"subtopic_count": len(args.Subtopics),
-		"has_retry_hint": args.RetryHint != "",
+		// action and reason are the typed decision agentic-loop reads to
+		// stamp LoopCompletedEvent.Decision (ADR-101); their keys live in
+		// agentic so writer and reader cannot drift apart.
+		agentic.MetadataKeyDecideAction: args.Action,
+		agentic.MetadataKeyDecideReason: args.Reason,
+		"loop_entity_id":                loopEntityID,
+		"subtopic_count":                len(args.Subtopics),
+		"has_retry_hint":                args.RetryHint != "",
 	}
 	// Signal 4: ToolResult metadata. Downstream consumers reading the
 	// raw tool result (tracing, replay, dashboards) see the SAP fact

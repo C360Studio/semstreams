@@ -552,8 +552,11 @@ func TestGeneratePortFieldSchema(t *testing.T) {
 	if !ok || configField.Type != "object" || !configField.Editable {
 		t.Fatalf("config field = %#v", configField)
 	}
-	if len(fields) != 4 {
+	if len(fields) != 5 {
 		t.Fatalf("fields = %#v, want only canonical common-envelope fields", fields)
+	}
+	if external, ok := fields["external"]; !ok || external.Type != "bool" || external.Editable {
+		t.Fatalf("external envelope field = %#v, want a read-only bool (ADR-100 external-boundary marker)", external)
 	}
 	if len(configField.Variants) != len(canonicalPortKinds) {
 		t.Fatalf("config variants = %d, want %d canonical kinds", len(configField.Variants), len(canonicalPortKinds))

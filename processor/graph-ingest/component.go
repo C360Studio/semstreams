@@ -645,6 +645,53 @@ type graphIngestCoreSubscription interface {
 	Drain(context.Context) error
 }
 
+// DeclarePorts is the component.PortDeclarer for graph-ingest: the ports
+// CreateGraphIngest will report for rawConfig, computed without dependencies.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	_, inputs, outputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfigFrom(inputs, outputs), nil
+}
+
+// resolveConfig parses rawConfig, applies defaults, validates, and resolves
+// the effective ports. It is the one derivation DeclarePorts and
+// CreateGraphIngest share.
+func resolveConfig(rawConfig json.RawMessage) (Config, []component.Port, []component.Port, error) {
+	var config Config
+	if len(rawConfig) > 0 {
+		if err := json.Unmarshal(rawConfig, &config); err != nil {
+			return Config{}, nil, nil, errs.Wrap(err, "CreateGraphIngest", "factory", "config unmarshal")
+		}
+	} else {
+		config = DefaultConfig()
+	}
+
+	// Apply defaults and validate
+	config.ApplyDefaults()
+	if err := config.Validate(); err != nil {
+		return Config{}, nil, nil, errs.Wrap(err, "CreateGraphIngest", "factory", "config validation")
+	}
+	inputs := make([]component.Port, 0, len(config.Ports.Inputs))
+	for _, definition := range config.Ports.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return Config{}, nil, nil, errs.WrapInvalid(err, "CreateGraphIngest", "factory", "resolve input port")
+		}
+		inputs = append(inputs, port)
+	}
+	outputs := make([]component.Port, 0, len(config.Ports.Outputs))
+	for _, definition := range config.Ports.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return Config{}, nil, nil, errs.WrapInvalid(err, "CreateGraphIngest", "factory", "resolve output port")
+		}
+		outputs = append(outputs, port)
+	}
+	return config, inputs, outputs, nil
+}
+
 // CreateGraphIngest is the factory function for creating graph-ingest components
 func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
 	// Validate dependencies
@@ -658,20 +705,9 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 		return nil, errs.WrapInvalid(errors.New("payload registry is required"), "CreateGraphIngest", "factory", "PayloadRegistry required")
 	}
 
-	// Parse configuration
-	var config Config
-	if len(rawConfig) > 0 {
-		if err := json.Unmarshal(rawConfig, &config); err != nil {
-			return nil, errs.Wrap(err, "CreateGraphIngest", "factory", "config unmarshal")
-		}
-	} else {
-		config = DefaultConfig()
-	}
-
-	// Apply defaults and validate
-	config.ApplyDefaults()
-	if err := config.Validate(); err != nil {
-		return nil, errs.Wrap(err, "CreateGraphIngest", "factory", "config validation")
+	config, inputs, outputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
 	}
 	// O-16 (a): hierarchy containers are born with a registered framework type.
 	// A registry that lacks it would refuse every container birth per arrival
@@ -688,22 +724,6 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 
 	// Create logger with component context
 	logger := deps.GetLoggerWithComponent("graph-ingest")
-	inputs := make([]component.Port, 0, len(config.Ports.Inputs))
-	for _, definition := range config.Ports.Inputs {
-		port, err := definition.Resolve(component.DirectionInput)
-		if err != nil {
-			return nil, errs.WrapInvalid(err, "CreateGraphIngest", "factory", "resolve input port")
-		}
-		inputs = append(inputs, port)
-	}
-	outputs := make([]component.Port, 0, len(config.Ports.Outputs))
-	for _, definition := range config.Ports.Outputs {
-		port, err := definition.Resolve(component.DirectionOutput)
-		if err != nil {
-			return nil, errs.WrapInvalid(err, "CreateGraphIngest", "factory", "resolve output port")
-		}
-		outputs = append(outputs, port)
-	}
 
 	// Create component
 	comp := &Component{
@@ -754,6 +774,7 @@ func Register(registry *component.Registry) error {
 		Version:     "1.0.0",
 		Schema:      schema,
 		Factory:     CreateGraphIngest,
+		Ports:       DeclarePorts,
 	})
 }
 

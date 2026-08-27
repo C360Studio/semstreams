@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -29,6 +30,15 @@ type Info struct {
 // This pattern matches service constructors: func(rawConfig json.RawMessage, deps Dependencies) (Service, error)
 type Factory func(rawConfig json.RawMessage, deps Dependencies) (Discoverable, error)
 
+// PortDeclarer declares a factory's ports as a pure function of the raw
+// component configuration and the instance name. It takes no dependencies,
+// performs no I/O, and constructs nothing: it is the static fact a
+// registration carries beside Schema, evaluated offline by composition
+// validation and verified against the constructed component at boot
+// admission. The constructor MUST derive its ports from the same function so
+// the two cannot drift.
+type PortDeclarer func(rawConfig json.RawMessage, instanceName string) (PortConfig, error)
+
 // Dependency identifiers used by Registration.Dependencies. Components
 // declare these at registration to opt into framework-driven behavior
 // (e.g., restart when a named runtime dependency changes). Kept as
@@ -51,6 +61,7 @@ type Registration struct {
 	Version      string       `json:"version"`      // Component version
 	Schema       ConfigSchema `json:"schema"`       // Schema as static metadata (Feature 011)
 	Factory      Factory      `json:"-"`            // Factory function (not serializable)
+	Ports        PortDeclarer `json:"-"`            // Static port declaration (not serializable)
 	Dependencies []string     `json:"dependencies"` // Boot dependencies such as DepModelRegistry
 }
 
@@ -60,6 +71,7 @@ type Registration struct {
 type RegistrationConfig struct {
 	Name         string       // Component name (e.g., "udp", "websocket", "graph-processor")
 	Factory      Factory      // Factory function to create component instances
+	Ports        PortDeclarer // Pure port declaration the constructor's ports must equal
 	Schema       ConfigSchema // Configuration schema for validation and discovery
 	Type         string       // Component type: "input", "processor", "output", "storage"
 	Protocol     string       // Technical protocol (udp, tcp, websocket, file, etc.)
@@ -69,12 +81,14 @@ type RegistrationConfig struct {
 	Dependencies []string     // Runtime deps declared via constants like DepModelRegistry
 }
 
-// componentDeclaration is the immutable shape captured for one admitted
-// component. It carries no
-// lifecycle, health, readiness, grouping, or orchestration state.
-type componentDeclaration struct {
+// Declaration is the immutable port shape of one component instance: what the
+// Registry retains for an admitted component, and what Declare produces for a
+// configured-but-unconstructed one. It carries no lifecycle, health,
+// readiness, grouping, or orchestration state.
+type Declaration struct {
 	InstanceName       string
 	FactoryIdentity    string
+	ComponentType      types.ComponentType
 	InputPorts         []Port
 	OutputPorts        []Port
 	InputFacts         []PortFacts
@@ -86,7 +100,7 @@ type componentDeclaration struct {
 // admission. The Registry retains the immutable declaration, never the live
 // component handle.
 type preparedComponent struct {
-	declaration componentDeclaration
+	declaration Declaration
 	component   Discoverable
 }
 
@@ -94,7 +108,7 @@ type preparedComponent struct {
 // admitted component declaration. Registry read methods require the root internal access
 // token; downstream adopters cannot obtain this otherwise-unexported type.
 type declarationSnapshot struct {
-	record componentDeclaration
+	record Declaration
 }
 
 func (s declarationSnapshot) Name() string    { return s.record.InstanceName }
@@ -116,12 +130,17 @@ func (s declarationSnapshot) OutputDeclarationFacts() []PortFacts {
 	return clonePortFactsSlice(s.record.OutputFacts)
 }
 
+// Declaration returns a defensive clone of the admitted declaration value.
+func (s declarationSnapshot) Declaration() Declaration {
+	return cloneComponentDeclaration(s.record)
+}
+
 // Registry manages component factories and immutable admitted declarations.
 // Runtime component handles remain private to ComponentManager.
 type Registry struct {
-	factories    map[string]*Registration        // Factory registry by name
-	declarations map[string]componentDeclaration // Admitted declaration by instance name
-	mu           sync.RWMutex                    // Protects all registry state
+	factories    map[string]*Registration // Factory registry by name
+	declarations map[string]Declaration   // Admitted declaration by instance name
+	mu           sync.RWMutex             // Protects all registry state
 
 	sealed bool
 }
@@ -130,7 +149,7 @@ type Registry struct {
 func NewRegistry() *Registry {
 	return &Registry{
 		factories:    make(map[string]*Registration),
-		declarations: make(map[string]componentDeclaration),
+		declarations: make(map[string]Declaration),
 	}
 }
 
@@ -148,6 +167,11 @@ func (r *Registry) RegisterFactory(name string, registration *Registration) erro
 	}
 	if registration.Type == "" {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Registry", "RegisterFactory", "component type validation")
+	}
+	if registration.Ports == nil {
+		return errs.WrapInvalid(
+			fmt.Errorf("factory %q declares no ports: set Registration.Ports to the pure port declarer the constructor derives its ports from", name),
+			"Registry", "RegisterFactory", "port declarer validation")
 	}
 
 	r.mu.Lock()
@@ -265,14 +289,164 @@ func (r *Registry) prepareComponent(
 			"factory returned nil component without error")
 	}
 
-	prepared, err := captureComponentDeclaration(instanceName, config.Name, component)
+	prepared, err := captureComponentDeclaration(instanceName, config, component)
 	if err != nil {
 		return preparedComponent{}, errs.Wrap(err, "Registry", operation, "capture declaration")
+	}
+	// P1 parity: the static declaration must equal what the constructed
+	// component reports, port for port. A disagreement is a lying declarer or
+	// a drifted constructor; either fails admission here, naming the factory,
+	// the instance, and the first differing port.
+	declared, err := declare(registration, instanceName, config)
+	if err != nil {
+		return preparedComponent{}, errs.WrapInvalid(
+			fmt.Errorf("factory %q instance %q: port declarer failed: %w", config.Name, instanceName, err),
+			"Registry", operation, "port declaration parity")
+	}
+	if err := comparePortDeclarations(declared, prepared); err != nil {
+		return preparedComponent{}, errs.WrapInvalid(
+			fmt.Errorf("factory %q instance %q: %w", config.Name, instanceName, err),
+			"Registry", operation, "port declaration parity")
 	}
 	return preparedComponent{declaration: prepared, component: component}, nil
 }
 
-func (r *Registry) admitPrepared(prepared componentDeclaration) error {
+// Declare evaluates the named factory's port declarer for one configured
+// instance and resolves the result through the canonical port resolver. It
+// constructs nothing and needs no dependencies: this is the offline half of
+// the declaration the Registry verifies at admission.
+func (r *Registry) Declare(instanceName string, config types.ComponentConfig) (Declaration, error) {
+	if err := ValidateComponentName(instanceName); err != nil {
+		return Declaration{}, errs.Wrap(err, "Registry", "Declare", "instance name validation")
+	}
+	if config.Type == "" {
+		return Declaration{}, errs.WrapInvalid(errs.ErrInvalidConfig, "Registry", "Declare", "component type validation")
+	}
+	if err := ValidateComponentName(config.Name); err != nil {
+		return Declaration{}, errs.Wrap(err, "Registry", "Declare", "factory name validation")
+	}
+	if err := ValidateFactoryConfig(config.Config); err != nil {
+		return Declaration{}, errs.Wrap(err, "Registry", "Declare", "config security validation")
+	}
+	r.mu.RLock()
+	registration, exists := r.factories[config.Name]
+	r.mu.RUnlock()
+	if !exists {
+		return Declaration{}, errs.WrapInvalid(
+			fmt.Errorf("unknown component factory '%s'", config.Name), "Registry", "Declare", "factory lookup")
+	}
+	if registration.Type != string(config.Type) {
+		return Declaration{}, errs.WrapInvalid(
+			fmt.Errorf("component '%s' is type '%s', not '%s'", config.Name, registration.Type, config.Type),
+			"Registry", "Declare", "type validation")
+	}
+	declared, err := declare(registration, instanceName, config)
+	if err != nil {
+		return Declaration{}, errs.WrapInvalid(err, "Registry", "Declare", "port declaration")
+	}
+	return declared, nil
+}
+
+// declare runs a registration's declarer and resolves every definition through
+// resolveAndProjectPort, the single interpreter of a port declaration.
+func declare(registration *Registration, instanceName string, config types.ComponentConfig) (Declaration, error) {
+	ports, err := registration.Ports(config.Config, instanceName)
+	if err != nil {
+		return Declaration{}, err
+	}
+	inputs, inputFacts, err := resolveDefinitions(ports.Inputs, DirectionInput)
+	if err != nil {
+		return Declaration{}, fmt.Errorf("declared input ports: %w", err)
+	}
+	outputs, outputFacts, err := resolveDefinitions(ports.Outputs, DirectionOutput)
+	if err != nil {
+		return Declaration{}, fmt.Errorf("declared output ports: %w", err)
+	}
+	return Declaration{
+		InstanceName:       instanceName,
+		FactoryIdentity:    config.Name,
+		ComponentType:      config.Type,
+		InputPorts:         inputs,
+		OutputPorts:        outputs,
+		InputFacts:         inputFacts,
+		OutputFacts:        outputFacts,
+		ExclusiveResources: exclusiveResources(inputFacts, outputFacts),
+	}, nil
+}
+
+func resolveDefinitions(definitions []PortDefinition, direction Direction) ([]Port, []PortFacts, error) {
+	ports := make([]Port, len(definitions))
+	facts := make([]PortFacts, len(definitions))
+	for index, definition := range definitions {
+		resolved, projected, err := resolveAndProjectPort(definition, direction)
+		if err != nil {
+			return nil, nil, err
+		}
+		ports[index] = resolved
+		facts[index] = projected
+	}
+	return ports, facts, nil
+}
+
+// comparePortDeclarations reports the first port on which the declared and
+// the constructed declarations disagree: name, direction, required, kind,
+// resource identity, NATS subjects, or interface contract, in order.
+func comparePortDeclarations(declared, constructed Declaration) error {
+	if err := comparePortLane(DirectionInput, declared.InputPorts, declared.InputFacts, constructed.InputPorts, constructed.InputFacts); err != nil {
+		return err
+	}
+	return comparePortLane(DirectionOutput, declared.OutputPorts, declared.OutputFacts, constructed.OutputPorts, constructed.OutputFacts)
+}
+
+func comparePortLane(
+	direction Direction,
+	declared []Port, declaredFacts []PortFacts,
+	constructed []Port, constructedFacts []PortFacts,
+) error {
+	for index := 0; index < len(declared) || index < len(constructed); index++ {
+		switch {
+		case index >= len(declared):
+			return fmt.Errorf("port %q: constructed %s port not declared (declared %d %s ports, constructed %d)",
+				constructed[index].Name, direction, len(declared), direction, len(constructed))
+		case index >= len(constructed):
+			return fmt.Errorf("port %q: declared %s port not constructed (declared %d %s ports, constructed %d)",
+				declared[index].Name, direction, len(declared), direction, len(constructed))
+		}
+		if reason := portDifference(declared[index], declaredFacts[index], constructed[index], constructedFacts[index]); reason != "" {
+			return fmt.Errorf("port %q: %s", declared[index].Name, reason)
+		}
+	}
+	return nil
+}
+
+func portDifference(declared Port, declaredFacts PortFacts, constructed Port, constructedFacts PortFacts) string {
+	switch {
+	case declared.Name != constructed.Name:
+		return fmt.Sprintf("declared name %q, constructed %q", declared.Name, constructed.Name)
+	case declared.Direction != constructed.Direction:
+		return fmt.Sprintf("declared direction %q, constructed %q", declared.Direction, constructed.Direction)
+	case declared.Required != constructed.Required:
+		return fmt.Sprintf("declared required=%v, constructed %v", declared.Required, constructed.Required)
+	case declared.External != constructed.External:
+		return fmt.Sprintf("declared external=%v, constructed %v", declared.External, constructed.External)
+	case declaredFacts.Kind() != constructedFacts.Kind():
+		return fmt.Sprintf("declared kind %q, constructed %q", declaredFacts.Kind(), constructedFacts.Kind())
+	case declaredFacts.ResourceID() != constructedFacts.ResourceID():
+		return fmt.Sprintf("declared resource %q, constructed %q", declaredFacts.ResourceID(), constructedFacts.ResourceID())
+	case !slices.Equal(declaredFacts.NATSSubjects(), constructedFacts.NATSSubjects()):
+		return fmt.Sprintf("declared subjects %v, constructed %v", declaredFacts.NATSSubjects(), constructedFacts.NATSSubjects())
+	}
+	declaredContract, declaredHas := declaredFacts.Interface()
+	constructedContract, constructedHas := constructedFacts.Interface()
+	if declaredHas != constructedHas || declaredContract.Type != constructedContract.Type ||
+		declaredContract.Version != constructedContract.Version ||
+		!slices.Equal(declaredContract.Compatible, constructedContract.Compatible) {
+		return fmt.Sprintf("declared interface %v %+v, constructed %v %+v", declaredHas, declaredContract, constructedHas, constructedContract)
+	}
+	return ""
+}
+
+func (r *Registry) admitPrepared(prepared Declaration) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sealed {
@@ -356,6 +530,7 @@ func (r *Registry) ListFactories() map[string]*Registration {
 			Description:  registration.Description,
 			Version:      registration.Version,
 			Schema:       cloneConfigSchema(registration.Schema),
+			Ports:        registration.Ports, // pure function; no handle to leak
 			Dependencies: append([]string(nil), registration.Dependencies...),
 			// Factory is intentionally not copied for safety
 		}
@@ -444,6 +619,7 @@ func (r *Registry) RegisterWithConfig(config RegistrationConfig) error {
 	registration := &Registration{
 		Name:         config.Name,
 		Factory:      config.Factory,
+		Ports:        config.Ports,
 		Schema:       config.Schema,
 		Type:         config.Type,
 		Protocol:     config.Protocol,
@@ -562,16 +738,29 @@ func (r *Registry) checkResourceConflictsLocked(instanceName string, resources [
 }
 
 func captureComponentDeclaration(
-	instanceName, factoryIdentity string, discoverable Discoverable,
-) (componentDeclaration, error) {
+	instanceName string, config types.ComponentConfig, discoverable Discoverable,
+) (Declaration, error) {
 	inputs, inputFacts, err := cloneAndProjectPorts(discoverable.InputPorts())
 	if err != nil {
-		return componentDeclaration{}, err
+		return Declaration{}, err
 	}
 	outputs, outputFacts, err := cloneAndProjectPorts(discoverable.OutputPorts())
 	if err != nil {
-		return componentDeclaration{}, err
+		return Declaration{}, err
 	}
+	return Declaration{
+		InstanceName:       instanceName,
+		FactoryIdentity:    config.Name,
+		ComponentType:      config.Type,
+		InputPorts:         inputs,
+		OutputPorts:        outputs,
+		InputFacts:         inputFacts,
+		OutputFacts:        outputFacts,
+		ExclusiveResources: exclusiveResources(inputFacts, outputFacts),
+	}, nil
+}
+
+func exclusiveResources(inputFacts, outputFacts []PortFacts) []string {
 	resources := make([]string, 0, len(inputFacts)+len(outputFacts))
 	for _, facts := range append(append([]PortFacts(nil), inputFacts...), outputFacts...) {
 		if facts.IsExclusive() {
@@ -579,28 +768,14 @@ func captureComponentDeclaration(
 		}
 	}
 	sort.Strings(resources)
-	resources = compactStrings(resources)
-	return componentDeclaration{
-		InstanceName:       instanceName,
-		FactoryIdentity:    factoryIdentity,
-		InputPorts:         inputs,
-		OutputPorts:        outputs,
-		InputFacts:         inputFacts,
-		OutputFacts:        outputFacts,
-		ExclusiveResources: resources,
-	}, nil
+	return compactStrings(resources)
 }
 
 func cloneAndProjectPorts(ports []Port) ([]Port, []PortFacts, error) {
 	cloned := make([]Port, len(ports))
 	facts := make([]PortFacts, len(ports))
 	for index, port := range ports {
-		resolved, projected, err := resolveAndProjectPort(PortDefinition{
-			Name:        port.Name,
-			Required:    port.Required,
-			Description: port.Description,
-			Config:      port.Config,
-		}, port.Direction)
+		resolved, projected, err := resolveAndProjectPort(definitionFromPort(port), port.Direction)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -626,19 +801,19 @@ func compactStrings(values []string) []string {
 }
 
 // declaration returns a defensive clone of one admitted component declaration.
-func (r *Registry) declaration(instanceName string) (componentDeclaration, bool) {
+func (r *Registry) declaration(instanceName string) (Declaration, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	declaration, ok := r.declarations[instanceName]
 	if !ok {
-		return componentDeclaration{}, false
+		return Declaration{}, false
 	}
 	return cloneComponentDeclaration(declaration), true
 }
 
 // declarationsSnapshot returns a deterministic defensive clone of the complete
 // boot admission set.
-func (r *Registry) declarationsSnapshot() []componentDeclaration {
+func (r *Registry) declarationsSnapshot() []Declaration {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.declarationsLocked()
@@ -677,20 +852,20 @@ func (r *Registry) Snapshots(
 
 //revive:enable:unexported-return
 
-func (r *Registry) declarationsLocked() []componentDeclaration {
+func (r *Registry) declarationsLocked() []Declaration {
 	names := make([]string, 0, len(r.declarations))
 	for name := range r.declarations {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	result := make([]componentDeclaration, 0, len(names))
+	result := make([]Declaration, 0, len(names))
 	for _, name := range names {
 		result = append(result, cloneComponentDeclaration(r.declarations[name]))
 	}
 	return result
 }
 
-func cloneComponentDeclaration(declaration componentDeclaration) componentDeclaration {
+func cloneComponentDeclaration(declaration Declaration) Declaration {
 	clone := declaration
 	clone.InputPorts = cloneResolvedPorts(declaration.InputPorts)
 	clone.OutputPorts = cloneResolvedPorts(declaration.OutputPorts)
@@ -703,9 +878,7 @@ func cloneComponentDeclaration(declaration componentDeclaration) componentDeclar
 func cloneResolvedPorts(ports []Port) []Port {
 	cloned := make([]Port, len(ports))
 	for index, port := range ports {
-		resolved, _, err := resolveAndProjectPort(PortDefinition{
-			Name: port.Name, Required: port.Required, Description: port.Description, Config: port.Config,
-		}, port.Direction)
+		resolved, _, err := resolveAndProjectPort(definitionFromPort(port), port.Direction)
 		if err != nil {
 			panic(fmt.Sprintf("clone retained port %q: %v", port.Name, err))
 		}

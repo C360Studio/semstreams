@@ -42,6 +42,7 @@ func TestValidatorUsesCopiedRealRegistrationAndActualNodeConfig(t *testing.T) {
 			}
 			return &validationTestComponent{value: cfg.Value}, nil
 		},
+		Ports: func(json.RawMessage, string) (component.PortConfig, error) { return component.PortConfig{}, nil },
 	}))
 	validator := NewValidator(registry, &natsclient.Client{},
 		slog.New(slog.NewTextHandler(io.Discard, nil)))

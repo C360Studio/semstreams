@@ -208,20 +208,45 @@ var (
 	_ component.LifecycleComponent = (*Component)(nil)
 )
 
-// CreateGraphQuery creates a new graph query coordinator component
-func CreateGraphQuery(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
-	// Parse configuration
+// DeclarePorts is the component.PortDeclarer for graph-query: the ports
+// CreateGraphQuery will report for rawConfig, computed without dependencies.
+// The coordinator declares no outputs; it answers over request/reply.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	_, inputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfigFrom(inputs, nil), nil
+}
+
+// resolveConfig parses rawConfig, applies defaults, validates, and resolves
+// the input ports. It is the one derivation DeclarePorts and CreateGraphQuery
+// share.
+func resolveConfig(rawConfig json.RawMessage) (Config, []component.Port, error) {
 	var config Config
 	if err := json.Unmarshal(rawConfig, &config); err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
+		return Config{}, nil, fmt.Errorf("parse config: %w", err)
 	}
-
-	// Apply defaults
 	config.ApplyDefaults()
-
-	// Validate configuration
 	if err := config.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid config: %w", err)
+		return Config{}, nil, fmt.Errorf("invalid config: %w", err)
+	}
+	inputs := make([]component.Port, 0, len(config.Ports.Inputs))
+	for _, definition := range config.Ports.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return Config{}, nil, fmt.Errorf("resolve input port: %w", err)
+		}
+		inputs = append(inputs, port)
+	}
+	return config, inputs, nil
+}
+
+// CreateGraphQuery creates a new graph query coordinator component
+func CreateGraphQuery(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+	config, inputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
 	}
 
 	// Validate dependencies - deps.NATSClient is typed as *natsclient.Client
@@ -231,14 +256,6 @@ func CreateGraphQuery(rawConfig json.RawMessage, deps component.Dependencies) (c
 	}
 
 	logger := deps.GetLoggerWithComponent("graph-query")
-	inputs := make([]component.Port, 0, len(config.Ports.Inputs))
-	for _, definition := range config.Ports.Inputs {
-		port, err := definition.Resolve(component.DirectionInput)
-		if err != nil {
-			return nil, fmt.Errorf("resolve input port: %w", err)
-		}
-		inputs = append(inputs, port)
-	}
 	queryFacts, err := inputs[0].Facts()
 	if err != nil {
 		return nil, fmt.Errorf("inspect graph query subject family: %w", err)
@@ -762,6 +779,7 @@ func Register(registry *component.Registry) error {
 		Description:  "Query coordinator for graph subsystem",
 		Version:      "1.0.0",
 		Factory:      CreateGraphQuery,
+		Ports:        DeclarePorts,
 		Schema:       DefaultConfig().Schema(),
 		Dependencies: []string{component.DepModelRegistry},
 	})

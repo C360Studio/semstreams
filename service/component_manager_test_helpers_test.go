@@ -51,6 +51,9 @@ func admitTestRegistryComponent(
 		Factory: func(json.RawMessage, component.Dependencies) (component.Discoverable, error) {
 			return instance, nil
 		},
+		Ports: func(json.RawMessage, string) (component.PortConfig, error) {
+			return component.PortConfigFrom(instance.InputPorts(), instance.OutputPorts()), nil
+		},
 	}))
 	_, err := registry.CreateComponent(componentadmission.Access{}, name, types.ComponentConfig{
 		Name: name, Type: types.ComponentTypeProcessor, Enabled: true, Config: json.RawMessage(`{}`),

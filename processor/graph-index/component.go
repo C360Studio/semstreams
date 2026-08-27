@@ -371,6 +371,51 @@ type entityIndexWork struct {
 	completionRevision uint64
 }
 
+// DeclarePorts is the component.PortDeclarer for graph-index: the ports
+// CreateGraphIndex will report for rawConfig, computed without dependencies.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	_, inputs, outputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfigFrom(inputs, outputs), nil
+}
+
+// resolveConfig parses rawConfig, applies defaults, validates, and resolves
+// the effective ports. It is the one derivation DeclarePorts and
+// CreateGraphIndex share.
+func resolveConfig(rawConfig json.RawMessage) (Config, []component.Port, []component.Port, error) {
+	var config Config
+	if len(rawConfig) > 0 {
+		if err := json.Unmarshal(rawConfig, &config); err != nil {
+			return Config{}, nil, nil, errs.Wrap(err, "CreateGraphIndex", "factory", "config unmarshal")
+		}
+	} else {
+		config = DefaultConfig()
+	}
+	config.ApplyDefaults()
+	if err := config.Validate(); err != nil {
+		return Config{}, nil, nil, errs.Wrap(err, "CreateGraphIndex", "factory", "config validation")
+	}
+	inputs := make([]component.Port, len(config.Ports.Inputs))
+	for index, definition := range config.Ports.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return Config{}, nil, nil, errs.Wrap(err, "CreateGraphIndex", "factory", "resolve input port")
+		}
+		inputs[index] = port
+	}
+	outputs := make([]component.Port, len(config.Ports.Outputs))
+	for index, definition := range config.Ports.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return Config{}, nil, nil, errs.Wrap(err, "CreateGraphIndex", "factory", "resolve output port")
+		}
+		outputs[index] = port
+	}
+	return config, inputs, outputs, nil
+}
+
 // CreateGraphIndex is the factory function for creating graph-index components
 func CreateGraphIndex(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
 	// Validate dependencies
@@ -379,36 +424,9 @@ func CreateGraphIndex(rawConfig json.RawMessage, deps component.Dependencies) (c
 	}
 	natsClient := deps.NATSClient
 
-	// Parse configuration
-	var config Config
-	if len(rawConfig) > 0 {
-		if err := json.Unmarshal(rawConfig, &config); err != nil {
-			return nil, errs.Wrap(err, "CreateGraphIndex", "factory", "config unmarshal")
-		}
-	} else {
-		config = DefaultConfig()
-	}
-
-	// Apply defaults and validate
-	config.ApplyDefaults()
-	if err := config.Validate(); err != nil {
-		return nil, errs.Wrap(err, "CreateGraphIndex", "factory", "config validation")
-	}
-	inputs := make([]component.Port, len(config.Ports.Inputs))
-	for index, definition := range config.Ports.Inputs {
-		port, err := definition.Resolve(component.DirectionInput)
-		if err != nil {
-			return nil, errs.Wrap(err, "CreateGraphIndex", "factory", "resolve input port")
-		}
-		inputs[index] = port
-	}
-	outputs := make([]component.Port, len(config.Ports.Outputs))
-	for index, definition := range config.Ports.Outputs {
-		port, err := definition.Resolve(component.DirectionOutput)
-		if err != nil {
-			return nil, errs.Wrap(err, "CreateGraphIndex", "factory", "resolve output port")
-		}
-		outputs[index] = port
+	config, inputs, outputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
 	}
 
 	// Create logger with component context
@@ -443,6 +461,7 @@ func Register(registry *component.Registry) error {
 		Version:     "1.0.0",
 		Schema:      schema,
 		Factory:     CreateGraphIndex,
+		Ports:       DeclarePorts,
 	})
 }
 

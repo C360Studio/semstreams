@@ -1,0 +1,772 @@
+# Tasks — composition-validation-substrate
+
+**Amend a task line when the work HAPPENS, not only when it succeeds.** A gate that ran and was never recorded is
+indistinguishable from one that was skipped. A `[~]` is a recorded decision and MUST also be noted in the spec delta.
+No task here asserts a post-merge fact; the merge gate owns CI.
+
+Word discipline: `scripts/openspec-queue.sh` reads the words hold / blocked / blocking / halt / red / failed / failing
+in any OPEN task line as a live caveat. They appear only in the RED-capture task (2.11) and in CLOSED tasks.
+Everywhere else say "MUST fail", "does not compile", "abort", "barrier".
+
+Premises (measured at `5cc0c7fb`; re-measure at the claim head and amend here): `component/registry.go:52-62`
+(`Registration` carries `Schema`, no ports), `:139-147` (nil-`Factory` rejection precedent), `:209-273`
+(`prepareComponent`; nil-NATS guard `:228`), `:564-590` (`captureComponentDeclaration`), `:667-678` (`Snapshots`);
+`component/ports.go:53-113,153-165` (`PortDefinition`/`PortConfig`/`MergePortConfig`); `component/port_resolver.go:11`
+(`Resolve`); `config/streams.go:435` (`extractPortsFromConfig`); `config/stream_bounds.go:259-320` (pure port lane);
+`component/flowgraph/flowgraph.go:127-143` (`BuildFromRegistry`), `:216` (`ConnectComponentsByPatterns`), `:714`
+(`AnalyzeConnectivity`), `:748-770` (status derivation), `:955` (`ValidateStreamRequirements`);
+`engine/validator.go:300-388,389-457,459-489,491-610,612-623` (the logic that moves); `service/component_manager.go:229-335`
+(`Initialize`; seal `:330`), `:1008` (cache invalidation), `:1430-1500`; `service/component_manager_http.go:74-77,618-716`;
+`cmd/semstreams/flags.go:22,71` and `main.go:102-115` (`--validate`); `cmd/openapi-generator/main.go:54-90`;
+`processor/agentic-tools/executors/register.go:51-54,114-117,201-204` (tool gates);
+`processor/agentic-tools/component_catalog_executor.go:15-60`; `service/register.go:15` (`flow-builder`);
+`service/flow_service.go:560-585` (override-expiry reporter host); `configs/protocol-flow.json:39-42`;
+`test/e2e/client/observability.go:80-114,330-400`; `test/e2e/scenarios/tiered.go:187`; the 33-factory table in
+`docs/proposals/gh1089-flow-boundary-inventory.md` §2.3.
+
+## 1. Claim
+
+- [x] 1.1 Claimed 2026-08-26 on branch `claude/gh1092-composition-validation-substrate` (worktree
+      `../semstreams-wt/claude/gh1092-composition-validation-substrate`, base `origin/main` `c3a17741`); draft PR
+      #1101 is open with `Closes #1092` in its body; this change directory's claim tick was its first commit. The
+      earlier wording of this line (`Closes #1089`, branch `claude/gh1089-composition-validation`, PR #1088 closure)
+      predated the owner's two-PR split (design §7 item 5): #1092 is the substrate PR (P1–P7, this PR #1101) and
+      #1093 is the retirement PR. THIS change is the substrate only: its every task, delta, and gate is performed on
+      this branch, and it archives as this PR's final content commit. The retirement's target state lives in its own
+      change, `openspec/changes/flow-authoring-retirement/` (owner instruction, 2026-08-26) — the `flow-authoring`
+      REMOVED delta, the `component-runtime-config` REMOVED requirement, the "framework owns no composition authoring
+      store" requirement, and the tasks that were annotated `(#1093)` here all moved there. Nothing in this file waits
+      on #1093.
+- [x] 1.2 Owner ruling on #1089 (2026-08-26), verbatim: "C, ADR-100 accepted." The nine §7 defaults stood without
+      override (ADR-100 Status; restated by the owner at the #1092 claim): (1) no next-boot write verb; (2) a factory
+      without a declarer is REJECTED at `RegisterFactory`; (3) boot REFUSES on an error-severity finding, only after
+      every shipped config has been measured (P3 before P5); (4) tools named `validate_composition` /
+      `composition_graph`, `list_components` kept; (5) TWO landing PRs — #1092 substrate (this PR #1101), #1093
+      retirement; (6) `--validate` stays as an alias; (7) `empty_composition` is a WARNING; (8) the new exported
+      surface is reviewed by the owner inside this PR; (9) PR #1088 closed unmerged. No answer departs from the
+      delta, so no delta edit was needed before 2.x.
+
+## 2. Baseline capture — write the named tests first
+
+- [x] 2.1 `component/registry_test.go`: `TestRegisterFactoryRejectsNilPortDeclarer` (does not compile until 3.1 adds
+      the field — record the compile error verbatim as the baseline); `TestAdmissionRefusesPortDeclarationMismatch`
+      with a package-local fake factory whose declarer returns one output and whose component returns two.
+- [x] 2.2 `componentregistry/register_integration_test.go` (`//go:build integration`):
+      `TestDeclaredPortsMatchConstructedPortsForEveryRegisteredFactory` — `natsclient.NewTestClient(t,
+      natsclient.WithJetStream(), natsclient.WithKV())`, the full registry (core + `graphresearch.RegisterComponents` +
+      `optionalotel.Register`), a table of 33 rows each carrying the smallest configuration the factory admits
+      (the inventory's nil-deps column names the five that reject `{}`), construct through
+      `Registry.CreateComponent` with real deps, evaluate the declarer, compare resolved ports port-for-port. Assert
+      `len(rows) == len(registry.ListFactories())` so a new factory cannot be skipped.
+- [x] 2.3 `composition/validate_test.go`: the eight named P2 tests (`TestValidateFindingsVocabularyIsClosed`,
+      `TestValidateReportsUnknownComponent`, `TestValidateReportsRequiredStreamInputWithoutPublisher`,
+      `TestValidateReportsInterfaceMismatch`, `TestValidateReportsStreamRequirement`,
+      `TestValidateReportsConnectionPatternConflict`, `TestValidateReportsExclusiveResourceConflict`,
+      `TestValidateIsDeterministic`) over hand-built registries of package-local fake factories with declarers only
+      (no construction). Decode every result from its JSON into a fresh `composition.Result` before asserting.
+- [x] 2.4 `composition/shipped_configs_test.go`: `TestValidateShippedConfigsHaveNoErrorFindings` walking
+      `configs/**/*.json`, `docker/**/*.json`, `test/e2e/**/*.json` (skip files that are not `config.Config`
+      documents by decoding and checking `platform.org`). Record the initial finding counts per file here.
+- [x] 2.5 `composition/engine_parity_integration_test.go` (`//go:build integration`; deleted with the engine by
+      `flow-authoring-retirement` 3.2, not by this change):
+      `TestValidateMatchesEngineFindingsForShippedConfigs` — for every shipped config, `flowstore.FromComponentConfigs`
+      + `engine.ValidateFlowDefinition` against a real NATS client vs `composition.Validate`; assert equal sets of
+      `(type, component, port)` after mapping `empty_flow`→`empty_composition`, `graph_build_error`→
+      `port_declaration_error`. This is the dropped-step detector for the move in 3.2; a difference is a finding to
+      resolve, not to map away.
+- [x] 2.6 `composition/cli/main_test.go`: `TestCLIValidateExitsNonZeroOnErrorFindings`,
+      `TestCLICatalogPrintsEveryRegisteredFactory` (asserts 33 against `len(registry.ListFactories())`),
+      `TestCLIGraphMermaidRendersEveryEdge`. `cmd/semstreams/main_test.go`:
+      `TestValidateFlagReportsCompositionFindings`.
+- [x] 2.7 `composition/assert_test.go`: `TestAssertValidFailsOnErrorFinding` with a recording `testing.TB`.
+- [x] 2.8 `service/component_manager_boot_findings_integration_test.go` (`//go:build integration`):
+      `TestComponentManagerRefusesBootOnErrorFinding` (a config with a JetStream input fed only by a core-NATS output),
+      `TestComponentManagerExposesBootFindings`, `TestGraphProjectionMatchesAdmittedComposition`;
+      `service/component_manager_http_test.go`: `TestFlowValidationHandlerProjectsLibraryResult` (decode into a fresh
+      `composition.Result`; assert equality with the retained result). `composition/mermaid_test.go`:
+      `TestMermaidIsDeterministic`.
+- [x] 2.9 `processor/agentic-tools/executors/composition_tools_test.go`: `TestValidateCompositionToolReturnsFindings`,
+      `TestCompositionGraphToolReturnsMermaid`, `TestListComponentsCarriesPorts` — through `RegisterBuiltins` with
+      `ToolDependencies{ComponentRegistry: reg, SkipBuiltins: skipAllBut("component_catalog")}` so the production
+      wire is driven.
+- [x] 2.10 `test/contract/schema_export_test.go` `TestSchemaExportCarriesDefaultPorts`;
+      `composition/catalog_test.go` `TestCatalogCarriesDefaultPortsOrRequiresConfig`.
+- [x] 2.11 RED capture: run each §2 file with `-run` and record the verbatim `--- FAIL` / compile-error lines here
+      (this is the one task where the words red / failed may appear). Commands:
+      `go test -race ./component/ -run 'TestRegisterFactoryRejectsNilPortDeclarer|TestAdmissionRefusesPortDeclarationMismatch' -v`;
+      `go test -race -tags=integration ./componentregistry/ -run TestDeclaredPortsMatchConstructedPortsForEveryRegisteredFactory -v`;
+      `go test -race ./composition/... -run 'TestValidate|TestCatalog|TestMermaid|TestAssertValid|TestCLI' -v`;
+      `go test -race -tags=integration ./composition/ -run TestValidateMatchesEngineFindingsForShippedConfigs -v`;
+      `go test -race -tags=integration ./service/ -run 'TestComponentManagerRefusesBootOnErrorFinding|TestComponentManagerExposesBootFindings|TestGraphProjectionMatchesAdmittedComposition' -v`;
+      `go test -race ./service/ -run 'TestFlowValidationHandlerProjectsLibraryResult|TestServiceRegistryHasNoFlowBuilder|TestStreamOverrideExpiryReporterRegistersWithoutFlowService' -v`;
+      `go test -race ./processor/agentic-tools/executors/ -run 'TestValidateCompositionToolReturnsFindings|TestCompositionGraphToolReturnsMermaid|TestListComponentsCarriesPorts|TestToolRegistryHasNoFlowTools' -v`;
+      `go test -race ./cmd/semstreams/ -run TestValidateFlagReportsCompositionFindings -v`;
+      `go test ./test/contract/ -run 'TestOpenAPIHasNoFlowRoutes|TestSchemaExportCarriesDefaultPorts' -v`.
+      Commit the tests before any implementation (`test(composition): baseline for #1089`).
+      RED captured 2026-08-26 at the claim head (`4f7e678e` + §2 test files), verbatim first lines (log:
+      scratchpad `red.log`; the #1093 test names in the commands above were not run — they land with the retirement PR):
+      1. `component/registry_test.go:262:3: unknown field Ports in struct literal of type RegistrationConfig` /
+         `FAIL	github.com/c360studio/semstreams/component [build failed]`
+      2. `componentregistry/register_integration_test.go:126:30: registry.Declare undefined (type *component.Registry has no field or method Declare)` /
+         `FAIL	github.com/c360studio/semstreams/componentregistry [build failed]`
+      3. `github.com/c360studio/semstreams/composition: build constraints exclude all Go files in .../composition` /
+         `github.com/c360studio/semstreams/composition/cli: no non-test Go files in .../composition/cli` /
+         `FAIL	github.com/c360studio/semstreams/composition [build failed]` / `FAIL	github.com/c360studio/semstreams/composition/cli [build failed]`
+      4. `github.com/c360studio/semstreams/composition: no non-test Go files in .../composition` / `FAIL	github.com/c360studio/semstreams/composition [build failed]`
+      5. `github.com/c360studio/semstreams/composition: no non-test Go files in .../composition` / `FAIL	github.com/c360studio/semstreams/service [build failed]`
+      6. `github.com/c360studio/semstreams/composition: build constraints exclude all Go files in .../composition` / `FAIL	github.com/c360studio/semstreams/service [build failed]`
+      7. `... composition: build constraints exclude all Go files ...` / `FAIL	github.com/c360studio/semstreams/processor/agentic-tools/executors [build failed]`
+      8. `... composition: build constraints exclude all Go files ...` / `FAIL	github.com/c360studio/semstreams/cmd/semstreams [build failed]`
+      9. `schema_export_test.go:52: udp.v1.json: default_ports=false ports_require_config=false ports_error="" — want exactly one shape` (one line per
+         committed component schema) / `--- FAIL: TestSchemaExportCarriesDefaultPorts (0.01s)` / `FAIL	github.com/c360studio/semstreams/test/contract	0.475s`
+      Committed as `test(composition): baseline for #1092` (the issue number in the task's suggested subject predates the split).
+
+## 3. GREEN — implement in dependency order
+
+- [x] 3.1 **P1.** `component.PortDeclarer`, `Registration.Ports`, `RegistrationConfig.Ports`, nil rejection in
+      `RegisterFactory`; exported `component.Declaration` value type (the existing `componentDeclaration` shape,
+      `registry.go:76-84`); `Registry.Declare(factory, cfg types.ComponentConfig, instance) (Declaration, error)`
+      resolving through `resolveAndProjectPort`; parity compare in `prepareComponent` after
+      `captureComponentDeclaration`. Then all 33 factories: expose the existing derivation as `Ports` and call it
+      from the constructor (one home; the constructor MUST NOT keep a second derivation). Record the 33 file:line
+      pairs here. `examples/processors/*` and `cmd/e2e-semstreams/mission` components get declarers too (they
+      register through the same seam).
+      DONE (head after `0333cde3`): `component/registry.go:40` (`PortDeclarer`), `:64` (`Registration.Ports`), `:74`
+      (`RegistrationConfig.Ports`), `:88` (`Declaration`, the exported `componentDeclaration` shape + `ComponentType`),
+      `:134` (`declarationSnapshot.Declaration()`), `:173` (nil declarer rejected at `RegisterFactory`, after the Type
+      check so the existing validation table keeps its messages), `:318` (`Registry.Declare(instanceName, config)` —
+      one parameter fewer than the design's `Declare(factory, cfg, instance)`: `cfg.Name` IS the factory), `:300`
+      + `:394` (parity compare in `prepareComponent` after `captureComponentDeclaration`: name, direction, required,
+      kind, resource id, subjects, interface, in order; first differing port named). `component/ports.go:157`
+      (`PortConfigFrom` — the one helper the 38 declarers use to expose resolved ports as definitions; added beside
+      the design's list, owner review). Declarers (`DeclarePorts`, one per package; the constructor calls the same
+      `resolveConfig`/`resolvePorts` and keeps no second derivation): agentic-dispatch `processor/agentic-dispatch/component.go:200`
+      · agentic-governance `processor/agentic-governance/component.go:76` · agentic-loop `processor/agentic-loop/component.go:197`
+      · agentic-model `processor/agentic-model/component.go:113` · agentic-tools `processor/agentic-tools/component.go:103`
+      · file `output/file/file.go:146` · file_input `input/file/file.go:630` · gated-dag `processor/gated-dag/component.go:82`
+      · graph-clustering `processor/graph-clustering/component.go:669` · graph-embedding `processor/graph-embedding/component.go:381`
+      · graph-gateway `gateway/graph-gateway/component.go:360` · graph-index `processor/graph-index/component.go:376`
+      · graph-index-spatial `processor/graph-index-spatial/component.go:212` · graph-index-temporal `processor/graph-index-temporal/component.go:221`
+      · graph-ingest `processor/graph-ingest/component.go:645` · graph-query `processor/graph-query/component.go:214`
+      · http `gateway/http/http.go:75` (static: no ports; config still validated) · httppost `output/httppost/httppost.go:146`
+      · json_filter `processor/json_filter/json_filter.go:122` · json_generic `processor/json_generic/json_generic.go:106`
+      · json_map `processor/json_map/json_map.go:128` · lifecycle-gateway `gateway/lifecycle-gateway/component.go:302`
+      · objectstore `storage/objectstore/component.go:154` (see 3.1a) · otel-exporter `output/otel/component.go:115`
+      · research-graph-assess `processor/research-graph-assess/component.go:84` · research-graph-classify `processor/research-graph-classify/component.go:98`
+      · research-graph-execute `processor/research-graph-execute/component.go:78` · research-graph-route `processor/research-graph-route/component.go:87`
+      · research-graph-synthesize `processor/research-graph-synthesize/component.go:74` · rule-processor `processor/rule/factory.go:31`
+      · udp `input/udp/udp.go:739` · websocket `output/websocket/websocket.go:1842` · websocket_input `input/websocket/register.go:17`;
+      registered through the same seam: http_input `input/http/register.go:14`, document_processor
+      `examples/processors/document/component.go:119`, iot_sensor `examples/processors/iot_sensor/component.go:118`,
+      weather_station `examples/processors/weather_station/component.go:91`, mission-command `cmd/e2e-semstreams/mission/command.go:175`.
+      Parity: `go test -race -tags=integration ./componentregistry/ -run TestDeclaredPortsMatchConstructedPortsForEveryRegisteredFactory -v`
+      → `--- PASS: TestDeclaredPortsMatchConstructedPortsForEveryRegisteredFactory (0.47s)` / `ok github.com/c360studio/semstreams/componentregistry 1.971s`
+      (33/33 rows, `len(rows) == len(ListFactories())`). Two rows needed the smallest admitted configuration rather than `{}`:
+      `http` (`routes[0].nats_subject`) and `lifecycle-gateway` (`path_prefix` + `ports.outputs`: `SafeUnmarshal` runs `Validate`
+      BEFORE `ApplyDefaults`, so any non-empty document must carry both — pre-existing, not changed here; FILED #1108). Catalog for `{}`
+      (`go run ./cmd/semstreams catalog`, 33 entries): 23 declare `default_ports`; 10 `ports_require_config`: file, file_input,
+      gated-dag, graph-gateway, graph-ingest, graph-query, http, httppost, lifecycle-gateway, rule-processor (file, httppost,
+      http, lifecycle-gateway because `SafeUnmarshal` validates before defaults on `{}` — pre-existing, FILED #1108).
+- [~] 3.1a **objectstore instance name — measured, not codified.** `storage/objectstore/component.go` passes the literal
+      `"objectstore"` to `resolveObjectStorePorts` (now the named constant `constructedInstanceName`, `:143`); the factory
+      signature carries no instance name and `component.Dependencies` has no such field, so the ADMITTED declaration NEVER
+      carries the real instance name — its `store-provide` port is `store:objectstore` for every instance. Every shipped
+      instance is named `objectstore` (16 configs, `grep -rl '"name": "objectstore"' configs/`), so shipped compositions
+      cannot observe the difference. The declarer (`:154`) therefore ignores its `instanceName` parameter and mirrors the
+      constructor, so parity holds and nothing changes at runtime; the spec's "pure function of ... the instance name"
+      is NOT honoured for this one factory. Threading the real instance name into the constructor would change the
+      store-provide resource identity (`store:<instance>`) at runtime for any adopter naming the instance differently —
+      an owner ruling (FILED #1106, inventory §12.2). Neither side is codified in a test.
+      Written into the delta as a `[~]` note under "Port declarations are static facts of a registration" (review H3).
+- [x] 3.2 **P2 + P6.** `composition/` package: constants, `Finding`, `Result`, `Graph`, `Validate`, `Analyze`,
+      `Mermaid`; `flowgraph.BuildFromDeclarations`. Move `engine/validator.go:300-623` logic in (severity table in
+      one function; interface compatibility exact-match preserved). `TestValidateMatchesEngineFindingsForShippedConfigs`
+      MUST be green before the engine is deleted (`flow-authoring-retirement` 3.2); every difference it surfaces is
+      recorded here with its disposition.
+      DONE: `composition/findings.go` (13 `Type*` constants, `Finding`, `Result`, `severityOf` `:67` — the one severity
+      table), `composition/graph.go` (`Graph`/`Node`/`PortView`/`Edge`), `composition/analyze.go:16` (`Analyze`),
+      `composition/validate.go:19` (`Validate`; mirrors `prepareComponent`'s pre-factory checks as findings; an
+      exclusive-resource loser is excluded from the graph exactly as admission would refuse it),
+      `composition/mermaid.go:12`, `composition/catalog.go:51`; `component/flowgraph/flowgraph.go:144`
+      (`BuildFromDeclarations`; `BuildFromRegistry` is now a wrapper over it). `flowgraph` edge derivation, orphan and
+      disconnected-node walks, KV-writer and network-conflict checks, and stream-requirement dedupe now iterate sorted
+      keys (`:163` `sortedNodeNames` and `slices.Sorted(maps.Keys(...))` at each site) — without this the connection
+      ID chosen for a pair reachable under both a stream name and a subject differed run to run, and
+      `TestValidateIsDeterministic`/`TestMermaidIsDeterministic` could not hold. Engine parity (dropped-step detector):
+      `go test -race -tags=integration ./composition/ -run TestValidateMatchesEngineFindingsForShippedConfigs -v` →
+      `--- PASS: TestValidateMatchesEngineFindingsForShippedConfigs (1.29s)` / `ok github.com/c360studio/semstreams/composition 2.737s`
+      over all 22 shipped configs, two-way on the engine's vocabulary — of which the shipped configs exhibit only
+      `disconnected_node`, `orphaned_port`, `missing_interface`, and `empty_composition`; `interface_mismatch`,
+      `unknown_component`, and `port_declaration_error` are exercised by the unit tests (`TestValidateReportsInterfaceMismatch`
+      caught the 4.4 omission; the oracle did not), not by the oracle (review M5). Differences surfaced and their dispositions:
+      (1) with only a NATS client the engine could not construct `agentic-dispatch`/`agentic-model` (ModelRegistry) and
+      `lifecycle-gateway` (LifecycleManager), and `engine/validator.go:120-133` returns build errors only and SKIPS
+      connectivity when any node fails — an oracle that bails is no oracle; disposition: added
+      `engine.NewValidatorWithDependencies` (`engine/validator.go:37`, additive; `NewValidator` delegates to it) so the
+      test constructs every node with real deps and the comparison is complete; a `graph_build_error` from the engine
+      is now a test failure, never a skip. (2) `stream_requirement`, `config_invalid`, `component_type_mismatch`,
+      `component_config_invalid`, `exclusive_resource_conflict`, `connection_pattern_error` are composition-only: the
+      engine never emitted them (stream requirements lived in the HTTP handler, the rest in the Registry); they are
+      excluded from the engine comparison by vocabulary, not mapped. (3) After the H4 ruling the external-boundary
+      marker suppresses the `no_publishers` orphan of inputs declared `external`; the engine predates the marker and
+      still reports `orphaned_port agentic-dispatch/user.message` on the nine agentic configs. The detector records
+      that one ruled departure per config (`disposition external-boundary marker`), scoped to exactly that finding on
+      exactly the ports the projection marks external (`Graph.Nodes[].Inputs[].External`); every other engine finding
+      must still be matched. No remaining difference.
+- [x] 3.3 **P4.** `composition.AssertValid` — `composition/assert.go:14`; `TestAssertValidFailsOnErrorFinding` PASS.
+- [x] 3.4 **P3.** `composition/cli.Main`; `cmd/semstreams`: verb dispatch before `parseCLI` (`main.go:86`), and
+      `--validate` (`main.go:112-115`) prints the same findings and exits non-zero on errors. `cmd/e2e-semstreams`
+      wires the same. Update `docs/concepts/32-agent-memory.md:226` (`--validate` example) if its output changes.
+      DONE: `composition/cli/main.go:54` (`Main`) and `:37` (`Dispatch(args, registry, stdout, stderr) (code, handled)`
+      — the design's adopter-seam three-liner; added beside `Main`, owner review); `cmd/semstreams/main.go:86`
+      (`dispatchCompositionVerb`, before `run()` so no banner precedes the JSON), `:108` (`fullComponentRegistry`: the
+      verbs and `--validate` judge against the FULL catalog — core + graph-research + OTEL — while boot gates the two
+      capabilities on `Selected(cfg)`; FILED #1107 as a prediction/observation gap — a config can validate clean offline
+      and refuse boot), `:165` (`--validate`
+      calls `compositioncli.Main` with the `validate` verb: same findings, exit non-zero on errors); `cmd/e2e-semstreams/main.go:85,104,157`
+      the same plus the bundled examples; help text in `cmd/semstreams/flags.go` and the e2e `printHelp`.
+      `docs/concepts/32-agent-memory.md:226` updated (output is the `composition.Result` JSON; exit 1 on error findings).
+      Tests: `TestCLIValidateExitsNonZeroOnErrorFindings`, `TestCLICatalogPrintsEveryRegisteredFactory` (33),
+      `TestCLIGraphMermaidRendersEveryEdge`, `TestValidateFlagReportsCompositionFindings` (drives `main()` in a child
+      process via `TestMain`) all PASS.
+- [x] 3.5 **Measure shipped compositions.** Run `go run ./cmd/semstreams validate <path>` over every file 2.4 walks;
+      paste the error findings here. Fix each shipped configuration or record it as FILED #n with the owner's
+      disposition. 2.4 MUST be green before 3.6 flips the boot refuse.
+      MEASURED, final (owner ruling H4 = option ii landed; `go build ./cmd/e2e-semstreams && e2e-semstreams validate <path>`
+      over the 22 `config.Config` documents under `configs/` against the union registry core + graph-research + OTEL
+      + the e2e examples; `docker/` and `test/e2e/` hold no JSON configs), verbatim per file:
+      configs/agentic.json: exit=0 status=warnings errors=0 warnings=11 nodes=7 edges=117
+      configs/cloud-federation.json: exit=0 status=warnings errors=0 warnings=1 nodes=2 edges=1
+      configs/e2e-structural.json: exit=0 status=warnings errors=0 warnings=10 nodes=17 edges=16
+      configs/edge-federation.json: exit=0 status=valid errors=0 warnings=0 nodes=3 edges=2
+      configs/examples/research-graph-pipeline.json: exit=0 status=warnings errors=0 warnings=9 nodes=13 edges=100
+      configs/flows/crud-tools-test.json: exit=0 status=warnings errors=0 warnings=9 nodes=7 edges=85
+      configs/flows/deep-research-test.json: exit=0 status=warnings errors=0 warnings=9 nodes=7 edges=86
+      configs/flows/deep-research.json: exit=0 status=warnings errors=0 warnings=9 nodes=8 edges=166
+      configs/flows/lesson-example.json: exit=0 status=warnings errors=0 warnings=9 nodes=6 edges=72
+      configs/flows/ops-agent-test.json: exit=0 status=warnings errors=0 warnings=9 nodes=6 edges=72
+      configs/flows/ops-agent.json: exit=0 status=warnings errors=0 warnings=9 nodes=6 edges=72
+      configs/gemini-example.json: exit=0 status=warnings errors=0 warnings=1 nodes=0 edges=0
+      configs/graph-backend.json: exit=0 status=warnings errors=0 warnings=9 nodes=5 edges=3
+      configs/hello-world.json: exit=0 status=warnings errors=0 warnings=7 nodes=6 edges=4
+      configs/lifecycle-flow.json: exit=0 status=warnings errors=0 warnings=1 nodes=5 edges=4
+      configs/protocol-flow.json: exit=0 status=warnings errors=0 warnings=11 nodes=12 edges=9
+      configs/research-graph-e2e.json: exit=0 status=warnings errors=0 warnings=9 nodes=13 edges=100
+      configs/semantic-8b.json: exit=0 status=warnings errors=0 warnings=12 nodes=19 edges=20
+      configs/semantic-frontier.json: exit=0 status=warnings errors=0 warnings=12 nodes=19 edges=20
+      configs/semantic.json: exit=0 status=warnings errors=0 warnings=12 nodes=19 edges=20
+      configs/statistical.json: exit=0 status=warnings errors=0 warnings=12 nodes=19 edges=20
+      configs/structural.json: exit=0 status=warnings errors=0 warnings=10 nodes=17 edges=17
+      TOTAL 22 configs; 0 with error findings
+      Dispositions, in the order they landed:
+      (a) FIXED, config defect (review H1): `configs/research-graph-e2e.json` and `configs/examples/research-graph-pipeline.json`
+          declared the rule-processor's `component.dispatch` output on the 2-token subject `component.*` while the five
+          `*_trigger` inputs subscribe on 3-token `component.<stage>.>`; `flowgraph.matchTokens` never overlaps those.
+          Changed to `component.>` (runtime-inert); grammar control amended (`postFoundationBResearchDispatchSubjectAmendments`,
+          `TestPostFoundationBResearchDispatchSubjectAmendmentIsExact`; control record section "Research-graph dispatch
+          subject amendment"). 6 errors → 1 each; edges 95 → 100.
+      (b) FIXED, validator model gap (review H2): explicit `streams` reach `composition.Analyze(declarations, streams)`
+          at both evidence classes; `configs/lifecycle-flow.json` 1 → 0.
+      (c) FIXED by owner ruling (H4, option ii, 2026-08-26): the external-boundary marker. `component.PortDefinition.External`
+          / `component.Port.External` (`component/ports.go`, `component/port.go`; wire `"external": true`, an envelope
+          field beside `name`/`required`/`description` — the kind-independent home for a fact about the port's
+          connection, parallel to `required`. #1095 §C.3's `"import": true` is the same KIND of thing — an operator
+          statement, not a predicted framework value — but lives on `JetStreamPort` (kind-specific config, #1095
+          tasks 2.x) because import authority is a JetStream-lane fact; `external` is envelope because any
+          stream-pattern input can be fed from outside. Different homes for a reason) travels
+          through the strict codec, `resolveAndProjectPort`, `definitionFromPort`/`MergePortConfig`, the admitted
+          declaration, the parity compare (`portDifference`), the schema envelope (`component/schema_tags.go`
+          `"external"`, bool, read-only) and the catalog/`default_ports` (`composition.PortView.External`).
+          `composition.Analyze` suppresses ONLY the `no_publishers` orphan of an input declared external
+          (`composition/analyze.go` `externalInputs`); unmarked required orphans stay errors; other findings on the
+          marked port are unaffected. `agentic-dispatch/user.message` is `Required: true, External: true` at the factory
+          default (`processor/agentic-dispatch/config.go:68`); because a named merge is a complete replacement, the eight
+          shipped overrides carry `"external": true` too (grammar control amended: `postFoundationBExternalBoundaryAmendments`,
+          `TestPostFoundationBExternalBoundaryAmendmentIsExact`; control record section "Owner-approved external-boundary
+          marker amendment"; envelope pin in `TestGeneratePortFieldSchema` raised 4 → 5). Tests:
+          `TestValidateSuppressesOrphanOnlyForExternallyFedInput`, `TestPortDefinitionExternalRoundTrip`. 9 → 0.
+          Adopter seam of the marker (review round 2, M2): *must know* — an input fed from outside the composition
+          is declared `"external": true`, and a named override of such a port restates it (a named merge is a complete
+          replacement, exactly as for `required`/`description`); *do nothing* — boot refuses with
+          `orphaned_port on <instance>/<port>: … no_publishers (… If this input is fed from outside the composition,
+          declare "external": true on the port (a named override replaces the whole port, so restate it there))` — the
+          remedy is in the refusal text (`composition/analyze.go` `orphanedPortFinding`, `service/component_manager.go`
+          `analyzeBootComposition`), loud and one line; *find out* — the boot log, `validate <config>`, and the
+          `orphaned_port` finding's suggestions; *should know* — nothing beyond declaring the boundary they already know
+          about. `external` on an output is refused at resolution (`component/port_resolver.go`), never ignored.
+      RESULT: 22/22 shipped configurations carry no error finding; `TestValidateShippedConfigsHaveNoErrorFindings` is
+      un-skipped and green. The 3.5 deviation no longer exists.
+- [x] 3.6 **P5.** `ComponentManager.Initialize`: `Analyze(registry.Snapshots)` before `SealComposition`; log; refuse
+      on error (per the 1.2 ruling); retain the result; `handleFlowValidation`/`handleFlowGraph` become projections of
+      the retained result (delete `component_manager_http.go:677-683` status logic). Update
+      `test/e2e/client/observability.go:330-400` to decode `composition.Result`.
+      DONE except the refuse: `service/component_manager.go:365` (`analyzeBootComposition`, called at `:249` for the
+      nil-config path and `:342` before `SealComposition`; logs every finding, retains the result at `:80`
+      `bootFindings`), `service/component_manager_http.go:601` (`handleFlowValidation` serves the retained result
+      verbatim), `:578` (`handleFlowGraph` serves `result.Graph`, Mermaid on `format=mermaid`), OpenAPI rows for
+      `/validate` and `/flowgraph` now carry `SchemaRef`s to `Result`/`Graph`; the handler's private status logic is
+      deleted. `test/e2e/client/observability.go` decodes `composition.Result`; `CheckFlowHealth` fails on error
+      findings and keeps the tier's gateway filter over `disconnected_node` warnings. Tests PASS:
+      `TestComponentManagerExposesBootFindings`, `TestGraphProjectionMatchesAdmittedComposition`,
+      `TestFlowValidationHandlerProjectsLibraryResult`.
+      REFUSE FLIPPED (owner's default 3, precondition met by 3.5): `analyzeBootComposition` (`service/component_manager.go`)
+      returns an error naming every error finding (`composition validation refused boot with N error finding(s): …`) so
+      `Initialize` and therefore boot fail; the Registry is not sealed on that path. `TestComponentManagerRefusesBootOnErrorFinding`
+      is un-skipped and green (integration). The 3.6 deviation no longer exists; the `[~]` notes are removed from the delta.
+- [x] 3.7 **P7.** `list_components` gains `default_ports`; `validate_composition` and `composition_graph` executors
+      under the `component_catalog` gate. `docs/operations/adopter-tool-effect-metadata.md:130` rows updated.
+      DONE: `processor/agentic-tools/executors/composition_tools.go` (`validate_composition`, `composition_graph`;
+      `ToolEffectReadOnly`; config decoded through `config.Loader.LoadFromBytes` so the tool judges what a file would),
+      registered under the `component_catalog` gate at `register_component_catalog.go:30`; `list_components` gains
+      `default_ports` through `service.BuildComponentTypeCatalog` → `composition.Catalog` (`component_manager_http.go:387`;
+      `/types/{id}` serves the same entry). Doc row updated. Tests PASS: `TestValidateCompositionToolReturnsFindings`,
+      `TestCompositionGraphToolReturnsMermaid`, `TestListComponentsCarriesPorts` (through `RegisterBuiltins` with
+      `SkipBuiltins` = every group but `component_catalog`).
+- [x] 3.10 Commit GREEN (`feat(composition)!: …` with a BREAKING footer) before §4. Gates run at the GREEN head before
+      the commit: `go build ./...`; `go vet ./...`; `go vet -tags=integration ./...`; `task lint` (revive 0 warnings
+      after two `empty-block` fixes); `go test -race ./...` → every package `ok` (two fixes on the way: the
+      port-grammar guard rejected a `FilePort` type assertion in `output/file/file.go`, replaced by carrying the
+      path; `TestComponentManagerFlowReportingUsesRetainedPortsAfterComponentMutation` now computes the retained boot
+      result before hitting the projections); `go test ./test/contract/...` `ok` with the regenerated schemas (the
+      `default_ports` rows land in this commit so it is green; §5 verifies the second regeneration is clean).
+
+## 4. Forced omissions — each guard must be load-bearing
+
+Each: apply the omission, run the named command, record the verbatim failure, restore with `cp` from a copy taken
+before the omission, and record `shasum -a 256` equality of the restored file.
+
+- [x] 4.1 Delete the parity compare in `prepareComponent` → `go test -race ./component/ -run
+      TestAdmissionRefusesPortDeclarationMismatch -v` MUST fail.
+      DONE: `[applied]` → `--- FAIL: TestAdmissionRefusesPortDeclarationMismatch (0.00s)`; `component/registry.go` restored by `cp`, sha256 `620dc74f…a3dd` before and after.
+- [x] 4.2 Delete the nil check on `Ports` in `RegisterFactory` → `TestRegisterFactoryRejectsNilPortDeclarer` MUST fail.
+      DONE: `[applied]` → `--- FAIL: TestRegisterFactoryRejectsNilPortDeclarer (0.00s)`; `component/registry.go` restored, sha256 `620dc74f…a3dd` before and after.
+- [x] 4.3 Replace one factory's declarer body with its defaults only (udp: drop the merge) →
+      `go test -race -tags=integration ./componentregistry/ -run TestDeclaredPortsMatchConstructedPortsForEveryRegisteredFactory -v`
+      MUST fail on the udp row with an overridden port.
+      DONE (the udp row overrides `udp_socket` to port 14551, commit `c57f5994`, so a defaults-only declarer disagrees with the constructed 14551): `[applied]` → `--- FAIL: TestDeclaredPortsMatchConstructedPortsForEveryRegisteredFactory (0.48s)`; `input/udp/udp.go` restored, sha256 `8fd1db37…a647` before and after.
+- [x] 4.4 Delete the `interface_mismatch` branch in `composition` → `TestValidateReportsInterfaceMismatch` and
+      `TestValidateFindingsVocabularyIsClosed` MUST fail.
+      DONE: `[applied]` → `--- FAIL: TestValidateFindingsVocabularyIsClosed (0.01s)` and `--- FAIL: TestValidateReportsInterfaceMismatch (0.00s)`; `composition/analyze.go` restored, sha256 `b7262f3f…b6c0` before and after.
+- [x] 4.5 Delete the boot refuse (keep the log) → `go test -race -tags=integration ./service/ -run
+      TestComponentManagerRefusesBootOnErrorFinding -v` MUST fail.
+      NOT RUN: the refuse is not flipped (3.6 `[~]`); there is nothing to omit until the owner rules. 4.12 below covers the boot analysis wiring instead.
+      RE-ENABLED after the H4 ruling: see the omission record appended below (4.17).
+- [x] 4.6 Reintroduce a local status computation in `handleFlowValidation` → `TestFlowValidationHandlerProjectsLibraryResult`
+      MUST fail.
+      DONE: `[applied]` (a local errors→warnings→valid derivation in `handleFlowValidation`) → `--- FAIL: TestFlowValidationHandlerProjectsLibraryResult (0.00s)`; `service/component_manager_http.go` restored, sha256 `86551daa…563c` before and after.
+- [x] 4.8 Delete edge rendering in `Mermaid` → `TestCLIGraphMermaidRendersEveryEdge` MUST fail.
+      DONE: `[applied]` → `--- FAIL: TestCLIGraphMermaidRendersEveryEdge (0.01s)`; `composition/mermaid.go` restored, sha256 `28ed7fa2…2ad2` before and after.
+- [x] 4.10 Delete the composition-tools registration under the `component_catalog` gate
+      (`register_component_catalog.go:30`) → `[applied]` → `--- FAIL: TestValidateCompositionToolReturnsFindings (0.00s)`,
+      `--- FAIL: TestCompositionGraphToolReturnsMermaid (0.00s)`; restored, sha256 `82377807…3c4f` before and after.
+- [x] 4.11 Delete the `default_ports` assignment in `composition.Catalog` → `[applied]` →
+      `--- FAIL: TestCatalogCarriesDefaultPortsOrRequiresConfig (0.06s)`, `--- FAIL: TestListComponentsCarriesPorts (0.00s)`;
+      `composition/catalog.go` restored, sha256 `a4e8d681…764d` before and after.
+- [x] 4.12 Delete the `analyzeBootComposition()` call before `SealComposition` (`component_manager.go:342`) →
+      `[applied]` → `--- FAIL: TestComponentManagerExposesBootFindings (0.26s)` (integration); `service/component_manager.go`
+      restored, sha256 `1f23b5f9…4017` before and after.
+- [x] 4.13 Not claimed: the sorted iteration in `flowgraph` is exercised by `TestValidateIsDeterministic` and
+      `TestMermaidIsDeterministic` over five runs; a map-iteration mutation can pass those by chance, so no omission is
+      recorded for it (a subtest that can pass under the mutation proves nothing).
+- [x] 4.14 `--validate` prints the old "✓ Configuration is valid" and returns nil → `[applied]` →
+      `--- FAIL: TestValidateFlagReportsCompositionFindings (1.05s)`; `cmd/semstreams/main.go` restored, sha256
+      `e3addbe7…eca0` before and after.
+      All omissions: full log in the session scratchpad `mutations.log`; `git status --porcelain` → 0 lines and
+      `go build ./...` OK after the sequence.
+- [x] 4.15 (review H2) Drop the explicit-stream suppression in `composition.Analyze` → `[applied]` →
+      `--- FAIL: TestValidateStreamRequirementSatisfiedByExplicitStream (0.00s)` (`TestValidateReportsStreamRequirement`
+      still PASS, so the suppression and the finding are distinct guards); `composition/analyze.go` restored, sha256
+      `0f57d23c…300f` before and after.
+- [x] 4.16 (review H2, boot wiring) `analyzeBootComposition` passes `nil` instead of `cm.bootStreams` → `[applied]` →
+      `--- FAIL: TestComponentManagerBootFindingsHonourExplicitStreams (0.26s)` (integration; `TestComponentManagerExposesBootFindings`
+      still PASS); `service/component_manager.go` restored, sha256 `99f95458…cb8c` before and after. Log: scratchpad
+      `mutations2.log`; tree clean and `go build ./...` OK after.
+- [x] 4.17 (4.5 re-enabled after the H4 ruling) Delete the boot refuse, keep the log → `[applied]` →
+      `--- FAIL: TestComponentManagerRefusesBootOnErrorFinding (0.28s)` (integration; `TestComponentManagerExposesBootFindings`
+      still PASS); `service/component_manager.go` restored, sha256 `298ed7e4…20ee` before and after.
+- [x] 4.18 (owner ruling H4) Drop the external-boundary marker check in `composition.Analyze` → `[applied]` →
+      `--- FAIL: TestValidateSuppressesOrphanOnlyForExternallyFedInput (0.00s)` (`TestValidateReportsRequiredStreamInputWithoutPublisher`
+      still PASS, so unmarked orphans are guarded independently); `composition/analyze.go` restored, sha256
+      `66fb8a8a…fa24` before and after. Log: scratchpad `mutations3.log`; tree clean and `go build ./...` OK after.
+- [x] 4.19 (review round 2, M3) Drop the stream-NAME check so any explicit stream may satisfy a subscriber →
+      `[applied]` → `--- FAIL: TestValidateStreamRequirementNeedsTheNamedStream (0.00s)` (`…SatisfiedByExplicitStream`
+      still PASS); `composition/analyze.go` restored, sha256 `859e22a1…26f9` before and after.
+- [x] 4.20 (review round 2, M3) Overlap (the unexported direct match `matchNATSPattern`) instead of cover
+      (`SubjectCovers`) → `[applied]` →
+      `--- FAIL: TestValidateStreamRequirementNeedsCoverNotOverlap (0.00s)`; `composition/analyze.go` restored, same sha.
+- [x] 4.21 (review round 2, M4) Drop the output rejection of `external` → `[applied]` →
+      `--- FAIL: TestPortDefinitionExternalRoundTrip (0.00s)`; `component/port_resolver.go` restored, sha256
+      `e875f491…166e` before and after. Log: scratchpad `mutations4.log`; tree clean and `go build ./...` OK after.
+
+## 5. Schema regeneration
+
+- [x] 5.1 `task schema:generate`; commit the `schemas/*.v1.json` `default_ports` rows, the removed `/flows*` rows and
+      `Flow*` schemas, and the changed `/flowgraph` and `/validate` response schemas; delete
+      `schemas/workflow-definition.v1.json` (stale: no factory, `cmd/openapi-generator/main.go:94`) and record it.
+      Second `task schema:generate` → `git diff --exit-code schemas/ specs/openapi.v3.yaml` clean.
+      DONE (#1092 half): the regenerated `schemas/*.v1.json` (`x-component-metadata.default_ports` for 23 factories,
+      `ports_require_config` + `ports_error` for 10) and `specs/openapi.v3.yaml` (`/validate` → `#/components/schemas/Result`,
+      `/flowgraph` → `#/components/schemas/Graph`, both schemas emitted from `composition.Result`/`composition.Graph` by
+      reflection; `format` query parameter on `/flowgraph`) landed in the GREEN commit `aa70317c` (34 files,
+      +1416/−41) so that commit's contract tests are green. Second `task schema:generate` on the §4 head →
+      `git diff --exit-code --stat schemas/ specs/openapi.v3.yaml` → NO-DRIFT; `task schema:check-changes` → clean;
+      `go test ./test/contract/...` → `ok github.com/c360studio/semstreams/test/contract 2.866s`.
+      NOT this PR (#1093, the removal surface): the removed `/flows*` rows and `Flow*` schemas;
+      `schemas/workflow-definition.v1.json` (stale, no factory) stays — `test/contract` keeps it in `nonComponentSchemas`
+      and `TestSchemaExportCarriesDefaultPorts` skips it by that map.
+
+## 6. Standard gates — record each command and its result
+
+- [x] 6.1 `task lint`.
+      RE-RUN on the owner-round head (`11cfd7ff`, after merging `origin/main` `e95c27b3` = PR #1098): `task lint` →
+      exit 0, revive printed no problem, `go fmt ./...` changed nothing (`git status --porcelain` → 0 lines after).
+      DONE on `38155919`+§6 head: `task lint` → exit 0, revive `0 problems` (two `empty-block` warnings fixed at the GREEN head; log: scratchpad `lint_final.log`).
+- [x] 6.2 `go test -race ./...`.
+      RE-RUN on `11cfd7ff` with `-count=1`: `EXIT=0`, 155 `ok` lines, `grep -E '^FAIL|^--- FAIL|^panic:'` → no lines
+      (log: scratchpad `unit_r5.log`).
+      DONE at the GREEN head (`aa70317c`, code unchanged since): every package `ok`, `grep -E '^FAIL'` → no FAIL lines (log: scratchpad `unit1.log`, 153 `ok` lines after the two fixes recorded in 3.10 re-ran green).
+- [x] 6.3 `go test -race -tags=integration -p 2 ./...`.
+      RE-RUN on `11cfd7ff` with `-count=1`: `EXIT=0`, 155 `ok` lines, `grep -E '^FAIL|^--- FAIL|^panic:'` → no lines
+      (log: scratchpad `integration_r5.log`). Focused after the #1098 merge, before the full suites:
+      `go test -race -count=1 -tags=integration ./internal/portgrammarcontrol/ -run 'TestPostFoundationBExternalBoundaryAmendmentIsExact|TestPostFoundationBWorkflowTerminalAmendmentIsExact|TestPostFoundationBResearchDispatchSubjectAmendmentIsExact' -v`
+      → all three `--- PASS` (both amendment lists survived the merge; `wantTotal` is 137 on main, on the pre-merge
+      branch, and after the merge — not relaxed);
+      `go test -race -count=1 -tags=integration ./componentregistry/ -run TestDeclaredPortsMatchConstructedPortsForEveryRegisteredFactory -v`
+      → `--- PASS` (dispatch's sixth input is declared and constructed alike);
+      `go test -race -count=1 -tags=integration ./composition/ -run 'TestValidateShippedConfigsHaveNoErrorFindings|TestValidateMatchesEngineFindingsForShippedConfigs' -v`
+      → both `--- PASS`.
+      DONE on `38155919` (`-count=1`): 155 packages `ok`, `EXIT=0`, `grep -E '^(FAIL|--- FAIL|panic:)'` → no FAIL lines (log: scratchpad `integration_full.log`). The two `[~]` target-state tests report `--- SKIP` naming their tasks.
+- [x] 6.4 `task build`.
+      RE-RUN on `11cfd7ff`: `task build` → `Built bin/semstreams`; CI cross-compile line → exit 0 (29860002 bytes);
+      `go build ./...` and `go vet -tags=integration ./...` → clean; `openspec validate --all --strict` →
+      `Totals: 55 passed, 0 failed (55 items)`; `task openspec:queue` → `flow-authoring-retirement` ok,
+      `composition-validation-substrate` reports only the deliberate `[~]` 3.1a.
+      DONE: `Built bin/semstreams`; CI line `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s -X main.version=local" -o semstreams-linux-amd64 ./cmd/semstreams` → exit 0 (29876386 bytes). `go vet -tags=integration ./...` → clean. `openspec validate composition-validation-substrate --strict` → `Change 'composition-validation-substrate' is valid`.
+- [x] 6.5 `go test ./test/contract/...`.
+      RE-RUN on `11cfd7ff`: `ok github.com/c360studio/semstreams/test/contract 2.618s`. `task schema:generate` after the
+      #1098 merge produced one expected change — `schemas/agentic-dispatch.v1.json` gains the `agent_loops` kv-read
+      entry under `default_ports`, the catalog export this change added picking up #1098's new port — committed as
+      `11cfd7ff`; the second `task schema:generate` left `git diff --stat schemas/ specs/` empty.
+      DONE: `ok github.com/c360studio/semstreams/test/contract 2.866s` on the regenerated schemas (5.1).
+- [x] 6.6 `task e2e:core` for this PR (#1092: step 1 of the design's per-step table is BREAKING for adopter
+      components, and the `/gaps` removal in 9.1 is BREAKING for its clients; `task e2e:core` is the covering tier the
+      design names, and it exercises every ComponentManager route a tiered `Setup` reads). `task e2e:crud-tools` is
+      `flow-authoring-retirement` 6.6's, not this change's.
+      DONE for #1092 on `38155919`: `task e2e:core` → `[OK] Readiness and heartbeat report 12/12 healthy components` ·
+      `msg="Scenario PASSED" name=core-health` · `msg="Scenario PASSED" name=core-dataflow` (duration 36.3s) ·
+      `msg="Scenario PASSED" name=core-graph-roundtrip` · `[OK] SIGTERM exited 0, released listeners, completed shutdown,
+      and left NATS healthy` · `[OK] Early SIGTERM canceled blocked NATS boot, exited 1, and fenced service startup` ·
+      `EXIT=0` (log: scratchpad `e2e_core.log`). Every shipped factory in `configs/protocol-flow.json` passed the P1
+      parity check at boot admission and every tiered `Setup` pre-flight (`CheckFlowHealth`) decoded the new
+      `composition.Result` shape.
+      RE-RUN on the marker/refuse head (`1f7851be`+, owner ruling H4): `task lint` → exit 0; `go test -race ./...` →
+      155 `ok`, exit 0, no FAIL lines (`unit_r3.log`); `go test -race -tags=integration -p 2 -count=1 ./...` → 155 `ok`,
+      `EXIT=0`, no FAIL lines (`integration_r3.log`; `TestValidateShippedConfigsHaveNoErrorFindings` and
+      `TestComponentManagerRefusesBootOnErrorFinding` now PASS, `go test -race -tags=integration -count=1
+      ./internal/portgrammarcontrol/` → `ok`); `task build` → `Built bin/semstreams`; CI cross-compile line → exit 0;
+      `go vet -tags=integration ./...` → clean; second `task schema:generate` → NO-DRIFT, `task schema:check-changes`
+      clean, `go test ./test/contract/...` → `ok`; `openspec validate composition-validation-substrate --strict` → valid;
+      `task e2e:core` with the refuse live → `[OK] Readiness and heartbeat report 12/12 healthy components` ·
+      `Scenario PASSED` core-health · core-dataflow · core-graph-roundtrip · `[OK] SIGTERM exited 0 …` · `[OK] Early
+      SIGTERM canceled blocked NATS boot …` · `EXIT=0` (`e2e_core_r3.log`).
+      `task e2e:agentic` on `96814e04` (review round 2 accepted; the only tier that boots `External: true` —
+      `configs/flows/crud-tools-test.json`'s `agentic-dispatch/user.message` — through a real boot with the refuse
+      live), verbatim: `[OK] All ports available` · `[OK] E2E environment cleaned` · `[AGENTIC] Starting agentic tier
+      E2E test...` · `[OK] Services are healthy (NATS + mock-llm + semstreams)` (the tier's health gate is compose
+      `--wait`; this tier prints no per-component count — the scenario's `verify-components` step covers it) ·
+      `[AGENTIC] Running agentic tier scenario...` · `msg="Running scenario" name=agentic` · `msg="Executing scenario"
+      name=agentic` · `msg="Scenario completed successfully" duration=45.167551125s metrics="map[capture-baseline_duration_ms:6
+      durable_tool_replay_executor_invocations:1 governance_verdicts_approved_audit:1 governance_verdicts_total:1
+      graph_loop_triples:10 graph_model_triples:6 inject-task_duration_ms:1 stream_chunks_total:5 stream_ttft_count:1
+      tool_executions:1 trajectory_elapsed_ms:39 trajectory_facts:10 trajectory_tokens_in:336 trajectory_tokens_out:189
+      validate-results_duration_ms:0 validate-trajectory_duration_ms:5 verify-components_duration_ms:2
+      verify-durable-tool-replay_duration_ms:44586 verify-graph-triples_duration_ms:3 verify-streaming-metrics_duration_ms:15
+      verify-terminal-response_duration_ms:5 verify-tool-call-governance_duration_ms:17 verify-tool-execution_duration_ms:10
+      wait-for-completion_duration_ms:513]" assertions_run=0` · compose down clean · `EXIT=0 WALL=75s`
+      (log: scratchpad `e2e_agentic.log`).
+## 7. Review and archive (inside the landing PR; the `AGENTS.md:68-73` Land order)
+
+- [x] 7.1 `semstreams-reviewer` on the GREEN + §4 + §5 head: verdict, every finding and its disposition (FIXED /
+      FILED #n / ruling) recorded here. Findings on unused paths are FILED, not fixed.
+      Round 1 (Fable, at `0b00749d`): REQUEST CHANGES — nothing BLOCKING, 4 HIGH, 6 MEDIUM. Dispositions:
+      H1 FIXED (3.5a: research-graph configs `component.*` → `component.>`); H2 FIXED (3.5b: `Analyze(declarations,
+      streams config.StreamConfigs)` — the second parameter is the type the framework already owns for explicit
+      streams, both evidence classes hold it, and nil means none; coverage first reused the edge matcher through an
+      exported `flowgraph.SubjectMatches`, superseded by M3 below and removed entirely in the owner round (9.2); scenario "an explicit stream declaration satisfies a JetStream subscriber" + tests
+      `TestValidateStreamRequirementSatisfiedByExplicitStream` (unit) and `TestComponentManagerBootFindingsHonourExplicitStreams`
+      (integration) PASS; omissions 4.15/4.16 below); H3 FIXED (objectstore `[~]` written under the P1 requirement;
+      conformance D2/DEVIATION corrected); H4 PENDING OWNER (3.5c; not acted on); M1 FIXED (`composition/doc.go`,
+      `CheckFlowHealth` comment, "17" → 16 configs); M2 FIXED (`docs/basics/05-first-processor.md` and
+      `.claude/skills/semstreams-dev/SKILL.md` registration snippets carry `Ports`/`DeclarePorts`); M4 FILED #1107
+      (full-catalog verbs vs `Selected(cfg)` boot gating); M5 FIXED (3.2 names the exercised oracle subset); Q8 FIXED
+      (delta GIVEN reworded: KV writers → `connection_pattern_error`, same network address → `exclusive_resource_conflict`);
+      NITs FIXED (`cli.IsVerb` exported and used by both binaries instead of a duplicated verb switch; Mermaid edge sort
+      tie-breaks on Pattern and ConnectionID).
+      Owner ruling on H4 (2026-08-26, #1092/#1101): option (ii), an explicit external-boundary marker — IMPLEMENTED
+      (3.5c, 3.6, 4.17, 4.18; the two grammar-control amendments). Ruled unchanged: the 38 `DeclarePorts` exports stay
+      exported (default keep); #1107 (verbs vs boot catalog) stays filed — no registry-builder parameter added.
+      Round 2 (narrow re-review, `0b00749d..be38605a`): APPROVE WITH CHANGES — H4 as ruled, refuse load-bearing, 22/22
+      re-derived, `External` passes the exported-surface gate (PortDefinition/Port/PortView all kept). Dispositions:
+      M1 FIXED (`composition/doc.go`, `CheckFlowHealth` comment, conformance D3 rewritten to the flipped truth;
+      `grep -rn "pending ruling\|owner's ruling recorded\|REFUSE is"` → 0 outside tasks); M2 FIXED (remedy suggestion on
+      the required no-publisher orphan; the refusal prints each finding's suggestions; seam recorded in 3.5c);
+      M3 FIXED (`flowgraph.SubjectCovers` — the test-only `subjectPatternCoveredByFilter` promoted to a production
+      owner; the `SubjectMatches` export H2 had added became a phantom at that moment and is removed in 9.2; `explicitStreamCovers(streams, streamName, subjects)` keys on the subscriber's
+      declared stream name from `StreamFacts.Name()` via `subscriberStreamNames` and requires cover per subject; tests
+      `TestValidateStreamRequirementNeedsTheNamedStream`, `TestValidateStreamRequirementNeedsCoverNotOverlap`,
+      `TestSubjectCoversIsDirectionalCover`; omissions 4.19/4.20); M4 FIXED (`resolveAndProjectPort` refuses
+      `external` on a non-input with `portConfigError(..., "external", ...)`; case added to
+      `TestPortDefinitionExternalRoundTrip`; omission 4.21); M5 FIXED (3.5c wording: same kind of statement, different
+      home for a reason); NITs FIXED (external-vs-not case in `TestAdmissionRefusesPortDeclarationMismatch`;
+      `correctExternalBoundaryInput` / `correctResearchDispatchSubject` split). Before undraft (not yet run):
+      `task e2e:agentic` once — the only tier that boots `External: true` (crud-tools-test.json) through a real boot.
+      Round 3 (Fable, narrow re-review of the owner round at `e67901b9`): APPROVE WITH CHANGES — 0 BLOCKING,
+      0 HIGH, 2 MEDIUM, 3 NIT. Dispositions, all applied in 9.7: M1 FIXED (the migration doc said `/gaps` was
+      mounted at `/component-manager/gaps`; `service/service_manager.go:1683-1686` maps the service name
+      `component-manager` to the prefix `components`, and the generated document's key is the unprefixed
+      `/gaps` — both occurrences corrected, and the generated-vs-served distinction is now stated once);
+      M2 FIXED (the `[~]` understated the retained engine as a test oracle when it is a SERVED second
+      judgment — reworded in the delta and in 9.1 with the route, the call chain, and the measured absence
+      of any `External` check); NIT-1 FIXED (`declaredMethods` walks every method a `PathSpec` declares, so a
+      future non-GET operation's body is searched); NIT-2 FIXED (three wildcard-intersection rows in
+      `TestSubjectCoversIsDirectionalCover`, re-derived independently against the implementation before
+      adding them); NIT-3 RECORDED in `flow-authoring-retirement` 3.3 (dead `ValidationStatus`).
+- [x] 7.2 Owner-run Codex round where the owner asks for it: verdict and dispositions recorded here; each fix
+      re-enters 7.1 and re-runs the focused commands of 2.11 with `-v`.
+      Round 1 (owner-run, at `bad4a1af`): REQUEST CHANGES — 1 BLOCKING (`/gaps` bypasses the canonical judgment),
+      1 MEDIUM (`SubjectMatches` is a phantom export), plus placeholder cleanup and the pre-archive restructuring.
+      Owner ruling with it: legacy paths are broken and documented for downstream migration, not maintained — so
+      both findings were retirements. Every disposition, its evidence, and its mutation record are §9. The §6 gates
+      were re-run on the resulting head (see each 6.x line). The reviewer re-read of §9 is 7.1 round 3.
+      Round 2 (owner-run, at `c851d0be`): **APPROVE**, no actionable findings. It rechecked each round-1
+      disposition independently — `/gaps` "closed by retirement, not hidden" with the route, handler, generated
+      operation, `ValidateFlowConnectivity`, `DetectObjectStoreGaps`, `ComponentGap` and the callerless
+      helper/cache surface all absent; `SubjectMatches` absent with no Go consumer; the surviving
+      `POST <flowbuilder>/flows/{id}/validate` judgment "no longer an unrecorded contradiction"; the migration
+      record's generated-key vs served-path distinction correct; the #1098 merge preserved with "grammar-control
+      counts remain exact". Its own verification, verbatim: `go test -race -count=1 ./service ./component/flowgraph
+      ./composition/...` PASS · `go test -race -count=1 -tags=integration ./service ./componentregistry
+      ./composition` PASS · `go test -count=1 ./test/contract/...` PASS · `openspec validate --all --strict` — 55
+      passed, 0 failed · "Hosted CI: all seven reported checks green". Closing note, verbatim: "The remaining 7.4
+      reconciliation, archive-as-final-content-commit, and narrow archive/spec-sync check are normal landing
+      steps, not review findings. Any correction after this reviewed head must re-enter review before
+      archive/undraft."
+- [x] 7.3 `conformance.md`: replace every `__` placeholder with the measured `file:line` at the head that carries the
+      last `.go` or delta change. Maintained as part of every commit that moves a line, not at the end.
+      DONE at `e67901b9`+9.7: `grep -n '__' openspec/changes/composition-validation-substrate/conformance.md` →
+      one hit, the sentence in the preamble that DEFINES the placeholder convention; no placeholder remains in
+      any table cell. The rows that carried the retirement's unmeasurable `service/__:__` moved to
+      `flow-authoring-retirement/conformance.md`, where they are still `__` because that work has not run.
+- [x] 7.4 Reconcile: every scenario in `specs/composition-validation/spec.md` and in the MODIFIED requirement of
+      `specs/component-runtime-config/spec.md` names a test that exists and is green in 6.2/6.3/6.5; table recorded
+      here. Any `[~]` in this file is ALSO written into the delta before archiving. (The REMOVED-requirement half of
+      this reconciliation moved to `flow-authoring-retirement` 7.4 with the deltas it reconciles.)
+      DONE. Table in `conformance.md` ("Task 7.4 reconciliation"): 26 scenarios in `specs/composition-validation`
+      and 9 in the `component-runtime-config` MODIFIED requirement, each naming a test that exists. NO scenario in
+      either delta lacks a test. Commands and results at the reconciliation head:
+      `go test -race -count=1 ./component/ -run 'TestPortDefinitionAndPortUseOneStrictWire|TestPortDefinitionExternalRoundTrip|TestFactsForPortPreservesStreamAndInterfaceFacts|TestPortCodecRejectsUnknownAndLegacyShapes|TestMergePortConfigCompleteReplacementStableOrderAndClone|TestMergePortConfigRejectsInvalidOverrides|TestPortConfigJSONRejectsDuplicateNamesWithinEachLane|TestPortConfigJSONResolvesJetStreamDefinitionsByLane|TestResolvePortRejectsInvalidDeclarations|TestResolveJetStreamOutputAllowsProvisionerOwnedName|TestRegisterFactoryRejectsNilPortDeclarer|TestAdmissionRefusesPortDeclarationMismatch' -v`
+      → 12 `--- PASS`, 0 otherwise;
+      `go test -count=1 ./test/contract/ -run 'TestShippedAgenticModelConfigDoesNotExposeLegacyStreamName|TestShippedJetStreamInputsDeclareBackingStreamAndSubjects|TestSchemaExportCarriesDefaultPorts' -v`
+      → all three `--- PASS`;
+      `go test -race -count=1 ./composition/... ./service/ ./cmd/semstreams/ ./processor/agentic-tools/executors/ -run 'TestValidate|TestCatalog|TestMermaid|TestAssertValid|TestCLI|TestFlowValidationHandlerProjectsLibraryResult|TestComponentGapsOperationIsAbsent|TestExternalInputIsNeverACriticalOrphan|TestCompositionGraphToolReturnsMermaid|TestListComponentsCarriesPorts'`
+      → `ok` for composition, composition/cli, service, cmd/semstreams, processor/agentic-tools/executors;
+      `go test -race -count=1 -tags=integration ./service/ ./componentregistry/ -run 'TestComponentManagerRefusesBootOnErrorFinding|TestComponentManagerExposesBootFindings|TestGraphProjectionMatchesAdmittedComposition|TestComponentManagerBootFindingsHonourExplicitStreams|TestDeclaredPortsMatchConstructedPortsForEveryRegisteredFactory' -v`
+      → all five `--- PASS`.
+      FINDING RAISED AND FIXED BY THIS RECONCILIATION (details in `conformance.md`): the `component-runtime-config`
+      MODIFIED block carried 2 of the requirement's 9 scenarios. A MODIFIED requirement replaces the whole
+      requirement — the `2026-08-08-foundation-b-port-language` archive restates all 9, which is why the current spec
+      has 9 — so archiving as written would have been REFUSED by openspec 1.7.0 for seven scenarios of permanent current
+      truth (the archiver rejects a MODIFIED block that omits or renames a current scenario; corrected by the narrow
+      archive check — a silent drop is reachable only via `--skip-specs` or a hand sync). All seven were
+      restored verbatim from `openspec/specs/component-runtime-config/spec.md` before the archive; header sets and
+      order now match exactly and the block's only difference from current truth is the intended `external` grammar.
+      The one `[~]` in this file (3.1a) is written into the delta under the P1 requirement.
+- [x] 7.5 `openspec archive composition-validation-substrate` with the spec sync as the final content commit; the
+      narrow reviewer check of the archive/spec sync follows as a PR comment; then undraft. The PR body is a
+      published layer: re-read it at undraft and correct any claim the branch no longer supports.
+      ARCHIVE SHAPE — DONE in the owner round (9.4), so the re-review sees final content: the retirement's target
+      state now lives in `openspec/changes/flow-authoring-retirement/` (proposal, tasks, conformance, and the moved
+      deltas: the entire `specs/flow-authoring/spec.md` REMOVED, the `## REMOVED Requirements` section of
+      `specs/component-runtime-config/spec.md`, and the "framework owns no composition authoring store" requirement).
+      What stays here is exactly what this PR performs, including the `/gaps` REMOVED it performs itself. The
+      `composition-validation` capability delta carries a real `## Purpose` (9.4). `openspec validate --all --strict`
+      and `task openspec:queue` were run with both changes present (9.5). The archive command itself is NOT run in the
+      owner round; it is this PR's final content commit after the re-review.
+      ARCHIVED 2026-08-27 after Codex round 2 APPROVE (7.2) and the 7.4 reconciliation:
+      `openspec validate composition-validation-substrate --strict` → `Change 'composition-validation-substrate'
+      is valid`; `openspec archive composition-validation-substrate --yes` → `component-runtime-config: update`,
+      `composition-validation: create`, `Totals: + 8, ~ 1, - 0, → 0`, `Specs updated successfully.`, archived as
+      `2026-08-27-composition-validation-substrate`. The one incomplete task the archiver reported is the
+      deliberate `[~]` 3.1a, which carries its delta note. `flow-authoring-retirement` was NOT archived and stays
+      open for #1093.
+      Spec sync verified, not assumed: `git diff --stat -- openspec/specs` → `component-runtime-config/spec.md`
+      13 insertions / 5 deletions (the `external` grammar and the marker clause, nothing else) and
+      `openspec/specs/composition-validation/` NEW (8 requirements, 26 scenarios, carrying its `## Purpose`).
+      Header-set proof for the MODIFIED capability: the `### Requirement:` + `#### Scenario:` header list of
+      `openspec/specs/component-runtime-config/spec.md` was captured before the archive and diffed after — 47
+      lines before, 47 after, `diff` empty. Zero headers dropped, zero added, order unchanged.
+      NOT DONE HERE, and not assertable from this branch: the narrow reviewer check of this archive/spec sync,
+      undraft, the `implemented-by` line, and the merge gate. Those are the owner's, after this head is reviewed.
+
+## 8. Not in scope (recorded so the archiver does not infer completion)
+
+- A next-boot component-configuration write verb (design §7 item 1).
+- `POST <components>/validate` with a draft body.
+- Unifying merge-vs-replace port-override policies across factories.
+- The e2e client's gateway filter (`observability.go:378-392`).
+- semstreams-ui and semteams migrations (owners' work; instructions in the migration document).
+- #1087's four scenarios (their routes no longer exist).
+
+## 9. Owner-run cross-agent round (2026-08-26) — dispositions
+
+Verdict at `bad4a1af`: REQUEST CHANGES (1 BLOCKING, 1 MEDIUM, plus a placeholder-cleanup item and the pre-archive
+restructuring). Owner ruling accompanying it, verbatim: "we do not need to maintain legacy paths — we break it and
+document it for migration by downstream at this stage." Both findings are therefore RETIREMENTS, not projections.
+
+- [x] 9.1 **BLOCKING — `/gaps` bypassed the canonical composition judgment.** `service/component_manager_http.go:630`
+      `handleFlowGaps` called `ValidateFlowConnectivity()` and classified required `no_publishers` ports as critical on
+      its own (`:649-684`), contradicting ADR-100 D3 and the accepted H4 behavior: with one required external JetStream
+      input, boot reported `status=warnings errors=0` while `GET /gaps` reported `no_publishers, required=true,
+      critical_port_count=1, has_issues=true`.
+      DONE, RETIRED (commit `9bc905b8`): removed the route (`component_manager_http.go` `RegisterHTTPHandlers`), the
+      `/gaps` OpenAPI path entry, `handleFlowGaps` (73 lines), and — after grepping for every remaining consumer —
+      the Go surface only it reached: `ComponentManager.ValidateFlowConnectivity`, `ComponentManager.DetectObjectStoreGaps`,
+      `ComponentGap`, `isStorageComponent`, `hasIncomingEdges`, and the `flowGraphCache.lastAnalysis` field (100 lines
+      from `component_manager.go`), plus the two test call sites (`component_manager_integration_test.go`'s
+      `ValidateFlowConnectivity` assertions and subtest, `component_manager_port_facts_test.go`'s `"gaps"` handler row).
+      `task schema:generate` dropped the `/gaps` operation from `specs/openapi.v3.yaml` (14 lines).
+      Callers grep after removal: `grep -rn 'SubjectMatches\|handleFlowGaps\|ValidateFlowConnectivity\|AnalyzeConnectivity\|/gaps'
+      --include='*.go' --include='*.md' --include='*.json' .` → no `handleFlowGaps` or `ValidateFlowConnectivity`
+      anywhere outside `docs/proposals/` (historical inventory) and this change's own artifacts.
+      RETAINED, deliberate not-done, written into the delta (`[~]` under "The framework serves one composition judgment
+      and no second gap analysis") and into `flow-authoring-retirement` 3.3 + its conformance CARRIED row.
+      CORRECTION (review round 3, M2): the first wording of this paragraph said the engine was retained because "the
+      oracle still calls it". Measured at this head, that understates it — the engine is a SERVED second judgment, not
+      test scaffolding. `POST <flowbuilder>/flows/{id}/validate` (`service/flow_service.go:197`, handler `:516`) →
+      `engine.ValidateFlowDefinition` (`engine/engine.go:73`) → `engine/validator.go:309` `convertAnalysisToResult`,
+      which owns its own severity table and has no `External` check anywhere (`grep -rn External engine/` → 0 lines):
+      `:328-334` errors every required stream input whose issue is `no_publishers`, so an input declared `external: true`
+      IS reported as an error on that route while boot and `<components>/validate` report nothing. That is the same
+      class the new requirement's SHALL forbids. It is retained solely because ADR-100 D5 deletes the surface that
+      serves it: `flow-authoring-retirement` 3.2 removes `engine/`, `service/flow_service.go`, and that route together,
+      and removing the route here without the store would leave a saved-diagram surface with no validator at all.
+      Separately retained: `flowgraph.FlowGraph.AnalyzeConnectivity` (production callers `composition/analyze.go:59` —
+      the canonical library itself, so the primitive is canonical — and `engine/validator.go:168`, which leaves with
+      #1093), and `ComponentManager.GetFlowGraph` / `buildFlowGraph` / `flowgraph.BuildFromRegistry` /
+      `GET <components>/paths`. `/paths` derives no severity, so it is a projection and not a second judgment; whether
+      it should serve the retained `Result.Graph` instead of rebuilding is #1093's call.
+      Tests (RED first, at the pre-removal head): `service/component_manager_gaps_removed_test.go`
+      `TestComponentGapsOperationIsAbsent` → `component_manager_gaps_removed_test.go:52: GET /components/gaps = 200,
+      want 404 or 405`; `TestExternalInputIsNeverACriticalOrphanOnAnyComponentOperation` →
+      `//gaps` subtest `reports "no_publishers" for an external input: {…"critical_port_count":1,…"has_issues":true…}`
+      — Codex's reproduction, reproduced by the guard. Both PASS after the removal. The second test enumerates the
+      surface from its OWNING declaration (`componentManagerOpenAPISpec().Paths`) rather than a hand-kept list, so a
+      second judgment mounted anywhere on the component surface is caught.
+      Restore mutation (`cp`, never `checkout`): removed-state sha256 `cc2efe1b…f5af` (`component_manager_http.go`) and
+      `01935ce1…b8ce` (`component_manager.go`) → `[applied]` the pre-removal copies → `--- FAIL:
+      TestComponentGapsOperationIsAbsent` (`GET /components/gaps = 200, want 404 or 405`) and `--- FAIL:
+      TestExternalInputIsNeverACriticalOrphanOnAnyComponentOperation//gaps` → restored by `cp`, sha256 `cc2efe1b…f5af`
+      and `01935ce1…b8ce` again (equal), `git status --porcelain` → 0 lines, `go build ./...` OK, both tests `ok`.
+      Migration entry: `docs/operations/migration-beta162-to-beta163.md` section "Composition validation substrate
+      (ADR-100) — `GET <components>/gaps` is removed".
+- [x] 9.2 **MEDIUM — `component/flowgraph/flowgraph.go:395` `SubjectMatches` was a phantom export.** Round 1 (H2)
+      exported it; round 2 (M3) replaced its use with `SubjectCovers` and left it with no production consumer, a doc
+      comment claiming composition uses it, and overlap semantics its bidirectional direct-match implementation does
+      not deliver (`foo.*.bar` and `foo.baz.*` intersect concretely; the implementation answers false).
+      DONE, REMOVED (commit `6c1ac491`): the function is deleted, not unexported — the one in-package test that needed
+      an overlap comparison (`component/flowgraph/subject_cover_test.go`) asserts against the unexported
+      `matchNATSPattern` directly, and `SubjectCovers`'s doc no longer names a symbol that does not exist. Stale text
+      corrected in this file: 4.20 (the mutation names `matchNATSPattern`), 7.1 round-1 H2, 7.1 round-2 M3.
+      Mutation check per the owner's instruction is the caller grep: `grep -rn 'SubjectMatches' --include='*.go' .` →
+      0 lines; `go build ./...` OK; `go test -race -count=1 ./component/flowgraph/` → `ok`.
+- [x] 9.3 **Conformance placeholder cleanup.** Every `#` FILE placeholder now carries its number, each verified with
+      `gh issue view <n> --json title`: #1106 objectstore constant instance name (3.1a, the delta's `[~]`, conformance
+      D2 and DEVIATION) — title "objectstore: the factory passes a constant instance name (\"objectstore\") to
+      resolveObjectStorePorts — the admitted declaration never carries the real instance name"; #1107 composition verbs
+      judge the full catalog while boot registers only `Selected(cfg)` (3.4, 7.1 round-1 M4) — title "composition verbs
+      judge the FULL component catalog while boot registers graph-research/OTEL only when Selected(cfg) — a config can
+      validate clean offline and fail boot"; #1108 `SafeUnmarshal` before `ApplyDefaults` → `ports_require_config` for
+      10 of 33 (3.1) — title "SafeUnmarshal validates before ApplyDefaults, so 10 of 33 factories refuse {} and the
+      catalog reports ports_require_config instead of default ports". The `cli.Main` registry-builder parameter is not
+      a separate item: it is the remedy #1107 records and the owner ruled it out ("no registry-builder parameter
+      added", 7.1). No `#` FILE placeholder without a number remains in this change.
+- [x] 9.4 **Pre-archive restructuring (content only; `openspec archive` NOT run).** Created
+      `openspec/changes/flow-authoring-retirement/` — `proposal.md` (target state for #1093), `tasks.md` (the
+      `(#1093)`-annotated 2.10, 3.8, 3.9, 4.7, 4.9, 6.7, the e2e clause of 6.6 and the REMOVED clause of 7.4, renumbered
+      as its own 2.1/3.1/3.2/3.4/4.1/4.2/6.6/6.7/7.4, plus 3.3 for the retained duplicate graph build),
+      `conformance.md` (D5.a–D5.g + the CARRIED row), and the moved deltas: the entire
+      `specs/flow-authoring/spec.md` (11 REMOVED, `git mv`), the `## REMOVED Requirements` section of
+      `specs/component-runtime-config/spec.md`, and the "The framework owns no composition authoring store" requirement
+      out of `specs/composition-validation/spec.md`. This change keeps only what this PR performs — including the
+      `/gaps` removal requirement of 9.1 — and 1.1, 2.5, 3.2, 6.6, 7.4, 7.5 are rewritten to say so. The
+      `composition-validation` capability delta gained a real `## Purpose`.
+- [x] 9.5 **Gates on the owner-round head `11cfd7ff`** (each also appended to its own 6.x line). Host coordination: the
+      beta.162 candidate proof shares this machine, so before each tier `task e2e:check-ports` → `[OK] All ports
+      available`, `docker ps` showed no e2e container, and `/private/tmp/claude-501/e2e-lock-proof` was absent;
+      `/private/tmp/claude-501/e2e-lock-gh1101` was held for the duration of both tiers and removed after teardown.
+      `task lint` → exit 0, revive no problem · `go build ./...` OK · `go vet -tags=integration ./...` clean ·
+      `go test -race -count=1 ./...` → EXIT=0, 155 `ok`, no FAIL lines ·
+      `go test -race -count=1 -tags=integration -p 2 ./...` → EXIT=0, 155 `ok`, no FAIL lines ·
+      `task schema:generate` + second run → `git diff --stat schemas/ specs/` empty ·
+      `go test ./test/contract/...` → `ok … 2.618s` · `openspec validate --all --strict` → 55 passed, 0 failed ·
+      `task openspec:queue` → both changes clean apart from the deliberate `[~]` 3.1a ·
+      `task e2e:core` → `EXIT=0`, `[OK] All ports available` · `[OK] E2E environment cleaned` · `[OK] All services are
+      healthy` · `[OK] Readiness and heartbeat report 12/12 healthy components` · `msg="Scenario PASSED"
+      name=core-health` · `msg="Scenario PASSED" name=core-dataflow` · `msg="Scenario PASSED" name=core-graph-roundtrip`
+      · `[OK] SIGTERM exited 0, released listeners, completed shutdown, and left NATS healthy` · `[OK] Early SIGTERM
+      canceled blocked NATS boot, exited 1, and fenced service startup` (log: scratchpad `e2e_core_r5.log`) ·
+      `task e2e:agentic` (the merge brought #1098's agentic-dispatch changes, and this is the only tier that boots
+      `External: true` through a real boot with the refuse live) → `EXIT=0`, `[OK] Services are healthy (NATS +
+      mock-llm + semstreams)` · `msg="Scenario completed successfully" duration=45.150619917s` with
+      `tool_executions:1 graph_loop_triples:10 graph_model_triples:6 verify-terminal-response_duration_ms:7 …` ·
+      compose down clean (log: scratchpad `e2e_agentic_r5.log`).
+      Focused commands for the two tests added in 9.1 (both unit, no build tag needed):
+      `go test -race -count=1 ./service/ -run 'TestComponentGapsOperationIsAbsent|TestExternalInputIsNeverACriticalOrphanOnAnyComponentOperation' -v`
+      → both `--- PASS`; under the integration tag the same package and selector also pass:
+      `go test -race -count=1 -tags=integration ./service/ -run 'TestComponentGapsOperationIsAbsent|TestExternalInputIsNeverACriticalOrphanOnAnyComponentOperation' -v`.
+- [x] 9.6 **`origin/main` integrated twice.** First at `483ffc05` (merge of `08660fc5`: #1099, #1102, #1104 — no `.go`
+      file changed, `git diff bad4a1af 483ffc05 --stat -- '*.go'` empty). Second at `650c7b96` (merge of `e95c27b3`,
+      PR #1098 / #1094), which git resolved with NO conflict; both sides were verified present rather than assumed:
+      `processor/agentic-dispatch/config.go` carries #1098's `agent_loops` `KVReadPort` on `AGENT_LOOPS` AND this
+      change's `Required: true, External: true` on `user.message`; `internal/portgrammarcontrol/target_test.go` carries
+      #1098's `postFoundationBWorkflowTerminalGoIdentityAdditions` + `TestPostFoundationBWorkflowTerminalAmendmentIsExact`
+      AND this change's `postFoundationBExternalBoundaryAmendments` + `postFoundationBResearchDispatchSubjectAmendments`
+      with their exactness tests; `wantTotal := 137 - len(postFoundationBGraphQueryGoIdentityRetirements)` is identical
+      on `origin/main`, on the pre-merge branch head, and after the merge — no count relaxed. Schema consequence
+      committed as `11cfd7ff`.
+- [x] 9.7 **Review round 3 dispositions (Fable at `e67901b9`, APPROVE WITH CHANGES).** Each premise was re-measured
+      before the edit, not taken on the finding's word.
+      M1 — `docs/operations/migration-beta162-to-beta163.md:130,166` claimed the retired route was
+      `/component-manager/gaps`. MEASURED: `service/service_manager.go:1683-1686` `serviceNameToPrefix` maps the
+      service name `component-manager` to the URL prefix `components`, and the generated document carries UNPREFIXED
+      keys (`grep -nE '^    /[A-Za-z]' specs/openapi.v3.yaml` → `/flowgraph`, `/list`, `/paths`, … — the prefix is
+      applied at mount, not in the document). So the operation key is `/gaps` and the served path is
+      `/components/gaps`, which is what the regression test and `test/e2e/client/observability.go:290` use. Both
+      occurrences corrected, and the doc now states the generated-key vs served-path distinction once rather than
+      asserting a single wrong path. (This also explains the sister residue: the `"/gaps"` keys in semteams/semspec/
+      semstreams-ui are the document key; `semdragon`'s `/component-manager/gaps` predates this mapping.)
+      M2 — see the CORRECTION paragraph in 9.1 and the reworded `[~]` in the delta. MEASURED at this head:
+      `service/flow_service.go:197` routes `POST <flowbuilder>/flows/{id}/validate` to `:516` `handleValidateFlow` →
+      `engine/engine.go:73` → `engine/validator.go:309` `convertAnalysisToResult`; `:328-334` makes every required
+      stream `no_publishers` port an error; `grep -rn External engine/` → 0 lines. The engine is a served second
+      severity table that ignores the marker, not a test oracle — retained only because
+      `flow-authoring-retirement` 3.2 deletes it with the surface that serves it.
+      NIT-1 — `service/component_manager_gaps_removed_test.go` gains `declaredMethods(PathSpec) []string`, walking
+      GET/POST/PUT/PATCH/DELETE for every non-nil operation and sorting them, so the body of a future non-GET
+      component operation is searched instead of silently skipped. Every advertised operation declares only GET today;
+      the walk is what keeps that true rather than assumed.
+      NIT-2 — `component/flowgraph/subject_cover_test.go` gains `{"foo.*.bar","foo.baz.*",false}`,
+      `{"foo.baz.*","foo.*.bar",false}`, `{"foo.*.bar","foo.baz.bar",true}`. Each was re-derived by hand against
+      `SubjectCovers` before being added (index 2: filter `bar` vs pattern `*` → `tokenCovered` false; index 1: filter
+      `baz` vs pattern `*` → false; the third covers token for token), then confirmed by the run. These are Codex's
+      case: two filters whose concrete subject sets intersect where neither covers the other — the question the retired
+      `SubjectMatches` claimed to answer and got wrong.
+      NIT-3 — recorded, not fixed, per the finding: `flow-authoring-retirement` 3.3 now carries the dead
+      `ValidationStatus`. MEASURED: written at `component/flowgraph/flowgraph.go:822` and `:874` via `hasCriticalIssues`
+      (`:858-876`), which treats every required stream `no_publishers` port as critical with no `External` check; read
+      by nothing in production — `grep -rn ValidationStatus --include='*.go' .` finds only the struct field
+      (`flowgraph_analysis.go:12`), the two writes, `flowgraph_test.go:258,312`, and `doc.go:35,55,141` teaching it.
+      Gates on the 9.7 head: `task lint` → exit 0, revive no problem · `gofmt -l` on both edited test files → no output ·
+      `go test -race -count=1 ./service/ ./component/flowgraph/` → `ok github.com/c360studio/semstreams/service`,
+      `ok github.com/c360studio/semstreams/component/flowgraph` · `openspec validate --all --strict` → 55 passed,
+      0 failed · `task openspec:queue` → both changes clean apart from the deliberate `[~]` 3.1a.

@@ -466,6 +466,9 @@
               "description": {
                 "type": "string"
               },
+              "external": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               },
@@ -772,6 +775,9 @@
               "description": {
                 "type": "string"
               },
+              "external": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               },
@@ -804,6 +810,32 @@
     "type": "processor",
     "protocol": "json_filter",
     "domain": "processing",
-    "version": "0.1.0"
+    "version": "0.1.0",
+    "default_ports": {
+      "inputs": [
+        {
+          "name": "nats_input",
+          "direction": "input",
+          "type": "core .json.v1",
+          "required": true,
+          "connection_id": "raw.\u003e",
+          "pattern": "stream",
+          "description": "NATS subjects to filter (must be GenericJSON payloads)",
+          "kind": "nats"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "nats_output",
+          "direction": "output",
+          "type": "core .json.v1",
+          "required": true,
+          "connection_id": "filtered.messages",
+          "pattern": "stream",
+          "description": "NATS subject for matched messages",
+          "kind": "nats"
+        }
+      ]
+    }
   }
 }

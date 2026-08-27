@@ -161,66 +161,14 @@ type subscriptionInputBindings struct {
 
 // NewComponent creates a new router component
 func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
-	// Parse configuration
-	var config Config
-	if err := json.Unmarshal(rawConfig, &config); err != nil {
-		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "parse config")
+	config, inputPorts, outputPorts, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
 	}
 
 	// Require model registry
 	if deps.ModelRegistry == nil {
 		return nil, errs.WrapInvalid(errs.ErrMissingConfig, "Component", "NewComponent", "deps.ModelRegistry is required")
-	}
-
-	// Apply defaults for empty values. Permissions get the same treatment
-	// because JSON unmarshal of a config without a "permissions" block
-	// leaves a zero-value PermissionConfig where every allow-list is nil —
-	// silently denying all requests, including submit_task. Without this
-	// fill-in, a minimal dispatch config (no "permissions" key) would
-	// receive user messages and then log nothing because the permission
-	// check fails before any task is published.
-	if config.DefaultRole == "" {
-		config.DefaultRole = DefaultConfig().DefaultRole
-	}
-	if config.StreamName == "" {
-		config.StreamName = DefaultConfig().StreamName
-	}
-	if config.Permissions.View == nil && config.Permissions.SubmitTask == nil &&
-		config.Permissions.CancelAny == nil && config.Permissions.Approve == nil &&
-		!config.Permissions.CancelOwn {
-		config.Permissions = DefaultConfig().Permissions
-	}
-
-	// Validate configuration
-	if err := config.Validate(); err != nil {
-		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "validate config")
-	}
-
-	// Build ports
-	merged := *DefaultConfig().Ports
-	if config.Ports != nil {
-		var err error
-		merged, err = component.MergePortConfig(merged, *config.Ports)
-		if err != nil {
-			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "merge ports")
-		}
-	}
-	config.Ports = &merged
-	inputPorts := make([]component.Port, 0, len(merged.Inputs))
-	for _, definition := range merged.Inputs {
-		port, err := definition.Resolve(component.DirectionInput)
-		if err != nil {
-			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve input port")
-		}
-		inputPorts = append(inputPorts, port)
-	}
-	outputPorts := make([]component.Port, 0, len(merged.Outputs))
-	for _, definition := range merged.Outputs {
-		port, err := definition.Resolve(component.DirectionOutput)
-		if err != nil {
-			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve output port")
-		}
-		outputPorts = append(outputPorts, port)
 	}
 
 	logger := deps.GetLogger()
@@ -245,6 +193,79 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	comp.loadGlobalCommands()
 
 	return comp, nil
+}
+
+// DeclarePorts is the component.PortDeclarer for agentic-dispatch: the ports
+// NewComponent will report for rawConfig, computed without dependencies.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	_, inputs, outputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfigFrom(inputs, outputs), nil
+}
+
+// resolveConfig parses rawConfig, applies defaults, validates, and resolves
+// the effective ports. It is the one derivation DeclarePorts and NewComponent
+// share, so the declaration and the constructed component cannot drift.
+func resolveConfig(rawConfig json.RawMessage) (Config, []component.Port, []component.Port, error) {
+	// Parse configuration
+	var config Config
+	if err := json.Unmarshal(rawConfig, &config); err != nil {
+		return Config{}, nil, nil, errs.WrapInvalid(err, "Component", "NewComponent", "parse config")
+	}
+
+	// Apply defaults for empty values. Permissions get the same treatment
+	// because JSON unmarshal of a config without a "permissions" block
+	// leaves a zero-value PermissionConfig where every allow-list is nil —
+	// silently denying all requests, including submit_task. Without this
+	// fill-in, a minimal dispatch config (no "permissions" key) would
+	// receive user messages and then log nothing because the permission
+	// check fails before any task is published.
+	if config.DefaultRole == "" {
+		config.DefaultRole = DefaultConfig().DefaultRole
+	}
+	if config.StreamName == "" {
+		config.StreamName = DefaultConfig().StreamName
+	}
+	if config.Permissions.View == nil && config.Permissions.SubmitTask == nil &&
+		config.Permissions.CancelAny == nil && config.Permissions.Approve == nil &&
+		!config.Permissions.CancelOwn {
+		config.Permissions = DefaultConfig().Permissions
+	}
+
+	// Validate configuration
+	if err := config.Validate(); err != nil {
+		return Config{}, nil, nil, errs.WrapInvalid(err, "Component", "NewComponent", "validate config")
+	}
+
+	// Build ports
+	merged := *DefaultConfig().Ports
+	if config.Ports != nil {
+		var err error
+		merged, err = component.MergePortConfig(merged, *config.Ports)
+		if err != nil {
+			return Config{}, nil, nil, errs.WrapInvalid(err, "Component", "NewComponent", "merge ports")
+		}
+	}
+	config.Ports = &merged
+	inputPorts := make([]component.Port, 0, len(merged.Inputs))
+	for _, definition := range merged.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return Config{}, nil, nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve input port")
+		}
+		inputPorts = append(inputPorts, port)
+	}
+	outputPorts := make([]component.Port, 0, len(merged.Outputs))
+	for _, definition := range merged.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return Config{}, nil, nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve output port")
+		}
+		outputPorts = append(outputPorts, port)
+	}
+	return config, inputPorts, outputPorts, nil
 }
 
 // Meta returns component metadata

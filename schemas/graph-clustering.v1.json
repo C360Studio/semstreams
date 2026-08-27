@@ -761,6 +761,9 @@
               "description": {
                 "type": "string"
               },
+              "external": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               },
@@ -1067,6 +1070,9 @@
               "description": {
                 "type": "string"
               },
+              "external": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               },
@@ -1116,6 +1122,72 @@
     "type": "processor",
     "protocol": "nats",
     "domain": "graph",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "default_ports": {
+      "inputs": [
+        {
+          "name": "entity_watch",
+          "direction": "input",
+          "type": "",
+          "required": false,
+          "connection_id": "kv:ENTITY_STATES",
+          "pattern": "watch",
+          "description": "",
+          "kind": "kv-watch"
+        },
+        {
+          "name": "entity_states",
+          "direction": "input",
+          "type": "",
+          "required": false,
+          "connection_id": "kv:ENTITY_STATES",
+          "pattern": "read",
+          "description": "",
+          "kind": "kv-read"
+        },
+        {
+          "name": "outgoing_index",
+          "direction": "input",
+          "type": "",
+          "required": false,
+          "connection_id": "kv:OUTGOING_INDEX",
+          "pattern": "read",
+          "description": "",
+          "kind": "kv-read"
+        },
+        {
+          "name": "incoming_index",
+          "direction": "input",
+          "type": "",
+          "required": false,
+          "connection_id": "kv:INCOMING_INDEX",
+          "pattern": "read",
+          "description": "",
+          "kind": "kv-read"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "graph_mutations",
+          "direction": "output",
+          "type": "semstreams.graph.mutation",
+          "required": true,
+          "connection_id": "graph.mutation.\u003e",
+          "pattern": "request",
+          "description": "",
+          "kind": "nats-request"
+        },
+        {
+          "name": "communities",
+          "direction": "output",
+          "type": "",
+          "required": false,
+          "connection_id": "kv:COMMUNITY_INDEX",
+          "pattern": "watch",
+          "description": "",
+          "kind": "kv-write"
+        }
+      ]
+    }
   }
 }

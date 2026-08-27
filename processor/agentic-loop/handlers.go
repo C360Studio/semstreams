@@ -1190,7 +1190,8 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 		// read_loop_result, even when the provider adapter routed it to
 		// the non-canonical field.
 		completionText := resolveCompletionText(response.Message)
-		if err := h.handleCompleteResponse(&result, loopID, entity, completionText); err != nil {
+		// Model-text completion: no terminal tool, so no typed decision.
+		if err := h.handleCompleteResponse(&result, loopID, entity, completionText, nil); err != nil {
 			return result, err
 		}
 
@@ -1918,7 +1919,7 @@ func (h *MessageHandler) failLoop(result *HandlerResult, loopID, outcome, reason
 // would not want a synth decide overwriting its successful completion).
 func hasDecideToolCall(steps []agentic.TrajectoryStep) bool {
 	for _, s := range steps {
-		if s.StepType == "tool_call" && s.ToolName == "decide" {
+		if s.StepType == "tool_call" && s.ToolName == agentic.DecideToolName {
 			return true
 		}
 	}
@@ -1932,7 +1933,7 @@ func hasDecideToolCall(steps []agentic.TrajectoryStep) bool {
 // Config.SynthesizeTerminalOnCompletion opt-in (gh#158).
 func decideToolAvailable(tools []agentic.ToolDefinition) bool {
 	for _, td := range tools {
-		if td.Name == "decide" {
+		if td.Name == agentic.DecideToolName {
 			return true
 		}
 	}
@@ -1954,9 +1955,55 @@ func resolveCompletionText(msg agentic.ChatMessage) string {
 	return msg.ReasoningContent
 }
 
+// resolveToolName resolves the function name of a tool result through the
+// loop's name-fallback chain: the name tracked at dispatch for this call ID
+// first, then the name carried on the result envelope itself. The fallback
+// is what survives a LoopManager cache loss (process restart) — agentic-tools
+// stamps Name on every result before publishing, so the envelope always
+// carries it. Returns "" only when neither source knows the name.
+func (h *MessageHandler) resolveToolName(toolResult agentic.ToolResult) string {
+	if tracked := h.loopManager.GetToolName(toolResult.CallID); tracked != "" {
+		return tracked
+	}
+	return toolResult.Name
+}
+
+// decisionFromTerminalTool projects the typed coordinator decision of a
+// `decide` terminal (ADR-101, gh#1094). Returns nil for every other
+// terminal: a non-decide StopLoop tool, a model-text completion (terminal
+// is nil), or a decide result whose typed metadata is absent or empty —
+// a present-but-empty Decision would fail LoopCompletedEvent.Validate and
+// Term the terminal, so an unusable decision is left unstamped and the
+// terminal keeps today's no-decision behaviour.
+//
+// The decision is read from the tool result's typed metadata, never parsed
+// out of Content: Content stays the canonical decide payload for
+// read_loop_result and downstream rules.
+func (h *MessageHandler) decisionFromTerminalTool(terminal *agentic.ToolResult) *agentic.CoordinatorDecision {
+	if terminal == nil || h.resolveToolName(*terminal) != agentic.DecideToolName {
+		return nil
+	}
+	action, _ := terminal.Metadata[agentic.MetadataKeyDecideAction].(string)
+	reason, _ := terminal.Metadata[agentic.MetadataKeyDecideReason].(string)
+	if action == "" || reason == "" {
+		h.logger.Warn("decide terminal carried no usable typed decision",
+			slog.String("loop_id", terminal.LoopID),
+			slog.String("call_id", terminal.CallID),
+			slog.Bool("action_present", action != ""),
+			slog.Bool("reason_present", reason != ""))
+		return nil
+	}
+	return &agentic.CoordinatorDecision{Action: action, Reason: reason}
+}
+
 // handleCompleteResponse processes completion responses.
 // It enriches the completion event with full context for rules-based orchestration.
-func (h *MessageHandler) handleCompleteResponse(result *HandlerResult, loopID string, entity agentic.LoopEntity, responseContent string) error {
+//
+// terminal is the StopLoop tool result that ended the loop, or nil when the
+// loop completed on model text. It is the loop's only observation of WHICH
+// tool terminated it, and is what carries a `decide` terminal's typed
+// decision onto the completion event.
+func (h *MessageHandler) handleCompleteResponse(result *HandlerResult, loopID string, entity agentic.LoopEntity, responseContent string, terminal *agentic.ToolResult) error {
 	if err := h.loopManager.TransitionLoop(loopID, agentic.LoopStateComplete); err != nil {
 		return err
 	}
@@ -1990,6 +2037,7 @@ func (h *MessageHandler) handleCompleteResponse(result *HandlerResult, loopID st
 		Metadata:    entity.Metadata,
 		RunID:       entity.RunID,
 		RunEntityID: h.resolveRunEntityID(entity.RunID),
+		Decision:    h.decisionFromTerminalTool(terminal),
 	}
 
 	// Pull token totals from trajectory for cost tracking. Also doubles as
@@ -2163,7 +2211,7 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 	// Content becomes the LoopCompletedEvent.Result.
 	if toolResult.StopLoop {
 		h.loopManager.ClearQueuedTools(loopID)
-		if err := h.handleCompleteResponse(&result, loopID, entity, toolResult.Content); err != nil {
+		if err := h.handleCompleteResponse(&result, loopID, entity, toolResult.Content, &toolResult); err != nil {
 			return result, err
 		}
 		return result, nil
@@ -2238,12 +2286,9 @@ func (h *MessageHandler) checkApprovalGate(loopID string, entity *agentic.LoopEn
 // alongside any non-fatal error so the caller can decide whether to
 // surface it.
 func (h *MessageHandler) gateForApproval(loopID string, entity *agentic.LoopEntity, toolResult agentic.ToolResult) (*PublishedMessage, error) {
-	toolName := h.loopManager.GetToolName(toolResult.CallID)
-	if toolName == "" {
-		// Fall back to the tool name on the result envelope when the
-		// LoopManager cache has been cleared (e.g., process restart).
-		toolName = toolResult.Name
-	}
+	// Falls back to the tool name on the result envelope when the
+	// LoopManager cache has been cleared (e.g., process restart).
+	toolName := h.resolveToolName(toolResult)
 	args := h.loopManager.GetToolArguments(toolResult.CallID)
 
 	if err := entity.BeginAwaitingApproval(toolResult.CallID, toolName, args, toolResult.Error, h.config.ApprovalTimeout(), toolResult.TraceID); err != nil {

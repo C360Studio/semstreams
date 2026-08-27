@@ -133,3 +133,54 @@ strings (`entity/types.go:187-365`, `processor/{spec,docs,decision}/processor.go
 - **semdragon** (`07f4de9`, pinned to beta.135): writes through the pre-ADR-091 subject and directly to KV
   (`questdag/unit.go:673`, `graphclient.go:79-95`); already off the current mutation surface. `questdag.unit.v1` and the dynamic
   `semdragons.<event>.v1` keys become obligations only if it returns to the typed mutation API.
+
+## Composition validation substrate (ADR-100) — `GET <components>/gaps` is removed
+
+### What changes on the wire
+
+`GET <components>/gaps` — the operation key `/gaps` in the generated document, served at `/components/gaps` because
+ComponentManager mounts under the `components` prefix (`service/service_manager.go:1683-1686` maps the service name
+`component-manager` to the URL prefix `components`) — is **removed without an alias**,
+together with its response body (`disconnected_nodes`, `orphaned_ports`, `objectstore_gaps`, and the `summary` object
+carrying `total_gaps` / `critical_gaps` / `optional_gaps` / `critical_port_count` / `has_issues`). The route 404s and the
+operation is gone from `specs/openapi.v3.yaml`. Its Go surface goes with it:
+`ComponentManager.ValidateFlowConnectivity`, `ComponentManager.DetectObjectStoreGaps`, and the `ComponentGap` type.
+
+The operation was a **second composition judgment**. It re-derived the connection graph on demand and applied its own
+severity table, which disagreed with the canonical one: an input declared `"external": true` — fed from outside the
+composition, an operator statement introduced in this same landing — is not an orphan to the canonical validator, while
+`/gaps` reported it as `no_publishers`, `required=true`, `critical_port_count=1`, `has_issues=true`. ADR-100 D3 admits one
+validator and one findings vocabulary, so the second judgment is retired rather than re-projected.
+
+### What replaces it
+
+| You wanted | Use |
+|---|---|
+| The findings for the composition that is running | `GET <components>/validate` — the `composition.Result` ComponentManager retained at boot, verbatim (`status`, `errors`, `warnings`, `graph`). Boot now **refuses** on an error finding, so a running process has none. |
+| The connection graph of the composition that is running | `GET <components>/flowgraph` (JSON, or `?format=mermaid`) |
+| The findings for a composition before you boot it | The `validate <config-path>` verb (`composition/cli.Main`, wired into `semstreams`; `--validate` reports the same findings), or `composition.Validate(catalog, cfg)` in Go |
+| The same judgment in a test | `composition.AssertValid(t, catalog, cfg)` |
+| The same judgment from an agent | The read-only tools `validate_composition` and `composition_graph`, under the existing `component_catalog` gate |
+
+The finding types `disconnected_node` and `orphaned_port` survive by name in the canonical vocabulary; a required stream
+input with no publisher is an `orphaned_port` **error** there (severity, not a separate "critical" count), and an input
+declared `"external": true` raises no such finding. `GET <components>/paths` (reachability from input components) is
+unchanged — it is a projection, not a judgment.
+
+### Downstream action
+
+Measured across the local sister checkouts on 2026-08-26 (`grep -rn "gaps"` over `*.ts`, `*.tsx`, `*.svelte`, `*.go`,
+`*.py`, excluding generated files): **no repository calls the operation from hand-written code.** Every hit is a
+generated OpenAPI type — `semstreams-ui/src/lib/types/api.generated.ts:703`, `semteams/ui/src/lib/types/api.generated.ts:715`,
+`semspec/ui/src/lib/types/{api,semstreams}.generated.ts:600,715`, `semdragon/ui/src/lib/api/generated.d.ts:91` and
+`semdragon/ui/static/openapi.json:58`.
+
+- **Every UI repository**: regenerate types from the new `specs/openapi.v3.yaml`. The `/gaps`
+  operation key disappears; nothing else in the component surface changes shape except `/flowgraph`
+  and `/validate`, which gain typed schemas (`Graph`, `Result`).
+- **Anyone who added a call since that measurement**: replace a `has_issues` check with `result.status !== "valid"` from
+  `<components>/validate`, and a `critical_port_count` check with `result.errors.length`. Do not reimplement the severity
+  rule client-side — that is the defect this landing removes.
+- **Anyone whose component has an input fed from outside the composition** (a UI, a peer process, a rule action): declare
+  `"external": true` on that input port, and restate it in any named override (a named merge is a complete replacement).
+  Without it, boot refuses with `orphaned_port … no_publishers` and prints the one-line remedy.

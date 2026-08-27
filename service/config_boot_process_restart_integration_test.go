@@ -163,6 +163,10 @@ func runConfigBootProcessRole(ctx context.Context, url, role string) (result err
 			}
 			return &configBootProcessComponent{marker: cfg.Marker}, nil
 		},
+		Ports: func(json.RawMessage, string) (component.PortConfig, error) {
+			probe := &configBootProcessComponent{}
+			return component.PortConfigFrom(probe.InputPorts(), probe.OutputPorts()), nil
+		},
 	}); err != nil {
 		return fmt.Errorf("register proof component: %w", err)
 	}

@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/composition"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -350,4 +352,44 @@ func (m *mockComponentWithoutDebug) Health() component.HealthStatus {
 
 func (m *mockComponentWithoutDebug) DataFlow() component.FlowMetrics {
 	return component.FlowMetrics{}
+}
+
+// TestFlowValidationHandlerProjectsLibraryResult — <components>/validate
+// serves the retained boot result verbatim and computes no status of its own.
+// The fixture's Status is deliberately NOT derivable from its arrays (an
+// "errors" status over a warnings-only body): a handler that recomputed status
+// locally would serve "warnings" and fail this test, which is what makes the
+// projection assertion load-bearing.
+func TestFlowValidationHandlerProjectsLibraryResult(t *testing.T) {
+	retained := &composition.Result{
+		Status: composition.StatusErrors,
+		Errors: []composition.Finding{},
+		Warnings: []composition.Finding{{
+			Type: composition.TypeDisconnectedNode, Severity: composition.SeverityWarning,
+			Component: "alone", Message: "component has no connections",
+			Suggestions: []string{"connect to other components"},
+		}},
+		Graph: composition.Graph{
+			Nodes: []composition.Node{{Instance: "alone", Factory: "lonely", Type: "processor",
+				Inputs: []composition.PortView{}, Outputs: []composition.PortView{}}},
+			Edges: []composition.Edge{},
+		},
+	}
+	cm := &ComponentManager{
+		BaseService:  NewBaseServiceWithOptions("component-manager", nil),
+		registry:     component.NewRegistry(),
+		bootFindings: retained,
+	}
+	recorder := httptest.NewRecorder()
+	cm.handleFlowValidation(recorder, httptest.NewRequest(http.MethodGet, "/components/validate", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var served composition.Result
+	if err := json.Unmarshal(recorder.Body.Bytes(), &served); err != nil {
+		t.Fatalf("decode: %v\n%s", err, recorder.Body.String())
+	}
+	if !reflect.DeepEqual(served, *retained) {
+		t.Fatalf("served result is not the retained result verbatim:\nserved=%+v\nretained=%+v", served, *retained)
+	}
 }

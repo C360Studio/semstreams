@@ -105,45 +105,44 @@ type streamConsumerBinding struct {
 
 // NewComponent creates a new agentic-model processor component
 func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+	return NewComponentWithOptions(rawConfig, deps)
+}
+
+// DeclarePorts is the component.PortDeclarer for agentic-model: the ports
+// NewComponent will report for rawConfig, computed without dependencies.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	_, inputs, outputs, err := resolveConfig(rawConfig, "DeclarePorts")
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfigFrom(inputs, outputs), nil
+}
+
+// resolveConfig parses rawConfig over the defaults, merges the port
+// overrides, validates, and resolves the effective ports. It is the one
+// derivation DeclarePorts and the constructors share.
+func resolveConfig(rawConfig json.RawMessage, method string) (Config, []component.Port, []component.Port, error) {
 	defaults := DefaultConfig()
 	config := DefaultConfig()
 	if err := json.Unmarshal(rawConfig, &config); err != nil {
-		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "unmarshal config")
+		return Config{}, nil, nil, errs.WrapInvalid(err, "Component", method, "unmarshal config")
 	}
 	if config.Ports == nil {
 		config.Ports = defaults.Ports
 	}
 	mergedPorts, err := component.MergePortConfig(*defaults.Ports, *config.Ports)
 	if err != nil {
-		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "merge port overrides")
+		return Config{}, nil, nil, errs.WrapInvalid(err, "Component", method, "merge port overrides")
 	}
 	config.Ports = &mergedPorts
-
-	// Validate configuration
 	if err := config.Validate(); err != nil {
-		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "validate config")
+		return Config{}, nil, nil, errs.WrapInvalid(err, "Component", method, "validate config")
 	}
-
-	// Require model registry
-	if deps.ModelRegistry == nil {
-		return nil, errs.WrapInvalid(errs.ErrMissingConfig, "Component", "NewComponent", "model registry is required")
-	}
-
-	// Parse timeout for message processing
-	messageTimeout := 110 * time.Second // default — kept 10s below consumer AckWait 120s so context.Done propagates before NATS redelivery (see resolveTimeout precedence and feedback_class_of_bugs_to_invariant.md)
-	if config.Timeout != "" {
-		var err error
-		messageTimeout, err = time.ParseDuration(config.Timeout)
-		if err != nil {
-			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "parse timeout")
-		}
-	}
-
 	inputPorts, outputPorts, err := resolveConfiguredPorts(config)
 	if err != nil {
-		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve ports")
+		return Config{}, nil, nil, errs.WrapInvalid(err, "Component", method, "resolve ports")
 	}
-	return newComponent(config, deps, messageTimeout, inputPorts, outputPorts), nil
+	return config, inputPorts, outputPorts, nil
 }
 
 // NewComponentWithOptions is the option-aware constructor. The factory
@@ -151,39 +150,26 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 // in-process RollingWindowBreaker for circuit breaking. Tests and
 // callers wanting a custom HealthPolicy use this directly.
 func NewComponentWithOptions(rawConfig json.RawMessage, deps component.Dependencies, opts ...Option) (component.Discoverable, error) {
-	defaults := DefaultConfig()
-	config := DefaultConfig()
-	if err := json.Unmarshal(rawConfig, &config); err != nil {
-		return nil, errs.WrapInvalid(err, "Component", "NewComponentWithOptions", "unmarshal config")
-	}
-	if config.Ports == nil {
-		config.Ports = defaults.Ports
-	}
-	mergedPorts, err := component.MergePortConfig(*defaults.Ports, *config.Ports)
+	config, inputPorts, outputPorts, err := resolveConfig(rawConfig, "NewComponentWithOptions")
 	if err != nil {
-		return nil, errs.WrapInvalid(err, "Component", "NewComponentWithOptions", "merge port overrides")
-	}
-	config.Ports = &mergedPorts
-	if err := config.Validate(); err != nil {
-		return nil, errs.WrapInvalid(err, "Component", "NewComponentWithOptions", "validate config")
+		return nil, err
 	}
 	if deps.ModelRegistry == nil {
 		return nil, errs.WrapInvalid(errs.ErrMissingConfig, "Component", "NewComponentWithOptions", "model registry is required")
 	}
 
+	// Parse timeout for message processing: the default is kept 10s below the
+	// consumer AckWait of 120s so context.Done propagates before NATS
+	// redelivery (see resolveTimeout precedence and
+	// feedback_class_of_bugs_to_invariant.md).
 	messageTimeout := 110 * time.Second
 	if config.Timeout != "" {
-		var err error
 		messageTimeout, err = time.ParseDuration(config.Timeout)
 		if err != nil {
 			return nil, errs.WrapInvalid(err, "Component", "NewComponentWithOptions", "parse timeout")
 		}
 	}
 
-	inputPorts, outputPorts, err := resolveConfiguredPorts(config)
-	if err != nil {
-		return nil, errs.WrapInvalid(err, "Component", "NewComponentWithOptions", "resolve ports")
-	}
 	c := newComponent(config, deps, messageTimeout, inputPorts, outputPorts)
 	for _, opt := range opts {
 		opt(c)

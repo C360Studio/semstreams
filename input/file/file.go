@@ -624,15 +624,34 @@ func (f *Input) publishToNATS(ctx context.Context, data []byte) error {
 	return nil
 }
 
-// CreateInput creates a file input component following service pattern
-func CreateInput(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
-	cfg := DefaultConfig()
+// DeclarePorts is the component.PortDeclarer for file_input: the file_source
+// port derived from path and format plus the configured output, exactly as
+// CreateInput will report them.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	cfg, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return component.PortConfig{}, err
+	}
+	_, _, _, _, inputPorts, outputPorts, _, err := cfg.getConfiguredPorts()
+	if err != nil {
+		return component.PortConfig{}, errs.WrapInvalid(err, "file-input", "NewInput", "resolve configured ports")
+	}
+	return component.PortConfigFrom(inputPorts, outputPorts), nil
+}
 
+// resolveConfig overlays the user configuration on the defaults. It is the one
+// derivation DeclarePorts and CreateInput share; getConfiguredPorts is the one
+// port derivation.
+func resolveConfig(rawConfig json.RawMessage) (Config, error) {
+	cfg := DefaultConfig()
 	if len(rawConfig) > 0 {
 		type configOverride Config
 		var override configOverride
 		if err := component.SafeUnmarshal(rawConfig, &override); err != nil {
-			return nil, errs.Wrap(err, "file-input-factory", "create", "secure config parsing")
+			return Config{}, errs.Wrap(err, "file-input-factory", "create", "secure config parsing")
 		}
 		userConfig := Config(override)
 
@@ -650,6 +669,15 @@ func CreateInput(rawConfig json.RawMessage, deps component.Dependencies) (compon
 			cfg.Interval = userConfig.Interval
 		}
 		cfg.Loop = userConfig.Loop
+	}
+	return cfg, nil
+}
+
+// CreateInput creates a file input component following service pattern
+func CreateInput(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+	cfg, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
 	}
 
 	if deps.NATSClient == nil {
@@ -672,6 +700,7 @@ func Register(registry *component.Registry) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
 		Name:        "file_input",
 		Factory:     CreateInput,
+		Ports:       DeclarePorts,
 		Schema:      fileSchema,
 		Type:        "input",
 		Protocol:    "file",

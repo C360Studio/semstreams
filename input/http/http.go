@@ -108,24 +108,25 @@ type InputDeps struct {
 	Logger          *slog.Logger
 }
 
-// NewInput constructs a new HTTP polling input from the given
-// dependencies. The constructor validates so direct callers cannot bypass the
-// same fail-closed port and endpoint contract used by registry construction.
-func NewInput(deps InputDeps) (*Input, error) {
-	if err := deps.Config.Validate(); err != nil {
-		return nil, errs.WrapInvalid(err, "Input", "NewInput", "validate config")
+// resolvePorts validates the configuration, derives the schedule and source
+// input ports from the resolved polling cadence and endpoint, and resolves
+// the configured outputs. It is the one port derivation DeclarePorts and
+// NewInput share; inputs are [schedule, source].
+func resolvePorts(cfg Config) ([]component.Port, []component.Port, resolved, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, nil, resolved{}, errs.WrapInvalid(err, "Input", "NewInput", "validate config")
 	}
-	resolved, err := deps.Config.resolve()
+	res, err := cfg.resolve()
 	if err != nil {
-		return nil, errs.WrapInvalid(err, "Input", "NewInput", "resolve config")
+		return nil, nil, resolved{}, errs.WrapInvalid(err, "Input", "NewInput", "resolve config")
 	}
-	if deps.Config.Ports == nil || len(deps.Config.Ports.Outputs) != 1 {
-		return nil, errs.WrapInvalid(errs.ErrMissingConfig, "Input", "NewInput", "exactly one output port is required")
+	if cfg.Ports == nil || len(cfg.Ports.Outputs) != 1 {
+		return nil, nil, resolved{}, errs.WrapInvalid(errs.ErrMissingConfig, "Input", "NewInput", "exactly one output port is required")
 	}
 	const schedulePortName = "http_schedule"
-	scheduleConfig := component.TimerPort{Interval: resolved.interval.String()}
+	scheduleConfig := component.TimerPort{Interval: res.interval.String()}
 	sourceConfig := component.HTTPClientPort{
-		Method: resolved.method, URLPattern: resolved.url, TriggerPort: schedulePortName,
+		Method: res.method, URLPattern: res.url, TriggerPort: schedulePortName,
 	}
 	scheduleDefinition := component.PortDefinition{
 		Name:        "http_schedule",
@@ -136,28 +137,40 @@ func NewInput(deps InputDeps) (*Input, error) {
 	sourceDefinition := component.PortDefinition{
 		Name:        "http_source",
 		Required:    true,
-		Description: fmt.Sprintf("HTTP endpoint: %s", resolved.url),
+		Description: fmt.Sprintf("HTTP endpoint: %s", res.url),
 		Config:      sourceConfig,
 	}
 	schedule, err := scheduleDefinition.Resolve(component.DirectionInput)
 	if err != nil {
-		return nil, errs.WrapInvalid(err, "Input", "NewInput", "resolve HTTP schedule port")
+		return nil, nil, resolved{}, errs.WrapInvalid(err, "Input", "NewInput", "resolve HTTP schedule port")
 	}
 	input, err := sourceDefinition.Resolve(component.DirectionInput)
 	if err != nil {
-		return nil, errs.WrapInvalid(err, "Input", "NewInput", "resolve HTTP source port")
+		return nil, nil, resolved{}, errs.WrapInvalid(err, "Input", "NewInput", "resolve HTTP source port")
 	}
-	if sourceConfig.TriggerPort != scheduleDefinition.Name || scheduleConfig.Interval != resolved.interval.String() {
-		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Input", "NewInput", "HTTP source trigger must reference the runtime polling cadence")
+	if sourceConfig.TriggerPort != scheduleDefinition.Name || scheduleConfig.Interval != res.interval.String() {
+		return nil, nil, resolved{}, errs.WrapInvalid(errs.ErrInvalidConfig, "Input", "NewInput", "HTTP source trigger must reference the runtime polling cadence")
 	}
-	outputs := make([]component.Port, len(deps.Config.Ports.Outputs))
-	for index, definition := range deps.Config.Ports.Outputs {
+	outputs := make([]component.Port, len(cfg.Ports.Outputs))
+	for index, definition := range cfg.Ports.Outputs {
 		output, resolveErr := definition.Resolve(component.DirectionOutput)
 		if resolveErr != nil {
-			return nil, errs.WrapInvalid(resolveErr, "Input", "NewInput", "resolve output port")
+			return nil, nil, resolved{}, errs.WrapInvalid(resolveErr, "Input", "NewInput", "resolve output port")
 		}
 		outputs[index] = output
 	}
+	return []component.Port{schedule, input}, outputs, res, nil
+}
+
+// NewInput constructs a new HTTP polling input from the given
+// dependencies. The constructor validates so direct callers cannot bypass the
+// same fail-closed port and endpoint contract used by registry construction.
+func NewInput(deps InputDeps) (*Input, error) {
+	inputs, outputs, resolved, err := resolvePorts(deps.Config)
+	if err != nil {
+		return nil, err
+	}
+	schedule, input := inputs[0], inputs[1]
 	logger := deps.Logger
 	if logger == nil {
 		logger = slog.Default().With("component", "http-input", "url", resolved.url)

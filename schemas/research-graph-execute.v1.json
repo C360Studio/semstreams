@@ -486,6 +486,9 @@
               "description": {
                 "type": "string"
               },
+              "external": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               },
@@ -792,6 +795,9 @@
               "description": {
                 "type": "string"
               },
+              "external": {
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               },
@@ -816,6 +822,72 @@
     "type": "processor",
     "protocol": "execute_subqueries",
     "domain": "research",
-    "version": "0.1.0"
+    "version": "0.1.0",
+    "default_ports": {
+      "inputs": [
+        {
+          "name": "trigger",
+          "direction": "input",
+          "type": "",
+          "required": true,
+          "connection_id": "component.execute_subqueries.\u003e",
+          "pattern": "stream",
+          "description": "R2's publish target. Subject suffix carries the research-pipeline loop_id.",
+          "kind": "nats"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "graph_mutations",
+          "direction": "output",
+          "type": "semstreams.graph.mutation",
+          "required": true,
+          "connection_id": "graph.mutation.\u003e",
+          "pattern": "request",
+          "description": "",
+          "kind": "nats-request"
+        },
+        {
+          "name": "batch",
+          "direction": "output",
+          "type": "graph.query",
+          "required": true,
+          "connection_id": "graph.query.batch",
+          "pattern": "request",
+          "description": "",
+          "kind": "nats-request"
+        },
+        {
+          "name": "relationships",
+          "direction": "output",
+          "type": "graph.query",
+          "required": true,
+          "connection_id": "graph.query.relationships",
+          "pattern": "request",
+          "description": "",
+          "kind": "nats-request"
+        },
+        {
+          "name": "temporal",
+          "direction": "output",
+          "type": "graph.query",
+          "required": true,
+          "connection_id": "graph.query.temporal",
+          "pattern": "request",
+          "description": "",
+          "kind": "nats-request"
+        },
+        {
+          "name": "searchGraph",
+          "direction": "output",
+          "type": "graph.query",
+          "required": true,
+          "connection_id": "graph.query.searchGraph",
+          "pattern": "request",
+          "description": "",
+          "kind": "nats-request"
+        }
+      ]
+    }
   }
 }

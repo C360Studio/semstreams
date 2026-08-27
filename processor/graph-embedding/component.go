@@ -376,19 +376,24 @@ type Component struct {
 	statusInterval time.Duration
 }
 
-// CreateGraphEmbedding is the factory function for creating graph-embedding components
-func CreateGraphEmbedding(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
-	// Validate dependencies
-	if deps.NATSClient == nil {
-		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "CreateGraphEmbedding", "factory", "NATSClient required")
+// DeclarePorts is the component.PortDeclarer for graph-embedding: the ports
+// CreateGraphEmbedding will report for rawConfig, computed without dependencies.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	_, inputs, outputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
 	}
-	natsClient := deps.NATSClient
+	return component.PortConfigFrom(inputs, outputs), nil
+}
 
-	// Parse configuration
+// resolveConfig parses rawConfig, applies defaults, validates, and resolves
+// the effective ports. It is the one derivation DeclarePorts and
+// CreateGraphEmbedding share.
+func resolveConfig(rawConfig json.RawMessage) (Config, []component.Port, []component.Port, error) {
 	var config Config
 	if len(rawConfig) > 0 {
 		if err := json.Unmarshal(rawConfig, &config); err != nil {
-			return nil, errs.Wrap(err, "CreateGraphEmbedding", "factory", "config unmarshal")
+			return Config{}, nil, nil, errs.Wrap(err, "CreateGraphEmbedding", "factory", "config unmarshal")
 		}
 		// Targeted probe for the removed cache_ttl knob: plain json.Unmarshal
 		// silently ignores unknown fields, so a stale config carrying it would
@@ -398,7 +403,7 @@ func CreateGraphEmbedding(rawConfig json.RawMessage, deps component.Dependencies
 			CacheTTL *json.RawMessage `json:"cache_ttl"`
 		}
 		if err := json.Unmarshal(rawConfig, &removed); err == nil && removed.CacheTTL != nil {
-			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "CreateGraphEmbedding", "factory",
+			return Config{}, nil, nil, errs.WrapInvalid(errs.ErrInvalidConfig, "CreateGraphEmbedding", "factory",
 				"cache_ttl was removed from graph-embedding; delete it from the config (see docs/operations/embeddings-cache-removal.md)")
 		}
 	} else {
@@ -408,16 +413,13 @@ func CreateGraphEmbedding(rawConfig json.RawMessage, deps component.Dependencies
 	// Apply defaults and validate
 	config.ApplyDefaults()
 	if err := config.Validate(); err != nil {
-		return nil, errs.Wrap(err, "CreateGraphEmbedding", "factory", "config validation")
+		return Config{}, nil, nil, errs.Wrap(err, "CreateGraphEmbedding", "factory", "config validation")
 	}
-
-	// Create logger with component context
-	logger := deps.GetLoggerWithComponent("graph-embedding")
 	inputs := make([]component.Port, 0, len(config.Ports.Inputs))
 	for _, definition := range config.Ports.Inputs {
 		port, err := definition.Resolve(component.DirectionInput)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "CreateGraphEmbedding", "factory", "resolve input port")
+			return Config{}, nil, nil, errs.WrapInvalid(err, "CreateGraphEmbedding", "factory", "resolve input port")
 		}
 		inputs = append(inputs, port)
 	}
@@ -425,10 +427,28 @@ func CreateGraphEmbedding(rawConfig json.RawMessage, deps component.Dependencies
 	for _, definition := range config.Ports.Outputs {
 		port, err := definition.Resolve(component.DirectionOutput)
 		if err != nil {
-			return nil, errs.WrapInvalid(err, "CreateGraphEmbedding", "factory", "resolve output port")
+			return Config{}, nil, nil, errs.WrapInvalid(err, "CreateGraphEmbedding", "factory", "resolve output port")
 		}
 		outputs = append(outputs, port)
 	}
+	return config, inputs, outputs, nil
+}
+
+// CreateGraphEmbedding is the factory function for creating graph-embedding components
+func CreateGraphEmbedding(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+	// Validate dependencies
+	if deps.NATSClient == nil {
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "CreateGraphEmbedding", "factory", "NATSClient required")
+	}
+	natsClient := deps.NATSClient
+
+	config, inputs, outputs, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create logger with component context
+	logger := deps.GetLoggerWithComponent("graph-embedding")
 	var storeRegistry = (*storeregistry.Registry)(nil)
 	for _, input := range inputs {
 		facts, err := input.Facts()
@@ -476,6 +496,7 @@ func Register(registry *component.Registry) error {
 		Version:      "1.0.0",
 		Schema:       schema,
 		Factory:      CreateGraphEmbedding,
+		Ports:        DeclarePorts,
 		Dependencies: []string{component.DepModelRegistry},
 	})
 }

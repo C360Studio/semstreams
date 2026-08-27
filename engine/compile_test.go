@@ -20,6 +20,7 @@ func compileTestEngine(t *testing.T) *Engine {
 		Factory: func(_ json.RawMessage, _ component.Dependencies) (component.Discoverable, error) {
 			return &validationTestComponent{}, nil
 		},
+		Ports: func(json.RawMessage, string) (component.PortConfig, error) { return component.PortConfig{}, nil },
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -15,6 +15,7 @@ func Register(registry *component.Registry) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
 		Name:        "rule-processor",
 		Factory:     CreateRuleProcessor,
+		Ports:       DeclarePorts,
 		Schema:      schema,
 		Type:        "processor",
 		Protocol:    "rule",
@@ -24,22 +25,34 @@ func Register(registry *component.Registry) error {
 	})
 }
 
-// CreateRuleProcessor creates a rule processor with the new factory pattern
-func CreateRuleProcessor(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
-	// Validate required dependencies
-	if deps.NATSClient == nil {
-		return nil, errs.WrapInvalid(fmt.Errorf("NATS client is required"),
-			"rule-processor-factory", "create", "NATS client validation")
+// DeclarePorts is the component.PortDeclarer for rule-processor: the
+// configured ports (defaults when none are configured), resolved exactly as
+// the processor's setupPorts resolves them.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	ruleConfig, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
 	}
+	if ruleConfig.Ports == nil {
+		return component.PortConfig{}, fmt.Errorf("rule processor config missing required Ports configuration")
+	}
+	inputs, outputs, err := resolvePorts(*ruleConfig.Ports)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfigFrom(inputs, outputs), nil
+}
 
-	// Start with identity-free internal defaults; the required operator pack_id
-	// is overlaid below and the complete config is validated before construction.
+// resolveConfig overlays the operator configuration on the identity-free
+// defaults and validates the result. It is the one derivation DeclarePorts and
+// CreateRuleProcessor share; resolvePorts is the one port derivation.
+func resolveConfig(rawConfig json.RawMessage) (Config, error) {
 	ruleConfig := defaultConfig()
 	if len(rawConfig) > 0 {
 		// Parse user config
 		var userConfig Config
 		if err := json.Unmarshal(rawConfig, &userConfig); err != nil {
-			return nil, errs.WrapInvalid(err, "rule-processor-factory", "create", "parse config")
+			return Config{}, errs.WrapInvalid(err, "rule-processor-factory", "create", "parse config")
 		}
 
 		// Apply user overrides
@@ -87,7 +100,22 @@ func CreateRuleProcessor(rawConfig json.RawMessage, deps component.Dependencies)
 	// must be subject-safe, and a config-time reject is far clearer than a
 	// silent RegisterOwner failure at the composition root.
 	if err := ruleConfig.Validate(); err != nil {
-		return nil, errs.WrapInvalid(err, "rule-processor-factory", "create", "validate config")
+		return Config{}, errs.WrapInvalid(err, "rule-processor-factory", "create", "validate config")
+	}
+	return ruleConfig, nil
+}
+
+// CreateRuleProcessor creates a rule processor with the new factory pattern
+func CreateRuleProcessor(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+	// Validate required dependencies
+	if deps.NATSClient == nil {
+		return nil, errs.WrapInvalid(fmt.Errorf("NATS client is required"),
+			"rule-processor-factory", "create", "NATS client validation")
+	}
+
+	ruleConfig, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
 	}
 
 	// Create processor with metrics if available

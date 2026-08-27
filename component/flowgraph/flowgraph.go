@@ -3,6 +3,8 @@ package flowgraph
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/c360studio/semstreams/component"
@@ -127,20 +129,39 @@ func (g *FlowGraph) GetEdges() []FlowEdge {
 func BuildFromRegistry(
 	access componentadmission.Access, registry *component.Registry,
 ) (*FlowGraph, error) {
+	snapshots := registry.Snapshots(access)
+	declarations := make([]component.Declaration, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		declarations = append(declarations, snapshot.Declaration())
+	}
+	return BuildFromDeclarations(declarations)
+}
+
+// BuildFromDeclarations constructs and connects a flow graph from component
+// declarations — admitted (Registry snapshots) or declared offline
+// (Registry.Declare) — so the boot-time and the offline paths build the same
+// graph from the same interpreter.
+func BuildFromDeclarations(declarations []component.Declaration) (*FlowGraph, error) {
 	graph := NewFlowGraph()
-	for _, snapshot := range registry.Snapshots(access) {
+	for _, declaration := range declarations {
 		if err := graph.addComponentNode(
-			snapshot.Name(),
-			snapshot.Inputs(), snapshot.InputDeclarationFacts(),
-			snapshot.Outputs(), snapshot.OutputDeclarationFacts(),
+			declaration.InstanceName,
+			declaration.InputPorts, declaration.InputFacts,
+			declaration.OutputPorts, declaration.OutputFacts,
 		); err != nil {
-			return nil, fmt.Errorf("add component %q to flow graph: %w", snapshot.Name(), err)
+			return nil, fmt.Errorf("add component %q to flow graph: %w", declaration.InstanceName, err)
 		}
 	}
 	if err := graph.ConnectComponentsByPatterns(); err != nil {
 		return nil, fmt.Errorf("connect component flow graph: %w", err)
 	}
 	return graph, nil
+}
+
+// sortedNodeNames returns the graph's component names in a stable order so
+// edge derivation does not depend on map iteration.
+func (g *FlowGraph) sortedNodeNames() []string {
+	return slices.Sorted(maps.Keys(g.nodes))
 }
 
 func (g *FlowGraph) addComponentNode(
@@ -290,7 +311,8 @@ func (g *FlowGraph) validateGraphMutationProviders() error {
 func (g *FlowGraph) buildPublisherMap() map[component.InteractionPattern]map[string][]ComponentPortRef {
 	publishers := make(map[component.InteractionPattern]map[string][]ComponentPortRef)
 
-	for componentName, node := range g.nodes {
+	for _, componentName := range g.sortedNodeNames() {
+		node := g.nodes[componentName]
 		for _, port := range node.OutputPorts {
 			if publishers[port.Pattern] == nil {
 				publishers[port.Pattern] = make(map[string][]ComponentPortRef)
@@ -333,7 +355,8 @@ func (g *FlowGraph) buildPublisherMap() map[component.InteractionPattern]map[str
 func (g *FlowGraph) buildSubscriberMap() map[component.InteractionPattern]map[string][]ComponentPortRef {
 	subscribers := make(map[component.InteractionPattern]map[string][]ComponentPortRef)
 
-	for componentName, node := range g.nodes {
+	for _, componentName := range g.sortedNodeNames() {
+		node := g.nodes[componentName]
 		for _, port := range node.InputPorts {
 			if subscribers[port.Pattern] == nil {
 				subscribers[port.Pattern] = make(map[string][]ComponentPortRef)
@@ -367,6 +390,70 @@ func (g *FlowGraph) buildSubscriberMap() map[component.InteractionPattern]map[st
 	}
 
 	return subscribers
+}
+
+// SubjectCovers reports whether filter COVERS pattern: every concrete subject
+// that matches pattern also matches filter under NATS wildcard semantics. It
+// is directional: `data.>` covers `data.*`, `data.*` does not cover `data.>`,
+// and `data.raw` does not cover `data.*`. Composition validation uses it to
+// decide whether an explicit stream's subjects feed a JetStream subscriber's
+// subjects. Edge derivation's unexported direct-match test is a different
+// question and is not exported: it answers "may these two ports be connected",
+// not "does this filter deliver every subject that one".
+func SubjectCovers(filter, pattern string) bool {
+	patternTokens := strings.Split(pattern, ".")
+	filterTokens := strings.Split(filter, ".")
+	if !validSubjectTokens(patternTokens) || !validSubjectTokens(filterTokens) {
+		return false
+	}
+	filterHasTail := filterTokens[len(filterTokens)-1] == ">"
+	if !filterHasTail {
+		if patternTokens[len(patternTokens)-1] == ">" || len(patternTokens) != len(filterTokens) {
+			return false
+		}
+		for index := range filterTokens {
+			if !tokenCovered(patternTokens[index], filterTokens[index]) {
+				return false
+			}
+		}
+		return true
+	}
+	// A trailing `>` consumes at least one token, so the pattern must reach
+	// the filter's prefix plus one.
+	prefix := len(filterTokens) - 1
+	if len(patternTokens) < prefix+1 {
+		return false
+	}
+	for index := 0; index < prefix; index++ {
+		token := patternTokens[index]
+		if token == ">" {
+			token = "*"
+		}
+		if !tokenCovered(token, filterTokens[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func validSubjectTokens(tokens []string) bool {
+	if len(tokens) == 0 {
+		return false
+	}
+	for index, token := range tokens {
+		if token == "" || (strings.ContainsAny(token, "*>") && token != "*" && token != ">") ||
+			(token == ">" && index != len(tokens)-1) {
+			return false
+		}
+	}
+	return true
+}
+
+func tokenCovered(patternToken, filterToken string) bool {
+	if filterToken == "*" {
+		return true
+	}
+	return patternToken != "*" && patternToken == filterToken
 }
 
 // matchNATSPattern checks if a subject matches a NATS pattern
@@ -453,9 +540,14 @@ func (g *FlowGraph) connectStreamPorts(publishers, subscribers map[string][]Comp
 	}
 	seen := make(map[edgeKey]bool)
 
-	// Stream pattern: publishers -> subscribers with NATS pattern matching
-	for pubConnID, pubs := range publishers {
-		for subConnID, subs := range subscribers {
+	// Stream pattern: publishers -> subscribers with NATS pattern matching.
+	// Connection IDs are visited in sorted order so the edge set — and the
+	// connection ID chosen for a pair reachable under both a stream name and a
+	// subject — is the same on every run.
+	for _, pubConnID := range slices.Sorted(maps.Keys(publishers)) {
+		pubs := publishers[pubConnID]
+		for _, subConnID := range slices.Sorted(maps.Keys(subscribers)) {
+			subs := subscribers[subConnID]
 			// Check if publisher subject matches subscriber pattern or vice versa
 			if matchNATSPattern(pubConnID, subConnID) || matchNATSPattern(subConnID, pubConnID) {
 				// Use the more concrete (non-wildcard) connection ID for the edge.
@@ -500,8 +592,10 @@ func (g *FlowGraph) connectStorePorts(publishers, subscribers map[string][]Compo
 	type edgeKey struct{ from, to ComponentPortRef }
 	seen := make(map[edgeKey]bool)
 
-	for pubConnID, pubs := range publishers {
-		for _, subs := range subscribers {
+	for _, pubConnID := range slices.Sorted(maps.Keys(publishers)) {
+		pubs := publishers[pubConnID]
+		for _, subConnID := range slices.Sorted(maps.Keys(subscribers)) {
+			subs := subscribers[subConnID]
 			for _, pub := range pubs {
 				for _, sub := range subs {
 					if pub.ComponentName == sub.ComponentName {
@@ -564,8 +658,12 @@ func (g *FlowGraph) connectRequestPorts(publishers, subscribers map[string][]Com
 
 	// Cross-match every publisher connection ID against every subscriber connection
 	// ID using NATS pattern matching (handles * and > wildcards in either position).
-	for pubConnID, pubs := range publishers {
-		for subConnID, subs := range subscribers {
+	publisherIDs := slices.Sorted(maps.Keys(publishers))
+	subscriberIDs := slices.Sorted(maps.Keys(subscribers))
+	for _, pubConnID := range publisherIDs {
+		pubs := publishers[pubConnID]
+		for _, subConnID := range subscriberIDs {
+			subs := subscribers[subConnID]
 			if matchNATSPattern(pubConnID, subConnID) || matchNATSPattern(subConnID, pubConnID) {
 				// Use the more concrete (non-wildcard) ID as the edge connection ID.
 				connID := pubConnID
@@ -584,8 +682,10 @@ func (g *FlowGraph) connectRequestPorts(publishers, subscribers map[string][]Com
 	// Also connect ports that are both publishers (output) and subscribers (input)
 	// on matching subjects — request ports are bidirectional so either side may
 	// appear in either map.
-	for pubConnID1, ports1 := range publishers {
-		for pubConnID2, ports2 := range publishers {
+	for _, pubConnID1 := range publisherIDs {
+		ports1 := publishers[pubConnID1]
+		for _, pubConnID2 := range publisherIDs {
+			ports2 := publishers[pubConnID2]
 			if pubConnID1 == pubConnID2 {
 				continue
 			}
@@ -602,8 +702,10 @@ func (g *FlowGraph) connectRequestPorts(publishers, subscribers map[string][]Com
 			}
 		}
 	}
-	for subConnID1, ports1 := range subscribers {
-		for subConnID2, ports2 := range subscribers {
+	for _, subConnID1 := range subscriberIDs {
+		ports1 := subscribers[subConnID1]
+		for _, subConnID2 := range subscriberIDs {
+			ports2 := subscribers[subConnID2]
 			if subConnID1 == subConnID2 {
 				continue
 			}
@@ -624,8 +726,8 @@ func (g *FlowGraph) connectRequestPorts(publishers, subscribers map[string][]Com
 
 // connectWatchPorts connects watch pattern ports (KV bucket observation)
 func (g *FlowGraph) validateKVWriters(publishers map[string][]ComponentPortRef, warnings *[]string) {
-	for connectionID, pubs := range publishers {
-		if len(pubs) > 1 {
+	for _, connectionID := range slices.Sorted(maps.Keys(publishers)) {
+		if pubs := publishers[connectionID]; len(pubs) > 1 {
 			*warnings = append(*warnings, fmt.Sprintf("multiple writers to KV bucket %s: %v", connectionID, pubs))
 		}
 	}
@@ -634,7 +736,8 @@ func (g *FlowGraph) validateKVWriters(publishers map[string][]ComponentPortRef, 
 // connectKVPorts connects KV writers to either change watchers or exact readers
 // without collapsing their distinct interaction semantics.
 func (g *FlowGraph) connectKVPorts(publishers, subscribers map[string][]ComponentPortRef, pattern component.InteractionPattern) {
-	for connectionID, pubs := range publishers {
+	for _, connectionID := range slices.Sorted(maps.Keys(publishers)) {
+		pubs := publishers[connectionID]
 		if subs, exists := subscribers[connectionID]; exists {
 			for _, pub := range pubs {
 				for _, sub := range subs {
@@ -659,7 +762,8 @@ func (g *FlowGraph) validateNetworkPorts(publishers, subscribers map[string][]Co
 	allPorts := make(map[string][]ComponentPortRef)
 
 	// Check publishers for conflicts
-	for connID, candidates := range publishers {
+	for _, connID := range slices.Sorted(maps.Keys(publishers)) {
+		candidates := publishers[connID]
 		ports := g.exclusivePortRefs(candidates, component.DirectionOutput)
 		if len(ports) > 1 {
 			conflicts = append(conflicts,
@@ -671,7 +775,8 @@ func (g *FlowGraph) validateNetworkPorts(publishers, subscribers map[string][]Co
 	}
 
 	// Check if subscribers conflict with publishers (both trying to bind same port)
-	for connID, candidates := range subscribers {
+	for _, connID := range slices.Sorted(maps.Keys(subscribers)) {
+		candidates := subscribers[connID]
 		ports := g.exclusivePortRefs(candidates, component.DirectionInput)
 		if len(ports) == 0 {
 			continue
@@ -733,7 +838,7 @@ func (g *FlowGraph) AnalyzeConnectivity() *FlowAnalysisResult {
 	}
 
 	// Find disconnected nodes (nodes with no edges)
-	for name := range g.nodes {
+	for _, name := range g.sortedNodeNames() {
 		hasConnection := false
 		for _, edge := range g.edges {
 			if edge.From.ComponentName == name || edge.To.ComponentName == name {
@@ -834,7 +939,8 @@ func (g *FlowGraph) findOrphanedPorts() []OrphanedPort {
 	}
 
 	// Check all ports for orphans
-	for componentName, node := range g.nodes {
+	for _, componentName := range g.sortedNodeNames() {
+		node := g.nodes[componentName]
 		// Check input ports
 		for _, port := range node.InputPorts {
 			if connectedPorts[componentName] == nil || !connectedPorts[componentName][port.Name] {
@@ -1033,8 +1139,8 @@ func (g *FlowGraph) ValidateStreamRequirements() []StreamRequirementWarning {
 	}
 
 	result := make([]StreamRequirementWarning, 0, len(deduped))
-	for _, w := range deduped {
-		result = append(result, *w)
+	for _, key := range slices.Sorted(maps.Keys(deduped)) {
+		result = append(result, *deduped[key])
 	}
 
 	return result

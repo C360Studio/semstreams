@@ -769,6 +769,7 @@ func GeneratePortFieldSchema() map[string]PortFieldInfo {
 		"name":        {Type: "string", Editable: false},
 		"required":    {Type: "bool", Editable: false},
 		"description": {Type: "string", Editable: false},
+		"external":    {Type: "bool", Editable: false},
 		"config":      {Type: "object", Editable: true, Variants: variants},
 	}
 }

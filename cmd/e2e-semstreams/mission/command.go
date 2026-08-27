@@ -160,6 +160,7 @@ func Register(registry *component.Registry) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
 		Name:        CommandComponentName,
 		Factory:     NewComponent,
+		Ports:       DeclarePorts,
 		Schema:      commandSchema,
 		Type:        "processor",
 		Protocol:    "mission",
@@ -169,43 +170,73 @@ func Register(registry *component.Registry) error {
 	})
 }
 
-// NewComponent is the factory called by the component registry.
-func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+// DeclarePorts is the component.PortDeclarer for mission-command: the one
+// input and one output NewComponent will report for rawConfig.
+func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
+	resolved, err := resolveConfig(rawConfig)
+	if err != nil {
+		return component.PortConfig{}, err
+	}
+	return component.PortConfigFrom([]component.Port{resolved.input}, []component.Port{resolved.output}), nil
+}
+
+type resolvedConfig struct {
+	cfg           ComponentConfig
+	input, output component.Port
+	inputSubject  string
+	outputSubject string
+}
+
+// resolveConfig parses and validates rawConfig and resolves its two ports
+// with the core-NATS single-subject rule. It is the one derivation
+// DeclarePorts and NewComponent share.
+func resolveConfig(rawConfig json.RawMessage) (resolvedConfig, error) {
 	var cfg ComponentConfig
 	if err := json.Unmarshal(rawConfig, &cfg); err != nil {
-		return nil, errs.WrapInvalid(err, "mission.Component", "NewComponent", "config unmarshal")
+		return resolvedConfig{}, errs.WrapInvalid(err, "mission.Component", "NewComponent", "config unmarshal")
 	}
 	if cfg.Ports == nil || len(cfg.Ports.Inputs) != 1 || len(cfg.Ports.Outputs) != 1 {
-		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "mission.Component", "NewComponent",
+		return resolvedConfig{}, errs.WrapInvalid(errs.ErrInvalidConfig, "mission.Component", "NewComponent",
 			"exactly one input and one output port are required")
 	}
 	if cfg.OrgID == "" || cfg.Platform == "" {
-		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "mission.Component", "NewComponent",
+		return resolvedConfig{}, errs.WrapInvalid(errs.ErrInvalidConfig, "mission.Component", "NewComponent",
 			"org_id and platform are required")
 	}
 	input, err := cfg.Ports.Inputs[0].Resolve(component.DirectionInput)
 	if err != nil {
-		return nil, errs.WrapInvalid(err, "mission.Component", "NewComponent", "resolve input port")
+		return resolvedConfig{}, errs.WrapInvalid(err, "mission.Component", "NewComponent", "resolve input port")
 	}
 	inputFacts, err := input.Facts()
 	if err != nil {
-		return nil, errs.WrapInvalid(err, "mission.Component", "NewComponent", "inspect input port")
+		return resolvedConfig{}, errs.WrapInvalid(err, "mission.Component", "NewComponent", "inspect input port")
 	}
 	output, err := cfg.Ports.Outputs[0].Resolve(component.DirectionOutput)
 	if err != nil {
-		return nil, errs.WrapInvalid(err, "mission.Component", "NewComponent", "resolve output port")
+		return resolvedConfig{}, errs.WrapInvalid(err, "mission.Component", "NewComponent", "resolve output port")
 	}
 	outputFacts, err := output.Facts()
 	if err != nil {
-		return nil, errs.WrapInvalid(err, "mission.Component", "NewComponent", "inspect output port")
+		return resolvedConfig{}, errs.WrapInvalid(err, "mission.Component", "NewComponent", "inspect output port")
 	}
 	inputSubjects := inputFacts.NATSSubjects()
 	outputSubjects := outputFacts.NATSSubjects()
 	if inputFacts.Kind() != component.PortKindNATS || outputFacts.Kind() != component.PortKindNATS ||
 		len(inputSubjects) != 1 || len(outputSubjects) != 1 {
-		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "mission.Component", "NewComponent",
+		return resolvedConfig{}, errs.WrapInvalid(errs.ErrInvalidConfig, "mission.Component", "NewComponent",
 			"mission command ports require core-nats kind with exactly one subject")
 	}
+	return resolvedConfig{cfg: cfg, input: input, output: output, inputSubject: inputSubjects[0], outputSubject: outputSubjects[0]}, nil
+}
+
+// NewComponent is the factory called by the component registry.
+func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+	resolved, err := resolveConfig(rawConfig)
+	if err != nil {
+		return nil, err
+	}
+	cfg, input, output := resolved.cfg, resolved.input, resolved.output
+	inputSubjects, outputSubjects := []string{resolved.inputSubject}, []string{resolved.outputSubject}
 	return &Component{
 		name:       CommandComponentName,
 		inputSubj:  inputSubjects[0],

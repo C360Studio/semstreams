@@ -91,6 +91,40 @@ The eight amended shipped configurations are `configs/e2e-structural.json`, `con
 or omit any required output fail startup until migrated. Full release validation, including the relevant breaking-change
 E2E tier, remains checkpoint 5 and is not discharged by the Foundation B target guard.
 
+### Owner-approved external-boundary marker amendment
+
+The port envelope gains one boolean, `external`, beside `name`, `required`, and `description`: an operator statement
+that an input is fed from outside the composition (a UI, a peer process, a rule action), so composition validation
+(ADR-100) expects no in-graph publisher for it and suppresses exactly that input's no-publisher orphan finding — nothing
+else. Owner ruling 2026-08-26 on #1092 (option ii). The agentic-dispatch `user.message` default carries it
+(`go:processor/agentic-dispatch/config.go#L64C5`, unchanged identity), and because a named override is a complete
+replacement, the eight frozen shipped overrides carry it too (`postFoundationBExternalBoundaryAmendments`):
+
+- `config:configs/examples/research-graph-pipeline.json#/components/agentic-dispatch/config/ports/inputs/0`
+- `config:configs/flows/crud-tools-test.json#/components/agentic-dispatch/config/ports/inputs/0`
+- `config:configs/flows/deep-research-test.json#/components/agentic-dispatch/config/ports/inputs/0`
+- `config:configs/flows/deep-research.json#/components/agentic-dispatch/config/ports/inputs/0`
+- `config:configs/flows/lesson-example.json#/components/agentic-dispatch/config/ports/inputs/0`
+- `config:configs/flows/ops-agent-test.json#/components/agentic-dispatch/config/ports/inputs/0`
+- `config:configs/flows/ops-agent.json#/components/agentic-dispatch/config/ports/inputs/0`
+- `config:configs/research-graph-e2e.json#/components/agentic-dispatch/config/ports/inputs/0`
+
+Row count, kind, subjects, and stream coverage are unchanged; the immutable worklist and dispositions are not
+rewritten; this amendment changes target interpretation only.
+
+### Research-graph dispatch subject amendment
+
+The two frozen rule-processor `component.dispatch` output rows declared the 2-token subject `component.*` while the
+five research-graph `*_trigger` inputs subscribe on 3-token `component.<stage>.>` and the rule-pack actions publish
+3-token subjects (`configs/rules/research-graph/*.json`); the declared publisher never overlapped its own subscribers.
+The subject is now `component.>` (ADR-100 review H1, 2026-08-26; runtime-inert — the rule publisher uses output ports
+only for an exact single-subject match). `postFoundationBResearchDispatchSubjectAmendments`:
+
+- `config:configs/examples/research-graph-pipeline.json#/components/rule-processor/config/ports/outputs/0`
+- `config:configs/research-graph-e2e.json#/components/rule-processor/config/ports/outputs/0`
+
+Row count, kind, and name are unchanged; the immutable worklist and dispositions are not rewritten.
+
 ### Owner-approved trajectory override retirement amendment
 
 Agentic-loop's default contract now owns the required `trajectories` `kv-write` port, including interface
