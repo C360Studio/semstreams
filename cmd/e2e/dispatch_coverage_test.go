@@ -5,8 +5,12 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"io/fs"
+	"maps"
 	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -14,38 +18,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestAdvertisedScenariosAreDispatchable is the guard for the core-federation
-// class of defect (gh#1129): a menu entry or -scenario flag help entry naming
-// a scenario with no case in createScenario's dispatch switch fails for
-// anyone who selects it. Both surfaces are enumerated from their OWNING
-// declarations — the live createScenario switch (via go/ast on main.go) and
-// the live handleListCommand/-scenario flag help output (by calling the
-// production functions) — never a hand-copied name list, so this guard
-// cannot silently drift from what the CLI actually offers or dispatches.
+// TestAdvertisedScenariosAreDispatchable proves ONE half of what an advertised
+// scenario needs: every name printed in the --list menu or in the -scenario
+// flag help has a case in createScenario's dispatch switch. Both surfaces are
+// enumerated from their OWNING declarations — the live createScenario switch
+// (via go/ast on main.go) and the live handleListCommand/-scenario flag help
+// output (by calling the production functions) — never a hand-copied name
+// list, so this guard cannot silently drift from what the CLI offers.
+//
+// It is NOT gh#1129 regression evidence, and the earlier version of this
+// comment claiming it was is corrected here. On the tree that filed gh#1129
+// (a28fceb3) core-federation was advertised at main.go:131 and :235 AND
+// dispatched at :383 — so this assertion is GREEN on the exact unfixed
+// defect, measured 2026-08-27 by running this test against that tree. The
+// gh#1129 defect is an advertised, dispatchable scenario that nothing can
+// stand up; TestAdvertisedScenariosHaveARunner below is its guard.
 //
 // Both extractors are scoped by structure (section boundaries, token
 // separators), never by a fixed indentation depth or a comma-only split:
-// gh#1129 review found the guard could be walked around by adding a menu
-// entry at a different indent, or a flag-help name joined to its neighbor
-// by " or " instead of ", or " — both previously matched nothing and were
-// silently dropped instead of failing. See menuEntryPattern and
-// tokenSplitPattern below, and the floor assertion on the menu count,
-// which exists so a parser regression that silently stops matching entries
-// fails loudly instead of vacuously passing on zero or one survivor.
+// review found this guard could be walked around by adding a menu entry at a
+// different indent, or a flag-help name joined to its neighbor by " or "
+// instead of ", or " — both previously matched nothing and were silently
+// dropped instead of failing. See menuEntryPattern, tokenSplitPattern, the
+// flag-help extractor's reject-unknown-token assertion, and the floor on the
+// menu count, which exists so a parser regression that silently stops
+// matching entries fails loudly instead of vacuously passing on one survivor.
 //
-// This only checks the advertised ⇒ dispatchable direction (a name printed
-// in the menu or flag help must have a switch case). It does not require the
-// reverse: some dispatchable names (e.g. "ops", "crud-tools", and the bare
-// "structural"/"statistical"/"semantic" tiered-variant aliases) are
-// intentionally not advertised as standalone menu entries, and that is not
-// the failure class gh#1129 found — a menu entry that fails when selected.
-//
-// A per-scenario compose/task existence check was considered and skipped:
-// scenario names do not map 1:1 onto task or compose targets (core-health
-// and core-dataflow both run under `task e2e:core`; the tiered variants
-// share `task e2e:structural`/`statistical`/`semantic`), so any such mapping
-// would itself be a hand-maintained list — the exact anti-pattern this guard
-// exists to avoid.
+// This only checks the advertised => dispatchable direction. It does not
+// require the reverse: some dispatchable names (e.g. "ops", "crud-tools", and
+// the bare "structural"/"statistical"/"semantic" tiered-variant aliases) are
+// intentionally not advertised as standalone menu entries.
 func TestAdvertisedScenariosAreDispatchable(t *testing.T) {
 	dispatchable := dispatchableScenarioNames(t)
 	require.NotEmpty(t, dispatchable, "createScenario's dispatch switch must be found and non-empty")
@@ -64,56 +66,261 @@ func TestAdvertisedScenariosAreDispatchable(t *testing.T) {
 	}
 }
 
-// dispatchableScenarioNames parses cmd/e2e/main.go's createScenario function
-// and returns every case-clause string literal on its switch — the exact set
-// of names --scenario can stand up. Enumerated by walking the real source at
-// test time so it cannot go stale relative to the dispatcher it guards.
+// TestAdvertisedScenariosHaveARunner is the gh#1129 guard. core-federation had
+// a menu entry AND a dispatch case — the check above passes on it — and still
+// could not be stood up by anyone who selected it: no `task e2e:federation`,
+// no compose file defining the `edge` service its config dialed, no distinct
+// ports.
+//
+// A unit test cannot prove a scenario's Docker topology actually comes up;
+// only running the tier can. What it CAN prove — and what gh#1129's first and
+// cheapest leg was — is that some runner NAMES the scenario. Every advertised
+// name must therefore be reachable one of exactly two ways, both derived from
+// owning declarations rather than a hand-copied list:
+//
+//  1. a `./e2e --scenario <name>` invocation in Taskfile.yml or
+//     taskfiles/**/*.yml names it directly, or
+//  2. its dispatch case returns a constructor that runAllScenarios also
+//     builds, so the `--scenario all` that `task e2e:core` runs covers it —
+//     core-health and core-dataflow are reachable only this way.
+//
+// Stated so nobody reads this guard as more than it is: it does NOT prove the
+// named task target has a working compose topology, distinct ports, or
+// resolvable hostnames. Those were gh#1129's other three legs, and they fail
+// only when the tier runs, which is the only place they can be observed.
+func TestAdvertisedScenariosHaveARunner(t *testing.T) {
+	namedByTask := scenarioNamesInvokedByTaskRunners(t)
+	inAllBundle := scenarioNamesCoveredByAllBundle(t)
+
+	advertised := append(advertisedMenuScenarioNames(t), advertisedFlagHelpScenarioNames(t)...)
+	for _, name := range advertised {
+		require.Truef(t, namedByTask[name] || inAllBundle[name],
+			"scenario %q is advertised but nothing runs it: no `./e2e --scenario %s` in Taskfile.yml or "+
+				"taskfiles/**/*.yml (those name %v), and createScenario's case for it does not return a "+
+				"constructor that runAllScenarios builds for `--scenario all` (that covers %v). This is the "+
+				"gh#1129 shape: an advertised scenario that fails for anyone who selects it.",
+			name, name, slices.Sorted(maps.Keys(namedByTask)), slices.Sorted(maps.Keys(inAllBundle)))
+	}
+}
+
+// parseMainGo parses cmd/e2e/main.go, the owning declaration for the dispatch
+// switch, the -scenario flag registration, and the `--scenario all` bundle.
+func parseMainGo(t *testing.T) *ast.File {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	require.NoError(t, err)
+	return f
+}
+
+// findFuncDecl returns main.go's top-level declaration of the named function.
+// A miss is fatal rather than an empty result: every set derived from an AST
+// walk here must fail loudly when the shape it reads moves, since an empty
+// set would make every assertion above pass vacuously.
+func findFuncDecl(t *testing.T, file *ast.File, name string) *ast.FuncDecl {
+	t.Helper()
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if ok && fn.Recv == nil && fn.Name.Name == name {
+			return fn
+		}
+	}
+	require.FailNowf(t, "function not found",
+		"main.go must declare func %s — this guard reads it as an owning declaration", name)
+	return nil
+}
+
+// dispatchCaseClauses returns every case clause on createScenario's switch.
+func dispatchCaseClauses(t *testing.T, file *ast.File) []*ast.CaseClause {
+	t.Helper()
+	fn := findFuncDecl(t, file, "createScenario")
+	var clauses []*ast.CaseClause
+	for _, stmt := range fn.Body.List {
+		sw, ok := stmt.(*ast.SwitchStmt)
+		if !ok {
+			continue
+		}
+		for _, clauseStmt := range sw.Body.List {
+			if clause, ok := clauseStmt.(*ast.CaseClause); ok {
+				clauses = append(clauses, clause)
+			}
+		}
+	}
+	require.NotEmpty(t, clauses, "createScenario's switch statement must be found by AST walk")
+	return clauses
+}
+
+// caseClauseNames returns the string literals a case clause matches on. The
+// default clause has none and yields nothing.
+func caseClauseNames(t *testing.T, clause *ast.CaseClause) []string {
+	t.Helper()
+	var names []string
+	for _, expr := range clause.List {
+		lit, ok := expr.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			continue
+		}
+		value, err := strconv.Unquote(lit.Value)
+		require.NoError(t, err)
+		names = append(names, value)
+	}
+	return names
+}
+
+// dispatchableScenarioNames returns every case-clause string literal on
+// createScenario's switch — the exact set of names --scenario can stand up.
+// Enumerated by walking the real source at test time so it cannot go stale
+// relative to the dispatcher it guards.
 func dispatchableScenarioNames(t *testing.T) map[string]bool {
 	t.Helper()
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "main.go", nil, 0)
-	require.NoError(t, err)
-
 	names := make(map[string]bool)
-	found := false
-	ast.Inspect(f, func(n ast.Node) bool {
-		fn, ok := n.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != "createScenario" {
+	for _, clause := range dispatchCaseClauses(t, parseMainGo(t)) {
+		for _, name := range caseClauseNames(t, clause) {
+			names[name] = true
+		}
+	}
+	return names
+}
+
+// calleeName renders a call target or type expression as its source spelling
+// ("scenarios.NewCoreHealthScenario", "newThroughputScenario") for the
+// identity comparisons the all-bundle check makes.
+func calleeName(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e.Name
+	case *ast.SelectorExpr:
+		if pkg, ok := e.X.(*ast.Ident); ok {
+			return pkg.Name + "." + e.Sel.Name
+		}
+		return e.Sel.Name
+	default:
+		return ""
+	}
+}
+
+// allBundleConstructors returns the constructor names inside runAllScenarios'
+// []scenarios.Scenario literal — exactly what `--scenario all` stands up, and
+// therefore what `task e2e:core` covers without naming a scenario itself.
+func allBundleConstructors(t *testing.T, file *ast.File) map[string]bool {
+	t.Helper()
+	constructors := make(map[string]bool)
+	ast.Inspect(findFuncDecl(t, file, "runAllScenarios"), func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok {
 			return true
 		}
-		for _, stmt := range fn.Body.List {
-			sw, ok := stmt.(*ast.SwitchStmt)
-			if !ok {
-				continue
-			}
-			found = true
-			for _, clauseStmt := range sw.Body.List {
-				clause, ok := clauseStmt.(*ast.CaseClause)
-				if !ok {
-					continue
-				}
-				for _, expr := range clause.List {
-					lit, ok := expr.(*ast.BasicLit)
-					if !ok || lit.Kind != token.STRING {
-						continue
-					}
-					value, unquoteErr := strconv.Unquote(lit.Value)
-					require.NoError(t, unquoteErr)
-					names[value] = true
-				}
+		arr, ok := lit.Type.(*ast.ArrayType)
+		if !ok || calleeName(arr.Elt) != "scenarios.Scenario" {
+			return true
+		}
+		for _, elt := range lit.Elts {
+			if call, ok := elt.(*ast.CallExpr); ok {
+				constructors[calleeName(call.Fun)] = true
 			}
 		}
-		return false
+		return true
 	})
-	require.True(t, found, "createScenario's switch statement must be found by AST walk")
+	require.NotEmpty(t, constructors,
+		"runAllScenarios must build a non-empty []scenarios.Scenario literal — this guard reads it as the "+
+			"owning declaration of what `--scenario all` covers")
+	return constructors
+}
+
+// scenarioNamesCoveredByAllBundle returns the createScenario case names whose
+// returned constructor also appears in runAllScenarios' bundle. Both halves
+// come from main.go's AST, so neither can drift from the source.
+func scenarioNamesCoveredByAllBundle(t *testing.T) map[string]bool {
+	t.Helper()
+	file := parseMainGo(t)
+	bundle := allBundleConstructors(t, file)
+
+	covered := make(map[string]bool)
+	for _, clause := range dispatchCaseClauses(t, file) {
+		names := caseClauseNames(t, clause)
+		for _, stmt := range clause.Body {
+			ret, ok := stmt.(*ast.ReturnStmt)
+			if !ok || len(ret.Results) != 1 {
+				continue
+			}
+			call, ok := ret.Results[0].(*ast.CallExpr)
+			if !ok || !bundle[calleeName(call.Fun)] {
+				continue
+			}
+			for _, name := range names {
+				covered[name] = true
+			}
+		}
+	}
+	return covered
+}
+
+// e2eBinaryInvocation marks a Taskfile command line that runs the e2e binary
+// itself. Mock-server commands under docker/compose take a --scenario flag too
+// (ops.yml, crud-tools.yml, deep-research.yml, research-graph.yml) but name
+// the MOCK's fixture set, not an e2e scenario — counting those would let an
+// unrunnable e2e scenario pass on a name collision, so only lines invoking
+// ./e2e are read.
+const e2eBinaryInvocation = "./e2e"
+
+// taskScenarioFlagPattern captures the argument of a --scenario flag in either
+// `--scenario name` or `--scenario=name` form. The captured charset is name
+// characters plus Task's `{{.VAR}}` template punctuation and nothing else, so
+// the shell wrapping several targets use — `(cd cmd/e2e && ./e2e --scenario
+// lifecycle) || rc=$?` — does not glue its closing paren onto the name. A name
+// spelled in some shape this charset misses drops out of the runner set, which
+// makes the guard fail loudly on that scenario rather than pass on it.
+var taskScenarioFlagPattern = regexp.MustCompile(`--scenario[=\s]+([A-Za-z0-9_.{}-]+)`)
+
+// scenarioNamesInvokedByTaskRunners returns every scenario name a Taskfile
+// command passes to the e2e binary. Task targets are the owning declaration of
+// "what anyone can actually run": gh#1129's scenario appeared in no target at
+// all, which is why nobody could stand it up.
+func scenarioNamesInvokedByTaskRunners(t *testing.T) map[string]bool {
+	t.Helper()
+	files := []string{filepath.Join("..", "..", "Taskfile.yml")}
+	err := filepath.WalkDir(filepath.Join("..", "..", "taskfiles"),
+		func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if !entry.IsDir() && filepath.Ext(path) == ".yml" {
+				files = append(files, path)
+			}
+			return nil
+		})
+	require.NoError(t, err)
+	require.GreaterOrEqualf(t, len(files), 10,
+		"found only %d Taskfile(s) to scan for --scenario invocations — a path or extension regression, not a "+
+			"repository that lost its task targets", len(files))
+
+	names := make(map[string]bool)
+	for _, path := range files {
+		content, readErr := os.ReadFile(path) //nolint:gosec // fixed in-repo Taskfile paths
+		require.NoError(t, readErr)
+		for _, line := range strings.Split(string(content), "\n") {
+			if !strings.Contains(line, e2eBinaryInvocation) {
+				continue
+			}
+			for _, match := range taskScenarioFlagPattern.FindAllStringSubmatch(line, -1) {
+				if strings.Contains(match[1], "{{") {
+					continue // a Task template variable, not a literal scenario name
+				}
+				names[match[1]] = true
+			}
+		}
+	}
+	require.GreaterOrEqualf(t, len(names), 8,
+		"only %d scenario names are invoked by any task target (%v) — a collapse below this floor means the "+
+			"invocation parser stopped matching, not that the tiers stopped running scenarios",
+		len(names), slices.Sorted(maps.Keys(names)))
 	return names
 }
 
 // captureListOutput runs handleListCommand(true) — the production --list
 // implementation — and returns everything it printed to stdout. Shared by
-// TestLessonsScenarioIsDispatchedAndListed (main_test.go) and the dispatch
-// coverage guard below so both drive the exact same production output
-// through one capture path instead of two copies of the os.Pipe dance.
+// TestLessonsScenarioIsDispatchedAndListed (main_test.go) and the guards above
+// so all of them drive the exact same production output through one capture
+// path instead of copies of the os.Pipe dance.
 func captureListOutput(t *testing.T) string {
 	t.Helper()
 	original := os.Stdout
@@ -132,32 +339,31 @@ func captureListOutput(t *testing.T) string {
 	return string(out)
 }
 
-// scenarioSectionHeader is the exact top-level (zero-indent) line that
-// opens the block of runnable "name - description" entries in --list
-// output. Used only to find the section, never to enumerate names.
+// scenarioSectionHeader is the exact top-level (zero-indent) line that opens
+// the block of runnable "name - description" entries in --list output. Used
+// only to find the section, never to enumerate names.
 const scenarioSectionHeader = "Individual Scenarios:"
 
 // menuEntryPattern matches a "name  - description" line at ANY indentation
 // once inside the Individual Scenarios section — e.g. "core-health     -
 // Component health checks" or "tiered --variant structural  - Rules-only,
-// ZERO embeddings/clusters". It is deliberately not anchored to a fixed
-// indent depth: a prior version required exactly four leading spaces, so a
-// new sub-section printed at a different depth (2, 6, 22 spaces...) was
-// invisible to it. A line with no whitespace-hyphen-whitespace separator —
-// a sub-header ("  Core:") or a wrapped continuation of the previous
-// description — never matches, at any indent. The capture is the whole
-// name field, including any trailing "--variant X"; the caller takes its
-// first token.
+// ZERO embeddings/clusters". It is deliberately not anchored to a fixed indent
+// depth: a prior version required exactly four leading spaces, so a new
+// sub-section printed at a different depth (2, 6, 22 spaces...) was invisible
+// to it. A line with no whitespace-hyphen-whitespace separator — a sub-header
+// ("  Core:") or a wrapped continuation of the previous description — never
+// matches, at any indent. The capture is the whole name field, including any
+// trailing "--variant X"; the caller takes its first token.
 var menuEntryPattern = regexp.MustCompile(`^\s+(\S.*?)\s+-\s+\S`)
 
-// advertisedMenuScenarioNames runs the production --list output and
-// extracts the runnable scenario name from every entry line inside the
-// "Individual Scenarios:" section. The section is scoped by its own
-// start/end markers — the header line and the next zero-indent line after
-// it — never by a fixed indent depth, so entries at any indentation are
-// still found, and lines from the adjacent "task e2e:<tier>" or "Variant
-// flag" sections (which also contain "name - description" shaped text) are
-// never mistaken for --scenario names.
+// advertisedMenuScenarioNames runs the production --list output and extracts
+// the runnable scenario name from every entry line inside the "Individual
+// Scenarios:" section. The section is scoped by its own start/end markers —
+// the header line and the next zero-indent line after it — never by a fixed
+// indent depth, so entries at any indentation are still found, and lines from
+// the adjacent "task e2e:<tier>" or "Variant flag" sections (which also
+// contain "name - description" shaped text) are never mistaken for --scenario
+// names.
 func advertisedMenuScenarioNames(t *testing.T) []string {
 	t.Helper()
 	out := captureListOutput(t)
@@ -189,35 +395,65 @@ func advertisedMenuScenarioNames(t *testing.T) []string {
 }
 
 // scenarioNameToken matches a single scenario-name-shaped word: lowercase,
-// hyphenated, never quoted. It rejects the quoted "'all'" sentinel outright
-// (it starts with a non-letter) without needing to special-case it.
+// hyphenated, never quoted.
 var scenarioNameToken = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
-// flagHelpStopwords are English connectors that can appear in the
-// -scenario usage prose ("... lessons, or 'all'"). They are plain lowercase
-// words, so they would otherwise pass scenarioNameToken despite never being
-// a scenario name.
-var flagHelpStopwords = map[string]bool{"or": true, "and": true}
+// flagHelpNonNames is the closed set of tokens the -scenario usage
+// parenthetical may carry that are not scenario names: the English connectors
+// its prose uses, and the quoted 'all' sentinel (a mode of runScenarios, not a
+// createScenario case). Every OTHER token must be a scenario name — see
+// advertisedFlagHelpScenarioNames.
+var flagHelpNonNames = map[string]bool{"or": true, "and": true, "'all'": true}
 
 // tokenSplitPattern splits the -scenario usage parenthetical on commas AND
 // whitespace runs. A comma-only split previously let a name joined to its
-// neighbor without a comma (e.g. "... lessons core-bogus or 'all'") glue
-// into one non-matching string that scenarioNameToken silently dropped —
-// the flag-help mirror of the menu's indentation coupling.
+// neighbor without a comma (e.g. "... lessons core-bogus or 'all'") glue into
+// one non-matching string that was silently dropped — the flag-help mirror of
+// the menu's indentation coupling.
 var tokenSplitPattern = regexp.MustCompile(`[,\s]+`)
 
 // advertisedFlagHelpScenarioNames parses the -scenario flag's usage string
-// (the flag.StringVar call registering "scenario" in main.go) and returns
-// the bare scenario names listed in its parenthetical, dropping connector
-// words and the quoted "'all'" sentinel.
+// (the flag.StringVar call registering "scenario" in main.go) and returns the
+// bare scenario names listed in its parenthetical.
+//
+// Every token that is not in the closed flagHelpNonNames set FAILS here rather
+// than being dropped. The previous version appended tokens matching
+// scenarioNameToken and ignored the rest, so a malformed advertised name —
+// "core_dataflow" for "core-dataflow" — vanished silently and the dispatch
+// check passed on it (proved by mutation, 2026-08-27). A name that cannot be
+// dispatched is the defect this file exists to catch; it must not be able to
+// hide by being unparseable.
 func advertisedFlagHelpScenarioNames(t *testing.T) []string {
 	t.Helper()
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "main.go", nil, 0)
-	require.NoError(t, err)
+	usage := scenarioFlagUsage(t)
 
+	open := strings.Index(usage, "(")
+	closeIdx := strings.LastIndex(usage, ")")
+	require.True(t, open >= 0 && closeIdx > open, "-scenario usage text must list names in parens: %q", usage)
+
+	var names []string
+	for _, part := range tokenSplitPattern.Split(usage[open+1:closeIdx], -1) {
+		part = strings.TrimSpace(part)
+		if part == "" || flagHelpNonNames[part] {
+			continue
+		}
+		require.Truef(t, scenarioNameToken.MatchString(part),
+			"-scenario usage advertises token %q, which is neither a scenario name (%s) nor one of the "+
+				"known connector/sentinel tokens %v. Anything else in this list is a name a user will pass "+
+				"to --scenario and cannot be dispatched; it fails here instead of being dropped.",
+			part, scenarioNameToken, slices.Sorted(maps.Keys(flagHelpNonNames)))
+		names = append(names, part)
+	}
+	require.NotEmpty(t, names, "-scenario usage text must list at least one bare scenario name")
+	return names
+}
+
+// scenarioFlagUsage returns the usage string main.go registers for the
+// -scenario flag, read from the flag.StringVar call itself.
+func scenarioFlagUsage(t *testing.T) string {
+	t.Helper()
 	var usage string
-	ast.Inspect(f, func(n ast.Node) bool {
+	ast.Inspect(parseMainGo(t), func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
@@ -230,34 +466,17 @@ func advertisedFlagHelpScenarioNames(t *testing.T) []string {
 		if !ok || nameLit.Kind != token.STRING {
 			return true
 		}
-		name, unquoteErr := strconv.Unquote(nameLit.Value)
-		require.NoError(t, unquoteErr)
+		name, err := strconv.Unquote(nameLit.Value)
+		require.NoError(t, err)
 		if name != "scenario" {
 			return true
 		}
 		usageLit, ok := call.Args[3].(*ast.BasicLit)
 		require.True(t, ok, "flag.StringVar(..., \"scenario\", ...) usage argument must be a string literal")
-		usage, unquoteErr = strconv.Unquote(usageLit.Value)
-		require.NoError(t, unquoteErr)
+		usage, err = strconv.Unquote(usageLit.Value)
+		require.NoError(t, err)
 		return false
 	})
 	require.NotEmpty(t, usage, "-scenario flag registration must be found by AST walk")
-
-	open := strings.Index(usage, "(")
-	closeIdx := strings.LastIndex(usage, ")")
-	require.True(t, open >= 0 && closeIdx > open, "-scenario usage text must list names in parens: %q", usage)
-	inner := usage[open+1 : closeIdx]
-
-	var names []string
-	for _, part := range tokenSplitPattern.Split(inner, -1) {
-		part = strings.TrimSpace(part)
-		if part == "" || flagHelpStopwords[part] {
-			continue
-		}
-		if scenarioNameToken.MatchString(part) {
-			names = append(names, part)
-		}
-	}
-	require.NotEmpty(t, names, "-scenario usage text must list at least one bare scenario name")
-	return names
+	return usage
 }
