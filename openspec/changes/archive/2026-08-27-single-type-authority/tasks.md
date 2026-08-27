@@ -557,6 +557,10 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       semmem, semsource, semdragon sections read as written at their pinned SHAs; `:20` added (boot-time consequences).
       semconnect: the instruction is the #1114 (a) ruling (own composition root), written 2026-08-27 — see 6.5. The PR body
       link is the owner's (task 1.1).
-- [ ] 7.6 Implementation review by `semstreams-reviewer`, the owner-run cross-agent round where asked, fixes and re-review;
+- [x] 7.6 Implementation review by `semstreams-reviewer`, the owner-run cross-agent round where asked, fixes and re-review;
       `openspec archive single-type-authority` + spec sync as the final content commit; narrow reviewer check of the archive;
       undraft. The merge gate owns CI.
+      Review rounds complete 2026-08-27: Fable review at `2f56384f` (applied), owner-run Codex round at `b18fd518`
+      (applied, 7.2), narrow re-review at `dd368a5e` (applied, 7.2); CI + E2E Ladder green on `b5ea631d`. The archive is
+      THIS commit. Remaining and owner-side, deliberately NOT asserted here: the narrow reviewer check of the archive,
+      undraft, and the merge gate.
