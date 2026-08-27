@@ -579,7 +579,7 @@ before the omission, and record `shasum -a 256` equality of the restored file.
       restored verbatim from `openspec/specs/component-runtime-config/spec.md` before the archive; header sets and
       order now match exactly and the block's only difference from current truth is the intended `external` grammar.
       The one `[~]` in this file (3.1a) is written into the delta under the P1 requirement.
-- [ ] 7.5 `openspec archive composition-validation-substrate` with the spec sync as the final content commit; the
+- [x] 7.5 `openspec archive composition-validation-substrate` with the spec sync as the final content commit; the
       narrow reviewer check of the archive/spec sync follows as a PR comment; then undraft. The PR body is a
       published layer: re-read it at undraft and correct any claim the branch no longer supports.
       ARCHIVE SHAPE — DONE in the owner round (9.4), so the re-review sees final content: the retirement's target
@@ -590,6 +590,21 @@ before the omission, and record `shasum -a 256` equality of the restored file.
       `composition-validation` capability delta carries a real `## Purpose` (9.4). `openspec validate --all --strict`
       and `task openspec:queue` were run with both changes present (9.5). The archive command itself is NOT run in the
       owner round; it is this PR's final content commit after the re-review.
+      ARCHIVED 2026-08-27 after Codex round 2 APPROVE (7.2) and the 7.4 reconciliation:
+      `openspec validate composition-validation-substrate --strict` → `Change 'composition-validation-substrate'
+      is valid`; `openspec archive composition-validation-substrate --yes` → `component-runtime-config: update`,
+      `composition-validation: create`, `Totals: + 8, ~ 1, - 0, → 0`, `Specs updated successfully.`, archived as
+      `2026-08-27-composition-validation-substrate`. The one incomplete task the archiver reported is the
+      deliberate `[~]` 3.1a, which carries its delta note. `flow-authoring-retirement` was NOT archived and stays
+      open for #1093.
+      Spec sync verified, not assumed: `git diff --stat -- openspec/specs` → `component-runtime-config/spec.md`
+      13 insertions / 5 deletions (the `external` grammar and the marker clause, nothing else) and
+      `openspec/specs/composition-validation/` NEW (8 requirements, 26 scenarios, carrying its `## Purpose`).
+      Header-set proof for the MODIFIED capability: the `### Requirement:` + `#### Scenario:` header list of
+      `openspec/specs/component-runtime-config/spec.md` was captured before the archive and diffed after — 47
+      lines before, 47 after, `diff` empty. Zero headers dropped, zero added, order unchanged.
+      NOT DONE HERE, and not assertable from this branch: the narrow reviewer check of this archive/spec sync,
+      undraft, the `implemented-by` line, and the merge gate. Those are the owner's, after this head is reviewed.
 
 ## 8. Not in scope (recorded so the archiver does not infer completion)
 
