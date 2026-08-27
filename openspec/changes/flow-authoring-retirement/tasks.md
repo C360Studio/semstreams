@@ -236,7 +236,9 @@ Premises were measured at `5cc0c7fb` and are re-measured at the claim head; the 
       back. The `/gaps` removal already has its section in `docs/operations/migration-beta162-to-beta163.md`; link it
       rather than restating it.
 
-      DEVIATION (location only; content as specified). The section was written as a new `##` section INSIDE
+      RECONCILED (owner ruling 2026-08-27: **ACCEPT the location**; `proposal.md`'s migration bullet now names
+      `docs/operations/migration-beta162-to-beta163.md`, and `conformance.md` carries a DEVIATION row with the
+      sign-off). The deviation, as originally recorded: the section was written as a new `##` section INSIDE
       `docs/operations/migration-beta162-to-beta163.md` — "## Flow-authoring retirement (ADR-100 D5) — the
       saved-diagram surface is removed" — rather than as a separate
       `docs/operations/migration-composition-validation-adr100.md`. Reason: that document's own header states the
@@ -246,7 +248,7 @@ Premises were measured at `5cc0c7fb` and are re-measured at the claim head; the 
       instead of linking across files. Content is as the task specifies: removed routes (a table of ten, each with its
       replacement and the downstream action), tools, packages/symbols, buckets, the `/paths` and metric-host changes,
       and per-repo instructions for semstreams-ui and semteams measured at their pinned SHAs. Reversible with one
-      `git mv` + a link if the owner prefers the separate file.
+      `git mv` + a link if the owner prefers the separate file. — The owner ruled ACCEPT, so no `git mv` is owed; the proposal is the reconciled target and this line is history.
 - [x] 3.5 Commit GREEN with a BREAKING footer before §4.
       `e097c8d9` `refactor(flow)!: retire the flow-authoring surface (ADR-100 D5)` — 76 files, +571/−11336.
 
@@ -531,6 +533,37 @@ before the omission, and record `shasum -a 256` equality of the restored file. C
       30 → 34, all of it this round's own additions); the stray duplicated fragment at the end of the MED-4 mutation
       transcript removed; "the two FILED files" corrected to three files carrying two FILED items.
 
+      **Codex round at `16afec1f` (owner-run): CHANGES REQUESTED — two findings, both active-record
+      inconsistencies, no code-level correctness findings.** Codex independently confirmed the production census, the
+      ComponentManager rehome, `/paths` deriving from the retained graph with all three origin forms covered, and the
+      gates.
+
+      | # | Finding | Disposition |
+      |---|---|---|
+      | HIGH | `conformance.md:13` + `proposal.md:29-45` — the #1122 correction never reached the binding target and evidence layers. D5.c still claimed `schemas/*.json` unchanged; the proposal's removal list omitted the published-artifact break entirely. Archiving that state would preserve false evidence about what the ruling changed | **FIXED.** `proposal.md` gains a "Published artifact" bullet naming the deleted schema, the `nonComponentSchemas` removal and the 34 → 33 count; D5.c no longer claims the directory is untouched and points at the new row; new rows **D5.h** (deleted artifact, exemption + four skip sites, generator note, the four contract guards proven load-bearing by the restore transcript with the artifact's sha256) and **D5.h-migration** (the two vendoring repositories, each with the `file:line` it must delete); the `composition-validation` delta gains a SHALL clause and a scenario naming all four guards |
+      | MEDIUM | `proposal.md:43-45` — task 3.4's location deviation was recorded in tasks but never reconciled in the proposal, and conformance had no DEVIATION row or owner sign-off | **FIXED**, with the owner's ruling (2026-08-27): **ACCEPT the location.** `proposal.md`'s migration bullet now names `docs/operations/migration-beta162-to-beta163.md` and explains the reconciliation; `conformance.md` carries a DEVIATION row with the reasoning and the sign-off quoted; this task line is marked RECONCILED. No `git mv` is owed |
+
+      **Five-layer propagation sweep** (`proposal.md` · `tasks.md` · `conformance.md` · spec deltas · migration doc),
+      run because this was the third round where the code was right and an outer record layer lagged. Ten corrections
+      checked against all five layers; four gaps found and closed, none of them the two Codex named:
+
+      | Correction | proposal | tasks | conformance | spec delta | migration doc |
+      |---|---|---|---|---|---|
+      | #1122 schema deletion | **FIXED** — "Published artifact" bullet | ✓ 5.1 | **FIXED** — D5.c corrected, D5.h + D5.h-migration added | **GAP → FIXED** — SHALL clause + a scenario naming the four guards | ✓ its own subsection |
+      | Migration-doc location | **FIXED** — bullet names the real file | ✓ 3.4 RECONCILED | **FIXED** — DEVIATION row + sign-off | n/a — a document location is not a requirement | n/a — a document does not describe its own location |
+      | MED-5 metric reach | n/a | ✓ 7.1 row quotes the added lines | **GAP → FIXED** — D5.e now records that reachability changed though the contract did not | n/a | ✓ "Expect output you have never seen before" |
+      | HIGH-1 join guards | n/a | ✓ 7.1 + transcript | **GAP → FIXED** — D5.e names all three | **GAP → FIXED** — SHALL clause + "the refresh loop is joined before Stop returns" | n/a — no adopter action |
+      | HIGH-2 wide census | n/a | ✓ 3.2 CORRECTED CENSUS | ✓ D5.d cites the 3.2 count, which is the corrected one | n/a | n/a |
+      | 4.3 dispatch-key hole | n/a | ✓ 4.3 | ✓ D5.b names it | ✓ scenario names `TestToolRegistryHasNoFlowTools` | n/a |
+      | 3.3 `/paths` re-judgement | ✓ | ✓ 3.3 | ✓ CARRIED row | ✓ MODIFIED requirement | ✓ its own subsection |
+      | MED-4 HTTPClient origin arm | n/a | ✓ 7.1 + transcript | **GAP → FIXED** — CARRIED row names the traversal guard and its three arms | **GAP → FIXED** — the `/paths` scenario names `TestFlowPathsTraverseTheRetainedGraph` and the three origin forms | n/a |
+      | MED-R1 `doc.go` signatures | n/a | ✓ 7.1 | n/a — a wrong example predating this landing, not a surface it removes | n/a | n/a — not a break this landing introduces |
+      | Rehome host + phantom metric | ✓ | ✓ 3.1 | **FIXED with MED-5** — D5.e records the phantom and → #1123 | ✓ metric scenario now says "against the registry the `/metrics` endpoint scrapes" | ✓ |
+
+      Every "n/a" is a layer that does not own the fact, stated rather than left blank. Nothing in this sweep is
+      UNVERIFIED: each cell was checked by reading the layer at this head, and the four gaps were closed before the
+      push rather than recorded as debt.
+
       **FILED, not fixed** (unused paths, pre-existing, filed by the coordinator): `testutil/flow.go:185-255` dead
       `FlowBuilder` (zero callers outside `testutil/`, confirmed by grep); `metric/registry.go:243-247`
       `RegisterGaugeVec` discards the existing collector on a second registration.
@@ -555,8 +588,16 @@ before the omission, and record `shasum -a 256` equality of the restored file. C
       --- FAIL: TestFlowPathsTraverseTheRetainedGraph (0.00s)
           component_manager_paths_test.go:121: "map[listener:[listener middle sink] poller:[poller middle sink]]" should have 3 item(s), but has 2
       ```
-- [ ] 7.2 Owner-run cross-agent round where the owner asks for it: verdict and dispositions recorded here; each fix
+- [x] 7.2 Owner-run cross-agent round where the owner asks for it: verdict and dispositions recorded here; each fix
       re-enters 7.1.
+      RAN at `16afec1f` (Codex, owner-run): **CHANGES REQUESTED** — two findings, both active-record inconsistencies,
+      no code-level correctness findings; the verdict and both dispositions are recorded in 7.1 above, and both fixes
+      re-entered 7.1 as required. Codex independently verified the production census, the ComponentManager rehome
+      (workflow-agnostic operator reporting, exclusive ownership, loop joins `Stop`), `/paths` deriving from the
+      retained composition graph with all three admitted origin forms covered, `go test -race` over
+      `./service ./component/flowgraph ./processor/agentic-tools/executors`, `go test ./test/contract/...`,
+      `openspec validate --strict`, and the hosted checks. The location deviation it raised was ruled by the owner the
+      same day (ACCEPT) and is reconciled in `proposal.md` + the `conformance.md` DEVIATION row.
 - [x] 7.3 `conformance.md`: replace every `__` placeholder with the measured `file:line` at the head that carries the
       last `.go` or delta change. Maintained as part of every commit that moves a line, not at the end.
 
