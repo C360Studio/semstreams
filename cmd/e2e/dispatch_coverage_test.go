@@ -109,9 +109,15 @@ func TestAdvertisedScenariosHaveARunner(t *testing.T) {
 // up is laundered into "has a runner" by a help string or a commented-out
 // example — the gh#1129 shape surviving the gh#1129 guard.
 //
-// Each line here is a shape this repository actually writes; the file:line
-// citations are where. Names are deliberately ones no menu entry advertises, so
-// a row proves the extraction rather than the repository's current contents.
+// A row whose shape field carries a file:line is a shape this repository
+// actually writes THERE — every one re-verified by opening the file
+// (2026-08-27). A row labelled "defense in depth" has NO live in-tree instance
+// and guards the class anyway; the comment shapes are all of that kind, because
+// `grep -rnE '^[[:space:]]*#.*\./e2e'` over all 25 Taskfiles returns ZERO hits
+// and no executed line carries `./e2e` after a `#` either. An earlier revision
+// of this comment cited two of them as live idioms; that was measured false and
+// is withdrawn. Names are deliberately ones no menu entry advertises, so a row
+// proves the extraction rather than the repository's current contents.
 func TestOnlyExecutedTaskLinesCountAsRunners(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -141,13 +147,13 @@ func TestOnlyExecutedTaskLinesCountAsRunners(t *testing.T) {
 			name:  "folded scalar continuation line",
 			line:  `        cd cmd/e2e && ./e2e --scenario delta-runs --base-url http://localhost:38090`,
 			want:  []string{"delta-runs"},
-			shape: "taskfiles/e2e/slow-consumer.yml:13",
+			shape: "taskfiles/e2e/slow-consumer.yml:12-14",
 		},
 		{
 			name:  "echoed manual-run instructions are printed, not run",
 			line:  `      - 'echo "  cd cmd/e2e && ./e2e --scenario epsilon-echoed --message-count 10000"'`,
 			want:  nil,
-			shape: "taskfiles/e2e/throughput.yml:156 — THE DEFEAT",
+			shape: "taskfiles/e2e/throughput.yml:156 — the ONE live in-tree instance",
 		},
 		{
 			name:  "printf'd instructions are printed, not run",
@@ -159,19 +165,46 @@ func TestOnlyExecutedTaskLinesCountAsRunners(t *testing.T) {
 			name:  "commented-out invocation inside a cmds block",
 			line:  `      # cd cmd/e2e && ./e2e --scenario eta-commented`,
 			want:  nil,
-			shape: "taskfiles/e2e/lifecycle.yml:16-23 — THE DEFEAT",
+			shape: "defense in depth — no comment line in this tree carries ./e2e",
 		},
 		{
 			name:  "top-of-file comment naming a scenario",
 			line:  `# run with: cd cmd/e2e && ./e2e --scenario theta-commented`,
 			want:  nil,
-			shape: "taskfiles/e2e/research-graph.yml:5",
+			shape: "taskfiles/e2e/research-graph.yml:5 names scenarios in a comment, but carries no ./e2e",
+		},
+		{
+			name:  "trailing comment on an executed line is still a comment",
+			line:  `      - docker compose -f docker/compose/core.yml up -d   # then: cd cmd/e2e && ./e2e --scenario lambda-commented`,
+			want:  nil,
+			shape: "defense in depth — the whole-line check alone counted this, reproduced 2026-08-27",
+		},
+		{
+			name: "a hash inside a quoted argument does not make the line a comment",
+			line: `      - cd cmd/e2e && ./e2e --tag "batch #7" --scenario mu-runs`,
+			want: []string{"mu-runs"},
+			shape: "constructed boundary case — rejects dropping/truncating at any #, which silently " +
+				"drops a REAL runner; the # sits before --scenario because that is the only position " +
+				"where an over-broad rule loses the name instead of trimming text after it",
+		},
+		{
+			name: "a hash joined to the preceding word is not a comment introducer",
+			line: `      - cd cmd/e2e && ./e2e --tag 'v1# rc' --scenario xi-runs`,
+			want: []string{"xi-runs"},
+			shape: "constructed boundary case — pins trailingCommentStart's LEADING bound; " +
+				"neither shell nor YAML opens a comment at a # glued to the previous word",
 		},
 		{
 			name:  "a real invocation followed by a progress echo still counts",
 			line:  `      - cd cmd/e2e && ./e2e --scenario iota-runs && echo "[DONE] ./e2e --scenario kappa-echoed"`,
 			want:  []string{"iota-runs"},
 			shape: "rejects the over-broad fix: dropping any line containing echo",
+		},
+		{
+			name:  "a scenario name containing the letters is not a printing command",
+			line:  `      - cd cmd/e2e && ./e2e --scenario core-echoedonly`,
+			want:  []string{"core-echoedonly"},
+			shape: "rejects the over-broad fix: matching echo/printf as a bare substring",
 		},
 		{
 			name:  "template variable is not a literal scenario name",
@@ -371,6 +404,20 @@ var taskScenarioFlagPattern = regexp.MustCompile(`--scenario[=\s]+([A-Za-z0-9_.{
 // `printfoo` out.
 var printingCommandWord = regexp.MustCompile(`(^|[^A-Za-z0-9_./-])(echo|printf)(\s|$)`)
 
+// trailingCommentStart matches the `#` that opens a YAML end-of-line comment.
+// Task never runs the text after it, so a `./e2e --scenario X` there is
+// documentation exactly as it is on a whole-line comment — the leading `#` is
+// not what makes a comment, its position is. Bounded on BOTH sides the same way
+// printingCommandWord bounds its command word: `#` at start of line or preceded
+// by whitespace, and followed by whitespace or end of line. The trailing bound
+// is what keeps a `#` inside a quoted command argument (`--tag "batch #7"`,
+// `--color '#ff0000'`) from truncating a real invocation, which is the
+// over-narrowing direction — silently dropping a scenario that IS run. The
+// leading bound is what keeps `v1# rc` out, a `#` glued to the previous word,
+// which opens a comment in neither shell nor YAML. Each bound has its own row
+// in TestOnlyExecutedTaskLinesCountAsRunners and dies without it.
+var trailingCommentStart = regexp.MustCompile(`(^|\s)#(\s|$)`)
+
 // executedTaskCommand returns the part of a Taskfile line the task runner
 // actually executes, or "" when the line executes nothing.
 //
@@ -379,35 +426,61 @@ var printingCommandWord = regexp.MustCompile(`(^|[^A-Za-z0-9_./-])(echo|printf)(
 // in the menu and dispatchable in createScenario, but named only by a help
 // string or a commented-out example, satisfied TestAdvertisedScenariosHaveARunner
 // while nobody could stand it up. That is the gh#1129 shape surviving the
-// gh#1129 guard. Both laundering shapes are live idioms in this tree:
-// taskfiles/e2e/throughput.yml prints its manual-run instructions with echo,
-// and taskfiles/e2e/lifecycle.yml + research-graph.yml carry scenario names in
-// YAML comments. Proved by mutation, 2026-08-27: a synthetic core-echoedonly
-// referenced only by those two shapes passed both guards before this check and
-// fails after it.
+// gh#1129 guard.
 //
-// Two exclusions, in order:
+// Exactly ONE of the three shapes below has a live in-tree instance:
+// taskfiles/e2e/throughput.yml:156 prints its manual-run instructions with
+// echo, and that single line is the only classification this whole check
+// changes — the runner set is 13 names before it and the same 13 after, proved
+// by driving scenarioNamesInvokedByTaskRunners over the real files both ways.
+// The comment shapes are defense in depth with NO live instance, measured
+// 2026-08-27: `grep -rnE '^[[:space:]]*#.*\./e2e'` over all 25 Taskfiles
+// returns zero hits, and no executed line carries `./e2e` after a `#` either.
+// taskfiles/e2e/research-graph.yml:5 does name scenarios in a comment but has
+// no `./e2e`, so it never entered the extractor and was already excluded;
+// taskfiles/e2e/lifecycle.yml:16-23, which an earlier revision of this comment
+// and its commit message called a live case, is prose about `|| rc=$?` with
+// neither `--scenario` nor `./e2e` on any of those lines. Both of those
+// citations were measured false and are withdrawn.
 //
-//  1. A line whose content is a YAML comment. Task never runs it — and these
-//     appear INSIDE cmds: blocks (lifecycle.yml:16-23), not only at file top.
-//  2. Everything from the first echo/printf command word onward. Truncating
-//     rather than rejecting the whole line keeps a real invocation that is
-//     merely FOLLOWED by a progress echo counted; only the printed text is
-//     dropped.
+// Three exclusions, in order, each reproduced as a GREEN-on-the-defect before
+// it was written (2026-08-27) using a synthetic scenario advertised in the menu
+// and dispatched to a constructor runAllScenarios does not build:
 //
-// It reads one line at a time, as the caller does, which is what the folded
-// (`>-`) and block (`|`) scalars this repo writes commands in require. It is
-// therefore not YAML-structural: a `./e2e --scenario X` written into a `desc:`
-// string would still count. TestOnlyExecutedTaskLinesCountAsRunners pins every
-// shape above, including that boundary.
+//  1. A line whose content is entirely a YAML comment. Task never runs it.
+//  2. Everything from a trailing `#` comment onward. The `#` that opens a
+//     comment is not special because it is a `#` but because of where it sits,
+//     so a whole-line check leaves the same laundering available one space to
+//     the right: `- docker compose ... up -d  # then: ./e2e --scenario X`
+//     counted X as run.
+//  3. Everything from the first echo/printf command word onward.
+//
+// The last two truncate rather than reject the whole line, so a real invocation
+// merely FOLLOWED by a progress echo or a note stays counted; only the text the
+// runner does not execute is dropped.
+//
+// It reads one line at a time, as the caller does. That is a choice, not a
+// requirement the scalars impose: a YAML node parse would JOIN the folded
+// (`>-`) scalar at slow-consumer.yml:12-14 that this reads as two lines, and
+// would handle it at least as well. The line read is taken because every shape
+// that launders a name is itself LINE-level — a comment, an echo argument — so
+// a node parse would buy nothing here while adding Task's `cmds:`/`cmd:`/
+// `defer:` grammar as a second thing to keep in sync. The cost is that this is
+// not YAML-structural: a `./e2e --scenario X` written into a `desc:` string
+// would still count. TestOnlyExecutedTaskLinesCountAsRunners pins every shape
+// above, including that boundary.
 func executedTaskCommand(line string) string {
 	if strings.HasPrefix(strings.TrimSpace(line), "#") {
 		return ""
 	}
-	if loc := printingCommandWord.FindStringIndex(line); loc != nil {
-		return line[:loc[0]]
+	command := line
+	if loc := trailingCommentStart.FindStringIndex(command); loc != nil {
+		command = command[:loc[0]]
 	}
-	return line
+	if loc := printingCommandWord.FindStringIndex(command); loc != nil {
+		command = command[:loc[0]]
+	}
+	return command
 }
 
 // scenarioNamesInTaskfileContent returns the scenario names one Taskfile's text
