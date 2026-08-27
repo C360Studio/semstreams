@@ -80,11 +80,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create clients and setup context
-	edgeClient, cloudClient, ctx := setupClientsAndContext(logger, flags.baseURL, flags.cloudURL)
+	// Create client and setup context
+	edgeClient, ctx := setupClientsAndContext(logger, flags.baseURL)
 
 	// Run scenarios and exit
-	exitCode := runScenarios(ctx, logger, edgeClient, cloudClient, flags)
+	exitCode := runScenarios(ctx, logger, edgeClient, flags)
 	os.Exit(exitCode)
 }
 
@@ -93,9 +93,7 @@ type cliFlags struct {
 	scenarioName  string
 	verbose       bool
 	baseURL       string
-	cloudURL      string
 	udpEndpoint   string
-	wsEndpoint    string
 	showVersion   bool
 	listScenarios bool
 	// Tiered test variant flags
@@ -128,14 +126,10 @@ func parseCommandLineFlags() *cliFlags {
 	flags := &cliFlags{}
 
 	flag.StringVar(&flags.scenarioName, "scenario", "",
-		"Run specific scenario (core-health, core-dataflow, core-graph-roundtrip, lessons, core-federation, or 'all')")
+		"Run specific scenario (core-health, core-dataflow, core-graph-roundtrip, lessons, or 'all')")
 	flag.BoolVar(&flags.verbose, "verbose", false, "Enable verbose logging")
 	flag.StringVar(&flags.baseURL, "base-url", config.DefaultEndpoints.HTTP, "SemStreams HTTP endpoint (edge)")
-	flag.StringVar(&flags.cloudURL, "cloud-url", "http://localhost:8081",
-		"SemStreams cloud HTTP endpoint (federation only)")
 	flag.StringVar(&flags.udpEndpoint, "udp-endpoint", config.DefaultEndpoints.UDP, "UDP test endpoint")
-	flag.StringVar(&flags.wsEndpoint, "ws-endpoint", "ws://localhost:8082/stream",
-		"WebSocket endpoint (federation only)")
 	flag.BoolVar(&flags.showVersion, "version", false, "Show version information")
 	flag.BoolVar(&flags.listScenarios, "list", false, "List available scenarios")
 	// Tiered test variant flags
@@ -232,7 +226,6 @@ func handleListCommand(listScenarios bool) bool {
 	fmt.Println("    core-dataflow   - UDP → Filter → Map → File pipeline")
 	fmt.Println("    core-graph-roundtrip - Projection write → ENTITY_STATES/index → GraphQL read")
 	fmt.Println("    core-slow-consumer - Assembled slow-consumer attribution")
-	fmt.Println("    core-federation - Edge → Cloud federation via WebSocket")
 	fmt.Println("")
 	fmt.Println("  Tiered (unified scenario with --variant flag):")
 	fmt.Println("    tiered --variant structural  - Rules-only, ZERO embeddings/clusters")
@@ -284,14 +277,12 @@ func setupLogger(verbose bool) *slog.Logger {
 	return logger
 }
 
-// setupClientsAndContext creates clients and sets up signal handling
-func setupClientsAndContext(logger *slog.Logger, baseURL, cloudURL string) (
-	*client.ObservabilityClient,
+// setupClientsAndContext creates the client and sets up signal handling
+func setupClientsAndContext(logger *slog.Logger, baseURL string) (
 	*client.ObservabilityClient,
 	context.Context,
 ) {
 	edgeClient := client.NewObservabilityClient(baseURL)
-	cloudClient := client.NewObservabilityClient(cloudURL)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -303,14 +294,14 @@ func setupClientsAndContext(logger *slog.Logger, baseURL, cloudURL string) (
 		cancel()
 	}()
 
-	return edgeClient, cloudClient, ctx
+	return edgeClient, ctx
 }
 
 // runScenarios runs the appropriate scenarios based on flags
 func runScenarios(
 	ctx context.Context,
 	logger *slog.Logger,
-	edgeClient, cloudClient *client.ObservabilityClient,
+	edgeClient *client.ObservabilityClient,
 	flags *cliFlags,
 ) int {
 	logger.Info("Connecting to SemStreams",
@@ -330,7 +321,7 @@ func runScenarios(
 	}
 
 	// Run specific scenario
-	scenario := createScenario(edgeClient, cloudClient, flags)
+	scenario := createScenario(edgeClient, flags)
 	if scenario == nil {
 		logger.Error("Unknown scenario", "name", flags.scenarioName)
 		fmt.Println("\nRun with --list to see all available scenarios")
@@ -353,7 +344,6 @@ func runScenarios(
 //   - ml   → semantic
 func createScenario(
 	edgeClient *client.ObservabilityClient,
-	cloudClient *client.ObservabilityClient,
 	flags *cliFlags,
 ) scenarios.Scenario {
 	switch flags.scenarioName {
@@ -380,9 +370,6 @@ func createScenario(
 			AppContainer: "semstreams-e2e-slow-consumer-app",
 			MetricsURL:   flags.metricsURL,
 		})
-	case "core-federation", "federation":
-		return scenarios.NewCoreFederationScenario(edgeClient, cloudClient, flags.udpEndpoint, flags.wsEndpoint, nil)
-
 	// Tiered scenario (unified: structural, statistical, semantic)
 	case "tiered", "structural", "statistical", "semantic":
 		cfg := scenarios.DefaultTieredConfig()

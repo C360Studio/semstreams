@@ -361,3 +361,19 @@ Measured on 2026-08-27 at each sister's pinned SHA, read-only.
   hand-written call site, no Go import.
 - **semsource, semconnect, semboids, semmachina, semops, semmem, semdev**: no call site and no import. Two prose
   mentions in semsource docs.
+
+## core-federation e2e scenario removed (gh#1129)
+
+Added 2026-08-27, after the beta.163 landings above; verified against this repository's own `origin/main` HEAD at
+the time of writing, not the pinned sister SHAs the provenance sentence at the top of this document covers — this
+section carries no sister-repo obligation, so no sister pin applies.
+
+**Nothing ran it.** The `core-federation` e2e scenario (`test/e2e/scenarios/core_federation.go`), its dispatch case
+and menu entry in `cmd/e2e/main.go`, its two configs (`configs/cloud-federation.json`, `configs/edge-federation.json`),
+and its doc (`test/e2e/docs/core-federation.md`) are deleted with no replacement. It was dispatchable but unreachable:
+no `task e2e:federation` wrapper existed, no compose file defined an `edge` service, and `cloud-federation.json`
+dialed the literal hostname `ws://edge:8082/stream` that this repo never created. Owner ruling 2026-08-27 (gh#1129,
+option (b)): delete under the greenfield principle — a menu entry that fails for anyone who selects it is legacy
+cruft, not a capability. No in-tree consumer (verified by grep across this repository); the e2e scenario set is not
+part of the supported framework surface, so no downstream-obligation claim is made about the read-only sister repos
+— nobody read them for this.
