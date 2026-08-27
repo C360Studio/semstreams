@@ -89,6 +89,60 @@ services:
       timeout: 3s
       retries: 10
 
+  # The e2e-target twin of `semstreams`. It binds the SAME host ports as the
+  # production app on purpose: that identical port set is what keeps the two
+  # apart — a bare `--profile fixtures up` would try to start both and fail on
+  # the bind, so the task files always name `nats semstreams-fixtures`. The
+  # profile only hides the twin from a bare `up`; it does not prevent the two
+  # from sharing one NATS (both would serve graph.mutation.>). Do not give the
+  # twin its own ports.
+  # Boots cmd/e2e-semstreams, whose composition root registers the synthetic
+  # types the e2e scenarios stamp on entity.create (test.fixture.v1, ...);
+  # ADR-103: a production-target tier stamps only what the production binary
+  # registers, so the graph round-trip probe and the lessons tier run here.
+  semstreams-fixtures:
+    image: c360studio/semstreams:e2e-test
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+      target: e2e
+    container_name: semstreams-e2e-fixtures-app
+    profiles:
+      - fixtures
+    command: ["--config", "/app/configs/protocol-flow.json"]
+    depends_on:
+      nats:
+        condition: service_healthy
+    environment:
+      - SEMSTREAMS_NATS_URLS=nats://nats:4222
+      - SEMSTREAMS_CONFIG=/app/configs/protocol-flow.json
+      - SEMSTREAMS_LOG_LEVEL=debug
+      - SEMSTREAMS_DEBUG=${SEMSTREAMS_DEBUG:-false}
+      - SEMSTREAMS_DEBUG_PORT=6060
+    volumes:
+      - ../../configs:/app/configs:ro
+    ports:
+      - "38080:8080" # HTTP API (health, components)
+      - "39090:9090" # Prometheus metrics
+      - "36060:6060" # pprof (when SEMSTREAMS_DEBUG=true)
+      - "34550:14550/udp" # UDP input
+      - "38082:8082" # WebSocket output
+    networks:
+      - semstreams-e2e-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8080/readyz",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 networks:
   semstreams-e2e-net:
     driver: bridge

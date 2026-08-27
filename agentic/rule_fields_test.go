@@ -23,8 +23,10 @@ func TestEveryRegisteredAgenticPayloadIsRuleReadable(t *testing.T) {
 	}
 
 	listed := reg.ListByDomain(Domain)
-	if len(listed) != 15 {
-		t.Fatalf("agentic domain registers %d payloads, test expects the 15 covered by this change", len(listed))
+	// 15 event payloads (#1052) + the 5 entity types born on the mutation
+	// lane that ADR-103 registers as Graphable payloads.
+	if len(listed) != 20 {
+		t.Fatalf("agentic domain registers %d payloads, test expects the 20 covered by the projection table", len(listed))
 	}
 
 	for _, registration := range listed {
@@ -258,6 +260,69 @@ func projectionCases() []projectionCase {
 			// lanes feed the same switch that produces `status`, which IS
 			// validated against a closed set, so nothing is lost.
 			withhold: []string{"finish_reason", "message", "error"},
+		},
+		// --- Entity types born on the mutation lane (ADR-103) ---
+		{
+			name: "LoopExecutionEntity",
+			payload: &LoopExecutionEntity{
+				Org: "acme", Platform: "ops", LoopID: "l1",
+				Task: &TaskMessage{TaskID: "t1", Role: "architect", Prompt: "user text"},
+			},
+			expose:   map[string]any{"org": "acme", "platform": "ops", "loop_id": "l1"},
+			withhold: []string{"task"},
+		},
+		{
+			name: "AgentLessonEntity",
+			payload: &AgentLessonEntity{
+				Org: "acme", Platform: "ops", ID: "lesson-1",
+				Category: "retention-policy", Polarity: "avoid", Severity: "warning", Status: "proposed",
+				CreatedAt: now, Summary: "authored summary", Detail: "authored detail", InjectionForm: "authored form",
+				Evidence: []string{"acme.ops.agent.agentic-loop.execution.l1"}, AppliesTo: []string{"tag:go"},
+				ObservedRole: "ops", ExecutedBy: "acme.ops.agent.agentic-loop.execution.l0",
+			},
+			expose: map[string]any{
+				"category": "retention-policy", "polarity": "avoid", "severity": "warning", "status": "proposed",
+				"observed_role": "ops", "executed_by": "acme.ops.agent.agentic-loop.execution.l0",
+			},
+			withhold: []string{"summary", "detail", "injection_form"},
+		},
+		{
+			name: "OpsDiagnosisEntity",
+			payload: &OpsDiagnosisEntity{
+				Org: "acme", Platform: "ops", ID: "finding-1",
+				Finding: "authored finding", Recommendation: "authored recommendation", Confidence: 0.85,
+				Evidence: []string{"acme.ops.agent.agentic-loop.execution.l1"}, ObservedRole: "ops", Severity: "warn",
+				ExecutedBy: "acme.ops.agent.agentic-loop.execution.l0",
+			},
+			expose:   map[string]any{"confidence": 0.85, "severity": "warn", "observed_role": "ops"},
+			withhold: []string{"finding", "recommendation"},
+		},
+		{
+			name: "ModelEndpointEntity",
+			payload: &ModelEndpointEntity{
+				Org: "acme", Platform: "ops", Name: "gpt4o", Provider: "openai", Model: "gpt-4o",
+				URL: "https://api.openai.com/v1", SupportsTools: true, MaxTokens: 128000,
+				InputPricePer1MTokens: 5, OutputPricePer1MTokens: 15, RequestsPerMinute: 60,
+			},
+			expose: map[string]any{
+				"provider": "openai", "model": "gpt-4o", "supports_tools": true, "max_tokens": 128000,
+				"requests_per_minute": 60,
+			},
+			withhold: nil,
+		},
+		{
+			name: "WebObservationEntity",
+			payload: &WebObservationEntity{
+				Org: "acme", Platform: "ops", CanonicalURL: "https://example.com/x", Tool: WebObservationToolHTTPRequest,
+				LoopEntityID: "acme.ops.agent.agentic-loop.execution.l1",
+				FetchedAt:    "2026-08-26T12:00:00Z", ContentType: "text/html", StatusCode: 200,
+				Text: "page body", Truncated: true, Title: "provider title", Snippet: "provider snippet",
+				SourceQuery: "authored query", ObservedAt: "2026-08-26T12:00:01Z",
+			},
+			expose: map[string]any{
+				"tool": "http_request", "status_code": 200, "truncated": true, "content_type": "text/html",
+			},
+			withhold: []string{"text", "title", "snippet", "source_query"},
 		},
 	}
 

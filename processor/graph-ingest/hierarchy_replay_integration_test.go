@@ -57,7 +57,8 @@ var replayContainerIDs = []string{
 // different request.
 func replayEntity(id string) *graph.EntityState {
 	return &graph.EntityState{
-		ID: id,
+		ID:          id,
+		MessageType: testEntityType(),
 		Triples: []message.Triple{{
 			Subject:   id,
 			Predicate: "entity.type.class",

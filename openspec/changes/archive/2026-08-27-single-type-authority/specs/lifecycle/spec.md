@@ -15,5 +15,7 @@ with `Manager.Register`; the type registers no contract.
 - **WHEN** `Manager.Create` births a participant
 - **THEN** the entity is created with `message_type` `lifecycle.harness.v1`
 - **AND** `mutation_rejections_total{reason="message_type_unregistered"}` does not increment
-- **AND** the test that verifies this is `TestManager_RoundTripCreateGetTransition`
+- **AND** the test that verifies this is `TestHarnessBirthPassesRegisteredTypeGate` (integration: `Manager.Create` against a
+  real graph-ingest holding the builtin set; the counter unchanged); `TestManager_RoundTripCreateGetTransition` pins the
+  stamp on the captured create request
 

@@ -9,7 +9,11 @@ cannot create a second entity, and the writer MUST reject any lesson carrying ze
 citations. The lesson type `agentic.agent_lesson.v1` MUST be a registered Graphable payload
 (`agentic.AgentLessonEntity`: factory, floor `content`, birth contract registered with the type);
 `emit_lesson` MUST construct that entity and birth it through the entity's own `Triples()`, so the
-lesson has a serializable form as itself and one builder of its triples.
+lesson has a serializable form as itself and one builder of its triples. `AgentLessonEntity.Validate()` IS the ADR-080
+writer contract (required fields, control-byte hygiene, the injection-form byte bound, the polarity / severity / status
+vocabularies, at least one well-formed evidence entity ID, at least one typed scope key, a well-formed back-link);
+`emit_lesson` parses wire shape, clamps severity, and delegates every other gate to it, counting the wrapped
+`ErrLessonEvidence` / `ErrLessonBound` / `ErrLessonGrammar` sentinels as the ADR-080 rejection reasons.
 
 #### Scenario: Evidence-cited lesson is created
 - **WHEN** `emit_lesson` is called with summary, detail, injection form, category, polarity,
@@ -19,6 +23,12 @@ lesson has a serializable form as itself and one builder of its triples.
   `agent.lesson.status` of `proposed`
 - **AND** the entity's `message_type` is the registered `agentic.agent_lesson.v1`
 - **AND** the test that verifies this is `TestEmitLessonExecutor_CreatesLesson`
+
+#### Scenario: The lesson contract is the entity's
+
+- **WHEN** an `AgentLessonEntity` violates any gate the emit_lesson parser used to own
+- **THEN** `Validate()` names the fault, `BaseMessage` refuses to marshal it, and `emit_lesson` returns the same rejection
+- **AND** the test that verifies this is `TestAgentLessonEntityRejectsMalformed` (with `TestEmitLessonExecutor_EvidenceRejects`)
 
 #### Scenario: Re-emitting an identical lesson is idempotent
 - **WHEN** `emit_lesson` is called twice with identical category, scope keys, summary, and

@@ -196,6 +196,33 @@ func canonicalMutationProvider(ports *component.PortConfig) (string, error) {
 	return *provider, nil
 }
 
+// requireRegisteredMessageType is the one registered-type gate for both create
+// paths (ADR-103 d3): the entity.create RPC (after the structural IsValid
+// check) and the in-process CreateEntity (the hierarchy container birth). It
+// writes nothing and yields one classified error — class invalid, closed code
+// message_type_unregistered, the key in detail "message_type" — which the RPC
+// lane meters and logs through meteredMutation and the in-process lane returns
+// to its caller (not metered: the counter is labelled by RPC subject). A
+// component that holds no registry fails CLOSED with code internal and an
+// ERROR log (O-15); a nil value never stands in for "unknown, admit".
+func (c *Component) requireRegisteredMessageType(entity *graph.EntityState) error {
+	if c.payloadRegistry == nil {
+		if c.logger != nil {
+			c.logger.Error("graph-ingest holds no payload registry; refusing the create",
+				slog.String("entity_id", entity.ID),
+				slog.String("message_type", entity.MessageType.Key()))
+		}
+		return rejectInternal(errors.New("graph-ingest holds no payload registry; entity.create refused"))
+	}
+	key := entity.MessageType.Key()
+	if _, ok := c.payloadRegistry.GetRegistration(key); !ok {
+		return rejectInvalidDetail(graph.ErrorCodeMessageTypeUnregistered,
+			map[string]any{"message_type": key},
+			fmt.Errorf("entity message_type %q is not registered in this deployment's payload registry", key))
+	}
+	return nil
+}
+
 func (c *Component) handleCanonicalCreate(ctx context.Context, data []byte) ([]byte, error) {
 	var request graph.CreateEntityRequest
 	if err := decodeCanonicalMutation(data, &request, "entity", "triples"); err != nil {
@@ -206,6 +233,9 @@ func (c *Component) handleCanonicalCreate(ctx context.Context, data []byte) ([]b
 	}
 	if !request.Entity.MessageType.IsValid() {
 		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, errors.New("entity message_type must be valid"))
+	}
+	if err := c.requireRegisteredMessageType(request.Entity); err != nil {
+		return nil, err
 	}
 	if len(request.Entity.Triples) != 0 {
 		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest,

@@ -371,7 +371,7 @@ func (s *Scenario) Teardown(ctx context.Context) error {
 func evidenceContract() projection.Contract {
 	return projection.Contract{
 		Name:            evidenceContractName,
-		MessageType:     "test.fixture.v1",
+		MessageType:     message.Type{Domain: "test", Category: "fixture", Version: "v1"},
 		EntityPattern:   evidenceEntityID,
 		BirthPredicates: []string{vocabulary.DCTermsTitle},
 		IndexingProfile: "control",
@@ -454,7 +454,7 @@ func requireProposedAuthority(exact *graph.ExactEntity, fixture productLessonFix
 		return err
 	}
 	callerTriples, err := requireCanonicalIndexingProfile(
-		exact.Entity.ID, exact.Entity.Triples, vocabulary.IndexingProfileControl)
+		exact.Entity.ID, exact.Entity.Triples, vocabulary.IndexingProfileContent) // ADR-103 O-3: the lesson's registered floor
 	if err != nil {
 		return fmt.Errorf("proposed indexing profile: %w", err)
 	}
@@ -469,7 +469,7 @@ func requireActiveAuthority(exact *graph.ExactEntity, fixture productLessonFixtu
 		return err
 	}
 	callerTriples, err := requireCanonicalIndexingProfile(
-		exact.Entity.ID, exact.Entity.Triples, vocabulary.IndexingProfileControl)
+		exact.Entity.ID, exact.Entity.Triples, vocabulary.IndexingProfileContent) // ADR-103 O-3: the lesson's registered floor
 	if err != nil {
 		return fmt.Errorf("active indexing profile: %w", err)
 	}

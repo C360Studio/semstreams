@@ -203,8 +203,8 @@ func TestEmitLessonExecutor_CreatesLesson(t *testing.T) {
 		if tr.Subject != lessonID {
 			t.Errorf("triple %q has subject %q, want %q", tr.Predicate, tr.Subject, lessonID)
 		}
-		if tr.Source != emitLessonSource {
-			t.Errorf("triple %q has source %q, want %q", tr.Predicate, tr.Source, emitLessonSource)
+		if tr.Source != "ops-emit-lesson" {
+			t.Errorf("triple %q has source %q, want %q", tr.Predicate, tr.Source, "ops-emit-lesson")
 		}
 	}
 }
@@ -422,7 +422,7 @@ func TestEmitLessonExecutor_InjectionFormBound(t *testing.T) {
 	store := &recordingLessonStore{}
 	e := newEmitLessonExecutor(store)
 	call := validEmitLessonCall()
-	call.Arguments["injection_form"] = strings.Repeat("x", maxInjectionFormBytes+1)
+	call.Arguments["injection_form"] = strings.Repeat("x", agentic.LessonInjectionFormMaxBytes+1)
 
 	res, err := e.Execute(context.Background(), call)
 	if err != nil {
@@ -444,7 +444,7 @@ func TestEmitLessonExecutor_InjectionFormAtBoundAccepted(t *testing.T) {
 	store := &recordingLessonStore{}
 	e := newEmitLessonExecutor(store)
 	call := validEmitLessonCall()
-	call.Arguments["injection_form"] = strings.Repeat("y", maxInjectionFormBytes)
+	call.Arguments["injection_form"] = strings.Repeat("y", agentic.LessonInjectionFormMaxBytes)
 
 	res, err := e.Execute(context.Background(), call)
 	if err != nil {
@@ -454,8 +454,8 @@ func TestEmitLessonExecutor_InjectionFormAtBoundAccepted(t *testing.T) {
 		t.Fatalf("injection form AT the bound must be accepted, got error: %q", res.Error)
 	}
 	facts := factsOf(store.triples)
-	if got, _ := facts[agvocab.LessonInjectionForm][0].(string); len(got) != maxInjectionFormBytes {
-		t.Errorf("injection form must persist un-truncated at %d bytes, got %d", maxInjectionFormBytes, len(got))
+	if got, _ := facts[agvocab.LessonInjectionForm][0].(string); len(got) != agentic.LessonInjectionFormMaxBytes {
+		t.Errorf("injection form must persist un-truncated at %d bytes, got %d", agentic.LessonInjectionFormMaxBytes, len(got))
 	}
 }
 
@@ -866,7 +866,7 @@ func TestRequireSameLessonIdentity(t *testing.T) {
 		},
 		AppliesTo: []string{"tag:go", "id:acme.test.agent"},
 	}
-	requested := buildEmitLessonTriples(lessonID, loopID, requestedArgs, "ops", now)
+	requested := lessonTriplesForTest(lessonID, loopID, requestedArgs, "ops", now)
 
 	// Mutable/non-identity fields may differ after the first birth, and the two
 	// identity collections are order-insensitive.
@@ -877,7 +877,7 @@ func TestRequireSameLessonIdentity(t *testing.T) {
 	existingArgs.InjectionForm = "Use the curated form."
 	existingArgs.Evidence = []string{requestedArgs.Evidence[1], requestedArgs.Evidence[0]}
 	existingArgs.AppliesTo = []string{requestedArgs.AppliesTo[1], requestedArgs.AppliesTo[0]}
-	existing := buildEmitLessonTriples(lessonID, loopID, existingArgs, "ops", now.Add(-time.Hour))
+	existing := lessonTriplesForTest(lessonID, loopID, existingArgs, "ops", now.Add(-time.Hour))
 	if err := requireSameLessonIdentity(existing, requested); err != nil {
 		t.Fatalf("same content-derived identity rejected: %v", err)
 	}
@@ -903,4 +903,20 @@ func TestRequireSameLessonIdentity(t *testing.T) {
 			t.Fatal("duplicate identity field accepted")
 		}
 	})
+}
+
+// lessonTriplesForTest builds the lesson triple set the way emitLesson does —
+// through the registered AgentLessonEntity — for a lessonID of the form
+// {org}.{platform}.agent.lesson.record.{id}.
+func lessonTriplesForTest(lessonID, loopID string, args emitLessonArgs, observedRole string, now time.Time) []message.Triple {
+	parts := strings.SplitN(lessonID, ".", 6)
+	entity := &agentic.AgentLessonEntity{
+		Org: parts[0], Platform: parts[1], ID: parts[5],
+		Category: args.Category, Polarity: args.Polarity, Severity: args.Severity,
+		Status: lessonBornStatus, CreatedAt: now,
+		Summary: args.Summary, Detail: args.Detail, InjectionForm: args.InjectionForm,
+		Evidence: args.Evidence, AppliesTo: args.AppliesTo,
+		ObservedRole: observedRole, ExecutedBy: loopID,
+	}
+	return entity.Triples()
 }

@@ -457,9 +457,11 @@ func (s *Scenario) seedSyntheticLoops(ctx context.Context, result *scenarios.Res
 			})
 		}
 		entityState := graph.EntityState{
-			ID:          seed.entityID,
-			Triples:     triples,
-			MessageType: message.Type{Domain: "agentic", Category: "loop-completed", Version: "1"},
+			ID:      seed.entityID,
+			Triples: triples,
+			// The registered agentic.loop_completed.v1 key (O-9: the seed used a
+			// mis-spelled key; the direct PutKV stays and is filed separately).
+			MessageType: message.Type{Domain: agentic.Domain, Category: agentic.CategoryLoopCompleted, Version: agentic.SchemaVersion},
 			Version:     1,
 			UpdatedAt:   now,
 		}
@@ -787,7 +789,7 @@ func (s *Scenario) promoteLesson(ctx context.Context, result *scenarios.Result) 
 	return fmt.Errorf(
 		"lesson %s status did not flip to active within %v (last seen %q) — "+
 			"check LessonCurator.Promote and the agentic.lesson-record reconcile lane "+
-			"(internal/builtinprojection/contracts.go)",
+			"(agentic.LessonContract in agentic/agent_lesson_entity.go)",
 		s.lessonEntityID, s.config.CompleteTimeout, lastSeen)
 }
 

@@ -53,7 +53,7 @@ func TestIntegration_IngestGuardBucket_ReconcilesTTLBucketAtAcquisition(t *testi
 	cfg := DefaultConfig()
 	cfgJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
-	comp, err := CreateGraphIngest(cfgJSON, component.Dependencies{NATSClient: testClient.Client})
+	comp, err := CreateGraphIngest(cfgJSON, component.Dependencies{NATSClient: testClient.Client, PayloadRegistry: newTestPayloadRegistry(t)})
 	require.NoError(t, err)
 	c := comp.(*Component)
 	require.NoError(t, c.Initialize())
@@ -194,7 +194,7 @@ func startKeyedWireComponent(t *testing.T) (context.Context, *Component, *natscl
 	cfgJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
 
-	comp, err := CreateGraphIngest(cfgJSON, component.Dependencies{NATSClient: testClient.Client})
+	comp, err := CreateGraphIngest(cfgJSON, component.Dependencies{NATSClient: testClient.Client, PayloadRegistry: newTestPayloadRegistry(t)})
 	require.NoError(t, err)
 	c := comp.(*Component)
 	require.NoError(t, c.Initialize())

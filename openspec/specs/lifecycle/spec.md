@@ -4,9 +4,7 @@
 
 Define the reusable named-instance lifecycle surface over canonical graph exact reads and mutations. Lifecycle records
 domain phases and transitions; it does not arbitrate graph writers or create missing entities for transitions.
-
 ## Requirements
-
 ### Requirement: Workflow registration validates projectability and local contract shape
 
 Workflow registration MUST reject a schema type that cannot implement `Participant`, an invalid entity-ID pattern,
@@ -242,3 +240,23 @@ their existing close-on-channel-close behavior.
 - **WHEN** its subscription terminates asynchronously
 - **THEN** the existing value channel closes
 - **AND** the caller is not required to configure or consume a new lifecycle surface
+
+### Requirement: Harness births carry the registered lifecycle type
+
+Every entity the lifecycle `Manager` births MUST be stamped `lifecycle.harness.v1`, and that type MUST be registered by the
+framework builtin payload set as a Graphable carrier (`lifecycle.HarnessEntity`) with floor `control`, so a harness birth
+passes graph-ingest's registered-type gate and a harness entity can arrive on the fact lane as itself. Registering a carrier
+makes the fact-lane merge path reachable for lifecycle entities (the same class as `storage.stored.v1`): a marshalled harness
+entity arriving on a Graphable input merges by predicate replacement like any other Graphable. Per-workflow contracts remain
+with `Manager.Register`; the type registers no contract.
+
+#### Scenario: a workflow birth passes the registered-type gate
+
+- **GIVEN** the framework builtin payload set is registered in graph-ingest's registry
+- **WHEN** `Manager.Create` births a participant
+- **THEN** the entity is created with `message_type` `lifecycle.harness.v1`
+- **AND** `mutation_rejections_total{reason="message_type_unregistered"}` does not increment
+- **AND** the test that verifies this is `TestHarnessBirthPassesRegisteredTypeGate` (integration: `Manager.Create` against a
+  real graph-ingest holding the builtin set; the counter unchanged); `TestManager_RoundTripCreateGetTransition` pins the
+  stamp on the captured create request
+

@@ -26,7 +26,6 @@ import (
 	"github.com/c360studio/semstreams/frameworkcapabilities/graphresearch"
 	rulepackcap "github.com/c360studio/semstreams/frameworkcapabilities/rulepacks"
 	"github.com/c360studio/semstreams/internal/bootstrapobservability"
-	"github.com/c360studio/semstreams/internal/builtinprojection"
 	"github.com/c360studio/semstreams/internal/maxdelivery"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -266,8 +265,9 @@ func run() (runErr error) {
 	}
 
 	lifecycleManager := lifecycle.NewManager(natsClient, logger)
+	// The registry is the one table of framework contracts (ADR-103).
 	mutationClient, err := service.WireGraphRuntime(
-		bootCtx, natsClient, logger, builtinprojection.Contracts()...,
+		bootCtx, natsClient, logger, payloadReg.Contracts()...,
 	)
 	if err != nil {
 		return fmt.Errorf("wire graph runtime: %w", err)

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic/agentrun"
+	"github.com/c360studio/semstreams/cmd/e2e-semstreams/fixtures"
 	"github.com/c360studio/semstreams/cmd/e2e-semstreams/mission"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/componentregistry"
@@ -29,7 +30,6 @@ import (
 	"github.com/c360studio/semstreams/frameworkcapabilities/graphresearch"
 	rulepackcap "github.com/c360studio/semstreams/frameworkcapabilities/rulepacks"
 	"github.com/c360studio/semstreams/internal/bootstrapobservability"
-	"github.com/c360studio/semstreams/internal/builtinprojection"
 	"github.com/c360studio/semstreams/internal/maxdelivery"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -196,8 +196,9 @@ func run() (runErr error) {
 	}
 
 	lifecycleManager := lifecycle.NewManager(natsClient, logger)
+	// The registry is the one table of framework contracts (ADR-103).
 	mutationClient, err := service.WireGraphRuntime(
-		ctx, natsClient, logger, builtinprojection.Contracts()...,
+		ctx, natsClient, logger, payloadReg.Contracts()...,
 	)
 	if err != nil {
 		return fmt.Errorf("wire graph runtime: %w", err)
@@ -412,6 +413,11 @@ func buildPayloadRegistry(cfg *config.Config) (*payloadregistry.Registry, error)
 	}
 	if err := mission.RegisterPayloads(reg); err != nil {
 		return nil, fmt.Errorf("register mission payloads: %w", err)
+	}
+	// The keys the e2e scenarios stamp on entity.create (ADR-103): without
+	// this every scenario birth through the real wire is refused.
+	if err := fixtures.RegisterPayloads(reg); err != nil {
+		return nil, fmt.Errorf("register e2e fixture payloads: %w", err)
 	}
 	if graphresearch.Selected(cfg) {
 		if err := graphresearch.RegisterPayloads(reg); err != nil {

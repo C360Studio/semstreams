@@ -1,5 +1,12 @@
-## ADDED Requirements
+# payload-registry Specification
 
+## Purpose
+The payload registry is the deployment's single type authority (ADR-103): a `message.Type` exists in a binary only by
+being registered there, with its indexing profile floor and its graph-state contracts bound at the same registration.
+Registration is what makes a type publishable (`BaseMessage.MarshalJSON` gates on the payload's `Validate()`) and what
+graph-ingest consults to refuse an unregistered stamp — readers, codecs, and boot sweeps never consult it. Each binary
+composes its own registry; there is no global.
+## Requirements
 ### Requirement: A message type is a type of the deployment only if it is registered in the binary's payload registry
 
 The payload registry MUST be the single authority for which `message.Type` keys (`domain.category.version`) exist in a
@@ -8,6 +15,24 @@ payload `Schema()` disagrees with the registration, and a key already registered
 types, and no global registry — each binary constructs its own and injects it through `Dependencies.PayloadRegistry`. A type
 registered in one binary is not thereby a type of another: the attributes registered with it (floor, contracts) exist only
 where the type is registered.
+
+A production-target e2e tier stamps only what the production binary registers (owner ruling on #1100, 2026-08-27):
+`cmd/semstreams` registers no test type, so a scenario that births a synthetic type runs against `cmd/e2e-semstreams`, whose
+composition root registers them through `cmd/e2e-semstreams/fixtures.RegisterPayloads`.
+
+| Tier (`task e2e:<tier>`) | App target / binary | Synthetic types stamped on `entity.create` |
+|---|---|---|
+| core — phase 1 (`core-health`, `core-dataflow`) | `production` / `cmd/semstreams` (`docker/compose/e2e.yml` `semstreams`) | none |
+| core — phase 2 (`core-graph-roundtrip`) | `e2e` / `cmd/e2e-semstreams` (`e2e.yml` `semstreams-fixtures`, profile `fixtures`) | `test.fixture.v1` |
+| lessons | `e2e` (`e2e.yml` `semstreams-fixtures`) | `test.fixture.v1` (evidence fixture) |
+| research-graph | `e2e` (`research-graph.yml`) | `research.e2e_search_seed.v1` |
+| structural / statistical / semantic | `e2e` (`tiered.yml`) | `e2e.eventtime.v1`, `e2e.canonical_create_contract.v1`, `e2e.relationship_contract.v1` (structural) |
+| lifecycle | `e2e` (`lifecycle.yml`) | none (`lifecycle.harness.v1` is a framework type) |
+| ops | `e2e` (`ops.yml`) | none (its seed is the framework type `agentic.loop_completed.v1`, written by direct `PutKV` — `ops/scenario.go:464,472`) |
+| agentic | `production` (`agentic.yml`) | none |
+| crud-tools | `production` (`crud-tools.yml`) | none on create (`e2e.probe.v1` is a direct `PutKV`) |
+| deep-research | `production` (`deep-research.yml`) | none |
+| slow-consumer | `production`-derived (`e2e-slow-consumer.yml`) | none |
 
 #### Scenario: a colliding key is refused at registration
 
@@ -23,6 +48,14 @@ where the type is registered.
 - **WHEN** `IndexingProfileFor("research.result.v1")` is read from its registry
 - **THEN** it reports the type as unregistered with no floor
 - **AND** the test that verifies this is `TestIndexingProfileFor`
+
+#### Scenario: a component holding the key separator is refused at registration
+
+- **WHEN** a registration declares `Domain: "bad.domain"` (or a category or version containing `.`)
+- **THEN** `Register` returns an error naming the separator and stores nothing — the key could never round-trip through
+  `Key()`, so the error belongs at boot, not at the first `Create`
+- **AND** `types.Type.Validate` is the one owner of that component grammar
+- **AND** the test that verifies this is `TestRegisterRejectsMalformedComponent` (and `TestTypeValidateOwnsComponentGrammar`)
 
 #### Scenario: a factory that disagrees with its registration is refused
 
@@ -125,4 +158,34 @@ builtin set. No framework type MAY be documented as "mutation-only, not register
 - **THEN** predicate, object (type and value), `Source`, and `Confidence` match triple-for-triple, and only `Timestamp` differs
 - **AND** the test that verifies this is `TestModelEndpointEntityMatchesBuilder` (also `TestOpsDiagnosisEntityMatchesBuilder`,
   `TestWebObservationEntityMatchesToolBuilders`, `TestEmitLessonBuildsEntityTriples`)
+
+### Requirement: A registered payload's `Validate()` is the writer's full contract
+
+A registered framework entity type MUST carry the complete contract its writer used to enforce — every required field,
+closed vocabulary, numeric range, byte bound, control-byte rule, and entity-ID grammar — in ONE validator that both the
+writer's argument parser and `Validate()` use, because registration makes a type publishable: `BaseMessage.MarshalJSON`
+uses `Payload.Validate()` as the publication gate. The parser MAY normalise (clamp a severity) and MUST check only wire shape; it MUST
+NOT duplicate or weaken the contract. A payload that fails `Validate()` MUST fail to marshal through `BaseMessage`.
+
+Boundary (fact lane): graph-ingest's fact-lane consumer decodes through `message.NewDecoder` WITHOUT calling `Validate()`
+(`processor/graph-ingest/component.go` `extractEntityFromMessage`), so wire bytes that bypass `BaseMessage.MarshalJSON` are
+not gated by this requirement; that lane's missing validation is #1112's, not this change's. The decoded payload still
+carries the contract.
+
+#### Scenario: a malformed registered payload is unpublishable
+
+- **WHEN** an `OpsDiagnosisEntity` with no finding, recommendation, evidence, severity, or executor and a confidence of 2
+  (the Codex repro) — or any one of the lesson, model-endpoint, loop-execution, or web-observation contract violations —
+  is validated and marshalled through `message.NewBaseMessage`
+- **THEN** `Validate()` returns an error naming the fault and `json.Marshal` fails
+- **AND** the tests that verify this are `TestAgentLessonEntityRejectsMalformed`, `TestOpsDiagnosisEntityRejectsMalformed`,
+  `TestModelEndpointEntityRejectsMalformed`, `TestLoopExecutionEntityRejectsMalformed`, `TestWebObservationEntityRejectsMalformed`
+
+#### Scenario: a malformed finding never reaches the graph
+
+- **GIVEN** a real graph-ingest holding the builtin set
+- **WHEN** `emit_diagnosis` is invoked with the Codex repro shape
+- **THEN** the tool returns an invalid-arguments result, no `ops.diagnosis.finding` key is born, and the same shape cannot be
+  marshalled through `BaseMessage`
+- **AND** the test that verifies this is `TestMalformedDiagnosisNeverReachesTheGraph`
 

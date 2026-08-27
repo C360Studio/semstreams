@@ -150,7 +150,8 @@ func newTestDependencies(t *testing.T) component.Dependencies {
 	natsClient := newTestNATSClient(t)
 
 	return component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: newTestPayloadRegistry(t),
 		// MetricsRegistry intentionally not set - tests will set as needed
 	}
 }

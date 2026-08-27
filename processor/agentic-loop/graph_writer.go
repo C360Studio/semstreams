@@ -248,7 +248,15 @@ func (w *graphWriter) WriteModelEndpoints(ctx context.Context) {
 			continue
 		}
 		entityID := agentic.ModelEndpointEntityID(w.platform.Org, w.platform.Platform, name)
-		triples := buildModelEndpointTriples(entityID, *ep)
+		endpoint := modelEndpointEntity(w.platform.Org, w.platform.Platform, name, *ep)
+		// The endpoint's contract is the entity's (ADR-103) — the same gate
+		// BaseMessage.MarshalJSON applies to every publisher.
+		if err := endpoint.Validate(); err != nil {
+			w.logger.Warn("graph_writer: model endpoint entity fails its contract; not born",
+				"endpoint", name, "entity_id", entityID, "error", err)
+			continue
+		}
+		triples := endpoint.Triples()
 		entity := &gtypes.EntityState{
 			ID:          entityID,
 			MessageType: agentic.ModelEndpointMessageType(),
@@ -464,9 +472,16 @@ func (w *graphWriter) WriteSpawnIdentity(ctx context.Context, loopID string, tas
 		Task:     task,
 	}
 
+	// The execution entity's contract is the entity's (ADR-103) — the same
+	// gate BaseMessage.MarshalJSON applies to every publisher. It is the
+	// writer's historical contract exactly: a task with nothing to say is a
+	// graceful skip, matching the pre-ADR-103 empty-triples return.
 	triples := entity.Triples()
 	if len(triples) == 0 {
 		return nil
+	}
+	if err := entity.Validate(); err != nil {
+		return fmt.Errorf("spawn identity for loop %s fails the loop-execution contract: %w", loopID, err)
 	}
 
 	entityState := &gtypes.EntityState{
@@ -506,44 +521,18 @@ func (w *graphWriter) WriteLoopCancellation(ctx context.Context, event *agentic.
 
 // --- pure triple builders (testable without NATS) ---
 
-// buildModelEndpointTriples constructs the full set of triples describing a model endpoint.
-// Optional fields are omitted when their zero value carries no information.
-func buildModelEndpointTriples(entityID string, ep model.EndpointConfig) []message.Triple {
-	now := time.Now()
-	triple := func(predicate string, object any) message.Triple {
-		return message.Triple{
-			Subject:    entityID,
-			Predicate:  predicate,
-			Object:     object,
-			Source:     graphWriterSource,
-			Timestamp:  now,
-			Confidence: 1.0,
-		}
+// modelEndpointEntity maps one endpoint configuration onto the registered
+// model-endpoint entity (ADR-103), the one builder of its triples.
+func modelEndpointEntity(org, platform, name string, ep model.EndpointConfig) *agentic.ModelEndpointEntity {
+	return &agentic.ModelEndpointEntity{
+		Org: org, Platform: platform, Name: name,
+		Provider: ep.Provider, Model: ep.Model, URL: ep.URL,
+		SupportsTools:          ep.SupportsTools,
+		MaxTokens:              ep.MaxTokens,
+		InputPricePer1MTokens:  ep.InputPricePer1MTokens,
+		OutputPricePer1MTokens: ep.OutputPricePer1MTokens,
+		RequestsPerMinute:      ep.RequestsPerMinute,
 	}
-
-	triples := []message.Triple{
-		triple(agvocab.ModelProvider, ep.Provider),
-		triple(agvocab.ModelName, ep.Model),
-		triple(agvocab.ModelSupportsTools, ep.SupportsTools),
-	}
-
-	if ep.MaxTokens > 0 {
-		triples = append(triples, triple(agvocab.ModelMaxTokens, ep.MaxTokens))
-	}
-	if ep.InputPricePer1MTokens > 0 {
-		triples = append(triples, triple(agvocab.ModelInputPrice, ep.InputPricePer1MTokens))
-	}
-	if ep.OutputPricePer1MTokens > 0 {
-		triples = append(triples, triple(agvocab.ModelOutputPrice, ep.OutputPricePer1MTokens))
-	}
-	if ep.URL != "" {
-		triples = append(triples, triple(agvocab.ModelEndpointURL, ep.URL))
-	}
-	if ep.RequestsPerMinute > 0 {
-		triples = append(triples, triple(agvocab.ModelRateLimit, ep.RequestsPerMinute))
-	}
-
-	return triples
 }
 
 // appendEvidenceIntegrity stamps the observed-audit-loss condition onto a

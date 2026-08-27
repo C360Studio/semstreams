@@ -36,6 +36,7 @@ import (
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	gateddagexec "github.com/c360studio/semstreams/processor/gated-dag"
@@ -193,7 +194,7 @@ func setupFullStack(t *testing.T, opts fsOpts) *fullStack {
 	// graph-ingest: mutation + query handlers, ENTITY_STATES.
 	giJSON, err := json.Marshal(graphingest.DefaultConfig())
 	require.NoError(t, err)
-	giDisc, err := graphingest.CreateGraphIngest(giJSON, component.Dependencies{NATSClient: nc})
+	giDisc, err := graphingest.CreateGraphIngest(giJSON, component.Dependencies{NATSClient: nc, PayloadRegistry: fullstackPayloadRegistry(t)})
 	require.NoError(t, err)
 	gi := giDisc.(*graphingest.Component)
 	require.NoError(t, gi.Initialize())
@@ -314,7 +315,7 @@ func (fs *fullStack) seedUnit(t *testing.T, id string, dependsOn ...string) {
 		})
 	}
 	require.NoError(t, fs.gi.CreateEntity(context.Background(), &gtypes.EntityState{
-		ID: id, Triples: triples, Version: 1, UpdatedAt: time.Now(),
+		ID: id, MessageType: fullstackUnitType, Triples: triples, Version: 1, UpdatedAt: time.Now(),
 	}))
 }
 
@@ -628,4 +629,16 @@ func TestFullStack_StallEventPublished(t *testing.T) {
 		return len(got.units) == 2
 	}, fsEventually, 100*time.Millisecond, "a cycle must publish a StallEvent naming both held units")
 	require.Empty(t, fs.dispatched.snapshot(), "a cycle dispatches nothing")
+}
+
+// fullstackUnitType is the stamp the full-stack tests birth unit entities with.
+var fullstackUnitType = message.Type{Domain: "test", Category: "unit", Version: "v1"}
+
+// fullstackPayloadRegistry is the builtin set plus the test unit stamp
+// (ADR-103).
+func fullstackPayloadRegistry(t *testing.T) *payloadregistry.Registry {
+	t.Helper()
+	reg := payloadbuiltins.NewTestRegistry(t)
+	payloadregistry.RegisterTestType(t, reg, fullstackUnitType)
+	return reg
 }

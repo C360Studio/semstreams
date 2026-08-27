@@ -13,7 +13,7 @@ import (
 // This exercises the FALLBACK capture (every bind-time read failed). The normal path
 // captures at bind via recordBindBacklog; see the integration test for that.
 func TestLatchBootstrap_ScopeCapturedOnce(t *testing.T) {
-	c := &Component{}
+	c := withTestRegistry(t, &Component{})
 
 	scope, complete := c.latchBootstrap(900, false)
 	if scope != 900 {
@@ -43,7 +43,7 @@ func TestLatchBootstrap_ScopeCapturedOnce(t *testing.T) {
 // complete with scope 0, which a consumer reads as "there was nothing to do" rather
 // than "I might be early".
 func TestLatchBootstrap_ZeroScopeIsAuthoritativelyNothingToDo(t *testing.T) {
-	c := &Component{}
+	c := withTestRegistry(t, &Component{})
 
 	scope, complete := c.latchBootstrap(0, false)
 	if scope != 0 {
@@ -59,7 +59,7 @@ func TestLatchBootstrap_ZeroScopeIsAuthoritativelyNothingToDo(t *testing.T) {
 // absence; letting it latch would permanently mark bootstrap complete off a backend
 // fault.
 func TestLatchBootstrap_ObservationFailureNeverLatches(t *testing.T) {
-	c := &Component{}
+	c := withTestRegistry(t, &Component{})
 
 	scope, complete := c.latchBootstrap(0, true)
 	if complete {
@@ -81,7 +81,7 @@ func TestLatchBootstrap_ObservationFailureNeverLatches(t *testing.T) {
 // Ready. Ready carries "caught up right now" and must flicker with load; bootstrap
 // must NOT, or every consumer would defer during ordinary operation.
 func TestLatchBootstrap_DrainedIsALatchNotALiveRead(t *testing.T) {
-	c := &Component{}
+	c := withTestRegistry(t, &Component{})
 
 	c.latchBootstrap(10, false)
 	if _, complete := c.latchBootstrap(0, false); !complete {
@@ -99,7 +99,7 @@ func TestLatchBootstrap_DrainedIsALatchNotALiveRead(t *testing.T) {
 // ENTITY_STATES sweep draining is an INDEPENDENT fact from the stream backlog, and
 // both must hold.
 func TestLatchBootstrap_RequiresTheEntityStateSweep(t *testing.T) {
-	c := &Component{}
+	c := withTestRegistry(t, &Component{})
 	c.entityBootstrapStarted.Store(true) // a sweep is in progress
 
 	if _, complete := c.latchBootstrap(0, false); complete {
@@ -116,7 +116,7 @@ func TestLatchBootstrap_RequiresTheEntityStateSweep(t *testing.T) {
 // double-counting a consumer across a rebind, and keeps a degraded verdict naming the
 // same consumer run to run.
 func TestBoundConsumers_DedupedAndDeterministic(t *testing.T) {
-	c := &Component{}
+	c := withTestRegistry(t, &Component{})
 	c.registerBoundConsumer("SENSOR", "graph-ingest-sensor-all")
 	c.registerBoundConsumer("EVENTS", "graph-ingest-events-all")
 	c.registerBoundConsumer("SENSOR", "graph-ingest-sensor-all") // rebind
@@ -138,7 +138,7 @@ func TestOldestOutstandingAt_PresenceEncoding(t *testing.T) {
 	applied := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
 
 	t.Run("caught up reports no staleness", func(t *testing.T) {
-		c := &Component{}
+		c := withTestRegistry(t, &Component{})
 		c.recordApplied(applied)
 		if got := c.oldestOutstandingAt(0); !got.IsZero() {
 			t.Errorf("got %v, want zero — caught up has no staleness to report", got)
@@ -146,7 +146,7 @@ func TestOldestOutstandingAt_PresenceEncoding(t *testing.T) {
 	})
 
 	t.Run("backlog ages from the last applied message", func(t *testing.T) {
-		c := &Component{}
+		c := withTestRegistry(t, &Component{})
 		c.recordApplied(applied)
 		if got := c.oldestOutstandingAt(5); !got.Equal(applied) {
 			t.Errorf("got %v, want %v", got, applied)
@@ -154,14 +154,14 @@ func TestOldestOutstandingAt_PresenceEncoding(t *testing.T) {
 	})
 
 	t.Run("nothing applied yet reports absent, not fresh", func(t *testing.T) {
-		c := &Component{}
+		c := withTestRegistry(t, &Component{})
 		if got := c.oldestOutstandingAt(5); !got.IsZero() {
 			t.Errorf("got %v, want zero — an unknown age must not read as 0ms fresh", got)
 		}
 	})
 
 	t.Run("a zero delivery timestamp is not recorded", func(t *testing.T) {
-		c := &Component{}
+		c := withTestRegistry(t, &Component{})
 		c.recordApplied(time.Time{})
 		if got := c.oldestOutstandingAt(5); !got.IsZero() {
 			t.Errorf("got %v, want zero", got)
@@ -172,7 +172,7 @@ func TestOldestOutstandingAt_PresenceEncoding(t *testing.T) {
 // TestLastSyncedRFC3339 pins the operator field's encoding, including the empty
 // string before anything has been applied.
 func TestLastSyncedRFC3339(t *testing.T) {
-	c := &Component{}
+	c := withTestRegistry(t, &Component{})
 	if got := c.lastSyncedRFC3339(); got != "" {
 		t.Errorf("got %q, want empty before anything is applied", got)
 	}
@@ -192,7 +192,7 @@ func TestLastSyncedRFC3339(t *testing.T) {
 // publish `bootstrap_complete && bootstrap_scope == 0`: the contract's "authoritatively
 // nothing to replay", asserted over a real initial build.
 func TestLatchBootstrap_PartialBindCaptureIsDiscarded(t *testing.T) {
-	c := &Component{}
+	c := withTestRegistry(t, &Component{})
 
 	// Consumer A binds and reads 0. Consumer B's read FAILS.
 	c.bootBacklog.Add(0)
@@ -218,7 +218,7 @@ func TestLatchBootstrap_PartialBindCaptureIsDiscarded(t *testing.T) {
 // succeeded, the accumulated total is authoritative and the tick must NOT overwrite it
 // with a later, smaller observation (the backlog is draining by then).
 func TestLatchBootstrap_CompleteBindCaptureIsKept(t *testing.T) {
-	c := &Component{}
+	c := withTestRegistry(t, &Component{})
 
 	// Two consumers bound cleanly, 900 total at bind.
 	c.bootBacklog.Add(400)
@@ -235,7 +235,7 @@ func TestLatchBootstrap_CompleteBindCaptureIsKept(t *testing.T) {
 // TestLatchBootstrap_NoBindReadRanTakesTheFirstObservation covers the deployment where
 // the tick beats every bind read (or no consumer is bound yet).
 func TestLatchBootstrap_NoBindReadRanTakesTheFirstObservation(t *testing.T) {
-	c := &Component{}
+	c := withTestRegistry(t, &Component{})
 	if scope, _ := c.latchBootstrap(120, false); scope != 120 {
 		t.Errorf("scope = %d, want 120", scope)
 	}

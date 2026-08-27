@@ -255,16 +255,21 @@ func (e *HTTPRequestExecutor) emitObservation(ctx context.Context, call agentic.
 	fetchedAt := now.UTC().Format(time.RFC3339Nano)
 	contentType := resp.Header.Get("Content-Type")
 
-	observationTriples := []message.Triple{
-		{Subject: urlEntity, Predicate: agvocab.WebURL, Object: canon, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
-		{Subject: urlEntity, Predicate: agvocab.WebFetchedAt, Object: fetchedAt, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
-		{Subject: urlEntity, Predicate: agvocab.WebFetchedBy, Object: loopEntityID, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
-		{Subject: urlEntity, Predicate: agvocab.WebContentType, Object: contentType, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
-		{Subject: urlEntity, Predicate: agvocab.WebStatusCode, Object: resp.StatusCode, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
-		{Subject: urlEntity, Predicate: agvocab.WebText, Object: body, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
-		{Subject: urlEntity, Predicate: agvocab.WebTruncated, Object: truncated, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
+	// The registered observation entity is the one builder of its triples
+	// (ADR-103); Tool selects the http_request source and predicate set.
+	observation := &agentic.WebObservationEntity{
+		Org: e.platform.Org, Platform: e.platform.Platform, CanonicalURL: canon,
+		Tool: agentic.WebObservationToolHTTPRequest, LoopEntityID: loopEntityID,
+		FetchedAt: fetchedAt, ContentType: contentType, StatusCode: resp.StatusCode,
+		Text: body, Truncated: truncated,
 	}
-	if err := publishWebObservation(ctx, e.publisher, urlEntity, observationTriples); err != nil {
+	if err := observation.Validate(); err != nil {
+		webEmitFailuresTotal.WithLabelValues("http_request", "validate").Inc()
+		e.logger.Warn("http_request emission skipped: observation fails its contract",
+			"call_id", call.ID, "url", canon, "error", err)
+		return
+	}
+	if err := publishWebObservation(ctx, e.publisher, urlEntity, observation.Triples()); err != nil {
 		webEmitFailuresTotal.WithLabelValues("http_request", "publish").Inc()
 		e.logger.Warn("http_request observation emission failed",
 			"call_id", call.ID, "url", canon, "error", err)

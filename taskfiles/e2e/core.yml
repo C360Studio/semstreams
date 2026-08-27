@@ -2,7 +2,7 @@ version: "3"
 
 tasks:
   default:
-    desc: Run core E2E tests (health + dataflow + graph round-trip)
+    desc: Run core E2E tests (health + dataflow on the production binary; graph round-trip on the e2e-target binary)
     silent: false
     deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
     cmds:
@@ -76,7 +76,7 @@ tasks:
         done
         [ "$matched" = "true" ] || fail "heartbeat totals did not match runtime component health within 10s"
         echo "[OK] Readiness and heartbeat report $healthy/$total healthy components"
-      - echo "[E2E] Running core tests (health + dataflow + graph round-trip)..."
+      - echo "[E2E] Running core tests on the production binary (health + dataflow)..."
       - cd cmd/e2e && ./e2e --scenario all
       - |
         fail() {
@@ -198,6 +198,17 @@ tasks:
           fail_early_boot "services started after early SIGTERM"
         fi
         echo "[OK] Early SIGTERM canceled blocked NATS boot, exited 1, and fenced service startup"
+
+      # Phase 2 (ADR-103): the graph round-trip probe births a synthetic type
+      # (test.fixture.v1) that only cmd/e2e-semstreams registers, so after the
+      # production app's shutdown checks it runs against the e2e-target twin.
+      - echo "[E2E] Phase 2 - graph round-trip probe against the e2e-target binary..."
+      - docker compose -f docker/compose/e2e.yml down -v --timeout 15
+      - defer: docker compose -f docker/compose/e2e.yml --profile fixtures down -v --timeout 15
+      - docker compose -f docker/compose/e2e.yml --profile fixtures up -d --wait --build nats semstreams-fixtures
+      - echo "[OK] e2e-target services are healthy"
+      - cd cmd/e2e && ./e2e --scenario core-graph-roundtrip
+      - echo "[OK] graph round-trip probe passed against the e2e-target binary"
 
   debug:
     desc: Start E2E environment for debugging (leaves containers running)

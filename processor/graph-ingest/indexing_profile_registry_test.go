@@ -13,27 +13,48 @@ import (
 	"github.com/c360studio/semstreams/agentic/research"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/payloadregistry"
+	agenticdispatch "github.com/c360studio/semstreams/processor/agentic-dispatch"
 	"github.com/c360studio/semstreams/vocabulary"
 )
 
-// ADR-054 Phase 2: deriveIndexingProfileFloor consults a type-aware registry
-// (indexingProfileDefaults) instead of always returning control. The floor is
-// still LENIENT (no consumer acts on it); these tests lock the registry values
-// + the metric-on-miss semantics.
+// ADR-054 Phase 2 / ADR-103: the indexing-profile floor is an attribute
+// registered with the type (Registration.IndexingProfile), read through the
+// registry graph-ingest already holds. The floor is still LENIENT (no consumer
+// acts on it); these tests lock the registered values + the metric semantics —
+// every expectation the retired string-keyed table carried is kept.
+
+// floorTestRegistry holds the three registration sets whose floors the
+// retired table enumerated: agentic (15 + the mutation-lane types), the
+// dispatch signal message, and graph research.
+func floorTestRegistry(t *testing.T) *payloadregistry.Registry {
+	t.Helper()
+	return payloadregistry.NewWithSubset(t, agentic.RegisterPayloads, research.RegisterPayloads, agenticdispatch.RegisterPayloads)
+}
+
+// floorTestComponent is a Component holding only the floor registry, for the
+// registeredIndexingProfile helper.
+func floorTestComponent(t *testing.T) *Component {
+	t.Helper()
+	return &Component{payloadRegistry: floorTestRegistry(t)}
+}
 
 func TestIndexingProfileRegistry_AllValuesValid(t *testing.T) {
-	require.NotEmpty(t, indexingProfileDefaults, "registry seed must not be empty")
-	for key, value := range indexingProfileDefaults {
-		assert.True(t, vocabulary.IsValidIndexingProfile(value),
-			"registry value for %q must be a valid indexing profile, got %q", key, value)
+	reg := floorTestRegistry(t)
+	listed := reg.List()
+	require.NotEmpty(t, listed, "registry must not be empty")
+	for key, registration := range listed {
+		assert.True(t, registration.IndexingProfile == "" || vocabulary.IsValidIndexingProfile(registration.IndexingProfile),
+			"registered floor for %q must be empty or a valid indexing profile, got %q", key, registration.IndexingProfile)
 	}
 }
 
 func TestIndexingProfileFloorFor(t *testing.T) {
+	c := floorTestComponent(t)
 	cases := []struct {
-		mt         message.Type
-		want       string
-		registered bool
+		mt      message.Type
+		want    string
+		floored bool
 	}{
 		{message.Type{Domain: "agentic", Category: "request", Version: "v1"}, vocabulary.IndexingProfileTrace, true},
 		{message.Type{Domain: "agentic", Category: "tool_result", Version: "v1"}, vocabulary.IndexingProfileTrace, true},
@@ -41,27 +62,29 @@ func TestIndexingProfileFloorFor(t *testing.T) {
 		{message.Type{Domain: "agentic", Category: "loop_completed", Version: "v1"}, vocabulary.IndexingProfileControl, true},
 		{message.Type{Domain: "agentic", Category: "signal", Version: "v1"}, vocabulary.IndexingProfileSignal, true},
 		{message.Type{Domain: "research", Category: "result", Version: "v1"}, vocabulary.IndexingProfileContent, true},
-		// Misses fall to the control floor (fail-safe) and report registered=false.
+		// A type the registry does not hold falls to the control floor (fail-safe)
+		// and reports floored=false; the create seams refuse it before this runs.
 		{message.Type{Domain: "unknown", Category: "thing", Version: "v1"}, vocabulary.IndexingProfileControl, false},
 		{message.Type{}, vocabulary.IndexingProfileControl, false},
 	}
 	for _, tc := range cases {
-		profile, registered := indexingProfileFloorFor(tc.mt)
+		profile, floored := c.registeredIndexingProfile(tc.mt)
 		assert.Equal(t, tc.want, profile, "profile for %q", tc.mt.Key())
-		assert.Equal(t, tc.registered, registered, "registered for %q", tc.mt.Key())
+		assert.Equal(t, tc.floored, floored, "floored for %q", tc.mt.Key())
 	}
+
+	t.Run("a component without a registry answers control and unfloored", func(t *testing.T) {
+		profile, floored := (&Component{}).registeredIndexingProfile(message.Type{Domain: "agentic", Category: "request", Version: "v1"})
+		assert.Equal(t, vocabulary.IndexingProfileControl, profile)
+		assert.False(t, floored)
+	})
 }
 
-// TestIndexingProfileRegistry_KeysTrackDomainVersionConstants is the
-// version-drift guard for the string-keyed registry. The production registry
-// can't import the domain packages (that would couple the generic graph-ingest
-// layer to agentic/research/operating-model), but this TEST can — so it rebuilds
-// canonical keys from the domain Domain/Category/SchemaVersion constants and
-// asserts the registry contains them. If a domain bumps SchemaVersion (v1→v2)
-// without updating the registry, the rebuilt key won't be found and this fails
-// at CI time — catching the silent control-default drift the metric would
-// otherwise only surface in production.
+// TestIndexingProfileRegistry_KeysTrackDomainVersionConstants keeps the
+// registered floors pinned to the domain constants: every key the retired
+// table carried is registered with the same value.
 func TestIndexingProfileRegistry_KeysTrackDomainVersionConstants(t *testing.T) {
+	reg := floorTestRegistry(t)
 	key := func(domain, category, version string) string {
 		return message.Type{Domain: domain, Category: category, Version: version}.Key()
 	}
@@ -69,18 +92,34 @@ func TestIndexingProfileRegistry_KeysTrackDomainVersionConstants(t *testing.T) {
 		key  string
 		want string
 	}{
-		{key(agentic.Domain, agentic.CategoryRequest, agentic.SchemaVersion), vocabulary.IndexingProfileTrace},
-		{key(agentic.Domain, agentic.CategoryToolResult, agentic.SchemaVersion), vocabulary.IndexingProfileTrace},
 		{key(agentic.Domain, agentic.CategoryUserMessage, agentic.SchemaVersion), vocabulary.IndexingProfileContent},
-		{key(agentic.Domain, agentic.CategoryLoopCompleted, agentic.SchemaVersion), vocabulary.IndexingProfileControl},
-		{key(agentic.Domain, agentic.CategorySignal, agentic.SchemaVersion), vocabulary.IndexingProfileSignal},
+		{key(agentic.Domain, agentic.CategoryUserResponse, agentic.SchemaVersion), vocabulary.IndexingProfileContent},
 		{key(research.Domain, research.CategoryResult, research.SchemaVersion), vocabulary.IndexingProfileContent},
+		{key(agentic.Domain, agentic.CategoryTask, agentic.SchemaVersion), vocabulary.IndexingProfileControl},
+		{key(agentic.Domain, agentic.CategoryLoopCreated, agentic.SchemaVersion), vocabulary.IndexingProfileControl},
+		{key(agentic.Domain, agentic.CategoryLoopCompleted, agentic.SchemaVersion), vocabulary.IndexingProfileControl},
+		{key(agentic.Domain, agentic.CategoryLoopFailed, agentic.SchemaVersion), vocabulary.IndexingProfileControl},
+		{key(agentic.Domain, agentic.CategoryLoopCancelled, agentic.SchemaVersion), vocabulary.IndexingProfileControl},
+		{key(agentic.Domain, agentic.CategoryApprovalPending, agentic.SchemaVersion), vocabulary.IndexingProfileControl},
+		{key(agentic.Domain, agentic.CategoryApprovalResponse, agentic.SchemaVersion), vocabulary.IndexingProfileControl},
+		{key(research.Domain, research.CategoryIntent, research.SchemaVersion), vocabulary.IndexingProfileControl},
+		{key(agentic.Domain, agentic.CategorySignal, agentic.SchemaVersion), vocabulary.IndexingProfileSignal},
+		{key(agentic.Domain, agentic.CategorySignalMessage, agentic.SchemaVersion), vocabulary.IndexingProfileSignal},
+		{key(agentic.Domain, agentic.CategoryRequest, agentic.SchemaVersion), vocabulary.IndexingProfileTrace},
+		{key(agentic.Domain, agentic.CategoryResponse, agentic.SchemaVersion), vocabulary.IndexingProfileTrace},
+		{key(agentic.Domain, agentic.CategoryToolCall, agentic.SchemaVersion), vocabulary.IndexingProfileTrace},
+		{key(agentic.Domain, agentic.CategoryToolResult, agentic.SchemaVersion), vocabulary.IndexingProfileTrace},
+		{key(agentic.Domain, agentic.CategoryContextEvent, agentic.SchemaVersion), vocabulary.IndexingProfileTrace},
 		{key(research.Domain, research.CategoryRouteDecision, research.SchemaVersion), vocabulary.IndexingProfileTrace},
+		{key(research.Domain, research.CategoryClassifierOutput, research.SchemaVersion), vocabulary.IndexingProfileTrace},
+		{key(research.Domain, research.CategoryExecutionOutput, research.SchemaVersion), vocabulary.IndexingProfileTrace},
+		{key(research.Domain, research.CategoryAssessmentOutput, research.SchemaVersion), vocabulary.IndexingProfileTrace},
 	}
+	require.Len(t, cases, 22, "the retired table carried 22 keys")
 	for _, tc := range cases {
-		got, ok := indexingProfileDefaults[tc.key]
-		assert.True(t, ok, "registry must contain key %q (rebuilt from domain constants — drift if missing)", tc.key)
-		assert.Equal(t, tc.want, got, "profile for %q", tc.key)
+		got, registered := reg.IndexingProfileFor(tc.key)
+		assert.True(t, registered, "registry must hold %q (rebuilt from domain constants — drift if missing)", tc.key)
+		assert.Equal(t, tc.want, got, "floor for %q", tc.key)
 	}
 }
 
@@ -120,8 +159,8 @@ func TestIndexingProfile_Append_DoesNotStamp(t *testing.T) {
 		"the entity holds exactly one additional user triple after append")
 }
 
-// End-to-end through the production create handler: a REGISTERED type floors to
-// its registry profile (here trace, not the old always-control) and, because a
+// End-to-end through the production create handler: a type with a REGISTERED
+// floor takes it (here trace, not the old always-control) and, because a
 // registered floor is a deliberate classification rather than an operator gap,
 // the default-fallback metric must NOT fire.
 func TestIndexingProfile_RegistryFloor_RegisteredTypeNoMetric(t *testing.T) {
@@ -140,22 +179,23 @@ func TestIndexingProfile_RegistryFloor_RegisteredTypeNoMetric(t *testing.T) {
 
 	es := storedEntity(t, comp, id)
 	assert.Equal(t, []string{vocabulary.IndexingProfileTrace}, profileValues(es),
-		"a registered type must floor to its registry profile (trace), not the old always-control")
+		"a type with a registered floor must take it (trace), not the old always-control")
 	assert.InDelta(t, before, testutil.ToFloat64(counter), 0.0001,
-		"a registered floor is NOT a registry gap → the default metric must NOT fire")
+		"a registered floor is NOT a gap → the default metric must NOT fire")
 }
 
-// The complement: an UNREGISTERED type floors to control AND fires the gap
-// metric (the ADR §5 "registry gap is visible" signal).
-func TestIndexingProfile_RegistryFloor_UnregisteredFiresMetric(t *testing.T) {
+// The complement: a REGISTERED type that declares no floor falls to control AND
+// fires the metric — its new meaning under ADR-103: the label names a
+// Registration literal whose IndexingProfile is empty.
+func TestIndexingProfile_RegistryFloor_RegisteredNoFloorFiresMetric(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	ctx := context.Background()
 
-	mt := message.Type{Domain: "gapdomain", Category: "gapcat", Version: "v1"}
+	mt := message.Type{Domain: "test", Category: "nofloor", Version: "v1"}
 	counter := getIndexingProfileDefaultMetric(nil).WithLabelValues(mt.Key())
 	before := testutil.ToFloat64(counter)
 
-	const id = "c360.platform.gapdomain.sys.gapcat.001"
+	const id = "c360.platform.test.sys.nofloor.001"
 	req := graph.CreateEntityRequest{Entity: &graph.EntityState{ID: id, MessageType: mt}}
 	data, _ := json.Marshal(req)
 	_, err := comp.handleCanonicalCreate(ctx, data)
@@ -163,7 +203,7 @@ func TestIndexingProfile_RegistryFloor_UnregisteredFiresMetric(t *testing.T) {
 
 	es := storedEntity(t, comp, id)
 	assert.Equal(t, []string{vocabulary.IndexingProfileControl}, profileValues(es),
-		"an unregistered type floors to control (fail-safe)")
+		"a registered type with no floor falls to control (fail-safe)")
 	assert.InDelta(t, before+1, testutil.ToFloat64(counter), 0.0001,
-		"an unregistered floor IS a gap → the default metric must fire exactly once")
+		"a registered type with no floor IS the metered gap → the default metric must fire exactly once")
 }

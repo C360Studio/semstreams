@@ -17,7 +17,22 @@ key). Reads, `entity.reconcile`, `triple.append`, `entity.delete`, and entities 
 of an unknown type are refused. `projection.Contract` literals keep compiling (the contract types move to
 `pkg/projection/contract` with aliases). A product that creates through `pkg/projection.MutationClient.Create` may omit
 `entity.MessageType`: the client fills it from the bound contract (owner ruling O-17); a non-empty stamp that conflicts with
-the contract is rejected. Full mechanics: `openspec/specs/payload-registry/spec.md`, `openspec/specs/graph-ingest/spec.md`.
+the contract is rejected. `projection.Contract.MessageType` is now the structured `message.Type` — on the wire
+`{"domain":…,"category":…,"version":…}`, the same shape `EntityState.message_type` has — so a dotted-string literal
+(`MessageType: "semmachina.campaign_entity.v1"` or `agentic.LoopExecutionMessageType().Key()`) no longer compiles and a
+rule pack's `"message_type": "…"` no longer loads: write `MessageType: YourMessageType()` (the `message.Type` builder every
+product already has) and `"message_type": {"domain": …, "category": …, "version": …}`. `Register` refuses a domain,
+category, or version containing `.`. Registered framework entity types now validate their writer's full contract at
+publication (`Validate()` gates `BaseMessage.MarshalJSON`). Two boot-time consequences for a composition root that builds its own graph-ingest: the
+graph-ingest factory refuses to construct without a payload registry (`Dependencies.PayloadRegistry`), and with
+`enable_hierarchy: true` it refuses to construct unless that registry holds `graph.hierarchy_container.v1` — both are
+registered by `payloadbuiltins.Register`, so a root that calls it (semmachina, semdev do) sees no change. Full mechanics:
+`openspec/specs/payload-registry/spec.md`, `openspec/specs/graph-ingest/spec.md`.
+
+Two exported constants are removed: `agentic.LessonPolarityAvoid` and `agentic.LessonPolarityBestPractice` (the lesson
+polarity vocabulary is now unexported, matching the sibling severity and status vocabularies; a producer writes the
+literal `"avoid"` / `"best_practice"`, and `Validate`'s error names both values). No adopter impact, verified: a grep
+across all nine sister repositories found zero references.
 
 ### The one obligation
 
@@ -59,7 +74,8 @@ through `message.NewDecoder(reg)`, assert the concrete type, `EntityID()`, and t
   carrying the fields your triple builders read); floors: `campaign_entity` and `turn_state` `control` (machinery),
   `knowledge_grant_entity` and `revelation_receipt_entity` `content` if their text is retrieval-worthy, else `control`;
   contracts: the seven birth contracts in `internal/projectioncontract/contracts.go:77-109` bound to their types (a contract's
-  `MessageType` may be left empty — `Register` fills it). Invert the "deliberately unregistered" tests
+  `MessageType` may be left zero — `Register` fills it; where set, it is now `message.Type{…}`, not the dotted string at
+  `contracts.go:106-109`). Invert the "deliberately unregistered" tests
   (`submitaction_test.go:364` and any sibling) — the rationale they pin is the one ADR-103 retires.
 - **Verification:** four round-trip tests; `TestCategoryCampaignEntity_*` and friends assert registration instead of its absence.
 
@@ -73,13 +89,18 @@ through `message.NewDecoder(reg)`, assert the concrete type, `EntityID()`, and t
 - **Day one:** intake records and standards sources are rejected at birth; lessons and lifecycle births keep working.
 - **Obligation:** a `RegisterPayloads` in `internal/intake` and `internal/standards` (or one in `internal/graphown`) called from
   `runtime.go:624` after the builtins; floors: `intake_event` `control`, `standards_source` `content`; contracts: the graphown
-  contracts for those two (`internal/graphown/contracts.go`) bound to the types.
+  contracts for those two (`internal/graphown/contracts.go`) bound to the types. The structured contract type also breaks
+  compilation where a contract literal sets a dotted string: `internal/graphown/contracts.go:444` and
+  `test/conformance/standards_contracts_test.go:102-103` — use the `message.Type` builder instead of `.Key()`.
 - **Verification:** two round-trip tests; `graphown.Creator.Create` against beta.163 returns `applied`.
 
 ### semconnect — pinned `d0d06e0`
 
 - **Types stamped (11):** `c360.csapi-{system,datastream,procedure,deployment,sampling-feature,property,control-stream,command,system-event,feasibility,schema-artifact}.v1`
-  (`gateway/cs-api/projection_contracts.go:29-39`), stamped at `gateway/cs-api/graph_mutations.go:159`. semconnect holds **no
+  (`gateway/cs-api/projection_contracts.go:29-39` — those vars are already structured `message.Type`s and are fine; the
+  compile breaks are the contract literals that flatten them, `projection_contracts.go:45,60` and
+  `projection_contracts_test.go:26` — carry the `message.Type` value instead of `.Key()`), stamped at
+  `gateway/cs-api/graph_mutations.go:159`. semconnect holds **no
   registry**: `cmd/cs-api-server` calls neither `payloadbuiltins.Register` nor `payloadregistry.New`; its one registration
   (`message/oms/register.go:16-22`, OMS observation) is exported for a host. The 11 stamps reach the **host's** graph-ingest.
 - **Day one:** every CS-API resource birth is rejected by the host's graph-ingest.
@@ -88,6 +109,14 @@ through `message.NewDecoder(reg)`, assert the concrete type, `EntityID()`, and t
   type), and have the **host composition root** call it after `payloadbuiltins.Register`. `message/oms.RegisterPayloads` is the
   in-tree model for the shape.
 - **Verification:** round-trip tests in `gateway/cs-api`; one host-side boot that registers both and creates a system resource.
+- **Ruled (#1114, 2026-08-27, option (a)):** semconnect builds its own composition root — the pattern semmachina
+  (`cmd/semmachina/main.go:98-99`), semdev (`internal/boot/runtime.go:623-624`), semteams (`cmd/semteams/main.go:872-873`)
+  and semsource (`cmd/semsource/run.go:279-280`) already follow: a `cmd/<binary>/main.go` that builds
+  `payloadregistry.New()`, calls `payloadbuiltins.Register(reg)`, then `csapi.RegisterPayloads(reg)` (the export above),
+  injects `reg` through `component.Dependencies.PayloadRegistry`, and hosts graph-ingest itself. The framework binary gains
+  no registration seam; the unmodified `cmd/semstreams` image in `semconnect/deploy/compose.yml:19-49` and
+  `conformance/compose.yml:55-73` cannot host CS-API births after this tag. Sisters stay read-only: this is the
+  instruction, not a change made for semconnect.
 
 ### semteams — pinned `8a70b7e7`
 
@@ -96,7 +125,8 @@ through `message.NewDecoder(reg)`, assert the concrete type, `EntityID()`, and t
   (`cmd/semteams/flowtemplates/loader.go:200`) carry `lifecycle.harness.v1` — registered by `payloadbuiltins.Register`. Own
   registered types: `research/artifact.go:253`, `devviaspec/plan.go:148`, `semsource/payload.go:39-69`.
 - **Day one:** nothing is rejected.
-- **Obligation:** none at ingest. Recommended: replace the two re-declared contracts with `agentic.LoopExecutionContract()` and
+- **Obligation:** the two re-declared contracts set `MessageType` from `.Key()` (`cmd/semteams/main.go:971,998`), which no
+  longer compiles against the structured field — replace them with `agentic.LoopExecutionContract()` and
   `agentic.LessonContract()` (the contracts now live beside their types; `openspec/specs/agentic-lessons/spec.md` "External
   lesson composition uses the framework-owned contract snapshot").
 - **Verification:** boot; the loop-execution and lesson contracts validate unchanged.
@@ -118,7 +148,9 @@ strings (`entity/types.go:187-365`, `processor/{spec,docs,decision}/processor.go
 ### Not affected
 
 - **semsource** (`4093d3c`): births on the fact lane as the registered `semsource.entity.v1` (`graph/event_payload.go:22-31`);
-  mutation-lane use is `Reconcile` only (`processor/supersession/lifecycle.go:303,325`). Nothing to do.
+  mutation-lane use is `Reconcile` only (`processor/supersession/lifecycle.go:303,325`) — no registration obligation.
+  ONE compile fix from the structured contract type: `graph/contract.go:71` sets `MessageType: EntityType.Key()` in a
+  `projection.Contract` literal; write `MessageType: EntityType` (it is already a `message.Type`).
 - **semdragon** (`07f4de9`, pinned to beta.135): writes through the pre-ADR-091 subject and directly to KV
   (`questdag/unit.go:673`, `graphclient.go:79-95`); already off the current mutation surface. `questdag.unit.v1` and the dynamic
   `semdragons.<event>.v1` keys become obligations only if it returns to the typed mutation API.

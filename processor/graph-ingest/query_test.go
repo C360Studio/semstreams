@@ -71,10 +71,11 @@ func TestComponent_HandleQuerySuffix_Success(t *testing.T) {
 			// Store entities in KV bucket
 			for _, id := range tt.storedIDs {
 				entity := &graph.EntityState{
-					ID:        id,
-					Triples:   []message.Triple{},
-					Version:   1,
-					UpdatedAt: time.Now(),
+					ID:          id,
+					MessageType: testEntityType(),
+					Triples:     []message.Triple{},
+					Version:     1,
+					UpdatedAt:   time.Now(),
 				}
 				require.NoError(t, comp.CreateEntity(ctx, entity))
 			}
@@ -111,10 +112,11 @@ func TestComponent_HandleQuerySuffix_NoMatch(t *testing.T) {
 	}
 	for _, id := range entities {
 		entity := &graph.EntityState{
-			ID:        id,
-			Triples:   []message.Triple{},
-			Version:   1,
-			UpdatedAt: time.Now(),
+			ID:          id,
+			MessageType: testEntityType(),
+			Triples:     []message.Triple{},
+			Version:     1,
+			UpdatedAt:   time.Now(),
 		}
 		require.NoError(t, comp.CreateEntity(ctx, entity))
 	}
@@ -191,10 +193,11 @@ func TestComponent_HandleQuerySuffix_PartialSuffixNoMatch(t *testing.T) {
 
 	// Store entity
 	entity := &graph.EntityState{
-		ID:        "c360.logistics.environmental.sensor.temperature.temp-sensor-001",
-		Triples:   []message.Triple{},
-		Version:   1,
-		UpdatedAt: time.Now(),
+		ID:          "c360.logistics.environmental.sensor.temperature.temp-sensor-001",
+		MessageType: testEntityType(),
+		Triples:     []message.Triple{},
+		Version:     1,
+		UpdatedAt:   time.Now(),
 	}
 	require.NoError(t, comp.CreateEntity(ctx, entity))
 
@@ -295,7 +298,8 @@ func TestComponent_HandleQueryPrefix_Success(t *testing.T) {
 			// Store entities
 			for _, id := range tt.storedIDs {
 				entity := &graph.EntityState{
-					ID: id,
+					ID:          id,
+					MessageType: testEntityType(),
 					Triples: []message.Triple{
 						{
 							Subject:   id,
@@ -354,7 +358,8 @@ func TestComponent_HandleQueryPrefix_ReturnsFullEntities(t *testing.T) {
 
 	// Create entity with triples
 	entity := &graph.EntityState{
-		ID: "c360.platform.robotics.mav1.drone.001",
+		ID:          "c360.platform.robotics.mav1.drone.001",
+		MessageType: testEntityType(),
 		Triples: []message.Triple{
 			{
 				Subject:   "c360.platform.robotics.mav1.drone.001",
@@ -421,10 +426,11 @@ func TestComponent_HandleQueryPrefix_NoMatches(t *testing.T) {
 
 	// Store some entities
 	entity := &graph.EntityState{
-		ID:        "c360.platform.robotics.mav1.drone.001",
-		Triples:   []message.Triple{},
-		Version:   1,
-		UpdatedAt: time.Now(),
+		ID:          "c360.platform.robotics.mav1.drone.001",
+		MessageType: testEntityType(),
+		Triples:     []message.Triple{},
+		Version:     1,
+		UpdatedAt:   time.Now(),
 	}
 	require.NoError(t, comp.CreateEntity(ctx, entity))
 
