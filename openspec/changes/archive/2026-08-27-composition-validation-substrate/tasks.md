@@ -575,7 +575,9 @@ before the omission, and record `shasum -a 256` equality of the restored file.
       FINDING RAISED AND FIXED BY THIS RECONCILIATION (details in `conformance.md`): the `component-runtime-config`
       MODIFIED block carried 2 of the requirement's 9 scenarios. A MODIFIED requirement replaces the whole
       requirement — the `2026-08-08-foundation-b-port-language` archive restates all 9, which is why the current spec
-      has 9 — so archiving as written would have deleted seven scenarios of permanent current truth. All seven were
+      has 9 — so archiving as written would have been REFUSED by openspec 1.7.0 for seven scenarios of permanent current
+      truth (the archiver rejects a MODIFIED block that omits or renames a current scenario; corrected by the narrow
+      archive check — a silent drop is reachable only via `--skip-specs` or a hand sync). All seven were
       restored verbatim from `openspec/specs/component-runtime-config/spec.md` before the archive; header sets and
       order now match exactly and the block's only difference from current truth is the intended `external` grammar.
       The one `[~]` in this file (3.1a) is written into the delta under the P1 requirement.

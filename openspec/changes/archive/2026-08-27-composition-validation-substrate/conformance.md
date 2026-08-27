@@ -87,10 +87,29 @@ exact commands and results are `tasks.md` 7.4.
 `component-runtime-config` carried only 2 of the requirement's 9 scenarios. An OpenSpec MODIFIED requirement REPLACES
 the whole requirement, scenarios included — the archived precedent
 `openspec/changes/archive/2026-08-08-foundation-b-port-language/specs/component-runtime-config/spec.md` restates all 9,
-which is exactly why `openspec/specs/component-runtime-config/spec.md` has 9 today. Archiving as written would have
-silently deleted seven scenarios of permanent current truth: "Named merge is complete replacement", "Invalid named
+which is exactly why `openspec/specs/component-runtime-config/spec.md` has 9 today. (Correction from the narrow archive
+check: openspec 1.7.0 REFUSES a MODIFIED block that omits or renames a current scenario — `specs-apply.js:285-288`,
+verified on a scratch copy of the 2-of-9 state: `Aborted. No files were changed.`, exit 1 — so the restoration was
+required for the archive to run, not to prevent a silent drop; a silent drop is reachable only via `--skip-specs` or
+a hand sync.) Archiving as written would have been refused for seven scenarios of permanent current truth: "Named merge is complete replacement", "Invalid named
 merge is rejected", "JetStream fields survive canonical round-trip", "Subject-only JetStream input is rejected",
 "JetStream input without subjects is rejected", "Subject-only JetStream output remains valid", and "Retired
 agentic-model stream default is absent". All seven were restored verbatim from the current spec before archiving; the
 header sets and their order are now identical, and the block's only remaining difference from current truth is the
 intended `external` grammar.
+
+## Archive / spec-sync check — `semstreams-reviewer` (Fable) at `671a92d7`: ARCHIVE OK
+
+Scope: `3ad2f008` (restoration) + `671a92d7` (archive). `3ad2f008` judged a pure restoration (3 files under `openspec/`; delta
+diff = 50 appended lines, 0 removed; each restored scenario byte-identical to main's spec) — no re-entry to full review.
+`component-runtime-config` header sets 47/47, diff empty, dupes 0; body change = the `external` grammar paragraph, the
+scenario-1 marker clause, one archiver-added trailing blank line. `composition-validation` synced spec == archived delta
+(8 requirements, 26 scenarios, real Purpose, both `[~]` blocks present). Archive dir carries proposal/tasks/conformance +
+both deltas (no design.md ever existed; the design is `docs/proposals/gh1089-flow-boundary-design.md`);
+`flow-authoring-retirement` untouched and open; `openspec validate --all --strict` 55/55; no ticked task asserts a
+post-merge fact; 7.1/7.2/7.4 records match the PR comments verbatim. 7.4 spot-check 6/35 rows: every named test exists
+and asserts its scenario's THEN; focused unit + integration commands re-run green. Findings: MEDIUM — the "silently
+deleted" mechanism claim (corrected above); NIT — 7.5 mixed wording (disclosed as NOT DONE at the time); NIT — archiver
+trailing blank line; NIT — `ports_merge_test.go` exercises the kind-specific-fields AND clause through a common field
+(pre-existing test and scenario). Observation: `assertPortsEqual` in the registry parity test does not compare
+`External`; the marker's parity is covered by `component/registry_test.go:302`.
