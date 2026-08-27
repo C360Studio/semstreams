@@ -72,6 +72,7 @@ func TestTaxonomyAcrossSourcesIsPatternNotPrefix(t *testing.T) {
 	t.Parallel()
 
 	require.NoError(t, ValidateEntityIDPattern("acme.dep1.*.git.*.*"))
+	// entity-id-audit:classify intentional-malformed "acme.dep1.*.git" line=76 column=32 surface=go-call:ValidateEntityIDPrefix entity_id_prefix_invalid:first_byte a taxonomy across sources is not expressible as a prefix
 	err := ValidateEntityIDPrefix("acme.dep1.*.git")
 	require.Error(t, err)
 	var classified *errs.ClassifiedError

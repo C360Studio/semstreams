@@ -245,7 +245,7 @@ func (s *Scenario) verifyDurableToolReplay(ctx context.Context, result *scenario
 		LoopID:  fmt.Sprintf("e2e-durable-loop-%d", time.Now().UnixNano()),
 		TraceID: fmt.Sprintf("e2e-durable-trace-%d", time.Now().UnixNano()),
 		Arguments: map[string]any{
-			"entity_id": "c360.agentic.sensor.temperature.temp-sensor-001",
+			"entity_id": "c360.agentic.sensor.environmental.temperature.temp-sensor-001",
 		},
 	}
 	request := message.NewBaseMessage(call.Schema(), &call, "e2e-durable-replay")
