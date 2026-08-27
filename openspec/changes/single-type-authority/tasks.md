@@ -403,8 +403,8 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       `go test -race -count=1 ./...` → 154 ok, 0 FAIL (after the census fixture and annotation re-pins in `17324b94`);
       per-package `go test -race -tags=integration -count=1 -p 2`: graph-ingest `ok 27.815s`, agentic-tools `ok 57.566s`,
       executors `ok 4.445s`, runner `ok 1.278s`, agentic-loop `ok 28.110s`, graph-index `ok 38.526s`, rule `ok 40.023s`,
-      gated-dag `ok 7.968s`, lifecycle `ok 4.605s`; full `go test -race -tags=integration -count=1 -p 2 ./...` — see the
-      appended line below; `task schema:generate` → "OpenAPI generation complete", `git diff --exit-code schemas/ specs/openapi.v3.yaml`
+      gated-dag `ok 7.968s`, lifecycle `ok 4.605s`; full `go test -race -tags=integration -count=1 -p 2 ./...` (21:13:06Z–21:22:16Z, background, log in the session
+      scratchpad) → exit 0, 0 `FAIL` lines, 0 panics; `task schema:generate` → "OpenAPI generation complete", `git diff --exit-code schemas/ specs/openapi.v3.yaml`
       → empty; `go test ./test/contract/...` → ok; `grep NewNATSLessonCurator` → 0; `grep builtinprojection --include='*.go'` → 1
       (assertion message in `payloadbuiltins/single_type_authority_test.go` naming the retired set); `go vet -tags=integration ./...`
       → clean; `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...` → ok; `git diff --stat go.sum` → empty;
@@ -419,8 +419,10 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       `entity message_type "test.fixture.v1" is not registered in this deployment's payload registry`; `task e2e:lessons`
       21:10:42Z–21:11:10Z → FAIL: `create evidence fixture: … "test.fixture.v1" is not registered in this deployment's payload registry`;
       `go test -race -tags=integration -count=1 -run TestWebObservationBirthIsRegistered ./processor/agentic-tools/executors/` → ok.
-      Not run: `e2e:ops`, `e2e:lifecycle` (e2e target; expected green), `e2e:crud-tools`, `e2e:research-graph` (production target;
-      expected to fail on the same premise). `[~]`: the union cannot be green until the owner rules the tier-to-binary
+      `task e2e:lifecycle` 2026-08-27 11:07:24Z–11:07:48Z → "Scenario completed successfully" (e2e binary; harness births carry
+      `lifecycle.harness.v1` through the real stack); `task e2e:ops` 11:08:00Z–11:08:22Z → "Scenario completed successfully"
+      (e2e binary; diagnosis births, lesson birth + promotion, the O-9 seed key). Not run: `e2e:crud-tools`, `e2e:research-graph`
+      (production target; expected to fail on the same premise as core and lessons). `[~]`: the union cannot be green until the owner rules the tier-to-binary
       premise recorded under 6.1; the candidate-proof rows are the TAG gate's, not this PR's.
 - [x] 7.4 Fill `conformance.md` Implementation and Test columns with `file:line` at the head that carries the last change to
       any `.go` file or spec delta on the branch; an empty cell at review time is a deviation to record.
