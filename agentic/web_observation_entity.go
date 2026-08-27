@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -128,16 +129,43 @@ func (e *WebObservationEntity) Schema() message.Type {
 	return WebObservationMessageType()
 }
 
-// Validate implements message.Payload: the tool must be known and the
-// identity fields must form a well-formed observation entity ID.
+// Validate implements message.Payload and IS the observation writers'
+// contract: a known tool, identity (a canonicalisable URL), a well-formed
+// observing-loop entity ID, and the tool's own facts — http_request records
+// an RFC 3339 fetch time and a status the executor would have emitted (it
+// never emits 4xx/5xx: "we observed this URL's content" is not that
+// observation); web_search records an RFC 3339 observation time and the
+// query that produced the hit. BaseMessage.MarshalJSON refuses a payload
+// that fails it; both executors delegate here before publishing.
 func (e *WebObservationEntity) Validate() error {
 	switch e.Tool {
 	case WebObservationToolHTTPRequest, WebObservationToolWebSearch:
 	default:
 		return fmt.Errorf("web observation tool %q is not http_request or web_search", e.Tool)
 	}
-	_, _, err := TryWebObservationEntityID(e.Org, e.Platform, e.CanonicalURL)
-	return err
+	if _, _, err := TryWebObservationEntityID(e.Org, e.Platform, e.CanonicalURL); err != nil {
+		return err
+	}
+	if !message.IsValidEntityID(e.LoopEntityID) {
+		return fmt.Errorf("loop_entity_id %q is not a well-formed 6-part entity ID (the observing loop)", e.LoopEntityID)
+	}
+	switch e.Tool {
+	case WebObservationToolHTTPRequest:
+		if _, err := time.Parse(time.RFC3339Nano, e.FetchedAt); err != nil {
+			return fmt.Errorf("fetched_at %q is not an RFC 3339 timestamp: %w", e.FetchedAt, err)
+		}
+		if e.StatusCode < 100 || e.StatusCode >= 400 {
+			return fmt.Errorf("status_code %d is outside the observed range 100-399 (http_request does not emit 4xx/5xx)", e.StatusCode)
+		}
+	case WebObservationToolWebSearch:
+		if _, err := time.Parse(time.RFC3339Nano, e.ObservedAt); err != nil {
+			return fmt.Errorf("observed_at %q is not an RFC 3339 timestamp: %w", e.ObservedAt, err)
+		}
+		if e.SourceQuery == "" {
+			return errors.New("source_query is required for a web_search observation")
+		}
+	}
+	return nil
 }
 
 // MarshalJSON implements json.Marshaler with the alias idiom.

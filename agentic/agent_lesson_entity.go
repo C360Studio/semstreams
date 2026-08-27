@@ -2,7 +2,9 @@ package agentic
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/message"
@@ -25,6 +27,141 @@ const CategoryAgentLesson = "agent_lesson"
 // value the ops agent's emit_lesson tool has always stamped, so operators can
 // distinguish lesson triples from other emitters at a glance.
 const lessonSource = "ops-emit-lesson"
+
+// The lesson writer's contract (ADR-080 decision 3), owned by the payload
+// since registration made it publishable: these are the closed sets and
+// bounds AgentLessonEntity.Validate enforces and the emit_lesson tool
+// delegates to.
+const (
+	// LessonPolarityAvoid and LessonPolarityBestPractice are the closed polarity
+	// set. Polarity is meaning-bearing (it inverts the lesson's guidance), so an
+	// invalid value is rejected — never clamped.
+	LessonPolarityAvoid        = "avoid"
+	LessonPolarityBestPractice = "best_practice"
+
+	// Lesson severities order brief injection only; note "warning" (not the
+	// ops.diagnosis family's "warn").
+	lessonSeverityInfo     = "info"
+	lessonSeverityWarning  = "warning"
+	lessonSeverityCritical = "critical"
+
+	// Lesson lifecycle statuses: born proposed; promotion, retirement, and
+	// supersession are the curator's transitions.
+	lessonStatusProposed   = "proposed"
+	lessonStatusActive     = "active"
+	lessonStatusRetired    = "retired"
+	lessonStatusSuperseded = "superseded"
+
+	// LessonInjectionFormMaxBytes bounds agent.lesson.injection-form. The
+	// injection form is rendered verbatim into future loops' briefs, so it must
+	// stay small — the bound IS the quality gate that keeps briefs bounded.
+	// Over-bound is REJECTED with an instructive error naming the bound, never
+	// truncated; the unbounded prose lives in Detail. 320 bytes ≈ 80 tokens.
+	LessonInjectionFormMaxBytes = 320
+
+	// LessonMinEvidence is the minimum number of evidence entity IDs per
+	// lesson. A lesson with no evidence is unverifiable and cannot be promoted.
+	LessonMinEvidence = 1
+
+	// minLessonAppliesToIDSegments is the minimum number of dotted segments an
+	// `id:<prefix>` scope key must carry. Fewer than three (e.g. `id:c360`)
+	// would match an entire org and defeat scoping.
+	minLessonAppliesToIDSegments = 3
+)
+
+// Sentinels the lesson validator wraps so a writer can count WHICH ADR-080
+// writer gate a rejection tripped (evidence / bound / grammar) without
+// re-parsing the message; input-hygiene rejections carry none.
+var (
+	// ErrLessonEvidence marks a missing or malformed evidence citation.
+	ErrLessonEvidence = errors.New("lesson evidence")
+	// ErrLessonBound marks an injection form over the byte bound.
+	ErrLessonBound = errors.New("lesson injection-form bound")
+	// ErrLessonGrammar marks a scope key that violates the typed-key grammar.
+	ErrLessonGrammar = errors.New("lesson scope-key grammar")
+)
+
+// IsLessonSeverity reports whether s is one of the closed lesson severities.
+// The emit_lesson tool clamps an unknown severity to the default before
+// building the entity; a decoded payload with an unknown severity is invalid.
+func IsLessonSeverity(s string) bool {
+	switch s {
+	case lessonSeverityInfo, lessonSeverityWarning, lessonSeverityCritical:
+		return true
+	default:
+		return false
+	}
+}
+
+func isLessonPolarity(s string) bool {
+	return s == LessonPolarityAvoid || s == LessonPolarityBestPractice
+}
+
+func isLessonStatus(s string) bool {
+	switch s {
+	case lessonStatusProposed, lessonStatusActive, lessonStatusRetired, lessonStatusSuperseded:
+		return true
+	default:
+		return false
+	}
+}
+
+// rejectControlBytes rejects any ASCII control byte (C0, 0x00–0x1F, plus DEL
+// 0x7F) in an identity or brief-rendered field. Content-derived identity
+// concatenates the identity fields with the \x1f/\x1e separators; forbidding
+// control bytes in the participating tokens makes that encoding injective by
+// construction (a separator cannot be smuggled into a component to forge a
+// collision), and the injection form is rendered verbatim into another
+// agent's system prompt, where a newline would break the block framing.
+func rejectControlBytes(field, value string) error {
+	for i := 0; i < len(value); i++ {
+		if b := value[i]; b < 0x20 || b == 0x7f {
+			return fmt.Errorf(
+				"%s must not contain ASCII control bytes (found 0x%02x at position %d); use plain text",
+				field, b, i)
+		}
+	}
+	return nil
+}
+
+// validateLessonScopeKey enforces the typed scope-key grammar:
+// `id:<prefix>` where the prefix has at least minLessonAppliesToIDSegments
+// segments, or `tag:<token>`. Existence of the id-prefix is NOT checked here
+// (that lives at brief-assembly matching); this is a shape gate only.
+func validateLessonScopeKey(key string) error {
+	if err := rejectControlBytes("scope key", key); err != nil {
+		return err
+	}
+	switch {
+	case strings.HasPrefix(key, "tag:"):
+		token := strings.TrimPrefix(key, "tag:")
+		if token == "" {
+			return fmt.Errorf("scope key %q has an empty tag token", key)
+		}
+		return nil
+	case strings.HasPrefix(key, "id:"):
+		prefix := strings.TrimPrefix(key, "id:")
+		if prefix == "" {
+			return fmt.Errorf("scope key %q has an empty id prefix", key)
+		}
+		segments := strings.Split(prefix, ".")
+		if len(segments) < minLessonAppliesToIDSegments {
+			return fmt.Errorf(
+				"scope key %q has an id prefix of %d segment(s); need at least %d (fewer would match an entire org)",
+				key, len(segments), minLessonAppliesToIDSegments)
+		}
+		for _, segment := range segments {
+			if segment == "" {
+				return fmt.Errorf("scope key %q has an empty id-prefix segment", key)
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf(
+			"scope key %q is untyped; must be \"id:<entity-id-prefix of %d+ segments>\" or \"tag:<token>\"",
+			key, minLessonAppliesToIDSegments)
+	}
+}
 
 // Contract and group names identify the built-in lesson-record projection
 // schema. The contract is registered with agentic.agent_lesson.v1 (ADR-103).
@@ -153,11 +290,87 @@ func (e *AgentLessonEntity) Schema() message.Type {
 	return AgentLessonMessageType()
 }
 
-// Validate implements message.Payload: the identity fields must form a
-// well-formed lesson entity ID.
+// Validate implements message.Payload and IS the lesson writer's contract
+// (ADR-080 decision 3): identity, every required field, the control-byte
+// hygiene on the identity and brief-rendered fields, the injection-form byte
+// bound, the polarity / severity / status vocabularies, the birth timestamp,
+// at least one well-formed evidence entity ID, at least one typed scope key,
+// and a well-formed executed-by back-link. BaseMessage.MarshalJSON refuses a
+// payload that fails it, so nothing this method rejects can be published; the
+// emit_lesson tool delegates its argument gates here and counts the wrapped
+// sentinels. It never mutates the entity — clamping is the writer's policy.
 func (e *AgentLessonEntity) Validate() error {
-	_, err := tryAgentLessonEntityID(e.Org, e.Platform, e.ID)
-	return err
+	if _, err := tryAgentLessonEntityID(e.Org, e.Platform, e.ID); err != nil {
+		return err
+	}
+	if e.Summary == "" {
+		return errors.New("summary is required and must be a non-empty string")
+	}
+	if err := rejectControlBytes("summary", e.Summary); err != nil {
+		return err
+	}
+	if e.Detail == "" {
+		return errors.New("detail is required and must be a non-empty string")
+	}
+	if e.InjectionForm == "" {
+		return errors.New("injection_form is required and must be a non-empty string")
+	}
+	if err := rejectControlBytes("injection_form", e.InjectionForm); err != nil {
+		return err
+	}
+	if n := len(e.InjectionForm); n > LessonInjectionFormMaxBytes {
+		return fmt.Errorf(
+			"%w: injection_form is %d bytes, over the %d-byte bound; shorten it (put the full explanation in detail) — the injection form is rendered verbatim into future briefs",
+			ErrLessonBound, n, LessonInjectionFormMaxBytes)
+	}
+	if e.Category == "" {
+		return errors.New("category is required and must be a non-empty string")
+	}
+	if err := rejectControlBytes("category", e.Category); err != nil {
+		return err
+	}
+	if !isLessonPolarity(e.Polarity) {
+		return fmt.Errorf(
+			"polarity %q is invalid; must be one of %q or %q (polarity is meaning-bearing and is not clamped)",
+			e.Polarity, LessonPolarityAvoid, LessonPolarityBestPractice)
+	}
+	if !IsLessonSeverity(e.Severity) {
+		return fmt.Errorf("severity %q is invalid; must be one of %q, %q, or %q",
+			e.Severity, lessonSeverityInfo, lessonSeverityWarning, lessonSeverityCritical)
+	}
+	if !isLessonStatus(e.Status) {
+		return fmt.Errorf("status %q is invalid; must be one of %q, %q, %q, or %q",
+			e.Status, lessonStatusProposed, lessonStatusActive, lessonStatusRetired, lessonStatusSuperseded)
+	}
+	if e.CreatedAt.IsZero() {
+		return errors.New("created_at is required (the immutable birth timestamp)")
+	}
+	if len(e.Evidence) < LessonMinEvidence {
+		return fmt.Errorf(
+			"%w: evidence must cite at least %d entity ID, got 0; a lesson with no evidence is unverifiable and cannot be promoted",
+			ErrLessonEvidence, LessonMinEvidence)
+	}
+	for i, ev := range e.Evidence {
+		if !message.IsValidEntityID(ev) {
+			return fmt.Errorf(
+				"%w: evidence[%d] %q is not a well-formed 6-part entity ID; cite the loop/trajectory/entity the lesson was derived from",
+				ErrLessonEvidence, i, ev)
+		}
+	}
+	if len(e.AppliesTo) == 0 {
+		return fmt.Errorf(
+			"%w: applies_to must carry at least 1 typed scope key (id:<entity-id-prefix of %d+ segments> or tag:<token>)",
+			ErrLessonGrammar, minLessonAppliesToIDSegments)
+	}
+	for i, key := range e.AppliesTo {
+		if err := validateLessonScopeKey(key); err != nil {
+			return fmt.Errorf("%w: applies_to[%d]: %w", ErrLessonGrammar, i, err)
+		}
+	}
+	if !message.IsValidEntityID(e.ExecutedBy) {
+		return fmt.Errorf("executed_by %q is not a well-formed 6-part entity ID (the ops loop that distilled the lesson)", e.ExecutedBy)
+	}
+	return nil
 }
 
 // MarshalJSON implements json.Marshaler with the alias idiom.
@@ -178,7 +391,7 @@ func (e *AgentLessonEntity) UnmarshalJSON(data []byte) error {
 func LessonContract() contract.Contract {
 	return contract.Contract{
 		Name:          LessonRecordContractName,
-		MessageType:   AgentLessonMessageType().Key(),
+		MessageType:   AgentLessonMessageType(),
 		EntityPattern: "*.*.agent.lesson.record.*",
 		BirthPredicates: []string{
 			agvocab.LessonCategory,

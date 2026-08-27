@@ -263,6 +263,12 @@ func (e *HTTPRequestExecutor) emitObservation(ctx context.Context, call agentic.
 		FetchedAt: fetchedAt, ContentType: contentType, StatusCode: resp.StatusCode,
 		Text: body, Truncated: truncated,
 	}
+	if err := observation.Validate(); err != nil {
+		webEmitFailuresTotal.WithLabelValues("http_request", "validate").Inc()
+		e.logger.Warn("http_request emission skipped: observation fails its contract",
+			"call_id", call.ID, "url", canon, "error", err)
+		return
+	}
 	if err := publishWebObservation(ctx, e.publisher, urlEntity, observation.Triples()); err != nil {
 		webEmitFailuresTotal.WithLabelValues("http_request", "publish").Inc()
 		e.logger.Warn("http_request observation emission failed",

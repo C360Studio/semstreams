@@ -40,12 +40,14 @@ type PredicateGroup struct {
 // Contract declares the graph shape emitted by one projection. It validates
 // caller intent; it does not reserve predicates or prevent other writers.
 //
-// MessageType names the registered payload type the contract is bound to. A
-// contract registered with a payload type inherits that type's key when the
-// field is empty; a contract naming another key is a registration error.
+// MessageType is the registered payload type the contract is bound to,
+// carried structured (on the wire as {"domain","category","version"}, the
+// same shape EntityState.message_type has) so nothing parses a key. A
+// contract registered with a payload type inherits that type when the field
+// is zero; a contract naming another type is a registration error.
 type Contract struct {
 	Name            string           `json:"name"`
-	MessageType     string           `json:"message_type,omitempty"`
+	MessageType     semtypes.Type    `json:"message_type"`
 	EntityPattern   string           `json:"entity_pattern"`
 	Groups          []PredicateGroup `json:"groups,omitempty"`
 	BirthPredicates []string         `json:"birth_predicates,omitempty"`
@@ -75,6 +77,11 @@ func (c Contract) validate(requireDeclared bool) error {
 	}
 	if len(c.Groups) == 0 && len(c.BirthPredicates) == 0 {
 		return fmt.Errorf("%w: contract %q declares no predicates", ErrInvalidContract, c.Name)
+	}
+	if c.MessageType != (semtypes.Type{}) {
+		if err := c.MessageType.Validate(); err != nil {
+			return fmt.Errorf("%w: contract %q message type: %w", ErrInvalidContract, c.Name, err)
+		}
 	}
 	if c.IndexingProfile != "" && !vocabulary.IsValidIndexingProfile(c.IndexingProfile) {
 		return fmt.Errorf("%w: contract %q has invalid indexing profile %q", ErrInvalidContract, c.Name, c.IndexingProfile)

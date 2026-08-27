@@ -422,7 +422,7 @@ func TestEmitLessonExecutor_InjectionFormBound(t *testing.T) {
 	store := &recordingLessonStore{}
 	e := newEmitLessonExecutor(store)
 	call := validEmitLessonCall()
-	call.Arguments["injection_form"] = strings.Repeat("x", maxInjectionFormBytes+1)
+	call.Arguments["injection_form"] = strings.Repeat("x", agentic.LessonInjectionFormMaxBytes+1)
 
 	res, err := e.Execute(context.Background(), call)
 	if err != nil {
@@ -444,7 +444,7 @@ func TestEmitLessonExecutor_InjectionFormAtBoundAccepted(t *testing.T) {
 	store := &recordingLessonStore{}
 	e := newEmitLessonExecutor(store)
 	call := validEmitLessonCall()
-	call.Arguments["injection_form"] = strings.Repeat("y", maxInjectionFormBytes)
+	call.Arguments["injection_form"] = strings.Repeat("y", agentic.LessonInjectionFormMaxBytes)
 
 	res, err := e.Execute(context.Background(), call)
 	if err != nil {
@@ -454,8 +454,8 @@ func TestEmitLessonExecutor_InjectionFormAtBoundAccepted(t *testing.T) {
 		t.Fatalf("injection form AT the bound must be accepted, got error: %q", res.Error)
 	}
 	facts := factsOf(store.triples)
-	if got, _ := facts[agvocab.LessonInjectionForm][0].(string); len(got) != maxInjectionFormBytes {
-		t.Errorf("injection form must persist un-truncated at %d bytes, got %d", maxInjectionFormBytes, len(got))
+	if got, _ := facts[agvocab.LessonInjectionForm][0].(string); len(got) != agentic.LessonInjectionFormMaxBytes {
+		t.Errorf("injection form must persist un-truncated at %d bytes, got %d", agentic.LessonInjectionFormMaxBytes, len(got))
 	}
 }
 

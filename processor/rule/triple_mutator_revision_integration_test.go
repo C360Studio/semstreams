@@ -215,6 +215,6 @@ func TestTripleMutator_NoOpRemoveDoesNotClaimAnotherWritersRevision(t *testing.T
 func revisionClaimRegistry(t *testing.T) *payloadregistry.Registry {
 	t.Helper()
 	reg := payloadbuiltins.NewTestRegistry(t)
-	payloadregistry.RegisterTestType(t, reg, "test.revision-claim.v1")
+	payloadregistry.RegisterTestType(t, reg, message.Type{Domain: "test", Category: "revision-claim", Version: "v1"})
 	return reg
 }

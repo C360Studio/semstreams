@@ -13,27 +13,27 @@ import (
 // testStampKeys are the message types this package's tests stamp on the
 // create seams (ADR-103: a stamp the registry does not hold is refused).
 // Builtin and research types are registered by their own RegisterPayloads;
-// these are the test-only keys, registered as schema-less stubs with no floor.
-var testStampKeys = []string{
-	"test.entity.v1",
-	"test.widget.v1",
-	"test.fixture.v1",
-	"test.mutation.v1",
-	"test.nofloor.v1",
-	"test.seed.v1",
-	"test.merge.v1",
-	"test.graphable.v1",
-	"test.storable.v1",
-	"test.poison.v1",
-	"test.container.v1",
-	"test.sensor.v1",
-	"test.decode.v1",
-	"test.noop.v1",
-	"test.revision.v1",
-	"metrictest.widget.v1",
-	"boid.telemetry.v1",
-	"workflow.task-unit.v1",
-	"mission.command.v1",
+// these are the test-only types, registered as schema-less stubs with no floor.
+var testStampKeys = []message.Type{
+	{Domain: "test", Category: "entity", Version: "v1"},
+	{Domain: "test", Category: "widget", Version: "v1"},
+	{Domain: "test", Category: "fixture", Version: "v1"},
+	{Domain: "test", Category: "mutation", Version: "v1"},
+	{Domain: "test", Category: "nofloor", Version: "v1"},
+	{Domain: "test", Category: "seed", Version: "v1"},
+	{Domain: "test", Category: "merge", Version: "v1"},
+	{Domain: "test", Category: "graphable", Version: "v1"},
+	{Domain: "test", Category: "storable", Version: "v1"},
+	{Domain: "test", Category: "poison", Version: "v1"},
+	{Domain: "test", Category: "container", Version: "v1"},
+	{Domain: "test", Category: "sensor", Version: "v1"},
+	{Domain: "test", Category: "decode", Version: "v1"},
+	{Domain: "test", Category: "noop", Version: "v1"},
+	{Domain: "test", Category: "revision", Version: "v1"},
+	{Domain: "metrictest", Category: "widget", Version: "v1"},
+	{Domain: "boid", Category: "telemetry", Version: "v1"},
+	{Domain: "workflow", Category: "task-unit", Version: "v1"},
+	{Domain: "mission", Category: "command", Version: "v1"},
 }
 
 // testEntityType is the stamp for test entities born through CreateEntity.
@@ -48,8 +48,8 @@ func registerTestStamps(tb testing.TB, reg *payloadregistry.Registry) {
 	if err := research.RegisterPayloads(reg); err != nil {
 		tb.Fatalf("register research payloads: %v", err)
 	}
-	for _, key := range testStampKeys {
-		payloadregistry.RegisterTestType(tb, reg, key)
+	for _, mt := range testStampKeys {
+		payloadregistry.RegisterTestType(tb, reg, mt)
 	}
 }
 

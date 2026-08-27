@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/projection"
 	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/stretchr/testify/require"
@@ -19,7 +20,7 @@ func TestProcessorProjectionBindings(t *testing.T) {
 	contracts := []projection.Contract{
 		{
 			Name:          "drone.status",
-			MessageType:   "telemetry.robotics.drone-status.v1",
+			MessageType:   message.Type{Domain: "telemetry", Category: "drone_status", Version: "v1"},
 			EntityPattern: "acme.ops.robotics.gcs.drone.*",
 			Groups: []projection.PredicateGroup{{
 				Name:       "state",

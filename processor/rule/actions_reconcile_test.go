@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/projection"
 	"github.com/c360studio/semstreams/vocabulary"
@@ -44,7 +45,7 @@ func reconcileTestContracts(t testing.TB) []projection.Contract {
 	registerReconcileTestVocabulary(t)
 	return []projection.Contract{{
 		Name:          testReconcileContract,
-		MessageType:   "test.status.v1",
+		MessageType:   message.Type{Domain: "test", Category: "status", Version: "v1"},
 		EntityPattern: "acme.ops.robotics.gcs.drone.*",
 		Groups: []projection.PredicateGroup{
 			{

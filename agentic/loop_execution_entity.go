@@ -2,6 +2,8 @@ package agentic
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"time"
 	"unicode/utf8"
 
@@ -165,11 +167,22 @@ func (e *LoopExecutionEntity) Schema() message.Type {
 	return LoopExecutionMessageType()
 }
 
-// Validate implements message.Payload: the identity fields must form a
-// well-formed loop-execution entity ID.
+// Validate implements message.Payload and IS the spawn-identity writer's
+// contract: identity plus the spawning TaskMessage, validated by its own
+// contract (task_id, role, model, prompt, bounds). BaseMessage.MarshalJSON
+// refuses a payload that fails it; the agentic-loop graph writer delegates
+// here before birthing the execution entity.
 func (e *LoopExecutionEntity) Validate() error {
-	_, err := TryLoopExecutionEntityID(e.Org, e.Platform, e.LoopID)
-	return err
+	if _, err := TryLoopExecutionEntityID(e.Org, e.Platform, e.LoopID); err != nil {
+		return err
+	}
+	if e.Task == nil {
+		return errors.New("task is required (the spawning TaskMessage)")
+	}
+	if err := e.Task.Validate(); err != nil {
+		return fmt.Errorf("task: %w", err)
+	}
+	return nil
 }
 
 // MarshalJSON implements json.Marshaler with the alias idiom.
@@ -204,7 +217,7 @@ func LoopExecutionMessageType() message.Type {
 func LoopExecutionContract() contract.Contract {
 	return contract.Contract{
 		Name:          LoopExecutionContractName,
-		MessageType:   LoopExecutionMessageType().Key(),
+		MessageType:   LoopExecutionMessageType(),
 		EntityPattern: "*.*.agent.agentic-loop.execution.*",
 		BirthPredicates: []string{
 			agvocab.LoopRole,

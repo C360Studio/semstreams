@@ -112,7 +112,7 @@ func TestCreateAcceptsRegisteredMessageType(t *testing.T) {
 // metered, a registered floor is not.
 func TestFloorComesFromRegistration(t *testing.T) {
 	reg := payloadbuiltins.NewTestRegistry(t)
-	payloadregistry.RegisterTestType(t, reg, "test.nofloor.v1")
+	payloadregistry.RegisterTestType(t, reg, message.Type{Domain: "test", Category: "nofloor", Version: "v1"})
 	ctx, c, nc := startGateTestComponent(t, reg, false)
 	client := gateMutationClient(t, nc)
 
@@ -153,7 +153,7 @@ func TestFloorComesFromRegistration(t *testing.T) {
 // the unknown-label metric does not fire.
 func TestHierarchyContainerBirthCarriesRegisteredType(t *testing.T) {
 	reg := payloadbuiltins.NewTestRegistry(t)
-	payloadregistry.RegisterTestType(t, reg, "test.entity.v1")
+	payloadregistry.RegisterTestType(t, reg, message.Type{Domain: "test", Category: "entity", Version: "v1"})
 	ctx, c, _ := startGateTestComponent(t, reg, true)
 	unknown := getIndexingProfileDefaultMetric(nil).WithLabelValues("unknown")
 	before := testutil.ToFloat64(unknown)

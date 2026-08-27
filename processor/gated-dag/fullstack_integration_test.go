@@ -639,6 +639,6 @@ var fullstackUnitType = message.Type{Domain: "test", Category: "unit", Version: 
 func fullstackPayloadRegistry(t *testing.T) *payloadregistry.Registry {
 	t.Helper()
 	reg := payloadbuiltins.NewTestRegistry(t)
-	payloadregistry.RegisterTestType(t, reg, fullstackUnitType.Key())
+	payloadregistry.RegisterTestType(t, reg, fullstackUnitType)
 	return reg
 }

@@ -2,6 +2,9 @@ package agentic
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
 	"time"
 
 	"github.com/c360studio/semstreams/message"
@@ -106,11 +109,37 @@ func (e *ModelEndpointEntity) Schema() message.Type {
 	return ModelEndpointMessageType()
 }
 
-// Validate implements message.Payload: the identity fields must form a
-// well-formed endpoint entity ID.
+// Validate implements message.Payload and IS the endpoint writer's contract:
+// identity, a non-empty provider and model, and non-negative limits and
+// prices (the model registry's config validation is the upstream owner of the
+// provider vocabulary; this package does not import it). BaseMessage.
+// MarshalJSON refuses a payload that fails it; WriteModelEndpoints delegates
+// here before birthing an endpoint.
 func (e *ModelEndpointEntity) Validate() error {
-	_, err := tryModelEndpointEntityID(e.Org, e.Platform, e.Name)
-	return err
+	if _, err := tryModelEndpointEntityID(e.Org, e.Platform, e.Name); err != nil {
+		return err
+	}
+	if e.Provider == "" {
+		return errors.New("provider is required and must be a non-empty string")
+	}
+	if e.Model == "" {
+		return errors.New("model is required and must be a non-empty string")
+	}
+	if e.MaxTokens < 0 {
+		return fmt.Errorf("max_tokens must not be negative, got %d", e.MaxTokens)
+	}
+	if e.RequestsPerMinute < 0 {
+		return fmt.Errorf("requests_per_minute must not be negative, got %d", e.RequestsPerMinute)
+	}
+	for _, price := range []struct {
+		name  string
+		value float64
+	}{{"input_price_per_1m_tokens", e.InputPricePer1MTokens}, {"output_price_per_1m_tokens", e.OutputPricePer1MTokens}} {
+		if math.IsNaN(price.value) || math.IsInf(price.value, 0) || price.value < 0 {
+			return fmt.Errorf("%s must be a finite non-negative number, got %g", price.name, price.value)
+		}
+	}
+	return nil
 }
 
 // MarshalJSON implements json.Marshaler with the alias idiom.

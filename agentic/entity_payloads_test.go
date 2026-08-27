@@ -54,7 +54,7 @@ func fullLoopExecution() *agentic.LoopExecutionEntity {
 	return &agentic.LoopExecutionEntity{
 		Org: payloadTestOrg, Platform: payloadTestPlatform, LoopID: "loop-1",
 		Task: &agentic.TaskMessage{
-			LoopID: "loop-1", TaskID: "task-1", Role: "researcher", Prompt: "do the thing",
+			LoopID: "loop-1", TaskID: "task-1", Role: "researcher", Model: "mock", Prompt: "do the thing",
 			WorkflowSlug: "wf", WorkflowStep: "design", UserID: "user-1",
 			ParentLoopID: "loop-0", RunID: "run-1", InReplyTo: "loop-9",
 		},
@@ -169,8 +169,8 @@ func TestRegisteredContractMatchesTriples(t *testing.T) {
 	}
 	for _, contract := range contracts {
 		t.Run(contract.Name, func(t *testing.T) {
-			entity, ok := entities[contract.MessageType]
-			require.Truef(t, ok, "no fully populated entity for registered type %s", contract.MessageType)
+			entity, ok := entities[contract.MessageType.Key()]
+			require.Truef(t, ok, "no fully populated entity for registered type %s", contract.MessageType.Key())
 			emitted := predicateSet(entity.Triples())
 
 			allowed := make(map[string]struct{})

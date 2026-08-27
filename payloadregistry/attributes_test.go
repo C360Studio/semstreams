@@ -23,7 +23,7 @@ func attrRegistration(domain, category, version string) *Registration {
 	}
 }
 
-func lessonLikeContract(name, messageType string) contract.Contract {
+func lessonLikeContract(name string, messageType types.Type) contract.Contract {
 	return contract.Contract{
 		Name: name, MessageType: messageType, EntityPattern: "*.*.agent.lesson.record.*",
 		BirthPredicates: []string{"agent.lesson.category"},
@@ -49,7 +49,7 @@ func TestRegisterRejectsInvalidIndexingProfile(t *testing.T) {
 		reg := New()
 		r := attrRegistration("agentic", "agent_lesson", "v1")
 		r.IndexingProfile = vocabulary.IndexingProfileContent
-		c := lessonLikeContract("agentic.lesson-record", "")
+		c := lessonLikeContract("agentic.lesson-record", types.Type{})
 		c.IndexingProfile = vocabulary.IndexingProfileControl
 		r.Contracts = []contract.Contract{c}
 		err := reg.Register(r)
@@ -66,7 +66,7 @@ func TestRegisterRejectsInvalidIndexingProfile(t *testing.T) {
 func TestRegisterFillsAndChecksContractMessageType(t *testing.T) {
 	reg := New()
 	r := attrRegistration("agentic", "agent_lesson", "v1")
-	r.Contracts = []contract.Contract{lessonLikeContract("agentic.lesson-record", "")}
+	r.Contracts = []contract.Contract{lessonLikeContract("agentic.lesson-record", types.Type{})}
 	if err := reg.Register(r); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -74,14 +74,14 @@ func TestRegisterFillsAndChecksContractMessageType(t *testing.T) {
 	if !ok {
 		t.Fatal("registration missing")
 	}
-	if len(got.Contracts) != 1 || got.Contracts[0].MessageType != "agentic.agent_lesson.v1" {
+	if len(got.Contracts) != 1 || got.Contracts[0].MessageType.Key() != "agentic.agent_lesson.v1" {
 		t.Fatalf("stored contracts = %#v, want one contract keyed agentic.agent_lesson.v1", got.Contracts)
 	}
 
 	t.Run("a contract naming another key is refused", func(t *testing.T) {
 		reg := New()
 		r := attrRegistration("agentic", "agent_lesson", "v1")
-		r.Contracts = []contract.Contract{lessonLikeContract("agentic.lesson-record", "agentic.loop_execution.v1")}
+		r.Contracts = []contract.Contract{lessonLikeContract("agentic.lesson-record", types.Type{Domain: "agentic", Category: "loop_execution", Version: "v1"})}
 		err := reg.Register(r)
 		if err == nil {
 			t.Fatal("Register accepted a contract naming a different key")
@@ -100,8 +100,8 @@ func TestRegisterFillsAndChecksContractMessageType(t *testing.T) {
 		reg := New()
 		r := attrRegistration("agentic", "agent_lesson", "v1")
 		r.Contracts = []contract.Contract{
-			lessonLikeContract("agentic.lesson-record", ""),
-			lessonLikeContract("agentic.lesson-record", ""),
+			lessonLikeContract("agentic.lesson-record", types.Type{}),
+			lessonLikeContract("agentic.lesson-record", types.Type{}),
 		}
 		if err := reg.Register(r); err == nil || !strings.Contains(err.Error(), "agentic.lesson-record") {
 			t.Fatalf("Register = %v, want duplicate contract name error", err)
@@ -111,7 +111,7 @@ func TestRegisterFillsAndChecksContractMessageType(t *testing.T) {
 	t.Run("a contract with an invalid shape is refused", func(t *testing.T) {
 		reg := New()
 		r := attrRegistration("agentic", "agent_lesson", "v1")
-		r.Contracts = []contract.Contract{lessonLikeContract("", "")}
+		r.Contracts = []contract.Contract{lessonLikeContract("", types.Type{})}
 		if err := reg.Register(r); err == nil {
 			t.Fatal("Register accepted a contract with no name")
 		}
@@ -123,7 +123,7 @@ func TestGetRegistrationCopiesAttributes(t *testing.T) {
 	reg := New()
 	r := attrRegistration("agentic", "agent_lesson", "v1")
 	r.IndexingProfile = vocabulary.IndexingProfileContent
-	r.Contracts = []contract.Contract{lessonLikeContract("agentic.lesson-record", "")}
+	r.Contracts = []contract.Contract{lessonLikeContract("agentic.lesson-record", types.Type{})}
 	if err := reg.Register(r); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestContractsReturnsIndependentSortedCopies(t *testing.T) {
 	}
 	loop.Contracts = []contract.Contract{loopContract("zeta"), loopContract("alpha")}
 	lesson := attrRegistration("agentic", "agent_lesson", "v1")
-	lesson.Contracts = []contract.Contract{lessonLikeContract("agentic.lesson-record", "")}
+	lesson.Contracts = []contract.Contract{lessonLikeContract("agentic.lesson-record", types.Type{})}
 	if err := reg.Register(loop); err != nil {
 		t.Fatalf("Register loop: %v", err)
 	}
@@ -179,9 +179,9 @@ func TestContractsReturnsIndependentSortedCopies(t *testing.T) {
 		t.Fatalf("Contracts() returned %d contracts, want %d", len(got), len(wantNames))
 	}
 	for i := range got {
-		if got[i].Name != wantNames[i] || got[i].MessageType != wantKeys[i] {
+		if got[i].Name != wantNames[i] || got[i].MessageType.Key() != wantKeys[i] {
 			t.Fatalf("Contracts()[%d] = %s/%s, want %s/%s (ordered by key then name)",
-				i, got[i].MessageType, got[i].Name, wantKeys[i], wantNames[i])
+				i, got[i].MessageType.Key(), got[i].Name, wantKeys[i], wantNames[i])
 		}
 	}
 
@@ -241,5 +241,33 @@ func TestRegisterRejectsSchemaMismatch(t *testing.T) {
 		if !strings.Contains(err.Error(), tuple) {
 			t.Errorf("error does not name %s: %v", tuple, err)
 		}
+	}
+}
+
+// TestRegisterRejectsMalformedComponent (Codex round, MEDIUM): a component
+// holding the key separator would register a key nothing can bind a contract
+// to; Register refuses it at boot, naming the component.
+func TestRegisterRejectsMalformedComponent(t *testing.T) {
+	for _, tc := range []struct{ name, domain, category, version string }{
+		{"dotted domain", "bad.domain", "kind", "v1"},
+		{"dotted category", "domain", "bad.kind", "v1"},
+		{"dotted version", "domain", "kind", "v.1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := New()
+			err := reg.Register(&Registration{
+				Domain: tc.domain, Category: tc.category, Version: tc.version,
+				Factory: func() any { return &struct{}{} },
+			})
+			if err == nil {
+				t.Fatalf("Register accepted a component containing the separator")
+			}
+			if !strings.Contains(err.Error(), `"."`) {
+				t.Fatalf("error does not name the separator: %v", err)
+			}
+			if len(reg.List()) != 0 {
+				t.Fatal("a rejected registration was stored")
+			}
+		})
 	}
 }

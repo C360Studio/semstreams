@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 
 	"github.com/google/uuid"
 
@@ -17,20 +18,9 @@ import (
 // diagnosis emission tool.
 const EmitDiagnosisToolName = "emit_diagnosis"
 
-// minEmitDiagnosisEvidence is the minimum number of evidence entity IDs
-// required per diagnosis call. An ops finding without evidence is unverifiable.
-const minEmitDiagnosisEvidence = 1
-
 // emitDiagnosisDefaultSeverity is the severity applied when the ops agent
 // omits the field or supplies a value outside the valid enum.
 const emitDiagnosisDefaultSeverity = "info"
-
-// emitDiagnosisValidSeverities is the closed set of accepted severity values.
-var emitDiagnosisValidSeverities = map[string]bool{
-	"info":     true,
-	"warn":     true,
-	"critical": true,
-}
 
 // EmitDiagnosisExecutor is the ops agent's finding emission tool. Each call
 // mints a new {org}.{platform}.ops.diagnosis.finding.{uuid} entity and
@@ -84,7 +74,7 @@ func (e *EmitDiagnosisExecutor) ListTools() []agentic.ToolDefinition {
 					"evidence": map[string]any{
 						"type":        "array",
 						"items":       map[string]any{"type": "string"},
-						"minItems":    minEmitDiagnosisEvidence,
+						"minItems":    agentic.OpsDiagnosisMinEvidence,
 						"description": "Entity IDs of loops, trajectories, or other graph entities that support this finding. At least one required.",
 					},
 					"observed_role": map[string]any{
@@ -160,7 +150,7 @@ func (e *EmitDiagnosisExecutor) emitDiagnosis(ctx context.Context, call agentic.
 	// severity like "medium" or "low". Clamping to "info" lets the finding
 	// land rather than bouncing, and downstream rules that need severity can
 	// use the confidence field to distinguish urgency.
-	if !emitDiagnosisValidSeverities[args.Severity] {
+	if !agentic.IsOpsDiagnosisSeverity(args.Severity) {
 		args.Severity = emitDiagnosisDefaultSeverity
 	}
 
@@ -195,6 +185,15 @@ func (e *EmitDiagnosisExecutor) emitDiagnosis(ctx context.Context, call agentic.
 		Finding: args.Finding, Recommendation: args.Recommendation, Confidence: args.Confidence,
 		Evidence: args.Evidence, ObservedRole: args.ObservedRole, Severity: args.Severity,
 		ExecutedBy: loopEntityID,
+	}
+	// The finding's contract is the entity's (ADR-103) — the same gate
+	// BaseMessage.MarshalJSON applies to every publisher.
+	if err := finding.Validate(); err != nil {
+		return agentic.ToolResult{
+			CallID:    call.ID,
+			Error:     err.Error(),
+			ErrorKind: agentic.ToolErrorInvalidArgs,
+		}, nil
 	}
 	triples := finding.Triples()
 	if err := e.publisher.Create(ctx, diagnosisEntityID, agentic.OpsDiagnosisMessageType(), triples); err != nil {
@@ -238,71 +237,43 @@ func (e *EmitDiagnosisExecutor) emitDiagnosis(ctx context.Context, call agentic.
 // descriptive error for each validation failure so the framework's retry
 // policy can surface it to the model.
 func parseEmitDiagnosisArgs(raw map[string]any) (emitDiagnosisArgs, error) {
-	finding, ok := raw["finding"].(string)
-	if !ok || finding == "" {
-		return emitDiagnosisArgs{}, fmt.Errorf("finding is required and must be a non-empty string")
+	finding, err := readString(raw, "finding")
+	if err != nil {
+		return emitDiagnosisArgs{}, err
 	}
-
-	recommendation, ok := raw["recommendation"].(string)
-	if !ok || recommendation == "" {
-		return emitDiagnosisArgs{}, fmt.Errorf("recommendation is required and must be a non-empty string")
+	recommendation, err := readString(raw, "recommendation")
+	if err != nil {
+		return emitDiagnosisArgs{}, err
 	}
-
-	// JSON numbers unmarshalled into map[string]any arrive as float64.
-	rawConf, present := raw["confidence"]
-	if !present || rawConf == nil {
-		return emitDiagnosisArgs{}, fmt.Errorf("confidence is required")
-	}
-	confidence, ok := rawConf.(float64)
-	if !ok {
-		return emitDiagnosisArgs{}, fmt.Errorf("confidence must be a number")
-	}
-	if confidence < 0 || confidence > 1 {
-		return emitDiagnosisArgs{}, fmt.Errorf("confidence must be between 0.0 and 1.0, got %g", confidence)
-	}
-
-	rawEvidence, present := raw["evidence"]
-	if !present || rawEvidence == nil {
-		return emitDiagnosisArgs{}, fmt.Errorf("evidence is required")
-	}
-	evidenceSlice, ok := rawEvidence.([]any)
-	if !ok {
-		return emitDiagnosisArgs{}, fmt.Errorf("evidence must be an array of strings")
-	}
-	if len(evidenceSlice) < minEmitDiagnosisEvidence {
-		return emitDiagnosisArgs{}, fmt.Errorf("evidence must contain at least %d entity ID, got 0", minEmitDiagnosisEvidence)
-	}
-	evidence := make([]string, 0, len(evidenceSlice))
-	for i, v := range evidenceSlice {
-		s, ok := v.(string)
+	// JSON numbers unmarshalled into map[string]any arrive as float64. An
+	// absent confidence stays NaN so the entity contract reports it as out of
+	// range rather than silently reading a 0.
+	confidence := math.NaN()
+	if rawConf, present := raw["confidence"]; present && rawConf != nil {
+		value, ok := rawConf.(float64)
 		if !ok {
-			return emitDiagnosisArgs{}, fmt.Errorf("evidence[%d] must be a string", i)
+			return emitDiagnosisArgs{}, fmt.Errorf("confidence must be a number")
 		}
-		evidence = append(evidence, s)
+		confidence = value
 	}
-
-	args := emitDiagnosisArgs{
+	evidence, err := readStringArray(raw, "evidence")
+	if err != nil {
+		return emitDiagnosisArgs{}, err
+	}
+	observedRole, err := readString(raw, "observed_role")
+	if err != nil {
+		return emitDiagnosisArgs{}, err
+	}
+	severity, err := readString(raw, "severity")
+	if err != nil {
+		return emitDiagnosisArgs{}, err
+	}
+	return emitDiagnosisArgs{
 		Finding:        finding,
 		Recommendation: recommendation,
 		Confidence:     confidence,
 		Evidence:       evidence,
-	}
-
-	if rawRole, present := raw["observed_role"]; present && rawRole != nil {
-		role, ok := rawRole.(string)
-		if !ok {
-			return emitDiagnosisArgs{}, fmt.Errorf("observed_role must be a string")
-		}
-		args.ObservedRole = role
-	}
-
-	if rawSev, present := raw["severity"]; present && rawSev != nil {
-		sev, ok := rawSev.(string)
-		if !ok {
-			return emitDiagnosisArgs{}, fmt.Errorf("severity must be a string")
-		}
-		args.Severity = sev
-	}
-
-	return args, nil
+		ObservedRole:   observedRole,
+		Severity:       severity,
+	}, nil
 }

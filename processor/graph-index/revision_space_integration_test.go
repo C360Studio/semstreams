@@ -147,6 +147,6 @@ func addTriple(ctx context.Context, t *testing.T, nc *natsclient.Client, entityI
 func revisionSpaceRegistry(t *testing.T) *payloadregistry.Registry {
 	t.Helper()
 	reg := payloadbuiltins.NewTestRegistry(t)
-	payloadregistry.RegisterTestType(t, reg, "test.revision.v1")
+	payloadregistry.RegisterTestType(t, reg, message.Type{Domain: "test", Category: "revision", Version: "v1"})
 	return reg
 }

@@ -2,7 +2,9 @@ package agentic
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/c360studio/semstreams/message"
@@ -18,6 +20,31 @@ const CategoryOpsDiagnosis = "ops_diagnosis"
 // opsDiagnosisSource is the Source on every triple OpsDiagnosisEntity emits —
 // the value the ops agent's emit_diagnosis tool has always stamped.
 const opsDiagnosisSource = "ops-emit-diagnosis"
+
+// The diagnosis writer's contract (ADR-027), owned by the payload since
+// registration made it publishable.
+const (
+	opsDiagnosisSeverityInfo     = "info"
+	opsDiagnosisSeverityWarn     = "warn"
+	opsDiagnosisSeverityCritical = "critical"
+
+	// OpsDiagnosisMinEvidence is the minimum number of evidence entity IDs per
+	// finding. An ops finding without evidence is unverifiable.
+	OpsDiagnosisMinEvidence = 1
+)
+
+// IsOpsDiagnosisSeverity reports whether s is one of the closed diagnosis
+// severities. The emit_diagnosis tool clamps an unknown severity to the
+// default before building the entity; a decoded payload with an unknown
+// severity is invalid.
+func IsOpsDiagnosisSeverity(s string) bool {
+	switch s {
+	case opsDiagnosisSeverityInfo, opsDiagnosisSeverityWarn, opsDiagnosisSeverityCritical:
+		return true
+	default:
+		return false
+	}
+}
 
 // OpsDiagnosisMessageType returns the message.Type for the ops-diagnosis-finding
 // entity — key "agentic.ops_diagnosis.v1". Registered by RegisterPayloads with
@@ -113,11 +140,40 @@ func (e *OpsDiagnosisEntity) Schema() message.Type {
 	return OpsDiagnosisMessageType()
 }
 
-// Validate implements message.Payload: the identity fields must form a
-// well-formed finding entity ID.
+// Validate implements message.Payload and IS the diagnosis writer's contract:
+// identity, a non-empty finding and recommendation, a confidence in [0, 1],
+// at least one evidence citation, a closed-set severity, and a well-formed
+// executed-by back-link. BaseMessage.MarshalJSON refuses a payload that fails
+// it; the emit_diagnosis tool delegates its argument gates here.
 func (e *OpsDiagnosisEntity) Validate() error {
-	_, err := tryOpsDiagnosisEntityID(e.Org, e.Platform, e.ID)
-	return err
+	if _, err := tryOpsDiagnosisEntityID(e.Org, e.Platform, e.ID); err != nil {
+		return err
+	}
+	if e.Finding == "" {
+		return errors.New("finding is required and must be a non-empty string")
+	}
+	if e.Recommendation == "" {
+		return errors.New("recommendation is required and must be a non-empty string")
+	}
+	if math.IsNaN(e.Confidence) || e.Confidence < 0 || e.Confidence > 1 {
+		return fmt.Errorf("confidence must be between 0.0 and 1.0, got %g", e.Confidence)
+	}
+	if len(e.Evidence) < OpsDiagnosisMinEvidence {
+		return fmt.Errorf("evidence must contain at least %d entity ID, got 0", OpsDiagnosisMinEvidence)
+	}
+	for i, ev := range e.Evidence {
+		if ev == "" {
+			return fmt.Errorf("evidence[%d] must be a non-empty string", i)
+		}
+	}
+	if !IsOpsDiagnosisSeverity(e.Severity) {
+		return fmt.Errorf("severity %q is invalid; must be one of %q, %q, or %q",
+			e.Severity, opsDiagnosisSeverityInfo, opsDiagnosisSeverityWarn, opsDiagnosisSeverityCritical)
+	}
+	if !message.IsValidEntityID(e.ExecutedBy) {
+		return fmt.Errorf("executed_by %q is not a well-formed 6-part entity ID (the ops loop that emitted the finding)", e.ExecutedBy)
+	}
+	return nil
 }
 
 // MarshalJSON implements json.Marshaler with the alias idiom.

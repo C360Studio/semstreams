@@ -128,6 +128,14 @@ func (pr *Registry) Register(registration *Registration) error {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "PayloadRegistry", "Register", "version validation")
 	}
 
+	// Component grammar: the key must round-trip through Key(); a component
+	// holding the separator would register a key nothing can bind a contract
+	// to, and the error belongs at boot, not at the first Create.
+	registeredType := types.Type{Domain: registration.Domain, Category: registration.Category, Version: registration.Version}
+	if err := registeredType.Validate(); err != nil {
+		return errs.WrapInvalid(err, "PayloadRegistry", "Register", "message type grammar")
+	}
+
 	// Verify factory produces payload with matching Schema()
 	if err := validateSchemaConsistency(registration); err != nil {
 		return err
@@ -144,7 +152,7 @@ func (pr *Registry) Register(registration *Registration) error {
 
 	msgType := registration.MessageType()
 
-	contracts, err := bindContracts(msgType, registration.IndexingProfile, registration.Contracts)
+	contracts, err := bindContracts(registeredType, registration.IndexingProfile, registration.Contracts)
 	if err != nil {
 		return err
 	}
@@ -167,13 +175,14 @@ func (pr *Registry) Register(registration *Registration) error {
 	return nil
 }
 
-// bindContracts returns independent copies of the contracts bound to msgType:
-// an empty contract MessageType is filled with the key, a different key is
-// refused, contract names are unique within the registration, a contract
-// profile must agree with the type's floor when both are set (O-13), and each
-// contract passes shape validation. Predicate declaration is not checked here;
-// it stays at mutation-client construction.
-func bindContracts(msgType, floor string, contracts []contract.Contract) ([]contract.Contract, error) {
+// bindContracts returns independent copies of the contracts bound to the
+// registered type: a zero contract MessageType is filled with the structured
+// type (never a parsed key), a different type is refused, contract names are
+// unique within the registration, a contract profile must agree with the
+// type's floor when both are set (O-13), and each contract passes shape
+// validation. Predicate declaration is not checked here; it stays at
+// mutation-client construction.
+func bindContracts(registered types.Type, floor string, contracts []contract.Contract) ([]contract.Contract, error) {
 	if len(contracts) == 0 {
 		return nil, nil
 	}
@@ -181,29 +190,29 @@ func bindContracts(msgType, floor string, contracts []contract.Contract) ([]cont
 	names := make(map[string]struct{}, len(contracts))
 	for _, original := range contracts {
 		c := cloneContract(original)
-		if c.MessageType == "" {
-			c.MessageType = msgType
+		if c.MessageType == (types.Type{}) {
+			c.MessageType = registered
 		}
-		if c.MessageType != msgType {
+		if !c.MessageType.Equal(registered) {
 			return nil, errs.WrapInvalid(
-				fmt.Errorf("contract %q names message type %q but is registered with %q", c.Name, c.MessageType, msgType),
+				fmt.Errorf("contract %q names message type %q but is registered with %q", c.Name, c.MessageType.Key(), registered.Key()),
 				"PayloadRegistry", "Register", "contract message type check")
 		}
 		if _, duplicate := names[c.Name]; duplicate {
 			return nil, errs.WrapInvalid(
-				fmt.Errorf("contract name %q repeats within registration %q", c.Name, msgType),
+				fmt.Errorf("contract name %q repeats within registration %q", c.Name, registered.Key()),
 				"PayloadRegistry", "Register", "contract name check")
 		}
 		names[c.Name] = struct{}{}
 		if floor != "" && c.IndexingProfile != "" && c.IndexingProfile != floor {
 			return nil, errs.WrapInvalid(
 				fmt.Errorf("contract %q declares indexing profile %q but %q registers floor %q",
-					c.Name, c.IndexingProfile, msgType, floor),
+					c.Name, c.IndexingProfile, registered.Key(), floor),
 				"PayloadRegistry", "Register", "contract profile agreement")
 		}
 		if err := c.ValidateShape(); err != nil {
 			return nil, errs.WrapInvalid(
-				fmt.Errorf("contract bound to %q: %w", msgType, err),
+				fmt.Errorf("contract bound to %q: %w", registered.Key(), err),
 				"PayloadRegistry", "Register", "contract shape validation")
 		}
 		bound = append(bound, c)

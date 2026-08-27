@@ -248,7 +248,15 @@ func (w *graphWriter) WriteModelEndpoints(ctx context.Context) {
 			continue
 		}
 		entityID := agentic.ModelEndpointEntityID(w.platform.Org, w.platform.Platform, name)
-		triples := modelEndpointEntity(w.platform.Org, w.platform.Platform, name, *ep).Triples()
+		endpoint := modelEndpointEntity(w.platform.Org, w.platform.Platform, name, *ep)
+		// The endpoint's contract is the entity's (ADR-103) — the same gate
+		// BaseMessage.MarshalJSON applies to every publisher.
+		if err := endpoint.Validate(); err != nil {
+			w.logger.Warn("graph_writer: model endpoint entity fails its contract; not born",
+				"endpoint", name, "entity_id", entityID, "error", err)
+			continue
+		}
+		triples := endpoint.Triples()
 		entity := &gtypes.EntityState{
 			ID:          entityID,
 			MessageType: agentic.ModelEndpointMessageType(),
@@ -464,6 +472,12 @@ func (w *graphWriter) WriteSpawnIdentity(ctx context.Context, loopID string, tas
 		Task:     task,
 	}
 
+	// The execution entity's contract is the entity's (ADR-103) — the same
+	// gate BaseMessage.MarshalJSON applies to every publisher. A task that
+	// fails its own contract is a birth failure, not a graceful skip.
+	if err := entity.Validate(); err != nil {
+		return fmt.Errorf("spawn identity for loop %s fails the loop-execution contract: %w", loopID, err)
+	}
 	triples := entity.Triples()
 	if len(triples) == 0 {
 		return nil

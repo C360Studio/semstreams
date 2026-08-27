@@ -371,7 +371,7 @@ func (s *Scenario) Teardown(ctx context.Context) error {
 func evidenceContract() projection.Contract {
 	return projection.Contract{
 		Name:            evidenceContractName,
-		MessageType:     "test.fixture.v1",
+		MessageType:     message.Type{Domain: "test", Category: "fixture", Version: "v1"},
 		EntityPattern:   evidenceEntityID,
 		BirthPredicates: []string{vocabulary.DCTermsTitle},
 		IndexingProfile: "control",

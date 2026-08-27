@@ -35,7 +35,7 @@
   "projection_contracts": [
     {
       "name": "agentic.lesson-record",
-      "message_type": "agentic.agent_lesson.v1",
+      "message_type": { "domain": "agentic", "category": "agent_lesson", "version": "v1" },
       "entity_pattern": "*.*.agent.lesson.record.*",
       "groups": [
         {

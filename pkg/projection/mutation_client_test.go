@@ -10,6 +10,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/vocabulary"
 )
@@ -300,7 +301,7 @@ func projectionTestContract(t *testing.T) Contract {
 	vocabulary.Register("test.event.seen")
 	vocabulary.Register("test.identity.name")
 	return Contract{
-		Name: "test", MessageType: "test.fixture.v1", EntityPattern: "*.*.test.system.widget.*",
+		Name: "test", MessageType: message.Type{Domain: "test", Category: "fixture", Version: "v1"}, EntityPattern: "*.*.test.system.widget.*",
 		BirthPredicates: []string{"test.identity.name"},
 		Groups: []PredicateGroup{
 			{Name: "state", Mode: ModeReconcile, Predicates: []string{"test.value.name"}},
@@ -359,13 +360,13 @@ func TestCreateFillsMessageTypeFromContract(t *testing.T) {
 	if err := json.Unmarshal(requester.requests[0].payload, &sent); err != nil {
 		t.Fatal(err)
 	}
-	if sent.Entity == nil || sent.Entity.MessageType.Key() != contract.MessageType {
-		t.Fatalf("request entity message type = %#v, want %q from the contract", sent.Entity, contract.MessageType)
+	if sent.Entity == nil || !sent.Entity.MessageType.Equal(contract.MessageType) {
+		t.Fatalf("request entity message type = %#v, want %q from the contract", sent.Entity, contract.MessageType.Key())
 	}
 
 	t.Run("no contract type and no stamp is still rejected", func(t *testing.T) {
 		untyped := contract
-		untyped.MessageType = ""
+		untyped.MessageType = message.Type{}
 		requester := &projectionRequester{handle: func(string, []byte) ([]byte, error) { return nil, nil }}
 		client, err := newMutationClient(requester, []Contract{untyped}, time.Second)
 		if err != nil {
@@ -403,9 +404,57 @@ func TestCreateRejectsConflictingMessageType(t *testing.T) {
 		Metadata: MutationMetadata{RequestID: "create-conflict", Source: "test-projector"},
 	})
 	assertProjectionRejectedBeforeRequest(t, receipt, err, MutationOperationCreate, requester)
-	for _, key := range []string{conflicting.Key(), contract.MessageType} {
+	for _, key := range []string{conflicting.Key(), contract.MessageType.Key()} {
 		if !strings.Contains(err.Error(), key) {
 			t.Errorf("error does not name %s: %v", key, err)
 		}
+	}
+}
+
+// TestCreateFillsFromRegisteredContract (Codex round, MEDIUM): the contract
+// set the composition root derives from the payload registry carries each
+// contract's STRUCTURED type, so Create fills a zero stamp from it directly —
+// no key is parsed. This is the path that used to fail once a registered key
+// could not be split back into three parts.
+func TestCreateFillsFromRegisteredContract(t *testing.T) {
+	t.Cleanup(vocabulary.SnapshotRegistry())
+	vocabulary.Register("test.identity.name")
+	reg := payloadregistry.New()
+	registered := message.Type{Domain: "test", Category: "fixture", Version: "v1"}
+	if err := reg.Register(&payloadregistry.Registration{
+		Domain: registered.Domain, Category: registered.Category, Version: registered.Version,
+		Factory: func() any { return &struct{}{} },
+		Contracts: []Contract{{
+			Name: "test", EntityPattern: "*.*.test.system.widget.*",
+			BirthPredicates: []string{"test.identity.name"},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	requester := &projectionRequester{handle: func(string, []byte) ([]byte, error) {
+		return projectionJSON(t, graph.CreateEntityResponse{
+			Outcome: graph.MutationApplied, Entity: projectionTestState(), KVRevision: 1,
+		}), nil
+	}}
+	client, err := newMutationClient(requester, reg.Contracts(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Create(context.Background(), CreateMutation{
+		Contract: "test",
+		Entity:   &graph.EntityState{ID: projectionTestEntity, Version: 1},
+		Triples: []message.Triple{{
+			Subject: projectionTestEntity, Predicate: "test.identity.name", Object: "widget",
+		}},
+		Metadata: MutationMetadata{RequestID: "create-registered", Source: "test-projector"},
+	}); err != nil {
+		t.Fatalf("Create with a zero stamp against a registry-bound contract: %v", err)
+	}
+	var sent graph.CreateEntityRequest
+	if err := json.Unmarshal(requester.requests[0].payload, &sent); err != nil {
+		t.Fatal(err)
+	}
+	if sent.Entity == nil || !sent.Entity.MessageType.Equal(registered) {
+		t.Fatalf("request stamp = %#v, want the registered type %s", sent.Entity, registered.Key())
 	}
 }

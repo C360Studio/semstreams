@@ -103,7 +103,7 @@ func TestProductLessonFixtureHasAcceptedIdentityAndCompleteTuples(t *testing.T) 
 
 func TestEvidenceContractAndFixtureAreExact(t *testing.T) {
 	contract := evidenceContract()
-	if contract.Name != "e2e.lessons.evidence" || contract.MessageType != "test.fixture.v1" ||
+	if contract.Name != "e2e.lessons.evidence" || contract.MessageType.Key() != "test.fixture.v1" ||
 		contract.EntityPattern != evidenceEntityID || contract.IndexingProfile != "control" {
 		t.Fatalf("evidence contract = %+v", contract)
 	}

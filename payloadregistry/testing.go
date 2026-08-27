@@ -1,8 +1,9 @@
 package payloadregistry
 
 import (
-	"strings"
 	"testing"
+
+	"github.com/c360studio/semstreams/pkg/types"
 )
 
 // NewForTest returns a fresh empty Registry suitable for unit tests
@@ -45,21 +46,17 @@ func NewWithSubset(tb testing.TB, regs ...func(*Registry) error) *Registry {
 // at graph-ingest's create seam without owning a payload type.
 type testStubPayload struct{}
 
-// RegisterTestType registers key ("domain.category.version") with a
-// schema-less stub factory and no floor. tb.Fatalf on a malformed key or a
-// registration error, so a test terminates at the fixture rather than at the
-// first rejected create.
-func RegisterTestType(tb testing.TB, reg *Registry, key string) {
+// RegisterTestType registers mt with a schema-less stub factory and no floor.
+// tb.Fatalf on a registration error (including component grammar), so a test
+// terminates at the fixture rather than at the first rejected create. The
+// type is taken structured — nothing here or anywhere parses a key.
+func RegisterTestType(tb testing.TB, reg *Registry, mt types.Type) {
 	tb.Helper()
-	parts := strings.Split(key, ".")
-	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		tb.Fatalf("payloadregistry.RegisterTestType: key %q is not domain.category.version", key)
-	}
 	if err := reg.Register(&Registration{
-		Domain: parts[0], Category: parts[1], Version: parts[2],
-		Description: "test stub type " + key,
+		Domain: mt.Domain, Category: mt.Category, Version: mt.Version,
+		Description: "test stub type " + mt.Key(),
 		Factory:     func() any { return &testStubPayload{} },
 	}); err != nil {
-		tb.Fatalf("payloadregistry.RegisterTestType(%q): %v", key, err)
+		tb.Fatalf("payloadregistry.RegisterTestType(%q): %v", mt.Key(), err)
 	}
 }

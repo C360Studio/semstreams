@@ -243,6 +243,6 @@ var itestUnitType = message.Type{Domain: "test", Category: "unit", Version: "v1"
 func itestPayloadRegistry(t *testing.T) *payloadregistry.Registry {
 	t.Helper()
 	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads, lifecycle.RegisterPayloads, inference.RegisterPayloads, RegisterPayloads)
-	payloadregistry.RegisterTestType(t, reg, itestUnitType.Key())
+	payloadregistry.RegisterTestType(t, reg, itestUnitType)
 	return reg
 }

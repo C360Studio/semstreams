@@ -260,6 +260,12 @@ func (e *WebSearchExecutor) emitObservations(ctx context.Context, call agentic.T
 			Tool: agentic.WebObservationToolWebSearch, LoopEntityID: loopEntityID,
 			Title: r.title, Snippet: r.description, SourceQuery: query, ObservedAt: observedAt,
 		}
+		if err := observation.Validate(); err != nil {
+			webEmitFailuresTotal.WithLabelValues("web_search", "validate").Inc()
+			e.logger.Warn("web_search emission skipped result: observation fails its contract",
+				"call_id", call.ID, "url", canon, "error", err)
+			continue
+		}
 		if err := publishWebObservation(ctx, e.publisher, urlEntity, observation.Triples()); err != nil {
 			webEmitFailuresTotal.WithLabelValues("web_search", "publish").Inc()
 			e.logger.Warn("web_search observation emission failed",
