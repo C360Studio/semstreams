@@ -798,6 +798,7 @@ import "github.com/c360studio/semstreams/pkg/projection/contract"
 
 var _ = contract.Contract{Name: "canonical", EntityPattern: "*.*.agentic-loop.agent.execution.*"}
 var _ = contract.Contract{Name: "retired-order", EntityPattern: "*.*.agent.agentic-loop.execution.*"}
+var _ = []contract.Contract{{Name: "elided-element", EntityPattern: "*.*.agent.lesson.record.*"}}
 var _ = map[string]any{"entity_pattern": "shipment"}
 `)
 	writeFixture(t, root, "configs/rulepack.json", `{
@@ -820,18 +821,24 @@ var _ = map[string]any{"entity_pattern": "shipment"}
 		"config:projection_contracts.entity_pattern=acme.ops.lesson.agent.record.*",
 		"go-field:Contract.EntityPattern=*.*.agentic-loop.agent.execution.*",
 		"go-field:Contract.EntityPattern=*.*.agent.agentic-loop.execution.*",
+		// []contract.Contract{{...}} elides the element type; the slice's element
+		// type names the container so the row is seen and judged, not just counted.
+		"go-field:Contract.EntityPattern=*.*.agent.lesson.record.*",
 	}
 	if !reflect.DeepEqual(values, want) {
 		t.Fatalf("candidates = %#v, want %#v — the classifier option key is a different vocabulary", values, want)
 	}
 	reasons := findingReasons(findings)
-	if got := reasons["domain_unregistered"]; len(got) != 1 || !strings.Contains(got[0], "*.*.agent.agentic-loop.execution.*") {
-		t.Fatalf("findings = %#v, want the retired-order contract pattern reported as an unregistered domain", findings)
+	domains := strings.Join(reasons["domain_unregistered"], "\n")
+	if len(reasons["domain_unregistered"]) != 2 ||
+		!strings.Contains(domains, "*.*.agent.agentic-loop.execution.*") ||
+		!strings.Contains(domains, "*.*.agent.lesson.record.*") {
+		t.Fatalf("findings = %#v, want both retired-order contract patterns — the plain literal and the elided slice element — reported as unregistered domains", findings)
 	}
 	if got := reasons["authority_literal"]; len(got) != 1 || !strings.Contains(got[0], "acme.ops.lesson.agent.record.*") {
 		t.Fatalf("findings = %#v, want the literal-authority config contract pattern reported", findings)
 	}
-	if len(findings) != 2 {
-		t.Fatalf("findings = %#v, want exactly the retired-order domain and the literal authority", findings)
+	if len(findings) != 3 {
+		t.Fatalf("findings = %#v, want exactly the two retired-order domains and the literal authority", findings)
 	}
 }

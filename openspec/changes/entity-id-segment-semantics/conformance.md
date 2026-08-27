@@ -1,4 +1,4 @@
-# Conformance — entity-id-segment-semantics (revision 7 — slice A implementation columns filled; slice B rows marked NOT IN THIS PR; implementation-review round applied)
+# Conformance — entity-id-segment-semantics (revision 8 — slice A implementation columns filled; slice B rows marked NOT IN THIS PR; implementation-review rounds 1 and 2 applied)
 
 Per-ruling map from the owner rulings on #1095 (2026-08-26, including the design-package ruling: O-1–O-11, O-13,
 O-14 accepted; O-12 overridden to read-only mirror; hierarchy skip accepted), the design constraints, and ADR-102 decisions to
@@ -44,7 +44,7 @@ Constraint rows are labelled K1–K3 so they do not collide with the inventory's
 
 | Finding | Disposition | Evidence |
 |---|---|---|
-| HIGH-1 — the audit could not see the projection-contract declaration surface (`contract.Contract.EntityPattern` normalizes to `entitypattern`, matched by no arm; `projection_contracts[].entity_pattern` never extracted) | FIXED, scoped (see deviation below) | `internal/entityidaudit/audit.go` `languageForName` `entitypattern`+`Contract` arm and the `projection_contracts` walk; `TestAuditSeesProjectionContractEntityPatterns`; golden row `testdata/corpus/entities.go:11`. Corpus 1289 → 1304 candidates, 0 findings; the 14 new rows include `agentic/loop_execution_entity.go:224`, `agentic/agent_lesson_entity.go:400`, `configs/rules/lessons/lesson-lifecycle-rulepack.json:39` |
+| HIGH-1 — the audit could not see the projection-contract declaration surface (`contract.Contract.EntityPattern` normalizes to `entitypattern`, matched by no arm; `projection_contracts[].entity_pattern` never extracted) | FIXED, scoped (see deviation below) | `internal/entityidaudit/audit.go` `languageForName` `entitypattern`+`contractTypeName` arm and the `projection_contracts` walk; `TestAuditSeesProjectionContractEntityPatterns`; golden row `testdata/corpus/entities.go:11`. Corpus 1289 → 1304 candidates, 0 findings; the 14 new rows include `agentic/loop_execution_entity.go:224`, `agentic/agent_lesson_entity.go:400`, `configs/rules/lessons/lesson-lifecycle-rulepack.json:39`. Round 2 widened it again to 1317 (MEDIUM-2) |
 | HIGH-2 — `migration…md` pointed provenance at "the SHAs in design §D", which holds none | FIXED | pointer re-aimed at the eleven SHAs pinned at the top of the section; the misleading **UNPINNED** label replaced with "SHA recorded at application rather than at the reading". All 11 re-verified read-only (`git cat-file -t` = commit, dated, `rev-parse HEAD` equal) |
 | HIGH-3(a) — the do-nothing path is silent and nothing said so | FIXED | new paragraph after the wire section: `ValidateEntityID` is arity/alphabet only (`pkg/types/entity_id.go:149`), and the four downstream reinterpretations are cited at `graph/inference/hierarchy.go:26-29`, `graph/clustering/entityid_provider.go:224`, `processor/graph-query/summary.go:197`, `vocabulary/export/export.go:129-130`; the audit's blind spot for fully templated builders is stated |
 | HIGH-3(b) — obligation 4 instructs a composition-root call no composition root in this repo makes | FIXED by option (2) — obligation restated | Option (1) was rejected on evidence: `cmd/e2e-semstreams/main.go` composes `document` (content, sensor, maintenance, observation), `iot_sensor` (environmental, facility) and `mission` (lifecycle) — no pair collides, so a boot check placed there could never fail, and `examples/processors/weather_station` has no consumer outside its own package. The falsifiable proof already exists at `pkg/types/entity_domain_authority_test.go:72-79` on the semsource/semdragon `web` pair. Obligation 4 now separates *declared-or-reserved* (enforced by the audit) from *cross-product collision* (only `NewEntityDomainAuthority` detects it; the audit's registered set is flat — `segment_rules.go:206`), and states that skipping the call reports a collision nowhere |
@@ -56,14 +56,14 @@ Constraint rows are labelled K1–K3 so they do not collide with the inventory's
 | MEDIUM — eight exported symbols with no consumer (`FrameworkEntityDomains`, `ReservedInstanceTokens`, `FrameworkIdentityFamilies`, `PrefixLevel(n)`, four `PrefixLevel*`) | NOT CHANGED — owner call at merge | keep as the ADR-099/gh606 vocabulary, or delete until a consumer exists |
 | MEDIUM — `agentic/web_observation_entity.go:24` `const` became a package-level `var` | FIXED with a falsifiable pin | a compile-time array-index assertion is impossible (the value comes from a function call, not a constant); `agentic/web_observation_entity_test.go` now pins the literal 16. Mutation-proven: `framework_identity_families.go:28` `InstanceBytes: 32` → `webObservationInstanceLen = 32, want 16`. The pre-existing check compared the segment against the same var and did not fire |
 | NIT — `tasks.md` cited `agentic/agent_lesson_entity.go:399` (that line is `MessageType`) | FIXED | three sites re-anchored to `:400` |
-| NIT — `tasks.md` cited `ops/scenario.go:715` (a closing brace) | FIXED | two sites re-anchored to `:607` and `:718-719` |
+| NIT — `tasks.md` cited `ops/scenario.go:715` (a closing brace) | FIXED — **four** sites, not the two this row first claimed (round 2 MEDIUM-3) | all four re-anchored to `:607` and `:718-719` (`tasks.md` `:37`, `:619`, `:694`, `:708`); `:686`'s `:604`/`:712` are legitimate pre-change targets and stay |
 | NIT — `graph/clustering/semantic_edge_provider_test.go:366` comment named the retired order | FIXED | `o.p.d.sys.t` → `o.p.sys.d.t`; the values were already canonical |
 | NIT — `test/e2e/scenarios/research-graph/scenario.go:115` field kept the retired concept's name | FIXED | `PlatformInstance`/`platform_instance` → `PlatformID`/`platform_id`; three in-package sites, no JSON supplies this struct (`DefaultConfig` is the only producer) |
 
 ### HIGH-1 mutation transcript (RED before / GREEN after, `cp` backups, restore verified by md5)
 
-Baseline both sides: unmutated tree passes — pre-fix `1289 structured candidates`, post-fix `1304`, zero findings in
-each. Each mutation was applied with a `cp` backup, an explicit `[applied]` marker printed between mutating and
+Baseline both sides: unmutated tree passes — pre-fix `1289 structured candidates`, post-fix `1304` (and `1317` after
+round 2's MEDIUM-2), zero findings in each. Each mutation was applied with a `cp` backup, an explicit `[applied]` marker printed between mutating and
 testing, and restoration confirmed by matching md5 (never `git checkout`/`restore`/`stash`).
 
 | Mutation | Pre-fix (`audit.go` md5 `e01f724f5591…`) | Post-fix (md5 `f8c963b34c4d…`) |
@@ -109,3 +109,31 @@ by mutation: `configs/rules/lessons/lesson-lifecycle-rulepack.json:39` set to `*
 the same line set to `acme.ops.lesson.agent.record.*` fires `authority_literal`. That boundary is the file's documented
 design (an adopter config may legitimately name a domain no Go delegation in this tree declares), not a hole this
 round closes.
+
+## Re-review round 2 (`5f66ce37` → `897476cf`; verdict CHANGES REQUESTED, 0 BLOCKING, 1 HIGH, 3 MEDIUM, 1 NIT)
+
+Round 1's HIGH-1 was independently reproduced and confirmed closed: same baselines, all three mutations
+NOT KILLED → KILLED, plus three reviewer-added mutations the developer had not run — the Go × `authority_literal`
+combination, a newly-visible row set to a 5-part value, and reverting `audit.go` against the new test — all three
+discriminating. The 11 false positives were reproduced, so the round-1 deviation was correct.
+
+| Finding | Disposition | Evidence |
+|---|---|---|
+| **HIGH — `migration…md:442-444` told an adopter a config projection contract is domain-checked.** A defect round 1 *introduced*: the sentence "Every declaration-pattern surface counts, including … a config's `projection_contracts[].entity_pattern`" was attached to the `domain_unregistered` claim. `segment_rules.go:57-59` returns before the domain rule for anything outside production Go. Round 1 measured this boundary and recorded it here, then published the opposite — the correction loop failing outward, one section above the place the same document states it correctly | FIXED | obligation 4 now reads "in production Go only" and carries an explicit paragraph: a config is extracted, judged lexically and for `authority_literal`, and **never** domain-checked, so a rulepack in the retired order passes silently. Re-proven at this head: `lesson-lifecycle-rulepack.json:39` → `*.*.agent.lesson.record.*` → `entity ID audit passed: 1317` |
+| MEDIUM-2 — the `container` binding under-covered: `[]Contract{{EntityPattern: …}}` elides its element type, so `strings.Contains("", "contract")` failed. 13 real declarations missed. Round 1 deferred this citing the generic-generalization blast radius; that obstacle does not bind a `Contract`-scoped fix | FIXED | `audit.go:392-402` clones the `*ast.ArrayType` element-type idiom already at `segment_rules.go:174-185`, keyed on the new `contractTypeName` constant (`audit.go:724`) that `languageForName:737` also reads, so the two cannot drift. Corpus 1304 → 1317; **corpus diff: 0 rows removed, 14 added**, all 317 existing `go-field:.<field>` surfaces intact, so `pkg/fusion/engine_test.go:211`'s line-pinned annotation is untouched. Zero new findings |
+| MEDIUM-3 — the `:715` NIT was half closed; the round-1 row claimed "two sites" when four cite the brace | FIXED, and the row above corrected | `tasks.md:694` and `:708` re-anchored to `:607`/`:718-719`. Both sit inside "Done." evidence where a current anchor is load-bearing |
+| MEDIUM-4 — the eight/three provenance split had no in-tree artifact, and on the only checkable reading the grouping differs | FIXED | split dropped; the paragraph now keeps only what was verified and is all an adopter needs — all eleven SHAs resolve to real commits and each equals that sister's current `HEAD` |
+| NIT-1 — `audit.go` cited `graph/query/classifier.go:80` for `Options["entity_pattern"]`; that line is the comment above an unrelated token regexp and `entity_pattern` appears in zero production Go under `graph/query/` | FIXED | the comment now cites `configs/domains/iot.json:8` and `graph/query/examples_test.go:52` |
+
+### MEDIUM-2 mutation transcript
+
+| Mutation | Pre-fix (`audit.go` md5 `f8c963b34c4d…`) | Post-fix (md5 `240103495e73…`) |
+|---|---|---|
+| `processor/rule/projection_derivation_test.go:66` (an elided `[]projection.Contract{{…}}` element) → 5-part `acme.ops.test.system.record` | `entity ID audit passed: 1304` — **NOT KILLED** | `:66: declaration-pattern go-field:Contract.EntityPattern: "acme.ops.test.system.record": entity_id_pattern_invalid:arity` — **KILLED** |
+| revert `audit.go` with the extended test in place | `candidates = []string{…3 rows…}`, want 4 — **FAILS** | passes |
+
+Restored by `cp` and md5: `audit.go` `240103495e73666a7571cd8a5d58c7ba`,
+`projection_derivation_test.go` `3a8410fec4d1d50634913b4db454e514`,
+`lesson-lifecycle-rulepack.json` `65a66ebf606768fc45ec2048bc0a1e46` — each equal to its pre-mutation value.
+
+The 13 recovered declarations are all `_test.go` in this tree (`processor/rule/projection_derivation_test.go:{66,78,86,177,207,281,395}`, `config_projection_test.go:{28,97,165}`, `actions_reconcile_test.go:49`, `projection_bindings_test.go:24`, `pkg/projection/mutation_client_test.go:428`), so the recovery is lexical here; the audit's purpose is running over a sister's tree, where `processor/rule/config.go:78` `ProjectionContracts []projection.Contract` invites exactly that spelling in production. A map-keyed `Contract` literal was searched for and does not exist in this tree, so the walk stays slice-scoped rather than speculatively general.

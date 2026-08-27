@@ -380,13 +380,12 @@ part of the supported framework surface, so no downstream-obligation claim is ma
 
 ## Entity-ID segment semantics, slice A (ADR-102, #1095) — the canonical order is `org.platform.system.domain.type.instance`
 
-Added 2026-08-27. The per-sister table below was measured read-only on 2026-08-26. Eight sisters were pinned at that
-reading and every pin was re-read on application without having moved: semsource `4093d3ce`, semmachina `841c45e8`,
-semdev `ca3956af`, semdragon `07f4de9b`, semteams `8a70b7e7`, semconnect `d0d06e00`, semspec `5a9496ee`, semmem
-`b909cbf1`. Three carry a SHA recorded at application rather than at the reading: semboids `8c03cc53`, semops
-`602c619a`, semsage `4d28b4dc`. All eleven resolve to a real commit and were that sister's `HEAD` when this section
-was written, so every row diffs against something. Every SemStreams-side claim below was re-verified against this
-branch after merging `#1116`, `#1109`, and `#1130`.
+Added 2026-08-27. The per-sister table below was measured read-only on 2026-08-26 at these SHAs: semsource
+`4093d3ce`, semmachina `841c45e8`, semdev `ca3956af`, semdragon `07f4de9b`, semteams `8a70b7e7`, semconnect
+`d0d06e00`, semspec `5a9496ee`, semmem `b909cbf1`, semboids `8c03cc53`, semops `602c619a`, semsage `4d28b4dc`. All
+eleven were re-verified read-only when this section was written: each resolves to a real commit and each equals that
+sister's current `HEAD`, so every row diffs against something. Every SemStreams-side claim below was re-verified
+against this branch after merging `#1116`, `#1109`, and `#1130`.
 
 ### What changes on the wire
 
@@ -437,11 +436,17 @@ GraphQL value `entityTypes[].type`, now `system.domain.type`.
 4. **Domains are delegated (ruled O-3/O-5) — and the two halves of that have different enforcement.** A product
    declares `[]pkg/types.EntityDomainDelegation{{Producer, Domain[, Type]}}`. The framework reserves `agent`, `ops`,
    `graph`; `system` and `instance` values are never registered.
-   *Declared-or-reserved is enforced by the corpus audit.* A literal position-4 value in production Go that is neither
-   reserved nor declared is a `domain_unregistered` finding from `cmd/entity-id-audit`, which reads your
-   `EntityDomainDelegation` literals as the registered set (`internal/entityidaudit/segment_rules.go:152-155`). Every
-   declaration-pattern surface counts, including a projection contract's `EntityPattern` field and a config's
-   `projection_contracts[].entity_pattern`.
+   *Declared-or-reserved is enforced by the corpus audit — in production Go only.* A literal position-4 value in
+   production Go that is neither reserved nor declared is a `domain_unregistered` finding from `cmd/entity-id-audit`,
+   which reads your `EntityDomainDelegation` literals as the registered set
+   (`internal/entityidaudit/segment_rules.go:152-155`). Every production-Go declaration-pattern surface is judged,
+   including a projection contract's `EntityPattern` field in both spellings — the named literal and the elided
+   `[]Contract{{…}}` element.
+   **A config is extracted but never domain-checked.** `segment_rules.go:57-59` returns before the domain rule for
+   anything outside production Go, so a rulepack's `projection_contracts[].entity_pattern` is judged only lexically
+   and for `authority_literal`. A rulepack left in the RETIRED ORDER passes the audit silently — verified by
+   mutation. Mirror the Go contract by hand and re-read positions 3-4 yourself; on that surface the audit will not
+   tell you.
    *Cross-product collision is not.* The audit collects a flat domain set with no producer dimension
    (`segment_rules.go:206`), so two producers delegating one domain is invisible to it. The single detector is passing
    every composed product's delegations to `pkg/types.NewEntityDomainAuthority` at your composition root, which then

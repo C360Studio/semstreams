@@ -339,6 +339,12 @@ func auditGo(path string, symbols *goSymbols) ([]Candidate, error) {
 		})
 	}
 	var out []Candidate
+	// Elements of []Contract{{...}} elide their type, so the element literal has
+	// no name of its own to bind EntityPattern against. Name it from the slice's
+	// element type, the same way collectRegisteredDomains reads
+	// []EntityDomainDelegation{{...}} (segment_rules.go). Scoped to Contract: it
+	// adds rows and renames no existing surface.
+	elidedContractElements := make(map[*ast.CompositeLit]bool)
 	add := func(expr ast.Expr, language Language, surface string) {
 		value, ok := resolve(expr)
 		if !ok {
@@ -383,7 +389,17 @@ func auditGo(path string, symbols *goSymbols) ([]Candidate, error) {
 	ast.Inspect(file, func(node ast.Node) bool {
 		switch n := node.(type) {
 		case *ast.CompositeLit:
+			if array, ok := n.Type.(*ast.ArrayType); ok && expressionName(array.Elt) == contractTypeName {
+				for _, element := range n.Elts {
+					if inner, ok := element.(*ast.CompositeLit); ok && inner.Type == nil {
+						elidedContractElements[inner] = true
+					}
+				}
+			}
 			typeName := expressionName(n.Type)
+			if typeName == "" && elidedContractElements[n] {
+				typeName = contractTypeName
+			}
 			fields := make(map[string]ast.Expr)
 			for _, element := range n.Elts {
 				if keyed, ok := element.(*ast.KeyValueExpr); ok {
@@ -702,6 +718,11 @@ func expressionName(expr ast.Expr) string {
 	}
 }
 
+// contractTypeName is the projection-contract type whose EntityPattern field is
+// a declaration pattern. Both the composite-literal walk and languageForName
+// read it, so an elided slice element and a named literal cannot diverge.
+const contractTypeName = "Contract"
+
 func languageForName(name, container string) (Language, bool) {
 	normalized := normalizeName(name)
 	container = strings.ToLower(container)
@@ -710,10 +731,10 @@ func languageForName(name, container string) (Language, bool) {
 		return LanguageDeclarationPattern, true
 	// A projection contract's EntityPattern (pkg/projection/contract.Contract) is
 	// a declaration pattern. It is bound to its owning type because the same
-	// normalized name spells an unrelated vocabulary elsewhere: the query
-	// classifier's Options["entity_pattern"] holds an entity *type* token
-	// (graph/query/classifier.go:80).
-	case normalized == "entitypattern" && strings.Contains(container, "contract"):
+	// normalized name spells an unrelated vocabulary elsewhere: an entity *type*
+	// token under a query classifier's options key (configs/domains/iot.json:8,
+	// read as Options["entity_pattern"] at graph/query/examples_test.go:52).
+	case normalized == "entitypattern" && strings.Contains(container, strings.ToLower(contractTypeName)):
 		return LanguageDeclarationPattern, true
 	case normalized == "entityidprefix" || strings.HasSuffix(normalized, "entityidprefix") || normalized == "entityprefix" || normalized == "idprefix":
 		return LanguageQueryPrefix, true
