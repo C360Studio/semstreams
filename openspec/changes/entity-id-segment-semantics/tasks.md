@@ -43,13 +43,18 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
 
 ## 1. Claim
 
-- [ ] 1.1 Worktree `../semstreams-wt/claude/gh1095-entity-id-segment-semantics` from `origin/main`; draft PR #1099 open
-      with `Closes #1095`, `Closes #1096`, and `implemented-by: <persona>` in the body; this change directory,
-      `docs/adr/102-entity-id-segment-semantics.md`, and the two `docs/proposals/gh1095-*` documents are its first
-      commit. Slices A (contract + sweep) and B (boundary + import lane + #1096) land in this ONE PR; the PR body is
-      a published layer carrying the per-sister migration list (design §D), the two values that leave the graph
-      (export IRI path, `graphSummary` `entity_types[].type`), and the owner ruling of 2026-08-26 as applied (O-1–O-11,
-      O-13, O-14 as recommended; O-12 = read-only mirror).
+- [x] 1.1 Slice A claimed 2026-08-27: worktree `../semstreams-wt/claude/gh1095-entity-id-slice-a`, branch
+      `claude/gh1095-entity-id-slice-a` from `origin/main` `78fe095c`; draft PR (number recorded on the PR itself and in
+      7.6) whose body starts `Part of #1095 (slice A of two — slice B closes it)`, then `Closes #1097`, then
+      `implemented-by: fable`. The owner split the design's one-PR landing (design §D row 2) into two PRs after the
+      design package merged as `7e7ea76e` (#1099): **slice A** = §2 tests 2.1–2.4, 2.6 (substitution + lesson-scope
+      rows only), 2.7, 2.8, 2.9 for those; §3 except 3.8; §4 omissions M1, M2, M5, M7–M12, M14, M15; §5; §7 gates for
+      what slice A does. **Slice B** (a later PR carrying `Closes #1095`, `Closes #1096`) = §2.5, the two run-scope
+      tests of 2.6, 3.8 (run-origin linkage is the #1096 mechanism), M3/M4/M6/M13, and all of §6. Slice A's PR body is
+      the published layer for the per-sister migration list (design §D), the two values that leave the graph (export
+      IRI path, `graphSummary` `entity_types[].type`), and the owner ruling of 2026-08-26 as applied (O-1–O-11, O-13,
+      O-14 as recommended; O-12 = read-only mirror); slice B's PR body restates it for the boundary. #1097 (two
+      defects in `docs/concepts/16-federation.md`) is folded into slice A's §5.5 doc sweep by owner direction.
 
 ## 2. Baseline capture — write the named tests first
 
