@@ -119,6 +119,17 @@ func TestOpsDiagnosisEntityRejectsMalformed(t *testing.T) {
 // any requests_per_minute are boot-accepted configuration and stay valid.
 func TestModelEndpointEntityRejectsMalformed(t *testing.T) {
 	requirePublishable(t, fullModelEndpoint())
+	// The relaxation is guarded, not merely absent (archive-check correction):
+	// an empty provider and a negative rate limit are boot-accepted endpoint
+	// configuration — model/registry.go:533 permits `Provider == ""`, and
+	// nothing anywhere validates the endpoint's RequestsPerMinute — so both
+	// MUST publish. Restoring either rejection turns these rows RED.
+	noProvider := fullModelEndpoint()
+	noProvider.Provider = ""
+	requirePublishable(t, noProvider)
+	negativeRate := fullModelEndpoint()
+	negativeRate.RequestsPerMinute = -1
+	requirePublishable(t, negativeRate)
 	cases := []struct {
 		name   string
 		mutate func(e *agentic.ModelEndpointEntity)

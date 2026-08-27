@@ -29,6 +29,11 @@ graph-ingest factory refuses to construct without a payload registry (`Dependenc
 registered by `payloadbuiltins.Register`, so a root that calls it (semmachina, semdev do) sees no change. Full mechanics:
 `openspec/specs/payload-registry/spec.md`, `openspec/specs/graph-ingest/spec.md`.
 
+Two exported constants are removed: `agentic.LessonPolarityAvoid` and `agentic.LessonPolarityBestPractice` (the lesson
+polarity vocabulary is now unexported, matching the sibling severity and status vocabularies; a producer writes the
+literal `"avoid"` / `"best_practice"`, and `Validate`'s error names both values). No adopter impact, verified: a grep
+across all nine sister repositories found zero references.
+
 ### The one obligation
 
 Register every `message.Type` you stamp on `entity.create`, in the binary that hosts graph-ingest, with its ADR-054 floor and —

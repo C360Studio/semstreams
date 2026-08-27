@@ -489,11 +489,14 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       **Narrow re-review at `dd368a5e` (2026-08-27): CHANGES REQUESTED — 1 HIGH, 3 MEDIUM, 4 NIT, all applied.**
       HIGH-1 — the model-endpoint validator was STRONGER than its writer and the config owner (same class as the
       loop-execution over-delegation): it rejected `Provider == ""` where `model.validateEndpoint` explicitly permits it
-      (`registry.go`: `ep.Provider != "" && !validProviders[…]`; `configs/agentic.json` ships the provider-less `mock`
-      endpoint) and `RequestsPerMinute < 0` which has no upstream validation. Both rejections and their two test rows
-      dropped; the doc comment now names the derivation (`model.validateEndpoint` parity). Measured, not inferred:
-      `task e2e:agentic` 16:16:25Z–16:17:10Z rc=0 with `graph_model_triples:6` — the provider-less mock endpoint IS born
-      through `WriteModelEndpoints` (a rejection would have WARN-skipped it to zero model triples).
+      (`model/registry.go:533` reads `ep.Provider != "" && !validProviders[…]`) and `RequestsPerMinute < 0`, which no
+      endpoint-config validation anywhere checks (`grep -rn RequestsPerMinute --include='*.go'` — the governance hits are
+      a different struct's own knob). Both rejections and their two test rows dropped; the doc comment names the
+      derivation. `task e2e:agentic` 16:16:25Z–16:17:10Z rc=0 stayed green but does NOT exercise a provider-less endpoint
+      through `WriteModelEndpoints`: the tier's only live endpoint, `model_registry.endpoints.mock`, carries
+      `"provider": "openai"` (`configs/agentic.json:61`), and the provider-less block under
+      `components.agentic-model.config.endpoints` is dead config (`agenticmodel.Config` has no endpoints field). The
+      evidence claim is corrected and the missing positive guard added in the archive-check correction round below.
       MEDIUM-1 — migration-doc sister census corrected read-only: semsource moved out of "nothing to do"
       (`graph/contract.go:71` flattens `EntityType` with `.Key()` in a contract literal — compile break); semdev
       obligation notes `internal/graphown/contracts.go:444` + `test/conformance/standards_contracts_test.go:102-103`;
@@ -512,6 +515,30 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       `go test -race -tags=integration -count=1 -run 'TestWriteModelEndpoints|TestWriteSpawnIdentity' ./processor/agentic-loop/`
       ok 4.103s; `go test -race -tags=integration -count=1 -run TestMalformedDiagnosisNeverReachesTheGraph
       ./processor/agentic-tools/` ok 2.304s; `task e2e:agentic` under the host lock rc=0 (row above).
+      **Narrow archive check at `fc0cb9c0` (2026-08-27): ARCHIVE NEEDS CORRECTION — this post-archive content commit is
+      the correction round and re-enters archive reconciliation.**
+      HIGH — the HIGH-1 evidence did not discriminate, and the relaxation was unguarded: `graph_model_triples:6` came
+      from the provider-FUL `mock` endpoint (`WriteModelEndpoints` iterates `w.modelRegistry.ListEndpoints()`, resolved
+      from the top-level `model_registry` key, whose only endpoint carries `"provider": "openai"`; the provider-less
+      block under `components.agentic-model.config.endpoints` is unread — `agenticmodel.Config` has no endpoints field),
+      so the tier was green before the fix too; and reverting the entire HIGH-1 fix left `./agentic/` and
+      `TestWriteModelEndpoints` green because the dropped rejection rows had no positive counterpart. Guard added: two
+      `requirePublishable` rows in `TestModelEndpointEntityRejectsMalformed` — `Provider: ""` and
+      `RequestsPerMinute: -1` MUST pass `Validate()` and marshal through `BaseMessage`. Mutation transcript (round 4):
+      `model_endpoint_entity.go` sha `fe819b9d…` → `Provider == ""` rejection restored → `[applied]` (sha `9a8ab220…`) →
+      `--- FAIL: TestModelEndpointEntityRejectsMalformed` — `provider is required` → restore sha256-equal (`fe819b9d…`);
+      then `RequestsPerMinute < 0` rejection restored → `[applied]` (sha `01d02670…`) →
+      `--- FAIL: TestModelEndpointEntityRejectsMalformed` — `requests_per_minute must not be negative, got -1` →
+      restore sha256-equal, suite ok. The HIGH-1 paragraph above is corrected in place to the derivation only; the
+      `model_endpoint_entity.go` doc comment repoints its provider clause at `registry.go:533` and scopes
+      "no stronger than" to the JSON-reachable domain (the NaN/Inf half of the price guard is unreachable from JSON).
+      MEDIUM — the CODEX-HIGH conformance row overstated "mirrors `model.validateEndpoint` exactly": reworded to
+      "mirrors the checks it derives"; the closed provider vocabulary {anthropic, ollama, openai, openrouter, gemini}
+      (`registry.go:533-535`) stays the config owner's — weaker than upstream on that axis, deliberate and pre-existing.
+      NIT — the migration doc now records the removed exports `agentic.{LessonPolarityAvoid, LessonPolarityBestPractice}`
+      with "no adopter impact, verified" (the archive check grepped all nine sisters: zero hits). Reported, not fixed
+      (coordinator files it): `processor/agentic-loop/graph_writer.go:250` calls the panicking `ModelEndpointEntityID`
+      before `endpoint.Validate()` — pre-existing.
 - [x] 7.3 Tag gate (owner override O-6): `task e2e:agentic`, `task e2e:lessons`, `task e2e:structural`, `task e2e:ops`, `task e2e:research-graph`, `task e2e:lifecycle`, `task e2e:crud-tools`, `task e2e:core` — all eight green, each as a provenance-complete row (exact command, runner identity, UTC start/end) in the candidate-proof record per `openspec/specs/release-candidate-proof/spec.md`; and, until the web-observation tier exists (O-10), `go test -race -tags=integration -count=1 -run TestWebObservationBirthIsRegistered ./processor/agentic-tools/executors/` recorded as a row of its own. One agent at a time on the host; the BREAKING commit lands on main
       only behind all of these; results recorded here verbatim.
       Run 2026-08-26 on this laptop (runner: Claude Fable 5 in the `claude/gh1100-single-type-authority-impl` worktree):

@@ -110,14 +110,17 @@ func (e *ModelEndpointEntity) Schema() message.Type {
 }
 
 // Validate implements message.Payload and IS the endpoint writer's contract —
-// derived from, and no stronger than, the config owner's validateEndpoint
-// (model/registry.go): model required, max_tokens and both prices
-// non-negative. Provider is deliberately NOT required — the registry permits
-// an empty provider (registry.go: `ep.Provider != "" && !validProviders[...]`),
-// AdapterFor("") returns the generic adapter, and configs/agentic.json ships
-// a provider-less endpoint — and RequestsPerMinute is deliberately unchecked,
+// derived from, and on the JSON-reachable domain no stronger than, the config
+// owner's validateEndpoint (model/registry.go): model required, max_tokens
+// and both prices non-negative (the NaN/Inf half of the price guard is
+// unreachable from JSON config). Provider is deliberately NOT required — the
+// registry permits an empty provider (registry.go:533 reads
+// `ep.Provider != "" && !validProviders[...]`) and AdapterFor("") returns the
+// generic adapter — and RequestsPerMinute is deliberately unchecked,
 // mirroring its absence upstream: a payload contract stronger than its writer
-// converts a boot-accepted config into a silently missing graph entity.
+// converts a boot-accepted config into a silently missing graph entity. The
+// closed provider vocabulary stays the config owner's; this contract does not
+// carry it.
 // BaseMessage.MarshalJSON refuses a payload that fails this;
 // WriteModelEndpoints delegates here before birthing an endpoint.
 func (e *ModelEndpointEntity) Validate() error {
