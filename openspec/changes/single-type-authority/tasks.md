@@ -347,8 +347,9 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       RULED 2026-08-27 (owner, #1100, option (a) narrowed): a production-target tier stamps only what the production binary
       registers; only the three synthetic-type scenarios move to the e2e target; core-health/core-dataflow, agentic,
       deep-research, slow-consumer stay on `cmd/semstreams`; no test types in the product binary. Implemented: `e2e.yml` gains
-      `semstreams-fixtures` (target `e2e`, profile `fixtures`, same config/ports; profiled so the two apps never share one
-      NATS); `core.yml` phase 1 runs `--scenario all` (now health + dataflow) on the production app through its shutdown
+      `semstreams-fixtures` (target `e2e`, profile `fixtures`, same config and the SAME host ports — the identical port set is
+      the guard that keeps the twin and the production app from running together; the profile only hides the twin from a
+      bare `up`, and the task files name `nats semstreams-fixtures` explicitly); `core.yml` phase 1 runs `--scenario all` (now health + dataflow) on the production app through its shutdown
       checks, phase 2 tears it down and runs `--scenario core-graph-roundtrip` on the fixtures app; `lessons.yml` boots the
       fixtures app; `research-graph.yml` switches its single app to target `e2e`; `cmd/e2e/main.go` `all` no longer bundles
       the probe; `common.yml` clean covers the profile; the lessons scenario asserts the lesson's ruled `content` floor (O-3)

@@ -21,7 +21,7 @@ composition root registers them through `cmd/e2e-semstreams/fixtures.RegisterPay
 | research-graph | `e2e` (`research-graph.yml`) | `research.e2e_search_seed.v1` |
 | structural / statistical / semantic | `e2e` (`tiered.yml`) | `e2e.eventtime.v1`, `e2e.canonical_create_contract.v1`, `e2e.relationship_contract.v1` (structural) |
 | lifecycle | `e2e` (`lifecycle.yml`) | none (`lifecycle.harness.v1` is a framework type) |
-| ops | `e2e` (`ops.yml`) | none (`e2e.probe.v1`-style seeds are direct `PutKV`) |
+| ops | `e2e` (`ops.yml`) | none (its seed is the framework type `agentic.loop_completed.v1`, written by direct `PutKV` — `ops/scenario.go:464,472`) |
 | agentic | `production` (`agentic.yml`) | none |
 | crud-tools | `production` (`crud-tools.yml`) | none on create (`e2e.probe.v1` is a direct `PutKV`) |
 | deep-research | `production` (`deep-research.yml`) | none |
