@@ -43,10 +43,14 @@ import (
 // Platform is a value type (not pointer) because PlatformMeta is a small
 // POD; the empty value is still safe for the decide tool to use.
 type ToolDependencies struct {
-	NATSClient        *natsclient.Client
-	MutationClient    *projection.MutationClient
-	Platform          component.PlatformMeta
-	Logger            *slog.Logger
+	NATSClient     *natsclient.Client
+	MutationClient *projection.MutationClient
+	Platform       component.PlatformMeta
+	Logger         *slog.Logger
+	// The ADR-029 Pattern-B step numbers are historical: steps 2 and 4 were the
+	// flow and flow-template managers, removed with the authoring surface
+	// (ADR-100 D5, #1093). The remaining numbers are left as they were so the
+	// ADR still reads against this list.
 	RuleManager       RuleManager         // Pattern-B step 1
 	PersonaManager    PersonaManager      // Pattern-B step 3
 	ComponentRegistry *component.Registry // Pattern-B step 5; nil → list_components skipped

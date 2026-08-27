@@ -26,12 +26,6 @@
 //   - Retains live handles as the sole lifecycle owner
 //   - Exposes read-only health, status, configuration, and flow graph views
 //
-// FlowService: saved flow-diagram authoring API:
-//   - CRUD operations for flow definitions
-//   - Validation and compilation through Engine
-//   - Explicit sorted, upsert-only publication for the next boot
-//   - Best-effort observations keyed by diagram component names
-//
 // # Service Patterns
 //
 // All services follow standardized patterns:
@@ -279,10 +273,12 @@
 //	    // Create service manager
 //	    manager := service.NewServiceManager(deps)
 //
-//	    // Register services
-//	    manager.RegisterConstructor("flow-service", func(d Dependencies) (Service, error) {
-//	        return service.NewFlowService(d, flowEngine, flowStore)
-//	    })
+//	    // Register services. Constructors take (rawConfig, *Dependencies) and
+//	    // are registered on the Registry, which the manager is built from.
+//	    registry := service.NewServiceRegistry()
+//	    if err := registry.Register("metrics", service.NewMetrics); err != nil {
+//	        log.Fatal(err)
+//	    }
 //
 //	    // Initialize and start
 //	    ctx := context.Background()

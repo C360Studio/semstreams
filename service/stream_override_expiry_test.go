@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -177,7 +179,14 @@ func composeComponentManagerWithOverride(
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	require.NoError(t, client.Connect(ctx))
-	t.Cleanup(func() { _ = client.Close(context.WithoutCancel(ctx)) })
+	t.Cleanup(func() {
+		// Bounded, like every other detached cleanup here: an unbounded
+		// WithoutCancel would let a wedged Close hang the test binary with no
+		// deadline of its own.
+		closeCtx, cancelClose := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancelClose()
+		_ = client.Close(closeCtx)
+	})
 
 	bootConfig := &config.Config{StreamMigrationOverrides: overrides}
 	configManager, err := config.NewConfigManager(bootConfig, client, logger)
@@ -283,4 +292,141 @@ func TestComponentManagerStartRunsOverrideExpiryReporter(t *testing.T) {
 	stopCtx, cancelStop := context.WithTimeout(context.WithoutCancel(runtimeCtx), 30*time.Second)
 	defer cancelStop()
 	require.NoError(t, manager.Stop(stopCtx))
+}
+
+// --- join guards (review HIGH-1) ---------------------------------------------
+//
+// FlowService carried three lifecycle guards for this property and they were
+// deleted with it. The join is invisible to an ordinary test: the real reporter
+// returns on cancellation in nanoseconds, so `supervise` releasing `done` early
+// and releasing it correctly look identical. The lever below is the reporter's
+// OWN config source — run's first act is an immediate evaluate, and evaluate
+// calls configOf. A configOf the test holds open holds the loop open, inside
+// production code, with no test seam on the manager.
+
+// heldConfigSource blocks the reporter inside its first evaluate until the test
+// releases it, and reports when the loop got there.
+type heldConfigSource struct {
+	cfg      *config.Config
+	entered  chan struct{}
+	release  chan struct{}
+	enterOne sync.Once
+	calls    atomic.Int64
+}
+
+func newHeldConfigSource(cfg *config.Config) *heldConfigSource {
+	return &heldConfigSource{
+		cfg:     cfg,
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (h *heldConfigSource) get() *config.Config {
+	h.calls.Add(1)
+	h.enterOne.Do(func() { close(h.entered) })
+	<-h.release
+	return h.cfg
+}
+
+// TestSuperviseHoldsDoneUntilTheOverrideExpiryLoopReturns is the airtight half:
+// it asserts on the very channel Stop joins. `done` must not close while a
+// launched loop is still running, and the check is a zero-timeout select, so it
+// cannot pass by being slow.
+func TestSuperviseHoldsDoneUntilTheOverrideExpiryLoopReturns(t *testing.T) {
+	source := newHeldConfigSource(&config.Config{})
+	manager := newPortOwnershipCM(t, nil)
+	manager.overrideExpiry = newStreamOverrideExpiryReporter(source.get, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go manager.supervise(ctx, done)
+
+	<-source.entered // the loop is inside evaluate, holding on release
+	cancel()         // publishHealthLoop returns immediately; the loop cannot
+
+	// Give the health loop every chance to return and supervise every chance to
+	// release done wrongly. Nothing releases the reporter, so a correct
+	// supervise CANNOT be finished.
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-done:
+		close(source.release)
+		t.Fatal("supervise released done while the override-expiry loop was still running: " +
+			"Stop would return with a live goroutine behind it")
+	default:
+	}
+
+	close(source.release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("supervise never released done after the loop returned")
+	}
+}
+
+// TestComponentManagerStopWaitsForTheOverrideExpiryLoop drives the whole
+// production path — Start, Stop, and the waitSupervisor join between them —
+// rather than supervise alone, because the property adopters depend on is that
+// STOP does not return with a live goroutine behind it.
+func TestComponentManagerStopWaitsForTheOverrideExpiryLoop(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	service, _ := composeComponentManagerWithOverride(t, config.StreamMigrationOverrides{
+		"LAPSED": {Owner: "team-legacy", Expires: "2020-01-01", Reason: "sizing study"},
+	}, logger)
+	manager, ok := service.(*ComponentManager)
+	require.True(t, ok, "NewComponentManager returned %T", service)
+
+	// Swap the reporter's config source for one this test holds. Same reporter
+	// type and same production launch path; only the source is under control.
+	source := newHeldConfigSource(&config.Config{})
+	manager.overrideExpiry = newStreamOverrideExpiryReporter(source.get, logger)
+
+	runtimeCtx, cancelRuntime := context.WithCancel(t.Context())
+	defer cancelRuntime()
+	require.NoError(t, manager.Start(runtimeCtx))
+	<-source.entered
+
+	stopErr := make(chan error, 1)
+	go func() {
+		stopCtx, cancelStop := context.WithTimeout(context.WithoutCancel(runtimeCtx), 30*time.Second)
+		defer cancelStop()
+		stopErr <- manager.Stop(stopCtx)
+	}()
+
+	select {
+	case err := <-stopErr:
+		close(source.release)
+		t.Fatalf("Stop returned (%v) while the override-expiry loop was still inside evaluate", err)
+	case <-time.After(250 * time.Millisecond):
+		// Stop is blocked on the join, which is the property under test.
+	}
+
+	close(source.release)
+	select {
+	case err := <-stopErr:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Stop never returned after the override-expiry loop was released")
+	}
+}
+
+// TestComponentManagerFailedStartDoesNotLaunchOverrideExpiryLoop replaces
+// TestFlowServiceFailedStartDoesNotLaunchOverrideReporter: a Start that refuses
+// must leave no loop behind, or a failed boot leaks a goroutine reading config
+// forever.
+func TestComponentManagerFailedStartDoesNotLaunchOverrideExpiryLoop(t *testing.T) {
+	source := newHeldConfigSource(&config.Config{})
+	close(source.release) // never block; this test counts calls, it does not hold
+
+	manager := newPortOwnershipCM(t, nil)
+	manager.overrideExpiry = newStreamOverrideExpiryReporter(source.get, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	// initialized is false on a struct-literal manager, so Start refuses before
+	// it reaches supervise.
+	require.Error(t, manager.Start(t.Context()), "Start must refuse an uninitialized manager")
+
+	require.Nil(t, manager.supervisorDone, "a refused Start must leave no supervisor to join")
+	require.Zero(t, source.calls.Load(),
+		"a refused Start launched the override-expiry loop anyway: it read the configuration %d time(s)",
+		source.calls.Load())
 }

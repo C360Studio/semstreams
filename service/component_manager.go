@@ -76,8 +76,12 @@ type ComponentManager struct {
 	// an optional service, because the component-manager is the one service the
 	// framework refuses to compose without (mandatoryServices,
 	// MandatoryServiceDisabledError): an operator who declares a bridge should
-	// not also have to declare the service that tells them it lapsed. Nil when
-	// the boot configuration declares no override source.
+	// not also have to declare the service that tells them it lapsed.
+	//
+	// NewComponentManager always assigns it — a composition with no override
+	// declared still reports the empty set, which is what makes the gauge's
+	// absence meaningful. It is nil only on a manager built as a struct literal,
+	// which unit tests do, and that is the case supervise's guard covers.
 	overrideExpiry *streamOverrideExpiryReporter
 
 	// bootFindings is the composition analysis of the admitted boot set,
@@ -534,6 +538,8 @@ func (cm *ComponentManager) supervise(ctx context.Context, done chan<- struct{})
 	defer close(done)
 
 	var loops sync.WaitGroup
+	// Guarded because a struct-literal manager (unit tests) has no reporter;
+	// every manager NewComponentManager builds does.
 	if cm.overrideExpiry != nil {
 		loops.Add(1)
 		go func() {
@@ -542,6 +548,11 @@ func (cm *ComponentManager) supervise(ctx context.Context, done chan<- struct{})
 		}()
 	}
 	cm.publishHealthLoop(ctx)
+	// Every loop launched above joins BEFORE done is released, so a Stop that
+	// observes supervisorDone has observed their completion. Dropping this is
+	// silent: the real reporter returns on cancellation in nanoseconds, so only
+	// a loop the test holds open can prove the join
+	// (TestSuperviseHoldsDoneUntilTheOverrideExpiryLoopReturns).
 	loops.Wait()
 }
 

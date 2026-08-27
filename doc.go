@@ -113,7 +113,7 @@
 // Core packages:
 //   - component: Component lifecycle, registry, port definitions
 //   - componentregistry: Registration of all component types
-//   - engine: Component orchestration and lifecycle
+//   - composition: Offline and boot-time composition validation
 //   - config: Configuration loading and validation
 //
 // Graph packages:

@@ -36,12 +36,14 @@
 //
 // # Supported Construction Boundary
 //
-// The framework service root builds flow graphs once from the complete
-// [component.Registry] declaration set admitted at boot. In production,
-// service.ComponentManager owns that construction and exposes the sealed graph
-// and connectivity validation for the process lifetime. Component authors
-// declare ports for boot admission; later desired-state writes apply on the
-// next process start and do not rebuild the running graph.
+// Flow graphs are built from a complete [component.Declaration] set through
+// [BuildFromDeclarations], and [composition.Analyze] is that function's
+// production caller — offline from declared ports, and at boot from the
+// declarations the Registry admitted. ComponentManager no longer builds a graph
+// of its own; it retains the composition.Result Analyze produced and projects
+// it (ADR-100). Component authors declare ports for boot admission; later
+// desired-state writes apply on the next process start and do not rebuild the
+// running graph.
 //
 // Direct downstream graph assembly is retired. Registry-to-node ingestion is
 // an internal framework seam so every consumer sees the same retained

@@ -43,9 +43,11 @@ func admitTypedTestComponent(
 // perfectly well-formed answer, and every other test on this surface only
 // checks that the handler returns 200.
 //
-// It covers BOTH origin rules, because they are decided by different projected
-// facts: "poller" is an origin by its declared component type, "listener" by an
-// input port whose interaction pattern reaches outside the composition.
+// It covers ALL THREE origin rules, because each is decided by a different
+// projected fact and each is separately deletable: "poller" is an origin by its
+// declared component type, "listener" by a network-listening input port, and
+// "fetcher" by an outbound HTTP-client input port. Asserting two of the three
+// left the PatternHTTPClient arm free to be removed silently (review MED-4).
 func TestFlowPathsTraverseTheRetainedGraph(t *testing.T) {
 	poller := &portFactsDiscoverable{
 		baseDiscoverable: baseDiscoverable{name: "poller"},
@@ -63,6 +65,17 @@ func TestFlowPathsTraverseTheRetainedGraph(t *testing.T) {
 		inputs: []component.Port{{
 			Name: "wire", Direction: component.DirectionInput,
 			Config: component.NetworkPort{Protocol: "udp", Host: "0.0.0.0", Port: 34551},
+		}},
+		outputs: []component.Port{{
+			Name: "out", Direction: component.DirectionOutput,
+			Config: component.NATSPort{Subject: "paths.test.data"},
+		}},
+	}
+	poller2 := &portFactsDiscoverable{
+		baseDiscoverable: baseDiscoverable{name: "fetcher"},
+		inputs: []component.Port{{
+			Name: "feed", Direction: component.DirectionInput,
+			Config: component.HTTPClientPort{Method: "GET", URLPattern: "https://example.test/feed"},
 		}},
 		outputs: []component.Port{{
 			Name: "out", Direction: component.DirectionOutput,
@@ -91,6 +104,7 @@ func TestFlowPathsTraverseTheRetainedGraph(t *testing.T) {
 	registry := component.NewRegistry()
 	admitTypedTestComponent(t, registry, "poller", types.ComponentTypeInput, poller)
 	admitTypedTestComponent(t, registry, "listener", types.ComponentTypeProcessor, listener)
+	admitTypedTestComponent(t, registry, "fetcher", types.ComponentTypeProcessor, poller2)
 	admitTypedTestComponent(t, registry, "middle", types.ComponentTypeProcessor, middle)
 	admitTypedTestComponent(t, registry, "sink", types.ComponentTypeOutput, sink)
 	manager := newPortOwnershipCM(t, registry)
@@ -102,9 +116,12 @@ func TestFlowPathsTraverseTheRetainedGraph(t *testing.T) {
 	want := map[string][]string{
 		"poller":   {"poller", "middle", "sink"},
 		"listener": {"listener", "middle", "sink"},
+		"fetcher":  {"fetcher", "middle", "sink"},
 	}
 	require.Len(t, paths, len(want),
-		"paths = %#v; want one entry per origin — a declared input type AND a network-listening port", paths)
+		"paths = %#v; want one entry per origin — a declared input TYPE, a network-listening port, and an "+
+			"outbound HTTP-client port. Each is a separate arm of isInputNode and each can be deleted "+
+			"independently, so all three are asserted", paths)
 	for origin, expected := range want {
 		reachable, ok := paths[origin]
 		require.True(t, ok, "paths = %#v, want %q recognised as an origin", paths, origin)

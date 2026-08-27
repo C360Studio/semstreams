@@ -141,6 +141,32 @@ Premises were measured at `5cc0c7fb` and are re-measured at the claim head; the 
       `docs/operations/26-nats-kv-key-migration-ledger.md` (three ledger rows for packages that no longer exist),
       `persona/manager.go` × 3 and `doc.go` × 2 and `graph/kvcatalog.go` × 1 comment references,
       `test/e2e/scenarios/crud-tools/scenario.go` doc comment.
+
+      **CORRECTED CENSUS (review HIGH-2).** The census above used the task's case-SENSITIVE five-token pattern, which
+      cannot see `FlowService`, `FlowManager`, `flow_template`, the bucket names, or the tool names, and it missed six
+      survivors: `service/doc.go:29-33` (FlowService listed as a Core Service Type) and `:283-285` (an adopter example
+      teaching `manager.RegisterConstructor("flow-service", …)` → `service.NewFlowService(d, flowEngine, flowStore)`,
+      a signature that never existed on this head), `doc.go:116` (`engine: Component orchestration and lifecycle`),
+      `message/README.md:670` (dangling link to `../engine/`), `component/flowgraph/doc.go:39-44` ("service.
+      ComponentManager owns that construction" — now `composition.Analyze` through `BuildFromDeclarations`), and
+      `processor/agentic-tools/executors/personas.go:14` (`FlowManager` in a comment). All six swept.
+      Re-run with the wide pattern:
+      `grep -rniE 'flowstore|flowtemplate|flowengine|flow-builder|flowbuilder|FlowManager|FlowService|flow_template|semstreams_flows|FLOW_TEMPLATES|create_flow|update_flow|delete_flow|list_flows|get_flow|instantiate_flow|manage_flow' --include='*.go' --include='*.json' --include='*.yml' --include='*.yaml' --include='*.md' .`
+      raw **650**; excluding `docs/adr/` + `openspec/changes/archive/` **336**; live tree **89**. Every live hit is in
+      one of five permitted classes, none of them production code:
+
+      | Count | Where | Class |
+      |---|---|---|
+      | 30 | `docs/operations/migration-beta162-to-beta163.md` | the migration section, which exists to name what left |
+      | 25 | the four removal guards + `service/stream_override_expiry_test.go` | a guard must name what it forbids |
+      | 14 | `openspec/specs/flow-authoring/spec.md` | the retired capability spec; leaves with `openspec archive` |
+      | 16 | `testutil/flow.go` (12) + `testutil/doc.go` (4) | pre-existing dead `FlowBuilder`, zero callers — FILED by the coordinator, not this change |
+      | 2 | `docs/operations/migration-beta34-to-beta35.md` | a historical migration doc, history like `docs/adr/` |
+      | 1 | `test/e2e/client/websocket.go:150` | ADR-096 residue, FILED (3.3) |
+      | 1 | `openspec/specs/composition-validation/spec.md` | the `[~]` this change's MODIFIED requirement replaces at archive |
+
+      Production `.go` outside `testutil/` and the guards: **zero**
+      (`grep -rniE '<wide pattern>' --include='*.go' . | grep -v _test.go` returns only the two FILED files).
 - [x] 3.3 **Re-judge the retained duplicate build.** `ComponentManager.GetFlowGraph` / `buildFlowGraph` /
       `flowgraph.BuildFromRegistry` and `GET <components>/paths` rebuild a graph from the admitted registry instead of
       serving the retained `composition.Result.Graph`. PR #1101 removed the `/gaps` judgment and recorded this build as
@@ -416,6 +442,19 @@ before the omission, and record `shasum -a 256` equality of the restored file. C
         durable_tool_replay_executor_invocations:1  stream_chunks_total:5  tool_executions:1
       ```
 
+      **`task e2e:ops` → exit=0** (added on review MED-3: this tier boots `configs/flows/ops-agent-test.json`, whose
+      `allowed_tools` this change rewrote; the reviewer traced it as expected-green, which is an inference until
+      measured):
+      ```
+      [OK] Services are healthy (NATS + mock-llm + semstreams)
+      Scenario completed successfully duration=622.0ms  assertions_run=9
+        verify-registered-tools_duration_ms:36  verify-diagnoses-via-http_duration_ms:19
+        verify-lesson-proposed_duration_ms:14   promote-lesson_duration_ms:17
+        wait-for-loop-completion_duration_ms:259
+      ```
+      Same host protocol: foreign suite waited out, ports checked, `e2e-lock-gh1093` held and removed, teardown
+      confirmed clean.
+
 - [x] 6.7 Downstream measurement (read-only): `cd ~/Code/c360/semteams && go vet ./cmd/semteams/` against a `replace`
       to this branch in a scratch module (never edit semteams; snapshot its porcelain and use
       `GOFLAGS=-mod=readonly` or a scratch copy so its `go.mod` is not rewritten); record the compile errors as the
@@ -440,7 +479,53 @@ before the omission, and record `shasum -a 256` equality of the restored file. C
       `reapOrphanedTestFlows` runs from `global-setup.ts` on every run.
 ## 7. Review and archive (inside the landing PR)
 
-- [ ] 7.1 `semstreams-reviewer` on the GREEN + §4 + §5 head: verdict, every finding and its disposition (FIXED /
+- [x] 7.1 `semstreams-reviewer` on the GREEN + §4 + §5 head: verdict, every finding and its disposition (FIXED /
+      FILED #n / ruling) recorded here. Findings on unused paths are FILED, not fixed.
+
+      **Fable review at `32a12d12`: APPROVE WITH CHANGES — 0 BLOCKING, 2 HIGH, 6 MEDIUM, 6 NIT.** Every finding is
+      dispositioned below; all applied in one round.
+
+      | # | Finding | Disposition |
+      |---|---|---|
+      | HIGH-1 | `supervise` joins the loop via `loops.Wait()`, but the three FlowService guards for that property were deleted with no replacement; the reviewer dropped `loops.Wait()` and `-race ./service/` stayed green | **FIXED.** Three guards added in `service/stream_override_expiry_test.go`: `TestSuperviseHoldsDoneUntilTheOverrideExpiryLoopReturns` (zero-timeout select on the very channel `Stop` joins), `TestComponentManagerStopWaitsForTheOverrideExpiryLoop` (whole Start→Stop path), `TestComponentManagerFailedStartDoesNotLaunchOverrideExpiryLoop`. The lever is the reporter's OWN `configOf` — `run`'s first act is an immediate `evaluate`, so a config source the test holds open holds the loop open inside production code, with no test seam on the manager. Mutation transcript below |
+      | HIGH-2 | case-sensitive census missed six survivors outside the permitted classes | **FIXED**, all six swept (`service/doc.go` ×2, `doc.go`, `message/README.md`, `component/flowgraph/doc.go`, `executors/personas.go`); census re-run with the wide case-insensitive pattern and recorded in 3.2. Note `service/doc.go:283-285` taught `service.NewFlowService(d, flowEngine, flowStore)` — a signature that never existed on this head, so the example was wrong before it was stale; replaced with the real `Registry.Register` shape |
+      | MED-1 | `component_manager.go:79-80` comment ("Nil when the boot configuration declares no override source") contradicts `:239-242`, which always assigns | **FIXED** by correcting the comment. The nil-check at `:537` is NOT dead and stays: 30 tests build a `&ComponentManager{}` struct literal, which has no reporter. Both the field comment and the guard now say so |
+      | MED-2 | bare `context.WithoutCancel(ctx)` in a `t.Cleanup` | **FIXED** — bounded with `context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)`, matching the two other detached contexts in the file |
+      | MED-3 | `task e2e:ops` unmeasured though it boots the rewritten `ops-agent-test.json` | **FIXED** — run, green, row recorded in 6.6 (`assertions_run=9`) |
+      | MED-4 | `TestFlowPathsTraverseTheRetainedGraph` left the `PatternHTTPClient` origin arm uncovered | **FIXED** — added a third origin node with an `HTTPClientPort` and re-stated the doc comment as three rules. Mutation-verified: deleting the arm now fails with `should have 3 item(s), but has 2` |
+      | MED-5 | migration doc understates the metric's reach | **FIXED** — added "Expect output you have never seen before": the WARN previously fired only where `flow-builder` was enabled and the gauge reached `/metrics` in no process at all, so an already-lapsed bridge will start reporting on the first beta.163 boot |
+      | MED-6 | `docs/adr/096:63` links the deleted migration guide | **FIXED** — one status line beneath the link pointing at ADR-100 and `migration-beta162-to-beta163.md`; no other edit to the ADR |
+      | NIT | `executors/register.go:50-52` Pattern-B step comments now skip 2 and 4 | **FIXED** — a note that the numbers are historical and why |
+      | NIT | `composition/findings.go:66` cites a deleted path | **FIXED** — marked as provenance at the SHA where it existed |
+      | NIT | migration doc `:156-157` needs a forward pointer to the `/paths` 500→503 change | **FIXED** |
+      | NIT | semstreams-ui count should separate the classes | **FIXED**, and MEASURED rather than taken: 17 hand-written `src/` files, 16 `e2e/` files naming `flowbuilder`, and **4** (not 10) further `e2e/` files driving the `/flows` UI routes without naming the proxy path — `flow-crud.spec.ts`, `flow-management.spec.ts`, `navigation.spec.ts`, `pages/FlowListPage.ts` — for 20 e2e files total. The four are named in the doc |
+      | — | migration table lacked rows for `FlowServiceConfig`, `OverallHealth`, `ComponentHealth`, `ComponentMetric`, `RuntimeMessage`, `FlowExecutor`, `FlowTemplateExecutor` | **FIXED** — six rows added, each "none — served the removed routes", with the `file:line` each had on `origin/main` |
+      | — | reviewer saw the held #1122 edits land mid-review as an unexplained writer | Explained: they were prepared under coordinator instruction and held unpushed pending the owner's ruling on #1122. Now folded into this round; task 5.1 amended from DECIDED-stays to the ruling |
+
+      **FILED, not fixed** (unused paths, pre-existing, filed by the coordinator): `testutil/flow.go:185-255` dead
+      `FlowBuilder` (zero callers outside `testutil/`, confirmed by grep); `metric/registry.go:243-247`
+      `RegisterGaugeVec` discards the existing collector on a second registration.
+
+      **HIGH-1 mutation transcript.** `service/component_manager.go` sha256
+      `c3e19ff557ed1895e0e55a9af78e2e97f1d560fe574e7e67a813a63af3031ce3` before; `cp` backup taken; `loops.Wait()`
+      replaced with a comment; `[applied]` printed; then
+      `go test -race -count=1 ./service/ -run 'TestSuperviseHoldsDone|TestComponentManagerStopWaitsForTheOverrideExpiryLoop'`:
+      ```
+      --- FAIL: TestSuperviseHoldsDoneUntilTheOverrideExpiryLoopReturns (0.05s)
+          stream_override_expiry_test.go:348: supervise released done while the override-expiry loop was still running: Stop would return with a live goroutine behind it
+      --- FAIL: TestComponentManagerStopWaitsForTheOverrideExpiryLoop (0.04s)
+          stream_override_expiry_test.go:393: Stop returned (<nil>) while the override-expiry loop was still inside evaluate
+      ```
+      Restored from the copy; sha256 `c3e19ff557ed1895e0e55a9af78e2e97f1d560fe574e7e67a813a63af3031ce3` — before ==
+      after; suite green.
+
+      **MED-4 mutation transcript.** Same file, same sha256 before and after; `case component.PatternNetwork,
+      component.PatternHTTPClient:` narrowed to `case component.PatternNetwork:`;
+      `go test -count=1 ./service/ -run TestFlowPathsTraverseTheRetainedGraph`:
+      ```
+      --- FAIL: TestFlowPathsTraverseTheRetainedGraph (0.00s)
+          component_manager_paths_test.go:121: "map[listener:[listener middle sink] poller:[poller middle sink]]" should have 3 item(s), but has 2
+      ```
       FILED #n / ruling) recorded here. Findings on unused paths are FILED, not fixed.
 - [ ] 7.2 Owner-run cross-agent round where the owner asks for it: verdict and dispositions recorded here; each fix
       re-enters 7.1.

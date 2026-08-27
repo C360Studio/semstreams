@@ -227,6 +227,11 @@ The shipped `configs/flows/ops-agent*.json` were migrated this way in this landi
 | package `engine` | diagram validation and compilation; it constructed every node through the Registry with a live NATS client to read ports |
 | service `flow-builder` (`service.NewFlowServiceFromConfig`, `service.FlowService`) | with `FlowListResponse`, `FlowCreateRequest`, `FlowUpdateRequest`, `RuntimeHealthResponse`, `RuntimeMetricsResponse`, `RuntimeMessagesResponse` |
 | `executors.FlowManager`, `executors.FlowTemplateManager`, `executors.NewFlowExecutor`, `executors.NewFlowTemplateExecutor` | with the two `ToolDependencies` fields of the same names |
+| `service.FlowServiceConfig` (`flow_service.go:28`) | none — it configured the removed service (`prometheus_url`, `fallback_to_raw`); a `flow-builder` block in a `services` config is now an unknown service and refuses at boot |
+| `service.OverallHealth`, `service.ComponentHealth` (`flow_runtime_health.go:42,50`) | none — response types of `/observations/health`. Read component health at `GET <components>/health` and `GET <components>/status/{name}`, whose shapes are unrelated |
+| `service.ComponentMetric` (`flow_runtime_metrics.go:52`) | none — response type of `/observations/metrics`. Scrape `/metrics` |
+| `service.RuntimeMessage` (`flow_runtime_messages.go:16`) | none — response type of `/observations/messages`. Use the message-logger service's own routes |
+| `executors.FlowExecutor`, `executors.FlowTemplateExecutor` (`flows.go:27`, `flow_templates.go:29`) | none — the executors behind the eleven tools |
 | `flowgraph.BuildFromRegistry` | no production caller once `engine` and the ComponentManager rebuild are gone; `flowgraph.BuildFromDeclarations` is the one construction seam, and `composition.Analyze` is the one caller that matters |
 | `flowgraph.FlowAnalysisResult.ValidationStatus` | a `"healthy"`/`"warnings"` string with **no production reader**, computed by a walk that (like the retired `/gaps`) treated every required stream port with `no_publishers` as critical without checking `External`. Severity belongs to `composition.Result.Status` |
 | `service.ComponentManager.GetFlowGraph` | see "`/paths` now serves the retained graph" below |
@@ -282,9 +287,12 @@ Measured on 2026-08-27 at each sister's pinned SHA, read-only.
   `src/lib/api/flows.ts`, `src/lib/services/{flowApi,publishApi,observationsApi,messagesApi,opsSummaryApi}.ts`,
   `src/lib/server/mcp/tools.ts`, `src/lib/server/ai/toolExecutors.ts`,
   `src/lib/components/{OpsConsoleShell,runtime/OpsReadinessMatrix,runtime/LogsTab}.svelte`, `src/lib/types/flow.ts`, and
-  the four files under `src/routes/flows/`. 16 files under `e2e/` reference it, including
-  `e2e/helpers/backend-helpers.ts`, whose `reapOrphanedTestFlows` runs from `e2e/global-setup.ts` on **every** run and
-  will fail against a backend with no `/flowbuilder/flows`. The canvas editor and publish panel lose their backend;
+  the four files under `src/routes/flows/`. Counted precisely on 2026-08-27: **17 hand-written `src/` files**
+  (19 call sites), **16 `e2e/` files naming `flowbuilder`**, and **4 further `e2e/` files that drive the `/flows` UI
+  routes without naming the proxy path** — `e2e/flow-crud.spec.ts`, `e2e/flow-management.spec.ts`,
+  `e2e/navigation.spec.ts`, `e2e/pages/FlowListPage.ts` — which lose their backend all the same: **20 e2e files in
+  total**. Among the first group, `e2e/helpers/backend-helpers.ts`'s `reapOrphanedTestFlows` runs from
+  `e2e/global-setup.ts` on **every** run and will fail against a backend with no `/flowbuilder/flows`. The canvas editor and publish panel lose their backend;
   what comes back is a read-only projection (`<components>/flowgraph`, JSON or `?format=mermaid`) of what is running and
   a validator (`<components>/validate`) for what would run. Regenerate `src/lib/types/api.generated.ts`
   (`npm run generate-types`) — the `Flow*` schemas and every `/flows*` operation key disappear.
