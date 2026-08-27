@@ -208,7 +208,8 @@ Premises were measured at `5cc0c7fb` and are re-measured at the claim head; the 
       replacement and the downstream action), tools, packages/symbols, buckets, the `/paths` and metric-host changes,
       and per-repo instructions for semstreams-ui and semteams measured at their pinned SHAs. Reversible with one
       `git mv` + a link if the owner prefers the separate file.
-- [ ] 3.5 Commit GREEN with a BREAKING footer before §4.
+- [x] 3.5 Commit GREEN with a BREAKING footer before §4.
+      `e097c8d9` `refactor(flow)!: retire the flow-authoring surface (ADR-100 D5)` — 76 files, +571/−11336.
 
 ## 4. Forced omissions — each guard must be load-bearing
 
@@ -297,20 +298,55 @@ before the omission, and record `shasum -a 256` equality of the restored file. C
 
 ## 6. Standard gates — record each command and its result
 
-- [ ] 6.1 `task lint`.
-- [ ] 6.2 `go test -race -count=1 ./...`.
-- [ ] 6.3 `go test -race -count=1 -tags=integration -p 2 ./...`.
-- [ ] 6.4 `task build` and the CI cross-compile line; `go vet -tags=integration ./...`.
-- [ ] 6.5 `go test ./test/contract/...`.
+- [x] 6.1 `task lint`.
+      `task lint` → `go vet ./...`, `go fmt ./...`, `revive` and the two guards all clean; last line
+      `ok github.com/c360studio/semstreams/test/natsclient 0.555s`. Zero findings.
+- [x] 6.2 `go test -race -count=1 ./...`.
+      First run on the GREEN head found ONE failure, fixed here: `test/testinfra` `TestInfrastructurePolicyGuard`
+      ```
+      policy_guard_test.go:68: stale policy baseline entries (2); remove resolved debt so the ratchet cannot hide a regression:
+        integration-time-sleep|service/flow_runtime_messages_integration_test.go|TestRuntimeMessagesIntegration|time.Sleep(100 * time.Millisecond)|1
+        integration-time-sleep|service/flow_runtime_messages_integration_test.go|TestRuntimeMessagesIntegration|time.Sleep(100 * time.Millisecond)|2
+      ```
+      The two entries named a file this change deletes, and the ratchet correctly refuses a baseline that carries debt
+      for code that no longer exists. Removed from `test/testinfra/policy_baseline.json`.
+      Re-run: `go test -race -count=1 ./...` → `grep -c '^FAIL'` = **0**, `exit=0`.
+- [x] 6.3 `go test -race -count=1 -tags=integration -p 2 ./...`.
+      → `grep -c '^FAIL'` = **0**, `exit=0` (ended 2026-08-27T14:01:34Z). Run alone on the host — the other agent's
+      suite was confirmed finished first (`pgrep -fl 'go test'` empty).
+- [x] 6.4 `task build` and the CI cross-compile line; `go vet -tags=integration ./...`.
+      `task build` → `Built bin/semstreams`.
+      `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /dev/null ./cmd/semstreams` → OK, and the same for
+      `./cmd/e2e-semstreams` → OK (`.github/workflows/ci.yml:138` is the line mirrored).
+      `go vet -tags=integration ./...` → clean, no output.
+- [x] 6.5 `go test ./test/contract/...`.
+      → `ok github.com/c360studio/semstreams/test/contract 2.670s`. `task schema:check-changes` → clean
+      (`git diff --exit-code schemas/ specs/openapi.v3.yaml` passes).
 - [ ] 6.6 **BREAKING e2e gate** (ADR-100 Consequences; the repository rule is that a BREAKING commit has its covering
       tier green BEFORE it lands): `task e2e:core`, `task e2e:crud-tools` (the tool registry boots without the flow
       gates), `task e2e:agentic` (the largest shipped composition through the boot check). Paste each tier summary here.
-- [ ] 6.7 Downstream measurement (read-only): `cd ~/Code/c360/semteams && go vet ./cmd/semteams/` against a `replace`
+- [x] 6.7 Downstream measurement (read-only): `cd ~/Code/c360/semteams && go vet ./cmd/semteams/` against a `replace`
       to this branch in a scratch module (never edit semteams; snapshot its porcelain and use
       `GOFLAGS=-mod=readonly` or a scratch copy so its `go.mod` is not rewritten); record the compile errors as the
       migration document's semteams section. semstreams-ui: record the 15 call sites from inventory §9 in the migration
       document; the owner runs its suite.
 
+      DONE, and written into `docs/operations/migration-beta162-to-beta163.md` § "Flow-authoring retirement (ADR-100
+      D5)" → "Downstream action".
+      semteams: probed in a scratch `rsync` copy (`.git`, `node_modules`, `.claude/worktrees` excluded) with a
+      `replace` appended to the COPY's `go.mod`; the real checkout was never touched — HEAD `8a70b7e76e2598…` and
+      `git status --porcelain` were snapshotted before and re-read after and are identical. `go vet ./cmd/semteams/`
+      → three errors, all import-resolution:
+      ```
+      cmd/semteams/main.go:24:2: module github.com/c360studio/semstreams ... does not contain package .../engine
+      cmd/semteams/main.go:25:2: ... does not contain package .../flowstore
+      cmd/semteams/main.go:26:2: ... does not contain package .../flowtemplate
+      ```
+      (semteams already fails to compile against `main` for non-flow reasons — inventory §9; this adds three imports
+      to a migration it already owed.) The symbols behind them are enumerated in the migration section.
+      semstreams-ui at `39f5f04`: **17** hand-written `src/` files / **19** call sites, plus **16** `e2e/` files,
+      enumerated by grep in the migration section, including `e2e/helpers/backend-helpers.ts` whose
+      `reapOrphanedTestFlows` runs from `global-setup.ts` on every run.
 ## 7. Review and archive (inside the landing PR)
 
 - [ ] 7.1 `semstreams-reviewer` on the GREEN + §4 + §5 head: verdict, every finding and its disposition (FIXED /
