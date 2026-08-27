@@ -56,11 +56,15 @@ services:
   # SemStreams Application with research-graph chain
   semstreams:
     # Per-target image tag — see docker/compose/e2e.yml for rationale.
-    image: c360studio/semstreams:e2e-production
+    # e2e target (ADR-103): the research-graph scenario seeds
+    # research.e2e_search_seed.v1 through entity.create, a synthetic type only
+    # cmd/e2e-semstreams registers; the e2e binary is the production binary
+    # plus the example and fixture registrations.
+    image: c360studio/semstreams:e2e-test
     build:
       context: ../..
       dockerfile: docker/Dockerfile
-      target: production
+      target: e2e
     container_name: semstreams-research-graph-app
     command: ["--config", "/app/configs/research-graph-e2e.json"]
     depends_on:

@@ -58,7 +58,8 @@ func TestComponent_SynchronousHierarchy_IncludedBeforeWrite(t *testing.T) {
 
 			// Create entity
 			entity := &graph.EntityState{
-				ID: tt.entityID,
+				ID:          tt.entityID,
+				MessageType: testEntityType(),
 				Triples: []message.Triple{
 					{
 						Subject:   tt.entityID,
@@ -108,8 +109,8 @@ func TestComponent_SynchronousHierarchy_IncludedBeforeWrite(t *testing.T) {
 	}
 }
 
-// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone" line=506 column=24 surface=go-field:.entityID entity_id_invalid:arity five-part hierarchy ID rejection fixture
-// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone.test001.extra" line=514 column=24 surface=go-field:.entityID entity_id_invalid:arity seven-part hierarchy ID rejection fixture
+// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone" line=512 column=24 surface=go-field:.entityID entity_id_invalid:arity five-part hierarchy ID rejection fixture
+// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone.test001.extra" line=520 column=24 surface=go-field:.entityID entity_id_invalid:arity seven-part hierarchy ID rejection fixture
 
 func TestComponent_SynchronousHierarchy_SingleWrite(t *testing.T) {
 	tests := []struct {
@@ -137,7 +138,8 @@ func TestComponent_SynchronousHierarchy_SingleWrite(t *testing.T) {
 
 			// Create entity
 			entity := &graph.EntityState{
-				ID: tt.entityID,
+				ID:          tt.entityID,
+				MessageType: testEntityType(),
 				Triples: []message.Triple{
 					{
 						Subject:   tt.entityID,
@@ -212,7 +214,8 @@ func TestComponent_SynchronousHierarchy_ContainerCreation(t *testing.T) {
 	// Create a single entity that triggers all container creation
 	entityID := "c360.platform.robotics.mav1.drone.test001"
 	entity := &graph.EntityState{
-		ID: entityID,
+		ID:          entityID,
+		MessageType: testEntityType(),
 		Triples: []message.Triple{
 			{
 				Subject:   entityID,
@@ -275,7 +278,8 @@ func TestComponent_SynchronousHierarchy_MultipleEntitiesSameType(t *testing.T) {
 
 	for _, entityID := range entities {
 		entity := &graph.EntityState{
-			ID: entityID,
+			ID:          entityID,
+			MessageType: testEntityType(),
 			Triples: []message.Triple{
 				{
 					Subject:   entityID,
@@ -378,7 +382,8 @@ func TestComponent_SynchronousHierarchy_NoWatcherLifecycle(t *testing.T) {
 				ctx := context.Background()
 
 				entity := &graph.EntityState{
-					ID: "c360.platform.test.system.type.instance001",
+					ID:          "c360.platform.test.system.type.instance001",
+					MessageType: testEntityType(),
 					Triples: []message.Triple{
 						{
 							Subject:   "c360.platform.test.system.type.instance001",
@@ -441,7 +446,8 @@ func TestComponent_SynchronousHierarchy_DisabledConfig(t *testing.T) {
 
 		entityID := "c360.platform.robotics.mav1.drone.test001"
 		entity := &graph.EntityState{
-			ID: entityID,
+			ID:          entityID,
+			MessageType: testEntityType(),
 			Triples: []message.Triple{
 				{
 					Subject:   entityID,
@@ -529,7 +535,8 @@ func TestComponent_SynchronousHierarchy_InvalidEntityID(t *testing.T) {
 			defer comp.Stop(context.Background())
 
 			entity := &graph.EntityState{
-				ID: tt.entityID,
+				ID:          tt.entityID,
+				MessageType: testEntityType(),
 				Triples: []message.Triple{
 					{
 						Subject:   tt.entityID,
@@ -594,7 +601,8 @@ func TestComponent_SynchronousHierarchy_ContextCancellation(t *testing.T) {
 
 		entityID := "c360.platform.robotics.mav1.drone.test001"
 		entity := &graph.EntityState{
-			ID: entityID,
+			ID:          entityID,
+			MessageType: testEntityType(),
 			Triples: []message.Triple{
 				{
 					Subject:   entityID,
@@ -638,7 +646,8 @@ func TestComponent_SynchronousHierarchy_SiblingEdges(t *testing.T) {
 		// Create first entity - no siblings yet
 		entity1ID := "c360.platform.sensors.hvac.temperature.sensor001"
 		entity1 := &graph.EntityState{
-			ID: entity1ID,
+			ID:          entity1ID,
+			MessageType: testEntityType(),
 			Triples: []message.Triple{
 				{
 					Subject:   entity1ID,
@@ -667,7 +676,8 @@ func TestComponent_SynchronousHierarchy_SiblingEdges(t *testing.T) {
 		// Create second entity of same type - should create bidirectional sibling edges
 		entity2ID := "c360.platform.sensors.hvac.temperature.sensor002"
 		entity2 := &graph.EntityState{
-			ID: entity2ID,
+			ID:          entity2ID,
+			MessageType: testEntityType(),
 			Triples: []message.Triple{
 				{
 					Subject:   entity2ID,
@@ -740,7 +750,8 @@ func TestComponent_SynchronousHierarchy_SiblingEdges(t *testing.T) {
 
 		for _, entityID := range entityIDs {
 			entity := &graph.EntityState{
-				ID: entityID,
+				ID:          entityID,
+				MessageType: testEntityType(),
 				Triples: []message.Triple{
 					{
 						Subject:   entityID,

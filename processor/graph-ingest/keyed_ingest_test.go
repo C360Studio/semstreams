@@ -96,10 +96,10 @@ func TestGuardKey(t *testing.T) {
 // --- ingestGuardStale: in-memory tier + nil-durable (no NATS) ---
 
 func TestIngestGuardStale_MemoryTierAndFirstSeen(t *testing.T) {
-	c := &Component{
+	c := withTestRegistry(t, &Component{
 		ingestGuardMem:    []*laneGuard{newLaneGuard(16)},
 		ingestGuardBucket: nil, // no durable tier in this unit test
-	}
+	})
 	ctx := context.Background()
 	work := ingestWork{entityID: "c360.a.b.c.d.001", stream: "SENSOR", seq: 5}
 
@@ -133,10 +133,10 @@ func TestIngestGuardStale_MemoryTierAndFirstSeen(t *testing.T) {
 // A different stream for the same entity must NOT be judged against another
 // stream's sequence (independent per-stream sequence spaces — round-2 fix).
 func TestIngestGuardStale_PerStreamIndependence(t *testing.T) {
-	c := &Component{
+	c := withTestRegistry(t, &Component{
 		ingestGuardMem:    []*laneGuard{newLaneGuard(16)},
 		ingestGuardBucket: nil,
-	}
+	})
 	ctx := context.Background()
 	entity := "c360.a.b.c.d.001"
 

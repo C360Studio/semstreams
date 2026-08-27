@@ -113,7 +113,7 @@ func newBenchComponent(b *testing.B) (*Component, *mockKVBucket) {
 	configJSON, err := json.Marshal(DefaultConfig())
 	require.NoError(b, err)
 
-	comp, err := CreateGraphIngest(configJSON, component.Dependencies{NATSClient: natsClient})
+	comp, err := CreateGraphIngest(configJSON, component.Dependencies{NATSClient: natsClient, PayloadRegistry: newTestPayloadRegistry(b)})
 	require.NoError(b, err)
 
 	c := comp.(*Component)

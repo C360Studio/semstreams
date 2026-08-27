@@ -75,7 +75,7 @@ Both indexes are populated and verified, but actual queries are not tested:
 |----------|--------|------------|
 | **core-health** | Good | Minor: `MaxStartupTime` unused |
 | **core-dataflow** | Moderate | Filter logic not validated; content not verified |
-| **core-federation** | Weak | `MinMessagesOnCloud` unused; federation not actually verified |
+| **core-federation** | Weak | `MinMessagesOnCloud` unused; federation not actually verified. **Superseded by gh#1129 (2026-08-27): scenario deleted, unreachable.** |
 | **tiered-structural** | Good | **PathRAG not tested**; zero-constraints are warnings only |
 | **tiered-statistical** | Moderate | **GraphRAG not tested**; community structure not validated |
 | **tiered-semantic** | Good LLM | **GraphRAG not tested**; LLM quality not validated |
@@ -92,7 +92,7 @@ Both indexes are populated and verified, but actual queries are not tested:
 |-------|-----------|----------------|
 | No PathRAG test | All tiered | Create `test-pathrag` stage with known entity traversal |
 | No GraphRAG test | Statistical, Semantic | Create `test-graphrag-local` and `test-graphrag-global` stages |
-| Federation not verified | core-federation | Implement `MinMessagesOnCloud` check |
+| Federation not verified | core-federation | **Superseded by gh#1129 (2026-08-27): scenario deleted, not fixed.** |
 | MCP tests always pass | gateway-mcp | Fix rate limiting and error handling assertions |
 
 ### High (Should Fix)

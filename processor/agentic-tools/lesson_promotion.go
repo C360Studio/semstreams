@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/graph"
-	"github.com/c360studio/semstreams/internal/builtinprojection"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/projection"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
@@ -16,7 +16,7 @@ import (
 
 // lessonCuratorSource tags the lifecycle triples this writer publishes so
 // operators can distinguish a curator promotion/retirement from the ops
-// agent's original emit_lesson births at a glance (mirrors emitLessonSource).
+// agent's original emit_lesson births at a glance (the lesson entity's own source is ops-emit-lesson).
 const lessonCuratorSource = "ops-lesson-curator"
 
 // Lesson lifecycle status values the curator writes. Born status is
@@ -48,8 +48,9 @@ type LessonCurator struct {
 }
 
 // LessonProjectionContract returns an independent snapshot of the canonical
-// projection contract required by LessonCurator lifecycle mutations.
-func LessonProjectionContract() projection.Contract { return builtinprojection.LessonContract() }
+// projection contract required by LessonCurator lifecycle mutations — the
+// contract registered with agentic.agent_lesson.v1 in the payload registry.
+func LessonProjectionContract() projection.Contract { return agentic.LessonContract() }
 
 // NewLessonCurator builds a curator over explicitly supplied write and read
 // capabilities for tests and specialized composition. A nil logger uses
@@ -167,8 +168,8 @@ func (c *LessonCurator) replace(ctx context.Context, lessonEntityID string, add 
 		timestamp = add[0].Timestamp
 	}
 	_, err := c.writer.Reconcile(ctx, projection.ReconcileMutation{
-		Contract: builtinprojection.LessonRecordContractName,
-		Group:    builtinprojection.LessonLifecycleGroupName,
+		Contract: agentic.LessonRecordContractName,
+		Group:    agentic.LessonLifecycleGroupName,
 		EntityID: lessonEntityID,
 		Desired:  add,
 		Metadata: projection.MutationMetadata{

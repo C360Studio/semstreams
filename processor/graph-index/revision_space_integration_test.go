@@ -13,6 +13,8 @@ import (
 	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadbuiltins"
+	"github.com/c360studio/semstreams/payloadregistry"
 	graphingest "github.com/c360studio/semstreams/processor/graph-ingest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -79,7 +81,7 @@ func startIngest(ctx context.Context, t *testing.T, nc *natsclient.Client) {
 	t.Helper()
 	cfg, err := json.Marshal(graphingest.DefaultConfig())
 	require.NoError(t, err)
-	comp, err := graphingest.CreateGraphIngest(cfg, component.Dependencies{NATSClient: nc})
+	comp, err := graphingest.CreateGraphIngest(cfg, component.Dependencies{NATSClient: nc, PayloadRegistry: revisionSpaceRegistry(t)})
 	require.NoError(t, err)
 	c := comp.(component.LifecycleComponent)
 	require.NoError(t, c.Initialize())
@@ -91,7 +93,7 @@ func startIndex(ctx context.Context, t *testing.T, nc *natsclient.Client) *Compo
 	t.Helper()
 	cfg, err := json.Marshal(DefaultConfig())
 	require.NoError(t, err)
-	comp, err := CreateGraphIndex(cfg, component.Dependencies{NATSClient: nc})
+	comp, err := CreateGraphIndex(cfg, component.Dependencies{NATSClient: nc, PayloadRegistry: revisionSpaceRegistry(t)})
 	require.NoError(t, err)
 	c := comp.(*Component)
 	require.NoError(t, c.Initialize())
@@ -138,4 +140,13 @@ func addTriple(ctx context.Context, t *testing.T, nc *natsclient.Client, entityI
 	require.Equal(t, entityID, response.Results[0].EntityID)
 	require.Contains(t, []graph.MutationOutcome{graph.MutationApplied, graph.MutationUnchanged}, response.Results[0].Outcome)
 	return response.Results[0].KVRevision
+}
+
+// revisionSpaceRegistry is the builtin set plus the test stamp this file
+// births through graph-ingest's create seam (ADR-103).
+func revisionSpaceRegistry(t *testing.T) *payloadregistry.Registry {
+	t.Helper()
+	reg := payloadbuiltins.NewTestRegistry(t)
+	payloadregistry.RegisterTestType(t, reg, message.Type{Domain: "test", Category: "revision", Version: "v1"})
+	return reg
 }

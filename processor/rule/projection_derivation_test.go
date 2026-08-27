@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/projection"
 	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/stretchr/testify/require"
@@ -202,7 +203,7 @@ func TestDeriveEffectiveProjectionContractsValidatesDeclaredStructuralSuperset(t
 	}
 	superset := []projection.Contract{{
 		Name:            "override",
-		MessageType:     "test.override.v1",
+		MessageType:     message.Type{Domain: "test", Category: "override", Version: "v1"},
 		EntityPattern:   "acme.*.test.system.record.*",
 		BirthPredicates: []string{"test.derive.birth"},
 		IndexingProfile: "control",

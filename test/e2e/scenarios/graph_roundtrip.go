@@ -230,7 +230,7 @@ func (p *GraphRoundTripProbe) validateDependencies() error {
 func (p *GraphRoundTripProbe) buildMutationClient(entityID string) (*projection.MutationClient, error) {
 	contract := projection.Contract{
 		Name:            graphRoundTripContract,
-		MessageType:     "test.fixture.v1",
+		MessageType:     message.Type{Domain: "test", Category: "fixture", Version: "v1"},
 		EntityPattern:   entityID,
 		IndexingProfile: "control",
 		Groups: []projection.PredicateGroup{{

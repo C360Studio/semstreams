@@ -840,35 +840,35 @@ func (s *Scenario) verifyGraphTriples(ctx context.Context, result *scenarios.Res
 	modelEntityID := agentic.ModelEndpointEntityID(org, platform, "mock")
 	modelEntity, err := s.nats.GetEntity(ctx, modelEntityID)
 	if err != nil {
-		// Model endpoint triples are written at startup; if graph-ingest wasn't ready
-		// yet they may be missing. Warn rather than fail.
-		result.Warnings = append(result.Warnings,
-			fmt.Sprintf("model endpoint entity %s not found: %v", modelEntityID, err))
-	} else {
-		modelPreds := make(map[string]bool, len(modelEntity.Triples))
-		for _, t := range modelEntity.Triples {
-			modelPreds[t.Predicate] = true
-		}
-
-		requiredModelPreds := []string{
-			agvocab.ModelProvider,
-			agvocab.ModelName,
-			agvocab.ModelSupportsTools,
-		}
-		modelMissing := []string{}
-		for _, pred := range requiredModelPreds {
-			if !modelPreds[pred] {
-				modelMissing = append(modelMissing, pred)
-			}
-		}
-		if len(modelMissing) > 0 {
-			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("model entity %s missing predicates: %v", modelEntityID, modelMissing))
-		}
-
-		result.Metrics["graph_model_triples"] = len(modelEntity.Triples)
-		result.Details["graph_model_entity_id"] = modelEntityID
+		// Model endpoint entities are born at startup through entity.create with
+		// the registered agentic.model_endpoint.v1 stamp; a missing entity means
+		// the birth was refused or never happened, so this tier fails rather
+		// than warns (ADR-103, N-1).
+		return fmt.Errorf("model endpoint entity %s not found: %w", modelEntityID, err)
 	}
+	modelPreds := make(map[string]bool, len(modelEntity.Triples))
+	for _, t := range modelEntity.Triples {
+		modelPreds[t.Predicate] = true
+	}
+
+	requiredModelPreds := []string{
+		agvocab.ModelProvider,
+		agvocab.ModelName,
+		agvocab.ModelSupportsTools,
+	}
+	modelMissing := []string{}
+	for _, pred := range requiredModelPreds {
+		if !modelPreds[pred] {
+			modelMissing = append(modelMissing, pred)
+		}
+	}
+	if len(modelMissing) > 0 {
+		result.Warnings = append(result.Warnings,
+			fmt.Sprintf("model entity %s missing predicates: %v", modelEntityID, modelMissing))
+	}
+
+	result.Metrics["graph_model_triples"] = len(modelEntity.Triples)
+	result.Details["graph_model_entity_id"] = modelEntityID
 
 	// --- Verify loop→model relationship ---
 	if loopPreds[agvocab.LoopModelUsed] {

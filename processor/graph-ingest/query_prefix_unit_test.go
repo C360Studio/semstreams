@@ -42,7 +42,8 @@ func storePrefixEntity(t *testing.T, comp *Component, id string) {
 	t.Helper()
 	ctx := context.Background()
 	entity := &graph.EntityState{
-		ID: id,
+		ID:          id,
+		MessageType: testEntityType(),
 		Triples: []message.Triple{
 			{
 				Subject:   id,

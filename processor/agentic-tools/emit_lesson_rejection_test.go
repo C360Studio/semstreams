@@ -36,7 +36,7 @@ func TestEmitLessonExecutor_RejectionCounterReasons(t *testing.T) {
 		{
 			name: "bound — over-bound injection form",
 			mutate: func(c *agentic.ToolCall) {
-				over := make([]byte, maxInjectionFormBytes+1)
+				over := make([]byte, agentic.LessonInjectionFormMaxBytes+1)
 				for i := range over {
 					over[i] = 'x'
 				}

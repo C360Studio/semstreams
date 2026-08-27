@@ -99,8 +99,6 @@ func main() {
 		log.Printf("  ✓ Generated component schema: %s", outFile)
 	}
 
-	// Note: Workflow definition schema generation removed - old workflow processor deprecated
-
 	// Get all registered service OpenAPI specs
 	serviceSpecs := service.GetAllOpenAPISpecs()
 	log.Printf("Found %d service OpenAPI specs", len(serviceSpecs))

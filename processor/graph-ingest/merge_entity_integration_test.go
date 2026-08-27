@@ -254,7 +254,7 @@ func TestIntegration_MergeEntity_HierarchyDoesNotDuplicate(t *testing.T) {
 	cfgJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
 
-	comp, err := CreateGraphIngest(cfgJSON, component.Dependencies{NATSClient: testClient.Client})
+	comp, err := CreateGraphIngest(cfgJSON, component.Dependencies{NATSClient: testClient.Client, PayloadRegistry: newTestPayloadRegistry(t)})
 	require.NoError(t, err)
 	c := comp.(*Component)
 	require.NoError(t, c.Initialize())

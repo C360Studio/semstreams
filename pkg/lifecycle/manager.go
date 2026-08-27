@@ -19,14 +19,6 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// lifecycleMessageType identifies writes from the harness in graph-ingest
-// telemetry. Stamped on lifecycle mutations so operators can identify them.
-var lifecycleMessageType = message.Type{
-	Domain:   "lifecycle",
-	Category: "harness",
-	Version:  "v1",
-}
-
 type entityStatesReader interface {
 	ListKeys(context.Context, ...jetstream.WatchOpt) (jetstream.KeyLister, error)
 	Watch(context.Context, string, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error)
@@ -402,7 +394,7 @@ func (m *Manager) createWithRegistration(ctx context.Context, reg *registration,
 				ID:          entityID,
 				Version:     1,
 				UpdatedAt:   now,
-				MessageType: lifecycleMessageType,
+				MessageType: HarnessMessageType(),
 			},
 			Triples: delta,
 		}

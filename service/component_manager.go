@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/component/flowgraph"
 	"github.com/c360studio/semstreams/composition"
 	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/internal/componentadmission"
@@ -72,8 +71,18 @@ type ComponentManager struct {
 	bootModelRegistry model.RegistryReader
 	bootStreams       config.StreamConfigs // explicit `streams` of the boot configuration, for composition analysis
 
-	// FlowGraph caching for thread-safe analysis
-	graphCache flowGraphCache
+	// overrideExpiry re-reports stream migration-override expiry against the
+	// LIVE configuration while the process runs. It is hosted HERE, and not by
+	// an optional service, because the component-manager is the one service the
+	// framework refuses to compose without (mandatoryServices,
+	// MandatoryServiceDisabledError): an operator who declares a bridge should
+	// not also have to declare the service that tells them it lapsed.
+	//
+	// NewComponentManager always assigns it — a composition with no override
+	// declared still reports the empty set, which is what makes the gauge's
+	// absence meaningful. It is nil only on a manager built as a struct literal,
+	// which unit tests do, and that is the case supervise's guard covers.
+	overrideExpiry *streamOverrideExpiryReporter
 
 	// bootFindings is the composition analysis of the admitted boot set,
 	// computed once in Initialize before the Registry seals (ADR-100 P5). The
@@ -224,6 +233,31 @@ func NewComponentManager(rawConfig json.RawMessage, deps *Dependencies) (Service
 	if deps != nil && deps.NATSClient != nil {
 		cm.natsClient = deps.NATSClient
 	}
+
+	// Stream migration-override expiry reporting (ADR-100 D5 rehome). The
+	// closure reads currentConfig every call rather than capturing bootConfig:
+	// an operator may extend or remove an override without restarting, and a
+	// reporter that kept warning about a renewed bridge would be worse than one
+	// that said nothing. This is report-only and never composition authority —
+	// runtime construction above still uses the boot snapshot alone.
+	cm.overrideExpiry = newStreamOverrideExpiryReporter(
+		currentConfig.Get,
+		cm.logger.With("source", "component-manager.stream-overrides"),
+	)
+	if deps != nil && deps.MetricsRegistry != nil {
+		// Registered here, against the registry the /metrics endpoint scrapes,
+		// rather than only through the Service interface's RegisterMetrics:
+		// nothing in the framework calls that method (see
+		// storage_observability.go), so a metric reachable only through it is a
+		// phantom.
+		if err := cm.overrideExpiry.register(deps.MetricsRegistry); err != nil {
+			return nil, fmt.Errorf("register stream override expiry metrics: %w", err)
+		}
+	}
+	// Evaluate once at composition so every declared bridge has a series before
+	// it matters. An alert on a series that first appears at the moment of
+	// failure cannot be tested in advance.
+	cm.overrideExpiry.evaluate(time.Now())
 
 	// Set health check
 	cm.SetHealthCheck(cm.healthCheck)
@@ -497,9 +531,29 @@ func (cm *ComponentManager) finishStart(
 	return startErr
 }
 
+// supervise owns every manager-scoped periodic loop for the runtime context and
+// returns only once all of them have. Stop joins this goroutine through
+// supervisorDone, so a loop launched here needs no lifecycle handles of its own.
 func (cm *ComponentManager) supervise(ctx context.Context, done chan<- struct{}) {
 	defer close(done)
+
+	var loops sync.WaitGroup
+	// Guarded because a struct-literal manager (unit tests) has no reporter;
+	// every manager NewComponentManager builds does.
+	if cm.overrideExpiry != nil {
+		loops.Add(1)
+		go func() {
+			defer loops.Done()
+			cm.overrideExpiry.run(ctx)
+		}()
+	}
 	cm.publishHealthLoop(ctx)
+	// Every loop launched above joins BEFORE done is released, so a Stop that
+	// observes supervisorDone has observed their completion. Dropping this is
+	// silent: the real reporter returns on cancellation in nanoseconds, so only
+	// a loop the test holds open can prove the join
+	// (TestSuperviseHoldsDoneUntilTheOverrideExpiryLoopReturns).
+	loops.Wait()
 }
 
 // componentToStart holds component info for the parallel launch batch.
@@ -1078,9 +1132,6 @@ func (cm *ComponentManager) createComponent(
 	cm.components[instanceName] = mc
 	cm.mu.Unlock()
 
-	// Invalidate the FlowGraph cache while assembling the fixed boot set.
-	cm.invalidateFlowGraph()
-
 	return nil
 }
 
@@ -1338,308 +1389,80 @@ type ComponentStatus struct {
 	LastError error                  `json:"last_error,omitempty"`
 }
 
-// Flow validation types for ComponentManager operational validation
-
-// ComponentPortInfo represents port information extracted from a component
-type ComponentPortInfo struct {
-	ComponentName string                `json:"component_name"`
-	InputPorts    []ComponentPortDetail `json:"input_ports"`
-	OutputPorts   []ComponentPortDetail `json:"output_ports"`
-}
-
-// ComponentPortDetail represents detailed information about a single port
-type ComponentPortDetail struct {
-	Name      string              `json:"name"`
-	Direction component.Direction `json:"direction"`
-	Subject   string              `json:"subject"`
-	PortType  string              `json:"port_type"`
-}
-
-// FlowConnection represents a connection between publisher and subscriber
-type FlowConnection struct {
-	Publisher  ComponentPortReference `json:"publisher"`
-	Subscriber ComponentPortReference `json:"subscriber"`
-	Subject    string                 `json:"subject"`
-}
-
-// ComponentPortReference references a specific port on a component
-type ComponentPortReference struct {
-	ComponentName string `json:"component_name"`
-	PortName      string `json:"port_name"`
-}
-
-// FlowGap represents a disconnected port (no matching publisher/subscriber)
-type FlowGap struct {
-	ComponentName string `json:"component_name"`
-	PortName      string `json:"port_name"`
-	Subject       string `json:"subject"`
-	Direction     string `json:"direction"` // "input" or "output"
-	Issue         string `json:"issue"`     // "no_publishers" or "no_subscribers"
-}
-
-// extractComponentPortInfo extracts retained port information for flow validation.
-func (cm *ComponentManager) extractComponentPortInfo(instanceName string) (*ComponentPortInfo, error) {
-	snapshot, ok := cm.registry.Snapshot(componentadmission.Access{}, instanceName)
-	if !ok {
-		return nil, fmt.Errorf("component %q has no admitted declaration", instanceName)
-	}
-	portInfo := &ComponentPortInfo{
-		ComponentName: instanceName,
-		InputPorts:    []ComponentPortDetail{},
-		OutputPorts:   []ComponentPortDetail{},
-	}
-
-	inputs := snapshot.Inputs()
-	inputFacts := snapshot.InputDeclarationFacts()
-	for index, port := range inputs {
-		portInfo.InputPorts = append(portInfo.InputPorts, cm.extractPortDetail(port, inputFacts[index]))
-	}
-
-	outputs := snapshot.Outputs()
-	outputFacts := snapshot.OutputDeclarationFacts()
-	for index, port := range outputs {
-		portInfo.OutputPorts = append(portInfo.OutputPorts, cm.extractPortDetail(port, outputFacts[index]))
-	}
-
-	return portInfo, nil
-}
-
-// extractPortDetail extracts subject and type information from a port
-func (cm *ComponentManager) extractPortDetail(
-	port component.Port, facts component.PortFacts,
-) ComponentPortDetail {
-	detail := &ComponentPortDetail{
-		Name:      port.Name,
-		Direction: port.Direction,
-		PortType:  string(facts.Kind()),
-	}
-	if subjects := facts.NATSSubjects(); len(subjects) > 0 {
-		detail.Subject = subjects[0]
-	}
-	return *detail
-}
-
-// analyzeFlowConnections identifies connections between components based on subject matching
-func (cm *ComponentManager) analyzeFlowConnections(instanceNames []string) ([]FlowConnection, error) {
-	var connections []FlowConnection
-
-	// Build lists of publishers and subscribers
-	var publishers []publisherInfo
-	var subscribers []subscriberInfo
-
-	for _, instanceName := range instanceNames {
-		portInfo, err := cm.extractComponentPortInfo(instanceName)
-		if err != nil {
-			return nil, err
-		}
-
-		// Collect publishers (output ports)
-		for _, outPort := range portInfo.OutputPorts {
-			publishers = append(publishers, publisherInfo{
-				ComponentName: portInfo.ComponentName,
-				PortName:      outPort.Name,
-				Subject:       outPort.Subject,
-			})
-		}
-
-		// Collect subscribers (input ports)
-		for _, inPort := range portInfo.InputPorts {
-			subscribers = append(subscribers, subscriberInfo{
-				ComponentName: portInfo.ComponentName,
-				PortName:      inPort.Name,
-				Subject:       inPort.Subject,
-			})
-		}
-	}
-
-	// Match publishers to subscribers based on exact subject match (simple implementation)
-	for _, pub := range publishers {
-		for _, sub := range subscribers {
-			if pub.Subject == sub.Subject {
-				connections = append(connections, FlowConnection{
-					Publisher: ComponentPortReference{
-						ComponentName: pub.ComponentName,
-						PortName:      pub.PortName,
-					},
-					Subscriber: ComponentPortReference{
-						ComponentName: sub.ComponentName,
-						PortName:      sub.PortName,
-					},
-					Subject: pub.Subject,
-				})
-			}
-		}
-	}
-
-	return connections, nil
-}
-
-// Helper types for flow analysis
-type publisherInfo struct {
-	ComponentName string
-	PortName      string
-	Subject       string
-}
-
-type subscriberInfo struct {
-	ComponentName string
-	PortName      string
-	Subject       string
-}
-
 // =============================================================================
-// FlowGraph Integration
+// Composition projections
 // =============================================================================
 
-// flowGraphCache provides efficient caching of FlowGraph analysis results
-type flowGraphCache struct {
-	mu           sync.RWMutex
-	currentGraph *flowgraph.FlowGraph
-	cacheValid   bool
-	lastUpdate   time.Time
-}
-
-// GetFlowGraph returns the current FlowGraph, using cache if valid.
-func (cm *ComponentManager) GetFlowGraph() (*flowgraph.FlowGraph, error) {
-	// Check cache validity under read lock
-	cm.graphCache.mu.RLock()
-	if cm.graphCache.cacheValid && cm.graphCache.currentGraph != nil {
-		graph := cm.graphCache.currentGraph
-		cm.graphCache.mu.RUnlock()
-		return graph, nil
-	}
-	cm.graphCache.mu.RUnlock()
-
-	// Need to rebuild graph - acquire write lock
-	cm.graphCache.mu.Lock()
-	defer cm.graphCache.mu.Unlock()
-
-	// Double-check after acquiring write lock
-	if cm.graphCache.cacheValid && cm.graphCache.currentGraph != nil {
-		return cm.graphCache.currentGraph, nil
-	}
-
-	// Build new graph
-	graph, err := cm.buildFlowGraph()
-	if err != nil {
-		return nil, err
-	}
-
-	// Update cache
-	cm.graphCache.currentGraph = graph
-	cm.graphCache.cacheValid = true
-	cm.graphCache.lastUpdate = time.Now()
-
-	return graph, nil
-}
-
-// buildFlowGraph creates a new FlowGraph from current components
-func (cm *ComponentManager) buildFlowGraph() (*flowgraph.FlowGraph, error) {
-	return flowgraph.BuildFromRegistry(componentadmission.Access{}, cm.registry)
-}
-
-// invalidateFlowGraph marks the cached FlowGraph as invalid
-func (cm *ComponentManager) invalidateFlowGraph() {
-	cm.graphCache.mu.Lock()
-	defer cm.graphCache.mu.Unlock()
-
-	cm.graphCache.cacheValid = false
-	cm.graphCache.currentGraph = nil
-}
-
-// GetFlowPaths returns data paths from input components to all reachable components
+// GetFlowPaths reports, for each input component of the boot composition, every
+// component reachable from it.
+//
+// It reads the graph the composition result RETAINS (ADR-100 P5), and does not
+// rebuild one from the Registry. The rebuild it replaces walked the same
+// declarations through a second construction and could therefore disagree with
+// the result `<components>/validate` and `<components>/flowgraph` serve; ADR-100
+// D3 puts one interpreter behind every answer about a composition. This derives
+// no severity — it is a projection, not a judgment.
 func (cm *ComponentManager) GetFlowPaths() (map[string][]string, error) {
-	graph, err := cm.GetFlowGraph()
-	if err != nil {
-		return nil, err
+	result := cm.bootCompositionResult()
+	if result == nil {
+		return nil, errs.WrapTransient(
+			errors.New("composition result unavailable"),
+			"ComponentManager", "GetFlowPaths", "composition not initialized")
+	}
+
+	adjacency := make(map[string][]string, len(result.Graph.Nodes))
+	for _, edge := range result.Graph.Edges {
+		adjacency[edge.From] = append(adjacency[edge.From], edge.To)
 	}
 
 	paths := make(map[string][]string)
-
-	// Find all input components (components with no input ports or external input ports)
-	inputComponents := cm.findInputComponents(graph)
-
-	for _, inputComponent := range inputComponents {
-		// Use graph traversal to find all reachable components
-		reachable := cm.depthFirstTraversal(graph, inputComponent)
-		paths[inputComponent] = reachable
+	for _, node := range result.Graph.Nodes {
+		if !isInputNode(node) {
+			continue
+		}
+		paths[node.Instance] = reachableFrom(node.Instance, adjacency)
 	}
-
 	return paths, nil
 }
 
-// Helper methods for FlowGraph analysis
-
-// findInputComponents identifies components that serve as data inputs
-func (cm *ComponentManager) findInputComponents(graph *flowgraph.FlowGraph) []string {
-	var inputs []string
-	nodes := graph.GetNodes()
-
-	for componentName, node := range nodes {
-		// Check if component type is "input" or has external input ports
-		if cm.isInputComponent(componentName, node) {
-			inputs = append(inputs, componentName)
-		}
+// isInputNode reports whether a projected node originates data for the graph.
+// Both facts come off the projection itself: the declared component type, and
+// an input port whose interaction pattern reaches outside the composition —
+// PatternNetwork binds a local listener, PatternHTTPClient initiates an
+// outbound poll. Either makes the component a data source.
+func isInputNode(node composition.Node) bool {
+	if node.Type == string(types.ComponentTypeInput) {
+		return true
 	}
-
-	return inputs
-}
-
-// isInputComponent determines if a component is an input component
-func (cm *ComponentManager) isInputComponent(componentName string, node *flowgraph.ComponentNode) bool {
-	// Check component configuration for type
-	if cm.componentConfigs != nil {
-		if compCfg, ok := cm.componentConfigs[componentName]; ok {
-			if compCfg.Type == "input" {
-				return true
-			}
-		}
-	}
-
-	// Check if component has external input ports (network listener or outbound
-	// HTTP-client). Both patterns indicate the component is the data source for
-	// the internal graph: PatternNetwork binds a local listener, PatternHTTPClient
-	// initiates an outbound poll. Either makes the component an input origin.
-	for _, port := range node.InputPorts {
-		if port.Pattern == component.PatternNetwork || port.Pattern == component.PatternHTTPClient {
+	for _, port := range node.Inputs {
+		switch component.InteractionPattern(port.Pattern) {
+		case component.PatternNetwork, component.PatternHTTPClient:
 			return true
 		}
 	}
-
 	return false
 }
 
-// depthFirstTraversal performs DFS to find all reachable components from a starting component
-func (cm *ComponentManager) depthFirstTraversal(graph *flowgraph.FlowGraph, start string) []string {
+// reachableFrom returns start followed by every node reachable from it, in
+// depth-first order. Edges arrive sorted from the projection, so the order is
+// stable across calls.
+func reachableFrom(start string, adjacency map[string][]string) []string {
 	visited := make(map[string]bool)
-	var result []string
+	var order []string
 
-	// Build adjacency list from edges
-	adj := make(map[string][]string)
-	edges := graph.GetEdges()
-
-	for _, edge := range edges {
-		from := edge.From.ComponentName
-		to := edge.To.ComponentName
-		adj[from] = append(adj[from], to)
-	}
-
-	// DFS traversal
-	cm.dfsVisit(start, adj, visited, &result)
-
-	return result
-}
-
-// dfsVisit performs the actual DFS traversal
-func (cm *ComponentManager) dfsVisit(node string, adj map[string][]string, visited map[string]bool, result *[]string) {
-	visited[node] = true
-	*result = append(*result, node)
-
-	for _, neighbor := range adj[node] {
-		if !visited[neighbor] {
-			cm.dfsVisit(neighbor, adj, visited, result)
+	var visit func(string)
+	visit = func(node string) {
+		if visited[node] {
+			return
+		}
+		visited[node] = true
+		order = append(order, node)
+		for _, next := range adjacency[node] {
+			visit(next)
 		}
 	}
+	visit(start)
+	return order
 }
 
 // publishHealthLoop publishes component health to JetStream every 5s.

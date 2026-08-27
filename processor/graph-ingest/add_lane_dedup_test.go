@@ -42,7 +42,7 @@ func dedupTriple(subject string) message.Triple {
 func seedDedupEntity(t *testing.T, id string) (*Component, uint64) {
 	t.Helper()
 	comp := createTestComponentWithMockKV(t)
-	entity := &graph.EntityState{ID: id, Triples: []message.Triple{}, Version: 1, UpdatedAt: time.Now()}
+	entity := &graph.EntityState{ID: id, MessageType: testEntityType(), Triples: []message.Triple{}, Version: 1, UpdatedAt: time.Now()}
 	require.NoError(t, comp.CreateEntity(context.Background(), entity))
 	entry, err := comp.entityBucket.Get(context.Background(), id)
 	require.NoError(t, err)
@@ -413,7 +413,8 @@ func TestHandleCanonicalAppend_MultiSubjectReportsIndependentRevisions(t *testin
 	ctx := context.Background()
 	const otherSubject = "c360.platform.robotics.mav1.drone.007"
 	require.NoError(t, comp.CreateEntity(ctx, &graph.EntityState{
-		ID: otherSubject, Triples: []message.Triple{}, Version: 1, UpdatedAt: time.Now(),
+		ID:          otherSubject,
+		MessageType: testEntityType(), Triples: []message.Triple{}, Version: 1, UpdatedAt: time.Now(),
 	}))
 
 	first := dedupTriple(dedupSubject)
@@ -444,10 +445,11 @@ func TestAddTriple_PreExistingStoredDuplicatesAreKeptAndStillSuppress(t *testing
 
 	// Write the poisoned-by-history shape directly: two identical stored copies.
 	entity := &graph.EntityState{
-		ID:        dedupSubject,
-		Triples:   []message.Triple{triple, triple},
-		Version:   1,
-		UpdatedAt: time.Now(),
+		ID:          dedupSubject,
+		MessageType: testEntityType(),
+		Triples:     []message.Triple{triple, triple},
+		Version:     1,
+		UpdatedAt:   time.Now(),
 	}
 	require.NoError(t, comp.CreateEntity(ctx, entity))
 	before, revBefore := readDedupEntity(t, comp, dedupSubject)

@@ -5,9 +5,9 @@
 // general-role agent gets scoped to rule-CRUD tools → mock LLM scripts a
 // create_rule call → verify the rule landed in the semstreams_config KV
 // bucket with the expected content. Covers the end-to-end path for
-// rule tools; the other three Pattern-B families (flow, persona,
-// flow_template) share the same registration + dispatch plumbing so a
-// single-family scenario proves the whole pattern.
+// rule tools; the other Pattern-B family (persona) shares the same
+// registration + dispatch plumbing so a single-family scenario proves the
+// whole pattern.
 //
 // When a regression breaks the CRUD path, this scenario fails at the
 // stage closest to the break (tool dispatch → executor → manager → KV)

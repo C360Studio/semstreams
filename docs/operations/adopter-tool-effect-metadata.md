@@ -127,13 +127,9 @@ ship unclassified or misspelled. Broad strokes:
 
 | Effect | Tools |
 |---|---|
-| `read_only` | `query_entity`, `query_entities`, `query_relationships`, `query_neighbors`, `query_by_type`, `read_loop_result`, `list_components` (carries `default_ports`), `validate_composition`, `composition_graph` (both run the offline composition validator over a configuration document; no NATS, no write — ADR-100), `instantiate_flow_template` (renders, persists nothing), and the `list_*` / `get_*` half of the rule, flow, persona, and flow-template tools |
+| `read_only` | `query_entity`, `query_entities`, `query_relationships`, `query_neighbors`, `query_by_type`, `read_loop_result`, `list_components` (carries `default_ports`), `validate_composition`, `composition_graph` (both run the offline composition validator over a configuration document; no NATS, no write — ADR-100), and the `list_*` / `get_*` half of the rule and persona tools |
 | `mutating` | the `create_*` / `update_*` / `delete_*` half of those same CRUD tools, `scratchpad`, `write_todos`, `decide`, `emit_lesson`, `emit_diagnosis`, `research_graph`, and `web_search` **when backed by a real provider** — it writes observation triples to the graph; the no-provider stub is `read_only` |
 | `external_effect` | `bash`, `http_request` |
-
-Saved-flow component-configuration publication is a mutating HTTP operation at
-`POST /flowbuilder/flows/{id}/publish-component-configs`; it is not an agent
-tool and therefore does not belong in the tool classification table.
 
 Note `web_search`: two implementations share one tool name and legitimately
 carry different effects. Read the effect off the catalog your deployment serves

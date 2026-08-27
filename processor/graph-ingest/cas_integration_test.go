@@ -26,7 +26,7 @@ func TestIntegration_ConcurrentCanonicalAppend(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
 	configJSON, err := json.Marshal(DefaultConfig())
 	require.NoError(t, err)
-	created, err := CreateGraphIngest(configJSON, component.Dependencies{NATSClient: testClient.Client})
+	created, err := CreateGraphIngest(configJSON, component.Dependencies{NATSClient: testClient.Client, PayloadRegistry: newTestPayloadRegistry(t)})
 	require.NoError(t, err)
 	c := created.(*Component)
 	require.NoError(t, c.Initialize())
@@ -34,7 +34,7 @@ func TestIntegration_ConcurrentCanonicalAppend(t *testing.T) {
 	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 
 	const entityID = "c360.test.cas.concurrent.drone.001"
-	require.NoError(t, c.CreateEntity(ctx, &graph.EntityState{ID: entityID, Version: 1, UpdatedAt: time.Now()}))
+	require.NoError(t, c.CreateEntity(ctx, &graph.EntityState{ID: entityID, MessageType: testEntityType(), Version: 1, UpdatedAt: time.Now()}))
 
 	const writers = 20
 	var wg sync.WaitGroup

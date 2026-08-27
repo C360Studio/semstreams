@@ -12,8 +12,10 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 
+	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph/inference"
 	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
@@ -42,7 +44,7 @@ func startStack(t *testing.T, backstop string) (*graphingest.Component, *natscli
 	// graph-ingest serves graph.ingest.query.prefix + graph.mutation.entity.*
 	giJSON, err := json.Marshal(graphingest.DefaultConfig())
 	require.NoError(t, err)
-	giDisc, err := graphingest.CreateGraphIngest(giJSON, component.Dependencies{NATSClient: nc})
+	giDisc, err := graphingest.CreateGraphIngest(giJSON, component.Dependencies{NATSClient: nc, PayloadRegistry: itestPayloadRegistry(t)})
 	require.NoError(t, err)
 	gi := giDisc.(*graphingest.Component)
 	require.NoError(t, gi.Initialize())
@@ -99,7 +101,7 @@ func seedUnit(t *testing.T, gi *graphingest.Component, id string, triples ...mes
 		}
 	}
 	require.NoError(t, gi.CreateEntity(context.Background(), &graph.EntityState{
-		ID: id, Triples: triples, Version: 1, UpdatedAt: time.Now(),
+		ID: id, MessageType: itestUnitType, Triples: triples, Version: 1, UpdatedAt: time.Now(),
 	}))
 }
 
@@ -228,4 +230,19 @@ func readPrefix(t *testing.T, nc *natsclient.Client, prefix string) []graph.Enti
 	var resp graph.PrefixQueryResponse
 	require.NoError(t, json.Unmarshal(respData, &resp))
 	return resp.Entities
+}
+
+// itestUnitType is the stamp the executor tests birth unit entities with.
+var itestUnitType = message.Type{Domain: "test", Category: "unit", Version: "v1"}
+
+// itestPayloadRegistry is the registry graph-ingest holds in these tests
+// (ADR-103). payloadbuiltins imports this package, so the set is assembled
+// from the owning RegisterPayloads functions instead: agentic, the lifecycle
+// harness carrier, the hierarchy container, this package's own payloads, and
+// the test unit stamp.
+func itestPayloadRegistry(t *testing.T) *payloadregistry.Registry {
+	t.Helper()
+	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads, lifecycle.RegisterPayloads, inference.RegisterPayloads, RegisterPayloads)
+	payloadregistry.RegisterTestType(t, reg, itestUnitType)
+	return reg
 }

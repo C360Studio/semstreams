@@ -156,27 +156,6 @@ There is no HTTP start, stop, or component-configuration write operation.
 
 For component architecture and connectivity validation details, see [component package](../component) and [flowgraph](../component/flowgraph).
 
-### Saved Flow Authoring Endpoints
-
-FlowService treats flows as saved diagrams, not runtime lifecycle owners:
-
-```text
-GET|POST /flowbuilder/flows
-GET|PUT|DELETE /flowbuilder/flows/{id}
-POST /flowbuilder/flows/{id}/validate
-POST /flowbuilder/flows/{id}/publish-component-configs
-GET /flowbuilder/flows/{id}/observations/{metrics,health,messages}
-```
-
-CRUD and validation do not publish configuration. Explicit publication validates
-and compiles the diagram, sorts component names, and performs upsert-only writes.
-It reports exact partial progress, leaves the current process unchanged, and
-requires a restart before published candidates can be composed. Diagram
-omissions never delete component configuration.
-
-Flow deploy/start/stop/undeploy routes, the flow status WebSocket, associated
-runtime log stream, runtime ownership state, and lifecycle tools are absent.
-
 ## API Reference
 
 ### Types

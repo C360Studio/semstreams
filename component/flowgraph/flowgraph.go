@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/internal/componentadmission"
 	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
@@ -122,19 +121,6 @@ func (g *FlowGraph) GetEdges() []FlowEdge {
 	result := make([]FlowEdge, len(g.edges))
 	copy(result, g.edges)
 	return result
-}
-
-// BuildFromRegistry constructs a flow graph solely from retained Registry
-// declarations. Its internal token keeps this runtime seam framework-only.
-func BuildFromRegistry(
-	access componentadmission.Access, registry *component.Registry,
-) (*FlowGraph, error) {
-	snapshots := registry.Snapshots(access)
-	declarations := make([]component.Declaration, 0, len(snapshots))
-	for _, snapshot := range snapshots {
-		declarations = append(declarations, snapshot.Declaration())
-	}
-	return BuildFromDeclarations(declarations)
 }
 
 // BuildFromDeclarations constructs and connects a flow graph from component
@@ -815,11 +801,16 @@ func (g *FlowGraph) exclusivePortRefs(candidates []ComponentPortRef, direction c
 	return result
 }
 
-// AnalyzeConnectivity performs graph connectivity analysis
+// AnalyzeConnectivity performs graph connectivity analysis. It reports what the
+// graph IS — connected components, disconnected nodes, orphaned ports — and
+// derives no severity of its own. Severity belongs to composition.Analyze,
+// which owns the one findings vocabulary (ADR-100 D3); a status computed here
+// would be a second judgment over the same walk, and the one that used to be
+// here treated every required stream port with no publisher as critical without
+// checking whether the operator declared it externally fed.
 func (g *FlowGraph) AnalyzeConnectivity() *FlowAnalysisResult {
 	result := &FlowAnalysisResult{
 		ConnectedEdges:      g.edges,
-		ValidationStatus:    "healthy",
 		DisconnectedNodes:   []DisconnectedNode{}, // Initialize empty slice
 		ConnectedComponents: [][]string{},         // Initialize empty slice
 		OrphanedPorts:       []OrphanedPort{},     // Initialize empty slice
@@ -853,25 +844,6 @@ func (g *FlowGraph) AnalyzeConnectivity() *FlowAnalysisResult {
 				Suggestions:   []string{"connect to other components", "verify component configuration"},
 			})
 		}
-	}
-
-	// Determine validation status based on severity
-	hasCriticalIssues := false
-	for _, port := range result.OrphanedPorts {
-		// Check if this is a critical issue
-		if port.Issue == IssueNoPublishers || port.Issue == IssueNoSubscribers {
-			// Only required stream connections are critical
-			// Optional ports without connections are acceptable
-			if port.Pattern == component.PatternStream && port.Required {
-				hasCriticalIssues = true
-				break
-			}
-		}
-	}
-
-	// Set validation status
-	if len(result.DisconnectedNodes) > 0 || hasCriticalIssues {
-		result.ValidationStatus = "warnings"
 	}
 
 	return result

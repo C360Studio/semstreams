@@ -38,6 +38,14 @@ const (
 	// graph-ingest structural gate when enforcement is on.
 	ErrorCodeStructuralInvalid = "structural_invalid"
 
+	// ErrorCodeMessageTypeUnregistered indicates an entity.create stamped a
+	// message_type the receiving binary's payload registry does not hold
+	// (ADR-103: the registry is the single type authority). Class invalid; the
+	// caller registers the type, it does not retry. Detail carries the key under
+	// "message_type". Emitted by graph-ingest's registered-type gate on both
+	// create paths (the RPC lane and the in-process CreateEntity).
+	ErrorCodeMessageTypeUnregistered = "message_type_unregistered"
+
 	// ErrorCodeInternal is the catch-all for handler-internal
 	// failures (KV transport errors, unmarshal failures on stored
 	// state, etc.). Callers may retry as appropriate.

@@ -2066,8 +2066,22 @@
             "description": "indexing_profile"
           },
           "message_type": {
-            "type": "string",
-            "description": "message_type"
+            "type": "object",
+            "description": "message_type",
+            "properties": {
+              "category": {
+                "type": "string",
+                "description": "category"
+              },
+              "domain": {
+                "type": "string",
+                "description": "domain"
+              },
+              "version": {
+                "type": "string",
+                "description": "version"
+              }
+            }
           },
           "name": {
             "type": "string",

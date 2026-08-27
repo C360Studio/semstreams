@@ -595,8 +595,8 @@ func TestTypeNameFromReflect(t *testing.T) {
 func TestServiceOpenAPIRegistry(t *testing.T) {
 	specs := service.GetAllOpenAPISpecs()
 
-	// We should have at least the flow-service, component-manager, and message-logger
-	expectedServices := []string{"flow-service", "component-manager", "message-logger"}
+	// We should have at least the component-manager and message-logger
+	expectedServices := []string{"component-manager", "message-logger"}
 
 	for _, name := range expectedServices {
 		if _, exists := specs[name]; !exists {
@@ -609,14 +609,14 @@ func TestServiceOpenAPIRegistry(t *testing.T) {
 func TestResponseTypesInRegistry(t *testing.T) {
 	specs := service.GetAllOpenAPISpecs()
 
-	// Flow service should have response types
-	flowSpec, exists := specs["flow-service"]
+	// Component manager should have response types
+	componentSpec, exists := specs["component-manager"]
 	if !exists {
-		t.Fatal("flow-service not found in registry")
+		t.Fatal("component-manager not found in registry")
 	}
 
-	if len(flowSpec.ResponseTypes) == 0 {
-		t.Error("flow-service should have ResponseTypes declared")
+	if len(componentSpec.ResponseTypes) == 0 {
+		t.Error("component-manager should have ResponseTypes declared")
 	}
 
 	// Message logger should have response types

@@ -354,26 +354,6 @@ fail before arbitration, watchers, writes, or dependent construction; detached r
 - **WHEN** model-registry configuration changes
 - **THEN** ComponentManager does not restart or replace a component
 
-### Requirement: Explicit Flow publication reports persistence without activation
-
-The explicit Flow component-configuration publication operation SHALL report the component instance names actually
-persisted. Successful publication SHALL report that the running process is unchanged and reboot is required.
-
-Write success SHALL NOT be described as runtime activation. SemStreams SHALL NOT automatically restart the process.
-
-#### Scenario: Publication succeeds for the next boot
-
-- **GIVEN** a running process and a valid saved Flow
-- **WHEN** explicit publication persists all compiled component configuration
-- **THEN** the response reports the exact persisted component names
-- **AND** it reports the running process unchanged and reboot required
-
-#### Scenario: Publication validation fails before writes
-
-- **WHEN** the saved Flow fails the existing validation or compilation contract
-- **THEN** no compiled component configuration is persisted
-- **AND** the running process remains unchanged
-
 ### Requirement: The engine-owned-revision skip suppresses only the in-memory re-apply
 
 The config watcher SHALL, for a Manager-owned revision (`revision <= engineHighWaterRev`), suppress only the redundant

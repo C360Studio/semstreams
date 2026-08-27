@@ -29,27 +29,19 @@ semstreams --config config.json
 
 Components defined in the config start automatically. Ideal for production and CI/CD.
 
-### UI Mode (Visual Flow Builder)
+### Reading the composition back
 
-> **WIP**: The visual flow builder UI is under active development in the `semstreams-ui` repository, planned for beta release. Backend APIs (Flow CRUD, component lifecycle, live metrics) are available now.
+A configuration is the only authored artifact: connections are derived from the ports each component
+declares, and a diagram is a read-only projection of the composition, never something the framework
+stores (ADR-100).
 
-Design flows visually with drag-and-drop components, real-time validation, and live metrics. The UI
-connects to the same APIs that power headless mode.
+- **Validate before you boot**: `composition.Validate` over the configuration document, or the
+  `validate` verb, reports the same findings the next boot would raise.
+- **Project what is running**: `GET <components>/flowgraph` renders the admitted composition as JSON
+  or Mermaid; `GET <components>/validate` serves the findings retained at boot.
 
-### Static Config → Flow Bridge
-
-When you start with a static config, SemStreams automatically creates a Flow in the flows bucket.
-This makes your static configuration visible and controllable through the UI:
-
-- **First boot**: Static config → Flow created in KV
-- **Subsequent boots**: KV wins (UI customizations preserved)
-- **Reset**: Delete flow from KV to restore static config
-
-This allows you to start in headless mode for deployment, then connect the UI later to monitor
-and adjust the running flow.
-
-See [Flow Architecture](../concepts/12-flow-architecture.md) for details on the dual-bucket design
-and lifecycle operations.
+See [Composition validation](../../openspec/specs/composition-validation/spec.md) for the full
+contract.
 
 ## Component-Based Deployment
 

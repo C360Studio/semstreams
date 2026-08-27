@@ -253,15 +253,20 @@ func (e *WebSearchExecutor) emitObservations(ctx context.Context, call agentic.T
 			continue
 		}
 
-		observationTriples := []message.Triple{
-			{Subject: urlEntity, Predicate: agvocab.WebURL, Object: canon, Source: webSearchTripleSource, Timestamp: now, Confidence: 1.0},
-			{Subject: urlEntity, Predicate: agvocab.WebTitle, Object: r.title, Source: webSearchTripleSource, Timestamp: now, Confidence: 1.0},
-			{Subject: urlEntity, Predicate: agvocab.WebSnippet, Object: r.description, Source: webSearchTripleSource, Timestamp: now, Confidence: 1.0},
-			{Subject: urlEntity, Predicate: agvocab.WebSourceQuery, Object: query, Source: webSearchTripleSource, Timestamp: now, Confidence: 1.0},
-			{Subject: urlEntity, Predicate: agvocab.WebObservedAt, Object: observedAt, Source: webSearchTripleSource, Timestamp: now, Confidence: 1.0},
-			{Subject: urlEntity, Predicate: agvocab.WebObservedBy, Object: loopEntityID, Source: webSearchTripleSource, Timestamp: now, Confidence: 1.0},
+		// The registered observation entity is the one builder of its triples
+		// (ADR-103); Tool selects the web_search source and predicate set.
+		observation := &agentic.WebObservationEntity{
+			Org: e.platform.Org, Platform: e.platform.Platform, CanonicalURL: canon,
+			Tool: agentic.WebObservationToolWebSearch, LoopEntityID: loopEntityID,
+			Title: r.title, Snippet: r.description, SourceQuery: query, ObservedAt: observedAt,
 		}
-		if err := publishWebObservation(ctx, e.publisher, urlEntity, observationTriples); err != nil {
+		if err := observation.Validate(); err != nil {
+			webEmitFailuresTotal.WithLabelValues("web_search", "validate").Inc()
+			e.logger.Warn("web_search emission skipped result: observation fails its contract",
+				"call_id", call.ID, "url", canon, "error", err)
+			continue
+		}
+		if err := publishWebObservation(ctx, e.publisher, urlEntity, observation.Triples()); err != nil {
 			webEmitFailuresTotal.WithLabelValues("web_search", "publish").Inc()
 			e.logger.Warn("web_search observation emission failed",
 				"call_id", call.ID, "url", canon, "error", err)
