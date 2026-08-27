@@ -501,7 +501,7 @@ before the omission, and record `shasum -a 256` equality of the restored file. C
       | MED-5 | migration doc understates the metric's reach | **FIXED in the re-review round (commit `docs(flow): apply the two migration-doc edits …`), not the first — see the correction note below.** `docs/operations/migration-beta162-to-beta163.md` now carries, immediately after "evaluated once immediately, so the series exists from boot rather than from the first tick": `**Expect output you have never seen before.** "Unchanged" describes the metric's contract, not its reach. Before beta.163 this report was effectively unreachable: the WARN fired only in a process that enabled the \`flow-builder\` service, and the gauge reached \`/metrics\` in **no** process at all, because it was registered only through \`Service.RegisterMetrics\` — a method nothing in the framework calls.` … followed by the remedy (bound the stream, or `archival_streams`) |
       | MED-6 | `docs/adr/096:63` links the deleted migration guide | **FIXED** — one status line beneath the link pointing at ADR-100 and `migration-beta162-to-beta163.md`; no other edit to the ADR |
       | NIT | `executors/register.go:50-52` Pattern-B step comments now skip 2 and 4 | **FIXED** — a note that the numbers are historical and why |
-      | NIT | `composition/findings.go:66` cites a deleted path | **FIXED** — marked as provenance at the SHA where it existed |
+      | NIT | `composition/findings.go:69` cites a deleted path | **FIXED** — marked as provenance at the SHA where it existed |
       | NIT | migration doc `:156-157` needs a forward pointer to the `/paths` 500→503 change | **FIXED in the re-review round (commit `docs(flow): apply the two migration-doc edits …`), not the first — see the correction note below.** That paragraph now reads `... is unchanged **by this landing** — it is a projection, not a judgment. The flow-authoring retirement below does change it: same response shape, but it is now derived from the retained composition result and answers 503 rather than 500 before that result exists. See "\`/paths\` now serves the retained graph".` |
       | NIT | semstreams-ui count should separate the classes | **FIXED**, and MEASURED rather than taken: 17 hand-written `src/` files, 16 `e2e/` files naming `flowbuilder`, and **4** (not 10) further `e2e/` files driving the `/flows` UI routes without naming the proxy path — `flow-crud.spec.ts`, `flow-management.spec.ts`, `navigation.spec.ts`, `pages/FlowListPage.ts` — for 20 e2e files total. The four are named in the doc |
       | — | migration table lacked rows for `FlowServiceConfig`, `OverallHealth`, `ComponentHealth`, `ComponentMetric`, `RuntimeMessage`, `FlowExecutor`, `FlowTemplateExecutor` | **FIXED** — six rows added, each "none — served the removed routes", with the `file:line` each had on `origin/main` |
@@ -560,9 +560,14 @@ before the omission, and record `shasum -a 256` equality of the restored file. C
       | MED-R1 `doc.go` signatures | n/a | ✓ 7.1 | n/a — a wrong example predating this landing, not a surface it removes | n/a | n/a — not a break this landing introduces |
       | Rehome host + phantom metric | ✓ | ✓ 3.1 | **FIXED with MED-5** — D5.e records the phantom and → #1123 | ✓ metric scenario now says "against the registry the `/metrics` endpoint scrapes" | ✓ |
 
-      Every "n/a" is a layer that does not own the fact, stated rather than left blank. Nothing in this sweep is
-      UNVERIFIED: each cell was checked by reading the layer at this head, and the four gaps were closed before the
-      push rather than recorded as debt.
+      Every "n/a" is a layer that does not own the fact, stated rather than left blank. Each cell was checked by
+      reading the layer at that head, and the four gaps were closed before the push rather than recorded as debt.
+
+      **One qualification, added after the narrow archive check.** This paragraph originally said "nothing in this
+      sweep is UNVERIFIED". That was true of the presence of every fact and false of one attribute of it: the sweep
+      checked WHETHER each layer carried the correction, and did not re-measure the `file:line` anchors inside the two
+      conformance rows it rewrote. Seven anchors were stale as a result — see 7.3, where all 41 are now re-measured.
+      The sweep's own lesson generalises: a rewritten row is new text, and every measured value in it is new evidence.
 
       **FILED, not fixed** (unused paths, pre-existing, filed by the coordinator): `testutil/flow.go:185-255` dead
       `FlowBuilder` (zero callers outside `testutil/`, confirmed by grep); `metric/registry.go:243-247`
@@ -601,9 +606,33 @@ before the omission, and record `shasum -a 256` equality of the restored file. C
 - [x] 7.3 `conformance.md`: replace every `__` placeholder with the measured `file:line` at the head that carries the
       last `.go` or delta change. Maintained as part of every commit that moves a line, not at the end.
 
-      DONE at `2c5d4add` + this commit; every `__` in `conformance.md` replaced with a measured `file:line`, each
-      re-read after the last code change on the branch. The CARRIED row now records the 3.3 resolution rather than
-      pointing at an open question.
+      DONE at `2c5d4add`; every `__` in `conformance.md` replaced with a measured `file:line`. The CARRIED row records
+      the 3.3 resolution rather than pointing at an open question.
+
+      **CORRECTED after the narrow archive check.** The claim "each re-read after the last code change on the branch"
+      was FALSE from `1ab47e6a` onward, and this line asserted it anyway. The anchors were measured at `86a517ea` and
+      were right there; `55cd1740` then edited `service/component_manager.go` and
+      `service/stream_override_expiry_test.go` and moved them; and the sweep commit `1ab47e6a` REWROTE the two rows
+      that carried them (adding the join-guards paragraph to D5.e and the traversal guard to CARRIED) while copying
+      the old numbers forward. Rewriting a row is exactly when its anchors must be re-measured, and that is the same
+      carry-forward failure the sweep itself was created to catch — in the one cell the sweep did not treat as data.
+
+      Re-measured EVERY anchor in both artifacts at the archive head, not only the five the review named:
+      **41 anchors checked, 7 moved.** The five named — `stream_override_expiry_test.go:181→220`, the
+      `TestComponentManagerStartRunsOverrideExpiryReporter` `:232→271`, `component_manager.go:74-81→74-85`
+      (comment `:74-84`, field `:85`), the CARRIED range `:1382-1455→:1392-1466` with `GetFlowPaths` `:1394→1405`,
+      and `isInputNode` `:1422→1433` / `reachableFrom` `:1438→1449` — plus **two the review did not name**:
+      `processor/agentic-tools/executors/register.go` `:45-50→45-56`, `:109-113→113-118`, `:196-198→200-202` (shifted
+      by the Pattern-B historical-numbering comment added in `55cd1740`), and `composition/findings.go:66→69` in the
+      7.1 NIT row (shifted by my own edit to that same comment). One anchor was reworded rather than renumbered:
+      `component/flowgraph/flowgraph.go:127` pointed at where `BuildFromRegistry` USED to be, which now lands inside
+      `BuildFromDeclarations`'s doc comment; it now cites `BuildFromDeclarations` `:130` and says the old function was
+      deleted outright.
+      Unmoved and re-verified: all six other guard-test anchors, `service/register.go:9-19`, the four
+      `specs/openapi.v3.yaml` anchors (`:105`, `:476`, `:595`, `:1759`), `flowgraph_analysis.go:7-12`, the four #1122
+      contract-guard anchors, `executor.go:158`, `service_manager.go:385-387`,
+      `service_manager_health_listener_test.go:277-286`, `storage_observability.go:244-250`, and the historical
+      anchors that describe deleted code (correct as history by construction).
 - [x] 7.4 Reconcile: every REMOVED requirement in `specs/flow-authoring/spec.md` and
       `specs/component-runtime-config/spec.md` names tests that no longer exist; every scenario in
       `specs/composition-validation/spec.md` names a test that exists and is green in 6.2/6.3/6.5; table recorded here.
@@ -631,7 +660,7 @@ before the omission, and record `shasum -a 256` equality of the restored file. C
       | `TestServiceRegistryHasNoFlowBuilder` | `service/register_test.go:29` | 6.2 |
       | `TestOpenAPIHasNoFlowRoutes` | `test/contract/openapi_no_flow_routes_test.go:41` | 6.5 |
       | `TestToolRegistryHasNoFlowTools` | `processor/agentic-tools/executors/register_test.go:501` | 6.2 |
-      | `TestStreamOverrideExpiryReporterRegistersWithoutFlowService` | `service/stream_override_expiry_test.go:181` | 6.2 |
+      | `TestStreamOverrideExpiryReporterRegistersWithoutFlowService` | `service/stream_override_expiry_test.go:220` | 6.2 |
       | `TestComponentManagerFlowReportingUsesRetainedPortsAfterComponentMutation` | `service/component_manager_port_facts_test.go:107` | 6.2 |
       | `TestComponentManagerProjectionCarriesOnlyAdmittedInstances` | `service/component_manager_port_facts_test.go:90` | 6.2 |
 
@@ -686,9 +715,6 @@ before the omission, and record `shasum -a 256` equality of the restored file. C
 
       `openspec validate --all --strict` → 53 passed, 0 failed (55 before: the change left the in-flight set and
       `flow-authoring` left the spec set). `task openspec:queue` → this change no longer in flight.
-      `flow-authoring` capability directory leaves `openspec/specs/` with it; the narrow reviewer check of the
-      archive/spec sync follows as a PR comment; then undraft. The PR body is a published layer: re-read it at undraft
-      and correct any claim the branch no longer supports.
 
 ## 8. Not in scope (recorded so the archiver does not infer completion)
 
