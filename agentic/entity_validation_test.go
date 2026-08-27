@@ -140,7 +140,9 @@ func TestModelEndpointEntityRejectsMalformed(t *testing.T) {
 }
 
 // TestLoopExecutionEntityRejectsMalformed: the spawn-identity payload carries
-// its TaskMessage's own contract.
+// the WRITER's contract exactly — identity, a spawning task, and at least one
+// spawn-identity fact — not the full task-request contract (the writer never
+// required model or prompt; each fact is emitted only when present).
 func TestLoopExecutionEntityRejectsMalformed(t *testing.T) {
 	requirePublishable(t, fullLoopExecution())
 	cases := []struct {
@@ -150,10 +152,7 @@ func TestLoopExecutionEntityRejectsMalformed(t *testing.T) {
 	}{
 		{"dotted loop id", func(e *agentic.LoopExecutionEntity) { e.LoopID = "a.b" }, "loop"},
 		{"nil task", func(e *agentic.LoopExecutionEntity) { e.Task = nil }, "task"},
-		{"task without task_id", func(e *agentic.LoopExecutionEntity) { e.Task.TaskID = "" }, "task_id"},
-		{"task without role", func(e *agentic.LoopExecutionEntity) { e.Task.Role = "" }, "role"},
-		{"task without model", func(e *agentic.LoopExecutionEntity) { e.Task.Model = "" }, "model"},
-		{"task without prompt", func(e *agentic.LoopExecutionEntity) { e.Task.Prompt = "" }, "prompt"},
+		{"task with nothing to emit", func(e *agentic.LoopExecutionEntity) { e.Task = &agentic.TaskMessage{} }, "spawn-identity"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

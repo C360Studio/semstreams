@@ -42,6 +42,14 @@ composition root registers them through `cmd/e2e-semstreams/fixtures.RegisterPay
 - **THEN** it reports the type as unregistered with no floor
 - **AND** the test that verifies this is `TestIndexingProfileFor`
 
+#### Scenario: a component holding the key separator is refused at registration
+
+- **WHEN** a registration declares `Domain: "bad.domain"` (or a category or version containing `.`)
+- **THEN** `Register` returns an error naming the separator and stores nothing — the key could never round-trip through
+  `Key()`, so the error belongs at boot, not at the first `Create`
+- **AND** `types.Type.Validate` is the one owner of that component grammar
+- **AND** the test that verifies this is `TestRegisterRejectsMalformedComponent` (and `TestTypeValidateOwnsComponentGrammar`)
+
 #### Scenario: a factory that disagrees with its registration is refused
 
 - **WHEN** a registration's factory produces a payload whose `Schema()` returns a different domain, category, or version
@@ -144,3 +152,33 @@ builtin set. No framework type MAY be documented as "mutation-only, not register
 - **AND** the test that verifies this is `TestModelEndpointEntityMatchesBuilder` (also `TestOpsDiagnosisEntityMatchesBuilder`,
   `TestWebObservationEntityMatchesToolBuilders`, `TestEmitLessonBuildsEntityTriples`)
 
+
+### Requirement: A registered payload's `Validate()` is the writer's full contract
+
+A registered framework entity type MUST carry the complete contract its writer used to enforce — every required field,
+closed vocabulary, numeric range, byte bound, control-byte rule, and entity-ID grammar — in ONE validator that both the
+writer's argument parser and `Validate()` use, because registration makes a type publishable: `BaseMessage.MarshalJSON`
+uses `Payload.Validate()` as the publication gate. The parser MAY normalise (clamp a severity) and MUST check only wire shape; it MUST
+NOT duplicate or weaken the contract. A payload that fails `Validate()` MUST fail to marshal through `BaseMessage`.
+
+Boundary (fact lane): graph-ingest's fact-lane consumer decodes through `message.NewDecoder` WITHOUT calling `Validate()`
+(`processor/graph-ingest/component.go` `extractEntityFromMessage`), so wire bytes that bypass `BaseMessage.MarshalJSON` are
+not gated by this requirement; that lane's missing validation is #1112's, not this change's. The decoded payload still
+carries the contract.
+
+#### Scenario: a malformed registered payload is unpublishable
+
+- **WHEN** an `OpsDiagnosisEntity` with no finding, recommendation, evidence, severity, or executor and a confidence of 2
+  (the Codex repro) — or any one of the lesson, model-endpoint, loop-execution, or web-observation contract violations —
+  is validated and marshalled through `message.NewBaseMessage`
+- **THEN** `Validate()` returns an error naming the fault and `json.Marshal` fails
+- **AND** the tests that verify this are `TestAgentLessonEntityRejectsMalformed`, `TestOpsDiagnosisEntityRejectsMalformed`,
+  `TestModelEndpointEntityRejectsMalformed`, `TestLoopExecutionEntityRejectsMalformed`, `TestWebObservationEntityRejectsMalformed`
+
+#### Scenario: a malformed finding never reaches the graph
+
+- **GIVEN** a real graph-ingest holding the builtin set
+- **WHEN** `emit_diagnosis` is invoked with the Codex repro shape
+- **THEN** the tool returns an invalid-arguments result, no `ops.diagnosis.finding` key is born, and the same shape cannot be
+  marshalled through `BaseMessage`
+- **AND** the test that verifies this is `TestMalformedDiagnosisNeverReachesTheGraph`

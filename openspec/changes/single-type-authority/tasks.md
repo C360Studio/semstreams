@@ -229,8 +229,12 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       Done 2026-08-26: `go test -race -count=1 -run 'TestCreateFillsMessageTypeFromContract|TestCreateRejectsConflictingMessageType|TestContractLiteralCompilesAgainstAliases|TestOverlappingLocalContractsConstruct' ./pkg/projection/`
       → four `--- PASS`; `go test -race -count=1 -run 'TestContractValidateUsesVocabularyProfiles|TestValidateShapeSkipsPredicateDeclaration' ./pkg/projection/contract/`
       → two `--- PASS`. The conflict message now names both keys (see 2.9: it was RED at baseline on that assertion).
-      The fill parses the contract key with an unexported three-part splitter in `pkg/projection` (no parser exists in
-      `pkg/types`; adding one is a `pkg/*` export outside O-2).
+      2026-08-27 (Codex round, MEDIUM): that splitter was the weak seam — a registered `bad.domain` key could not be split
+      back and the fill failed silently at first use. Reversed: `contract.Contract.MessageType` is the structured
+      `types.Type`, the fill copies it, `types.Type.Validate` (new `pkg/types` export, the one owner of component grammar)
+      refuses a component holding `.` at `Register` and in contract validation, and all three splitters are deleted
+      (`mutation_client.go`, `payloadregistry/testing.go` — `RegisterTestType` now takes a `types.Type` — and the
+      graph-ingest fixture). No parser was added anywhere.
 
 ## 4. The six framework types
 
@@ -419,6 +423,18 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       (l) delete the hierarchy factory check → `--- FAIL: TestFactoryRejectsHierarchyWithoutContainerType (0.00s)` (only failure)
       (m) make `ModelMaxTokens` unconditional → `--- FAIL: TestModelEndpointEntityMatchesBuilder (0.00s)` (only failure in `./agentic/`)
       (n) drop the O-17 fill → `--- FAIL: TestCreateFillsMessageTypeFromContract (0.00s)` (only failure in `./pkg/projection/`)
+      Round 2 (Codex round fixes, 2026-08-27, same cp+sha256 harness on the committed tree `1c2a7c5a`; every restore equal):
+      (R2-lesson-bound) remove the injection-form bound → `--- FAIL: TestAgentLessonEntityRejectsMalformed` (only failure in `./agentic/`);
+      (R2b-diagnosis-confidence) make the confidence range vacuous (imports kept) → `--- FAIL: TestOpsDiagnosisEntityRejectsMalformed`;
+      (R2-model-required) remove the model-required check → `--- FAIL: TestModelEndpointEntityRejectsMalformed`;
+      (R2c-loop-task, SUPERSEDED — see below) severed the `Task.Validate()` delegation → `--- FAIL: TestLoopExecutionEntityRejectsMalformed`;
+      that delegation itself was over-strict and was replaced; (R2d-loop-facts) remove the reshaped validator's
+      no-spawn-identity-facts check → `--- FAIL: TestLoopExecutionEntityRejectsMalformed` (only failure in `./agentic/`);
+      (R2-web-status) remove the status-code range → `--- FAIL: TestWebObservationEntityRejectsMalformed`;
+      (R2-register-grammar) remove the `Type.Validate` call in `Register` → `--- FAIL: TestRegisterRejectsMalformedComponent` (only failure in `./payloadregistry/`);
+      (R2-fill) drop the structured fill → `--- FAIL: TestCreateFillsMessageTypeFromContract` + `--- FAIL: TestCreateFillsFromRegisteredContract`.
+      Two first attempts (delete the whole check) failed as `[build failed]` (an import went unused), not through the named
+      test — re-shaped to keep imports compiled so the observer is the test, and recorded as such.
       Review HIGH-3 (2026-08-27), same harness: (H3-a) `HarnessMessageType()` category → `harness-unregistered` →
       `--- FAIL: TestHarnessBirthPassesRegisteredTypeGate (0.43s)` (new integration test, `pkg/lifecycle/harness_gate_integration_test.go`,
       real graph-ingest + `payloadbuiltins.NewTestRegistry`); the mutation ALSO fails `--- FAIL: TestHarnessEntity_RoundTrip`,
@@ -442,6 +458,30 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       (assertion message in `payloadbuiltins/single_type_authority_test.go` naming the retired set); `go vet -tags=integration ./...`
       → clean; `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...` → ok; `git diff --stat go.sum` → empty;
       `openspec validate single-type-authority --strict` → valid.
+      **Owner-run Codex round at `b18fd518` (2026-08-27): CHANGES REQUESTED, two findings, both accepted and applied.**
+      HIGH — registered payloads validated identity only (Codex repro: an `OpsDiagnosisEntity` with only identity and
+      `Confidence: 2` validated and marshalled): `Validate()` on the five agentic entity types now IS the writer's contract,
+      one validator per type used by the tool-arg parsers (shape-only, severity clamp kept as writer policy) and by
+      `BaseMessage.MarshalJSON`; `WriteModelEndpoints`, `WriteSpawnIdentity`, `http_request` and `web_search` validate before
+      birthing. Negative tests: `TestAgentLessonEntityRejectsMalformed`, `TestOpsDiagnosisEntityRejectsMalformed`,
+      `TestModelEndpointEntityRejectsMalformed`, `TestLoopExecutionEntityRejectsMalformed`, `TestWebObservationEntityRejectsMalformed`
+      (Validate AND marshal), `TestMalformedDiagnosisNeverReachesTheGraph` (integration, real graph-ingest). Fact-lane
+      boundary measured and stated in the payload-registry delta: the consumer decodes without `Validate()` (#1112).
+      MEDIUM — lossy key parse: see 3.4. Tests `TestRegisterRejectsMalformedComponent`, `TestTypeValidateOwnsComponentGrammar`,
+      `TestCreateFillsFromRegisteredContract`. Mutation transcripts: 7.1 (round 2).
+      Correction caught by the chained suites (2026-08-27 15:10–15:20Z, both RED before the fix): the loop-execution
+      validator first delegated to the full `TaskMessage.Validate` — STRONGER than the spawn-identity writer's contract
+      (the writer emits each fact only when present and never required model or prompt) — and
+      `TestWriteSpawnIdentity_Integration` / `TestWriteSpawnIdentity_EntityExistsReturnedToCaller_Integration` failed:
+      `spawn identity for loop loop-spawn-int fails the loop-execution contract: task: model required`. Reshaped to the
+      writer's contract exactly (non-nil task, at least one spawn-identity fact; the empty-fact set stays the writer's
+      graceful skip); the one-table test's structured/string compare fixed with `.Key()`. Re-runs after the fix:
+      `./agentic/ ./payloadbuiltins/ ./processor/agentic-loop/` unit ok; `-tags=integration -run TestWriteSpawnIdentity ./processor/agentic-loop/` ok. ok. Post-fix full suites:
+      `go test -race -count=1 ./...` → 156 ok, 0 FAIL; `go test -race -tags=integration -count=1 -p 2 ./...`
+      (15:26–15:34Z) → 156 ok, 0 FAIL, exit 0. Tiers whose writers changed, re-run under the host lock (2026-08-27):
+      - `task e2e:ops` — 15:35:38Z–15:36:11Z — rc=0 — `Scenario completed successfully duration=605.676709ms`
+      - `task e2e:lessons` — 15:36:11Z–15:36:30Z — rc=0 — `Scenario completed successfully … assertions_run=3`
+      - `task e2e:agentic` — 15:36:30Z–15:37:29Z — rc=0 — `Scenario completed successfully duration=45.270090792s`
 - [x] 7.3 Tag gate (owner override O-6): `task e2e:agentic`, `task e2e:lessons`, `task e2e:structural`, `task e2e:ops`, `task e2e:research-graph`, `task e2e:lifecycle`, `task e2e:crud-tools`, `task e2e:core` — all eight green, each as a provenance-complete row (exact command, runner identity, UTC start/end) in the candidate-proof record per `openspec/specs/release-candidate-proof/spec.md`; and, until the web-observation tier exists (O-10), `go test -race -tags=integration -count=1 -run TestWebObservationBirthIsRegistered ./processor/agentic-tools/executors/` recorded as a row of its own. One agent at a time on the host; the BREAKING commit lands on main
       only behind all of these; results recorded here verbatim.
       Run 2026-08-26 on this laptop (runner: Claude Fable 5 in the `claude/gh1100-single-type-authority-impl` worktree):

@@ -63,7 +63,7 @@ func TestPayloadRegistryIsTheSingleTypeAuthority(t *testing.T) {
 			}
 			require.Len(t, registration.Contracts, 1)
 			assert.Equal(t, tc.contract, registration.Contracts[0].Name)
-			assert.Equal(t, tc.key, registration.Contracts[0].MessageType, "the contract names the registration's key")
+			assert.Equal(t, tc.key, registration.Contracts[0].MessageType.Key(), "the contract names the registration's key")
 		})
 	}
 

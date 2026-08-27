@@ -3,7 +3,6 @@ package agentic
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 	"unicode/utf8"
 
@@ -168,10 +167,14 @@ func (e *LoopExecutionEntity) Schema() message.Type {
 }
 
 // Validate implements message.Payload and IS the spawn-identity writer's
-// contract: identity plus the spawning TaskMessage, validated by its own
-// contract (task_id, role, model, prompt, bounds). BaseMessage.MarshalJSON
-// refuses a payload that fails it; the agentic-loop graph writer delegates
-// here before birthing the execution entity.
+// contract — no stronger: identity, a non-nil spawning TaskMessage, and at
+// least one spawn-identity fact to emit. The writer never required a full
+// task request (Triples() emits role, task, parent, run, reply-to, workflow,
+// user, and description each only when present), so neither does the payload;
+// TaskMessage.Validate remains the contract of a task ARRIVING as a task
+// request, not of the identity snapshot a loop execution carries.
+// BaseMessage.MarshalJSON refuses a payload that fails this; the agentic-loop
+// graph writer delegates here before birthing the execution entity.
 func (e *LoopExecutionEntity) Validate() error {
 	if _, err := TryLoopExecutionEntityID(e.Org, e.Platform, e.LoopID); err != nil {
 		return err
@@ -179,8 +182,8 @@ func (e *LoopExecutionEntity) Validate() error {
 	if e.Task == nil {
 		return errors.New("task is required (the spawning TaskMessage)")
 	}
-	if err := e.Task.Validate(); err != nil {
-		return fmt.Errorf("task: %w", err)
+	if len(e.Triples()) == 0 {
+		return errors.New("task carries no spawn-identity facts (role, task, parent, run, reply-to, workflow, user, and description are all empty)")
 	}
 	return nil
 }

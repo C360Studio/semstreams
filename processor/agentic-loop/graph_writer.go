@@ -473,14 +473,15 @@ func (w *graphWriter) WriteSpawnIdentity(ctx context.Context, loopID string, tas
 	}
 
 	// The execution entity's contract is the entity's (ADR-103) — the same
-	// gate BaseMessage.MarshalJSON applies to every publisher. A task that
-	// fails its own contract is a birth failure, not a graceful skip.
-	if err := entity.Validate(); err != nil {
-		return fmt.Errorf("spawn identity for loop %s fails the loop-execution contract: %w", loopID, err)
-	}
+	// gate BaseMessage.MarshalJSON applies to every publisher. It is the
+	// writer's historical contract exactly: a task with nothing to say is a
+	// graceful skip, matching the pre-ADR-103 empty-triples return.
 	triples := entity.Triples()
 	if len(triples) == 0 {
 		return nil
+	}
+	if err := entity.Validate(); err != nil {
+		return fmt.Errorf("spawn identity for loop %s fails the loop-execution contract: %w", loopID, err)
 	}
 
 	entityState := &gtypes.EntityState{
