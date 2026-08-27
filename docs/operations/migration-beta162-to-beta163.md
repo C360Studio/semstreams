@@ -232,6 +232,27 @@ The shipped `configs/flows/ops-agent*.json` were migrated this way in this landi
 | `service.ComponentManager.GetFlowGraph` | see "`/paths` now serves the retained graph" below |
 | `service.ComponentPortInfo`, `service.ComponentPortDetail`, `service.FlowConnection`, `service.ComponentPortReference`, `service.FlowGap` | residue of the retired `/gaps` analysis: a second, exact-subject-match connection interpreter with no caller |
 
+### `schemas/workflow-definition.v1.json` is deleted
+
+Owner ruling on #1122 (2026-08-27): the file belongs to this retirement and goes with it. It was a **generated
+artifact with no generator** — no registered factory produces it, the generator stopped emitting it when the old
+workflow processor was retired, and `test/contract` carried a `nonComponentSchemas` exemption so the
+orphaned-schema, schema-drift, JSON-Schema-shape and `default_ports` guards all skipped it. That exemption is removed
+too, so every file in `schemas/` is now a component schema subject to all four guards with no exceptions. `schemas/`
+goes from 34 files to **33 — one per registered factory**, which is what the ADR-100 inventory said the number should
+have been all along.
+
+Nothing in this repository read it, and no product reads it through an API: it is a checked-in file that downstream
+repositories **vendor by copying**. Two carry a copy today, and both should drop it:
+
+| Repository | What to delete | Measured |
+|---|---|---|
+| semstreams-ui @ `39f5f04` | `contracts/semstreams/schemas/workflow-definition.v1.json` (4,595 bytes) | Vendored artifact only — `grep -rn "workflow-definition"` over `src/`, `e2e/`, `scripts/`, `package.json` (excluding `node_modules`) returns **no hand-written reference**, so deleting the file is the whole change |
+| semteams @ `8a70b7e7` | `schemas/workflow-definition.v1.json` (4,595 bytes) **and** the exemption that hides it: `test/contract/schema_contract_test.go:14-18` (the `nonComponentSchemas` declaration and its `"workflow-definition": true` entry at `:17`) plus its three skip sites at `:57`, `:106`, and `:188` | semteams mirrors this repository's contract test; with the entry gone its own orphaned-schema guard fails on the vendored file, so the file and the exemption must be deleted together |
+
+There is no replacement. A product that still wants a JSON-Schema for a workflow definition owns it in its own
+repository; the framework generates schemas only for registered component factories.
+
 **Two KV buckets are no longer created**: `semstreams_flows` and `FLOW_TEMPLATES`. A bucket retained from an earlier
 deployment is inert — nothing reads it, nothing writes it, and no migration, legacy reader, or compatibility Flow view
 exists. Delete it when convenient.

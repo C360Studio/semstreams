@@ -298,13 +298,39 @@ before the omission, and record `shasum -a 256` equality of the restored file. C
       Remaining `Flow` occurrences in the document are the retained `FlowGraph` **tag** on
       `/flowgraph`, `/paths`, `/validate` (4 lines) — the projection surface ADR-100 keeps.
 
-      `schemas/workflow-definition.v1.json` — DECIDED: **it stays**, and the `nonComponentSchemas` exception stays with
-      it. It is stale in this tree (no factory generates it), but it is not stale downstream: `semstreams-ui` vendors a
-      copy at `contracts/semstreams/schemas/workflow-definition.v1.json` and `semteams` carries both
-      `schemas/workflow-definition.v1.json` and a `test/contract/schema_contract_test.go` that names it. Deleting it is
-      therefore a downstream contract break that ADR-100 does not authorize and this change's deltas carry no guard
-      for; #1092 reached the same conclusion (`openspec/changes/archive/2026-08-27-composition-validation-substrate/
-      tasks.md:414-415`). FILED for a separate owner ruling.
+      `schemas/workflow-definition.v1.json` — **DELETED.** This reverses the DECIDED-stays I recorded first, on the
+      owner's ruling on #1122 (2026-08-27): the file belongs to the flow-authoring retirement and goes with it. My
+      earlier reasoning weighed the two vendored downstream copies as a break ADR-100 did not authorize; the owner
+      ruled the opposite way and the ruling governs.
+
+      Premise correction: the ruling located the exemption at `cmd/openapi-generator/main.go:94`. Measured, there is
+      no `nonComponentSchemas` there — `:102` held only a stale comment ("Workflow definition schema generation
+      removed"), which is deleted with the artifact it described. The exemption lives in
+      `test/contract/schema_contract_test.go:17-21` (declaration) with skip sites at `:64`, `:113`, `:237` and
+      `test/contract/schema_export_test.go:30`. All removed; the map is gone entirely rather than left empty, so no
+      file in `schemas/` is exempt from any guard. `schema_export_test.go`'s `name` local existed only to feed the
+      skip and went with it.
+
+      Evidence the removal makes the guards REAL rather than cosmetic — restored the deleted artifact
+      (`git show origin/main:schemas/workflow-definition.v1.json`, sha256
+      `7938cc0671725d535a1c64e2f61963d2b0e991d91c394eedaa69bd5f49b4c61c`) and re-ran `go test ./test/contract/...`:
+      ```
+      --- FAIL: TestCommittedSchemasMatchCode
+      --- FAIL: TestCommittedSchemasValidStructure
+      --- FAIL: TestNoOrphanedSchemaFiles
+          schema_contract_test.go:221: Orphaned schema file: workflow-definition.v1.json (no corresponding component registered)
+      --- FAIL: TestSchemaExportCarriesDefaultPorts
+      ```
+      Four guards that had been skipping it now catch it. Artifact deleted again; `go test ./test/contract/...` →
+      `ok github.com/c360studio/semstreams/test/contract 2.645s`.
+
+      `task schema:generate` run twice after the deletion: the generator does NOT re-create the file (confirming "no
+      factory"), and `git status --porcelain schemas/ specs/` shows only the deletion both times → no drift.
+      `task schema:check-changes` clean. `schemas/` is now **33 files for 33 registered factories** — the count the
+      ADR-100 inventory said it should have been (`docs/proposals/gh1089-flow-boundary-inventory.md:358`).
+      Downstream obligations (semstreams-ui `39f5f04`, semteams `8a70b7e7` — file AND its contract-test exemption at
+      `test/contract/schema_contract_test.go:14-18,57,106,188`) are recorded in
+      `docs/operations/migration-beta162-to-beta163.md` § "`schemas/workflow-definition.v1.json` is deleted".
 
 ## 6. Standard gates — record each command and its result
 
@@ -334,6 +360,8 @@ before the omission, and record `shasum -a 256` equality of the restored file. C
       not fixed — a ten-call-site test-helper change does not belong in a retirement PR.
       Final run after that change: `go test -race -count=1 ./...` → `grep -c '^FAIL'` = **0**, `exit=0`;
       the named test passed 3/3 in isolation before and after.
+      Re-run again after the #1122 ruling (deleting `schemas/workflow-definition.v1.json` and the
+      `nonComponentSchemas` exemption): `go test -race -count=1 ./...` → `grep -c '^FAIL'` = **0**, `exit=0`.
 - [x] 6.3 `go test -race -count=1 -tags=integration -p 2 ./...`.
       → `grep -c '^FAIL'` = **0**, `exit=0` (ended 2026-08-27T14:01:34Z). Re-run after the §7.1 self-review additions
       → `grep -c '^FAIL'` = **0**, `exit=0`. Run alone on the host both times — `pgrep -f 'go test'` was checked empty
@@ -346,6 +374,8 @@ before the omission, and record `shasum -a 256` equality of the restored file. C
 - [x] 6.5 `go test ./test/contract/...`.
       → `ok github.com/c360studio/semstreams/test/contract 2.670s`. `task schema:check-changes` → clean
       (`git diff --exit-code schemas/ specs/openapi.v3.yaml` passes).
+      Re-run after the #1122 ruling, with every schema now covered by every guard and no exemption map:
+      → `ok github.com/c360studio/semstreams/test/contract 2.645s`; `task schema:check-changes` clean.
 - [x] 6.6 **BREAKING e2e gate** (ADR-100 Consequences; the repository rule is that a BREAKING commit has its covering
       tier green BEFORE it lands): `task e2e:core`, `task e2e:crud-tools` (the tool registry boots without the flow
       gates), `task e2e:agentic` (the largest shipped composition through the boot check). Paste each tier summary here.
