@@ -215,11 +215,60 @@ Premises were measured at `5cc0c7fb` and are re-measured at the claim head; the 
 Each: apply the omission, run the named command, record the verbatim failure, restore with `cp` from a copy taken
 before the omission, and record `shasum -a 256` equality of the restored file. Commit before mutating.
 
-- [ ] 4.1 Delete the rehomed reporter registration → `TestStreamOverrideExpiryReporterRegistersWithoutFlowService`
+- [x] 4.1 Delete the rehomed reporter registration → `TestStreamOverrideExpiryReporterRegistersWithoutFlowService`
       MUST fail.
-- [ ] 4.2 Re-add `"flow-builder"` to `service/register.go` → `TestServiceRegistryHasNoFlowBuilder` MUST fail.
-- [ ] 4.3 Re-add one flow tool registration → `TestToolRegistryHasNoFlowTools` MUST fail.
-- [ ] 4.4 Re-add one `/flowbuilder` OpenAPI row → `TestOpenAPIHasNoFlowRoutes` MUST fail.
+- [x] 4.2 Re-add `"flow-builder"` to `service/register.go` → `TestServiceRegistryHasNoFlowBuilder` MUST fail.
+- [x] 4.3 Re-add one flow tool registration → `TestToolRegistryHasNoFlowTools` MUST fail.
+- [x] 4.4 Re-add one `/flowbuilder` OpenAPI row → `TestOpenAPIHasNoFlowRoutes` MUST fail.
+
+      All four run against the GREEN head `e097c8d9`, committed before mutating. `[applied]` printed between each
+      mutation and its test run; each file restored by `cp` from a copy taken before the omission and the restoration
+      proved by `shasum -a 256` equality (4.3 by a clean `git status` — the omission was in a tracked file).
+
+      **4.1** — deleted the `cm.overrideExpiry.register(deps.MetricsRegistry)` call in `NewComponentManager`.
+      `go test -count=1 ./service/ -run 'TestStreamOverrideExpiryReporterRegistersWithoutFlowService'`
+      ```
+      --- FAIL: TestStreamOverrideExpiryReporterRegistersWithoutFlowService (0.02s)
+          Messages: metric semstreams_streams_migration_override_expiredmap[owner:team-legacy stream:LAPSED] must be published
+      ```
+      restored `service/component_manager.go`
+      `3fa4196141e036e9431176284aa567e6137e06b25849163c4ac592bcb4ec6b76` before == after.
+
+      **4.2** — re-added `"flow-builder": NewMetrics` to `RegisterAll` (the constructor is gone; the NAME is what the
+      guard forbids). `go test -count=1 ./service/ -run 'TestServiceRegistryHasNoFlowBuilder'`
+      ```
+      --- FAIL: TestServiceRegistryHasNoFlowBuilder (0.00s)
+          register_test.go:37: service registry still offers "flow-builder"; ADR-100 D5 removes the flow-builder service without an alias
+      ```
+      restored `service/register.go` `48b619f167a2a3bf02e10aa42c11bf2c2ad7acd690374311af297aee4e199d34` before == after.
+
+      **4.3 — the omission FOUND A HOLE IN THE GUARD, and the guard was fixed.** Re-added one retired registration in
+      `registerComponentCatalog`: `tools.RegisterTool("create_flow", …)`.
+      `go test -count=1 ./processor/agentic-tools/executors/ -run TestToolRegistryHasNoFlowTools` → **ok**, i.e. the
+      guard stayed GREEN with `create_flow` registered. Cause: `ExecutorRegistry.ListTools` walks unique EXECUTORS and
+      dedups by definition name (`processor/agentic-tools/executor.go:158`), so a name registered as a dispatch KEY
+      whose executor advertises something else never appears there — while `Execute` keys straight off the
+      registration map (`:211`), so the tool is callable. The guard read the advertised set only. Fixed by asking both
+      questions: `containsName(reg.ListTools(), name)` AND `reg.GetTool(name) != nil`. Re-run with the omission still
+      applied:
+      ```
+      --- FAIL: TestToolRegistryHasNoFlowTools (0.00s)
+          register_test.go:530: tool registry still dispatches "create_flow"; ADR-100 D5 removes it without an alias
+      ```
+      Omission then removed; `git status` clean for
+      `processor/agentic-tools/executors/register_component_catalog.go`; guard green.
+
+      **4.4** — re-added a `"/flows"` GET row to the ComponentManager OpenAPI declaration
+      (`service/component_manager_http.go`) and ran `task schema:generate`, so the mutation travels the real
+      declaration → generator → document path rather than being hand-edited into the artifact.
+      `go test -count=1 ./test/contract/ -run TestOpenAPIHasNoFlowRoutes`
+      ```
+      --- FAIL: TestOpenAPIHasNoFlowRoutes (0.00s)
+          openapi_no_flow_routes_test.go:46: specs/openapi.v3.yaml still publishes "/flows"; ADR-100 D5 removes it without an alias
+      ```
+      restored `service/component_manager_http.go`
+      `cfae8df40db6db2be3129850de845368f11a6170c58a5d09b95a00ba0fbcc353` and `specs/openapi.v3.yaml`
+      `2711f3b5b66b91eec5a248e532cddfbc10f6dd5d398415a5be9c0e2be4825e11`, both before == after.
 
 ## 5. Schema regeneration
 

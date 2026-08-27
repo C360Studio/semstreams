@@ -515,8 +515,19 @@ func TestToolRegistryHasNoFlowTools(t *testing.T) {
 
 	registered := reg.ListTools()
 	for _, name := range retiredFlowToolNames {
+		// Two questions, because the registry answers them separately:
+		// ListTools walks unique EXECUTORS and dedups by definition name, so a
+		// name registered as a dispatch key with an executor that advertises
+		// something else is invisible there — and still callable through
+		// Execute, which keys straight off the registration map. Asking only
+		// the advertised set would let the retired surface back in through the
+		// dispatch door. (Measured: forced omission 4.3 registered "create_flow"
+		// as a key and the advertised-set assertion alone stayed green.)
 		if containsName(registered, name) {
 			t.Errorf("tool registry still advertises %q; ADR-100 D5 removes it without an alias", name)
+		}
+		if reg.GetTool(name) != nil {
+			t.Errorf("tool registry still dispatches %q; ADR-100 D5 removes it without an alias", name)
 		}
 	}
 
