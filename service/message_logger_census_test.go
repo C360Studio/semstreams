@@ -127,6 +127,13 @@ func TestMessageLoggerShippedSubjectCensusArtifactIsCompleteAndExact(t *testing.
 		computed.Raw, computed.Effective, computed.Delta, computed.ExactCollapses,
 		computed.AddedKinds, computed.ContainmentOverlaps)
 
+	// gh#1129 (owner ruling 2026-08-27): configs/cloud-federation.json and
+	// configs/edge-federation.json left the scope above (21 -> 19); their raw
+	// declarations drop out of this frozen census as -7 rows / -4 per-config
+	// exact keys / -4 global strings (395->388, 243->239, 54->50), carried
+	// through unchanged into Effective below. Delta/exact_collapses/added_kinds
+	// /overlaps are untouched — neither config held an agentic-loop or
+	// governance factory.
 	require.Equal(t, subjectCensusCounts{Rows: 388, PerConfigExactKeys: 239, GlobalStrings: 50}, census.Raw)
 	require.Equal(t, subjectCensusCounts{Rows: 572, PerConfigExactKeys: 376, GlobalStrings: 66}, census.Effective)
 	require.Equal(t, subjectCensusCounts{Rows: 184, PerConfigExactKeys: 137, GlobalStrings: 16}, census.Delta)

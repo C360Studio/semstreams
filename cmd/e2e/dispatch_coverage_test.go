@@ -23,6 +23,16 @@ import (
 // production functions) — never a hand-copied name list, so this guard
 // cannot silently drift from what the CLI actually offers or dispatches.
 //
+// Both extractors are scoped by structure (section boundaries, token
+// separators), never by a fixed indentation depth or a comma-only split:
+// gh#1129 review found the guard could be walked around by adding a menu
+// entry at a different indent, or a flag-help name joined to its neighbor
+// by " or " instead of ", or " — both previously matched nothing and were
+// silently dropped instead of failing. See menuEntryPattern and
+// tokenSplitPattern below, and the floor assertion on the menu count,
+// which exists so a parser regression that silently stops matching entries
+// fails loudly instead of vacuously passing on zero or one survivor.
+//
 // This only checks the advertised ⇒ dispatchable direction (a name printed
 // in the menu or flag help must have a switch case). It does not require the
 // reverse: some dispatchable names (e.g. "ops", "crud-tools", and the bare
@@ -40,7 +50,11 @@ func TestAdvertisedScenariosAreDispatchable(t *testing.T) {
 	dispatchable := dispatchableScenarioNames(t)
 	require.NotEmpty(t, dispatchable, "createScenario's dispatch switch must be found and non-empty")
 
-	for _, name := range advertisedMenuScenarioNames(t) {
+	menuNames := advertisedMenuScenarioNames(t)
+	require.GreaterOrEqualf(t, len(menuNames), 10,
+		"Individual Scenarios menu advertised only %d entries — a collapse below this floor means the line "+
+			"parser silently stopped matching, not that scenarios were actually removed", len(menuNames))
+	for _, name := range menuNames {
 		require.Truef(t, dispatchable[name],
 			"menu (--list) advertises scenario %q with no case in createScenario's dispatch switch", name)
 	}
@@ -95,21 +109,13 @@ func dispatchableScenarioNames(t *testing.T) map[string]bool {
 	return names
 }
 
-// menuEntryPattern matches a "name  - description" line indented exactly
-// four spaces under handleListCommand's "Individual Scenarios:" section,
-// e.g. "    core-health     - Component health checks" or
-// "    tiered --variant structural  - Rules-only, ZERO embeddings/clusters".
-// Deeper-indented continuation lines (over four spaces before the first
-// non-space) never match. The capture is the whole name field, including
-// any trailing "--variant X"; the caller takes its first token.
-var menuEntryPattern = regexp.MustCompile(`^ {4}(\S.*?)\s+-\s+\S`)
-
-// advertisedMenuScenarioNames runs the production --list output
-// (handleListCommand) and extracts the runnable scenario name from every
-// "Individual Scenarios:" entry line.
-func advertisedMenuScenarioNames(t *testing.T) []string {
+// captureListOutput runs handleListCommand(true) — the production --list
+// implementation — and returns everything it printed to stdout. Shared by
+// TestLessonsScenarioIsDispatchedAndListed (main_test.go) and the dispatch
+// coverage guard below so both drive the exact same production output
+// through one capture path instead of two copies of the os.Pipe dance.
+func captureListOutput(t *testing.T) string {
 	t.Helper()
-
 	original := os.Stdout
 	reader, writer, err := os.Pipe()
 	require.NoError(t, err)
@@ -123,25 +129,87 @@ func advertisedMenuScenarioNames(t *testing.T) []string {
 	out, err := io.ReadAll(reader)
 	require.NoError(t, err)
 	require.NoError(t, reader.Close())
+	return string(out)
+}
+
+// scenarioSectionHeader is the exact top-level (zero-indent) line that
+// opens the block of runnable "name - description" entries in --list
+// output. Used only to find the section, never to enumerate names.
+const scenarioSectionHeader = "Individual Scenarios:"
+
+// menuEntryPattern matches a "name  - description" line at ANY indentation
+// once inside the Individual Scenarios section — e.g. "core-health     -
+// Component health checks" or "tiered --variant structural  - Rules-only,
+// ZERO embeddings/clusters". It is deliberately not anchored to a fixed
+// indent depth: a prior version required exactly four leading spaces, so a
+// new sub-section printed at a different depth (2, 6, 22 spaces...) was
+// invisible to it. A line with no whitespace-hyphen-whitespace separator —
+// a sub-header ("  Core:") or a wrapped continuation of the previous
+// description — never matches, at any indent. The capture is the whole
+// name field, including any trailing "--variant X"; the caller takes its
+// first token.
+var menuEntryPattern = regexp.MustCompile(`^\s+(\S.*?)\s+-\s+\S`)
+
+// advertisedMenuScenarioNames runs the production --list output and
+// extracts the runnable scenario name from every entry line inside the
+// "Individual Scenarios:" section. The section is scoped by its own
+// start/end markers — the header line and the next zero-indent line after
+// it — never by a fixed indent depth, so entries at any indentation are
+// still found, and lines from the adjacent "task e2e:<tier>" or "Variant
+// flag" sections (which also contain "name - description" shaped text) are
+// never mistaken for --scenario names.
+func advertisedMenuScenarioNames(t *testing.T) []string {
+	t.Helper()
+	out := captureListOutput(t)
 
 	var names []string
-	for _, line := range strings.Split(string(out), "\n") {
+	inSection := false
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, " ") {
+			// Zero-indent line: a top-level section boundary.
+			inSection = strings.TrimSpace(line) == scenarioSectionHeader
+			continue
+		}
+		if !inSection {
+			continue
+		}
 		m := menuEntryPattern.FindStringSubmatch(line)
 		if m == nil {
-			continue
+			continue // sub-header or continuation line, not an entry — any indent
 		}
 		fields := strings.Fields(m[1])
 		require.NotEmpty(t, fields, "matched menu line %q must yield a name token", line)
 		names = append(names, fields[0])
 	}
-	require.NotEmpty(t, names, "--list output must advertise at least one scenario")
+	require.NotEmptyf(t, names, "--list output must advertise at least one scenario under %q", scenarioSectionHeader)
 	return names
 }
 
+// scenarioNameToken matches a single scenario-name-shaped word: lowercase,
+// hyphenated, never quoted. It rejects the quoted "'all'" sentinel outright
+// (it starts with a non-letter) without needing to special-case it.
+var scenarioNameToken = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
+// flagHelpStopwords are English connectors that can appear in the
+// -scenario usage prose ("... lessons, or 'all'"). They are plain lowercase
+// words, so they would otherwise pass scenarioNameToken despite never being
+// a scenario name.
+var flagHelpStopwords = map[string]bool{"or": true, "and": true}
+
+// tokenSplitPattern splits the -scenario usage parenthetical on commas AND
+// whitespace runs. A comma-only split previously let a name joined to its
+// neighbor without a comma (e.g. "... lessons core-bogus or 'all'") glue
+// into one non-matching string that scenarioNameToken silently dropped —
+// the flag-help mirror of the menu's indentation coupling.
+var tokenSplitPattern = regexp.MustCompile(`[,\s]+`)
+
 // advertisedFlagHelpScenarioNames parses the -scenario flag's usage string
 // (the flag.StringVar call registering "scenario" in main.go) and returns
-// the bare scenario names listed in its parenthetical, dropping non-name
-// tokens such as the "or 'all'" sentinel.
+// the bare scenario names listed in its parenthetical, dropping connector
+// words and the quoted "'all'" sentinel.
 func advertisedFlagHelpScenarioNames(t *testing.T) []string {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -180,11 +248,13 @@ func advertisedFlagHelpScenarioNames(t *testing.T) []string {
 	require.True(t, open >= 0 && closeIdx > open, "-scenario usage text must list names in parens: %q", usage)
 	inner := usage[open+1 : closeIdx]
 
-	identifier := regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 	var names []string
-	for _, part := range strings.Split(inner, ",") {
+	for _, part := range tokenSplitPattern.Split(inner, -1) {
 		part = strings.TrimSpace(part)
-		if identifier.MatchString(part) {
+		if part == "" || flagHelpStopwords[part] {
+			continue
+		}
+		if scenarioNameToken.MatchString(part) {
 			names = append(names, part)
 		}
 	}
