@@ -109,27 +109,26 @@ func (e *ModelEndpointEntity) Schema() message.Type {
 	return ModelEndpointMessageType()
 }
 
-// Validate implements message.Payload and IS the endpoint writer's contract:
-// identity, a non-empty provider and model, and non-negative limits and
-// prices (the model registry's config validation is the upstream owner of the
-// provider vocabulary; this package does not import it). BaseMessage.
-// MarshalJSON refuses a payload that fails it; WriteModelEndpoints delegates
-// here before birthing an endpoint.
+// Validate implements message.Payload and IS the endpoint writer's contract —
+// derived from, and no stronger than, the config owner's validateEndpoint
+// (model/registry.go): model required, max_tokens and both prices
+// non-negative. Provider is deliberately NOT required — the registry permits
+// an empty provider (registry.go: `ep.Provider != "" && !validProviders[...]`),
+// AdapterFor("") returns the generic adapter, and configs/agentic.json ships
+// a provider-less endpoint — and RequestsPerMinute is deliberately unchecked,
+// mirroring its absence upstream: a payload contract stronger than its writer
+// converts a boot-accepted config into a silently missing graph entity.
+// BaseMessage.MarshalJSON refuses a payload that fails this;
+// WriteModelEndpoints delegates here before birthing an endpoint.
 func (e *ModelEndpointEntity) Validate() error {
 	if _, err := tryModelEndpointEntityID(e.Org, e.Platform, e.Name); err != nil {
 		return err
-	}
-	if e.Provider == "" {
-		return errors.New("provider is required and must be a non-empty string")
 	}
 	if e.Model == "" {
 		return errors.New("model is required and must be a non-empty string")
 	}
 	if e.MaxTokens < 0 {
 		return fmt.Errorf("max_tokens must not be negative, got %d", e.MaxTokens)
-	}
-	if e.RequestsPerMinute < 0 {
-		return fmt.Errorf("requests_per_minute must not be negative, got %d", e.RequestsPerMinute)
 	}
 	for _, price := range []struct {
 		name  string

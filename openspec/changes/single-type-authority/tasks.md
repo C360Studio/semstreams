@@ -444,6 +444,10 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       remains the observer of the ingest gate. (H3-b) `manager.go` stamp → a different literal →
       `--- FAIL: TestManager_RoundTripCreateGetTransition (0.00s)` on the `fakeEmitter`-captured create request. Both restores
       sha256-equal.
+      Round 3 (narrow re-review NIT-2, 2026-08-27): the nil-task row's pin re-proven discriminating. `loop_execution_entity.go`
+      sha `b18ab3e2…` → error weakened to `task is required` (the old substring `task` would still match) → `[applied]` →
+      `--- FAIL: TestLoopExecutionEntityRejectsMalformed` — `"task is required" does not contain "the spawning taskmessage"` →
+      restore sha256-equal (`b18ab3e2…`), suite ok.
 - [x] 7.2 `task lint` (revive warnings = failure); `go test -race -count=1 ./...`; `go test -race -tags=integration -count=1 -p 2 ./...`;
       `task schema:generate && git diff --exit-code schemas/ specs/`; `go test ./test/contract/...`;
       `grep -rn 'NewNATSLessonCurator' --include='*.go' .` → 0 (the retired helper stays absent); `grep -rn builtinprojection
@@ -482,6 +486,32 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       - `task e2e:ops` — 15:35:38Z–15:36:11Z — rc=0 — `Scenario completed successfully duration=605.676709ms`
       - `task e2e:lessons` — 15:36:11Z–15:36:30Z — rc=0 — `Scenario completed successfully … assertions_run=3`
       - `task e2e:agentic` — 15:36:30Z–15:37:29Z — rc=0 — `Scenario completed successfully duration=45.270090792s`
+      **Narrow re-review at `dd368a5e` (2026-08-27): CHANGES REQUESTED — 1 HIGH, 3 MEDIUM, 4 NIT, all applied.**
+      HIGH-1 — the model-endpoint validator was STRONGER than its writer and the config owner (same class as the
+      loop-execution over-delegation): it rejected `Provider == ""` where `model.validateEndpoint` explicitly permits it
+      (`registry.go`: `ep.Provider != "" && !validProviders[…]`; `configs/agentic.json` ships the provider-less `mock`
+      endpoint) and `RequestsPerMinute < 0` which has no upstream validation. Both rejections and their two test rows
+      dropped; the doc comment now names the derivation (`model.validateEndpoint` parity). Measured, not inferred:
+      `task e2e:agentic` 16:16:25Z–16:17:10Z rc=0 with `graph_model_triples:6` — the provider-less mock endpoint IS born
+      through `WriteModelEndpoints` (a rejection would have WARN-skipped it to zero model triples).
+      MEDIUM-1 — migration-doc sister census corrected read-only: semsource moved out of "nothing to do"
+      (`graph/contract.go:71` flattens `EntityType` with `.Key()` in a contract literal — compile break); semdev
+      obligation notes `internal/graphown/contracts.go:444` + `test/conformance/standards_contracts_test.go:102-103`;
+      semconnect citation corrected to the contract literals `projection_contracts.go:45,60` +
+      `projection_contracts_test.go:26` (the `:29-39` vars are already structured and fine).
+      MEDIUM-2 — conformance GATE-2 row: the eleven Codex-round exports through the exported-surface gate
+      (`types.Type.Validate` KEEP with reasoning; eight agentic exports KEEP; the polarity pair unexported per NIT-1).
+      MEDIUM-3 — the CODEX-HIGH conformance row now states writer parity for all five validators.
+      NIT-1 `LessonPolarity*` unexported (zero external consumers, sibling vocabularies unexported); NIT-2 nil-task row
+      pinned to `the spawning TaskMessage` with a fresh discrimination transcript (7.1 round 3); NIT-3 conformance NOTE-2
+      records the `IsValid`/`Validate` strictness divergence at `mutation_client.go:150,332`; NIT-4
+      `TestMalformedDiagnosisNeverReachesTheGraph` gained a positive control — the valid finding is awaited in
+      `ENTITY_STATES` (`require.Eventually` on its key) before the malformed-absence scan, so the scan is ordered after a
+      proven-live lane and cannot pass vacuously against an empty bucket.
+      Re-runs 2026-08-27 16:05–16:17Z: `go test -race -count=1 ./agentic/ ./model/` ok;
+      `go test -race -tags=integration -count=1 -run 'TestWriteModelEndpoints|TestWriteSpawnIdentity' ./processor/agentic-loop/`
+      ok 4.103s; `go test -race -tags=integration -count=1 -run TestMalformedDiagnosisNeverReachesTheGraph
+      ./processor/agentic-tools/` ok 2.304s; `task e2e:agentic` under the host lock rc=0 (row above).
 - [x] 7.3 Tag gate (owner override O-6): `task e2e:agentic`, `task e2e:lessons`, `task e2e:structural`, `task e2e:ops`, `task e2e:research-graph`, `task e2e:lifecycle`, `task e2e:crud-tools`, `task e2e:core` — all eight green, each as a provenance-complete row (exact command, runner identity, UTC start/end) in the candidate-proof record per `openspec/specs/release-candidate-proof/spec.md`; and, until the web-observation tier exists (O-10), `go test -race -tags=integration -count=1 -run TestWebObservationBirthIsRegistered ./processor/agentic-tools/executors/` recorded as a row of its own. One agent at a time on the host; the BREAKING commit lands on main
       only behind all of these; results recorded here verbatim.
       Run 2026-08-26 on this laptop (runner: Claude Fable 5 in the `claude/gh1100-single-type-authority-impl` worktree):

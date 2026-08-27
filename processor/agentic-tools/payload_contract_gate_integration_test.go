@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -48,15 +49,43 @@ func TestMalformedDiagnosisNeverReachesTheGraph(t *testing.T) {
 	assert.Equal(t, agentic.ToolErrorInvalidArgs, result.ErrorKind)
 	assert.Contains(t, result.Error, "finding")
 
+	// Positive control first: a VALID finding through the same executor and
+	// stack IS born, so "no malformed key" below cannot be vacuously true
+	// against an empty bucket or a dead lane.
+	valid, err := executor.Execute(ctx, agentic.ToolCall{
+		ID: "call-2", Name: agentictools.EmitDiagnosisToolName, LoopID: "loop-gate",
+		Arguments: map[string]any{
+			"finding":        "the finding",
+			"recommendation": "the recommendation",
+			"confidence":     0.9,
+			"evidence":       []any{"acme.ops.agent.agentic-loop.execution.loop-gate"},
+			"severity":       "info",
+		},
+	})
+	require.NoError(t, err)
+	require.Emptyf(t, valid.Error, "the valid finding must be born: %s", valid.Error)
+	validID, _ := valid.Metadata["diagnosis_id"].(string)
+	require.NotEmpty(t, validID)
+
 	js, err := client.JetStream()
 	require.NoError(t, err)
 	kv, err := js.KeyValue(ctx, graph.BucketEntityStates)
 	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		_, getErr := kv.Get(ctx, validID)
+		return getErr == nil
+	}, 5*time.Second, 100*time.Millisecond,
+		"positive control: the valid finding %s must appear in ENTITY_STATES", validID)
+
+	// The lane is live and the scan is ordered after the valid birth; the
+	// malformed shape submitted first must not be present.
 	keys, err := kv.Keys(ctx)
-	if err == nil {
-		for _, key := range keys {
-			assert.NotContains(t, key, ".ops.diagnosis.finding.", "a malformed finding was born: %s", key)
+	require.NoError(t, err)
+	for _, key := range keys {
+		if key == validID {
+			continue
 		}
+		assert.NotContains(t, key, ".ops.diagnosis.finding.", "a malformed finding was born: %s", key)
 	}
 
 	// Fact lane: the same shape is unpublishable through the framework's wrap.

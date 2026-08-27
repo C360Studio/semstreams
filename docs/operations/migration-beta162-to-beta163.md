@@ -84,14 +84,18 @@ through `message.NewDecoder(reg)`, assert the concrete type, `EntityID()`, and t
 - **Day one:** intake records and standards sources are rejected at birth; lessons and lifecycle births keep working.
 - **Obligation:** a `RegisterPayloads` in `internal/intake` and `internal/standards` (or one in `internal/graphown`) called from
   `runtime.go:624` after the builtins; floors: `intake_event` `control`, `standards_source` `content`; contracts: the graphown
-  contracts for those two (`internal/graphown/contracts.go`) bound to the types.
+  contracts for those two (`internal/graphown/contracts.go`) bound to the types. The structured contract type also breaks
+  compilation where a contract literal sets a dotted string: `internal/graphown/contracts.go:444` and
+  `test/conformance/standards_contracts_test.go:102-103` — use the `message.Type` builder instead of `.Key()`.
 - **Verification:** two round-trip tests; `graphown.Creator.Create` against beta.163 returns `applied`.
 
 ### semconnect — pinned `d0d06e0`
 
 - **Types stamped (11):** `c360.csapi-{system,datastream,procedure,deployment,sampling-feature,property,control-stream,command,system-event,feasibility,schema-artifact}.v1`
-  (`gateway/cs-api/projection_contracts.go:29-39`, dotted strings that no longer compile as a contract `MessageType` —
-  build them as `message.Type{…}`), stamped at `gateway/cs-api/graph_mutations.go:159`. semconnect holds **no
+  (`gateway/cs-api/projection_contracts.go:29-39` — those vars are already structured `message.Type`s and are fine; the
+  compile breaks are the contract literals that flatten them, `projection_contracts.go:45,60` and
+  `projection_contracts_test.go:26` — carry the `message.Type` value instead of `.Key()`), stamped at
+  `gateway/cs-api/graph_mutations.go:159`. semconnect holds **no
   registry**: `cmd/cs-api-server` calls neither `payloadbuiltins.Register` nor `payloadregistry.New`; its one registration
   (`message/oms/register.go:16-22`, OMS observation) is exported for a host. The 11 stamps reach the **host's** graph-ingest.
 - **Day one:** every CS-API resource birth is rejected by the host's graph-ingest.
@@ -139,7 +143,9 @@ strings (`entity/types.go:187-365`, `processor/{spec,docs,decision}/processor.go
 ### Not affected
 
 - **semsource** (`4093d3c`): births on the fact lane as the registered `semsource.entity.v1` (`graph/event_payload.go:22-31`);
-  mutation-lane use is `Reconcile` only (`processor/supersession/lifecycle.go:303,325`). Nothing to do.
+  mutation-lane use is `Reconcile` only (`processor/supersession/lifecycle.go:303,325`) — no registration obligation.
+  ONE compile fix from the structured contract type: `graph/contract.go:71` sets `MessageType: EntityType.Key()` in a
+  `projection.Contract` literal; write `MessageType: EntityType` (it is already a `message.Type`).
 - **semdragon** (`07f4de9`, pinned to beta.135): writes through the pre-ADR-091 subject and directly to KV
   (`questdag/unit.go:673`, `graphclient.go:79-95`); already off the current mutation surface. `questdag.unit.v1` and the dynamic
   `semdragons.<event>.v1` keys become obligations only if it returns to the typed mutation API.

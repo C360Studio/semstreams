@@ -33,11 +33,15 @@ const lessonSource = "ops-emit-lesson"
 // bounds AgentLessonEntity.Validate enforces and the emit_lesson tool
 // delegates to.
 const (
-	// LessonPolarityAvoid and LessonPolarityBestPractice are the closed polarity
-	// set. Polarity is meaning-bearing (it inverts the lesson's guidance), so an
-	// invalid value is rejected — never clamped.
-	LessonPolarityAvoid        = "avoid"
-	LessonPolarityBestPractice = "best_practice"
+	// lessonPolarityAvoid and lessonPolarityBestPractice are the closed
+	// polarity set, unexported like every sibling vocabulary here: no consumer
+	// outside this package needs the constants (a producer writes the literal;
+	// Validate's error names both values), and exporting two of the four
+	// lesson vocabularies while severity and status stay unexported would be
+	// an inconsistent surface. Polarity is meaning-bearing (it inverts the
+	// lesson's guidance), so an invalid value is rejected — never clamped.
+	lessonPolarityAvoid        = "avoid"
+	lessonPolarityBestPractice = "best_practice"
 
 	// Lesson severities order brief injection only; note "warning" (not the
 	// ops.diagnosis family's "warn").
@@ -94,7 +98,7 @@ func IsLessonSeverity(s string) bool {
 }
 
 func isLessonPolarity(s string) bool {
-	return s == LessonPolarityAvoid || s == LessonPolarityBestPractice
+	return s == lessonPolarityAvoid || s == lessonPolarityBestPractice
 }
 
 func isLessonStatus(s string) bool {
@@ -332,7 +336,7 @@ func (e *AgentLessonEntity) Validate() error {
 	if !isLessonPolarity(e.Polarity) {
 		return fmt.Errorf(
 			"polarity %q is invalid; must be one of %q or %q (polarity is meaning-bearing and is not clamped)",
-			e.Polarity, LessonPolarityAvoid, LessonPolarityBestPractice)
+			e.Polarity, lessonPolarityAvoid, lessonPolarityBestPractice)
 	}
 	if !IsLessonSeverity(e.Severity) {
 		return fmt.Errorf("severity %q is invalid; must be one of %q, %q, or %q",

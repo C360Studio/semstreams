@@ -114,7 +114,9 @@ func TestOpsDiagnosisEntityRejectsMalformed(t *testing.T) {
 }
 
 // TestModelEndpointEntityRejectsMalformed carries the endpoint writer's
-// contract into the payload.
+// contract into the payload — exactly the checks model.validateEndpoint owns
+// (model required, max_tokens and prices non-negative); an empty provider and
+// any requests_per_minute are boot-accepted configuration and stay valid.
 func TestModelEndpointEntityRejectsMalformed(t *testing.T) {
 	requirePublishable(t, fullModelEndpoint())
 	cases := []struct {
@@ -123,12 +125,10 @@ func TestModelEndpointEntityRejectsMalformed(t *testing.T) {
 		want   string
 	}{
 		{"dotted name", func(e *agentic.ModelEndpointEntity) { e.Name = "gpt.4o" }, "endpointname"},
-		{"empty provider", func(e *agentic.ModelEndpointEntity) { e.Provider = "" }, "provider"},
 		{"empty model", func(e *agentic.ModelEndpointEntity) { e.Model = "" }, "model"},
 		{"negative max tokens", func(e *agentic.ModelEndpointEntity) { e.MaxTokens = -1 }, "max_tokens"},
 		{"negative input price", func(e *agentic.ModelEndpointEntity) { e.InputPricePer1MTokens = -1 }, "input_price"},
 		{"negative output price", func(e *agentic.ModelEndpointEntity) { e.OutputPricePer1MTokens = -1 }, "output_price"},
-		{"negative rate limit", func(e *agentic.ModelEndpointEntity) { e.RequestsPerMinute = -1 }, "requests_per_minute"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -151,7 +151,7 @@ func TestLoopExecutionEntityRejectsMalformed(t *testing.T) {
 		want   string
 	}{
 		{"dotted loop id", func(e *agentic.LoopExecutionEntity) { e.LoopID = "a.b" }, "loop"},
-		{"nil task", func(e *agentic.LoopExecutionEntity) { e.Task = nil }, "task"},
+		{"nil task", func(e *agentic.LoopExecutionEntity) { e.Task = nil }, "the spawning TaskMessage"},
 		{"task with nothing to emit", func(e *agentic.LoopExecutionEntity) { e.Task = &agentic.TaskMessage{} }, "spawn-identity"},
 	}
 	for _, tc := range cases {
