@@ -571,7 +571,7 @@ func TestFullStack_EventDrivenDispatchBeatsBackstop(t *testing.T) {
 func TestFullStack_FanOutInstanceAutoCompletes(t *testing.T) {
 	const subject = "fs.dispatch.s6"
 	prefix := "fs.test.s6.fanout.unit"
-	instID := "fs.test.gateddag.fanout.instance.s6"
+	instID := "fs.test.gated-dag.agent.fanout.s6"
 	fs := setupFullStack(t, fsOpts{prefix: prefix, subject: subject, fanOutInstanceID: instID})
 
 	ctx := context.Background()

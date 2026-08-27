@@ -106,6 +106,10 @@ func TestEntityWatcher_RuleTriggerDebouncing(t *testing.T) {
 
 	processor, err := rule.NewProcessorWithMetrics(natsClient, &config, nil)
 	require.NoError(t, err)
+	// Production installs the deployment authority through CreateRuleProcessor
+	// (processor/rule/factory.go:130); the rule engine mints its trigger identity
+	// under it and fails closed on an empty pair (ADR-102 d2).
+	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 
 	// Initialize processor (loads rules)
 	err = processor.Initialize()
@@ -391,6 +395,10 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 
 	processor, err := rule.NewProcessorWithMetrics(natsClient, &config, nil)
 	require.NoError(t, err)
+	// Production installs the deployment authority through CreateRuleProcessor
+	// (processor/rule/factory.go:130); the rule engine mints its trigger identity
+	// under it and fails closed on an empty pair (ADR-102 d2).
+	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 
 	// Initialize processor (loads rules)
 	err = processor.Initialize()

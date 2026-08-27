@@ -175,7 +175,9 @@ It transfers with one substitution — the unit is `domain` or `domain.type` ins
 - Enforcement point: declaration time (builders, `EntityIDPattern` declarations, projection contracts,
   `lifecycle.Workflow`), NOT the graph-ingest hot path — the wire carries no producer identity (F3), so a runtime
   check would have nothing to authorize against. This mirrors the donor exactly.
-- Consumer at birth: the nine framework builders and `internal/builtinprojection/contracts.go:26,56`.
+- Consumer at birth: the nine framework builders and the two projection-contract `EntityPattern` declarations —
+  `internal/builtinprojection/contracts.go:26,56` when this was written; PR #1109 deleted that package and moved both
+  onto the payload registrations (`agentic/loop_execution_entity.go:224`, `agentic/agent_lesson_entity.go:399`).
 
 What it does not do: it cannot stop a product from choosing a colliding domain with another product in the same
 deployment; registration makes the collision visible at boot (two producers delegating the same domain is a
@@ -222,7 +224,9 @@ name literal.
 - **Import lane declaration:** a boolean on the JetStream input port (`"import": true`) — an operator statement of
   trust, not a predicted framework value. Provenance recorded = the port name and the envelope `source` string.
   Nothing is authenticated (F3–F4); the contract says so. The reference declaration lives in
-  `configs/graph-backend.json`, which composes graph-ingest; `cloud-federation.json`/`edge-federation.json` do not
+  `configs/graph-backend.json`, which composes graph-ingest. (This sentence originally contrasted it against
+  `cloud-federation.json`/`edge-federation.json`; PR #1130 (#1129) deleted both. Re-measured 2026-08-27: 12 of the 14
+  shipped `configs/*.json` compose graph-ingest — the exceptions are `gemini-example.json` and `prompts.json`.)
   (T6).
 - **Signature (r3, F-9):** `pkg/types.ValidateEntityIDAuthority(candidate, org, platform string, importLane bool)
   error` — strings, because `types.PlatformMeta` lives in the root `types` package (P9).

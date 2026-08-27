@@ -128,6 +128,10 @@ func TestIntegration_KVEntityStateWatch(t *testing.T) {
 	metricsRegistry := metric.NewMetricsRegistry()
 	processor, err := rule.NewProcessorWithMetrics(natsClient, &config, metricsRegistry)
 	require.NoError(t, err)
+	// Production installs the deployment authority through CreateRuleProcessor
+	// (processor/rule/factory.go:130); the rule engine mints its trigger identity
+	// under it and fails closed on an empty pair (ADR-102 d2).
+	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 	processor.SetDecoder(message.NewDecoder(payloadbuiltins.NewTestRegistry(t)))
 	require.NotNil(t, processor)
 
@@ -225,6 +229,10 @@ func TestIntegration_DynamicRuleCRUD(t *testing.T) {
 
 	processor, err := rule.NewProcessor(natsClient, &config)
 	require.NoError(t, err)
+	// Production installs the deployment authority through CreateRuleProcessor
+	// (processor/rule/factory.go:130); the rule engine mints its trigger identity
+	// under it and fails closed on an empty pair (ADR-102 d2).
+	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 	processor.SetDecoder(message.NewDecoder(payloadbuiltins.NewTestRegistry(t)))
 	require.NotNil(t, processor)
 
@@ -362,6 +370,10 @@ func TestIntegration_JSONDSLRuleLoading(t *testing.T) {
 
 	processor, err := rule.NewProcessor(natsClient, &config)
 	require.NoError(t, err)
+	// Production installs the deployment authority through CreateRuleProcessor
+	// (processor/rule/factory.go:130); the rule engine mints its trigger identity
+	// under it and fails closed on an empty pair (ADR-102 d2).
+	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 	processor.SetDecoder(message.NewDecoder(payloadbuiltins.NewTestRegistry(t)))
 	require.NotNil(t, processor)
 
@@ -417,6 +429,10 @@ func TestIntegration_PrometheusMetrics(t *testing.T) {
 
 	processor, err := rule.NewProcessorWithMetrics(natsClient, &config, metricsRegistry)
 	require.NoError(t, err)
+	// Production installs the deployment authority through CreateRuleProcessor
+	// (processor/rule/factory.go:130); the rule engine mints its trigger identity
+	// under it and fails closed on an empty pair (ADR-102 d2).
+	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 	processor.SetDecoder(message.NewDecoder(payloadbuiltins.NewTestRegistry(t)))
 	require.NotNil(t, processor)
 
@@ -508,6 +524,10 @@ func TestIntegration_DynamicWatchPatterns(t *testing.T) {
 
 	processor, err := rule.NewProcessor(natsClient, &config)
 	require.NoError(t, err)
+	// Production installs the deployment authority through CreateRuleProcessor
+	// (processor/rule/factory.go:130); the rule engine mints its trigger identity
+	// under it and fails closed on an empty pair (ADR-102 d2).
+	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 	processor.SetDecoder(message.NewDecoder(payloadbuiltins.NewTestRegistry(t)))
 
 	err = processor.Initialize()
@@ -643,6 +663,10 @@ func TestIntegration_GraphIntegration(t *testing.T) {
 
 	processor, err := rule.NewProcessor(natsClient, &config)
 	require.NoError(t, err)
+	// Production installs the deployment authority through CreateRuleProcessor
+	// (processor/rule/factory.go:130); the rule engine mints its trigger identity
+	// under it and fails closed on an empty pair (ADR-102 d2).
+	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 	processor.SetDecoder(message.NewDecoder(payloadbuiltins.NewTestRegistry(t)))
 	require.NotNil(t, processor)
 
@@ -790,6 +814,10 @@ func TestIntegration_TransitionOperator_UpdateKV(t *testing.T) {
 	metricsRegistry := metric.NewMetricsRegistry()
 	processor, err := rule.NewProcessorWithMetrics(natsClient, &config, metricsRegistry)
 	require.NoError(t, err)
+	// Production installs the deployment authority through CreateRuleProcessor
+	// (processor/rule/factory.go:130); the rule engine mints its trigger identity
+	// under it and fails closed on an empty pair (ADR-102 d2).
+	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 	processor.SetDecoder(message.NewDecoder(payloadbuiltins.NewTestRegistry(t)))
 
 	err = processor.Initialize()

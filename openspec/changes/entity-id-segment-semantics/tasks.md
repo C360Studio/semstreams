@@ -34,10 +34,13 @@ and `platform.{Org,Platform}` = 62 lines; `vocabulary/export/export.go:123-126` 
 `processor/graph-query/summary.go:198-202` → GraphQL `EntityTypeSummary.type` (`gateway/graph-gateway/component.go:1870`),
 asserted only by `test/e2e/scenarios/tiered.go:350` (statistical, semantic); `graph/clustering/entityid_provider.go:231-236`
 (live via `processor/graph-clustering/component.go:1331`) and `graph/clustering/summarizer.go:719-731`;
-`test/e2e/scenarios/ops/scenario.go:604,712`, `tiered_structural.go:428-434`, `research-graph/scenario.go:201-203`,
+`test/e2e/scenarios/ops/scenario.go:604,712` (now `:607,:715` after the slice-A rewrite),
+`tiered_structural.go:428-434`, `research-graph/scenario.go:201-203`,
 `cmd/e2e-semstreams/mission/command.go:59-66,324-328` (e2e position literals and wire authority);
-`configs/cloud-federation.json` and `configs/edge-federation.json` compose no graph-ingest (`grep -c` → 0);
-`configs/graph-backend.json` does; `agentic/agentrun/agentrun.go:114-124` (run entity carries only `agent.run.phase`
+`configs/graph-backend.json` composes graph-ingest (`grep -c '"graph-ingest"'` → 2), as do 11 of the 14 shipped
+configs; only `configs/gemini-example.json` and `configs/prompts.json` do not — re-measured 2026-08-27 after PR #1130
+deleted `configs/cloud-federation.json` and `configs/edge-federation.json`, which this line originally cited as the
+graph-ingest-free pair; `agentic/agentrun/agentrun.go:114-124` (run entity carries only `agent.run.phase`
 and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, mgr, org, platform, rootLoopID)`),
 `vocabulary/agentic/predicates.go:489,502` (`agent.loop.run`, `agent.run.entity-id`).
 
@@ -606,11 +609,14 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
 `service/flow_runtime_messages_test.go:128` `"*.*.data"`, which is a NATS subject-match fixture and not an entity-ID
 declaration pattern. No inventory row was skipped for the flow retirement, so no such row is owed to the spec delta.
 
-**Rows paused behind PR #1109 (#1100):** the five framework-builder files and the three literal sites named in 5.1–5.3.
-They are the only open work in this slice; each names its file and the reason at its task row above.
+**Rows formerly paused behind PR #1109 (#1100): RELEASED.** #1109 merged as `62f56d7e`; this branch merged
+`origin/main` (also carrying #1116 `b0a3f0b9` and #1130 `ad153b20`) and finished 5.1–5.3. Two anchors had moved
+and are re-anchored in place: `internal/builtinprojection/contracts.go:26,56` no longer exists (#1109 deleted the
+package; both declarations are now on the payload registrations) and
+`test/e2e/scenarios/ops/scenario.go:604,712` are now `:607,:715`.
 
 
-- [ ] 5.1 Framework builders (`agentic/entity_ids.go`, `agent_lesson_entity.go`, `web_observation_entity.go`,
+- [x] 5.1 Framework builders (`agentic/entity_ids.go`, `agent_lesson_entity.go`, `web_observation_entity.go`,
       `ops_diagnosis_entity.go`, `graph/events.go`, `processor/rule/graph_event_identity.go`, gated-dag participant,
       e2e mission, `examples/processors/iot_sensor/payload.go`) emit `org.platform.<component>.<domain>.<type>.<instance>`
       and authorize their domain; ADR-076 families drop the `semstreams.framework` literal and `graph.NewAlertEvent`
@@ -630,10 +636,22 @@ They are the only open work in this slice; each names its file and the reason at
       `cmd/e2e-semstreams/mission/{state,command}.go`, and the five example builders
       (`examples/processors/document/payload_{document,sensor,maintenance,observation}.go`,
       `weather_station/payload.go`, `iot_sensor/payload.go`) which also declare their domain delegations.
-      **Measured barrier evidence:** `task entity-id:audit` reports exactly seven `domain_unregistered` findings, one
-      per un-migrated builder — the audit rule is what proves the row is not silently skipped.
+      **Barrier evidence, then and now:** before the #1109 merge `task entity-id:audit` reported exactly seven
+      `domain_unregistered` findings, one per un-migrated builder. **After this row: zero** —
+      `go run ./cmd/entity-id-audit .` → `entity ID audit passed: 1289 structured candidates across 1 roots`.
+      The zero is load-bearing, proven by mutation: reverting `agentic/ops_diagnosis_entity.go`'s format to the
+      retired order re-fires `agentic/ops_diagnosis_entity.go:225: format-builder
+      go-format-prefix:tryOpsDiagnosisEntityID: "%s.%s.ops.diagnosis.finding.%s": domain_unregistered`; restore
+      verified by md5 (`569dbba82fee6bbcb8da9f5371149b1e` before and after).
+      **Completed after the merge:** the five builder files re-slotted (`agentic/entity_ids.go`,
+      `agent_lesson_entity.go`, `web_observation_entity.go`, `ops_diagnosis_entity.go`, plus
+      `loop_execution_entity.go`, which #1109 created and which carries the sixth family pattern).
+      `TryWebObservationEntityID` now composes from `pkg/types.WebObservationIdentityFamily()` rather than
+      re-spelling `web.agent.observation` in a `Sprintf`: the family table is the declared single home for those
+      prefixes and had no consumer, and `webObservationInstanceLen` is now read from the same entry that binds
+      the authority-pair budget.
 
-- [ ] 5.2 Index-position readers (inventory W3, W9, C3): `graph/inference/hierarchy.go`,
+- [x] 5.2 Index-position readers (inventory W3, W9, C3): `graph/inference/hierarchy.go`,
       `graph/clustering/entityid_provider.go:231-236` (`getSystem`, live through `NewEntityIDProvider` at
       `processor/graph-clustering/component.go:1331` — stays correct until gh606 deletes it),
       `graph/clustering/summarizer.go:719-731` (domain grouping of the summary prompt),
@@ -641,15 +659,24 @@ They are the only open work in this slice; each names its file and the reason at
       API value change named in the PR body), `graphrag.go`, `agentic/entity_ids.go:161-171`,
       `agentic/agentrun/agentrun.go:158-170`, `examples/processors/iot_sensor/processor.go:278-288` (the silent
       `facility.zone` reader) read by named field via `ParseEntityID`, never by raw index.
-      **Partly done — same barrier.** Done: `graph/clustering/entityid_provider.go` (`getSystem`, `getTypePrefix`),
+      **Done.** After the merge: `graph/inference/hierarchy.go` builds every container from the NAMED prefix
+      levels (`TypePrefix`/`TaxonomyPrefix`/`SourcePrefix`) instead of `strings.Join(parts[:N])`, and
+      `isContainerEntity` reads `pkg/types.IsReservedInstanceToken` instead of re-spelling the padding set — the
+      audit rule and the runtime check now share one home. The H7 naming debt is recorded at the declaration:
+      `CreateSystemEdges`/`CreateDomainEdges` and `hierarchy.{system,domain}.member` name the retired order and
+      are ruled (O-6) to retire with gh606, not to be renamed here. `agentic.LoopIDFromExecutionEntityID` reads
+      `ParseEntityID`'s System/Domain/Type. Earlier in this PR: `graph/clustering/entityid_provider.go`
+      (`getSystem`, `getTypePrefix`),
       `graph/clustering/summarizer.go` (`parseEntityID`, prompt grouping), `processor/graph-query/summary.go`
       (`aggregateEntityTypes`), `processor/graph-query/graphrag.go` (`extractEntityType`, `extractEntityInstance`),
       `agentic/agentrun/agentrun.go` (`runIDFromChainEntityID`), `examples/processors/iot_sensor/processor.go`
       (`ParseZoneEntityID`), `graph/llm/prompt_types.go` field comments. PAUSED: `graph/inference/hierarchy.go` and
       `agentic/entity_ids.go:161-171` (`LoopIDFromExecutionEntityID`) — both in PR #1109.
 
-- [ ] 5.3 Declaration patterns, config literals, and e2e literals (inventory W5–W6, W8, W10): `agentic/agentrun/agentrun.go:100`,
-      `internal/builtinprojection/contracts.go:26,56`, `processor/gated-dag/participant.go:17`,
+- [x] 5.3 Declaration patterns, config literals, and e2e literals (inventory W5–W6, W8, W10): `agentic/agentrun/agentrun.go:100`,
+      `internal/builtinprojection/contracts.go:26,56` (RE-ANCHORED: PR #1109 deleted that package and moved both
+      declarations onto the payload registrations — now `agentic/loop_execution_entity.go:224` and
+      `agentic/agent_lesson_entity.go:399`), `processor/gated-dag/participant.go:17`,
       `cmd/e2e-semstreams/mission/state.go:28`, `configs/*` three literal patterns; lesson record prefix
       (`agent_lesson_entity.go:85-93`); `entityPartNames` resolves by name; `test/e2e/scenarios/ops/scenario.go:604`
       and `:712`, `test/e2e/scenarios/tiered_structural.go:428-434` (rename the `domain`/`system` variables with the
@@ -657,20 +684,29 @@ They are the only open work in this slice; each names its file and the reason at
       expectations, and `cmd/e2e-semstreams/mission/command.go:59-66,324-328` (mission minted from `deps.Platform`,
       never from the wire) rewritten in the same commit so no tier reports a position-literal mismatch that reads as
       a regression (`test/e2e/client/nats.go:965-974` is arity-only and stays).
-      **Partly done — same barrier.** Done: `agentic/agentrun/agentrun.go:100` (`*.*.chain.agent.execution.*`),
+      **Done.** After the merge: the two projection `EntityPattern` declarations re-slotted at their new home
+      (`agentic/loop_execution_entity.go:224`, `agentic/agent_lesson_entity.go:399`), the lesson record prefix
+      (`agent_lesson_entity.go:487-491`), and `test/e2e/scenarios/ops/scenario.go` `:607`/`:715` — both assertions now
+      read positions by name through `ParseEntityID`. The three-part PREDICATE `ops.diagnosis.finding` that the same
+      scenario queries is a separate vocabulary name and is deliberately unchanged.
+      Earlier in this PR: `agentic/agentrun/agentrun.go:100` (`*.*.chain.agent.execution.*`),
       `processor/gated-dag/participant.go:17`, `cmd/e2e-semstreams/mission/state.go:28`, every `configs/*` literal
       pattern (`entity_watch_buckets.ENTITY_STATES` and the lesson rule pack now carry no literal authority),
       `test/e2e/scenarios/tiered_structural.go:428-434` (variables renamed `source`/`domain`),
       `research-graph/scenario.go`, `lifecycle/scenario.go`, `agentic/scenario.go:248`,
       `cmd/e2e-semstreams/mission/command.go` (minted from `deps.Platform`; the config knob and the wire authority are
       gone), `processor/rule/entity_substitution.go` (`entityPartNames` resolves by name).
-      PAUSED: `internal/builtinprojection/contracts.go:26,56`, `agentic/agent_lesson_entity.go:85-93`,
-      `test/e2e/scenarios/ops/scenario.go:604,712` — all in PR #1109.
+      **Done after the #1109 merge:** the two projection `EntityPattern` declarations that were
+      `internal/builtinprojection/contracts.go:26,56` — that package is deleted and they now live at
+      `agentic/loop_execution_entity.go:224` (`*.*.agentic-loop.agent.execution.*`) and
+      `agentic/agent_lesson_entity.go:399` (`*.*.lesson.agent.record.*`), with the lesson record prefix at
+      `agent_lesson_entity.go:487-491`; and `test/e2e/scenarios/ops/scenario.go` (re-measured `:607` and `:715`,
+      both now reading positions by name through `ParseEntityID`).
 
 - [x] 5.4 `config/config.go`: `GetPlatform()` returns `Platform.ID`; `instance_id` present in a loaded config fails
       load with guidance naming `platform.id` (`removedConfigFields` precedent); `cmd/semstreams/main.go:477-484` and
       `cmd/e2e-semstreams/main.go:628-634` drop the precedence; every `configs/*.json` drops `instance_id`. Ruled (O-2).
-      **Done:** `config.GetPlatform()` returns `Platform.ID`; `pkg/platform.Config.InstanceID` deleted; `rejectRemovedPlatformFields` fails load naming `platform.id` at both raw-JSON loaders; `cmd/semstreams/main.go` and `cmd/e2e-semstreams/main.go` `extractPlatformMeta` read `GetOrg()`/`GetPlatform()`; `instance_id` removed from 18 `configs/**/*.json`.
+      **Done:** `config.GetPlatform()` returns `Platform.ID`; `pkg/platform.Config.InstanceID` deleted; `rejectRemovedPlatformFields` fails load naming `platform.id` at both raw-JSON loaders; `cmd/semstreams/main.go` and `cmd/e2e-semstreams/main.go` `extractPlatformMeta` read `GetOrg()`/`GetPlatform()`; `instance_id` removed from `configs/**/*.json` — 18 files carried it at the merge base `78fe095c`; 16 were edited in place and the other 2 (`configs/cloud-federation.json`, `configs/edge-federation.json`) were deleted by PR #1130, so 16 edits land here. `git grep -l instance_id HEAD -- configs/` → 0.
 
 - [x] 5.5 Docs: `docs/concepts/*`, `docs/basics/*`, `CLAUDE.md`, `AGENTS.md`, `openspec/project.md:91`,
       `openspec/specs/structural-identity/spec.md:6-13` name the new order (29 files, inventory §1.14 list);
@@ -749,9 +785,9 @@ They are the only open work in this slice; each names its file and the reason at
       loud log names lane and segment index, never the identity. Mutation of an existing foreign subject from any
       non-import lane is rejected `foreign_authority` — an import is a read-only mirror (ruled O-12(a)); local facts
       about an import live on a local subject that references it.
-- [ ] 6.2 `JetStreamPort` gains `Import bool` (`"import"`); the port schema and `configs/graph-backend.json` (which
-      composes graph-ingest — `cloud-federation.json`/`edge-federation.json` do not) carry one declared import lane as
-      the reference.
+- [ ] 6.2 `JetStreamPort` gains `Import bool` (`"import"`); the port schema and `configs/graph-backend.json` (the
+      reference graph-backend composition; it composes graph-ingest) carry one declared import lane as the reference.
+      The two federation configs this row once contrasted against were deleted by PR #1130 (#1129).
 - [ ] 6.3 `processor/rule`: add a `platform` field to the action executor plumbed from `deps.Platform` at construction
       (the processor holds none today); `actions.go:1575-1583` mints from it; the firing entity remains the parent
       reference; delete the `SplitN` read-back. Before `stampRun` (`:1697-1700`) the action evaluates

@@ -227,7 +227,7 @@ func configBootInitialConfig() *config.Config {
 	return &config.Config{
 		Version: "1.0.0",
 		Platform: config.PlatformConfig{
-			Org: "test", ID: "config-boot-process-proof", InstanceID: "proof-slot", Environment: "test",
+			Org: "test", ID: "config-boot-process-proof", Environment: "test",
 		},
 		Components: config.ComponentConfigs{
 			configBootInitialName: configBootComponentConfig("initial"),

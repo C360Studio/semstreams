@@ -778,10 +778,11 @@ func (s *Scenario) verifyGraphTriples(ctx context.Context, result *scenarios.Res
 		return fmt.Errorf("loop_id not found in result details")
 	}
 
-	// The agentic config uses platform.org="c360", platform.instance_id="agentic-001".
-	// instance_id takes precedence over id in extractPlatformMeta.
+	// The deployment authority is configs/agentic.json's platform.org / platform.id.
+	// platform.instance_id was removed (ADR-102, ruled O-2), so there is no longer a
+	// precedence rule to mirror here: platform.id IS the authority the binary mints under.
 	const org = "c360"
-	const platform = "agentic-001"
+	const platform = "semstreams-agentic"
 
 	// --- Verify loop execution entity ---
 	// Graph writes happen after the completion metric is incremented, so the entity

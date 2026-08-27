@@ -377,3 +377,100 @@ option (b)): delete under the greenfield principle — a menu entry that fails f
 cruft, not a capability. No in-tree consumer (verified by grep across this repository); the e2e scenario set is not
 part of the supported framework surface, so no downstream-obligation claim is made about the read-only sister repos
 — nobody read them for this.
+
+## Entity-ID segment semantics, slice A (ADR-102, #1095) — the canonical order is `org.platform.system.domain.type.instance`
+
+Added 2026-08-27. The per-sister table below was measured read-only on 2026-08-26 at each sister's pinned SHA. On
+application every pin was re-read and **none had moved**: semsource `4093d3ce`, semmachina `841c45e8`, semdev
+`ca3956af`, semdragon `07f4de9b`, semteams `8a70b7e7`, semconnect `d0d06e00`, semspec `5a9496ee`, semmem `b909cbf1`.
+semboids (`8c03cc53`), semops (`602c619a`), and semsage (`4d28b4dc`) carry no pin anywhere in this document; their rows
+are the 2026-08-26 reading and are **UNPINNED**. Every SemStreams-side claim below was re-verified against this branch
+after merging `#1116`, `#1109`, and `#1130`.
+
+### What changes on the wire
+
+Every minted identity changes. Positions 3 and 4 swap and gain meanings: position 3 is **`system` — the source** that
+produced the entity (a repository, feed, world, board, API, or framework component); position 4 is **`domain` — a
+delegated taxonomy**. Positions 1-2 are the **minting deployment authority**: the composition root's `platform.org` /
+`platform.id`, carried to components as `deps.Platform`, and never a payload value, a constant, or a product name.
+`instance` stays last. Arity stays six. There is no accept-both-orders parser, no alias for the retired order, and no
+compatibility knob: a downstream starts on newly provisioned NATS storage after every owned builder, pattern, config,
+fixture, and query is updated (`openspec/specs/entity-id-contract/spec.md` "clean owned-source break").
+
+Framework families re-slot (`<system>.<domain>.<type>`): loop execution `agentic-loop.agent.execution`, chain
+`chain.agent.execution`, model endpoint `model-registry.agent.endpoint`, lesson `lesson.agent.record` (record prefix
+`org.platform.lesson.agent.record`), web observation `web.agent.observation`, ops diagnosis `diagnosis.ops.finding`,
+gated-DAG fan-out `gated-dag.agent.fanout` (ruled O-9), and — under the deployment's own authority instead of ADR-076's
+retired `semstreams.framework` literal — rule alerts `org.platform.rules.graph.alert.<digest>` and rule triggers
+`org.platform.rules.graph.trigger.<digest>`. Two deployments running one pack no longer converge on one trigger entity.
+
+Two values that **leave the graph** follow the new order and are not re-minted by fresh state (owner item O-10): the
+vocabulary export IRI path `<base>/entities/{org}/{platform}/{system}/{domain}/{type}/{instance}` and the `graphSummary`
+GraphQL value `entityTypes[].type`, now `system.domain.type`.
+
+### The obligations
+
+1. **`platform.instance_id` is gone (ruled O-2).** `platform.id` is the single authority field; a config that still
+   carries `instance_id` does not load (`config field platform.instance_id was removed (ADR-102, BREAKING) …`). Every
+   sister `extractPlatformMeta` that preferred `InstanceID` drops that precedence.
+2. **The authority pair is bounded at load (ruled O-14).** `len(platform.org)+len(platform.id) <= 170` bytes while the
+   rule-trigger family (86 fixed bytes) binds; the budget is `pkg/types.MaxAuthorityPairBytes()`, derived from
+   `pkg/types.FrameworkIdentityFamilies()`, never configured. An `org` or `id` that is not one canonical entity-ID
+   segment (a dot, a leading `-`/`_`) is rejected at load for the same reason.
+3. **Builders swap positions 3-4 and take authority only from `deps.Platform`.** A product name in `platform`, a fixed
+   literal authority in a builder, a `Sprintf` template whose org/platform are literals, or a trailing-dot prefix
+   constant is an `authority_literal` finding once the sister runs `cmd/entity-id-audit` over its tree.
+4. **Domains are delegated (ruled O-3/O-5).** A product declares `[]pkg/types.EntityDomainDelegation{{Producer, Domain[,
+   Type]}}` and passes them to `pkg/types.NewEntityDomainAuthority` at its composition root; two producers delegating one
+   domain is a boot-time composition rejection. The framework reserves `agent`, `ops`, `graph`; `system` and `instance`
+   values are never registered. A literal position-4 value in production Go that is neither reserved nor declared is a
+   `domain_unregistered` audit finding.
+5. **Prefix levels have fixed meanings (ADR-102 d6):** 2 = deployment (`DeploymentPrefix`), 3 = source
+   (`SourcePrefix`, the federation triple; ADR-099 level 1), 4 = taxonomy (`TaxonomyPrefix`; ADR-099 level 0), 5 = type
+   (`TypePrefix`), plus `PrefixLevel(n)`. `SystemPrefix`, `DomainPrefix`, `PlatformPrefix`, `IsSameSystem`, `IsSameDomain`
+   no longer exist; `IsSameSource` compares the source prefix. "A taxonomy across sources" is the wildcard pattern
+   `org.platform.*.D.*.*` or a `tag:` lesson scope, never a prefix; a three-position `id:` lesson scope key now means one
+   source within one deployment.
+6. **Exported signatures.** `graph.NewAlertEvent(org, platform, alertType, sourceEntityID, properties, metadata)`;
+   `rule.NewExpressionRule(platform types.PlatformMeta, packID, def)`, `rule.NewTestRule(platform, packID, …)`,
+   `rule.Dependencies.Platform`, `(*rule.Processor).SetPlatform` (installed by `CreateRuleProcessor` from
+   `deps.Platform`); `internal/semantictest.EntityID(t, org, platform, system, domain, type, instance)` — positional,
+   so call sites keep their strings and only the two middle arguments change meaning; swap them where the fixture named
+   a family.
+7. **Rule substitution tokens keep their names**: `$entity.system` / `$entity.domain` (and `$related.*`) resolve by the
+   named position, so a template written against the names is unchanged; a config-authored subject carrying `$entity.id`
+   emits the new token order, and a subscriber pinning position literals follows it.
+8. **Reference configs**: `entity_watch_buckets.ENTITY_STATES` and rule `entity.pattern` values carry no literal
+   authority (`*.*.…`); a literal org/platform in a shipped config pattern is an `authority_literal` audit finding.
+
+### Per-sister list (values → after; measured 2026-08-26 at the SHAs in design §D, read-only)
+
+| Sister | Change |
+|---|---|
+| semsource | `PlatformSemsource` constant → `deps.Platform.Platform`; order swap at every `entityid.Build` call; register domains `web, media, config, git, golang, svelte`; `MaxOrgLen` arithmetic re-checked against the 170-byte pair bound; `handler/entity_state_test.go` fixtures |
+| semmachina | per-world composed `platform.id` is already the authority; order swap |
+| semboids | delete the `"semboids"` fallback literal; order swap in two builders; register `sim` |
+| semdev | order swap (`forge.intake`, `repo.standards`, `agent.chain.execution` prefix → `chain.agent.execution`); register `forge`, `repo`; drop `instance_id` precedence |
+| semdragon | replace `Org "default"`/`Platform "local"` defaults with config; order swap (`game.<board>`, `web.agent.doc`); register `game`, `web` — `web` collides with semsource's `web` when both run in one deployment (ruled O-5: boot-time rejection) |
+| semteams | one literal (`attestation_runner.go:124`); drop precedence; e2e configs |
+| semops | `Platform: "edge"` literal → config; order swap (`cop.fusion`); register `cop` |
+| semconnect | `semconnect` platform → config; `SystemEventIDPrefix` shape; register `systems` |
+| semspec | order swap in `agentgraph/entities.go:54-60`; the `rule.NewExpressionRule(def)` call in `workflow/intakerules/rulepack_test.go:124` was already one argument behind main; 10k fixtures importing semsource IDs re-generate after semsource re-slots |
+| semsage | `OrgDefault`/`PlatformDefault` constants → config; `_` placeholder fixture |
+| semmem | 5-part fixtures → six-part in the new order; imported lessons opt-in by scope (O-13); curation status on an imported lesson lives on a local overlay entity (O-12) — both land with slice B |
+
+### Not in this slice (slice B, a later PR)
+
+The graph-ingest authority gate (`entity_id_authority_invalid` on every lane), the `JetStreamPort.Import` lane, the
+hierarchy-inference skip for foreign authority, and #1096 (the rule engine's run-scope mint under `deps.Platform` with
+`agent.run.origin-entity-id`). Until slice B lands, an entity claiming a foreign or colliding authority is still
+accepted as local truth; the coded validator `pkg/types.ValidateEntityIDAuthority` exists and is unwired.
+
+### Interaction with the ADR-103 section above
+
+`internal/builtinprojection` no longer exists (#1109 deleted it); the two projection contracts that declared entity
+patterns now live on their payload registrations — `agentic.LessonContract()` (`agentic/agent_lesson_entity.go`) and
+`agentic.LoopExecutionContract()` (`agentic/loop_execution_entity.go`). A sister that copied either `entity_pattern`
+literal re-slots it there, not in a projection package. The framework's own `configs/rules/lessons/lesson-lifecycle-rulepack.json`
+carries the re-slotted `*.*.lesson.agent.record.*` beside ADR-103's structured `message_type` object; a product rulepack
+mirroring that contract changes both in one edit.
