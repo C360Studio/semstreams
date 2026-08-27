@@ -103,6 +103,97 @@ func TestAdvertisedScenariosHaveARunner(t *testing.T) {
 	}
 }
 
+// TestOnlyExecutedTaskLinesCountAsRunners guards the executed-versus-documented
+// distinction TestAdvertisedScenariosHaveARunner rests on. Without it that guard
+// accepts any Taskfile line CONTAINING "./e2e", so a scenario nothing can stand
+// up is laundered into "has a runner" by a help string or a commented-out
+// example — the gh#1129 shape surviving the gh#1129 guard.
+//
+// Each line here is a shape this repository actually writes; the file:line
+// citations are where. Names are deliberately ones no menu entry advertises, so
+// a row proves the extraction rather than the repository's current contents.
+func TestOnlyExecutedTaskLinesCountAsRunners(t *testing.T) {
+	tests := []struct {
+		name  string
+		line  string
+		want  []string
+		shape string
+	}{
+		{
+			name:  "plain cmds invocation",
+			line:  `      - cd cmd/e2e && ./e2e --scenario alpha-runs`,
+			want:  []string{"alpha-runs"},
+			shape: "taskfiles/e2e/core.yml:80",
+		},
+		{
+			name:  "subshell capturing the exit code",
+			line:  `          (cd cmd/e2e && ./e2e --scenario beta-runs) || rc=$?`,
+			want:  []string{"beta-runs"},
+			shape: "taskfiles/e2e/lifecycle.yml:26",
+		},
+		{
+			name:  "env-prefixed invocation",
+			line:  `      - cd cmd/e2e && SEMSTREAMS_E2E_LLM_ENHANCEMENT_WAIT=10m ./e2e --scenario gamma-runs`,
+			want:  []string{"gamma-runs"},
+			shape: "taskfiles/e2e/semantic.yml:39",
+		},
+		{
+			name:  "folded scalar continuation line",
+			line:  `        cd cmd/e2e && ./e2e --scenario delta-runs --base-url http://localhost:38090`,
+			want:  []string{"delta-runs"},
+			shape: "taskfiles/e2e/slow-consumer.yml:13",
+		},
+		{
+			name:  "echoed manual-run instructions are printed, not run",
+			line:  `      - 'echo "  cd cmd/e2e && ./e2e --scenario epsilon-echoed --message-count 10000"'`,
+			want:  nil,
+			shape: "taskfiles/e2e/throughput.yml:156 — THE DEFEAT",
+		},
+		{
+			name:  "printf'd instructions are printed, not run",
+			line:  `      - printf '  cd cmd/e2e && ./e2e --scenario zeta-printed\n'`,
+			want:  nil,
+			shape: "the other shell spelling of the same laundering",
+		},
+		{
+			name:  "commented-out invocation inside a cmds block",
+			line:  `      # cd cmd/e2e && ./e2e --scenario eta-commented`,
+			want:  nil,
+			shape: "taskfiles/e2e/lifecycle.yml:16-23 — THE DEFEAT",
+		},
+		{
+			name:  "top-of-file comment naming a scenario",
+			line:  `# run with: cd cmd/e2e && ./e2e --scenario theta-commented`,
+			want:  nil,
+			shape: "taskfiles/e2e/research-graph.yml:5",
+		},
+		{
+			name:  "a real invocation followed by a progress echo still counts",
+			line:  `      - cd cmd/e2e && ./e2e --scenario iota-runs && echo "[DONE] ./e2e --scenario kappa-echoed"`,
+			want:  []string{"iota-runs"},
+			shape: "rejects the over-broad fix: dropping any line containing echo",
+		},
+		{
+			name:  "template variable is not a literal scenario name",
+			line:  `      - cd cmd/e2e && ./e2e --scenario tiered --variant {{.VARIANT}}`,
+			want:  []string{"tiered"},
+			shape: "Taskfile.yml:182",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := slices.Sorted(maps.Keys(scenarioNamesInTaskfileContent(tc.line)))
+			require.Equalf(t, tc.want, got,
+				"line shape from %s must contribute exactly %v to the runner set. A line only counts "+
+					"when it is a command the task runner executes; a mention in a printed string or a "+
+					"YAML comment is documentation, and counting it lets an advertised scenario nothing "+
+					"can stand up pass TestAdvertisedScenariosHaveARunner.",
+				tc.shape, tc.want)
+		})
+	}
+}
+
 // parseMainGo parses cmd/e2e/main.go, the owning declaration for the dispatch
 // switch, the -scenario flag registration, and the `--scenario all` bundle.
 func parseMainGo(t *testing.T) *ast.File {
@@ -271,6 +362,76 @@ const e2eBinaryInvocation = "./e2e"
 // makes the guard fail loudly on that scenario rather than pass on it.
 var taskScenarioFlagPattern = regexp.MustCompile(`--scenario[=\s]+([A-Za-z0-9_.{}-]+)`)
 
+// printingCommandWord matches the first `echo` or `printf` command word on a
+// Taskfile line. Everything from that word to end of line is an argument the
+// shell PRINTS, so a `./e2e --scenario X` inside it is documentation, not an
+// invocation. The leading alternation makes it a command word rather than a
+// substring, so a scenario NAME containing the letters (core-echoedonly) or a
+// path ending in them never matches; the trailing one keeps `echoes` and
+// `printfoo` out.
+var printingCommandWord = regexp.MustCompile(`(^|[^A-Za-z0-9_./-])(echo|printf)(\s|$)`)
+
+// executedTaskCommand returns the part of a Taskfile line the task runner
+// actually executes, or "" when the line executes nothing.
+//
+// Review of this guard's first version found it counted any line CONTAINING
+// "./e2e", with no check that the line was a command — so a scenario advertised
+// in the menu and dispatchable in createScenario, but named only by a help
+// string or a commented-out example, satisfied TestAdvertisedScenariosHaveARunner
+// while nobody could stand it up. That is the gh#1129 shape surviving the
+// gh#1129 guard. Both laundering shapes are live idioms in this tree:
+// taskfiles/e2e/throughput.yml prints its manual-run instructions with echo,
+// and taskfiles/e2e/lifecycle.yml + research-graph.yml carry scenario names in
+// YAML comments. Proved by mutation, 2026-08-27: a synthetic core-echoedonly
+// referenced only by those two shapes passed both guards before this check and
+// fails after it.
+//
+// Two exclusions, in order:
+//
+//  1. A line whose content is a YAML comment. Task never runs it — and these
+//     appear INSIDE cmds: blocks (lifecycle.yml:16-23), not only at file top.
+//  2. Everything from the first echo/printf command word onward. Truncating
+//     rather than rejecting the whole line keeps a real invocation that is
+//     merely FOLLOWED by a progress echo counted; only the printed text is
+//     dropped.
+//
+// It reads one line at a time, as the caller does, which is what the folded
+// (`>-`) and block (`|`) scalars this repo writes commands in require. It is
+// therefore not YAML-structural: a `./e2e --scenario X` written into a `desc:`
+// string would still count. TestOnlyExecutedTaskLinesCountAsRunners pins every
+// shape above, including that boundary.
+func executedTaskCommand(line string) string {
+	if strings.HasPrefix(strings.TrimSpace(line), "#") {
+		return ""
+	}
+	if loc := printingCommandWord.FindStringIndex(line); loc != nil {
+		return line[:loc[0]]
+	}
+	return line
+}
+
+// scenarioNamesInTaskfileContent returns the scenario names one Taskfile's text
+// passes to the e2e binary on lines the runner executes. Split out from the
+// file walk so the executed-versus-documented distinction can be driven through
+// this exact production path with synthetic content rather than re-implemented
+// in the test.
+func scenarioNamesInTaskfileContent(content string) map[string]bool {
+	names := make(map[string]bool)
+	for _, line := range strings.Split(content, "\n") {
+		command := executedTaskCommand(line)
+		if !strings.Contains(command, e2eBinaryInvocation) {
+			continue
+		}
+		for _, match := range taskScenarioFlagPattern.FindAllStringSubmatch(command, -1) {
+			if strings.Contains(match[1], "{{") {
+				continue // a Task template variable, not a literal scenario name
+			}
+			names[match[1]] = true
+		}
+	}
+	return names
+}
+
 // scenarioNamesInvokedByTaskRunners returns every scenario name a Taskfile
 // command passes to the e2e binary. Task targets are the owning declaration of
 // "what anyone can actually run": gh#1129's scenario appeared in no target at
@@ -297,17 +458,7 @@ func scenarioNamesInvokedByTaskRunners(t *testing.T) map[string]bool {
 	for _, path := range files {
 		content, readErr := os.ReadFile(path) //nolint:gosec // fixed in-repo Taskfile paths
 		require.NoError(t, readErr)
-		for _, line := range strings.Split(string(content), "\n") {
-			if !strings.Contains(line, e2eBinaryInvocation) {
-				continue
-			}
-			for _, match := range taskScenarioFlagPattern.FindAllStringSubmatch(line, -1) {
-				if strings.Contains(match[1], "{{") {
-					continue // a Task template variable, not a literal scenario name
-				}
-				names[match[1]] = true
-			}
-		}
+		maps.Copy(names, scenarioNamesInTaskfileContent(string(content)))
 	}
 	require.GreaterOrEqualf(t, len(names), 8,
 		"only %d scenario names are invoked by any task target (%v) — a collapse below this floor means the "+
