@@ -523,6 +523,11 @@ func isOwnerApprovedRetiredConfig(path string) bool {
 		"configs/examples/pathrag-graph-traversal.json": {},
 		"configs/http-gateway-semantic-search.json":     {},
 		"configs/semantic-basic.json":                   {},
+		// gh#1129 (owner ruling 2026-08-27): the core-federation e2e scenario
+		// was unreachable — no compose "edge" service, no task wrapper, no
+		// distinct ports — and is deleted along with its configs.
+		"configs/cloud-federation.json": {},
+		"configs/edge-federation.json":  {},
 	}[path]
 	return retired
 }
@@ -580,8 +585,8 @@ func assertFoundationBTargetAccounting(
 			accounting.retiredSurvivors, accounting.retiredDeletions, legacyRetirements)
 	}
 	retiredTargets := accounting.retiredSurvivors + accounting.retiredDeletions
-	if retiredTargets != 5 || accounting.retiredDocuments != 2 {
-		t.Fatalf("owner-approved retired Foundation B fixture targets=%d documents=%d, want 5 and 2",
+	if retiredTargets != 12 || accounting.retiredDocuments != 4 {
+		t.Fatalf("owner-approved retired Foundation B fixture targets=%d documents=%d, want 12 and 4",
 			retiredTargets, accounting.retiredDocuments)
 	}
 	if accounting.inputIdentityCorrections != 60 {
@@ -594,10 +599,12 @@ func assertFoundationBTargetAccounting(
 		t.Fatalf("component-default primitive corrections=%d, want 10", accounting.primitiveCorrections)
 	}
 	actualRows := countCanonicalConfigRows(t, documents, portsParents)
-	// cloud-federation's ws_control and hello-world's ALIAS_INDEX are the
-	// two owner-approved production-prerequisite additions outside the frozen
-	// worklist. They offset two of the five retired historical rows.
-	const approvedPrerequisiteAdditions = 2
+	// hello-world's ALIAS_INDEX is the one owner-approved production-prerequisite
+	// addition outside the frozen worklist that still survives. cloud-federation's
+	// ws_control was the other (an untracked second output alongside the
+	// worklist's tracked ws_data row) — gh#1129 (owner ruling 2026-08-27) retired
+	// the whole cloud-federation.json config, so ws_control no longer contributes.
+	const approvedPrerequisiteAdditions = 1
 	// The post-Foundation-B graph-query cutover retires eleven legacy provider
 	// targets and replaces them one-for-one, versions eight existing gateway
 	// rows without changing their count, and adds ten exact research consumer

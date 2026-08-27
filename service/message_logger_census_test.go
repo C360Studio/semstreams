@@ -84,11 +84,10 @@ func TestMessageLoggerShippedSubjectCensusArtifactIsCompleteAndExact(t *testing.
 	require.Equal(t, []string{"aliases", "synthetic factories", "substitute configurations"},
 		census.Ruling.ProhibitedSubstitutes)
 	require.Equal(t, []string{
-		"configs/cloud-federation.json@1.0.2: explicit ws_control plus documented WebSocket duration decoding",
 		"configs/hello-world.json@1.1.1: explicit ALIAS_INDEX graph-index output",
 		"configs/lifecycle-flow.json@1.1.1: mission-command ports declare actual core NATS behavior",
 	}, census.Ruling.ProductionPrerequisiteRepairs)
-	require.Len(t, census.Scope, 21)
+	require.Len(t, census.Scope, 19)
 	require.True(t, slices.IsSorted(census.Scope), "frozen config scope must be deterministic")
 	var discovered []string
 	for _, pattern := range []string{"../configs/*.json", "../configs/examples/*.json", "../configs/flows/*.json"} {
@@ -128,8 +127,8 @@ func TestMessageLoggerShippedSubjectCensusArtifactIsCompleteAndExact(t *testing.
 		computed.Raw, computed.Effective, computed.Delta, computed.ExactCollapses,
 		computed.AddedKinds, computed.ContainmentOverlaps)
 
-	require.Equal(t, subjectCensusCounts{Rows: 395, PerConfigExactKeys: 243, GlobalStrings: 54}, census.Raw)
-	require.Equal(t, subjectCensusCounts{Rows: 579, PerConfigExactKeys: 380, GlobalStrings: 70}, census.Effective)
+	require.Equal(t, subjectCensusCounts{Rows: 388, PerConfigExactKeys: 239, GlobalStrings: 50}, census.Raw)
+	require.Equal(t, subjectCensusCounts{Rows: 572, PerConfigExactKeys: 376, GlobalStrings: 66}, census.Effective)
 	require.Equal(t, subjectCensusCounts{Rows: 184, PerConfigExactKeys: 137, GlobalStrings: 16}, census.Delta)
 	require.Equal(t, census.Raw.Rows+census.Delta.Rows, census.Effective.Rows)
 	require.Equal(t, census.Raw.PerConfigExactKeys+census.Delta.PerConfigExactKeys, census.Effective.PerConfigExactKeys)

@@ -17,16 +17,13 @@
       "substitute configurations"
     ],
     "production_prerequisite_repairs": [
-      "configs/cloud-federation.json@1.0.2: explicit ws_control plus documented WebSocket duration decoding",
       "configs/hello-world.json@1.1.1: explicit ALIAS_INDEX graph-index output",
       "configs/lifecycle-flow.json@1.1.1: mission-command ports declare actual core NATS behavior"
     ]
   },
   "scope": [
     "configs/agentic.json",
-    "configs/cloud-federation.json",
     "configs/e2e-structural.json",
-    "configs/edge-federation.json",
     "configs/examples/research-graph-pipeline.json",
     "configs/flows/crud-tools-test.json",
     "configs/flows/deep-research-test.json",
@@ -45,8 +42,8 @@
     "configs/statistical.json",
     "configs/structural.json"
   ],
-  "raw": {"rows": 395, "per_config_exact_keys": 243, "global_strings": 54},
-  "effective": {"rows": 579, "per_config_exact_keys": 380, "global_strings": 70},
+  "raw": {"rows": 388, "per_config_exact_keys": 239, "global_strings": 50},
+  "effective": {"rows": 572, "per_config_exact_keys": 376, "global_strings": 66},
   "delta": {"rows": 184, "per_config_exact_keys": 137, "global_strings": 16, "removals": 0},
   "exact_collapses": {"loop_dispatch": 47, "governance": 0, "total": 47},
   "added_kinds": {

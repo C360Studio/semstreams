@@ -74,7 +74,6 @@ Detailed documentation for each scenario is available in [test/e2e/docs/](./docs
 |----------|---------|------|---------|-----|
 | core-health | - | Core | Component availability and health endpoints | [docs/core-health.md](./docs/core-health.md) |
 | core-dataflow | - | Core | Complete data pipeline: UDP → JSONFilter → JSONMap → File | [docs/core-dataflow.md](./docs/core-dataflow.md) |
-| core-federation | - | Core | Edge-to-cloud data flow with ack/nack protocol | [docs/core-federation.md](./docs/core-federation.md) |
 | tiered | `structural` | Structural | Rules-only, ZERO embeddings/clusters, OnEnter/OnExit | [docs/tiered.md](./docs/tiered.md) |
 | tiered | `statistical` | Statistical | BM25 embeddings, LPA communities, no external ML | [docs/tiered.md](./docs/tiered.md) |
 | tiered | `semantic` | Semantic | Neural embeddings + LLM summaries | [docs/tiered.md](./docs/tiered.md) |
@@ -94,7 +93,6 @@ test/e2e/
 └── scenarios/
     ├── core_health.go
     ├── core_dataflow.go
-    ├── core_federation.go
     └── tiered.go           # Structural + Statistical + Semantic (via --variant)
 
 cmd/e2e/

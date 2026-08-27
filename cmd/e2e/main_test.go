@@ -20,7 +20,7 @@ type assertionReportingScenario struct {
 }
 
 func TestLessonsScenarioIsDispatchedAndListed(t *testing.T) {
-	got := createScenario(nil, nil, &cliFlags{scenarioName: "lessons"})
+	got := createScenario(nil, &cliFlags{scenarioName: "lessons"})
 	if got == nil || got.Name() != "lessons" {
 		t.Fatalf("createScenario(lessons) = %v", got)
 	}
