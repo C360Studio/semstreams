@@ -9,12 +9,23 @@ types, and no global registry — each binary constructs its own and injects it 
 registered in one binary is not thereby a type of another: the attributes registered with it (floor, contracts) exist only
 where the type is registered.
 
-> Implementation note (2026-08-26/27, tasks 6.1/7.3 `[~]`): the e2e tiers that stamp scenario-only keys on `entity.create` were
-> assumed to boot `cmd/e2e-semstreams`; measured, core, lessons and research-graph birth them against the production image
-> (`cmd/semstreams`), whose registry the e2e fixtures cannot reach (crud-tools writes its `e2e.probe.v1` by direct `PutKV`,
-> which this requirement does not govern). Whether those three tiers re-target (agentic, deep-research and slow-consumer keep
-> booting the production binary), the scenarios re-stamp, or the production binary registers e2e types is an owner ruling;
-> this requirement is unchanged by it.
+A production-target e2e tier stamps only what the production binary registers (owner ruling on #1100, 2026-08-27):
+`cmd/semstreams` registers no test type, so a scenario that births a synthetic type runs against `cmd/e2e-semstreams`, whose
+composition root registers them through `cmd/e2e-semstreams/fixtures.RegisterPayloads`.
+
+| Tier (`task e2e:<tier>`) | App target / binary | Synthetic types stamped on `entity.create` |
+|---|---|---|
+| core — phase 1 (`core-health`, `core-dataflow`) | `production` / `cmd/semstreams` (`docker/compose/e2e.yml` `semstreams`) | none |
+| core — phase 2 (`core-graph-roundtrip`) | `e2e` / `cmd/e2e-semstreams` (`e2e.yml` `semstreams-fixtures`, profile `fixtures`) | `test.fixture.v1` |
+| lessons | `e2e` (`e2e.yml` `semstreams-fixtures`) | `test.fixture.v1` (evidence fixture) |
+| research-graph | `e2e` (`research-graph.yml`) | `research.e2e_search_seed.v1` |
+| structural / statistical / semantic | `e2e` (`tiered.yml`) | `e2e.eventtime.v1`, `e2e.canonical_create_contract.v1`, `e2e.relationship_contract.v1` (structural) |
+| lifecycle | `e2e` (`lifecycle.yml`) | none (`lifecycle.harness.v1` is a framework type) |
+| ops | `e2e` (`ops.yml`) | none (`e2e.probe.v1`-style seeds are direct `PutKV`) |
+| agentic | `production` (`agentic.yml`) | none |
+| crud-tools | `production` (`crud-tools.yml`) | none on create (`e2e.probe.v1` is a direct `PutKV`) |
+| deep-research | `production` (`deep-research.yml`) | none |
+| slow-consumer | `production`-derived (`e2e-slow-consumer.yml`) | none |
 
 #### Scenario: a colliding key is refused at registration
 

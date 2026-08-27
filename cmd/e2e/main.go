@@ -601,14 +601,15 @@ func runAllScenarios(
 	// When running all scenarios, we use the default HTTP endpoint for WebSocket
 	wsClient := client.NewWebSocketClient(config.DefaultEndpoints.HTTP)
 
+	// `all` is every scenario the PRODUCTION binary serves. The graph
+	// round-trip probe is not among them: it births a synthetic type
+	// (test.fixture.v1) that only the e2e binary registers (ADR-103 — a
+	// production-target tier stamps only what the production binary
+	// registers), so `task e2e:core` runs it as its second phase against the
+	// e2e-target app (`--scenario core-graph-roundtrip`).
 	tests := []scenarios.Scenario{
 		scenarios.NewCoreHealthScenario(obsClient, nil),
 		scenarios.NewCoreDataflowScenario(obsClient, wsClient, udpEndpoint, nil),
-		scenarios.NewGraphRoundTripScenario(
-			config.DefaultEndpoints.NATS,
-			baseURL,
-			strings.TrimRight(baseURL, "/")+"/graph-gateway/graphql",
-		),
 	}
 
 	passed := 0

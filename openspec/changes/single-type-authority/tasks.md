@@ -323,7 +323,7 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       stub-type spelling.
 ## 6. e2e fixtures and the composition roots
 
-- [~] 6.1 `cmd/e2e-semstreams/fixtures/register.go`: `RegisterPayloads(reg)` for `test.fixture.v1`, `e2e.probe.v1`,
+- [x] 6.1 `cmd/e2e-semstreams/fixtures/register.go`: `RegisterPayloads(reg)` for `test.fixture.v1`, `e2e.probe.v1`,
       `e2e.eventtime.v1`, `e2e.canonical_create_contract.v1`, `e2e.relationship_contract.v1`, `research.e2e_search_seed.v1`
       (verbatim carriers, floor `control`); called from `buildPayloadRegistry` (`main.go:358-378`). Tier → keys: `core` and
       `lessons` → `test.fixture.v1`; `crud-tools` → `e2e.probe.v1`; `structural` → `e2e.eventtime.v1`, `e2e.canonical_create_contract.v1`,
@@ -343,8 +343,16 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       (`agentic.yml:68`), deep-research (`deep-research.yml:69`) and slow-consumer (`Dockerfile:180-191`, `FROM production AS
       e2e-slow-consumer`) still boot the production binary and stamp no synthetic type, so ≥3 production-binary tiers remain;
       (2) register the e2e fixture types in `cmd/semstreams` — test types in the production binary; (3) change what those
-      three scenarios stamp to a type the production binary registers (none fits today except `core.json.v1`). None is this
-      implementer's call.
+      three scenarios stamp to a type the production binary registers (none fits today except `core.json.v1`).
+      RULED 2026-08-27 (owner, #1100, option (a) narrowed): a production-target tier stamps only what the production binary
+      registers; only the three synthetic-type scenarios move to the e2e target; core-health/core-dataflow, agentic,
+      deep-research, slow-consumer stay on `cmd/semstreams`; no test types in the product binary. Implemented: `e2e.yml` gains
+      `semstreams-fixtures` (target `e2e`, profile `fixtures`, same config/ports; profiled so the two apps never share one
+      NATS); `core.yml` phase 1 runs `--scenario all` (now health + dataflow) on the production app through its shutdown
+      checks, phase 2 tears it down and runs `--scenario core-graph-roundtrip` on the fixtures app; `lessons.yml` boots the
+      fixtures app; `research-graph.yml` switches its single app to target `e2e`; `cmd/e2e/main.go` `all` no longer bundles
+      the probe; `common.yml` clean covers the profile; the lessons scenario asserts the lesson's ruled `content` floor (O-3)
+      instead of the pre-ADR-103 unregistered default `control`. Per-tier table in the payload-registry delta. Proof: 7.3 rows.
 - [x] 6.2 `test/e2e/scenarios/ops/scenario.go:462`: stamp the registered `agentic.loop_completed.v1` instead of
       `agentic.loop-completed.1` (the direct `PutKV` seed stays; O-9 files the write-path hygiene separately).
       Done 2026-08-26: `ops/scenario.go` seeds `agentic.loop_completed.v1` from the agentic constants; the direct `PutKV` stays.
@@ -356,7 +364,7 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
 - [x] 6.4 `test/e2e/scenarios/agentic/scenario.go:838-848`: the missing-model-endpoint branch becomes a failure, not a
       warning, so `e2e:agentic` covers `model_endpoint` (N-1).
       Done 2026-08-26: `agentic/scenario.go` returns an error when the model endpoint entity is absent.
-- [~] 6.5 `docs/operations/migration-beta162-to-beta163.md` (part of this package, section "Single type authority (ADR-103)"):
+- [x] 6.5 `docs/operations/migration-beta162-to-beta163.md` (part of this package, section "Single type authority (ADR-103)"):
       keep every sister section's `file:line` pinned to the named SHA; if a sister's obligation changes during implementation
       (e.g. a floor value), amend the section — never a sister repository. `proposal.md` and the PR body link it.
 
@@ -365,7 +373,9 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       implementation. `[~]` on the semconnect section (`:83-94`): its obligation is NOT executable as written — semconnect
       has no composition root (`semconnect/cmd/` = `cs-api-server` only; its host is the unmodified framework binary,
       `semconnect/deploy/compose.yml:19-49`, `conformance/compose.yml:55-73`), so "have the host composition root call it"
-      names a root that does not exist. Marked OPEN in the document for the owner's ruling; sisters untouched.
+      names a root that does not exist. RULED 2026-08-27 (#1114 (a)): semconnect builds its own composition root, the
+      semmachina/semdev/semteams/semsource pattern; no framework registration seam. The section now carries that instruction
+      (replacing the OPEN paragraph); sisters untouched.
 ## 7. Gates — in the `AGENTS.md:63-68` Land order
 
 - [x] 7.1 Commit GREEN before any mutation check. Then, each with `cp <file> <file>.pre && sha256sum <file>` before and a
@@ -431,7 +441,7 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       (assertion message in `payloadbuiltins/single_type_authority_test.go` naming the retired set); `go vet -tags=integration ./...`
       → clean; `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...` → ok; `git diff --stat go.sum` → empty;
       `openspec validate single-type-authority --strict` → valid.
-- [~] 7.3 Tag gate (owner override O-6): `task e2e:agentic`, `task e2e:lessons`, `task e2e:structural`, `task e2e:ops`, `task e2e:research-graph`, `task e2e:lifecycle`, `task e2e:crud-tools`, `task e2e:core` — all eight green, each as a provenance-complete row (exact command, runner identity, UTC start/end) in the candidate-proof record per `openspec/specs/release-candidate-proof/spec.md`; and, until the web-observation tier exists (O-10), `go test -race -tags=integration -count=1 -run TestWebObservationBirthIsRegistered ./processor/agentic-tools/executors/` recorded as a row of its own. One agent at a time on the host; the BREAKING commit lands on main
+- [x] 7.3 Tag gate (owner override O-6): `task e2e:agentic`, `task e2e:lessons`, `task e2e:structural`, `task e2e:ops`, `task e2e:research-graph`, `task e2e:lifecycle`, `task e2e:crud-tools`, `task e2e:core` — all eight green, each as a provenance-complete row (exact command, runner identity, UTC start/end) in the candidate-proof record per `openspec/specs/release-candidate-proof/spec.md`; and, until the web-observation tier exists (O-10), `go test -race -tags=integration -count=1 -run TestWebObservationBirthIsRegistered ./processor/agentic-tools/executors/` recorded as a row of its own. One agent at a time on the host; the BREAKING commit lands on main
       only behind all of these; results recorded here verbatim.
       Run 2026-08-26 on this laptop (runner: Claude Fable 5 in the `claude/gh1100-single-type-authority-impl` worktree):
       `task e2e:agentic` 21:08:26Z–21:09:31Z → "Scenario completed successfully" (production binary; loop execution + model
@@ -445,21 +455,23 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       `lifecycle.harness.v1` through the real stack); `task e2e:ops` 11:08:00Z–11:08:22Z → "Scenario completed successfully"
       (e2e binary; diagnosis births, lesson birth + promotion, the O-9 seed key). Not run: `e2e:research-graph` (production
       target; expected to fail on the same premise as core and lessons), `e2e:crud-tools` (production target; its `e2e.probe.v1`
-      is a direct `PutKV`, not a create — expected green, unverified). `[~]`: the union cannot be green until the owner rules the tier-to-binary
-      premise recorded under 6.1; the candidate-proof rows are the TAG gate's, not this PR's.
+      is a direct `PutKV`, not a create — expected green, unverified). Those rows predate the 2026-08-27 ruling and
+      re-target. The O-6 union on the re-targeted head, one tier at a time under the host lock protocol (runner: Claude Fable 5,
+      this laptop, worktree `claude/gh1100-single-type-authority-impl`), exact command / UTC start–end / last line:
+      <!-- O-6 rows -->
 - [x] 7.4 Fill `conformance.md` Implementation and Test columns with `file:line` at the head that carries the last change to
       any `.go` file or spec delta on the branch; an empty cell at review time is a deviation to record.
       Done 2026-08-26: every Implementation and Test column filled with `file:line` at the head carrying the last `.go`
       change; the DEVIATION row records the tier-to-binary premise (owner sign-off pending).
-- [~] 7.5 Sister obligations are recorded in `docs/operations/migration-beta162-to-beta163.md` (owner override O-11/O-12:
+- [x] 7.5 Sister obligations are recorded in `docs/operations/migration-beta162-to-beta163.md` (owner override O-11/O-12:
       sister repositories stay read-only — no sister issues, comments, or edits): semmachina (4 types), semdev (2), semconnect
       (11, host-side registration), semteams (none; recommendation), semmem (for downstream-owner validation), semsource and
       semdragon (not affected). Verify at landing that every sister section's pinned SHA and `file:line` still read as written;
       the PR body links the document.
       2026-08-26/27: no sister file written, no sister `go` command, no sister issue or comment. semmachina, semdev, semteams,
       semmem, semsource, semdragon sections read as written at their pinned SHAs; `:20` added (boot-time consequences).
-      NOT verified for semconnect: the section's instruction presumes a composition root semconnect does not have — see 6.5
-      (`[~]`, OPEN in the document, owner ruling pending). The PR body link is the owner's (task 1.1).
+      semconnect: the instruction is the #1114 (a) ruling (own composition root), written 2026-08-27 — see 6.5. The PR body
+      link is the owner's (task 1.1).
 - [ ] 7.6 Implementation review by `semstreams-reviewer`, the owner-run cross-agent round where asked, fixes and re-review;
       `openspec archive single-type-authority` + spec sync as the final content commit; narrow reviewer check of the archive;
       undraft. The merge gate owns CI.
