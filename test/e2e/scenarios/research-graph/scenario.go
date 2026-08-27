@@ -124,7 +124,10 @@ func DefaultConfig() *Config {
 		ChainKickoffTimeout: 30 * time.Second,
 		CompleteTimeout:     60 * time.Second,
 		PlatformOrg:         "c360",
-		PlatformInstance:    "rg-e2e-001",
+		// configs/research-graph-e2e.json platform.id. platform.instance_id was
+		// removed (ADR-102, ruled O-2), so platform.id IS the authority the binary
+		// mints loop executions under; this must equal it or nothing is ever found.
+		PlatformInstance: "research-graph-e2e",
 	}
 }
 

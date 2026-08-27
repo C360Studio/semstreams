@@ -817,6 +817,40 @@ package; both declarations are now on the payload registrations) and
       Excluded with reason recorded: `slow-consumer`, `throughput`, `openai-responses`, `deep-research` (no position
       literal). Cold-start proof: each tier starts on newly provisioned NATS storage with readiness fail-closed
       through initial replay.
+      **SLICE A RUN — 2026-08-27, all ten GREEN, one at a time on a host with no competing gate.** The row stays open
+      because slice B changes the same paths and must re-run it; this records what slice A proved.
+
+      | Tier | exit | evidence |
+      |---|---|---|
+      | `e2e:core` | 0 | `graph_roundtrip_trace_entries:2`, health+dataflow on the production binary, round-trip on the e2e twin |
+      | `e2e:structural` | 0 | `hierarchy_container_count:46` (min 32), `inverse_symmetry_valid:1`, `rule_firings:6`, `authority_hierarchy_provenance_triples:836`, `validation_errors:0` |
+      | `e2e:statistical` | 0 | `hierarchy_container_count:46`; gateway response-shape probe green |
+      | `e2e:semantic` | 0 | 11m24s, 48 stages; `graphrag_local_community_id:c360.logistics.document.content.group.container` (a level-4 taxonomy container + two padding tokens, i.e. the rewritten builder on the wire), `gateway_shape_probes_checked:3`, `communities_total:17`, `embedding_resolved_total:111`, `validation_errors:0` |
+      | `e2e:agentic` | 0 | `graph_loop_triples:10`, `graph_model_triples:6` — the loop-execution and model-endpoint entities found in the graph at the new order AND under `platform.id`, which is the discriminating half: the scenario now asks for `semstreams-agentic`, so the retired `instance_id` precedence would return nothing |
+      | `e2e:lessons` | 0 | `assertions_run=3` |
+      | `e2e:lifecycle` | 0 | `rule-driven-transition_duration_ms:157` — UDP → graph-ingest → entity-watcher → rule → `Manager.Transition` → MISSIONS KV → gateway, with positions 1-2 stamped from `deps.Platform` |
+      | `e2e:ops` | 0 | `assertions_run=9`, including both wire subject-shape checks (`*.*.diagnosis.ops.finding.*`, `*.*.lesson.agent.record.*`) read by name off subjects the running binary produced |
+      | `e2e:crud-tools` | 0 | `tool_executions:4`, `hotreload_pickup_latency_ms:213` |
+      | `e2e:research-graph` | 0 | both fixture modes; `loops_completed_total:2`, `orchestration_triples_total:17`/`21` |
+
+      **Two tiers were RED first and the failures were real, not fixtures drifting.** Both are the same defect class,
+      and it is the one the adopter-seam rule names — a caller predicting a value the framework owns:
+      - `e2e:lifecycle`: `docker/compose/lifecycle.yml` hardcoded the seed `c360.test.gcs.lifecycle.mission.m001`
+        while `configs/lifecycle-flow.json`'s `platform.id` is `semstreams-lifecycle`. Since the mission-command
+        processor now stamps its own authority, the seeded and commanded entities were different keys and the tier
+        failed 5s later as "rule did not transition mission to flying", naming the symptom. Fixed by aligning the
+        seed, the scenario constant, and — so the next such mismatch is loud — a boot guard in `seedMission`
+        (`cmd/e2e-semstreams/main.go`) that rejects a `--lifecycle-seed` whose authority pair is not this
+        deployment's, naming both pairs.
+      - `e2e:research-graph`: `test/e2e/scenarios/research-graph/scenario.go` carried `PlatformInstance:
+        "rg-e2e-001"`, the retired `instance_id`, against a config whose `platform.id` is `research-graph-e2e`.
+
+      Hole class enumerated rather than fixed one-by-one: **every one of the 16 configs that carried `instance_id`
+      had a value different from its `platform.id`**, so any hardcoded copy is now wrong. Grepping all 16 retired
+      values across `*.go`/`*.json`/`*.yml`/`*.md` (excluding `docs/` and `openspec/`) returns exactly three live
+      sites — the two above plus `test/e2e/scenarios/agentic/scenario.go`, already fixed — and two deliberate
+      non-sites: `config/config_test.go:419` (the O-2 rejection fixture, which must keep `instance_id`) and
+      `processor/agentic-tools/decide_test.go` (an arbitrary self-consistent unit-test platform value).
 - [ ] 7.3 Implementation review by `semstreams-reviewer`; verdict and every finding's disposition recorded in
       `conformance.md`.
 - [ ] 7.4 Owner-run cross-agent round where the owner asks for it; fixes and re-review recorded in `conformance.md`.

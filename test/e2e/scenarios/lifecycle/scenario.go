@@ -52,7 +52,7 @@ import (
 // MissionEntityID is the identifier seeded by the e2e binary via
 // `--lifecycle-seed`. Matches docker/compose/lifecycle.yml and
 // cmd/e2e-semstreams's --lifecycle-seed flag.
-const MissionEntityID = "c360.test.gcs.lifecycle.mission.m001"
+const MissionEntityID = "c360.semstreams-lifecycle.gcs.lifecycle.mission.m001"
 
 const lifecycleNATSURL = "nats://localhost:34222"
 
