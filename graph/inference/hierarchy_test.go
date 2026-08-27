@@ -129,7 +129,7 @@ func TestHierarchyInference_InverseEdgeWriteFailureIsNonFatal(t *testing.T) {
 	failingAdder := &hierarchyMockTripleAdder{err: errors.New("entity not found (simulated must-exist rejection)")}
 	entityManager := newMockEntityManager()
 	// An existing sibling so createSiblingEdges attempts an inverse back-edge.
-	entityManager.addExistingEntity("c360.logistics.environmental.sensor.temperature.temp-002")
+	entityManager.addExistingEntity("c360.logistics.sensor.environmental.temperature.temp-002")
 
 	config := HierarchyConfig{
 		Enabled:            true,
@@ -143,7 +143,7 @@ func TestHierarchyInference_InverseEdgeWriteFailureIsNonFatal(t *testing.T) {
 	// GetHierarchyTriples is the production entry (graph-ingest MergeEntity calls
 	// it on the create branch). Every inverse-edge write inside it hits the
 	// failing adder; container creation goes through the (working) entityManager.
-	triples, err := hi.GetHierarchyTriples(context.Background(), "c360.logistics.environmental.sensor.temperature.temp-001")
+	triples, err := hi.GetHierarchyTriples(context.Background(), "c360.logistics.sensor.environmental.temperature.temp-001")
 
 	require.NoError(t, err,
 		"inverse-edge write failures must NOT propagate — the forward hierarchy triples must still return")
@@ -162,7 +162,7 @@ func TestHierarchyInference_OnEntityCreated_Disabled(t *testing.T) {
 
 	hi := NewHierarchyInference(entityManager, tripleAdder, config, nil)
 
-	err := hi.OnEntityCreated(context.Background(), "c360.logistics.sensor.document.temperature.sensor-001")
+	err := hi.OnEntityCreated(context.Background(), "c360.logistics.document.sensor.temperature.sensor-001")
 	require.NoError(t, err)
 
 	// No triples should be added when disabled
@@ -182,12 +182,12 @@ func TestHierarchyInference_OnEntityCreated_InvalidEntityID(t *testing.T) {
 	hi := NewHierarchyInference(entityManager, tripleAdder, config, nil)
 
 	// 5-part entity ID should be skipped
-	err := hi.OnEntityCreated(context.Background(), "c360.logistics.sensor.document.temperature")
+	err := hi.OnEntityCreated(context.Background(), "c360.logistics.document.sensor.temperature")
 	require.NoError(t, err)
 	assert.Empty(t, tripleAdder.getTriples())
 
 	// 7-part entity ID should be skipped
-	err = hi.OnEntityCreated(context.Background(), "c360.logistics.sensor.document.temperature.zone.sensor")
+	err = hi.OnEntityCreated(context.Background(), "c360.logistics.document.sensor.temperature.zone.sensor")
 	require.NoError(t, err)
 	assert.Empty(t, tripleAdder.getTriples())
 }
@@ -205,8 +205,8 @@ func TestHierarchyInference_OnEntityCreated_TypeEdgeOnly(t *testing.T) {
 
 	hi := NewHierarchyInference(entityManager, tripleAdder, config, nil)
 
-	entityID := "c360.logistics.sensor.document.temperature.sensor-001"
-	containerID := "c360.logistics.sensor.document.temperature.group"
+	entityID := "c360.logistics.document.sensor.temperature.sensor-001"
+	containerID := "c360.logistics.document.sensor.temperature.group"
 	err := hi.OnEntityCreated(context.Background(), entityID)
 	require.NoError(t, err)
 
@@ -256,7 +256,7 @@ func TestHierarchyInference_OnEntityCreated_AllLevels(t *testing.T) {
 
 	hi := NewHierarchyInference(entityManager, tripleAdder, config, nil)
 
-	entityID := "c360.logistics.sensor.document.temperature.sensor-001"
+	entityID := "c360.logistics.document.sensor.temperature.sensor-001"
 	err := hi.OnEntityCreated(context.Background(), entityID)
 	require.NoError(t, err)
 
@@ -268,8 +268,8 @@ func TestHierarchyInference_OnEntityCreated_AllLevels(t *testing.T) {
 	for _, e := range createdEntities {
 		containerIDs[e.ID] = true
 	}
-	assert.True(t, containerIDs["c360.logistics.sensor.document.temperature.group"]) // Type
-	assert.True(t, containerIDs["c360.logistics.sensor.document.group.container"])   // System
+	assert.True(t, containerIDs["c360.logistics.document.sensor.temperature.group"]) // Type
+	assert.True(t, containerIDs["c360.logistics.document.sensor.group.container"])   // System
 	assert.True(t, containerIDs["c360.logistics.sensor.group.container.level"])      // Domain
 
 	// Should create 6 edges: 3 forward (member) + 3 inverse (contains)
@@ -284,8 +284,8 @@ func TestHierarchyInference_OnEntityCreated_AllLevels(t *testing.T) {
 		}
 	}
 	assert.Len(t, forwardPredicates, 3)
-	assert.Equal(t, "c360.logistics.sensor.document.temperature.group", forwardPredicates[vocabulary.HierarchyTypeMember])
-	assert.Equal(t, "c360.logistics.sensor.document.group.container", forwardPredicates[vocabulary.HierarchySystemMember])
+	assert.Equal(t, "c360.logistics.document.sensor.temperature.group", forwardPredicates[vocabulary.HierarchyTypeMember])
+	assert.Equal(t, "c360.logistics.document.sensor.group.container", forwardPredicates[vocabulary.HierarchySystemMember])
 	assert.Equal(t, "c360.logistics.sensor.group.container.level", forwardPredicates[vocabulary.HierarchyDomainMember])
 
 	// Extract inverse edges (container → contains → entity)
@@ -296,8 +296,8 @@ func TestHierarchyInference_OnEntityCreated_AllLevels(t *testing.T) {
 		}
 	}
 	assert.Len(t, inversePredicates, 3)
-	assert.Equal(t, "c360.logistics.sensor.document.temperature.group", inversePredicates[vocabulary.HierarchyTypeContains])
-	assert.Equal(t, "c360.logistics.sensor.document.group.container", inversePredicates[vocabulary.HierarchySystemContains])
+	assert.Equal(t, "c360.logistics.document.sensor.temperature.group", inversePredicates[vocabulary.HierarchyTypeContains])
+	assert.Equal(t, "c360.logistics.document.sensor.group.container", inversePredicates[vocabulary.HierarchySystemContains])
 	assert.Equal(t, "c360.logistics.sensor.group.container.level", inversePredicates[vocabulary.HierarchyDomainContains])
 }
 
@@ -315,11 +315,11 @@ func TestHierarchyInference_ContainerReuse(t *testing.T) {
 	hi := NewHierarchyInference(entityManager, tripleAdder, config, nil)
 
 	// Create first entity
-	err := hi.OnEntityCreated(context.Background(), "c360.logistics.sensor.document.temperature.sensor-001")
+	err := hi.OnEntityCreated(context.Background(), "c360.logistics.document.sensor.temperature.sensor-001")
 	require.NoError(t, err)
 
 	// Create second entity with same type prefix
-	err = hi.OnEntityCreated(context.Background(), "c360.logistics.sensor.document.temperature.sensor-002")
+	err = hi.OnEntityCreated(context.Background(), "c360.logistics.document.sensor.temperature.sensor-002")
 	require.NoError(t, err)
 
 	// Should only create 1 container (reused)
@@ -336,7 +336,7 @@ func TestHierarchyInference_ContainerExistsInStorage(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	// Pre-existing container in storage
-	entityManager.addExistingEntity("c360.logistics.sensor.document.temperature.group")
+	entityManager.addExistingEntity("c360.logistics.document.sensor.temperature.group")
 
 	config := HierarchyConfig{
 		Enabled:           true,
@@ -347,7 +347,7 @@ func TestHierarchyInference_ContainerExistsInStorage(t *testing.T) {
 
 	hi := NewHierarchyInference(entityManager, tripleAdder, config, nil)
 
-	err := hi.OnEntityCreated(context.Background(), "c360.logistics.sensor.document.temperature.sensor-001")
+	err := hi.OnEntityCreated(context.Background(), "c360.logistics.document.sensor.temperature.sensor-001")
 	require.NoError(t, err)
 
 	// Should NOT create container (already exists)
@@ -372,7 +372,7 @@ func TestHierarchyInference_ContainerEntityProperties(t *testing.T) {
 
 	hi := NewHierarchyInference(entityManager, tripleAdder, config, nil)
 
-	err := hi.OnEntityCreated(context.Background(), "c360.logistics.sensor.document.temperature.sensor-001")
+	err := hi.OnEntityCreated(context.Background(), "c360.logistics.document.sensor.temperature.sensor-001")
 	require.NoError(t, err)
 
 	// Verify container entity has correct properties
@@ -380,7 +380,7 @@ func TestHierarchyInference_ContainerEntityProperties(t *testing.T) {
 	require.Len(t, createdEntities, 1)
 
 	container := createdEntities[0]
-	assert.Equal(t, "c360.logistics.sensor.document.temperature.group", container.ID)
+	assert.Equal(t, "c360.logistics.document.sensor.temperature.group", container.ID)
 	require.Len(t, container.Triples, 1)
 
 	triple := container.Triples[0]
@@ -401,7 +401,7 @@ func TestHierarchyInference_ClearCache(t *testing.T) {
 	hi := NewHierarchyInference(entityManager, tripleAdder, config, nil)
 
 	// Create entity to populate cache
-	err := hi.OnEntityCreated(context.Background(), "c360.logistics.sensor.document.temperature.sensor-001")
+	err := hi.OnEntityCreated(context.Background(), "c360.logistics.document.sensor.temperature.sensor-001")
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, hi.GetCacheStats())
@@ -432,7 +432,7 @@ func TestHierarchyInference_GetMetrics(t *testing.T) {
 	assert.Equal(t, int64(0), failed)
 
 	// Create entity
-	err := hi.OnEntityCreated(context.Background(), "c360.logistics.sensor.document.temperature.sensor-001")
+	err := hi.OnEntityCreated(context.Background(), "c360.logistics.document.sensor.temperature.sensor-001")
 	require.NoError(t, err)
 
 	containers, edges, failed = hi.GetMetrics()
@@ -460,7 +460,7 @@ func TestBuildContainerIDs(t *testing.T) {
 
 	// Test type container ID
 	typeID := hi.buildTypeContainerID(parts)
-	assert.Equal(t, "org.platform.domain.system.type.group", typeID)
+	assert.Equal(t, "org.platform.system.domain.type.group", typeID)
 
 	// Test system container ID
 	systemID := hi.buildSystemContainerID(parts)
@@ -476,7 +476,7 @@ func TestHierarchyInference_RaceConditionOnContainerCreate(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	// Simulate race: container "exists" error during create
-	entityManager.addExistingEntity("c360.logistics.sensor.document.temperature.group")
+	entityManager.addExistingEntity("c360.logistics.document.sensor.temperature.group")
 
 	config := HierarchyConfig{
 		Enabled:           true,
@@ -488,7 +488,7 @@ func TestHierarchyInference_RaceConditionOnContainerCreate(t *testing.T) {
 	hi := NewHierarchyInference(entityManager, tripleAdder, config, nil)
 
 	// Even if container exists, edges should still be created
-	err := hi.OnEntityCreated(context.Background(), "c360.logistics.sensor.document.temperature.sensor-001")
+	err := hi.OnEntityCreated(context.Background(), "c360.logistics.document.sensor.temperature.sensor-001")
 	require.NoError(t, err)
 
 	// Should create 2 edges: forward (member) + inverse (contains)

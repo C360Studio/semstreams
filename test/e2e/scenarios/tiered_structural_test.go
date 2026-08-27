@@ -7,7 +7,7 @@ import (
 )
 
 func TestValidateCompoundPredicateCoverage(t *testing.T) {
-	const known = "c360.logistics.environmental.sensor.temperature.temp-sensor-001"
+	const known = "c360.logistics.sensor.environmental.temperature.temp-sensor-001"
 	t.Run("non-empty intersection", func(t *testing.T) {
 		require.NoError(t, validateCompoundPredicateCoverage(10, 3, []string{known, "other"}, known))
 	})

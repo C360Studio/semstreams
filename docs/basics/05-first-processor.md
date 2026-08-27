@@ -210,10 +210,10 @@ type SensorReading struct {
 }
 
 // EntityID returns a deterministic 6-part federated entity ID.
-// Format: {org}.{platform}.{domain}.{system}.{type}.{instance}
-// Example: "acme.logistics.environmental.sensor.temperature.sensor-042"
+// Format: {org}.{platform}.{system}.{domain}.{type}.{instance}
+// Example: "acme.logistics.sensor.environmental.temperature.sensor-042"
 func (s *SensorReading) EntityID() string {
-    return fmt.Sprintf("%s.%s.environmental.sensor.%s.%s",
+    return fmt.Sprintf("%s.%s.sensor.environmental.%s.%s",
         s.OrgID,
         s.Platform,
         s.SensorType,
@@ -359,7 +359,7 @@ When your entity references another entity, you need that entity to exist. Creat
 // ZoneEntityID generates a federated 6-part entity ID for a zone.
 // Use this helper to ensure consistency between Zone.EntityID() and references.
 func ZoneEntityID(orgID, platform, zoneType, zoneID string) string {
-    return fmt.Sprintf("%s.%s.facility.zone.%s.%s",
+    return fmt.Sprintf("%s.%s.zone.facility.%s.%s",
         orgID, platform, zoneType, zoneID)
 }
 
@@ -699,7 +699,7 @@ func TestSensorReading_Triples_SemanticPredicates(t *testing.T) {
         SensorType:   "temperature",
         Value:        23.5,
         Unit:         "celsius",
-        ZoneEntityID: "acme.logistics.facility.zone.area.warehouse-7",
+        ZoneEntityID: "acme.logistics.zone.facility.area.warehouse-7",
         ObservedAt:   time.Now(),
         OrgID:        "acme",
         Platform:     "logistics",
@@ -1243,7 +1243,7 @@ task dev:send DATA='{"device_id":"sensor-001","type":"temperature","reading":23.
 task dev:stats
 
 # Query via GraphQL
-task dev:graphql QUERY='{ entity(id: "acme.logistics.environmental.sensor.temperature.sensor-001") { triples { predicate object } } }'
+task dev:graphql QUERY='{ entity(id: "acme.logistics.sensor.environmental.temperature.sensor-001") { triples { predicate object } } }'
 ```
 
 ## What Happens Next

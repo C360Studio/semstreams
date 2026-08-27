@@ -221,9 +221,11 @@ type Graphable interface {
 
 ## Entity ID Format
 
-6-part hierarchical: `org.platform.domain.system.type.instance`
+6-part hierarchical: `org.platform.system.domain.type.instance` (ADR-102: `org.platform` = the minting deployment
+authority from `platform.org`/`platform.id`, never a product name; `system` = the source that produced the entity;
+`domain.type` = a delegated taxonomy; `instance` = the leaf, always last)
 
-Example: `acme.ops.robotics.gcs.drone.001`
+Example: `acme.ops.gcs.robotics.drone.001`
 
 ## Common Tasks
 

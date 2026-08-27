@@ -5,7 +5,6 @@
     "id": "streamkit-cloud",
     "type": "cloud-hub",
     "region": "cloud",
-    "instance_id": "cloud-001",
     "environment": "development"
   },
   "nats": {

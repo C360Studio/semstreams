@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph/llm"
 	"github.com/c360studio/semstreams/message"
 )
 
@@ -17,7 +18,7 @@ func TestStatisticalSummarizer_SummarizeCommunity(t *testing.T) {
 	ctx := context.Background()
 
 	// Create test entities with robotics theme
-	// Using proper 6-part entity ID format: org.platform.domain.system.type.instance
+	// Using proper 6-part entity ID format: org.platform.system.domain.type.instance
 	entities := []*gtypes.EntityState{
 		{
 			ID: "c360.platform.robotics.system.drone.1",
@@ -333,4 +334,42 @@ func TestStatisticalSummarizer_BuildCorpusDF_Resets(t *testing.T) {
 	s.BuildCorpusDF(nil)
 	assert.Nil(t, s.corpusDF, "BuildCorpusDF(nil) should clear the map")
 	assert.Zero(t, s.corpusN, "BuildCorpusDF(nil) should reset corpusN")
+}
+
+// TestSummaryGroupsByNamedDomain pins the LLM summary prompt data against the
+// canonical order: entities group by the named Domain field (position 4) and
+// each group's system.type breakdown reads System (position 3) and Type by
+// name, never by raw index (inventory C3, tasks 5.2).
+func TestSummaryGroupsByNamedDomain(t *testing.T) {
+	summarizer := &LLMSummarizer{}
+	entities := []*gtypes.EntityState{
+		{ID: "acme.dep1.src.git.commit.a1"},
+		{ID: "acme.dep1.src.git.commit.a2"},
+		{ID: "acme.dep1.src.git.repo.r1"},
+		{ID: "acme.dep1.feed.media.video.v1"},
+	}
+	data := summarizer.buildPromptData(entities, []string{"commit"}, nil)
+
+	require.Equal(t, 4, data.EntityCount)
+	assert.Equal(t, "git", data.DominantDomain, "three of four entities share the taxonomy git")
+	assert.Equal(t, "acme.dep1", data.OrgPlatform)
+
+	groups := map[string]llm.DomainGroup{}
+	for _, group := range data.Domains {
+		groups[group.Domain] = group
+	}
+	require.Contains(t, groups, "git")
+	require.Contains(t, groups, "media")
+	assert.NotContains(t, groups, "src", "src is the source (position 3), not a domain")
+	assert.Equal(t, 3, groups["git"].Count)
+
+	systemTypes := map[string]int{}
+	for _, st := range groups["git"].SystemTypes {
+		systemTypes[st.Name] = st.Count
+	}
+	assert.Equal(t, map[string]int{"src.commit": 2, "src.repo": 1}, systemTypes)
+
+	require.Len(t, data.SampleEntities, 4)
+	assert.Equal(t, "src", data.SampleEntities[0].System)
+	assert.Equal(t, "git", data.SampleEntities[0].Domain)
 }

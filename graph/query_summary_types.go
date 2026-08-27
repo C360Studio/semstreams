@@ -49,13 +49,14 @@ type SummaryRequest struct {
 //
 // Examples in this codebase:
 //
-//	acme.platform1.agent.agentic-loop.execution.<loopID>
+//	acme.platform1.agentic-loop.agent.execution.<loopID>
 //	→ type "agent.agentic-loop.execution"
 //
-//	acme.platform1.agent.web.observation.<hash>
+//	acme.platform1.web.agent.observation.<hash>
 //	→ type "agent.web.observation"
 type EntityTypeSummary struct {
-	// Type is the domain.system.type triple — the bucket name.
+	// Type is the system.domain.type triple (positions 3-5 of the canonical
+	// entity ID, by named field) — the bucket name.
 	Type string `json:"type"`
 
 	// Count is how many entities in the scanned sample fall in this

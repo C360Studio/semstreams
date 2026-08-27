@@ -20,7 +20,7 @@ type Type = types.Type
 type EntityType = types.EntityType
 
 // EntityID represents a complete entity identifier with semantic structure.
-// Follows the pattern: org.platform.domain.system.type.instance for federated entity management.
+// Follows the pattern: org.platform.system.domain.type.instance for federated entity management.
 type EntityID = types.EntityID
 
 // ParseEntityID delegates canonical parsing to pkg/types.

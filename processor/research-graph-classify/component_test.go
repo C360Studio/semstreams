@@ -407,7 +407,7 @@ func TestComponent_HandleMessage_StampsOrchestrationTriples(t *testing.T) {
 	// All triples must share the loop-execution entity ID (the 6-part
 	// form derived from deps.Platform.Org/Platform and loop_id) so
 	// graph-ingest's per-Subject CAS path lands them atomically.
-	const wantSubject = "acme.ops.agent.agentic-loop.execution.rg_test001"
+	const wantSubject = "acme.ops.agentic-loop.agent.execution.rg_test001"
 	facts := map[string]any{}
 	for _, tr := range batch {
 		if tr.Subject != wantSubject {

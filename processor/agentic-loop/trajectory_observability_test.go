@@ -80,7 +80,7 @@ func TestTrajectoryAuditFailureMultipleStagesMarkOnce(t *testing.T) {
 	}
 
 	triples := buildLoopCompletionTriples(
-		"acme.ops.agent.agentic-loop.execution.loop-multi",
+		"acme.ops.agentic-loop.agent.execution.loop-multi",
 		&agentic.LoopCompletedEvent{LoopID: "loop-multi", Outcome: "success", CompletedAt: time.Now()},
 		"", 0, c.trajectoryAuditLoss.observed("loop-multi"))
 

@@ -5,7 +5,6 @@
     "id": "streamkit-edge",
     "type": "edge-gateway",
     "region": "edge",
-    "instance_id": "edge-001",
     "environment": "development"
   },
   "nats": {

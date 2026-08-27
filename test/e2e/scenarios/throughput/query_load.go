@@ -45,20 +45,20 @@ type querySpec struct {
 }
 
 // knownEntityIDs returns entity IDs known to exist in the statistical testdata.
-// Entity IDs are built by iot_sensor as: {org}.{platform}.environmental.sensor.{type}.{device_id}
+// Entity IDs are built by iot_sensor as: {org}.{platform}.sensor.environmental.{type}.{device_id}
 // where {type} comes from the "type" field in sensors.jsonl (e.g., "combustible_gas", not "gas").
 func knownEntityIDs() []string {
 	return []string{
-		"c360.logistics.environmental.sensor.temperature.temp-sensor-001",
-		"c360.logistics.environmental.sensor.temperature.temp-sensor-002",
-		"c360.logistics.environmental.sensor.humidity.humid-sensor-001",
-		"c360.logistics.environmental.sensor.pressure.pressure-sensor-001",
-		"c360.logistics.environmental.sensor.power.power-sensor-001",
-		"c360.logistics.environmental.sensor.vibration.vibration-sensor-001",
-		"c360.logistics.environmental.sensor.flow.flow-sensor-001",
-		"c360.logistics.environmental.sensor.combustible_gas.gas-sensor-001",
-		"c360.logistics.environmental.sensor.illumination.light-sensor-001",
-		"c360.logistics.environmental.sensor.level.level-sensor-001",
+		"c360.logistics.sensor.environmental.temperature.temp-sensor-001",
+		"c360.logistics.sensor.environmental.temperature.temp-sensor-002",
+		"c360.logistics.sensor.environmental.humidity.humid-sensor-001",
+		"c360.logistics.sensor.environmental.pressure.pressure-sensor-001",
+		"c360.logistics.sensor.environmental.power.power-sensor-001",
+		"c360.logistics.sensor.environmental.vibration.vibration-sensor-001",
+		"c360.logistics.sensor.environmental.flow.flow-sensor-001",
+		"c360.logistics.sensor.environmental.combustible_gas.gas-sensor-001",
+		"c360.logistics.sensor.environmental.illumination.light-sensor-001",
+		"c360.logistics.sensor.environmental.level.level-sensor-001",
 	}
 }
 
@@ -84,8 +84,8 @@ func buildQueryPool() []querySpec {
 	prefixes := []string{
 		"c360.logistics",
 		"c360.logistics.environmental",
-		"c360.logistics.environmental.sensor",
-		"c360.logistics.environmental.sensor.temperature",
+		"c360.logistics.sensor.environmental",
+		"c360.logistics.sensor.environmental.temperature",
 		"c360.logistics.warehouse",
 	}
 	for i := range 20 {

@@ -117,13 +117,13 @@ func TestRelationshipInventoryMatchesResponderWire(t *testing.T) {
 	require.Equal(t, "[]"+reflect.TypeOf(relationshipWire{}).Name(), operation.successType)
 
 	encoded, err := json.Marshal([]relationshipWire{{
-		EdgeType: "test.edge", FromEntityID: "from", ToEntityID: "to",
+		EdgeType: "test.edge", FromEntityID: "acme.ops.src.graph.node.from", ToEntityID: "acme.ops.src.graph.node.to",
 	}})
 	require.NoError(t, err)
 	var rows []map[string]any
 	require.NoError(t, json.Unmarshal(encoded, &rows))
 	require.Equal(t, []map[string]any{{
-		"edge_type": "test.edge", "from_entity_id": "from", "to_entity_id": "to",
+		"edge_type": "test.edge", "from_entity_id": "acme.ops.src.graph.node.from", "to_entity_id": "acme.ops.src.graph.node.to",
 	}}, rows)
 	require.NotContains(t, rows[0], "predicate")
 }

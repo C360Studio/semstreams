@@ -22,13 +22,13 @@ import (
 func TestRuleTriggerEntityIDContract(t *testing.T) {
 	const ruleID = "Rule ID with exact spaces/bytes"
 	const packID = "contract-pack"
-	const golden = "semstreams.framework.graph.rules.trigger.35a80784ae877b3ed4dd1f35aaa5fdd4bf4905e495af8810ce871be20571b685"
+	const golden = "acme.dep1.rules.graph.trigger.35a80784ae877b3ed4dd1f35aaa5fdd4bf4905e495af8810ce871be20571b685"
 
-	first, err := ruleTriggerEntityID(packID, ruleID)
+	first, err := ruleTriggerEntityID(testPlatform.Org, testPlatform.Platform, packID, ruleID)
 	if err != nil {
 		t.Fatalf("ruleTriggerEntityID: %v", err)
 	}
-	second, err := ruleTriggerEntityID(packID, ruleID)
+	second, err := ruleTriggerEntityID(testPlatform.Org, testPlatform.Platform, packID, ruleID)
 	if err != nil {
 		t.Fatalf("repeat ruleTriggerEntityID: %v", err)
 	}
@@ -41,31 +41,32 @@ func TestRuleTriggerEntityIDContract(t *testing.T) {
 	if err := types.ValidateEntityID(first); err != nil {
 		t.Fatalf("derived trigger ID is not canonical: %v", err)
 	}
-	if len(first) != len(ruleTriggerEntityPrefix)+64 || len(first) > types.MaxEntityIDBytes {
+	family := types.RuleTriggerIdentityFamily()
+	if len(first) != len(testPlatform.Org)+len(testPlatform.Platform)+family.FixedBytes() || len(first) > types.MaxEntityIDBytes {
 		t.Fatalf("derived trigger ID length = %d", len(first))
 	}
-	if len(first) != 105 {
-		t.Fatalf("derived trigger ID length = %d, want 105", len(first))
+	if len(first) != 94 {
+		t.Fatalf("derived trigger ID length = %d, want 94", len(first))
 	}
-	if strings.HasPrefix(first, "semstreams.framework.graph.rules.alert.") {
+	if strings.HasPrefix(first, "acme.dep1.rules.graph.alert.") {
 		t.Fatalf("rule trigger identity overlaps the alert namespace: %q", first)
 	}
 
-	different, err := ruleTriggerEntityID(packID, ruleID+"!")
+	different, err := ruleTriggerEntityID(testPlatform.Org, testPlatform.Platform, packID, ruleID+"!")
 	if err != nil {
 		t.Fatalf("different ruleTriggerEntityID: %v", err)
 	}
 	if different == first {
 		t.Fatal("distinct exact rule IDs produced the same trigger ID")
 	}
-	differentPack, err := ruleTriggerEntityID(packID+"-other", ruleID)
+	differentPack, err := ruleTriggerEntityID(testPlatform.Org, testPlatform.Platform, packID+"-other", ruleID)
 	if err != nil {
 		t.Fatalf("different pack ruleTriggerEntityID: %v", err)
 	}
 	if differentPack == first {
 		t.Fatal("distinct exact pack IDs produced the same trigger ID")
 	}
-	unnormalized, err := ruleTriggerEntityID("Contract-Pack", ruleID)
+	unnormalized, err := ruleTriggerEntityID(testPlatform.Org, testPlatform.Platform, "Contract-Pack", ruleID)
 	if err != nil {
 		t.Fatalf("unnormalized ruleTriggerEntityID: %v", err)
 	}
@@ -73,24 +74,24 @@ func TestRuleTriggerEntityIDContract(t *testing.T) {
 		t.Fatal("pack ID was normalized before hashing")
 	}
 
-	veryLong, err := ruleTriggerEntityID(packID, strings.Repeat("x", 4096))
+	veryLong, err := ruleTriggerEntityID(testPlatform.Org, testPlatform.Platform, packID, strings.Repeat("x", 4096))
 	if err != nil {
 		t.Fatalf("long ruleTriggerEntityID: %v", err)
 	}
 	if len(veryLong) != len(first) {
 		t.Fatalf("long rule ID changed bounded output length: %d != %d", len(veryLong), len(first))
 	}
-	if empty, err := ruleTriggerEntityID(packID, ""); err == nil || empty != "" {
+	if empty, err := ruleTriggerEntityID(testPlatform.Org, testPlatform.Platform, packID, ""); err == nil || empty != "" {
 		t.Fatalf("empty rule ID = (%q, %v), want empty plus error", empty, err)
 	}
-	if empty, err := ruleTriggerEntityID("", ruleID); err == nil || empty != "" {
+	if empty, err := ruleTriggerEntityID(testPlatform.Org, testPlatform.Platform, "", ruleID); err == nil || empty != "" {
 		t.Fatalf("empty pack ID = (%q, %v), want empty plus error", empty, err)
 	}
 }
 
 func TestRuleTriggerEntityIDRejectsNonTokenPackID(t *testing.T) {
 	t.Parallel()
-	if entityID, err := ruleTriggerEntityID("pack.with.separator", "rule"); err == nil || entityID != "" {
+	if entityID, err := ruleTriggerEntityID(testPlatform.Org, testPlatform.Platform, "pack.with.separator", "rule"); err == nil || entityID != "" {
 		t.Fatalf("dotted pack trigger identity = (%q, %v), want empty ID and error", entityID, err)
 	}
 }
@@ -101,10 +102,10 @@ func TestExecutableRuleConstructionRequiresPackID(t *testing.T) {
 		ID: "pack-required", Type: "expression", Name: "Pack required", Enabled: true,
 		Conditions: []expression.ConditionExpression{{Field: "test.fixture.value", Operator: "eq", Value: "ok"}},
 	}
-	if _, err := NewExpressionRule("", definition); err == nil || !strings.Contains(err.Error(), "pack_id is required") {
+	if _, err := NewExpressionRule(testPlatform, "", definition); err == nil || !strings.Contains(err.Error(), "pack_id is required") {
 		t.Fatalf("NewExpressionRule empty pack error = %v, want required error", err)
 	}
-	if _, err := NewTestRule("", definition.ID, definition.Name, nil, definition.Conditions); err == nil || !strings.Contains(err.Error(), "pack_id is required") {
+	if _, err := NewTestRule(testPlatform, "", definition.ID, definition.Name, nil, definition.Conditions); err == nil || !strings.Contains(err.Error(), "pack_id is required") {
 		t.Fatalf("NewTestRule empty pack error = %v, want required error", err)
 	}
 	if _, err := NewExpressionRuleFactory().Create(definition.ID, definition, Dependencies{}); err == nil || !strings.Contains(err.Error(), "pack_id is required") {
@@ -122,6 +123,7 @@ func TestDirectRuleEventProducersUseCanonicalTriggerIdentity(t *testing.T) {
 	expressionRule := &ExpressionRule{
 		id:            "expression trigger",
 		packID:        "expression-contract-pack",
+		platform:      testPlatform,
 		name:          "Expression Trigger",
 		shouldTrigger: true,
 	}
@@ -134,6 +136,7 @@ func TestDirectRuleEventProducersUseCanonicalTriggerIdentity(t *testing.T) {
 	testRule := &TestRule{
 		id:            "test trigger",
 		packID:        "test-contract-pack",
+		platform:      testPlatform,
 		name:          "Test Trigger",
 		shouldTrigger: true,
 	}
@@ -152,7 +155,7 @@ func TestDirectRuleEventProducerPropagatesConstructionError(t *testing.T) {
 		name:          "Reserved Metadata",
 		shouldTrigger: true,
 		metadata:      map[string]any{"entity_id": "must not shadow"},
-		// entity-id-audit:classify intentional-malformed "must not shadow" line=154 column=46 surface=go-field:.entity_id entity_id_invalid:arity reserved-envelope collision rejection fixture
+		// entity-id-audit:classify intentional-malformed "must not shadow" line=157 column=46 surface=go-field:.entity_id entity_id_invalid:arity reserved-envelope collision rejection fixture
 	}
 	events, err := rule.ExecuteEvents([]message.Message{msg})
 	if err == nil || events != nil {
@@ -433,7 +436,7 @@ func assertCanonicalTriggerEvent(t testing.TB, events []Event, packID, ruleID st
 	if !ok {
 		t.Fatalf("event type = %T, want *graph.Event", events[0])
 	}
-	wantID, err := ruleTriggerEntityID(packID, ruleID)
+	wantID, err := ruleTriggerEntityID(testPlatform.Org, testPlatform.Platform, packID, ruleID)
 	if err != nil {
 		t.Fatalf("ruleTriggerEntityID: %v", err)
 	}

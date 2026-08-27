@@ -208,14 +208,14 @@ func (ec *ExecutionContext) RuleID() string {
 // Supported variables:
 //   - $now: Current wallclock as RFC3339 UTC (always available)
 //   - $entity.id: The primary entity ID (full 6-part federated string)
-//   - $entity.org / $entity.platform / $entity.domain / $entity.system / $entity.type / $entity.instance:
-//     individual segments of a valid 6-part entity ID. Use $entity.instance
+//   - $entity.org / $entity.platform / $entity.system / $entity.domain / $entity.type / $entity.instance:
+//     individual segments of a canonical 6-part entity ID, resolved by name. Use $entity.instance
 //     to pass the bare loop UUID into tools like read_loop_result without
 //     handing the LLM the full federated string. Tokens survive
 //     substitution (and trip the unresolved-template warning) when the
 //     entity ID isn't a valid 6-part form — see entity_substitution.go.
 //   - $related.id: The related entity ID (for pair rules)
-//   - $related.org / $related.platform / $related.domain / $related.system / $related.type / $related.instance:
+//   - $related.org / $related.platform / $related.system / $related.domain / $related.type / $related.instance:
 //     individual segments of a valid 6-part related entity ID, mirror of the entity set.
 //   - $state.iteration: Current iteration count
 //   - $state.max_iterations: Configured max iterations

@@ -4,7 +4,7 @@
 
 `agentic-lessons` governs **procedural memory**: how completed agent work is distilled into
 durable, reusable guidance, and how that guidance reaches later loops. A lesson is a
-first-class graph entity (`{org}.{platform}.agent.lesson.record.{id}`), not a document — it
+first-class graph entity (`{org}.{platform}.lesson.agent.record.{id}`), not a document — it
 lives in the same substrate as every other agent artifact, under the same mutation and
 projection contracts.
 
@@ -36,7 +36,7 @@ register rule-opaque, so rules cannot predicate on model-sampled prose.
 ## Requirements
 ### Requirement: A lesson is an evidence-cited first-class graph entity with content-derived identity
 The framework SHALL persist each lesson as a first-class graph entity
-(`{org}.{platform}.agent.lesson.record.{id}`) minted through the canonical graph mutation API
+(`{org}.{platform}.lesson.agent.record.{id}`) minted through the canonical graph mutation API
 with a semantic envelope, where `{id}` MUST be derived deterministically from the lesson's
 content (category, scope keys, summary, evidence set) so that re-emitting an identical lesson
 cannot create a second entity, and the writer MUST reject any lesson carrying zero evidence

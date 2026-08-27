@@ -38,7 +38,7 @@ This package provides LLM integration for:
 Prompts understand the federated entity ID notation:
 
 ```
-{org}.{platform}.{domain}.{system}.{type}.{instance}
+{org}.{platform}.{system}.{domain}.{type}.{instance}
 ```
 
 | Part | Index | Example |

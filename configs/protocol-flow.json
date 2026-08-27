@@ -5,7 +5,6 @@
     "id": "streamkit-pure",
     "type": "flow-orchestration",
     "region": "local",
-    "instance_id": "streamkit-001",
     "environment": "development"
   },
   "nats": {

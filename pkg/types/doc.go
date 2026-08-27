@@ -19,8 +19,8 @@
 //
 //	// Entity identification
 //	entityID := types.EntityID{
-//	    Org: "c360", Platform: "prod", Domain: "robotics",
-//	    System: "gcs1", Type: "drone", Instance: "42",
+//	    Org: "c360", Platform: "prod", System: "gcs1",
+//	    Domain: "robotics", Type: "drone", Instance: "42",
 //	}
-//	key := entityID.Key() // "c360.prod.robotics.gcs1.drone.42"
+//	key := entityID.Key() // "c360.prod.gcs1.robotics.drone.42"
 package types

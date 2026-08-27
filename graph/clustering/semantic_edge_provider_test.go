@@ -218,7 +218,7 @@ func TestSemanticEdgeProvider_DualQualifying_ResolvesToMax(t *testing.T) {
 	ctx := context.Background()
 	// a1 and a2 share the 5-part prefix o.p.d.s.t -> siblings (weight 0.7).
 	base := &stubProvider{
-		entities:  []string{"o.p.d.s.t.a1", "o.p.d.s.t.a2"},
+		entities:  []string{"o.p.s.d.t.a1", "o.p.s.d.t.a2"},
 		neighbors: map[string][]string{},
 	}
 	eidp := NewEntityIDProvider(base, EntityIDProviderConfig{
@@ -227,14 +227,14 @@ func TestSemanticEdgeProvider_DualQualifying_ResolvesToMax(t *testing.T) {
 	}, nil)
 	// They are also a mutual-kNN semantic pair (weight 0.9).
 	finder := &stubFinder{directed: map[string][]string{
-		"o.p.d.s.t.a1": {"o.p.d.s.t.a2"},
-		"o.p.d.s.t.a2": {"o.p.d.s.t.a1"},
+		"o.p.s.d.t.a1": {"o.p.s.d.t.a2"},
+		"o.p.s.d.t.a2": {"o.p.s.d.t.a1"},
 	}}
 	prov := NewSemanticEdgeProvider(eidp, finder,
 		WeightConfig{SiblingWeight: 0.7, SystemPeerWeight: 0.2, SemanticWeight: 0.9},
 		SemanticEdgeParams{K: 8, Threshold: 0.75}, nil)
 
-	w, err := prov.GetEdgeWeight(ctx, "o.p.d.s.t.a1", "o.p.d.s.t.a2")
+	w, err := prov.GetEdgeWeight(ctx, "o.p.s.d.t.a1", "o.p.s.d.t.a2")
 	require.NoError(t, err)
 	assert.InDelta(t, 0.9, w, 1e-9, "sibling+semantic resolves to max(0.7,0.9), not the sum 1.6")
 }
@@ -255,23 +255,23 @@ func TestSemanticEdgeProvider_WiredClassification_KVLikeBase(t *testing.T) {
 		// Explicit edge, stored to->from: outgoing of ex1 only, so ex2 reaches it
 		// only via its INCOMING rows. Different system+type so no virtual tier
 		// qualifies — the resolved weight can only come from the explicit edge.
-		ex1 = "o.p.d.sysx.tx.ex1"
-		ex2 = "o.p.d.sysy.ty.ex2"
+		ex1 = "o.p.sysx.d.tx.ex1"
+		ex2 = "o.p.sysy.d.ty.ex2"
 		// Semantic-only: different type prefix AND different system, mutual-kNN.
 		sem1 = "o.p.d.s1.t1.sem1"
 		sem2 = "o.p.d.s2.t2.sem2"
 		// Sibling-only (also system-peers, but 0.7 dominates 0.2), not mutual-kNN.
-		sb1 = "o.p.d.sib.tt.sb1"
-		sb2 = "o.p.d.sib.tt.sb2"
+		sb1 = "o.p.sib.d.tt.sb1"
+		sb2 = "o.p.sib.d.tt.sb2"
 		// System-peer-only: same system segment, different type, not mutual-kNN.
-		sp1 = "o.p.d.sp.ta.sp1"
-		sp2 = "o.p.d.sp.tb.sp2"
+		sp1 = "o.p.sp.d.ta.sp1"
+		sp2 = "o.p.sp.d.tb.sp2"
 		// Sibling AND mutual-kNN semantic -> max(0.7, 0.9).
-		ss1 = "o.p.d.ss.tc.ss1"
-		ss2 = "o.p.d.ss.tc.ss2"
+		ss1 = "o.p.ss.d.tc.ss1"
+		ss2 = "o.p.ss.d.tc.ss2"
 		// Absent: different system+type, no explicit edge, not mutual-kNN.
-		za = "o.p.d.za.tz.za1"
-		zb = "o.p.d.zb.tw.zb1"
+		za = "o.p.za.d.tz.za1"
+		zb = "o.p.zb.d.tw.zb1"
 	)
 
 	base := &kvLikeProvider{
@@ -321,20 +321,20 @@ func TestSemanticEdgeProvider_WiredClassification_KVLikeBase(t *testing.T) {
 func TestSemanticEdgeProvider_ExplicitDominates(t *testing.T) {
 	ctx := context.Background()
 	base := &stubProvider{
-		entities:  []string{"o.p.d.s.t.a1", "o.p.d.s.t.a2"},
-		neighbors: map[string][]string{"o.p.d.s.t.a1": {"o.p.d.s.t.a2"}},
-		weights:   map[string]float64{"o.p.d.s.t.a1->o.p.d.s.t.a2": 1.0},
+		entities:  []string{"o.p.s.d.t.a1", "o.p.s.d.t.a2"},
+		neighbors: map[string][]string{"o.p.s.d.t.a1": {"o.p.s.d.t.a2"}},
+		weights:   map[string]float64{"o.p.s.d.t.a1->o.p.s.d.t.a2": 1.0},
 	}
 	eidp := NewEntityIDProvider(base, DefaultEntityIDProviderConfig(), nil)
 	finder := &stubFinder{directed: map[string][]string{
-		"o.p.d.s.t.a1": {"o.p.d.s.t.a2"},
-		"o.p.d.s.t.a2": {"o.p.d.s.t.a1"},
+		"o.p.s.d.t.a1": {"o.p.s.d.t.a2"},
+		"o.p.s.d.t.a2": {"o.p.s.d.t.a1"},
 	}}
 	prov := NewSemanticEdgeProvider(eidp, finder,
 		WeightConfig{SiblingWeight: 0.7, SystemPeerWeight: 0.2, SemanticWeight: 0.9},
 		SemanticEdgeParams{K: 8, Threshold: 0.75}, nil)
 
-	w, err := prov.GetEdgeWeight(ctx, "o.p.d.s.t.a1", "o.p.d.s.t.a2")
+	w, err := prov.GetEdgeWeight(ctx, "o.p.s.d.t.a1", "o.p.s.d.t.a2")
 	require.NoError(t, err)
 	assert.InDelta(t, 1.0, w, 1e-9, "explicit edge is strictly dominant over every virtual tier")
 }
@@ -342,12 +342,12 @@ func TestSemanticEdgeProvider_ExplicitDominates(t *testing.T) {
 // GetAllEntityIDs delegates unchanged.
 func TestSemanticEdgeProvider_GetAllEntityIDs_Delegates(t *testing.T) {
 	ctx := context.Background()
-	base := &stubProvider{entities: []string{"o.p.d.s.t.a1", "o.p.d.s.t.a2"}}
+	base := &stubProvider{entities: []string{"o.p.s.d.t.a1", "o.p.s.d.t.a2"}}
 	eidp := NewEntityIDProvider(base, DefaultEntityIDProviderConfig(), nil)
 	prov := NewSemanticEdgeProvider(eidp, &stubFinder{}, WeightConfig{}, SemanticEdgeParams{}, nil)
 	ids, err := prov.GetAllEntityIDs(ctx)
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"o.p.d.s.t.a1", "o.p.d.s.t.a2"}, ids)
+	assert.ElementsMatch(t, []string{"o.p.s.d.t.a1", "o.p.s.d.t.a2"}, ids)
 }
 
 // --- §1.4 / §2.3: default-off equivalence -----------------------------------
@@ -363,8 +363,8 @@ func TestSemanticEdgeProvider_NoMutualEdges_MatchesEntityIDProvider(t *testing.T
 	// synthesizes virtual edges we must reproduce exactly.
 	base := &stubProvider{
 		entities: []string{
-			"o.p.d.sys.t.a1", "o.p.d.sys.t.a2", // siblings (share o.p.d.sys.t)
-			"o.p.d.sys.u.b1", // system-peer (shares system "sys"), different type
+			"o.p.sys.d.t.a1", "o.p.sys.d.t.a2", // siblings (share o.p.d.sys.t)
+			"o.p.sys.d.u.b1", // system-peer (shares system "sys"), different type
 		},
 		neighbors: map[string][]string{},
 	}
@@ -387,15 +387,15 @@ func TestSemanticEdgeProvider_NoMutualEdges_MatchesEntityIDProvider(t *testing.T
 	}
 
 	// Weights match for a sibling pair and a system-peer pair.
-	wantSib, err := eidp.GetEdgeWeight(ctx, "o.p.d.sys.t.a1", "o.p.d.sys.t.a2")
+	wantSib, err := eidp.GetEdgeWeight(ctx, "o.p.sys.d.t.a1", "o.p.sys.d.t.a2")
 	require.NoError(t, err)
-	gotSib, err := prov.GetEdgeWeight(ctx, "o.p.d.sys.t.a1", "o.p.d.sys.t.a2")
+	gotSib, err := prov.GetEdgeWeight(ctx, "o.p.sys.d.t.a1", "o.p.sys.d.t.a2")
 	require.NoError(t, err)
 	assert.InDelta(t, wantSib, gotSib, 1e-9, "sibling weight preserved")
 
-	wantPeer, err := eidp.GetEdgeWeight(ctx, "o.p.d.sys.t.a1", "o.p.d.sys.u.b1")
+	wantPeer, err := eidp.GetEdgeWeight(ctx, "o.p.sys.d.t.a1", "o.p.sys.d.u.b1")
 	require.NoError(t, err)
-	gotPeer, err := prov.GetEdgeWeight(ctx, "o.p.d.sys.t.a1", "o.p.d.sys.u.b1")
+	gotPeer, err := prov.GetEdgeWeight(ctx, "o.p.sys.d.t.a1", "o.p.sys.d.u.b1")
 	require.NoError(t, err)
 	assert.InDelta(t, wantPeer, gotPeer, 1e-9, "system-peer weight preserved")
 }

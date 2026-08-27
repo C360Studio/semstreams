@@ -62,7 +62,7 @@ type StorageReference struct {
 //	func (s *StoredEntity) Triples() []Triple { return s.triples }
 //	func (s *StoredEntity) StorageRef() *StorageReference { return s.storage }
 type Storable interface {
-	// EntityID returns deterministic 6-part ID: org.platform.domain.system.type.instance
+	// EntityID returns deterministic 6-part ID: org.platform.system.domain.type.instance
 	// (duplicated from graph.Graphable to avoid import cycle)
 	EntityID() string
 

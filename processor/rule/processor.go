@@ -21,6 +21,7 @@ import (
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/projection"
+	"github.com/c360studio/semstreams/types"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -45,6 +46,7 @@ type Processor struct {
 	flowMetrics component.FlowMetrics
 
 	// Rule processing resources
+	platform            types.PlatformMeta // deployment authority for every minted identity (ADR-102)
 	natsClient          *natsclient.Client
 	graphEventPublisher graphEventPublisher
 	rules               map[string]Rule // Self-loaded rules; written by applyRuleChanges under mu.Lock, read under mu.RLock.
@@ -354,6 +356,15 @@ func NewProcessorWithMetrics(natsClient *natsclient.Client, config *Config, metr
 // without agentic-tools).
 func (rp *Processor) SetToolRegistry(r component.ToolRegistryReader) {
 	rp.toolRegistry = r
+}
+
+// SetPlatform installs the deployment's own authority (deps.Platform at the
+// composition root). Every entity the rule engine mints — trigger identities
+// today, run-scope mints under #1096 — carries it in positions 1-2; nothing is
+// read back from a firing entity (ADR-102 d2). Called by the component factory
+// after construction, before rules load.
+func (rp *Processor) SetPlatform(platform types.PlatformMeta) {
+	rp.platform = platform
 }
 
 // SetDecoder installs the payload Decoder used to unmarshal incoming

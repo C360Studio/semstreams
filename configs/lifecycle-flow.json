@@ -5,7 +5,6 @@
     "id": "semstreams-lifecycle",
     "type": "lifecycle-e2e",
     "region": "local",
-    "instance_id": "lifecycle-001",
     "environment": "test"
   },
   "tier": "lifecycle",
@@ -119,9 +118,7 @@
               "name": "command_out"
             }
           ]
-        },
-        "org_id": "c360",
-        "platform": "test"
+        }
       }
     },
     "graph-ingest": {
@@ -195,7 +192,7 @@
             }
           ]
         },
-        "entity_watch_buckets": {"ENTITY_STATES": ["c360.test.lifecycle.gcs.mission.*"]},
+        "entity_watch_buckets": {"ENTITY_STATES": ["*.*.gcs.lifecycle.mission.*"]},
         "rules_files": ["/app/configs/rules/lifecycle/01-mission-launch.json"],
         "buffer_window_size": "10m",
         "alert_cooldown_period": "2m"

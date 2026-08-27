@@ -11,12 +11,14 @@ import (
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/processor/rule/expression"
+	"github.com/c360studio/semstreams/types"
 )
 
 // ExpressionRule implements Rule interface for expression-based condition evaluation
 type ExpressionRule struct {
 	id            string
 	packID        string
+	platform      types.PlatformMeta
 	name          string
 	description   string
 	subscribed    []string
@@ -81,7 +83,7 @@ func (r *ExpressionRule) SetLifecycleManager(m LifecycleManager) {
 
 // NewExpressionRule creates a new expression-based rule under an explicit
 // stable pack identity.
-func NewExpressionRule(packID string, def Definition) (*ExpressionRule, error) {
+func NewExpressionRule(platform types.PlatformMeta, packID string, def Definition) (*ExpressionRule, error) {
 	if err := validatePackID(packID); err != nil {
 		return nil, err
 	}
@@ -115,6 +117,7 @@ func NewExpressionRule(packID string, def Definition) (*ExpressionRule, error) {
 	return &ExpressionRule{
 		id:          def.ID,
 		packID:      packID,
+		platform:    platform,
 		name:        def.Name,
 		description: def.Description,
 		subscribed:  subjects,
@@ -343,7 +346,7 @@ func (r *ExpressionRule) ExecuteEvents(messages []message.Message) ([]Event, err
 		properties[k] = v
 	}
 
-	entityID, err := ruleTriggerEntityID(r.packID, r.id)
+	entityID, err := ruleTriggerEntityID(r.platform.Org, r.platform.Platform, r.packID, r.id)
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +384,7 @@ func (f *ExpressionRuleFactory) Type() string {
 
 // Create creates an expression rule from definition
 func (f *ExpressionRuleFactory) Create(_ string, def Definition, deps Dependencies) (Rule, error) {
-	rule, err := NewExpressionRule(deps.PackID, def)
+	rule, err := NewExpressionRule(deps.Platform, deps.PackID, def)
 	if err != nil {
 		return nil, err
 	}

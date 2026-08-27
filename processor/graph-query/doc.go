@@ -58,7 +58,7 @@
 // BFS-based graph traversal with path tracking and relevance scoring:
 //
 //	{
-//	    "start_entity": "org.platform.domain.system.type.instance",
+//	    "start_entity": "org.platform.system.domain.type.instance",
 //	    "max_depth": 3,
 //	    "max_nodes": 100,
 //	    "include_siblings": false
@@ -71,7 +71,7 @@
 // Community-scoped search for entities related to a starting entity:
 //
 //	{
-//	    "entity_id": "org.platform.domain.system.type.instance",
+//	    "entity_id": "org.platform.system.domain.type.instance",
 //	    "query": "navigation system",
 //	    "level": 0
 //	}

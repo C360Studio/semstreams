@@ -34,7 +34,7 @@
 // Example:
 //
 //	func (d *DroneTelemetry) EntityID() string {
-//	    return fmt.Sprintf("acme.ops.robotics.gcs.drone.%s", d.DroneID)
+//	    return fmt.Sprintf("acme.ops.gcs.robotics.drone.%s", d.DroneID)
 //	}
 //
 //	func (d *DroneTelemetry) Triples() []message.Triple {
@@ -47,11 +47,14 @@
 //
 // # Entity ID Format
 //
-// Use 6-part hierarchical identifiers for federation and queryability:
+// Use 6-part hierarchical identifiers for federation and queryability
+// (ADR-102): org.platform is the minting deployment authority (platform.org /
+// platform.id, carried as deps.Platform), system is the source that produced
+// the entity, domain.type is a delegated taxonomy, instance is the leaf.
 //
-//	org.platform.domain.system.type.instance
+//	org.platform.system.domain.type.instance
 //
-// Example: acme.ops.robotics.gcs.drone.001
+// Example: acme.ops.gcs.robotics.drone.001
 //
 // # Predicates
 //

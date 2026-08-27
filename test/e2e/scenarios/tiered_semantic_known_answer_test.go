@@ -8,7 +8,7 @@ import (
 func TestHasExactEntityDigestLabelRequiresLabelOnMeasuredFixture(t *testing.T) {
 	t.Parallel()
 
-	const entityID = "c360.logistics.content.document.operations.doc-ops-001"
+	const entityID = "c360.logistics.document.content.operations.doc-ops-001"
 	const title = "Forklift Operation Manual"
 
 	tests := []struct {
@@ -27,7 +27,7 @@ func TestHasExactEntityDigestLabelRequiresLabelOnMeasuredFixture(t *testing.T) {
 		},
 		{
 			name: "title on a different row cannot replace ID join",
-			body: `{"entity_digests":[{"id":"c360.logistics.content.document.operations.other","label":"` + title + `"}]}`,
+			body: `{"entity_digests":[{"id":"c360.logistics.document.content.operations.other","label":"` + title + `"}]}`,
 		},
 	}
 

@@ -3,7 +3,7 @@ package llm
 // CommunitySummaryData is the data structure for community_summary prompts.
 type CommunitySummaryData struct {
 	EntityCount    int
-	Domains        []DomainGroup // Grouped by domain from entity ID part[2]
+	Domains        []DomainGroup // Grouped by the named Domain position of the entity ID
 	DominantDomain string        // Most common domain, or "mixed"
 	OrgPlatform    string        // Common org.platform if uniform
 	Keywords       string

@@ -17,7 +17,7 @@ func (p *recordingPromoter) Promote(_ context.Context, entityID string) error {
 
 func TestHandlerPromotesValidLesson(t *testing.T) {
 	t.Parallel()
-	const entityID = "acme.ops.agent.lesson.record.11111111-1111-5111-8111-111111111111"
+	const entityID = "acme.ops.lesson.agent.record.11111111-1111-5111-8111-111111111111"
 	promoter := &recordingPromoter{}
 	data, err := json.Marshal(PromoteRequest{EntityID: entityID})
 	if err != nil {

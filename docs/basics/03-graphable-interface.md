@@ -19,12 +19,12 @@ Two methods. That's it.
 Returns a deterministic 6-part identifier:
 
 ```text
-org.platform.domain.system.type.instance
+org.platform.system.domain.type.instance
 ```
 
 **Requirements:**
 
-- Exactly six dot-separated positions: `org.platform.domain.system.type.instance`
+- Exactly six dot-separated positions: `org.platform.system.domain.type.instance`
 - At most 256 serialized bytes, including the five separators
 - Each position matches `[A-Za-z0-9][A-Za-z0-9_-]*`
 - Deterministic: the same input always produces the same ID
@@ -38,14 +38,14 @@ normalizes, hashes, or repairs an invalid ID.
 
 ```go
 func (s *SensorReading) EntityID() string {
-    return fmt.Sprintf("%s.%s.environmental.sensor.%s.%s",
+    return fmt.Sprintf("%s.%s.sensor.environmental.%s.%s",
         s.OrgID,      // "acme"
         s.Platform,   // "logistics"
         s.SensorType, // "temperature"
         s.DeviceID,   // "sensor-042"
     )
 }
-// Result: "acme.logistics.environmental.sensor.temperature.sensor-042"
+// Result: "acme.logistics.sensor.environmental.temperature.sensor-042"
 ```
 
 ## Triples: Facts
@@ -109,7 +109,7 @@ The Object field determines whether a triple is a property or a relationship:
 // Relationship: @id marks the object as a canonical entity reference
 {
     Predicate: "geo.location.zone",
-    Object: "acme.logistics.facility.zone.area.warehouse-7",
+    Object: "acme.logistics.zone.facility.area.warehouse-7",
     Datatype: message.EntityReferenceDatatype,
 }
 ```
@@ -172,7 +172,7 @@ type DroneTelemetry struct {
 }
 
 func (d *DroneTelemetry) EntityID() string {
-    return fmt.Sprintf("%s.%s.robotics.gcs.drone.%s",
+    return fmt.Sprintf("%s.%s.gcs.robotics.drone.%s",
         d.OrgID,
         d.Platform,
         d.DroneID,
@@ -193,7 +193,7 @@ func (d *DroneTelemetry) Triples() []message.Triple {
 
     // Relationship (only if fleet is assigned)
     if d.FleetID != "" {
-        fleetEntityID := fmt.Sprintf("%s.%s.operations.fleet.cargo.%s",
+        fleetEntityID := fmt.Sprintf("%s.%s.fleet.operations.cargo.%s",
             d.OrgID, d.Platform, d.FleetID)
         triples = append(triples, message.Triple{
             Subject:   id,
@@ -295,7 +295,7 @@ Always generate full entity IDs for references:
 
 ```go
 // Good: Full entity ID
-fleetID := fmt.Sprintf("%s.%s.ops.fleet.cargo.%s", orgID, platform, fleetName)
+fleetID := fmt.Sprintf("%s.%s.fleet.ops.cargo.%s", orgID, platform, fleetName)
 {Predicate: "fleet.membership", Object: fleetID}
 
 // Bad: Partial or ambiguous

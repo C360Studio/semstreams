@@ -118,11 +118,11 @@ func TestHandleQueryGraphSummary_HappyPath(t *testing.T) {
 		switch subject {
 		case "graph.ingest.query.prefix":
 			return prefixEnvelope(
-				"acme.platform.agent.web.observation.h1",
-				"acme.platform.agent.web.observation.h2",
-				"acme.platform.agent.web.observation.h3",
-				"acme.platform.agent.agentic-loop.execution.l1",
-				"acme.platform.agent.agentic-loop.execution.l2",
+				"acme.platform.web.agent.observation.h1",
+				"acme.platform.web.agent.observation.h2",
+				"acme.platform.web.agent.observation.h3",
+				"acme.platform.agentic-loop.agent.execution.l1",
+				"acme.platform.agentic-loop.agent.execution.l2",
 				"acme.platform.semsource.golang.workspace.f1",
 			), nil
 		case "graph.index.query.predicateList":
@@ -157,8 +157,8 @@ func TestHandleQueryGraphSummary_HappyPath(t *testing.T) {
 		t.Fatalf("EntityTypes = %d, want 3 buckets", got)
 	}
 	// Buckets must be sorted by Count desc; first is the 3-entity web.observation.
-	if summary.EntityTypes[0].Type != "agent.web.observation" {
-		t.Errorf("top bucket = %q, want agent.web.observation", summary.EntityTypes[0].Type)
+	if summary.EntityTypes[0].Type != "web.agent.observation" {
+		t.Errorf("top bucket = %q, want web.agent.observation", summary.EntityTypes[0].Type)
 	}
 	if summary.EntityTypes[0].Count != 3 {
 		t.Errorf("top bucket Count = %d, want 3", summary.EntityTypes[0].Count)
@@ -185,7 +185,7 @@ func TestHandleQueryGraphSummary_IncludePredicatesFalse(t *testing.T) {
 	c := newSummaryTestComponent(func(_ context.Context, subject string, _ []byte, _ time.Duration) ([]byte, error) {
 		switch subject {
 		case "graph.ingest.query.prefix":
-			return prefixEnvelope("acme.platform.agent.web.observation.h1"), nil
+			return prefixEnvelope("acme.platform.web.agent.observation.h1"), nil
 		case "graph.index.query.predicateList":
 			predicateCalled = true
 			return predicateListResponse(graph.PredicateSummary{Predicate: "test.fixture.x", EntityCount: 1}), nil
@@ -221,7 +221,7 @@ func TestHandleQueryGraphSummary_PredicateFailure_StillReturnsEntityFacet(t *tes
 	c := newSummaryTestComponent(func(_ context.Context, subject string, _ []byte, _ time.Duration) ([]byte, error) {
 		switch subject {
 		case "graph.ingest.query.prefix":
-			return prefixEnvelope("acme.platform.agent.web.observation.h1"), nil
+			return prefixEnvelope("acme.platform.web.agent.observation.h1"), nil
 		case "graph.index.query.predicateList":
 			return nil, errors.New("graph-index degraded")
 		}
@@ -265,9 +265,9 @@ func TestHandleQueryGraphSummary_TruncationFlag(t *testing.T) {
 		if subject == "graph.ingest.query.prefix" {
 			// Return exactly the limit we asked for — simulates a full sample.
 			return prefixEnvelope(
-				"acme.platform.agent.web.observation.h1",
-				"acme.platform.agent.web.observation.h2",
-				"acme.platform.agent.web.observation.h3",
+				"acme.platform.web.agent.observation.h1",
+				"acme.platform.web.agent.observation.h2",
+				"acme.platform.web.agent.observation.h3",
 			), nil
 		}
 		return predicateListResponse(), nil
@@ -289,9 +289,9 @@ func TestHandleQueryGraphSummary_TruncationFlag(t *testing.T) {
 // failing the whole summary.
 func TestAggregateEntityTypes_SkipsMalformedIDs(t *testing.T) {
 	ids := []string{
-		"acme.platform.agent.web.observation.h1", // valid
+		"acme.platform.web.agent.observation.h1", // valid
 		"too.short",                              // 2 parts, skip
-		"acme.platform.agent.web.observation.h2", // valid
+		"acme.platform.web.agent.observation.h2", // valid
 		"three.part.thing",                       // 3 parts, skip
 	}
 	got := aggregateEntityTypes(ids, 2)
@@ -373,5 +373,28 @@ func TestParseSummaryRequest_RoundTrip(t *testing.T) {
 	}
 	if decoded.ExamplesPerType != original.ExamplesPerType {
 		t.Errorf("ExamplesPerType round-trip: got %d, want %d", decoded.ExamplesPerType, original.ExamplesPerType)
+	}
+}
+
+// TestGraphSummaryTypeKeyFollowsCanonicalOrder pins that EntityTypeSummary.Type
+// is `system.domain.type` built from the NAMED fields of pkg/types.ParseEntityID
+// (P6: an API value every graphSummary consumer sees), and that a value the
+// canonical parser rejects is skipped rather than bucketed by raw index.
+func TestGraphSummaryTypeKeyFollowsCanonicalOrder(t *testing.T) {
+	ids := []string{
+		"acme.dep1.src.git.commit.a1",
+		"acme.dep1.src.git.commit.a2",
+		"acme.dep1.src.git.commit.a3.extra", // seven positions: not an entity ID
+		"acme.dep1.src.git.commit.-a4",      // first byte: not an entity ID
+	}
+	got := aggregateEntityTypes(ids, 2)
+	if len(got) != 1 {
+		t.Fatalf("buckets = %+v, want exactly one canonical bucket", got)
+	}
+	if got[0].Type != "src.git.commit" {
+		t.Fatalf("Type = %q, want src.git.commit (system.domain.type by named field)", got[0].Type)
+	}
+	if got[0].Count != 2 {
+		t.Fatalf("Count = %d, want 2 (non-canonical values are skipped, never bucketed by index)", got[0].Count)
 	}
 }

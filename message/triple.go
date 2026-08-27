@@ -107,8 +107,8 @@ type Triple struct {
 //
 //	func (b *BatteryPayload) Triples() []Triple {
 //	    entityID := EntityID{
-//	        Source: "telemetry", Domain: "robotics", Type: "drone",
-//	        Instance: fmt.Sprintf("%d", b.SystemID),
+//	        Org: "acme", Platform: "dep1", System: "telemetry",
+//	        Domain: "robotics", Type: "drone", Instance: fmt.Sprintf("%d", b.SystemID),
 //	    }.Key()
 //
 //	    return []Triple{{
@@ -146,7 +146,7 @@ func (t Triple) IsRelationship() bool {
 }
 
 // IsValidEntityID checks if a string conforms to the canonical 6-part EntityID format.
-// Valid format: organization.platform.domain.system.type.instance (e.g., "c360.platform1.robotics.mav1.drone.0")
+// Valid format: organization.platform.system.domain.type.instance (e.g., "c360.platform1.mav1.robotics.drone.0")
 // Each part must contain only alphanumeric characters, hyphens, or underscores.
 // This prevents false positives from strings that happen to have 5 dots (e.g., JSON
 // with file extensions like ".go", ".md") and ensures the ID is safe as a NATS KV key.

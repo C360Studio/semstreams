@@ -192,7 +192,7 @@ type OpenAIServer struct {
 func NewOpenAIServer() *OpenAIServer {
 	return &OpenAIServer{
 		toolArgs: map[string]string{
-			"query_entity": `{"entity_id": "c360.logistics.environmental.sensor.temperature.temp-sensor-001"}`,
+			"query_entity": `{"entity_id": "c360.logistics.sensor.environmental.temperature.temp-sensor-001"}`,
 		},
 		// Return JSON for workflow condition evaluation
 		completionContent: `{"valid": true, "summary": "Analysis complete. Temperature sensor reading exceeds threshold. Recommend monitoring."}`,

@@ -105,7 +105,11 @@ func SerializeToString(triples []message.Triple, format Format, opts ...Option) 
 // defaultSubjectIRI converts an entity ID or arbitrary subject string to an IRI.
 // For valid 6-part entity IDs, it produces:
 //
-//	{base}/entities/{org}/{platform}/{domain}/{system}/{type}/{instance}
+//	{base}/entities/{org}/{platform}/{system}/{domain}/{type}/{instance}
+//
+// The path follows the canonical entity-ID order from the named fields
+// (owner item O-10 on #1095): the exporter is not a second interpreter of
+// position order.
 //
 // For other subjects, it falls back to dot-to-slash conversion:
 //
@@ -123,7 +127,7 @@ func subjectToIRI(subject, base string) string {
 	eid, err := message.ParseEntityID(subject)
 	if err == nil {
 		return fmt.Sprintf("%s/entities/%s/%s/%s/%s/%s/%s",
-			base, eid.Org, eid.Platform, eid.Domain, eid.System, eid.Type, eid.Instance)
+			base, eid.Org, eid.Platform, eid.System, eid.Domain, eid.Type, eid.Instance)
 	}
 
 	// Fallback: dot-to-slash

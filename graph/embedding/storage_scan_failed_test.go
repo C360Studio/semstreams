@@ -51,10 +51,10 @@ func TestScanFailed_SeedsFromSnapshot(t *testing.T) {
 			t.Fatalf("put: %v", err)
 		}
 	}
-	save(&Record{EntityID: "e.fail.1", Status: StatusFailed, Reason: "connection_refused", ErrorMsg: "dial: refused"})
-	save(&Record{EntityID: "e.fail.2", Status: StatusFailed, Reason: "content_error"})
-	save(&Record{EntityID: "e.ok", Status: StatusGenerated, Vector: []float32{1, 2, 3}})
-	save(&Record{EntityID: "e.pending", Status: StatusPending, SourceText: "x"})
+	save(&Record{EntityID: "acme.ops.src.embed.record.fail-1", Status: StatusFailed, Reason: "connection_refused", ErrorMsg: "dial: refused"})
+	save(&Record{EntityID: "acme.ops.src.embed.record.fail-2", Status: StatusFailed, Reason: "content_error"})
+	save(&Record{EntityID: "acme.ops.src.embed.record.ok", Status: StatusGenerated, Vector: []float32{1, 2, 3}})
+	save(&Record{EntityID: "acme.ops.src.embed.record.pending", Status: StatusPending, SourceText: "x"})
 
 	got, err := s.ScanFailed(ctx)
 	if err != nil {
@@ -68,13 +68,13 @@ func TestScanFailed_SeedsFromSnapshot(t *testing.T) {
 	if len(byID) != 2 {
 		t.Fatalf("ScanFailed returned %d entries (%v), want exactly the 2 failed records", len(byID), byID)
 	}
-	if byID["e.fail.1"] != "connection_refused" || byID["e.fail.2"] != "content_error" {
+	if byID["acme.ops.src.embed.record.fail-1"] != "connection_refused" || byID["acme.ops.src.embed.record.fail-2"] != "content_error" {
 		t.Fatalf("failed reasons not seeded correctly: %v", byID)
 	}
-	if _, ok := byID["e.ok"]; ok {
+	if _, ok := byID["acme.ops.src.embed.record.ok"]; ok {
 		t.Error("a generated record must not be seeded as failed")
 	}
-	if _, ok := byID["e.pending"]; ok {
+	if _, ok := byID["acme.ops.src.embed.record.pending"]; ok {
 		t.Error("a pending record must not be seeded as failed")
 	}
 }

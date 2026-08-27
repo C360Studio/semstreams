@@ -398,10 +398,10 @@ func TestScanFailed_NormalizesReasonAndSeedsRevision(t *testing.T) {
 			t.Fatalf("put: %v", err)
 		}
 	}
-	save(&Record{EntityID: "e.valid", Status: StatusFailed, Reason: failReasonConnectionRefused, SourceRevision: 7})
-	save(&Record{EntityID: "e.empty", Status: StatusFailed, Reason: "", SourceRevision: 8})
-	save(&Record{EntityID: "e.arbitrary", Status: StatusFailed, Reason: "semembed-503-upstream-x9f2a", SourceRevision: 9})
-	save(&Record{EntityID: "e.future", Status: StatusFailed, Reason: "quota_exceeded", SourceRevision: 10})
+	save(&Record{EntityID: "acme.ops.src.embed.record.valid", Status: StatusFailed, Reason: failReasonConnectionRefused, SourceRevision: 7})
+	save(&Record{EntityID: "acme.ops.src.embed.record.empty", Status: StatusFailed, Reason: "", SourceRevision: 8})
+	save(&Record{EntityID: "acme.ops.src.embed.record.arbitrary", Status: StatusFailed, Reason: "semembed-503-upstream-x9f2a", SourceRevision: 9})
+	save(&Record{EntityID: "acme.ops.src.embed.record.future", Status: StatusFailed, Reason: "quota_exceeded", SourceRevision: 10})
 
 	got, err := s.ScanFailed(ctx)
 	require.NoError(t, err)
@@ -412,13 +412,13 @@ func TestScanFailed_NormalizesReasonAndSeedsRevision(t *testing.T) {
 	}
 	require.Len(t, byID, 4)
 
-	require.Equal(t, failReasonConnectionRefused, byID["e.valid"].Reason, "a valid enum reason passes through")
-	require.Equal(t, reasonUnknown, byID["e.empty"].Reason, "an empty reason collapses to unknown")
-	require.Equal(t, reasonUnknown, byID["e.arbitrary"].Reason, "an arbitrary stored reason must collapse to unknown, not become a label (#613 F5)")
-	require.Equal(t, reasonUnknown, byID["e.future"].Reason, "a future/unknown reason value collapses to unknown")
+	require.Equal(t, failReasonConnectionRefused, byID["acme.ops.src.embed.record.valid"].Reason, "a valid enum reason passes through")
+	require.Equal(t, reasonUnknown, byID["acme.ops.src.embed.record.empty"].Reason, "an empty reason collapses to unknown")
+	require.Equal(t, reasonUnknown, byID["acme.ops.src.embed.record.arbitrary"].Reason, "an arbitrary stored reason must collapse to unknown, not become a label (#613 F5)")
+	require.Equal(t, reasonUnknown, byID["acme.ops.src.embed.record.future"].Reason, "a future/unknown reason value collapses to unknown")
 
-	require.Equal(t, uint64(7), byID["e.valid"].SourceRevision, "SourceRevision seeds the revision-CAS baseline (#613 F1)")
-	require.Equal(t, uint64(9), byID["e.arbitrary"].SourceRevision)
+	require.Equal(t, uint64(7), byID["acme.ops.src.embed.record.valid"].SourceRevision, "SourceRevision seeds the revision-CAS baseline (#613 F1)")
+	require.Equal(t, uint64(9), byID["acme.ops.src.embed.record.arbitrary"].SourceRevision)
 
 	// Bounded: at most enum-size distinct reason values ever reach a label.
 	distinct := map[string]bool{}

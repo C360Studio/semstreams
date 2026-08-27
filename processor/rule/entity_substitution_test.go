@@ -17,7 +17,7 @@ func TestApplyEntityPartsSubstitutions_ValidSixPartID(t *testing.T) {
 	want := "org=c360 plat=osh-demo-001 domain=agent system=agentic-loop " +
 		"type=execution instance=c1e90237-1cd5-4def-99ab-aabbccddeeff"
 
-	id := "c360.osh-demo-001.agent.agentic-loop.execution.c1e90237-1cd5-4def-99ab-aabbccddeeff"
+	id := "c360.osh-demo-001.agentic-loop.agent.execution.c1e90237-1cd5-4def-99ab-aabbccddeeff"
 	if got := applyEntityPartsSubstitutions(in, "entity", id); got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
@@ -29,7 +29,7 @@ func TestApplyEntityPartsSubstitutions_RelatedPrefix(t *testing.T) {
 	in := "rel.org=$related.org rel.instance=$related.instance"
 	want := "rel.org=c360 rel.instance=001"
 
-	if got := applyEntityPartsSubstitutions(in, "related", "c360.platform.domain.system.type.001"); got != want {
+	if got := applyEntityPartsSubstitutions(in, "related", "c360.platform.system.domain.type.001"); got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
 }
@@ -84,12 +84,12 @@ func TestSubstituteVariables_EntityParts_FullPipeline(t *testing.T) {
 	t.Parallel()
 
 	ec := &ExecutionContext{
-		EntityID:  "c360.osh-demo-001.agent.agentic-loop.execution.c1e90237",
+		EntityID:  "c360.osh-demo-001.agentic-loop.agent.execution.c1e90237",
 		RelatedID: "c360.fleet.cars.toyota.sedan.vin-001",
 	}
 
 	in := "loop=$entity.instance full=$entity.id rel.type=$related.type"
-	want := "loop=c1e90237 full=c360.osh-demo-001.agent.agentic-loop.execution.c1e90237 rel.type=sedan"
+	want := "loop=c1e90237 full=c360.osh-demo-001.agentic-loop.agent.execution.c1e90237 rel.type=sedan"
 
 	if got := ec.SubstituteVariables(context.Background(), in); got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
@@ -149,7 +149,7 @@ func TestSubstituteVariables_TriplePrefixCollision_LongestMatchFirst(t *testing.
 	t.Parallel()
 
 	planUUID := "78a0e9ed-3da3-4bc4-ae33-1c3c8f4a0001"
-	planEntity := "c360.bootstrap-001.agent.agentic-loop.execution." + planUUID
+	planEntity := "c360.bootstrap-001.agentic-loop.agent.execution." + planUUID
 
 	tests := []struct {
 		name        string
@@ -176,7 +176,7 @@ func TestSubstituteVariables_TriplePrefixCollision_LongestMatchFirst(t *testing.
 			t.Parallel()
 
 			ec := &ExecutionContext{
-				EntityID: "c360.bootstrap-001.agent.agentic-loop.execution.child",
+				EntityID: "c360.bootstrap-001.agentic-loop.agent.execution.child",
 				Entity: &gtypes.EntityState{
 					Triples: tt.tripleOrder,
 				},
@@ -203,5 +203,41 @@ func TestSubstituteVariables_EntityParts_NonConformingIDWarnsViaRegex(t *testing
 	leftovers := unresolvedTemplateVarRe.FindAllString(in, -1)
 	if len(leftovers) != 1 || !strings.Contains(leftovers[0], "$entity.instance") {
 		t.Fatalf("unresolvedTemplateVarRe did not match $entity.instance — got %v", leftovers)
+	}
+}
+
+// TestSegmentTokensResolveByName pins that $entity.system and $entity.domain
+// resolve to positions 3 and 4 of the canonical order by NAME through
+// pkg/types.ParseEntityID, so a token keeps its meaning across any order
+// change (rule-engine delta "Entity-segment substitution tokens are named by
+// position meaning").
+func TestSegmentTokensResolveByName(t *testing.T) {
+	t.Parallel()
+
+	in := "src=$entity.system dom=$entity.domain id=$entity.instance"
+	got := applyEntityPartsSubstitutions(in, "entity", "acme.dep1.src.git.commit.a1")
+	if want := "src=src dom=git id=a1"; got != want {
+		t.Fatalf("applyEntityPartsSubstitutions() = %q, want %q", got, want)
+	}
+	rel := applyEntityPartsSubstitutions("$related.org/$related.platform/$related.system/$related.domain/$related.type/$related.instance", "related", "acme.dep1.src.git.commit.a1")
+	if want := "acme/dep1/src/git/commit/a1"; rel != want {
+		t.Fatalf("related substitution = %q, want %q", rel, want)
+	}
+}
+
+// TestSegmentTokensUnresolvedOnInvalidID pins that a value failing canonical
+// validation leaves every segment token untouched so the unresolved-template
+// warning regex fires.
+func TestSegmentTokensUnresolvedOnInvalidID(t *testing.T) {
+	t.Parallel()
+
+	in := "src=$entity.system dom=$entity.domain id=$entity.instance"
+	got := applyEntityPartsSubstitutions(in, "entity", "acme.dep1.src.git.commit")
+	if got != in {
+		t.Fatalf("five-position value resolved tokens: %q", got)
+	}
+	leftovers := unresolvedTemplateVarRe.FindAllString(got, -1)
+	if len(leftovers) != 3 {
+		t.Fatalf("unresolved-template warning regex matched %v, want the three surviving tokens", leftovers)
 	}
 }

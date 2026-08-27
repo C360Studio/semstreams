@@ -76,7 +76,7 @@ func TestLoopFromEntity_RoundTrip(t *testing.T) {
 	if got.RunID != entity.RunID {
 		t.Errorf("RunID: got %q, want %q", got.RunID, entity.RunID)
 	}
-	if want := "c360.ops.agent.chain.execution.run-root"; got.RunEntityID != want {
+	if want := "c360.ops.chain.agent.execution.run-root"; got.RunEntityID != want {
 		t.Errorf("RunEntityID: got %q, want %q (derived from org/platform + RunID)", got.RunEntityID, want)
 	}
 	// Token and prompt fields are absent from live entities.
@@ -112,7 +112,7 @@ func TestLoopFromCompletion_RunFields(t *testing.T) {
 		TaskID:      "task-1",
 		Outcome:     agentic.OutcomeSuccess,
 		RunID:       "run-root",
-		RunEntityID: "c360.ops.agent.chain.execution.run-root",
+		RunEntityID: "c360.ops.chain.agent.execution.run-root",
 	}
 	raw, err := json.Marshal(&event)
 	if err != nil {

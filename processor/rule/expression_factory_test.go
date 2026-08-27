@@ -345,7 +345,7 @@ func TestExpressionRuleEvaluation(t *testing.T) {
 				Conditions: tt.conditions,
 			}
 
-			rule, err := NewExpressionRule("direct-expression-test", def)
+			rule, err := NewExpressionRule(testPlatform, "direct-expression-test", def)
 			if err != nil {
 				t.Fatalf("failed to create rule: %v", err)
 			}
@@ -373,7 +373,7 @@ func TestExpressionRuleCooldown(t *testing.T) {
 		},
 	}
 
-	rule, err := NewExpressionRule("direct-expression-test", def)
+	rule, err := NewExpressionRule(testPlatform, "direct-expression-test", def)
 	if err != nil {
 		t.Fatalf("failed to create rule: %v", err)
 	}
@@ -555,7 +555,7 @@ func TestExpressionRuleEvaluateEntityState(t *testing.T) {
 			logic: "and",
 			triples: []message.Triple{
 				{Subject: "test", Predicate: "sensor.measurement.fahrenheit", Object: 41.2},
-				{Subject: "test", Predicate: "geo.location.zone", Object: "c360.logistics.facility.zone.area.cold-storage-1"},
+				{Subject: "test", Predicate: "geo.location.zone", Object: "c360.logistics.zone.facility.area.cold-storage-1"},
 				{Subject: "test", Predicate: "sensor.classification.type", Object: "temperature"},
 			},
 			want: true,
@@ -569,7 +569,7 @@ func TestExpressionRuleEvaluateEntityState(t *testing.T) {
 			logic: "and",
 			triples: []message.Triple{
 				{Subject: "test", Predicate: "sensor.measurement.fahrenheit", Object: 38.5},
-				{Subject: "test", Predicate: "geo.location.zone", Object: "c360.logistics.facility.zone.area.cold-storage-1"},
+				{Subject: "test", Predicate: "geo.location.zone", Object: "c360.logistics.zone.facility.area.cold-storage-1"},
 			},
 			want: false,
 		},
@@ -582,7 +582,7 @@ func TestExpressionRuleEvaluateEntityState(t *testing.T) {
 			logic: "and",
 			triples: []message.Triple{
 				{Subject: "test", Predicate: "sensor.measurement.fahrenheit", Object: 45.0},
-				{Subject: "test", Predicate: "geo.location.zone", Object: "c360.logistics.facility.zone.area.dock-1"},
+				{Subject: "test", Predicate: "geo.location.zone", Object: "c360.logistics.zone.facility.area.dock-1"},
 			},
 			want: false,
 		},
@@ -635,7 +635,7 @@ func TestExpressionRuleEvaluateEntityState(t *testing.T) {
 				Conditions: tt.conditions,
 			}
 
-			rule, err := NewExpressionRule("direct-expression-test", def)
+			rule, err := NewExpressionRule(testPlatform, "direct-expression-test", def)
 			if err != nil {
 				t.Fatalf("failed to create rule: %v", err)
 			}
@@ -656,7 +656,7 @@ func TestExpressionRuleEvaluateEntityState(t *testing.T) {
 // gh#519 / rule-evaluation-completeness production-wire acceptance test:
 // a condition Value carrying the `$entity.triple.<predicate>.value` form
 // must resolve through the SAME path a real rule takes —
-// NewExpressionRule(def).EvaluateEntityState(...) — not a helper-direct
+// NewExpressionRule(testPlatform, def).EvaluateEntityState(...) — not a helper-direct
 // substitution call. Mirrors the "field-to-field equality gate" and
 // "absence is silent and non-matching" scenarios in
 // openspec/changes/rule-evaluation-completeness/specs/rule-engine/spec.md.
@@ -714,7 +714,7 @@ func TestExpressionRuleEvaluateEntityState_TripleValueSubstitution(t *testing.T)
 				},
 			}
 
-			rule, err := NewExpressionRule("direct-expression-test", def)
+			rule, err := NewExpressionRule(testPlatform, "direct-expression-test", def)
 			if err != nil {
 				t.Fatalf("failed to create rule: %v", err)
 			}

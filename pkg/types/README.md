@@ -38,17 +38,19 @@ key := entityType.Key() // "robotics.drone"
 
 ### EntityID
 
-Six-part federated entity identifier following the hierarchy: org.platform.domain.system.type.instance.
+Six-part federated entity identifier in the canonical order org.platform.system.domain.type.instance (ADR-102):
+`org.platform` is the minting deployment authority (`platform.org` / `platform.id`), `system` is the source that
+produced the entity, `domain.type` is a delegated taxonomy, `instance` is the leaf.
 
 ```go
 entityID := types.EntityID{
-    Org: "c360", Platform: "prod", Domain: "robotics",
-    System: "gcs1", Type: "drone", Instance: "42",
+    Org: "c360", Platform: "prod", System: "gcs1",
+    Domain: "robotics", Type: "drone", Instance: "42",
 }
-key := entityID.Key() // "c360.prod.robotics.gcs1.drone.42"
+key := entityID.Key() // "c360.prod.gcs1.robotics.drone.42"
 
 // Parse from string
-parsed, err := types.ParseEntityID("c360.prod.robotics.gcs1.drone.42")
+parsed, err := types.ParseEntityID("c360.prod.gcs1.robotics.drone.42")
 ```
 
 ## Import Pattern

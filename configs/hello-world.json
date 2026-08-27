@@ -5,7 +5,6 @@
     "id": "hello-world",
     "type": "quickstart",
     "region": "local",
-    "instance_id": "hello-001",
     "environment": "development"
   },
   "tier": "rules",

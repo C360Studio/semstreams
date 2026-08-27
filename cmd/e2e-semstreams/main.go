@@ -678,14 +678,11 @@ func ensureStreamsWithSpinner(
 }
 
 func extractPlatformMeta(cfg *config.Config) types.PlatformMeta {
-	platformID := cfg.Platform.InstanceID
-	if platformID == "" {
-		platformID = cfg.Platform.ID
-	}
-
+	// platform.id is the single deployment authority field (ADR-102, ruled
+	// O-2): positions 1-2 of every identity this process mints.
 	return types.PlatformMeta{
-		Org:      cfg.Platform.Org,
-		Platform: platformID,
+		Org:      cfg.GetOrg(),
+		Platform: cfg.GetPlatform(),
 	}
 }
 

@@ -17,7 +17,7 @@ func TestPerRuleRevisionTracking(t *testing.T) {
 		ownRevisions: make(map[ruleRevKey]map[uint64]time.Time),
 	}
 
-	entityID := "org.platform.domain.system.type.001"
+	entityID := "org.platform.system.domain.type.001"
 
 	// Rule A writes a triple and reports revision 42.
 	p.trackRuleRevision("rule-a", entityID, 42)

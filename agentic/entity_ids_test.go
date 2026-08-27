@@ -23,28 +23,28 @@ func TestModelEndpointEntityID(t *testing.T) {
 				org:          "c360",
 				platform:     "ops",
 				endpointName: "claude-sonnet",
-				want:         "c360.ops.agent.model-registry.endpoint.claude-sonnet",
+				want:         "c360.ops.model-registry.agent.endpoint.claude-sonnet",
 			},
 			{
 				name:         "ollama local endpoint",
 				org:          "c360",
 				platform:     "ops",
 				endpointName: "ollama-local",
-				want:         "c360.ops.agent.model-registry.endpoint.ollama-local",
+				want:         "c360.ops.model-registry.agent.endpoint.ollama-local",
 			},
 			{
 				name:         "openai endpoint",
 				org:          "acme",
 				platform:     "prod",
 				endpointName: "openai-gpt4",
-				want:         "acme.prod.agent.model-registry.endpoint.openai-gpt4",
+				want:         "acme.prod.model-registry.agent.endpoint.openai-gpt4",
 			},
 			{
 				name:         "endpoint with underscore",
 				org:          "myorg",
 				platform:     "staging",
 				endpointName: "custom_model",
-				want:         "myorg.staging.agent.model-registry.endpoint.custom_model",
+				want:         "myorg.staging.model-registry.agent.endpoint.custom_model",
 			},
 		}
 
@@ -98,28 +98,28 @@ func TestLoopExecutionEntityID(t *testing.T) {
 				org:      "c360",
 				platform: "ops",
 				loopID:   "abc123",
-				want:     "c360.ops.agent.agentic-loop.execution.abc123",
+				want:     "c360.ops.agentic-loop.agent.execution.abc123",
 			},
 			{
 				name:     "UUID-style loop ID with hyphens",
 				org:      "c360",
 				platform: "ops",
 				loopID:   "550e8400-e29b-41d4-a716-446655440000",
-				want:     "c360.ops.agent.agentic-loop.execution.550e8400-e29b-41d4-a716-446655440000",
+				want:     "c360.ops.agentic-loop.agent.execution.550e8400-e29b-41d4-a716-446655440000",
 			},
 			{
 				name:     "short loop ID",
 				org:      "acme",
 				platform: "prod",
 				loopID:   "x1",
-				want:     "acme.prod.agent.agentic-loop.execution.x1",
+				want:     "acme.prod.agentic-loop.agent.execution.x1",
 			},
 			{
 				name:     "loop ID with underscores",
 				org:      "myorg",
 				platform: "staging",
 				loopID:   "loop_42",
-				want:     "myorg.staging.agent.agentic-loop.execution.loop_42",
+				want:     "myorg.staging.agentic-loop.agent.execution.loop_42",
 			},
 		}
 
@@ -168,7 +168,7 @@ func TestTryLoopExecutionEntityID(t *testing.T) {
 	t.Run("happy path matches LoopExecutionEntityID", func(t *testing.T) {
 		got, err := agentic.TryLoopExecutionEntityID("c360", "ops", "abc123")
 		assert.NoError(t, err)
-		assert.Equal(t, "c360.ops.agent.agentic-loop.execution.abc123", got)
+		assert.Equal(t, "c360.ops.agentic-loop.agent.execution.abc123", got)
 	})
 
 	t.Run("returns error instead of panicking on bad input", func(t *testing.T) {
@@ -183,7 +183,7 @@ func TestTryLoopExecutionEntityID(t *testing.T) {
 			{"empty loopID", "c360", "ops", ""},
 			{"dot in org", "c360.studio", "ops", "abc"},
 			{"dot in platform", "c360", "ops.prod", "abc"},
-			{"dot in loopID (beta.36 class)", "c360", "ops", "c360.ops.agent.agentic-loop.execution.abc"},
+			{"dot in loopID (beta.36 class)", "c360", "ops", "c360.ops.agentic-loop.agent.execution.abc"},
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
@@ -214,21 +214,21 @@ func TestChainExecutionEntityID(t *testing.T) {
 				org:      "c360",
 				platform: "ops",
 				chainID:  "abc123",
-				want:     "c360.ops.agent.chain.execution.abc123",
+				want:     "c360.ops.chain.agent.execution.abc123",
 			},
 			{
 				name:     "chain ID is the dispatch loop UUID",
 				org:      "c360",
 				platform: "ops",
 				chainID:  "550e8400-e29b-41d4-a716-446655440000",
-				want:     "c360.ops.agent.chain.execution.550e8400-e29b-41d4-a716-446655440000",
+				want:     "c360.ops.chain.agent.execution.550e8400-e29b-41d4-a716-446655440000",
 			},
 			{
 				name:     "different org and platform",
 				org:      "acme",
 				platform: "prod",
 				chainID:  "x1",
-				want:     "acme.prod.agent.chain.execution.x1",
+				want:     "acme.prod.chain.agent.execution.x1",
 			},
 		}
 
@@ -265,19 +265,19 @@ func TestLoopIDFromExecutionEntityID(t *testing.T) {
 		}{
 			{
 				name:     "simple loop ID",
-				input:    "c360.ops.agent.agentic-loop.execution.abc123",
+				input:    "c360.ops.agentic-loop.agent.execution.abc123",
 				wantID:   "abc123",
 				wantHave: true,
 			},
 			{
 				name:     "UUID loop ID",
-				input:    "c360.ops.agent.agentic-loop.execution.550e8400-e29b-41d4-a716-446655440000",
+				input:    "c360.ops.agentic-loop.agent.execution.550e8400-e29b-41d4-a716-446655440000",
 				wantID:   "550e8400-e29b-41d4-a716-446655440000",
 				wantHave: true,
 			},
 			{
 				name:     "loop ID with underscores",
-				input:    "myorg.staging.agent.agentic-loop.execution.loop_42",
+				input:    "myorg.staging.agentic-loop.agent.execution.loop_42",
 				wantID:   "loop_42",
 				wantHave: true,
 			},
@@ -298,12 +298,12 @@ func TestLoopIDFromExecutionEntityID(t *testing.T) {
 		// rules fired on non-loop trigger entities (model endpoints,
 		// trajectory steps, chain entities, ops findings, telemetry).
 		tests := []string{
-			"c360.ops.agent.model-registry.endpoint.claude-sonnet", // ModelEndpointEntityID shape
-			"c360.ops.agent.agentic-loop.step.abc123-0",            // TrajectoryStepEntityID shape
-			"c360.ops.agent.chain.execution.abc123",                // ChainExecutionEntityID shape
-			"c360.ops.ops.diagnosis.finding.uuid-here",             // ops domain finding
+			"c360.ops.model-registry.agent.endpoint.claude-sonnet", // ModelEndpointEntityID shape
+			"c360.ops.agentic-loop.agent.step.abc123-0",            // TrajectoryStepEntityID shape
+			"c360.ops.chain.agent.execution.abc123",                // ChainExecutionEntityID shape
+			"c360.ops.diagnosis.ops.finding.uuid-here",             // ops domain finding
 			"c360.ops.robotics.gcs.drone.001",                      // domain telemetry
-			"c360.ops.agent.agentic-loop.completion.abc123",        // type segment differs (completion vs execution)
+			"c360.ops.agentic-loop.agent.completion.abc123",        // type segment differs (completion vs execution)
 			"c360.ops.agent.something-else.execution.abc123",       // system segment differs
 		}
 		for _, input := range tests {
@@ -323,8 +323,8 @@ func TestLoopIDFromExecutionEntityID(t *testing.T) {
 			"abc",
 			"too.few.parts.here",
 			"too.many.parts.here.in.this.string",
-			"c360.ops.agent.agentic-loop.execution.has spaces",
-			"c360.ops.agent.agentic-loop.execution..", // empty trailing parts
+			"c360.ops.agentic-loop.agent.execution.has spaces",
+			"c360.ops.agentic-loop.agent.execution..", // empty trailing parts
 		}
 		for _, input := range tests {
 			t.Run(input, func(t *testing.T) {

@@ -140,7 +140,7 @@ func TestComponentFailedStartCleanupTimeoutRetainsAuthorityForStopRetry(t *testi
 		<-processRelease
 	})
 	pool.Start(runCtx)
-	require.NoError(t, pool.Submit(runCtx, entityIndexWork{entityID: "work"}))
+	require.NoError(t, pool.Submit(runCtx, entityIndexWork{entityID: "acme.ops.src.index.work.order"}))
 	select {
 	case <-processStarted:
 	case <-time.After(time.Second):

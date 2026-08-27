@@ -28,7 +28,7 @@ func TestWeatherReading_EntityID_6PartFormat(t *testing.T) {
 	}
 
 	// Verify expected format
-	want := "acme.weather.meteorology.station.outdoor.ws-001"
+	want := "acme.weather.station.meteorology.outdoor.ws-001"
 	if entityID != want {
 		t.Errorf("EntityID() = %q, want %q", entityID, want)
 	}

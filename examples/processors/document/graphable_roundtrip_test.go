@@ -25,7 +25,7 @@ func TestDocument_GraphableRoundtrip(t *testing.T) {
 
 	// Verify document implements Graphable directly
 	var g graph.Graphable = doc
-	assert.Equal(t, "acme.logistics.content.document.test.doc-001", g.EntityID())
+	assert.Equal(t, "acme.logistics.document.content.test.doc-001", g.EntityID())
 
 	// Create BaseMessage
 	msgType := message.Type{
@@ -59,7 +59,7 @@ func TestDocument_GraphableRoundtrip(t *testing.T) {
 		entityID := graphable.EntityID()
 		t.Logf("EntityID after round-trip: %s", entityID)
 		// The entity ID should now be fully qualified with org and platform
-		assert.Equal(t, "acme.logistics.content.document.test.doc-001", entityID)
+		assert.Equal(t, "acme.logistics.document.content.test.doc-001", entityID)
 	}
 
 	// Also test via 'any' - this is what ProcessMessage does
@@ -82,7 +82,7 @@ func TestDocument_OrgPlatformPreservation(t *testing.T) {
 	}
 
 	// Direct check
-	assert.Equal(t, "acme.logistics.content.document.general.doc-001", doc.EntityID())
+	assert.Equal(t, "acme.logistics.document.content.general.doc-001", doc.EntityID())
 
 	// After JSON round-trip
 	data, err := json.Marshal(doc)
@@ -98,5 +98,5 @@ func TestDocument_OrgPlatformPreservation(t *testing.T) {
 	assert.Equal(t, "logistics", restored.Platform, "Platform should be preserved in JSON")
 
 	// EntityID should be fully qualified
-	assert.Equal(t, "acme.logistics.content.document.general.doc-001", restored.EntityID())
+	assert.Equal(t, "acme.logistics.document.content.general.doc-001", restored.EntityID())
 }

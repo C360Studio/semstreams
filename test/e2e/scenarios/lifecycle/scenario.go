@@ -52,7 +52,7 @@ import (
 // MissionEntityID is the identifier seeded by the e2e binary via
 // `--lifecycle-seed`. Matches docker/compose/lifecycle.yml and
 // cmd/e2e-semstreams's --lifecycle-seed flag.
-const MissionEntityID = "c360.test.lifecycle.gcs.mission.m001"
+const MissionEntityID = "c360.test.gcs.lifecycle.mission.m001"
 
 const lifecycleNATSURL = "nats://localhost:34222"
 
@@ -246,9 +246,10 @@ func (s *Scenario) stageOperatorPatch(ctx context.Context, _ *scenarios.Result) 
 // mission's phase until it reaches `flying` or the timeout expires.
 // Proves the rule engine wired through Manager.Transition end-to-end.
 func (s *Scenario) stageRuleTransition(ctx context.Context, result *scenarios.Result) error {
+	// The authority is the e2e deployment's own platform.org/platform.id
+	// (configs/lifecycle-flow.json), stamped by the mission-command processor;
+	// the wire carries none.
 	cmd := map[string]any{
-		"org_id":     "c360",
-		"platform":   "test",
 		"mission_id": "m001",
 		"command":    "launch",
 	}

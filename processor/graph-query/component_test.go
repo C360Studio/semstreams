@@ -1235,8 +1235,8 @@ func TestExtractRelationships_BothEndsPresent(t *testing.T) {
 	comp := createTestComponent(t)
 
 	// Use valid 6-part entity IDs (IsRelationship() requires this format)
-	entity001 := "org.platform.domain.system.type.001"
-	entity002 := "org.platform.domain.system.type.002"
+	entity001 := "org.platform.system.domain.type.001"
+	entity002 := "org.platform.system.domain.type.002"
 
 	// Create entities with relationships
 	entities := []*gtypes.EntityState{
@@ -1273,8 +1273,8 @@ func TestExtractRelationships_BothEndsPresent(t *testing.T) {
 func TestExtractRelationships_OneEndMissing(t *testing.T) {
 	comp := createTestComponent(t)
 
-	entity001 := "org.platform.domain.system.type.001"
-	entity999 := "org.platform.domain.system.type.999" // valid format but not in result set
+	entity001 := "org.platform.system.domain.type.001"
+	entity999 := "org.platform.system.domain.type.999" // valid format but not in result set
 
 	// Create entity with relationship to entity NOT in result set
 	entities := []*gtypes.EntityState{

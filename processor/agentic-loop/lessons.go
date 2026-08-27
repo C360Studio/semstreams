@@ -40,7 +40,7 @@ const maxLessonPages = 16
 // A nil reader disables injection entirely (back-compat).
 type LessonReader interface {
 	// ReadLessons lists the matcher-relevant projection of every lesson record
-	// under recordPrefix (the {org}.{platform}.agent.lesson.record 5-part
+	// under recordPrefix (the {org}.{platform}.lesson.agent.record 5-part
 	// prefix). The caller filters/orders/bounds the result.
 	ReadLessons(ctx context.Context, recordPrefix string) ([]lessonmatch.Lesson, error)
 }

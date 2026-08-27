@@ -78,7 +78,7 @@ func TestIntegration_D1_ProjectionRoundTrip(t *testing.T) {
 		platform   = "ops"
 		rootLoopID = "d1-integration-test-loop"
 	)
-	fullEntityID := "acme.ops.agent.chain.execution." + rootLoopID
+	fullEntityID := "acme.ops.chain.agent.execution." + rootLoopID
 
 	// Build the exact authority value returned by graph-ingest.
 	now := time.Now().UTC()
@@ -233,7 +233,7 @@ func TestIntegration_MilestoneSubscriberBindsAStreamThatAppearsDuringStart(t *te
 
 	payload := &agentic.LoopCompletedEvent{
 		LoopID: "run-late-visible", TaskID: "task-late-visible", Outcome: agentic.OutcomeSuccess,
-		CompletedAt: time.Now().UTC(), RunEntityID: "missing-run-late-visible",
+		CompletedAt: time.Now().UTC(), RunEntityID: agentic.ChainExecutionEntityID("acme", "ops", "missing-run-late-visible"),
 	}
 	data, marshalErr := json.Marshal(message.NewBaseMessage(payload.Schema(), payload, "agentic-loop"))
 	require.NoError(t, marshalErr)
@@ -314,7 +314,7 @@ func TestIntegration_MilestoneSubscriber_StartsWhenStreamPresent(t *testing.T) {
 
 	payload := &agentic.LoopCompletedEvent{
 		LoopID: "run-present", TaskID: "task-present", Outcome: agentic.OutcomeSuccess,
-		CompletedAt: time.Now().UTC(), RunEntityID: "missing-run-present",
+		CompletedAt: time.Now().UTC(), RunEntityID: agentic.ChainExecutionEntityID("acme", "ops", "missing-run-present"),
 	}
 	data, marshalErr := json.Marshal(message.NewBaseMessage(payload.Schema(), payload, "agentic-loop"))
 	require.NoError(t, marshalErr)
@@ -347,7 +347,7 @@ func TestIntegration_MilestoneSubscriberDrainsBothHandlesBeforeWaiting(t *testin
 
 	payload := &agentic.LoopCompletedEvent{
 		LoopID: "blocked-run", TaskID: "blocked-task", Outcome: agentic.OutcomeSuccess,
-		CompletedAt: time.Now().UTC(), RunEntityID: "missing-blocked-run",
+		CompletedAt: time.Now().UTC(), RunEntityID: agentic.ChainExecutionEntityID("acme", "ops", "missing-blocked-run"),
 	}
 	data, err := json.Marshal(message.NewBaseMessage(payload.Schema(), payload, "agentic-loop"))
 	require.NoError(t, err)
@@ -453,9 +453,9 @@ func TestIntegration_MilestoneSubscriberProductionEnvelopeCallbacks(t *testing.T
 
 	at := time.Now().UTC()
 	payloads := []message.Payload{
-		&agentic.LoopCompletedEvent{LoopID: "run-success", TaskID: "task-success", Outcome: agentic.OutcomeSuccess, CompletedAt: at, RunEntityID: "missing-run-success"},
-		&agentic.LoopFailedEvent{LoopID: "run-failed", TaskID: "task-failed", Outcome: agentic.OutcomeFailed, FailedAt: at, RunEntityID: "missing-run-failed"},
-		&agentic.LoopCancelledEvent{LoopID: "run-cancelled", TaskID: "task-cancelled", Outcome: agentic.OutcomeCancelled, CancelledAt: at, RunEntityID: "missing-run-cancelled"},
+		&agentic.LoopCompletedEvent{LoopID: "run-success", TaskID: "task-success", Outcome: agentic.OutcomeSuccess, CompletedAt: at, RunEntityID: agentic.ChainExecutionEntityID("acme", "ops", "missing-run-success")},
+		&agentic.LoopFailedEvent{LoopID: "run-failed", TaskID: "task-failed", Outcome: agentic.OutcomeFailed, FailedAt: at, RunEntityID: agentic.ChainExecutionEntityID("acme", "ops", "missing-run-failed")},
+		&agentic.LoopCancelledEvent{LoopID: "run-cancelled", TaskID: "task-cancelled", Outcome: agentic.OutcomeCancelled, CancelledAt: at, RunEntityID: agentic.ChainExecutionEntityID("acme", "ops", "missing-run-cancelled")},
 	}
 	for _, payload := range payloads {
 		data, marshalErr := json.Marshal(message.NewBaseMessage(payload.Schema(), payload, "agentic-loop"))

@@ -155,7 +155,7 @@ Relationship predicates have entity IDs as values:
 
 ```go
 {Predicate: "fleet.membership.current", Object: "acme.ops.fleet.cargo.rescue"}
-{Predicate: "geo.location.zone", Object: "acme.logistics.facility.zone.area.warehouse-7"}
+{Predicate: "geo.location.zone", Object: "acme.logistics.zone.facility.area.warehouse-7"}
 ```
 
 The distinction matters because relationships create edges in the graph.

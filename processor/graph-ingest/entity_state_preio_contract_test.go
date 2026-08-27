@@ -39,7 +39,7 @@ func TestMutationEntityIdentityRejectionPrecedesKVIO(t *testing.T) {
 		Triples: []message.Triple{{Subject: "", Predicate: semantictest.Predicate(t, "test", "state", "value")}},
 	}
 	malformedRootEntity := &graph.EntityState{
-		ID:      "bad",
+		ID:      "bad", // entity-id-audit:classify intentional-malformed "bad" line=42 column=12 surface=go-field:EntityState.ID entity_id_invalid:arity malformed root entity rejected before I/O
 		Triples: []message.Triple{{Subject: validID, Predicate: semantictest.Predicate(t, "test", "state", "value")}},
 	}
 

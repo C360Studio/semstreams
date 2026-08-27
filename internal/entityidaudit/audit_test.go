@@ -37,7 +37,7 @@ func TestGoldenCorpusReport(t *testing.T) {
 func TestAuditExtractsTheThreeEntityIDLanguages(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	writeFixture(t, root, "entities.go", `package fixture
+	writeFixture(t, root, "entities_test.go", `package fixture
 const entityID = "acme.ops.robotics.gcs.drone.001"
 const entityPattern = "acme.ops.robotics.*.drone.*"
 const entityPrefix = "acme.ops.robotics"
@@ -70,8 +70,8 @@ var _ = Query{EntityIDPrefix: entityPrefix}
 func TestAuditExtractsStaticEntityIDConstructorsAndGraphableReturns(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	writeFixture(t, root, "constructor.go", `package fixture
-var _ = EntityID{Org: "acme", Platform: "ops", Domain: "robotics", System: "gcs", Type: "drone", Instance: "001"}
+	writeFixture(t, root, "constructor_test.go", `package fixture
+var _ = EntityID{Org: "acme", Platform: "ops", System: "robotics", Domain: "gcs", Type: "drone", Instance: "001"}
 type payload struct{}
 func (payload) EntityID() string { return "acme.ops.robotics.gcs.sensor.002" }
 `)
@@ -627,5 +627,158 @@ func writeFixture(t *testing.T, root, name, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func findingReasons(findings []Finding) map[string][]string {
+	out := map[string][]string{}
+	for _, finding := range findings {
+		out[finding.Reason] = append(out[finding.Reason], finding.Surface+"="+finding.Value)
+	}
+	return out
+}
+
+// TestAuditFlagsAuthorityLiteral pins the segment rule `authority_literal`: a
+// production builder whose platform position is a literal product name is a
+// finding (ADR-102 d3: product names are provenance, not identity), seen
+// through the new go-format-prefix surface.
+func TestAuditFlagsAuthorityLiteral(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeFixture(t, root, "builder.go", `package fixture
+import "fmt"
+type payload struct{ Repo, SHA string }
+func (p payload) EntityID() string { return fmt.Sprintf("acme.semsource.%s.git.commit.%s", p.Repo, p.SHA) }
+var _ = EntityDomainDelegation{Producer: "semsource", Domain: "git"}
+`)
+	_, findings, err := Audit(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reasons := findingReasons(findings)
+	if got := reasons["authority_literal"]; len(got) != 1 || !strings.HasPrefix(got[0], "go-format-prefix") || !strings.Contains(got[0], "acme.semsource.%s.git.commit.%s") {
+		t.Fatalf("findings = %#v, want one authority_literal on the go-format-prefix surface", findings)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("findings = %#v, want exactly the authority finding (git is delegated)", findings)
+	}
+}
+
+// TestAuditFlagsFormatPrefixAuthorityLiteral pins both new surfaces: a
+// trailing-dot dotted constant and a `semstreams.framework.%s…` format string
+// both report authority_literal.
+func TestAuditFlagsFormatPrefixAuthorityLiteral(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeFixture(t, root, "prefix.go", `package fixture
+import "fmt"
+const alertEntityPrefix = "semstreams.framework.graph.rules.alert."
+func build(a, b, c, d string) string { return fmt.Sprintf("semstreams.framework.%s.%s.%s.%s", a, b, c, d) }
+`)
+	_, findings, err := Audit(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reasons := findingReasons(findings)
+	got := reasons["authority_literal"]
+	if len(got) != 2 {
+		t.Fatalf("findings = %#v, want two authority_literal findings", findings)
+	}
+	surfaces := strings.Join(got, "\n")
+	if !strings.Contains(surfaces, "go-dotted-constant") || !strings.Contains(surfaces, "go-format-prefix") {
+		t.Fatalf("findings = %#v, want one on go-dotted-constant and one on go-format-prefix", findings)
+	}
+}
+
+// TestAuditFlagsUnregisteredDomain pins the segment rule `domain_unregistered`:
+// a literal position-4 value in production Go outside the framework-reserved
+// set and not a registered EntityDomainDelegation is a finding; reserved and
+// delegated domains are not.
+func TestAuditFlagsUnregisteredDomain(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeFixture(t, root, "domains.go", `package fixture
+import "fmt"
+const entityIDPattern = "*.*.src.media.*.*"
+const chainEntityIDPattern = "*.*.chain.agent.execution.*"
+const gitEntityIDPattern = "*.*.src.git.*.*"
+const webEntityIDPattern = "*.*.src.web.*.*"
+var _ = EntityDomainDelegation{Producer: "semsource", Domain: "git"}
+var _ = []EntityDomainDelegation{{Producer: "semsource", Domain: "web"}}
+type payload struct{ ID string }
+func (p payload) EntityID() string { return fmt.Sprintf("%s.%s.world.game.quest.%s", "a", "b", p.ID) }
+`)
+	_, findings, err := Audit(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reasons := findingReasons(findings)
+	got := reasons["domain_unregistered"]
+	if len(got) != 2 {
+		t.Fatalf("findings = %#v, want media (pattern) and game (format builder) as the only unregistered domains", findings)
+	}
+	joined := strings.Join(got, "\n")
+	if !strings.Contains(joined, "*.*.src.media.*.*") || !strings.Contains(joined, "world.game.quest") {
+		t.Fatalf("findings = %#v, want the media pattern and the game builder", findings)
+	}
+	if len(reasons["authority_literal"]) != 0 {
+		t.Fatalf("findings = %#v, wildcard and template authorities are not literals", findings)
+	}
+}
+
+// TestAuditFlagsReservedInstanceToken pins that a production instance value
+// equal to a container padding token is a finding (the tokens are
+// contract-reserved until gh606 retires containers).
+func TestAuditFlagsReservedInstanceToken(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeFixture(t, root, "reserved.go", `package fixture
+var _ = EntityState{ID: "acme.dep1.src.agent.commit.group"}
+var _ = EntityState{ID: "acme.dep1.src.agent.commit.a1"}
+`)
+	_, findings, err := Audit(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reasons := findingReasons(findings)
+	if got := reasons["instance_reserved"]; len(got) != 1 || !strings.Contains(got[0], ".group") {
+		t.Fatalf("findings = %#v, want one instance_reserved finding for the group token", findings)
+	}
+}
+
+// TestAuditSegmentRulesSkipTestFilesAndSeeConfigPatterns pins the corpus the
+// segment rules cover: `_test.go` fixtures and testdata are lexical-only,
+// while a rule-pack `entity.pattern` or an ENTITY_STATES watch pattern in a
+// config is a declaration pattern subject to authority_literal.
+func TestAuditSegmentRulesSkipTestFilesAndSeeConfigPatterns(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeFixture(t, root, "fixture_test.go", `package fixture
+const entityIDPattern = "acme.ops.src.media.*.*"
+`)
+	writeFixture(t, root, "configs/rules.json", `{
+  "entity_watch_buckets": {"ENTITY_STATES": ["c360.*.*.*.*.*"], "AGENT_LOOPS": ["COMPLETE_*"]},
+  "rules": [{"entity": {"pattern": "*.*.src.agent.*.*"}}, {"entity": {"pattern": "c360.test.gcs.lifecycle.mission.*"}}]
+}`)
+	candidates, findings, err := Audit(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reasons := findingReasons(findings)
+	got := reasons["authority_literal"]
+	if len(got) != 2 {
+		t.Fatalf("findings = %#v, want the two config patterns with a literal org", findings)
+	}
+	if len(reasons["domain_unregistered"]) != 0 {
+		t.Fatalf("findings = %#v, the test fixture and config patterns are outside the domain rule", findings)
+	}
+	patterns := 0
+	for _, candidate := range candidates {
+		if candidate.Language == LanguageDeclarationPattern && strings.HasPrefix(candidate.Surface, "config:") {
+			patterns++
+		}
+	}
+	if patterns != 3 {
+		t.Fatalf("candidates = %#v, want three config declaration patterns (ENTITY_STATES watch + two rule entity patterns), never the AGENT_LOOPS key glob", candidates)
 	}
 }

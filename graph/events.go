@@ -17,7 +17,6 @@ import (
 const (
 	eventMetadataVersion = "1.0.0"
 	alertDigestDomain    = "semstreams.graph.alert.v1"
-	alertEntityPrefix    = "semstreams.framework.graph.rules.alert."
 )
 
 var envelopePropertyKeys = map[string]struct{}{
@@ -167,9 +166,14 @@ func NewRelationshipCreateEvent(
 	return newEvent(EventRelationshipCreate, fromID, toID, properties, metadata, 1)
 }
 
-// NewAlertEvent creates and validates a deterministic framework-owned alert entity.
+// NewAlertEvent creates and validates a deterministic alert entity under the
+// deployment's own authority: org.platform.rules.graph.alert.<digest>, composed
+// from the pkg/types rule-alert identity family (ADR-102 d2 supersedes
+// ADR-076 d1's fixed framework namespace). org and platform are the
+// composition root's platform.org / platform.id carried as deps.Platform —
+// never a payload value, a constant, or the source entity's own authority.
 func NewAlertEvent(
-	alertType, sourceEntityID string,
+	org, platform, alertType, sourceEntityID string,
 	properties map[string]any,
 	metadata EventMetadata,
 ) (*Event, error) {
@@ -189,7 +193,10 @@ func NewAlertEvent(
 		return nil, err
 	}
 	metadata = defaultMetadataVersion(metadata)
-	alertID := alertEntityPrefix + alertInstance(sourceEntityID, alertType, metadata)
+	alertID, err := semtypes.RuleAlertIdentityFamily().EntityID(org, platform, alertInstance(sourceEntityID, alertType, metadata))
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "Event", "NewAlertEvent", "compose alert entity ID under the deployment authority")
+	}
 	return newEvent(EventEntityCreate, alertID, "", properties, metadata, 0.8)
 }
 

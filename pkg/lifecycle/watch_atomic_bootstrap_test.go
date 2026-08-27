@@ -34,7 +34,7 @@ func TestLifecycleMatchingWatchPoisonDoesNotBlockUnrelatedExactRead(t *testing.T
 	t.Parallel()
 	mgr, _, bucket := newTestManager(t)
 
-	validID := "acme.ops.lifecycle.gcs.mission.valid-b"
+	validID := "acme.ops.gcs.lifecycle.mission.valid-b"
 	bucket.put(validID, validLifecycleState(validID))
 
 	watcher := newLifecycleAtomicWatcher()
@@ -46,7 +46,7 @@ func TestLifecycleMatchingWatchPoisonDoesNotBlockUnrelatedExactRead(t *testing.T
 		t.Fatalf("Watch: %v", err)
 	}
 
-	poisonID := "acme.ops.lifecycle.gcs.mission.poison-a"
+	poisonID := "acme.ops.gcs.lifecycle.mission.poison-a"
 	watcher.updates <- poisonLifecycleWatchEntry(poisonID, 2)
 	requireValueChannelClosed(t, out, "matching poison subscription")
 
@@ -73,7 +73,7 @@ func TestLifecyclePoisonClosesOnlyMatchingSubscription(t *testing.T) {
 	otherWatcher := newLifecycleAtomicWatcher()
 	bucket.watchFactory = func(pattern string) (jetstream.KeyWatcher, error) {
 		switch pattern {
-		case "*.*.lifecycle.gcs.mission.*":
+		case "*.*.gcs.lifecycle.mission.*":
 			return fixtureWatcher, nil
 		case "*.*.other.gcs.mission.*":
 			return otherWatcher, nil
@@ -94,7 +94,7 @@ func TestLifecyclePoisonClosesOnlyMatchingSubscription(t *testing.T) {
 		t.Fatalf("Watch other: %v", err)
 	}
 
-	poisonID := "acme.ops.lifecycle.gcs.mission.poison-a"
+	poisonID := "acme.ops.gcs.lifecycle.mission.poison-a"
 	fixtureWatcher.updates <- poisonLifecycleWatchEntry(poisonID, 2)
 	requireValueChannelClosed(t, fixtureOut, "fixture poison subscription")
 
@@ -119,7 +119,7 @@ func TestLifecycleWatchEventsPoisonEmitsNoEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WatchEvents: %v", err)
 	}
-	poisonID := "acme.ops.lifecycle.gcs.mission.poison-a"
+	poisonID := "acme.ops.gcs.lifecycle.mission.poison-a"
 	watcher.updates <- poisonLifecycleWatchEntry(poisonID, 7)
 	select {
 	case event, ok := <-out:
@@ -147,7 +147,7 @@ func TestLifecycleWatchPoisonWarningNamesSubscriptionAndAuthorityEntryOnce(t *te
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
-	poisonID := "acme.ops.lifecycle.gcs.mission.poison-a"
+	poisonID := "acme.ops.gcs.lifecycle.mission.poison-a"
 	watcher.updates <- poisonLifecycleWatchEntry(poisonID, 41)
 	watcher.updates <- poisonLifecycleWatchEntry(poisonID, 42)
 	requireValueChannelClosed(t, out, "poison subscription")
@@ -197,7 +197,7 @@ func TestLifecycleWatchTransportCloseIsLocalAndLaterSubscriptionWorks(t *testing
 	if err != nil {
 		t.Fatalf("second Watch: %v", err)
 	}
-	validID := "acme.ops.lifecycle.gcs.mission.valid-b"
+	validID := "acme.ops.gcs.lifecycle.mission.valid-b"
 	second.updates <- validLifecycleWatchEntry(t, validID, 2)
 	select {
 	case participant := <-secondOut:

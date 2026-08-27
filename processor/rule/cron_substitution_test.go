@@ -212,14 +212,14 @@ func TestExecutionContext_SubstituteVariables_ScheduleNamespace(t *testing.T) {
 func TestSubstituteVariables_AgentRunTripleResolves(t *testing.T) {
 	t.Parallel()
 
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loop-xyz"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loop-xyz"
 	ec := &ExecutionContext{
 		EntityID: loopEntityID,
 		Entity: &gtypes.EntityState{
 			ID: loopEntityID,
 			Triples: []message.Triple{
 				{Subject: loopEntityID, Predicate: "agent.loop.run", Object: "root-loop-uuid"},
-				{Subject: loopEntityID, Predicate: "agent.run.entity-id", Object: "acme.ops.agent.chain.execution.root-loop-uuid"},
+				{Subject: loopEntityID, Predicate: "agent.run.entity-id", Object: "acme.ops.chain.agent.execution.root-loop-uuid"},
 			},
 		},
 	}
@@ -233,7 +233,7 @@ func TestSubstituteVariables_AgentRunTripleResolves(t *testing.T) {
 	// subject. $entity.triple.agent.run.entity-id must resolve to the full ID so a
 	// rule can use it as an add_triple/update_triple Subject.
 	gotEntity := ec.SubstituteVariables(context.Background(), "$entity.triple.agent.run.entity-id")
-	if want := "acme.ops.agent.chain.execution.root-loop-uuid"; gotEntity != want {
+	if want := "acme.ops.chain.agent.execution.root-loop-uuid"; gotEntity != want {
 		t.Errorf("$entity.triple.agent.run.entity-id resolved to %q, want %q", gotEntity, want)
 	}
 

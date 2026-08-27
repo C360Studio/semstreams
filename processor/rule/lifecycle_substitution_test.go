@@ -107,7 +107,7 @@ func TestSubstitute_LifecycleWorkflowAndWorkflowDef_PrefixOrdering(t *testing.T)
 	mgr.seed("mission", &fakeParticipant{EntityIDF: entityID, PhaseF: "planning"})
 	mgr.workflowDefs["mission"] = lifecycle.WorkflowDef{
 		Workflow:        "mission",
-		EntityIDPattern: "*.test.lifecycle.gcs.mission.*",
+		EntityIDPattern: "*.test.gcs.lifecycle.mission.*",
 		PhasePredicate:  "test.mission.phase",
 	}
 
@@ -294,7 +294,7 @@ func TestEvaluator_ResolvesLifecyclePhaseConditionField(t *testing.T) {
 
 // TestExpressionRule_EvaluateEntityState_ResolvesLifecyclePhase drives
 // the SAME production entrypoint StatefulEvaluator uses for initial
-// matching — NewExpressionRule("direct-expression-test", def) + SetLifecycleManager(mgr) +
+// matching — NewExpressionRule(testPlatform, "direct-expression-test", def) + SetLifecycleManager(mgr) +
 // EvaluateEntityState. A regression that drops the
 // PopulateLifecycleStateFields call inside EvaluateEntityState would
 // fail this test ([[feedback_integration_tests_must_drive_production_wire]]).
@@ -314,7 +314,7 @@ func TestExpressionRule_EvaluateEntityState_ResolvesLifecyclePhase(t *testing.T)
 			{Field: "$entity.lifecycle.phase", Operator: expression.OpEqual, Value: "flying"},
 		},
 	}
-	rule, err := NewExpressionRule("direct-expression-test", def)
+	rule, err := NewExpressionRule(testPlatform, "direct-expression-test", def)
 	if err != nil {
 		t.Fatalf("NewExpressionRule: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestExpressionRule_EvaluateEntityState_LifecyclePhaseMismatch(t *testing.T)
 			{Field: "$entity.lifecycle.phase", Operator: expression.OpEqual, Value: "flying"},
 		},
 	}
-	rule, err := NewExpressionRule("direct-expression-test", def)
+	rule, err := NewExpressionRule(testPlatform, "direct-expression-test", def)
 	if err != nil {
 		t.Fatalf("NewExpressionRule: %v", err)
 	}
@@ -470,7 +470,7 @@ func TestExpressionRule_NoManagerLeavesLifecyclePhaseUnresolved(t *testing.T) {
 			{Field: "$entity.lifecycle.phase", Operator: expression.OpEqual, Value: "flying"},
 		},
 	}
-	rule, err := NewExpressionRule("direct-expression-test", def)
+	rule, err := NewExpressionRule(testPlatform, "direct-expression-test", def)
 	if err != nil {
 		t.Fatalf("NewExpressionRule: %v", err)
 	}

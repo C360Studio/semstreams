@@ -3,6 +3,7 @@ package clustering
 import (
 	"context"
 	"fmt"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"math"
 	"sort"
 	"strings"
@@ -681,24 +682,23 @@ func (s *LLMSummarizer) BuildCorpusDF(entities []*gtypes.EntityState) {
 	}
 }
 
-// parseEntityID extracts the 6 parts from a federated entity ID.
-// Entity ID format: {org}.{platform}.{domain}.{system}.{type}.{instance}
+// parseEntityID maps a canonical entity ID onto llm.EntityParts by NAMED
+// field of pkg/types.ParseEntityID (org.platform.system.domain.type.instance).
+// A value the canonical parser rejects leaves every part empty rather than
+// mis-splitting: there is one structural-identity contract, not a looser
+// local one.
 func parseEntityID(entityID string) llm.EntityParts {
-	parts := strings.Split(entityID, ".")
 	ep := llm.EntityParts{Full: entityID}
-	// Entity IDs are EXACTLY 6 parts (org.platform.domain.system.type.instance) with
-	// no dotted instance — the single structural-identity contract enforced by
-	// message.IsValidEntityID. A non-6-part ID leaves EntityParts empty rather than
-	// mis-splitting (the prior `>= 6` + Join(parts[5:]) drift defined a second,
-	// looser contract for the same invariant).
-	if len(parts) == 6 {
-		ep.Org = parts[0]
-		ep.Platform = parts[1]
-		ep.Domain = parts[2]
-		ep.System = parts[3]
-		ep.Type = parts[4]
-		ep.Instance = parts[5]
+	parsed, err := semtypes.ParseEntityID(entityID)
+	if err != nil {
+		return ep
 	}
+	ep.Org = parsed.Org
+	ep.Platform = parsed.Platform
+	ep.System = parsed.System
+	ep.Domain = parsed.Domain
+	ep.Type = parsed.Type
+	ep.Instance = parsed.Instance
 	return ep
 }
 
@@ -710,13 +710,14 @@ type domainGroupBuilder struct {
 }
 
 // buildPromptData creates the data structure for prompt template rendering.
-// It parses 6-part entity IDs and groups by domain (part[2]).
+// It parses canonical entity IDs and groups by the named Domain field
+// (position 4 of org.platform.system.domain.type.instance).
 func (s *LLMSummarizer) buildPromptData(
 	entities []*gtypes.EntityState,
 	keywords []string,
 	entityContent map[string]*llm.EntityContent,
 ) llm.CommunitySummaryData {
-	// Group by domain (part[2] of entity ID)
+	// Group by the named Domain field
 	domainGroups := make(map[string]*domainGroupBuilder)
 	orgPlatforms := make(map[string]int)
 

@@ -60,7 +60,7 @@ Return a deterministic 6-part federated ID:
 
 ```go
 func (p *YourPayload) EntityID() string {
-    // {org}.{platform}.{domain}.{system}.{type}.{instance}
+    // {org}.{platform}.{system}.{domain}.{type}.{instance}
     return fmt.Sprintf("%s.%s.yourdomain.system.%s.%s",
         p.OrgID,
         p.Platform,

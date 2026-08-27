@@ -51,7 +51,7 @@ func TestIntegration_MatchesWithLifecycle_RealManagerUnresolvedEntity(t *testing
 	}
 
 	got, err := MatchesWithLifecycle(context.Background(), def,
-		createTestEntityState("c360.platform1.lifecycle.gcs.mission.unregistered", nil), mgr)
+		createTestEntityState("c360.platform1.gcs.lifecycle.mission.unregistered", nil), mgr)
 
 	require.Error(t, err, "a lifecycle condition the real Manager cannot resolve must be "+
 		"refused; answering false would report 'nothing owed' for a question never asked")
@@ -72,7 +72,7 @@ func TestIntegration_MatchesWithLifecycle_RealManagerOrdinaryDefinition(t *testi
 			{Field: "sensor.measurement.fahrenheit", Operator: "gte", Value: 40.0},
 		},
 	}
-	entity := createTestEntityState("c360.platform1.lifecycle.gcs.mission.ordinary",
+	entity := createTestEntityState("c360.platform1.gcs.lifecycle.mission.ordinary",
 		[]message.Triple{{Subject: "t", Predicate: "sensor.measurement.fahrenheit", Object: 41.2}})
 
 	got, err := MatchesWithLifecycle(context.Background(), def, entity, mgr)
@@ -91,9 +91,9 @@ func TestIntegration_MatchesWithLifecycle_PairAgreesViaRealManager(t *testing.T)
 	for _, c := range matchCorpus() {
 		t.Run(c.name, func(t *testing.T) {
 			plain, errPlain := Matches(context.Background(), defFor(c),
-				createTestEntityState("c360.platform1.lifecycle.gcs.mission.pair", c.triples))
+				createTestEntityState("c360.platform1.gcs.lifecycle.mission.pair", c.triples))
 			withLC, errLC := MatchesWithLifecycle(context.Background(), defFor(c),
-				createTestEntityState("c360.platform1.lifecycle.gcs.mission.pair", c.triples), mgr)
+				createTestEntityState("c360.platform1.gcs.lifecycle.mission.pair", c.triples), mgr)
 
 			require.NoError(t, errPlain)
 			require.NoError(t, errLC)

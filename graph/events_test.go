@@ -113,7 +113,7 @@ func TestGraphEventConstructorsFailClosed(t *testing.T) {
 			return NewRelationshipDeleteEvent(validID, id, "owns", metadata)
 		}},
 		{"alert source", func(id string) (*Event, error) {
-			return NewAlertEvent("threshold", id, map[string]any{"observed": 42}, metadata)
+			return NewAlertEvent("acme", "dep1", "threshold", id, map[string]any{"observed": 42}, metadata)
 		}},
 	}
 	for _, test := range tests {
@@ -133,7 +133,7 @@ func TestConstructorsOwnTopLevelPropertiesOnly(t *testing.T) {
 	caller := map[string]any{"nested_map": nestedMap, "nested_slice": nestedSlice, "status_text": "new"}
 	before := cloneProperties(caller)
 
-	event, err := NewAlertEvent("threshold", eventTestID(t, "source"), caller, metadata)
+	event, err := NewAlertEvent("acme", "dep1", "threshold", eventTestID(t, "source"), caller, metadata)
 	if err != nil {
 		t.Fatalf("NewAlertEvent: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestConstructorsOwnTopLevelPropertiesOnly(t *testing.T) {
 		t.Run(key, func(t *testing.T) {
 			input := map[string]any{key: "collision", "nested": nestedMap}
 			inputBefore := cloneProperties(input)
-			got, constructErr := NewAlertEvent("threshold", eventTestID(t, "source"), input, metadata)
+			got, constructErr := NewAlertEvent("acme", "dep1", "threshold", eventTestID(t, "source"), input, metadata)
 			if constructErr == nil || got != nil {
 				t.Fatalf("collision construct = (%#v, %v), want (nil, error)", got, constructErr)
 			}
@@ -183,7 +183,7 @@ func TestConstructorOwnedPropertyCollisions(t *testing.T) {
 	if event, err := NewRelationshipCreateEvent(id, eventTestID(t, "target"), "", metadata); err == nil || event != nil {
 		t.Fatalf("empty relationship type = (%#v, %v), want (nil, error)", event, err)
 	}
-	if event, err := NewAlertEvent("", id, nil, metadata); err == nil || event != nil {
+	if event, err := NewAlertEvent("acme", "dep1", "", id, nil, metadata); err == nil || event != nil {
 		t.Fatalf("empty alert type = (%#v, %v), want (nil, error)", event, err)
 	}
 }
@@ -216,22 +216,22 @@ func TestNewAlertEventDigestContract(t *testing.T) {
 		Reason:    "battery below threshold",
 	}
 	sourceID := eventTestID(t, "drone-001")
-	event, err := NewAlertEvent("battery_low", sourceID, map[string]any{"value": 10}, metadata)
+	event, err := NewAlertEvent("acme", "dep1", "battery_low", sourceID, map[string]any{"value": 10}, metadata)
 	if err != nil {
 		t.Fatalf("NewAlertEvent: %v", err)
 	}
-	const golden = "semstreams.framework.graph.rules.alert.3c18b02fde7a5bdd8e7ab45cd2309936067799121833df9a2b579a4bd8080ce4"
+	const golden = "acme.dep1.rules.graph.alert.3c18b02fde7a5bdd8e7ab45cd2309936067799121833df9a2b579a4bd8080ce4"
 	if event.EntityID != golden {
 		t.Fatalf("alert ID = %q, want %q", event.EntityID, golden)
 	}
-	if len(event.EntityID) != 103 {
-		t.Fatalf("alert ID length = %d, want 103", len(event.EntityID))
+	if len(event.EntityID) != 92 {
+		t.Fatalf("alert ID length = %d, want 92", len(event.EntityID))
 	}
 	if event.Metadata.Version != eventMetadataVersion || metadata.Version != "" {
 		t.Fatalf("local version default failed: event=%q caller=%q", event.Metadata.Version, metadata.Version)
 	}
 
-	repeated, err := NewAlertEvent("battery_low", sourceID, map[string]any{"different": true}, EventMetadata{
+	repeated, err := NewAlertEvent("acme", "dep1", "battery_low", sourceID, map[string]any{"different": true}, EventMetadata{
 		RuleName:  metadata.RuleName,
 		Timestamp: metadata.Timestamp.In(time.FixedZone("other", -7*60*60)),
 		Source:    metadata.Source,
@@ -259,7 +259,7 @@ func TestNewAlertEventDigestContract(t *testing.T) {
 	}
 	for _, change := range changes {
 		t.Run(change.name, func(t *testing.T) {
-			changed, changedErr := NewAlertEvent(change.alertType, change.sourceID, nil, change.metadata)
+			changed, changedErr := NewAlertEvent("acme", "dep1", change.alertType, change.sourceID, nil, change.metadata)
 			if changedErr != nil {
 				t.Fatalf("NewAlertEvent: %v", changedErr)
 			}
@@ -276,14 +276,14 @@ func TestNewAlertEventMaximumSource(t *testing.T) {
 	if len(maximum) != 256 {
 		t.Fatalf("test source length = %d, want 256", len(maximum))
 	}
-	event, err := NewAlertEvent("maximum", maximum, nil, metadata)
+	event, err := NewAlertEvent("acme", "dep1", "maximum", maximum, nil, metadata)
 	if err != nil {
 		t.Fatalf("NewAlertEvent maximum source: %v", err)
 	}
-	if len(event.EntityID) != 103 || !strings.HasPrefix(event.EntityID, alertEntityPrefix) {
+	if len(event.EntityID) != 92 || !strings.HasPrefix(event.EntityID, "acme.dep1.rules.graph.alert.") {
 		t.Fatalf("alert ID = %q (len %d), want fixed canonical form", event.EntityID, len(event.EntityID))
 	}
-	repeated, err := NewAlertEvent("maximum", maximum, nil, metadata)
+	repeated, err := NewAlertEvent("acme", "dep1", "maximum", maximum, nil, metadata)
 	if err != nil {
 		t.Fatalf("repeat NewAlertEvent maximum source: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestNewAlertEventMaximumSource(t *testing.T) {
 	}
 
 	tooLong := "a.b.c.d.e." + strings.Repeat("x", 247)
-	if event, err = NewAlertEvent("maximum", tooLong, nil, metadata); err == nil || event != nil {
+	if event, err = NewAlertEvent("acme", "dep1", "maximum", tooLong, nil, metadata); err == nil || event != nil {
 		t.Fatalf("257-byte source = (%#v, %v), want (nil, error)", event, err)
 	}
 }

@@ -88,7 +88,7 @@ and `docs/adr/README.md` for the ADR-vs-spec split. In short:
 
 ## Standing Technical Conventions
 
-- Entity IDs are deterministic 6-part IDs (`org.platform.domain.system.type.instance`).
+- Entity IDs are deterministic 6-part IDs (`org.platform.system.domain.type.instance`).
 - Every entity birth carries a semantic envelope. Non-create mutations are must-exist and no
   producer relies on a mutation auto-vivifying an entity.
 - `graph-ingest` is the sole writer to `ENTITY_STATES`; other components request

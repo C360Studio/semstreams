@@ -32,13 +32,13 @@ type Maintenance struct {
 }
 
 // EntityID returns a federated entity ID for the maintenance record.
-// Example: "acme.logistics.maintenance.work.completed.maint-001"
+// Example: "acme.logistics.work.maintenance.completed.maint-001"
 func (m *Maintenance) EntityID() string {
 	status := m.Status
 	if status == "" {
 		status = "pending"
 	}
-	return fmt.Sprintf("%s.%s.maintenance.work.%s.%s",
+	return fmt.Sprintf("%s.%s.work.maintenance.%s.%s",
 		m.OrgID,
 		m.Platform,
 		status,

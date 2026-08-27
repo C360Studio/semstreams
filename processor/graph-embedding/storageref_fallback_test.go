@@ -94,7 +94,7 @@ func TestShouldFetchViaStorageRef(t *testing.T) {
 func TestExtractTextForEmbedding_RecoversInlineContentForStorageRefEntity(t *testing.T) {
 	c := &Component{}
 	es := &graph.EntityState{
-		ID:         "c360.logistics.maintenance.work.completed.maint-001",
+		ID:         "c360.logistics.work.maintenance.completed.maint-001",
 		StorageRef: &message.StorageReference{StorageInstance: "objstore", Key: "k/maint-001"},
 		Triples: []message.Triple{
 			{Subject: "x", Predicate: "maintenance.text.title", Object: "Hydraulic pump service"},

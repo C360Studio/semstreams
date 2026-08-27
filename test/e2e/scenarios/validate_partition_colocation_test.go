@@ -17,9 +17,9 @@ func comm(id string, level int, members ...string) *clustering.Community {
 
 // eid renders a 6-part warehouse EntityID whose last segment is the given
 // source-record id — mirrors the real ingest shape
-// (c360.logistics.maintenance.work.completed.maint-003).
+// (c360.logistics.work.maintenance.completed.maint-003).
 func eid(recordID string) string {
-	return "c360.logistics.maintenance.work.completed." + recordID
+	return "c360.logistics.work.maintenance.completed." + recordID
 }
 
 func TestLastSegment(t *testing.T) {
@@ -27,9 +27,9 @@ func TestLastSegment(t *testing.T) {
 		in   string
 		want string
 	}{
-		{"c360.logistics.maintenance.work.completed.maint-003", "maint-003"},
-		{"c360.logistics.content.document.shipping.doc-shipping-001", "doc-shipping-001"},
-		{"c360.logistics.observation.record.high.obs-001", "obs-001"},
+		{"c360.logistics.work.maintenance.completed.maint-003", "maint-003"},
+		{"c360.logistics.document.content.shipping.doc-shipping-001", "doc-shipping-001"},
+		{"c360.logistics.record.observation.high.obs-001", "obs-001"},
 		{"no-dots-here", "no-dots-here"},
 		{"", ""},
 	}

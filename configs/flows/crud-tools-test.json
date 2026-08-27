@@ -5,7 +5,6 @@
     "id": "crud-tools",
     "type": "agentic-e2e",
     "region": "local",
-    "instance_id": "crud-tools-001",
     "environment": "test"
   },
   "tier": "agentic",

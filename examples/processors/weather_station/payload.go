@@ -94,10 +94,11 @@ type WeatherReading struct {
 }
 
 // EntityID returns a deterministic 6-part federated entity ID.
-// Format: {org}.{platform}.{domain}.{system}.{type}.{instance}
-// Example: "acme.weather.meteorology.station.outdoor.ws-001"
+// Format: {org}.{platform}.{system}.{domain}.{type}.{instance} — canonical order
+// (ADR-102): system = station (the source), domain = meteorology (delegated).
+// Example: "acme.weather.station.meteorology.outdoor.ws-001"
 func (w *WeatherReading) EntityID() string {
-	return fmt.Sprintf("%s.%s.meteorology.station.outdoor.%s",
+	return fmt.Sprintf("%s.%s.station.meteorology.outdoor.%s",
 		w.OrgID,
 		w.Platform,
 		w.StationID,

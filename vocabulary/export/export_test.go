@@ -285,3 +285,24 @@ func TestResolvePredicateIRI_Empty(t *testing.T) {
 		t.Errorf("expected empty string for empty predicate, got %q", got)
 	}
 }
+
+// TestSubjectToIRIFollowsCanonicalOrder pins the published IRI path
+// `…/entities/{org}/{platform}/{system}/{domain}/{type}/{instance}` — the
+// canonical order emitted from the named fields (owner item O-10; a
+// published-artifact break fresh state does not re-mint).
+func TestSubjectToIRIFollowsCanonicalOrder(t *testing.T) {
+	base := "https://semstreams.semanticstream.ing"
+	got := subjectToIRI("acme.dep1.src.git.commit.a1", base)
+	want := "https://semstreams.semanticstream.ing/entities/acme/dep1/src/git/commit/a1"
+	if got != want {
+		t.Errorf("subjectToIRI() = %q, want %q", got, want)
+	}
+	eid, err := message.ParseEntityID("acme.dep1.src.git.commit.a1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := base + "/entities/" + eid.Org + "/" + eid.Platform + "/" + eid.System + "/" + eid.Domain + "/" + eid.Type + "/" + eid.Instance
+	if got != byName {
+		t.Errorf("subjectToIRI() = %q, want the named-field composition %q", got, byName)
+	}
+}

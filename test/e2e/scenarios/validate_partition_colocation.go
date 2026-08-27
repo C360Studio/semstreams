@@ -63,7 +63,7 @@ const PartitionColocationHighShare = 0.8
 // B0 thematicQuestion so the co-location table lines up 1:1 with the B0 recall
 // table from the same run. expected are KNOWN source-record ids from the semantic
 // corpus (testdata/semantic/*.jsonl) — each is the LAST dotted segment of the
-// 6-part ingested EntityID (e.g. c360.logistics.maintenance.work.completed.maint-003
+// 6-part ingested EntityID (e.g. c360.logistics.work.maintenance.completed.maint-003
 // → maint-003). All were verified present in the corpus.
 type colocationExpectation struct {
 	// id matches a thematicQuestions[].id (validate_thematic_eval.go) so the two
@@ -454,7 +454,7 @@ func printPartitionColocation(grades []colocationGrade, agg colocationAggregate)
 
 // lastSegment returns the final dotted segment of a 6-part EntityID — the
 // source-record id used as ground-truth (e.g.
-// c360.logistics.maintenance.work.completed.maint-003 -> maint-003). Exact
+// c360.logistics.work.maintenance.completed.maint-003 -> maint-003). Exact
 // segment equality (NOT substring/HasSuffix) is what the caller matches on, so
 // maint-1 never matches maint-16.
 func lastSegment(entityID string) string {

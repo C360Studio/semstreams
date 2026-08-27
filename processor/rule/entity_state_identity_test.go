@@ -72,7 +72,7 @@ func identityProbeDecoder(t *testing.T) *message.Decoder {
 // StatefulEvaluator over a StateTracker, mock KV and publisher.
 func newIdentityProcessor(t *testing.T, def Definition) (*Processor, *StateTracker, *mockPublisher) {
 	t.Helper()
-	r, err := NewExpressionRule("test-pack", def)
+	r, err := NewExpressionRule(testPlatform, "test-pack", def)
 	if err != nil {
 		t.Fatalf("NewExpressionRule: %v", err)
 	}

@@ -102,7 +102,7 @@ func TestValidateExecuteBranchArtifactsRejectsUnattributedSynthesisEvidence(t *t
 		Synthesis: "Fabricated evidence should fail attribution.",
 		Evidence: []fusion.Evidence{
 			{EntityID: ControlledSeedEntityID, Tier: "0", Source: walkSeedsEntityStateSource},
-			{EntityID: "c360.rg-e2e.research.seed.document.fabricated", Tier: "0", Source: walkSeedsEntityStateSource},
+			{EntityID: "c360.rg-e2e.seed.research.document.fabricated", Tier: "0", Source: walkSeedsEntityStateSource},
 		},
 		DecompTrace: &research.DecompTrace{
 			RouterAction: research.ActionWalkSeeds,

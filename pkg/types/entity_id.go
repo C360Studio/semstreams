@@ -2,7 +2,6 @@ package types
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -70,34 +69,45 @@ const canonicalEntityIDParts = 6
 
 var errInvalidEntityIDContract = errors.New("invalid entity ID contract input")
 
-// EntityID represents a complete entity identifier with semantic structure.
-// Follows the pattern: org.platform.domain.system.type.instance for federated entity management.
+// EntityID is one complete entity identity in the canonical order
+// org.platform.system.domain.type.instance (ADR-102). Each position has one
+// meaning and one owner:
+//
+//	pos  name      meaning                                   supplied by
+//	1    org       organization namespace                    platform.org (config)
+//	2    platform  minting deployment authority              platform.id (config, via deps.Platform)
+//	3    system    the source that produced the entity       the producer (feed, repo, world, framework component)
+//	4    domain    delegated taxonomy                        a registered EntityDomainDelegation, or a framework-reserved domain
+//	5    type      entity type within the domain             the same delegation as domain
+//	6    instance  the producer's leaf identifier            the producer; the only unbounded-cardinality position, always last
+//
+// Positions 1-2 are never a payload value, a constant, or a product name; a
+// product is provenance (Triple.Source, the envelope source), not identity.
 //
 // Examples:
-//   - EntityID{Org: "c360", Platform: "platform1", Domain: "robotics", System: "gcs1", Type: "drone", Instance: "1"} -> "c360.platform1.robotics.gcs1.drone.1"
-//   - EntityID{Org: "c360", Platform: "platform1", Domain: "robotics", System: "mav1", Type: "battery", Instance: "0"} -> "c360.platform1.robotics.mav1.battery.0"
-//
-// EntityID enables federated entity identification where multiple sources may have
-// entities with the same local ID but different canonical identities.
+//   - EntityID{Org: "acme", Platform: "dep1", System: "src", Domain: "git", Type: "commit", Instance: "a1"} -> "acme.dep1.src.git.commit.a1"
+//   - EntityID{Org: "acme", Platform: "dep1", System: "agentic-loop", Domain: "agent", Type: "execution", Instance: "<uuid>"}
 type EntityID struct {
-	// Federation hierarchy (3 parts)
-	Org      string // Organization namespace (e.g., "c360")
-	Platform string // Platform/instance ID (e.g., "platform1")
-	System   string // System/source ID - RUNTIME from message (e.g., "mav1", "gcs255")
+	// Deployment authority (2 parts): the composition root's own identity.
+	Org      string // Organization namespace (e.g., "acme")
+	Platform string // Minting deployment authority (e.g., "dep1"), from platform.id
 
-	// Domain hierarchy (2 parts)
-	Domain string // Data domain (e.g., "robotics")
-	Type   string // Entity type (e.g., "drone", "battery")
+	// Source (1 part): who produced the entity; never the product name.
+	System string // Source (e.g., "src", "gcs1", "agentic-loop")
 
-	// Instance identifier (1 part)
-	Instance string // Simple instance ID (e.g., "1", "42")
+	// Taxonomy (2 parts): a delegated domain and its type.
+	Domain string // Delegated taxonomy (e.g., "git", "agent")
+	Type   string // Entity type within the domain (e.g., "commit", "execution")
+
+	// Leaf (1 part): unbounded cardinality, always last.
+	Instance string // Leaf identifier (e.g., "a1", a UUID, a digest)
 }
 
-// Key returns the full 6-part dotted notation in domain-first format
-// This implements the Keyable interface for unified semantic keys.
+// Key returns the canonical six-part dotted key in
+// org.platform.system.domain.type.instance order. It implements the Keyable
+// interface for unified semantic keys.
 func (eid EntityID) Key() string {
-	return fmt.Sprintf("%s.%s.%s.%s.%s.%s",
-		eid.Org, eid.Platform, eid.Domain, eid.System, eid.Type, eid.Instance)
+	return eid.Org + "." + eid.Platform + "." + eid.System + "." + eid.Domain + "." + eid.Type + "." + eid.Instance
 }
 
 // String returns the same as Key() for backwards compatibility
@@ -116,8 +126,9 @@ func (eid EntityID) IsValid() bool {
 }
 
 // ParseEntityID creates EntityID from dotted string format.
-// Expects exactly 6 parts: org.platform.domain.system.type.instance
-// Returns an error if the format is invalid.
+// Expects exactly 6 parts in the canonical order
+// org.platform.system.domain.type.instance and assigns every field from its
+// named position. Returns a coded error if the format is invalid.
 func ParseEntityID(s string) (EntityID, error) {
 	if err := ValidateEntityID(s); err != nil {
 		return EntityID{}, err
@@ -126,8 +137,8 @@ func ParseEntityID(s string) (EntityID, error) {
 	return EntityID{
 		Org:      parts[0],
 		Platform: parts[1],
-		Domain:   parts[2],
-		System:   parts[3],
+		System:   parts[2],
+		Domain:   parts[3],
 		Type:     parts[4],
 		Instance: parts[5],
 	}, nil
@@ -245,104 +256,91 @@ func newEntityIDContractError(code, reason string, detail map[string]any) error 
 	return errs.ClassifiedCodeDetail(errs.ErrorInvalid, code, detail, errInvalidEntityIDContract)
 }
 
-// TypePrefix returns the 5-part prefix identifying the entity type level.
-// Format: org.platform.domain.system.type
-// This groups all instances of the same type (siblings).
-//
-// Example:
-//
-//	eid := EntityID{Org: "c360", Platform: "logistics", Domain: "environmental",
-//	                System: "sensor", Type: "temperature", Instance: "cold-storage-01"}
-//	eid.TypePrefix() // Returns "c360.logistics.environmental.sensor.temperature"
+// Prefix levels. A prefix of length n means exactly the level named for n
+// (ADR-102 d6); grouping by a non-prefix combination — a taxonomy across
+// sources — is an exact-arity wildcard pattern or KV filter, never a prefix.
+const (
+	// PrefixLevelDeployment is the two-position prefix org.platform: everything
+	// one deployment holds.
+	PrefixLevelDeployment = 2
+	// PrefixLevelSource is the three-position prefix org.platform.system: the
+	// federation triple — everything this deployment holds from one source.
+	// ADR-099 level 1.
+	PrefixLevelSource = 3
+	// PrefixLevelTaxonomy is the four-position prefix org.platform.system.domain.
+	// ADR-099 level 0.
+	PrefixLevelTaxonomy = 4
+	// PrefixLevelType is the five-position prefix org.platform.system.domain.type:
+	// the sibling group.
+	PrefixLevelType = 5
+)
+
+// DeploymentPrefix returns the two-position prefix org.platform.
+func (eid EntityID) DeploymentPrefix() string {
+	return eid.Org + "." + eid.Platform
+}
+
+// SourcePrefix returns the three-position prefix org.platform.system — the
+// federation triple.
+func (eid EntityID) SourcePrefix() string {
+	return eid.DeploymentPrefix() + "." + eid.System
+}
+
+// TaxonomyPrefix returns the four-position prefix org.platform.system.domain.
+func (eid EntityID) TaxonomyPrefix() string {
+	return eid.SourcePrefix() + "." + eid.Domain
+}
+
+// TypePrefix returns the five-position prefix org.platform.system.domain.type
+// shared by every instance of one type (siblings).
 func (eid EntityID) TypePrefix() string {
-	return fmt.Sprintf("%s.%s.%s.%s.%s",
-		eid.Org, eid.Platform, eid.Domain, eid.System, eid.Type)
+	return eid.TaxonomyPrefix() + "." + eid.Type
 }
 
-// SystemPrefix returns the 4-part prefix identifying the system level.
-// Format: org.platform.domain.system
-// This groups all entity types within the same system.
+// PrefixLevel returns the named prefix for level n in [PrefixLevelDeployment,
+// PrefixLevelType]. Any other n is a coded prefix rejection: the levels are a
+// closed vocabulary, not an arbitrary cut.
+func (eid EntityID) PrefixLevel(n int) (string, error) {
+	switch n {
+	case PrefixLevelDeployment:
+		return eid.DeploymentPrefix(), nil
+	case PrefixLevelSource:
+		return eid.SourcePrefix(), nil
+	case PrefixLevelTaxonomy:
+		return eid.TaxonomyPrefix(), nil
+	case PrefixLevelType:
+		return eid.TypePrefix(), nil
+	default:
+		return "", newEntityIDContractError(ErrorCodeEntityIDPrefixInvalid, EntityIDReasonArity, map[string]any{
+			EntityIDDetailMeasuredParts: n,
+			EntityIDDetailAllowedParts:  PrefixLevelType,
+		})
+	}
+}
+
+// HasPrefix reports whether this EntityID lies under the given literal prefix
+// on a position boundary.
 //
 // Example:
 //
-//	eid := EntityID{Org: "c360", Platform: "logistics", Domain: "environmental",
-//	                System: "sensor", Type: "temperature", Instance: "cold-storage-01"}
-//	eid.SystemPrefix() // Returns "c360.logistics.environmental.sensor"
-func (eid EntityID) SystemPrefix() string {
-	return fmt.Sprintf("%s.%s.%s.%s",
-		eid.Org, eid.Platform, eid.Domain, eid.System)
-}
-
-// DomainPrefix returns the 3-part prefix identifying the domain level.
-// Format: org.platform.domain
-// This groups all systems within the same domain.
-//
-// Example:
-//
-//	eid := EntityID{Org: "c360", Platform: "logistics", Domain: "environmental",
-//	                System: "sensor", Type: "temperature", Instance: "cold-storage-01"}
-//	eid.DomainPrefix() // Returns "c360.logistics.environmental"
-func (eid EntityID) DomainPrefix() string {
-	return fmt.Sprintf("%s.%s.%s",
-		eid.Org, eid.Platform, eid.Domain)
-}
-
-// PlatformPrefix returns the 2-part prefix identifying the platform level.
-// Format: org.platform
-// This groups all domains within the same platform.
-//
-// Example:
-//
-//	eid := EntityID{Org: "c360", Platform: "logistics", Domain: "environmental",
-//	                System: "sensor", Type: "temperature", Instance: "cold-storage-01"}
-//	eid.PlatformPrefix() // Returns "c360.logistics"
-func (eid EntityID) PlatformPrefix() string {
-	return fmt.Sprintf("%s.%s", eid.Org, eid.Platform)
-}
-
-// HasPrefix checks if this EntityID has the given prefix.
-// Used for hierarchical grouping and sibling detection.
-//
-// Example:
-//
-//	eid := EntityID{Org: "c360", Platform: "logistics", Domain: "environmental",
-//	                System: "sensor", Type: "temperature", Instance: "cold-storage-01"}
-//	eid.HasPrefix("c360.logistics.environmental.sensor.temperature") // true (same type)
-//	eid.HasPrefix("c360.logistics.environmental.sensor")             // true (same system)
-//	eid.HasPrefix("c360.logistics.environmental")                    // true (same domain)
-//	eid.HasPrefix("c360.logistics.facility")                         // false (different domain)
+//	eid := EntityID{Org: "acme", Platform: "dep1", System: "src", Domain: "git", Type: "commit", Instance: "a1"}
+//	eid.HasPrefix("acme.dep1.src.git.commit") // true (same type)
+//	eid.HasPrefix("acme.dep1.src")            // true (same source)
+//	eid.HasPrefix("acme.dep1.other")          // false (different source)
 func (eid EntityID) HasPrefix(prefix string) bool {
 	key := eid.Key()
 	// Exact match or prefix with dot separator
 	return key == prefix || strings.HasPrefix(key, prefix+".")
 }
 
-// IsSibling checks if another EntityID is a sibling (same type-level prefix).
-// Siblings are entities of the same type within the same system.
-//
-// Example:
-//
-//	sensor1 := EntityID{Org: "c360", Platform: "logistics", Domain: "environmental",
-//	                    System: "sensor", Type: "temperature", Instance: "cold-storage-01"}
-//	sensor2 := EntityID{Org: "c360", Platform: "logistics", Domain: "environmental",
-//	                    System: "sensor", Type: "temperature", Instance: "cold-storage-02"}
-//	sensor1.IsSibling(sensor2) // true - same type prefix
-//
-//	humid := EntityID{Org: "c360", Platform: "logistics", Domain: "environmental",
-//	                  System: "sensor", Type: "humidity", Instance: "zone-a"}
-//	sensor1.IsSibling(humid) // false - different type
+// IsSibling reports whether other shares this EntityID's type prefix and is
+// not the same instance.
 func (eid EntityID) IsSibling(other EntityID) bool {
 	return eid.TypePrefix() == other.TypePrefix() && eid.Instance != other.Instance
 }
 
-// IsSameSystem checks if another EntityID is in the same system.
-// Entities in the same system may have different types but share the system-level prefix.
-func (eid EntityID) IsSameSystem(other EntityID) bool {
-	return eid.SystemPrefix() == other.SystemPrefix()
-}
-
-// IsSameDomain checks if another EntityID is in the same domain.
-// Entities in the same domain may have different systems but share the domain-level prefix.
-func (eid EntityID) IsSameDomain(other EntityID) bool {
-	return eid.DomainPrefix() == other.DomainPrefix()
+// IsSameSource reports whether other shares this EntityID's source prefix
+// (org.platform.system).
+func (eid EntityID) IsSameSource(other EntityID) bool {
+	return eid.SourcePrefix() == other.SourcePrefix()
 }

@@ -281,7 +281,7 @@ func (s *TieredScenario) executeValidateRuleTransitions(ctx context.Context, res
 // This helps diagnose rule trigger issues by showing exactly what triples are in ENTITY_STATES
 func (s *TieredScenario) executeValidateEntityTriples(ctx context.Context, result *Result) error {
 	// Get a sample temperature sensor entity
-	sampleEntityID := "c360.logistics.environmental.sensor.temperature.temp-sensor-001"
+	sampleEntityID := "c360.logistics.sensor.environmental.temperature.temp-sensor-001"
 
 	entity, err := s.natsClient.GetEntity(ctx, sampleEntityID)
 	if err != nil {
@@ -381,7 +381,7 @@ func (s *TieredScenario) executeValidateEntityTriples(ctx context.Context, resul
 	}
 
 	// Also check humidity entity to debug why humidity rule doesn't trigger
-	humidEntityID := "c360.logistics.environmental.sensor.humidity.humid-sensor-001"
+	humidEntityID := "c360.logistics.sensor.environmental.humidity.humid-sensor-001"
 	humidEntity, humidErr := s.natsClient.GetEntity(ctx, humidEntityID)
 	if humidErr != nil {
 		fmt.Printf("[HUMIDITY DEBUG] Failed to get entity %s: %v\n", humidEntityID, humidErr)
@@ -423,15 +423,17 @@ func (s *TieredScenario) executeValidateCanonicalCreateNoHierarchy(ctx context.C
 		return errors.New("canonical create hierarchy contract requires the NATS validation client")
 	}
 
+	// Canonical order org.platform.system.domain.type.instance: the source
+	// precedes the taxonomy, and each container pads a prefix level.
 	token := fmt.Sprintf("%x", time.Now().UnixNano())
+	source := "source" + token
 	domain := "rpc" + token
-	system := "system" + token
 	entityType := "leaf" + token
-	entityID := fmt.Sprintf("c360.e2e.%s.%s.%s.001", domain, system, entityType)
+	entityID := fmt.Sprintf("c360.e2e.%s.%s.%s.001", source, domain, entityType)
 	containerIDs := []string{
-		fmt.Sprintf("c360.e2e.%s.%s.%s.group", domain, system, entityType),
-		fmt.Sprintf("c360.e2e.%s.%s.group.container", domain, system),
-		fmt.Sprintf("c360.e2e.%s.group.container.level", domain),
+		fmt.Sprintf("c360.e2e.%s.%s.%s.group", source, domain, entityType),
+		fmt.Sprintf("c360.e2e.%s.%s.group.container", source, domain),
+		fmt.Sprintf("c360.e2e.%s.group.container.level", source),
 	}
 
 	mutationClient, err := graphmutation.NewClient(s.natsClient, 10*time.Second)
@@ -621,10 +623,10 @@ func (s *TieredScenario) executeTestPathRAGDocument(ctx context.Context, result 
 // Sensor entities demonstrate EntityID sibling inference (structural IoT data).
 func (s *TieredScenario) getPathRAGSensorEntity() string {
 	// All tiers use testdata/semantic/sensors.jsonl
-	// Entity IDs follow format: {org}.{platform}.environmental.sensor.{type}.{device_id}
+	// Entity IDs follow format: {org}.{platform}.sensor.environmental.{type}.{device_id}
 	// From sensors.jsonl: device_id=temp-sensor-001, type=temperature
 	// Config: org_id=c360, platform=logistics
-	return "c360.logistics.environmental.sensor.temperature.temp-sensor-001"
+	return "c360.logistics.sensor.environmental.temperature.temp-sensor-001"
 }
 
 // getPathRAGDocumentEntity returns a document entity for PathRAG testing.
@@ -634,7 +636,7 @@ func (s *TieredScenario) getPathRAGDocumentEntity() string {
 	// All tiers use testdata/semantic/maintenance.jsonl
 	// Use maintenance entity which has 15+ siblings with same type prefix
 	// This allows sibling inference to find related entities
-	return "c360.logistics.maintenance.work.completed.maint-001"
+	return "c360.logistics.work.maintenance.completed.maint-001"
 }
 
 // sendPathRAGRequest sends the PathRAG GraphQL query and returns the parsed response
@@ -871,7 +873,7 @@ func (s *TieredScenario) executeTestEntitiesByPrefix(ctx context.Context, result
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
 	// Test: Query every entity page under the temperature-sensor prefix.
-	prefix := "c360.logistics.environmental.sensor.temperature"
+	prefix := "c360.logistics.sensor.environmental.temperature"
 	type prefixEntity struct {
 		ID string `json:"id"`
 	}
@@ -1342,10 +1344,10 @@ func (s *TieredScenario) executeTestZoneRelationships(ctx context.Context, resul
 	gatewayURL := s.config.GraphQLURL
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
-	// Zone entity ID format: {org}.{platform}.facility.zone.{zoneType}.{locationID}
+	// Zone entity ID format: {org}.{platform}.zone.facility.{zoneType}.{locationID}
 	// From test data sensors.jsonl, "cold-storage-1" is a known location with default zone type "area"
-	// The IoT processor generates: c360.logistics.facility.zone.area.cold-storage-1
-	zoneEntityID := "c360.logistics.facility.zone.area.cold-storage-1"
+	// The IoT processor generates: c360.logistics.zone.facility.area.cold-storage-1
+	zoneEntityID := "c360.logistics.zone.facility.area.cold-storage-1"
 
 	// Query incoming relationships to the zone entity
 	relationshipsQuery := map[string]any{
@@ -1538,9 +1540,9 @@ func (s *TieredScenario) executeTestEntityByAlias(ctx context.Context, result *R
 
 	// Test REAL alias resolution using sensor serial number
 	// From testdata/semantic/sensors.jsonl: temp-sensor-001 has serial "SN-TEMP-2024-001"
-	// Expected entity ID: c360.logistics.environmental.sensor.temperature.temp-sensor-001
+	// Expected entity ID: c360.logistics.sensor.environmental.temperature.temp-sensor-001
 	serialNumber := "SN-TEMP-2024-001"
-	expectedEntityID := "c360.logistics.environmental.sensor.temperature.temp-sensor-001"
+	expectedEntityID := "c360.logistics.sensor.environmental.temperature.temp-sensor-001"
 
 	aliasQuery := map[string]any{
 		"query": `query($aliasOrID: String!) {
@@ -2210,7 +2212,7 @@ func (s *TieredScenario) executeTestPredicateCompound(ctx context.Context, resul
 	// by executeValidateEntityTriples). A known-answer pair keeps AND coverage
 	// non-empty regardless of lexical predicate-index ordering.
 	predicates := []string{"sensor.measurement.fahrenheit", "geo.location.zone"}
-	knownEntityID := "c360.logistics.environmental.sensor.temperature.temp-sensor-001"
+	knownEntityID := "c360.logistics.sensor.environmental.temperature.temp-sensor-001"
 
 	// Test OR query (union)
 	orResult, err := s.sendCompoundPredicateQuery(ctx, predicates, "OR")

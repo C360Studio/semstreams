@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/graph/query"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
@@ -245,30 +246,33 @@ type CommunitySummary struct {
 // without requiring a full EntityState load.
 type EntityDigest struct {
 	ID        string   `json:"id"`
-	Type      string   `json:"type"`                // extracted from 5th segment of entity ID
+	Type      string   `json:"type"`                // the Type position (5th) of the canonical entity ID
 	Label     string   `json:"label,omitempty"`     // human-readable name from key predicates
 	Relevance float64  `json:"relevance,omitempty"` // semantic similarity score when available
 	Tags      []string `json:"tags,omitempty"`      // classification tags (content.classification.tag triples), capped
 }
 
-// extractEntityType returns the type segment (5th part) of a 6-part entity ID.
-// Returns empty string if the ID has fewer than 5 segments.
+// extractEntityType returns the Type position (position 5 of
+// org.platform.system.domain.type.instance) of a canonical entity ID, read by
+// named field. Returns "" for a value the canonical parser rejects.
 func extractEntityType(entityID string) string {
-	parts := strings.Split(entityID, ".")
-	if len(parts) >= 5 {
-		return parts[4]
+	parsed, err := semtypes.ParseEntityID(entityID)
+	if err != nil {
+		return ""
 	}
-	return ""
+	return parsed.Type
 }
 
-// extractEntityInstance returns the instance segment (6th part) of a 6-part entity ID.
-// Used as a fallback label when no predicate-based label is available.
+// extractEntityInstance returns the Instance position (position 6) of a
+// canonical entity ID, read by named field. Used as a fallback label when no
+// predicate-based label is available; a value the canonical parser rejects is
+// returned whole.
 func extractEntityInstance(entityID string) string {
-	parts := strings.Split(entityID, ".")
-	if len(parts) >= 6 {
-		return parts[5]
+	parsed, err := semtypes.ParseEntityID(entityID)
+	if err != nil {
+		return entityID
 	}
-	return entityID
+	return parsed.Instance
 }
 
 // handleLocalSearch handles local search requests via NATS request/reply
@@ -1540,7 +1544,7 @@ func (c *Component) loadEntities(ctx context.Context, entityIDs []string) ([]*gt
 // that are semantically similar to the query text using embeddings.
 // This provides better results than text matching for semantic queries.
 // filterEntityIDsByType filters entity IDs to those whose type segment (5th part of the
-// 6-part ID: org.platform.domain.system.type.instance) matches any of the requested types.
+// 6-part ID: org.platform.system.domain.type.instance) matches any of the requested types.
 // Returns all IDs (fellBack=false) if typeFilters is empty.
 //
 // Graceful-fallback contract (#645): the type filters come from the classifier

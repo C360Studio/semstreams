@@ -11,7 +11,6 @@
     "id": "research-graph-e2e",
     "type": "agentic-e2e",
     "region": "local",
-    "instance_id": "rg-e2e-001",
     "environment": "test"
   },
   "tier": "agentic",

@@ -41,7 +41,7 @@ func TestIntegration_LessonCuratorFromPublicProjectionContractPreservesBirthPred
 	ingest := startGraphIngestForMutationTest(t, client)
 	builtins.Register()
 
-	const evidenceID = "acme.ops.agent.agentic-loop.execution.loop-abc"
+	const evidenceID = "acme.ops.agentic-loop.agent.execution.loop-abc"
 	now := time.Now().UTC()
 	require.NoError(t, ingest.CreateEntity(ctx, &graph.EntityState{
 		ID:          evidenceID,
@@ -82,7 +82,7 @@ func TestIntegration_LessonCuratorFromPublicProjectionContractPreservesBirthPred
 	require.NotEmpty(t, entityID)
 	birthBefore := birthObjectSets(t, readEntityKV(t, client, entityID))
 
-	const supersedingID = "acme.ops.agent.lesson.record.99999999-9999-5999-8999-999999999999"
+	const supersedingID = "acme.ops.lesson.agent.record.99999999-9999-5999-8999-999999999999"
 	staleRetiredAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 	seedLifecycleGroup(t, ctx, mutations, lessonContract.Name, lessonContract.Groups[0].Name, entityID, []message.Triple{
 		lifecycleSeedTriple(entityID, agvocab.LessonStatus, "proposed", staleRetiredAt),

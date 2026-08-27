@@ -38,7 +38,7 @@ import "github.com/c360studio/semstreams/message"
 //
 //	func (p *PositionPayload) EntityID() string {
 //	    // Return deterministic 6-part ID
-//	    return fmt.Sprintf("acme.telemetry.robotics.mavlink.drone.%d", p.SystemID)
+//	    return fmt.Sprintf("acme.telemetry.mavlink.robotics.drone.%d", p.SystemID)
 //	}
 //
 //	func (p *PositionPayload) Triples() []message.Triple {
@@ -52,7 +52,7 @@ import "github.com/c360studio/semstreams/message"
 //
 // Graphable provides entity identification and semantic triples
 type Graphable interface {
-	// EntityID returns deterministic 6-part ID: org.platform.domain.system.type.instance
+	// EntityID returns deterministic 6-part ID: org.platform.system.domain.type.instance
 	EntityID() string
 
 	// Triples returns all facts about this entity

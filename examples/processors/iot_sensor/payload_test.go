@@ -27,13 +27,13 @@ func TestSensorReading_EntityID_6PartFormat(t *testing.T) {
 				SensorType:   "temperature",
 				Value:        23.5,
 				Unit:         "celsius",
-				ZoneEntityID: "acme.logistics.facility.zone.area.warehouse-7",
+				ZoneEntityID: "acme.logistics.zone.facility.area.warehouse-7",
 				ObservedAt:   time.Now(),
 				OrgID:        "acme",
 				Platform:     "logistics",
 			},
 			wantParts:  6,
-			wantPrefix: "acme.logistics.environmental.sensor",
+			wantPrefix: "acme.logistics.sensor.environmental",
 		},
 		{
 			name: "humidity sensor",
@@ -42,13 +42,13 @@ func TestSensorReading_EntityID_6PartFormat(t *testing.T) {
 				SensorType:   "humidity",
 				Value:        65.0,
 				Unit:         "percent",
-				ZoneEntityID: "acme.facilities.facility.zone.area.office-3",
+				ZoneEntityID: "acme.facilities.zone.facility.area.office-3",
 				ObservedAt:   time.Now(),
 				OrgID:        "acme",
 				Platform:     "facilities",
 			},
 			wantParts:  6,
-			wantPrefix: "acme.facilities.environmental.sensor",
+			wantPrefix: "acme.facilities.sensor.environmental",
 		},
 	}
 
@@ -91,7 +91,7 @@ func TestSensorReading_Triples_SemanticPredicates(t *testing.T) {
 		SensorType:   "temperature",
 		Value:        23.5,
 		Unit:         "celsius",
-		ZoneEntityID: "acme.logistics.facility.zone.area.warehouse-7",
+		ZoneEntityID: "acme.logistics.zone.facility.area.warehouse-7",
 		ObservedAt:   time.Date(2025, 11, 26, 10, 30, 0, 0, time.UTC),
 		OrgID:        "acme",
 		Platform:     "logistics",
@@ -179,7 +179,7 @@ func TestZone_EntityID_6PartFormat(t *testing.T) {
 	}
 
 	// Verify expected prefix
-	wantPrefix := "acme.logistics.facility.zone"
+	wantPrefix := "acme.logistics.zone.facility"
 	if !strings.HasPrefix(entityID, wantPrefix) {
 		t.Errorf("EntityID() = %q, want prefix %q", entityID, wantPrefix)
 	}

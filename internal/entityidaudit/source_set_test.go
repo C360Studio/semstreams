@@ -11,11 +11,11 @@ func TestAuditRepositoryTrackedSetIgnoresDirtyRuntimeArtifacts(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	writeFixture(t, root, ".gitignore", "runtime/\n")
-	writeFixture(t, root, "tracked.go", `package fixture
+	writeFixture(t, root, "tracked_test.go", `package fixture
 var _ = EntityState{ID: "acme.ops.robotics.gcs.drone.001"}
 `)
 	runGit(t, root, "init")
-	runGit(t, root, "add", ".gitignore", "tracked.go")
+	runGit(t, root, "add", ".gitignore", "tracked_test.go")
 
 	before, err := AuditRepositoryFull(root, false)
 	if err != nil {

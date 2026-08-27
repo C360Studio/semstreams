@@ -5,13 +5,13 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func validComponentConfig() ComponentConfig {
 	return ComponentConfig{
-		OrgID: "acme", Platform: "ops",
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{{
 				Name: "commands", Description: "mission commands", Required: true,
@@ -29,7 +29,7 @@ func newMissionComponent(t *testing.T, config ComponentConfig) *Component {
 	t.Helper()
 	rawConfig, err := json.Marshal(config)
 	require.NoError(t, err)
-	discoverable, err := NewComponent(rawConfig, component.Dependencies{})
+	discoverable, err := NewComponent(rawConfig, component.Dependencies{Platform: types.PlatformMeta{Org: "acme", Platform: "ops"}})
 	require.NoError(t, err)
 	return discoverable.(*Component)
 }

@@ -3,7 +3,7 @@
   "pack_id": "lesson-lifecycle",
   "enable_graph_integration": true,
   "entity_watch_buckets": {
-    "ENTITY_STATES": ["*.*.agent.lesson.record.*"]
+    "ENTITY_STATES": ["*.*.lesson.agent.record.*"]
   },
   "ports": {
     "inputs": [
@@ -36,7 +36,7 @@
     {
       "name": "agentic.lesson-record",
       "message_type": "agentic.agent_lesson.v1",
-      "entity_pattern": "*.*.agent.lesson.record.*",
+      "entity_pattern": "*.*.lesson.agent.record.*",
       "groups": [
         {
           "mode": "reconcile",
@@ -56,7 +56,7 @@
       "name": "Auto-retire suppressed lessons at birth",
       "description": "Birth-time suppression primitive using reconcile_predicates. An ops persona may tag lessons that document an already-fixed anti-pattern with the open category 'deprecated'. When such a lesson is born proposed, this rule reconciles agent.lesson.status to retired. It does not retire an already-active lesson, mutate category, or perform the evidence checks required for promotion; those remain the responsibility of LessonCurator. The written predicate must be a literal member of this pack's local reconcile group.",
       "enabled": true,
-      "entity": {"pattern": "*.*.agent.lesson.record.*"},
+      "entity": {"pattern": "*.*.lesson.agent.record.*"},
       "conditions": [
         {"field": "agent.lesson.status", "operator": "eq", "value": "proposed"},
         {"field": "agent.lesson.category", "operator": "eq", "value": "deprecated"}

@@ -23,21 +23,36 @@ separate federation pipeline.
 
 ## Entity ID Namespacing
 
-External entities use the same 6-part ID format as internal ones:
+External entities use the same six-part canonical ID as internal ones — the lexical contract
+(`openspec/specs/entity-id-contract/spec.md`: exactly six positions, ASCII alphabet, 256 bytes) is enforced at
+every graph boundary today:
 
 ```text
-org.platform.domain.system.type.instance
+org.platform.system.domain.type.instance
 ```
 
-The `domain.system` segments naturally prevent ID collisions between sources:
+The positions have meanings (ADR-102, #1095). `org.platform` is the **minting deployment authority** — the
+composition root's `platform.org` / `platform.id` of the deployment that produced the entity. `system` is the
+**source** that produced it: a repository, feed, world, board, API, or framework component. `domain.type` is a
+delegated taxonomy. `instance` is the leaf.
 
 ```text
-acme.ops.semsource.git.repo.myapp       ← from semsource
-acme.ops.semstreams.gcs.drone.001       ← local entity
-acme.ops.semsource.ast.function.main    ← from semsource
+acme.dep1.myapp.git.repo.myapp        ← minted by deployment acme.dep1 from the source myapp (a repository)
+acme.dep1.gcs.robotics.drone.001      ← minted by acme.dep1 from the source gcs
+acme.dep2.myapp.git.repo.myapp        ← the same repository as held by the peer deployment acme.dep2
 ```
 
-No special namespace filtering is needed. The ID format handles isolation by design.
+The **product** that produced an entity (semsource, semmem, …) is provenance — `Triple.Source` and the envelope
+`source` — and is never a position of the ID. Isolation between sources of one deployment comes from `system`;
+isolation between deployments comes from `org.platform`, and nothing coordinates that pair automatically: two
+deployments that choose the same `platform.org` / `platform.id` mint colliding identities, and the ID format does
+not isolate them by itself.
+
+What the boundary enforces today is the lexical contract only. Enforcement of the authority pair — a subject whose
+`org.platform` is not the deployment's own is rejected unless it arrives on an input port declared as an import
+lane, a subject claiming the local pair on an import lane is rejected, and an import is a read-only mirror no local
+lane mutates — is the second half of #1095 (`openspec/changes/entity-id-segment-semantics/`, graph-ingest delta).
+Until it lands, an entity claiming a foreign or colliding authority is accepted as local truth.
 
 ## Relationships Are Triples
 
@@ -45,9 +60,9 @@ External sources encode relationships as triples, not as a separate edge structu
 relationship between two functions is a triple like any other fact:
 
 ```text
-Subject: acme.ops.semsource.ast.function.main
+Subject: acme.dep1.myapp.ast.function.main
 Predicate: source.code.calls
-Object: acme.ops.semsource.ast.function.helper
+Object: acme.dep1.myapp.ast.function.helper
 Datatype: @id
 ```
 
@@ -158,9 +173,14 @@ Both patterns require zero code changes — they are purely flow configuration d
 
 An external source sends `EventPayload` messages over WebSocket. Each payload must contain:
 
-1. **Entity ID** — canonical six-part identifier, at most 256 bytes
+1. **Entity ID** — canonical six-part identifier in the order above, at most 256 bytes, carrying the
+   producing deployment's own `org.platform`
 2. **Triples** — `[]message.Triple` with canonical subjects and explicit `@id` relationship objects
-3. **Valid schema** — the payload must be registered via `federation.RegisterPayload(domain)`
+3. **A registered payload type** — the payload's `message.Type` must be registered in the **receiving** binary's
+   payload registry through a `RegisterPayloads(reg *payloadregistry.Registry) error` function called from its
+   composition root (see [Payload Registry](15-payload-registry.md)). SemStreams has no `federation` package and
+   no `EventPayload` type of its own: the `EventPayload` in the diagram above is semsource's
+   `graph/event_payload.go` (`semsource.entity.v1`), the shipped example of a federated Graphable.
 
 The receiving SemStreams instance does not need to know the source's internal schema or data
 model. If it has an ID and triples, it's a graph entity.

@@ -11,7 +11,7 @@ import (
 // EntityState represents complete local graph state for an entity.
 // Triples are the single source of truth for all semantic properties.
 //
-// The ID field is the 6-part entity identifier (org.platform.domain.system.type.instance)
+// The ID field is the 6-part entity identifier (org.platform.system.domain.type.instance)
 // which serves as the NATS KV key for storage and retrieval.
 //
 // To extract type information from the ID, use message.ParseEntityID():
@@ -22,7 +22,7 @@ import (
 //	}
 //	entityType := eid.Type
 type EntityState struct {
-	// ID is the 6-part entity identifier: org.platform.domain.system.type.instance
+	// ID is the 6-part entity identifier: org.platform.system.domain.type.instance
 	// Used as NATS KV key for storage and retrieval.
 	ID string `json:"id"`
 

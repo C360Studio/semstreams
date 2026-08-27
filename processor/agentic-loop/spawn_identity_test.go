@@ -27,7 +27,7 @@ func buildSpawnTriples(loopEntityID string, task *agentic.TaskMessage, org, plat
 		Platform: platform,
 		// extract the loopID from the 6-part entity ID — tests pass it
 		// directly so we reconstruct the struct fields from the caller args.
-		// LoopExecutionEntityID format: org.platform.agent.agentic-loop.execution.loopID
+		// LoopExecutionEntityID format: org.platform.agentic-loop.agent.execution.loopID
 		// The LoopID field is not strictly needed since EntityID() is
 		// computed from it, but it must be set to produce a valid EntityID.
 		LoopID: loopIDFromEntityID(loopEntityID, org, platform),
@@ -47,7 +47,7 @@ func loopIDFromEntityID(entityID, org, platform string) string {
 }
 
 func TestBuildSpawnIdentityTriples_RequiredFields(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.spawn-001"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.spawn-001"
 	task := &agentic.TaskMessage{
 		TaskID: "task-spawn-001",
 		Role:   "researcher",
@@ -93,7 +93,7 @@ func TestBuildSpawnIdentityTriples_RequiredFields(t *testing.T) {
 // ancestry-walk and rule-engine $entity.triple.agent.loop.parent
 // substitutions continue to resolve to a navigable entity reference.
 func TestBuildSpawnIdentityTriples_StampsParent(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.child-001"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.child-001"
 	task := &agentic.TaskMessage{
 		TaskID:       "task-child-001",
 		Role:         "gather",
@@ -111,7 +111,7 @@ func TestBuildSpawnIdentityTriples_StampsParent(t *testing.T) {
 	if !ok {
 		t.Fatal("LoopParent object is not a string")
 	}
-	want := "acme.ops.agent.agentic-loop.execution.parent-loop-uuid"
+	want := "acme.ops.agentic-loop.agent.execution.parent-loop-uuid"
 	if parent != want {
 		t.Errorf("LoopParent = %q, want %q", parent, want)
 	}
@@ -121,7 +121,7 @@ func TestBuildSpawnIdentityTriples_StampsParent(t *testing.T) {
 }
 
 func TestBuildSpawnIdentityTriples_OptionalFieldsPresentWhenSet(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.spawn-full"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.spawn-full"
 	task := &agentic.TaskMessage{
 		TaskID:       "task-spawn-full",
 		Role:         "architect",
@@ -159,7 +159,7 @@ func TestBuildSpawnIdentityTriples_OptionalFieldsPresentWhenSet(t *testing.T) {
 }
 
 func TestBuildSpawnIdentityTriples_OptionalFieldsOmittedWhenEmpty(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.spawn-minimal"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.spawn-minimal"
 	task := &agentic.TaskMessage{
 		TaskID: "task-spawn-minimal",
 		Role:   "researcher",
@@ -192,7 +192,7 @@ func TestBuildSpawnIdentityTriples_OptionalFieldsOmittedWhenEmpty(t *testing.T) 
 }
 
 func TestBuildSpawnIdentityTriples_LongPromptTruncated(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.spawn-long-prompt"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.spawn-long-prompt"
 
 	// 10KB prompt — above maxPromptTripleBytes (8KB).
 	longPrompt := ""
@@ -234,7 +234,7 @@ func TestBuildSpawnIdentityTriples_SharedTimestamp(t *testing.T) {
 		Prompt:       "prompt",
 	}
 
-	triples := buildSpawnTriples("acme.ops.agent.agentic-loop.execution.spawn-shared", task, "acme", "ops")
+	triples := buildSpawnTriples("acme.ops.agentic-loop.agent.execution.spawn-shared", task, "acme", "ops")
 	if len(triples) < 2 {
 		t.Fatalf("expected multiple triples, got %d", len(triples))
 	}
@@ -264,7 +264,7 @@ func TestBuildSpawnIdentityTriples_TripleCountWithFullTask(t *testing.T) {
 		Prompt:       "prompt",
 	}
 
-	triples := buildSpawnTriples("acme.ops.agent.agentic-loop.execution.spawn-count", task, "acme", "ops")
+	triples := buildSpawnTriples("acme.ops.agentic-loop.agent.execution.spawn-count", task, "acme", "ops")
 	want := 10 // role, task, parent, run, run.entity_id, reply_to, workflow, workflow_step, user, description
 	if len(triples) != want {
 		preds := make([]string, 0, len(triples))
@@ -278,7 +278,7 @@ func TestBuildSpawnIdentityTriples_TripleCountWithFullTask(t *testing.T) {
 // Sanity check: now-vs-past timestamps are sensible (not zero).
 func TestBuildSpawnIdentityTriples_TimestampPopulated(t *testing.T) {
 	task := &agentic.TaskMessage{TaskID: "task-ts", Role: "researcher"}
-	triples := buildSpawnTriples("acme.ops.agent.agentic-loop.execution.spawn-ts", task, "acme", "ops")
+	triples := buildSpawnTriples("acme.ops.agentic-loop.agent.execution.spawn-ts", task, "acme", "ops")
 
 	if len(triples) == 0 {
 		t.Fatal("expected at least one triple")
@@ -296,7 +296,7 @@ func TestBuildSpawnIdentityTriples_TimestampPopulated(t *testing.T) {
 // TestBuildSpawnIdentityTriples_StampsRunID verifies that agent.loop.run is stamped
 // with the bare RunID string when TaskMessage.RunID is set (ADR-053 D7).
 func TestBuildSpawnIdentityTriples_StampsRunID(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.child-run-001"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.child-run-001"
 	task := &agentic.TaskMessage{
 		TaskID: "task-run-001",
 		Role:   "researcher",
@@ -327,7 +327,7 @@ func TestBuildSpawnIdentityTriples_StampsRunID(t *testing.T) {
 	if !ok {
 		t.Fatal("LoopRunEntityID object is not a string")
 	}
-	if want := "acme.ops.agent.chain.execution.root-loop-uuid"; runEntityID != want {
+	if want := "acme.ops.chain.agent.execution.root-loop-uuid"; runEntityID != want {
 		t.Errorf("LoopRunEntityID = %q, want %q", runEntityID, want)
 	}
 }
@@ -336,7 +336,7 @@ func TestBuildSpawnIdentityTriples_StampsRunID(t *testing.T) {
 // NOT emitted when TaskMessage.RunID is empty — loops not in a run must not
 // carry a zero-value triple.
 func TestBuildSpawnIdentityTriples_OmitsRunIDWhenEmpty(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.solo-loop"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.solo-loop"
 	task := &agentic.TaskMessage{
 		TaskID: "task-solo",
 		Role:   "researcher",
@@ -359,7 +359,7 @@ func TestBuildSpawnIdentityTriples_OmitsRunIDWhenEmpty(t *testing.T) {
 // agent.run.entity-id triple). Conflating the two would break ResolveRun,
 // which reads agent.loop.run as a bare id and rebuilds the chain entity ID.
 func TestBuildSpawnIdentityTriples_RunIDIsNotEntityID(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.child-run-002"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.child-run-002"
 	task := &agentic.TaskMessage{
 		TaskID: "task-run-002",
 		Role:   "coordinator",
@@ -393,7 +393,7 @@ func TestBuildSpawnIdentityTriples_RunIDIsNotEntityID(t *testing.T) {
 // $entity.triple.agent.loop.reply_to gets a navigable reference and can fire on
 // the reply (ADR-053 §4b-2 clarification resume).
 func TestBuildSpawnIdentityTriples_StampsReplyTo(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.reply-001"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.reply-001"
 	task := &agentic.TaskMessage{
 		TaskID:    "task-reply-001",
 		Role:      "coordinator",
@@ -411,7 +411,7 @@ func TestBuildSpawnIdentityTriples_StampsReplyTo(t *testing.T) {
 	if !ok {
 		t.Fatal("LoopReplyTo object is not a string")
 	}
-	want := "acme.ops.agent.agentic-loop.execution.asking-loop-uuid"
+	want := "acme.ops.agentic-loop.agent.execution.asking-loop-uuid"
 	if replyTo != want {
 		t.Errorf("LoopReplyTo = %q, want %q", replyTo, want)
 	}
@@ -424,7 +424,7 @@ func TestBuildSpawnIdentityTriples_StampsReplyTo(t *testing.T) {
 // agent.loop.reply_to is NOT emitted for a non-reply loop — an ordinary
 // continuation must not be mis-marked as a reply.
 func TestBuildSpawnIdentityTriples_OmitsReplyToWhenEmpty(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.non-reply"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.non-reply"
 	task := &agentic.TaskMessage{
 		TaskID: "task-non-reply",
 		Role:   "researcher",
@@ -451,7 +451,7 @@ func TestBuildSpawnIdentityTriples_SharedTimestamp_WithRunID(t *testing.T) {
 		Prompt:       "prompt",
 	}
 
-	triples := buildSpawnTriples("acme.ops.agent.agentic-loop.execution.spawn-shared-run", task, "acme", "ops")
+	triples := buildSpawnTriples("acme.ops.agentic-loop.agent.execution.spawn-shared-run", task, "acme", "ops")
 	if len(triples) < 2 {
 		t.Fatalf("expected multiple triples, got %d", len(triples))
 	}

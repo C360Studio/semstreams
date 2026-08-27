@@ -109,7 +109,7 @@ func TestParseEntityIDAndStructValidationShareAuthority(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, original, parsed.String())
 	assert.True(t, parsed.IsValid())
-	assert.False(t, (EntityID{Org: "-bad", Platform: "p", Domain: "d", System: "s", Type: "t", Instance: "i"}).IsValid()) // entity-id-audit:classify intentional-malformed "-bad.p.d.s.t.i" line=112 column=19 surface=go-constructor:EntityID entity_id_invalid:first_byte constructor rejection fixture
+	assert.False(t, (EntityID{Org: "-bad", Platform: "p", System: "s", Domain: "d", Type: "t", Instance: "i"}).IsValid()) // entity-id-audit:classify intentional-malformed "-bad.p.s.d.t.i" line=112 column=19 surface=go-constructor:EntityID entity_id_invalid:first_byte constructor rejection fixture
 
 	_, err = ParseEntityID("a.b.c.d.e") // entity-id-audit:classify intentional-malformed "a.b.c.d.e" line=114 column=25 surface=go-call:ParseEntityID entity_id_invalid:arity parser rejection fixture
 	assertEntityIDContractError(t, err, ErrorCodeEntityIDInvalid, EntityIDReasonArity, nil)

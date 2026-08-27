@@ -6,10 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
-	"strings"
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/pkg/errs"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 )
 
 const (
@@ -29,12 +29,6 @@ const (
 	// bug-log precedent at docs/bugs/gemini-duplicate-graph-summary.md)
 	// while keeping the response compact.
 	graphSummaryDefaultExamplesPerType = 2
-
-	// graphSummaryMinEntityIDSegments is the minimum number of
-	// dot-separated parts in a canonical entity ID per
-	// message.IsValidEntityID. Below this we skip the entity from
-	// the type-distribution aggregation (it isn't a real entity ID).
-	graphSummaryMinEntityIDSegments = 6
 )
 
 // handleQueryGraphSummary composes a graph overview by fanning out to:
@@ -67,7 +61,7 @@ func (c *Component) handleQueryGraphSummary(ctx context.Context, data []byte) ([
 	// the pagination contract.
 	prefixPayload, err := json.Marshal(graph.PrefixQueryRequest{
 		Prefix: "",
-		// entity-id-audit:classify intentional-sentinel "" line=69 column=11 surface=go-field:PrefixQueryRequest.Prefix entity_id_prefix_invalid:empty documented match-all query
+		// entity-id-audit:classify intentional-sentinel "" line=63 column=11 surface=go-field:PrefixQueryRequest.Prefix entity_id_prefix_invalid:empty documented match-all query
 		Limit: req.EntitySampleLimit,
 	})
 	if err != nil {
@@ -179,8 +173,9 @@ func extractEntityIDsFromPrefixResponse(data []byte) ([]string, error) {
 	return out, nil
 }
 
-// aggregateEntityTypes groups entity IDs into domain.system.type
-// buckets (segments 2.3.4 of the 6-part ID) and selects up to
+// aggregateEntityTypes groups canonical entity IDs into system.domain.type
+// buckets (positions 3-5 of org.platform.system.domain.type.instance, read by
+// named field; a value the canonical parser rejects is skipped) and selects up to
 // examplesPerType sample IDs per bucket. Returns the buckets sorted
 // by count descending (highest-count types first), with ties broken
 // alphabetically on the type name so the response is stable across
@@ -195,11 +190,11 @@ func aggregateEntityTypes(entityIDs []string, examplesPerType int) []graph.Entit
 	}
 	buckets := make(map[string]*bucket)
 	for _, id := range entityIDs {
-		segs := strings.Split(id, ".")
-		if len(segs) < graphSummaryMinEntityIDSegments {
+		parsed, err := semtypes.ParseEntityID(id)
+		if err != nil {
 			continue
 		}
-		typeKey := segs[2] + "." + segs[3] + "." + segs[4]
+		typeKey := parsed.System + "." + parsed.Domain + "." + parsed.Type
 		b, ok := buckets[typeKey]
 		if !ok {
 			b = &bucket{}

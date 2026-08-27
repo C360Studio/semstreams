@@ -41,7 +41,7 @@ var knownAnswerTerms = []knownAnswerTerm{
 		term:      "forklift",
 		substrAny: []string{"forklift", "fl-042", "fl_042"},
 		requiredDigest: &knownAnswerDigest{
-			entityID: "c360.logistics.content.document.operations.doc-ops-001",
+			entityID: "c360.logistics.document.content.operations.doc-ops-001",
 			label:    "Forklift Operation Manual",
 		},
 	},

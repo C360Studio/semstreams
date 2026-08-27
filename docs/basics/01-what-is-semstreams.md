@@ -70,7 +70,7 @@ type DroneTelemetry struct {
 }
 
 func (d *DroneTelemetry) EntityID() string {
-    return fmt.Sprintf("acme.ops.robotics.gcs.drone.%s", d.DroneID)
+    return fmt.Sprintf("acme.ops.gcs.robotics.drone.%s", d.DroneID)
 }
 
 func (d *DroneTelemetry) Triples() []message.Triple {
@@ -93,7 +93,7 @@ Entities stored in NATS KV with version tracking:
 
 ```json
 {
-  "id": "acme.ops.robotics.gcs.drone.001",
+  "id": "acme.ops.gcs.robotics.drone.001",
   "triples": [
     {"predicate": "drone.classification.type", "object": "cargo"},
     {"predicate": "drone.telemetry.battery", "object": 78}
@@ -178,20 +178,24 @@ For details on what each tier provides, see [Real-Time Inference](../concepts/00
 Use 6-part hierarchical identifiers:
 
 ```text
-org.platform.domain.system.type.instance
+org.platform.system.domain.type.instance
  │      │       │      │     │      │
- │      │       │      │     │      └─ Instance (001, rescue, sensor-a)
- │      │       │      │     └─ Entity type (drone, fleet, sensor)
- │      │       │      └─ Source system (gcs, hq, factory)
- │      │       └─ Data domain (robotics, ops, iot)
- │      └─ Platform (rescue, warehouse, production)
- └─ Organization (acme, globex)
+ │      │       │      │     │      └─ Instance — the leaf (001, rescue, sensor-a)
+ │      │       │      │     └─ Entity type within the domain (drone, fleet, sensor)
+ │      │       │      └─ Domain — a delegated taxonomy (robotics, ops, iot)
+ │      │       └─ System — the source that produced the entity (gcs, hq, factory)
+ │      └─ Platform — the minting deployment authority (platform.id)
+ └─ Organization namespace (platform.org)
 ```
+
+Positions have meanings (ADR-102). `org.platform` is never a product name or a payload value: it is the
+composition root's own identity, carried to components as `deps.Platform`. `system` names the source; the product
+that produced an entity is provenance (`Triple.Source`), not identity.
 
 Benefits:
 
 - Federation across organizations
-- Queryable by prefix (`acme.ops.*`)
+- Queryable by prefix: `acme.ops` (one deployment), `acme.ops.gcs` (one source — the federation triple)
 - Self-documenting entity provenance
 
 ## Relationships Create Edges

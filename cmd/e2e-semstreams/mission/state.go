@@ -14,6 +14,7 @@ import (
 	"reflect"
 
 	"github.com/c360studio/semstreams/pkg/lifecycle"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 )
 
@@ -21,11 +22,22 @@ import (
 const Workflow = "mission"
 
 // EntityIDPattern matches mission entities in the federated graph.
-// Six-segment org.platform.domain.system.type.instance shape per
+// Six-segment org.platform.system.domain.type.instance shape per
 // pkg/types.EntityID; the org + platform + instance segments wildcard
-// while domain (`lifecycle`), system (`gcs`), and type (`mission`)
-// pin the canonical mission shape.
-const EntityIDPattern = "*.*.lifecycle.gcs.mission.*"
+// while system (`gcs`, the source), domain (`lifecycle`, this harness's
+// delegated taxonomy), and type (`mission`) pin the canonical mission shape.
+const EntityIDPattern = "*.*.gcs.lifecycle.mission.*"
+
+// Producer is the trusted producer name this harness registers its entity
+// domain under; the e2e composition root supplies it.
+const Producer = "e2e-mission"
+
+// EntityDomainDelegations declares the `lifecycle` domain this harness mints
+// under. It is not a framework-reserved domain: lifecycle participation is a
+// property of an entity, not a framework family (inventory PF-9).
+func EntityDomainDelegations() []semtypes.EntityDomainDelegation {
+	return []semtypes.EntityDomainDelegation{{Producer: Producer, Domain: "lifecycle"}}
+}
 
 // Predicate names for projection (ADR-049). Manager.Transition writes
 // `mission.state.phase`; UpdateFromOperator writes `mission.owner.org-id`

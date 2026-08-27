@@ -139,7 +139,7 @@ organization.domain.category.type.subtype.instance
 └────────────┬───────────────┘ └────────┬────────┘
         Namespace                   Identity
 
-Example: acme.logistics.environmental.sensor.temperature.sensor-042
+Example: acme.logistics.sensor.environmental.temperature.sensor-042
 ```
 
 **Why 6 parts?**
@@ -345,12 +345,12 @@ See [Temporal Index](../advanced/05-index-reference.md#temporal_index) for detai
 Use entity ID hierarchy:
 
 ```text
-acme.logistics.facility.zone.area.warehouse-7
-acme.logistics.facility.zone.area.warehouse-7.section.north
-acme.logistics.facility.zone.area.warehouse-7.section.south
+acme.logistics.zone.facility.area.warehouse-7
+acme.logistics.zone.facility.area.warehouse-7.section.north
+acme.logistics.zone.facility.area.warehouse-7.section.south
 ```
 
-Query with wildcards: `acme.logistics.facility.zone.area.warehouse-7.*`
+Query with wildcards: `acme.logistics.zone.facility.area.warehouse-7.*`
 
 ## Related
 

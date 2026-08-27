@@ -96,7 +96,7 @@ func repoRoot(t *testing.T) string {
 // documentation-vs-reality failure earlier.
 func TestExampleFanOutPack_EndToEnd_DynamicCount(t *testing.T) {
 	const (
-		coordinatorEntityID = "acme.research.agent.agentic-loop.execution.coord-1"
+		coordinatorEntityID = "acme.research.agentic-loop.agent.execution.coord-1"
 		n                   = 5 // dynamic via #149 .length; cover N>3 specifically since the original pack pinned 3
 	)
 
@@ -170,7 +170,7 @@ func phase1SpawnInvestigators(
 	// entity-watcher path would have populated.
 	coordinator.ID = coordinatorEntityID
 
-	rule, err := NewExpressionRule("direct-expression-test", rule01)
+	rule, err := NewExpressionRule(testPlatform, "direct-expression-test", rule01)
 	require.NoError(t, err)
 	require.True(t, rule.EvaluateEntityState(context.Background(), coordinator),
 		"rule 01 EvaluateEntityState must match a coordinator with next_action=fan_out (drives the production wire including SubstituteConditionValues)")
@@ -208,11 +208,11 @@ func phase2StampCompletions(
 	t.Helper()
 	mutator := &mockTripleMutator{}
 	executor := NewActionExecutorFull(nil, mutator, nil)
-	rule, err := NewExpressionRule("direct-expression-test", rule02)
+	rule, err := NewExpressionRule(testPlatform, "direct-expression-test", rule02)
 	require.NoError(t, err)
 
 	for i, taskID := range taskIDs {
-		invID := fmt.Sprintf("acme.research.agent.agentic-loop.execution.inv-%d", i)
+		invID := fmt.Sprintf("acme.research.agentic-loop.agent.execution.inv-%d", i)
 		investigator := &gtypes.EntityState{
 			ID: invID,
 			Triples: []message.Triple{
@@ -260,7 +260,7 @@ func phase3FireJoin(
 ) {
 	t.Helper()
 	coordinator.ID = coordinatorEntityID
-	rule, err := NewExpressionRule("direct-expression-test", rule03)
+	rule, err := NewExpressionRule(testPlatform, "direct-expression-test", rule03)
 	require.NoError(t, err)
 	require.True(t, rule.EvaluateEntityState(context.Background(), coordinator),
 		"rule 03 EvaluateEntityState must match when len(gather.child.completed) == .length(coordinator.decision.subtopics) — drives the production wire including SubstituteConditionValues + #149 .length substitution + #147 array operator wiring")
@@ -359,8 +359,8 @@ func TestExampleFanOutPack_EndToEnd_PartialCompletionDoesNotFireJoin(t *testing.
 	}
 	coordinator := &gtypes.EntityState{Triples: triples}
 
-	coordinator.ID = "acme.research.agent.agentic-loop.execution.coord-x"
-	rule, err := NewExpressionRule("direct-expression-test", rule03)
+	coordinator.ID = "acme.research.agentic-loop.agent.execution.coord-x"
+	rule, err := NewExpressionRule(testPlatform, "direct-expression-test", rule03)
 	require.NoError(t, err)
 	assert.False(t, rule.EvaluateEntityState(context.Background(), coordinator),
 		"rule 03 EvaluateEntityState must NOT match at N-1 completions — premature synthesis would lose the slowest child's findings. Drives the production wire so a future refactor that removes the substitution helper from EvaluateEntityState fails this test rather than silently shipping broken.")

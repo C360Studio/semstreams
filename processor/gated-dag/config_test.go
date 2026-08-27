@@ -61,7 +61,7 @@ func TestConfig_Validate(t *testing.T) {
 		{"bad stranded after", func(c *Config) { c.StrandedAfter = "nope" }, "stranded_after"},
 		{"negative stranded after", func(c *Config) { c.StrandedAfter = "-1s" }, "stranded_after"},
 		{"instance id with custom workflow", func(c *Config) {
-			c.FanOutInstanceID = "org.plat.gateddag.fanout.instance.x"
+			c.FanOutInstanceID = "org.plat.gated-dag.agent.fanout.x"
 			c.FanOutWorkflow = "custom-wf"
 		}, "requires the default fan_out_workflow"},
 		{"noncanonical instance id", func(c *Config) {
@@ -103,7 +103,7 @@ func TestConfig_EntityIDByteBoundaries(t *testing.T) {
 	// against FanOutEntityIDPattern, and this test's subject is byte
 	// boundaries, not pattern conformance — a generic a.b.c.d.e. prefix would
 	// fail for the wrong reason.
-	const fanOutPrefix = "a.b.gateddag.fanout.instance."
+	const fanOutPrefix = "a.b.gated-dag.agent.fanout."
 	id256 := fanOutPrefix + strings.Repeat("x", semtypes.MaxEntityIDBytes-len(fanOutPrefix))
 	require.Len(t, prefix256, semtypes.MaxEntityIDBytes)
 	require.Len(t, id256, semtypes.MaxEntityIDBytes)

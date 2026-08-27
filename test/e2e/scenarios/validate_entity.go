@@ -164,20 +164,20 @@ func (s *TieredScenario) getCriticalEntities() []string {
 	switch s.config.Variant {
 	case "structural":
 		return []string{
-			"c360.logistics.environmental.sensor.temperature.temp-sensor-001",
-			"c360.logistics.maintenance.work.completed.maint-001",
+			"c360.logistics.sensor.environmental.temperature.temp-sensor-001",
+			"c360.logistics.work.maintenance.completed.maint-001",
 		}
 	case "statistical", "semantic":
 		return []string{
-			"c360.logistics.content.document.operations.doc-ops-001",
-			"c360.logistics.environmental.sensor.temperature.temp-sensor-001",
-			"c360.logistics.maintenance.work.completed.maint-001",
+			"c360.logistics.document.content.operations.doc-ops-001",
+			"c360.logistics.sensor.environmental.temperature.temp-sensor-001",
+			"c360.logistics.work.maintenance.completed.maint-001",
 		}
 	default:
 		return []string{
-			"c360.logistics.content.document.operations.doc-ops-001",
-			"c360.logistics.environmental.sensor.temperature.temp-sensor-001",
-			"c360.logistics.maintenance.work.completed.maint-001",
+			"c360.logistics.document.content.operations.doc-ops-001",
+			"c360.logistics.sensor.environmental.temperature.temp-sensor-001",
+			"c360.logistics.work.maintenance.completed.maint-001",
 		}
 	}
 }
@@ -292,17 +292,17 @@ func (s *TieredScenario) executeVerifyEntityRetrieval(ctx context.Context, resul
 
 	// Test entities from test data files
 	// These are fully-qualified entity IDs after processing with org_id=c360, platform=logistics
-	// Format: {org}.{platform}.{domain}.{system}.{category/status/severity}.{id}
+	// Format: {org}.{platform}.{system}.{domain}.{category/status/severity}.{id}
 	testEntities := []struct {
 		id           string
 		expectedType string
 		source       string
 	}{
-		{"c360.logistics.content.document.operations.doc-ops-001", "document", "documents.jsonl"},
-		{"c360.logistics.content.document.quality.doc-quality-001", "document", "documents.jsonl"},
-		{"c360.logistics.maintenance.work.completed.maint-001", "maintenance", "maintenance.jsonl"},
-		{"c360.logistics.observation.record.high.obs-001", "observation", "observations.jsonl"},
-		{"c360.logistics.sensor.document.temperature.sensor-temp-001", "sensor_doc", "sensor_docs.jsonl"},
+		{"c360.logistics.document.content.operations.doc-ops-001", "document", "documents.jsonl"},
+		{"c360.logistics.document.content.quality.doc-quality-001", "document", "documents.jsonl"},
+		{"c360.logistics.work.maintenance.completed.maint-001", "maintenance", "maintenance.jsonl"},
+		{"c360.logistics.record.observation.high.obs-001", "observation", "observations.jsonl"},
+		{"c360.logistics.document.sensor.temperature.sensor-temp-001", "sensor_doc", "sensor_docs.jsonl"},
 	}
 
 	foundEntities := 0

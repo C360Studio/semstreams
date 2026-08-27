@@ -266,7 +266,7 @@ func TestExecuteAddTriple_FirstMatchSemantic_MixedTypes(t *testing.T) {
 // returned false — wrong by numeric semantics. Power-of-10 boundary
 // is the surface where lex and numeric disagree.
 //
-// Drives the production wire — NewExpressionRule(def).EvaluateEntityState —
+// Drives the production wire — NewExpressionRule(testPlatform, def).EvaluateEntityState —
 // per [[feedback_integration_tests_must_drive_production_wire]]. A
 // helper-direct compareValues test would pass without exercising the
 // rule-evaluation path that production uses.
@@ -335,7 +335,7 @@ func TestNumericCompare_AfterStringifiedObject_UsesNumericSemantics(t *testing.T
 					{Field: semantictest.Predicate(t, "test", "metric", "value"), Operator: tt.operator, Value: tt.compareTo, Required: true},
 				},
 			}
-			rule, err := NewExpressionRule("typed-substitution-test", def)
+			rule, err := NewExpressionRule(testPlatform, "typed-substitution-test", def)
 			require.NoError(t, err)
 
 			entityID := semantictest.EntityID(t, "test", "rule", "typed", "numeric", "entity", "001")

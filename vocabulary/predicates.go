@@ -236,7 +236,7 @@ const (
 
 // Hierarchy Domain Predicates
 // These predicates describe relationships derived from 6-part entity ID structure.
-// Entity IDs follow the pattern: org.platform.domain.system.type.instance
+// Entity IDs follow the pattern: org.platform.system.domain.type.instance
 // Hierarchy inference automatically creates these edges at entity ingestion time.
 
 const (
@@ -255,17 +255,17 @@ const (
 	HierarchyDomainContains = "hierarchy.domain.contains"
 
 	// HierarchySystemMember indicates entity belongs to a system (4-part prefix match).
-	// Subject is the entity, object is the system prefix (e.g., "c360.logistics.sensor.document").
+	// Subject is the entity, object is the system prefix (e.g., "c360.logistics.document.sensor").
 	// StandardIRI: skos:broader (entity is narrower than system)
 	// InverseOf: HierarchySystemContains
-	// Example: sensor-temp-001 hierarchy.system.member c360.logistics.sensor.document
+	// Example: sensor-temp-001 hierarchy.system.member c360.logistics.document.sensor
 	HierarchySystemMember = "hierarchy.system.member"
 
 	// HierarchySystemContains indicates system contains an entity (inverse of HierarchySystemMember).
 	// Subject is the system, object is the entity.
 	// StandardIRI: skos:narrower (system contains narrower entities)
 	// InverseOf: HierarchySystemMember
-	// Example: c360.logistics.sensor.document hierarchy.system.contains sensor-temp-001
+	// Example: c360.logistics.document.sensor hierarchy.system.contains sensor-temp-001
 	HierarchySystemContains = "hierarchy.system.contains"
 
 	// HierarchyTypeSibling indicates entities share the same type (5-part prefix match).

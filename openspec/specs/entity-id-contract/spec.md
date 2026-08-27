@@ -3,7 +3,7 @@
 ## Purpose
 
 `entity-id-contract` governs **entity identity**: the canonical six-segment ASCII form
-(`org.platform.domain.system.type.instance`), who is allowed to parse and validate it, and what
+(`org.platform.system.domain.type.instance`), who is allowed to parse and validate it, and what
 happens when something fails to conform. `pkg/types` is the **sole** parser and validator authority
 — that single-authority rule is the point, because identity that each caller re-derives is identity
 that drifts. Enforcement is unconditional at graph boundaries, with no permissive mode and no
@@ -21,7 +21,7 @@ capability answers one question — is this a legal entity ID, and who says so.
 ### Requirement: Every entity ID has one canonical six-segment ASCII form
 
 An entity ID MUST contain exactly six non-empty dot-separated segments in
-`org.platform.domain.system.type.instance` order. Each segment MUST begin with one ASCII alphanumeric byte and every
+`org.platform.system.domain.type.instance` order. Each segment MUST begin with one ASCII alphanumeric byte and every
 remaining byte MUST be ASCII alphanumeric, `_`, or `-`. The complete serialized key, including five dots, MUST be no
 longer than 256 bytes. There MUST be no independent per-segment length maximum.
 

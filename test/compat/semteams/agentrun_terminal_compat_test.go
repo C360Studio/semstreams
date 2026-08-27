@@ -41,15 +41,15 @@ func TestLocalSemstreamsAgentRunProductionTerminalCallbacks(t *testing.T) {
 	at := time.Unix(1_700_001_000, 0).UTC()
 	payloads := []message.Payload{
 		&agentic.LoopCompletedEvent{
-			LoopID: "loop-success", TaskID: "task-success", RunEntityID: "missing-success",
+			LoopID: "loop-success", TaskID: "task-success", RunEntityID: agentic.ChainExecutionEntityID("semteams", "test", "missing-success"),
 			Outcome: agentic.OutcomeSuccess, CompletedAt: at,
 		},
 		&agentic.LoopFailedEvent{
-			LoopID: "loop-failed", TaskID: "task-failed", RunEntityID: "missing-failed",
+			LoopID: "loop-failed", TaskID: "task-failed", RunEntityID: agentic.ChainExecutionEntityID("semteams", "test", "missing-failed"),
 			Outcome: agentic.OutcomeFailed, FailedAt: at,
 		},
 		&agentic.LoopCancelledEvent{
-			LoopID: "loop-cancelled", TaskID: "task-cancelled", RunEntityID: "missing-cancelled",
+			LoopID: "loop-cancelled", TaskID: "task-cancelled", RunEntityID: agentic.ChainExecutionEntityID("semteams", "test", "missing-cancelled"),
 			Outcome: agentic.OutcomeCancelled, CancelledAt: at,
 		},
 	}
