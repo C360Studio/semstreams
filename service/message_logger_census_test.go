@@ -21,6 +21,7 @@ import (
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/stretchr/testify/require"
@@ -395,9 +396,22 @@ func messageLoggerCensusDependencies() component.Dependencies {
 	client := &natsclient.Client{}
 	return component.Dependencies{
 		NATSClient: client, Logger: slog.Default(), MetricsRegistry: metric.NewMetricsRegistry(),
-		ModelRegistry: &model.Registry{}, PayloadRegistry: payloadregistry.New(),
+		ModelRegistry: &model.Registry{}, PayloadRegistry: censusPayloadRegistry(),
 		LifecycleManager: lifecycle.NewManager(client, slog.Default()),
 	}
+}
+
+// censusPayloadRegistry is the registry production boots with: every shipped
+// config constructs graph-ingest against payloadbuiltins.Register (both
+// composition roots call it before the component manager runs), and under
+// ADR-103 a hierarchy-enabled graph-ingest refuses to construct without the
+// container type that set registers.
+func censusPayloadRegistry() *payloadregistry.Registry {
+	reg := payloadregistry.New()
+	if err := payloadbuiltins.Register(reg); err != nil {
+		panic("census payload registry: " + err.Error())
+	}
+	return reg
 }
 
 func collectRawCensusRows(

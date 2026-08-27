@@ -143,6 +143,13 @@ func (c *MutationClient) Create(ctx context.Context, request CreateMutation) (Mu
 			errors.New("entity.triples must be empty; CreateMutation.Triples is the sole fact source"))
 	}
 	entity := request.Entity.Clone()
+	// O-17: the bound contract is the only spelling of the type a caller needs.
+	// A zero stamp is filled from the contract's structured type before
+	// validation and before the request is built (no key is parsed); a
+	// non-zero stamp that differs is rejected below.
+	if entity.MessageType == (message.Type{}) && binding.contract.MessageType.IsValid() {
+		entity.MessageType = binding.contract.MessageType
+	}
 	if err := validateEntity(binding.contract, entity); err != nil {
 		return notCommitted(), invalidMutationError(MutationOperationCreate, err)
 	}
@@ -322,8 +329,9 @@ func validateEntity(contract Contract, entity *graph.EntityState) error {
 	if !entity.MessageType.IsValid() {
 		return errors.New("entity message type is required")
 	}
-	if contract.MessageType != "" && entity.MessageType.Key() != contract.MessageType {
-		return fmt.Errorf("entity message type %q does not match contract %q", entity.MessageType.Key(), contract.Name)
+	if contract.MessageType.IsValid() && !entity.MessageType.Equal(contract.MessageType) {
+		return fmt.Errorf("entity message type %q does not match contract %q message type %q",
+			entity.MessageType.Key(), contract.Name, contract.MessageType.Key())
 	}
 	return nil
 }

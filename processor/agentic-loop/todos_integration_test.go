@@ -13,6 +13,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadbuiltins"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
 	graphingest "github.com/c360studio/semstreams/processor/graph-ingest"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
@@ -74,7 +75,7 @@ func TestIntegration_TodoWriteReadRoundTrip(t *testing.T) {
 	configJSON, err := json.Marshal(config)
 	require.NoError(t, err)
 
-	comp, err := graphingest.CreateGraphIngest(configJSON, component.Dependencies{NATSClient: natsClient})
+	comp, err := graphingest.CreateGraphIngest(configJSON, component.Dependencies{NATSClient: natsClient, PayloadRegistry: payloadbuiltins.NewTestRegistry(t)})
 	require.NoError(t, err)
 	c := comp.(*graphingest.Component)
 	require.NoError(t, c.Initialize())
@@ -190,7 +191,7 @@ func TestIntegration_FreshLoopReturnsEmptyList(t *testing.T) {
 	configJSON, err := json.Marshal(config)
 	require.NoError(t, err)
 
-	comp, err := graphingest.CreateGraphIngest(configJSON, component.Dependencies{NATSClient: natsClient})
+	comp, err := graphingest.CreateGraphIngest(configJSON, component.Dependencies{NATSClient: natsClient, PayloadRegistry: payloadbuiltins.NewTestRegistry(t)})
 	require.NoError(t, err)
 	c := comp.(*graphingest.Component)
 	require.NoError(t, c.Initialize())

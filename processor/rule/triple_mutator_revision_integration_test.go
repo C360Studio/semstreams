@@ -28,6 +28,8 @@ import (
 	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadbuiltins"
+	"github.com/c360studio/semstreams/payloadregistry"
 	graphingest "github.com/c360studio/semstreams/processor/graph-ingest"
 )
 
@@ -56,7 +58,7 @@ func newRevisionClaimHarness(t *testing.T) *revisionClaimHarness {
 	require.NoError(t, err)
 	created, err := graphingest.CreateGraphIngest(
 		rawConfig,
-		component.Dependencies{NATSClient: testClient.Client},
+		component.Dependencies{NATSClient: testClient.Client, PayloadRegistry: revisionClaimRegistry(t)},
 	)
 	require.NoError(t, err)
 	ingest := created.(*graphingest.Component)
@@ -206,4 +208,13 @@ func TestTripleMutator_NoOpRemoveDoesNotClaimAnotherWritersRevision(t *testing.T
 	require.False(t, h.tracker.shouldSkipRule(ruleID, revisionClaimEntityID, externalRev),
 		"a no-op remove committed nothing, so claiming the external writer's revision "+
 			"makes the rule drop a genuine external change")
+}
+
+// revisionClaimRegistry is the builtin set plus the test stamp this file
+// births through graph-ingest's create seam (ADR-103).
+func revisionClaimRegistry(t *testing.T) *payloadregistry.Registry {
+	t.Helper()
+	reg := payloadbuiltins.NewTestRegistry(t)
+	payloadregistry.RegisterTestType(t, reg, message.Type{Domain: "test", Category: "revision-claim", Version: "v1"})
+	return reg
 }

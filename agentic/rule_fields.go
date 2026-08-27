@@ -515,3 +515,132 @@ func (r *AgentResponse) RuleFields() map[string]any {
 	}
 	return fields
 }
+
+// putNonZeroInt adds key when value is non-zero, mirroring `omitempty` on an
+// int field.
+func putNonZeroInt(fields map[string]any, key string, value int) {
+	if value != 0 {
+		fields[key] = value
+	}
+}
+
+// putNonZeroFloat adds key when value is non-zero, mirroring `omitempty` on a
+// float64 field.
+func putNonZeroFloat(fields map[string]any, key string, value float64) {
+	if value != 0 {
+		fields[key] = value
+	}
+}
+
+// putStrings adds key as an independent copy of value. Identifier lists
+// (evidence entity IDs, typed scope keys) are structural: each entry is
+// validated at the writer before it reaches the wire.
+func putStrings(fields map[string]any, key string, value []string) {
+	fields[key] = append([]string(nil), value...)
+}
+
+// --- Entity types born on the mutation lane (ADR-103) ---
+//
+// These five are registered Graphable payloads so they can arrive on the fact
+// lane as themselves; the same projection policy applies to them as to the
+// event payloads above.
+
+// RuleFields implements message.RuleReadable.
+//
+// Withheld: Task — the nested TaskMessage carries the user's prompt. A rule on
+// the spawning task reads the agentic.task.v1 payload, which has its own
+// projection; nesting it here would smuggle the prompt in by another name.
+func (e *LoopExecutionEntity) RuleFields() map[string]any {
+	return map[string]any{
+		"org":      e.Org,
+		"platform": e.Platform,
+		"loop_id":  e.LoopID,
+	}
+}
+
+// RuleFields implements message.RuleReadable.
+//
+// Withheld: Summary, Detail, InjectionForm — the lesson's authored prose
+// (ADR-080). A rule matches on category, polarity, severity, status, scope
+// keys, and evidence; what the lesson SAYS is a judgement for a curator.
+func (e *AgentLessonEntity) RuleFields() map[string]any {
+	fields := map[string]any{
+		"org":         e.Org,
+		"platform":    e.Platform,
+		"id":          e.ID,
+		"category":    e.Category,
+		"polarity":    e.Polarity,
+		"severity":    e.Severity,
+		"status":      e.Status,
+		"executed_by": e.ExecutedBy,
+	}
+	putStrings(fields, "evidence", e.Evidence)
+	putStrings(fields, "applies_to", e.AppliesTo)
+	putTime(fields, "created_at", e.CreatedAt)
+	putString(fields, "observed_role", e.ObservedRole)
+	return fields
+}
+
+// RuleFields implements message.RuleReadable.
+//
+// Withheld: Finding, Recommendation — the ops agent's authored prose
+// (ADR-027). Confidence, severity, evidence, and the observed role are the
+// structural facts a rule may branch on.
+func (e *OpsDiagnosisEntity) RuleFields() map[string]any {
+	fields := map[string]any{
+		"org":         e.Org,
+		"platform":    e.Platform,
+		"id":          e.ID,
+		"confidence":  e.Confidence,
+		"severity":    e.Severity,
+		"executed_by": e.ExecutedBy,
+	}
+	putStrings(fields, "evidence", e.Evidence)
+	putString(fields, "observed_role", e.ObservedRole)
+	return fields
+}
+
+// RuleFields implements message.RuleReadable.
+//
+// Nothing withheld: every field is operator configuration (provider, model,
+// endpoint address, limits, prices) — low-cardinality structural facts.
+func (e *ModelEndpointEntity) RuleFields() map[string]any {
+	fields := map[string]any{
+		"org":            e.Org,
+		"platform":       e.Platform,
+		"name":           e.Name,
+		"provider":       e.Provider,
+		"model":          e.Model,
+		"supports_tools": e.SupportsTools,
+	}
+	putString(fields, "url", e.URL)
+	putNonZeroInt(fields, "max_tokens", e.MaxTokens)
+	putNonZeroFloat(fields, "input_price_per_1m_tokens", e.InputPricePer1MTokens)
+	putNonZeroFloat(fields, "output_price_per_1m_tokens", e.OutputPricePer1MTokens)
+	putNonZeroInt(fields, "requests_per_minute", e.RequestsPerMinute)
+	return fields
+}
+
+// RuleFields implements message.RuleReadable.
+//
+// Withheld: Text (the fetched page body), Title and Snippet (the search
+// provider's content), SourceQuery (the agent's authored search text). The
+// URL, tool, loop, timestamps, content type, status code, and truncation flag
+// are the observation's structure.
+func (e *WebObservationEntity) RuleFields() map[string]any {
+	fields := map[string]any{
+		"org":            e.Org,
+		"platform":       e.Platform,
+		"canonical_url":  e.CanonicalURL,
+		"tool":           string(e.Tool),
+		"loop_entity_id": e.LoopEntityID,
+	}
+	putString(fields, "fetched_at", e.FetchedAt)
+	putString(fields, "content_type", e.ContentType)
+	putNonZeroInt(fields, "status_code", e.StatusCode)
+	if e.Truncated {
+		fields["truncated"] = true
+	}
+	putString(fields, "observed_at", e.ObservedAt)
+	return fields
+}

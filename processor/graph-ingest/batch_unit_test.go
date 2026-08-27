@@ -75,7 +75,7 @@ func TestAddTriples_ValidationRejectsBeforeCAS(t *testing.T) {
 
 			// Canonical append touches c.entityBucket only after validating the
 			// complete request, so these cases prove rejection is pre-I/O.
-			c := &Component{}
+			c := withTestRegistry(t, &Component{})
 			data, marshalErr := json.Marshal(graph.AppendTriplesRequest{Triples: tt.triples})
 			if marshalErr != nil {
 				t.Fatal(marshalErr)

@@ -113,8 +113,7 @@
 // Core packages:
 //   - component: Component lifecycle, registry, port definitions
 //   - componentregistry: Registration of all component types
-//   - engine: Component orchestration and lifecycle
-//   - flowstore: Flow persistence (NATS KV)
+//   - composition: Offline and boot-time composition validation
 //   - config: Configuration loading and validation
 //
 // Graph packages:
@@ -125,7 +124,7 @@
 // Infrastructure:
 //   - natsclient: NATS connection management
 //   - gateway: HTTP, GraphQL, MCP API endpoints
-//   - service: Discovery, flow-builder, metrics services
+//   - service: Discovery, component-manager, metrics services
 //   - metric: Prometheus metrics
 //   - health: Health check system
 //

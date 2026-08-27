@@ -16,23 +16,33 @@ import (
 // Panics if any input part is empty or contains a dot, as these represent
 // programming errors — the caller is responsible for supplying well-formed identifiers.
 func ModelEndpointEntityID(org, platform, endpointName string) string {
-	if err := validatePart("org", org); err != nil {
+	id, err := tryModelEndpointEntityID(org, platform, endpointName)
+	if err != nil {
 		panic(fmt.Sprintf("ModelEndpointEntityID: %s", err))
+	}
+	return id
+}
+
+// tryModelEndpointEntityID is the error-returning form of ModelEndpointEntityID;
+// the decoded-payload path uses it so a malformed identity never panics.
+func tryModelEndpointEntityID(org, platform, endpointName string) (string, error) {
+	if err := validatePart("org", org); err != nil {
+		return "", err
 	}
 	if err := validatePart("platform", platform); err != nil {
-		panic(fmt.Sprintf("ModelEndpointEntityID: %s", err))
+		return "", err
 	}
 	if err := validatePart("endpointName", endpointName); err != nil {
-		panic(fmt.Sprintf("ModelEndpointEntityID: %s", err))
+		return "", err
 	}
 
 	id := fmt.Sprintf("%s.%s.agent.model-registry.endpoint.%s", org, platform, endpointName)
 
 	if !message.IsValidEntityID(id) {
-		panic(fmt.Sprintf("ModelEndpointEntityID: constructed id %q failed IsValidEntityID — check input values", id))
+		return "", fmt.Errorf("constructed id %q failed IsValidEntityID — check input values", id)
 	}
 
-	return id
+	return id, nil
 }
 
 // LoopExecutionEntityID constructs a 6-part entity ID for an agentic loop execution.

@@ -26,12 +26,6 @@
 //   - Retains live handles as the sole lifecycle owner
 //   - Exposes read-only health, status, configuration, and flow graph views
 //
-// FlowService: saved flow-diagram authoring API:
-//   - CRUD operations for flow definitions
-//   - Validation and compilation through Engine
-//   - Explicit sorted, upsert-only publication for the next boot
-//   - Best-effort observations keyed by diagram component names
-//
 // # Service Patterns
 //
 // All services follow standardized patterns:
@@ -92,17 +86,16 @@
 //
 // # Service Registration
 //
-// Services are registered with Manager using constructor functions:
+// Constructors are registered on a Registry, and the Manager is built from it:
 //
-//	manager := service.NewServiceManager(deps)
+//	registry := service.NewServiceRegistry()
+//	if err := registry.Register("my-service", NewMyService); err != nil {
+//	    log.Fatal(err)
+//	}
+//	manager := service.NewServiceManager(registry)
 //
-//	// Register services
-//	manager.RegisterConstructor("my-service", func(deps Dependencies) (Service, error) {
-//	    return NewMyService(deps, config)
-//	})
-//
-//	// Initialize and start all services
-//	if err := manager.InitializeAll(ctx); err != nil {
+//	// Construct the services the configuration names
+//	if err := manager.ConfigureFromServices(cfg.Services, deps); err != nil {
 //	    log.Fatal(err)
 //	}
 //	if err := manager.StartAll(ctx); err != nil {
@@ -276,19 +269,23 @@
 //	        Platform:        cfg.Platform,
 //	    }
 //
-//	    // Create service manager
-//	    manager := service.NewServiceManager(deps)
-//
-//	    // Register services
-//	    manager.RegisterConstructor("flow-service", func(d Dependencies) (Service, error) {
-//	        return service.NewFlowService(d, flowEngine, flowStore)
-//	    })
-//
-//	    // Initialize and start
-//	    ctx := context.Background()
-//	    if err := manager.InitializeAll(ctx); err != nil {
+//	    // Register service constructors, then build the manager FROM the
+//	    // registry. A constructor is func(json.RawMessage, *Dependencies)
+//	    // (Service, error); service.RegisterAll registers the built-in set.
+//	    registry := service.NewServiceRegistry()
+//	    if err := service.RegisterAll(registry); err != nil {
 //	        log.Fatal(err)
 //	    }
+//	    manager := service.NewServiceManager(registry)
+//
+//	    // Construct the services the configuration names. component-manager is
+//	    // mandatory and is created here even when the block omits it.
+//	    if err := manager.ConfigureFromServices(cfg.Services, &deps); err != nil {
+//	        log.Fatal(err)
+//	    }
+//
+//	    // Start
+//	    ctx := context.Background()
 //	    if err := manager.StartAll(ctx); err != nil {
 //	        log.Fatal(err)
 //	    }

@@ -667,7 +667,7 @@ See `*_test.go` files for comprehensive examples:
 
 - [SemStreams Component Package](../component/) - Component registry and payload registration
 - [SemStreams Errors Package](../errors/) - Error classification system
-- [Flow Engine](../engine/) - Type validation and flow deployment
+- [Composition](../composition/) - Port-declaration validation of a composition
 - [NATS Client](../natsclient/) - Message transport layer
 
 ## Contributing

@@ -28,34 +28,11 @@ import (
 // observation seam.
 const EmitLessonToolName = "emit_lesson"
 
-// emitLessonSource is the Source field on triples this tool publishes. Lets
-// operators distinguish ops lesson triples from other emitters in the graph at
-// a glance (mirrors emitDiagnosisSource).
-const emitLessonSource = "ops-emit-lesson"
-
-// minEmitLessonEvidence is the minimum number of evidence entity IDs required
-// per lesson. A lesson with no evidence is unverifiable and cannot be promoted
-// (promotion resolves evidence existence, task 4.1). ADR-080 decision 3.
-const minEmitLessonEvidence = 1
-
-// maxInjectionFormBytes bounds agent.lesson.injection-form. The injection form
-// is rendered verbatim into future loops' briefs, so it must stay small — the
-// bound IS the quality gate that keeps briefs bounded. Over-bound is REJECTED
-// with an instructive error naming the bound (spec: never truncated silently);
-// the unbounded prose lives in agent.lesson.detail instead. ADR-080 decision 3;
-// 320 bytes ≈ 80 tokens (design.md open question, tunable pre-tag).
-const maxInjectionFormBytes = 320
-
 // defaultEmitLessonPerLoopCap bounds how many lessons a single ops loop may
 // emit. Runaway protection: one ops loop legitimately emits several lessons
 // (StopLoop:false), but an unbounded loop must not flood the graph. Over-cap is
 // rejected with an instructive error naming the cap; no entity is created.
 const defaultEmitLessonPerLoopCap = 20
-
-// minAppliesToIDSegments is the minimum number of dotted segments an
-// `id:<prefix>` scope key must carry. Fewer than three (e.g. `id:c360`) would
-// match an entire org and defeat scoping, so it is rejected. ADR-080 decision 3.
-const minAppliesToIDSegments = 3
 
 // lessonBornStatus is the agent.lesson.status value every lesson is created
 // with. Lessons are born `proposed`; only promotion to `active` (task 4.1)
@@ -92,22 +69,6 @@ const emitLessonDefaultSeverity = "info"
 // kind. A repeated emit therefore reaches the same strict-create conflict;
 // this component decides explicitly how to handle that known identity.
 var lessonNamespaceUUID = uuid.MustParse("2c5acb9b-8283-4b34-a4d1-4b1c9f8502ca")
-
-// emitLessonValidSeverities is the closed set of accepted severity values.
-// Note "warning" (not the ops.diagnosis family's "warn").
-var emitLessonValidSeverities = map[string]bool{
-	"info":     true,
-	"warning":  true,
-	"critical": true,
-}
-
-// emitLessonValidPolarities is the closed set of accepted polarity values.
-// Polarity is meaning-bearing (avoid vs best_practice inverts the lesson's
-// guidance), so an invalid value is REJECTED — never clamped.
-var emitLessonValidPolarities = map[string]bool{
-	"avoid":         true,
-	"best_practice": true,
-}
 
 // LessonStore is the narrow create+read surface emit_lesson needs. It is
 // deliberately purpose-built (not TriplePublisher): the executor must know
@@ -375,7 +336,7 @@ func (e *EmitLessonExecutor) ListTools() []agentic.ToolDefinition {
 					},
 					"injection_form": map[string]any{
 						"type":        "string",
-						"description": fmt.Sprintf("Compressed, imperative form rendered verbatim into future briefs. Must be at most %d bytes — keep it tight.", maxInjectionFormBytes),
+						"description": fmt.Sprintf("Compressed, imperative form rendered verbatim into future briefs. Must be at most %d bytes — keep it tight.", agentic.LessonInjectionFormMaxBytes),
 					},
 					"category": map[string]any{
 						"type":        "string",
@@ -394,7 +355,7 @@ func (e *EmitLessonExecutor) ListTools() []agentic.ToolDefinition {
 					"evidence_entity_ids": map[string]any{
 						"type":        "array",
 						"items":       map[string]any{"type": "string"},
-						"minItems":    minEmitLessonEvidence,
+						"minItems":    agentic.LessonMinEvidence,
 						"description": "Entity IDs (6-part) of loops, trajectories, or other graph entities that support this lesson. At least one required.",
 					},
 					"applies_to": map[string]any{
@@ -454,18 +415,9 @@ func (e *EmitLessonExecutor) Execute(ctx context.Context, call agentic.ToolCall)
 }
 
 func (e *EmitLessonExecutor) emitLesson(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
-	args, reason, err := parseEmitLessonArgs(call.Arguments)
+	args, err := parseEmitLessonArgs(call.Arguments)
 	if err != nil {
-		// Count only the four ADR-080 writer-gate rejections (reason != "");
-		// input-hygiene rejects stay uncounted.
-		if reason != "" && e.recordRejection != nil {
-			e.recordRejection(reason)
-		}
-		return agentic.ToolResult{
-			CallID:    call.ID,
-			Error:     err.Error(),
-			ErrorKind: agentic.ToolErrorInvalidArgs,
-		}, nil
+		return e.rejectLesson(call, err), nil
 	}
 
 	if call.LoopID == "" {
@@ -476,9 +428,36 @@ func (e *EmitLessonExecutor) emitLesson(ctx context.Context, call agentic.ToolCa
 		}, errs.WrapInvalid(fmt.Errorf("tool call missing loop_id"), "EmitLessonExecutor", "emitLesson", "resolve loop entity")
 	}
 
-	// Per-loop emission cap (runaway protection). Reserve budget AFTER arg
-	// validation (a rejected call must not consume budget) and BEFORE publish;
-	// a publish failure releases it so a transient error never burns the cap.
+	// The lesson's contract is the entity's (ADR-103): build it first and let
+	// AgentLessonEntity.Validate — the same gate BaseMessage.MarshalJSON
+	// applies to every publisher — decide, BEFORE any budget is reserved.
+	lessonID := uuid.NewSHA1(lessonNamespaceUUID, []byte(canonicalLessonContent(args))).String()
+	loopEntityID, err := agentic.TryLoopExecutionEntityID(e.platform.Org, e.platform.Platform, call.LoopID)
+	if err != nil {
+		return agentic.ToolResult{
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("construct loop entity ID: %v", err),
+			ErrorKind: agentic.ToolErrorInternal,
+		}, errs.WrapInvalid(err, "EmitLessonExecutor", "emitLesson", "construct loop entity ID")
+	}
+	// observed_role is DERIVED from loop context (the framework-propagated tool
+	// metadata), never taken from the caller's arguments.
+	lesson := &agentic.AgentLessonEntity{
+		Org: e.platform.Org, Platform: e.platform.Platform, ID: lessonID,
+		Category: args.Category, Polarity: args.Polarity, Severity: args.Severity,
+		Status: lessonBornStatus, CreatedAt: time.Now(),
+		Summary: args.Summary, Detail: args.Detail, InjectionForm: args.InjectionForm,
+		Evidence: args.Evidence, AppliesTo: args.AppliesTo,
+		ObservedRole: deriveObservedRole(call.Metadata), ExecutedBy: loopEntityID,
+	}
+	if err := lesson.Validate(); err != nil {
+		return e.rejectLesson(call, err), nil
+	}
+
+	// Per-loop emission cap (runaway protection). Reserve budget AFTER the
+	// contract check (a rejected call must not consume budget) and BEFORE
+	// publish; a publish failure releases it so a transient error never burns
+	// the cap.
 	loopCap, reserved := e.reserveEmission(call.LoopID)
 	if !reserved {
 		if e.recordRejection != nil {
@@ -496,26 +475,10 @@ func (e *EmitLessonExecutor) emitLesson(ctx context.Context, call agentic.ToolCa
 	// (category + sorted applies_to + summary + sorted evidence). Sorting the
 	// multi-valued sets makes re-emission order-insensitive; polarity, severity,
 	// detail, and injection_form are NOT part of identity, so refining them
-	// re-mints the same entity (idempotent). ADR-080 decision 3.
-	lessonID := uuid.NewSHA1(lessonNamespaceUUID, []byte(canonicalLessonContent(args))).String()
-	lessonEntityID := agentic.AgentLessonEntityID(e.platform.Org, e.platform.Platform, lessonID)
-
-	loopEntityID, err := agentic.TryLoopExecutionEntityID(e.platform.Org, e.platform.Platform, call.LoopID)
-	if err != nil {
-		e.releaseEmission(call.LoopID)
-		return agentic.ToolResult{
-			CallID:    call.ID,
-			Error:     fmt.Sprintf("construct loop entity ID: %v", err),
-			ErrorKind: agentic.ToolErrorInternal,
-		}, errs.WrapInvalid(err, "EmitLessonExecutor", "emitLesson", "construct loop entity ID")
-	}
-
-	// observed_role is DERIVED from loop context (the framework-propagated tool
-	// metadata), never taken from the caller's arguments.
-	observedRole := deriveObservedRole(call.Metadata)
-
-	now := time.Now()
-	triples := buildEmitLessonTriples(lessonEntityID, loopEntityID, args, observedRole, now)
+	// re-mints the same entity (idempotent). ADR-080 decision 3. The registered
+	// lesson entity is the one builder of its triples (ADR-103).
+	lessonEntityID := lesson.EntityID()
+	triples := lesson.Triples()
 
 	// BIRTH via entity.create with the typed-origin envelope. Append is
 	// must-exist, so an append to a never-created lesson returns not-found.
@@ -567,7 +530,7 @@ func (e *EmitLessonExecutor) emitLesson(ctx context.Context, call agentic.ToolCa
 		Severity:      args.Severity,
 		Evidence:      args.Evidence,
 		AppliesTo:     args.AppliesTo,
-		ObservedRole:  observedRole,
+		ObservedRole:  lesson.ObservedRole,
 		InjectionForm: args.InjectionForm,
 	}
 	payload, err := json.Marshal(result)
@@ -623,6 +586,20 @@ func (e *EmitLessonExecutor) releaseEmission(loopID string) {
 	}
 }
 
+// rejectLesson turns a contract or shape failure into the tool result the
+// agent sees, counting the ADR-080 writer-gate rejections (evidence / bound /
+// grammar) and leaving input-hygiene rejects uncounted.
+func (e *EmitLessonExecutor) rejectLesson(call agentic.ToolCall, err error) agentic.ToolResult {
+	if reason := lessonRejectionReason(err); reason != "" && e.recordRejection != nil {
+		e.recordRejection(reason)
+	}
+	return agentic.ToolResult{
+		CallID:    call.ID,
+		Error:     err.Error(),
+		ErrorKind: agentic.ToolErrorInvalidArgs,
+	}
+}
+
 // deriveObservedRole reads the observed role from framework-propagated tool
 // metadata (agentic.MetadataKeyAgentRole, stamped authoritatively by
 // agentic-loop dispatch from the loop entity), returning "" when absent. Never
@@ -673,76 +650,6 @@ func canonicalLessonContent(args emitLessonArgs) string {
 	return b.String()
 }
 
-// buildEmitLessonTriples assembles the full triple set for a single lesson in
-// deterministic order. All triples share Subject=lessonEntityID (including the
-// agent.action.executed-by back-link FROM the lesson TO the loop), so they
-// belong to the one lesson entity being born:
-//
-//  1. category
-//  2. polarity
-//  3. severity
-//  4. status (proposed)
-//  5. created-at (immutable birth timestamp)
-//  6. summary
-//  7. detail
-//  8. injection-form
-//  9. evidence (one per entry)
-//  10. applies-to (one per entry)
-//  11. observed-role (if derived)
-//  12. agent.action.executed-by back-link to the ops loop
-func buildEmitLessonTriples(lessonEntityID, loopEntityID string, args emitLessonArgs, observedRole string, now time.Time) []message.Triple {
-	triples := make([]message.Triple, 0, 9+len(args.Evidence)+len(args.AppliesTo))
-
-	base := func(pred, obj string) message.Triple {
-		return message.Triple{
-			Subject:    lessonEntityID,
-			Predicate:  pred,
-			Object:     obj,
-			Source:     emitLessonSource,
-			Timestamp:  now,
-			Confidence: 1.0,
-		}
-	}
-
-	triples = append(triples, base(agvocab.LessonCategory, args.Category))
-	triples = append(triples, base(agvocab.LessonPolarity, args.Polarity))
-	triples = append(triples, base(agvocab.LessonSeverity, args.Severity))
-	triples = append(triples, base(agvocab.LessonStatus, lessonBornStatus))
-	// Immutable birth timestamp — the replay-stable ordering key the
-	// brief-assembly matcher sorts on (severity → created-at → entity-ID).
-	// RFC3339 UTC. NOT part of content identity and absent from the lifecycle
-	// reconcile group, so strict create preserves the FIRST emit's created-at
-	// across idempotent re-emits and an ADR-073 from-zero reingest. A triple's
-	// own Timestamp is re-stamped by lifecycle transitions; this object is not.
-	triples = append(triples, base(agvocab.LessonCreatedAt, now.UTC().Format(time.RFC3339)))
-	triples = append(triples, base(agvocab.LessonSummary, args.Summary))
-	triples = append(triples, base(agvocab.LessonDetail, args.Detail))
-	triples = append(triples, base(agvocab.LessonInjectionForm, args.InjectionForm))
-
-	for _, ev := range args.Evidence {
-		triples = append(triples, base(agvocab.LessonEvidence, ev))
-	}
-	for _, scope := range args.AppliesTo {
-		triples = append(triples, base(agvocab.LessonAppliesTo, scope))
-	}
-
-	if observedRole != "" {
-		triples = append(triples, base(agvocab.LessonObservedRole, observedRole))
-	}
-
-	// Back-link from the lesson entity to the ops loop that distilled it.
-	triples = append(triples, message.Triple{
-		Subject:    lessonEntityID,
-		Predicate:  "agent.action.executed-by",
-		Object:     loopEntityID,
-		Source:     emitLessonSource,
-		Timestamp:  now,
-		Confidence: 1.0,
-	})
-
-	return triples
-}
-
 // parseEmitLessonArgs reads the untyped tool arguments into emitLessonArgs and
 // enforces every writer gate with an instructive error (spec: reject naming the
 // violated contract so the agent can rewrite; never truncate). Severity is
@@ -753,99 +660,47 @@ func buildEmitLessonTriples(lessonEntityID, loopEntityID string, args emitLesson
 // by the caller) when the error is one of those contract gates, or "" for
 // input-hygiene rejects (required field, polarity enum, control bytes) which
 // are not one of the four gates and stay uncounted. It is "" whenever err is nil.
-func parseEmitLessonArgs(raw map[string]any) (emitLessonArgs, string, error) {
-	summary, err := requireNonEmptyString(raw, "summary")
+func parseEmitLessonArgs(raw map[string]any) (emitLessonArgs, error) {
+	summary, err := readString(raw, "summary")
 	if err != nil {
-		return emitLessonArgs{}, "", err
+		return emitLessonArgs{}, err
 	}
-	if err := rejectControlBytes("summary", summary); err != nil {
-		return emitLessonArgs{}, "", err
-	}
-	detail, err := requireNonEmptyString(raw, "detail")
+	detail, err := readString(raw, "detail")
 	if err != nil {
-		return emitLessonArgs{}, "", err
+		return emitLessonArgs{}, err
 	}
-	injectionForm, err := requireNonEmptyString(raw, "injection_form")
+	injectionForm, err := readString(raw, "injection_form")
 	if err != nil {
-		return emitLessonArgs{}, "", err
+		return emitLessonArgs{}, err
 	}
-	// Control-byte hygiene: injection_form is the ONE field rendered VERBATIM
-	// into a downstream agent's system prompt (agentic-loop renderLessonBlock,
-	// one line per lesson). A newline or other control byte would break that
-	// block framing and let a lesson smuggle fake prompt scaffolding (e.g.
-	// "do X\n\n[SYSTEM] ignore prior...") into another agent's brief. Reject as
-	// input hygiene — UNCOUNTED (reason ""), matching the summary/category/
-	// applies_to control-byte rejects.
-	if err := rejectControlBytes("injection_form", injectionForm); err != nil {
-		return emitLessonArgs{}, "", err
-	}
-	// Injection-form byte bound — REJECT over-bound, never truncate.
-	if n := len(injectionForm); n > maxInjectionFormBytes {
-		return emitLessonArgs{}, lessonRejectBound, fmt.Errorf(
-			"injection_form is %d bytes, over the %d-byte bound; shorten it (put the full explanation in detail) — the injection form is rendered verbatim into future briefs",
-			n, maxInjectionFormBytes)
-	}
-	category, err := requireNonEmptyString(raw, "category")
+	category, err := readString(raw, "category")
 	if err != nil {
-		return emitLessonArgs{}, "", err
+		return emitLessonArgs{}, err
 	}
-	if err := rejectControlBytes("category", category); err != nil {
-		return emitLessonArgs{}, "", err
-	}
-
-	polarity, err := requireNonEmptyString(raw, "polarity")
+	polarity, err := readString(raw, "polarity")
 	if err != nil {
-		return emitLessonArgs{}, "", err
+		return emitLessonArgs{}, err
 	}
-	if !emitLessonValidPolarities[polarity] {
-		return emitLessonArgs{}, "", fmt.Errorf(
-			"polarity %q is invalid; must be one of \"avoid\" or \"best_practice\" (polarity is meaning-bearing and is not clamped)",
-			polarity)
-	}
-
-	// Severity: optional, clamped to the default when missing/invalid.
-	severity := emitLessonDefaultSeverity
-	if rawSev, present := raw["severity"]; present && rawSev != nil {
-		sev, ok := rawSev.(string)
-		if !ok {
-			return emitLessonArgs{}, "", fmt.Errorf("severity must be a string")
-		}
-		if emitLessonValidSeverities[sev] {
-			severity = sev
-		}
-	}
-
-	evidence, err := parseStringArray(raw, "evidence_entity_ids")
+	// Severity: optional, clamped to the default when missing or outside the
+	// closed set. Unlike polarity (meaning-bearing, rejected by the entity's
+	// contract), severity only affects brief-injection ordering, so an invalid
+	// value is clamped to the lowest urgency rather than bouncing the call —
+	// writer policy, applied before the shared contract runs.
+	severity, err := readString(raw, "severity")
 	if err != nil {
-		return emitLessonArgs{}, lessonRejectEvidence, err
+		return emitLessonArgs{}, err
 	}
-	if len(evidence) < minEmitLessonEvidence {
-		return emitLessonArgs{}, lessonRejectEvidence, fmt.Errorf(
-			"evidence_entity_ids must cite at least %d entity ID, got 0; a lesson with no evidence is unverifiable and cannot be promoted",
-			minEmitLessonEvidence)
+	if !agentic.IsLessonSeverity(severity) {
+		severity = emitLessonDefaultSeverity
 	}
-	for i, ev := range evidence {
-		if !message.IsValidEntityID(ev) {
-			return emitLessonArgs{}, lessonRejectEvidence, fmt.Errorf(
-				"evidence_entity_ids[%d] %q is not a well-formed 6-part entity ID; cite the loop/trajectory/entity the lesson was derived from",
-				i, ev)
-		}
-	}
-
-	appliesTo, err := parseStringArray(raw, "applies_to")
+	evidence, err := readStringArray(raw, "evidence_entity_ids")
 	if err != nil {
-		return emitLessonArgs{}, lessonRejectGrammar, err
+		return emitLessonArgs{}, fmt.Errorf("%w: %w", agentic.ErrLessonEvidence, err)
 	}
-	if len(appliesTo) == 0 {
-		return emitLessonArgs{}, lessonRejectGrammar, fmt.Errorf(
-			"applies_to must carry at least 1 typed scope key (id:<entity-id-prefix of 3+ segments> or tag:<token>)")
+	appliesTo, err := readStringArray(raw, "applies_to")
+	if err != nil {
+		return emitLessonArgs{}, fmt.Errorf("%w: %w", agentic.ErrLessonGrammar, err)
 	}
-	for i, key := range appliesTo {
-		if err := validateAppliesToKey(key); err != nil {
-			return emitLessonArgs{}, lessonRejectGrammar, fmt.Errorf("applies_to[%d]: %w", i, err)
-		}
-	}
-
 	return emitLessonArgs{
 		Summary:       summary,
 		Detail:        detail,
@@ -855,81 +710,50 @@ func parseEmitLessonArgs(raw map[string]any) (emitLessonArgs, string, error) {
 		Severity:      severity,
 		Evidence:      evidence,
 		AppliesTo:     appliesTo,
-	}, "", nil
+	}, nil
 }
 
-// validateAppliesToKey enforces the typed scope-key grammar at emit time:
-// `id:<prefix>` where the prefix has at least minAppliesToIDSegments segments,
-// or `tag:<token>`. Existence of the id-prefix is NOT checked here (that lives
-// at brief-assembly matching); this is a shape gate only.
-func validateAppliesToKey(key string) error {
-	if err := rejectControlBytes("scope key", key); err != nil {
-		return err
-	}
+// lessonRejectionReason maps a contract failure to the ADR-080 writer-gate
+// label the rejection counter carries (evidence / bound / grammar), or "" for
+// an input-hygiene reject, which stays uncounted.
+func lessonRejectionReason(err error) string {
 	switch {
-	case strings.HasPrefix(key, "tag:"):
-		token := strings.TrimPrefix(key, "tag:")
-		if token == "" {
-			return fmt.Errorf("scope key %q has an empty tag token", key)
-		}
-		return nil
-	case strings.HasPrefix(key, "id:"):
-		prefix := strings.TrimPrefix(key, "id:")
-		if prefix == "" {
-			return fmt.Errorf("scope key %q has an empty id prefix", key)
-		}
-		segments := strings.Split(prefix, ".")
-		if len(segments) < minAppliesToIDSegments {
-			return fmt.Errorf(
-				"scope key %q has an id prefix of %d segment(s); need at least %d (fewer would match an entire org)",
-				key, len(segments), minAppliesToIDSegments)
-		}
-		for _, s := range segments {
-			if s == "" {
-				return fmt.Errorf("scope key %q has an empty id-prefix segment", key)
-			}
-		}
-		return nil
+	case errors.Is(err, agentic.ErrLessonEvidence):
+		return lessonRejectEvidence
+	case errors.Is(err, agentic.ErrLessonBound):
+		return lessonRejectBound
+	case errors.Is(err, agentic.ErrLessonGrammar):
+		return lessonRejectGrammar
 	default:
-		return fmt.Errorf(
-			"scope key %q is untyped; must be \"id:<entity-id-prefix of %d+ segments>\" or \"tag:<token>\"",
-			key, minAppliesToIDSegments)
+		return ""
 	}
 }
 
-// rejectControlBytes rejects any ASCII control byte (C0, 0x00–0x1F, plus DEL
-// 0x7F) in an identity field. Content-derived identity concatenates the
-// identity fields with the \x1f/\x1e separators; forbidding control bytes in
-// the participating tokens makes that encoding injective by construction (a
-// separator cannot be smuggled into a component to forge a collision).
-func rejectControlBytes(field, value string) error {
-	for i := 0; i < len(value); i++ {
-		if b := value[i]; b < 0x20 || b == 0x7f {
-			return fmt.Errorf(
-				"%s must not contain ASCII control bytes (found 0x%02x at position %d); use plain text",
-				field, b, i)
-		}
+// readString reads an optional string field: absent or null reads as "";
+// a present non-string is a shape error. Whether "" is acceptable is the
+// entity contract's decision (AgentLessonEntity.Validate), not the parser's.
+func readString(raw map[string]any, field string) (string, error) {
+	value, present := raw[field]
+	if !present || value == nil {
+		return "", nil
 	}
-	return nil
+	s, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string", field)
+	}
+	return s, nil
 }
 
-// requireNonEmptyString reads a required non-empty string field.
-func requireNonEmptyString(raw map[string]any, field string) (string, error) {
-	v, ok := raw[field].(string)
-	if !ok || v == "" {
-		return "", fmt.Errorf("%s is required and must be a non-empty string", field)
+// readStringArray reads an optional JSON array of strings (arrays
+// unmarshalled into map[string]any arrive as []any): absent or null reads as
+// nil; a present non-array, or a non-string element, is a shape error. The
+// minimum count and element grammar are the entity contract's.
+func readStringArray(raw map[string]any, field string) ([]string, error) {
+	value, present := raw[field]
+	if !present || value == nil {
+		return nil, nil
 	}
-	return v, nil
-}
-
-// parseStringArray reads a required JSON array of strings. JSON arrays
-// unmarshalled into map[string]any arrive as []any.
-func parseStringArray(raw map[string]any, field string) ([]string, error) {
-	rawVal, present := raw[field]
-	if !present || rawVal == nil {
-		return nil, fmt.Errorf("%s is required", field)
-	}
-	slice, ok := rawVal.([]any)
+	slice, ok := value.([]any)
 	if !ok {
 		return nil, fmt.Errorf("%s must be an array of strings", field)
 	}

@@ -612,7 +612,9 @@ func (cm *ComponentManager) writeJSON(w http.ResponseWriter, value any, what str
 	}
 }
 
-// handleFlowPaths returns data paths from input components to all reachable components
+// handleFlowPaths projects reachability from the boot composition's input
+// components. Like the graph and validation handlers it serves the result
+// retained at Initialize; nothing is recomputed and no severity is derived.
 func (cm *ComponentManager) handleFlowPaths(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -621,8 +623,10 @@ func (cm *ComponentManager) handleFlowPaths(w http.ResponseWriter, r *http.Reque
 
 	paths, err := cm.GetFlowPaths()
 	if err != nil {
-		cm.logger.Error("Failed to build FlowGraph paths", "error", err)
-		http.Error(w, "Failed to build flow paths", http.StatusInternalServerError)
+		// The only failure mode left is an uninitialized composition, which is
+		// the same "not ready yet" the sibling projections report.
+		cm.logger.Error("Failed to project composition paths", "error", err)
+		http.Error(w, "composition not initialized", http.StatusServiceUnavailable)
 		return
 	}
 

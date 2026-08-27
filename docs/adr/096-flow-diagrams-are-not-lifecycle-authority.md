@@ -61,3 +61,5 @@ downstream impact, but sister repositories remain read-only and their owners per
 - [Disposition](../../openspec/changes/archive/2026-08-21-require-restart-for-config-activation/pr990-boot-only-disposition.md)
 - [Archived change](../../openspec/changes/archive/2026-08-21-require-restart-for-config-activation/)
 - [Migration guide](../operations/migration-boot-only-flow-activation.md)
+  — migration guide retired with #1093; see [ADR-100](100-compositions-are-validated-diagrams-are-projections.md)
+  and [`migration-beta162-to-beta163.md`](../operations/migration-beta162-to-beta163.md).

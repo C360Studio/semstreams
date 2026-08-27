@@ -58,10 +58,11 @@ func TestCreateEntity_UnicodeID(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			entity := &graph.EntityState{
-				ID:        tt.entityID,
-				Triples:   []message.Triple{},
-				Version:   1,
-				UpdatedAt: time.Now(),
+				ID:          tt.entityID,
+				MessageType: testEntityType(),
+				Triples:     []message.Triple{},
+				Version:     1,
+				UpdatedAt:   time.Now(),
 			}
 
 			err := comp.CreateEntity(ctx, entity)
@@ -77,13 +78,13 @@ func TestCreateEntity_UnicodeID(t *testing.T) {
 
 // entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone.🚁001" line=46 column=15 surface=go-field:.entityID entity_id_invalid:first_byte Unicode instance rejection fixture
 // entity-id-audit:classify intentional-malformed "c360.platform.робот.mav1.drone.001" line=52 column=15 surface=go-field:.entityID entity_id_invalid:first_byte Unicode domain rejection fixture
-// entity-id-audit:classify intentional-malformed "" line=136 column=14 surface=go-field:.entityID entity_id_invalid:empty empty ID rejection fixture
-// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone" line=141 column=14 surface=go-field:.entityID entity_id_invalid:arity five-part ID rejection fixture
-// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone.001.extra" line=146 column=14 surface=go-field:.entityID entity_id_invalid:arity seven-part ID rejection fixture
-// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav 1.drone.001" line=151 column=14 surface=go-field:.entityID entity_id_invalid:alphabet whitespace rejection fixture
-// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone.001!" line=156 column=14 surface=go-field:.entityID entity_id_invalid:alphabet punctuation rejection fixture
-// entity-id-audit:classify intentional-malformed "" line=253 column=15 surface=go-field:.entityID entity_id_invalid:empty empty validation fixture
-// entity-id-audit:classify intentional-malformed "" line=450 column=9 surface=go-return:EntityID entity_id_invalid:empty empty Graphable ID rejection fixture
+// entity-id-audit:classify intentional-malformed "" line=138 column=14 surface=go-field:.entityID entity_id_invalid:empty empty ID rejection fixture
+// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone" line=143 column=14 surface=go-field:.entityID entity_id_invalid:arity five-part ID rejection fixture
+// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone.001.extra" line=148 column=14 surface=go-field:.entityID entity_id_invalid:arity seven-part ID rejection fixture
+// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav 1.drone.001" line=153 column=14 surface=go-field:.entityID entity_id_invalid:alphabet whitespace rejection fixture
+// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone.001!" line=158 column=14 surface=go-field:.entityID entity_id_invalid:alphabet punctuation rejection fixture
+// entity-id-audit:classify intentional-malformed "" line=256 column=15 surface=go-field:.entityID entity_id_invalid:empty empty validation fixture
+// entity-id-audit:classify intentional-malformed "" line=456 column=9 surface=go-return:EntityID entity_id_invalid:empty empty Graphable ID rejection fixture
 
 func TestCreateEntity_LargeTripleSet(t *testing.T) {
 	// Test entity creation with large number of triples (performance test)
@@ -104,10 +105,11 @@ func TestCreateEntity_LargeTripleSet(t *testing.T) {
 	}
 
 	entity := &graph.EntityState{
-		ID:        "c360.platform.test.sys.type.001",
-		Triples:   triples,
-		Version:   1,
-		UpdatedAt: time.Now(),
+		ID:          "c360.platform.test.sys.type.001",
+		MessageType: testEntityType(),
+		Triples:     triples,
+		Version:     1,
+		UpdatedAt:   time.Now(),
 	}
 
 	// Should handle large triple set without error
@@ -161,10 +163,11 @@ func TestCreateEntity_InvalidIDFormats(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			entity := &graph.EntityState{
-				ID:        tt.entityID,
-				Triples:   []message.Triple{},
-				Version:   1,
-				UpdatedAt: time.Now(),
+				ID:          tt.entityID,
+				MessageType: testEntityType(),
+				Triples:     []message.Triple{},
+				Version:     1,
+				UpdatedAt:   time.Now(),
 			}
 
 			err := comp.CreateEntity(ctx, entity)
@@ -281,7 +284,8 @@ func TestEntitySerialization_Roundtrip(t *testing.T) {
 	// Test that entity can be marshaled and unmarshaled without data loss
 
 	original := &graph.EntityState{
-		ID: "c360.platform.robotics.mav1.drone.001",
+		ID:          "c360.platform.robotics.mav1.drone.001",
+		MessageType: testEntityType(),
 		Triples: []message.Triple{
 			{
 				Subject:    "c360.platform.robotics.mav1.drone.001",
@@ -368,7 +372,8 @@ func TestEntitySerialization_SpecialCharacters(t *testing.T) {
 	// Test entity with special characters in predicates and string objects
 
 	entity := &graph.EntityState{
-		ID: "c360.platform.test.sys.type.001",
+		ID:          "c360.platform.test.sys.type.001",
+		MessageType: testEntityType(),
 		Triples: []message.Triple{
 			{
 				Subject:   "c360.platform.test.sys.type.001",
@@ -414,7 +419,8 @@ func TestEntitySerialization_LargeObjectValues(t *testing.T) {
 	largeString := strings.Repeat("A", 10000) // 10KB string
 
 	entity := &graph.EntityState{
-		ID: "c360.platform.test.sys.type.001",
+		ID:          "c360.platform.test.sys.type.001",
+		MessageType: testEntityType(),
 		Triples: []message.Triple{
 			{
 				Subject:   "c360.platform.test.sys.type.001",
@@ -465,7 +471,8 @@ func newTestContext(t *testing.T) context.Context {
 
 func newTestEntity(id string) *graph.EntityState {
 	return &graph.EntityState{
-		ID: id,
+		ID:          id,
+		MessageType: testEntityType(),
 		Triples: []message.Triple{
 			{
 				Subject:    id,

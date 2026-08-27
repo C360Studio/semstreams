@@ -351,9 +351,10 @@ func TestBatchBackendFailureReturnsNoPartialEntities(t *testing.T) {
 
 func newIngestGuardTestComponent(bucket *mockKVBucket) *Component {
 	c := &Component{
-		entityBucket: bucketStoreForTest(bucket),
-		logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
-		running:      true,
+		entityBucket:    bucketStoreForTest(bucket),
+		payloadRegistry: mustTestPayloadRegistry(),
+		logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		running:         true,
 		// Fresh, unregistered gauge per component so tests can assert values
 		// without cross-test interference on the process-global metric.
 		poisonedEntities: prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_poisoned_entities"}),

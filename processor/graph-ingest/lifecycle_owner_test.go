@@ -74,7 +74,7 @@ func TestLifecycleOwnerRunningStopPreservesEffectSettlementOrder(t *testing.T) {
 
 	runCtx, runCancel := context.WithCancel(t.Context())
 	submitCtx, submitCancel := context.WithCancel(runCtx)
-	owner := &Component{
+	owner := withTestRegistry(t, &Component{
 		logger:             slog.Default(),
 		lifecycleUsed:      true,
 		running:            true,
@@ -87,7 +87,7 @@ func TestLifecycleOwnerRunningStopPreservesEffectSettlementOrder(t *testing.T) {
 		}},
 		subscriptions:  []graphIngestCoreSubscription{coreSub},
 		boundConsumers: []boundConsumer{{stream: "ENTITY", name: "graph-ingest-entity"}},
-	}
+	})
 
 	stopResult := make(chan error, 1)
 	go func() { stopResult <- owner.Stop(t.Context()) }()
@@ -136,7 +136,7 @@ func TestLifecycleOwnerFailedCleanupRetainsExactHandlesForLaterStop(t *testing.T
 		closed: make(chan struct{}), drainSeen: make(chan struct{}),
 	}
 	runCtx, runCancel := context.WithCancel(t.Context())
-	owner := &Component{
+	owner := withTestRegistry(t, &Component{
 		logger:         slog.Default(),
 		lifecycleUsed:  true,
 		cleanupPending: true,
@@ -144,7 +144,7 @@ func TestLifecycleOwnerFailedCleanupRetainsExactHandlesForLaterStop(t *testing.T
 		consumers: []graphIngestConsumerBinding{{
 			handle: consumer,
 		}},
-	}
+	})
 
 	expired, expire := context.WithCancel(t.Context())
 	expire()
@@ -181,7 +181,7 @@ func TestLifecycleOwnerRunningDeadlineIsTerminalWithoutReplay(t *testing.T) {
 	consumer := &graphIngestLifecycleConsumeContext{
 		closed: make(chan struct{}), drainSeen: make(chan struct{}),
 	}
-	owner := &Component{
+	owner := withTestRegistry(t, &Component{
 		logger:        slog.Default(),
 		lifecycleUsed: true,
 		running:       true,
@@ -189,7 +189,7 @@ func TestLifecycleOwnerRunningDeadlineIsTerminalWithoutReplay(t *testing.T) {
 		consumers: []graphIngestConsumerBinding{{
 			handle: consumer,
 		}},
-	}
+	})
 	stopCtx, expire := context.WithCancel(t.Context())
 	stopResult := make(chan error, 1)
 	go func() { stopResult <- owner.Stop(stopCtx) }()
@@ -214,7 +214,7 @@ func TestLifecycleOwnerRunningDeadlineIsTerminalWithoutReplay(t *testing.T) {
 }
 
 func TestLifecycleOwnerStopBeforeStartIsTerminal(t *testing.T) {
-	owner := &Component{}
+	owner := withTestRegistry(t, &Component{})
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
 	if err := owner.Start(canceled); err == nil {

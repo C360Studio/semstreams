@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/projection"
 )
 
@@ -23,7 +24,7 @@ func TestConfigPackIDProjectionContractsRoundTrip(t *testing.T) {
 		ProjectionContracts: []projection.Contract{
 			{
 				Name:          "drone.status",
-				MessageType:   "telemetry.robotics.drone-status.v1",
+				MessageType:   message.Type{Domain: "telemetry", Category: "drone_status", Version: "v1"},
 				EntityPattern: "acme.ops.robotics.gcs.drone.*",
 				Groups: []projection.PredicateGroup{
 					{

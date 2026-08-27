@@ -47,7 +47,7 @@ func TestIntegration_NoGuardConsumerOnEntityStatesAfterStart(t *testing.T) {
 	natsClient := testClient.Client
 
 	config := DefaultConfig()
-	deps := component.Dependencies{NATSClient: natsClient}
+	deps := component.Dependencies{NATSClient: natsClient, PayloadRegistry: newTestPayloadRegistry(t)}
 	configJSON, err := json.Marshal(config)
 	require.NoError(t, err)
 	comp, err := CreateGraphIngest(configJSON, deps)
@@ -71,7 +71,8 @@ func TestIntegration_NoGuardConsumerOnEntityStatesAfterStart(t *testing.T) {
 	// A post-Start write commits and is delivered to NO graph-ingest watcher:
 	// the consumer count on the backing stream stays zero across the write.
 	require.NoError(t, c.MergeEntity(ctx, &graph.EntityState{
-		ID: seededID,
+		ID:          seededID,
+		MessageType: testEntityType(),
 		Triples: []message.Triple{{
 			Subject: seededID, Predicate: "test.state.value", Object: "post-start",
 			Timestamp: time.Now(), Confidence: 1.0,
@@ -120,7 +121,7 @@ func TestIntegration_BootSweepInventoriesResidentPoisonRealNATS(t *testing.T) {
 	require.NoError(t, err)
 
 	config := DefaultConfig()
-	deps := component.Dependencies{NATSClient: natsClient}
+	deps := component.Dependencies{NATSClient: natsClient, PayloadRegistry: newTestPayloadRegistry(t)}
 	configJSON, err := json.Marshal(config)
 	require.NoError(t, err)
 	comp, err := CreateGraphIngest(configJSON, deps)
@@ -151,7 +152,8 @@ func TestIntegration_BootSweepInventoriesResidentPoisonRealNATS(t *testing.T) {
 	_, inventoried = poisonInventoryEntry(c, poisonID)
 	assert.False(t, inventoried)
 	require.NoError(t, c.CreateEntity(ctx, &graph.EntityState{
-		ID: poisonID,
+		ID:          poisonID,
+		MessageType: testEntityType(),
 		Triples: []message.Triple{{
 			Subject: poisonID, Predicate: "test.state.value", Object: "reborn",
 			Timestamp: time.Now(), Confidence: 1.0,

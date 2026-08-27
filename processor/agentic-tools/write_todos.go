@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
-	"github.com/c360studio/semstreams/internal/builtinprojection"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/projection"
@@ -193,8 +192,8 @@ func (e *WriteTodosExecutor) write(ctx context.Context, call agentic.ToolCall) (
 		}, errs.WrapFatal(err, "WriteTodosExecutor", "write", "encode todo records")
 	}
 	_, err = e.writer.Reconcile(ctx, projection.ReconcileMutation{
-		Contract: builtinprojection.LoopExecutionContractName,
-		Group:    builtinprojection.TodoGroupName,
+		Contract: agentic.LoopExecutionContractName,
+		Group:    agentic.TodoGroupName,
 		EntityID: loopEntityID,
 		Desired:  triples,
 		Metadata: projection.MutationMetadata{

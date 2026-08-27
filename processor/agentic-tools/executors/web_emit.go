@@ -34,6 +34,7 @@ const webEmitTimeout = 5 * time.Second
 //
 // Reasons are a closed set:
 //   - "entity_id" — TryWebObservationEntityID rejected the URL
+//   - "validate"  — WebObservationEntity.Validate rejected the observation (ADR-103)
 //   - "publish"   — TriplePublisher.AddTriple returned an error
 //
 // Per the 2026-05-11 design decision, both tools log+counter+continue

@@ -81,9 +81,10 @@ func TestPoisonRepairRecoveryWithoutRestart(t *testing.T) {
 
 	// Canonical wire repair step 2: fresh create serves.
 	require.NoError(t, c.CreateEntity(context.Background(), &graph.EntityState{
-		ID:      id,
-		Version: 1,
-		Triples: []message.Triple{{Subject: id, Predicate: "test.state.value", Object: "fresh", Timestamp: time.Now(), Confidence: 1.0}},
+		ID:          id,
+		MessageType: testEntityType(),
+		Version:     1,
+		Triples:     []message.Triple{{Subject: id, Predicate: "test.state.value", Object: "fresh", Timestamp: time.Now(), Confidence: 1.0}},
 	}))
 	data, err = queryEntity(t, c, id)
 	require.NoError(t, err, "fresh create after repair must serve")
@@ -217,8 +218,9 @@ func TestPoisonInventoryIsObservabilityOnly(t *testing.T) {
 		}, 1)
 
 		require.NoError(t, c.MergeEntity(ctx, &graph.EntityState{
-			ID:      id,
-			Triples: []message.Triple{{Subject: id, Predicate: "test.state.value", Object: "merged", Timestamp: time.Now(), Confidence: 1.0}},
+			ID:          id,
+			MessageType: testEntityType(),
+			Triples:     []message.Triple{{Subject: id, Predicate: "test.state.value", Object: "merged", Timestamp: time.Now(), Confidence: 1.0}},
 		}), "writes never consult the inventory")
 		_, inventoried := poisonInventoryEntry(c, id)
 		assert.False(t, inventoried, "the committed write clears the stale entry (D3b)")
@@ -332,7 +334,7 @@ func TestProcessIngestResidentPoisonNakThenAppliesAfterRepair(t *testing.T) {
 	seedPoisonBytes(bucket, id, 1)
 
 	work := ingestWork{
-		entity: &graph.EntityState{ID: id, Triples: []message.Triple{{
+		entity: &graph.EntityState{ID: id, MessageType: testEntityType(), Triples: []message.Triple{{
 			Subject: id, Predicate: "test.state.value", Object: "survivor", Timestamp: time.Now(), Confidence: 1.0,
 		}}},
 		msg: &keyedIngestTestMsg{}, entityID: id, stream: "ENTITY", seq: 7,
@@ -484,7 +486,7 @@ func TestDetectionInvalidatesCachedEntry(t *testing.T) {
 	c.entityCache = entityCache
 
 	id := "acme.ops.test.system.widget.cache-a"
-	_, err = entityCache.Set(id, graph.EntityState{ID: id, Version: 1})
+	_, err = entityCache.Set(id, graph.EntityState{ID: id, MessageType: testEntityType(), Version: 1})
 	require.NoError(t, err)
 	_, hit := entityCache.Get(id)
 	require.True(t, hit, "fixture: the entry must be cache-warm before poisoning")
@@ -508,7 +510,8 @@ func TestSuffixResolutionServesIDWhileReadRefuses(t *testing.T) {
 
 	id := "c360.logistics.environmental.sensor.temperature.poison-sensor-001"
 	require.NoError(t, comp.CreateEntity(ctx, &graph.EntityState{
-		ID: id, Triples: []message.Triple{}, Version: 1, UpdatedAt: time.Now(),
+		ID:          id,
+		MessageType: testEntityType(), Triples: []message.Triple{}, Version: 1, UpdatedAt: time.Now(),
 	}))
 	// Poison the stored bytes out-of-band; the suffix index entry remains.
 	_, err := comp.entityBucket.Put(ctx, id, guardTestPoisonBytes(id))

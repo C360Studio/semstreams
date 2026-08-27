@@ -53,7 +53,7 @@ func startGraphIngestForLessons(t *testing.T, natsClient *natsclient.Client) {
 	configJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
 
-	comp, err := graphingest.CreateGraphIngest(configJSON, component.Dependencies{NATSClient: natsClient})
+	comp, err := graphingest.CreateGraphIngest(configJSON, component.Dependencies{NATSClient: natsClient, PayloadRegistry: payloadbuiltins.NewTestRegistry(t)})
 	require.NoError(t, err)
 
 	gi := comp.(*graphingest.Component)

@@ -1,27 +1,34 @@
-// Package payloadregistry provides type-discriminated payload
-// registration and lookup for message.BaseMessage deserialization.
+// Package payloadregistry is the single type authority for a binary
+// (ADR-103): a message.Type is a type of the deployment if and only if it
+// is registered here. A registration carries the factory that decodes the
+// type, the ADR-054 indexing-profile floor graph-ingest stamps on entities
+// born with it, and the projection contracts bound to it. There is no
+// second catalogue of types and no global registry — each binary constructs
+// its own and injects it through component.Dependencies.PayloadRegistry.
 //
-// Lives as a leaf package (imports only stdlib + pkg/errs + pkg/types)
-// so it can be referenced by both `message` and `agentic` without
-// creating an import cycle. Previously these types lived in
-// `component`, which forced agentic and message to import component
-// solely for payload registration — the cycle that blocked clean
-// dependency wiring of model.RegistryReader-style typed registries.
+// Import edge: payloadregistry → pkg/projection/contract → {pkg/types,
+// vocabulary → pkg/platform}. The genuinely new transitive dependency this
+// adds is vocabulary itself — five init()s (hierarchy.go, labels.go,
+// lifecycle.go, relationships.go, rulepacks/predicates.go) and a global
+// predicate registry; pkg/platform was already reached through message.
+// `message` imports this package and therefore inherits the edge. The
+// package still reaches neither message nor any component package, so
+// message and agentic can both import it without a cycle.
 //
-// Pattern A (boot-registry) per ADR-029. The package-level singleton
-// (Register / Create / Build / GlobalRegistry) is preserved for
-// backward compatibility with existing init()-based registrations,
-// but new consumers should prefer the *Registry instance form and
-// dependency-inject it like other registries.
+// Pattern A (boot-registry) per ADR-029: consumers use the *Registry
+// instance form and dependency-inject it like other registries.
 package payloadregistry
 
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/pkg/projection/contract"
 	"github.com/c360studio/semstreams/pkg/types"
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 // Factory creates a payload instance for a specific message type.
@@ -40,7 +47,9 @@ type Factory func() any
 // for performance optimization of high-frequency payload types.
 type Builder func(fields map[string]any) (any, error)
 
-// Registration holds factory and metadata for a payload type.
+// Registration holds factory and metadata for a payload type, plus the
+// attributes registered with the type (ADR-103): its indexing-profile floor
+// and the projection contracts bound to it.
 type Registration struct {
 	Factory     Factory        `json:"-"`           // Factory function (not serializable)
 	Builder     Builder        `json:"-"`           // Builder function (not serializable)
@@ -49,6 +58,17 @@ type Registration struct {
 	Version     string         `json:"version"`     // Schema version (e.g., "v1", "v2")
 	Description string         `json:"description"` // Human-readable description
 	Example     map[string]any `json:"example"`     // Optional example payload data
+
+	// IndexingProfile is the ADR-054 channel-(c) floor graph-ingest stamps on
+	// an entity born with this type when the producer declares none. Empty
+	// means the type declares no floor: ingest applies control and meters
+	// the gap under indexing_profile_default_total{message_type}.
+	IndexingProfile string `json:"indexing_profile,omitempty"`
+
+	// Contracts are the projection contracts bound to this type. Each names
+	// this registration's key (an empty MessageType is filled at Register);
+	// a contract naming another key is a registration error.
+	Contracts []contract.Contract `json:"-"`
 }
 
 // MessageType returns the formatted message type string for this registration.
@@ -108,12 +128,34 @@ func (pr *Registry) Register(registration *Registration) error {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "PayloadRegistry", "Register", "version validation")
 	}
 
+	// Component grammar: the key must round-trip through Key(); a component
+	// holding the separator would register a key nothing can bind a contract
+	// to, and the error belongs at boot, not at the first Create.
+	registeredType := types.Type{Domain: registration.Domain, Category: registration.Category, Version: registration.Version}
+	if err := registeredType.Validate(); err != nil {
+		return errs.WrapInvalid(err, "PayloadRegistry", "Register", "message type grammar")
+	}
+
 	// Verify factory produces payload with matching Schema()
 	if err := validateSchemaConsistency(registration); err != nil {
 		return err
 	}
 
+	if registration.IndexingProfile != "" && !vocabulary.IsValidIndexingProfile(registration.IndexingProfile) {
+		return errs.WrapInvalid(
+			fmt.Errorf("indexing profile %q is not one of the vocabulary's profiles", registration.IndexingProfile),
+			"PayloadRegistry",
+			"Register",
+			"indexing profile validation",
+		)
+	}
+
 	msgType := registration.MessageType()
+
+	contracts, err := bindContracts(registeredType, registration.IndexingProfile, registration.Contracts)
+	if err != nil {
+		return err
+	}
 
 	pr.mu.Lock()
 	defer pr.mu.Unlock()
@@ -127,14 +169,139 @@ func (pr *Registry) Register(registration *Registration) error {
 		)
 	}
 
-	pr.registrations[msgType] = registration
+	stored := *registration
+	stored.Contracts = contracts
+	pr.registrations[msgType] = &stored
 	return nil
 }
 
+// bindContracts returns independent copies of the contracts bound to the
+// registered type: a zero contract MessageType is filled with the structured
+// type (never a parsed key), a different type is refused, contract names are
+// unique within the registration, a contract profile must agree with the
+// type's floor when both are set (O-13), and each contract passes shape
+// validation. Predicate declaration is not checked here; it stays at
+// mutation-client construction.
+func bindContracts(registered types.Type, floor string, contracts []contract.Contract) ([]contract.Contract, error) {
+	if len(contracts) == 0 {
+		return nil, nil
+	}
+	bound := make([]contract.Contract, 0, len(contracts))
+	names := make(map[string]struct{}, len(contracts))
+	for _, original := range contracts {
+		c := cloneContract(original)
+		if c.MessageType == (types.Type{}) {
+			c.MessageType = registered
+		}
+		if !c.MessageType.Equal(registered) {
+			return nil, errs.WrapInvalid(
+				fmt.Errorf("contract %q names message type %q but is registered with %q", c.Name, c.MessageType.Key(), registered.Key()),
+				"PayloadRegistry", "Register", "contract message type check")
+		}
+		if _, duplicate := names[c.Name]; duplicate {
+			return nil, errs.WrapInvalid(
+				fmt.Errorf("contract name %q repeats within registration %q", c.Name, registered.Key()),
+				"PayloadRegistry", "Register", "contract name check")
+		}
+		names[c.Name] = struct{}{}
+		if floor != "" && c.IndexingProfile != "" && c.IndexingProfile != floor {
+			return nil, errs.WrapInvalid(
+				fmt.Errorf("contract %q declares indexing profile %q but %q registers floor %q",
+					c.Name, c.IndexingProfile, registered.Key(), floor),
+				"PayloadRegistry", "Register", "contract profile agreement")
+		}
+		if err := c.ValidateShape(); err != nil {
+			return nil, errs.WrapInvalid(
+				fmt.Errorf("contract bound to %q: %w", registered.Key(), err),
+				"PayloadRegistry", "Register", "contract shape validation")
+		}
+		bound = append(bound, c)
+	}
+	return bound, nil
+}
+
+// cloneContract returns a contract whose slices are independent of the input.
+func cloneContract(c contract.Contract) contract.Contract {
+	clone := c
+	clone.BirthPredicates = append([]string(nil), c.BirthPredicates...)
+	clone.Groups = make([]contract.PredicateGroup, len(c.Groups))
+	for index, group := range c.Groups {
+		clone.Groups[index] = group
+		clone.Groups[index].Predicates = append([]string(nil), group.Predicates...)
+	}
+	return clone
+}
+
+func cloneContracts(contracts []contract.Contract) []contract.Contract {
+	if len(contracts) == 0 {
+		return nil
+	}
+	cloned := make([]contract.Contract, len(contracts))
+	for index, c := range contracts {
+		cloned[index] = cloneContract(c)
+	}
+	return cloned
+}
+
+// copyWithoutFactory returns the caller-facing view of a registration: every
+// attribute with independent contract copies; Factory and Builder are
+// intentionally not copied.
+func (pr *Registration) copyWithoutFactory() *Registration {
+	return &Registration{
+		Domain:          pr.Domain,
+		Category:        pr.Category,
+		Version:         pr.Version,
+		Description:     pr.Description,
+		Example:         pr.Example,
+		IndexingProfile: pr.IndexingProfile,
+		Contracts:       cloneContracts(pr.Contracts),
+	}
+}
+
+// IndexingProfileFor returns the floor registered with key and whether the key
+// is registered in this registry. A registered type may declare no floor
+// (profile == ""); an unregistered key reports ("", false). Floors exist per
+// binary because registrations do.
+func (pr *Registry) IndexingProfileFor(key string) (profile string, registered bool) {
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
+
+	registration, exists := pr.registrations[key]
+	if !exists {
+		return "", false
+	}
+	return registration.IndexingProfile, true
+}
+
+// Contracts returns fresh copies of every projection contract registered with
+// a type, ordered by message-type key and then by contract name. The
+// composition root derives its mutation-client contract set from it; no other
+// table of framework contracts exists.
+func (pr *Registry) Contracts() []contract.Contract {
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
+
+	keys := make([]string, 0, len(pr.registrations))
+	for key, registration := range pr.registrations {
+		if len(registration.Contracts) != 0 {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+
+	var result []contract.Contract
+	for _, key := range keys {
+		contracts := cloneContracts(pr.registrations[key].Contracts)
+		sort.Slice(contracts, func(i, j int) bool { return contracts[i].Name < contracts[j].Name })
+		result = append(result, contracts...)
+	}
+	return result
+}
+
 // Create creates a payload instance using the registered factory.
-// Returns nil if the message type is not registered.
-// This allows BaseMessage.UnmarshalJSON to handle unknown types gracefully
-// by falling back to GenericPayload.
+// Returns nil if the message type is not registered; BaseMessage.UnmarshalJSON
+// then rejects the payload as unregistered — the fact lane admits only
+// registered types.
 func (pr *Registry) Create(domain, category, version string) any {
 	typeStr := fmt.Sprintf("%s.%s.%s", domain, category, version)
 
@@ -196,14 +363,7 @@ func (pr *Registry) GetRegistration(msgType string) (*Registration, bool) {
 	}
 
 	// Return a copy to prevent external modification of the factory function
-	return &Registration{
-		Domain:      registration.Domain,
-		Category:    registration.Category,
-		Version:     registration.Version,
-		Description: registration.Description,
-		Example:     registration.Example,
-		// Factory is intentionally not copied for safety
-	}, true
+	return registration.copyWithoutFactory(), true
 }
 
 // List returns all registered payload types.
@@ -215,14 +375,7 @@ func (pr *Registry) List() map[string]*Registration {
 	// Return a copy to prevent external modification
 	result := make(map[string]*Registration, len(pr.registrations))
 	for msgType, registration := range pr.registrations {
-		result[msgType] = &Registration{
-			Domain:      registration.Domain,
-			Category:    registration.Category,
-			Version:     registration.Version,
-			Description: registration.Description,
-			Example:     registration.Example,
-			// Factory is intentionally not copied for safety
-		}
+		result[msgType] = registration.copyWithoutFactory()
 	}
 
 	return result
@@ -238,14 +391,7 @@ func (pr *Registry) ListByDomain(domain string) []*Registration {
 	var result []*Registration
 	for _, registration := range pr.registrations {
 		if registration.Domain == domain {
-			result = append(result, &Registration{
-				Domain:      registration.Domain,
-				Category:    registration.Category,
-				Version:     registration.Version,
-				Description: registration.Description,
-				Example:     registration.Example,
-				// Factory is intentionally not copied for safety
-			})
+			result = append(result, registration.copyWithoutFactory())
 		}
 	}
 

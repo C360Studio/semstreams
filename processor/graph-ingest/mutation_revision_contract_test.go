@@ -59,7 +59,8 @@ func TestHandleCanonicalAppend_ReportsItsOwnCASRevision(t *testing.T) {
 	comp, bucket := createTestComponentWithMockKVBucket(t)
 	ctx := context.Background()
 	require.NoError(t, comp.CreateEntity(ctx, &graph.EntityState{
-		ID: dedupSubject, Triples: []message.Triple{}, Version: 1, UpdatedAt: time.Now(),
+		ID:          dedupSubject,
+		MessageType: testEntityType(), Triples: []message.Triple{}, Version: 1, UpdatedAt: time.Now(),
 	}))
 
 	triple := dedupTriple(dedupSubject)
