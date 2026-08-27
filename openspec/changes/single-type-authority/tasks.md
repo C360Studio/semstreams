@@ -468,7 +468,11 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       - `task e2e:crud-tools` — 2026-08-27T13:23:15Z–2026-08-27T13:23:29Z UTC — rc=0 — `time=2026-08-27T08:23:29.045-05:00 level=INFO msg="Scenario completed successfully" duration=856.553917ms`
       - `task e2e:core` — 2026-08-27T13:23:29Z–2026-08-27T13:24:48Z UTC — rc=0 — `[OK] graph round-trip probe passed against the e2e-target binary`
       - `go test -race -tags=integration -count=1 -run TestWebObservationBirthIsRegistered ./processor/agentic-tools/executors/` — 2026-08-27T13:24:48Z–2026-08-27T13:24:52Z UTC — rc=0 — `ok  	github.com/c360studio/semstreams/processor/agentic-tools/executors	1.918s`
-      All nine rows green; the candidate-proof record is the TAG gate's and reuses these rows.
+      All nine rows green. `cmd/e2e/main.go` (the driver every tier boots) changed in `f59a492f` (the unused `baseURL`
+      parameter), so the two tiers whose driver path changed were re-run on `f59a492f`:
+      - `task e2e:core` — 2026-08-27T13:50:52Z–2026-08-27T13:52:25Z UTC — rc=0 — `[OK] graph round-trip probe passed against the e2e-target binary`
+      - `task e2e:lessons` — 2026-08-27T13:52:25Z–2026-08-27T13:52:43Z UTC — rc=0 — `time=2026-08-27T08:52:43.144-05:00 level=INFO msg="Scenario completed successfully" duration=20.852583ms assertions_run=3`
+      The candidate-proof record is the TAG gate's and reuses these rows.
 - [x] 7.4 Fill `conformance.md` Implementation and Test columns with `file:line` at the head that carries the last change to
       any `.go` file or spec delta on the branch; an empty cell at review time is a deviation to record.
       Done 2026-08-26: every Implementation and Test column filled with `file:line` at the head carrying the last `.go`
