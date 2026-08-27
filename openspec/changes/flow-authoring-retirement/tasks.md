@@ -15,13 +15,25 @@ Premises were measured at `5cc0c7fb` and are re-measured at the claim head; the 
 
 ## 1. Claim
 
-- [ ] 1.1 Claim #1093: dedicated worktree on an agent-prefixed branch off `origin/main` AFTER PR #1101 merges (this
+- [x] 1.1 Claim #1093: dedicated worktree on an agent-prefixed branch off `origin/main` AFTER PR #1101 merges (this
       change's deletions rest on the substrate that PR lands, and its 2.5 engine-parity test is deleted here); draft PR
       with `Closes #1093` in the body; this change directory's claim tick is its first commit.
-- [ ] 1.2 Re-measure the premises: the removal list in the proposal against the claim head, and
+- [x] 1.2 Re-measure the premises: the removal list in the proposal against the claim head, and
       `grep -rn "flowstore\|flowtemplate\|flowengine\|flow-builder\|flowbuilder" --include='*.go' --include='*.json'
       --include='*.yml' --include='*.md' .` (main tree, `docs/adr` and `openspec/changes/archive` excluded) — record the
       starting count here so 3.2's closing count is a measurement and not an assertion.
+
+      Claim head `78fe095c`. Worktree `../semstreams-wt/claude/gh1093-flow-authoring-retirement`, branch
+      `claude/gh1093-flow-authoring-retirement`, PR #____ (draft, `Closes #1093`).
+      Command (run from the worktree root):
+      `grep -rn "flowstore\|flowtemplate\|flowengine\|flow-builder\|flowbuilder" --include='*.go' --include='*.json'
+      --include='*.yml' --include='*.md' .`
+      Starting counts — raw **752**; with the task's two exclusions (`docs/adr/`, `openspec/changes/archive/`) **504**;
+      live tree only (additionally excluding `docs/proposals/` and this change's own directory) **361**.
+      Premise note for 3.2: the task's "→ 0" cannot hold for the two-exclusion filter, because `docs/proposals/*`
+      (retired inventories/designs, 116 hits at claim) and this change's own artifacts are history that records the
+      removed surface by name. 3.2 records the live-tree count and enumerates the residue by class instead of
+      asserting a zero the filter cannot reach.
 
 ## 2. Baseline capture — write the removal guards first
 
