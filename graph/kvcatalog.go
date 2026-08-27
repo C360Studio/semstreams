@@ -6,7 +6,7 @@
 //
 // Boundary rule (so the catalog cannot grow by accretion): a bucket belongs
 // here ONLY if the framework guarantees its write-ownership or retention.
-// Application/product buckets (AGENT_LOOPS, flowstore, personas, governance
+// Application/product buckets (AGENT_LOOPS, personas, governance
 // stores, workflow-type Lifecycle buckets, research-graph state, ...) are
 // outside it by rule and keep plain CreateKeyValueBucket.
 //

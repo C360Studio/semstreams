@@ -78,45 +78,6 @@ func (c *ObservabilityClient) GetPlatformHealth(ctx context.Context) (*PlatformH
 	return &health, nil
 }
 
-// FlowInfo represents a flow from the flowbuilder API
-type FlowInfo struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Version int64  `json:"version"`
-}
-
-// FlowsResponse represents the response from GET /flowbuilder/flows
-type FlowsResponse struct {
-	Flows []FlowInfo `json:"flows"`
-}
-
-// GetFlows retrieves all flows from the flowbuilder API
-func (c *ObservabilityClient) GetFlows(ctx context.Context) ([]FlowInfo, error) {
-	url := c.baseURL + "/flowbuilder/flows"
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("executing request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-
-	var flowsResp FlowsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&flowsResp); err != nil {
-		return nil, fmt.Errorf("decoding response: %w", err)
-	}
-
-	return flowsResp.Flows, nil
-}
-
 // GetComponents retrieves information about all managed components
 func (c *ObservabilityClient) GetComponents(ctx context.Context) ([]ComponentInfo, error) {
 	url := c.baseURL + config.ComponentPaths.List

@@ -255,7 +255,6 @@ func TestFlowGraphAnalysis(t *testing.T) {
 		result := graph.AnalyzeConnectivity()
 		require.NotNil(t, result)
 
-		assert.Equal(t, "healthy", result.ValidationStatus)
 		assert.Len(t, result.ConnectedEdges, 2) // input->processor, processor->output
 		assert.Empty(t, result.DisconnectedNodes)
 		assert.Empty(t, result.OrphanedPorts)
@@ -309,7 +308,10 @@ func TestFlowGraphAnalysis(t *testing.T) {
 		// Analyze connectivity
 		result := graph.AnalyzeConnectivity()
 
-		assert.Equal(t, "warnings", result.ValidationStatus)
+		// The analysis reports facts, not severity: the isolated node is BOTH
+		// disconnected and orphaned, and what that means is composition.Analyze's
+		// call (ADR-100 D3).
+		assert.Len(t, result.DisconnectedNodes, 1)
 		assert.Len(t, result.OrphanedPorts, 1) // isolated component has orphaned input port
 
 		orphanedPort := result.OrphanedPorts[0]

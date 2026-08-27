@@ -32,7 +32,6 @@
 //	│  - ConnectedComponents: clusters of connected components               │
 //	│  - OrphanedPorts: ports with no connections                             │
 //	│  - DisconnectedNodes: components with no edges                          │
-//	│  - ValidationStatus: healthy/warnings                                   │
 //	└─────────────────────────────────────────────────────────────────────────┘
 //
 // # Supported Construction Boundary
@@ -52,11 +51,14 @@
 //
 //	// Analyze connectivity
 //	result := graph.AnalyzeConnectivity()
-//	if result.ValidationStatus == "warnings" {
-//	    for _, orphan := range result.OrphanedPorts {
-//	        log.Warn("orphaned port", "component", orphan.ComponentName, "port", orphan.PortName)
-//	    }
+//	for _, orphan := range result.OrphanedPorts {
+//	    log.Warn("orphaned port", "component", orphan.ComponentName, "port", orphan.PortName)
 //	}
+//
+// The analysis reports facts and derives no severity. What an orphan or a
+// disconnected node MEANS is composition.Analyze's judgment, which owns the one
+// findings vocabulary (ADR-100); read a status from a composition.Result, never
+// from this walk.
 //
 // Validate JetStream requirements:
 //
@@ -137,8 +139,6 @@
 //   - optional_api_unused: Request ports are optional by design
 //   - optional_interface_unused: Interface-specific alternative ports
 //   - optional_index_unwatched: KV watch ports may be intentionally unused
-//
-// ValidationStatus: "healthy" if no issues, "warnings" if any problems detected.
 //
 // # JetStream Validation
 //

@@ -31,17 +31,6 @@ func TestRegisterRules_NilManagerSkips(t *testing.T) {
 	}
 }
 
-func TestRegisterFlows_NilManagerSkips(t *testing.T) {
-	t.Parallel()
-	reg := agentictools.NewExecutorRegistry()
-	if err := registerFlows(reg, nil, slog.Default()); err != nil {
-		t.Fatalf("registerFlows(nil) should be a clean skip, got err: %v", err)
-	}
-	if got := len(reg.ListTools()); got != 0 {
-		t.Fatalf("registerFlows(nil) registered %d tools, want 0", got)
-	}
-}
-
 func TestRegisterPersonas_NilManagerSkips(t *testing.T) {
 	t.Parallel()
 	reg := agentictools.NewExecutorRegistry()
@@ -50,17 +39,6 @@ func TestRegisterPersonas_NilManagerSkips(t *testing.T) {
 	}
 	if got := len(reg.ListTools()); got != 0 {
 		t.Fatalf("registerPersonas(nil) registered %d tools, want 0", got)
-	}
-}
-
-func TestRegisterFlowTemplates_NilManagerSkips(t *testing.T) {
-	t.Parallel()
-	reg := agentictools.NewExecutorRegistry()
-	if err := registerFlowTemplates(reg, nil, slog.Default()); err != nil {
-		t.Fatalf("registerFlowTemplates(nil) should be a clean skip, got err: %v", err)
-	}
-	if got := len(reg.ListTools()); got != 0 {
-		t.Fatalf("registerFlowTemplates(nil) registered %d tools, want 0", got)
 	}
 }
 
@@ -442,7 +420,7 @@ func TestBuiltinGroupKeys_Stability(t *testing.T) {
 		"read_loop_result", "decide", "emit_diagnosis", "emit_lesson",
 		"write_todos", "scratchpad",
 		"graph_query",
-		"rules", "flows", "personas", "flow_templates",
+		"rules", "personas",
 		"component_catalog",
 	}
 	if len(BuiltinGroupKeys) != len(want) {

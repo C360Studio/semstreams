@@ -38,8 +38,8 @@ Migration state has five allowed values:
   assigned.
 - Raw bucket Get/Put/Create/Update/Delete/Purge/List: caller or builder bytes unchanged; each bucket owner; domain
   bound and physical codec; owner-specific; each owning change; unassessed; assigned.
-- Flow, template, and persona stores: raw IDs; `flowstore`, `flowtemplate`, and `persona`; public ID bounds and literal
-  syntax; possible clean bucket rebuild; future ID contract; unassessed; pending.
+- Persona store: raw IDs; `persona`; public ID bounds and literal syntax; possible clean bucket rebuild; future ID
+  contract; unassessed; pending.
 - Runtime config: fixed keys plus `components.<name>` and `services.<name>`; `config`; component/service name semantics;
   possible config migration; config key contract; unassessed; pending.
 - `sanitizeNATSKey`: spaces replaced with `_`; `config`; lossy identity collision; explicit semantic migration;
@@ -89,10 +89,6 @@ allowed values as the boundary inventory.
   before bucket lookup; agentic governance audit; generated-ID bound and literal-key validation; no rebuild because
   the former colon key was rejected by NATS and never persisted; GitHub #952 governance persistence correction;
   conforming; complete.
-- `flowstore/manager.go`: raw `flow.ID` Create/Put/Get/Delete, raw Keys, and caller Watch pattern; flow store; flow-ID
-  bound plus filter grammar; possible flow bucket rebuild; flow identity contract; unassessed; pending.
-- `flowtemplate/manager.go`: raw template ID Create/Put/Get/Delete and Keys; flow templates; template-ID bound;
-  possible template bucket rebuild; template identity contract; unassessed; pending.
 - `persona/manager.go`: raw persona ID Create/Put/Get/Delete and Keys; personas; persona-ID bound; possible persona
   bucket rebuild; persona identity contract; unassessed; pending.
 - `config/manager.go`: fixed `version`, `platform`, `nats`, and `model_registry` keys plus lossy
@@ -170,7 +166,7 @@ key builders, reversible codecs, hashes, and lossy sanitation. Local variables r
 were traced to their operations, which caught boundaries such as governance violation storage that do not declare a
 KV field. The covered production source families are:
 
-- `natsclient`, `component`, `config`, `flowstore`, `flowtemplate`, and `persona`;
+- `natsclient`, `component`, `config`, and `persona`;
 - `pkg/lifecycle` and `pkg/dispatch`;
 - `graph/query`, `graph/embedding`, `graph/clustering`, `graph/structural`, and `graph/inference`;
 - graph ingest, index, query, clustering, embedding, spatial, and temporal processors;

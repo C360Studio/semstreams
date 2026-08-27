@@ -36,15 +36,10 @@
         "sample_rate": 1
       }
     },
-    "flow-builder": {
-      "enabled": true,
-      "config": {}
-    },
     "log-forwarder": {
       "enabled": true,
       "config": {
-        "min_level": "DEBUG",
-        "exclude_sources": ["flow-service.websocket"]
+        "min_level": "DEBUG"
       }
     },
     "metrics-forwarder": {

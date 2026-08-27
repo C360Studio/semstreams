@@ -43,15 +43,13 @@ import (
 // Platform is a value type (not pointer) because PlatformMeta is a small
 // POD; the empty value is still safe for the decide tool to use.
 type ToolDependencies struct {
-	NATSClient          *natsclient.Client
-	MutationClient      *projection.MutationClient
-	Platform            component.PlatformMeta
-	Logger              *slog.Logger
-	RuleManager         RuleManager         // Pattern-B step 1
-	FlowManager         FlowManager         // Pattern-B step 2
-	PersonaManager      PersonaManager      // Pattern-B step 3
-	FlowTemplateManager FlowTemplateManager // Pattern-B step 4
-	ComponentRegistry   *component.Registry // Pattern-B step 5; nil → list_components skipped
+	NATSClient        *natsclient.Client
+	MutationClient    *projection.MutationClient
+	Platform          component.PlatformMeta
+	Logger            *slog.Logger
+	RuleManager       RuleManager         // Pattern-B step 1
+	PersonaManager    PersonaManager      // Pattern-B step 3
+	ComponentRegistry *component.Registry // Pattern-B step 5; nil → list_components skipped
 	// LoopsBucket is the NATS KV bucket name holding agent-loop state.
 	// read_loop_result reads from it. Empty falls back
 	// to "AGENT_LOOPS". One bucket per process — wiring is boot-time so
@@ -111,9 +109,7 @@ var BuiltinGroupKeys = []string{
 	// Multi-tool registrations: key is the register-function's domain
 	"graph_query",       // registerGraphQuery — query_entity + 4 others
 	"rules",             // registerRules — rule CRUD tools
-	"flows",             // registerFlows — flow CRUD tools
 	"personas",          // registerPersonas — persona CRUD tools
-	"flow_templates",    // registerFlowTemplates — flow_template CRUD tools
 	"component_catalog", // registerComponentCatalog — list_components
 }
 
@@ -198,9 +194,7 @@ func RegisterBuiltins(ctx context.Context, reg *agentictools.ExecutorRegistry, d
 	// Pattern-B registry-backed tools. A nil manager is a legal skip;
 	// duplicate-name failures propagate.
 	gate("rules", func() error { return registerRules(reg, deps.RuleManager, logger) })
-	gate("flows", func() error { return registerFlows(reg, deps.FlowManager, logger) })
 	gate("personas", func() error { return registerPersonas(reg, deps.PersonaManager, logger) })
-	gate("flow_templates", func() error { return registerFlowTemplates(reg, deps.FlowTemplateManager, logger) })
 	gate("component_catalog", func() error { return registerComponentCatalog(reg, deps.ComponentRegistry, logger) })
 
 	if len(errs) > 0 {

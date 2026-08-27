@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -195,4 +196,61 @@ func TestStreamOverrideExpiryReporterRegistersWithoutFlowService(t *testing.T) {
 		"an open bridge reports zero so the alert series exists before it matters")
 	assert.Contains(t, logs.String(), "EXPIRED",
 		"the WARN half of the report must survive the rehome too")
+}
+
+// syncBuffer is a log sink safe for the reporter goroutine to write while the
+// test reads. Without it this test would report a data race rather than the
+// behaviour it is about.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func (b *syncBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
+}
+
+// TestComponentManagerStartRunsOverrideExpiryReporter covers the second half of
+// the rehome: registration alone leaves a series frozen at its boot value, and
+// the whole point of the reporter is that it crosses the deadline WITHOUT a
+// restart. Start must put the loop on the manager's runtime context, and Stop
+// must join it (supervise waits for it before closing supervisorDone).
+func TestComponentManagerStartRunsOverrideExpiryReporter(t *testing.T) {
+	sink := &syncBuffer{}
+	logger := slog.New(slog.NewTextHandler(sink, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	manager, _ := composeComponentManagerWithOverride(t, config.StreamMigrationOverrides{
+		"LAPSED": {Owner: "team-legacy", Expires: "2020-01-01", Reason: "sizing study"},
+	}, logger)
+
+	// Discard the composition-time evaluation so the next WARN can only have
+	// come from the loop Start launched.
+	sink.Reset()
+
+	runtimeCtx, cancelRuntime := context.WithCancel(t.Context())
+	defer cancelRuntime()
+	require.NoError(t, manager.Start(runtimeCtx))
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(sink.String(), "EXPIRED")
+	}, 5*time.Second, 10*time.Millisecond,
+		"Start must run the override-expiry loop; nothing re-evaluated after composition")
+
+	stopCtx, cancelStop := context.WithTimeout(context.WithoutCancel(runtimeCtx), 30*time.Second)
+	defer cancelStop()
+	require.NoError(t, manager.Stop(stopCtx))
 }

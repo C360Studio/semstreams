@@ -12,7 +12,6 @@ func RegisterAll(registry *Registry) error {
 		"log-forwarder":     NewLogForwarderService,
 		"metrics-forwarder": NewMetricsForwarderService,
 		"component-manager": NewComponentManager,
-		"flow-builder":      NewFlowServiceFromConfig,
 		"heartbeat":         NewHeartbeatService,
 		// Account storage observability. Opt-in and report-only: a deployment
 		// that does not name it in its `services` block never constructs it.

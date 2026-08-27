@@ -150,10 +150,10 @@ func TestComponentManagerWithRealNATS(t *testing.T) {
 	components := cm.GetComponentStatus()
 	assert.NotNil(t, components)
 
-	// Test FlowGraph (should work even with no components)
-	flowGraph, err := cm.GetFlowGraph()
+	// The composition projection is served even with no components
+	paths, err := cm.GetFlowPaths()
 	assert.NoError(t, err)
-	assert.NotNil(t, flowGraph)
+	assert.NotNil(t, paths)
 
 	// Stop should work
 	err = cm.Stop(context.Background())
@@ -161,8 +161,9 @@ func TestComponentManagerWithRealNATS(t *testing.T) {
 	assert.False(t, cm.IsStarted())
 }
 
-// TestComponentManagerFlowGraphValidation tests that FlowGraph validation works
-func TestComponentManagerFlowGraphValidation(t *testing.T) {
+// TestComponentManagerCompositionProjection tests that the projections served
+// from the retained boot composition work with no components admitted.
+func TestComponentManagerCompositionProjection(t *testing.T) {
 	ctx := context.Background()
 
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
@@ -196,19 +197,6 @@ func TestComponentManagerFlowGraphValidation(t *testing.T) {
 	err = cm.Start(ctx)
 	require.NoError(t, err)
 	defer cm.Stop(context.Background())
-
-	// Test FlowGraph functionality
-	t.Run("GetFlowGraph", func(t *testing.T) {
-		graph, err := cm.GetFlowGraph()
-		require.NoError(t, err)
-		assert.NotNil(t, graph, "FlowGraph should be created even with no components")
-
-		nodes := graph.GetNodes()
-		assert.NotNil(t, nodes, "Nodes map should exist")
-
-		edges := graph.GetEdges()
-		assert.NotNil(t, edges, "Edges slice should exist")
-	})
 
 	t.Run("GetFlowPaths", func(t *testing.T) {
 		paths, err := cm.GetFlowPaths()

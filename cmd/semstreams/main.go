@@ -22,8 +22,6 @@ import (
 	"github.com/c360studio/semstreams/componentregistry"
 	compositioncli "github.com/c360studio/semstreams/composition/cli"
 	"github.com/c360studio/semstreams/config"
-	"github.com/c360studio/semstreams/flowstore"
-	"github.com/c360studio/semstreams/flowtemplate"
 	optionalotel "github.com/c360studio/semstreams/frameworkadapters/otel"
 	"github.com/c360studio/semstreams/frameworkcapabilities/graphresearch"
 	rulepackcap "github.com/c360studio/semstreams/frameworkcapabilities/rulepacks"
@@ -293,9 +291,7 @@ func run() (runErr error) {
 		Platform:                platform,
 		Logger:                  logger,
 		RuleManager:             buildRuleManager(bootCtx, natsClient, configManager, logger),
-		FlowManager:             buildFlowManager(natsClient, logger),
 		PersonaManager:          personaMgr,
-		FlowTemplateManager:     buildFlowTemplateManager(natsClient, logger),
 		ComponentRegistry:       componentRegistry,
 		LoopsBucket:             graphresearch.LoopsBucket(cfg),
 		RestrictedDecideActions: extractRestrictedDecideActions(cfg, logger),
@@ -755,19 +751,6 @@ func buildRuleManager(ctx context.Context, natsClient *natsclient.Client, config
 	return rcm
 }
 
-// buildFlowManager constructs a flowstore.Manager (KV-backed flow CRUD).
-// Nil returned on init failure so registerFlows skips tool registration
-// — consistent with the nil-RuleManager path. Matches ADR-029 Pattern B.
-func buildFlowManager(natsClient *natsclient.Client, logger *slog.Logger) executors.FlowManager {
-	mgr, err := flowstore.NewManager(natsClient)
-	if err != nil {
-		logger.Warn("flow CRUD tools disabled: could not initialise flow store",
-			slog.Any("error", err))
-		return nil
-	}
-	return mgr
-}
-
 // buildPersonaManagerConcrete constructs a *persona.Manager (KV-backed
 // persona CRUD) and returns the concrete type so callers like the file
 // loader can call Upsert directly. Nil is returned on init failure;
@@ -779,18 +762,6 @@ func buildPersonaManagerConcrete(natsClient *natsclient.Client, logger *slog.Log
 	mgr, err := persona.NewManager(natsClient)
 	if err != nil {
 		logger.Warn("persona CRUD tools disabled: could not initialise persona store",
-			slog.Any("error", err))
-		return nil
-	}
-	return mgr
-}
-
-// buildFlowTemplateManager constructs a flowtemplate.Manager (KV-backed
-// template CRUD + render). Same shape as the other Pattern-B builders.
-func buildFlowTemplateManager(natsClient *natsclient.Client, logger *slog.Logger) executors.FlowTemplateManager {
-	mgr, err := flowtemplate.NewManager(natsClient)
-	if err != nil {
-		logger.Warn("flow-template tools disabled: could not initialise flow-template store",
 			slog.Any("error", err))
 		return nil
 	}

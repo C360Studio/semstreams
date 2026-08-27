@@ -144,11 +144,10 @@ component is structurally cheaper than spawning a renderer agent.
 
 ## What the framework does NOT provide
 
-- **A `render_template` rule action.** Go `text/template` exists in
-  `flowtemplate/` but only for flow definitions. There is no built-in
-  way for a rule to fill a template against entity state and emit the
-  result. If demand emerges, this is a clean future extension; in the
-  meantime use `publish_agent` with a renderer role.
+- **A `render_template` rule action.** There is no built-in way for a
+  rule to fill a template against entity state and emit the result. If
+  demand emerges, this is a clean future extension; in the meantime use
+  `publish_agent` with a renderer role.
 - **Per-entity ObjectStore writes from rules.** Rules can `update_kv`
   but not write directly to an ObjectStore bucket. If the artifact is
   large (>1 MB) wire an output component that consumes the rule's

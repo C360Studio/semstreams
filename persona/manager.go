@@ -25,8 +25,7 @@ type Manager struct {
 
 // NewManager opens (or creates) the PERSONAS bucket and returns a
 // Manager for it. Returning an error on bucket-open failure lets main
-// decide whether to skip registration or fail fast — mirrors how
-// flowstore.NewManager behaves.
+// decide whether to skip registration or fail fast.
 func NewManager(natsClient *natsclient.Client) (*Manager, error) {
 	if natsClient == nil {
 		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "persona", "NewManager", "nats client cannot be nil")
@@ -43,8 +42,8 @@ func NewManager(natsClient *natsclient.Client) (*Manager, error) {
 }
 
 // Create stores a new persona. Fails if ID already exists so callers
-// must use Update for edits — matches the flowstore.Manager pattern and
-// gives Pattern-B CRUD its optimistic-create semantics.
+// must use Update for edits, which gives Pattern-B CRUD its
+// optimistic-create semantics.
 func (m *Manager) Create(ctx context.Context, p *Persona) error {
 	if p == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "persona", "Create", "persona cannot be nil")
@@ -65,9 +64,9 @@ func (m *Manager) Create(ctx context.Context, p *Persona) error {
 	return nil
 }
 
-// Update overwrites an existing persona. Unlike flowstore.Manager.Update
-// there's no version-based optimistic concurrency here — personas are
-// edited less often and rarely concurrently; last-writer-wins is fine.
+// Update overwrites an existing persona. There is no version-based
+// optimistic concurrency here — personas are edited less often and rarely
+// concurrently; last-writer-wins is fine.
 // If concurrent edit becomes a real concern we add a Version field to
 // Persona and a CAS check.
 func (m *Manager) Update(ctx context.Context, p *Persona) error {
