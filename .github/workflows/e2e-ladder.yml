@@ -18,12 +18,16 @@ name: E2E Ladder
 #   - e2e:core's coverage is subsumed by the statistical run (owner, 2026-07-28):
 #     the tiered/statistical variant boots the full stack and validates
 #     health/dataflow along the way, so a separate core job would be redundant.
-#   - e2e:semantic (neural embeddings + seminstruct, incl. the 8b thematic
-#     gate) is too heavy for per-PR. It stays the pre-tag HARD RULE
-#     (CLAUDE.md: a relevant e2e tier green before any BREAKING tag) + nightly.
-#     TODO: add e2e:semantic here — either a nightly job or a labeled/opt-in
-#     per-PR job — so the neural thematic path has a standing CI gate, not only
-#     the manual pre-tag run. Tracked in issue #1117.
+#   - e2e:semantic's heavy quality variants (:8b, :frontier) are too heavy for
+#     per-PR and stay pre-tag/manual (CLAUDE.md: a relevant e2e tier green
+#     before any BREAKING tag). The DEFAULT semantic variant is already the
+#     CI-shaped small-model configuration (semembed + seminstruct
+#     qwen3-0.6b/1.7b) for exactly this reason, but runs in no workflow yet.
+#     Owner ruling (2026-08-27, #1117): wiring it here is PER-PR, not
+#     nightly — schedule-triggered runs are reserved for out-of-band security
+#     scanning (CVE and similar), never functional e2e. The open question is
+#     which assertions the per-PR gate carries (path vs quality), not
+#     per-PR-vs-nightly. Tracked in issue #1117.
 
 on:
   pull_request:

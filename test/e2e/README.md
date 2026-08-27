@@ -219,9 +219,12 @@ dispatch-only workflow is not its owner" — it is diagnostic holdout tooling, n
 
 ### Pending: wiring the semantic tier into the ladder
 
-[#1117](https://github.com/C360Studio/semstreams/issues/1117) proposes adding the default `semantic` variant (the
-small-model CI-shaped configuration that already exists in `taskfiles/e2e/semantic.yml`) to `e2e-ladder.yml`. As
-of this writing that issue is **open, not done** — the semantic tier still runs in no workflow.
+Owner-ruled target (2026-08-27, [#1117](https://github.com/C360Studio/semstreams/issues/1117)): the default
+`semantic` variant — already the CI-shaped small-model configuration in `taskfiles/e2e/semantic.yml` — gets wired
+into `e2e-ladder.yml` as a **per-PR** job, not a nightly one; schedule-triggered runs are reserved for out-of-band
+security scanning, never functional e2e. The open question is which assertions the per-PR gate carries (path vs
+quality), not per-PR-vs-nightly. As of this writing #1117 is **open, not done** — the semantic tier still runs in
+no workflow.
 
 ## References
 

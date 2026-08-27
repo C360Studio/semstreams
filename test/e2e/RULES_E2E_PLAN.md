@@ -290,7 +290,6 @@ type RulesPerformanceConfig struct {
 ### Phase 5: CI/CD Integration (Week 4)
 - [ ] Add integration tests to CI pipeline
 - [ ] Create docker-compose profile for e2e rule tests
-- [ ] Add to nightly test suite
 - [ ] Document test execution procedures
 - [ ] Set up performance regression alerts
 
