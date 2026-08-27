@@ -24,8 +24,8 @@ const (
 	// CategoryOrchestration contains tools for spawning sub-agents and decomposing tasks.
 	CategoryOrchestration ToolCategory = "orchestration"
 
-	// CategoryMeta contains durable authoring tools such as create_rule and
-	// create_flow. Flow authoring does not grant runtime lifecycle authority.
+	// CategoryMeta contains durable authoring tools such as create_rule.
+	// Authoring a durable artifact does not grant runtime lifecycle authority.
 	CategoryMeta ToolCategory = "meta"
 )
 
@@ -60,7 +60,6 @@ var toolCategories = map[string]ToolCategory{
 	"create_rule": CategoryMeta,
 	"update_rule": CategoryMeta,
 	"delete_rule": CategoryMeta,
-	"create_flow": CategoryMeta,
 }
 
 // GetToolCategory returns the category for a tool name.

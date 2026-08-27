@@ -9,7 +9,6 @@ type FlowAnalysisResult struct {
 	ConnectedEdges      []FlowEdge         `json:"connected_edges"`
 	DisconnectedNodes   []DisconnectedNode `json:"disconnected_nodes"`
 	OrphanedPorts       []OrphanedPort     `json:"orphaned_ports"`
-	ValidationStatus    string             `json:"validation_status"`
 }
 
 // DisconnectedNode represents a component with no connections

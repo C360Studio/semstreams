@@ -25,8 +25,6 @@ import (
 	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/examples/processors/document"
 	iotsensor "github.com/c360studio/semstreams/examples/processors/iot_sensor"
-	"github.com/c360studio/semstreams/flowstore"
-	"github.com/c360studio/semstreams/flowtemplate"
 	optionalotel "github.com/c360studio/semstreams/frameworkadapters/otel"
 	"github.com/c360studio/semstreams/frameworkcapabilities/graphresearch"
 	rulepackcap "github.com/c360studio/semstreams/frameworkcapabilities/rulepacks"
@@ -230,9 +228,7 @@ func run() (runErr error) {
 		Platform:                platform,
 		Logger:                  logger,
 		RuleManager:             buildRuleManager(ctx, natsClient, configManager, logger),
-		FlowManager:             buildFlowManager(natsClient, logger),
 		PersonaManager:          personaMgr,
-		FlowTemplateManager:     buildFlowTemplateManager(natsClient, logger),
 		ComponentRegistry:       componentRegistry,
 		LoopsBucket:             graphresearch.LoopsBucket(cfg),
 		RestrictedDecideActions: extractRestrictedDecideActions(cfg, logger),
@@ -463,19 +459,6 @@ func buildRuleManager(ctx context.Context, natsClient *natsclient.Client, config
 	return rcm
 }
 
-// buildFlowManager constructs a flowstore.Manager for flow CRUD. Mirrors
-// cmd/semstreams/main.go. Returns nil on init failure so registerFlows
-// skips registration — consistent with the RuleManager path.
-func buildFlowManager(natsClient *natsclient.Client, logger *slog.Logger) executors.FlowManager {
-	mgr, err := flowstore.NewManager(natsClient)
-	if err != nil {
-		logger.Warn("flow CRUD tools disabled: could not initialise flow store",
-			slog.Any("error", err))
-		return nil
-	}
-	return mgr
-}
-
 // buildPersonaManager mirrors cmd/semstreams/main.go; ADR-029 Pattern B. It
 // returns the concrete manager so the startup file loader can install the same
 // checked-in persona fragments used by the production composition root.
@@ -483,17 +466,6 @@ func buildPersonaManager(natsClient *natsclient.Client, logger *slog.Logger) *pe
 	mgr, err := persona.NewManager(natsClient)
 	if err != nil {
 		logger.Warn("persona CRUD tools disabled: could not initialise persona store",
-			slog.Any("error", err))
-		return nil
-	}
-	return mgr
-}
-
-// buildFlowTemplateManager mirrors cmd/semstreams/main.go; ADR-029 Pattern B.
-func buildFlowTemplateManager(natsClient *natsclient.Client, logger *slog.Logger) executors.FlowTemplateManager {
-	mgr, err := flowtemplate.NewManager(natsClient)
-	if err != nil {
-		logger.Warn("flow-template tools disabled: could not initialise flow-template store",
 			slog.Any("error", err))
 		return nil
 	}

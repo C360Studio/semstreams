@@ -62,8 +62,10 @@ type Finding struct {
 }
 
 // severityOf is the one severity table. An orphaned port is an error exactly
-// when it is a required stream input with no publisher (the rule formerly at
-// engine/validator.go:313-361); every other orphan is a warning.
+// when it is a required stream input with no publisher; every other orphan is
+// a warning. The rule was lifted from the since-deleted engine validator
+// (engine/validator.go:313-361 as it stood at 5cc0c7fb, removed by #1093) —
+// cited for provenance only; that path no longer exists to compare against.
 func severityOf(typ string, orphan *flowgraph.OrphanedPort) string {
 	switch typ {
 	case TypeDisconnectedNode, TypeMissingInterface, TypeEmptyComposition:

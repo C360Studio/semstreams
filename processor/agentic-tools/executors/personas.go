@@ -11,7 +11,7 @@ import (
 
 // PersonaManager is the subset of persona.Manager that PersonaExecutor
 // needs. Declared here so tests can substitute in-memory fakes —
-// same pattern as RuleManager and FlowManager.
+// same pattern as RuleManager.
 type PersonaManager interface {
 	Create(ctx context.Context, p *persona.Persona) error
 	Update(ctx context.Context, p *persona.Persona) error

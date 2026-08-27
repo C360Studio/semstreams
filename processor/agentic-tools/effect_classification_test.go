@@ -16,7 +16,12 @@ import (
 // a constructor helper — the count collapses and this floor fails loudly rather
 // than reporting green over an empty set. Raise it when the tool count grows
 // substantially; it is a floor, not an exact count.
-const minimumClassifiedTools = 38
+//
+// Lowered from 38 to 29 when ADR-100 D5 removed the eleven flow and
+// flow-template tools (#1093): 40 literals were found before that removal, 29
+// after. A floor left above the real count would fail for the one reason it
+// exists to rule out.
+const minimumClassifiedTools = 29
 
 // TestEveryFrameworkToolDeclaresAnEffect asserts that every agentic.ToolDefinition
 // composite literal in the framework's own tool packages declares an Effect.

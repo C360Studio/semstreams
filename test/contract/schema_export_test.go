@@ -26,10 +26,6 @@ func TestSchemaExportCarriesDefaultPorts(t *testing.T) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".v1.json") {
 			continue
 		}
-		name := strings.TrimSuffix(entry.Name(), ".v1.json")
-		if nonComponentSchemas[name] {
-			continue
-		}
 		data, err := os.ReadFile(filepath.Join(repoRoot, "schemas", entry.Name()))
 		if err != nil {
 			t.Fatal(err)

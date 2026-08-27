@@ -35,14 +35,27 @@ contradicted the substrate the same PR shipped. This change removes the rest.
   `cmd/e2e-semstreams` wiring, `test/e2e/client/observability.go:80-114`, the `/flowbuilder/*` OpenAPI rows and the
   `Flow*` schemas, `docs/concepts/12-flow-architecture.md`, and
   `docs/operations/migration-boot-only-flow-activation.md`.
+- **Published artifact** (added 2026-08-27 on the owner's ruling on #1122, after this proposal was first written):
+  `schemas/workflow-definition.v1.json` leaves with the retirement, and the contract-test exemption that hid it —
+  `nonComponentSchemas` in `test/contract/schema_contract_test.go` and its four skip sites — is removed with it rather
+  than emptied. It was a generated artifact with no generator: no registered factory produces it, the generator
+  stopped emitting it when the old workflow processor was retired, and the exemption made four contract guards skip
+  it. `schemas/` therefore goes 34 → 33 files, one per registered factory, with no file exempt from any guard. This
+  is a **published-artifact break**: two sister repositories vendor a copy by hand, and the migration document names
+  the file and the exemption each must delete.
 - **Buckets**: the framework creates no `semstreams_flows` or `FLOW_TEMPLATES` bucket. Retained deployed buckets are
   inert; pre-v1 fresh-state policy means no migration, no legacy reader, no compatibility Flow view.
 - **Spec deltas**: `flow-authoring` loses all eleven requirements (the capability is retired);
   `component-runtime-config` loses its Flow-publication requirement; `composition-validation` gains "The framework owns
   no composition authoring store" with the four absence guards.
-- **Migration**: `docs/operations/migration-composition-validation-adr100.md` — removed routes, tools, packages,
-  buckets; per-repo instructions for semstreams-ui and semteams from inventory §9. The `/gaps` removal already has its
-  section in `docs/operations/migration-beta162-to-beta163.md`; this document is the wider surface.
+- **Migration**: `docs/operations/migration-beta162-to-beta163.md`, as a new `##` section
+  ("Flow-authoring retirement (ADR-100 D5)") — removed routes, tools, packages, buckets, the deleted schema artifact;
+  per-repo instructions for semstreams-ui and semteams from inventory §9.
+  *(This bullet originally named a separate `docs/operations/migration-composition-validation-adr100.md`. It was
+  reconciled to the file the work actually used: that document's own header states the convention "One `##` section
+  per landing; later wave items … append their own sections below", #1101 set the precedent by putting the ADR-100
+  `/gaps` section there, and this section cross-references that one directly rather than across files. Recorded as a
+  DEVIATION row in `conformance.md` with the owner's sign-off, and in `tasks.md` 3.4.)*
 
 ## Non-goals
 

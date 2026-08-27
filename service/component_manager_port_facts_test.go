@@ -36,6 +36,13 @@ func TestComponentManagerAbsentBootModelRegistryRemainsNil(t *testing.T) {
 	}
 }
 
+// TestComponentManagerPortReportingUsesCanonicalFactsWithoutDroppingKinds
+// follows the property to its surviving home. It used to read
+// ComponentManager.extractComponentPortInfo — a second port interpreter that
+// lived beside the composition library and was reachable only from the retired
+// /gaps analysis. The projection carries the same canonical facts, so the
+// assertion moves rather than being deleted: every declared port appears, with
+// the kind its PortFacts report, on the result Initialize retains.
 func TestComponentManagerPortReportingUsesCanonicalFactsWithoutDroppingKinds(t *testing.T) {
 	instance := &portFactsDiscoverable{
 		baseDiscoverable: baseDiscoverable{name: "facts"},
@@ -44,35 +51,56 @@ func TestComponentManagerPortReportingUsesCanonicalFactsWithoutDroppingKinds(t *
 			{Name: "entities", Direction: component.DirectionInput, Config: component.KVReadPort{Bucket: "ENTITY_STATES"}},
 		},
 		outputs: []component.Port{
-			{Name: "request", Direction: component.DirectionOutput, Config: component.NATSRequestPort{Subject: "graph.mutation.>"}},
+			{Name: "request", Direction: component.DirectionOutput, Config: component.NATSRequestPort{Subject: "svc.echo"}},
 		},
 	}
 	registry := component.NewRegistry()
 	admitTestRegistryComponent(t, registry, "facts", instance)
 	manager := newPortOwnershipCM(t, registry)
+	if err := manager.analyzeBootComposition(); err != nil {
+		t.Fatalf("analyzeBootComposition: %v", err)
+	}
 
-	info, err := manager.extractComponentPortInfo("facts")
-	if err != nil {
-		t.Fatal(err)
+	result := manager.bootCompositionResult()
+	if result == nil || len(result.Graph.Nodes) != 1 {
+		t.Fatalf("projection nodes = %+v, want exactly the one admitted instance", result)
 	}
-	if len(info.InputPorts) != 2 || len(info.OutputPorts) != 1 {
-		t.Fatalf("reported ports = inputs:%d outputs:%d", len(info.InputPorts), len(info.OutputPorts))
+	node := result.Graph.Nodes[0]
+	if node.Instance != "facts" {
+		t.Fatalf("projected instance = %q, want the admitted name", node.Instance)
 	}
-	if got := info.InputPorts[0]; got.PortType != "jetstream" || got.Subject != "events.>" {
-		t.Fatalf("JetStream detail = %+v", got)
+	if len(node.Inputs) != 2 || len(node.Outputs) != 1 {
+		t.Fatalf("projected ports = inputs:%d outputs:%d", len(node.Inputs), len(node.Outputs))
 	}
-	if got := info.InputPorts[1]; got.PortType != "kv-read" || got.Subject != "" {
-		t.Fatalf("KV read detail = %+v", got)
+	if got := node.Inputs[0]; got.Kind != "jetstream" || got.Name != "events" {
+		t.Fatalf("JetStream input view = %+v", got)
 	}
-	if got := info.OutputPorts[0]; got.PortType != "nats-request" || got.Subject != "graph.mutation.>" {
-		t.Fatalf("request detail = %+v", got)
+	if got := node.Inputs[1]; got.Kind != "kv-read" || got.Name != "entities" {
+		t.Fatalf("KV read input view = %+v", got)
+	}
+	if got := node.Outputs[0]; got.Kind != "nats-request" || got.ConnectionID != "svc.echo" {
+		t.Fatalf("request output view = %+v", got)
 	}
 }
 
-func TestComponentManagerPortReportingRejectsUnadmittedInstance(t *testing.T) {
+// TestComponentManagerProjectionCarriesOnlyAdmittedInstances replaces the
+// rejection guard the removed extractComponentPortInfo carried: an instance the
+// Registry never admitted has no declaration, so it cannot appear in a
+// projection derived from admitted declarations.
+func TestComponentManagerProjectionCarriesOnlyAdmittedInstances(t *testing.T) {
 	manager := newPortOwnershipCM(t, nil)
-	if _, err := manager.extractComponentPortInfo("missing"); err == nil {
-		t.Fatal("manager reporting accepted an unadmitted instance")
+	if err := manager.analyzeBootComposition(); err != nil {
+		t.Fatalf("analyzeBootComposition: %v", err)
+	}
+	result := manager.bootCompositionResult()
+	if result == nil {
+		t.Fatal("boot composition result missing")
+	}
+	if len(result.Graph.Nodes) != 0 {
+		t.Fatalf("projection nodes = %+v, want none for an empty registry", result.Graph.Nodes)
+	}
+	if _, err := manager.GetFlowPaths(); err != nil {
+		t.Fatalf("GetFlowPaths over an empty composition: %v", err)
 	}
 }
 
@@ -95,13 +123,13 @@ func TestComponentManagerFlowReportingUsesRetainedPortsAfterComponentMutation(t 
 		t.Fatalf("analyzeBootComposition: %v", err)
 	}
 
-	graph, err := manager.GetFlowGraph()
-	if err != nil {
-		t.Fatalf("GetFlowGraph reread mutated component declaration: %v", err)
+	result := manager.bootCompositionResult()
+	if result == nil || len(result.Graph.Nodes) != 1 {
+		t.Fatalf("projection = %+v, want the one retained declaration", result)
 	}
-	node := graph.GetNodes()["source"]
-	if node == nil || len(node.InputPorts) != 1 || node.InputPorts[0].ConnectionID != "events.original" {
-		t.Fatalf("flowgraph node = %#v, want retained events.original declaration", node)
+	node := result.Graph.Nodes[0]
+	if node.Instance != "source" || len(node.Inputs) != 1 || node.Inputs[0].ConnectionID != "events.original" {
+		t.Fatalf("projected node = %#v, want retained events.original declaration", node)
 	}
 
 	handlers := map[string]http.HandlerFunc{
