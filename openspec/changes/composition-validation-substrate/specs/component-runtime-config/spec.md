@@ -42,3 +42,53 @@ NOT be accepted.
 - **WHEN** configuration is decoded
 - **THEN** startup fails before component initialization
 - **AND** no compatibility repair, alias expansion, or fallback is attempted
+
+#### Scenario: Named merge is complete replacement
+
+- **GIVEN** a valid override naming an existing port
+- **WHEN** effective configuration is produced
+- **THEN** the override completely replaces that named port
+- **AND** omitted kind-specific fields are not inherited from the prior declaration
+
+#### Scenario: Invalid named merge is rejected
+
+- **WHEN** an override names an unknown port, repeats a port name, changes a port's direction, or changes its kind
+- **THEN** effective configuration fails with typed component and port context
+
+#### Scenario: JetStream fields survive canonical round-trip
+
+- **GIVEN** a canonical `jetstream` declaration
+- **WHEN** it is decoded, merged, exposed through runtime configuration, and projected as normalized facts
+- **THEN** its subjects, storage, retention, days, size, replicas, consumer, deliver policy, acknowledgement policy,
+  maximum deliveries, acknowledgement wait, heartbeat, maximum pending acknowledgements, and interface metadata are
+  unchanged
+
+#### Scenario: Subject-only JetStream input is rejected
+
+- **GIVEN** a canonical input `jetstream` declaration with one or more non-empty subjects and no `stream_name`
+- **WHEN** its containing `PortConfig` is decoded for the input lane
+- **THEN** decoding resolves the declaration for the input direction and fails before component initialization
+- **AND** the typed failure identifies the port, kind `jetstream`, and field `stream_name`
+- **AND** no component-local subject derivation or default supplies the missing backing stream
+- **AND** no partially decoded input or output lane is assigned
+
+#### Scenario: JetStream input without subjects is rejected
+
+- **GIVEN** a canonical input `jetstream` declaration with a non-empty `stream_name` and no non-empty subjects
+- **WHEN** the declaration is resolved
+- **THEN** resolution fails before component initialization
+- **AND** the typed failure identifies field `subjects`
+
+#### Scenario: Subject-only JetStream output remains valid
+
+- **GIVEN** a canonical output `jetstream` declaration with one or more non-empty subjects and no `stream_name`
+- **WHEN** its containing `PortConfig` is decoded for the output lane
+- **THEN** resolution succeeds with the declared subjects and an omitted stream name
+- **AND** only the canonical generic provisioner may derive the physical stream name
+
+#### Scenario: Retired agentic-model stream default is absent
+
+- **GIVEN** an agentic-model component configuration
+- **WHEN** its schema, defaults, documentation, and shipped configurations are inspected
+- **THEN** no top-level `stream_name` field is exposed
+- **AND** each JetStream input carries its explicit backing `stream_name` on the canonical port declaration

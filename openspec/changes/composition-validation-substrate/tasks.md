@@ -486,7 +486,7 @@ before the omission, and record `shasum -a 256` equality of the restored file.
       (log: scratchpad `e2e_agentic.log`).
 ## 7. Review and archive (inside the landing PR; the `AGENTS.md:68-73` Land order)
 
-- [ ] 7.1 `semstreams-reviewer` on the GREEN + §4 + §5 head: verdict, every finding and its disposition (FIXED /
+- [x] 7.1 `semstreams-reviewer` on the GREEN + §4 + §5 head: verdict, every finding and its disposition (FIXED /
       FILED #n / ruling) recorded here. Findings on unused paths are FILED, not fixed.
       Round 1 (Fable, at `0b00749d`): REQUEST CHANGES — nothing BLOCKING, 4 HIGH, 6 MEDIUM. Dispositions:
       H1 FIXED (3.5a: research-graph configs `component.*` → `component.>`); H2 FIXED (3.5b: `Analyze(declarations,
@@ -531,23 +531,54 @@ before the omission, and record `shasum -a 256` equality of the restored file.
       future non-GET operation's body is searched); NIT-2 FIXED (three wildcard-intersection rows in
       `TestSubjectCoversIsDirectionalCover`, re-derived independently against the implementation before
       adding them); NIT-3 RECORDED in `flow-authoring-retirement` 3.3 (dead `ValidationStatus`).
-- [ ] 7.2 Owner-run Codex round where the owner asks for it: verdict and dispositions recorded here; each fix
+- [x] 7.2 Owner-run Codex round where the owner asks for it: verdict and dispositions recorded here; each fix
       re-enters 7.1 and re-runs the focused commands of 2.11 with `-v`.
       Round 1 (owner-run, at `bad4a1af`): REQUEST CHANGES — 1 BLOCKING (`/gaps` bypasses the canonical judgment),
       1 MEDIUM (`SubjectMatches` is a phantom export), plus placeholder cleanup and the pre-archive restructuring.
       Owner ruling with it: legacy paths are broken and documented for downstream migration, not maintained — so
       both findings were retirements. Every disposition, its evidence, and its mutation record are §9. The §6 gates
       were re-run on the resulting head (see each 6.x line). The reviewer re-read of §9 is 7.1 round 3.
+      Round 2 (owner-run, at `c851d0be`): **APPROVE**, no actionable findings. It rechecked each round-1
+      disposition independently — `/gaps` "closed by retirement, not hidden" with the route, handler, generated
+      operation, `ValidateFlowConnectivity`, `DetectObjectStoreGaps`, `ComponentGap` and the callerless
+      helper/cache surface all absent; `SubjectMatches` absent with no Go consumer; the surviving
+      `POST <flowbuilder>/flows/{id}/validate` judgment "no longer an unrecorded contradiction"; the migration
+      record's generated-key vs served-path distinction correct; the #1098 merge preserved with "grammar-control
+      counts remain exact". Its own verification, verbatim: `go test -race -count=1 ./service ./component/flowgraph
+      ./composition/...` PASS · `go test -race -count=1 -tags=integration ./service ./componentregistry
+      ./composition` PASS · `go test -count=1 ./test/contract/...` PASS · `openspec validate --all --strict` — 55
+      passed, 0 failed · "Hosted CI: all seven reported checks green". Closing note, verbatim: "The remaining 7.4
+      reconciliation, archive-as-final-content-commit, and narrow archive/spec-sync check are normal landing
+      steps, not review findings. Any correction after this reviewed head must re-enter review before
+      archive/undraft."
 - [x] 7.3 `conformance.md`: replace every `__` placeholder with the measured `file:line` at the head that carries the
       last `.go` or delta change. Maintained as part of every commit that moves a line, not at the end.
       DONE at `e67901b9`+9.7: `grep -n '__' openspec/changes/composition-validation-substrate/conformance.md` →
       one hit, the sentence in the preamble that DEFINES the placeholder convention; no placeholder remains in
       any table cell. The rows that carried the retirement's unmeasurable `service/__:__` moved to
       `flow-authoring-retirement/conformance.md`, where they are still `__` because that work has not run.
-- [ ] 7.4 Reconcile: every scenario in `specs/composition-validation/spec.md` and in the MODIFIED requirement of
+- [x] 7.4 Reconcile: every scenario in `specs/composition-validation/spec.md` and in the MODIFIED requirement of
       `specs/component-runtime-config/spec.md` names a test that exists and is green in 6.2/6.3/6.5; table recorded
       here. Any `[~]` in this file is ALSO written into the delta before archiving. (The REMOVED-requirement half of
       this reconciliation moved to `flow-authoring-retirement` 7.4 with the deltas it reconciles.)
+      DONE. Table in `conformance.md` ("Task 7.4 reconciliation"): 26 scenarios in `specs/composition-validation`
+      and 9 in the `component-runtime-config` MODIFIED requirement, each naming a test that exists. NO scenario in
+      either delta lacks a test. Commands and results at the reconciliation head:
+      `go test -race -count=1 ./component/ -run 'TestPortDefinitionAndPortUseOneStrictWire|TestPortDefinitionExternalRoundTrip|TestFactsForPortPreservesStreamAndInterfaceFacts|TestPortCodecRejectsUnknownAndLegacyShapes|TestMergePortConfigCompleteReplacementStableOrderAndClone|TestMergePortConfigRejectsInvalidOverrides|TestPortConfigJSONRejectsDuplicateNamesWithinEachLane|TestPortConfigJSONResolvesJetStreamDefinitionsByLane|TestResolvePortRejectsInvalidDeclarations|TestResolveJetStreamOutputAllowsProvisionerOwnedName|TestRegisterFactoryRejectsNilPortDeclarer|TestAdmissionRefusesPortDeclarationMismatch' -v`
+      → 12 `--- PASS`, 0 otherwise;
+      `go test -count=1 ./test/contract/ -run 'TestShippedAgenticModelConfigDoesNotExposeLegacyStreamName|TestShippedJetStreamInputsDeclareBackingStreamAndSubjects|TestSchemaExportCarriesDefaultPorts' -v`
+      → all three `--- PASS`;
+      `go test -race -count=1 ./composition/... ./service/ ./cmd/semstreams/ ./processor/agentic-tools/executors/ -run 'TestValidate|TestCatalog|TestMermaid|TestAssertValid|TestCLI|TestFlowValidationHandlerProjectsLibraryResult|TestComponentGapsOperationIsAbsent|TestExternalInputIsNeverACriticalOrphan|TestCompositionGraphToolReturnsMermaid|TestListComponentsCarriesPorts'`
+      → `ok` for composition, composition/cli, service, cmd/semstreams, processor/agentic-tools/executors;
+      `go test -race -count=1 -tags=integration ./service/ ./componentregistry/ -run 'TestComponentManagerRefusesBootOnErrorFinding|TestComponentManagerExposesBootFindings|TestGraphProjectionMatchesAdmittedComposition|TestComponentManagerBootFindingsHonourExplicitStreams|TestDeclaredPortsMatchConstructedPortsForEveryRegisteredFactory' -v`
+      → all five `--- PASS`.
+      FINDING RAISED AND FIXED BY THIS RECONCILIATION (details in `conformance.md`): the `component-runtime-config`
+      MODIFIED block carried 2 of the requirement's 9 scenarios. A MODIFIED requirement replaces the whole
+      requirement — the `2026-08-08-foundation-b-port-language` archive restates all 9, which is why the current spec
+      has 9 — so archiving as written would have deleted seven scenarios of permanent current truth. All seven were
+      restored verbatim from `openspec/specs/component-runtime-config/spec.md` before the archive; header sets and
+      order now match exactly and the block's only difference from current truth is the intended `external` grammar.
+      The one `[~]` in this file (3.1a) is written into the delta under the P1 requirement.
 - [ ] 7.5 `openspec archive composition-validation-substrate` with the spec sync as the final content commit; the
       narrow reviewer check of the archive/spec sync follows as a PR comment; then undraft. The PR body is a
       published layer: re-read it at undraft and correct any claim the branch no longer supports.
