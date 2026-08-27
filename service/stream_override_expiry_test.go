@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -125,24 +127,52 @@ func TestOverrideExpiry_RemovedOverrideStopsReporting(t *testing.T) {
 // override, and NewComponentManager — because the property under test is the
 // wiring, not the reporter. A helper-only assertion would keep passing after
 // the wiring was dropped, which is the exact failure the rehome must not have.
+// sharedOverrideExpiryNATS starts ONE embedded JetStream server for this file
+// and holds it for the test binary's life. One server rather than one per test
+// is deliberate: a server bound to a random ephemeral port HOLDS that port,
+// while this package's other tests choose ports by binding :0, reading the
+// number and closing — a probe whose answer goes stale the instant anything
+// else binds. Every server this file does not start is one fewer chance to
+// invalidate one of those probes. Nothing here runs in parallel and each test
+// gets its own config.Manager, so one server is not shared test state.
+var (
+	sharedOverrideExpiryNATSOnce sync.Once
+	sharedOverrideExpiryNATSURL  string
+	sharedOverrideExpiryNATSErr  error
+)
+
+func sharedOverrideExpiryNATS(t *testing.T) string {
+	t.Helper()
+	sharedOverrideExpiryNATSOnce.Do(func() {
+		storeDir, err := os.MkdirTemp("", "override-expiry-js")
+		if err != nil {
+			sharedOverrideExpiryNATSErr = err
+			return
+		}
+		server, err := natsserver.NewServer(&natsserver.Options{
+			Port: -1, NoLog: true, NoSigs: true, JetStream: true, StoreDir: storeDir,
+		})
+		if err != nil {
+			sharedOverrideExpiryNATSErr = err
+			return
+		}
+		server.Start()
+		if !server.ReadyForConnections(10 * time.Second) {
+			sharedOverrideExpiryNATSErr = errors.New("embedded NATS server not ready")
+			return
+		}
+		sharedOverrideExpiryNATSURL = server.ClientURL()
+	})
+	require.NoError(t, sharedOverrideExpiryNATSErr)
+	return sharedOverrideExpiryNATSURL
+}
+
 func composeComponentManagerWithOverride(
 	t *testing.T, overrides config.StreamMigrationOverrides, logger *slog.Logger,
 ) (Service, *metric.MetricsRegistry) {
 	t.Helper()
 
-	server, err := natsserver.NewServer(&natsserver.Options{
-		Port: -1, NoLog: true, NoSigs: true, JetStream: true, StoreDir: t.TempDir(),
-	})
-	require.NoError(t, err)
-	server.Start()
-	t.Cleanup(func() {
-		server.Shutdown()
-		server.WaitForShutdown()
-	})
-	if !server.ReadyForConnections(10 * time.Second) {
-		t.Fatal("embedded NATS server not ready")
-	}
-	client, err := natsclient.NewClient(server.ClientURL())
+	client, err := natsclient.NewClient(sharedOverrideExpiryNATS(t))
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()

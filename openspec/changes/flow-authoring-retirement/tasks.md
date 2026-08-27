@@ -177,6 +177,16 @@ Premises were measured at `5cc0c7fb` and are re-measured at the claim head; the 
          critical, no `External` check). The two test assertions on it are replaced with assertions on the FACTS the
          analysis reports (`DisconnectedNodes`, `OrphanedPorts`), which is what it now returns.
 
+      Behavioural guard for part 1, added after the first self-review found the rewrite untested:
+      `TestFlowPathsTraverseTheRetainedGraph` (`service/component_manager_paths_test.go`) builds a four-node
+      composition through the production Registry — a `type: "input"` timer-driven poller, a network-listening
+      processor, a middle processor and an output sink — and asserts BOTH origins are found and each reaches the whole
+      downstream chain in depth-first order. Every other test on this surface only checks that the handler returns 200,
+      and an empty `paths` map is a well-formed 200. Two forced omissions, each restored by `cp` with
+      `shasum -a 256` `3fa4196141e036e9431176284aa567e6137e06b25849163c4ac592bcb4ec6b76` before == after:
+      removing `isInputNode`'s declared-type branch → `"map[listener:[listener middle sink]]" should have 2 item(s),
+      but has 1`; dropping the edge-derivation loop in `GetFlowPaths` → `Not equal` on the reachable chain.
+
       Also removed under this heading — measured zero-caller residue of the `/gaps` judgment PR #1101 retired, sitting
       beside the canonical library as a second exact-subject-match connection interpreter:
       `ComponentManager.analyzeFlowConnections` (no caller at all), `extractComponentPortInfo`/`extractPortDetail`
@@ -311,9 +321,23 @@ before the omission, and record `shasum -a 256` equality of the restored file. C
       The two entries named a file this change deletes, and the ratchet correctly refuses a baseline that carries debt
       for code that no longer exists. Removed from `test/testinfra/policy_baseline.json`.
       Re-run: `go test -race -count=1 ./...` → `grep -c '^FAIL'` = **0**, `exit=0`.
+
+      A LATER run on this host went red once on a test this change does not touch —
+      `service` `TestStartHealthListener_BindsHealthAndHealthz`:
+      `bind health listener: listen tcp :55079: bind: address already in use`. Mechanism, read rather than guessed:
+      `freePort` (`service/service_manager_health_listener_test.go:277-286`) binds `:0`, reads the number and CLOSES
+      the listener, then the test binds that number again — a probe whose answer goes stale the instant anything else
+      binds. Ten call sites across three files share it. Not caused here (`git log origin/main..HEAD` touches none of
+      those files) but plausibly AGGRAVATED here: the two new guard tests each started an embedded NATS server on a
+      random ephemeral port, which HOLDS it. Response: the two now share ONE server for the whole file
+      (`sharedOverrideExpiryNATS`), halving the ports this change adds to the package. The helper's own race is FILED,
+      not fixed — a ten-call-site test-helper change does not belong in a retirement PR.
+      Final run after that change: `go test -race -count=1 ./...` → `grep -c '^FAIL'` = **0**, `exit=0`;
+      the named test passed 3/3 in isolation before and after.
 - [x] 6.3 `go test -race -count=1 -tags=integration -p 2 ./...`.
-      → `grep -c '^FAIL'` = **0**, `exit=0` (ended 2026-08-27T14:01:34Z). Run alone on the host — the other agent's
-      suite was confirmed finished first (`pgrep -fl 'go test'` empty).
+      → `grep -c '^FAIL'` = **0**, `exit=0` (ended 2026-08-27T14:01:34Z). Re-run after the §7.1 self-review additions
+      → `grep -c '^FAIL'` = **0**, `exit=0`. Run alone on the host both times — `pgrep -f 'go test'` was checked empty
+      before each.
 - [x] 6.4 `task build` and the CI cross-compile line; `go vet -tags=integration ./...`.
       `task build` → `Built bin/semstreams`.
       `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /dev/null ./cmd/semstreams` → OK, and the same for
