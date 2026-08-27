@@ -320,7 +320,7 @@ func runScenarios(
 
 	if flags.scenarioName == "" || flags.scenarioName == "all" {
 		logger.Info("Running all core scenarios...")
-		return runAllScenarios(ctx, logger, edgeClient, flags.baseURL, flags.udpEndpoint)
+		return runAllScenarios(ctx, logger, edgeClient, flags.udpEndpoint)
 	} else if flags.scenarioName == "semantic" {
 		logger.Info("Running all semantic scenarios...")
 		return runSemanticScenarios(ctx, logger, edgeClient, flags.udpEndpoint)
@@ -594,7 +594,6 @@ func runAllScenarios(
 	ctx context.Context,
 	logger *slog.Logger,
 	obsClient *client.ObservabilityClient,
-	baseURL string,
 	udpEndpoint string,
 ) int {
 	// Create WebSocket client for dataflow scenario

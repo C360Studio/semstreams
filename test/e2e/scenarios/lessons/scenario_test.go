@@ -124,7 +124,7 @@ func TestEvidenceContractAndFixtureAreExact(t *testing.T) {
 	}
 	exact := &graph.ExactEntity{Entity: mutation.Entity.Clone(), KVRevision: 1}
 	exact.Entity.Triples = append([]message.Triple(nil), mutation.Triples...)
-	exact.Entity.Triples = append(exact.Entity.Triples, canonicalProfileTriple(evidenceEntityID))
+	exact.Entity.Triples = append(exact.Entity.Triples, canonicalProfileTriple(evidenceEntityID, vocabulary.IndexingProfileControl))
 	if err := requireEvidenceAuthority(exact); err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestAuthorityComparatorsRequireOneCanonicalIndexingProfileStamp(t *testing.
 			exact.Entity.Triples = exact.Entity.Triples[:len(exact.Entity.Triples)-1]
 		}},
 		{name: "duplicate", mutate: func(exact *graph.ExactEntity) {
-			exact.Entity.Triples = append(exact.Entity.Triples, canonicalProfileTriple(fixture.entityID))
+			exact.Entity.Triples = append(exact.Entity.Triples, canonicalProfileTriple(fixture.entityID, vocabulary.IndexingProfileContent))
 		}},
 		{name: "wrong object", mutate: func(exact *graph.ExactEntity) {
 			exact.Entity.Triples[len(exact.Entity.Triples)-1].Object = vocabulary.IndexingProfileTrace
@@ -456,16 +456,20 @@ func TestRunStagesAndCleanupSeesIDsTrackedDuringStages(t *testing.T) {
 
 func exactLesson(fixture productLessonFixture, triples []message.Triple) *graph.ExactEntity {
 	withProfile := append([]message.Triple(nil), triples...)
-	withProfile = append(withProfile, canonicalProfileTriple(fixture.entityID))
+	withProfile = append(withProfile, canonicalProfileTriple(fixture.entityID, vocabulary.IndexingProfileContent))
 	return &graph.ExactEntity{Entity: &graph.EntityState{
 		ID: fixture.entityID, MessageType: fixture.messageType, Triples: withProfile,
 	}, KVRevision: 1}
 }
 
-func canonicalProfileTriple(subject string) message.Triple {
+// canonicalProfileTriple is the create-seam stamp graph-ingest adds: the
+// evidence fixture (test.fixture.v1) takes the fixtures' control floor, a
+// lesson (agentic.agent_lesson.v1) takes its registered content floor
+// (ADR-103, O-3).
+func canonicalProfileTriple(subject, profile string) message.Triple {
 	return message.Triple{
 		Subject: subject, Predicate: vocabulary.EntityIndexingProfile,
-		Object: vocabulary.IndexingProfileControl, Source: "graph-ingest-indexing-profile",
+		Object: profile, Source: "graph-ingest-indexing-profile",
 		Timestamp: fixtureTimestamp.Add(time.Minute), Confidence: 1,
 	}
 }

@@ -458,7 +458,17 @@ research-graph/scenario.go:350-352, ops/scenario.go:459-470}`, `processor/graph-
       is a direct `PutKV`, not a create — expected green, unverified). Those rows predate the 2026-08-27 ruling and
       re-target. The O-6 union on the re-targeted head, one tier at a time under the host lock protocol (runner: Claude Fable 5,
       this laptop, worktree `claude/gh1100-single-type-authority-impl`), exact command / UTC start–end / last line:
-      <!-- O-6 rows -->
+      Head `386cd8c2` (merge of main `78fe095c` + the re-target), 2026-08-27:
+      - `task e2e:agentic` — 2026-08-27T13:19:39Z–2026-08-27T13:20:38Z UTC — rc=0 — `time=2026-08-27T08:20:37.535-05:00 level=INFO msg="Scenario completed successfully" duration=45.289827209s`
+      - `task e2e:lessons` — 2026-08-27T13:20:38Z–2026-08-27T13:20:56Z UTC — rc=0 — `time=2026-08-27T08:20:56.128-05:00 level=INFO msg="Scenario completed successfully" duration=32.65175ms`
+      - `task e2e:structural` — 2026-08-27T13:21:21Z–2026-08-27T13:21:40Z UTC — rc=0 — `time=2026-08-27T08:21:40.138-05:00 level=INFO msg="Scenario completed successfully" duration=612.655ms`
+      - `task e2e:ops` — 2026-08-27T13:21:41Z–2026-08-27T13:22:09Z UTC — rc=0 — `time=2026-08-27T08:22:08.889-05:00 level=INFO msg="Scenario completed successfully" duration=576.83875ms`
+      - `task e2e:research-graph` — 2026-08-27T13:22:20Z–2026-08-27T13:22:48Z UTC — rc=0 — `time=2026-08-27T08:22:48.227-05:00 level=INFO msg="Scenario completed successfully" duration=1.036792667s`
+      - `task e2e:lifecycle` — 2026-08-27T13:22:49Z–2026-08-27T13:23:02Z UTC — rc=0 — `time=2026-08-27T08:23:02.048-05:00 level=INFO msg="Scenario completed successfully" duration=203.398667ms`
+      - `task e2e:crud-tools` — 2026-08-27T13:23:15Z–2026-08-27T13:23:29Z UTC — rc=0 — `time=2026-08-27T08:23:29.045-05:00 level=INFO msg="Scenario completed successfully" duration=856.553917ms`
+      - `task e2e:core` — 2026-08-27T13:23:29Z–2026-08-27T13:24:48Z UTC — rc=0 — `[OK] graph round-trip probe passed against the e2e-target binary`
+      - `go test -race -tags=integration -count=1 -run TestWebObservationBirthIsRegistered ./processor/agentic-tools/executors/` — 2026-08-27T13:24:48Z–2026-08-27T13:24:52Z UTC — rc=0 — `ok  	github.com/c360studio/semstreams/processor/agentic-tools/executors	1.918s`
+      All nine rows green; the candidate-proof record is the TAG gate's and reuses these rows.
 - [x] 7.4 Fill `conformance.md` Implementation and Test columns with `file:line` at the head that carries the last change to
       any `.go` file or spec delta on the branch; an empty cell at review time is a deviation to record.
       Done 2026-08-26: every Implementation and Test column filled with `file:line` at the head carrying the last `.go`
