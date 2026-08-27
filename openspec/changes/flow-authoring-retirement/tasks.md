@@ -152,12 +152,12 @@ Premises were measured at `5cc0c7fb` and are re-measured at the claim head; the 
       `processor/agentic-tools/executors/personas.go:14` (`FlowManager` in a comment). All six swept.
       Re-run with the wide pattern:
       `grep -rniE 'flowstore|flowtemplate|flowengine|flow-builder|flowbuilder|FlowManager|FlowService|flow_template|semstreams_flows|FLOW_TEMPLATES|create_flow|update_flow|delete_flow|list_flows|get_flow|instantiate_flow|manage_flow' --include='*.go' --include='*.json' --include='*.yml' --include='*.yaml' --include='*.md' .`
-      raw **650**; excluding `docs/adr/` + `openspec/changes/archive/` **336**; live tree **89**. Every live hit is in
+      raw **666**; excluding `docs/adr/` + `openspec/changes/archive/` **352**; live tree **93**. Every live hit is in
       one of five permitted classes, none of them production code:
 
       | Count | Where | Class |
       |---|---|---|
-      | 30 | `docs/operations/migration-beta162-to-beta163.md` | the migration section, which exists to name what left |
+      | 34 | `docs/operations/migration-beta162-to-beta163.md` | the migration section, which exists to name what left |
       | 25 | the four removal guards + `service/stream_override_expiry_test.go` | a guard must name what it forbids |
       | 14 | `openspec/specs/flow-authoring/spec.md` | the retired capability spec; leaves with `openspec archive` |
       | 16 | `testutil/flow.go` (12) + `testutil/doc.go` (4) | pre-existing dead `FlowBuilder`, zero callers — FILED by the coordinator, not this change |
@@ -165,8 +165,11 @@ Premises were measured at `5cc0c7fb` and are re-measured at the claim head; the 
       | 1 | `test/e2e/client/websocket.go:150` | ADR-096 residue, FILED (3.3) |
       | 1 | `openspec/specs/composition-validation/spec.md` | the `[~]` this change's MODIFIED requirement replaces at archive |
 
-      Production `.go` outside `testutil/` and the guards: **zero**
-      (`grep -rniE '<wide pattern>' --include='*.go' . | grep -v _test.go` returns only the two FILED files).
+      Production `.go` outside `testutil/` and the guards: **zero**. Measured with
+      `grep -rlniE '<wide pattern>' --include='*.go' . | grep -v '_test\.go'` → exactly three files, carrying the two
+      FILED items: `testutil/flow.go` and `testutil/doc.go` (one item — the dead `FlowBuilder` and the doc block that
+      teaches it) and `test/e2e/client/websocket.go` (the ADR-096 status-stream residue). Counts re-measured at the
+      head that carries this round; they move when this change's own artifacts grow.
 - [x] 3.3 **Re-judge the retained duplicate build.** `ComponentManager.GetFlowGraph` / `buildFlowGraph` /
       `flowgraph.BuildFromRegistry` and `GET <components>/paths` rebuild a graph from the admitted registry instead of
       serving the retained `composition.Result.Graph`. PR #1101 removed the `/gaps` judgment and recorded this build as
@@ -493,14 +496,40 @@ before the omission, and record `shasum -a 256` equality of the restored file. C
       | MED-2 | bare `context.WithoutCancel(ctx)` in a `t.Cleanup` | **FIXED** — bounded with `context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)`, matching the two other detached contexts in the file |
       | MED-3 | `task e2e:ops` unmeasured though it boots the rewritten `ops-agent-test.json` | **FIXED** — run, green, row recorded in 6.6 (`assertions_run=9`) |
       | MED-4 | `TestFlowPathsTraverseTheRetainedGraph` left the `PatternHTTPClient` origin arm uncovered | **FIXED** — added a third origin node with an `HTTPClientPort` and re-stated the doc comment as three rules. Mutation-verified: deleting the arm now fails with `should have 3 item(s), but has 2` |
-      | MED-5 | migration doc understates the metric's reach | **FIXED** — added "Expect output you have never seen before": the WARN previously fired only where `flow-builder` was enabled and the gauge reached `/metrics` in no process at all, so an already-lapsed bridge will start reporting on the first beta.163 boot |
+      | MED-5 | migration doc understates the metric's reach | **FIXED in the re-review round (commit `docs(flow): apply the two migration-doc edits …`), not the first — see the correction note below.** `docs/operations/migration-beta162-to-beta163.md` now carries, immediately after "evaluated once immediately, so the series exists from boot rather than from the first tick": `**Expect output you have never seen before.** "Unchanged" describes the metric's contract, not its reach. Before beta.163 this report was effectively unreachable: the WARN fired only in a process that enabled the \`flow-builder\` service, and the gauge reached \`/metrics\` in **no** process at all, because it was registered only through \`Service.RegisterMetrics\` — a method nothing in the framework calls.` … followed by the remedy (bound the stream, or `archival_streams`) |
       | MED-6 | `docs/adr/096:63` links the deleted migration guide | **FIXED** — one status line beneath the link pointing at ADR-100 and `migration-beta162-to-beta163.md`; no other edit to the ADR |
       | NIT | `executors/register.go:50-52` Pattern-B step comments now skip 2 and 4 | **FIXED** — a note that the numbers are historical and why |
       | NIT | `composition/findings.go:66` cites a deleted path | **FIXED** — marked as provenance at the SHA where it existed |
-      | NIT | migration doc `:156-157` needs a forward pointer to the `/paths` 500→503 change | **FIXED** |
+      | NIT | migration doc `:156-157` needs a forward pointer to the `/paths` 500→503 change | **FIXED in the re-review round (commit `docs(flow): apply the two migration-doc edits …`), not the first — see the correction note below.** That paragraph now reads `... is unchanged **by this landing** — it is a projection, not a judgment. The flow-authoring retirement below does change it: same response shape, but it is now derived from the retained composition result and answers 503 rather than 500 before that result exists. See "\`/paths\` now serves the retained graph".` |
       | NIT | semstreams-ui count should separate the classes | **FIXED**, and MEASURED rather than taken: 17 hand-written `src/` files, 16 `e2e/` files naming `flowbuilder`, and **4** (not 10) further `e2e/` files driving the `/flows` UI routes without naming the proxy path — `flow-crud.spec.ts`, `flow-management.spec.ts`, `navigation.spec.ts`, `pages/FlowListPage.ts` — for 20 e2e files total. The four are named in the doc |
       | — | migration table lacked rows for `FlowServiceConfig`, `OverallHealth`, `ComponentHealth`, `ComponentMetric`, `RuntimeMessage`, `FlowExecutor`, `FlowTemplateExecutor` | **FIXED** — six rows added, each "none — served the removed routes", with the `file:line` each had on `origin/main` |
       | — | reviewer saw the held #1122 edits land mid-review as an unexplained writer | Explained: they were prepared under coordinator instruction and held unpushed pending the owner's ruling on #1122. Now folded into this round; task 5.1 amended from DECIDED-stays to the ruling |
+
+      **CORRECTION (narrow re-review at `55cd1740`: CHANGES REQUESTED, one HIGH).** Two rows above said FIXED for
+      edits that did not exist at that head. The MED-5 sentence and the `:156-157` forward pointer were written in a
+      single script with a third edit; that script's third assertion failed, the exception aborted it BEFORE
+      `write_text`, so none of the three landed. I re-applied only the third in a follow-up and recorded all three as
+      FIXED. My own verification command in that same step —
+      `grep -c "Expect output you have never seen before" docs/operations/migration-beta162-to-beta163.md` — printed
+      **0**, and I read past it. `docs/operations/migration-beta162-to-beta163.md:273-280` and `:156-157` were
+      byte-identical between `32a12d12` and `55cd1740`; the commit message and the PR body repeated the false claims.
+      Both edits are now applied and both were verified by grep AFTER writing, with the added lines quoted in the rows
+      above so the record and the diff are checkable against each other. Lesson recorded: a partial-failure script
+      leaves NO edit applied, and a verify command that returns 0 is the finding, not noise.
+
+      **Re-review MED-R1** — `service/doc.go` still taught `service.NewServiceManager(deps)` (real:
+      `NewServiceManager(registry *Registry) *Manager`, `service_manager.go:131`) and `manager.InitializeAll(ctx)`
+      (exists on no type), in the same example my HIGH-2 fix had just edited. **FIXED**, and swept as a CLASS rather
+      than the two named instances: a THIRD block at `service/doc.go:87-104` carried the same three invented symbols
+      plus `manager.RegisterConstructor`. Both blocks now teach the real sequence — `NewServiceRegistry` →
+      `Register`/`RegisterAll` → `NewServiceManager(registry)` → `ConfigureFromServices` → `StartAll`/`StopAll` — and
+      every symbol was checked to exist before it was written (`registry.go:17`, `register.go:8`,
+      `service_manager.go:131,153,390,838`, `metrics.go:69`). Class check
+      `grep -nE 'NewServiceManager\(deps\)|InitializeAll|RegisterConstructor|NewFlowService' service/doc.go` → no hits.
+
+      **Re-review NITs** — census counts refreshed at this head (raw 666 / 352 / live 93; the migration doc row moved
+      30 → 34, all of it this round's own additions); the stray duplicated fragment at the end of the MED-4 mutation
+      transcript removed; "the two FILED files" corrected to three files carrying two FILED items.
 
       **FILED, not fixed** (unused paths, pre-existing, filed by the coordinator): `testutil/flow.go:185-255` dead
       `FlowBuilder` (zero callers outside `testutil/`, confirmed by grep); `metric/registry.go:243-247`
@@ -526,7 +555,6 @@ before the omission, and record `shasum -a 256` equality of the restored file. C
       --- FAIL: TestFlowPathsTraverseTheRetainedGraph (0.00s)
           component_manager_paths_test.go:121: "map[listener:[listener middle sink] poller:[poller middle sink]]" should have 3 item(s), but has 2
       ```
-      FILED #n / ruling) recorded here. Findings on unused paths are FILED, not fixed.
 - [ ] 7.2 Owner-run cross-agent round where the owner asks for it: verdict and dispositions recorded here; each fix
       re-enters 7.1.
 - [x] 7.3 `conformance.md`: replace every `__` placeholder with the measured `file:line` at the head that carries the

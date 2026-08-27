@@ -154,7 +154,9 @@ validator and one findings vocabulary, so the second judgment is retired rather 
 The finding types `disconnected_node` and `orphaned_port` survive by name in the canonical vocabulary; a required stream
 input with no publisher is an `orphaned_port` **error** there (severity, not a separate "critical" count), and an input
 declared `"external": true` raises no such finding. `GET <components>/paths` (reachability from input components) is
-unchanged — it is a projection, not a judgment.
+unchanged **by this landing** — it is a projection, not a judgment. The flow-authoring retirement below does change it:
+same response shape, but it is now derived from the retained composition result and answers 503 rather than 500 before
+that result exists. See "`/paths` now serves the retained graph".
 
 ### Downstream action
 
@@ -277,6 +279,16 @@ component-manager, the one service the framework refuses to compose without, so 
 `stream_migration_overrides` bridge cannot lose the report by not enabling a service. **The metric name, labels
 (`stream`, `owner`), and semantics are unchanged.** It is now registered against the registry `/metrics` scrapes at
 composition time and evaluated once immediately, so the series exists from boot rather than from the first tick.
+
+**Expect output you have never seen before.** "Unchanged" describes the metric's contract, not its reach. Before
+beta.163 this report was effectively unreachable: the WARN fired only in a process that enabled the `flow-builder`
+service, and the gauge reached `/metrics` in **no** process at all, because it was registered only through
+`Service.RegisterMetrics` — a method nothing in the framework calls. Both now run in every process, in every
+composition. So if you hold a `stream_migration_overrides` bridge whose expiry has already passed, the first boot on
+beta.163 starts logging a WARN per lapsed bridge per minute and exporting
+`semstreams_streams_migration_override_expired{stream=...,owner=...} 1`. Nothing regressed — the signal is working for
+the first time. Bound the stream (`max_age`, `max_bytes`, `discard`), or move it to `archival_streams` with an owner
+and a reason if permanence is genuinely its contract.
 
 ### Downstream action
 
