@@ -55,6 +55,7 @@ type ModelEndpointEntity struct {
 func (e *ModelEndpointEntity) EntityID() string {
 	id, err := tryModelEndpointEntityID(e.Org, e.Platform, e.Name)
 	if err != nil {
+		// entity-id-audit:classify intentional-sentinel "" line=59 column=10 surface=go-return:EntityID entity_id_invalid:empty documented model endpoint failure return; graph-ingest rejects an empty ID and a decoded payload must not panic
 		return ""
 	}
 	return id

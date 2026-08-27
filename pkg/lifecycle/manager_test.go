@@ -327,7 +327,7 @@ type lifecycle struct{}
 func (lifecycle) fixtureWorkflow() Workflow {
 	return Workflow{
 		Name:            "fixture",
-		EntityIDPattern: "*.*.lifecycle.gcs.mission.*",
+		EntityIDPattern: "*.*.gcs.lifecycle.mission.*",
 		Phases:          []string{"planning", "flying", "completed", "aborted", "failed"},
 		Transitions: Transitions{
 			"planning":  {"flying", "aborted"},
@@ -356,7 +356,7 @@ func TestManager_RoundTripCreateGetTransition(t *testing.T) {
 	mgr, emitter, _ := newTestManager(t)
 	ctx := context.Background()
 
-	id := "c360.platform1.lifecycle.gcs.mission.001"
+	id := "c360.platform1.gcs.lifecycle.mission.001"
 	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning", OwnerOrgID: "acme"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -396,7 +396,7 @@ func TestManager_HistoryReadsTransitionRecordsFromCurrentEntity(t *testing.T) {
 	mgr, _, _ := newTestManager(t)
 	ctx := context.Background()
 
-	id := "c360.platform1.lifecycle.gcs.mission.history-current"
+	id := "c360.platform1.gcs.lifecycle.mission.history-current"
 	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning", OwnerOrgID: "acme"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -424,7 +424,7 @@ func TestManager_TransitionTimestampAdvancesPastRecordedFuture(t *testing.T) {
 	mgr, _, bucket := newTestManager(t)
 	ctx := context.Background()
 
-	id := "c360.platform1.lifecycle.gcs.mission.monotonic-time"
+	id := "c360.platform1.gcs.lifecycle.mission.monotonic-time"
 	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -469,7 +469,7 @@ func TestManager_ReferencesReportsSourceRelationshipWithoutTarget(t *testing.T) 
 		t.Fatal(err)
 	}
 	reg.workflow.ReferencePredicates = []ReferenceSpec{{Predicate: "mission.assignment.drone"}}
-	sourceID := "c360.platform1.lifecycle.gcs.mission.references"
+	sourceID := "c360.platform1.gcs.lifecycle.mission.references"
 	targetID := "c360.platform1.assets.flight.drone.absent"
 	if err := mgr.Create(ctx, &fixtureMission{ID: sourceID, PhaseF: "planning"}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -507,7 +507,7 @@ func TestManager_TransitionRecordsAreOccurrenceDiscriminatedAndBounded(t *testin
 		"flying":   {"planning"},
 	}
 
-	id := "c360.platform1.lifecycle.gcs.mission.history-cap"
+	id := "c360.platform1.gcs.lifecycle.mission.history-cap"
 	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -556,7 +556,7 @@ func TestManager_TransitionRejectsInvalidEdge(t *testing.T) {
 	t.Parallel()
 	mgr, _, _ := newTestManager(t)
 	ctx := context.Background()
-	id := "c360.platform1.lifecycle.gcs.mission.t1"
+	id := "c360.platform1.gcs.lifecycle.mission.t1"
 	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -569,7 +569,7 @@ func TestManager_TransitionRejectsInvalidEdge(t *testing.T) {
 func TestManager_TransitionConflictRebuildsIntentFromChangedAuthority(t *testing.T) {
 	mgr, emitter, bucket := newTestManager(t)
 	ctx := context.Background()
-	id := "c360.platform1.lifecycle.gcs.mission.retry-rebuild"
+	id := "c360.platform1.gcs.lifecycle.mission.retry-rebuild"
 	if err := mgr.Create(ctx, &fixtureMission{
 		ID: id, PhaseF: "flying", OwnerOrgID: "before-conflict",
 	}); err != nil {
@@ -666,7 +666,7 @@ func TestManager_TransitionConflictRebuildsIntentFromChangedAuthority(t *testing
 func TestManager_TransitionConflictRejectsChangedPhaseInconsistentOccurrenceChain(t *testing.T) {
 	mgr, emitter, bucket := newTestManager(t)
 	ctx := context.Background()
-	id := "c360.platform1.lifecycle.gcs.mission.retry-chain"
+	id := "c360.platform1.gcs.lifecycle.mission.retry-chain"
 	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "flying", OwnerOrgID: "before-conflict"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -726,7 +726,7 @@ func TestManager_TransitionConflictRejectsChangedPhaseInconsistentOccurrenceChai
 func TestManager_TransitionConflictRevalidatesChangedEdge(t *testing.T) {
 	mgr, emitter, bucket := newTestManager(t)
 	ctx := context.Background()
-	id := "c360.platform1.lifecycle.gcs.mission.retry-edge"
+	id := "c360.platform1.gcs.lifecycle.mission.retry-edge"
 	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "flying", OwnerOrgID: "before-conflict"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -807,7 +807,7 @@ func TestManager_TransitionRejectsUnknownSourceBeforeMutation(t *testing.T) {
 	t.Parallel()
 	mgr, emitter, _ := newTestManager(t)
 	ctx := context.Background()
-	id := "c360.platform1.lifecycle.gcs.mission.invalid-source"
+	id := "c360.platform1.gcs.lifecycle.mission.invalid-source"
 	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -825,7 +825,7 @@ func TestManager_CreateOnExistingPhaseTripleErrAlreadyExists(t *testing.T) {
 	t.Parallel()
 	mgr, _, _ := newTestManager(t)
 	ctx := context.Background()
-	id := "c360.platform1.lifecycle.gcs.mission.dup"
+	id := "c360.platform1.gcs.lifecycle.mission.dup"
 	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
 		t.Fatalf("first Create: %v", err)
 	}
@@ -839,7 +839,7 @@ func TestManager_UpdateFromOperatorPatchesPredicate(t *testing.T) {
 	t.Parallel()
 	mgr, _, _ := newTestManager(t)
 	ctx := context.Background()
-	id := "c360.platform1.lifecycle.gcs.mission.op"
+	id := "c360.platform1.gcs.lifecycle.mission.op"
 	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -861,7 +861,7 @@ func TestManager_UpdateFromOperatorRejectsProtectedField(t *testing.T) {
 	t.Parallel()
 	mgr, _, _ := newTestManager(t)
 	ctx := context.Background()
-	id := "c360.platform1.lifecycle.gcs.mission.prot"
+	id := "c360.platform1.gcs.lifecycle.mission.prot"
 	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -875,7 +875,7 @@ func TestManager_GetReturnsNotLifecycleManagedForRawEntity(t *testing.T) {
 	t.Parallel()
 	mgr, _, bucket := newTestManager(t)
 	ctx := context.Background()
-	id := "c360.platform1.lifecycle.gcs.mission.raw"
+	id := "c360.platform1.gcs.lifecycle.mission.raw"
 	// Seed entity directly into the bucket WITHOUT a phase triple —
 	// simulates a processor stamping `mission.control.command` before any
 	// lifecycle action fires.
@@ -906,7 +906,7 @@ func TestManagerGetRejectsPredicatePoisonWithoutProjection(t *testing.T) {
 	t.Parallel()
 
 	mgr, _, bucket := newTestManager(t)
-	entityID := "c360.platform1.lifecycle.gcs.mission.poisoned"
+	entityID := "c360.platform1.gcs.lifecycle.mission.poisoned"
 	bucket.put(entityID, &graph.EntityState{
 		ID: entityID,
 		Triples: []message.Triple{
@@ -935,7 +935,7 @@ func TestManager_LookupByEntityIDMatchesPattern(t *testing.T) {
 	t.Parallel()
 	mgr, _, _ := newTestManager(t)
 	ctx := context.Background()
-	id := "c360.platform1.lifecycle.gcs.mission.lkup"
+	id := "c360.platform1.gcs.lifecycle.mission.lkup"
 	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -952,7 +952,7 @@ func TestManager_GetRawReturnsAllTriples(t *testing.T) {
 	t.Parallel()
 	mgr, _, bucket := newTestManager(t)
 	ctx := context.Background()
-	id := "c360.platform1.lifecycle.gcs.mission.raw2"
+	id := "c360.platform1.gcs.lifecycle.mission.raw2"
 	bucket.put(id, &graph.EntityState{
 		ID: id,
 		Triples: []message.Triple{
@@ -981,7 +981,7 @@ func TestManager_TransitionReplacesPhaseTripleNotAppend(t *testing.T) {
 	t.Parallel()
 	mgr, _, bucket := newTestManager(t)
 	ctx := context.Background()
-	id := "c360.platform1.lifecycle.gcs.mission.accum"
+	id := "c360.platform1.gcs.lifecycle.mission.accum"
 
 	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -1025,7 +1025,7 @@ func TestManager_ConcurrentCreateOnlyOneWins(t *testing.T) {
 	t.Parallel()
 	mgr, _, _ := newTestManager(t)
 	ctx := context.Background()
-	id := "c360.platform1.lifecycle.gcs.mission.race"
+	id := "c360.platform1.gcs.lifecycle.mission.race"
 
 	const N = 8
 	var wg sync.WaitGroup
@@ -1068,7 +1068,7 @@ func TestWorkflowValidateRejectsNon6SegmentPattern(t *testing.T) {
 	t.Parallel()
 	bad := Workflow{
 		Name:            "bad",
-		EntityIDPattern: "*.lifecycle.gcs.mission.*", // entity-id-audit:classify intentional-malformed "*.lifecycle.gcs.mission.*" line=1071 column=20 surface=go-field:Workflow.EntityIDPattern entity_id_pattern_invalid:arity five segment rejection fixture
+		EntityIDPattern: "*.gcs.lifecycle.mission.*", // entity-id-audit:classify intentional-malformed "*.gcs.lifecycle.mission.*" line=1071 column=20 surface=go-field:Workflow.EntityIDPattern entity_id_pattern_invalid:arity five segment rejection fixture
 		Transitions:     Transitions{"planning": {}},
 		PhasePredicate:  "workflow.lifecycle.phase",
 		Schema:          reflect.TypeOf(fixtureMission{}),
@@ -1159,7 +1159,7 @@ func TestManager_DiffSkipsZeroValueOnMissingPredicate(t *testing.T) {
 	t.Parallel()
 	mgr, emitter, _ := newTestManager(t)
 	ctx := context.Background()
-	id := "c360.platform1.lifecycle.gcs.mission.zerodiff"
+	id := "c360.platform1.gcs.lifecycle.mission.zerodiff"
 
 	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -1192,7 +1192,7 @@ func TestManager_Despawn_ReclaimsAtExactRevisionAndRejectsAbsence(t *testing.T) 
 	t.Parallel()
 	mgr, emitter, bucket := newTestManager(t)
 	ctx := context.Background()
-	id := "c360.platform1.lifecycle.gcs.mission.dsp1"
+	id := "c360.platform1.gcs.lifecycle.mission.dsp1"
 	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -1219,7 +1219,7 @@ func TestManager_Despawn_ReclaimsAtExactRevisionAndRejectsAbsence(t *testing.T) 
 func TestManager_Despawn_RejectsUnregisteredWorkflow(t *testing.T) {
 	t.Parallel()
 	mgr, emitter, _ := newTestManager(t)
-	err := mgr.Despawn(context.Background(), "nope", "c360.platform1.lifecycle.gcs.mission.x")
+	err := mgr.Despawn(context.Background(), "nope", "c360.platform1.gcs.lifecycle.mission.x")
 	if !errors.Is(err, ErrWorkflowNotRegistered) {
 		t.Errorf("want ErrWorkflowNotRegistered, got %v", err)
 	}
@@ -1245,7 +1245,7 @@ func TestManager_DespawnWith_TransitionsThenReclaims(t *testing.T) {
 	t.Parallel()
 	mgr, emitter, bucket := newTestManager(t)
 	ctx := context.Background()
-	id := "c360.platform1.lifecycle.gcs.mission.dsp2"
+	id := "c360.platform1.gcs.lifecycle.mission.dsp2"
 	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -1276,7 +1276,7 @@ func TestManager_DespawnWith_DoesNotDeleteNewerStateAfterTerminalCommit(t *testi
 	t.Parallel()
 	mgr, emitter, bucket := newTestManager(t)
 	ctx := context.Background()
-	id := "c360.platform1.lifecycle.gcs.mission.dsp-race"
+	id := "c360.platform1.gcs.lifecycle.mission.dsp-race"
 	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -1310,7 +1310,7 @@ func TestManager_DespawnWith_PreservesDeleteCommitUnknown(t *testing.T) {
 	t.Parallel()
 	mgr, emitter, bucket := newTestManager(t)
 	ctx := context.Background()
-	id := "c360.platform1.lifecycle.gcs.mission.dsp-unknown"
+	id := "c360.platform1.gcs.lifecycle.mission.dsp-unknown"
 	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -1336,7 +1336,7 @@ func TestManager_DespawnWith_PartialFailureRecoverableViaDespawn(t *testing.T) {
 	t.Parallel()
 	mgr, emitter, bucket := newTestManager(t)
 	ctx := context.Background()
-	id := "c360.platform1.lifecycle.gcs.mission.dsp3"
+	id := "c360.platform1.gcs.lifecycle.mission.dsp3"
 	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -1392,7 +1392,7 @@ func TestCreate_AcceptsEntityIDInsideThePattern(t *testing.T) {
 	mgr, _, _ := newTestManager(t)
 	ctx := context.Background()
 
-	const inside = "c360.platform1.lifecycle.gcs.mission.ok"
+	const inside = "c360.platform1.gcs.lifecycle.mission.ok"
 	if err := mgr.Create(ctx, &fixtureMission{ID: inside, PhaseF: "planning"}); err != nil {
 		t.Fatalf("Create in-pattern: %v", err)
 	}
@@ -1427,7 +1427,7 @@ func TestCreate_AcceptsEntityIDInsideThePattern(t *testing.T) {
 // relaxations for a different reason.
 func TestMustExistLanes_DoNotAutoVivify(t *testing.T) {
 	ctx := context.Background()
-	const ghost = "c360.platform1.lifecycle.gcs.mission.ghost"
+	const ghost = "c360.platform1.gcs.lifecycle.mission.ghost"
 
 	t.Run("state patch", func(t *testing.T) {
 		mgr, _, _ := newTestManager(t)
@@ -1499,7 +1499,7 @@ func TestCreateFromOperator_ProjectsTheCausalResponseNotALaterRead(t *testing.T)
 		}
 	}
 
-	const id = "c360.platform1.lifecycle.gcs.mission.causal"
+	const id = "c360.platform1.gcs.lifecycle.mission.causal"
 	result, err := mgr.CreateFromOperator(ctx, "fixture",
 		[]byte(`{"entity_id":"`+id+`","phase":"planning","owner_org_id":"from-the-request"}`))
 	if err != nil {
@@ -1536,7 +1536,7 @@ func TestCreateFromOperator_UsesTheRouteSelectedRegistration(t *testing.T) {
 		t.Fatalf("Register alias: %v", err)
 	}
 
-	const id = "c360.platform1.lifecycle.gcs.mission.aliased"
+	const id = "c360.platform1.gcs.lifecycle.mission.aliased"
 	_, err := mgr.CreateFromOperator(ctx, "fixture-alias",
 		[]byte(`{"entity_id":"`+id+`","phase":"planning"}`))
 	if err != nil {
@@ -1555,7 +1555,7 @@ func TestCreateFromOperator_RejectsUnknownFields(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := mgr.CreateFromOperator(ctx, "fixture",
-		[]byte(`{"entity_id":"c360.platform1.lifecycle.gcs.mission.unk","phase":"planning","not_a_field":"dropped"}`))
+		[]byte(`{"entity_id":"c360.platform1.gcs.lifecycle.mission.unk","phase":"planning","not_a_field":"dropped"}`))
 	if !errors.Is(err, ErrInvalidInitialState) {
 		t.Fatalf("err = %v, want ErrInvalidInitialState — an unpersistable key must not be silently dropped behind a 201", err)
 	}
@@ -1570,7 +1570,7 @@ func TestCreate_UnrelatedConcurrentUpdateIsNotADuplicateBirth(t *testing.T) {
 	ctx := context.Background()
 
 	// Entity exists with a NON-lifecycle triple, and the CAS will miss.
-	const id = "c360.platform1.lifecycle.gcs.mission.contended"
+	const id = "c360.platform1.gcs.lifecycle.mission.contended"
 	bucket.put(id, &graph.EntityState{
 		ID:      id,
 		Version: 1,

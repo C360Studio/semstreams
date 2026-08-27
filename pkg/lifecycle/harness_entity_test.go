@@ -16,7 +16,7 @@ import (
 // TestHarnessEntity_RoundTrip: the harness carrier is a verbatim Graphable —
 // its triples survive the production decoder unchanged.
 func TestHarnessEntity_RoundTrip(t *testing.T) {
-	const id = "c360.platform1.lifecycle.gcs.mission.001"
+	const id = "c360.platform1.gcs.lifecycle.mission.001"
 	at := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	original := &lifecycle.HarnessEntity{
 		ID: id,

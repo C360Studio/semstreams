@@ -22,8 +22,8 @@ func TestTryWebObservationEntityID_HappyPath(t *testing.T) {
 	if parts[0] != "acme" || parts[1] != "ops" {
 		t.Errorf("org/platform parts = %q/%q, want acme/ops", parts[0], parts[1])
 	}
-	if parts[2] != "agent" || parts[3] != "web" || parts[4] != "observation" {
-		t.Errorf("domain.system.type = %q.%q.%q, want agent.web.observation", parts[2], parts[3], parts[4])
+	if parts[2] != "web" || parts[3] != "agent" || parts[4] != "observation" {
+		t.Errorf("system.domain.type = %q.%q.%q, want web.agent.observation", parts[2], parts[3], parts[4])
 	}
 	if len(parts[5]) != webObservationInstanceLen {
 		t.Errorf("instance segment %q has length %d, want %d", parts[5], len(parts[5]), webObservationInstanceLen)

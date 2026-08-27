@@ -6,13 +6,13 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"strings"
 	"sync"
 	"sync/atomic"
 
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 )
 
@@ -20,18 +20,27 @@ import (
 // the 6-part entity ID structure. It operates synchronously - hierarchy triples
 // are computed and returned before the entity is written to storage.
 //
-// Entity ID format: org.platform.domain.system.type.instance
-// Example: acme.iot.sensors.hvac.temperature.001
+// Entity ID format: org.platform.system.domain.type.instance (ADR-102).
+// Example: acme.iot.hvac.sensors.temperature.001
 //
-// Container entities are auto-created with the following pattern:
-//   - Type container:   org.platform.domain.system.type.group (6-part)
-//   - System container: org.platform.domain.system.group.container (6-part)
-//   - Domain container: org.platform.domain.group.container.level (6-part)
+// Containers are built from the NAMED prefix levels, not fixed indexes:
+//   - Type container:     <TypePrefix>.group                 (level 5 + padding)
+//   - Taxonomy container: <TaxonomyPrefix>.group.container   (level 4 + padding)
+//   - Source container:   <SourcePrefix>.group.container.level (level 3 + padding)
 //
 // Graph distances via containers:
 //   - Same type siblings: 2 hops (entity → type.group ← entity)
-//   - Same system, different type: 4 hops
-//   - Same domain, different system: 6 hops
+//   - Same taxonomy, different type: 4 hops
+//   - Same source, different taxonomy: 6 hops
+//
+// NAMING DEBT (ADR-102 §B.4 / H7, owner item O-6): the config fields
+// CreateSystemEdges / CreateDomainEdges and the vocabulary predicates
+// hierarchy.system.member / hierarchy.domain.member were named for the
+// retired order and now misname their container — the "system" edge is the
+// taxonomy container and the "domain" edge is the source container. The
+// ruling is to retire containers with gh606 rather than rename an
+// operator-facing field and a published predicate for one release; the
+// mechanics below are unchanged and correct.
 //
 // This is a stateless utility - no lifecycle methods (Start/Stop).
 type HierarchyInference struct {
@@ -126,19 +135,16 @@ func NewHierarchyInference(
 }
 
 // isContainerEntity returns true if the entityID represents a container entity.
-// Container entities end with .group, .container, or .level and have exactly 6 parts.
+// Container entities carry a reserved padding token in the INSTANCE position
+// (group, container, level) and have exactly 6 parts. The token set is owned by
+// pkg/types.ReservedInstanceTokens — this reads it rather than re-spelling it,
+// so the audit rule and this check can never disagree.
 func isContainerEntity(entityID string) bool {
-	if entityID == "" {
+	parsed, err := semtypes.ParseEntityID(entityID)
+	if err != nil {
 		return false
 	}
-
-	parts := strings.Split(entityID, ".")
-	if len(parts) != 6 {
-		return false
-	}
-
-	lastPart := parts[5]
-	return lastPart == "group" || lastPart == "container" || lastPart == "level"
+	return semtypes.IsReservedInstanceToken(parsed.Instance)
 }
 
 // GetHierarchyTriples returns hierarchy membership triples for the given entity ID.
@@ -171,9 +177,10 @@ func (h *HierarchyInference) GetHierarchyTriples(ctx context.Context, entityID s
 		return nil, nil
 	}
 
-	// Parse entity ID to validate 6-part structure
-	parts := strings.Split(entityID, ".")
-	if len(parts) != 6 {
+	// Parse the entity ID once; every container prefix below is read from a
+	// NAMED position on the parsed value, never from a fixed index.
+	parsed, err := semtypes.ParseEntityID(entityID)
+	if err != nil {
 		// Not a valid 6-part EntityID, skip silently
 		return nil, nil
 	}
@@ -183,7 +190,7 @@ func (h *HierarchyInference) GetHierarchyTriples(ctx context.Context, entityID s
 
 	// Create type membership: entity → type.group
 	if h.config.CreateTypeEdges {
-		typeContainerID := h.buildTypeContainerID(parts)
+		typeContainerID := buildTypeContainerID(parsed)
 		triple, err := h.ensureContainerAndReturnEdge(ctx, entityID, typeContainerID, vocabulary.HierarchyTypeMember)
 		if err != nil {
 			errs = append(errs, err)
@@ -194,7 +201,7 @@ func (h *HierarchyInference) GetHierarchyTriples(ctx context.Context, entityID s
 
 	// Create sibling edges to entities with same type (5-part prefix)
 	if h.config.CreateTypeSiblings {
-		siblingTriples, err := h.createSiblingEdges(ctx, entityID, parts)
+		siblingTriples, err := h.createSiblingEdges(ctx, entityID, parsed)
 		if err != nil {
 			// Log but don't fail - sibling edges are supplementary
 			h.logger.Warn("Failed to create sibling edges",
@@ -205,9 +212,10 @@ func (h *HierarchyInference) GetHierarchyTriples(ctx context.Context, entityID s
 		}
 	}
 
-	// Create system membership: entity → system.group.container
+	// Create taxonomy membership: entity → <TaxonomyPrefix>.group.container.
+	// Config field and predicate keep the retired "system" name (H7 above).
 	if h.config.CreateSystemEdges {
-		systemContainerID := h.buildSystemContainerID(parts)
+		systemContainerID := buildTaxonomyContainerID(parsed)
 		triple, err := h.ensureContainerAndReturnEdge(ctx, entityID, systemContainerID, vocabulary.HierarchySystemMember)
 		if err != nil {
 			errs = append(errs, err)
@@ -216,9 +224,10 @@ func (h *HierarchyInference) GetHierarchyTriples(ctx context.Context, entityID s
 		}
 	}
 
-	// Create domain membership: entity → domain.group.container.level
+	// Create source membership: entity → <SourcePrefix>.group.container.level.
+	// Config field and predicate keep the retired "domain" name (H7 above).
 	if h.config.CreateDomainEdges {
-		domainContainerID := h.buildDomainContainerID(parts)
+		domainContainerID := buildSourceContainerID(parsed)
 		triple, err := h.ensureContainerAndReturnEdge(ctx, entityID, domainContainerID, vocabulary.HierarchyDomainMember)
 		if err != nil {
 			errs = append(errs, err)
@@ -254,38 +263,42 @@ func (h *HierarchyInference) OnEntityCreated(ctx context.Context, entityID strin
 	return errors.Join(errs...)
 }
 
-// buildTypeContainerID creates a 6-part type container ID.
-// Input: [org, platform, domain, system, type, instance]
-// Output: org.platform.domain.system.type.group
-func (h *HierarchyInference) buildTypeContainerID(parts []string) string {
-	return strings.Join(parts[:5], ".") + ".group"
+// buildTypeContainerID creates a 6-part type container ID from the level-5
+// type prefix plus one padding token.
+// Output: org.platform.system.domain.type.group
+func buildTypeContainerID(eid semtypes.EntityID) string {
+	return eid.TypePrefix() + ".group"
 }
 
-// buildSystemContainerID creates a 6-part system container ID.
-// Input: [org, platform, domain, system, type, instance]
-// Output: org.platform.domain.system.group.container
-func (h *HierarchyInference) buildSystemContainerID(parts []string) string {
-	return strings.Join(parts[:4], ".") + ".group.container"
+// buildTaxonomyContainerID creates a 6-part container ID from the level-4
+// taxonomy prefix plus two padding tokens. Reached through the
+// CreateSystemEdges config field and stamped hierarchy.system.member — both
+// retired names for this container (H7).
+// Output: org.platform.system.domain.group.container
+func buildTaxonomyContainerID(eid semtypes.EntityID) string {
+	return eid.TaxonomyPrefix() + ".group.container"
 }
 
-// buildDomainContainerID creates a 6-part domain container ID.
-// Input: [org, platform, domain, system, type, instance]
-// Output: org.platform.domain.group.container.level
-func (h *HierarchyInference) buildDomainContainerID(parts []string) string {
-	return strings.Join(parts[:3], ".") + ".group.container.level"
+// buildSourceContainerID creates a 6-part container ID from the level-3 source
+// prefix plus three padding tokens. Reached through the CreateDomainEdges
+// config field and stamped hierarchy.domain.member — both retired names for
+// this container (H7).
+// Output: org.platform.system.group.container.level
+func buildSourceContainerID(eid semtypes.EntityID) string {
+	return eid.SourcePrefix() + ".group.container.level"
 }
 
 // createSiblingEdges creates bidirectional sibling edges between the new entity
-// and all existing entities with the same type (5-part prefix).
+// and all existing entities sharing its level-5 type prefix.
 //
 // For each existing sibling:
 //   - Returns a forward edge: newEntity → hierarchy.type.sibling → existingSibling
 //   - Adds inverse edge directly: existingSibling → hierarchy.type.sibling → newEntity
 //
 // Cost: O(N) per new entity where N is existing sibling count.
-func (h *HierarchyInference) createSiblingEdges(ctx context.Context, entityID string, parts []string) ([]message.Triple, error) {
-	// Build 5-part prefix for sibling lookup (excludes instance part)
-	prefix := strings.Join(parts[:5], ".")
+func (h *HierarchyInference) createSiblingEdges(ctx context.Context, entityID string, eid semtypes.EntityID) ([]message.Triple, error) {
+	// The level-5 type prefix is the sibling scope (excludes the instance).
+	prefix := eid.TypePrefix()
 
 	// Find existing members with same prefix
 	existingMembers, err := h.entityManager.ListWithPrefix(ctx, prefix)

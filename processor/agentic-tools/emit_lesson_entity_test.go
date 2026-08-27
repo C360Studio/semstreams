@@ -35,15 +35,15 @@ func goldenLessonMultiset(rows []lessonPredicateObject) map[lessonPredicateObjec
 // object multiset from AgentLessonEntity.Triples() equals the multiset the
 // former buildEmitLessonTriples produced (golden captured at 08660fc5).
 func TestEmitLessonBuildsEntityTriples(t *testing.T) {
-	const lessonID = "acme.ops.agent.lesson.record.11111111-1111-5111-8111-111111111111"
-	const loopID = "acme.ops.agent.agentic-loop.execution.loop-ops-abc"
+	const lessonID = "acme.ops.lesson.agent.record.11111111-1111-5111-8111-111111111111"
+	const loopID = "acme.ops.agentic-loop.agent.execution.loop-ops-abc"
 	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	entity := &agentic.AgentLessonEntity{
 		Org: "acme", Platform: "ops", ID: "11111111-1111-5111-8111-111111111111",
 		Category: "retention-policy", Polarity: "avoid", Severity: "warning", Status: lessonBornStatus,
 		CreatedAt: now,
 		Summary:   "cap retention sweeps", Detail: "the detail", InjectionForm: "Cap sweeps.",
-		Evidence:     []string{"acme.ops.agent.agentic-loop.execution.loop-1", "acme.ops.agent.agentic-loop.execution.loop-2"},
+		Evidence:     []string{"acme.ops.agentic-loop.agent.execution.loop-1", "acme.ops.agentic-loop.agent.execution.loop-2"},
 		AppliesTo:    []string{"tag:go", "id:acme.ops.agent"},
 		ObservedRole: "ops", ExecutedBy: loopID,
 	}
@@ -60,8 +60,8 @@ func TestEmitLessonBuildsEntityTriples(t *testing.T) {
 		{agvocab.LessonSummary, "cap retention sweeps"},
 		{agvocab.LessonDetail, "the detail"},
 		{agvocab.LessonInjectionForm, "Cap sweeps."},
-		{agvocab.LessonEvidence, "acme.ops.agent.agentic-loop.execution.loop-1"},
-		{agvocab.LessonEvidence, "acme.ops.agent.agentic-loop.execution.loop-2"},
+		{agvocab.LessonEvidence, "acme.ops.agentic-loop.agent.execution.loop-1"},
+		{agvocab.LessonEvidence, "acme.ops.agentic-loop.agent.execution.loop-2"},
 		{agvocab.LessonAppliesTo, "tag:go"},
 		{agvocab.LessonAppliesTo, "id:acme.ops.agent"},
 		{agvocab.LessonObservedRole, "ops"},

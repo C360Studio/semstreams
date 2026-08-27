@@ -39,7 +39,7 @@ func buildSpawnTriples(loopEntityID string, task *agentic.TaskMessage, org, plat
 // loopIDFromEntityID extracts the loopID segment from a pre-built entity ID.
 // Used only by the test helper above.
 func loopIDFromEntityID(entityID, org, platform string) string {
-	prefix := org + "." + platform + ".agent.agentic-loop.execution."
+	prefix := org + "." + platform + ".agentic-loop.agent.execution."
 	if len(entityID) > len(prefix) {
 		return entityID[len(prefix):]
 	}

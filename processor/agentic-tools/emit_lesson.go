@@ -90,7 +90,7 @@ type LessonStore interface {
 }
 
 // EmitLessonExecutor is the ops agent's lesson distillation tool. Each call
-// mints a content-derived {org}.{platform}.agent.lesson.record.{uuid5} entity
+// mints a content-derived {org}.{platform}.lesson.agent.record.{uuid5} entity
 // born status="proposed", publishes one triple per predicate plus an
 // agent.action.executed-by back-link to the ops loop, and returns StopLoop:false
 // so one ops loop can distil multiple lessons. Content-derived identity makes

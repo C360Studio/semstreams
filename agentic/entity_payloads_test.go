@@ -23,9 +23,9 @@ type graphable interface {
 const (
 	payloadTestOrg       = "acme"
 	payloadTestPlatform  = "ops"
-	payloadTestLoopID    = "acme.ops.agent.agentic-loop.execution.loop-ops-abc"
-	payloadTestEvidence  = "acme.ops.agent.agentic-loop.execution.loop-1"
-	payloadTestEvidence2 = "acme.ops.agent.agentic-loop.execution.loop-2"
+	payloadTestLoopID    = "acme.ops.agentic-loop.agent.execution.loop-ops-abc"
+	payloadTestEvidence  = "acme.ops.agentic-loop.agent.execution.loop-1"
+	payloadTestEvidence2 = "acme.ops.agentic-loop.agent.execution.loop-2"
 )
 
 var payloadTestTime = time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
@@ -219,7 +219,7 @@ func assertGoldenTriples(t *testing.T, entityID string, got []message.Triple, wa
 // 08660fc5 for a fully populated endpoint and for one with every optional
 // field zero (the five zero-gates; bool/int/float64 objects).
 func TestModelEndpointEntityMatchesBuilder(t *testing.T) {
-	const entityID = "acme.ops.agent.model-registry.endpoint.gpt4o"
+	const entityID = "acme.ops.model-registry.agent.endpoint.gpt4o"
 	const source = "agentic-loop"
 
 	full := fullModelEndpoint()
@@ -251,7 +251,7 @@ func TestModelEndpointEntityMatchesBuilder(t *testing.T) {
 // 08660fc5: the full set, the %g confidence object, and the entity's
 // Confidence on every triple.
 func TestOpsDiagnosisEntityMatchesBuilder(t *testing.T) {
-	const entityID = "acme.ops.ops.diagnosis.finding.550e8400-e29b-41d4-a716-446655440000"
+	const entityID = "acme.ops.diagnosis.ops.finding.550e8400-e29b-41d4-a716-446655440000"
 	const source = "ops-emit-diagnosis"
 
 	full := fullDiagnosis()

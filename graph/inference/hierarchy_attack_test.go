@@ -24,7 +24,7 @@ func TestAttack_IsContainerEntity_Concurrent(t *testing.T) {
 	}{
 		{"c360.logistics.sensor.environmental.temperature.group", true},
 		{"c360.logistics.sensor.environmental.group.container", true},
-		{"c360.logistics.environmental.group.container.level", true},
+		{"c360.logistics.sensor.group.container.level", true},
 		{"c360.logistics.sensor.environmental.temperature.temp-001", false},
 		{"", false},
 		{"a.b.c.d.e", false},
@@ -87,7 +87,7 @@ func TestAttack_OnEntityCreated_Concurrent(t *testing.T) {
 		// Container entities (should be skipped)
 		"c360.logistics.sensor.environmental.temperature.group",
 		"c360.logistics.sensor.environmental.group.container",
-		"c360.logistics.environmental.group.container.level",
+		"c360.logistics.sensor.group.container.level",
 	}
 
 	const goroutines = 50

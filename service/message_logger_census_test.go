@@ -196,7 +196,7 @@ func TestMessageLoggerCensusRejectsUnknownEnabledFactory(t *testing.T) {
 		"version":"1.0.0",
 		"platform":{
 			"org":"test","id":"census","type":"test","region":"local",
-			"instance_id":"census-001","environment":"test"
+			"environment":"test"
 		},
 		"components":{
 			"future-unknown":{
@@ -398,6 +398,10 @@ func messageLoggerCensusDependencies() component.Dependencies {
 		NATSClient: client, Logger: slog.Default(), MetricsRegistry: metric.NewMetricsRegistry(),
 		ModelRegistry: &model.Registry{}, PayloadRegistry: censusPayloadRegistry(),
 		LifecycleManager: lifecycle.NewManager(client, slog.Default()),
+		// Both composition roots fill deps.Platform from platform.org/platform.id
+		// before the component manager runs; components that mint identities
+		// (mission-command) refuse to construct without it (ADR-102).
+		Platform: component.PlatformMeta{Org: "test", Platform: "census"},
 	}
 }
 

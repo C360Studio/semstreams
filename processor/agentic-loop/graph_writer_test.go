@@ -41,7 +41,7 @@ func objectFor(triples []message.Triple, predicate string) any {
 // --- modelEndpointEntity (the registered ModelEndpointEntity is the builder) ---
 
 func TestBuildModelEndpointTriples_RequiredFields(t *testing.T) {
-	entityID := "acme.ops.agent.model-registry.endpoint.claude"
+	entityID := "acme.ops.model-registry.agent.endpoint.claude"
 	ep := model.EndpointConfig{
 		Provider:      "anthropic",
 		Model:         "claude-opus-4-5",
@@ -149,8 +149,8 @@ func TestBuildModelEndpointTriples_OptionalFieldsPresentWhenSet(t *testing.T) {
 // --- buildLoopCompletionTriples ---
 
 func TestBuildLoopCompletionTriples_RequiredFields(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loop123"
-	modelEntityID := "acme.ops.agent.model-registry.endpoint.claude"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loop123"
+	modelEntityID := "acme.ops.model-registry.agent.endpoint.claude"
 
 	event := &agentic.LoopCompletedEvent{
 		LoopID:      "loop123",
@@ -219,8 +219,8 @@ func TestBuildLoopCompletionTriples_RequiredFields(t *testing.T) {
 }
 
 func TestBuildLoopCompletionTriples_CostCalculation(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loop456"
-	modelEntityID := "acme.ops.agent.model-registry.endpoint.claude"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loop456"
+	modelEntityID := "acme.ops.model-registry.agent.endpoint.claude"
 
 	event := &agentic.LoopCompletedEvent{
 		LoopID:      "loop456",
@@ -255,8 +255,8 @@ func TestBuildLoopCompletionTriples_CostCalculation(t *testing.T) {
 }
 
 func TestBuildLoopCompletionTriples_ZeroCostOmitted(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loop789"
-	modelEntityID := "acme.ops.agent.model-registry.endpoint.local"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loop789"
+	modelEntityID := "acme.ops.model-registry.agent.endpoint.local"
 
 	event := &agentic.LoopCompletedEvent{
 		LoopID:      "loop789",
@@ -277,8 +277,8 @@ func TestBuildLoopCompletionTriples_ZeroCostOmitted(t *testing.T) {
 }
 
 func TestBuildLoopCompletionTriples_OptionalFieldsOmittedWhenEmpty(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopA"
-	modelEntityID := "acme.ops.agent.model-registry.endpoint.claude"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loopA"
+	modelEntityID := "acme.ops.model-registry.agent.endpoint.claude"
 
 	event := &agentic.LoopCompletedEvent{
 		LoopID:      "loopA",
@@ -312,8 +312,8 @@ func TestBuildLoopCompletionTriples_OptionalFieldsOmittedWhenEmpty(t *testing.T)
 // WriteSpawnIdentity; completion/failure stamps do NOT carry it. Covered
 // by TestBuildSpawnIdentityTriples_StampsDescription.
 func TestBuildLoopCompletionTriples_DescriptionNotInCompletion(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopD"
-	modelEntityID := "acme.ops.agent.model-registry.endpoint.claude"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loopD"
+	modelEntityID := "acme.ops.model-registry.agent.endpoint.claude"
 
 	event := &agentic.LoopCompletedEvent{
 		LoopID:      "loopD",
@@ -334,8 +334,8 @@ func TestBuildLoopCompletionTriples_DescriptionNotInCompletion(t *testing.T) {
 }
 
 func TestBuildLoopFailureTriples_DescriptionNotInFailure(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopE"
-	modelEntityID := "acme.ops.agent.model-registry.endpoint.claude"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loopE"
+	modelEntityID := "acme.ops.model-registry.agent.endpoint.claude"
 
 	event := &agentic.LoopFailedEvent{
 		LoopID:     "loopE",
@@ -406,8 +406,8 @@ func TestTruncateForTriple(t *testing.T) {
 // user) live on the entity from WriteSpawnIdentity, NOT the completion
 // stamp. Covered by TestBuildSpawnIdentityTriples_OptionalFieldsPresentWhenSet.
 func TestBuildLoopCompletionTriples_SpawnFieldsNotInCompletion(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopB"
-	modelEntityID := "acme.ops.agent.model-registry.endpoint.claude"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loopB"
+	modelEntityID := "acme.ops.model-registry.agent.endpoint.claude"
 
 	event := &agentic.LoopCompletedEvent{
 		LoopID:       "loopB",
@@ -444,8 +444,8 @@ func TestBuildLoopCompletionTriples_SpawnFieldsNotInCompletion(t *testing.T) {
 // --- buildLoopFailureTriples ---
 
 func TestBuildLoopFailureTriples_RequiredFields(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopFail"
-	modelEntityID := "acme.ops.agent.model-registry.endpoint.claude"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loopFail"
+	modelEntityID := "acme.ops.model-registry.agent.endpoint.claude"
 
 	event := &agentic.LoopFailedEvent{
 		LoopID:     "loopFail",
@@ -494,8 +494,8 @@ func TestBuildLoopFailureTriples_RequiredFields(t *testing.T) {
 }
 
 func TestBuildLoopFailureTriples_OptionalFieldsOmittedWhenEmpty(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopFail2"
-	modelEntityID := "acme.ops.agent.model-registry.endpoint.claude"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loopFail2"
+	modelEntityID := "acme.ops.model-registry.agent.endpoint.claude"
 
 	event := &agentic.LoopFailedEvent{
 		LoopID:     "loopFail2",
@@ -530,8 +530,8 @@ func TestBuildLoopFailureTriples_OptionalFieldsOmittedWhenEmpty(t *testing.T) {
 // (producing duplicate parent triples after append-semantics) fails
 // loud.
 func TestBuildLoopFailureTriples_ParentNotInFailure(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopFailChild"
-	modelEntityID := "acme.ops.agent.model-registry.endpoint.claude"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loopFailChild"
+	modelEntityID := "acme.ops.model-registry.agent.endpoint.claude"
 
 	event := &agentic.LoopFailedEvent{
 		LoopID:       "loopFailChild",
@@ -554,8 +554,8 @@ func TestBuildLoopFailureTriples_ParentNotInFailure(t *testing.T) {
 // keeps only the completion-shape signals (outcome, iterations, tokens,
 // cost, model_used, ended_at).
 func TestBuildLoopFailureTriples_SpawnFieldsNotInFailure(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopFail3"
-	modelEntityID := "acme.ops.agent.model-registry.endpoint.claude"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loopFail3"
+	modelEntityID := "acme.ops.model-registry.agent.endpoint.claude"
 
 	event := &agentic.LoopFailedEvent{
 		LoopID:       "loopFail3",
@@ -602,7 +602,7 @@ func TestBuildLoopFailureTriples_SpawnFieldsNotInFailure(t *testing.T) {
 }
 
 func TestBuildLoopFailureTriples_EmptyModelOmitsModelUsed(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopFail4"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loopFail4"
 
 	event := &agentic.LoopFailedEvent{
 		LoopID:     "loopFail4",
@@ -622,7 +622,7 @@ func TestBuildLoopFailureTriples_EmptyModelOmitsModelUsed(t *testing.T) {
 }
 
 func TestBuildLoopCompletionTriples_EmptyModelOmitsModelUsed(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopNoModel"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loopNoModel"
 
 	event := &agentic.LoopCompletedEvent{
 		LoopID:      "loopNoModel",
@@ -644,7 +644,7 @@ func TestBuildLoopCompletionTriples_EmptyModelOmitsModelUsed(t *testing.T) {
 // --- buildLoopCancellationTriples ---
 
 func TestBuildLoopCancellationTriples_RequiredFields(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopCancel"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loopCancel"
 
 	event := &agentic.LoopCancelledEvent{
 		LoopID:      "loopCancel",
@@ -677,7 +677,7 @@ func TestBuildLoopCancellationTriples_RequiredFields(t *testing.T) {
 // gh#159: workflow / workflow_step are spawn-only; cancellation stamp
 // keeps only the transition signals (outcome, ended_at).
 func TestBuildLoopCancellationTriples_SpawnFieldsNotInCancellation(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopCancel2"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loopCancel2"
 
 	event := &agentic.LoopCancelledEvent{
 		LoopID:       "loopCancel2",
@@ -892,7 +892,7 @@ func TestResolveModelAccounting(t *testing.T) {
 // round-trip through BaseMessage) becomes one triple of the form
 // <loopEntityID> agent.lineage.<role-key> <upstream loop ID>.
 func TestBuildLineageTriples_StampsLineagePredicates(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.architect-loop-001"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.architect-loop-001"
 	related := map[string]any{
 		"researcher": "loop-research-abc",
 		"planner":    "loop-plan-xyz",
@@ -951,7 +951,7 @@ func TestBuildLineageTriples_StampsLineagePredicates(t *testing.T) {
 // empty maps produce no triples (back-compat: products that don't
 // opt into RelatedLoops see no graph mutation).
 func TestBuildLineageTriples_EmptyAndNilNoops(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.x"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.x"
 
 	if got, err := buildLineageTriples(loopEntityID, nil); err != nil || got != nil {
 		t.Errorf("nil related: got %d triples, want 0 (nil)", len(got))
@@ -964,7 +964,7 @@ func TestBuildLineageTriples_EmptyAndNilNoops(t *testing.T) {
 // TestBuildLineageTriples_MalformedBatchRejectedAtomically verifies that one
 // malformed entry rejects every sibling rather than being silently skipped.
 func TestBuildLineageTriples_MalformedBatchRejectedAtomically(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.x"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.x"
 	tests := []struct {
 		name    string
 		subject string
@@ -994,7 +994,7 @@ func TestBuildLineageTriples_MalformedBatchRejectedAtomically(t *testing.T) {
 // observability primitives (ADR-033) rely on for cross-arc / cross-
 // run aggregation. Drift here breaks consumer aggregation queries.
 func TestBuildLineageTriples_PredicateNamespace(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.x"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.x"
 	related := map[string]any{
 		"researcher":        "loop-research",
 		"research-reviewer": "loop-other",
@@ -1029,7 +1029,7 @@ func TestWriteLineageTriplesPropagatesTypedPreflightFailureBeforeIO(t *testing.T
 // rule can route on WHY (escalate vs retry). An event with no classified
 // reason stamps no terminal-reason triple at all.
 func TestBuildLoopFailureTriples_TerminalReasonDistinguishesFailureClasses(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopReason"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loopReason"
 
 	failedWith := func(reason string) []message.Triple {
 		return buildLoopFailureTriples(loopEntityID, &agentic.LoopFailedEvent{
@@ -1097,7 +1097,7 @@ func terminalTripleBuilders(loopEntityID string) map[string]func(evidenceIncompl
 // Spec: "a loop with observed audit loss is machine-readable as incomplete"
 // — on EVERY terminal path, and on the same mutation that carries outcome.
 func TestBuildLoopTerminalTriples_ObservedAuditLossStampsIncomplete(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loop123"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loop123"
 
 	for name, build := range terminalTripleBuilders(loopEntityID) {
 		t.Run(name, func(t *testing.T) {
@@ -1134,7 +1134,7 @@ func TestBuildLoopTerminalTriples_ObservedAuditLossStampsIncomplete(t *testing.T
 // Spec: "a loop with no observed audit loss carries no claim" — absence,
 // never a positive completeness assertion.
 func TestBuildLoopTerminalTriples_NoObservedLossCarriesNoClaim(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loop123"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loop123"
 
 	for name, build := range terminalTripleBuilders(loopEntityID) {
 		t.Run(name, func(t *testing.T) {
@@ -1154,7 +1154,7 @@ func TestBuildLoopTerminalTriples_NoObservedLossCarriesNoClaim(t *testing.T) {
 // without observed loss. "complete" is the value ADR-084 forbids: the
 // component can only know the failures it saw.
 func TestBuildLoopTerminalTriples_NeverWritesComplete(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loop123"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loop123"
 
 	for name, build := range terminalTripleBuilders(loopEntityID) {
 		for _, observed := range []bool{true, false} {
@@ -1177,7 +1177,7 @@ func TestBuildLoopTerminalTriples_NeverWritesComplete(t *testing.T) {
 // the triple. Electing one of several failed stages would manufacture a
 // claim about which mattered.
 func TestBuildLoopTerminalTriples_ConditionCarriesNoQualifier(t *testing.T) {
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loop123"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loop123"
 	qualifiers := []string{
 		string(trajectoryStageEvidencePut), string(trajectoryStageFactCreate),
 		string(trajectoryReasonBackend), string(trajectoryReasonTimeout),

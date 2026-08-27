@@ -114,10 +114,10 @@ func (r *fakeLessonReader) ReadAuthoritative(_ context.Context, entityID string)
 }
 
 const (
-	testLessonID   = "acme.ops.agent.lesson.record.11111111-1111-5111-8111-111111111111"
-	testEvidence1  = "acme.ops.agent.agentic-loop.execution.loop-a"
-	testEvidence2  = "acme.ops.agent.agentic-loop.execution.loop-b"
-	testSupersedID = "acme.ops.agent.lesson.record.22222222-2222-5222-8222-222222222222"
+	testLessonID   = "acme.ops.lesson.agent.record.11111111-1111-5111-8111-111111111111"
+	testEvidence1  = "acme.ops.agentic-loop.agent.execution.loop-a"
+	testEvidence2  = "acme.ops.agentic-loop.agent.execution.loop-b"
+	testSupersedID = "acme.ops.lesson.agent.record.22222222-2222-5222-8222-222222222222"
 )
 
 func statusTriple(entityID, status string) message.Triple {

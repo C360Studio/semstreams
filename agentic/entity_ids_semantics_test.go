@@ -99,7 +99,11 @@ func TestFrameworkPrefixesAndPatternsFollowCanonicalOrder(t *testing.T) {
 	loopID, ok := agentic.LoopIDFromExecutionEntityID("acme.dep1.agentic-loop.agent.execution.abc123")
 	assert.True(t, ok)
 	assert.Equal(t, "abc123", loopID)
-	_, ok = agentic.LoopIDFromExecutionEntityID("acme.dep1.agent.agentic-loop.execution.abc123")
+	// The retired order org.platform.domain.system.type.instance must NOT parse
+	// as a loop execution. Kept as a literal, not derived from the canonical one:
+	// a token-order sweep over this file flattened it into the positive case once.
+	const retiredOrder = "acme.dep1.agent.agentic-loop.execution.abc123"
+	_, ok = agentic.LoopIDFromExecutionEntityID(retiredOrder)
 	assert.False(t, ok, "the retired order must not be admitted as a loop execution")
 }
 
@@ -109,7 +113,12 @@ func TestFrameworkPrefixesAndPatternsFollowCanonicalOrder(t *testing.T) {
 func TestAlertIdentityCarriesTheDeploymentAuthority(t *testing.T) {
 	t.Parallel()
 
-	metadata := graph.EventMetadata{RuleName: "r", Timestamp: time.Unix(1_700_000_000, 0).UTC(), Source: "rule-processor"}
+	metadata := graph.EventMetadata{
+		RuleName:  "r",
+		Timestamp: time.Unix(1_700_000_000, 0).UTC(),
+		Source:    "rule-processor",
+		Reason:    "threshold crossed", // graph/events.go:99 requires it on every event
+	}
 	source := agentic.LoopExecutionEntityID("acme", "dep1", "loop")
 	first, err := graph.NewAlertEvent("acme", "dep1", "threshold", source, nil, metadata)
 	require.NoError(t, err)

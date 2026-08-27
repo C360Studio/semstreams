@@ -58,7 +58,7 @@ func TestMalformedDiagnosisNeverReachesTheGraph(t *testing.T) {
 			"finding":        "the finding",
 			"recommendation": "the recommendation",
 			"confidence":     0.9,
-			"evidence":       []any{"acme.ops.agent.agentic-loop.execution.loop-gate"},
+			"evidence":       []any{"acme.ops.agentic-loop.agent.execution.loop-gate"},
 			"severity":       "info",
 		},
 	})
@@ -85,7 +85,7 @@ func TestMalformedDiagnosisNeverReachesTheGraph(t *testing.T) {
 		if key == validID {
 			continue
 		}
-		assert.NotContains(t, key, ".ops.diagnosis.finding.", "a malformed finding was born: %s", key)
+		assert.NotContains(t, key, ".diagnosis.ops.finding.", "a malformed finding was born: %s", key)
 	}
 
 	// Fact lane: the same shape is unpublishable through the framework's wrap.
