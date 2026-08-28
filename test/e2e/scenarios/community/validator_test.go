@@ -161,8 +161,8 @@ func TestValidator_PatternMatching(t *testing.T) {
 		{
 			ID: "comm-1",
 			Members: []string{
-				"c360.logistics.sensor.document.temperature.sensor-temp-001",
-				"c360.logistics.sensor.document.temperature.sensor-temp-002",
+				"c360.logistics.document.sensor.temperature.sensor-temp-001",
+				"c360.logistics.document.sensor.temperature.sensor-temp-002",
 			},
 		},
 	}

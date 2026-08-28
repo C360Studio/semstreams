@@ -106,6 +106,10 @@ func TestEntityWatcher_RuleTriggerDebouncing(t *testing.T) {
 
 	processor, err := rule.NewProcessorWithMetrics(natsClient, &config, nil)
 	require.NoError(t, err)
+	// Production installs the deployment authority through CreateRuleProcessor
+	// (processor/rule/factory.go:130); the rule engine mints its trigger identity
+	// under it and fails closed on an empty pair (ADR-102 d2).
+	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 
 	// Initialize processor (loads rules)
 	err = processor.Initialize()
@@ -318,7 +322,7 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 			Logic:   "and",
 			Enabled: true,
 			Entity: rule.EntityConfig{
-				Pattern:      "c360.logistics.environmental.sensor.temperature.*",
+				Pattern:      "c360.logistics.sensor.environmental.temperature.*",
 				WatchBuckets: []string{gtypes.BucketEntityStates},
 			},
 		},
@@ -337,7 +341,7 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 			Logic:   "and",
 			Enabled: true,
 			Entity: rule.EntityConfig{
-				Pattern:      "c360.logistics.environmental.sensor.pressure.*",
+				Pattern:      "c360.logistics.sensor.environmental.pressure.*",
 				WatchBuckets: []string{gtypes.BucketEntityStates},
 			},
 		},
@@ -356,7 +360,7 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 			Logic:   "and",
 			Enabled: true,
 			Entity: rule.EntityConfig{
-				Pattern:      "c360.logistics.environmental.sensor.humidity.*",
+				Pattern:      "c360.logistics.sensor.environmental.humidity.*",
 				WatchBuckets: []string{gtypes.BucketEntityStates},
 			},
 		},
@@ -375,7 +379,7 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 			Logic:   "and",
 			Enabled: true,
 			Entity: rule.EntityConfig{
-				Pattern:      "c360.logistics.environmental.sensor.vibration.*",
+				Pattern:      "c360.logistics.sensor.environmental.vibration.*",
 				WatchBuckets: []string{gtypes.BucketEntityStates},
 			},
 		},
@@ -385,12 +389,16 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 	// This bypasses the coalescing set and processes each entity update immediately
 	config, configErr := rule.NewConfig("entity-watcher-bounded-test")
 	require.NoError(t, configErr)
-	config.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"c360.logistics.environmental.sensor.*.*"}}
+	config.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"c360.logistics.sensor.environmental.*.*"}}
 	config.DebounceDelayMs = 0 // Immediate processing - no batching
 	config.InlineRules = rules
 
 	processor, err := rule.NewProcessorWithMetrics(natsClient, &config, nil)
 	require.NoError(t, err)
+	// Production installs the deployment authority through CreateRuleProcessor
+	// (processor/rule/factory.go:130); the rule engine mints its trigger identity
+	// under it and fails closed on an empty pair (ADR-102 d2).
+	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 
 	// Initialize processor (loads rules)
 	err = processor.Initialize()
@@ -423,7 +431,7 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 	}
 
 	// Create 100 entities across the 4 sensor types (25 per type)
-	// Each entity has proper 6-part ID: c360.logistics.environmental.sensor.{type}.{instance}
+	// Each entity has proper 6-part ID: c360.logistics.sensor.environmental.{type}.{instance}
 	entityCount := 100
 	sensorTypes := []string{"temperature", "pressure", "humidity", "vibration"}
 
@@ -516,7 +524,7 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 }
 
 // createEntityID generates a proper 6-part entity ID for testing
-// Format: c360.logistics.environmental.sensor.{type}.{instance}
+// Format: c360.logistics.sensor.environmental.{type}.{instance}
 func createEntityID(sensorType string, index int) string {
 	eid := message.EntityID{
 		Org:      "c360",

@@ -161,27 +161,28 @@ type SensorReading struct {
 	Altitude  *float64 // e.g., 10.0 meters (optional)
 
 	// Entity reference fields (computed by processor)
-	ZoneEntityID string // e.g., "acme.logistics.facility.zone.area.warehouse-7"
+	ZoneEntityID string // e.g., "acme.logistics.zone.facility.area.warehouse-7"
 
 	// Context fields (set by processor from config)
 	OrgID    string // e.g., "acme"
 	Platform string // e.g., "logistics"
 }
 
-// EntityID returns a deterministic 6-part federated entity ID following the pattern:
-// {org}.{platform}.{domain}.{system}.{type}.{instance}
+// EntityID returns a deterministic 6-part federated entity ID in the canonical
+// order (ADR-102):
+// {org}.{platform}.{system}.{domain}.{type}.{instance}
 //
-// Example: "acme.logistics.environmental.sensor.temperature.sensor-042"
+// Example: "acme.logistics.sensor.environmental.temperature.sensor-042"
 //
 // The 6 parts provide:
-//   - org: Organization identifier (multi-tenancy)
-//   - platform: Platform/product within the organization
-//   - domain: Business domain (environmental, logistics, etc.)
-//   - system: System or subsystem (sensor, actuator, etc.)
-//   - type: Entity type within the system (temperature, humidity, etc.)
+//   - org: Organization namespace (multi-tenancy)
+//   - platform: the minting deployment authority (platform.id), never a product name
+//   - system: the source that produced the entity (sensor, actuator, etc.)
+//   - domain: this example's delegated taxonomy (environmental)
+//   - type: Entity type within the domain (temperature, humidity, etc.)
 //   - instance: Unique instance identifier
 func (s *SensorReading) EntityID() string {
-	return fmt.Sprintf("%s.%s.environmental.sensor.%s.%s",
+	return fmt.Sprintf("%s.%s.sensor.environmental.%s.%s",
 		s.OrgID,
 		s.Platform,
 		s.SensorType,
@@ -346,9 +347,10 @@ func (s *SensorReading) UnmarshalJSON(data []byte) error {
 // consistency between Zone.EntityID() and any references to zones.
 //
 // Example: ZoneEntityID("acme", "logistics", "area", "warehouse-7")
-// Returns: "acme.logistics.facility.zone.area.warehouse-7"
+// Returns: "acme.logistics.zone.facility.area.warehouse-7"
+// (system = zone, domain = facility in the canonical order)
 func ZoneEntityID(orgID, platform, zoneType, zoneID string) string {
-	return fmt.Sprintf("%s.%s.facility.zone.%s.%s",
+	return fmt.Sprintf("%s.%s.zone.facility.%s.%s",
 		orgID,
 		platform,
 		zoneType,
@@ -369,7 +371,7 @@ type Zone struct {
 }
 
 // EntityID returns a deterministic 6-part federated entity ID for the zone.
-// Example: "acme.logistics.facility.zone.area.warehouse-7"
+// Example: "acme.logistics.zone.facility.area.warehouse-7"
 func (z *Zone) EntityID() string {
 	return ZoneEntityID(z.OrgID, z.Platform, z.ZoneType, z.ZoneID)
 }

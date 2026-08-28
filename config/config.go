@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/pkg/platform"
 	"github.com/c360studio/semstreams/pkg/security"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/types"
 )
 
@@ -239,6 +240,9 @@ func (c *Config) Validate() error {
 
 	if c.Platform.ID == "" {
 		return errors.New("platform.id is required")
+	}
+	if err := validateAuthorityPair(c.Platform.Org, c.Platform.ID); err != nil {
+		return err
 	}
 
 	// Validate Security Configuration
@@ -475,6 +479,9 @@ func (l *Loader) loadRawJSONFromBytes(data []byte) (map[string]any, error) {
 	if err := json.Unmarshal(data, &rawConfig); err != nil {
 		return nil, err
 	}
+	if err := rejectRemovedPlatformFields(rawConfig); err != nil {
+		return nil, err
+	}
 
 	// Convert duration strings
 	l.parseDurations(rawConfig)
@@ -526,6 +533,9 @@ func (l *Loader) loadRawJSON(path string) (map[string]any, error) {
 	// Unmarshal into map
 	var rawConfig map[string]any
 	if err := json.Unmarshal(data, &rawConfig); err != nil {
+		return nil, err
+	}
+	if err := rejectRemovedPlatformFields(rawConfig); err != nil {
 		return nil, err
 	}
 
@@ -769,12 +779,55 @@ func (c *Config) GetOrg() string {
 	return c.Platform.Org
 }
 
-// GetPlatform returns the platform identifier (prefer instance_id over id)
+// GetPlatform returns the minting deployment authority: platform.id, the one
+// identity field (ADR-102, ruled O-2; platform.instance_id was removed).
 func (c *Config) GetPlatform() string {
-	if c.Platform.InstanceID != "" {
-		return c.Platform.InstanceID
-	}
 	return c.Platform.ID
+}
+
+// validateAuthorityPair bounds platform.org + platform.id so every framework
+// identity family fits under the canonical 256-byte entity-ID bound (ADR-102
+// amends ADR-076 d2; ruled O-14). The budget is derived from the framework's
+// own family table, never configured by the operator, and the second check is
+// by observation rather than arithmetic: the binding family's identity is
+// composed under the pair and must validate, which also refuses an org or id
+// that is not one canonical entity-ID segment.
+func validateAuthorityPair(org, id string) error {
+	binding := semtypes.LongestFrameworkIdentityFamily()
+	if pair := len(org) + len(id); pair > semtypes.MaxAuthorityPairBytes() {
+		return fmt.Errorf(
+			"platform.org + platform.id is %d bytes; the authority pair may not exceed %d bytes so that the %s identity family (%d fixed bytes) fits the %d-byte entity-ID bound",
+			pair, semtypes.MaxAuthorityPairBytes(), binding.Name, binding.FixedBytes(), semtypes.MaxEntityIDBytes,
+		)
+	}
+	if _, err := binding.EntityID(org, id, strings.Repeat("0", binding.InstanceBytes)); err != nil {
+		return fmt.Errorf("platform.org %q / platform.id %q cannot carry the %s identity family: %w", org, id, binding.Name, err)
+	}
+	return nil
+}
+
+// removedPlatformFields maps every field withdrawn from the platform block to
+// the guidance that replaces it. encoding/json silently DROPS a key with no
+// matching struct field, so without this probe an operator upgrading past
+// ADR-102 would keep `instance_id` in their config, see no error, and mint
+// under platform.id instead of the value they believed was their authority.
+var removedPlatformFields = map[string]string{
+	"instance_id": "removed (ADR-102, BREAKING): platform.id is the single deployment authority field and positions 1-2 of every minted entity ID. Delete instance_id and put its value in platform.id",
+}
+
+// rejectRemovedPlatformFields fails the load when a withdrawn platform field is
+// present, naming its replacement.
+func rejectRemovedPlatformFields(raw map[string]any) error {
+	platform, ok := raw["platform"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	for field, guidance := range removedPlatformFields {
+		if _, found := platform[field]; found {
+			return fmt.Errorf("config field platform.%s was %s", field, guidance)
+		}
+	}
+	return nil
 }
 
 // String returns a JSON representation of the config

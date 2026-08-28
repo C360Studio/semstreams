@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/pkg/errs"
 	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"gopkg.in/yaml.v3"
@@ -43,6 +44,13 @@ const (
 	// LanguageIntentionalTemplate marks an exact pre-substitution expression
 	// whose resolved runtime value must satisfy the entity-ID contract.
 	LanguageIntentionalTemplate Language = "intentional-template"
+	// LanguageFormatBuilder is a fmt.Sprintf format whose dot-separated tokens
+	// are entity-ID positions, with a format verb as a template position
+	// (surface go-format-prefix).
+	LanguageFormatBuilder Language = "format-builder"
+	// LanguagePrefixConstant is a trailing-dot dotted string constant an
+	// entity-ID builder concatenates onto (surface go-dotted-constant).
+	LanguagePrefixConstant Language = "prefix-constant"
 
 	maxAnnotationsPerFile    = 100
 	maxAnnotationLineBytes   = 512
@@ -169,6 +177,10 @@ func auditFiles(files []string) ([]Candidate, []Finding, error) {
 		candidates = append(candidates, classified...)
 	}
 
+	registered, err := collectRegisteredDomains(files, symbols)
+	if err != nil {
+		return nil, nil, err
+	}
 	candidates = deduplicate(candidates)
 	findings := make([]Finding, 0)
 	for index := range candidates {
@@ -181,6 +193,12 @@ func auditFiles(files []string) ([]Candidate, []Finding, error) {
 			candidate.Status = "finding"
 			candidate.Reason = validationReason(err)
 			findings = append(findings, Finding{Candidate: *candidate, Reason: candidate.Reason})
+			continue
+		}
+		if reason := segmentFinding(*candidate, registered); reason != "" {
+			candidate.Status = "finding"
+			candidate.Reason = reason
+			findings = append(findings, Finding{Candidate: *candidate, Reason: reason})
 			continue
 		}
 		candidate.Status = "valid"
@@ -217,6 +235,10 @@ func validate(language Language, value string) error {
 		return semtypes.ValidateEntityIDPattern(value)
 	case LanguageQueryPrefix:
 		return semtypes.ValidateEntityIDPrefix(value)
+	case LanguageFormatBuilder:
+		return validateFormatBuilder(value)
+	case LanguagePrefixConstant:
+		return validatePrefixConstant(value)
 	default:
 		return nil
 	}
@@ -317,6 +339,12 @@ func auditGo(path string, symbols *goSymbols) ([]Candidate, error) {
 		})
 	}
 	var out []Candidate
+	// Elements of []Contract{{...}} elide their type, so the element literal has
+	// no name of its own to bind EntityPattern against. Name it from the slice's
+	// element type, the same way collectRegisteredDomains reads
+	// []EntityDomainDelegation{{...}} (segment_rules.go). Scoped to Contract: it
+	// adds rows and renames no existing surface.
+	elidedContractElements := make(map[*ast.CompositeLit]bool)
 	add := func(expr ast.Expr, language Language, surface string) {
 		value, ok := resolve(expr)
 		if !ok {
@@ -345,6 +373,12 @@ func auditGo(path string, symbols *goSymbols) ([]Candidate, error) {
 						!excludedDeclarationName(name.Name) && !isEntityIDSchemaRegexDeclaration(path, name.Name) {
 						if language, ok := languageForName(name.Name, ""); ok {
 							add(values.Values[i], language, "go-declaration:"+name.Name)
+						} else if value, ok := resolve(values.Values[i]); ok && isDottedPrefixConstant(name.Name, value) {
+							position := fset.Position(values.Values[i].Pos())
+							out = append(out, Candidate{
+								File: path, Line: position.Line, Column: position.Column, Language: LanguagePrefixConstant,
+								Value: value, Surface: "go-dotted-constant:" + name.Name,
+							})
 						}
 					}
 				}
@@ -355,7 +389,17 @@ func auditGo(path string, symbols *goSymbols) ([]Candidate, error) {
 	ast.Inspect(file, func(node ast.Node) bool {
 		switch n := node.(type) {
 		case *ast.CompositeLit:
+			if array, ok := n.Type.(*ast.ArrayType); ok && expressionName(array.Elt) == contractTypeName {
+				for _, element := range n.Elts {
+					if inner, ok := element.(*ast.CompositeLit); ok && inner.Type == nil {
+						elidedContractElements[inner] = true
+					}
+				}
+			}
 			typeName := expressionName(n.Type)
+			if typeName == "" && elidedContractElements[n] {
+				typeName = contractTypeName
+			}
 			fields := make(map[string]ast.Expr)
 			for _, element := range n.Elts {
 				if keyed, ok := element.(*ast.KeyValueExpr); ok {
@@ -411,6 +455,17 @@ func auditGo(path string, symbols *goSymbols) ([]Candidate, error) {
 						File: path, Line: position.Line, Column: position.Column, Language: LanguageLiteral,
 						Value: strings.Join(parts, "."), Surface: "go-call:semantictest.EntityID",
 					})
+				}
+			}
+			if name == "Sprintf" && len(n.Args) > 0 {
+				if format, ok := n.Args[0].(*ast.BasicLit); ok && format.Kind == token.STRING {
+					if value, err := strconv.Unquote(format.Value); err == nil && formatBuilderTokens(value) != nil {
+						position := fset.Position(format.Pos())
+						out = append(out, Candidate{
+							File: path, Line: position.Line, Column: position.Column, Language: LanguageFormatBuilder,
+							Value: value, Surface: "go-format-prefix:" + enclosingFunctionName(file, n.Pos()),
+						})
+					}
 				}
 			}
 			if len(n.Args) > 0 {
@@ -663,11 +718,23 @@ func expressionName(expr ast.Expr) string {
 	}
 }
 
+// contractTypeName is the projection-contract type whose EntityPattern field is
+// a declaration pattern. Both the composite-literal walk and languageForName
+// read it, so an elided slice element and a named literal cannot diverge.
+const contractTypeName = "Contract"
+
 func languageForName(name, container string) (Language, bool) {
 	normalized := normalizeName(name)
 	container = strings.ToLower(container)
 	switch {
 	case normalized == "entityidpattern" || strings.HasSuffix(normalized, "entityidpattern") || normalized == "targetpattern" || normalized == "ownerpattern":
+		return LanguageDeclarationPattern, true
+	// A projection contract's EntityPattern (pkg/projection/contract.Contract) is
+	// a declaration pattern. It is bound to its owning type because the same
+	// normalized name spells an unrelated vocabulary elsewhere: an entity *type*
+	// token under a query classifier's options key (configs/domains/iot.json:8,
+	// read as Options["entity_pattern"] at graph/query/examples_test.go:52).
+	case normalized == "entitypattern" && strings.Contains(container, strings.ToLower(contractTypeName)):
 		return LanguageDeclarationPattern, true
 	case normalized == "entityidprefix" || strings.HasSuffix(normalized, "entityidprefix") || normalized == "entityprefix" || normalized == "idprefix":
 		return LanguageQueryPrefix, true
@@ -692,7 +759,8 @@ func isTripleType(name string) bool {
 
 func entityIDConstructorValue(fields map[string]ast.Expr, resolve func(ast.Expr) (string, bool)) (string, bool) {
 	parts := make([]string, 0, 6)
-	for _, name := range []string{"Org", "Platform", "Domain", "System", "Type", "Instance"} {
+	// Canonical order org.platform.system.domain.type.instance (ADR-102).
+	for _, name := range []string{"Org", "Platform", "System", "Domain", "Type", "Instance"} {
 		expr, ok := fields[name]
 		if !ok {
 			return "", false
@@ -819,6 +887,32 @@ func walkConfigNode(path string, root *yaml.Node, lineOffset int) []Candidate {
 			}
 			if _, ok := fields["triples"]; ok {
 				addOccurrences("id", LanguageLiteral, "config:entity-state-")
+			}
+			if entity, ok := fields["entity"]; ok && entity.Kind == yaml.MappingNode {
+				for i := 0; i+1 < len(entity.Content); i += 2 {
+					if entity.Content[i].Value == "pattern" {
+						addValue("entity.pattern", entity.Content[i+1], LanguageDeclarationPattern, "config:")
+					}
+				}
+			}
+			if contracts, ok := fields["projection_contracts"]; ok && contracts.Kind == yaml.SequenceNode {
+				for _, element := range contracts.Content {
+					if element.Kind != yaml.MappingNode {
+						continue
+					}
+					for i := 0; i+1 < len(element.Content); i += 2 {
+						if normalizeName(element.Content[i].Value) == "entitypattern" {
+							addValue("projection_contracts.entity_pattern", element.Content[i+1], LanguageDeclarationPattern, "config:")
+						}
+					}
+				}
+			}
+			if buckets, ok := fields["entity_watch_buckets"]; ok && buckets.Kind == yaml.MappingNode {
+				for i := 0; i+1 < len(buckets.Content); i += 2 {
+					if buckets.Content[i].Value == graph.BucketEntityStates {
+						addValue("entity_watch_buckets."+graph.BucketEntityStates, buckets.Content[i+1], LanguageDeclarationPattern, "config:")
+					}
+				}
 			}
 			if _, predicate := fields["predicate"]; predicate {
 				if _, object := fields["object"]; object {
@@ -1061,4 +1155,17 @@ func deduplicate(in []Candidate) []Candidate {
 		return out[i].Surface < out[j].Surface
 	})
 	return out
+}
+
+// enclosingFunctionName names the function or method whose body contains pos,
+// so a format-builder surface reads like the builder it belongs to.
+func enclosingFunctionName(file *ast.File, pos token.Pos) string {
+	for _, decl := range file.Decls {
+		function, ok := decl.(*ast.FuncDecl)
+		if !ok || function.Body == nil || pos < function.Pos() || pos > function.End() {
+			continue
+		}
+		return function.Name.Name
+	}
+	return "fmt.Sprintf"
 }

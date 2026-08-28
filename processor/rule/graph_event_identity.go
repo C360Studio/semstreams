@@ -9,16 +9,17 @@ import (
 	semtypes "github.com/c360studio/semstreams/pkg/types"
 )
 
-const (
-	ruleTriggerDigestDomain = "semstreams.graph.rule-trigger.v1"
-	ruleTriggerEntityPrefix = "semstreams.framework.graph.rules.trigger."
-)
+const ruleTriggerDigestDomain = "semstreams.graph.rule-trigger.v1"
 
-// ruleTriggerEntityID returns the stable framework-owned entity updated when a
-// rule triggers. Pack identity disambiguates processor-local rule IDs, while
-// the full digest keeps both exact inputs out of NATS key positions. Replicas
-// of the same pack intentionally converge on the same entity.
-func ruleTriggerEntityID(packID, ruleID string) (string, error) {
+// ruleTriggerEntityID returns the stable entity updated when a rule triggers:
+// org.platform.rules.graph.trigger.<digest>, composed from the pkg/types
+// rule-trigger identity family under the deployment's own authority (ADR-102
+// d2; supersedes ADR-076 d1's fixed framework namespace). Pack identity
+// disambiguates processor-local rule IDs, while the full digest keeps both
+// exact inputs out of NATS key positions. Replicas of the same pack in one
+// deployment intentionally converge on the same entity; two deployments
+// running the same pack do not, because the authority differs.
+func ruleTriggerEntityID(org, platform, packID, ruleID string) (string, error) {
 	if err := validatePackID(packID); err != nil {
 		return "", errs.WrapInvalid(err, "RuleProcessor", "ruleTriggerEntityID", "validate pack ID")
 	}
@@ -29,9 +30,9 @@ func ruleTriggerEntityID(packID, ruleID string) (string, error) {
 	writeRuleTriggerFrame(digest, ruleTriggerDigestDomain)
 	writeRuleTriggerFrame(digest, packID)
 	writeRuleTriggerFrame(digest, ruleID)
-	entityID := ruleTriggerEntityPrefix + hex.EncodeToString(digest.Sum(nil))
-	if err := semtypes.ValidateEntityID(entityID); err != nil {
-		return "", errs.WrapInvalid(err, "RuleProcessor", "ruleTriggerEntityID", "validate derived trigger entity ID")
+	entityID, err := semtypes.RuleTriggerIdentityFamily().EntityID(org, platform, hex.EncodeToString(digest.Sum(nil)))
+	if err != nil {
+		return "", errs.WrapInvalid(err, "RuleProcessor", "ruleTriggerEntityID", "compose trigger entity ID under the deployment authority")
 	}
 	return entityID, nil
 }

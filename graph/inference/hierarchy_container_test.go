@@ -6,6 +6,7 @@ package inference
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,7 +24,7 @@ func TestIsContainerEntity_Detection(t *testing.T) {
 		// Type containers (end with .group)
 		{
 			name:            "type container",
-			entityID:        "c360.logistics.environmental.sensor.temperature.group",
+			entityID:        "c360.logistics.sensor.environmental.temperature.group",
 			wantIsContainer: true,
 		},
 		{
@@ -35,7 +36,7 @@ func TestIsContainerEntity_Detection(t *testing.T) {
 		// System containers (end with .container)
 		{
 			name:            "system container",
-			entityID:        "c360.logistics.environmental.sensor.group.container",
+			entityID:        "c360.logistics.sensor.environmental.group.container",
 			wantIsContainer: true,
 		},
 		{
@@ -47,7 +48,7 @@ func TestIsContainerEntity_Detection(t *testing.T) {
 		// Domain containers (end with .level)
 		{
 			name:            "domain container",
-			entityID:        "c360.logistics.environmental.group.container.level",
+			entityID:        "c360.logistics.sensor.group.container.level",
 			wantIsContainer: true,
 		},
 		{
@@ -59,29 +60,29 @@ func TestIsContainerEntity_Detection(t *testing.T) {
 		// Real entities (not containers)
 		{
 			name:            "real entity",
-			entityID:        "c360.logistics.environmental.sensor.temperature.temp-001",
+			entityID:        "c360.logistics.sensor.environmental.temperature.temp-001",
 			wantIsContainer: false,
 		},
 		{
 			name:            "real entity with numeric instance",
-			entityID:        "c360.logistics.environmental.sensor.temperature.001",
+			entityID:        "c360.logistics.sensor.environmental.temperature.001",
 			wantIsContainer: false,
 		},
 		{
 			name:            "real entity with UUID instance",
-			entityID:        "c360.logistics.environmental.sensor.temperature.abc-123-def",
+			entityID:        "c360.logistics.sensor.environmental.temperature.abc-123-def",
 			wantIsContainer: false,
 		},
 
 		// Short entity IDs (< 6 parts) - cannot be containers
 		{
 			name:            "5-part entity",
-			entityID:        "c360.logistics.environmental.sensor.temperature",
+			entityID:        "c360.logistics.sensor.environmental.temperature",
 			wantIsContainer: false,
 		},
 		{
 			name:            "4-part entity",
-			entityID:        "c360.logistics.environmental.sensor",
+			entityID:        "c360.logistics.sensor.environmental",
 			wantIsContainer: false,
 		},
 		{
@@ -103,12 +104,12 @@ func TestIsContainerEntity_Detection(t *testing.T) {
 		// Non-c360 entities
 		{
 			name:            "non-c360 real entity",
-			entityID:        "other.org.domain.system.type.instance",
+			entityID:        "other.org.system.domain.type.instance",
 			wantIsContainer: false,
 		},
 		{
 			name:            "non-c360 container",
-			entityID:        "other.org.domain.system.type.group",
+			entityID:        "other.org.system.domain.type.group",
 			wantIsContainer: true,
 		},
 
@@ -135,7 +136,7 @@ func TestIsContainerEntity_Detection(t *testing.T) {
 		},
 		{
 			name:            "7-part entity ending with group",
-			entityID:        "c360.logistics.environmental.sensor.temperature.instance.group",
+			entityID:        "c360.logistics.sensor.environmental.temperature.instance.group",
 			wantIsContainer: false, // Too many parts
 		},
 	}
@@ -159,22 +160,22 @@ func TestHierarchyInference_SkipContainerEntities(t *testing.T) {
 	}{
 		{
 			name:       "skip type container",
-			entityID:   "c360.logistics.environmental.sensor.temperature.group",
+			entityID:   "c360.logistics.sensor.environmental.temperature.group",
 			shouldSkip: true,
 		},
 		{
 			name:       "skip system container",
-			entityID:   "c360.logistics.environmental.sensor.group.container",
+			entityID:   "c360.logistics.sensor.environmental.group.container",
 			shouldSkip: true,
 		},
 		{
 			name:       "skip domain container",
-			entityID:   "c360.logistics.environmental.group.container.level",
+			entityID:   "c360.logistics.sensor.group.container.level",
 			shouldSkip: true,
 		},
 		{
 			name:       "process real entity",
-			entityID:   "c360.logistics.environmental.sensor.temperature.temp-001",
+			entityID:   "c360.logistics.sensor.environmental.temperature.temp-001",
 			shouldSkip: false,
 		},
 	}
@@ -229,7 +230,7 @@ func TestHierarchyInference_NoCascade(t *testing.T) {
 	hi := NewHierarchyInference(entityManager, tripleAdder, config, nil)
 
 	// Create a real entity
-	entityID := "c360.logistics.environmental.sensor.temperature.temp-001"
+	entityID := "c360.logistics.sensor.environmental.temperature.temp-001"
 	err := hi.OnEntityCreated(context.Background(), entityID)
 	require.NoError(t, err)
 
@@ -244,9 +245,9 @@ func TestHierarchyInference_NoCascade(t *testing.T) {
 	}
 
 	expectedContainers := []string{
-		"c360.logistics.environmental.sensor.temperature.group", // Type
-		"c360.logistics.environmental.sensor.group.container",   // System
-		"c360.logistics.environmental.group.container.level",    // Domain
+		"c360.logistics.sensor.environmental.temperature.group", // Type
+		"c360.logistics.sensor.environmental.group.container",   // System
+		"c360.logistics.sensor.group.container.level",           // Domain
 	}
 
 	for _, expectedID := range expectedContainers {
@@ -264,7 +265,7 @@ func TestHierarchyInference_NoCascade(t *testing.T) {
 
 	// Now simulate what would happen if containers were processed (BUG scenario)
 	// If the bug exists, processing a container would create more containers
-	typeContainer := "c360.logistics.environmental.sensor.temperature.group"
+	typeContainer := "c360.logistics.sensor.environmental.temperature.group"
 
 	// Clear state to test container processing in isolation
 	tripleAdder.mu.Lock()
@@ -299,9 +300,12 @@ func TestHierarchyInference_MultipleEntitiesSameType(t *testing.T) {
 	hi := NewHierarchyInference(entityManager, tripleAdder, config, nil)
 
 	// Create 10 entities of the same type
-	baseID := "c360.logistics.environmental.sensor.temperature"
+	baseID := "c360.logistics.sensor.environmental.temperature"
 	for i := 1; i <= 10; i++ {
-		entityID := baseID + ".temp-" + string(rune('0'+i))
+		// strconv, not string(rune('0'+i)): at i=10 that yields ':' — not a
+		// canonical entity-ID segment, so the tenth entity was silently
+		// ungrammatical and every count below was one short of its claim.
+		entityID := baseID + ".temp-" + strconv.Itoa(i)
 		err := hi.OnEntityCreated(context.Background(), entityID)
 		require.NoError(t, err, "Failed to create entity %q", entityID)
 	}
@@ -317,9 +321,9 @@ func TestHierarchyInference_MultipleEntitiesSameType(t *testing.T) {
 		"Should create 60 edges (10 entities × 6 edges each), got %d", len(triples))
 
 	// Verify all entities reference the same containers
-	typeContainerID := "c360.logistics.environmental.sensor.temperature.group"
-	systemContainerID := "c360.logistics.environmental.sensor.group.container"
-	domainContainerID := "c360.logistics.environmental.group.container.level"
+	typeContainerID := "c360.logistics.sensor.environmental.temperature.group"
+	systemContainerID := "c360.logistics.sensor.environmental.group.container"
+	domainContainerID := "c360.logistics.sensor.group.container.level"
 
 	typeMemberCount := 0
 	systemMemberCount := 0
@@ -370,12 +374,12 @@ func TestHierarchyInference_ContainerEntityWithNonStandardSuffix(t *testing.T) {
 	assert.Len(t, triples, 2, "Should create edges for non-container entity")
 }
 
-// entity-id-audit:classify intentional-malformed "c360.logistics.environmental.sensor.temperature" line=79 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies five-position IDs are not containers
-// entity-id-audit:classify intentional-malformed "c360.logistics.environmental.sensor" line=84 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies four-position IDs are not containers
-// entity-id-audit:classify intentional-malformed "c360.logistics.environmental" line=89 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies three-position IDs are not containers
-// entity-id-audit:classify intentional-malformed "c360.logistics" line=94 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies two-position IDs are not containers
-// entity-id-audit:classify intentional-malformed "c360" line=99 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies one-position IDs are not containers
-// entity-id-audit:classify intentional-malformed "" line=118 column=21 surface=go-field:.entityID entity_id_invalid:empty verifies empty input is not a container
-// entity-id-audit:classify intentional-malformed "." line=123 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies a dot-only value is not a container
-// entity-id-audit:classify intentional-malformed "a.b.c.d.group" line=128 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies a five-position group suffix is not a container
-// entity-id-audit:classify intentional-malformed "c360.logistics.environmental.sensor.temperature.instance.group" line=138 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies a seven-position group suffix is not a container
+// entity-id-audit:classify intentional-malformed "c360.logistics.sensor.environmental.temperature" line=80 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies five-position IDs are not containers
+// entity-id-audit:classify intentional-malformed "c360.logistics.sensor.environmental" line=85 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies four-position IDs are not containers
+// entity-id-audit:classify intentional-malformed "c360.logistics.environmental" line=90 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies three-position IDs are not containers
+// entity-id-audit:classify intentional-malformed "c360.logistics" line=95 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies two-position IDs are not containers
+// entity-id-audit:classify intentional-malformed "c360" line=100 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies one-position IDs are not containers
+// entity-id-audit:classify intentional-malformed "" line=119 column=21 surface=go-field:.entityID entity_id_invalid:empty verifies empty input is not a container
+// entity-id-audit:classify intentional-malformed "." line=124 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies a dot-only value is not a container
+// entity-id-audit:classify intentional-malformed "a.b.c.d.group" line=129 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies a five-position group suffix is not a container
+// entity-id-audit:classify intentional-malformed "c360.logistics.sensor.environmental.temperature.instance.group" line=139 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies a seven-position group suffix is not a container

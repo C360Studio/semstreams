@@ -21,7 +21,7 @@ func TestIntegration_HandlerUnsubscribesOnShutdown(t *testing.T) {
 		t.Fatalf("subscribe: %v", err)
 	}
 	requestData, err := json.Marshal(PromoteRequest{
-		EntityID: "acme.ops.agent.lesson.record.11111111-1111-5111-8111-111111111111",
+		EntityID: "acme.ops.lesson.agent.record.11111111-1111-5111-8111-111111111111",
 	})
 	if err != nil {
 		t.Fatal(err)

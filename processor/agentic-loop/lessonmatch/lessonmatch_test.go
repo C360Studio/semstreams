@@ -36,19 +36,19 @@ func TestMatch_Eligibility(t *testing.T) {
 	}{
 		{
 			name:      "tag match",
-			lesson:    active("c360.ops.agent.lesson.record.a", "info", "", []string{"tag:ops"}, "x"),
+			lesson:    active("c360.ops.lesson.agent.record.a", "info", "", []string{"tag:ops"}, "x"),
 			scope:     Scope{Tags: []string{"ops"}},
 			wantMatch: true,
 		},
 		{
 			name:      "tag miss",
-			lesson:    active("c360.ops.agent.lesson.record.a", "info", "", []string{"tag:researcher"}, "x"),
+			lesson:    active("c360.ops.lesson.agent.record.a", "info", "", []string{"tag:researcher"}, "x"),
 			scope:     Scope{Tags: []string{"ops"}},
 			wantMatch: false,
 		},
 		{
 			name:      "id-prefix match on segment boundary",
-			lesson:    active("c360.ops.agent.lesson.record.a", "info", "", []string{"id:c360.ops.robotics"}, "x"),
+			lesson:    active("c360.ops.lesson.agent.record.a", "info", "", []string{"id:c360.ops.robotics"}, "x"),
 			scope:     Scope{EntityIDs: []string{"c360.ops.robotics.gcs.drone.001"}},
 			wantMatch: true,
 		},
@@ -58,43 +58,43 @@ func TestMatch_Eligibility(t *testing.T) {
 			// (segment "ops" != "ops-agent") even though "c360.ops" is a raw
 			// string prefix of "c360.ops-agent".
 			name:      "id-prefix rejects mid-segment string prefix",
-			lesson:    active("c360.ops.agent.lesson.record.a", "info", "", []string{"id:c360.ops.robotics"}, "x"),
+			lesson:    active("c360.ops.lesson.agent.record.a", "info", "", []string{"id:c360.ops.robotics"}, "x"),
 			scope:     Scope{EntityIDs: []string{"c360.ops-agent.robotics.gcs.drone.001"}},
 			wantMatch: false,
 		},
 		{
 			name:      "id-prefix equal to full entity ID matches",
-			lesson:    active("c360.ops.agent.lesson.record.a", "info", "", []string{"id:c360.ops.robotics.gcs.drone.001"}, "x"),
+			lesson:    active("c360.ops.lesson.agent.record.a", "info", "", []string{"id:c360.ops.robotics.gcs.drone.001"}, "x"),
 			scope:     Scope{EntityIDs: []string{"c360.ops.robotics.gcs.drone.001"}},
 			wantMatch: true,
 		},
 		{
 			name:      "id-prefix longer than entity ID cannot match",
-			lesson:    active("c360.ops.agent.lesson.record.a", "info", "", []string{"id:c360.ops.robotics.gcs.drone.001.extra"}, "x"),
+			lesson:    active("c360.ops.lesson.agent.record.a", "info", "", []string{"id:c360.ops.robotics.gcs.drone.001.extra"}, "x"),
 			scope:     Scope{EntityIDs: []string{"c360.ops.robotics.gcs.drone.001"}},
 			wantMatch: false,
 		},
 		{
 			name:      "any-key match (one of several keys matches)",
-			lesson:    active("c360.ops.agent.lesson.record.a", "info", "", []string{"tag:nope", "id:c360.ops.robotics"}, "x"),
+			lesson:    active("c360.ops.lesson.agent.record.a", "info", "", []string{"tag:nope", "id:c360.ops.robotics"}, "x"),
 			scope:     Scope{EntityIDs: []string{"c360.ops.robotics.gcs.drone.001"}},
 			wantMatch: true,
 		},
 		{
 			name:      "empty scope matches nothing (no firehose)",
-			lesson:    active("c360.ops.agent.lesson.record.a", "info", "", []string{"tag:ops"}, "x"),
+			lesson:    active("c360.ops.lesson.agent.record.a", "info", "", []string{"tag:ops"}, "x"),
 			scope:     Scope{},
 			wantMatch: false,
 		},
 		{
 			name:      "lesson with no applies_to matches nothing",
-			lesson:    active("c360.ops.agent.lesson.record.a", "info", "", nil, "x"),
+			lesson:    active("c360.ops.lesson.agent.record.a", "info", "", nil, "x"),
 			scope:     Scope{Tags: []string{"ops"}, EntityIDs: []string{"c360.ops.robotics.gcs.drone.001"}},
 			wantMatch: false,
 		},
 		{
 			name:      "untyped scope key ignored",
-			lesson:    active("c360.ops.agent.lesson.record.a", "info", "", []string{"c360.ops.robotics"}, "x"),
+			lesson:    active("c360.ops.lesson.agent.record.a", "info", "", []string{"c360.ops.robotics"}, "x"),
 			scope:     Scope{EntityIDs: []string{"c360.ops.robotics.gcs.drone.001"}},
 			wantMatch: false,
 		},
@@ -119,7 +119,7 @@ func TestMatch_ExcludesNonActiveStatus(t *testing.T) {
 	scope := Scope{Tags: []string{"ops"}}
 	for _, status := range []string{"proposed", "retired", "superseded", "", "ACTIVE", "unknown"} {
 		t.Run(status, func(t *testing.T) {
-			l := active("c360.ops.agent.lesson.record.a", "info", "", []string{"tag:ops"}, "x")
+			l := active("c360.ops.lesson.agent.record.a", "info", "", []string{"tag:ops"}, "x")
 			l.Status = status
 			got := Match([]Lesson{l}, scope, Opts{})
 			if got.MatchedCount != 0 || got.IncludedCount != 0 {
@@ -135,15 +135,15 @@ func TestMatch_OrderingBySeverity(t *testing.T) {
 	scope := Scope{Tags: []string{"ops"}}
 	// Same created-at, differing severity; supply out of order.
 	ls := []Lesson{
-		active("c360.ops.agent.lesson.record.info", "info", "2026-07-19T10:00:00Z", []string{"tag:ops"}, "i"),
-		active("c360.ops.agent.lesson.record.crit", "critical", "2026-07-19T10:00:00Z", []string{"tag:ops"}, "c"),
-		active("c360.ops.agent.lesson.record.warn", "warning", "2026-07-19T10:00:00Z", []string{"tag:ops"}, "w"),
+		active("c360.ops.lesson.agent.record.info", "info", "2026-07-19T10:00:00Z", []string{"tag:ops"}, "i"),
+		active("c360.ops.lesson.agent.record.crit", "critical", "2026-07-19T10:00:00Z", []string{"tag:ops"}, "c"),
+		active("c360.ops.lesson.agent.record.warn", "warning", "2026-07-19T10:00:00Z", []string{"tag:ops"}, "w"),
 	}
 	got := Match(ls, scope, Opts{})
 	want := []string{
-		"c360.ops.agent.lesson.record.crit",
-		"c360.ops.agent.lesson.record.warn",
-		"c360.ops.agent.lesson.record.info",
+		"c360.ops.lesson.agent.record.crit",
+		"c360.ops.lesson.agent.record.warn",
+		"c360.ops.lesson.agent.record.info",
 	}
 	assertOrder(t, idsOf(got.Included), want)
 }
@@ -151,15 +151,15 @@ func TestMatch_OrderingBySeverity(t *testing.T) {
 func TestMatch_OrderingByCreatedAtWithinSeverity(t *testing.T) {
 	scope := Scope{Tags: []string{"ops"}}
 	ls := []Lesson{
-		active("c360.ops.agent.lesson.record.old", "warning", "2026-07-19T08:00:00Z", []string{"tag:ops"}, "o"),
-		active("c360.ops.agent.lesson.record.new", "warning", "2026-07-19T12:00:00Z", []string{"tag:ops"}, "n"),
-		active("c360.ops.agent.lesson.record.mid", "warning", "2026-07-19T10:00:00Z", []string{"tag:ops"}, "m"),
+		active("c360.ops.lesson.agent.record.old", "warning", "2026-07-19T08:00:00Z", []string{"tag:ops"}, "o"),
+		active("c360.ops.lesson.agent.record.new", "warning", "2026-07-19T12:00:00Z", []string{"tag:ops"}, "n"),
+		active("c360.ops.lesson.agent.record.mid", "warning", "2026-07-19T10:00:00Z", []string{"tag:ops"}, "m"),
 	}
 	got := Match(ls, scope, Opts{})
 	want := []string{
-		"c360.ops.agent.lesson.record.new", // newest first
-		"c360.ops.agent.lesson.record.mid",
-		"c360.ops.agent.lesson.record.old",
+		"c360.ops.lesson.agent.record.new", // newest first
+		"c360.ops.lesson.agent.record.mid",
+		"c360.ops.lesson.agent.record.old",
 	}
 	assertOrder(t, idsOf(got.Included), want)
 }
@@ -168,15 +168,15 @@ func TestMatch_OrderingTiebreakByEntityID(t *testing.T) {
 	scope := Scope{Tags: []string{"ops"}}
 	// Identical severity AND created-at ⇒ entity-ID ASC decides.
 	ls := []Lesson{
-		active("c360.ops.agent.lesson.record.ccc", "warning", "2026-07-19T10:00:00Z", []string{"tag:ops"}, "c"),
-		active("c360.ops.agent.lesson.record.aaa", "warning", "2026-07-19T10:00:00Z", []string{"tag:ops"}, "a"),
-		active("c360.ops.agent.lesson.record.bbb", "warning", "2026-07-19T10:00:00Z", []string{"tag:ops"}, "b"),
+		active("c360.ops.lesson.agent.record.ccc", "warning", "2026-07-19T10:00:00Z", []string{"tag:ops"}, "c"),
+		active("c360.ops.lesson.agent.record.aaa", "warning", "2026-07-19T10:00:00Z", []string{"tag:ops"}, "a"),
+		active("c360.ops.lesson.agent.record.bbb", "warning", "2026-07-19T10:00:00Z", []string{"tag:ops"}, "b"),
 	}
 	got := Match(ls, scope, Opts{})
 	want := []string{
-		"c360.ops.agent.lesson.record.aaa",
-		"c360.ops.agent.lesson.record.bbb",
-		"c360.ops.agent.lesson.record.ccc",
+		"c360.ops.lesson.agent.record.aaa",
+		"c360.ops.lesson.agent.record.bbb",
+		"c360.ops.lesson.agent.record.ccc",
 	}
 	assertOrder(t, idsOf(got.Included), want)
 }
@@ -184,17 +184,17 @@ func TestMatch_OrderingTiebreakByEntityID(t *testing.T) {
 func TestMatch_MissingOrUnparseableCreatedAtSortsLast(t *testing.T) {
 	scope := Scope{Tags: []string{"ops"}}
 	ls := []Lesson{
-		active("c360.ops.agent.lesson.record.empty", "warning", "", []string{"tag:ops"}, "e"),
-		active("c360.ops.agent.lesson.record.bad", "warning", "not-a-timestamp", []string{"tag:ops"}, "b"),
-		active("c360.ops.agent.lesson.record.good", "warning", "2026-07-19T10:00:00Z", []string{"tag:ops"}, "g"),
+		active("c360.ops.lesson.agent.record.empty", "warning", "", []string{"tag:ops"}, "e"),
+		active("c360.ops.lesson.agent.record.bad", "warning", "not-a-timestamp", []string{"tag:ops"}, "b"),
+		active("c360.ops.lesson.agent.record.good", "warning", "2026-07-19T10:00:00Z", []string{"tag:ops"}, "g"),
 	}
 	got := Match(ls, scope, Opts{})
 	// good (parseable) first; empty/bad both unparseable → entity-ID ASC among
 	// them: "bad" < "empty".
 	want := []string{
-		"c360.ops.agent.lesson.record.good",
-		"c360.ops.agent.lesson.record.bad",
-		"c360.ops.agent.lesson.record.empty",
+		"c360.ops.lesson.agent.record.good",
+		"c360.ops.lesson.agent.record.bad",
+		"c360.ops.lesson.agent.record.empty",
 	}
 	assertOrder(t, idsOf(got.Included), want)
 }
@@ -232,11 +232,11 @@ func TestMatch_ByteBudget(t *testing.T) {
 	// Five 100-byte injection forms, all critical, distinct created-at so order
 	// is deterministic (newest first).
 	ls := []Lesson{
-		active("c360.ops.agent.lesson.record.e", "critical", "2026-07-19T10:00:05Z", []string{"tag:ops"}, strings.Repeat("e", 100)),
-		active("c360.ops.agent.lesson.record.d", "critical", "2026-07-19T10:00:04Z", []string{"tag:ops"}, strings.Repeat("d", 100)),
-		active("c360.ops.agent.lesson.record.c", "critical", "2026-07-19T10:00:03Z", []string{"tag:ops"}, strings.Repeat("c", 100)),
-		active("c360.ops.agent.lesson.record.b", "critical", "2026-07-19T10:00:02Z", []string{"tag:ops"}, strings.Repeat("b", 100)),
-		active("c360.ops.agent.lesson.record.a", "critical", "2026-07-19T10:00:01Z", []string{"tag:ops"}, strings.Repeat("a", 100)),
+		active("c360.ops.lesson.agent.record.e", "critical", "2026-07-19T10:00:05Z", []string{"tag:ops"}, strings.Repeat("e", 100)),
+		active("c360.ops.lesson.agent.record.d", "critical", "2026-07-19T10:00:04Z", []string{"tag:ops"}, strings.Repeat("d", 100)),
+		active("c360.ops.lesson.agent.record.c", "critical", "2026-07-19T10:00:03Z", []string{"tag:ops"}, strings.Repeat("c", 100)),
+		active("c360.ops.lesson.agent.record.b", "critical", "2026-07-19T10:00:02Z", []string{"tag:ops"}, strings.Repeat("b", 100)),
+		active("c360.ops.lesson.agent.record.a", "critical", "2026-07-19T10:00:01Z", []string{"tag:ops"}, strings.Repeat("a", 100)),
 	}
 	// Budget of 250 bytes fits exactly two 100-byte forms (third would hit 300 > 250).
 	got := Match(ls, scope, Opts{K: 25, ByteBudget: 250})
@@ -248,8 +248,8 @@ func TestMatch_ByteBudget(t *testing.T) {
 	}
 	// Included are the two newest (ranked prefix).
 	assertOrder(t, idsOf(got.Included), []string{
-		"c360.ops.agent.lesson.record.e",
-		"c360.ops.agent.lesson.record.d",
+		"c360.ops.lesson.agent.record.e",
+		"c360.ops.lesson.agent.record.d",
 	})
 }
 
@@ -291,20 +291,20 @@ func TestMatch_DeterministicAcrossCalls(t *testing.T) {
 	scope := Scope{Tags: []string{"ops"}, EntityIDs: []string{"c360.ops.robotics.gcs.drone.001"}}
 	// Mixed severities, created-ats, and scope-key kinds; input order shuffled.
 	ls := []Lesson{
-		active("c360.ops.agent.lesson.record.z", "info", "2026-07-19T09:00:00Z", []string{"tag:ops"}, "z"),
-		active("c360.ops.agent.lesson.record.m", "critical", "2026-07-19T08:00:00Z", []string{"id:c360.ops.robotics"}, "m"),
-		active("c360.ops.agent.lesson.record.a", "critical", "2026-07-19T08:00:00Z", []string{"tag:ops"}, "a"),
-		active("c360.ops.agent.lesson.record.q", "warning", "2026-07-19T11:00:00Z", []string{"tag:ops"}, "q"),
+		active("c360.ops.lesson.agent.record.z", "info", "2026-07-19T09:00:00Z", []string{"tag:ops"}, "z"),
+		active("c360.ops.lesson.agent.record.m", "critical", "2026-07-19T08:00:00Z", []string{"id:c360.ops.robotics"}, "m"),
+		active("c360.ops.lesson.agent.record.a", "critical", "2026-07-19T08:00:00Z", []string{"tag:ops"}, "a"),
+		active("c360.ops.lesson.agent.record.q", "warning", "2026-07-19T11:00:00Z", []string{"tag:ops"}, "q"),
 	}
 	first := Match(ls, scope, Opts{})
 	second := Match(ls, scope, Opts{})
 	assertOrder(t, idsOf(second.Included), idsOf(first.Included))
 	// Sanity: the expected total order.
 	assertOrder(t, idsOf(first.Included), []string{
-		"c360.ops.agent.lesson.record.a", // critical, 08:00, id "a" < "m"
-		"c360.ops.agent.lesson.record.m", // critical, 08:00
-		"c360.ops.agent.lesson.record.q", // warning, 11:00
-		"c360.ops.agent.lesson.record.z", // info, 09:00
+		"c360.ops.lesson.agent.record.a", // critical, 08:00, id "a" < "m"
+		"c360.ops.lesson.agent.record.m", // critical, 08:00
+		"c360.ops.lesson.agent.record.q", // warning, 11:00
+		"c360.ops.lesson.agent.record.z", // info, 09:00
 	})
 }
 
@@ -314,7 +314,7 @@ func TestMatch_DeterministicAcrossCalls(t *testing.T) {
 func makeN(n int, sev, scopeKey string) []Lesson {
 	out := make([]Lesson, 0, n)
 	for i := range n {
-		id := "c360.ops.agent.lesson.record." + pad3(i)
+		id := "c360.ops.lesson.agent.record." + pad3(i)
 		out = append(out, active(id, sev, "", []string{scopeKey}, "f"+pad3(i)))
 	}
 	return out

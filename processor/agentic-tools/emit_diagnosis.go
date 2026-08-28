@@ -23,7 +23,7 @@ const EmitDiagnosisToolName = "emit_diagnosis"
 const emitDiagnosisDefaultSeverity = "info"
 
 // EmitDiagnosisExecutor is the ops agent's finding emission tool. Each call
-// mints a new {org}.{platform}.ops.diagnosis.finding.{uuid} entity and
+// mints a new {org}.{platform}.diagnosis.ops.finding.{uuid} entity and
 // publishes one triple per predicate plus an agent.action.executed_by
 // back-link to the ops loop entity. StopLoop is false so the agent can emit
 // multiple findings per loop before calling submit_work.

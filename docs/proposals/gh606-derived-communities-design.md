@@ -21,12 +21,20 @@ are OUT of scope.
 - P3 — Membership is derivable through an existing bounded lane: `graph.ingest.query.prefix`
   (paginated, max_payload-aware, `graph/query_prefix_types.go:10-58`) and is already consumed
   that way by `hierarchyStats` (`processor/graph-query/query.go:469-545`).
-- P4 — Production reads level 0 only (`graphrag.go` leaves `req.Level` zero; gh#606 Finding 2
-  verification note).
+- P4 — Production reads level 0 only today (`graphrag.go` leaves `req.Level` zero; gh#606 Finding 2
+  verification note). **RESTATED (ADR-102, O-11 on #1095, 2026-08-26):** after the canonical reorder level 1
+  (source) is served by default and LLM summaries gate there; level 0 stays available by request.
 - P5 — The only production consumers of COMMUNITY_INDEX are graph-query's cache + the
   enhancement-worker trigger (inventory §3); zero sister-repo direct consumers (owner ruling
   measurement).
-- P6 — The canonical prefix functions exist in ONE home: `pkg/types/entity_id.go:257-348`.
+- P6 — The canonical prefix functions exist in ONE home: `pkg/types.EntityID.DeploymentPrefix` (2),
+  `SourcePrefix` (3), `TaxonomyPrefix` (4), `TypePrefix` (5) (renamed by #1095 slice A per ADR-102 d6;
+  `SystemPrefix`/`DomainPrefix`/`PlatformPrefix` no longer exist).
+  **`PrefixLevel(n)` and the `PrefixLevel*` level constants were DELETED by owner ruling 2026-08-28** (#1119): this
+  design was their only named consumer and #606 had not yet been implemented, so they were phantom exports. The
+  removal is deliberate, not an oversight — re-add whatever level vocabulary #606's code actually calls, in the same
+  change as the caller, rather than resurrecting that shape speculatively. The four named methods above are
+  unchanged and carry the same meanings, so the levels themselves are still expressible.
 
 ## 2. Options considered
 
@@ -43,7 +51,7 @@ summarization cost into the query path and breaks binding constraint (3) surface
 
 COMMUNITY_INDEX keeps its name, bucket, owner, and KV-twofer role, but a record becomes
 bounded group METADATA — no `Members` array, no `entity.{level}.{id}` mapping keys. Membership
-is derived: entity→group is a pure function (`SystemPrefix` etc.); group→members is a bounded
+is derived: entity→group is a pure function (`SourcePrefix` etc.); group→members is a bounded
 prefix scan through the existing paginated lane.
 Cost: a BREAKING record-schema change (pre-v1 fresh-state policy applies); localSearch member
 loading becomes a prefix query (it gains pagination it never had).
@@ -64,17 +72,19 @@ Rejected by the binding ruling and by ADR-086's measured honest negative.
 
 `community(entity, level)` = the entity ID prefix at that level. Levels are REAL:
 
-| Level | Prefix | Parts | Example (`acme.ops.robotics.gcs.drone.001`) |
+| Level | Prefix | Parts | Example (`acme.dep1.src.git.commit.a1`, canonical order org.platform.system.domain.type.instance) |
 |---|---|---|---|
-| 0 | `SystemPrefix` | 4 | `acme.ops.robotics.gcs` |
-| 1 | `DomainPrefix` | 3 | `acme.ops.robotics` |
-| 2 | `PlatformPrefix` | 2 | `acme.ops` |
+| 0 | `TaxonomyPrefix` | 4 | `acme.dep1.src.git` — one taxonomy within one source (source × taxonomy) |
+| 1 | `SourcePrefix` | 3 | `acme.dep1.src` — one source (the federation triple); **served by default (O-11)** |
+| 2 | `DeploymentPrefix` | 2 | `acme.dep1` — one deployment |
 
 - Community ID = the prefix string itself. IDs are level-distinct BY CONSTRUCTION (different
   arity), which structurally kills the level-collision class (#608/#609 item 1: community ID ==
   seed entity ID identical across levels).
-- Level 0 = system, per the ruling and per P4 (level 0 is what production reads; the system
-  filter is the measured useful partition).
+- Level 1 = source (RESTATED under ADR-102): the "same system" the gh#606 ruling measured as the useful
+  partition is the system VALUE — under the canonical order exactly the three-position source prefix — so
+  level 1 is served by default and LLM summaries gate there (O-11 on #1095, re-ruling Q8). Level 0 (source ×
+  taxonomy) is the same set partition the previous order's level 0 was; its ID string reorders.
 - The 5-part type prefix is deliberately NOT a community level (ruling names three); type
   grouping remains served by `hierarchyStats` / `extractEntityType`. (Owner question Q2.)
 - Every entity belongs to exactly one community per level, deterministically, at birth, O(1),
@@ -87,7 +97,7 @@ The producer stays in `processor/graph-clustering`'s existing interval loop
 (`runDetectionLoop`), replacing `LPADetector.DetectCommunities` with a `PrefixPartitioner`:
 
 1. `GetAllEntityIDs` from ENTITY_STATES (as today, `component.go:1971-1981`), sorted.
-2. Group by `SystemPrefix`/`DomainPrefix`/`PlatformPrefix` — O(N) string work, no edges, no
+2. Group by `TaxonomyPrefix`/`SourcePrefix`/`DeploymentPrefix` — O(N) string work, no edges, no
    iterations, no rng.
 3. Per group: `member_count`, `membership_hash` (= `clustering.MembershipHash(members)`,
    unchanged single home, `storage.go:31-48`), keywords + statistical summary via the existing
@@ -122,7 +132,7 @@ Consequences for the producer's dependency surface:
 ```text
 CommunityGroup {
   id              string   // the prefix; also the key suffix
-  level           int      // 0=system 1=domain 2=platform
+  level           int      // 0=taxonomy (source × domain) 1=source 2=deployment (ADR-102 order)
   member_count    int
   membership_hash string   // clustering.MembershipHash over the enumerated members
   keywords        []string
@@ -268,7 +278,7 @@ replaced by assertions that CAN fail:
 | Tier table: "Statistical adds community detection" | `README.md:156`, `docs/concepts/00-real-time-inference.md` | **CHANGE WORDING** — "community organization (ID-derived) + summaries"; detection is no longer what the tier adds |
 | Tier 2 improves communities | already corrected (gh#606 Finding 1; docs honest) | HOLDS (no regression — semantic tier never affected the partition) |
 | `COMMUNITY_INDEX: community records with members and summaries` | `doc.go:109` | **CHANGE** — metadata records; members derived |
-| GraphQL schema: localSearch/globalSearch/searchGraph fields, `CommunitySummary`, `entityIdHierarchy` | `gateway/graph-gateway/component.go:1835-1859` | HOLDS — no field shape changes; `level` docs updated to system/domain/platform; `entityIdHierarchy` becomes the same fact the partition serves (one home) |
+| GraphQL schema: localSearch/globalSearch/searchGraph fields, `CommunitySummary`, `entityIdHierarchy` | `gateway/graph-gateway/component.go:1835-1859` | HOLDS — no field shape changes; `level` docs updated to taxonomy/source/deployment (ADR-102 order); `entityIdHierarchy` becomes the same fact the partition serves (one home) |
 
 ### 3.9 Related-issue disposition table
 
@@ -331,5 +341,5 @@ replaced by assertions that CAN fail:
   `community` route. Residual caution: raw-NATS sister use cannot be proven absent from this
   tree — the deletion note in the sister notification (§3.6) covers it, and semsource
   confirmation is being sought in the open channel as cheap insurance.
-- Q8 — **RULED (default adopted): LLM summarization gates to level 0 by default** — the served
+- Q8 — **RE-RULED by O-11 on #1095 (2026-08-26): LLM summarization gates to level 1 (source) by default** — the served
   level; a deliberate cost decision the fake hierarchy never allowed.

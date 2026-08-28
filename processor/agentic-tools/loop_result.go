@@ -167,7 +167,7 @@ func (e *ReadLoopResultExecutor) readLoopResult(ctx context.Context, call agenti
 //
 // Rule templates that substitute `$entity.id` for an agent-loop entity
 // hand the LLM the full 6-part federated string
-// `org.platform.agent.agentic-loop.execution.<uuid>`. The LLM faithfully
+// `org.platform.agentic-loop.agent.execution.<uuid>`. The LLM faithfully
 // copies that into the tool call. The bucket only knows about
 // `<uuid>` — the trailing segment after the last dot. Templates that
 // switch to `$entity.instance` (preferred — see entity_substitution.go)

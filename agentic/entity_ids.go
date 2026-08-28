@@ -5,13 +5,14 @@ import (
 	"strings"
 
 	"github.com/c360studio/semstreams/message"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 )
 
 // ModelEndpointEntityID constructs a 6-part entity ID for a model registry endpoint.
-// Format: {org}.{platform}.agent.model-registry.endpoint.{endpointName}
+// Format: {org}.{platform}.model-registry.agent.endpoint.{endpointName}
 //
 // Example: ModelEndpointEntityID("c360", "ops", "claude-sonnet")
-// Returns: "c360.ops.agent.model-registry.endpoint.claude-sonnet"
+// Returns: "c360.ops.model-registry.agent.endpoint.claude-sonnet"
 //
 // Panics if any input part is empty or contains a dot, as these represent
 // programming errors — the caller is responsible for supplying well-formed identifiers.
@@ -36,7 +37,7 @@ func tryModelEndpointEntityID(org, platform, endpointName string) (string, error
 		return "", err
 	}
 
-	id := fmt.Sprintf("%s.%s.agent.model-registry.endpoint.%s", org, platform, endpointName)
+	id := fmt.Sprintf("%s.%s.model-registry.agent.endpoint.%s", org, platform, endpointName)
 
 	if !message.IsValidEntityID(id) {
 		return "", fmt.Errorf("constructed id %q failed IsValidEntityID — check input values", id)
@@ -46,10 +47,10 @@ func tryModelEndpointEntityID(org, platform, endpointName string) (string, error
 }
 
 // LoopExecutionEntityID constructs a 6-part entity ID for an agentic loop execution.
-// Format: {org}.{platform}.agent.agentic-loop.execution.{loopID}
+// Format: {org}.{platform}.agentic-loop.agent.execution.{loopID}
 //
 // Example: LoopExecutionEntityID("c360", "ops", "abc123")
-// Returns: "c360.ops.agent.agentic-loop.execution.abc123"
+// Returns: "c360.ops.agentic-loop.agent.execution.abc123"
 //
 // Panics if any input part is empty or contains a dot. Suitable for
 // boot-time and post-completion paths where invalid input represents
@@ -89,7 +90,7 @@ func TryLoopExecutionEntityID(org, platform, loopID string) (string, error) {
 		return "", fmt.Errorf("LoopExecutionEntityID: %w", err)
 	}
 
-	id := fmt.Sprintf("%s.%s.agent.agentic-loop.execution.%s", org, platform, loopID)
+	id := fmt.Sprintf("%s.%s.agentic-loop.agent.execution.%s", org, platform, loopID)
 
 	if !message.IsValidEntityID(id) {
 		return "", fmt.Errorf("LoopExecutionEntityID: constructed id %q failed IsValidEntityID — check input values", id)
@@ -99,18 +100,18 @@ func TryLoopExecutionEntityID(org, platform, loopID string) (string, error) {
 }
 
 // ChainExecutionEntityID constructs a 6-part entity ID for a cross-arc agent chain.
-// Format: {org}.{platform}.agent.chain.execution.{chainID}
+// Format: {org}.{platform}.chain.agent.execution.{chainID}
 //
 // Example: ChainExecutionEntityID("c360", "ops", "abc123")
-// Returns: "c360.ops.agent.chain.execution.abc123"
+// Returns: "c360.ops.chain.agent.execution.abc123"
 //
 // A chain entity is the canonical anchor for cross-arc data flow: rules and
 // product subscribers stamp milestone triples (chain.dispatched_at,
 // chain.research_artifact_loop, chain.spec_artifact_loop, chain.paused.*,
 // chain.decision.*, ...) on this entity. The chain_id is the dispatch loop's
 // UUID — no new ID generation required at chain start. See semteams ADR-038
-// for the chain-anchor pattern. `chain` is a sibling component to
-// `agentic-loop` within the `agent` domain.
+// for the chain-anchor pattern. `chain` is a sibling system (position 3) to
+// `agentic-loop` within the framework-reserved `agent` domain (position 4).
 //
 // Panics if any input part is empty or contains a dot, as these represent
 // programming errors — the caller is responsible for supplying well-formed identifiers.
@@ -145,7 +146,7 @@ func TryChainExecutionEntityID(org, platform, chainID string) (string, error) {
 		return "", fmt.Errorf("ChainExecutionEntityID: %w", err)
 	}
 
-	id := fmt.Sprintf("%s.%s.agent.chain.execution.%s", org, platform, chainID)
+	id := fmt.Sprintf("%s.%s.chain.agent.execution.%s", org, platform, chainID)
 
 	if !message.IsValidEntityID(id) {
 		return "", fmt.Errorf("ChainExecutionEntityID: constructed id %q failed IsValidEntityID — check input values", id)
@@ -156,28 +157,28 @@ func TryChainExecutionEntityID(org, platform, chainID string) (string, error) {
 
 // LoopIDFromExecutionEntityID extracts the loop_id segment from a 6-part
 // entity ID matching the LoopExecutionEntityID shape:
-// {org}.{platform}.agent.agentic-loop.execution.{loopID}
+// {org}.{platform}.agentic-loop.agent.execution.{loopID}
 //
 // Returns ("", false) when the input is not a valid 6-part entity ID, or
-// when it doesn't match the agent.agentic-loop.execution.* shape (e.g.
+// when it doesn't match the agentic-loop.agent.execution.* shape (e.g.
 // model-registry endpoints, trajectory steps, chain entities, or non-agent
 // entity IDs). Used by the rule engine's publish_agent action to set
 // task.ParentLoopID when a rule fires on a loop-execution-shaped trigger
 // entity, so rule-fanned chains carry their parent linkage natively
 // (semteams ADR-038 §D2).
 //
-// Pure parser: no validation of the loop_id's content beyond IsValidEntityID's
-// alphanumeric/hyphen/underscore guard.
+// Reads positions by NAME through pkg/types.ParseEntityID (ADR-102): the
+// system, domain, and type fields, never fixed indexes. Pure parser: no
+// validation of the loop_id's content beyond the entity-ID grammar.
 func LoopIDFromExecutionEntityID(entityID string) (string, bool) {
-	if !message.IsValidEntityID(entityID) {
+	parsed, err := semtypes.ParseEntityID(entityID)
+	if err != nil {
 		return "", false
 	}
-	parts := strings.Split(entityID, ".")
-	// IsValidEntityID guarantees exactly 6 parts; the indexed reads are safe.
-	if parts[2] != "agent" || parts[3] != "agentic-loop" || parts[4] != "execution" {
+	if parsed.System != "agentic-loop" || parsed.Domain != "agent" || parsed.Type != "execution" {
 		return "", false
 	}
-	return parts[5], true
+	return parsed.Instance, true
 }
 
 // validatePart checks that a single entity ID component is non-empty and contains no dots.

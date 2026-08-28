@@ -28,7 +28,7 @@ func TestKVProviderOutgoingReaderRejectsRowsWithoutCanonicalTarget(t *testing.T)
 			name: "malformed outgoing target",
 			row: relationshipEntry{
 				Predicate:  "robotics.assigned.mission",
-				ToEntityID: "malformed-target",
+				ToEntityID: "malformed-target", // entity-id-audit:classify intentional-malformed "malformed-target" line=31 column=17 surface=go-field:relationshipEntry.ToEntityID entity_id_invalid:arity malformed relationship target rejection fixture
 			},
 		},
 	}

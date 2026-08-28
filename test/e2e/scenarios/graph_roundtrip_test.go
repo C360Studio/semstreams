@@ -97,7 +97,7 @@ func TestGraphRoundTripFixtureIsStructurallyValid(t *testing.T) {
 	t.Parallel()
 
 	updatedAt := time.Date(2026, time.August, 3, 12, 0, 0, 0, time.UTC)
-	entity := newGraphRoundTripEntity("c360.e2e.core.graph.canary.fixture", updatedAt)
+	entity := newGraphRoundTripEntity("c360.e2e.graph.core.canary.fixture", updatedAt)
 	entity.Triples = []message.Triple{{
 		Subject: entity.ID, Predicate: vocabulary.DCTermsTitle, Object: "fixture",
 	}}
@@ -124,7 +124,7 @@ func TestResponseErrorPreservesAllGraphQLErrors(t *testing.T) {
 func TestQueryGraphQLEntityConsumesExactEntityResult(t *testing.T) {
 	t.Parallel()
 
-	const entityID = "c360.e2e.core.graph.canary.fixture"
+	const entityID = "c360.e2e.graph.core.canary.fixture"
 	httpClient := &http.Client{Transport: graphRoundTripTransport(func(r *http.Request) (*http.Response, error) {
 		var request struct {
 			Query string `json:"query"`
@@ -226,7 +226,7 @@ func TestValidateMutationTraceEntries(t *testing.T) {
 const (
 	traceFixtureID = "0123456789abcdef0123456789abcdef"
 	wrongTraceID   = "ffffffffffffffffffffffffffffffff"
-	traceEntityID  = "c360.e2e.core.graph.canary.fixture"
+	traceEntityID  = "c360.e2e.graph.core.canary.fixture"
 )
 
 func mutationTraceFixture() (map[string]mutationTraceExpectation, []client.MessageEntry) {
@@ -240,9 +240,9 @@ func mutationTraceFixture() (map[string]mutationTraceExpectation, []client.Messa
 	}
 	entries := []client.MessageEntry{
 		{Subject: mutationCreateSubject, TraceID: traceFixtureID, SpanID: "1111111111111111",
-			RawData: json.RawMessage(`{"entity":{"id":"c360.e2e.core.graph.canary.fixture"},"trace_id":"0123456789abcdef0123456789abcdef","request_id":"create-request"}`)},
+			RawData: json.RawMessage(`{"entity":{"id":"c360.e2e.graph.core.canary.fixture"},"trace_id":"0123456789abcdef0123456789abcdef","request_id":"create-request"}`)},
 		{Subject: mutationReconcileSubject, TraceID: traceFixtureID, SpanID: "2222222222222222",
-			RawData: json.RawMessage(`{"entity_id":"c360.e2e.core.graph.canary.fixture","trace_id":"0123456789abcdef0123456789abcdef","request_id":"replace-request"}`)},
+			RawData: json.RawMessage(`{"entity_id":"c360.e2e.graph.core.canary.fixture","trace_id":"0123456789abcdef0123456789abcdef","request_id":"replace-request"}`)},
 	}
 	return expected, entries
 }

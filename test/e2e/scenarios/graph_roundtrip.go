@@ -80,7 +80,7 @@ func (p *GraphRoundTripProbe) Run(ctx context.Context, result *Result) error {
 	runCtx, cancel := context.WithTimeout(traceCtx, p.timeout)
 	defer cancel()
 
-	entityID := "c360.e2e.core.graph.canary." + rootTrace.TraceID[:12]
+	entityID := "c360.e2e.graph.core.canary." + rootTrace.TraceID[:12]
 	before := "graph-canary-before-" + rootTrace.TraceID
 	after := "graph-canary-after-" + rootTrace.TraceID
 	requestPrefix := "graph-canary-" + rootTrace.TraceID

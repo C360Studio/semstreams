@@ -8,12 +8,14 @@ import (
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/processor/rule/expression"
+	"github.com/c360studio/semstreams/types"
 )
 
 // TestRule is a functional rule implementation for testing
 type TestRule struct {
 	id            string
 	packID        string
+	platform      types.PlatformMeta
 	name          string
 	subscribed    []string
 	enabled       bool
@@ -24,13 +26,14 @@ type TestRule struct {
 }
 
 // NewTestRule creates a test rule under an explicit stable pack identity.
-func NewTestRule(packID, id, name string, subjects []string, conditions []expression.ConditionExpression) (*TestRule, error) {
+func NewTestRule(platform types.PlatformMeta, packID, id, name string, subjects []string, conditions []expression.ConditionExpression) (*TestRule, error) {
 	if err := validatePackID(packID); err != nil {
 		return nil, err
 	}
 	return &TestRule{
 		id:         id,
 		packID:     packID,
+		platform:   platform,
 		name:       name,
 		subscribed: subjects,
 		enabled:    true,
@@ -126,7 +129,7 @@ func (r *TestRule) ExecuteEvents(messages []message.Message) ([]Event, error) {
 
 	msg := messages[len(messages)-1]
 
-	entityID, err := ruleTriggerEntityID(r.packID, r.id)
+	entityID, err := ruleTriggerEntityID(r.platform.Org, r.platform.Platform, r.packID, r.id)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +181,7 @@ func (f *TestRuleFactory) Create(ruleID string, def Definition, deps Dependencie
 		subjects = nil
 	}
 
-	return NewTestRule(deps.PackID, ruleID, def.Name, subjects, def.Conditions)
+	return NewTestRule(deps.Platform, deps.PackID, ruleID, def.Name, subjects, def.Conditions)
 }
 
 // Validate validates the rule definition

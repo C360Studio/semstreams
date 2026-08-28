@@ -60,7 +60,7 @@ func validEmitDiagnosisCall() agentic.ToolCall {
 			"finding":        "researcher loop exceeded token budget",
 			"recommendation": "reduce max_tokens for researcher endpoint to 4096",
 			"confidence":     0.85,
-			"evidence":       []any{"acme.test.agent.agentic-loop.execution.loop-abc"},
+			"evidence":       []any{"acme.test.agentic-loop.agent.execution.loop-abc"},
 			"observed_role":  "researcher",
 			"severity":       "warn",
 		},
@@ -140,12 +140,12 @@ func TestEmitDiagnosisExecutor_HappyPath(t *testing.T) {
 	assertTriple(agvocab.OpsDiagnosisFinding, "researcher loop exceeded token budget")
 	assertTriple(agvocab.OpsDiagnosisRecommendation, "reduce max_tokens for researcher endpoint to 4096")
 	assertTriple(agvocab.OpsDiagnosisConfidence, "0.85")
-	assertTriple(agvocab.OpsDiagnosisEvidence, "acme.test.agent.agentic-loop.execution.loop-abc")
+	assertTriple(agvocab.OpsDiagnosisEvidence, "acme.test.agentic-loop.agent.execution.loop-abc")
 	assertTriple(agvocab.OpsDiagnosisObservedRole, "researcher")
 	assertTriple(agvocab.OpsDiagnosisSeverity, "warn")
 
 	// executed_by back-link must point to the ops loop entity.
-	wantLoopEntity := "acme.test.agent.agentic-loop.execution.loop-ops-abc"
+	wantLoopEntity := "acme.test.agentic-loop.agent.execution.loop-ops-abc"
 	assertTriple("agent.action.executed-by", wantLoopEntity)
 
 	// Every triple must share the same diagnosis entity as subject (not the
@@ -164,8 +164,8 @@ func TestEmitDiagnosisExecutor_HappyPath(t *testing.T) {
 	}
 
 	// Diagnosis entity must carry the org and platform prefix.
-	if !strings.HasPrefix(diagEntity, "acme.test.ops.diagnosis.finding.") {
-		t.Errorf("diagnosis entity %q must start with acme.test.ops.diagnosis.finding.", diagEntity)
+	if !strings.HasPrefix(diagEntity, "acme.test.diagnosis.ops.finding.") {
+		t.Errorf("diagnosis entity %q must start with acme.test.diagnosis.ops.finding.", diagEntity)
 	}
 
 	// Source must be the ops-emit-diagnosis tag on every triple.
@@ -196,7 +196,7 @@ func TestEmitDiagnosisExecutor_MissingFinding(t *testing.T) {
 		Arguments: map[string]any{
 			"recommendation": "reduce max_tokens",
 			"confidence":     0.5,
-			"evidence":       []any{"acme.test.agent.agentic-loop.execution.loop-abc"},
+			"evidence":       []any{"acme.test.agentic-loop.agent.execution.loop-abc"},
 		},
 	})
 	if err != nil {
@@ -223,7 +223,7 @@ func TestEmitDiagnosisExecutor_MissingRecommendation(t *testing.T) {
 		Arguments: map[string]any{
 			"finding":    "something wrong",
 			"confidence": 0.5,
-			"evidence":   []any{"acme.test.agent.agentic-loop.execution.loop-abc"},
+			"evidence":   []any{"acme.test.agentic-loop.agent.execution.loop-abc"},
 		},
 	})
 	if res.ErrorKind != agentic.ToolErrorInvalidArgs {
@@ -244,7 +244,7 @@ func TestEmitDiagnosisExecutor_MissingConfidence(t *testing.T) {
 		Arguments: map[string]any{
 			"finding":        "something wrong",
 			"recommendation": "fix it",
-			"evidence":       []any{"acme.test.agent.agentic-loop.execution.loop-abc"},
+			"evidence":       []any{"acme.test.agentic-loop.agent.execution.loop-abc"},
 		},
 	})
 	if res.ErrorKind != agentic.ToolErrorInvalidArgs {
@@ -266,7 +266,7 @@ func TestEmitDiagnosisExecutor_NonNumericConfidence(t *testing.T) {
 			"finding":        "something wrong",
 			"recommendation": "fix it",
 			"confidence":     "high", // should be a number
-			"evidence":       []any{"acme.test.agent.agentic-loop.execution.loop-abc"},
+			"evidence":       []any{"acme.test.agentic-loop.agent.execution.loop-abc"},
 		},
 	})
 	if res.ErrorKind != agentic.ToolErrorInvalidArgs {
@@ -298,7 +298,7 @@ func TestEmitDiagnosisExecutor_ConfidenceOutOfRange(t *testing.T) {
 					"finding":        "something wrong",
 					"recommendation": "fix it",
 					"confidence":     tt.confidence,
-					"evidence":       []any{"acme.test.agent.agentic-loop.execution.loop-abc"},
+					"evidence":       []any{"acme.test.agentic-loop.agent.execution.loop-abc"},
 				},
 			})
 			if res.ErrorKind != agentic.ToolErrorInvalidArgs {
@@ -366,7 +366,7 @@ func TestEmitDiagnosisExecutor_ObservedRoleOmitted(t *testing.T) {
 			"finding":        "something wrong",
 			"recommendation": "fix it",
 			"confidence":     0.5,
-			"evidence":       []any{"acme.test.agent.agentic-loop.execution.loop-abc"},
+			"evidence":       []any{"acme.test.agentic-loop.agent.execution.loop-abc"},
 			// observed_role intentionally absent
 		},
 	})
@@ -404,7 +404,7 @@ func TestEmitDiagnosisExecutor_SeverityDefaultsToInfo(t *testing.T) {
 			"finding":        "something wrong",
 			"recommendation": "fix it",
 			"confidence":     0.5,
-			"evidence":       []any{"acme.test.agent.agentic-loop.execution.loop-abc"},
+			"evidence":       []any{"acme.test.agentic-loop.agent.execution.loop-abc"},
 			// severity intentionally absent
 		},
 	})
@@ -439,7 +439,7 @@ func TestEmitDiagnosisExecutor_SeverityInvalidClampsToInfo(t *testing.T) {
 			"finding":        "something wrong",
 			"recommendation": "fix it",
 			"confidence":     0.5,
-			"evidence":       []any{"acme.test.agent.agentic-loop.execution.loop-abc"},
+			"evidence":       []any{"acme.test.agentic-loop.agent.execution.loop-abc"},
 			"severity":       "medium", // invalid enum value
 		},
 	})
@@ -484,11 +484,11 @@ func TestEmitDiagnosisExecutor_MultiEvidence(t *testing.T) {
 	e := newEmitDiagnosisExecutor(pub)
 
 	evidence := []any{
-		"acme.test.agent.agentic-loop.execution.loop-001",
-		"acme.test.agent.agentic-loop.execution.loop-002",
-		"acme.test.agent.agentic-loop.execution.loop-003",
-		"acme.test.agent.agentic-loop.execution.loop-004",
-		"acme.test.agent.agentic-loop.execution.loop-005",
+		"acme.test.agentic-loop.agent.execution.loop-001",
+		"acme.test.agentic-loop.agent.execution.loop-002",
+		"acme.test.agentic-loop.agent.execution.loop-003",
+		"acme.test.agentic-loop.agent.execution.loop-004",
+		"acme.test.agentic-loop.agent.execution.loop-005",
 	}
 
 	_, err := e.Execute(context.Background(), agentic.ToolCall{
@@ -542,7 +542,7 @@ func TestEmitDiagnosisExecutor_UnknownTool(t *testing.T) {
 
 // TestEmitDiagnosisExecutor_DiagnosisEntityIDShape double-checks that each
 // call mints a distinct diagnosis entity and the entity ID follows the
-// {org}.{platform}.ops.diagnosis.finding.{uuid} shape.
+// {org}.{platform}.diagnosis.ops.finding.{uuid} shape.
 func TestEmitDiagnosisExecutor_DiagnosisEntityIDShape(t *testing.T) {
 	e := NewEmitDiagnosisExecutor(
 		&recordingPublisher{},
@@ -559,7 +559,7 @@ func TestEmitDiagnosisExecutor_DiagnosisEntityIDShape(t *testing.T) {
 				"finding":        "test",
 				"recommendation": "test",
 				"confidence":     0.5,
-				"evidence":       []any{"acme.test.agent.agentic-loop.execution.loop-abc"},
+				"evidence":       []any{"acme.test.agentic-loop.agent.execution.loop-abc"},
 			},
 		}
 	}
@@ -577,7 +577,7 @@ func TestEmitDiagnosisExecutor_DiagnosisEntityIDShape(t *testing.T) {
 		t.Errorf("two calls produced the same diagnosis entity ID — IDs must be unique")
 	}
 
-	wantPrefix := "c360.deep-research.ops.diagnosis.finding."
+	wantPrefix := "c360.deep-research.diagnosis.ops.finding."
 	if !strings.HasPrefix(id1, wantPrefix) {
 		t.Errorf("diagnosis entity %q does not have prefix %q", id1, wantPrefix)
 	}
@@ -606,11 +606,11 @@ func TestEmitDiagnosisExecutor_LoopEntityBacklink(t *testing.T) {
 			"finding":        "test",
 			"recommendation": "test",
 			"confidence":     0.5,
-			"evidence":       []any{"acme.test.agent.agentic-loop.execution.loop-abc"},
+			"evidence":       []any{"acme.test.agentic-loop.agent.execution.loop-abc"},
 		},
 	})
 
-	wantLoopEntity := fmt.Sprintf("c360.ops.agent.agentic-loop.execution.my-ops-loop")
+	wantLoopEntity := fmt.Sprintf("c360.ops.agentic-loop.agent.execution.my-ops-loop")
 	for _, tr := range pub.triples {
 		if tr.Predicate == "agent.action.executed-by" {
 			if tr.Object != wantLoopEntity {

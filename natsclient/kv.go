@@ -518,7 +518,7 @@ func (kv *KVStore) KeysByPrefix(ctx context.Context, prefix string) ([]string, e
 
 // KeysByFilter returns all keys matching an exact NATS subject filter. Unlike
 // KeysByPrefix, this supports fixed-position wildcards such as
-// "*.org.platform.domain.system.type.instance".
+// "*.org.platform.system.domain.type.instance" (ADR-102 canonical order).
 //
 // A filtered key listing is a correctness boundary for derived-index
 // reconciliation. The NATS KeyLister closes its channel when ctx is cancelled,

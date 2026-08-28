@@ -77,7 +77,7 @@ semsource-side question, not a SemStreams framework decision.)
 
 ## The Lesson Lifecycle
 
-A lesson is a first-class graph entity — `{org}.{platform}.agent.lesson.record.{uuid5}` — with a
+A lesson is a first-class graph entity — `{org}.{platform}.lesson.agent.record.{uuid5}` — with a
 gated lifecycle. Only `active` lessons are ever injected.
 
 ```mermaid
@@ -241,7 +241,7 @@ intent (no identity fields). For the template's identity:
   "category": "retry-policy",
   "polarity": "avoid",
   "severity": "warning",
-  "evidence_entity_ids": ["c360.lesson-example.agent.agentic-loop.execution.loop-0001"],
+  "evidence_entity_ids": ["c360.lesson-example.agentic-loop.agent.execution.loop-0001"],
   "applies_to": ["tag:lesson-example"]
 }
 ```
@@ -249,18 +249,18 @@ intent (no identity fields). For the template's identity:
 Each argument maps to one `agent.lesson.*` predicate on the born entity;
 `evidence_entity_ids` cites the loop/trajectory/entity the lesson was derived
 from (a loop execution entity is
-`{org}.{platform}.agent.agentic-loop.execution.{loopID}`). The gates
+`{org}.{platform}.agentic-loop.agent.execution.{loopID}`). The gates
 (`evidence`, `bound`, `grammar`, `cap`) reject a malformed call with an
 instructive error rather than truncating it.
 
 The lesson is born `status="proposed"` with a **content-derived** entity ID
-(`{org}.{platform}.agent.lesson.record.{uuid5}` over category + sorted
+(`{org}.{platform}.lesson.agent.record.{uuid5}` over category + sorted
 `applies_to` + summary + sorted evidence), so re-emitting the identical lesson is
 idempotent. The tool result reports the minted ID and persisted status:
 
 ```json
 {
-  "lesson_id": "c360.lesson-example.agent.lesson.record.<uuid5>",
+  "lesson_id": "c360.lesson-example.lesson.agent.record.<uuid5>",
   "lesson_status": "proposed",
   "lesson_created": true
 }
@@ -297,7 +297,7 @@ It returns a JSON array of triples; the freshly emitted lesson reads `proposed`:
 ```json
 [
   {
-    "subject": "c360.lesson-example.agent.lesson.record.<uuid5>",
+    "subject": "c360.lesson-example.lesson.agent.record.<uuid5>",
     "predicate": "agent.lesson.status",
     "object": "proposed",
     "source": "ops-emit-lesson",
@@ -369,7 +369,7 @@ scope as `tag:lesson-example`, the matcher selects the now-`active` lesson (only
 
 ```text
 [Lessons — durable guidance distilled from prior work; matched 1, showing 1]
-- Avoid unbounded retries on network timeouts; cap at 3 attempts. (c360.lesson-example.agent.lesson.record.<uuid5>)
+- Avoid unbounded retries on network timeouts; cap at 3 attempts. (c360.lesson-example.lesson.agent.record.<uuid5>)
 ```
 
 The header states **matched-versus-included** counts, so any truncation by the

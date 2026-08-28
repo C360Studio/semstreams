@@ -28,7 +28,7 @@ import "time"
 // a declared predicate.
 type Participant interface {
 	// EntityID returns the 6-part federated graph entity ID
-	// (org.platform.domain.system.type.instance). Used as the
+	// (org.platform.system.domain.type.instance). Used as the
 	// canonical identifier across the graph, KV, and operator API.
 	EntityID() string
 

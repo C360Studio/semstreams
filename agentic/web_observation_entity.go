@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/message"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
@@ -18,7 +19,9 @@ import (
 // as the instance segment. 16 hex chars = 64 bits of entropy. Long
 // enough to make collisions vanishingly unlikely at any realistic graph
 // scale; short enough to keep entity IDs and NATS subjects compact.
-const webObservationInstanceLen = 16
+// Derived from the family table so the length lives in one home: the
+// same value binds the authority-pair budget at configuration load.
+var webObservationInstanceLen = semtypes.WebObservationIdentityFamily().InstanceBytes
 
 // CategoryWebObservation identifies graph entities that represent one
 // canonical URL observed by agent tools.
@@ -86,6 +89,7 @@ type WebObservationEntity struct {
 func (e *WebObservationEntity) EntityID() string {
 	id, _, err := TryWebObservationEntityID(e.Org, e.Platform, e.CanonicalURL)
 	if err != nil {
+		// entity-id-audit:classify intentional-sentinel "" line=93 column=10 surface=go-return:EntityID entity_id_invalid:empty documented web observation failure return; graph-ingest rejects an empty ID and a decoded payload must not panic
 		return ""
 	}
 	return id
@@ -184,11 +188,11 @@ func (e *WebObservationEntity) UnmarshalJSON(data []byte) error {
 // URL observed by an agent (web_search) or fetched by an agent
 // (http_request), along with the canonical URL the entity represents.
 // Same URL across loops → same entity ID, so observations naturally
-// dedup: rule queries against agent.web.observation entities see one
+// dedup: rule queries against web.agent.observation entities see one
 // vertex per URL with whatever predicates the system has so far
 // accumulated.
 //
-// Format: {org}.{platform}.agent.web.observation.{sha256-hex-16}
+// Format: {org}.{platform}.web.agent.observation.{sha256-hex-16}
 //
 // Returns ("", "", error) when org/platform are empty or contain dots,
 // when rawURL fails to parse, or when the constructed ID fails
@@ -230,9 +234,12 @@ func TryWebObservationEntityID(org, platform, rawURL string) (entityID, canonica
 	sum := sha256.Sum256([]byte(canonicalURL))
 	instance := hex.EncodeToString(sum[:])[:webObservationInstanceLen]
 
-	id := fmt.Sprintf("%s.%s.agent.web.observation.%s", org, platform, instance)
-	if !message.IsValidEntityID(id) {
-		return "", "", fmt.Errorf("WebObservationEntityID: constructed id %q failed IsValidEntityID — check input values", id)
+	// The web.agent.observation prefix is declared once, in the framework
+	// identity-family table (ADR-102, ruled O-14); composing from it keeps
+	// this builder from becoming a second spelling of the same family.
+	id, err := semtypes.WebObservationIdentityFamily().EntityID(org, platform, instance)
+	if err != nil {
+		return "", "", fmt.Errorf("WebObservationEntityID: %w", err)
 	}
 	return id, canonicalURL, nil
 }

@@ -386,7 +386,7 @@ const MetadataKeyRunID = "agent.run_id"
 
 // MetadataKeyRunEntityID is the ToolCall.Metadata key carrying the
 // resolved 6-part chain execution entity ID
-// (org.platform.agent.chain.execution.<runID>) for the loop's run
+// (org.platform.chain.agent.execution.<runID>) for the loop's run
 // anchor. Mirrors LoopCreatedEvent.RunEntityID / LoopCompletedEvent.
 // RunEntityID so a tool executor and an event subscriber resolve the
 // same run/chain entity.

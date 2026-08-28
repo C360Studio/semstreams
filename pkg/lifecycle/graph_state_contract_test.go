@@ -17,8 +17,8 @@ func TestGetPoisonIsScopedAndRepairIsObservedOnNextRead(t *testing.T) {
 	t.Parallel()
 
 	mgr, _, bucket := newTestManager(t)
-	poisonID := "acme.ops.lifecycle.gcs.mission.poisoned-a"
-	validID := "acme.ops.lifecycle.gcs.mission.valid-b"
+	poisonID := "acme.ops.gcs.lifecycle.mission.poisoned-a"
+	validID := "acme.ops.gcs.lifecycle.mission.valid-b"
 	bucket.raw[poisonID] = poisonedLifecycleState(poisonID)
 	bucket.put(validID, validLifecycleState(validID))
 
@@ -47,7 +47,7 @@ func TestGetPoisonIsScopedAndRepairIsObservedOnNextRead(t *testing.T) {
 func TestPoisonedMutationPreconditionEmitsNoMutation(t *testing.T) {
 	t.Parallel()
 	mgr, emitter, bucket := newTestManager(t)
-	entityID := "acme.ops.lifecycle.gcs.mission.poisoned"
+	entityID := "acme.ops.gcs.lifecycle.mission.poisoned"
 	bucket.raw[entityID] = poisonedLifecycleState(entityID)
 
 	err := mgr.Transition(context.Background(), "fixture", entityID, "flying", TransitionSourceRule, "go")
@@ -62,7 +62,7 @@ func TestPoisonedMutationPreconditionEmitsNoMutation(t *testing.T) {
 func TestListFiltersWorkflowBeforeDecodeAndReturnsNoPartialOnMatchingPoison(t *testing.T) {
 	t.Parallel()
 	mgr, _, bucket := newTestManager(t)
-	validID := "acme.ops.lifecycle.gcs.mission.valid"
+	validID := "acme.ops.gcs.lifecycle.mission.valid"
 	nonmatchingPoisonID := "acme.ops.other.gcs.device.poison"
 	bucket.put(validID, validLifecycleState(validID))
 	bucket.raw[nonmatchingPoisonID] = poisonedLifecycleState(nonmatchingPoisonID)
@@ -73,7 +73,7 @@ func TestListFiltersWorkflowBeforeDecodeAndReturnsNoPartialOnMatchingPoison(t *t
 		t.Fatalf("List with nonmatching poison = (%#v, %v), want valid entity", participants, err)
 	}
 
-	matchingPoisonID := "acme.ops.lifecycle.gcs.mission.poison"
+	matchingPoisonID := "acme.ops.gcs.lifecycle.mission.poison"
 	bucket.raw[matchingPoisonID] = poisonedLifecycleState(matchingPoisonID)
 	bucket.listKeys = []string{validID, matchingPoisonID}
 	participants, err = mgr.List(context.Background(), "fixture", ListOptions{})
@@ -109,7 +109,7 @@ func (r classifiedPoisonRequester) RequestClassified(
 func TestProductionExactRPCPoisonPreservesClassificationWithoutConcreteCause(t *testing.T) {
 	t.Parallel()
 	mgr, emitter, _ := newTestManager(t)
-	entityID := "acme.ops.lifecycle.gcs.mission.poisoned"
+	entityID := "acme.ops.gcs.lifecycle.mission.poisoned"
 	mgr.exactReader = graph.NewExactEntityReader(classifiedPoisonRequester{entityID: entityID}, time.Second)
 
 	participant, err := mgr.Get(context.Background(), "fixture", entityID)
@@ -137,7 +137,7 @@ func TestHistoryReturnsNoPartialEventsWhenCurrentEntityIsPoisoned(t *testing.T) 
 	t.Parallel()
 
 	mgr, _, bucket := newTestManager(t)
-	entityID := "acme.ops.lifecycle.gcs.mission.history"
+	entityID := "acme.ops.gcs.lifecycle.mission.history"
 	bucket.raw[entityID] = poisonedLifecycleState(entityID)
 
 	events, err := mgr.History(context.Background(), "fixture", entityID)
@@ -154,7 +154,7 @@ func TestHistoryRejectsMalformedTransitionRecordAsAWhole(t *testing.T) {
 	t.Parallel()
 
 	mgr, _, bucket := newTestManager(t)
-	entityID := "acme.ops.lifecycle.gcs.mission.malformed-history"
+	entityID := "acme.ops.gcs.lifecycle.mission.malformed-history"
 	bucket.put(entityID, &graph.EntityState{
 		ID: entityID,
 		Triples: []message.Triple{
@@ -176,7 +176,7 @@ func TestHistoryRejectsTransitionRecordDriftFromCurrentPhase(t *testing.T) {
 	t.Parallel()
 
 	mgr, _, bucket := newTestManager(t)
-	entityID := "acme.ops.lifecycle.gcs.mission.drifted-history"
+	entityID := "acme.ops.gcs.lifecycle.mission.drifted-history"
 	record := newTransitionRecord("", "planning", time.Now(), TransitionSourceFramework, "created")
 	bucket.put(entityID, &graph.EntityState{
 		ID: entityID,

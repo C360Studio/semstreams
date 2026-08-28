@@ -53,7 +53,7 @@ func (r *recordingPublisher) Append(_ context.Context, triples []message.Triple)
 func TestTriplePublisher_InterfaceShape(t *testing.T) {
 	var pub TriplePublisher = &recordingPublisher{}
 	assert.NotNil(t, pub)
-	entityID := semantictest.EntityID(t, "c360", "ops", "agent", "agentic-loop", "execution", "rg-x")
+	entityID := semantictest.EntityID(t, "c360", "ops", "agentic-loop", "agent", "execution", "rg-x")
 	err := pub.Create(context.Background(), entityID, message.Type{Domain: "agentic", Category: "loop_execution", Version: "v1"}, []message.Triple{{Subject: entityID, Predicate: semantictest.Predicate(t, "test", "publisher", "shape"), Object: "z", Timestamp: time.Now()}})
 	assert.NoError(t, err)
 	err = pub.Append(context.Background(), []message.Triple{{Subject: entityID, Predicate: semantictest.Predicate(t, "test", "publisher", "append"), Object: "z", Timestamp: time.Now()}})
@@ -71,7 +71,7 @@ func (l *countingLogger) Warn(_ string, _ ...any) { l.warns++ }
 // (the kickoff is best-effort, non-fatal) rather than panicking.
 func TestBirthLoopEntityWithTriples_NilPublisher_Degraded(t *testing.T) {
 	lg := &countingLogger{}
-	err := BirthLoopEntityWithTriples(context.Background(), nil, lg, "research_graph_tool", "rg_x", "c360.ops.agent.agentic-loop.execution.rg_x", message.Type{}, nil)
+	err := BirthLoopEntityWithTriples(context.Background(), nil, lg, "research_graph_tool", "rg_x", "c360.ops.agentic-loop.agent.execution.rg_x", message.Type{}, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, lg.warns, "nil publisher must log a single degraded warn")
 }
@@ -81,7 +81,7 @@ func TestBirthLoopEntityWithTriples_NilPublisher_Degraded(t *testing.T) {
 // the gh#390 fix: the FIRST write must CREATE the entity, not append to it.
 func TestBirthLoopEntityWithTriples_Success(t *testing.T) {
 	pub := &recordingPublisher{}
-	entityID := semantictest.EntityID(t, "c360", "ops", "agent", "agentic-loop", "execution", "rg-x")
+	entityID := semantictest.EntityID(t, "c360", "ops", "agentic-loop", "agent", "execution", "rg-x")
 	want := message.Type{Domain: "agentic", Category: "loop_execution", Version: "v1"}
 	triples := []message.Triple{{Subject: entityID, Predicate: semantictest.Predicate(t, "research", "graph", "topic"), Object: "drones", Timestamp: time.Now()}}
 
@@ -101,7 +101,7 @@ func TestBirthLoopEntityWithTriples_Success(t *testing.T) {
 func TestBirthLoopEntityWithTriples_Failure_Propagates(t *testing.T) {
 	pub := &recordingPublisher{err: assert.AnError}
 	lg := &countingLogger{}
-	err := BirthLoopEntityWithTriples(context.Background(), pub, lg, "research_graph_tool", "rg_x", "c360.ops.agent.agentic-loop.execution.rg_x", message.Type{}, nil)
+	err := BirthLoopEntityWithTriples(context.Background(), pub, lg, "research_graph_tool", "rg_x", "c360.ops.agentic-loop.agent.execution.rg_x", message.Type{}, nil)
 	assert.Error(t, err)
 	assert.Equal(t, 1, lg.warns, "a birth failure must log a single warn")
 }

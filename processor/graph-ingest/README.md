@@ -81,19 +81,22 @@ sensor.processed   ─┤                 │
 When `enable_hierarchy` is enabled, the component automatically creates container entities based on the 6-part entity ID structure:
 
 ```
-org.platform.domain.system.type.instance
+org.platform.system.domain.type.instance
  │      │       │      │     │      │
  └──────┴───────┴──────┴─────┴──────┴─► Real entity
         │       │      │     │
-        └───────┴──────┴─────┴─► Type container (*.group)
+        └───────┴──────┴─────┴─► Type container (5-part prefix + .group)
                 │      │
-                └──────┴─► System container (*.container)
+                └──────┴─► Taxonomy container (4-part prefix, source × domain, + .group.container)
                        │
-                       └─► Domain container (*.level)
+                       └─► Source container (3-part prefix + .group.container.level)
 ```
 
+The padding tokens `group`, `container`, `level` are contract-reserved instance values
+(`pkg/types.IsReservedInstanceToken`); containers retire with gh#606 (ADR-099).
+
 This creates edges that enable:
-- Efficient traversal by type, system, or domain
+- Efficient traversal by type, taxonomy, or source
 - Automatic grouping without explicit relationship creation
 - Query-time aggregation by hierarchy level
 

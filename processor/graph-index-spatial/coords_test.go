@@ -97,7 +97,7 @@ func TestSpatialResult_JSONShape(t *testing.T) {
 
 func TestSpatialResult_JSONRoundTrip(t *testing.T) {
 	original := SpatialResult{
-		ID:   "acme.logistics.environmental.sensor.temperature.sensor-042",
+		ID:   "acme.logistics.sensor.environmental.temperature.sensor-042",
 		Type: "entity",
 		Lat:  37.7749,
 		Lon:  -122.4194,

@@ -86,7 +86,7 @@ CommunityPrompt = PromptTemplate{
     System: `You are an analyst summarizing communities of related entities.
 
 Entity IDs follow a 6-part federated notation:
-  {org}.{platform}.{domain}.{system}.{type}.{instance}
+  {org}.{platform}.{system}.{domain}.{type}.{instance}
 
 Parts:
 - org: Organization identifier (multi-tenancy)
@@ -145,7 +145,7 @@ ID: {{.ID}}
 Prompts understand the federated entity ID notation:
 
 ```
-{org}.{platform}.{domain}.{system}.{type}.{instance}
+{org}.{platform}.{system}.{domain}.{type}.{instance}
 ```
 
 | Part | Index | Example | Purpose |

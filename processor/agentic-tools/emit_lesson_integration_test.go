@@ -125,7 +125,7 @@ func validLessonToolCall(id string) *agentic.ToolCall {
 			"category":            "retention-policy",
 			"polarity":            "avoid",
 			"severity":            "warning",
-			"evidence_entity_ids": []any{"acme.ops.agent.agentic-loop.execution.loop-abc"},
+			"evidence_entity_ids": []any{"acme.ops.agentic-loop.agent.execution.loop-abc"},
 			"applies_to":          []any{"tag:ops", "id:acme.ops.agent"},
 		},
 	}
@@ -190,7 +190,7 @@ func TestIntegration_EmitLesson_ProductionWire(t *testing.T) {
 	entityID, _ := res1.Metadata["lesson_id"].(string)
 	require.NotEmpty(t, entityID, "result must carry lesson_id")
 	require.True(t, message.IsValidEntityID(entityID), "lesson_id must be a valid 6-part entity ID")
-	assert.Contains(t, entityID, "acme.ops.agent.lesson.record.")
+	assert.Contains(t, entityID, "acme.ops.lesson.agent.record.")
 
 	// Read the entity straight from ENTITY_STATES KV.
 	js, err := natsClient.JetStream()
@@ -209,9 +209,9 @@ func TestIntegration_EmitLesson_ProductionWire(t *testing.T) {
 	statusVals := objectsFor(&es, "agent.lesson.status")
 	require.Len(t, statusVals, 1, "exactly one status triple")
 	assert.Equal(t, "proposed", statusVals[0], "lesson must be born proposed")
-	assert.Equal(t, []string{"acme.ops.agent.agentic-loop.execution.loop-abc"}, objectsFor(&es, "agent.lesson.evidence"))
+	assert.Equal(t, []string{"acme.ops.agentic-loop.agent.execution.loop-abc"}, objectsFor(&es, "agent.lesson.evidence"))
 	assert.Len(t, objectsFor(&es, "agent.lesson.applies-to"), 2, "both scope keys persisted")
-	assert.Equal(t, []string{"acme.ops.agent.agentic-loop.execution.loop-ops-int"}, objectsFor(&es, "agent.action.executed-by"),
+	assert.Equal(t, []string{"acme.ops.agentic-loop.agent.execution.loop-ops-int"}, objectsFor(&es, "agent.action.executed-by"),
 		"executed-by back-link derived from the loop id")
 	assert.Equal(t, []string{"ops"}, objectsFor(&es, "agent.lesson.observed-role"), "observed-role derived from loop metadata")
 

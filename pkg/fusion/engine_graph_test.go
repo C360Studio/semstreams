@@ -287,7 +287,7 @@ func TestGraph_FactCap_ObservableAndIndependent(t *testing.T) {
 			Object:    i,
 		})
 	}
-	seed := &fusion.Entity{ID: "S", Triples: triples}
+	seed := &fusion.Entity{ID: "acme.ops.src.fusion.fact.multisource", Triples: triples}
 	resp := fuseGraph(t, graphSeed(seed), refLens{})
 
 	node := resp.Graph.Nodes[0]
@@ -312,7 +312,7 @@ func TestGraph_EdgeCap_Truncates(t *testing.T) {
 	for i := range 260 {
 		triples = append(triples, message.Triple{Predicate: refEdgePred, Object: fmt.Sprintf("t%03d", i)})
 	}
-	seed := &fusion.Entity{ID: "S", Triples: triples}
+	seed := &fusion.Entity{ID: "acme.ops.src.fusion.fact.multisource", Triples: triples}
 	resp := fuseGraph(t, graphSeed(seed), refLens{})
 
 	if len(resp.Graph.Edges) != 256 {
@@ -334,7 +334,7 @@ func TestGraph_EvidenceCap_Truncates(t *testing.T) {
 	for i := range 10 {
 		triples = append(triples, message.Triple{Predicate: refEdgePred, Object: "B", Source: fmt.Sprintf("sensor-%d", i)})
 	}
-	seed := &fusion.Entity{ID: "S", Triples: triples}
+	seed := &fusion.Entity{ID: "acme.ops.src.fusion.fact.multisource", Triples: triples}
 	resp := fuseGraph(t, graphSeed(seed), refLens{})
 
 	if len(resp.Graph.Edges) != 1 {
@@ -642,14 +642,14 @@ func TestGraph_FactEvidenceCap_Truncates(t *testing.T) {
 	triples := make([]message.Triple, 0, 10)
 	for i := range 10 {
 		triples = append(triples, message.Triple{
-			Subject:   "S",
+			Subject:   "acme.ops.src.fusion.fact.multisource",
 			Predicate: "acme.fact.multisource",
 			Object:    "same-value",
 			Source:    fmt.Sprintf("producer-%02d", i),
 			Timestamp: time.Date(2026, 7, 19, 0, 0, i, 0, time.UTC),
 		})
 	}
-	seed := &fusion.Entity{ID: "S", Triples: triples}
+	seed := &fusion.Entity{ID: "acme.ops.src.fusion.fact.multisource", Triples: triples}
 	resp := fuseGraph(t, graphSeed(seed), refLens{})
 
 	if len(resp.Graph.Nodes) != 1 {

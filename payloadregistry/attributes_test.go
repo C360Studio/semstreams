@@ -25,7 +25,7 @@ func attrRegistration(domain, category, version string) *Registration {
 
 func lessonLikeContract(name string, messageType types.Type) contract.Contract {
 	return contract.Contract{
-		Name: name, MessageType: messageType, EntityPattern: "*.*.agent.lesson.record.*",
+		Name: name, MessageType: messageType, EntityPattern: "*.*.lesson.agent.record.*",
 		BirthPredicates: []string{"agent.lesson.category"},
 	}
 }
@@ -158,7 +158,7 @@ func TestContractsReturnsIndependentSortedCopies(t *testing.T) {
 	loop := attrRegistration("agentic", "loop_execution", "v1")
 	loopContract := func(name string) contract.Contract {
 		return contract.Contract{
-			Name: name, EntityPattern: "*.*.agent.agentic-loop.execution.*",
+			Name: name, EntityPattern: "*.*.agentic-loop.agent.execution.*",
 			BirthPredicates: []string{"agent.loop.role"},
 		}
 	}

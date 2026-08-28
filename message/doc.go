@@ -186,16 +186,16 @@
 //	// EntityType is derived from EntityID
 //	entityID := EntityID{
 //	    Org: "c360", Platform: "platform1",
-//	    Domain: "robotics", Type: "drone",
-//	    System: "mav1", Instance: "1",
+//	    System: "mav1", Domain: "robotics",
+//	    Type: "drone", Instance: "1",
 //	}
 //	entityType := entityID.EntityType()  // Returns EntityType{Domain: "robotics", Type: "drone"}
 //	// Used for: Graph queries like "find all robotics.drone entities"
 //
-// ## 3. EntityID (Federated Identity) - "org.platform.domain.system.type.instance"
+// ## 3. EntityID (Federated Identity) - "org.platform.system.domain.type.instance"
 //
 // Purpose: Provides globally unique entity identifiers across federated platforms.
-// Format: EntityID with 6 parts -> "c360.platform1.robotics.mav1.drone.1"
+// Format: EntityID with 6 parts -> "c360.platform1.mav1.robotics.drone.1"
 //
 // Use When:
 //   - Multi-platform deployments need unique entity identity
@@ -206,14 +206,14 @@
 // Example:
 //
 //	entityID := EntityID{
-//	    Org:      "c360",      // Organization namespace
-//	    Platform: "platform1", // Platform instance
-//	    Domain:   "robotics",  // Data domain
-//	    System:   "mav1",      // Message source system
-//	    Type:     "drone",     // Entity type
-//	    Instance: "1",         // Local instance ID
+//	    Org:      "c360",      // Organization namespace (platform.org)
+//	    Platform: "platform1", // Minting deployment authority (platform.id)
+//	    System:   "mav1",      // Source that produced the entity
+//	    Domain:   "robotics",  // Delegated taxonomy
+//	    Type:     "drone",     // Entity type within the domain
+//	    Instance: "1",         // Leaf identifier
 //	}
-//	// Key(): "c360.platform1.robotics.mav1.drone.1"
+//	// Key(): "c360.platform1.mav1.robotics.drone.1"
 //	// Used for: Federated entity resolution and deduplication
 //
 // ## Type Relationships

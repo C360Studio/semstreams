@@ -39,15 +39,16 @@ type Document struct {
 }
 
 // EntityID returns a deterministic 6-part federated entity ID following the pattern:
-// {org}.{platform}.{domain}.{system}.{type}.{instance}
+// {org}.{platform}.{system}.{domain}.{type}.{instance} — canonical order (ADR-102):
+// system = document (the source), domain = content (this example's delegated taxonomy).
 //
-// Example: "acme.logistics.content.document.safety.doc-001"
+// Example: "acme.logistics.document.content.safety.doc-001"
 func (d *Document) EntityID() string {
 	category := d.Category
 	if category == "" {
 		category = "general"
 	}
-	return fmt.Sprintf("%s.%s.content.document.%s.%s",
+	return fmt.Sprintf("%s.%s.document.content.%s.%s",
 		d.OrgID,
 		d.Platform,
 		category,

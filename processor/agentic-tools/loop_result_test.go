@@ -315,7 +315,7 @@ func TestNormalizeLoopID(t *testing.T) {
 		name, in, want string
 	}{
 		{"bare uuid", "c1e90237-1cd5-4def-99ab-aabbccddeeff", "c1e90237-1cd5-4def-99ab-aabbccddeeff"},
-		{"full entity id", "c360.osh-demo-001.agent.agentic-loop.execution.c1e90237-1cd5", "c1e90237-1cd5"},
+		{"full entity id", "c360.osh-demo-001.agentic-loop.agent.execution.c1e90237-1cd5", "c1e90237-1cd5"},
 		{"three parts", "agentic-loop.execution.uuid-here", "uuid-here"},
 		{"empty stays empty", "", ""},
 		{"single char", "x", "x"},
@@ -343,7 +343,7 @@ func TestNormalizeLoopID(t *testing.T) {
 func TestReadLoopResultExecutor_FullEntityIDLoopArg(t *testing.T) {
 	kv := newMockLoopsKV()
 	bareLoopID := "c1e90237-1cd5-4def-99ab-aabbccddeeff"
-	fullEntityID := "c360.osh-demo-001.agent.agentic-loop.execution." + bareLoopID
+	fullEntityID := "c360.osh-demo-001.agentic-loop.agent.execution." + bareLoopID
 	seedCompletion(t, kv, bareLoopID, agentic.LoopCompletedEvent{
 		LoopID:  bareLoopID,
 		Role:    "researcher",

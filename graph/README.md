@@ -15,7 +15,7 @@ Complete local graph state for a single entity, stored in NATS KV as the canonic
 
 ```go
 type EntityState struct {
-    ID          string          // 6-part federated ID: org.platform.domain.system.type.instance
+    ID          string          // 6-part federated ID: org.platform.system.domain.type.instance
     Triples     []message.Triple // All semantic facts about this entity
     StorageRef  *message.StorageReference // Optional reference to full message storage
     MessageType message.Type     // Provenance: which message type created/updated this entity
@@ -36,13 +36,14 @@ lat, found := state.GetPropertyValue("geo.location.latitude")
 
 ### Entity Identification
 
-All entity IDs use the 6-part federated format defined in `message.EntityID`:
+All entity IDs use the 6-part federated format defined in `message.EntityID` (canonical order, ADR-102:
+`org.platform` = the minting deployment authority, `system` = the source, `domain.type` = a delegated taxonomy):
 
 ```
-org.platform.domain.system.type.instance
+org.platform.system.domain.type.instance
 ```
 
-Example: `c360.telemetry.robotics.mavlink.drone.42`
+Example: `c360.telemetry.mavlink.robotics.drone.42`
 
 To parse entity IDs and extract type information:
 

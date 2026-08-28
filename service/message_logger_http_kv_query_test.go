@@ -124,8 +124,8 @@ func TestHandleKVQuery_MissingBucketReturns404WithoutCreating(t *testing.T) {
 // existing callers), a "failed" filter keeps failed EMBEDDING_INDEX records and skips
 // generated ones, and a non-object value never matches.
 func TestRecordMatchesStatus_OptInFailedFilter(t *testing.T) {
-	failed := map[string]any{"entity_id": "e1", "status": "failed", "reason": "connection_refused", "error_msg": "dial: connection refused"}
-	generated := map[string]any{"entity_id": "e2", "status": "generated"}
+	failed := map[string]any{"entity_id": "acme.ops.src.embed.record.e1", "status": "failed", "reason": "connection_refused", "error_msg": "dial: connection refused"}
+	generated := map[string]any{"entity_id": "acme.ops.src.embed.record.e2", "status": "generated"}
 
 	if !recordMatchesStatus(failed, "") || !recordMatchesStatus(generated, "") {
 		t.Fatal("an empty filter must match every record (filter off by default)")

@@ -53,7 +53,7 @@ func TestValidateDefinitionRejectsMalformedEntityPattern(t *testing.T) {
 func TestEntityPatternDoesNotBecomeMessageSubscription(t *testing.T) {
 	t.Parallel()
 
-	rule, err := NewExpressionRule("entity-pattern-rule-test", Definition{
+	rule, err := NewExpressionRule(testPlatform, "entity-pattern-rule-test", Definition{
 		ID: "entity-only", Type: "expression", Enabled: true,
 		Entity: EntityConfig{Pattern: "acme.*.robotics.*.drone.*"},
 	})

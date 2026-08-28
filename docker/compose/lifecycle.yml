@@ -60,7 +60,7 @@ services:
         "--config",
         "/app/configs/lifecycle-flow.json",
         "--lifecycle-seed",
-        "c360.test.lifecycle.gcs.mission.m001",
+        "c360.semstreams-lifecycle.gcs.lifecycle.mission.m001",
       ]
     depends_on:
       nats:

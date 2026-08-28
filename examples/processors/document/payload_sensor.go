@@ -31,13 +31,13 @@ type SensorDocument struct {
 }
 
 // EntityID returns a federated entity ID for the sensor document.
-// Example: "acme.logistics.sensor.document.temperature.sensor-doc-001"
+// Example: "acme.logistics.document.sensor.temperature.sensor-doc-001"
 func (s *SensorDocument) EntityID() string {
 	category := s.Category
 	if category == "" {
 		category = "general"
 	}
-	return fmt.Sprintf("%s.%s.sensor.document.%s.%s",
+	return fmt.Sprintf("%s.%s.document.sensor.%s.%s",
 		s.OrgID,
 		s.Platform,
 		category,

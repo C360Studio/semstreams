@@ -22,8 +22,16 @@ func TestTryWebObservationEntityID_HappyPath(t *testing.T) {
 	if parts[0] != "acme" || parts[1] != "ops" {
 		t.Errorf("org/platform parts = %q/%q, want acme/ops", parts[0], parts[1])
 	}
-	if parts[2] != "agent" || parts[3] != "web" || parts[4] != "observation" {
-		t.Errorf("domain.system.type = %q.%q.%q, want agent.web.observation", parts[2], parts[3], parts[4])
+	if parts[2] != "web" || parts[3] != "agent" || parts[4] != "observation" {
+		t.Errorf("system.domain.type = %q.%q.%q, want web.agent.observation", parts[2], parts[3], parts[4])
+	}
+	// webObservationInstanceLen is a package-level var derived from the family
+	// table, so comparing the segment against it alone would pass for any table
+	// value. Pin the literal the doc comment claims (16 hex chars = 64 bits) so a
+	// change at pkg/types/framework_identity_families.go:28 fails here instead of
+	// silently re-shaping every minted web-observation ID.
+	if webObservationInstanceLen != 16 {
+		t.Errorf("webObservationInstanceLen = %d, want 16", webObservationInstanceLen)
 	}
 	if len(parts[5]) != webObservationInstanceLen {
 		t.Errorf("instance segment %q has length %d, want %d", parts[5], len(parts[5]), webObservationInstanceLen)

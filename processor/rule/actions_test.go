@@ -2087,7 +2087,7 @@ func TestAction_PublishAgent_ParentLoopIDFromLoopEntity(t *testing.T) {
 	}
 
 	// Trigger entity is a loop execution — parent linkage should appear.
-	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agent", "agentic-loop", "execution", "loop-research-abc")
+	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agentic-loop", "agent", "execution", "loop-research-abc")
 	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: loopEntityID}))
 	require.Len(t, mock.published, 1)
 
@@ -2108,9 +2108,9 @@ func TestAction_PublishAgent_NonLoopTriggerLeavesParentLoopIDUnset(t *testing.T)
 	t.Parallel()
 	ctx := context.Background()
 	telemetryID := semantictest.EntityID(t, "c360", "ops", "robotics", "gcs", "drone", "001")
-	modelID := semantictest.EntityID(t, "c360", "ops", "agent", "model-registry", "endpoint", "claude-sonnet")
-	stepID := semantictest.EntityID(t, "c360", "ops", "agent", "agentic-loop", "step", "loop-1-0")
-	chainID := semantictest.EntityID(t, "c360", "ops", "agent", "chain", "execution", "chain-abc")
+	modelID := semantictest.EntityID(t, "c360", "ops", "model-registry", "agent", "endpoint", "claude-sonnet")
+	stepID := semantictest.EntityID(t, "c360", "ops", "agentic-loop", "agent", "step", "loop-1-0")
+	chainID := semantictest.EntityID(t, "c360", "ops", "chain", "agent", "execution", "chain-abc")
 
 	tests := []struct {
 		name     string
@@ -3384,7 +3384,7 @@ func TestAction_PublishAgent_RunIDInheritedFromLoopEntity(t *testing.T) {
 	}
 
 	// Build an entity state that carries agent.loop.run = "root-loop-uuid".
-	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agent", "agentic-loop", "execution", "loop-abc")
+	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agentic-loop", "agent", "execution", "loop-abc")
 	entity := &gtypes.EntityState{
 		ID: loopEntityID,
 		Triples: []message.Triple{
@@ -3431,7 +3431,7 @@ func TestAction_PublishAgent_RunIDNotInheritedWhenMissing(t *testing.T) {
 	}
 
 	// Loop entity without agent.loop.run triple.
-	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agent", "agentic-loop", "execution", "loop-xyz")
+	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agentic-loop", "agent", "execution", "loop-xyz")
 	entity := &gtypes.EntityState{
 		ID: loopEntityID,
 		Triples: []message.Triple{
@@ -3473,7 +3473,7 @@ func TestAction_PublishAgent_RunIDInheritedFromNonLoopEntityTriple(t *testing.T)
 	}
 
 	// Chain entity (not a loop execution) carrying an agent.loop.run triple.
-	chainEntityID := semantictest.EntityID(t, "c360", "ops", "agent", "chain", "execution", "chain-abc")
+	chainEntityID := semantictest.EntityID(t, "c360", "ops", "chain", "agent", "execution", "chain-abc")
 	entity := &gtypes.EntityState{
 		ID: chainEntityID,
 		Triples: []message.Triple{
@@ -3522,7 +3522,7 @@ func TestAction_PublishAgent_RunScopeNew_MintsRunAndStampsAgentRun(t *testing.T)
 
 	// Trigger entity is a loop-execution entity — the firing coordinator loop.
 	firingLoopID := "coordinator-loop-uuid"
-	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agent", "agentic-loop", "execution", firingLoopID)
+	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agentic-loop", "agent", "execution", firingLoopID)
 
 	action := Action{
 		Type:     ActionTypePublishAgent,
@@ -3548,7 +3548,7 @@ func TestAction_PublishAgent_RunScopeNew_MintsRunAndStampsAgentRun(t *testing.T)
 		"spawned child's RunID must equal the firing loop's bare loop-id")
 
 	// Manager.Create must have been called (run minted in "dispatched").
-	runEntityID := semantictest.EntityID(t, "acme", "ops", "agent", "chain", "execution", firingLoopID)
+	runEntityID := semantictest.EntityID(t, "acme", "ops", "chain", "agent", "execution", firingLoopID)
 	_, created := mgr.entities["agent-run"][runEntityID]
 	assert.True(t, created, "Manager.Create must mint the AgentRun entity")
 
@@ -3576,7 +3576,7 @@ func TestActionPublishAgentRunScopeNewInvalidLineageHasNoSideEffects(t *testing.
 	executor.SetLifecycleManager(mgr)
 
 	firingLoopID := "coordinator-invalid-lineage"
-	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agent", "agentic-loop", "execution", firingLoopID)
+	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agentic-loop", "agent", "execution", firingLoopID)
 	err := executor.Execute(context.Background(), Action{
 		Type:     ActionTypePublishAgent,
 		Subject:  "agent.task.researcher",
@@ -3650,7 +3650,7 @@ func TestAction_PublishAgent_RunScopeNew_NoLifecycleManagerFallsBackToInherit(t 
 	executor := NewActionExecutorComplete(nil, nil, pub, nil)
 
 	firingLoopID := "coordinator-loop-uuid"
-	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agent", "agentic-loop", "execution", firingLoopID)
+	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agentic-loop", "agent", "execution", firingLoopID)
 
 	action := Action{
 		Type:     ActionTypePublishAgent,
@@ -3685,7 +3685,7 @@ func TestAction_PublishAgent_RunScopeNone_SuppressesRunID(t *testing.T) {
 	executor := NewActionExecutorFull(nil, nil, pub)
 
 	firingLoopID := "coordinator-loop-uuid"
-	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agent", "agentic-loop", "execution", firingLoopID)
+	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agentic-loop", "agent", "execution", firingLoopID)
 
 	// Entity has an agent.loop.run triple — but run_scope:none suppresses it.
 	entity := &gtypes.EntityState{
@@ -3731,7 +3731,7 @@ func TestAction_PublishAgent_RunScopeNew_MintsRunSuccessfully(t *testing.T) {
 	executor.SetLifecycleManager(mgr)
 
 	firingLoopID := "coord-fresh-mint"
-	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agent", "agentic-loop", "execution", firingLoopID)
+	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agentic-loop", "agent", "execution", firingLoopID)
 
 	action := Action{
 		Type:     ActionTypePublishAgent,
@@ -3754,7 +3754,7 @@ func TestAction_PublishAgent_RunScopeNew_MintsRunSuccessfully(t *testing.T) {
 		"run_scope=new: spawned child's RunID must equal the firing loop's bare loop-id")
 
 	// Manager.Create must have created the run entity.
-	runEntityID := "acme.ops.agent.chain.execution." + firingLoopID
+	runEntityID := "acme.ops.chain.agent.execution." + firingLoopID
 	_, created := mgr.entities["agent-run"][runEntityID]
 	assert.True(t, created, "Manager.Create must mint the AgentRun entity in 'dispatched' phase")
 }
@@ -3857,7 +3857,7 @@ func TestAction_PublishAgent_CarriesNoChannelFields(t *testing.T) {
 
 	// A loop-entity trigger: the richest spawn shape, carrying ancestry and a
 	// run anchor. Even here no channel field rides along.
-	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agent", "agentic-loop", "execution", "loop-root-abc")
+	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agentic-loop", "agent", "execution", "loop-root-abc")
 	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: loopEntityID}))
 	require.Len(t, mock.published, 1)
 

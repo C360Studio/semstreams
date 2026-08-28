@@ -20,9 +20,11 @@ package platform
 // config-package alias config.PlatformConfig is preserved for backward
 // compatibility with existing call sites.
 //
-// Six-part federated entity IDs are anchored on these fields
-// (org.platform.domain.system.type.instance). The struct is JSON-
-// shaped so it round-trips cleanly through config files and
+// Six-part federated entity IDs are anchored on Org and ID: they are
+// positions 1-2 of every identity this deployment mints
+// (org.platform.system.domain.type.instance, ADR-102), so ID is the
+// minting deployment authority and nothing else names it. The struct
+// is JSON-shaped so it round-trips cleanly through config files and
 // embedded message metadata.
 type Config struct {
 	Org          string   `json:"org"`                    // Organization namespace (e.g., "c360", "noaa")
@@ -31,7 +33,5 @@ type Config struct {
 	Region       string   `json:"region,omitempty"`       // gulf_mexico, atlantic, pacific
 	Capabilities []string `json:"capabilities,omitempty"` // radar, ctd, deployment, etc.
 
-	// Federation support for multi-platform deployments
-	InstanceID  string `json:"instance_id,omitempty"` // e.g., "west-1", "dev-local", "vessel-alpha"
 	Environment string `json:"environment,omitempty"` // "prod", "dev", "test"
 }

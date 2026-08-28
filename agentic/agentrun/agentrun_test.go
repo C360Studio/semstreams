@@ -31,15 +31,15 @@ import (
 func TestAgentRun_ParticipantInterface(t *testing.T) {
 	t.Parallel()
 	run := &agentrun.AgentRun{
-		EntityIDField:     "acme.ops.agent.chain.execution.loop-uuid-abc",
+		EntityIDField:     "acme.ops.chain.agent.execution.loop-uuid-abc",
 		PhaseField:        "dispatched",
-		ParentRunEntityID: "acme.ops.agent.chain.execution.parent-uuid",
+		ParentRunEntityID: "acme.ops.chain.agent.execution.parent-uuid",
 	}
-	assert.Equal(t, "acme.ops.agent.chain.execution.loop-uuid-abc", run.EntityID())
+	assert.Equal(t, "acme.ops.chain.agent.execution.loop-uuid-abc", run.EntityID())
 	assert.Equal(t, "agent-run", run.Workflow())
 	assert.Equal(t, "dispatched", run.Phase())
 	assert.False(t, run.IsTerminal(), "dispatched is not terminal")
-	assert.Equal(t, "acme.ops.agent.chain.execution.parent-uuid", run.ParentEntityID())
+	assert.Equal(t, "acme.ops.chain.agent.execution.parent-uuid", run.ParentEntityID())
 }
 
 func TestAgentRun_IsTerminal(t *testing.T) {
@@ -68,7 +68,7 @@ func TestAgentRun_IsTerminal(t *testing.T) {
 func TestAgentRun_RunID_ValidChainEntity(t *testing.T) {
 	t.Parallel()
 	run := &agentrun.AgentRun{
-		EntityIDField: "acme.ops.agent.chain.execution.loop-uuid-abc",
+		EntityIDField: "acme.ops.chain.agent.execution.loop-uuid-abc",
 	}
 	runID, ok := run.RunID()
 	require.True(t, ok)
@@ -79,7 +79,7 @@ func TestAgentRun_RunID_NonChainEntityReturnsFalse(t *testing.T) {
 	t.Parallel()
 	// agentic-loop entity, not a chain.execution entity.
 	run := &agentrun.AgentRun{
-		EntityIDField: "acme.ops.agent.agentic-loop.execution.loop-uuid",
+		EntityIDField: "acme.ops.agentic-loop.agent.execution.loop-uuid",
 	}
 	_, ok := run.RunID()
 	assert.False(t, ok, "RunID should return false for non-chain.execution entity IDs")
@@ -90,7 +90,7 @@ func TestAgentRun_RunID_NonChainEntityReturnsFalse(t *testing.T) {
 // that the AgentRun struct compiles as a valid Participant (static type check).
 func TestAgentRun_FullIDInEntityIDField(t *testing.T) {
 	t.Parallel()
-	fullEntityID := "acme.ops.agent.chain.execution.run-uuid-001"
+	fullEntityID := "acme.ops.chain.agent.execution.run-uuid-001"
 	run := &agentrun.AgentRun{EntityIDField: fullEntityID}
 	// EntityID() must return the full 6-part ID, not a bare runID.
 	assert.Equal(t, fullEntityID, run.EntityID())
@@ -128,7 +128,7 @@ func TestWorkflowDeclaration_TransitionsValid(t *testing.T) {
 func TestWorkflowDeclaration_EntityIDPattern(t *testing.T) {
 	t.Parallel()
 	wf := agentrun.WorkflowDeclaration()
-	assert.Equal(t, "*.*.agent.chain.execution.*", wf.EntityIDPattern)
+	assert.Equal(t, "*.*.chain.agent.execution.*", wf.EntityIDPattern)
 }
 
 func TestWorkflowDeclaration_PhasePredicate(t *testing.T) {
@@ -202,7 +202,7 @@ func TestMint_Idempotent_ErrAlreadyExistsFallsBackToGet(t *testing.T) {
 
 	mock := newMockLifecycleManager()
 	// Pre-seed the run to simulate a prior mint.
-	runEntityID := "acme.ops.agent.chain.execution.run-already-exists"
+	runEntityID := "acme.ops.chain.agent.execution.run-already-exists"
 	existing := &agentrun.AgentRun{
 		EntityIDField: runEntityID,
 		PhaseField:    "dispatched",
@@ -231,7 +231,7 @@ func TestMint_EntityIDShape(t *testing.T) {
 	// Verify the entity ID Mint would construct without needing a Manager.
 	entityID, err := agentic.TryChainExecutionEntityID("acme", "ops", "root-uuid")
 	require.NoError(t, err)
-	assert.Equal(t, "acme.ops.agent.chain.execution.root-uuid", entityID)
+	assert.Equal(t, "acme.ops.chain.agent.execution.root-uuid", entityID)
 }
 
 func TestMint_EmptyOrgReturnsError(t *testing.T) {
@@ -299,7 +299,7 @@ func TestResolveRun_AncestryWalkPath_WhenNoRunTriple(t *testing.T) {
 func TestSubscriber_RootLoopFailViaResolveWalk(t *testing.T) {
 	t.Parallel()
 	rootLoopID := "root-loop-id"
-	runEntityID := "acme.ops.agent.chain.execution." + rootLoopID
+	runEntityID := "acme.ops.chain.agent.execution." + rootLoopID
 
 	run := &agentrun.AgentRun{
 		EntityIDField: runEntityID,
@@ -351,7 +351,7 @@ func TestSubscriber_RootLoopFailViaResolveWalk(t *testing.T) {
 // where a child loop's terminal event carries RunEntityID on the wire.
 func TestSubscriber_ChildLoopFailPreservesRunStateViaWireRunID(t *testing.T) {
 	t.Parallel()
-	runEntityID := "acme.ops.agent.chain.execution.root-loop-id"
+	runEntityID := "acme.ops.chain.agent.execution.root-loop-id"
 	run := &agentrun.AgentRun{
 		EntityIDField: runEntityID,
 		PhaseField:    "dispatched", // still dispatched to test the guard boundary
@@ -386,7 +386,7 @@ func TestSubscriber_ChildLoopFailPreservesRunStateViaWireRunID(t *testing.T) {
 
 func TestSubscriber_ChildLoopFailPreservesExecutingRun(t *testing.T) {
 	t.Parallel()
-	runEntityID := "acme.ops.agent.chain.execution.root-loop-id"
+	runEntityID := "acme.ops.chain.agent.execution.root-loop-id"
 	run := &agentrun.AgentRun{
 		EntityIDField: runEntityID,
 		PhaseField:    "executing", // already advanced — children are active
@@ -421,7 +421,7 @@ func TestSubscriber_ChildLoopFailPreservesExecutingRun(t *testing.T) {
 
 func TestSubscriber_RootCancelDeliveredWithoutLifecycleMutation(t *testing.T) {
 	t.Parallel()
-	runEntityID := "acme.ops.agent.chain.execution.root-cancel-id"
+	runEntityID := "acme.ops.chain.agent.execution.root-cancel-id"
 	run := &agentrun.AgentRun{
 		EntityIDField: runEntityID,
 		PhaseField:    "dispatched",
@@ -461,7 +461,7 @@ func TestSubscriber_RootCancelDeliveredWithoutLifecycleMutation(t *testing.T) {
 
 func TestSubscriber_CategoryDemux_CancelledEventDetectedCorrectly(t *testing.T) {
 	t.Parallel()
-	runEntityID := "acme.ops.agent.chain.execution.demux-test"
+	runEntityID := "acme.ops.chain.agent.execution.demux-test"
 	run := &agentrun.AgentRun{
 		EntityIDField: runEntityID,
 		PhaseField:    "executing",
@@ -501,7 +501,7 @@ func TestSubscriber_CategoryDemux_CancelledEventDetectedCorrectly(t *testing.T) 
 
 func TestSubscriber_CategoryDemux_CompletedEventDetectedCorrectly(t *testing.T) {
 	t.Parallel()
-	runEntityID := "acme.ops.agent.chain.execution.completed-run"
+	runEntityID := "acme.ops.chain.agent.execution.completed-run"
 	run := &agentrun.AgentRun{
 		EntityIDField: runEntityID,
 		PhaseField:    "executing",
@@ -543,7 +543,7 @@ func TestSubscriber_CategoryDemux_CompletedEventDetectedCorrectly(t *testing.T) 
 
 func TestSubscriber_PanicGuard_SecondHandlerRunsAfterFirstPanics(t *testing.T) {
 	t.Parallel()
-	runEntityID := "acme.ops.agent.chain.execution.panic-run"
+	runEntityID := "acme.ops.chain.agent.execution.panic-run"
 	run := &agentrun.AgentRun{
 		EntityIDField: runEntityID,
 		PhaseField:    "executing",

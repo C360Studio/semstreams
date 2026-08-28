@@ -11,7 +11,7 @@ import (
 
 // registerEmitLesson wires the ops agent's emit_lesson tool (ADR-080), the
 // procedural-memory write path on the ADR-027 ops observation seam. Each call
-// mints a content-derived {org}.{platform}.agent.lesson.record.{uuid5} entity
+// mints a content-derived {org}.{platform}.lesson.agent.record.{uuid5} entity
 // (born status="proposed") via the graph.mutation.entity.create
 // NATS surface — the same birth path emit_diagnosis uses. A nil natsClient is a
 // deployment choice (skip silently); a registry-level failure (duplicate name)

@@ -91,7 +91,7 @@ func TestGraphQueryExecutor_QueryEntity_Success(t *testing.T) {
 
 	// Store test entity
 	entityData := map[string]any{
-		"id":   "c360.logistics.environmental.sensor.temperature.temp-sensor-001",
+		"id":   "c360.logistics.sensor.environmental.temperature.temp-sensor-001",
 		"type": "temperature",
 		"properties": map[string]any{
 			"reading":  48.2,
@@ -99,14 +99,14 @@ func TestGraphQueryExecutor_QueryEntity_Success(t *testing.T) {
 		},
 	}
 	entityJSON, _ := json.Marshal(entityData)
-	kv.Put("c360.logistics.environmental.sensor.temperature.temp-sensor-001", entityJSON)
+	kv.Put("c360.logistics.sensor.environmental.temperature.temp-sensor-001", entityJSON)
 
 	// Execute query
 	call := agentic.ToolCall{
 		ID:   "call_123",
 		Name: "query_entity",
 		Arguments: map[string]any{
-			"entity_id": "c360.logistics.environmental.sensor.temperature.temp-sensor-001",
+			"entity_id": "c360.logistics.sensor.environmental.temperature.temp-sensor-001",
 		},
 	}
 
@@ -142,7 +142,7 @@ func TestGraphQueryExecutor_QueryEntity_Success(t *testing.T) {
 		t.Fatal("expected non-nil metadata")
 	}
 
-	if result.Metadata["entity_id"] != "c360.logistics.environmental.sensor.temperature.temp-sensor-001" {
+	if result.Metadata["entity_id"] != "c360.logistics.sensor.environmental.temperature.temp-sensor-001" {
 		t.Errorf("unexpected entity_id in metadata: %v", result.Metadata["entity_id"])
 	}
 }

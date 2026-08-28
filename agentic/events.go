@@ -24,7 +24,7 @@ type LoopCreatedEvent struct {
 	// Empty when the loop is not part of a run.
 	RunID string `json:"run_id,omitempty"`
 	// RunEntityID is the full 6-part chain execution entity ID for the run
-	// (e.g. "org.platform.agent.chain.execution.<runID>"). Empty when RunID is empty.
+	// (e.g. "org.platform.chain.agent.execution.<runID>"). Empty when RunID is empty.
 	RunEntityID string `json:"run_entity_id,omitempty"`
 }
 

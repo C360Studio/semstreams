@@ -1,11 +1,11 @@
 package agentic_test
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -24,21 +24,21 @@ func TestAgentLessonEntityID(t *testing.T) {
 				org:      "acme",
 				platform: "ops",
 				id:       "2c5acb9b-8283-5b34-a4d1-4b1c9f8502ca",
-				want:     "acme.ops.agent.lesson.record.2c5acb9b-8283-5b34-a4d1-4b1c9f8502ca",
+				want:     "acme.ops.lesson.agent.record.2c5acb9b-8283-5b34-a4d1-4b1c9f8502ca",
 			},
 			{
 				name:     "short alphanumeric id",
 				org:      "c360",
 				platform: "prod",
 				id:       "abc123",
-				want:     "c360.prod.agent.lesson.record.abc123",
+				want:     "c360.prod.lesson.agent.record.abc123",
 			},
 			{
 				name:     "id with underscores",
 				org:      "myorg",
 				platform: "staging",
 				id:       "lesson_42",
-				want:     "myorg.staging.agent.lesson.record.lesson_42",
+				want:     "myorg.staging.lesson.agent.record.lesson_42",
 			},
 		}
 
@@ -51,16 +51,16 @@ func TestAgentLessonEntityID(t *testing.T) {
 		}
 	})
 
-	t.Run("shape constraints — exactly 6 parts, agent.lesson.record axes", func(t *testing.T) {
+	t.Run("shape constraints — exactly 6 parts, lesson.agent.record axes", func(t *testing.T) {
 		got := agentic.AgentLessonEntityID("acme", "ops", "abc123")
-		parts := strings.Split(got, ".")
-		require.Len(t, parts, 6, "entity ID must have exactly 6 parts")
-		assert.Equal(t, "acme", parts[0], "part[0] = org")
-		assert.Equal(t, "ops", parts[1], "part[1] = platform")
-		assert.Equal(t, "agent", parts[2], "part[2] = domain")
-		assert.Equal(t, "lesson", parts[3], "part[3] = system")
-		assert.Equal(t, "record", parts[4], "part[4] = type")
-		assert.Equal(t, "abc123", parts[5], "part[5] = instance (the content-derived id)")
+		parsed, err := semtypes.ParseEntityID(got)
+		require.NoError(t, err, "entity ID must be canonical")
+		assert.Equal(t, "acme", parsed.Org, "position 1 = org")
+		assert.Equal(t, "ops", parsed.Platform, "position 2 = platform (the minting authority)")
+		assert.Equal(t, "lesson", parsed.System, "position 3 = system (the source that produced it)")
+		assert.Equal(t, "agent", parsed.Domain, "position 4 = domain (framework-reserved)")
+		assert.Equal(t, "record", parsed.Type, "position 5 = type")
+		assert.Equal(t, "abc123", parsed.Instance, "position 6 = instance (the content-derived id)")
 	})
 
 	t.Run("panics on invalid input", func(t *testing.T) {

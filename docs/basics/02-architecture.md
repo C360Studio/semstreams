@@ -123,10 +123,10 @@ Example entity state:
 
 ```json
 {
-  "id": "acme.logistics.environmental.sensor.temperature.sensor-042",
+  "id": "acme.logistics.sensor.environmental.temperature.sensor-042",
   "triples": [
     {"predicate": "sensor.measurement.celsius", "object": 23.5},
-    {"predicate": "geo.location.zone", "object": "acme.logistics.facility.zone.area.warehouse-7"}
+    {"predicate": "geo.location.zone", "object": "acme.logistics.zone.facility.area.warehouse-7"}
   ],
   "version": 5
 }

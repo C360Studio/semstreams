@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -384,4 +385,43 @@ func TestLoader_ExampleConfig(t *testing.T) {
 	assert.Equal(t, types.ComponentType("output"), wsOutput.Type)
 	assert.Equal(t, "websocket", wsOutput.Name)
 	assert.True(t, wsOutput.Enabled)
+}
+
+// TestConfigRejectsOversizedAuthorityPair pins the configuration-load bound on
+// the authority pair (ADR-102 amends ADR-076 d2, O-14): len(org)+len(id) may
+// not exceed the budget derived from the longest fixed-suffix framework family
+// — 170 bytes while the rule trigger family binds — and the error names both.
+func TestConfigRejectsOversizedAuthorityPair(t *testing.T) {
+	writeAndLoad := func(t *testing.T, org, id string) error {
+		t.Helper()
+		configFile := filepath.Join(t.TempDir(), "config.json")
+		body := `{"platform": {"org": "` + org + `", "id": "` + id + `", "type": "vessel"}}`
+		require.NoError(t, os.WriteFile(configFile, []byte(body), 0o600))
+		loader := NewLoader()
+		loader.EnableValidation(true)
+		_, err := loader.LoadFile(configFile)
+		return err
+	}
+	org := strings.Repeat("o", 85)
+	require.NoError(t, writeAndLoad(t, org, strings.Repeat("p", 85)), "170 bytes is the budget, not over it")
+
+	err := writeAndLoad(t, org, strings.Repeat("p", 86))
+	require.Error(t, err, "171 bytes must not load")
+	assert.Contains(t, err.Error(), "170")
+	assert.Contains(t, err.Error(), "rule-trigger")
+	assert.Contains(t, err.Error(), "171")
+}
+
+// TestConfigRejectsRemovedInstanceID pins O-2: `platform.instance_id` left
+// identity; its presence fails load with guidance naming `platform.id`.
+func TestConfigRejectsRemovedInstanceID(t *testing.T) {
+	configFile := filepath.Join(t.TempDir(), "config.json")
+	body := `{"platform": {"org": "c360", "id": "backend", "instance_id": "backend-001", "type": "vessel"}}`
+	require.NoError(t, os.WriteFile(configFile, []byte(body), 0o600))
+	loader := NewLoader()
+	loader.EnableValidation(true)
+	_, err := loader.LoadFile(configFile)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "instance_id")
+	assert.Contains(t, err.Error(), "platform.id")
 }

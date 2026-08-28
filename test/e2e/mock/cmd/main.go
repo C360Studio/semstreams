@@ -28,7 +28,7 @@ func main() {
 
 	openaiAddr := fmt.Sprintf(":%d", *port)
 	openaiServer := mock.NewOpenAIServer().
-		WithToolArgs("query_entity", `{"entity_id": "c360.logistics.environmental.sensor.temperature.temp-sensor-001"}`).
+		WithToolArgs("query_entity", `{"entity_id": "c360.logistics.sensor.environmental.temperature.temp-sensor-001"}`).
 		WithCompletionContent(`{"valid": true, "summary": "Analysis complete. Temperature sensor reading exceeds threshold. Recommend monitoring HVAC system."}`)
 
 	applyScenarioPreset(openaiServer, *scenario)

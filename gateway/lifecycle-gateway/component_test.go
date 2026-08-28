@@ -338,7 +338,7 @@ func (m *fakeManager) Watch(_ context.Context, _ string) (<-chan lifecycle.Parti
 func testMissionWorkflowDef() lifecycle.WorkflowDef {
 	return lifecycle.WorkflowDef{
 		Workflow:               "mission",
-		EntityIDPattern:        "*.*.lifecycle.gcs.mission.*",
+		EntityIDPattern:        "*.*.gcs.lifecycle.mission.*",
 		Transitions:            lifecycle.Transitions{"planning": {"flying", "aborted"}, "flying": {"completed", "failed"}, "completed": {}, "failed": {}, "aborted": {}},
 		OperatorWritableFields: []string{"owner_org_id"},
 	}
@@ -372,8 +372,8 @@ func TestListWorkflows_Success(t *testing.T) {
 	workflowDef.OperatorWritablePredicates = []string{semantictest.Predicate(t, "lifecycle", "mission", "owner-org-id")}
 	srv, mgr := newTestGateway(t, "/gw", workflowDef)
 	defer srv.Close()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "lifecycle", "gcs", "mission", "1"), PhaseF: "planning"})
-	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "lifecycle", "gcs", "mission", "2"), PhaseF: "flying"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "gcs", "lifecycle", "mission", "1"), PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "gcs", "lifecycle", "mission", "2"), PhaseF: "flying"})
 
 	resp, err := http.Get(srv.URL + "/gw/workflows")
 	if err != nil {
@@ -414,14 +414,14 @@ func TestListWorkflows_PartialListFailure(t *testing.T) {
 	// blow up the whole response.
 	mgr.registerWorkflow(lifecycle.WorkflowDef{
 		Workflow:                   "calibration",
-		EntityIDPattern:            "*.*.lifecycle.gcs.calibration.*",
+		EntityIDPattern:            "*.*.gcs.lifecycle.calibration.*",
 		PhasePredicate:             semantictest.Predicate(t, "lifecycle", "calibration", "phase"),
 		Transitions:                lifecycle.Transitions{"idle": {"running"}, "running": {}},
 		OperatorWritableFields:     []string{"owner_org_id"},
 		OperatorWritablePredicates: []string{semantictest.Predicate(t, "lifecycle", "calibration", "owner-org-id")},
 	})
-	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "lifecycle", "gcs", "mission", "1"), PhaseF: "planning"})
-	mgr.seed("calibration", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "lifecycle", "gcs", "calibration", "1"), PhaseF: "idle"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "gcs", "lifecycle", "mission", "1"), PhaseF: "planning"})
+	mgr.seed("calibration", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "gcs", "lifecycle", "calibration", "1"), PhaseF: "idle"})
 
 	mgr.listErrByWorkflow = map[string]error{
 		"mission": fmt.Errorf("simulated KV unreachable for MISSIONS bucket"),
@@ -470,8 +470,8 @@ func TestListInstances_FiltersByPhase(t *testing.T) {
 	workflowDef.OperatorWritablePredicates = []string{semantictest.Predicate(t, "lifecycle", "mission", "owner-org-id")}
 	srv, mgr := newTestGateway(t, "/gw", workflowDef)
 	defer srv.Close()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "lifecycle", "gcs", "mission", "1"), PhaseF: "planning"})
-	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "lifecycle", "gcs", "mission", "2"), PhaseF: "flying"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "gcs", "lifecycle", "mission", "1"), PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "gcs", "lifecycle", "mission", "2"), PhaseF: "flying"})
 
 	resp, err := http.Get(srv.URL + "/gw/workflows/mission?phase=flying")
 	if err != nil {
@@ -486,7 +486,7 @@ func TestListInstances_FiltersByPhase(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("expected 1 instance, got %d", len(got))
 	}
-	if got[0]["entity_id"] != "acme.ops.lifecycle.gcs.mission.1" && got[0]["entity_id"] != "acme.ops.lifecycle.gcs.mission.2" {
+	if got[0]["entity_id"] != "acme.ops.gcs.lifecycle.mission.1" && got[0]["entity_id"] != "acme.ops.gcs.lifecycle.mission.2" {
 		t.Errorf("entity_id: got %v", got[0]["entity_id"])
 	}
 }
@@ -499,7 +499,7 @@ func TestListInstances_LimitOffset(t *testing.T) {
 	srv, mgr := newTestGateway(t, "/gw", workflowDef)
 	defer srv.Close()
 	for i := 0; i < 5; i++ {
-		mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "lifecycle", "gcs", "mission", fmt.Sprintf("%d", i)), PhaseF: "planning"})
+		mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "gcs", "lifecycle", "mission", fmt.Sprintf("%d", i)), PhaseF: "planning"})
 	}
 	resp, err := http.Get(srv.URL + "/gw/workflows/mission?limit=2&offset=1")
 	if err != nil {
@@ -554,9 +554,9 @@ func TestGetInstance_Success(t *testing.T) {
 	workflowDef.OperatorWritablePredicates = []string{semantictest.Predicate(t, "lifecycle", "mission", "owner-org-id")}
 	srv, mgr := newTestGateway(t, "/gw", workflowDef)
 	defer srv.Close()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "lifecycle", "gcs", "mission", "1"), PhaseF: "flying", OwnerOrgIDF: "acme"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "gcs", "lifecycle", "mission", "1"), PhaseF: "flying", OwnerOrgIDF: "acme"})
 
-	resp, err := http.Get(srv.URL + "/gw/workflows/mission/acme.ops.lifecycle.gcs.mission.1")
+	resp, err := http.Get(srv.URL + "/gw/workflows/mission/acme.ops.gcs.lifecycle.mission.1")
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
@@ -566,7 +566,7 @@ func TestGetInstance_Success(t *testing.T) {
 	}
 	var got map[string]any
 	mustDecodeJSON(t, resp, &got)
-	if got["entity_id"] != "acme.ops.lifecycle.gcs.mission.1" || got["phase"] != "flying" || got["owner_org_id"] != "acme" {
+	if got["entity_id"] != "acme.ops.gcs.lifecycle.mission.1" || got["phase"] != "flying" || got["owner_org_id"] != "acme" {
 		t.Errorf("instance state: got %v", got)
 	}
 }
@@ -595,10 +595,10 @@ func TestStatePatch_Success(t *testing.T) {
 	workflowDef.OperatorWritablePredicates = []string{semantictest.Predicate(t, "lifecycle", "mission", "owner-org-id")}
 	srv, mgr := newTestGateway(t, "/gw", workflowDef)
 	defer srv.Close()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "lifecycle", "gcs", "mission", "1"), PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "gcs", "lifecycle", "mission", "1"), PhaseF: "planning"})
 
 	body := bytes.NewBufferString(`{"owner_org_id": "acme"}`)
-	resp, err := http.Post(srv.URL+"/gw/workflows/mission/acme.ops.lifecycle.gcs.mission.1/state", "application/json", body)
+	resp, err := http.Post(srv.URL+"/gw/workflows/mission/acme.ops.gcs.lifecycle.mission.1/state", "application/json", body)
 	if err != nil {
 		t.Fatalf("POST: %v", err)
 	}
@@ -609,8 +609,8 @@ func TestStatePatch_Success(t *testing.T) {
 	if mgr.updateCalls != 1 {
 		t.Errorf("UpdateFromOperator should be called once, got %d", mgr.updateCalls)
 	}
-	if mgr.entities["mission"]["acme.ops.lifecycle.gcs.mission.1"].OwnerOrgIDF != "acme" {
-		t.Errorf("patch didn't land, owner_org_id=%q", mgr.entities["mission"]["acme.ops.lifecycle.gcs.mission.1"].OwnerOrgIDF)
+	if mgr.entities["mission"]["acme.ops.gcs.lifecycle.mission.1"].OwnerOrgIDF != "acme" {
+		t.Errorf("patch didn't land, owner_org_id=%q", mgr.entities["mission"]["acme.ops.gcs.lifecycle.mission.1"].OwnerOrgIDF)
 	}
 }
 
@@ -621,11 +621,11 @@ func TestStatePatch_FieldRejected_400(t *testing.T) {
 	workflowDef.OperatorWritablePredicates = []string{semantictest.Predicate(t, "lifecycle", "mission", "owner-org-id")}
 	srv, mgr := newTestGateway(t, "/gw", workflowDef)
 	defer srv.Close()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "lifecycle", "gcs", "mission", "1"), PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "gcs", "lifecycle", "mission", "1"), PhaseF: "planning"})
 
 	// "phase" isn't in writableFields → fake returns ErrFieldNotOperatorWritable.
 	body := bytes.NewBufferString(`{"phase": "completed"}`)
-	resp, err := http.Post(srv.URL+"/gw/workflows/mission/acme.ops.lifecycle.gcs.mission.1/state", "application/json", body)
+	resp, err := http.Post(srv.URL+"/gw/workflows/mission/acme.ops.gcs.lifecycle.mission.1/state", "application/json", body)
 	if err != nil {
 		t.Fatalf("POST: %v", err)
 	}
@@ -643,7 +643,7 @@ func TestStatePatch_InvalidJSON_400(t *testing.T) {
 	srv, _ := newTestGateway(t, "/gw", workflowDef)
 	defer srv.Close()
 
-	resp, err := http.Post(srv.URL+"/gw/workflows/mission/acme.ops.lifecycle.gcs.mission.1/state", "application/json",
+	resp, err := http.Post(srv.URL+"/gw/workflows/mission/acme.ops.gcs.lifecycle.mission.1/state", "application/json",
 		bytes.NewBufferString(`not json`))
 	if err != nil {
 		t.Fatalf("POST: %v", err)
@@ -661,7 +661,7 @@ func TestStatePatch_MethodNotAllowed_405(t *testing.T) {
 	workflowDef.OperatorWritablePredicates = []string{semantictest.Predicate(t, "lifecycle", "mission", "owner-org-id")}
 	srv, _ := newTestGateway(t, "/gw", workflowDef)
 	defer srv.Close()
-	resp, err := http.Get(srv.URL + "/gw/workflows/mission/acme.ops.lifecycle.gcs.mission.1/state")
+	resp, err := http.Get(srv.URL + "/gw/workflows/mission/acme.ops.gcs.lifecycle.mission.1/state")
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
@@ -678,10 +678,10 @@ func TestOperatorTransition_Success(t *testing.T) {
 	workflowDef.OperatorWritablePredicates = []string{semantictest.Predicate(t, "lifecycle", "mission", "owner-org-id")}
 	srv, mgr := newTestGateway(t, "/gw", workflowDef)
 	defer srv.Close()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "lifecycle", "gcs", "mission", "1"), PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "gcs", "lifecycle", "mission", "1"), PhaseF: "planning"})
 
 	body := bytes.NewBufferString(`{"phase": "flying", "note": "operator nudge"}`)
-	resp, err := http.Post(srv.URL+"/gw/workflows/mission/acme.ops.lifecycle.gcs.mission.1/transition", "application/json", body)
+	resp, err := http.Post(srv.URL+"/gw/workflows/mission/acme.ops.gcs.lifecycle.mission.1/transition", "application/json", body)
 	if err != nil {
 		t.Fatalf("POST: %v", err)
 	}
@@ -689,8 +689,8 @@ func TestOperatorTransition_Success(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status: %d, body=%s", resp.StatusCode, mustBody(resp))
 	}
-	if mgr.entities["mission"]["acme.ops.lifecycle.gcs.mission.1"].PhaseF != "flying" {
-		t.Errorf("transition didn't land, phase=%q", mgr.entities["mission"]["acme.ops.lifecycle.gcs.mission.1"].PhaseF)
+	if mgr.entities["mission"]["acme.ops.gcs.lifecycle.mission.1"].PhaseF != "flying" {
+		t.Errorf("transition didn't land, phase=%q", mgr.entities["mission"]["acme.ops.gcs.lifecycle.mission.1"].PhaseF)
 	}
 	if mgr.transitionCalls != 1 {
 		t.Errorf("Transition should be called once, got %d", mgr.transitionCalls)
@@ -704,7 +704,7 @@ func TestOperatorTransition_MissingPhase_400(t *testing.T) {
 	workflowDef.OperatorWritablePredicates = []string{semantictest.Predicate(t, "lifecycle", "mission", "owner-org-id")}
 	srv, _ := newTestGateway(t, "/gw", workflowDef)
 	defer srv.Close()
-	resp, err := http.Post(srv.URL+"/gw/workflows/mission/acme.ops.lifecycle.gcs.mission.1/transition",
+	resp, err := http.Post(srv.URL+"/gw/workflows/mission/acme.ops.gcs.lifecycle.mission.1/transition",
 		"application/json", bytes.NewBufferString(`{}`))
 	if err != nil {
 		t.Fatalf("POST: %v", err)
@@ -722,12 +722,12 @@ func TestHistory_Success(t *testing.T) {
 	workflowDef.OperatorWritablePredicates = []string{semantictest.Predicate(t, "lifecycle", "mission", "owner-org-id")}
 	srv, mgr := newTestGateway(t, "/gw", workflowDef)
 	defer srv.Close()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "lifecycle", "gcs", "mission", "1"), PhaseF: "flying"})
-	mgr.historyByID["acme.ops.lifecycle.gcs.mission.1"] = []lifecycle.TransitionEvent{
+	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "gcs", "lifecycle", "mission", "1"), PhaseF: "flying"})
+	mgr.historyByID["acme.ops.gcs.lifecycle.mission.1"] = []lifecycle.TransitionEvent{
 		{From: "planning", To: "flying", At: time.Now(), Triggered: lifecycle.TransitionSourceRule, Note: ""},
 	}
 
-	resp, err := http.Get(srv.URL + "/gw/workflows/mission/acme.ops.lifecycle.gcs.mission.1/history")
+	resp, err := http.Get(srv.URL + "/gw/workflows/mission/acme.ops.gcs.lifecycle.mission.1/history")
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
@@ -749,11 +749,11 @@ func TestChildren_Success(t *testing.T) {
 	workflowDef.OperatorWritablePredicates = []string{semantictest.Predicate(t, "lifecycle", "mission", "owner-org-id")}
 	srv, mgr := newTestGateway(t, "/gw", workflowDef)
 	defer srv.Close()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "lifecycle", "gcs", "mission", "parent"), PhaseF: "planning"})
-	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "lifecycle", "gcs", "mission", "child-1"), PhaseF: "planning", ParentMissionF: semantictest.EntityID(t, "acme", "ops", "lifecycle", "gcs", "mission", "parent")})
-	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "lifecycle", "gcs", "mission", "child-2"), PhaseF: "flying", ParentMissionF: semantictest.EntityID(t, "acme", "ops", "lifecycle", "gcs", "mission", "parent")})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "gcs", "lifecycle", "mission", "parent"), PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "gcs", "lifecycle", "mission", "child-1"), PhaseF: "planning", ParentMissionF: semantictest.EntityID(t, "acme", "ops", "gcs", "lifecycle", "mission", "parent")})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "gcs", "lifecycle", "mission", "child-2"), PhaseF: "flying", ParentMissionF: semantictest.EntityID(t, "acme", "ops", "gcs", "lifecycle", "mission", "parent")})
 
-	resp, err := http.Get(srv.URL + "/gw/workflows/mission/acme.ops.lifecycle.gcs.mission.parent/children")
+	resp, err := http.Get(srv.URL + "/gw/workflows/mission/acme.ops.gcs.lifecycle.mission.parent/children")
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
@@ -775,7 +775,7 @@ func TestUnknownSubresource_404(t *testing.T) {
 	workflowDef.OperatorWritablePredicates = []string{semantictest.Predicate(t, "lifecycle", "mission", "owner-org-id")}
 	srv, _ := newTestGateway(t, "/gw", workflowDef)
 	defer srv.Close()
-	resp, err := http.Get(srv.URL + "/gw/workflows/mission/acme.ops.lifecycle.gcs.mission.1/garbage")
+	resp, err := http.Get(srv.URL + "/gw/workflows/mission/acme.ops.gcs.lifecycle.mission.1/garbage")
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
@@ -792,7 +792,7 @@ func TestWebSocket_StreamsUpdates(t *testing.T) {
 	mgr := newFakeManager()
 	mgr.registerWorkflow(lifecycle.WorkflowDef{
 		Workflow:                   "mission",
-		EntityIDPattern:            "*.*.lifecycle.gcs.mission.*",
+		EntityIDPattern:            "*.*.gcs.lifecycle.mission.*",
 		PhasePredicate:             semantictest.Predicate(t, "lifecycle", "mission", "phase"),
 		Transitions:                lifecycle.Transitions{"planning": {"flying"}, "flying": {}},
 		OperatorWritableFields:     []string{"owner_org_id"},
@@ -821,7 +821,7 @@ func TestWebSocket_StreamsUpdates(t *testing.T) {
 	defer conn.Close()
 
 	// Push a Participant snapshot through the watch channel.
-	p := &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "lifecycle", "gcs", "mission", "ws-1"), WorkflowF: "mission", PhaseF: "flying"}
+	p := &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "gcs", "lifecycle", "mission", "ws-1"), WorkflowF: "mission", PhaseF: "flying"}
 	mgr.watchCh <- p
 
 	// Read with deadline.
@@ -832,7 +832,7 @@ func TestWebSocket_StreamsUpdates(t *testing.T) {
 	if err := conn.ReadJSON(&got); err != nil {
 		t.Fatalf("ReadJSON: %v", err)
 	}
-	if got["entity_id"] != "acme.ops.lifecycle.gcs.mission.ws-1" || got["phase"] != "flying" {
+	if got["entity_id"] != "acme.ops.gcs.lifecycle.mission.ws-1" || got["phase"] != "flying" {
 		t.Errorf("WS payload: got %v", got)
 	}
 }
@@ -842,7 +842,7 @@ func TestWebSocket_DisabledReturns403(t *testing.T) {
 	mgr := newFakeManager()
 	mgr.registerWorkflow(lifecycle.WorkflowDef{
 		Workflow:                   "mission",
-		EntityIDPattern:            "*.*.lifecycle.gcs.mission.*",
+		EntityIDPattern:            "*.*.gcs.lifecycle.mission.*",
 		PhasePredicate:             semantictest.Predicate(t, "lifecycle", "mission", "phase"),
 		Transitions:                lifecycle.Transitions{"planning": {}},
 		OperatorWritableFields:     []string{"owner_org_id"},
@@ -1018,13 +1018,13 @@ func TestFactory_FullProductionWire(t *testing.T) {
 	mgr := newFakeManager()
 	mgr.registerWorkflow(lifecycle.WorkflowDef{
 		Workflow:                   "mission",
-		EntityIDPattern:            "*.*.lifecycle.gcs.mission.*",
+		EntityIDPattern:            "*.*.gcs.lifecycle.mission.*",
 		PhasePredicate:             semantictest.Predicate(t, "lifecycle", "mission", "phase"),
 		Transitions:                lifecycle.Transitions{"planning": {"flying"}, "flying": {}},
 		OperatorWritableFields:     []string{"owner_org_id"},
 		OperatorWritablePredicates: []string{semantictest.Predicate(t, "lifecycle", "mission", "owner-org-id")},
 	})
-	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "lifecycle", "gcs", "mission", "wire-1"), PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: semantictest.EntityID(t, "acme", "ops", "gcs", "lifecycle", "mission", "wire-1"), PhaseF: "planning"})
 	comp.manager = mgr
 
 	if err := comp.Initialize(); err != nil {
@@ -1040,7 +1040,7 @@ func TestFactory_FullProductionWire(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/wire/workflows/mission/acme.ops.lifecycle.gcs.mission.wire-1")
+	resp, err := http.Get(srv.URL + "/wire/workflows/mission/acme.ops.gcs.lifecycle.mission.wire-1")
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
@@ -1050,7 +1050,7 @@ func TestFactory_FullProductionWire(t *testing.T) {
 	}
 	var got map[string]any
 	mustDecodeJSON(t, resp, &got)
-	if got["entity_id"] != "acme.ops.lifecycle.gcs.mission.wire-1" {
+	if got["entity_id"] != "acme.ops.gcs.lifecycle.mission.wire-1" {
 		t.Errorf("entity_id: got %v", got["entity_id"])
 	}
 	// Confirm factory wired the Upgrader (zero-value Upgrader's

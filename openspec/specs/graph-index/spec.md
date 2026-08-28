@@ -277,7 +277,7 @@ premise does not convert recovery into a release operation.
 ### Requirement: Predicate membership keys are raw canonical predicates
 
 PREDICATE_INDEX MUST adopt the fixed-nine-token layout
-`domain.category.property.org.platform.domain.system.type.instance`, preserving one membership per key and O(E)
+`domain.category.property.org.platform.system.domain.type.instance`, preserving one membership per key and O(E)
 writes. PREDICATE_CATALOG MUST be retired. The complete worst-case key and every constructed filter MUST pass the
 `nats-kv-keys` budgets and pinned real-NATS maximum/exact-match conformance. Production activation MUST additionally
 pass the replacement lifecycle, CI, sustained-churn, restart, and resource gates. A server, SDK, predicate grammar,

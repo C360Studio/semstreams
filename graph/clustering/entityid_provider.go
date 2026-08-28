@@ -3,9 +3,9 @@ package clustering
 
 import (
 	"context"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"log/slog"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -16,8 +16,8 @@ import (
 // based on EntityID hierarchy. This enables LPA clustering to find communities
 // using the 6-part EntityID structure even when explicit relationship triples don't exist.
 //
-// EntityID format: org.platform.domain.system.type.instance
-// Entities with the same 5-part TypePrefix (org.platform.domain.system.type) are considered siblings.
+// EntityID format: org.platform.system.domain.type.instance
+// Entities with the same 5-part TypePrefix (org.platform.system.domain.type) are considered siblings.
 //
 // Virtual edges are computed on-demand and cached for performance.
 // These edges are NOT persisted - they're ephemeral hints for the clustering algorithm.
@@ -43,7 +43,7 @@ type EntityIDProvider struct {
 
 	// Cache for type prefix -> entity IDs mapping
 	typePrefixCache map[string][]string
-	// Cache for system -> entity IDs mapping (system = part[3] of entity ID)
+	// Cache for source -> entity IDs mapping (the named System position of the entity ID)
 	systemCache      map[string][]string
 	cacheMu          sync.RWMutex
 	cacheInitialized atomic.Bool
@@ -66,7 +66,7 @@ type EntityIDProviderConfig struct {
 	IncludeSiblings bool
 
 	// IncludeSystemPeers enables system-affinity edges between entities
-	// sharing the same system (part[3] of the 6-part entity ID).
+	// sharing the same source (the named System position of the 6-part entity ID).
 	// This biases LPA toward system-coherent communities when the graph
 	// contains entities from heterogeneous data sources.
 	IncludeSystemPeers bool
@@ -205,35 +205,28 @@ func (p *EntityIDProvider) GetNeighbors(ctx context.Context, entityID string, di
 	return result, nil
 }
 
-// getTypePrefix extracts the 5-part type prefix from a 6-part EntityID.
-// EntityID format: org.platform.domain.system.type.instance
-// TypePrefix: org.platform.domain.system.type
-//
-// Returns empty string if EntityID doesn't have exactly 6 parts.
+// getTypePrefix returns the five-position type prefix
+// org.platform.system.domain.type of a canonical entity ID, read by named
+// field. Returns "" for a value the canonical parser rejects.
 func getTypePrefix(entityID string) string {
-	parts := strings.Split(entityID, ".")
-	if len(parts) != 6 {
-		return "" // Not a valid 6-part EntityID
-	}
-	// Join first 5 parts
-	return strings.Join(parts[:5], ".")
-}
-
-// getSystem extracts the system segment (part[3]) from a 6-part EntityID.
-// EntityID format: org.platform.domain.system.type.instance
-//
-// Using part[3] (system) rather than part[2] (domain) provides more granular
-// affinity: "document" vs "sensor" vs "work" rather than broad categories
-// like "content" or "environmental" where many unrelated entity types share
-// the same domain.
-//
-// Returns empty string if EntityID doesn't have exactly 6 parts.
-func getSystem(entityID string) string {
-	parts := strings.Split(entityID, ".")
-	if len(parts) != 6 {
+	parsed, err := semtypes.ParseEntityID(entityID)
+	if err != nil {
 		return ""
 	}
-	return parts[3]
+	return parsed.TypePrefix()
+}
+
+// getSystem returns the source position (System, position 3 of
+// org.platform.system.domain.type.instance) of a canonical entity ID, read by
+// named field. The source — one feed, repo, world, or framework component —
+// is the affinity the gh#606 measurement found useful; it is never a taxonomy.
+// Returns "" for a value the canonical parser rejects.
+func getSystem(entityID string) string {
+	parsed, err := semtypes.ParseEntityID(entityID)
+	if err != nil {
+		return ""
+	}
+	return parsed.System
 }
 
 // findSiblingNeighbors returns entities with the same type prefix that aren't already explicit neighbors.
@@ -323,7 +316,7 @@ func (p *EntityIDProvider) findSystemPeerNeighbors(
 	return result, nil
 }
 
-// areSystemPeers returns true if two entities share the same system (part[3]).
+// areSystemPeers returns true if two entities share the same source (the named System position).
 func areSystemPeers(entityA, entityB string) bool {
 	systemA := getSystem(entityA)
 	systemB := getSystem(entityB)

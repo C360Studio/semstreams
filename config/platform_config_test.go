@@ -63,14 +63,14 @@ func TestPlatformConfig_OrgValidation(t *testing.T) {
 			wantError: "platform.org 'c360 corp' is not valid for NATS subjects",
 		},
 		{
-			name: "valid org with dots and dashes",
+			name: "org with a dot is rejected (a dot is the entity-ID separator; ADR-102)",
 			config: &Config{
 				Platform: PlatformConfig{
 					Org: "c360-corp.dev",
 					ID:  "platform1",
 				},
 			},
-			wantError: "",
+			wantError: "cannot carry the rule-trigger identity family",
 		},
 		{
 			name: "valid org with underscore s",

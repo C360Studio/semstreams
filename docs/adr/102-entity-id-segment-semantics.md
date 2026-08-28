@@ -2,10 +2,29 @@
 
 ## Status
 
+**Accepted (2026-08-26); decision 4 amended 2026-08-28.**
+
+**Supersession — O-5, owner ruling 2026-08-28**
+([#1095 comment](https://github.com/C360Studio/semstreams/issues/1095#issuecomment-5454766422)): **domain overlap
+between producers is PERMITTED, and nothing reports it.** The taxonomy vocabulary is shared, and overlap is
+legitimate and sometimes intended. The boot-time composition rejection is retired, and so is the whole authorization
+apparatus: `EntityDomainAuthority`, `NewEntityDomainAuthority` and `Authorize` are DELETED. With overlap permitted
+there was nothing left to authorize, they had no production caller, and detecting a mis-chosen taxonomy token is a
+*vocabulary* question — someone picked the wrong token — not one to answer at composition time. An offline
+composition-validator report was implemented and then removed by the same ruling on the same day, as complexity
+ratcheted for little gain; nothing regresses, because the rejection it replaced had never run.
+
+`EntityDomainDelegation` is retained: the corpus audit AST-scans those literals for the registered set its
+`domain_unregistered` rule consults, and that is its only consumer. Overlap collides nothing — `system` is position
+3, so the IDs stay distinct, and ADR-099 level 0 is source x taxonomy, so the communities do too; the cross-source
+pattern `org.platform.*.<domain>.*.*` returning every producer's entities in a taxonomy is the point. Exclusivity
+may be reintroduced if a concrete use case appears.
+
 **Accepted (2026-08-26).** Owner ruling on the design package (PR #1099, `132727c0`), recorded on #1095:
 O-1 order `org.platform.system.domain.type.instance`; O-2 one config field `platform.id`, `instance_id` removed;
 O-3 `system` values unregistered, product-name literals rejected by the audit; O-4 an import of an ID already held
-under another source is rejected; O-5 cross-product `domain` collisions are boot-time composition rejections; O-6
+under another source is rejected; ~~O-5 cross-product `domain` collisions are boot-time composition rejections~~
+**(SUPERSEDED 2026-08-28 — see the Supersession note above)**; O-6
 hierarchy containers retire with gh606; O-7 one tag holds the wave; O-8 ADR-076 d1 superseded and d2 amended; O-9 the
 gated-DAG family re-slots under `agent`, reserved set `{agent, ops, graph}`; O-10 the export IRI follows the canonical
 order; O-11 ADR-099 level 1 (source) is served by default and summaries gate there (gh606 Q8 re-ruled); **O-12
@@ -44,8 +63,14 @@ inventory is `docs/proposals/gh1095-entity-id-segment-semantics-inventory.md`.
    framework component); the producing product rides `Triple.Source` and the envelope `source`.
 4. **`domain` and `type` are delegated on the predicate-namespace pattern.** The framework reserves `agent`,
    `ops`, `graph`; the gated-DAG family re-slots under `agent` (O-9); a product registers exact
-   `domain` or `domain.type` delegations at its composition root; an undelegated value in a builder or declaration
-   is a composition rejection at boot, never a runtime rewrite. `system` and `instance` are not registered.
+   `domain` or `domain.type` delegations in production Go. Two producers MAY declare one domain (superseding O-5,
+   above), and nothing reports the overlap. An undelegated value in a builder or declaration is never a runtime
+   rewrite. `system` and `instance` are not registered.
+
+   > **What slice A actually ships for the undelegated case** (recorded, not decided): the enforcement is the
+   > offline corpus audit's `domain_unregistered` rule reading the `EntityDomainDelegation` literals, not a boot
+   > rejection. There is no longer an `Authorize` to call. Whether a boot-time act should exist for the undelegated
+   > case is unruled and open.
 5. **Every graph boundary enforces the deployment's own authority on the candidate subject identity.** A subject
    whose `org.platform` differs from the deployment's is rejected with a coded error unless it arrives on an input
    port the operator declared as an import lane; on an import lane a subject claiming the local authority is

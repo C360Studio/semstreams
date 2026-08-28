@@ -753,7 +753,7 @@ func TestDecideExecutor_HappyPath(t *testing.T) {
 		t.Fatalf("expected 3 triples (next_action + reason + subtopics), got %d", len(pub.triples))
 	}
 
-	wantSubject := "acme.test.agent.agentic-loop.execution.loop-abc"
+	wantSubject := "acme.test.agentic-loop.agent.execution.loop-abc"
 	for _, tr := range pub.triples {
 		if tr.Subject != wantSubject {
 			t.Errorf("triple subject = %q, want %q", tr.Subject, wantSubject)
@@ -981,7 +981,7 @@ func TestDecideExecutor_LoopEntityIDFormat(t *testing.T) {
 		},
 	})
 
-	want := "c360.deep-research-001.agent.agentic-loop.execution.xyz"
+	want := "c360.deep-research-001.agentic-loop.agent.execution.xyz"
 	if got := pub.triples[0].Subject; got != want {
 		t.Errorf("subject = %q, want %q", got, want)
 	}

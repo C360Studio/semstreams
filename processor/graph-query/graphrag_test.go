@@ -20,7 +20,7 @@ func TestExtractEntityType(t *testing.T) {
 	}{
 		{"acme.ops.robotics.gcs.drone.001", "drone"},
 		{"local.dev.game.board1.quest.3416ee6c", "quest"},
-		{"local.dev.agent.model-registry.endpoint.semembed", "endpoint"},
+		{"local.dev.model-registry.agent.endpoint.semembed", "endpoint"},
 		{"short.id", ""},
 		{"a.b.c.d.sensor.x", "sensor"},
 		{"", ""},
@@ -98,9 +98,9 @@ func TestResolveLabel(t *testing.T) {
 
 	t.Run("model.name fallback", func(t *testing.T) {
 		entity := &gtypes.EntityState{
-			ID: "local.dev.agent.model-registry.endpoint.semembed",
+			ID: "local.dev.model-registry.agent.endpoint.semembed",
 			Triples: []message.Triple{
-				{Subject: "local.dev.agent.model-registry.endpoint.semembed", Predicate: semantictest.Predicate(t, "agent", "model", "name"), Object: "nomic-embed-text"},
+				{Subject: "local.dev.model-registry.agent.endpoint.semembed", Predicate: semantictest.Predicate(t, "agent", "model", "name"), Object: "nomic-embed-text"},
 			},
 		}
 		got := resolveLabel(entity)
@@ -153,7 +153,7 @@ func TestBuildEntityDigests(t *testing.T) {
 	entityIDs := []string{
 		"local.dev.game.board1.quest.3416ee6c",
 		"local.dev.game.board1.agent.675e7820",
-		"local.dev.agent.model-registry.endpoint.semembed",
+		"local.dev.model-registry.agent.endpoint.semembed",
 	}
 	scores := map[string]float64{
 		"local.dev.game.board1.quest.3416ee6c": 0.87,
@@ -161,7 +161,7 @@ func TestBuildEntityDigests(t *testing.T) {
 	}
 	labels := map[string]string{
 		"local.dev.game.board1.quest.3416ee6c":             "Dragon Slayer Quest",
-		"local.dev.agent.model-registry.endpoint.semembed": "nomic-embed-text",
+		"local.dev.model-registry.agent.endpoint.semembed": "nomic-embed-text",
 	}
 
 	digests := buildEntityDigests(entityIDs, scores, labels)

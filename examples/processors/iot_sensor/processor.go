@@ -3,6 +3,7 @@ package iotsensor
 import (
 	"errors"
 	"fmt"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"time"
 )
 
@@ -272,19 +273,21 @@ func contains(s, substr string) bool {
 }
 
 // ParseZoneEntityID extracts zone type and zone ID from a full zone entity ID.
-// Zone entity ID format: org.platform.facility.zone.{zoneType}.{zoneID}
-// Example: "c360.logistics.facility.zone.area.cold-storage-1" -> ("area", "cold-storage-1")
-// Returns empty strings if the entity ID is not a valid zone format.
+// Zone entity ID format (canonical order): org.platform.zone.facility.{zoneType}.{zoneID}
+// Example: "c360.logistics.zone.facility.area.cold-storage-1" -> ("area", "cold-storage-1")
+// Returns empty strings if the entity ID is not a canonical zone identity. The
+// positions are read by NAME through pkg/types.ParseEntityID, never by raw
+// index, so a value in any other shape resolves to nothing rather than to a
+// silently mis-read zone.
 func ParseZoneEntityID(entityID string) (zoneType, zoneID string) {
-	parts := splitEntityID(entityID)
-	if len(parts) != 6 {
+	parsed, err := semtypes.ParseEntityID(entityID)
+	if err != nil {
 		return "", ""
 	}
-	// Validate it's a zone entity (parts 2-3 should be "facility.zone")
-	if parts[2] != "facility" || parts[3] != "zone" {
+	if parsed.System != zoneSystem || parsed.Domain != facilityDomain {
 		return "", ""
 	}
-	return parts[4], parts[5]
+	return parsed.Type, parsed.Instance
 }
 
 // splitEntityID splits an entity ID into its parts.

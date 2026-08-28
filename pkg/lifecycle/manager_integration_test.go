@@ -180,7 +180,7 @@ func TestIntegration_Despawn_RemovesEntity(t *testing.T) {
 	mgr := NewManager(tc.Client, nil)
 	require.NoError(t, mgr.Register(lifecycle{}.fixtureWorkflow()))
 
-	id := "c360.platform1.lifecycle.gcs.mission.int-dsp"
+	id := "c360.platform1.gcs.lifecycle.mission.int-dsp"
 	require.NoError(t, mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}))
 	_, err := mgr.Get(ctx, "fixture", id)
 	require.NoError(t, err, "entity should exist after Create")
@@ -226,7 +226,7 @@ func TestIntegration_DespawnWith_DoesNotDeleteNewerStateAfterTerminalCommit(t *t
 	mgr := NewManager(tc.Client, nil)
 	require.NoError(t, mgr.Register(lifecycle{}.fixtureWorkflow()))
 
-	const id = "c360.platform1.lifecycle.gcs.mission.int-dsp-cas"
+	const id = "c360.platform1.gcs.lifecycle.mission.int-dsp-cas"
 	require.NoError(t, mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}))
 	err := mgr.DespawnWith(ctx, "fixture", id, TransitionSourceRule, "raced-cull")
 	require.ErrorIs(t, err, errs.ErrRevisionMismatch)
@@ -283,7 +283,7 @@ func TestIntegration_WatchEvents_DeliversUpsertAndDelete(t *testing.T) {
 	watchCh, err := mgr.Watch(ctx, "fixture")
 	require.NoError(t, err)
 
-	id := "c360.platform1.lifecycle.gcs.mission.int-we"
+	id := "c360.platform1.gcs.lifecycle.mission.int-we"
 
 	require.NoError(t, mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}))
 	requireEvent(t, eventsCh, Upserted, id)
@@ -327,7 +327,7 @@ func TestIntegration_CreateFromOperator_BirthLane(t *testing.T) {
 	mgr := NewManager(tc.Client, nil)
 	require.NoError(t, mgr.Register(lifecycle{}.fixtureWorkflow()))
 
-	const id = "c360.platform1.lifecycle.gcs.mission.int-create"
+	const id = "c360.platform1.gcs.lifecycle.mission.int-create"
 	initial := []byte(`{"entity_id":"` + id + `","phase":"planning","owner_org_id":"acme"}`)
 
 	result, err := mgr.CreateFromOperator(ctx, "fixture", initial)
@@ -386,7 +386,7 @@ func TestIntegration_CreateFromOperator_IsCreateOrFail(t *testing.T) {
 	mgr := NewManager(tc.Client, nil)
 	require.NoError(t, mgr.Register(lifecycle{}.fixtureWorkflow()))
 
-	const id = "c360.platform1.lifecycle.gcs.mission.int-dup"
+	const id = "c360.platform1.gcs.lifecycle.mission.int-dup"
 	first := []byte(`{"entity_id":"` + id + `","phase":"planning","owner_org_id":"first"}`)
 	_, err := mgr.CreateFromOperator(ctx, "fixture", first)
 	require.NoError(t, err)
@@ -414,7 +414,7 @@ func TestIntegration_CreateFromOperator_RejectsUndeclaredInitialPhase(t *testing
 	mgr := NewManager(tc.Client, nil)
 	require.NoError(t, mgr.Register(lifecycle{}.fixtureWorkflow()))
 
-	const id = "c360.platform1.lifecycle.gcs.mission.int-badphase"
+	const id = "c360.platform1.gcs.lifecycle.mission.int-badphase"
 	initial := []byte(`{"entity_id":"` + id + `","phase":"not-a-declared-phase"}`)
 
 	_, err := mgr.CreateFromOperator(ctx, "fixture", initial)

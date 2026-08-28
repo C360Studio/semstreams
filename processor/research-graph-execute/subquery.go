@@ -254,7 +254,7 @@ func resolveSeedRefByCandidateIndex(ref string, candidates []research.Candidate)
 
 // resolveSeedRefByPartialID does suffix-match against the classifier
 // candidate IDs. The 6-part federated ID
-// org.platform.domain.system.type.instance means a partial
+// org.platform.system.domain.type.instance means a partial
 // "robotics.gcs.drone" should match "acme.ops.robotics.gcs.drone.001".
 // Returns the FIRST candidate that has the partial as a suffix;
 // ties broken by relevance order (which candidates already supply).

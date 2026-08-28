@@ -234,7 +234,7 @@ func TestDispatchToolCall_StampsRunAnchor(t *testing.T) {
 	if got := metadata[agentic.MetadataKeyRunID]; got != runID {
 		t.Errorf("payload.metadata[%q] = %v, want %q", agentic.MetadataKeyRunID, got, runID)
 	}
-	// org.platform.agent.chain.execution.<runID>
+	// org.platform.chain.agent.execution.<runID>
 	wantEntityID := agentic.ChainExecutionEntityID("acme", "ops", runID)
 	if got := metadata[agentic.MetadataKeyRunEntityID]; got != wantEntityID {
 		t.Errorf("payload.metadata[%q] = %v, want %q", agentic.MetadataKeyRunEntityID, got, wantEntityID)

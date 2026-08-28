@@ -541,7 +541,7 @@ func TestWriteTodosExecutor_MalformedLoopIDSurfacesAsInternal(t *testing.T) {
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:     "c",
 		Name:   WriteTodosToolName,
-		LoopID: "acme.test.agent.agentic-loop.execution.abc123", // 6-part ID, has dots
+		LoopID: "acme.test.agentic-loop.agent.execution.abc123", // 6-part ID, has dots
 		Arguments: todosArg(
 			map[string]any{"id": "1", "content": "x", "status": "pending"},
 		),

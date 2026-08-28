@@ -221,7 +221,7 @@ func LoopExecutionContract() contract.Contract {
 	return contract.Contract{
 		Name:          LoopExecutionContractName,
 		MessageType:   LoopExecutionMessageType(),
-		EntityPattern: "*.*.agent.agentic-loop.execution.*",
+		EntityPattern: "*.*.agentic-loop.agent.execution.*",
 		BirthPredicates: []string{
 			agvocab.LoopRole,
 			agvocab.LoopTask,

@@ -313,7 +313,7 @@ below).
 Semantic domain objects and lifecycle-managed coordination roots
 implementing `Graphable`:
 
-- 6-part hierarchical entity ID (`org.platform.domain.system.type.instance`)
+- 6-part hierarchical entity ID (`org.platform.system.domain.type.instance`)
 - Persist across multiple events
 - Queryable in the knowledge graph
 - Carry lifecycle facts when phase, progress, ownership, parent/child

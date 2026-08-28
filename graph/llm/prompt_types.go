@@ -8,20 +8,20 @@ type EntityContent struct {
 }
 
 // EntityParts represents parsed 6-part entity ID components.
-// Entity IDs follow the pattern: {org}.{platform}.{domain}.{system}.{type}.{instance}
+// Entity IDs follow the canonical pattern: {org}.{platform}.{system}.{domain}.{type}.{instance}
 type EntityParts struct {
 	Full     string // Complete entity ID
 	Org      string // Part 0: Organization
 	Platform string // Part 1: Platform
-	Domain   string // Part 2: Business domain
-	System   string // Part 3: System/subsystem
+	System   string // Part 2: Source (feed, repo, world, or framework component)
+	Domain   string // Part 3: Delegated taxonomy
 	Type     string // Part 4: Entity type
 	Instance string // Part 5: Instance ID
 	Title    string // Entity title from content store (optional)
 	Abstract string // Entity abstract from content store (optional)
 }
 
-// DomainGroup groups entities by their domain (part[2] of entity ID).
+// DomainGroup groups entities by their domain (position 4 of the entity ID).
 type DomainGroup struct {
 	Domain      string       // e.g., "environmental", "content"
 	Count       int          // Total entities in domain

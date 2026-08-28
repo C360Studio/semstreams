@@ -31,6 +31,7 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/test/e2e/client"
 	"github.com/c360studio/semstreams/test/e2e/harness/lessoncuration"
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
@@ -140,7 +141,7 @@ type Scenario struct {
 	seededLoopKeys   []string
 	seededEntityKeys []string
 
-	// lessonEntityID is the {org}.{platform}.agent.lesson.record.{uuid5} entity
+	// lessonEntityID is the {org}.{platform}.lesson.agent.record.{uuid5} entity
 	// the emit loop mints. Discovered from the graph in verifyLessonProposed
 	// (the UUIDv5 is content-derived, so the scenario reads it back rather than
 	// recomputing it) and consumed by promoteLesson + injectAndVerifyLesson.
@@ -596,15 +597,19 @@ func (s *Scenario) verifyDiagnosesViaHTTP(ctx context.Context, result *scenarios
 }
 
 // assertFindingSubjectsValid checks each finding triple's subject matches the
-// 6-part ops diagnosis entity ID shape: *.ops.diagnosis.finding.*.
+// 6-part ops diagnosis entity ID shape *.*.diagnosis.ops.finding.* — system
+// "diagnosis", the framework-reserved domain "ops", type "finding" (ADR-102).
+// Positions are read by NAME through ParseEntityID, never by fixed index; the
+// predicate ops.diagnosis.finding queried above is a separate three-part
+// vocabulary name and is unchanged.
 func assertFindingSubjectsValid(triples []message.Triple) error {
 	for i, t := range triples {
-		parts := strings.Split(t.Subject, ".")
-		if len(parts) != 6 {
-			return fmt.Errorf("finding[%d] subject %q has %d parts, want 6", i, t.Subject, len(parts))
+		parsed, err := semtypes.ParseEntityID(t.Subject)
+		if err != nil {
+			return fmt.Errorf("finding[%d] subject %q is not a canonical 6-part entity ID: %w", i, t.Subject, err)
 		}
-		if parts[2] != "ops" || parts[3] != "diagnosis" || parts[4] != "finding" {
-			return fmt.Errorf("finding[%d] subject %q does not match *.ops.diagnosis.finding.*", i, t.Subject)
+		if parsed.System != "diagnosis" || parsed.Domain != "ops" || parsed.Type != "finding" {
+			return fmt.Errorf("finding[%d] subject %q does not match *.*.diagnosis.ops.finding.*", i, t.Subject)
 		}
 	}
 	return nil
@@ -692,7 +697,7 @@ func (s *Scenario) assertConfidenceTriples(
 }
 
 // verifyLessonProposed is stage 2 of the ADR-080 §5 round-trip: the emit loop's
-// emit_lesson call must have minted exactly one agent.lesson.record entity, born
+// emit_lesson call must have minted exactly one lesson.agent.record entity, born
 // status="proposed" and carrying the injection form + scope key the inject stage
 // later depends on. The minted UUIDv5 is content-derived, so the scenario reads
 // the entity ID back from the graph (via /graph/triples) rather than recomputing
@@ -710,9 +715,9 @@ func (s *Scenario) verifyLessonProposed(ctx context.Context, result *scenarios.R
 	}
 
 	lesson := statusTriples[0]
-	parts := strings.Split(lesson.Subject, ".")
-	if len(parts) != 6 || parts[2] != "agent" || parts[3] != "lesson" || parts[4] != "record" {
-		return fmt.Errorf("lesson subject %q does not match *.*.agent.lesson.record.* (6 parts)", lesson.Subject)
+	parsedLesson, err := semtypes.ParseEntityID(lesson.Subject)
+	if err != nil || parsedLesson.System != "lesson" || parsedLesson.Domain != "agent" || parsedLesson.Type != "record" {
+		return fmt.Errorf("lesson subject %q does not match *.*.lesson.agent.record.* (6 parts)", lesson.Subject)
 	}
 	if status := fmt.Sprintf("%v", lesson.Object); status != "proposed" {
 		return fmt.Errorf("lesson %q status = %q, want %q (lessons are born proposed)", lesson.Subject, status, "proposed")

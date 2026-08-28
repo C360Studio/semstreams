@@ -558,6 +558,7 @@ func (rp *Processor) createRuleFromConfig(ruleID string, ruleMap map[string]any)
 		NATSClient: rp.natsClient,
 		Logger:     rp.logger,
 		PackID:     rp.config.PackID,
+		Platform:   rp.platform,
 	}
 
 	// Use factory to create rule

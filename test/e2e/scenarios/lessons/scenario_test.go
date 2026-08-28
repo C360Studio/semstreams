@@ -60,7 +60,7 @@ func TestRunStagesDoesNotCountFailedStageOrRunLaterStages(t *testing.T) {
 
 func TestProductLessonFixtureHasAcceptedIdentityAndCompleteTuples(t *testing.T) {
 	fixture := newProductLessonFixture(defaultConfig())
-	if fixture.entityID != "c360.streamkit-pure.agent.lesson.record.54b545de-8f18-5419-b996-220d3c992c5c" {
+	if fixture.entityID != "c360.streamkit-pure.lesson.agent.record.54b545de-8f18-5419-b996-220d3c992c5c" {
 		t.Fatalf("entity ID = %q", fixture.entityID)
 	}
 	if got := fixture.messageType.Key(); got != "agentic.agent_lesson.v1" {

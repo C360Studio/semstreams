@@ -9,6 +9,7 @@ import (
 
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -129,7 +130,7 @@ func TestHierarchyInference_InverseEdgeWriteFailureIsNonFatal(t *testing.T) {
 	failingAdder := &hierarchyMockTripleAdder{err: errors.New("entity not found (simulated must-exist rejection)")}
 	entityManager := newMockEntityManager()
 	// An existing sibling so createSiblingEdges attempts an inverse back-edge.
-	entityManager.addExistingEntity("c360.logistics.environmental.sensor.temperature.temp-002")
+	entityManager.addExistingEntity("c360.logistics.sensor.environmental.temperature.temp-002")
 
 	config := HierarchyConfig{
 		Enabled:            true,
@@ -143,7 +144,7 @@ func TestHierarchyInference_InverseEdgeWriteFailureIsNonFatal(t *testing.T) {
 	// GetHierarchyTriples is the production entry (graph-ingest MergeEntity calls
 	// it on the create branch). Every inverse-edge write inside it hits the
 	// failing adder; container creation goes through the (working) entityManager.
-	triples, err := hi.GetHierarchyTriples(context.Background(), "c360.logistics.environmental.sensor.temperature.temp-001")
+	triples, err := hi.GetHierarchyTriples(context.Background(), "c360.logistics.sensor.environmental.temperature.temp-001")
 
 	require.NoError(t, err,
 		"inverse-edge write failures must NOT propagate — the forward hierarchy triples must still return")
@@ -450,25 +451,29 @@ func TestDefaultHierarchyConfig(t *testing.T) {
 	assert.True(t, config.CreateDomainEdges)
 }
 
+// TestBuildContainerIDs pins each container to its NAMED prefix level under the
+// canonical order org.platform.system.domain.type.instance (ADR-102). The
+// fixture deliberately gives positions 3 and 4 distinguishable values ("src"
+// and "dom") so a builder that read them in the retired order would produce a
+// different string — the previous fixture named them "domain"/"system" in
+// position order, which made every assertion here order-blind.
 func TestBuildContainerIDs(t *testing.T) {
-	tripleAdder := &hierarchyMockTripleAdder{}
-	entityManager := newMockEntityManager()
+	eid := semtypes.EntityID{
+		Org: "org", Platform: "platform",
+		System: "src", Domain: "dom", Type: "type", Instance: "instance",
+	}
+	require.Equal(t, "org.platform.src.dom.type.instance", eid.Key())
 
-	hi := NewHierarchyInference(entityManager, tripleAdder, DefaultHierarchyConfig(), nil)
+	// Level 5 (type prefix) + one padding token.
+	assert.Equal(t, "org.platform.src.dom.type.group", buildTypeContainerID(eid))
 
-	parts := []string{"org", "platform", "domain", "system", "type", "instance"}
+	// Level 4 (taxonomy prefix) + two padding tokens. Reached through the
+	// retired-name CreateSystemEdges field and hierarchy.system.member (H7).
+	assert.Equal(t, "org.platform.src.dom.group.container", buildTaxonomyContainerID(eid))
 
-	// Test type container ID
-	typeID := hi.buildTypeContainerID(parts)
-	assert.Equal(t, "org.platform.domain.system.type.group", typeID)
-
-	// Test system container ID
-	systemID := hi.buildSystemContainerID(parts)
-	assert.Equal(t, "org.platform.domain.system.group.container", systemID)
-
-	// Test domain container ID
-	domainID := hi.buildDomainContainerID(parts)
-	assert.Equal(t, "org.platform.domain.group.container.level", domainID)
+	// Level 3 (source prefix) + three padding tokens. Reached through the
+	// retired-name CreateDomainEdges field and hierarchy.domain.member (H7).
+	assert.Equal(t, "org.platform.src.group.container.level", buildSourceContainerID(eid))
 }
 
 func TestHierarchyInference_RaceConditionOnContainerCreate(t *testing.T) {

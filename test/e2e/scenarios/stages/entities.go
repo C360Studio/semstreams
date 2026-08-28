@@ -211,11 +211,11 @@ func (v *EntityVerifier) getCriticalEntities() []string {
 	case "structural":
 		// All tiers now use testdata/semantic/sensors.jsonl
 		return []string{
-			"c360.logistics.environmental.sensor.temperature.temp-sensor-001",
+			"c360.logistics.sensor.environmental.temperature.temp-sensor-001",
 		}
 	default:
 		return []string{
-			"c360.logistics.content.document.operations.doc-ops-001",
+			"c360.logistics.document.content.operations.doc-ops-001",
 		}
 	}
 }
@@ -248,11 +248,11 @@ type TestEntity struct {
 // DefaultTestEntities returns the standard test entities to verify
 func DefaultTestEntities() []TestEntity {
 	return []TestEntity{
-		{"c360.logistics.content.document.operations.doc-ops-001", "document", "documents.jsonl"},
-		{"c360.logistics.content.document.quality.doc-quality-001", "document", "documents.jsonl"},
-		{"c360.logistics.maintenance.work.completed.maint-001", "maintenance", "maintenance.jsonl"},
-		{"c360.logistics.observation.record.high.obs-001", "observation", "observations.jsonl"},
-		{"c360.logistics.sensor.document.temperature.sensor-temp-001", "sensor_doc", "sensor_docs.jsonl"},
+		{"c360.logistics.document.content.operations.doc-ops-001", "document", "documents.jsonl"},
+		{"c360.logistics.document.content.quality.doc-quality-001", "document", "documents.jsonl"},
+		{"c360.logistics.work.maintenance.completed.maint-001", "maintenance", "maintenance.jsonl"},
+		{"c360.logistics.record.observation.high.obs-001", "observation", "observations.jsonl"},
+		{"c360.logistics.document.sensor.temperature.sensor-temp-001", "sensor_doc", "sensor_docs.jsonl"},
 	}
 }
 

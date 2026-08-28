@@ -11,10 +11,11 @@ import (
 const FanOutWorkflow = "gateddag-fanout"
 
 // FanOutEntityIDPattern matches FanOut instance entities. Six-segment
-// org.platform.domain.system.type.instance shape: org + platform + instance
-// wildcard; domain (`gateddag`), system (`fanout`), type (`instance`) pin the
-// canonical shape.
-const FanOutEntityIDPattern = "*.*.gateddag.fanout.instance.*"
+// org.platform.system.domain.type.instance shape: org + platform + instance
+// wildcard; system (`gated-dag`, the minting component), domain (`agent`, the
+// framework-reserved domain this family re-slotted under — ADR-102, ruled
+// O-9), type (`fanout`) pin the canonical shape.
+const FanOutEntityIDPattern = "*.*.gated-dag.agent.fanout.*"
 
 // PredicateFanOutPhase is the FanOut phase predicate. lifecycle.Watch only
 // delivers entries carrying this predicate, so the watched entities MUST carry

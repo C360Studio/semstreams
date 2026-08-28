@@ -16,7 +16,7 @@ var fixedTime = time.Date(2026, 6, 2, 18, 30, 45, 123456789, time.UTC)
 
 const fixedTimeRFC = "2026-06-02T18:30:45.123456789Z"
 
-const testLoopEntityID = "acme.ops.agent.agentic-loop.execution.rg_abc12345"
+const testLoopEntityID = "acme.ops.agentic-loop.agent.execution.rg_abc12345"
 
 // assertSharedSubject is the cross-cutting atomicity assertion: every
 // builder must return triples that all share one Subject so graph-ingest's

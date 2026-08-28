@@ -38,6 +38,7 @@ import (
 	"github.com/c360studio/semstreams/persona"
 	shutdownerrs "github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/processor/agentic-tools/executors"
 	rulepkg "github.com/c360studio/semstreams/processor/rule"
@@ -301,7 +302,7 @@ func run() (runErr error) {
 		if cliCfg.LifecycleSeed == "" {
 			return nil
 		}
-		return seedMission(seedCtx, svcDeps.LifecycleManager, cliCfg.LifecycleSeed)
+		return seedMission(seedCtx, svcDeps.LifecycleManager, svcDeps.Platform, cliCfg.LifecycleSeed)
 	}, rootResources.close)
 }
 
@@ -432,12 +433,30 @@ func buildPayloadRegistry(cfg *config.Config) (*payloadregistry.Registry, error)
 // flag so the gateway has a known instance to serve before the
 // scenario runs. Already-exists is treated as a no-op so the binary
 // is idempotent across restarts in the e2e fixture.
-func seedMission(ctx context.Context, mgr *lifecycle.Manager, entityID string) error {
+//
+// The seed's authority pair MUST equal this deployment's own
+// platform.org/platform.id. Since ADR-102 the mission-command processor
+// stamps positions 1-2 from deps.Platform and never from the wire, so a
+// seed carrying a different pair creates an entity no command can ever
+// reach: the tier then fails 5s later as "rule did not transition", which
+// names the symptom and hides the cause. Reject it at boot instead.
+func seedMission(ctx context.Context, mgr *lifecycle.Manager, platform types.PlatformMeta, entityID string) error {
+	parsed, err := semtypes.ParseEntityID(entityID)
+	if err != nil {
+		return fmt.Errorf("--lifecycle-seed %q is not a canonical entity ID: %w", entityID, err)
+	}
+	if parsed.Org != platform.Org || parsed.Platform != platform.Platform {
+		return fmt.Errorf(
+			"--lifecycle-seed %q claims authority %s.%s but this deployment's authority is %s.%s "+
+				"(platform.org/platform.id): the mission-command processor stamps its own authority, "+
+				"so nothing would ever command the seeded entity",
+			entityID, parsed.Org, parsed.Platform, platform.Org, platform.Platform)
+	}
 	state := &mission.State{
 		EntityIDField: entityID,
 		PhaseField:    mission.PhasePlanning,
 	}
-	err := mgr.Create(ctx, state)
+	err = mgr.Create(ctx, state)
 	if err == nil {
 		slog.Info("seeded mission", "entity_id", entityID, "phase", mission.PhasePlanning)
 		return nil
@@ -656,14 +675,11 @@ func ensureStreamsWithSpinner(
 }
 
 func extractPlatformMeta(cfg *config.Config) types.PlatformMeta {
-	platformID := cfg.Platform.InstanceID
-	if platformID == "" {
-		platformID = cfg.Platform.ID
-	}
-
+	// platform.id is the single deployment authority field (ADR-102, ruled
+	// O-2): positions 1-2 of every identity this process mints.
 	return types.PlatformMeta{
-		Org:      cfg.Platform.Org,
-		Platform: platformID,
+		Org:      cfg.GetOrg(),
+		Platform: cfg.GetPlatform(),
 	}
 }
 

@@ -177,6 +177,7 @@ func (rp *Processor) loadRules() error {
 		NATSClient: rp.natsClient,
 		Logger:     rp.logger,
 		PackID:     rp.config.PackID,
+		Platform:   rp.platform,
 	}
 
 	for _, def := range allDefinitions {

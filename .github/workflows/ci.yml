@@ -67,6 +67,12 @@ jobs:
       - name: Run revive (pinned via go.mod tool directive)
         run: go tool revive -config revive.toml -formatter friendly ./...
 
+      - name: Entity-ID corpus audit (lexical + segment rules)
+        # ADR-102 / entity-id-contract "Segment semantics are enforced by the
+        # entity-ID corpus audit": the tracked corpus must have zero invalid or
+        # unclassified candidates. Same invocation as `task entity-id:audit`.
+        run: go run ./cmd/entity-id-audit .
+
       - name: Substrate-flake guard — fixed-port lint regex matrix test
         # gh#220 review C1 — the lint guard's regex matrix must be
         # verified, not implicitly trusted. Runs fixture test that

@@ -10,7 +10,6 @@
     "id": "lesson-example",
     "type": "agentic",
     "region": "local",
-    "instance_id": "lesson-example-001",
     "environment": "example"
   },
   "tier": "agentic",

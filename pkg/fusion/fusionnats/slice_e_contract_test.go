@@ -39,7 +39,7 @@ func TestSliceEFusionEntityRejectsInvalidExactEvidence(t *testing.T) {
 		{name: "nil entity", wire: graph.ExactEntity{KVRevision: 1}, want: "entity"},
 		{name: "zero revision", wire: graph.ExactEntity{Entity: &graph.EntityState{ID: id}}, want: "revision"},
 		{name: "requested ID mismatch", wire: graph.ExactEntity{Entity: &graph.EntityState{ID: "acme.ops.robotics.gcs.sensor.002"}, KVRevision: 1}, want: "mismatch"},
-		{name: "poisoned entity", wire: graph.ExactEntity{Entity: &graph.EntityState{ID: "bad"}, KVRevision: 1}, want: "validate"},
+		{name: "poisoned entity", wire: graph.ExactEntity{Entity: &graph.EntityState{ID: "bad"}, KVRevision: 1}, want: "validate"}, // entity-id-audit:classify intentional-malformed "bad" line=42 column=84 surface=go-field:EntityState.ID entity_id_invalid:arity poisoned wire entity must fail canonical validation
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -151,7 +151,7 @@ func TestRuleWatcherCleanBootstrapPreservesOnRecovery(t *testing.T) {
 	executor := &atomicRecoveryExecutor{}
 	processor.stateTracker = tracker
 	processor.statefulEvaluator = NewStatefulEvaluator(tracker, executor, nil)
-	recoveryRule, err := NewTestRule("atomic-bootstrap-test", "recovery-rule", "Recovery Rule", nil, nil)
+	recoveryRule, err := NewTestRule(testPlatform, "atomic-bootstrap-test", "recovery-rule", "Recovery Rule", nil, nil)
 	if err != nil {
 		t.Fatalf("NewTestRule: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestRuleWatcherNeverMatchedEntityDoesNotRecoverOnBootstrap(t *testing.T) {
 	executor := &atomicRecoveryExecutor{}
 	processor.stateTracker = tracker
 	processor.statefulEvaluator = NewStatefulEvaluator(tracker, executor, nil)
-	recoveryRule, err := NewTestRule("atomic-bootstrap-test", "recovery-rule", "Recovery Rule", nil, nil)
+	recoveryRule, err := NewTestRule(testPlatform, "atomic-bootstrap-test", "recovery-rule", "Recovery Rule", nil, nil)
 	if err != nil {
 		t.Fatalf("NewTestRule: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestRuleWatcherLiveMatchPersistsStateForLaterBootstrapRecovery(t *testing.T
 	// FIRST flips bootstrap=false before any real entry arrives, so the
 	// entity update below dispatches on the genuine live path.
 	liveExecutor := &atomicRecoveryExecutor{}
-	liveRule, err := NewTestRule("atomic-bootstrap-test", "recovery-rule", "Recovery Rule", nil, nil)
+	liveRule, err := NewTestRule(testPlatform, "atomic-bootstrap-test", "recovery-rule", "Recovery Rule", nil, nil)
 	if err != nil {
 		t.Fatalf("NewTestRule: %v", err)
 	}
@@ -309,7 +309,7 @@ func TestRuleWatcherLiveMatchPersistsStateForLaterBootstrapRecovery(t *testing.T
 	// Bootstrap replay of the same still-matching entity must now
 	// classify as recovery and fire OnRecovery exactly once.
 	restartExecutor := &atomicRecoveryExecutor{}
-	restartRule, err := NewTestRule("atomic-bootstrap-test", "recovery-rule", "Recovery Rule", nil, nil)
+	restartRule, err := NewTestRule(testPlatform, "atomic-bootstrap-test", "recovery-rule", "Recovery Rule", nil, nil)
 	if err != nil {
 		t.Fatalf("NewTestRule: %v", err)
 	}

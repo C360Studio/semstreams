@@ -6,7 +6,6 @@
     "id": "ops-agent",
     "type": "agentic-e2e",
     "region": "local",
-    "instance_id": "ops-agent-001",
     "environment": "test"
   },
   "tier": "agentic",

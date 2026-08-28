@@ -193,7 +193,7 @@ func TestMatchPattern(t *testing.T) {
 	}{
 		{"*.lifecycle.gcs.mission.*", "c360.lifecycle.gcs.mission.001", true}, // 5 vs 5 parts
 		{"*.lifecycle.gcs.mission.*", "c360.lifecycle.gcs.mission.001.extra", false},
-		{"*.*.lifecycle.gcs.mission.*", "c360.x.lifecycle.gcs.mission.001", true}, // 6 vs 6
+		{"*.*.gcs.lifecycle.mission.*", "c360.x.gcs.lifecycle.mission.001", true}, // 6 vs 6
 		{"*.lifecycle.gcs.mission.*.*", "c360.lifecycle.gcs.mission.x.001", true},
 		{"*.lifecycle.gcs.mission.*.*", "c360.lifecycle.gcs.drone.x.001", false},
 		{"c360.*.*.*.*.001", "c360.a.b.c.d.001", true},

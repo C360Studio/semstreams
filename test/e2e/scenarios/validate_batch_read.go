@@ -266,7 +266,7 @@ func (s *TieredScenario) assertBatchReconciliation(ctx context.Context, present 
 		sample = sample[:5]
 	}
 	// A syntactically valid 6-part ID that is guaranteed absent from ENTITY_STATES.
-	absentID := fmt.Sprintf("c360.e2e.reconcile.batch.absent.%d", time.Now().UnixNano())
+	absentID := fmt.Sprintf("c360.e2e.batch.reconcile.absent.%d", time.Now().UnixNano())
 	requested := make([]string, 0, len(sample)+1)
 	requested = append(requested, sample...)
 	requested = append(requested, absentID)
@@ -349,7 +349,7 @@ func (s *TieredScenario) assertBatchReconciliationClient(ctx context.Context, pr
 	}
 	// Request the present IDs in REVERSED order (see downscope note) plus one
 	// guaranteed-absent ID, so the production client must reconcile a missing entry.
-	absentID := fmt.Sprintf("c360.e2e.reconcile.client.absent.%d", time.Now().UnixNano())
+	absentID := fmt.Sprintf("c360.e2e.client.reconcile.absent.%d", time.Now().UnixNano())
 	requested := make([]string, 0, len(sample)+1)
 	for i := range sample {
 		requested = append(requested, sample[len(sample)-1-i])

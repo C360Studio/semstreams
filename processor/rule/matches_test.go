@@ -122,7 +122,7 @@ func TestMatches_AgreesWithStatefulPath(t *testing.T) {
 			def := defFor(c)
 			entity := createTestEntityState("test.entity.id", c.triples)
 
-			stateful, err := NewExpressionRule("matches-parity-test", def)
+			stateful, err := NewExpressionRule(testPlatform, "matches-parity-test", def)
 			if err != nil {
 				t.Fatalf("NewExpressionRule: %v", err)
 			}
@@ -237,7 +237,7 @@ func TestMatches_EvaluationErrorPropagatesRatherThanBecomingFalse(t *testing.T) 
 	triples := []message.Triple{{Subject: "test", Predicate: "sensor.classification.type", Object: "temperature"}}
 
 	// The engine returns a bare false for this input.
-	stateful, err := NewExpressionRule("required-absent-test", def)
+	stateful, err := NewExpressionRule(testPlatform, "required-absent-test", def)
 	if err != nil {
 		t.Fatalf("NewExpressionRule: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestMatches_CooldownIsNotAppliedAndNotRefused(t *testing.T) {
 	triples := []message.Triple{{Subject: "test", Predicate: "sensor.measurement.fahrenheit", Object: 41.2}}
 
 	// The running engine, mid-cooldown, answers the INSTANT question: no.
-	stateful, err := NewExpressionRule("cooldown-test", def)
+	stateful, err := NewExpressionRule(testPlatform, "cooldown-test", def)
 	if err != nil {
 		t.Fatalf("NewExpressionRule: %v", err)
 	}
@@ -319,7 +319,7 @@ func TestMatches_LeavesEngineStateUntouched(t *testing.T) {
 	}
 	triples := []message.Triple{{Subject: "test", Predicate: "sensor.measurement.fahrenheit", Object: 41.2}}
 
-	stateful, err := NewExpressionRule("untouched-test", def)
+	stateful, err := NewExpressionRule(testPlatform, "untouched-test", def)
 	if err != nil {
 		t.Fatalf("NewExpressionRule: %v", err)
 	}
@@ -363,7 +363,7 @@ func TestMatches_DisabledDefinitionOwesNothing(t *testing.T) {
 	}
 
 	// Parity: production agrees.
-	stateful, err := NewExpressionRule("disabled-parity-test", def)
+	stateful, err := NewExpressionRule(testPlatform, "disabled-parity-test", def)
 	if err != nil {
 		t.Fatalf("NewExpressionRule: %v", err)
 	}
@@ -624,7 +624,7 @@ func TestMatches_RejectsNilContext(t *testing.T) {
 }
 
 func TestMatches_ConditionSubstitutionSecondLookupHonoursCallerCancellation(t *testing.T) {
-	entityID := "test.entity.id"
+	entityID := "acme.ops.src.test.entity.cancel"
 	base := newFakeManager()
 	base.seed("mission", &fakeParticipant{EntityIDF: entityID, PhaseF: "flying"})
 	lookup := &secondLookupBlocks{

@@ -28,6 +28,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/types"
 	"github.com/nats-io/nats.go"
 )
 
@@ -58,7 +59,7 @@ type Command struct {
 // given the standard parts. Exposed as a helper so the e2e scenario
 // / seeder can use the same shape.
 func EntityIDFor(orgID, platform, missionID string) string {
-	return fmt.Sprintf("%s.%s.lifecycle.gcs.mission.%s", orgID, platform, missionID)
+	return fmt.Sprintf("%s.%s.gcs.lifecycle.mission.%s", orgID, platform, missionID)
 }
 
 // EntityID returns the federated identifier the command targets.
@@ -123,11 +124,11 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
 
 // --- Processor component ---
 
-// ComponentConfig configures the mission-command processor.
+// ComponentConfig configures the mission-command processor. The authority a
+// mission is minted under is not configurable here: it is the deployment's own
+// deps.Platform (ADR-102), never a config knob or a wire value.
 type ComponentConfig struct {
-	Ports    *component.PortConfig `json:"ports"`
-	OrgID    string                `json:"org_id"`
-	Platform string                `json:"platform"`
+	Ports *component.PortConfig `json:"ports"`
 }
 
 var commandSchema = component.GenerateConfigSchema(reflect.TypeOf(ComponentConfig{}))
@@ -142,6 +143,7 @@ type Component struct {
 	inputSubj  string
 	outputSubj string
 	cfg        ComponentConfig
+	platform   types.PlatformMeta // the deployment authority every mission is minted under
 	inputs     []component.Port
 	outputs    []component.Port
 
@@ -199,10 +201,6 @@ func resolveConfig(rawConfig json.RawMessage) (resolvedConfig, error) {
 		return resolvedConfig{}, errs.WrapInvalid(errs.ErrInvalidConfig, "mission.Component", "NewComponent",
 			"exactly one input and one output port are required")
 	}
-	if cfg.OrgID == "" || cfg.Platform == "" {
-		return resolvedConfig{}, errs.WrapInvalid(errs.ErrInvalidConfig, "mission.Component", "NewComponent",
-			"org_id and platform are required")
-	}
 	input, err := cfg.Ports.Inputs[0].Resolve(component.DirectionInput)
 	if err != nil {
 		return resolvedConfig{}, errs.WrapInvalid(err, "mission.Component", "NewComponent", "resolve input port")
@@ -235,6 +233,10 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	if err != nil {
 		return nil, err
 	}
+	if deps.Platform.Org == "" || deps.Platform.Platform == "" {
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "mission.Component", "NewComponent",
+			"deps.Platform is required: missions are minted under the deployment's own authority")
+	}
 	cfg, input, output := resolved.cfg, resolved.input, resolved.output
 	inputSubjects, outputSubjects := []string{resolved.inputSubject}, []string{resolved.outputSubject}
 	return &Component{
@@ -242,6 +244,7 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		inputSubj:  inputSubjects[0],
 		outputSubj: outputSubjects[0],
 		cfg:        cfg,
+		platform:   deps.Platform,
 		inputs:     []component.Port{input},
 		outputs:    []component.Port{output},
 		nats:       deps.NATSClient,
@@ -351,12 +354,15 @@ func (c *Component) handle(ctx context.Context, data []byte) {
 		c.logger.Warn("mission-command: bad JSON", slog.String("error", err.Error()))
 		return
 	}
-	if cmd.OrgID == "" {
-		cmd.OrgID = c.cfg.OrgID
+	// The mission is minted under the deployment's own authority (ADR-102):
+	// a wire value is never the authority. A sender naming another pair is
+	// logged, not honoured.
+	if (cmd.OrgID != "" && cmd.OrgID != c.platform.Org) || (cmd.Platform != "" && cmd.Platform != c.platform.Platform) {
+		c.logger.Warn("mission-command: wire authority ignored; minting under the deployment authority",
+			slog.String("wire_org", cmd.OrgID), slog.String("wire_platform", cmd.Platform))
 	}
-	if cmd.Platform == "" {
-		cmd.Platform = c.cfg.Platform
-	}
+	cmd.OrgID = c.platform.Org
+	cmd.Platform = c.platform.Platform
 	if err := cmd.Validate(); err != nil {
 		c.logger.Warn("mission-command: invalid command", slog.String("error", err.Error()))
 		return

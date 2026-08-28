@@ -135,7 +135,7 @@ func TestLoopCreatedEvent_RunID_ProductionWireRoundTrip(t *testing.T) {
 		MaxIterations: 20,
 		CreatedAt:     time.Now().UTC().Truncate(time.Second),
 		RunID:         "root-loop-uuid",
-		RunEntityID:   "acme.ops.agent.chain.execution.root-loop-uuid",
+		RunEntityID:   "acme.ops.chain.agent.execution.root-loop-uuid",
 	}
 	baseMsg := message.NewBaseMessage(ev.Schema(), ev, "test")
 	data, err := json.Marshal(baseMsg)
@@ -146,7 +146,7 @@ func TestLoopCreatedEvent_RunID_ProductionWireRoundTrip(t *testing.T) {
 	got, ok := decoded.Payload().(*agentic.LoopCreatedEvent)
 	require.True(t, ok, "expected *agentic.LoopCreatedEvent payload, got %T", decoded.Payload())
 	assert.Equal(t, "root-loop-uuid", got.RunID)
-	assert.Equal(t, "acme.ops.agent.chain.execution.root-loop-uuid", got.RunEntityID)
+	assert.Equal(t, "acme.ops.chain.agent.execution.root-loop-uuid", got.RunEntityID)
 	assert.Equal(t, "loop-created-001", got.LoopID)
 }
 
@@ -180,7 +180,7 @@ func TestLoopCompletedEvent_RunID_ProductionWireRoundTrip(t *testing.T) {
 		Model:       "model-x",
 		CompletedAt: time.Now().UTC().Truncate(time.Second),
 		RunID:       "root-loop-uuid",
-		RunEntityID: "acme.ops.agent.chain.execution.root-loop-uuid",
+		RunEntityID: "acme.ops.chain.agent.execution.root-loop-uuid",
 	}
 	baseMsg := message.NewBaseMessage(ev.Schema(), ev, "test")
 	data, err := json.Marshal(baseMsg)
@@ -191,7 +191,7 @@ func TestLoopCompletedEvent_RunID_ProductionWireRoundTrip(t *testing.T) {
 	got, ok := decoded.Payload().(*agentic.LoopCompletedEvent)
 	require.True(t, ok, "expected *agentic.LoopCompletedEvent payload, got %T", decoded.Payload())
 	assert.Equal(t, "root-loop-uuid", got.RunID)
-	assert.Equal(t, "acme.ops.agent.chain.execution.root-loop-uuid", got.RunEntityID)
+	assert.Equal(t, "acme.ops.chain.agent.execution.root-loop-uuid", got.RunEntityID)
 }
 
 func TestLoopCompletedEvent_RunID_OmittedWhenEmpty(t *testing.T) {
@@ -225,7 +225,7 @@ func TestLoopFailedEvent_RunID_ProductionWireRoundTrip(t *testing.T) {
 		Model:       "model-x",
 		FailedAt:    time.Now().UTC().Truncate(time.Second),
 		RunID:       "root-loop-uuid",
-		RunEntityID: "acme.ops.agent.chain.execution.root-loop-uuid",
+		RunEntityID: "acme.ops.chain.agent.execution.root-loop-uuid",
 	}
 	baseMsg := message.NewBaseMessage(ev.Schema(), ev, "test")
 	data, err := json.Marshal(baseMsg)
@@ -236,7 +236,7 @@ func TestLoopFailedEvent_RunID_ProductionWireRoundTrip(t *testing.T) {
 	got, ok := decoded.Payload().(*agentic.LoopFailedEvent)
 	require.True(t, ok, "expected *agentic.LoopFailedEvent payload, got %T", decoded.Payload())
 	assert.Equal(t, "root-loop-uuid", got.RunID)
-	assert.Equal(t, "acme.ops.agent.chain.execution.root-loop-uuid", got.RunEntityID)
+	assert.Equal(t, "acme.ops.chain.agent.execution.root-loop-uuid", got.RunEntityID)
 }
 
 func TestLoopFailedEvent_RunID_OmittedWhenEmpty(t *testing.T) {
@@ -269,7 +269,7 @@ func TestLoopCancelledEvent_RunID_ProductionWireRoundTrip(t *testing.T) {
 		ParentLoopID: "parent-loop-uuid",
 		CancelledAt:  time.Now().UTC().Truncate(time.Second),
 		RunID:        "root-loop-uuid",
-		RunEntityID:  "acme.ops.agent.chain.execution.root-loop-uuid",
+		RunEntityID:  "acme.ops.chain.agent.execution.root-loop-uuid",
 	}
 	baseMsg := message.NewBaseMessage(ev.Schema(), ev, "test")
 	data, err := json.Marshal(baseMsg)
@@ -280,7 +280,7 @@ func TestLoopCancelledEvent_RunID_ProductionWireRoundTrip(t *testing.T) {
 	got, ok := decoded.Payload().(*agentic.LoopCancelledEvent)
 	require.True(t, ok, "expected *agentic.LoopCancelledEvent payload, got %T", decoded.Payload())
 	assert.Equal(t, "root-loop-uuid", got.RunID)
-	assert.Equal(t, "acme.ops.agent.chain.execution.root-loop-uuid", got.RunEntityID)
+	assert.Equal(t, "acme.ops.chain.agent.execution.root-loop-uuid", got.RunEntityID)
 	assert.Equal(t, "parent-loop-uuid", got.ParentLoopID,
 		"LoopCancelledEvent.ParentLoopID must round-trip (parity with LoopFailedEvent)")
 }

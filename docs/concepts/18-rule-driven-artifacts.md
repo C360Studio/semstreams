@@ -98,7 +98,12 @@ Pair it with an `output/file` component subscribed to that subject:
 ```
 
 Each entity change now produces a JSON file scoped under the entity
-ID. Substitute `output/httppost` for outbound webhooks, or wire an
+ID. `$entity.id` substitutes the whole canonical ID
+(`org.platform.system.domain.type.instance`), so the subject's tokens
+follow that order and a subscriber that pins position literals — for
+example `output.drone-snapshot.*.*.gcs.robotics.>` — must follow it
+too; a subscriber written for another order matches nothing and reports
+nothing. Substitute `output/httppost` for outbound webhooks, or wire an
 ObjectStore writer for blob-shaped artifacts.
 
 ## Worked example: render markdown via a renderer agent

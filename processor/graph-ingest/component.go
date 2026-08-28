@@ -2682,8 +2682,9 @@ func (c *Component) addTriplesLane(ctx context.Context, triples []message.Triple
 }
 
 // entitySuffixKeys returns the suffix index keys for a given entity ID.
-// Entity ID format: org.platform.domain.system.type.instance
-// Returns two keys: instance part and type.instance part.
+// Entity ID format: org.platform.system.domain.type.instance (ADR-102).
+// Returns two keys: instance part and type.instance part. Both are read from
+// the END of the ID, so the position-3/4 reorder does not move them.
 func entitySuffixKeys(entityID string) (instance, typeInstance string) {
 	parts := strings.Split(entityID, ".")
 	if len(parts) < 2 {

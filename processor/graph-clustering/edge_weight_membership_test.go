@@ -113,8 +113,8 @@ func TestEntityIDProviderGetEdgeWeight_TiersComeAlive(t *testing.T) {
 	const (
 		// siblingA / siblingB share the 5-part type prefix → siblings (and, being
 		// same-system, would also be system peers; siblings are checked first).
-		siblingA = "c360.logistics.environmental.sensor.temperature.temp-001"
-		siblingB = "c360.logistics.environmental.sensor.temperature.temp-002"
+		siblingA = "c360.logistics.sensor.environmental.temperature.temp-001"
+		siblingB = "c360.logistics.sensor.environmental.temperature.temp-002"
 		// peerA / peerB share the system segment (gcs) but differ in type
 		// (drone vs sensor) → system peers, NOT siblings.
 		peerA = "acme.ops.robotics.gcs.drone.001"

@@ -185,7 +185,6 @@ func newGuardsTestComponentManager(
 		Platform: config.PlatformConfig{
 			Org:         "test",
 			ID:          "guards-test",
-			InstanceID:  "guards-001",
 			Environment: "test",
 		},
 		Components: components,

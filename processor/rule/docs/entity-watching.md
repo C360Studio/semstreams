@@ -85,7 +85,7 @@ acme.logistics.*.fleet.*.*
 |---------|---------|---------------|
 | `*.*.robotics.*.*.*` | `acme.platform1.robotics.fleet.drone.d007` | `acme.platform1.logistics.fleet.drone.d007` |
 | `acme.*.*.*.drone.*` | `acme.prod.robotics.fleet.drone.d007` | `acme.prod.robotics.fleet.sensor.s001` |
-| `acme.logistics.*.*.*.*` | `acme.logistics.environmental.sensor.temperature.s042` | `acme.production.environmental.sensor.temperature.s042` |
+| `acme.logistics.*.*.*.*` | `acme.logistics.sensor.environmental.temperature.s042` | `acme.production.sensor.environmental.temperature.s042` |
 
 ## KV Watcher Setup
 

@@ -5,7 +5,6 @@
     "id": "semstreams-kitchen-sink-ml",
     "type": "comprehensive-semantic",
     "region": "local",
-    "instance_id": "semantic-999-ml",
     "environment": "test"
   },
   "nats": {
@@ -399,7 +398,7 @@
         "pack_id": "semantic-8b-rules",
         "entity_watch_buckets": {
           "ENTITY_STATES": [
-            "c360.*.*.*.*.*"
+            "*.*.*.*.*.*"
           ]
         },
         "ports": {

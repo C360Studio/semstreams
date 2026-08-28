@@ -521,7 +521,7 @@ func TestWriteSpawnIdentity_Integration(t *testing.T) {
 	req := received[0]
 
 	// Entity ID must be the loop-execution 6-part ID.
-	wantEntityID := "acme.ops.agent.agentic-loop.execution.loop-spawn-int"
+	wantEntityID := "acme.ops.agentic-loop.agent.execution.loop-spawn-int"
 	if req.Entity == nil {
 		t.Fatal("Entity field is nil in create request")
 	}
@@ -570,7 +570,7 @@ func TestWriteSpawnIdentity_Integration(t *testing.T) {
 		if !message.IsValidEntityID(parent) {
 			t.Errorf("LoopParent %q is not a valid 6-part entity ID", parent)
 		}
-		want := "acme.ops.agent.agentic-loop.execution.loop-parent-uuid"
+		want := "acme.ops.agentic-loop.agent.execution.loop-parent-uuid"
 		if parent != want {
 			t.Errorf("LoopParent = %q, want %q", parent, want)
 		}

@@ -5,7 +5,6 @@
     "id": "semstreams-structural",
     "type": "rules-only",
     "region": "local",
-    "instance_id": "structural-001",
     "environment": "test"
   },
   "tier": "rules",
@@ -370,7 +369,7 @@
       "enabled": true,
       "config": {
         "pack_id": "structural-rules",
-        "entity_watch_buckets": {"ENTITY_STATES": ["c360.*.*.*.*.*"]},
+        "entity_watch_buckets": {"ENTITY_STATES": ["*.*.*.*.*.*"]},
         "ports": {
           "inputs": [
             {

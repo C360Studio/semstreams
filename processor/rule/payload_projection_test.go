@@ -71,7 +71,7 @@ func (p *declaredSubsetPayload) RuleFields() map[string]any {
 
 func newLoopCompletedRule(t *testing.T, id string) *ExpressionRule {
 	t.Helper()
-	r, err := NewExpressionRule("test-pack", Definition{
+	r, err := NewExpressionRule(testPlatform, "test-pack", Definition{
 		ID:      id,
 		Type:    "expression",
 		Name:    id,
@@ -255,7 +255,7 @@ func TestShippedArchitectEditorRuleFiresOnLoopCompletedEvent(t *testing.T) {
 		t.Fatalf("shipped rule %s is disabled; this test asserts the enabled shipped config", def.ID)
 	}
 
-	r, err := NewExpressionRule("agentic-workflow", def)
+	r, err := NewExpressionRule(testPlatform, "agentic-workflow", def)
 	if err != nil {
 		t.Fatalf("NewExpressionRule from shipped config: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestMessagePathSubstitutesTypedPayloadFieldsIntoActions(t *testing.T) {
 		}},
 	}
 
-	rule, err := NewExpressionRule("test-pack", def)
+	rule, err := NewExpressionRule(testPlatform, "test-pack", def)
 	if err != nil {
 		t.Fatalf("NewExpressionRule: %v", err)
 	}

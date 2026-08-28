@@ -53,7 +53,6 @@ func TestComponentManagerInitializeCreatesComponents(t *testing.T) {
 		Platform: config.PlatformConfig{
 			Org:         "test",
 			ID:          "test-platform",
-			InstanceID:  "test-001",
 			Environment: "test",
 		},
 		Components: componentConfigs,
@@ -114,7 +113,6 @@ func TestComponentManagerWithRealNATS(t *testing.T) {
 		Platform: config.PlatformConfig{
 			Org:         "test",
 			ID:          "test-platform",
-			InstanceID:  "test-001",
 			Environment: "test",
 		},
 	}, testClient.Client, slog.Default())
@@ -173,7 +171,6 @@ func TestComponentManagerCompositionProjection(t *testing.T) {
 		Platform: config.PlatformConfig{
 			Org:         "test",
 			ID:          "test-platform",
-			InstanceID:  "test-001",
 			Environment: "test",
 		},
 	}, testClient.Client, slog.Default())
@@ -222,7 +219,6 @@ func TestServiceManagerMandatoryService(t *testing.T) {
 		Platform: config.PlatformConfig{
 			Org:         "test",
 			ID:          "test-platform",
-			InstanceID:  "test-001",
 			Environment: "test",
 		},
 		// Do NOT include component-manager in config. Explicitly opt out of the

@@ -56,7 +56,7 @@ const (
 	// identity proves the execute fixture traversed the production graph
 	// query and fusion path. The direct fixture intentionally keeps its
 	// run-scoped entity identity.
-	ControlledSeedEntityID = "c360.rg-e2e.research.seed.document.controlled"
+	ControlledSeedEntityID = "c360.rg-e2e.seed.research.document.controlled"
 )
 
 // FixtureMode selects one of the two isolated research-graph E2E routes.
@@ -111,8 +111,8 @@ type Config struct {
 	// platform block — used to construct LoopExecutionEntityID for
 	// triple lookup. Hardcoded here rather than read from the config
 	// to keep the scenario self-contained.
-	PlatformOrg      string `json:"platform_org"`
-	PlatformInstance string `json:"platform_instance"`
+	PlatformOrg string `json:"platform_org"`
+	PlatformID  string `json:"platform_id"`
 }
 
 // DefaultConfig returns defaults aligned with docker/compose/research-graph.yml.
@@ -124,7 +124,10 @@ func DefaultConfig() *Config {
 		ChainKickoffTimeout: 30 * time.Second,
 		CompleteTimeout:     60 * time.Second,
 		PlatformOrg:         "c360",
-		PlatformInstance:    "rg-e2e-001",
+		// configs/research-graph-e2e.json platform.id. platform.instance_id was
+		// removed (ADR-102, ruled O-2), so platform.id IS the authority the binary
+		// mints loop executions under; this must equal it or nothing is ever found.
+		PlatformID: "research-graph-e2e",
 	}
 }
 
@@ -199,7 +202,7 @@ func (s *Scenario) Teardown(ctx context.Context) error {
 }
 
 func researchGraphSeedEntityID(runToken string) string {
-	return "c360.rg-e2e.research.seed.document." + runToken
+	return "c360.rg-e2e.seed.research.document." + runToken
 }
 
 func newResearchEmbeddingSearchHandler(seedEntityID string) func(context.Context, []byte) ([]byte, error) {
@@ -456,7 +459,7 @@ func (s *Scenario) waitForSearchResultStamp(ctx context.Context, result *scenari
 	if !ok || loopID == "" {
 		return fmt.Errorf("research_loop_id not set (waitForResearchPipelineLoop didn't populate it)")
 	}
-	loopEntityID, err := agentic.TryLoopExecutionEntityID(s.config.PlatformOrg, s.config.PlatformInstance, loopID)
+	loopEntityID, err := agentic.TryLoopExecutionEntityID(s.config.PlatformOrg, s.config.PlatformID, loopID)
 	if err != nil {
 		return fmt.Errorf("construct loop entity ID for %s: %w", loopID, err)
 	}

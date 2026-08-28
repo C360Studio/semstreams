@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
-	"strings"
 	"sync"
 	"time"
 
@@ -37,6 +36,7 @@ import (
 	"github.com/c360studio/semstreams/payloadregistry"
 	semerrs "github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 )
 
@@ -95,9 +95,10 @@ func init() {
 const WorkflowName = "agent-run"
 
 // EntityIDPattern matches agent-run chain execution entities in the federated graph.
-// Six-segment shape per the federated EntityID contract; org + platform + instance
-// are wildcarded; domain (agent), system (chain), type (execution) are pinned.
-const EntityIDPattern = "*.*.agent.chain.execution.*"
+// Six-segment shape per the federated EntityID contract in the canonical order
+// org.platform.system.domain.type.instance; org + platform + instance are
+// wildcarded; system (chain), domain (agent), type (execution) are pinned.
+const EntityIDPattern = "*.*.chain.agent.execution.*"
 
 // AgentRun is the lifecycle.Participant for an agent run (ADR-053 D1).
 //
@@ -112,7 +113,7 @@ const EntityIDPattern = "*.*.agent.chain.execution.*"
 // when passed back through TryChainExecutionEntityID (which rejects dots).
 // RunID() derives the bare loop UUID from EntityIDField at read time.
 type AgentRun struct {
-	// EntityIDField is the full 6-part federated ID: org.platform.agent.chain.execution.<runID>
+	// EntityIDField is the full 6-part federated ID: org.platform.chain.agent.execution.<runID>
 	// Tagged lifecycle:"id" so the projection layer populates it from the KV key, not a triple.
 	EntityIDField string `json:"-" lifecycle:"id"`
 
@@ -148,26 +149,23 @@ func (r *AgentRun) ParentEntityID() string { return r.ParentRunEntityID }
 // Returns ("", false) when EntityIDField is not a valid chain.execution entity ID.
 //
 // The bare RunID == the dispatch-root loop UUID; it is NOT stored as a triple
-// but derived by parsing parts[5] from the 6-part entity ID.
+// but derived from the instance position of the 6-part entity ID.
 func (r *AgentRun) RunID() (string, bool) {
 	return runIDFromChainEntityID(r.EntityIDField)
 }
 
-// runIDFromChainEntityID extracts the bare run loop-id (instance segment) from
-// a full chain.execution entity ID. Returns ("", false) for non-matching IDs.
+// runIDFromChainEntityID extracts the bare run loop-id (instance position) from
+// a full chain.agent.execution entity ID, reading positions by NAME through
+// pkg/types.ParseEntityID. Returns ("", false) for non-matching IDs.
 func runIDFromChainEntityID(entityID string) (string, bool) {
-	if !message.IsValidEntityID(entityID) {
+	parsed, err := semtypes.ParseEntityID(entityID)
+	if err != nil {
 		return "", false
 	}
-	// IsValidEntityID guarantees exactly 6 dot-separated parts.
-	parts := strings.Split(entityID, ".")
-	if len(parts) != 6 {
+	if parsed.System != "chain" || parsed.Domain != "agent" || parsed.Type != "execution" {
 		return "", false
 	}
-	if parts[2] != "agent" || parts[3] != "chain" || parts[4] != "execution" {
-		return "", false
-	}
-	return parts[5], true
+	return parsed.Instance, true
 }
 
 // WorkflowDeclaration returns the lifecycle.Workflow ready to pass to
@@ -208,7 +206,7 @@ func Register(mgr *lifecycle.Manager) error {
 
 // Mint creates (or retrieves if already exists) an AgentRun for the given
 // rootLoopID (ADR-053 D4). The run's entity ID is
-// org.platform.agent.chain.execution.<rootLoopID>, initial phase is "dispatched".
+// org.platform.chain.agent.execution.<rootLoopID>, initial phase is "dispatched".
 //
 // Idempotent: if Manager.Create returns lifecycle.ErrAlreadyExists (the run was
 // already minted — common on JetStream redelivery or concurrent rule firings),

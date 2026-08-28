@@ -65,8 +65,8 @@ func activeLesson(id, sev, createdAt, form string, appliesTo ...string) lessonma
 
 func TestAssembleSystemPrompt_InjectsMatchingActiveLessons(t *testing.T) {
 	reader := &fakeLessonReader{lessons: []lessonmatch.Lesson{
-		activeLesson("acme.ops.agent.lesson.record.a", "warning", "2026-07-19T10:00:00Z", "Scope deletes to COMPLETE_* keys.", "tag:ops"),
-		activeLesson("acme.ops.agent.lesson.record.b", "info", "2026-07-19T09:00:00Z", "Prefer KV watch for facts.", "tag:ops"),
+		activeLesson("acme.ops.lesson.agent.record.a", "warning", "2026-07-19T10:00:00Z", "Scope deletes to COMPLETE_* keys.", "tag:ops"),
+		activeLesson("acme.ops.lesson.agent.record.b", "info", "2026-07-19T09:00:00Z", "Prefer KV watch for facts.", "tag:ops"),
 	}}
 	h := lessonHandler(reader)
 
@@ -77,9 +77,9 @@ func TestAssembleSystemPrompt_InjectsMatchingActiveLessons(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Scope deletes to COMPLETE_* keys.",
-		"acme.ops.agent.lesson.record.a",
+		"acme.ops.lesson.agent.record.a",
 		"Prefer KV watch for facts.",
-		"acme.ops.agent.lesson.record.b",
+		"acme.ops.lesson.agent.record.b",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("brief missing %q\nblock:\n%s", want, got)
@@ -94,7 +94,7 @@ func TestAssembleSystemPrompt_InjectsMatchingActiveLessons(t *testing.T) {
 // --- Spec: Proposed lesson is not injected ---
 
 func TestAssembleSystemPrompt_ProposedLessonNotInjected(t *testing.T) {
-	proposed := activeLesson("acme.ops.agent.lesson.record.p", "critical", "2026-07-19T10:00:00Z", "should not appear", "tag:ops")
+	proposed := activeLesson("acme.ops.lesson.agent.record.p", "critical", "2026-07-19T10:00:00Z", "should not appear", "tag:ops")
 	proposed.Status = "proposed"
 	h := lessonHandler(&fakeLessonReader{lessons: []lessonmatch.Lesson{proposed}})
 
@@ -106,7 +106,7 @@ func TestAssembleSystemPrompt_ProposedLessonNotInjected(t *testing.T) {
 
 // A retired lesson likewise leaves the brief (matcher exclusion, reader path).
 func TestAssembleSystemPrompt_RetiredLessonNotInjected(t *testing.T) {
-	retired := activeLesson("acme.ops.agent.lesson.record.r", "critical", "2026-07-19T10:00:00Z", "should not appear", "tag:ops")
+	retired := activeLesson("acme.ops.lesson.agent.record.r", "critical", "2026-07-19T10:00:00Z", "should not appear", "tag:ops")
 	retired.Status = "retired"
 	h := lessonHandler(&fakeLessonReader{lessons: []lessonmatch.Lesson{retired}})
 
@@ -121,7 +121,7 @@ func TestAssembleSystemPrompt_BoundedAndObservable(t *testing.T) {
 	// 12 matching active lessons; default K=10 ⇒ 10 shown, header states 12/10.
 	var lessons []lessonmatch.Lesson
 	for i := 0; i < 12; i++ {
-		id := "acme.ops.agent.lesson.record." + string(rune('a'+i))
+		id := "acme.ops.lesson.agent.record." + string(rune('a'+i))
 		lessons = append(lessons, activeLesson(id, "info", "", "form-"+string(rune('a'+i)), "tag:ops"))
 	}
 	h := lessonHandler(&fakeLessonReader{lessons: lessons})
@@ -142,9 +142,9 @@ func TestAssembleSystemPrompt_OrderingReplayStableAcrossReads(t *testing.T) {
 	// so a stable result proves the order derives from created-at (the immutable
 	// birth triple), not insertion order / KV revision / UpdatedAt.
 	lessons := []lessonmatch.Lesson{
-		activeLesson("acme.ops.agent.lesson.record.zzz", "warning", "2026-07-19T12:00:00Z", "newest", "tag:ops"), // newest
-		activeLesson("acme.ops.agent.lesson.record.aaa", "warning", "2026-07-19T08:00:00Z", "oldest", "tag:ops"), // oldest
-		activeLesson("acme.ops.agent.lesson.record.mmm", "warning", "2026-07-19T10:00:00Z", "middle", "tag:ops"),
+		activeLesson("acme.ops.lesson.agent.record.zzz", "warning", "2026-07-19T12:00:00Z", "newest", "tag:ops"), // newest
+		activeLesson("acme.ops.lesson.agent.record.aaa", "warning", "2026-07-19T08:00:00Z", "oldest", "tag:ops"), // oldest
+		activeLesson("acme.ops.lesson.agent.record.mmm", "warning", "2026-07-19T10:00:00Z", "middle", "tag:ops"),
 	}
 	h := lessonHandler(&fakeLessonReader{lessons: lessons})
 
@@ -174,7 +174,7 @@ func TestAssembleSystemPrompt_NoReaderNoInjection(t *testing.T) {
 
 func TestAssembleSystemPrompt_EmptyRoleSkipsRead(t *testing.T) {
 	reader := &fakeLessonReader{lessons: []lessonmatch.Lesson{
-		activeLesson("acme.ops.agent.lesson.record.a", "warning", "2026-07-19T10:00:00Z", "x", "tag:ops"),
+		activeLesson("acme.ops.lesson.agent.record.a", "warning", "2026-07-19T10:00:00Z", "x", "tag:ops"),
 	}}
 	h := lessonHandler(reader)
 	task := opsTask()
@@ -198,7 +198,7 @@ func TestAssembleSystemPrompt_ReadFailureFailsOpen(t *testing.T) {
 func TestAssembleSystemPrompt_MissingPlatformSkipsInjection(t *testing.T) {
 	h := &MessageHandler{
 		config:       Config{},
-		lessonReader: &fakeLessonReader{lessons: []lessonmatch.Lesson{activeLesson("acme.ops.agent.lesson.record.a", "warning", "", "x", "tag:ops")}},
+		lessonReader: &fakeLessonReader{lessons: []lessonmatch.Lesson{activeLesson("acme.ops.lesson.agent.record.a", "warning", "", "x", "tag:ops")}},
 		logger:       todoTestLogger(),
 		// platform intentionally zero-valued
 	}
@@ -210,7 +210,7 @@ func TestAssembleSystemPrompt_MissingPlatformSkipsInjection(t *testing.T) {
 // The lesson block appends AFTER the persona base (both present ⇒ separated).
 func TestAssembleSystemPrompt_AppendsAfterBase(t *testing.T) {
 	block := renderLessonBlock(lessonmatch.Result{
-		Included:      []lessonmatch.MatchedLesson{{EntityID: "acme.ops.agent.lesson.record.a", InjectionForm: "do the thing"}},
+		Included:      []lessonmatch.MatchedLesson{{EntityID: "acme.ops.lesson.agent.record.a", InjectionForm: "do the thing"}},
 		MatchedCount:  1,
 		IncludedCount: 1,
 	})
@@ -237,9 +237,9 @@ func TestAssembleSystemPrompt_RecordsInjectionMetric(t *testing.T) {
 	// 3 matching active lessons; DefaultK=10 > 3 ⇒ matched 3 / included 3 (both
 	// counters advance by 3, proving the injection step records observability).
 	h := lessonHandler(&fakeLessonReader{lessons: []lessonmatch.Lesson{
-		activeLesson("acme.ops.agent.lesson.record.a", "critical", "2026-07-19T10:00:03Z", "a", "tag:ops"),
-		activeLesson("acme.ops.agent.lesson.record.b", "critical", "2026-07-19T10:00:02Z", "b", "tag:ops"),
-		activeLesson("acme.ops.agent.lesson.record.c", "critical", "2026-07-19T10:00:01Z", "c", "tag:ops"),
+		activeLesson("acme.ops.lesson.agent.record.a", "critical", "2026-07-19T10:00:03Z", "a", "tag:ops"),
+		activeLesson("acme.ops.lesson.agent.record.b", "critical", "2026-07-19T10:00:02Z", "b", "tag:ops"),
+		activeLesson("acme.ops.lesson.agent.record.c", "critical", "2026-07-19T10:00:01Z", "c", "tag:ops"),
 	}})
 	h.metrics = m
 	_ = h.assembleSystemPrompt(context.Background(), opsTask())
@@ -260,7 +260,7 @@ func TestWarnIfLessonPageCapHit(t *testing.T) {
 	t.Run("warns when cursor still non-empty (cap hit ⇒ partial coverage)", func(t *testing.T) {
 		var buf bytes.Buffer
 		logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-		warnIfLessonPageCapHit(logger, "acme.ops.agent.lesson.record", "still-more", maxLessonPages, 16000)
+		warnIfLessonPageCapHit(logger, "acme.ops.lesson.agent.record", "still-more", maxLessonPages, 16000)
 		out := buf.String()
 		if !strings.Contains(out, "lesson page cap hit") {
 			t.Errorf("expected page-cap Warn, got: %q", out)
@@ -276,7 +276,7 @@ func TestWarnIfLessonPageCapHit(t *testing.T) {
 	t.Run("silent when cursor empty (pagination completed ⇒ full coverage)", func(t *testing.T) {
 		var buf bytes.Buffer
 		logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-		warnIfLessonPageCapHit(logger, "acme.ops.agent.lesson.record", "", 3, 42)
+		warnIfLessonPageCapHit(logger, "acme.ops.lesson.agent.record", "", 3, 42)
 		if buf.Len() != 0 {
 			t.Errorf("exhausted pagination must not warn, got: %q", buf.String())
 		}
@@ -287,7 +287,7 @@ func TestWarnIfLessonPageCapHit(t *testing.T) {
 
 func TestProjectLessonEntity(t *testing.T) {
 	es := &graph.EntityState{
-		ID: "acme.ops.agent.lesson.record.a",
+		ID: "acme.ops.lesson.agent.record.a",
 		Triples: []message.Triple{
 			{Predicate: agvocab.LessonStatus, Object: "active"},
 			{Predicate: agvocab.LessonSeverity, Object: "warning"},

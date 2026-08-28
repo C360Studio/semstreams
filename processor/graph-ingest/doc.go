@@ -58,7 +58,7 @@
 // # Hierarchy Inference
 //
 // When enable_hierarchy is true, the component automatically creates container entities
-// based on the 6-part entity ID structure (org.platform.domain.system.type.instance).
+// based on the 6-part entity ID structure (org.platform.system.domain.type.instance).
 // This creates edges for:
 //   - Type containers (*.group)
 //   - System containers (*.container)

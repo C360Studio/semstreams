@@ -114,7 +114,7 @@ func validEmitLessonCall() agentic.ToolCall {
 			"category":            "retention-policy",
 			"polarity":            "avoid",
 			"severity":            "warning",
-			"evidence_entity_ids": []any{"acme.test.agent.agentic-loop.execution.loop-abc"},
+			"evidence_entity_ids": []any{"acme.test.agentic-loop.agent.execution.loop-abc"},
 			"applies_to":          []any{"tag:ops", "id:acme.test.agent"},
 		},
 	}
@@ -157,8 +157,8 @@ func TestEmitLessonExecutor_CreatesLesson(t *testing.T) {
 	if !message.IsValidEntityID(store.createdEntityID) {
 		t.Errorf("birth entity ID %q is not a valid 6-part entity ID", store.createdEntityID)
 	}
-	if !strings.HasPrefix(store.createdEntityID, "acme.test.agent.lesson.record.") {
-		t.Errorf("lesson entity %q must start with acme.test.agent.lesson.record.", store.createdEntityID)
+	if !strings.HasPrefix(store.createdEntityID, "acme.test.lesson.agent.record.") {
+		t.Errorf("lesson entity %q must start with acme.test.lesson.agent.record.", store.createdEntityID)
 	}
 
 	// Fresh birth ⇒ result reports created=true, status=proposed.
@@ -187,9 +187,9 @@ func TestEmitLessonExecutor_CreatesLesson(t *testing.T) {
 	assertObj(agvocab.LessonSeverity, "warning")
 	assertObj(agvocab.LessonStatus, "proposed") // born proposed (gated lifecycle)
 	assertObj(agvocab.LessonSummary, "cap retention sweeps to entity-owned buckets")
-	assertObj(agvocab.LessonEvidence, "acme.test.agent.agentic-loop.execution.loop-abc")
+	assertObj(agvocab.LessonEvidence, "acme.test.agentic-loop.agent.execution.loop-abc")
 	assertObj(agvocab.LessonObservedRole, "ops")
-	assertObj("agent.action.executed-by", "acme.test.agent.agentic-loop.execution.loop-ops-abc")
+	assertObj("agent.action.executed-by", "acme.test.agentic-loop.agent.execution.loop-ops-abc")
 
 	if got := len(facts[agvocab.LessonAppliesTo]); got != 2 {
 		t.Errorf("applies_to triple count = %d, want 2", got)
@@ -366,7 +366,7 @@ func TestEmitLessonExecutor_ContentDerivedIdentity(t *testing.T) {
 
 	reordered := validEmitLessonCall()
 	reordered.Arguments["applies_to"] = []any{"id:acme.test.agent", "tag:ops"}
-	reordered.Arguments["evidence_entity_ids"] = []any{"acme.test.agent.agentic-loop.execution.loop-abc"}
+	reordered.Arguments["evidence_entity_ids"] = []any{"acme.test.agentic-loop.agent.execution.loop-abc"}
 	reordered.Arguments["polarity"] = "best_practice"
 	reordered.Arguments["severity"] = "critical"
 	reordered.Arguments["detail"] = "a completely different explanation"
@@ -498,7 +498,7 @@ func TestEmitLessonExecutor_AppliesToGrammar(t *testing.T) {
 	}{
 		{"tag token", []any{"tag:researcher"}},
 		{"id prefix exactly 3 segments", []any{"id:acme.test.agent"}},
-		{"id prefix 6 segments", []any{"id:acme.test.agent.agentic-loop.execution.loop-abc"}},
+		{"id prefix 6 segments", []any{"id:acme.test.agentic-loop.agent.execution.loop-abc"}},
 		{"mixed", []any{"tag:ops", "id:acme.test.agent"}},
 	}
 	for _, tt := range accept {
@@ -667,7 +667,7 @@ func TestEmitLessonExecutor_DerivedAttribution(t *testing.T) {
 		if got, _ := facts[agvocab.LessonObservedRole][0].(string); got != "researcher" {
 			t.Errorf("observed-role = %q, want researcher (derived from metadata)", got)
 		}
-		if got, _ := facts["agent.action.executed-by"][0].(string); got != "acme.test.agent.agentic-loop.execution.loop-ops-abc" {
+		if got, _ := facts["agent.action.executed-by"][0].(string); got != "acme.test.agentic-loop.agent.execution.loop-ops-abc" {
 			t.Errorf("executed-by = %q, want the loop entity", got)
 		}
 	})
@@ -853,16 +853,16 @@ func TestEmitLessonExecutor_PublisherFailureReleasesBudget(t *testing.T) {
 
 func TestRequireSameLessonIdentity(t *testing.T) {
 	t.Parallel()
-	const lessonID = "acme.test.agent.lesson.record.11111111-1111-5111-8111-111111111111"
-	const loopID = "acme.test.agent.agentic-loop.execution.loop-ops-abc"
+	const lessonID = "acme.test.lesson.agent.record.11111111-1111-5111-8111-111111111111"
+	const loopID = "acme.test.agentic-loop.agent.execution.loop-ops-abc"
 	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
 	requestedArgs := emitLessonArgs{
 		Category: "testing", Summary: "preserve semantic identity",
 		Polarity: "best_practice", Severity: "warning", Detail: "requested detail",
 		InjectionForm: "Verify first.",
 		Evidence: []string{
-			"acme.test.agent.agentic-loop.execution.loop-one",
-			"acme.test.agent.agentic-loop.execution.loop-two",
+			"acme.test.agentic-loop.agent.execution.loop-one",
+			"acme.test.agentic-loop.agent.execution.loop-two",
 		},
 		AppliesTo: []string{"tag:go", "id:acme.test.agent"},
 	}
@@ -907,7 +907,7 @@ func TestRequireSameLessonIdentity(t *testing.T) {
 
 // lessonTriplesForTest builds the lesson triple set the way emitLesson does —
 // through the registered AgentLessonEntity — for a lessonID of the form
-// {org}.{platform}.agent.lesson.record.{id}.
+// {org}.{platform}.lesson.agent.record.{id}.
 func lessonTriplesForTest(lessonID, loopID string, args emitLessonArgs, observedRole string, now time.Time) []message.Triple {
 	parts := strings.SplitN(lessonID, ".", 6)
 	entity := &agentic.AgentLessonEntity{

@@ -46,7 +46,7 @@
 //
 // Prompts understand the 6-part federated entity ID notation:
 //
-//	{org}.{platform}.{domain}.{system}.{type}.{instance}
+//	{org}.{platform}.{system}.{domain}.{type}.{instance}
 //
 // # Configuration
 //

@@ -175,7 +175,7 @@ func TestProcessor_Process_ZoneEntityID(t *testing.T) {
 				"unit":      "celsius",
 				"location":  "warehouse-7",
 			},
-			wantZoneID: "acme.logistics.facility.zone.area.warehouse-7",
+			wantZoneID: "acme.logistics.zone.facility.area.warehouse-7",
 		},
 		{
 			name: "explicit zone type",
@@ -187,7 +187,7 @@ func TestProcessor_Process_ZoneEntityID(t *testing.T) {
 				"location":  "building-a",
 				"zone_type": "building",
 			},
-			wantZoneID: "acme.logistics.facility.zone.building.building-a",
+			wantZoneID: "acme.logistics.zone.facility.building.building-a",
 		},
 	}
 
@@ -330,5 +330,29 @@ func TestConfig_Validation(t *testing.T) {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestParseZoneEntityIDReadsNamedPositions pins the zone reader against the
+// canonical order: a zone entity is `org.platform.zone.facility.<zoneType>.<zoneID>`
+// (system = zone, domain = facility), read by named field, and the retired
+// order resolves to nothing instead of silently mis-reading (inventory W9).
+func TestParseZoneEntityIDReadsNamedPositions(t *testing.T) {
+	zoneType, zoneID := ParseZoneEntityID(ZoneEntityID("acme", "logistics", "area", "cold-storage-1"))
+	if zoneType != "area" || zoneID != "cold-storage-1" {
+		t.Fatalf("ParseZoneEntityID(canonical) = (%q, %q), want (area, cold-storage-1)", zoneType, zoneID)
+	}
+	if got := ZoneEntityID("acme", "logistics", "area", "cold-storage-1"); got != "acme.logistics.zone.facility.area.cold-storage-1" {
+		t.Fatalf("ZoneEntityID = %q, want acme.logistics.zone.facility.area.cold-storage-1", got)
+	}
+	for _, bad := range []string{
+		"acme.logistics." + "facility.zone" + ".area.cold-storage-1", // retired order (domain before system)
+		"acme.logistics.zone.facility.area",                          // five positions
+		"acme.logistics.zone.facility.area.cold.1",                   // seven positions
+		"",
+	} {
+		if zoneType, zoneID := ParseZoneEntityID(bad); zoneType != "" || zoneID != "" {
+			t.Fatalf("ParseZoneEntityID(%q) = (%q, %q), want empty", bad, zoneType, zoneID)
+		}
 	}
 }

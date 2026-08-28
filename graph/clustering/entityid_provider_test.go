@@ -38,22 +38,22 @@ func TestGetTypePrefix(t *testing.T) {
 	}{
 		{
 			name:     "valid 6-part EntityID",
-			entityID: semantictest.EntityID(t, "c360", "logistics", "environmental", "sensor", "temperature", "temp-sensor-001"),
-			want:     "c360.logistics.environmental.sensor.temperature",
+			entityID: semantictest.EntityID(t, "c360", "logistics", "sensor", "environmental", "temperature", "temp-sensor-001"),
+			want:     "c360.logistics.sensor.environmental.temperature",
 		},
 		{
 			name:     "another valid 6-part EntityID",
-			entityID: semantictest.EntityID(t, "c360", "logistics", "maintenance", "work", "completed", "maint-001"),
-			want:     "c360.logistics.maintenance.work.completed",
+			entityID: semantictest.EntityID(t, "c360", "logistics", "work", "maintenance", "completed", "maint-001"),
+			want:     "c360.logistics.work.maintenance.completed",
 		},
 		{
 			name:     "5-part EntityID - invalid",
-			entityID: "c360.logistics.environmental.sensor.temperature",
+			entityID: "c360.logistics.sensor.environmental.temperature",
 			want:     "",
 		},
 		{
 			name:     "7-part EntityID - invalid",
-			entityID: "c360.logistics.environmental.sensor.temperature.temp.001",
+			entityID: "c360.logistics.sensor.environmental.temperature.temp.001",
 			want:     "",
 		},
 		{
@@ -76,11 +76,11 @@ func TestGetTypePrefix(t *testing.T) {
 func TestEntityIDProvider_GetNeighbors_IncludesSiblings(t *testing.T) {
 	// Setup: Create entities with same type prefix (siblings)
 	entities := []string{
-		"c360.logistics.environmental.sensor.temperature.temp-sensor-001",
-		"c360.logistics.environmental.sensor.temperature.temp-sensor-002",
-		"c360.logistics.environmental.sensor.temperature.temp-sensor-003",
-		"c360.logistics.environmental.sensor.humidity.humid-001", // Different type
-		"c360.logistics.maintenance.work.completed.maint-001",    // Different domain
+		"c360.logistics.sensor.environmental.temperature.temp-sensor-001",
+		"c360.logistics.sensor.environmental.temperature.temp-sensor-002",
+		"c360.logistics.sensor.environmental.temperature.temp-sensor-003",
+		"c360.logistics.sensor.environmental.humidity.humid-001", // Different type
+		"c360.logistics.work.maintenance.completed.maint-001",    // Different domain
 	}
 
 	base := &entityIDTestProvider{
@@ -107,8 +107,8 @@ func TestEntityIDProvider_GetNeighbors_IncludesSiblings(t *testing.T) {
 
 	// Should include temp-sensor-002 and temp-sensor-003 as siblings
 	expectedSiblings := map[string]bool{
-		"c360.logistics.environmental.sensor.temperature.temp-sensor-002": true,
-		"c360.logistics.environmental.sensor.temperature.temp-sensor-003": true,
+		"c360.logistics.sensor.environmental.temperature.temp-sensor-002": true,
+		"c360.logistics.sensor.environmental.temperature.temp-sensor-003": true,
 	}
 
 	for _, n := range neighbors {
@@ -121,10 +121,10 @@ func TestEntityIDProvider_GetNeighbors_IncludesSiblings(t *testing.T) {
 
 	// Should NOT include entities with different type prefix
 	for _, n := range neighbors {
-		if n == "c360.logistics.environmental.sensor.humidity.humid-001" {
+		if n == "c360.logistics.sensor.environmental.humidity.humid-001" {
 			t.Error("Should not include humidity sensor (different type)")
 		}
-		if n == "c360.logistics.maintenance.work.completed.maint-001" {
+		if n == "c360.logistics.work.maintenance.completed.maint-001" {
 			t.Error("Should not include maintenance record (different system)")
 		}
 	}
@@ -132,8 +132,8 @@ func TestEntityIDProvider_GetNeighbors_IncludesSiblings(t *testing.T) {
 
 func TestEntityIDProvider_GetNeighbors_ExcludesSelf(t *testing.T) {
 	entities := []string{
-		"c360.logistics.environmental.sensor.temperature.temp-sensor-001",
-		"c360.logistics.environmental.sensor.temperature.temp-sensor-002",
+		"c360.logistics.sensor.environmental.temperature.temp-sensor-001",
+		"c360.logistics.sensor.environmental.temperature.temp-sensor-002",
 	}
 
 	base := &entityIDTestProvider{
@@ -162,8 +162,8 @@ func TestEntityIDProvider_GetNeighbors_ExcludesSelf(t *testing.T) {
 
 func TestEntityIDProvider_GetNeighbors_DisabledSiblings(t *testing.T) {
 	entities := []string{
-		"c360.logistics.environmental.sensor.temperature.temp-sensor-001",
-		"c360.logistics.environmental.sensor.temperature.temp-sensor-002",
+		"c360.logistics.sensor.environmental.temperature.temp-sensor-001",
+		"c360.logistics.sensor.environmental.temperature.temp-sensor-002",
 	}
 
 	base := &entityIDTestProvider{
@@ -192,9 +192,9 @@ func TestEntityIDProvider_GetNeighbors_DisabledSiblings(t *testing.T) {
 
 func TestEntityIDProvider_GetEdgeWeight_Siblings(t *testing.T) {
 	entities := []string{
-		"c360.logistics.environmental.sensor.temperature.temp-sensor-001",
-		"c360.logistics.environmental.sensor.temperature.temp-sensor-002",
-		"c360.logistics.environmental.sensor.humidity.humid-001",
+		"c360.logistics.sensor.environmental.temperature.temp-sensor-001",
+		"c360.logistics.sensor.environmental.temperature.temp-sensor-002",
+		"c360.logistics.sensor.environmental.humidity.humid-001",
 	}
 
 	base := &entityIDTestProvider{
@@ -232,8 +232,8 @@ func TestEntityIDProvider_GetEdgeWeight_Siblings(t *testing.T) {
 
 func TestEntityIDProvider_GetEdgeWeight_ExplicitTakesPrecedence(t *testing.T) {
 	entities := []string{
-		"c360.logistics.environmental.sensor.temperature.temp-sensor-001",
-		"c360.logistics.environmental.sensor.temperature.temp-sensor-002",
+		"c360.logistics.sensor.environmental.temperature.temp-sensor-001",
+		"c360.logistics.sensor.environmental.temperature.temp-sensor-002",
 	}
 
 	base := &entityIDTestProvider{
@@ -241,7 +241,7 @@ func TestEntityIDProvider_GetEdgeWeight_ExplicitTakesPrecedence(t *testing.T) {
 		neighbors: make(map[string][]string),
 		weights: map[string]float64{
 			// Explicit edge with weight 1.0
-			"c360.logistics.environmental.sensor.temperature.temp-sensor-001->c360.logistics.environmental.sensor.temperature.temp-sensor-002": 1.0,
+			"c360.logistics.sensor.environmental.temperature.temp-sensor-001->c360.logistics.sensor.environmental.temperature.temp-sensor-002": 1.0,
 		},
 	}
 
@@ -274,25 +274,25 @@ func TestEntityIDProvider_AreSiblings(t *testing.T) {
 	}{
 		{
 			name:     "same type prefix - siblings",
-			entityA:  "c360.logistics.environmental.sensor.temperature.temp-001",
-			entityB:  "c360.logistics.environmental.sensor.temperature.temp-002",
+			entityA:  "c360.logistics.sensor.environmental.temperature.temp-001",
+			entityB:  "c360.logistics.sensor.environmental.temperature.temp-002",
 			expected: true,
 		},
 		{
 			name:     "different type - not siblings",
-			entityA:  "c360.logistics.environmental.sensor.temperature.temp-001",
-			entityB:  "c360.logistics.environmental.sensor.humidity.humid-001",
+			entityA:  "c360.logistics.sensor.environmental.temperature.temp-001",
+			entityB:  "c360.logistics.sensor.environmental.humidity.humid-001",
 			expected: false,
 		},
 		{
 			name:     "different system - not siblings",
-			entityA:  "c360.logistics.environmental.sensor.temperature.temp-001",
-			entityB:  "c360.logistics.maintenance.work.completed.maint-001",
+			entityA:  "c360.logistics.sensor.environmental.temperature.temp-001",
+			entityB:  "c360.logistics.work.maintenance.completed.maint-001",
 			expected: false,
 		},
 		{
 			name:     "invalid EntityID - not siblings",
-			entityA:  "c360.logistics.environmental.sensor.temperature.temp-001",
+			entityA:  "c360.logistics.sensor.environmental.temperature.temp-001",
 			entityB:  "invalid-entity-id",
 			expected: false,
 		},
@@ -313,7 +313,7 @@ func TestEntityIDProvider_MaxSiblings(t *testing.T) {
 	// Create many entities with same type prefix
 	var entities []string
 	for i := 0; i < 20; i++ {
-		entities = append(entities, "c360.logistics.environmental.sensor.temperature.temp-"+string(rune('a'+i)))
+		entities = append(entities, "c360.logistics.sensor.environmental.temperature.temp-"+string(rune('a'+i)))
 	}
 
 	base := &entityIDTestProvider{
@@ -349,10 +349,12 @@ func TestGetSystem(t *testing.T) {
 		entityID string
 		want     string
 	}{
-		{"acme.ops.robotics.gcs.drone.001", "gcs"},
-		{"acme.ops.git.repo.commit.abc", "repo"},
+		// Position 3 of org.platform.system.domain.type.instance is the source.
+		{"acme.ops.gcs.robotics.drone.001", "gcs"},
+		{"acme.ops.repo.git.commit.abc", "repo"},
 		{"short.id", ""},
-		{"a.b.game.board1.quest.x", "board1"},
+		{"a.b.board1.game.quest.x", "board1"},
+		{"a.b.c.d.e.f.g", ""},
 		{"", ""},
 	}
 	for _, tt := range tests {
@@ -570,6 +572,56 @@ func TestSystemPeers_NoDuplicateWithSiblings(t *testing.T) {
 	}
 }
 
-// entity-id-audit:classify intentional-malformed "c360.logistics.environmental.sensor.temperature" line=51 column=14 surface=go-field:.entityID entity_id_invalid:arity verifies a five-position ID has no type prefix
-// entity-id-audit:classify intentional-malformed "c360.logistics.environmental.sensor.temperature.temp.001" line=56 column=14 surface=go-field:.entityID entity_id_invalid:arity verifies a seven-position ID has no type prefix
+// entity-id-audit:classify intentional-malformed "c360.logistics.sensor.environmental.temperature" line=51 column=14 surface=go-field:.entityID entity_id_invalid:arity verifies a five-position ID has no type prefix
+// entity-id-audit:classify intentional-malformed "c360.logistics.sensor.environmental.temperature.temp.001" line=56 column=14 surface=go-field:.entityID entity_id_invalid:arity verifies a seven-position ID has no type prefix
 // entity-id-audit:classify intentional-malformed "" line=61 column=14 surface=go-field:.entityID entity_id_invalid:empty verifies empty input has no type prefix
+
+// TestEntityIDEdgesReadPositionsByName pins the EntityID edge synthesis
+// against the canonical order org.platform.system.domain.type.instance: sibling
+// edges share the five-position type prefix and source-peer edges share the
+// named System field (position 3), never a raw index (graph-clustering delta
+// "sibling and source-peer synthesis reads positions by name"; inventory C3).
+func TestEntityIDEdgesReadPositionsByName(t *testing.T) {
+	base := &entityIDTestProvider{
+		entities: []string{
+			"acme.dep1.src.git.commit.a1",
+			"acme.dep1.src.git.commit.a2",   // sibling: same type prefix
+			"acme.dep1.src.media.video.v1",  // source peer: same source, other taxonomy
+			"acme.dep1.other.git.commit.b1", // same taxonomy, OTHER source: not a peer
+		},
+		neighbors: map[string][]string{},
+		weights:   map[string]float64{},
+	}
+	provider := NewEntityIDProvider(base, EntityIDProviderConfig{
+		IncludeSiblings:    true,
+		SiblingWeight:      0.7,
+		MaxSiblings:        10,
+		IncludeSystemPeers: true,
+		SystemPeerWeight:   0.3,
+		MaxSystemPeers:     15,
+	}, nil)
+
+	neighbors, err := provider.GetNeighbors(context.Background(), "acme.dep1.src.git.commit.a1", "both")
+	if err != nil {
+		t.Fatalf("GetNeighbors: %v", err)
+	}
+	got := map[string]bool{}
+	for _, id := range neighbors {
+		got[id] = true
+	}
+	if !got["acme.dep1.src.git.commit.a2"] {
+		t.Errorf("neighbors = %v, want the sibling a2 (five-position type prefix)", neighbors)
+	}
+	if !got["acme.dep1.src.media.video.v1"] {
+		t.Errorf("neighbors = %v, want the source peer v1 (named System = src)", neighbors)
+	}
+	if got["acme.dep1.other.git.commit.b1"] {
+		t.Errorf("neighbors = %v, b1 shares the taxonomy git but not the source and must not be a peer", neighbors)
+	}
+	if source := getSystem("acme.dep1.src.git.commit.a1"); source != "src" {
+		t.Errorf("getSystem = %q, want src (position 3 by name)", source)
+	}
+	if prefix := getTypePrefix("acme.dep1.src.git.commit.a1"); prefix != "acme.dep1.src.git.commit" {
+		t.Errorf("getTypePrefix = %q, want acme.dep1.src.git.commit", prefix)
+	}
+}

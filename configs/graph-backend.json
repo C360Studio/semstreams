@@ -5,7 +5,6 @@
     "id": "graph-backend",
     "type": "graph-backend",
     "region": "local",
-    "instance_id": "backend-001",
     "environment": "development"
   },
   "tier": "rules",

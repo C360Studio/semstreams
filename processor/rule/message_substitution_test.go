@@ -153,7 +153,7 @@ func TestSubstituteVariables_Message_FullPipeline(t *testing.T) {
 	t.Parallel()
 
 	ec := &ExecutionContext{
-		EntityID: "c360.osh.agent.agentic-loop.execution.uuid-001",
+		EntityID: "c360.osh.agentic-loop.agent.execution.uuid-001",
 		MessageData: map[string]any{
 			"loop_id":   "loop-abc",
 			"call_id":   "call-001",
@@ -165,7 +165,7 @@ func TestSubstituteVariables_Message_FullPipeline(t *testing.T) {
 	}
 
 	in := "rule fired on $entity.id for loop=$message.loop_id call=$message.call_id cmd=$message.tool_args.command"
-	want := "rule fired on c360.osh.agent.agentic-loop.execution.uuid-001 for loop=loop-abc call=call-001 cmd=ls /tmp"
+	want := "rule fired on c360.osh.agentic-loop.agent.execution.uuid-001 for loop=loop-abc call=call-001 cmd=ls /tmp"
 
 	if got := ec.SubstituteVariables(context.Background(), in); got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
@@ -240,7 +240,7 @@ func TestSubstituteVariables_Message_CoexistsWithOtherNamespaces(t *testing.T) {
 	t.Parallel()
 
 	ec := &ExecutionContext{
-		EntityID: "c360.osh.agent.agentic-loop.execution.uuid-001",
+		EntityID: "c360.osh.agentic-loop.agent.execution.uuid-001",
 		Caller: &CallerContext{
 			ID:   "alice",
 			Role: "operator",

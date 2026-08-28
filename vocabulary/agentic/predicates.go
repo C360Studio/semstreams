@@ -476,7 +476,7 @@ const (
 	// run loop, then drives the run entity back from awaiting_approval to
 	// executing. Grammar-collision-free: agent.loop.* is already a substitution
 	// namespace; reply_to adds no new $-prefix token.
-	// Example: "org.platform.agent.agentic-loop.execution.<askingLoopID>"
+	// Example: "org.platform.agentic-loop.agent.execution.<askingLoopID>"
 	// DataType: string (6-part entity ID)
 	LoopReplyTo = "agent.loop.reply-to"
 
@@ -497,7 +497,7 @@ const (
 	// derive the 6-part from the bare LoopRun (substitution is string interp,
 	// not function calls), so the framework stamps the full form directly.
 	// For computed run-state, prefer a Go agentrun.MilestoneHandler instead.
-	// Example: "org.platform.agent.chain.execution.<runID>"
+	// Example: "org.platform.chain.agent.execution.<runID>"
 	// DataType: string (6-part federated entity ID)
 	LoopRunEntityID = "agent.run.entity-id"
 
@@ -772,7 +772,7 @@ const (
 	// finding. Multi-valued: one triple per evidence entity. Downstream
 	// queries can follow evidence links to the loop or trajectory entities
 	// the ops agent examined.
-	// Example: "acme.ops.agent.agentic-loop.execution.abc123"
+	// Example: "acme.ops.agentic-loop.agent.execution.abc123"
 	// DataType: string (entity ID)
 	OpsDiagnosisEvidence = "ops.diagnosis.evidence"
 
@@ -795,7 +795,7 @@ const (
 // Emitted by the ops agent's emit_lesson terminal tool (see
 // processor/agentic-tools/emit_lesson.go) onto a freshly-minted lesson record
 // entity per distilled lesson. Each emit_lesson call mints a content-derived
-// {org}.{platform}.agent.lesson.record.{uuid5} entity and attaches one triple
+// {org}.{platform}.lesson.agent.record.{uuid5} entity and attaches one triple
 // per predicate so downstream rules and curation lanes can branch
 // deterministically on polarity, severity, status, and scope without parsing
 // the LLM-authored prose. Lessons are born status="proposed"; only promotion to
@@ -881,7 +881,7 @@ const (
 	// (>=1 enforced at the emit_lesson writer). Multi-valued: one triple per
 	// cited entity. Registered with StandardIRI prov:wasDerivedFrom so the
 	// citation exports as a PROV-O derivation edge (annotation only).
-	// Example: "acme.ops.agent.agentic-loop.execution.abc123"
+	// Example: "acme.ops.agentic-loop.agent.execution.abc123"
 	// DataType: string (entity ID)
 	LessonEvidence = "agent.lesson.evidence"
 
@@ -906,7 +906,7 @@ const (
 
 	// LessonSupersededBy is the entity ID of the lesson that replaces this one
 	// on supersession. Single-valued — replace, never append.
-	// Example: "acme.ops.agent.lesson.record.def456"
+	// Example: "acme.ops.lesson.agent.record.def456"
 	// DataType: string (entity ID)
 	LessonSupersededBy = "agent.lesson.superseded-by"
 

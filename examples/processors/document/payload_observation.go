@@ -32,13 +32,13 @@ type Observation struct {
 }
 
 // EntityID returns a federated entity ID for the observation.
-// Example: "acme.logistics.observation.record.high.obs-001"
+// Example: "acme.logistics.record.observation.high.obs-001"
 func (o *Observation) EntityID() string {
 	severity := o.Severity
 	if severity == "" {
 		severity = "medium"
 	}
-	return fmt.Sprintf("%s.%s.observation.record.%s.%s",
+	return fmt.Sprintf("%s.%s.record.observation.%s.%s",
 		o.OrgID,
 		o.Platform,
 		severity,

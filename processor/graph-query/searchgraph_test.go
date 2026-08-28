@@ -68,8 +68,8 @@ func TestSearchGraphResponseEmpty_MalformedJSONIsNonEmpty(t *testing.T) {
 // fallback-marker fields are set.
 func TestAdaptSemanticToGlobalSearchResponse_HappyPath(t *testing.T) {
 	semanticPayload := []byte(`{"query":"drone","results":[
-		{"entity_id":"acme.x.agent.web.observation.h1","similarity":0.82},
-		{"entity_id":"acme.x.agent.web.observation.h2","similarity":0.71}
+		{"entity_id":"acme.x.web.agent.observation.h1","similarity":0.82},
+		{"entity_id":"acme.x.web.agent.observation.h2","similarity":0.71}
 	]}`)
 
 	got := adaptSemanticToGlobalSearchResponse(semanticPayload)
@@ -91,7 +91,7 @@ func TestAdaptSemanticToGlobalSearchResponse_HappyPath(t *testing.T) {
 	if len(got.EntityDigests) != 2 {
 		t.Fatalf("EntityDigests len = %d, want 2", len(got.EntityDigests))
 	}
-	if got.EntityDigests[0].ID != "acme.x.agent.web.observation.h1" {
+	if got.EntityDigests[0].ID != "acme.x.web.agent.observation.h1" {
 		t.Errorf("first digest ID = %q", got.EntityDigests[0].ID)
 	}
 	if got.EntityDigests[0].Relevance != 0.82 {

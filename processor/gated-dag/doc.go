@@ -68,7 +68,7 @@
 // Before the executor can dispatch, the consumer sets up the fan-out:
 //
 //  1. (Optional) Set FanOutInstanceID so the framework owns the FanOut lifecycle:
-//     the executor then creates the `*.*.gateddag.fanout.instance.*` instance in
+//     the executor then creates the `*.*.gated-dag.agent.fanout.*` instance in
 //     `dispatching` on Start and auto-transitions it to `completed` when every
 //     unit is Done. If unset, no instance lifecycle is owned. FanOut *failure* is
 //     always consumer-driven (Manager.Fail) — a stall may be recoverable, so the

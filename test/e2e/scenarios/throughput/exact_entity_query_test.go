@@ -50,7 +50,7 @@ func TestBuildQueryPoolPrefixQueriesSelectEntityPage(t *testing.T) {
 func TestProbeEntitiesSelectsExactEntity(t *testing.T) {
 	t.Parallel()
 
-	const entityID = "c360.logistics.environmental.sensor.temperature.temp-sensor-001"
+	const entityID = "c360.logistics.sensor.environmental.temperature.temp-sensor-001"
 	var observedQuery string
 	httpClient := &http.Client{Transport: probeTransport(func(r *http.Request) (*http.Response, error) {
 		var request struct {
@@ -77,7 +77,7 @@ func TestProbeEntitiesSelectsExactEntity(t *testing.T) {
 func TestProbeEntitiesRequiresCompleteExactEntityEvidence(t *testing.T) {
 	t.Parallel()
 
-	const entityID = "c360.logistics.environmental.sensor.temperature.temp-sensor-001"
+	const entityID = "c360.logistics.sensor.environmental.temperature.temp-sensor-001"
 	tests := map[string]string{
 		"null exact result":       `{"data":{"entity":null}}`,
 		"missing nested entity":   `{"data":{"entity":{"entity":null,"kvRevision":1}}}`,
@@ -104,7 +104,7 @@ func TestProbeEntitiesRequiresCompleteExactEntityEvidence(t *testing.T) {
 func TestProbeEntitiesWithoutConfigReportsAllMissing(t *testing.T) {
 	t.Parallel()
 
-	entityIDs := []string{"c360.logistics.environmental.sensor.temperature.temp-sensor-001"}
+	entityIDs := []string{"c360.logistics.sensor.environmental.temperature.temp-sensor-001"}
 	missing := (&Scenario{}).probeEntities(context.Background(), http.DefaultClient, entityIDs)
 	if len(missing) != 1 || missing[0] != entityIDs[0] {
 		t.Fatalf("missing = %v, want %v", missing, entityIDs)

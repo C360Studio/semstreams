@@ -21,7 +21,7 @@ func TestLoopExecutionEntity_EntityID(t *testing.T) {
 		Task:     &agentic.TaskMessage{TaskID: "t", Role: "r"},
 	}
 	got := e.EntityID()
-	want := "acme.ops.agent.agentic-loop.execution.loop-abc123"
+	want := "acme.ops.agentic-loop.agent.execution.loop-abc123"
 	if got != want {
 		t.Errorf("EntityID() = %q, want %q", got, want)
 	}
@@ -68,7 +68,7 @@ func TestLoopExecutionEntity_Triples_RequiredFields(t *testing.T) {
 	}
 	ts := triples("acme", "ops", "loop-001", task)
 
-	loopEntityID := "acme.ops.agent.agentic-loop.execution.loop-001"
+	loopEntityID := "acme.ops.agentic-loop.agent.execution.loop-001"
 	for _, tr := range ts {
 		if tr.Subject != loopEntityID {
 			t.Errorf("triple subject = %q, want %q", tr.Subject, loopEntityID)
@@ -181,7 +181,7 @@ func TestLoopExecutionEntity_Triples_ParentIsEntityID(t *testing.T) {
 	if !ok {
 		t.Fatal("LoopParent object is not a string")
 	}
-	want := "acme.ops.agent.agentic-loop.execution.parent-loop-uuid"
+	want := "acme.ops.agentic-loop.agent.execution.parent-loop-uuid"
 	if parent != want {
 		t.Errorf("LoopParent = %q, want %q", parent, want)
 	}
@@ -203,7 +203,7 @@ func TestLoopExecutionEntity_Triples_ReplyToIsEntityID(t *testing.T) {
 	if !ok {
 		t.Fatal("LoopReplyTo object is not a string")
 	}
-	want := "acme.ops.agent.agentic-loop.execution.asking-loop-uuid"
+	want := "acme.ops.agentic-loop.agent.execution.asking-loop-uuid"
 	if replyTo != want {
 		t.Errorf("LoopReplyTo = %q, want %q", replyTo, want)
 	}
@@ -236,7 +236,7 @@ func TestLoopExecutionEntity_Triples_RunIDShape(t *testing.T) {
 	if !ok {
 		t.Fatal("LoopRunEntityID object is not a string")
 	}
-	wantEntityID := "acme.ops.agent.chain.execution.run-uuid"
+	wantEntityID := "acme.ops.chain.agent.execution.run-uuid"
 	if runEntityID != wantEntityID {
 		t.Errorf("LoopRunEntityID = %q, want %q", runEntityID, wantEntityID)
 	}

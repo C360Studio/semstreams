@@ -14,21 +14,21 @@ import (
 	"github.com/c360studio/semstreams/vocabulary"
 )
 
-// EntityID joins the six explicit semantic positions without rewriting any
-// byte and returns the value only when the canonical entity-ID authority
-// accepts it.
+// EntityID joins the six explicit semantic positions in the canonical order
+// org.platform.system.domain.type.instance without rewriting any byte and
+// returns the value only when the canonical entity-ID authority accepts it.
 func EntityID(
 	t testing.TB,
 	organization string,
 	platform string,
-	domain string,
 	system string,
+	domain string,
 	entityType string,
 	instance string,
 ) string {
 	t.Helper()
 
-	value, err := validateEntityIDFixture(organization, platform, domain, system, entityType, instance)
+	value, err := validateEntityIDFixture(organization, platform, system, domain, entityType, instance)
 	if err != nil {
 		t.Fatalf("invalid canonical entity-ID fixture %q: %v", value, err)
 	}
@@ -51,12 +51,12 @@ func Predicate(t testing.TB, domain, category, property string) string {
 func validateEntityIDFixture(
 	organization string,
 	platform string,
-	domain string,
 	system string,
+	domain string,
 	entityType string,
 	instance string,
 ) (string, error) {
-	value := strings.Join([]string{organization, platform, domain, system, entityType, instance}, ".")
+	value := strings.Join([]string{organization, platform, system, domain, entityType, instance}, ".")
 	return value, semtypes.ValidateEntityID(value)
 }
 

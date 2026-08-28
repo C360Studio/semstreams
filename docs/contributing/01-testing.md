@@ -338,7 +338,7 @@ func TestSensorReading_Graphable(t *testing.T) {
     }
 
     assert.Equal(t,
-        "acme.logistics.environmental.sensor.temperature.sensor-042",
+        "acme.logistics.sensor.environmental.temperature.sensor-042",
         reading.EntityID())
     assert.Contains(t, reading.Triples(), Triple{
         Subject:   reading.EntityID(),

@@ -124,6 +124,11 @@ func CreateRuleProcessor(rawConfig json.RawMessage, deps component.Dependencies)
 		return nil, fmt.Errorf("failed to create rule processor: %w", err)
 	}
 
+	// The deployment's own authority for every identity the rule engine mints
+	// (trigger entities; run-scope mints under #1096). Installed before rules
+	// load so every rule carries it (ADR-102 d2).
+	processor.SetPlatform(deps.Platform)
+
 	// Propagate the shared tool registry so publish_agent's
 	// default_tools can resolve tool definitions at action time.
 	processor.SetToolRegistry(deps.ToolRegistry)

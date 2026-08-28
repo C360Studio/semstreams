@@ -6,7 +6,7 @@ TBD - created by archiving change enforce-structural-invariants. Update Purpose 
 ### Requirement: Entity IDs MUST be exactly six non-empty dot-separated parts
 
 An entity ID MUST consist of exactly six dot-separated parts
-(`org.platform.domain.system.type.instance`), each part non-empty and composed only of the characters
+(`org.platform.system.domain.type.instance`), each part non-empty and composed only of the characters
 `[a-zA-Z0-9_-]` (no interior dots). A string with fewer than or more than six parts, an empty part, or a
 part containing any other character (including a dotted "instance") is not a valid entity ID. This is the
 single contract — there is no `>= 6` variant.

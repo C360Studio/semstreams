@@ -9,6 +9,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/processor/rule/expression"
+	"github.com/c360studio/semstreams/types"
 )
 
 // Definition represents a JSON rule configuration
@@ -94,6 +95,10 @@ type Dependencies struct {
 	NATSClient *natsclient.Client
 	Logger     *slog.Logger
 	PackID     string
+	// Platform is the deployment's own authority (deps.Platform at the
+	// composition root): positions 1-2 of every entity a rule mints. Never
+	// read back from a firing entity (ADR-102 d2; #1096).
+	Platform types.PlatformMeta
 }
 
 // Schema describes the configuration schema for a rule type

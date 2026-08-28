@@ -54,10 +54,13 @@ Give components the narrow interface they need: `EntityCreator`, `PredicateRecon
 
 Local contracts remain the generic product rule. When SemStreams exposes an owned
 purpose-scoped contract snapshot for a first-party built-in writer, include that
-snapshot in the composition-root client instead of copying its
-`internal/builtinprojection` declaration. For example,
-`agentictools.LessonProjectionContract()` returns an independent canonical lesson
-contract snapshot.
+snapshot in the composition-root client instead of copying the framework's own
+declaration. For example, `agentictools.LessonProjectionContract()`
+(`processor/agentic-tools/lesson_promotion.go:53`) returns an independent
+canonical lesson contract snapshot, delegating to `agentic.LessonContract()`
+(`agentic/agent_lesson_entity.go:396`). The framework declaration lives on the
+payload registration (`agentic/payload_registry.go:53`), not in a projection
+package — PR #1109 deleted `internal/builtinprojection`.
 
 The snapshot removes a private predicate-set prediction while preserving one local
 client and narrow capability injection. It does not make local contracts globally

@@ -717,12 +717,12 @@ func TestIntegration_HierarchyEdgeIndexing(t *testing.T) {
 	defer graphIndex.Stop(context.Background())
 
 	// Create entity with hierarchy edges - mimics what graph-ingest produces
-	// Entity ID follows 6-part format: org.platform.domain.system.type.instance
-	entityID := "c360.logistics.sensor.document.temperature.sensor-temp-001"
+	// Entity ID follows 6-part format: org.platform.system.domain.type.instance
+	entityID := "c360.logistics.document.sensor.temperature.sensor-temp-001"
 
 	// Container IDs also follow 6-part format (created by hierarchy inference)
-	typeContainer := "c360.logistics.sensor.document.temperature.group"
-	systemContainer := "c360.logistics.sensor.document.group.container"
+	typeContainer := "c360.logistics.document.sensor.temperature.group"
+	systemContainer := "c360.logistics.document.sensor.group.container"
 	domainContainer := "c360.logistics.sensor.group.container.level"
 
 	state := graph.EntityState{
