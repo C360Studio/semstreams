@@ -306,9 +306,9 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
 
 - [x] 3.2 Replace `TypePrefix/SystemPrefix/DomainPrefix/PlatformPrefix` with the named levels `DeploymentPrefix` (2),
       `SourcePrefix` (3), `TaxonomyPrefix` (4), `TypePrefix` (5), ~~plus `PrefixLevel(n)`~~ (struck 2026-08-28);
-      `IsSameSystem` → `IsSameSource`;
+      ~~`IsSameSystem` → `IsSameSource`~~ (the rename happened; the result was struck 2026-08-28);
       `IsSameDomain` removed (not a prefix under the new order; `grep -rn IsSameDomain --include='*.go'` → tests only).
-      **Done, then REDUCED 2026-08-28.** `DeploymentPrefix`/`SourcePrefix`/`TaxonomyPrefix`/`TypePrefix` and `IsSameSource` ship. `PrefixLevel(n)` and the `PrefixLevelDeployment..PrefixLevelType` constants were implemented as this row describes and are now DELETED for want of any consumer (owner ruling; see the phantom-export note in 7.3). `SystemPrefix`/`DomainPrefix`/`PlatformPrefix`/`IsSameSystem`/`IsSameDomain` deleted (`message/parse_entity_id_test.go` rewritten to the named levels).
+      **Done, then REDUCED 2026-08-28.** `DeploymentPrefix`/`SourcePrefix`/`TaxonomyPrefix`/`TypePrefix` ship. `PrefixLevel(n)`, the `PrefixLevelDeployment..PrefixLevelType` constants, and `IsSameSource` were implemented as this row describes and are now DELETED for want of any consumer (owner rulings; see the phantom-export note in 7.3). A caller wanting the source-equality predicate compares `SourcePrefix()` directly. `SystemPrefix`/`DomainPrefix`/`PlatformPrefix`/`IsSameSystem`/`IsSameDomain` deleted (`message/parse_entity_id_test.go` rewritten to the named levels).
 
 - [x] 3.3 Add `EntityDomainDelegation`, ~~`EntityDomainAuthority`, `NewEntityDomainAuthority`, `Authorize(producer,
       domain, entityType)`~~ (struck 2026-08-28), and the reserved set `FrameworkEntityDomains = {agent, ops, graph}`
@@ -840,10 +840,26 @@ package; both declarations are now on the payload registrations) and
 
 ## 7. Gates and landing (AGENTS.md:63-68 order)
 
+> **§7 is per-CHANGE, not per-slice — every row below stays open when slice A merges.** This PR is **slice A of
+> two** (1.1); the change remains IN FLIGHT after it lands, and **7.5 archives when slice B lands**, not here.
+> Three facts settle it, all checkable in this file: 1.1 declares the split and says slice A's PR body starts
+> `Part of #1095 (slice A of two — slice B closes it)` while slice B carries `Closes #1095`; 7.5's command is
+> `openspec archive entity-id-segment-semantics` — a change-level operation with no per-slice form; and 7.2 already
+> applies the convention, recording slice A's ten green tiers while staying open "because slice B changes the same
+> paths and must re-run it". 1.1's "§7 gates for what slice A does" assigns slice A the *running*, not the ticking.
+>
+> So slice A **executes** 7.1/7.2/7.3/7.4 and records the results here and in `conformance.md` **without ticking
+> them**; slice B re-runs them for the completed change and ticks them then. No archive or spec-sync check is owed
+> on slice A's PR, and a reviewer should not ask for one. Do not re-derive this: `task openspec:queue` reporting
+> `34/51` with 17 open is the expected state at slice A's merge, not an unfinished change.
+
 - [ ] 7.1 Focused gates, results recorded verbatim: `task lint`; `go test -race -count=1 ./...`;
       `scripts/run-integration-tests.sh` (what CI runs); `go test ./test/contract/...`; `task entity-id:audit`;
       `task schema:generate && git diff --exit-code schemas/ specs/`;
       `openspec validate entity-id-segment-semantics --strict --no-interactive`.
+      **SLICE A RUN — recorded, row intentionally open.** Every gate above was run green on slice A's landing head;
+      the per-round results are in `conformance.md`. The row stays open because slice B changes the same paths and
+      must re-run it for the completed change, exactly as 7.2 does.
 - [ ] 7.2 Covering e2e tiers on the landing branch, one at a time on the shared host, results recorded verbatim:
       `task e2e:core`; `task e2e:structural`; `task e2e:statistical`; `task e2e:semantic`; `task e2e:agentic`;
       `task e2e:lessons`; `task e2e:lifecycle`; `task e2e:ops`; `task e2e:crud-tools`; `task e2e:research-graph`.
@@ -896,11 +912,13 @@ package; both declarations are now on the payload registrations) and
       prefix methods, `LongestFrameworkIdentityFamily`); the surviving new-export table with each symbol's present
       consumer is in `conformance.md`.
       **For #606 (ADR-099), which is blocked on this PR:** the prefix-level vocabulary was removed DELIBERATELY for
-      want of a present consumer, not overlooked. The four named prefix methods and `IsSameSource` remain with the
-      same meanings. Re-add whatever level vocabulary #606's code actually calls, with the caller in the same
-      change, rather than resurrecting `PrefixLevel(n)` speculatively.
-      **Raised, not acted on:** `IsSameSource` now has no caller at all outside `message/parse_entity_id_test.go` —
-      a ninth phantom by the same test, outside this ruling.
+      want of a present consumer, not overlooked. The four named prefix methods remain with the same meanings;
+      `IsSameSource` was deleted with them, checked against #606 first — its design does not name it (the inventory
+      hit is `IsSameSystem`, the pre-#1095 name) and #606 partitions by `SourcePrefix()` as a key, not by a pairwise
+      comparator. Re-add whatever level vocabulary #606's code actually calls, with the caller in the same change,
+      rather than resurrecting `PrefixLevel(n)` speculatively.
+      **Ninth phantom, RULED and DELETED 2026-08-28:** `IsSameSource` had no caller at all; the method,
+      `TestEntityIDIsSameSource` and the two assertions in `entity_id_semantics_test.go` are gone.
       **Follow-up recorded, not done here:** `pkg/types/entity_domain_authority.go` holds no authority after the
       2026-08-28 deletion. The filename was kept this round to avoid churning the citations across these artifacts;
       renaming it to `pkg/types/entity_domain.go` (with the citations swept) is owed.

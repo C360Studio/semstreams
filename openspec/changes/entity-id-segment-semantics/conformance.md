@@ -18,7 +18,7 @@ Constraint rows are labelled K1–K3 so they do not collide with the inventory's
 | K1 | Reordering allowed (constraint) | `pkg/types/entity_id.go` `Key()`/`ParseEntityID`; repository sweep (`scratchpad sweep.py`, 132 files; `sweep2.py`, 5 files) | `specs/entity-id-contract/spec.md` MODIFIED "Every entity ID has one canonical six-segment ASCII form" | `TestEntityIDKeyOrderIsSystemBeforeDomain` |
 | K2 | Arity stays six (constraint) | `pkg/types/entity_id.go` validators unchanged (`canonicalEntityIDParts = 6`) | same (unchanged arity clause) | existing `pkg/types` arity tests |
 | K3 | Second- and third-order impacts of the six-part shape made explicit (constraint) | `docs/proposals/gh1095-entity-id-segment-semantics-inventory.md` §1 (rows S/K/X/W/C/H/L/R/M/D/F/T/P + census) | — | independent inventory pass (PASS WITH DIVERGENCES, r2 corrections) |
-| D1 | Order `org.platform.system.domain.type.instance`; instance last (ADR-102 d1, d6) | `pkg/types/entity_id.go` `DeploymentPrefix`/`SourcePrefix`/`TaxonomyPrefix`/`TypePrefix`, `IsSameSource`; retired helpers deleted, and `PrefixLevel(n)` deleted 2026-08-28 as a phantom | MODIFIED canonical form; ADDED "Prefix lengths have fixed meanings and the instance position is last" | `TestPrefixLevelsAreNamed`, `TestTaxonomyAcrossSourcesIsPatternNotPrefix` |
+| D1 | Order `org.platform.system.domain.type.instance`; instance last (ADR-102 d1, d6) | `pkg/types/entity_id.go` `DeploymentPrefix`/`SourcePrefix`/`TaxonomyPrefix`/`TypePrefix`; retired helpers deleted, and `PrefixLevel(n)`, the four `PrefixLevel*` constants and `IsSameSource` deleted 2026-08-28 as phantoms | MODIFIED canonical form; ADDED "Prefix lengths have fixed meanings and the instance position is last" | `TestPrefixLevelsAreNamed`, `TestTaxonomyAcrossSourcesIsPatternNotPrefix` |
 | D2 | `platform` from the single identity field (conditional on O-2); ADR-076 d1 retired, d2 amended (d2) | `config/config.go` `GetPlatform`, `rejectRemovedPlatformFields`, `validateAuthorityPair`; `pkg/platform.Config.InstanceID` deleted; `pkg/types/framework_identity_families.go` (`MaxAuthorityPairBytes()` = 170 derived); `graph/events.go` + `processor/rule/graph_event_identity.go` compose from the family table — no `semstreams.framework` literal remains | ADDED position-meaning requirement; ADDED "The authority pair is bounded at configuration load" | `TestConfigRejectsOversizedAuthorityPair`; `NewAlertEvent`/`ruleTriggerEntityID` rows in `entity_ids_semantics_test.go` |
 | D3 | Product names are provenance (d3) | `internal/entityidaudit/segment_rules.go` `authority_literal` over `go-format-prefix`, `go-dotted-constant`, declaration patterns (production Go + `configs/`), and whole six-segment literals on the minting surfaces `{go-constructor:EntityID, go-return:EntityID}`. **Stated limit:** `audit.go` `entityIDConstructorValue` resolves the constructor only when ALL SIX fields are static, so a partial-literal mint (`EntityID{Org: deps.Org, Platform: "semsource", …}`) produces no candidate at all — pre-existing extraction behaviour, made load-bearing by the new rule and deliberately not widened in this change | same | `TestAuditFlagsAuthorityLiteral`, `TestAuditFlagsAuthorityLiteralInAMintingLiteral` |
 | D4 | Domain delegation + reserved set `{agent, ops, graph}` (d4); overlap between producers PERMITTED and UNREPORTED per the 2026-08-28 ruling | `pkg/types/entity_domain_authority.go` (authority type deleted; `EntityDomainDelegation` and the reserved sets retained); `processor/gated-dag/participant.go` `*.*.gated-dag.agent.fanout.*` (re-slotted under `agent`); `segment_rules.go` `domain_unregistered` with `collectRegisteredDomains`, over a corpus that includes the projection-contract declaration surface (`audit.go` `languageForName` `entitypattern`/`Contract` arm and `projection_contracts[].entity_pattern`); delegations declared by `examples/processors/{document,iot_sensor,weather_station}/entity_domains.go` and `cmd/e2e-semstreams/mission/state.go`, whose ONLY consumer is the audit's registered set | ADDED requirement retitled and narrowed to the declaration; three scenarios | `TestAuditFlagsUnregisteredDomain`, `TestEntityDomainDelegationIsADeclarationNotAPolicy`, plus the registered-set mutation recorded below |
@@ -273,9 +273,13 @@ The remaining ten are accounted for, not overlooked:
 - **`DeploymentPrefix()`** — has an in-package production caller (`SourcePrefix()` at `entity_id.go:275`); outside
   the package it is referenced only by `message/parse_entity_id_test.go`. Left in place, as ruled; a ninth cut was
   not in this ruling.
-- **`IsSameSource`** — reported, not cut. It replaced the retired `IsSameSystem` and has **no caller at all**: none
-  in `pkg/types` production, and outside only `message/parse_entity_id_test.go`. By the same test that condemned the
-  eight it is a ninth phantom, but it is outside the ruling and is raised here rather than removed unilaterally.
+- **`IsSameSource`** — raised here, then **RULED and DELETED 2026-08-28** as the ninth phantom. It replaced the
+  retired `IsSameSystem` and had no caller at all: none in `pkg/types` production, and outside only
+  `message/parse_entity_id_test.go` (`TestEntityIDIsSameSource`, removed with it) and one pair of assertions in
+  `entity_id_semantics_test.go`. Checked against #606 before the cut: its design does not name it — the inventory's
+  hit is `IsSameSystem`, the pre-#1095 name, in a row inventorying the old state — and #606 partitions by
+  `SourcePrefix()` as a key, not by a pairwise comparator. Callers wanting the predicate compare `SourcePrefix()`
+  directly.
 
 ### The eight, and what happened to each
 
@@ -295,7 +299,33 @@ none of the eight had an in-package caller either, so unexporting would have lef
 ADR-099/#606 was the named future consumer for the prefix-level vocabulary, and #606 is a ruled beta.163 epic
 blocked on this PR. The vocabulary was **deliberately removed for want of a present consumer**, not missed:
 `EntityID.PrefixLevel(n)` and the four `PrefixLevel*` constants are gone, while the four named prefix methods
-(`DeploymentPrefix`, `SourcePrefix`, `TaxonomyPrefix`, `TypePrefix`) and `IsSameSource` remain and carry the same
-meanings. #606's implementer should re-add whatever level vocabulary its code actually calls, with the caller in the
+(`DeploymentPrefix`, `SourcePrefix`, `TaxonomyPrefix`, `TypePrefix`) remain and carry the same meanings.
+`IsSameSource` went with them on the same test — #606 partitions by `SourcePrefix()` as a key rather than by a
+pairwise comparator, so nothing it needs was removed. #606's implementer should re-add whatever level vocabulary its code actually calls, with the caller in the
 same change, rather than resurrecting this shape speculatively. `pkg/types/entity_id.go` carries the same note above
 the prefix methods.
+
+## Landing scope — slice A of two; the change stays in flight
+
+**This PR does not archive the change, and no archive/spec-sync check is owed on it.**
+`entity-id-segment-semantics` is landing in two PRs. Slice A is this one; slice B carries `Closes #1095` and
+`Closes #1096`. `task openspec:queue` reporting **34/51 with 17 open** is the expected state at slice A's merge, not
+an unfinished change: 11 of the 17 are slice B's work by design — 2.5, 2.6 (its two run-scope tests), 3.8, the
+mutation checks M3/M4/M6/M13 (4.3, 4.4, 4.6, 4.13), and all four rows of §6 — and the remaining 6 are §7, which is
+scoped per-change.
+
+The evidence, all checkable in `tasks.md`: **1.1** declares the split and pins slice A's PR body to open
+`Part of #1095 (slice A of two — slice B closes it)`; **7.5**'s command is `openspec archive
+entity-id-segment-semantics`, a change-level operation with no per-slice form; and **7.2 already applies the
+convention**, recording slice A's ten green e2e tiers while staying open "because slice B changes the same paths and
+must re-run it". 1.1's "§7 gates for what slice A does" assigns slice A the *running*, not the ticking.
+
+So slice A **executed** 7.1 (focused gates), 7.2 (ten covering tiers), 7.3 (implementation review, three rounds) and
+7.4 (the Codex owner round plus two owner rulings) — every result recorded in this file — and **left all four
+unticked**, because slice B re-runs them for the completed change and ticks them then. **No task in this change
+asserts a post-merge fact**: verified by reading every `[x]` row and every §7 row; the only CI-shaped statements are
+gate results already obtained on a branch head, and 7.6 is explicit that "No task asserts CI state."
+
+Slice B inherits, in `tasks.md`: the §7 scoping note above §7.1, the `IsSameSource`/phantom-export rulings, the
+`pkg/types/entity_domain_authority.go` rename follow-up, and the #606 note that the prefix-level vocabulary was
+removed deliberately.

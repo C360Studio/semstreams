@@ -306,9 +306,3 @@ func (eid EntityID) HasPrefix(prefix string) bool {
 func (eid EntityID) IsSibling(other EntityID) bool {
 	return eid.TypePrefix() == other.TypePrefix() && eid.Instance != other.Instance
 }
-
-// IsSameSource reports whether other shares this EntityID's source prefix
-// (org.platform.system).
-func (eid EntityID) IsSameSource(other EntityID) bool {
-	return eid.SourcePrefix() == other.SourcePrefix()
-}

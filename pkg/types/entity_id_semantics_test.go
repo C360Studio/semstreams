@@ -56,10 +56,6 @@ func TestPrefixLevelsAreNamed(t *testing.T) {
 	} {
 		assert.Len(t, strings.Split(got, "."), want, "prefix %q must have %d positions", got, want)
 	}
-
-	other := EntityID{Org: "acme", Platform: "dep1", System: "src", Domain: "media", Type: "video", Instance: "v9"}
-	assert.True(t, eid.IsSameSource(other))
-	assert.False(t, eid.IsSameSource(EntityID{Org: "acme", Platform: "dep1", System: "other", Domain: "git", Type: "commit", Instance: "a1"}))
 }
 
 // TestTaxonomyAcrossSourcesIsPatternNotPrefix pins that "every git entity of
@@ -69,7 +65,7 @@ func TestTaxonomyAcrossSourcesIsPatternNotPrefix(t *testing.T) {
 	t.Parallel()
 
 	require.NoError(t, ValidateEntityIDPattern("acme.dep1.*.git.*.*"))
-	// entity-id-audit:classify intentional-malformed "acme.dep1.*.git" line=73 column=32 surface=go-call:ValidateEntityIDPrefix entity_id_prefix_invalid:first_byte a taxonomy across sources is not expressible as a prefix
+	// entity-id-audit:classify intentional-malformed "acme.dep1.*.git" line=69 column=32 surface=go-call:ValidateEntityIDPrefix entity_id_prefix_invalid:first_byte a taxonomy across sources is not expressible as a prefix
 	err := ValidateEntityIDPrefix("acme.dep1.*.git")
 	require.Error(t, err)
 	var classified *errs.ClassifiedError

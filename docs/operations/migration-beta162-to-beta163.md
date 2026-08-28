@@ -462,7 +462,7 @@ GraphQL value `entityTypes[].type`, now `system.domain.type`.
 5. **Prefix levels have fixed meanings (ADR-102 d6):** 2 = deployment (`DeploymentPrefix`), 3 = source
    (`SourcePrefix`, the federation triple; ADR-099 level 1), 4 = taxonomy (`TaxonomyPrefix`; ADR-099 level 0), 5 = type
    (`TypePrefix`). `SystemPrefix`, `DomainPrefix`, `PlatformPrefix`, `IsSameSystem`, `IsSameDomain`
-   no longer exist; `IsSameSource` compares the source prefix. "A taxonomy across sources" is the wildcard pattern
+   no longer exist, and neither does `IsSameSource` — compare `SourcePrefix()` directly. "A taxonomy across sources" is the wildcard pattern
    `org.platform.*.D.*.*` or a `tag:` lesson scope, never a prefix; a three-position `id:` lesson scope key now means one
    source within one deployment.
 6. **Exported signatures.** `graph.NewAlertEvent(org, platform, alertType, sourceEntityID, properties, metadata)`;
