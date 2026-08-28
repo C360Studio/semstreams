@@ -318,9 +318,7 @@
               "name": "doc_out"
             }
           ]
-        },
-        "org_id": "c360",
-        "platform": "logistics"
+        }
       }
     },
     "iot_sensor": {
@@ -355,9 +353,7 @@
               "name": "sensor_out"
             }
           ]
-        },
-        "org_id": "c360",
-        "platform": "logistics"
+        }
       }
     },
     "rule": {

@@ -50,7 +50,7 @@ func (e *GraphQueryExecutor) ListTools() []agentic.ToolDefinition {
 				"properties": map[string]any{
 					"entity_id": map[string]any{
 						"type":        "string",
-						"description": "The full entity ID to query (e.g., c360.logistics.sensor.environmental.temperature.temp-sensor-001)",
+						"description": "The full entity ID to query (e.g., acme.dep1.sensor.environmental.temperature.temp-sensor-001)",
 					},
 				},
 				"required": []string{"entity_id"},

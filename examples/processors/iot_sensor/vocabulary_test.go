@@ -20,12 +20,11 @@ func TestRegisterVocabularyDeclaresReferenceRuleOutputs(t *testing.T) {
 
 func TestPressureRuleUnitProducesDeclaredPredicate(t *testing.T) {
 	reading := &SensorReading{
-		DeviceID:   "pressure-001",
-		SensorType: "pressure",
-		Value:      12.5,
-		Unit:       "psi",
-		OrgID:      "test",
-		Platform:   "e2e",
+		DeviceID:      "pressure-001",
+		SensorType:    "pressure",
+		Value:         12.5,
+		Unit:          "psi",
+		EntityIDValue: SensorReadingEntityID(testAuthority, "pressure", "pressure-001"),
 	}
 	if err := reading.Validate(); err != nil {
 		t.Fatalf("Validate() failed for pressure rule unit: %v", err)

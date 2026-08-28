@@ -9,7 +9,17 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/types"
 )
+
+// testAuthority is a deployment authority in the shape a composition root
+// supplies it: platform.org / platform.id. "dep1" is a deployment name, not a
+// product name — position 2 never carries a product (ADR-102 d2, d3).
+var testAuthority = types.PlatformMeta{Org: "acme", Platform: "dep1"}
+
+// secondAuthority is a second deployment under the same org, proving the
+// minted prefix follows the composition root rather than any payload field.
+var secondAuthority = types.PlatformMeta{Org: "acme", Platform: "dep2"}
 
 // TestSensorReading_EntityID_6PartFormat verifies that SensorReading.EntityID()
 // returns a properly formatted 6-part federated entity ID.
@@ -23,32 +33,30 @@ func TestSensorReading_EntityID_6PartFormat(t *testing.T) {
 		{
 			name: "temperature sensor",
 			reading: SensorReading{
-				DeviceID:     "sensor-042",
-				SensorType:   "temperature",
-				Value:        23.5,
-				Unit:         "celsius",
-				ZoneEntityID: "acme.logistics.zone.facility.area.warehouse-7",
-				ObservedAt:   time.Now(),
-				OrgID:        "acme",
-				Platform:     "logistics",
+				DeviceID:      "sensor-042",
+				SensorType:    "temperature",
+				Value:         23.5,
+				Unit:          "celsius",
+				ZoneEntityID:  ZoneEntityID(testAuthority, "area", "warehouse-7"),
+				ObservedAt:    time.Now(),
+				EntityIDValue: SensorReadingEntityID(testAuthority, "temperature", "sensor-042"),
 			},
 			wantParts:  6,
-			wantPrefix: "acme.logistics.sensor.environmental",
+			wantPrefix: "acme.dep1.sensor.environmental",
 		},
 		{
 			name: "humidity sensor",
 			reading: SensorReading{
-				DeviceID:     "hum-001",
-				SensorType:   "humidity",
-				Value:        65.0,
-				Unit:         "percent",
-				ZoneEntityID: "acme.facilities.zone.facility.area.office-3",
-				ObservedAt:   time.Now(),
-				OrgID:        "acme",
-				Platform:     "facilities",
+				DeviceID:      "hum-001",
+				SensorType:    "humidity",
+				Value:         65.0,
+				Unit:          "percent",
+				ZoneEntityID:  ZoneEntityID(secondAuthority, "area", "office-3"),
+				ObservedAt:    time.Now(),
+				EntityIDValue: SensorReadingEntityID(secondAuthority, "humidity", "hum-001"),
 			},
 			wantParts:  6,
-			wantPrefix: "acme.facilities.sensor.environmental",
+			wantPrefix: "acme.dep2.sensor.environmental",
 		},
 	}
 
@@ -87,14 +95,13 @@ func TestSensorReading_EntityID_6PartFormat(t *testing.T) {
 // returns semantically meaningful triples with proper predicates.
 func TestSensorReading_Triples_SemanticPredicates(t *testing.T) {
 	reading := SensorReading{
-		DeviceID:     "sensor-042",
-		SensorType:   "temperature",
-		Value:        23.5,
-		Unit:         "celsius",
-		ZoneEntityID: "acme.logistics.zone.facility.area.warehouse-7",
-		ObservedAt:   time.Date(2025, 11, 26, 10, 30, 0, 0, time.UTC),
-		OrgID:        "acme",
-		Platform:     "logistics",
+		DeviceID:      "sensor-042",
+		SensorType:    "temperature",
+		Value:         23.5,
+		Unit:          "celsius",
+		ZoneEntityID:  ZoneEntityID(testAuthority, "area", "warehouse-7"),
+		ObservedAt:    time.Date(2025, 11, 26, 10, 30, 0, 0, time.UTC),
+		EntityIDValue: SensorReadingEntityID(testAuthority, "temperature", "sensor-042"),
 	}
 
 	triples := reading.Triples()
@@ -158,11 +165,10 @@ func TestSensorReading_Triples_SemanticPredicates(t *testing.T) {
 // formatted 6-part federated entity ID.
 func TestZone_EntityID_6PartFormat(t *testing.T) {
 	zone := Zone{
-		ZoneID:   "warehouse-7",
-		ZoneType: "area",
-		Name:     "Main Warehouse",
-		OrgID:    "acme",
-		Platform: "logistics",
+		ZoneID:        "warehouse-7",
+		ZoneType:      "area",
+		Name:          "Main Warehouse",
+		EntityIDValue: ZoneEntityID(testAuthority, "area", "warehouse-7"),
 	}
 
 	entityID := zone.EntityID()
@@ -179,7 +185,7 @@ func TestZone_EntityID_6PartFormat(t *testing.T) {
 	}
 
 	// Verify expected prefix
-	wantPrefix := "acme.logistics.zone.facility"
+	wantPrefix := "acme.dep1.zone.facility"
 	if !strings.HasPrefix(entityID, wantPrefix) {
 		t.Errorf("EntityID() = %q, want prefix %q", entityID, wantPrefix)
 	}
@@ -188,11 +194,10 @@ func TestZone_EntityID_6PartFormat(t *testing.T) {
 // TestZone_Triples verifies that Zone.Triples() returns proper triples.
 func TestZone_Triples(t *testing.T) {
 	zone := Zone{
-		ZoneID:   "warehouse-7",
-		ZoneType: "area",
-		Name:     "Main Warehouse",
-		OrgID:    "acme",
-		Platform: "logistics",
+		ZoneID:        "warehouse-7",
+		ZoneType:      "area",
+		Name:          "Main Warehouse",
+		EntityIDValue: ZoneEntityID(testAuthority, "area", "warehouse-7"),
 	}
 
 	triples := zone.Triples()

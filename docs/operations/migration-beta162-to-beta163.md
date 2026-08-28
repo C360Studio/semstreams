@@ -512,3 +512,75 @@ mirroring that contract changes both in one edit. Both spellings are inside the 
 `go-field:Contract.EntityPattern` and the config key as `config:projection_contracts.entity_pattern` — so a
 contract left in the retired order is a `domain_unregistered` finding in production Go, and a contract given a literal
 org/platform is an `authority_literal` finding in either.
+
+## Entity-ID segment semantics, slice C (ADR-102 d2, #1149) — `org_id` / `platform` leave the example processors
+
+Added 2026-08-28. Slice A moved the *meaning* of positions 1-2 to the composition root's `platform.org` /
+`platform.id`. Its corpus sweep did not reach `examples/processors/`, where three shipped example components still
+declared `org_id` and `platform` as their own operator config keys — two of them `required:true` — and minted from
+them, while the payload types additionally carried `OrgID` / `Platform` on the wire. Every shipped config that
+composed them declared one authority at the top level and a different one on the component:
+`configs/e2e-structural.json` said `c360` / `semstreams-e2e-structural` at the top and `c360` / `logistics` on
+`iot_sensor`. This slice retires both meanings.
+
+### What changes
+
+1. **`org_id` and `platform` are removed from `iot_sensor`, `document_processor`, and `weather_station`, and a
+   config that still carries either FAILS TO LOAD** with a coded error naming ADR-102 d2:
+
+   ```text
+   IoTSensorComponent.rejectRemovedConfigKeys: config field "org_id" was removed (ADR-102 d2, BREAKING):
+   positions 1-2 of every minted entity ID are the composition root's platform.org / platform.id and nothing
+   else — never an operator knob on a component. Delete the field; set platform.org at the top level of the
+   config
+   ```
+
+   The refusal fires on both entry paths that read the raw component config — `DeclarePorts` (offline composition
+   validation) and `NewComponent` (boot) — because both share one `resolveConfig`. Same shape as slice A's
+   `platform.instance_id` rejection (`config/config.go` `removedPlatformFields`) and graph-clustering's
+   `removedConfigFields`.
+
+2. **`OrgID` and `Platform` leave the wire shape of all seven example payload types** — `SensorReading`, `Zone`,
+   `Document`, `Maintenance`, `Observation`, `SensorDocument`, `WeatherReading`. Each now carries one
+   `entity_id` field holding the identity its processor minted, and `EntityID()` returns that value rather than
+   recomputing it. A minting function sits beside each type (`SensorReadingEntityID`, `ZoneEntityID`,
+   `DocumentEntityID`, `MaintenanceEntityID`, `ObservationEntityID`, `SensorDocumentEntityID`,
+   `WeatherReadingEntityID`), each taking `types.PlatformMeta` — `component.Dependencies.Platform`, verbatim.
+
+3. **`NewProcessor` takes the deployment authority, not a config struct.** The `Config` struct that held
+   `OrgID` / `Platform` in each of the three example packages is deleted; `NewProcessor(deps.Platform)` replaces
+   `NewProcessor(Config{OrgID: …, Platform: …})`.
+
+4. **Every entity the example processors mint changes identity.** `c360.logistics.*` becomes the deployment's own
+   authority: `c360.semstreams-e2e-structural.*` under `configs/e2e-structural.json`,
+   `c360.semstreams-statistical.*` under `configs/statistical.json`, `c360.semstreams-kitchen-sink-ml.*` under
+   `configs/semantic.json` (and its `-8b` / `-frontier` overlays), `c360.semstreams-structural.*` under
+   `configs/structural.json`, `demo.hello-world.*` under `configs/hello-world.json`.
+
+### Doing nothing — LOUD on the config, and this is deliberate
+
+An operator who upgrades and changes nothing gets a **boot-time refusal**, not a silent re-mint. That is the whole
+point of obligation 1. `encoding/json` DROPS an unknown key without complaint, so removing the struct field alone
+would have left the operator's `"platform": "logistics"` in place, ignored, while every entity ID moved to
+`platform.id` — a silent authority change discoverable only by diffing entity IDs. The rejection converts that into
+an error naming the field and its replacement.
+
+This is the opposite of slice A's own position-3/4 swap, which the section above records as silent. Where a break
+CAN be made loud, it is.
+
+### Adopter action
+
+1. Delete `org_id` and `platform` from every `iot_sensor` / `document_processor` / `weather_station` component block
+   in your configs. If the values differed from your top-level `platform.org` / `platform.id`, decide which one you
+   meant: the top-level pair is now the only authority, so move the value you want there.
+2. If you copied an example processor into your own repo (the README tells you to), apply the same three edits:
+   delete the config keys, add the rejection probe, and take the authority from `deps.Platform`.
+3. Re-provision NATS storage. Every entity ID these processors mint changes; there is no alias, migration, or
+   dual-read (`openspec/specs/entity-id-contract/spec.md` "clean owned-source break").
+4. Re-point any query, fixture, dashboard, or rule that names `c360.logistics.*` at your deployment's own authority.
+
+### Not affected
+
+Products that do not compose the bundled example processors are unaffected: no framework component ever had an
+`org_id` or `platform` config key. `cmd/e2e-semstreams/mission` already took its authority from `deps.Platform` and
+refuses a wire value that disagrees, so it needed no change.

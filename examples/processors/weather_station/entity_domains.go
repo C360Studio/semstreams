@@ -7,6 +7,17 @@ import semtypes "github.com/c360studio/semstreams/pkg/types"
 // root, never inferred from a payload.
 const Producer = "weather-station-example"
 
+// Entity-ID positions this example owns. Under the canonical order
+// org.platform.system.domain.type.instance (ADR-102) position 3 is the SOURCE
+// and position 4 the delegated taxonomy. Positions 1-2 are never named here:
+// they are the composition root's platform.org / platform.id and are supplied
+// at mint time (ADR-102 d2).
+const (
+	stationSystem     = "station"
+	meteorologyDomain = "meteorology"
+	outdoorType       = "outdoor"
+)
+
 // EntityDomainDelegations declares the entity domain this example mints under
 // (position 4 of the canonical org.platform.system.domain.type.instance order).
 // The entity-ID corpus audit AST-scans these literals for the registered set
@@ -21,6 +32,6 @@ const Producer = "weather-station-example"
 // vocabulary question, not one the framework decides for you.
 func EntityDomainDelegations() []semtypes.EntityDomainDelegation {
 	return []semtypes.EntityDomainDelegation{
-		{Producer: Producer, Domain: "meteorology"},
+		{Producer: Producer, Domain: meteorologyDomain},
 	}
 }

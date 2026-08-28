@@ -23,6 +23,8 @@ import (
 
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/payloadregistry"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
+	"github.com/c360studio/semstreams/types"
 )
 
 var measurementPredicateByUnit = map[string]string{
@@ -54,11 +56,8 @@ func buildSensorReading(fields map[string]any) (any, error) {
 	if v, ok := fields["ZoneEntityID"].(string); ok {
 		msg.ZoneEntityID = v
 	}
-	if v, ok := fields["OrgID"].(string); ok {
-		msg.OrgID = v
-	}
-	if v, ok := fields["Platform"].(string); ok {
-		msg.Platform = v
+	if v, ok := fields["EntityIDValue"].(string); ok {
+		msg.EntityIDValue = v
 	}
 
 	// Handle optional float64 pointers for geospatial fields
@@ -110,12 +109,11 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
 		},
 		Builder: buildSensorReading,
 		Example: map[string]any{
-			"DeviceID":   "sensor-042",
-			"SensorType": "temperature",
-			"Value":      23.5,
-			"Unit":       "celsius",
-			"OrgID":      "acme",
-			"Platform":   "logistics",
+			"DeviceID":      "sensor-042",
+			"SensorType":    "temperature",
+			"Value":         23.5,
+			"Unit":          "celsius",
+			"EntityIDValue": "acme.dep1.sensor.environmental.temperature.sensor-042",
 		},
 	}); err != nil {
 		return err
@@ -129,11 +127,10 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
 			return &Zone{}
 		},
 		Example: map[string]any{
-			"ZoneID":   "warehouse-7",
-			"ZoneType": "warehouse",
-			"Name":     "Main Warehouse",
-			"OrgID":    "acme",
-			"Platform": "logistics",
+			"ZoneID":        "warehouse-7",
+			"ZoneType":      "warehouse",
+			"Name":          "Main Warehouse",
+			"EntityIDValue": "acme.dep1.zone.facility.warehouse.warehouse-7",
 		},
 	})
 }
@@ -160,34 +157,48 @@ type SensorReading struct {
 	Longitude *float64 // e.g., -122.4194 (nil if not provided)
 	Altitude  *float64 // e.g., 10.0 meters (optional)
 
-	// Entity reference fields (computed by processor)
-	ZoneEntityID string // e.g., "acme.logistics.zone.facility.area.warehouse-7"
+	// Entity reference fields (minted by the processor)
+	ZoneEntityID string // e.g., "acme.dep1.zone.facility.area.warehouse-7"
 
-	// Context fields (set by processor from config)
-	OrgID    string // e.g., "acme"
-	Platform string // e.g., "logistics"
+	// EntityIDValue is this reading's own identity, minted once by the
+	// processor under the composition root's platform.org / platform.id and
+	// carried on the wire from there (ADR-102 d2). It is not re-derived
+	// downstream: a reader that had to recompute it would need an authority
+	// nobody can hand it, and would get a different answer when told wrong.
+	EntityIDValue string `json:"entity_id"`
 }
 
-// EntityID returns a deterministic 6-part federated entity ID in the canonical
-// order (ADR-102):
+// EntityID returns the identity minted for this reading. The value is
+// SensorReadingEntityID's output, stamped at mint time and carried on the
+// wire — never recomputed here.
+func (s *SensorReading) EntityID() string {
+	return s.EntityIDValue
+}
+
+// SensorReadingEntityID mints a reading's deterministic 6-part federated
+// entity ID in the canonical order (ADR-102):
 // {org}.{platform}.{system}.{domain}.{type}.{instance}
 //
-// Example: "acme.logistics.sensor.environmental.temperature.sensor-042"
+// Example: "acme.dep1.sensor.environmental.temperature.sensor-042"
 //
 // The 6 parts provide:
-//   - org: Organization namespace (multi-tenancy)
-//   - platform: the minting deployment authority (platform.id), never a product name
+//   - org: the composition root's platform.org (multi-tenancy)
+//   - platform: the composition root's platform.id — the minting deployment
+//     authority, never a product name and never an operator knob on this
+//     component (ADR-102 d2)
 //   - system: the source that produced the entity (sensor, actuator, etc.)
 //   - domain: this example's delegated taxonomy (environmental)
 //   - type: Entity type within the domain (temperature, humidity, etc.)
 //   - instance: Unique instance identifier
-func (s *SensorReading) EntityID() string {
-	return fmt.Sprintf("%s.%s.sensor.environmental.%s.%s",
-		s.OrgID,
-		s.Platform,
-		s.SensorType,
-		s.DeviceID,
-	)
+func SensorReadingEntityID(authority types.PlatformMeta, sensorType, deviceID string) string {
+	return semtypes.EntityID{
+		Org:      authority.Org,
+		Platform: authority.Platform,
+		System:   sensorSystem,
+		Domain:   environmentDomain,
+		Type:     sensorType,
+		Instance: deviceID,
+	}.Key()
 }
 
 // Triples returns semantic facts about this sensor reading using domain-appropriate
@@ -319,11 +330,8 @@ func (s *SensorReading) Validate() error {
 	if _, ok := measurementPredicateByUnit[s.Unit]; !ok {
 		return fmt.Errorf("unsupported unit %q; supported units are celsius, fahrenheit, percent, hpa, psi", s.Unit)
 	}
-	if s.OrgID == "" {
-		return fmt.Errorf("org_id is required")
-	}
-	if s.Platform == "" {
-		return fmt.Errorf("platform is required")
+	if s.EntityIDValue == "" {
+		return fmt.Errorf("entity_id is required; mint it with SensorReadingEntityID under the deployment authority")
 	}
 	return nil
 }
@@ -342,20 +350,24 @@ func (s *SensorReading) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*Alias)(s))
 }
 
-// ZoneEntityID generates a federated 6-part entity ID for a zone.
-// This is the single source of truth for zone entity ID format, ensuring
-// consistency between Zone.EntityID() and any references to zones.
+// ZoneEntityID mints a federated 6-part entity ID for a zone under the
+// deployment authority. This is the single source of truth for zone entity ID
+// format, ensuring consistency between Zone.EntityID() and any references to
+// zones. Positions 1-2 come from the composition root's platform.org /
+// platform.id and nothing else (ADR-102 d2).
 //
-// Example: ZoneEntityID("acme", "logistics", "area", "warehouse-7")
-// Returns: "acme.logistics.zone.facility.area.warehouse-7"
+// Example: ZoneEntityID(types.PlatformMeta{Org: "acme", Platform: "dep1"}, "area", "warehouse-7")
+// Returns: "acme.dep1.zone.facility.area.warehouse-7"
 // (system = zone, domain = facility in the canonical order)
-func ZoneEntityID(orgID, platform, zoneType, zoneID string) string {
-	return fmt.Sprintf("%s.%s.zone.facility.%s.%s",
-		orgID,
-		platform,
-		zoneType,
-		zoneID,
-	)
+func ZoneEntityID(authority types.PlatformMeta, zoneType, zoneID string) string {
+	return semtypes.EntityID{
+		Org:      authority.Org,
+		Platform: authority.Platform,
+		System:   zoneSystem,
+		Domain:   facilityDomain,
+		Type:     zoneType,
+		Instance: zoneID,
+	}.Key()
 }
 
 // Zone represents a location zone entity. It demonstrates how entity references
@@ -365,15 +377,15 @@ type Zone struct {
 	ZoneType string // e.g., "warehouse", "office", "outdoor"
 	Name     string // e.g., "Main Warehouse"
 
-	// Context fields
-	OrgID    string
-	Platform string
+	// EntityIDValue is the zone's minted identity — ZoneEntityID's output,
+	// stamped under the deployment authority and carried on the wire.
+	EntityIDValue string `json:"entity_id"`
 }
 
-// EntityID returns a deterministic 6-part federated entity ID for the zone.
-// Example: "acme.logistics.zone.facility.area.warehouse-7"
+// EntityID returns the zone's minted identity.
+// Example: "acme.dep1.zone.facility.area.warehouse-7"
 func (z *Zone) EntityID() string {
-	return ZoneEntityID(z.OrgID, z.Platform, z.ZoneType, z.ZoneID)
+	return z.EntityIDValue
 }
 
 // Triples returns semantic facts about this zone.
@@ -415,11 +427,8 @@ func (z *Zone) Validate() error {
 	if z.ZoneID == "" {
 		return fmt.Errorf("zone_id is required")
 	}
-	if z.OrgID == "" {
-		return fmt.Errorf("org_id is required")
-	}
-	if z.Platform == "" {
-		return fmt.Errorf("platform is required")
+	if z.EntityIDValue == "" {
+		return fmt.Errorf("entity_id is required; mint it with ZoneEntityID under the deployment authority")
 	}
 	return nil
 }

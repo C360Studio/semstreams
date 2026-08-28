@@ -3,12 +3,14 @@ package scenarios
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/c360studio/semstreams/test/e2e/config"
 )
 
 func TestHasExactEntityDigestLabelRequiresLabelOnMeasuredFixture(t *testing.T) {
 	t.Parallel()
 
-	const entityID = "c360.logistics.document.content.operations.doc-ops-001"
+	entityID := config.TierEntityID(config.VariantSemantic, "document.content.operations.doc-ops-001")
 	const title = "Forklift Operation Manual"
 
 	tests := []struct {
@@ -27,7 +29,9 @@ func TestHasExactEntityDigestLabelRequiresLabelOnMeasuredFixture(t *testing.T) {
 		},
 		{
 			name: "title on a different row cannot replace ID join",
-			body: `{"entity_digests":[{"id":"c360.logistics.document.content.operations.other","label":"` + title + `"}]}`,
+			body: `{"entity_digests":[{"id":"` +
+				config.TierEntityID(config.VariantSemantic, "document.content.operations.other") +
+				`","label":"` + title + `"}]}`,
 		},
 	}
 

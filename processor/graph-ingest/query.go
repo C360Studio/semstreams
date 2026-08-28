@@ -456,7 +456,7 @@ func marshalFittingPrefixPage(
 // handleQuerySuffixNATS handles suffix-based entity ID resolution.
 // Uses a three-tier lookup: TTL cache → KV suffix index → fallback full scan.
 // This enables NL queries to use partial entity IDs like "temp-sensor-001" which
-// get resolved to full 6-part IDs like "c360.logistics.sensor.environmental.temperature.temp-sensor-001".
+// get resolved to full 6-part IDs like "acme.dep1.sensor.environmental.temperature.temp-sensor-001".
 // Suffix resolution deliberately serves IDs WITHOUT decoding entity bytes
 // (design D5: resolution is not serving state) — a subsequent read of a
 // poisoned entity's state still fails with the typed classification.

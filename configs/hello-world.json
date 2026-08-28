@@ -124,9 +124,7 @@
               "name": "sensor_out"
             }
           ]
-        },
-        "org_id": "demo",
-        "platform": "hello"
+        }
       }
     },
 

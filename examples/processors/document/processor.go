@@ -2,30 +2,9 @@ package document
 
 import (
 	"fmt"
+
+	"github.com/c360studio/semstreams/types"
 )
-
-// Config holds the configuration for the document processor.
-// It provides the organizational context applied to all processed documents.
-type Config struct {
-	// OrgID is the organization identifier (e.g., "acme")
-	// This becomes the first part of federated entity IDs.
-	OrgID string
-
-	// Platform is the platform/product identifier (e.g., "logistics")
-	// This becomes the second part of federated entity IDs.
-	Platform string
-}
-
-// Validate checks that the configuration is valid.
-func (c Config) Validate() error {
-	if c.OrgID == "" {
-		return fmt.Errorf("org_id is required")
-	}
-	if c.Platform == "" {
-		return fmt.Errorf("platform is required")
-	}
-	return nil
-}
 
 // Payload represents a document that implements both Graphable and Payload interfaces.
 // Used as a common return type from the processor.
@@ -35,16 +14,22 @@ type Payload interface {
 }
 
 // Processor transforms incoming JSON document data into Graphable payloads.
-// It applies organizational context from configuration and produces
+// It mints every entity ID under the deployment authority and produces
 // document instances with proper federated entity IDs and semantic triples.
 type Processor struct {
-	config Config
+	// authority is the composition root's platform.org / platform.id,
+	// received through component.Dependencies.Platform. It is the ONLY
+	// source of positions 1-2 of every entity this processor mints: not an
+	// operator config key, not a constant, not a product name, and not a
+	// field on an incoming payload (ADR-102 d2).
+	authority types.PlatformMeta
 }
 
-// NewProcessor creates a new document processor with the given configuration.
-func NewProcessor(config Config) *Processor {
+// NewProcessor creates a new document processor minting under the given
+// deployment authority. Callers pass component.Dependencies.Platform verbatim.
+func NewProcessor(authority types.PlatformMeta) *Processor {
 	return &Processor{
-		config: config,
+		authority: authority,
 	}
 }
 
@@ -106,9 +91,8 @@ func (p *Processor) processDocument(input map[string]any) (*Document, error) {
 		Tags:        getStringSlice(input, "tags"),
 		CreatedAt:   getStringOpt(input, "created_at"),
 		UpdatedAt:   getStringOpt(input, "updated_at"),
-		OrgID:       p.config.OrgID,
-		Platform:    p.config.Platform,
 	}
+	doc.EntityIDValue = MintDocumentEntityID(p.authority, doc.Category, doc.ID)
 
 	return doc, nil
 }
@@ -135,14 +119,13 @@ func (p *Processor) processMaintenance(input map[string]any) (*Maintenance, erro
 		CompletionDate: getStringOpt(input, "completion_date"),
 		Category:       getStringOpt(input, "category"),
 		Tags:           getStringSlice(input, "tags"),
-		OrgID:          p.config.OrgID,
-		Platform:       p.config.Platform,
 	}
 
 	// Default status if not provided
 	if maint.Status == "" {
-		maint.Status = "pending"
+		maint.Status = defaultMaintenanceStatus
 	}
+	maint.EntityIDValue = MintMaintenanceEntityID(p.authority, maint.Status, maint.ID)
 
 	return maint, nil
 }
@@ -169,14 +152,13 @@ func (p *Processor) processObservation(input map[string]any) (*Observation, erro
 		ObservedAt:  getStringOpt(input, "observed_at"),
 		Category:    getStringOpt(input, "category"),
 		Tags:        getStringSlice(input, "tags"),
-		OrgID:       p.config.OrgID,
-		Platform:    p.config.Platform,
 	}
 
 	// Default severity if not provided
 	if obs.Severity == "" {
-		obs.Severity = "medium"
+		obs.Severity = defaultObservationSeverity
 	}
+	obs.EntityIDValue = MintObservationEntityID(p.authority, obs.Severity, obs.ID)
 
 	return obs, nil
 }
@@ -203,9 +185,8 @@ func (p *Processor) processSensorDocument(input map[string]any) (*SensorDocument
 		Unit:        getStringOpt(input, "unit"),
 		Category:    getStringOpt(input, "category"),
 		Tags:        getStringSlice(input, "tags"),
-		OrgID:       p.config.OrgID,
-		Platform:    p.config.Platform,
 	}
+	sensorDoc.EntityIDValue = SensorMintDocumentEntityID(p.authority, sensorDoc.Category, sensorDoc.ID)
 
 	return sensorDoc, nil
 }

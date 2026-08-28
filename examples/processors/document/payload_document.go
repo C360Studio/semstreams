@@ -8,6 +8,8 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
+	"github.com/c360studio/semstreams/types"
 )
 
 // Document represents a generic document entity. It implements the ContentStorable
@@ -30,30 +32,41 @@ type Document struct {
 	CreatedAt   string   `json:"created_at"`  // ISO timestamp
 	UpdatedAt   string   `json:"updated_at"`  // ISO timestamp
 
-	// Context fields (set by processor from config, preserved through JSON for NATS transport)
-	OrgID    string `json:"org_id,omitempty"`   // e.g., "acme"
-	Platform string `json:"platform,omitempty"` // e.g., "logistics"
+	// EntityIDValue is this document's own identity, minted once by the
+	// processor under the composition root's platform.org / platform.id and
+	// carried on the wire from there (ADR-102 d2). Nothing downstream
+	// re-derives it: a reader would need an authority nobody can hand it.
+	EntityIDValue string `json:"entity_id"`
 
 	// Storage reference (set by processor after storing content)
 	storageRef *message.StorageReference `json:"-"`
 }
 
-// EntityID returns a deterministic 6-part federated entity ID following the pattern:
-// {org}.{platform}.{system}.{domain}.{type}.{instance} — canonical order (ADR-102):
-// system = document (the source), domain = content (this example's delegated taxonomy).
-//
-// Example: "acme.logistics.document.content.safety.doc-001"
+// EntityID returns the identity minted for this document — MintDocumentEntityID's
+// output, stamped at mint time and carried on the wire, never recomputed here.
 func (d *Document) EntityID() string {
-	category := d.Category
+	return d.EntityIDValue
+}
+
+// MintDocumentEntityID mints a document's deterministic 6-part federated entity ID
+// following the pattern {org}.{platform}.{system}.{domain}.{type}.{instance} —
+// canonical order (ADR-102): system = document (the source), domain = content
+// (this example's delegated taxonomy). Positions 1-2 are the composition
+// root's platform.org / platform.id and nothing else (ADR-102 d2).
+//
+// Example: "acme.dep1.document.content.safety.doc-001"
+func MintDocumentEntityID(authority types.PlatformMeta, category, id string) string {
 	if category == "" {
-		category = "general"
+		category = defaultDocumentCategory
 	}
-	return fmt.Sprintf("%s.%s.document.content.%s.%s",
-		d.OrgID,
-		d.Platform,
-		category,
-		d.ID,
-	)
+	return semtypes.EntityID{
+		Org:      authority.Org,
+		Platform: authority.Platform,
+		System:   documentSystem,
+		Domain:   contentDomain,
+		Type:     category,
+		Instance: id,
+	}.Key()
 }
 
 // Triples returns METADATA ONLY facts about this document using Dublin Core predicates.
@@ -197,11 +210,8 @@ func (d *Document) Validate() error {
 	if d.Title == "" {
 		return fmt.Errorf("title is required")
 	}
-	if d.OrgID == "" {
-		return fmt.Errorf("org_id is required (set by processor)")
-	}
-	if d.Platform == "" {
-		return fmt.Errorf("platform is required (set by processor)")
+	if d.EntityIDValue == "" {
+		return fmt.Errorf("entity_id is required; mint it with MintDocumentEntityID under the deployment authority")
 	}
 	return nil
 }

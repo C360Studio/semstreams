@@ -2,11 +2,13 @@ package iotsensor
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/types"
 )
 
 // TestProcessor_Process_JSONTransformation verifies that the processor correctly
@@ -14,18 +16,15 @@ import (
 func TestProcessor_Process_JSONTransformation(t *testing.T) {
 	tests := []struct {
 		name      string
-		config    Config
+		authority types.PlatformMeta
 		inputJSON string
 		wantType  string
 		wantValue float64
 		wantErr   bool
 	}{
 		{
-			name: "temperature reading",
-			config: Config{
-				OrgID:    "acme",
-				Platform: "logistics",
-			},
+			name:      "temperature reading",
+			authority: testAuthority,
 			inputJSON: `{
 				"device_id": "sensor-042",
 				"type": "temperature",
@@ -39,11 +38,8 @@ func TestProcessor_Process_JSONTransformation(t *testing.T) {
 			wantErr:   false,
 		},
 		{
-			name: "humidity reading",
-			config: Config{
-				OrgID:    "acme",
-				Platform: "facilities",
-			},
+			name:      "humidity reading",
+			authority: secondAuthority,
 			inputJSON: `{
 				"device_id": "hum-001",
 				"type": "humidity",
@@ -57,11 +53,8 @@ func TestProcessor_Process_JSONTransformation(t *testing.T) {
 			wantErr:   false,
 		},
 		{
-			name: "missing device_id",
-			config: Config{
-				OrgID:    "acme",
-				Platform: "logistics",
-			},
+			name:      "missing device_id",
+			authority: testAuthority,
 			inputJSON: `{
 				"type": "temperature",
 				"reading": 23.5,
@@ -75,7 +68,7 @@ func TestProcessor_Process_JSONTransformation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := NewProcessor(tt.config)
+			p := NewProcessor(tt.authority)
 
 			var input map[string]any
 			if err := json.Unmarshal([]byte(tt.inputJSON), &input); err != nil {
@@ -121,14 +114,13 @@ func TestProcessor_Process_JSONTransformation(t *testing.T) {
 	}
 }
 
-// TestProcessor_Process_ContextFields verifies that processor applies config context.
-func TestProcessor_Process_ContextFields(t *testing.T) {
-	config := Config{
-		OrgID:    "testorg",
-		Platform: "testplatform",
-	}
+// TestProcessor_Process_MintsUnderDeploymentAuthority verifies the processor
+// mints positions 1-2 from the deployment authority it was constructed with
+// and from nothing else (ADR-102 d2).
+func TestProcessor_Process_MintsUnderDeploymentAuthority(t *testing.T) {
+	authority := types.PlatformMeta{Org: "testorg", Platform: "testdeployment"}
 
-	p := NewProcessor(config)
+	p := NewProcessor(authority)
 
 	input := map[string]any{
 		"device_id": "sensor-001",
@@ -144,18 +136,13 @@ func TestProcessor_Process_ContextFields(t *testing.T) {
 		t.Fatalf("Process() unexpected error: %v", err)
 	}
 
-	// Verify context fields from config are applied
-	if sr.OrgID != config.OrgID {
-		t.Errorf("OrgID = %q, want %q", sr.OrgID, config.OrgID)
+	// Both minted identities carry the deployment authority in positions 1-2.
+	wantPrefix := "testorg.testdeployment."
+	if !strings.HasPrefix(sr.EntityID(), wantPrefix) {
+		t.Errorf("EntityID() = %q, want to start with %q", sr.EntityID(), wantPrefix)
 	}
-	if sr.Platform != config.Platform {
-		t.Errorf("Platform = %q, want %q", sr.Platform, config.Platform)
-	}
-
-	// Verify EntityID includes org and platform
-	entityID := sr.EntityID()
-	if entityID[:len("testorg.testplatform")] != "testorg.testplatform" {
-		t.Errorf("EntityID() = %q, want to start with %q", entityID, "testorg.testplatform")
+	if !strings.HasPrefix(sr.ZoneEntityID, wantPrefix) {
+		t.Errorf("ZoneEntityID = %q, want to start with %q", sr.ZoneEntityID, wantPrefix)
 	}
 }
 
@@ -175,7 +162,7 @@ func TestProcessor_Process_ZoneEntityID(t *testing.T) {
 				"unit":      "celsius",
 				"location":  "warehouse-7",
 			},
-			wantZoneID: "acme.logistics.zone.facility.area.warehouse-7",
+			wantZoneID: "acme.dep1.zone.facility.area.warehouse-7",
 		},
 		{
 			name: "explicit zone type",
@@ -187,11 +174,11 @@ func TestProcessor_Process_ZoneEntityID(t *testing.T) {
 				"location":  "building-a",
 				"zone_type": "building",
 			},
-			wantZoneID: "acme.logistics.zone.facility.building.building-a",
+			wantZoneID: "acme.dep1.zone.facility.building.building-a",
 		},
 	}
 
-	p := NewProcessor(Config{OrgID: "acme", Platform: "logistics"})
+	p := NewProcessor(testAuthority)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -212,7 +199,7 @@ func TestProcessor_Process_ZoneEntityID(t *testing.T) {
 
 // TestProcessor_Process_HelpfulErrors verifies that error messages suggest correct field names.
 func TestProcessor_Process_HelpfulErrors(t *testing.T) {
-	p := NewProcessor(Config{OrgID: "acme", Platform: "logistics"})
+	p := NewProcessor(testAuthority)
 
 	tests := []struct {
 		name           string
@@ -292,63 +279,22 @@ func containsStringHelper(s, substr string) bool {
 	return false
 }
 
-// TestConfig_Validation verifies Config validation.
-func TestConfig_Validation(t *testing.T) {
-	tests := []struct {
-		name    string
-		config  Config
-		wantErr bool
-	}{
-		{
-			name: "valid config",
-			config: Config{
-				OrgID:    "acme",
-				Platform: "logistics",
-			},
-			wantErr: false,
-		},
-		{
-			name: "missing OrgID",
-			config: Config{
-				Platform: "logistics",
-			},
-			wantErr: true,
-		},
-		{
-			name: "missing Platform",
-			config: Config{
-				OrgID: "acme",
-			},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.config.Validate()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
 // TestParseZoneEntityIDReadsNamedPositions pins the zone reader against the
 // canonical order: a zone entity is `org.platform.zone.facility.<zoneType>.<zoneID>`
 // (system = zone, domain = facility), read by named field, and the retired
 // order resolves to nothing instead of silently mis-reading (inventory W9).
 func TestParseZoneEntityIDReadsNamedPositions(t *testing.T) {
-	zoneType, zoneID := ParseZoneEntityID(ZoneEntityID("acme", "logistics", "area", "cold-storage-1"))
+	zoneType, zoneID := ParseZoneEntityID(ZoneEntityID(testAuthority, "area", "cold-storage-1"))
 	if zoneType != "area" || zoneID != "cold-storage-1" {
 		t.Fatalf("ParseZoneEntityID(canonical) = (%q, %q), want (area, cold-storage-1)", zoneType, zoneID)
 	}
-	if got := ZoneEntityID("acme", "logistics", "area", "cold-storage-1"); got != "acme.logistics.zone.facility.area.cold-storage-1" {
-		t.Fatalf("ZoneEntityID = %q, want acme.logistics.zone.facility.area.cold-storage-1", got)
+	if got := ZoneEntityID(testAuthority, "area", "cold-storage-1"); got != "acme.dep1.zone.facility.area.cold-storage-1" {
+		t.Fatalf("ZoneEntityID = %q, want acme.dep1.zone.facility.area.cold-storage-1", got)
 	}
 	for _, bad := range []string{
-		"acme.logistics." + "facility.zone" + ".area.cold-storage-1", // retired order (domain before system)
-		"acme.logistics.zone.facility.area",                          // five positions
-		"acme.logistics.zone.facility.area.cold.1",                   // seven positions
+		"acme.dep1." + "facility.zone" + ".area.cold-storage-1", // retired order (domain before system)
+		"acme.dep1.zone.facility.area",                          // five positions
+		"acme.dep1.zone.facility.area.cold.1",                   // seven positions
 		"",
 	} {
 		if zoneType, zoneID := ParseZoneEntityID(bad); zoneType != "" || zoneID != "" {
