@@ -355,3 +355,43 @@ the OUTPUT direction. Harmless while no input-only port field was ever set; `imp
 **Two shipped-config ledgers amended rather than absorbed:** `internal/portgrammarcontrol`
 (`approvedImportLaneAdditions = 1`) and `service/testdata/message_logger_subject_census.json` (388→389 raw rows).
 Both carry the reason inline.
+
+### ESCALATION — the shipped example processors still take the authority from config and from the wire
+
+**Measured on slice B's branch, 2026-08-28, by running `task e2e:structural`: it fails with
+`entity stabilization failed: got 0, expected 74`.** Zero entities reach `ENTITY_STATES` because the boundary
+correctly refuses every one of them.
+
+The cause is a pre-existing ADR-102 d2 violation that slice A's sweep did not reach and slice B's gate makes fatal:
+
+| Config | `platform.org` / `platform.id` | `iot_sensor` + `document_processor` `org_id` / `platform` |
+|---|---|---|
+| `configs/e2e-structural.json` | `c360` / `semstreams-e2e-structural` | `c360` / `logistics` |
+| `configs/statistical.json` | `c360` / `semstreams-statistical` | `c360` / `logistics` |
+| `configs/semantic.json` | `c360` / `semstreams-kitchen-sink-ml` | `c360` / `logistics` |
+| `configs/structural.json` | `c360` / `semstreams-structural` | `c360` / `logistics` |
+| `configs/hello-world.json` | `demo` / `hello-world` | `demo` / `hello` |
+
+`examples/processors/{iot_sensor,document,weather_station}` declare `org_id` and `platform` as REQUIRED
+operator-facing config keys (`component.go` `Config.OrgID` / `Config.Platform`, `required:true`) and mint from them
+(`iot_sensor/processor.go:150-152`); the payload types additionally carry `OrgID`/`Platform` on the WIRE
+(`document/payload_document.go:34-35` and siblings). ADR-102 d2 retires both meanings: position 2 is the composition
+root's `platform.id` "and nothing else… never taken from a payload, a constant, a product name, or a firing entity".
+
+**Why this is not fixed inside slice B.** The fix is not the code — it is the corpus. Any correct fix changes
+position 2 of every entity the example processors mint, and `c360.logistics.*` is hardcoded in **237 places across
+32 files** (`test/e2e/scenarios` 13 files, unit fixtures in `processor/`, `graph/`, `message/`, plus doc comments in
+`vocabulary/predicates.go`). Three tiers need three DIFFERENT replacement values, so it is not one substitution. It
+needs its own RED capture, its own forced omissions, and its own review — a slice, not a tail.
+
+**What slice B does instead:** nothing silent. The mismatch is now a loud boot-time-visible refusal with a coded
+error, a metric and a WARN per entity, where before slice A it was accepted as local truth and after slice A it was
+accepted with the wrong meaning. `e2e:core` is green because `configs/protocol-flow.json` composes no example
+processor. The tiers that do — `structural`, `statistical`, `semantic` — are RED for this reason and this reason
+only, and that is recorded rather than worked around.
+
+**For the owner / architect.** Two orderings are available: (a) land slice B and take the example-processor
+retirement as slice C before the beta.163 tag, or (b) hold slice B until the sweep lands with it. This is a scoping
+ruling, not an implementation choice: retiring a `required:true` operator-facing config key across three shipped
+example packages and four payload types is a spec delta with a rejection act (the shape slice A used for
+`platform.instance_id`), and it belongs to whoever owns that decision.

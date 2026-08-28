@@ -102,7 +102,7 @@ func TestValidateExecuteBranchArtifactsRejectsUnattributedSynthesisEvidence(t *t
 		Synthesis: "Fabricated evidence should fail attribution.",
 		Evidence: []fusion.Evidence{
 			{EntityID: ControlledSeedEntityID, Tier: "0", Source: walkSeedsEntityStateSource},
-			{EntityID: "c360.rg-e2e.seed.research.document.fabricated", Tier: "0", Source: walkSeedsEntityStateSource},
+			{EntityID: "c360.research-graph-e2e.seed.research.document.fabricated", Tier: "0", Source: walkSeedsEntityStateSource},
 		},
 		DecompTrace: &research.DecompTrace{
 			RouterAction: research.ActionWalkSeeds,
@@ -116,8 +116,17 @@ func TestValidateExecuteBranchArtifactsRejectsUnattributedSynthesisEvidence(t *t
 	)
 }
 
+// testSeedEntityID composes a run-scoped seed under the SAME deployment
+// authority the scenario's DefaultConfig declares. Since ADR-102 d5 the graph
+// accepts no other pair, so a fixture that hardcoded one would drift silently
+// from the config the tier actually boots.
+func testSeedEntityID(runToken string) string {
+	cfg := DefaultConfig()
+	return researchGraphSeedEntityID(cfg.PlatformOrg, cfg.PlatformID, runToken)
+}
+
 func TestResearchEmbeddingSearchResponderReturnsSeededHit(t *testing.T) {
-	seedEntityID := researchGraphSeedEntityID("abc123")
+	seedEntityID := testSeedEntityID("abc123")
 	request, err := json.Marshal(graphembedding.SearchRequest{
 		Query: researchGraphTopic,
 		Limit: 25,
@@ -139,7 +148,7 @@ func TestResearchEmbeddingSearchResponderRejectsUnexpectedTopic(t *testing.T) {
 	request, err := json.Marshal(graphembedding.SearchRequest{Query: "some other topic"})
 	require.NoError(t, err)
 
-	_, err = newResearchEmbeddingSearchHandler(researchGraphSeedEntityID("abc123"))(
+	_, err = newResearchEmbeddingSearchHandler(testSeedEntityID("abc123"))(
 		context.Background(),
 		request,
 	)
@@ -147,7 +156,7 @@ func TestResearchEmbeddingSearchResponderRejectsUnexpectedTopic(t *testing.T) {
 }
 
 func TestResearchEmbeddingSearchResponderRejectsMalformedRequest(t *testing.T) {
-	_, err := newResearchEmbeddingSearchHandler(researchGraphSeedEntityID("abc123"))(
+	_, err := newResearchEmbeddingSearchHandler(testSeedEntityID("abc123"))(
 		context.Background(),
 		[]byte(`{"query":`),
 	)
@@ -155,8 +164,8 @@ func TestResearchEmbeddingSearchResponderRejectsMalformedRequest(t *testing.T) {
 }
 
 func TestResearchEmbeddingSearchResponderBindsRunScopedSeed(t *testing.T) {
-	firstSeedEntityID := researchGraphSeedEntityID("aaa111")
-	secondSeedEntityID := researchGraphSeedEntityID("bbb222")
+	firstSeedEntityID := testSeedEntityID("aaa111")
+	secondSeedEntityID := testSeedEntityID("bbb222")
 	require.NotEqual(t, firstSeedEntityID, secondSeedEntityID)
 	_, err := message.ParseEntityID(firstSeedEntityID)
 	require.NoError(t, err)

@@ -50,6 +50,14 @@ type GraphRoundTripProbe struct {
 	graphqlURL string
 	httpClient *http.Client
 	timeout    time.Duration
+	// org / platform are the DEPLOYMENT the probe is driving — positions 1-2 of
+	// the canary it mints. Since ADR-102 the graph refuses any subject outside
+	// its own authority, so a canary whose pair is not the running stack's
+	// `platform.org`/`platform.id` is rejected at the boundary rather than
+	// written. The caller states which stack it is probing; it is the one fact
+	// the probe cannot observe from the outside.
+	org      string
+	platform string
 }
 
 // NewGraphRoundTripProbe builds the shared graph canary used by core and every
@@ -57,7 +65,7 @@ type GraphRoundTripProbe struct {
 func NewGraphRoundTripProbe(
 	nats *client.NATSValidationClient,
 	msgLogger *client.MessageLoggerClient,
-	graphqlURL string,
+	graphqlURL, org, platform string,
 ) *GraphRoundTripProbe {
 	return &GraphRoundTripProbe{
 		nats:       nats,
@@ -65,6 +73,8 @@ func NewGraphRoundTripProbe(
 		graphqlURL: strings.TrimRight(graphqlURL, "/"),
 		httpClient: &http.Client{Timeout: 3 * time.Second},
 		timeout:    graphRoundTripTimeout,
+		org:        org,
+		platform:   platform,
 	}
 }
 
@@ -80,7 +90,15 @@ func (p *GraphRoundTripProbe) Run(ctx context.Context, result *Result) error {
 	runCtx, cancel := context.WithTimeout(traceCtx, p.timeout)
 	defer cancel()
 
-	entityID := "c360.e2e.graph.core.canary." + rootTrace.TraceID[:12]
+	// The canary carries the DEPLOYMENT's own authority. A pair that disagrees
+	// with the running stack's config is refused by the graph boundary, which is
+	// the intended behaviour — so state the disagreement here rather than let it
+	// surface as an opaque "invalid entity ID contract input".
+	if p.org == "" || p.platform == "" {
+		return fmt.Errorf("graph round-trip probe requires the deployment authority " +
+			"(org/platform of the stack under test); a canary minted under any other pair is refused")
+	}
+	entityID := p.org + "." + p.platform + ".graph.core.canary." + rootTrace.TraceID[:12]
 	before := "graph-canary-before-" + rootTrace.TraceID
 	after := "graph-canary-after-" + rootTrace.TraceID
 	requestPrefix := "graph-canary-" + rootTrace.TraceID

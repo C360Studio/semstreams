@@ -1073,6 +1073,18 @@ package; both declarations are now on the payload registrations) and
       **SLICE A RUN — recorded, row intentionally open.** Every gate above was run green on slice A's landing head;
       the per-round results are in `conformance.md`. The row stays open because slice B changes the same paths and
       must re-run it for the completed change, exactly as 7.2 does.
+
+      **SLICE B RUN — 2026-08-28, all green. Row stays open until review + archive.**
+
+      | Gate | Result |
+      |---|---|
+      | `task lint` (`go vet`, `go fmt`, revive, fixed-port guard, request guard) | clean, no output |
+      | `go test -race -count=1 ./...` | exit 0, 153 packages `ok`, 0 `FAIL` |
+      | `scripts/run-integration-tests.sh` (what CI runs) | exit 0, 153 packages `ok`. Reached green on the FIFTH run: four rounds of harness authority declarations that the untagged suite could not see (`pkg/lifecycle`, `processor/agentic-loop`, `processor/gated-dag`, five graph-ingest integration fixtures, `processor/rule`'s revision-claim harness) |
+      | `go test ./test/contract/...` | `ok` |
+      | `task entity-id:audit` | `entity ID audit passed: 1319 structured candidates across 1 roots`, 0 findings. Baseline re-measured at `3f3133a6` in a scratch worktree: 1312 — the +7 are this slice's own test literals, and none trips a rule |
+      | `task schema:generate && git diff --exit-code schemas/ specs/` | clean. The generated delta is `import` on the jetstream INPUT port only, 30 schema files x 3 lines; verified the sole occurrence in `schemas/graph-ingest.v1.json` is under `ports/inputs/items/config/oneOf[2]` |
+      | `openspec validate --all --strict --no-interactive` | `Totals: 53 passed, 0 failed (53 items)` |
 - [ ] 7.2 Covering e2e tiers on the landing branch, one at a time on the shared host, results recorded verbatim:
       `task e2e:core`; `task e2e:structural`; `task e2e:statistical`; `task e2e:semantic`; `task e2e:agentic`;
       `task e2e:lessons`; `task e2e:lifecycle`; `task e2e:ops`; `task e2e:crud-tools`; `task e2e:research-graph`.
@@ -1113,6 +1125,34 @@ package; both declarations are now on the payload registrations) and
       sites — the two above plus `test/e2e/scenarios/agentic/scenario.go`, already fixed — and two deliberate
       non-sites: `config/config_test.go:419` (the O-2 rejection fixture, which must keep `instance_id`) and
       `processor/agentic-tools/decide_test.go` (an arbitrary self-consistent unit-test platform value).
+      **SLICE B RUN — 2026-08-28, one at a time on a host with no competing gate. SEVEN GREEN, THREE RED for one
+      pre-existing cause that is escalated, not worked around.**
+
+      | Tier | exit | evidence |
+      |---|---|---|
+      | `e2e:core` | 0 | `graph_roundtrip_trace_entries:2`. RED first: the shared graph canary minted `c360.e2e.graph.core.canary.*` while `configs/protocol-flow.json` declares `c360`/`streamkit-pure`, so the boundary refused it. The canary now carries the deployment's pair, stated by the caller (`cmd/e2e/main.go`), and the probe REFUSES to run with an empty pair rather than mint a foreign one |
+      | `e2e:agentic` | 0 | `graph_loop_triples:10`, `graph_model_triples:6`, `tool_executions:1`, `governance_verdicts_total:1`, `durable_tool_replay_executor_invocations:1` — the loop/model/run path this slice rewrites, under `c360`/`semstreams-agentic` |
+      | `e2e:lessons` | 0 | `assertions_run=3` |
+      | `e2e:lifecycle` | 0 | `rule-driven-transition_duration_ms:159` — UDP → graph-ingest → entity-watcher → rule → `Manager.Transition` → MISSIONS KV → gateway, now through the authority gate |
+      | `e2e:ops` | 0 | `assertions_run=9`, `promote-lesson`, `verify-diagnoses-via-http`, `wait-for-loop-completion` |
+      | `e2e:crud-tools` | 0 | `tool_executions:4`, `hotreload_pickup_latency_ms:224`, `fire_every_n_triggered_delta:9` |
+      | `e2e:research-graph` | 0 | both fixture modes; `loops_completed_total:2`, `orchestration_triples_total:17`/`21`. RED first, same class as core: the seed builder hardcoded `c360.rg-e2e.…` while the config declares `research-graph-e2e`. Slice A renamed the field (`PlatformInstance` → `PlatformID`) and left this literal; it now composes from `DefaultConfig`'s pair, and the unit fixtures route through one helper so they cannot drift again |
+      | `e2e:structural` | **RED** | `entity stabilization failed: got 0, expected 74` |
+      | `e2e:statistical` | not run | same cause as structural — same two components, same mismatch |
+      | `e2e:semantic` | not run | same cause |
+
+      **The three RED tiers have ONE cause and it is not this slice's code.** `examples/processors/{iot_sensor,document}`
+      take the entity-ID authority from their own REQUIRED component config (`org_id`/`platform` = `c360`/`logistics`)
+      while the configs that compose them declare `platform.id` = `semstreams-e2e-structural` / `semstreams-statistical` /
+      `semstreams-kitchen-sink-ml`; their payload types carry `OrgID`/`Platform` on the wire as well. ADR-102 d2 retires
+      both meanings. Slice A's sweep did not reach them; slice B's gate makes the mismatch fatal instead of silent.
+      Correcting it moves position 2 of every entity those processors mint, and `c360.logistics.*` is hardcoded in 237
+      places across 32 files with three different replacement values — a slice with its own RED capture, not a tail.
+      Full write-up and the two orderings for the owner are in `conformance.md` §ESCALATION.
+
+      Excluded with reason recorded: `slow-consumer`, `throughput`, `openai-responses`, `deep-research` (no position
+      literal), unchanged from slice A.
+
 - [ ] 7.3 Implementation review by `semstreams-reviewer`; verdict and every finding's disposition recorded in
       `conformance.md`.
       **Round 1:** verdict CHANGES REQUESTED at `5f66ce37` (0 BLOCKING, 3 HIGH, 7 MEDIUM, 4 NIT); every finding's
