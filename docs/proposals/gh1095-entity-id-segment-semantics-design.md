@@ -164,6 +164,14 @@ consumer: `agentic/tools.go:369-382`.
 It transfers with one substitution — the unit is `domain` or `domain.type` instead of `domain` or
 `domain.category`:
 
+> **SUPERSEDED 2026-08-28 — the authority half of this design was built and then deleted.** The four bullets below
+> specify `EntityDomainAuthority`/`Authorize`, a `RegisterEntityDomains` registration act, and declaration-time
+> authorization. **None of that ships.** Domain overlap between producers is permitted, so there was nothing left to
+> authorize; the type, its constructor and `Authorize` were removed, and no composition-time report replaced them.
+> What survives is `EntityDomainDelegation` as a declaration whose only consumer is the entity-ID corpus audit's
+> registered set (`internal/entityidaudit` `collectRegisteredDomains`). The bullets are kept as the record of what
+> was designed and put to the owner; read them as history, not as an API.
+
 - `pkg/types.EntityDomainDelegation{Producer, Domain, Type}` (empty `Type` = domain-wide) and
   `EntityDomainAuthority.Authorize(producer, domain, entityType) error`.
 - Framework-reserved set declared in-tree (`agent`, `ops`, `graph`; the gated-DAG family re-slots under `agent`,
@@ -180,8 +188,11 @@ It transfers with one substitution — the unit is `domain` or `domain.type` ins
   onto the payload registrations (`agentic/loop_execution_entity.go:224`, `agentic/agent_lesson_entity.go:399`).
 
 What it does not do: it cannot stop a product from choosing a colliding domain with another product in the same
-deployment; registration makes the collision visible at boot (two producers delegating the same domain is a
-composition rejection, the ADR-076 d4 "duplicate PackID" shape). Ruled (O-3): `system` is not registered — `system` values are runtime-derived (repo slugs, world namespaces) and unbounded; registering
+deployment; registration was to make the collision visible at boot (two producers delegating the same domain a
+composition rejection, the ADR-076 d4 "duplicate PackID" shape). **That rejection was superseded on 2026-08-28**:
+overlap is permitted and nothing reports it, because a token two products mean different things by is a vocabulary
+problem rather than a composition-time one. ADR-076 d4's own duplicate-PackID rejection is unaffected and still
+ships. Ruled (O-3): `system` is not registered — `system` values are runtime-derived (repo slugs, world namespaces) and unbounded; registering
 them would make every new repo a config change. The audit checks that a builder's system position is not a product
 name literal.
 
@@ -328,7 +339,7 @@ Per-sister migration list (values → after):
 | semmachina | per-world composed `platform.id` is already the authority (one composition root per world); drop the `"semmachina-"` prefix or keep it — it is the operator's `id`; order swap |
 | semboids | delete the `"semboids"` fallback literal; order swap in two builders; register `sim` |
 | semdev | order swap (`forge.intake`, `repo.standards`, `agent.chain.execution` prefix); register `forge`, `repo`; drop `instance_id` precedence |
-| semdragon | replace `Org "default"`/`Platform "local"` defaults with config; order swap (`game.<board>`, `web.agent.doc`); register `game`, `web` — `web` collides with semsource's `web` (owner item O-5) |
+| semdragon | replace `Org "default"`/`Platform "local"` defaults with config; order swap (`game.<board>`, `web.agent.doc`); register `game`, `web` — `web` collides with semsource's `web` (owner item O-5 — **SUPERSEDED 2026-08-28: overlap is permitted and nothing reports it**) |
 | semteams | one literal (`attestation_runner.go:124`); drop precedence; e2e configs |
 | semops | `Platform: "edge"` literal → config; order swap (`cop.fusion`); register `cop` |
 | semconnect | `semconnect` platform → config; `SystemEventIDPrefix` shape; register `systems` |
@@ -365,7 +376,7 @@ record of what was put to the owner.
 | O-2 | `platform.id` vs `instance_id` (ADR-102 d2 is conditional on this) | C.5 | one field: `id`; `instance_id` removed with load-time guidance |
 | O-3 | Are `system` values registered? | C.2 | no; audit rejects product-name literals |
 | O-4 | Import-lane semantics for an ID that already exists locally under a different source | C.4 | reject (`local_authority_claimed` sibling reason `exists_foreign_source`) |
-| O-5 | Cross-product domain collisions (`web`: semsource vs semdragon) | inventory §1.14 | registration makes it a boot-time composition rejection in a deployment running both; each product owns its delegation |
+| O-5 | Cross-product domain collisions (`web`: semsource vs semdragon) | inventory §1.14 | ~~registration makes it a boot-time composition rejection in a deployment running both~~; each product owns its delegation. **SUPERSEDED 2026-08-28: overlap is PERMITTED, the authority type is deleted, and nothing reports it** |
 | O-6 | Hierarchy containers: retire with gh606, or declare padding tokens and rename the two predicates | B.4, H7 | retire with gh606; padding contract only as the priced fallback |
 | O-7 | Tag split | §D (fallback priced) | one tag holding rows 1–3 |
 | O-8 | ADR-076 d1 supersession (framework namespace → deployment authority for alerts/triggers) | PF-7, P8 | supersede d1; amend d2 (O-14); keep d3–d6 |

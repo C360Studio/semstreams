@@ -44,20 +44,17 @@ func TestPrefixLevelsAreNamed(t *testing.T) {
 	assert.Equal(t, "acme.dep1.src.git", eid.TaxonomyPrefix())
 	assert.Equal(t, "acme.dep1.src.git.commit", eid.TypePrefix())
 
-	for level, want := range map[int]string{
-		2: "acme.dep1",
-		3: "acme.dep1.src",
-		4: "acme.dep1.src.git",
-		5: "acme.dep1.src.git.commit",
+	// Each prefix extends the one below it by exactly one position, which is
+	// what makes "a prefix of length n IS the level named for n" true. The
+	// numeric PrefixLevel(n) accessor and its level constants were deleted on
+	// 2026-08-28 for want of a consumer; the named methods are the vocabulary.
+	assert.Equal(t, eid.DeploymentPrefix()+"."+eid.System, eid.SourcePrefix())
+	assert.Equal(t, eid.SourcePrefix()+"."+eid.Domain, eid.TaxonomyPrefix())
+	assert.Equal(t, eid.TaxonomyPrefix()+"."+eid.Type, eid.TypePrefix())
+	for want, got := range map[int]string{
+		2: eid.DeploymentPrefix(), 3: eid.SourcePrefix(), 4: eid.TaxonomyPrefix(), 5: eid.TypePrefix(),
 	} {
-		got, err := eid.PrefixLevel(level)
-		require.NoError(t, err, "level %d", level)
-		assert.Equal(t, want, got, "level %d", level)
-	}
-	for _, level := range []int{0, 1, 6, 7} {
-		got, err := eid.PrefixLevel(level)
-		assert.Empty(t, got, "level %d", level)
-		assertEntityIDContractError(t, err, ErrorCodeEntityIDPrefixInvalid, EntityIDReasonArity, nil)
+		assert.Len(t, strings.Split(got, "."), want, "prefix %q must have %d positions", got, want)
 	}
 
 	other := EntityID{Org: "acme", Platform: "dep1", System: "src", Domain: "media", Type: "video", Instance: "v9"}
@@ -72,7 +69,7 @@ func TestTaxonomyAcrossSourcesIsPatternNotPrefix(t *testing.T) {
 	t.Parallel()
 
 	require.NoError(t, ValidateEntityIDPattern("acme.dep1.*.git.*.*"))
-	// entity-id-audit:classify intentional-malformed "acme.dep1.*.git" line=76 column=32 surface=go-call:ValidateEntityIDPrefix entity_id_prefix_invalid:first_byte a taxonomy across sources is not expressible as a prefix
+	// entity-id-audit:classify intentional-malformed "acme.dep1.*.git" line=73 column=32 surface=go-call:ValidateEntityIDPrefix entity_id_prefix_invalid:first_byte a taxonomy across sources is not expressible as a prefix
 	err := ValidateEntityIDPrefix("acme.dep1.*.git")
 	require.Error(t, err)
 	var classified *errs.ClassifiedError
@@ -103,7 +100,7 @@ func TestMaxAuthorityPairBytesDerivesFromLongestFamily(t *testing.T) {
 			t.Fatalf("EntityID(%q, %q, %q) = (%q, %v), want fail closed", bad[0], bad[1], bad[2], id, err)
 		}
 	}
-	for _, family := range FrameworkIdentityFamilies() {
+	for _, family := range frameworkIdentityFamilies {
 		assert.LessOrEqual(t, family.FixedBytes(), longest.FixedBytes(), family.Name)
 		assert.True(t, IsFrameworkEntityDomain(family.Domain), "%s domain %q must be reserved", family.Name, family.Domain)
 	}

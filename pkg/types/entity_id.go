@@ -256,24 +256,13 @@ func newEntityIDContractError(code, reason string, detail map[string]any) error 
 	return errs.ClassifiedCodeDetail(errs.ErrorInvalid, code, detail, errInvalidEntityIDContract)
 }
 
-// Prefix levels. A prefix of length n means exactly the level named for n
-// (ADR-102 d6); grouping by a non-prefix combination — a taxonomy across
-// sources — is an exact-arity wildcard pattern or KV filter, never a prefix.
-const (
-	// PrefixLevelDeployment is the two-position prefix org.platform: everything
-	// one deployment holds.
-	PrefixLevelDeployment = 2
-	// PrefixLevelSource is the three-position prefix org.platform.system: the
-	// federation triple — everything this deployment holds from one source.
-	// ADR-099 level 1.
-	PrefixLevelSource = 3
-	// PrefixLevelTaxonomy is the four-position prefix org.platform.system.domain.
-	// ADR-099 level 0.
-	PrefixLevelTaxonomy = 4
-	// PrefixLevelType is the five-position prefix org.platform.system.domain.type:
-	// the sibling group.
-	PrefixLevelType = 5
-)
+// Prefix levels are named methods, not a level vocabulary: a prefix of length
+// n means exactly the level named for n (ADR-102 d6), and grouping by a
+// non-prefix combination — a taxonomy across sources — is an exact-arity
+// wildcard pattern or KV filter, never a prefix. The exported level constants
+// and EntityID.PrefixLevel(n) that once accompanied these were deleted by the
+// owner ruling of 2026-08-28: they had no consumer. ADR-099/#606 re-adds a
+// level vocabulary when it has one.
 
 // DeploymentPrefix returns the two-position prefix org.platform.
 func (eid EntityID) DeploymentPrefix() string {
@@ -295,27 +284,6 @@ func (eid EntityID) TaxonomyPrefix() string {
 // shared by every instance of one type (siblings).
 func (eid EntityID) TypePrefix() string {
 	return eid.TaxonomyPrefix() + "." + eid.Type
-}
-
-// PrefixLevel returns the named prefix for level n in [PrefixLevelDeployment,
-// PrefixLevelType]. Any other n is a coded prefix rejection: the levels are a
-// closed vocabulary, not an arbitrary cut.
-func (eid EntityID) PrefixLevel(n int) (string, error) {
-	switch n {
-	case PrefixLevelDeployment:
-		return eid.DeploymentPrefix(), nil
-	case PrefixLevelSource:
-		return eid.SourcePrefix(), nil
-	case PrefixLevelTaxonomy:
-		return eid.TaxonomyPrefix(), nil
-	case PrefixLevelType:
-		return eid.TypePrefix(), nil
-	default:
-		return "", newEntityIDContractError(ErrorCodeEntityIDPrefixInvalid, EntityIDReasonArity, map[string]any{
-			EntityIDDetailMeasuredParts: n,
-			EntityIDDetailAllowedParts:  PrefixLevelType,
-		})
-	}
 }
 
 // HasPrefix reports whether this EntityID lies under the given literal prefix

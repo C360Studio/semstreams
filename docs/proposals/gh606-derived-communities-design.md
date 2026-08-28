@@ -28,8 +28,13 @@ are OUT of scope.
   enhancement-worker trigger (inventory §3); zero sister-repo direct consumers (owner ruling
   measurement).
 - P6 — The canonical prefix functions exist in ONE home: `pkg/types.EntityID.DeploymentPrefix` (2),
-  `SourcePrefix` (3), `TaxonomyPrefix` (4), `TypePrefix` (5) and `PrefixLevel(n)` (renamed by #1095 slice A per
-  ADR-102 d6; `SystemPrefix`/`DomainPrefix`/`PlatformPrefix` no longer exist).
+  `SourcePrefix` (3), `TaxonomyPrefix` (4), `TypePrefix` (5) (renamed by #1095 slice A per ADR-102 d6;
+  `SystemPrefix`/`DomainPrefix`/`PlatformPrefix` no longer exist).
+  **`PrefixLevel(n)` and the `PrefixLevel*` level constants were DELETED by owner ruling 2026-08-28** (#1119): this
+  design was their only named consumer and #606 had not yet been implemented, so they were phantom exports. The
+  removal is deliberate, not an oversight — re-add whatever level vocabulary #606's code actually calls, in the same
+  change as the caller, rather than resurrecting that shape speculatively. The four named methods above are
+  unchanged and carry the same meanings, so the levels themselves are still expressible.
 
 ## 2. Options considered
 

@@ -28,11 +28,6 @@ var frameworkIdentityFamilies = [...]FrameworkIdentityFamily{
 	{Name: "web-observation", System: "web", Domain: "agent", Type: "observation", InstanceBytes: 16},
 }
 
-// FrameworkIdentityFamilies returns a copy of the fixed-suffix family table.
-func FrameworkIdentityFamilies() []FrameworkIdentityFamily {
-	return append([]FrameworkIdentityFamily(nil), frameworkIdentityFamilies[:]...)
-}
-
 // RuleAlertIdentityFamily is the ADR-076 rule alert family under the
 // deployment's own authority.
 func RuleAlertIdentityFamily() FrameworkIdentityFamily { return frameworkIdentityFamilies[0] }

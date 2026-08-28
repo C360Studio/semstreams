@@ -11,11 +11,6 @@ var frameworkEntityDomains = [...]string{"agent", "ops", "graph"}
 // containers. A producer instance equal to one of them is a corpus finding.
 var reservedInstanceTokens = [...]string{"group", "container", "level"}
 
-// FrameworkEntityDomains returns a copy of the framework-reserved domain set.
-func FrameworkEntityDomains() []string {
-	return append([]string(nil), frameworkEntityDomains[:]...)
-}
-
 // IsFrameworkEntityDomain reports whether domain is framework-reserved.
 func IsFrameworkEntityDomain(domain string) bool {
 	for _, reserved := range frameworkEntityDomains {
@@ -24,11 +19,6 @@ func IsFrameworkEntityDomain(domain string) bool {
 		}
 	}
 	return false
-}
-
-// ReservedInstanceTokens returns a copy of the reserved instance tokens.
-func ReservedInstanceTokens() []string {
-	return append([]string(nil), reservedInstanceTokens[:]...)
 }
 
 // IsReservedInstanceToken reports whether token is a reserved instance token.

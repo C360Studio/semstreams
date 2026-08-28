@@ -428,7 +428,7 @@ GraphQL value `entityTypes[].type`, now `system.domain.type`.
    sister `extractPlatformMeta` that preferred `InstanceID` drops that precedence.
 2. **The authority pair is bounded at load (ruled O-14).** `len(platform.org)+len(platform.id) <= 170` bytes while the
    rule-trigger family (86 fixed bytes) binds; the budget is `pkg/types.MaxAuthorityPairBytes()`, derived from
-   `pkg/types.FrameworkIdentityFamilies()`, never configured. An `org` or `id` that is not one canonical entity-ID
+   `pkg/types.LongestFrameworkIdentityFamily()`, never configured. An `org` or `id` that is not one canonical entity-ID
    segment (a dot, a leading `-`/`_`) is rejected at load for the same reason.
 3. **Builders swap positions 3-4 and take authority only from `deps.Platform`.** A product name in `platform`, a fixed
    literal authority in a builder, a `Sprintf` template whose org/platform are literals, or a trailing-dot prefix
@@ -461,7 +461,7 @@ GraphQL value `entityTypes[].type`, now `system.domain.type`.
    not detect it at composition time.
 5. **Prefix levels have fixed meanings (ADR-102 d6):** 2 = deployment (`DeploymentPrefix`), 3 = source
    (`SourcePrefix`, the federation triple; ADR-099 level 1), 4 = taxonomy (`TaxonomyPrefix`; ADR-099 level 0), 5 = type
-   (`TypePrefix`), plus `PrefixLevel(n)`. `SystemPrefix`, `DomainPrefix`, `PlatformPrefix`, `IsSameSystem`, `IsSameDomain`
+   (`TypePrefix`). `SystemPrefix`, `DomainPrefix`, `PlatformPrefix`, `IsSameSystem`, `IsSameDomain`
    no longer exist; `IsSameSource` compares the source prefix. "A taxonomy across sources" is the wildcard pattern
    `org.platform.*.D.*.*` or a `tag:` lesson scope, never a prefix; a three-position `id:` lesson scope key now means one
    source within one deployment.

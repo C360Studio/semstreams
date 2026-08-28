@@ -1,4 +1,4 @@
-# Conformance — entity-id-segment-semantics (revision 9 — slice A implementation columns filled; slice B rows marked NOT IN THIS PR; review rounds 1-3 and the Codex owner round applied; O-5 superseded and the entity-domain authority type deleted)
+# Conformance — entity-id-segment-semantics (revision 10 — slice A implementation columns filled; slice B rows marked NOT IN THIS PR; review rounds 1-3 and the Codex owner round applied; O-5 superseded and the entity-domain authority type deleted)
 
 Per-ruling map from the owner rulings on #1095 (2026-08-26, including the design-package ruling: O-1–O-11, O-13,
 O-14 accepted; O-12 overridden to read-only mirror; hierarchy skip accepted), the design constraints, and ADR-102 decisions to
@@ -18,12 +18,12 @@ Constraint rows are labelled K1–K3 so they do not collide with the inventory's
 | K1 | Reordering allowed (constraint) | `pkg/types/entity_id.go` `Key()`/`ParseEntityID`; repository sweep (`scratchpad sweep.py`, 132 files; `sweep2.py`, 5 files) | `specs/entity-id-contract/spec.md` MODIFIED "Every entity ID has one canonical six-segment ASCII form" | `TestEntityIDKeyOrderIsSystemBeforeDomain` |
 | K2 | Arity stays six (constraint) | `pkg/types/entity_id.go` validators unchanged (`canonicalEntityIDParts = 6`) | same (unchanged arity clause) | existing `pkg/types` arity tests |
 | K3 | Second- and third-order impacts of the six-part shape made explicit (constraint) | `docs/proposals/gh1095-entity-id-segment-semantics-inventory.md` §1 (rows S/K/X/W/C/H/L/R/M/D/F/T/P + census) | — | independent inventory pass (PASS WITH DIVERGENCES, r2 corrections) |
-| D1 | Order `org.platform.system.domain.type.instance`; instance last (ADR-102 d1, d6) | `pkg/types/entity_id.go` `DeploymentPrefix`/`SourcePrefix`/`TaxonomyPrefix`/`TypePrefix`/`PrefixLevel`, `IsSameSource`; retired helpers deleted | MODIFIED canonical form; ADDED "Prefix lengths have fixed meanings and the instance position is last" | `TestPrefixLevelsAreNamed`, `TestTaxonomyAcrossSourcesIsPatternNotPrefix` |
+| D1 | Order `org.platform.system.domain.type.instance`; instance last (ADR-102 d1, d6) | `pkg/types/entity_id.go` `DeploymentPrefix`/`SourcePrefix`/`TaxonomyPrefix`/`TypePrefix`, `IsSameSource`; retired helpers deleted, and `PrefixLevel(n)` deleted 2026-08-28 as a phantom | MODIFIED canonical form; ADDED "Prefix lengths have fixed meanings and the instance position is last" | `TestPrefixLevelsAreNamed`, `TestTaxonomyAcrossSourcesIsPatternNotPrefix` |
 | D2 | `platform` from the single identity field (conditional on O-2); ADR-076 d1 retired, d2 amended (d2) | `config/config.go` `GetPlatform`, `rejectRemovedPlatformFields`, `validateAuthorityPair`; `pkg/platform.Config.InstanceID` deleted; `pkg/types/framework_identity_families.go` (`MaxAuthorityPairBytes()` = 170 derived); `graph/events.go` + `processor/rule/graph_event_identity.go` compose from the family table — no `semstreams.framework` literal remains | ADDED position-meaning requirement; ADDED "The authority pair is bounded at configuration load" | `TestConfigRejectsOversizedAuthorityPair`; `NewAlertEvent`/`ruleTriggerEntityID` rows in `entity_ids_semantics_test.go` |
 | D3 | Product names are provenance (d3) | `internal/entityidaudit/segment_rules.go` `authority_literal` over `go-format-prefix`, `go-dotted-constant`, declaration patterns (production Go + `configs/`), and whole six-segment literals on the minting surfaces `{go-constructor:EntityID, go-return:EntityID}`. **Stated limit:** `audit.go` `entityIDConstructorValue` resolves the constructor only when ALL SIX fields are static, so a partial-literal mint (`EntityID{Org: deps.Org, Platform: "semsource", …}`) produces no candidate at all — pre-existing extraction behaviour, made load-bearing by the new rule and deliberately not widened in this change | same | `TestAuditFlagsAuthorityLiteral`, `TestAuditFlagsAuthorityLiteralInAMintingLiteral` |
 | D4 | Domain delegation + reserved set `{agent, ops, graph}` (d4); overlap between producers PERMITTED and UNREPORTED per the 2026-08-28 ruling | `pkg/types/entity_domain_authority.go` (authority type deleted; `EntityDomainDelegation` and the reserved sets retained); `processor/gated-dag/participant.go` `*.*.gated-dag.agent.fanout.*` (re-slotted under `agent`); `segment_rules.go` `domain_unregistered` with `collectRegisteredDomains`, over a corpus that includes the projection-contract declaration surface (`audit.go` `languageForName` `entitypattern`/`Contract` arm and `projection_contracts[].entity_pattern`); delegations declared by `examples/processors/{document,iot_sensor,weather_station}/entity_domains.go` and `cmd/e2e-semstreams/mission/state.go`, whose ONLY consumer is the audit's registered set | ADDED requirement retitled and narrowed to the declaration; three scenarios | `TestAuditFlagsUnregisteredDomain`, `TestEntityDomainDelegationIsADeclarationNotAPolicy`, plus the registered-set mutation recorded below |
 | D5 | Subject-only coded authority rejection; import lane; `@id` objects structural only (no stub, absent object permitted); imports are read-only mirrors (ruled O-12(a)) (d5) | `pkg/types/entity_id_authority.go` (codes, reasons, lane detail, identity-free details) — slice A; the boundary and mirror rules are slice B — NOT IN THIS PR | ADDED "Authority mismatch is a coded rejection distinct from structural rejection"; graph-ingest ADDED | `TestAuthorityRejectionIsCodedAndIdentityFree`, `TestAuthorityRejectionLocalClaimOnImportLane`, `TestAuthorityGateRejectsAnnotationOfImportedSubject` |
-| D6 | Prefix-level meanings; ADR-099 levels 0 = source×taxonomy, 1 = source, 2 = deployment (d6) | `pkg/types/entity_id.go` `PrefixLevel*` constants and helpers; `graph/clustering/entityid_provider.go` `getSystem`/`getTypePrefix` by name; `docs/proposals/gh606-derived-communities-design.md` restated (level 1 = source, served by default) | ADDED prefix-level requirement; `specs/graph-clustering/spec.md` MODIFIED | `TestEntityIDEdgesReadPositionsByName` |
+| D6 | Prefix-level meanings; ADR-099 levels 0 = source×taxonomy, 1 = source, 2 = deployment (d6) | `pkg/types/entity_id.go` named prefix methods (the `PrefixLevel*` constants and `PrefixLevel(n)` were deleted 2026-08-28 as phantoms; #606 re-adds a level vocabulary with a consumer); `graph/clustering/entityid_provider.go` `getSystem`/`getTypePrefix` by name; `docs/proposals/gh606-derived-communities-design.md` restated (level 1 = source, served by default) | ADDED prefix-level requirement; `specs/graph-clustering/spec.md` MODIFIED | `TestEntityIDEdgesReadPositionsByName` |
 | D7 | Never rewrite; fresh-state break (d7) | no alias, ledger, or dual parser anywhere in the diff; `docs/operations/migration-beta162-to-beta163.md` slice-A section (on the merged tree) | existing "clean owned-source break" requirement (unchanged) | cold-start proof in tasks §7.2 |
 | H | Hierarchy inference skips foreign-authority entities (accepted by ruling on every lane; O-6 ruled: containers retire with gh606) | slice B — NOT IN THIS PR; slice A reserves the padding tokens (`pkg/types.ReservedInstanceTokens`) | `specs/graph-ingest/spec.md` ADDED "Hierarchy inference skips foreign-authority entities" | `TestHierarchySkipsForeignAuthority` |
 | A1 | Audit gains two surfaces and two segment rules and becomes a CI gate | `internal/entityidaudit/audit.go` (`go-format-prefix`, `go-dotted-constant`, config `entity.pattern` / `entity_watch_buckets.ENTITY_STATES`), `segment_rules.go` (`authority_literal`, `domain_unregistered`, `instance_reserved`); `.github/workflows/ci.yml` Lint job step "Entity-ID corpus audit" | ADDED "Segment semantics are enforced by the entity-ID corpus audit" | `TestAuditFlagsFormatPrefixAuthorityLiteral`; `task entity-id:audit` in tasks 7.1 |
@@ -53,7 +53,7 @@ Constraint rows are labelled K1–K3 so they do not collide with the inventory's
 | MEDIUM — O-13 Implementation column blank | FIXED | marked "slice B — NOT IN THIS PR" like its siblings |
 | MEDIUM — `tasks.md` 5 preamble stated a present-tense grep over four paths #1116 deleted | FIXED | past-tensed; the conclusion survives and now holds trivially |
 | MEDIUM — `pkg/types/entity_domain_authority.go:77` `NewEntityDomainAuthority` returns a handle the documented adopter pattern does not consume | NOT CHANGED — owner call at merge | the signature is on the owner's merge list with the eight phantom exports; changing it unilaterally is out of this round's scope |
-| MEDIUM — eight exported symbols with no consumer (`FrameworkEntityDomains`, `ReservedInstanceTokens`, `FrameworkIdentityFamilies`, `PrefixLevel(n)`, four `PrefixLevel*`) | NOT CHANGED — owner call at merge | keep as the ADR-099/gh606 vocabulary, or delete until a consumer exists |
+| MEDIUM — eight exported symbols with no consumer (`FrameworkEntityDomains`, `ReservedInstanceTokens`, `FrameworkIdentityFamilies`, `PrefixLevel(n)`, four `PrefixLevel*`) | **RULED 2026-08-28: DELETED**, all eight | each had zero consumers of any kind; deleted outright rather than unexported, because none had an in-package caller either. Their load-bearing siblings survive — see the surviving-export table below |
 | MEDIUM — `agentic/web_observation_entity.go:24` `const` became a package-level `var` | FIXED with a falsifiable pin | a compile-time array-index assertion is impossible (the value comes from a function call, not a constant); `agentic/web_observation_entity_test.go` now pins the literal 16. Mutation-proven: `framework_identity_families.go:28` `InstanceBytes: 32` → `webObservationInstanceLen = 32, want 16`. The pre-existing check compared the segment against the same var and did not fire |
 | NIT — `tasks.md` cited `agentic/agent_lesson_entity.go:399` (that line is `MessageType`) | FIXED | three sites re-anchored to `:400` |
 | NIT — `tasks.md` cited `ops/scenario.go:715` (a closing brace) | FIXED — **four** sites, not the two this row first claimed (round 2 MEDIUM-3) | all four re-anchored to `:607` and `:718-719` (`tasks.md` `:37`, `:619`, `:694`, `:708`); `:686`'s `:604`/`:712` are legitimate pre-change targets and stay |
@@ -222,8 +222,9 @@ depend on a declared (non-reserved) domain, so the mechanism is load-bearing bey
 
 ### Phantom-export count for the owner's merge decision
 
-The deletion takes **four** symbols off the list entirely — `EntityDomainAuthority`, `NewEntityDomainAuthority`,
-`Authorize`, `EntityIDReasonDomainUndelegated` — none of which now exist. The eight-symbol phantom subset is
+*(Superseded by the 2026-08-28 ruling that deleted all eight; kept as the measurement that informed it.)* The
+deletion takes **four** symbols off the list entirely — `EntityDomainAuthority`, `NewEntityDomainAuthority`,
+`Authorize`, `EntityIDReasonDomainUndelegated` — none of which now exist. The eight-symbol phantom subset was
 **unchanged at eight**, re-measured over the 935 production `.go` files outside `pkg/types`:
 `FrameworkEntityDomains()` 0, `ReservedInstanceTokens()` 0, `FrameworkIdentityFamilies()` 0, `PrefixLevel(n)` 0, and
 `PrefixLevelDeployment` / `PrefixLevelSource` / `PrefixLevelTaxonomy` / `PrefixLevelType` 0 each. Their singular
@@ -237,3 +238,64 @@ also not a phantom — `SourcePrefix()` and `PrefixLevel` call it.
 `pkg/types/entity_domain_authority.go` holds no authority. The name is kept to avoid churning the citations in this
 change's own artifacts, and the type doc states what the file holds and why the policy was deleted. Renaming it to
 `entity_domain.go` is a reasonable follow-up and is not done here.
+
+## Surviving new-export table for `pkg/types` (reviewer contract "name its present consumer")
+
+Twenty-one exported symbols are new in `pkg/types` on this branch, derived by diffing declarations against
+`origin/main` rather than from a list. Eleven have a production consumer outside the package:
+
+| Symbol | Present production consumer outside `pkg/types` |
+|---|---|
+| `EntityDomainDelegation` | `cmd/e2e-semstreams/mission/state.go`, the three example packages, and `internal/entityidaudit` `collectRegisteredDomains` (AST) |
+| `IsFrameworkEntityDomain` | `internal/entityidaudit/segment_rules.go` `domain_unregistered` |
+| `IsReservedInstanceToken` | `graph/inference/hierarchy.go` `isContainerEntity`; `segment_rules.go` `instance_reserved` |
+| `SourcePrefix()` | `graph/inference/hierarchy.go` source container |
+| `TaxonomyPrefix()` | `graph/inference/hierarchy.go` taxonomy container |
+| `TypePrefix()` | `graph/inference/hierarchy.go`, `graph/clustering/entityid_provider.go` |
+| `LongestFrameworkIdentityFamily` | `config/config.go:796` `validateAuthorityPair` |
+| `MaxAuthorityPairBytes` | `config/config.go:800` |
+| `FixedBytes` | `config/config.go:800` |
+| `RuleAlertIdentityFamily` | `graph/events.go:196` |
+| `RuleTriggerIdentityFamily` | `processor/rule/graph_event_identity.go:33` |
+| `WebObservationIdentityFamily` | `agentic/web_observation_entity.go:240` |
+
+The remaining ten are accounted for, not overlooked:
+
+- **`FrameworkIdentityFamily`** — not a phantom, a grep artifact. `config/config.go:796` binds a value of the type
+  and calls `.Name`, `.FixedBytes()`, `.InstanceBytes` and `.EntityID(...)` on it; the type crosses the boundary
+  even though its bare name does not appear.
+- **Seven slice-B authority symbols** — `ValidateEntityIDAuthority`, `ErrorCodeEntityIDAuthorityInvalid`,
+  `EntityIDReasonForeignAuthority`, `EntityIDReasonLocalAuthorityClaimed`, `EntityIDDetailLane`,
+  `EntityIDLaneLocal`, `EntityIDLaneImport`. These are a **declared** deferral, not a discovered phantom:
+  `migration-beta162-to-beta163.md:502` states in the adopter-facing layer that the validator "exists and is
+  unwired", and the "Not in this slice" section names the boundary as slice B's. The owner ruling scoped this
+  round's deletion away from them explicitly.
+- **`DeploymentPrefix()`** — has an in-package production caller (`SourcePrefix()` at `entity_id.go:275`); outside
+  the package it is referenced only by `message/parse_entity_id_test.go`. Left in place, as ruled; a ninth cut was
+  not in this ruling.
+- **`IsSameSource`** — reported, not cut. It replaced the retired `IsSameSystem` and has **no caller at all**: none
+  in `pkg/types` production, and outside only `message/parse_entity_id_test.go`. By the same test that condemned the
+  eight it is a ninth phantom, but it is outside the ruling and is raised here rather than removed unilaterally.
+
+### The eight, and what happened to each
+
+All eight were **deleted outright**, not unexported: the delete-vs-unexport question was decided by reading, and
+none of the eight had an in-package caller either, so unexporting would have left dead unexported symbols.
+
+| Deleted | Verification before cutting |
+|---|---|
+| `FrameworkEntityDomains()` | only its own declaration in production `pkg/types`; test rewritten onto `frameworkEntityDomains` |
+| `ReservedInstanceTokens()` | same; `graph/inference/hierarchy.go:139` named it in **prose only** and now names `IsReservedInstanceToken` |
+| `FrameworkIdentityFamilies()` | same. `MaxAuthorityPairBytes` was checked first and calls `LongestFrameworkIdentityFamily()`, not this accessor, so the 170-byte derivation is untouched — the migration doc's sentence naming this accessor was wrong and is corrected |
+| `EntityID.PrefixLevel(n)` | only its own declaration; `TestPrefixLevelsAreNamed` rewritten to pin the four named methods and their position counts |
+| `PrefixLevelDeployment` / `PrefixLevelSource` / `PrefixLevelTaxonomy` / `PrefixLevelType` | verified rather than assumed: their only uses were inside `PrefixLevel(n)`'s switch and its error detail, so they fall with it |
+
+### Consequence for gh606 — deliberate, not overlooked
+
+ADR-099/#606 was the named future consumer for the prefix-level vocabulary, and #606 is a ruled beta.163 epic
+blocked on this PR. The vocabulary was **deliberately removed for want of a present consumer**, not missed:
+`EntityID.PrefixLevel(n)` and the four `PrefixLevel*` constants are gone, while the four named prefix methods
+(`DeploymentPrefix`, `SourcePrefix`, `TaxonomyPrefix`, `TypePrefix`) and `IsSameSource` remain and carry the same
+meanings. #606's implementer should re-add whatever level vocabulary its code actually calls, with the caller in the
+same change, rather than resurrecting this shape speculatively. `pkg/types/entity_id.go` carries the same note above
+the prefix methods.

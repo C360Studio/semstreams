@@ -137,7 +137,7 @@ validation MUST run first; an authority reason MUST never mask a structural one.
 ### Requirement: Prefix lengths have fixed meanings and the instance position is last
 
 `pkg/types` MUST export the named prefix levels `DeploymentPrefix` (two positions), `SourcePrefix` (three),
-`TaxonomyPrefix` (four), and `TypePrefix` (five) plus `PrefixLevel(n)`, and MUST NOT export a helper whose meaning
+`TaxonomyPrefix` (four), and `TypePrefix` (five), and MUST NOT export a helper whose meaning
 depends on a position order other than the canonical one. A query prefix of length n MUST mean exactly the level
 named for n. Grouping by a non-prefix combination (a taxonomy across sources) MUST be expressed as an exact-arity
 wildcard pattern or KV filter, never as a prefix. The `instance` position MUST remain last so that every grouping
@@ -149,7 +149,6 @@ substitution MAY depend on that placement.
 - **GIVEN** entity `acme.dep1.src.git.commit.a1`
 - **WHEN** `SourcePrefix()` runs
 - **THEN** it returns `acme.dep1.src`
-- **AND** `PrefixLevel(3)` returns the same value
 - **AND** the test that verifies this is `TestPrefixLevelsAreNamed`
 
 #### Scenario: a taxonomy across sources is a pattern, not a prefix

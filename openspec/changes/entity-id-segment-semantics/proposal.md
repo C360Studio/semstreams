@@ -16,9 +16,12 @@ The pre-v1 clean break is the only window in which the order can change (ADR-076
 - **BREAKING:** the canonical order becomes `org.platform.system.domain.type.instance` (owner decision O-1); every
   builder, pattern, prefix helper, index-position reader, config literal, fixture, and document follows.
 - `pkg/types` names each position, exports the prefix-level vocabulary (deployment = 2, source = 3, taxonomy = 4,
-  type = 5), and adds an entity-domain authority on the predicate-namespace pattern with a framework-reserved set.
-- Every framework builder authorizes its domain at construction and takes authority only from `deps.Platform`;
-  ADR-076's fixed `semstreams.framework` namespace is retired in favour of the deployment's own `org.platform`.
+  type = 5), and adds `EntityDomainDelegation` — a declaration on the predicate-namespace pattern, with a
+  framework-reserved set. An authorization policy over it was built and then deleted by the owner ruling of
+  2026-08-28: domain overlap between producers is permitted, so there was nothing to authorize. The declaration's
+  only consumer is the entity-ID corpus audit's registered set.
+- Every framework builder declares its domain and takes authority only from `deps.Platform`; ADR-076's fixed
+  `semstreams.framework` namespace is retired in favour of the deployment's own `org.platform`.
 - `pkg/types` exports a coded authority rejection distinct from structural rejection.
 - graph-ingest enforces the deployment's own authority on every lane before KV I/O; an input port may be declared an
   import lane; #1096 is fixed by minting from `deps.Platform`.

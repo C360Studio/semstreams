@@ -137,8 +137,8 @@ func NewHierarchyInference(
 // isContainerEntity returns true if the entityID represents a container entity.
 // Container entities carry a reserved padding token in the INSTANCE position
 // (group, container, level) and have exactly 6 parts. The token set is owned by
-// pkg/types.ReservedInstanceTokens — this reads it rather than re-spelling it,
-// so the audit rule and this check can never disagree.
+// pkg/types — this asks it via IsReservedInstanceToken rather than re-spelling
+// the tokens, so the audit rule and this check can never disagree.
 func isContainerEntity(entityID string) bool {
 	parsed, err := semtypes.ParseEntityID(entityID)
 	if err != nil {

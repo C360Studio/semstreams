@@ -66,7 +66,8 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
       `Key() == "acme.dep1.src.git.commit.a1"`; assert `ParseEntityID` of that string round-trips every field.
       `TestPrefixLevelsAreNamed` — assert `DeploymentPrefix()=="acme.dep1"`, `SourcePrefix()=="acme.dep1.src"`,
       `TaxonomyPrefix()=="acme.dep1.src.git"`, `TypePrefix()=="acme.dep1.src.git.commit"`, and that
-      `PrefixLevel(n)` for n∈{2,3,4,5} returns the same strings. `TestTaxonomyAcrossSourcesIsPatternNotPrefix` —
+      each prefix extends the one below it by one position (the numeric `PrefixLevel(n)` this row asked for was
+      deleted 2026-08-28). `TestTaxonomyAcrossSourcesIsPatternNotPrefix` —
       `ValidateEntityIDPattern("acme.dep1.*.git.*.*")` is nil and `ValidateEntityIDPrefix("acme.dep1.*.git")` returns
       `entity_id_prefix_invalid`. Does not compile at baseline (new symbols).
       **Done (slice A, `a0e2a2cb`+):** `pkg/types/entity_id_semantics_test.go` — the three named tests plus `TestMaxAuthorityPairBytesDerivesFromLongestFamily` (pins that the 170-byte budget is derived from the family table, never hand-copied). Did not compile at baseline (see 2.9).
@@ -76,7 +77,13 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
       the returned error carries code `entity_id_authority_invalid` and reason `domain_undelegated`.
       `TestEntityDomainAuthorityReservedPassesForEveryProducer` — every reserved domain passes for an empty and for
       an arbitrary producer. Does not compile at baseline.
-      **Done:** `pkg/types/entity_domain_authority_test.go` — both named tests plus `TestEntityDomainAuthorityRejectsDuplicateAndReservedDelegations` (one domain by two producers, a reserved domain, an empty producer, a non-canonical segment all refuse to build). Did not compile at baseline.
+      **Done at the time, then SUPERSEDED.** `pkg/types/entity_domain_authority_test.go` carried both named tests
+      plus `TestEntityDomainAuthorityRejectsDuplicateAndReservedDelegations`, and did not compile at baseline (the
+      RED capture is in 2.9). **None of the three exists now**: the owner ruling of 2026-08-28 deleted
+      `EntityDomainAuthority`/`Authorize`, so every test of that policy went with it. What the file pins today is
+      the surface that survived — `TestFrameworkEntityDomainsIsTheClosedReservedSet`,
+      `TestReservedInstanceTokensIsTheClosedContainerSet` (coverage this row never had), and
+      `TestEntityDomainDelegationIsADeclarationNotAPolicy`.
 
 - [x] 2.3 `pkg/types/entity_id_authority_test.go`: `TestAuthorityRejectionIsCodedAndIdentityFree` — table over
       (candidate, org, platform, importLane) → reason `foreign_authority` / nil; assert `errs.Code ==
@@ -298,17 +305,19 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
       **Done:** `pkg/types/entity_id.go` — struct reordered with the position table in its doc comment, `Key()` and `ParseEntityID` by named position, `EntityType()` unchanged; `internal/entityidaudit` constructor join follows (`audit.go` `entityIDConstructorValue`).
 
 - [x] 3.2 Replace `TypePrefix/SystemPrefix/DomainPrefix/PlatformPrefix` with the named levels `DeploymentPrefix` (2),
-      `SourcePrefix` (3), `TaxonomyPrefix` (4), `TypePrefix` (5), plus `PrefixLevel(n)`; `IsSameSystem` → `IsSameSource`;
+      `SourcePrefix` (3), `TaxonomyPrefix` (4), `TypePrefix` (5), ~~plus `PrefixLevel(n)`~~ (struck 2026-08-28);
+      `IsSameSystem` → `IsSameSource`;
       `IsSameDomain` removed (not a prefix under the new order; `grep -rn IsSameDomain --include='*.go'` → tests only).
-      **Done:** `DeploymentPrefix`/`SourcePrefix`/`TaxonomyPrefix`/`TypePrefix`, `PrefixLevel(n)` (coded prefix rejection outside 2–5), `PrefixLevelDeployment..PrefixLevelType` constants, `IsSameSource`; `SystemPrefix`/`DomainPrefix`/`PlatformPrefix`/`IsSameSystem`/`IsSameDomain` deleted (`message/parse_entity_id_test.go` rewritten to the named levels).
+      **Done, then REDUCED 2026-08-28.** `DeploymentPrefix`/`SourcePrefix`/`TaxonomyPrefix`/`TypePrefix` and `IsSameSource` ship. `PrefixLevel(n)` and the `PrefixLevelDeployment..PrefixLevelType` constants were implemented as this row describes and are now DELETED for want of any consumer (owner ruling; see the phantom-export note in 7.3). `SystemPrefix`/`DomainPrefix`/`PlatformPrefix`/`IsSameSystem`/`IsSameDomain` deleted (`message/parse_entity_id_test.go` rewritten to the named levels).
 
 - [x] 3.3 Add `EntityDomainDelegation`, ~~`EntityDomainAuthority`, `NewEntityDomainAuthority`, `Authorize(producer,
       domain, entityType)`~~ (struck 2026-08-28), and the reserved set `FrameworkEntityDomains = {agent, ops, graph}`
       (ruled O-9: the gated-DAG family re-slots under `agent`); the authority half mirrored
       `vocabulary/namespace_authority.go` shape-for-shape until it was deleted.
       **Done, then REDUCED by the owner ruling of 2026-08-28.** What ships in `pkg/types/entity_domain_authority.go`
-      is `EntityDomainDelegation` plus the reserved sets — `FrameworkEntityDomains()`/`IsFrameworkEntityDomain` =
-      `{agent, ops, graph}` and `ReservedInstanceTokens()`/`IsReservedInstanceToken`. `EntityDomainAuthority`,
+      is `EntityDomainDelegation` plus the reserved-set predicates `IsFrameworkEntityDomain` (`{agent, ops,
+      graph}`) and `IsReservedInstanceToken`. The plural accessors `FrameworkEntityDomains()`/
+      `ReservedInstanceTokens()` were also deleted 2026-08-28 as phantoms. `EntityDomainAuthority`,
       `NewEntityDomainAuthority` and `Authorize` were implemented as this row describes and are now DELETED: with
       domain overlap permitted there was nothing left to authorize, they had no production caller, and detecting a
       mis-chosen taxonomy token is a vocabulary question rather than a composition-time one. The single consumer of
@@ -327,14 +336,14 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
 
 - [x] 3.5 Reserve the container padding tokens: `ReservedInstanceTokens = {group, container, level}`;
       `ValidateEntityID` unchanged (lexical); the audit (5.6) and `graph/inference/hierarchy.go` consume the constant.
-      **Done:** `ReservedInstanceTokens()`/`IsReservedInstanceToken` in `pkg/types/entity_domain_authority.go`; the audit reports `instance_reserved` (5.6). `graph/inference/hierarchy.go` consumes the constant on the merged tree (5.2 — PR #1109 owns that file during this window).
+      **Done:** `IsReservedInstanceToken` in `pkg/types/entity_domain_authority.go` (the `ReservedInstanceTokens()` accessor beside it was deleted 2026-08-28 as a phantom; the unexported `reservedInstanceTokens` table remains its single home); the audit reports `instance_reserved` (5.6). `graph/inference/hierarchy.go` consumes the constant on the merged tree (5.2 — PR #1109 owns that file during this window).
 
 - [x] 3.6 `internal/semantictest.EntityID` positional args follow the new order; `message.ParseEntityID` delegator
       unchanged (alias).
       **Done:** `internal/semantictest/fixtures.go` positional parameters renamed `(org, platform, system, domain, type, instance)`; the join is unchanged so call sites keep their strings; call sites naming a family had their two middle arguments swapped (scratchpad `sweep2.py`, 5 files). `message.ParseEntityID` delegator unchanged.
 
 - [x] 3.7 Authority-pair bound at config load (`config/config.go:225-241`): declare the framework identity family
-      table in `pkg/types` (`FrameworkIdentityFamilies`, each family's fixed suffix; the rule trigger family = 86 bytes
+      table in `pkg/types` (the unexported `frameworkIdentityFamilies` table, each family's fixed suffix; the rule trigger family = 86 bytes
       today) and `MaxAuthorityPairBytes = 256 − longest = 170` there — `config` imports neither `graph` nor
       `processor/rule` and the trigger prefix is unexported (`graph_event_identity.go:14`); `graph/events.go:20` and
       `ruleTriggerEntityID` build their prefixes from the `pkg/types` family entries so the number is never
@@ -373,7 +382,7 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       AFTER  sha256 690ab162c909db961c0b9c4d7df60fce205c3b036ee69e92239fa641678e3711  restored=yes
       ```
 
-- [x] 4.2 M2 `EntityDomainAuthority.Authorize`: return nil unconditionally → `TestEntityDomainAuthorityMirrorsPredicateAuthority` MUST fail.
+- [x] 4.2 M2 `EntityDomainAuthority.Authorize`: return nil unconditionally → `TestEntityDomainAuthorityMirrorsPredicateAuthority` MUST fail. *(Historical: performed at the §4 baseline. Both the mutated method and the test were deleted on 2026-08-28; the transcript below is kept verbatim as the evidence it was then, and is not reproducible at this head.)*
       **Done** (`Authorize` short-circuits to nil for every domain):
 
       ```text
@@ -446,7 +455,7 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       AFTER  sha256 ea1483350d7eb8f7c6b34c65488935b1c7720cd91aae69acb99f070ac82297a2  restored=yes
       ```
 
-- [x] 4.8 M8 `SourcePrefix`/`PrefixLevel(3)`: return four positions → `TestPrefixLevelsAreNamed` MUST fail.
+- [x] 4.8 M8 `SourcePrefix`/`PrefixLevel(3)`: return four positions → `TestPrefixLevelsAreNamed` MUST fail. *(Historical: `PrefixLevel` was deleted 2026-08-28; the transcript below is the evidence as taken and is not reproducible at this head.)*
       **Done** (`SourcePrefix` returns four positions):
 
       ```text
@@ -631,7 +640,8 @@ package; both declarations are now on the payload registrations) and
 - [x] 5.1 Framework builders (`agentic/entity_ids.go`, `agent_lesson_entity.go`, `web_observation_entity.go`,
       `ops_diagnosis_entity.go`, `graph/events.go`, `processor/rule/graph_event_identity.go`, gated-dag participant,
       e2e mission, `examples/processors/iot_sensor/payload.go`) emit `org.platform.<component>.<domain>.<type>.<instance>`
-      and authorize their domain; ADR-076 families drop the `semstreams.framework` literal and `graph.NewAlertEvent`
+      and declare their domain (the task said "authorize"; no authorization act ships — see 3.3); ADR-076 families
+      drop the `semstreams.framework` literal and `graph.NewAlertEvent`
       / `ruleTriggerEntityID` gain `org, platform string` parameters (exported-surface change on `graph/`; no sister
       caller). Example builders `examples/processors/document/payload_document.go:50`, `payload_sensor.go:40`,
       `payload_maintenance.go:41`, `payload_observation.go:41`, `examples/processors/weather_station/payload.go:100`
@@ -765,8 +775,8 @@ package; both declarations are now on the payload registrations) and
       **Done.** `internal/entityidaudit/segment_rules.go` adds the surfaces `go-format-prefix` (a `fmt.Sprintf`
       format whose dotted tokens are positions, `%s` = template position) and `go-dotted-constant` (a trailing-dot
       dotted constant under an entity-named declaration), and the rules `authority_literal`, `domain_unregistered`
-      (against `pkg/types.FrameworkEntityDomains()` plus `EntityDomainDelegation` literals collected from production
-      Go), and `instance_reserved` (`pkg/types.ReservedInstanceTokens`). `audit.go` also extracts rule
+      (against `pkg/types.IsFrameworkEntityDomain` plus `EntityDomainDelegation` literals collected from
+      production Go), and `instance_reserved` (`pkg/types.IsReservedInstanceToken`). `audit.go` also extracts rule
       `entity.pattern` and `entity_watch_buckets.ENTITY_STATES` values from configs as declaration patterns (the
       bucket name comes from `graph.BucketEntityStates`, not a second literal). Fixture tests per rule: 2.8.
       `.github/workflows/ci.yml` Lint job gained the step "Entity-ID corpus audit (lexical + segment rules)" running
@@ -825,7 +835,7 @@ package; both declarations are now on the payload registrations) and
       pair reaches `NewHierarchyInference` (which carries none today, `hierarchy.go:109-114`;
       `processor/graph-ingest/component.go:1371-1376`) through `HierarchyConfig` from the `deps.Platform` read 6.1
       adds; the skip is accepted by ruling on every lane;
-      containers use `ReservedInstanceTokens`; a container whose ID would exceed 256 bytes returns the coded
+      containers use the reserved padding tokens (`IsReservedInstanceToken`); a container whose ID would exceed 256 bytes returns the coded
       structural error instead of a padded overflow.
 
 ## 7. Gates and landing (AGENTS.md:63-68 order)
@@ -879,6 +889,21 @@ package; both declarations are now on the payload registrations) and
       **Round 1:** verdict CHANGES REQUESTED at `5f66ce37` (0 BLOCKING, 3 HIGH, 7 MEDIUM, 4 NIT); every finding's
       disposition, the one scoped deviation, and the stated residue are in `conformance.md` §"Implementation-review
       round".
+      **Phantom exports RULED 2026-08-28: all eight DELETED** — `FrameworkEntityDomains()`,
+      `ReservedInstanceTokens()`, `FrameworkIdentityFamilies()`, `EntityID.PrefixLevel(n)` and the four
+      `PrefixLevel*` constants. Deleted outright rather than unexported: none had an in-package caller either.
+      Their load-bearing siblings survive (`IsFrameworkEntityDomain`, `IsReservedInstanceToken`, the four named
+      prefix methods, `LongestFrameworkIdentityFamily`); the surviving new-export table with each symbol's present
+      consumer is in `conformance.md`.
+      **For #606 (ADR-099), which is blocked on this PR:** the prefix-level vocabulary was removed DELIBERATELY for
+      want of a present consumer, not overlooked. The four named prefix methods and `IsSameSource` remain with the
+      same meanings. Re-add whatever level vocabulary #606's code actually calls, with the caller in the same
+      change, rather than resurrecting `PrefixLevel(n)` speculatively.
+      **Raised, not acted on:** `IsSameSource` now has no caller at all outside `message/parse_entity_id_test.go` —
+      a ninth phantom by the same test, outside this ruling.
+      **Follow-up recorded, not done here:** `pkg/types/entity_domain_authority.go` holds no authority after the
+      2026-08-28 deletion. The filename was kept this round to avoid churning the citations across these artifacts;
+      renaming it to `pkg/types/entity_domain.go` (with the citations swept) is owed.
       **Round 2:** narrow re-review `5f66ce37` → `897476cf`, CHANGES REQUESTED (0 BLOCKING, 1 HIGH, 3 MEDIUM, 1 NIT);
       HIGH-1 confirmed closed by independent reproduction. The HIGH was a defect round 1 introduced in the published
       layer, not a survivor.

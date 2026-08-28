@@ -93,7 +93,7 @@ org.platform.system.domain.type.instance
 ```
 
 The padding tokens `group`, `container`, `level` are contract-reserved instance values
-(`pkg/types.ReservedInstanceTokens`); containers retire with gh#606 (ADR-099).
+(`pkg/types.IsReservedInstanceToken`); containers retire with gh#606 (ADR-099).
 
 This creates edges that enable:
 - Efficient traversal by type, taxonomy, or source

@@ -15,8 +15,8 @@ import (
 func TestFrameworkEntityDomainsIsTheClosedReservedSet(t *testing.T) {
 	t.Parallel()
 
-	assert.ElementsMatch(t, []string{"agent", "ops", "graph"}, FrameworkEntityDomains())
-	for _, domain := range FrameworkEntityDomains() {
+	assert.ElementsMatch(t, []string{"agent", "ops", "graph"}, frameworkEntityDomains[:])
+	for _, domain := range frameworkEntityDomains {
 		assert.True(t, IsFrameworkEntityDomain(domain), domain)
 	}
 	assert.False(t, IsFrameworkEntityDomain("gateddag"))
@@ -32,8 +32,8 @@ func TestFrameworkEntityDomainsIsTheClosedReservedSet(t *testing.T) {
 func TestReservedInstanceTokensIsTheClosedContainerSet(t *testing.T) {
 	t.Parallel()
 
-	assert.ElementsMatch(t, []string{"group", "container", "level"}, ReservedInstanceTokens())
-	for _, token := range ReservedInstanceTokens() {
+	assert.ElementsMatch(t, []string{"group", "container", "level"}, reservedInstanceTokens[:])
+	for _, token := range reservedInstanceTokens {
 		assert.True(t, IsReservedInstanceToken(token), token)
 	}
 	assert.False(t, IsReservedInstanceToken("drone"))
