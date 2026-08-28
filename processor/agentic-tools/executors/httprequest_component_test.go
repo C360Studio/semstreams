@@ -67,7 +67,7 @@ func TestHTTPRequestExecutor_ComponentClassifiesAndRetriesNetworkFailure(t *test
 
 	result, err := harness.Execute(context.Background(), agentic.ToolCall{
 		ID: "network-retry", Name: "http_request",
-		Arguments: map[string]any{"url": "http://retry.example/page"},
+		Arguments: map[string]any{"url": "http://retry.example/page", "method": "GET"},
 	})
 
 	require.NoError(t, err)

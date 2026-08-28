@@ -166,11 +166,15 @@ func httpFailureKind(err error) agentic.ToolErrorKind {
 
 // ListTools returns the http_request tool definition.
 func (e *HTTPRequestExecutor) ListTools() []agentic.ToolDefinition {
+	effect := agentic.ToolEffectReadOnly
+	if e.publisher != nil {
+		effect = agentic.ToolEffectMutating
+	}
 	return []agentic.ToolDefinition{
 		{
 			Name:        "http_request",
-			Description: "Fetch one URL and return bounded content with final-URL, content-type, and truncation metadata. Static HTML is converted to Markdown-like readable text; JavaScript is not executed.",
-			Effect:      agentic.ToolEffectExternal,
+			Description: "Read one URL with GET and return bounded content with final-URL, content-type, and truncation metadata. Static HTML is converted to Markdown-like readable text; JavaScript is not executed.",
+			Effect:      effect,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -180,7 +184,8 @@ func (e *HTTPRequestExecutor) ListTools() []agentic.ToolDefinition {
 					},
 					"method": map[string]any{
 						"type":        "string",
-						"description": "HTTP method: GET or POST (default: GET)",
+						"enum":        []string{"GET"},
+						"description": "HTTP method: GET only (default: GET)",
 					},
 				},
 				"required": []string{"url"},
@@ -198,6 +203,19 @@ func (e *HTTPRequestExecutor) Execute(ctx context.Context, call agentic.ToolCall
 	if !ok || rawURL == "" {
 		return httpFailureResult(call.ID, httpFail(agentic.ToolErrorInvalidArgs, "url is required"))
 	}
+	method := "GET"
+	if rawMethod, exists := call.Arguments["method"]; exists {
+		m, methodOK := rawMethod.(string)
+		if !methodOK {
+			return httpFailureResult(call.ID, httpFail(agentic.ToolErrorInvalidArgs, "method must be GET"))
+		}
+		if m != "" {
+			method = strings.ToUpper(m)
+		}
+	}
+	if method != "GET" {
+		return httpFailureResult(call.ID, httpFail(agentic.ToolErrorInvalidArgs, "method must be GET"))
+	}
 
 	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
 		return httpFailureResult(call.ID, httpFail(agentic.ToolErrorInvalidArgs, "url must start with http:// or https://"))
@@ -209,14 +227,6 @@ func (e *HTTPRequestExecutor) Execute(ctx context.Context, call agentic.ToolCall
 	if len(canonicalURL.String()) > httpMaxURLSize {
 		return httpFailureResult(call.ID, httpFail(agentic.ToolErrorInvalidArgs,
 			"URL exceeds %d-byte policy bound", httpMaxURLSize))
-	}
-
-	method := "GET"
-	if m, ok := call.Arguments["method"].(string); ok && m != "" {
-		method = strings.ToUpper(m)
-	}
-	if method != "GET" && method != "POST" {
-		return httpFailureResult(call.ID, httpFail(agentic.ToolErrorInvalidArgs, "method must be GET or POST"))
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, e.effectiveTimeout())
@@ -311,17 +321,19 @@ type httpReadable struct {
 }
 
 func httpReadableResponse(body []byte, contentType string, rawTruncated bool) (httpReadable, error) {
-	mediaType, _, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		mediaType = strings.TrimSpace(strings.Split(contentType, ";")[0])
+	mediaType, _, parseErr := mime.ParseMediaType(contentType)
+	charsetContentType := contentType
+	if strings.TrimSpace(contentType) == "" || parseErr != nil || httpGenericMediaType(mediaType) {
+		detectedContentType := http.DetectContentType(body)
+		detectedMediaType, _, detectedErr := mime.ParseMediaType(detectedContentType)
+		if detectedErr == nil {
+			mediaType = detectedMediaType
+			charsetContentType = detectedContentType
+		}
 	}
 	isHTML := strings.EqualFold(mediaType, "text/html") || strings.EqualFold(mediaType, "application/xhtml+xml")
-	if !isHTML {
-		detected, _, _ := mime.ParseMediaType(http.DetectContentType(body))
-		isHTML = strings.EqualFold(detected, "text/html")
-	}
 	if isHTML {
-		decodedReader, decodeErr := htmlcharset.NewReader(bytes.NewReader(body), contentType)
+		decodedReader, decodeErr := htmlcharset.NewReader(bytes.NewReader(body), charsetContentType)
 		if decodeErr != nil {
 			return httpReadable{}, httpRekind(agentic.ToolErrorExternal, "decode HTML charset", decodeErr)
 		}
@@ -364,6 +376,11 @@ func httpReadableResponse(body []byte, contentType string, rawTruncated bool) (h
 		Transform: "raw",
 		Truncated: rawTruncated || textTruncated,
 	}, nil
+}
+
+func httpGenericMediaType(mediaType string) bool {
+	return strings.EqualFold(mediaType, "application/octet-stream") ||
+		strings.EqualFold(mediaType, "binary/octet-stream")
 }
 
 func httpWithTruncationSentinel(text string) string {

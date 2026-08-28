@@ -139,6 +139,8 @@ func TestHTTPRequestExecutor_ListTools(t *testing.T) {
 	require.Len(t, tools, 1)
 	tool := tools[0]
 	assert.Equal(t, "http_request", tool.Name)
+	assert.Equal(t, agentic.ToolEffectReadOnly, tool.Effect)
+	assert.Contains(t, tool.Description, "GET")
 	assert.Contains(t, tool.Description, "Markdown-like")
 	assert.Contains(t, tool.Description, "JavaScript is not executed")
 
@@ -146,10 +148,68 @@ func TestHTTPRequestExecutor_ListTools(t *testing.T) {
 	require.True(t, ok, "parameters must have a properties map")
 	assert.Contains(t, props, "url")
 	assert.Contains(t, props, "method")
+	method, ok := props["method"].(map[string]any)
+	require.True(t, ok, "method must have a schema")
+	assert.Equal(t, []string{"GET"}, method["enum"])
 
 	required, ok := tool.Parameters["required"].([]string)
 	require.True(t, ok, "parameters must have a required slice")
 	assert.Contains(t, required, "url")
+
+	emittingTool := NewHTTPRequestExecutor(WithHTTPTriplePublisher(&recordingPublisher{})).ListTools()[0]
+	assert.Equal(t, agentic.ToolEffectMutating, emittingTool.Effect)
+}
+
+func TestHTTPRequestExecutor_Execute_ExplicitPlainTextIsNeverHTMLSniffed(t *testing.T) {
+	const body = "<html><head><title>Looks HTML</title></head><body><h1>Keep markup</h1></body></html>"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	port := testServerPort(t, srv)
+	fakeIP := net.ParseIP("93.184.216.14")
+	network := &httpTestNetwork{
+		resolved:    map[string][]net.IP{"plain.example": {fakeIP}},
+		dialTargets: map[string]string{net.JoinHostPort(fakeIP.String(), port): srv.Listener.Addr().String()},
+	}
+	pub := &recordingPublisher{}
+	executor := network.executor(
+		WithHTTPTriplePublisher(pub),
+		WithHTTPPlatform(testPlatform()),
+	)
+
+	result := executeHTTPTestCall(context.Background(), t, executor, "http://plain.example:"+port+"/page")
+
+	require.Empty(t, result.Error)
+	assert.Contains(t, result.Content, "Content-Type: text/plain")
+	assert.Contains(t, result.Content, "Content-Transform: raw")
+	assert.Contains(t, result.Content, body)
+	assert.NotContains(t, result.Content, "Title: Looks HTML")
+
+	facts := make(map[string]any)
+	for _, triple := range pub.triples {
+		facts[triple.Predicate] = triple.Object
+	}
+	assert.Equal(t, "text/plain", facts[agvocab.WebContentType])
+	assert.Equal(t, body, facts[agvocab.WebText])
+}
+
+func TestHTTPReadableResponse_SniffsHTMLOnlyForUnusableMIME(t *testing.T) {
+	body := []byte("<html><body><h1>Reference</h1></body></html>")
+	for _, contentType := range []string{"", ";", "application/octet-stream"} {
+		readable, err := httpReadableResponse(body, contentType, false)
+		require.NoError(t, err, "Content-Type %q", contentType)
+		assert.Equal(t, "html-to-markdown", readable.Transform, "Content-Type %q", contentType)
+		assert.Contains(t, readable.Text, "# Reference", "Content-Type %q", contentType)
+	}
+
+	for _, contentType := range []string{"text/plain", "application/json"} {
+		readable, err := httpReadableResponse(body, contentType, false)
+		require.NoError(t, err, "Content-Type %q", contentType)
+		assert.Equal(t, "raw", readable.Transform, "Content-Type %q", contentType)
+		assert.Equal(t, string(body), readable.Text, "Content-Type %q", contentType)
+	}
 }
 
 func TestHTTPHTMLToMarkdown_StructuralMarkupCannotExceedBound(t *testing.T) {
@@ -891,13 +951,31 @@ func TestHTTPRequestExecutor_Execute_InputValidation(t *testing.T) {
 			wantErrFrag: "user information is not allowed",
 		},
 		{
+			name: "method POST rejected",
+			call: agentic.ToolCall{
+				ID:        "c-post",
+				Name:      "http_request",
+				Arguments: map[string]any{"url": "http://127.0.0.1/", "method": "POST"},
+			},
+			wantErrFrag: "method must be GET",
+		},
+		{
+			name: "method must be a string",
+			call: agentic.ToolCall{
+				ID:        "c-method-type",
+				Name:      "http_request",
+				Arguments: map[string]any{"url": "http://127.0.0.1/", "method": 7},
+			},
+			wantErrFrag: "method must be GET",
+		},
+		{
 			name: "method DELETE rejected",
 			call: agentic.ToolCall{
 				ID:        "c7",
 				Name:      "http_request",
 				Arguments: map[string]any{"url": "http://127.0.0.1/", "method": "DELETE"},
 			},
-			wantErrFrag: "method must be GET or POST",
+			wantErrFrag: "method must be GET",
 		},
 		{
 			name: "method PUT rejected",
@@ -906,7 +984,7 @@ func TestHTTPRequestExecutor_Execute_InputValidation(t *testing.T) {
 				Name:      "http_request",
 				Arguments: map[string]any{"url": "http://127.0.0.1/", "method": "PUT"},
 			},
-			wantErrFrag: "method must be GET or POST",
+			wantErrFrag: "method must be GET",
 		},
 	}
 
@@ -926,23 +1004,27 @@ func TestHTTPRequestExecutor_Execute_InputValidation(t *testing.T) {
 	}
 }
 
-// TestHTTPRequestExecutor_Execute_MethodRejectedBeforeNetwork proves argument
-// validation does not perform DNS or dialing first.
-func TestHTTPRequestExecutor_Execute_MethodRejectedBeforeNetwork(t *testing.T) {
+// TestHTTPRequestExecutor_Execute_POSTRejectedBeforeExternalEffect proves the
+// retired mutating method cannot reach DNS, dialing, or a remote server.
+func TestHTTPRequestExecutor_Execute_POSTRejectedBeforeExternalEffect(t *testing.T) {
 	e := NewHTTPRequestExecutor(WithHTTPTimeout(2 * time.Second))
 	e.lookupIP = func(_ context.Context, _ string) ([]net.IP, error) {
 		t.Fatal("method validation reached DNS")
 		return nil, nil
 	}
+	e.dialContext = func(_ context.Context, _, _ string) (net.Conn, error) {
+		t.Fatal("method validation reached dial")
+		return nil, nil
+	}
 	ctx := context.Background()
 
 	result, err := e.Execute(ctx, agentic.ToolCall{
-		ID:        "method-del",
+		ID:        "method-post",
 		Name:      "http_request",
-		Arguments: map[string]any{"url": "http://127.0.0.1/", "method": "DELETE"},
+		Arguments: map[string]any{"url": "http://example.com/", "method": "POST"},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "method must be GET or POST", result.Error)
+	assert.Equal(t, "method must be GET", result.Error)
 	assert.Equal(t, agentic.ToolErrorInvalidArgs, result.ErrorKind)
 	assert.Empty(t, result.Content)
 }
@@ -1227,12 +1309,12 @@ func TestHTTPRequestExecutor_MethodCaseNormalization(t *testing.T) {
 	})
 	require.NoError(t, err)
 	// SSRF blocks loopback before method check completes — but no method error.
-	assert.NotContains(t, result.Error, "method must be GET or POST")
+	assert.NotContains(t, result.Error, "method must be GET")
 }
 
 // TestHTTPRequestExecutor_InvalidMethodMessage pins the public validation text.
 func TestHTTPRequestExecutor_InvalidMethodMessage(t *testing.T) {
-	expected := "method must be GET or POST"
+	expected := "method must be GET"
 	e := NewHTTPRequestExecutor(WithHTTPTimeout(100 * time.Millisecond))
 	result, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:        "bad-method",
