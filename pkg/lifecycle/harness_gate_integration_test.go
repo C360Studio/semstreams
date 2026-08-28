@@ -101,6 +101,10 @@ func TestHarnessBirthPassesRegisteredTypeGate(t *testing.T) {
 	require.NoError(t, err)
 	created, err := graphingest.CreateGraphIngest(configJSON, component.Dependencies{
 		NATSClient: client, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+		// graph-ingest refuses an absent deployment authority (ADR-102 d5) and
+		// rejects any subject outside it, so the fixture pair must match the
+		// entity IDs this file uses.
+		Platform: component.PlatformMeta{Org: "c360", Platform: "platform1"},
 	})
 	require.NoError(t, err)
 	ingest := created.(*graphingest.Component)

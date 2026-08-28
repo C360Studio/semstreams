@@ -53,7 +53,13 @@ func startGraphIngestForLessons(t *testing.T, natsClient *natsclient.Client) {
 	configJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
 
-	comp, err := graphingest.CreateGraphIngest(configJSON, component.Dependencies{NATSClient: natsClient, PayloadRegistry: payloadbuiltins.NewTestRegistry(t)})
+	comp, err := graphingest.CreateGraphIngest(configJSON, component.Dependencies{
+		NATSClient: natsClient, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+		// graph-ingest refuses an absent deployment authority (ADR-102 d5) and
+		// rejects any subject outside it, so the fixture pair must match the entity
+		// IDs this file uses.
+		Platform: component.PlatformMeta{Org: "acme", Platform: "ops"},
+	})
 	require.NoError(t, err)
 
 	gi := comp.(*graphingest.Component)

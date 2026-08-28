@@ -143,7 +143,7 @@ func TestGraphIngest_FailedStartRollbackOwnsExactConsumerAndPreservesDurable(t *
 	if err != nil {
 		t.Fatalf("marshal config: %v", err)
 	}
-	created, err := CreateGraphIngest(configJSON, component.Dependencies{NATSClient: getSharedNATSClient(t).Client, PayloadRegistry: newTestPayloadRegistry(t)})
+	created, err := CreateGraphIngest(configJSON, testDependencies(t, getSharedNATSClient(t).Client))
 	if err != nil {
 		t.Fatalf("CreateGraphIngest: %v", err)
 	}

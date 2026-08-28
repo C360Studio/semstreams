@@ -44,7 +44,14 @@ func startStack(t *testing.T, backstop string) (*graphingest.Component, *natscli
 	// graph-ingest serves graph.ingest.query.prefix + graph.mutation.entity.*
 	giJSON, err := json.Marshal(graphingest.DefaultConfig())
 	require.NoError(t, err)
-	giDisc, err := graphingest.CreateGraphIngest(giJSON, component.Dependencies{NATSClient: nc, PayloadRegistry: itestPayloadRegistry(t)})
+	giDisc, err := graphingest.CreateGraphIngest(giJSON, component.Dependencies{
+		NATSClient: nc, PayloadRegistry: itestPayloadRegistry(t),
+		// graph-ingest refuses an absent deployment authority (ADR-102 d5) and
+		// rejects any subject outside it, so the fixture pair must match the entity
+		// IDs this file uses.
+		// itestPrefix (itest.ops.plan.fanout.unit) is what this file seeds.
+		Platform: component.PlatformMeta{Org: "itest", Platform: "ops"},
+	})
 	require.NoError(t, err)
 	gi := giDisc.(*graphingest.Component)
 	require.NoError(t, gi.Initialize())

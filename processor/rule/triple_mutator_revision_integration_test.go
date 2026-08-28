@@ -58,7 +58,12 @@ func newRevisionClaimHarness(t *testing.T) *revisionClaimHarness {
 	require.NoError(t, err)
 	created, err := graphingest.CreateGraphIngest(
 		rawConfig,
-		component.Dependencies{NATSClient: testClient.Client, PayloadRegistry: revisionClaimRegistry(t)},
+		component.Dependencies{
+			NATSClient: testClient.Client, PayloadRegistry: revisionClaimRegistry(t),
+			// revisionClaimEntityID sits under this pair; graph-ingest refuses
+			// any subject outside its own authority (ADR-102 d5).
+			Platform: component.PlatformMeta{Org: "c360", Platform: "platform"},
+		},
 	)
 	require.NoError(t, err)
 	ingest := created.(*graphingest.Component)

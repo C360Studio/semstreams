@@ -46,7 +46,10 @@ func TestResidentUnregisteredStampIsNotPoison(t *testing.T) {
 
 	configJSON, err := json.Marshal(DefaultConfig())
 	require.NoError(t, err)
-	comp, err := CreateGraphIngest(configJSON, component.Dependencies{NATSClient: nc, PayloadRegistry: payloadbuiltins.NewTestRegistry(t)})
+	comp, err := CreateGraphIngest(configJSON, component.Dependencies{
+		NATSClient: nc, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+		Platform: component.PlatformMeta{Org: "c360", Platform: "test"},
+	})
 	require.NoError(t, err)
 	c := comp.(*Component)
 	require.NoError(t, c.Initialize())

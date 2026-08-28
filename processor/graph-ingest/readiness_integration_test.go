@@ -70,7 +70,7 @@ func startIngestForReadiness(ctx context.Context, t *testing.T) (*natsclient.Tes
 	configJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
 
-	comp, err := CreateGraphIngest(configJSON, testDependencies(t, tc.Client))
+	comp, err := CreateGraphIngest(configJSON, testDependencies(t, tc.Client, withAuthority("c360", "test")))
 	require.NoError(t, err)
 
 	c := comp.(*Component)
@@ -171,7 +171,7 @@ func TestIntegration_ReadinessEnvelope_BacklogIsNotReady(t *testing.T) {
 	cfg := DefaultConfig()
 	configJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
-	comp, err := CreateGraphIngest(configJSON, testDependencies(t, tc.Client))
+	comp, err := CreateGraphIngest(configJSON, testDependencies(t, tc.Client, withAuthority("c360", "test")))
 	require.NoError(t, err)
 	c := comp.(*Component)
 	c.statusInterval = 100 * time.Millisecond
@@ -248,7 +248,7 @@ func TestIntegration_ReadinessEnvelope_NoStreamingPortIsHonestlyCaughtUp(t *test
 	configJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
 
-	comp, err := CreateGraphIngest(configJSON, testDependencies(t, tc.Client))
+	comp, err := CreateGraphIngest(configJSON, testDependencies(t, tc.Client, withAuthority("c360", "test")))
 	require.NoError(t, err)
 	c := comp.(*Component)
 	c.statusInterval = 100 * time.Millisecond
@@ -330,7 +330,7 @@ func TestIntegration_ReadyImpliesTheWritesAreDurable(t *testing.T) {
 	cfg := DefaultConfig()
 	configJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
-	comp, err := CreateGraphIngest(configJSON, testDependencies(t, tc.Client))
+	comp, err := CreateGraphIngest(configJSON, testDependencies(t, tc.Client, withAuthority("c360", "test")))
 	require.NoError(t, err)
 	c := comp.(*Component)
 	c.statusInterval = 50 * time.Millisecond

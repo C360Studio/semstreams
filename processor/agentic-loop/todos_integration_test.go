@@ -75,7 +75,13 @@ func TestIntegration_TodoWriteReadRoundTrip(t *testing.T) {
 	configJSON, err := json.Marshal(config)
 	require.NoError(t, err)
 
-	comp, err := graphingest.CreateGraphIngest(configJSON, component.Dependencies{NATSClient: natsClient, PayloadRegistry: payloadbuiltins.NewTestRegistry(t)})
+	comp, err := graphingest.CreateGraphIngest(configJSON, component.Dependencies{
+		NATSClient: natsClient, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+		// graph-ingest refuses an absent deployment authority (ADR-102 d5) and
+		// rejects any subject outside it, so the fixture pair must match the entity
+		// IDs this file uses.
+		Platform: component.PlatformMeta{Org: "acme", Platform: "ops"},
+	})
 	require.NoError(t, err)
 	c := comp.(*graphingest.Component)
 	require.NoError(t, c.Initialize())
@@ -191,7 +197,13 @@ func TestIntegration_FreshLoopReturnsEmptyList(t *testing.T) {
 	configJSON, err := json.Marshal(config)
 	require.NoError(t, err)
 
-	comp, err := graphingest.CreateGraphIngest(configJSON, component.Dependencies{NATSClient: natsClient, PayloadRegistry: payloadbuiltins.NewTestRegistry(t)})
+	comp, err := graphingest.CreateGraphIngest(configJSON, component.Dependencies{
+		NATSClient: natsClient, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+		// graph-ingest refuses an absent deployment authority (ADR-102 d5) and
+		// rejects any subject outside it, so the fixture pair must match the entity
+		// IDs this file uses.
+		Platform: component.PlatformMeta{Org: "acme", Platform: "ops"},
+	})
 	require.NoError(t, err)
 	c := comp.(*graphingest.Component)
 	require.NoError(t, c.Initialize())
