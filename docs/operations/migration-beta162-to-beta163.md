@@ -494,12 +494,76 @@ GraphQL value `entityTypes[].type`, now `system.domain.type`.
 | semsage | `OrgDefault`/`PlatformDefault` constants → config; `_` placeholder fixture |
 | semmem | 5-part fixtures → six-part in the new order; imported lessons opt-in by scope (O-13); curation status on an imported lesson lives on a local overlay entity (O-12) — both land with slice B |
 
-### Not in this slice (slice B, a later PR)
+### Slice B (this PR) — the boundary is now enforced
 
-The graph-ingest authority gate (`entity_id_authority_invalid` on every lane), the `JetStreamPort.Import` lane, the
-hierarchy-inference skip for foreign authority, and #1096 (the rule engine's run-scope mint under `deps.Platform` with
-`agent.run.origin-entity-id`). Until slice B lands, an entity claiming a foreign or colliding authority is still
-accepted as local truth; the coded validator `pkg/types.ValidateEntityIDAuthority` exists and is unwired.
+Slice A shipped `pkg/types.ValidateEntityIDAuthority` and left it unwired. Slice B wires it. What follows is the
+whole adopter-facing surface, and for each one what happens if you do nothing.
+
+**What must an adopter know.** Four things, no more:
+
+1. **Your composition root must carry `platform.org` and `platform.id`.** graph-ingest and the rule processor now
+   REFUSE to construct without them (`deps.Platform`). Config load has always required both, so a deployment that
+   loads a config already satisfies this; a binary that hand-builds `component.Dependencies` does not.
+2. **graph-ingest accepts only entities your deployment minted** — positions 1-2 of every candidate SUBJECT must
+   equal your `org`/`platform`, on every lane, before any KV I/O. Rejection is coded
+   `entity_id_authority_invalid` with reason `foreign_authority`, metered
+   `mutation_rejections{reason="authority_foreign"}`, and logged WARN with the lane and segment index (never the
+   identity).
+3. **To hold a peer's entities, declare an import lane** — `"import": true` on a `jetstream` INPUT port. On that
+   lane a foreign pair is persisted byte-for-byte and a subject claiming YOUR pair is refused
+   (`local_authority_claimed` / `mutation_rejections{reason="authority_claimed"}`). The reference declaration is
+   `configs/graph-backend.json`'s `peer_import` port on `peer.entity.>`. It is an operator statement of trust and
+   nothing is authenticated: the recorded provenance is the port declaration plus the envelope `source` string.
+4. **An import is a READ-ONLY mirror** (ruled O-12(a)). No local lane mutates a foreign subject — not `entity.create`,
+   not `triple.append`, not `entity.reconcile`, not `entity.delete`, and not the framework's own writes. Every local
+   fact about an imported entity lives on a LOCAL subject that references it through an `@id` triple; `@id` OBJECTS
+   are never authority-checked, no stub is created for them, and an absent target is permitted, which is what makes
+   that pattern work.
+
+**What SHOULD an adopter have to know? Ideally only (3).** The framework already holds your `org`/`platform`; it does
+not ask you to restate the pair anywhere, to predict which writes are local, or to compute a lane. `import` is the one
+knob, and it exists because trusting a peer is a decision only an operator can make. Everything else is observed:
+the boundary compares against the pair it already has and reports the real outcome.
+
+**What happens if you do nothing — three loud paths and one silent one.**
+
+- *No `platform.org` / `platform.id`* → **LOUD.** Boot fails at the factory:
+  `deps.Platform must carry the deployment authority (platform.org and platform.id)`.
+- *A peer's entities arriving on an ordinary lane* → **LOUD.** Each is refused with the coded error, counted under
+  `mutation_rejections{reason="authority_foreign"}`, and logged. Nothing is written; nothing is silently dropped.
+- *A direct `inference.NewHierarchyInference` consumer that does not set `HierarchyConfig.Org`/`Platform`* →
+  **LOUD.** With `Enabled: true` and no pair, `GetHierarchyTriples` returns a classified error rather than deciding
+  every entity is foreign and minting nothing forever.
+- *A rule chained off the run anchors of an IMPORTED firing entity* → **SILENT, and this is the one to read twice.**
+  When a rule with `run_scope=new` fires on an imported loop, the framework writes NOTHING to that loop: neither
+  `agent.loop.run`, nor `agent.run.entity-id`, nor the `rule.task.spawned` back-reference. A chained rule whose
+  condition reads `$entity.triple.agent.run.entity-id` or `$entity.triple.rule.spawned_task` off that entity simply
+  never fires. **A rule that does not fire logs nothing and fails nothing** — the only signal is
+  `rule_run_anchor_skipped_total{reason="foreign_authority"}` rising and one Info line per action naming which writes
+  were skipped. If your rule packs chain off either predicate and any of your firing entities are imported, re-point
+  those rules at the LOCAL run entity (`org.platform.chain.agent.execution.<loopID>`) or its local children before
+  you upgrade. Hierarchy is the same shape and the same ruling: an imported entity is persisted with no
+  `hierarchy.*` triple, no container, and no sibling edge, so structural-tier queries return fewer edges over
+  imported data and nothing says so.
+
+**The linkage that replaces those writes.** Every agent run — local origin or imported — now carries
+`agent.run.origin-entity-id` on the LOCAL run entity, naming the loop it was minted from, set at birth by
+`agentrun.Mint`. It is the one home for the run→loop pointer that never depends on writing the loop. Walk it from the
+run side: run → `agent.run.origin-entity-id` → the mirrored loop → its `agent.loop.parent` chain.
+
+**Exported signature changes:** `agentrun.Mint(ctx, mgr, org, platform, rootLoopID, originEntityID)` gains the
+origin; `AgentRun` gains `OriginEntityID`; `component.JetStreamPort` gains `Import`; `component.StreamFacts` gains
+`Import()`; `inference.HierarchyConfig` gains `Org`/`Platform` (both `json:"-"` — framework-owned, never operator
+config). `agvocab.RunOriginEntityID = "agent.run.origin-entity-id"` is a new declared predicate.
+
+**Stated limit on the origin predicate.** The design calls `agent.run.origin-entity-id` an `@id` predicate, and its
+object IS a canonical entity ID — but the stored triple carries no `@id` datatype marker, because the Lifecycle
+harness has no write-side datatype channel: `pkg/lifecycle` emits every projected triple through one helper that sets
+Subject, Predicate, Object, Timestamp and Confidence and nothing else (`pkg/lifecycle/graph_emit.go`; the package
+contains no `Datatype` reference at all). Its sibling `agent.run.parent-entity-id` and the run anchor
+`agent.run.entity-id` behave identically today, so this is the family's existing convention rather than a new gap.
+The consequence is narrow and worth knowing: `pkg/fusion`'s graph facet projects an edge only for a lens-declared
+predicate or an explicit `@id`, so the origin link reads as a property fact there unless your lens declares it.
 
 ### Interaction with the ADR-103 section above
 

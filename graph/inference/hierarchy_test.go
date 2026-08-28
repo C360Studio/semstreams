@@ -135,6 +135,52 @@ const (
 	hierarchyTestPlatform = "logistics"
 )
 
+// TestGetHierarchyTriplesSkipsForeignAuthority is the DISCRIMINATING test for
+// the ADR-102 skip, and it lives here rather than at the graph-ingest seam for a
+// measured reason: at that seam the skip is shadowed. graph-ingest's own
+// authority gate refuses every container birth under a peer's pair, which makes
+// GetHierarchyTriples return a joined error, and the merge path then discards
+// the WHOLE triple set on any error (component.go, "Failed to get hierarchy
+// triples") — so an imported entity ends up with no hierarchy triples whether
+// this check exists or not. Deleting the check is invisible there and visible
+// here.
+//
+// It also covers the case graph-ingest cannot: this is exported framework
+// surface, and a consumer calling GetHierarchyTriples directly has no second
+// layer behind it.
+func TestGetHierarchyTriplesSkipsForeignAuthority(t *testing.T) {
+	entityManager := newMockEntityManager()
+	tripleAdder := &hierarchyMockTripleAdder{}
+	hi := NewHierarchyInference(entityManager, tripleAdder, HierarchyConfig{
+		Org:                hierarchyTestOrg,
+		Platform:           hierarchyTestPlatform,
+		Enabled:            true,
+		CreateTypeEdges:    true,
+		CreateSystemEdges:  true,
+		CreateDomainEdges:  true,
+		CreateTypeSiblings: true,
+	}, nil)
+
+	// A peer deployment's entity: same org, different platform, canonical shape.
+	const imported = hierarchyTestOrg + ".dep9.sensor.document.temperature.sensor-001"
+
+	triples, err := hi.GetHierarchyTriples(context.Background(), imported)
+
+	require.NoError(t, err, "a foreign entity is skipped, not rejected")
+	assert.Empty(t, triples, "no membership or sibling triple may be minted for an imported entity")
+	assert.Empty(t, entityManager.getCreatedEntities(),
+		"no container entity may be born under a peer's authority")
+	assert.Empty(t, tripleAdder.getTriples(),
+		"no inverse edge may be written for an imported entity")
+
+	// The same shape under THIS deployment's authority still mints, so the skip
+	// is authority-scoped rather than a blanket disable.
+	local := hierarchyTestOrg + "." + hierarchyTestPlatform + ".sensor.document.temperature.sensor-001"
+	localTriples, err := hi.GetHierarchyTriples(context.Background(), local)
+	require.NoError(t, err)
+	assert.NotEmpty(t, localTriples, "a local entity still receives hierarchy triples")
+}
+
 func TestHierarchyInference_InverseEdgeWriteFailureIsNonFatal(t *testing.T) {
 	// Every in-process inverse-edge write rejects — simulating a must-exist
 	// "entity not found" on the sibling/container target.

@@ -63,21 +63,25 @@ func authorityMetricReason(err error) (string, bool) {
 // identity: the whole point of the gate is that a foreign identity is not this
 // deployment's to publish, and a rejected one reaching operator logs would
 // re-publish exactly what was refused.
-func (c *Component) recordAuthorityRejection(subject, reason string, err error) {
+func (c *Component) recordAuthorityRejection(arrival, reason string, err error) {
 	if c.mutationRejections != nil {
-		c.mutationRejections.WithLabelValues(subject, reason).Inc()
+		c.mutationRejections.WithLabelValues(arrival, reason).Inc()
 	}
 	if c.logger == nil {
 		return
 	}
+	// arrival is the NATS subject the write came in on — the mutation operation
+	// or the fact-lane filter subject. It names WHERE, and carries no identity.
 	attrs := []any{
-		slog.String("lane", subject),
+		slog.String("arrival", arrival),
 		slog.String("reason", reason),
 	}
 	var classified *errs.ClassifiedError
 	if errors.As(err, &classified) {
+		// lane is the authority lane the candidate was judged on: "local" or
+		// "import" (pkg/types.EntityIDLane*).
 		if lane, ok := classified.Detail[semtypes.EntityIDDetailLane].(string); ok {
-			attrs = append(attrs, slog.String("arrival", lane))
+			attrs = append(attrs, slog.String("lane", lane))
 		}
 		if index, ok := classified.Detail[semtypes.EntityIDDetailSegmentIndex].(int); ok {
 			attrs = append(attrs, slog.Int("segment_index", index))

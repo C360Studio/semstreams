@@ -47,6 +47,13 @@ const (
 	// canonical — only its positions 1-2 differ — so a structural rejection
 	// here would prove nothing about the authority gate.
 	authorityForeignID = "acme.dep2.src.git.commit.a1"
+	// authorityForeignSiblingID shares authorityForeignID's five-position type
+	// prefix. Sibling edges need no container, so with hierarchy enabled a
+	// second import under the same prefix is the ONE path that would put a
+	// hierarchy triple on an imported entity even while every container birth
+	// is refused elsewhere — which is what makes the skip in
+	// GetHierarchyTriples load-bearing rather than shadowed.
+	authorityForeignSiblingID = "acme.dep2.src.git.commit.a2"
 	// authorityLocalClaimID carries THIS deployment's pair and is what a peer
 	// must not be able to mint through an import lane.
 	authorityLocalClaimID = "acme.dep1.src.git.commit.a1"
@@ -280,14 +287,20 @@ func TestImportLaneAcceptsForeignRejectsLocalClaim(t *testing.T) {
 func TestHierarchySkipsForeignAuthority(t *testing.T) {
 	h := startAuthorityGateComponent(t, true)
 
+	// Two imports sharing a type prefix: the second would take the sibling-edge
+	// path, which mints a forward hierarchy triple onto the entity itself
+	// without needing a container.
 	h.publishFact(t, authorityImportSubject, authorityForeignID)
-	stored := h.awaitEntity(t, authorityForeignID)
+	h.awaitEntity(t, authorityForeignID)
+	h.publishFact(t, authorityImportSubject, authorityForeignSiblingID)
+	h.awaitEntity(t, authorityForeignSiblingID)
 
-	for _, tr := range stored.Triples {
-		assert.NotContains(t, tr.Predicate, "hierarchy.",
-			"an imported entity must carry no hierarchy triple (got %q)", tr.Predicate)
+	for _, id := range []string{authorityForeignID, authorityForeignSiblingID} {
+		for _, tr := range h.awaitEntity(t, id).Triples {
+			assert.NotContains(t, tr.Predicate, "hierarchy.",
+				"imported entity %q must carry no hierarchy triple (got %q)", id, tr.Predicate)
+		}
 	}
-
 	// No container was born under the peer's authority.
 	parsed, err := semtypes.ParseEntityID(authorityForeignID)
 	require.NoError(t, err)

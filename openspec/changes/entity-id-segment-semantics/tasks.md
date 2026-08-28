@@ -99,7 +99,7 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
       (the two constructors do not compile with the new parameters).
       **Done:** `agentic/entity_ids_semantics_test.go` (nine builder rows, the `graph.NewAlertEvent(org, platform, …)` row, the gated-DAG pattern, `LoopIDFromExecutionEntityID` rejecting the retired order, and `TestAlertIdentityCarriesTheDeploymentAuthority`); the trigger row lives in `processor/rule/graph_event_identity_semantics_test.go` because `ruleTriggerEntityID` is unexported; the e2e mission row in `cmd/e2e-semstreams/mission/entity_id_semantics_test.go`. Did not compile at baseline (see 2.9). GREEN for the agentic rows only after 5.1 lands on the merged tree.
 
-- [ ] 2.5 `processor/graph-ingest/authority_gate_integration_test.go` (`//go:build integration`; real NATS via the
+- [x] 2.5 `processor/graph-ingest/authority_gate_integration_test.go` (`//go:build integration`; real NATS via the
       package's existing test client): `TestAuthorityGateRejectsForeignOnFactLane` — deployment `acme.dep1`; publish a
       Graphable whose ID is `acme.dep2.src.git.commit.a1` on a non-import port; assert no `ENTITY_STATES` key is
       created and `mutation_rejections{reason="authority_foreign"}` == 1. `TestAuthorityGateRejectsForeignOnMutationLane`
@@ -115,9 +115,15 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
       lane targeting the imported subject is rejected `foreign_authority` and the import's revision is unchanged.
       MUST fail at baseline (no gate exists: the foreign write lands, the annotation lands, and the container is
       minted under `acme.dep2`).
-      **Slice B — not done in this PR** (graph-ingest boundary tests belong with the gate they exercise).
+      **Done (slice B):** `processor/graph-ingest/authority_gate_integration_test.go` — all six named tests, driving
+      the assembled component against real NATS (consume closure → keyed pool → `processIngest` for the fact lane;
+      `SubscribeForRequests`-registered canonical handlers over request/reply for the mutation lane). Did not compile
+      at baseline (see 2.9). **One row was strengthened after a measured mutation result:**
+      `TestHierarchySkipsForeignAuthority` as this row specifies could NOT kill M13 — see 4.13 — so it now imports
+      TWO peers sharing a type prefix, the sibling-edge path being the only one that reaches an imported entity
+      without a container; the discriminating test for the skip lives in `graph/inference` (4.13).
 
-- [ ] 2.6 `processor/rule/actions_run_scope_integration_test.go` (`//go:build integration`; a recording
+- [x] 2.6 `processor/rule/actions_run_scope_integration_test.go` (`//go:build integration`; a recording
       `tripleMutator` that captures every `AddTriple` subject): `TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite`
       — deployment `acme.dep1`; a rule with `run_scope=new` fires on `foreign.dep9.agentic-loop.agent.execution.<uuid>`
       (a peer deployment's own loop execution, because `LoopIDFromExecutionEntityID` (`actions.go:1554`,
@@ -138,7 +144,15 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
       `id:acme.dep1.src` matches a loop scoped to `acme.dep1.src.git.commit.a1` and not `acme.dep1.other.git.commit.a1`.
       GREEN at baseline (segment-boundary matching is order-agnostic, inventory L2): a documenting test, outside the
       2.9 baseline capture; it pins the meaning the spec delta assigns to three positions.
-      **Partly done (slice A rows):** `TestSegmentTokensResolveByName` / `TestSegmentTokensUnresolvedOnInvalidID` in `processor/rule/entity_substitution_test.go` (the first did not pass at baseline, the second did — see 2.9); `TestAppliesToThreeSegmentsIsSourceScope` in `processor/agentic-loop/lessonmatch/lessonmatch_scope_test.go` — the matcher's home rather than `emit_lesson_test.go`, which PR #1109 owns during this window (GREEN at baseline, documenting). The two `actions_run_scope_integration_test.go` rows are slice B and are not done in this PR.
+      **Partly done (slice A rows):** `TestSegmentTokensResolveByName` / `TestSegmentTokensUnresolvedOnInvalidID` in `processor/rule/entity_substitution_test.go` (the first did not pass at baseline, the second did — see 2.9); `TestAppliesToThreeSegmentsIsSourceScope` in `processor/agentic-loop/lessonmatch/lessonmatch_scope_test.go` — the matcher's home rather than `emit_lesson_test.go`, which PR #1109 owns during this window (GREEN at baseline, documenting).
+      **Done (slice B):** `processor/rule/actions_run_scope_integration_test.go` — both named tests over a real
+      graph-ingest, a real `lifecycle.Manager` with `agentrun.Register`, the real `tripleMutator` wrapped by a
+      recording one, and the production `executor.Execute`. Did not compile at baseline (see 2.9). The imported loop
+      is seeded straight into `ENTITY_STATES` as the mirror an import lane would have left — the import path itself
+      is proven by 2.5's `TestImportLaneAcceptsForeignRejectsLocalClaim`. **The first test found a defect this row
+      did not predict:** `rule.task.spawned` is a THIRD framework write to the firing entity on the same action, and
+      it reached the foreign subject. The requirement is "no mutation request targets the foreign subject", so the
+      skip now covers it; the delta and 6.3 were amended.
 
 - [x] 2.7 `processor/graph-query/summary_test.go`: `TestGraphSummaryTypeKeyFollowsCanonicalOrder` — the
       `EntityTypeSummary.Type` for `acme.dep1.src.git.commit.a1` is `src.git.commit`, built from named fields.
@@ -298,6 +312,39 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
 
       Two rows did not go RED: `TestAppliesToThreeSegmentsIsSourceScope` (`ok`, a documenting test as the task predicts) and, by value, the export/summary pair (2.7).
 
+      **Slice B RED capture** at `5e5b6dd4` (baseline = the merged slice A head `3f3133a6` + slice B's claim
+      commit), on the two integration files this slice owns, before any of §3.8/§6 was written. Verbatim:
+
+  ```
+  $ go test -race -tags=integration -count=1 -run 'TestAuthorityGate|TestImportLane|TestHierarchySkipsForeignAuthority' ./processor/graph-ingest/
+  # github.com/c360studio/semstreams/processor/graph-ingest [github.com/c360studio/semstreams/processor/graph-ingest.test]
+  processor/graph-ingest/authority_gate_integration_test.go:92:4: unknown field Import in struct literal of type component.JetStreamPort
+  processor/graph-ingest/authority_gate_integration_test.go:157:72: undefined: authorityMetricReasonForeign
+  processor/graph-ingest/authority_gate_integration_test.go:165:65: undefined: authorityMetricReasonForeign
+  processor/graph-ingest/authority_gate_integration_test.go:265:22: undefined: authorityMetricReasonClaimed
+  processor/graph-ingest/authority_gate_integration_test.go:273:66: undefined: authorityMetricReasonClaimed
+  FAIL	github.com/c360studio/semstreams/processor/graph-ingest [build failed]
+  FAIL
+
+  $ go test -race -tags=integration -count=1 -run 'TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite|TestRunScopeNewOnLocalLoopStampsAnchorAndOrigin' ./processor/rule/
+  # github.com/c360studio/semstreams/processor/rule [github.com/c360studio/semstreams/processor/rule.test]
+  processor/rule/actions_run_scope_integration_test.go:98:3: unknown field runAnchorSkippedTotal in struct literal of type Metrics
+  processor/rule/actions_run_scope_integration_test.go:152:11: executor.setPlatform undefined (type *ActionExecutor has no field or method setPlatform)
+  processor/rule/actions_run_scope_integration_test.go:154:11: executor.setMetrics undefined (type *ActionExecutor has no field or method setMetrics)
+  processor/rule/actions_run_scope_integration_test.go:227:46: undefined: agvocab.RunOriginEntityID
+  processor/rule/actions_run_scope_integration_test.go:229:11: undefined: agvocab.RunOriginEntityID
+  processor/rule/actions_run_scope_integration_test.go:242:13: h.metrics.runAnchorSkippedTotal undefined (type *Metrics has no field or method runAnchorSkippedTotal)
+  processor/rule/actions_run_scope_integration_test.go:267:46: undefined: agvocab.RunOriginEntityID
+  processor/rule/actions_run_scope_integration_test.go:280:13: h.metrics.runAnchorSkippedTotal undefined (type *Metrics has no field or method runAnchorSkippedTotal)
+  FAIL	github.com/c360studio/semstreams/processor/rule [build failed]
+  FAIL
+  ```
+
+      Both are build failures, which is the honest RED for this slice: the six graph-ingest rows need
+      `JetStreamPort.Import` and the two metric reason constants, and the two rule rows need
+      `agvocab.RunOriginEntityID` and the executor's platform/metrics seams — none of which existed. A value-level
+      RED was impossible without first adding the surface the tests name.
+
 ## 3. Contract — `pkg/types` and `config`
 
 - [x] 3.1 Reorder `EntityID` fields to `Org, Platform, System, Domain, Type, Instance`; `Key()`/`ParseEntityID` follow;
@@ -351,12 +398,28 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
       ADR-076 d2.
       **Done:** `pkg/types/framework_identity_families.go` — `FrameworkIdentityFamily{Name, System, Domain, Type, InstanceBytes}` with `FixedBytes()` and `EntityID(org, platform, instance)` (fail-closed compose), the table (`rule-alert` 84, `rule-trigger` 86, `web-observation` 40 fixed bytes), `RuleAlertIdentityFamily()`/`RuleTriggerIdentityFamily()`/`WebObservationIdentityFamily()`, `LongestFrameworkIdentityFamily()`, `MaxAuthorityPairBytes()` = 256 − 86 = 170 computed, never a literal. `graph/events.go` and `processor/rule/graph_event_identity.go` compose from the table; `config/config.go` `validateAuthorityPair` rejects over-budget pairs naming `rule-trigger` and 170, then composes the binding family's identity under the pair by observation (which also refuses a dotted or leading-`-` org/id). Amends ADR-076 d2.
 
-- [ ] 3.8 Run origin linkage: declare `agvocab.RunOriginEntityID = "agent.run.origin-entity-id"` (`@id`) beside
+- [x] 3.8 Run origin linkage: declare `agvocab.RunOriginEntityID = "agent.run.origin-entity-id"` (`@id`) beside
       `LoopRunEntityID` (`vocabulary/agentic/predicates.go:502`); add `AgentRun.OriginEntityID` with lifecycle tag
       `predicate=agent.run.origin-entity-id` (`agentic/agentrun/agentrun.go:114-124`) as a birth predicate of the run
       contract; `agentrun.Mint` gains `originEntityID` and sets it at creation (`:224-233`); update the run projection
       contract and schema (`task schema:generate`).
-      **Slice B — not done in this PR** (the run-origin predicate is the #1096 mechanism and lands with 6.3).
+      **Done (slice B), with one measured deviation recorded.** `agvocab.RunOriginEntityID = "agent.run.origin-entity-id"`
+      is declared beside `LoopRunEntityID` (`vocabulary/agentic/predicates.go`) and registered in
+      `vocabulary/agentic/register.go`; `AgentRun.OriginEntityID` carries the lifecycle tag
+      `predicate=agent.run.origin-entity-id` and `agentrun.go`'s `init()` registers the predicate so
+      `lifecycle.RequireDeclaredPredicate` admits it; `Mint(ctx, mgr, org, platform, rootLoopID, originEntityID)`
+      sets it at creation for every run, local origin or imported. `task schema:generate` produced only the
+      `import` port-field additions (3 lines x 30 schema files) — `AgentRun` is not an operator-facing config type
+      and contributes no schema. **DEVIATION, measured, not implemented around:** this row and the design call the
+      predicate `@id`, and its object IS a canonical entity ID, but the stored triple carries no `@id` DATATYPE.
+      `pkg/lifecycle` has no write-side datatype channel — `graph_emit.go`'s `triple()` sets Subject, Predicate,
+      Object, Timestamp and Confidence, and `grep -rn Datatype pkg/lifecycle/` returns nothing — so a
+      lifecycle-projected birth predicate cannot carry one without new framework surface in `pkg/lifecycle` that no
+      task authorises. The design's own concrete mechanism (`lifecycle tag predicate=agent.run.origin-entity-id`) is
+      what shipped, and it matches its two siblings exactly: `agent.run.parent-entity-id` (`agentrun.go`) and the
+      anchor `agent.run.entity-id` (`actions.go` `stampRun`) are both emitted without a datatype today. Consequence
+      recorded in the migration note: `pkg/fusion`'s graph facet projects an edge only for a lens-declared predicate
+      or an explicit `@id`, so the origin link reads as a property fact there unless a lens declares it.
 
 ## 4. Forced omissions — one per new parser/builder/mapper (commit GREEN first; restore by `cp` + `shasum`)
 
@@ -398,12 +461,42 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       AFTER  sha256 046239ae979aafbde12425d7aea0609641b7b658c65c6abe4f368a887c5f9381  restored=yes
       ```
 
-- [ ] 4.3 M3 graph-ingest gate: delete the `ValidateEntityIDAuthority` call on the fact lane →
+- [x] 4.3 M3 graph-ingest gate: delete the `ValidateEntityIDAuthority` call on the fact lane →
       `TestAuthorityGateRejectsForeignOnFactLane` MUST fail.
-      **Slice B — not done in this PR.**
+      **Done.** Both fact-lane calls were deleted — `prepareFactProjection`'s and `mergeEntityOnLane`'s backstop —
+      because deleting only one leaves the other holding the lane:
 
-- [ ] 4.4 M4 import lane: ignore the port's `import` flag → `TestImportLaneAcceptsForeignRejectsLocalClaim` MUST fail.
-      **Slice B — not done in this PR.**
+      ```text
+      ===== M3: processor/graph-ingest/component.go =====
+      BEFORE sha256 b0968b77728757215827edc3841f4998f5e9eb946b9eb7c7c57966fb2f632ac5
+      [applied] processor/graph-ingest/component.go
+      --- FAIL: TestAuthorityGateRejectsForeignOnFactLane (5.34s)
+          authority_gate_integration_test.go:162:
+              	Error:      	Condition never satisfied
+              	Messages:   	mutation_rejections{reason="authority_foreign"} must increment exactly once
+      FAIL
+      FAIL	github.com/c360studio/semstreams/processor/graph-ingest	6.193s
+      AFTER  sha256 b0968b77728757215827edc3841f4998f5e9eb946b9eb7c7c57966fb2f632ac5  restored=yes
+      ```
+
+- [x] 4.4 M4 import lane: ignore the port's `import` flag → `TestImportLaneAcceptsForeignRejectsLocalClaim` MUST fail.
+      **Done** (`importLane := stream.Import()` → `importLane := false`):
+
+      ```text
+      ===== M4: processor/graph-ingest/component.go =====
+      BEFORE sha256 b0968b77728757215827edc3841f4998f5e9eb946b9eb7c7c57966fb2f632ac5
+      [applied] processor/graph-ingest/component.go
+      WARN graph-ingest: entity authority rejected lane=import.entity.> reason=authority_foreign arrival=local segment_index=1
+      --- FAIL: TestImportLaneAcceptsForeignRejectsLocalClaim (5.36s)
+              	Error:      	Condition never satisfied
+              	Messages:   	entity "acme.dep2.src.git.commit.a1" never landed in ENTITY_STATES
+      FAIL
+      FAIL	github.com/c360studio/semstreams/processor/graph-ingest	6.171s
+      AFTER  sha256 b0968b77728757215827edc3841f4998f5e9eb946b9eb7c7c57966fb2f632ac5  restored=yes
+      ```
+
+      The WARN line is the discriminating half: with the flag ignored the declared import lane reports
+      `arrival=local`, which is exactly the mutation.
 
 - [x] 4.5 M5 `entityPartNames`: swap the two names back → `TestSegmentTokensResolveByName` MUST fail; delete the
       `IsValidEntityID` guard in `applyEntityPartsSubstitutions` → `TestSegmentTokensUnresolvedOnInvalidID` MUST fail.
@@ -431,11 +524,52 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       AFTER  sha256 27bfa301d8ec4943333d44f1f68175a42ecb7cd66f18d256b74ee932738f9707  restored=yes
       ```
 
-- [ ] 4.6 M6a `actions.go` run-scope mint: restore `idParts[0], idParts[1]` → both 2.6 tests MUST fail (run minted under
+- [x] 4.6 M6a `actions.go` run-scope mint: restore `idParts[0], idParts[1]` → both 2.6 tests MUST fail (run minted under
       `foreign.dep9`). M6b: delete the foreign-authority skip before `stampRun` → `…WithoutForeignWrite` MUST fail (a
       captured `AddTriple` targets the imported subject). M6c: delete the `OriginEntityID` assignment in `Mint` → both
       2.6 tests MUST fail (the local linkage is missing).
-      **Slice B — not done in this PR.**
+      **Done, with one premise correction on M6a.** All three killed; M6a kills ONE test, not both, and the row's
+      prediction that it kills both is measurably wrong: on a LOCAL firing loop the read-back
+      `idParts[0], idParts[1]` and `deps.Platform` are the same two strings by construction, so no assertion can
+      separate them there. The imported case is where the read-back is observable, and that is the case that fails.
+
+      ```text
+      ===== M6a: processor/rule/actions.go =====
+      BEFORE sha256 ee4a36975218075df42aff56a3deeb65d5f43ccc9ba2c369dd7ecddb32f79747
+      [applied] processor/rule/actions.go
+      --- FAIL: TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite (0.54s)
+          actions_run_scope_integration_test.go:195 (via :226):
+              	Error:      	Received unexpected error:
+              	            	kv: key not found
+      FAIL	github.com/c360studio/semstreams/processor/rule	1.373s
+      (TestRunScopeNewOnLocalLoopStampsAnchorAndOrigin passes — see the premise correction above)
+      AFTER  sha256 ee4a36975218075df42aff56a3deeb65d5f43ccc9ba2c369dd7ecddb32f79747  restored=yes
+
+      ===== M6b: processor/rule/actions.go =====
+      BEFORE sha256 ee4a36975218075df42aff56a3deeb65d5f43ccc9ba2c369dd7ecddb32f79747
+      [applied] processor/rule/actions.go
+      --- FAIL: TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite (0.54s)
+              	Error:      	[]string{"foreign.dep9.agentic-loop.agent.execution.import1", "foreign.dep9.agentic-loop.agent.execution.import1"} should not contain "foreign.dep9.agentic-loop.agent.execution.import1"
+              	Messages:   	no mutation request may target a foreign-authority subject, not even a rejected one
+      FAIL	github.com/c360studio/semstreams/processor/rule	1.370s
+      AFTER  sha256 ee4a36975218075df42aff56a3deeb65d5f43ccc9ba2c369dd7ecddb32f79747  restored=yes
+
+      ===== M6c: agentic/agentrun/agentrun.go =====
+      BEFORE sha256 b5958bac8f63b43b4a6fda8fa5e2144ddb298315696f761970caa3af20b2d665
+      [applied] agentic/agentrun/agentrun.go
+      --- FAIL: TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite (0.57s)
+              	Error:      	Should be true
+              	Messages:   	the local run must carry agent.run.origin-entity-id so the run->loop pointer never depends on writing the loop
+      --- FAIL: TestRunScopeNewOnLocalLoopStampsAnchorAndOrigin (0.38s)
+              	Error:      	Should be true
+              	Messages:   	a local origin gets the same predicate as an imported one
+      FAIL	github.com/c360studio/semstreams/processor/rule	1.437s
+      AFTER  sha256 b5958bac8f63b43b4a6fda8fa5e2144ddb298315696f761970caa3af20b2d665  restored=yes
+      ```
+
+      M6b's two captured subjects (rather than one) are the anchor pair, both of which the skip suppresses. The
+      third framework write to the firing entity — `rule.task.spawned` — is covered by the same skip and by the same
+      test; it was found by writing the test, not by this row.
 
 - [x] 4.7 M7 audit `authority_literal` rule: skip the `go-format-prefix` and `go-dotted-constant` surfaces →
       `TestAuditFlagsAuthorityLiteral` and `TestAuditFlagsFormatPrefixAuthorityLiteral` MUST fail.
@@ -572,8 +706,36 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       AFTER  sha256 dbf56af410378dd642b93c6231bb96ac50e754680f855f1690f7e5719d8816a8  restored=yes
       ```
 
-- [ ] 4.13 M13 hierarchy foreign-skip: delete the authority check in `GetHierarchyTriples` → `TestHierarchySkipsForeignAuthority` MUST fail.
-      **Slice B — not done in this PR.**
+- [x] 4.13 M13 hierarchy foreign-skip: delete the authority check in `GetHierarchyTriples` → `TestHierarchySkipsForeignAuthority` MUST fail.
+      **Done, and this row's named killer is measurably the WRONG one — recorded rather than worked around.**
+      Deleting the check does NOT fail `TestHierarchySkipsForeignAuthority` (twice: once as this row wrote it, and
+      again after strengthening it with a second import sharing the type prefix so the sibling-edge path could fire).
+      Two production facts shadow it at the graph-ingest seam, both of them this change's own additions:
+      `createEntityWithReceipt` refuses every container birth under a peer's pair, so `GetHierarchyTriples` returns a
+      joined error; and the merge path DISCARDS the whole triple set on any error
+      (`component.go`, "Failed to get hierarchy triples"). The imported entity therefore carries no hierarchy triple
+      with or without the check. A test the neighbouring guard satisfies tests the neighbouring guard.
+
+      The discriminating test was added beside the code it guards —
+      `graph/inference.TestGetHierarchyTriplesSkipsForeignAuthority` — which is also the only place that covers the
+      case graph-ingest cannot: `NewHierarchyInference` is exported framework surface with no second layer behind it.
+      The strengthened integration row stays: it pins the OBSERVABLE contract end-to-end.
+
+      ```text
+      ===== M13: graph/inference/hierarchy.go =====
+      BEFORE sha256 4309ae20799134a8d15a44a532c595e62919abc5f6d603198839b4e20e6b436f
+      [applied] graph/inference/hierarchy.go
+      (attempt 1, TestHierarchySkipsForeignAuthority as written) ok  github.com/c360studio/semstreams/processor/graph-ingest  2.242s  -- NOT KILLED
+      (attempt 2, same test + a second import sharing the type prefix) ok  github.com/c360studio/semstreams/processor/graph-ingest  2.209s  -- NOT KILLED
+      (attempt 3, the discriminating unit test)
+      --- FAIL: TestGetHierarchyTriplesSkipsForeignAuthority (0.00s)
+          hierarchy_test.go:170: Should be empty, but was [{c360.dep9.sensor.document.temperature.sensor-001 hierarchy.type.member c360.dep9.sensor.document.temperature.group ...} {... hierarchy.system.member ...} {... hierarchy.domain.member ...}]
+              	Messages:   	no membership or sibling triple may be minted for an imported entity
+          hierarchy_test.go:171: Should be empty, but was [0x3542639b6200 0x3542639b6280 0x3542639b6300]
+              	Messages:   	no container entity may be born under a peer's authority
+          hierarchy_test.go:173: Should be empty, but was [{c360.dep9.sensor.document.temperature.group hierarchy.type.contains ...} {... hierarchy.system.contains ...} {... hierarchy.domain.contains ...}]
+      AFTER  sha256 4309ae20799134a8d15a44a532c595e62919abc5f6d603198839b4e20e6b436f  restored=yes
+      ```
 
 - [x] 4.14 M14 config-load bound: delete the `MaxAuthorityPairBytes` check → `TestConfigRejectsOversizedAuthorityPair` MUST fail.
       **Done.** M14 deletes the `validateAuthorityPair` call. M14b (bonus, O-2) needed a second attempt: the first deleted the `instance_id` probe at only ONE of the two raw-JSON loaders and the file-loading test still passed — an incomplete mutant, recorded; deleting the CALL at both sites kills it:
@@ -811,17 +973,44 @@ package; both declarations are now on the payload registrations) and
 
 ## 6. Boundary enforcement, hierarchy, and #1096
 
-- [ ] 6.1 graph-ingest reads `deps.Platform` at construction (`CreateGraphIngest`, `component.go:644`); the structural
+- [x] 6.1 graph-ingest reads `deps.Platform` at construction (`CreateGraphIngest`, `component.go:644`); the structural
       gate calls `ValidateEntityIDAuthority` for the candidate SUBJECT identity only — never for `@id` objects, which
       keep structural validation; no stub is created and an absent object is permitted (`graph-ingest/spec.md:776-780`) — on the fact lane, every `graph.mutation.>` operation, and
       direct persistence, before KV I/O; metered once as `mutation_rejections{reason="authority_foreign"|"authority_claimed"}`;
       loud log names lane and segment index, never the identity. Mutation of an existing foreign subject from any
       non-import lane is rejected `foreign_authority` — an import is a read-only mirror (ruled O-12(a)); local facts
       about an import live on a local subject that references it.
-- [ ] 6.2 `JetStreamPort` gains `Import bool` (`"import"`); the port schema and `configs/graph-backend.json` (the
+      **Done.** `CreateGraphIngest` (`component.go:704`) reads `deps.Platform` into the component's `org`/`platform`
+      and REFUSES an empty pair (`:721`) — an absent authority has no honest reading, and config load already
+      requires `platform.org`/`platform.id`. The gate is `authorizeSubject` (`processor/graph-ingest/authority_gate.go:38`),
+      one call beside every seam that already validates an entity ID structurally — the enumeration, all ten:
+      `component.go:1743` (`prepareFactProjection`, the fact lane, carrying the arrival port's declared lane),
+      `:2064` (`mergeEntityOnLane`, the write chokepoint's backstop for direct callers), `:2221`
+      (`createEntityWithReceipt`, in-process births incl. hierarchy containers), `:2301` (`deleteEntityAtRevision`),
+      `:2442` (`addTripleLane`, hierarchy inverse edges), `:2581` (`addTriplesLane`, EVERY subject in a batch, not
+      just the synthetic root); and the four canonical handlers before any KV I/O —
+      `canonical_mutations.go:244` (create), `:307` (reconcile, before its fetch), `:383` (append, every triple
+      subject), `:474` (delete). `@id` OBJECTS are never passed to it. Metering is `recordAuthorityRejection`
+      (`authority_gate.go:66`): the mutation lane routes through `meteredMutation`'s one wrapper via
+      `authorityMetricReason`, and the fact lane meters in `processIngest` under the arrival subject — disjoint
+      paths, so exactly one increment per rejection. The WARN names lane, arrival lane and segment index and never
+      the identity. The `component.go:644` anchor this row cites is pre-#1109/#1130 and now reads `:704`.
+- [x] 6.2 `JetStreamPort` gains `Import bool` (`"import"`); the port schema and `configs/graph-backend.json` (the
       reference graph-backend composition; it composes graph-ingest) carry one declared import lane as the reference.
       The two federation configs this row once contrasted against were deleted by PR #1130 (#1129).
-- [ ] 6.3 `processor/rule`: add a `platform` field to the action executor plumbed from `deps.Platform` at construction
+      **Done.** `component/port_jetstream.go:61` `Import bool` (`"import,omitempty"`); `StreamFacts.importLane` +
+      `StreamFacts.Import()` (`component/port_facts.go`); the field constraint declares it INPUT-only
+      (`port_codec.go`), deliberately WITHOUT `zeroIsOmitted` — that flag is numeric (it projects `Const: 0`), so on
+      an output port `import` is simply absent from the schema rather than pinned to a number. `task schema:generate`
+      adds it to 30 schemas, input direction only (verified: the sole occurrence in `schemas/graph-ingest.v1.json`
+      is under `ports/inputs/items/config/oneOf[2]`). `configs/graph-backend.json` gains the reference `peer_import`
+      port on `peer.entity.>` plus the `PEER_ENTITY` stream that backs it — without the stream declaration
+      graph-ingest's consumer would wait for a stream nothing provisions and `Start` would fail. Two shipped-config
+      ledgers were amended rather than absorbed: `internal/portgrammarcontrol` (`approvedImportLaneAdditions = 1`)
+      and `service/testdata/message_logger_subject_census.json` (+1 raw row / exact key / global string).
+      **Latent defect surfaced and fixed:** `test/shipped_graph_mutation_ports_test.go` resolved graph-ingest INPUT
+      ports with `component.DirectionOutput`; harmless until a direction-scoped input field existed.
+- [x] 6.3 `processor/rule`: add a `platform` field to the action executor plumbed from `deps.Platform` at construction
       (the processor holds none today); `actions.go:1575-1583` mints from it; the firing entity remains the parent
       reference; delete the `SplitN` read-back. Before `stampRun` (`:1697-1700`) the action evaluates
       `semtypes.ValidateEntityIDAuthority(entityID, org, platform, false)`: when the firing loop is local the anchor pair
@@ -830,13 +1019,37 @@ package; both declarations are now on the payload registrations) and
       `rule_run_anchor_skipped_total{reason="foreign_authority"}` with an Info log naming the rule; `agentrun.Mint`
       receives the firing entity as `originEntityID` (3.8) in both cases. #1096 is complete only when 2.6 is GREEN and
       M6a–M6c are recorded.
-- [ ] 6.4 `graph/inference/hierarchy.go`: `GetHierarchyTriples` returns `nil, nil` for an entity whose positions 1–2
+      **Done, with the skip WIDER than this row specifies — a defect 2.6 found.** `ActionExecutor` gains unexported
+      `platform types.PlatformMeta` and `metrics *Metrics` with unexported `setPlatform`/`setMetrics`, wired from
+      `rp.platform`/`rp.metrics` in `processor.go`'s existing concrete-type block (no new exported surface);
+      `CreateRuleProcessor` (`factory.go:124`) now refuses an empty `deps.Platform` for the same reason graph-ingest
+      does. `actions.go:1687` mints from `e.platform`; the `strings.SplitN` read-back is deleted; the firing entity
+      is passed to `agentrun.Mint` as `originEntityID`. The guard is `foreignFiringEntity` (`actions.go:571`) with
+      `foreignFiringSkipRecorder` (`:589`) and the unconditional `stampRunAnchors` (`:619`).
+      **The row named two writes; there are THREE.** `rule.task.spawned`, the framework's own back-reference onto
+      the firing entity after publish, also reached the imported subject — a rejected request, which the requirement
+      forbids as explicitly as an accepted one ("no mutation request targets the foreign subject, not even a rejected
+      one"). It is now covered by the same guard. Metric consequence, recorded rather than absorbed: the counter
+      fires ONCE per action execution however many writes it covers, so its spec-pinned name
+      `rule_run_anchor_skipped_total` is narrower than its meaning — counting per omitted write would report two
+      federation events where one happened. Naming debt, not a second concern; the spec delta was amended to say so.
+      An executor with no platform answers `false` (cannot judge) rather than "everything is foreign", which is
+      unreachable in production because the factory refuses that state.
+- [x] 6.4 `graph/inference/hierarchy.go`: `GetHierarchyTriples` returns `nil, nil` for an entity whose positions 1–2
       differ from the deployment authority (no container, no membership, no inverse sibling edge, no warning) — the
       pair reaches `NewHierarchyInference` (which carries none today, `hierarchy.go:109-114`;
       `processor/graph-ingest/component.go:1371-1376`) through `HierarchyConfig` from the `deps.Platform` read 6.1
       adds; the skip is accepted by ruling on every lane;
       containers use the reserved padding tokens (`IsReservedInstanceToken`); a container whose ID would exceed 256 bytes returns the coded
       structural error instead of a padded overflow.
+      **Done.** `HierarchyConfig` gains `Org`/`Platform`, both `json:"-"` — framework-owned, set only by
+      graph-ingest's `initHierarchyInference` from the same `deps.Platform` read 6.1 adds, never operator config;
+      `GetHierarchyTriples` (`graph/inference/hierarchy.go:217`) returns `nil, nil` for a foreign entity, with no
+      warning, on every lane. An ENABLED inference holding NO authority pair returns a classified error instead:
+      answering "everything is foreign" would silently disable the feature forever, which is the failure shape this
+      change exists to remove. graph-ingest cannot reach that branch — its factory refuses first. Container padding
+      and the 256-byte rejection are unchanged from slice A. See 4.13 for the measured shadowing at the ingest seam
+      and where the discriminating test lives.
 
 ## 7. Gates and landing (AGENTS.md:63-68 order)
 
