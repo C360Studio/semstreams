@@ -3,14 +3,13 @@ package agenticloop
 import (
 	"context"
 	"errors"
-	"sync"
-	"sync/atomic"
-	"testing"
-
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
+	"sync"
+	"sync/atomic"
+	"testing"
 )
 
 type causalHandle struct {
