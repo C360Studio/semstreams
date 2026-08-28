@@ -2,17 +2,78 @@ package executors
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type httpTestNetwork struct {
+	mu          sync.Mutex
+	resolved    map[string][]net.IP
+	dialTargets map[string]string
+	dialed      []string
+}
+
+func (n *httpTestNetwork) lookupIP(_ context.Context, host string) ([]net.IP, error) {
+	ips, ok := n.resolved[host]
+	if !ok {
+		return nil, fmt.Errorf("test host %q is not mapped", host)
+	}
+	return ips, nil
+}
+
+func (n *httpTestNetwork) dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	n.mu.Lock()
+	n.dialed = append(n.dialed, addr)
+	target, ok := n.dialTargets[addr]
+	n.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("validated address %q has no test dial target", addr)
+	}
+	return (&net.Dialer{}).DialContext(ctx, network, target)
+}
+
+func (n *httpTestNetwork) executor(opts ...HTTPRequestOption) *HTTPRequestExecutor {
+	e := NewHTTPRequestExecutor(opts...)
+	e.lookupIP = n.lookupIP
+	e.dialContext = n.dialContext
+	return e
+}
+
+func (n *httpTestNetwork) dialSnapshot() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]string(nil), n.dialed...)
+}
+
+func testServerPort(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	_, port, err := net.SplitHostPort(srv.Listener.Addr().String())
+	require.NoError(t, err)
+	return port
+}
+
+func executeHTTPTestCall(t *testing.T, e *HTTPRequestExecutor, ctx context.Context, rawURL string) agentic.ToolResult {
+	t.Helper()
+	result, err := e.Execute(ctx, agentic.ToolCall{
+		ID:        "test-call",
+		Name:      "http_request",
+		LoopID:    "test-loop",
+		Arguments: map[string]any{"url": rawURL},
+	})
+	require.NoError(t, err)
+	return result
+}
 
 // TestNewHTTPRequestExecutor verifies the constructor and default timeout.
 func TestNewHTTPRequestExecutor(t *testing.T) {
@@ -46,6 +107,301 @@ func TestHTTPRequestExecutor_ListTools(t *testing.T) {
 	required, ok := tool.Parameters["required"].([]string)
 	require.True(t, ok, "parameters must have a required slice")
 	assert.Contains(t, required, "url")
+}
+
+func TestHTTPRequestExecutor_Execute_HTMLBecomesBoundedReadableMarkdown(t *testing.T) {
+	html := `<!doctype html><html><head><title>Reference Guide</title>` +
+		`<style>.hidden { display:none }</style></head><body>` +
+		`<header>Site chrome</header><nav>Navigation chrome</nav>` +
+		`<main><h1>API Reference</h1><p>Read <strong>this page</strong>.</p>` +
+		`<ul><li>First fact</li><li>Second fact</li></ul></main>` +
+		`<script>ignoreAgentInstructions()</script><footer>Footer chrome</footer>` +
+		`</body></html>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(html))
+	}))
+	t.Cleanup(srv.Close)
+
+	port := testServerPort(t, srv)
+	fakeIP := net.ParseIP("203.0.113.10")
+	network := &httpTestNetwork{
+		resolved:    map[string][]net.IP{"docs.example": {fakeIP}},
+		dialTargets: map[string]string{net.JoinHostPort(fakeIP.String(), port): srv.Listener.Addr().String()},
+	}
+	pub := &recordingPublisher{}
+	e := network.executor(
+		WithHTTPTriplePublisher(pub),
+		WithHTTPPlatform(testPlatform()),
+	)
+
+	result := executeHTTPTestCall(t, e, context.Background(), "http://docs.example:"+port+"/guide")
+
+	require.Empty(t, result.Error)
+	assert.Contains(t, result.Content, "HTTP 200")
+	assert.Contains(t, result.Content, "Final-URL: http://docs.example:"+port+"/guide")
+	assert.Contains(t, result.Content, "Content-Type: text/html; charset=utf-8")
+	assert.Contains(t, result.Content, "Content-Transform: html-to-markdown")
+	assert.Contains(t, result.Content, "Title: Reference Guide")
+	assert.Contains(t, result.Content, "Truncated: false")
+	assert.Contains(t, result.Content, "# API Reference")
+	assert.Contains(t, result.Content, "- First fact")
+	assert.NotContains(t, result.Content, "Site chrome")
+	assert.NotContains(t, result.Content, "Navigation chrome")
+	assert.NotContains(t, result.Content, "ignoreAgentInstructions")
+	assert.NotContains(t, result.Content, "Footer chrome")
+
+	facts := make(map[string]any)
+	for _, triple := range pub.triples {
+		facts[triple.Predicate] = triple.Object
+	}
+	assert.Equal(t, "http://docs.example:"+port+"/guide", facts[agvocab.WebURL])
+	assert.Contains(t, facts[agvocab.WebText], "# API Reference")
+	assert.NotContains(t, facts[agvocab.WebText], "<html>")
+	assert.Equal(t, false, facts[agvocab.WebTruncated])
+}
+
+func TestHTTPRequestExecutor_Execute_ReportsContentTypeAndTruncation(t *testing.T) {
+	tests := []struct {
+		name          string
+		contentType   string
+		body          string
+		wantTransform string
+		wantBody      string
+		wantTruncated bool
+	}{
+		{
+			name:          "plain response remains raw",
+			contentType:   "application/json",
+			body:          `{"status":"ok"}`,
+			wantTransform: "raw",
+			wantBody:      `{"status":"ok"}`,
+		},
+		{
+			name:          "readable HTML is bounded",
+			contentType:   "text/html",
+			body:          "<p>" + strings.Repeat("x", httpMaxTextSize+100) + "</p>",
+			wantTransform: "html-to-markdown",
+			wantBody:      "[content truncated]",
+			wantTruncated: true,
+		},
+		{
+			name:          "raw read bound remains observable",
+			contentType:   "text/html",
+			body:          "<script>" + strings.Repeat("x", httpMaxResponseSize+100) + "</script><p>unread tail</p>",
+			wantTransform: "html-to-markdown",
+			wantBody:      "[content truncated]",
+			wantTruncated: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", tc.contentType)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			t.Cleanup(srv.Close)
+			port := testServerPort(t, srv)
+			fakeIP := net.ParseIP("203.0.113.11")
+			network := &httpTestNetwork{
+				resolved:    map[string][]net.IP{"content.example": {fakeIP}},
+				dialTargets: map[string]string{net.JoinHostPort(fakeIP.String(), port): srv.Listener.Addr().String()},
+			}
+
+			result := executeHTTPTestCall(t, network.executor(), context.Background(), "http://content.example:"+port+"/page")
+
+			require.Empty(t, result.Error)
+			assert.Contains(t, result.Content, "Content-Type: "+tc.contentType)
+			assert.Contains(t, result.Content, "Content-Transform: "+tc.wantTransform)
+			assert.Contains(t, result.Content, fmt.Sprintf("Truncated: %t", tc.wantTruncated))
+			assert.Contains(t, result.Content, tc.wantBody)
+		})
+	}
+}
+
+func TestHTTPRequestExecutor_Execute_RedirectsDialEachValidatedHop(t *testing.T) {
+	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("final page"))
+	}))
+	t.Cleanup(final.Close)
+	finalPort := testServerPort(t, final)
+
+	var redirectURL string
+	initial := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Redirect(w, &http.Request{}, redirectURL, http.StatusFound)
+	}))
+	t.Cleanup(initial.Close)
+	initialPort := testServerPort(t, initial)
+	redirectURL = "http://reference.example:" + finalPort + "/final"
+
+	initialIP := net.ParseIP("203.0.113.20")
+	finalIP := net.ParseIP("203.0.113.21")
+	network := &httpTestNetwork{
+		resolved: map[string][]net.IP{
+			"index.example":     {initialIP},
+			"reference.example": {finalIP},
+		},
+		dialTargets: map[string]string{
+			net.JoinHostPort(initialIP.String(), initialPort): initial.Listener.Addr().String(),
+			net.JoinHostPort(finalIP.String(), finalPort):     final.Listener.Addr().String(),
+		},
+	}
+
+	result := executeHTTPTestCall(t, network.executor(), context.Background(), "http://index.example:"+initialPort+"/start")
+
+	require.Empty(t, result.Error)
+	assert.Contains(t, result.Content, "Final-URL: "+redirectURL)
+	assert.Contains(t, result.Content, "final page")
+	assert.Equal(t, []string{
+		net.JoinHostPort(initialIP.String(), initialPort),
+		net.JoinHostPort(finalIP.String(), finalPort),
+	}, network.dialSnapshot())
+}
+
+func TestHTTPRequestExecutor_Execute_SameHostRedirectUsesTargetPort(t *testing.T) {
+	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("other port"))
+	}))
+	t.Cleanup(final.Close)
+	finalPort := testServerPort(t, final)
+
+	initial := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Redirect(w, &http.Request{}, "http://same.example:"+finalPort+"/final", http.StatusFound)
+	}))
+	t.Cleanup(initial.Close)
+	initialPort := testServerPort(t, initial)
+
+	fakeIP := net.ParseIP("203.0.113.22")
+	network := &httpTestNetwork{
+		resolved: map[string][]net.IP{"same.example": {fakeIP}},
+		dialTargets: map[string]string{
+			net.JoinHostPort(fakeIP.String(), initialPort): initial.Listener.Addr().String(),
+			net.JoinHostPort(fakeIP.String(), finalPort):   final.Listener.Addr().String(),
+		},
+	}
+
+	result := executeHTTPTestCall(t, network.executor(), context.Background(), "http://same.example:"+initialPort+"/start")
+	require.Empty(t, result.Error)
+	assert.Contains(t, result.Content, "other port")
+	assert.Equal(t, []string{
+		net.JoinHostPort(fakeIP.String(), initialPort),
+		net.JoinHostPort(fakeIP.String(), finalPort),
+	}, network.dialSnapshot())
+}
+
+func TestHTTPRequestExecutor_Execute_RedirectPolicyFailures(t *testing.T) {
+	tests := []struct {
+		name        string
+		location    string
+		resolved    map[string][]net.IP
+		wantError   string
+		wantDialLen int
+	}{
+		{
+			name:        "private redirect target",
+			location:    "http://private.example/secret",
+			resolved:    map[string][]net.IP{"private.example": {net.ParseIP("127.0.0.1")}},
+			wantError:   "blocked",
+			wantDialLen: 1,
+		},
+		{
+			name:        "unsupported redirect scheme",
+			location:    "file:///etc/passwd",
+			resolved:    map[string][]net.IP{},
+			wantError:   "redirect policy",
+			wantDialLen: 1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			initial := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				http.Redirect(w, &http.Request{}, tc.location, http.StatusFound)
+			}))
+			t.Cleanup(initial.Close)
+			port := testServerPort(t, initial)
+			initialIP := net.ParseIP("203.0.113.23")
+			resolved := map[string][]net.IP{"initial.example": {initialIP}}
+			for host, ips := range tc.resolved {
+				resolved[host] = ips
+			}
+			network := &httpTestNetwork{
+				resolved: resolved,
+				dialTargets: map[string]string{
+					net.JoinHostPort(initialIP.String(), port): initial.Listener.Addr().String(),
+				},
+			}
+
+			result := executeHTTPTestCall(t, network.executor(), context.Background(), "http://initial.example:"+port+"/start")
+			assert.Empty(t, result.Content)
+			assert.Contains(t, result.Error, tc.wantError)
+			assert.Len(t, network.dialSnapshot(), tc.wantDialLen)
+		})
+	}
+}
+
+func TestHTTPRequestExecutor_Execute_RedirectLimitIsObservable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/again", http.StatusFound)
+	}))
+	t.Cleanup(server.Close)
+	port := testServerPort(t, server)
+	fakeIP := net.ParseIP("203.0.113.24")
+	network := &httpTestNetwork{
+		resolved:    map[string][]net.IP{"loop.example": {fakeIP}},
+		dialTargets: map[string]string{net.JoinHostPort(fakeIP.String(), port): server.Listener.Addr().String()},
+	}
+
+	result := executeHTTPTestCall(t, network.executor(), context.Background(), "http://loop.example:"+port+"/start")
+	assert.Empty(t, result.Content)
+	assert.Contains(t, result.Error, "too many redirects")
+	assert.Len(t, network.dialSnapshot(), 5)
+}
+
+func TestHTTPRequestExecutor_Execute_CancellationStopsRedirectedRequest(t *testing.T) {
+	requestStarted := make(chan struct{})
+	final := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		close(requestStarted)
+		<-r.Context().Done()
+	}))
+	t.Cleanup(final.Close)
+	finalPort := testServerPort(t, final)
+
+	initial := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://slow.example:"+finalPort+"/wait", http.StatusFound)
+	}))
+	t.Cleanup(initial.Close)
+	initialPort := testServerPort(t, initial)
+
+	initialIP := net.ParseIP("203.0.113.25")
+	finalIP := net.ParseIP("203.0.113.26")
+	network := &httpTestNetwork{
+		resolved: map[string][]net.IP{
+			"initial.example": {initialIP},
+			"slow.example":    {finalIP},
+		},
+		dialTargets: map[string]string{
+			net.JoinHostPort(initialIP.String(), initialPort): initial.Listener.Addr().String(),
+			net.JoinHostPort(finalIP.String(), finalPort):     final.Listener.Addr().String(),
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	resultCh := make(chan agentic.ToolResult, 1)
+	go func() {
+		resultCh <- executeHTTPTestCall(t, network.executor(WithHTTPTimeout(5*time.Second)), ctx, "http://initial.example:"+initialPort+"/start")
+	}()
+	<-requestStarted
+	cancel()
+
+	select {
+	case result := <-resultCh:
+		assert.Empty(t, result.Content)
+		assert.Contains(t, result.Error, "context canceled")
+	case <-time.After(time.Second):
+		t.Fatal("http_request did not stop after context cancellation")
+	}
 }
 
 // TestHTTPTruncate tests the truncation helper directly.
