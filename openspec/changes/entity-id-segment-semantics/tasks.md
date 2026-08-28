@@ -935,3 +935,62 @@ package; both declarations are now on the payload registrations) and
       check of the archive/spec sync recorded.
 - [ ] 7.6 Undraft; PR body carries `implemented-by`, the per-sister migration list, the two values that leave the
       graph, the owner ruling of 2026-08-26 as applied, and the e2e evidence pointers. No task asserts CI state.
+
+## 8. Slice C — the example processors' own authority (#1149, PR #1150)
+
+Slice A's corpus sweep (section 5) did not reach `examples/processors/`. Slice B's boundary gate made the gap
+fatal: `task e2e:structural` on the slice-B branch failed with `entity stabilization failed: got 0, expected 74`
+because the gate correctly refused every entity the example processors minted. The owner ruled 2026-08-28 that this
+lands FIRST, as its own slice, so the corpus is compliant before the gate arrives. Recorded in `conformance.md`
+§ESCALATION on the slice-B branch.
+
+- [x] 8.1 RED capture, committed at `5d9644a1` before any implementation. `TestRetiredAuthorityKeysAreRefused` fails
+      with `DeclarePorts accepted retired key "org_id"` / `"platform"` in all three packages, and
+      `TestComponentMintsUnderDeploymentAuthority` fails with
+      `sensor entity ID "default-org.default-platform.sensor.environmental.temperature.temp-sensor-001" does not
+      mint under the deployment authority "c360.semstreams-e2e-structural."`. The companion control
+      `TestDefaultConfigLoadsWithoutRetiredKeys` passes on the same baseline, so the RED is attributable to the
+      retired key and not to a malformed fixture.
+- [x] 8.2 The rejection act. `removedConfigFields` + `rejectRemovedConfigKeys` in each of
+      `examples/processors/{iot_sensor,document,weather_station}/component.go`, called from `resolveConfig` — the
+      one derivation `DeclarePorts` and `NewComponent` share, so neither entry path can accept what the other
+      refuses. Same shape as `config.rejectRemovedPlatformFields` (slice A, O-2) and
+      `processor/graph-clustering.rejectRemovedConfigKeys` (ADR-083/090).
+- [x] 8.3 Forced omission of 8.2. Deleting the `rejectRemovedConfigKeys(rawConfig)` CALL from `iot_sensor`'s
+      `resolveConfig` (the function retained, referenced by a blank identifier so the package still compiles) turns
+      `TestRetiredAuthorityKeysAreRefused` RED with `DeclarePorts accepted retired key "org_id"`; restored by `cp`
+      with a matching md5 (`c2e8c5a78ec6cefe1ba084bf05c44c48` before and after). The mutant kills the CALL, not the
+      primitive.
+- [x] 8.4 Forced omission of the minting wire. Replacing `NewProcessor(deps.Platform)` with
+      `NewProcessor(types.PlatformMeta{Org: "c360", Platform: "logistics"})` turns
+      `TestComponentMintsUnderDeploymentAuthority` RED. **Recorded finding:** `cmd/entity-id-audit` stayed GREEN
+      under that mutant — its `authority_literal` rule judges entity-ID-shaped candidates, and a `PlatformMeta`
+      struct literal handed to a constructor is not one. The audit is not a guard for this class; the behavioral
+      test is.
+- [x] 8.5 Wire shape. `OrgID`/`Platform` removed from all seven example payload types (`SensorReading`, `Zone`,
+      `Document`, `Maintenance`, `Observation`, `SensorDocument`, `WeatherReading`); each carries one `entity_id`
+      field holding the minted identity, and `EntityID()` returns it. A minting function per type takes
+      `types.PlatformMeta` and composes through `semtypes.EntityID{...}.Key()` rather than `fmt.Sprintf`.
+      `TestDocument_MintedIdentityPreservation` asserts the retired fields are absent from the marshalled wire map.
+- [x] 8.6 Config corpus. `org_id`/`platform` deleted from 13 component blocks across 7 shipped configs
+      (`e2e-structural`, `statistical`, `semantic`, `semantic-8b`, `semantic-frontier`, `structural`,
+      `hello-world`). `composition.TestValidateShippedConfigsHaveNoErrorFindings` was RED on all 7 before the edit —
+      the rejection act firing against the real corpus at unit-test speed — and is GREEN after.
+- [x] 8.7 Per-tier corpus. `test/e2e/config.TierAuthority`/`TierEntityID` replace the hardcoded `c360.logistics.*`
+      in the coupled scenarios; `TestTierAuthorityMatchesShippedConfigs` re-derives the table from
+      `docker/compose/tiered.yml` (profile → `--config`) and each config's `platform.org`/`platform.id`. Mutating
+      one table entry to `c360.logistics` turns it RED with `tier "statistical" boots configs/statistical.json with
+      platform "c360.semstreams-statistical", but the table says "c360.logistics"`; restored by `cp` with matching
+      md5 `41216a4cff37f1898ffdcbdc959496dd`.
+- [x] 8.8 Deliberate not-done, recorded rather than swept: `test/e2e/scenarios/stages/entities.go` (7 sites) is a
+      stale duplicate of `validate_entity.go` with **no importers at all** (`grep -rn "e2e/scenarios/stages"
+      --include='*.go' .` outside the package itself returns nothing); `test/e2e/scenarios/{anomaly,community}/
+      validator_test.go` (8 sites) are synthetic pair/member fixtures, not claims about minted identity, and the
+      audit exempts test fixtures by design (`internal/entityidaudit/segment_rules.go` — "Test fixtures stay
+      lexical-only"); `test/e2e/mock/{openai_server.go,cmd/main.go}` (2 sites) are canned mock-LLM tool arguments in
+      tiers this slice does not gate. Retiring the dead `stages` entity-verifier half is follow-up work, not this
+      slice.
+- [x] 8.9 Adopter seam. `docs/operations/migration-beta162-to-beta163.md` gains the slice C section with the
+      do-nothing verdict stated as **LOUD** (boot-time refusal), the shape of the error, and the four adopter
+      actions. `docs/basics/05-first-processor.md` and `examples/processors/iot_sensor/README.md` — the two
+      surfaces that told an adopter to add the keys — teach the `deps.Platform` pattern and the rejection probe.
