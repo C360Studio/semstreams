@@ -55,6 +55,12 @@ var portBindingTable = map[PortKind]portBinding{
 			Type: "int", Editable: true, Minimum: intPointer(-1),
 			Directions: []Direction{DirectionInput}, zeroIsOmitted: true,
 		},
+		// An import lane is an INPUT-side statement of trust (ADR-102 d5); on
+		// an output port the flag would describe nothing graph-ingest reads.
+		// No zeroIsOmitted: that flag is numeric (it projects Const: 0 and
+		// short-circuits a numeric minimum), so on an output port `import`
+		// is simply absent from the schema rather than pinned to a number.
+		"import": {Type: "bool", Editable: true, Directions: []Direction{DirectionInput}},
 	}),
 	PortKindKVWatch:      newPortBinding(PortKindKVWatch, inputOnly(), func() Portable { return &KVWatchPort{} }, normalizeKVWatchPort, kvWatchPortFacts, []string{"bucket"}, nil),
 	PortKindKVRead:       newPortBinding(PortKindKVRead, inputOnly(), func() Portable { return &KVReadPort{} }, normalizeKVReadPort, kvReadPortFacts, []string{"bucket"}, nil),

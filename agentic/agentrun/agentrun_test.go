@@ -211,7 +211,8 @@ func TestMint_Idempotent_ErrAlreadyExistsFallsBackToGet(t *testing.T) {
 
 	// Mint with the same ID — Create returns ErrAlreadyExists.
 	// Mint must fall back to Get and return the existing run.
-	result, err := agentrun.Mint(ctx, mock, "acme", "ops", "run-already-exists")
+	result, err := agentrun.Mint(ctx, mock, "acme", "ops", "run-already-exists",
+		"acme.ops.agentic-loop.agent.execution.run-already-exists")
 	require.NoError(t, err, "Mint must not error on ErrAlreadyExists — idempotent path")
 	require.NotNil(t, result)
 	assert.Equal(t, runEntityID, result.EntityID(),

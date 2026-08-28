@@ -152,6 +152,7 @@ func newTestDependencies(t *testing.T) component.Dependencies {
 	return component.Dependencies{
 		NATSClient:      natsClient,
 		PayloadRegistry: newTestPayloadRegistry(t),
+		Platform:        component.PlatformMeta{Org: testDeploymentOrg, Platform: testDeploymentPlatform},
 		// MetricsRegistry intentionally not set - tests will set as needed
 	}
 }

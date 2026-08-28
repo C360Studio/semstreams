@@ -75,6 +75,7 @@ func createTestComponentForLifecycle() *Component {
 	deps := component.Dependencies{
 		NATSClient:      tc.Client,
 		PayloadRegistry: mustTestPayloadRegistry(),
+		Platform:        component.PlatformMeta{Org: testDeploymentOrg, Platform: testDeploymentPlatform},
 	}
 
 	configJSON, err := json.Marshal(config)

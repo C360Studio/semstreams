@@ -487,6 +487,10 @@ func registerLoopPredicates() {
 		vocabulary.WithDescription("Entity reference to the chain execution this loop belongs to"),
 		vocabulary.WithDataType("string"))
 
+	vocabulary.Register(RunOriginEntityID,
+		vocabulary.WithDescription("Entity reference to the loop execution this run was minted from"),
+		vocabulary.WithDataType("string"))
+
 	vocabulary.Register(LoopReplyTo,
 		vocabulary.WithDescription("Reply subject used to return this loop's result"),
 		vocabulary.WithDataType("string"))

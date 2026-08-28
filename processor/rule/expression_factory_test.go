@@ -507,6 +507,7 @@ func TestCreateRuleProcessor_InlineRulesPassedThrough(t *testing.T) {
 
 	deps := component.Dependencies{
 		NATSClient: mockClient,
+		Platform:   component.PlatformMeta{Org: "acme", Platform: "ops"},
 	}
 
 	// This will fail because mockClient isn't fully initialized,

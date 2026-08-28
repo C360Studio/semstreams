@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
@@ -254,7 +253,7 @@ func TestIntegration_MergeEntity_HierarchyDoesNotDuplicate(t *testing.T) {
 	cfgJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
 
-	comp, err := CreateGraphIngest(cfgJSON, component.Dependencies{NATSClient: testClient.Client, PayloadRegistry: newTestPayloadRegistry(t)})
+	comp, err := CreateGraphIngest(cfgJSON, testDependencies(t, testClient.Client, withAuthority("c360", "test")))
 	require.NoError(t, err)
 	c := comp.(*Component)
 	require.NoError(t, c.Initialize())

@@ -77,13 +77,19 @@ triples and no warning is logged for the skip.
 
 Every framework component that mints runtime state in reaction to an entity — including the rule engine's
 `publish_agent` with `run_scope=new` — MUST take `org` and `platform` from `deps.Platform` and MUST NOT read them
-back from the firing or triggering entity's ID. The local run entity MUST carry `agent.run.origin-entity-id` (an
-`@id` birth predicate naming the firing loop) for every run, so the run→loop linkage has one home that never depends
-on writing the loop. The run-anchor pair (`agent.loop.run`, `agent.run.entity-id`) MUST be written on the firing loop
-only when that loop carries the deployment's own authority; when the firing loop is a foreign-authority import the
-rule action MUST detect the foreign authority before any write, MUST issue no mutation request targeting the foreign
-subject, and MUST record the skip as `rule_run_anchor_skipped_total{reason="foreign_authority"}` with an Info log —
-a counted skip, never a rejection. Issue #1096 is complete only when this path is implemented and tested.
+back from the firing or triggering entity's ID. A component that receives no deployment authority MUST refuse to
+construct rather than mint under an empty or foreign pair. The local run entity MUST carry
+`agent.run.origin-entity-id` — a birth predicate naming the firing loop, whose object is that loop's canonical entity
+ID — for every run, so the run→loop linkage has one home that never depends on writing the loop.
+
+**No framework write reaches a foreign firing entity.** The run-anchor pair (`agent.loop.run`,
+`agent.run.entity-id`) and the `rule.task.spawned` back-reference MUST be written on the firing entity only when it
+carries the deployment's own authority. When the firing entity is a foreign-authority import the rule action MUST
+detect that before any write and MUST issue no mutation request targeting the foreign subject — not even one
+graph-ingest would reject. The decision MUST be recorded once per action execution as
+`rule_run_anchor_skipped_total{reason="foreign_authority"}` with an Info log naming which writes were skipped: a
+counted skip, never a rejection, and one federation event rather than one per omitted write. Issue #1096 is complete
+only when this path is implemented and tested.
 
 #### Scenario: a rule firing on an imported loop links the local run without writing to the import
 
@@ -93,6 +99,7 @@ a counted skip, never a rejection. Issue #1096 is complete only when this path i
 - **THEN** a run entity `acme.dep1.chain.agent.execution.<uuid>` is minted carrying `agent.run.origin-entity-id` =
   the imported entity
 - **AND** no mutation request targets `foreign.dep9.agentic-loop.agent.execution.<uuid>` and its revision is unchanged
+- **AND** no mutation request carries `rule.task.spawned` for that subject either
 - **AND** `rule_run_anchor_skipped_total{reason="foreign_authority"}` increments exactly once and
   `mutation_rejections` does not
 - **AND** the test that verifies this is `TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite`

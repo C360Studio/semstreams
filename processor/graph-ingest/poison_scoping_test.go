@@ -32,7 +32,7 @@ import (
 // unregistered gauge so gauge assertions cannot interfere across tests.
 func poisonScopingTestComponent(t *testing.T) (*Component, *mockKVBucket) {
 	t.Helper()
-	c, bucket := createTestComponentWithMockKVBucket(t)
+	c, bucket := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 	c.running = true
 	c.startTime = time.Now()
 	c.poisonedEntities = prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_poison_scoping_gauge"})
@@ -505,7 +505,7 @@ func TestDetectionInvalidatesCachedEntry(t *testing.T) {
 // needs no decode and may succeed, while the follow-up state read fails with
 // the typed classification.
 func TestSuffixResolutionServesIDWhileReadRefuses(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("c360", "logistics"))
 	ctx := context.Background()
 
 	id := "c360.logistics.environmental.sensor.temperature.poison-sensor-001"

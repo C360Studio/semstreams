@@ -40,6 +40,16 @@ type Metrics struct {
 	// loop_max_iterations resolving to a non-integer) fails closed but
 	// invisibly — the classified error is real, but nothing alerts on it.
 	actionFailuresTotal *prometheus.CounterVec
+
+	// runAnchorSkippedTotal counts run-anchor writes the publish_agent
+	// run_scope=new path DELIBERATELY did not issue because the firing loop
+	// carries a foreign authority — an imported mirror the framework must not
+	// mutate (ADR-102; #1096). It is a counted skip, never a rejection: no
+	// mutation request is sent, so nothing appears in graph-ingest's
+	// mutation_rejections, and without this counter the omission would be
+	// invisible. Labeled by reason only (today the single value
+	// foreign_authority), so cardinality cannot follow entity or rule count.
+	runAnchorSkippedTotal *prometheus.CounterVec
 }
 
 // Package-level singleton (registered once to avoid duplicate registration panics)
@@ -170,6 +180,13 @@ func newRuleMetrics(registry *metric.MetricsRegistry, _ string) *Metrics {
 				Name:      "action_failures_total",
 				Help:      "Rule action executions that failed (non-deny errors from ActionExecutor.Execute), by action_type",
 			}, []string{"action_type"}),
+
+			runAnchorSkippedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "rule",
+				Name:      "run_anchor_skipped_total",
+				Help:      "Run-anchor writes deliberately not issued because the firing entity carries a foreign authority (ADR-102), by reason",
+			}, []string{"reason"}),
 		}
 
 		registry.PrometheusRegistry().MustRegister(
@@ -189,6 +206,7 @@ func newRuleMetrics(registry *metric.MetricsRegistry, _ string) *Metrics {
 			ruleMetrics.actionGatePassesTotal,
 			ruleMetrics.governanceVerdictAuditFailures,
 			ruleMetrics.actionFailuresTotal,
+			ruleMetrics.runAnchorSkippedTotal,
 		)
 	})
 

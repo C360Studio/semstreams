@@ -71,6 +71,8 @@ func TestAttack_OnEntityCreated_Concurrent(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: true,
@@ -139,6 +141,8 @@ func TestAttack_CancelledContext(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: true,
@@ -195,7 +199,10 @@ func TestAttack_EdgeCaseInputs(t *testing.T) {
 			// Should handle gracefully in OnEntityCreated
 			tripleAdder := &hierarchyMockTripleAdder{}
 			entityManager := newMockEntityManager()
-			config := HierarchyConfig{Enabled: true, CreateTypeEdges: true}
+			config := HierarchyConfig{
+				Org: hierarchyTestOrg, Platform: hierarchyTestPlatform,
+				Enabled: true, CreateTypeEdges: true,
+			}
 			hi := NewHierarchyInference(entityManager, tripleAdder, config, nil)
 
 			require.NotPanics(t, func() {
@@ -212,6 +219,8 @@ func TestAttack_ContainerCacheConcurrency(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: true,
@@ -262,6 +271,8 @@ func TestAttack_ClearCacheDuringOperations(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: false,
@@ -340,6 +351,8 @@ func TestAttack_MetricsConcurrency(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: true,
@@ -468,6 +481,8 @@ func TestAttack_LargeEntityBurst(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: true,
@@ -517,6 +532,8 @@ func TestAttack_MemoryUsage(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: true,
@@ -549,6 +566,8 @@ func TestAttack_GoroutineCount(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: true,

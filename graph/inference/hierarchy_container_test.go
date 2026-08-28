@@ -186,6 +186,8 @@ func TestHierarchyInference_SkipContainerEntities(t *testing.T) {
 			entityManager := newMockEntityManager()
 
 			config := HierarchyConfig{
+				Org:               hierarchyTestOrg,
+				Platform:          hierarchyTestPlatform,
 				Enabled:           true,
 				CreateTypeEdges:   true,
 				CreateSystemEdges: true,
@@ -221,6 +223,8 @@ func TestHierarchyInference_NoCascade(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: true,
@@ -291,6 +295,8 @@ func TestHierarchyInference_MultipleEntitiesSameType(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: true,
@@ -353,6 +359,8 @@ func TestHierarchyInference_ContainerEntityWithNonStandardSuffix(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: false,

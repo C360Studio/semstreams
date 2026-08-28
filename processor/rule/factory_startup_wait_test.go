@@ -52,7 +52,11 @@ func TestFactoryAppliesStartupWaitBudget(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			deps := component.Dependencies{NATSClient: &natsclient.Client{}}
+			deps := component.Dependencies{
+				NATSClient: &natsclient.Client{},
+				// The factory refuses an absent deployment authority (ADR-102 d2).
+				Platform: component.PlatformMeta{Org: "acme", Platform: "ops"},
+			}
 
 			discoverable, err := CreateRuleProcessor(json.RawMessage(tt.rawConfig), deps)
 			if err != nil {

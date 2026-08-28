@@ -769,6 +769,12 @@ func (rp *Processor) initializeStateTracker(ctx context.Context) error {
 	}
 	if executor, ok := actionExecutor.(*ActionExecutor); ok {
 		executor.setProjectionTargets(rp.projectionTargets, rp)
+		// The deployment's own authority for every identity the executor mints
+		// (ADR-102 d2; #1096) and the shared collectors that count what it
+		// deliberately did not write. Both flow from the factory's
+		// deps.Platform / deps.MetricsRegistry; the executor has no other source.
+		executor.setPlatform(rp.platform)
+		executor.setMetrics(rp.metrics)
 	}
 
 	// Persist the executor on the processor so the cron scheduler

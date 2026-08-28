@@ -11,7 +11,7 @@ import (
 )
 
 func TestHandleQueryEntityReturnsEntityAndSameEntryRevision(t *testing.T) {
-	component := createTestComponentWithMockKV(t)
+	component := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 	const entityID = "acme.ops.robotics.gcs.drone.001"
 	entity := graph.EntityState{ID: entityID, Version: 991}
 	data, err := graph.MarshalEntityState(&entity)
@@ -43,7 +43,7 @@ func TestHandleQueryEntityReturnsEntityAndSameEntryRevision(t *testing.T) {
 }
 
 func TestHandleQueryEntityRejectsMalformedIDBeforeKVLookup(t *testing.T) {
-	component := createTestComponentWithMockKV(t)
+	component := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 	_, err := component.handleQueryEntityNATS(context.Background(), []byte(`{"id":"not-six-parts"}`))
 	if err == nil {
 		t.Fatal("malformed entity ID was accepted")
@@ -55,7 +55,7 @@ func TestHandleQueryEntityRejectsMalformedIDBeforeKVLookup(t *testing.T) {
 }
 
 func TestHandleQueryEntityRejectsAuthorityKeyEntityMismatch(t *testing.T) {
-	component := createTestComponentWithMockKV(t)
+	component := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 	const (
 		requestedID = "acme.ops.robotics.gcs.drone.001"
 		storedID    = "acme.ops.robotics.gcs.drone.002"

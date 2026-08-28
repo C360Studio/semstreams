@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/governance"
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/internal/semantictest"
@@ -2122,7 +2123,7 @@ func TestAction_PublishAgent_NonLoopTriggerLeavesParentLoopIDUnset(t *testing.T)
 		{"chain execution", chainID},
 		{name: "non-canonical entity ID", entityID: "e.1"},
 	}
-	// entity-id-audit:classify intentional-malformed "e.1" line=2123 column=47 surface=go-field:.entityID entity_id_invalid:arity verifies noncanonical IDs remain opaque agent payload values
+	// entity-id-audit:classify intentional-malformed "e.1" line=2124 column=47 surface=go-field:.entityID entity_id_invalid:arity verifies noncanonical IDs remain opaque agent payload values
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2818,7 +2819,7 @@ func TestAction_UpdateKV_VariableSubstitution(t *testing.T) {
 		Payload: map[string]any{
 			"status":     "drafting",
 			"updated_at": "$now",
-			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2821 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
+			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2822 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
 		},
 		Merge: false,
 	}
@@ -3519,6 +3520,11 @@ func TestAction_PublishAgent_RunScopeNew_MintsRunAndStampsAgentRun(t *testing.T)
 
 	executor := NewActionExecutorComplete(nil, mutator, pub, nil)
 	executor.SetLifecycleManager(mgr)
+	// The deployment's OWN authority. Since #1096 the mint takes it from here
+	// and never from the firing entity; this fixture happens to share the pair
+	// with the firing loop, which is the LOCAL case. The imported case is
+	// TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite.
+	executor.setPlatform(component.PlatformMeta{Org: "acme", Platform: "ops"})
 
 	// Trigger entity is a loop-execution entity — the firing coordinator loop.
 	firingLoopID := "coordinator-loop-uuid"
@@ -3729,6 +3735,7 @@ func TestAction_PublishAgent_RunScopeNew_MintsRunSuccessfully(t *testing.T) {
 	mgr := newFakeManager()
 	executor := NewActionExecutorComplete(nil, nil, pub, nil)
 	executor.SetLifecycleManager(mgr)
+	executor.setPlatform(component.PlatformMeta{Org: "acme", Platform: "ops"})
 
 	firingLoopID := "coord-fresh-mint"
 	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agentic-loop", "agent", "execution", firingLoopID)

@@ -124,6 +124,17 @@ func (m *mockEntityManager) addExistingEntity(id string) {
 // write, the entity's own forward hierarchy triples still land and ingest does
 // not fail. A refactor that made these propagate would break the flip; this test
 // catches that.
+// hierarchyTestOrg / hierarchyTestPlatform are the deployment authority every
+// enabled HierarchyConfig now declares (ADR-102): inference mints containers
+// and sibling edges from the ingested entity's own prefix, so it must know
+// which prefix is this deployment's. They match positions 1-2 of every entity
+// ID in this package's hierarchy fixtures — change one and the other must
+// follow, or the fixture becomes an import and mints nothing.
+const (
+	hierarchyTestOrg      = "c360"
+	hierarchyTestPlatform = "logistics"
+)
+
 func TestHierarchyInference_InverseEdgeWriteFailureIsNonFatal(t *testing.T) {
 	// Every in-process inverse-edge write rejects — simulating a must-exist
 	// "entity not found" on the sibling/container target.
@@ -133,6 +144,8 @@ func TestHierarchyInference_InverseEdgeWriteFailureIsNonFatal(t *testing.T) {
 	entityManager.addExistingEntity("c360.logistics.sensor.environmental.temperature.temp-002")
 
 	config := HierarchyConfig{
+		Org:                hierarchyTestOrg,
+		Platform:           hierarchyTestPlatform,
 		Enabled:            true,
 		CreateTypeEdges:    true,
 		CreateSystemEdges:  true,
@@ -157,6 +170,8 @@ func TestHierarchyInference_OnEntityCreated_Disabled(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:             hierarchyTestOrg,
+		Platform:        hierarchyTestPlatform,
 		Enabled:         false, // Disabled
 		CreateTypeEdges: true,
 	}
@@ -176,6 +191,8 @@ func TestHierarchyInference_OnEntityCreated_InvalidEntityID(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:             hierarchyTestOrg,
+		Platform:        hierarchyTestPlatform,
 		Enabled:         true,
 		CreateTypeEdges: true,
 	}
@@ -198,6 +215,8 @@ func TestHierarchyInference_OnEntityCreated_TypeEdgeOnly(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: false,
@@ -249,6 +268,8 @@ func TestHierarchyInference_OnEntityCreated_AllLevels(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: true,
@@ -307,6 +328,8 @@ func TestHierarchyInference_ContainerReuse(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: false,
@@ -340,6 +363,8 @@ func TestHierarchyInference_ContainerExistsInStorage(t *testing.T) {
 	entityManager.addExistingEntity("c360.logistics.sensor.document.temperature.group")
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: false,
@@ -365,6 +390,8 @@ func TestHierarchyInference_ContainerEntityProperties(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: false,
@@ -395,6 +422,8 @@ func TestHierarchyInference_ClearCache(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:             hierarchyTestOrg,
+		Platform:        hierarchyTestPlatform,
 		Enabled:         true,
 		CreateTypeEdges: true,
 	}
@@ -418,6 +447,8 @@ func TestHierarchyInference_GetMetrics(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: true,
@@ -484,6 +515,8 @@ func TestHierarchyInference_RaceConditionOnContainerCreate(t *testing.T) {
 	entityManager.addExistingEntity("c360.logistics.sensor.document.temperature.group")
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: false,

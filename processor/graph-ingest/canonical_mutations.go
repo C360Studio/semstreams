@@ -237,6 +237,13 @@ func (c *Component) handleCanonicalCreate(ctx context.Context, data []byte) ([]b
 	if err := c.requireRegisteredMessageType(request.Entity); err != nil {
 		return nil, err
 	}
+	// Authority gate before any clone, profile, or KV work (ADR-102 d5). The
+	// mutation lane is never an import lane — only a declared JetStream input
+	// port is — so a foreign subject here is refused unconditionally, which is
+	// also what makes an import a read-only mirror (ruled O-12(a)).
+	if err := c.authorizeSubject(request.Entity.ID, false); err != nil {
+		return nil, err
+	}
 	if len(request.Entity.Triples) != 0 {
 		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest,
 			errors.New("entity.triples is not admitted; use top-level triples"))
@@ -294,6 +301,11 @@ func (c *Component) handleCanonicalReconcile(ctx context.Context, data []byte) (
 	}
 	if err := validateEntityID(request.EntityID); err != nil {
 		return nil, rejectFromError(err)
+	}
+	// Before the fetch: a refused mutation must not even read the imported
+	// entity's state (ADR-102 d5 — "before any KV I/O").
+	if err := c.authorizeSubject(request.EntityID, false); err != nil {
+		return nil, err
 	}
 	if request.ExpectedRevision == 0 {
 		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, errors.New("expected_revision must be nonzero"))
@@ -364,6 +376,13 @@ func (c *Component) handleCanonicalAppend(ctx context.Context, data []byte) ([]b
 	}
 	if err := validateCanonicalAppendRequest(request.Triples); err != nil {
 		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, err)
+	}
+	// Every subject, before the batch reaches KV: annotating an imported
+	// subject from a local lane is refused (ADR-102 d5, ruled O-12(a)).
+	for index := range request.Triples {
+		if err := c.authorizeSubject(request.Triples[index].Subject, false); err != nil {
+			return nil, err
+		}
 	}
 
 	result, batchErr := c.addTriplesLane(ctx, request.Triples, dedupLaneAddBatch)
@@ -451,6 +470,9 @@ func (c *Component) handleCanonicalDelete(ctx context.Context, data []byte) ([]b
 	}
 	if err := validateEntityID(request.EntityID); err != nil {
 		return nil, rejectFromError(err)
+	}
+	if err := c.authorizeSubject(request.EntityID, false); err != nil {
+		return nil, err
 	}
 	if request.ExpectedRevision == 0 {
 		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, errors.New("expected_revision must be nonzero"))

@@ -12,7 +12,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -41,7 +40,7 @@ func TestIntegration_QueryEntityNATS_WireContract(t *testing.T) {
 	natsClient := testClient.Client
 
 	config := DefaultConfig()
-	deps := component.Dependencies{NATSClient: natsClient, PayloadRegistry: newTestPayloadRegistry(t)}
+	deps := testDependencies(t, natsClient)
 
 	configJSON, err := json.Marshal(config)
 	require.NoError(t, err)

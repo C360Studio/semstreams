@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
@@ -26,7 +25,7 @@ func TestIntegration_ConcurrentCanonicalAppend(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
 	configJSON, err := json.Marshal(DefaultConfig())
 	require.NoError(t, err)
-	created, err := CreateGraphIngest(configJSON, component.Dependencies{NATSClient: testClient.Client, PayloadRegistry: newTestPayloadRegistry(t)})
+	created, err := CreateGraphIngest(configJSON, testDependencies(t, testClient.Client, withAuthority("c360", "test")))
 	require.NoError(t, err)
 	c := created.(*Component)
 	require.NoError(t, c.Initialize())

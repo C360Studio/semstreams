@@ -102,6 +102,8 @@ func TestIntegration_RuleReadableProjectionProductionLifecycle(t *testing.T) {
 		NATSClient:      nc,
 		MetricsRegistry: metric.NewMetricsRegistry(),
 		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+		// The factory refuses an absent deployment authority (ADR-102 d2).
+		Platform: component.PlatformMeta{Org: "acme", Platform: "ops"},
 	}
 
 	discoverable, err := rule.CreateRuleProcessor(json.RawMessage(configJSON), deps)

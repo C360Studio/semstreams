@@ -113,6 +113,18 @@ func CreateRuleProcessor(rawConfig json.RawMessage, deps component.Dependencies)
 			"rule-processor-factory", "create", "NATS client validation")
 	}
 
+	// Every identity the rule engine mints — trigger entities, run-scope mints
+	// — takes positions 1-2 from here, and the run-anchor skip decides
+	// foreign-vs-local by comparing against it (ADR-102 d2/d5). An absent pair
+	// would make the engine either mint an invalid identity or judge every
+	// firing entity foreign, both silently. Config load already requires
+	// platform.org and platform.id, so a real deployment cannot reach this.
+	if deps.Platform.Org == "" || deps.Platform.Platform == "" {
+		return nil, errs.WrapInvalid(
+			fmt.Errorf("deps.Platform must carry the deployment authority (platform.org and platform.id)"),
+			"rule-processor-factory", "create", "Platform validation")
+	}
+
 	ruleConfig, err := resolveConfig(rawConfig)
 	if err != nil {
 		return nil, err

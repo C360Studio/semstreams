@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
@@ -47,7 +46,7 @@ func TestIntegration_NoGuardConsumerOnEntityStatesAfterStart(t *testing.T) {
 	natsClient := testClient.Client
 
 	config := DefaultConfig()
-	deps := component.Dependencies{NATSClient: natsClient, PayloadRegistry: newTestPayloadRegistry(t)}
+	deps := testDependencies(t, natsClient, withAuthority("c360", "test"))
 	configJSON, err := json.Marshal(config)
 	require.NoError(t, err)
 	comp, err := CreateGraphIngest(configJSON, deps)
@@ -121,7 +120,7 @@ func TestIntegration_BootSweepInventoriesResidentPoisonRealNATS(t *testing.T) {
 	require.NoError(t, err)
 
 	config := DefaultConfig()
-	deps := component.Dependencies{NATSClient: natsClient, PayloadRegistry: newTestPayloadRegistry(t)}
+	deps := testDependencies(t, natsClient, withAuthority("c360", "test"))
 	configJSON, err := json.Marshal(config)
 	require.NoError(t, err)
 	comp, err := CreateGraphIngest(configJSON, deps)

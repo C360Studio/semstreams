@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
@@ -34,7 +33,7 @@ func startPrefixTestComponent(t *testing.T) (*Component, *natsclient.Client) {
 	nc := testClient.Client
 
 	config := DefaultConfig()
-	deps := component.Dependencies{NATSClient: nc, PayloadRegistry: newTestPayloadRegistry(t)}
+	deps := testDependencies(t, nc)
 	configJSON, err := json.Marshal(config)
 	require.NoError(t, err)
 

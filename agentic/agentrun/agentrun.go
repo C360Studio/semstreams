@@ -38,6 +38,7 @@ import (
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
+	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
 // agentRunTransitions is the declared phase graph for an AgentRun (ADR-053 D2).
@@ -75,6 +76,12 @@ const (
 
 	// predicateParentRunEntityID carries the parent run's full entity ID, if any.
 	predicateParentRunEntityID = "agent.run.parent-entity-id"
+
+	// predicateOriginEntityID carries the originating loop-execution entity ID.
+	// It is agvocab.RunOriginEntityID; spelled here as a local constant for the
+	// same reason its siblings are — this package's init() is what declares the
+	// run family to the predicate vocabulary.
+	predicateOriginEntityID = agvocab.RunOriginEntityID
 )
 
 func init() {
@@ -85,6 +92,7 @@ func init() {
 		predicateAuditFrom,
 		predicateAuditNote,
 		predicateParentRunEntityID,
+		predicateOriginEntityID,
 	} {
 		vocabulary.Register(predicate)
 	}
@@ -105,7 +113,8 @@ const EntityIDPattern = "*.*.chain.agent.execution.*"
 // Field tags:
 //   - lifecycle:"id"                                         — entity identity (full 6-part ID, from KV key)
 //   - lifecycle:"phase,predicate=agent.run.phase"            — current phase triple
-//   - lifecycle:"predicate=agent.run.parent_entity_id"       — parent run entity ID triple
+//   - lifecycle:"predicate=agent.run.parent-entity-id"       — parent RUN entity ID triple
+//   - lifecycle:"predicate=agent.run.origin-entity-id"       — originating LOOP entity ID triple
 //
 // D1 CRITICAL: EntityIDField MUST hold the FULL 6-part chain.execution entity ID
 // because the projection layer populates it from the entity-state KEY (not a
@@ -122,6 +131,19 @@ type AgentRun struct {
 
 	// ParentRunEntityID is the parent run's full entity ID, or empty for root runs.
 	ParentRunEntityID string `json:"parent_run_entity_id,omitempty" lifecycle:"predicate=agent.run.parent-entity-id"`
+
+	// OriginEntityID is the full entity ID of the loop execution this run was
+	// minted FROM — the run's origin, set at birth by Mint for every run
+	// (ADR-102; #1096). It is NOT ParentRunEntityID: that names the parent
+	// RUN, this names the originating LOOP.
+	//
+	// It exists because the reciprocal anchors on the loop (agent.loop.run,
+	// agent.run.entity-id) are written only when the firing loop carries this
+	// deployment's own authority. For an imported loop the framework writes
+	// nothing to it, so this predicate is the only surviving pointer — and
+	// giving it one home for local and imported origins alike keeps the walk
+	// identical in both cases.
+	OriginEntityID string `json:"origin_entity_id,omitempty" lifecycle:"predicate=agent.run.origin-entity-id"`
 }
 
 // EntityID returns the full 6-part federated entity ID.
@@ -208,6 +230,14 @@ func Register(mgr *lifecycle.Manager) error {
 // rootLoopID (ADR-053 D4). The run's entity ID is
 // org.platform.chain.agent.execution.<rootLoopID>, initial phase is "dispatched".
 //
+// org and platform are the MINTING DEPLOYMENT's own authority (deps.Platform),
+// never read back from originEntityID: a rule firing on an imported loop mints
+// its runtime state locally (ADR-102 d2; #1096). originEntityID is the loop
+// execution the run was minted from; it is stamped as the birth predicate
+// agent.run.origin-entity-id, which is the run->loop pointer that survives when
+// the origin is a foreign-authority import the framework must not write to.
+// An empty originEntityID stamps nothing.
+//
 // Idempotent: if Manager.Create returns lifecycle.ErrAlreadyExists (the run was
 // already minted — common on JetStream redelivery or concurrent rule firings),
 // Mint treats it as success and returns the existing run via Manager.Get.
@@ -219,15 +249,20 @@ func Register(mgr *lifecycle.Manager) error {
 // exists and is in a valid state. The gh#178 concern (which caller's Create "won")
 // does not apply here because all callers want the same initial phase ("dispatched")
 // and the run entity is immutable in terms of identity.
-func Mint(ctx context.Context, mgr MintableManager, org, platform, rootLoopID string) (*AgentRun, error) {
+func Mint(
+	ctx context.Context,
+	mgr MintableManager,
+	org, platform, rootLoopID, originEntityID string,
+) (*AgentRun, error) {
 	entityID, err := agentic.TryChainExecutionEntityID(org, platform, rootLoopID)
 	if err != nil {
 		return nil, fmt.Errorf("agentrun.Mint: build entity ID: %w", err)
 	}
 
 	initial := &AgentRun{
-		EntityIDField: entityID,
-		PhaseField:    "dispatched",
+		EntityIDField:  entityID,
+		PhaseField:     "dispatched",
+		OriginEntityID: originEntityID,
 	}
 	if err := mgr.Create(ctx, initial); err != nil {
 		if errors.Is(err, lifecycle.ErrAlreadyExists) {

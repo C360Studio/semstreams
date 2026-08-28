@@ -501,6 +501,22 @@ const (
 	// DataType: string (6-part federated entity ID)
 	LoopRunEntityID = "agent.run.entity-id"
 
+	// RunOriginEntityID is the FULL 6-part entity ID of the loop execution a
+	// run was minted FROM — the run's origin, an entity reference (@id).
+	// Stamped by agentrun.Mint at creation as a birth predicate of the LOCAL
+	// run entity, for every run, whether the origin is local or an imported
+	// mirror (ADR-102; #1096). It is the ONE home of the run->loop pointer
+	// that never depends on writing the loop: when the firing loop carries a
+	// foreign authority the framework writes nothing to it, so the reciprocal
+	// LoopRun / LoopRunEntityID anchors on the loop are absent by design and
+	// only this predicate resolves the ancestry.
+	//
+	// Distinct from LoopRunParentEntityID's neighbour agent.run.parent-entity-id
+	// (agentic/agentrun), which names the parent RUN, not the originating loop.
+	// Example: "org.platform.agentic-loop.agent.execution.<loopID>"
+	// DataType: string (6-part federated entity ID)
+	RunOriginEntityID = "agent.run.origin-entity-id"
+
 	// LoopWorkflow is the workflow slug this loop belongs to.
 	// Example: "code-review", "feature-implementation"
 	// DataType: string

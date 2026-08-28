@@ -32,7 +32,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
@@ -113,7 +112,7 @@ func newBenchComponent(b *testing.B) (*Component, *mockKVBucket) {
 	configJSON, err := json.Marshal(DefaultConfig())
 	require.NoError(b, err)
 
-	comp, err := CreateGraphIngest(configJSON, component.Dependencies{NATSClient: natsClient, PayloadRegistry: newTestPayloadRegistry(b)})
+	comp, err := CreateGraphIngest(configJSON, testDependencies(b, natsClient, withAuthority("c360", "sim")))
 	require.NoError(b, err)
 
 	c := comp.(*Component)

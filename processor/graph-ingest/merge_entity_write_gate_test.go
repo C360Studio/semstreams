@@ -44,7 +44,7 @@ func TestMergeEntity_InvalidCandidateNeverCommits(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run("merge branch "+tc.name, func(t *testing.T) {
-			c, bucket := createTestComponentWithMockKVBucket(t)
+			c, bucket := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 			resident := &graph.EntityState{ID: validID, Version: 1, Triples: []message.Triple{
 				{Subject: validID, Predicate: semantictest.Predicate(t, "test", "state", "value"), Object: "resident"},
 			}}
@@ -69,7 +69,7 @@ func TestMergeEntity_InvalidCandidateNeverCommits(t *testing.T) {
 		})
 
 		t.Run("create branch "+tc.name, func(t *testing.T) {
-			c, bucket := createTestComponentWithMockKVBucket(t)
+			c, bucket := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 
 			err := c.MergeEntity(context.Background(), &graph.EntityState{
 				ID: validID, Triples: tc.triples,

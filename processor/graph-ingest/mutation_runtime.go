@@ -48,6 +48,14 @@ func (c *Component) meteredMutation(subject string, handler mutationHandler) mut
 			return response, nil
 		}
 		c.recordPredicateContractRejections(subject, err)
+		// An authority rejection meters under its own operator-facing reason
+		// (authority_foreign / authority_claimed) and logs WITHOUT the identity;
+		// everything else keeps metering under its classified code. Routing both
+		// through this one wrapper is what keeps "metered exactly once" true.
+		if authorityReason, isAuthority := authorityMetricReason(err); isAuthority {
+			c.recordAuthorityRejection(subject, authorityReason, err)
+			return response, err
+		}
 		reason := graph.ErrorCodeInternal
 		var classified *errs.ClassifiedError
 		if errors.As(err, &classified) && classified.Code != "" {

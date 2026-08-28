@@ -588,6 +588,14 @@ type Component struct {
 	// inject a concurrent invalidation into the read window. Production is nil.
 	repopulateHook func(entityID string)
 
+	// org and platform are the DEPLOYMENT's own authority — positions 1-2 of
+	// every identity this deployment may mint (ADR-102 d5). Read once from
+	// deps.Platform at construction, which refuses an empty pair, so they are
+	// non-empty for the component's whole life and never re-derived from a
+	// candidate, a payload, or a subject.
+	org      string
+	platform string
+
 	// Metrics (atomic)
 	messagesProcessed int64
 	bytesProcessed    int64
@@ -704,6 +712,17 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 	if deps.PayloadRegistry == nil {
 		return nil, errs.WrapInvalid(errors.New("payload registry is required"), "CreateGraphIngest", "factory", "PayloadRegistry required")
 	}
+	// The authority gate compares every candidate subject against this pair
+	// (ADR-102 d5). An absent pair has no honest reading: admitting everything
+	// would silently retire the gate, and rejecting everything would take the
+	// graph down at the first fact. Both are worse than refusing to construct,
+	// and config load already requires platform.org and platform.id
+	// (config/config.go Validate), so a real deployment cannot reach this.
+	if deps.Platform.Org == "" || deps.Platform.Platform == "" {
+		return nil, errs.WrapInvalid(
+			errors.New("deps.Platform must carry the deployment authority (platform.org and platform.id)"),
+			"CreateGraphIngest", "factory", "Platform required")
+	}
 
 	config, inputs, outputs, err := resolveConfig(rawConfig)
 	if err != nil {
@@ -750,6 +769,8 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 		poisonedEntities:              getPoisonedEntitiesMetric(deps.MetricsRegistry),
 		metricsRegistry:               deps.MetricsRegistry,
 		cacheGen:                      make(map[string]uint64),
+		org:                           deps.Platform.Org,
+		platform:                      deps.Platform.Platform,
 	}
 
 	// Initialize last activity
@@ -1410,6 +1431,12 @@ func (c *Component) initHierarchyInference() {
 		CreateSystemEdges:  true,
 		CreateDomainEdges:  true,
 		CreateTypeSiblings: enableTypeSiblings,
+		// The deployment's own authority, from the same deps.Platform read the
+		// gate uses: containers and sibling edges are minted from the ingested
+		// entity's prefix, so an imported entity would mint them under a peer's
+		// authority. Inference skips those entities entirely (ADR-102).
+		Org:      c.org,
+		Platform: c.platform,
 	}
 
 	c.hierarchyInference = inference.NewHierarchyInference(
@@ -1455,6 +1482,9 @@ func (c *Component) setupJetStreamConsumer(ctx, submitCtx context.Context, port 
 	}
 	subject := stream.Subjects()[0]
 	streamName := stream.Name()
+	// The operator's import declaration is read from the PORT, once, here — a
+	// message can never claim it (ADR-102 d5).
+	importLane := stream.Import()
 
 	// Wait for stream to be available
 	waitForStream := c.waitForStream
@@ -1549,6 +1579,8 @@ func (c *Component) setupJetStreamConsumer(ctx, submitCtx context.Context, port 
 			stream:      meta.Stream,
 			seq:         meta.Sequence.Stream,
 			deliveredAt: meta.Timestamp,
+			subject:     subject,
+			importLane:  importLane,
 		}
 		if serr := c.ingestPool.SubmitBlocking(submitCtx, work); serr != nil {
 			if nakErr := msg.Nak(); nakErr != nil {
@@ -1632,7 +1664,7 @@ func (c *Component) handleMessage(ctx context.Context, subject string, data []by
 		return
 	}
 
-	_ = c.ingestEntity(ctx, entity)
+	_ = c.ingestEntity(ctx, entity, false)
 }
 
 // decodeEntity decodes a message's bytes into an EntityState: unmarshal the
@@ -1652,8 +1684,10 @@ func (c *Component) decodeEntity(subject string, data []byte) (*graph.EntityStat
 }
 
 // ingestEntity merges one Graphable projection into its authority entity.
-func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState) error {
-	if err := c.prepareFactProjection(entity); err != nil {
+// importLane is the arrival port's declared lane (ADR-102 d5); the synchronous
+// compat entry point and every direct caller pass false.
+func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState, importLane bool) error {
+	if err := c.prepareFactProjection(entity, importLane); err != nil {
 		return err
 	}
 
@@ -1674,7 +1708,7 @@ func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState)
 	// JetStream consumer path previously replaced all state and silently
 	// erased lifecycle-managed entity state on every subsequent
 	// Graphable arrival.
-	if err := c.MergeEntity(ctx, entity); err != nil {
+	if err := c.mergeEntityOnLane(ctx, entity, importLane); err != nil {
 		c.logger.Error("Failed to merge entity",
 			slog.String("entity_id", entity.ID),
 			slog.Any("error", err))
@@ -1692,7 +1726,7 @@ func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState)
 // before its redelivery guard so malformed identity cannot become a guard key
 // or trigger guard I/O; ingestEntity calls it as the reusable direct-entry
 // safety net. The operation is idempotent.
-func (c *Component) prepareFactProjection(entity *graph.EntityState) error {
+func (c *Component) prepareFactProjection(entity *graph.EntityState, importLane bool) error {
 	if entity == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "ingestEntity", "entity cannot be nil")
 	}
@@ -1702,6 +1736,12 @@ func (c *Component) prepareFactProjection(entity *graph.EntityState) error {
 			TripleIndex: -1,
 			Err:         err,
 		}, "Component", "ingestEntity", "validate envelope entity ID")
+	}
+	// Authority gate (ADR-102 d5), before the projection fill and before any KV
+	// I/O. importLane is the arrival port's own declaration, carried from the
+	// consume closure; a direct caller supplies false.
+	if err := c.authorizeSubject(entity.ID, importLane); err != nil {
+		return err
 	}
 
 	// Graphable projection convenience: an omitted subject means the envelope
@@ -1979,6 +2019,16 @@ func (c *Component) CreateEntity(ctx context.Context, entity *graph.EntityState)
 // Uses entityBucket.UpdateWithRetry for atomic CAS read-modify-write,
 // so concurrent arrivals on the same Subject converge without racing.
 func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) error {
+	// Direct in-process persistence is a LOCAL lane: only a declared JetStream
+	// import port carries the other one, and it reaches mergeEntityOnLane
+	// through ingestEntity.
+	return c.mergeEntityOnLane(ctx, entity, false)
+}
+
+// mergeEntityOnLane is MergeEntity's body, carrying the arrival lane so the
+// authority gate can admit a foreign subject on a declared import port and
+// refuse it everywhere else (ADR-102 d5).
+func (c *Component) mergeEntityOnLane(ctx context.Context, entity *graph.EntityState, importLane bool) error {
 	if entity == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "MergeEntity", "entity cannot be nil")
 	}
@@ -2006,6 +2056,12 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 	// legitimate birth of the same ID would create. References to absent entities
 	// are valid graph facts and remain observable as unresolved references.
 	if err := validateEntityID(entity.ID); err != nil {
+		return err
+	}
+	// The write chokepoint's own authority gate (ADR-102 d5): the fact lane has
+	// already run it in prepareFactProjection, so this is the backstop that
+	// covers every direct caller, on the same seam that owns the ID check.
+	if err := c.authorizeSubject(entity.ID, importLane); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -2158,6 +2214,13 @@ func (c *Component) createEntityWithReceipt(
 	if err := validateEntityID(entity.ID); err != nil {
 		return nil, 0, err
 	}
+	// In-process creation is a LOCAL lane: hierarchy container births are minted
+	// by this deployment, so a foreign subject here would be the framework
+	// minting under a peer's authority (ADR-102 d5). Not metered — the counter
+	// is labelled by RPC subject and an in-process birth has none.
+	if err := c.authorizeSubject(entity.ID, false); err != nil {
+		return nil, 0, err
+	}
 	if err := graph.ValidateEntityStateContract(entity); err != nil {
 		return nil, 0, errs.WrapInvalid(err, "Component", "CreateEntity", "validate entity state contract")
 	}
@@ -2231,6 +2294,11 @@ func (c *Component) createEntityWithReceipt(
 
 func (c *Component) deleteEntityAtRevision(ctx context.Context, entityID string, revision uint64) error {
 	if err := validateEntityID(entityID); err != nil {
+		return err
+	}
+	// Deleting a foreign subject is a mutation of an imported mirror, refused
+	// on every local lane (ADR-102 d5, ruled O-12(a)).
+	if err := c.authorizeSubject(entityID, false); err != nil {
 		return err
 	}
 	if revision == 0 {
@@ -2368,6 +2436,12 @@ func (c *Component) addTripleLane(ctx context.Context, triple message.Triple, la
 	}); contractErr != nil {
 		return false, 0, errs.WrapInvalid(contractErr, "Component", "AddTriple", "validate triple contract")
 	}
+	// Same seam, same lane: an in-process append names its own subject, so a
+	// foreign one would be the framework annotating an imported mirror
+	// (ADR-102 d5, ruled O-12(a)).
+	if authErr := c.authorizeSubject(triple.Subject, false); authErr != nil {
+		return false, 0, authErr
+	}
 
 	// Check context
 	if ctxErr := ctx.Err(); ctxErr != nil {
@@ -2499,6 +2573,14 @@ func (c *Component) addTriplesLane(ctx context.Context, triples []message.Triple
 		ID: triples[0].Subject, Triples: triples,
 	}); contractErr != nil {
 		return addTriplesResult{}, errs.WrapInvalid(contractErr, "Component", "AddTriples", "validate batch contract")
+	}
+	// EVERY subject in the batch, not just the synthetic root: a batch is
+	// rejected whole, so one foreign subject must not ride in beside local ones
+	// (ADR-102 d5).
+	for index := range triples {
+		if authErr := c.authorizeSubject(triples[index].Subject, false); authErr != nil {
+			return addTriplesResult{}, authErr
+		}
 	}
 
 	if ctxErr := ctx.Err(); ctxErr != nil {

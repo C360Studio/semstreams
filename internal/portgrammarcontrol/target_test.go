@@ -605,14 +605,20 @@ func assertFoundationBTargetAccounting(
 	// worklist's tracked ws_data row) — gh#1129 (owner ruling 2026-08-27) retired
 	// the whole cloud-federation.json config, so ws_control no longer contributes.
 	const approvedPrerequisiteAdditions = 1
+	// The one reference import lane (ADR-102 d5, #1095 task 6.2):
+	// configs/graph-backend.json declares graph-ingest's `peer_import`
+	// jetstream input with "import": true, the shipped example of the only
+	// port kind on which a foreign org.platform is admitted. It is an addition
+	// outside the frozen worklist, recorded here rather than absorbed.
+	const approvedImportLaneAdditions = 1
 	// The post-Foundation-B graph-query cutover retires eleven legacy provider
 	// targets and replaces them one-for-one, versions eight existing gateway
 	// rows without changing their count, and adds ten exact research consumer
 	// rows (two classify plus eight execute).
-	wantRows := 522 - retiredTargets + approvedPrerequisiteAdditions - legacyRetirements +
+	wantRows := 522 - retiredTargets + approvedPrerequisiteAdditions + approvedImportLaneAdditions - legacyRetirements +
 		len(postFoundationBGraphQueryProviderReplacements) + len(postFoundationBResearchQueryRawAdditions)
 	if actualRows != wantRows {
-		t.Fatalf("canonical active config rows=%d, want %d (historical 522 - %d retired fixture targets + %d prerequisites - %d retired legacy graph-query inputs + %d provider replacements + %d research query additions)",
+		t.Fatalf("canonical active config rows=%d, want %d (historical 522 - %d retired fixture targets + %d prerequisites + 1 import lane - %d retired legacy graph-query inputs + %d provider replacements + %d research query additions)",
 			actualRows, wantRows, retiredTargets, approvedPrerequisiteAdditions, legacyRetirements,
 			len(postFoundationBGraphQueryProviderReplacements), len(postFoundationBResearchQueryRawAdditions))
 	}
