@@ -1,6 +1,6 @@
 # gh#1095 — entity-ID segment semantics: options, contract, break wave, owner items
 
-**Baseline:** `origin/main` `5cc0c7fb`; committed as draft PR #1099 (`b6b4b024`). **Status: ACCEPTED** — owner ruling
+**Baseline:** `origin/main` `5cc0c7fb`; committed as draft PR #1099 (`b6b4b024`). **Status: ACCEPTED, with O-5 SUPERSEDED** (2026-08-28 — domain overlap between producers is permitted and the authority type is deleted; see ADR-102's Status block and https://github.com/C360Studio/semstreams/issues/1095#issuecomment-5454766422. The O-5 row in §F and the semdragon row in §D record what was ruled on 2026-08-26 and are kept as history) — owner ruling
 2026-08-26, applied in this revision. Row ids (S1, K3, W2, H1, …) refer to the inventory.
 
 ## Checkpoint (revision 5)

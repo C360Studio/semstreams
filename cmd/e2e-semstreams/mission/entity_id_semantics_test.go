@@ -23,15 +23,25 @@ func TestMissionIdentityFollowsCanonicalOrder(t *testing.T) {
 	if err != nil || !matched {
 		t.Fatalf("MatchEntityIDPattern(%q, %q) = (%v, %v), want match", EntityIDPattern, want, matched, err)
 	}
-	authority, err := semtypes.NewEntityDomainAuthority(EntityDomainDelegations()...)
-	if err != nil {
-		t.Fatalf("NewEntityDomainAuthority: %v", err)
-	}
 	parsed, err := semtypes.ParseEntityID(want)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := authority.Authorize(Producer, parsed.Domain, parsed.Type); err != nil {
-		t.Fatalf("the mission harness must delegate its own domain: %v", err)
+	// The harness declares its own taxonomy rather than borrowing a
+	// framework-reserved one; the audit reads that declaration for its
+	// registered set. There is no Authorize call to make: the authority policy
+	// was deleted by the owner ruling of 2026-08-28.
+	if semtypes.IsFrameworkEntityDomain(parsed.Domain) {
+		t.Fatalf("domain %q is framework-reserved; the harness must delegate its own", parsed.Domain)
+	}
+	declared := false
+	for _, delegation := range EntityDomainDelegations() {
+		if delegation.Producer == Producer && delegation.Domain == parsed.Domain {
+			declared = true
+		}
+	}
+	if !declared {
+		t.Fatalf("the mission harness must declare %q for producer %q; delegations = %+v",
+			parsed.Domain, Producer, EntityDomainDelegations())
 	}
 }

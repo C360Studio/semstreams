@@ -302,11 +302,20 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
       `IsSameDomain` removed (not a prefix under the new order; `grep -rn IsSameDomain --include='*.go'` → tests only).
       **Done:** `DeploymentPrefix`/`SourcePrefix`/`TaxonomyPrefix`/`TypePrefix`, `PrefixLevel(n)` (coded prefix rejection outside 2–5), `PrefixLevelDeployment..PrefixLevelType` constants, `IsSameSource`; `SystemPrefix`/`DomainPrefix`/`PlatformPrefix`/`IsSameSystem`/`IsSameDomain` deleted (`message/parse_entity_id_test.go` rewritten to the named levels).
 
-- [x] 3.3 Add `EntityDomainDelegation`, `EntityDomainAuthority`, `NewEntityDomainAuthority`, `Authorize(producer,
-      domain, entityType)`, and the reserved set `FrameworkEntityDomains = {agent, ops, graph}` (ruled O-9: the gated-DAG
-      family re-slots under `agent`); mirror `vocabulary/namespace_authority.go` shape-for-shape
-      (`Producer` from the trusted boundary, exact matches only).
-      **Done:** `pkg/types/entity_domain_authority.go` — `EntityDomainDelegation`, `EntityDomainAuthority`, `NewEntityDomainAuthority` (composition rejections: empty producer, non-canonical segment, reserved domain delegated; the two-producer rejection was implemented here and REMOVED 2026-08-28 when the owner superseded O-5 — overlap is permitted and reported by `composition.Validate` instead), `Authorize(producer, domain, entityType)` nil-safe with reserved passing for every producer, `FrameworkEntityDomains()`/`IsFrameworkEntityDomain` = `{agent, ops, graph}`. Consumers at birth: framework builders (reserved), the e2e mission harness and the three example packages declare delegations (`EntityDomainDelegations()`), the audit reads them as the registered set.
+- [x] 3.3 Add `EntityDomainDelegation`, ~~`EntityDomainAuthority`, `NewEntityDomainAuthority`, `Authorize(producer,
+      domain, entityType)`~~ (struck 2026-08-28), and the reserved set `FrameworkEntityDomains = {agent, ops, graph}`
+      (ruled O-9: the gated-DAG family re-slots under `agent`); the authority half mirrored
+      `vocabulary/namespace_authority.go` shape-for-shape until it was deleted.
+      **Done, then REDUCED by the owner ruling of 2026-08-28.** What ships in `pkg/types/entity_domain_authority.go`
+      is `EntityDomainDelegation` plus the reserved sets — `FrameworkEntityDomains()`/`IsFrameworkEntityDomain` =
+      `{agent, ops, graph}` and `ReservedInstanceTokens()`/`IsReservedInstanceToken`. `EntityDomainAuthority`,
+      `NewEntityDomainAuthority` and `Authorize` were implemented as this row describes and are now DELETED: with
+      domain overlap permitted there was nothing left to authorize, they had no production caller, and detecting a
+      mis-chosen taxonomy token is a vocabulary question rather than a composition-time one. The single consumer of
+      the delegation is the corpus audit, which AST-scans the literals for its registered set — proven by mutation:
+      removing `{Producer, Domain: environmentDomain}` from `examples/processors/iot_sensor/entity_domains.go` makes
+      `examples/processors/iot_sensor/payload.go:185` report `domain_unregistered`, and restoring it returns the
+      corpus to 1317/0.
 
 - [x] 3.4 Export `ErrorCodeEntityIDAuthorityInvalid = "entity_id_authority_invalid"`, reasons
       `EntityIDReasonForeignAuthority = "foreign_authority"`, `EntityIDReasonLocalAuthorityClaimed =
@@ -872,7 +881,12 @@ package; both declarations are now on the payload registrations) and
       round".
       **Round 2:** narrow re-review `5f66ce37` → `897476cf`, CHANGES REQUESTED (0 BLOCKING, 1 HIGH, 3 MEDIUM, 1 NIT);
       HIGH-1 confirmed closed by independent reproduction. The HIGH was a defect round 1 introduced in the published
-      layer, not a survivor. Dispositions in the same `conformance.md` section. Re-review is outstanding.
+      layer, not a survivor.
+      **Codex owner round** at `328b4181` (1 BLOCKING, 1 HIGH, 1 MEDIUM): the BLOCKING went to the owner and
+      returned as the ruling superseding O-5.
+      **Round 3** at `8e3411c8` (1 BLOCKING, 2 HIGH, 3 MEDIUM, 3 NIT): the owner then ruled a second time on the
+      same day — drop the overlap reporting and the authority type entirely — which dissolved the BLOCKING and
+      HIGH-1. Dispositions for every round are in `conformance.md`. Re-review is outstanding.
 - [ ] 7.4 Owner-run cross-agent round where the owner asks for it; fixes and re-review recorded in `conformance.md`.
 - [ ] 7.5 `openspec archive entity-id-segment-semantics` + spec sync as the final content commit; narrow reviewer
       check of the archive/spec sync recorded.

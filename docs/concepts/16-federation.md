@@ -47,9 +47,9 @@ framework permits it (owner ruling 2026-08-28): they are told apart by `system`,
 `acme.dep1.semsource.web.page.001` and `acme.dep1.semdragon.web.doc.001` are distinct entities, and ADR-099 level 0
 is source x taxonomy, so they land in distinct communities. That is what gives the cross-source pattern
 `org.platform.*.web.*.*` its meaning — "everything in this taxonomy, whoever produced it". A `system` prefix
-(`org.platform.<system>`) narrows the same question back to one source. An overlap nobody intended is reported by
-`composition.Validate` as a non-blocking `entity_domain_overlap` finding, never as a boot refusal: a warning that
-fires on the intended case would be ignored by the time the accidental one arrived.
+(`org.platform.<system>`) narrows the same question back to one source. Nothing in the framework reports an overlap:
+two products meaning different things by one token is a vocabulary problem — someone picked the wrong token — and
+detecting it at composition time would be the wrong layer.
 
 The **product** that produced an entity (semsource, semmem, …) is provenance — `Triple.Source` and the envelope
 `source` — and is never a position of the ID. Isolation between sources of one deployment comes from `system`;

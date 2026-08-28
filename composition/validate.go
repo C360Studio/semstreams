@@ -7,7 +7,6 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/config"
-	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/types"
 )
 
@@ -17,17 +16,7 @@ import (
 // exclusive resources — and the declared ports are then analyzed as a graph.
 // It performs no I/O, opens no connection, and constructs no component; the
 // only error return is for nil arguments, every judgment is a Finding.
-//
-// delegations are the entity-domain declarations of the products this binary
-// composes — each product's []pkg/types.EntityDomainDelegation, which only a
-// composition root holds; neither the catalog nor the configuration carries
-// them. Supplying none simply omits the overlap report. Two producers sharing
-// one domain is permitted (owner ruling 2026-08-28) and is reported here at
-// warning severity; boot runs Analyze, which has no delegation input, so this
-// finding can never reach the boot refusal.
-func Validate(
-	catalog *component.Registry, cfg *config.Config, delegations ...semtypes.EntityDomainDelegation,
-) (*Result, error) {
+func Validate(catalog *component.Registry, cfg *config.Config) (*Result, error) {
 	if catalog == nil {
 		return nil, errors.New("composition: nil catalog")
 	}
@@ -74,10 +63,6 @@ func Validate(
 			claimed[resource] = name
 		}
 		declarations = append(declarations, declaration)
-	}
-
-	for _, finding := range entityDomainOverlaps(delegations) {
-		result.add(finding)
 	}
 
 	analysis := Analyze(declarations, working.Streams)

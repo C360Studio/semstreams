@@ -9,10 +9,16 @@ const Producer = "document-example"
 
 // EntityDomainDelegations declares the entity domains this example mints under
 // (position 4 of the canonical org.platform.system.domain.type.instance order).
-// A composition root passes them to semtypes.NewEntityDomainAuthority so a
-// collision with another product's domain is a boot-time rejection, and the
-// entity-ID corpus audit reads them as the registered set for its
-// domain_unregistered rule.
+// The entity-ID corpus audit AST-scans these literals for the registered set
+// its domain_unregistered rule consults, so a position-4 token this example
+// mints without declaring here is a finding. Nothing reads them at runtime and
+// there is no constructor to call.
+//
+// Sharing a domain with another product is PERMITTED (owner ruling
+// 2026-08-28): `system` at position 3 keeps the entity IDs distinct, and
+// ADR-099 level 0 is source x taxonomy, so the communities stay distinct too.
+// Picking a token another product already means something else by is a
+// vocabulary question, not one the framework decides for you.
 func EntityDomainDelegations() []semtypes.EntityDomainDelegation {
 	return []semtypes.EntityDomainDelegation{
 		{Producer: Producer, Domain: "content"},

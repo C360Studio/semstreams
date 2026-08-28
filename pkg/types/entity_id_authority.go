@@ -13,9 +13,6 @@ const (
 	// EntityIDReasonLocalAuthorityClaimed identifies a candidate claiming the
 	// deployment's own org.platform on a declared import lane.
 	EntityIDReasonLocalAuthorityClaimed = "local_authority_claimed"
-	// EntityIDReasonDomainUndelegated identifies a domain that is neither
-	// framework-reserved nor delegated to the producer.
-	EntityIDReasonDomainUndelegated = "domain_undelegated"
 
 	// EntityIDDetailLane reports which lane the candidate arrived on.
 	EntityIDDetailLane = "lane"

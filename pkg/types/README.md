@@ -42,13 +42,17 @@ Six-part federated entity identifier in the canonical order org.platform.system.
 `org.platform` is the minting deployment authority (`platform.org` / `platform.id`), `system` is the source that
 produced the entity, `domain.type` is a delegated taxonomy, `instance` is the leaf.
 
-The taxonomy vocabulary is **shared**: more than one producer may delegate the same `domain`, and
-`NewEntityDomainAuthority` permits it (owner ruling 2026-08-28, superseding #1095 O-5). Sharing `web` between two
-products collides nothing — `system` at position 3 keeps `acme.prod.semsource.web.page.001` and
-`acme.prod.semdragon.web.doc.001` apart, and ADR-099 level 0 is source x taxonomy, so they are distinct communities.
-It is also what makes `org.platform.*.<domain>.*.*` useful: that pattern is "this taxonomy across every source",
-and it only has more than one answer because domains can be shared. An overlap you did not intend is reported
-offline by `composition.Validate` as a non-blocking `entity_domain_overlap` finding; it is never a boot refusal.
+The taxonomy vocabulary is **shared**: more than one producer may declare the same `domain`, and the framework
+permits it (owner ruling 2026-08-28, superseding #1095 O-5). Sharing `web` between two products collides nothing —
+`system` at position 3 keeps `acme.prod.semsource.web.page.001` and `acme.prod.semdragon.web.doc.001` apart, and
+ADR-099 level 0 is source x taxonomy, so they are distinct communities. It is also what makes
+`org.platform.*.<domain>.*.*` useful: that pattern is "this taxonomy across every source", and it only has more than
+one answer because domains can be shared; a `system` prefix narrows it back to one source.
+
+Nothing reports an overlap and there is no policy object to construct. `EntityDomainDelegation` is a **declaration**
+whose only reader is the entity-ID corpus audit, which AST-scans the literals in production Go for the registered set
+its `domain_unregistered` rule consults. Two products meaning different things by one token is a vocabulary problem,
+not a composition-time one.
 
 ```go
 entityID := types.EntityID{

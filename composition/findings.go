@@ -35,12 +35,6 @@ const (
 	TypeMissingInterface = "missing_interface"
 	// TypeEmptyComposition: no enabled components.
 	TypeEmptyComposition = "empty_composition"
-	// TypeEntityDomainOverlap: two or more producers delegate one entity
-	// domain. Permitted (owner ruling 2026-08-28, superseding #1095 O-5) — the
-	// taxonomy vocabulary is shared — so this is an observation for the
-	// operator composing them, never a refusal. Emitted only by Validate; the
-	// boot path runs Analyze, which takes no delegations.
-	TypeEntityDomainOverlap = "entity_domain_overlap"
 )
 
 // Finding severities.
@@ -74,7 +68,7 @@ type Finding struct {
 // cited for provenance only; that path no longer exists to compare against.
 func severityOf(typ string, orphan *flowgraph.OrphanedPort) string {
 	switch typ {
-	case TypeDisconnectedNode, TypeMissingInterface, TypeEmptyComposition, TypeEntityDomainOverlap:
+	case TypeDisconnectedNode, TypeMissingInterface, TypeEmptyComposition:
 		return SeverityWarning
 	case TypeOrphanedPort:
 		if orphan != nil && orphan.Issue == flowgraph.IssueNoPublishers &&

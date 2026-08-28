@@ -70,58 +70,48 @@ deployment's own `org.platform`; a fixed framework literal in positions 1–2 is
 - **THEN** it reports the occurrence with reason `authority_literal`
 - **AND** the test that verifies this is `TestAuditFlagsAuthorityLiteral`
 
-### Requirement: Entity-domain authority is delegated on the predicate-namespace pattern
+### Requirement: Entity domains are declared by their producer and read only by the corpus audit
 
-`pkg/types` MUST export an `EntityDomainAuthority` built from explicit `EntityDomainDelegation{Producer, Domain,
-Type}` values, mirroring `vocabulary.PredicateAuthority`: a framework-reserved domain (`agent`, `ops`, `graph`; the
-gated-DAG family is re-slotted under `agent`) MUST pass for every producer; an unreserved domain MUST require a non-empty producer with an exact matching
-`domain` or `domain.type` delegation; producer identity MUST come from the trusted composition boundary and MUST NOT
-be inferred from `Triple.Source` or a payload type. Authorization MUST run at declaration surfaces (framework
-builders, entity-ID pattern declarations, projection contracts, lifecycle workflows) and MUST NOT run on the
-graph-ingest persistence hot path. Two or more producers MUST be permitted to delegate one domain: the taxonomy
+`pkg/types` MUST export `EntityDomainDelegation{Producer, Domain, Type}` as the declaration a product makes of the
+entity domains it mints under, and MUST NOT ship a runtime or composition-time authorization policy over it (owner
+ruling 2026-08-28, superseding O-5). The framework MUST reserve the domains `agent`, `ops`, and `graph` — the
+gated-DAG family is re-slotted under `agent` — and MUST expose that set and the reserved instance tokens as
+predicates. Producer identity MUST come from the trusted composition boundary and MUST NOT be inferred from
+`Triple.Source` or a payload type. Two or more producers MUST be permitted to declare one domain: the taxonomy
 vocabulary is shared, `system` at position 3 keeps the entity IDs distinct, and ADR-099 level 0 is source x taxonomy
-so the derived communities stay distinct (owner ruling 2026-08-28, superseding O-5). An overlap MUST be reported by
-the offline composition validator as a non-blocking finding, and MUST NOT be a boot refusal or a runtime log line.
-The delegations MUST be retained: they are the registered set the corpus audit's `domain_unregistered` rule reads.
-`system` and `instance` values MUST NOT be registered.
+so the derived communities stay distinct. An overlap MUST NOT be a boot refusal, a runtime log line, or a
+composition finding — a token two products mean different things by is a vocabulary question, not one the framework
+answers. The declarations MUST be retained as composite literals in production Go: they are the registered set the
+corpus audit's `domain_unregistered` rule reads, and no other consumer exists. `system` and `instance` values MUST
+NOT be registered.
 
-#### Scenario: a reserved domain passes for every producer
+#### Scenario: the reserved domain set is closed
 
-- **GIVEN** an authority with no delegations
-- **WHEN** `Authorize("", "agent", "execution")` runs
-- **THEN** it returns nil
-- **AND** the test that verifies this is `TestEntityDomainAuthorityReservedPassesForEveryProducer`
+- **GIVEN** the exported framework-reserved domain set
+- **WHEN** it is compared against `{agent, ops, graph}`
+- **THEN** it is exactly that set, and `gateddag` is NOT reserved because the gated-DAG family re-slots under `agent`
+- **AND** the test that verifies this is `TestFrameworkEntityDomainsIsTheClosedReservedSet`
 
-#### Scenario: an undelegated domain is a coded rejection
+#### Scenario: the audit's registered set is the declarations themselves
 
-- **GIVEN** an authority delegating only `git` to producer `semsource`
-- **WHEN** `Authorize("semsource", "media", "video")` runs
-- **THEN** it returns code `entity_id_authority_invalid` with reason `domain_undelegated`
-- **AND** the test that verifies this is `TestEntityDomainAuthorityMirrorsPredicateAuthority`
+- **GIVEN** a production builder minting position 4 `environmental`, declared by an `EntityDomainDelegation` literal
+- **WHEN** that literal is removed and the entity-ID corpus audit runs
+- **THEN** the builder is reported with reason `domain_unregistered`
+- **AND** restoring the literal returns the corpus to zero findings
+- **AND** the evidence is the mutation recorded in `conformance.md`
 
-#### Scenario: two producers may delegate one domain
+#### Scenario: two producers may declare one domain with nothing reporting it
 
-- **GIVEN** a delegation of `web` to producer `semsource` and a delegation of `web` to producer `semdragon`
-- **WHEN** `NewEntityDomainAuthority` builds the authority and `Authorize` runs for each producer
-- **THEN** the authority builds without error and both producers are authorized for `web`
-- **AND** a producer holding no delegation for `web` is still rejected
-- **AND** the test that verifies this is `TestEntityDomainAuthorityPermitsSharedDomains`
-
-#### Scenario: a shared domain is a non-blocking composition finding
-
-- **GIVEN** a composition whose supplied delegations give one domain two producers
-- **WHEN** `composition.Validate` runs over it
-- **THEN** it reports one `entity_domain_overlap` finding naming the domain and both producers
-- **AND** the finding severity is `warning`, the result status is not `errors`, and the boot path's
-  `composition.Analyze` cannot observe it
-- **AND** the tests that verify this are `TestValidateReportsSharedEntityDomainAsNonBlockingFinding` and
-  `TestBootAnalysisCannotSeeEntityDomainOverlap`
+- **GIVEN** a declaration of `web` by producer `semsource` and a declaration of `web` by producer `semdragon`
+- **WHEN** the composition is validated and the corpus audit runs
+- **THEN** neither reports the overlap, and `web` is registered for both
+- **AND** the test that verifies this is `TestEntityDomainDelegationIsADeclarationNotAPolicy`
 
 ### Requirement: Authority mismatch is a coded rejection distinct from structural rejection
 
 `pkg/types` MUST export `ErrorCodeEntityIDAuthorityInvalid = "entity_id_authority_invalid"`, reasons
-`EntityIDReasonForeignAuthority = "foreign_authority"`, `EntityIDReasonLocalAuthorityClaimed =
-"local_authority_claimed"`, and `EntityIDReasonDomainUndelegated = "domain_undelegated"`, and the detail key
+`EntityIDReasonForeignAuthority = "foreign_authority"` and `EntityIDReasonLocalAuthorityClaimed =
+"local_authority_claimed"`, and the detail key
 `EntityIDDetailLane = "lane"`. `ValidateEntityIDAuthority(candidate, org, platform string, importLane bool)` MUST return
 `foreign_authority` when `importLane` is false and positions 1–2 differ from `org`/`platform`, MUST return
 `local_authority_claimed` when `importLane` is true and positions 1–2 equal them, and MUST return nil otherwise. It
@@ -213,6 +203,9 @@ instance tokens; a production instance value equal to one of them MUST be a find
 - **WHEN** the audit runs
 - **THEN** it reports both with reason `authority_literal`
 - **AND** a triple subject or typed reference naming another deployment's authority is NOT reported
+- **AND** the constructor surface resolves only when ALL SIX fields are statically resolvable
+  (`entityIDConstructorValue`), so a partial-literal mint such as `EntityID{Org: deps.Org, Platform: "semsource", …}`
+  yields no candidate and is outside this rule — a stated limit of the extraction, not of the rule
 - **AND** the test that verifies this is `TestAuditFlagsAuthorityLiteralInAMintingLiteral`
 
 #### Scenario: the corpus is clean at the landing head
