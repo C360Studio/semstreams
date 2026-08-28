@@ -3,6 +3,8 @@ package executors
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
@@ -21,12 +24,17 @@ import (
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
+	htmlcharset "golang.org/x/net/html/charset"
+	"golang.org/x/net/idna"
 )
 
 const (
 	httpMaxResponseSize = 100 * 1024 // 100KB
-	httpMaxTextSize     = 20000      // bytes, before the truncation sentinel
-	httpMaxTitleSize    = 512        // bytes
+	httpMaxToolContent  = 20000      // total ToolResult.Content bytes, including metadata
+	httpMaxTextSize     = httpMaxToolContent
+	httpMaxTitleSize    = 512  // bytes
+	httpMaxURLSize      = 4096 // bytes after IDNA canonicalization
+	httpMaxContentType  = 256  // bytes
 	httpRequestTimeout  = 30 * time.Second
 
 	// httpRequestTripleSource is the Source field on triples this tool
@@ -49,6 +57,7 @@ type HTTPRequestExecutor struct {
 
 	lookupIP    func(context.Context, string) ([]net.IP, error)
 	dialContext func(context.Context, string, string) (net.Conn, error)
+	tlsConfig   *tls.Config
 
 	publisher agentictools.TriplePublisher
 	platform  component.PlatformMeta
@@ -120,6 +129,41 @@ func (e *HTTPRequestExecutor) effectiveTimeout() time.Duration {
 	return httpRequestTimeout
 }
 
+type httpFailure struct {
+	kind agentic.ToolErrorKind
+	err  error
+}
+
+func (e *httpFailure) Error() string { return e.err.Error() }
+
+func (e *httpFailure) Unwrap() error { return e.err }
+
+func httpFail(kind agentic.ToolErrorKind, format string, args ...any) error {
+	return &httpFailure{kind: kind, err: fmt.Errorf(format, args...)}
+}
+
+func httpRekind(kind agentic.ToolErrorKind, format string, err error) error {
+	return &httpFailure{kind: kind, err: fmt.Errorf(format+": %w", err)}
+}
+
+func httpFailureResult(callID string, err error) (agentic.ToolResult, error) {
+	kind := httpFailureKind(err)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		kind = agentic.ToolErrorTimeout
+		return agentic.ToolResult{CallID: callID, Error: err.Error(), ErrorKind: kind},
+			fmt.Errorf("http_request interrupted: %w", err)
+	}
+	return agentic.ToolResult{CallID: callID, Error: err.Error(), ErrorKind: kind}, nil
+}
+
+func httpFailureKind(err error) agentic.ToolErrorKind {
+	var failure *httpFailure
+	if errors.As(err, &failure) {
+		return failure.kind
+	}
+	return agentic.ToolErrorInternal
+}
+
 // ListTools returns the http_request tool definition.
 func (e *HTTPRequestExecutor) ListTools() []agentic.ToolDefinition {
 	return []agentic.ToolDefinition{
@@ -148,28 +192,23 @@ func (e *HTTPRequestExecutor) ListTools() []agentic.ToolDefinition {
 // Execute handles an http_request tool call.
 func (e *HTTPRequestExecutor) Execute(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
 	if ctx == nil {
-		return agentic.ToolResult{CallID: call.ID, Error: "context is required"}, nil
+		return httpFailureResult(call.ID, httpFail(agentic.ToolErrorInvalidArgs, "context is required"))
 	}
 	rawURL, ok := call.Arguments["url"].(string)
 	if !ok || rawURL == "" {
-		return agentic.ToolResult{CallID: call.ID, Error: "url is required"}, nil
+		return httpFailureResult(call.ID, httpFail(agentic.ToolErrorInvalidArgs, "url is required"))
 	}
 
 	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
-		return agentic.ToolResult{
-			CallID: call.ID,
-			Error:  "url must start with http:// or https://",
-		}, nil
+		return httpFailureResult(call.ID, httpFail(agentic.ToolErrorInvalidArgs, "url must start with http:// or https://"))
 	}
-
-	reqCtx, cancel := context.WithTimeout(ctx, e.effectiveTimeout())
-	defer cancel()
-
-	// Resolve, validate, and retain the exact address set for the first dial.
-	// Redirect targets repeat this operation in CheckRedirect before their dial.
-	pinnedIPs, err := httpResolveAndValidateWithLookup(reqCtx, rawURL, e.lookupIP)
+	canonicalURL, err := httpCanonicalURL(rawURL)
 	if err != nil {
-		return agentic.ToolResult{CallID: call.ID, Error: err.Error()}, nil
+		return httpFailureResult(call.ID, err)
+	}
+	if len(canonicalURL.String()) > httpMaxURLSize {
+		return httpFailureResult(call.ID, httpFail(agentic.ToolErrorInvalidArgs,
+			"URL exceeds %d-byte policy bound", httpMaxURLSize))
 	}
 
 	method := "GET"
@@ -177,41 +216,45 @@ func (e *HTTPRequestExecutor) Execute(ctx context.Context, call agentic.ToolCall
 		method = strings.ToUpper(m)
 	}
 	if method != "GET" && method != "POST" {
-		return agentic.ToolResult{
-			CallID: call.ID,
-			Error:  "method must be GET or POST",
-		}, nil
+		return httpFailureResult(call.ID, httpFail(agentic.ToolErrorInvalidArgs, "method must be GET or POST"))
 	}
 
-	req, err := http.NewRequestWithContext(reqCtx, method, rawURL, nil)
+	reqCtx, cancel := context.WithTimeout(ctx, e.effectiveTimeout())
+	defer cancel()
+
+	// Resolve, validate, and retain the exact address set for the first dial.
+	// Redirect targets repeat this operation in CheckRedirect before their dial.
+	pinnedIPs, err := httpResolveAndValidateWithLookup(reqCtx, canonicalURL.String(), e.lookupIP)
 	if err != nil {
-		return agentic.ToolResult{
-			CallID: call.ID,
-			Error:  fmt.Sprintf("create request: %v", err),
-		}, nil
+		return httpFailureResult(call.ID, err)
+	}
+
+	req, err := http.NewRequestWithContext(reqCtx, method, canonicalURL.String(), nil)
+	if err != nil {
+		return httpFailureResult(call.ID, httpRekind(agentic.ToolErrorInvalidArgs, "create request", err))
 	}
 	req.Header.Set("User-Agent", "semstreams-agent/1.0")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8")
 
-	client, err := httpBuildPinnedClient(rawURL, pinnedIPs, e.lookupIP, e.dialContext, e.effectiveTimeout())
+	client, err := httpBuildPinnedClient(
+		canonicalURL.String(), pinnedIPs, e.lookupIP, e.dialContext, e.tlsConfig, e.effectiveTimeout(),
+	)
 	if err != nil {
-		return agentic.ToolResult{CallID: call.ID, Error: err.Error()}, nil
+		return httpFailureResult(call.ID, err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return agentic.ToolResult{
-			CallID: call.ID,
-			Error:  fmt.Sprintf("request failed: %v", err),
-		}, nil
+		var failure *httpFailure
+		if !errors.As(err, &failure) {
+			err = httpRekind(agentic.ToolErrorNetwork, "request failed", err)
+		}
+		return httpFailureResult(call.ID, err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, httpMaxResponseSize+1))
 	if err != nil {
-		return agentic.ToolResult{
-			CallID: call.ID,
-			Error:  fmt.Sprintf("read response: %v", err),
-		}, nil
+		return httpFailureResult(call.ID, httpRekind(agentic.ToolErrorNetwork, "read response", err))
 	}
 
 	rawTruncated := len(body) > httpMaxResponseSize
@@ -220,15 +263,28 @@ func (e *HTTPRequestExecutor) Execute(ctx context.Context, call agentic.ToolCall
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		return agentic.ToolResult{
-			CallID: call.ID,
-			Error:  fmt.Sprintf("HTTP %d: %s", resp.StatusCode, httpTruncate(string(body), 500)),
-		}, nil
+		return httpFailureResult(call.ID, httpFail(httpStatusErrorKind(resp.StatusCode), "HTTP %d: %s",
+			resp.StatusCode, httpTruncate(strings.ToValidUTF8(string(body), "�"), 500)))
 	}
 
 	contentType := resp.Header.Get("Content-Type")
-	readable := httpReadableResponse(body, contentType, rawTruncated)
+	if !utf8.ValidString(contentType) {
+		return httpFailureResult(call.ID, httpFail(agentic.ToolErrorExternal,
+			"response Content-Type is not valid UTF-8"))
+	}
+	if len(contentType) > httpMaxContentType {
+		return httpFailureResult(call.ID, httpFail(agentic.ToolErrorExternal,
+			"response Content-Type exceeds %d-byte policy bound", httpMaxContentType))
+	}
+	readable, err := httpReadableResponse(body, contentType, rawTruncated)
+	if err != nil {
+		return httpFailureResult(call.ID, err)
+	}
 	finalURL := resp.Request.URL.String()
+	formatted, err := httpFormatReadableResult(resp.StatusCode, finalURL, contentType, readable)
+	if err != nil {
+		return httpFailureResult(call.ID, err)
+	}
 
 	// Opportunistic graph emission. Detach from the caller's ctx so an
 	// upstream cancellation doesn't half-write the batch, and so the
@@ -238,12 +294,12 @@ func (e *HTTPRequestExecutor) Execute(ctx context.Context, call agentic.ToolCall
 	if e.publisher != nil {
 		emitCtx, emitCancel := context.WithTimeout(context.WithoutCancel(ctx), webEmitTimeout)
 		defer emitCancel()
-		e.emitObservation(emitCtx, call, finalURL, resp, readable.Text, readable.Truncated)
+		e.emitObservation(emitCtx, call, finalURL, resp, formatted.Body, formatted.Truncated)
 	}
 
 	return agentic.ToolResult{
 		CallID:  call.ID,
-		Content: httpFormatReadableResult(resp.StatusCode, finalURL, contentType, readable),
+		Content: formatted.Content,
 	}, nil
 }
 
@@ -254,28 +310,51 @@ type httpReadable struct {
 	Truncated bool
 }
 
-func httpReadableResponse(body []byte, contentType string, rawTruncated bool) httpReadable {
+func httpReadableResponse(body []byte, contentType string, rawTruncated bool) (httpReadable, error) {
 	mediaType, _, err := mime.ParseMediaType(contentType)
 	if err != nil {
 		mediaType = strings.TrimSpace(strings.Split(contentType, ";")[0])
 	}
-	if strings.EqualFold(mediaType, "text/html") || strings.EqualFold(mediaType, "application/xhtml+xml") {
-		text, textTruncated := httpHTMLToMarkdown(bytes.NewReader(body), httpMaxTextSize)
-		if rawTruncated || textTruncated {
+	isHTML := strings.EqualFold(mediaType, "text/html") || strings.EqualFold(mediaType, "application/xhtml+xml")
+	if !isHTML {
+		detected, _, _ := mime.ParseMediaType(http.DetectContentType(body))
+		isHTML = strings.EqualFold(detected, "text/html")
+	}
+	if isHTML {
+		decodedReader, decodeErr := htmlcharset.NewReader(bytes.NewReader(body), contentType)
+		if decodeErr != nil {
+			return httpReadable{}, httpRekind(agentic.ToolErrorExternal, "decode HTML charset", decodeErr)
+		}
+		decoded, decodeErr := io.ReadAll(io.LimitReader(decodedReader, httpMaxResponseSize*4+1))
+		if decodeErr != nil {
+			return httpReadable{}, httpRekind(agentic.ToolErrorExternal, "decode HTML body", decodeErr)
+		}
+		decodedTruncated := len(decoded) > httpMaxResponseSize*4
+		if decodedTruncated {
+			decoded = decoded[:httpMaxResponseSize*4]
+		}
+		decoded = []byte(strings.ToValidUTF8(string(decoded), "�"))
+		text, textTruncated := httpHTMLToMarkdown(bytes.NewReader(decoded), httpMaxTextSize)
+		if rawTruncated || decodedTruncated || textTruncated {
 			text = httpWithTruncationSentinel(text)
+		}
+		title := httpExtractHTMLTitle(bytes.NewReader(decoded))
+		if len(title) > httpMaxTitleSize {
+			return httpReadable{}, httpFail(agentic.ToolErrorExternal,
+				"response title exceeds %d-byte policy bound", httpMaxTitleSize)
 		}
 		return httpReadable{
 			Text:      text,
-			Title:     httpTruncate(httpExtractHTMLTitle(bytes.NewReader(body)), httpMaxTitleSize),
+			Title:     title,
 			Transform: "html-to-markdown",
-			Truncated: rawTruncated || textTruncated,
-		}
+			Truncated: rawTruncated || decodedTruncated || textTruncated,
+		}, nil
 	}
 
-	text := string(body)
+	text := strings.ToValidUTF8(string(body), "�")
 	textTruncated := len(text) > httpMaxTextSize
 	if textTruncated {
-		text = text[:httpMaxTextSize]
+		text = httpUTF8Prefix(text, httpMaxTextSize)
 	}
 	if rawTruncated || textTruncated {
 		text = httpWithTruncationSentinel(text)
@@ -284,7 +363,7 @@ func httpReadableResponse(body []byte, contentType string, rawTruncated bool) ht
 		Text:      text,
 		Transform: "raw",
 		Truncated: rawTruncated || textTruncated,
-	}
+	}, nil
 }
 
 func httpWithTruncationSentinel(text string) string {
@@ -294,16 +373,101 @@ func httpWithTruncationSentinel(text string) string {
 	return strings.TrimRight(text, "\n") + "\n[content truncated]"
 }
 
-func httpFormatReadableResult(statusCode int, finalURL, contentType string, readable httpReadable) string {
+type httpFormattedResult struct {
+	Content   string
+	Body      string
+	Truncated bool
+}
+
+func httpFormatReadableResult(
+	statusCode int,
+	finalURL string,
+	contentType string,
+	readable httpReadable,
+) (httpFormattedResult, error) {
+	if len(finalURL) > httpMaxURLSize {
+		return httpFormattedResult{}, httpFail(agentic.ToolErrorPermission,
+			"final URL exceeds %d-byte policy bound", httpMaxURLSize)
+	}
+	if len(contentType) > httpMaxContentType {
+		return httpFormattedResult{}, httpFail(agentic.ToolErrorExternal,
+			"response Content-Type exceeds %d-byte policy bound", httpMaxContentType)
+	}
+	readable.Title = strings.ToValidUTF8(readable.Title, "�")
+	if len(readable.Title) > httpMaxTitleSize {
+		return httpFormattedResult{}, httpFail(agentic.ToolErrorExternal,
+			"response title exceeds %d-byte policy bound", httpMaxTitleSize)
+	}
+	readable.Text = strings.ToValidUTF8(readable.Text, "�")
+
+	header := httpReadableHeader(statusCode, finalURL, contentType, readable.Title, readable.Transform, readable.Truncated)
+	if len(header) > httpMaxToolContent {
+		return httpFormattedResult{}, httpFail(agentic.ToolErrorExternal,
+			"response metadata exceeds %d-byte result bound", httpMaxToolContent)
+	}
+	body := readable.Text
+	truncated := readable.Truncated
+	if len(header)+len(body) > httpMaxToolContent {
+		truncated = true
+		header = httpReadableHeader(statusCode, finalURL, contentType, readable.Title, readable.Transform, true)
+		body = httpFitTextWithSentinel(body, httpMaxToolContent-len(header))
+	}
+	content := header + body
+	if len(content) > httpMaxToolContent {
+		return httpFormattedResult{}, httpFail(agentic.ToolErrorInternal,
+			"formatted response exceeded %d-byte invariant", httpMaxToolContent)
+	}
+	return httpFormattedResult{Content: content, Body: body, Truncated: truncated}, nil
+}
+
+func httpReadableHeader(statusCode int, finalURL, contentType, title, transform string, truncated bool) string {
 	var result strings.Builder
 	fmt.Fprintf(&result, "HTTP %d\nFinal-URL: %s\nContent-Type: %s\nContent-Transform: %s\nTruncated: %t\n",
-		statusCode, finalURL, contentType, readable.Transform, readable.Truncated)
-	if readable.Title != "" {
-		fmt.Fprintf(&result, "Title: %s\n", readable.Title)
+		statusCode, finalURL, contentType, transform, truncated)
+	if title != "" {
+		fmt.Fprintf(&result, "Title: %s\n", title)
 	}
 	result.WriteByte('\n')
-	result.WriteString(readable.Text)
 	return result.String()
+}
+
+func httpFitTextWithSentinel(text string, maxBytes int) string {
+	const sentinel = "\n[content truncated]"
+	text = strings.TrimSuffix(text, sentinel)
+	if maxBytes <= len(sentinel) {
+		return httpUTF8Prefix("[content truncated]", maxBytes)
+	}
+	return strings.TrimRight(httpUTF8Prefix(text, maxBytes-len(sentinel)), "\n") + sentinel
+}
+
+func httpUTF8Prefix(text string, maxBytes int) string {
+	text = strings.ToValidUTF8(text, "�")
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(text) <= maxBytes {
+		return text
+	}
+	end := maxBytes
+	for end > 0 && !utf8.ValidString(text[:end]) {
+		end--
+	}
+	return text[:end]
+}
+
+func httpStatusErrorKind(statusCode int) agentic.ToolErrorKind {
+	switch statusCode {
+	case http.StatusBadRequest, http.StatusMethodNotAllowed, http.StatusNotAcceptable,
+		http.StatusLengthRequired, http.StatusRequestEntityTooLarge, http.StatusRequestURITooLong,
+		http.StatusUnsupportedMediaType, http.StatusUnprocessableEntity:
+		return agentic.ToolErrorInvalidArgs
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return agentic.ToolErrorPermission
+	case http.StatusNotFound, http.StatusGone:
+		return agentic.ToolErrorNotFound
+	default:
+		return agentic.ToolErrorExternal
+	}
 }
 
 func httpHTMLToMarkdown(r io.Reader, maxBytes int) (string, bool) {
@@ -379,7 +543,7 @@ func httpHTMLToMarkdown(r io.Reader, maxBytes int) (string, bool) {
 				return httpCollapseNewlines(strings.TrimSpace(result.String())), truncated
 			}
 			if len(text)+1 > remaining {
-				result.WriteString(text[:remaining])
+				result.WriteString(httpUTF8Prefix(text, remaining))
 				truncated = true
 				return httpCollapseNewlines(strings.TrimSpace(result.String())), truncated
 			}
@@ -390,7 +554,7 @@ func httpHTMLToMarkdown(r io.Reader, maxBytes int) (string, bool) {
 
 	text := httpCollapseNewlines(strings.TrimSpace(result.String()))
 	if len(text) > maxBytes {
-		text = text[:maxBytes]
+		text = httpUTF8Prefix(text, maxBytes)
 		truncated = true
 	}
 	return text, truncated
@@ -514,16 +678,16 @@ func httpResolveAndValidateWithLookup(
 	rawURL string,
 	lookupIP func(context.Context, string) ([]net.IP, error),
 ) ([]net.IP, error) {
-	parsed, err := url.Parse(rawURL)
+	parsed, err := httpCanonicalURL(rawURL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid URL: %v", err)
+		return nil, err
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return nil, fmt.Errorf("URL policy: unsupported scheme %q", parsed.Scheme)
+		return nil, httpFail(agentic.ToolErrorPermission, "URL policy: unsupported scheme %q", parsed.Scheme)
 	}
 	host := parsed.Hostname()
 	if host == "" {
-		return nil, fmt.Errorf("invalid URL: host is required")
+		return nil, httpFail(agentic.ToolErrorInvalidArgs, "invalid URL: host is required")
 	}
 
 	var ips []net.IP
@@ -532,11 +696,11 @@ func httpResolveAndValidateWithLookup(
 	} else {
 		ips, err = lookupIP(ctx, host)
 		if err != nil {
-			return nil, fmt.Errorf("DNS resolution failed for %s: %w", host, err)
+			return nil, httpRekind(agentic.ToolErrorNetwork, "DNS resolution failed for "+host, err)
 		}
 	}
 	if len(ips) == 0 {
-		return nil, fmt.Errorf("no IPs resolved for %s", host)
+		return nil, httpFail(agentic.ToolErrorNetwork, "no IPs resolved for %s", host)
 	}
 
 	return httpValidateResolvedIPs(host, ips)
@@ -549,7 +713,8 @@ func httpValidateResolvedIPs(host string, ips []net.IP) ([]net.IP, error) {
 			ip = v4
 		}
 		if httpBlockedIP(ip) {
-			return nil, fmt.Errorf("blocked: %s resolves to private/reserved IP %s", host, ip)
+			return nil, httpFail(agentic.ToolErrorPermission,
+				"blocked: %s resolves to private/reserved IP %s", host, ip)
 		}
 		validated = append(validated, ip)
 	}
@@ -616,11 +781,12 @@ func httpBuildPinnedClient(
 	pinnedIPs []net.IP,
 	lookupIP func(context.Context, string) ([]net.IP, error),
 	dialContext func(context.Context, string, string) (net.Conn, error),
+	tlsConfig *tls.Config,
 	timeout time.Duration,
 ) (*http.Client, error) {
-	initialURL, err := url.Parse(rawURL)
+	initialURL, err := httpCanonicalURL(rawURL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid URL: %v", err)
+		return nil, err
 	}
 	initialAuthority, err := httpURLAuthority(initialURL)
 	if err != nil {
@@ -631,18 +797,21 @@ func httpBuildPinnedClient(
 
 	transport := &http.Transport{
 		DisableKeepAlives: true,
+		TLSClientConfig:   tlsConfig,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			canonicalAddr, canonicalErr := httpCanonicalAuthority(addr)
 			if canonicalErr != nil {
-				return nil, fmt.Errorf("request policy: %w", canonicalErr)
+				return nil, httpRekind(agentic.ToolErrorPermission, "request policy", canonicalErr)
 			}
 			ips := pins.get(canonicalAddr)
 			if len(ips) == 0 {
-				return nil, fmt.Errorf("request policy: no validated address for %s", canonicalAddr)
+				return nil, httpFail(agentic.ToolErrorInternal,
+					"request policy: no validated address for %s", canonicalAddr)
 			}
 			_, port, err := net.SplitHostPort(canonicalAddr)
 			if err != nil {
-				return nil, fmt.Errorf("request policy: invalid dial authority %q: %w", addr, err)
+				return nil, httpRekind(agentic.ToolErrorPermission,
+					fmt.Sprintf("request policy: invalid dial authority %q", addr), err)
 			}
 			var lastErr error
 			for _, ip := range ips {
@@ -653,7 +822,7 @@ func httpBuildPinnedClient(
 				}
 				lastErr = dialErr
 			}
-			return nil, lastErr
+			return nil, httpRekind(agentic.ToolErrorNetwork, "dial validated address", lastErr)
 		},
 	}
 
@@ -662,23 +831,63 @@ func httpBuildPinnedClient(
 		Timeout:   timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
-				return fmt.Errorf("redirect policy: too many redirects")
+				return httpFail(agentic.ToolErrorPermission, "redirect policy: too many redirects")
 			}
-			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
-				return fmt.Errorf("redirect policy: unsupported scheme %q", req.URL.Scheme)
+			canonicalRedirect, canonicalErr := httpCanonicalURL(req.URL.String())
+			if canonicalErr != nil {
+				return httpRekind(agentic.ToolErrorPermission, "redirect policy", canonicalErr)
 			}
-			redirectIPs, resolveErr := httpResolveAndValidateWithLookup(req.Context(), req.URL.String(), lookupIP)
+			if len(canonicalRedirect.String()) > httpMaxURLSize {
+				return httpFail(agentic.ToolErrorPermission,
+					"redirect policy: URL exceeds %d-byte bound", httpMaxURLSize)
+			}
+			if canonicalRedirect.Scheme != "http" && canonicalRedirect.Scheme != "https" {
+				return httpFail(agentic.ToolErrorPermission,
+					"redirect policy: unsupported scheme %q", canonicalRedirect.Scheme)
+			}
+			*req.URL = *canonicalRedirect
+			redirectIPs, resolveErr := httpResolveAndValidateWithLookup(req.Context(), canonicalRedirect.String(), lookupIP)
 			if resolveErr != nil {
-				return fmt.Errorf("redirect policy: %w", resolveErr)
+				return httpRekind(httpFailureKind(resolveErr), "redirect target", resolveErr)
 			}
 			authority, authorityErr := httpURLAuthority(req.URL)
 			if authorityErr != nil {
-				return fmt.Errorf("redirect policy: %w", authorityErr)
+				return httpRekind(agentic.ToolErrorPermission, "redirect policy", authorityErr)
 			}
 			pins.put(authority, redirectIPs)
 			return nil
 		},
 	}, nil
+}
+
+func httpCanonicalURL(rawURL string) (*url.URL, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, httpRekind(agentic.ToolErrorInvalidArgs, "invalid URL", err)
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return nil, httpFail(agentic.ToolErrorInvalidArgs, "invalid URL: host is required")
+	}
+	if parsed.User != nil {
+		return nil, httpFail(agentic.ToolErrorInvalidArgs, "invalid URL: user information is not allowed")
+	}
+	canonicalHost := host
+	if net.ParseIP(host) == nil {
+		canonicalHost, err = idna.Lookup.ToASCII(host)
+		if err != nil {
+			return nil, httpRekind(agentic.ToolErrorInvalidArgs, "invalid IDN hostname", err)
+		}
+		canonicalHost = strings.ToLower(canonicalHost)
+	}
+	if port := parsed.Port(); port != "" {
+		parsed.Host = net.JoinHostPort(canonicalHost, port)
+	} else if strings.Contains(canonicalHost, ":") {
+		parsed.Host = "[" + canonicalHost + "]"
+	} else {
+		parsed.Host = canonicalHost
+	}
+	return parsed, nil
 }
 
 func httpURLAuthority(parsed *url.URL) (string, error) {
@@ -697,6 +906,13 @@ func httpURLAuthority(parsed *url.URL) (string, error) {
 			return "", fmt.Errorf("unsupported scheme %q", parsed.Scheme)
 		}
 	}
+	if net.ParseIP(host) == nil {
+		canonicalHost, err := idna.Lookup.ToASCII(host)
+		if err != nil {
+			return "", fmt.Errorf("invalid IDN hostname %q: %w", host, err)
+		}
+		host = canonicalHost
+	}
 	return net.JoinHostPort(strings.ToLower(host), port), nil
 }
 
@@ -709,8 +925,9 @@ func httpCanonicalAuthority(authority string) (string, error) {
 }
 
 func httpTruncate(s string, maxLen int) string {
+	s = strings.ToValidUTF8(s, "�")
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	return httpUTF8Prefix(s, maxLen) + "..."
 }

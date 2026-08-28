@@ -2,6 +2,8 @@ package executors
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/c360studio/semstreams/agentic"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
@@ -85,6 +88,7 @@ func buildHTTPTestPinnedClient(t *testing.T, rawURL string, pinnedIP net.IP, tim
 			return nil, fmt.Errorf("unexpected redirect lookup for %q", host)
 		},
 		dialer.DialContext,
+		nil,
 		timeout,
 	)
 	require.NoError(t, err)
@@ -124,6 +128,7 @@ func TestHTTPRequestExecutor_Execute_RejectsNilContext(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "nil-context", result.CallID)
 	assert.Equal(t, "context is required", result.Error)
+	assert.Equal(t, agentic.ToolErrorInvalidArgs, result.ErrorKind)
 }
 
 // TestHTTPRequestExecutor_ListTools verifies the tool definition shape.
@@ -261,8 +266,212 @@ func TestHTTPRequestExecutor_Execute_ReportsContentTypeAndTruncation(t *testing.
 			assert.Contains(t, result.Content, "Content-Transform: "+tc.wantTransform)
 			assert.Contains(t, result.Content, fmt.Sprintf("Truncated: %t", tc.wantTruncated))
 			assert.Contains(t, result.Content, tc.wantBody)
+			assert.LessOrEqual(t, len(result.Content), httpMaxToolContent)
 		})
 	}
+}
+
+func TestHTTPRequestExecutor_Execute_TotalContentBoundIsUTF8Safe(t *testing.T) {
+	body := strings.Repeat("🙂", httpMaxToolContent)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = fmt.Fprintf(w, "<html><head><title>Large page</title></head><body><p>%s</p></body></html>", body)
+	}))
+	t.Cleanup(srv.Close)
+	port := testServerPort(t, srv)
+	fakeIP := net.ParseIP("93.184.216.12")
+	network := &httpTestNetwork{
+		resolved:    map[string][]net.IP{"large.example": {fakeIP}},
+		dialTargets: map[string]string{net.JoinHostPort(fakeIP.String(), port): srv.Listener.Addr().String()},
+	}
+
+	result := executeHTTPTestCall(context.Background(), t, network.executor(), "http://large.example:"+port+"/page")
+	require.Empty(t, result.Error)
+	assert.LessOrEqual(t, len(result.Content), httpMaxToolContent)
+	assert.Greater(t, len(result.Content), httpMaxToolContent-utf8.UTFMax)
+	assert.True(t, utf8.ValidString(result.Content))
+	assert.Contains(t, result.Content, "Truncated: true")
+	assert.True(t, strings.HasSuffix(result.Content, "[content truncated]"))
+}
+
+func TestHTTPRequestExecutor_Execute_DecodesDeclaredAndDetectedHTMLCharset(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		contentType string
+		body        []byte
+		want        []string
+	}{
+		{
+			name:        "declared ISO-8859-1",
+			contentType: "text/html; charset=iso-8859-1",
+			body:        []byte("<html><head><title>Caf\xe9</title></head><body><p>Cr\xe8me br\xfbl\xe9e</p></body></html>"),
+			want:        []string{"Title: Café", "Crème brûlée"},
+		},
+		{
+			name:        "meta-detected Windows-1252",
+			contentType: "text/html",
+			body:        []byte("<html><head><meta charset=windows-1252></head><body><p>Price \x80</p></body></html>"),
+			want:        []string{"Price €"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", tc.contentType)
+				_, _ = w.Write(tc.body)
+			}))
+			t.Cleanup(srv.Close)
+			port := testServerPort(t, srv)
+			fakeIP := net.ParseIP("93.184.216.13")
+			network := &httpTestNetwork{
+				resolved:    map[string][]net.IP{"charset.example": {fakeIP}},
+				dialTargets: map[string]string{net.JoinHostPort(fakeIP.String(), port): srv.Listener.Addr().String()},
+			}
+
+			result := executeHTTPTestCall(context.Background(), t, network.executor(), "http://charset.example:"+port+"/page")
+			require.Empty(t, result.Error)
+			for _, want := range tc.want {
+				assert.Contains(t, result.Content, want)
+			}
+			assert.True(t, utf8.ValidString(result.Content))
+		})
+	}
+}
+
+func TestHTTPRequestExecutor_Execute_MetadataPolicyBoundsAreTyped(t *testing.T) {
+	tooLongURL := "http://example.com/" + strings.Repeat("x", httpMaxURLSize)
+	result, err := NewHTTPRequestExecutor().Execute(context.Background(), agentic.ToolCall{
+		ID: "long-url", Name: "http_request", Arguments: map[string]any{"url": tooLongURL},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, agentic.ToolErrorInvalidArgs, result.ErrorKind)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; x="+strings.Repeat("x", httpMaxContentType))
+		_, _ = w.Write([]byte("body"))
+	}))
+	t.Cleanup(srv.Close)
+	port := testServerPort(t, srv)
+	fakeIP := net.ParseIP("93.184.216.14")
+	network := &httpTestNetwork{
+		resolved:    map[string][]net.IP{"metadata.example": {fakeIP}},
+		dialTargets: map[string]string{net.JoinHostPort(fakeIP.String(), port): srv.Listener.Addr().String()},
+	}
+	result = executeHTTPTestCall(context.Background(), t, network.executor(), "http://metadata.example:"+port+"/page")
+	assert.Empty(t, result.Content)
+	assert.Equal(t, agentic.ToolErrorExternal, result.ErrorKind)
+	assert.Contains(t, result.Error, "Content-Type")
+
+	titleServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = fmt.Fprintf(w, "<html><head><title>%s</title></head><body>body</body></html>",
+			strings.Repeat("x", httpMaxTitleSize+1))
+	}))
+	t.Cleanup(titleServer.Close)
+	titlePort := testServerPort(t, titleServer)
+	titleIP := net.ParseIP("93.184.216.18")
+	titleNetwork := &httpTestNetwork{
+		resolved:    map[string][]net.IP{"title.example": {titleIP}},
+		dialTargets: map[string]string{net.JoinHostPort(titleIP.String(), titlePort): titleServer.Listener.Addr().String()},
+	}
+	result, err = titleNetwork.executor().Execute(context.Background(), agentic.ToolCall{
+		ID: "long-title", Name: "http_request",
+		Arguments: map[string]any{"url": "http://title.example:" + titlePort + "/page"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, agentic.ToolErrorExternal, result.ErrorKind)
+	assert.Contains(t, result.Error, "title")
+}
+
+func TestHTTPRequestExecutor_Execute_FailureKindsAreStructured(t *testing.T) {
+	t.Run("DNS failure is network", func(t *testing.T) {
+		e := NewHTTPRequestExecutor()
+		e.lookupIP = func(_ context.Context, _ string) ([]net.IP, error) {
+			return nil, fmt.Errorf("resolver unavailable")
+		}
+		result, err := e.Execute(context.Background(), agentic.ToolCall{
+			ID: "dns", Name: "http_request", Arguments: map[string]any{"url": "http://dns.example/page"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, agentic.ToolErrorNetwork, result.ErrorKind)
+	})
+
+	t.Run("dial failure is network", func(t *testing.T) {
+		fakeIP := net.ParseIP("93.184.216.16")
+		network := &httpTestNetwork{
+			resolved:    map[string][]net.IP{"dial.example": {fakeIP}},
+			dialTargets: map[string]string{},
+		}
+		result, err := network.executor().Execute(context.Background(), agentic.ToolCall{
+			ID: "dial", Name: "http_request", Arguments: map[string]any{"url": "http://dial.example/page"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, agentic.ToolErrorNetwork, result.ErrorKind)
+	})
+
+	for _, tc := range []struct {
+		status int
+		kind   agentic.ToolErrorKind
+	}{
+		{status: http.StatusUnauthorized, kind: agentic.ToolErrorPermission},
+		{status: http.StatusForbidden, kind: agentic.ToolErrorPermission},
+		{status: http.StatusBadRequest, kind: agentic.ToolErrorInvalidArgs},
+		{status: http.StatusNotFound, kind: agentic.ToolErrorNotFound},
+		{status: http.StatusTooManyRequests, kind: agentic.ToolErrorExternal},
+		{status: http.StatusServiceUnavailable, kind: agentic.ToolErrorExternal},
+	} {
+		t.Run(fmt.Sprintf("HTTP %d", tc.status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, "upstream failure", tc.status)
+			}))
+			t.Cleanup(srv.Close)
+			port := testServerPort(t, srv)
+			fakeIP := net.ParseIP("93.184.216.17")
+			network := &httpTestNetwork{
+				resolved:    map[string][]net.IP{"status.example": {fakeIP}},
+				dialTargets: map[string]string{net.JoinHostPort(fakeIP.String(), port): srv.Listener.Addr().String()},
+			}
+			result, err := network.executor().Execute(context.Background(), agentic.ToolCall{
+				ID: "status", Name: "http_request",
+				Arguments: map[string]any{"url": "http://status.example:" + port + "/page"},
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.kind, result.ErrorKind)
+		})
+	}
+}
+
+func TestHTTPRequestExecutor_Execute_DeadlinePropagatesAsGoError(t *testing.T) {
+	e := NewHTTPRequestExecutor(WithHTTPTimeout(20 * time.Millisecond))
+	e.lookupIP = func(ctx context.Context, _ string) ([]net.IP, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	result, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID: "deadline", Name: "http_request", Arguments: map[string]any{"url": "http://slow-dns.example/page"},
+	})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Equal(t, agentic.ToolErrorTimeout, result.ErrorKind)
+}
+
+func TestHTTPRequestExecutor_Execute_CanonicalizesIDNBeforeResolutionAndDial(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.Host)
+		require.NoError(t, err)
+		assert.Equal(t, "xn--bcher-kva.example", host)
+		_, _ = w.Write([]byte("internationalized host"))
+	}))
+	t.Cleanup(srv.Close)
+	port := testServerPort(t, srv)
+	fakeIP := net.ParseIP("93.184.216.15")
+	network := &httpTestNetwork{
+		resolved:    map[string][]net.IP{"xn--bcher-kva.example": {fakeIP}},
+		dialTargets: map[string]string{net.JoinHostPort(fakeIP.String(), port): srv.Listener.Addr().String()},
+	}
+
+	result := executeHTTPTestCall(context.Background(), t, network.executor(), "http://bücher.example:"+port+"/page")
+	require.Empty(t, result.Error)
+	assert.Contains(t, result.Content, "Final-URL: http://xn--bcher-kva.example:"+port+"/page")
+	assert.Equal(t, []string{net.JoinHostPort(fakeIP.String(), port)}, network.dialSnapshot())
 }
 
 func TestHTTPRequestExecutor_Execute_RedirectsDialEachValidatedHop(t *testing.T) {
@@ -279,14 +488,15 @@ func TestHTTPRequestExecutor_Execute_RedirectsDialEachValidatedHop(t *testing.T)
 	}))
 	t.Cleanup(initial.Close)
 	initialPort := testServerPort(t, initial)
-	redirectURL = "http://reference.example:" + finalPort + "/final"
+	redirectURL = "http://bücher.example:" + finalPort + "/final"
+	canonicalRedirectURL := "http://xn--bcher-kva.example:" + finalPort + "/final"
 
 	initialIP := net.ParseIP("93.184.216.20")
 	finalIP := net.ParseIP("93.184.216.21")
 	network := &httpTestNetwork{
 		resolved: map[string][]net.IP{
-			"index.example":     {initialIP},
-			"reference.example": {finalIP},
+			"index.example":         {initialIP},
+			"xn--bcher-kva.example": {finalIP},
 		},
 		dialTargets: map[string]string{
 			net.JoinHostPort(initialIP.String(), initialPort): initial.Listener.Addr().String(),
@@ -297,11 +507,95 @@ func TestHTTPRequestExecutor_Execute_RedirectsDialEachValidatedHop(t *testing.T)
 	result := executeHTTPTestCall(context.Background(), t, network.executor(), "http://index.example:"+initialPort+"/start")
 
 	require.Empty(t, result.Error)
-	assert.Contains(t, result.Content, "Final-URL: "+redirectURL)
+	assert.Contains(t, result.Content, "Final-URL: "+canonicalRedirectURL)
 	assert.Contains(t, result.Content, "final page")
 	assert.Equal(t, []string{
 		net.JoinHostPort(initialIP.String(), initialPort),
 		net.JoinHostPort(finalIP.String(), finalPort),
+	}, network.dialSnapshot())
+}
+
+func TestHTTPRequestExecutor_Execute_HTTPToHTTPSRedirectUsesTLSIdentityAndDefaultPort(t *testing.T) {
+	serverName := make(chan string, 1)
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serverName <- r.TLS.ServerName
+		_, _ = w.Write([]byte("secure final"))
+	}))
+	t.Cleanup(secure.Close)
+
+	initial := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://example.com/final", http.StatusFound)
+	}))
+	t.Cleanup(initial.Close)
+	initialPort := testServerPort(t, initial)
+
+	roots := x509.NewCertPool()
+	roots.AddCert(secure.Certificate())
+	initialIP := net.ParseIP("93.184.216.30")
+	secureIP := net.ParseIP("93.184.216.31")
+	network := &httpTestNetwork{
+		resolved: map[string][]net.IP{
+			"initial.example": {initialIP},
+			"example.com":     {secureIP},
+		},
+		dialTargets: map[string]string{
+			net.JoinHostPort(initialIP.String(), initialPort): initial.Listener.Addr().String(),
+			net.JoinHostPort(secureIP.String(), "443"):        secure.Listener.Addr().String(),
+		},
+	}
+	e := network.executor()
+	e.tlsConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
+
+	result := executeHTTPTestCall(context.Background(), t, e, "http://initial.example:"+initialPort+"/start")
+	require.Empty(t, result.Error)
+	assert.Contains(t, result.Content, "Final-URL: https://example.com/final")
+	assert.Contains(t, result.Content, "secure final")
+	assert.Equal(t, "example.com", <-serverName)
+	assert.Equal(t, []string{
+		net.JoinHostPort(initialIP.String(), initialPort),
+		net.JoinHostPort(secureIP.String(), "443"),
+	}, network.dialSnapshot())
+}
+
+func TestHTTPRequestExecutor_Execute_HTTPSToHTTPRedirectUsesSchemeSelectedDefaultPort(t *testing.T) {
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("plain final"))
+	}))
+	t.Cleanup(plain.Close)
+
+	serverName := make(chan string, 1)
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serverName <- r.TLS.ServerName
+		http.Redirect(w, r, "http://plain.example/final", http.StatusFound)
+	}))
+	t.Cleanup(secure.Close)
+	securePort := testServerPort(t, secure)
+
+	roots := x509.NewCertPool()
+	roots.AddCert(secure.Certificate())
+	secureIP := net.ParseIP("93.184.216.32")
+	plainIP := net.ParseIP("93.184.216.33")
+	network := &httpTestNetwork{
+		resolved: map[string][]net.IP{
+			"example.com":   {secureIP},
+			"plain.example": {plainIP},
+		},
+		dialTargets: map[string]string{
+			net.JoinHostPort(secureIP.String(), securePort): secure.Listener.Addr().String(),
+			net.JoinHostPort(plainIP.String(), "80"):        plain.Listener.Addr().String(),
+		},
+	}
+	e := network.executor()
+	e.tlsConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
+
+	result := executeHTTPTestCall(context.Background(), t, e, "https://example.com:"+securePort+"/start")
+	require.Empty(t, result.Error)
+	assert.Contains(t, result.Content, "Final-URL: http://plain.example/final")
+	assert.Contains(t, result.Content, "plain final")
+	assert.Equal(t, "example.com", <-serverName)
+	assert.Equal(t, []string{
+		net.JoinHostPort(secureIP.String(), securePort),
+		net.JoinHostPort(plainIP.String(), "80"),
 	}, network.dialSnapshot())
 }
 
@@ -342,6 +636,7 @@ func TestHTTPRequestExecutor_Execute_RedirectPolicyFailures(t *testing.T) {
 		location    string
 		resolved    map[string][]net.IP
 		wantError   string
+		wantKind    agentic.ToolErrorKind
 		wantDialLen int
 	}{
 		{
@@ -349,6 +644,7 @@ func TestHTTPRequestExecutor_Execute_RedirectPolicyFailures(t *testing.T) {
 			location:    "http://private.example/secret",
 			resolved:    map[string][]net.IP{"private.example": {net.ParseIP("127.0.0.1")}},
 			wantError:   "blocked",
+			wantKind:    agentic.ToolErrorPermission,
 			wantDialLen: 1,
 		},
 		{
@@ -356,6 +652,15 @@ func TestHTTPRequestExecutor_Execute_RedirectPolicyFailures(t *testing.T) {
 			location:    "file:///etc/passwd",
 			resolved:    map[string][]net.IP{},
 			wantError:   "redirect policy",
+			wantKind:    agentic.ToolErrorPermission,
+			wantDialLen: 1,
+		},
+		{
+			name:        "redirect DNS failure",
+			location:    "http://missing.example/page",
+			resolved:    map[string][]net.IP{},
+			wantError:   "DNS resolution failed",
+			wantKind:    agentic.ToolErrorNetwork,
 			wantDialLen: 1,
 		},
 	}
@@ -382,6 +687,7 @@ func TestHTTPRequestExecutor_Execute_RedirectPolicyFailures(t *testing.T) {
 			result := executeHTTPTestCall(context.Background(), t, network.executor(), "http://initial.example:"+port+"/start")
 			assert.Empty(t, result.Content)
 			assert.Contains(t, result.Error, tc.wantError)
+			assert.Equal(t, tc.wantKind, result.ErrorKind)
 			assert.Len(t, network.dialSnapshot(), tc.wantDialLen)
 		})
 	}
@@ -402,6 +708,7 @@ func TestHTTPRequestExecutor_Execute_RedirectLimitIsObservable(t *testing.T) {
 	result := executeHTTPTestCall(context.Background(), t, network.executor(), "http://loop.example:"+port+"/start")
 	assert.Empty(t, result.Content)
 	assert.Contains(t, result.Error, "too many redirects")
+	assert.Equal(t, agentic.ToolErrorPermission, result.ErrorKind)
 	assert.Len(t, network.dialSnapshot(), 5)
 }
 
@@ -452,9 +759,10 @@ func TestHTTPRequestExecutor_Execute_CancellationStopsRedirectedRequest(t *testi
 
 	select {
 	case outcome := <-resultCh:
-		require.NoError(t, outcome.err)
+		require.ErrorIs(t, outcome.err, context.Canceled)
 		assert.Empty(t, outcome.result.Content)
 		assert.Contains(t, outcome.result.Error, "context canceled")
+		assert.Equal(t, agentic.ToolErrorTimeout, outcome.result.ErrorKind)
 	case <-time.After(time.Second):
 		t.Fatal("http_request did not stop after context cancellation")
 	}
@@ -574,18 +882,22 @@ func TestHTTPRequestExecutor_Execute_InputValidation(t *testing.T) {
 			wantErrFrag: "http:// or https://",
 		},
 		{
+			name: "URL credentials rejected",
+			call: agentic.ToolCall{
+				ID:        "c-credentials",
+				Name:      "http_request",
+				Arguments: map[string]any{"url": "http://user:password@example.com/"},
+			},
+			wantErrFrag: "user information is not allowed",
+		},
+		{
 			name: "method DELETE rejected",
 			call: agentic.ToolCall{
 				ID:        "c7",
 				Name:      "http_request",
 				Arguments: map[string]any{"url": "http://127.0.0.1/", "method": "DELETE"},
 			},
-			// SSRF block on 127.0.0.1 fires before method check, but the
-			// executor returns an error in ToolResult.Error either way. We
-			// test pure method rejection via a non-SSRF URL; since we can't
-			// reach the internet in unit tests we verify ordering: SSRF error
-			// is returned (which is also a ToolResult.Error, not a Go error).
-			wantErrFrag: "blocked",
+			wantErrFrag: "method must be GET or POST",
 		},
 		{
 			name: "method PUT rejected",
@@ -594,7 +906,7 @@ func TestHTTPRequestExecutor_Execute_InputValidation(t *testing.T) {
 				Name:      "http_request",
 				Arguments: map[string]any{"url": "http://127.0.0.1/", "method": "PUT"},
 			},
-			wantErrFrag: "blocked",
+			wantErrFrag: "method must be GET or POST",
 		},
 	}
 
@@ -605,33 +917,33 @@ func TestHTTPRequestExecutor_Execute_InputValidation(t *testing.T) {
 			assert.Equal(t, tc.call.ID, result.CallID)
 			assert.Empty(t, result.Content)
 			assert.Contains(t, result.Error, tc.wantErrFrag)
+			wantKind := agentic.ToolErrorInvalidArgs
+			if tc.wantErrFrag == "blocked" {
+				wantKind = agentic.ToolErrorPermission
+			}
+			assert.Equal(t, wantKind, result.ErrorKind)
 		})
 	}
 }
 
-// TestHTTPRequestExecutor_Execute_MethodValidation isolates the method check
-// from SSRF by testing an unreachable but syntactically valid hostname.
-// DNS will fail (no real host), so we only verify scheme/method ordering.
+// TestHTTPRequestExecutor_Execute_MethodRejectedBeforeNetwork proves argument
+// validation does not perform DNS or dialing first.
 func TestHTTPRequestExecutor_Execute_MethodRejectedBeforeNetwork(t *testing.T) {
 	e := NewHTTPRequestExecutor(WithHTTPTimeout(2 * time.Second))
+	e.lookupIP = func(_ context.Context, _ string) ([]net.IP, error) {
+		t.Fatal("method validation reached DNS")
+		return nil, nil
+	}
 	ctx := context.Background()
 
-	// localhost resolves to 127.0.0.1 which is loopback — SSRF fires first.
-	// We need DNS to succeed but resolve to a public IP to test method rejection.
-	// Use a bogus hostname that fails DNS lookup so the SSRF check never runs,
-	// then test method-only rejection via a loopback URL.
-	//
-	// The cleanest approach: call Execute with a loopback URL and a bad method.
-	// The SSRF block fires first and returns "blocked". That's the correct behavior:
-	// we block before even parsing the method.
 	result, err := e.Execute(ctx, agentic.ToolCall{
 		ID:        "method-del",
 		Name:      "http_request",
 		Arguments: map[string]any{"url": "http://127.0.0.1/", "method": "DELETE"},
 	})
 	require.NoError(t, err)
-	// SSRF fires first — the method is irrelevant for private IPs.
-	assert.NotEmpty(t, result.Error)
+	assert.Equal(t, "method must be GET or POST", result.Error)
+	assert.Equal(t, agentic.ToolErrorInvalidArgs, result.ErrorKind)
 	assert.Empty(t, result.Content)
 }
 
@@ -918,25 +1230,9 @@ func TestHTTPRequestExecutor_MethodCaseNormalization(t *testing.T) {
 	assert.NotContains(t, result.Error, "method must be GET or POST")
 }
 
-// TestHTTPRequestExecutor_InvalidMethodRejected verifies that an unrecognized
-// method on a non-SSRF URL is rejected. We use a hostname that will fail DNS
-// so SSRF validation fails first; for method rejection we need DNS to succeed
-// and return a public IP. Since we cannot guarantee external DNS in CI, we
-// verify method rejection via a unit-level check of the ordering logic.
-//
-// The ordering in Execute is:
-//  1. url present & starts with http(s):// — else error
-//  2. httpResolveAndValidate (DNS + SSRF)   — else error
-//  3. method check                           — else error
-//
-// For private IPs (always resolvable), step 2 fires. For public IPs, step 3
-// would fire for invalid methods. We verify step 3 message shape below.
+// TestHTTPRequestExecutor_InvalidMethodMessage pins the public validation text.
 func TestHTTPRequestExecutor_InvalidMethodMessage(t *testing.T) {
-	// Construct the error string directly to confirm its exact text.
-	// This matches the literal string in Execute().
 	expected := "method must be GET or POST"
-
-	// Verify the message appears in the source constant (not just copied here).
 	e := NewHTTPRequestExecutor(WithHTTPTimeout(100 * time.Millisecond))
 	result, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:        "bad-method",
@@ -944,12 +1240,8 @@ func TestHTTPRequestExecutor_InvalidMethodMessage(t *testing.T) {
 		Arguments: map[string]any{"url": "http://127.0.0.1/", "method": "PATCH"},
 	})
 	require.NoError(t, err)
-	// SSRF fires before method check. Error must be non-empty.
-	assert.NotEmpty(t, result.Error)
-	// The method message is only returned when SSRF passes (public IPs).
-	// We verify it doesn't appear (SSRF took precedence).
-	assert.NotContains(t, result.Error, expected,
-		"SSRF should fire before method validation for private IPs")
+	assert.Equal(t, expected, result.Error)
+	assert.Equal(t, agentic.ToolErrorInvalidArgs, result.ErrorKind)
 }
 
 // TestHTTPResolveAndValidate_InvalidURL verifies malformed URLs are caught.
