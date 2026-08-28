@@ -65,20 +65,33 @@ func TestEntityDomainAuthorityReservedPassesForEveryProducer(t *testing.T) {
 	assert.False(t, IsFrameworkEntityDomain(""))
 }
 
-// TestEntityDomainAuthorityRejectsDuplicateAndReservedDelegations pins the
-// composition-time rejections: two producers delegating one domain, a
-// delegation of a reserved domain, an empty producer, and a non-canonical
-// segment all refuse to build.
-func TestEntityDomainAuthorityRejectsDuplicateAndReservedDelegations(t *testing.T) {
+// TestEntityDomainAuthorityPermitsSharedDomains pins the owner ruling of
+// 2026-08-28 (superseding O-5): two producers MAY delegate one domain. The
+// assertion is positive, not merely "no error" — each producer must actually
+// be authorized for the shared taxonomy, which is the capability the retired
+// exclusivity rule made unavailable.
+func TestEntityDomainAuthorityPermitsSharedDomains(t *testing.T) {
 	t.Parallel()
 
-	_, err := NewEntityDomainAuthority(
+	authority, err := NewEntityDomainAuthority(
 		EntityDomainDelegation{Producer: "semsource", Domain: "web"},
 		EntityDomainDelegation{Producer: "semdragon", Domain: "web"},
 	)
-	require.Error(t, err, "one domain delegated by two producers is a composition rejection")
+	require.NoError(t, err, "a shared taxonomy is permitted, not a composition rejection")
+	require.NoError(t, authority.Authorize("semsource", "web", "page"))
+	require.NoError(t, authority.Authorize("semdragon", "web", "doc"))
+	require.Error(t, authority.Authorize("semteams", "web", "page"),
+		"sharing a domain does not open it to an undelegated producer")
+}
 
-	_, err = NewEntityDomainAuthority(
+// TestEntityDomainAuthorityRejectsReservedAndMalformedDelegations pins the
+// composition-time rejections that survive the 2026-08-28 ruling: a delegation
+// of a reserved domain, an empty producer, and a non-canonical segment all
+// refuse to build.
+func TestEntityDomainAuthorityRejectsReservedAndMalformedDelegations(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewEntityDomainAuthority(
 		EntityDomainDelegation{Producer: "semsource", Domain: "web"},
 		EntityDomainDelegation{Producer: "semsource", Domain: "web", Type: "page"},
 	)

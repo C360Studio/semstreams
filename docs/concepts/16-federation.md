@@ -42,6 +42,15 @@ acme.dep1.gcs.robotics.drone.001      ← minted by acme.dep1 from the source gc
 acme.dep2.myapp.git.repo.myapp        ← the same repository as held by the peer deployment acme.dep2
 ```
 
+`domain` is a **shared vocabulary, not an exclusive claim.** Two products may both delegate `web`, and the
+framework permits it (owner ruling 2026-08-28): they are told apart by `system`, so
+`acme.dep1.semsource.web.page.001` and `acme.dep1.semdragon.web.doc.001` are distinct entities, and ADR-099 level 0
+is source x taxonomy, so they land in distinct communities. That is what gives the cross-source pattern
+`org.platform.*.web.*.*` its meaning — "everything in this taxonomy, whoever produced it". A `system` prefix
+(`org.platform.<system>`) narrows the same question back to one source. An overlap nobody intended is reported by
+`composition.Validate` as a non-blocking `entity_domain_overlap` finding, never as a boot refusal: a warning that
+fires on the intended case would be ignored by the time the accidental one arrived.
+
 The **product** that produced an entity (semsource, semmem, …) is provenance — `Triple.Source` and the envelope
 `source` — and is never a position of the ID. Isolation between sources of one deployment comes from `system`;
 isolation between deployments comes from `org.platform`, and nothing coordinates that pair automatically: two

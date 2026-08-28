@@ -71,12 +71,17 @@ type EntityDomainAuthority struct {
 
 // NewEntityDomainAuthority validates and installs exact domain delegations.
 // It is a composition rejection when a producer is empty, a segment is not a
-// canonical entity-ID segment, a framework-reserved domain is delegated, or
-// one domain is delegated by two different producers (ruled O-5: a
-// cross-product collision surfaces at boot, never at runtime).
+// canonical entity-ID segment, or a framework-reserved domain is delegated.
+//
+// Two producers MAY delegate the same domain (owner ruling 2026-08-28,
+// superseding O-5): the taxonomy vocabulary is shared, and overlap is
+// legitimate and sometimes intended. Overlap collides nothing — `system` is
+// position 3, so the IDs stay distinct, and ADR-099 level 0 is source x
+// taxonomy, so the communities stay distinct. It is reported offline by
+// composition.Validate as a non-blocking entity_domain_overlap finding, never
+// as a boot refusal and never as a runtime log line.
 func NewEntityDomainAuthority(delegations ...EntityDomainDelegation) (*EntityDomainAuthority, error) {
 	authority := &EntityDomainAuthority{delegations: make(map[string][]EntityDomainDelegation)}
-	owners := make(map[string]string, len(delegations))
 	for _, delegation := range delegations {
 		producer := strings.TrimSpace(delegation.Producer)
 		if producer == "" {
@@ -93,10 +98,6 @@ func NewEntityDomainAuthority(delegations ...EntityDomainDelegation) (*EntityDom
 		if IsFrameworkEntityDomain(delegation.Domain) {
 			return nil, fmt.Errorf("entity domain delegation for producer %q: domain %q is framework-reserved and cannot be delegated", producer, delegation.Domain)
 		}
-		if owner, held := owners[delegation.Domain]; held && owner != producer {
-			return nil, fmt.Errorf("entity domain %q is delegated to both %q and %q; one domain has one producer per composition", delegation.Domain, owner, producer)
-		}
-		owners[delegation.Domain] = producer
 		authority.delegations[producer] = append(authority.delegations[producer], EntityDomainDelegation{
 			Producer: producer, Domain: delegation.Domain, Type: delegation.Type,
 		})

@@ -25,11 +25,11 @@ func TestScoredEntityLess_DeterministicTopKUnderPermutation(t *testing.T) {
 	// that can decide which k survive the truncation.
 	base := make([]ScoredEntity, 0, n)
 	ids := []string{
-		"o.p.d.s.t.e01", "o.p.d.s.t.e02", "o.p.d.s.t.e03", "o.p.d.s.t.e04",
-		"o.p.d.s.t.e05", "o.p.d.s.t.e06", "o.p.d.s.t.e07", "o.p.d.s.t.e08",
-		"o.p.d.s.t.e09", "o.p.d.s.t.e10", "o.p.d.s.t.e11", "o.p.d.s.t.e12",
-		"o.p.d.s.t.e13", "o.p.d.s.t.e14", "o.p.d.s.t.e15", "o.p.d.s.t.e16",
-		"o.p.d.s.t.e17", "o.p.d.s.t.e18", "o.p.d.s.t.e19", "o.p.d.s.t.e20",
+		"o.p.s.d.t.e01", "o.p.s.d.t.e02", "o.p.s.d.t.e03", "o.p.s.d.t.e04",
+		"o.p.s.d.t.e05", "o.p.s.d.t.e06", "o.p.s.d.t.e07", "o.p.s.d.t.e08",
+		"o.p.s.d.t.e09", "o.p.s.d.t.e10", "o.p.s.d.t.e11", "o.p.s.d.t.e12",
+		"o.p.s.d.t.e13", "o.p.s.d.t.e14", "o.p.s.d.t.e15", "o.p.s.d.t.e16",
+		"o.p.s.d.t.e17", "o.p.s.d.t.e18", "o.p.s.d.t.e19", "o.p.s.d.t.e20",
 	}
 	for _, id := range ids {
 		base = append(base, ScoredEntity{EntityID: id, Similarity: 0.87})
@@ -81,11 +81,11 @@ func TestFindSimilarFromCache_DeterministicTopKAtEqualSimilarity(t *testing.T) {
 	// All identical vectors -> identical cosine similarity to any query, so the
 	// k-boundary tie-break is the only discriminator.
 	ids := []string{
-		"o.p.d.s.t.e01", "o.p.d.s.t.e02", "o.p.d.s.t.e03", "o.p.d.s.t.e04",
-		"o.p.d.s.t.e05", "o.p.d.s.t.e06", "o.p.d.s.t.e07", "o.p.d.s.t.e08",
-		"o.p.d.s.t.e09", "o.p.d.s.t.e10", "o.p.d.s.t.e11", "o.p.d.s.t.e12",
-		"o.p.d.s.t.e13", "o.p.d.s.t.e14", "o.p.d.s.t.e15", "o.p.d.s.t.e16",
-		"o.p.d.s.t.e17", "o.p.d.s.t.e18", "o.p.d.s.t.e19", "o.p.d.s.t.e20",
+		"o.p.s.d.t.e01", "o.p.s.d.t.e02", "o.p.s.d.t.e03", "o.p.s.d.t.e04",
+		"o.p.s.d.t.e05", "o.p.s.d.t.e06", "o.p.s.d.t.e07", "o.p.s.d.t.e08",
+		"o.p.s.d.t.e09", "o.p.s.d.t.e10", "o.p.s.d.t.e11", "o.p.s.d.t.e12",
+		"o.p.s.d.t.e13", "o.p.s.d.t.e14", "o.p.s.d.t.e15", "o.p.s.d.t.e16",
+		"o.p.s.d.t.e17", "o.p.s.d.t.e18", "o.p.s.d.t.e19", "o.p.s.d.t.e20",
 	}
 	cache := make(map[string][]float32, len(ids))
 	for _, id := range ids {

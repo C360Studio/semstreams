@@ -25,7 +25,8 @@ import (
 const (
 	// ReasonAuthorityLiteral reports a literal, non-wildcard, non-template value
 	// in positions 1-2 (org.platform) of a production builder, declaration
-	// pattern, or prefix constant. The authority is deps.Platform, never a literal.
+	// pattern, or prefix constant — including a whole six-segment literal minted
+	// on one of the mintingSurfaces. The authority is deps.Platform, never a literal.
 	ReasonAuthorityLiteral = "authority_literal"
 	// ReasonDomainUnregistered reports a literal position-4 (domain) value in
 	// production Go that is neither framework-reserved nor a registered
@@ -50,7 +51,16 @@ func segmentFinding(candidate Candidate, registered map[string]bool) string {
 	config := isConfigPath(candidate.File)
 	switch candidate.Language {
 	case LanguageDeclarationPattern, LanguageFormatBuilder, LanguagePrefixConstant:
-		if (production || config) && len(tokens) >= 2 && (isLiteralPosition(tokens[0]) || isLiteralPosition(tokens[1])) {
+		if (production || config) && authorityIsLiteral(tokens) {
+			return ReasonAuthorityLiteral
+		}
+	case LanguageLiteral:
+		// A whole six-segment literal this code mints for its OWN entity is a
+		// builder too — the most literal one there is. Scoped to the minting
+		// surfaces: a triple subject, a typed reference, or a state ID may name
+		// another deployment's entity, and naming a foreign authority there is
+		// legitimate.
+		if production && isMintingSurface(candidate.Surface) && authorityIsLiteral(tokens) {
 			return ReasonAuthorityLiteral
 		}
 	}
@@ -68,6 +78,28 @@ func segmentFinding(candidate Candidate, registered map[string]bool) string {
 		}
 	}
 	return ""
+}
+
+// mintingSurfaces is the closed set of surfaces on which production Go states
+// the identity of the entity it is ITSELF minting, rather than referring to an
+// entity someone else minted. Only these are judged for a literal authority.
+var mintingSurfaces = [...]string{"go-constructor:EntityID", "go-return:EntityID"}
+
+// isMintingSurface reports whether surface is one this code mints its own
+// identity on.
+func isMintingSurface(surface string) bool {
+	for _, minting := range mintingSurfaces {
+		if surface == minting {
+			return true
+		}
+	}
+	return false
+}
+
+// authorityIsLiteral reports whether either authority position (1-2) is a
+// fixed literal rather than a wildcard, format verb, or substitution template.
+func authorityIsLiteral(tokens []string) bool {
+	return len(tokens) >= 2 && (isLiteralPosition(tokens[0]) || isLiteralPosition(tokens[1]))
 }
 
 // isLiteralPosition reports whether a position token is a fixed literal rather

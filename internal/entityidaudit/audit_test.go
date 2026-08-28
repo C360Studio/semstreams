@@ -842,3 +842,41 @@ var _ = map[string]any{"entity_pattern": "shipment"}
 		t.Fatalf("findings = %#v, want exactly the two retired-order domains and the literal authority", findings)
 	}
 }
+
+// TestAuditFlagsAuthorityLiteralInAMintingLiteral pins the `authority_literal`
+// rule over the two surfaces where production Go mints its OWN identity as a
+// whole literal: the six-field `EntityID{…}` constructor and a `Graphable`
+// `EntityID()` method returning a constant. The spec delta requires the reason
+// for ANY literal positions 1-2 in a production builder, and a builder that
+// spells all six segments at once is the most literal builder there is.
+//
+// The fixtures use the framework-reserved `graph` domain deliberately, so
+// `domain_unregistered` cannot mask a miss, and a triple reference naming a
+// foreign authority is the negative control: a relationship pointing at
+// another deployment's entity is legitimate and must stay unflagged.
+func TestAuditFlagsAuthorityLiteralInAMintingLiteral(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeFixture(t, root, "mint.go", `package fixture
+var _ = EntityID{Org: "acme", Platform: "fixed-product", System: "rules", Domain: "graph", Type: "trigger", Instance: "leaf"}
+type payload struct{}
+func (payload) EntityID() string { return "acme.fixed-product.rules.graph.alert.a1" }
+var _ = Triple{Subject: "acme.other.rules.graph.alert.b2", Predicate: "graph.rules.related-to", Object: "acme.foreign.rules.graph.alert.c3", ObjectType: "@id"}
+`)
+	_, findings, err := Audit(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reasons := findingReasons(findings)
+	got := reasons[ReasonAuthorityLiteral]
+	if len(got) != 2 {
+		t.Fatalf("findings = %#v, want authority_literal on the constructor and the EntityID() return", findings)
+	}
+	joined := strings.Join(got, "\n")
+	if !strings.Contains(joined, "go-constructor:EntityID") || !strings.Contains(joined, "go-return:EntityID") {
+		t.Fatalf("findings = %#v, want both minting surfaces reported", findings)
+	}
+	if len(findings) != 2 {
+		t.Fatalf("findings = %#v, want exactly the two minted identities — a triple subject and a typed reference name other entities, not this code's own authority", findings)
+	}
+}

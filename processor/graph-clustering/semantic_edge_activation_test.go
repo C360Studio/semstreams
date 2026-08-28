@@ -50,7 +50,7 @@ func TestSemanticFinderAdapter_ClassifiesNotReadyVsGenuineEmpty(t *testing.T) {
 			errors.New("embedding index not ready: bootstrap still validating"))}
 		adapter := semanticFinderAdapter{finder: finder}
 
-		ids, err := adapter.SimilarNeighbors(ctx, "o.p.d.s.t.a", 0.75, 8)
+		ids, err := adapter.SimilarNeighbors(ctx, "o.p.s.d.t.a", 0.75, 8)
 		require.Error(t, err)
 		assert.Nil(t, ids)
 		assert.ErrorIs(t, err, clustering.ErrSemanticIndexNotReady,
@@ -68,7 +68,7 @@ func TestSemanticFinderAdapter_ClassifiesNotReadyVsGenuineEmpty(t *testing.T) {
 			errors.New("graph state reset required"))}
 		adapter := semanticFinderAdapter{finder: finder}
 
-		ids, err := adapter.SimilarNeighbors(ctx, "o.p.d.s.t.a", 0.75, 8)
+		ids, err := adapter.SimilarNeighbors(ctx, "o.p.s.d.t.a", 0.75, 8)
 		require.Error(t, err)
 		assert.Nil(t, ids)
 		assert.ErrorIs(t, err, clustering.ErrSemanticIndexNotReady,
@@ -83,10 +83,10 @@ func TestSemanticFinderAdapter_ClassifiesNotReadyVsGenuineEmpty(t *testing.T) {
 		// sentinel and NOT a countable transient. Only this stable code fails open.
 		finder := &fakeClassifiedFinder{err: errs.ClassifiedCode(
 			errs.ErrorInvalid, graph.ErrorCodeEmbeddingUnavailable,
-			errors.New("embedding not ready for o.p.d.s.t.a: status=pending"))}
+			errors.New("embedding not ready for o.p.s.d.t.a: status=pending"))}
 		adapter := semanticFinderAdapter{finder: finder}
 
-		ids, err := adapter.SimilarNeighbors(ctx, "o.p.d.s.t.a", 0.75, 8)
+		ids, err := adapter.SimilarNeighbors(ctx, "o.p.s.d.t.a", 0.75, 8)
 		require.NoError(t, err, "a recognized per-entity miss is not an error at the edge site")
 		assert.Empty(t, ids)
 	})
@@ -105,7 +105,7 @@ func TestSemanticFinderAdapter_ClassifiesNotReadyVsGenuineEmpty(t *testing.T) {
 			"querySimilarityFinder", "FindSimilar", "unmarshal response")}
 		adapter := semanticFinderAdapter{finder: finder}
 
-		ids, err := adapter.SimilarNeighbors(ctx, "o.p.d.s.t.a", 0.75, 8)
+		ids, err := adapter.SimilarNeighbors(ctx, "o.p.s.d.t.a", 0.75, 8)
 		require.Error(t, err)
 		assert.Nil(t, ids, "a malformed reply must NOT be cached as an empty neighbor set")
 		assert.ErrorIs(t, err, clustering.ErrSemanticQueryTransient,
@@ -122,7 +122,7 @@ func TestSemanticFinderAdapter_ClassifiesNotReadyVsGenuineEmpty(t *testing.T) {
 			errs.ErrorInvalid, "some_future_code", errors.New("a code the adapter does not recognize"))}
 		adapter := semanticFinderAdapter{finder: finder}
 
-		ids, err := adapter.SimilarNeighbors(ctx, "o.p.d.s.t.a", 0.75, 8)
+		ids, err := adapter.SimilarNeighbors(ctx, "o.p.s.d.t.a", 0.75, 8)
 		require.Error(t, err)
 		assert.Nil(t, ids)
 		assert.ErrorIs(t, err, clustering.ErrSemanticQueryTransient,
@@ -142,7 +142,7 @@ func TestSemanticFinderAdapter_ClassifiesNotReadyVsGenuineEmpty(t *testing.T) {
 			errors.New("connection reset"), "x", "y", "z")}
 		adapter := semanticFinderAdapter{finder: finder}
 
-		ids, err := adapter.SimilarNeighbors(ctx, "o.p.d.s.t.a", 0.75, 8)
+		ids, err := adapter.SimilarNeighbors(ctx, "o.p.s.d.t.a", 0.75, 8)
 		require.Error(t, err)
 		assert.Nil(t, ids)
 		assert.ErrorIs(t, err, clustering.ErrSemanticQueryTransient,
@@ -153,21 +153,21 @@ func TestSemanticFinderAdapter_ClassifiesNotReadyVsGenuineEmpty(t *testing.T) {
 
 	t.Run("genuine results project to entity IDs", func(t *testing.T) {
 		finder := &fakeClassifiedFinder{results: []inference.SimilarityResult{
-			{EntityID: "o.p.d.s.t.b", Similarity: 0.9},
-			{EntityID: "o.p.d.s.t.c", Similarity: 0.8},
+			{EntityID: "o.p.s.d.t.b", Similarity: 0.9},
+			{EntityID: "o.p.s.d.t.c", Similarity: 0.8},
 		}}
 		adapter := semanticFinderAdapter{finder: finder}
 
-		ids, err := adapter.SimilarNeighbors(ctx, "o.p.d.s.t.a", 0.75, 8)
+		ids, err := adapter.SimilarNeighbors(ctx, "o.p.s.d.t.a", 0.75, 8)
 		require.NoError(t, err)
-		assert.Equal(t, []string{"o.p.d.s.t.b", "o.p.d.s.t.c"}, ids)
+		assert.Equal(t, []string{"o.p.s.d.t.b", "o.p.s.d.t.c"}, ids)
 	})
 
 	t.Run("empty result set is a genuine empty, not an error", func(t *testing.T) {
 		finder := &fakeClassifiedFinder{results: nil}
 		adapter := semanticFinderAdapter{finder: finder}
 
-		ids, err := adapter.SimilarNeighbors(ctx, "o.p.d.s.t.a", 0.75, 8)
+		ids, err := adapter.SimilarNeighbors(ctx, "o.p.s.d.t.a", 0.75, 8)
 		require.NoError(t, err, "asked, no semantic neighbors is not an error")
 		assert.Empty(t, ids)
 	})
@@ -335,7 +335,7 @@ func (fakeNeighborFinder) SimilarNeighbors(context.Context, string, float64, int
 type oneEntityBase struct{}
 
 func (oneEntityBase) GetAllEntityIDs(context.Context) ([]string, error) {
-	return []string{"o.p.d.s.t.a"}, nil
+	return []string{"o.p.s.d.t.a"}, nil
 }
 func (oneEntityBase) GetNeighbors(context.Context, string, string) ([]string, error) {
 	return nil, nil
@@ -424,7 +424,7 @@ func TestRecordSemanticMode_ReportsActualNotIntent(t *testing.T) {
 	require.True(t, sep.IsActive(), "the preflight verdict set the provider active")
 
 	// Detection reads the provider and aborts the build (the finder is cold).
-	_, err := sep.GetNeighbors(context.Background(), "o.p.d.s.t.a", "both")
+	_, err := sep.GetNeighbors(context.Background(), "o.p.s.d.t.a", "both")
 	require.NoError(t, err, "an abort degrades to structural-only, it does not error")
 
 	// ACTUAL mode after detection: structural-only. The signal must report 0, not the

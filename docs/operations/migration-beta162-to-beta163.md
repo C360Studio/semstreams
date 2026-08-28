@@ -447,14 +447,18 @@ GraphQL value `entityTypes[].type`, now `system.domain.type`.
    and for `authority_literal`. A rulepack left in the RETIRED ORDER passes the audit silently — verified by
    mutation. Mirror the Go contract by hand and re-read positions 3-4 yourself; on that surface the audit will not
    tell you.
-   *Cross-product collision is not.* The audit collects a flat domain set with no producer dimension
-   (`segment_rules.go:206`), so two producers delegating one domain is invisible to it. The single detector is passing
-   every composed product's delegations to `pkg/types.NewEntityDomainAuthority` at your composition root, which then
-   refuses to build; `pkg/types/entity_domain_authority_test.go:72-79` pins that rejection on the exact
-   semsource/semdragon `web` pair the table below cites. That call is yours to make and nothing in the framework
-   requires it — skip it and a collision is reported nowhere, because slice A wires no runtime authority check by
-   design. This repo does not demonstrate it from a composition root either: `cmd/e2e-semstreams` composes only
-   framework examples whose delegations cannot collide, so a check placed there could never fail.
+   *Sharing a domain across producers is PERMITTED* — owner ruling 2026-08-28, superseding O-5. Two products may
+   both delegate `web`; the taxonomy vocabulary is shared and the overlap is sometimes the point. It collides
+   nothing: `system` is position 3, so `acme.prod.semsource.web.page.001` and `acme.prod.semdragon.web.doc.001` are
+   distinct IDs, and ADR-099 level 0 is source x taxonomy, so the two are distinct communities. The cross-source
+   wildcard `org.platform.*.<domain>.*.*` then returns every producer's entities in that taxonomy, which is the
+   query sharing exists to serve. `NewEntityDomainAuthority` no longer refuses a domain two producers declare; it
+   still refuses an empty producer, a non-canonical segment, and any delegation of a reserved domain.
+   *An unintended overlap is an observation, not a refusal.* Pass your composed products' delegations to
+   `composition.Validate(catalog, cfg, delegations...)` and it reports one `entity_domain_overlap` finding per shared
+   domain, naming the producers, at **warning** severity. It is deliberately not a boot WARN: a warning that fires on
+   the intended case trains operators to ignore it and then misses the accidental one. Boot runs
+   `composition.Analyze`, which takes no delegations, so this finding can never refuse a boot.
 5. **Prefix levels have fixed meanings (ADR-102 d6):** 2 = deployment (`DeploymentPrefix`), 3 = source
    (`SourcePrefix`, the federation triple; ADR-099 level 1), 4 = taxonomy (`TaxonomyPrefix`; ADR-099 level 0), 5 = type
    (`TypePrefix`), plus `PrefixLevel(n)`. `SystemPrefix`, `DomainPrefix`, `PlatformPrefix`, `IsSameSystem`, `IsSameDomain`
@@ -482,7 +486,7 @@ GraphQL value `entityTypes[].type`, now `system.domain.type`.
 | semmachina | per-world composed `platform.id` is already the authority; order swap |
 | semboids | delete the `"semboids"` fallback literal; order swap in two builders; register `sim` |
 | semdev | order swap (`forge.intake`, `repo.standards`, `agent.chain.execution` prefix → `chain.agent.execution`); register `forge`, `repo`; drop `instance_id` precedence |
-| semdragon | replace `Org "default"`/`Platform "local"` defaults with config; order swap (`game.<board>`, `web.agent.doc`); register `game`, `web` — `web` collides with semsource's `web` when both run in one deployment (ruled O-5: boot-time rejection) |
+| semdragon | replace `Org "default"`/`Platform "local"` defaults with config; order swap (`game.<board>`, `web.agent.doc`); register `game`, `web` — `web` is also semsource's domain, which is PERMITTED (ruling 2026-08-28): the two are told apart by `system` at position 3, and `composition.Validate` reports the overlap as a non-blocking `entity_domain_overlap` finding |
 | semteams | one literal (`attestation_runner.go:124`); drop precedence; e2e configs |
 | semops | `Platform: "edge"` literal → config; order swap (`cop.fusion`); register `cop` |
 | semconnect | `semconnect` platform → config; `SystemEventIDPrefix` shape; register `systems` |

@@ -306,7 +306,7 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
       domain, entityType)`, and the reserved set `FrameworkEntityDomains = {agent, ops, graph}` (ruled O-9: the gated-DAG
       family re-slots under `agent`); mirror `vocabulary/namespace_authority.go` shape-for-shape
       (`Producer` from the trusted boundary, exact matches only).
-      **Done:** `pkg/types/entity_domain_authority.go` — `EntityDomainDelegation`, `EntityDomainAuthority`, `NewEntityDomainAuthority` (composition rejections: empty producer, non-canonical segment, reserved domain delegated, one domain under two producers — ruled O-5), `Authorize(producer, domain, entityType)` nil-safe with reserved passing for every producer, `FrameworkEntityDomains()`/`IsFrameworkEntityDomain` = `{agent, ops, graph}`. Consumers at birth: framework builders (reserved), the e2e mission harness and the three example packages declare delegations (`EntityDomainDelegations()`), the audit reads them as the registered set.
+      **Done:** `pkg/types/entity_domain_authority.go` — `EntityDomainDelegation`, `EntityDomainAuthority`, `NewEntityDomainAuthority` (composition rejections: empty producer, non-canonical segment, reserved domain delegated; the two-producer rejection was implemented here and REMOVED 2026-08-28 when the owner superseded O-5 — overlap is permitted and reported by `composition.Validate` instead), `Authorize(producer, domain, entityType)` nil-safe with reserved passing for every producer, `FrameworkEntityDomains()`/`IsFrameworkEntityDomain` = `{agent, ops, graph}`. Consumers at birth: framework builders (reserved), the e2e mission harness and the three example packages declare delegations (`EntityDomainDelegations()`), the audit reads them as the registered set.
 
 - [x] 3.4 Export `ErrorCodeEntityIDAuthorityInvalid = "entity_id_authority_invalid"`, reasons
       `EntityIDReasonForeignAuthority = "foreign_authority"`, `EntityIDReasonLocalAuthorityClaimed =
@@ -725,8 +725,17 @@ package; both declarations are now on the payload registrations) and
       `docs/basics/{01,03}`, `docs/concepts/{02,14,16,18}`, `graph/README.md`, `pkg/types/README.md`,
       `processor/graph-ingest/README.md`, and the package docs (`doc.go`, `message/doc.go`, `message/types.go`,
       `message/triple.go`, `pkg/types/doc.go`, `graph/graphable.go`, `graph/types.go`, `pkg/lifecycle/participant.go`,
-      `pkg/platform/platform.go`, `natsclient/kv.go`, `vocabulary/predicates.go`, …) — the sweep covered 132 files and
-      the explained examples were hand-edited so the prose matches the new meanings, not just the token order.
+      `pkg/platform/platform.go`, `vocabulary/predicates.go`, …) — the explained examples were hand-edited so the
+      prose matches the new meanings, not just the token order.
+      **Correction (Codex round, 2026-08-28): this list named `natsclient/kv.go`, and the claim was false.**
+      `git log origin/main..HEAD -- natsclient/kv.go` returned no commits: the file was never edited by this PR, and
+      `natsclient/kv.go:521` still documented the retired order. Re-measured: of the seventeen files named here,
+      sixteen were genuinely touched and `natsclient/kv.go` was the single false entry; it is edited now, together
+      with `processor/graph-ingest/component.go:2685` and `config/README.md:50`. Current-surface census after those
+      edits — retired order outside history: one hit, `agentic/entity_ids_semantics_test.go:102`, which names it AS
+      retired; `platform.instance_id` as a live field: zero (the remaining `fan_out_instance_id` is the unrelated
+      gated-DAG config key, and `process_instance_id` is ADR-056's). The "132 files" figure is withdrawn as
+      unreproducible rather than restated.
       `docs/concepts/18-rule-driven-artifacts.md` states that a `$entity.id` subject carries the canonical order and
       that position-literal subscriptions must follow it. `docs/proposals/gh606-derived-communities-design.md` is
       RESTATED at P4, P6, the level table, §3.1, §3.2, the record example, the GraphQL note, and Q8 (level 1 = source,

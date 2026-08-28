@@ -216,7 +216,7 @@ func TestSemanticEdgeProvider_MutualKNN_DirectionalNonMatchDoesNotSynthesize(t *
 // A pair that is BOTH a mutual-kNN match and a sibling resolves to the max.
 func TestSemanticEdgeProvider_DualQualifying_ResolvesToMax(t *testing.T) {
 	ctx := context.Background()
-	// a1 and a2 share the 5-part prefix o.p.d.s.t -> siblings (weight 0.7).
+	// a1 and a2 share the 5-part prefix o.p.s.d.t -> siblings (weight 0.7).
 	base := &stubProvider{
 		entities:  []string{"o.p.s.d.t.a1", "o.p.s.d.t.a2"},
 		neighbors: map[string][]string{},

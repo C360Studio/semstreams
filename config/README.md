@@ -47,7 +47,6 @@ The configuration has been simplified to four main sections:
     "type": "vessel",                      // Platform type (vessel, shore, buoy, satellite)
     "region": "gulf_mexico",               // Geographic region
     "capabilities": ["radar", "ctd"],      // Platform capabilities
-    "instance_id": "west-1",               // Instance identifier for federation
     "environment": "prod"                  // Environment (prod, dev, test)
   },
   "nats": {
