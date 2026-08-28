@@ -1,14 +1,17 @@
 package executors
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -16,11 +19,14 @@ import (
 	"github.com/c360studio/semstreams/message"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
+	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 const (
 	httpMaxResponseSize = 100 * 1024 // 100KB
-	httpMaxTextSize     = 20000      // chars
+	httpMaxTextSize     = 20000      // bytes, before the truncation sentinel
+	httpMaxTitleSize    = 512        // bytes
 	httpRequestTimeout  = 30 * time.Second
 
 	// httpRequestTripleSource is the Source field on triples this tool
@@ -40,6 +46,9 @@ const (
 // (semstreams.agentic_tool_web.emit_failures_total).
 type HTTPRequestExecutor struct {
 	timeout time.Duration
+
+	lookupIP    func(context.Context, string) ([]net.IP, error)
+	dialContext func(context.Context, string, string) (net.Conn, error)
 
 	publisher agentictools.TriplePublisher
 	platform  component.PlatformMeta
@@ -89,9 +98,14 @@ func WithHTTPClock(now func() time.Time) HTTPRequestOption {
 
 // NewHTTPRequestExecutor creates an HTTP request executor.
 func NewHTTPRequestExecutor(opts ...HTTPRequestOption) *HTTPRequestExecutor {
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	e := &HTTPRequestExecutor{
-		logger: slog.Default(),
-		now:    time.Now,
+		lookupIP: func(ctx context.Context, host string) ([]net.IP, error) {
+			return net.DefaultResolver.LookupIP(ctx, "ip", host)
+		},
+		dialContext: dialer.DialContext,
+		logger:      slog.Default(),
+		now:         time.Now,
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -111,7 +125,7 @@ func (e *HTTPRequestExecutor) ListTools() []agentic.ToolDefinition {
 	return []agentic.ToolDefinition{
 		{
 			Name:        "http_request",
-			Description: "Fetch a URL and return its content. HTML is converted to readable text. Use for reading documentation, APIs, and web content.",
+			Description: "Fetch one URL and return bounded content with final-URL, content-type, and truncation metadata. Static HTML is converted to Markdown-like readable text; JavaScript is not executed.",
 			Effect:      agentic.ToolEffectExternal,
 			Parameters: map[string]any{
 				"type": "object",
@@ -133,6 +147,9 @@ func (e *HTTPRequestExecutor) ListTools() []agentic.ToolDefinition {
 
 // Execute handles an http_request tool call.
 func (e *HTTPRequestExecutor) Execute(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
+	if ctx == nil {
+		return agentic.ToolResult{CallID: call.ID, Error: "context is required"}, nil
+	}
 	rawURL, ok := call.Arguments["url"].(string)
 	if !ok || rawURL == "" {
 		return agentic.ToolResult{CallID: call.ID, Error: "url is required"}, nil
@@ -145,9 +162,12 @@ func (e *HTTPRequestExecutor) Execute(ctx context.Context, call agentic.ToolCall
 		}, nil
 	}
 
-	// Single DNS resolution: resolve, validate (SSRF), and pin in one step.
-	// This eliminates the TOCTOU window between SSRF check and HTTP dial.
-	pinnedIP, err := httpResolveAndValidate(rawURL)
+	reqCtx, cancel := context.WithTimeout(ctx, e.effectiveTimeout())
+	defer cancel()
+
+	// Resolve, validate, and retain the exact address set for the first dial.
+	// Redirect targets repeat this operation in CheckRedirect before their dial.
+	pinnedIPs, err := httpResolveAndValidateWithLookup(reqCtx, rawURL, e.lookupIP)
 	if err != nil {
 		return agentic.ToolResult{CallID: call.ID, Error: err.Error()}, nil
 	}
@@ -163,9 +183,6 @@ func (e *HTTPRequestExecutor) Execute(ctx context.Context, call agentic.ToolCall
 		}, nil
 	}
 
-	reqCtx, cancel := context.WithTimeout(ctx, e.effectiveTimeout())
-	defer cancel()
-
 	req, err := http.NewRequestWithContext(reqCtx, method, rawURL, nil)
 	if err != nil {
 		return agentic.ToolResult{
@@ -176,7 +193,10 @@ func (e *HTTPRequestExecutor) Execute(ctx context.Context, call agentic.ToolCall
 	req.Header.Set("User-Agent", "semstreams-agent/1.0")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8")
 
-	client := httpBuildPinnedClientFromIP(rawURL, pinnedIP, e.effectiveTimeout())
+	client, err := httpBuildPinnedClient(rawURL, pinnedIPs, e.lookupIP, e.dialContext, e.effectiveTimeout())
+	if err != nil {
+		return agentic.ToolResult{CallID: call.ID, Error: err.Error()}, nil
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return agentic.ToolResult{
@@ -194,6 +214,11 @@ func (e *HTTPRequestExecutor) Execute(ctx context.Context, call agentic.ToolCall
 		}, nil
 	}
 
+	rawTruncated := len(body) > httpMaxResponseSize
+	if rawTruncated {
+		body = body[:httpMaxResponseSize]
+	}
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
 		return agentic.ToolResult{
 			CallID: call.ID,
@@ -201,12 +226,9 @@ func (e *HTTPRequestExecutor) Execute(ctx context.Context, call agentic.ToolCall
 		}, nil
 	}
 
-	content := string(body)
-	truncated := false
-	if len(content) > httpMaxTextSize {
-		content = content[:httpMaxTextSize] + "\n[content truncated]"
-		truncated = true
-	}
+	contentType := resp.Header.Get("Content-Type")
+	readable := httpReadableResponse(body, contentType, rawTruncated)
+	finalURL := resp.Request.URL.String()
 
 	// Opportunistic graph emission. Detach from the caller's ctx so an
 	// upstream cancellation doesn't half-write the batch, and so the
@@ -216,13 +238,214 @@ func (e *HTTPRequestExecutor) Execute(ctx context.Context, call agentic.ToolCall
 	if e.publisher != nil {
 		emitCtx, emitCancel := context.WithTimeout(context.WithoutCancel(ctx), webEmitTimeout)
 		defer emitCancel()
-		e.emitObservation(emitCtx, call, rawURL, resp, content, truncated)
+		e.emitObservation(emitCtx, call, finalURL, resp, readable.Text, readable.Truncated)
 	}
 
 	return agentic.ToolResult{
 		CallID:  call.ID,
-		Content: fmt.Sprintf("HTTP %d\n\n%s", resp.StatusCode, content),
+		Content: httpFormatReadableResult(resp.StatusCode, finalURL, contentType, readable),
 	}, nil
+}
+
+type httpReadable struct {
+	Text      string
+	Title     string
+	Transform string
+	Truncated bool
+}
+
+func httpReadableResponse(body []byte, contentType string, rawTruncated bool) httpReadable {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		mediaType = strings.TrimSpace(strings.Split(contentType, ";")[0])
+	}
+	if strings.EqualFold(mediaType, "text/html") || strings.EqualFold(mediaType, "application/xhtml+xml") {
+		text, textTruncated := httpHTMLToMarkdown(bytes.NewReader(body), httpMaxTextSize)
+		if rawTruncated || textTruncated {
+			text = httpWithTruncationSentinel(text)
+		}
+		return httpReadable{
+			Text:      text,
+			Title:     httpTruncate(httpExtractHTMLTitle(bytes.NewReader(body)), httpMaxTitleSize),
+			Transform: "html-to-markdown",
+			Truncated: rawTruncated || textTruncated,
+		}
+	}
+
+	text := string(body)
+	textTruncated := len(text) > httpMaxTextSize
+	if textTruncated {
+		text = text[:httpMaxTextSize]
+	}
+	if rawTruncated || textTruncated {
+		text = httpWithTruncationSentinel(text)
+	}
+	return httpReadable{
+		Text:      text,
+		Transform: "raw",
+		Truncated: rawTruncated || textTruncated,
+	}
+}
+
+func httpWithTruncationSentinel(text string) string {
+	if text == "" {
+		return "[content truncated]"
+	}
+	return strings.TrimRight(text, "\n") + "\n[content truncated]"
+}
+
+func httpFormatReadableResult(statusCode int, finalURL, contentType string, readable httpReadable) string {
+	var result strings.Builder
+	fmt.Fprintf(&result, "HTTP %d\nFinal-URL: %s\nContent-Type: %s\nContent-Transform: %s\nTruncated: %t\n",
+		statusCode, finalURL, contentType, readable.Transform, readable.Truncated)
+	if readable.Title != "" {
+		fmt.Fprintf(&result, "Title: %s\n", readable.Title)
+	}
+	result.WriteByte('\n')
+	result.WriteString(readable.Text)
+	return result.String()
+}
+
+func httpHTMLToMarkdown(r io.Reader, maxBytes int) (string, bool) {
+	tokenizer := html.NewTokenizer(r)
+	var result strings.Builder
+	skipDepth := 0
+	truncated := false
+
+	for {
+		tokenType := tokenizer.Next()
+		if tokenType == html.ErrorToken {
+			break
+		}
+		if result.Len() >= maxBytes {
+			truncated = true
+			break
+		}
+
+		switch tokenType {
+		case html.StartTagToken:
+			tagName, _ := tokenizer.TagName()
+			tag := atom.Lookup(tagName)
+			if httpSkippedHTMLTag(tag) {
+				skipDepth++
+				continue
+			}
+			if skipDepth > 0 {
+				continue
+			}
+			switch tag {
+			case atom.H1:
+				result.WriteString("\n# ")
+			case atom.H2:
+				result.WriteString("\n## ")
+			case atom.H3:
+				result.WriteString("\n### ")
+			case atom.H4:
+				result.WriteString("\n#### ")
+			case atom.H5:
+				result.WriteString("\n##### ")
+			case atom.H6:
+				result.WriteString("\n###### ")
+			case atom.Li:
+				result.WriteString("\n- ")
+			case atom.Br:
+				result.WriteByte('\n')
+			default:
+				if httpBlockHTMLTag(tag) {
+					result.WriteByte('\n')
+				}
+			}
+		case html.EndTagToken:
+			tagName, _ := tokenizer.TagName()
+			tag := atom.Lookup(tagName)
+			if httpSkippedHTMLTag(tag) && skipDepth > 0 {
+				skipDepth--
+				continue
+			}
+			if skipDepth == 0 && httpBlockHTMLTag(tag) {
+				result.WriteByte('\n')
+			}
+		case html.TextToken:
+			if skipDepth > 0 {
+				continue
+			}
+			text := httpNormalizeWhitespace(strings.TrimSpace(string(tokenizer.Text())))
+			if text == "" {
+				continue
+			}
+			remaining := maxBytes - result.Len()
+			if remaining <= 0 {
+				truncated = true
+				return httpCollapseNewlines(strings.TrimSpace(result.String())), truncated
+			}
+			if len(text)+1 > remaining {
+				result.WriteString(text[:remaining])
+				truncated = true
+				return httpCollapseNewlines(strings.TrimSpace(result.String())), truncated
+			}
+			result.WriteString(text)
+			result.WriteByte(' ')
+		}
+	}
+
+	text := httpCollapseNewlines(strings.TrimSpace(result.String()))
+	if len(text) > maxBytes {
+		text = text[:maxBytes]
+		truncated = true
+	}
+	return text, truncated
+}
+
+func httpExtractHTMLTitle(r io.Reader) string {
+	tokenizer := html.NewTokenizer(r)
+	inTitle := false
+	for {
+		switch tokenizer.Next() {
+		case html.ErrorToken:
+			return ""
+		case html.StartTagToken:
+			tagName, _ := tokenizer.TagName()
+			inTitle = atom.Lookup(tagName) == atom.Title
+		case html.TextToken:
+			if inTitle {
+				return httpNormalizeWhitespace(strings.TrimSpace(string(tokenizer.Text())))
+			}
+		case html.EndTagToken:
+			if inTitle {
+				return ""
+			}
+		}
+	}
+}
+
+func httpSkippedHTMLTag(tag atom.Atom) bool {
+	switch tag {
+	case atom.Script, atom.Style, atom.Nav, atom.Footer, atom.Header, atom.Noscript:
+		return true
+	default:
+		return false
+	}
+}
+
+func httpBlockHTMLTag(tag atom.Atom) bool {
+	switch tag {
+	case atom.P, atom.Div, atom.Br, atom.Tr, atom.Blockquote, atom.Pre, atom.Section, atom.Article, atom.Li,
+		atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6:
+		return true
+	default:
+		return false
+	}
+}
+
+func httpNormalizeWhitespace(text string) string {
+	return strings.Join(strings.Fields(text), " ")
+}
+
+func httpCollapseNewlines(text string) string {
+	for strings.Contains(text, "\n\n\n") {
+		text = strings.ReplaceAll(text, "\n\n\n", "\n\n")
+	}
+	return text
 }
 
 // emitObservation writes the URL-side observation entity plus a
@@ -286,58 +509,151 @@ func (e *HTTPRequestExecutor) emitObservation(ctx context.Context, call agentic.
 	}
 }
 
-// httpResolveAndValidate performs DNS resolution and SSRF validation in a single
-// step. Returns the validated IP to pin for the HTTP connection. This eliminates
-// the TOCTOU window between SSRF check and HTTP dial that would allow DNS rebinding.
-func httpResolveAndValidate(rawURL string) (net.IP, error) {
+func httpResolveAndValidateWithLookup(
+	ctx context.Context,
+	rawURL string,
+	lookupIP func(context.Context, string) ([]net.IP, error),
+) ([]net.IP, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid URL: %v", err)
 	}
-
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, fmt.Errorf("URL policy: unsupported scheme %q", parsed.Scheme)
+	}
 	host := parsed.Hostname()
-	ips, err := net.LookupIP(host)
-	if err != nil {
-		return nil, fmt.Errorf("DNS resolution failed for %s: %w", host, err)
+	if host == "" {
+		return nil, fmt.Errorf("invalid URL: host is required")
+	}
+
+	var ips []net.IP
+	if literal := net.ParseIP(host); literal != nil {
+		ips = []net.IP{literal}
+	} else {
+		ips, err = lookupIP(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("DNS resolution failed for %s: %w", host, err)
+		}
 	}
 	if len(ips) == 0 {
 		return nil, fmt.Errorf("no IPs resolved for %s", host)
 	}
 
-	// Validate ALL resolved IPs (not just the one we'll use).
+	return httpValidateResolvedIPs(host, ips)
+}
+
+func httpValidateResolvedIPs(host string, ips []net.IP) ([]net.IP, error) {
+	validated := make([]net.IP, 0, len(ips))
 	for _, ip := range ips {
 		if v4 := ip.To4(); v4 != nil {
 			ip = v4
 		}
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
-			ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		if httpBlockedIP(ip) {
 			return nil, fmt.Errorf("blocked: %s resolves to private/reserved IP %s", host, ip)
 		}
+		validated = append(validated, ip)
 	}
-
-	// Pin the first validated IP.
-	pinnedIP := ips[0]
-	if v4 := pinnedIP.To4(); v4 != nil {
-		pinnedIP = v4
-	}
-	return pinnedIP, nil
+	return validated, nil
 }
 
-// httpBuildPinnedClientFromIP constructs an HTTP client that uses the pre-validated
-// and pinned IP address, preventing DNS rebinding after validation.
-func httpBuildPinnedClientFromIP(rawURL string, pinnedIP net.IP, timeout time.Duration) *http.Client {
-	dialer := &net.Dialer{Timeout: 10 * time.Second}
+func httpBlockedIP(ip net.IP) bool {
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() {
+		return true
+	}
+	for _, network := range httpReservedNetworks {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+var httpReservedNetworks = []*net.IPNet{
+	httpMustCIDR("0.0.0.0/8"),
+	httpMustCIDR("100.64.0.0/10"),
+	httpMustCIDR("192.0.0.0/24"),
+	httpMustCIDR("192.0.2.0/24"),
+	httpMustCIDR("192.88.99.0/24"),
+	httpMustCIDR("198.18.0.0/15"),
+	httpMustCIDR("198.51.100.0/24"),
+	httpMustCIDR("203.0.113.0/24"),
+	httpMustCIDR("240.0.0.0/4"),
+	httpMustCIDR("64:ff9b::/96"),
+	httpMustCIDR("64:ff9b:1::/48"),
+	httpMustCIDR("100::/64"),
+	httpMustCIDR("2001::/23"),
+	httpMustCIDR("2001:db8::/32"),
+	httpMustCIDR("2002::/16"),
+}
+
+func httpMustCIDR(cidr string) *net.IPNet {
+	_, network, err := net.ParseCIDR(cidr)
+	if err != nil {
+		panic(fmt.Sprintf("invalid HTTP SSRF CIDR %q: %v", cidr, err))
+	}
+	return network
+}
+
+type httpPinnedAddresses struct {
+	mu        sync.Mutex
+	addresses map[string][]net.IP
+}
+
+func (p *httpPinnedAddresses) put(authority string, ips []net.IP) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.addresses[authority] = append([]net.IP(nil), ips...)
+}
+
+func (p *httpPinnedAddresses) get(authority string) []net.IP {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]net.IP(nil), p.addresses[authority]...)
+}
+
+func httpBuildPinnedClient(
+	rawURL string,
+	pinnedIPs []net.IP,
+	lookupIP func(context.Context, string) ([]net.IP, error),
+	dialContext func(context.Context, string, string) (net.Conn, error),
+	timeout time.Duration,
+) (*http.Client, error) {
+	initialURL, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid URL: %v", err)
+	}
+	initialAuthority, err := httpURLAuthority(initialURL)
+	if err != nil {
+		return nil, err
+	}
+	pins := &httpPinnedAddresses{addresses: make(map[string][]net.IP)}
+	pins.put(initialAuthority, pinnedIPs)
+
 	transport := &http.Transport{
-		DisableKeepAlives: true, // per-request client, no connection reuse
+		DisableKeepAlives: true,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			_, port, err := net.SplitHostPort(addr)
-			if err != nil || port == "" {
-				port = "443"
-				if strings.HasPrefix(rawURL, "http://") {
-					port = "80"
-				}
+			canonicalAddr, canonicalErr := httpCanonicalAuthority(addr)
+			if canonicalErr != nil {
+				return nil, fmt.Errorf("request policy: %w", canonicalErr)
 			}
-			return dialer.DialContext(ctx, network, net.JoinHostPort(pinnedIP.String(), port))
+			ips := pins.get(canonicalAddr)
+			if len(ips) == 0 {
+				return nil, fmt.Errorf("request policy: no validated address for %s", canonicalAddr)
+			}
+			_, port, err := net.SplitHostPort(canonicalAddr)
+			if err != nil {
+				return nil, fmt.Errorf("request policy: invalid dial authority %q: %w", addr, err)
+			}
+			var lastErr error
+			for _, ip := range ips {
+				validatedAddr := net.JoinHostPort(ip.String(), port)
+				conn, dialErr := dialContext(ctx, network, validatedAddr)
+				if dialErr == nil {
+					return conn, nil
+				}
+				lastErr = dialErr
+			}
+			return nil, lastErr
 		},
 	}
 
@@ -345,17 +661,51 @@ func httpBuildPinnedClientFromIP(rawURL string, pinnedIP net.IP, timeout time.Du
 		Transport: transport,
 		Timeout:   timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			// Validate redirect targets via fresh DNS resolution + SSRF check.
-			_, err := httpResolveAndValidate(req.URL.String())
-			if err != nil {
-				return err
-			}
 			if len(via) >= 5 {
-				return fmt.Errorf("too many redirects")
+				return fmt.Errorf("redirect policy: too many redirects")
 			}
+			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+				return fmt.Errorf("redirect policy: unsupported scheme %q", req.URL.Scheme)
+			}
+			redirectIPs, resolveErr := httpResolveAndValidateWithLookup(req.Context(), req.URL.String(), lookupIP)
+			if resolveErr != nil {
+				return fmt.Errorf("redirect policy: %w", resolveErr)
+			}
+			authority, authorityErr := httpURLAuthority(req.URL)
+			if authorityErr != nil {
+				return fmt.Errorf("redirect policy: %w", authorityErr)
+			}
+			pins.put(authority, redirectIPs)
 			return nil
 		},
+	}, nil
+}
+
+func httpURLAuthority(parsed *url.URL) (string, error) {
+	host := parsed.Hostname()
+	if host == "" {
+		return "", fmt.Errorf("invalid URL: host is required")
 	}
+	port := parsed.Port()
+	if port == "" {
+		switch parsed.Scheme {
+		case "http":
+			port = "80"
+		case "https":
+			port = "443"
+		default:
+			return "", fmt.Errorf("unsupported scheme %q", parsed.Scheme)
+		}
+	}
+	return net.JoinHostPort(strings.ToLower(host), port), nil
+}
+
+func httpCanonicalAuthority(authority string) (string, error) {
+	host, port, err := net.SplitHostPort(authority)
+	if err != nil {
+		return "", fmt.Errorf("invalid dial authority %q: %w", authority, err)
+	}
+	return net.JoinHostPort(strings.ToLower(host), port), nil
 }
 
 func httpTruncate(s string, maxLen int) string {

@@ -63,7 +63,7 @@ func testServerPort(t *testing.T, srv *httptest.Server) string {
 	return port
 }
 
-func executeHTTPTestCall(t *testing.T, e *HTTPRequestExecutor, ctx context.Context, rawURL string) agentic.ToolResult {
+func executeHTTPTestCall(ctx context.Context, t *testing.T, e *HTTPRequestExecutor, rawURL string) agentic.ToolResult {
 	t.Helper()
 	result, err := e.Execute(ctx, agentic.ToolCall{
 		ID:        "test-call",
@@ -73,6 +73,36 @@ func executeHTTPTestCall(t *testing.T, e *HTTPRequestExecutor, ctx context.Conte
 	})
 	require.NoError(t, err)
 	return result
+}
+
+func buildHTTPTestPinnedClient(t *testing.T, rawURL string, pinnedIP net.IP, timeout time.Duration) *http.Client {
+	t.Helper()
+	dialer := &net.Dialer{}
+	client, err := httpBuildPinnedClient(
+		rawURL,
+		[]net.IP{pinnedIP},
+		func(_ context.Context, host string) ([]net.IP, error) {
+			return nil, fmt.Errorf("unexpected redirect lookup for %q", host)
+		},
+		dialer.DialContext,
+		timeout,
+	)
+	require.NoError(t, err)
+	return client
+}
+
+func resolveHTTPTestURL(rawURL string) (net.IP, error) {
+	ips, err := httpResolveAndValidateWithLookup(
+		context.Background(),
+		rawURL,
+		func(ctx context.Context, host string) ([]net.IP, error) {
+			return net.DefaultResolver.LookupIP(ctx, "ip", host)
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	return ips[0], nil
 }
 
 // TestNewHTTPRequestExecutor verifies the constructor and default timeout.
@@ -89,6 +119,13 @@ func TestWithHTTPTimeout(t *testing.T) {
 	assert.Equal(t, d, e.effectiveTimeout())
 }
 
+func TestHTTPRequestExecutor_Execute_RejectsNilContext(t *testing.T) {
+	result, err := NewHTTPRequestExecutor().Execute(nil, agentic.ToolCall{ID: "nil-context"})
+	require.NoError(t, err)
+	assert.Equal(t, "nil-context", result.CallID)
+	assert.Equal(t, "context is required", result.Error)
+}
+
 // TestHTTPRequestExecutor_ListTools verifies the tool definition shape.
 func TestHTTPRequestExecutor_ListTools(t *testing.T) {
 	e := NewHTTPRequestExecutor()
@@ -97,7 +134,8 @@ func TestHTTPRequestExecutor_ListTools(t *testing.T) {
 	require.Len(t, tools, 1)
 	tool := tools[0]
 	assert.Equal(t, "http_request", tool.Name)
-	assert.NotEmpty(t, tool.Description)
+	assert.Contains(t, tool.Description, "Markdown-like")
+	assert.Contains(t, tool.Description, "JavaScript is not executed")
 
 	props, ok := tool.Parameters["properties"].(map[string]any)
 	require.True(t, ok, "parameters must have a properties map")
@@ -107,6 +145,13 @@ func TestHTTPRequestExecutor_ListTools(t *testing.T) {
 	required, ok := tool.Parameters["required"].([]string)
 	require.True(t, ok, "parameters must have a required slice")
 	assert.Contains(t, required, "url")
+}
+
+func TestHTTPHTMLToMarkdown_StructuralMarkupCannotExceedBound(t *testing.T) {
+	input := strings.Repeat("<h1></h1>", httpMaxTextSize)
+	text, truncated := httpHTMLToMarkdown(strings.NewReader(input), httpMaxTextSize)
+	assert.True(t, truncated)
+	assert.LessOrEqual(t, len(text), httpMaxTextSize)
 }
 
 func TestHTTPRequestExecutor_Execute_HTMLBecomesBoundedReadableMarkdown(t *testing.T) {
@@ -124,7 +169,7 @@ func TestHTTPRequestExecutor_Execute_HTMLBecomesBoundedReadableMarkdown(t *testi
 	t.Cleanup(srv.Close)
 
 	port := testServerPort(t, srv)
-	fakeIP := net.ParseIP("203.0.113.10")
+	fakeIP := net.ParseIP("93.184.216.10")
 	network := &httpTestNetwork{
 		resolved:    map[string][]net.IP{"docs.example": {fakeIP}},
 		dialTargets: map[string]string{net.JoinHostPort(fakeIP.String(), port): srv.Listener.Addr().String()},
@@ -135,7 +180,7 @@ func TestHTTPRequestExecutor_Execute_HTMLBecomesBoundedReadableMarkdown(t *testi
 		WithHTTPPlatform(testPlatform()),
 	)
 
-	result := executeHTTPTestCall(t, e, context.Background(), "http://docs.example:"+port+"/guide")
+	result := executeHTTPTestCall(context.Background(), t, e, "http://docs.example:"+port+"/guide")
 
 	require.Empty(t, result.Error)
 	assert.Contains(t, result.Content, "HTTP 200")
@@ -203,13 +248,13 @@ func TestHTTPRequestExecutor_Execute_ReportsContentTypeAndTruncation(t *testing.
 			}))
 			t.Cleanup(srv.Close)
 			port := testServerPort(t, srv)
-			fakeIP := net.ParseIP("203.0.113.11")
+			fakeIP := net.ParseIP("93.184.216.11")
 			network := &httpTestNetwork{
 				resolved:    map[string][]net.IP{"content.example": {fakeIP}},
 				dialTargets: map[string]string{net.JoinHostPort(fakeIP.String(), port): srv.Listener.Addr().String()},
 			}
 
-			result := executeHTTPTestCall(t, network.executor(), context.Background(), "http://content.example:"+port+"/page")
+			result := executeHTTPTestCall(context.Background(), t, network.executor(), "http://content.example:"+port+"/page")
 
 			require.Empty(t, result.Error)
 			assert.Contains(t, result.Content, "Content-Type: "+tc.contentType)
@@ -236,8 +281,8 @@ func TestHTTPRequestExecutor_Execute_RedirectsDialEachValidatedHop(t *testing.T)
 	initialPort := testServerPort(t, initial)
 	redirectURL = "http://reference.example:" + finalPort + "/final"
 
-	initialIP := net.ParseIP("203.0.113.20")
-	finalIP := net.ParseIP("203.0.113.21")
+	initialIP := net.ParseIP("93.184.216.20")
+	finalIP := net.ParseIP("93.184.216.21")
 	network := &httpTestNetwork{
 		resolved: map[string][]net.IP{
 			"index.example":     {initialIP},
@@ -249,7 +294,7 @@ func TestHTTPRequestExecutor_Execute_RedirectsDialEachValidatedHop(t *testing.T)
 		},
 	}
 
-	result := executeHTTPTestCall(t, network.executor(), context.Background(), "http://index.example:"+initialPort+"/start")
+	result := executeHTTPTestCall(context.Background(), t, network.executor(), "http://index.example:"+initialPort+"/start")
 
 	require.Empty(t, result.Error)
 	assert.Contains(t, result.Content, "Final-URL: "+redirectURL)
@@ -273,7 +318,7 @@ func TestHTTPRequestExecutor_Execute_SameHostRedirectUsesTargetPort(t *testing.T
 	t.Cleanup(initial.Close)
 	initialPort := testServerPort(t, initial)
 
-	fakeIP := net.ParseIP("203.0.113.22")
+	fakeIP := net.ParseIP("93.184.216.22")
 	network := &httpTestNetwork{
 		resolved: map[string][]net.IP{"same.example": {fakeIP}},
 		dialTargets: map[string]string{
@@ -282,7 +327,7 @@ func TestHTTPRequestExecutor_Execute_SameHostRedirectUsesTargetPort(t *testing.T
 		},
 	}
 
-	result := executeHTTPTestCall(t, network.executor(), context.Background(), "http://same.example:"+initialPort+"/start")
+	result := executeHTTPTestCall(context.Background(), t, network.executor(), "http://same.example:"+initialPort+"/start")
 	require.Empty(t, result.Error)
 	assert.Contains(t, result.Content, "other port")
 	assert.Equal(t, []string{
@@ -322,7 +367,7 @@ func TestHTTPRequestExecutor_Execute_RedirectPolicyFailures(t *testing.T) {
 			}))
 			t.Cleanup(initial.Close)
 			port := testServerPort(t, initial)
-			initialIP := net.ParseIP("203.0.113.23")
+			initialIP := net.ParseIP("93.184.216.23")
 			resolved := map[string][]net.IP{"initial.example": {initialIP}}
 			for host, ips := range tc.resolved {
 				resolved[host] = ips
@@ -334,7 +379,7 @@ func TestHTTPRequestExecutor_Execute_RedirectPolicyFailures(t *testing.T) {
 				},
 			}
 
-			result := executeHTTPTestCall(t, network.executor(), context.Background(), "http://initial.example:"+port+"/start")
+			result := executeHTTPTestCall(context.Background(), t, network.executor(), "http://initial.example:"+port+"/start")
 			assert.Empty(t, result.Content)
 			assert.Contains(t, result.Error, tc.wantError)
 			assert.Len(t, network.dialSnapshot(), tc.wantDialLen)
@@ -348,13 +393,13 @@ func TestHTTPRequestExecutor_Execute_RedirectLimitIsObservable(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	port := testServerPort(t, server)
-	fakeIP := net.ParseIP("203.0.113.24")
+	fakeIP := net.ParseIP("93.184.216.24")
 	network := &httpTestNetwork{
 		resolved:    map[string][]net.IP{"loop.example": {fakeIP}},
 		dialTargets: map[string]string{net.JoinHostPort(fakeIP.String(), port): server.Listener.Addr().String()},
 	}
 
-	result := executeHTTPTestCall(t, network.executor(), context.Background(), "http://loop.example:"+port+"/start")
+	result := executeHTTPTestCall(context.Background(), t, network.executor(), "http://loop.example:"+port+"/start")
 	assert.Empty(t, result.Content)
 	assert.Contains(t, result.Error, "too many redirects")
 	assert.Len(t, network.dialSnapshot(), 5)
@@ -375,8 +420,8 @@ func TestHTTPRequestExecutor_Execute_CancellationStopsRedirectedRequest(t *testi
 	t.Cleanup(initial.Close)
 	initialPort := testServerPort(t, initial)
 
-	initialIP := net.ParseIP("203.0.113.25")
-	finalIP := net.ParseIP("203.0.113.26")
+	initialIP := net.ParseIP("93.184.216.25")
+	finalIP := net.ParseIP("93.184.216.26")
 	network := &httpTestNetwork{
 		resolved: map[string][]net.IP{
 			"initial.example": {initialIP},
@@ -388,17 +433,28 @@ func TestHTTPRequestExecutor_Execute_CancellationStopsRedirectedRequest(t *testi
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	resultCh := make(chan agentic.ToolResult, 1)
+	type executeOutcome struct {
+		result agentic.ToolResult
+		err    error
+	}
+	resultCh := make(chan executeOutcome, 1)
+	e := network.executor(WithHTTPTimeout(5 * time.Second))
 	go func() {
-		resultCh <- executeHTTPTestCall(t, network.executor(WithHTTPTimeout(5*time.Second)), ctx, "http://initial.example:"+initialPort+"/start")
+		result, err := e.Execute(ctx, agentic.ToolCall{
+			ID:        "cancel-call",
+			Name:      "http_request",
+			Arguments: map[string]any{"url": "http://initial.example:" + initialPort + "/start"},
+		})
+		resultCh <- executeOutcome{result: result, err: err}
 	}()
 	<-requestStarted
 	cancel()
 
 	select {
-	case result := <-resultCh:
-		assert.Empty(t, result.Content)
-		assert.Contains(t, result.Error, "context canceled")
+	case outcome := <-resultCh:
+		require.NoError(t, outcome.err)
+		assert.Empty(t, outcome.result.Content)
+		assert.Contains(t, outcome.result.Error, "context canceled")
 	case <-time.After(time.Second):
 		t.Fatal("http_request did not stop after context cancellation")
 	}
@@ -616,8 +672,28 @@ func TestHTTPResolveAndValidate_SSRFBlocking(t *testing.T) {
 			url:  "http://192.168.1.1/",
 		},
 		{
+			name: "carrier-grade NAT",
+			url:  "http://100.64.0.1/",
+		},
+		{
+			name: "IPv4 documentation range",
+			url:  "http://203.0.113.1/",
+		},
+		{
+			name: "IPv4 benchmark range",
+			url:  "http://198.18.0.1/",
+		},
+		{
 			name: "IPv6 loopback ::1",
 			url:  "http://[::1]/",
+		},
+		{
+			name: "IPv6 documentation range",
+			url:  "http://[2001:db8::1]/",
+		},
+		{
+			name: "NAT64 translation range",
+			url:  "http://[64:ff9b::7f00:1]/",
 		},
 		{
 			name: "link-local multicast 224.0.0.1",
@@ -627,11 +703,19 @@ func TestHTTPResolveAndValidate_SSRFBlocking(t *testing.T) {
 			name: "unspecified 0.0.0.0",
 			url:  "http://0.0.0.0/",
 		},
+		{
+			name: "current-network IPv4 range",
+			url:  "http://0.0.0.1/",
+		},
+		{
+			name: "future-use IPv4 range",
+			url:  "http://240.0.0.1/",
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ip, err := httpResolveAndValidate(tc.url)
+			ip, err := resolveHTTPTestURL(tc.url)
 			assert.Error(t, err, "expected SSRF block for %s", tc.url)
 			assert.Nil(t, ip, "should not return an IP when blocked")
 			// "blocked" appears in the error for private/reserved IPs.
@@ -676,7 +760,7 @@ func TestHTTPResolveAndValidate_SSRFBlocking_ViaExecute(t *testing.T) {
 }
 
 // TestHTTPRequestExecutor_Execute_HTTPMechanics tests response handling by
-// bypassing DNS lookup entirely. We call httpBuildPinnedClientFromIP directly
+// bypassing DNS lookup entirely. We call httpBuildPinnedClient directly
 // with the loopback address of the test server, then verify the executor's
 // status-code branching, body reading, and content-length capping.
 //
@@ -686,9 +770,9 @@ func TestHTTPResolveAndValidate_SSRFBlocking_ViaExecute(t *testing.T) {
 // the internal helpers that Execute() delegates to, confirming behavior at each
 // layer.
 
-// TestHTTPBuildPinnedClientFromIP_PinsConnection verifies the pinned client
+// TestHTTPBuildPinnedClient_PinsConnection verifies the pinned client
 // dials the provided IP regardless of the hostname in the URL.
-func TestHTTPBuildPinnedClientFromIP_PinsConnection(t *testing.T) {
+func TestHTTPBuildPinnedClient_PinsConnection(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("pinned-ok"))
@@ -704,7 +788,7 @@ func TestHTTPBuildPinnedClientFromIP_PinsConnection(t *testing.T) {
 	// Build a client pinned to the test server's IP, using a fake hostname URL.
 	// This verifies the dialer ignores the URL hostname and uses pinnedIP.
 	fakeURL := "http://fake-hostname.internal:" + port + "/"
-	client := httpBuildPinnedClientFromIP(fakeURL, ip, 5*time.Second)
+	client := buildHTTPTestPinnedClient(t, fakeURL, ip, 5*time.Second)
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, fakeURL, nil)
 	require.NoError(t, err)
@@ -727,7 +811,7 @@ func TestHTTPTruncate_ResponseBodyCap(t *testing.T) {
 
 // TestHTTPRequestExecutor_Execute_StatusCodeBranching verifies non-2xx/3xx
 // responses set ToolResult.Error and successful responses set ToolResult.Content.
-// We bypass SSRF by using httpBuildPinnedClientFromIP with the real server IP.
+// We bypass SSRF by using httpBuildPinnedClient with the real server IP.
 func TestHTTPRequestExecutor_Execute_StatusCodeBranching(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -762,7 +846,7 @@ func TestHTTPRequestExecutor_Execute_StatusCodeBranching(t *testing.T) {
 			require.NotNil(t, pinnedIP)
 
 			rawURL := "http://fake-host.internal:" + port + "/"
-			client := httpBuildPinnedClientFromIP(rawURL, pinnedIP, 5*time.Second)
+			client := buildHTTPTestPinnedClient(t, rawURL, pinnedIP, 5*time.Second)
 
 			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, rawURL, nil)
 			require.NoError(t, err)
@@ -871,14 +955,14 @@ func TestHTTPRequestExecutor_InvalidMethodMessage(t *testing.T) {
 // TestHTTPResolveAndValidate_InvalidURL verifies malformed URLs are caught.
 func TestHTTPResolveAndValidate_InvalidURL(t *testing.T) {
 	// A URL with a control character is unparseable.
-	_, err := httpResolveAndValidate("http://\x00bad/")
+	_, err := resolveHTTPTestURL("http://\x00bad/")
 	assert.Error(t, err)
 }
 
 // TestHTTPResolveAndValidate_DNSFailure verifies a non-existent hostname
 // produces a DNS error, not a panic.
 func TestHTTPResolveAndValidate_DNSFailure(t *testing.T) {
-	_, err := httpResolveAndValidate("http://this-host-definitely-does-not-exist.invalid/")
+	_, err := resolveHTTPTestURL("http://this-host-definitely-does-not-exist.invalid/")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "DNS resolution failed")
 }
