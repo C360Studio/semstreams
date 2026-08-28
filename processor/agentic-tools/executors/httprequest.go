@@ -166,15 +166,11 @@ func httpFailureKind(err error) agentic.ToolErrorKind {
 
 // ListTools returns the http_request tool definition.
 func (e *HTTPRequestExecutor) ListTools() []agentic.ToolDefinition {
-	effect := agentic.ToolEffectReadOnly
-	if e.publisher != nil {
-		effect = agentic.ToolEffectMutating
-	}
-	return []agentic.ToolDefinition{
+	tools := []agentic.ToolDefinition{
 		{
 			Name:        "http_request",
 			Description: "Read one URL with GET and return bounded content with final-URL, content-type, and truncation metadata. Static HTML is converted to Markdown-like readable text; JavaScript is not executed.",
-			Effect:      effect,
+			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -192,6 +188,10 @@ func (e *HTTPRequestExecutor) ListTools() []agentic.ToolDefinition {
 			},
 		},
 	}
+	if e.publisher != nil {
+		tools[0].Effect = agentic.ToolEffectMutating
+	}
+	return tools
 }
 
 // Execute handles an http_request tool call.
