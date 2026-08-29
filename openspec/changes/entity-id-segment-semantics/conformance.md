@@ -644,7 +644,7 @@ independent second reading.
 | Delete the `initializeStateTracker` refusal entirely | All three subtests of `TestInitializeStateTrackerRefusesAbsentDeploymentAuthority` **FAIL** on both assertions. The mutant is why the test asserts the error CLASS and not merely `require.Error`: an empty `natsclient.Client` fails at `JetStream()` two lines later with a TRANSIENT error, so a bare `require.Error` would have passed with the guard deleted |
 | Drop the `Platform` half of the pair (`rp.platform.Org == ""` only) | Only `…/platform_absent` **FAILS**; `setter_never_called` and `org_absent` pass — the mutant discriminates, so a half-guard is caught by its own row |
 | Return the refusal unclassified (plain `fmt.Errorf`, no `errs.WrapInvalid`) | All three subtests **FAIL** on the `errs.IsInvalid` assertion only; the message assertion still passes. The classification is load-bearing, not decoration |
-| The harness sweep, measured rather than asserted | Before adding `SetPlatform` to the seven NATS-backed test files, `go test -tags=integration ./processor/rule/...` **FAILED** six tests: the four `TestIntegration_CronRule_*`, `TestEntityWatcher_DeletedEntityCleansRuleState` and `TestStatefulEvaluator_Integration`. The other nine call sites had been running against an executor with a retired guard and said nothing — which is the same silence HIGH-1 describes, reproduced inside our own suite |
+| The harness sweep, measured rather than asserted | Before adding `SetPlatform`, `go test -tags=integration ./processor/rule/...` **FAILED** six tests: the four `TestIntegration_CronRule_*`, `TestEntityWatcher_DeletedEntityCleansRuleState` and `TestStatefulEvaluator_Integration`. Those six come from THREE construction sites. The sweep covers **17 sites across 8 files** (`git show 3301f61f -- '*_test.go' \| grep -c '^+.*SetPlatform(component.PlatformMeta'` → 17: 7 files under `processor/rule` plus `processor/gated-dag/fullstack_integration_test.go`), so the other **fourteen** had been running green against an executor with a retired guard and said nothing — the same silence HIGH-1 describes, reproduced inside our own suite. **Commit `3301f61f`'s message says "fifteen … across seven files … six of them failed loudly, the other nine"; the counts are wrong** — it conflated failing TESTS with construction SITES and missed the `gated-dag` file. The squash body must carry the corrected sentence, because `COMMIT_MESSAGES` squash is what reaches `main` |
 
 ### Correction-propagation sweep for round 6
 
@@ -663,6 +663,11 @@ local` / `read LOCAL`) and every hit inside this change's blast radius was re-sy
   parameter, in a test whose own third case represents that state.
 - `processor/rule/doc.go` — the package's `Example Usage` built a NATS-backed processor with no `SetPlatform`. It is
   the adopter-facing copy of the wiring HIGH-1 broke, so it now carries the call and what happens without it.
+- **Commit `3301f61f`'s own message** — its closing paragraph miscounted the harness sweep ("fifteen … across seven
+  files", "six of them failed loudly, the other nine"). Measured: 17 sites across 8 files, 6 failing tests from 3 of
+  those sites, 14 silent. The branch commit cannot be corrected in place without rewriting a SHA the review round is
+  anchored to, so the correction lives here and in `tasks.md` 6.3, and **the squash body must carry the corrected
+  sentence** — under `COMMIT_MESSAGES` squash the branch text, not the PR body, is what lands on `main`.
 - `tasks.md` 6.3 — "unrepresentable" → UNFORGETTABLE with the reason, plus the round-6 paragraph.
 - `conformance.md` round-1 HIGH-1 row and the Codex-round O-4 row — annotated in place, not rewritten; both stated
   something in the present tense that round 6 refutes.

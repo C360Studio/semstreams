@@ -1178,9 +1178,12 @@ package; both declarations are now on the payload registrations) and
       `CreateRuleProcessor` uses, scoped to the NATS branch because the no-NATS branch builds `NewActionExecutor`,
       which cannot write. **BREAKING for a direct `NewProcessor` caller** (`!` subject, migration-note paragraph); no
       in-repo binary is affected. `TestInitializeStateTrackerRefusesAbsentDeploymentAuthority` (3 cases) plus the
-      negative-space `TestInitializeStateTrackerPastTheAuthorityCheckFailsElsewhere`; fifteen NATS-backed test
-      harnesses across seven files were swept to the established `SetPlatform` idiom, six of which failed loudly
-      without it. Three mutants, all killed, in `conformance.md`'s round-6 table.
+      negative-space `TestInitializeStateTrackerPastTheAuthorityCheckFailsElsewhere`; SEVENTEEN NATS-backed
+      construction sites across EIGHT files were swept to the established `SetPlatform` idiom (`git show 3301f61f
+      -- '*_test.go' | grep -c '^+.*SetPlatform(component.PlatformMeta'` → 17). Three of those sites were reached by
+      tests that FAILED without the authority — six failing tests, four of them `TestIntegration_CronRule_*`; the
+      other fourteen sites had been running green against an executor whose guard was retired. Three mutants, all
+      killed, in `conformance.md`'s round-6 table.
 - [x] 6.4 `graph/inference/hierarchy.go`: `GetHierarchyTriples` returns `nil, nil` for an entity whose positions 1–2
       differ from the deployment authority (no container, no membership, no inverse sibling edge, no warning) — the
       pair reaches `NewHierarchyInference` (which carries none today, `hierarchy.go:109-114`;
