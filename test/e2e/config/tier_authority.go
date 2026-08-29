@@ -26,6 +26,17 @@ var tierAuthority = map[string]string{
 	VariantSemantic:    "c360.semstreams-kitchen-sink-ml",
 }
 
+// CoreAuthority is positions 1-2 of every entity the CORE stack mints — the
+// platform.org / platform.id of configs/protocol-flow.json, which
+// docker/compose/e2e.yml boots. It sits beside the tier table rather than in it
+// because core is a different compose document with no profiles, but it obeys
+// the same rule: one home, re-derived by TestCoreAuthorityMatchesShippedConfig
+// so it cannot drift from the config the stack actually starts.
+//
+// The graph round-trip canary is minted under it (#1095 slice B); since
+// ADR-102 d5 the boundary refuses every other pair.
+const CoreAuthority = "c360.streamkit-pure"
+
 // TierAuthority returns the deployment authority prefix (org.platform) for a
 // tier variant. An unknown variant panics rather than returning a plausible
 // default: an entity ID built under the wrong authority produces a

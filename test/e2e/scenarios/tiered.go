@@ -84,13 +84,6 @@ type TieredConfig struct {
 	GatewayURL          string `json:"gateway_url"`
 	GraphQLURL          string `json:"graphql_url"` // GraphQL endpoint (port varies by profile)
 
-	// PlatformOrg / PlatformID are the authority of the deployment this tier
-	// drives — its config's platform.org / platform.id. The graph canary is
-	// minted under them because the graph refuses every other pair (ADR-102 d5),
-	// so they are a statement about WHICH STACK is under test, not a knob.
-	PlatformOrg string `json:"platform_org"`
-	PlatformID  string `json:"platform_id"`
-
 	// Comparison output configuration
 	OutputDir string `json:"output_dir"`
 
@@ -133,9 +126,7 @@ func DefaultTieredConfig() *TieredConfig {
 		GatewayURL:           config.DefaultEndpoints.HTTP + "/api-gateway",
 		GraphQLURL:           config.DefaultEndpoints.HTTP + "/graph-gateway/graphql", // Via ServiceManager shared mux
 		OutputDir:            "test/e2e/results",
-		PlatformOrg:          "c360", // every tiered config declares org c360
-		PlatformID:           "",     // set per variant: the tiers run different configs
-		MaxRegressionPercent: 20.0,   // 20% regression threshold
+		MaxRegressionPercent: 20.0, // 20% regression threshold
 		// Structural tier defaults (rules-only, no ML)
 		ExpectedEmbeddings:   0, // Structural: NO embeddings
 		ExpectedClusters:     0, // Structural: NO clustering
@@ -425,8 +416,16 @@ func (s *TieredScenario) executeGraphRoundTrip(ctx context.Context, result *Resu
 	if s.msgLogger == nil {
 		return fmt.Errorf("graph-roundtrip requires Message Logger")
 	}
+	// The canary is minted under the DEPLOYMENT's authority, resolved the same
+	// way every other tiered fixture resolves it (#1149) — one home, and it
+	// handles the auto-detected-variant case a config field could not.
+	variant := s.effectiveVariant(result)
+	if variant == "" {
+		return fmt.Errorf("graph-roundtrip: tier variant is unresolved, so the deployment " +
+			"authority the canary must be minted under is unknown")
+	}
 	probe := NewGraphRoundTripProbe(s.natsClient, s.msgLogger, s.config.GraphQLURL,
-		s.config.PlatformOrg, s.config.PlatformID)
+		config.TierAuthority(variant))
 	return probe.Run(ctx, result)
 }
 

@@ -12,18 +12,17 @@ type GraphRoundTripScenario struct {
 	natsURL    string
 	serviceURL string
 	graphqlURL string
-	// org / platform name the DEPLOYMENT under test — the canary is minted
-	// under this pair because the graph accepts no other (ADR-102 d5).
-	org      string
-	platform string
-	nats     *client.NATSValidationClient
+	// authority names the DEPLOYMENT under test as `org.platform` — the canary
+	// is minted under it because the graph accepts no other (ADR-102 d5).
+	authority string
+	nats      *client.NATSValidationClient
 }
 
 // NewGraphRoundTripScenario creates the standalone core graph canary.
-func NewGraphRoundTripScenario(natsURL, serviceURL, graphqlURL, org, platform string) *GraphRoundTripScenario {
+func NewGraphRoundTripScenario(natsURL, serviceURL, graphqlURL, authority string) *GraphRoundTripScenario {
 	return &GraphRoundTripScenario{
 		natsURL: natsURL, serviceURL: serviceURL, graphqlURL: graphqlURL,
-		org: org, platform: platform,
+		authority: authority,
 	}
 }
 
@@ -51,7 +50,7 @@ func (s *GraphRoundTripScenario) Execute(ctx context.Context) (*Result, error) {
 		ScenarioName: s.Name(), StartTime: time.Now(),
 		Metrics: make(map[string]any), Details: make(map[string]any),
 	}
-	probe := NewGraphRoundTripProbe(s.nats, client.NewMessageLoggerClient(s.serviceURL), s.graphqlURL, s.org, s.platform)
+	probe := NewGraphRoundTripProbe(s.nats, client.NewMessageLoggerClient(s.serviceURL), s.graphqlURL, s.authority)
 	if err := probe.Run(ctx, result); err != nil {
 		result.Error = err.Error()
 		result.Errors = []string{err.Error()}

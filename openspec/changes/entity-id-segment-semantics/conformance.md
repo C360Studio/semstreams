@@ -356,7 +356,12 @@ the OUTPUT direction. Harmless while no input-only port field was ever set; `imp
 (`approvedImportLaneAdditions = 1`) and `service/testdata/message_logger_subject_census.json` (388→389 raw rows).
 Both carry the reason inline.
 
-### ESCALATION — the shipped example processors still take the authority from config and from the wire
+### ESCALATION — RAISED BY SLICE B, RULED, AND CLOSED BY SLICE C (#1149, merged `b060511f`)
+
+*Kept in full as the evidence that produced the ruling. The defect it describes is FIXED; every present-tense
+sentence below describes the tree as slice B measured it on 2026-08-28, before slice C. The outcome is at the end.*
+
+#### What slice B measured
 
 **Measured on slice B's branch, 2026-08-28, by running `task e2e:structural`: it fails with
 `entity stabilization failed: got 0, expected 74`.** Zero entities reach `ENTITY_STATES` because the boundary
@@ -395,3 +400,23 @@ retirement as slice C before the beta.163 tag, or (b) hold slice B until the swe
 ruling, not an implementation choice: retiring a `required:true` operator-facing config key across three shipped
 example packages and four payload types is a spec delta with a rejection act (the shape slice A used for
 `platform.instance_id`), and it belongs to whoever owns that decision.
+
+#### Outcome — ruled option (a); slice C landed first
+
+The owner ruled the escalation valid and sequenced **slice C before slice B**. It merged as `b060511f` (PR #1150,
+`Closes #1149`) with CI green on `main` (run 33229302012: Lint, Test, Build, Schema Validation, CI Status Check all
+success). `org_id`/`platform` are gone as config keys from `examples/processors/{iot_sensor,document,weather_station}`
+and as wire fields from seven payload types; position 2 now comes from `deps.Platform` alone, and
+`test/e2e/config/tier_authority.go` owns the per-tier authority mapping with a unit test that re-derives it from
+`docker/compose/tiered.yml` and each config's declared pair.
+
+Slice B merged `origin/main` at `b060511f` and re-ran the three tiers. **Their results are in `tasks.md` 7.2**, which
+is the row that owns e2e evidence; they are recorded there rather than duplicated here.
+
+**One semantic conflict the merge did not flag.** Git reported zero textual conflicts because slice C did not touch
+slice B's files. But slice B's `cmd/e2e/main.go` carried a per-variant `switch` restating the same three
+`platform.id` values slice C had just made `config.TierAuthority` the single home for — two homes for one fact, and
+only one of them drift-guarded. Slice B's copy was deleted and its callers routed through `config.TierAuthority`.
+`CoreAuthority` was added beside it for the core stack (a different compose document, no profiles) with a matching
+`TestCoreAuthorityMatchesShippedConfig` that re-derives it from `docker/compose/e2e.yml`; mutation-checked by setting
+it to `c360.streamkit-pure-WRONG`, which the test rejects naming both values.

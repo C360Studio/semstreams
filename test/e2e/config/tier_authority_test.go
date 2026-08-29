@@ -46,6 +46,26 @@ func TestTierAuthorityMatchesShippedConfigs(t *testing.T) {
 	}
 }
 
+// TestCoreAuthorityMatchesShippedConfig is TestTierAuthorityMatchesShippedConfigs
+// for the core stack, whose compose document declares no profiles: it reads the
+// --config argument out of docker/compose/e2e.yml directly and requires
+// CoreAuthority to equal that config's platform.org.platform.id.
+func TestCoreAuthorityMatchesShippedConfig(t *testing.T) {
+	const coreComposeFile = "docker/compose/e2e.yml"
+	data, err := os.ReadFile(filepath.Join(repoRoot, coreComposeFile))
+	if err != nil {
+		t.Fatalf("read %s: %v", coreComposeFile, err)
+	}
+	match := configArgument.FindStringSubmatch(string(data))
+	if match == nil {
+		t.Fatalf("no --config argument found in %s; the regex or the compose shape changed", coreComposeFile)
+	}
+	org, id := platformIdentity(t, filepath.Join(repoRoot, match[1]))
+	if got := org + "." + id; got != CoreAuthority {
+		t.Errorf("core boots %s with platform %q, but CoreAuthority says %q", match[1], got, CoreAuthority)
+	}
+}
+
 // TestTierAuthorityRejectsUnknownVariant pins the fail-closed behavior: an
 // unregistered variant must panic rather than yield a plausible prefix.
 func TestTierAuthorityRejectsUnknownVariant(t *testing.T) {

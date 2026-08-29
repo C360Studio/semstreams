@@ -367,7 +367,7 @@ func createScenario(
 			config.DefaultEndpoints.NATS,
 			flags.baseURL,
 			strings.TrimRight(flags.baseURL, "/")+"/graph-gateway/graphql",
-			"c360", "streamkit-pure",
+			config.CoreAuthority,
 		)
 	case "core-slow-consumer", "slow-consumer":
 		return scenarios.NewSlowConsumerAttributionScenario(scenarios.SlowConsumerAttributionConfig{
@@ -389,21 +389,6 @@ func createScenario(
 				cfg.Variant = flags.scenarioName
 			}
 		}
-		// Each tier runs a DIFFERENT config, so each has a different
-		// platform.id, and the graph canary must carry the one the stack
-		// under test actually declares (ADR-102 d5): structural ->
-		// configs/e2e-structural.json, statistical -> configs/statistical.json,
-		// semantic -> configs/semantic.json. An unrecognised variant leaves the
-		// pair empty and the probe refuses rather than minting a foreign canary.
-		switch cfg.Variant {
-		case "structural":
-			cfg.PlatformID = "semstreams-e2e-structural"
-		case "statistical":
-			cfg.PlatformID = "semstreams-statistical"
-		case "semantic":
-			cfg.PlatformID = "semstreams-kitchen-sink-ml"
-		}
-
 		// Set GraphQL URL based on variant — via ServiceManager shared mux
 		if cfg.Variant == "semantic" {
 			cfg.GraphQLURL = "http://localhost:38180/graph-gateway/graphql"

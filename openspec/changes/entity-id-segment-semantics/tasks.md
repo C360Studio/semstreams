@@ -1085,6 +1085,14 @@ package; both declarations are now on the payload registrations) and
       | `task entity-id:audit` | `entity ID audit passed: 1319 structured candidates across 1 roots`, 0 findings. Baseline re-measured at `3f3133a6` in a scratch worktree: 1312 — the +7 are this slice's own test literals, and none trips a rule |
       | `task schema:generate && git diff --exit-code schemas/ specs/` | clean. The generated delta is `import` on the jetstream INPUT port only, 30 schema files x 3 lines; verified the sole occurrence in `schemas/graph-ingest.v1.json` is under `ports/inputs/items/config/oneOf[2]` |
       | `openspec validate --all --strict --no-interactive` | `Totals: 53 passed, 0 failed (53 items)` |
+
+      **RE-RUN after merging `origin/main` at `b060511f` (slice C), all green, serialized on an idle host:**
+      `task lint` exit 0 · `go test -race -count=1 ./...` exit 0, **153 `ok`, 0 `FAIL`** ·
+      `scripts/run-integration-tests.sh` exit 0, **153 `ok`, 0 `FAIL`** · `go test ./test/contract/...` `ok` ·
+      `task entity-id:audit` `entity ID audit passed: 1304 structured candidates across 1 roots`, 0 findings
+      (1319 → 1304: slice C deleted the `org_id`/`platform` literals it retired) ·
+      `task schema:generate && git diff --exit-code schemas/ specs/` clean ·
+      `openspec validate --all --strict` `Totals: 53 passed, 0 failed`.
 - [ ] 7.2 Covering e2e tiers on the landing branch, one at a time on the shared host, results recorded verbatim:
       `task e2e:core`; `task e2e:structural`; `task e2e:statistical`; `task e2e:semantic`; `task e2e:agentic`;
       `task e2e:lessons`; `task e2e:lifecycle`; `task e2e:ops`; `task e2e:crud-tools`; `task e2e:research-graph`.
@@ -1125,8 +1133,8 @@ package; both declarations are now on the payload registrations) and
       sites — the two above plus `test/e2e/scenarios/agentic/scenario.go`, already fixed — and two deliberate
       non-sites: `config/config_test.go:419` (the O-2 rejection fixture, which must keep `instance_id`) and
       `processor/agentic-tools/decide_test.go` (an arbitrary self-consistent unit-test platform value).
-      **SLICE B RUN — 2026-08-28, one at a time on a host with no competing gate. SEVEN GREEN, THREE RED for one
-      pre-existing cause that is escalated, not worked around.**
+      **SLICE B RUN 1 — 2026-08-28, before slice C. Seven green, three red for one pre-existing cause. Kept because
+      it is the evidence that produced the slice-C escalation; superseded by RUN 2 below.**
 
       | Tier | exit | evidence |
       |---|---|---|
@@ -1152,6 +1160,33 @@ package; both declarations are now on the payload registrations) and
 
       Excluded with reason recorded: `slow-consumer`, `throughput`, `openai-responses`, `deep-research` (no position
       literal), unchanged from slice A.
+
+      **SLICE B RUN 2 — 2026-08-28, after merging `origin/main` at `b060511f` (slice C, #1149). ALL TEN GREEN**, one
+      at a time on a host verified idle before each run (no `go test`/`task`/compose process, no container, no
+      integration lock — #1120's `freePort` race is contention-triggered, so a concurrent gate could manufacture a
+      red belonging to neither change). `main` was confirmed green at `b060511f` first (run 33229302012: Lint, Test,
+      Build, Schema Validation, CI Status Check all success) rather than merged on trust.
+
+      | Tier | exit | evidence |
+      |---|---|---|
+      | `e2e:structural` | **0** | `entities_processed_at_validation:174`, `hierarchy_container_count:46` (min 32), `inverse_symmetry_valid:1`, `authority_hierarchy_provenance_triples:836`, `rule_firings:6`, `canonical_create_hierarchy_births:0`, `relationship_stub_births:0`, `temporal_observed_time_validated:1`, `validation_errors:0` |
+      | `e2e:statistical` | **0** | `variant:statistical`, `hierarchy_container_count:46`, `entity_count:125`, `validation_errors:0` |
+      | `e2e:semantic` | **0** | 48 stages; `communities_total:18`, `embedding_resolved_total:87`, `gateway_shape_probes_checked:3`, `hierarchy_container_count:46`, `validation_errors:0`, and the discriminating value — `graphrag_local_community_id:c360.semstreams-kitchen-sink-ml.document.content.group.container`, a container minted under the DEPLOYMENT's authority where slice A read `c360.logistics.…`. That is the gate and slice C composing on the wire: hierarchy mints only under the deployment's own pair |
+      | `e2e:core` | 0 | re-run (I changed `graph_roundtrip{,_scenario}.go` and `cmd/e2e/main.go`); `graph_roundtrip_trace_entries:2` |
+      | `e2e:agentic` | 0 | re-run as cheap insurance on the tier covering slice B's #1096 mechanism; `graph_loop_triples:10`, `graph_model_triples:6`, `tool_executions:1` |
+      | `e2e:lessons`, `e2e:lifecycle`, `e2e:ops`, `e2e:crud-tools`, `e2e:research-graph` | 0 (RUN 1) | **judged unaffected, not skipped.** Three checks: no file under their scenario directories is in `git diff --name-only be6b2072 HEAD`; their configs (`agentic.json`, `lifecycle-flow.json`, `research-graph-e2e.json`, `flows/*`) compose none of the three example processors slice C rewrote; and the only non-example production files slice C touched — `processor/agentic-tools/executors/graph_query.go`, `processor/graph-ingest/query.go`, `vocabulary/predicates.go` — are doc-comment and tool-description string edits with no behavioural change (verified by reading the diff hunks) |
+
+      **Three tiers went from red to green, and the red moved twice before it cleared** — each move a real defect of
+      the same class, found only by re-running rather than by assuming slice C had covered everything:
+      1. `entity stabilization failed: got 0, expected 74` → **fixed by slice C**; ingest now stabilizes in 12ms at 174 entities.
+      2. `validate-canonical-create-no-hierarchy … entity.create rejected` → `tiered_structural.go` minted `c360.e2e.…` through the canonical RPC. Slice C's sweep targeted `c360.logistics`, so this literal was outside it.
+      3. `test-temporal-observed-time … entity.create rejected` → a third site, `c360.platform.e2e.eventtime.observation.001`, a function-level `const`.
+
+      After (2) I stopped fixing instance-by-instance and enumerated the class: every string literal in non-test
+      `test/e2e/**` shaped like the start of a six-part ID, grouped by its first two positions. That found (3) and
+      proved the only remaining non-tier literals are the two `validate_batch_read.go` absent-ID probes, which are
+      READ-only and deliberately stay foreign — a foreign pair makes their guaranteed absence structural rather than
+      incidental, and that reason is now a comment in the file.
 
 - [ ] 7.3 Implementation review by `semstreams-reviewer`; verdict and every finding's disposition recorded in
       `conformance.md`.
