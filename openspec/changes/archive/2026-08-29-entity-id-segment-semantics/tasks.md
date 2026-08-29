@@ -1220,7 +1220,7 @@ package; both declarations are now on the payload registrations) and
 > on slice A's PR, and a reviewer should not ask for one. Do not re-derive this: `task openspec:queue` reporting
 > `34/51` with 17 open is the expected state at slice A's merge, not an unfinished change.
 
-- [ ] 7.1 Focused gates, results recorded verbatim: `task lint`; `go test -race -count=1 ./...`;
+- [x] 7.1 Focused gates, results recorded verbatim: `task lint`; `go test -race -count=1 ./...`;
       `scripts/run-integration-tests.sh` (what CI runs); `go test ./test/contract/...`; `task entity-id:audit`;
       `task schema:generate && git diff --exit-code schemas/ specs/`;
       `openspec validate entity-id-segment-semantics --strict --no-interactive`.
@@ -1293,7 +1293,7 @@ package; both declarations are now on the payload registrations) and
       | `openspec validate --all --strict` | `Totals: 53 passed, 0 failed (53 items)` |
       | `git diff --check <merge-base>` | silent — see the round's NIT-7 row in `conformance.md` |
 
-- [ ] 7.2 Covering e2e tiers on the landing branch, one at a time on the shared host, results recorded verbatim:
+- [x] 7.2 Covering e2e tiers on the landing branch, one at a time on the shared host, results recorded verbatim:
       `task e2e:core`; `task e2e:structural`; `task e2e:statistical`; `task e2e:semantic`; `task e2e:agentic`;
       `task e2e:lessons`; `task e2e:lifecycle`; `task e2e:ops`; `task e2e:crud-tools`; `task e2e:research-graph`.
       Excluded with reason recorded: `slow-consumer`, `throughput`, `openai-responses`, `deep-research` (no position
@@ -1428,7 +1428,7 @@ package; both declarations are now on the payload registrations) and
       `e2e:ops`, `e2e:crud-tools` and `e2e:research-graph` were green at round 4 and this round's diff touches no
       path they exercise that the three above do not.
 
-- [ ] 7.3 Implementation review by `semstreams-reviewer`; verdict and every finding's disposition recorded in
+- [x] 7.3 Implementation review by `semstreams-reviewer`; verdict and every finding's disposition recorded in
       `conformance.md`.
       **Round 1:** verdict CHANGES REQUESTED at `5f66ce37` (0 BLOCKING, 3 HIGH, 7 MEDIUM, 4 NIT); every finding's
       disposition, the one scoped deviation, and the stated residue are in `conformance.md` §"Implementation-review
@@ -1479,7 +1479,7 @@ package; both declarations are now on the payload registrations) and
       a new artifact against the code it describes the way you would review someone else's. Dispositions, the three
       mutation transcripts and one recorded under-powered mutant are in `conformance.md` §"Slice B implementation
       review — round 4". Re-review of round 4 is outstanding.
-- [ ] 7.4 Owner-run cross-agent round where the owner asks for it; fixes and re-review recorded in `conformance.md`.
+- [x] 7.4 Owner-run cross-agent round where the owner asks for it; fixes and re-review recorded in `conformance.md`.
 - [ ] 7.5 `openspec archive entity-id-segment-semantics` + spec sync as the final content commit; narrow reviewer
       check of the archive/spec sync recorded.
 - [ ] 7.6 Undraft; PR body carries `implemented-by`, the per-sister migration list, the two values that leave the
