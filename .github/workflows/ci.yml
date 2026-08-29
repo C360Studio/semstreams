@@ -29,6 +29,17 @@ jobs:
       # CI with new ruleset warnings until we deliberately bump the pin
       # in go.mod. Closes Rule 4 of [[feedback_substrate_flake_discipline]].
 
+      - name: Verify go.mod/go.sum are tidy
+        # A machine with `GOFLAGS=-mod=mod` set (Go's default is
+        # `-mod=readonly`) lets ANY go command — build, test, vet, list,
+        # gopls — rewrite go.sum as a side effect. A full-module-graph
+        # command then appends ~190 `/go.mod`-only hash lines that no
+        # build needs. It is invisible: extra go.sum entries are inert,
+        # so every other CI job stays green while the noise lands on main.
+        # `-diff` reports what tidy WOULD change and writes nothing, so
+        # this is a read-only check that names the offending lines.
+        run: go mod tidy -diff
+
       - name: Run go vet
         run: go vet ./...
 
