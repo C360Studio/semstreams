@@ -51,11 +51,19 @@ func (s jetStreamCompletedOutcomeStore) Create(ctx context.Context, key string, 
 
 type irrecoverableOutcomeError struct{ err error }
 type outcomeCollisionError struct{ err error }
+type ambiguousOutcomeCreateError struct{ err error }
 
-func (e *irrecoverableOutcomeError) Error() string { return e.err.Error() }
-func (e *irrecoverableOutcomeError) Unwrap() error { return e.err }
-func (e *outcomeCollisionError) Error() string     { return e.err.Error() }
-func (e *outcomeCollisionError) Unwrap() error     { return e.err }
+func (e *irrecoverableOutcomeError) Error() string   { return e.err.Error() }
+func (e *irrecoverableOutcomeError) Unwrap() error   { return e.err }
+func (e *outcomeCollisionError) Error() string       { return e.err.Error() }
+func (e *outcomeCollisionError) Unwrap() error       { return e.err }
+func (e *ambiguousOutcomeCreateError) Error() string { return e.err.Error() }
+func (e *ambiguousOutcomeCreateError) Unwrap() error { return e.err }
+
+func isAmbiguousOutcomeCreateError(err error) bool {
+	var target *ambiguousOutcomeCreateError
+	return errors.As(err, &target)
+}
 
 func isIrrecoverableOutcomeError(err error) bool {
 	var target *irrecoverableOutcomeError

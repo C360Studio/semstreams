@@ -18,6 +18,7 @@ import (
 type mockMsg struct {
 	subject         string
 	data            []byte
+	dataCount       atomic.Int32
 	ackCalled       atomic.Bool
 	nakCalled       atomic.Bool
 	ackCount        atomic.Int32
@@ -36,7 +37,7 @@ type mockMsg struct {
 	termErr       error
 }
 
-func (m *mockMsg) Data() []byte                              { return m.data }
+func (m *mockMsg) Data() []byte                              { m.dataCount.Add(1); return m.data }
 func (m *mockMsg) Subject() string                           { return m.subject }
 func (m *mockMsg) Reply() string                             { return "" }
 func (m *mockMsg) Headers() nats.Header                      { return nil }
@@ -57,7 +58,9 @@ func (m *mockMsg) Nak() error {
 	m.nakCalled.Store(true)
 	m.nakCount.Add(1)
 	m.recordSettlement()
-	return nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.nakErr
 }
 
 func (m *mockMsg) NakWithDelay(delay time.Duration) error {

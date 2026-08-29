@@ -162,6 +162,52 @@ func TestDurableHandlerExportedAPICensus(t *testing.T) {
 	}
 }
 
+func TestLegacyHeartbeatProductionCallAllowlist(t *testing.T) {
+	files := parseProductionGoFiles(t, filepath.Clean(".."))
+	got := map[string]int{}
+	for _, parsed := range files {
+		ast.Inspect(parsed.file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if ok && selector.Sel.Name == "ConsumeWithHeartbeat" {
+				got[parsed.rel]++
+			}
+			return true
+		})
+	}
+	want := map[string]int{
+		"agentic/agentrun/agentrun.go":         1,
+		"processor/agentic-loop/component.go":  1,
+		"processor/agentic-model/component.go": 1,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("legacy ConsumeWithHeartbeat callers = %#v, want exact held allowlist %#v", got, want)
+	}
+}
+
+func TestNoDeliveryDispositionExportedSurface(t *testing.T) {
+	files := parseProductionGoFiles(t, ".")
+	for _, parsed := range files {
+		for _, declaration := range parsed.file.Decls {
+			switch declaration := declaration.(type) {
+			case *ast.FuncDecl:
+				if strings.Contains(declaration.Name.Name, "DeliveryDisposition") {
+					t.Fatalf("forbidden disposition constructor/function exported: %s", declaration.Name.Name)
+				}
+			case *ast.GenDecl:
+				for _, spec := range declaration.Specs {
+					if typed, ok := spec.(*ast.TypeSpec); ok && strings.Contains(typed.Name.Name, "DeliveryDisposition") {
+						t.Fatalf("forbidden disposition type exported: %s", typed.Name.Name)
+					}
+				}
+			}
+		}
+	}
+}
+
 func TestClientHasNoChildLifecycleSurfaceOrCatalog(t *testing.T) {
 	files := parseProductionGoFiles(t, ".")
 	forbiddenMethods := map[string]struct{}{
