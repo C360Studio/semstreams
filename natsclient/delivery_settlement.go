@@ -25,10 +25,45 @@ const (
 	DeliveryDecisionQuarantine
 )
 
-// DeliveryWork performs one delivery's owner-defined work and returns its
-// semantic decision followed by the cause required by that decision. Data is
-// read-only and invocation-scoped; work must not retain or mutate it.
-type DeliveryWork func(context.Context, []byte) (DeliveryDecision, error)
+// DeliveryAttempt is the server-observed attempt number for one delivery.
+// Its zero value means that valid delivery metadata was not available.
+type DeliveryAttempt struct {
+	number uint64
+}
+
+// Number returns the server-observed delivery attempt number.
+func (a DeliveryAttempt) Number() uint64 { return a.number }
+
+// MetadataAvailable reports whether the server supplied a valid attempt number.
+func (a DeliveryAttempt) MetadataAvailable() bool { return a.number > 0 }
+
+// IsRedelivery reports whether this delivery follows the first attempt.
+func (a DeliveryAttempt) IsRedelivery() bool { return a.number > 1 }
+
+// DeliveryWork performs one delivery's owner-defined work with the immutable
+// server-observed attempt and returns its semantic decision followed by the
+// cause required by that decision. Data is read-only and invocation-scoped;
+// work must not retain or mutate it.
+type DeliveryWork func(context.Context, DeliveryAttempt, []byte) (DeliveryDecision, error)
+
+// DeliveryMetadataUnavailableError identifies missing or invalid server
+// delivery metadata. The stable token allows callers to classify the failure
+// while Unwrap preserves the transport or validation cause.
+type DeliveryMetadataUnavailableError struct{ cause error }
+
+func (e *DeliveryMetadataUnavailableError) Error() string {
+	if e == nil || e.cause == nil {
+		return "delivery_metadata_unavailable"
+	}
+	return fmt.Sprintf("delivery_metadata_unavailable: %v", e.cause)
+}
+
+func (e *DeliveryMetadataUnavailableError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
 
 // InvalidDeliveryDecisionError identifies a decision/error tuple that does
 // not satisfy the closed DeliveryWork contract.
@@ -267,6 +302,17 @@ func ConsumeDeliveryWithHeartbeat(
 			decision: DeliveryDecisionInvalid, cause: cause, quarantined: true, ownerStopNeeded: true,
 		}
 	}
+	metadata, err := msg.Metadata()
+	if err != nil {
+		return unavailableDeliveryMetadata(err)
+	}
+	if metadata == nil {
+		return unavailableDeliveryMetadata(errors.New("message metadata is nil"))
+	}
+	if metadata.NumDelivered == 0 {
+		return unavailableDeliveryMetadata(errors.New("message delivery attempt is zero"))
+	}
+	attempt := DeliveryAttempt{number: metadata.NumDelivered}
 
 	workCtx, workCancel := context.WithCancel(ctx)
 	defer workCancel()
@@ -287,7 +333,7 @@ func ConsumeDeliveryWithHeartbeat(
 			}
 			done <- result
 		}()
-		result.decision, result.cause = policy.work(workCtx, data)
+		result.decision, result.cause = policy.work(workCtx, attempt, data)
 	}()
 
 	ticker := time.NewTicker(policy.heartbeat)
@@ -310,6 +356,15 @@ func ConsumeDeliveryWithHeartbeat(
 			joined := <-done
 			return settleDeliveryDecision(msg, policy.retry, interpretDeliveryWork(joined))
 		}
+	}
+}
+
+func unavailableDeliveryMetadata(cause error) DeliveryResult {
+	return DeliveryResult{
+		decision:        DeliveryDecisionQuarantine,
+		cause:           &DeliveryMetadataUnavailableError{cause: cause},
+		quarantined:     true,
+		ownerStopNeeded: true,
 	}
 }
 

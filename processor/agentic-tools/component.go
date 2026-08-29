@@ -422,7 +422,10 @@ func (c *Component) setupConsumer(ctx context.Context, setup consumerSetup) erro
 		return errs.WrapFatal(err, "Component", "setupConsumer", "construct semantic retry policy")
 	}
 	deliveryPolicy, err := natsclient.ValidateHeartbeatDeliveryPolicy(
-		ctx, cfg, heartbeatInterval, retryPolicy, c.handleToolDelivery,
+		ctx, cfg, heartbeatInterval, retryPolicy,
+		func(workCtx context.Context, _ natsclient.DeliveryAttempt, data []byte) (natsclient.DeliveryDecision, error) {
+			return c.handleToolDelivery(workCtx, data)
+		},
 	)
 	if err != nil {
 		return errs.WrapInvalid(err, "Component", "setupConsumer", "validate heartbeat delivery policy")

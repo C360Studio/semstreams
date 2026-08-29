@@ -578,7 +578,10 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		AutoCreate:    false,
 	}
 	agentCompletePolicy, err := natsclient.ValidateHeartbeatDeliveryPolicy(
-		ctx, agentCompleteCfg, 10*time.Second, terminalRetryPolicy, c.handleTerminalDelivery,
+		ctx, agentCompleteCfg, 10*time.Second, terminalRetryPolicy,
+		func(workCtx context.Context, _ natsclient.DeliveryAttempt, data []byte) (natsclient.DeliveryDecision, error) {
+			return c.handleTerminalDelivery(workCtx, data)
+		},
 	)
 	if err != nil {
 		return errs.WrapInvalid(err, "Component", "setupSubscriptions", "validate agent.complete delivery policy")
@@ -638,7 +641,10 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		AutoCreate:    false,
 	}
 	agentFailedPolicy, err := natsclient.ValidateHeartbeatDeliveryPolicy(
-		ctx, agentFailedCfg, 10*time.Second, terminalRetryPolicy, c.handleTerminalDelivery,
+		ctx, agentFailedCfg, 10*time.Second, terminalRetryPolicy,
+		func(workCtx context.Context, _ natsclient.DeliveryAttempt, data []byte) (natsclient.DeliveryDecision, error) {
+			return c.handleTerminalDelivery(workCtx, data)
+		},
 	)
 	if err != nil {
 		return errs.WrapInvalid(err, "Component", "setupSubscriptions", "validate agent.failed delivery policy")

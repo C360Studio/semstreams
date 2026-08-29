@@ -32,13 +32,13 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       method executor.
 - [x] 2.8 Prove `ConsumeWithHeartbeat`, `TerminateDelivery(error) error`, and `PermanentDeliveryError`
       characterization unchanged after private executor extraction.
-- [ ] 2.9 Add failing tests for opaque `DeliveryAttempt`, exact
+- [x] 2.9 Add failing tests for opaque `DeliveryAttempt`, exact
       `DeliveryWork(context.Context, DeliveryAttempt, []byte)` signature, nil-impossible value semantics, zero
       behavior, first delivery, second delivery, and conservative crash-before-call redelivery.
-- [ ] 2.10 Add failing tests for metadata error, nil metadata, and zero delivery number. Assert typed
+- [x] 2.10 Add failing tests for metadata error, nil metadata, and zero delivery number. Assert typed
       `DeliveryMetadataUnavailableError`, cause reachability, Quarantine, OwnerStopRequired, one Metadata call, and
       zero Data, work, heartbeat, or terminal calls.
-- [ ] 2.11 Implement metadata observation before Data/work, migrate the three policy bindings through local wrappers
+- [x] 2.11 Implement metadata observation before Data/work, migrate the three policy bindings through local wrappers
       that leave domain handlers unchanged, migrate settlement fakes, preserve C8/C9, and prove panic, cancellation,
       control-loss, and every started task still join under valid metadata.
 - [ ] 2.12 Add the deprecation notice and exact shrinking AST allowlist for `ConsumeWithHeartbeat` only; docs/examples
@@ -65,7 +65,7 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       Retry; immutable terminal/route poison Term; unknown publish outcome Quarantine before MaxDeliver=0 retry.
 - [x] 4.5 Migrate dispatch two bindings to the permanent typed API and exact-owner control-loss reaction.
 - [x] 4.6 Assert held model/loop/AgentRun source, config, settlement, cancellation, logs, and health remain unchanged.
-- [ ] 4.7 Prove metadata-unavailable results close admission and drain the exact tools or dispatch handle outside
+- [x] 4.7 Prove metadata-unavailable results close admission and drain the exact tools or dispatch handle outside
       callback, including callback-before-handle ordering.
 - [ ] 4.8 Replace builder-only tests with permanent policy/API integration tests, recheck zero adopters, obtain the
       approved Stage A gate, and remove `NewDurableHandler` without alias.
@@ -81,10 +81,11 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       unlimited retry.
 - [x] 5.5 Prove owner-fatal control loss, post-latch refusal, exact-handle shutdown, and reconstructed ordinary
       ownership.
-- [x] 5.6 Run `GOFLAGS=-mod=readonly task e2e:agentic`: PASS in 2m03.893s with clean teardown; completed replay had
+- [x] 5.6 Run `GOFLAGS=-mod=readonly task e2e:agentic`: PASS after DeliveryAttempt admission in 2m03.999s with clean
+      teardown; completed replay had
       one executor effect, tools BackOff redelivered at 15s with two quarantine attempts, and dispatch emitted one
       replacement response.
-- [ ] 5.7 With a real durable consumer, observe Number 1 on first delivery and Number 2 with `IsRedelivery` after
+- [x] 5.7 With a real durable consumer, observe Number 1 on first delivery and Number 2 with `IsRedelivery` after
       explicit retry or missing settlement.
 
 ## 6. Non-authorizing binding gates
