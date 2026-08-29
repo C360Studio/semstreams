@@ -21,6 +21,7 @@ import (
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/storage/objectstore"
+	"github.com/c360studio/semstreams/types"
 )
 
 // #727: handleJetStreamWriteRequest previously acked the JetStream delivery
@@ -457,12 +458,14 @@ func TestIntegration_JetStreamWrite_InvalidEntityIDTerminatesDelivery(t *testing
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = advSub.Unsubscribe() })
 
-	// OrgID "-poison" passes Document.Validate (non-empty) but makes
-	// Document.EntityID() start with '-', which fails ValidateEntityID's
-	// first-byte rule (classified Invalid) inside StoreContent.
+	// A leading '-' in the org position passes Document.Validate (the entity
+	// ID is non-empty) but fails ValidateEntityID's first-byte rule
+	// (classified Invalid) inside StoreContent.
 	doc := &document.Document{
 		ID: "bad-001", Title: "Poison", Description: "invalid entity id",
-		Body: "body", Category: "docs", OrgID: "-poison", Platform: "plat",
+		Body: "body", Category: "docs",
+		EntityIDValue: document.MintDocumentEntityID(
+			types.PlatformMeta{Org: "-poison", Platform: "plat"}, "docs", "bad-001"),
 	}
 	baseMsg := message.NewBaseMessage(doc.Schema(), doc, "test-source")
 	msgBytes, err := baseMsg.MarshalJSON()
@@ -577,7 +580,9 @@ func TestIntegration_JetStreamWrite_StoredEmitFailureNaksAfterCommit(t *testing.
 
 	doc := &document.Document{
 		ID: "ok-001", Title: "Valid", Description: "emit must gate the ack",
-		Body: "body", Category: "docs", OrgID: "acme", Platform: "ops",
+		Body: "body", Category: "docs",
+		EntityIDValue: document.MintDocumentEntityID(
+			types.PlatformMeta{Org: "acme", Platform: "dep1"}, "docs", "ok-001"),
 	}
 	baseMsg := message.NewBaseMessage(doc.Schema(), doc, "test-source")
 	msgBytes, err := baseMsg.MarshalJSON()

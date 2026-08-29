@@ -3,11 +3,12 @@ package scenarios
 import (
 	"testing"
 
+	"github.com/c360studio/semstreams/test/e2e/config"
 	"github.com/stretchr/testify/require"
 )
 
 func TestValidateCompoundPredicateCoverage(t *testing.T) {
-	const known = "c360.logistics.sensor.environmental.temperature.temp-sensor-001"
+	known := config.TierEntityID(config.VariantStructural, "sensor.environmental.temperature.temp-sensor-001")
 	t.Run("non-empty intersection", func(t *testing.T) {
 		require.NoError(t, validateCompoundPredicateCoverage(10, 3, []string{known, "other"}, known))
 	})

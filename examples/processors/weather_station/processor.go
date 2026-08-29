@@ -1,36 +1,26 @@
 package weatherstation
 
 import (
-	"errors"
 	"fmt"
 	"time"
+
+	"github.com/c360studio/semstreams/types"
 )
-
-// Config holds the configuration for the processor.
-type Config struct {
-	OrgID    string
-	Platform string
-}
-
-// Validate checks that the configuration is valid.
-func (c Config) Validate() error {
-	if c.OrgID == "" {
-		return errors.New("OrgID is required")
-	}
-	if c.Platform == "" {
-		return errors.New("Platform is required")
-	}
-	return nil
-}
 
 // Processor transforms incoming JSON weather data into Graphable payloads.
 type Processor struct {
-	config Config
+	// authority is the composition root's platform.org / platform.id,
+	// received through component.Dependencies.Platform. It is the ONLY
+	// source of positions 1-2 of every entity this processor mints: not an
+	// operator config key, not a constant, not a product name, and not a
+	// field on an incoming payload (ADR-102 d2).
+	authority types.PlatformMeta
 }
 
-// NewProcessor creates a new weather station processor with the given configuration.
-func NewProcessor(config Config) *Processor {
-	return &Processor{config: config}
+// NewProcessor creates a new weather station processor minting under the given
+// deployment authority. Callers pass component.Dependencies.Platform verbatim.
+func NewProcessor(authority types.PlatformMeta) *Processor {
+	return &Processor{authority: authority}
 }
 
 // Process transforms incoming JSON data into a WeatherReading.
@@ -87,16 +77,15 @@ func (p *Processor) Process(input map[string]any) (*WeatherReading, error) {
 	}
 
 	return &WeatherReading{
-		StationID:   stationID,
-		Temperature: temperature,
-		Humidity:    humidity,
-		WindSpeed:   windSpeed,
-		Condition:   condition,
-		City:        city,
-		Country:     country,
-		ObservedAt:  observedAt,
-		OrgID:       p.config.OrgID,
-		Platform:    p.config.Platform,
+		StationID:     stationID,
+		Temperature:   temperature,
+		Humidity:      humidity,
+		WindSpeed:     windSpeed,
+		Condition:     condition,
+		City:          city,
+		Country:       country,
+		ObservedAt:    observedAt,
+		EntityIDValue: WeatherReadingEntityID(p.authority, stationID),
 	}, nil
 }
 

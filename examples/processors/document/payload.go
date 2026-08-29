@@ -64,11 +64,8 @@ func buildDocument(fields map[string]any) (any, error) {
 	if v, ok := fields["updated_at"].(string); ok {
 		msg.UpdatedAt = v
 	}
-	if v, ok := fields["org_id"].(string); ok {
-		msg.OrgID = v
-	}
-	if v, ok := fields["platform"].(string); ok {
-		msg.Platform = v
+	if v, ok := fields["entity_id"].(string); ok {
+		msg.EntityIDValue = v
 	}
 
 	// Handle tags slice
@@ -115,11 +112,8 @@ func buildMaintenance(fields map[string]any) (any, error) {
 	if v, ok := fields["category"].(string); ok {
 		msg.Category = v
 	}
-	if v, ok := fields["org_id"].(string); ok {
-		msg.OrgID = v
-	}
-	if v, ok := fields["platform"].(string); ok {
-		msg.Platform = v
+	if v, ok := fields["entity_id"].(string); ok {
+		msg.EntityIDValue = v
 	}
 	if v, ok := fields["tags"].([]any); ok {
 		msg.Tags = make([]string, 0, len(v))
@@ -163,11 +157,8 @@ func buildObservation(fields map[string]any) (any, error) {
 	if v, ok := fields["category"].(string); ok {
 		msg.Category = v
 	}
-	if v, ok := fields["org_id"].(string); ok {
-		msg.OrgID = v
-	}
-	if v, ok := fields["platform"].(string); ok {
-		msg.Platform = v
+	if v, ok := fields["entity_id"].(string); ok {
+		msg.EntityIDValue = v
 	}
 	if v, ok := fields["tags"].([]any); ok {
 		msg.Tags = make([]string, 0, len(v))
@@ -211,11 +202,8 @@ func buildSensorDocument(fields map[string]any) (any, error) {
 	if v, ok := fields["category"].(string); ok {
 		msg.Category = v
 	}
-	if v, ok := fields["org_id"].(string); ok {
-		msg.OrgID = v
-	}
-	if v, ok := fields["platform"].(string); ok {
-		msg.Platform = v
+	if v, ok := fields["entity_id"].(string); ok {
+		msg.EntityIDValue = v
 	}
 	if v, ok := fields["tags"].([]any); ok {
 		msg.Tags = make([]string, 0, len(v))

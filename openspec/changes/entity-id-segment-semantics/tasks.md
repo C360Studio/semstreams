@@ -1188,3 +1188,140 @@ package; both declarations are now on the payload registrations) and
       check of the archive/spec sync recorded.
 - [ ] 7.6 Undraft; PR body carries `implemented-by`, the per-sister migration list, the two values that leave the
       graph, the owner ruling of 2026-08-26 as applied, and the e2e evidence pointers. No task asserts CI state.
+
+## 8. Slice C — the example processors' own authority (#1149, PR #1150)
+
+Slice A's corpus sweep (section 5) did not reach `examples/processors/`. Slice B's boundary gate made the gap
+fatal: `task e2e:structural` on the slice-B branch failed with `entity stabilization failed: got 0, expected 74`
+because the gate correctly refused every entity the example processors minted. The owner ruled 2026-08-28 that this
+lands FIRST, as its own slice, so the corpus is compliant before the gate arrives. Recorded in `conformance.md`
+§ESCALATION on the slice-B branch.
+
+- [x] 8.1 RED capture, committed at `5d9644a1` before any implementation. `TestRetiredAuthorityKeysAreRefused` fails
+      with `DeclarePorts accepted retired key "org_id"` / `"platform"` in all three packages, and
+      `TestComponentMintsUnderDeploymentAuthority` fails with
+      `sensor entity ID "default-org.default-platform.sensor.environmental.temperature.temp-sensor-001" does not
+      mint under the deployment authority "c360.semstreams-e2e-structural."`. The companion control
+      `TestDefaultConfigLoadsWithoutRetiredKeys` passes on the same baseline, so the RED is attributable to the
+      retired key and not to a malformed fixture.
+- [x] 8.2 The rejection act. `removedConfigFields` + `rejectRemovedConfigKeys` in each of
+      `examples/processors/{iot_sensor,document,weather_station}/component.go`, called from `resolveConfig` — the
+      one derivation `DeclarePorts` and `NewComponent` share, so neither entry path can accept what the other
+      refuses. Same shape as `config.rejectRemovedPlatformFields` (slice A, O-2) and
+      `processor/graph-clustering.rejectRemovedConfigKeys` (ADR-083/090).
+- [x] 8.3 Forced omission of 8.2. Deleting the `rejectRemovedConfigKeys(rawConfig)` CALL from `iot_sensor`'s
+      `resolveConfig` (the function retained, referenced by a blank identifier so the package still compiles) turns
+      `TestRetiredAuthorityKeysAreRefused` RED with `DeclarePorts accepted retired key "org_id"`; restored by `cp`
+      with a matching md5 (`c2e8c5a78ec6cefe1ba084bf05c44c48` before and after). The mutant kills the CALL, not the
+      primitive.
+- [x] 8.4 Forced omission of the minting wire. Replacing `NewProcessor(deps.Platform)` with
+      `NewProcessor(types.PlatformMeta{Org: "c360", Platform: "logistics"})` turns
+      `TestComponentMintsUnderDeploymentAuthority` RED.
+- [x] 8.4a **Recorded finding, corrected after review — this slice REMOVES `examples/processors/` from the
+      entity-ID corpus, it does not merely fail to be guarded by it.** The first write-up of 8.4 said only that the
+      audit "is not a guard for this class"; re-measured against an isolated checkout of the base commit
+      (`git archive 3f3133a6` into a scratch repo, then `cmd/entity-id-audit -format json` over both roots):
+
+      | root | candidates | format-builder | literal |
+      |---|---|---|---|
+      | base `3f3133a6` | 1312 | 43 | 1150 |
+      | branch at the reviewed head `e80a2185` | 1296 | 36 | 1141 |
+      | branch after the review fixes | 1298 | 36 | 1143 |
+      | `examples/processors/` alone, base | **10** | 7 | 3 |
+      | `examples/processors/` alone, reviewed head | **0** | 0 | 0 |
+      | `examples/processors/` alone, after fixes | **2** | 0 | 2 |
+
+      **16 candidates left the corpus and 0 entered at the reviewed head**; the 7 `format-builder` departures are exactly the seven
+      production mints this slice converted from `fmt.Sprintf` to `semtypes.EntityID{...}.Key()`. Mechanism:
+      `internal/entityidaudit/audit.go` `entityIDConstructorValue` emits a candidate only when ALL SIX fields
+      resolve to string constants; `Org: authority.Org` and a caller-supplied `Type` never resolve, so no candidate
+      is emitted at all. Converting any mint to the struct-builder form with one non-constant field silently exits
+      the corpus — a framework-wide class, not an examples one.
+
+      Both halves proven by paired mutation, `Domain` → `"bogusundeclareddomain"` (undeclared and unreserved):
+      on this branch `go run ./cmd/entity-id-audit .` stays GREEN at 1296 while
+      `go test ./examples/processors/...` fails `TestSensorReading_EntityID_6PartFormat`; on the base tree the
+      same edit to the `fmt.Sprintf` form yields
+      `format-builder go-format-prefix:EntityID: "%s.%s.sensor.bogusundeclareddomain.%s.%s": domain_unregistered`
+      and the audit EXITS 1. Both trees restored by `cp`; branch file md5 `b604c39026a946190d2d5b271ac0f154`
+      before and after. Widening `entityIDConstructorValue` is framework follow-up, deliberately not done here.
+
+      The MEDIUM-2 fix (8.11) re-admitted **2** of the 10 as `literal` candidates, which pins the naming rule
+      exactly: `internal/entityidaudit/audit.go` `languageForName` lowercases and strips `_`/`-`, so the map key
+      `entity_id` normalizes to `entityid` and IS recognised, while `EntityIDValue` normalizes to `entityidvalue`
+      and is recognised by nothing. The Go field name is invisible to the corpus; the wire key is not. Net for the
+      slice: 1312 → 1298 overall, `examples/processors/` 10 → 2.
+- [x] 8.4b Consequence fixed in this slice: the `EntityDomainDelegations` doc comment in all three
+      `examples/processors/*/entity_domains.go` promised that an undeclared position-4 token "is a finding". That
+      sentence pre-dates this slice (present in all three at `3f3133a6`) and was TRUE there; this slice falsified
+      it. All three now state what the audit does and does not reach, and name the behavioural tests as the actual
+      guard. A comment promising a check that does not fire is worse than no comment.
+- [x] 8.5 Wire shape. `OrgID`/`Platform` removed from all seven example payload types (`SensorReading`, `Zone`,
+      `Document`, `Maintenance`, `Observation`, `SensorDocument`, `WeatherReading`); each carries one `entity_id`
+      field holding the minted identity, and `EntityID()` returns it. A minting function per type takes
+      `types.PlatformMeta` and composes through `semtypes.EntityID{...}.Key()` rather than `fmt.Sprintf`.
+      `TestDocument_MintedIdentityPreservation` asserts the retired fields are absent from the marshalled wire map.
+- [x] 8.6 Config corpus. `org_id`/`platform` deleted from 13 component blocks across 7 shipped configs
+      (`e2e-structural`, `statistical`, `semantic`, `semantic-8b`, `semantic-frontier`, `structural`,
+      `hello-world`). `composition.TestValidateShippedConfigsHaveNoErrorFindings` was RED on all 7 before the edit —
+      the rejection act firing against the real corpus at unit-test speed — and is GREEN after.
+- [x] 8.7 Per-tier corpus. `test/e2e/config.TierAuthority`/`TierEntityID` replace the hardcoded `c360.logistics.*`
+      in the coupled scenarios; `TestTierAuthorityMatchesShippedConfigs` re-derives the table from
+      `docker/compose/tiered.yml` (profile → `--config`) and each config's `platform.org`/`platform.id`. Mutating
+      one table entry to `c360.logistics` turns it RED with `tier "statistical" boots configs/statistical.json with
+      platform "c360.semstreams-statistical", but the table says "c360.logistics"`; restored by `cp` with matching
+      md5 `41216a4cff37f1898ffdcbdc959496dd`.
+- [x] 8.8 Deliberate not-done, recorded rather than swept: `test/e2e/scenarios/stages/entities.go` (7 sites) is a
+      stale duplicate of `validate_entity.go` with **no importers at all** (`grep -rn "e2e/scenarios/stages"
+      --include='*.go' .` outside the package itself returns nothing); `test/e2e/scenarios/{anomaly,community}/
+      validator_test.go` (8 sites) are synthetic pair/member fixtures, not claims about minted identity, and the
+      audit exempts test fixtures by design (`internal/entityidaudit/segment_rules.go` — "Test fixtures stay
+      lexical-only"); `test/e2e/mock/{openai_server.go,cmd/main.go}` (2 sites) are canned mock-LLM tool arguments in
+      tiers this slice does not gate. Retiring the dead `stages` entity-verifier half is follow-up work, not this
+      slice.
+- [x] 8.9 Adopter seam. `docs/operations/migration-beta162-to-beta163.md` gains the slice C section with the
+      do-nothing verdict stated as **LOUD** (boot-time refusal), the shape of the error, and the four adopter
+      actions. `docs/basics/05-first-processor.md` and `examples/processors/iot_sensor/README.md` — the two
+      surfaces that told an adopter to add the keys — teach the `deps.Platform` pattern and the rejection probe.
+- [x] 8.10 Implementation review round 1 at `e80a2185` (CHANGES REQUESTED — 2 HIGH, 2 MEDIUM, 2 NIT). Every anchor
+      re-derived independently before editing; all six held. Dispositions:
+      **HIGH-1** (audit corpus) — FIXED, see 8.4a/8.4b. My own count is **16** candidates departed, not the
+      reviewer's 15; the summary breakdown (`format-builder` 43→36, `literal` 1150→1141) totals 16 and matches
+      1312−1296 exactly.
+      **HIGH-2** (`docs/operations/migration-beta162-to-beta163.md` named four functions that do not exist) —
+      FIXED. The `Mint*` rename never reached the doc layer. Replaced the inline prose list with a
+      payload-type → package → function table, and verified it mechanically: the names in the table diff clean
+      against `grep -o "^func [A-Za-z]*EntityID(authority" examples/processors/*/*.go`. Whole-tree sweep for the
+      four pre-rename spellings across ALL file types now returns 0.
+      **MEDIUM-1** (`SensorMintDocumentEntityID`, a surviving `s/DocumentEntityID/MintDocumentEntityID/` artifact) —
+      FIXED to `MintSensorDocumentEntityID`, 4 sites, rename scoped to `examples/processors/document/*.go` by
+      glob rather than a tree-wide `--include=*.go`. That scoping is the direct lesson of the `agentic` collision
+      recorded in the PR body.
+      **MEDIUM-2** (builder key vs wire key) — FIXED in `iot_sensor` and covered by a new test; the second half is
+      pre-existing and out of scope, see 8.11.
+      **NIT** (`throughput` variant is a prediction) — turned into an observation, see 8.12.
+      **NIT** (`stages/entities.go`) — left as recorded in 8.8; the reviewer is filing it as an issue.
+- [x] 8.11 MEDIUM-2, measured rather than assumed. `buildSensorReading` read `fields["EntityIDValue"]` (the Go
+      field name) while the wire key is `entity_id`; `SensorReading` and `Zone` are otherwise untagged, so Go name
+      and wire name coincide for every other field and the compiler could not see the divergence.
+      `payloadregistry.Registry.Build`'s documented fallback is `json.Marshal(fields)` → `Unmarshal` into the
+      Factory type, so the WIRE key is the contract. Builder and both `Example` maps now use `entity_id`, and
+      `TestRegisteredExamplesBuildThroughTheRegistry` drives production `Registry.Build` over each registration's
+      own `Example`; reverting the builder key turns it RED with
+      `validation failed: entity_id is required` (restored by `cp`, md5 `bb4c6c2bec5c5a090ceb47a2f39b1d81`).
+      **The reviewer's second half is NOT the same small edit and is deliberately not taken.** A throwaway probe
+      over all seven registrations showed `iot.sensor.v1` and `facility.zone.v1` BUILD-OK after the fix, while the
+      four `content.*` and `weather.station.v1` fail on `id is required` / `station_id is required` — their
+      `Example` maps are spelled in Go field names (`"ID"`, `"Title"`, `"StationID"`) for EVERY key while their
+      builders read json keys (`fields["id"]`, `fields["station_id"]`). Adding `entity_id` would change nothing;
+      `Validate()` fails on the first field. Pre-existing at `3f3133a6` (`buildDocument` reads `fields["id"]`,
+      `Example` supplies `"ID"`), on a path with no production caller. Re-spelling five `Example` maps is a
+      separate fix.
+- [x] 8.12 NIT. `throughput/query_load.go` names its tier statically because the scenario takes no `--variant` and
+      has no runtime way to ask the deployment who it is. `TestTierEntityMatchesTheProfileTheTaskBringsUp` reads
+      the `--profile` argument out of `taskfiles/e2e/throughput.yml` and requires `tierEntity`'s OUTPUT to equal
+      that profile's authority. First cut compared the taskfile against the `config.VariantStatistical` constant
+      and **survived** the mutation `VariantStatistical` → `VariantSemantic` in `tierEntity` — it tested the
+      primitive, not the wiring. Rewritten to assert through `tierEntity` itself; the same mutation now fails with
+      `tierEntity produced "c360.semstreams-kitchen-sink-ml…"`. Restored by `cp`, md5
+      `75888326c3bb6c8bdbd271a4a155ac59`.

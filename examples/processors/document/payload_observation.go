@@ -8,6 +8,8 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
+	"github.com/c360studio/semstreams/types"
 )
 
 // Observation represents an observation or inspection record. It implements ContentStorable.
@@ -23,27 +25,35 @@ type Observation struct {
 	Category    string   `json:"category"`    // safety, quality, environment
 	Tags        []string `json:"tags"`
 
-	// Context fields (set by processor from config, preserved through JSON for NATS transport)
-	OrgID    string `json:"org_id,omitempty"`
-	Platform string `json:"platform,omitempty"`
+	// EntityIDValue is this observation's own identity, minted once by the
+	// processor under the composition root's platform.org / platform.id and
+	// carried on the wire from there (ADR-102 d2).
+	EntityIDValue string `json:"entity_id"`
 
 	// Storage reference (set by processor)
 	storageRef *message.StorageReference `json:"-"`
 }
 
-// EntityID returns a federated entity ID for the observation.
-// Example: "acme.logistics.record.observation.high.obs-001"
+// EntityID returns the identity minted for this observation.
 func (o *Observation) EntityID() string {
-	severity := o.Severity
+	return o.EntityIDValue
+}
+
+// MintObservationEntityID mints an observation's federated entity ID under the
+// deployment authority (ADR-102 d2): system = record, domain = observation.
+// Example: "acme.dep1.record.observation.high.obs-001"
+func MintObservationEntityID(authority types.PlatformMeta, severity, id string) string {
 	if severity == "" {
-		severity = "medium"
+		severity = defaultObservationSeverity
 	}
-	return fmt.Sprintf("%s.%s.record.observation.%s.%s",
-		o.OrgID,
-		o.Platform,
-		severity,
-		o.ID,
-	)
+	return semtypes.EntityID{
+		Org:      authority.Org,
+		Platform: authority.Platform,
+		System:   recordSystem,
+		Domain:   observationDomain,
+		Type:     severity,
+		Instance: id,
+	}.Key()
 }
 
 // Triples returns METADATA ONLY facts about this observation.
@@ -198,11 +208,8 @@ func (o *Observation) Validate() error {
 	if o.Title == "" {
 		return fmt.Errorf("title is required")
 	}
-	if o.OrgID == "" {
-		return fmt.Errorf("org_id is required (set by processor)")
-	}
-	if o.Platform == "" {
-		return fmt.Errorf("platform is required (set by processor)")
+	if o.EntityIDValue == "" {
+		return fmt.Errorf("entity_id is required; mint it with MintObservationEntityID under the deployment authority")
 	}
 	return nil
 }

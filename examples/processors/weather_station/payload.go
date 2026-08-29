@@ -7,6 +7,8 @@ import (
 
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/payloadregistry"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
+	"github.com/c360studio/semstreams/types"
 )
 
 func buildWeatherReading(fields map[string]any) (any, error) {
@@ -33,11 +35,8 @@ func buildWeatherReading(fields map[string]any) (any, error) {
 	if v, ok := fields["country"].(string); ok {
 		msg.Country = v
 	}
-	if v, ok := fields["org_id"].(string); ok {
-		msg.OrgID = v
-	}
-	if v, ok := fields["platform"].(string); ok {
-		msg.Platform = v
+	if v, ok := fields["entity_id"].(string); ok {
+		msg.EntityIDValue = v
 	}
 
 	// Handle observed_at timestamp
@@ -88,21 +87,34 @@ type WeatherReading struct {
 	Country     string    `json:"country"`
 	ObservedAt  time.Time `json:"observed_at"`
 
-	// Context fields (set by processor from config)
-	OrgID    string `json:"org_id"`
-	Platform string `json:"platform"`
+	// EntityIDValue is this reading's own identity, minted once by the
+	// processor under the composition root's platform.org / platform.id and
+	// carried on the wire from there (ADR-102 d2).
+	EntityIDValue string `json:"entity_id"`
 }
 
-// EntityID returns a deterministic 6-part federated entity ID.
-// Format: {org}.{platform}.{system}.{domain}.{type}.{instance} — canonical order
-// (ADR-102): system = station (the source), domain = meteorology (delegated).
-// Example: "acme.weather.station.meteorology.outdoor.ws-001"
+// EntityID returns the identity minted for this reading —
+// WeatherReadingEntityID's output, stamped at mint time and carried on the
+// wire, never recomputed here.
 func (w *WeatherReading) EntityID() string {
-	return fmt.Sprintf("%s.%s.station.meteorology.outdoor.%s",
-		w.OrgID,
-		w.Platform,
-		w.StationID,
-	)
+	return w.EntityIDValue
+}
+
+// WeatherReadingEntityID mints a reading's deterministic 6-part federated
+// entity ID. Format: {org}.{platform}.{system}.{domain}.{type}.{instance} —
+// canonical order (ADR-102): system = station (the source), domain =
+// meteorology (delegated). Positions 1-2 are the composition root's
+// platform.org / platform.id and nothing else (ADR-102 d2).
+// Example: "acme.dep1.station.meteorology.outdoor.ws-001"
+func WeatherReadingEntityID(authority types.PlatformMeta, stationID string) string {
+	return semtypes.EntityID{
+		Org:      authority.Org,
+		Platform: authority.Platform,
+		System:   stationSystem,
+		Domain:   meteorologyDomain,
+		Type:     outdoorType,
+		Instance: stationID,
+	}.Key()
 }
 
 // Triples returns semantic facts about this weather reading.
@@ -205,11 +217,8 @@ func (w *WeatherReading) Validate() error {
 	if w.Condition == "" {
 		return fmt.Errorf("condition is required")
 	}
-	if w.OrgID == "" {
-		return fmt.Errorf("org_id is required")
-	}
-	if w.Platform == "" {
-		return fmt.Errorf("platform is required")
+	if w.EntityIDValue == "" {
+		return fmt.Errorf("entity_id is required; mint it with WeatherReadingEntityID under the deployment authority")
 	}
 	return nil
 }

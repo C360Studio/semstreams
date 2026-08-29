@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/c360studio/semstreams/graph/clustering"
+	"github.com/c360studio/semstreams/test/e2e/config"
 )
 
 // comm is a tiny helper for building synthetic level-0 communities. Members are
@@ -16,10 +17,11 @@ func comm(id string, level int, members ...string) *clustering.Community {
 }
 
 // eid renders a 6-part warehouse EntityID whose last segment is the given
-// source-record id — mirrors the real ingest shape
-// (c360.logistics.work.maintenance.completed.maint-003).
+// source-record id — mirrors the real ingest shape of the semantic tier this
+// stage runs in, whose positions 1-2 are configs/semantic.json's platform.org
+// / platform.id (ADR-102 d2).
 func eid(recordID string) string {
-	return "c360.logistics.work.maintenance.completed." + recordID
+	return config.TierEntityID(config.VariantSemantic, "work.maintenance.completed."+recordID)
 }
 
 func TestLastSegment(t *testing.T) {
@@ -27,9 +29,9 @@ func TestLastSegment(t *testing.T) {
 		in   string
 		want string
 	}{
-		{"c360.logistics.work.maintenance.completed.maint-003", "maint-003"},
-		{"c360.logistics.document.content.shipping.doc-shipping-001", "doc-shipping-001"},
-		{"c360.logistics.record.observation.high.obs-001", "obs-001"},
+		{eid("maint-003"), "maint-003"},
+		{config.TierEntityID(config.VariantSemantic, "document.content.shipping.doc-shipping-001"), "doc-shipping-001"},
+		{config.TierEntityID(config.VariantSemantic, "record.observation.high.obs-001"), "obs-001"},
 		{"no-dots-here", "no-dots-here"},
 		{"", ""},
 	}

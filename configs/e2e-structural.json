@@ -281,9 +281,7 @@
               "name": "sensor_out"
             }
           ]
-        },
-        "org_id": "c360",
-        "platform": "logistics"
+        }
       }
     },
     "document_processor": {
@@ -318,9 +316,7 @@
               "name": "doc_out"
             }
           ]
-        },
-        "org_id": "c360",
-        "platform": "logistics"
+        }
       }
     },
     "objectstore": {

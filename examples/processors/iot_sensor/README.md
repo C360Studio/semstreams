@@ -48,25 +48,36 @@ type YourPayload struct {
     Type      string
     // ... domain-specific fields
 
-    // Context fields (from processor config)
-    OrgID    string
-    Platform string
+    // EntityIDValue is the identity your processor MINTS for this entity,
+    // once, under the deployment authority — carried on the wire from there.
+    // The payload does NOT carry org/platform: positions 1-2 are the
+    // composition root's platform.org / platform.id and never come from a
+    // payload, a config key, a constant, or a product name (ADR-102 d2).
+    EntityIDValue string `json:"entity_id"`
 }
 ```
 
 ### 3. Implement EntityID
 
-Return a deterministic 6-part federated ID:
+Return the minted identity, and expose the minting function beside it:
 
 ```go
 func (p *YourPayload) EntityID() string {
+    return p.EntityIDValue
+}
+
+// YourPayloadEntityID mints the deterministic 6-part federated ID.
+// The authority argument is component.Dependencies.Platform, verbatim.
+func YourPayloadEntityID(authority types.PlatformMeta, entityType, id string) string {
     // {org}.{platform}.{system}.{domain}.{type}.{instance}
-    return fmt.Sprintf("%s.%s.yourdomain.system.%s.%s",
-        p.OrgID,
-        p.Platform,
-        p.Type,
-        p.ID,
-    )
+    return semtypes.EntityID{
+        Org:      authority.Org,
+        Platform: authority.Platform,
+        System:   "yoursystem",
+        Domain:   "yourdomain",
+        Type:     entityType,
+        Instance: id,
+    }.Key()
 }
 ```
 

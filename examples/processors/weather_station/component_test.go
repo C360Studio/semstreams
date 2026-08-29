@@ -9,8 +9,6 @@ import (
 
 func TestNewComponent_ValidConfig(t *testing.T) {
 	config := ComponentConfig{
-		OrgID:    "acme",
-		Platform: "weather",
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{Name: "input", Config: component.NATSPort{Subject: "raw.weather.>"}},
@@ -52,46 +50,15 @@ func TestNewComponent_ValidConfig(t *testing.T) {
 	}
 }
 
-func TestNewComponent_MissingOrgID(t *testing.T) {
-	config := ComponentConfig{
-		Platform: "weather",
-		Ports: &component.PortConfig{
-			Inputs:  []component.PortDefinition{{Name: "input", Config: component.NATSPort{Subject: "raw.>"}}},
-			Outputs: []component.PortDefinition{{Name: "output", Config: component.NATSPort{Subject: "out.>"}}},
-		},
-	}
-
-	rawConfig, _ := json.Marshal(config)
-	deps := component.Dependencies{}
-
-	_, err := NewComponent(rawConfig, deps)
-	if err == nil {
-		t.Error("NewComponent() expected error for missing OrgID, got nil")
-	}
-}
-
-func TestNewComponent_MissingPlatform(t *testing.T) {
-	config := ComponentConfig{
-		OrgID: "acme",
-		Ports: &component.PortConfig{
-			Inputs:  []component.PortDefinition{{Name: "input", Config: component.NATSPort{Subject: "raw.>"}}},
-			Outputs: []component.PortDefinition{{Name: "output", Config: component.NATSPort{Subject: "out.>"}}},
-		},
-	}
-
-	rawConfig, _ := json.Marshal(config)
-	deps := component.Dependencies{}
-
-	_, err := NewComponent(rawConfig, deps)
-	if err == nil {
-		t.Error("NewComponent() expected error for missing Platform, got nil")
-	}
-}
+// The org_id / platform required-key tests that used to live here were
+// deleted with the keys themselves (ADR-102 d2). Their replacement is
+// TestRetiredAuthorityKeysAreRefused in retired_authority_keys_test.go, which
+// proves the stronger fact: the keys are not merely optional now, they are
+// refused, so an operator carrying them forward cannot mint under a silently
+// different authority.
 
 func TestComponent_InputPorts(t *testing.T) {
 	config := ComponentConfig{
-		OrgID:    "acme",
-		Platform: "weather",
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{Name: "input", Config: component.NATSPort{Subject: "raw.weather.>"}},
@@ -120,8 +87,6 @@ func TestComponent_InputPorts(t *testing.T) {
 
 func TestComponent_OutputPorts(t *testing.T) {
 	config := ComponentConfig{
-		OrgID:    "acme",
-		Platform: "weather",
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{Name: "input", Config: component.NATSPort{Subject: "raw.weather.>"}},
