@@ -15,7 +15,7 @@ supervisor, lifecycle gate, or durable quarantine store would duplicate those au
 
 ## What changes
 
-- Add closed ACK, Retry, Terminate, and Quarantine dispositions.
+- Add a validated ACK, Retry, Terminate, or Quarantine decision plus error-last work contract.
 - Add explicit immediate or fixed-delay semantic retry policy, independent of consumer BackOff.
 - Validate heartbeat policy from the exact consumer configuration before acquisition.
 - Add an inspectable result that preserves semantic, heartbeat-control, and local settlement evidence.
@@ -60,4 +60,3 @@ pull settlement API is proposed.
 - No universal `DoubleAck` contract or claim of server confirmation.
 - No production migration of the other 22 bindings or two examples.
 - No sister-repository mutation.
-

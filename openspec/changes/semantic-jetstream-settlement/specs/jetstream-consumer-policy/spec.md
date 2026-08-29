@@ -20,23 +20,49 @@ held model, loop, and AgentRun allowlist. New production legacy callers SHALL fa
 - **THEN** legacy is removed without alias after separate owner approval
 - **AND** the permanent typed API remains unchanged
 
-### Requirement: delivery work returns a closed semantic disposition
+### Requirement: delivery work returns a validated decision/error tuple
 
-Typed heartbeat work SHALL return ACK, Retry, Terminate, or Quarantine. Retry, Terminate, and Quarantine SHALL include
-a cause. Zero, unknown, missing-cause, and recovered panic outcomes SHALL fail closed without guessing a terminal
-method.
+Typed work SHALL implement `DeliveryWork func(context.Context) (DeliveryDecision, error)`. The exported decisions
+SHALL be Invalid, ACK, Retry, Terminate, and Quarantine using the exact `DeliveryDecision*` constants.
 
-#### Scenario: owner-defined durable consequence completes
+ACK SHALL require nil error. Retry, Terminate, and Quarantine SHALL require non-nil error. Invalid, unknown, and every
+mismatched tuple SHALL preserve the requested decision, attempt no terminal method, expose an
+`InvalidDeliveryDecisionError`, quarantine, and require owner stop. A supplied error SHALL remain reachable through
+the typed cause. Recovered panic SHALL synthesize Quarantine with `DeliveryWorkPanicError`.
 
-- **WHEN** the binding's accepted durable consequence completes
-- **THEN** work returns ACK
-- **AND** the framework attempts Ack
+Existing `TerminateDelivery(error) error` and `PermanentDeliveryError` SHALL retain their exact behavior and SHALL
+not be deprecated or removed by this change.
 
-#### Scenario: outcome is unclassified
+#### Scenario: valid ACK
 
-- **WHEN** retry and termination are not proven safe
-- **THEN** work returns Quarantine
-- **AND** no terminal settlement method is attempted
+- **WHEN** work returns `DeliveryDecisionAck, nil`
+- **THEN** the framework attempts Ack
+- **AND** the result records ACK with nil semantic cause
+
+#### Scenario: decision requires a cause
+
+- **WHEN** work returns Retry, Terminate, or Quarantine with nil error
+- **THEN** the result preserves the requested decision
+- **AND** handling quarantines with `InvalidDeliveryDecisionError`
+- **AND** no terminal method is attempted
+
+#### Scenario: ACK incorrectly carries an error
+
+- **WHEN** work returns ACK with a non-nil error
+- **THEN** the result preserves ACK as the requested decision
+- **AND** the invalid-decision cause unwraps the supplied error
+
+#### Scenario: unknown decision
+
+- **WHEN** work returns an enum value outside the declared constants
+- **THEN** the result preserves that numeric decision
+- **AND** handling quarantines and requires owner stop
+
+#### Scenario: work panics
+
+- **WHEN** work panics before returning a tuple
+- **THEN** the result records Quarantine with `DeliveryWorkPanicError`
+- **AND** no terminal method is attempted
 
 ### Requirement: semantic retry and consumer lease policy are distinct
 
@@ -75,7 +101,7 @@ present, otherwise positive AckWait, otherwise 30 seconds. Invalid AckWait/BackO
 
 ### Requirement: delivery results preserve semantic and transport evidence
 
-`DeliveryResult` SHALL expose semantic kind/cause, control error, settlement error, local method
+`DeliveryResult` SHALL expose requested decision/cause, control error, settlement error, local method
 attempt/success/failure, server confirmation, quarantine, owner-stop requirement, and aggregate error. Plain terminal
 methods SHALL never report server confirmation. A method error SHALL mean unknown/not-confirmed and SHALL NOT prove
 redelivery.
@@ -94,14 +120,14 @@ redelivery.
 
 ### Requirement: cancellation joins semantic work
 
-Owner cancellation SHALL cancel work, join it, interpret the exact disposition, and then apply settlement. Context
+Owner cancellation SHALL cancel work, join it, interpret the exact decision/error tuple, and then apply settlement. Context
 cancellation SHALL NOT overwrite the joined semantic result. InProgress failure SHALL cancel and join work, preserve
-kind/cause, record control error, attempt no later terminal method, and require owner stop.
+decision/cause, record control error, attempt no later terminal method, and require owner stop.
 
 #### Scenario: heartbeat fails after joined ACK
 
 - **WHEN** InProgress fails and work joins with ACK
-- **THEN** Kind remains ACK and ControlError identifies heartbeat failure
+- **THEN** Decision remains ACK and ControlError identifies heartbeat failure
 - **AND** no terminal method follows
 - **AND** OwnerStopRequired is true
 
@@ -133,7 +159,7 @@ heartbeat 15s only when its hold lifts. BackOff SHALL remain missing-settlement 
 
 Model, each loop binding, and each AgentRun binding SHALL require a then-current line-addressable addendum, independent
 inventory/design reviews, and named owner acceptance before migration. Their current done rows SHALL NOT authorize
-durable state, rehydration, handler ledgers, or disposition mapping.
+durable state, rehydration, handler ledgers, or decision mapping.
 
 #### Scenario: an implementer reaches a held binding
 

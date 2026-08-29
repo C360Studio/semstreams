@@ -15,20 +15,24 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 ## 2. TDD additive foundation
 
 - [ ] 2.1 Characterize every legacy ACK, 30-second retry, Term, 5-second cancellation, InProgress, and error-chain path.
-- [ ] 2.2 Add pre-implementation tests for every disposition kind, constructor, invalid/missing cause, and panic
-      quarantine.
-- [ ] 2.3 Add the complete DeliveryResult truth table, cause reachability, local-method predicates, false server
-      confirmation, and OwnerStopRequired behavior.
+- [ ] 2.2 Add pre-implementation tests for all five DeliveryDecision constants, zero/unknown decisions, the
+      error-last DeliveryWork signature, every valid/invalid tuple, error unwrapping, typed panic quarantine, and the
+      absence of a disposition constructor family.
+- [ ] 2.3 Add the complete DeliveryResult decision/handling truth table: exact requested-decision preservation, typed
+      causes, cause reachability, local-method predicates, false server confirmation, quarantine, and
+      OwnerStopRequired.
 - [ ] 2.4 Add pre-implementation retry-policy tests for zero, immediate Nak, fixed delayed Nak, nonpositive delay, and preservation
       of semantic cause across local method success/failure.
 - [ ] 2.5 Add pre-implementation heartbeat-policy tests for nil/ended context, nil work, invalid retry,
       heartbeat/AckWait/BackOff
       bounds, equality, canonical default, defensive copy, and zero runtime defense before message I/O.
 - [ ] 2.6 Add exact current/target nine-binding configuration tests and same-config validation/acquisition conformance.
-- [ ] 2.7 Implement closed dispositions, policies, result, cancel/join/interpret, and permanent
+- [ ] 2.7 Implement DeliveryDecision/DeliveryWork, policies, result, cancel/join/interpret, and permanent
       `ConsumeDeliveryWithHeartbeat` using only a private terminal-method executor.
-- [ ] 2.8 Prove legacy characterization unchanged after private executor extraction.
-- [ ] 2.9 Add deprecation notice and exact shrinking AST allowlist; docs/examples advertise only the permanent API.
+- [ ] 2.8 Prove `ConsumeWithHeartbeat`, `TerminateDelivery(error) error`, and `PermanentDeliveryError`
+      characterization unchanged after private executor extraction.
+- [ ] 2.9 Add the deprecation notice and exact shrinking AST allowlist for `ConsumeWithHeartbeat` only; docs/examples
+      advertise only the permanent typed API.
 
 ## 3. TDD owner-private control loss
 

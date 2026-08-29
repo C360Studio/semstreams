@@ -10,6 +10,9 @@
   C6 SHA-256 `9204138bfe74653bb0b421efeada2280dde1e22ebccd6d417124e78526efe361`.
 - Independent result: `DESIGN PASS`.
 - Owner ruling: #759 comment `issuecomment-5459809936`, approved 2026-08-28.
+- C8 decision/error correction: SHA-256
+  `122db11f5e4ef8d14c48a9fbf8bacabe624af0662d4f853cd4fc607bd626af7b`, independent result
+  `C8 DESIGN PASS`, owner ruling #759 comment `issuecomment-5462213858`, approved 2026-08-29.
 
 ### Rebase addendum
 
@@ -84,7 +87,7 @@ SemMachina retains older `ConsumeDurable` surfaces, which are migration evidence
 
 | Missing fact | Current spelling | Gap |
 |---|---|---|
-| semantic disposition | nil ACK, permanent wrapper Term, other error delayed NAK | no closed exhaustive type |
+| semantic decision | nil ACK, permanent wrapper Term, other error delayed NAK | no closed exhaustive decision contract |
 | cancellation result | work cancels and joins | context can overwrite joined meaning |
 | unclassified failure | generic retry; panic NAK | no fail-closed quarantine |
 | control ownership loss | helper returns an error | exact owner has no typed stop-required result |
