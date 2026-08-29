@@ -72,7 +72,12 @@ Rituals:
   archive re-enters reconciliation and final review; no later content commit bypasses the archive/spec-sync check.
   State `implemented-by: <persona>` in the PR body; Codex uses `Sol`.
 - **Close:** no issue closes without the owner's explicit `CONFIRM-CLOSE` visible in the issue or PR. A chat-only signal
-  is not shared durable state and does not authorize a `Closes #n` merge.
+  is not shared durable state and does not authorize a `Closes #n` merge. The signal MUST name the issues it closes and
+  covers only those. An approval of adjacent work — a PR, a review round, a design, a waiver — never widens into a
+  close, and a bare "approved" is never read as `CONFIRM-CLOSE` (owner ruling, 2026-08-29: "stick with the confirm
+  close requirement so we can all ensure that an 'approved' does not drift into too wide a condition"). A PR carrying
+  `Closes #a` and `Closes #b` needs the confirm for both, named. Transcribing the owner's own words into the issue or
+  PR is recording; inferring the gate from an adjacent approval is not, and is the failure this rule exists to stop.
 - **Tag:** milestone at 100% → candidate selection per `openspec/specs/release-candidate-proof/spec.md`. The
   milestone never names the candidate SHA.
 
