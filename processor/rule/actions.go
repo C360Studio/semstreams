@@ -602,7 +602,7 @@ func (e *ActionExecutor) foreignFiringEntity(entityID string) bool {
 
 // foreignFiringSkipLogMessage is the single Info line a dispatch emits when the
 // firing entity is a foreign import. It is a named constant so the test pinning
-// the requirement's "an Info log naming which writes were skipped" matches the
+// the requirement's "ONE Info log per dispatch naming EVERY write that dispatch skipped" matches the
 // production string instead of a copy that can drift away from it.
 const foreignFiringSkipLogMessage = "publish_agent: firing entity carries a foreign authority — framework writes to it skipped"
 

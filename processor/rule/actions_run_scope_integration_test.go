@@ -111,7 +111,7 @@ type capturedRecord struct {
 }
 
 // capturingHandler records what the executor logged. The log is a promised
-// operator surface here ("an Info log naming which writes were skipped"), so it
+// operator surface here ("ONE Info log per dispatch naming EVERY write that dispatch skipped"), so it
 // is asserted like any other output rather than discarded. Locking keeps -race
 // clean regardless of who calls the logger.
 type capturingHandler struct {
@@ -395,7 +395,7 @@ func TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity(t *testing.T
 }
 
 // TestForeignFiringSkipLogNamesEveryDeclinedWrite pins the operator half of the
-// requirement — "an Info log naming which writes were skipped" — which the
+// requirement — "ONE Info log per dispatch naming EVERY write that dispatch skipped" — which the
 // counter assertions above cannot see.
 //
 // Under run_scope=new on an imported loop, THREE framework writes are declined
@@ -472,6 +472,14 @@ func TestRunScopeNewOnLocalLoopStampsAnchorAndOrigin(t *testing.T) {
 	assert.InDelta(t, 0.0, testutil.ToFloat64(
 		h.metrics.foreignFiringWritesSkippedTotal.WithLabelValues(semtypes.EntityIDReasonForeignAuthority)), 0.0001,
 		"nothing is skipped when the firing loop carries the deployment's own authority")
+
+	// The log's negative half. flush runs from a defer on EVERY dispatch, local
+	// ones included, so its emptiness guard is the only thing between a local
+	// dispatch and a false foreign-authority line on the surface the migration
+	// guide calls the operator's signal. The counter has both halves pinned;
+	// without this the log has only its positive one.
+	assert.Empty(t, h.logs.withMessage(foreignFiringSkipLogMessage),
+		"a dispatch that declined nothing emits no skip line — the deferred flush fires on local dispatches too")
 
 	_ = h.mutator.snapshot()
 }
