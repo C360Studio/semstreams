@@ -564,20 +564,30 @@ type ActionExecutor struct {
 // other than this deployment's — an imported read-only mirror the framework
 // must not write to (ADR-102 d5, ruled O-12(a)).
 //
-// An executor with no deployment authority cannot judge this and answers false.
-// Reaching that state is an in-repo test-fixture condition, and the reason is
-// caller enumeration, not capability: the two production construction sites
-// that can write (processor.go, NATS present) both call
-// NewActionExecutorComplete, which takes the authority as a constructor
-// parameter and so cannot omit it; the third (processor.go, no NATS client)
-// calls NewActionExecutor, which holds neither publisher nor mutator, and both
-// guarded writes require them. NewActionExecutorWithMutator and
-// NewActionExecutorFull CAN hold a mutator and a publisher, so they COULD reach
-// the guarded writes with e.platform zero — they simply have no production and
-// no sister-repo caller (verified by grep across the c360 tree). Do not read
-// this as "the convenience constructors cannot write": an earlier revision of
-// this comment claimed that, and NewActionExecutorFull's own signature refutes
-// it.
+// An executor with no deployment authority cannot judge this and answers false
+// — every entity reads as LOCAL, which RETIRES the guards below rather than
+// tightening them. A production executor in that state does exist: the no-NATS
+// branch of processor.go builds one through NewActionExecutor. What is an
+// in-repo test-fixture condition is reaching that state WITH A GUARDED WRITE IN
+// PLAY, and the reason is caller enumeration, not capability:
+//
+//   - The two production sites that can write (processor.go, NATS present) both
+//     call NewActionExecutorComplete, which takes the authority as a constructor
+//     parameter and so cannot omit it.
+//   - The third production site (processor.go, no NATS client) calls
+//     NewActionExecutor, which holds neither publisher nor mutator; both guarded
+//     writes require a mutator, so its zero e.platform is inert.
+//   - NewActionExecutorFull takes BOTH a mutator and a publisher, so it could
+//     reach either guarded write with e.platform zero. NewActionExecutorWithMutator
+//     takes only a mutator and there is no publisher setter, so it can never
+//     reach the published-gated rule.task.spawned skip — but SetLifecycleManager
+//     is exported, so with its mutator it can still reach the run-anchor guard.
+//     Neither has a production or a sister-repo caller (verified by grep across
+//     the c360 tree).
+//
+// Do not read this as "the convenience constructors cannot write": an earlier
+// revision of this comment claimed that, and NewActionExecutorFull's own
+// signature refutes it.
 //
 // CreateRuleProcessor's refusal of an empty deps.Platform is a SEPARATE guard:
 // it protects deps.Platform, not the hop from there into this field. Do not
@@ -590,42 +600,58 @@ func (e *ActionExecutor) foreignFiringEntity(entityID string) bool {
 	return semtypes.ValidateEntityIDAuthority(entityID, e.platform.Org, e.platform.Platform, false) != nil
 }
 
-// foreignFiringSkipRecorder returns a func that counts and logs the decision to
-// write NOTHING to a foreign firing entity — once per DISPATCH, however many
-// framework writes that covers. publish_agent has two: the run-anchor pair
-// (run_scope=new only) and the rule.task.spawned back-reference (every
-// run_scope).
+// foreignFiringSkipLogMessage is the single Info line a dispatch emits when the
+// firing entity is a foreign import. It is a named constant so the test pinning
+// the requirement's "an Info log naming which writes were skipped" matches the
+// production string instead of a copy that can drift away from it.
+const foreignFiringSkipLogMessage = "publish_agent: firing entity carries a foreign authority — framework writes to it skipped"
+
+// foreignFiringSkipRecorder returns the pair that records the decision to write
+// NOTHING to a foreign firing entity: record accumulates one declined write, and
+// flush emits the single Info line for the dispatch. The caller defers flush, so
+// the line is emitted even when the dispatch later fails.
 //
-// "Per dispatch" is exact and deliberate, and the counted unit is (firing entity
-// x `for_each` item): this recorder is created inside publishAgentOnce, which
-// runs once per item, so an action fanning out over N items reports N skips.
-// The firing entity is INVARIANT across that fan-out — executePublishAgent
-// passes the same ExecutionContext to every iteration and only the item varies —
-// so those N skips are N dispatches declined for ONE imported entity, never N
-// distinct declined entities. Two earlier revisions of this comment were wrong
-// here: first "per action execution", then "N entities were declined".
+// The split exists because the two declined writes are decided at different
+// points in publishAgentOnce — the run-anchor pair (run_scope=new only) before
+// publication, the rule.task.spawned back-reference after it — and a log line
+// written at the first decision can only ever name the first. It named only the
+// anchors while silently omitting rule.task.spawned, which is the write an
+// operator debugging "$entity.triple.rule.spawned_task never fires" is actually
+// looking for. Accumulate, then log what the dispatch ACTUALLY declined.
+//
+// The counter still increments exactly once per dispatch — on the first recorded
+// write, not per omitted write. "Per dispatch" is exact and deliberate, and the
+// counted unit is (firing entity x `for_each` item): this recorder is created
+// inside publishAgentOnce, which runs once per item, so an action fanning out
+// over N items reports N skips. The firing entity is INVARIANT across that
+// fan-out — executePublishAgent passes the same ExecutionContext to every
+// iteration and only the item varies — so those N skips are N dispatches
+// declined for ONE imported entity, never N distinct declined entities. Two
+// earlier revisions of this comment were wrong here: first "per action
+// execution", then "N entities were declined".
 //
 // The counter is named for what it counts — framework writes to a foreign
 // firing entity — not for the run anchor, because under run_scope inherit|none
 // no anchor is ever in play and only the spawned-task back-reference is
 // skipped. The identity is never logged: it is not this deployment's to publish.
-func (e *ActionExecutor) foreignFiringSkipRecorder(ec *ExecutionContext) func(string) {
-	recorded := false
-	return func(what string) {
-		if recorded {
-			return
-		}
-		recorded = true
-		if e.metrics != nil && e.metrics.foreignFiringWritesSkippedTotal != nil {
+func (e *ActionExecutor) foreignFiringSkipRecorder(ec *ExecutionContext) (record func(string), flush func()) {
+	var skipped []string
+	record = func(what string) {
+		if len(skipped) == 0 && e.metrics != nil && e.metrics.foreignFiringWritesSkippedTotal != nil {
 			e.metrics.foreignFiringWritesSkippedTotal.WithLabelValues(semtypes.EntityIDReasonForeignAuthority).Inc()
 		}
-		if e.logger != nil {
-			e.logger.Info("publish_agent: firing entity carries a foreign authority — framework writes to it skipped",
-				slog.String("rule_id", ec.RuleID()),
-				slog.String("skipped", what),
-				slog.String("reason", semtypes.EntityIDReasonForeignAuthority))
-		}
+		skipped = append(skipped, what)
 	}
+	flush = func() {
+		if len(skipped) == 0 || e.logger == nil {
+			return
+		}
+		e.logger.Info(foreignFiringSkipLogMessage,
+			slog.String("rule_id", ec.RuleID()),
+			slog.String("skipped", strings.Join(skipped, "; ")),
+			slog.String("reason", semtypes.EntityIDReasonForeignAuthority))
+	}
+	return record, flush
 }
 
 // stampRunAnchors writes the reciprocal run anchors (agent.loop.run,
@@ -1844,7 +1870,11 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 	// inherit|none there is no anchor and only the back-reference is skipped,
 	// which is why neither the counter nor the log names the run anchor.
 	foreignFiring := e.foreignFiringEntity(entityID)
-	recordForeignSkip := e.foreignFiringSkipRecorder(ec)
+	recordForeignSkip, flushForeignSkips := e.foreignFiringSkipRecorder(ec)
+	// Deferred so the one Info line names EVERY write this dispatch declined —
+	// the rule.task.spawned decision is only reached after publication — and so
+	// it is still emitted when a later step returns an error.
+	defer flushForeignSkips()
 
 	if pendingRunMint != nil {
 		// The firing entity is the run's ORIGIN, recorded on the local run at

@@ -46,7 +46,8 @@ type Metrics struct {
 	// carries a foreign authority — an imported mirror it must not mutate
 	// (ADR-102 d5; #1096). Two writes fall under it: the run-anchor pair
 	// (run_scope=new) and the rule.task.spawned back-reference (every
-	// run_scope), counted once together because one federation event happened.
+	// run_scope), counted once together because ONE DISPATCH declined them —
+	// not once per omitted write. The accompanying Info line names which ones.
 	//
 	// One increment per DISPATCH, not per action, where a dispatch is one
 	// (firing entity x `for_each` item): publish_agent fans out over `for_each`

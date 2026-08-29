@@ -19,6 +19,7 @@ package rule
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -101,6 +102,53 @@ func foreignFiringSkipTestMetrics() *Metrics {
 	}
 }
 
+// capturedRecord is one slog record as an OPERATOR would read it: the level, the
+// message, and the attributes flattened to strings.
+type capturedRecord struct {
+	level slog.Level
+	msg   string
+	attrs map[string]string
+}
+
+// capturingHandler records what the executor logged. The log is a promised
+// operator surface here ("an Info log naming which writes were skipped"), so it
+// is asserted like any other output rather than discarded. Locking keeps -race
+// clean regardless of who calls the logger.
+type capturingHandler struct {
+	mu      sync.Mutex
+	records []capturedRecord
+}
+
+func (h *capturingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *capturingHandler) Handle(_ context.Context, r slog.Record) error {
+	captured := capturedRecord{level: r.Level, msg: r.Message, attrs: make(map[string]string)}
+	r.Attrs(func(a slog.Attr) bool {
+		captured.attrs[a.Key] = a.Value.String()
+		return true
+	})
+	h.mu.Lock()
+	h.records = append(h.records, captured)
+	h.mu.Unlock()
+	return nil
+}
+
+func (h *capturingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *capturingHandler) WithGroup(string) slog.Handler      { return h }
+
+// withMessage returns every record carrying exactly this message.
+func (h *capturingHandler) withMessage(msg string) []capturedRecord {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]capturedRecord, 0, len(h.records))
+	for _, record := range h.records {
+		if record.msg == msg {
+			out = append(out, record)
+		}
+	}
+	return out
+}
+
 type runScopeHarness struct {
 	ctx      context.Context
 	executor *ActionExecutor
@@ -109,6 +157,7 @@ type runScopeHarness struct {
 	manager  *lifecycle.Manager
 	bucket   *natsclient.KVStore
 	pub      *mockPublisher
+	logs     *capturingHandler
 }
 
 func newRunScopeHarness(t *testing.T) *runScopeHarness {
@@ -147,7 +196,8 @@ func newRunScopeHarness(t *testing.T) *runScopeHarness {
 	mutator := &recordingTripleMutator{inner: newTripleMutator(testClient.Client, tracker)}
 	pub := &mockPublisher{}
 
-	executor := NewActionExecutorComplete(nil, mutator, pub, nil,
+	logs := &capturingHandler{}
+	executor := NewActionExecutorComplete(slog.New(logs), mutator, pub, nil,
 		component.PlatformMeta{Org: runScopeOrg, Platform: runScopePlatform})
 	executor.SetLifecycleManager(manager)
 	metrics := foreignFiringSkipTestMetrics()
@@ -155,7 +205,7 @@ func newRunScopeHarness(t *testing.T) *runScopeHarness {
 
 	return &runScopeHarness{
 		ctx: ctx, executor: executor, mutator: mutator, metrics: metrics,
-		manager: manager, bucket: testClient.Client.NewKVStore(bucket), pub: pub,
+		manager: manager, bucket: testClient.Client.NewKVStore(bucket), pub: pub, logs: logs,
 	}
 }
 
@@ -269,11 +319,23 @@ func (h *runScopeHarness) runScopeNewForEachAction() Action {
 // the migration note all previously said "N imported entities"; this test is
 // what makes that class of error fail loudly rather than archive as truth.
 //
-// Mutation check that proves it discriminates: make foreignFiringSkipRecorder's
-// `recorded` latch a field on ActionExecutor instead of a closure local (which
-// converts per-dispatch into per-action for a single Execute call). This test
-// fails 1 != 3; TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite
-// still passes, because one dispatch cannot tell the two units apart.
+// Two mutation checks, because the scenario makes two claims:
+//
+//   - The COUNT is per dispatch: promote foreignFiringSkipRecorder's skipped
+//     accumulator to a field on ActionExecutor (which converts per-dispatch into
+//     per-action for a single Execute call). This test fails 1 != 3;
+//     TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite still passes,
+//     because one dispatch cannot tell the two units apart.
+//   - The ENTITY is invariant: derive `entityID` per iteration in
+//     publishAgentOnce (`entityID += "-" + iterVarValue`), so the firing entity
+//     really does vary across the fan-out. The count, the publish tally and the
+//     import's revision are ALL unmoved by that — 3 is still 3 — which is why
+//     the invariance clause needs its own evidence. task.RunID is the firing
+//     loop's bare id, so decoding what each dispatch carried is that evidence:
+//     under the mutant the three dispatches carry import1-hydraulics,
+//     import1-pneumatics, import1-electrics and this test fails. Prefix or
+//     substring checks on TaskID do NOT discriminate — `rule-<id>-hydraulics-<ns>`
+//     still carries the `rule-<id>-` prefix.
 func TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity(t *testing.T) {
 	h := newRunScopeHarness(t)
 	revisionBefore := h.seedImportedLoop(t)
@@ -301,6 +363,22 @@ func TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity(t *testing.T
 		"one increment per DISPATCH: 3 for_each items on ONE imported firing entity is 3, not 1 — "+
 			"and it is 3 declined dispatches, not 3 declined entities")
 
+	// The invariance the scenario asserts, read off what each dispatch actually
+	// carried: task.RunID is the firing loop's bare id, derived from the firing
+	// entity, so three dispatches carrying the same RunID is three dispatches
+	// declined for ONE entity. Decoded through the production decoder, not a
+	// shape cast.
+	decoder := newActionsTestDecoder(t)
+	for index, published := range h.pub.published {
+		baseMsg, decodeErr := decoder.Decode(published.data)
+		require.NoError(t, decodeErr, "dispatch %d", index)
+		task, isTask := baseMsg.Payload().(*agentic.TaskMessage)
+		require.True(t, isTask, "dispatch %d: expected *agentic.TaskMessage, got %T", index, baseMsg.Payload())
+		assert.Equal(t, runScopeImportedUUID, task.RunID,
+			"dispatch %d must carry the SAME firing loop as every other: the fan-out varies the ITEM, "+
+				"never the firing entity, which is what makes 3 increments ONE declined entity", index)
+	}
+
 	// The other half of the same fact: however many times it was declined, only
 	// one entity was ever in play, and nothing was written to it.
 	assert.NotContains(t, h.mutator.subjects(), runScopeImportedLoop,
@@ -309,6 +387,48 @@ func TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity(t *testing.T
 	require.NoError(t, err)
 	assert.Equal(t, revisionBefore, entry.Revision,
 		"the single import is a read-only mirror across every iteration")
+}
+
+// TestForeignFiringSkipLogNamesEveryDeclinedWrite pins the operator half of the
+// requirement — "an Info log naming which writes were skipped" — which the
+// counter assertions above cannot see.
+//
+// Under run_scope=new on an imported loop, THREE framework writes are declined
+// across TWO decision points: the anchor pair before publication, and
+// rule.task.spawned after it. The line was emitted at the first decision and a
+// latch swallowed the second, so it named only the anchors. rule.task.spawned is
+// exactly the write an operator debugging "$entity.triple.rule.spawned_task
+// never fires" is looking for, and the migration note tells them this line is
+// the only signal — a line that omits it sends them looking for a write that
+// never happened.
+//
+// Mutation check: emit the line inside record (at the first declined write)
+// instead of in the deferred flush. This test fails on the missing
+// rule.task.spawned; every counter assertion in this file still passes, because
+// the counter's unit never changed.
+func TestForeignFiringSkipLogNamesEveryDeclinedWrite(t *testing.T) {
+	h := newRunScopeHarness(t)
+	h.seedImportedLoop(t)
+
+	require.NoError(t, h.executor.Execute(h.ctx, h.runScopeNewAction(),
+		&ExecutionContext{EntityID: runScopeImportedLoop}))
+	require.Len(t, h.pub.published, 1,
+		"a skip is not a rejection: the agent task still dispatches")
+
+	lines := h.logs.withMessage(foreignFiringSkipLogMessage)
+	require.Len(t, lines, 1, "one line per DISPATCH, the same unit the counter uses")
+	assert.Equal(t, slog.LevelInfo, lines[0].level, "a deliberate skip is Info, not Warn or Error")
+
+	skipped := lines[0].attrs["skipped"]
+	assert.Contains(t, skipped, agvocab.LoopRun, "the run anchor was declined and must be named")
+	assert.Contains(t, skipped, agvocab.LoopRunEntityID, "so was its reciprocal")
+	assert.Contains(t, skipped, "rule.task.spawned",
+		"the back-reference is declined on this same dispatch; naming only the anchors understates the set")
+	assert.Contains(t, skipped, agvocab.RunOriginEntityID,
+		"and the line says where the linkage went instead")
+	assert.NotContains(t, skipped, runScopeImportedLoop,
+		"the peer's identity is never logged — it is not this deployment's to publish")
+	assert.Equal(t, semtypes.EntityIDReasonForeignAuthority, lines[0].attrs["reason"])
 }
 
 // TestRunScopeNewOnLocalLoopStampsAnchorAndOrigin is the other half: on a local
