@@ -9,8 +9,8 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 - [x] 1.3 Complete C6 options/design and independent review: `DESIGN PASS`.
 - [x] 1.4 Record explicit owner approval on #759.
 - [x] 1.5 File and reconcile #1155 as the process-replacement admission gate.
-- [ ] 1.6 Commit this OpenSpec proposal first, push the isolated branch, and open the draft PR claim with `Closes #759`
-      and `implemented-by: Sol`.
+- [x] 1.6 Committed the OpenSpec proposal first as `12878610`, pushed the isolated branch, and opened draft PR #1156
+      with `Closes #759` and `implemented-by: Sol`.
 
 ## 2. TDD additive foundation
 
