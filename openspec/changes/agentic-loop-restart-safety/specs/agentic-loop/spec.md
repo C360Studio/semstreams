@@ -57,10 +57,11 @@ correlation SHALL use the framework execution identity.
 - **THEN** their framework execution identities differ
 - **AND** their completed tool outcomes cannot collide
 
-### Requirement: Approval continuation survives beyond stream retention
+### Requirement: Approval continuation survives retained-message eviction
 
 Before acknowledging an approval-required `ToolResult`, agentic-loop SHALL durably store and verify a registered
-`ApprovalContinuationV1` object and persist its typed `StorageReference` in `PendingApprovalState`.
+`ApprovalContinuationV1` object and persist its typed `StorageReference` in `PendingApprovalState`. This guarantee
+applies while the authoritative pending loop record remains within its admitted finite approval lifetime.
 
 #### Scenario: Process is replaced while approval waits
 
@@ -83,11 +84,20 @@ Before acknowledging an approval-required `ToolResult`, agentic-loop SHALL durab
 - **THEN** agentic-loop quarantines the conflicting delivery
 - **AND** does not dispatch the tool a second way
 
+#### Scenario: Pending loop authority has expired
+
+- **WHEN** the authoritative `PendingApprovalState` has expired
+- **THEN** agentic-loop does not scan Store objects to guess a pending approval
+- **AND** does not advertise the approval as indefinitely restart-safe
+
 ### Requirement: Approval continuation is a registered payload
 
 `ApprovalContinuationV1` SHALL implement the payload contract and SHALL be registered explicitly in every required
 composition root. Its JSON methods SHALL marshal only its own fields through a type alias. Its Store object SHALL use
 the normal typed envelope and SHALL pass a production-decoder round trip.
+
+Its registration SHALL declare no indexing-profile floor and no projection contract because the payload is private,
+non-Graphable Store material.
 
 #### Scenario: A binary needs approval continuation
 
@@ -100,6 +110,61 @@ the normal typed envelope and SHALL pass a production-decoder round trip.
 - **WHEN** approval recovery encounters an unregistered continuation type
 - **THEN** startup or decoding fails loudly
 - **AND** the framework does not treat raw JSON as a compatible fallback
+
+### Requirement: Approval continuation storage is content-addressed and verified
+
+Agentic-loop SHALL derive the continuation key from SHA-256 of canonical payload JSON, excluding `BaseMessage`
+identity and metadata. It SHALL use get-before-put and post-write production decoding, validation, digest, and
+identity verification. Store overwrite behavior SHALL NOT resolve collisions.
+
+#### Scenario: Matching object already exists
+
+- **WHEN** the expected key contains a valid matching continuation
+- **THEN** agentic-loop reuses it
+- **AND** does not write another object
+
+#### Scenario: Put result is unknown
+
+- **WHEN** Put returns an unknown commit result
+- **THEN** agentic-loop reads the deterministic key
+- **AND** treats a matching object as committed success
+- **AND** retries unresolved absence
+
+#### Scenario: Key contains conflicting content
+
+- **WHEN** the deterministic key contains malformed or semantically different content
+- **THEN** agentic-loop quarantines the invariant collision
+- **AND** fails health loudly
+
+#### Scenario: Referenced continuation is permanently absent
+
+- **WHEN** a pending loop references a continuation that is permanently absent
+- **THEN** agentic-loop durably fails the loop with `approval_continuation_unavailable`
+- **AND** does not reconstruct from partial arguments
+
+#### Scenario: Continuation is no longer needed
+
+- **WHEN** the deterministic downstream outcome has committed
+- **THEN** continuation deletion is best-effort
+- **AND** cleanup failure does not reverse source settlement
+- **AND** cleanup failure and orphan bytes are metered without adding a scanner
+
+### Requirement: Approval lifetime is bounded by its reference authority
+
+When approval gating is enabled, approval timeout SHALL be finite, nonzero, and no longer than observed
+`AGENT_LOOPS` retention with the required safety margin. Zero, empty, indefinite, and over-retention values SHALL fail
+configuration validation.
+
+#### Scenario: Approval timeout is indefinite
+
+- **WHEN** approval gating is enabled with zero or empty timeout
+- **THEN** configuration validation fails
+- **AND** the framework does not claim indefinite restart-safe approval
+
+#### Scenario: Approval timeout exceeds loop retention
+
+- **WHEN** configured timeout exceeds observed `AGENT_LOOPS` retention after safety margin
+- **THEN** startup fails readiness with the observed and required values
 
 ### Requirement: Approval deadlines are reconstructed narrowly
 
@@ -124,14 +189,26 @@ timeout SHALL cancel the operation but SHALL NOT authorize returning while the t
 - **THEN** the owner cancels and joins the work
 - **AND** the delivery callback returns only after that join completes
 
-### Requirement: Recovery observes stream bounds
+### Requirement: Restart-safe replay observes and admits stream bounds
 
-At startup, agentic-loop SHALL observe actual AGENT stream bounds and SHALL fail readiness when those bounds cannot
-retain ordinary continuation outputs for the admitted loop and delivery horizon. Configuration SHALL NOT require an
-adopter to predict server-effective retention.
+At startup, agentic-loop SHALL observe actual AGENT stream bounds. Restart-safe admission SHALL require
+`DiscardNew`, sufficient MaxAge for the framework-computed loop and delivery horizon, and no earlier per-subject or
+message eviction bound. Configuration SHALL NOT require an adopter to predict server-effective retention.
 
 #### Scenario: Observed retention is unsafe
 
 - **WHEN** the actual AGENT stream bounds are shorter than the admitted ordinary continuation horizon
 - **THEN** agentic-loop reports the observed mismatch in readiness
 - **AND** does not claim restart-safe recovery
+
+#### Scenario: Capacity policy discards old evidence
+
+- **WHEN** the actual AGENT stream uses `DiscardOld`
+- **THEN** restart-safe consumers do not start
+- **AND** readiness reports that size pressure can evict continuation authority
+
+#### Scenario: Capacity is full under admitted policy
+
+- **WHEN** the admitted `DiscardNew` stream rejects a required publication for capacity
+- **THEN** the producer returns Retry
+- **AND** retains its source delivery rather than accepting continuation loss

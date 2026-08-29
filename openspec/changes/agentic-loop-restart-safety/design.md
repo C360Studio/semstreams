@@ -92,6 +92,17 @@ A different payload under the same semantic identity is an invariant collision a
 
 Before invoking, agentic-model checks for an already committed matching `agent.response.<requestID>`.
 
+The policy also needs to distinguish first delivery from redelivery. The accepted #759 work signature currently
+exposes only context and read-only bytes, so this design adds a blocking #759 addendum. Natsclient constructs an
+immutable `DeliveryAttempt` observation from native message metadata before invoking work. The value exposes only
+delivery number, metadata availability, and derived redelivery classification. It exposes no native message,
+settlement method, sequence, consumer identity, header, or mutable state.
+
+This observation belongs at #759's native-message boundary. Agentic-model must not create a model-private wrapper.
+When metadata is unavailable, natsclient does not invoke work or settle positively. It quarantines with typed
+`delivery_metadata_unavailable`, stops the exact owner, and reports the affected component and port. This #759
+addendum requires separate review and owner acceptance before #1146 model implementation.
+
 When no response exists after redelivery, the configured provider policy is one of:
 
 - `fail_commit_unknown`: do not invoke again; publish a typed commit-unknown `AgentResponse`. This is the default.
@@ -101,6 +112,10 @@ When no response exists after redelivery, the configured provider policy is one 
 
 The default avoids a second paid or effectful invocation, but may report commit-unknown when the prior process died
 before invoking. This tradeoff is intentional and must be visible to the operator.
+
+Commit-unknown is machine-readable through a closed optional `AgentResponseFailureKind`. The admitted value is
+`provider_commit_unknown`, and it is valid only with error status. Existing error responses may omit failure kind,
+but every non-empty unknown value is invalid. Consumers branch on this field and never parse free-text error content.
 
 A pre-invocation started marker is prohibited because it cannot close both sides of the call boundary. A
 completed-result ledger is not introduced because it closes only return-to-publication loss, not invocation
@@ -158,12 +173,33 @@ Before ACKing an approval-required `ToolResult`, agentic-loop:
 7. publishes `ApprovalPendingEvent` with synchronous PubAck.
 
 No new bucket is introduced. The continuation satisfies private-storage grounds 4 and 5: it is potentially bulky,
-high-churn operational execution material, not a graph fact. Rules do not read it. The graph-visible current loop
-state carries only the typed reference and the narrow approval classification needed by rule consumers.
+high-churn operational execution material, not a graph fact. `PendingApprovalState` is private operational state in
+the existing `AGENT_LOOPS` authority. It produces no triples and is not directly rule-readable. Rules continue to
+observe their admitted event and graph facts; they do not read continuation references or decision fingerprints.
 
-`ApprovalContinuationV1` must implement the payload contract, use alias-based JSON marshaling, and be registered
-explicitly through every required composition root. A production-decoder round-trip and binary registration census
-are required. There is no `init()` or unregistered raw envelope.
+`ApprovalContinuationV1` contains LoopID, TaskID, RequestID, execution identity, provider CallID, positive tool
+ordinal, originating `AgentRequest`, and originating tool-call `AgentResponse`. Validation checks every nested type
+and identity, recomputes execution identity, and proves that the selected ordinal identifies the reviewed call.
+
+It implements `Schema`, `Validate`, and alias-based JSON marshal and unmarshal methods. `agentic.RegisterPayloads`
+registers its factory with an empty indexing profile and no projection contract because it is non-Graphable Store
+material. `payloadbuiltins.Register` carries it to every first-party composition root. Implementation must repeat the
+binary census and use the production decoder; there is no `init()`, raw fallback, or anonymous-struct decoder.
+
+The content key is SHA-256 of canonical payload JSON, encoded lowercase base32 without padding beneath
+`agentic/approval-continuation/v1/`. The digest excludes `BaseMessage` random ID and timestamp. Stored bytes are one
+normal registered `BaseMessage` envelope, and the `StorageReference` records exact Store instance, deterministic key,
+content type, and envelope size.
+
+Persistence validates, derives the key, resolves the exact Store, and performs get-before-put. A matching existing
+object is reused. Absence permits one Put followed by Get, production decode, validation, digest, and identity
+verification. An unknown Put result is reconciled by Get: a matching object succeeds, unresolved absence retries,
+and malformed or conflicting content quarantines. Store overwrite behavior is never collision resolution.
+
+A permanently missing referenced object fails the loop durably with `approval_continuation_unavailable`; recovery
+never guesses from partial arguments. The reference remains until the deterministic downstream outcome commits.
+Deletion afterward is best-effort and does not gate settlement. A crash may leave a content-addressed orphan; #1146
+adds metrics but no scanner or reaper. Any later cleanup authority requires measured growth and a separate ruling.
 
 For approve or modify, the pending record retains the applied response fingerprint until the approved `ToolResult`
 arrives. This lets a replacement replay the exact call and reject a conflicting decision. For reject or timeout,
@@ -172,11 +208,29 @@ the pending record is cleared only after the deterministic next request or termi
 When approval timeout is configured, agentic-loop performs narrow startup hydration of awaiting-approval records so
 their existing deadlines survive replacement. This is component-owned timer repair, not a general supervisor.
 
+### Reference lifetime decision
+
+The Store object is discoverable only while `PendingApprovalState` remains in `AGENT_LOOPS`, whose current TTL is 24
+hours. Therefore the earlier indefinite claim is false. The admissible choices are:
+
+- require a finite, nonzero approval timeout no longer than observed `AGENT_LOOPS` retention, with safety margin;
+- change the existing loop authority's retention for every loop through separately reviewed migration work; or
+- separately design a discoverable approval-reference authority.
+
+Persisting the reference in the graph is rejected because it exposes private execution material. A new bucket is not
+admitted by this draft. The architectural recommendation is a finite timeout within existing loop retention. The
+owner must select the exact default. If truly indefinite approval is required, design stops for a new authority
+decision rather than claiming the Store object alone solves it.
+
 ## Dispatch projection recovery
 
-`LoopTracker` remains a cache. At startup, dispatch reconstructs its active-loop and pending-approval projection
-from current `AGENT_LOOPS` records. HTTP handlers use exact read-through when the cache misses. `LoopCreatedEvent`
-and `ApprovalPendingEvent` update the cache but are not durable authority.
+`LoopTracker` remains a cache. Dispatch builds a candidate projection from an all-current `AGENT_LOOPS` watch while
+applying ordered concurrent updates. It exposes that projection to AutoContinue only after the watch's initial
+snapshot completion boundary, then installs it atomically. An interrupted initial or live watch makes AutoContinue
+unavailable until another complete projection is installed. A partial projection is never authoritative.
+
+Explicit LoopID operations use exact read-through and may remain available while AutoContinue hydration is
+incomplete. `LoopCreatedEvent` and `ApprovalPendingEvent` update the projection but are not durable authority.
 
 This bounded hydration is required because AutoContinue addresses loops by user and channel rather than LoopID. It
 creates no durable state.
@@ -293,10 +347,28 @@ synchronous calls under bounded contexts. An owned worker, if required, joins be
 
 Audit remains nonblocking as specified. Nonblocking does not authorize an abandoned goroutine.
 
-## Retention and readiness
+## Observed AGENT replay admissibility
 
-At `Start`, the framework observes actual AGENT stream bounds. It rejects a configuration that cannot retain ordinary
-continuation outputs for the admitted loop and delivery horizon. The adopter does not predict server-effective state.
+`MaxAge` alone cannot prove a recovery horizon while `MaxBytes` plus `DiscardOld` may evict required evidence early.
+The current shipped posture therefore cannot advertise bounded restart-safe continuation under capacity pressure.
+
+Before starting recovery-dependent consumers, the framework reads actual AGENT `StreamInfo` for the stream and
+subjects resolved from accepted ports. The strong restart-safe option requires `DiscardNew`, actual `MaxAge` covering
+the framework-computed ordinary loop and delivery horizon, and no per-subject or message bound that can evict
+required evidence earlier. The framework computes the horizon from its own loop timeout, AckWait, and BackOff; the
+adopter does not predict it.
+
+If observed configuration is inadmissible, the component does not start affected durable consumers or advertise
+restart-safe readiness. It reports exact observed and required fields and never mutates stream policy silently.
+`DiscardNew` trades availability under a full stream for non-loss: rejected publication makes the producer Retry and
+retain its source delivery instead of evicting continuation evidence.
+
+The alternative is to retain `DiscardOld` and explicitly narrow the guarantee to recovery only while exact evidence
+remains. Missing required evidence then fails or quarantines loudly, and bounded restart safety is not advertised.
+The owner must select between the strong `DiscardNew` contract and this narrower claim. Copying every turn to Store
+is rejected as checkpoint-like material without an ordinary-lane failpoint.
+
+External purge, administrative deletion, and storage loss remain operator data-loss events outside either guarantee.
 
 A missing configured continuation Store does not silently downgrade approval safety. An approval-required result
 remains unsettled and retries while health reports the exact unresolved storage instance.
@@ -343,12 +415,13 @@ The design is rejected or revised if any premise fails:
 3. Request identity uniquely and deterministically binds LoopID and logical turn.
 4. Tool execution identity is a digest of RequestID, provider CallID, and ordinal; provider CallID is unchanged.
 5. Cold `ToolResult` handling reconstructs its active batch without scanning.
-6. Observed AGENT bounds retain ordinary continuation outputs for the admitted loop and delivery horizon.
+6. The owner-selected AGENT admissibility contract is observed honestly and does not infer a horizon from MaxAge
+   while `DiscardOld` capacity eviction remains possible.
 7. Approval replacement succeeds after deliberate AGENT eviction by resolving the registered Store reference.
 8. Governance replacement reads the exact retained verdict or safely re-obtains it. Failure returns for new design.
 9. `fail_commit_unknown` produces zero second provider calls; `at_least_once` records repeated attempts explicitly.
 10. No process-only map is required to classify a delivered source after replacement.
-11. Only dispatch projection and configured approval-deadline repair enumerate current loop state.
+11. Only complete dispatch projection and configured approval-deadline repair enumerate current loop state.
 12. AgentRun remains absent until #1148 merges and a new inventory is accepted.
 
 ## Out of scope

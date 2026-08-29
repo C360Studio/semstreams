@@ -14,6 +14,10 @@
 - [ ] 1.2 Confirm every touched consumer uses #759's accepted `DeliveryResult` contract and native delivery owner.
 - [ ] 1.3 Confirm #1155 real-NATS replacement proof is available and reusable.
 - [ ] 1.4 Reconcile the design against merged #759; stop for reinventory if the surface differs materially.
+- [ ] 1.5 Add immutable `DeliveryAttempt` observation to #759 without exposing native message or settlement methods.
+- [ ] 1.6 Obtain #759 addendum review and owner acceptance before #1146 model work.
+- [ ] 1.7 Quarantine and stop the exact owner when delivery metadata is unavailable.
+- [ ] 1.8 Test first delivery, second delivery, crash-before-call false unknown, and unavailable metadata.
 
 ## 2. Stable identity and replay helpers
 
@@ -30,6 +34,9 @@
 - [ ] 3.3 Reconcile an existing committed matching response before provider invocation.
 - [ ] 3.4 Return explicit settlement for parse, resolution, invocation, error-response, and publication paths.
 - [ ] 3.5 Add real-NATS replacement failpoints around invocation, return, response commit, and source ACK.
+- [ ] 3.6 Add closed `AgentResponseFailureKind` validation.
+- [ ] 3.7 Emit `provider_commit_unknown` only with error status.
+- [ ] 3.8 Reject unknown enum values and prohibit classification through error-string parsing.
 
 ## 4. Loop task and response settlement
 
@@ -59,6 +66,19 @@
 - [ ] 6.6 Reconstruct configured approval deadlines from current `AGENT_LOOPS` after replacement.
 - [ ] 6.7 Rebuild dispatch `LoopTracker` from `AGENT_LOOPS` and add exact HTTP read-through.
 - [ ] 6.8 Test pending, approve, modify, reject, timeout, duplicate, and conflicting decisions across replacement.
+- [ ] 6.9 Record owner choice for finite approval timeout or separately changed reference authority.
+- [ ] 6.10 If finite is selected, reject zero, empty, and over-retention approval timeout when gating is enabled.
+- [ ] 6.11 Record and document the owner-selected finite default; do not invent one during implementation.
+- [ ] 6.12 Test expired entity and permanently missing continuation behavior.
+- [ ] 6.13 Implement canonical payload digest, deterministic key, get-before-put, and read-back verification.
+- [ ] 6.14 Test matching reuse, malformed and semantic collision, lost Put reply, and transient Get.
+- [ ] 6.15 Add best-effort post-dependency cleanup metrics; add no scanner or reaper.
+- [ ] 6.16 Leave the payload indexing profile empty and projection contracts nil.
+- [ ] 6.17 Census every composition root and document downstream `payloadbuiltins` adoption.
+- [ ] 6.18 Build the dispatch projection off-path and install only after initial snapshot completion.
+- [ ] 6.19 Mark AutoContinue unavailable on initial or live-watch interruption.
+- [ ] 6.20 Preserve explicit LoopID exact reads during incomplete AutoContinue hydration.
+- [ ] 6.21 Test complete-empty, complete-unique, complete-ambiguous, interrupted, and stale-terminal hydration.
 
 ## 7. Signals and projections
 
@@ -75,23 +95,32 @@
 - [ ] 8.4 If retained verdict and response redelivery succeed, add no durable governance state.
 - [ ] 8.5 If they fail, stop with the named failpoint for a new owner ruling; do not invent a bucket.
 
-## 9. Context and lifecycle closure
+## 9. AGENT replay admissibility
 
-- [ ] 9.1 Remove return-before-join behavior from `runWithBudget`.
-- [ ] 9.2 Remove return-before-join behavior from trajectory batch recording.
-- [ ] 9.3 Prove callback cancellation cancels and joins before settlement.
-- [ ] 9.4 Prove `Stop` joins every task spawned by touched deliveries.
+- [ ] 9.1 Record owner choice: require observed `DiscardNew` or narrow the advertised restart guarantee.
+- [ ] 9.2 Read actual `StreamInfo` before starting recovery-dependent consumers.
+- [ ] 9.3 Compute the ordinary horizon from framework-owned timeout and consumer policy.
+- [ ] 9.4 If strong admission is selected, reject `DiscardOld` and other early-eviction bounds.
+- [ ] 9.5 Test `DiscardOld`, `DiscardNew`, insufficient MaxAge, full-stream backpressure, and missing evidence.
+- [ ] 9.6 Document migration, capacity, and backpressure cost.
 
-## 10. Verification and documentation
+## 10. Context and lifecycle closure
 
-- [ ] 10.1 Add table-driven unit tests for every lane's happy and sad disposition.
-- [ ] 10.2 Add real-NATS process-replacement tests using #1155.
-- [ ] 10.3 Serialize and run the relevant agentic E2E tier.
-- [ ] 10.4 Correct the false restart claims identified in the accepted inventory.
-- [ ] 10.5 Document provider ambiguity, Store requirements, metrics, and external-executor migration.
-- [ ] 10.6 Obtain SemStreams reviewer approval.
-- [ ] 10.7 Obtain owner-run cross-agent review.
-- [ ] 10.8 Archive as the final content commit and obtain narrow archive and spec-sync review.
+- [ ] 10.1 Remove return-before-join behavior from `runWithBudget`.
+- [ ] 10.2 Remove return-before-join behavior from trajectory batch recording.
+- [ ] 10.3 Prove callback cancellation cancels and joins before settlement.
+- [ ] 10.4 Prove `Stop` joins every task spawned by touched deliveries.
+
+## 11. Verification and documentation
+
+- [ ] 11.1 Add table-driven unit tests for every lane's happy and sad disposition.
+- [ ] 11.2 Add real-NATS process-replacement tests using #1155.
+- [ ] 11.3 Serialize and run the relevant agentic E2E tier.
+- [ ] 11.4 Correct the false restart claims identified in the accepted inventory.
+- [ ] 11.5 Document provider ambiguity, Store requirements, metrics, and external-executor migration.
+- [ ] 11.6 Obtain SemStreams reviewer approval.
+- [ ] 11.7 Obtain owner-run cross-agent review.
+- [ ] 11.8 Archive as the final content commit and obtain narrow archive and spec-sync review.
 
 ## Hold: AgentRun
 
