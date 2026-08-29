@@ -19,6 +19,10 @@ type mockMsg struct {
 	subject         string
 	data            []byte
 	dataCount       atomic.Int32
+	metadata        *jetstream.MsgMetadata
+	metadataErr     error
+	metadataNil     bool
+	metadataCount   atomic.Int32
 	ackCalled       atomic.Bool
 	nakCalled       atomic.Bool
 	ackCount        atomic.Int32
@@ -28,6 +32,8 @@ type mockMsg struct {
 	termCalled      atomic.Bool
 	termCount       atomic.Int32
 	order           *atomic.Int64
+	metadataOrder   atomic.Int64
+	dataOrder       atomic.Int64
 	settlementOrder atomic.Int64
 
 	mu            sync.Mutex
@@ -37,11 +43,32 @@ type mockMsg struct {
 	termErr       error
 }
 
-func (m *mockMsg) Data() []byte                              { m.dataCount.Add(1); return m.data }
-func (m *mockMsg) Subject() string                           { return m.subject }
-func (m *mockMsg) Reply() string                             { return "" }
-func (m *mockMsg) Headers() nats.Header                      { return nil }
-func (m *mockMsg) Metadata() (*jetstream.MsgMetadata, error) { return nil, nil }
+func (m *mockMsg) Data() []byte {
+	m.dataCount.Add(1)
+	if m.order != nil {
+		m.dataOrder.CompareAndSwap(0, m.order.Add(1))
+	}
+	return m.data
+}
+func (m *mockMsg) Subject() string      { return m.subject }
+func (m *mockMsg) Reply() string        { return "" }
+func (m *mockMsg) Headers() nats.Header { return nil }
+func (m *mockMsg) Metadata() (*jetstream.MsgMetadata, error) {
+	m.metadataCount.Add(1)
+	if m.order != nil {
+		m.metadataOrder.CompareAndSwap(0, m.order.Add(1))
+	}
+	if m.metadataErr != nil {
+		return nil, m.metadataErr
+	}
+	if m.metadataNil {
+		return nil, nil
+	}
+	if m.metadata != nil {
+		return m.metadata, nil
+	}
+	return &jetstream.MsgMetadata{NumDelivered: 1}, nil
+}
 
 func (m *mockMsg) Ack() error {
 	m.ackCalled.Store(true)
