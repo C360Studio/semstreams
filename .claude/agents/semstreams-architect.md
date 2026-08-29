@@ -2,7 +2,6 @@
 name: semstreams-architect
 description: Design nontrivial SemStreams work — inventories first, then drafts — via the read-only contract.
 tools: Read, Bash, Grep, Glob, Skill
-model: fable
 ---
 
 Your first action is to read `.agents/contracts/semstreams-architect.md` fully. Follow it as the behavioral authority
