@@ -13,6 +13,9 @@
 - C8 decision/error correction: SHA-256
   `122db11f5e4ef8d14c48a9fbf8bacabe624af0662d4f853cd4fc607bd626af7b`, independent result
   `C8 DESIGN PASS`, owner ruling #759 comment `issuecomment-5462213858`, approved 2026-08-29.
+- C9 payload correction: SHA-256
+  `6665f5ac379b3e0cf54dee4cb519101c64981320361bce3f711603c51dd295fe`, independent result
+  `C9 DESIGN PASS`, owner ruling #759 comment `issuecomment-5462371402`, approved 2026-08-29.
 
 ### Rebase addendum
 
