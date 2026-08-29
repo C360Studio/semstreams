@@ -63,12 +63,14 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 - [ ] 5.1 Prove healthy InProgress renewal prevents overlap and stopped renewal follows BackOff independently of
       semantic retry, using scaled integration timing.
 - [x] 5.2 Assert production tools configuration keeps BackOff 15s/60s and heartbeat 5s.
-- [ ] 5.3 Replace SemStreams while retaining NATS; prove tools first redelivery follows the 15-second class, completed
+- [x] 5.3 Replace SemStreams while retaining NATS; prove tools first redelivery follows the 15-second class, completed
       replay publishes without a second executor effect, and ambiguous post-effect state quarantines.
-- [ ] 5.4 Prove dispatch replacement produces no duplicate user response and ambiguous publication never enters
+- [x] 5.4 Prove dispatch replacement produces no duplicate user response and ambiguous publication never enters
       unlimited retry.
-- [ ] 5.5 Prove owner-fatal control loss, post-latch refusal, exact-handle shutdown, and reconstructed ordinary ownership.
-- [ ] 5.6 Run `task e2e:agentic` after Stage A with clean teardown and record the exact result.
+- [x] 5.5 Prove owner-fatal control loss, post-latch refusal, exact-handle shutdown, and reconstructed ordinary ownership.
+- [x] 5.6 Run `GOFLAGS=-mod=readonly task e2e:agentic`: PASS in 2m03.893s with clean teardown; completed replay had
+      one executor effect, tools BackOff redelivered at 15s with two quarantine attempts, and dispatch emitted one
+      replacement response.
 
 ## 6. Non-authorizing binding gates
 
