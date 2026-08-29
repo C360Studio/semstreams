@@ -20,16 +20,20 @@ No configuration MAY disable the check. The import declaration and the envelope 
 provenance this requirement records; it authenticates nothing.
 
 **DEFERRED to #1168, recorded rather than dropped — the O-4 import-collision rejection is NOT in this change.**
-ADR-102 decision 4's accepted clause "an import of an ID already held under another source is rejected"
-(`docs/adr/102-entity-id-segment-semantics.md:26`) is not implemented, and nothing above asserts it. It cannot be a
-guard at this seam because the fact it compares does not exist yet: `graph.EntityState` (`graph/types.go:24-47`)
-carries no arrival-source or authority field — its `MessageType` records the payload type, not who sent it —
-`graph.MergeTriples` compares `(Subject, Predicate)` only, and the import-lane fact is read once at
-`processor/graph-ingest/component.go:1487` and recorded nowhere. Implementing O-4 therefore means designing retained
-provenance, which is stored-state work rather than a boundary check. Its home is #1168, queued immediately behind
-this change. Nothing is live while it waits: `grep -rn '"import"' configs/` returns 0, so no configuration this
-repository ships declares an import lane, and a second arrival of one ID under two sources is unreachable through a
-shipped composition.
+ADR-102 decision 4's accepted clause "an import of an ID already held under another source is rejected" is not
+implemented, and nothing above asserts it. It cannot be a guard at this seam because the fact it compares is never
+retained: `graph.EntityState` carries no arrival-source or authority field — its `MessageType` records the payload
+type, not who sent it — `graph.MergeTriples` compares `(Subject, Predicate)` only, and the import-lane declaration is
+read at composition and dispatch time (`PortFacts.Stream().Import()`, consulted by graph-ingest's input-port setup
+and by `component`'s port resolver to derive `External`) without ever being written down beside the entity it
+admitted. Implementing O-4 therefore means designing retained provenance, which is stored-state work rather than a
+boundary check. Its home is #1168, queued immediately behind this change. Nothing is live while it waits:
+`grep -rn '"import"' configs/` returns 0, so no configuration this repository ships declares an import lane, and a
+second arrival of one ID under two sources is unreachable through a shipped composition.
+
+**This paragraph is change-scoped truth in a current-truth home, and nothing enforces its removal.** Whoever lands
+#1168 MUST delete it in the same change that implements the rejection, and state the rejection here instead. Until
+then it is the only record in the capability's spec that an accepted ADR-102 clause is knowingly absent.
 
 #### Scenario: a foreign write on a local lane never reaches ENTITY_STATES
 

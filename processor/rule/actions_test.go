@@ -2498,9 +2498,12 @@ func foreignFiringSkipTestMetrics() *Metrics {
 // Two facts are pinned together because either alone is satisfiable by a broken
 // implementation:
 //
-//   - The authority is a CONSTRUCTOR PARAMETER, so it cannot be omitted. Deleting
-//     it from the signature is a compile error at every call site, which is the
-//     point: the fail-open state is unrepresentable rather than merely untested.
+//   - The authority is a CONSTRUCTOR PARAMETER, so it cannot be FORGOTTEN.
+//     Deleting it from the signature is a compile error at every call site. It
+//     does not make the state unrepresentable — the third case below hands the
+//     constructor a zero PlatformMeta deliberately, which compiles — so the
+//     fail-closed answer, not the signature, is what covers a caller who passes
+//     nothing meaningful.
 //   - The guard FAILS CLOSED on an explicitly zero authority. An executor with no
 //     org/platform pair cannot establish that any entity is local, so every
 //     firing entity reads as foreign and the write is skipped and counted.
@@ -2942,7 +2945,7 @@ func TestAction_UpdateKV_VariableSubstitution(t *testing.T) {
 		Payload: map[string]any{
 			"status":     "drafting",
 			"updated_at": "$now",
-			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2945 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
+			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2948 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
 		},
 		Merge: false,
 	}

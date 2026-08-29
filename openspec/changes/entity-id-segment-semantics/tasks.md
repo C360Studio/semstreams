@@ -1147,7 +1147,10 @@ package; both declarations are now on the payload registrations) and
       EXPORTED: its caller is an adopter outside this repository who is in no review here, and it hands out both a
       mutator and a publisher, which is everything either guarded write needs. Caller enumeration is not a property
       of an exported symbol.
-      **Fixed both ways, so the state is unrepresentable rather than merely tested.** (a) `NewActionExecutorFull`
+      **Fixed both ways, so the state is UNFORGETTABLE rather than merely tested** (round 6 corrected the word: a
+      zero `PlatformMeta` compiles, and `TestPublishAgentThroughExportedFullConstructorSkipsForeignSpawnedTask`
+      represents that exact state and asserts the fail-closed answer — a parameter makes the authority impossible to
+      omit, not impossible to express). (a) `NewActionExecutorFull`
       and `NewActionExecutorWithMutator` — the two other constructors that can hold a `tripleMutator`, which both
       guarded writes require — now take `platform types.PlatformMeta` as a final parameter, matching
       `NewActionExecutorComplete`. **This is a BREAKING change to two exported symbols**, recorded in the migration
@@ -1162,6 +1165,22 @@ package; both declarations are now on the payload registrations) and
       short-circuit fails `absent_authority_reads_every_entity_as_foreign`; making `NewActionExecutorFull` accept the
       authority and drop it (`_ = platform`) fails
       `local_firing_entity_under_the_supplied_authority_is_written`, which is the parameter itself doing the work.
+      **ROUND 6 (HIGH-1) closed the seam all of the above missed, and it was a REGRESSION this PR introduced.**
+      Guarding the three executor constructors and `CreateRuleProcessor` left the PROCESSOR constructor open:
+      `NewProcessor`/`NewProcessorWithMetrics` (`processor.go:260`/`:265`) are exported, take no authority and never
+      set `platform`, and `SetPlatform` (`:366`) is an optional setter documented as "called by the component
+      factory" — convention, not a guard. `initializeStateTracker` built `NewActionExecutorComplete` from
+      `rp.platform` unchecked, so `rule.NewProcessor(client, cfg)` + `Start` produced a mutator-and-publisher
+      executor under a zero pair. Deleting the short-circuit therefore converted that seam's WORKING
+      `rule.task.spawned` write (under `run_scope=inherit|none`; `run_scope=new` was already broken there because
+      `TryChainExecutionEntityID` rejects an empty org) into a silent skip. `initializeStateTracker` now refuses
+      first — before any NATS call, before the RULE_STATE bucket — with the same `errs.WrapInvalid` shape
+      `CreateRuleProcessor` uses, scoped to the NATS branch because the no-NATS branch builds `NewActionExecutor`,
+      which cannot write. **BREAKING for a direct `NewProcessor` caller** (`!` subject, migration-note paragraph); no
+      in-repo binary is affected. `TestInitializeStateTrackerRefusesAbsentDeploymentAuthority` (3 cases) plus the
+      negative-space `TestInitializeStateTrackerPastTheAuthorityCheckFailsElsewhere`; fifteen NATS-backed test
+      harnesses across seven files were swept to the established `SetPlatform` idiom, six of which failed loudly
+      without it. Three mutants, all killed, in `conformance.md`'s round-6 table.
 - [x] 6.4 `graph/inference/hierarchy.go`: `GetHierarchyTriples` returns `nil, nil` for an entity whose positions 1–2
       differ from the deployment authority (no container, no membership, no inverse sibling edge, no warning) — the
       pair reaches `NewHierarchyInference` (which carries none today, `hierarchy.go:109-114`;

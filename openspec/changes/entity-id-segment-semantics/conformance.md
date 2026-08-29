@@ -430,7 +430,7 @@ reviewer's own mutant.
 
 | Finding | Disposition | Evidence |
 |---|---|---|
-| HIGH-1 — the #1096 fix's only wiring (`processor.go` `executor.setPlatform`) was untested and failed OPEN: deleting it made `foreignFiringEntity` answer false for EVERY entity, retiring the guard silently, with both suites green | FIXED by the preferred route — the state is now unrepresentable, not merely tested | The authority is a CONSTRUCTOR parameter of `NewActionExecutorComplete` (the only constructor receiving a mutator, publisher and KV writer) and `setPlatform` is DELETED, so the production path cannot omit it. `TestIntegration_ProductionExecutorCarriesTheDeploymentAuthority` drives `CreateRuleProcessor` → `initializeStateTracker` over **both** construction branches. The stale claim at `actions.go:574-576` — that `factory.go:122` made the branch unreachable — is corrected in place: that refusal guards `deps.Platform`, not the hop into the executor |
+| HIGH-1 — the #1096 fix's only wiring (`processor.go` `executor.setPlatform`) was untested and failed OPEN: deleting it made `foreignFiringEntity` answer false for EVERY entity, retiring the guard silently, with both suites green | FIXED by the preferred route — the state is now unrepresentable, not merely tested (**round-6 correction: "unrepresentable" was the wrong word and it hid the fourth seam.** A parameter makes the authority unforgettable; a zero `PlatformMeta` is still expressible, and `NewProcessor` reached the executor without one until round 6 refused it in `initializeStateTracker`) | The authority is a CONSTRUCTOR parameter of `NewActionExecutorComplete` (the only constructor receiving a mutator, publisher and KV writer) and `setPlatform` is DELETED, so the production path cannot omit it. `TestIntegration_ProductionExecutorCarriesTheDeploymentAuthority` drives `CreateRuleProcessor` → `initializeStateTracker` over **both** construction branches. The stale claim at `actions.go:574-576` — that `factory.go:122` made the branch unreachable — is corrected in place: that refusal guards `deps.Platform`, not the hop into the executor |
 | HIGH-2 — reconcile and delete lanes had ZERO coverage, and reconcile has no backstop (it writes through `entityBucket.Update` and never enters `mergeEntityOnLane`) | FIXED | `TestAuthorityGateRejectsReconcileOfImportedSubject` and `TestAuthorityGateRejectsDeleteOfImportedSubject`, plus two `#### Scenario` blocks in the graph-ingest delta. Reconcile is the lane `pkg/lifecycle.Manager` writes through, so an unguarded one would let any participant attach to a peer's entity |
 | HIGH-3 — the three LOUD paths the migration note promises were unpinned; deleting all three in one compiling mutant left six suites green | FIXED | `TestCreateGraphIngestRefusesAbsentDeploymentAuthority`, `TestCreateRuleProcessorRefusesAbsentDeploymentAuthority`, `TestGetHierarchyTriplesRefusesWithoutDeploymentAuthority` — each a table over both-absent / org-absent / platform-absent, each with a negative-space partner so the refusal is about the ABSENT pair and not an unrelated failure |
 | MEDIUM-1 — the counter's name and documented cardinality were both wrong | FIXED now, not deferred | Renamed `rule_foreign_firing_writes_skipped_total`; spec restated **per dispatch** (the recorder lives in `publishAgentOnce`, which runs once per `for_each` item). The name was not merely narrow: under `run_scope` `inherit`/`none` no anchor is in play and only `rule.task.spawned` is skipped, so "run anchor" was wrong. Free now — no dashboard, no alert, no sister consumer — and a breaking series rename later |
@@ -542,7 +542,7 @@ house adopter-seam rule says so directly.
 
 | Finding | Disposition | Evidence |
 |---|---|---|
-| **BLOCKING 1 — the accepted O-4 import-collision ruling is not implemented** | **DEFERRED to #1168 by owner ruling, and now RECORDED where a deliberate not-done has to be: in the DELTA** | The premise was re-measured and holds: the seam has no provenance to compare. `graph.EntityState` (`graph/types.go:24-47`) carries no arrival-source or authority field — `MessageType` is the payload type, not the sender — `graph.MergeTriples` compares `(Subject, Predicate)` only, and the import-lane fact is read once at `processor/graph-ingest/component.go:1487` and recorded nowhere. Implementing O-4 means CREATING the fact, which is retained-provenance design, not a boundary guard. `specs/graph-ingest/spec.md` now carries a **DEFERRED to #1168** paragraph inside the authority requirement naming the home and the reason; this row is its index. Nothing is live while it waits: `grep -rn '"import"' configs/` → **0**, so no shipped configuration declares an import lane and a second arrival of one ID under two sources is unreachable through a shipped composition. The ADR is NOT edited — that is an owner action |
+| **BLOCKING 1 — the accepted O-4 import-collision ruling is not implemented** | **DEFERRED to #1168 by owner ruling, and now RECORDED where a deliberate not-done has to be: in the DELTA** | The premise was re-measured and holds: the seam has no provenance to compare. `graph.EntityState` (`graph/types.go:24-47`) carries no arrival-source or authority field — `MessageType` is the payload type, not the sender — `graph.MergeTriples` compares `(Subject, Predicate)` only, and the import-lane fact is read at `processor/graph-ingest/component.go:1487` and recorded nowhere. (**Round-6 correction:** "read ONCE at" was false when written — commit `a5071d3e`, in this same round, added a second non-test read at `component/port_resolver.go:89`. The count was never the argument; neither read retains provenance, so the deferral stands. The delta no longer states a count.) Implementing O-4 means CREATING the fact, which is retained-provenance design, not a boundary guard. `specs/graph-ingest/spec.md` now carries a **DEFERRED to #1168** paragraph inside the authority requirement naming the home and the reason; this row is its index. Nothing is live while it waits: `grep -rn '"import"' configs/` → **0**, so no shipped configuration declares an import lane and a second arrival of one ID under two sources is unreachable through a shipped composition. The ADR is NOT edited — that is an owner action |
 | **BLOCKING 2 — an exported write-capable constructor can silently disable the foreign-write guard** | **FIXED, both ways** | `foreignFiringEntity` answered `false` when the executor held no authority, so every firing entity read LOCAL and both framework writes went through; `NewActionExecutorFull` supplies a mutator AND a publisher and took no authority. (a) `NewActionExecutorFull` and `NewActionExecutorWithMutator` — the two other constructors that can hold a `tripleMutator`, the capability both guarded writes require — now take `platform types.PlatformMeta` as a final parameter, matching `NewActionExecutorComplete`. **BREAKING on two exported symbols**, stated in the migration note and the PR body. (b) The short-circuit is DELETED: `ValidateEntityIDAuthority` decides, and under an empty pair every parseable ID differs at position 1, so an unknown authority reads foreign — fail-CLOSED, and the reason label stays truthful. `TestPublishAgentThroughExportedFullConstructorSkipsForeignSpawnedTask` covers the exported path with three cases; both mutants die (tasks 6.3) |
 | **BLOCKING 3 — `agentrun.Mint` can alias two federated origins** | **SAFETY HALF FIXED HERE; the collision-free derivation is #1168** | `Mint` now requires a non-empty `originEntityID` and, on `lifecycle.ErrAlreadyExists`, compares the STORED `OriginEntityID` with the requested one — using the `mgr.Get` that path already performs, so no new read, no second party, no lookup. A mismatch is a classified `ErrorInvalid`. Legacy-empty-record policy DEFINED: an origin-less stored run is refused, not adopted. The idempotence test's origin-less seed is replaced by a same-origin seed, and `TestMint_TwoOriginsAtOneInstanceAreRefusedNotAliased` is the two-authority/same-instance proof Codex asked for. This does not make the identity collision-free and the artifacts say so (tasks 3.8) |
 | **HIGH 4 — direct-persistence authority rejects are neither metered nor loudly logged** | **IMPLEMENTED, not amended** | The requirement covers direct persistence in the same breath as the other two lanes, so narrowing it to match the code would have been the defect this change has already had twice. `arrivalDirect = "direct"` is one bounded value in the label position the other lanes fill with their arrival subject, and `recordDirectAuthorityRejection` routes to the same `recordAuthorityRejection`. Applied at all five direct guards. Exactly-once is structural: each `graph.mutation.>` handler authorizes and RETURNS before entering any shared body, and `prepareFactProjection` does the same on the fact lane. `TestAuthorityGateMetersDirectPersistenceRejectionsOnEveryDirectSeam` also makes the first assertion in this change of the "loud log" half, which had no test on ANY lane. Both mutants die, and the per-seam mutant kills only its own subtest (tasks 6.1) |
@@ -585,9 +585,13 @@ Restored md5s, each equal to its pre-mutation value: `processor/rule/actions.go`
 Every artifact asserting the withdrawn mechanism was re-synced rather than left standing:
 
 - `processor/rule/actions.go` — `foreignFiringEntity`'s doc comment (fourth revision; it now states the fail-closed
-  mechanism and records that the short-circuit was deleted) and `NewActionExecutorComplete`'s comment about the
-  convenience constructors, which said they have no caller "and are in-repo test fixtures" — true of this repository
-  and irrelevant to an exported symbol.
+  mechanism and records that the short-circuit was deleted), and the SECOND paragraph of
+  `NewActionExecutorComplete`'s doc — the one about the convenience constructors, which said they have no caller
+  "and are in-repo test fixtures", true of this repository and irrelevant to an exported symbol.
+  **Overclaimed when written, corrected in round 6:** this bullet said "`NewActionExecutorComplete`'s comment"
+  without qualification. The FIRST paragraph of that same doc still asserted the deleted mechanism ("a zero value
+  makes `foreignFiringEntity` answer **false** for every entity") and was left standing. An overclaimed sweep is
+  worse than an unswept file, because the next reviewer stops looking.
 - `processor/rule/factory.go` — the comment describing the absent-pair failure mode as fail-OPEN. It now scopes
   itself to the MINT (which is what that refusal guards) and points at the separately fail-closed write guard.
 - `tasks.md` 6.3 — the sentence "An executor with no platform answers `false` (cannot judge)" is struck through and
@@ -607,3 +611,67 @@ Every artifact asserting the withdrawn mechanism was re-synced rather than left 
   owner-accepted SOURCE this change implements; a canonical artifact does not amend its source. The delta is where
   target state lives, and it now carries both corrections — the qualifier deleted and O-4 recorded as deferred to
   #1168 — so a reader of the archived spec is not misled, and a reader of the design sees what was designed.
+
+## Slice B implementation review — round 6 (final round before archive, at `88d5ec11`; 2 BLOCKING, 2 MEDIUM)
+
+The Codex owner round's fail-closed rewrite was correct and its mutants all reproduced. What it did not do was
+enumerate the hole class: it closed the three *executor* constructors and the *factory*, and left the *processor*
+constructor — the most accessible seam of the four — reaching the same absent-authority state. This round's lesson is
+the guarantee contract's own: a guard protects a CLASS, and the class here was "every path that can hand an
+ActionExecutor a zero PlatformMeta", not "every ActionExecutor constructor".
+
+| Finding | Disposition | Evidence |
+|---|---|---|
+| **HIGH-1 (BLOCKING) — the fail-closed change regressed a seam it did not cover** | **FIXED** | `NewProcessor`/`NewProcessorWithMetrics` (`processor/rule/processor.go:260`/`:265`) are exported, take no authority and never set `platform`; `SetPlatform` (`:366`) is an OPTIONAL setter whose doc says "called by the component factory" — convention, not a guard. `initializeStateTracker` reached `NewActionExecutorComplete(..., rp.platform)` with no check, so `rule.NewProcessor(client, cfg)` + `Start` built a mutator-and-publisher executor under a zero pair. Before the fail-closed rewrite that executor judged every entity LOCAL and `rule.task.spawned` was WRITTEN; after it, every entity reads FOREIGN and the write is skipped, counted and logged at Info. `run_scope=new` was already broken for that seam (`TryChainExecutionEntityID` rejects an empty org), but `rule.task.spawned` under `run_scope=inherit\|none` worked on `origin/main` and stopped working on this branch — a regression this PR introduced. `initializeStateTracker` now refuses first, before any NATS call and before the bucket, with the same `errs.WrapInvalid` shape `CreateRuleProcessor` uses. Scoped to the NATS branch: the no-NATS branch builds `NewActionExecutor`, which holds neither mutator nor publisher. **BREAKING** for a direct `NewProcessor` caller — `!` subject, migration note paragraph. No in-repo binary is affected (`grep -rn "NewProcessor" cmd/ internal/ test/` for rule → 0; both binaries use `CreateRuleProcessor`) |
+| **HIGH-2 (BLOCKING) — two artifacts still asserted the deleted mechanism, and the sweep record said otherwise** | **FIXED, and the sweep bullet corrected** | `actions.go`'s `NewActionExecutorComplete` doc, FIRST paragraph, said a zero value "makes `foreignFiringEntity` answer **false** for every entity" — backwards at HEAD, and the Codex round's own mutant (restoring `return false`) is the proof. Its "unrepresentable" claim was contradicted by the test that represents and asserts that exact state; the doc now says UNFORGETTABLE and names the two seams that close it. `factory_platform_refusal_test.go`'s doc said an absent pair would "judge every firing entity local" — same inversion, third occurrence in this comment family (round-4 B2 was the same defect). The round-5 sweep bullet asserted it swept "`NewActionExecutorComplete`'s comment"; it swept the SECOND paragraph only. The bullet is corrected in place rather than deleted |
+| **MEDIUM-2 — the O-4 deferral was refuted by its own commit** | **FIXED in the delta; the conformance row annotated** | The delta said the import-lane fact is "read once at `component.go:1487`". `grep -rn "\.Import()" --include='*.go' \| grep -v _test` returns TWO non-test reads: `processor/graph-ingest/component.go:1487` and `component/port_resolver.go:89`, the second added by `a5071d3e` in this same round. The deferral's argument survives untouched — the resolver read derives `External` at composition time and retains no provenance either — so the count was struck rather than the paragraph |
+| **MEDIUM-3 — line-pinned code citations in a spec that becomes current truth** | **FIXED** | The DEFERRED paragraph cited `graph/types.go:24-47`, `component.go:1487` and `docs/adr/102-…:26`. Line pins rot on the next edit, which is correct for this point-in-time file and wrong for `openspec/specs/`. The paragraph now cites symbols — `graph.EntityState`, `graph.MergeTriples`, `PortFacts.Stream().Import()` — and names ADR-102 decision 4 without a line. The pins stay here. The paragraph also now carries its own removal instruction: whoever lands #1168 MUST delete it, because it is change-scoped truth in a current-truth home and nothing enforces its removal |
+
+**Explicitly out of scope, by the reviewer's direction:** the cron reason-label finding (`foreign_authority` reported
+for a cron dispatch with no firing entity) — pre-existing mechanism, filed separately, and the reason vocabulary is
+NOT touched in this round. The three NITs (`Mint`'s mismatch error embedding a foreign identity; `import: true`
+silently ignored on output ports; the design doc's status-block annotation) are left standing. Nothing from #1168.
+
+### Round-6 mutation evidence
+
+`cp` backup taken after the fix was COMMITTED (`3301f61f`), restoration verified by `md5`, `[applied]`/`[restored]`
+printed between mutating and testing. Pre- and post-mutation md5 of `processor/rule/processor.go`:
+`6251e0953a6d75a8697876875fa95ffa`, equal after every mutant, with `git status --porcelain` empty afterwards as an
+independent second reading.
+
+| Mutant | Result |
+|---|---|
+| Delete the `initializeStateTracker` refusal entirely | All three subtests of `TestInitializeStateTrackerRefusesAbsentDeploymentAuthority` **FAIL** on both assertions. The mutant is why the test asserts the error CLASS and not merely `require.Error`: an empty `natsclient.Client` fails at `JetStream()` two lines later with a TRANSIENT error, so a bare `require.Error` would have passed with the guard deleted |
+| Drop the `Platform` half of the pair (`rp.platform.Org == ""` only) | Only `…/platform_absent` **FAILS**; `setter_never_called` and `org_absent` pass — the mutant discriminates, so a half-guard is caught by its own row |
+| Return the refusal unclassified (plain `fmt.Errorf`, no `errs.WrapInvalid`) | All three subtests **FAIL** on the `errs.IsInvalid` assertion only; the message assertion still passes. The classification is load-bearing, not decoration |
+| The harness sweep, measured rather than asserted | Before adding `SetPlatform` to the seven NATS-backed test files, `go test -tags=integration ./processor/rule/...` **FAILED** six tests: the four `TestIntegration_CronRule_*`, `TestEntityWatcher_DeletedEntityCleansRuleState` and `TestStatefulEvaluator_Integration`. The other nine call sites had been running against an executor with a retired guard and said nothing — which is the same silence HIGH-1 describes, reproduced inside our own suite |
+
+### Correction-propagation sweep for round 6
+
+Two claims were withdrawn this round — the failure DIRECTION under an absent pair, and the word
+"unrepresentable" for a state a parameter cannot prevent. Both were grepped repository-wide
+(`grep -rn "unrepresentable" --include='*.md' --include='*.go' .`, and `answer false` / `judge every firing entity
+local` / `read LOCAL`) and every hit inside this change's blast radius was re-synced:
+
+- `processor/rule/actions.go` — the FIRST paragraph of `NewActionExecutorComplete`'s doc (the HIGH-2 subject), and
+  `foreignFiringEntity`'s closing paragraph, which enumerated THREE construction paths and called the state
+  "unrepresentable". That enumeration is the reason the fourth path stayed open for a round; it now lists four,
+  names `initializeStateTracker` as the seam `NewProcessor` reaches, and says plainly that a parameter cannot refuse
+  a zero value handed to it deliberately.
+- `processor/rule/factory_platform_refusal_test.go` — the inverted failure mode in the test's own doc.
+- `processor/rule/actions_test.go` — the same "unrepresentable" claim on the bullet describing the constructor
+  parameter, in a test whose own third case represents that state.
+- `processor/rule/doc.go` — the package's `Example Usage` built a NATS-backed processor with no `SetPlatform`. It is
+  the adopter-facing copy of the wiring HIGH-1 broke, so it now carries the call and what happens without it.
+- `tasks.md` 6.3 — "unrepresentable" → UNFORGETTABLE with the reason, plus the round-6 paragraph.
+- `conformance.md` round-1 HIGH-1 row and the Codex-round O-4 row — annotated in place, not rewritten; both stated
+  something in the present tense that round 6 refutes.
+- `docs/operations/migration-beta162-to-beta163.md` — a BREAKING paragraph for the direct `NewProcessor` caller,
+  next to the existing empty-pair consequence it makes reachable.
+- `specs/graph-ingest/spec.md` — the deferral's line pins replaced by symbols, its "read once" count struck, and its
+  own removal instruction added for whoever lands #1168.
+
+**Not swept, deliberately:** the reason vocabulary (`foreign_authority` on a cron dispatch with no firing entity)
+is a pre-existing mechanism the reviewer is filing separately and directed this round not to touch. The historical
+round-2/round-4 paragraphs inside `tasks.md` 6.3 that describe the short-circuit in the past tense are history and
+read as history; only present-tense claims were corrected.

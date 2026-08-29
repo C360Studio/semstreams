@@ -574,14 +574,24 @@ type ActionExecutor struct {
 // entity LOCAL and so RETIRED both guards below; three rounds of review treated
 // that as a doc-comment problem. It is deleted.
 //
-// The absent-authority state is additionally unrepresentable from every
-// direction an ActionExecutor can be built: NewActionExecutorComplete,
-// NewActionExecutorFull and NewActionExecutorWithMutator — the three
-// constructors that can hold a tripleMutator, which both guarded writes require
-// — all take the authority as a parameter, and CreateRuleProcessor refuses a
-// deps.Platform with an empty pair. NewActionExecutor takes no authority and
-// cannot write: it holds neither mutator nor publisher and there is no setter
-// for either.
+// FOUR paths can reach this function with an authority, and all four are closed
+// — an earlier revision of this comment enumerated three and called the state
+// "unrepresentable", which is how the fourth stayed open for a round:
+//
+//   - NewActionExecutorComplete, NewActionExecutorFull and
+//     NewActionExecutorWithMutator — the three constructors that can hold a
+//     tripleMutator, which both guarded writes require — take the authority as a
+//     PARAMETER, so a caller cannot forget it. They cannot refuse a zero value
+//     handed to them deliberately; the fail-closed answer above is what covers
+//     that, and TestPublishAgentThroughExportedFullConstructorSkipsForeignSpawnedTask
+//     asserts it.
+//   - CreateRuleProcessor refuses a deps.Platform with an empty pair.
+//   - initializeStateTracker refuses a NATS-backed Processor whose optional
+//     SetPlatform was never called — the seam an adopter reaches through the
+//     exported NewProcessor, which takes no authority at all.
+//
+// NewActionExecutor takes no authority and cannot write: it holds neither mutator
+// nor publisher and there is no setter for either.
 func (e *ActionExecutor) foreignFiringEntity(entityID string) bool {
 	return semtypes.ValidateEntityIDAuthority(entityID, e.platform.Org, e.platform.Platform, false) != nil
 }
@@ -784,12 +794,24 @@ func NewActionExecutorFull(
 //
 // platform is the DEPLOYMENT's own authority (deps.Platform at the composition
 // root). It is a constructor parameter rather than a setter because it is the
-// only input that, when absent, silently RETIRES a guard: a zero value makes
-// foreignFiringEntity answer false for every entity, so the framework would
-// write to an imported mirror with nothing logged and nothing counted
-// (ADR-102 d5; #1096). Every other capability here degrades loudly or is
-// nil-safe, so a forgotten setter costs a feature; a forgotten authority costs
-// the contract. Making it unrepresentable is cheaper than testing for it.
+// only input whose absence changes what the guard MEANS rather than what it
+// does: a zero value makes foreignFiringEntity answer TRUE for every entity, so
+// every framework write to a firing entity is skipped — counted and logged, but
+// skipped for the deployment's own entities as well as for imported mirrors, and
+// a rule chained off $entity.triple.rule.spawned_task stops firing (ADR-102 d5;
+// #1096). That is the safe direction and it is deliberate; it is still an
+// executor that cannot do its job. Every other capability here degrades loudly
+// or is nil-safe, so a forgotten setter costs a feature; a forgotten authority
+// costs the contract.
+//
+// A parameter does not make the absent-authority state unrepresentable — a zero
+// PlatformMeta compiles fine, and
+// TestPublishAgentThroughExportedFullConstructorSkipsForeignSpawnedTask
+// represents it and asserts the fail-closed answer. What a parameter makes it is
+// UNFORGETTABLE: the caller has to write something in that position. The two
+// seams that could supply nothing at all are closed separately —
+// CreateRuleProcessor refuses an empty deps.Platform, and initializeStateTracker
+// refuses a NATS-backed processor whose SetPlatform was never called.
 //
 // This is the constructor the production path uses whenever a NATS client is
 // present, and the only one that receives a KV writer. Of the three convenience

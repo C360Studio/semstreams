@@ -17,9 +17,12 @@ import (
 // green.
 //
 // The rule engine mints trigger identities and run-scope state under this pair
-// and decides foreign-vs-local by comparing against it, so an absent pair would
-// make the engine either mint an invalid identity or judge every firing entity
-// local — both silently.
+// and decides foreign-vs-local by comparing against it. An absent pair would
+// therefore mint an invalid identity, and would leave a write guard that can no
+// longer discriminate: foreignFiringEntity fails CLOSED, so under an empty pair
+// every firing entity reads FOREIGN and every framework write to it is declined.
+// Safe, but wrong for the deployment's own entities, and only counted and logged
+// at Info — a rule chained off $entity.triple.rule.spawned_task just stops.
 func TestCreateRuleProcessorRefusesAbsentDeploymentAuthority(t *testing.T) {
 	rawConfig := json.RawMessage(`{"pack_id":"refusal-pin"}`)
 
