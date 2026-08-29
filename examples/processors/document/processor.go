@@ -186,7 +186,7 @@ func (p *Processor) processSensorDocument(input map[string]any) (*SensorDocument
 		Category:    getStringOpt(input, "category"),
 		Tags:        getStringSlice(input, "tags"),
 	}
-	sensorDoc.EntityIDValue = SensorMintDocumentEntityID(p.authority, sensorDoc.Category, sensorDoc.ID)
+	sensorDoc.EntityIDValue = MintSensorDocumentEntityID(p.authority, sensorDoc.Category, sensorDoc.ID)
 
 	return sensorDoc, nil
 }

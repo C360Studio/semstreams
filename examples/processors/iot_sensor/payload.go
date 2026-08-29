@@ -56,7 +56,12 @@ func buildSensorReading(fields map[string]any) (any, error) {
 	if v, ok := fields["ZoneEntityID"].(string); ok {
 		msg.ZoneEntityID = v
 	}
-	if v, ok := fields["EntityIDValue"].(string); ok {
+	// Keyed by the WIRE name, not the Go field name: Builder's documented
+	// fallback is a JSON round-trip through Factory, so a builder must read
+	// what the JSON carries. Every other field on this type is untagged, so
+	// its Go name and wire name coincide; EntityIDValue is the one field
+	// where they differ.
+	if v, ok := fields["entity_id"].(string); ok {
 		msg.EntityIDValue = v
 	}
 
@@ -109,11 +114,11 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
 		},
 		Builder: buildSensorReading,
 		Example: map[string]any{
-			"DeviceID":      "sensor-042",
-			"SensorType":    "temperature",
-			"Value":         23.5,
-			"Unit":          "celsius",
-			"EntityIDValue": "acme.dep1.sensor.environmental.temperature.sensor-042",
+			"DeviceID":   "sensor-042",
+			"SensorType": "temperature",
+			"Value":      23.5,
+			"Unit":       "celsius",
+			"entity_id":  "acme.dep1.sensor.environmental.temperature.sensor-042",
 		},
 	}); err != nil {
 		return err
@@ -127,10 +132,10 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
 			return &Zone{}
 		},
 		Example: map[string]any{
-			"ZoneID":        "warehouse-7",
-			"ZoneType":      "warehouse",
-			"Name":          "Main Warehouse",
-			"EntityIDValue": "acme.dep1.zone.facility.warehouse.warehouse-7",
+			"ZoneID":    "warehouse-7",
+			"ZoneType":  "warehouse",
+			"Name":      "Main Warehouse",
+			"entity_id": "acme.dep1.zone.facility.warehouse.warehouse-7",
 		},
 	})
 }

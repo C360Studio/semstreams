@@ -38,10 +38,10 @@ func (s *SensorDocument) EntityID() string {
 	return s.EntityIDValue
 }
 
-// SensorMintDocumentEntityID mints a sensor document's federated entity ID under
+// MintSensorDocumentEntityID mints a sensor document's federated entity ID under
 // the deployment authority (ADR-102 d2): system = document, domain = sensor.
 // Example: "acme.dep1.document.sensor.temperature.sensor-doc-001"
-func SensorMintDocumentEntityID(authority types.PlatformMeta, category, id string) string {
+func MintSensorDocumentEntityID(authority types.PlatformMeta, category, id string) string {
 	if category == "" {
 		category = defaultDocumentCategory
 	}
@@ -206,7 +206,7 @@ func (s *SensorDocument) Validate() error {
 		return fmt.Errorf("title is required")
 	}
 	if s.EntityIDValue == "" {
-		return fmt.Errorf("entity_id is required; mint it with SensorMintDocumentEntityID under the deployment authority")
+		return fmt.Errorf("entity_id is required; mint it with MintSensorDocumentEntityID under the deployment authority")
 	}
 	return nil
 }

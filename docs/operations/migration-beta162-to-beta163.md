@@ -543,9 +543,23 @@ composed them declared one authority at the top level and a different one on the
 2. **`OrgID` and `Platform` leave the wire shape of all seven example payload types** — `SensorReading`, `Zone`,
    `Document`, `Maintenance`, `Observation`, `SensorDocument`, `WeatherReading`. Each now carries one
    `entity_id` field holding the identity its processor minted, and `EntityID()` returns that value rather than
-   recomputing it. A minting function sits beside each type (`SensorReadingEntityID`, `ZoneEntityID`,
-   `DocumentEntityID`, `MaintenanceEntityID`, `ObservationEntityID`, `SensorDocumentEntityID`,
-   `WeatherReadingEntityID`), each taking `types.PlatformMeta` — `component.Dependencies.Platform`, verbatim.
+   recomputing it. A minting function sits beside each type, each taking `types.PlatformMeta` —
+   `component.Dependencies.Platform`, verbatim:
+
+   | Payload type | Package | Minting function |
+   |---|---|---|
+   | `SensorReading` | `iot_sensor` | `SensorReadingEntityID` |
+   | `Zone` | `iot_sensor` | `ZoneEntityID` |
+   | `Document` | `document` | `MintDocumentEntityID` |
+   | `Maintenance` | `document` | `MintMaintenanceEntityID` |
+   | `Observation` | `document` | `MintObservationEntityID` |
+   | `SensorDocument` | `document` | `MintSensorDocumentEntityID` |
+   | `WeatherReading` | `weather_station` | `WeatherReadingEntityID` |
+
+   The `document` package's four carry a `Mint` prefix because `document.DocumentEntityID` stutters under revive.
+   The prefix went on all four for within-package consistency, not on the other three packages, whose names do not
+   stutter. If you rename these in your own copy, scope the edit to the package: `ObservationEntityID` is a
+   substring of the unrelated `agentic.TryWebObservationEntityID`, and a tree-wide substitution rewrites it.
 
 3. **`NewProcessor` takes the deployment authority, not a config struct.** The `Config` struct that held
    `OrgID` / `Platform` in each of the three example packages is deleted; `NewProcessor(deps.Platform)` replaces
