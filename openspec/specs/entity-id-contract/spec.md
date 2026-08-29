@@ -438,7 +438,7 @@ NOT be registered.
 
 #### Scenario: the reserved domain set is closed
 
-- **GIVEN** the exported framework-reserved domain set
+- **GIVEN** the framework-reserved domain set, reachable outside its package only through `IsFrameworkEntityDomain`
 - **WHEN** it is compared against `{agent, ops, graph}`
 - **THEN** it is exactly that set, and `gateddag` is NOT reserved because the gated-DAG family re-slots under `agent`
 - **AND** the test that verifies this is `TestFrameworkEntityDomainsIsTheClosedReservedSet`
@@ -449,7 +449,7 @@ NOT be registered.
 - **WHEN** that literal is removed and the entity-ID corpus audit runs
 - **THEN** the builder is reported with reason `domain_unregistered`
 - **AND** restoring the literal returns the corpus to zero findings
-- **AND** the evidence is the mutation recorded in `conformance.md`
+- **AND** the test that verifies this is `TestAuditFlagsUnregisteredDomain`
 
 #### Scenario: two producers may declare one domain with nothing reporting it
 

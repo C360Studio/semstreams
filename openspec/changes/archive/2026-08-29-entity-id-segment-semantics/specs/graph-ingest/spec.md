@@ -14,8 +14,9 @@ positions 1–2 differ from the deployment's MUST be rejected. On a declared imp
 1–2 equal the deployment's MUST be rejected, and a foreign candidate MUST be persisted with its identity bytes
 unchanged. Each rejection MUST be metered exactly once as `mutation_rejections{reason="authority_foreign"}` or
 `{reason="authority_claimed"}` and MUST emit a loud log naming the lane and the segment index, never the identity.
-This holds on the direct in-process lane too: it carries no NATS subject, so its metric and log name the lane as
-`arrival="direct"` rather than omitting the record.
+This holds on the direct in-process lane too: it carries no NATS subject, so it names the lane rather than omitting
+the record — `direct` in the metric's `subject` label, which the other lanes fill with their arrival subject, and in
+the log's own `arrival` attribute.
 No configuration MAY disable the check. The import declaration and the envelope `source` string are the only
 provenance this requirement records; it authenticates nothing.
 
@@ -109,7 +110,7 @@ then it is the only record in the capability's spec that an accepted ADR-102 cla
 - **WHEN** it is used as the subject of an in-process `CreateEntity`, `MergeEntity`, hierarchy inverse-edge append,
   batch append, or revision-checked delete — no NATS request, no arrival subject
 - **THEN** the caller receives the coded authority error AND
-  `mutation_rejections{arrival="direct",reason="authority_foreign"}` increments exactly once
+  `mutation_rejections{subject="direct",reason="authority_foreign"}` increments exactly once
 - **AND** exactly one WARN is emitted for that call, naming the lane and the segment index and never the identity
 - **AND** the test that verifies this is `TestAuthorityGateMetersDirectPersistenceRejectionsOnEveryDirectSeam`
 
@@ -164,7 +165,7 @@ read as one distinct declined entity: `publish_agent` fans out over `for_each` w
 so an action fanning out over N items on a single imported firing entity MUST report N skips for that ONE entity.
 The counter is named for the writes it covers rather than for the run anchor, because
 under `run_scope` `inherit` or `none` no anchor is in play and only the `rule.task.spawned` back-reference is
-skipped. Issue #1096 is complete only when this path is implemented and tested.
+skipped.
 
 #### Scenario: a rule firing on an imported loop links the local run without writing to the import
 
