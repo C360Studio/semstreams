@@ -379,6 +379,11 @@ func TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity(t *testing.T
 				"never the firing entity, which is what makes 3 increments ONE declined entity", index)
 	}
 
+	// One Info line per dispatch too, matching the counter — the requirement says
+	// "ONE Info log per dispatch", and a single-dispatch test cannot see it.
+	assert.Len(t, h.logs.withMessage(foreignFiringSkipLogMessage), 3,
+		"the log's unit is the counter's unit: three declined dispatches, three lines")
+
 	// The other half of the same fact: however many times it was declined, only
 	// one entity was ever in play, and nothing was written to it.
 	assert.NotContains(t, h.mutator.subjects(), runScopeImportedLoop,

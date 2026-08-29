@@ -141,7 +141,8 @@ skipped. Issue #1096 is complete only when this path is implemented and tested.
 - **GIVEN** the same deployment and the same single imported loop
   `foreign.dep9.agentic-loop.agent.execution.<uuid>`
 - **WHEN** one `publish_agent` action with `run_scope=new` fans out over a `for_each` list of 3 items on it
-- **THEN** 3 tasks are dispatched and `rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` reads 3
+- **THEN** 3 tasks are dispatched, `rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` reads 3,
+  and 3 Info lines are emitted — the log's unit is the counter's unit
 - **AND** those 3 increments describe ONE declined entity, not three: all 3 dispatched tasks carry the same `run_id`,
   which is derived from the firing entity, so the firing entity is invariant across the fan-out and the counter MUST
   NOT be read as a count of distinct peer entities

@@ -1868,7 +1868,9 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 	// entityID does not vary across the fan-out.
 	// Which writes are actually in play depends on run_scope — under
 	// inherit|none there is no anchor and only the back-reference is skipped,
-	// which is why neither the counter nor the log names the run anchor.
+	// which is why neither the counter's NAME nor the log's MESSAGE is about the
+	// run anchor. The log's `skipped` field names whichever writes this dispatch
+	// actually declined.
 	foreignFiring := e.foreignFiringEntity(entityID)
 	recordForeignSkip, flushForeignSkips := e.foreignFiringSkipRecorder(ec)
 	// Deferred so the one Info line names EVERY write this dispatch declined —
