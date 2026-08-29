@@ -11,7 +11,9 @@ held model, loop, and AgentRun allowlist. New production legacy callers SHALL fa
 #### Scenario: Stage A compiles with held callers
 
 - **WHEN** tools and dispatch migrate to the typed entry point
-- **THEN** held model, loop, and AgentRun continue to compile against legacy
+- **THEN** binding-local wrappers accept `DeliveryAttempt` and delegate unchanged bytes to transport-agnostic domain
+  handlers
+- **AND** held model, loop, and AgentRun continue to compile against legacy
 - **AND** their configuration and runtime behavior remain unchanged
 
 #### Scenario: final legacy removal

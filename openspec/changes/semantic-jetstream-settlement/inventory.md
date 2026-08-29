@@ -169,9 +169,13 @@ zero-caller removal gate.
 
 ### Adopter seam
 
-A component author receives an immutable delivery observation and need not predict or parse native JetStream
-metadata. Existing callbacks fail at compile time until they accept the added value; they may ignore it. Missing,
-erroneous, nil, or zero-number metadata fails before Data or work with typed
+A component author defining a typed binding receives an immutable delivery observation and need not predict or parse
+native JetStream metadata. An existing `DeliveryWork` binding fails at compile time until its binding callback
+accepts the added value; it may ignore it. The three current Stage A bindings SHALL use binding-local wrappers that
+accept and ignore `DeliveryAttempt`, then delegate unchanged bytes to the existing tools and dispatch domain
+handlers. Those domain handlers and their direct tests remain context-plus-bytes and transport-agnostic.
+
+Missing, erroneous, nil, or zero-number metadata fails before Data or work with typed
 `DeliveryMetadataUnavailableError`, Quarantine, and `OwnerStopRequired`.
 
 A redelivery observation is conservative. It does not prove prior work ran because the prior process may have
