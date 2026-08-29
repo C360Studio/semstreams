@@ -1044,6 +1044,17 @@ package; both declarations are now on the payload registrations) and
       narrow but WRONG for `run_scope` `inherit`/`none`, where no anchor is in play and only `rule.task.spawned` is
       skipped. Renamed `rule_foreign_firing_writes_skipped_total`, spec restated per-dispatch: free now (no
       dashboard, no alert, no sister consumer) and a breaking series rename later.
+      **ROUND 2 (HIGH-1) corrected that round-1 restatement, which was itself wrong.** It read "an action declining
+      N imported entities MUST report N skips", making a false causal claim about `for_each`: `executePublishAgent`
+      passes the SAME `ExecutionContext` to every iteration and `publishAgentOnce` reads `entityID` from it, so the
+      firing entity is INVARIANT across the fan-out. N items on ONE import are N declined DISPATCHES for one
+      entity, and an operator reading the counter as "distinct peer entities declined" over-counts by the fan-out
+      factor. The counted unit is now stated everywhere as one (firing entity x `for_each` item). The claim was
+      also unobservable — `runScopeNewAction` carries no `ForEach`, so both 2.6 tests assert a single dispatch —
+      and is now pinned by `TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity` (3 items, 1 import, 3
+      increments), with a matching `#### Scenario` in the delta. Mutation-checked: moving the recorder's `recorded`
+      latch onto `ActionExecutor` (per-dispatch → per-action) fails the new test 1 != 3 while
+      `TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite` still passes.
       An executor with no platform answers `false` (cannot judge) rather than "everything is foreign". Round 1
       HIGH-1 corrected the reason WHY that is safe: it is not the `CreateRuleProcessor` refusal, which guards
       `deps.Platform` and not the hop into the executor. The authority is now a CONSTRUCTOR parameter of
@@ -1108,6 +1119,21 @@ package; both declarations are now on the payload registrations) and
       (1319 → 1304: slice C deleted the `org_id`/`platform` literals it retired) ·
       `task schema:generate && git diff --exit-code schemas/ specs/` clean ·
       `openspec validate --all --strict` `Totals: 53 passed, 0 failed`.
+
+      **RE-RUN after review round 2 and after merging `origin/main` at `fb0cb71d`, all green, serialized on a host
+      verified idle first (no `go test`/`task`/compose process, no container):**
+
+      | Gate | Result |
+      |---|---|
+      | `go mod tidy -diff` (new required Lint step on `main` as of `fb0cb71d`) | exit 0 |
+      | `task lint` | exit 0, no findings; `go fmt` left the tree unmodified |
+      | `go test -race -count=1 ./...` | exit 0, **153 `ok`, 0 `FAIL`** |
+      | `go test -tags=integration -race -count=1 -p 2 ./...` (what CI runs) | exit 0, **153 `ok`, 0 `FAIL`**; `processor/rule` 58.129s, `processor/graph-ingest` 33.069s |
+      | `go test ./test/contract/...` | `ok`, 2.504s |
+      | `task entity-id:audit` | `entity ID audit passed: 1305 structured candidates across 1 roots`, 0 findings. Baseline re-measured at `b5b106e4` in a scratch worktree: **1303** — the +2 are exactly this round's two never-persisted probe consts (`authorityForeignAbsentID`, `authorityLocalAbsentID`), and neither trips a rule |
+      | `task schema:generate && git status --short schemas/ specs/` | clean, no drift |
+      | `openspec validate --all --strict --no-interactive` | `Totals: 53 passed, 0 failed (53 items)` |
+      | `openspec validate entity-id-segment-semantics --strict` | `Change 'entity-id-segment-semantics' is valid` |
 - [ ] 7.2 Covering e2e tiers on the landing branch, one at a time on the shared host, results recorded verbatim:
       `task e2e:core`; `task e2e:structural`; `task e2e:statistical`; `task e2e:semantic`; `task e2e:agentic`;
       `task e2e:lessons`; `task e2e:lifecycle`; `task e2e:ops`; `task e2e:crud-tools`; `task e2e:research-graph`.
@@ -1212,9 +1238,19 @@ package; both declarations are now on the payload registrations) and
       those three tiers are green. A grep for a literal shape cannot distinguish the two classes; only asking "does
       this reach graph-ingest?" can, and that is the question I should have enumerated on.
 
-      The `PutKV` fixtures are NOT chased here (coordinator's direction) and are filed as coverage debt: they are
-      test fixtures writing around a boundary they are not asserting, so nothing regresses today, but a fixture that
-      bypasses the gate cannot notice if the gate stops working.
+      The `PutKV` fixtures are NOT chased here (coordinator's direction) and are filed as coverage debt in
+      **gh#1161**: they are test fixtures writing around a boundary they are not asserting, so nothing regresses
+      today, but a fixture that bypasses the gate cannot notice if the gate stops working. Round 2 (MEDIUM-2) found
+      that "filed" had been asserted with no issue behind it — the prose WAS the record — and that the `ops` fixture
+      is the sharp case: it seeds foreign-authority entities straight into `ENTITY_STATES`, manufacturing exactly
+      the state ADR-102 d5 exists to prevent.
+
+      **AFTER REVIEW ROUND 2 — no tier re-run, and the reason is measured, not assumed.** Round 2's production
+      diff is comment-only: `git diff b5b106e4 HEAD -- processor/rule/actions.go processor/rule/metrics.go`
+      filtered to non-comment, non-blank changed lines returns NOTHING. The two new tests are both
+      `//go:build integration` and run in the integration gate above. The remaining changes are the spec delta,
+      `conformance.md`, this file, and `docs/operations/migration-beta162-to-beta163.md`. No tier exercises a path
+      whose behaviour moved, so RUN 2's ten green tiers stand for the round-2 head.
 
 - [ ] 7.3 Implementation review by `semstreams-reviewer`; verdict and every finding's disposition recorded in
       `conformance.md`.
@@ -1246,6 +1282,18 @@ package; both declarations are now on the payload registrations) and
       **Round 3** at `8e3411c8` (1 BLOCKING, 2 HIGH, 3 MEDIUM, 3 NIT): the owner then ruled a second time on the
       same day — drop the overlap reporting and the authority type entirely — which dissolved the BLOCKING and
       HIGH-1. Dispositions for every round are in `conformance.md`. Re-review is outstanding.
+      **The rounds above are SLICE A's** (PR #1101 lineage). Slice B's own rounds, on PR #1148:
+      **Slice B round 1:** CHANGES REQUESTED at `b6b99f5f` (0 BLOCKING, 3 HIGH, 6 MEDIUM, 3 NIT). All four findings
+      slice B carried in were confirmed; the gap was tests for slice B's own fail-closed guards — the reviewer ran
+      nine mutations and four were NOT KILLED. Dispositions in `conformance.md` §"Slice B implementation review —
+      round 1".
+      **Slice B round 2:** CHANGES REQUESTED at `b5b106e4` (0 BLOCKING, 1 HIGH, 3 MEDIUM, 1 NIT). Items A and B of
+      the round passed fully — all four round-1 mutants now die by their own named tests, the HIGH-1 mutation no
+      longer compiles, both construction branches are killed independently, no caller was lost. Every remaining
+      finding was in the prose/spec layer, and **two of the five (HIGH-1, MEDIUM-3) were defects the round-1 FIXES
+      introduced**, which is the round's carry-forward: a remedy is new code and needs the original diff's
+      adversarial pass. Dispositions and the round-2 mutation evidence are in `conformance.md` §"Slice B
+      implementation review — round 2". Re-review of round 2 is outstanding.
 - [ ] 7.4 Owner-run cross-agent round where the owner asks for it; fixes and re-review recorded in `conformance.md`.
 - [ ] 7.5 `openspec archive entity-id-segment-semantics` + spec sync as the final content commit; narrow reviewer
       check of the archive/spec sync recorded.
