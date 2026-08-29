@@ -350,6 +350,22 @@ func (s *Scenario) verifyDispatchAcrossReplacement(
 	}
 	restored = true
 
+	return s.verifyDispatchRecoveryAfterQuarantine(
+		ctx, result, controller, userStream, consumer,
+		quarantinedInfo.Delivered.Consumer, terminal, responseSubject,
+	)
+}
+
+func (s *Scenario) verifyDispatchRecoveryAfterQuarantine(
+	ctx context.Context,
+	result *scenarios.Result,
+	controller composeProcessController,
+	userStream jetstream.Stream,
+	consumer jetstream.Consumer,
+	quarantinedDeliveries uint64,
+	terminal dispatchTerminalFixture,
+	responseSubject string,
+) error {
 	blocked, blockedResponseSubject, err := s.newDispatchTerminal(ctx, "post-latch")
 	if err != nil {
 		return err
@@ -364,9 +380,9 @@ func (s *Scenario) verifyDispatchAcrossReplacement(
 	if err != nil {
 		return fmt.Errorf("read post-latch dispatch consumer: %w", err)
 	}
-	if postLatchInfo.Delivered.Consumer != quarantinedInfo.Delivered.Consumer {
+	if postLatchInfo.Delivered.Consumer != quarantinedDeliveries {
 		return fmt.Errorf("dispatch unlimited lane retried after quarantine: deliveries %d -> %d",
-			quarantinedInfo.Delivered.Consumer, postLatchInfo.Delivered.Consumer)
+			quarantinedDeliveries, postLatchInfo.Delivered.Consumer)
 	}
 
 	if err := s.replaceSemStreams(ctx, controller); err != nil {
