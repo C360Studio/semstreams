@@ -16,8 +16,8 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 
 - [ ] 2.1 Characterize every legacy ACK, 30-second retry, Term, 5-second cancellation, InProgress, and error-chain path.
 - [ ] 2.2 Add pre-implementation tests for all five DeliveryDecision constants, zero/unknown decisions, the
-      error-last DeliveryWork signature, every valid/invalid tuple, error unwrapping, typed panic quarantine, and the
-      absence of a disposition constructor family.
+      exact error-last `DeliveryWork(context.Context, []byte)` signature, per-delivery and nil payloads, every
+      valid/invalid tuple, error unwrapping, typed panic quarantine, and the absence of a disposition constructor family.
 - [ ] 2.3 Add the complete DeliveryResult decision/handling truth table: exact requested-decision preservation, typed
       causes, cause reachability, local-method predicates, false server confirmation, quarantine, and
       OwnerStopRequired.
@@ -25,10 +25,11 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       of semantic cause across local method success/failure.
 - [ ] 2.5 Add pre-implementation heartbeat-policy tests for nil/ended context, nil work, invalid retry,
       heartbeat/AckWait/BackOff
-      bounds, equality, canonical default, defensive copy, and zero runtime defense before message I/O.
+      bounds, equality, canonical default, defensive copy, and zero runtime defense before Data or any message method.
 - [ ] 2.6 Add exact current/target nine-binding configuration tests and same-config validation/acquisition conformance.
-- [ ] 2.7 Implement DeliveryDecision/DeliveryWork, policies, result, cancel/join/interpret, and permanent
-      `ConsumeDeliveryWithHeartbeat` using only a private terminal-method executor.
+- [ ] 2.7 Implement DeliveryDecision/DeliveryWork, policies, one Data extraction per admitted delivery, private message
+      ownership, cancel/join/interpret, and permanent `ConsumeDeliveryWithHeartbeat` using only a private terminal
+      method executor.
 - [ ] 2.8 Prove `ConsumeWithHeartbeat`, `TerminateDelivery(error) error`, and `PermanentDeliveryError`
       characterization unchanged after private executor extraction.
 - [ ] 2.9 Add the deprecation notice and exact shrinking AST allowlist for `ConsumeWithHeartbeat` only; docs/examples

@@ -22,8 +22,12 @@ held model, loop, and AgentRun allowlist. New production legacy callers SHALL fa
 
 ### Requirement: delivery work returns a validated decision/error tuple
 
-Typed work SHALL implement `DeliveryWork func(context.Context) (DeliveryDecision, error)`. The exported decisions
+Typed work SHALL implement `DeliveryWork func(context.Context, []byte) (DeliveryDecision, error)`. The exported decisions
 SHALL be Invalid, ACK, Retry, Terminate, and Quarantine using the exact `DeliveryDecision*` constants.
+
+The framework SHALL validate non-nil work before acquisition. For each admitted delivery it SHALL supply that
+delivery's body as read-only invocation-scoped bytes and SHALL NOT expose `jetstream.Msg` or another
+settlement-capable interface to work.
 
 ACK SHALL require nil error. Retry, Terminate, and Quarantine SHALL require non-nil error. Invalid, unknown, and every
 mismatched tuple SHALL preserve the requested decision, attempt no terminal method, expose an
@@ -38,6 +42,24 @@ not be deprecated or removed by this change.
 - **WHEN** work returns `DeliveryDecisionAck, nil`
 - **THEN** the framework attempts Ack
 - **AND** the result records ACK with nil semantic cause
+
+#### Scenario: setup validates work before acquisition
+
+- **WHEN** DeliveryWork is nil
+- **THEN** heartbeat-policy validation fails
+- **AND** no consumer is acquired and no message operation occurs
+
+#### Scenario: policy is reused across deliveries
+
+- **WHEN** one validated policy handles two deliveries with different bodies
+- **THEN** each invocation receives its own current body
+- **AND** no payload is retained in the policy
+
+#### Scenario: settlement authority does not escape
+
+- **WHEN** typed work runs
+- **THEN** it receives context and read-only payload bytes only
+- **AND** Ack, Nak, Term, and InProgress remain exclusively inside natsclient
 
 #### Scenario: decision requires a cause
 
@@ -98,6 +120,12 @@ present, otherwise positive AckWait, otherwise 30 seconds. Invalid AckWait/BackO
 - **WHEN** an operator supplies BackOff
 - **THEN** validation observes its shortest entry
 - **AND** rejects heartbeat above half that entry without clamping
+
+#### Scenario: invalid runtime policy touches no message data
+
+- **WHEN** the runtime entry point receives a zero or invalid heartbeat policy
+- **THEN** it calls neither Data, work, heartbeat, nor terminal settlement
+- **AND** it returns the invalid quarantined owner-stop result
 
 ### Requirement: delivery results preserve semantic and transport evidence
 

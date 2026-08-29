@@ -34,7 +34,9 @@ const (
     DeliveryDecisionQuarantine
 )
 
-type DeliveryWork func(context.Context) (DeliveryDecision, error)
+// DeliveryWork classifies one delivered payload. Data is read-only and valid
+// for this invocation; work must not retain or mutate it.
+type DeliveryWork func(context.Context, []byte) (DeliveryDecision, error)
 
 type InvalidDeliveryDecisionError struct { /* private */ }
 func (e *InvalidDeliveryDecisionError) Error() string
@@ -88,7 +90,8 @@ otherwise positive AckWait, otherwise 30 seconds. One private resolver serves va
 
 The policy defensively copies BackOff and retains callback/timing only—no context, cancel, handle, goroutine, health,
 or cross-delivery state. Zero policy fails before message I/O. Each owner passes the same config variable to validation
-and acquisition.
+and acquisition. Validation stores the work function but no payload; one policy may serve multiple deliveries and each
+invocation receives its current body.
 
 ### D5 — preserve crash schedules and lower heartbeat when admitted
 
@@ -133,6 +136,12 @@ Owner cancellation cancels work, joins it, interprets its exact decision/error t
 never replaces joined meaning. InProgress failure cancels and joins, preserves meaning, records ControlError, attempts
 no later terminal method, and sets OwnerStopRequired. Work panic is recovered inside the joined goroutine. Every task
 joins before return; no context is retained.
+
+After runtime policy defense, the typed entry point reads `msg.Data()` exactly once, launches work with those bytes,
+and runs InProgress concurrently while work is pending. Every exit joins work and normalizes its returned tuple or
+panic before branch interpretation. Control failure adds ControlError and attempts no terminal method; normal
+completion passes only Ack/Nak/NakWithDelay/Term to the private terminal executor. The settlement-capable message never
+reaches work or policy.
 
 ### D8 — private exact-owner reaction
 
@@ -180,6 +189,8 @@ from the final legacy-helper removal.
 - Remove BackOff: silently weakens tools/loop crash recovery.
 - Shared gate/supervisor/durable quarantine: duplicates component and JetStream authority.
 - Migrate held callers by implementation judgment: invents definition of done and replay safety.
+- Pass `jetstream.Msg`, a settlement-capable view, or per-delivery work closure: leaks settlement authority or weakens
+  setup-time validation.
 
 ## Verification gates
 
