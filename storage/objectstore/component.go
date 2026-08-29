@@ -978,8 +978,7 @@ func (c *Component) waitForStream(ctx context.Context, streamName string) error 
 	return errs.WrapTransient(errs.ErrStorageUnavailable, "Component", "waitForStream", fmt.Sprintf("stream %s not available after %d retries", streamName, maxRetries))
 }
 
-// Nak delays mirror the documented house precedent in
-// natsclient.ConsumeWithHeartbeat (natsclient/heartbeat.go): 30s breathing room
+// Nak delays mirror the documented heartbeat-settlement precedent: 30s breathing room
 // before retrying failed work, 5s for graceful shutdown/cancellation. They are
 // deliberately NOT operator-configurable (#727).
 const (
@@ -1005,7 +1004,7 @@ const (
 //	errs.IsInvalid             -> Term              (poison message, do not retry)
 //	anything else              -> NakWithDelay(30s) (transient/unclassified: retry)
 //
-// The delays and the Term/NAK split follow natsclient.ConsumeWithHeartbeat,
+// The delays and the Term/NAK split follow the heartbeat-settlement precedent,
 // with one DELIBERATE divergence: heartbeat lets cancellation own the outcome
 // even when work returned nil (NAK -> redeliver -> duplicate), because its
 // select can race a success report against ctx.Done(). Here a nil error means

@@ -19,6 +19,199 @@ type productionGoFile struct {
 	file *ast.File
 }
 
+type legacyHeartbeatReferenceScan struct {
+	directCalls map[string]int
+	violations  []string
+}
+
+func newDurableHandlerRetirementViolations(files []productionGoFile) []string {
+	var violations []string
+	for _, parsed := range files {
+		declarationNames := map[*ast.Ident]struct{}{}
+		if parsed.file.Name.Name == "natsclient" {
+			for _, declaration := range parsed.file.Decls {
+				switch declaration := declaration.(type) {
+				case *ast.FuncDecl:
+					if declaration.Name.Name == "NewDurableHandler" {
+						declarationNames[declaration.Name] = struct{}{}
+						violations = append(violations, parsed.rel+": function or receiver method")
+					}
+				case *ast.GenDecl:
+					for _, spec := range declaration.Specs {
+						switch spec := spec.(type) {
+						case *ast.ValueSpec:
+							for _, name := range spec.Names {
+								if name.Name == "NewDurableHandler" {
+									declarationNames[name] = struct{}{}
+									violations = append(violations, parsed.rel+": variable or constant alias")
+								}
+							}
+						case *ast.TypeSpec:
+							if spec.Name.Name == "NewDurableHandler" {
+								declarationNames[spec.Name] = struct{}{}
+								violations = append(violations, parsed.rel+": type alias")
+							}
+						}
+					}
+				}
+			}
+		}
+
+		aliases, dotImport := natsclientImportBindings(parsed.file)
+		ast.Inspect(parsed.file, func(node ast.Node) bool {
+			switch reference := node.(type) {
+			case *ast.SelectorExpr:
+				if reference.Sel.Name != "NewDurableHandler" {
+					return true
+				}
+				if qualifier, qualified := reference.X.(*ast.Ident); qualified {
+					if _, imported := aliases[qualifier.Name]; imported {
+						violations = append(violations, parsed.rel+": qualified call or symbol reference")
+					}
+				}
+				return false
+			case *ast.Ident:
+				if reference.Name != "NewDurableHandler" ||
+					(parsed.file.Name.Name != "natsclient" && !dotImport) {
+					return true
+				}
+				if _, declaration := declarationNames[reference]; !declaration {
+					violations = append(violations, parsed.rel+": identifier call or symbol reference")
+				}
+			}
+			return true
+		})
+	}
+	return violations
+}
+
+func scanLegacyHeartbeatReferences(files []productionGoFile) legacyHeartbeatReferenceScan {
+	result := legacyHeartbeatReferenceScan{directCalls: map[string]int{}}
+	for _, parsed := range files {
+		declarationNames := map[*ast.Ident]struct{}{}
+		if parsed.file.Name.Name == "natsclient" {
+			for _, declaration := range parsed.file.Decls {
+				switch declaration := declaration.(type) {
+				case *ast.FuncDecl:
+					if declaration.Name.Name != "ConsumeWithHeartbeat" {
+						continue
+					}
+					declarationNames[declaration.Name] = struct{}{}
+					if declaration.Recv != nil || parsed.rel != "natsclient/heartbeat.go" {
+						result.violations = append(result.violations,
+							parsed.rel+": alternate function or receiver method")
+					}
+				case *ast.GenDecl:
+					for _, spec := range declaration.Specs {
+						switch spec := spec.(type) {
+						case *ast.ValueSpec:
+							for _, name := range spec.Names {
+								if name.Name == "ConsumeWithHeartbeat" {
+									declarationNames[name] = struct{}{}
+									result.violations = append(result.violations,
+										parsed.rel+": variable or constant alias")
+								}
+							}
+						case *ast.TypeSpec:
+							if spec.Name.Name == "ConsumeWithHeartbeat" {
+								declarationNames[spec.Name] = struct{}{}
+								result.violations = append(result.violations, parsed.rel+": type alias")
+							}
+						}
+					}
+				}
+			}
+		}
+
+		aliases, dotImport := natsclientImportBindings(parsed.file)
+		relevantSelector := func(selector *ast.SelectorExpr) bool {
+			qualifier, ok := selector.X.(*ast.Ident)
+			if !ok || selector.Sel.Name != "ConsumeWithHeartbeat" {
+				return false
+			}
+			_, ok = aliases[qualifier.Name]
+			return ok
+		}
+		relevantIdent := func(identifier *ast.Ident) bool {
+			return identifier.Name == "ConsumeWithHeartbeat" &&
+				(parsed.file.Name.Name == "natsclient" || dotImport)
+		}
+
+		directReferences := map[ast.Node]struct{}{}
+		ast.Inspect(parsed.file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			switch called := call.Fun.(type) {
+			case *ast.SelectorExpr:
+				if relevantSelector(called) {
+					directReferences[called] = struct{}{}
+				}
+			case *ast.Ident:
+				if relevantIdent(called) {
+					directReferences[called] = struct{}{}
+				}
+			}
+			return true
+		})
+
+		ast.Inspect(parsed.file, func(node ast.Node) bool {
+			switch reference := node.(type) {
+			case *ast.SelectorExpr:
+				if reference.Sel.Name != "ConsumeWithHeartbeat" {
+					return true
+				}
+				if relevantSelector(reference) {
+					if _, direct := directReferences[reference]; direct {
+						result.directCalls[parsed.rel]++
+					} else {
+						result.violations = append(result.violations, parsed.rel+": indirect package reference")
+					}
+				}
+				return false
+			case *ast.Ident:
+				if !relevantIdent(reference) {
+					return true
+				}
+				if _, declaration := declarationNames[reference]; declaration {
+					return true
+				}
+				if _, direct := directReferences[reference]; direct {
+					result.directCalls[parsed.rel]++
+				} else {
+					result.violations = append(result.violations, parsed.rel+": indirect identifier reference")
+				}
+			}
+			return true
+		})
+	}
+	return result
+}
+
+func natsclientImportBindings(file *ast.File) (map[string]struct{}, bool) {
+	aliases := map[string]struct{}{}
+	dotImport := false
+	for _, imported := range file.Imports {
+		importPath, err := strconv.Unquote(imported.Path.Value)
+		if err != nil || importPath != "github.com/c360studio/semstreams/natsclient" {
+			continue
+		}
+		if imported.Name == nil {
+			aliases["natsclient"] = struct{}{}
+			continue
+		}
+		switch imported.Name.Name {
+		case ".":
+			dotImport = true
+		case "_":
+		default:
+			aliases[imported.Name.Name] = struct{}{}
+		}
+	}
+	return aliases, dotImport
+}
+
 func TestConsumerPolicyProductionCallsiteCensus(t *testing.T) {
 	files := parseProductionGoFiles(t, filepath.Clean(".."))
 	internalCallers := map[string]int{}
@@ -142,49 +335,198 @@ func TestConsumerPolicyExportedClientAPICensus(t *testing.T) {
 	}
 }
 
-func TestDurableHandlerExportedAPICensus(t *testing.T) {
-	files := parseProductionGoFiles(t, ".")
-	got := map[string]string{}
-	for _, parsed := range files {
-		for _, declaration := range parsed.file.Decls {
-			fn, ok := declaration.(*ast.FuncDecl)
-			if !ok || fn.Recv != nil || fn.Name.Name != "NewDurableHandler" {
-				continue
+func TestNewDurableHandlerHasNoDeclarationOrProductionCalls(t *testing.T) {
+	files := parseProductionGoFiles(t, filepath.Clean(".."))
+	if violations := newDurableHandlerRetirementViolations(files); len(violations) != 0 {
+		t.Fatalf("retired NewDurableHandler surface remains: %v", violations)
+	}
+}
+
+func TestNewDurableHandlerRetirementRejectsAliasAndReceiverBypasses(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+	}{
+		{
+			name:   "exported variable alias",
+			source: "package natsclient\nvar NewDurableHandler = func() {}\n",
+		},
+		{
+			name: "receiver method",
+			source: "package natsclient\n" +
+				"type Client struct{}\n" +
+				"func (*Client) NewDurableHandler() {}\n",
+		},
+		{
+			name: "external qualified call",
+			source: "package fixture\n" +
+				"import nc \"github.com/c360studio/semstreams/natsclient\"\n" +
+				"func callRetired() { nc.NewDurableHandler() }\n",
+		},
+		{
+			name: "external default-import symbol",
+			source: "package fixture\n" +
+				"import \"github.com/c360studio/semstreams/natsclient\"\n" +
+				"var retired = natsclient.NewDurableHandler\n",
+		},
+		{
+			name: "external symbol taking",
+			source: "package fixture\n" +
+				"import nc \"github.com/c360studio/semstreams/natsclient\"\n" +
+				"var retired = nc.NewDurableHandler\n",
+		},
+		{
+			name: "external dot-import call",
+			source: "package fixture\n" +
+				"import . \"github.com/c360studio/semstreams/natsclient\"\n" +
+				"func callRetired() { NewDurableHandler() }\n",
+		},
+		{
+			name:   "type alias",
+			source: "package natsclient\ntype NewDurableHandler = func()\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "bypass.go"), []byte(tt.source), 0o600); err != nil {
+				t.Fatal(err)
 			}
-			got[fn.Name.Name] = compactNode(t, fn.Type)
-		}
+			if violations := newDurableHandlerRetirementViolations(parseProductionGoFiles(t, root)); len(violations) == 0 {
+				t.Fatal("retirement guard accepted bypass")
+			}
+		})
 	}
-	want := map[string]string{
-		"NewDurableHandler": "func(cfg StreamConsumerConfig, heartbeat time.Duration, work func(context.Context, []byte) error) (func(context.Context, jetstream.Msg), error)",
+}
+
+func TestNewDurableHandlerRetirementIgnoresUnrelatedSelector(t *testing.T) {
+	root := t.TempDir()
+	source := "package fixture\n" +
+		"import other \"example.com/other\"\n" +
+		"func callOther() { other.NewDurableHandler() }\n"
+	if err := os.WriteFile(filepath.Join(root, "unrelated.go"), []byte(source), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("durable handler API census = %#v, want %#v", got, want)
+	if violations := newDurableHandlerRetirementViolations(parseProductionGoFiles(t, root)); len(violations) != 0 {
+		t.Fatalf("unrelated selector classified as retired builder: %v", violations)
 	}
 }
 
 func TestLegacyHeartbeatProductionCallAllowlist(t *testing.T) {
 	files := parseProductionGoFiles(t, filepath.Clean(".."))
-	got := map[string]int{}
+	scan := scanLegacyHeartbeatReferences(files)
+	if len(scan.violations) != 0 {
+		t.Fatalf("legacy ConsumeWithHeartbeat surface violations: %v", scan.violations)
+	}
+	wantDeclaration := map[string]string{
+		"natsclient/heartbeat.go": "func(ctx context.Context, msg jetstream.Msg, heartbeatInterval time.Duration, work func(context.Context) error) error",
+	}
+	gotDeclaration := map[string]string{}
 	for _, parsed := range files {
-		ast.Inspect(parsed.file, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
+		if parsed.file.Name.Name != "natsclient" {
+			continue
+		}
+		for _, declaration := range parsed.file.Decls {
+			fn, ok := declaration.(*ast.FuncDecl)
+			if ok && fn.Name.Name == "ConsumeWithHeartbeat" {
+				gotDeclaration[parsed.rel] = compactNode(t, fn.Type)
 			}
-			selector, ok := call.Fun.(*ast.SelectorExpr)
-			if ok && selector.Sel.Name == "ConsumeWithHeartbeat" {
-				got[parsed.rel]++
-			}
-			return true
-		})
+		}
+	}
+	if !reflect.DeepEqual(gotDeclaration, wantDeclaration) {
+		t.Fatalf("legacy ConsumeWithHeartbeat declaration = %#v, want %#v", gotDeclaration, wantDeclaration)
 	}
 	want := map[string]int{
 		"agentic/agentrun/agentrun.go":         1,
 		"processor/agentic-loop/component.go":  1,
 		"processor/agentic-model/component.go": 1,
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("legacy ConsumeWithHeartbeat callers = %#v, want exact held allowlist %#v", got, want)
+	if !reflect.DeepEqual(scan.directCalls, want) {
+		t.Fatalf("legacy ConsumeWithHeartbeat callers = %#v, want exact held allowlist %#v", scan.directCalls, want)
+	}
+}
+
+func TestLegacyHeartbeatGuardRejectsTakingOrAliasingSymbol(t *testing.T) {
+	root := t.TempDir()
+	source := "package fixture\n" +
+		"import nc \"github.com/c360studio/semstreams/natsclient\"\n" +
+		"var ExportedLegacyHeartbeat = nc.ConsumeWithHeartbeat\n" +
+		"func callIndirect() { legacy := nc.ConsumeWithHeartbeat; _ = legacy(nil, nil, 0, nil) }\n"
+	if err := os.WriteFile(filepath.Join(root, "indirect.go"), []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scan := scanLegacyHeartbeatReferences(parseProductionGoFiles(t, root))
+	if len(scan.violations) != 2 {
+		t.Fatalf("legacy indirect-reference violations = %v, want two", scan.violations)
+	}
+	if len(scan.directCalls) != 0 {
+		t.Fatalf("legacy direct calls = %#v, want none", scan.directCalls)
+	}
+}
+
+func TestLegacyHeartbeatGuardRejectsAlternateExportedSurface(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+	}{
+		{
+			name:   "variable alias",
+			source: "package natsclient\nvar ConsumeWithHeartbeat = func() {}\n",
+		},
+		{
+			name: "receiver method",
+			source: "package natsclient\n" +
+				"type Client struct{}\n" +
+				"func (*Client) ConsumeWithHeartbeat() {}\n",
+		},
+		{
+			name:   "type alias",
+			source: "package natsclient\ntype ConsumeWithHeartbeat = func()\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "alternate.go"), []byte(tt.source), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			scan := scanLegacyHeartbeatReferences(parseProductionGoFiles(t, root))
+			if len(scan.violations) == 0 {
+				t.Fatal("legacy surface guard accepted alternate export")
+			}
+		})
+	}
+}
+
+func TestLegacyHeartbeatGuardCountsDotImportAsDirectCall(t *testing.T) {
+	root := t.TempDir()
+	source := "package fixture\n" +
+		"import . \"github.com/c360studio/semstreams/natsclient\"\n" +
+		"func callLegacy() { _ = ConsumeWithHeartbeat(nil, nil, 0, nil) }\n"
+	if err := os.WriteFile(filepath.Join(root, "dot.go"), []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scan := scanLegacyHeartbeatReferences(parseProductionGoFiles(t, root))
+	if len(scan.violations) != 0 {
+		t.Fatalf("dot-import direct call reported as indirect: %v", scan.violations)
+	}
+	want := map[string]int{"dot.go": 1}
+	if !reflect.DeepEqual(scan.directCalls, want) {
+		t.Fatalf("dot-import direct calls = %#v, want %#v", scan.directCalls, want)
+	}
+}
+
+func TestLegacyHeartbeatGuardIgnoresUnrelatedSelector(t *testing.T) {
+	root := t.TempDir()
+	source := "package fixture\n" +
+		"import other \"example.com/other\"\n" +
+		"func callOther() { other.ConsumeWithHeartbeat() }\n"
+	if err := os.WriteFile(filepath.Join(root, "unrelated.go"), []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scan := scanLegacyHeartbeatReferences(parseProductionGoFiles(t, root))
+	if len(scan.violations) != 0 || len(scan.directCalls) != 0 {
+		t.Fatalf("unrelated selector classified as legacy: violations=%v direct=%#v", scan.violations, scan.directCalls)
 	}
 }
 

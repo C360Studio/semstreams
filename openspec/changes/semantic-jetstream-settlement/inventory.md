@@ -86,6 +86,11 @@ Five production direct `ConsumeWithHeartbeat` owner sites represent nine raw bin
 `NewDurableHandler` has zero measured production and sister adopters. SemDev has two direct legacy-helper callers.
 SemMachina retains older `ConsumeDurable` surfaces, which are migration evidence rather than baseline compatibility.
 
+Stage A repeated the zero-adopter measurement on 2026-08-29. The repository production AST census found only the
+builder declaration and its internal legacy-helper call, with no caller. A read-only search across active C360 sister
+checkouts, excluding SemStreams and its worktrees, found no `NewDurableHandler` occurrence. The permanent typed API,
+Stage A migration, owner review, and #1155 replacement proof are present, so D11's removal gate is satisfied.
+
 ## Measured gaps
 
 | Missing fact | Current spelling | Gap |

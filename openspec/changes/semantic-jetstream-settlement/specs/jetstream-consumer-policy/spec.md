@@ -1,5 +1,73 @@
 # jetstream-consumer-policy Delta
 
+## MODIFIED Requirements
+
+### Requirement: Every exported port-backed consumption operation requires policy context
+
+`ConsumeStreamWithConfig` and `ConsumeStreamWithConfigContexts` SHALL require nonempty component and port context,
+complete every fallible stream, consumer, policy, and observation setup step before delivery, and then return the exact
+native `jetstream.ConsumeContext` created at the delivery commit point. No fallible setup step SHALL follow successful
+`Consumer.Consume`. Former error-only signatures and a stateful SemStreams managed-consumer wrapper SHALL NOT remain.
+
+The canonical signatures SHALL be:
+
+```go
+func (c *Client) ConsumeStreamWithConfig(
+    ctx context.Context,
+    owner PortConsumerContext,
+    cfg StreamConsumerConfig,
+    handler func(context.Context, jetstream.Msg),
+) (jetstream.ConsumeContext, error)
+
+func (c *Client) ConsumeStreamWithConfigContexts(
+    setupCtx context.Context,
+    handlerCtx context.Context,
+    owner PortConsumerContext,
+    cfg StreamConsumerConfig,
+    handler func(context.Context, jetstream.Msg),
+) (jetstream.ConsumeContext, error)
+```
+
+Temporary `ConsumeStreamWithConfigHandle` and `ConsumeStreamWithConfigContextsHandle` aliases or bridges SHALL NOT
+remain after the canonical cutover.
+
+`ConsumeDurable` and `NewDurableHandler` SHALL NOT exist or have aliases. A durable heartbeat owner SHALL validate
+`HeartbeatDeliveryPolicy` from the exact `StreamConsumerConfig` used for acquisition, pass a handler that invokes
+`ConsumeDeliveryWithHeartbeat` to the canonical port-backed operation, inspect the returned `DeliveryResult`, and
+retain the exact native handle.
+
+#### Scenario: setup fails before commit
+- **GIVEN** any setup or observation step fails
+- **WHEN** the operation returns
+- **THEN** delivery has not begun and no lifecycle handle is published
+
+#### Scenario: split-context setup returns ownership
+- **WHEN** split-context setup succeeds
+- **THEN** setup observation used setup context and handlers use handler context
+- **AND** the owner receives the exact native handle for Drain and Closed
+
+#### Scenario: Missing owner context fails before I/O
+- **WHEN** a port-backed operation receives empty component or port context
+- **THEN** it returns typed invalid configuration before consumer creation
+
+#### Scenario: Split-context consumption remains observed
+- **GIVEN** setup and handler lifetimes differ
+- **WHEN** `ConsumeStreamWithConfigContexts` creates the consumer
+- **THEN** setup observation uses setup context and delivered handlers use handler context
+- **AND** the owner receives the exact native handle
+
+#### Scenario: Temporary bridge is absent
+- **WHEN** the canonical consumption surface is enumerated
+- **THEN** neither temporary `*Handle` method exists
+- **AND** every SemStreams caller uses the canonical method and retains its result
+
+#### Scenario: Transitional durable builders are absent
+
+- **WHEN** the durable-consumption surface and production call sites are enumerated
+- **THEN** neither `ConsumeDurable` nor `NewDurableHandler` exists or has an alias
+- **AND** durable heartbeat owners compose the permanent typed policy and delivery APIs with an owner-held canonical
+  consume operation
+
 ## ADDED Requirements
 
 ### Requirement: typed semantic heartbeat settlement is additive during held migration
@@ -255,13 +323,15 @@ private. #759 SHALL add no exported pull settlement operation and SHALL not modi
 - **THEN** they may call the same private terminal-method executor
 - **AND** no shared helper owns admission, a native handle, health, shutdown, or restart
 
-### Requirement: the zero-adopter builder retires after Stage A proof
+## REMOVED Requirements
 
-`NewDurableHandler` SHALL be removed without alias only after the permanent typed API, direct validation/integration
-tests, Stage A migration, owner review, and #1155 Stage A proof exist. Held callers SHALL NOT depend on the builder.
+### Requirement: Durable settlement composition is stateless
 
-#### Scenario: Stage A replacement is proven
+**Reason**: `NewDurableHandler` was a zero-adopter transitional wrapper around the legacy nil/error settlement
+contract. The permanent typed policy and delivery APIs now own validation and per-delivery settlement, and the
+accepted Stage A removal gate has been satisfied.
 
-- **WHEN** the permanent API and Stage A tools/dispatch paths pass the required owner and replacement gates
-- **THEN** the zero-adopter builder is removed without alias
-- **AND** held callers continue through the separately contained legacy helper
+**Migration**: No measured `NewDurableHandler` adopter requires source migration. Durable owners validate
+`HeartbeatDeliveryPolicy` from the exact acquisition configuration, invoke `ConsumeDeliveryWithHeartbeat` inside the
+canonical owner-held consumer callback, inspect `DeliveryResult`, and stop the exact owner outside the callback when
+`OwnerStopRequired` is true. `docs/operations/migration-restart-safe-nats-client.md` carries the complete composition.
