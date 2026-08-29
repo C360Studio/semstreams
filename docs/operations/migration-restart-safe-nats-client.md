@@ -40,28 +40,58 @@ native handle.
 
 ## Durable consumer migration
 
-`ConsumeDurable` is removed. Compose the stateless handler with the canonical handle-return operation:
+`ConsumeDurable` and the temporary `NewDurableHandler` builder are removed without aliases. Validate the exact
+consumer policy once, then compose the permanent typed callback with the canonical handle-return operation:
 
 ```go
-handler, err := natsclient.NewDurableHandler(cfg, heartbeat, work)
+policy, err := natsclient.ValidateHeartbeatDeliveryPolicy(
+	ctx,
+	cfg,
+	heartbeat,
+	natsclient.ImmediateDeliveryRetry(),
+	func(
+		workCtx context.Context,
+		attempt natsclient.DeliveryAttempt,
+		data []byte,
+	) (natsclient.DeliveryDecision, error) {
+		return doDurableWork(workCtx, attempt, data)
+	},
+)
 if err != nil {
-    return err
+	return err
 }
 
-consumeHandle, err := client.ConsumeStreamWithConfig(ctx, owner, cfg, handler)
+consumeHandle, err := client.ConsumeStreamWithConfig(
+	ctx,
+	owner,
+	cfg,
+	func(msgCtx context.Context, msg jetstream.Msg) {
+		result := natsclient.ConsumeDeliveryWithHeartbeat(msgCtx, msg, policy)
+		recordDeliveryResult(result)
+	},
+)
 if err != nil {
-    return err
+	return err
 }
 ```
 
-`NewDurableHandler` rejects nil work and nonpositive heartbeat. When `BackOff` is nonempty, every interval must be
-positive and the minimum interval is the effective acknowledgement wait. Otherwise positive `AckWait` is effective,
-with a 30-second default for a nonpositive value. Heartbeat equal to half that effective wait is valid; a larger value
-is rejected.
+`doDurableWork` and `recordDeliveryResult` are component-private placeholders, not framework APIs. A binding that
+does not use attempt observation accepts and ignores `DeliveryAttempt` before delegating the unchanged bytes to its
+transport-agnostic domain handler.
 
-The returned handler delegates InProgress and terminal settlement to `ConsumeWithHeartbeat`. Every nonnil handler
-result remains operator-visible as a WARN with message `ConsumeDurable handler error` and fields `stream`, `consumer`,
-and `error`.
+Pass the same `cfg` value to validation and acquisition. Validation rejects nil work, ended context, invalid retry
+policy, nonpositive heartbeat, invalid acknowledgement timing, and heartbeat greater than half the effective
+acknowledgement interval before acquisition. When `BackOff` is nonempty, its shortest positive interval is effective;
+otherwise positive `AckWait` is effective, with a 30-second default for zero. Equality at half is valid.
+
+The work callback defines its owner-specific durable consequence and returns ACK, Retry, Terminate, or Quarantine.
+`ConsumeDeliveryWithHeartbeat` owns payload extraction, `DeliveryAttempt` observation, InProgress, cancellation,
+work join, and the one terminal settlement attempt. Inspect every `DeliveryResult`: preserve its semantic, heartbeat,
+and settlement evidence in existing health/log surfaces. If `OwnerStopRequired` is true, close admission and stop the
+exact retained consume handle outside the callback. A terminal-method error alone does not authorize owner shutdown.
+
+`ConsumeWithHeartbeat` is deprecated and contained to the temporarily held SemStreams model, loop, and AgentRun
+bindings. New integrations use only the typed API above.
 
 ## Removed Client lifecycle authority
 
@@ -127,7 +157,9 @@ SemStreams records migration surfaces but does not edit sister repositories.
 
 Known old-signature port consumers exist in SemSpec, SemDev, and SemDragon. Known `ConsumeDurable` consumers exist in
 SemMachina, SemSpec, and SemDragon. Those owners must compile their current checkout, retain the returned
-`jetstream.ConsumeContext`, replace `ConsumeDurable` with `NewDurableHandler`, and remove Client-wide shutdown calls.
+`jetstream.ConsumeContext`, replace `ConsumeDurable` with the permanent typed policy/API composition above, and remove
+Client-wide shutdown calls. A read-only 2026-08-29 scan of active C360 sister checkouts found no `NewDurableHandler`
+adopters, so its removal requires no separate source migration.
 
 Generated schema copies containing `delete_consumer_on_stop` exist in SemStreams UI, SemSpec, SemTeams, and SemDragon.
 Their owners regenerate or remove those copies and validate their products.

@@ -9,6 +9,10 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+// defaultConsumerAckWait mirrors buildConsumerConfig's server fallback so
+// heartbeat validation uses the same effective acknowledgement interval.
+const defaultConsumerAckWait = 30 * time.Second
+
 // DeliveryDecision is the owner-supplied semantic outcome for one delivery.
 type DeliveryDecision uint8
 

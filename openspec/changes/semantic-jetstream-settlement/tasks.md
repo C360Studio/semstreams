@@ -41,7 +41,7 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 - [x] 2.11 Implement metadata observation before Data/work, migrate the three policy bindings through local wrappers
       that leave domain handlers unchanged, migrate settlement fakes, preserve C8/C9, and prove panic, cancellation,
       control-loss, and every started task still join under valid metadata.
-- [ ] 2.12 Add the deprecation notice and exact shrinking AST allowlist for `ConsumeWithHeartbeat` only; docs/examples
+- [x] 2.12 Add the deprecation notice and exact shrinking AST allowlist for `ConsumeWithHeartbeat` only; docs/examples
       advertise only the permanent typed API.
 
 ## 3. TDD owner-private control loss
@@ -67,12 +67,16 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 - [x] 4.6 Assert held model/loop/AgentRun source, config, settlement, cancellation, logs, and health remain unchanged.
 - [x] 4.7 Prove metadata-unavailable results close admission and drain the exact tools or dispatch handle outside
       callback, including callback-before-handle ordering.
-- [ ] 4.8 Replace builder-only tests with permanent policy/API integration tests, recheck zero adopters, obtain the
+- [x] 4.8 Replace builder-only tests with permanent policy/API integration tests, recheck zero adopters, obtain the
       approved Stage A gate, and remove `NewDurableHandler` without alias.
+- [ ] 4.9 BLOCKED archive reconciliation: inventory and independently review the current SemSpec/SemDragon
+      gated-DAG consumers, then obtain an owner ruling to modify the stale generic nil/error durable-wrapper and
+      heartbeat requirements or remove natsclient mechanics from that capability. Do not infer their settlement
+      decision mapping from Stage A.
 
 ## 5. Real-NATS and #1155 Stage A
 
-- [ ] 5.1 Prove healthy InProgress renewal prevents overlap and stopped renewal follows BackOff independently of
+- [x] 5.1 Prove healthy InProgress renewal prevents overlap and stopped renewal follows BackOff independently of
       semantic retry, using scaled integration timing.
 - [x] 5.2 Assert production tools configuration keeps BackOff 15s/60s and heartbeat 5s.
 - [x] 5.3 Replace SemStreams while retaining NATS; prove tools first redelivery follows the 15-second class, completed
