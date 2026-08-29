@@ -211,6 +211,10 @@ Stage A migrates tools one and dispatch two. Tools ACKs only after completed out
 completed-outcome replay publication may Retry; post-execution outcome-Create ambiguity quarantines. Dispatch retries
 only proven pre-publish failure; unknown PubAck after invocation quarantines before unlimited retry.
 
+Each of the three policy constructions uses a binding-local `DeliveryWork` closure. The closure accepts and ignores
+`DeliveryAttempt`, then delegates unchanged bytes to the existing tools or dispatch domain handler. Transport
+observation does not enter those domain handler signatures or their direct tests.
+
 Model, loop task, loop response, loop tool-result, AgentRun complete, and AgentRun failed are six separate
 non-authorizing holds. Each requires a then-current line-addressable inventory/adopter/collision addendum, independent
 inventory pass, options/design, independent design pass, and explicit owner acceptance naming the lifted binding.

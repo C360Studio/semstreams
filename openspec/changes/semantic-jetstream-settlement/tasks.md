@@ -38,8 +38,9 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 - [ ] 2.10 Add failing tests for metadata error, nil metadata, and zero delivery number. Assert typed
       `DeliveryMetadataUnavailableError`, cause reachability, Quarantine, OwnerStopRequired, one Metadata call, and
       zero Data, work, heartbeat, or terminal calls.
-- [ ] 2.11 Implement metadata observation before Data/work, migrate all current typed callbacks and fakes, preserve
-      C8/C9, and prove panic, cancellation, control-loss, and every started task still join under valid metadata.
+- [ ] 2.11 Implement metadata observation before Data/work, migrate the three policy bindings through local wrappers
+      that leave domain handlers unchanged, migrate settlement fakes, preserve C8/C9, and prove panic, cancellation,
+      control-loss, and every started task still join under valid metadata.
 - [ ] 2.12 Add the deprecation notice and exact shrinking AST allowlist for `ConsumeWithHeartbeat` only; docs/examples
       advertise only the permanent typed API.
 
