@@ -237,7 +237,7 @@ also not a phantom — `SourcePrefix()` and `PrefixLevel` call it.
 
 `pkg/types/entity_domain_authority.go` holds no authority. The name is kept to avoid churning the citations in this
 change's own artifacts, and the type doc states what the file holds and why the policy was deleted. Renaming it to
-`entity_domain.go` is a reasonable follow-up and is not done here.
+`entity_domain.go` is a reasonable follow-up and is not done here — **filed as #1171**.
 
 ## Surviving new-export table for `pkg/types` (reviewer contract "name its present consumer")
 
@@ -442,7 +442,7 @@ reviewer's own mutant.
 | NIT-2 — `hierarchyTestPlatform = "logistics"` put a product name in the deployment position, in the framework's own exemplar | FIXED | `semstreams-hierarchy-test`; the 49 fixture IDs under the old pair follow. The two-position `"c360.logistics"` malformed-ID fixture is deliberately untouched — it is a line-pinned audit annotation asserting an arity rejection |
 | RECOMMENDED — `hierarchy_entities_skipped_total{reason="foreign_authority"}` for the silent hierarchy skip | **DECLINED, with reasons** | See below |
 
-### The recommended hierarchy counter — declined, and why
+### The recommended hierarchy counter — declined, and why (gap filed as #1172)
 
 The gap is real: the hierarchy skip is the one deliberate omission with no counter. I did not add one, because every
 available shape violates a rule this repository already paid for:
@@ -631,6 +631,10 @@ ActionExecutor a zero PlatformMeta", not "every ActionExecutor constructor".
 for a cron dispatch with no firing entity) — pre-existing mechanism, filed separately, and the reason vocabulary is
 NOT touched in this round. The three NITs (`Mint`'s mismatch error embedding a foreign identity; `import: true`
 silently ignored on output ports; the design doc's status-block annotation) are left standing. Nothing from #1168.
+Each is filed rather than buried by this archive: the `Mint` error's foreign identity as **#1174**, `import: true`
+on output ports together with the unfed-import orphan exemption as **#1173**. The design doc's status-block
+annotation is deliberately NOT filed — it is a cosmetic consistency point in a proposal document, and the
+correction it would mirror already lives in the delta, which is what archives as current truth.
 
 ### Round-6 mutation evidence
 
