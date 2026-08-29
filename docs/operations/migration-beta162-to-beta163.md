@@ -603,6 +603,23 @@ that any entity is local, so every firing entity reads as foreign and the framew
 `rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` and logged once per dispatch. It is not
 silent, but a rule chained off those predicates will not fire, so pass the real pair.
 
+**BREAKING for a direct `rule.NewProcessor` caller: `SetPlatform` is now required before `Start`.**
+`rule.NewProcessor` and `rule.NewProcessorWithMetrics` are exported, take no authority, and never populate it;
+`(*rule.Processor).SetPlatform` was an optional setter documented as "called by the component factory". If you
+construct the processor yourself and never call it, `Start` now refuses to build the action executor — it logs
+`Failed to initialize state tracker` at Warn and continues, so the stateful evaluator and the cron scheduler are
+absent and **no rule action runs**. Previously the same wiring worked. Add one line before `Initialize`/`Start`:
+
+```go
+processor.SetPlatform(component.PlatformMeta{Org: "acme", Platform: "platform1"})
+```
+
+Pass the same value you pass to `component.Dependencies.Platform`. Nothing changes if you build the processor
+through `rule.CreateRuleProcessor` — it installs the pair from `deps.Platform` and has refused an empty one since
+this release. The refusal exists because the write guard fails closed: a NATS-backed executor with no authority
+reads EVERY firing entity as foreign, so the paragraph above would apply to every entity in your deployment rather
+than to imported mirrors, and it would do so at Info level.
+
 **`agentrun.Mint` now refuses two things it used to accept.** An empty `originEntityID` is rejected; and when the run
 already exists, its STORED origin is compared with the one you passed and a mismatch is rejected with a classified
 invalid error instead of returning the other origin's run. The run's entity ID derives from the loop's instance

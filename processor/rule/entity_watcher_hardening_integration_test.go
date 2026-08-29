@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
@@ -53,6 +54,7 @@ func TestEntityWatcherHardeningRealNATS(t *testing.T) {
 	}
 	processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)
 	require.NoError(t, err)
+	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 	require.NoError(t, processor.Initialize())
 
 	counter := &watcherIntegrationCounterRule{name: "entity"}

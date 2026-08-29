@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/natsclient"
 )
 
@@ -29,6 +30,7 @@ func TestStatefulEvaluator_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create processor: %v", err)
 	}
+	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 
 	// Initialize processor
 	if err := processor.Initialize(); err != nil {

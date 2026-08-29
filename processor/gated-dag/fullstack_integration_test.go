@@ -214,6 +214,7 @@ func setupFullStack(t *testing.T, opts fsOpts) *fullStack {
 	rcfg.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"fs.test.*.*.*.*"}}
 	rproc, err := rule.NewProcessor(nc, &rcfg)
 	require.NoError(t, err)
+	rproc.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 	require.NoError(t, rproc.Initialize())
 	require.NoError(t, rproc.Start(ctx))
 	t.Cleanup(func() { _ = rproc.Stop(context.Background()) })

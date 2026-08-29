@@ -668,6 +668,30 @@ func (rp *Processor) fenceRuntimeCommands() <-chan error {
 // initializeStateTracker creates the RULE_STATE KV bucket and initializes state tracking components.
 // This enables stateful ECA rules with OnEnter/OnExit/WhileTrue actions.
 func (rp *Processor) initializeStateTracker(ctx context.Context) error {
+	// The deployment's own authority is a PRECONDITION of the writing executor
+	// built below, and this is the seam that can reach it without the factory.
+	// NewProcessor/NewProcessorWithMetrics are exported, take no authority and
+	// never populate rp.platform; SetPlatform is an optional setter. An adopter
+	// wiring the processor directly therefore lands here with a zero pair, which
+	// is the state CreateRuleProcessor refuses one hop earlier — and the guard
+	// downstream fails CLOSED, so that executor reads EVERY firing entity as
+	// foreign and silently declines every framework write to it (rule.task.spawned
+	// under any run_scope; the run anchors under run_scope=new). Refusing here
+	// makes both seams say the same thing (ADR-102 d2/d5; #1096).
+	//
+	// It is first in the function so the refusal never depends on NATS being
+	// reachable, and so no RULE_STATE bucket is created for a processor that
+	// cannot dispatch. Scoped to the NATS branch: the no-NATS branch below builds
+	// NewActionExecutor, which holds neither mutator nor publisher, takes no
+	// authority and cannot write to a firing entity at all.
+	if rp.natsClient != nil && (rp.platform.Org == "" || rp.platform.Platform == "") {
+		return errs.WrapInvalid(
+			fmt.Errorf("rule processor has no deployment authority (platform.org and platform.id); "+
+				"CreateRuleProcessor installs it from deps.Platform, a direct NewProcessor caller "+
+				"must call SetPlatform before Start"),
+			"RuleProcessor", "initializeStateTracker", "Platform validation")
+	}
+
 	// Get or create the RULE_STATE KV bucket
 	const bucketName = "RULE_STATE"
 

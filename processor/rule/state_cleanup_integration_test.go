@@ -12,6 +12,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
 
+	"github.com/c360studio/semstreams/component"
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 )
@@ -40,6 +41,7 @@ func TestEntityWatcher_DeletedEntityCleansRuleState(t *testing.T) {
 	config.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"gh358.test.*.*.*.*"}}
 	proc, err := NewProcessor(nc, &config)
 	require.NoError(t, err)
+	proc.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 	require.NoError(t, proc.Initialize())
 	require.NoError(t, proc.Start(ctx))
 	t.Cleanup(func() { _ = proc.Stop(context.Background()) })

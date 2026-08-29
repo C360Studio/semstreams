@@ -74,6 +74,7 @@ func buildHotReloadProcessor(t *testing.T, natsClient *natsclient.Client) *Proce
 
 	proc, err := NewProcessor(natsClient, &cfg)
 	require.NoError(t, err)
+	proc.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 	require.NoError(t, proc.Initialize())
 	return proc
 }

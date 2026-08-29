@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/component"
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/natsclient"
@@ -78,6 +79,7 @@ func TestIntegration_RuleReadiness_EmptyReplayIsAuthoritativelyNothingToDo(t *te
 
 	processor, err := rule.NewProcessorWithMetrics(tc.Client, &config, nil)
 	require.NoError(t, err)
+	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 	require.NoError(t, processor.Initialize())
 	require.NoError(t, processor.Start(ctx))
 	t.Cleanup(func() {
@@ -139,6 +141,7 @@ func TestIntegration_RuleReadiness_NonEmptyReplayReportsScope(t *testing.T) {
 
 	processor, err := rule.NewProcessorWithMetrics(tc.Client, &config, nil)
 	require.NoError(t, err)
+	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 	require.NoError(t, processor.Initialize())
 	require.NoError(t, processor.Start(ctx))
 	t.Cleanup(func() {
@@ -180,6 +183,7 @@ func TestIntegration_RuleStopAfterAcceptedStartParentCancellation(t *testing.T) 
 	}
 	processor, err := rule.NewProcessorWithMetrics(tc.Client, &config, nil)
 	require.NoError(t, err)
+	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 	var (
 		stopOnce sync.Once
 		stopErr  error
