@@ -565,11 +565,19 @@ type ActionExecutor struct {
 // must not write to (ADR-102 d5, ruled O-12(a)).
 //
 // An executor with no deployment authority cannot judge this and answers false.
-// Only a test fixture reaches that state: the WRITING executor takes the
-// authority as a constructor parameter (NewActionExecutorComplete), so the
-// production path cannot omit it, and the convenience constructors that can
-// hold none also hold no mutator, publisher or lifecycle manager and therefore
-// perform none of the writes this guard protects.
+// Reaching that state is an in-repo test-fixture condition, and the reason is
+// caller enumeration, not capability: the two production construction sites
+// that can write (processor.go, NATS present) both call
+// NewActionExecutorComplete, which takes the authority as a constructor
+// parameter and so cannot omit it; the third (processor.go, no NATS client)
+// calls NewActionExecutor, which holds neither publisher nor mutator, and both
+// guarded writes require them. NewActionExecutorWithMutator and
+// NewActionExecutorFull CAN hold a mutator and a publisher, so they COULD reach
+// the guarded writes with e.platform zero — they simply have no production and
+// no sister-repo caller (verified by grep across the c360 tree). Do not read
+// this as "the convenience constructors cannot write": an earlier revision of
+// this comment claimed that, and NewActionExecutorFull's own signature refutes
+// it.
 //
 // CreateRuleProcessor's refusal of an empty deps.Platform is a SEPARATE guard:
 // it protects deps.Platform, not the hop from there into this field. Do not
@@ -588,11 +596,14 @@ func (e *ActionExecutor) foreignFiringEntity(entityID string) bool {
 // (run_scope=new only) and the rule.task.spawned back-reference (every
 // run_scope).
 //
-// "Per dispatch" is exact and deliberate: this recorder is created inside
-// publishAgentOnce, which runs once per `for_each` item, so an action fanning
-// out over N items reports N skips — N entities were declined, not one. An
-// earlier revision of this comment said "per action execution", which was wrong
-// for exactly that case.
+// "Per dispatch" is exact and deliberate, and the counted unit is (firing entity
+// x `for_each` item): this recorder is created inside publishAgentOnce, which
+// runs once per item, so an action fanning out over N items reports N skips.
+// The firing entity is INVARIANT across that fan-out — executePublishAgent
+// passes the same ExecutionContext to every iteration and only the item varies —
+// so those N skips are N dispatches declined for ONE imported entity, never N
+// distinct declined entities. Two earlier revisions of this comment were wrong
+// here: first "per action execution", then "N entities were declined".
 //
 // The counter is named for what it counts — framework writes to a foreign
 // firing entity — not for the run anchor, because under run_scope inherit|none
@@ -745,9 +756,15 @@ func NewActionExecutorFull(logger *slog.Logger, mutator TripleMutator, publisher
 // nil-safe, so a forgotten setter costs a feature; a forgotten authority costs
 // the contract. Making it unrepresentable is cheaper than testing for it.
 //
-// This is the constructor that receives a mutator, a publisher and a KV writer
-// — the executor that can actually write. The three convenience constructors
-// above hold none of those and are test fixtures.
+// This is the constructor the production path uses whenever a NATS client is
+// present, and the only one that receives a KV writer. Of the three convenience
+// constructors above, NewActionExecutor is also a production constructor — the
+// no-NATS branch of processor.go builds it — but it holds neither publisher nor
+// mutator, so no framework write to the firing entity is possible through it.
+// NewActionExecutorWithMutator and NewActionExecutorFull have no production and
+// no sister-repo caller; they are in-repo test fixtures. They are NOT incapable
+// of writing (Full takes both a mutator and a publisher), which is why the
+// authority here is a parameter and not a setter.
 func NewActionExecutorComplete(
 	logger *slog.Logger,
 	mutator TripleMutator,
@@ -1820,7 +1837,9 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 	// skipped, and the skip is counted once (ADR-102 d5, ruled O-12(a)).
 	//
 	// Once per dispatch, not per action: publishAgentOnce runs once per
-	// `for_each` item, so an action declining N imported entities reports N.
+	// `for_each` item, so an action fanning out over N items on an imported
+	// firing entity reports N — N declined dispatches for ONE entity, since
+	// entityID does not vary across the fan-out.
 	// Which writes are actually in play depends on run_scope — under
 	// inherit|none there is no anchor and only the back-reference is skipped,
 	// which is why neither the counter nor the log names the run anchor.

@@ -561,8 +561,11 @@ the boundary compares against the pair it already has and reports the real outco
   condition reads `$entity.triple.agent.run.entity-id` or `$entity.triple.rule.spawned_task` off that entity simply
   never fires. **A rule that does not fire logs nothing and fails nothing** — the only signal is
   `rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` rising and one Info line per dispatch naming
-  which writes were skipped. It counts once per DISPATCH, so an action fanning out over `for_each` and declining N
-  imported entities reports N — one federation event per entity declined. If your rule packs chain off either predicate and any of your firing entities are imported, re-point
+  which writes were skipped. **It counts DISPATCHES, not entities.** One increment is one `publish_agent` dispatch —
+  one (firing entity x `for_each` item) — whose framework writes were all declined. The firing entity does not vary
+  across a `for_each` fan-out, so an action fanning out over N items on a single imported entity reports N. Do not
+  read the counter as "distinct peer entities we declined to write to"; over a fanning rule pack it exceeds that
+  number by the fan-out factor. If your rule packs chain off either predicate and any of your firing entities are imported, re-point
   those rules at the LOCAL run entity (`org.platform.chain.agent.execution.<loopID>`) or its local children before
   you upgrade. Hierarchy is the same shape and the same ruling: an imported entity is persisted with no
   `hierarchy.*` triple, no container, and no sibling edge, so structural-tier queries return fewer edges over

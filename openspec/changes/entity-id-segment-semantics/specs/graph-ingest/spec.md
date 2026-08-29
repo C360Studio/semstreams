@@ -105,9 +105,11 @@ carries the deployment's own authority. When the firing entity is a foreign-auth
 detect that before any write and MUST issue no mutation request targeting the foreign subject — not even one
 graph-ingest would reject. The decision MUST be recorded once per DISPATCH as
 `rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` with an Info log naming which writes were
-skipped: a counted skip, never a rejection, and one federation event per declined entity rather than one per omitted
-write. Per dispatch, not per action: `publish_agent` fans out over `for_each`, so an action declining N imported
-entities MUST report N skips. The counter is named for the writes it covers rather than for the run anchor, because
+skipped: a counted skip, never a rejection, and one increment for the whole dispatch rather than one per omitted
+write. The counted unit is one `publish_agent` dispatch — one (firing entity, `for_each` item) pair — and MUST NOT be
+read as one distinct declined entity: `publish_agent` fans out over `for_each` with the firing entity held constant,
+so an action fanning out over N items on a single imported firing entity MUST report N skips for that ONE entity.
+The counter is named for the writes it covers rather than for the run anchor, because
 under `run_scope` `inherit` or `none` no anchor is in play and only the `rule.task.spawned` back-reference is
 skipped. Issue #1096 is complete only when this path is implemented and tested.
 
@@ -123,6 +125,17 @@ skipped. Issue #1096 is complete only when this path is implemented and tested.
 - **AND** `rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` increments exactly once and
   `mutation_rejections` does not
 - **AND** the test that verifies this is `TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite`
+
+#### Scenario: the skip counter counts dispatches, so a for_each fan-out on one import reports N
+
+- **GIVEN** the same deployment and the same single imported loop
+  `foreign.dep9.agentic-loop.agent.execution.<uuid>`
+- **WHEN** one `publish_agent` action with `run_scope=new` fans out over a `for_each` list of 3 items on it
+- **THEN** 3 tasks are dispatched and `rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` reads 3
+- **AND** those 3 increments describe ONE declined entity, not three: the firing entity is invariant across the
+  fan-out, so the counter MUST NOT be read as a count of distinct peer entities
+- **AND** no mutation request targets the import and its revision is unchanged
+- **AND** the test that verifies this is `TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity`
 
 #### Scenario: a rule firing on a local loop stamps the anchor pair and the origin
 

@@ -48,8 +48,12 @@ type Metrics struct {
 	// (run_scope=new) and the rule.task.spawned back-reference (every
 	// run_scope), counted once together because one federation event happened.
 	//
-	// One increment per DISPATCH, not per action: publish_agent fans out over
-	// `for_each`, and an action declining N imported entities is N skips.
+	// One increment per DISPATCH, not per action, where a dispatch is one
+	// (firing entity x `for_each` item): publish_agent fans out over `for_each`
+	// with the firing entity held constant, so an action fanning out over N
+	// items on an imported entity is N skips for that ONE entity. Read this as
+	// "framework writes we declined to make", never as "distinct peer entities
+	// we declined to write to" — the fan-out factor separates the two.
 	//
 	// It is a counted skip, never a rejection: no mutation request is sent, so
 	// nothing appears in graph-ingest's mutation_rejections, and without this

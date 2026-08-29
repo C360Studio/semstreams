@@ -243,6 +243,74 @@ func TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite(t *testing.T) 
 		"the skip is COUNTED, not silent and not a rejection")
 }
 
+// runScopeNewForEachAction fans the same run_scope=new dispatch over a list-typed
+// triple on the firing entity. It exists because the counter's documented
+// cardinality is a claim about the FAN-OUT, and runScopeNewAction (no ForEach)
+// can only ever observe a single dispatch.
+func (h *runScopeHarness) runScopeNewForEachAction() Action {
+	a := h.runScopeNewAction()
+	a.Prompt = "investigate $subtopic"
+	a.ForEach = "$entity.triple.coordinator.decision.subtopics"
+	a.ForEachVar = "subtopic"
+	return a
+}
+
+// TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity pins the ONE
+// thing the single-dispatch tests above structurally cannot see: what the skip
+// counter's unit actually is.
+//
+// executePublishAgent passes the SAME ExecutionContext to every `for_each`
+// iteration — only the item varies — and publishAgentOnce reads entityID from
+// it, so the firing entity is invariant across the fan-out. Three items on ONE
+// imported loop therefore produce THREE increments for ONE declined entity.
+// That is the reading operators must not get wrong: the counter counts declined
+// DISPATCHES, and over a fanning rule pack it exceeds the number of distinct
+// declined entities by the fan-out factor. The spec, the metric doc comment and
+// the migration note all previously said "N imported entities"; this test is
+// what makes that class of error fail loudly rather than archive as truth.
+//
+// Mutation check that proves it discriminates: make foreignFiringSkipRecorder's
+// `recorded` latch a field on ActionExecutor instead of a closure local (which
+// converts per-dispatch into per-action for a single Execute call). This test
+// fails 1 != 3; TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite
+// still passes, because one dispatch cannot tell the two units apart.
+func TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity(t *testing.T) {
+	h := newRunScopeHarness(t)
+	revisionBefore := h.seedImportedLoop(t)
+
+	// One firing entity, three items. The list rides the firing entity as the
+	// JSON-encoded triple Object the decide tool emits.
+	ec := &ExecutionContext{
+		EntityID: runScopeImportedLoop,
+		Entity: &graph.EntityState{
+			ID: runScopeImportedLoop,
+			Triples: []message.Triple{{
+				Subject:   runScopeImportedLoop,
+				Predicate: "coordinator.decision.subtopics",
+				Object:    `["hydraulics","pneumatics","electrics"]`,
+			}},
+		},
+	}
+
+	require.NoError(t, h.executor.Execute(h.ctx, h.runScopeNewForEachAction(), ec))
+
+	require.Len(t, h.pub.published, 3, "the fan-out must actually dispatch three times")
+
+	assert.InDelta(t, 3.0, testutil.ToFloat64(
+		h.metrics.foreignFiringWritesSkippedTotal.WithLabelValues(semtypes.EntityIDReasonForeignAuthority)), 0.0001,
+		"one increment per DISPATCH: 3 for_each items on ONE imported firing entity is 3, not 1 — "+
+			"and it is 3 declined dispatches, not 3 declined entities")
+
+	// The other half of the same fact: however many times it was declined, only
+	// one entity was ever in play, and nothing was written to it.
+	assert.NotContains(t, h.mutator.subjects(), runScopeImportedLoop,
+		"no dispatch in the fan-out may target the foreign subject")
+	entry, err := h.bucket.Get(h.ctx, runScopeImportedLoop)
+	require.NoError(t, err)
+	assert.Equal(t, revisionBefore, entry.Revision,
+		"the single import is a read-only mirror across every iteration")
+}
+
 // TestRunScopeNewOnLocalLoopStampsAnchorAndOrigin is the other half: on a local
 // firing loop the anchor pair is still stamped, and the origin predicate is set
 // for a local origin too — one home for the linkage, in both cases.
