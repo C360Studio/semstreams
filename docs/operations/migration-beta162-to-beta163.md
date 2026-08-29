@@ -546,6 +546,13 @@ not ask you to restate the pair anywhere, to predict which writes are local, or 
 knob, and it exists because trusting a peer is a decision only an operator can make. Everything else is observed:
 the boundary compares against the pair it already has and reports the real outcome.
 
+**`import` really is the only field — you do not also set `external`.** A port marked `"external": true` tells
+composition validation that an input is fed from outside the composition, so no in-graph publisher is expected. That
+is true of an import lane by construction: the lane refuses any subject carrying YOUR pair, so nothing inside your
+composition can legitimately publish to it. The framework therefore derives it — declaring `import` marks the port
+external, and `validate <config>` does not report your lane as a no-publisher orphan. Setting `external: true`
+yourself as well is harmless and changes nothing.
+
 **What happens if you do nothing — three loud paths and one silent one.**
 
 - *No `platform.org` / `platform.id`* → **LOUD.** Boot fails at the factory:
@@ -582,6 +589,27 @@ run side: run → `agent.run.origin-entity-id` → the mirrored loop → its `ag
 origin; `AgentRun` gains `OriginEntityID`; `component.JetStreamPort` gains `Import`; `component.StreamFacts` gains
 `Import()`; `inference.HierarchyConfig` gains `Org`/`Platform` (both `json:"-"` — framework-owned, never operator
 config). `agvocab.RunOriginEntityID = "agent.run.origin-entity-id"` is a new declared predicate.
+
+`processor/rule.NewActionExecutorFull(logger, mutator, publisher, platform)` and
+`NewActionExecutorWithMutator(logger, mutator, platform)` gain a trailing `types.PlatformMeta` — your deployment's
+own `platform.org` / `platform.id`, the same value you pass to `component.Dependencies.Platform`. They are the two
+other constructors that can hold a triple mutator, and the mutator is what makes the framework's writes to a FIRING
+entity possible, so an executor holding one must be able to tell your entities from an imported mirror. Pass
+`deps.Platform`. `NewActionExecutorComplete` already took it; `NewActionExecutor` takes none and cannot write.
+
+**What happens if you pass an empty pair:** the guard fails CLOSED. An executor with no authority cannot establish
+that any entity is local, so every firing entity reads as foreign and the framework's writes to it —
+`agent.loop.run`, `agent.run.entity-id`, `rule.task.spawned` — are skipped, counted under
+`rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` and logged once per dispatch. It is not
+silent, but a rule chained off those predicates will not fire, so pass the real pair.
+
+**`agentrun.Mint` now refuses two things it used to accept.** An empty `originEntityID` is rejected; and when the run
+already exists, its STORED origin is compared with the one you passed and a mismatch is rejected with a classified
+invalid error instead of returning the other origin's run. The run's entity ID derives from the loop's instance
+segment alone, so two loops that different deployments name with the same instance derive one local run ID — the
+refusal makes that collision loud instead of an aliased run. A stored run carrying no origin is refused rather than
+adopted. `errs.IsInvalid(err)` is the branch: do not retry either refusal. Deriving a collision-free identity is
+tracked separately as #1168.
 
 **Stated limit on the origin predicate.** The design calls `agent.run.origin-entity-id` an `@id` predicate, and its
 object IS a canonical entity ID — but the stored triple carries no `@id` datatype marker, because the Lifecycle

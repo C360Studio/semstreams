@@ -1,4 +1,4 @@
-# Conformance — entity-id-segment-semantics (revision 11 — slice B implementation columns filled: the graph-ingest authority gate, the import lane, the hierarchy skip and #1096; slice A columns unchanged; O-5 remains superseded)
+# Conformance — entity-id-segment-semantics (revision 12 — the Codex owner round: the exported write-capable constructors take the authority and the guard fails closed, the direct persistence lane is metered, `import` is genuinely one knob, `agentrun.Mint` refuses an aliased origin, and O-4 is recorded as deferred to #1168)
 
 Per-ruling map from the owner rulings on #1095 (2026-08-26, including the design-package ruling: O-1–O-11, O-13,
 O-14 accepted; O-12 overridden to read-only mirror; hierarchy skip accepted), the design constraints, and ADR-102 decisions to
@@ -529,3 +529,72 @@ copied the slice header into a local and wrote it back in a `defer` on `foreignF
 returns immediately, so the field was restored to nil before any `record` call. Every test passed. A mutation check
 that fails to kill is either a coverage finding or a broken mutant, and the difference has to be established rather
 than assumed.
+
+## Codex owner round on slice B (CHANGES REQUESTED at `9eb191e3`; 3 BLOCKING, 1 HIGH, 2 MEDIUM, 1 NIT)
+
+The owner ruled on 2026-08-29 that this PR may merge once the findings outside the new issue **#1168** are
+addressed, and that #1168 goes immediately behind it in the beta.163 queue. Blocker 1 (O-4) and the identity
+redesign half of blocker 3 are #1168's; everything else below is fixed here. Two of the seven are defects EARLIER
+ROUNDS INTRODUCED OR REFUSED TO SEE, which is this round's lesson: rounds 1, 2 and 4 each rewrote
+`foreignFiringEntity`'s doc comment on the reasoning that no in-repo production caller reaches the fail-open state.
+That reasoning cannot hold for an EXPORTED constructor — the caller is an adopter who is in no review here — and the
+house adopter-seam rule says so directly.
+
+| Finding | Disposition | Evidence |
+|---|---|---|
+| **BLOCKING 1 — the accepted O-4 import-collision ruling is not implemented** | **DEFERRED to #1168 by owner ruling, and now RECORDED where a deliberate not-done has to be: in the DELTA** | The premise was re-measured and holds: the seam has no provenance to compare. `graph.EntityState` (`graph/types.go:24-47`) carries no arrival-source or authority field — `MessageType` is the payload type, not the sender — `graph.MergeTriples` compares `(Subject, Predicate)` only, and the import-lane fact is read once at `processor/graph-ingest/component.go:1487` and recorded nowhere. Implementing O-4 means CREATING the fact, which is retained-provenance design, not a boundary guard. `specs/graph-ingest/spec.md` now carries a **DEFERRED to #1168** paragraph inside the authority requirement naming the home and the reason; this row is its index. Nothing is live while it waits: `grep -rn '"import"' configs/` → **0**, so no shipped configuration declares an import lane and a second arrival of one ID under two sources is unreachable through a shipped composition. The ADR is NOT edited — that is an owner action |
+| **BLOCKING 2 — an exported write-capable constructor can silently disable the foreign-write guard** | **FIXED, both ways** | `foreignFiringEntity` answered `false` when the executor held no authority, so every firing entity read LOCAL and both framework writes went through; `NewActionExecutorFull` supplies a mutator AND a publisher and took no authority. (a) `NewActionExecutorFull` and `NewActionExecutorWithMutator` — the two other constructors that can hold a `tripleMutator`, the capability both guarded writes require — now take `platform types.PlatformMeta` as a final parameter, matching `NewActionExecutorComplete`. **BREAKING on two exported symbols**, stated in the migration note and the PR body. (b) The short-circuit is DELETED: `ValidateEntityIDAuthority` decides, and under an empty pair every parseable ID differs at position 1, so an unknown authority reads foreign — fail-CLOSED, and the reason label stays truthful. `TestPublishAgentThroughExportedFullConstructorSkipsForeignSpawnedTask` covers the exported path with three cases; both mutants die (tasks 6.3) |
+| **BLOCKING 3 — `agentrun.Mint` can alias two federated origins** | **SAFETY HALF FIXED HERE; the collision-free derivation is #1168** | `Mint` now requires a non-empty `originEntityID` and, on `lifecycle.ErrAlreadyExists`, compares the STORED `OriginEntityID` with the requested one — using the `mgr.Get` that path already performs, so no new read, no second party, no lookup. A mismatch is a classified `ErrorInvalid`. Legacy-empty-record policy DEFINED: an origin-less stored run is refused, not adopted. The idempotence test's origin-less seed is replaced by a same-origin seed, and `TestMint_TwoOriginsAtOneInstanceAreRefusedNotAliased` is the two-authority/same-instance proof Codex asked for. This does not make the identity collision-free and the artifacts say so (tasks 3.8) |
+| **HIGH 4 — direct-persistence authority rejects are neither metered nor loudly logged** | **IMPLEMENTED, not amended** | The requirement covers direct persistence in the same breath as the other two lanes, so narrowing it to match the code would have been the defect this change has already had twice. `arrivalDirect = "direct"` is one bounded value in the label position the other lanes fill with their arrival subject, and `recordDirectAuthorityRejection` routes to the same `recordAuthorityRejection`. Applied at all five direct guards. Exactly-once is structural: each `graph.mutation.>` handler authorizes and RETURNS before entering any shared body, and `prepareFactProjection` does the same on the fact lane. `TestAuthorityGateMetersDirectPersistenceRejectionsOnEveryDirectSeam` also makes the first assertion in this change of the "loud log" half, which had no test on ANY lane. Both mutants die, and the per-seam mutant kills only its own subtest (tasks 6.1) |
+| **MEDIUM 5 — the documented "one knob" import lane is false as written** | **IMPLEMENTED (derived), not documented around** | Composition suppressed the no-publisher orphan only from `PortDefinition.External`, a SIBLING of `config`, so a lane declared exactly as the migration note shows was still reported. Documenting a second field is the wrong half of the adopter-seam rule: an import lane refuses any subject carrying this deployment's own authority, so no in-graph publisher can legitimately feed it — "external" is ENTAILED by "import". `component/port_resolver.go` derives it through the canonical facts projection (`PortFacts.Stream().Import()`), because `internal/portgrammarcontrol` admits only `port_codec.go` and `port_facts.go` as homes for interpreting a concrete port config; asserting `JetStreamPort` in the resolver failed that control test and the failure was the right one. `TestValidateImportLaneIsExternallyFedWithoutASecondKnob` carries the control case — the same port without `import` is still an orphan (tasks 6.2) |
+| **MEDIUM 6 — checked task 6.2 is false as worded** | **RECONCILED** | The row required `configs/graph-backend.json` to carry a declared lane; round 1 (MEDIUM-4) removed every shipped lane and the Done evidence said so, leaving the row contradicting itself in a file that ARCHIVES. The statement now says what shipped and why, and names the round that changed the intent rather than pretending it was always so |
+| **NIT 7 — the diff fails `git diff --check`** | **FIXED for the WHOLE file, not only the added lines** | The flagged lines are verbatim `go test` transcripts pasted under a six-space block indent, so `go`'s own eight-space+tab indent became space-before-tab. Every mixed leading indent in `tasks.md` was expanded to spaces at eight-column tab stops (34 lines) — rendering is byte-identical at those stops — and the trailing whitespace this exposed was stripped (34 lines; no line in the file uses a two-space markdown break, checked). Fixing only the flagged lines would have left the file one edit away from re-exposing the rest, which is the "clean except known X" shape. `git diff --check <merge-base>` is now silent |
+
+### O-4 — what is deferred, and the standing of the record
+
+O-4 is an ACCEPTED ADR-102 ruling (`docs/adr/102-entity-id-segment-semantics.md:26`) that left this change's target
+state with no record, which is exactly the "a deliberate not-done must reach the DELTA" shape: `tasks.md` stops the
+implementer, but the DELTA is what archives as current truth, and a requirement silent about a ruling reads as a
+capability that was never wanted. The deferral is therefore stated in
+`specs/graph-ingest/spec.md` inside the requirement that would carry it, not only here, and it names **#1168** as its
+home. The ADR is left untouched: amending an accepted decision record is the owner's act, not this round's.
+
+### Round mutation transcripts
+
+Backups by `cp`, restoration verified by `md5`, `[applied]`/`[restored]` printed between mutating and testing, and
+`git status --porcelain` empty afterwards — the tree was committed before the first mutant, so an empty status is an
+independent second reading of every restore.
+
+| Mutant | Result |
+|---|---|
+| `foreignFiringEntity`: restore the deleted `if e.platform.Org == "" { return false }` short-circuit | `TestPublishAgentThroughExportedFullConstructorSkipsForeignSpawnedTask/absent_authority_reads_every_entity_as_foreign` **FAILS** — the other two subtests pass, so the mutant is specific to the fail-open half |
+| `NewActionExecutorFull`: accept `platform` and drop it (`_ = platform`) | `…/local_firing_entity_under_the_supplied_authority_is_written` **FAILS** — the parameter itself is doing the work, not the signature |
+| graph-ingest: delete all five `recordDirectAuthorityRejection` CALLS | all five subtests of `TestAuthorityGateMetersDirectPersistenceRejectionsOnEveryDirectSeam` **FAIL** |
+| graph-ingest: delete ONLY `addTriplesLane`'s recording call | only `batch_append_body` **FAILS** — the seam enumeration discriminates, so a future seam added without the call is caught by its own row |
+| `port_resolver.go`: `External: def.External,` (derivation CALL deleted) | `TestValidateImportLaneIsExternallyFedWithoutASecondKnob/declared_import_lane_is_externally_fed` **FAILS** `orphaned_port findings = 1, want 0`; the control subtest passes |
+| `agentrun.Mint`: delete the stored-origin comparison | `TestMint_TwoOriginsAtOneInstanceAreRefusedNotAliased` and `TestMint_LegacyOriginlessStoredRunIsRefused` **FAIL** |
+| `agentrun.Mint`: delete the empty-origin refusal | `TestMint_RefusesEmptyOrigin` **FAILS** |
+
+Restored md5s, each equal to its pre-mutation value: `processor/rule/actions.go`
+`5958e8e1f1639e0bd0fabc0d11f322de`; `processor/graph-ingest/component.go` `1bdf1efb1d8c8cb2df6b8f05890e96b5`;
+`component/port_resolver.go` `f2e74208f81669b70d1069ba9bd819fb`; `agentic/agentrun/agentrun.go`
+`2a467c8a50ef38f5c1259edd5b022fd5`.
+
+### Correction-propagation sweep for this round
+
+Every artifact asserting the withdrawn mechanism was re-synced rather than left standing:
+
+- `processor/rule/actions.go` — `foreignFiringEntity`'s doc comment (fourth revision; it now states the fail-closed
+  mechanism and records that the short-circuit was deleted) and `NewActionExecutorComplete`'s comment about the
+  convenience constructors, which said they have no caller "and are in-repo test fixtures" — true of this repository
+  and irrelevant to an exported symbol.
+- `processor/rule/factory.go` — the comment describing the absent-pair failure mode as fail-OPEN. It now scopes
+  itself to the MINT (which is what that refusal guards) and points at the separately fail-closed write guard.
+- `tasks.md` 6.3 — the sentence "An executor with no platform answers `false` (cannot judge)" is struck through and
+  marked WITHDRAWN; 6.2's statement line is reconciled; 6.1 and 3.8 carry the new evidence.
+- `specs/graph-ingest/spec.md` — "already-persisted" is deleted from the read-only-mirror clause. `authorizeSubject`
+  runs before any read and refuses on identity alone; the very next scenario
+  (`TestAuthorityGateRefusesForeignReconcileRegardlessOfExistence`) proves existence is irrelevant, so the qualifier
+  described a stored-state predicate a future implementer might have added a read to satisfy — the ADR-091 line.
+- `docs/operations/migration-beta162-to-beta163.md` — the two exported constructors are added to the breaking
+  signature list, and the "one knob" paragraph now states the derivation that makes it true.

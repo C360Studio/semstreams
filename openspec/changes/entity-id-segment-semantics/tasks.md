@@ -428,6 +428,25 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
       anchor `agent.run.entity-id` (`actions.go` `stampRun`) are both emitted without a datatype today. Consequence
       recorded in the migration note: `pkg/fusion`'s graph facet projects an edge only for a lens-declared predicate
       or an explicit `@id`, so the origin link reads as a property fact there unless a lens declares it.
+      **Codex owner round (blocker 3, safety half) — `Mint` now fails closed on the origin.** Setting the predicate
+      is not the same as depending on it: the run entity ID derives from the loop's INSTANCE segment alone
+      (`org.platform.chain.agent.execution.<instance>`), so two loops that different deployments name with the same
+      instance derive ONE local run ID. `Mint` accepted an empty origin and, on `lifecycle.ErrAlreadyExists`,
+      returned the stored run without looking at its origin — so the second caller silently received the first
+      origin's run and its work was attributed to a stranger. Two guards, both over state this function already
+      holds: a non-empty `originEntityID` is required before `Create`, and on the already-exists path the STORED
+      `OriginEntityID` is compared with the requested one — the `mgr.Get` that path already performs, no new read,
+      no second party, no lookup. A mismatch returns a classified `ErrorInvalid`. **Legacy-empty-record policy,
+      defined:** a stored run whose origin is empty is REFUSED, not adopted — an empty value cannot establish that
+      the stored run is this caller's, and pre-v1 identity work starts downstreams on newly provisioned storage
+      rather than reading old state, so there is no record to migrate. This does NOT make the identity
+      collision-free; deriving it from the full origin is **#1168**, and the tests are named so they cannot be read
+      as claiming otherwise. The idempotence test's origin-less seed — the shape Codex named — is replaced by a
+      same-origin seed. `TestMint_TwoOriginsAtOneInstanceAreRefusedNotAliased` is the two-authority/same-instance
+      proof and also asserts the first run's stored origin is untouched; `TestMint_RefusesEmptyOrigin` asserts
+      nothing was created; `TestMint_LegacyOriginlessStoredRunIsRefused` pins the policy. Mutations, `cp` backup,
+      md5 `2a467c8a50ef38f5c1259edd5b022fd5` restored after each: deleting the stored-origin comparison fails the
+      two-authority and legacy tests; deleting the empty-origin refusal fails `TestMint_RefusesEmptyOrigin`.
 
 ## 4. Forced omissions — one per new parser/builder/mapper (commit GREEN first; restore by `cp` + `shasum`)
 
@@ -1003,8 +1022,34 @@ package; both declarations are now on the payload registrations) and
       `authorityMetricReason`, and the fact lane meters in `processIngest` under the arrival subject — disjoint
       paths, so exactly one increment per rejection. The WARN names lane, arrival lane and segment index and never
       the identity. The `component.go:644` anchor this row cites is pre-#1109/#1130 and now reads `:704`.
-- [x] 6.2 `JetStreamPort` gains `Import bool` (`"import"`); the port schema and `configs/graph-backend.json` (the
-      reference graph-backend composition; it composes graph-ingest) carry one declared import lane as the reference.
+      **Codex owner round (finding 4) — the DIRECT lane was refusing invisibly, and is now metered.** The sentence
+      above was true of two lanes out of three: the five direct guards returned the classified error and recorded
+      nothing, so a framework component calling `CreateEntity` or `MergeEntity` in-process with a foreign subject was
+      refused correctly and silently — the operator's `mutation_rejections` panel and their log stream both read as
+      if nothing had been refused, which is the requirement's whole point. Implemented rather than amended: the
+      requirement covers direct persistence in the same breath as the other two lanes.
+      `authority_gate.go` adds `arrivalDirect = "direct"` — one bounded value in the label position the other lanes
+      fill with their arrival subject — and `recordDirectAuthorityRejection`, which routes to the same
+      `recordAuthorityRejection` the other two lanes use, so metered-exactly-once stays a property of the code.
+      Applied at all five direct guards (`component.go:2221`, `:2064`, `:2301`, `:2442`, `:2581`). Exactly-once
+      survives the two bodies the RPC lane shares: `handleCanonicalAppend` and `handleCanonicalDelete` authorize the
+      same subject and RETURN before entering `addTriplesLane`/`deleteEntityAtRevision`, and `handleCanonicalCreate`
+      writes through `entityBucket.Create` and never enters `createEntityWithReceipt`; the fact lane is the same
+      shape (`prepareFactProjection` gates and returns before `mergeEntityOnLane`).
+      `TestAuthorityGateMetersDirectPersistenceRejectionsOnEveryDirectSeam` drives the assembled component over all
+      five seams, asserting the delta on `{arrival="direct",reason="authority_foreign"}`, exactly one WARN per call,
+      and that no attribute carries the refused identity — the first assertion in this change of the "loud log"
+      half, which had no test on any lane. The log message is a named constant (`authorityRejectionLogMessage`) so
+      the test pins the production string. Mutations, `cp` backups, md5 `1bdf1efb1d8c8cb2df6b8f05890e96b5` restored
+      after each: deleting all five recording CALLS fails all five subtests; deleting only the batch-append body's
+      call fails only `batch_append_body`, so the enumeration discriminates seam by seam.
+- [x] 6.2 `JetStreamPort` gains `Import bool` (`"import"`), carried into the port schema; **no shipped configuration
+      declares an import lane** and the reference declaration lives in the migration note as a snippet instead. This
+      row originally required `configs/graph-backend.json` to carry one as the reference; review round 1 (MEDIUM-4)
+      ruled that wrong and the row is restated rather than left contradicting its own Done evidence — a lane is an
+      operator statement of trust, so the shipped composition must import nothing. Declaring the lane must also be
+      the ONLY knob it takes: composition validation derives "fed from outside the composition" from the
+      declaration, so an operator does not restate it as `external: true`.
       The two federation configs this row once contrasted against were deleted by PR #1130 (#1129).
       **Done.** `component/port_jetstream.go:61` `Import bool` (`"import,omitempty"`); `StreamFacts.importLane` +
       `StreamFacts.Import()` (`component/port_facts.go`); the field constraint declares it INPUT-only
@@ -1024,6 +1069,21 @@ package; both declarations are now on the payload registrations) and
       (`internal/portgrammarcontrol`, `service/testdata/message_logger_subject_census.json`) were reverted with it.
       **Latent defect surfaced and fixed:** `test/shipped_graph_mutation_ports_test.go` resolved graph-ingest INPUT
       ports with `component.DirectionOutput`; harmless until a direction-scoped input field existed.
+      **Codex owner round (finding 5) — the documented one knob was not one knob, and this is FIXED IN CODE.**
+      The snippet sets `config.import` only, but `composition/analyze.go:71-78` suppressed the no-publisher orphan
+      from `PortDefinition.External` — a SIBLING of `config`, not a field inside it — so a lane declared exactly as
+      documented was still reported as an orphan by `validate <config>` and by boot analysis. Documenting a second
+      field would have been the wrong half of the adopter-seam rule: an import lane refuses any subject carrying this
+      deployment's own authority, so no in-graph publisher can legitimately feed it and "external" is ENTAILED by
+      "import", not an independent operator fact. `component/port_resolver.go` now derives it —
+      `External: def.External || feedsFromAPeerDeployment(facts, direction)` — reading the declaration off the
+      canonical facts projection (`PortFacts.Stream().Import()`) rather than asserting `JetStreamPort`, because
+      `internal/portgrammarcontrol` admits only `port_codec.go` and `port_facts.go` as homes for interpreting a
+      concrete port config. An operator's own `external: true` is untouched and it applies to inputs only.
+      Pinned by `TestValidateImportLaneIsExternallyFedWithoutASecondKnob`, whose control case is the same port with
+      `import` absent — still an orphan — so the test discriminates the derivation and not the orphan rule.
+      Mutation: `External: def.External,` (the derivation CALL deleted) → the import subtest FAILS
+      `orphaned_port findings = 1, want 0`; restored by `cp`, md5 `f2e74208f81669b70d1069ba9bd819fb`.
 - [x] 6.3 `processor/rule`: add a `platform` field to the action executor plumbed from `deps.Platform` at construction
       (the processor holds none today); `actions.go:1575-1583` mints from it; the firing entity remains the parent
       reference; delete the `SplitN` read-back. Before `stampRun` (`:1697-1700`) the action evaluates
@@ -1076,12 +1136,32 @@ package; both declarations are now on the payload registrations) and
       increments), with a matching `#### Scenario` in the delta. Mutation-checked: moving the recorder's `recorded`
       latch onto `ActionExecutor` (per-dispatch → per-action) fails the new test 1 != 3 while
       `TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite` still passes.
-      An executor with no platform answers `false` (cannot judge) rather than "everything is foreign". Round 1
-      HIGH-1 corrected the reason WHY that is safe: it is not the `CreateRuleProcessor` refusal, which guards
-      `deps.Platform` and not the hop into the executor. The authority is now a CONSTRUCTOR parameter of
-      `NewActionExecutorComplete` — the only constructor that receives a mutator, publisher and KV writer — so the
-      production path cannot omit it, and `TestIntegration_ProductionExecutorCarriesTheDeploymentAuthority` pins
-      both construction branches.
+      ~~An executor with no platform answers `false` (cannot judge) rather than "everything is foreign".~~
+      **WITHDRAWN by the Codex owner round (blocker 2) — that answer was fail-OPEN and it is deleted.** Round 1
+      HIGH-1 corrected the reason the production path was safe: not the `CreateRuleProcessor` refusal, which guards
+      `deps.Platform` and not the hop into the executor, but the authority being a CONSTRUCTOR parameter of
+      `NewActionExecutorComplete`, pinned on both construction branches by
+      `TestIntegration_ProductionExecutorCarriesTheDeploymentAuthority`. What rounds 1, 2 and 4 each treated as a
+      DOC-COMMENT problem — rewriting `foreignFiringEntity`'s comment three times on the reasoning that no in-repo
+      production caller uses the convenience constructors — was a real hole, because `NewActionExecutorFull` is
+      EXPORTED: its caller is an adopter outside this repository who is in no review here, and it hands out both a
+      mutator and a publisher, which is everything either guarded write needs. Caller enumeration is not a property
+      of an exported symbol.
+      **Fixed both ways, so the state is unrepresentable rather than merely tested.** (a) `NewActionExecutorFull`
+      and `NewActionExecutorWithMutator` — the two other constructors that can hold a `tripleMutator`, which both
+      guarded writes require — now take `platform types.PlatformMeta` as a final parameter, matching
+      `NewActionExecutorComplete`. **This is a BREAKING change to two exported symbols**, recorded in the migration
+      note. `NewActionExecutor` takes none and cannot write: it holds neither mutator nor publisher and there is no
+      setter for either. (b) The `if e.platform.Org == "" { return false }` short-circuit is DELETED, so
+      `ValidateEntityIDAuthority` decides: under an empty pair every parseable six-part ID differs at position 1 and
+      reads as foreign, which is fail-CLOSED and is also the truthful reason label. `foreignFiringEntity` and
+      `factory.go`'s comment are re-synced to the new mechanism.
+      `TestPublishAgentThroughExportedFullConstructorSkipsForeignSpawnedTask` covers the exported constructor path
+      over three cases — local written, foreign skipped and counted, absent-authority skipped and counted.
+      Mutations, `cp` backup, md5 `5958e8e1f1639e0bd0fabc0d11f322de` restored after each: restoring the deleted
+      short-circuit fails `absent_authority_reads_every_entity_as_foreign`; making `NewActionExecutorFull` accept the
+      authority and drop it (`_ = platform`) fails
+      `local_firing_entity_under_the_supplied_authority_is_written`, which is the parameter itself doing the work.
 - [x] 6.4 `graph/inference/hierarchy.go`: `GetHierarchyTriples` returns `nil, nil` for an entity whose positions 1–2
       differ from the deployment authority (no container, no membership, no inverse sibling edge, no warning) — the
       pair reaches `NewHierarchyInference` (which carries none today, `hierarchy.go:109-114`;
@@ -1170,6 +1250,22 @@ package; both declarations are now on the payload registrations) and
       | `task schema:generate && git status --short schemas/ specs/` | clean, no drift |
       | `openspec validate --all --strict --no-interactive` | `Totals: 53 passed, 0 failed (53 items)` |
       | `openspec validate entity-id-segment-semantics --strict` | `Change 'entity-id-segment-semantics' is valid` |
+
+      **RE-RUN after the Codex owner round, all green, serialized on a host verified idle first (load 2.89,
+      no `go test`/`task` process, `docker ps -q` returned nothing, 53Gi free):**
+
+      | Gate | Result |
+      |---|---|
+      | `go mod tidy -diff` | exit 0 |
+      | `task lint` | exit 0, no findings; `go fmt` left the tree unmodified |
+      | `go test -race -count=1 ./...` | exit 0, **153 `ok`, 0 `FAIL`** |
+      | `go test -tags=integration -race -count=1 -p 2 ./...` (what CI runs) | exit 0, **153 `ok`, 0 `FAIL`**; `processor/rule` 42.267s, `processor/graph-ingest` 32.247s |
+      | `go test ./test/contract/...` | `ok`, 2.646s |
+      | `task entity-id:audit` | `entity ID audit passed: 1312 structured candidates across 1 roots`, 0 findings. 1306 → 1312: the +6 are this round's own test literals — the three `TestMint_*` origin fixtures, the two `TestPublishAgentThroughExportedFullConstructorSkipsForeignSpawnedTask` IDs and the `TestValidateImportLaneIsExternallyFedWithoutASecondKnob` subject — and none trips a rule. Two line-pinned annotations in `processor/rule/actions_test.go` were re-anchored (`line=2125`→`2128`, `line=2823`→`2945`) because this round's insertions moved their targets |
+      | `task schema:generate && git status --short schemas/ specs/` | clean, no drift |
+      | `openspec validate --all --strict` | `Totals: 53 passed, 0 failed (53 items)` |
+      | `git diff --check <merge-base>` | silent — see the round's NIT-7 row in `conformance.md` |
+
 - [ ] 7.2 Covering e2e tiers on the landing branch, one at a time on the shared host, results recorded verbatim:
       `task e2e:core`; `task e2e:structural`; `task e2e:statistical`; `task e2e:semantic`; `task e2e:agentic`;
       `task e2e:lessons`; `task e2e:lifecycle`; `task e2e:ops`; `task e2e:crud-tools`; `task e2e:research-graph`.
@@ -1287,6 +1383,23 @@ package; both declarations are now on the payload registrations) and
       `//go:build integration` and run in the integration gate above. The remaining changes are the spec delta,
       `conformance.md`, this file, and `docs/operations/migration-beta162-to-beta163.md`. No tier exercises a path
       whose behaviour moved, so RUN 2's ten green tiers stand for the round-2 head.
+
+      **AFTER THE CODEX OWNER ROUND — three tiers RE-RUN, because this round's diff is not comment-only.** It
+      changes `component/port_resolver.go`, which every port of every component resolves through at boot; the five
+      direct-persistence guards in graph-ingest; the rule executor's foreign-firing decision; and `agentrun.Mint`.
+      The round's commit is marked BREAKING, so the house rule requires a covering tier green before it lands.
+      Run one at a time on an idle host, `task e2e:check-ports` clean first:
+
+      | Tier | Exit | Evidence |
+      |---|---|---|
+      | `e2e:core` | 0 | `graph_roundtrip_trace_entries:2` — the boot path with the derived `External`; every component's ports resolve through the changed resolver, so a regression there would refuse to compose |
+      | `e2e:agentic` | 0 | 45.2s; `graph_loop_triples:10`, `graph_model_triples:6`, `tool_executions:1`, `governance_verdicts_total:1`, `durable_tool_replay_executor_invocations:1` — the loop/run path through the rewritten `agentrun.Mint` origin guards |
+      | `e2e:structural` | 0 | Every value RUN 2 recorded for this tier is unchanged — `entities_processed_at_validation:174`, `hierarchy_container_count:46` (min 32), `inverse_symmetry_valid:1`, `authority_hierarchy_provenance_triples:836`, `rule_firings:6`, `canonical_create_hierarchy_births:0`, `relationship_stub_births:0`, `temporal_observed_time_validated:1`, `validation_errors:0` — which is the point: the direct-lane metering adds a record beside a refusal and changes no verdict |
+
+      The seven remaining tiers were not re-run. `e2e:statistical`/`e2e:semantic` exercise the same graph-ingest
+      and hierarchy paths `e2e:structural` covers, one inference tier further out; `e2e:lessons`, `e2e:lifecycle`,
+      `e2e:ops`, `e2e:crud-tools` and `e2e:research-graph` were green at round 4 and this round's diff touches no
+      path they exercise that the three above do not.
 
 - [ ] 7.3 Implementation review by `semstreams-reviewer`; verdict and every finding's disposition recorded in
       `conformance.md`.

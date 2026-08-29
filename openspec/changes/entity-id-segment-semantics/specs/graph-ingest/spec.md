@@ -8,14 +8,28 @@ Graphable fact arrival, every `graph.mutation.>` operation, and direct persisten
 structural validation. `@id` objects MUST NOT be authority-checked; they keep canonical structural validation; no stub is created and an absent object is permitted
 (the unmodified requirement "Relationship target absence creates no entity"), so a local subject may reference an
 imported entity. An import is a read-only mirror: a mutation from any
-non-import lane whose subject is an already-persisted foreign-authority entity MUST be rejected with
+non-import lane whose subject is a foreign-authority entity MUST be rejected with
 `foreign_authority`, and every local fact about an imported entity MUST live on a local subject that references it. On a lane whose input port is not declared `"import": true`, a candidate whose
 positions 1–2 differ from the deployment's MUST be rejected. On a declared import lane, a candidate whose positions
 1–2 equal the deployment's MUST be rejected, and a foreign candidate MUST be persisted with its identity bytes
 unchanged. Each rejection MUST be metered exactly once as `mutation_rejections{reason="authority_foreign"}` or
 `{reason="authority_claimed"}` and MUST emit a loud log naming the lane and the segment index, never the identity.
+This holds on the direct in-process lane too: it carries no NATS subject, so its metric and log name the lane as
+`arrival="direct"` rather than omitting the record.
 No configuration MAY disable the check. The import declaration and the envelope `source` string are the only
 provenance this requirement records; it authenticates nothing.
+
+**DEFERRED to #1168, recorded rather than dropped — the O-4 import-collision rejection is NOT in this change.**
+ADR-102 decision 4's accepted clause "an import of an ID already held under another source is rejected"
+(`docs/adr/102-entity-id-segment-semantics.md:26`) is not implemented, and nothing above asserts it. It cannot be a
+guard at this seam because the fact it compares does not exist yet: `graph.EntityState` (`graph/types.go:24-47`)
+carries no arrival-source or authority field — its `MessageType` records the payload type, not who sent it —
+`graph.MergeTriples` compares `(Subject, Predicate)` only, and the import-lane fact is read once at
+`processor/graph-ingest/component.go:1487` and recorded nowhere. Implementing O-4 therefore means designing retained
+provenance, which is stored-state work rather than a boundary check. Its home is #1168, queued immediately behind
+this change. Nothing is live while it waits: `grep -rn '"import"' configs/` returns 0, so no configuration this
+repository ships declares an import lane, and a second arrival of one ID under two sources is unreachable through a
+shipped composition.
 
 #### Scenario: a foreign write on a local lane never reaches ENTITY_STATES
 
@@ -85,6 +99,16 @@ provenance this requirement records; it authenticates nothing.
 - **AND** the imported entity's revision is unchanged
 - **AND** the test that verifies this is `TestAuthorityGateRejectsAnnotationOfImportedSubject`
 
+#### Scenario: a direct in-process rejection is metered and logged like any other
+
+- **GIVEN** the same deployment and a foreign-authority entity ID
+- **WHEN** it is used as the subject of an in-process `CreateEntity`, `MergeEntity`, hierarchy inverse-edge append,
+  batch append, or revision-checked delete — no NATS request, no arrival subject
+- **THEN** the caller receives the coded authority error AND
+  `mutation_rejections{arrival="direct",reason="authority_foreign"}` increments exactly once
+- **AND** exactly one WARN is emitted for that call, naming the lane and the segment index and never the identity
+- **AND** the test that verifies this is `TestAuthorityGateMetersDirectPersistenceRejectionsOnEveryDirectSeam`
+
 ### Requirement: Hierarchy inference skips foreign-authority entities
 
 Hierarchy inference MUST NOT mint a container entity, a membership triple, or an inverse sibling edge for an entity
@@ -108,6 +132,21 @@ back from the firing or triggering entity's ID. A component that receives no dep
 construct rather than mint under an empty or foreign pair. The local run entity MUST carry
 `agent.run.origin-entity-id` — a birth predicate naming the firing loop, whose object is that loop's canonical entity
 ID — for every run, so the run→loop linkage has one home that never depends on writing the loop.
+
+Every rule-engine constructor that can hold the triple mutator — the capability both framework writes below require
+— MUST take the deployment authority as a constructor parameter rather than a setter, including the exported
+convenience constructors, because the caller of an exported constructor is an adopter outside this repository who is
+in no review here. Where the authority is nonetheless absent, the foreign-vs-local decision MUST fail CLOSED: an
+executor holding no pair cannot establish that any entity is local, so every firing entity reads as foreign and every
+framework write to it is skipped, counted and logged. A decision that answers "local" for an unknown authority
+retires the guard rather than tightening it.
+
+`agentrun.Mint` MUST refuse an empty origin, and on an already-exists result MUST compare the STORED
+`agent.run.origin-entity-id` with the requested one and refuse a mismatch with a classified error, using the record
+that path already fetches. The run entity ID derives from the loop's instance segment alone, so two loops that
+different deployments name with the same instance derive one local run ID; the refusal converts a silent alias into a
+loud failure. A stored run carrying no origin is refused, not adopted — an empty value cannot establish that the
+stored run is this caller's. Making the identity collision-free is out of scope here and is #1168.
 
 **No framework write reaches a foreign firing entity.** The run-anchor pair (`agent.loop.run`,
 `agent.run.entity-id`) and the `rule.task.spawned` back-reference MUST be written on the firing entity only when it
@@ -167,3 +206,27 @@ skipped. Issue #1096 is complete only when this path is implemented and tested.
 - **THEN** the run entity is minted under `acme.dep1.` carrying `agent.run.origin-entity-id` = the local loop
 - **AND** the loop carries `agent.loop.run` and `agent.run.entity-id`
 - **AND** the test that verifies this is `TestRunScopeNewOnLocalLoopStampsAnchorAndOrigin`
+
+#### Scenario: an executor built through an exported constructor cannot silently disable the guard
+
+- **GIVEN** an `ActionExecutor` built through the exported `NewActionExecutorFull`, which holds both a mutator and a
+  publisher and can therefore reach both framework writes
+- **WHEN** it is constructed with the deployment's authority and a `publish_agent` action fires on a foreign entity
+- **THEN** `rule.task.spawned` is not written and the skip is counted once
+- **AND WHEN** it is constructed with an EMPTY authority and the same action fires on a LOCAL entity
+- **THEN** the write is still skipped and counted — the unknown authority fails closed, it does not read as local
+- **AND** the test that verifies this is
+  `TestPublishAgentThroughExportedFullConstructorSkipsForeignSpawnedTask`
+
+#### Scenario: two origins at one instance segment get a refusal, not each other's run
+
+- **GIVEN** a deployment `acme`/`ops` and two imported loops with distinct authorities and the same instance
+  segment — `peerone.dep1.agentic-loop.agent.execution.a1b2c3d4` and
+  `peertwo.dep9.agentic-loop.agent.execution.a1b2c3d4`
+- **WHEN** a run is minted from the first and then from the second
+- **THEN** the first mint succeeds carrying its own origin, and the second is REFUSED with a classified invalid error
+  rather than returning the first origin's run
+- **AND** the first run's stored origin is unchanged
+- **AND** an empty requested origin, and a stored run carrying no origin, are refused the same way
+- **AND** the tests that verify this are `TestMint_TwoOriginsAtOneInstanceAreRefusedNotAliased`,
+  `TestMint_RefusesEmptyOrigin` and `TestMint_LegacyOriginlessStoredRunIsRefused`
