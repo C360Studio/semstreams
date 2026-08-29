@@ -19,6 +19,7 @@ package rule
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"sync"
 	"testing"
@@ -434,6 +435,40 @@ func TestForeignFiringSkipLogNamesEveryDeclinedWrite(t *testing.T) {
 	assert.NotContains(t, skipped, runScopeImportedLoop,
 		"the peer's identity is never logged — it is not this deployment's to publish")
 	assert.Equal(t, semtypes.EntityIDReasonForeignAuthority, lines[0].attrs["reason"])
+}
+
+// TestForeignFiringSkipLogSurvivesAPublishFailure pins the OTHER reason the
+// flush is deferred rather than tail-called. The anchor skips are recorded
+// before the publish; rule.task.spawned is decided after it. So on a publish
+// error the counter has already incremented while the dispatch returns early,
+// and only the defer keeps the log's unit equal to the counter's unit — the
+// equality the requirement states.
+//
+// Without this, a tail call placed before the success return passes the whole
+// suite: every other test in this file takes the happy path, where a tail call
+// and a defer are indistinguishable. An operator debugging a failed dispatch is
+// exactly who needs the line, and is exactly who would not get it.
+//
+// Mutation check: replace `defer flushForeignSkips()` with a `flushForeignSkips()`
+// call immediately before publishAgentOnce's success return. This test fails on
+// the missing line; every other test in the package still passes.
+func TestForeignFiringSkipLogSurvivesAPublishFailure(t *testing.T) {
+	h := newRunScopeHarness(t)
+	h.seedImportedLoop(t)
+	h.pub.err = errors.New("jetstream unavailable")
+
+	err := h.executor.Execute(h.ctx, h.runScopeNewAction(),
+		&ExecutionContext{EntityID: runScopeImportedLoop})
+	require.Error(t, err, "the publish failure must surface; this test is about what is logged on the way out")
+
+	lines := h.logs.withMessage(foreignFiringSkipLogMessage)
+	require.Len(t, lines, 1,
+		"the skips recorded before the publish are still declined facts — the line is emitted on the error path too")
+	assert.Contains(t, lines[0].attrs["skipped"], agvocab.LoopRun,
+		"the anchor was declined before the publish was attempted, so it is named")
+	assert.InDelta(t, 1.0, testutil.ToFloat64(
+		h.metrics.foreignFiringWritesSkippedTotal.WithLabelValues(semtypes.EntityIDReasonForeignAuthority)), 0.0001,
+		"the counter incremented on this dispatch; the log must not silently disagree with it")
 }
 
 // TestRunScopeNewOnLocalLoopStampsAnchorAndOrigin is the other half: on a local
