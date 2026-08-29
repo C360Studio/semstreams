@@ -1,0 +1,99 @@
+# Tasks: agentic-loop restart-safe settlement
+
+## 0. Accepted gates
+
+- [x] 0.1 Complete the file:line surface, lane, state, lifecycle, and adopter inventory.
+- [x] 0.2 Receive independent `INVENTORY PASS` for SHA-256
+  `70603493e56887c3e355dcf9087891e03cf7ea7764454fcf528e0686b1bdfe9d`.
+- [ ] 0.3 Receive independent design review and explicit owner acceptance.
+- [x] 0.4 Remove `skip_specs: true` and materialize draft capability deltas.
+
+## 1. Blocking settlement foundation
+
+- [ ] 1.1 Hold implementation until #759 merges.
+- [ ] 1.2 Confirm every touched consumer uses #759's accepted `DeliveryResult` contract and native delivery owner.
+- [ ] 1.3 Confirm #1155 real-NATS replacement proof is available and reusable.
+- [ ] 1.4 Reconcile the design against merged #759; stop for reinventory if the surface differs materially.
+
+## 2. Stable identity and replay helpers
+
+- [ ] 2.1 Define deterministic TaskID, LoopID, RequestID, execution identity, output identity, and fingerprints.
+- [ ] 2.2 Preserve provider CallID; add framework RequestID and execution correlation.
+- [ ] 2.3 Evolve `TOOL_CALL_OUTCOMES` identity without adding a second outcome authority.
+- [ ] 2.4 Add exact committed-message lookup and collision validation for requests, responses, and verdicts.
+- [ ] 2.5 Add deterministic `Nats-Msg-Id` to every required output.
+
+## 3. Provider settlement
+
+- [ ] 3.1 Add `fail_commit_unknown`, `at_least_once`, and admitted `provider_reconcile` policies.
+- [ ] 3.2 Default to `fail_commit_unknown` and publish a typed machine-readable `AgentResponse` failure.
+- [ ] 3.3 Reconcile an existing committed matching response before provider invocation.
+- [ ] 3.4 Return explicit settlement for parse, resolution, invocation, error-response, and publication paths.
+- [ ] 3.5 Add real-NATS replacement failpoints around invocation, return, response commit, and source ACK.
+
+## 4. Loop task and response settlement
+
+- [ ] 4.1 Replace void task and response adapters with typed delivery work.
+- [ ] 4.2 Add direct `LoopEntity` read-through by LoopID.
+- [ ] 4.3 Settle task birth, initial request, created event, and terminal failures at the delivery boundary.
+- [ ] 4.4 Reconstruct response context and configuration from committed request material.
+- [ ] 4.5 Classify exact duplicate, proven applied, missing, and conflicting response identities.
+- [ ] 4.6 Route every required KV, Store, and publication failure into settlement.
+
+## 5. Tool-result continuation
+
+- [ ] 5.1 Stamp RequestID and framework execution identity on `ToolCall` and `ToolResult`.
+- [ ] 5.2 Reconstruct ordered tool batches from committed request, response, and pending results.
+- [ ] 5.3 Replace `stale_callid` log-and-drop with proven ACK, Retry, Terminate, or Quarantine.
+- [ ] 5.4 Persist each accepted result before publishing the next tool or request.
+- [ ] 5.5 Prove replacement between every result persistence and downstream PubAck boundary.
+- [ ] 5.6 Reuse `TOOL_CALL_OUTCOMES`; add no claimed or in-progress tool ledger.
+
+## 6. Approval continuation and dispatch
+
+- [ ] 6.1 Define and register `ApprovalContinuationV1` using the payload-registry checklist.
+- [ ] 6.2 Wire every required composition root and add production-decoder round-trip coverage.
+- [ ] 6.3 Store and verify continuation through `StoreRegistry` before ACKing approval-required results.
+- [ ] 6.4 Add typed continuation reference and applied-decision fingerprint to `PendingApprovalState`.
+- [ ] 6.5 Keep approve or modify evidence until the approved `ToolResult` arrives.
+- [ ] 6.6 Reconstruct configured approval deadlines from current `AGENT_LOOPS` after replacement.
+- [ ] 6.7 Rebuild dispatch `LoopTracker` from `AGENT_LOOPS` and add exact HTTP read-through.
+- [ ] 6.8 Test pending, approve, modify, reject, timeout, duplicate, and conflicting decisions across replacement.
+
+## 7. Signals and projections
+
+- [ ] 7.1 Convert signal handling to typed settlement with explicit happy and sad definitions.
+- [ ] 7.2 Make cancel wait for `COMPLETE_` state and terminal PubAck.
+- [ ] 7.3 Treat created and approval-pending consumers as reconstructable projections, not authority.
+- [ ] 7.4 Test AutoContinue and approval HTTP after replacement with empty process caches.
+
+## 8. Governance correlation proof
+
+- [ ] 8.1 Add stable proposal identity and fingerprint without changing #1140 policy content.
+- [ ] 8.2 Replace missing-waiter completion with validated retained-verdict recovery.
+- [ ] 8.3 Test replacement before proposal, after proposal, after verdict ACK, and before tool publication.
+- [ ] 8.4 If retained verdict and response redelivery succeed, add no durable governance state.
+- [ ] 8.5 If they fail, stop with the named failpoint for a new owner ruling; do not invent a bucket.
+
+## 9. Context and lifecycle closure
+
+- [ ] 9.1 Remove return-before-join behavior from `runWithBudget`.
+- [ ] 9.2 Remove return-before-join behavior from trajectory batch recording.
+- [ ] 9.3 Prove callback cancellation cancels and joins before settlement.
+- [ ] 9.4 Prove `Stop` joins every task spawned by touched deliveries.
+
+## 10. Verification and documentation
+
+- [ ] 10.1 Add table-driven unit tests for every lane's happy and sad disposition.
+- [ ] 10.2 Add real-NATS process-replacement tests using #1155.
+- [ ] 10.3 Serialize and run the relevant agentic E2E tier.
+- [ ] 10.4 Correct the false restart claims identified in the accepted inventory.
+- [ ] 10.5 Document provider ambiguity, Store requirements, metrics, and external-executor migration.
+- [ ] 10.6 Obtain SemStreams reviewer approval.
+- [ ] 10.7 Obtain owner-run cross-agent review.
+- [ ] 10.8 Archive as the final content commit and obtain narrow archive and spec-sync review.
+
+## Hold: AgentRun
+
+- [ ] H.1 After #1148 merges, reinventory AgentRun against the accepted baseline.
+- [ ] H.2 Add AgentRun only through a separately reviewed and owner-accepted design delta.
