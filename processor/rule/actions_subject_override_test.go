@@ -25,7 +25,7 @@ func TestExecuteAddTriple_SubjectExplicitLiteral(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mutator := &mockTripleMutator{}
-	executor := NewActionExecutorFull(nil, mutator, nil)
+	executor := NewActionExecutorFull(nil, mutator, nil, testExecutorPlatform())
 
 	action := Action{
 		Type:      ActionTypeAddTriple,
@@ -46,7 +46,7 @@ func TestExecuteAddTriple_SubjectSubstitutionResolved(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mutator := &mockTripleMutator{}
-	executor := NewActionExecutorFull(nil, mutator, nil)
+	executor := NewActionExecutorFull(nil, mutator, nil, testExecutorPlatform())
 
 	// Trigger entity (a child gather loop) carries a parent-loop ref
 	// triple — the counter pattern stamps the completion marker on
@@ -76,7 +76,7 @@ func TestExecuteAddTriple_SubjectEmptyDefaultsToEntityID(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mutator := &mockTripleMutator{}
-	executor := NewActionExecutorFull(nil, mutator, nil)
+	executor := NewActionExecutorFull(nil, mutator, nil, testExecutorPlatform())
 
 	// Back-compat path: no Subject set → falls through to the trigger
 	// entity. Every pre-#147 rule must keep its behaviour.
@@ -96,7 +96,7 @@ func TestExecuteAddTriple_SubjectResolvedEmptyIsError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mutator := &mockTripleMutator{}
-	executor := NewActionExecutorFull(nil, mutator, nil)
+	executor := NewActionExecutorFull(nil, mutator, nil, testExecutorPlatform())
 
 	// Trigger entity DOESN'T carry the referenced predicate — typo or
 	// race. Must return an error, NOT silently fall back to EntityID
@@ -127,7 +127,7 @@ func TestExecuteRemoveTriple_SubjectOverrideTargetsNamedEntity(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mutator := &mockTripleMutator{}
-	executor := NewActionExecutorFull(nil, mutator, nil)
+	executor := NewActionExecutorFull(nil, mutator, nil, testExecutorPlatform())
 
 	action := Action{
 		Type:      ActionTypeRemoveTriple,
@@ -145,7 +145,7 @@ func TestExecuteRemoveTriple_SubjectEmptyDefaultsToEntityID(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mutator := &mockTripleMutator{}
-	executor := NewActionExecutorFull(nil, mutator, nil)
+	executor := NewActionExecutorFull(nil, mutator, nil, testExecutorPlatform())
 
 	action := Action{
 		Type:      ActionTypeRemoveTriple,
@@ -161,7 +161,7 @@ func TestExecuteRemoveTriple_SubjectResolvedEmptyIsError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mutator := &mockTripleMutator{}
-	executor := NewActionExecutorFull(nil, mutator, nil)
+	executor := NewActionExecutorFull(nil, mutator, nil, testExecutorPlatform())
 
 	ec := &ExecutionContext{
 		EntityID: "acme.ops.robot.gcs.gather.99",
@@ -182,7 +182,7 @@ func TestExecuteUpdateTriple_SubjectSubstitutionResolved(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mutator := &mockTripleMutator{}
-	executor := NewActionExecutorFull(nil, mutator, nil)
+	executor := NewActionExecutorFull(nil, mutator, nil, testExecutorPlatform())
 
 	ec := &ExecutionContext{
 		EntityID: "acme.ops.robot.gcs.gather.99",
@@ -211,7 +211,7 @@ func TestExecuteUpdateTriple_SubjectEmptyDefaultsToEntityID(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mutator := &mockTripleMutator{}
-	executor := NewActionExecutorFull(nil, mutator, nil)
+	executor := NewActionExecutorFull(nil, mutator, nil, testExecutorPlatform())
 
 	action := Action{
 		Type:      ActionTypeUpdateTriple,
@@ -228,7 +228,7 @@ func TestExecuteUpdateTriple_SubjectResolvedEmptyIsError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mutator := &mockTripleMutator{}
-	executor := NewActionExecutorFull(nil, mutator, nil)
+	executor := NewActionExecutorFull(nil, mutator, nil, testExecutorPlatform())
 
 	ec := &ExecutionContext{
 		EntityID: "acme.ops.robot.gcs.gather.99",

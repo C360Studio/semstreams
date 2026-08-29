@@ -50,15 +50,43 @@ func resolveAndProjectPort(def PortDefinition, direction Direction) (Port, PortF
 	if field, err := validateFieldConstraints(config, direction, binding); err != nil {
 		return Port{}, PortFacts{}, portConfigError(def.Name, config.Kind(), field, err)
 	}
+	facts := binding.facts(config)
 	port := Port{
 		Name:        def.Name,
 		Direction:   direction,
 		Required:    def.Required,
 		Description: def.Description,
-		External:    def.External,
+		External:    def.External || feedsFromAPeerDeployment(facts, direction),
 		Config:      config,
 	}
-	return port, binding.facts(config), nil
+	return port, facts, nil
+}
+
+// feedsFromAPeerDeployment reports whether this resolved input is an ADR-102
+// import lane, which ENTAILS External and therefore derives it.
+//
+// An import lane states that the entities arriving on it were minted by a PEER
+// deployment; the lane refuses any subject carrying this deployment's own
+// authority, so no component inside this composition can legitimately publish to
+// it. "Fed from outside the composition" is not a second fact about that lane —
+// it is the same fact — and asking the operator to restate it as `external: true`
+// beside `config.import` is asking them to predict a value the framework already
+// holds. They would omit it, and composition validation would report the lane
+// they declared exactly as documented as a no-publisher orphan.
+//
+// It reads the declaration off the canonical facts projection rather than
+// asserting JetStreamPort here: port_codec.go and port_facts.go are the two
+// admitted homes for interpreting a concrete port config, and the runtime port
+// grammar control (internal/portgrammarcontrol) enforces that.
+//
+// It only ever adds External; an operator's own `external: true` is untouched,
+// and the direction guard keeps this to inputs, where both fields are meaningful.
+func feedsFromAPeerDeployment(facts PortFacts, direction Direction) bool {
+	if direction != DirectionInput {
+		return false
+	}
+	stream, ok := facts.Stream()
+	return ok && stream.Import()
 }
 
 func validateFieldConstraints(config Portable, direction Direction, binding portBinding) (string, error) {

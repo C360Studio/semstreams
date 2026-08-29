@@ -20,6 +20,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -80,6 +82,51 @@ type authorityGateHarness struct {
 	ctx        context.Context
 	component  *Component
 	testClient *natsclient.TestClient
+	logs       *authorityLogCapture
+}
+
+// authorityLogCapture records what the component logged. The requirement makes
+// the WARN an operator surface — "a loud log naming the lane and the segment
+// index, never the identity" — so it is asserted like any other output rather
+// than discarded. Locking keeps -race clean regardless of who logs.
+type authorityLogCapture struct {
+	mu      sync.Mutex
+	records []authorityLogRecord
+}
+
+type authorityLogRecord struct {
+	level slog.Level
+	msg   string
+	attrs map[string]string
+}
+
+func (h *authorityLogCapture) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *authorityLogCapture) Handle(_ context.Context, r slog.Record) error {
+	captured := authorityLogRecord{level: r.Level, msg: r.Message, attrs: map[string]string{}}
+	r.Attrs(func(a slog.Attr) bool {
+		captured.attrs[a.Key] = a.Value.String()
+		return true
+	})
+	h.mu.Lock()
+	h.records = append(h.records, captured)
+	h.mu.Unlock()
+	return nil
+}
+
+func (h *authorityLogCapture) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *authorityLogCapture) WithGroup(string) slog.Handler      { return h }
+
+func (h *authorityLogCapture) withMessage(msg string) []authorityLogRecord {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]authorityLogRecord, 0, len(h.records))
+	for _, record := range h.records {
+		if record.msg == msg {
+			out = append(out, record)
+		}
+	}
+	return out
 }
 
 // startAuthorityGateComponent builds graph-ingest with TWO JetStream input
@@ -113,10 +160,12 @@ func startAuthorityGateComponent(t *testing.T, enableHierarchy bool) *authorityG
 	configJSON, err := json.Marshal(config)
 	require.NoError(t, err)
 
+	logs := &authorityLogCapture{}
 	created, err := CreateGraphIngest(configJSON, component.Dependencies{
 		NATSClient:      testClient.Client,
 		PayloadRegistry: newTestPayloadRegistry(t),
 		Platform:        component.PlatformMeta{Org: authorityOrg, Platform: authorityPlatform},
+		Logger:          slog.New(logs),
 	})
 	require.NoError(t, err)
 
@@ -127,7 +176,7 @@ func startAuthorityGateComponent(t *testing.T, enableHierarchy bool) *authorityG
 	require.NoError(t, testClient.GetNativeConnection().Flush())
 	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 
-	return &authorityGateHarness{ctx: ctx, component: c, testClient: testClient}
+	return &authorityGateHarness{ctx: ctx, component: c, testClient: testClient, logs: logs}
 }
 
 // publishFact publishes a Graphable on the given subject prefix and returns
@@ -507,4 +556,90 @@ func TestAuthorityGateRejectsDeleteOfImportedSubject(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, revisionBefore, after.Revision,
 		"the import must still exist at its original revision after the refused delete")
+}
+
+// TestAuthorityGateMetersDirectPersistenceRejectionsOnEveryDirectSeam closes
+// review finding 4. The requirement covers direct persistence in the same
+// breath as the other two lanes — "on every lane — Graphable fact arrival,
+// every graph.mutation.> operation, and direct persistence" — and then says
+// each rejection is metered exactly once and loudly logged. The direct guards
+// previously only returned the classified error: a framework component calling
+// CreateEntity or MergeEntity in-process with a foreign subject was refused
+// correctly and invisibly, so an operator's `mutation_rejections` panel and
+// their log stream both read as if nothing had been refused.
+//
+// It enumerates the direct seams from the guard sites rather than from the two
+// public methods, because three of the five are reached through an adapter or a
+// shared body and a test covering only the public pair would leave them open:
+// the hierarchy inverse-edge adapter, the batch-append body, and the delete
+// body all carry their own guard.
+//
+// The counter is process-wide (sync.Once), so every assertion is a DELTA.
+func TestAuthorityGateMetersDirectPersistenceRejectionsOnEveryDirectSeam(t *testing.T) {
+	h := startAuthorityGateComponent(t, false)
+
+	counter := h.component.mutationRejections.WithLabelValues(arrivalDirect, authorityMetricReasonForeign)
+	foreignEntity := func() *graph.EntityState {
+		return &graph.EntityState{
+			ID: authorityForeignID, MessageType: testEntityType(), Version: 1, UpdatedAt: time.Now(),
+		}
+	}
+	foreignTriple := message.Triple{
+		Subject: authorityForeignID, Predicate: semantictest.Predicate(t, "test", "fixture", "value"),
+		Object: "v", Timestamp: time.Now(), Confidence: 1.0,
+	}
+
+	seams := []struct {
+		name string
+		call func() error
+	}{
+		{name: "CreateEntity", call: func() error {
+			return h.component.CreateEntity(h.ctx, foreignEntity())
+		}},
+		{name: "MergeEntity", call: func() error {
+			return h.component.MergeEntity(h.ctx, foreignEntity())
+		}},
+		{name: "hierarchy inverse-edge adapter", call: func() error {
+			return (&tripleAdderAdapter{component: h.component}).AddTriple(h.ctx, foreignTriple)
+		}},
+		{name: "batch append body", call: func() error {
+			_, err := h.component.addTriplesLane(h.ctx, []message.Triple{foreignTriple}, dedupLaneAddBatch)
+			return err
+		}},
+		{name: "delete body", call: func() error {
+			return h.component.deleteEntityAtRevision(h.ctx, authorityForeignID, 1)
+		}},
+	}
+
+	for _, seam := range seams {
+		t.Run(seam.name, func(t *testing.T) {
+			before := testutil.ToFloat64(counter)
+			logsBefore := len(h.logs.withMessage(authorityRejectionLogMessage))
+
+			err := seam.call()
+			require.Error(t, err, "a foreign subject must be refused on the direct lane")
+			var classified *errs.ClassifiedError
+			require.ErrorAs(t, err, &classified)
+			assert.Equal(t, semtypes.ErrorCodeEntityIDAuthorityInvalid, classified.Code,
+				"the caller still receives the classified error; metering does not replace it")
+
+			assert.InDelta(t, before+1, testutil.ToFloat64(counter), 0.0001,
+				"the direct-lane rejection is metered exactly once under arrival=%q", arrivalDirect)
+
+			records := h.logs.withMessage(authorityRejectionLogMessage)
+			require.Len(t, records, logsBefore+1, "exactly one loud log per refused direct call")
+			record := records[len(records)-1]
+			assert.Equal(t, slog.LevelWarn, record.level, "the log must be loud")
+			assert.Equal(t, arrivalDirect, record.attrs["arrival"])
+			assert.Equal(t, authorityMetricReasonForeign, record.attrs["reason"])
+			assert.Equal(t, semtypes.EntityIDLaneLocal, record.attrs["lane"])
+			assert.Equal(t, "1", record.attrs["segment_index"],
+				"the log names the failing segment index — authorityForeignID shares the org and "+
+					"differs at position 2 (platform), which is index 1")
+			for key, value := range record.attrs {
+				assert.NotContains(t, value, authorityForeignID,
+					"the refused identity is not this deployment's to publish; attr %q leaked it", key)
+			}
+		})
+	}
 }

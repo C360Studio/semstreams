@@ -370,7 +370,7 @@ func TestMessagePathSubstitutesTypedPayloadFieldsIntoActions(t *testing.T) {
 		ruleDefinitions:   map[string]Definition{def.ID: def},
 		matchCounters:     map[string]*atomic.Int64{def.ID: {}},
 		stateTracker:      tracker,
-		statefulEvaluator: NewStatefulEvaluator(tracker, NewActionExecutorFull(slog.Default(), nil, publisher), nil),
+		statefulEvaluator: NewStatefulEvaluator(tracker, NewActionExecutorFull(slog.Default(), nil, publisher, testExecutorPlatform()), nil),
 	}
 
 	event := &agentic.LoopCompletedEvent{

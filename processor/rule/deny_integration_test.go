@@ -33,6 +33,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/processor/rule"
+	"github.com/c360studio/semstreams/types"
 )
 
 // natsPublisher is a test-only implementation of rule.Publisher that publishes
@@ -120,7 +121,7 @@ func TestIntegration_DenyFlow(t *testing.T) {
 	require.NoError(t, sm.EnsureStreams(ctx, &config.Config{}))
 
 	pub := &natsPublisher{natsClient: nc}
-	executor := rule.NewActionExecutorFull(nil, nil, pub)
+	executor := rule.NewActionExecutorFull(nil, nil, pub, types.PlatformMeta{Org: "acme", Platform: "ops"})
 	executor.SetVerdictAuditor(&denyTestVerdictAuditor{nc: nc})
 
 	// Capture verdict events landing on the audit stream subject.

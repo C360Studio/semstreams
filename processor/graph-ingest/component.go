@@ -2059,10 +2059,11 @@ func (c *Component) mergeEntityOnLane(ctx context.Context, entity *graph.EntityS
 		return err
 	}
 	// The write chokepoint's own authority gate (ADR-102 d5): the fact lane has
-	// already run it in prepareFactProjection, so this is the backstop that
-	// covers every direct caller, on the same seam that owns the ID check.
+	// already run it in prepareFactProjection AND returned, so reaching a
+	// rejection here means a DIRECT caller, which is why the recording is the
+	// direct lane's and cannot double-count the fact lane's.
 	if err := c.authorizeSubject(entity.ID, importLane); err != nil {
-		return err
+		return c.recordDirectAuthorityRejection(err)
 	}
 	if err := ctx.Err(); err != nil {
 		return errs.Wrap(err, "Component", "MergeEntity", "context cancelled")
@@ -2216,10 +2217,12 @@ func (c *Component) createEntityWithReceipt(
 	}
 	// In-process creation is a LOCAL lane: hierarchy container births are minted
 	// by this deployment, so a foreign subject here would be the framework
-	// minting under a peer's authority (ADR-102 d5). Not metered — the counter
-	// is labelled by RPC subject and an in-process birth has none.
+	// minting under a peer's authority (ADR-102 d5). Metered and logged under
+	// the `direct` arrival, so the requirement's "each rejection is metered
+	// exactly once and loudly logged" holds on this lane too — an in-process
+	// birth has no RPC subject, not no destination.
 	if err := c.authorizeSubject(entity.ID, false); err != nil {
-		return nil, 0, err
+		return nil, 0, c.recordDirectAuthorityRejection(err)
 	}
 	if err := graph.ValidateEntityStateContract(entity); err != nil {
 		return nil, 0, errs.WrapInvalid(err, "Component", "CreateEntity", "validate entity state contract")
@@ -2297,9 +2300,11 @@ func (c *Component) deleteEntityAtRevision(ctx context.Context, entityID string,
 		return err
 	}
 	// Deleting a foreign subject is a mutation of an imported mirror, refused
-	// on every local lane (ADR-102 d5, ruled O-12(a)).
+	// on every local lane (ADR-102 d5, ruled O-12(a)). handleCanonicalDelete
+	// authorizes and returns before it reaches this body, so a rejection here is
+	// a direct in-process delete and is metered as one.
 	if err := c.authorizeSubject(entityID, false); err != nil {
-		return err
+		return c.recordDirectAuthorityRejection(err)
 	}
 	if revision == 0 {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "deleteEntityAtRevision", "revision must be nonzero")
@@ -2438,9 +2443,11 @@ func (c *Component) addTripleLane(ctx context.Context, triple message.Triple, la
 	}
 	// Same seam, same lane: an in-process append names its own subject, so a
 	// foreign one would be the framework annotating an imported mirror
-	// (ADR-102 d5, ruled O-12(a)).
+	// (ADR-102 d5, ruled O-12(a)). This body has no RPC caller — hierarchy
+	// inference's inverse edges are its only entry — so the rejection is the
+	// direct lane's to meter.
 	if authErr := c.authorizeSubject(triple.Subject, false); authErr != nil {
-		return false, 0, authErr
+		return false, 0, c.recordDirectAuthorityRejection(authErr)
 	}
 
 	// Check context
@@ -2576,10 +2583,13 @@ func (c *Component) addTriplesLane(ctx context.Context, triples []message.Triple
 	}
 	// EVERY subject in the batch, not just the synthetic root: a batch is
 	// rejected whole, so one foreign subject must not ride in beside local ones
-	// (ADR-102 d5).
+	// (ADR-102 d5). One record for the batch, at the first refused subject:
+	// the batch is one rejected operation, not one per subject.
+	// handleCanonicalAppend authorizes every subject and returns before this
+	// body, so the RPC lane never reaches here with a foreign subject.
 	for index := range triples {
 		if authErr := c.authorizeSubject(triples[index].Subject, false); authErr != nil {
-			return addTriplesResult{}, authErr
+			return addTriplesResult{}, c.recordDirectAuthorityRejection(authErr)
 		}
 	}
 

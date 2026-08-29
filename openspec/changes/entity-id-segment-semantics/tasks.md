@@ -212,77 +212,77 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
   pkg/types/entity_domain_authority_test.go:57:25: too many errors
   FAIL	github.com/c360studio/semstreams/pkg/types [build failed]
   FAIL
-  
+
   $ go test -race -count=1 -run FrameworkBuildersMint|FrameworkPrefixesAndPatterns|AlertIdentityCarries ./agentic/
   # github.com/c360studio/semstreams/agentic_test [github.com/c360studio/semstreams/agentic.test]
   agentic/entity_ids_semantics_test.go:60:76: too many arguments in call to graph.NewAlertEvent
-  	want (string, string, map[string]any, graph.EventMetadata)
+        want (string, string, map[string]any, graph.EventMetadata)
   agentic/entity_ids_semantics_test.go:75:28: undefined: semtypes.IsFrameworkEntityDomain
   agentic/entity_ids_semantics_test.go:114:73: too many arguments in call to graph.NewAlertEvent
-  	want (string, string, map[string]any, graph.EventMetadata)
+        want (string, string, map[string]any, graph.EventMetadata)
   agentic/entity_ids_semantics_test.go:116:74: too many arguments in call to graph.NewAlertEvent
-  	want (string, string, map[string]any, graph.EventMetadata)
+        want (string, string, map[string]any, graph.EventMetadata)
   agentic/entity_ids_semantics_test.go:121:45: undefined: semtypes.LongestFrameworkIdentityFamily
   agentic/entity_ids_semantics_test.go:123:64: too many arguments in call to graph.NewAlertEvent
-  	want (string, string, map[string]any, graph.EventMetadata)
+        want (string, string, map[string]any, graph.EventMetadata)
   agentic/entity_ids_semantics_test.go:125:69: too many arguments in call to graph.NewAlertEvent
-  	want (string, string, map[string]any, graph.EventMetadata)
+        want (string, string, map[string]any, graph.EventMetadata)
   FAIL	github.com/c360studio/semstreams/agentic [build failed]
   FAIL
-  
+
   $ go test -race -count=1 -run TestRuleTriggerIdentityCarriesTheDeploymentAuthority|TestSegmentTokens ./processor/rule/
   # github.com/c360studio/semstreams/processor/rule [github.com/c360studio/semstreams/processor/rule.test]
   processor/rule/graph_event_identity_semantics_test.go:18:52: too many arguments in call to ruleTriggerEntityID
-  	want (string, string)
+        want (string, string)
   processor/rule/graph_event_identity_semantics_test.go:22:54: too many arguments in call to ruleTriggerEntityID
-  	want (string, string)
+        want (string, string)
   processor/rule/graph_event_identity_semantics_test.go:26:52: too many arguments in call to ruleTriggerEntityID
-  	want (string, string)
+        want (string, string)
   processor/rule/graph_event_identity_semantics_test.go:45:18: undefined: types.LongestFrameworkIdentityFamily
   processor/rule/graph_event_identity_semantics_test.go:50:53: too many arguments in call to ruleTriggerEntityID
-  	want (string, string)
+        want (string, string)
   FAIL	github.com/c360studio/semstreams/processor/rule [build failed]
   FAIL
-  
+
   $ go test -race -count=1 -run TestAppliesToThreeSegmentsIsSourceScope ./processor/agentic-loop/lessonmatch/
   ok  	github.com/c360studio/semstreams/processor/agentic-loop/lessonmatch	1.226s
-  
+
   $ go test -race -count=1 -run TestGraphSummaryTypeKeyFollowsCanonicalOrder ./processor/graph-query/
   --- FAIL: TestGraphSummaryTypeKeyFollowsCanonicalOrder (0.00s)
       summary_test.go:398: Count = 4, want 2 (non-canonical values are skipped, never bucketed by index)
   FAIL
   FAIL	github.com/c360studio/semstreams/processor/graph-query	0.382s
   FAIL
-  
+
   $ go test -race -count=1 -run TestEntityIDEdgesReadPositionsByName|TestSummaryGroupsByNamedDomain ./graph/clustering/
   --- FAIL: TestEntityIDEdgesReadPositionsByName (0.00s)
       entityid_provider_test.go:614: neighbors = [acme.dep1.src.git.commit.a2 acme.dep1.other.git.commit.b1], want the source peer v1 (named System = src)
       entityid_provider_test.go:620: getSystem = "git", want src (position 3 by name)
   --- FAIL: TestSummaryGroupsByNamedDomain (0.00s)
-          	Error Trace:	/Users/coby/Code/c360/semstreams-wt/claude/gh1095-entity-id-slice-a/graph/clustering/summarizer_test.go:354
-          	Error:      	Not equal: 
-          	            	expected: "git"
-          	            	actual  : "src"
-          	Error Trace:	/Users/coby/Code/c360/semstreams-wt/claude/gh1095-entity-id-slice-a/graph/clustering/summarizer_test.go:361
-          	Error:      	map[string]llm.DomainGroup{"feed":llm.DomainGroup{Domain:"feed", Count:1, SystemTypes:[]llm.SystemType{llm.SystemType{Name:"media.video", Count:1}}}, "src":llm.DomainGroup{Domain:"src", Count:3, SystemTypes:[]llm.SystemType{llm.SystemType{Name:"git.repo", Count:1}, llm.SystemType{Name:"git.commit", Count:2}}}} does not contain "git"
+                Error Trace:	/Users/coby/Code/c360/semstreams-wt/claude/gh1095-entity-id-slice-a/graph/clustering/summarizer_test.go:354
+                Error:      	Not equal:
+                                expected: "git"
+                                actual  : "src"
+                Error Trace:	/Users/coby/Code/c360/semstreams-wt/claude/gh1095-entity-id-slice-a/graph/clustering/summarizer_test.go:361
+                Error:      	map[string]llm.DomainGroup{"feed":llm.DomainGroup{Domain:"feed", Count:1, SystemTypes:[]llm.SystemType{llm.SystemType{Name:"media.video", Count:1}}}, "src":llm.DomainGroup{Domain:"src", Count:3, SystemTypes:[]llm.SystemType{llm.SystemType{Name:"git.repo", Count:1}, llm.SystemType{Name:"git.commit", Count:2}}}} does not contain "git"
   FAIL
   FAIL	github.com/c360studio/semstreams/graph/clustering	0.327s
   FAIL
-  
+
   $ go test -race -count=1 -run TestSubjectToIRIFollowsCanonicalOrder ./vocabulary/export/
   --- FAIL: TestSubjectToIRIFollowsCanonicalOrder (0.00s)
       export_test.go:306: subjectToIRI() = "https://semstreams.semanticstream.ing/entities/acme/dep1/src/git/commit/a1", want the named-field composition "https://semstreams.semanticstream.ing/entities/acme/dep1/git/src/commit/a1"
   FAIL
   FAIL	github.com/c360studio/semstreams/vocabulary/export	0.172s
   FAIL
-  
+
   $ go test -race -count=1 -run TestParseZoneEntityIDReadsNamedPositions ./examples/processors/iot_sensor/
   --- FAIL: TestParseZoneEntityIDReadsNamedPositions (0.00s)
       processor_test.go:346: ZoneEntityID = "acme.logistics.facility.zone.area.cold-storage-1", want acme.logistics.zone.facility.area.cold-storage-1
   FAIL
   FAIL	github.com/c360studio/semstreams/examples/processors/iot_sensor	0.270s
   FAIL
-  
+
   $ go test -race -count=1 -run TestAuditFlags|TestAuditSegmentRules ./internal/entityidaudit/
   --- FAIL: TestAuditFlagsAuthorityLiteral (0.00s)
       audit_test.go:660: findings = []entityidaudit.Finding{}, want one authority_literal on the go-format-prefix surface
@@ -297,18 +297,18 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
   FAIL
   FAIL	github.com/c360studio/semstreams/internal/entityidaudit	0.214s
   FAIL
-  
+
   $ go test -race -count=1 -run TestConfigRejectsOversizedAuthorityPair|TestConfigRejectsRemovedInstanceID ./config/
   --- FAIL: TestConfigRejectsOversizedAuthorityPair (0.00s)
-          	Error Trace:	/Users/coby/Code/c360/semstreams-wt/claude/gh1095-entity-id-slice-a/config/config_test.go:409
-          	Error:      	An error is expected but got nil.
+                Error Trace:	/Users/coby/Code/c360/semstreams-wt/claude/gh1095-entity-id-slice-a/config/config_test.go:409
+                Error:      	An error is expected but got nil.
   --- FAIL: TestConfigRejectsRemovedInstanceID (0.00s)
-          	Error Trace:	/Users/coby/Code/c360/semstreams-wt/claude/gh1095-entity-id-slice-a/config/config_test.go:424
-          	Error:      	An error is expected but got nil.
+                Error Trace:	/Users/coby/Code/c360/semstreams-wt/claude/gh1095-entity-id-slice-a/config/config_test.go:424
+                Error:      	An error is expected but got nil.
   FAIL
   FAIL	github.com/c360studio/semstreams/config	0.286s
   FAIL
-  
+
   $ go test -race -count=1 -run TestMissionIdentityFollowsCanonicalOrder ./cmd/e2e-semstreams/mission/
   # github.com/c360studio/semstreams/cmd/e2e-semstreams/mission [github.com/c360studio/semstreams/cmd/e2e-semstreams/mission.test]
   cmd/e2e-semstreams/mission/entity_id_semantics_test.go:26:29: undefined: semtypes.NewEntityDomainAuthority
@@ -443,10 +443,10 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       BEFORE sha256 690ab162c909db961c0b9c4d7df60fce205c3b036ee69e92239fa641678e3711
       [applied] pkg/types/entity_id.go
       --- FAIL: TestEntityIDKeyOrderIsSystemBeforeDomain (0.00s)
-          entity_id_semantics_test.go:28: 
-          entity_id_semantics_test.go:29: 
-          entity_id_semantics_test.go:32: 
-          entity_id_semantics_test.go:33: 
+          entity_id_semantics_test.go:28:
+          entity_id_semantics_test.go:29:
+          entity_id_semantics_test.go:32:
+          entity_id_semantics_test.go:33:
       FAIL
       FAIL	github.com/c360studio/semstreams/pkg/types	0.290s
       FAIL
@@ -461,8 +461,8 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       BEFORE sha256 046239ae979aafbde12425d7aea0609641b7b658c65c6abe4f368a887c5f9381
       [applied] pkg/types/entity_domain_authority.go
       --- FAIL: TestEntityDomainAuthorityMirrorsPredicateAuthority (0.00s)
-          entity_domain_authority_test.go:34: 
-              	            				/Users/coby/Code/c360/semstreams-wt/claude/gh1095-entity-id-slice-a/pkg/types/entity_domain_authority_test.go:34
+          entity_domain_authority_test.go:34:
+                                                        /Users/coby/Code/c360/semstreams-wt/claude/gh1095-entity-id-slice-a/pkg/types/entity_domain_authority_test.go:34
       FAIL
       FAIL	github.com/c360studio/semstreams/pkg/types	0.242s
       FAIL
@@ -480,8 +480,8 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       [applied] processor/graph-ingest/component.go
       --- FAIL: TestAuthorityGateRejectsForeignOnFactLane (5.34s)
           authority_gate_integration_test.go:162:
-              	Error:      	Condition never satisfied
-              	Messages:   	mutation_rejections{reason="authority_foreign"} must increment exactly once
+                Error:      	Condition never satisfied
+                Messages:   	mutation_rejections{reason="authority_foreign"} must increment exactly once
       FAIL
       FAIL	github.com/c360studio/semstreams/processor/graph-ingest	6.193s
       AFTER  sha256 b0968b77728757215827edc3841f4998f5e9eb946b9eb7c7c57966fb2f632ac5  restored=yes
@@ -496,8 +496,8 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       [applied] processor/graph-ingest/component.go
       WARN graph-ingest: entity authority rejected lane=import.entity.> reason=authority_foreign arrival=local segment_index=1
       --- FAIL: TestImportLaneAcceptsForeignRejectsLocalClaim (5.36s)
-              	Error:      	Condition never satisfied
-              	Messages:   	entity "acme.dep2.src.git.commit.a1" never landed in ENTITY_STATES
+                Error:      	Condition never satisfied
+                Messages:   	entity "acme.dep2.src.git.commit.a1" never landed in ENTITY_STATES
       FAIL
       FAIL	github.com/c360studio/semstreams/processor/graph-ingest	6.171s
       AFTER  sha256 b0968b77728757215827edc3841f4998f5e9eb946b9eb7c7c57966fb2f632ac5  restored=yes
@@ -520,7 +520,7 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       FAIL	github.com/c360studio/semstreams/processor/rule	0.402s
       FAIL
       AFTER  sha256 27bfa301d8ec4943333d44f1f68175a42ecb7cd66f18d256b74ee932738f9707  restored=yes
-      
+
       ===== M5b: processor/rule/entity_substitution.go =====
       BEFORE sha256 27bfa301d8ec4943333d44f1f68175a42ecb7cd66f18d256b74ee932738f9707
       [applied] processor/rule/entity_substitution.go
@@ -547,8 +547,8 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       [applied] processor/rule/actions.go
       --- FAIL: TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite (0.54s)
           actions_run_scope_integration_test.go:195 (via :226):
-              	Error:      	Received unexpected error:
-              	            	kv: key not found
+                Error:      	Received unexpected error:
+                                kv: key not found
       FAIL	github.com/c360studio/semstreams/processor/rule	1.373s
       (TestRunScopeNewOnLocalLoopStampsAnchorAndOrigin passes — see the premise correction above)
       AFTER  sha256 ee4a36975218075df42aff56a3deeb65d5f43ccc9ba2c369dd7ecddb32f79747  restored=yes
@@ -557,8 +557,8 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       BEFORE sha256 ee4a36975218075df42aff56a3deeb65d5f43ccc9ba2c369dd7ecddb32f79747
       [applied] processor/rule/actions.go
       --- FAIL: TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite (0.54s)
-              	Error:      	[]string{"foreign.dep9.agentic-loop.agent.execution.import1", "foreign.dep9.agentic-loop.agent.execution.import1"} should not contain "foreign.dep9.agentic-loop.agent.execution.import1"
-              	Messages:   	no mutation request may target a foreign-authority subject, not even a rejected one
+                Error:      	[]string{"foreign.dep9.agentic-loop.agent.execution.import1", "foreign.dep9.agentic-loop.agent.execution.import1"} should not contain "foreign.dep9.agentic-loop.agent.execution.import1"
+                Messages:   	no mutation request may target a foreign-authority subject, not even a rejected one
       FAIL	github.com/c360studio/semstreams/processor/rule	1.370s
       AFTER  sha256 ee4a36975218075df42aff56a3deeb65d5f43ccc9ba2c369dd7ecddb32f79747  restored=yes
 
@@ -566,11 +566,11 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       BEFORE sha256 b5958bac8f63b43b4a6fda8fa5e2144ddb298315696f761970caa3af20b2d665
       [applied] agentic/agentrun/agentrun.go
       --- FAIL: TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite (0.57s)
-              	Error:      	Should be true
-              	Messages:   	the local run must carry agent.run.origin-entity-id so the run->loop pointer never depends on writing the loop
+                Error:      	Should be true
+                Messages:   	the local run must carry agent.run.origin-entity-id so the run->loop pointer never depends on writing the loop
       --- FAIL: TestRunScopeNewOnLocalLoopStampsAnchorAndOrigin (0.38s)
-              	Error:      	Should be true
-              	Messages:   	a local origin gets the same predicate as an imported one
+                Error:      	Should be true
+                Messages:   	a local origin gets the same predicate as an imported one
       FAIL	github.com/c360studio/semstreams/processor/rule	1.437s
       AFTER  sha256 b5958bac8f63b43b4a6fda8fa5e2144ddb298315696f761970caa3af20b2d665  restored=yes
       ```
@@ -605,13 +605,13 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       BEFORE sha256 690ab162c909db961c0b9c4d7df60fce205c3b036ee69e92239fa641678e3711
       [applied] pkg/types/entity_id.go
       --- FAIL: TestPrefixLevelsAreNamed (0.00s)
-          entity_id_semantics_test.go:43: 
-          entity_id_semantics_test.go:44: 
-          entity_id_semantics_test.go:45: 
-          entity_id_semantics_test.go:55: 
-          entity_id_semantics_test.go:55: 
-          entity_id_semantics_test.go:55: 
-          entity_id_semantics_test.go:64: 
+          entity_id_semantics_test.go:43:
+          entity_id_semantics_test.go:44:
+          entity_id_semantics_test.go:45:
+          entity_id_semantics_test.go:55:
+          entity_id_semantics_test.go:55:
+          entity_id_semantics_test.go:55:
+          entity_id_semantics_test.go:64:
       FAIL
       FAIL	github.com/c360studio/semstreams/pkg/types	0.242s
       FAIL
@@ -643,14 +643,14 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       FAIL	github.com/c360studio/semstreams/processor/graph-query [build failed]
       FAIL
       AFTER  sha256 d43df4ba99f77e86aba32380c5d2639b3708c4a913418b5a280f47aee2c831d9  restored=yes
-      
+
       ===== M10 (re-run, compiling mutant): processor/graph-query/summary.go =====
       BEFORE sha256 d43df4ba99f77e86aba32380c5d2639b3708c4a913418b5a280f47aee2c831d9
       [applied] processor/graph-query/summary.go
       FAIL	github.com/c360studio/semstreams/processor/graph-query [build failed]
       FAIL
       AFTER  sha256 d43df4ba99f77e86aba32380c5d2639b3708c4a913418b5a280f47aee2c831d9  restored=yes
-      
+
       ===== M10 (re-run 2, compiling mutant: raw segs[2..4] reader, parser import dropped): processor/graph-query/summary.go =====
       BEFORE sha256 d43df4ba99f77e86aba32380c5d2639b3708c4a913418b5a280f47aee2c831d9
       [applied] processor/graph-query/summary.go
@@ -689,7 +689,7 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       FAIL	github.com/c360studio/semstreams/graph/clustering [build failed]
       FAIL
       AFTER  sha256 f5a3683dd120e7021684df15b521f9e04ee4a6bd81653d187c52fdc72502f2db  restored=yes
-      
+
       ===== M12a (re-run, compiling mutant): graph/clustering/entityid_provider.go =====
       BEFORE sha256 f5a3683dd120e7021684df15b521f9e04ee4a6bd81653d187c52fdc72502f2db
       [applied] graph/clustering/entityid_provider.go
@@ -701,13 +701,13 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       FAIL	github.com/c360studio/semstreams/graph/clustering	0.372s
       FAIL
       AFTER  sha256 f5a3683dd120e7021684df15b521f9e04ee4a6bd81653d187c52fdc72502f2db  restored=yes
-      
+
       ===== M12b: graph/clustering/summarizer.go =====
       BEFORE sha256 dbf56af410378dd642b93c6231bb96ac50e754680f855f1690f7e5719d8816a8
       [applied] graph/clustering/summarizer.go
       --- FAIL: TestSummaryGroupsByNamedDomain (0.00s)
-          summarizer_test.go:354: 
-          summarizer_test.go:361: 
+          summarizer_test.go:354:
+          summarizer_test.go:361:
       FAIL
       FAIL	github.com/c360studio/semstreams/graph/clustering	0.353s
       FAIL
@@ -738,9 +738,9 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       (attempt 3, the discriminating unit test)
       --- FAIL: TestGetHierarchyTriplesSkipsForeignAuthority (0.00s)
           hierarchy_test.go:170: Should be empty, but was [{c360.dep9.sensor.document.temperature.sensor-001 hierarchy.type.member c360.dep9.sensor.document.temperature.group ...} {... hierarchy.system.member ...} {... hierarchy.domain.member ...}]
-              	Messages:   	no membership or sibling triple may be minted for an imported entity
+                Messages:   	no membership or sibling triple may be minted for an imported entity
           hierarchy_test.go:171: Should be empty, but was [0x3542639b6200 0x3542639b6280 0x3542639b6300]
-              	Messages:   	no container entity may be born under a peer's authority
+                Messages:   	no container entity may be born under a peer's authority
           hierarchy_test.go:173: Should be empty, but was [{c360.dep9.sensor.document.temperature.group hierarchy.type.contains ...} {... hierarchy.system.contains ...} {... hierarchy.domain.contains ...}]
       AFTER  sha256 4309ae20799134a8d15a44a532c595e62919abc5f6d603198839b4e20e6b436f  restored=yes
       ```
@@ -753,23 +753,23 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       BEFORE sha256 ec9b3918d265c2bae4a78da79588cb1af77386f06c93402bd4b2d2c059a1619a
       [applied] config/config.go
       --- FAIL: TestConfigRejectsOversizedAuthorityPair (0.00s)
-          config_test.go:409: 
+          config_test.go:409:
       FAIL
       FAIL	github.com/c360studio/semstreams/config	0.304s
       FAIL
       AFTER  sha256 ec9b3918d265c2bae4a78da79588cb1af77386f06c93402bd4b2d2c059a1619a  restored=yes
-      
+
       ===== M14b: config/config.go =====
       BEFORE sha256 ec9b3918d265c2bae4a78da79588cb1af77386f06c93402bd4b2d2c059a1619a
       [applied] config/config.go
       ok  	github.com/c360studio/semstreams/config	1.312s
       AFTER  sha256 ec9b3918d265c2bae4a78da79588cb1af77386f06c93402bd4b2d2c059a1619a  restored=yes
-      
+
       ===== M14b (re-run, compiling mutant): config/config.go =====
       BEFORE sha256 ec9b3918d265c2bae4a78da79588cb1af77386f06c93402bd4b2d2c059a1619a
       [applied] config/config.go
       --- FAIL: TestConfigRejectsRemovedInstanceID (0.00s)
-          config_test.go:424: 
+          config_test.go:424:
       FAIL
       FAIL	github.com/c360studio/semstreams/config	0.303s
       FAIL

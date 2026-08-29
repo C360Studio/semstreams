@@ -564,39 +564,25 @@ type ActionExecutor struct {
 // other than this deployment's — an imported read-only mirror the framework
 // must not write to (ADR-102 d5, ruled O-12(a)).
 //
-// An executor with no deployment authority cannot judge this and answers false
-// — every entity reads as LOCAL, which RETIRES the guards below rather than
-// tightening them. A production executor in that state does exist: the no-NATS
-// branch of processor.go builds one through NewActionExecutor. What is an
-// in-repo test-fixture condition is reaching that state WITH A GUARDED WRITE IN
-// PLAY, and the reason is caller enumeration, not capability:
+// It fails CLOSED, and it does so by asking the validator rather than by
+// short-circuiting. An executor holding no deployment authority cannot establish
+// that any entity is local, and ValidateEntityIDAuthority already says so: with
+// an empty org/platform pair every parseable six-part ID differs at position 1,
+// so every firing entity reads as foreign and every framework write to it is
+// skipped, counted and logged. Three earlier revisions of this function carried
+// an `if e.platform.Org == "" { return false }` short-circuit that judged every
+// entity LOCAL and so RETIRED both guards below; three rounds of review treated
+// that as a doc-comment problem. It is deleted.
 //
-//   - The two production sites that can write (processor.go, NATS present) both
-//     call NewActionExecutorComplete, which takes the authority as a constructor
-//     parameter and so cannot omit it.
-//   - The third production site (processor.go, no NATS client) calls
-//     NewActionExecutor, which holds neither publisher nor mutator; both guarded
-//     writes require a mutator, so its zero e.platform is inert.
-//   - NewActionExecutorFull takes BOTH a mutator and a publisher, so it could
-//     reach either guarded write with e.platform zero. NewActionExecutorWithMutator
-//     takes only a mutator and there is no publisher setter, so it can never
-//     reach the published-gated rule.task.spawned skip — but SetLifecycleManager
-//     is exported, so with its mutator it can still reach the run-anchor guard.
-//     Neither has a production or a sister-repo caller (verified by grep across
-//     the c360 tree).
-//
-// Do not read this as "the convenience constructors cannot write": an earlier
-// revision of this comment claimed that, and NewActionExecutorFull's own
-// signature refutes it.
-//
-// CreateRuleProcessor's refusal of an empty deps.Platform is a SEPARATE guard:
-// it protects deps.Platform, not the hop from there into this field. Do not
-// read it as making this branch unreachable — an earlier revision of this
-// comment did, and it was wrong.
+// The absent-authority state is additionally unrepresentable from every
+// direction an ActionExecutor can be built: NewActionExecutorComplete,
+// NewActionExecutorFull and NewActionExecutorWithMutator — the three
+// constructors that can hold a tripleMutator, which both guarded writes require
+// — all take the authority as a parameter, and CreateRuleProcessor refuses a
+// deps.Platform with an empty pair. NewActionExecutor takes no authority and
+// cannot write: it holds neither mutator nor publisher and there is no setter
+// for either.
 func (e *ActionExecutor) foreignFiringEntity(entityID string) bool {
-	if e.platform.Org == "" || e.platform.Platform == "" {
-		return false
-	}
 	return semtypes.ValidateEntityIDAuthority(entityID, e.platform.Org, e.platform.Platform, false) != nil
 }
 
@@ -747,19 +733,41 @@ func NewActionExecutor(logger *slog.Logger) *ActionExecutor {
 
 // NewActionExecutorWithMutator creates a new ActionExecutor with triple mutation support.
 // The mutator enables actual persistence of triple operations via NATS request/response.
-func NewActionExecutorWithMutator(logger *slog.Logger, mutator TripleMutator) *ActionExecutor {
+//
+// platform is the DEPLOYMENT's own authority (deps.Platform at the composition
+// root), required for the same reason it is required by
+// NewActionExecutorComplete: the mutator is what makes the framework's writes to
+// a FIRING entity possible, so an executor that holds one must be able to tell
+// this deployment's entities from an imported mirror (ADR-102 d5; #1096).
+func NewActionExecutorWithMutator(
+	logger *slog.Logger,
+	mutator TripleMutator,
+	platform types.PlatformMeta,
+) *ActionExecutor {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &ActionExecutor{
 		logger:        logger,
 		tripleMutator: mutator,
+		platform:      platform,
 	}
 }
 
 // NewActionExecutorFull creates a new ActionExecutor with full functionality.
 // The mutator enables triple persistence, and the publisher enables NATS publishing.
-func NewActionExecutorFull(logger *slog.Logger, mutator TripleMutator, publisher Publisher) *ActionExecutor {
+//
+// platform is the DEPLOYMENT's own authority — see NewActionExecutorComplete for
+// why it is a parameter and not a setter. This constructor holds BOTH a mutator
+// and a publisher, so it can reach both framework writes to the firing entity
+// (the run-anchor pair and the rule.task.spawned back-reference); it therefore
+// carries exactly the same requirement.
+func NewActionExecutorFull(
+	logger *slog.Logger,
+	mutator TripleMutator,
+	publisher Publisher,
+	platform types.PlatformMeta,
+) *ActionExecutor {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -767,6 +775,7 @@ func NewActionExecutorFull(logger *slog.Logger, mutator TripleMutator, publisher
 		logger:        logger,
 		tripleMutator: mutator,
 		publisher:     publisher,
+		platform:      platform,
 	}
 }
 
@@ -786,11 +795,11 @@ func NewActionExecutorFull(logger *slog.Logger, mutator TripleMutator, publisher
 // present, and the only one that receives a KV writer. Of the three convenience
 // constructors above, NewActionExecutor is also a production constructor — the
 // no-NATS branch of processor.go builds it — but it holds neither publisher nor
-// mutator, so no framework write to the firing entity is possible through it.
-// NewActionExecutorWithMutator and NewActionExecutorFull have no production and
-// no sister-repo caller; they are in-repo test fixtures. They are NOT incapable
-// of writing (Full takes both a mutator and a publisher), which is why the
-// authority here is a parameter and not a setter.
+// mutator, so no framework write to the firing entity is possible through it and
+// it takes no authority. NewActionExecutorWithMutator and NewActionExecutorFull
+// have no production and no sister-repo caller today, but they are EXPORTED, so
+// the caller who matters is an adopter outside this repository who is not in any
+// review here; both can hold a mutator, so both take the authority too.
 func NewActionExecutorComplete(
 	logger *slog.Logger,
 	mutator TripleMutator,

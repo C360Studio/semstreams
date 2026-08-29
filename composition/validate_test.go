@@ -328,6 +328,68 @@ func TestValidateSuppressesOrphanOnlyForExternallyFedInput(t *testing.T) {
 	}
 }
 
+// TestValidateImportLaneIsExternallyFedWithoutASecondKnob — a declared import
+// lane is fed by a PEER deployment by construction, so it must not be reported
+// as a no-publisher orphan, and the operator must not have to say so twice.
+//
+// `docs/operations/migration-beta162-to-beta163.md` promises "`import` is the one
+// knob" and shows a snippet that sets `config.import` and nothing else. Before
+// this derivation that promise was false: composition suppressed the orphan
+// finding only from `PortDefinition.External`, a sibling of `config`, so a lane
+// declared exactly the documented way was still reported. `external` is
+// ENTAILED by `import` — the lane refuses any subject carrying this deployment's
+// own authority (ADR-102 d5), so no in-graph publisher can legitimately feed it
+// — which makes restating it a fact the framework already holds.
+//
+// The control case is what makes this a test of the DERIVATION rather than of
+// the orphan rule: the same port with `import` absent is still an orphan.
+func TestValidateImportLaneIsExternallyFedWithoutASecondKnob(t *testing.T) {
+	importLane := component.PortDefinition{
+		Name: "peer_import", Required: true,
+		Config: component.JetStreamPort{StreamName: "PEER_ENTITY", Subjects: []string{"peer.entity.>"}, Import: true},
+	}
+	ordinaryLane := component.PortDefinition{
+		Name: "peer_import", Required: true,
+		Config: component.JetStreamPort{StreamName: "PEER_ENTITY", Subjects: []string{"peer.entity.>"}},
+	}
+
+	for _, tc := range []struct {
+		name        string
+		port        component.PortDefinition
+		wantOrphans int
+	}{
+		{name: "declared import lane is externally fed", port: importLane, wantOrphans: 0},
+		{name: "the same lane without import is still an orphan", port: ordinaryLane, wantOrphans: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry := fakeRegistry(t,
+				fakeSpec{name: "mirror", typ: "processor", inputs: []component.PortDefinition{tc.port}},
+			)
+			cfg := compositionOf(config.ComponentConfigs{
+				"graph-ingest": instance("mirror", types.ComponentTypeProcessor),
+			})
+			cfg.Streams = config.StreamConfigs{"PEER_ENTITY": {Subjects: []string{"peer.entity.>"}}}
+
+			result := validateRoundTrip(t, registry, cfg)
+			orphans := findingsOfType(append(append([]composition.Finding(nil), result.Errors...), result.Warnings...),
+				composition.TypeOrphanedPort)
+			if len(orphans) != tc.wantOrphans {
+				t.Fatalf("orphaned_port findings = %d, want %d: %+v", len(orphans), tc.wantOrphans, orphans)
+			}
+			// The derived fact reaches the projection an operator reads, so a
+			// lane declared with one knob is visibly external there too.
+			for _, node := range result.Graph.Nodes {
+				if node.Instance != "graph-ingest" || len(node.Inputs) != 1 {
+					continue
+				}
+				if got := node.Inputs[0].External; got != (tc.wantOrphans == 0) {
+					t.Fatalf("projected external = %v, want %v", got, tc.wantOrphans == 0)
+				}
+			}
+		})
+	}
+}
+
 // TestValidateStreamRequirementNeedsTheNamedStream — a JetStream consumer
 // binds by stream NAME: an explicit stream that covers the subjects but is
 // declared under another name does not feed it.

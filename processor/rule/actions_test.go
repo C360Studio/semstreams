@@ -18,8 +18,11 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/errs"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/types"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -499,7 +502,7 @@ func TestAction_Publish(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mock := &mockPublisher{}
-			executor := NewActionExecutorFull(nil, nil, mock)
+			executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 			err := executor.Execute(ctx, tt.action, &ExecutionContext{EntityID: tt.entityID, RelatedID: tt.relatedID})
 
@@ -525,7 +528,7 @@ func TestAction_Publish_PayloadFormat(t *testing.T) {
 
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublish,
@@ -572,7 +575,7 @@ func TestExecutePublish_SubstitutesPropertyTemplates(t *testing.T) {
 
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 	ec := &ExecutionContext{
 		EntityID: "c360.platform.test.svc.entity.001",
 		MessageData: map[string]any{
@@ -628,7 +631,7 @@ func TestExecutePublish_NilPropertiesNoOp(t *testing.T) {
 
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 	ec := &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "publish", "entity", "002")}
 	action := Action{
 		Type:    ActionTypePublish,
@@ -671,7 +674,7 @@ func TestAction_Publish_ErrorHandling(t *testing.T) {
 	ctx := context.Background()
 	expectedErr := assert.AnError
 	mock := &mockPublisher{err: expectedErr}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublish,
@@ -787,7 +790,7 @@ func TestAction_UpdateTriple(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mock := &mockTripleMutator{}
-			executor := NewActionExecutorWithMutator(nil, mock)
+			executor := NewActionExecutorWithMutator(nil, mock, testExecutorPlatform())
 
 			err := executor.Execute(ctx, tt.action, &ExecutionContext{EntityID: tt.entityID, RelatedID: tt.relatedID})
 
@@ -845,7 +848,7 @@ func TestAction_UpdateTriple_RemoveFailsContinues(t *testing.T) {
 	mock := &mockTripleMutator{
 		removeErr: assert.AnError, // Simulate remove failure
 	}
-	executor := NewActionExecutorWithMutator(nil, mock)
+	executor := NewActionExecutorWithMutator(nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:      ActionTypeUpdateTriple,
@@ -869,7 +872,7 @@ func TestAction_UpdateTriple_AddFails(t *testing.T) {
 	mock := &mockTripleMutator{
 		addErr: assert.AnError,
 	}
-	executor := NewActionExecutorWithMutator(nil, mock)
+	executor := NewActionExecutorWithMutator(nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:      ActionTypeUpdateTriple,
@@ -1005,7 +1008,7 @@ func TestAction_PublishAgent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mock := &mockPublisher{}
-			executor := NewActionExecutorFull(nil, nil, mock)
+			executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 			err := executor.Execute(ctx, tt.action, &ExecutionContext{EntityID: tt.entityID, RelatedID: tt.relatedID})
 
@@ -1031,7 +1034,7 @@ func TestAction_PublishAgent_PayloadFormat(t *testing.T) {
 
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -1074,7 +1077,7 @@ func TestAction_PublishAgent_ToolsResolved(t *testing.T) {
 	}
 
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 	executor.SetToolRegistry(reg)
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -1106,7 +1109,7 @@ func TestAction_PublishAgent_EmptyToolsLeavesUnset(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -1140,7 +1143,7 @@ func TestAction_PublishAgent_ActionAllowlist(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:            ActionTypePublishAgent,
@@ -1183,7 +1186,7 @@ func TestAction_PublishAgent_ResponseFormat(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	rf := agentic.NewJSONSchemaFormat("decision", map[string]any{
 		"type":                 "object",
@@ -1227,7 +1230,7 @@ func TestAction_PublishAgent_EmptyResponseFormat(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -1274,7 +1277,7 @@ func TestAction_PublishAgent_ToolChoice(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			mock := &mockPublisher{}
-			executor := NewActionExecutorFull(nil, nil, mock)
+			executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 			action := Action{
 				Type:       ActionTypePublishAgent,
@@ -1307,7 +1310,7 @@ func TestAction_PublishAgent_EmptyToolChoice(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -1338,7 +1341,7 @@ func TestAction_PublishAgent_LoopMaxIterations_Literal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:              ActionTypePublishAgent,
@@ -1373,7 +1376,7 @@ func TestAction_PublishAgent_LoopMaxIterations_SubstitutedFromEntityTriple(t *te
 	entityID := semantictest.EntityID(t, "test", "rule", "actions", "loop-max-iterations", "entity", "002")
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	ec := &ExecutionContext{
 		EntityID: entityID,
@@ -1415,7 +1418,7 @@ func TestAction_PublishAgent_LoopMaxIterations_NonIntegerSubstitutionFailsLoudly
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:              ActionTypePublishAgent,
@@ -1445,7 +1448,7 @@ func TestAction_PublishAgent_LoopMaxIterations_ZeroFailsLoudly(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:              ActionTypePublishAgent,
@@ -1469,7 +1472,7 @@ func TestAction_PublishAgent_EmptyLoopMaxIterations(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -1502,7 +1505,7 @@ func TestAction_PublishAgent_ForEach_DispatchesPerItem(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	// Trigger entity carries the subtopics list as a JSON-encoded
 	// triple Object — the wire shape the decide tool emits.
@@ -1555,7 +1558,7 @@ func TestAction_PublishAgent_ForEach_EmptyListNoDispatch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	ec := &ExecutionContext{
 		EntityID: semantictest.EntityID(t, "test", "rule", "actions", "foreach", "entity", "002"),
@@ -1587,7 +1590,7 @@ func TestAction_PublishAgent_ForEach_MissingVarErrors(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -1614,7 +1617,7 @@ func TestAction_PublishAgent_ForEach_NonListDegeneratesToSingle(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	ec := &ExecutionContext{
 		EntityID: semantictest.EntityID(t, "test", "rule", "actions", "foreach", "entity", "004"),
@@ -1665,7 +1668,7 @@ func TestAction_PublishAgent_RelatedLoops(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -1710,7 +1713,7 @@ func TestAction_PublishAgent_RelatedLoops_VariableSubstitution(t *testing.T) {
 	entityID := semantictest.EntityID(t, "test", "rule", "actions", "related-loops", "entity", "003")
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -1745,7 +1748,7 @@ func TestAction_PublishAgent_EmptyRelatedLoops(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -1774,7 +1777,7 @@ func TestActionPublishAgentRelatedLoopsRejectsResolvedEmptyBeforePublish(t *test
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 	action := Action{
 		Type:    ActionTypePublishAgent,
 		Subject: "agent.task.test",
@@ -1795,7 +1798,7 @@ func TestActionPublishAgentRelatedLoopsRejectsResolvedEmptyBeforePublish(t *test
 func TestActionPublishAgentRelatedLoopsRejectsInvalidKeyBeforePublish(t *testing.T) {
 	t.Parallel()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 	err := executor.Execute(context.Background(), Action{
 		Type:    ActionTypePublishAgent,
 		Subject: "agent.task.test",
@@ -1831,7 +1834,7 @@ func TestAction_PublishAgent_Properties_StampedToMetadata(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -1865,7 +1868,7 @@ func TestAction_PublishAgent_Properties_VariableSubstitution(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -1899,7 +1902,7 @@ func TestAction_PublishAgent_Properties_ForEachIterVar(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	ec := &ExecutionContext{
 		EntityID: "acme.ops.robot.gcs.coordinator.001",
@@ -1952,7 +1955,7 @@ func TestAction_PublishAgent_Properties_NonStringPassThrough(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -1987,7 +1990,7 @@ func TestAction_PublishAgent_Properties_ReservedKeysSkipped(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:            ActionTypePublishAgent,
@@ -2044,7 +2047,7 @@ func TestAction_PublishAgent_EmptyProperties_NoMetadataChange(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -2078,7 +2081,7 @@ func TestAction_PublishAgent_ParentLoopIDFromLoopEntity(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -2124,12 +2127,12 @@ func TestAction_PublishAgent_NonLoopTriggerLeavesParentLoopIDUnset(t *testing.T)
 		{"chain execution", chainID},
 		{name: "non-canonical entity ID", entityID: "e.1"},
 	}
-	// entity-id-audit:classify intentional-malformed "e.1" line=2125 column=47 surface=go-field:.entityID entity_id_invalid:arity verifies noncanonical IDs remain opaque agent payload values
+	// entity-id-audit:classify intentional-malformed "e.1" line=2128 column=47 surface=go-field:.entityID entity_id_invalid:arity verifies noncanonical IDs remain opaque agent payload values
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mock := &mockPublisher{}
-			executor := NewActionExecutorFull(nil, nil, mock)
+			executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 			action := Action{
 				Type:    ActionTypePublishAgent,
 				Subject: "agent.task.test",
@@ -2158,7 +2161,7 @@ func TestAction_PublishAgent_EmptyActionAllowlist(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -2226,7 +2229,7 @@ func TestAction_PublishAgent_ErrorHandling(t *testing.T) {
 	ctx := context.Background()
 	expectedErr := assert.AnError
 	mock := &mockPublisher{err: expectedErr}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -2254,7 +2257,7 @@ func TestAction_PublishAgent_WorkflowFields(t *testing.T) {
 
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:         ActionTypePublishAgent,
@@ -2290,7 +2293,7 @@ func TestAction_PublishAgent_WorkflowFieldsVariableSubstitution(t *testing.T) {
 
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:         ActionTypePublishAgent,
@@ -2322,7 +2325,7 @@ func TestAction_PublishAgent_NoWorkflowFields(t *testing.T) {
 
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -2355,7 +2358,7 @@ func TestAction_PublishAgent_QualifierDeveloperRoles(t *testing.T) {
 	for _, role := range []string{"qualifier", "developer"} {
 		t.Run(role, func(t *testing.T) {
 			mock := &mockPublisher{}
-			executor := NewActionExecutorFull(nil, nil, mock)
+			executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 			action := Action{
 				Type:    ActionTypePublishAgent,
@@ -2394,7 +2397,7 @@ func TestAction_PublishAgent_ExtendedRoles(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mock := &mockPublisher{}
-			executor := NewActionExecutorFull(nil, nil, mock)
+			executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 			action := Action{
 				Type:    ActionTypePublishAgent,
@@ -2426,7 +2429,7 @@ func TestAction_PublishAgent_WritesSpawnedTaskTriple(t *testing.T) {
 	ctx := context.Background()
 	mockPub := &mockPublisher{}
 	mockMut := &mockTripleMutator{}
-	executor := NewActionExecutorFull(nil, mockMut, mockPub)
+	executor := NewActionExecutorFull(nil, mockMut, mockPub, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -2436,7 +2439,11 @@ func TestAction_PublishAgent_WritesSpawnedTaskTriple(t *testing.T) {
 		Prompt:  "investigate",
 	}
 
-	entityID := semantictest.EntityID(t, "org", "platform", "domain", "system", "type", "001")
+	// The firing entity carries the executor's OWN authority. rule.task.spawned
+	// is a framework write onto the firing entity, so it is written only for a
+	// local one; the foreign half of that contract is
+	// TestPublishAgentThroughExportedFullConstructorSkipsForeignSpawnedTask.
+	entityID := semantictest.EntityID(t, "acme", "ops", "domain", "system", "type", "001")
 	ec := &ExecutionContext{
 		EntityID: entityID,
 		State:    &MatchState{RuleID: "research-rule"},
@@ -2466,6 +2473,121 @@ func TestAction_PublishAgent_WritesSpawnedTaskTriple(t *testing.T) {
 	assert.Equal(t, "research-rule", mockMut.addedRuleIDs[0])
 }
 
+// foreignFiringSkipTestMetrics is a fresh, unregistered *Metrics carrying only
+// the counter the foreign-firing tests exercise — the isolation pattern of
+// actionFailuresTestMetrics (action_failure_metrics_test.go). It lives in this
+// untagged file because both the unit test below and the tagged
+// actions_run_scope_integration_test.go read the same counter.
+func foreignFiringSkipTestMetrics() *Metrics {
+	return &Metrics{
+		foreignFiringWritesSkippedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "test_rule_foreign_firing_writes_skipped_total",
+		}, []string{"reason"}),
+	}
+}
+
+// TestPublishAgentThroughExportedFullConstructorSkipsForeignSpawnedTask covers
+// the EXPORTED constructor path of the read-only-mirror guard (ADR-102 d5,
+// ruled O-12(a)). NewActionExecutorFull hands out both a mutator and a
+// publisher, which is everything the rule.task.spawned back-reference needs, so
+// an adopter outside this repository — who is in no review here — reaches the
+// guard through it. Three earlier rounds on #1148 argued the guard was safe
+// because no in-repo production caller uses this constructor; caller enumeration
+// is not a property of an exported symbol.
+//
+// Two facts are pinned together because either alone is satisfiable by a broken
+// implementation:
+//
+//   - The authority is a CONSTRUCTOR PARAMETER, so it cannot be omitted. Deleting
+//     it from the signature is a compile error at every call site, which is the
+//     point: the fail-open state is unrepresentable rather than merely untested.
+//   - The guard FAILS CLOSED on an explicitly zero authority. An executor with no
+//     org/platform pair cannot establish that any entity is local, so every
+//     firing entity reads as foreign and the write is skipped and counted.
+//     Restoring foreignFiringEntity's deleted `if e.platform.Org == "" { return
+//     false }` short-circuit turns the third case green-to-red here — that
+//     short-circuit judged every entity LOCAL and retired the guard entirely.
+func TestPublishAgentThroughExportedFullConstructorSkipsForeignSpawnedTask(t *testing.T) {
+	t.Parallel()
+
+	local := semantictest.EntityID(t, "acme", "ops", "domain", "system", "type", "001")
+	foreign := semantictest.EntityID(t, "foreign", "dep9", "domain", "system", "type", "001")
+
+	tests := []struct {
+		name          string
+		platform      types.PlatformMeta
+		entityID      string
+		wantTriples   int
+		wantSkipCount float64
+	}{
+		{
+			name:          "local firing entity under the supplied authority is written",
+			platform:      testExecutorPlatform(),
+			entityID:      local,
+			wantTriples:   1,
+			wantSkipCount: 0,
+		},
+		{
+			name:          "foreign firing entity is skipped and counted",
+			platform:      testExecutorPlatform(),
+			entityID:      foreign,
+			wantTriples:   0,
+			wantSkipCount: 1,
+		},
+		{
+			// The state Codex named: a write-capable executor holding no
+			// deployment authority. It must not decide "local by default".
+			name:          "absent authority reads every entity as foreign",
+			platform:      types.PlatformMeta{},
+			entityID:      local,
+			wantTriples:   0,
+			wantSkipCount: 1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockPub := &mockPublisher{}
+			mockMut := &mockTripleMutator{}
+			executor := NewActionExecutorFull(nil, mockMut, mockPub, tc.platform)
+			metrics := foreignFiringSkipTestMetrics()
+			executor.setMetrics(metrics)
+
+			action := Action{
+				Type:    ActionTypePublishAgent,
+				Subject: "agent.task.test",
+				Role:    "researcher",
+				Model:   "mock-model",
+				Prompt:  "investigate",
+			}
+			ec := &ExecutionContext{
+				EntityID: tc.entityID,
+				State:    &MatchState{RuleID: "exported-constructor-rule"},
+			}
+
+			require.NoError(t, executor.Execute(context.Background(), action, ec))
+
+			// The agent task itself is always published — the guard governs the
+			// framework's write BACK to the firing entity, not the dispatch.
+			require.Len(t, mockPub.published, 1)
+
+			require.Len(t, mockMut.addedTriples, tc.wantTriples,
+				"rule.task.spawned is a framework write onto the firing entity")
+			for _, triple := range mockMut.addedTriples {
+				assert.Equal(t, "rule.task.spawned", triple.Predicate)
+				assert.Equal(t, tc.entityID, triple.Subject)
+			}
+
+			assert.InDelta(t, tc.wantSkipCount, testutil.ToFloat64(
+				metrics.foreignFiringWritesSkippedTotal.WithLabelValues(
+					semtypes.EntityIDReasonForeignAuthority)), 0.0001,
+				"a declined framework write is counted, never silent")
+		})
+	}
+}
+
 // TestAction_PublishAgent_NoMutatorSkipsTriple verifies that publish_agent
 // still succeeds if no triple mutator is configured (e.g. graph integration
 // disabled). The spawned_task triple is simply skipped.
@@ -2474,7 +2596,7 @@ func TestAction_PublishAgent_NoMutatorSkipsTriple(t *testing.T) {
 
 	ctx := context.Background()
 	mockPub := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mockPub)
+	executor := NewActionExecutorFull(nil, nil, mockPub, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -2497,7 +2619,7 @@ func TestAction_PublishAgent_NoPublisherSkipsTriple(t *testing.T) {
 
 	ctx := context.Background()
 	mockMut := &mockTripleMutator{}
-	executor := NewActionExecutorFull(nil, mockMut, nil)
+	executor := NewActionExecutorFull(nil, mockMut, nil, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -2820,7 +2942,7 @@ func TestAction_UpdateKV_VariableSubstitution(t *testing.T) {
 		Payload: map[string]any{
 			"status":     "drafting",
 			"updated_at": "$now",
-			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2823 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
+			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2945 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
 		},
 		Merge: false,
 	}
@@ -2906,7 +3028,7 @@ func TestAction_UpdateKV_NoWriter(t *testing.T) {
 	ctx := context.Background()
 
 	// No kvWriter — should be a graceful no-op
-	executor := NewActionExecutorFull(nil, nil, nil)
+	executor := NewActionExecutorFull(nil, nil, nil, testExecutorPlatform())
 
 	action := Action{
 		Type:   ActionTypeUpdateKV,
@@ -3048,7 +3170,7 @@ func TestExecuteDeny_ReturnsDenyVerdict(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	executor := NewActionExecutorWithMutator(slog.Default(), &mockTripleMutator{})
+	executor := NewActionExecutorWithMutator(slog.Default(), &mockTripleMutator{}, testExecutorPlatform())
 	ec := newDenyTestEC("deny-rule-1", nil)
 	action := Action{Type: ActionTypeDeny, Reason: "access not allowed"}
 
@@ -3168,7 +3290,7 @@ func TestExecuteApprove_ReturnsNilDoesNotShortCircuit(t *testing.T) {
 	ctx := context.Background()
 	mut := &mockTripleMutator{}
 	pub := &mockPublisher{}
-	executor := NewActionExecutorFull(slog.Default(), mut, pub)
+	executor := NewActionExecutorFull(slog.Default(), mut, pub, testExecutorPlatform())
 	ec := newApproveTestEC("approve-rule-1", nil, nil)
 	action := Action{
 		Type:    ActionTypeApprove,
@@ -3190,7 +3312,7 @@ func TestExecuteApprove_PublishesVerdictPayload(t *testing.T) {
 	ctx := context.Background()
 	mut := &mockTripleMutator{}
 	pub := &mockPublisher{}
-	executor := NewActionExecutorFull(slog.Default(), mut, pub)
+	executor := NewActionExecutorFull(slog.Default(), mut, pub, testExecutorPlatform())
 	ec := newApproveTestEC("approve-rule-pub", nil, map[string]any{
 		"loop_id": "loop-abc",
 		"call_id": "call-001",
@@ -3236,7 +3358,7 @@ func TestExecuteApprove_EmitsVerdictAudit(t *testing.T) {
 	ctx := context.Background()
 	aud := &mockVerdictAuditor{}
 	pub := &mockPublisher{}
-	executor := NewActionExecutorFull(slog.Default(), nil, pub)
+	executor := NewActionExecutorFull(slog.Default(), nil, pub, testExecutorPlatform())
 	executor.SetVerdictAuditor(aud)
 	ec := newApproveTestEC("approve-rule-audit", nil, nil)
 	action := Action{
@@ -3266,7 +3388,7 @@ func TestExecuteApprove_AuditFailureDoesNotBlockPublish(t *testing.T) {
 	ctx := context.Background()
 	aud := &mockVerdictAuditor{err: errors.New("nats unavailable")}
 	pub := &mockPublisher{}
-	executor := NewActionExecutorFull(slog.Default(), nil, pub)
+	executor := NewActionExecutorFull(slog.Default(), nil, pub, testExecutorPlatform())
 	executor.SetVerdictAuditor(aud)
 	ec := newApproveTestEC("approve-rule-audit-fail", nil, nil)
 	action := Action{
@@ -3316,7 +3438,7 @@ func TestExecuteApprove_PublishFailureReturnsError(t *testing.T) {
 	ctx := context.Background()
 	mut := &mockTripleMutator{}
 	pub := &mockPublisher{err: errors.New("jetstream timeout")}
-	executor := NewActionExecutorFull(slog.Default(), mut, pub)
+	executor := NewActionExecutorFull(slog.Default(), mut, pub, testExecutorPlatform())
 	ec := newApproveTestEC("approve-rule-pub-fail", nil, nil)
 	action := Action{
 		Type:    ActionTypeApprove,
@@ -3337,7 +3459,7 @@ func TestExecuteApprove_RequiresSubject(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	executor := NewActionExecutorFull(slog.Default(), &mockTripleMutator{}, &mockPublisher{})
+	executor := NewActionExecutorFull(slog.Default(), &mockTripleMutator{}, &mockPublisher{}, testExecutorPlatform())
 	ec := newApproveTestEC("approve-no-subject", nil, nil)
 	action := Action{Type: ActionTypeApprove, Reason: "permit"}
 
@@ -3375,7 +3497,7 @@ func TestAction_PublishAgent_RunIDInheritedFromLoopEntity(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -3422,7 +3544,7 @@ func TestAction_PublishAgent_RunIDNotInheritedWhenMissing(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -3464,7 +3586,7 @@ func TestAction_PublishAgent_RunIDInheritedFromNonLoopEntityTriple(t *testing.T)
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -3697,7 +3819,7 @@ func TestAction_PublishAgent_RunScopeNone_SuppressesRunID(t *testing.T) {
 	ctx := context.Background()
 
 	pub := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, pub)
+	executor := NewActionExecutorFull(nil, nil, pub, testExecutorPlatform())
 
 	firingLoopID := "coordinator-loop-uuid"
 	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agentic-loop", "agent", "execution", firingLoopID)
@@ -3785,7 +3907,7 @@ func TestAction_PublishAgent_FilesystemPolicy(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:             ActionTypePublishAgent,
@@ -3824,7 +3946,7 @@ func TestAction_PublishAgent_NoFilesystemPolicy(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,
@@ -3861,7 +3983,7 @@ func TestAction_PublishAgent_CarriesNoChannelFields(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mock)
+	executor := NewActionExecutorFull(nil, nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:    ActionTypePublishAgent,

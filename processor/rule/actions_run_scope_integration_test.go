@@ -25,7 +25,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -90,17 +89,6 @@ func (r *recordingTripleMutator) snapshot() []message.Triple {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]message.Triple(nil), r.added...)
-}
-
-// foreignFiringSkipTestMetrics is a fresh, unregistered *Metrics carrying only the
-// counter this file exercises — the isolation pattern of
-// actionFailuresTestMetrics (action_failure_metrics_test.go).
-func foreignFiringSkipTestMetrics() *Metrics {
-	return &Metrics{
-		foreignFiringWritesSkippedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "test_rule_foreign_firing_writes_skipped_total",
-		}, []string{"reason"}),
-	}
 }
 
 // capturedRecord is one slog record as an OPERATOR would read it: the level, the

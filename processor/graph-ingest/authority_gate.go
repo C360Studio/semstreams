@@ -19,6 +19,19 @@ const (
 	authorityMetricReasonClaimed = "authority_claimed"
 )
 
+// arrivalDirect is the `arrival` label value for the DIRECT in-process lane —
+// an in-binary call into CreateEntity, MergeEntity, the hierarchy triple
+// adapter, or the shared append/delete bodies, rather than a NATS request. The
+// other two lanes label with the subject they arrived on; a direct call has
+// none, and this fixed token holds that position. It is a lane name and never a
+// caller name or an identity, so the series stays bounded by exactly one value.
+const arrivalDirect = "direct"
+
+// authorityRejectionLogMessage is the single WARN a refused candidate produces
+// on any lane. Named so the test pinning the requirement's "loud log" matches
+// the production string instead of a copy that can drift away from it.
+const authorityRejectionLogMessage = "graph-ingest: entity authority rejected"
+
 // authorizeSubject validates positions 1-2 of a candidate SUBJECT identity
 // against the deployment's own authority for the lane it arrived on.
 //
@@ -87,5 +100,30 @@ func (c *Component) recordAuthorityRejection(arrival, reason string, err error) 
 			attrs = append(attrs, slog.Int("segment_index", index))
 		}
 	}
-	c.logger.Warn("graph-ingest: entity authority rejected", attrs...)
+	c.logger.Warn(authorityRejectionLogMessage, attrs...)
+}
+
+// recordDirectAuthorityRejection meters and loudly logs an authority rejection
+// taken on the DIRECT in-process lane, then returns the error unchanged so a
+// guard reads `return c.recordDirectAuthorityRejection(err)`.
+//
+// It is the direct lane's counterpart to meteredMutation (mutation_runtime.go)
+// and to processIngest's authority branch (keyed_ingest.go). All three route
+// through recordAuthorityRejection, which is what makes "metered exactly once"
+// a property of the code rather than of a convention.
+//
+// Exactly once survives the two bodies the RPC lane shares with this one
+// (addTriplesLane, deleteEntityAtRevision): each graph.mutation.> handler
+// authorizes the same subject and RETURNS before entering them, so a refused
+// request is counted on the lane it actually arrived on and never twice. The
+// fact lane is the same shape — prepareFactProjection runs the gate and returns
+// before mergeEntityOnLane's backstop.
+//
+// A non-authority error passes through unrecorded; that classification has one
+// home, in authorityMetricReason.
+func (c *Component) recordDirectAuthorityRejection(err error) error {
+	if reason, isAuthority := authorityMetricReason(err); isAuthority {
+		c.recordAuthorityRejection(arrivalDirect, reason, err)
+	}
+	return err
 }

@@ -226,6 +226,17 @@ func Register(mgr *lifecycle.Manager) error {
 	return mgr.Register(WorkflowDeclaration())
 }
 
+// The two refusals Mint can issue about a run's origin. Both are wrapped
+// ErrorInvalid — a caller distinguishes them from a transient store failure with
+// errs.IsInvalid and must not retry either. They are unexported because no
+// caller branches on the specific one today; the classification is the contract.
+var (
+	errOriginEntityIDRequired = errors.New(
+		"origin entity ID is required: a run with no recorded origin cannot be told apart from another deployment's run at the same instance")
+	errOriginEntityIDMismatch = errors.New(
+		"the run at this entity ID was minted from a different origin")
+)
+
 // Mint creates (or retrieves if already exists) an AgentRun for the given
 // rootLoopID (ADR-053 D4). The run's entity ID is
 // org.platform.chain.agent.execution.<rootLoopID>, initial phase is "dispatched".
@@ -236,11 +247,29 @@ func Register(mgr *lifecycle.Manager) error {
 // execution the run was minted from; it is stamped as the birth predicate
 // agent.run.origin-entity-id, which is the run->loop pointer that survives when
 // the origin is a foreign-authority import the framework must not write to.
-// An empty originEntityID stamps nothing.
+//
+// originEntityID is REQUIRED. The run entity ID derives from rootLoopID alone,
+// so two loops that a peer and this deployment happen to name the same INSTANCE
+// derive the same local run ID — and before this check the second Mint silently
+// returned the first loop's run, with the second run's work attributed to the
+// first origin. Mint therefore refuses an empty origin, and on the
+// already-exists path compares the STORED origin with the requested one and
+// refuses a mismatch. That does not make the identity collision-free — deriving
+// it from the full origin is #1168 — it converts a silent alias into a loud
+// refusal, using state this function already fetches.
+//
+// LEGACY-EMPTY-RECORD POLICY: a stored run whose OriginEntityID is empty is
+// REFUSED, not adopted. An empty stored origin cannot establish that the stored
+// run is this caller's run, and a zero value is never an answer to an identity
+// question. Nothing in a pre-v1 deployment has to be migrated for this: every
+// run Mint creates from now on carries its origin, and pre-v1 identity work
+// starts downstreams on newly provisioned storage rather than reading old state
+// (the storage-and-retention contract; ADR-076 d6).
 //
 // Idempotent: if Manager.Create returns lifecycle.ErrAlreadyExists (the run was
 // already minted — common on JetStream redelivery or concurrent rule firings),
-// Mint treats it as success and returns the existing run via Manager.Get.
+// Mint treats it as success and returns the existing run via Manager.Get,
+// PROVIDED its stored origin is the requested one.
 //
 // NOTE: there is a narrow concurrent-create race (gh#178) where two goroutines
 // both call Mint for the same ID simultaneously; both may observe ErrAlreadyExists
@@ -254,6 +283,10 @@ func Mint(
 	mgr MintableManager,
 	org, platform, rootLoopID, originEntityID string,
 ) (*AgentRun, error) {
+	if originEntityID == "" {
+		return nil, semerrs.WrapInvalid(errOriginEntityIDRequired,
+			"agentrun", "Mint", "validate origin entity ID")
+	}
 	entityID, err := agentic.TryChainExecutionEntityID(org, platform, rootLoopID)
 	if err != nil {
 		return nil, fmt.Errorf("agentrun.Mint: build entity ID: %w", err)
@@ -274,6 +307,16 @@ func Mint(
 			run, ok := existing.(*AgentRun)
 			if !ok {
 				return nil, fmt.Errorf("agentrun.Mint: Manager.Get returned unexpected type %T", existing)
+			}
+			// The stored run is this caller's run only if it was minted from the
+			// same origin. This read costs nothing new — the already-exists path
+			// has already fetched it — and it is the whole difference between
+			// returning a peer's run under this deployment's ID and saying so.
+			if run.OriginEntityID != originEntityID {
+				return nil, semerrs.WrapInvalid(
+					fmt.Errorf("%w: run %s was minted from %q, requested %q",
+						errOriginEntityIDMismatch, entityID, run.OriginEntityID, originEntityID),
+					"agentrun", "Mint", "compare stored origin entity ID")
 			}
 			return run, nil
 		}

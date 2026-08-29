@@ -136,7 +136,7 @@ func runOnEnter(t *testing.T, def Definition, entity *gtypes.EntityState) (*mock
 
 	pub := &mockPublisher{}
 	mut := &mockTripleMutator{}
-	exec := NewActionExecutorFull(nil, mut, pub)
+	exec := NewActionExecutorFull(nil, mut, pub, testExecutorPlatform())
 	ec := &ExecutionContext{EntityID: entity.ID, Entity: entity}
 	evaluator := expression.NewExpressionEvaluator()
 	for _, action := range def.OnEnter {
@@ -342,7 +342,7 @@ func TestResearchGraphPipeline_R4_AssessDecision_BothBranches(t *testing.T) {
 
 		pub := &mockPublisher{}
 		mut := &mockTripleMutator{}
-		exec := NewActionExecutorFull(nil, mut, pub)
+		exec := NewActionExecutorFull(nil, mut, pub, testExecutorPlatform())
 		ec := &ExecutionContext{EntityID: entity.ID, Entity: entity}
 		evaluator := expression.NewExpressionEvaluator()
 		// Replicate the stateful_evaluator's iteration counter + per-

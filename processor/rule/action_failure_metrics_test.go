@@ -36,7 +36,7 @@ func TestRunActions_ActionExecutionFailure_IncrementsActionFailuresMetric(t *tes
 	bucket := newMockKVBucket()
 	tracker := NewStateTracker(bucket, slog.Default())
 	mockPub := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mockPub)
+	executor := NewActionExecutorFull(nil, nil, mockPub, testExecutorPlatform())
 	evaluator := NewStatefulEvaluator(tracker, executor, slog.Default())
 
 	metrics := actionFailuresTestMetrics()
@@ -90,7 +90,7 @@ func TestRunActions_SuccessfulAction_DoesNotIncrementActionFailuresMetric(t *tes
 	bucket := newMockKVBucket()
 	tracker := NewStateTracker(bucket, slog.Default())
 	mockPub := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, mockPub)
+	executor := NewActionExecutorFull(nil, nil, mockPub, testExecutorPlatform())
 	evaluator := NewStatefulEvaluator(tracker, executor, slog.Default())
 
 	metrics := actionFailuresTestMetrics()
