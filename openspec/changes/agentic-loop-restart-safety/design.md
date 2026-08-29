@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft after accepted inventory. Owner ruling and independent design review are required before implementation.
+Owner-accepted target state after independent `DESIGN REVIEW PASS`. Implementation remains blocked by #759.
 
 ## Accepted inventory
 
@@ -19,7 +19,7 @@ invalidates this reference and requires reinventory before implementation.
 - AgentRun is excluded until #1148 merges and its surface is reinventoried.
 - Governance content and policy coverage remain #1140.
 - Framework-wide restart generalization remains #1145.
-- No implementation is authorized by this draft.
+- No production implementation begins until the approved #759 `DeliveryAttempt` addendum merges.
 
 ## Options considered
 
@@ -100,8 +100,8 @@ settlement method, sequence, consumer identity, header, or mutable state.
 
 This observation belongs at #759's native-message boundary. Agentic-model must not create a model-private wrapper.
 When metadata is unavailable, natsclient does not invoke work or settle positively. It quarantines with typed
-`delivery_metadata_unavailable`, stops the exact owner, and reports the affected component and port. This #759
-addendum requires separate review and owner acceptance before #1146 model implementation.
+`delivery_metadata_unavailable`, stops the exact owner, and reports the affected component and port. The owner
+accepted this addendum; its implementation and review remain a prerequisite to #1146 model implementation.
 
 When no response exists after redelivery, the configured provider policy is one of:
 
@@ -208,19 +208,15 @@ the pending record is cleared only after the deterministic next request or termi
 When approval timeout is configured, agentic-loop performs narrow startup hydration of awaiting-approval records so
 their existing deadlines survive replacement. This is component-owned timer repair, not a general supervisor.
 
-### Reference lifetime decision
+### Reference lifetime
 
 The Store object is discoverable only while `PendingApprovalState` remains in `AGENT_LOOPS`, whose current TTL is 24
-hours. Therefore the earlier indefinite claim is false. The admissible choices are:
-
-- require a finite, nonzero approval timeout no longer than observed `AGENT_LOOPS` retention, with safety margin;
-- change the existing loop authority's retention for every loop through separately reviewed migration work; or
-- separately design a discoverable approval-reference authority.
+hours. Therefore the earlier indefinite claim is false. Approval timeout defaults to 12 hours and must be finite,
+nonzero, and within observed `AGENT_LOOPS` retention after the framework-computed safety margin.
 
 Persisting the reference in the graph is rejected because it exposes private execution material. A new bucket is not
-admitted by this draft. The architectural recommendation is a finite timeout within existing loop retention. The
-owner must select the exact default. If truly indefinite approval is required, design stops for a new authority
-decision rather than claiming the Store object alone solves it.
+admitted. If truly indefinite approval is required, design stops for a separately reviewed change to the existing
+loop authority or a discoverable reference authority rather than claiming the Store object alone solves it.
 
 ## Dispatch projection recovery
 
@@ -363,10 +359,9 @@ restart-safe readiness. It reports exact observed and required fields and never 
 `DiscardNew` trades availability under a full stream for non-loss: rejected publication makes the producer Retry and
 retain its source delivery instead of evicting continuation evidence.
 
-The alternative is to retain `DiscardOld` and explicitly narrow the guarantee to recovery only while exact evidence
-remains. Missing required evidence then fails or quarantines loudly, and bounded restart safety is not advertised.
-The owner must select between the strong `DiscardNew` contract and this narrower claim. Copying every turn to Store
-is rejected as checkpoint-like material without an ordinary-lane failpoint.
+The owner selected the strong `DiscardNew` contract. Existing `DiscardOld` deployments require an explicit migration
+before restart-safe admission. Copying every turn to Store is rejected as checkpoint-like material without an
+ordinary-lane failpoint.
 
 External purge, administrative deletion, and storage loss remain operator data-loss events outside either guarantee.
 
@@ -415,8 +410,8 @@ The design is rejected or revised if any premise fails:
 3. Request identity uniquely and deterministically binds LoopID and logical turn.
 4. Tool execution identity is a digest of RequestID, provider CallID, and ordinal; provider CallID is unchanged.
 5. Cold `ToolResult` handling reconstructs its active batch without scanning.
-6. The owner-selected AGENT admissibility contract is observed honestly and does not infer a horizon from MaxAge
-   while `DiscardOld` capacity eviction remains possible.
+6. The observed AGENT admissibility contract requires `DiscardNew` and does not infer a horizon from MaxAge while
+   an earlier capacity-eviction bound remains possible.
 7. Approval replacement succeeds after deliberate AGENT eviction by resolving the registered Store reference.
 8. Governance replacement reads the exact retained verdict or safely re-obtains it. Failure returns for new design.
 9. `fail_commit_unknown` produces zero second provider calls; `at_least_once` records repeated attempts explicitly.

@@ -5,7 +5,7 @@
 - [x] 0.1 Complete the file:line surface, lane, state, lifecycle, and adopter inventory.
 - [x] 0.2 Receive independent `INVENTORY PASS` for SHA-256
   `70603493e56887c3e355dcf9087891e03cf7ea7764454fcf528e0686b1bdfe9d`.
-- [ ] 0.3 Receive independent design review and explicit owner acceptance.
+- [x] 0.3 Receive independent `DESIGN REVIEW PASS` at `b8e2c031` and explicit owner acceptance on #1146.
 - [x] 0.4 Remove `skip_specs: true` and materialize draft capability deltas.
 
 ## 1. Blocking settlement foundation
@@ -15,7 +15,7 @@
 - [ ] 1.3 Confirm #1155 real-NATS replacement proof is available and reusable.
 - [ ] 1.4 Reconcile the design against merged #759; stop for reinventory if the surface differs materially.
 - [ ] 1.5 Add immutable `DeliveryAttempt` observation to #759 without exposing native message or settlement methods.
-- [ ] 1.6 Obtain #759 addendum review and owner acceptance before #1146 model work.
+- [x] 1.6 Obtain design review and owner acceptance for the #759 addendum before #1146 model work.
 - [ ] 1.7 Quarantine and stop the exact owner when delivery metadata is unavailable.
 - [ ] 1.8 Test first delivery, second delivery, crash-before-call false unknown, and unavailable metadata.
 
@@ -66,9 +66,9 @@
 - [ ] 6.6 Reconstruct configured approval deadlines from current `AGENT_LOOPS` after replacement.
 - [ ] 6.7 Rebuild dispatch `LoopTracker` from `AGENT_LOOPS` and add exact HTTP read-through.
 - [ ] 6.8 Test pending, approve, modify, reject, timeout, duplicate, and conflicting decisions across replacement.
-- [ ] 6.9 Record owner choice for finite approval timeout or separately changed reference authority.
+- [x] 6.9 Record owner choice for finite approval timeout rather than a new reference authority.
 - [ ] 6.10 If finite is selected, reject zero, empty, and over-retention approval timeout when gating is enabled.
-- [ ] 6.11 Record and document the owner-selected finite default; do not invent one during implementation.
+- [x] 6.11 Record the owner-selected 12-hour finite default.
 - [ ] 6.12 Test expired entity and permanently missing continuation behavior.
 - [ ] 6.13 Implement canonical payload digest, deterministic key, get-before-put, and read-back verification.
 - [ ] 6.14 Test matching reuse, malformed and semantic collision, lost Put reply, and transient Get.
@@ -97,7 +97,7 @@
 
 ## 9. AGENT replay admissibility
 
-- [ ] 9.1 Record owner choice: require observed `DiscardNew` or narrow the advertised restart guarantee.
+- [x] 9.1 Record owner choice to require observed `DiscardNew` for restart-safe admission.
 - [ ] 9.2 Read actual `StreamInfo` before starting recovery-dependent consumers.
 - [ ] 9.3 Compute the ordinary horizon from framework-owned timeout and consumer policy.
 - [ ] 9.4 If strong admission is selected, reject `DiscardOld` and other early-eviction bounds.

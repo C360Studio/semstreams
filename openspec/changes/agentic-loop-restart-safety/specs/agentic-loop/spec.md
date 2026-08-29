@@ -153,7 +153,13 @@ identity verification. Store overwrite behavior SHALL NOT resolve collisions.
 
 When approval gating is enabled, approval timeout SHALL be finite, nonzero, and no longer than observed
 `AGENT_LOOPS` retention with the required safety margin. Zero, empty, indefinite, and over-retention values SHALL fail
-configuration validation.
+configuration validation. The default approval timeout SHALL be 12 hours.
+
+#### Scenario: Approval timeout is omitted
+
+- **WHEN** approval gating is enabled and no timeout is supplied
+- **THEN** agentic-loop uses a 12-hour timeout
+- **AND** validates it against observed `AGENT_LOOPS` retention
 
 #### Scenario: Approval timeout is indefinite
 
