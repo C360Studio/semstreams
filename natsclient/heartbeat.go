@@ -71,6 +71,9 @@ func nonCancellationWorkError(err error) error {
 // On InProgress failure: returns error (message will be redelivered by server)
 // Cancellation and heartbeat failure wait for work to exit before returning
 // delivery control.
+//
+// Deprecated: new production bindings use ConsumeDeliveryWithHeartbeat. This
+// legacy contract remains only for the held model, loop, and AgentRun bindings.
 func ConsumeWithHeartbeat(
 	ctx context.Context,
 	msg jetstream.Msg,
@@ -114,7 +117,7 @@ func ConsumeWithHeartbeat(
 			// this check select can choose done first and spend the normal 30s
 			// work-error NAK path instead of the one shutdown/restart NAK below.
 			if ctx.Err() != nil {
-				if nakErr := msg.NakWithDelay(5 * time.Second); nakErr != nil {
+				if nakErr := executeTerminalMethod(msg, terminalMethodNakWithDelay, 5*time.Second); nakErr != nil {
 					return errors.Join(ctx.Err(), fmt.Errorf("NAK cancelled delivery: %w", nakErr))
 				}
 				return ctx.Err()
@@ -122,22 +125,22 @@ func ConsumeWithHeartbeat(
 			if err != nil {
 				var permanent *PermanentDeliveryError
 				if errors.As(err, &permanent) {
-					if termErr := msg.Term(); termErr != nil {
+					if termErr := executeTerminalMethod(msg, terminalMethodTerm, 0); termErr != nil {
 						return errors.Join(err, fmt.Errorf("terminate permanent delivery: %w", termErr))
 					}
 					return err
 				}
-				if nakErr := msg.NakWithDelay(30 * time.Second); nakErr != nil {
+				if nakErr := executeTerminalMethod(msg, terminalMethodNakWithDelay, 30*time.Second); nakErr != nil {
 					return errors.Join(err, fmt.Errorf("NAK transient delivery: %w", nakErr))
 				}
 				return err
 			}
-			return msg.Ack()
+			return executeTerminalMethod(msg, terminalMethodAck, 0)
 
 		case <-ctx.Done():
 			workCancel()
 			<-done
-			if nakErr := msg.NakWithDelay(5 * time.Second); nakErr != nil {
+			if nakErr := executeTerminalMethod(msg, terminalMethodNakWithDelay, 5*time.Second); nakErr != nil {
 				return errors.Join(ctx.Err(), fmt.Errorf("NAK cancelled delivery: %w", nakErr))
 			}
 			return ctx.Err()

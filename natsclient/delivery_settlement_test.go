@@ -1,0 +1,344 @@
+package natsclient
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestDeliveryDecisionConstants(t *testing.T) {
+	require.Equal(t, DeliveryDecision(0), DeliveryDecisionInvalid)
+	require.Equal(t, DeliveryDecision(1), DeliveryDecisionAck)
+	require.Equal(t, DeliveryDecision(2), DeliveryDecisionRetry)
+	require.Equal(t, DeliveryDecision(3), DeliveryDecisionTerminate)
+	require.Equal(t, DeliveryDecision(4), DeliveryDecisionQuarantine)
+	var work DeliveryWork = func(context.Context, []byte) (DeliveryDecision, error) {
+		return DeliveryDecisionAck, nil
+	}
+	decision, err := work(t.Context(), nil)
+	require.NoError(t, err)
+	require.Equal(t, DeliveryDecisionAck, decision)
+}
+
+func TestValidateHeartbeatDeliveryPolicy(t *testing.T) {
+	work := func(context.Context, []byte) (DeliveryDecision, error) { return DeliveryDecisionAck, nil }
+	immediate := ImmediateDeliveryRetry()
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	tests := []struct {
+		name      string
+		ctx       context.Context
+		cfg       StreamConsumerConfig
+		heartbeat time.Duration
+		retry     DeliveryRetryPolicy
+		work      DeliveryWork
+		wantErr   string
+	}{
+		{name: "ackwait equality", ctx: t.Context(), cfg: StreamConsumerConfig{AckWait: 30 * time.Second}, heartbeat: 15 * time.Second, retry: immediate, work: work},
+		{name: "default equality", ctx: t.Context(), cfg: StreamConsumerConfig{}, heartbeat: 15 * time.Second, retry: immediate, work: work},
+		{name: "shortest backoff", ctx: t.Context(), cfg: StreamConsumerConfig{AckWait: time.Hour, BackOff: []time.Duration{20 * time.Second, 5 * time.Second}}, heartbeat: 2500 * time.Millisecond, retry: immediate, work: work},
+		{name: "nil context", cfg: StreamConsumerConfig{}, heartbeat: time.Second, retry: immediate, work: work, wantErr: "context"},
+		{name: "ended context", ctx: cancelled, cfg: StreamConsumerConfig{}, heartbeat: time.Second, retry: immediate, work: work, wantErr: "ended"},
+		{name: "nil work", ctx: t.Context(), cfg: StreamConsumerConfig{}, heartbeat: time.Second, retry: immediate, wantErr: "work"},
+		{name: "zero retry", ctx: t.Context(), cfg: StreamConsumerConfig{}, heartbeat: time.Second, work: work, wantErr: "retry"},
+		{name: "zero heartbeat", ctx: t.Context(), cfg: StreamConsumerConfig{}, retry: immediate, work: work, wantErr: "positive"},
+		{name: "negative ackwait", ctx: t.Context(), cfg: StreamConsumerConfig{AckWait: -time.Second}, heartbeat: time.Second, retry: immediate, work: work, wantErr: "ack wait"},
+		{name: "zero backoff", ctx: t.Context(), cfg: StreamConsumerConfig{BackOff: []time.Duration{time.Second, 0}}, heartbeat: time.Millisecond, retry: immediate, work: work, wantErr: "back_off[1]"},
+		{name: "above half", ctx: t.Context(), cfg: StreamConsumerConfig{AckWait: 30 * time.Second}, heartbeat: 15*time.Second + 1, retry: immediate, work: work, wantErr: "ceiling"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ValidateHeartbeatDeliveryPolicy(tt.ctx, tt.cfg, tt.heartbeat, tt.retry, tt.work)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestHeartbeatDeliveryPolicyDefensivelyCopiesBackOff(t *testing.T) {
+	cfg := StreamConsumerConfig{BackOff: []time.Duration{10 * time.Second}}
+	policy, err := ValidateHeartbeatDeliveryPolicy(t.Context(), cfg, 5*time.Second,
+		ImmediateDeliveryRetry(), func(context.Context, []byte) (DeliveryDecision, error) { return DeliveryDecisionAck, nil })
+	require.NoError(t, err)
+	cfg.BackOff[0] = time.Nanosecond
+	require.Equal(t, []time.Duration{10 * time.Second}, policy.backOff)
+	msg := &mockMsg{subject: "copy"}
+	result := ConsumeDeliveryWithHeartbeat(t.Context(), msg, policy)
+	require.NoError(t, result.Err())
+	require.Equal(t, int32(1), msg.ackCount.Load())
+}
+
+func TestHeartbeatDeliveryPolicyReusesWorkWithCurrentPayload(t *testing.T) {
+	bodies := make(chan []byte, 2)
+	policy, err := ValidateHeartbeatDeliveryPolicy(t.Context(), StreamConsumerConfig{}, time.Second,
+		ImmediateDeliveryRetry(), func(_ context.Context, data []byte) (DeliveryDecision, error) {
+			bodies <- append([]byte(nil), data...)
+			return DeliveryDecisionAck, nil
+		})
+	require.NoError(t, err)
+
+	first := &mockMsg{subject: "first", data: []byte("one")}
+	second := &mockMsg{subject: "second", data: []byte("two")}
+	require.NoError(t, ConsumeDeliveryWithHeartbeat(t.Context(), first, policy).Err())
+	require.NoError(t, ConsumeDeliveryWithHeartbeat(t.Context(), second, policy).Err())
+	require.Equal(t, []byte("one"), <-bodies)
+	require.Equal(t, []byte("two"), <-bodies)
+	require.Equal(t, int32(1), first.dataCount.Load())
+	require.Equal(t, int32(1), second.dataCount.Load())
+}
+
+func TestConsumeDeliveryWithHeartbeatPassesNilPayloadOnce(t *testing.T) {
+	var observed []byte
+	policy, err := ValidateHeartbeatDeliveryPolicy(t.Context(), StreamConsumerConfig{}, time.Second,
+		ImmediateDeliveryRetry(), func(_ context.Context, data []byte) (DeliveryDecision, error) {
+			observed = data
+			return DeliveryDecisionAck, nil
+		})
+	require.NoError(t, err)
+	msg := &mockMsg{subject: "nil"}
+	require.NoError(t, ConsumeDeliveryWithHeartbeat(t.Context(), msg, policy).Err())
+	require.Nil(t, observed)
+	require.Equal(t, int32(1), msg.dataCount.Load())
+}
+
+func TestDelayedDeliveryRetryValidation(t *testing.T) {
+	_, err := DelayedDeliveryRetry(0)
+	require.Error(t, err)
+	_, err = DelayedDeliveryRetry(-time.Second)
+	require.Error(t, err)
+	_, err = DelayedDeliveryRetry(30 * time.Second)
+	require.NoError(t, err)
+}
+
+func TestImmediateDeliveryRetryUsesPlainNak(t *testing.T) {
+	cause := errors.New("retry")
+	policy, err := ValidateHeartbeatDeliveryPolicy(t.Context(), StreamConsumerConfig{}, time.Second,
+		ImmediateDeliveryRetry(), func(context.Context, []byte) (DeliveryDecision, error) {
+			return DeliveryDecisionRetry, cause
+		})
+	require.NoError(t, err)
+	msg := &mockMsg{subject: "immediate"}
+	result := ConsumeDeliveryWithHeartbeat(t.Context(), msg, policy)
+	require.ErrorIs(t, result.Err(), cause)
+	require.Equal(t, int32(1), msg.nakCount.Load())
+	require.Zero(t, msg.nakDelay.Load())
+
+	settlementErr := errors.New("nak unknown")
+	failed := &mockMsg{subject: "immediate-failed", nakErr: settlementErr}
+	failedResult := ConsumeDeliveryWithHeartbeat(t.Context(), failed, policy)
+	require.True(t, failedResult.SettlementMethodFailed())
+	require.ErrorIs(t, failedResult.SettlementError(), settlementErr)
+	require.ErrorIs(t, failedResult.Err(), cause)
+	require.ErrorIs(t, failedResult.Err(), settlementErr)
+	require.False(t, failedResult.OwnerStopRequired())
+}
+
+func TestConsumeDeliveryWithHeartbeatValidDecisionTruthTable(t *testing.T) {
+	cause := errors.New("semantic")
+	settlementErr := errors.New("settlement")
+	delayed, err := DelayedDeliveryRetry(30 * time.Second)
+	require.NoError(t, err)
+	tests := []struct {
+		name       string
+		decision   DeliveryDecision
+		cause      error
+		configure  func(*mockMsg)
+		attempted  bool
+		succeeded  bool
+		failed     bool
+		quarantine bool
+		stop       bool
+		wantErr    error
+	}{
+		{name: "ack", decision: DeliveryDecisionAck, attempted: true, succeeded: true},
+		{name: "ack method failure", decision: DeliveryDecisionAck, configure: func(m *mockMsg) { m.ackErr = settlementErr }, attempted: true, failed: true, wantErr: settlementErr},
+		{name: "retry", decision: DeliveryDecisionRetry, cause: cause, attempted: true, succeeded: true, wantErr: cause},
+		{name: "retry method failure", decision: DeliveryDecisionRetry, cause: cause, configure: func(m *mockMsg) { m.nakErr = settlementErr }, attempted: true, failed: true, wantErr: settlementErr},
+		{name: "terminate", decision: DeliveryDecisionTerminate, cause: cause, attempted: true, succeeded: true, wantErr: cause},
+		{name: "terminate method failure", decision: DeliveryDecisionTerminate, cause: cause, configure: func(m *mockMsg) { m.termErr = settlementErr }, attempted: true, failed: true, wantErr: settlementErr},
+		{name: "quarantine", decision: DeliveryDecisionQuarantine, cause: cause, quarantine: true, stop: true, wantErr: cause},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &mockMsg{subject: "typed"}
+			if tt.configure != nil {
+				tt.configure(msg)
+			}
+			policy, policyErr := ValidateHeartbeatDeliveryPolicy(t.Context(), StreamConsumerConfig{}, time.Second, delayed,
+				func(context.Context, []byte) (DeliveryDecision, error) { return tt.decision, tt.cause })
+			require.NoError(t, policyErr)
+			result := ConsumeDeliveryWithHeartbeat(t.Context(), msg, policy)
+			require.Equal(t, tt.decision, result.Decision())
+			require.ErrorIs(t, result.Cause(), tt.cause)
+			require.Equal(t, tt.attempted, result.SettlementAttempted())
+			require.Equal(t, tt.succeeded, result.SettlementMethodSucceeded())
+			require.Equal(t, tt.failed, result.SettlementMethodFailed())
+			require.False(t, result.ServerConfirmed())
+			require.Equal(t, tt.quarantine, result.Quarantined())
+			require.Equal(t, tt.stop, result.OwnerStopRequired())
+			if tt.wantErr == nil {
+				require.NoError(t, result.Err())
+			} else {
+				require.ErrorIs(t, result.Err(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestConsumeDeliveryWithHeartbeatInvalidDecisionTuplesFailClosed(t *testing.T) {
+	supplied := errors.New("supplied")
+	tests := []struct {
+		name     string
+		decision DeliveryDecision
+		cause    error
+	}{
+		{name: "invalid nil", decision: DeliveryDecisionInvalid},
+		{name: "invalid error", decision: DeliveryDecisionInvalid, cause: supplied},
+		{name: "ack error", decision: DeliveryDecisionAck, cause: supplied},
+		{name: "retry nil", decision: DeliveryDecisionRetry},
+		{name: "terminate nil", decision: DeliveryDecisionTerminate},
+		{name: "quarantine nil", decision: DeliveryDecisionQuarantine},
+		{name: "unknown nil", decision: DeliveryDecision(200)},
+		{name: "unknown error", decision: DeliveryDecision(200), cause: supplied},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &mockMsg{subject: "invalid"}
+			policy, err := ValidateHeartbeatDeliveryPolicy(t.Context(), StreamConsumerConfig{}, time.Second,
+				ImmediateDeliveryRetry(), func(context.Context, []byte) (DeliveryDecision, error) { return tt.decision, tt.cause })
+			require.NoError(t, err)
+			result := ConsumeDeliveryWithHeartbeat(t.Context(), msg, policy)
+			require.Equal(t, tt.decision, result.Decision())
+			var invalid *InvalidDeliveryDecisionError
+			require.ErrorAs(t, result.Cause(), &invalid)
+			if tt.cause != nil {
+				require.ErrorIs(t, result.Cause(), tt.cause)
+			}
+			require.True(t, result.Quarantined())
+			require.True(t, result.OwnerStopRequired())
+			require.False(t, result.SettlementAttempted())
+			require.Zero(t, msg.ackCount.Load()+msg.nakCount.Load()+msg.termCount.Load())
+		})
+	}
+}
+
+func TestConsumeDeliveryWithHeartbeatControlLossPreservesJoinedMeaning(t *testing.T) {
+	controlErr := errors.New("heartbeat transport")
+	cause := errors.New("retry after cleanup")
+	msg := &mockMsg{subject: "typed", inProgressErr: controlErr}
+	policy, err := ValidateHeartbeatDeliveryPolicy(t.Context(), StreamConsumerConfig{}, time.Millisecond,
+		ImmediateDeliveryRetry(), func(ctx context.Context, _ []byte) (DeliveryDecision, error) {
+			<-ctx.Done()
+			return DeliveryDecisionRetry, cause
+		})
+	require.NoError(t, err)
+
+	result := ConsumeDeliveryWithHeartbeat(t.Context(), msg, policy)
+	require.Equal(t, DeliveryDecisionRetry, result.Decision())
+	require.ErrorIs(t, result.Cause(), cause)
+	require.ErrorIs(t, result.ControlError(), controlErr)
+	require.True(t, result.OwnerStopRequired())
+	require.False(t, result.SettlementAttempted())
+	require.Zero(t, msg.ackCount.Load()+msg.nakCount.Load()+msg.termCount.Load())
+	require.Equal(t, int32(1), msg.dataCount.Load())
+}
+
+func TestConsumeDeliveryWithHeartbeatOwnerCancellationJoinsThenSettles(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	entered := make(chan struct{})
+	policy, err := ValidateHeartbeatDeliveryPolicy(ctx, StreamConsumerConfig{}, time.Second,
+		ImmediateDeliveryRetry(), func(workCtx context.Context, _ []byte) (DeliveryDecision, error) {
+			close(entered)
+			<-workCtx.Done()
+			return DeliveryDecisionAck, nil
+		})
+	require.NoError(t, err)
+	msg := &mockMsg{subject: "cancel"}
+	returned := make(chan DeliveryResult, 1)
+	go func() { returned <- ConsumeDeliveryWithHeartbeat(ctx, msg, policy) }()
+	<-entered
+	cancel()
+	result := <-returned
+	require.Equal(t, DeliveryDecisionAck, result.Decision())
+	require.NoError(t, result.Err())
+	require.Equal(t, int32(1), msg.ackCount.Load())
+}
+
+func TestConsumeDeliveryWithHeartbeatControlLossNormalizesInvalidAndPanic(t *testing.T) {
+	controlErr := errors.New("heartbeat transport")
+	tests := []struct {
+		name         string
+		work         DeliveryWork
+		wantDecision DeliveryDecision
+		assertCause  func(*testing.T, error)
+	}{
+		{
+			name: "invalid tuple", wantDecision: DeliveryDecisionAck,
+			work: func(ctx context.Context, _ []byte) (DeliveryDecision, error) {
+				<-ctx.Done()
+				return DeliveryDecisionAck, errors.New("ack cannot carry cause")
+			},
+			assertCause: func(t *testing.T, err error) {
+				var target *InvalidDeliveryDecisionError
+				require.ErrorAs(t, err, &target)
+			},
+		},
+		{
+			name: "panic", wantDecision: DeliveryDecisionQuarantine,
+			work: func(ctx context.Context, _ []byte) (DeliveryDecision, error) {
+				<-ctx.Done()
+				panic("cleanup panic")
+			},
+			assertCause: func(t *testing.T, err error) {
+				var target *DeliveryWorkPanicError
+				require.ErrorAs(t, err, &target)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &mockMsg{subject: tt.name, data: []byte("body"), inProgressErr: controlErr}
+			policy, err := ValidateHeartbeatDeliveryPolicy(t.Context(), StreamConsumerConfig{}, time.Millisecond,
+				ImmediateDeliveryRetry(), tt.work)
+			require.NoError(t, err)
+			result := ConsumeDeliveryWithHeartbeat(t.Context(), msg, policy)
+			require.Equal(t, tt.wantDecision, result.Decision())
+			tt.assertCause(t, result.Cause())
+			require.ErrorIs(t, result.ControlError(), controlErr)
+			require.True(t, result.Quarantined())
+			require.True(t, result.OwnerStopRequired())
+			require.False(t, result.SettlementAttempted())
+			require.Equal(t, int32(1), msg.dataCount.Load())
+		})
+	}
+}
+
+func TestConsumeDeliveryWithHeartbeatPanicAndZeroPolicyFailClosed(t *testing.T) {
+	t.Run("panic", func(t *testing.T) {
+		msg := &mockMsg{subject: "panic"}
+		policy, err := ValidateHeartbeatDeliveryPolicy(t.Context(), StreamConsumerConfig{}, time.Second,
+			ImmediateDeliveryRetry(), func(context.Context, []byte) (DeliveryDecision, error) { panic("boom") })
+		require.NoError(t, err)
+		result := ConsumeDeliveryWithHeartbeat(t.Context(), msg, policy)
+		require.Equal(t, DeliveryDecisionQuarantine, result.Decision())
+		var panicErr *DeliveryWorkPanicError
+		require.ErrorAs(t, result.Cause(), &panicErr)
+		require.True(t, result.OwnerStopRequired())
+		require.Zero(t, msg.ackCount.Load()+msg.nakCount.Load()+msg.termCount.Load())
+	})
+
+	t.Run("zero policy before message IO", func(t *testing.T) {
+		msg := &mockMsg{subject: "zero"}
+		result := ConsumeDeliveryWithHeartbeat(t.Context(), msg, HeartbeatDeliveryPolicy{})
+		require.Equal(t, DeliveryDecisionInvalid, result.Decision())
+		require.True(t, result.OwnerStopRequired())
+		require.Zero(t, msg.inProgressCount.Load()+msg.ackCount.Load()+msg.nakCount.Load()+msg.termCount.Load())
+		require.Zero(t, msg.dataCount.Load())
+	})
+}

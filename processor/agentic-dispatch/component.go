@@ -90,16 +90,18 @@ type Component struct {
 	modelRegistry model.RegistryReader // Unified model registry for model selection
 
 	// Lifecycle state
-	mu             sync.RWMutex
-	lifecycleMu    sync.Mutex
-	lifecycleUsed  bool
-	terminal       bool
-	stopping       bool
-	cleanupPending bool
-	startDone      chan struct{}
-	cancel         context.CancelFunc
-	started        bool
-	startTime      time.Time
+	mu                 sync.RWMutex
+	lifecycleMu        sync.Mutex
+	lifecycleUsed      bool
+	terminal           bool
+	stopping           bool
+	cleanupPending     bool
+	startDone          chan struct{}
+	cancel             context.CancelFunc
+	started            bool
+	startTime          time.Time
+	agentCompleteFatal error
+	agentFailedFatal   error
 
 	// Ports
 	inputPorts  []component.Port
@@ -140,8 +142,9 @@ type Component struct {
 
 // consumerInfo tracks JetStream consumer details for cleanup
 type streamConsumerBinding struct {
-	handle      jetstream.ConsumeContext
-	drainIssued bool
+	handle       jetstream.ConsumeContext
+	drainOnce    *sync.Once
+	observerDone <-chan struct{}
 }
 
 type subscriptionInputBinding struct {
@@ -298,22 +301,40 @@ func (c *Component) Health() component.HealthStatus {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	healthy := c.started
+	healthy := c.started && c.agentCompleteFatal == nil && c.agentFailedFatal == nil
 	uptime := time.Duration(0)
 	if c.started {
 		uptime = time.Since(c.startTime)
 	}
 
 	status := "stopped"
-	if healthy {
+	lastError := ""
+	errorCount := 0
+	if c.agentCompleteFatal != nil {
+		lastError = c.agentCompleteFatal.Error()
+		errorCount++
+	}
+	if c.agentFailedFatal != nil {
+		if lastError == "" {
+			lastError = c.agentFailedFatal.Error()
+		} else {
+			lastError += "; " + c.agentFailedFatal.Error()
+		}
+		errorCount++
+	}
+	if c.started && errorCount > 0 {
+		status = "terminal delivery ownership lost"
+	} else if healthy {
 		status = "running"
 	}
 
 	return component.HealthStatus{
-		Healthy:   healthy,
-		LastCheck: time.Now(),
-		Uptime:    uptime,
-		Status:    status,
+		Healthy:    healthy,
+		LastCheck:  time.Now(),
+		ErrorCount: errorCount,
+		LastError:  lastError,
+		Uptime:     uptime,
+		Status:     status,
 	}
 }
 
@@ -460,15 +481,17 @@ func (c *Component) cleanup(ctx context.Context) error {
 	var stopErr error
 	for i := range c.consumers {
 		binding := &c.consumers[i]
-		if !binding.drainIssued {
-			binding.handle.Drain()
-			binding.drainIssued = true
-		}
+		binding.drain()
 		stopErr = errors.Join(stopErr, c.awaitConsumerClosed(ctx, binding.handle.Closed()))
 	}
 	c.stopActivityView()
 	if c.cancel != nil {
 		c.cancel()
+	}
+	for i := range c.consumers {
+		if done := c.consumers[i].observerDone; done != nil {
+			<-done
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		stopErr = errors.Join(stopErr, err)
@@ -513,6 +536,10 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	terminalRetryPolicy, err := natsclient.DelayedDeliveryRetry(30 * time.Second)
+	if err != nil {
+		return errs.WrapFatal(err, "Component", "setupSubscriptions", "construct terminal retry policy")
+	}
 
 	// Subscribe to user messages via JetStream
 	// Use "last" policy to catch messages sent just before consumer starts
@@ -536,7 +563,7 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		return errs.WrapTransient(err, "Component", "setupSubscriptions", "subscribe to user.message")
 	}
 	c.lifecycleMu.Lock()
-	c.consumers = append(c.consumers, streamConsumerBinding{handle: handle})
+	c.consumers = append(c.consumers, newStreamConsumerBinding(handle))
 	c.lifecycleMu.Unlock()
 
 	// Subscribe to agent completions via JetStream
@@ -550,18 +577,29 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		MaxAckPending: bindings.agentComplete.consumerConfig.MaxAckPending,
 		AutoCreate:    false,
 	}
+	agentCompletePolicy, err := natsclient.ValidateHeartbeatDeliveryPolicy(
+		ctx, agentCompleteCfg, 10*time.Second, terminalRetryPolicy, c.handleTerminalDelivery,
+	)
+	if err != nil {
+		return errs.WrapInvalid(err, "Component", "setupSubscriptions", "validate agent.complete delivery policy")
+	}
+	agentCompleteAdmission := newDeliveryLaneAdmission(c.recordAgentCompleteFatal)
 	handle, err = c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.agentComplete.portName}, agentCompleteCfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		handleErr := c.handleTerminalDelivery(msgCtx, msg)
-		c.observeTerminalDelivery(handleErr)
-		if handleErr != nil {
-			c.logger.Warn("Agent completion settlement failed", slog.Any("error", handleErr))
+		result, admitted := consumeAdmittedDelivery(msgCtx, msg, agentCompletePolicy, agentCompleteAdmission)
+		if admitted && !result.OwnerStopRequired() {
+			c.observeTerminalDelivery(result.Err())
+		}
+		if admitted && !result.OwnerStopRequired() && result.Err() != nil {
+			c.logger.Warn("Agent completion settlement failed", slog.Any("error", result.Err()))
 		}
 	})
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupSubscriptions", "subscribe to agent.complete")
 	}
+	agentCompleteBinding := newStreamConsumerBinding(handle)
+	c.observeDeliveryLane(ctx, &agentCompleteBinding, agentCompleteAdmission)
 	c.lifecycleMu.Lock()
-	c.consumers = append(c.consumers, streamConsumerBinding{handle: handle})
+	c.consumers = append(c.consumers, agentCompleteBinding)
 	c.lifecycleMu.Unlock()
 
 	// Subscribe to loop created events for workflow context sync
@@ -585,7 +623,7 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		return errs.WrapTransient(err, "Component", "setupSubscriptions", "subscribe to agent.created")
 	}
 	c.lifecycleMu.Lock()
-	c.consumers = append(c.consumers, streamConsumerBinding{handle: handle})
+	c.consumers = append(c.consumers, newStreamConsumerBinding(handle))
 	c.lifecycleMu.Unlock()
 
 	// Subscribe to loop failed events
@@ -599,18 +637,29 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		MaxAckPending: bindings.agentFailed.consumerConfig.MaxAckPending,
 		AutoCreate:    false,
 	}
+	agentFailedPolicy, err := natsclient.ValidateHeartbeatDeliveryPolicy(
+		ctx, agentFailedCfg, 10*time.Second, terminalRetryPolicy, c.handleTerminalDelivery,
+	)
+	if err != nil {
+		return errs.WrapInvalid(err, "Component", "setupSubscriptions", "validate agent.failed delivery policy")
+	}
+	agentFailedAdmission := newDeliveryLaneAdmission(c.recordAgentFailedFatal)
 	handle, err = c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.agentFailed.portName}, agentFailedCfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		handleErr := c.handleTerminalDelivery(msgCtx, msg)
-		c.observeTerminalDelivery(handleErr)
-		if handleErr != nil {
-			c.logger.Warn("Agent failure settlement failed", slog.Any("error", handleErr))
+		result, admitted := consumeAdmittedDelivery(msgCtx, msg, agentFailedPolicy, agentFailedAdmission)
+		if admitted && !result.OwnerStopRequired() {
+			c.observeTerminalDelivery(result.Err())
+		}
+		if admitted && !result.OwnerStopRequired() && result.Err() != nil {
+			c.logger.Warn("Agent failure settlement failed", slog.Any("error", result.Err()))
 		}
 	})
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupSubscriptions", "subscribe to agent.failed")
 	}
+	agentFailedBinding := newStreamConsumerBinding(handle)
+	c.observeDeliveryLane(ctx, &agentFailedBinding, agentFailedAdmission)
 	c.lifecycleMu.Lock()
-	c.consumers = append(c.consumers, streamConsumerBinding{handle: handle})
+	c.consumers = append(c.consumers, agentFailedBinding)
 	c.lifecycleMu.Unlock()
 
 	// Subscribe to approval-pending events so the HTTP approval
@@ -647,7 +696,7 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		return errs.WrapTransient(err, "Component", "setupSubscriptions", "subscribe to agent.approval_pending")
 	}
 	c.lifecycleMu.Lock()
-	c.consumers = append(c.consumers, streamConsumerBinding{handle: handle})
+	c.consumers = append(c.consumers, newStreamConsumerBinding(handle))
 	c.lifecycleMu.Unlock()
 
 	return nil
@@ -659,16 +708,39 @@ func (c *Component) observeTerminalDelivery(err error) {
 	}
 }
 
-// handleTerminalDelivery is the shared production callback for both physical
-// terminal lanes. Semantic category authority remains in agentterminal.Decode.
-func (c *Component) handleTerminalDelivery(msgCtx context.Context, msg jetstream.Msg) error {
-	return natsclient.ConsumeWithHeartbeat(msgCtx, msg, 10*time.Second, func(workCtx context.Context) error {
-		err := c.settleAgentTerminal(workCtx, msg.Data())
-		if isPermanentTerminal(err) {
-			return natsclient.TerminateDelivery(err)
-		}
-		return err
-	})
+func (c *Component) recordAgentCompleteFatal(result natsclient.DeliveryResult) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.agentCompleteFatal == nil {
+		c.agentCompleteFatal = fmt.Errorf("agent.complete delivery ownership lost: %w", result.Err())
+	}
+}
+
+func (c *Component) recordAgentFailedFatal(result natsclient.DeliveryResult) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.agentFailedFatal == nil {
+		c.agentFailedFatal = fmt.Errorf("agent.failed delivery ownership lost: %w", result.Err())
+	}
+}
+
+// handleTerminalDelivery is shared semantic work for both physical terminal
+// lanes. Semantic category authority remains in agentterminal.Decode.
+func (c *Component) handleTerminalDelivery(
+	workCtx context.Context,
+	data []byte,
+) (natsclient.DeliveryDecision, error) {
+	err := c.settleAgentTerminal(workCtx, data)
+	switch {
+	case err == nil:
+		return natsclient.DeliveryDecisionAck, nil
+	case isPermanentTerminal(err):
+		return natsclient.DeliveryDecisionTerminate, err
+	case isUnknownTerminalPublication(err):
+		return natsclient.DeliveryDecisionQuarantine, err
+	default:
+		return natsclient.DeliveryDecisionRetry, err
+	}
 }
 
 // waitForStream waits for a JetStream stream to be available

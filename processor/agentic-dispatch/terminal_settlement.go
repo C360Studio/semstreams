@@ -17,9 +17,12 @@ import (
 const terminalResponseIDPrefix = "terminal-user-response:"
 
 type permanentTerminalError struct{ err error }
+type unknownTerminalPublicationError struct{ err error }
 
-func (e *permanentTerminalError) Error() string { return e.err.Error() }
-func (e *permanentTerminalError) Unwrap() error { return e.err }
+func (e *permanentTerminalError) Error() string          { return e.err.Error() }
+func (e *permanentTerminalError) Unwrap() error          { return e.err }
+func (e *unknownTerminalPublicationError) Error() string { return e.err.Error() }
+func (e *unknownTerminalPublicationError) Unwrap() error { return e.err }
 
 func permanentTerminal(format string, args ...any) error {
 	return &permanentTerminalError{err: fmt.Errorf(format, args...)}
@@ -27,6 +30,11 @@ func permanentTerminal(format string, args ...any) error {
 
 func isPermanentTerminal(err error) bool {
 	var target *permanentTerminalError
+	return errors.As(err, &target)
+}
+
+func isUnknownTerminalPublication(err error) bool {
+	var target *unknownTerminalPublicationError
 	return errors.As(err, &target)
 }
 
@@ -148,7 +156,10 @@ func terminalResponse(event agentterminal.Event, route terminalRoute) agentic.Us
 
 func (c *Component) publishTerminalResponse(ctx context.Context, response agentic.UserResponse, msgID string) error {
 	if c.sendTerminalResponseFn != nil {
-		return c.sendTerminalResponseFn(ctx, response, msgID)
+		if err := c.sendTerminalResponseFn(ctx, response, msgID); err != nil {
+			return &unknownTerminalPublicationError{err: fmt.Errorf("publish terminal response: %w", err)}
+		}
+		return nil
 	}
 	responseMessage := message.NewBaseMessage(response.Schema(), &response, "agentic-dispatch")
 	data, err := json.Marshal(responseMessage)
@@ -160,7 +171,7 @@ func (c *Component) publishTerminalResponse(ctx context.Context, response agenti
 		return permanentTerminal("resolve terminal response subject: %w", err)
 	}
 	if err := c.natsClient.PublishToStreamWithMsgID(ctx, subject, data, msgID); err != nil {
-		return fmt.Errorf("publish terminal response: %w", err)
+		return &unknownTerminalPublicationError{err: fmt.Errorf("publish terminal response: %w", err)}
 	}
 	return nil
 }
