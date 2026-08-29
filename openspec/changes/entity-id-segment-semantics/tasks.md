@@ -1180,9 +1180,14 @@ package; both declarations are now on the payload registrations) and
       in-repo binary is affected. `TestInitializeStateTrackerRefusesAbsentDeploymentAuthority` (3 cases) plus the
       negative-space `TestInitializeStateTrackerPastTheAuthorityCheckFailsElsewhere`; SEVENTEEN NATS-backed
       construction sites across EIGHT files were swept to the established `SetPlatform` idiom (`git show 3301f61f
-      -- '*_test.go' | grep -c '^+.*SetPlatform(component.PlatformMeta'` → 17). Three of those sites were reached by
-      tests that FAILED without the authority — six failing tests, four of them `TestIntegration_CronRule_*`; the
-      other fourteen sites had been running green against an executor whose guard was retired. Three mutants, all
+      -- '*_test.go' | grep -c '^+.*SetPlatform(component.PlatformMeta'` → 17). FOUR of those sites were reached by
+      tests that FAILED without the authority — SEVEN failing tests: four `TestIntegration_CronRule_*`,
+      `TestEntityWatcher_DeletedEntityCleansRuleState`, `TestStatefulEvaluator_Integration`, and
+      `TestFullStack_ResetSurvivesEvictedRow` in `processor/gated-dag`. The other THIRTEEN sites never reach the
+      guard at all: `foreignFiringEntity` has one production caller (`actions.go` `publishAgentOnce`), reachable
+      only from `case ActionTypePublishAgent`, and no swept file configures a `publish_agent` action. Measured
+      across BOTH packages — `go test -tags=integration ./processor/rule/... ./processor/gated-dag/...`; a run
+      scoped to `./processor/rule/...` cannot see the eighth file this same sentence counts. Three mutants, all
       killed, in `conformance.md`'s round-6 table.
 - [x] 6.4 `graph/inference/hierarchy.go`: `GetHierarchyTriples` returns `nil, nil` for an entity whose positions 1–2
       differ from the deployment authority (no container, no membership, no inverse sibling edge, no warning) — the

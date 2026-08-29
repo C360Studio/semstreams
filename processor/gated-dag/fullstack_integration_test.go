@@ -214,7 +214,11 @@ func setupFullStack(t *testing.T, opts fsOpts) *fullStack {
 	rcfg.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"fs.test.*.*.*.*"}}
 	rproc, err := rule.NewProcessor(nc, &rcfg)
 	require.NoError(t, err)
-	rproc.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
+	// Same pair as the graph-ingest composition above. This fixture is ONE
+	// deployment: a rule processor minting trigger identities under a different
+	// authority than the graph-ingest that must accept them is a contradiction
+	// the harness would only surface once a rule is added here.
+	rproc.SetPlatform(component.PlatformMeta{Org: "fs", Platform: "test"})
 	require.NoError(t, rproc.Initialize())
 	require.NoError(t, rproc.Start(ctx))
 	t.Cleanup(func() { _ = rproc.Stop(context.Background()) })

@@ -574,9 +574,10 @@ type ActionExecutor struct {
 // entity LOCAL and so RETIRED both guards below; three rounds of review treated
 // that as a doc-comment problem. It is deleted.
 //
-// FOUR paths can reach this function with an authority, and all four are closed
-// — an earlier revision of this comment enumerated three and called the state
-// "unrepresentable", which is how the fourth stayed open for a round:
+// THREE constructors can hand this executor an authority, and TWO guards refuse
+// a caller who would not — an earlier revision of this comment enumerated the
+// constructors alone and called the state "unrepresentable", which is how the
+// second guard's seam stayed open for a round:
 //
 //   - NewActionExecutorComplete, NewActionExecutorFull and
 //     NewActionExecutorWithMutator — the three constructors that can hold a
