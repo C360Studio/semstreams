@@ -21,31 +21,38 @@ at final legacy removal.
 Legacy remains source- and behavior-compatible only for an exact shrinking allowlist: model, loop, and AgentRun.
 New production callers fail AST conformance. Documentation and examples use only the typed API.
 
-### D2 — closed semantic disposition
+### D2 — semantic decision and error-last work contract
 
 ```go
-type DeliveryDispositionKind uint8
+type DeliveryDecision uint8
 
 const (
-    DeliveryDispositionInvalid DeliveryDispositionKind = iota
-    DeliveryDispositionAck
-    DeliveryDispositionRetry
-    DeliveryDispositionTerminate
-    DeliveryDispositionQuarantine
+    DeliveryDecisionInvalid DeliveryDecision = iota
+    DeliveryDecisionAck
+    DeliveryDecisionRetry
+    DeliveryDecisionTerminate
+    DeliveryDecisionQuarantine
 )
 
-type DeliveryDisposition struct { /* private */ }
+type DeliveryWork func(context.Context) (DeliveryDecision, error)
 
-func (d DeliveryDisposition) Kind() DeliveryDispositionKind
-func AckDelivery() DeliveryDisposition
-func RetryDelivery(cause error) DeliveryDisposition
-func TerminateDelivery(cause error) DeliveryDisposition
-func QuarantineDelivery(cause error) DeliveryDisposition
+type InvalidDeliveryDecisionError struct { /* private */ }
+func (e *InvalidDeliveryDecisionError) Error() string
+func (e *InvalidDeliveryDecisionError) Unwrap() error
+
+type DeliveryWorkPanicError struct { /* private */ }
+func (e *DeliveryWorkPanicError) Error() string
+func (e *DeliveryWorkPanicError) Unwrap() error
 ```
 
-ACK means the owner-defined durable consequence completed. Retry is repairable and carries no timing. Terminate is
-immutable poison. Quarantine means retry and termination are not proven safe. Non-ACK kinds require causes; zero,
-unknown, missing-cause, and recovered panic fail closed. `PermanentDeliveryError` compatibility remains exact.
+ACK plus nil means the owner-defined durable consequence completed. Retry, Terminate, and Quarantine require non-nil
+causes. Zero, unknown, and every mismatched decision/error tuple preserve the requested decision in DeliveryResult,
+attempt no terminal method, quarantine with `InvalidDeliveryDecisionError`, and require owner stop. A supplied error
+remains reachable through that typed error.
+
+A recovered panic synthesizes Quarantine with `DeliveryWorkPanicError`, attempts no terminal method, and requires
+owner stop. There is no DeliveryDisposition type or typed constructor family. Existing
+`TerminateDelivery(error) error` and `PermanentDeliveryError` remain exact and outside every #759 removal gate.
 
 ### D3 — lease and semantic retry are separate
 
@@ -70,7 +77,7 @@ func ValidateHeartbeatDeliveryPolicy(
     cfg StreamConsumerConfig,
     heartbeat time.Duration,
     retry DeliveryRetryPolicy,
-    work func(context.Context) DeliveryDisposition,
+    work DeliveryWork,
 ) (HeartbeatDeliveryPolicy, error)
 ```
 
@@ -98,7 +105,7 @@ future loop lanes at 15 seconds permit at most 12/minute total at MaxAckPending 
 ```go
 type DeliveryResult struct { /* private immutable observation */ }
 
-func (r DeliveryResult) Kind() DeliveryDispositionKind
+func (r DeliveryResult) Decision() DeliveryDecision
 func (r DeliveryResult) Cause() error
 func (r DeliveryResult) ControlError() error
 func (r DeliveryResult) SettlementError() error
@@ -111,17 +118,18 @@ func (r DeliveryResult) OwnerStopRequired() bool
 func (r DeliveryResult) Err() error
 ```
 
-Only clean local Ack has nil Err. Retry/Terminate causes remain reachable after method success. Control and settlement
-errors remain separate. Plain Ack/Nak/NakWithDelay/Term never sets ServerConfirmed. Method error means
-unknown/not-confirmed, not unsettled or guaranteed redelivery.
+Decision preserves exactly what joined work requested; invalid tuples do not rewrite it. Panic synthesizes Quarantine
+because work returned no tuple. Only clean local Ack has nil Err. Retry/Terminate causes remain reachable after method
+success. Control and settlement errors remain separate. Plain Ack/Nak/NakWithDelay/Term never sets ServerConfirmed.
+Method error means unknown/not-confirmed, not unsettled or guaranteed redelivery.
 
 OwnerStopRequired is true for semantic quarantine, invalid/panic defense, and every InProgress control failure while
-preserving joined Kind/Cause. It is false for a terminal method error alone. Control failure cannot maintain ownership
-while work may have run; a method error does not prove the lane's heartbeat control path is lost.
+preserving joined Decision/Cause. It is false for a terminal method error alone. Control failure cannot maintain
+ownership while work may have run; a method error does not prove the lane's heartbeat control path is lost.
 
 ### D7 — cancel, join, interpret
 
-Owner cancellation cancels work, joins it, interprets its exact disposition, then attempts settlement. Context error
+Owner cancellation cancels work, joins it, interprets its exact decision/error tuple, then attempts settlement. Context error
 never replaces joined meaning. InProgress failure cancels and joins, preserves meaning, records ControlError, attempts
 no later terminal method, and sets OwnerStopRequired. Work panic is recovered inside the joined goroutine. Every task
 joins before return; no context is retained.
@@ -140,7 +148,8 @@ The observer derives from Start/Run and joins Stop. Shared natsclient owns no li
 
 Typed and legacy helpers may share only a private terminal-method executor. Before extraction, characterization tests
 pin every legacy ACK, 30-second Retry, Term, 5-second cancellation, InProgress, and error-chain path. Typed does not call
-legacy; legacy does not translate through exported dispositions.
+legacy; legacy does not translate through the exported DeliveryDecision/DeliveryWork contract. Here legacy means only
+`ConsumeWithHeartbeat`; `TerminateDelivery(error) error` and `PermanentDeliveryError` are not deprecated or removed.
 
 The AST allowlist names only model, loop, and AgentRun production files and shrinks with migration. Legacy receives a
 deprecation comment and is removed without alias only after all held addenda/proofs, zero repository callers, sister
@@ -179,4 +188,3 @@ from the final legacy-helper removal.
 - #1155 Stage A process replacement with one tools effect and no duplicate dispatch response.
 - `task e2e:agentic` after Stage A and every later admitted stage.
 - No final legacy removal until the approved zero-caller gate and separate owner approval.
-
