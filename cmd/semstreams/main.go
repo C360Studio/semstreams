@@ -136,6 +136,9 @@ func run() (runErr error) {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	if err := prepareE2EProcessBarrierConfig(cfg); err != nil {
+		return fmt.Errorf("prepare E2E process barrier config: %w", err)
+	}
 
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
@@ -297,6 +300,9 @@ func run() (runErr error) {
 		RestrictedDecideActions: extractRestrictedDecideActions(cfg, logger),
 	}); err != nil {
 		return fmt.Errorf("register builtin tools: %w", err)
+	}
+	if err := registerE2EProcessBarrier(toolRegistry, natsClient); err != nil {
+		return fmt.Errorf("register E2E process barrier: %w", err)
 	}
 	if graphresearch.Selected(cfg) {
 		if err := graphresearch.RegisterTool(bootCtx, toolRegistry, natsClient, platform, logger, graphresearch.LoopsBucket(cfg)); err != nil {
