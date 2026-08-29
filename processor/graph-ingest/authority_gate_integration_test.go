@@ -62,6 +62,10 @@ const (
 
 	authorityImportStream  = "IMPORT_ENTITY"
 	authorityImportSubject = "import.entity."
+
+	// The two mutation lanes review round 1 (HIGH-2) found uncovered.
+	authorityReconcileSubject = "graph.mutation.entity.reconcile"
+	authorityDeleteSubject    = "graph.mutation.entity.delete"
 )
 
 // authorityGateHarness is the assembled component plus the test client, so a
@@ -347,4 +351,89 @@ func TestAuthorityGateRejectsAnnotationOfImportedSubject(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, revisionBefore, after.Revision,
 		"the import's revision must be untouched by the refused annotation")
+}
+
+// TestAuthorityGateRejectsReconcileOfImportedSubject closes the lane with the
+// LEAST margin for error: handleCanonicalReconcile writes straight through
+// entityBucket.Update and never enters mergeEntityOnLane, so its own gate is
+// the ONLY thing between a local reconcile and mutation of an imported mirror
+// — there is no backstop behind it. It is also the lane pkg/lifecycle.Manager
+// writes through, so an unguarded reconcile would let any lifecycle participant
+// attach itself to a peer's entity.
+//
+// Deleting that gate previously left both suites green (review HIGH-2).
+func TestAuthorityGateRejectsReconcileOfImportedSubject(t *testing.T) {
+	h := startAuthorityGateComponent(t, false)
+
+	h.publishFact(t, authorityImportSubject, authorityForeignID)
+	h.awaitEntity(t, authorityForeignID)
+
+	entry, err := h.component.entityBucket.Get(h.ctx, authorityForeignID)
+	require.NoError(t, err)
+	revisionBefore := entry.Revision
+
+	reqBytes, err := json.Marshal(graph.ReconcilePredicatesRequest{
+		EntityID:         authorityForeignID,
+		ExpectedRevision: revisionBefore,
+		Predicates:       []string{semantictest.Predicate(t, "test", "fixture", "curation")},
+		Desired: []message.Triple{{
+			Subject:   authorityForeignID,
+			Predicate: semantictest.Predicate(t, "test", "fixture", "curation"),
+			Object:    "curated", Timestamp: time.Now(), Confidence: 1.0,
+		}},
+	})
+	require.NoError(t, err)
+
+	respBytes, err := h.component.natsClient.RequestClassified(
+		h.ctx, authorityReconcileSubject, reqBytes, 2*time.Second)
+	require.Error(t, err, "reconcile is a mutation; no local lane may reconcile a foreign subject")
+	assert.Nil(t, respBytes)
+
+	var classified *errs.ClassifiedError
+	require.ErrorAs(t, err, &classified)
+	assert.Equal(t, semtypes.ErrorCodeEntityIDAuthorityInvalid, classified.Code)
+	assert.Equal(t, semtypes.EntityIDReasonForeignAuthority, classified.Detail[semtypes.EntityIDDetailReason])
+
+	after, err := h.component.entityBucket.Get(h.ctx, authorityForeignID)
+	require.NoError(t, err)
+	assert.Equal(t, revisionBefore, after.Revision,
+		"the import's revision must be untouched by the refused reconcile")
+}
+
+// TestAuthorityGateRejectsDeleteOfImportedSubject pins the delete lane. An
+// import is a read-only MIRROR, not local property: reclaiming a peer's entity
+// is as much a mutation as annotating it, and the mirror must outlive any local
+// decision about it. Deleting BOTH delete-lane gates previously left the suites
+// green (review HIGH-2).
+func TestAuthorityGateRejectsDeleteOfImportedSubject(t *testing.T) {
+	h := startAuthorityGateComponent(t, false)
+
+	h.publishFact(t, authorityImportSubject, authorityForeignID)
+	h.awaitEntity(t, authorityForeignID)
+
+	entry, err := h.component.entityBucket.Get(h.ctx, authorityForeignID)
+	require.NoError(t, err)
+	revisionBefore := entry.Revision
+
+	reqBytes, err := json.Marshal(graph.DeleteEntityRequest{
+		EntityID:         authorityForeignID,
+		ExpectedRevision: revisionBefore,
+	})
+	require.NoError(t, err)
+
+	respBytes, err := h.component.natsClient.RequestClassified(
+		h.ctx, authorityDeleteSubject, reqBytes, 2*time.Second)
+	require.Error(t, err, "no local lane may delete a foreign subject")
+	assert.Nil(t, respBytes)
+
+	var classified *errs.ClassifiedError
+	require.ErrorAs(t, err, &classified)
+	assert.Equal(t, semtypes.ErrorCodeEntityIDAuthorityInvalid, classified.Code)
+	assert.Equal(t, semtypes.EntityIDReasonForeignAuthority, classified.Detail[semtypes.EntityIDDetailReason])
+
+	// The mirror survives, byte-for-byte and at the same revision.
+	after, err := h.component.entityBucket.Get(h.ctx, authorityForeignID)
+	require.NoError(t, err)
+	assert.Equal(t, revisionBefore, after.Revision,
+		"the import must still exist at its original revision after the refused delete")
 }

@@ -711,10 +711,10 @@ func (rp *Processor) initializeStateTracker(ctx context.Context) error {
 		kvWriter := newNATSKVWriter(rp.natsClient, rp.logger)
 		if rp.config.EnableGraphIntegration {
 			mutator := newTripleMutator(rp.natsClient, rp)
-			actionExecutor = NewActionExecutorComplete(rp.logger, mutator, publisher, kvWriter)
+			actionExecutor = NewActionExecutorComplete(rp.logger, mutator, publisher, kvWriter, rp.platform)
 			rp.logger.Info("ActionExecutor initialized with triple mutation, publishing, and KV write support")
 		} else {
-			actionExecutor = NewActionExecutorComplete(rp.logger, nil, publisher, kvWriter)
+			actionExecutor = NewActionExecutorComplete(rp.logger, nil, publisher, kvWriter, rp.platform)
 			rp.logger.Info("ActionExecutor initialized with publishing and KV write support (graph integration disabled)")
 		}
 	} else {
@@ -769,11 +769,10 @@ func (rp *Processor) initializeStateTracker(ctx context.Context) error {
 	}
 	if executor, ok := actionExecutor.(*ActionExecutor); ok {
 		executor.setProjectionTargets(rp.projectionTargets, rp)
-		// The deployment's own authority for every identity the executor mints
-		// (ADR-102 d2; #1096) and the shared collectors that count what it
-		// deliberately did not write. Both flow from the factory's
-		// deps.Platform / deps.MetricsRegistry; the executor has no other source.
-		executor.setPlatform(rp.platform)
+		// The collectors that count what the executor deliberately did not write.
+		// The deployment authority is NOT set here: it is a constructor
+		// parameter of NewActionExecutorComplete above, so it cannot be
+		// forgotten the way a setter can (#1096).
 		executor.setMetrics(rp.metrics)
 	}
 

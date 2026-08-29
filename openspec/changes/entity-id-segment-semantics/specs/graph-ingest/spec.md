@@ -50,6 +50,23 @@ provenance this requirement records; it authenticates nothing.
 - **THEN** the create is accepted and the reference is persisted unchanged
 - **AND** the test that verifies this is `TestAuthorityGateAllowsForeignReferenceObject`
 
+#### Scenario: a local lane cannot reconcile an imported entity
+
+- **GIVEN** an imported entity `acme.dep2.src.git.commit.a1` persisted through an import lane
+- **WHEN** an `entity.reconcile` request from a non-import lane names it as subject
+- **THEN** the request is rejected with code `entity_id_authority_invalid` and reason `foreign_authority`
+- **AND** the rejection happens before the entity's state is read, so no KV I/O is performed on its behalf
+- **AND** the imported entity's revision is unchanged
+- **AND** the test that verifies this is `TestAuthorityGateRejectsReconcileOfImportedSubject`
+
+#### Scenario: a local lane cannot delete an imported entity
+
+- **GIVEN** the same imported entity
+- **WHEN** an `entity.delete` request from a non-import lane names it as subject, at its current revision
+- **THEN** the request is rejected with code `entity_id_authority_invalid` and reason `foreign_authority`
+- **AND** the entity still exists at that revision — a mirror is not local property to reclaim
+- **AND** the test that verifies this is `TestAuthorityGateRejectsDeleteOfImportedSubject`
+
 #### Scenario: a local lane cannot annotate an imported entity
 
 - **GIVEN** the same imported entity `acme.dep2.src.git.commit.a1`
@@ -86,10 +103,13 @@ ID — for every run, so the run→loop linkage has one home that never depends 
 `agent.run.entity-id`) and the `rule.task.spawned` back-reference MUST be written on the firing entity only when it
 carries the deployment's own authority. When the firing entity is a foreign-authority import the rule action MUST
 detect that before any write and MUST issue no mutation request targeting the foreign subject — not even one
-graph-ingest would reject. The decision MUST be recorded once per action execution as
-`rule_run_anchor_skipped_total{reason="foreign_authority"}` with an Info log naming which writes were skipped: a
-counted skip, never a rejection, and one federation event rather than one per omitted write. Issue #1096 is complete
-only when this path is implemented and tested.
+graph-ingest would reject. The decision MUST be recorded once per DISPATCH as
+`rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` with an Info log naming which writes were
+skipped: a counted skip, never a rejection, and one federation event per declined entity rather than one per omitted
+write. Per dispatch, not per action: `publish_agent` fans out over `for_each`, so an action declining N imported
+entities MUST report N skips. The counter is named for the writes it covers rather than for the run anchor, because
+under `run_scope` `inherit` or `none` no anchor is in play and only the `rule.task.spawned` back-reference is
+skipped. Issue #1096 is complete only when this path is implemented and tested.
 
 #### Scenario: a rule firing on an imported loop links the local run without writing to the import
 
@@ -100,7 +120,7 @@ only when this path is implemented and tested.
   the imported entity
 - **AND** no mutation request targets `foreign.dep9.agentic-loop.agent.execution.<uuid>` and its revision is unchanged
 - **AND** no mutation request carries `rule.task.spawned` for that subject either
-- **AND** `rule_run_anchor_skipped_total{reason="foreign_authority"}` increments exactly once and
+- **AND** `rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` increments exactly once and
   `mutation_rejections` does not
 - **AND** the test that verifies this is `TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite`
 

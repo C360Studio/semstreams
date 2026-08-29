@@ -511,9 +511,30 @@ whole adopter-facing surface, and for each one what happens if you do nothing.
    identity).
 3. **To hold a peer's entities, declare an import lane** — `"import": true` on a `jetstream` INPUT port. On that
    lane a foreign pair is persisted byte-for-byte and a subject claiming YOUR pair is refused
-   (`local_authority_claimed` / `mutation_rejections{reason="authority_claimed"}`). The reference declaration is
-   `configs/graph-backend.json`'s `peer_import` port on `peer.entity.>`. It is an operator statement of trust and
-   nothing is authenticated: the recorded provenance is the port declaration plus the envelope `source` string.
+   (`local_authority_claimed` / `mutation_rejections{reason="authority_claimed"}`). It is an operator statement of
+   trust and nothing is authenticated: the recorded provenance is the port declaration plus the envelope `source`
+   string.
+
+   **No shipped config declares one, deliberately.** A lane is a decision to trust a peer, so the default
+   composition must import nothing; a reference config carrying an enabled lane would hand that decision to whoever
+   copied the file. Add it yourself, to the graph-ingest instance that should hold the mirror:
+
+   ```json
+   {
+     "name": "peer_import",
+     "config": {
+       "kind": "jetstream",
+       "stream_name": "PEER_ENTITY",
+       "subjects": ["peer.entity.>"],
+       "deliver_policy": "all",
+       "import": true
+     }
+   }
+   ```
+
+   Declare the backing stream too (`streams.PEER_ENTITY` with `max_age`, `max_bytes` and `discard`), or graph-ingest
+   waits for a stream nothing provisions and `Start` fails. `import` is INPUT-only: on an output port it is refused
+   at config resolution rather than ignored.
 4. **An import is a READ-ONLY mirror** (ruled O-12(a)). No local lane mutates a foreign subject — not `entity.create`,
    not `triple.append`, not `entity.reconcile`, not `entity.delete`, and not the framework's own writes. Every local
    fact about an imported entity lives on a LOCAL subject that references it through an `@id` triple; `@id` OBJECTS
@@ -539,8 +560,9 @@ the boundary compares against the pair it already has and reports the real outco
   `agent.loop.run`, nor `agent.run.entity-id`, nor the `rule.task.spawned` back-reference. A chained rule whose
   condition reads `$entity.triple.agent.run.entity-id` or `$entity.triple.rule.spawned_task` off that entity simply
   never fires. **A rule that does not fire logs nothing and fails nothing** — the only signal is
-  `rule_run_anchor_skipped_total{reason="foreign_authority"}` rising and one Info line per action naming which writes
-  were skipped. If your rule packs chain off either predicate and any of your firing entities are imported, re-point
+  `rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` rising and one Info line per dispatch naming
+  which writes were skipped. It counts once per DISPATCH, so an action fanning out over `for_each` and declining N
+  imported entities reports N — one federation event per entity declined. If your rule packs chain off either predicate and any of your firing entities are imported, re-point
   those rules at the LOCAL run entity (`org.platform.chain.agent.execution.<loopID>`) or its local children before
   you upgrade. Hierarchy is the same shape and the same ruling: an imported entity is persisted with no
   `hierarchy.*` triple, no container, and no sibling edge, so structural-tier queries return fewer edges over

@@ -19,6 +19,7 @@ import (
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/errs"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
+	"github.com/c360studio/semstreams/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -2123,7 +2124,7 @@ func TestAction_PublishAgent_NonLoopTriggerLeavesParentLoopIDUnset(t *testing.T)
 		{"chain execution", chainID},
 		{name: "non-canonical entity ID", entityID: "e.1"},
 	}
-	// entity-id-audit:classify intentional-malformed "e.1" line=2124 column=47 surface=go-field:.entityID entity_id_invalid:arity verifies noncanonical IDs remain opaque agent payload values
+	// entity-id-audit:classify intentional-malformed "e.1" line=2125 column=47 surface=go-field:.entityID entity_id_invalid:arity verifies noncanonical IDs remain opaque agent payload values
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2747,7 +2748,7 @@ func TestAction_UpdateKV_Merge(t *testing.T) {
 		"my-plan": {"status": "created", "owner": "alice"},
 	}
 
-	executor := NewActionExecutorComplete(nil, nil, nil, kv)
+	executor := NewActionExecutorComplete(nil, nil, nil, kv, testExecutorPlatform())
 
 	action := Action{
 		Type:   ActionTypeUpdateKV,
@@ -2777,7 +2778,7 @@ func TestAction_UpdateKV_Overwrite(t *testing.T) {
 	ctx := context.Background()
 
 	kv := newMockKVWriter()
-	executor := NewActionExecutorComplete(nil, nil, nil, kv)
+	executor := NewActionExecutorComplete(nil, nil, nil, kv, testExecutorPlatform())
 
 	action := Action{
 		Type:   ActionTypeUpdateKV,
@@ -2803,7 +2804,7 @@ func TestAction_UpdateKV_VariableSubstitution(t *testing.T) {
 	entityID := semantictest.EntityID(t, "test", "rule", "actions", "kv-substitution", "plan", "001")
 
 	kv := newMockKVWriter()
-	executor := NewActionExecutorComplete(nil, nil, nil, kv)
+	executor := NewActionExecutorComplete(nil, nil, nil, kv, testExecutorPlatform())
 
 	entity := &gtypes.EntityState{
 		ID: entityID,
@@ -2819,7 +2820,7 @@ func TestAction_UpdateKV_VariableSubstitution(t *testing.T) {
 		Payload: map[string]any{
 			"status":     "drafting",
 			"updated_at": "$now",
-			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2822 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
+			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2823 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
 		},
 		Merge: false,
 	}
@@ -2849,7 +2850,7 @@ func TestAction_UpdateKV_MissingBucket(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	executor := NewActionExecutorComplete(nil, nil, nil, newMockKVWriter())
+	executor := NewActionExecutorComplete(nil, nil, nil, newMockKVWriter(), testExecutorPlatform())
 
 	action := Action{
 		Type: ActionTypeUpdateKV,
@@ -2885,7 +2886,7 @@ func TestAction_UpdateKV_MissingKey(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	executor := NewActionExecutorComplete(nil, nil, nil, newMockKVWriter())
+	executor := NewActionExecutorComplete(nil, nil, nil, newMockKVWriter(), testExecutorPlatform())
 
 	action := Action{
 		Type:   ActionTypeUpdateKV,
@@ -3500,6 +3501,14 @@ func TestAction_PublishAgent_RunIDInheritedFromNonLoopEntityTriple(t *testing.T)
 		"ParentLoopID must be empty for non-loop-execution trigger entities")
 }
 
+// testExecutorPlatform is the deployment authority the fixtures in this file
+// build a writing executor under. Since #1096 it is a CONSTRUCTOR parameter, so
+// a fixture cannot silently produce an executor whose foreign-authority guard
+// is retired; naming it here keeps the value visible without repeating it.
+func testExecutorPlatform() types.PlatformMeta {
+	return types.PlatformMeta{Org: "acme", Platform: "ops"}
+}
+
 // --- ADR-053 D4: run_scope tests (I2) ---
 //
 // These tests drive publishAgentOnce through the PRODUCTION executor.Execute entry
@@ -3518,13 +3527,13 @@ func TestAction_PublishAgent_RunScopeNew_MintsRunAndStampsAgentRun(t *testing.T)
 	// Use the fakeLifecycleManager from actions_lifecycle_test.go (same package).
 	mgr := newFakeManager()
 
-	executor := NewActionExecutorComplete(nil, mutator, pub, nil)
+	// The deployment's OWN authority. Since #1096 the mint takes it from the
+	// constructor and never from the firing entity; this fixture happens to
+	// share the pair with the firing loop, which is the LOCAL case. The
+	// imported case is TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite.
+	executor := NewActionExecutorComplete(nil, mutator, pub, nil,
+		component.PlatformMeta{Org: "acme", Platform: "ops"})
 	executor.SetLifecycleManager(mgr)
-	// The deployment's OWN authority. Since #1096 the mint takes it from here
-	// and never from the firing entity; this fixture happens to share the pair
-	// with the firing loop, which is the LOCAL case. The imported case is
-	// TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite.
-	executor.setPlatform(component.PlatformMeta{Org: "acme", Platform: "ops"})
 
 	// Trigger entity is a loop-execution entity — the firing coordinator loop.
 	firingLoopID := "coordinator-loop-uuid"
@@ -3578,7 +3587,7 @@ func TestActionPublishAgentRunScopeNewInvalidLineageHasNoSideEffects(t *testing.
 	pub := &mockPublisher{}
 	mutator := &mockTripleMutator{}
 	mgr := newFakeManager()
-	executor := NewActionExecutorComplete(nil, mutator, pub, nil)
+	executor := NewActionExecutorComplete(nil, mutator, pub, nil, testExecutorPlatform())
 	executor.SetLifecycleManager(mgr)
 
 	firingLoopID := "coordinator-invalid-lineage"
@@ -3616,7 +3625,7 @@ func TestAction_PublishAgent_RunScopeNew_NonLoopEntityFallsBackToInherit(t *test
 	pub := &mockPublisher{}
 	mgr := newFakeManager()
 
-	executor := NewActionExecutorComplete(nil, nil, pub, nil)
+	executor := NewActionExecutorComplete(nil, nil, pub, nil, testExecutorPlatform())
 	executor.SetLifecycleManager(mgr)
 
 	// Non-loop entity (e.g. a sensor entity, not agent.*.execution.*).
@@ -3653,7 +3662,7 @@ func TestAction_PublishAgent_RunScopeNew_NoLifecycleManagerFallsBackToInherit(t 
 
 	pub := &mockPublisher{}
 	// No SetLifecycleManager call — lifecycle is nil.
-	executor := NewActionExecutorComplete(nil, nil, pub, nil)
+	executor := NewActionExecutorComplete(nil, nil, pub, nil, testExecutorPlatform())
 
 	firingLoopID := "coordinator-loop-uuid"
 	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agentic-loop", "agent", "execution", firingLoopID)
@@ -3733,9 +3742,9 @@ func TestAction_PublishAgent_RunScopeNew_MintsRunSuccessfully(t *testing.T) {
 
 	pub := &mockPublisher{}
 	mgr := newFakeManager()
-	executor := NewActionExecutorComplete(nil, nil, pub, nil)
+	executor := NewActionExecutorComplete(nil, nil, pub, nil,
+		component.PlatformMeta{Org: "acme", Platform: "ops"})
 	executor.SetLifecycleManager(mgr)
-	executor.setPlatform(component.PlatformMeta{Org: "acme", Platform: "ops"})
 
 	firingLoopID := "coord-fresh-mint"
 	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agentic-loop", "agent", "execution", firingLoopID)

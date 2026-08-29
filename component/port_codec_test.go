@@ -252,3 +252,78 @@ func assertCommonConfigWire(t *testing.T, raw []byte, kind PortKind) {
 		t.Fatal("wire contains retired data wrapper")
 	}
 }
+
+// TestJetStreamImportLaneDecodesFromOperatorJSON pins the import lane across
+// the seam an operator actually uses: JSON. The flag is the ONE knob deciding
+// whether graph-ingest admits a foreign org.platform (ADR-102 d5), so the path
+// from `"import": true` in a config to StreamFacts.Import() is contract, not
+// convenience — and a Go struct literal in a component test does not exercise
+// the decoder.
+//
+// It is asserted here rather than by shipping an enabled import lane in a
+// reference config: a lane is an operator statement of TRUST, and the shipped
+// default must import nothing (review MEDIUM-4).
+func TestJetStreamImportLaneDecodesFromOperatorJSON(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{
+			name: "declared true",
+			raw: `{"name":"peer_import","config":{"kind":"jetstream","stream_name":"PEER_ENTITY",
+			       "subjects":["peer.entity.>"],"deliver_policy":"all","import":true}}`,
+			want: true,
+		},
+		{
+			// The fail-closed default: a port that says nothing imports nothing.
+			name: "omitted",
+			raw: `{"name":"entity_stream","config":{"kind":"jetstream","stream_name":"ENTITY",
+			       "subjects":["entity.>"],"deliver_policy":"all"}}`,
+			want: false,
+		},
+		{
+			name: "declared false",
+			raw: `{"name":"entity_stream","config":{"kind":"jetstream","stream_name":"ENTITY",
+			       "subjects":["entity.>"],"import":false}}`,
+			want: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var definition PortDefinition
+			if err := json.Unmarshal([]byte(tc.raw), &definition); err != nil {
+				t.Fatalf("decode operator port JSON: %v", err)
+			}
+			port, err := definition.Resolve(DirectionInput)
+			if err != nil {
+				t.Fatalf("resolve input port: %v", err)
+			}
+			facts, err := port.Facts()
+			if err != nil {
+				t.Fatalf("port facts: %v", err)
+			}
+			stream, ok := facts.Stream()
+			if !ok {
+				t.Fatal("a jetstream port must project StreamFacts")
+			}
+			if got := stream.Import(); got != tc.want {
+				t.Errorf("StreamFacts.Import() = %v, want %v — the operator's declaration did not survive decode", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestJetStreamImportLaneIsRefusedOnAnOutputPort pins the direction scoping: a
+// lane is an INPUT-side statement, and declaring it on an output is an
+// authoring mistake that must be loud rather than ignored.
+func TestJetStreamImportLaneIsRefusedOnAnOutputPort(t *testing.T) {
+	var definition PortDefinition
+	raw := `{"name":"bad","config":{"kind":"jetstream","stream_name":"ENTITY",
+	         "subjects":["entity.>"],"import":true}}`
+	if err := json.Unmarshal([]byte(raw), &definition); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, err := definition.Resolve(DirectionOutput); err == nil {
+		t.Fatal("declaring import on an output port must be refused, not silently ignored")
+	}
+}

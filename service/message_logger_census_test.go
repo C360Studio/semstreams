@@ -135,14 +135,8 @@ func TestMessageLoggerShippedSubjectCensusArtifactIsCompleteAndExact(t *testing.
 	// through unchanged into Effective below. Delta/exact_collapses/added_kinds
 	// /overlaps are untouched — neither config held an agentic-loop or
 	// governance factory.
-	// #1095 slice B (ADR-102 d5): configs/graph-backend.json gained the one
-	// shipped reference import lane — graph-ingest's `peer_import` jetstream
-	// input on `peer.entity.>` — which is +1 raw row / +1 per-config exact key
-	// / +1 global string (388->389, 239->240, 50->51), carried unchanged into
-	// Effective. Delta/exact_collapses/added_kinds/overlaps are untouched:
-	// graph-backend composes no agentic-loop or governance factory.
-	require.Equal(t, subjectCensusCounts{Rows: 389, PerConfigExactKeys: 240, GlobalStrings: 51}, census.Raw)
-	require.Equal(t, subjectCensusCounts{Rows: 573, PerConfigExactKeys: 377, GlobalStrings: 67}, census.Effective)
+	require.Equal(t, subjectCensusCounts{Rows: 388, PerConfigExactKeys: 239, GlobalStrings: 50}, census.Raw)
+	require.Equal(t, subjectCensusCounts{Rows: 572, PerConfigExactKeys: 376, GlobalStrings: 66}, census.Effective)
 	require.Equal(t, subjectCensusCounts{Rows: 184, PerConfigExactKeys: 137, GlobalStrings: 16}, census.Delta)
 	require.Equal(t, census.Raw.Rows+census.Delta.Rows, census.Effective.Rows)
 	require.Equal(t, census.Raw.PerConfigExactKeys+census.Delta.PerConfigExactKeys, census.Effective.PerConfigExactKeys)

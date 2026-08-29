@@ -26,9 +26,16 @@ import (
 	"github.com/c360studio/semstreams/vocabulary/builtins"
 )
 
+// evidenceEntityID is minted under the CORE stack's own authority — the lessons
+// tier boots docker/compose/e2e.yml, the same composition the core tier does —
+// composed from e2econfig.CoreAuthority rather than restated. A hardcoded copy
+// is a second home for a value one place owns, and the graph refuses any pair
+// but the deployment's (ADR-102 d5), so drift here is a refused create three
+// stages later rather than a compile error (review MEDIUM-5).
+var evidenceEntityID = e2econfig.CoreAuthority + ".test.fixture.evidence.product-lesson"
+
 const (
 	evidenceContractName    = "e2e.lessons.evidence"
-	evidenceEntityID        = "c360.streamkit-pure.test.fixture.evidence.product-lesson"
 	evidenceCreateRequestID = "e2e-lessons-evidence-create"
 	lessonCreateRequestID   = "e2e-lessons-create"
 	fixtureSource           = "e2e-product-lesson"

@@ -90,13 +90,13 @@ func (r *recordingTripleMutator) snapshot() []message.Triple {
 	return append([]message.Triple(nil), r.added...)
 }
 
-// runAnchorTestMetrics is a fresh, unregistered *Metrics carrying only the
+// foreignFiringSkipTestMetrics is a fresh, unregistered *Metrics carrying only the
 // counter this file exercises — the isolation pattern of
 // actionFailuresTestMetrics (action_failure_metrics_test.go).
-func runAnchorTestMetrics() *Metrics {
+func foreignFiringSkipTestMetrics() *Metrics {
 	return &Metrics{
-		runAnchorSkippedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "test_rule_run_anchor_skipped_total",
+		foreignFiringWritesSkippedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "test_rule_foreign_firing_writes_skipped_total",
 		}, []string{"reason"}),
 	}
 }
@@ -147,10 +147,10 @@ func newRunScopeHarness(t *testing.T) *runScopeHarness {
 	mutator := &recordingTripleMutator{inner: newTripleMutator(testClient.Client, tracker)}
 	pub := &mockPublisher{}
 
-	executor := NewActionExecutorComplete(nil, mutator, pub, nil)
+	executor := NewActionExecutorComplete(nil, mutator, pub, nil,
+		component.PlatformMeta{Org: runScopeOrg, Platform: runScopePlatform})
 	executor.SetLifecycleManager(manager)
-	executor.setPlatform(component.PlatformMeta{Org: runScopeOrg, Platform: runScopePlatform})
-	metrics := runAnchorTestMetrics()
+	metrics := foreignFiringSkipTestMetrics()
 	executor.setMetrics(metrics)
 
 	return &runScopeHarness{
@@ -239,7 +239,7 @@ func TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite(t *testing.T) 
 		"the import is a read-only mirror; its revision must not move")
 
 	assert.InDelta(t, 1.0, testutil.ToFloat64(
-		h.metrics.runAnchorSkippedTotal.WithLabelValues(semtypes.EntityIDReasonForeignAuthority)), 0.0001,
+		h.metrics.foreignFiringWritesSkippedTotal.WithLabelValues(semtypes.EntityIDReasonForeignAuthority)), 0.0001,
 		"the skip is COUNTED, not silent and not a rejection")
 }
 
@@ -277,7 +277,7 @@ func TestRunScopeNewOnLocalLoopStampsAnchorAndOrigin(t *testing.T) {
 	assert.Equal(t, runEntityID, runEntity)
 
 	assert.InDelta(t, 0.0, testutil.ToFloat64(
-		h.metrics.runAnchorSkippedTotal.WithLabelValues(semtypes.EntityIDReasonForeignAuthority)), 0.0001,
+		h.metrics.foreignFiringWritesSkippedTotal.WithLabelValues(semtypes.EntityIDReasonForeignAuthority)), 0.0001,
 		"nothing is skipped when the firing loop carries the deployment's own authority")
 
 	_ = h.mutator.snapshot()

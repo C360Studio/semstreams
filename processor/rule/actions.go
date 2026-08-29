@@ -565,9 +565,16 @@ type ActionExecutor struct {
 // must not write to (ADR-102 d5, ruled O-12(a)).
 //
 // An executor with no deployment authority cannot judge this and answers false.
-// That state is unreachable in production: CreateRuleProcessor refuses an empty
-// deps.Platform, so only a hand-assembled test executor sees it, and answering
-// true there would silently disable framework writes for every entity.
+// Only a test fixture reaches that state: the WRITING executor takes the
+// authority as a constructor parameter (NewActionExecutorComplete), so the
+// production path cannot omit it, and the convenience constructors that can
+// hold none also hold no mutator, publisher or lifecycle manager and therefore
+// perform none of the writes this guard protects.
+//
+// CreateRuleProcessor's refusal of an empty deps.Platform is a SEPARATE guard:
+// it protects deps.Platform, not the hop from there into this field. Do not
+// read it as making this branch unreachable — an earlier revision of this
+// comment did, and it was wrong.
 func (e *ActionExecutor) foreignFiringEntity(entityID string) bool {
 	if e.platform.Org == "" || e.platform.Platform == "" {
 		return false
@@ -576,16 +583,21 @@ func (e *ActionExecutor) foreignFiringEntity(entityID string) bool {
 }
 
 // foreignFiringSkipRecorder returns a func that counts and logs the decision to
-// write NOTHING to a foreign firing entity — once per action execution, however
-// many framework writes that covers. publish_agent has two: the run-anchor pair
-// and the rule.task.spawned back-reference.
+// write NOTHING to a foreign firing entity — once per DISPATCH, however many
+// framework writes that covers. publish_agent has two: the run-anchor pair
+// (run_scope=new only) and the rule.task.spawned back-reference (every
+// run_scope).
 //
-// The counter's spec-pinned name (rule_run_anchor_skipped_total) names the
-// anchor case, which is the one ADR-102 enumerates; its meaning is the wider
-// event, because both writes are skipped for one reason on one action and
-// counting them separately would report two federation events where one
-// happened. The narrower name is recorded naming debt, not a second concern.
-// The identity is never logged — it is not this deployment's to publish.
+// "Per dispatch" is exact and deliberate: this recorder is created inside
+// publishAgentOnce, which runs once per `for_each` item, so an action fanning
+// out over N items reports N skips — N entities were declined, not one. An
+// earlier revision of this comment said "per action execution", which was wrong
+// for exactly that case.
+//
+// The counter is named for what it counts — framework writes to a foreign
+// firing entity — not for the run anchor, because under run_scope inherit|none
+// no anchor is ever in play and only the spawned-task back-reference is
+// skipped. The identity is never logged: it is not this deployment's to publish.
 func (e *ActionExecutor) foreignFiringSkipRecorder(ec *ExecutionContext) func(string) {
 	recorded := false
 	return func(what string) {
@@ -593,12 +605,11 @@ func (e *ActionExecutor) foreignFiringSkipRecorder(ec *ExecutionContext) func(st
 			return
 		}
 		recorded = true
-		if e.metrics != nil && e.metrics.runAnchorSkippedTotal != nil {
-			e.metrics.runAnchorSkippedTotal.WithLabelValues(semtypes.EntityIDReasonForeignAuthority).Inc()
+		if e.metrics != nil && e.metrics.foreignFiringWritesSkippedTotal != nil {
+			e.metrics.foreignFiringWritesSkippedTotal.WithLabelValues(semtypes.EntityIDReasonForeignAuthority).Inc()
 		}
 		if e.logger != nil {
-			e.logger.Info("publish_agent: firing entity carries a foreign authority — framework writes "+
-				"to it skipped; run linkage lives on the local run as "+agvocab.RunOriginEntityID,
+			e.logger.Info("publish_agent: firing entity carries a foreign authority — framework writes to it skipped",
 				slog.String("rule_id", ec.RuleID()),
 				slog.String("skipped", what),
 				slog.String("reason", semtypes.EntityIDReasonForeignAuthority))
@@ -641,16 +652,10 @@ func (e *ActionExecutor) stampRunAnchors(
 	}
 }
 
-// setPlatform installs the deployment's own authority. Unexported and set by
-// the rule Processor at Initialize from its own deps.Platform-fed field: the
-// executor has no second honest source for it, and an exported setter would
-// invite a caller to supply one.
-func (e *ActionExecutor) setPlatform(platform types.PlatformMeta) {
-	e.platform = platform
-}
-
-// setMetrics installs the shared rule collectors. Unexported for the same
-// reason as setPlatform: the Processor owns the registry.
+// setMetrics installs the shared rule collectors. Unexported because the
+// Processor owns the registry. Unlike the deployment authority — which is a
+// CONSTRUCTOR parameter precisely so it cannot be forgotten — metrics are
+// nil-safe observability: omitting them loses a counter, never a guard.
 func (e *ActionExecutor) setMetrics(metrics *Metrics) {
 	e.metrics = metrics
 }
@@ -728,8 +733,28 @@ func NewActionExecutorFull(logger *slog.Logger, mutator TripleMutator, publisher
 	}
 }
 
-// NewActionExecutorComplete creates an ActionExecutor with all capabilities including KV writes.
-func NewActionExecutorComplete(logger *slog.Logger, mutator TripleMutator, publisher Publisher, kvWriter KVWriter) *ActionExecutor {
+// NewActionExecutorComplete creates an ActionExecutor with all capabilities
+// including KV writes.
+//
+// platform is the DEPLOYMENT's own authority (deps.Platform at the composition
+// root). It is a constructor parameter rather than a setter because it is the
+// only input that, when absent, silently RETIRES a guard: a zero value makes
+// foreignFiringEntity answer false for every entity, so the framework would
+// write to an imported mirror with nothing logged and nothing counted
+// (ADR-102 d5; #1096). Every other capability here degrades loudly or is
+// nil-safe, so a forgotten setter costs a feature; a forgotten authority costs
+// the contract. Making it unrepresentable is cheaper than testing for it.
+//
+// This is the constructor that receives a mutator, a publisher and a KV writer
+// — the executor that can actually write. The three convenience constructors
+// above hold none of those and are test fixtures.
+func NewActionExecutorComplete(
+	logger *slog.Logger,
+	mutator TripleMutator,
+	publisher Publisher,
+	kvWriter KVWriter,
+	platform types.PlatformMeta,
+) *ActionExecutor {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -738,6 +763,7 @@ func NewActionExecutorComplete(logger *slog.Logger, mutator TripleMutator, publi
 		tripleMutator: mutator,
 		publisher:     publisher,
 		kvWriter:      kvWriter,
+		platform:      platform,
 	}
 }
 
@@ -1788,10 +1814,16 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 	// run_scope=new is intentionally committed only after the complete,
 	// substituted TaskMessage has passed validation. Mint and graph writes are
 	// externally visible; an invalid lineage map must produce none of them.
-	// One decision for every framework write this action would make to the
+	// One decision for every framework write this DISPATCH would make to the
 	// firing entity: an imported entity is a read-only mirror, so the anchors
 	// below and the rule.task.spawned back-reference further down are both
 	// skipped, and the skip is counted once (ADR-102 d5, ruled O-12(a)).
+	//
+	// Once per dispatch, not per action: publishAgentOnce runs once per
+	// `for_each` item, so an action declining N imported entities reports N.
+	// Which writes are actually in play depends on run_scope — under
+	// inherit|none there is no anchor and only the back-reference is skipped,
+	// which is why neither the counter nor the log names the run anchor.
 	foreignFiring := e.foreignFiringEntity(entityID)
 	recordForeignSkip := e.foreignFiringSkipRecorder(ec)
 
@@ -1814,7 +1846,11 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 			}
 		} else if e.tripleMutator != nil {
 			if foreignFiring {
-				recordForeignSkip(agvocab.LoopRun + "," + agvocab.LoopRunEntityID)
+				// run_scope=new DID mint a local run, so here — and only here —
+				// the linkage claim holds: the run→loop pointer survives as
+				// agvocab.RunOriginEntityID on that run.
+				recordForeignSkip(agvocab.LoopRun + "," + agvocab.LoopRunEntityID +
+					" (linkage on the local run as " + agvocab.RunOriginEntityID + ")")
 			} else {
 				e.stampRunAnchors(ctx, ec, entityID, pendingRunMint.org, pendingRunMint.platform, pendingRunMint.firingLoopID)
 			}

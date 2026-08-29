@@ -29,14 +29,6 @@
       "config": {}
     }
   },
-  "streams": {
-    "PEER_ENTITY": {
-      "subjects": ["peer.entity.>"],
-      "max_age": "24h",
-      "max_bytes": 268435456,
-      "discard": "old"
-    }
-  },
   "components": {
     "graph-ingest": {
       "type": "processor",
@@ -56,16 +48,6 @@
               },
               "name": "graph_mutations",
               "required": true
-            },
-            {
-              "config": {
-                "kind": "jetstream",
-                "stream_name": "PEER_ENTITY",
-                "subjects": ["peer.entity.>"],
-                "deliver_policy": "all",
-                "import": true
-              },
-              "name": "peer_import"
             }
           ],
           "outputs": [

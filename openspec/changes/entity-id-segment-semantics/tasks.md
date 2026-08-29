@@ -131,7 +131,8 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
       (`:1555-1570`)); assert the run entity `acme.dep1.chain.agent.execution.<uuid>` exists with
       `agvocab.RunOriginEntityID` = the imported ID, that ZERO captured `AddTriple` calls have the imported ID as
       subject, that the import's `ENTITY_STATES` revision is unchanged, and that
-      `rule_run_anchor_skipped_total{reason="foreign_authority"}` == 1 while `mutation_rejections` is unchanged.
+      `rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` == 1 (named `rule_run_anchor_skipped_total`
+      when this row was written; renamed in review round 1, MEDIUM-1) while `mutation_rejections` is unchanged.
       `TestRunScopeNewOnLocalLoopStampsAnchorAndOrigin` — the same rule on `acme.dep1.agentic-loop.agent.execution.<uuid>`;
       assert the run carries `agvocab.RunOriginEntityID` = the local loop AND the loop received `agvocab.LoopRun` and
       `agvocab.LoopRunEntityID`. Both MUST fail at baseline (#1096: the mint reads `foreign.dep9`, the origin predicate
@@ -1003,11 +1004,17 @@ package; both declarations are now on the payload registrations) and
       (`port_codec.go`), deliberately WITHOUT `zeroIsOmitted` — that flag is numeric (it projects `Const: 0`), so on
       an output port `import` is simply absent from the schema rather than pinned to a number. `task schema:generate`
       adds it to 30 schemas, input direction only (verified: the sole occurrence in `schemas/graph-ingest.v1.json`
-      is under `ports/inputs/items/config/oneOf[2]`). `configs/graph-backend.json` gains the reference `peer_import`
-      port on `peer.entity.>` plus the `PEER_ENTITY` stream that backs it — without the stream declaration
-      graph-ingest's consumer would wait for a stream nothing provisions and `Start` would fail. Two shipped-config
-      ledgers were amended rather than absorbed: `internal/portgrammarcontrol` (`approvedImportLaneAdditions = 1`)
-      and `service/testdata/message_logger_subject_census.json` (+1 raw row / exact key / global string).
+      is under `ports/inputs/items/config/oneOf[2]`). `configs/graph-backend.json` initially carried the reference
+      `peer_import` port; **review round 1 (MEDIUM-4) removed it and the change is better for it.** An import lane is
+      an operator statement of TRUST, so shipping one enabled in the reference composition hands that decision to
+      whoever copies the file — and it contradicted this slice's own documented default, that a port saying nothing
+      imports nothing. No shipped config declares a lane now; the declaration is a snippet in
+      `docs/operations/migration-beta162-to-beta163.md` with its backing-stream requirement stated.
+      The operator-facing seam is covered where it actually lives — JSON — by
+      `TestJetStreamImportLaneDecodesFromOperatorJSON` (declared true / omitted / declared false) and
+      `TestJetStreamImportLaneIsRefusedOnAnOutputPort`, which is stronger than a shipped config: a Go struct literal
+      never exercises the decoder. The two shipped-config ledgers amended for the lane
+      (`internal/portgrammarcontrol`, `service/testdata/message_logger_subject_census.json`) were reverted with it.
       **Latent defect surfaced and fixed:** `test/shipped_graph_mutation_ports_test.go` resolved graph-ingest INPUT
       ports with `component.DirectionOutput`; harmless until a direction-scoped input field existed.
 - [x] 6.3 `processor/rule`: add a `platform` field to the action executor plumbed from `deps.Platform` at construction
@@ -1016,7 +1023,8 @@ package; both declarations are now on the payload registrations) and
       `semtypes.ValidateEntityIDAuthority(entityID, org, platform, false)`: when the firing loop is local the anchor pair
       is stamped as today; when it is a foreign-authority import BOTH anchor writes are skipped deliberately — no
       mutation request targets the foreign subject — and the skip is recorded as
-      `rule_run_anchor_skipped_total{reason="foreign_authority"}` with an Info log naming the rule; `agentrun.Mint`
+      `rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` (renamed in review round 1) with an Info
+      log naming the rule; `agentrun.Mint`
       receives the firing entity as `originEntityID` (3.8) in both cases. #1096 is complete only when 2.6 is GREEN and
       M6a–M6c are recorded.
       **Done, with the skip WIDER than this row specifies — a defect 2.6 found.** `ActionExecutor` gains unexported
@@ -1029,12 +1037,19 @@ package; both declarations are now on the payload registrations) and
       **The row named two writes; there are THREE.** `rule.task.spawned`, the framework's own back-reference onto
       the firing entity after publish, also reached the imported subject — a rejected request, which the requirement
       forbids as explicitly as an accepted one ("no mutation request targets the foreign subject, not even a rejected
-      one"). It is now covered by the same guard. Metric consequence, recorded rather than absorbed: the counter
-      fires ONCE per action execution however many writes it covers, so its spec-pinned name
-      `rule_run_anchor_skipped_total` is narrower than its meaning — counting per omitted write would report two
-      federation events where one happened. Naming debt, not a second concern; the spec delta was amended to say so.
-      An executor with no platform answers `false` (cannot judge) rather than "everything is foreign", which is
-      unreachable in production because the factory refuses that state.
+      one"). It is now covered by the same guard. Metric consequence, first recorded as naming debt and then FIXED in
+      review round 1 (MEDIUM-1): the counter fires once per DISPATCH however many writes it covers. Two things were
+      wrong with the original `rule_run_anchor_skipped_total` — "per action execution" was inexact, because the
+      recorder is created inside `publishAgentOnce`, which runs once per `for_each` item; and the name was not merely
+      narrow but WRONG for `run_scope` `inherit`/`none`, where no anchor is in play and only `rule.task.spawned` is
+      skipped. Renamed `rule_foreign_firing_writes_skipped_total`, spec restated per-dispatch: free now (no
+      dashboard, no alert, no sister consumer) and a breaking series rename later.
+      An executor with no platform answers `false` (cannot judge) rather than "everything is foreign". Round 1
+      HIGH-1 corrected the reason WHY that is safe: it is not the `CreateRuleProcessor` refusal, which guards
+      `deps.Platform` and not the hop into the executor. The authority is now a CONSTRUCTOR parameter of
+      `NewActionExecutorComplete` — the only constructor that receives a mutator, publisher and KV writer — so the
+      production path cannot omit it, and `TestIntegration_ProductionExecutorCarriesTheDeploymentAuthority` pins
+      both construction branches.
 - [x] 6.4 `graph/inference/hierarchy.go`: `GetHierarchyTriples` returns `nil, nil` for an entity whose positions 1–2
       differ from the deployment authority (no container, no membership, no inverse sibling edge, no warning) — the
       pair reaches `NewHierarchyInference` (which carries none today, `hierarchy.go:109-114`;
@@ -1182,11 +1197,24 @@ package; both declarations are now on the payload registrations) and
       2. `validate-canonical-create-no-hierarchy … entity.create rejected` → `tiered_structural.go` minted `c360.e2e.…` through the canonical RPC. Slice C's sweep targeted `c360.logistics`, so this literal was outside it.
       3. `test-temporal-observed-time … entity.create rejected` → a third site, `c360.platform.e2e.eventtime.observation.001`, a function-level `const`.
 
-      After (2) I stopped fixing instance-by-instance and enumerated the class: every string literal in non-test
-      `test/e2e/**` shaped like the start of a six-part ID, grouped by its first two positions. That found (3) and
-      proved the only remaining non-tier literals are the two `validate_batch_read.go` absent-ID probes, which are
-      READ-only and deliberately stay foreign — a foreign pair makes their guaranteed absence structural rather than
-      incidental, and that reason is now a comment in the file.
+      After (2) I stopped fixing instance-by-instance and enumerated: every string literal in non-test
+      `test/e2e/**` shaped like the start of a six-part ID, grouped by its first two positions. That found (3).
+
+      **CORRECTION (review round 1, MEDIUM-3).** I then claimed that enumeration proved "the only remaining non-tier
+      literals are the two `validate_batch_read.go` absent-ID probes". That claim is REFUTED and the reviewer is
+      right. Survivors under a literal authority include `crud-tools/scenario.go:570,672` — which writes **nine
+      entities** — `ops/scenario.go:59-61` (three more, seeded at `:473`), and `lifecycle/scenario.go:364`.
+
+      The class I actually closed is **"fixtures that mint THROUGH graph-ingest"**, not "six-part-shaped literals in
+      e2e code". Every survivor writes AROUND the boundary — `s.nats.PutKV` straight into a bucket
+      (`crud-tools:692` → the probe bucket, `ops:473` → `ENTITY_STATES` itself, `lifecycle` →
+      `injectLifecyclePoison` against the authority bucket) — so the gate never sees them, which is precisely why
+      those three tiers are green. A grep for a literal shape cannot distinguish the two classes; only asking "does
+      this reach graph-ingest?" can, and that is the question I should have enumerated on.
+
+      The `PutKV` fixtures are NOT chased here (coordinator's direction) and are filed as coverage debt: they are
+      test fixtures writing around a boundary they are not asserting, so nothing regresses today, but a fixture that
+      bypasses the gate cannot notice if the gate stops working.
 
 - [ ] 7.3 Implementation review by `semstreams-reviewer`; verdict and every finding's disposition recorded in
       `conformance.md`.

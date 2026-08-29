@@ -217,7 +217,10 @@ name literal.
   is written only when the firing loop carries the deployment's own authority. For an imported firing loop the rule
   action detects the foreign authority BEFORE `stampRun` (`pkg/types.ValidateEntityIDAuthority(entityID, org,
   platform, false) != nil`), skips both anchor writes deliberately — no mutation request targets the foreign subject,
-  not even a rejected one — and records the skip as `rule_run_anchor_skipped_total{reason="foreign_authority"}` with
+  not even a rejected one — and records the skip as `rule_run_anchor_skipped_total{reason="foreign_authority"}`
+  (**RENAMED during slice B implementation review to `rule_foreign_firing_writes_skipped_total`, and restated as once
+  per DISPATCH rather than per action**: the recorder lives in `publishAgentOnce`, which runs once per `for_each`
+  item, and under `run_scope` `inherit`/`none` no anchor is in play so the anchor name was wrong, not just narrow) with
   an Info log naming the rule and the lane; it is a counted skip, never a rejection. The linkage moves to the LOCAL
   run entity: `agent.run.origin-entity-id` (`@id`; `agvocab.RunOriginEntityID`, declared beside `LoopRunEntityID` in `vocabulary/agentic/predicates.go:502`) as a birth predicate of the local run entity (`AgentRun.OriginEntityID`, lifecycle tag `predicate=agent.run.origin-entity-id`, set by `agentrun.Mint` at creation), set for every run, local or imported origin, so the run→loop pointer has one home that
   never depends on writing the loop. The run entity today carries only `agent.run.phase` and
@@ -234,8 +237,12 @@ name literal.
   through `HierarchyConfig` from the `deps.Platform` read graph-ingest adds.
 - **Import lane declaration:** a boolean on the JetStream input port (`"import": true`) — an operator statement of
   trust, not a predicted framework value. Provenance recorded = the port name and the envelope `source` string.
-  Nothing is authenticated (F3–F4); the contract says so. The reference declaration lives in
-  `configs/graph-backend.json`, which composes graph-ingest. (This sentence originally contrasted it against
+  Nothing is authenticated (F3–F4); the contract says so. The reference declaration was to live in
+  `configs/graph-backend.json`, which composes graph-ingest. **SUPERSEDED during slice B implementation review
+  (MEDIUM-4): no shipped config declares a lane.** Shipping one enabled in the reference composition hands an
+  operator's trust decision to whoever copies the file, and contradicts the lane's own fail-closed default. The
+  declaration is a documented snippet instead, and the operator-facing JSON seam is pinned by a port-codec
+  round-trip test — stronger than a shipped config, which a Go struct literal never exercises. (This sentence originally contrasted it against
   `cloud-federation.json`/`edge-federation.json`; PR #1130 (#1129) deleted both. Re-measured 2026-08-27: 12 of the 14
   shipped `configs/*.json` compose graph-ingest — the exceptions are `gemini-example.json` and `prompts.json`.)
   (T6).
