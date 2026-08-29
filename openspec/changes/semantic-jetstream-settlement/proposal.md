@@ -19,6 +19,10 @@ supervisor, lifecycle gate, or durable quarantine store would duplicate those au
 - Add explicit immediate or fixed-delay semantic retry policy, independent of consumer BackOff.
 - Validate heartbeat policy from the exact consumer configuration before acquisition.
 - Add an inspectable result that preserves semantic, heartbeat-control, and local settlement evidence.
+- Observe JetStream delivery number at the native-message boundary and pass an immutable,
+  settlement-authority-free `DeliveryAttempt` to typed work.
+- Fail closed before payload access or work when delivery metadata is unavailable, using typed
+  `delivery_metadata_unavailable` quarantine and the existing exact-owner stop path.
 - Make heartbeat control loss require exact-owner shutdown without moving lifecycle into natsclient.
 - Add permanent `ConsumeDeliveryWithHeartbeat` while held callers retain characterized legacy behavior.
 - Migrate tools and dispatch first; require process-replacement proof in #1155.
@@ -50,6 +54,8 @@ pull settlement API is proposed.
 - Model and loop defaults change only when their separately held migrations are approved.
 - Required breaking gate: `task e2e:agentic` after every admitted stage plus #1155 process-replacement evidence.
 - Two measured SemDev legacy callers require a SemStreams-owned migration record before final legacy removal.
+- `DeliveryWork` gains one value argument. The three Stage A policy bindings and focused tests migrate together;
+  measured external typed adopters are zero.
 
 ## Non-goals
 
@@ -60,3 +66,6 @@ pull settlement API is proposed.
 - No universal `DoubleAck` contract or claim of server confirmation.
 - No production migration of the other 22 bindings or two examples.
 - No sister-repository mutation.
+- No native message, header, reply, stream sequence, consumer sequence, stream identity, consumer identity, or
+  settlement method escapes through `DeliveryAttempt`.
+- Delivery number is an observation, not proof that a prior invocation started or committed an effect.

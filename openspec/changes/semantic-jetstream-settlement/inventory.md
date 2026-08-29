@@ -90,7 +90,7 @@ SemMachina retains older `ConsumeDurable` surfaces, which are migration evidence
 
 | Missing fact | Current spelling | Gap |
 |---|---|---|
-| semantic decision | nil ACK, permanent wrapper Term, other error delayed NAK | no closed exhaustive decision contract |
+| semantic decision | nil ACK, wrapper Term, delayed NAK | no closed exhaustive decision contract |
 | cancellation result | work cancels and joins | context can overwrite joined meaning |
 | unclassified failure | generic retry; panic NAK | no fail-closed quarantine |
 | control ownership loss | helper returns an error | exact owner has no typed stop-required result |
@@ -148,3 +148,32 @@ semantic retry policy. It does not ask work to calculate AckWait, BackOff, attem
 During staging, doing nothing preserves the deprecated legacy source and runtime behavior for allowlisted held callers.
 New production legacy callers fail repository conformance. Compile failure occurs only at the final approved
 zero-caller removal gate.
+
+## DeliveryAttempt addendum — current checkpoint
+
+- Repository head: `776505b3bb4ca4356bd8af6f4bbbcb0ce7610803`.
+- `DeliveryWork` currently exposes only context and read-only bytes
+  (`natsclient/delivery_settlement.go:28-31`).
+- `ConsumeDeliveryWithHeartbeat` currently performs runtime policy defense, derives work context, reads
+  `msg.Data()` once, launches work, heartbeats, cancels and joins, interprets, and settles
+  (`natsclient/delivery_settlement.go:256-313`). It does not call `msg.Metadata()`.
+- JetStream already owns the observation through `Msg.Metadata().NumDelivered`; no durable or model-private
+  attempt state is required.
+- Current typed production adopters are tools one binding
+  (`processor/agentic-tools/component.go:424-426`) and dispatch complete and failed two bindings
+  (`processor/agentic-dispatch/component.go:580-582,640-642`).
+- A read-only sibling-repository scan found zero external adopters of `DeliveryWork`,
+  `ValidateHeartbeatDeliveryPolicy`, or `ConsumeDeliveryWithHeartbeat`.
+- Held model, loop, and AgentRun bindings remain unchanged. C8 decision/error and C9 read-only-byte decisions
+  remain unchanged.
+
+### Adopter seam
+
+A component author receives an immutable delivery observation and need not predict or parse native JetStream
+metadata. Existing callbacks fail at compile time until they accept the added value; they may ignore it. Missing,
+erroneous, nil, or zero-number metadata fails before Data or work with typed
+`DeliveryMetadataUnavailableError`, Quarantine, and `OwnerStopRequired`.
+
+A redelivery observation is conservative. It does not prove prior work ran because the prior process may have
+stopped before invocation. The observation carries no settlement, lifecycle, replay, checkpoint, or durable-state
+authority.

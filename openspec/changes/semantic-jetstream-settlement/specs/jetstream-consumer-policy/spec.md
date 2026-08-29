@@ -22,11 +22,13 @@ held model, loop, and AgentRun allowlist. New production legacy callers SHALL fa
 
 ### Requirement: delivery work returns a validated decision/error tuple
 
-Typed work SHALL implement `DeliveryWork func(context.Context, []byte) (DeliveryDecision, error)`. The exported decisions
-SHALL be Invalid, ACK, Retry, Terminate, and Quarantine using the exact `DeliveryDecision*` constants.
+Typed work SHALL implement
+`DeliveryWork func(context.Context, DeliveryAttempt, []byte) (DeliveryDecision, error)`. The exported decisions
+SHALL remain Invalid, ACK, Retry, Terminate, and Quarantine using the exact `DeliveryDecision*` constants.
 
 The framework SHALL validate non-nil work before acquisition. For each admitted delivery it SHALL supply that
-delivery's body as read-only invocation-scoped bytes and SHALL NOT expose `jetstream.Msg` or another
+delivery's immutable settlement-authority-free `DeliveryAttempt` and body as read-only invocation-scoped bytes. It
+SHALL NOT expose `jetstream.Msg`, headers, reply subjects, sequences, consumer identity, or another
 settlement-capable interface to work.
 
 ACK SHALL require nil error. Retry, Terminate, and Quarantine SHALL require non-nil error. Invalid, unknown, and every
@@ -58,8 +60,9 @@ not be deprecated or removed by this change.
 #### Scenario: settlement authority does not escape
 
 - **WHEN** typed work runs
-- **THEN** it receives context and read-only payload bytes only
-- **AND** Ack, Nak, Term, and InProgress remain exclusively inside natsclient
+- **THEN** it receives context, immutable `DeliveryAttempt`, and read-only payload bytes only
+- **AND** Ack, Nak, Term, InProgress, native message, headers, sequences, and consumer identity remain exclusively
+  inside natsclient
 
 #### Scenario: decision requires a cause
 
@@ -85,6 +88,46 @@ not be deprecated or removed by this change.
 - **WHEN** work panics before returning a tuple
 - **THEN** the result records Quarantine with `DeliveryWorkPanicError`
 - **AND** no terminal method is attempted
+
+### Requirement: delivery attempt is observed before work
+
+For each valid typed delivery, natsclient SHALL call `msg.Metadata()` exactly once before Data or work. It SHALL
+derive `DeliveryAttempt.Number` from positive `NumDelivered`; `MetadataAvailable` SHALL be true and `IsRedelivery`
+SHALL be true only when Number is greater than one. The zero value SHALL report Number zero, metadata unavailable,
+and not redelivered. Typed work SHALL never receive that zero value.
+
+Metadata error, nil metadata, or zero delivery number SHALL produce Quarantine with typed
+`DeliveryMetadataUnavailableError`, require owner stop, and call neither Data, work, heartbeat, nor a terminal
+settlement method. An underlying metadata error SHALL remain reachable through the typed cause.
+
+`DeliveryAttempt` SHALL expose no native message, header, reply, stream or consumer sequence, stream or consumer
+identity, settlement method, setter, or mutable state. Redelivery SHALL be an observation and SHALL NOT prove that
+prior work started or committed.
+
+#### Scenario: first delivery
+
+- **WHEN** metadata reports `NumDelivered == 1`
+- **THEN** work receives Number 1 with MetadataAvailable true
+- **AND** IsRedelivery is false
+
+#### Scenario: second delivery
+
+- **WHEN** metadata reports `NumDelivered == 2`
+- **THEN** work receives Number 2 with MetadataAvailable true
+- **AND** IsRedelivery is true
+
+#### Scenario: prior process stopped before work
+
+- **WHEN** a first delivery was lost before work invocation and JetStream delivers it again
+- **THEN** the next work invocation observes redelivery
+- **AND** the framework does not claim the prior invocation or effect occurred
+
+#### Scenario: metadata is unavailable
+
+- **WHEN** Metadata errors, returns nil, or reports delivery number zero
+- **THEN** the result quarantines with typed `DeliveryMetadataUnavailableError`
+- **AND** OwnerStopRequired is true
+- **AND** Data, work, heartbeat, Ack, Nak, delayed Nak, and Term are not called
 
 ### Requirement: semantic retry and consumer lease policy are distinct
 
@@ -124,7 +167,7 @@ present, otherwise positive AckWait, otherwise 30 seconds. Invalid AckWait/BackO
 #### Scenario: invalid runtime policy touches no message data
 
 - **WHEN** the runtime entry point receives a zero or invalid heartbeat policy
-- **THEN** it calls neither Data, work, heartbeat, nor terminal settlement
+- **THEN** it calls neither Metadata, Data, work, heartbeat, nor terminal settlement
 - **AND** it returns the invalid quarantined owner-stop result
 
 ### Requirement: delivery results preserve semantic and transport evidence
@@ -148,9 +191,13 @@ redelivery.
 
 ### Requirement: cancellation joins semantic work
 
-Owner cancellation SHALL cancel work, join it, interpret the exact decision/error tuple, and then apply settlement. Context
-cancellation SHALL NOT overwrite the joined semantic result. InProgress failure SHALL cancel and join work, preserve
-decision/cause, record control error, attempt no later terminal method, and require owner stop.
+Owner cancellation SHALL cancel work, join it, interpret the exact decision/error tuple, and then apply settlement.
+Context cancellation SHALL NOT overwrite the joined semantic result. InProgress failure SHALL cancel and join work,
+preserve decision/cause, record control error, attempt no later terminal method, and require owner stop.
+
+These semantics apply after a valid `DeliveryAttempt` has been observed. Panic, owner cancellation, and heartbeat
+control loss SHALL preserve that observation without changing the existing cancel, join, interpret, and
+OwnerStopRequired decisions.
 
 #### Scenario: heartbeat fails after joined ACK
 

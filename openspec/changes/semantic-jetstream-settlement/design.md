@@ -34,9 +34,14 @@ const (
     DeliveryDecisionQuarantine
 )
 
-// DeliveryWork classifies one delivered payload. Data is read-only and valid
-// for this invocation; work must not retain or mutate it.
-type DeliveryWork func(context.Context, []byte) (DeliveryDecision, error)
+// DeliveryWork classifies one delivered payload. Attempt is immutable and
+// settlement-authority-free. Data is read-only and invocation-scoped; work
+// must not retain or mutate it.
+type DeliveryWork func(
+    context.Context,
+    DeliveryAttempt,
+    []byte,
+) (DeliveryDecision, error)
 
 type InvalidDeliveryDecisionError struct { /* private */ }
 func (e *InvalidDeliveryDecisionError) Error() string
@@ -55,6 +60,39 @@ remains reachable through that typed error.
 A recovered panic synthesizes Quarantine with `DeliveryWorkPanicError`, attempts no terminal method, and requires
 owner stop. There is no DeliveryDisposition type or typed constructor family. Existing
 `TerminateDelivery(error) error` and `PermanentDeliveryError` remain exact and outside every #759 removal gate.
+
+### D2a — immutable delivery-attempt observation
+
+```go
+type DeliveryAttempt struct {
+    number uint64
+}
+
+func (a DeliveryAttempt) Number() uint64
+func (a DeliveryAttempt) MetadataAvailable() bool
+func (a DeliveryAttempt) IsRedelivery() bool
+
+type DeliveryMetadataUnavailableError struct { /* private cause */ }
+func (e *DeliveryMetadataUnavailableError) Error() string
+func (e *DeliveryMetadataUnavailableError) Unwrap() error
+```
+
+`DeliveryAttempt` is a value with one private delivery-number field. Private state matches `DeliveryResult` and
+prevents inconsistent caller-authored combinations. There is no pointer, setter, exported constructor, or
+native-message escape. Number zero is the unavailable zero value; `MetadataAvailable` is `number != 0` and
+`IsRedelivery` is `number > 1`.
+
+After runtime policy defense, natsclient calls `msg.Metadata()` exactly once. Metadata error, nil metadata, or
+`NumDelivered == 0` prevents Data access and work invocation. The result synthesizes Quarantine with
+`DeliveryMetadataUnavailableError`, attempts no heartbeat or terminal method, and sets `OwnerStopRequired`. The
+existing owner-private latch and observer stop the exact committed lane outside the callback.
+
+A valid first delivery supplies Number 1 and `IsRedelivery == false`. A valid second or later delivery supplies its
+observed number and `IsRedelivery == true`. Redelivery is conservative evidence only: a process may have stopped
+before the earlier work call, so it does not prove a prior effect or commit-unknown outcome.
+
+The attempt exposes no `jetstream.Msg`, headers, reply subject, stream or consumer sequence, stream or consumer
+identity, settlement method, or mutable state.
 
 ### D3 — lease and semantic retry are separate
 
@@ -132,16 +170,18 @@ ownership while work may have run; a method error does not prove the lane's hear
 
 ### D7 — cancel, join, interpret
 
-Owner cancellation cancels work, joins it, interprets its exact decision/error tuple, then attempts settlement. Context error
-never replaces joined meaning. InProgress failure cancels and joins, preserves meaning, records ControlError, attempts
-no later terminal method, and sets OwnerStopRequired. Work panic is recovered inside the joined goroutine. Every task
-joins before return; no context is retained.
+Owner cancellation cancels work, joins it, interprets its exact decision/error tuple, then attempts settlement.
+Context error never replaces joined meaning. InProgress failure cancels and joins, preserves meaning, records
+ControlError, attempts no later terminal method, and sets OwnerStopRequired. Work panic is recovered inside the
+joined goroutine. Every task joins before return; no context is retained.
 
-After runtime policy defense, the typed entry point reads `msg.Data()` exactly once, launches work with those bytes,
-and runs InProgress concurrently while work is pending. Every exit joins work and normalizes its returned tuple or
-panic before branch interpretation. Control failure adds ControlError and attempts no terminal method; normal
-completion passes only Ack/Nak/NakWithDelay/Term to the private terminal executor. The settlement-capable message never
-reaches work or policy.
+After runtime policy defense, the typed entry point reads `msg.Metadata()` exactly once and validates a positive
+delivery number. Invalid or unavailable metadata returns typed quarantined owner-stop evidence before Data, work,
+heartbeat, or settlement. With valid metadata it reads `msg.Data()` exactly once, constructs the immutable attempt,
+launches work with attempt plus those bytes, and runs InProgress concurrently while work is pending. Every started
+task joins before return and normalizes its returned tuple or panic before branch interpretation. Control failure
+adds ControlError and attempts no terminal method; normal completion passes only Ack/Nak/NakWithDelay/Term to the
+private terminal executor. The settlement-capable message never reaches work or policy.
 
 ### D8 — private exact-owner reaction
 
@@ -155,10 +195,11 @@ The observer derives from Start/Run and joins Stop. Shared natsclient owns no li
 
 ### D9 — private terminal executor and legacy containment
 
-Typed and legacy helpers may share only a private terminal-method executor. Before extraction, characterization tests
-pin every legacy ACK, 30-second Retry, Term, 5-second cancellation, InProgress, and error-chain path. Typed does not call
-legacy; legacy does not translate through the exported DeliveryDecision/DeliveryWork contract. Here legacy means only
-`ConsumeWithHeartbeat`; `TerminateDelivery(error) error` and `PermanentDeliveryError` are not deprecated or removed.
+Typed and legacy helpers may share only a private terminal-method executor. Before extraction, characterization
+tests pin every legacy ACK, 30-second Retry, Term, 5-second cancellation, InProgress, and error-chain path. Typed does
+not call legacy; legacy does not translate through the exported DeliveryDecision/DeliveryWork contract. Here legacy
+means only `ConsumeWithHeartbeat`; `TerminateDelivery(error) error` and `PermanentDeliveryError` are not deprecated
+or removed.
 
 The AST allowlist names only model, loop, and AgentRun production files and shrinks with migration. Legacy receives a
 deprecation comment and is removed without alias only after all held addenda/proofs, zero repository callers, sister
@@ -183,7 +224,8 @@ from the final legacy-helper removal.
 
 ## Rejected designs
 
-- Extend the builder into a handle owner: creates a second lifecycle authority and cannot resolve callback-before-return.
+- Extend the builder into a handle owner: creates a second lifecycle authority and cannot resolve
+  callback-before-return.
 - Export a no-heartbeat `SettleDelivery`: no present #759 adopter; OTEL needs later pull-specific inventory.
 - Derive semantic retry from BackOff: conflates explicit Nak policy with server missing-settlement schedule.
 - Remove BackOff: silently weakens tools/loop crash recovery.
@@ -191,6 +233,9 @@ from the final legacy-helper removal.
 - Migrate held callers by implementation judgment: invents definition of done and replay safety.
 - Pass `jetstream.Msg`, a settlement-capable view, or per-delivery work closure: leaks settlement authority or weakens
   setup-time validation.
+- Export `DeliveryAttempt` fields or a public constructor: permits inconsistent caller-authored observations and
+  turns a framework-observed fact back into caller prediction.
+- Treat redelivery as proof prior work ran: process loss before invocation produces the same later observation.
 
 ## Verification gates
 

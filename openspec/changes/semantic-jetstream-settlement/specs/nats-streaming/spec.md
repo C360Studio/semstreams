@@ -8,11 +8,21 @@ Semantic settlement SHALL use existing JetStream consumer position and redeliver
 terminal method. The existing component owner SHALL stop its exact lane and ordinary reconstruction SHALL reacquire
 durable ownership. #759 SHALL add no recovery ledger or durable quarantine state.
 
+`DeliveryAttempt` SHALL be an invocation-scoped projection of JetStream `NumDelivered`, not a checkpoint or replay
+authority. Missing metadata SHALL add no replacement state; it SHALL fail closed and leave JetStream plus the exact
+existing owner responsible for redelivery and reconstruction.
+
 #### Scenario: quarantined delivery
 
 - **WHEN** a delivery quarantines or loses heartbeat control
 - **THEN** later admission closes and the exact existing owner stops the lane
 - **AND** reconstructed ownership uses the existing durable consumer state
+
+#### Scenario: redelivery is not execution proof
+
+- **WHEN** JetStream reports a second delivery after the prior process stopped before invoking work
+- **THEN** `DeliveryAttempt` reports redelivery
+- **AND** no framework state claims that the prior work or effect occurred
 
 ### Requirement: no-settlement BackOff and explicit semantic retry remain distinct
 
