@@ -55,9 +55,19 @@ provenance this requirement records; it authenticates nothing.
 - **GIVEN** an imported entity `acme.dep2.src.git.commit.a1` persisted through an import lane
 - **WHEN** an `entity.reconcile` request from a non-import lane names it as subject
 - **THEN** the request is rejected with code `entity_id_authority_invalid` and reason `foreign_authority`
-- **AND** the rejection happens before the entity's state is read, so no KV I/O is performed on its behalf
 - **AND** the imported entity's revision is unchanged
 - **AND** the test that verifies this is `TestAuthorityGateRejectsReconcileOfImportedSubject`
+
+#### Scenario: the refusal precedes the state read, so no KV I/O happens on a foreign subject's behalf
+
+- **GIVEN** a foreign-authority entity ID `acme.dep2.src.git.commit.zz` that was never persisted
+- **WHEN** an `entity.reconcile` request from a non-import lane names it as subject
+- **THEN** the request is rejected with code `entity_id_authority_invalid` and reason `foreign_authority`, NOT with
+  `entity_not_found` — absence is observable only through the state read, so reporting the authority instead shows
+  the read never happened
+- **AND** the identical request against a never-persisted LOCAL id `acme.dep1.src.git.commit.zz` IS rejected with
+  `entity_not_found`, which is what makes the previous clause an ordering fact rather than a precedence one
+- **AND** the test that verifies this is `TestAuthorityGateRejectsReconcileBeforeReadingState`
 
 #### Scenario: a local lane cannot delete an imported entity
 

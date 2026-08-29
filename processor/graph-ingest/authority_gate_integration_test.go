@@ -57,6 +57,12 @@ const (
 	// authorityLocalClaimID carries THIS deployment's pair and is what a peer
 	// must not be able to mint through an import lane.
 	authorityLocalClaimID = "acme.dep1.src.git.commit.a1"
+	// authorityForeignAbsentID / authorityLocalAbsentID are never persisted by
+	// any test. They are the ordering probe for "the rejection happens before
+	// the entity's state is read": absence is observable ONLY through the fetch,
+	// so which of the two errors comes back says whether the fetch was reached.
+	authorityForeignAbsentID = "acme.dep2.src.git.commit.zz"
+	authorityLocalAbsentID   = "acme.dep1.src.git.commit.zz"
 	// authorityLocalLoopID is a local subject that references the import.
 	authorityLocalLoopID = "acme.dep1.agentic-loop.agent.execution.a1b2c3d4"
 
@@ -398,6 +404,64 @@ func TestAuthorityGateRejectsReconcileOfImportedSubject(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, revisionBefore, after.Revision,
 		"the import's revision must be untouched by the refused reconcile")
+}
+
+// TestAuthorityGateRejectsReconcileBeforeReadingState proves the ordering half
+// of ADR-102 d5 — "before any KV I/O" — which the reconcile test above states
+// but cannot show: asserting the error code and an unchanged revision is equally
+// consistent with reading the entity and then refusing.
+//
+// The probe is absence. A missing entity is observable ONLY through
+// fetchEntityState, which reports it as entity_not_found, so the fetch is the
+// one step whose execution leaves a distinguishable trace. Reconciling a
+// never-persisted FOREIGN id returns entity_id_authority_invalid, not
+// entity_not_found — the fetch never ran.
+//
+// The local partner is what makes that evidence rather than coincidence: the
+// identical request against a never-persisted LOCAL id DOES return
+// entity_not_found, so reaching the fetch demonstrably produces a different
+// outcome. Without it the foreign case would only show that an authority error
+// outranks a not-found error, which is not an ordering claim at all.
+func TestAuthorityGateRejectsReconcileBeforeReadingState(t *testing.T) {
+	h := startAuthorityGateComponent(t, false)
+
+	reconcileOf := func(t *testing.T, entityID string) *errs.ClassifiedError {
+		t.Helper()
+		reqBytes, err := json.Marshal(graph.ReconcilePredicatesRequest{
+			EntityID:         entityID,
+			ExpectedRevision: 1,
+			Predicates:       []string{semantictest.Predicate(t, "test", "fixture", "curation")},
+			Desired: []message.Triple{{
+				Subject:   entityID,
+				Predicate: semantictest.Predicate(t, "test", "fixture", "curation"),
+				Object:    "curated", Timestamp: time.Now(), Confidence: 1.0,
+			}},
+		})
+		require.NoError(t, err)
+
+		respBytes, err := h.component.natsClient.RequestClassified(
+			h.ctx, authorityReconcileSubject, reqBytes, 2*time.Second)
+		require.Error(t, err)
+		assert.Nil(t, respBytes)
+		var classified *errs.ClassifiedError
+		require.ErrorAs(t, err, &classified)
+		return classified
+	}
+
+	// Negative space first: absence IS reachable and IS reported, so the code
+	// below is a statement about ordering and not about which error wins.
+	local := reconcileOf(t, authorityLocalAbsentID)
+	require.Equal(t, graph.ErrorCodeEntityNotFound, local.Code,
+		"a never-persisted LOCAL subject must reach fetchEntityState and be reported absent — "+
+			"if this stops holding, the foreign assertion below stops proving anything")
+
+	foreign := reconcileOf(t, authorityForeignAbsentID)
+	assert.Equal(t, semtypes.ErrorCodeEntityIDAuthorityInvalid, foreign.Code,
+		"the authority gate must answer for a foreign subject")
+	assert.Equal(t, semtypes.EntityIDReasonForeignAuthority, foreign.Detail[semtypes.EntityIDDetailReason])
+	assert.NotEqual(t, graph.ErrorCodeEntityNotFound, foreign.Code,
+		"a foreign subject that does not exist must NOT be reported absent: learning it is absent "+
+			"requires the KV read the gate is specified to precede")
 }
 
 // TestAuthorityGateRejectsDeleteOfImportedSubject pins the delete lane. An
