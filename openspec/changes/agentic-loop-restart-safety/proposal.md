@@ -35,6 +35,8 @@ intake/approval, then governance correlation only where the measured flow requir
   outputs or references is insufficient.
 - The inventory and adopter seam are provisional until independent `INVENTORY PASS`; design and task truth follow
   only after that gate and explicit owner acceptance.
+- `.openspec.yaml` uses `skip_specs: true` only while this claim is inventory-only; the accepted design must replace
+  it with capability deltas before any implementation begins.
 
 ## Impact
 
@@ -43,4 +45,3 @@ intake/approval, then governance correlation only where the measured flow requir
 - Blocks restart-safe approval/enforcement claims in #1140.
 - Expected capability deltas: `agentic-loop` and the settlement/replay capabilities selected after inventory.
 - Required verification includes real-NATS process replacement and a serialized relevant agentic E2E tier.
-
