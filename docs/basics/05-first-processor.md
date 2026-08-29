@@ -201,24 +201,39 @@ type SensorReading struct {
     Latitude     *float64 `json:"latitude,omitempty"`
     Longitude    *float64 `json:"longitude,omitempty"`
 
-    // Entity reference (computed by processor)
+    // Entity reference (minted by processor)
     ZoneEntityID string `json:"zone_entity_id"`
 
-    // Context fields (set by processor from config)
-    OrgID    string `json:"org_id"`
-    Platform string `json:"platform"`
+    // EntityIDValue is this reading's own identity, minted ONCE by the
+    // processor under the composition root's platform.org / platform.id and
+    // carried on the wire from there (ADR-102 d2). Never re-derived
+    // downstream — a reader would need an authority nobody can hand it.
+    EntityIDValue string `json:"entity_id"`
 }
 
-// EntityID returns a deterministic 6-part federated entity ID.
-// Format: {org}.{platform}.{system}.{domain}.{type}.{instance}
-// Example: "acme.logistics.sensor.environmental.temperature.sensor-042"
+// EntityID returns the identity that was minted for this reading.
 func (s *SensorReading) EntityID() string {
-    return fmt.Sprintf("%s.%s.sensor.environmental.%s.%s",
-        s.OrgID,
-        s.Platform,
-        s.SensorType,
-        s.DeviceID,
-    )
+    return s.EntityIDValue
+}
+
+// SensorReadingEntityID mints the deterministic 6-part federated entity ID.
+// Format: {org}.{platform}.{system}.{domain}.{type}.{instance}
+// Example: "acme.dep1.sensor.environmental.temperature.sensor-042"
+//
+// Positions 1-2 are the DEPLOYMENT AUTHORITY: the composition root's
+// platform.org / platform.id, handed to you as
+// component.Dependencies.Platform. They are never a config key on your
+// component, never a product name, and never a field on the incoming
+// payload (ADR-102 d2).
+func SensorReadingEntityID(authority types.PlatformMeta, sensorType, deviceID string) string {
+    return semtypes.EntityID{
+        Org:      authority.Org,
+        Platform: authority.Platform,
+        System:   "sensor",
+        Domain:   "environmental",
+        Type:     sensorType,
+        Instance: deviceID,
+    }.Key()
 }
 
 // Triples returns semantic facts about this sensor reading.
@@ -320,11 +335,8 @@ func (s *SensorReading) Validate() error {
     if s.Unit == "" {
         return fmt.Errorf("unit is required")
     }
-    if s.OrgID == "" {
-        return fmt.Errorf("org_id is required")
-    }
-    if s.Platform == "" {
-        return fmt.Errorf("platform is required")
+    if s.EntityIDValue == "" {
+        return fmt.Errorf("entity_id is required; mint it with SensorReadingEntityID")
     }
     return nil
 }
@@ -356,11 +368,18 @@ func (s *SensorReading) UnmarshalJSON(data []byte) error {
 When your entity references another entity, you need that entity to exist. Create a Zone type:
 
 ```go
-// ZoneEntityID generates a federated 6-part entity ID for a zone.
-// Use this helper to ensure consistency between Zone.EntityID() and references.
-func ZoneEntityID(orgID, platform, zoneType, zoneID string) string {
-    return fmt.Sprintf("%s.%s.zone.facility.%s.%s",
-        orgID, platform, zoneType, zoneID)
+// ZoneEntityID mints a federated 6-part entity ID for a zone under the
+// deployment authority. Use this helper to ensure consistency between
+// Zone.EntityID() and references.
+func ZoneEntityID(authority types.PlatformMeta, zoneType, zoneID string) string {
+    return semtypes.EntityID{
+        Org:      authority.Org,
+        Platform: authority.Platform,
+        System:   "zone",
+        Domain:   "facility",
+        Type:     zoneType,
+        Instance: zoneID,
+    }.Key()
 }
 
 // Zone represents a location zone entity.
@@ -368,12 +387,13 @@ type Zone struct {
     ZoneID   string
     ZoneType string
     Name     string
-    OrgID    string
-    Platform string
+
+    // EntityIDValue is the zone's minted identity — ZoneEntityID's output.
+    EntityIDValue string `json:"entity_id"`
 }
 
 func (z *Zone) EntityID() string {
-    return ZoneEntityID(z.OrgID, z.Platform, z.ZoneType, z.ZoneID)
+    return z.EntityIDValue
 }
 
 func (z *Zone) Triples() []message.Triple {
@@ -408,11 +428,8 @@ func (z *Zone) Validate() error {
     if z.ZoneID == "" {
         return fmt.Errorf("zone_id is required")
     }
-    if z.OrgID == "" {
-        return fmt.Errorf("org_id is required")
-    }
-    if z.Platform == "" {
-        return fmt.Errorf("platform is required")
+    if z.EntityIDValue == "" {
+        return fmt.Errorf("entity_id is required; mint it with ZoneEntityID")
     }
     return nil
 }
@@ -426,34 +443,25 @@ The processor transforms raw JSON into your Graphable payload. Create `processor
 package iotsensor
 
 import (
-    "errors"
     "fmt"
     "time"
+
+    semtypes "github.com/c360studio/semstreams/pkg/types"
+    "github.com/c360studio/semstreams/types"
 )
-
-// Config holds the configuration for the processor.
-type Config struct {
-    OrgID    string
-    Platform string
-}
-
-func (c Config) Validate() error {
-    if c.OrgID == "" {
-        return errors.New("OrgID is required")
-    }
-    if c.Platform == "" {
-        return errors.New("Platform is required")
-    }
-    return nil
-}
 
 // Processor transforms incoming JSON sensor data into Graphable payloads.
 type Processor struct {
-    config Config
+    // authority is the composition root's platform.org / platform.id,
+    // received through component.Dependencies.Platform. It is the ONLY
+    // source of positions 1-2 of every entity this processor mints
+    // (ADR-102 d2). There is no processor-level config for it, because
+    // there is no decision left for an operator to make.
+    authority types.PlatformMeta
 }
 
-func NewProcessor(config Config) *Processor {
-    return &Processor{config: config}
+func NewProcessor(authority types.PlatformMeta) *Processor {
+    return &Processor{authority: authority}
 }
 
 // Process transforms incoming JSON data into a SensorReading.
@@ -514,14 +522,13 @@ func (p *Processor) Process(input map[string]any) (*SensorReading, error) {
     }
 
     return &SensorReading{
-        DeviceID:     deviceID,
-        SensorType:   sensorType,
-        Value:        value,
-        Unit:         unit,
-        ObservedAt:   observedAt,
-        ZoneEntityID: ZoneEntityID(p.config.OrgID, p.config.Platform, zoneType, locationID),
-        OrgID:        p.config.OrgID,
-        Platform:     p.config.Platform,
+        DeviceID:      deviceID,
+        SensorType:    sensorType,
+        Value:         value,
+        Unit:          unit,
+        ObservedAt:    observedAt,
+        ZoneEntityID:  ZoneEntityID(p.authority, zoneType, locationID),
+        EntityIDValue: SensorReadingEntityID(p.authority, sensorType, deviceID),
     }, nil
 }
 
@@ -619,10 +626,16 @@ import (
 
     "github.com/c360studio/semstreams/graph"
     "github.com/c360studio/semstreams/message"
+    "github.com/c360studio/semstreams/types"
 )
 
+// testAuthority is a deployment authority in the shape a composition root
+// supplies it: platform.org / platform.id. "dep1" is a DEPLOYMENT name —
+// position 2 never carries a product name (ADR-102 d2, d3).
+var testAuthority = types.PlatformMeta{Org: "acme", Platform: "dep1"}
+
 func TestProcessor_Process_JSONTransformation(t *testing.T) {
-    p := NewProcessor(Config{OrgID: "acme", Platform: "logistics"})
+    p := NewProcessor(testAuthority)
 
     inputJSON := `{
         "device_id": "sensor-042",
@@ -675,10 +688,9 @@ import (
 
 func TestSensorReading_EntityID_6PartFormat(t *testing.T) {
     reading := SensorReading{
-        DeviceID:   "sensor-042",
-        SensorType: "temperature",
-        OrgID:      "acme",
-        Platform:   "logistics",
+        DeviceID:      "sensor-042",
+        SensorType:    "temperature",
+        EntityIDValue: SensorReadingEntityID(testAuthority, "temperature", "sensor-042"),
     }
 
     entityID := reading.EntityID()
@@ -699,10 +711,9 @@ func TestSensorReading_Triples_SemanticPredicates(t *testing.T) {
         SensorType:   "temperature",
         Value:        23.5,
         Unit:         "celsius",
-        ZoneEntityID: "acme.logistics.zone.facility.area.warehouse-7",
-        ObservedAt:   time.Now(),
-        OrgID:        "acme",
-        Platform:     "logistics",
+        ZoneEntityID:  ZoneEntityID(testAuthority, "area", "warehouse-7"),
+        ObservedAt:    time.Now(),
+        EntityIDValue: SensorReadingEntityID(testAuthority, "temperature", "sensor-042"),
     }
 
     triples := reading.Triples()
@@ -758,10 +769,13 @@ import (
 )
 
 // ComponentConfig holds configuration for the component.
+//
+// Note what is NOT here: the deployment authority. There is no org_id or
+// platform key, because there is no decision for an operator to make —
+// positions 1-2 of every entity you mint are the composition root's
+// platform.org / platform.id, handed to you as deps.Platform (ADR-102 d2).
 type ComponentConfig struct {
-    Ports    *component.PortConfig `json:"ports"`
-    OrgID    string                `json:"org_id"`
-    Platform string                `json:"platform"`
+    Ports *component.PortConfig `json:"ports"`
 }
 
 // DefaultConfig returns the default configuration.
@@ -787,9 +801,33 @@ func DefaultConfig() ComponentConfig {
                 },
             },
         },
-        OrgID:    "default-org",
-        Platform: "default-platform",
     }
+}
+
+// removedConfigFields names every key withdrawn from the operator surface.
+// encoding/json silently DROPS a key with no matching struct field, so an
+// operator who upgrades and keeps org_id would see no error while every
+// entity ID quietly changed authority. A removed knob must fail at load.
+var removedConfigFields = map[string]string{
+    "org_id":   `removed (ADR-102 d2, BREAKING): positions 1-2 of every minted entity ID are the composition root's platform.org / platform.id. Delete the field; set platform.org at the top level of the config`,
+    "platform": `removed (ADR-102 d2, BREAKING): positions 1-2 of every minted entity ID are the composition root's platform.org / platform.id. Delete the field; set platform.id at the top level of the config`,
+}
+
+func rejectRemovedConfigKeys(raw json.RawMessage) error {
+    if len(raw) == 0 {
+        return nil
+    }
+    var present map[string]json.RawMessage
+    if err := json.Unmarshal(raw, &present); err != nil {
+        return nil // not an object; the caller's own decode reports that
+    }
+    for field, guidance := range removedConfigFields {
+        if _, found := present[field]; found {
+            return errs.WrapInvalid(errs.ErrInvalidConfig, "IoTSensorComponent", "rejectRemovedConfigKeys",
+                fmt.Sprintf("config field %q was %s", field, guidance))
+        }
+    }
+    return nil
 }
 
 var iotSensorSchema = component.GenerateConfigSchema(reflect.TypeOf(ComponentConfig{}))
@@ -822,6 +860,9 @@ type Component struct {
 func NewComponent(
     rawConfig json.RawMessage, deps component.Dependencies,
 ) (component.Discoverable, error) {
+    if err := rejectRemovedConfigKeys(rawConfig); err != nil {
+        return nil, err
+    }
     var config ComponentConfig
     if err := json.Unmarshal(rawConfig, &config); err != nil {
         return nil, errs.WrapInvalid(err, "IoTSensorComponent", "NewComponent", "config unmarshal")
@@ -829,16 +870,6 @@ func NewComponent(
 
     if config.Ports == nil {
         config = DefaultConfig()
-    }
-
-    if config.OrgID == "" {
-        return nil, errs.WrapInvalid(
-            errs.ErrInvalidConfig, "IoTSensorComponent", "NewComponent", "OrgID is required")
-    }
-
-    if config.Platform == "" {
-        return nil, errs.WrapInvalid(
-            errs.ErrInvalidConfig, "IoTSensorComponent", "NewComponent", "Platform is required")
     }
 
     var inputSubjects []string
@@ -854,10 +885,9 @@ func NewComponent(
         outputSubject = config.Ports.Outputs[0].Subject
     }
 
-    processor := NewProcessor(Config{
-        OrgID:    config.OrgID,
-        Platform: config.Platform,
-    })
+    // The deployment authority comes from the composition root and nowhere
+    // else — the component never reads it from its own config (ADR-102 d2).
+    processor := NewProcessor(deps.Platform)
 
     return &Component{
         name:       "iot-sensor-processor",
@@ -982,8 +1012,9 @@ func (c *Component) handleMessage(ctx context.Context, msgData []byte) {
                 ZoneID:   zoneID,
                 ZoneType: zoneType,
                 Name:     zoneID,
-                OrgID:    reading.OrgID,
-                Platform: reading.Platform,
+                // The reading already carries the zone identity the
+                // processor minted; reuse it rather than re-deriving.
+                EntityIDValue: reading.ZoneEntityID,
             }
             c.emitEntity(ctx, zone, zone.Schema())
         }
@@ -1126,6 +1157,7 @@ package iotsensor
 
 import (
     "encoding/json"
+    "strings"
     "testing"
 
     "github.com/c360studio/semstreams/component"
@@ -1133,8 +1165,6 @@ import (
 
 func TestNewComponent_ValidConfig(t *testing.T) {
     config := ComponentConfig{
-        OrgID:    "acme",
-        Platform: "logistics",
         Ports: &component.PortConfig{
             Inputs: []component.PortDefinition{
                 {Name: "input", Type: "nats", Subject: "raw.sensor.>"},
@@ -1164,21 +1194,24 @@ func TestNewComponent_ValidConfig(t *testing.T) {
     }
 }
 
-func TestNewComponent_MissingOrgID(t *testing.T) {
-    config := ComponentConfig{
-        Platform: "logistics",
-        Ports: &component.PortConfig{
-            Inputs:  []component.PortDefinition{{Name: "input", Type: "nats", Subject: "raw.>"}},
-            Outputs: []component.PortDefinition{{Name: "output", Type: "nats", Subject: "out.>"}},
-        },
-    }
+// A config that still carries a retired authority key must be REFUSED, not
+// quietly ignored. This is the test that stops an upgrade from silently
+// re-minting every entity under a different authority.
+func TestNewComponent_RejectsRetiredAuthorityKey(t *testing.T) {
+    rawConfig := []byte(`{
+        "org_id": "acme",
+        "ports": {
+            "inputs":  [{"name": "input",  "config": {"kind": "nats", "subject": "raw.>"}}],
+            "outputs": [{"name": "output", "config": {"kind": "nats", "subject": "out.>"}}]
+        }
+    }`)
 
-    rawConfig, _ := json.Marshal(config)
-    deps := component.Dependencies{}
-
-    _, err := NewComponent(rawConfig, deps)
+    _, err := NewComponent(rawConfig, component.Dependencies{})
     if err == nil {
-        t.Error("NewComponent() expected error for missing OrgID, got nil")
+        t.Fatal("NewComponent() accepted the retired org_id key")
+    }
+    if !strings.Contains(err.Error(), "ADR-102") {
+        t.Errorf("refusal %q does not name the decision that retired the key", err)
     }
 }
 
@@ -1208,8 +1241,6 @@ Add your processor to a flow configuration:
     "iot_sensor": {
       "type": "iot_sensor",
       "config": {
-        "org_id": "acme",
-        "platform": "logistics",
         "ports": {
           "inputs": [
             {
@@ -1243,7 +1274,8 @@ task dev:send DATA='{"device_id":"sensor-001","type":"temperature","reading":23.
 task dev:stats
 
 # Query via GraphQL
-task dev:graphql QUERY='{ entity(id: "acme.logistics.sensor.environmental.temperature.sensor-001") { triples { predicate object } } }'
+# The first two positions are YOUR config's platform.org / platform.id.
+task dev:graphql QUERY='{ entity(id: "acme.dep1.sensor.environmental.temperature.sensor-001") { triples { predicate object } } }'
 ```
 
 ## What Happens Next
@@ -1313,6 +1345,9 @@ Before deploying your processor:
 
 - [ ] EntityID returns exactly 6 parts
 - [ ] EntityID is deterministic (same input = same output)
+- [ ] Positions 1-2 come from `deps.Platform` and nowhere else — no `org_id` /
+      `platform` config key, no constant, no product name, no payload field
+      (ADR-102 d2)
 - [ ] Predicates use dotted notation (domain.category.property)
 - [ ] Entity references use full entity IDs, not partial strings
 - [ ] Required fields are validated

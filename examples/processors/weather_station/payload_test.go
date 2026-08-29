@@ -7,13 +7,18 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/types"
 )
+
+// testAuthority is a deployment authority in the shape a composition root
+// supplies it: platform.org / platform.id. "dep1" is a deployment name, not a
+// product name — position 2 never carries a product (ADR-102 d2, d3).
+var testAuthority = types.PlatformMeta{Org: "acme", Platform: "dep1"}
 
 func TestWeatherReading_EntityID_6PartFormat(t *testing.T) {
 	reading := WeatherReading{
-		StationID: "ws-001",
-		OrgID:     "acme",
-		Platform:  "weather",
+		StationID:     "ws-001",
+		EntityIDValue: WeatherReadingEntityID(testAuthority, "ws-001"),
 	}
 
 	entityID := reading.EntityID()
@@ -28,7 +33,7 @@ func TestWeatherReading_EntityID_6PartFormat(t *testing.T) {
 	}
 
 	// Verify expected format
-	want := "acme.weather.station.meteorology.outdoor.ws-001"
+	want := "acme.dep1.station.meteorology.outdoor.ws-001"
 	if entityID != want {
 		t.Errorf("EntityID() = %q, want %q", entityID, want)
 	}
@@ -36,14 +41,13 @@ func TestWeatherReading_EntityID_6PartFormat(t *testing.T) {
 
 func TestWeatherReading_Triples_SemanticPredicates(t *testing.T) {
 	reading := WeatherReading{
-		StationID:   "ws-001",
-		Temperature: 22.5,
-		Humidity:    65.0,
-		Condition:   "sunny",
-		City:        "San Francisco",
-		ObservedAt:  time.Now(),
-		OrgID:       "acme",
-		Platform:    "weather",
+		StationID:     "ws-001",
+		Temperature:   22.5,
+		Humidity:      65.0,
+		Condition:     "sunny",
+		City:          "San Francisco",
+		ObservedAt:    time.Now(),
+		EntityIDValue: WeatherReadingEntityID(testAuthority, "ws-001"),
 	}
 
 	triples := reading.Triples()
@@ -79,28 +83,25 @@ func TestWeatherReading_Validate(t *testing.T) {
 		{
 			name: "valid reading",
 			reading: WeatherReading{
-				StationID: "ws-001",
-				Condition: "sunny",
-				OrgID:     "acme",
-				Platform:  "weather",
+				StationID:     "ws-001",
+				Condition:     "sunny",
+				EntityIDValue: WeatherReadingEntityID(testAuthority, "ws-001"),
 			},
 			wantErr: false,
 		},
 		{
 			name: "missing station_id",
 			reading: WeatherReading{
-				Condition: "sunny",
-				OrgID:     "acme",
-				Platform:  "weather",
+				Condition:     "sunny",
+				EntityIDValue: WeatherReadingEntityID(testAuthority, ""),
 			},
 			wantErr: true,
 		},
 		{
 			name: "missing condition",
 			reading: WeatherReading{
-				StationID: "ws-001",
-				OrgID:     "acme",
-				Platform:  "weather",
+				StationID:     "ws-001",
+				EntityIDValue: WeatherReadingEntityID(testAuthority, "ws-001"),
 			},
 			wantErr: true,
 		},

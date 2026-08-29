@@ -9,7 +9,7 @@ import (
 )
 
 func TestProcessor_Process_JSONTransformation(t *testing.T) {
-	p := NewProcessor(Config{OrgID: "acme", Platform: "weather"})
+	p := NewProcessor(testAuthority)
 
 	inputJSON := `{
 		"station_id": "ws-001",
@@ -54,7 +54,7 @@ func TestProcessor_Process_JSONTransformation(t *testing.T) {
 }
 
 func TestProcessor_Process_MissingField(t *testing.T) {
-	p := NewProcessor(Config{OrgID: "acme", Platform: "weather"})
+	p := NewProcessor(testAuthority)
 
 	// Missing condition
 	input := map[string]any{
@@ -69,35 +69,8 @@ func TestProcessor_Process_MissingField(t *testing.T) {
 	}
 }
 
-func TestConfig_Validation(t *testing.T) {
-	tests := []struct {
-		name    string
-		config  Config
-		wantErr bool
-	}{
-		{
-			name:    "valid config",
-			config:  Config{OrgID: "acme", Platform: "weather"},
-			wantErr: false,
-		},
-		{
-			name:    "missing OrgID",
-			config:  Config{Platform: "weather"},
-			wantErr: true,
-		},
-		{
-			name:    "missing Platform",
-			config:  Config{OrgID: "acme"},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.config.Validate()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
+// The processor Config struct and its OrgID/Platform validation were deleted
+// with the operator keys (ADR-102 d2): the processor now takes the deployment
+// authority from component.Dependencies.Platform, so there is no
+// processor-local configuration left to validate. What replaced this test is
+// TestComponentMintsUnderDeploymentAuthority in deployment_authority_test.go.

@@ -241,31 +241,31 @@ const (
 
 const (
 	// HierarchyDomainMember indicates entity belongs to a domain (3-part prefix match).
-	// Subject is the entity, object is the domain prefix (e.g., "c360.logistics.sensor").
+	// Subject is the entity, object is the domain prefix (e.g., "acme.dep1.sensor").
 	// StandardIRI: skos:broader (entity is narrower than domain)
 	// InverseOf: HierarchyDomainContains
-	// Example: sensor-temp-001 hierarchy.domain.member c360.logistics.sensor
+	// Example: sensor-temp-001 hierarchy.domain.member acme.dep1.sensor
 	HierarchyDomainMember = "hierarchy.domain.member"
 
 	// HierarchyDomainContains indicates domain contains an entity (inverse of HierarchyDomainMember).
 	// Subject is the domain, object is the entity.
 	// StandardIRI: skos:narrower (domain contains narrower entities)
 	// InverseOf: HierarchyDomainMember
-	// Example: c360.logistics.sensor hierarchy.domain.contains sensor-temp-001
+	// Example: acme.dep1.sensor hierarchy.domain.contains sensor-temp-001
 	HierarchyDomainContains = "hierarchy.domain.contains"
 
 	// HierarchySystemMember indicates entity belongs to a system (4-part prefix match).
-	// Subject is the entity, object is the system prefix (e.g., "c360.logistics.document.sensor").
+	// Subject is the entity, object is the system prefix (e.g., "acme.dep1.document.sensor").
 	// StandardIRI: skos:broader (entity is narrower than system)
 	// InverseOf: HierarchySystemContains
-	// Example: sensor-temp-001 hierarchy.system.member c360.logistics.document.sensor
+	// Example: sensor-temp-001 hierarchy.system.member acme.dep1.document.sensor
 	HierarchySystemMember = "hierarchy.system.member"
 
 	// HierarchySystemContains indicates system contains an entity (inverse of HierarchySystemMember).
 	// Subject is the system, object is the entity.
 	// StandardIRI: skos:narrower (system contains narrower entities)
 	// InverseOf: HierarchySystemMember
-	// Example: c360.logistics.document.sensor hierarchy.system.contains sensor-temp-001
+	// Example: acme.dep1.document.sensor hierarchy.system.contains sensor-temp-001
 	HierarchySystemContains = "hierarchy.system.contains"
 
 	// HierarchyTypeSibling indicates entities share the same type (5-part prefix match).

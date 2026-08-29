@@ -8,7 +8,26 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/test/e2e/client"
+	"github.com/c360studio/semstreams/test/e2e/config"
 )
+
+// tierMinter returns the function that builds a fixture entity ID under the
+// authority of the tier THIS run booted. The three tiers deploy three
+// different platform.id values, and every example processor mints positions
+// 1-2 from the composition root's platform.org / platform.id and nothing else
+// (ADR-102 d2) — so an ID assembled from a literal is right in at most one
+// tier and reports "entity not found" in the others.
+//
+// It fails rather than guessing: a wrong authority does not surface here, it
+// surfaces stages later as a missing entity, which is precisely the silent
+// failure this indirection removes.
+func (s *TieredScenario) tierMinter(result *Result) (func(suffix string) string, error) {
+	variant := s.effectiveVariant(result)
+	if variant == "" {
+		return nil, fmt.Errorf("tier variant is unresolved, so the deployment authority every fixture entity ID is minted under is unknown; pass --variant or let Execute detect it before this stage")
+	}
+	return func(suffix string) string { return config.TierEntityID(variant, suffix) }, nil
+}
 
 // Entity validation functions for tiered E2E tests
 
@@ -118,7 +137,10 @@ func (s *TieredScenario) executeVerifyEntityCount(ctx context.Context, result *R
 	}
 
 	minRequired := s.getMinRequiredEntities()
-	criticalEntities := s.getCriticalEntities()
+	criticalEntities, err := s.getCriticalEntities(result)
+	if err != nil {
+		return err
+	}
 
 	// Poll until entities are loaded
 	actualCount, pollCount, criticalFound, lastErr := s.pollForEntities(ctx, minRequired, criticalEntities)
@@ -160,26 +182,22 @@ func (s *TieredScenario) getMinRequiredEntities() int {
 // queried by exact ID at stage 12+; missing any of them = stage 14
 // flake. Sensor and document entities included for both PathRAG
 // shapes (sensor + document).
-func (s *TieredScenario) getCriticalEntities() []string {
-	switch s.config.Variant {
-	case "structural":
-		return []string{
-			"c360.logistics.sensor.environmental.temperature.temp-sensor-001",
-			"c360.logistics.work.maintenance.completed.maint-001",
-		}
-	case "statistical", "semantic":
-		return []string{
-			"c360.logistics.document.content.operations.doc-ops-001",
-			"c360.logistics.sensor.environmental.temperature.temp-sensor-001",
-			"c360.logistics.work.maintenance.completed.maint-001",
-		}
-	default:
-		return []string{
-			"c360.logistics.document.content.operations.doc-ops-001",
-			"c360.logistics.sensor.environmental.temperature.temp-sensor-001",
-			"c360.logistics.work.maintenance.completed.maint-001",
-		}
+func (s *TieredScenario) getCriticalEntities(result *Result) ([]string, error) {
+	mint, err := s.tierMinter(result)
+	if err != nil {
+		return nil, err
 	}
+	if s.effectiveVariant(result) == config.VariantStructural {
+		return []string{
+			mint("sensor.environmental.temperature.temp-sensor-001"),
+			mint("work.maintenance.completed.maint-001"),
+		}, nil
+	}
+	return []string{
+		mint("document.content.operations.doc-ops-001"),
+		mint("sensor.environmental.temperature.temp-sensor-001"),
+		mint("work.maintenance.completed.maint-001"),
+	}, nil
 }
 
 func (s *TieredScenario) pollForEntities(ctx context.Context, minRequired int, criticalEntities []string) (int, int, bool, error) {
@@ -290,19 +308,24 @@ func (s *TieredScenario) executeVerifyEntityRetrieval(ctx context.Context, resul
 		return nil
 	}
 
-	// Test entities from test data files
-	// These are fully-qualified entity IDs after processing with org_id=c360, platform=logistics
+	// Test entities from test data files. The document processor mints these
+	// under the deployment's OWN platform.org / platform.id (ADR-102 d2), so
+	// the authority prefix comes from the running tier, not from a literal.
 	// Format: {org}.{platform}.{system}.{domain}.{category/status/severity}.{id}
+	mint, err := s.tierMinter(result)
+	if err != nil {
+		return err
+	}
 	testEntities := []struct {
 		id           string
 		expectedType string
 		source       string
 	}{
-		{"c360.logistics.document.content.operations.doc-ops-001", "document", "documents.jsonl"},
-		{"c360.logistics.document.content.quality.doc-quality-001", "document", "documents.jsonl"},
-		{"c360.logistics.work.maintenance.completed.maint-001", "maintenance", "maintenance.jsonl"},
-		{"c360.logistics.record.observation.high.obs-001", "observation", "observations.jsonl"},
-		{"c360.logistics.document.sensor.temperature.sensor-temp-001", "sensor_doc", "sensor_docs.jsonl"},
+		{mint("document.content.operations.doc-ops-001"), "document", "documents.jsonl"},
+		{mint("document.content.quality.doc-quality-001"), "document", "documents.jsonl"},
+		{mint("work.maintenance.completed.maint-001"), "maintenance", "maintenance.jsonl"},
+		{mint("record.observation.high.obs-001"), "observation", "observations.jsonl"},
+		{mint("document.sensor.temperature.sensor-temp-001"), "sensor_doc", "sensor_docs.jsonl"},
 	}
 
 	foundEntities := 0

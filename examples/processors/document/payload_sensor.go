@@ -7,6 +7,8 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
+	"github.com/c360studio/semstreams/types"
 )
 
 // SensorDocument represents rich-text documentation for a sensor. It implements ContentStorable.
@@ -22,27 +24,35 @@ type SensorDocument struct {
 	Category    string   `json:"category"`    // temperature, pressure, humidity
 	Tags        []string `json:"tags"`
 
-	// Context fields (set by processor from config, preserved through JSON for NATS transport)
-	OrgID    string `json:"org_id,omitempty"`
-	Platform string `json:"platform,omitempty"`
+	// EntityIDValue is this sensor document's own identity, minted once by
+	// the processor under the composition root's platform.org / platform.id
+	// and carried on the wire from there (ADR-102 d2).
+	EntityIDValue string `json:"entity_id"`
 
 	// Storage reference (set by processor)
 	storageRef *message.StorageReference `json:"-"`
 }
 
-// EntityID returns a federated entity ID for the sensor document.
-// Example: "acme.logistics.document.sensor.temperature.sensor-doc-001"
+// EntityID returns the identity minted for this sensor document.
 func (s *SensorDocument) EntityID() string {
-	category := s.Category
+	return s.EntityIDValue
+}
+
+// MintSensorDocumentEntityID mints a sensor document's federated entity ID under
+// the deployment authority (ADR-102 d2): system = document, domain = sensor.
+// Example: "acme.dep1.document.sensor.temperature.sensor-doc-001"
+func MintSensorDocumentEntityID(authority types.PlatformMeta, category, id string) string {
 	if category == "" {
-		category = "general"
+		category = defaultDocumentCategory
 	}
-	return fmt.Sprintf("%s.%s.document.sensor.%s.%s",
-		s.OrgID,
-		s.Platform,
-		category,
-		s.ID,
-	)
+	return semtypes.EntityID{
+		Org:      authority.Org,
+		Platform: authority.Platform,
+		System:   documentSystem,
+		Domain:   sensorDomain,
+		Type:     category,
+		Instance: id,
+	}.Key()
 }
 
 // Triples returns METADATA ONLY facts about this sensor document.
@@ -195,11 +205,8 @@ func (s *SensorDocument) Validate() error {
 	if s.Title == "" {
 		return fmt.Errorf("title is required")
 	}
-	if s.OrgID == "" {
-		return fmt.Errorf("org_id is required (set by processor)")
-	}
-	if s.Platform == "" {
-		return fmt.Errorf("platform is required (set by processor)")
+	if s.EntityIDValue == "" {
+		return fmt.Errorf("entity_id is required; mint it with MintSensorDocumentEntityID under the deployment authority")
 	}
 	return nil
 }

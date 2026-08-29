@@ -280,8 +280,13 @@ func (s *TieredScenario) executeValidateRuleTransitions(ctx context.Context, res
 // executeValidateEntityTriples validates that sensor entities have the expected triples
 // This helps diagnose rule trigger issues by showing exactly what triples are in ENTITY_STATES
 func (s *TieredScenario) executeValidateEntityTriples(ctx context.Context, result *Result) error {
-	// Get a sample temperature sensor entity
-	sampleEntityID := "c360.logistics.sensor.environmental.temperature.temp-sensor-001"
+	// Get a sample temperature sensor entity, minted under this tier's own
+	// deployment authority (ADR-102 d2).
+	mint, err := s.tierMinter(result)
+	if err != nil {
+		return err
+	}
+	sampleEntityID := mint("sensor.environmental.temperature.temp-sensor-001")
 
 	entity, err := s.natsClient.GetEntity(ctx, sampleEntityID)
 	if err != nil {
@@ -381,7 +386,7 @@ func (s *TieredScenario) executeValidateEntityTriples(ctx context.Context, resul
 	}
 
 	// Also check humidity entity to debug why humidity rule doesn't trigger
-	humidEntityID := "c360.logistics.sensor.environmental.humidity.humid-sensor-001"
+	humidEntityID := mint("sensor.environmental.humidity.humid-sensor-001")
 	humidEntity, humidErr := s.natsClient.GetEntity(ctx, humidEntityID)
 	if humidErr != nil {
 		fmt.Printf("[HUMIDITY DEBUG] Failed to get entity %s: %v\n", humidEntityID, humidErr)
@@ -584,7 +589,10 @@ type pathRAGStep struct {
 // Sensor entities demonstrate EntityID sibling inference (structured IoT data).
 // PathRAG is a Tier 0 capability that runs on ALL tiers.
 func (s *TieredScenario) executeTestPathRAGSensor(ctx context.Context, result *Result) error {
-	startEntity := s.getPathRAGSensorEntity()
+	startEntity, err := s.getPathRAGSensorEntity(result)
+	if err != nil {
+		return err
+	}
 	gatewayURL := s.config.GraphQLURL
 
 	resp, latency, err := s.sendPathRAGRequest(ctx, startEntity, gatewayURL)
@@ -603,7 +611,10 @@ func (s *TieredScenario) executeTestPathRAGSensor(ctx context.Context, result *R
 // Document entities demonstrate text-based similarity (statistical/semantic enhancements).
 // PathRAG is a Tier 0 capability that runs on ALL tiers.
 func (s *TieredScenario) executeTestPathRAGDocument(ctx context.Context, result *Result) error {
-	startEntity := s.getPathRAGDocumentEntity()
+	startEntity, err := s.getPathRAGDocumentEntity(result)
+	if err != nil {
+		return err
+	}
 	gatewayURL := s.config.GraphQLURL
 
 	resp, latency, err := s.sendPathRAGRequest(ctx, startEntity, gatewayURL)
@@ -621,22 +632,30 @@ func (s *TieredScenario) executeTestPathRAGDocument(ctx context.Context, result 
 // getPathRAGSensorEntity returns a sensor entity for PathRAG testing.
 // All tiers now use testdata/semantic/sensors.jsonl which contains temperature sensors.
 // Sensor entities demonstrate EntityID sibling inference (structural IoT data).
-func (s *TieredScenario) getPathRAGSensorEntity() string {
+func (s *TieredScenario) getPathRAGSensorEntity(result *Result) (string, error) {
 	// All tiers use testdata/semantic/sensors.jsonl
 	// Entity IDs follow format: {org}.{platform}.sensor.environmental.{type}.{device_id}
 	// From sensors.jsonl: device_id=temp-sensor-001, type=temperature
-	// Config: org_id=c360, platform=logistics
-	return "c360.logistics.sensor.environmental.temperature.temp-sensor-001"
+	// Positions 1-2 are the tier's own platform.org / platform.id (ADR-102 d2).
+	mint, err := s.tierMinter(result)
+	if err != nil {
+		return "", err
+	}
+	return mint("sensor.environmental.temperature.temp-sensor-001"), nil
 }
 
 // getPathRAGDocumentEntity returns a document entity for PathRAG testing.
 // All tiers use testdata/semantic/maintenance.jsonl which contains maintenance records.
 // Document entities demonstrate text-based similarity (statistical/semantic enhancements).
-func (s *TieredScenario) getPathRAGDocumentEntity() string {
+func (s *TieredScenario) getPathRAGDocumentEntity(result *Result) (string, error) {
 	// All tiers use testdata/semantic/maintenance.jsonl
 	// Use maintenance entity which has 15+ siblings with same type prefix
 	// This allows sibling inference to find related entities
-	return "c360.logistics.work.maintenance.completed.maint-001"
+	mint, err := s.tierMinter(result)
+	if err != nil {
+		return "", err
+	}
+	return mint("work.maintenance.completed.maint-001"), nil
 }
 
 // sendPathRAGRequest sends the PathRAG GraphQL query and returns the parsed response
@@ -872,8 +891,13 @@ func (s *TieredScenario) executeTestEntitiesByPrefix(ctx context.Context, result
 	gatewayURL := s.config.GraphQLURL
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
-	// Test: Query every entity page under the temperature-sensor prefix.
-	prefix := "c360.logistics.sensor.environmental.temperature"
+	// Test: Query every entity page under the temperature-sensor prefix, whose
+	// first two positions are this tier's own deployment authority.
+	mint, err := s.tierMinter(result)
+	if err != nil {
+		return err
+	}
+	prefix := mint("sensor.environmental.temperature")
 	type prefixEntity struct {
 		ID string `json:"id"`
 	}
@@ -1345,9 +1369,13 @@ func (s *TieredScenario) executeTestZoneRelationships(ctx context.Context, resul
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
 	// Zone entity ID format: {org}.{platform}.zone.facility.{zoneType}.{locationID}
-	// From test data sensors.jsonl, "cold-storage-1" is a known location with default zone type "area"
-	// The IoT processor generates: c360.logistics.zone.facility.area.cold-storage-1
-	zoneEntityID := "c360.logistics.zone.facility.area.cold-storage-1"
+	// From test data sensors.jsonl, "cold-storage-1" is a known location with default zone type "area".
+	// The IoT processor mints it under the tier's own deployment authority.
+	mint, err := s.tierMinter(result)
+	if err != nil {
+		return err
+	}
+	zoneEntityID := mint("zone.facility.area.cold-storage-1")
 
 	// Query incoming relationships to the zone entity
 	relationshipsQuery := map[string]any{
@@ -1448,7 +1476,10 @@ func (s *TieredScenario) executeTestZoneRelationships(ctx context.Context, resul
 // executeTestPathRAGBoundary validates PathRAG respects maxNodes limit
 // PathRAG is a Tier 0 capability that runs on ALL tiers.
 func (s *TieredScenario) executeTestPathRAGBoundary(ctx context.Context, result *Result) error {
-	startEntity := s.getPathRAGSensorEntity()
+	startEntity, err := s.getPathRAGSensorEntity(result)
+	if err != nil {
+		return err
+	}
 	gatewayURL := s.config.GraphQLURL
 
 	// Query with tight bounds to verify maxNodes is respected
@@ -1540,9 +1571,13 @@ func (s *TieredScenario) executeTestEntityByAlias(ctx context.Context, result *R
 
 	// Test REAL alias resolution using sensor serial number
 	// From testdata/semantic/sensors.jsonl: temp-sensor-001 has serial "SN-TEMP-2024-001"
-	// Expected entity ID: c360.logistics.sensor.environmental.temperature.temp-sensor-001
+	// Expected entity ID: <tier authority>.sensor.environmental.temperature.temp-sensor-001
+	mint, err := s.tierMinter(result)
+	if err != nil {
+		return err
+	}
 	serialNumber := "SN-TEMP-2024-001"
-	expectedEntityID := "c360.logistics.sensor.environmental.temperature.temp-sensor-001"
+	expectedEntityID := mint("sensor.environmental.temperature.temp-sensor-001")
 
 	aliasQuery := map[string]any{
 		"query": `query($aliasOrID: String!) {
@@ -2212,7 +2247,11 @@ func (s *TieredScenario) executeTestPredicateCompound(ctx context.Context, resul
 	// by executeValidateEntityTriples). A known-answer pair keeps AND coverage
 	// non-empty regardless of lexical predicate-index ordering.
 	predicates := []string{"sensor.measurement.fahrenheit", "geo.location.zone"}
-	knownEntityID := "c360.logistics.sensor.environmental.temperature.temp-sensor-001"
+	mint, err := s.tierMinter(result)
+	if err != nil {
+		return err
+	}
+	knownEntityID := mint("sensor.environmental.temperature.temp-sensor-001")
 
 	// Test OR query (union)
 	orResult, err := s.sendCompoundPredicateQuery(ctx, predicates, "OR")

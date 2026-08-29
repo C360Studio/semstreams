@@ -29,8 +29,6 @@ func TestNewComponent_ValidConfig(t *testing.T) {
 				},
 			},
 		},
-		OrgID:    "acme",
-		Platform: "logistics",
 	}
 
 	rawConfig, err := json.Marshal(config)
@@ -52,69 +50,12 @@ func TestNewComponent_ValidConfig(t *testing.T) {
 	assert.Equal(t, "0.1.0", meta.Version)
 }
 
-func TestNewComponent_MissingOrgID(t *testing.T) {
-	config := ComponentConfig{
-		Ports: &component.PortConfig{
-			Inputs: []component.PortDefinition{
-				{
-					Name:   "nats_input",
-					Config: component.NATSPort{Subject: "raw.sensor.>"},
-				},
-			},
-			Outputs: []component.PortDefinition{
-				{
-					Name:   "nats_output",
-					Config: component.NATSPort{Subject: "events.graph.entity.sensor"},
-				},
-			},
-		},
-		// Missing OrgID
-		Platform: "logistics",
-	}
-
-	rawConfig, err := json.Marshal(config)
-	require.NoError(t, err)
-
-	deps := component.Dependencies{
-		NATSClient: nil,
-	}
-
-	_, err = NewComponent(rawConfig, deps)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "OrgID")
-}
-
-func TestNewComponent_MissingPlatform(t *testing.T) {
-	config := ComponentConfig{
-		Ports: &component.PortConfig{
-			Inputs: []component.PortDefinition{
-				{
-					Name:   "nats_input",
-					Config: component.NATSPort{Subject: "raw.sensor.>"},
-				},
-			},
-			Outputs: []component.PortDefinition{
-				{
-					Name:   "nats_output",
-					Config: component.NATSPort{Subject: "events.graph.entity.sensor"},
-				},
-			},
-		},
-		OrgID: "acme",
-		// Missing Platform
-	}
-
-	rawConfig, err := json.Marshal(config)
-	require.NoError(t, err)
-
-	deps := component.Dependencies{
-		NATSClient: nil,
-	}
-
-	_, err = NewComponent(rawConfig, deps)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Platform")
-}
+// The org_id / platform required-key tests that used to live here were
+// deleted with the keys themselves (ADR-102 d2). Their replacement is
+// TestRetiredAuthorityKeysAreRefused in retired_authority_keys_test.go, which
+// proves the stronger fact: the keys are not merely optional now, they are
+// refused, so an operator carrying them forward cannot mint under a silently
+// different authority.
 
 func TestComponent_InputPorts(t *testing.T) {
 	config := ComponentConfig{
@@ -127,8 +68,6 @@ func TestComponent_InputPorts(t *testing.T) {
 				{Name: "output", Config: component.NATSPort{Subject: "events.sensor", Interface: &component.InterfaceContract{Type: "domain.iot.sensor.v1"}}, Required: true},
 			},
 		},
-		OrgID:    "acme",
-		Platform: "logistics",
 	}
 
 	rawConfig, err := json.Marshal(config)
@@ -165,8 +104,6 @@ func TestComponent_OutputPorts(t *testing.T) {
 				{Name: "output", Config: component.NATSPort{Subject: "events.sensor", Interface: &component.InterfaceContract{Type: "domain.iot.sensor.v1"}}, Required: true},
 			},
 		},
-		OrgID:    "acme",
-		Platform: "logistics",
 	}
 
 	rawConfig, err := json.Marshal(config)

@@ -1,51 +1,36 @@
 package iotsensor
 
 import (
-	"errors"
 	"fmt"
-	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"time"
+
+	semtypes "github.com/c360studio/semstreams/pkg/types"
+	"github.com/c360studio/semstreams/types"
 )
-
-// Config holds the configuration for the IoT sensor processor.
-// It provides the organizational context that is applied to all processed readings.
-type Config struct {
-	// OrgID is the organization identifier (e.g., "acme")
-	// This becomes the first part of federated entity IDs.
-	OrgID string
-
-	// Platform is the platform/product identifier (e.g., "logistics")
-	// This becomes the second part of federated entity IDs.
-	Platform string
-}
-
-// Validate checks that the configuration is valid.
-func (c Config) Validate() error {
-	if c.OrgID == "" {
-		return errors.New("OrgID is required")
-	}
-	if c.Platform == "" {
-		return errors.New("Platform is required")
-	}
-	return nil
-}
 
 // Processor transforms incoming JSON sensor data into Graphable payloads.
 // It applies the organizational context from configuration and produces
 // SensorReading instances with proper federated entity IDs and semantic triples.
 //
 // This demonstrates the correct pattern for domain processors:
-//   - Configuration provides organizational context
+//   - The composition root supplies the deployment authority; configuration
+//     never does (ADR-102 d2)
 //   - Process method transforms data with domain understanding
 //   - Output is a Graphable payload, not generic JSON
 type Processor struct {
-	config Config
+	// authority is the composition root's platform.org / platform.id,
+	// received through component.Dependencies.Platform. It is the ONLY
+	// source of positions 1-2 of every entity this processor mints: not an
+	// operator config key, not a constant, not a product name, and not a
+	// field on an incoming payload (ADR-102 d2).
+	authority types.PlatformMeta
 }
 
-// NewProcessor creates a new IoT sensor processor with the given configuration.
-func NewProcessor(config Config) *Processor {
+// NewProcessor creates a new IoT sensor processor minting under the given
+// deployment authority. Callers pass component.Dependencies.Platform verbatim.
+func NewProcessor(authority types.PlatformMeta) *Processor {
 	return &Processor{
-		config: config,
+		authority: authority,
 	}
 }
 
@@ -64,12 +49,12 @@ func NewProcessor(config Config) *Processor {
 //
 // The processor:
 //  1. Extracts fields from the incoming JSON
-//  2. Applies organizational context from config
+//  2. Mints the identity under the deployment authority
 //  3. Returns a SensorReading that implements Graphable
 //
 // This method demonstrates domain-specific transformation logic:
 //   - Field extraction with proper type handling
-//   - Context enrichment from configuration
+//   - Identity minted from the composition root's authority
 //   - Validation of required fields
 func (p *Processor) Process(input map[string]any) (*SensorReading, error) {
 	// Extract required fields
@@ -135,21 +120,21 @@ func (p *Processor) Process(input map[string]any) (*SensorReading, error) {
 		altitude = &alt
 	}
 
-	// Build the Graphable payload with organizational context
-	// Processor computes the zone entity ID - this is domain knowledge
+	// Build the Graphable payload, minting both identities under the
+	// deployment authority. The processor computes the zone entity ID -
+	// this is domain knowledge.
 	reading := &SensorReading{
-		DeviceID:     deviceID,
-		SensorType:   sensorType,
-		Value:        value,
-		Unit:         unit,
-		ObservedAt:   observedAt,
-		SerialNumber: serialNumber,
-		Latitude:     latitude,
-		Longitude:    longitude,
-		Altitude:     altitude,
-		ZoneEntityID: ZoneEntityID(p.config.OrgID, p.config.Platform, zoneType, locationID),
-		OrgID:        p.config.OrgID,
-		Platform:     p.config.Platform,
+		DeviceID:      deviceID,
+		SensorType:    sensorType,
+		Value:         value,
+		Unit:          unit,
+		ObservedAt:    observedAt,
+		SerialNumber:  serialNumber,
+		Latitude:      latitude,
+		Longitude:     longitude,
+		Altitude:      altitude,
+		ZoneEntityID:  ZoneEntityID(p.authority, zoneType, locationID),
+		EntityIDValue: SensorReadingEntityID(p.authority, sensorType, deviceID),
 	}
 	if err := reading.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid sensor reading: %w", err)
@@ -274,7 +259,7 @@ func contains(s, substr string) bool {
 
 // ParseZoneEntityID extracts zone type and zone ID from a full zone entity ID.
 // Zone entity ID format (canonical order): org.platform.zone.facility.{zoneType}.{zoneID}
-// Example: "c360.logistics.zone.facility.area.cold-storage-1" -> ("area", "cold-storage-1")
+// Example: "acme.dep1.zone.facility.area.cold-storage-1" -> ("area", "cold-storage-1")
 // Returns empty strings if the entity ID is not a canonical zone identity. The
 // positions are read by NAME through pkg/types.ParseEntityID, never by raw
 // index, so a value in any other shape resolves to nothing rather than to a

@@ -175,6 +175,34 @@ identities are bounded, not fixed-length.
 - **THEN** it returns an error naming the trigger family and the 170-byte budget
 - **AND** the test that verifies this is `TestConfigRejectsOversizedAuthorityPair`
 
+### Requirement: A component that carried an authority config key refuses a configuration still declaring it
+
+A component that once accepted the deployment authority as its own configuration MUST refuse to load a
+configuration that still declares the retired key, with a coded error naming the key, the decision that retired it,
+and the replacement. The refusal MUST fire on every entry path that reads the component's raw configuration,
+including the offline port declaration and the boot-time factory. Silently ignoring the key is prohibited:
+`encoding/json` drops a key with no matching struct field, so an operator who carried the key forward would see no
+error while every identity the component mints moved to a different authority.
+
+#### Scenario: a component configuration carrying a retired authority key does not load
+
+- **GIVEN** an `iot_sensor`, `document_processor`, or `weather_station` component configuration that declares
+  `org_id` or `platform`
+- **WHEN** either the port declaration or the component factory reads it
+- **THEN** the load fails with an error naming the field, ADR-102 d2, and `platform.org` / `platform.id` as the
+  replacement
+- **AND** the test that verifies this is `TestRetiredAuthorityKeysAreRefused` in each of the three packages
+
+#### Scenario: an example processor mints from the composition root and nothing else
+
+- **GIVEN** a deployment whose `deps.Platform` is `c360`/`semstreams-e2e-structural`
+- **WHEN** an example processor built by its own factory transforms an input record
+- **THEN** positions 1–2 of every entity it mints — the reading, its zone, and every document family — are
+  `c360.semstreams-e2e-structural`
+- **AND** the minted identity survives a JSON round-trip, because the payload carries the minted value rather than
+  the authority it was minted from
+- **AND** the test that verifies this is `TestComponentMintsUnderDeploymentAuthority` in each of the three packages
+
 ### Requirement: Segment semantics are enforced by the entity-ID corpus audit
 
 The entity-ID corpus audit MUST report, in addition to lexical findings, `authority_literal` for any literal,

@@ -20,6 +20,7 @@ import (
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/storage/objectstore"
+	"github.com/c360studio/semstreams/types"
 	dto "github.com/prometheus/client_model/go"
 )
 
@@ -324,8 +325,8 @@ func TestIntegration_BaseMessageRoundTrip(t *testing.T) {
 		Description: "A comprehensive guide to workplace safety",
 		Body:        "This document covers all safety procedures...",
 		Category:    "safety",
-		OrgID:       "test-org",
-		Platform:    "test-platform",
+		EntityIDValue: document.MintDocumentEntityID(
+			types.PlatformMeta{Org: "test-org", Platform: "test-dep"}, "safety", "doc-test-001"),
 	}
 
 	// 2. Create BaseMessage wrapping the Document
@@ -693,8 +694,8 @@ func TestIntegration_ContentStorable_NoBinary(t *testing.T) {
 		Description: "This document has no binary content",
 		Body:        "Just text content here",
 		Category:    "text",
-		OrgID:       "test-org",
-		Platform:    "test",
+		EntityIDValue: document.MintDocumentEntityID(
+			types.PlatformMeta{Org: "test-org", Platform: "test-dep"}, "text", "doc-no-binary-001"),
 	}
 
 	// Store content - should work without binary
@@ -845,8 +846,8 @@ func TestIntegration_ExtractTextFields_KeyMapping(t *testing.T) {
 		Description: "This is the abstract/description text", // Maps to "abstract" role
 		Body:        "This is the body text",
 		Category:    "test",
-		OrgID:       "test",
-		Platform:    "test",
+		EntityIDValue: document.MintDocumentEntityID(
+			types.PlatformMeta{Org: "test-org", Platform: "test-dep"}, "test", "test-doc-001"),
 	}
 
 	// Create BaseMessage with Document payload
@@ -923,7 +924,9 @@ func TestIntegration_GH400_StoreContentStampsInstanceName(t *testing.T) {
 
 	doc := &document.Document{
 		ID: "gh400-doc-001", Title: "Canonical Instance", Description: "ref stamping",
-		Body: "verbatim body", Category: "test", OrgID: "org", Platform: "plat",
+		Body: "verbatim body", Category: "test",
+		EntityIDValue: document.MintDocumentEntityID(
+			types.PlatformMeta{Org: "org", Platform: "dep1"}, "test", "gh400-doc-001"),
 	}
 
 	ref, err := store.StoreContent(ctx, doc)
@@ -949,7 +952,9 @@ func TestIntegration_GH400_StoreContentDefaultsToBucketName(t *testing.T) {
 
 	doc := &document.Document{
 		ID: "gh400-doc-002", Title: "Default Bucket", Description: "fallback",
-		Body: "verbatim body", Category: "test", OrgID: "org", Platform: "plat",
+		Body: "verbatim body", Category: "test",
+		EntityIDValue: document.MintDocumentEntityID(
+			types.PlatformMeta{Org: "org", Platform: "dep1"}, "test", "gh400-doc-002"),
 	}
 
 	ref, err := store.StoreContent(ctx, doc)

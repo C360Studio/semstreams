@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/c360studio/semstreams/test/e2e/config"
 )
 
 // QueryLoadResult holds aggregate results from the query load phase.
@@ -44,21 +46,30 @@ type querySpec struct {
 	Query string
 }
 
+// tierEntity composes an entity ID under the deployment authority of the tier
+// the throughput scenario runs against. `task e2e:throughput` brings up the
+// STATISTICAL compose profile (docker/compose/tiered.yml), so every entity the
+// example processors mint carries configs/statistical.json's platform.org /
+// platform.id in positions 1-2 (ADR-102 d2).
+func tierEntity(suffix string) string {
+	return config.TierEntityID(config.VariantStatistical, suffix)
+}
+
 // knownEntityIDs returns entity IDs known to exist in the statistical testdata.
 // Entity IDs are built by iot_sensor as: {org}.{platform}.sensor.environmental.{type}.{device_id}
 // where {type} comes from the "type" field in sensors.jsonl (e.g., "combustible_gas", not "gas").
 func knownEntityIDs() []string {
 	return []string{
-		"c360.logistics.sensor.environmental.temperature.temp-sensor-001",
-		"c360.logistics.sensor.environmental.temperature.temp-sensor-002",
-		"c360.logistics.sensor.environmental.humidity.humid-sensor-001",
-		"c360.logistics.sensor.environmental.pressure.pressure-sensor-001",
-		"c360.logistics.sensor.environmental.power.power-sensor-001",
-		"c360.logistics.sensor.environmental.vibration.vibration-sensor-001",
-		"c360.logistics.sensor.environmental.flow.flow-sensor-001",
-		"c360.logistics.sensor.environmental.combustible_gas.gas-sensor-001",
-		"c360.logistics.sensor.environmental.illumination.light-sensor-001",
-		"c360.logistics.sensor.environmental.level.level-sensor-001",
+		tierEntity("sensor.environmental.temperature.temp-sensor-001"),
+		tierEntity("sensor.environmental.temperature.temp-sensor-002"),
+		tierEntity("sensor.environmental.humidity.humid-sensor-001"),
+		tierEntity("sensor.environmental.pressure.pressure-sensor-001"),
+		tierEntity("sensor.environmental.power.power-sensor-001"),
+		tierEntity("sensor.environmental.vibration.vibration-sensor-001"),
+		tierEntity("sensor.environmental.flow.flow-sensor-001"),
+		tierEntity("sensor.environmental.combustible_gas.gas-sensor-001"),
+		tierEntity("sensor.environmental.illumination.light-sensor-001"),
+		tierEntity("sensor.environmental.level.level-sensor-001"),
 	}
 }
 
@@ -81,12 +92,13 @@ func buildQueryPool() []querySpec {
 	}
 
 	// Prefix queries (20 entries = 20%)
+	authority := config.TierAuthority(config.VariantStatistical)
 	prefixes := []string{
-		"c360.logistics",
-		"c360.logistics.environmental",
-		"c360.logistics.sensor.environmental",
-		"c360.logistics.sensor.environmental.temperature",
-		"c360.logistics.warehouse",
+		authority,
+		authority + ".environmental",
+		authority + ".sensor.environmental",
+		authority + ".sensor.environmental.temperature",
+		authority + ".warehouse",
 	}
 	for i := range 20 {
 		pfx := prefixes[i%len(prefixes)]

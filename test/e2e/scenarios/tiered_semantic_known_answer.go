@@ -29,8 +29,12 @@ type knownAnswerTerm struct {
 }
 
 type knownAnswerDigest struct {
-	entityID string
-	label    string
+	// entitySuffix is positions 3-6 of the fixture entity —
+	// system.domain.type.instance. Positions 1-2 are the running tier's own
+	// platform.org / platform.id (ADR-102 d2) and are supplied at probe time,
+	// because the three tiers deploy three different authorities.
+	entitySuffix string
+	label        string
 }
 
 // knownAnswerTerms are the corpus probes for the semantic-tier known-answer
@@ -41,8 +45,8 @@ var knownAnswerTerms = []knownAnswerTerm{
 		term:      "forklift",
 		substrAny: []string{"forklift", "fl-042", "fl_042"},
 		requiredDigest: &knownAnswerDigest{
-			entityID: "c360.logistics.document.content.operations.doc-ops-001",
-			label:    "Forklift Operation Manual",
+			entitySuffix: "document.content.operations.doc-ops-001",
+			label:        "Forklift Operation Manual",
 		},
 	},
 	{
@@ -82,11 +86,16 @@ func (s *TieredScenario) executeValidateGlobalSearchKnownAnswer(ctx context.Cont
 
 	level := 0 // matches the level the Meshtastic bug surfaced at
 
+	mint, err := s.tierMinter(result)
+	if err != nil {
+		return err
+	}
+
 	results := make([]map[string]any, 0, len(knownAnswerTerms))
 	var failures []string
 
 	for _, ka := range knownAnswerTerms {
-		probe := s.runKnownAnswerProbe(ctx, gatewayURL, ka, level)
+		probe := s.runKnownAnswerProbe(ctx, gatewayURL, ka, level, mint)
 		results = append(results, probe.detail)
 		if probe.failure != "" {
 			failures = append(failures, probe.failure)
@@ -116,7 +125,9 @@ type knownAnswerProbeResult struct {
 }
 
 // runKnownAnswerProbe runs a single globalSearch + known-answer assertion.
-func (s *TieredScenario) runKnownAnswerProbe(ctx context.Context, gatewayURL string, ka knownAnswerTerm, level int) knownAnswerProbeResult {
+func (s *TieredScenario) runKnownAnswerProbe(
+	ctx context.Context, gatewayURL string, ka knownAnswerTerm, level int, mint func(string) string,
+) knownAnswerProbeResult {
 	resp, latency, err := s.sendGlobalSearchAtLevel(ctx, gatewayURL, ka.term, level)
 	if err != nil {
 		return knownAnswerProbeResult{
@@ -159,13 +170,16 @@ func (s *TieredScenario) runKnownAnswerProbe(ctx context.Context, gatewayURL str
 				ka.term, gs.Count, gs.Summarized, len(gs.EntityIDs), len(gs.EntityDigests), len(gs.CommunitySummaries), ka.substrAny),
 		}
 	}
-	if required := ka.requiredDigest; required != nil && !hasExactEntityDigestLabel(gs, required.entityID, required.label) {
-		return knownAnswerProbeResult{
-			detail: detail,
-			failure: fmt.Sprintf(
-				"term %q: compact digest %q did not carry exact label %q in EntityDigest.Label",
-				ka.term, required.entityID, required.label,
-			),
+	if required := ka.requiredDigest; required != nil {
+		entityID := mint(required.entitySuffix)
+		if !hasExactEntityDigestLabel(gs, entityID, required.label) {
+			return knownAnswerProbeResult{
+				detail: detail,
+				failure: fmt.Sprintf(
+					"term %q: compact digest %q did not carry exact label %q in EntityDigest.Label",
+					ka.term, entityID, required.label,
+				),
+			}
 		}
 	}
 	return knownAnswerProbeResult{detail: detail}

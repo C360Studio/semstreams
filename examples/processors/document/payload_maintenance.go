@@ -8,6 +8,8 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
+	"github.com/c360studio/semstreams/types"
 )
 
 // Maintenance represents a maintenance record entity. It implements ContentStorable.
@@ -23,27 +25,35 @@ type Maintenance struct {
 	Category       string   `json:"category"`        // equipment, facility, etc.
 	Tags           []string `json:"tags"`
 
-	// Context fields (set by processor from config, preserved through JSON for NATS transport)
-	OrgID    string `json:"org_id,omitempty"`
-	Platform string `json:"platform,omitempty"`
+	// EntityIDValue is this record's own identity, minted once by the
+	// processor under the composition root's platform.org / platform.id and
+	// carried on the wire from there (ADR-102 d2).
+	EntityIDValue string `json:"entity_id"`
 
 	// Storage reference (set by processor)
 	storageRef *message.StorageReference `json:"-"`
 }
 
-// EntityID returns a federated entity ID for the maintenance record.
-// Example: "acme.logistics.work.maintenance.completed.maint-001"
+// EntityID returns the identity minted for this maintenance record.
 func (m *Maintenance) EntityID() string {
-	status := m.Status
+	return m.EntityIDValue
+}
+
+// MintMaintenanceEntityID mints a maintenance record's federated entity ID under
+// the deployment authority (ADR-102 d2): system = work, domain = maintenance.
+// Example: "acme.dep1.work.maintenance.completed.maint-001"
+func MintMaintenanceEntityID(authority types.PlatformMeta, status, id string) string {
 	if status == "" {
-		status = "pending"
+		status = defaultMaintenanceStatus
 	}
-	return fmt.Sprintf("%s.%s.work.maintenance.%s.%s",
-		m.OrgID,
-		m.Platform,
-		status,
-		m.ID,
-	)
+	return semtypes.EntityID{
+		Org:      authority.Org,
+		Platform: authority.Platform,
+		System:   workSystem,
+		Domain:   maintenanceDomain,
+		Type:     status,
+		Instance: id,
+	}.Key()
 }
 
 // Triples returns METADATA ONLY facts about this maintenance record.
@@ -198,11 +208,8 @@ func (m *Maintenance) Validate() error {
 	if m.Title == "" {
 		return fmt.Errorf("title is required")
 	}
-	if m.OrgID == "" {
-		return fmt.Errorf("org_id is required (set by processor)")
-	}
-	if m.Platform == "" {
-		return fmt.Errorf("platform is required (set by processor)")
+	if m.EntityIDValue == "" {
+		return fmt.Errorf("entity_id is required; mint it with MintMaintenanceEntityID under the deployment authority")
 	}
 	return nil
 }

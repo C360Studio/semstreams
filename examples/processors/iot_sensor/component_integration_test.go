@@ -85,11 +85,12 @@ func TestIntegrationIoTSensorConsumerReplaysMessagePublishedBeforeStart(t *testi
 				},
 			}},
 		},
-		OrgID:    "c360",
-		Platform: "integration",
 	})
 	require.NoError(t, err)
-	discoverable, err := NewComponent(rawConfig, component.Dependencies{NATSClient: tc.Client})
+	discoverable, err := NewComponent(rawConfig, component.Dependencies{
+		NATSClient: tc.Client,
+		Platform:   component.PlatformMeta{Org: "c360", Platform: "integration"},
+	})
 	require.NoError(t, err)
 	processor := discoverable.(*Component)
 	require.NoError(t, processor.Start(ctx))
