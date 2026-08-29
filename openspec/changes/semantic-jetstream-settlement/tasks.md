@@ -17,12 +17,12 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 - [x] 2.1 Characterize every legacy ACK, 30-second retry, Term, 5-second cancellation, InProgress, and error-chain path.
 - [x] 2.2 Add pre-implementation tests for all five DeliveryDecision constants, zero/unknown decisions, the
       exact error-last `DeliveryWork(context.Context, []byte)` signature, per-delivery and nil payloads, every
-      valid/invalid tuple, error unwrapping, typed panic quarantine, and the absence of a disposition constructor family.
+      valid/invalid tuple, error unwrapping, typed panic quarantine, and no disposition constructor family.
 - [x] 2.3 Add the complete DeliveryResult decision/handling truth table: exact requested-decision preservation, typed
       causes, cause reachability, local-method predicates, false server confirmation, quarantine, and
       OwnerStopRequired.
-- [x] 2.4 Add pre-implementation retry-policy tests for zero, immediate Nak, fixed delayed Nak, nonpositive delay, and preservation
-      of semantic cause across local method success/failure.
+- [x] 2.4 Add pre-implementation retry-policy tests for zero, immediate Nak, fixed delayed Nak, nonpositive delay,
+      and preservation of semantic cause across local method success/failure.
 - [x] 2.5 Add pre-implementation heartbeat-policy tests for nil/ended context, nil work, invalid retry,
       heartbeat/AckWait/BackOff
       bounds, equality, canonical default, defensive copy, and zero runtime defense before Data or any message method.
@@ -32,13 +32,22 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       method executor.
 - [x] 2.8 Prove `ConsumeWithHeartbeat`, `TerminateDelivery(error) error`, and `PermanentDeliveryError`
       characterization unchanged after private executor extraction.
-- [ ] 2.9 Add the deprecation notice and exact shrinking AST allowlist for `ConsumeWithHeartbeat` only; docs/examples
+- [ ] 2.9 Add failing tests for opaque `DeliveryAttempt`, exact
+      `DeliveryWork(context.Context, DeliveryAttempt, []byte)` signature, nil-impossible value semantics, zero
+      behavior, first delivery, second delivery, and conservative crash-before-call redelivery.
+- [ ] 2.10 Add failing tests for metadata error, nil metadata, and zero delivery number. Assert typed
+      `DeliveryMetadataUnavailableError`, cause reachability, Quarantine, OwnerStopRequired, one Metadata call, and
+      zero Data, work, heartbeat, or terminal calls.
+- [ ] 2.11 Implement metadata observation before Data/work, migrate all current typed callbacks and fakes, preserve
+      C8/C9, and prove panic, cancellation, control-loss, and every started task still join under valid metadata.
+- [ ] 2.12 Add the deprecation notice and exact shrinking AST allowlist for `ConsumeWithHeartbeat` only; docs/examples
       advertise only the permanent typed API.
 
 ## 3. TDD owner-private control loss
 
 - [x] 3.1 Build a test-only owner harness; add no shared production gate.
-- [x] 3.2 Test callback-before-handle fatal buffering, capacity one, concurrent admission, and already-admitted completion.
+- [x] 3.2 Test callback-before-handle fatal buffering, capacity one, concurrent admission, and already-admitted
+      completion.
 - [x] 3.3 Test post-latch callbacks perform no work, heartbeat, Ack, Nak, delayed Nak, or Term.
 - [x] 3.4 Test InProgress failure with joined Ack/Retry/Terminate/Quarantine preserves meaning, attempts no terminal
       method, sets OwnerStopRequired, and stops the exact handle outside callback.
@@ -55,7 +64,9 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       Retry; immutable terminal/route poison Term; unknown publish outcome Quarantine before MaxDeliver=0 retry.
 - [x] 4.5 Migrate dispatch two bindings to the permanent typed API and exact-owner control-loss reaction.
 - [x] 4.6 Assert held model/loop/AgentRun source, config, settlement, cancellation, logs, and health remain unchanged.
-- [ ] 4.7 Replace builder-only tests with permanent policy/API integration tests, recheck zero adopters, obtain the
+- [ ] 4.7 Prove metadata-unavailable results close admission and drain the exact tools or dispatch handle outside
+      callback, including callback-before-handle ordering.
+- [ ] 4.8 Replace builder-only tests with permanent policy/API integration tests, recheck zero adopters, obtain the
       approved Stage A gate, and remove `NewDurableHandler` without alias.
 
 ## 5. Real-NATS and #1155 Stage A
@@ -67,10 +78,13 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       replay publishes without a second executor effect, and ambiguous post-effect state quarantines.
 - [x] 5.4 Prove dispatch replacement produces no duplicate user response and ambiguous publication never enters
       unlimited retry.
-- [x] 5.5 Prove owner-fatal control loss, post-latch refusal, exact-handle shutdown, and reconstructed ordinary ownership.
+- [x] 5.5 Prove owner-fatal control loss, post-latch refusal, exact-handle shutdown, and reconstructed ordinary
+      ownership.
 - [x] 5.6 Run `GOFLAGS=-mod=readonly task e2e:agentic`: PASS in 2m03.893s with clean teardown; completed replay had
       one executor effect, tools BackOff redelivered at 15s with two quarantine attempts, and dispatch emitted one
       replacement response.
+- [ ] 5.7 With a real durable consumer, observe Number 1 on first delivery and Number 2 with `IsRedelivery` after
+      explicit retry or missing settlement.
 
 ## 6. Non-authorizing binding gates
 
@@ -84,8 +98,8 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       durability, deterministic outputs, rehydration, and replacement proof.
 - [ ] 6.5 BLOCKED AgentRun complete: wait for #1148, rebase/re-inventory, then require its own handler/replay addendum,
       independent reviews, named owner acceptance, and #1155 proof.
-- [ ] 6.6 BLOCKED AgentRun error terminal: wait for #1148, rebase/re-inventory, then require its own handler/replay addendum,
-      independent reviews, named owner acceptance, and #1155 proof.
+- [ ] 6.6 BLOCKED AgentRun error terminal: wait for #1148, rebase/re-inventory, then require its own handler/replay
+      addendum, independent reviews, named owner acceptance, and #1155 proof.
 
 ## 7. Legacy removal and final verification
 
@@ -93,5 +107,7 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 - [ ] 7.2 Reconcile SemStreams-owned migration instructions for measured sister callers without sister mutation.
 - [ ] 7.3 BLOCKED legacy removal: require all six held-binding gates complete, zero repository callers, sister migration
       reconciliation or explicit coordinated break ruling, full #1155 and agentic E2E proof, and later owner approval.
-- [ ] 7.4 Run focused race tests, repository lint/race/integration/schema/contracts, and residual API/context searches.
-- [ ] 7.5 Reconcile OpenSpec task truth and archive as the final content commit, followed by narrow archive/spec-sync review.
+- [ ] 7.4 Run focused race tests, repository lint/race/integration/schema/contracts, and residual API/context
+      searches.
+- [ ] 7.5 Reconcile OpenSpec task truth and archive as the final content commit, followed by narrow archive/spec-sync
+      review.
