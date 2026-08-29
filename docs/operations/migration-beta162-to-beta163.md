@@ -560,8 +560,10 @@ the boundary compares against the pair it already has and reports the real outco
   `agent.loop.run`, nor `agent.run.entity-id`, nor the `rule.task.spawned` back-reference. A chained rule whose
   condition reads `$entity.triple.agent.run.entity-id` or `$entity.triple.rule.spawned_task` off that entity simply
   never fires. **A rule that does not fire logs nothing and fails nothing** — the only signal is
-  `rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` rising and one Info line per dispatch naming
-  which writes were skipped. **It counts DISPATCHES, not entities.** One increment is one `publish_agent` dispatch —
+  `rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` rising and one Info line per dispatch whose
+  `skipped` field names every write that dispatch declined — under `run_scope=new` that is `agent.loop.run`,
+  `agent.run.entity-id` AND `rule.task.spawned`; under `inherit`/`none`, `rule.task.spawned` alone.
+  **It counts DISPATCHES, not entities.** One increment is one `publish_agent` dispatch —
   one (firing entity x `for_each` item) — whose framework writes were all declined. The firing entity does not vary
   across a `for_each` fan-out, so an action fanning out over N items on a single imported entity reports N. Do not
   read the counter as "distinct peer entities we declined to write to"; over a fanning rule pack it exceeds that

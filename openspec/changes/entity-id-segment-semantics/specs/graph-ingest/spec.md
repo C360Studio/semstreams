@@ -58,16 +58,16 @@ provenance this requirement records; it authenticates nothing.
 - **AND** the imported entity's revision is unchanged
 - **AND** the test that verifies this is `TestAuthorityGateRejectsReconcileOfImportedSubject`
 
-#### Scenario: the refusal precedes the state read, so no KV I/O happens on a foreign subject's behalf
+#### Scenario: the refusal is decided from the identity alone, never from the entity's stored state
 
 - **GIVEN** a foreign-authority entity ID `acme.dep2.src.git.commit.zz` that was never persisted
 - **WHEN** an `entity.reconcile` request from a non-import lane names it as subject
 - **THEN** the request is rejected with code `entity_id_authority_invalid` and reason `foreign_authority`, NOT with
-  `entity_not_found` — absence is observable only through the state read, so reporting the authority instead shows
-  the read never happened
+  `entity_not_found` — the verdict does not depend on whether the entity exists
 - **AND** the identical request against a never-persisted LOCAL id `acme.dep1.src.git.commit.zz` IS rejected with
-  `entity_not_found`, which is what makes the previous clause an ordering fact rather than a precedence one
-- **AND** the test that verifies this is `TestAuthorityGateRejectsReconcileBeforeReadingState`
+  `entity_not_found`, so absence IS reachable and IS reported on this lane, and the foreign answer is not
+  "no entity here" under another code
+- **AND** the test that verifies this is `TestAuthorityGateRefusesForeignReconcileRegardlessOfExistence`
 
 #### Scenario: a local lane cannot delete an imported entity
 
@@ -114,9 +114,9 @@ ID — for every run, so the run→loop linkage has one home that never depends 
 carries the deployment's own authority. When the firing entity is a foreign-authority import the rule action MUST
 detect that before any write and MUST issue no mutation request targeting the foreign subject — not even one
 graph-ingest would reject. The decision MUST be recorded once per DISPATCH as
-`rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` with an Info log naming which writes were
-skipped: a counted skip, never a rejection, and one increment for the whole dispatch rather than one per omitted
-write. The counted unit is one `publish_agent` dispatch — one (firing entity, `for_each` item) pair — and MUST NOT be
+`rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` with ONE Info log per dispatch naming EVERY
+write that dispatch skipped, not only the writes decided at the first skip point: a counted skip, never a rejection,
+and one increment for the whole dispatch rather than one per omitted write. The counted unit is one `publish_agent` dispatch — one (firing entity, `for_each` item) pair — and MUST NOT be
 read as one distinct declined entity: `publish_agent` fans out over `for_each` with the firing entity held constant,
 so an action fanning out over N items on a single imported firing entity MUST report N skips for that ONE entity.
 The counter is named for the writes it covers rather than for the run anchor, because
@@ -142,10 +142,22 @@ skipped. Issue #1096 is complete only when this path is implemented and tested.
   `foreign.dep9.agentic-loop.agent.execution.<uuid>`
 - **WHEN** one `publish_agent` action with `run_scope=new` fans out over a `for_each` list of 3 items on it
 - **THEN** 3 tasks are dispatched and `rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` reads 3
-- **AND** those 3 increments describe ONE declined entity, not three: the firing entity is invariant across the
-  fan-out, so the counter MUST NOT be read as a count of distinct peer entities
+- **AND** those 3 increments describe ONE declined entity, not three: all 3 dispatched tasks carry the same `run_id`,
+  which is derived from the firing entity, so the firing entity is invariant across the fan-out and the counter MUST
+  NOT be read as a count of distinct peer entities
 - **AND** no mutation request targets the import and its revision is unchanged
 - **AND** the test that verifies this is `TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity`
+
+#### Scenario: the Info line names every write the dispatch declined
+
+- **GIVEN** the same deployment and the same imported loop, fired by a rule with `run_scope=new`
+- **WHEN** the dispatch declines both the run-anchor pair and the `rule.task.spawned` back-reference
+- **THEN** exactly one Info line is emitted for that dispatch, at level Info and with reason `foreign_authority`
+- **AND** its `skipped` field names `agent.loop.run`, `agent.run.entity-id` AND `rule.task.spawned` — all three are
+  declined on that one dispatch
+- **AND** it names `agent.run.origin-entity-id` as where the linkage went instead, and never names the imported
+  identity
+- **AND** the test that verifies this is `TestForeignFiringSkipLogNamesEveryDeclinedWrite`
 
 #### Scenario: a rule firing on a local loop stamps the anchor pair and the origin
 

@@ -406,23 +406,28 @@ func TestAuthorityGateRejectsReconcileOfImportedSubject(t *testing.T) {
 		"the import's revision must be untouched by the refused reconcile")
 }
 
-// TestAuthorityGateRejectsReconcileBeforeReadingState proves the ordering half
-// of ADR-102 d5 — "before any KV I/O" — which the reconcile test above states
-// but cannot show: asserting the error code and an unchanged revision is equally
-// consistent with reading the entity and then refusing.
+// TestAuthorityGateRefusesForeignReconcileRegardlessOfExistence pins what the
+// reconcile test above cannot: the verdict is decided from the IDENTITY alone
+// and never from the entity's stored state. Asserting a code and an unchanged
+// revision is equally consistent with reading the entity and then refusing.
 //
 // The probe is absence. A missing entity is observable ONLY through
-// fetchEntityState, which reports it as entity_not_found, so the fetch is the
-// one step whose execution leaves a distinguishable trace. Reconciling a
-// never-persisted FOREIGN id returns entity_id_authority_invalid, not
-// entity_not_found — the fetch never ran.
-//
-// The local partner is what makes that evidence rather than coincidence: the
+// fetchEntityState, which reports it as entity_not_found. Reconciling a
+// never-persisted FOREIGN id returns entity_id_authority_invalid instead; the
 // identical request against a never-persisted LOCAL id DOES return
-// entity_not_found, so reaching the fetch demonstrably produces a different
-// outcome. Without it the foreign case would only show that an authority error
-// outranks a not-found error, which is not an ordering claim at all.
-func TestAuthorityGateRejectsReconcileBeforeReadingState(t *testing.T) {
+// entity_not_found. The local partner is what makes the foreign case evidence
+// rather than coincidence: absence IS reachable and IS reported on this lane, so
+// the foreign answer is not "no entity here" wearing a different code.
+//
+// What this does NOT show — and an earlier revision of this comment, and of the
+// scenario naming it, both claimed it did — is that no KV read occurred. A gate
+// that fetched the state FIRST and then authorized, discarding the fetch result
+// when the authority check fails, would satisfy every assertion below.
+// "Before any KV I/O" (ADR-102 d5) is a code-level invariant: authorizeSubject
+// precedes fetchEntityState in every canonical handler. What this test defends
+// is the regression that actually threatens that invariant — moving the
+// authorization after the fetch and letting not-found win — which it kills.
+func TestAuthorityGateRefusesForeignReconcileRegardlessOfExistence(t *testing.T) {
 	h := startAuthorityGateComponent(t, false)
 
 	reconcileOf := func(t *testing.T, entityID string) *errs.ClassifiedError {
@@ -448,8 +453,9 @@ func TestAuthorityGateRejectsReconcileBeforeReadingState(t *testing.T) {
 		return classified
 	}
 
-	// Negative space first: absence IS reachable and IS reported, so the code
-	// below is a statement about ordering and not about which error wins.
+	// Negative space first: absence IS reachable and IS reported on this lane, so
+	// the foreign answer below is a statement about which input decides the
+	// verdict, and not merely about which error code outranks which.
 	local := reconcileOf(t, authorityLocalAbsentID)
 	require.Equal(t, graph.ErrorCodeEntityNotFound, local.Code,
 		"a never-persisted LOCAL subject must reach fetchEntityState and be reported absent — "+
@@ -460,8 +466,9 @@ func TestAuthorityGateRejectsReconcileBeforeReadingState(t *testing.T) {
 		"the authority gate must answer for a foreign subject")
 	assert.Equal(t, semtypes.EntityIDReasonForeignAuthority, foreign.Detail[semtypes.EntityIDDetailReason])
 	assert.NotEqual(t, graph.ErrorCodeEntityNotFound, foreign.Code,
-		"a foreign subject that does not exist must NOT be reported absent: learning it is absent "+
-			"requires the KV read the gate is specified to precede")
+		"a foreign subject that does not exist must NOT be reported absent: the verdict does not "+
+			"depend on whether the entity is there, which is what moving the authorization after "+
+			"the fetch would break")
 }
 
 // TestAuthorityGateRejectsDeleteOfImportedSubject pins the delete lane. An

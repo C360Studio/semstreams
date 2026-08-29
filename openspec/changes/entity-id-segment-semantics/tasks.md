@@ -154,6 +154,13 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
       did not predict:** `rule.task.spawned` is a THIRD framework write to the firing entity on the same action, and
       it reached the foreign subject. The requirement is "no mutation request targets the foreign subject", so the
       skip now covers it; the delta and 6.3 were amended.
+      **Round 2 added** `TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity` (3 `for_each` items, ONE
+      imported loop, 3 increments), because neither test above carries a `ForEach` and so neither can tell
+      "per dispatch" from "per action". **Round 4 added the missing half of it:** it asserted the COUNT but not the
+      invariance the delta hangs on it, so it now decodes all three published envelopes through the production
+      decoder and asserts each carries the same `task.RunID` — derived from the firing entity, therefore the
+      invariance itself. **Round 4 also added** `TestForeignFiringSkipLogNamesEveryDeclinedWrite`, which pins the
+      delta's Info-log promise: the line must name `rule.task.spawned` as well as the anchor pair.
 
 - [x] 2.7 `processor/graph-query/summary_test.go`: `TestGraphSummaryTypeKeyFollowsCanonicalOrder` — the
       `EntityTypeSummary.Type` for `acme.dep1.src.git.commit.a1` is `src.git.commit`, built from named fields.
@@ -1028,12 +1035,15 @@ package; both declarations are now on the payload registrations) and
       receives the firing entity as `originEntityID` (3.8) in both cases. #1096 is complete only when 2.6 is GREEN and
       M6a–M6c are recorded.
       **Done, with the skip WIDER than this row specifies — a defect 2.6 found.** `ActionExecutor` gains unexported
-      `platform types.PlatformMeta` and `metrics *Metrics` with unexported `setPlatform`/`setMetrics`, wired from
-      `rp.platform`/`rp.metrics` in `processor.go`'s existing concrete-type block (no new exported surface);
-      `CreateRuleProcessor` (`factory.go:124`) now refuses an empty `deps.Platform` for the same reason graph-ingest
-      does. `actions.go:1687` mints from `e.platform`; the `strings.SplitN` read-back is deleted; the firing entity
-      is passed to `agentrun.Mint` as `originEntityID`. The guard is `foreignFiringEntity` (`actions.go:571`) with
-      `foreignFiringSkipRecorder` (`:589`) and the unconditional `stampRunAnchors` (`:619`).
+      `platform types.PlatformMeta` and `metrics *Metrics` (no new exported surface). `metrics` is wired from
+      `rp.metrics` by the unexported `setMetrics` in `processor.go`'s existing concrete-type block. `platform` is
+      NOT: it is a constructor parameter of `NewActionExecutorComplete`, for the reason recorded in the round-1
+      correction below, and there is no `setPlatform` — an earlier revision of this row asserted one, and
+      `grep -rn "setPlatform" --include='*.go' .` returns nothing.
+      `CreateRuleProcessor` (`factory.go:125`) now refuses an empty `deps.Platform` for the same reason graph-ingest
+      does. `actions.go:1760` mints from `e.platform`; the `strings.SplitN` read-back is deleted; the firing entity
+      is passed to `agentrun.Mint` as `originEntityID`. The guard is `foreignFiringEntity` (`actions.go:596`) with
+      `foreignFiringSkipRecorder` (`:637`) and the unconditional `stampRunAnchors` (`:667`).
       **The row named two writes; there are THREE.** `rule.task.spawned`, the framework's own back-reference onto
       the firing entity after publish, also reached the imported subject — a rejected request, which the requirement
       forbids as explicitly as an accepted one ("no mutation request targets the foreign subject, not even a rejected
@@ -1044,6 +1054,17 @@ package; both declarations are now on the payload registrations) and
       narrow but WRONG for `run_scope` `inherit`/`none`, where no anchor is in play and only `rule.task.spawned` is
       skipped. Renamed `rule_foreign_firing_writes_skipped_total`, spec restated per-dispatch: free now (no
       dashboard, no alert, no sister consumer) and a breaking series rename later.
+      **ROUND 4 fixed what that rename left half-done in the LOG.** The counter's per-dispatch latch also swallowed
+      the second log call, so the Info line named only the anchors and never `rule.task.spawned` — the write an
+      operator debugging `$entity.triple.rule.spawned_task` is sent looking for by the migration note.
+      `foreignFiringSkipRecorder` now returns `(record, flush)`: `record` accumulates and still increments the
+      counter once per dispatch; the deferred `flush` emits one line naming every declined write. The counted unit is
+      unchanged. Round 4 also corrected three comments refuted by their own files — `foreignFiringEntity`'s
+      "in-repo test-fixture condition" (`processor.go`'s no-NATS branch is a production site with a zero
+      `e.platform`, inert because both guarded writes need a mutator) and its claim that
+      `NewActionExecutorWithMutator` can hold a publisher (it cannot, and there is no publisher setter); and
+      `factory.go`'s absent-authority failure mode, which was stated backwards on a guard: `foreignFiringEntity`
+      short-circuits to `false`, judging every firing entity LOCAL, which is fail-OPEN.
       **ROUND 2 (HIGH-1) corrected that round-1 restatement, which was itself wrong.** It read "an action declining
       N imported entities MUST report N skips", making a false causal claim about `for_each`: `executePublishAgent`
       passes the SAME `ExecutionContext` to every iteration and `publishAgentOnce` reads `entityID` from it, so the
@@ -1131,6 +1152,21 @@ package; both declarations are now on the payload registrations) and
       | `go test -tags=integration -race -count=1 -p 2 ./...` (what CI runs) | exit 0, **153 `ok`, 0 `FAIL`**; `processor/rule` 58.129s, `processor/graph-ingest` 33.069s |
       | `go test ./test/contract/...` | `ok`, 2.504s |
       | `task entity-id:audit` | `entity ID audit passed: 1305 structured candidates across 1 roots`, 0 findings. Baseline re-measured at `b5b106e4` in a scratch worktree: **1303** — the +2 are exactly this round's two never-persisted probe consts (`authorityForeignAbsentID`, `authorityLocalAbsentID`), and neither trips a rule |
+      | `task schema:generate && git status --short schemas/ specs/` | clean, no drift |
+      | `openspec validate --all --strict --no-interactive` | `Totals: 53 passed, 0 failed (53 items)` |
+      | `openspec validate entity-id-segment-semantics --strict` | `Change 'entity-id-segment-semantics' is valid` |
+
+      **RE-RUN after review round 4, all green, serialized on a host verified idle first (load 1.39, no `go test`
+      or `task` process, `docker ps -q` returned nothing):**
+
+      | Gate | Result |
+      |---|---|
+      | `go mod tidy -diff` | exit 0 |
+      | `task lint` | exit 0, no findings; `go fmt` left the tree unmodified |
+      | `go test -race -count=1 ./...` | exit 0, **153 `ok`, 0 `FAIL`** |
+      | `go test -tags=integration -race -count=1 -p 2 ./...` (what CI runs) | exit 0, **153 `ok`, 0 `FAIL`**; `processor/rule` 41.415s, `processor/graph-ingest` 30.495s |
+      | `go test ./test/contract/...` | `ok`, 2.654s |
+      | `task entity-id:audit` | `entity ID audit passed: 1306 structured candidates across 1 roots`, 0 findings. Baseline re-measured at `5c345833` in a scratch worktree: **1305**. The +1 is measured, not inferred: a JSON-corpus diff (`-format json`) attributes it to the single new `ExecutionContext{EntityID: runScopeImportedLoop}` in `TestForeignFiringSkipLogNamesEveryDeclinedWrite`; every other delta in the corpus is a line-number shift of an existing literal |
       | `task schema:generate && git status --short schemas/ specs/` | clean, no drift |
       | `openspec validate --all --strict --no-interactive` | `Totals: 53 passed, 0 failed (53 items)` |
       | `openspec validate entity-id-segment-semantics --strict` | `Change 'entity-id-segment-semantics' is valid` |
@@ -1294,6 +1330,15 @@ package; both declarations are now on the payload registrations) and
       introduced**, which is the round's carry-forward: a remedy is new code and needs the original diff's
       adversarial pass. Dispositions and the round-2 mutation evidence are in `conformance.md` §"Slice B
       implementation review — round 2". Re-review of round 2 is outstanding.
+      **Slice B round 3:** APPROVED at `5c345833` (0 BLOCKING, 0 HIGH).
+      **Slice B round 4:** artifact-accuracy corrections raised against that same approved commit — 0 BLOCKING,
+      0 HIGH, and every item an artifact claiming more than the tree supports. Two sat in the spec delta, which
+      archives as current truth: a fan-out scenario asserting an invariance its named test did not check, and an
+      ordering scenario claiming "no KV I/O" from evidence that only shows which input decides the verdict. Round 3's
+      fix for round 2's NIT reproduced the same defect in a new scenario, which is the round's carry-forward: re-read
+      a new artifact against the code it describes the way you would review someone else's. Dispositions, the three
+      mutation transcripts and one recorded under-powered mutant are in `conformance.md` §"Slice B implementation
+      review — round 4". Re-review of round 4 is outstanding.
 - [ ] 7.4 Owner-run cross-agent round where the owner asks for it; fixes and re-review recorded in `conformance.md`.
 - [ ] 7.5 `openspec archive entity-id-segment-semantics` + spec sync as the final content commit; narrow reviewer
       check of the archive/spec sync recorded.

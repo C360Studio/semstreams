@@ -221,7 +221,7 @@ name literal.
   (**RENAMED during slice B implementation review to `rule_foreign_firing_writes_skipped_total`, and restated as once
   per DISPATCH rather than per action**: the recorder lives in `publishAgentOnce`, which runs once per `for_each`
   item, and under `run_scope` `inherit`/`none` no anchor is in play so the anchor name was wrong, not just narrow) with
-  an Info log naming the rule and the lane; it is a counted skip, never a rejection. The linkage moves to the LOCAL
+  an Info log naming the rule and which writes were skipped (there is no lane field; corrected in review round 4, which also made the line name `rule.task.spawned` rather than the anchors alone); it is a counted skip, never a rejection. The linkage moves to the LOCAL
   run entity: `agent.run.origin-entity-id` (`@id`; `agvocab.RunOriginEntityID`, declared beside `LoopRunEntityID` in `vocabulary/agentic/predicates.go:502`) as a birth predicate of the local run entity (`AgentRun.OriginEntityID`, lifecycle tag `predicate=agent.run.origin-entity-id`, set by `agentrun.Mint` at creation), set for every run, local or imported origin, so the run→loop pointer has one home that
   never depends on writing the loop. The run entity today carries only `agent.run.phase` and
   `agent.run.parent-entity-id` (`agentrun.go:114-124`; ADR-053) — the parent RUN, not the originating loop — so no
