@@ -32,6 +32,13 @@ error publication failures remain log-only (`component.go:583-635,717-755,1049`)
 
 ## Surface and lane census
 
+### `user.message.>` / `UserMessage`
+
+External producers publish; dispatch consumes and ACKs after a void handler
+(`processor/agentic-dispatch/component.go:517-534,703-739`). Downstream `agent.task` publication failures are logged
+without reaching source settlement (`component.go:858-949`). Neither the user-message source nor its resulting task
+has a replacement correlation contract at this boundary.
+
 ### `agent.task.*` / `TaskMessage`
 
 Dispatch publishes; loop `taskInputHandler` calls `handleTaskMessage`. `LoopEntity` is written to `AGENT_LOOPS`, but
@@ -71,11 +78,18 @@ Dispatch publishes; loop consumes. The void adapter covers pause/cancel/resume
 (`agentic-loop/component.go:897-898,2070-2103`); transition, KV write, and downstream publication cannot classify
 source settlement.
 
-### `agent.approval_pending.*` / `ApprovalRequest`
+### `agent.approval_pending.*` / `ApprovalPendingEvent`
 
-Loop publishes; dispatch consumes. Dispatch ACKs after a void process-cache update
+The stream payload is `ApprovalPendingEvent`; `ApprovalRequest` is the HTTP DTO. Loop publishes and dispatch consumes.
+Dispatch ACKs after a void process-cache update
 (`agentic-dispatch/component.go:616-645,1021-1060`). `LoopTracker` and its early buffer are process-only. Replacement
 loses HTTP correlation and returns 404/409 (`http.go:705-872`).
+
+### `agent.created.*` / `LoopCreatedEvent`
+
+Loop publishes; dispatch consumes, updates process-only `LoopTracker`, and ACKs
+(`processor/agentic-dispatch/component.go:567-589,965-1012`). Replacement loses that correlation, including the
+ability to attach buffered approvals to the newly observed loop.
 
 ### `agent.approval_response.*` / `ApprovalResponse`
 
@@ -123,6 +137,9 @@ ignored (`processor/agentic-loop/governance_dispatcher.go:334-384,468-507`).
 - **Status and current facts:** `AGENT_LOOPS` `LoopEntity`, `COMPLETE_` records, and the #733 consumer-info inflight
   query. `LoopEntity` is current loop state, not proof of outstanding work. #733 rejects deriving liveness from stale
   loop state.
+- **Status and health:** `agentic-loop.Component.Health()` reports component start, audit, and provider state but no
+  settlement or process-replacement state (`processor/agentic-loop/component.go:418-449`). A healthy process signal
+  therefore does not prove that an active loop can resume.
 - **Audit:** `AGENT_TRAJECTORIES` and Store evidence. The `agentic-loop` spec says audit failure does not block
   transition, publication, or ACK. Terminal audit is not a seal, checkpoint, completeness, or recovery authority.
 - **Delivery ownership:** #759 / PR #1156 owns stateless settlement; each component owns exact native consume handles.
@@ -143,13 +160,22 @@ ignored (`processor/agentic-loop/governance_dispatcher.go:334-384,468-507`).
   Existing same-process tests are not proof.
 - **Governance result content:** #1140 owns tool-result governance/classification, not #1146 settlement/correlation.
 - **Lifecycle:** the component/service process owner retains exact consumer handles. No restart supervisor or
-  in-process replacement authority was found.
+  in-process replacement authority was found. `AGENT_LOOPS` is provisioned with history 10 and a 24-hour TTL
+  (`processor/agentic-loop/component.go:772-792`), which bounds any recovery design that reads it.
+- **Ownership and active/active behavior:** durable names derive from subject plus `ConsumerNameSuffix`; component-owned
+  handles drain during shutdown (`processor/agentic-loop/component.go:73-75,692-769,944-948`;
+  `processor/agentic-dispatch/component.go:1258-1265`). The current shape coordinates through durable-consumer
+  identity, not an active/active recovery owner.
 - **Readers:** loop, model, tools, dispatch, governance, HTTP approval clients, rules, and tests depend on a mixture of
   durable IDs and process-only indexes. No single recovery read path exists.
 - **Writers:** the same components, HTTP approval input, and rule verdict publishers perform durable writes, but source
   settlement does not consistently observe their outcome.
 - **Recovery:** JetStream redelivery, completed tool replay, terminal route reread, and the approval sweeper provide
   lane-specific incomplete coverage. No generic recovery ledger, state machine, or checkpoint implementation exists.
+- **Existing recovery-pattern owners:** graph-index hydrates authoritative KV before live processing
+  (`processor/graph-index/component.go:999-1019,1068-1080`); rule rehydrates watched entity state
+  (`processor/rule/entity_watcher.go:491-557`). #1145 separately names coordinator reconciliation for multi-step owners.
+  These are same-class precedents to measure, not authority to copy into agentic-loop without a replacement failpoint.
 
 ## Active change, issue, spec, and ADR overlap
 
@@ -176,6 +202,13 @@ No production struct retaining `context.Context` was found on the touched compon
 for exact component, sweeper, and activity lifecycles; they do not establish a second owner. Nearby detached contexts
 are bounded terminal/durability helpers (`processor/agentic-loop/trajectory_handler_wiring.go:148`, tools web
 emitters, and a recording finalizer). No unbounded `context.WithoutCancel` recovery loop or supervisor was found.
+
+Two bounded helpers do not join their goroutines before returning. `runWithBudget` may return when its budget expires
+while work continues under a canceled child context (`processor/agentic-loop/component.go:1719-1756`); completion,
+failure, and synthetic graph stamps use it immediately before downstream publication and source settlement
+(`component.go:1642-1707`). `recordTrajectoryBatchWithin` has the same return-before-join shape
+(`processor/agentic-loop/trajectory_handler_wiring.go:140-182`). The inventory cannot assume callback settlement or
+component `Stop` waits for those goroutines.
 
 The exact search for `supervisor|checkpoint|outbox|recovery state machine|event sourc|recovery ledger` found only
 prose or domain state labels and no generic recovery implementation.
@@ -218,14 +251,26 @@ prose or domain state labels and no generic recovery implementation.
 - **Discovery today:** misleading docs and same-process tests.
 - **Should know:** no supervisor/recovery-mode/checkpoint knob; observe actual replacement outcomes.
 
+### Governance rule or configuration author
+
+- **Must know today:** the exact `agent.toolcall.{approved,rejected}.<loop>.<call>` subject plus matching `decision`
+  and `call_id` fields.
+- **If they do nothing:** a late, mismatched, or uncorrelated verdict is ignored; the void adapter then permits ACK
+  (`processor/agentic-loop/governance_dispatcher.go:468-507`;
+  `processor/agentic-loop/component.go:901-909,2295-2317`).
+- **Discovery today:** distributed ADR/config/rule conventions and runtime logs; no typed boot-time correlation proof.
+- **Should know:** the semantic approve/reject decision and stable identities. The framework should absorb subject
+  construction, correlation validation, and settlement classification.
+
 The orchestration-boundary check confirms that restart safety does not create a third orchestration layer. Rules still
 trigger, lifecycle still owns declared entity phase, and components still execute work. Any later durable fact must
 have one exclusive owner and a named reader; this inventory admits no generic supervisor or workflow-aware component.
 
 ## Exact gap-closing searches
 
-- Subjects and payloads: all agentic port spellings plus `TaskMessage`, `AgentRequest`, `AgentResponse`, `ToolCall`,
-  `ToolResult`, `UserSignal`, `ApprovalRequest`, `ApprovalResponse`, and governance verdict types.
+- Subjects and payloads: all agentic port spellings plus `UserMessage`, `LoopCreatedEvent`, `ApprovalPendingEvent`,
+  `TaskMessage`, `AgentRequest`, `AgentResponse`, `ToolCall`, `ToolResult`, `UserSignal`, `ApprovalRequest`,
+  `ApprovalResponse`, and governance verdict types.
 - Delivery and settlement: every `ConsumeWithHeartbeat`, void adapter, `Ack`, `Nak`, `Term`, `InProgress`, and PubAck
   call on the touched agentic surfaces.
 - Durable state: every `AGENT_LOOPS` read/write/watch/list operation and every `TOOL_CALL_OUTCOMES` completed-outcome
