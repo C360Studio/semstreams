@@ -5,8 +5,9 @@
 - Baseline: `origin/main@b060511f383d74aa6a8684e39e42020a3b073a9b`.
 - Claim commit: `9a9a2ea22474155ca7ce4bdb22a117a2ebcd4a75`.
 - Source: completed read-only SemStreams architect census reconciled to that baseline and claim.
-- Review state: **PENDING independent `INVENTORY PASS`**.
-- This checkpoint authorizes inventory review only. It does not authorize target-state design or implementation.
+- Reviewed content SHA-256: `70603493e56887c3e355dcf9087891e03cf7ea7764454fcf528e0686b1bdfe9d`.
+- Independent result: **`INVENTORY PASS`**.
+- This checkpoint authorizes options/design drafting only. It does not authorize target state or implementation.
 
 ## Claimed gap
 
