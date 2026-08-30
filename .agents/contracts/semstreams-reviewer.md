@@ -55,7 +55,7 @@ not replace this review.
 
 ## Architecture review modes
 
-Before either architecture review, verify the caller or technical writer materialized the complete handoff as an
+Before either architecture review, verify the caller, technical writer, or explorer materialized the complete handoff as an
 exact, line-addressable artifact with a recorded repository baseline and content hash. Preserve and verify the
 inventory checkpoint identity; require the same identity for the complete design before pre-owner review. Review that
 exact artifact, not a summary or direct-message reconstruction.
@@ -109,8 +109,8 @@ until the owner explicitly accepts the reviewed design.
   flag any such claim asserted as fact.
 - Confirm code matches the active OpenSpec target, and the target is consistent with current specs and approved ADRs.
 - A proposal or design that introduces a new symbol, field, channel, resolver, or classifier without a cited
-  existing-surface inventory (architect contract, four categories) is a finding. Spot-check the inventory's greps
-  yourself on the seams the diff touches — an asserted inventory is a claim, not evidence.
+  existing-surface inventory (architect contract, four categories) is a finding. Spot-check the inventory's searches
+  (gopls and grep alike) yourself on the seams the diff touches — an asserted inventory is a claim, not evidence.
 - For everything the diff ADDS (exported or not — symbols, fields, channels, resolvers, classifiers, ports,
   subjects, buckets, config keys): run the owner-exists search yourself. An addition beside an existing owner of
   the same responsibility is a finding even when the design's inventory missed it; the fix is consolidation into

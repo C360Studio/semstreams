@@ -55,8 +55,11 @@ base: <40-hex sha>
 The four categories mirror the architect contract: **Claimed gap** (every plausible spelling of what the change says
 is missing), **Spellings of the fact** (every place the modeled fact is computed, declared, interpreted, persisted),
 **Adjacent claims** (specs, ADRs, active changes, open issues, draft PRs, sister-repo asks on the surface),
-**Consumers** (for each named symbol, port, subject, bucket, or field, its present readers). Every entry is a pin —
-`` `path:line` — `text` `` — verifiable by `task inventory:verify -- <file>`. Every search goes under `## Searches`
+**Consumers** (for each named symbol, port, subject, bucket, or field, its present readers). Every entry in the first,
+second, and fourth categories is a pin — `` `path:line` — `text` `` — verifiable by `task inventory:verify -- <file>`.
+Under **Adjacent claims**, in-tree files are pins too; an open issue, draft PR, or sister-repo ask has no `path:line`
+and is written `- #1180 — <title>` or `- semmem: <ask>`, deliberately outside the pin grammar — the verifier checks the
+pins in that section and ignores its other bullets. Every search goes under `## Searches`
 with its hit count, **zero-hit searches included**: an empty category is proven by the searches that came up empty,
 and an unrecorded search is how a category gets silently skipped. A category with nothing in it says
 `(none — see Searches)`.

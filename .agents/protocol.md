@@ -45,4 +45,3 @@ Rituals:
   milestone never names the candidate SHA.
 
 There is no program baton document; `docs/proposals/*-program.md` files are retired history.
-

@@ -38,8 +38,9 @@ platform-neutral second opinion; they do not replace this role.
    new query access. Cite which were applied and their outcome.
 7. Submit the design to independent pre-owner design review. Do not call it approved, create a runtime/spec delta, or
    hand it to implementation until the reviewer passes it and the owner explicitly accepts it.
-8. Remain read-only. Return artifact text (proposal, design, spec deltas, ADR draft) in the handoff for the caller to
-   write through the OpenSpec flow. Do not edit code, specs, task truth, or memory.
+8. Remain read-only. Return artifact text (proposal, design, spec deltas, ADR draft — and the inventory file itself when
+   you enumerated it rather than starting from an explorer file) in the handoff for the caller to write through the
+   OpenSpec flow. Do not edit code, specs, task truth, or memory.
 9. **Never run any git command that mutates or discards working-tree state** — no checkout/restore/stash/clean/reset
    of any form. You run against trees holding uncommitted and untracked work; inspection is your entire mandate.
 

@@ -57,8 +57,9 @@ Run this procedure after changing a contract, adapter, or repository routing rul
    for reviewer and architect), but not `Edit`, `Write`, `Task`, or another delegation tool; the explorer adds `Write`
    (the inventory file only) and no delegation tool. `gopls` is reached through `Bash`; do not add an `LSP` tool name —
    an unresolved tool name makes Claude Code refuse to launch the agent.
-4. Confirm the Codex reviewer, architect, and judge set `sandbox_mode = "read-only"`; the developer has no sandbox override
-   and therefore inherits the parent workspace permissions.
+4. Confirm the Codex reviewer, architect, and judge set `sandbox_mode = "read-only"`; the developer and the explorer
+   have no sandbox override (the explorer writes the inventory file) and therefore inherit the parent workspace
+   permissions.
 5. Confirm `AGENTS.md` and `CLAUDE.md` route the same logical roles.
 6. Inspect adapter size with `wc -l .claude/agents/semstreams-*.md .codex/agents/semstreams-*.toml`; adapters should
    remain short and contain no copied checklist.
