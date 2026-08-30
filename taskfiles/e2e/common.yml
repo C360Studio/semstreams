@@ -1,24 +1,50 @@
 version: "3"
 
 tasks:
+  # gh#1175. Two defects made this guard worse than useless.
+  #
+  # 1. It raced the teardown. `check-ports` was a SIBLING of `:e2e:clean` in
+  #    every tier's `deps:` list, and Task runs deps in PARALLEL — in run
+  #    33277988561 the guard printed "[OK] All ports available" at 22:12:25.7
+  #    while `e2e:clean` was still running `docker compose ... down` until
+  #    22:12:26.5. It was inspecting an environment mid-destruction.
+  #    The fix is the `deps:` below: the guard now depends on the teardown, so
+  #    it cannot start until `clean` has returned. Callers list only
+  #    `:e2e:check-ports`; they must NOT also list `:e2e:clean`, because Task
+  #    3.51 does not dedupe a task requested twice in one run (measured — it
+  #    ran `clean` twice, concurrently) and the sibling entry would restore
+  #    the race.
+  #
+  # 2. It guarded 2 of 46 ports — 38080/tcp and 34550/udp, hand-written — then
+  #    claimed "All ports available". The run it was supposed to protect died
+  #    binding 36060, which no preflight had ever looked at. The set is now
+  #    DERIVED from the compose context each caller passes, so it cannot drift
+  #    from what `docker compose up` binds, and the [OK] line carries the count
+  #    it actually probed.
   check-ports:
-    desc: Check if required E2E ports are available
+    desc: "Verify the host ports an E2E run is about to bind are free (COMPOSE_FILES=... PROFILES=... for a per-run guarantee; bare = advisory union)"
     silent: false
+    deps: [":e2e:clean"]
+    vars:
+      COMPOSE_FILES: '{{.COMPOSE_FILES | default ""}}'
+      PROFILES: '{{.PROFILES | default ""}}'
     cmds:
       - |
-        echo "[CHECK] Verifying ports are available..."
-        if lsof -Pi :38080 -sTCP:LISTEN -t >/dev/null 2>&1; then
-          echo "[ERROR] Port 38080 is already in use"
-          lsof -Pi :38080 -sTCP:LISTEN
-          exit 1
-        fi
-      - |
-        if lsof -Pi :34550 -t >/dev/null 2>&1; then
-          echo "[ERROR] Port 34550 (UDP) is already in use"
-          lsof -i :34550
-          exit 1
-        fi
-      - echo "[OK] All ports available"
+        profiles="{{.PROFILES}}"
+        args=""
+        for p in $profiles; do args="$args --profile $p"; done
+        scripts/e2e-check-ports.sh $args {{.COMPOSE_FILES}}
+
+  check-ports:test:
+    desc: |
+      Verify the port preflight itself — that it derives the set from the
+      compose context, counts honestly, and refuses to print [OK] over a set
+      it could not fully probe. gh#1175: the guard this replaced probed 2 of
+      46 ports and then claimed all of them, so the regression risk is a
+      guard that passes while checking nothing.
+    silent: false
+    cmds:
+      - bash scripts/e2e-check-ports_fixture_test.sh
 
   clean:
     desc: Clean E2E test environment

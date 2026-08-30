@@ -7,7 +7,10 @@ tasks:
   default:
     desc: "Semantic tier: Neural embeddings + LLM (~90s)"
     silent: false
-    deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
+    deps:
+      - task: ":e2e:check-ports"
+        vars: { COMPOSE_FILES: "docker/compose/tiered.yml", PROFILES: "semantic" }
+      - ":build:e2e"
     cmds:
       - echo "[SEMANTIC] Starting semantic tier E2E test (SemEmbed + SemInstruct)..."
       - defer: docker compose -f docker/compose/tiered.yml --profile semantic down -v --timeout 15
@@ -20,7 +23,10 @@ tasks:
   8b:
     desc: "HEAVY LOCAL: semantic tier with qwen3-8b answer+summary (valid GraphRAG/B0 baseline, NOT CI). ~10min, needs ~20GiB Docker RAM."
     silent: false
-    deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
+    deps:
+      - task: ":e2e:check-ports"
+        vars: { COMPOSE_FILES: "docker/compose/tiered.yml docker/compose/tiered.8b.yml", PROFILES: "semantic" }
+      - ":build:e2e"
     cmds:
       - echo "[SEMANTIC-8B] Standing up the semantic tier on qwen3-8b (answer_synthesis + community_summary)."
       - echo "[SEMANTIC-8B] This is the on-demand HEAVY measurement — two 8B instances load ~5GiB weights each; --wait blocks several minutes. The default 'task e2e:semantic' stays on qwen3-1.7b as the fast CI gate."
@@ -41,7 +47,10 @@ tasks:
   frontier:
     desc: "DIAGNOSTIC/CLOUD (not offline, not CI): semantic tier with Gemini 2.5 Flash for answer+summary — measures the synthesis-quality CEILING over the same retrieval/partition. Needs GEMINI_API_KEY (source ../semdev/.env). ~5min."
     silent: false
-    deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
+    deps:
+      - task: ":e2e:check-ports"
+        vars: { COMPOSE_FILES: "docker/compose/tiered.yml docker/compose/tiered.frontier.yml", PROFILES: "semantic" }
+      - ":build:e2e"
     cmds:
       - echo "[SEMANTIC-FRONTIER] Routing answer_synthesis + community_summary to Gemini 2.5 Flash — a CLOUD yardstick, NOT the offline-first product path. Production Tier-2 stays local seminstruct."
       - 'test -n "$GEMINI_API_KEY" || { echo "[ERROR] GEMINI_API_KEY is unset. Source it first, e.g.: set -a && source ../semdev/.env && set +a"; exit 1; }'
@@ -56,7 +65,9 @@ tasks:
   debug:
     desc: Start semantic tier for debugging (leaves containers running)
     silent: false
-    deps: [":e2e:clean", ":e2e:check-ports"]
+    deps:
+      - task: ":e2e:check-ports"
+        vars: { COMPOSE_FILES: "docker/compose/tiered.yml", PROFILES: "semantic" }
     cmds:
       - echo "[SEMANTIC DEBUG] Starting semantic tier environment..."
       - docker compose -f docker/compose/tiered.yml --profile semantic up -d --wait --build
@@ -76,7 +87,10 @@ tasks:
   fallback:
     desc: "Test graceful degradation: semantic config WITHOUT ML services"
     silent: false
-    deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
+    deps:
+      - task: ":e2e:check-ports"
+        vars: { COMPOSE_FILES: "docker/compose/tiered.yml", PROFILES: "statistical" }
+      - ":build:e2e"
     cmds:
       - echo "[SEMANTIC-FALLBACK] Testing semantic config graceful degradation (no ML services)..."
       - echo "[SEMANTIC-FALLBACK] Starting NATS only (no semembed/seminstruct)..."
@@ -91,7 +105,10 @@ tasks:
   compare:
     desc: Run statistical vs semantic and generate comparison report
     silent: false
-    deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
+    deps:
+      - task: ":e2e:check-ports"
+        vars: { COMPOSE_FILES: "docker/compose/tiered.yml", PROFILES: "statistical semantic" }
+      - ":build:e2e"
     cmds:
       - echo "[COMPARE] Running statistical variant first..."
       - task: compare:statistical

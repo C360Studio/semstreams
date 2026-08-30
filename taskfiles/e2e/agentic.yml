@@ -8,7 +8,10 @@ tasks:
   default:
     desc: "Agentic tier: Agent loop + tools (~30s)"
     silent: false
-    deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
+    deps:
+      - task: ":e2e:check-ports"
+        vars: { COMPOSE_FILES: "docker/compose/agentic.yml" }
+      - ":build:e2e"
     cmds:
       - echo "[AGENTIC] Starting agentic tier E2E test..."
       - defer: docker compose -f docker/compose/agentic.yml down -v --timeout 15

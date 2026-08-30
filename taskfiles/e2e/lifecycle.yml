@@ -4,7 +4,10 @@ tasks:
   default:
     desc: Run lifecycle E2E tests (ADR-047 Lifecycle harness gateway + rule round-trip)
     silent: false
-    deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
+    deps:
+      - task: ":e2e:check-ports"
+        vars: { COMPOSE_FILES: "docker/compose/lifecycle.yml" }
+      - ":build:e2e"
     cmds:
       - echo "[E2E LIFECYCLE] Starting SemStreams lifecycle environment..."
       # --build so the tier exercises CURRENT source, not a stale cached image
@@ -30,7 +33,9 @@ tasks:
   debug:
     desc: Start lifecycle E2E environment for debugging (leaves containers running)
     silent: false
-    deps: [":e2e:clean", ":e2e:check-ports"]
+    deps:
+      - task: ":e2e:check-ports"
+        vars: { COMPOSE_FILES: "docker/compose/lifecycle.yml" }
     cmds:
       - echo "[E2E LIFECYCLE DEBUG] Starting SemStreams lifecycle environment..."
       - docker compose -f docker/compose/lifecycle.yml up -d --build

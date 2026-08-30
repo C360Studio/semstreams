@@ -9,7 +9,10 @@ tasks:
   default:
     desc: "Crud-tools tier: Pattern-B CRUD round-trip (~15s)"
     silent: false
-    deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
+    deps:
+      - task: ":e2e:check-ports"
+        vars: { COMPOSE_FILES: "docker/compose/crud-tools.yml" }
+      - ":build:e2e"
     cmds:
       - echo "[CRUD-TOOLS] Starting crud-tools tier E2E test..."
       - docker compose -f docker/compose/crud-tools.yml up -d --wait --build

@@ -7,7 +7,10 @@ tasks:
   default:
     desc: "Statistical tier: BM25 + community detection (~60s)"
     silent: false
-    deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
+    deps:
+      - task: ":e2e:check-ports"
+        vars: { COMPOSE_FILES: "docker/compose/tiered.yml", PROFILES: "statistical" }
+      - ":build:e2e"
     cmds:
       - echo "[STATISTICAL] Starting statistical tier E2E test (BM25, no external ML)..."
       - defer: docker compose -f docker/compose/tiered.yml --profile statistical down -v --timeout 15

@@ -4,7 +4,10 @@ tasks:
   default:
     desc: Run core E2E tests (health + dataflow on the production binary; graph round-trip on the e2e-target binary)
     silent: false
-    deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
+    deps:
+      - task: ":e2e:check-ports"
+        vars: { COMPOSE_FILES: "docker/compose/e2e.yml", PROFILES: "fixtures" }
+      - ":build:e2e"
     cmds:
       - echo "[E2E] Starting SemStreams E2E environment..."
       # --build so the tier exercises CURRENT source, not a stale cached image (gh#246 follow-up).
@@ -213,7 +216,9 @@ tasks:
   debug:
     desc: Start E2E environment for debugging (leaves containers running)
     silent: false
-    deps: [":e2e:clean", ":e2e:check-ports"]
+    deps:
+      - task: ":e2e:check-ports"
+        vars: { COMPOSE_FILES: "docker/compose/e2e.yml" }
     cmds:
       - echo "[E2E DEBUG] Starting SemStreams E2E environment..."
       - docker compose -f docker/compose/e2e.yml up -d --build
