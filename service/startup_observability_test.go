@@ -483,6 +483,23 @@ func TestStartAllBindsSharedAndMetricsBeforeBlockedService(t *testing.T) {
 	require.NoError(t, manager.RegisterInstance("later", later))
 	require.NoError(t, manager.RegisterInstance("metrics", metricsService))
 
+	// metrics is the only real BaseService here, so it is the only unit whose
+	// health is an asynchronous observation: BaseService leaves healthy at the
+	// zero value until the monitor goroutine publishes the first check, which
+	// readiness deliberately waits for (see
+	// TestReadinessWaitsForInitialServiceHealthObservation). The gated fakes
+	// report healthy from construction.
+	const initialHealthBound = 2 * time.Second
+	metricsHealthy := make(chan struct{})
+	var metricsHealthyOnce sync.Once
+	metricsConcrete, isMetrics := metricsService.(*Metrics)
+	require.True(t, isMetrics, "metrics service must expose its health-change seam")
+	metricsConcrete.OnHealthChange(func(healthy bool) {
+		if healthy {
+			metricsHealthyOnce.Do(func() { close(metricsHealthy) })
+		}
+	})
+
 	var middlewareCalls atomic.Int64
 	manager.UseHTTPMiddleware(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -534,11 +551,23 @@ func TestStartAllBindsSharedAndMetricsBeforeBlockedService(t *testing.T) {
 	require.Contains(t, metricsText, `semstreams_startup_units{owner="services",stage="starts_invoked"} 1`)
 
 	close(release)
+	// StartAll starts services sequentially, so its return already establishes
+	// that later.Start ran to completion — assert that outcome rather than
+	// re-waiting later.entered, which Start closes before the gate and which
+	// therefore proves nothing here (#1189).
 	require.NoError(t, <-startDone)
+	require.EqualValues(t, 1, later.starts.Load(), "later service did not start after gate release")
+	require.Equal(t, StatusRunning, later.Status())
+
+	// A successful StartAll is not yet readiness: readiness also requires every
+	// service's first health observation, which the metrics monitor goroutine
+	// publishes off the Start path. Asserting an instantaneous 200 here raced
+	// that goroutine and lost under CI contention, and the next observation was
+	// a whole healthInterval away, so the single GET could never recover (#1189).
 	select {
-	case <-later.entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("later service did not start after gate release")
+	case <-metricsHealthy:
+	case <-time.After(initialHealthBound):
+		t.Fatal("metrics service did not publish its initial healthy observation")
 	}
 
 	readyResponse, err = client.Get(fmt.Sprintf("http://127.0.0.1:%d/readyz", httpPort))
