@@ -21,6 +21,10 @@ thin and must point to exactly one canonical contract.
   - Canonical: `.agents/contracts/semstreams-explorer.md`
   - Claude: `.claude/agents/semstreams-explorer.md`
   - Codex: `.codex/agents/semstreams-explorer.toml`
+- SemStreams judge (one bounded question over collected evidence; read-only; the one role a session may spawn on Fable)
+  - Canonical: `.agents/contracts/semstreams-judge.md`
+  - Claude: `.claude/agents/semstreams-judge.md`
+  - Codex: `.codex/agents/semstreams-judge.toml`
 
 ## Shared work protocol
 
@@ -47,12 +51,12 @@ Claude-workflow tooling and remain platform-specific by design — do not mirror
 
 Run this procedure after changing a contract, adapter, or repository routing rule. It only reads tracked files.
 
-1. Confirm all four canonical contracts and all eight adapters exist, and that `.agents/protocol.md` exists.
+1. Confirm all five canonical contracts and all ten adapters exist, and that `.agents/protocol.md` exists.
 2. Confirm each adapter names exactly its matching `.agents/contracts/...` path and says to read it fully first.
 3. Confirm the Claude reviewer and architect tool lists contain `Read`, `Bash`, `Grep`, `Glob`, `Skill`, and `LSP`,
    but not `Edit`, `Write`, `Task`, or another delegation tool; the explorer adds `Write` (the inventory file only)
    and no delegation tool.
-4. Confirm the Codex reviewer and architect set `sandbox_mode = "read-only"`; the developer has no sandbox override
+4. Confirm the Codex reviewer, architect, and judge set `sandbox_mode = "read-only"`; the developer has no sandbox override
    and therefore inherits the parent workspace permissions.
 5. Confirm `AGENTS.md` and `CLAUDE.md` route the same logical roles.
 6. Inspect adapter size with `wc -l .claude/agents/semstreams-*.md .codex/agents/semstreams-*.toml`; adapters should
@@ -71,6 +75,8 @@ Use these semantic fixtures when reading the routing text:
 - "Update durable docs or reconcile task truth" remains technical-writer-owned.
 - "Enumerate what is on this surface for a change" routes to SemStreams explorer (inventory file with every search
   recorded); the architect may start from that file and the reviewer re-derives it independently.
+- "Which of these two shapes / is this finding real / what should the owner rule on X" routes to SemStreams judge
+  (one bounded question over evidence given as paths; a recommendation and the ruling it prepares — the owner rules).
 - "Check an isolated Go idiom" may use a generic Go agent only as a second pass.
 
 The smoke passes only when Claude and Codex resolve the same logical role and canonical contract for every fixture.

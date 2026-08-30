@@ -46,6 +46,10 @@ Events → Graphable Interface → Knowledge Graph → Queries
   fact, adjacent specs/ADRs/issues — uses `semstreams-explorer` (cheap model, enumerate-only, writes
   `openspec/changes/<id>/inventory.md` with every search it ran). The architect may start from its file (owner
   ruling A, 2026-08-30, #1180); the reviewer's independent re-derivation is the check on its blind spots.
+- A bounded question that needs the strongest read — a design fork the architect framed, a review finding the
+  developer disputes, an owner-docket question — goes to `semstreams-judge`: it answers over collected evidence with a
+  recommendation, the strongest case against, and what remains unproven (≤20 tool calls, read-only). It never
+  enumerates (explorer) and never rules (owner); it is the one role a session may spawn on Fable.
 - Spawning these three project role agents is the DEFAULT execution path for nontrivial and spec-based work — no
   user permission needed. (Only massively-parallel Workflow orchestration is opt-in; that restriction does not apply
   to role agents. There is no "don't spawn agents unless asked" rule in this repo.)
