@@ -1,0 +1,272 @@
+# gh#1168 — federation identity: inventory-only handoff
+
+> Materialized verbatim from the `semstreams-architect` inventory-only pass on 2026-08-30 (contract handoff 1).
+> **Status: pending independent inventory review — `INVENTORY PASS` is not recorded.** No options, recommendation,
+> target state, or artifact delta appear here. Nothing below is approved.
+
+**Baseline:** worktree `claude/gh1168-federation-identity` at `d635e6800bb3208ef04bff3936f071c4cf166ffd`; every non-`openspec/changes/federation-identity/` path is byte-identical to `main@300e57fe`. `openspec validate federation-identity --strict` → `Change 'federation-identity' is valid`.
+
+**Status:** inventory only. No options, recommendation, target state, or artifact delta appear here. Nothing below is approved.
+
+## 0. Method notes and corpus traps (read first)
+
+- **0.1** `grep` on this host is `ugrep 7.8.4` aliased as grep. `--exclude-dir` was probed and honored (`grep -rl --exclude-dir=archive -E 'DEFERRED to #1168' openspec/ | grep -c changes/archive` → `0`). Independently, `find openspec/changes/archive -type f | sed 's/.*\.//' | sort | uniq -c` → `545 md, 49 yaml, 4 sha256` — **the archive holds no `.go` or `.json`**, so every Go/JSON count below is archive-clean by construction; `.md` counts were re-derived with `git grep … | grep -v '^openspec/changes/archive/'`.
+- **0.2** `.claude/worktrees` does **not** exist in this worktree (`ls .claude/worktrees` → no such directory). It exists only in the primary checkout (`/Users/coby/Code/c360/semstreams/.claude/worktrees/agent-a2f629df47afba9d4`, `agent-ac197079e8bbad4ae`, both dated Aug 1). No count here touched the primary checkout.
+- **0.3** Sister repos carry the same trap: `semteams/.claude/worktrees` (3 snapshots), `semdragon/.claude/worktrees` (5), `semspec/.claude/worktrees` (1). A naive `grep -r` over semteams reported 24 `ChainExecutionEntityID(` lines; the real tree has 8 (§4.6). Every sister number below is from `rg -n --glob='!**/.claude/**' --glob='!**/vendor/**' --glob='!**/node_modules/**' --glob='!**/.git/**'`.
+- **0.4** `git grep -E` on this macOS build does not support `\b` or `\s`; a first sister pass with `git grep` read `0` for every pattern and was discarded, not reported.
+- **0.5** Line numbers cited as `file:line` are at this baseline. Two issue-cited anchors have drifted: the design-doc collision claim the issue cites at `gh1095-…-design.md:268` is at **`:275`** at this head (`grep -n 'never collides with local'`; introduced by `7e7ea76e`); `agentic/agentrun/agentrun.go:222-223` in the issue is now `:290` (the `TryChainExecutionEntityID` call) and `:300-321` (the already-exists path).
+
+## 1. Problem statement (as measured, not as briefed)
+
+Three facts about identity are true at this head:
+
+- **A.** The run entity's instance segment is the firing loop's instance segment, copied verbatim under the local authority (`agentic/agentrun/agentrun.go:290` via `processor/rule/actions.go:1762,1786`). `Mint` now refuses a stored/requested origin mismatch (`agentrun.go:300-321`), so two foreign loops sharing an instance token produce one local run ID and a **loud refusal of the second** rather than a second run. The issue's premise that this derivation has one home (`Mint`) is **false**: the same `chain = f(org, platform, loopInstance)` derivation is spelled at seven in-repo sites and six semteams sites (§2.2).
+- **B.** `platform.org`/`platform.id` are validated for shape and byte budget only (`config/config.go:224-247, 795-807`); no entropy source exists under `config/` (§5.1). Contrary to the briefing's "cite or close empty", a **first-boot persist-and-compare precedent exists**: `config.Manager.Start` pushes the file's `platform` block into the fixed-name KV bucket `semstreams_config` on first boot and refuses a later boot whose (org, id, environment) tuple differs (`config/manager.go:172-215, 756-761, 866-894`; spec `component-runtime-config/spec.md:327-334`). It persists a value the file already holds; nothing in the tree mints a value the file lacks.
+- **O-4.** The premise in the DEFERRED paragraph (`openspec/specs/graph-ingest/spec.md:934-948`) holds at this head: `graph.EntityState` has no arrival/authority field (`graph/types.go:24-47`), `MergeTriples` keys on `(Subject, Predicate)` (`graph/helpers.go:108-140`), the import declaration is read at two non-test sites and retained nowhere (`processor/graph-ingest/component.go:1487`, `component/port_resolver.go:89`). Additionally measured: the arrival **port name is not carried to the gate** (only the filter subject is, `keyed_ingest.go:21-38`), the envelope `source` is **dropped** at ingest (`component.go:1795-1818`), and the per-triple `Triple.Source` **is** persisted (`message/triple.go:55-58`).
+
+## 2. Surface inventory
+
+### 2.1 Category 1 — the claimed gaps, measured
+
+| # | Claim (issue / proposal) | Measurement |
+|---|---|---|
+| G1 | `Mint` builds `TryChainExecutionEntityID(org, platform, rootLoopID)` | TRUE — `agentic/agentrun/agentrun.go:281-292`; `rootLoopID` = `firingLoopID` = `agentic.LoopIDFromExecutionEntityID(entityID)` = the firing loop's `Instance` field (`processor/rule/actions.go:1762`; `agentic/entity_ids.go:173-182` reads `parsed.Instance`). |
+| G2 | PR #1148 made `Mint` fail closed on origin mismatch | TRUE — `agentrun.go:286-289` (empty origin refused), `:315-320` (stored ≠ requested refused); tests `agentrun_test.go:248,279,300` (`TestMint_TwoOriginsAtOneInstanceAreRefusedNotAliased`, `TestMint_RefusesEmptyOrigin`, `TestMint_LegacyOriginlessStoredRunIsRefused`). |
+| G3 | `alertInstance` derives from the FULL origin via a length-framed digest | TRUE — `graph/events.go:297-309` frames `alertDigestDomain`, `sourceEntityID`, `alertType`, `metadata.RuleName`, `metadata.Source`, then 12 timestamp bytes; `writeFramedString` `:315-320`. **`alertInstance` is unexported and alert-specific**; it is not a reusable "digest of an origin ID" primitive. |
+| G4 | `graph_event_identity.go` uses the same idiom | TRUE, as a **byte-identical copy**: `processor/rule/graph_event_identity.go:44-49` `writeRuleTriggerFrame` duplicates `writeFramedString`. Trigger frames `(domain, packID, ruleID)` `:29-33` — no entity origin at all. |
+| G5 | "`Mint` is the only outlier" (only builder minting from another entity's fragment) | **FALSE as a count of homes** (§2.2): the loop-instance→chain derivation exists at `agentrun.go:290, 387, 419`; `actions.go:684`; `agentic/loop_execution_entity.go:138`; `processor/agentic-loop/handlers.go:571`; `processor/agentic-dispatch/loop_wire.go:76`. Also two other families take an externally supplied instance under the local authority: loop execution with a client-supplied `ReplyTo` loop ID (`processor/agentic-dispatch/http.go:298-307`, `component.go:876-885`), and the e2e mission from a wire `missionID` (`cmd/e2e-semstreams/mission/command.go:62`). |
+| G6 | `config` validates shape only, 170-byte budget | TRUE — `config/config.go:226-247` (org required, lowercased `:231`, NATS-subject-part `:234-238`; id required `:241-243`, **not lowercased**); `validateAuthorityPair` `:795-807` (pair ≤ `MaxAuthorityPairBytes()`=170, then composes the trigger family under the pair, which rejects dotted/leading-`-` segments via `pkg/types/framework_identity_families.go:80-85` → `entity_domain_authority.go:57-70`). Note `isValidNATSSubjectPart` admits `.` (`:295`) that the compose then refuses — **two validators, one field**. `MinimalConfig.Validate` requires only `platform.id` and no bound (`config/minimal_config.go:24-33`) — a third validator home. Env override `STREAMKIT_PLATFORM_ID` (`config.go:735`; prefix `:388`) is applied **before** validate (`Load` `:423→:427`, `LoadFromBytes` `:452→:456`). |
+| G7 | "Nothing coordinates that pair" / no first-boot persistence precedent | **PARTLY FALSE** — see §2.4 (config manager persists and compares the pair per NATS server). |
+| G8 | O-4 premise: no retained fact to compare | TRUE at the entity; see §2.5 for what provenance IS in hand on each lane. |
+| G9 | `agent.run.origin-entity-id` is written by `Mint` and read by nobody | TRUE — writer `agentrun.go:295-299`; production readers: **0** (§4.4); the value is read back only by `Mint` itself on the already-exists path (`:315`) through the lifecycle projection field `AgentRun.OriginEntityID` (`:146`). |
+| G10 | `RunID` means "the dispatch-root loop UUID" | TRUE and spelled in code, spec, and docs: `agentrun.go:170-177` ("The bare RunID == the dispatch-root loop UUID"), ADR-053 `:45, 157-158, 209-235`, `openspec/specs/agentic-terminal-events/spec.md:348-355` (RunID names `AGENT_LOOPS/<RunID>`), `docs/operations/38-agent-terminal-settlement.md:83-86`. Full reader/writer census §2.3. |
+| G11 | proposal: capabilities touched include `agentic-runs` and `configuration` | **No such spec directories exist** (`ls openspec/specs/` — 56 dirs; neither name). `Mint`'s contract lives in `graph-ingest/spec.md:1060-1065` and `:1137-1148`; the only spec naming `platform.id` is `entity-id-contract` (`git grep -l 'platform\.id' -- 'openspec/specs/*'` → 1 file). |
+| G12 | design.md `:268` "a foreign org.platform never collides with local" | Text is at `docs/proposals/gh1095-entity-id-segment-semantics-design.md:275` (row "content hash"); same row also asserts lessons are "UUIDv5 over content incl. loop IDs" — **not what the code digests**: `processor/agentic-tools/emit_lesson.go:632-651` `canonicalLessonContent` frames `category`, `applies_to`, `summary`, `evidence` only (evidence is agent-authored free text). |
+
+### 2.2 Category 2 — every current spelling of the facts being modeled
+
+**Fact A — "an entity minted from another entity's identity or fragment."** Every framework builder, with what it derives from (production Go; `agentic/`, `graph/`, `processor/`, `pkg/lifecycle`, `pkg/types`, `vocabulary/`, `cmd/`, `test/e2e`):
+
+| # | Builder | Instance derived from | Authority | Site |
+|---|---|---|---|---|
+| A1 | `TryChainExecutionEntityID` (run) | origin loop's `Instance` (verbatim) | local `deps.Platform` | `agentrun.go:290` (Mint); `:387` (ResolveRun via `agent.loop.run`); `:419` (ancestry root) |
+| A2 | same | `firingLoopID` | executor's `e.platform` | `processor/rule/actions.go:684` (`stampRunAnchors` → `agent.run.entity-id` on the local firing loop) |
+| A3 | same | `Task.RunID` | the loop's **wire** `Org`/`Platform` (#1154 class) | `agentic/loop_execution_entity.go:136-140` |
+| A4 | same | `runID` (loop's typed `RunID`) | handler `h.platform` | `processor/agentic-loop/handlers.go:562-579`, called `:597, 1572, 2039, 2623` and `component.go:2151` |
+| A5 | same | `LoopEntity.RunID` | dispatch's pair | `processor/agentic-dispatch/loop_wire.go:70-78` (HTTP `/activity` projection) |
+| A6 | `TryLoopExecutionEntityID` | `loopID` — framework uuid (`processor/agentic-loop/state.go:138`, `agentic-dispatch/http.go:306`) **or client-supplied** `msg.ReplyTo` (`http.go:298-299`, `component.go:876-877`) | local | 24 non-test call sites (§4.1) |
+| A7 | `ModelEndpointEntityID` | endpoint `name` (registry config) | local | `processor/agentic-loop/graph_writer.go:250, 724` |
+| A8 | lesson `tryAgentLessonEntityID` | `uuid.NewSHA1(lessonNamespaceUUID, canonicalLessonContent)` — content digest, **no origin ID field** | local | `emit_lesson.go:434, 632-651`; `agentic/agent_lesson_entity.go:454-471` |
+| A9 | `TryWebObservationEntityID` | `sha256(canonicalURL)[:16]` — unframed, truncated | local, via family table | `agentic/web_observation_entity.go:218-243`; family `framework_identity_families.go:28` |
+| A10 | `OpsDiagnosisEntityID` | `uuid.New()` v4 | local | `emit_diagnosis.go:161-162`; `ops_diagnosis_entity.go:214-235` |
+| A11 | `NewAlertEvent` | framed sha256 over **full** `sourceEntityID` + alert inputs + timestamp | local, via family table | `graph/events.go:175-201, 297-309` |
+| A12 | `ruleTriggerEntityID` | framed sha256 over `(packID, ruleID)` | local | `graph_event_identity.go:22-38`; callers `expression_factory.go:349`, `test_rule_factory.go:132` |
+| A13 | hierarchy containers | the ingested entity's `TypePrefix/TaxonomyPrefix/SourcePrefix` + reserved token — i.e. the **origin's own authority**, hence the foreign skip | origin's | `graph/inference/hierarchy.go:191-245, 482-503` |
+| A14 | gated-dag `FanOut` | `e.cfg.FanOutInstanceID` — config-supplied full ID | config | `processor/gated-dag/executor.go:161`; pattern `participant.go:18` |
+| A15 | e2e mission | wire `missionID` | local | `cmd/e2e-semstreams/mission/command.go:62` |
+| A16 | example processors (7 mints) | wire-supplied instance | local | `examples/processors/document/payload_{sensor:48,observation:49,document:62,maintenance:49}.go`, `iot_sensor/payload.go:199,368`, `weather_station/payload.go:110` |
+
+**Digest-primitive homes (the "consolidate onto `alertInstance`" premise):** four spellings of "instance from a digest" — framed sha256 ×2 copies (`graph/events.go:315-320`, `processor/rule/graph_event_identity.go:44-49`), raw sha256-16 (`web_observation_entity.go:234-235`), UUIDv5/SHA1 (`emit_lesson.go:434`). The only **exported** compose seam over a fixed-width instance is `pkg/types.FrameworkIdentityFamily.EntityID(org, platform, instance)` (`framework_identity_families.go:72-90`), whose table is `:25-29` (`rule-alert` 84 fixed bytes, `rule-trigger` 86, `web-observation` 40; `FixedBytes()` `:65-67` = 5 + system + domain + type + InstanceBytes). Non-entity digests of a loop fragment also exist as KV keys: `TrajectoryLoopDigest`/`TrajectoryFactPrefix` (`agentic/trajectory_fact.go:177-186`, sha256 of bare `loopID`).
+
+**Fact A′ — "RunID" (the bare run anchor).** Writers, then every reader and what each treats it as:
+
+- Writers: `actions.go:1786` (`task.RunID = firingLoopID`, run_scope=new); `:1774-1778, 1801-1805, 1817-1821` (inherit from firing entity's `agent.loop.run` triple); `UserMessage.RunID` client echo (`agentic/user_types.go:46-51`) → `TaskMessage.RunID` (`agentic-dispatch/http.go:155`, `component.go:841`); `LoopManager.SetRunID` (`processor/agentic-loop/state.go:818-829` from `handlers.go:476-478`), persisted as `LoopEntity.RunID` in `AGENT_LOOPS` (`agentic/state.go:57-59`).
+- Readers treating it as the root loop's UUID / a loop key: `AgentRun.RunID()` `agentrun.go:170-191`; `ResolveRun` `:373-446`; `LoopTerminalEvent.RunID` `:453`; terminal settlement `loadPersistedLoop(ctx, anchor)` with `anchor := terminal.RunID` (`processor/agentic-dispatch/terminal_settlement.go:362-365, 423-433`; `loadPersistedLoop` reads `AGENT_LOOPS` `:83-95`); spec `agentic-terminal-events/spec.md:348-355, 371-420`; `docs/operations/38:83-86`.
+- Readers treating it as a token to re-derive the chain entity: A2–A5 above; tool metadata `agent.run_id`/`agent.run_entity_id` (`agentic/tools.go:368-400`, stamped `handlers.go:1570-1574`) whose doc `:396-399` tells an adopter it "can reconstruct it from MetadataKeyRunID plus its own org/platform via agentic.ChainExecutionEntityID".
+- Wire/rule surfaces: `agentic/events.go:23-28, 80-85, 166-171, 216-221` (four events); `internal/agentterminal/terminal.go:74-75, 137, 158, 178`; rule-visible `run_id`/`run_entity_id` fields `agentic/rule_fields.go:109-110, 145-146, 195-196, 218-219, 270, 420`; HTTP resume `agentic-dispatch/http.go:42-45`; `/activity` `loop_wire.go:24-29, 53-54, 90-91`; `test/compat/semteams/agentrun_terminal_compat_test.go:44-52`.
+- Docs: ADR-053 `:45, 105-109, 157-158, 209-235`; `docs/operations/migration-beta162-to-beta163.md:584-591, 623-629`.
+- Zero: `gateway/` (`rg 'chain\.agent\.execution|AgentRun|RunID|run_id' gateway` → 0 non-test); `test/e2e` (only `results/writer.go:192,233` `generateRunID`, unrelated); `docs/concepts` (0).
+
+**Fact B — "the deployment authority pair."** One source, two extractors, one runtime carrier, one persisted mirror, two log lines:
+
+- Source: `pkg/platform` `Config.Org`/`Config.ID` (`pkg/platform/platform.go`, JSON `org`/`id`); alias `config.PlatformConfig` (`config/config.go:29`). Other block fields (`Type`, `Region`, `Capabilities`, `Environment`) are not identity.
+- Extractors: `cmd/semstreams/main.go:523-530`, `cmd/e2e-semstreams/main.go:677-684` (`GetOrg()`/`GetPlatform()` `config.go:777-786`) → `types.PlatformMeta` (`types/component.go:134-137`) → `component.Dependencies.Platform` (`service/component_manager.go:1206-1213`).
+- Carrier: `deps.Platform` — 55 non-test lines in 29 files (§4.2); sister-composed variants: semmachina builds `ID: "semmachina-" + e.cfg.WorldNS` per world (`semmachina/internal/boot/components.go:189-201`; `cmd/bellweather-surface-stack/main.go:276,288`).
+- Persisted mirror: KV `semstreams_config` key `platform` (`config/manager.go:756-761`, bucket `:72-80` History 5, fixed global name, created with `context.Background()` at `:73`).
+- Operator-visible: `"Platform identity configured"` log (`cmd/semstreams/main.go:245-248`, `cmd/e2e-semstreams/main.go:388-391`). Not in health, metrics, gateway, or any schema (§5).
+- Runtime mutation path: a KV `platform` key update is applied to in-memory config (`config/manager.go:567-570`); `GetPlatform()` has no post-boot caller (`grep -rn '\.GetPlatform()'` → the two extractors only), so a runtime change cannot reach `deps.Platform`.
+
+**Fact B′ — "the pair's byte bound."** `pkg/types.MaxAuthorityPairBytes()` (`framework_identity_families.go:55-61`) is the in-repo home; **semsource carries its own** `entityid.MaxOrgLen = 64` with an arithmetic comment assuming `platform (9)` bytes (`semsource/entityid/entityid.go:82-97`, enforced `semsource/config/config.go:341-345`).
+
+**Fact O-4 — "under whom was this entity first admitted."** No durable spelling. Transient/adjacent spellings: `importLane` bool on `ingestWork` (`keyed_ingest.go:35-38`), `Triple.Source` per triple (`message/triple.go:55-58`, producer-chosen; rule writes stamp `"rule_engine"` `actions.go:673`), `EntityState.MessageType` (payload type; overwritten on every re-arrival `component.go:2155`), envelope `source` (`message/base_message.go:121-127, 236-238, 286-290`; not carried past `extractEntityFromMessage` `component.go:1795-1818`).
+
+### 2.3 Category 3 — adjacent claims on the territory
+
+- ADRs: **102** d4 (O-4 clause, `:26`), d5 (provenance = declared lane + unauthenticated `source`; "typed origin is a separate decision", `:79-80`), d7 (never rewrite); **091** (no claims/leases/registries; `:38-45`); **076** d2 (framed digest instances; fixed lengths — amended by 102), d6 (digest version = new identity, no alias); **053** D1 (`RunID()` from `EntityIDField`), D4 (idempotent mint), D7/D8 (typed `RunID`/`RunEntityID` on the wire; "no `resolver.ChainEntityID` round-trip"), Storage (run in ENTITY_STATES, "no private bucket"); **068** (evidence not regenerable).
+- Specs: `entity-id-contract/spec.md:398-422` (positions/owners), `:461-486` (coded authority rejection), `:513-527` (pair bounded at load; budget "never configured by the operator"), `:557-594` (corpus audit; `:584-586` states the constructor-surface extraction limit); `graph-ingest/spec.md:914-948` (gate + DEFERRED paragraph with its own removal instruction `:946-948`), `:1043-1065` (Mint contract; `:1065` "collision-free … is #1168"), `:1137-1148` (two-origins scenario); `agentic-terminal-events/spec.md:348-355` (RunID → `AGENT_LOOPS/<RunID>`); `component-runtime-config/spec.md:327-334` (foreign platform identity in the shared config bucket fails Start); `graph-state-contract` (codec/poison only; no provenance requirement); `framework-bucket-catalog` (one requirement; any new bucket is catalog work); `rule-engine` (named-position `$entity.*` substitution — `processor/rule/entity_substitution.go:51-95`).
+- Issues: #1154 (five types recompute `EntityID()` from wire `org`/`platform`; A3 above also derives the **run** entity from those wire fields), #1172 (`hierarchy.go:217-218` returns `nil, nil` silently; `GetMetrics` `:529-531` has test-only callers), #1174 (`agentrun.go:316-319` embeds `entityID`, stored and requested origins; logged `actions.go:1924-1928`; contrast `authority_gate.go:83-114` and `actions.go:640-643` "identity is never logged"), #1171 (`pkg/types/entity_domain_authority.go:1-52` holds only `EntityDomainDelegation` + reserved sets), #1161 (e2e fixtures write around the gate via `PutKV` — any O-4 e2e proof inherits this), #1173 (`import:true` on output ports; unfed import lane not an orphan), #683 (structured values; `status:needs-decision`), #178 closed, #1096 closed.
+- Sister asks on this surface: none — `"import": true` → 0 in all 11 sisters; `ValidateEntityIDAuthority` → 0; `origin-entity-id` → 0; `NewAlertEvent(` → 0.
+- Sister pins (`go.mod`): semteams/semsource/semboids/semmachina/semdev/semconnect `v1.0.0-beta.160`; semdragon `beta.135`; semops `beta.145`; semspec `beta.134`; semsage `alpha.3`; semmem `replace github.com/c360/semstreams => ../semstreams` (tracks local main). **No sister has the slice-B surface** (`Mint` 6-arg, `Import`, `RunOriginEntityID`). semdev's conformance fixture still calls the 5-arg `Mint` (`semdev/test/conformance/testdata/g2fixture/bad.go:33`, under `testdata`, not compiled).
+
+### 2.4 First-boot persistence — the precedent census (Case B)
+
+| # | Mechanism | Persists what | Create vs Put | Restart behavior | Site |
+|---|---|---|---|---|---|
+| P1 | `config.Manager.Start` first-boot push | the whole file config incl. `platform` block into KV `semstreams_config` | `Put` (`kvStore.Put(ctx, "platform", data)`) | subsequent boot reads `platform`; **refuses Start** if (org, id, environment) differ (`platformIdentityKey` `:892-894`); identity-less configs fall through (`:201-204, 882-884`); version compare decides file→KV vs KV→file (`:217-247`) | `config/manager.go:172-215, 756-761, 866-894`; spec `component-runtime-config:327-334`; called from both binaries via `internal/bootstrapobservability/bootstrap.go:171-211` (`cmd/semstreams/main.go:199-243`, `cmd/e2e-semstreams/main.go:387`) |
+| P2 | rule `SeedFromRuntime` | file-loaded rules into KV `rules.*` | `Create`; exists → preserve operator edit | KV wins thereafter | `processor/rule/kv_config_integration.go:352-405` |
+| P3 | `seedMission` (e2e binary) | one lifecycle participant | `Manager.Create`; `ErrAlreadyExists` → no-op | idempotent; refuses a seed under a foreign pair | `cmd/e2e-semstreams/main.go:443-470` |
+| P4 | hierarchy container birth | container entity | `CreateEntity`; `ErrKVKeyExists` → cached | idempotent | `graph/inference/hierarchy.go:482-503` |
+| P5 | `natsclient.KVStore.Create` / `UpdateWithRetry` create branch | generic | `Create` | — | `natsclient/kv.go:201-215, 356-370` |
+
+Not found (exact searches in §5): any file write of config at boot; any production caller of `Config.SaveToFile`; any `process_instance_id` symbol; any per-process identity persisted (only `os.Hostname()/pid` as an in-memory producer ID, `natsclient/storage_inventory.go:592-599`).
+
+**What "first boot" means at this head:** the first process to `Put` `platform` into `semstreams_config` on a given NATS server. Every compose file runs one binary per config except `docker/compose/e2e.yml`, which runs `semstreams` (`:44-58`) and `semstreams-fixtures` (`:103-112`, profile `fixtures`) on the same `protocol-flow.json`; `tiered.yml` runs three binaries on three configs under mutually exclusive profiles (`:21, :198-310`). The bucket name is global and shared across sem* apps on one NATS (`manager.go:194-204`, gh#459).
+
+**170-byte arithmetic (measured, not designed):** budget = 256 − 86 (`rule-trigger`: 5+5+5+7+64) = 170. Longest shipped in-repo pair: 32 bytes (`configs/examples/research-graph-pipeline.json` `CHANGE_ME.research-graph-pipeline`), then 30 (`c360.semstreams-kitchen-sink-ml`). Longest sister pair seen: 33 (`c360.semconnect-production-backend`). The issue's example suffix `-7f3a9c` is 7 bytes. Family-table sensitivity (arithmetic only): a 64-hex fixed instance under `chain.agent.execution` would be 5+5+5+9+64 = **88** fixed bytes (> 86, would become the binding family → budget 168); under `agentic-loop.agent.execution` 5+12+5+9+64 = **95** (budget 161). The bound is checked in `Config.Validate` (`config.go:244`), which runs after env overrides (`:423-427`) and again on every `SafeConfig.Update/Mutate` (`:101, :139`).
+
+**Where `platform.id` is a literal (Case B corpus):** 23 in-repo JSON files (`jq` over every `"platform": {` file — §4.3): three ship a `CHANGE_ME` org with a **fixed** id (`configs/examples/research-graph-pipeline.json` → `research-graph-pipeline`, `configs/flows/deep-research.json` → `deep-research`, `configs/flows/ops-agent.json` → `ops-agent`); three share one id (`configs/semantic{,-8b,-frontier}.json` → `semstreams-kitchen-sink-ml`); `config/testdata/production.json` has no platform block. Sisters: semspec 13 configs, **4 sharing `semspec-e2e-mock`**; semdragon 3 configs all `local`/`dev`; semteams 4 (`semteams-bootstrap`, `semteams-bootstrap-e2e`, `bm25-semantic-demo`, `pathrag-demo`, all still carrying `instance_id`); semmem 3 (`instance_id` present — would fail `rejectRemovedPlatformFields` on main); semdev 2 (both `semdev-bootstrap`, with `instance_id`); semboids 1; semsage 1; semconnect 2. `.md` mentions of `platform.id` outside the archive: 51 lines (`git grep`), led by `docs/operations/migration-beta162-to-beta163.md` (12), `docs/basics/05-first-processor.md` (8), `config/README.md` (3), `docs/concepts/16-federation.md` (2). No `.yml` under `docker/` or `taskfiles/` names it (0).
+
+### 2.5 O-4 — state shape, writers, and provenance in hand at the gate
+
+- `graph.EntityState` `graph/types.go:24-47`: `ID`, `Triples`, `StorageRef`, `MessageType`, `Version`, `UpdatedAt`. Codec: `MarshalEntityState`/`ValidateEntityStateContract`/`UnmarshalEntityState{,Trusted}` `graph/entity_predicate_contract.go:134, 188, 255, 287`.
+- Production writers of `EntityState{`: graph-ingest fact lane `component.go:1813` (fields set: ID, Triples, MessageType, Version=1, StorageRef); graph-ingest contract probes `:2439, 2579`, `canonical_mutations.go:566, 580`; hierarchy container `hierarchy.go:482`; `pkg/lifecycle/manager.go:393`; `processor/agentic-loop/graph_writer.go:260, 487`; `processor/agentic-tools/emit_lesson.go:170`, `decide.go:685`; `processor/research-graph-llmwrap/triplepub.go:95`; `graph/types.go:103` (Clone); e2e fixtures ×8 (§4.5). KV commits: `component.go:2119, 2166, 2258, 2496, 2687`; `canonical_mutations.go:276, 344`; births via `entityBucket.Create` `component.go:2266`, `canonical_mutations.go:280`.
+- Readers of `EntityState.MessageType` (production): `component.go:1950, 1953` (indexing-profile floor), `:2155` (merge: newest arrival's type overwrites), `canonical_mutations.go:213, 217, 234` (registered-type gate), `graph/types.go:105`, `pkg/projection/mutation_client.go:150-151, 329-334`, `processor/agentic-tools/emit_lesson.go:197-200`; e2e `lessons/scenario.go:447, 556`.
+- Provenance available per lane at the gate: **fact lane** — port filter `subject`, `stream` name, stream `seq`, `importLane`, `deliveredAt` (`keyed_ingest.go:21-38`; filled `component.go:1571-1584`); `port.Name` is in scope at `component.go:1474, 1537` but **not carried**; envelope `source` dropped `:1795-1818`; per-triple `Triple.Source` persisted. **Mutation lane** — the `graph.mutation.*` subject (metered as `subject`), `TraceID`/`RequestID` on every request (`graph/mutation_requests.go:9-15, 27-34, 37-41`); no port name, no sender identity (`canonical_mutations.go:226-238`). **Direct lane** — nothing but the fixed token `direct` (`authority_gate.go:28-29`).
+- History: `graph/kvcatalog.go:41-52` (every owned bucket History 1), `:58-67` (ENTITY_STATES explicitly 1, with the rationale), `:69-74` (GRAPH_STATUS 3), `:76-100` (STORAGE_REPORT 10). Boot snapshot sweep assumes depth 1 (`graph-ingest/spec.md:489-496`).
+- Existing per-entity operational sidecars beside the graph: `GRAPH_INGEST_APPLIED_SEQ` — key `<entityID>/<stream>` → last applied seq, History 1, ClassOperational, written after side effects and before ack (`kvcatalog.go:108-110`; `keyed_ingest.go:72-76, 285-296`; `component.go:1233-1243`); `ENTITY_SUFFIX_INDEX` (`kvcatalog.go:106`); poison inventory — **in-memory only** (`poison_inventory.go:1-40`); lifecycle — **no bucket**, lives in ENTITY_STATES triples (`pkg/lifecycle/manager.go:174-191`; ADR-053 "no private bucket"); `AGENT_LOOPS` per loop (`processor/agentic-tools/executors/register.go:147`); `TOOL_CALL_OUTCOMES` (`kvcatalog.go:111-113`); `AGENT_TRAJECTORIES` (`agentic/trajectory_fact.go:18`).
+
+### 2.6 Category 4 — consumer at birth
+
+No new symbol is proposed in this phase. For the existing symbols the issue's shape names: `agent.run.origin-entity-id` has **0 production readers** (§4.4); `writeFramedString` and `alertInstance` are unexported with one caller each; `FrameworkIdentityFamily.EntityID` has three production callers (`graph/events.go:196`, `graph_event_identity.go:33`, `web_observation_entity.go:240`) plus `config.validateAuthorityPair` (`config.go:803`).
+
+## 3. Same-class collision tables
+
+### 3.1 Semantic class: "a framework identity whose instance is a function of another entity"
+
+| Dimension | Evidence |
+|---|---|
+| Owners | `agentic` (chain/loop/lesson/web/diagnosis builders, §2.2 A1–A10), `graph` (alert A11, hierarchy A13), `processor/rule` (trigger A12; run mint at `actions.go:1918-1919`), `pkg/types` (family table), `processor/agentic-loop`/`agentic-dispatch`/`agentrun` (chain re-derivation A4/A5/A1) |
+| Catalogs | `pkg/types/framework_identity_families.go:25-29` (fixed-suffix families only); projection contracts `agentic/loop_execution_entity.go:224` (`*.*.agentic-loop.agent.execution.*`), `agent_lesson_entity.go:400`; lifecycle workflow patterns `agentrun.go:109` (`*.*.chain.agent.execution.*`), `gated-dag/participant.go:18`; corpus audit `internal/entityidaudit/segment_rules.go` (no derivation rule; `authority_literal`, `domain_unregistered`, `instance_reserved` only) |
+| Status | none for identity derivation; `Mint` refusal is a classified `ErrorInvalid` (`agentrun.go:229-238`); rule log at `actions.go:1924-1928` |
+| Lifecycle | run: lifecycle `Manager.Create` at dispatch (`agentrun.go:300`); alerts are occurrence entities (ADR-076 "Consequences"); containers Create-once (`hierarchy.go:482-503`) |
+| Ownership | none (ADR-091); concurrent `Mint` race documented `agentrun.go:274-280` (gh#178 closed) |
+| Readers | §2.2 Fact A′ (RunID census); semteams 6 sites (§4.6) |
+| Writers | A1–A16 |
+| Recovery | `ResolveRun` ancestry fallback `agentrun.go:402-445`; terminal settlement walk `terminal_settlement.go:352-440`; no replay/rebuild of identities (ADR-102 d7) |
+
+### 3.2 Semantic class: "a deployment-unique authority value persisted across restarts"
+
+| Dimension | Evidence |
+|---|---|
+| Owners | `config` (`Validate` `:224-247`, `validateAuthorityPair` `:795-807`, env override `:735`, `MinimalConfig.Validate` `minimal_config.go:24-33`), `config.Manager` (KV mirror + mismatch guard `manager.go:172-215, 866-894`), the two composition roots (`extractPlatformMeta`), sisters that compose it in Go (semmachina `components.go:189-201`) |
+| Catalogs | no schema carries the platform block (`grep -l '"platform"' schemas/*.json` → 0); `config/README.md:43-50` documents it; `pkg/platform/platform.go` struct |
+| Status | boot log lines only (`cmd/semstreams/main.go:245-248`, `cmd/e2e-semstreams/main.go:388-391`); not in health/metrics/gateway (§5) |
+| Lifecycle | read at load; mirrored to KV on first boot (`Put`); KV `platform` updates applied in-memory `manager.go:567-570` but never re-extracted |
+| Ownership | `semstreams_config` is a fixed global bucket shared by every sem* app on one NATS (`manager.go:194-204`); mismatch on (org, id, environment) refuses Start; identity-less configs bypass |
+| Readers | `GetPlatform()` ×2; `deps.Platform` 55 lines / 29 files; `kvPlatformIdentity` `:866-877` |
+| Writers | operator file; `STREAMKIT_PLATFORM_ID`; `PushToKV` `:756-761`; KV `platform` key (UI/other processes) |
+| Recovery | none; ADR-102 d7 forbids rewrite; "identity-less" fallthrough documented as unfixed (`manager.go:201-204`) |
+
+### 3.3 Semantic class: "which source/lane first admitted an entity" (O-4)
+
+| Dimension | Evidence |
+|---|---|
+| Owners | none durable. Adjacent: graph-ingest gate (`authority_gate.go:51-53`), `ingestWork.importLane` (`keyed_ingest.go:35-38`), `Triple.Source` (`message/triple.go:55-58`), `EntityState.MessageType` (overwritten `component.go:2155`) |
+| Catalogs | `graph/kvcatalog.go` (ENTITY_STATES History 1; APPLIED_SEQ per `(entity, stream)`); `framework-bucket-catalog/spec.md` (one requirement) |
+| Status | `mutation_rejections{subject,reason}` (`authority_gate.go:84-86`) — no admission-provenance signal |
+| Lifecycle | entity: Create then CAS merge (`component.go:2100-2175`); guard: written after side effects (`keyed_ingest.go:208-215`) |
+| Ownership | single graph-ingest writer (ADR-091 d2); import lane is an operator trust statement (`port_jetstream.go:61`, `port_facts.go:157`) |
+| Readers | none of a "first admitted" fact; `MessageType` readers §2.5 |
+| Writers | none; fact-lane entity construction `component.go:1813`; merge `:2140-2167` |
+| Recovery | boot snapshot sweep validates bytes only (`graph-ingest/spec.md:489-511`); no replay of provenance; e2e fixtures seed foreign entities straight into ENTITY_STATES (#1161, `test/e2e/scenarios/ops/scenario.go:460-473`) |
+
+## 4. Measurements (command → result)
+
+All run from the worktree root unless a sister path is shown. `X='--exclude-dir=.claude --exclude-dir=archive --exclude-dir=.git'`.
+
+- **4.1** `grep -rn --include='*.go' $X -E '\b(Try)?(ChainExecutionEntityID|LoopExecutionEntityID|ModelEndpointEntityID|WebObservationEntityID)\(' . | grep -v _test.go` → 46 lines; distinct non-test files 24 (`| grep -rln … | wc -l`), test files 20. Chain-derivation sites among them: 7 (§2.2 A1–A5).
+- **4.2** `grep -rn --include='*.go' $X -E '\bdeps\.Platform\b' . | grep -v _test.go | wc -l` → 55; files → 29. `grep -rn --include='*.go' $X -E '\.Platform\.ID\b' . | grep -v _test.go` → 5 (`config.go:241,244,736,785`; `minimal_config.go:25`). `\.GetPlatform\(\)` → 2. `PlatformMeta\{` production → 5 (`cmd/semstreams/main.go:526`, `cmd/e2e-semstreams/main.go:680`, `service/component_manager.go:1210`, two doc comments). `PLATFORM_ID` → `config.go:735`, `config/doc.go:84`, `config/README.md:149` only.
+- **4.3** `for f in $(grep -rl $X -E '"platform"\s*:\s*\{' --include='*.json' .); do jq -r '…platform.org / .platform.id' $f; done` → 23 files (values in §2.4). `grep -rn $X -E 'platform\.id|platform_id|"id": *"' --include='*.yml' --include='*.yaml' docker/ taskfiles/` → 0. `git grep -n -E 'platform\.id' -- '*.md' | grep -v '^openspec/changes/archive/' | wc -l` → 51.
+- **4.4** `git grep -n -E 'agent\.run\.origin-entity-id|RunOriginEntityID|OriginEntityID|origin_entity_id' | grep -v '^openspec/changes/archive/' | wc -l` → 45; `-- '*.go' ':!*_test.go'` → 22 (all in `agentrun.go`, `actions.go` comments/log strings `:659, 1915, 1934, 1936`, `vocabulary/agentic/{predicates.go:504-518, register.go:490}`); `-- '*_test.go'` → 8. Production **readers** of the value: 0.
+- **4.5** `grep -rn --include='*.go' $X -E '(graph\.)?EntityState\{' . | grep -v _test.go` → 27 lines (§2.5). `rg -n --glob '!*_test.go' --glob '!message/**' -e '\.MessageType\b' --type go .` (filtered of contract/registry hits) → 13 production lines (§2.5).
+- **4.6** Sisters (`rg`, snapshots excluded; prod = non-`_test.go` lines): semteams — `(Try)?ChainExecutionEntityID(` 8 (6 builder calls: `tools/{emitdevviatestplan:354,emitautoresearchbaseline:169,emitautoresearchmeasurement:282,emitchange:165}/executor.go`, `runanchor/runanchor.go:41`, `commands/implementspec/command.go:217`; plus a product-local `isChainExecutionEntityID` helper `:305,322`), `LoopExecutionEntityID(` 8, `agentrun.` 3 (`main.go:939` `NewMilestoneSubscriber`), `RunID` 4, `RunEntityID` 12, `MetadataKeyRunID|agent.run_id` 7, `PlatformMeta{|extractPlatformMeta` 6, `instance_id` 5 lines, platform configs 4; semdev — `LoopExecutionEntityID(` 3, `agentrun.` 8, `RunID` 2 (`internal/ledger/ledger.go:72,85`), configs 2; semspec — `RunID` 20 lines / 11 files (its own `workflow/` run concept; framework linkage unverified), `RunEntityID` 3, configs 13; semdragon — `PlatformMeta{` 7, configs 4; semmem — `PlatformMeta{` 2, `instance_id` 8, configs 3; semsource — `PlatformMeta{` 1 (`cmd/semsource/run.go:327`), `MaxOrgLen` `entityid.go:97`; semboids 4/1; semmachina 3 (+1 `MetadataKeyRunID`); semconnect configs 3; semsage 4/1; semops 0 everywhere. `"import": true`, `ValidateEntityIDAuthority`, `NewAlertEvent(`, `origin-entity-id` → 0 in every sister.
+- **4.7** `grep -rn --include='*.go' $X -E 'RunID' . | grep -v _test.go` per-file: `actions.go` 12, `handlers.go` 12, `events.go` 12, `loop_wire.go` 11, `agentrun.go` 11, `rule_fields.go` 6, `user_types.go` 5, `terminal_settlement.go` 4, `agentterminal/terminal.go` 4, `loop_execution_entity.go` 4, `state.go` 3, `http.go` 3, `component.go` (dispatch) 3, `component.go` (loop) 2, `tools.go` 2, `agentic/state.go` 2, `predicates.go` 1. Tests: 14 files / 146 lines. `RunEntityID` production: 8 files (loop_wire 9, agentrun 9, events 8, handlers 4, terminal 4, rule_fields 4, tools 2, loop component 1).
+- **4.8** `grep -rn --include='*.go' $X -E 'writeFramedString|writeRuleTriggerFrame|sha256\.(New|Sum256)|fnv\.New|uuid\.NewSHA1|uuid\.NewMD5|NewV5|md5\.(New|Sum)' <trees> | grep -v _test.go` → 31 lines; those feeding an **entity instance**: `events.go:298-303`, `graph_event_identity.go:29-32`, `web_observation_entity.go:234`, `emit_lesson.go:434`. Others feed KV keys, dedup, action IDs, payload hashes (`trajectory_fact.go:178,184,303`, `trajectory_evidence.go:42`, `outcomes.go:67,100`, `name_index.go:40`, `action_id.go:66`, `clustering/storage.go:45`, `inference/storage.go:679,709`, `embedding/dedup.go`, `pii_filter.go:183`, `agentic-model/client.go:484`, `detonation.go:106`, `wildcard_executor.go:163`, `base_message.go:161`).
+- **4.9** `grep -rn --include='*.go' $X -E 'Sprintf\("[^"]*%[sdv][^"]*(\.[^"]*){5}' . | grep -v _test.go` → 6 six-part format builders (`mission/command.go:62`, `ops_diagnosis_entity.go:225`, `entity_ids.go:40,93,149`, `agent_lesson_entity.go:465`). `(semtypes|types)\.EntityID\{` production → 7 mints in `examples/processors/*` + 4 doc comments.
+- **4.10** `grep -rln --include='*.go' $X -E '"crypto/rand"|"math/rand(/v2)?"' . | grep -v _test.go` → 10 files, none under `config/`, `cmd/`, or `service/`.
+- **4.11** `grep -rn --include='*.go' $X -E 'SaveToFile\(|safeWriteFile\(|os\.WriteFile\(|os\.Create\(' cmd service config natsclient pkg component | grep -v _test.go` → definition `config.go:767-775`/`security.go:100-112` and writers in `cmd/openapi-generator`, `cmd/e2e` (reports), `cmd/measure-injection-classifier`, `pkg/acme` only. `process_instance_id|ProcessInstanceID|os\.Hostname\(` production → `natsclient/storage_inventory.go:594` only.
+- **4.12** `\.Import\(\)|importLane|Import bool|"import` production → 16 lines (§2.5); non-test `.Import()` reads: 2.
+- **4.13** `grep -cE '^\s{2}semstreams[a-z0-9_-]*:\s*$' docker/compose/*.yml` (counts include the `semstreams-*-net` network key): e2e.yml 3 (two binaries), tiered.yml 4 (three binaries, three configs), all others 2 (one binary). `--config` references per file listed in §2.4.
+- **4.14** `rg -n --glob '!openspec/changes/archive/**' -e '\$entity\.(instance|id|system|domain|type|org|platform)\b' configs docs/concepts docs/basics` → 13 lines, all `$entity.id` (full ID: `update_kv` key `configs/rules/deep-research/02-collect-evidence.json:25`, `add_triple` object `:36`, prompts, `docs/concepts/18:72,101,121,239`); `$entity.instance` in shipped configs → 0. `action.Subject` is substitution-resolved for `add_triple`/`update_triple`/`remove_triple`/`reconcile_predicates` (`actions.go:906-921, 1086-1090, 1700, 2094-2098`), so a config-authored subject **can** be composed from a firing entity's fragments; no shipped config does.
+- **4.15** `grep -n -E 'ActionType[A-Za-z]+\s*=\s*"' processor/rule/*.go` → 12 action types; none is an entity-create action.
+- **4.16** `git log --oneline -S'never collides with local' -- docs/proposals/gh1095-…-design.md` → `7e7ea76e` (design package, PR #1099). `grep -n 'never collides with local'` → `:275`.
+- **4.17** `grep -n -E '^func TestMint_' agentic/agentrun/agentrun_test.go` → 7 tests (`:206, 248, 279, 300, 318, 326, 333`).
+
+## 5. Searches that came up empty
+
+- **5.1** Entropy in config: `"crypto/rand"|"math/rand"` files → none under `config/` (4.10). `grep -rn -iE 'entropy|suffix|uuid|random' config/*.go | grep -v _test` — not run as a separate pass; the import census above is the closing evidence.
+- **5.2** `Config.SaveToFile` production callers → 0; boot-time config file writes in `cmd/`/`service/` → 0 (4.11).
+- **5.3** Schema carrying the platform block: `grep -l '"platform"' schemas/*.json | wc -l` → 0; `ls schemas | grep -iE 'config|platform'` → none.
+- **5.4** Metric labels carrying the pair: `rg -n --glob '!*_test.go' -e 'WithLabelValues\([^)]*(platform|org)' --type go .` → 0. Health/gateway exposure: `grep -rn -iE 'platform' health/ gateway/http/*.go` → `health/doc.go:57,277` comments only.
+- **5.5** Spec dirs `agentic-runs`, `configuration`: `ls openspec/specs/` → absent. `lifecycle/spec.md` mentions of `agentrun|AgentRun|chain.agent` → 0.
+- **5.6** Production readers of `agent.run.origin-entity-id` → 0 (4.4). Readers of `AgentRun.RunID()` in sisters (`\.RunID\(\)`) → 0 (semteams uses `NewMilestoneSubscriber` only).
+- **5.7** RunID in `gateway/` → 0; RunID assertions in `test/e2e` → 0; `run_id` in `docs/concepts|basics|operations` non-proposal → 0 except `operations/38:83-86` (`RunID`).
+- **5.8** Sister declarations of an import lane, uses of `ValidateEntityIDAuthority`, `NewAlertEvent(`, `origin-entity-id` → 0 across 11 sisters (4.6).
+- **5.9** `$entity.instance` in shipped configs → 0 (4.14). Rule action minting an entity → no such action type (4.15).
+- **5.10** A lesson-content digest field naming loop IDs → none (`emit_lesson.go:632-651`).
+- **5.11** Port name carried into `ingestWork` → absent (`keyed_ingest.go:21-38`); envelope `source` retained on `EntityState` → absent (`component.go:1795-1818`, `graph/types.go:24-47`).
+- **5.12** `.claude/worktrees` in this worktree → absent (0.2).
+- **5.13** A `platform.id` literal in any `docker/`/`taskfiles/` YAML → 0 (4.3).
+
+## 6. Adopter seam inventory
+
+Answered for a developer outside this repo who has never opened the file named.
+
+**S1 — `platform.id` (config field; env `STREAMKIT_PLATFORM_ID`; `MinimalConfig`; Go-composed in semmachina).**
+1. Must know today: (a) it is positions 1–2 of every minted ID (`entity-id-contract:398-407`); (b) `len(org)+len(id) ≤ 170` (`:513-527`); (c) it must be unique per deployment on a mesh and nothing checks that (`docs/concepts/16-federation.md:55-58`); (d) if two apps share one NATS, the (org, id, environment) tuple is compared against `semstreams_config` and Start refuses on mismatch (`manager.go:194-215`); (e) `instance_id` is refused (`config.go:814-831`); (f) `STREAMKIT_PLATFORM_ID` overrides the file before validation. Six facts — a design finding by the contract's "more than two" rule.
+2. Do nothing (clone a template): boot succeeds; every minted ID silently carries the cloned pair; a peer import from the clone is refused `local_authority_claimed` (`pkg/types/entity_id_authority.go:51-55`) — loud only at the first federation exchange, and ADR-102 d7 forbids rewriting what was already minted. Three shipped templates hand out a fixed id under `CHANGE_ME` (§2.4).
+3. Find out: boot error only for (b), (d), (e); doc or nowhere for (a), (c); (f) nowhere (a silent override). For uniqueness the honest rank is **nowhere until federation**.
+4. Gap: (c) is a fact the adopter is asked to predict (that no other deployment chose the same string) which the framework cannot observe at load and only observes at import time as a wall. The KV mirror (P1) observes sameness on one NATS server only.
+
+**S2 — `agentrun.Mint(ctx, mgr, org, platform, rootLoopID, originEntityID)` (exported; `agentic/agentrun/agentrun.go:281-285`).**
+1. Must know: pass `deps.Platform`, never a payload's pair (`:244-249`); `originEntityID` required and must equal the stored one on re-mint (`:250-259`); `rootLoopID` must be dot-free (`entity_ids.go:186-194`); `errs.IsInvalid` is the branch (`:229-232`).
+2. Do nothing: no in-repo or sister production caller exists (semteams uses `NewMilestoneSubscriber`; semdev's only call is an uncompiled 5-arg testdata fixture `bad.go:33`). A caller on beta.160 that upgrades will not compile (arity) — compile error, the best rank.
+3. Find out: compile error (signature), typed runtime error (origin refusal), migration doc `:623-629`.
+4. Gap: the mismatch error embeds the peer's identity (#1174) — a value the adopter's log pipeline then republishes without knowing it should not.
+
+**S3 — `agentic.(Try)ChainExecutionEntityID(org, platform, chainID)` (exported; `entity_ids.go:122-156`) and the documented re-derivation pattern (`agentic/tools.go:396-399`).**
+1. Must know: `chainID` is the run's bare `RunID`; the run entity is `org.platform.chain.agent.execution.<RunID>` and can be rebuilt from `RunID` + your own pair. semteams does this at 6 sites (§4.6); semteams also parses the shape itself (`implementspec/command.go:305-322`).
+2. Do nothing: works today; every one of those sites, plus in-repo A2–A5, **predicts** the run identity from a fragment. If the derivation changes, each becomes silently wrong (no compile change, no runtime error — they build a valid-looking ID for an entity that no longer exists).
+3. Find out: nowhere — a mismatched derivation returns a well-formed ID; `ResolveRun` returns `ErrEntityNotFound` at best (`agentrun.go:370-372`).
+4. Gap: seven in-repo and six sister sites recompute a framework-owned identity from a fragment instead of reading it (`RunEntityID` is already on every terminal event `events.go:26-28,83-85,169-171,219-221` and in tool metadata `tools.go:400`; `agent.run.entity-id` is on the local loop `loop_execution_entity.go:139`). The prediction-shaped surface is the re-derivation doc at `tools.go:396-399`.
+
+**S4 — `RunID` / `run_id` (wire fields, rule fields, tool metadata, HTTP resume, `AGENT_LOOPS` key).**
+1. Must know: it is the root loop's UUID; `AGENT_LOOPS/<RunID>` is the root loop's record (`agentic-terminal-events:348-355`); a client may echo it to resume (`user_types.go:46-51`); rules may match on `run_id` (`rule_fields.go`).
+2. Do nothing: everything works while RunID is a loop ID. Nothing authenticates a client-echoed `RunID` (`http.go:155`, `component.go:841`) or a rule-inherited `agent.loop.run` value (`actions.go:1774-1778`); both are producer/client-chosen strings.
+3. Find out: spec (`agentic-terminal-events`), ADR-053, doc comments; no boot/compile surface.
+4. Gap: the meaning "RunID == loop UUID" is load-bearing in a spec-level KV keying and in the settlement walk; it is not a documented promise to sisters beyond ADR-053 D8, which sisters read as "no round-trip needed".
+
+**S5 — `agent.run.origin-entity-id` (declared predicate `vocabulary/agentic/predicates.go:504-518`; no `@id` datatype, `conformance.md:344-350`).**
+1. Must know: it exists on every local run; it is the only run→loop pointer for an imported origin (`migration doc :584-586`); it reads as a property, not an edge, in fusion unless a lens declares it (`:631-638`).
+2. Do nothing: nothing reads it (4.4); a walk that expects `agent.run.entity-id` on an imported loop finds nothing and fires nothing (`migration doc :563-577`, the "SILENT" path).
+3. Find out: doc; Info log + counter on the skip side only.
+4. Gap: a predicate with a writer and no reader is the phantom-surface shape the contract names; its read path is presently `Mint`'s own comparison.
+
+**S6 — import lane `"import": true` (`component/port_jetstream.go:61`; `port_codec.go:63` input-only; `port_resolver.go:78-90` derives `External`).**
+1. Must know: it is a trust statement; nothing is authenticated (`graph-ingest:931-932`); a foreign ID re-arriving under two sources merges silently (O-4 absent, `:934-948`); an unfed lane is not flagged (#1173).
+2. Do nothing: no lane → every foreign entity refused loudly. With a lane → first-write-wins merge on collision, unobservable.
+3. Find out: spec paragraph; migration doc `:512-533`; nothing at runtime for the collision case.
+4. Gap: the lane asks the operator to predict that every peer feeding it mints under distinct pairs (S1's gap, one hop out).
+
+**S7 — `semstreams_config` `platform` key (shared-NATS identity guard, `manager.go:194-215`).**
+1. Must know: bucket name is global; the compared tuple includes `environment`; identity-less configs bypass; `Put` semantics on push.
+2. Do nothing: a second sem* app on the same NATS with a different pair fails Start with a message naming both tuples — loud. Two clones with the **same** pair pass.
+3. Find out: boot error.
+4. Gap: the guard detects difference, not sameness; sameness is exactly Case B.
+
+**Prediction-vs-observation summary:** the values adopters are asked to predict today are (i) global uniqueness of `platform.id` (S1/S6), (ii) the run identity from a fragment (S3, seven in-repo + six sister sites), (iii) the 170-byte bound in a sister's own arithmetic (`semsource/entityid.go:88` assumes `platform (9)`). The framework observes (ii) already on the wire (`RunEntityID`, `agent.run.entity-id`) and observes (i) only as a refusal at import.
+
+## 7. Open evidence questions (for the owner's three unruled items and the seam issues)
+
+- **Q1 (RunID meaning).** Measured: RunID is a client-echoable, rule-inheritable, unauthenticated string that keys `AGENT_LOOPS` (spec `agentic-terminal-events:348-355`) and seeds 13 re-derivations (§2.2, §4.6). Evidence still needed: whether semspec's 20 `RunID` lines are the framework's field or its own `workflow/` concept (files listed §4.6); whether any sister reads `agent.loop.run` off the graph directly (`rg 'agent\.loop\.run'` in sisters — **not run**).
+- **Q2 (refuse vs default).** Measured: three validator homes (`Config.Validate`, `MinimalConfig.Validate`, `validateAuthorityPair`), env override precedes validate, the KV mirror runs after validate and after NATS connect, `SafeConfig.Update/Mutate` re-validate drafts. Evidence still needed: which of the 23 in-repo and ~30 sister configs are copied templates by provenance (only the three `CHANGE_ME` files are self-declared); whether `docker/compose/e2e.yml`'s two-binary shape is exercised in CI (profile `fixtures` — **not measured**).
+- **Q3 (O-4 comparison key).** Measured: port name not carried to the gate; subject is; envelope `source` dropped; `Triple.Source` persisted per triple; mutation lane carries neither. Evidence still needed: how many shipped Graphable producers set `Triple.Source` and to what (`rg 'Source:\s*"' --type go` per producer — **not run**); whether `PortFacts` exposes the port name on the facts projection (`component/port_facts.go` — `Name` field **not confirmed**).
+- **Q4 (170-byte bound with a suffix).** Arithmetic in §2.4; unmeasured: whether a suffix would be applied before or after `applyEnvOverrides`, and whether `semsource`'s `MaxOrgLen` comment's `platform (9)` assumption is enforced anywhere in semsource (**not run**).
+- **Q5 (lesson digest).** design.md `:275` says lesson IDs digest "content incl. loop IDs"; `canonicalLessonContent` does not. Which is intended is an owner question; the corpus fact is the code.
+- **Q6 (#1154 overlap).** A3 (`loop_execution_entity.go:138`) derives the **run** entity from the loop's wire `Org`/`Platform`; any Case-A change to the chain derivation touches the same five-type seam #1154 owns.
+- **Q7 (#1174 overlap).** `Mint`'s error text (`agentrun.go:316-319`) is the only framework error at this head that embeds a peer identity; the log site is `actions.go:1928`.
+- **Q8 (#1172 overlap).** Unchanged by anything measured here; recorded because the hierarchy skip is the third "silent path" beside O-4's merge and S5's unread predicate.
+- **Q9 (context root).** `config.NewConfigManager` creates `context.Background()` inside a constructor (`config/manager.go:73`) on the exact seam a first-boot design would extend — a violation to inventory under the contract's design discipline, not precedent.
+- **Q10 (sister drift already present).** semmem (`replace => ../semstreams`) still ships `instance_id` in 3 configs and would fail `rejectRemovedPlatformFields` on main; semdev's testdata calls the 5-arg `Mint`. Both are read-only observations for `docs/operations/migration-*.md`, not actions here.
+
+Inventory ends here; stop for independent inventory review.
