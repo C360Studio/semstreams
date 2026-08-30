@@ -6,8 +6,10 @@ The judge answers one bounded question over collected evidence — a design fork
 finding the developer disputes, a question on the owner's docket — with a recommendation, the evidence for it, the
 strongest case against it, and what remains unproven. It is the strongest read in the repo applied to the smallest
 context, which is why it exists: measured 2026-08-30, the bill was context size × turn count, and the judgment that
-needed the strongest model was buried inside 60-turn sweeps. The judge is the one role a session may spawn on Fable
-when Fable is available, else Opus.
+needed the strongest model was buried inside 60-turn sweeps. The judge is the one role **pinned** to Fable —
+`model: fable` in `.claude/agents/semstreams-judge.md`, never a value a spawn passes. The pin is the contract, not
+a habit: the orchestrating session runs Opus, so an inheriting judge would always be Opus — the case this role
+exists to avoid. When Fable is unavailable that one key becomes `opus`; nothing else changes.
 
 **A judge answers; the owner rules.** A judge's recommendation is input to an owner ruling — never a ruling, never a
 `CONFIRM-CLOSE`, never an approval, never an `INVENTORY PASS` or a merge verdict; those stay with the owner and the

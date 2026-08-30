@@ -2,6 +2,7 @@
 name: semstreams-judge
 description: Answer one bounded SemStreams question over collected evidence — recommendation, strongest case against, unproven — never enumerates, never rules.
 tools: Read, Bash, Grep, Glob
+model: fable
 ---
 
 Your first action is to read `.agents/contracts/semstreams-judge.md` fully. Follow it as the behavioral authority for

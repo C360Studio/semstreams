@@ -21,7 +21,7 @@ thin and must point to exactly one canonical contract.
   - Canonical: `.agents/contracts/semstreams-explorer.md`
   - Claude: `.claude/agents/semstreams-explorer.md`
   - Codex: `.codex/agents/semstreams-explorer.toml`
-- SemStreams judge (one bounded question over collected evidence; read-only; the one role a session may spawn on Fable)
+- SemStreams judge (one bounded question over collected evidence; read-only; the one role pinned to Fable)
   - Canonical: `.agents/contracts/semstreams-judge.md`
   - Claude: `.claude/agents/semstreams-judge.md`
   - Codex: `.codex/agents/semstreams-judge.toml`
