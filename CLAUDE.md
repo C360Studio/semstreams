@@ -52,6 +52,9 @@ Events → Graphable Interface → Knowledge Graph → Queries
   enumerates (explorer) and never rules (owner); it is the one role pinned to Fable — the pin lives in
   `.claude/agents/semstreams-judge.md`, so a spawn never passes a model. A judge answer is
   never posted as the ruling comment and never removes `status:needs-decision` — only the owner's own words do.
+  **Spawn it when the alternative is another round of the same model checking its own work** — a fresh instance is
+  not a different vantage (#1148 converged HIGH → HIGH → APPROVE, then Codex found blockers). The four triggers and
+  the do-not list are `.agents/contracts/semstreams-judge.md` § *When to spawn a judge*; the default is not to spawn.
 - Spawning these project role agents is the DEFAULT execution path for nontrivial and spec-based work — no
   user permission needed. (Only massively-parallel Workflow orchestration is opt-in; that restriction does not apply
   to role agents. There is no "don't spawn agents unless asked" rule in this repo.)
