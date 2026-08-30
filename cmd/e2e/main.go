@@ -225,6 +225,8 @@ func handleListCommand(listScenarios bool) bool {
 	fmt.Println("    core-health     - Component health checks")
 	fmt.Println("    core-dataflow   - UDP → Filter → Map → File pipeline")
 	fmt.Println("    core-graph-roundtrip - Projection write → ENTITY_STATES/index → GraphQL read")
+	fmt.Println("    core-minted-authority - platform_identity records {org, stem, id} with a minted suffix (ADR-104)")
+	fmt.Println("    core-pre-identity-seed / core-pre-identity-assert - the pre-identity-bucket refusal stage")
 	fmt.Println("    core-slow-consumer - Assembled slow-consumer attribution")
 	fmt.Println("")
 	fmt.Println("  Tiered (unified scenario with --variant flag):")

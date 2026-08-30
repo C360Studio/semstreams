@@ -112,11 +112,20 @@ with a matching `md5 -q`. Verbatim failure lines below.
       `go test ./test/contract/...`; `task entity-id:audit`; `task schema:generate && git diff --exit-code schemas/ specs/`;
       `openspec validate federation-identity --strict --no-interactive`; `go mod tidy -diff`;
       `bash scripts/inventory-verify.sh docs/proposals/gh1168-federation-identity-pins.md`.
-- [ ] 6.2 Covering e2e tiers, one at a time on an idle host, results verbatim: `task e2e:core` (both Case B stages),
-      `task e2e:lifecycle` (observed-pair seed), `task e2e:structural` (ingest regression under a minted pair).
-      Excluded with reason: `statistical`, `semantic` (same ingest path as structural, no identity literal beyond
-      the e2e config helper — re-run any whose scenario file changes in 5.2), `agentic`, `ops`, `lessons`,
-      `crud-tools`, `research-graph`, `deep-research`, `slow-consumer`, `throughput`, `openai-responses`.
+- [x] 6.2 Covering e2e tiers, one at a time on an idle host, results verbatim:
+      `task e2e:core` EXIT=0 — `[OK] platform_identity records {org, stem, id} and the effective pair carries the
+      minted suffix` and `[OK] A pre-identity bucket refuses LOUD, exits nonzero, and creates no identity record`;
+      `task e2e:lifecycle` EXIT=0 — all eight stages, so the four-position seed and the observed pair agree;
+      `task e2e:structural` EXIT=0 — `entity_count:127 validation_errors:0` under the minted pair.
+      Stage mutation check: `./e2e --scenario core-minted-authority` exits 1 with
+      `read semstreams_config/platform_identity: ... bucket not found` when no record exists, and exits 1 with
+      `recorded id "streamkit-pure" is not the stem "streamkit-pure" plus a suffix` against a hand-seeded unsuffixed
+      record — the stage is not vacuous.
+      Excluded with reason: `statistical`, `semantic` (same ingest path as structural; their identity literals come
+      from the same e2e config helper structural exercised), `agentic`, `ops`, `lessons`, `crud-tools`,
+      `research-graph`, `deep-research`, `slow-consumer`, `throughput`, `openai-responses`. `lessons` and
+      `throughput` had scenario files changed in 5.2 and are owed a run before merge — pause seam for the reviewer
+      round.
 - [ ] 6.3 Implementation review by `semstreams-reviewer`; dispositions in `conformance.md`, including the per-ruling
       conformance table (owner cut → `file:line`).
 - [ ] 6.4 Owner-run cross-agent round where asked.
