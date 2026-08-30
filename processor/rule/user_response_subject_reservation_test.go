@@ -78,7 +78,7 @@ func TestActionExecutorRejectsDynamicReservedUserResponseSubjectBeforeSideEffect
 		t.Run(tt.name, func(t *testing.T) {
 			publisher := &mockPublisher{}
 			auditor := &mockVerdictAuditor{}
-			executor := NewActionExecutorFull(nil, nil, publisher)
+			executor := NewActionExecutorFull(nil, nil, publisher, testExecutorPlatform())
 			executor.SetVerdictAuditor(auditor)
 			ec := &ExecutionContext{
 				EntityID:    "c360.platform.test.system.entity.001",

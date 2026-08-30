@@ -25,7 +25,7 @@ import (
 // sort fix.
 func createTestComponentWithCache(t *testing.T) *Component {
 	t.Helper()
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 	c, err := cache.NewSimple[graph.EntityState]()
 	require.NoError(t, err)
 	comp.entityCache = c
@@ -156,7 +156,7 @@ func TestRegression_ByteTrimCursor_ScrambledFetchOrder(t *testing.T) {
 // indivisible entity is never emitted past the observed carrier limit and is
 // never skipped behind a fabricated continuation.
 func TestRegression_FirstEntityOversizedIsRefused(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 	storePrefixEntity(t, comp, "acme.ops.dom.sys.type.aaa")
 	request, err := json.Marshal(graph.PrefixQueryRequest{Prefix: "acme", Limit: 1})
 	require.NoError(t, err)

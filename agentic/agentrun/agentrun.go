@@ -38,6 +38,7 @@ import (
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
+	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
 // agentRunTransitions is the declared phase graph for an AgentRun (ADR-053 D2).
@@ -75,6 +76,12 @@ const (
 
 	// predicateParentRunEntityID carries the parent run's full entity ID, if any.
 	predicateParentRunEntityID = "agent.run.parent-entity-id"
+
+	// predicateOriginEntityID carries the originating loop-execution entity ID.
+	// It is agvocab.RunOriginEntityID; spelled here as a local constant for the
+	// same reason its siblings are — this package's init() is what declares the
+	// run family to the predicate vocabulary.
+	predicateOriginEntityID = agvocab.RunOriginEntityID
 )
 
 func init() {
@@ -85,6 +92,7 @@ func init() {
 		predicateAuditFrom,
 		predicateAuditNote,
 		predicateParentRunEntityID,
+		predicateOriginEntityID,
 	} {
 		vocabulary.Register(predicate)
 	}
@@ -105,7 +113,8 @@ const EntityIDPattern = "*.*.chain.agent.execution.*"
 // Field tags:
 //   - lifecycle:"id"                                         — entity identity (full 6-part ID, from KV key)
 //   - lifecycle:"phase,predicate=agent.run.phase"            — current phase triple
-//   - lifecycle:"predicate=agent.run.parent_entity_id"       — parent run entity ID triple
+//   - lifecycle:"predicate=agent.run.parent-entity-id"       — parent RUN entity ID triple
+//   - lifecycle:"predicate=agent.run.origin-entity-id"       — originating LOOP entity ID triple
 //
 // D1 CRITICAL: EntityIDField MUST hold the FULL 6-part chain.execution entity ID
 // because the projection layer populates it from the entity-state KEY (not a
@@ -122,6 +131,19 @@ type AgentRun struct {
 
 	// ParentRunEntityID is the parent run's full entity ID, or empty for root runs.
 	ParentRunEntityID string `json:"parent_run_entity_id,omitempty" lifecycle:"predicate=agent.run.parent-entity-id"`
+
+	// OriginEntityID is the full entity ID of the loop execution this run was
+	// minted FROM — the run's origin, set at birth by Mint for every run
+	// (ADR-102; #1096). It is NOT ParentRunEntityID: that names the parent
+	// RUN, this names the originating LOOP.
+	//
+	// It exists because the reciprocal anchors on the loop (agent.loop.run,
+	// agent.run.entity-id) are written only when the firing loop carries this
+	// deployment's own authority. For an imported loop the framework writes
+	// nothing to it, so this predicate is the only surviving pointer — and
+	// giving it one home for local and imported origins alike keeps the walk
+	// identical in both cases.
+	OriginEntityID string `json:"origin_entity_id,omitempty" lifecycle:"predicate=agent.run.origin-entity-id"`
 }
 
 // EntityID returns the full 6-part federated entity ID.
@@ -204,13 +226,50 @@ func Register(mgr *lifecycle.Manager) error {
 	return mgr.Register(WorkflowDeclaration())
 }
 
+// The two refusals Mint can issue about a run's origin. Both are wrapped
+// ErrorInvalid — a caller distinguishes them from a transient store failure with
+// errs.IsInvalid and must not retry either. They are unexported because no
+// caller branches on the specific one today; the classification is the contract.
+var (
+	errOriginEntityIDRequired = errors.New(
+		"origin entity ID is required: a run with no recorded origin cannot be told apart from another deployment's run at the same instance")
+	errOriginEntityIDMismatch = errors.New(
+		"the run at this entity ID was minted from a different origin")
+)
+
 // Mint creates (or retrieves if already exists) an AgentRun for the given
 // rootLoopID (ADR-053 D4). The run's entity ID is
 // org.platform.chain.agent.execution.<rootLoopID>, initial phase is "dispatched".
 //
+// org and platform are the MINTING DEPLOYMENT's own authority (deps.Platform),
+// never read back from originEntityID: a rule firing on an imported loop mints
+// its runtime state locally (ADR-102 d2; #1096). originEntityID is the loop
+// execution the run was minted from; it is stamped as the birth predicate
+// agent.run.origin-entity-id, which is the run->loop pointer that survives when
+// the origin is a foreign-authority import the framework must not write to.
+//
+// originEntityID is REQUIRED. The run entity ID derives from rootLoopID alone,
+// so two loops that a peer and this deployment happen to name the same INSTANCE
+// derive the same local run ID — and before this check the second Mint silently
+// returned the first loop's run, with the second run's work attributed to the
+// first origin. Mint therefore refuses an empty origin, and on the
+// already-exists path compares the STORED origin with the requested one and
+// refuses a mismatch. That does not make the identity collision-free — deriving
+// it from the full origin is #1168 — it converts a silent alias into a loud
+// refusal, using state this function already fetches.
+//
+// LEGACY-EMPTY-RECORD POLICY: a stored run whose OriginEntityID is empty is
+// REFUSED, not adopted. An empty stored origin cannot establish that the stored
+// run is this caller's run, and a zero value is never an answer to an identity
+// question. Nothing in a pre-v1 deployment has to be migrated for this: every
+// run Mint creates from now on carries its origin, and pre-v1 identity work
+// starts downstreams on newly provisioned storage rather than reading old state
+// (the storage-and-retention contract; ADR-076 d6).
+//
 // Idempotent: if Manager.Create returns lifecycle.ErrAlreadyExists (the run was
 // already minted — common on JetStream redelivery or concurrent rule firings),
-// Mint treats it as success and returns the existing run via Manager.Get.
+// Mint treats it as success and returns the existing run via Manager.Get,
+// PROVIDED its stored origin is the requested one.
 //
 // NOTE: there is a narrow concurrent-create race (gh#178) where two goroutines
 // both call Mint for the same ID simultaneously; both may observe ErrAlreadyExists
@@ -219,15 +278,24 @@ func Register(mgr *lifecycle.Manager) error {
 // exists and is in a valid state. The gh#178 concern (which caller's Create "won")
 // does not apply here because all callers want the same initial phase ("dispatched")
 // and the run entity is immutable in terms of identity.
-func Mint(ctx context.Context, mgr MintableManager, org, platform, rootLoopID string) (*AgentRun, error) {
+func Mint(
+	ctx context.Context,
+	mgr MintableManager,
+	org, platform, rootLoopID, originEntityID string,
+) (*AgentRun, error) {
+	if originEntityID == "" {
+		return nil, semerrs.WrapInvalid(errOriginEntityIDRequired,
+			"agentrun", "Mint", "validate origin entity ID")
+	}
 	entityID, err := agentic.TryChainExecutionEntityID(org, platform, rootLoopID)
 	if err != nil {
 		return nil, fmt.Errorf("agentrun.Mint: build entity ID: %w", err)
 	}
 
 	initial := &AgentRun{
-		EntityIDField: entityID,
-		PhaseField:    "dispatched",
+		EntityIDField:  entityID,
+		PhaseField:     "dispatched",
+		OriginEntityID: originEntityID,
 	}
 	if err := mgr.Create(ctx, initial); err != nil {
 		if errors.Is(err, lifecycle.ErrAlreadyExists) {
@@ -239,6 +307,16 @@ func Mint(ctx context.Context, mgr MintableManager, org, platform, rootLoopID st
 			run, ok := existing.(*AgentRun)
 			if !ok {
 				return nil, fmt.Errorf("agentrun.Mint: Manager.Get returned unexpected type %T", existing)
+			}
+			// The stored run is this caller's run only if it was minted from the
+			// same origin. This read costs nothing new — the already-exists path
+			// has already fetched it — and it is the whole difference between
+			// returning a peer's run under this deployment's ID and saying so.
+			if run.OriginEntityID != originEntityID {
+				return nil, semerrs.WrapInvalid(
+					fmt.Errorf("%w: run %s was minted from %q, requested %q",
+						errOriginEntityIDMismatch, entityID, run.OriginEntityID, originEntityID),
+					"agentrun", "Mint", "compare stored origin entity ID")
 			}
 			return run, nil
 		}

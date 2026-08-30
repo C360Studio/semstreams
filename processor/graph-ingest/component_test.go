@@ -35,8 +35,8 @@ type mockKVBucket struct {
 	watchAllFactory  func() (jetstream.KeyWatcher, error)
 }
 
-// entity-id-audit:classify intentional-malformed "" line=779 column=16 surface=go-field:EntityState.ID entity_id_invalid:empty empty state ID rejection fixture
-// entity-id-audit:classify intentional-malformed "" line=881 column=14 surface=go-triple-subject entity_id_invalid:empty empty triple subject rejection fixture
+// entity-id-audit:classify intentional-malformed "" line=782 column=16 surface=go-field:EntityState.ID entity_id_invalid:empty empty state ID rejection fixture
+// entity-id-audit:classify intentional-malformed "" line=884 column=14 surface=go-triple-subject entity_id_invalid:empty empty triple subject rejection fixture
 
 // mockKVData stores value with revision for CAS testing
 type mockKVData struct {
@@ -685,6 +685,7 @@ func TestCreateGraphIngest_ValidConfig(t *testing.T) {
 	deps := component.Dependencies{
 		NATSClient:      natsClient,
 		PayloadRegistry: newTestPayloadRegistry(t),
+		Platform:        component.PlatformMeta{Org: testDeploymentOrg, Platform: testDeploymentPlatform},
 	}
 
 	comp, err := CreateGraphIngest(configJSON, deps)
@@ -705,6 +706,7 @@ func TestCreateGraphIngest_InvalidConfig(t *testing.T) {
 	deps := component.Dependencies{
 		NATSClient:      natsClient,
 		PayloadRegistry: newTestPayloadRegistry(t),
+		Platform:        component.PlatformMeta{Org: testDeploymentOrg, Platform: testDeploymentPlatform},
 	}
 
 	comp, err := CreateGraphIngest(invalidJSON, deps)
@@ -722,6 +724,7 @@ func TestCreateGraphIngest_MissingDependencies(t *testing.T) {
 	deps := component.Dependencies{
 		NATSClient:      nil,
 		PayloadRegistry: newTestPayloadRegistry(t),
+		Platform:        component.PlatformMeta{Org: testDeploymentOrg, Platform: testDeploymentPlatform},
 	}
 
 	comp, err := CreateGraphIngest(configJSON, deps)
@@ -933,7 +936,7 @@ func TestComponent_RespectsContext_Timeout(t *testing.T) {
 // ====================================================================================
 
 // createTestComponent creates a basic test component with unconnected NATS client
-func createTestComponent(t *testing.T) *Component {
+func createTestComponent(t *testing.T, opts ...testComponentOption) *Component {
 	t.Helper()
 
 	// Create unconnected NATS client (won't actually connect)
@@ -941,10 +944,7 @@ func createTestComponent(t *testing.T) *Component {
 	require.NoError(t, err)
 
 	config := DefaultConfig()
-	deps := component.Dependencies{
-		NATSClient:      natsClient,
-		PayloadRegistry: newTestPayloadRegistry(t),
-	}
+	deps := testDependencies(t, natsClient, opts...)
 
 	configJSON, err := json.Marshal(config)
 	require.NoError(t, err)
@@ -956,13 +956,13 @@ func createTestComponent(t *testing.T) *Component {
 }
 
 // createTestComponentWithMockKV creates a test component with mock KV bucket
-func createTestComponentWithMockKV(t *testing.T) *Component {
+func createTestComponentWithMockKV(t *testing.T, opts ...testComponentOption) *Component {
 	t.Helper()
-	component, _ := createTestComponentWithMockKVBucket(t)
+	component, _ := createTestComponentWithMockKVBucket(t, opts...)
 	return component
 }
 
-func createTestComponentWithMockKVBucket(t *testing.T) (*Component, *mockKVBucket) {
+func createTestComponentWithMockKVBucket(t *testing.T, opts ...testComponentOption) (*Component, *mockKVBucket) {
 	t.Helper()
 
 	mockBucket := newMockKVBucket()
@@ -972,10 +972,7 @@ func createTestComponentWithMockKVBucket(t *testing.T) (*Component, *mockKVBucke
 	require.NoError(t, err)
 
 	config := DefaultConfig()
-	deps := component.Dependencies{
-		NATSClient:      natsClient,
-		PayloadRegistry: newTestPayloadRegistry(t),
-	}
+	deps := testDependencies(t, natsClient, opts...)
 
 	configJSON, err := json.Marshal(config)
 	require.NoError(t, err)

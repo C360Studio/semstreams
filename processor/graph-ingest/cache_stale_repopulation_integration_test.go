@@ -35,7 +35,7 @@ import (
 // with the guard the Set is skipped and the final read observes rev2.
 func TestIntegration_CacheStaleRepopulationRace(t *testing.T) {
 	ctx := context.Background()
-	c, _ := startPrefixTestComponent(t)
+	c, _ := startPrefixTestComponent(t, withAuthority("stalecache", "ops"))
 
 	const id = "stalecache.ops.dom.sys.type.entity1"
 

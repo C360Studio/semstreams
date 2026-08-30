@@ -18,7 +18,7 @@ import (
 )
 
 func TestHandleQueryPrefix_InvalidPrefixHasNoBucketIO(t *testing.T) {
-	comp, mock := createTestComponentWithMockKVBucket(t)
+	comp, mock := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 	var lists atomic.Int64
 	mock.listFilteredFunc = func(context.Context, ...string) (jetstream.KeyLister, error) {
 		lists.Add(1)
@@ -85,7 +85,7 @@ func callPrefixHandlerWithMaxPayload(
 // TestHandleQueryPrefix_SortDeterminism verifies that the same set of keys is
 // always returned in sorted lexicographic order regardless of insertion order.
 func TestHandleQueryPrefix_SortDeterminism(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 
 	// Store entities in reverse lexicographic order to confirm sorting happens.
 	ids := []string{
@@ -109,7 +109,7 @@ func TestHandleQueryPrefix_SortDeterminism(t *testing.T) {
 // TestHandleQueryPrefix_CursorPagination verifies that paginating with a cursor
 // returns sorted, disjoint pages that together cover the full result set.
 func TestHandleQueryPrefix_CursorPagination(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("org", "ops"))
 
 	// Store 5 entities.
 	for i := 1; i <= 5; i++ {
@@ -161,7 +161,7 @@ func TestHandleQueryPrefix_CursorPagination(t *testing.T) {
 // TestHandleQueryPrefix_LimitClampZero verifies that limit<=0 is clamped to
 // DefaultPrefixQueryLimit rather than returning zero or an error.
 func TestHandleQueryPrefix_LimitClampZero(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 	storePrefixEntity(t, comp, "acme.ops.dom.sys.type.entity-001")
 	storePrefixEntity(t, comp, "acme.ops.dom.sys.type.entity-002")
 
@@ -177,7 +177,7 @@ func TestHandleQueryPrefix_LimitClampZero(t *testing.T) {
 // TestHandleQueryPrefix_LimitClampAboveMax verifies that limit > MaxPrefixQueryLimit
 // is silently clamped — the handler returns at most MaxPrefixQueryLimit entities.
 func TestHandleQueryPrefix_LimitClampAboveMax(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("org", "ops"))
 	// Store 3 entities — well below the cap but enough to verify clamping doesn't error.
 	for i := 1; i <= 3; i++ {
 		storePrefixEntity(t, comp, fmt.Sprintf("org.ops.dom.sys.type.entity-%03d", i))
@@ -237,7 +237,7 @@ func TestMarshalFittingPrefixPageRejectsFirstIndivisibleEntity(t *testing.T) {
 // TestHandleQueryPrefix_InvalidCursor verifies that a malformed cursor returns
 // a classified error rather than panicking or silently returning wrong data.
 func TestHandleQueryPrefix_InvalidCursor(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 	storePrefixEntity(t, comp, "acme.ops.dom.sys.type.entity-001")
 
 	reqData, err := json.Marshal(graph.PrefixQueryRequest{
@@ -254,7 +254,7 @@ func TestHandleQueryPrefix_InvalidCursor(t *testing.T) {
 // TestHandleQueryPrefix_SinglePageNoNextCursor verifies that an exhausted page
 // omits NextCursor.
 func TestHandleQueryPrefix_SinglePageNoNextCursor(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 	storePrefixEntity(t, comp, "acme.ops.dom.sys.type.entity-001")
 	storePrefixEntity(t, comp, "acme.ops.dom.sys.type.entity-002")
 
@@ -278,7 +278,7 @@ func TestHandleQueryPrefix_SinglePageNoNextCursor(t *testing.T) {
 // TestHandleQueryPrefix_FirstPageRequest verifies that omitting cursor requests
 // the first page.
 func TestHandleQueryPrefix_FirstPageRequest(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("c360", "platform"))
 	storePrefixEntity(t, comp, "c360.platform.robotics.mav1.drone.001")
 
 	req := map[string]any{"prefix": "c360", "limit": 10}

@@ -70,7 +70,7 @@ func TestIngestEntity_FillsOnlyEmptyFactProjectionSubject(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, comp.ingestEntity(context.Background(), entity))
+	require.NoError(t, comp.ingestEntity(context.Background(), entity, false))
 	stored := storedEntity(t, comp, flParentID)
 	require.Len(t, stored.Triples, 3) // two facts plus the indexing-profile floor
 	for _, triple := range stored.Triples {
@@ -94,7 +94,7 @@ func TestIngestEntity_DoesNotRepairNonEmptyFactProjectionSubject(t *testing.T) {
 		}},
 	}
 
-	require.Error(t, comp.ingestEntity(context.Background(), entity))
+	require.Error(t, comp.ingestEntity(context.Background(), entity, false))
 	assert.Equal(t, 0, getCalls, "malformed projected state must fail before KV probing")
 	assert.Equal(t, "malformed", entity.Triples[0].Subject, "non-empty subject bytes must not be repaired")
 }
@@ -111,7 +111,7 @@ func TestIngestEntity_DoesNotFillFromInvalidEnvelopeIdentity(t *testing.T) {
 		Triples: []message.Triple{{Subject: "", Predicate: "test.subject.omitted"}},
 	}
 
-	require.Error(t, comp.ingestEntity(context.Background(), entity))
+	require.Error(t, comp.ingestEntity(context.Background(), entity, false))
 	assert.Equal(t, 0, getCalls, "invalid envelope must fail before KV probing")
 	assert.Empty(t, entity.Triples[0].Subject, "fill requires an already-canonical envelope ID")
 }
@@ -146,7 +146,7 @@ func TestStorageRefExtraction_ConsumerLiftsRefOntoEntity(t *testing.T) {
 	assert.Equal(t, ref.Key, entity.StorageRef.Key)
 
 	// And it must survive the merge into the bucket (create-branch marshal).
-	comp.ingestEntity(context.Background(), entity)
+	comp.ingestEntity(context.Background(), entity, false)
 	es := storedEntity(t, comp, flParentID)
 	require.NotNil(t, es.StorageRef, "StorageRef must persist through MergeEntity to the stored entity")
 	assert.Equal(t, "objectstore-primary", es.StorageRef.StorageInstance)
@@ -183,7 +183,7 @@ func TestIngestEntity_RejectsCrossSubjectFacts(t *testing.T) {
 		},
 	}
 
-	require.Error(t, comp.ingestEntity(ctx, entity))
+	require.Error(t, comp.ingestEntity(ctx, entity, false))
 	_, parentErr := comp.entityBucket.Get(ctx, flParentID)
 	_, childErr := comp.entityBucket.Get(ctx, flChildID)
 	assert.Error(t, parentErr, "a rejected Graphable must not partially write its primary entity")
@@ -200,7 +200,7 @@ func TestIngestEntity_SingleSubjectNoForeignEntityCreated(t *testing.T) {
 		Version:     1,
 		Triples:     []message.Triple{{Subject: flParentID, Predicate: "graph.rel.hosts", Object: "x", Timestamp: time.Now()}},
 	}
-	comp.ingestEntity(ctx, entity)
+	comp.ingestEntity(ctx, entity, false)
 
 	parent := storedEntity(t, comp, flParentID)
 	assert.True(t, hasPredicate(parent, "graph.rel.hosts"))

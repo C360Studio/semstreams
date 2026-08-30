@@ -69,6 +69,7 @@ func createHierarchyComponentOnClient(t *testing.T, natsClient *natsclient.Clien
 	deps := component.Dependencies{
 		NATSClient:      natsClient,
 		PayloadRegistry: newTestPayloadRegistry(t),
+		Platform:        component.PlatformMeta{Org: testDeploymentOrg, Platform: testDeploymentPlatform},
 	}
 
 	configJSON, err := json.Marshal(config)

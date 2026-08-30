@@ -23,7 +23,10 @@ func factoryTestDeps(t *testing.T, reg *payloadregistry.Registry) component.Depe
 	t.Helper()
 	natsClient, err := natsclient.NewClient("nats://localhost:4222")
 	require.NoError(t, err)
-	return component.Dependencies{NATSClient: natsClient, PayloadRegistry: reg}
+	return component.Dependencies{
+		NATSClient: natsClient, PayloadRegistry: reg,
+		Platform: component.PlatformMeta{Org: "c360", Platform: "test"},
+	}
 }
 
 func factoryTestConfig(t *testing.T, enableHierarchy bool) json.RawMessage {

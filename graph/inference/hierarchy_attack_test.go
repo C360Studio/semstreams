@@ -22,10 +22,10 @@ func TestAttack_IsContainerEntity_Concurrent(t *testing.T) {
 		entityID        string
 		wantIsContainer bool
 	}{
-		{"c360.logistics.sensor.environmental.temperature.group", true},
-		{"c360.logistics.sensor.environmental.group.container", true},
-		{"c360.logistics.sensor.group.container.level", true},
-		{"c360.logistics.sensor.environmental.temperature.temp-001", false},
+		{"c360.semstreams-hierarchy-test.sensor.environmental.temperature.group", true},
+		{"c360.semstreams-hierarchy-test.sensor.environmental.group.container", true},
+		{"c360.semstreams-hierarchy-test.sensor.group.container.level", true},
+		{"c360.semstreams-hierarchy-test.sensor.environmental.temperature.temp-001", false},
 		{"", false},
 		{"a.b.c.d.e", false},
 		{"a.b.c.d.e.f.g", false},
@@ -71,6 +71,8 @@ func TestAttack_OnEntityCreated_Concurrent(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: true,
@@ -81,13 +83,13 @@ func TestAttack_OnEntityCreated_Concurrent(t *testing.T) {
 
 	entities := []string{
 		// Real entities
-		"c360.logistics.sensor.environmental.temperature.temp-001",
-		"c360.logistics.sensor.environmental.temperature.temp-002",
-		"c360.logistics.sensor.environmental.pressure.press-001",
+		"c360.semstreams-hierarchy-test.sensor.environmental.temperature.temp-001",
+		"c360.semstreams-hierarchy-test.sensor.environmental.temperature.temp-002",
+		"c360.semstreams-hierarchy-test.sensor.environmental.pressure.press-001",
 		// Container entities (should be skipped)
-		"c360.logistics.sensor.environmental.temperature.group",
-		"c360.logistics.sensor.environmental.group.container",
-		"c360.logistics.sensor.group.container.level",
+		"c360.semstreams-hierarchy-test.sensor.environmental.temperature.group",
+		"c360.semstreams-hierarchy-test.sensor.environmental.group.container",
+		"c360.semstreams-hierarchy-test.sensor.group.container.level",
 	}
 
 	const goroutines = 50
@@ -139,6 +141,8 @@ func TestAttack_CancelledContext(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: true,
@@ -154,7 +158,7 @@ func TestAttack_CancelledContext(t *testing.T) {
 	go func() {
 		defer close(done)
 		// Should not hang on cancelled context
-		_ = hi.OnEntityCreated(ctx, "c360.logistics.sensor.environmental.temperature.temp-001")
+		_ = hi.OnEntityCreated(ctx, "c360.semstreams-hierarchy-test.sensor.environmental.temperature.temp-001")
 	}()
 
 	select {
@@ -179,8 +183,8 @@ func TestAttack_EdgeCaseInputs(t *testing.T) {
 		{"multiple trailing dots", "a.b.c.d.e.group..."},
 		{"double dots", "a..b.c.d.e.group"},
 		{"very long ID", strings.Repeat("a.", 1000) + "group"},
-		{"unicode", "c360.logistics.环境.sensor.温度.group"},
-		{"special chars", "c360.logistics.env$ironmental.sensor.temp@.group"},
+		{"unicode", "c360.semstreams-hierarchy-test.环境.sensor.温度.group"},
+		{"special chars", "c360.semstreams-hierarchy-test.env$ironmental.sensor.temp@.group"},
 		{"newline", "a.b.c.d.e\n.group"},
 		{"null byte", "a.b.c.d.e\x00.group"},
 	}
@@ -195,7 +199,10 @@ func TestAttack_EdgeCaseInputs(t *testing.T) {
 			// Should handle gracefully in OnEntityCreated
 			tripleAdder := &hierarchyMockTripleAdder{}
 			entityManager := newMockEntityManager()
-			config := HierarchyConfig{Enabled: true, CreateTypeEdges: true}
+			config := HierarchyConfig{
+				Org: hierarchyTestOrg, Platform: hierarchyTestPlatform,
+				Enabled: true, CreateTypeEdges: true,
+			}
 			hi := NewHierarchyInference(entityManager, tripleAdder, config, nil)
 
 			require.NotPanics(t, func() {
@@ -212,6 +219,8 @@ func TestAttack_ContainerCacheConcurrency(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: true,
@@ -229,7 +238,7 @@ func TestAttack_ContainerCacheConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = hi.OnEntityCreated(context.Background(), "c360.logistics.sensor.environmental.temperature.temp-001")
+			_ = hi.OnEntityCreated(context.Background(), "c360.semstreams-hierarchy-test.sensor.environmental.temperature.temp-001")
 		}()
 	}
 
@@ -262,6 +271,8 @@ func TestAttack_ClearCacheDuringOperations(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: false,
@@ -283,7 +294,7 @@ func TestAttack_ClearCacheDuringOperations(t *testing.T) {
 			case <-ctx.Done():
 				return
 			default:
-				entityID := "c360.logistics.sensor.environmental.temperature.temp-" + string(rune('A'+i%26))
+				entityID := "c360.semstreams-hierarchy-test.sensor.environmental.temperature.temp-" + string(rune('A'+i%26))
 				_ = hi.OnEntityCreated(ctx, entityID)
 			}
 		}
@@ -340,6 +351,8 @@ func TestAttack_MetricsConcurrency(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: true,
@@ -361,7 +374,7 @@ func TestAttack_MetricsConcurrency(t *testing.T) {
 			case <-ctx.Done():
 				return
 			default:
-				entityID := "c360.logistics.sensor.environmental.temperature.temp-" + string(rune('A'+i%26))
+				entityID := "c360.semstreams-hierarchy-test.sensor.environmental.temperature.temp-" + string(rune('A'+i%26))
 				_ = hi.OnEntityCreated(ctx, entityID)
 			}
 		}
@@ -405,7 +418,7 @@ func TestAttack_NilConfig(t *testing.T) {
 
 	require.NotPanics(t, func() {
 		hi := NewHierarchyInference(entityManager, tripleAdder, config, nil)
-		_ = hi.OnEntityCreated(context.Background(), "c360.logistics.sensor.environmental.temperature.temp-001")
+		_ = hi.OnEntityCreated(context.Background(), "c360.semstreams-hierarchy-test.sensor.environmental.temperature.temp-001")
 	}, "Should handle zero-value config")
 }
 
@@ -468,6 +481,8 @@ func TestAttack_LargeEntityBurst(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: true,
@@ -485,7 +500,7 @@ func TestAttack_LargeEntityBurst(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			// Different types to create different containers
-			entityID := "c360.logistics.sensor.environmental.temperature.temp-" + string(rune('A'+idx%26))
+			entityID := "c360.semstreams-hierarchy-test.sensor.environmental.temperature.temp-" + string(rune('A'+idx%26))
 			_ = hi.OnEntityCreated(context.Background(), entityID)
 		}(i)
 	}
@@ -517,6 +532,8 @@ func TestAttack_MemoryUsage(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: true,
@@ -528,7 +545,7 @@ func TestAttack_MemoryUsage(t *testing.T) {
 	// Create 10,000 entities with different types
 	const entityCount = 10000
 	for i := 0; i < entityCount; i++ {
-		entityID := "c360.logistics.sensor.environmental.temp.instance-" + string(rune('A'+i%26)) + string(rune('0'+i%10))
+		entityID := "c360.semstreams-hierarchy-test.sensor.environmental.temp.instance-" + string(rune('A'+i%26)) + string(rune('0'+i%10))
 		_ = hi.OnEntityCreated(context.Background(), entityID)
 	}
 
@@ -549,6 +566,8 @@ func TestAttack_GoroutineCount(t *testing.T) {
 	entityManager := newMockEntityManager()
 
 	config := HierarchyConfig{
+		Org:               hierarchyTestOrg,
+		Platform:          hierarchyTestPlatform,
 		Enabled:           true,
 		CreateTypeEdges:   true,
 		CreateSystemEdges: true,
@@ -561,7 +580,7 @@ func TestAttack_GoroutineCount(t *testing.T) {
 
 	// Create 100 entities
 	for i := 0; i < 100; i++ {
-		entityID := "c360.logistics.sensor.environmental.temperature.temp-" + string(rune('A'+i%26))
+		entityID := "c360.semstreams-hierarchy-test.sensor.environmental.temperature.temp-" + string(rune('A'+i%26))
 		_ = hi.OnEntityCreated(context.Background(), entityID)
 	}
 

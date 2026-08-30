@@ -12,9 +12,14 @@ import (
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 )
+
+// errHierarchyAuthorityUnset is returned when an ENABLED HierarchyInference
+// holds no deployment authority to compare an entity against.
+var errHierarchyAuthorityUnset = errors.New("hierarchy inference has no deployment authority")
 
 // HierarchyInference creates membership edges to container entities based on
 // the 6-part entity ID structure. It operates synchronously - hierarchy triples
@@ -79,6 +84,21 @@ type EntityManager interface {
 type HierarchyConfig struct {
 	// Enabled activates hierarchy inference on entity creation
 	Enabled bool `json:"enabled"`
+
+	// Org and Platform are the DEPLOYMENT's own authority — positions 1-2 of
+	// every identity this deployment may mint (ADR-102 d5). They are
+	// json:"-" on purpose: the framework already holds the pair at the
+	// composition root (deps.Platform) and an operator who had to restate it
+	// here could only restate it wrong. graph-ingest sets them from its own
+	// deps.Platform read; every other constructor of this config is a test.
+	//
+	// An entity whose positions 1-2 differ is an imported mirror, and
+	// GetHierarchyTriples mints NOTHING for it — no container, no membership
+	// triple, no inverse sibling edge — because the framework never mints
+	// under a foreign authority. Leaving the pair empty while Enabled is set
+	// is refused loudly rather than silently skipping every entity.
+	Org      string `json:"-"`
+	Platform string `json:"-"`
 
 	// CreateTypeEdges enables type membership edges (5-part prefix → type container)
 	// StandardIRI: skos:broader
@@ -166,14 +186,35 @@ func isContainerEntity(entityID string) bool {
 // 3. Returns a membership triple from entity to container
 // 4. Adds inverse edge to container (container → contains → entity) (WRITE)
 //
-// Returns empty slice if hierarchy is disabled or entity ID is invalid.
+// Returns empty slice if hierarchy is disabled, the entity ID is invalid, or
+// the entity carries a FOREIGN authority (an imported mirror — ADR-102).
 func (h *HierarchyInference) GetHierarchyTriples(ctx context.Context, entityID string) ([]message.Triple, error) {
 	if !h.config.Enabled {
 		return nil, nil
 	}
 
+	// An enabled inference with no deployment authority could only answer
+	// "everything is foreign" and mint nothing, for every entity, forever. That
+	// is the silent shape this check exists to prevent: it is a construction
+	// mistake, so it fails the write loudly instead of quietly disabling the
+	// feature. graph-ingest cannot reach it — its factory refuses an absent
+	// deps.Platform first.
+	if h.config.Org == "" || h.config.Platform == "" {
+		return nil, errs.WrapInvalid(errHierarchyAuthorityUnset, "HierarchyInference", "GetHierarchyTriples",
+			"hierarchy inference requires the deployment authority (HierarchyConfig.Org/Platform)")
+	}
+
 	// Skip container entities to prevent infinite cascade
 	if isContainerEntity(entityID) {
+		return nil, nil
+	}
+
+	// Foreign authority: the framework never mints under a peer's org.platform,
+	// so an imported entity is persisted with no hierarchy at all — on the
+	// import lane as on any other (ADR-102, accepted by ruling on every lane).
+	// No warning: for a federated deployment this is the ordinary case, and a
+	// per-arrival WARN would be noise, not signal.
+	if semtypes.ValidateEntityIDAuthority(entityID, h.config.Org, h.config.Platform, false) != nil {
 		return nil, nil
 	}
 

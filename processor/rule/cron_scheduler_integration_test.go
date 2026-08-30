@@ -75,6 +75,7 @@ func startCronProcessorForTest(t *testing.T, natsClient *natsclient.Client, rule
 	registry := metric.NewMetricsRegistry()
 	proc, err := NewProcessorWithMetrics(natsClient, &cfg, registry)
 	require.NoError(t, err)
+	proc.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 	// No SetDecoder call: cron rules fire on a clock, not on incoming
 	// messages, so the decoder path is unused. Same posture as
 	// kv_hot_reload_integration_test.go.

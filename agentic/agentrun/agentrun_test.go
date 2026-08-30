@@ -20,6 +20,7 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/agentic/agentrun"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 	"github.com/stretchr/testify/assert"
@@ -196,6 +197,12 @@ func (m *mockLifecycleManager) Create(_ context.Context, initial lifecycle.Parti
 // Manager.Create returns ErrAlreadyExists, Mint falls back to Manager.Get
 // and returns the already-minted run (not an error). This is the production
 // idempotency path for JetStream redeliveries and concurrent rule firings.
+//
+// The seed carries the SAME origin the Mint below requests, because that is
+// what makes the stored run this caller's run. An earlier version of this test
+// seeded an origin-less run and read the fall-back as success, which is exactly
+// the alias Mint now refuses — see
+// TestMint_TwoOriginsAtOneInstanceAreRefusedNotAliased.
 func TestMint_Idempotent_ErrAlreadyExistsFallsBackToGet(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -203,15 +210,17 @@ func TestMint_Idempotent_ErrAlreadyExistsFallsBackToGet(t *testing.T) {
 	mock := newMockLifecycleManager()
 	// Pre-seed the run to simulate a prior mint.
 	runEntityID := "acme.ops.chain.agent.execution.run-already-exists"
+	originEntityID := "acme.ops.agentic-loop.agent.execution.run-already-exists"
 	existing := &agentrun.AgentRun{
-		EntityIDField: runEntityID,
-		PhaseField:    "dispatched",
+		EntityIDField:  runEntityID,
+		PhaseField:     "dispatched",
+		OriginEntityID: originEntityID,
 	}
 	mock.seed(existing)
 
 	// Mint with the same ID — Create returns ErrAlreadyExists.
 	// Mint must fall back to Get and return the existing run.
-	result, err := agentrun.Mint(ctx, mock, "acme", "ops", "run-already-exists")
+	result, err := agentrun.Mint(ctx, mock, "acme", "ops", "run-already-exists", originEntityID)
 	require.NoError(t, err, "Mint must not error on ErrAlreadyExists — idempotent path")
 	require.NotNil(t, result)
 	assert.Equal(t, runEntityID, result.EntityID(),
@@ -223,6 +232,86 @@ func TestMint_Idempotent_ErrAlreadyExistsFallsBackToGet(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "run-already-exists", runID,
 		"idempotent Mint must return the correct bare RunID")
+}
+
+// TestMint_TwoOriginsAtOneInstanceAreRefusedNotAliased is the safety half of
+// review blocker 3. The run entity ID is derived from the loop's INSTANCE
+// segment alone (org.platform.chain.agent.execution.<instance>), so two loops
+// that different deployments happen to name the same instance derive the same
+// local run ID. Before this check the second Mint returned the FIRST loop's run
+// and the second loop's work was attributed to a stranger, with nothing logged
+// and nothing counted.
+//
+// This does not make the identity collision-free — deriving it from the full
+// origin is #1168 — and the test is written to say so: the second caller gets an
+// error, not a distinct run.
+func TestMint_TwoOriginsAtOneInstanceAreRefusedNotAliased(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	mock := newMockLifecycleManager()
+	const sharedInstance = "a1b2c3d4"
+	firstOrigin := "peerone.dep1.agentic-loop.agent.execution." + sharedInstance
+	secondOrigin := "peertwo.dep9.agentic-loop.agent.execution." + sharedInstance
+
+	first, err := agentrun.Mint(ctx, mock, "acme", "ops", sharedInstance, firstOrigin)
+	require.NoError(t, err)
+	require.Equal(t, "acme.ops.chain.agent.execution."+sharedInstance, first.EntityID())
+
+	second, err := agentrun.Mint(ctx, mock, "acme", "ops", sharedInstance, secondOrigin)
+	require.Error(t, err,
+		"a second origin at the same instance must be REFUSED, never silently served the first origin's run")
+	assert.Nil(t, second)
+	assert.True(t, errs.IsInvalid(err),
+		"the refusal is a classified invalid — a caller must not retry it as transient")
+
+	// The first run is untouched: a refused mint mutates nothing.
+	stored, getErr := mock.Get(ctx, agentrun.WorkflowName, first.EntityID())
+	require.NoError(t, getErr)
+	storedRun, ok := stored.(*agentrun.AgentRun)
+	require.True(t, ok)
+	assert.Equal(t, firstOrigin, storedRun.OriginEntityID)
+}
+
+// TestMint_RefusesEmptyOrigin — a run with no recorded origin cannot be told
+// apart from another deployment's run at the same instance, so Mint refuses to
+// create one. It refuses BEFORE Create, so the store is untouched.
+func TestMint_RefusesEmptyOrigin(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	mock := newMockLifecycleManager()
+	run, err := agentrun.Mint(ctx, mock, "acme", "ops", "no-origin", "")
+	require.Error(t, err)
+	assert.Nil(t, run)
+	assert.True(t, errs.IsInvalid(err))
+
+	_, getErr := mock.Get(ctx, agentrun.WorkflowName, "acme.ops.chain.agent.execution.no-origin")
+	assert.ErrorIs(t, getErr, lifecycle.ErrEntityNotFound,
+		"a refused mint must not have created anything")
+}
+
+// TestMint_LegacyOriginlessStoredRunIsRefused pins the legacy-empty-record
+// policy. A stored run whose origin is empty predates the invariant; an empty
+// value cannot establish that it is this caller's run, so it is refused rather
+// than adopted. Pre-v1 identity work starts downstreams on newly provisioned
+// storage, so there is no record to migrate — only a record that must not be
+// silently claimed.
+func TestMint_LegacyOriginlessStoredRunIsRefused(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	mock := newMockLifecycleManager()
+	mock.seed(&agentrun.AgentRun{
+		EntityIDField: "acme.ops.chain.agent.execution.legacy",
+		PhaseField:    "dispatched",
+	})
+
+	run, err := agentrun.Mint(ctx, mock, "acme", "ops", "legacy",
+		"acme.ops.agentic-loop.agent.execution.legacy")
+	require.Error(t, err, "an origin-less stored run is refused, not adopted")
+	assert.Nil(t, run)
+	assert.True(t, errs.IsInvalid(err))
 }
 
 // TestMint_EntityIDShape verifies the entity ID format produced by Mint.

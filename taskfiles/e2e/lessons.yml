@@ -4,7 +4,10 @@ tasks:
   default:
     desc: Run direct-product lesson birth/lifecycle/reader-matcher E2E gate
     silent: false
-    deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
+    deps:
+      - task: ":e2e:check-ports"
+        vars: { COMPOSE_FILES: "docker/compose/e2e.yml", PROFILES: "fixtures" }
+      - ":build:e2e"
     cmds:
       # ADR-103: the lesson scenario births its evidence fixture as
       # test.fixture.v1, which only cmd/e2e-semstreams registers, so this tier

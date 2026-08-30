@@ -143,7 +143,10 @@ tasks:
   e2e:tiers:
     desc: Run all tier E2E tests (structural -> statistical -> semantic)
     silent: false
-    deps: [e2e:clean, e2e:check-ports, build:e2e]
+    deps:
+      - task: "e2e:check-ports"
+        vars: { COMPOSE_FILES: "docker/compose/tiered.yml", PROFILES: "structural statistical semantic" }
+      - "build:e2e"
     cmds:
       - 'echo "[TIERS] Running all inference tier E2E tests..."'
       - 'echo ""'

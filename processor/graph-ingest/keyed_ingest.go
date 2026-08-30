@@ -28,6 +28,14 @@ type ingestWork struct {
 	// consume closure so the ack path can age the readiness view without a second
 	// Metadata() call on a per-message hot path.
 	deliveredAt time.Time
+	// subject is the arrival port's filter subject — the lane label the
+	// authority rejection is metered under, so an operator reading
+	// mutation_rejections can see WHICH port a refused write came in on.
+	subject string
+	// importLane is the arrival port's own "import": true declaration (ADR-102
+	// d5). It is read from the port, never from the message: a peer cannot
+	// declare itself trusted.
+	importLane bool
 }
 
 // laneGuard is one lane's in-memory applied-sequence cache — tier 1 of the
@@ -112,10 +120,18 @@ func (c *Component) processIngest(ctx context.Context, lane int, work ingestWork
 	// participates in the idempotency guard. Structural failures are terminal
 	// for this immutable stream message and must not create a guard key/Get or a
 	// redelivery loop.
-	if validationErr := c.prepareFactProjection(work.entity); validationErr != nil {
-		c.recordEntityStateContractRejection("graphable", validationErr)
-		c.recordPredicateContractRejections("graphable", validationErr)
-		c.logStructuralContractRejection("graphable", validationErr)
+	if validationErr := c.prepareFactProjection(work.entity, work.importLane); validationErr != nil {
+		// An authority rejection is its own class: metered under its own reason
+		// and logged without the identity, never counted as a structural
+		// contract rejection. Terminal either way — a foreign write can never
+		// become admissible by redelivery.
+		if reason, isAuthority := authorityMetricReason(validationErr); isAuthority {
+			c.recordAuthorityRejection(work.subject, reason, validationErr)
+		} else {
+			c.recordEntityStateContractRejection("graphable", validationErr)
+			c.recordPredicateContractRejections("graphable", validationErr)
+			c.logStructuralContractRejection("graphable", validationErr)
+		}
 		if termErr := work.msg.Term(); termErr != nil {
 			c.logger.Error("Failed to terminate structurally invalid ingest", slog.Any("error", termErr))
 		}
@@ -148,7 +164,7 @@ func (c *Component) processIngest(ctx context.Context, lane int, work ingestWork
 	// Apply. Structural contract violations are terminal for this immutable
 	// message; storage, timeout, and cancellation failures are retried.
 	start := time.Now()
-	ingestErr := c.ingestEntity(ctx, work.entity)
+	ingestErr := c.ingestEntity(ctx, work.entity, work.importLane)
 	c.processingDuration.Observe(time.Since(start).Seconds())
 	if ingestErr != nil {
 		var stateErr *graph.StateContractError

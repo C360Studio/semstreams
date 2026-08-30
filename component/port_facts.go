@@ -31,6 +31,7 @@ type StreamFacts struct {
 	ackWait           string
 	heartbeatInterval string
 	maxAckPending     int
+	importLane        bool
 }
 
 // NetworkFacts is the immutable listener binding portion of PortFacts.
@@ -150,6 +151,11 @@ func (f StreamFacts) HeartbeatInterval() string { return f.heartbeatInterval }
 // MaxAckPending returns the declared unacknowledged-message ceiling.
 func (f StreamFacts) MaxAckPending() int { return f.maxAckPending }
 
+// Import reports whether the operator declared this port an import lane — the
+// one place a foreign org.platform is admitted (ADR-102 d5). False is the
+// fail-closed default for every port that does not say otherwise.
+func (f StreamFacts) Import() bool { return f.importLane }
+
 // Protocol returns the network protocol.
 func (f NetworkFacts) Protocol() string { return f.protocol }
 
@@ -240,6 +246,7 @@ func jetStreamPortFacts(config Portable) PortFacts {
 		ackWait:           port.AckWait,
 		heartbeatInterval: port.HeartbeatInterval,
 		maxAckPending:     port.MaxAckPending,
+		importLane:        port.Import,
 	}
 	return facts
 }

@@ -66,7 +66,7 @@ func TestExecuteAddTriple_SubstitutedObject_PreservesType(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			mock := &mockTripleMutator{}
-			executor := NewActionExecutorWithMutator(nil, mock)
+			executor := NewActionExecutorWithMutator(nil, mock, testExecutorPlatform())
 
 			// Entity carries a single source triple with the typed Object.
 			entity := &gtypes.EntityState{
@@ -115,7 +115,7 @@ func TestExecuteUpdateTriple_SubstitutedObject_PreservesType(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			mock := &mockTripleMutator{}
-			executor := NewActionExecutorWithMutator(nil, mock)
+			executor := NewActionExecutorWithMutator(nil, mock, testExecutorPlatform())
 
 			entity := &gtypes.EntityState{
 				ID: entityID,
@@ -157,7 +157,7 @@ func TestExecuteAddTriple_MixedTemplate_FallsBackToString(t *testing.T) {
 	entityID := semantictest.EntityID(t, "c360", "platform", "robotics", "mav1", "drone", "001")
 
 	mock := &mockTripleMutator{}
-	executor := NewActionExecutorWithMutator(nil, mock)
+	executor := NewActionExecutorWithMutator(nil, mock, testExecutorPlatform())
 	entity := &gtypes.EntityState{
 		ID: entityID,
 		Triples: []message.Triple{
@@ -192,7 +192,7 @@ func TestExecuteAddTriple_LiteralObject_PreservesString(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mock := &mockTripleMutator{}
-	executor := NewActionExecutorWithMutator(nil, mock)
+	executor := NewActionExecutorWithMutator(nil, mock, testExecutorPlatform())
 
 	action := Action{
 		Type:      ActionTypeAddTriple,
@@ -223,7 +223,7 @@ func TestExecuteAddTriple_FirstMatchSemantic_MixedTypes(t *testing.T) {
 	ctx := context.Background()
 	entityID := semantictest.EntityID(t, "c360", "platform", "robotics", "mav1", "drone", "001")
 	mock := &mockTripleMutator{}
-	executor := NewActionExecutorWithMutator(nil, mock)
+	executor := NewActionExecutorWithMutator(nil, mock, testExecutorPlatform())
 
 	// Degenerate: two triples, same predicate, different types. First
 	// stamped is float64; second is string. The typed path returns the

@@ -176,7 +176,7 @@ func phase1SpawnInvestigators(
 		"rule 01 EvaluateEntityState must match a coordinator with next_action=fan_out (drives the production wire including SubstituteConditionValues)")
 
 	publisher := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, publisher)
+	executor := NewActionExecutorFull(nil, nil, publisher, testExecutorPlatform())
 	ec := &ExecutionContext{EntityID: coordinatorEntityID, Entity: coordinator}
 	for _, action := range rule01.OnEnter {
 		require.NoError(t, executor.Execute(context.Background(), action, ec))
@@ -207,7 +207,7 @@ func phase2StampCompletions(
 ) []message.Triple {
 	t.Helper()
 	mutator := &mockTripleMutator{}
-	executor := NewActionExecutorFull(nil, mutator, nil)
+	executor := NewActionExecutorFull(nil, mutator, nil, testExecutorPlatform())
 	rule, err := NewExpressionRule(testPlatform, "direct-expression-test", rule02)
 	require.NoError(t, err)
 
@@ -266,7 +266,7 @@ func phase3FireJoin(
 		"rule 03 EvaluateEntityState must match when len(gather.child.completed) == .length(coordinator.decision.subtopics) — drives the production wire including SubstituteConditionValues + #149 .length substitution + #147 array operator wiring")
 
 	publisher := &mockPublisher{}
-	executor := NewActionExecutorFull(nil, nil, publisher)
+	executor := NewActionExecutorFull(nil, nil, publisher, testExecutorPlatform())
 	ec := &ExecutionContext{EntityID: coordinatorEntityID, Entity: coordinator}
 	for _, action := range rule03.OnEnter {
 		require.NoError(t, executor.Execute(context.Background(), action, ec))

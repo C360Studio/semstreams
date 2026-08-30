@@ -1,0 +1,686 @@
+# Conformance — entity-id-segment-semantics (revision 12 — the Codex owner round: the exported write-capable constructors take the authority and the guard fails closed, the direct persistence lane is metered, `import` is genuinely one knob, `agentrun.Mint` refuses an aliased origin, and O-4 is recorded as deferred to #1168)
+
+Per-ruling map from the owner rulings on #1095 (2026-08-26, including the design-package ruling: O-1–O-11, O-13,
+O-14 accepted; O-12 overridden to read-only mirror; hierarchy skip accepted), the design constraints, and ADR-102 decisions to
+the code, spec delta, and test that carry each. Every `file:line` is to be measured at the head that holds the last
+change to any `.go` file or spec delta on the branch; `tasks.md` rows cite section numbers. Fill the right-hand
+columns at implementation time; a row with an empty Implementation column at review time is a deviation to record,
+not a gap to hide. Owner-item numbers follow the design §F (review letters O-12/13/14/15 = O-11/12/13/14 here).
+Constraint rows are labelled K1–K3 so they do not collide with the inventory's C1–C4 row ids.
+
+| # | Ruling / decision | Implementation | Spec delta | Test / evidence |
+|---|---|---|---|---|
+| R1 | Positions have defined meanings (ruling 1) | `pkg/types/entity_id.go` `EntityID` doc table + struct order; `ParseEntityID` by named position (slice A) | `specs/entity-id-contract/spec.md` ADDED "Each entity-ID position has one defined meaning and one owner" | `agentic/entity_ids_semantics_test.go` |
+| R2 | `platform` = minting deployment authority; source → `system`; `domain` = delegated taxonomy (ruling 2) | `pkg/types/entity_domain_authority.go` — **`EntityDomainDelegation` and the reserved sets only**; `EntityDomainAuthority`/`NewEntityDomainAuthority`/`Authorize` are DELETED (see the O-5 DEVIATION row); builders compose from `deps.Platform` — `graph/events.go` `NewAlertEvent(org, platform, …)`, `processor/rule/graph_event_identity.go` + `rule.Dependencies.Platform` / `(*Processor).SetPlatform`, `cmd/e2e-semstreams/mission/command.go` (`deps.Platform`, wire authority ignored), `config.GetPlatform()` = `platform.id` (slice A); agentic builders on the merged tree (5.1). Nothing authorizes a domain at runtime or at composition time, and nothing reports an overlap | same requirement; ADDED requirement retitled "Entity domains are declared by their producer and read only by the corpus audit" | `TestFrameworkEntityDomainsIsTheClosedReservedSet`, `TestEntityDomainDelegationIsADeclarationNotAPolicy` |
+| R3 | `org.platform` enforced at graph boundaries on the candidate subject unless via an import lane with provenance (ruling 3) | `pkg/types/entity_id_authority.go` `ValidateEntityIDAuthority` (slice A); **slice B**: `processor/graph-ingest/authority_gate.go` `authorizeSubject` called at all ten ID-validating seams (six in `component.go`, four canonical handlers — enumerated in tasks 6.1), `CreateGraphIngest` refuses an empty `deps.Platform`, `component.JetStreamPort.Import` + `StreamFacts.Import()` carry the lane from the port; NO shipped config declares a lane (review MEDIUM-4 — a lane is an operator statement of trust and the default composition must import nothing), the declaration is a documented snippet, and the operator-facing JSON seam is pinned by `TestJetStreamImportLaneDecodesFromOperatorJSON` | `specs/graph-ingest/spec.md` ADDED "Every graph boundary enforces the deployment's own authority…" | `TestAuthorityGateRejectsForeignOnFactLane`, `TestAuthorityGateRejectsForeignOnMutationLane`, `TestImportLaneAcceptsForeignRejectsLocalClaim`, `TestAuthorityGateAllowsForeignReferenceObject` |
+| R4 | Rule read-back is a bug (#1096); on an imported firing loop nothing is written to the import and the linkage lives on the local run (`agent.run.origin-entity-id`) | slice A plumbs `rule.Dependencies.Platform` / `Processor.SetPlatform`; **slice B**: `actions.go` mints from the executor's `platform` (the `strings.SplitN` read-back deleted), `foreignFiringEntity` + `foreignFiringSkipRecorder` suppress ALL THREE framework writes to a foreign firing entity (`agent.loop.run`, `agent.run.entity-id`, and `rule.task.spawned` — the third found by writing 2.6), `agvocab.RunOriginEntityID` + `AgentRun.OriginEntityID` + `agentrun.Mint(…, originEntityID)`, `CreateRuleProcessor` refuses an empty `deps.Platform` | `specs/graph-ingest/spec.md` ADDED "Framework-minted runtime state carries the deployment's own authority and never writes to an imported firing entity" | `TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite`, `TestRunScopeNewOnLocalLoopStampsAnchorAndOrigin`, `TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity`, `TestForeignFiringSkipLogNamesEveryDeclinedWrite` (round 4); omissions M6a–M6c |
+| R5 | semsource re-slots inside the wave (ruling 5) | N/A in-tree — downstream migration guidance in the PR body and design §D | — | communicate only |
+| K1 | Reordering allowed (constraint) | `pkg/types/entity_id.go` `Key()`/`ParseEntityID`; repository sweep (`scratchpad sweep.py`, 132 files; `sweep2.py`, 5 files) | `specs/entity-id-contract/spec.md` MODIFIED "Every entity ID has one canonical six-segment ASCII form" | `TestEntityIDKeyOrderIsSystemBeforeDomain` |
+| K2 | Arity stays six (constraint) | `pkg/types/entity_id.go` validators unchanged (`canonicalEntityIDParts = 6`) | same (unchanged arity clause) | existing `pkg/types` arity tests |
+| K3 | Second- and third-order impacts of the six-part shape made explicit (constraint) | `docs/proposals/gh1095-entity-id-segment-semantics-inventory.md` §1 (rows S/K/X/W/C/H/L/R/M/D/F/T/P + census) | — | independent inventory pass (PASS WITH DIVERGENCES, r2 corrections) |
+| D1 | Order `org.platform.system.domain.type.instance`; instance last (ADR-102 d1, d6) | `pkg/types/entity_id.go` `DeploymentPrefix`/`SourcePrefix`/`TaxonomyPrefix`/`TypePrefix`; retired helpers deleted, and `PrefixLevel(n)`, the four `PrefixLevel*` constants and `IsSameSource` deleted 2026-08-28 as phantoms | MODIFIED canonical form; ADDED "Prefix lengths have fixed meanings and the instance position is last" | `TestPrefixLevelsAreNamed`, `TestTaxonomyAcrossSourcesIsPatternNotPrefix` |
+| D2 | `platform` from the single identity field (conditional on O-2); ADR-076 d1 retired, d2 amended (d2) | `config/config.go` `GetPlatform`, `rejectRemovedPlatformFields`, `validateAuthorityPair`; `pkg/platform.Config.InstanceID` deleted; `pkg/types/framework_identity_families.go` (`MaxAuthorityPairBytes()` = 170 derived); `graph/events.go` + `processor/rule/graph_event_identity.go` compose from the family table — no `semstreams.framework` literal remains | ADDED position-meaning requirement; ADDED "The authority pair is bounded at configuration load" | `TestConfigRejectsOversizedAuthorityPair`; `NewAlertEvent`/`ruleTriggerEntityID` rows in `entity_ids_semantics_test.go` |
+| D3 | Product names are provenance (d3) | `internal/entityidaudit/segment_rules.go` `authority_literal` over `go-format-prefix`, `go-dotted-constant`, declaration patterns (production Go + `configs/`), and whole six-segment literals on the minting surfaces `{go-constructor:EntityID, go-return:EntityID}`. **Stated limit:** `audit.go` `entityIDConstructorValue` resolves the constructor only when ALL SIX fields are static, so a partial-literal mint (`EntityID{Org: deps.Org, Platform: "semsource", …}`) produces no candidate at all — pre-existing extraction behaviour, made load-bearing by the new rule and deliberately not widened in this change | same | `TestAuditFlagsAuthorityLiteral`, `TestAuditFlagsAuthorityLiteralInAMintingLiteral` |
+| D4 | Domain delegation + reserved set `{agent, ops, graph}` (d4); overlap between producers PERMITTED and UNREPORTED per the 2026-08-28 ruling | `pkg/types/entity_domain_authority.go` (authority type deleted; `EntityDomainDelegation` and the reserved sets retained); `processor/gated-dag/participant.go` `*.*.gated-dag.agent.fanout.*` (re-slotted under `agent`); `segment_rules.go` `domain_unregistered` with `collectRegisteredDomains`, over a corpus that includes the projection-contract declaration surface (`audit.go` `languageForName` `entitypattern`/`Contract` arm and `projection_contracts[].entity_pattern`); delegations declared by `examples/processors/{document,iot_sensor,weather_station}/entity_domains.go` and `cmd/e2e-semstreams/mission/state.go`, whose ONLY consumer is the audit's registered set | ADDED requirement retitled and narrowed to the declaration; three scenarios | `TestAuditFlagsUnregisteredDomain`, `TestEntityDomainDelegationIsADeclarationNotAPolicy`, plus the registered-set mutation recorded below |
+| D5 | Subject-only coded authority rejection; import lane; `@id` objects structural only (no stub, absent object permitted); imports are read-only mirrors (ruled O-12(a)) (d5) | `pkg/types/entity_id_authority.go` (slice A); **slice B**: the gate takes SUBJECTS only and is never called for an `@id` object; every non-import lane refuses a foreign subject, which is what makes the mirror read-only; metered `authority_foreign`/`authority_claimed` through `authorityMetricReason` (one home for the code→label mapping) and logged without the identity | ADDED "Authority mismatch is a coded rejection distinct from structural rejection"; graph-ingest ADDED | `TestAuthorityRejectionIsCodedAndIdentityFree`, `TestAuthorityRejectionLocalClaimOnImportLane`, `TestAuthorityGateRejectsAnnotationOfImportedSubject`, `TestAuthorityGateRefusesForeignReconcileRegardlessOfExistence` (added round 2 as `…RejectsReconcileBeforeReadingState`; renamed in round 4 because the name asserted more than the test shows — see round 4 A2) |
+| D6 | Prefix-level meanings; ADR-099 levels 0 = source×taxonomy, 1 = source, 2 = deployment (d6) | `pkg/types/entity_id.go` named prefix methods (the `PrefixLevel*` constants and `PrefixLevel(n)` were deleted 2026-08-28 as phantoms; #606 re-adds a level vocabulary with a consumer); `graph/clustering/entityid_provider.go` `getSystem`/`getTypePrefix` by name; `docs/proposals/gh606-derived-communities-design.md` restated (level 1 = source, served by default) | ADDED prefix-level requirement; `specs/graph-clustering/spec.md` MODIFIED | `TestEntityIDEdgesReadPositionsByName` |
+| D7 | Never rewrite; fresh-state break (d7) | no alias, ledger, or dual parser anywhere in the diff; `docs/operations/migration-beta162-to-beta163.md` slice-A section (on the merged tree) | existing "clean owned-source break" requirement (unchanged) | cold-start proof in tasks §7.2 |
+| H | Hierarchy inference skips foreign-authority entities (accepted by ruling on every lane; O-6 ruled: containers retire with gh606) | `graph/inference/hierarchy.go` `GetHierarchyTriples` returns `nil, nil` for a foreign entity; `HierarchyConfig.Org`/`Platform` (`json:"-"`, set from graph-ingest's `deps.Platform` read); an ENABLED inference with no pair returns a classified error rather than skipping everything silently | `specs/graph-ingest/spec.md` ADDED "Hierarchy inference skips foreign-authority entities" | `TestGetHierarchyTriplesSkipsForeignAuthority` is the DISCRIMINATING test (M13 does not kill `TestHierarchySkipsForeignAuthority` — the graph-ingest container gate shadows it; see tasks 4.13); `TestHierarchySkipsForeignAuthority` pins the observable end-to-end contract |
+| A1 | Audit gains two surfaces and two segment rules and becomes a CI gate | `internal/entityidaudit/audit.go` (`go-format-prefix`, `go-dotted-constant`, config `entity.pattern` / `entity_watch_buckets.ENTITY_STATES`), `segment_rules.go` (`authority_literal`, `domain_unregistered`, `instance_reserved`); `.github/workflows/ci.yml` Lint job step "Entity-ID corpus audit" | ADDED "Segment semantics are enforced by the entity-ID corpus audit" | `TestAuditFlagsFormatPrefixAuthorityLiteral`; `task entity-id:audit` in tasks 7.1 |
+| L1 | Lesson `id:` three-segment minimum means source scope | matcher unchanged (`processor/agentic-loop/lessonmatch/lessonmatch.go` is order-agnostic); meaning pinned by `lessonmatch_scope_test.go` | `specs/agentic-lessons/spec.md` MODIFIED | `TestAppliesToThreeSegmentsIsSourceScope` |
+| S1 | `$entity.<name>` resolves by name; invalid IDs leave tokens unresolved | `processor/rule/entity_substitution.go` `entityPartNames` + `entityPartValues` over `semtypes.ParseEntityID` | `specs/rule-engine/spec.md` ADDED | `TestSegmentTokensResolveByName`, `TestSegmentTokensUnresolvedOnInvalidID` |
+| P5 | Export IRI path follows the canonical order (O-10) | `vocabulary/export/export.go` `subjectToIRI` by named field | — (published artifact; announced in the PR body) | `TestSubjectToIRIFollowsCanonicalOrder` |
+| P6 | `EntityTypeSummary.type` built from named fields in canonical order | `processor/graph-query/summary.go` `aggregateEntityTypes` via `semtypes.ParseEntityID`; `graph/query_summary_types.go` doc | — (API value; announced in the PR body) | `TestGraphSummaryTypeKeyFollowsCanonicalOrder`; `task e2e:statistical` / `e2e:semantic` |
+| W9 | `iot_sensor` zone reader reads positions by name | `examples/processors/iot_sensor/processor.go` `ParseZoneEntityID` via `semtypes.ParseEntityID` (+ `entity_domains.go`) | — | `TestParseZoneEntityIDReadsNamedPositions`; omission M15 |
+| R-C | LPA provider and summarizer read positions by name in slice A; tag holds until gh606 (O-7) | `graph/clustering/entityid_provider.go` `getSystem`/`getTypePrefix`; `graph/clustering/summarizer.go` `parseEntityID` | — | `TestEntityIDEdgesReadPositionsByName`, `TestSummaryGroupsByNamedDomain` |
+| R-D | e2e position-literal assertions and the wire-minted mission rewritten with slice A | `cmd/e2e-semstreams/mission/command.go` mints from `deps.Platform` (config knob and wire authority removed), `configs/lifecycle-flow.json`, `test/e2e/scenarios/lifecycle/scenario.go`, `tiered_structural.go` (variables renamed `source`/`domain`), `research-graph/scenario.go`; `ops/scenario.go` on the merged tree (5.3) | — | `task e2e:ops`, `e2e:lessons`, `e2e:lifecycle`, `e2e:research-graph` results in `tasks.md` 7.2 |
+| O-11 | RULED 2026-08-26: level 1 (source) served by default; summaries gate there (gh606 Q8 re-ruled) | applied in gh606, not here | — | #1095 ruling comment |
+| O-12 | RULED 2026-08-26 (overridden): read-only mirror — no local lane mutates a foreign subject | every canonical mutation handler and every in-process write path gates on `authorizeSubject(..., false)`; the rule engine issues no request at all against a foreign firing entity | graph-ingest ADDED requirements (read-only-mirror clause; #1096 requirement) | `TestAuthorityGateRejectsAnnotationOfImportedSubject`, `TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite`, `TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity` (added round 2) |
+| O-13 | RULED 2026-08-26: imported lessons do not apply locally by default; opt-in by scope | **Holds with NO code change, re-measured on slice B's head.** `processor/agentic-loop/handlers.go:721` reads `agentic.AgentLessonRecordPrefix(h.platform.Org, h.platform.Platform)` — the LOCAL record prefix, from `deps.Platform` — so an imported lesson under a peer's pair is outside the scan by construction; a loop opts in by naming the imported source in its scope, which `lessonmatch.Match` resolves. The ruling describes the behaviour that already ships, not a change owed | — | `TestAppliesToThreeSegmentsIsSourceScope` (`processor/agentic-loop/lessonmatch/lessonmatch_scope_test.go`) pins the scope semantics; `task e2e:lessons` green on slice B |
+| O-14 | RULED 2026-08-26: authority-pair bound at config load (170 bytes today) | `config/config.go` `validateAuthorityPair`; `pkg/types.MaxAuthorityPairBytes()` derived from `LongestFrameworkIdentityFamily()` | ADDED "The authority pair is bounded at configuration load" | `TestConfigRejectsOversizedAuthorityPair` |
+| DEVIATION | **O-5 (boot-time composition rejection for a duplicate delegation) is SUPERSEDED, owner ruling 2026-08-28** — https://github.com/C360Studio/semstreams/issues/1095#issuecomment-5454766422. Raised by Codex's BLOCKING at `328b4181`: this change's own delta asserted the rejection and no composition root performed it. The owner ruled the act mis-specified, not missing: domain overlap between producers is permitted | **Second ruling, same day: the reporting and the type are DELETED, not deferred.** `EntityDomainAuthority`, `NewEntityDomainAuthority`, `Authorize` and `EntityIDReasonDomainUndelegated` removed; `composition/entity_domains.go` and its test deleted; `TypeEntityDomainOverlap` and the `Validate` variadic reverted, so the composition finding vocabulary returns to thirteen. `EntityDomainDelegation` retained as the audit's registered set | delta requirement retitled and narrowed: overlap permitted and unreported, declarations retained | `TestEntityDomainDelegationIsADeclarationNotAPolicy`, `TestFrameworkEntityDomainsIsTheClosedReservedSet`, and the registered-set mutation below |
+
+## Implementation-review round (verdict CHANGES REQUESTED at `5f66ce37`; 0 BLOCKING, 3 HIGH, 7 MEDIUM, 4 NIT)
+
+| Finding | Disposition | Evidence |
+|---|---|---|
+| HIGH-1 — the audit could not see the projection-contract declaration surface (`contract.Contract.EntityPattern` normalizes to `entitypattern`, matched by no arm; `projection_contracts[].entity_pattern` never extracted) | FIXED, scoped (see deviation below) | `internal/entityidaudit/audit.go` `languageForName` `entitypattern`+`contractTypeName` arm and the `projection_contracts` walk; `TestAuditSeesProjectionContractEntityPatterns`; golden row `testdata/corpus/entities.go:11`. Corpus 1289 → 1304 candidates, 0 findings; the 14 new rows include `agentic/loop_execution_entity.go:224`, `agentic/agent_lesson_entity.go:400`, `configs/rules/lessons/lesson-lifecycle-rulepack.json:39`. Round 2 widened it again to 1317 (MEDIUM-2) |
+| HIGH-2 — `migration…md` pointed provenance at "the SHAs in design §D", which holds none | FIXED | pointer re-aimed at the eleven SHAs pinned at the top of the section; the misleading **UNPINNED** label replaced with "SHA recorded at application rather than at the reading". All 11 re-verified read-only (`git cat-file -t` = commit, dated, `rev-parse HEAD` equal) |
+| HIGH-3(a) — the do-nothing path is silent and nothing said so | FIXED | new paragraph after the wire section: `ValidateEntityID` is arity/alphabet only (`pkg/types/entity_id.go:149`), and the four downstream reinterpretations are cited at `graph/inference/hierarchy.go:26-29`, `graph/clustering/entityid_provider.go:224`, `processor/graph-query/summary.go:197`, `vocabulary/export/export.go:129-130`; the audit's blind spot for fully templated builders is stated |
+| HIGH-3(b) — obligation 4 instructs a composition-root call no composition root in this repo makes | FIXED by option (2) — obligation restated | Option (1) was rejected on evidence: `cmd/e2e-semstreams/main.go` composes `document` (content, sensor, maintenance, observation), `iot_sensor` (environmental, facility) and `mission` (lifecycle) — no pair collides, so a boot check placed there could never fail, and `examples/processors/weather_station` has no consumer outside its own package. The falsifiable proof already exists at `pkg/types/entity_domain_authority_test.go:72-79` on the semsource/semdragon `web` pair. Obligation 4 now separates *declared-or-reserved* (enforced by the audit) from *cross-product collision* (only `NewEntityDomainAuthority` detects it; the audit's registered set is flat — `segment_rules.go:206`), and states that skipping the call reports a collision nowhere |
+| MEDIUM — `tasks.md` 5.6 asserted a live "reports 7 findings" | FIXED | restated as the pre-5.1 barrier reading |
+| MEDIUM — `conformance.md` D4 named `gateddag` as reserved | FIXED | reserved is `{agent, ops, graph}` (`pkg/types/entity_domain_authority.go:17`; `entity_domain_authority_test.go:64` asserts `gateddag` is not) |
+| MEDIUM — O-13 Implementation column blank | FIXED, then RE-MEASURED in slice B | slice A marked it "slice B — NOT IN THIS PR"; slice B measured it and found the ruling already holds with no code change (`handlers.go:721` scans the local prefix from `deps.Platform`). The row now records the mechanism rather than a deferral |
+| MEDIUM — `tasks.md` 5 preamble stated a present-tense grep over four paths #1116 deleted | FIXED | past-tensed; the conclusion survives and now holds trivially |
+| MEDIUM — `pkg/types/entity_domain_authority.go:77` `NewEntityDomainAuthority` returns a handle the documented adopter pattern does not consume | NOT CHANGED — owner call at merge | the signature is on the owner's merge list with the eight phantom exports; changing it unilaterally is out of this round's scope |
+| MEDIUM — eight exported symbols with no consumer (`FrameworkEntityDomains`, `ReservedInstanceTokens`, `FrameworkIdentityFamilies`, `PrefixLevel(n)`, four `PrefixLevel*`) | **RULED 2026-08-28: DELETED**, all eight | each had zero consumers of any kind; deleted outright rather than unexported, because none had an in-package caller either. Their load-bearing siblings survive — see the surviving-export table below |
+| MEDIUM — `agentic/web_observation_entity.go:24` `const` became a package-level `var` | FIXED with a falsifiable pin | a compile-time array-index assertion is impossible (the value comes from a function call, not a constant); `agentic/web_observation_entity_test.go` now pins the literal 16. Mutation-proven: `framework_identity_families.go:28` `InstanceBytes: 32` → `webObservationInstanceLen = 32, want 16`. The pre-existing check compared the segment against the same var and did not fire |
+| NIT — `tasks.md` cited `agentic/agent_lesson_entity.go:399` (that line is `MessageType`) | FIXED | three sites re-anchored to `:400` |
+| NIT — `tasks.md` cited `ops/scenario.go:715` (a closing brace) | FIXED — **four** sites, not the two this row first claimed (round 2 MEDIUM-3) | all four re-anchored to `:607` and `:718-719` (`tasks.md` `:37`, `:619`, `:694`, `:708`); `:686`'s `:604`/`:712` are legitimate pre-change targets and stay |
+| NIT — `graph/clustering/semantic_edge_provider_test.go:366` comment named the retired order | FIXED | `o.p.d.sys.t` → `o.p.sys.d.t`; the values were already canonical |
+| NIT — `test/e2e/scenarios/research-graph/scenario.go:115` field kept the retired concept's name | FIXED | `PlatformInstance`/`platform_instance` → `PlatformID`/`platform_id`; three in-package sites, no JSON supplies this struct (`DefaultConfig` is the only producer) |
+
+### HIGH-1 mutation transcript (RED before / GREEN after, `cp` backups, restore verified by md5)
+
+Baseline both sides: unmutated tree passes — pre-fix `1289 structured candidates`, post-fix `1304` (and `1317` after
+round 2's MEDIUM-2), zero findings in each. Each mutation was applied with a `cp` backup, an explicit `[applied]` marker printed between mutating and
+testing, and restoration confirmed by matching md5 (never `git checkout`/`restore`/`stash`).
+
+| Mutation | Pre-fix (`audit.go` md5 `e01f724f5591…`) | Post-fix (md5 `f8c963b34c4d…`) |
+|---|---|---|
+| `agentic/loop_execution_entity.go:224` → `*.*.agent.agentic-loop.execution.*` | `entity ID audit passed: 1289 …` — **NOT KILLED** | `:224: declaration-pattern go-field:Contract.EntityPattern: "*.*.agent.agentic-loop.execution.*": domain_unregistered` — **KILLED** |
+| `agentic/agent_lesson_entity.go:400` → `*.*.agent.lesson.record.*` | `entity ID audit passed: 1289 …` — **NOT KILLED** | `:400: … "*.*.agent.lesson.record.*": domain_unregistered` — **KILLED** |
+| `configs/rules/lessons/lesson-lifecycle-rulepack.json:39` → `acme.ops.lesson.agent.record.*` | `entity ID audit passed: 1289 …` — **NOT KILLED** | `:39: declaration-pattern config:projection_contracts.entity_pattern: "acme.ops.lesson.agent.record.*": authority_literal` — **KILLED** |
+| same config line → `*.*.agent.lesson.record.*` (retired order) | passes | passes — **surviving by design**, `segment_rules.go:57-59` gates the domain rule to production Go (see boundary note below) |
+
+Restored md5s: `998e7303f3a7daec33dd731f8a9ba9d3` (loop execution), `681ae240fbf98d782d78d72c5582f268` (lesson),
+`e0281f57402a1bc094d8b0996a93cda3` (rulepack), `090141635473dd55b11e51f845f6dd0c`
+(`pkg/types/framework_identity_families.go`, mutated 16→32 for the web-observation pin) — each equal to its
+pre-mutation value.
+
+**No newly-visible declaration produced a finding.** The 14 rows extraction gained are the three named sites plus ten
+`_test.go` contract fixtures (`payloadregistry/attributes_test.go`, `pkg/projection/{,contract/}contract_test.go`,
+`pkg/projection/mutation_client_test.go`) and `test/e2e/scenarios/lessons/scenario.go:375`; all `status: valid`, and
+the last two corpora are lexical-only by the segment rules' design.
+
+### Deviation from the review text — HIGH-1 extraction is scoped, not a blanket key match
+
+The finding asked for `entitypattern` in the generic `languageForName` arm and in the generic config-key switch. Both
+were implemented that way first and **measured**: `go run ./cmd/entity-id-audit .` reported **11 findings, all false
+positives**, because `entity_pattern` also spells the natural-language query classifier's option key — an entity *type*
+token, not an entity-ID pattern (`graph/query/classifier.go:80`, asserted at `graph/query/examples_test.go:52`). Nine
+came from `configs/domains/{iot,logistics,robotics}.json` (`"sensor"`, `"drone"`, `"shipment"`, …) and two from
+`graph/query/classifier_{chain,embedding}_test.go` map literals. The shipped fix therefore binds the Go arm to the
+owning type (`normalized == "entitypattern" && strings.Contains(container, "contract")` — the same idiom
+`languageForName` already uses for `id` under `entitystate`/`entitymutation`) and scopes the config extraction to
+`projection_contracts[]` (the same shape as the existing `entity.pattern` walk). Coverage of the finding's three named
+sites is unchanged; the eleven false positives do not appear.
+
+**Residue, stated not hidden.** An elided element literal — `[]contract.Contract{{EntityPattern: …}}` — has no type
+name at its own AST node and stays outside the corpus. Every such site in this tree is a `_test.go` (lexical-only by
+design); both production registrations go through `agentic.LoopExecutionContract()` / `agentic.LessonContract()`, which
+are covered. Generalizing the walk to name elided element types was implemented and measured too: it renames existing
+surfaces (`go-field:.EntityID` → `go-field:<Type>.EntityID`) and breaks line-pinned classification annotations
+(`pkg/fusion/engine_test.go:211` failed immediately), so it is a separate change, not this round's.
+
+**Config corpus boundary.** `segment_rules.go:57-59` gates `domain_unregistered` and `instance_reserved` to production
+Go, so a config carrying a retired-order pattern is extracted and lexically validated but not segment-judged. Verified
+by mutation: `configs/rules/lessons/lesson-lifecycle-rulepack.json:39` set to `*.*.agent.lesson.record.*` still passes;
+the same line set to `acme.ops.lesson.agent.record.*` fires `authority_literal`. That boundary is the file's documented
+design (an adopter config may legitimately name a domain no Go delegation in this tree declares), not a hole this
+round closes.
+
+## Re-review round 2 (`5f66ce37` → `897476cf`; verdict CHANGES REQUESTED, 0 BLOCKING, 1 HIGH, 3 MEDIUM, 1 NIT)
+
+Round 1's HIGH-1 was independently reproduced and confirmed closed: same baselines, all three mutations
+NOT KILLED → KILLED, plus three reviewer-added mutations the developer had not run — the Go × `authority_literal`
+combination, a newly-visible row set to a 5-part value, and reverting `audit.go` against the new test — all three
+discriminating. The 11 false positives were reproduced, so the round-1 deviation was correct.
+
+| Finding | Disposition | Evidence |
+|---|---|---|
+| **HIGH — `migration…md:442-444` told an adopter a config projection contract is domain-checked.** A defect round 1 *introduced*: the sentence "Every declaration-pattern surface counts, including … a config's `projection_contracts[].entity_pattern`" was attached to the `domain_unregistered` claim. `segment_rules.go:57-59` returns before the domain rule for anything outside production Go. Round 1 measured this boundary and recorded it here, then published the opposite — the correction loop failing outward, one section above the place the same document states it correctly | FIXED | obligation 4 now reads "in production Go only" and carries an explicit paragraph: a config is extracted, judged lexically and for `authority_literal`, and **never** domain-checked, so a rulepack in the retired order passes silently. Re-proven at this head: `lesson-lifecycle-rulepack.json:39` → `*.*.agent.lesson.record.*` → `entity ID audit passed: 1317` |
+| MEDIUM-2 — the `container` binding under-covered: `[]Contract{{EntityPattern: …}}` elides its element type, so `strings.Contains("", "contract")` failed. 13 real declarations missed. Round 1 deferred this citing the generic-generalization blast radius; that obstacle does not bind a `Contract`-scoped fix | FIXED | `audit.go:392-402` clones the `*ast.ArrayType` element-type idiom already at `segment_rules.go:174-185`, keyed on the new `contractTypeName` constant (`audit.go:724`) that `languageForName:737` also reads, so the two cannot drift. Corpus 1304 → 1317; **corpus diff: 0 rows removed, 14 added**, all 317 existing `go-field:.<field>` surfaces intact, so `pkg/fusion/engine_test.go:211`'s line-pinned annotation is untouched. Zero new findings |
+| MEDIUM-3 — the `:715` NIT was half closed; the round-1 row claimed "two sites" when four cite the brace | FIXED, and the row above corrected | `tasks.md:694` and `:708` re-anchored to `:607`/`:718-719`. Both sit inside "Done." evidence where a current anchor is load-bearing |
+| MEDIUM-4 — the eight/three provenance split had no in-tree artifact, and on the only checkable reading the grouping differs | FIXED | split dropped; the paragraph now keeps only what was verified and is all an adopter needs — all eleven SHAs resolve to real commits and each equals that sister's current `HEAD` |
+| NIT-1 — `audit.go` cited `graph/query/classifier.go:80` for `Options["entity_pattern"]`; that line is the comment above an unrelated token regexp and `entity_pattern` appears in zero production Go under `graph/query/` | FIXED | the comment now cites `configs/domains/iot.json:8` and `graph/query/examples_test.go:52` |
+
+### MEDIUM-2 mutation transcript
+
+| Mutation | Pre-fix (`audit.go` md5 `f8c963b34c4d…`) | Post-fix (md5 `240103495e73…`) |
+|---|---|---|
+| `processor/rule/projection_derivation_test.go:66` (an elided `[]projection.Contract{{…}}` element) → 5-part `acme.ops.test.system.record` | `entity ID audit passed: 1304` — **NOT KILLED** | `:66: declaration-pattern go-field:Contract.EntityPattern: "acme.ops.test.system.record": entity_id_pattern_invalid:arity` — **KILLED** |
+| revert `audit.go` with the extended test in place | `candidates = []string{…3 rows…}`, want 4 — **FAILS** | passes |
+
+Restored by `cp` and md5: `audit.go` `240103495e73666a7571cd8a5d58c7ba`,
+`projection_derivation_test.go` `3a8410fec4d1d50634913b4db454e514`,
+`lesson-lifecycle-rulepack.json` `65a66ebf606768fc45ec2048bc0a1e46` — each equal to its pre-mutation value.
+
+The 13 recovered declarations are all `_test.go` in this tree (`processor/rule/projection_derivation_test.go:{66,78,86,177,207,281,395}`, `config_projection_test.go:{28,97,165}`, `actions_reconcile_test.go:49`, `projection_bindings_test.go:24`, `pkg/projection/mutation_client_test.go:428`), so the recovery is lexical here; the audit's purpose is running over a sister's tree, where `processor/rule/config.go:78` `ProjectionContracts []projection.Contract` invites exactly that spelling in production. A map-keyed `Contract` literal was searched for and does not exist in this tree, so the walk stays slice-scoped rather than speculatively general.
+
+## Codex owner round at `328b4181` (1 BLOCKING, 1 HIGH, 1 MEDIUM) — all three premises independently re-verified
+
+| Finding | Disposition | Evidence |
+|---|---|---|
+| **BLOCKING — the change shipped a spec requirement it did not implement.** The delta asserted "A duplicate delegation of one domain by two producers in one composition MUST be a composition rejection before binding"; no composition root called `NewEntityDomainAuthority`. Rounds 1-2 treated the unwired constructor as a design choice when O-5 had already decided it | **RESOLVED BY OWNER RULING 2026-08-28 — the act was mis-specified, not missing.** See the DEVIATION row | exclusivity removed at `pkg/types/entity_domain_authority.go:83`; delta amended; overlap reported by `composition.Validate` |
+| **HIGH — `authority_literal` skipped a literal minting builder.** `segment_rules.go` covered declaration patterns, format builders and prefix constants but not `LanguageLiteral`, so a production `EntityID{Org: "acme", Platform: "fixed-product", …}` passed | FIXED, scoped to minting surfaces | `segment_rules.go:57` adds the `LanguageLiteral` arm gated on `isMintingSurface`; `mintingSurfaces` at `:86` is the closed set `{go-constructor:EntityID, go-return:EntityID}`. A triple subject, typed reference, or state ID may legitimately name a foreign authority and stays unjudged. `TestAuditFlagsAuthorityLiteralInAMintingLiteral` pins both surfaces and that negative. Full audit after the fix: **1317 candidates, 0 findings — no false positives** (the tree already mints from `deps.Platform`; all 22 literal-valued minting candidates are `_test.go`) |
+| **MEDIUM — the breaking-field sweep was incomplete and task 5.5 claimed otherwise** | FIXED, and 5.5 corrected | `config/README.md:50` (documented `instance_id`, a load-time error), `natsclient/kv.go:521` and `processor/graph-ingest/component.go:2685` (retired order in live doc comments). `git log origin/main..HEAD -- natsclient/kv.go` returned **no commits**: 5.5's "Done" list named a file this PR never touched. Sixteen of the seventeen named files were genuinely touched; that one was the single false entry. The unreproducible "132 files" figure is withdrawn rather than restated |
+
+### The seam chosen for the overlap report, and why
+
+`composition.Validate(catalog, cfg, delegations ...semtypes.EntityDomainDelegation)` — `validate.go:28-30`. Neither
+the catalog nor the configuration carries entity-domain delegations; they are `[]EntityDomainDelegation` functions in
+product packages, which only a composition root holds, so a new input was unavoidable. A **variadic on the existing
+signature** adds zero new types and zero new functions, and every one of the nine existing call sites compiles
+unchanged; an options type was rejected as speculative widening for a second input that does not exist. Supplying no
+delegations simply omits the report.
+
+**The finding cannot refuse a boot, structurally and not only by severity.** The boot refusal is
+`service/component_manager.go:396` `analyzeBootComposition`, which runs `composition.Analyze(declarations, streams)`
+— a function with no delegation parameter. The overlap finding is added in `Validate` only (`validate.go:79`), so
+`Analyze` cannot observe it. `TestBootAnalysisCannotSeeEntityDomainOverlap` pins that. Belt and braces,
+`severityOf` maps the type to `SeverityWarning` (`findings.go:77`).
+
+**Grammar-collision audit on the new token.** `entity_domain_overlap` / `EntityDomainOverlap` /
+`TypeEntityDomainOverlap`: **zero pre-existing hits** across `*.go`, `*.json` and `*.md`. It collides with none of
+the thirteen existing `Type*` constants, none of the audit reasons (`authority_literal`, `domain_unregistered`,
+`instance_reserved`), and none of the entity-ID codes (`entity_id_authority_invalid`, `domain_undelegated`). Noted
+as a near-miss the audit surfaced: `component.Registration.Domain` already exists and means a **business** domain
+("robotics", "semantic", "network") — an unrelated vocabulary that must not be overloaded for entity domains.
+
+### Round-3 mutation transcripts
+
+| Mutation | Result | Restore |
+|---|---|---|
+| `severityOf`: drop `TypeEntityDomainOverlap` from the warning arm | `Severity:"error"` → test fails with "an error trips the boot refusal on the intended case" — **KILLED** | `findings.go` md5 `80072982a31707b5332a1e99dc386c20` |
+| `Validate`: delete the `entityDomainOverlaps` CALL (wiring, not primitive) | both overlap tests fail — **KILLED** | `validate.go` md5 `80ef8f46a8be53423e3eb0bc20102154` |
+| production `OpsDiagnosisEntity.EntityID()` returns `"acme.fixed-product.diagnosis.ops.finding.d1"` | pre-fix `entity ID audit passed: 1318` — **NOT KILLED**; post-fix `:92: literal go-return:EntityID: …: authority_literal` — **KILLED** | `segment_rules.go` `d382cf4b28df75e05f7aa64165fe3036`, `ops_diagnosis_entity.go` `569dbba82fee6bbcb8da9f5371149b1e` |
+| revert `segment_rules.go` with the new audit test in place | test **FAILS** — it discriminates | as above |
+| restore `"instance_id": "west-1"` to `config/README.md`'s documented block | `TestREADMEPlatformExampleLoads` fails with the production loader's own removal error — **KILLED** | `README.md` md5 `e919f4215f6debf29e05592727ac04bf` |
+
+Codex suggested a config decode test for the documented platform block; it was taken.
+`config/readme_example_test.go:62` `TestREADMEPlatformExampleLoads` parses `config/README.md`'s own fenced example,
+strips its `//` annotations without touching `nats://` inside strings, and loads the platform block through
+`NewLoader().EnableValidation(true)`. The example can no longer drift from the removed-field guard.
+
+### Raised, not decided — for the owner
+
+ADR-102 decision 4 also said an **undelegated** value "is a composition rejection at boot". That is the same
+shape the BLOCKING found and is equally unimplemented: `Authorize` has zero production callers, and slice A's real
+enforcement is the corpus audit's `domain_unregistered` rule. The 2026-08-28 ruling covers the overlap clause only,
+so decision 4 now records what ships in a marked note rather than being re-decided here.
+
+## Review round 3 at `8e3411c8` (1 BLOCKING, 2 HIGH, 3 MEDIUM, 3 NIT) — and the second owner ruling that dissolved it
+
+The owner ruled 2026-08-28, after the round-3 ruling and in response to this review: **drop the overlap reporting
+entirely, and drop the authority type with it.** Not deferred — removed. In a shared vocabulary, two producers using
+one domain token for different things is a *vocabulary* problem (someone picked the wrong token), and detecting it at
+composition time is the wrong layer. Nothing regresses: overlap was unreported before this PR too, because the boot
+rejection the delta asserted never ran.
+
+| Finding | Disposition | Evidence |
+|---|---|---|
+| **BLOCKING — a fourteenth type appended to a closed vocabulary whose owning contract was not amended.** `openspec/specs/composition-validation/spec.md` is current truth asserting **thirteen** exported type constants and that nothing emits outside the set; the change directory had no `composition-validation` delta, and the in-code guard `allFindingTypes` is hand-maintained and was never enrolled | **DISSOLVED by the deletion** | `TypeEntityDomainOverlap` and its `severityOf` arm reverted; `composition/findings.go` and `composition/validate.go` restored byte-for-byte to `328b4181` (`git diff --quiet 328b4181 --` on both: clean). The vocabulary is thirteen again, `composition-validation`'s spec stays true untouched, and no delta is owed |
+| **HIGH-1 — the ruled reporting channel had zero production emitters.** Ten `Validate` call sites, not the nine the round-3 commit claimed; the three production ones (`cli/main.go:127`, `assert.go:16`, `composition_tools.go:88`) structurally cannot pass delegations | **DISSOLVED by the deletion.** The miscount is owned: the round-3 grep was for `composition.Validate` and could not see `assert.go`'s in-package call — the same same-line/wrong-filter shape as the `gh1030` miss earlier in this session | variadic reverted; all ten call sites are back to `Validate(catalog, cfg)` |
+| **HIGH-2 — the three adopter exemplars still taught the retired rule** | FIXED | `examples/processors/{document,weather_station,iot_sensor}/entity_domains.go` no longer mention a constructor or a boot-time rejection: they state that the corpus audit AST-scans the literals for its registered set, that nothing reads them at runtime, and that sharing a domain is permitted because `system` and ADR-099 L0 keep IDs and communities distinct |
+| MEDIUM — the minting rule fires only when all six constructor fields resolve statically, so a partial-literal mint yields no candidate | DISCLOSED, not widened | stated in the spec scenario at `entity-id-contract/spec.md` "a literal minted identity is a finding" and in conformance D3, both naming `entityIDConstructorValue` as the limit's home |
+| MEDIUM — the "You wanted / Use" answer key routed to three surfaces that could not report overlap | DISSOLVED | with no delegations parameter, `validate <config-path>`, `composition.Validate(catalog, cfg)` and `AssertValid(t, catalog, cfg)` are again the complete answer; `migration…md` obligation 4 no longer tells anyone to pass delegations, so `docs/basics/05-first-processor.md` needed no edit |
+| MEDIUM — `gh1095-…-design.md` still `**Status: ACCEPTED**` with no supersession note | FIXED | the status line now reads "ACCEPTED, with O-5 SUPERSEDED", links the ruling, and says the §F O-5 row and the §D semdragon row are kept as history |
+| NIT — ADR-102 "see below" pointed at a block that is above; a missing blank line fused two paragraphs with a stray leading space | FIXED | pointer now reads "see the Supersession note above"; the `**Accepted (2026-08-26).**` paragraph is separated again |
+
+### Registered-set survival — the load-bearing proof
+
+The ruling keeps `EntityDomainDelegation` precisely because the audit reads it. Mutation, on a real declaration:
+
+| Mutation | Result |
+|---|---|
+| remove `{Producer: Producer, Domain: environmentDomain}` from `examples/processors/iot_sensor/entity_domains.go` | `examples/processors/iot_sensor/payload.go:185: format-builder go-format-prefix:EntityID: "%s.%s.sensor.environmental.%s.%s": domain_unregistered` — **KILLED** |
+| restore it | `entity ID audit passed: 1317 structured candidates` |
+
+Restored by `cp`, md5 `793e429998a56cfefd103ab9113b69b8` equal to its pre-mutation value. Ten production candidates
+depend on a declared (non-reserved) domain, so the mechanism is load-bearing beyond the mutated one.
+
+### Phantom-export count for the owner's merge decision
+
+*(Superseded by the 2026-08-28 ruling that deleted all eight; kept as the measurement that informed it.)* The
+deletion takes **four** symbols off the list entirely — `EntityDomainAuthority`, `NewEntityDomainAuthority`,
+`Authorize`, `EntityIDReasonDomainUndelegated` — none of which now exist. The eight-symbol phantom subset was
+**unchanged at eight**, re-measured over the 935 production `.go` files outside `pkg/types`:
+`FrameworkEntityDomains()` 0, `ReservedInstanceTokens()` 0, `FrameworkIdentityFamilies()` 0, `PrefixLevel(n)` 0, and
+`PrefixLevelDeployment` / `PrefixLevelSource` / `PrefixLevelTaxonomy` / `PrefixLevelType` 0 each. Their singular
+siblings are NOT phantoms and must survive: `IsFrameworkEntityDomain` (`internal/entityidaudit/segment_rules.go`),
+`IsReservedInstanceToken` (`segment_rules.go` and `graph/inference/hierarchy.go`), and
+`SourcePrefix()`/`TaxonomyPrefix()`/`TypePrefix()` (hierarchy and clustering). `DeploymentPrefix()` was checked and is
+also not a phantom — `SourcePrefix()` and `PrefixLevel` call it.
+
+### What the file name now says
+
+`pkg/types/entity_domain_authority.go` holds no authority. The name is kept to avoid churning the citations in this
+change's own artifacts, and the type doc states what the file holds and why the policy was deleted. Renaming it to
+`entity_domain.go` is a reasonable follow-up and is not done here — **filed as #1171**.
+
+## Surviving new-export table for `pkg/types` (reviewer contract "name its present consumer")
+
+Twenty-one exported symbols are new in `pkg/types` on this branch, derived by diffing declarations against
+`origin/main` rather than from a list. Eleven have a production consumer outside the package:
+
+| Symbol | Present production consumer outside `pkg/types` |
+|---|---|
+| `EntityDomainDelegation` | `cmd/e2e-semstreams/mission/state.go`, the three example packages, and `internal/entityidaudit` `collectRegisteredDomains` (AST) |
+| `IsFrameworkEntityDomain` | `internal/entityidaudit/segment_rules.go` `domain_unregistered` |
+| `IsReservedInstanceToken` | `graph/inference/hierarchy.go` `isContainerEntity`; `segment_rules.go` `instance_reserved` |
+| `SourcePrefix()` | `graph/inference/hierarchy.go` source container |
+| `TaxonomyPrefix()` | `graph/inference/hierarchy.go` taxonomy container |
+| `TypePrefix()` | `graph/inference/hierarchy.go`, `graph/clustering/entityid_provider.go` |
+| `LongestFrameworkIdentityFamily` | `config/config.go:796` `validateAuthorityPair` |
+| `MaxAuthorityPairBytes` | `config/config.go:800` |
+| `FixedBytes` | `config/config.go:800` |
+| `RuleAlertIdentityFamily` | `graph/events.go:196` |
+| `RuleTriggerIdentityFamily` | `processor/rule/graph_event_identity.go:33` |
+| `WebObservationIdentityFamily` | `agentic/web_observation_entity.go:240` |
+
+The remaining ten are accounted for, not overlooked:
+
+- **`FrameworkIdentityFamily`** — not a phantom, a grep artifact. `config/config.go:796` binds a value of the type
+  and calls `.Name`, `.FixedBytes()`, `.InstanceBytes` and `.EntityID(...)` on it; the type crosses the boundary
+  even though its bare name does not appear.
+- **Seven slice-B authority symbols** — `ValidateEntityIDAuthority`, `ErrorCodeEntityIDAuthorityInvalid`,
+  `EntityIDReasonForeignAuthority`, `EntityIDReasonLocalAuthorityClaimed`, `EntityIDDetailLane`,
+  `EntityIDLaneLocal`, `EntityIDLaneImport`. These are a **declared** deferral, not a discovered phantom:
+  `migration-beta162-to-beta163.md:502` states in the adopter-facing layer that the validator "exists and is
+  unwired", and the "Not in this slice" section names the boundary as slice B's. The owner ruling scoped this
+  round's deletion away from them explicitly.
+- **`DeploymentPrefix()`** — has an in-package production caller (`SourcePrefix()` at `entity_id.go:275`); outside
+  the package it is referenced only by `message/parse_entity_id_test.go`. Left in place, as ruled; a ninth cut was
+  not in this ruling.
+- **`IsSameSource`** — raised here, then **RULED and DELETED 2026-08-28** as the ninth phantom. It replaced the
+  retired `IsSameSystem` and had no caller at all: none in `pkg/types` production, and outside only
+  `message/parse_entity_id_test.go` (`TestEntityIDIsSameSource`, removed with it) and one pair of assertions in
+  `entity_id_semantics_test.go`. Checked against #606 before the cut: its design does not name it — the inventory's
+  hit is `IsSameSystem`, the pre-#1095 name, in a row inventorying the old state — and #606 partitions by
+  `SourcePrefix()` as a key, not by a pairwise comparator. Callers wanting the predicate compare `SourcePrefix()`
+  directly.
+
+### The eight, and what happened to each
+
+All eight were **deleted outright**, not unexported: the delete-vs-unexport question was decided by reading, and
+none of the eight had an in-package caller either, so unexporting would have left dead unexported symbols.
+
+| Deleted | Verification before cutting |
+|---|---|
+| `FrameworkEntityDomains()` | only its own declaration in production `pkg/types`; test rewritten onto `frameworkEntityDomains` |
+| `ReservedInstanceTokens()` | same; `graph/inference/hierarchy.go:139` named it in **prose only** and now names `IsReservedInstanceToken` |
+| `FrameworkIdentityFamilies()` | same. `MaxAuthorityPairBytes` was checked first and calls `LongestFrameworkIdentityFamily()`, not this accessor, so the 170-byte derivation is untouched — the migration doc's sentence naming this accessor was wrong and is corrected |
+| `EntityID.PrefixLevel(n)` | only its own declaration; `TestPrefixLevelsAreNamed` rewritten to pin the four named methods and their position counts |
+| `PrefixLevelDeployment` / `PrefixLevelSource` / `PrefixLevelTaxonomy` / `PrefixLevelType` | verified rather than assumed: their only uses were inside `PrefixLevel(n)`'s switch and its error detail, so they fall with it |
+
+### Consequence for gh606 — deliberate, not overlooked
+
+ADR-099/#606 was the named future consumer for the prefix-level vocabulary, and #606 is a ruled beta.163 epic
+blocked on this PR. The vocabulary was **deliberately removed for want of a present consumer**, not missed:
+`EntityID.PrefixLevel(n)` and the four `PrefixLevel*` constants are gone, while the four named prefix methods
+(`DeploymentPrefix`, `SourcePrefix`, `TaxonomyPrefix`, `TypePrefix`) remain and carry the same meanings.
+`IsSameSource` went with them on the same test — #606 partitions by `SourcePrefix()` as a key rather than by a
+pairwise comparator, so nothing it needs was removed. #606's implementer should re-add whatever level vocabulary its code actually calls, with the caller in the
+same change, rather than resurrecting this shape speculatively. `pkg/types/entity_id.go` carries the same note above
+the prefix methods.
+
+## Landing scope — slice A of two; the change stays in flight
+
+**This PR does not archive the change, and no archive/spec-sync check is owed on it.**
+`entity-id-segment-semantics` is landing in two PRs. Slice A is this one; slice B carries `Closes #1095` and
+`Closes #1096`. `task openspec:queue` reporting **34/51 with 17 open** is the expected state at slice A's merge, not
+an unfinished change: 11 of the 17 are slice B's work by design — 2.5, 2.6 (its two run-scope tests), 3.8, the
+mutation checks M3/M4/M6/M13 (4.3, 4.4, 4.6, 4.13), and all four rows of §6 — and the remaining 6 are §7, which is
+scoped per-change.
+
+The evidence, all checkable in `tasks.md`: **1.1** declares the split and pins slice A's PR body to open
+`Part of #1095 (slice A of two — slice B closes it)`; **7.5**'s command is `openspec archive
+entity-id-segment-semantics`, a change-level operation with no per-slice form; and **7.2 already applies the
+convention**, recording slice A's ten green e2e tiers while staying open "because slice B changes the same paths and
+must re-run it". 1.1's "§7 gates for what slice A does" assigns slice A the *running*, not the ticking.
+
+So slice A **executed** 7.1 (focused gates), 7.2 (ten covering tiers), 7.3 (implementation review, three rounds) and
+7.4 (the Codex owner round plus two owner rulings) — every result recorded in this file — and **left all four
+unticked**, because slice B re-runs them for the completed change and ticks them then. **No task in this change
+asserts a post-merge fact**: verified by reading every `[x]` row and every §7 row; the only CI-shaped statements are
+gate results already obtained on a branch head, and 7.6 is explicit that "No task asserts CI state."
+
+Slice B inherits, in `tasks.md`: the §7 scoping note above §7.1, the `IsSameSource`/phantom-export rulings, the
+`pkg/types/entity_domain_authority.go` rename follow-up, and the #606 note that the prefix-level vocabulary was
+removed deliberately.
+
+## Slice B implementation round (this PR)
+
+Three findings the slice's own tests produced, all recorded rather than worked around. Each is written up with its
+evidence in `tasks.md`; this table is the index.
+
+| Finding | Where it came from | Disposition |
+|---|---|---|
+| `rule.task.spawned` is a THIRD framework write to the firing entity and reached the foreign subject | writing 2.6's `TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite`; the row named only the anchor pair | FIXED — one guard now covers all three writes; the spec delta's #1096 requirement and its scenario were amended to name `rule.task.spawned`; ~~the counter fires once per action execution, so its spec-pinned name is narrower than its meaning (recorded naming debt, tasks 6.3)~~ **SUPERSEDED — both halves withdrawn, see the round-1 MEDIUM-1 and round-2 HIGH-1 rows below.** The name was WRONG, not merely narrow, and was FIXED in round 1, not deferred as debt; the cardinality is once per DISPATCH — one (firing entity x `for_each` item) — which round 2 corrected again after the round-1 fix restated it as "per declined entity" |
+| M13's named killer cannot kill it | running the omission; `TestHierarchySkipsForeignAuthority` passes with the check deleted, twice, because graph-ingest's own container gate makes `GetHierarchyTriples` error and the merge path discards the whole set | RECORDED + covered — `graph/inference.TestGetHierarchyTriplesSkipsForeignAuthority` added beside the code, which also covers the exported-surface case graph-ingest cannot reach; the integration row keeps the observable contract (tasks 4.13) |
+| M6a kills one 2.6 test, not both | running the omission | PREMISE CORRECTION — on a local firing loop the read-back and `deps.Platform` are the same two strings by construction, so nothing can separate them there (tasks 4.6) |
+
+**Deviation carried into review, not resolved here:** `agent.run.origin-entity-id` is specified as an `@id`
+predicate and its object is a canonical entity ID, but the stored triple carries no `@id` datatype — `pkg/lifecycle`
+has no write-side datatype channel (`grep -rn Datatype pkg/lifecycle/` → nothing), and its two siblings
+`agent.run.parent-entity-id` and `agent.run.entity-id` behave identically today. The design's own concrete mechanism
+(a `lifecycle:"predicate=…"` tag) is what shipped. Giving the harness a datatype channel is new framework surface no
+task authorises; the consequence (`pkg/fusion` reads it as a property fact unless a lens declares the predicate) is
+stated in the migration note. Full write-up in tasks 3.8.
+
+**Latent defect fixed in passing:** `test/shipped_graph_mutation_ports_test.go` resolved graph-ingest INPUT ports in
+the OUTPUT direction. Harmless while no input-only port field was ever set; `import: true` made it a hard failure.
+
+**Two shipped-config ledgers amended rather than absorbed:** `internal/portgrammarcontrol`
+(`approvedImportLaneAdditions = 1`) and `service/testdata/message_logger_subject_census.json` (388→389 raw rows).
+Both carry the reason inline.
+
+### ESCALATION — RAISED BY SLICE B, RULED, AND CLOSED BY SLICE C (#1149, merged `b060511f`)
+
+*Kept in full as the evidence that produced the ruling. The defect it describes is FIXED; every present-tense
+sentence below describes the tree as slice B measured it on 2026-08-28, before slice C. The outcome is at the end.*
+
+#### What slice B measured
+
+**Measured on slice B's branch, 2026-08-28, by running `task e2e:structural`: it fails with
+`entity stabilization failed: got 0, expected 74`.** Zero entities reach `ENTITY_STATES` because the boundary
+correctly refuses every one of them.
+
+The cause is a pre-existing ADR-102 d2 violation that slice A's sweep did not reach and slice B's gate makes fatal:
+
+| Config | `platform.org` / `platform.id` | `iot_sensor` + `document_processor` `org_id` / `platform` |
+|---|---|---|
+| `configs/e2e-structural.json` | `c360` / `semstreams-e2e-structural` | `c360` / `logistics` |
+| `configs/statistical.json` | `c360` / `semstreams-statistical` | `c360` / `logistics` |
+| `configs/semantic.json` | `c360` / `semstreams-kitchen-sink-ml` | `c360` / `logistics` |
+| `configs/structural.json` | `c360` / `semstreams-structural` | `c360` / `logistics` |
+| `configs/hello-world.json` | `demo` / `hello-world` | `demo` / `hello` |
+
+`examples/processors/{iot_sensor,document,weather_station}` declare `org_id` and `platform` as REQUIRED
+operator-facing config keys (`component.go` `Config.OrgID` / `Config.Platform`, `required:true`) and mint from them
+(`iot_sensor/processor.go:150-152`); the payload types additionally carry `OrgID`/`Platform` on the WIRE
+(`document/payload_document.go:34-35` and siblings). ADR-102 d2 retires both meanings: position 2 is the composition
+root's `platform.id` "and nothing else… never taken from a payload, a constant, a product name, or a firing entity".
+
+**Why this is not fixed inside slice B.** The fix is not the code — it is the corpus. Any correct fix changes
+position 2 of every entity the example processors mint, and `c360.logistics.*` is hardcoded in **237 places across
+32 files** (`test/e2e/scenarios` 13 files, unit fixtures in `processor/`, `graph/`, `message/`, plus doc comments in
+`vocabulary/predicates.go`). Three tiers need three DIFFERENT replacement values, so it is not one substitution. It
+needs its own RED capture, its own forced omissions, and its own review — a slice, not a tail.
+
+**What slice B does instead:** nothing silent. The mismatch is now a loud boot-time-visible refusal with a coded
+error, a metric and a WARN per entity, where before slice A it was accepted as local truth and after slice A it was
+accepted with the wrong meaning. `e2e:core` is green because `configs/protocol-flow.json` composes no example
+processor. The tiers that do — `structural`, `statistical`, `semantic` — are RED for this reason and this reason
+only, and that is recorded rather than worked around.
+
+**For the owner / architect.** Two orderings are available: (a) land slice B and take the example-processor
+retirement as slice C before the beta.163 tag, or (b) hold slice B until the sweep lands with it. This is a scoping
+ruling, not an implementation choice: retiring a `required:true` operator-facing config key across three shipped
+example packages and four payload types is a spec delta with a rejection act (the shape slice A used for
+`platform.instance_id`), and it belongs to whoever owns that decision.
+
+#### Outcome — ruled option (a); slice C landed first
+
+The owner ruled the escalation valid and sequenced **slice C before slice B**. It merged as `b060511f` (PR #1150,
+`Closes #1149`) with CI green on `main` (run 33229302012: Lint, Test, Build, Schema Validation, CI Status Check all
+success). `org_id`/`platform` are gone as config keys from `examples/processors/{iot_sensor,document,weather_station}`
+and as wire fields from seven payload types; position 2 now comes from `deps.Platform` alone, and
+`test/e2e/config/tier_authority.go` owns the per-tier authority mapping with a unit test that re-derives it from
+`docker/compose/tiered.yml` and each config's declared pair.
+
+Slice B merged `origin/main` at `b060511f` and re-ran the three tiers. **Their results are in `tasks.md` 7.2**, which
+is the row that owns e2e evidence; they are recorded there rather than duplicated here.
+
+**One semantic conflict the merge did not flag.** Git reported zero textual conflicts because slice C did not touch
+slice B's files. But slice B's `cmd/e2e/main.go` carried a per-variant `switch` restating the same three
+`platform.id` values slice C had just made `config.TierAuthority` the single home for — two homes for one fact, and
+only one of them drift-guarded. Slice B's copy was deleted and its callers routed through `config.TierAuthority`.
+`CoreAuthority` was added beside it for the core stack (a different compose document, no profiles) with a matching
+`TestCoreAuthorityMatchesShippedConfig` that re-derives it from `docker/compose/e2e.yml`; mutation-checked by setting
+it to `c360.streamkit-pure-WRONG`, which the test rejects naming both values.
+
+## Slice B implementation review — round 1 (CHANGES REQUESTED at `b6b99f5f`; 0 BLOCKING, 3 HIGH, 6 MEDIUM, 3 NIT)
+
+All four findings slice B carried in were CONFIRMED, two with stronger mechanisms than slice B had. The design was
+found sound; what was missing was **tests for slice B's own fail-closed guards** — the reviewer ran nine mutations
+and four were NOT KILLED. Every one of those four is now killed by a named test, each verified by re-running the
+reviewer's own mutant.
+
+| Finding | Disposition | Evidence |
+|---|---|---|
+| HIGH-1 — the #1096 fix's only wiring (`processor.go` `executor.setPlatform`) was untested and failed OPEN: deleting it made `foreignFiringEntity` answer false for EVERY entity, retiring the guard silently, with both suites green | FIXED by the preferred route — the state is now unrepresentable, not merely tested (**round-6 correction: "unrepresentable" was the wrong word and it hid the fourth seam.** A parameter makes the authority unforgettable; a zero `PlatformMeta` is still expressible, and `NewProcessor` reached the executor without one until round 6 refused it in `initializeStateTracker`) | The authority is a CONSTRUCTOR parameter of `NewActionExecutorComplete` (the only constructor receiving a mutator, publisher and KV writer) and `setPlatform` is DELETED, so the production path cannot omit it. `TestIntegration_ProductionExecutorCarriesTheDeploymentAuthority` drives `CreateRuleProcessor` → `initializeStateTracker` over **both** construction branches. The stale claim at `actions.go:574-576` — that `factory.go:122` made the branch unreachable — is corrected in place: that refusal guards `deps.Platform`, not the hop into the executor |
+| HIGH-2 — reconcile and delete lanes had ZERO coverage, and reconcile has no backstop (it writes through `entityBucket.Update` and never enters `mergeEntityOnLane`) | FIXED | `TestAuthorityGateRejectsReconcileOfImportedSubject` and `TestAuthorityGateRejectsDeleteOfImportedSubject`, plus two `#### Scenario` blocks in the graph-ingest delta. Reconcile is the lane `pkg/lifecycle.Manager` writes through, so an unguarded one would let any participant attach to a peer's entity |
+| HIGH-3 — the three LOUD paths the migration note promises were unpinned; deleting all three in one compiling mutant left six suites green | FIXED | `TestCreateGraphIngestRefusesAbsentDeploymentAuthority`, `TestCreateRuleProcessorRefusesAbsentDeploymentAuthority`, `TestGetHierarchyTriplesRefusesWithoutDeploymentAuthority` — each a table over both-absent / org-absent / platform-absent, each with a negative-space partner so the refusal is about the ABSENT pair and not an unrelated failure |
+| MEDIUM-1 — the counter's name and documented cardinality were both wrong | FIXED now, not deferred | Renamed `rule_foreign_firing_writes_skipped_total`; spec restated **per dispatch** (the recorder lives in `publishAgentOnce`, which runs once per `for_each` item). The name was not merely narrow: under `run_scope` `inherit`/`none` no anchor is in play and only `rule.task.spawned` is skipped, so "run anchor" was wrong. Free now — no dashboard, no alert, no sister consumer — and a breaking series rename later |
+| MEDIUM-2 — the skip's Info log promised linkage on a local run that under `inherit`/`none` does not exist | FIXED | The linkage claim moved out of the shared log and onto the `run_scope=new` call site, which is the only place a local run exists |
+| MEDIUM-3 — slice B's class-enumeration claim was refuted | CORRECTED in `tasks.md` 7.2 | The class actually closed is "fixtures that mint THROUGH graph-ingest", not "six-part-shaped literals". Survivors (`crud-tools` 9 entities, `ops` 3, `lifecycle` 1) write AROUND the boundary via `PutKV`, which is why those tiers are green. Not chased here, per coordinator direction; filed as coverage debt in **gh#1161** (round 2 MEDIUM-2 found the "filed" claim had no issue behind it — the prose was the record) |
+| MEDIUM-4 — `configs/graph-backend.json` shipped `peer_import` ENABLED in the reference composition an operator copies | FIXED, and the change is better for it | The lane is removed from every shipped config: a lane is an operator statement of TRUST, and shipping one enabled hands that decision to whoever copies the file — contradicting this slice's own documented default that a port saying nothing imports nothing. The declaration is a documented snippet; the operator-facing seam is now covered where it actually lives, in JSON, by `TestJetStreamImportLaneDecodesFromOperatorJSON` (declared true / omitted / declared false) and `TestJetStreamImportLaneIsRefusedOnAnOutputPort` — stronger than a shipped config, which a Go struct literal never exercises. Both ledgers amended for the lane were reverted with it |
+| MEDIUM-5 — `lessons/scenario.go:31` hardcoded `c360.streamkit-pure.…` | FIXED | Composed from `e2econfig.CoreAuthority`. Verified the lessons tier boots `docker/compose/e2e.yml` → `configs/protocol-flow.json` → `c360.streamkit-pure`, so the value is byte-identical and no tier behaviour changes |
+| NIT-1 — the new const block was inserted INSIDE a test's doc comment | FIXED | The block moved to the top of the file; the severed comment is reattached to `TestHierarchyInference_InverseEdgeWriteFailureIsNonFatal` |
+| NIT-2 — `hierarchyTestPlatform = "logistics"` put a product name in the deployment position, in the framework's own exemplar | FIXED | `semstreams-hierarchy-test`; the 49 fixture IDs under the old pair follow. The two-position `"c360.logistics"` malformed-ID fixture is deliberately untouched — it is a line-pinned audit annotation asserting an arity rejection |
+| RECOMMENDED — `hierarchy_entities_skipped_total{reason="foreign_authority"}` for the silent hierarchy skip | **DECLINED, with reasons** | See below |
+
+### The recommended hierarchy counter — declined, and why (gap filed as #1172)
+
+The gap is real: the hierarchy skip is the one deliberate omission with no counter. I did not add one, because every
+available shape violates a rule this repository already paid for:
+
+- **An atomic counter beside `containersCreated`/`edgesCreated`/`edgesFailed`** would be a phantom.
+  `HierarchyInference.GetMetrics()` has **no production consumer** — `grep` finds only tests — so the value would be
+  unscrapeable and unread. "For observability, with zero present consumers" is the shape slice A deleted nine
+  exports for.
+- **A Prometheus counter inside `graph/inference`** means a registry dependency and new exported surface on a
+  framework package, which the developer contract routes through owner design review BEFORE implementation.
+- **Metering in graph-ingest instead** means re-deriving "is this foreign" at the call site, beside the decision
+  `GetHierarchyTriples` already owns — a second interpreter of one fact, which is how this codebase's recorded
+  defects usually start.
+
+The honest close is to make inference REPORT what it did rather than have a caller re-derive it, and that is a
+signature change to an exported method — worth doing deliberately, not bolted onto a review round. What exists
+meanwhile is not nothing: the absence of hierarchy triples on an imported entity is asserted end-to-end by
+`TestHierarchySkipsForeignAuthority` and at the unit level by `TestGetHierarchyTriplesSkipsForeignAuthority`, and
+`task e2e:structural` OBSERVED `hierarchy_container_count:46` on local entities in the same run (RUN 2, tasks 7.2).
+Nothing pins 46: the tier's actual gate is a derived floor — `expectedMinContainers := sourceEntityCount * 4 / 10`
+(`test/e2e/scenarios/tiered_semantic.go:986`) asserted as `containerCount >= expectedMinContainers`
+(`test/e2e/scenarios/results.go:551-554`), which was 32 on that run. 46 is a recorded observation, not an
+expectation any file carries. Recorded for the architect as the one remaining unobservable omission.
+
+## Slice B implementation review — round 2 (CHANGES REQUESTED at `b5b106e4`; 0 BLOCKING, 1 HIGH, 3 MEDIUM, 1 NIT)
+
+Items A and B of the round passed fully: all four round-1 mutants die, each by its own named test; the HIGH-1
+mutation no longer compiles; both construction branches are killed independently; no caller was lost. Every finding
+below is in the prose/spec layer, and two of the five are defects the ROUND-1 FIXES introduced — which is the
+round's real lesson: a remedy is new code with less design time than what it replaced, and it needs the original
+diff's adversarial pass.
+
+| Finding | Disposition | Evidence |
+|---|---|---|
+| HIGH-1 — a normative MUST that was false about its own mechanism, and untested: the spec delta said `publish_agent` fanning out over `for_each` "declines N imported entities", so N skips | FIXED at every site, and the cardinality is now observable | `executePublishAgent` passes the SAME `ExecutionContext` to every iteration (only `item` varies) and `publishAgentOnce` reads `entityID` from it, so the firing entity is INVARIANT across the fan-out: N items on ONE import are N declined DISPATCHES for one entity. An operator reading the counter as "distinct peer entities declined" over-counts by the fan-out factor, and the delta archives as current truth. Restated as one increment per (firing entity x `for_each` item) in the spec delta, `metrics.go`, BOTH `actions.go` comments, and the operator-facing migration note. The test gap round 1 flagged is closed by `TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity` — `runScopeNewAction` carries no `ForEach`, so both existing tests assert a single dispatch and structurally cannot tell "per dispatch" from "per action" |
+| MEDIUM-1 — the canonical artifact contradicted itself: the round-1 findings table still asserted, present tense, that the counter fires "once per action execution" and that the name was narrow debt deferred to tasks 6.3 | ANNOTATED IN PLACE, not rewritten | The row is struck through and marked SUPERSEDED with a pointer to the two rows that withdrew it. History is preserved; the present-tense claim is not. `docs/proposals/gh1095-entity-id-segment-semantics-design.md:220-221` was already annotated correctly and needed no change |
+| MEDIUM-2(a) — `tasks.md` and this file both said the `PutKV`-bypass fixtures were "filed as coverage debt"; no issue existed, so the prose WAS the record | FILED — **gh#1161**, cited at both sites | An in-PR guarantee is not discharged by a claim that it was filed. The sharp half is the `ops` fixture: it seeds foreign-authority entities straight into `ENTITY_STATES` at `ops/scenario.go:473`, manufacturing exactly the state ADR-102 d5 exists to prevent |
+| MEDIUM-2(b) — this file said `task e2e:structural` "pins `hierarchy_container_count:46`" | CORRECTED | Nothing pins 46. The gate is a derived floor: `expectedMinContainers := sourceEntityCount * 4 / 10` (`tiered_semantic.go:986`), asserted as `containerCount >= expectedMinContainers` (`results.go:551-554`), which was 32 on the recorded run. 46 appears in no expectation file, taskfile or testdata. Restated as an observed value from RUN 2. The stage does run on structural (`tiered.go:271`), so only the "pins" half was wrong |
+| MEDIUM-3 — the round-1 replacement doc comment, whose stated purpose was to correct a previously wrong reachability claim, made a NEW one: that the convenience constructors "hold no mutator, publisher or lifecycle manager and therefore perform none of the writes this guard protects" | FIXED — the comment now states caller enumeration, not capability | Refuted by the same file: `NewActionExecutorFull` takes both a mutator and a publisher, `NewActionExecutorWithMutator` takes a mutator, `SetLifecycleManager` is exported, and `rule.task.spawned` is gated on exactly `published && e.tripleMutator != nil`. What is TRUE: `NewActionExecutorComplete` is the production constructor whenever NATS is present; `NewActionExecutor` is ALSO a production constructor (the no-NATS branch of `processor.go`) but holds neither publisher nor mutator; `WithMutator` and `Full` COULD reach the guarded writes and simply have no production and no sister-repo caller (verified by grep across the c360 tree). Zero live blast radius either way — the correction is to the claim, not the code |
+| NIT-1 — the delta's AND-clause "the rejection happens before the entity's state is read, so no KV I/O is performed on its behalf" was true in code and unasserted | ASSERTED, then **NARROWED in round 4** — see A2 there | ~~The test probes with ABSENCE, which is observable only through the fetch, so reporting the authority instead shows the read never happened.~~ **SUPERSEDED.** Absence-probing distinguishes which error is REPORTED, not whether the read EXECUTED: a gate that fetched first and then authorized, discarding the fetch result, satisfies every assertion. The scenario, the test name and the test's doc comment were all narrowed in round 4 to the claim the evidence supports — the verdict is decided from the identity alone — with "before any KV I/O" left standing as the code-level invariant it is |
+
+### Round-2 mutation evidence
+
+Both new tests were mutation-checked, and in both cases the pre-existing test SURVIVED the mutant — which is the
+direct demonstration that the round-1 coverage gap was real and is now closed.
+
+| Mutant | New test | Pre-existing test |
+|---|---|---|
+| `foreignFiringSkipRecorder`'s `recorded` latch moved from a closure local to a field on `ActionExecutor`, converting once-per-DISPATCH into once-per-action for a single `Execute` (the latch was replaced by an accumulator in round 4; the equivalent mutant is re-run there) | `TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity` **FAILS**: "Max difference between 3 and 1 allowed is 0.0001, but difference was 2" | `TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite` **PASSES** — one dispatch cannot tell the two units apart |
+| `c.authorizeSubject` moved from before `fetchEntityState` to after it in `handleCanonicalReconcile` | `TestAuthorityGateRefusesForeignReconcileRegardlessOfExistence` (then named `…RejectsReconcileBeforeReadingState`) **FAILS** on both the code assertion and the `NotEqual(entity_not_found)` assertion | `TestAuthorityGateRejectsReconcileOfImportedSubject` **PASSES** — an unchanged revision is equally consistent with reading then refusing |
+
+## Slice B implementation review — round 4 (artifact-accuracy corrections raised at `5c345833`, after round 3 was APPROVED with 0 BLOCKING / 0 HIGH)
+
+Round 3's verdict was APPROVED, so nothing here is a rejected fix. Every item is an artifact that claimed more than the tree
+supports, and two of them sat in the spec delta, which archives as current truth. The round's own lesson repeats
+round 2's: round 3's fix for the round-2 NIT — an unasserted AND-clause — produced a NEW scenario with the same
+defect, and a test whose NAME asserted the unproven half.
+
+| Finding | Disposition | Evidence |
+|---|---|---|
+| A1 — the delta's fan-out scenario asserted "the firing entity is invariant across the fan-out" and named a test that does not check it | ASSERTED | `TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity` now decodes all three published envelopes through the production decoder (`newActionsTestDecoder`) and asserts each carries `task.RunID == "import1"`. `RunID` is `firingLoopID`, derived from the firing entity, so equal RunIDs across dispatches IS the invariance. `TaskID` does not discriminate: `rule-<id>-hydraulics-<ns>` still carries the `rule-<id>-` prefix |
+| A2 — the ordering scenario claimed precedence as ordering: "the refusal precedes the state read, so no KV I/O happens on a foreign subject's behalf" | NARROWED at every site | The scenario is retitled "the refusal is decided from the identity alone, never from the entity's stored state"; the `entity_not_found` partner clause now says what it shows and explicitly says what it does not; the test is renamed `TestAuthorityGateRefusesForeignReconcileRegardlessOfExistence` and its doc comment records the withdrawn claim. "Before any KV I/O" stays as the normative requirement it is — `authorizeSubject` precedes `fetchEntityState` in every canonical handler — defended by the mutant that actually threatens it |
+| B1 — `actions.go` `foreignFiringEntity`, third rewrite, carried two clauses its own file refutes | FIXED THEN SUPERSEDED — the Codex owner round (blocker 2) found the whole line of reasoning wrong: caller enumeration is not a property of an EXPORTED constructor. The comment is now on its fourth revision and states a fail-closed mechanism instead | "Reaching that state is an in-repo test-fixture condition" was false: `processor.go:721` is a PRODUCTION site (`NewActionExecutor`, no-NATS branch) with a zero `e.platform`. It is now "reaching that state WITH A GUARDED WRITE IN PLAY", with the inertness explained (both guarded writes need a mutator that constructor never holds). And `NewActionExecutorWithMutator` does NOT take a publisher and there is no publisher setter, so it cannot reach the `published`-gated `rule.task.spawned` skip — `SetLifecycleManager` plus its mutator still let it reach the run-anchor guard, so the conclusion survives, but the reason was false for one of the two constructors. Comment B at `NewActionExecutorComplete` already scoped this correctly; A now matches B |
+| B2 — `factory.go` stated the failure mode BACKWARDS on a guard | FIXED AS A COMMENT, THEN THE MECHANISM ITSELF WAS DELETED — the Codex owner round removed the short-circuit this row describes, so the sentence below is history: `foreignFiringEntity` no longer short-circuits at all and an absent pair now reads every entity FOREIGN | It said an absent pair "would … judge every firing entity **foreign**". `foreignFiringEntity` short-circuited to `false` on a zero platform: every entity read LOCAL, so the framework wrote to imported mirrors. Fail-OPEN, the dangerous direction to misstate. `NewActionExecutorComplete`'s own doc states it correctly in the same PR. Confirmed absent on `origin/main` — this PR introduced it |
+| C1 — `tasks.md` 6.3 asserted an unexported `setPlatform` wired in `processor.go` | FIXED | `grep -rn "setPlatform" --include='*.go' .` returns nothing; the same task's round-1 correction states the authority is a constructor parameter. Same self-contradiction shape as round-2 MEDIUM-1, in the file round 3 did not sweep |
+| C2 — the Info log understated the skipped set while the delta and the migration note promised it named which writes were skipped | FIXED IN CODE, not narrowed in prose | The two skip decisions are reached at different points (anchors before publication, `rule.task.spawned` after it) and the per-dispatch latch swallowed the second log call. Observed: `skipped="agent.loop.run,agent.run.entity-id (linkage on the local run as agent.run.origin-entity-id)"`. `foreignFiringSkipRecorder` now returns `(record, flush)`; the caller defers `flush`, which emits one line naming everything the dispatch declined. The counter's unit is unchanged. Pinned by `TestForeignFiringSkipLogNamesEveryDeclinedWrite` for the content and by a line-count assertion in the fan-out test for the "ONE per dispatch" half, which a single-dispatch test structurally cannot see; the migration note now names the predicates so an operator can grep for them |
+| D1 — `metrics.go` retained "counted once together because one federation event happened" three lines above the paragraph warning not to read an increment as an entity | FIXED | Replaced with "because ONE DISPATCH declined them — not once per omitted write" |
+| D2 — `tasks.md` 6.3 cited `actions.go:571/589/619`; actual 596/637/667 after this round (586/612/641 before it) | FIXED | Also `factory.go:124`→`:125` and `actions.go:1687`→`:1760`. Stale before this round; it archives, so it was corrected rather than left |
+
+### Round-4 mutation evidence
+
+Backups by `cp`, restoration verified by `md5` (`91c8794b051db56257c3d13e54e747f1` for `actions.go` before and after
+every mutant). The first row reproduces the reviewer's finding before fixing it, which is what makes the new
+assertion demonstrably the thing doing the work.
+
+| Mutant | Result |
+|---|---|
+| `entityID` derived per iteration in `publishAgentOnce` (`if iterVarValue != "" { entityID += "-" + iterVarValue }`), so the firing entity really does vary across the fan-out | **Before A1:** BOTH `TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity` and `TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite` PASS — the reviewer's finding, reproduced. **After A1:** the fan-out test FAILS on `expected: "import1" / actual: "import1-hydraulics"` (and `-pneumatics`, `-electrics`); the single-dispatch test still passes |
+| The Info line emitted inside `record` at the first declined write instead of in the deferred `flush` (the pre-C2 shape) | `TestForeignFiringSkipLogNamesEveryDeclinedWrite` FAILS: `"agent.loop.run,agent.run.entity-id (linkage on the local run as agent.run.origin-entity-id)" does not contain "rule.task.spawned"`. Every counter assertion in the file still passes — the counter's unit was never the defect |
+| The per-dispatch accumulator promoted to an `ActionExecutor` field (round 2's latch mutant, re-expressed for the new mechanism) | `TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity` FAILS: "Max difference between 3 and 1 allowed is 0.0001, but difference was 2". The three single-dispatch tests still pass |
+
+A first attempt at that third mutant was UNDER-POWERED and is recorded because it nearly passed as evidence: it
+copied the slice header into a local and wrote it back in a `defer` on `foreignFiringSkipRecorder` itself, which
+returns immediately, so the field was restored to nil before any `record` call. Every test passed. A mutation check
+that fails to kill is either a coverage finding or a broken mutant, and the difference has to be established rather
+than assumed.
+
+## Codex owner round on slice B (CHANGES REQUESTED at `9eb191e3`; 3 BLOCKING, 1 HIGH, 2 MEDIUM, 1 NIT)
+
+The owner ruled on 2026-08-29 that this PR may merge once the findings outside the new issue **#1168** are
+addressed, and that #1168 goes immediately behind it in the beta.163 queue. Blocker 1 (O-4) and the identity
+redesign half of blocker 3 are #1168's; everything else below is fixed here. Two of the seven are defects EARLIER
+ROUNDS INTRODUCED OR REFUSED TO SEE, which is this round's lesson: rounds 1, 2 and 4 each rewrote
+`foreignFiringEntity`'s doc comment on the reasoning that no in-repo production caller reaches the fail-open state.
+That reasoning cannot hold for an EXPORTED constructor — the caller is an adopter who is in no review here — and the
+house adopter-seam rule says so directly.
+
+| Finding | Disposition | Evidence |
+|---|---|---|
+| **BLOCKING 1 — the accepted O-4 import-collision ruling is not implemented** | **DEFERRED to #1168 by owner ruling, and now RECORDED where a deliberate not-done has to be: in the DELTA** | The premise was re-measured and holds: the seam has no provenance to compare. `graph.EntityState` (`graph/types.go:24-47`) carries no arrival-source or authority field — `MessageType` is the payload type, not the sender — `graph.MergeTriples` compares `(Subject, Predicate)` only, and the import-lane fact is read at `processor/graph-ingest/component.go:1487` and recorded nowhere. (**Round-6 correction:** "read ONCE at" was false when written — commit `a5071d3e`, in this same round, added a second non-test read at `component/port_resolver.go:89`. The count was never the argument; neither read retains provenance, so the deferral stands. The delta no longer states a count.) Implementing O-4 means CREATING the fact, which is retained-provenance design, not a boundary guard. `specs/graph-ingest/spec.md` now carries a **DEFERRED to #1168** paragraph inside the authority requirement naming the home and the reason; this row is its index. Nothing is live while it waits: `grep -rn '"import"' configs/` → **0**, so no shipped configuration declares an import lane and a second arrival of one ID under two sources is unreachable through a shipped composition. The ADR is NOT edited — that is an owner action |
+| **BLOCKING 2 — an exported write-capable constructor can silently disable the foreign-write guard** | **FIXED, both ways** | `foreignFiringEntity` answered `false` when the executor held no authority, so every firing entity read LOCAL and both framework writes went through; `NewActionExecutorFull` supplies a mutator AND a publisher and took no authority. (a) `NewActionExecutorFull` and `NewActionExecutorWithMutator` — the two other constructors that can hold a `tripleMutator`, the capability both guarded writes require — now take `platform types.PlatformMeta` as a final parameter, matching `NewActionExecutorComplete`. **BREAKING on two exported symbols**, stated in the migration note and the PR body. (b) The short-circuit is DELETED: `ValidateEntityIDAuthority` decides, and under an empty pair every parseable ID differs at position 1, so an unknown authority reads foreign — fail-CLOSED, and the reason label stays truthful. `TestPublishAgentThroughExportedFullConstructorSkipsForeignSpawnedTask` covers the exported path with three cases; both mutants die (tasks 6.3) |
+| **BLOCKING 3 — `agentrun.Mint` can alias two federated origins** | **SAFETY HALF FIXED HERE; the collision-free derivation is #1168** | `Mint` now requires a non-empty `originEntityID` and, on `lifecycle.ErrAlreadyExists`, compares the STORED `OriginEntityID` with the requested one — using the `mgr.Get` that path already performs, so no new read, no second party, no lookup. A mismatch is a classified `ErrorInvalid`. Legacy-empty-record policy DEFINED: an origin-less stored run is refused, not adopted. The idempotence test's origin-less seed is replaced by a same-origin seed, and `TestMint_TwoOriginsAtOneInstanceAreRefusedNotAliased` is the two-authority/same-instance proof Codex asked for. This does not make the identity collision-free and the artifacts say so (tasks 3.8) |
+| **HIGH 4 — direct-persistence authority rejects are neither metered nor loudly logged** | **IMPLEMENTED, not amended** | The requirement covers direct persistence in the same breath as the other two lanes, so narrowing it to match the code would have been the defect this change has already had twice. `arrivalDirect = "direct"` is one bounded value in the label position the other lanes fill with their arrival subject, and `recordDirectAuthorityRejection` routes to the same `recordAuthorityRejection`. Applied at all five direct guards. Exactly-once is structural: each `graph.mutation.>` handler authorizes and RETURNS before entering any shared body, and `prepareFactProjection` does the same on the fact lane. `TestAuthorityGateMetersDirectPersistenceRejectionsOnEveryDirectSeam` also makes the first assertion in this change of the "loud log" half, which had no test on ANY lane. Both mutants die, and the per-seam mutant kills only its own subtest (tasks 6.1) |
+| **MEDIUM 5 — the documented "one knob" import lane is false as written** | **IMPLEMENTED (derived), not documented around** | Composition suppressed the no-publisher orphan only from `PortDefinition.External`, a SIBLING of `config`, so a lane declared exactly as the migration note shows was still reported. Documenting a second field is the wrong half of the adopter-seam rule: an import lane refuses any subject carrying this deployment's own authority, so no in-graph publisher can legitimately feed it — "external" is ENTAILED by "import". `component/port_resolver.go` derives it through the canonical facts projection (`PortFacts.Stream().Import()`), because `internal/portgrammarcontrol` admits only `port_codec.go` and `port_facts.go` as homes for interpreting a concrete port config; asserting `JetStreamPort` in the resolver failed that control test and the failure was the right one. `TestValidateImportLaneIsExternallyFedWithoutASecondKnob` carries the control case — the same port without `import` is still an orphan (tasks 6.2) |
+| **MEDIUM 6 — checked task 6.2 is false as worded** | **RECONCILED** | The row required `configs/graph-backend.json` to carry a declared lane; round 1 (MEDIUM-4) removed every shipped lane and the Done evidence said so, leaving the row contradicting itself in a file that ARCHIVES. The statement now says what shipped and why, and names the round that changed the intent rather than pretending it was always so |
+| **NIT 7 — the diff fails `git diff --check`** | **FIXED for the WHOLE file, not only the added lines** | The flagged lines are verbatim `go test` transcripts pasted under a six-space block indent, so `go`'s own eight-space+tab indent became space-before-tab. Every mixed leading indent in `tasks.md` was expanded to spaces at eight-column tab stops (34 lines) — rendering is byte-identical at those stops — and the trailing whitespace this exposed was stripped (34 lines; no line in the file uses a two-space markdown break, checked). Fixing only the flagged lines would have left the file one edit away from re-exposing the rest, which is the "clean except known X" shape. `git diff --check <merge-base>` is now silent |
+
+### O-4 — what is deferred, and the standing of the record
+
+O-4 is an ACCEPTED ADR-102 ruling (`docs/adr/102-entity-id-segment-semantics.md:26`) that left this change's target
+state with no record, which is exactly the "a deliberate not-done must reach the DELTA" shape: `tasks.md` stops the
+implementer, but the DELTA is what archives as current truth, and a requirement silent about a ruling reads as a
+capability that was never wanted. The deferral is therefore stated in
+`specs/graph-ingest/spec.md` inside the requirement that would carry it, not only here, and it names **#1168** as its
+home. The ADR is left untouched: amending an accepted decision record is the owner's act, not this round's.
+
+### Round mutation transcripts
+
+Backups by `cp`, restoration verified by `md5`, `[applied]`/`[restored]` printed between mutating and testing, and
+`git status --porcelain` empty afterwards — the tree was committed before the first mutant, so an empty status is an
+independent second reading of every restore.
+
+| Mutant | Result |
+|---|---|
+| `foreignFiringEntity`: restore the deleted `if e.platform.Org == "" { return false }` short-circuit | `TestPublishAgentThroughExportedFullConstructorSkipsForeignSpawnedTask/absent_authority_reads_every_entity_as_foreign` **FAILS** — the other two subtests pass, so the mutant is specific to the fail-open half |
+| `NewActionExecutorFull`: accept `platform` and drop it (`_ = platform`) | `…/local_firing_entity_under_the_supplied_authority_is_written` **FAILS** — the parameter itself is doing the work, not the signature |
+| graph-ingest: delete all five `recordDirectAuthorityRejection` CALLS | all five subtests of `TestAuthorityGateMetersDirectPersistenceRejectionsOnEveryDirectSeam` **FAIL** |
+| graph-ingest: delete ONLY `addTriplesLane`'s recording call | only `batch_append_body` **FAILS** — the seam enumeration discriminates, so a future seam added without the call is caught by its own row |
+| `port_resolver.go`: `External: def.External,` (derivation CALL deleted) | `TestValidateImportLaneIsExternallyFedWithoutASecondKnob/declared_import_lane_is_externally_fed` **FAILS** `orphaned_port findings = 1, want 0`; the control subtest passes |
+| `agentrun.Mint`: delete the stored-origin comparison | `TestMint_TwoOriginsAtOneInstanceAreRefusedNotAliased` and `TestMint_LegacyOriginlessStoredRunIsRefused` **FAIL** |
+| `agentrun.Mint`: delete the empty-origin refusal | `TestMint_RefusesEmptyOrigin` **FAILS** |
+
+Restored md5s, each equal to its pre-mutation value: `processor/rule/actions.go`
+`5958e8e1f1639e0bd0fabc0d11f322de`; `processor/graph-ingest/component.go` `1bdf1efb1d8c8cb2df6b8f05890e96b5`;
+`component/port_resolver.go` `f2e74208f81669b70d1069ba9bd819fb`; `agentic/agentrun/agentrun.go`
+`2a467c8a50ef38f5c1259edd5b022fd5`.
+
+### Correction-propagation sweep for this round
+
+Every artifact asserting the withdrawn mechanism was re-synced rather than left standing:
+
+- `processor/rule/actions.go` — `foreignFiringEntity`'s doc comment (fourth revision; it now states the fail-closed
+  mechanism and records that the short-circuit was deleted), and the SECOND paragraph of
+  `NewActionExecutorComplete`'s doc — the one about the convenience constructors, which said they have no caller
+  "and are in-repo test fixtures", true of this repository and irrelevant to an exported symbol.
+  **Overclaimed when written, corrected in round 6:** this bullet said "`NewActionExecutorComplete`'s comment"
+  without qualification. The FIRST paragraph of that same doc still asserted the deleted mechanism ("a zero value
+  makes `foreignFiringEntity` answer **false** for every entity") and was left standing. An overclaimed sweep is
+  worse than an unswept file, because the next reviewer stops looking.
+- `processor/rule/factory.go` — the comment describing the absent-pair failure mode as fail-OPEN. It now scopes
+  itself to the MINT (which is what that refusal guards) and points at the separately fail-closed write guard.
+- `tasks.md` 6.3 — the sentence "An executor with no platform answers `false` (cannot judge)" is struck through and
+  marked WITHDRAWN; 6.2's statement line is reconciled; 6.1 and 3.8 carry the new evidence.
+- `specs/graph-ingest/spec.md` — "already-persisted" is deleted from the read-only-mirror clause. `authorizeSubject`
+  runs before any read and refuses on identity alone; the very next scenario
+  (`TestAuthorityGateRefusesForeignReconcileRegardlessOfExistence`) proves existence is irrelevant, so the qualifier
+  described a stored-state predicate a future implementer might have added a read to satisfy — the ADR-091 line.
+- `docs/operations/migration-beta162-to-beta163.md` — the two exported constructors are added to the breaking
+  signature list, the "one knob" paragraph states the derivation that makes it true, `Mint`'s two new refusals are
+  described with the branch (`errs.IsInvalid`), and the empty-pair consequence for an adopter-built executor is
+  named.
+- `conformance.md` round-4 rows B1 and B2 are annotated in place, not rewritten: both describe a `foreignFiringEntity`
+  mechanism this round deleted, and B2's present-tense "short-circuits to `false`" would otherwise read as current.
+- **Left standing deliberately, in `docs/proposals/gh1095-entity-id-segment-semantics-design.md`:** `:212`'s
+  "already-persisted foreign-authority entity" and `:275`/`:385`'s `exists_foreign_source` for O-4. The design is the
+  owner-accepted SOURCE this change implements; a canonical artifact does not amend its source. The delta is where
+  target state lives, and it now carries both corrections — the qualifier deleted and O-4 recorded as deferred to
+  #1168 — so a reader of the archived spec is not misled, and a reader of the design sees what was designed.
+
+## Slice B implementation review — round 6 (final round before archive, at `88d5ec11`; 2 BLOCKING, 2 MEDIUM)
+
+The Codex owner round's fail-closed rewrite was correct and its mutants all reproduced. What it did not do was
+enumerate the hole class: it closed the three *executor* constructors and the *factory*, and left the *processor*
+constructor — the most accessible seam of the four — reaching the same absent-authority state. This round's lesson is
+the guarantee contract's own: a guard protects a CLASS, and the class here was "every path that can hand an
+ActionExecutor a zero PlatformMeta", not "every ActionExecutor constructor".
+
+| Finding | Disposition | Evidence |
+|---|---|---|
+| **HIGH-1 (BLOCKING) — the fail-closed change regressed a seam it did not cover** | **FIXED** | `NewProcessor`/`NewProcessorWithMetrics` (`processor/rule/processor.go:260`/`:265`) are exported, take no authority and never set `platform`; `SetPlatform` (`:366`) is an OPTIONAL setter whose doc says "called by the component factory" — convention, not a guard. `initializeStateTracker` reached `NewActionExecutorComplete(..., rp.platform)` with no check, so `rule.NewProcessor(client, cfg)` + `Start` built a mutator-and-publisher executor under a zero pair. Before the fail-closed rewrite that executor judged every entity LOCAL and `rule.task.spawned` was WRITTEN; after it, every entity reads FOREIGN and the write is skipped, counted and logged at Info. `run_scope=new` was already broken for that seam (`TryChainExecutionEntityID` rejects an empty org), but `rule.task.spawned` under `run_scope=inherit\|none` worked on `origin/main` and stopped working on this branch — a regression this PR introduced. `initializeStateTracker` now refuses first, before any NATS call and before the bucket, with the same `errs.WrapInvalid` shape `CreateRuleProcessor` uses. Scoped to the NATS branch: the no-NATS branch builds `NewActionExecutor`, which holds neither mutator nor publisher. **BREAKING** for a direct `NewProcessor` caller — `!` subject, migration note paragraph. No in-repo binary is affected (`grep -rn "NewProcessor" cmd/ internal/ test/` for rule → 0; both binaries use `CreateRuleProcessor`) |
+| **HIGH-2 (BLOCKING) — two artifacts still asserted the deleted mechanism, and the sweep record said otherwise** | **FIXED, and the sweep bullet corrected** | `actions.go`'s `NewActionExecutorComplete` doc, FIRST paragraph, said a zero value "makes `foreignFiringEntity` answer **false** for every entity" — backwards at HEAD, and the Codex round's own mutant (restoring `return false`) is the proof. Its "unrepresentable" claim was contradicted by the test that represents and asserts that exact state; the doc now says UNFORGETTABLE and names the two seams that close it. `factory_platform_refusal_test.go`'s doc said an absent pair would "judge every firing entity local" — same inversion, third occurrence in this comment family (round-4 B2 was the same defect). The round-5 sweep bullet asserted it swept "`NewActionExecutorComplete`'s comment"; it swept the SECOND paragraph only. The bullet is corrected in place rather than deleted |
+| **MEDIUM-2 — the O-4 deferral was refuted by its own commit** | **FIXED in the delta; the conformance row annotated** | The delta said the import-lane fact is "read once at `component.go:1487`". `grep -rn "\.Import()" --include='*.go' \| grep -v _test` returns TWO non-test reads: `processor/graph-ingest/component.go:1487` and `component/port_resolver.go:89`, the second added by `a5071d3e` in this same round. The deferral's argument survives untouched — the resolver read derives `External` at composition time and retains no provenance either — so the count was struck rather than the paragraph |
+| **MEDIUM-3 — line-pinned code citations in a spec that becomes current truth** | **FIXED** | The DEFERRED paragraph cited `graph/types.go:24-47`, `component.go:1487` and `docs/adr/102-…:26`. Line pins rot on the next edit, which is correct for this point-in-time file and wrong for `openspec/specs/`. The paragraph now cites symbols — `graph.EntityState`, `graph.MergeTriples`, `PortFacts.Stream().Import()` — and names ADR-102 decision 4 without a line. The pins stay here. The paragraph also now carries its own removal instruction: whoever lands #1168 MUST delete it, because it is change-scoped truth in a current-truth home and nothing enforces its removal |
+
+**Explicitly out of scope, by the reviewer's direction:** the cron reason-label finding (`foreign_authority` reported
+for a cron dispatch with no firing entity) — pre-existing mechanism, filed separately, and the reason vocabulary is
+NOT touched in this round. The three NITs (`Mint`'s mismatch error embedding a foreign identity; `import: true`
+silently ignored on output ports; the design doc's status-block annotation) are left standing. Nothing from #1168.
+Each is filed rather than buried by this archive: the `Mint` error's foreign identity as **#1174**, `import: true`
+on output ports together with the unfed-import orphan exemption as **#1173**. The design doc's status-block
+annotation is deliberately NOT filed — it is a cosmetic consistency point in a proposal document, and the
+correction it would mirror already lives in the delta, which is what archives as current truth.
+
+### Round-6 mutation evidence
+
+`cp` backup taken after the fix was COMMITTED (`3301f61f`), restoration verified by `md5`, `[applied]`/`[restored]`
+printed between mutating and testing. Pre- and post-mutation md5 of `processor/rule/processor.go`:
+`6251e0953a6d75a8697876875fa95ffa`, equal after every mutant, with `git status --porcelain` empty afterwards as an
+independent second reading.
+
+| Mutant | Result |
+|---|---|
+| Delete the `initializeStateTracker` refusal entirely | All three subtests of `TestInitializeStateTrackerRefusesAbsentDeploymentAuthority` **FAIL** on both assertions. The mutant is why the test asserts the error CLASS and not merely `require.Error`: an empty `natsclient.Client` fails at `JetStream()` two lines later with a TRANSIENT error, so a bare `require.Error` would have passed with the guard deleted |
+| Drop the `Platform` half of the pair (`rp.platform.Org == ""` only) | Only `…/platform_absent` **FAILS**; `setter_never_called` and `org_absent` pass — the mutant discriminates, so a half-guard is caught by its own row |
+| Return the refusal unclassified (plain `fmt.Errorf`, no `errs.WrapInvalid`) | All three subtests **FAIL** on the `errs.IsInvalid` assertion only; the message assertion still passes. The classification is load-bearing, not decoration |
+| The harness sweep, measured rather than asserted | Before adding `SetPlatform`, `go test -tags=integration ./processor/rule/...` **FAILED** six tests: the four `TestIntegration_CronRule_*`, `TestEntityWatcher_DeletedEntityCleansRuleState` and `TestStatefulEvaluator_Integration`. Those six come from three sites; a run scoped to `./processor/rule/...` CANNOT SEE the eighth file this row itself counts, and widening it to `./processor/rule/... ./processor/gated-dag/...` adds `TestFullStack_ResetSurvivesEvictedRow` from a fourth site — SEVEN failing tests from FOUR sites. The sweep covers **17 sites across 8 files** (`git show 3301f61f -- '*_test.go' \| grep -c '^+.*SetPlatform(component.PlatformMeta'` → 17: 7 files under `processor/rule` plus `processor/gated-dag/fullstack_integration_test.go`), so the other **thirteen** never reach the guard at all — `foreignFiringEntity` has a single production caller inside `publishAgentOnce`, reachable only from `case ActionTypePublishAgent`, and no swept file configures a `publish_agent` action. They needed `SetPlatform` for RULE_STATE, not for the guard. **"Running green against a retired guard" was the wrong description** and is corrected here: on this branch a zero pair makes every entity read FOREIGN (the most-closed direction), not local — "retired" describes `origin/main`'s deleted short-circuit only. **Commit `3301f61f`'s message says "fifteen … across seven files … six of them failed loudly, the other nine"; the counts are wrong** — it conflated failing TESTS with construction SITES and missed the `gated-dag` file. The squash body must carry the corrected sentence, because `COMMIT_MESSAGES` squash is what reaches `main` |
+
+### Correction-propagation sweep for round 6
+
+Two claims were withdrawn this round — the failure DIRECTION under an absent pair, and the word
+"unrepresentable" for a state a parameter cannot prevent. Both were grepped repository-wide
+(`grep -rn "unrepresentable" --include='*.md' --include='*.go' .`, and `answer false` / `judge every firing entity
+local` / `read LOCAL`) and every hit inside this change's blast radius was re-synced:
+
+- `processor/rule/actions.go` — the FIRST paragraph of `NewActionExecutorComplete`'s doc (the HIGH-2 subject), and
+  `foreignFiringEntity`'s closing paragraph, which enumerated THREE construction paths and called the state
+  "unrepresentable". That enumeration is the reason the fourth path stayed open for a round; it now lists four,
+  names `initializeStateTracker` as the seam `NewProcessor` reaches, and says plainly that a parameter cannot refuse
+  a zero value handed to it deliberately.
+- `processor/rule/factory_platform_refusal_test.go` — the inverted failure mode in the test's own doc.
+- `processor/rule/actions_test.go` — the same "unrepresentable" claim on the bullet describing the constructor
+  parameter, in a test whose own third case represents that state.
+- `processor/rule/doc.go` — the package's `Example Usage` built a NATS-backed processor with no `SetPlatform`. It is
+  the adopter-facing copy of the wiring HIGH-1 broke, so it now carries the call and what happens without it.
+- **Commit `3301f61f`'s own message** — its closing paragraph miscounted the harness sweep ("fifteen … across seven
+  files", "six of them failed loudly, the other nine"). Measured: 17 sites across 8 files, 7 failing tests from 4 of
+  those sites, 14 silent. The branch commit cannot be corrected in place without rewriting a SHA the review round is
+  anchored to, so the correction lives here and in `tasks.md` 6.3, and **the squash body must carry the corrected
+  sentence** — under `COMMIT_MESSAGES` squash the branch text, not the PR body, is what lands on `main`.
+- `tasks.md` 6.3 — "unrepresentable" → UNFORGETTABLE with the reason, plus the round-6 paragraph.
+- `conformance.md` round-1 HIGH-1 row and the Codex-round O-4 row — annotated in place, not rewritten; both stated
+  something in the present tense that round 6 refutes.
+- `docs/operations/migration-beta162-to-beta163.md` — a BREAKING paragraph for the direct `NewProcessor` caller,
+  next to the existing empty-pair consequence it makes reachable.
+- `specs/graph-ingest/spec.md` — the deferral's line pins replaced by symbols, its "read once" count struck, and its
+  own removal instruction added for whoever lands #1168.
+
+**Not swept, deliberately:** the reason vocabulary (`foreign_authority` on a cron dispatch with no firing entity)
+is a pre-existing mechanism the reviewer is filing separately and directed this round not to touch. The historical
+round-2/round-4 paragraphs inside `tasks.md` 6.3 that describe the short-circuit in the past tense are history and
+read as history; only present-tense claims were corrected.

@@ -59,7 +59,7 @@ func TestShippedConfigs_UseCanonicalGraphMutationPorts(t *testing.T) {
 			// Rule-pack fragments under configs/rules are merged into a rule
 			// component rather than carrying a top-level components map.
 			if len(cfg.Components) == 0 && hasMutationPort(cfg.Ports.Outputs) {
-				assertCanonicalMutationPort(t, path, "rule-pack", cfg.Ports.Outputs)
+				assertCanonicalMutationPort(t, path, "rule-pack", component.DirectionOutput, cfg.Ports.Outputs)
 			}
 		})
 	}
@@ -74,7 +74,7 @@ func assertMutationPortContract(
 
 	switch componentName {
 	case "graph-ingest":
-		assertCanonicalMutationPort(t, path, instance, ports.Inputs)
+		assertCanonicalMutationPort(t, path, instance, component.DirectionInput, ports.Inputs)
 	case "graph-gateway":
 		for _, port := range ports.Outputs {
 			resolved, err := port.Resolve(component.DirectionOutput)
@@ -87,17 +87,27 @@ func assertMutationPortContract(
 		}
 	default:
 		if _, requester := graphMutationRequesters[componentName]; requester {
-			assertCanonicalMutationPort(t, path, instance, ports.Outputs)
+			assertCanonicalMutationPort(t, path, instance, component.DirectionOutput, ports.Outputs)
 		}
 	}
 }
 
-func assertCanonicalMutationPort(t *testing.T, path, instance string, ports []component.PortDefinition) {
+// assertCanonicalMutationPort resolves each port in the direction it is
+// DECLARED in. Resolving an input as an output used to be harmless and is not:
+// direction-scoped port fields (jetstream `import`, `max_ack_pending`) are
+// refused for the wrong direction, so a graph-ingest input lane would fail
+// resolution rather than simply not match.
+func assertCanonicalMutationPort(
+	t *testing.T,
+	path, instance string,
+	direction component.Direction,
+	ports []component.PortDefinition,
+) {
 	t.Helper()
 
 	var matches []component.PortDefinition
 	for _, port := range ports {
-		resolved, err := port.Resolve(component.DirectionOutput)
+		resolved, err := port.Resolve(direction)
 		require.NoError(t, err)
 		facts, err := resolved.Facts()
 		require.NoError(t, err)

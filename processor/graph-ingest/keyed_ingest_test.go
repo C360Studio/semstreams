@@ -176,7 +176,7 @@ func TestProcessIngest_InvalidGraphableTerminatesBeforeGuardIO(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			component, _ := createTestComponentWithMockKVBucket(t)
+			component, _ := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 			var logs bytes.Buffer
 			component.logger = slog.New(slog.NewTextHandler(&logs, nil))
 			guardBucket := newMockKVBucket()
@@ -251,7 +251,7 @@ func TestProcessIngest_DirtyStoredStateNaksAndInventoriesPerEntity(t *testing.T)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			component, entityBucket := createTestComponentWithMockKVBucket(t)
+			component, entityBucket := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 			entityBucket.data[tt.entityID] = mockKVData{value: tt.stored, revision: 1}
 			component.ingestGuardMem = []*laneGuard{newLaneGuard(16)}
 			guardBucket := newMockKVBucket()
@@ -308,7 +308,7 @@ func TestProcessIngest_DirtyStoredStateNaksAndInventoriesPerEntity(t *testing.T)
 
 func TestProcessIngest_GenericFatalApplyErrorTerminatesWithoutPoison(t *testing.T) {
 	const entityID = "acme.ops.test.system.widget.storage-fatal"
-	component, entityBucket := createTestComponentWithMockKVBucket(t)
+	component, entityBucket := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 	entityBucket.getFunc = func(context.Context, string) (jetstream.KeyValueEntry, error) {
 		return nil, errs.WrapFatal(errs.ErrStorageFull, "test", "entityGet", "storage exhausted")
 	}
@@ -339,7 +339,7 @@ func TestProcessIngest_GenericFatalApplyErrorTerminatesWithoutPoison(t *testing.
 }
 
 func TestProcessIngest_FillsEmptyFactSubjectBeforeStaleGuard(t *testing.T) {
-	component, _ := createTestComponentWithMockKVBucket(t)
+	component, _ := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 	component.ingestGuardMem = []*laneGuard{newLaneGuard(16)}
 	validID := "acme.ops.test.system.widget.001"
 	component.ingestGuardMem[0].set(guardKey(validID, "ENTITY"), 1)

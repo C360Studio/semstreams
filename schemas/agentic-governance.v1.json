@@ -519,6 +519,9 @@
                       "heartbeat_interval": {
                         "type": "string"
                       },
+                      "import": {
+                        "type": "boolean"
+                      },
                       "interface": {
                         "type": "object",
                         "properties": {

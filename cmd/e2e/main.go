@@ -360,10 +360,14 @@ func createScenario(
 		wsClient = client.NewWebSocketClient(wsURL)
 		return scenarios.NewCoreDataflowScenario(edgeClient, wsClient, flags.udpEndpoint, nil)
 	case "core-graph-roundtrip", "graph-roundtrip":
+		// The core stack runs configs/protocol-flow.json; its platform.org /
+		// platform.id ARE the authority the graph accepts (ADR-102 d5), so the
+		// canary is minted under them. Change the config and this changes with it.
 		return scenarios.NewGraphRoundTripScenario(
 			config.DefaultEndpoints.NATS,
 			flags.baseURL,
 			strings.TrimRight(flags.baseURL, "/")+"/graph-gateway/graphql",
+			config.CoreAuthority,
 		)
 	case "core-slow-consumer", "slow-consumer":
 		return scenarios.NewSlowConsumerAttributionScenario(scenarios.SlowConsumerAttributionConfig{

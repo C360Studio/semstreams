@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
@@ -46,7 +45,7 @@ func TestIntegration_ReadinessGaugesAreEmitted(t *testing.T) {
 	cfg := DefaultConfig()
 	cj, err := json.Marshal(cfg)
 	require.NoError(t, err)
-	comp, err := CreateGraphIngest(cj, component.Dependencies{NATSClient: tc.Client, PayloadRegistry: newTestPayloadRegistry(t)})
+	comp, err := CreateGraphIngest(cj, testDependencies(t, tc.Client))
 	require.NoError(t, err)
 	c := comp.(*Component)
 	c.statusInterval = 100 * time.Millisecond

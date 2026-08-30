@@ -194,7 +194,13 @@ func setupFullStack(t *testing.T, opts fsOpts) *fullStack {
 	// graph-ingest: mutation + query handlers, ENTITY_STATES.
 	giJSON, err := json.Marshal(graphingest.DefaultConfig())
 	require.NoError(t, err)
-	giDisc, err := graphingest.CreateGraphIngest(giJSON, component.Dependencies{NATSClient: nc, PayloadRegistry: fullstackPayloadRegistry(t)})
+	giDisc, err := graphingest.CreateGraphIngest(giJSON, component.Dependencies{
+		NATSClient: nc, PayloadRegistry: fullstackPayloadRegistry(t),
+		// graph-ingest refuses an absent deployment authority (ADR-102 d5) and
+		// rejects any subject outside it, so the fixture pair must match the entity
+		// IDs this file uses.
+		Platform: component.PlatformMeta{Org: "fs", Platform: "test"},
+	})
 	require.NoError(t, err)
 	gi := giDisc.(*graphingest.Component)
 	require.NoError(t, gi.Initialize())
@@ -208,6 +214,11 @@ func setupFullStack(t *testing.T, opts fsOpts) *fullStack {
 	rcfg.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"fs.test.*.*.*.*"}}
 	rproc, err := rule.NewProcessor(nc, &rcfg)
 	require.NoError(t, err)
+	// Same pair as the graph-ingest composition above. This fixture is ONE
+	// deployment: a rule processor minting trigger identities under a different
+	// authority than the graph-ingest that must accept them is a contradiction
+	// the harness would only surface once a rule is added here.
+	rproc.SetPlatform(component.PlatformMeta{Org: "fs", Platform: "test"})
 	require.NoError(t, rproc.Initialize())
 	require.NoError(t, rproc.Start(ctx))
 	t.Cleanup(func() { _ = rproc.Stop(context.Background()) })

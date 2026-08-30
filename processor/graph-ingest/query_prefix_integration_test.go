@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
@@ -23,7 +22,7 @@ import (
 // startPrefixTestComponent boots a graph-ingest component against a real
 // testcontainer NATS instance and returns it. The caller is responsible for
 // stopping it.
-func startPrefixTestComponent(t *testing.T) (*Component, *natsclient.Client) {
+func startPrefixTestComponent(t *testing.T, opts ...testComponentOption) (*Component, *natsclient.Client) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -34,7 +33,7 @@ func startPrefixTestComponent(t *testing.T) (*Component, *natsclient.Client) {
 	nc := testClient.Client
 
 	config := DefaultConfig()
-	deps := component.Dependencies{NATSClient: nc, PayloadRegistry: newTestPayloadRegistry(t)}
+	deps := testDependencies(t, nc, opts...)
 	configJSON, err := json.Marshal(config)
 	require.NoError(t, err)
 
@@ -76,7 +75,7 @@ func seedPrefixEntity(t *testing.T, ctx context.Context, c *Component, id string
 //   - No "next_cursor" key appears on the final page.
 func TestIntegration_PrefixQuery_PaginationCoverage(t *testing.T) {
 	ctx := context.Background()
-	c, nc := startPrefixTestComponent(t)
+	c, nc := startPrefixTestComponent(t, withAuthority("pagtest", "ops"))
 
 	// Seed 5 entities with a sortable ID suffix.
 	const count = 5
@@ -166,7 +165,7 @@ func TestIntegration_PrefixQuery_ErrorClassification(t *testing.T) {
 func TestIntegration_PrefixQuery_IndivisibleEntityTooLarge(t *testing.T) {
 	ctx := context.Background()
 	testClient := natsclient.NewTestClient(t)
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("oversize", "ops"))
 	comp.natsClient = testClient.Client
 
 	maxPayload, err := testClient.Client.MaxPayload()
@@ -212,7 +211,7 @@ func TestIntegration_PrefixQuery_IndivisibleEntityTooLarge(t *testing.T) {
 // exhausted single-page response has "entities" and no continuation token.
 func TestIntegration_PrefixQuery_ExhaustedPageOmitsCursor(t *testing.T) {
 	ctx := context.Background()
-	c, nc := startPrefixTestComponent(t)
+	c, nc := startPrefixTestComponent(t, withAuthority("singlepage", "ops"))
 
 	const id = "singlepage.ops.dom.sys.type.entity-001"
 	seedPrefixEntity(t, ctx, c, id)

@@ -126,6 +126,13 @@
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
+//	// Required. The rule engine mints trigger identities under this pair and
+//	// decides which entities it may write to by comparing against it. Without it
+//	// a NATS-backed Start refuses to build the action executor and warns: the
+//	// stateful evaluator and the cron scheduler are then absent and no rule
+//	// action runs. The component factory (rule.CreateRuleProcessor) installs it
+//	// from deps.Platform; a direct caller sets it here.
+//	processor.SetPlatform(component.PlatformMeta{Org: "acme", Platform: "platform1"})
 //	err = processor.Initialize()
 //	err = processor.Start(ctx)
 //

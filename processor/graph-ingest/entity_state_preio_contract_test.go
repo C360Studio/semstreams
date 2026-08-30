@@ -91,7 +91,7 @@ func TestMutationEntityIdentityRejectionPrecedesKVIO(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			component, bucket := createTestComponentWithMockKVBucket(t)
+			component, bucket := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 			var calls atomic.Int32
 			bucket.getFunc = func(context.Context, string) (jetstream.KeyValueEntry, error) {
 				calls.Add(1)
@@ -110,7 +110,7 @@ func TestMutationEntityIdentityRejectionPrecedesKVIO(t *testing.T) {
 }
 
 func TestEntityDeleteHandlerValidatesBeforeExistenceRead(t *testing.T) {
-	component, bucket := createTestComponentWithMockKVBucket(t)
+	component, bucket := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 	var calls atomic.Int32
 	bucket.getFunc = func(context.Context, string) (jetstream.KeyValueEntry, error) {
 		calls.Add(1)
@@ -172,7 +172,7 @@ func TestEntityMutationHandlersValidateCompleteCandidateBeforeKVIO(t *testing.T)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			component, bucket := createTestComponentWithMockKVBucket(t)
+			component, bucket := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 			var calls atomic.Int32
 			bucket.getFunc = func(context.Context, string) (jetstream.KeyValueEntry, error) {
 				calls.Add(1)

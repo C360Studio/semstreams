@@ -428,17 +428,24 @@ func (s *TieredScenario) executeValidateCanonicalCreateNoHierarchy(ctx context.C
 		return errors.New("canonical create hierarchy contract requires the NATS validation client")
 	}
 
-	// Canonical order org.platform.system.domain.type.instance: the source
-	// precedes the taxonomy, and each container pads a prefix level.
+	mint, err := s.tierMinter(result)
+	if err != nil {
+		return err
+	}
+
+	// Canonical order org.platform.system.domain.type.instance: positions 1-2
+	// are the deployment's own authority (the graph refuses any other —
+	// ADR-102 d5), the source precedes the taxonomy, and each container pads a
+	// prefix level.
 	token := fmt.Sprintf("%x", time.Now().UnixNano())
 	source := "source" + token
 	domain := "rpc" + token
 	entityType := "leaf" + token
-	entityID := fmt.Sprintf("c360.e2e.%s.%s.%s.001", source, domain, entityType)
+	entityID := mint(fmt.Sprintf("%s.%s.%s.001", source, domain, entityType))
 	containerIDs := []string{
-		fmt.Sprintf("c360.e2e.%s.%s.%s.group", source, domain, entityType),
-		fmt.Sprintf("c360.e2e.%s.%s.group.container", source, domain),
-		fmt.Sprintf("c360.e2e.%s.group.container.level", source),
+		mint(fmt.Sprintf("%s.%s.%s.group", source, domain, entityType)),
+		mint(fmt.Sprintf("%s.%s.group.container", source, domain)),
+		mint(fmt.Sprintf("%s.group.container.level", source)),
 	}
 
 	mutationClient, err := graphmutation.NewClient(s.natsClient, 10*time.Second)
@@ -490,9 +497,14 @@ func (s *TieredScenario) executeValidateRelationshipNoStub(ctx context.Context, 
 		return errors.New("relationship no-stub contract requires the NATS validation client")
 	}
 
+	mint, err := s.tierMinter(result)
+	if err != nil {
+		return err
+	}
+
 	token := fmt.Sprintf("%x", time.Now().UnixNano())
-	sourceID := "c360.e2e.relationship.source.node" + token + ".001"
-	targetID := "c360.e2e.relationship.target.node" + token + ".001"
+	sourceID := mint("relationship.source.node" + token + ".001")
+	targetID := mint("relationship.target.node" + token + ".001")
 	relationship := message.Triple{
 		Subject: sourceID, Predicate: "test.link.target", Object: targetID,
 		Datatype: message.EntityReferenceDatatype, Source: "e2e-structural",
@@ -1285,10 +1297,15 @@ func (s *TieredScenario) temporalSearchIDs(ctx context.Context, startTime, endTi
 // Structural-only: it creates a dedicated entity rather than relying on tier
 // test data, which carries no observation predicate.
 func (s *TieredScenario) executeTestTemporalObservedTime(ctx context.Context, result *Result) error {
-	const (
-		entityID     = "c360.platform.e2e.eventtime.observation.001"
-		observedPred = "time.observation.recorded"
-	)
+	const observedPred = "time.observation.recorded"
+	// Minted under the DEPLOYMENT's authority, not a literal: this stage creates
+	// its own entity through the canonical RPC, and the graph refuses any pair
+	// but its own (ADR-102 d5).
+	mint, err := s.tierMinter(result)
+	if err != nil {
+		return err
+	}
+	entityID := mint("e2e.eventtime.observation.001")
 	// Fixed historical observation instant, well away from "now" (write-time).
 	observedAt := time.Date(2024, 11, 15, 12, 0, 0, 0, time.UTC)
 

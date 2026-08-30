@@ -42,7 +42,7 @@ func queryEntityViaPrefix(t *testing.T, ctx context.Context, nc *natsclient.Clie
 // absent right after committing it and re-dispatched on every pass.
 func TestIntegration_CacheCoherence_AppendVisibleAfterPrefixRead(t *testing.T) {
 	ctx := context.Background()
-	c, nc := startPrefixTestComponent(t)
+	c, nc := startPrefixTestComponent(t, withAuthority("coh", "ops"))
 
 	const id = "coh.ops.dom.sys.type.entity1"
 	seedPrefixEntity(t, ctx, c, id)

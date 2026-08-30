@@ -65,7 +65,7 @@ func TestComponent_HandleQuerySuffix_Success(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			comp := createTestComponentWithMockKV(t)
+			comp := createTestComponentWithMockKV(t, authorityOfFixture(t, tt.storedIDs[0]))
 			ctx := context.Background()
 
 			// Store entities in KV bucket
@@ -102,7 +102,7 @@ func TestComponent_HandleQuerySuffix_Success(t *testing.T) {
 }
 
 func TestComponent_HandleQuerySuffix_NoMatch(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("c360", "logistics"))
 	ctx := context.Background()
 
 	// Store some entities
@@ -139,7 +139,7 @@ func TestComponent_HandleQuerySuffix_NoMatch(t *testing.T) {
 }
 
 func TestComponent_HandleQuerySuffix_EmptyBucket(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("c360", "logistics"))
 	ctx := context.Background()
 
 	// Don't store any entities - bucket is empty
@@ -177,7 +177,7 @@ func TestComponent_HandleQuerySuffix_InvalidRequest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			comp := createTestComponentWithMockKV(t)
+			comp := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 			ctx := context.Background()
 
 			_, err := comp.handleQuerySuffixNATS(ctx, tt.requestData)
@@ -188,7 +188,7 @@ func TestComponent_HandleQuerySuffix_InvalidRequest(t *testing.T) {
 
 func TestComponent_HandleQuerySuffix_PartialSuffixNoMatch(t *testing.T) {
 	// Ensure we only match on complete instance suffix, not partial
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("c360", "logistics"))
 	ctx := context.Background()
 
 	// Store entity
@@ -292,12 +292,15 @@ func TestComponent_HandleQueryPrefix_Success(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			comp := createTestComponentWithMockKV(t)
+			comp := createTestComponentWithMockKV(t, authorityOfFixture(t, tt.storedIDs[0]))
 			ctx := context.Background()
 
-			// Store entities
+			// These tables deliberately mix deployments — "match by org prefix"
+			// has no meaning otherwise — so an ID under this component's own
+			// authority is created through the production path and one under a
+			// peer's is seeded as the mirror an import lane would have left.
 			for _, id := range tt.storedIDs {
-				entity := &graph.EntityState{
+				seedOwnedOrMirrored(t, comp, &graph.EntityState{
 					ID:          id,
 					MessageType: testEntityType(),
 					Triples: []message.Triple{
@@ -310,8 +313,7 @@ func TestComponent_HandleQueryPrefix_Success(t *testing.T) {
 					},
 					Version:   1,
 					UpdatedAt: time.Now(),
-				}
-				require.NoError(t, comp.CreateEntity(ctx, entity))
+				})
 			}
 
 			// Create request
@@ -353,7 +355,7 @@ func TestComponent_HandleQueryPrefix_Success(t *testing.T) {
 func TestComponent_HandleQueryPrefix_ReturnsFullEntities(t *testing.T) {
 	// This test specifically verifies that the response contains full entity data
 	// not just entity IDs (the bug that was fixed)
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("c360", "platform"))
 	ctx := context.Background()
 
 	// Create entity with triples
@@ -412,7 +414,7 @@ func TestComponent_HandleQueryPrefix_ReturnsFullEntities(t *testing.T) {
 }
 
 func TestComponent_HandleQueryPrefix_InvalidRequest(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("c360", "logistics"))
 	ctx := context.Background()
 
 	// Malformed JSON
@@ -421,7 +423,7 @@ func TestComponent_HandleQueryPrefix_InvalidRequest(t *testing.T) {
 }
 
 func TestComponent_HandleQueryPrefix_NoMatches(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("c360", "platform"))
 	ctx := context.Background()
 
 	// Store some entities

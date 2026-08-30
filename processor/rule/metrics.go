@@ -40,6 +40,28 @@ type Metrics struct {
 	// loop_max_iterations resolving to a non-integer) fails closed but
 	// invisibly — the classified error is real, but nothing alerts on it.
 	actionFailuresTotal *prometheus.CounterVec
+
+	// foreignFiringWritesSkippedTotal counts publish_agent DISPATCHES in which
+	// the framework deliberately wrote nothing to the firing entity because it
+	// carries a foreign authority — an imported mirror it must not mutate
+	// (ADR-102 d5; #1096). Two writes fall under it: the run-anchor pair
+	// (run_scope=new) and the rule.task.spawned back-reference (every
+	// run_scope), counted once together because ONE DISPATCH declined them —
+	// not once per omitted write. The accompanying Info line names which ones.
+	//
+	// One increment per DISPATCH, not per action, where a dispatch is one
+	// (firing entity x `for_each` item): publish_agent fans out over `for_each`
+	// with the firing entity held constant, so an action fanning out over N
+	// items on an imported entity is N skips for that ONE entity. Read this as
+	// "framework writes we declined to make", never as "distinct peer entities
+	// we declined to write to" — the fan-out factor separates the two.
+	//
+	// It is a counted skip, never a rejection: no mutation request is sent, so
+	// nothing appears in graph-ingest's mutation_rejections, and without this
+	// counter the omission would be invisible. Labeled by reason only (today the
+	// single value foreign_authority), so cardinality cannot follow entity or
+	// rule count.
+	foreignFiringWritesSkippedTotal *prometheus.CounterVec
 }
 
 // Package-level singleton (registered once to avoid duplicate registration panics)
@@ -170,6 +192,13 @@ func newRuleMetrics(registry *metric.MetricsRegistry, _ string) *Metrics {
 				Name:      "action_failures_total",
 				Help:      "Rule action executions that failed (non-deny errors from ActionExecutor.Execute), by action_type",
 			}, []string{"action_type"}),
+
+			foreignFiringWritesSkippedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "rule",
+				Name:      "foreign_firing_writes_skipped_total",
+				Help:      "publish_agent dispatches whose framework writes to the firing entity were deliberately not issued because it carries a foreign authority (ADR-102 d5), by reason",
+			}, []string{"reason"}),
 		}
 
 		registry.PrometheusRegistry().MustRegister(
@@ -189,6 +218,7 @@ func newRuleMetrics(registry *metric.MetricsRegistry, _ string) *Metrics {
 			ruleMetrics.actionGatePassesTotal,
 			ruleMetrics.governanceVerdictAuditFailures,
 			ruleMetrics.actionFailuresTotal,
+			ruleMetrics.foreignFiringWritesSkippedTotal,
 		)
 	})
 

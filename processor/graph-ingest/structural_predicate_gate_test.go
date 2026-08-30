@@ -76,7 +76,7 @@ func seedStructuralGateEntity(t *testing.T, comp *Component, entityID string) *g
 // pre-release as provably inert — the authoritative persistence seam rejects
 // unconditionally, so the hatch could only swap the caller-visible error code).
 func TestValidateTriplePredicates_FailClosed_RejectsClassified(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 
 	triples := []message.Triple{
 		{Subject: structuralGateEntity, Predicate: "agent.role", Object: "researcher"}, // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.role","reason":"arity"}
@@ -90,7 +90,7 @@ func TestValidateTriplePredicates_FailClosed_RejectsClassified(t *testing.T) {
 }
 
 func TestValidateTriplePredicates_ValidPredicate_Untouched(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 	// A conforming predicate must pass the fail-closed gate untouched. (Metering
 	// on rejection is the meteredMutation wrapper's job — asserted in the
 	// handler-level tests below.)
@@ -113,7 +113,7 @@ func TestValidateTriplePredicates_ValidPredicate_Untouched(t *testing.T) {
 // the gate must fire BEFORE the must-exist check (structural_invalid, not
 // entity_not_found) and before any KV write.
 func TestHandleCanonicalAppend_InvalidPredicate_FailClosedNothingPersisted(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 	ctx := context.Background()
 
 	var logBuf bytes.Buffer
@@ -167,7 +167,7 @@ func TestHandleCanonicalAppend_InvalidPredicate_FailClosedNothingPersisted(t *te
 // rejects the ENTIRE batch — the conforming triple in the same batch must NOT
 // be persisted either.
 func TestHandleCanonicalAppend_InvalidPredicate_WholeBatchRejected(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 	ctx := context.Background()
 
 	baseline := seedStructuralGateEntity(t, comp, structuralGateEntity)
@@ -203,7 +203,7 @@ func TestHandleCanonicalAppend_InvalidPredicate_WholeBatchRejected(t *testing.T)
 // error, still nothing persisted, and the specific structural reason is metered
 // via predicate_contract_rejections{lane,reason}.
 func TestHandleCanonicalCreate_InvalidPredicate_NothingPersisted(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 	ctx := context.Background()
 
 	const createID = "acme.ops.robotics.gcs.drone.777"
@@ -245,7 +245,7 @@ func TestHandleCanonicalCreate_InvalidPredicate_NothingPersisted(t *testing.T) {
 // rejects the update as a classified validation error and leaves the stored
 // entity byte-identical (existing merge state untouched).
 func TestHandleCanonicalReconcile_InvalidPredicate_EntityUnchanged(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 	ctx := context.Background()
 
 	baseline := seedStructuralGateEntity(t, comp, structuralGateEntity)
@@ -284,7 +284,7 @@ func TestHandleCanonicalReconcile_InvalidPredicate_EntityUnchanged(t *testing.T)
 // predicates): prepareFactProjection's authoritative candidate validation
 // rejects the malformed predicate before the merge, and nothing is persisted.
 func TestIngestEntity_InvalidPredicate_NothingPersisted(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 	ctx := context.Background()
 
 	const ingestID = "acme.ops.robotics.gcs.drone.888"
@@ -297,7 +297,7 @@ func TestIngestEntity_InvalidPredicate_NothingPersisted(t *testing.T) {
 		Triples: []message.Triple{
 			{Subject: ingestID, Predicate: "agent.role", Object: "researcher", Timestamp: now, Confidence: 1.0}, // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.role","reason":"arity"}
 		},
-	})
+	}, false)
 	require.Error(t, err, "Graphable ingest must reject a malformed predicate")
 	assert.True(t, errs.IsInvalid(err), "classified invalid (do-not-retry)")
 	assert.Contains(t, err.Error(), "agent.role", "the error must name the offending predicate")
@@ -313,7 +313,7 @@ func TestIngestEntity_InvalidPredicate_NothingPersisted(t *testing.T) {
 // bump, prior triples preserved). Includes the gh#519 collision case: a real
 // 3-part predicate ending in the literal segment "value".
 func TestHandleCanonicalAppend_ValidPredicate_PersistsMergeIntact(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
+	comp := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 	ctx := context.Background()
 
 	baseline := seedStructuralGateEntity(t, comp, structuralGateEntity)

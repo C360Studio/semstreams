@@ -416,7 +416,16 @@ func (s *TieredScenario) executeGraphRoundTrip(ctx context.Context, result *Resu
 	if s.msgLogger == nil {
 		return fmt.Errorf("graph-roundtrip requires Message Logger")
 	}
-	probe := NewGraphRoundTripProbe(s.natsClient, s.msgLogger, s.config.GraphQLURL)
+	// The canary is minted under the DEPLOYMENT's authority, resolved the same
+	// way every other tiered fixture resolves it (#1149) — one home, and it
+	// handles the auto-detected-variant case a config field could not.
+	variant := s.effectiveVariant(result)
+	if variant == "" {
+		return fmt.Errorf("graph-roundtrip: tier variant is unresolved, so the deployment " +
+			"authority the canary must be minted under is unknown")
+	}
+	probe := NewGraphRoundTripProbe(s.natsClient, s.msgLogger, s.config.GraphQLURL,
+		config.TierAuthority(variant))
 	return probe.Run(ctx, result)
 }
 

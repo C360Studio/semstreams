@@ -47,6 +47,19 @@ type JetStreamPort struct {
 	// config path to this at all, so operators could not tune ingest backpressure.
 	MaxAckPending int `json:"max_ack_pending,omitempty"`
 
+	// Import declares this INPUT port an import lane: the operator states that
+	// entities arriving here were minted by a PEER deployment, so graph-ingest
+	// accepts a foreign org.platform on it and refuses a subject claiming this
+	// deployment's own pair (ADR-102 d5). Absent or false is the ordinary lane,
+	// where the deployment's own authority is required — the fail-closed
+	// default, so an operator who declares nothing imports nothing. It is a
+	// statement of trust, not a value the operator computes: the framework
+	// already holds the local pair and compares against it. Nothing on the wire
+	// is authenticated; the recorded provenance is this declaration plus the
+	// envelope `source` string. Meaningless on an output port and ignored
+	// there.
+	Import bool `json:"import,omitempty"`
+
 	// Interface contract
 	Interface *InterfaceContract `json:"interface,omitempty"`
 }

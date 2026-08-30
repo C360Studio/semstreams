@@ -56,7 +56,13 @@ const (
 	// identity proves the execute fixture traversed the production graph
 	// query and fusion path. The direct fixture intentionally keeps its
 	// run-scoped entity identity.
-	ControlledSeedEntityID = "c360.rg-e2e.seed.research.document.controlled"
+	//
+	// Positions 1-2 are the DEPLOYMENT's own authority — configs/research-graph-e2e.json's
+	// platform.org / platform.id. Since ADR-102 d5 the graph refuses every other
+	// pair, so the retired short form `c360.rg-e2e.…` is now rejected at the
+	// boundary rather than seeded; it must track DefaultConfig's PlatformOrg /
+	// PlatformID, which is what researchGraphSeedEntityID composes from.
+	ControlledSeedEntityID = "c360.research-graph-e2e.seed.research.document.controlled"
 )
 
 // FixtureMode selects one of the two isolated research-graph E2E routes.
@@ -165,7 +171,8 @@ func (s *Scenario) Setup(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create NATS client: %w", err)
 	}
-	s.researchSeedEntityID = researchGraphSeedEntityID(fmt.Sprintf("%x", time.Now().UnixNano()))
+	s.researchSeedEntityID = researchGraphSeedEntityID(
+		s.config.PlatformOrg, s.config.PlatformID, fmt.Sprintf("%x", time.Now().UnixNano()))
 	if s.config.FixtureMode == FixtureModeExecute {
 		s.researchSeedEntityID = ControlledSeedEntityID
 	}
@@ -201,8 +208,8 @@ func (s *Scenario) Teardown(ctx context.Context) error {
 	return teardownErr
 }
 
-func researchGraphSeedEntityID(runToken string) string {
-	return "c360.rg-e2e.seed.research.document." + runToken
+func researchGraphSeedEntityID(org, platformID, runToken string) string {
+	return org + "." + platformID + ".seed.research.document." + runToken
 }
 
 func newResearchEmbeddingSearchHandler(seedEntityID string) func(context.Context, []byte) ([]byte, error) {

@@ -76,5 +76,13 @@ jobs:
       - name: Install task
         run: sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
 
+      # gh#1175: the tier's port preflight derives its set from the compose
+      # context it is about to boot. Its regression risk is a guard that
+      # passes while checking nothing — exactly what the previous one did —
+      # so the guard's own fixture test runs here, in the job it protects and
+      # which already pays for Docker.
+      - name: Port preflight fixture test
+        run: bash scripts/e2e-check-ports_fixture_test.sh
+
       - name: Run e2e statistical tier
         run: task e2e:statistical

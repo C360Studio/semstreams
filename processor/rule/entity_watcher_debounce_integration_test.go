@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/natsclient"
 )
 
@@ -59,6 +60,7 @@ func TestIntegration_Processor_DebounceZero_NoCoalescingSet(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewProcessor failed: %v", err)
 			}
+			processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 
 			ctx := context.Background()
 			err = processor.Start(ctx)
@@ -106,6 +108,7 @@ func TestIntegration_Processor_DebounceZero_ImmediateProcessing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProcessor failed: %v", err)
 	}
+	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 
 	ctx := context.Background()
 	err = processor.Start(ctx)
@@ -145,6 +148,7 @@ func TestIntegration_Processor_DebounceZero_NoTickerSpinning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProcessor failed: %v", err)
 	}
+	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 
 	ctx := context.Background()
 	err = processor.Start(ctx)
@@ -188,6 +192,7 @@ func TestIntegration_Processor_DebounceNonZero_CoalescingSetCreated(t *testing.T
 	if err != nil {
 		t.Fatalf("NewProcessor failed: %v", err)
 	}
+	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 
 	ctx := context.Background()
 	err = processor.Start(ctx)
@@ -265,6 +270,7 @@ func TestIntegration_Processor_DebounceZero_Transition(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewProcessor failed: %v", err)
 			}
+			processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 
 			ctx := context.Background()
 			err = processor.Start(ctx)
@@ -308,6 +314,7 @@ func TestIntegration_Processor_DebounceZero_ConfigValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProcessor should accept debounce=0, got error: %v", err)
 	}
+	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 
 	ctx := context.Background()
 	err = processor.Start(ctx)
@@ -373,6 +380,7 @@ func TestIntegration_Processor_DebounceZero_EdgeCases(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewProcessor failed: %v", err)
 			}
+			processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 
 			ctx := context.Background()
 			err = processor.Start(ctx)
@@ -414,6 +422,7 @@ func TestIntegration_Processor_DebounceZero_NoResourceLeak(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Iteration %d: NewProcessor failed: %v", i, err)
 		}
+		processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 
 		ctx := context.Background()
 		err = processor.Start(ctx)

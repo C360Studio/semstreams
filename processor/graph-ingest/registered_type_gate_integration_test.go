@@ -14,7 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/c360studio/semstreams/agentic"
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/inference"
 	"github.com/c360studio/semstreams/internal/graphmutation"
@@ -30,7 +29,7 @@ const gateCreateSubject = "graph.mutation.entity.create"
 
 // startGateTestComponent boots graph-ingest over a real NATS testcontainer with
 // the supplied payload registry, serving the mutation subjects.
-func startGateTestComponent(t *testing.T, reg *payloadregistry.Registry, enableHierarchy bool) (context.Context, *Component, *natsclient.Client) {
+func startGateTestComponent(t *testing.T, reg *payloadregistry.Registry, enableHierarchy bool, opts ...testComponentOption) (context.Context, *Component, *natsclient.Client) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -42,7 +41,9 @@ func startGateTestComponent(t *testing.T, reg *payloadregistry.Registry, enableH
 	configJSON, err := json.Marshal(config)
 	require.NoError(t, err)
 
-	comp, err := CreateGraphIngest(configJSON, component.Dependencies{NATSClient: testClient.Client, PayloadRegistry: reg})
+	deps := testDependencies(t, testClient.Client, opts...)
+	deps.PayloadRegistry = reg // the caller's registry is the point of this fixture
+	comp, err := CreateGraphIngest(configJSON, deps)
 	require.NoError(t, err)
 	c := comp.(*Component)
 	require.NoError(t, c.Initialize())
@@ -71,7 +72,7 @@ func gateCreateRequest(id string, mt message.Type) graph.CreateEntityRequest {
 // ENTITY_STATES — the reply carries the closed code and the key in detail, the
 // rejection is metered exactly once, and no key is created.
 func TestCreateRejectsUnregisteredMessageType(t *testing.T) {
-	ctx, c, nc := startGateTestComponent(t, payloadbuiltins.NewTestRegistry(t), false)
+	ctx, c, nc := startGateTestComponent(t, payloadbuiltins.NewTestRegistry(t), false, withAuthority("c360", "test"))
 	counter := getMutationRejectionsMetric(nil).WithLabelValues(gateCreateSubject, graph.ErrorCodeMessageTypeUnregistered)
 	before := testutil.ToFloat64(counter)
 
@@ -96,7 +97,7 @@ func TestCreateRejectsUnregisteredMessageType(t *testing.T) {
 
 // TestCreateAcceptsRegisteredMessageType: a registered stamp is born unchanged.
 func TestCreateAcceptsRegisteredMessageType(t *testing.T) {
-	ctx, c, nc := startGateTestComponent(t, payloadbuiltins.NewTestRegistry(t), false)
+	ctx, c, nc := startGateTestComponent(t, payloadbuiltins.NewTestRegistry(t), false, withAuthority("c360", "test"))
 
 	const id = "c360.test.gate.system.lesson.registered"
 	response, err := gateMutationClient(t, nc).Create(ctx, gateCreateRequest(id, agentic.AgentLessonMessageType()))
@@ -113,7 +114,7 @@ func TestCreateAcceptsRegisteredMessageType(t *testing.T) {
 func TestFloorComesFromRegistration(t *testing.T) {
 	reg := payloadbuiltins.NewTestRegistry(t)
 	payloadregistry.RegisterTestType(t, reg, message.Type{Domain: "test", Category: "nofloor", Version: "v1"})
-	ctx, c, nc := startGateTestComponent(t, reg, false)
+	ctx, c, nc := startGateTestComponent(t, reg, false, withAuthority("c360", "test"))
 	client := gateMutationClient(t, nc)
 
 	t.Run("registered floor is stamped without a metric", func(t *testing.T) {

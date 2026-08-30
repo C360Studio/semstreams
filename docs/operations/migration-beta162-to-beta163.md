@@ -494,12 +494,148 @@ GraphQL value `entityTypes[].type`, now `system.domain.type`.
 | semsage | `OrgDefault`/`PlatformDefault` constants → config; `_` placeholder fixture |
 | semmem | 5-part fixtures → six-part in the new order; imported lessons opt-in by scope (O-13); curation status on an imported lesson lives on a local overlay entity (O-12) — both land with slice B |
 
-### Not in this slice (slice B, a later PR)
+### Slice B (this PR) — the boundary is now enforced
 
-The graph-ingest authority gate (`entity_id_authority_invalid` on every lane), the `JetStreamPort.Import` lane, the
-hierarchy-inference skip for foreign authority, and #1096 (the rule engine's run-scope mint under `deps.Platform` with
-`agent.run.origin-entity-id`). Until slice B lands, an entity claiming a foreign or colliding authority is still
-accepted as local truth; the coded validator `pkg/types.ValidateEntityIDAuthority` exists and is unwired.
+Slice A shipped `pkg/types.ValidateEntityIDAuthority` and left it unwired. Slice B wires it. What follows is the
+whole adopter-facing surface, and for each one what happens if you do nothing.
+
+**What must an adopter know.** Four things, no more:
+
+1. **Your composition root must carry `platform.org` and `platform.id`.** graph-ingest and the rule processor now
+   REFUSE to construct without them (`deps.Platform`). Config load has always required both, so a deployment that
+   loads a config already satisfies this; a binary that hand-builds `component.Dependencies` does not.
+2. **graph-ingest accepts only entities your deployment minted** — positions 1-2 of every candidate SUBJECT must
+   equal your `org`/`platform`, on every lane, before any KV I/O. Rejection is coded
+   `entity_id_authority_invalid` with reason `foreign_authority`, metered
+   `mutation_rejections{reason="authority_foreign"}`, and logged WARN with the lane and segment index (never the
+   identity).
+3. **To hold a peer's entities, declare an import lane** — `"import": true` on a `jetstream` INPUT port. On that
+   lane a foreign pair is persisted byte-for-byte and a subject claiming YOUR pair is refused
+   (`local_authority_claimed` / `mutation_rejections{reason="authority_claimed"}`). It is an operator statement of
+   trust and nothing is authenticated: the recorded provenance is the port declaration plus the envelope `source`
+   string.
+
+   **No shipped config declares one, deliberately.** A lane is a decision to trust a peer, so the default
+   composition must import nothing; a reference config carrying an enabled lane would hand that decision to whoever
+   copied the file. Add it yourself, to the graph-ingest instance that should hold the mirror:
+
+   ```json
+   {
+     "name": "peer_import",
+     "config": {
+       "kind": "jetstream",
+       "stream_name": "PEER_ENTITY",
+       "subjects": ["peer.entity.>"],
+       "deliver_policy": "all",
+       "import": true
+     }
+   }
+   ```
+
+   Declare the backing stream too (`streams.PEER_ENTITY` with `max_age`, `max_bytes` and `discard`), or graph-ingest
+   waits for a stream nothing provisions and `Start` fails. `import` is INPUT-only: on an output port it is refused
+   at config resolution rather than ignored.
+4. **An import is a READ-ONLY mirror** (ruled O-12(a)). No local lane mutates a foreign subject — not `entity.create`,
+   not `triple.append`, not `entity.reconcile`, not `entity.delete`, and not the framework's own writes. Every local
+   fact about an imported entity lives on a LOCAL subject that references it through an `@id` triple; `@id` OBJECTS
+   are never authority-checked, no stub is created for them, and an absent target is permitted, which is what makes
+   that pattern work.
+
+**What SHOULD an adopter have to know? Ideally only (3).** The framework already holds your `org`/`platform`; it does
+not ask you to restate the pair anywhere, to predict which writes are local, or to compute a lane. `import` is the one
+knob, and it exists because trusting a peer is a decision only an operator can make. Everything else is observed:
+the boundary compares against the pair it already has and reports the real outcome.
+
+**`import` really is the only field — you do not also set `external`.** A port marked `"external": true` tells
+composition validation that an input is fed from outside the composition, so no in-graph publisher is expected. That
+is true of an import lane by construction: the lane refuses any subject carrying YOUR pair, so nothing inside your
+composition can legitimately publish to it. The framework therefore derives it — declaring `import` marks the port
+external, and `validate <config>` does not report your lane as a no-publisher orphan. Setting `external: true`
+yourself as well is harmless and changes nothing.
+
+**What happens if you do nothing — three loud paths and one silent one.**
+
+- *No `platform.org` / `platform.id`* → **LOUD.** Boot fails at the factory:
+  `deps.Platform must carry the deployment authority (platform.org and platform.id)`.
+- *A peer's entities arriving on an ordinary lane* → **LOUD.** Each is refused with the coded error, counted under
+  `mutation_rejections{reason="authority_foreign"}`, and logged. Nothing is written; nothing is silently dropped.
+- *A direct `inference.NewHierarchyInference` consumer that does not set `HierarchyConfig.Org`/`Platform`* →
+  **LOUD.** With `Enabled: true` and no pair, `GetHierarchyTriples` returns a classified error rather than deciding
+  every entity is foreign and minting nothing forever.
+- *A rule chained off the run anchors of an IMPORTED firing entity* → **SILENT, and this is the one to read twice.**
+  When a rule with `run_scope=new` fires on an imported loop, the framework writes NOTHING to that loop: neither
+  `agent.loop.run`, nor `agent.run.entity-id`, nor the `rule.task.spawned` back-reference. A chained rule whose
+  condition reads `$entity.triple.agent.run.entity-id` or `$entity.triple.rule.spawned_task` off that entity simply
+  never fires. **A rule that does not fire logs nothing and fails nothing** — the only signal is
+  `rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` rising and one Info line per dispatch whose
+  `skipped` field names every write that dispatch declined — under `run_scope=new` that is `agent.loop.run`,
+  `agent.run.entity-id` AND `rule.task.spawned`; under `inherit`/`none`, `rule.task.spawned` alone.
+  **It counts DISPATCHES, not entities.** One increment is one `publish_agent` dispatch —
+  one (firing entity x `for_each` item) — whose framework writes were all declined. The firing entity does not vary
+  across a `for_each` fan-out, so an action fanning out over N items on a single imported entity reports N. Do not
+  read the counter as "distinct peer entities we declined to write to"; over a fanning rule pack it exceeds that
+  number by the fan-out factor. If your rule packs chain off either predicate and any of your firing entities are imported, re-point
+  those rules at the LOCAL run entity (`org.platform.chain.agent.execution.<loopID>`) or its local children before
+  you upgrade. Hierarchy is the same shape and the same ruling: an imported entity is persisted with no
+  `hierarchy.*` triple, no container, and no sibling edge, so structural-tier queries return fewer edges over
+  imported data and nothing says so.
+
+**The linkage that replaces those writes.** Every agent run — local origin or imported — now carries
+`agent.run.origin-entity-id` on the LOCAL run entity, naming the loop it was minted from, set at birth by
+`agentrun.Mint`. It is the one home for the run→loop pointer that never depends on writing the loop. Walk it from the
+run side: run → `agent.run.origin-entity-id` → the mirrored loop → its `agent.loop.parent` chain.
+
+**Exported signature changes:** `agentrun.Mint(ctx, mgr, org, platform, rootLoopID, originEntityID)` gains the
+origin; `AgentRun` gains `OriginEntityID`; `component.JetStreamPort` gains `Import`; `component.StreamFacts` gains
+`Import()`; `inference.HierarchyConfig` gains `Org`/`Platform` (both `json:"-"` — framework-owned, never operator
+config). `agvocab.RunOriginEntityID = "agent.run.origin-entity-id"` is a new declared predicate.
+
+`processor/rule.NewActionExecutorFull(logger, mutator, publisher, platform)` and
+`NewActionExecutorWithMutator(logger, mutator, platform)` gain a trailing `types.PlatformMeta` — your deployment's
+own `platform.org` / `platform.id`, the same value you pass to `component.Dependencies.Platform`. They are the two
+other constructors that can hold a triple mutator, and the mutator is what makes the framework's writes to a FIRING
+entity possible, so an executor holding one must be able to tell your entities from an imported mirror. Pass
+`deps.Platform`. `NewActionExecutorComplete` already took it; `NewActionExecutor` takes none and cannot write.
+
+**What happens if you pass an empty pair:** the guard fails CLOSED. An executor with no authority cannot establish
+that any entity is local, so every firing entity reads as foreign and the framework's writes to it —
+`agent.loop.run`, `agent.run.entity-id`, `rule.task.spawned` — are skipped, counted under
+`rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` and logged once per dispatch. It is not
+silent, but a rule chained off those predicates will not fire, so pass the real pair.
+
+**BREAKING for a direct `rule.NewProcessor` caller: `SetPlatform` is now required before `Start`.**
+`rule.NewProcessor` and `rule.NewProcessorWithMetrics` are exported, take no authority, and never populate it;
+`(*rule.Processor).SetPlatform` was an optional setter documented as "called by the component factory". If you
+construct the processor yourself and never call it, `Start` now refuses to build the action executor — it logs
+`Failed to initialize state tracker` at Warn and continues, so the stateful evaluator and the cron scheduler are
+absent and **no rule action runs**. Previously the same wiring worked. Add one line before `Initialize`/`Start`:
+
+```go
+processor.SetPlatform(component.PlatformMeta{Org: "acme", Platform: "platform1"})
+```
+
+Pass the same value you pass to `component.Dependencies.Platform`. Nothing changes if you build the processor
+through `rule.CreateRuleProcessor` — it installs the pair from `deps.Platform` and has refused an empty one since
+this release. The refusal exists because the write guard fails closed: a NATS-backed executor with no authority
+reads EVERY firing entity as foreign, so the paragraph above would apply to every entity in your deployment rather
+than to imported mirrors, and it would do so at Info level.
+
+**`agentrun.Mint` now refuses two things it used to accept.** An empty `originEntityID` is rejected; and when the run
+already exists, its STORED origin is compared with the one you passed and a mismatch is rejected with a classified
+invalid error instead of returning the other origin's run. The run's entity ID derives from the loop's instance
+segment alone, so two loops that different deployments name with the same instance derive one local run ID — the
+refusal makes that collision loud instead of an aliased run. A stored run carrying no origin is refused rather than
+adopted. `errs.IsInvalid(err)` is the branch: do not retry either refusal. Deriving a collision-free identity is
+tracked separately as #1168.
+
+**Stated limit on the origin predicate.** The design calls `agent.run.origin-entity-id` an `@id` predicate, and its
+object IS a canonical entity ID — but the stored triple carries no `@id` datatype marker, because the Lifecycle
+harness has no write-side datatype channel: `pkg/lifecycle` emits every projected triple through one helper that sets
+Subject, Predicate, Object, Timestamp and Confidence and nothing else (`pkg/lifecycle/graph_emit.go`; the package
+contains no `Datatype` reference at all). Its sibling `agent.run.parent-entity-id` and the run anchor
+`agent.run.entity-id` behave identically today, so this is the family's existing convention rather than a new gap.
+The consequence is narrow and worth knowing: `pkg/fusion`'s graph facet projects an edge only for a lens-declared
+predicate or an explicit `@id`, so the origin link reads as a property fact there unless your lens declares it.
 
 ### Interaction with the ADR-103 section above
 

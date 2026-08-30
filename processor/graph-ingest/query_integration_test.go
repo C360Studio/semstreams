@@ -35,6 +35,7 @@ func TestIntegration_QueryHandlers(t *testing.T) {
 	deps := component.Dependencies{
 		NATSClient:      natsClient,
 		PayloadRegistry: newTestPayloadRegistry(t),
+		Platform:        component.PlatformMeta{Org: testDeploymentOrg, Platform: testDeploymentPlatform},
 	}
 
 	configJSON, err := json.Marshal(config)

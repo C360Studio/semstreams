@@ -23,7 +23,7 @@ import (
 )
 
 func TestCanonicalMutationRoutesComeOnlyFromTypedProvider(t *testing.T) {
-	c := createTestComponentWithMockKV(t)
+	c := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 	routes, err := c.canonicalMutationRoutes()
 	if err != nil {
 		t.Fatalf("canonicalMutationRoutes: %v", err)
@@ -49,7 +49,7 @@ func TestCanonicalMutationRoutesComeOnlyFromTypedProvider(t *testing.T) {
 }
 
 func TestCanonicalMutationRoutesRejectLegacyCompanionPort(t *testing.T) {
-	c := createTestComponentWithMockKV(t)
+	c := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 	c.config.Ports.Inputs = append(c.config.Ports.Inputs, component.PortDefinition{
 		Name: "legacy_mutations", Config: component.NATSRequestPort{Subject: "graph.mutation.*"}, Required: true,
 	})
@@ -64,7 +64,7 @@ const (
 )
 
 func TestCanonicalCreateHasNoHierarchyOrRelationshipSideEffects(t *testing.T) {
-	c, bucket := createTestComponentWithMockKVBucket(t)
+	c, bucket := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 	c.config.EnableHierarchy = true
 
 	request := graph.CreateEntityRequest{
@@ -104,7 +104,7 @@ func TestCanonicalCreateHasNoHierarchyOrRelationshipSideEffects(t *testing.T) {
 }
 
 func TestCanonicalCreateAllowsTriplelessEntity(t *testing.T) {
-	c, _ := createTestComponentWithMockKVBucket(t)
+	c, _ := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 
 	request := graph.CreateEntityRequest{
 		Entity:    canonicalMutationEntity(canonicalEntityA),
@@ -140,7 +140,7 @@ func TestCanonicalCreateAllowsTriplelessEntity(t *testing.T) {
 }
 
 func TestCanonicalCreateRejectsLegacyNestedTriplesAndUnknownFields(t *testing.T) {
-	c, bucket := createTestComponentWithMockKVBucket(t)
+	c, bucket := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 	entity := canonicalMutationEntity(canonicalEntityA)
 	entity.Triples = []message.Triple{canonicalTriple(canonicalEntityA, "test.state.value", "legacy")}
 	legacy := mustCanonicalJSON(t, map[string]any{"entity": entity})
@@ -174,7 +174,7 @@ func TestCanonicalHandlersRejectUnknownFieldsBeforeAuthorityIO(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c, bucket := createTestComponentWithMockKVBucket(t)
+			c, bucket := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 			var calls atomic.Int32
 			bucket.createFunc = func(context.Context, string, []byte, ...jetstream.KVCreateOpt) (uint64, error) {
 				calls.Add(1)
@@ -194,7 +194,7 @@ func TestCanonicalHandlersRejectUnknownFieldsBeforeAuthorityIO(t *testing.T) {
 }
 
 func TestCanonicalReconcileUnchangedDoesNotAdvanceRevision(t *testing.T) {
-	c, bucket := createTestComponentWithMockKVBucket(t)
+	c, bucket := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 	created := createCanonicalEntity(t, c, canonicalEntityA, []message.Triple{
 		canonicalTriple(canonicalEntityA, "test.state.value", "ready"),
 		canonicalTriple(canonicalEntityA, "test.state.sibling", "keep"),
@@ -226,7 +226,7 @@ func TestCanonicalReconcileUnchangedDoesNotAdvanceRevision(t *testing.T) {
 }
 
 func TestCanonicalReconcileCompetingCASAllowsOneWinner(t *testing.T) {
-	c, _ := createTestComponentWithMockKVBucket(t)
+	c, _ := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 	created := createCanonicalEntity(t, c, canonicalEntityA, []message.Triple{
 		canonicalTriple(canonicalEntityA, "test.state.value", "before"),
 	})
@@ -254,7 +254,7 @@ func TestCanonicalReconcileCompetingCASAllowsOneWinner(t *testing.T) {
 }
 
 func TestCanonicalAppendRacesGraphableMergeWithoutLosingFacts(t *testing.T) {
-	c, _ := createTestComponentWithMockKVBucket(t)
+	c, _ := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 	created := createCanonicalEntity(t, c, canonicalEntityA, []message.Triple{
 		canonicalTriple(canonicalEntityA, "test.state.seed", "present"),
 	})
@@ -312,7 +312,7 @@ func TestCanonicalAppendRacesGraphableMergeWithoutLosingFacts(t *testing.T) {
 }
 
 func TestCanonicalReconcileEmptyDesiredRemovesOnlySelectedPredicates(t *testing.T) {
-	c, _ := createTestComponentWithMockKVBucket(t)
+	c, _ := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 	selected := canonicalTriple(canonicalEntityA, "test.state.value", "remove")
 	sibling := canonicalTriple(canonicalEntityA, "test.state.sibling", "keep")
 	created := createCanonicalEntity(t, c, canonicalEntityA, []message.Triple{selected, sibling})
@@ -358,7 +358,7 @@ func TestCanonicalReconcileAnnotationOnlyChangeAppliesThenExactRepeatIsUnchanged
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c, _ := createTestComponentWithMockKVBucket(t)
+			c, _ := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 			original := canonicalTriple(canonicalEntityA, "test.state.value", "same-object")
 			created := createCanonicalEntity(t, c, canonicalEntityA, []message.Triple{original})
 			desired := original
@@ -397,7 +397,7 @@ func TestCanonicalReconcileAnnotationOnlyChangeAppliesThenExactRepeatIsUnchanged
 }
 
 func TestCanonicalAppendReportsPartialAndDoesNotBirthAbsentSubject(t *testing.T) {
-	c, bucket := createTestComponentWithMockKVBucket(t)
+	c, bucket := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 	createCanonicalEntity(t, c, canonicalEntityA, nil)
 
 	request := graph.AppendTriplesRequest{Triples: []message.Triple{
@@ -427,7 +427,7 @@ func TestCanonicalAppendReportsPartialAndDoesNotBirthAbsentSubject(t *testing.T)
 }
 
 func TestCanonicalAppendReturnsBatchCancellation(t *testing.T) {
-	c, _ := createTestComponentWithMockKVBucket(t)
+	c, _ := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 	createCanonicalEntity(t, c, canonicalEntityA, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -478,7 +478,7 @@ func TestCanonicalAppendAccountingRequiresExactlyOneOutcomePerSubject(t *testing
 }
 
 func TestCanonicalAppendPreservesCommitBeforeTypedSubjectFailure(t *testing.T) {
-	c, bucket := createTestComponentWithMockKVBucket(t)
+	c, bucket := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 	createCanonicalEntity(t, c, canonicalEntityA, nil)
 	bucket.mu.Lock()
 	bucket.data[canonicalEntityB] = mockKVData{value: []byte(`{"id":`), revision: 1}
@@ -509,7 +509,7 @@ func TestCanonicalAppendPreservesCommitBeforeTypedSubjectFailure(t *testing.T) {
 }
 
 func TestCanonicalConcurrentIdenticalAppendStoresOneTuple(t *testing.T) {
-	c, _ := createTestComponentWithMockKVBucket(t)
+	c, _ := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 	createCanonicalEntity(t, c, canonicalEntityA, nil)
 	request := mustCanonicalJSON(t, graph.AppendTriplesRequest{Triples: []message.Triple{
 		canonicalTriple(canonicalEntityA, "test.evidence.value", "once"),
@@ -564,7 +564,7 @@ func TestCanonicalConcurrentIdenticalAppendStoresOneTuple(t *testing.T) {
 }
 
 func TestCanonicalDeleteIsRevisionFenced(t *testing.T) {
-	c, _ := createTestComponentWithMockKVBucket(t)
+	c, _ := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 	created := createCanonicalEntity(t, c, canonicalEntityA, nil)
 
 	stale := graph.DeleteEntityRequest{EntityID: canonicalEntityA, ExpectedRevision: created.KVRevision + 1}
@@ -586,7 +586,7 @@ func TestCanonicalDeleteIsRevisionFenced(t *testing.T) {
 }
 
 func TestCanonicalMutationOutcomeMetricAndRevisionMismatchLog(t *testing.T) {
-	c, _ := createTestComponentWithMockKVBucket(t)
+	c, _ := createTestComponentWithMockKVBucket(t, withAuthority("acme", "ops"))
 	created := createCanonicalEntity(t, c, canonicalEntityA, nil)
 	var logs bytes.Buffer
 	c.logger = slog.New(slog.NewTextHandler(&logs, nil))
@@ -615,7 +615,7 @@ func TestCanonicalMutationOutcomeMetricAndRevisionMismatchLog(t *testing.T) {
 }
 
 func TestCanonicalAppendOutcomeMetricCountsEachSubjectResult(t *testing.T) {
-	c := createTestComponentWithMockKV(t)
+	c := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 	operation := graphmutation.AppendTriples
 	applied := c.mutationOutcomes.WithLabelValues(string(operation), string(graph.MutationApplied))
 	failed := c.mutationOutcomes.WithLabelValues(string(operation), graph.ErrorCodeInternal)
@@ -638,7 +638,7 @@ func TestCanonicalAppendOutcomeMetricCountsEachSubjectResult(t *testing.T) {
 }
 
 func TestCanonicalAppendOutcomeMetricRejectsFailureWithoutDetail(t *testing.T) {
-	c := createTestComponentWithMockKV(t)
+	c := createTestComponentWithMockKV(t, withAuthority("acme", "ops"))
 	data := mustCanonicalJSON(t, graph.AppendTriplesResponse{Results: []graph.AppendSubjectResult{{
 		EntityID: canonicalEntityA, Outcome: graph.MutationFailed,
 	}}})

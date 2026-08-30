@@ -81,7 +81,13 @@ func startIngest(ctx context.Context, t *testing.T, nc *natsclient.Client) {
 	t.Helper()
 	cfg, err := json.Marshal(graphingest.DefaultConfig())
 	require.NoError(t, err)
-	comp, err := graphingest.CreateGraphIngest(cfg, component.Dependencies{NATSClient: nc, PayloadRegistry: revisionSpaceRegistry(t)})
+	comp, err := graphingest.CreateGraphIngest(cfg, component.Dependencies{
+		NATSClient: nc, PayloadRegistry: revisionSpaceRegistry(t),
+		// graph-ingest refuses an absent deployment authority (ADR-102 d5) and
+		// rejects any subject outside it, so the fixture pair must match the entity
+		// IDs this file uses.
+		Platform: component.PlatformMeta{Org: "c360", Platform: "test"},
+	})
 	require.NoError(t, err)
 	c := comp.(component.LifecycleComponent)
 	require.NoError(t, c.Initialize())
@@ -93,7 +99,13 @@ func startIndex(ctx context.Context, t *testing.T, nc *natsclient.Client) *Compo
 	t.Helper()
 	cfg, err := json.Marshal(DefaultConfig())
 	require.NoError(t, err)
-	comp, err := CreateGraphIndex(cfg, component.Dependencies{NATSClient: nc, PayloadRegistry: revisionSpaceRegistry(t)})
+	comp, err := CreateGraphIndex(cfg, component.Dependencies{
+		NATSClient: nc, PayloadRegistry: revisionSpaceRegistry(t),
+		// graph-ingest refuses an absent deployment authority (ADR-102 d5) and
+		// rejects any subject outside it, so the fixture pair must match the entity
+		// IDs this file uses.
+		Platform: component.PlatformMeta{Org: "c360", Platform: "test"},
+	})
 	require.NoError(t, err)
 	c := comp.(*Component)
 	require.NoError(t, c.Initialize())

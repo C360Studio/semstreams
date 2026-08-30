@@ -21,7 +21,9 @@ import (
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/pkg/projection"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/processor/rule/expression"
+	"github.com/c360studio/semstreams/types"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
@@ -545,6 +547,151 @@ type ActionExecutor struct {
 	reconciler     projection.PredicateReconciler
 	targetIndex    *projectionTargetIndex
 	revisionWriter revisionTracker
+	// platform is the deployment's own authority (deps.Platform at the
+	// composition root). Every identity this executor mints carries it in
+	// positions 1-2; nothing is read back from a firing entity (ADR-102 d2 —
+	// the #1096 defect was exactly that read-back). A zero value makes the
+	// mint fail closed in TryChainExecutionEntityID rather than mint under a
+	// foreign or empty authority.
+	platform types.PlatformMeta
+	// metrics is the rule processor's shared collector set. Optional: nil
+	// leaves the counters unrecorded (NATS-less test executors) and never
+	// changes a verdict.
+	metrics *Metrics
+}
+
+// foreignFiringEntity reports whether the firing entity carries an authority
+// other than this deployment's — an imported read-only mirror the framework
+// must not write to (ADR-102 d5, ruled O-12(a)).
+//
+// It fails CLOSED, and it does so by asking the validator rather than by
+// short-circuiting. An executor holding no deployment authority cannot establish
+// that any entity is local, and ValidateEntityIDAuthority already says so: with
+// an empty org/platform pair every parseable six-part ID differs at position 1,
+// so every firing entity reads as foreign and every framework write to it is
+// skipped, counted and logged. Three earlier revisions of this function carried
+// an `if e.platform.Org == "" { return false }` short-circuit that judged every
+// entity LOCAL and so RETIRED both guards below; three rounds of review treated
+// that as a doc-comment problem. It is deleted.
+//
+// THREE constructors can hand this executor an authority, and TWO guards refuse
+// a caller who would not — an earlier revision of this comment enumerated the
+// constructors alone and called the state "unrepresentable", which is how the
+// second guard's seam stayed open for a round:
+//
+//   - NewActionExecutorComplete, NewActionExecutorFull and
+//     NewActionExecutorWithMutator — the three constructors that can hold a
+//     tripleMutator, which both guarded writes require — take the authority as a
+//     PARAMETER, so a caller cannot forget it. They cannot refuse a zero value
+//     handed to them deliberately; the fail-closed answer above is what covers
+//     that, and TestPublishAgentThroughExportedFullConstructorSkipsForeignSpawnedTask
+//     asserts it.
+//   - CreateRuleProcessor refuses a deps.Platform with an empty pair.
+//   - initializeStateTracker refuses a NATS-backed Processor whose optional
+//     SetPlatform was never called — the seam an adopter reaches through the
+//     exported NewProcessor, which takes no authority at all.
+//
+// NewActionExecutor takes no authority and cannot write: it holds neither mutator
+// nor publisher and there is no setter for either.
+func (e *ActionExecutor) foreignFiringEntity(entityID string) bool {
+	return semtypes.ValidateEntityIDAuthority(entityID, e.platform.Org, e.platform.Platform, false) != nil
+}
+
+// foreignFiringSkipLogMessage is the single Info line a dispatch emits when the
+// firing entity is a foreign import. It is a named constant so the test pinning
+// the requirement's "ONE Info log per dispatch naming EVERY write that dispatch skipped" matches the
+// production string instead of a copy that can drift away from it.
+const foreignFiringSkipLogMessage = "publish_agent: firing entity carries a foreign authority — framework writes to it skipped"
+
+// foreignFiringSkipRecorder returns the pair that records the decision to write
+// NOTHING to a foreign firing entity: record accumulates one declined write, and
+// flush emits the single Info line for the dispatch. The caller defers flush, so
+// the line is emitted even when the dispatch later fails.
+//
+// The split exists because the two declined writes are decided at different
+// points in publishAgentOnce — the run-anchor pair (run_scope=new only) before
+// publication, the rule.task.spawned back-reference after it — and a log line
+// written at the first decision can only ever name the first. It named only the
+// anchors while silently omitting rule.task.spawned, which is the write an
+// operator debugging "$entity.triple.rule.spawned_task never fires" is actually
+// looking for. Accumulate, then log what the dispatch ACTUALLY declined.
+//
+// The counter still increments exactly once per dispatch — on the first recorded
+// write, not per omitted write. "Per dispatch" is exact and deliberate, and the
+// counted unit is (firing entity x `for_each` item): this recorder is created
+// inside publishAgentOnce, which runs once per item, so an action fanning out
+// over N items reports N skips. The firing entity is INVARIANT across that
+// fan-out — executePublishAgent passes the same ExecutionContext to every
+// iteration and only the item varies — so those N skips are N dispatches
+// declined for ONE imported entity, never N distinct declined entities. Two
+// earlier revisions of this comment were wrong here: first "per action
+// execution", then "N entities were declined".
+//
+// The counter is named for what it counts — framework writes to a foreign
+// firing entity — not for the run anchor, because under run_scope inherit|none
+// no anchor is ever in play and only the spawned-task back-reference is
+// skipped. The identity is never logged: it is not this deployment's to publish.
+func (e *ActionExecutor) foreignFiringSkipRecorder(ec *ExecutionContext) (record func(string), flush func()) {
+	var skipped []string
+	record = func(what string) {
+		if len(skipped) == 0 && e.metrics != nil && e.metrics.foreignFiringWritesSkippedTotal != nil {
+			e.metrics.foreignFiringWritesSkippedTotal.WithLabelValues(semtypes.EntityIDReasonForeignAuthority).Inc()
+		}
+		skipped = append(skipped, what)
+	}
+	flush = func() {
+		if len(skipped) == 0 || e.logger == nil {
+			return
+		}
+		e.logger.Info(foreignFiringSkipLogMessage,
+			slog.String("rule_id", ec.RuleID()),
+			slog.String("skipped", strings.Join(skipped, "; ")),
+			slog.String("reason", semtypes.EntityIDReasonForeignAuthority))
+	}
+	return record, flush
+}
+
+// stampRunAnchors writes the reciprocal run anchors (agent.loop.run,
+// agent.run.entity-id) onto the FIRING loop. The caller has already established
+// that the loop carries this deployment's own authority; for an imported loop no
+// mutation request is issued at all, not even one graph-ingest would reject, and
+// the run->loop linkage still resolves because agentrun.Mint stamped
+// agent.run.origin-entity-id on the LOCAL run entity.
+//
+// A chained rule reading $entity.triple.agent.run.entity-id off an imported
+// firing loop therefore finds nothing BY DESIGN, and must trigger on the local
+// run entity or its local children instead.
+func (e *ActionExecutor) stampRunAnchors(
+	ctx context.Context,
+	ec *ExecutionContext,
+	entityID, org, platform, firingLoopID string,
+) {
+
+	stampRun := func(predicate, object string) {
+		if _, tripleErr := e.tripleMutator.AddTriple(ctx, ec.RuleID(), message.Triple{
+			Subject: entityID, Predicate: predicate, Object: object,
+			Source: "rule_engine", Timestamp: time.Now(), Confidence: 1.0,
+		}); tripleErr != nil && e.logger != nil {
+			e.logger.Warn("publish_agent: run_scope=new: failed to stamp run anchor on firing entity",
+				slog.String("entity_id", entityID),
+				slog.String("predicate", predicate),
+				slog.String("firing_loop_id", firingLoopID),
+				slog.String("rule_id", ec.RuleID()),
+				slog.Any("error", tripleErr))
+		}
+	}
+	stampRun(agvocab.LoopRun, firingLoopID)
+	if runEntityID, idErr := agentic.TryChainExecutionEntityID(org, platform, firingLoopID); idErr == nil {
+		stampRun(agvocab.LoopRunEntityID, runEntityID)
+	}
+}
+
+// setMetrics installs the shared rule collectors. Unexported because the
+// Processor owns the registry. Unlike the deployment authority — which is a
+// CONSTRUCTOR parameter precisely so it cannot be forgotten — metrics are
+// nil-safe observability: omitting them loses a counter, never a guard.
+func (e *ActionExecutor) setMetrics(metrics *Metrics) {
+	e.metrics = metrics
 }
 
 // SetToolRegistry installs the shared tool registry used by
@@ -597,19 +744,41 @@ func NewActionExecutor(logger *slog.Logger) *ActionExecutor {
 
 // NewActionExecutorWithMutator creates a new ActionExecutor with triple mutation support.
 // The mutator enables actual persistence of triple operations via NATS request/response.
-func NewActionExecutorWithMutator(logger *slog.Logger, mutator TripleMutator) *ActionExecutor {
+//
+// platform is the DEPLOYMENT's own authority (deps.Platform at the composition
+// root), required for the same reason it is required by
+// NewActionExecutorComplete: the mutator is what makes the framework's writes to
+// a FIRING entity possible, so an executor that holds one must be able to tell
+// this deployment's entities from an imported mirror (ADR-102 d5; #1096).
+func NewActionExecutorWithMutator(
+	logger *slog.Logger,
+	mutator TripleMutator,
+	platform types.PlatformMeta,
+) *ActionExecutor {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &ActionExecutor{
 		logger:        logger,
 		tripleMutator: mutator,
+		platform:      platform,
 	}
 }
 
 // NewActionExecutorFull creates a new ActionExecutor with full functionality.
 // The mutator enables triple persistence, and the publisher enables NATS publishing.
-func NewActionExecutorFull(logger *slog.Logger, mutator TripleMutator, publisher Publisher) *ActionExecutor {
+//
+// platform is the DEPLOYMENT's own authority — see NewActionExecutorComplete for
+// why it is a parameter and not a setter. This constructor holds BOTH a mutator
+// and a publisher, so it can reach both framework writes to the firing entity
+// (the run-anchor pair and the rule.task.spawned back-reference); it therefore
+// carries exactly the same requirement.
+func NewActionExecutorFull(
+	logger *slog.Logger,
+	mutator TripleMutator,
+	publisher Publisher,
+	platform types.PlatformMeta,
+) *ActionExecutor {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -617,11 +786,50 @@ func NewActionExecutorFull(logger *slog.Logger, mutator TripleMutator, publisher
 		logger:        logger,
 		tripleMutator: mutator,
 		publisher:     publisher,
+		platform:      platform,
 	}
 }
 
-// NewActionExecutorComplete creates an ActionExecutor with all capabilities including KV writes.
-func NewActionExecutorComplete(logger *slog.Logger, mutator TripleMutator, publisher Publisher, kvWriter KVWriter) *ActionExecutor {
+// NewActionExecutorComplete creates an ActionExecutor with all capabilities
+// including KV writes.
+//
+// platform is the DEPLOYMENT's own authority (deps.Platform at the composition
+// root). It is a constructor parameter rather than a setter because it is the
+// only input whose absence changes what the guard MEANS rather than what it
+// does: a zero value makes foreignFiringEntity answer TRUE for every entity, so
+// every framework write to a firing entity is skipped — counted and logged, but
+// skipped for the deployment's own entities as well as for imported mirrors, and
+// a rule chained off $entity.triple.rule.spawned_task stops firing (ADR-102 d5;
+// #1096). That is the safe direction and it is deliberate; it is still an
+// executor that cannot do its job. Every other capability here degrades loudly
+// or is nil-safe, so a forgotten setter costs a feature; a forgotten authority
+// costs the contract.
+//
+// A parameter does not make the absent-authority state unrepresentable — a zero
+// PlatformMeta compiles fine, and
+// TestPublishAgentThroughExportedFullConstructorSkipsForeignSpawnedTask
+// represents it and asserts the fail-closed answer. What a parameter makes it is
+// UNFORGETTABLE: the caller has to write something in that position. The two
+// seams that could supply nothing at all are closed separately —
+// CreateRuleProcessor refuses an empty deps.Platform, and initializeStateTracker
+// refuses a NATS-backed processor whose SetPlatform was never called.
+//
+// This is the constructor the production path uses whenever a NATS client is
+// present, and the only one that receives a KV writer. Of the three convenience
+// constructors above, NewActionExecutor is also a production constructor — the
+// no-NATS branch of processor.go builds it — but it holds neither publisher nor
+// mutator, so no framework write to the firing entity is possible through it and
+// it takes no authority. NewActionExecutorWithMutator and NewActionExecutorFull
+// have no production and no sister-repo caller today, but they are EXPORTED, so
+// the caller who matters is an adopter outside this repository who is not in any
+// review here; both can hold a mutator, so both take the authority too.
+func NewActionExecutorComplete(
+	logger *slog.Logger,
+	mutator TripleMutator,
+	publisher Publisher,
+	kvWriter KVWriter,
+	platform types.PlatformMeta,
+) *ActionExecutor {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -630,6 +838,7 @@ func NewActionExecutorComplete(logger *slog.Logger, mutator TripleMutator, publi
 		tripleMutator: mutator,
 		publisher:     publisher,
 		kvWriter:      kvWriter,
+		platform:      platform,
 	}
 }
 
@@ -1569,19 +1778,18 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 				}
 			}
 		} else if e.lifecycle != nil {
-			// Parse org and platform from the 6-part entity ID.
-			// IsValidEntityID guarantees exactly 6 dot-separated parts; the firing
-			// entity has already passed through ec which validates entity IDs.
-			idParts := strings.SplitN(entityID, ".", 6)
-			if len(idParts) == 6 {
-				org, platform := idParts[0], idParts[1]
-				task.RunID = firingLoopID
-				pendingRunMint = &struct {
-					org          string
-					platform     string
-					firingLoopID string
-				}{org: org, platform: platform, firingLoopID: firingLoopID}
-			}
+			// The run is minted under THIS deployment's authority (#1096). It was
+			// once read back from the firing entity's positions 1-2, which minted
+			// local runtime state under whatever authority happened to fire the
+			// rule — for an imported entity, a peer's. deps.Platform is the only
+			// honest source (ADR-102 d2); the firing entity stays the ORIGIN
+			// reference on the local run, recorded below as originEntityID.
+			task.RunID = firingLoopID
+			pendingRunMint = &struct {
+				org          string
+				platform     string
+				firingLoopID string
+			}{org: e.platform.Org, platform: e.platform.Platform, firingLoopID: firingLoopID}
 		} else {
 			// No lifecycle manager wired — log and fall through to inherit.
 			if e.logger != nil {
@@ -1681,8 +1889,34 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 	// run_scope=new is intentionally committed only after the complete,
 	// substituted TaskMessage has passed validation. Mint and graph writes are
 	// externally visible; an invalid lineage map must produce none of them.
+	// One decision for every framework write this DISPATCH would make to the
+	// firing entity: an imported entity is a read-only mirror, so the anchors
+	// below and the rule.task.spawned back-reference further down are both
+	// skipped, and the skip is counted once (ADR-102 d5, ruled O-12(a)).
+	//
+	// Once per dispatch, not per action: publishAgentOnce runs once per
+	// `for_each` item, so an action fanning out over N items on an imported
+	// firing entity reports N — N declined dispatches for ONE entity, since
+	// entityID does not vary across the fan-out.
+	// Which writes are actually in play depends on run_scope — under
+	// inherit|none there is no anchor and only the back-reference is skipped,
+	// which is why neither the counter's NAME nor the log's MESSAGE is about the
+	// run anchor. The log's `skipped` field names whichever writes this dispatch
+	// actually declined.
+	foreignFiring := e.foreignFiringEntity(entityID)
+	recordForeignSkip, flushForeignSkips := e.foreignFiringSkipRecorder(ec)
+	// Deferred so the one Info line names EVERY write this dispatch declined —
+	// the rule.task.spawned decision is only reached after publication — and so
+	// it is still emitted when a later step returns an error.
+	defer flushForeignSkips()
+
 	if pendingRunMint != nil {
-		if _, mintErr := agentrun.Mint(ctx, e.lifecycle, pendingRunMint.org, pendingRunMint.platform, pendingRunMint.firingLoopID); mintErr != nil {
+		// The firing entity is the run's ORIGIN, recorded on the local run at
+		// birth (agent.run.origin-entity-id) for a local and an imported origin
+		// alike — one home for the run->loop pointer that never depends on
+		// writing the loop (ADR-102; #1096).
+		if _, mintErr := agentrun.Mint(ctx, e.lifecycle,
+			pendingRunMint.org, pendingRunMint.platform, pendingRunMint.firingLoopID, entityID); mintErr != nil {
 			// Mint failure is logged but does not abort dispatch. Remove the
 			// prospective run association before publication because no run exists.
 			task.RunID = ""
@@ -1694,23 +1928,14 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 					slog.Any("error", mintErr))
 			}
 		} else if e.tripleMutator != nil {
-			stampRun := func(predicate, object string) {
-				if _, tripleErr := e.tripleMutator.AddTriple(ctx, ec.RuleID(), message.Triple{
-					Subject: entityID, Predicate: predicate, Object: object,
-					Source: "rule_engine", Timestamp: time.Now(), Confidence: 1.0,
-				}); tripleErr != nil && e.logger != nil {
-					e.logger.Warn("publish_agent: run_scope=new: failed to stamp run anchor on firing entity",
-						slog.String("entity_id", entityID),
-						slog.String("predicate", predicate),
-						slog.String("firing_loop_id", pendingRunMint.firingLoopID),
-						slog.String("rule_id", ec.RuleID()),
-						slog.Any("error", tripleErr))
-				}
-			}
-			stampRun(agvocab.LoopRun, pendingRunMint.firingLoopID)
-			if runEntityID, idErr := agentic.TryChainExecutionEntityID(
-				pendingRunMint.org, pendingRunMint.platform, pendingRunMint.firingLoopID); idErr == nil {
-				stampRun(agvocab.LoopRunEntityID, runEntityID)
+			if foreignFiring {
+				// run_scope=new DID mint a local run, so here — and only here —
+				// the linkage claim holds: the run→loop pointer survives as
+				// agvocab.RunOriginEntityID on that run.
+				recordForeignSkip(agvocab.LoopRun + "," + agvocab.LoopRunEntityID +
+					" (linkage on the local run as " + agvocab.RunOriginEntityID + ")")
+			} else {
+				e.stampRunAnchors(ctx, ec, entityID, pendingRunMint.org, pendingRunMint.platform, pendingRunMint.firingLoopID)
 			}
 		}
 	}
@@ -1757,7 +1982,15 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 	// invisible to the rest of the rule engine. The write is tracked against
 	// the originating rule so it does not re-trigger the same rule; sibling
 	// rules watching ENTITY_STATES still see the new triple and fire.
-	if published && e.tripleMutator != nil {
+	// rule.task.spawned is a framework back-reference onto the FIRING entity, so
+	// it falls under the same read-only-mirror rule as the run anchors: for an
+	// imported entity no request is issued. A local fact about an import belongs
+	// on a local subject, and this predicate has no local subject to move to —
+	// a chained rule reading $entity.triple.rule.spawned_task off an imported
+	// entity finds nothing by design.
+	if published && e.tripleMutator != nil && foreignFiring {
+		recordForeignSkip("rule.task.spawned")
+	} else if published && e.tripleMutator != nil {
 		spawnedTriple := message.Triple{
 			Subject:    entityID,
 			Predicate:  "rule.task.spawned",

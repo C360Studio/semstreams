@@ -266,6 +266,9 @@ func (s *TieredScenario) assertBatchReconciliation(ctx context.Context, present 
 		sample = sample[:5]
 	}
 	// A syntactically valid 6-part ID that is guaranteed absent from ENTITY_STATES.
+	// Deliberately NOT under the tier's authority (ADR-102 d5): this ID is only
+	// ever READ, and a foreign pair makes its absence structural — the deployment
+	// could not create it even by accident — rather than incidental.
 	absentID := fmt.Sprintf("c360.e2e.batch.reconcile.absent.%d", time.Now().UnixNano())
 	requested := make([]string, 0, len(sample)+1)
 	requested = append(requested, sample...)
@@ -349,6 +352,7 @@ func (s *TieredScenario) assertBatchReconciliationClient(ctx context.Context, pr
 	}
 	// Request the present IDs in REVERSED order (see downscope note) plus one
 	// guaranteed-absent ID, so the production client must reconcile a missing entry.
+	// Read-only and deliberately foreign, for the reason above.
 	absentID := fmt.Sprintf("c360.e2e.client.reconcile.absent.%d", time.Now().UnixNano())
 	requested := make([]string, 0, len(sample)+1)
 	for i := range sample {

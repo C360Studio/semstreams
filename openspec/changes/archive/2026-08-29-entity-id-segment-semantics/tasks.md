@@ -99,7 +99,7 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
       (the two constructors do not compile with the new parameters).
       **Done:** `agentic/entity_ids_semantics_test.go` (nine builder rows, the `graph.NewAlertEvent(org, platform, …)` row, the gated-DAG pattern, `LoopIDFromExecutionEntityID` rejecting the retired order, and `TestAlertIdentityCarriesTheDeploymentAuthority`); the trigger row lives in `processor/rule/graph_event_identity_semantics_test.go` because `ruleTriggerEntityID` is unexported; the e2e mission row in `cmd/e2e-semstreams/mission/entity_id_semantics_test.go`. Did not compile at baseline (see 2.9). GREEN for the agentic rows only after 5.1 lands on the merged tree.
 
-- [ ] 2.5 `processor/graph-ingest/authority_gate_integration_test.go` (`//go:build integration`; real NATS via the
+- [x] 2.5 `processor/graph-ingest/authority_gate_integration_test.go` (`//go:build integration`; real NATS via the
       package's existing test client): `TestAuthorityGateRejectsForeignOnFactLane` — deployment `acme.dep1`; publish a
       Graphable whose ID is `acme.dep2.src.git.commit.a1` on a non-import port; assert no `ENTITY_STATES` key is
       created and `mutation_rejections{reason="authority_foreign"}` == 1. `TestAuthorityGateRejectsForeignOnMutationLane`
@@ -115,9 +115,15 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
       lane targeting the imported subject is rejected `foreign_authority` and the import's revision is unchanged.
       MUST fail at baseline (no gate exists: the foreign write lands, the annotation lands, and the container is
       minted under `acme.dep2`).
-      **Slice B — not done in this PR** (graph-ingest boundary tests belong with the gate they exercise).
+      **Done (slice B):** `processor/graph-ingest/authority_gate_integration_test.go` — all six named tests, driving
+      the assembled component against real NATS (consume closure → keyed pool → `processIngest` for the fact lane;
+      `SubscribeForRequests`-registered canonical handlers over request/reply for the mutation lane). Did not compile
+      at baseline (see 2.9). **One row was strengthened after a measured mutation result:**
+      `TestHierarchySkipsForeignAuthority` as this row specifies could NOT kill M13 — see 4.13 — so it now imports
+      TWO peers sharing a type prefix, the sibling-edge path being the only one that reaches an imported entity
+      without a container; the discriminating test for the skip lives in `graph/inference` (4.13).
 
-- [ ] 2.6 `processor/rule/actions_run_scope_integration_test.go` (`//go:build integration`; a recording
+- [x] 2.6 `processor/rule/actions_run_scope_integration_test.go` (`//go:build integration`; a recording
       `tripleMutator` that captures every `AddTriple` subject): `TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite`
       — deployment `acme.dep1`; a rule with `run_scope=new` fires on `foreign.dep9.agentic-loop.agent.execution.<uuid>`
       (a peer deployment's own loop execution, because `LoopIDFromExecutionEntityID` (`actions.go:1554`,
@@ -125,7 +131,8 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
       (`:1555-1570`)); assert the run entity `acme.dep1.chain.agent.execution.<uuid>` exists with
       `agvocab.RunOriginEntityID` = the imported ID, that ZERO captured `AddTriple` calls have the imported ID as
       subject, that the import's `ENTITY_STATES` revision is unchanged, and that
-      `rule_run_anchor_skipped_total{reason="foreign_authority"}` == 1 while `mutation_rejections` is unchanged.
+      `rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` == 1 (named `rule_run_anchor_skipped_total`
+      when this row was written; renamed in review round 1, MEDIUM-1) while `mutation_rejections` is unchanged.
       `TestRunScopeNewOnLocalLoopStampsAnchorAndOrigin` — the same rule on `acme.dep1.agentic-loop.agent.execution.<uuid>`;
       assert the run carries `agvocab.RunOriginEntityID` = the local loop AND the loop received `agvocab.LoopRun` and
       `agvocab.LoopRunEntityID`. Both MUST fail at baseline (#1096: the mint reads `foreign.dep9`, the origin predicate
@@ -138,7 +145,22 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
       `id:acme.dep1.src` matches a loop scoped to `acme.dep1.src.git.commit.a1` and not `acme.dep1.other.git.commit.a1`.
       GREEN at baseline (segment-boundary matching is order-agnostic, inventory L2): a documenting test, outside the
       2.9 baseline capture; it pins the meaning the spec delta assigns to three positions.
-      **Partly done (slice A rows):** `TestSegmentTokensResolveByName` / `TestSegmentTokensUnresolvedOnInvalidID` in `processor/rule/entity_substitution_test.go` (the first did not pass at baseline, the second did — see 2.9); `TestAppliesToThreeSegmentsIsSourceScope` in `processor/agentic-loop/lessonmatch/lessonmatch_scope_test.go` — the matcher's home rather than `emit_lesson_test.go`, which PR #1109 owns during this window (GREEN at baseline, documenting). The two `actions_run_scope_integration_test.go` rows are slice B and are not done in this PR.
+      **Partly done (slice A rows):** `TestSegmentTokensResolveByName` / `TestSegmentTokensUnresolvedOnInvalidID` in `processor/rule/entity_substitution_test.go` (the first did not pass at baseline, the second did — see 2.9); `TestAppliesToThreeSegmentsIsSourceScope` in `processor/agentic-loop/lessonmatch/lessonmatch_scope_test.go` — the matcher's home rather than `emit_lesson_test.go`, which PR #1109 owns during this window (GREEN at baseline, documenting).
+      **Done (slice B):** `processor/rule/actions_run_scope_integration_test.go` — both named tests over a real
+      graph-ingest, a real `lifecycle.Manager` with `agentrun.Register`, the real `tripleMutator` wrapped by a
+      recording one, and the production `executor.Execute`. Did not compile at baseline (see 2.9). The imported loop
+      is seeded straight into `ENTITY_STATES` as the mirror an import lane would have left — the import path itself
+      is proven by 2.5's `TestImportLaneAcceptsForeignRejectsLocalClaim`. **The first test found a defect this row
+      did not predict:** `rule.task.spawned` is a THIRD framework write to the firing entity on the same action, and
+      it reached the foreign subject. The requirement is "no mutation request targets the foreign subject", so the
+      skip now covers it; the delta and 6.3 were amended.
+      **Round 2 added** `TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity` (3 `for_each` items, ONE
+      imported loop, 3 increments), because neither test above carries a `ForEach` and so neither can tell
+      "per dispatch" from "per action". **Round 4 added the missing half of it:** it asserted the COUNT but not the
+      invariance the delta hangs on it, so it now decodes all three published envelopes through the production
+      decoder and asserts each carries the same `task.RunID` — derived from the firing entity, therefore the
+      invariance itself. **Round 4 also added** `TestForeignFiringSkipLogNamesEveryDeclinedWrite`, which pins the
+      delta's Info-log promise: the line must name `rule.task.spawned` as well as the anchor pair.
 
 - [x] 2.7 `processor/graph-query/summary_test.go`: `TestGraphSummaryTypeKeyFollowsCanonicalOrder` — the
       `EntityTypeSummary.Type` for `acme.dep1.src.git.commit.a1` is `src.git.commit`, built from named fields.
@@ -190,77 +212,77 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
   pkg/types/entity_domain_authority_test.go:57:25: too many errors
   FAIL	github.com/c360studio/semstreams/pkg/types [build failed]
   FAIL
-  
+
   $ go test -race -count=1 -run FrameworkBuildersMint|FrameworkPrefixesAndPatterns|AlertIdentityCarries ./agentic/
   # github.com/c360studio/semstreams/agentic_test [github.com/c360studio/semstreams/agentic.test]
   agentic/entity_ids_semantics_test.go:60:76: too many arguments in call to graph.NewAlertEvent
-  	want (string, string, map[string]any, graph.EventMetadata)
+        want (string, string, map[string]any, graph.EventMetadata)
   agentic/entity_ids_semantics_test.go:75:28: undefined: semtypes.IsFrameworkEntityDomain
   agentic/entity_ids_semantics_test.go:114:73: too many arguments in call to graph.NewAlertEvent
-  	want (string, string, map[string]any, graph.EventMetadata)
+        want (string, string, map[string]any, graph.EventMetadata)
   agentic/entity_ids_semantics_test.go:116:74: too many arguments in call to graph.NewAlertEvent
-  	want (string, string, map[string]any, graph.EventMetadata)
+        want (string, string, map[string]any, graph.EventMetadata)
   agentic/entity_ids_semantics_test.go:121:45: undefined: semtypes.LongestFrameworkIdentityFamily
   agentic/entity_ids_semantics_test.go:123:64: too many arguments in call to graph.NewAlertEvent
-  	want (string, string, map[string]any, graph.EventMetadata)
+        want (string, string, map[string]any, graph.EventMetadata)
   agentic/entity_ids_semantics_test.go:125:69: too many arguments in call to graph.NewAlertEvent
-  	want (string, string, map[string]any, graph.EventMetadata)
+        want (string, string, map[string]any, graph.EventMetadata)
   FAIL	github.com/c360studio/semstreams/agentic [build failed]
   FAIL
-  
+
   $ go test -race -count=1 -run TestRuleTriggerIdentityCarriesTheDeploymentAuthority|TestSegmentTokens ./processor/rule/
   # github.com/c360studio/semstreams/processor/rule [github.com/c360studio/semstreams/processor/rule.test]
   processor/rule/graph_event_identity_semantics_test.go:18:52: too many arguments in call to ruleTriggerEntityID
-  	want (string, string)
+        want (string, string)
   processor/rule/graph_event_identity_semantics_test.go:22:54: too many arguments in call to ruleTriggerEntityID
-  	want (string, string)
+        want (string, string)
   processor/rule/graph_event_identity_semantics_test.go:26:52: too many arguments in call to ruleTriggerEntityID
-  	want (string, string)
+        want (string, string)
   processor/rule/graph_event_identity_semantics_test.go:45:18: undefined: types.LongestFrameworkIdentityFamily
   processor/rule/graph_event_identity_semantics_test.go:50:53: too many arguments in call to ruleTriggerEntityID
-  	want (string, string)
+        want (string, string)
   FAIL	github.com/c360studio/semstreams/processor/rule [build failed]
   FAIL
-  
+
   $ go test -race -count=1 -run TestAppliesToThreeSegmentsIsSourceScope ./processor/agentic-loop/lessonmatch/
   ok  	github.com/c360studio/semstreams/processor/agentic-loop/lessonmatch	1.226s
-  
+
   $ go test -race -count=1 -run TestGraphSummaryTypeKeyFollowsCanonicalOrder ./processor/graph-query/
   --- FAIL: TestGraphSummaryTypeKeyFollowsCanonicalOrder (0.00s)
       summary_test.go:398: Count = 4, want 2 (non-canonical values are skipped, never bucketed by index)
   FAIL
   FAIL	github.com/c360studio/semstreams/processor/graph-query	0.382s
   FAIL
-  
+
   $ go test -race -count=1 -run TestEntityIDEdgesReadPositionsByName|TestSummaryGroupsByNamedDomain ./graph/clustering/
   --- FAIL: TestEntityIDEdgesReadPositionsByName (0.00s)
       entityid_provider_test.go:614: neighbors = [acme.dep1.src.git.commit.a2 acme.dep1.other.git.commit.b1], want the source peer v1 (named System = src)
       entityid_provider_test.go:620: getSystem = "git", want src (position 3 by name)
   --- FAIL: TestSummaryGroupsByNamedDomain (0.00s)
-          	Error Trace:	/Users/coby/Code/c360/semstreams-wt/claude/gh1095-entity-id-slice-a/graph/clustering/summarizer_test.go:354
-          	Error:      	Not equal: 
-          	            	expected: "git"
-          	            	actual  : "src"
-          	Error Trace:	/Users/coby/Code/c360/semstreams-wt/claude/gh1095-entity-id-slice-a/graph/clustering/summarizer_test.go:361
-          	Error:      	map[string]llm.DomainGroup{"feed":llm.DomainGroup{Domain:"feed", Count:1, SystemTypes:[]llm.SystemType{llm.SystemType{Name:"media.video", Count:1}}}, "src":llm.DomainGroup{Domain:"src", Count:3, SystemTypes:[]llm.SystemType{llm.SystemType{Name:"git.repo", Count:1}, llm.SystemType{Name:"git.commit", Count:2}}}} does not contain "git"
+                Error Trace:	/Users/coby/Code/c360/semstreams-wt/claude/gh1095-entity-id-slice-a/graph/clustering/summarizer_test.go:354
+                Error:      	Not equal:
+                                expected: "git"
+                                actual  : "src"
+                Error Trace:	/Users/coby/Code/c360/semstreams-wt/claude/gh1095-entity-id-slice-a/graph/clustering/summarizer_test.go:361
+                Error:      	map[string]llm.DomainGroup{"feed":llm.DomainGroup{Domain:"feed", Count:1, SystemTypes:[]llm.SystemType{llm.SystemType{Name:"media.video", Count:1}}}, "src":llm.DomainGroup{Domain:"src", Count:3, SystemTypes:[]llm.SystemType{llm.SystemType{Name:"git.repo", Count:1}, llm.SystemType{Name:"git.commit", Count:2}}}} does not contain "git"
   FAIL
   FAIL	github.com/c360studio/semstreams/graph/clustering	0.327s
   FAIL
-  
+
   $ go test -race -count=1 -run TestSubjectToIRIFollowsCanonicalOrder ./vocabulary/export/
   --- FAIL: TestSubjectToIRIFollowsCanonicalOrder (0.00s)
       export_test.go:306: subjectToIRI() = "https://semstreams.semanticstream.ing/entities/acme/dep1/src/git/commit/a1", want the named-field composition "https://semstreams.semanticstream.ing/entities/acme/dep1/git/src/commit/a1"
   FAIL
   FAIL	github.com/c360studio/semstreams/vocabulary/export	0.172s
   FAIL
-  
+
   $ go test -race -count=1 -run TestParseZoneEntityIDReadsNamedPositions ./examples/processors/iot_sensor/
   --- FAIL: TestParseZoneEntityIDReadsNamedPositions (0.00s)
       processor_test.go:346: ZoneEntityID = "acme.logistics.facility.zone.area.cold-storage-1", want acme.logistics.zone.facility.area.cold-storage-1
   FAIL
   FAIL	github.com/c360studio/semstreams/examples/processors/iot_sensor	0.270s
   FAIL
-  
+
   $ go test -race -count=1 -run TestAuditFlags|TestAuditSegmentRules ./internal/entityidaudit/
   --- FAIL: TestAuditFlagsAuthorityLiteral (0.00s)
       audit_test.go:660: findings = []entityidaudit.Finding{}, want one authority_literal on the go-format-prefix surface
@@ -275,18 +297,18 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
   FAIL
   FAIL	github.com/c360studio/semstreams/internal/entityidaudit	0.214s
   FAIL
-  
+
   $ go test -race -count=1 -run TestConfigRejectsOversizedAuthorityPair|TestConfigRejectsRemovedInstanceID ./config/
   --- FAIL: TestConfigRejectsOversizedAuthorityPair (0.00s)
-          	Error Trace:	/Users/coby/Code/c360/semstreams-wt/claude/gh1095-entity-id-slice-a/config/config_test.go:409
-          	Error:      	An error is expected but got nil.
+                Error Trace:	/Users/coby/Code/c360/semstreams-wt/claude/gh1095-entity-id-slice-a/config/config_test.go:409
+                Error:      	An error is expected but got nil.
   --- FAIL: TestConfigRejectsRemovedInstanceID (0.00s)
-          	Error Trace:	/Users/coby/Code/c360/semstreams-wt/claude/gh1095-entity-id-slice-a/config/config_test.go:424
-          	Error:      	An error is expected but got nil.
+                Error Trace:	/Users/coby/Code/c360/semstreams-wt/claude/gh1095-entity-id-slice-a/config/config_test.go:424
+                Error:      	An error is expected but got nil.
   FAIL
   FAIL	github.com/c360studio/semstreams/config	0.286s
   FAIL
-  
+
   $ go test -race -count=1 -run TestMissionIdentityFollowsCanonicalOrder ./cmd/e2e-semstreams/mission/
   # github.com/c360studio/semstreams/cmd/e2e-semstreams/mission [github.com/c360studio/semstreams/cmd/e2e-semstreams/mission.test]
   cmd/e2e-semstreams/mission/entity_id_semantics_test.go:26:29: undefined: semtypes.NewEntityDomainAuthority
@@ -297,6 +319,39 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
   ```
 
       Two rows did not go RED: `TestAppliesToThreeSegmentsIsSourceScope` (`ok`, a documenting test as the task predicts) and, by value, the export/summary pair (2.7).
+
+      **Slice B RED capture** at `5e5b6dd4` (baseline = the merged slice A head `3f3133a6` + slice B's claim
+      commit), on the two integration files this slice owns, before any of §3.8/§6 was written. Verbatim:
+
+  ```
+  $ go test -race -tags=integration -count=1 -run 'TestAuthorityGate|TestImportLane|TestHierarchySkipsForeignAuthority' ./processor/graph-ingest/
+  # github.com/c360studio/semstreams/processor/graph-ingest [github.com/c360studio/semstreams/processor/graph-ingest.test]
+  processor/graph-ingest/authority_gate_integration_test.go:92:4: unknown field Import in struct literal of type component.JetStreamPort
+  processor/graph-ingest/authority_gate_integration_test.go:157:72: undefined: authorityMetricReasonForeign
+  processor/graph-ingest/authority_gate_integration_test.go:165:65: undefined: authorityMetricReasonForeign
+  processor/graph-ingest/authority_gate_integration_test.go:265:22: undefined: authorityMetricReasonClaimed
+  processor/graph-ingest/authority_gate_integration_test.go:273:66: undefined: authorityMetricReasonClaimed
+  FAIL	github.com/c360studio/semstreams/processor/graph-ingest [build failed]
+  FAIL
+
+  $ go test -race -tags=integration -count=1 -run 'TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite|TestRunScopeNewOnLocalLoopStampsAnchorAndOrigin' ./processor/rule/
+  # github.com/c360studio/semstreams/processor/rule [github.com/c360studio/semstreams/processor/rule.test]
+  processor/rule/actions_run_scope_integration_test.go:98:3: unknown field runAnchorSkippedTotal in struct literal of type Metrics
+  processor/rule/actions_run_scope_integration_test.go:152:11: executor.setPlatform undefined (type *ActionExecutor has no field or method setPlatform)
+  processor/rule/actions_run_scope_integration_test.go:154:11: executor.setMetrics undefined (type *ActionExecutor has no field or method setMetrics)
+  processor/rule/actions_run_scope_integration_test.go:227:46: undefined: agvocab.RunOriginEntityID
+  processor/rule/actions_run_scope_integration_test.go:229:11: undefined: agvocab.RunOriginEntityID
+  processor/rule/actions_run_scope_integration_test.go:242:13: h.metrics.runAnchorSkippedTotal undefined (type *Metrics has no field or method runAnchorSkippedTotal)
+  processor/rule/actions_run_scope_integration_test.go:267:46: undefined: agvocab.RunOriginEntityID
+  processor/rule/actions_run_scope_integration_test.go:280:13: h.metrics.runAnchorSkippedTotal undefined (type *Metrics has no field or method runAnchorSkippedTotal)
+  FAIL	github.com/c360studio/semstreams/processor/rule [build failed]
+  FAIL
+  ```
+
+      Both are build failures, which is the honest RED for this slice: the six graph-ingest rows need
+      `JetStreamPort.Import` and the two metric reason constants, and the two rule rows need
+      `agvocab.RunOriginEntityID` and the executor's platform/metrics seams — none of which existed. A value-level
+      RED was impossible without first adding the surface the tests name.
 
 ## 3. Contract — `pkg/types` and `config`
 
@@ -351,12 +406,47 @@ and `agent.run.parent-entity-id`; no origin predicate), `:224-233` (`Mint(ctx, m
       ADR-076 d2.
       **Done:** `pkg/types/framework_identity_families.go` — `FrameworkIdentityFamily{Name, System, Domain, Type, InstanceBytes}` with `FixedBytes()` and `EntityID(org, platform, instance)` (fail-closed compose), the table (`rule-alert` 84, `rule-trigger` 86, `web-observation` 40 fixed bytes), `RuleAlertIdentityFamily()`/`RuleTriggerIdentityFamily()`/`WebObservationIdentityFamily()`, `LongestFrameworkIdentityFamily()`, `MaxAuthorityPairBytes()` = 256 − 86 = 170 computed, never a literal. `graph/events.go` and `processor/rule/graph_event_identity.go` compose from the table; `config/config.go` `validateAuthorityPair` rejects over-budget pairs naming `rule-trigger` and 170, then composes the binding family's identity under the pair by observation (which also refuses a dotted or leading-`-` org/id). Amends ADR-076 d2.
 
-- [ ] 3.8 Run origin linkage: declare `agvocab.RunOriginEntityID = "agent.run.origin-entity-id"` (`@id`) beside
+- [x] 3.8 Run origin linkage: declare `agvocab.RunOriginEntityID = "agent.run.origin-entity-id"` (`@id`) beside
       `LoopRunEntityID` (`vocabulary/agentic/predicates.go:502`); add `AgentRun.OriginEntityID` with lifecycle tag
       `predicate=agent.run.origin-entity-id` (`agentic/agentrun/agentrun.go:114-124`) as a birth predicate of the run
       contract; `agentrun.Mint` gains `originEntityID` and sets it at creation (`:224-233`); update the run projection
       contract and schema (`task schema:generate`).
-      **Slice B — not done in this PR** (the run-origin predicate is the #1096 mechanism and lands with 6.3).
+      **Done (slice B), with one measured deviation recorded.** `agvocab.RunOriginEntityID = "agent.run.origin-entity-id"`
+      is declared beside `LoopRunEntityID` (`vocabulary/agentic/predicates.go`) and registered in
+      `vocabulary/agentic/register.go`; `AgentRun.OriginEntityID` carries the lifecycle tag
+      `predicate=agent.run.origin-entity-id` and `agentrun.go`'s `init()` registers the predicate so
+      `lifecycle.RequireDeclaredPredicate` admits it; `Mint(ctx, mgr, org, platform, rootLoopID, originEntityID)`
+      sets it at creation for every run, local origin or imported. `task schema:generate` produced only the
+      `import` port-field additions (3 lines x 30 schema files) — `AgentRun` is not an operator-facing config type
+      and contributes no schema. **DEVIATION, measured, not implemented around:** this row and the design call the
+      predicate `@id`, and its object IS a canonical entity ID, but the stored triple carries no `@id` DATATYPE.
+      `pkg/lifecycle` has no write-side datatype channel — `graph_emit.go`'s `triple()` sets Subject, Predicate,
+      Object, Timestamp and Confidence, and `grep -rn Datatype pkg/lifecycle/` returns nothing — so a
+      lifecycle-projected birth predicate cannot carry one without new framework surface in `pkg/lifecycle` that no
+      task authorises. The design's own concrete mechanism (`lifecycle tag predicate=agent.run.origin-entity-id`) is
+      what shipped, and it matches its two siblings exactly: `agent.run.parent-entity-id` (`agentrun.go`) and the
+      anchor `agent.run.entity-id` (`actions.go` `stampRun`) are both emitted without a datatype today. Consequence
+      recorded in the migration note: `pkg/fusion`'s graph facet projects an edge only for a lens-declared predicate
+      or an explicit `@id`, so the origin link reads as a property fact there unless a lens declares it.
+      **Codex owner round (blocker 3, safety half) — `Mint` now fails closed on the origin.** Setting the predicate
+      is not the same as depending on it: the run entity ID derives from the loop's INSTANCE segment alone
+      (`org.platform.chain.agent.execution.<instance>`), so two loops that different deployments name with the same
+      instance derive ONE local run ID. `Mint` accepted an empty origin and, on `lifecycle.ErrAlreadyExists`,
+      returned the stored run without looking at its origin — so the second caller silently received the first
+      origin's run and its work was attributed to a stranger. Two guards, both over state this function already
+      holds: a non-empty `originEntityID` is required before `Create`, and on the already-exists path the STORED
+      `OriginEntityID` is compared with the requested one — the `mgr.Get` that path already performs, no new read,
+      no second party, no lookup. A mismatch returns a classified `ErrorInvalid`. **Legacy-empty-record policy,
+      defined:** a stored run whose origin is empty is REFUSED, not adopted — an empty value cannot establish that
+      the stored run is this caller's, and pre-v1 identity work starts downstreams on newly provisioned storage
+      rather than reading old state, so there is no record to migrate. This does NOT make the identity
+      collision-free; deriving it from the full origin is **#1168**, and the tests are named so they cannot be read
+      as claiming otherwise. The idempotence test's origin-less seed — the shape Codex named — is replaced by a
+      same-origin seed. `TestMint_TwoOriginsAtOneInstanceAreRefusedNotAliased` is the two-authority/same-instance
+      proof and also asserts the first run's stored origin is untouched; `TestMint_RefusesEmptyOrigin` asserts
+      nothing was created; `TestMint_LegacyOriginlessStoredRunIsRefused` pins the policy. Mutations, `cp` backup,
+      md5 `2a467c8a50ef38f5c1259edd5b022fd5` restored after each: deleting the stored-origin comparison fails the
+      two-authority and legacy tests; deleting the empty-origin refusal fails `TestMint_RefusesEmptyOrigin`.
 
 ## 4. Forced omissions — one per new parser/builder/mapper (commit GREEN first; restore by `cp` + `shasum`)
 
@@ -372,10 +462,10 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       BEFORE sha256 690ab162c909db961c0b9c4d7df60fce205c3b036ee69e92239fa641678e3711
       [applied] pkg/types/entity_id.go
       --- FAIL: TestEntityIDKeyOrderIsSystemBeforeDomain (0.00s)
-          entity_id_semantics_test.go:28: 
-          entity_id_semantics_test.go:29: 
-          entity_id_semantics_test.go:32: 
-          entity_id_semantics_test.go:33: 
+          entity_id_semantics_test.go:28:
+          entity_id_semantics_test.go:29:
+          entity_id_semantics_test.go:32:
+          entity_id_semantics_test.go:33:
       FAIL
       FAIL	github.com/c360studio/semstreams/pkg/types	0.290s
       FAIL
@@ -390,20 +480,50 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       BEFORE sha256 046239ae979aafbde12425d7aea0609641b7b658c65c6abe4f368a887c5f9381
       [applied] pkg/types/entity_domain_authority.go
       --- FAIL: TestEntityDomainAuthorityMirrorsPredicateAuthority (0.00s)
-          entity_domain_authority_test.go:34: 
-              	            				/Users/coby/Code/c360/semstreams-wt/claude/gh1095-entity-id-slice-a/pkg/types/entity_domain_authority_test.go:34
+          entity_domain_authority_test.go:34:
+                                                        /Users/coby/Code/c360/semstreams-wt/claude/gh1095-entity-id-slice-a/pkg/types/entity_domain_authority_test.go:34
       FAIL
       FAIL	github.com/c360studio/semstreams/pkg/types	0.242s
       FAIL
       AFTER  sha256 046239ae979aafbde12425d7aea0609641b7b658c65c6abe4f368a887c5f9381  restored=yes
       ```
 
-- [ ] 4.3 M3 graph-ingest gate: delete the `ValidateEntityIDAuthority` call on the fact lane →
+- [x] 4.3 M3 graph-ingest gate: delete the `ValidateEntityIDAuthority` call on the fact lane →
       `TestAuthorityGateRejectsForeignOnFactLane` MUST fail.
-      **Slice B — not done in this PR.**
+      **Done.** Both fact-lane calls were deleted — `prepareFactProjection`'s and `mergeEntityOnLane`'s backstop —
+      because deleting only one leaves the other holding the lane:
 
-- [ ] 4.4 M4 import lane: ignore the port's `import` flag → `TestImportLaneAcceptsForeignRejectsLocalClaim` MUST fail.
-      **Slice B — not done in this PR.**
+      ```text
+      ===== M3: processor/graph-ingest/component.go =====
+      BEFORE sha256 b0968b77728757215827edc3841f4998f5e9eb946b9eb7c7c57966fb2f632ac5
+      [applied] processor/graph-ingest/component.go
+      --- FAIL: TestAuthorityGateRejectsForeignOnFactLane (5.34s)
+          authority_gate_integration_test.go:162:
+                Error:      	Condition never satisfied
+                Messages:   	mutation_rejections{reason="authority_foreign"} must increment exactly once
+      FAIL
+      FAIL	github.com/c360studio/semstreams/processor/graph-ingest	6.193s
+      AFTER  sha256 b0968b77728757215827edc3841f4998f5e9eb946b9eb7c7c57966fb2f632ac5  restored=yes
+      ```
+
+- [x] 4.4 M4 import lane: ignore the port's `import` flag → `TestImportLaneAcceptsForeignRejectsLocalClaim` MUST fail.
+      **Done** (`importLane := stream.Import()` → `importLane := false`):
+
+      ```text
+      ===== M4: processor/graph-ingest/component.go =====
+      BEFORE sha256 b0968b77728757215827edc3841f4998f5e9eb946b9eb7c7c57966fb2f632ac5
+      [applied] processor/graph-ingest/component.go
+      WARN graph-ingest: entity authority rejected lane=import.entity.> reason=authority_foreign arrival=local segment_index=1
+      --- FAIL: TestImportLaneAcceptsForeignRejectsLocalClaim (5.36s)
+                Error:      	Condition never satisfied
+                Messages:   	entity "acme.dep2.src.git.commit.a1" never landed in ENTITY_STATES
+      FAIL
+      FAIL	github.com/c360studio/semstreams/processor/graph-ingest	6.171s
+      AFTER  sha256 b0968b77728757215827edc3841f4998f5e9eb946b9eb7c7c57966fb2f632ac5  restored=yes
+      ```
+
+      The WARN line is the discriminating half: with the flag ignored the declared import lane reports
+      `arrival=local`, which is exactly the mutation.
 
 - [x] 4.5 M5 `entityPartNames`: swap the two names back → `TestSegmentTokensResolveByName` MUST fail; delete the
       `IsValidEntityID` guard in `applyEntityPartsSubstitutions` → `TestSegmentTokensUnresolvedOnInvalidID` MUST fail.
@@ -419,7 +539,7 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       FAIL	github.com/c360studio/semstreams/processor/rule	0.402s
       FAIL
       AFTER  sha256 27bfa301d8ec4943333d44f1f68175a42ecb7cd66f18d256b74ee932738f9707  restored=yes
-      
+
       ===== M5b: processor/rule/entity_substitution.go =====
       BEFORE sha256 27bfa301d8ec4943333d44f1f68175a42ecb7cd66f18d256b74ee932738f9707
       [applied] processor/rule/entity_substitution.go
@@ -431,11 +551,52 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       AFTER  sha256 27bfa301d8ec4943333d44f1f68175a42ecb7cd66f18d256b74ee932738f9707  restored=yes
       ```
 
-- [ ] 4.6 M6a `actions.go` run-scope mint: restore `idParts[0], idParts[1]` → both 2.6 tests MUST fail (run minted under
+- [x] 4.6 M6a `actions.go` run-scope mint: restore `idParts[0], idParts[1]` → both 2.6 tests MUST fail (run minted under
       `foreign.dep9`). M6b: delete the foreign-authority skip before `stampRun` → `…WithoutForeignWrite` MUST fail (a
       captured `AddTriple` targets the imported subject). M6c: delete the `OriginEntityID` assignment in `Mint` → both
       2.6 tests MUST fail (the local linkage is missing).
-      **Slice B — not done in this PR.**
+      **Done, with one premise correction on M6a.** All three killed; M6a kills ONE test, not both, and the row's
+      prediction that it kills both is measurably wrong: on a LOCAL firing loop the read-back
+      `idParts[0], idParts[1]` and `deps.Platform` are the same two strings by construction, so no assertion can
+      separate them there. The imported case is where the read-back is observable, and that is the case that fails.
+
+      ```text
+      ===== M6a: processor/rule/actions.go =====
+      BEFORE sha256 ee4a36975218075df42aff56a3deeb65d5f43ccc9ba2c369dd7ecddb32f79747
+      [applied] processor/rule/actions.go
+      --- FAIL: TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite (0.54s)
+          actions_run_scope_integration_test.go:195 (via :226):
+                Error:      	Received unexpected error:
+                                kv: key not found
+      FAIL	github.com/c360studio/semstreams/processor/rule	1.373s
+      (TestRunScopeNewOnLocalLoopStampsAnchorAndOrigin passes — see the premise correction above)
+      AFTER  sha256 ee4a36975218075df42aff56a3deeb65d5f43ccc9ba2c369dd7ecddb32f79747  restored=yes
+
+      ===== M6b: processor/rule/actions.go =====
+      BEFORE sha256 ee4a36975218075df42aff56a3deeb65d5f43ccc9ba2c369dd7ecddb32f79747
+      [applied] processor/rule/actions.go
+      --- FAIL: TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite (0.54s)
+                Error:      	[]string{"foreign.dep9.agentic-loop.agent.execution.import1", "foreign.dep9.agentic-loop.agent.execution.import1"} should not contain "foreign.dep9.agentic-loop.agent.execution.import1"
+                Messages:   	no mutation request may target a foreign-authority subject, not even a rejected one
+      FAIL	github.com/c360studio/semstreams/processor/rule	1.370s
+      AFTER  sha256 ee4a36975218075df42aff56a3deeb65d5f43ccc9ba2c369dd7ecddb32f79747  restored=yes
+
+      ===== M6c: agentic/agentrun/agentrun.go =====
+      BEFORE sha256 b5958bac8f63b43b4a6fda8fa5e2144ddb298315696f761970caa3af20b2d665
+      [applied] agentic/agentrun/agentrun.go
+      --- FAIL: TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite (0.57s)
+                Error:      	Should be true
+                Messages:   	the local run must carry agent.run.origin-entity-id so the run->loop pointer never depends on writing the loop
+      --- FAIL: TestRunScopeNewOnLocalLoopStampsAnchorAndOrigin (0.38s)
+                Error:      	Should be true
+                Messages:   	a local origin gets the same predicate as an imported one
+      FAIL	github.com/c360studio/semstreams/processor/rule	1.437s
+      AFTER  sha256 b5958bac8f63b43b4a6fda8fa5e2144ddb298315696f761970caa3af20b2d665  restored=yes
+      ```
+
+      M6b's two captured subjects (rather than one) are the anchor pair, both of which the skip suppresses. The
+      third framework write to the firing entity — `rule.task.spawned` — is covered by the same skip and by the same
+      test; it was found by writing the test, not by this row.
 
 - [x] 4.7 M7 audit `authority_literal` rule: skip the `go-format-prefix` and `go-dotted-constant` surfaces →
       `TestAuditFlagsAuthorityLiteral` and `TestAuditFlagsFormatPrefixAuthorityLiteral` MUST fail.
@@ -463,13 +624,13 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       BEFORE sha256 690ab162c909db961c0b9c4d7df60fce205c3b036ee69e92239fa641678e3711
       [applied] pkg/types/entity_id.go
       --- FAIL: TestPrefixLevelsAreNamed (0.00s)
-          entity_id_semantics_test.go:43: 
-          entity_id_semantics_test.go:44: 
-          entity_id_semantics_test.go:45: 
-          entity_id_semantics_test.go:55: 
-          entity_id_semantics_test.go:55: 
-          entity_id_semantics_test.go:55: 
-          entity_id_semantics_test.go:64: 
+          entity_id_semantics_test.go:43:
+          entity_id_semantics_test.go:44:
+          entity_id_semantics_test.go:45:
+          entity_id_semantics_test.go:55:
+          entity_id_semantics_test.go:55:
+          entity_id_semantics_test.go:55:
+          entity_id_semantics_test.go:64:
       FAIL
       FAIL	github.com/c360studio/semstreams/pkg/types	0.242s
       FAIL
@@ -501,14 +662,14 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       FAIL	github.com/c360studio/semstreams/processor/graph-query [build failed]
       FAIL
       AFTER  sha256 d43df4ba99f77e86aba32380c5d2639b3708c4a913418b5a280f47aee2c831d9  restored=yes
-      
+
       ===== M10 (re-run, compiling mutant): processor/graph-query/summary.go =====
       BEFORE sha256 d43df4ba99f77e86aba32380c5d2639b3708c4a913418b5a280f47aee2c831d9
       [applied] processor/graph-query/summary.go
       FAIL	github.com/c360studio/semstreams/processor/graph-query [build failed]
       FAIL
       AFTER  sha256 d43df4ba99f77e86aba32380c5d2639b3708c4a913418b5a280f47aee2c831d9  restored=yes
-      
+
       ===== M10 (re-run 2, compiling mutant: raw segs[2..4] reader, parser import dropped): processor/graph-query/summary.go =====
       BEFORE sha256 d43df4ba99f77e86aba32380c5d2639b3708c4a913418b5a280f47aee2c831d9
       [applied] processor/graph-query/summary.go
@@ -547,7 +708,7 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       FAIL	github.com/c360studio/semstreams/graph/clustering [build failed]
       FAIL
       AFTER  sha256 f5a3683dd120e7021684df15b521f9e04ee4a6bd81653d187c52fdc72502f2db  restored=yes
-      
+
       ===== M12a (re-run, compiling mutant): graph/clustering/entityid_provider.go =====
       BEFORE sha256 f5a3683dd120e7021684df15b521f9e04ee4a6bd81653d187c52fdc72502f2db
       [applied] graph/clustering/entityid_provider.go
@@ -559,21 +720,49 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       FAIL	github.com/c360studio/semstreams/graph/clustering	0.372s
       FAIL
       AFTER  sha256 f5a3683dd120e7021684df15b521f9e04ee4a6bd81653d187c52fdc72502f2db  restored=yes
-      
+
       ===== M12b: graph/clustering/summarizer.go =====
       BEFORE sha256 dbf56af410378dd642b93c6231bb96ac50e754680f855f1690f7e5719d8816a8
       [applied] graph/clustering/summarizer.go
       --- FAIL: TestSummaryGroupsByNamedDomain (0.00s)
-          summarizer_test.go:354: 
-          summarizer_test.go:361: 
+          summarizer_test.go:354:
+          summarizer_test.go:361:
       FAIL
       FAIL	github.com/c360studio/semstreams/graph/clustering	0.353s
       FAIL
       AFTER  sha256 dbf56af410378dd642b93c6231bb96ac50e754680f855f1690f7e5719d8816a8  restored=yes
       ```
 
-- [ ] 4.13 M13 hierarchy foreign-skip: delete the authority check in `GetHierarchyTriples` → `TestHierarchySkipsForeignAuthority` MUST fail.
-      **Slice B — not done in this PR.**
+- [x] 4.13 M13 hierarchy foreign-skip: delete the authority check in `GetHierarchyTriples` → `TestHierarchySkipsForeignAuthority` MUST fail.
+      **Done, and this row's named killer is measurably the WRONG one — recorded rather than worked around.**
+      Deleting the check does NOT fail `TestHierarchySkipsForeignAuthority` (twice: once as this row wrote it, and
+      again after strengthening it with a second import sharing the type prefix so the sibling-edge path could fire).
+      Two production facts shadow it at the graph-ingest seam, both of them this change's own additions:
+      `createEntityWithReceipt` refuses every container birth under a peer's pair, so `GetHierarchyTriples` returns a
+      joined error; and the merge path DISCARDS the whole triple set on any error
+      (`component.go`, "Failed to get hierarchy triples"). The imported entity therefore carries no hierarchy triple
+      with or without the check. A test the neighbouring guard satisfies tests the neighbouring guard.
+
+      The discriminating test was added beside the code it guards —
+      `graph/inference.TestGetHierarchyTriplesSkipsForeignAuthority` — which is also the only place that covers the
+      case graph-ingest cannot: `NewHierarchyInference` is exported framework surface with no second layer behind it.
+      The strengthened integration row stays: it pins the OBSERVABLE contract end-to-end.
+
+      ```text
+      ===== M13: graph/inference/hierarchy.go =====
+      BEFORE sha256 4309ae20799134a8d15a44a532c595e62919abc5f6d603198839b4e20e6b436f
+      [applied] graph/inference/hierarchy.go
+      (attempt 1, TestHierarchySkipsForeignAuthority as written) ok  github.com/c360studio/semstreams/processor/graph-ingest  2.242s  -- NOT KILLED
+      (attempt 2, same test + a second import sharing the type prefix) ok  github.com/c360studio/semstreams/processor/graph-ingest  2.209s  -- NOT KILLED
+      (attempt 3, the discriminating unit test)
+      --- FAIL: TestGetHierarchyTriplesSkipsForeignAuthority (0.00s)
+          hierarchy_test.go:170: Should be empty, but was [{c360.dep9.sensor.document.temperature.sensor-001 hierarchy.type.member c360.dep9.sensor.document.temperature.group ...} {... hierarchy.system.member ...} {... hierarchy.domain.member ...}]
+                Messages:   	no membership or sibling triple may be minted for an imported entity
+          hierarchy_test.go:171: Should be empty, but was [0x3542639b6200 0x3542639b6280 0x3542639b6300]
+                Messages:   	no container entity may be born under a peer's authority
+          hierarchy_test.go:173: Should be empty, but was [{c360.dep9.sensor.document.temperature.group hierarchy.type.contains ...} {... hierarchy.system.contains ...} {... hierarchy.domain.contains ...}]
+      AFTER  sha256 4309ae20799134a8d15a44a532c595e62919abc5f6d603198839b4e20e6b436f  restored=yes
+      ```
 
 - [x] 4.14 M14 config-load bound: delete the `MaxAuthorityPairBytes` check → `TestConfigRejectsOversizedAuthorityPair` MUST fail.
       **Done.** M14 deletes the `validateAuthorityPair` call. M14b (bonus, O-2) needed a second attempt: the first deleted the `instance_id` probe at only ONE of the two raw-JSON loaders and the file-loading test still passed — an incomplete mutant, recorded; deleting the CALL at both sites kills it:
@@ -583,23 +772,23 @@ Each row: copy the file aside, delete the CALL (not the error check), run the na
       BEFORE sha256 ec9b3918d265c2bae4a78da79588cb1af77386f06c93402bd4b2d2c059a1619a
       [applied] config/config.go
       --- FAIL: TestConfigRejectsOversizedAuthorityPair (0.00s)
-          config_test.go:409: 
+          config_test.go:409:
       FAIL
       FAIL	github.com/c360studio/semstreams/config	0.304s
       FAIL
       AFTER  sha256 ec9b3918d265c2bae4a78da79588cb1af77386f06c93402bd4b2d2c059a1619a  restored=yes
-      
+
       ===== M14b: config/config.go =====
       BEFORE sha256 ec9b3918d265c2bae4a78da79588cb1af77386f06c93402bd4b2d2c059a1619a
       [applied] config/config.go
       ok  	github.com/c360studio/semstreams/config	1.312s
       AFTER  sha256 ec9b3918d265c2bae4a78da79588cb1af77386f06c93402bd4b2d2c059a1619a  restored=yes
-      
+
       ===== M14b (re-run, compiling mutant): config/config.go =====
       BEFORE sha256 ec9b3918d265c2bae4a78da79588cb1af77386f06c93402bd4b2d2c059a1619a
       [applied] config/config.go
       --- FAIL: TestConfigRejectsRemovedInstanceID (0.00s)
-          config_test.go:424: 
+          config_test.go:424:
       FAIL
       FAIL	github.com/c360studio/semstreams/config	0.303s
       FAIL
@@ -811,32 +1000,210 @@ package; both declarations are now on the payload registrations) and
 
 ## 6. Boundary enforcement, hierarchy, and #1096
 
-- [ ] 6.1 graph-ingest reads `deps.Platform` at construction (`CreateGraphIngest`, `component.go:644`); the structural
+- [x] 6.1 graph-ingest reads `deps.Platform` at construction (`CreateGraphIngest`, `component.go:644`); the structural
       gate calls `ValidateEntityIDAuthority` for the candidate SUBJECT identity only — never for `@id` objects, which
       keep structural validation; no stub is created and an absent object is permitted (`graph-ingest/spec.md:776-780`) — on the fact lane, every `graph.mutation.>` operation, and
       direct persistence, before KV I/O; metered once as `mutation_rejections{reason="authority_foreign"|"authority_claimed"}`;
       loud log names lane and segment index, never the identity. Mutation of an existing foreign subject from any
       non-import lane is rejected `foreign_authority` — an import is a read-only mirror (ruled O-12(a)); local facts
       about an import live on a local subject that references it.
-- [ ] 6.2 `JetStreamPort` gains `Import bool` (`"import"`); the port schema and `configs/graph-backend.json` (the
-      reference graph-backend composition; it composes graph-ingest) carry one declared import lane as the reference.
+      **Done.** `CreateGraphIngest` (`component.go:704`) reads `deps.Platform` into the component's `org`/`platform`
+      and REFUSES an empty pair (`:721`) — an absent authority has no honest reading, and config load already
+      requires `platform.org`/`platform.id`. The gate is `authorizeSubject` (`processor/graph-ingest/authority_gate.go:38`),
+      one call beside every seam that already validates an entity ID structurally — the enumeration, all ten:
+      `component.go:1743` (`prepareFactProjection`, the fact lane, carrying the arrival port's declared lane),
+      `:2064` (`mergeEntityOnLane`, the write chokepoint's backstop for direct callers), `:2221`
+      (`createEntityWithReceipt`, in-process births incl. hierarchy containers), `:2301` (`deleteEntityAtRevision`),
+      `:2442` (`addTripleLane`, hierarchy inverse edges), `:2581` (`addTriplesLane`, EVERY subject in a batch, not
+      just the synthetic root); and the four canonical handlers before any KV I/O —
+      `canonical_mutations.go:244` (create), `:307` (reconcile, before its fetch), `:383` (append, every triple
+      subject), `:474` (delete). `@id` OBJECTS are never passed to it. Metering is `recordAuthorityRejection`
+      (`authority_gate.go:66`): the mutation lane routes through `meteredMutation`'s one wrapper via
+      `authorityMetricReason`, and the fact lane meters in `processIngest` under the arrival subject — disjoint
+      paths, so exactly one increment per rejection. The WARN names lane, arrival lane and segment index and never
+      the identity. The `component.go:644` anchor this row cites is pre-#1109/#1130 and now reads `:704`.
+      **Codex owner round (finding 4) — the DIRECT lane was refusing invisibly, and is now metered.** The sentence
+      above was true of two lanes out of three: the five direct guards returned the classified error and recorded
+      nothing, so a framework component calling `CreateEntity` or `MergeEntity` in-process with a foreign subject was
+      refused correctly and silently — the operator's `mutation_rejections` panel and their log stream both read as
+      if nothing had been refused, which is the requirement's whole point. Implemented rather than amended: the
+      requirement covers direct persistence in the same breath as the other two lanes.
+      `authority_gate.go` adds `arrivalDirect = "direct"` — one bounded value in the label position the other lanes
+      fill with their arrival subject — and `recordDirectAuthorityRejection`, which routes to the same
+      `recordAuthorityRejection` the other two lanes use, so metered-exactly-once stays a property of the code.
+      Applied at all five direct guards (`component.go:2221`, `:2064`, `:2301`, `:2442`, `:2581`). Exactly-once
+      survives the two bodies the RPC lane shares: `handleCanonicalAppend` and `handleCanonicalDelete` authorize the
+      same subject and RETURN before entering `addTriplesLane`/`deleteEntityAtRevision`, and `handleCanonicalCreate`
+      writes through `entityBucket.Create` and never enters `createEntityWithReceipt`; the fact lane is the same
+      shape (`prepareFactProjection` gates and returns before `mergeEntityOnLane`).
+      `TestAuthorityGateMetersDirectPersistenceRejectionsOnEveryDirectSeam` drives the assembled component over all
+      five seams, asserting the delta on `{arrival="direct",reason="authority_foreign"}`, exactly one WARN per call,
+      and that no attribute carries the refused identity — the first assertion in this change of the "loud log"
+      half, which had no test on any lane. The log message is a named constant (`authorityRejectionLogMessage`) so
+      the test pins the production string. Mutations, `cp` backups, md5 `1bdf1efb1d8c8cb2df6b8f05890e96b5` restored
+      after each: deleting all five recording CALLS fails all five subtests; deleting only the batch-append body's
+      call fails only `batch_append_body`, so the enumeration discriminates seam by seam.
+- [x] 6.2 `JetStreamPort` gains `Import bool` (`"import"`), carried into the port schema; **no shipped configuration
+      declares an import lane** and the reference declaration lives in the migration note as a snippet instead. This
+      row originally required `configs/graph-backend.json` to carry one as the reference; review round 1 (MEDIUM-4)
+      ruled that wrong and the row is restated rather than left contradicting its own Done evidence — a lane is an
+      operator statement of trust, so the shipped composition must import nothing. Declaring the lane must also be
+      the ONLY knob it takes: composition validation derives "fed from outside the composition" from the
+      declaration, so an operator does not restate it as `external: true`.
       The two federation configs this row once contrasted against were deleted by PR #1130 (#1129).
-- [ ] 6.3 `processor/rule`: add a `platform` field to the action executor plumbed from `deps.Platform` at construction
+      **Done.** `component/port_jetstream.go:61` `Import bool` (`"import,omitempty"`); `StreamFacts.importLane` +
+      `StreamFacts.Import()` (`component/port_facts.go`); the field constraint declares it INPUT-only
+      (`port_codec.go`), deliberately WITHOUT `zeroIsOmitted` — that flag is numeric (it projects `Const: 0`), so on
+      an output port `import` is simply absent from the schema rather than pinned to a number. `task schema:generate`
+      adds it to 30 schemas, input direction only (verified: the sole occurrence in `schemas/graph-ingest.v1.json`
+      is under `ports/inputs/items/config/oneOf[2]`). `configs/graph-backend.json` initially carried the reference
+      `peer_import` port; **review round 1 (MEDIUM-4) removed it and the change is better for it.** An import lane is
+      an operator statement of TRUST, so shipping one enabled in the reference composition hands that decision to
+      whoever copies the file — and it contradicted this slice's own documented default, that a port saying nothing
+      imports nothing. No shipped config declares a lane now; the declaration is a snippet in
+      `docs/operations/migration-beta162-to-beta163.md` with its backing-stream requirement stated.
+      The operator-facing seam is covered where it actually lives — JSON — by
+      `TestJetStreamImportLaneDecodesFromOperatorJSON` (declared true / omitted / declared false) and
+      `TestJetStreamImportLaneIsRefusedOnAnOutputPort`, which is stronger than a shipped config: a Go struct literal
+      never exercises the decoder. The two shipped-config ledgers amended for the lane
+      (`internal/portgrammarcontrol`, `service/testdata/message_logger_subject_census.json`) were reverted with it.
+      **Latent defect surfaced and fixed:** `test/shipped_graph_mutation_ports_test.go` resolved graph-ingest INPUT
+      ports with `component.DirectionOutput`; harmless until a direction-scoped input field existed.
+      **Codex owner round (finding 5) — the documented one knob was not one knob, and this is FIXED IN CODE.**
+      The snippet sets `config.import` only, but `composition/analyze.go:71-78` suppressed the no-publisher orphan
+      from `PortDefinition.External` — a SIBLING of `config`, not a field inside it — so a lane declared exactly as
+      documented was still reported as an orphan by `validate <config>` and by boot analysis. Documenting a second
+      field would have been the wrong half of the adopter-seam rule: an import lane refuses any subject carrying this
+      deployment's own authority, so no in-graph publisher can legitimately feed it and "external" is ENTAILED by
+      "import", not an independent operator fact. `component/port_resolver.go` now derives it —
+      `External: def.External || feedsFromAPeerDeployment(facts, direction)` — reading the declaration off the
+      canonical facts projection (`PortFacts.Stream().Import()`) rather than asserting `JetStreamPort`, because
+      `internal/portgrammarcontrol` admits only `port_codec.go` and `port_facts.go` as homes for interpreting a
+      concrete port config. An operator's own `external: true` is untouched and it applies to inputs only.
+      Pinned by `TestValidateImportLaneIsExternallyFedWithoutASecondKnob`, whose control case is the same port with
+      `import` absent — still an orphan — so the test discriminates the derivation and not the orphan rule.
+      Mutation: `External: def.External,` (the derivation CALL deleted) → the import subtest FAILS
+      `orphaned_port findings = 1, want 0`; restored by `cp`, md5 `f2e74208f81669b70d1069ba9bd819fb`.
+- [x] 6.3 `processor/rule`: add a `platform` field to the action executor plumbed from `deps.Platform` at construction
       (the processor holds none today); `actions.go:1575-1583` mints from it; the firing entity remains the parent
       reference; delete the `SplitN` read-back. Before `stampRun` (`:1697-1700`) the action evaluates
       `semtypes.ValidateEntityIDAuthority(entityID, org, platform, false)`: when the firing loop is local the anchor pair
       is stamped as today; when it is a foreign-authority import BOTH anchor writes are skipped deliberately — no
       mutation request targets the foreign subject — and the skip is recorded as
-      `rule_run_anchor_skipped_total{reason="foreign_authority"}` with an Info log naming the rule; `agentrun.Mint`
+      `rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` (renamed in review round 1) with an Info
+      log naming the rule; `agentrun.Mint`
       receives the firing entity as `originEntityID` (3.8) in both cases. #1096 is complete only when 2.6 is GREEN and
       M6a–M6c are recorded.
-- [ ] 6.4 `graph/inference/hierarchy.go`: `GetHierarchyTriples` returns `nil, nil` for an entity whose positions 1–2
+      **Done, with the skip WIDER than this row specifies — a defect 2.6 found.** `ActionExecutor` gains unexported
+      `platform types.PlatformMeta` and `metrics *Metrics` (no new exported surface). `metrics` is wired from
+      `rp.metrics` by the unexported `setMetrics` in `processor.go`'s existing concrete-type block. `platform` is
+      NOT: it is a constructor parameter of `NewActionExecutorComplete`, for the reason recorded in the round-1
+      correction below, and there is no `setPlatform` — an earlier revision of this row asserted one, and
+      `grep -rn "setPlatform" --include='*.go' .` returns nothing.
+      `CreateRuleProcessor` (`factory.go:125`) now refuses an empty `deps.Platform` for the same reason graph-ingest
+      does. `actions.go:1760` mints from `e.platform`; the `strings.SplitN` read-back is deleted; the firing entity
+      is passed to `agentrun.Mint` as `originEntityID`. The guard is `foreignFiringEntity` (`actions.go:596`) with
+      `foreignFiringSkipRecorder` (`:637`) and the unconditional `stampRunAnchors` (`:667`).
+      **The row named two writes; there are THREE.** `rule.task.spawned`, the framework's own back-reference onto
+      the firing entity after publish, also reached the imported subject — a rejected request, which the requirement
+      forbids as explicitly as an accepted one ("no mutation request targets the foreign subject, not even a rejected
+      one"). It is now covered by the same guard. Metric consequence, first recorded as naming debt and then FIXED in
+      review round 1 (MEDIUM-1): the counter fires once per DISPATCH however many writes it covers. Two things were
+      wrong with the original `rule_run_anchor_skipped_total` — "per action execution" was inexact, because the
+      recorder is created inside `publishAgentOnce`, which runs once per `for_each` item; and the name was not merely
+      narrow but WRONG for `run_scope` `inherit`/`none`, where no anchor is in play and only `rule.task.spawned` is
+      skipped. Renamed `rule_foreign_firing_writes_skipped_total`, spec restated per-dispatch: free now (no
+      dashboard, no alert, no sister consumer) and a breaking series rename later.
+      **ROUND 4 fixed what that rename left half-done in the LOG.** The counter's per-dispatch latch also swallowed
+      the second log call, so the Info line named only the anchors and never `rule.task.spawned` — the write an
+      operator debugging `$entity.triple.rule.spawned_task` is sent looking for by the migration note.
+      `foreignFiringSkipRecorder` now returns `(record, flush)`: `record` accumulates and still increments the
+      counter once per dispatch; the deferred `flush` emits one line naming every declined write. The counted unit is
+      unchanged. Round 4 also corrected three comments refuted by their own files — `foreignFiringEntity`'s
+      "in-repo test-fixture condition" (`processor.go`'s no-NATS branch is a production site with a zero
+      `e.platform`, inert because both guarded writes need a mutator) and its claim that
+      `NewActionExecutorWithMutator` can hold a publisher (it cannot, and there is no publisher setter); and
+      `factory.go`'s absent-authority failure mode, which was stated backwards on a guard: `foreignFiringEntity`
+      short-circuits to `false`, judging every firing entity LOCAL, which is fail-OPEN.
+      **ROUND 2 (HIGH-1) corrected that round-1 restatement, which was itself wrong.** It read "an action declining
+      N imported entities MUST report N skips", making a false causal claim about `for_each`: `executePublishAgent`
+      passes the SAME `ExecutionContext` to every iteration and `publishAgentOnce` reads `entityID` from it, so the
+      firing entity is INVARIANT across the fan-out. N items on ONE import are N declined DISPATCHES for one
+      entity, and an operator reading the counter as "distinct peer entities declined" over-counts by the fan-out
+      factor. The counted unit is now stated everywhere as one (firing entity x `for_each` item). The claim was
+      also unobservable — `runScopeNewAction` carries no `ForEach`, so both 2.6 tests assert a single dispatch —
+      and is now pinned by `TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity` (3 items, 1 import, 3
+      increments), with a matching `#### Scenario` in the delta. Mutation-checked: moving the recorder's `recorded`
+      latch onto `ActionExecutor` (per-dispatch → per-action) fails the new test 1 != 3 while
+      `TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite` still passes.
+      ~~An executor with no platform answers `false` (cannot judge) rather than "everything is foreign".~~
+      **WITHDRAWN by the Codex owner round (blocker 2) — that answer was fail-OPEN and it is deleted.** Round 1
+      HIGH-1 corrected the reason the production path was safe: not the `CreateRuleProcessor` refusal, which guards
+      `deps.Platform` and not the hop into the executor, but the authority being a CONSTRUCTOR parameter of
+      `NewActionExecutorComplete`, pinned on both construction branches by
+      `TestIntegration_ProductionExecutorCarriesTheDeploymentAuthority`. What rounds 1, 2 and 4 each treated as a
+      DOC-COMMENT problem — rewriting `foreignFiringEntity`'s comment three times on the reasoning that no in-repo
+      production caller uses the convenience constructors — was a real hole, because `NewActionExecutorFull` is
+      EXPORTED: its caller is an adopter outside this repository who is in no review here, and it hands out both a
+      mutator and a publisher, which is everything either guarded write needs. Caller enumeration is not a property
+      of an exported symbol.
+      **Fixed both ways, so the state is UNFORGETTABLE rather than merely tested** (round 6 corrected the word: a
+      zero `PlatformMeta` compiles, and `TestPublishAgentThroughExportedFullConstructorSkipsForeignSpawnedTask`
+      represents that exact state and asserts the fail-closed answer — a parameter makes the authority impossible to
+      omit, not impossible to express). (a) `NewActionExecutorFull`
+      and `NewActionExecutorWithMutator` — the two other constructors that can hold a `tripleMutator`, which both
+      guarded writes require — now take `platform types.PlatformMeta` as a final parameter, matching
+      `NewActionExecutorComplete`. **This is a BREAKING change to two exported symbols**, recorded in the migration
+      note. `NewActionExecutor` takes none and cannot write: it holds neither mutator nor publisher and there is no
+      setter for either. (b) The `if e.platform.Org == "" { return false }` short-circuit is DELETED, so
+      `ValidateEntityIDAuthority` decides: under an empty pair every parseable six-part ID differs at position 1 and
+      reads as foreign, which is fail-CLOSED and is also the truthful reason label. `foreignFiringEntity` and
+      `factory.go`'s comment are re-synced to the new mechanism.
+      `TestPublishAgentThroughExportedFullConstructorSkipsForeignSpawnedTask` covers the exported constructor path
+      over three cases — local written, foreign skipped and counted, absent-authority skipped and counted.
+      Mutations, `cp` backup, md5 `5958e8e1f1639e0bd0fabc0d11f322de` restored after each: restoring the deleted
+      short-circuit fails `absent_authority_reads_every_entity_as_foreign`; making `NewActionExecutorFull` accept the
+      authority and drop it (`_ = platform`) fails
+      `local_firing_entity_under_the_supplied_authority_is_written`, which is the parameter itself doing the work.
+      **ROUND 6 (HIGH-1) closed the seam all of the above missed, and it was a REGRESSION this PR introduced.**
+      Guarding the three executor constructors and `CreateRuleProcessor` left the PROCESSOR constructor open:
+      `NewProcessor`/`NewProcessorWithMetrics` (`processor.go:260`/`:265`) are exported, take no authority and never
+      set `platform`, and `SetPlatform` (`:366`) is an optional setter documented as "called by the component
+      factory" — convention, not a guard. `initializeStateTracker` built `NewActionExecutorComplete` from
+      `rp.platform` unchecked, so `rule.NewProcessor(client, cfg)` + `Start` produced a mutator-and-publisher
+      executor under a zero pair. Deleting the short-circuit therefore converted that seam's WORKING
+      `rule.task.spawned` write (under `run_scope=inherit|none`; `run_scope=new` was already broken there because
+      `TryChainExecutionEntityID` rejects an empty org) into a silent skip. `initializeStateTracker` now refuses
+      first — before any NATS call, before the RULE_STATE bucket — with the same `errs.WrapInvalid` shape
+      `CreateRuleProcessor` uses, scoped to the NATS branch because the no-NATS branch builds `NewActionExecutor`,
+      which cannot write. **BREAKING for a direct `NewProcessor` caller** (`!` subject, migration-note paragraph); no
+      in-repo binary is affected. `TestInitializeStateTrackerRefusesAbsentDeploymentAuthority` (3 cases) plus the
+      negative-space `TestInitializeStateTrackerPastTheAuthorityCheckFailsElsewhere`; SEVENTEEN NATS-backed
+      construction sites across EIGHT files were swept to the established `SetPlatform` idiom (`git show 3301f61f
+      -- '*_test.go' | grep -c '^+.*SetPlatform(component.PlatformMeta'` → 17). FOUR of those sites were reached by
+      tests that FAILED without the authority — SEVEN failing tests: four `TestIntegration_CronRule_*`,
+      `TestEntityWatcher_DeletedEntityCleansRuleState`, `TestStatefulEvaluator_Integration`, and
+      `TestFullStack_ResetSurvivesEvictedRow` in `processor/gated-dag`. The other THIRTEEN sites never reach the
+      guard at all: `foreignFiringEntity` has one production caller (`actions.go` `publishAgentOnce`), reachable
+      only from `case ActionTypePublishAgent`, and no swept file configures a `publish_agent` action. Measured
+      across BOTH packages — `go test -tags=integration ./processor/rule/... ./processor/gated-dag/...`; a run
+      scoped to `./processor/rule/...` cannot see the eighth file this same sentence counts. Three mutants, all
+      killed, in `conformance.md`'s round-6 table.
+- [x] 6.4 `graph/inference/hierarchy.go`: `GetHierarchyTriples` returns `nil, nil` for an entity whose positions 1–2
       differ from the deployment authority (no container, no membership, no inverse sibling edge, no warning) — the
       pair reaches `NewHierarchyInference` (which carries none today, `hierarchy.go:109-114`;
       `processor/graph-ingest/component.go:1371-1376`) through `HierarchyConfig` from the `deps.Platform` read 6.1
       adds; the skip is accepted by ruling on every lane;
       containers use the reserved padding tokens (`IsReservedInstanceToken`); a container whose ID would exceed 256 bytes returns the coded
       structural error instead of a padded overflow.
+      **Done.** `HierarchyConfig` gains `Org`/`Platform`, both `json:"-"` — framework-owned, set only by
+      graph-ingest's `initHierarchyInference` from the same `deps.Platform` read 6.1 adds, never operator config;
+      `GetHierarchyTriples` (`graph/inference/hierarchy.go:217`) returns `nil, nil` for a foreign entity, with no
+      warning, on every lane. An ENABLED inference holding NO authority pair returns a classified error instead:
+      answering "everything is foreign" would silently disable the feature forever, which is the failure shape this
+      change exists to remove. graph-ingest cannot reach that branch — its factory refuses first. Container padding
+      and the 256-byte rejection are unchanged from slice A. See 4.13 for the measured shadowing at the ingest seam
+      and where the discriminating test lives.
 
 ## 7. Gates and landing (AGENTS.md:63-68 order)
 
@@ -853,14 +1220,80 @@ package; both declarations are now on the payload registrations) and
 > on slice A's PR, and a reviewer should not ask for one. Do not re-derive this: `task openspec:queue` reporting
 > `34/51` with 17 open is the expected state at slice A's merge, not an unfinished change.
 
-- [ ] 7.1 Focused gates, results recorded verbatim: `task lint`; `go test -race -count=1 ./...`;
+- [x] 7.1 Focused gates, results recorded verbatim: `task lint`; `go test -race -count=1 ./...`;
       `scripts/run-integration-tests.sh` (what CI runs); `go test ./test/contract/...`; `task entity-id:audit`;
       `task schema:generate && git diff --exit-code schemas/ specs/`;
       `openspec validate entity-id-segment-semantics --strict --no-interactive`.
       **SLICE A RUN — recorded, row intentionally open.** Every gate above was run green on slice A's landing head;
       the per-round results are in `conformance.md`. The row stays open because slice B changes the same paths and
       must re-run it for the completed change, exactly as 7.2 does.
-- [ ] 7.2 Covering e2e tiers on the landing branch, one at a time on the shared host, results recorded verbatim:
+
+      **SLICE B RUN — 2026-08-28, all green. Row stays open until review + archive.**
+
+      | Gate | Result |
+      |---|---|
+      | `task lint` (`go vet`, `go fmt`, revive, fixed-port guard, request guard) | clean, no output |
+      | `go test -race -count=1 ./...` | exit 0, 153 packages `ok`, 0 `FAIL` |
+      | `scripts/run-integration-tests.sh` (what CI runs) | exit 0, 153 packages `ok`. Reached green on the FIFTH run: four rounds of harness authority declarations that the untagged suite could not see (`pkg/lifecycle`, `processor/agentic-loop`, `processor/gated-dag`, five graph-ingest integration fixtures, `processor/rule`'s revision-claim harness) |
+      | `go test ./test/contract/...` | `ok` |
+      | `task entity-id:audit` | `entity ID audit passed: 1319 structured candidates across 1 roots`, 0 findings. Baseline re-measured at `3f3133a6` in a scratch worktree: 1312 — the +7 are this slice's own test literals, and none trips a rule |
+      | `task schema:generate && git diff --exit-code schemas/ specs/` | clean. The generated delta is `import` on the jetstream INPUT port only, 30 schema files x 3 lines; verified the sole occurrence in `schemas/graph-ingest.v1.json` is under `ports/inputs/items/config/oneOf[2]` |
+      | `openspec validate --all --strict --no-interactive` | `Totals: 53 passed, 0 failed (53 items)` |
+
+      **RE-RUN after merging `origin/main` at `b060511f` (slice C), all green, serialized on an idle host:**
+      `task lint` exit 0 · `go test -race -count=1 ./...` exit 0, **153 `ok`, 0 `FAIL`** ·
+      `scripts/run-integration-tests.sh` exit 0, **153 `ok`, 0 `FAIL`** · `go test ./test/contract/...` `ok` ·
+      `task entity-id:audit` `entity ID audit passed: 1304 structured candidates across 1 roots`, 0 findings
+      (1319 → 1304: slice C deleted the `org_id`/`platform` literals it retired) ·
+      `task schema:generate && git diff --exit-code schemas/ specs/` clean ·
+      `openspec validate --all --strict` `Totals: 53 passed, 0 failed`.
+
+      **RE-RUN after review round 2 and after merging `origin/main` at `fb0cb71d`, all green, serialized on a host
+      verified idle first (no `go test`/`task`/compose process, no container):**
+
+      | Gate | Result |
+      |---|---|
+      | `go mod tidy -diff` (new required Lint step on `main` as of `fb0cb71d`) | exit 0 |
+      | `task lint` | exit 0, no findings; `go fmt` left the tree unmodified |
+      | `go test -race -count=1 ./...` | exit 0, **153 `ok`, 0 `FAIL`** |
+      | `go test -tags=integration -race -count=1 -p 2 ./...` (what CI runs) | exit 0, **153 `ok`, 0 `FAIL`**; `processor/rule` 58.129s, `processor/graph-ingest` 33.069s |
+      | `go test ./test/contract/...` | `ok`, 2.504s |
+      | `task entity-id:audit` | `entity ID audit passed: 1305 structured candidates across 1 roots`, 0 findings. Baseline re-measured at `b5b106e4` in a scratch worktree: **1303** — the +2 are exactly this round's two never-persisted probe consts (`authorityForeignAbsentID`, `authorityLocalAbsentID`), and neither trips a rule |
+      | `task schema:generate && git status --short schemas/ specs/` | clean, no drift |
+      | `openspec validate --all --strict --no-interactive` | `Totals: 53 passed, 0 failed (53 items)` |
+      | `openspec validate entity-id-segment-semantics --strict` | `Change 'entity-id-segment-semantics' is valid` |
+
+      **RE-RUN after review round 4, all green, serialized on a host verified idle first (load 1.39, no `go test`
+      or `task` process, `docker ps -q` returned nothing):**
+
+      | Gate | Result |
+      |---|---|
+      | `go mod tidy -diff` | exit 0 |
+      | `task lint` | exit 0, no findings; `go fmt` left the tree unmodified |
+      | `go test -race -count=1 ./...` | exit 0, **153 `ok`, 0 `FAIL`** |
+      | `go test -tags=integration -race -count=1 -p 2 ./...` (what CI runs) | exit 0, **153 `ok`, 0 `FAIL`**; `processor/rule` 41.415s, `processor/graph-ingest` 30.495s |
+      | `go test ./test/contract/...` | `ok`, 2.654s |
+      | `task entity-id:audit` | `entity ID audit passed: 1306 structured candidates across 1 roots`, 0 findings. Baseline re-measured at `5c345833` in a scratch worktree: **1305**. The +1 is measured, not inferred: a JSON-corpus diff (`-format json`) attributes it to the single new `ExecutionContext{EntityID: runScopeImportedLoop}` in `TestForeignFiringSkipLogNamesEveryDeclinedWrite`; every other delta in the corpus is a line-number shift of an existing literal |
+      | `task schema:generate && git status --short schemas/ specs/` | clean, no drift |
+      | `openspec validate --all --strict --no-interactive` | `Totals: 53 passed, 0 failed (53 items)` |
+      | `openspec validate entity-id-segment-semantics --strict` | `Change 'entity-id-segment-semantics' is valid` |
+
+      **RE-RUN after the Codex owner round, all green, serialized on a host verified idle first (load 2.89,
+      no `go test`/`task` process, `docker ps -q` returned nothing, 53Gi free):**
+
+      | Gate | Result |
+      |---|---|
+      | `go mod tidy -diff` | exit 0 |
+      | `task lint` | exit 0, no findings; `go fmt` left the tree unmodified |
+      | `go test -race -count=1 ./...` | exit 0, **153 `ok`, 0 `FAIL`** |
+      | `go test -tags=integration -race -count=1 -p 2 ./...` (what CI runs) | exit 0, **153 `ok`, 0 `FAIL`**; `processor/rule` 42.267s, `processor/graph-ingest` 32.247s |
+      | `go test ./test/contract/...` | `ok`, 2.646s |
+      | `task entity-id:audit` | `entity ID audit passed: 1312 structured candidates across 1 roots`, 0 findings. **1307 → 1312, attributed by a JSON corpus diff (`-format json`) against `9eb191e3` in a scratch worktree, not inferred:** 6 rows added and 1 removed, every one of them a `_test.go` literal this round wrote. Added — `agentic/agentrun/agentrun_test.go` `go-assignment:originEntityID` `acme.ops.agentic-loop.agent.execution.run-already-exists` (the same-origin seed that replaces the origin-less one); `authority_gate_integration_test.go` `go-field:EntityState.ID` and `go-triple-subject`, both `acme.dep2.src.git.commit.a1` (the direct-lane test's foreign fixture); `actions_test.go` `go-call:semantictest.EntityID` `acme.ops.domain.system.type.001` x2 and `foreign.dep9.domain.system.type.001`. Removed — `actions_test.go` `org.platform.domain.system.type.001`, replaced because that test's firing entity now has to carry the executor's own authority. The `TestMint_*` origins produce no candidate at all: they are built by concatenation (`"peerone.dep1.agentic-loop.agent.execution." + sharedInstance`), which the extractor does not resolve — the same stated limit as a partial-literal mint (conformance D3). Two line-pinned annotations in `actions_test.go` were re-anchored (`line=2125`→`2128`, `line=2823`→`2945`) because this round's insertions moved their targets |
+      | `task schema:generate && git status --short schemas/ specs/` | clean, no drift |
+      | `openspec validate --all --strict` | `Totals: 53 passed, 0 failed (53 items)` |
+      | `git diff --check <merge-base>` | silent — see the round's NIT-7 row in `conformance.md` |
+
+- [x] 7.2 Covering e2e tiers on the landing branch, one at a time on the shared host, results recorded verbatim:
       `task e2e:core`; `task e2e:structural`; `task e2e:statistical`; `task e2e:semantic`; `task e2e:agentic`;
       `task e2e:lessons`; `task e2e:lifecycle`; `task e2e:ops`; `task e2e:crud-tools`; `task e2e:research-graph`.
       Excluded with reason recorded: `slow-consumer`, `throughput`, `openai-responses`, `deep-research` (no position
@@ -900,7 +1333,102 @@ package; both declarations are now on the payload registrations) and
       sites — the two above plus `test/e2e/scenarios/agentic/scenario.go`, already fixed — and two deliberate
       non-sites: `config/config_test.go:419` (the O-2 rejection fixture, which must keep `instance_id`) and
       `processor/agentic-tools/decide_test.go` (an arbitrary self-consistent unit-test platform value).
-- [ ] 7.3 Implementation review by `semstreams-reviewer`; verdict and every finding's disposition recorded in
+      **SLICE B RUN 1 — 2026-08-28, before slice C. Seven green, three red for one pre-existing cause. Kept because
+      it is the evidence that produced the slice-C escalation; superseded by RUN 2 below.**
+
+      | Tier | exit | evidence |
+      |---|---|---|
+      | `e2e:core` | 0 | `graph_roundtrip_trace_entries:2`. RED first: the shared graph canary minted `c360.e2e.graph.core.canary.*` while `configs/protocol-flow.json` declares `c360`/`streamkit-pure`, so the boundary refused it. The canary now carries the deployment's pair, stated by the caller (`cmd/e2e/main.go`), and the probe REFUSES to run with an empty pair rather than mint a foreign one |
+      | `e2e:agentic` | 0 | `graph_loop_triples:10`, `graph_model_triples:6`, `tool_executions:1`, `governance_verdicts_total:1`, `durable_tool_replay_executor_invocations:1` — the loop/model/run path this slice rewrites, under `c360`/`semstreams-agentic` |
+      | `e2e:lessons` | 0 | `assertions_run=3` |
+      | `e2e:lifecycle` | 0 | `rule-driven-transition_duration_ms:159` — UDP → graph-ingest → entity-watcher → rule → `Manager.Transition` → MISSIONS KV → gateway, now through the authority gate |
+      | `e2e:ops` | 0 | `assertions_run=9`, `promote-lesson`, `verify-diagnoses-via-http`, `wait-for-loop-completion` |
+      | `e2e:crud-tools` | 0 | `tool_executions:4`, `hotreload_pickup_latency_ms:224`, `fire_every_n_triggered_delta:9` |
+      | `e2e:research-graph` | 0 | both fixture modes; `loops_completed_total:2`, `orchestration_triples_total:17`/`21`. RED first, same class as core: the seed builder hardcoded `c360.rg-e2e.…` while the config declares `research-graph-e2e`. Slice A renamed the field (`PlatformInstance` → `PlatformID`) and left this literal; it now composes from `DefaultConfig`'s pair, and the unit fixtures route through one helper so they cannot drift again |
+      | `e2e:structural` | **RED** | `entity stabilization failed: got 0, expected 74` |
+      | `e2e:statistical` | not run | same cause as structural — same two components, same mismatch |
+      | `e2e:semantic` | not run | same cause |
+
+      **The three RED tiers have ONE cause and it is not this slice's code.** `examples/processors/{iot_sensor,document}`
+      take the entity-ID authority from their own REQUIRED component config (`org_id`/`platform` = `c360`/`logistics`)
+      while the configs that compose them declare `platform.id` = `semstreams-e2e-structural` / `semstreams-statistical` /
+      `semstreams-kitchen-sink-ml`; their payload types carry `OrgID`/`Platform` on the wire as well. ADR-102 d2 retires
+      both meanings. Slice A's sweep did not reach them; slice B's gate makes the mismatch fatal instead of silent.
+      Correcting it moves position 2 of every entity those processors mint, and `c360.logistics.*` is hardcoded in 237
+      places across 32 files with three different replacement values — a slice with its own RED capture, not a tail.
+      Full write-up and the two orderings for the owner are in `conformance.md` §ESCALATION.
+
+      Excluded with reason recorded: `slow-consumer`, `throughput`, `openai-responses`, `deep-research` (no position
+      literal), unchanged from slice A.
+
+      **SLICE B RUN 2 — 2026-08-28, after merging `origin/main` at `b060511f` (slice C, #1149). ALL TEN GREEN**, one
+      at a time on a host verified idle before each run (no `go test`/`task`/compose process, no container, no
+      integration lock — #1120's `freePort` race is contention-triggered, so a concurrent gate could manufacture a
+      red belonging to neither change). `main` was confirmed green at `b060511f` first (run 33229302012: Lint, Test,
+      Build, Schema Validation, CI Status Check all success) rather than merged on trust.
+
+      | Tier | exit | evidence |
+      |---|---|---|
+      | `e2e:structural` | **0** | `entities_processed_at_validation:174`, `hierarchy_container_count:46` (min 32), `inverse_symmetry_valid:1`, `authority_hierarchy_provenance_triples:836`, `rule_firings:6`, `canonical_create_hierarchy_births:0`, `relationship_stub_births:0`, `temporal_observed_time_validated:1`, `validation_errors:0` |
+      | `e2e:statistical` | **0** | `variant:statistical`, `hierarchy_container_count:46`, `entity_count:125`, `validation_errors:0` |
+      | `e2e:semantic` | **0** | 48 stages; `communities_total:18`, `embedding_resolved_total:87`, `gateway_shape_probes_checked:3`, `hierarchy_container_count:46`, `validation_errors:0`, and the discriminating value — `graphrag_local_community_id:c360.semstreams-kitchen-sink-ml.document.content.group.container`, a container minted under the DEPLOYMENT's authority where slice A read `c360.logistics.…`. That is the gate and slice C composing on the wire: hierarchy mints only under the deployment's own pair |
+      | `e2e:core` | 0 | re-run (I changed `graph_roundtrip{,_scenario}.go` and `cmd/e2e/main.go`); `graph_roundtrip_trace_entries:2` |
+      | `e2e:agentic` | 0 | re-run as cheap insurance on the tier covering slice B's #1096 mechanism; `graph_loop_triples:10`, `graph_model_triples:6`, `tool_executions:1` |
+      | `e2e:lessons`, `e2e:lifecycle`, `e2e:ops`, `e2e:crud-tools`, `e2e:research-graph` | 0 (RUN 1) | **judged unaffected, not skipped.** Three checks: no file under their scenario directories is in `git diff --name-only be6b2072 HEAD`; their configs (`agentic.json`, `lifecycle-flow.json`, `research-graph-e2e.json`, `flows/*`) compose none of the three example processors slice C rewrote; and the only non-example production files slice C touched — `processor/agentic-tools/executors/graph_query.go`, `processor/graph-ingest/query.go`, `vocabulary/predicates.go` — are doc-comment and tool-description string edits with no behavioural change (verified by reading the diff hunks) |
+
+      **Three tiers went from red to green, and the red moved twice before it cleared** — each move a real defect of
+      the same class, found only by re-running rather than by assuming slice C had covered everything:
+      1. `entity stabilization failed: got 0, expected 74` → **fixed by slice C**; ingest now stabilizes in 12ms at 174 entities.
+      2. `validate-canonical-create-no-hierarchy … entity.create rejected` → `tiered_structural.go` minted `c360.e2e.…` through the canonical RPC. Slice C's sweep targeted `c360.logistics`, so this literal was outside it.
+      3. `test-temporal-observed-time … entity.create rejected` → a third site, `c360.platform.e2e.eventtime.observation.001`, a function-level `const`.
+
+      After (2) I stopped fixing instance-by-instance and enumerated: every string literal in non-test
+      `test/e2e/**` shaped like the start of a six-part ID, grouped by its first two positions. That found (3).
+
+      **CORRECTION (review round 1, MEDIUM-3).** I then claimed that enumeration proved "the only remaining non-tier
+      literals are the two `validate_batch_read.go` absent-ID probes". That claim is REFUTED and the reviewer is
+      right. Survivors under a literal authority include `crud-tools/scenario.go:570,672` — which writes **nine
+      entities** — `ops/scenario.go:59-61` (three more, seeded at `:473`), and `lifecycle/scenario.go:364`.
+
+      The class I actually closed is **"fixtures that mint THROUGH graph-ingest"**, not "six-part-shaped literals in
+      e2e code". Every survivor writes AROUND the boundary — `s.nats.PutKV` straight into a bucket
+      (`crud-tools:692` → the probe bucket, `ops:473` → `ENTITY_STATES` itself, `lifecycle` →
+      `injectLifecyclePoison` against the authority bucket) — so the gate never sees them, which is precisely why
+      those three tiers are green. A grep for a literal shape cannot distinguish the two classes; only asking "does
+      this reach graph-ingest?" can, and that is the question I should have enumerated on.
+
+      The `PutKV` fixtures are NOT chased here (coordinator's direction) and are filed as coverage debt in
+      **gh#1161**: they are test fixtures writing around a boundary they are not asserting, so nothing regresses
+      today, but a fixture that bypasses the gate cannot notice if the gate stops working. Round 2 (MEDIUM-2) found
+      that "filed" had been asserted with no issue behind it — the prose WAS the record — and that the `ops` fixture
+      is the sharp case: it seeds foreign-authority entities straight into `ENTITY_STATES`, manufacturing exactly
+      the state ADR-102 d5 exists to prevent.
+
+      **AFTER REVIEW ROUND 2 — no tier re-run, and the reason is measured, not assumed.** Round 2's production
+      diff is comment-only: `git diff b5b106e4 HEAD -- processor/rule/actions.go processor/rule/metrics.go`
+      filtered to non-comment, non-blank changed lines returns NOTHING. The two new tests are both
+      `//go:build integration` and run in the integration gate above. The remaining changes are the spec delta,
+      `conformance.md`, this file, and `docs/operations/migration-beta162-to-beta163.md`. No tier exercises a path
+      whose behaviour moved, so RUN 2's ten green tiers stand for the round-2 head.
+
+      **AFTER THE CODEX OWNER ROUND — three tiers RE-RUN, because this round's diff is not comment-only.** It
+      changes `component/port_resolver.go`, which every port of every component resolves through at boot; the five
+      direct-persistence guards in graph-ingest; the rule executor's foreign-firing decision; and `agentrun.Mint`.
+      The round's commit is marked BREAKING, so the house rule requires a covering tier green before it lands.
+      Run one at a time on an idle host, `task e2e:check-ports` clean first:
+
+      | Tier | Exit | Evidence |
+      |---|---|---|
+      | `e2e:core` | 0 | `graph_roundtrip_trace_entries:2` — the boot path with the derived `External`; every component's ports resolve through the changed resolver, so a regression there would refuse to compose |
+      | `e2e:agentic` | 0 | 45.2s; `graph_loop_triples:10`, `graph_model_triples:6`, `tool_executions:1`, `governance_verdicts_total:1`, `durable_tool_replay_executor_invocations:1` — the loop/run path through the rewritten `agentrun.Mint` origin guards |
+      | `e2e:structural` | 0 | Every value RUN 2 recorded for this tier is unchanged — `entities_processed_at_validation:174`, `hierarchy_container_count:46` (min 32), `inverse_symmetry_valid:1`, `authority_hierarchy_provenance_triples:836`, `rule_firings:6`, `canonical_create_hierarchy_births:0`, `relationship_stub_births:0`, `temporal_observed_time_validated:1`, `validation_errors:0` — which is the point: the direct-lane metering adds a record beside a refusal and changes no verdict |
+
+      The seven remaining tiers were not re-run. `e2e:statistical`/`e2e:semantic` exercise the same graph-ingest
+      and hierarchy paths `e2e:structural` covers, one inference tier further out; `e2e:lessons`, `e2e:lifecycle`,
+      `e2e:ops`, `e2e:crud-tools` and `e2e:research-graph` were green at round 4 and this round's diff touches no
+      path they exercise that the three above do not.
+
+- [x] 7.3 Implementation review by `semstreams-reviewer`; verdict and every finding's disposition recorded in
       `conformance.md`.
       **Round 1:** verdict CHANGES REQUESTED at `5f66ce37` (0 BLOCKING, 3 HIGH, 7 MEDIUM, 4 NIT); every finding's
       disposition, the one scoped deviation, and the stated residue are in `conformance.md` §"Implementation-review
@@ -930,7 +1458,28 @@ package; both declarations are now on the payload registrations) and
       **Round 3** at `8e3411c8` (1 BLOCKING, 2 HIGH, 3 MEDIUM, 3 NIT): the owner then ruled a second time on the
       same day — drop the overlap reporting and the authority type entirely — which dissolved the BLOCKING and
       HIGH-1. Dispositions for every round are in `conformance.md`. Re-review is outstanding.
-- [ ] 7.4 Owner-run cross-agent round where the owner asks for it; fixes and re-review recorded in `conformance.md`.
+      **The rounds above are SLICE A's** (PR #1101 lineage). Slice B's own rounds, on PR #1148:
+      **Slice B round 1:** CHANGES REQUESTED at `b6b99f5f` (0 BLOCKING, 3 HIGH, 6 MEDIUM, 3 NIT). All four findings
+      slice B carried in were confirmed; the gap was tests for slice B's own fail-closed guards — the reviewer ran
+      nine mutations and four were NOT KILLED. Dispositions in `conformance.md` §"Slice B implementation review —
+      round 1".
+      **Slice B round 2:** CHANGES REQUESTED at `b5b106e4` (0 BLOCKING, 1 HIGH, 3 MEDIUM, 1 NIT). Items A and B of
+      the round passed fully — all four round-1 mutants now die by their own named tests, the HIGH-1 mutation no
+      longer compiles, both construction branches are killed independently, no caller was lost. Every remaining
+      finding was in the prose/spec layer, and **two of the five (HIGH-1, MEDIUM-3) were defects the round-1 FIXES
+      introduced**, which is the round's carry-forward: a remedy is new code and needs the original diff's
+      adversarial pass. Dispositions and the round-2 mutation evidence are in `conformance.md` §"Slice B
+      implementation review — round 2". Re-review of round 2 is outstanding.
+      **Slice B round 3:** APPROVED at `5c345833` (0 BLOCKING, 0 HIGH).
+      **Slice B round 4:** artifact-accuracy corrections raised against that same approved commit — 0 BLOCKING,
+      0 HIGH, and every item an artifact claiming more than the tree supports. Two sat in the spec delta, which
+      archives as current truth: a fan-out scenario asserting an invariance its named test did not check, and an
+      ordering scenario claiming "no KV I/O" from evidence that only shows which input decides the verdict. Round 3's
+      fix for round 2's NIT reproduced the same defect in a new scenario, which is the round's carry-forward: re-read
+      a new artifact against the code it describes the way you would review someone else's. Dispositions, the three
+      mutation transcripts and one recorded under-powered mutant are in `conformance.md` §"Slice B implementation
+      review — round 4". Re-review of round 4 is outstanding.
+- [x] 7.4 Owner-run cross-agent round where the owner asks for it; fixes and re-review recorded in `conformance.md`.
 - [ ] 7.5 `openspec archive entity-id-segment-semantics` + spec sync as the final content commit; narrow reviewer
       check of the archive/spec sync recorded.
 - [ ] 7.6 Undraft; PR body carries `implemented-by`, the per-sister migration list, the two values that leave the

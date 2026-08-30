@@ -50,6 +50,15 @@ type GraphRoundTripProbe struct {
 	graphqlURL string
 	httpClient *http.Client
 	timeout    time.Duration
+	// authority is positions 1-2 of the canary this probe mints — the DEPLOYMENT
+	// it is driving, spelled `org.platform`. Since ADR-102 d5 the graph refuses
+	// any subject outside its own authority, so a canary carrying anything but
+	// the running stack's `platform.org`.`platform.id` is rejected at the
+	// boundary rather than written. The caller states which stack it is probing;
+	// it is the one fact the probe cannot observe from the outside. For the
+	// three tiers the value comes from config.TierAuthority, which owns the
+	// mapping and re-derives it from the compose profiles (#1149).
+	authority string
 }
 
 // NewGraphRoundTripProbe builds the shared graph canary used by core and every
@@ -57,7 +66,7 @@ type GraphRoundTripProbe struct {
 func NewGraphRoundTripProbe(
 	nats *client.NATSValidationClient,
 	msgLogger *client.MessageLoggerClient,
-	graphqlURL string,
+	graphqlURL, authority string,
 ) *GraphRoundTripProbe {
 	return &GraphRoundTripProbe{
 		nats:       nats,
@@ -65,6 +74,7 @@ func NewGraphRoundTripProbe(
 		graphqlURL: strings.TrimRight(graphqlURL, "/"),
 		httpClient: &http.Client{Timeout: 3 * time.Second},
 		timeout:    graphRoundTripTimeout,
+		authority:  authority,
 	}
 }
 
@@ -80,7 +90,15 @@ func (p *GraphRoundTripProbe) Run(ctx context.Context, result *Result) error {
 	runCtx, cancel := context.WithTimeout(traceCtx, p.timeout)
 	defer cancel()
 
-	entityID := "c360.e2e.graph.core.canary." + rootTrace.TraceID[:12]
+	// The canary carries the DEPLOYMENT's own authority. A pair that disagrees
+	// with the running stack's config is refused by the graph boundary, which is
+	// the intended behaviour — so state the disagreement here rather than let it
+	// surface as an opaque "invalid entity ID contract input".
+	if p.authority == "" {
+		return fmt.Errorf("graph round-trip probe requires the deployment authority " +
+			"(org.platform of the stack under test); a canary minted under any other pair is refused")
+	}
+	entityID := p.authority + ".graph.core.canary." + rootTrace.TraceID[:12]
 	before := "graph-canary-before-" + rootTrace.TraceID
 	after := "graph-canary-after-" + rootTrace.TraceID
 	requestPrefix := "graph-canary-" + rootTrace.TraceID
