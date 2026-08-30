@@ -90,6 +90,12 @@ jobs:
         # exercises positive matches + suppression marker.
         run: bash scripts/lint-test-ports_fixture_test.sh
 
+      - name: Inventory-verify guard — line-pin drift detection matrix test
+        # Verifies scripts/inventory-verify.sh reports OK/MOVED/AMBIGUOUS/
+        # DRIFT/MALFORMED/BASE-unknown the way it claims to, and stays
+        # silent-safe (explicit "no pins found") on a broken inventory.
+        run: bash scripts/inventory-verify_fixture_test.sh
+
       - name: Substrate-flake guard — no fixed-port net.Listen in test files
         # gh#220 Subclass 2 — fixed-port literals in *_test.go collide
         # under parallel test execution. Single source of truth:

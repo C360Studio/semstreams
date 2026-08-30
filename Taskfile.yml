@@ -98,6 +98,16 @@ tasks:
     cmds:
       - go run ./cmd/entity-id-audit .
 
+  inventory:verify:
+    desc: Re-check every line-pinned entry of an inventory file after commits and list the pinned files to re-read
+    cmds:
+      - scripts/inventory-verify.sh {{.CLI_ARGS}}
+
+  inventory:verify:test:
+    desc: Verify the inventory-verify reporter catches the drift shapes it claims to
+    cmds:
+      - bash scripts/inventory-verify_fixture_test.sh
+
   predicate:test-audit:
     desc: Audit predicate candidates in Go tests and structured testdata with exact negative classifications
     cmds:
