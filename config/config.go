@@ -785,19 +785,41 @@ func (c *Config) GetPlatform() string {
 	return c.Platform.ID
 }
 
+// mintedSuffixBytes is what the framework's entropy suffix costs the authority
+// pair: one separator plus six lowercase hex bytes (ADR-104). It is reserved at
+// configuration load rather than checked after the mint, because by then the
+// suffixed identifier has been durably Created and ADR-102 d7 forbids rewriting
+// a minted authority — a pair discovered to be too long at that point could
+// never boot again.
+const mintedSuffixBytes = len("-") + 6
+
+// maxDeclarableAuthorityPairBytes is the budget for a pair as anyone declares
+// or records it: the family-table budget less the suffix the framework will
+// mint onto platform.id.
+func maxDeclarableAuthorityPairBytes() int {
+	return semtypes.MaxAuthorityPairBytes() - mintedSuffixBytes
+}
+
 // validateAuthorityPair bounds platform.org + platform.id so every framework
 // identity family fits under the canonical 256-byte entity-ID bound (ADR-102
-// amends ADR-076 d2; ruled O-14). The budget is derived from the framework's
-// own family table, never configured by the operator, and the second check is
-// by observation rather than arithmetic: the binding family's identity is
-// composed under the pair and must validate, which also refuses an org or id
-// that is not one canonical entity-ID segment.
+// amends ADR-076 d2; ruled O-14) once the ADR-104 entropy suffix is minted onto
+// platform.id. The budget is derived from the framework's own family table,
+// never configured by the operator, and the second check is by observation
+// rather than arithmetic: the binding family's identity is composed under the
+// pair and must validate, which also refuses an org or id that is not one
+// canonical entity-ID segment.
+//
+// It is the ONE rule for every authority pair the framework accepts — the
+// configuration document's, an adopted platform_identity record's, and the
+// effective pair after minting — so no path can admit a pair another path
+// rejects.
 func validateAuthorityPair(org, id string) error {
 	binding := semtypes.LongestFrameworkIdentityFamily()
-	if pair := len(org) + len(id); pair > semtypes.MaxAuthorityPairBytes() {
+	if pair := len(org) + len(id); pair > maxDeclarableAuthorityPairBytes() {
 		return fmt.Errorf(
-			"platform.org + platform.id is %d bytes; the authority pair may not exceed %d bytes so that the %s identity family (%d fixed bytes) fits the %d-byte entity-ID bound",
-			pair, semtypes.MaxAuthorityPairBytes(), binding.Name, binding.FixedBytes(), semtypes.MaxEntityIDBytes,
+			"platform.org + platform.id is %d bytes; the authority pair may not exceed %d bytes — the %d-byte budget the %s identity family (%d fixed bytes) leaves under the %d-byte entity-ID bound, less the %d bytes of the entropy suffix the framework mints onto platform.id on first boot (ADR-104)",
+			pair, maxDeclarableAuthorityPairBytes(), semtypes.MaxAuthorityPairBytes(),
+			binding.Name, binding.FixedBytes(), semtypes.MaxEntityIDBytes, mintedSuffixBytes,
 		)
 	}
 	if _, err := binding.EntityID(org, id, strings.Repeat("0", binding.InstanceBytes)); err != nil {

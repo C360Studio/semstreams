@@ -59,6 +59,11 @@ func TestConfigManager_Subscriptions(t *testing.T) {
 	// Create a test config
 	cfg := &Config{
 		Version: "1.0.0",
+		Platform: PlatformConfig{
+			Org:  "c360",
+			ID:   "test-platform",
+			Type: "test",
+		},
 		Services: types.ServiceConfigs{
 			"metrics": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"port": 9090}`)},
 		},
@@ -151,6 +156,9 @@ func TestConfigManager_KVUpdates(t *testing.T) {
 	// Push initial config to KV before starting watcher
 	err = cm.PushToKV(ctx)
 	require.NoError(t, err)
+	// A bucket that already holds configuration must also hold its identity
+	// record, or Start refuses it as predating identity minting (ADR-104).
+	seedDeclaredIdentity(t, ctx, cm)
 
 	// Start Manager
 	// This will detect existing KV and sync from it
@@ -349,6 +357,9 @@ func TestConfigManager_ModelRegistryKVUpdate(t *testing.T) {
 
 	err = cm.PushToKV(ctx)
 	require.NoError(t, err)
+	// A bucket that already holds configuration must also hold its identity
+	// record, or Start refuses it as predating identity minting (ADR-104).
+	seedDeclaredIdentity(t, ctx, cm)
 
 	err = cm.Start(ctx)
 	require.NoError(t, err)
@@ -442,6 +453,9 @@ func TestConfigManager_WatchModelRegistry(t *testing.T) {
 	defer cancel()
 
 	require.NoError(t, cm.PushToKV(ctx))
+	// A bucket that already holds configuration must also hold its identity
+	// record, or Start refuses it as predating identity minting (ADR-104).
+	seedDeclaredIdentity(t, ctx, cm)
 	require.NoError(t, cm.Start(ctx))
 	defer cm.Stop(5 * time.Second)
 

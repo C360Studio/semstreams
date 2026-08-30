@@ -113,7 +113,11 @@ func TestIntegrationProductionBootstrapObservability(t *testing.T) {
 		_, _, err = bootstrapobservability.StartConfigManager(
 			canceledCtx, bootstrapIntegrationConfig(testNATS.URL), testNATS.Client, phase.ConfigManager,
 		)
-		require.ErrorContains(t, err, "start config manager: failed to create any watchers")
+		// The canceled context now fails at the first bucket read — identity is
+		// established before watchers are created (ADR-104). What this subtest
+		// pins is the boot-failure SHAPE below, not which step failed first.
+		require.ErrorContains(t, err, "start config manager: ")
+		require.ErrorContains(t, err, "context canceled")
 
 		records := drainJSONRecords(t, writer.records)
 		var failures []map[string]any
@@ -262,6 +266,12 @@ func seedEffectiveForwarderConfig(
 	require.NoError(t, err)
 	putKVJSON(t, ctx, bucket, "version", "2.0.0")
 	putKVJSON(t, ctx, bucket, "platform", platform)
+	// A bucket that already holds configuration must also hold its identity
+	// record, or Start refuses it as predating identity minting (ADR-104).
+	// id == stem is the operator-provisioned, unsuffixed form.
+	putKVJSON(t, ctx, bucket, "platform_identity", map[string]string{
+		"org": platform.Org, "stem": platform.ID, "id": platform.ID,
+	})
 	putKVJSON(t, ctx, bucket, "services.log-forwarder", types.ServiceConfig{
 		Enabled: true,
 		Config:  json.RawMessage(`{"min_level":"WARN","exclude_sources":["kv-excluded"]}`),

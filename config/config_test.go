@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/types"
 )
 
@@ -387,29 +388,55 @@ func TestLoader_ExampleConfig(t *testing.T) {
 	assert.True(t, wsOutput.Enabled)
 }
 
+// writeAndLoadAuthorityPair loads a minimal configuration declaring the given
+// authority pair through the production loader with validation enabled.
+func writeAndLoadAuthorityPair(t *testing.T, org, id string) error {
+	t.Helper()
+	configFile := filepath.Join(t.TempDir(), "config.json")
+	body := `{"platform": {"org": "` + org + `", "id": "` + id + `", "type": "vessel"}}`
+	require.NoError(t, os.WriteFile(configFile, []byte(body), 0o600))
+	loader := NewLoader()
+	loader.EnableValidation(true)
+	_, err := loader.LoadFile(configFile)
+	return err
+}
+
 // TestConfigRejectsOversizedAuthorityPair pins the configuration-load bound on
 // the authority pair (ADR-102 amends ADR-076 d2, O-14): len(org)+len(id) may
 // not exceed the budget derived from the longest fixed-suffix framework family
-// — 170 bytes while the rule trigger family binds — and the error names both.
+// — 170 bytes while the rule trigger family binds — LESS the seven bytes of the
+// entropy suffix the framework mints onto platform.id (ADR-104), so 163 bytes
+// is the declarable pair. The error names the family, the budget, and the
+// measured pair.
 func TestConfigRejectsOversizedAuthorityPair(t *testing.T) {
-	writeAndLoad := func(t *testing.T, org, id string) error {
-		t.Helper()
-		configFile := filepath.Join(t.TempDir(), "config.json")
-		body := `{"platform": {"org": "` + org + `", "id": "` + id + `", "type": "vessel"}}`
-		require.NoError(t, os.WriteFile(configFile, []byte(body), 0o600))
-		loader := NewLoader()
-		loader.EnableValidation(true)
-		_, err := loader.LoadFile(configFile)
-		return err
-	}
-	org := strings.Repeat("o", 85)
-	require.NoError(t, writeAndLoad(t, org, strings.Repeat("p", 85)), "170 bytes is the budget, not over it")
+	org := strings.Repeat("o", 82)
+	require.NoError(t, writeAndLoadAuthorityPair(t, org, strings.Repeat("p", 81)),
+		"163 bytes is the declarable budget, not over it")
 
-	err := writeAndLoad(t, org, strings.Repeat("p", 86))
-	require.Error(t, err, "171 bytes must not load")
+	err := writeAndLoadAuthorityPair(t, org, strings.Repeat("p", 82))
+	require.Error(t, err, "164 bytes must not load")
 	assert.Contains(t, err.Error(), "170")
 	assert.Contains(t, err.Error(), "rule-trigger")
-	assert.Contains(t, err.Error(), "171")
+	assert.Contains(t, err.Error(), "164")
+}
+
+// TestConfigRejectsPairThatOnlyFitsUnsuffixed pins ADR-104 decision 5 and the
+// third collision the revision round found: a pair that fits the 170-byte
+// family budget while unsuffixed, but not once the framework mints seven bytes
+// onto platform.id, must be refused at LOAD. Refusing it later is unrepairable
+// — the suffixed identifier has by then been durably Created, and ADR-102 d7
+// forbids rewriting a minted authority.
+func TestConfigRejectsPairThatOnlyFitsUnsuffixed(t *testing.T) {
+	budget := semtypes.MaxAuthorityPairBytes()
+	org := strings.Repeat("o", 60)
+	// Exactly the family budget unsuffixed; seven bytes over it once minted.
+	id := strings.Repeat("p", budget-len(org))
+	require.Equal(t, budget, len(org)+len(id))
+
+	err := writeAndLoadAuthorityPair(t, org, id)
+	require.Error(t, err, "a pair that only fits unsuffixed must not load")
+	assert.Contains(t, err.Error(), "suffix",
+		"the refusal must name the minted suffix as the reason the pair does not fit")
 }
 
 // TestConfigRejectsRemovedInstanceID pins O-2: `platform.instance_id` left

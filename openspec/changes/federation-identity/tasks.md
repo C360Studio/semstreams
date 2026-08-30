@@ -24,10 +24,10 @@ in `docs/proposals/gh1168-federation-identity-pins.md`; inventory
 
 ## 2. Baseline capture — write the named tests first
 
-- [ ] 2.1 `config/config_test.go`: `TestConfigRejectsOversizedAuthorityPair` (now 164 bytes, and 163 accepted),
+- [x] 2.1 `config/config_test.go`: `TestConfigRejectsOversizedAuthorityPair` (now 164 bytes, and 163 accepted),
       `TestConfigRejectsPairThatOnlyFitsUnsuffixed` (a pair that fits the 170-byte family budget but not once the
       seven-byte suffix is reserved). Both assert the error names the binding family and the reserve.
-- [ ] 2.2 `config/manager_identity_integration_test.go` (integration, real NATS):
+- [x] 2.2 `config/manager_identity_integration_test.go` (integration, real NATS):
       `TestConfigManagerFirstBootMintsPlatformIdentity` (record carries exactly `org`/`stem`/`id`; `id` is the stem
       plus `-` plus six lowercase hex; the effective `platform.id` is that value; the pushed `platform` key carries
       it; the boot is still treated as a first boot),
@@ -42,22 +42,24 @@ in `docs/proposals/gh1168-federation-identity-pins.md`; inventory
       Start fails naming the pre-identity cause, and no `platform_identity` key exists afterwards),
       `TestVersionArbitrationNeverOverwritesPlatformIdentity`,
       `TestKVPlatformKeyIsAMirrorNotASource` (an external `platform` write does not change the running authority).
-- [ ] 2.3 Baseline capture, verbatim, filtered to build errors and `--- FAIL` lines.
+- [x] 2.3 Baseline capture, verbatim, filtered to build errors and `--- FAIL` lines. 2.1's two tests failed
+      "An error is expected but got nil" (164 bytes loaded; the unsuffixed-only pair loaded); 2.2's file did not
+      compile — `undefined: platformIdentityRecord`, `undefined: platformIdentityKVKey`.
 
 ## 3. Contract — `config`
 
-- [ ] 3.1 `config/config.go`: `validateAuthorityPair` reserves the seven bytes of the minted suffix
+- [x] 3.1 `config/config.go`: `validateAuthorityPair` reserves the seven bytes of the minted suffix
       (`mintedSuffixBytes`) against `semtypes.MaxAuthorityPairBytes()` and names the reserve in the error. One rule
       for the document's pair, an adopted record's, and the effective pair — no second spelling, no caller-supplied
       budget.
-- [ ] 3.2 `config/manager.go`: add `platformIdentityRecord{Org, Stem, ID}` and the `platform_identity` key
+- [x] 3.2 `config/manager.go`: add `platformIdentityRecord{Org, Stem, ID}` and the `platform_identity` key
       constant; add `establishPlatformIdentity(ctx)` called first in `Start(ctx)`, taking ONE `kvStore.Keys(ctx)`
       read and branching adopt / mint+`Create` / refuse-pre-identity-bucket per the design §3 table; return the
       first-boot answer from that same read, counting keys other than `platform_identity`. Mint is `crypto/rand`
       3 bytes → 6 lowercase hex. `ErrKVKeyExists` re-reads and adopts. The effective identifier is applied through
       `SafeConfig.Mutate`, which re-validates the pair. Every KV operation uses the Start context
       (`manager.go:73`'s constructor root is untouched and stays recorded debt).
-- [ ] 3.3 `config/manager.go`: delete `hasKVConfig` (its only caller is replaced by 3.2) and delete `updateConfig`'s
+- [x] 3.3 `config/manager.go`: delete `hasKVConfig` (its only caller is replaced by 3.2) and delete `updateConfig`'s
       `case "platform"` arm so the KV `platform` key is a published mirror the running configuration never adopts;
       `PushToKV` keeps writing it. Neither `PushToKV` nor `syncFromKV` writes or applies `platform_identity`.
 

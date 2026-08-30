@@ -493,6 +493,9 @@ func TestConfigManagerStartupVersionArbitration(t *testing.T) {
 				Enabled: true,
 				Config:  json.RawMessage(`{"source":"kv"}`),
 			})
+			// A bucket that already holds configuration must also hold its
+			// identity record (ADR-104); arbitration is what is under test here.
+			seedDeclaredIdentity(t, ctx, manager)
 
 			require.NoError(t, manager.Start(ctx))
 			defer manager.Stop(5 * time.Second)
@@ -540,6 +543,7 @@ func TestConfigManagerKVSelectionReplacesOnlyServices(t *testing.T) {
 	putConfigValue(t, ctx, manager, "components.kv-component", types.ComponentConfig{
 		Type: "output", Name: "kv-component", Enabled: true,
 	})
+	seedDeclaredIdentity(t, ctx, manager)
 
 	require.NoError(t, manager.Start(ctx))
 	defer manager.Stop(5 * time.Second)
@@ -565,6 +569,12 @@ func putConfigValue(t *testing.T, ctx context.Context, manager *Manager, key str
 // boot silently adopted the first's components (and could panic creating a
 // foreign one). The manager must fail startup before adopting or mutating a
 // bucket whose platform identity differs from the local file's.
+//
+// Since ADR-104 the refusal comes one branch EARLIER and from a stronger fact:
+// the first app's boot minted and recorded platform_identity, and the second
+// app's adopt check compares against that record rather than against the
+// mutable `platform` config key. That is what lets #1188 retire the config-key
+// guard without reopening gh#459.
 func TestConfigManager_RejectsForeignPlatformIdentityAtStart(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
 	ctx, cancel := context.WithCancel(context.Background())
@@ -606,8 +616,8 @@ func TestConfigManager_RejectsForeignPlatformIdentityAtStart(t *testing.T) {
 	require.NoError(t, err)
 	err = mgrB.Start(ctx)
 	require.ErrorContains(t, err, "config bucket platform identity mismatch")
-	require.ErrorContains(t, err, `local org="localorg" platform="local-app" environment=""`)
-	require.ErrorContains(t, err, `stored org="foreignorg" platform="foreign-app" environment=""`)
+	require.ErrorContains(t, err, `local org="localorg" platform="local-app"`)
+	require.ErrorContains(t, err, `recorded org="foreignorg" stem="foreign-app"`)
 	require.ErrorContains(t, err, `shared bucket "semstreams_config" belongs to another platform`)
 
 	got := mgrB.GetConfig().Get()
