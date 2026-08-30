@@ -21,7 +21,7 @@ func comm(id string, level int, members ...string) *clustering.Community {
 // stage runs in, whose positions 1-2 are configs/semantic.json's platform.org
 // / platform.id (ADR-102 d2).
 func eid(recordID string) string {
-	return config.TierEntityID(config.VariantSemantic, "work.maintenance.completed."+recordID)
+	return config.TierStemEntityID(config.VariantSemantic, "work.maintenance.completed."+recordID)
 }
 
 func TestLastSegment(t *testing.T) {
@@ -30,8 +30,8 @@ func TestLastSegment(t *testing.T) {
 		want string
 	}{
 		{eid("maint-003"), "maint-003"},
-		{config.TierEntityID(config.VariantSemantic, "document.content.shipping.doc-shipping-001"), "doc-shipping-001"},
-		{config.TierEntityID(config.VariantSemantic, "record.observation.high.obs-001"), "obs-001"},
+		{config.TierStemEntityID(config.VariantSemantic, "document.content.shipping.doc-shipping-001"), "doc-shipping-001"},
+		{config.TierStemEntityID(config.VariantSemantic, "record.observation.high.obs-001"), "obs-001"},
 		{"no-dots-here", "no-dots-here"},
 		{"", ""},
 	}

@@ -88,21 +88,23 @@ with a matching `md5 -q`. Verbatim failure lines below.
 
 ## 5. Sweep — spec, docs, e2e, configs, sisters' notes
 
-- [ ] 5.1 `docs/proposals/gh1095-entity-id-segment-semantics-design.md`: correct the collision claim by an appended
+- [x] 5.1 `docs/proposals/gh1095-entity-id-segment-semantics-design.md`: correct the collision claim by an appended
       note, not a rewrite (item 3 of the issue; former task 5.2).
-- [ ] 5.2 e2e observes rather than predicts: `test/e2e/config` reads `semstreams_config/platform_identity`;
-      `TestTierAuthorityMatchesShippedConfigs` / `TestCoreAuthorityMatchesShippedConfig` become **stem** checks;
-      `cmd/e2e/main.go` canary and `cmd/e2e-semstreams` `--lifecycle-seed` compose under the observed pair;
-      `docker/compose/lifecycle.yml:62`; `test/e2e/scenarios/{lessons/scenario.go,throughput/query_load.go,tiered.go}`.
-- [ ] 5.3 e2e stages in the core scenario: `validate-minted-authority` (the record's `id` is the stem plus six hex;
+- [x] 5.2 e2e observes rather than predicts: `test/e2e/config.EffectiveAuthority` reads
+      `semstreams_config/platform_identity` and cross-checks the declared stem; `TierAuthority`/`CoreAuthority`/
+      `TierEntityID` became `TierAuthorityStem`/`CoreAuthorityStem`/`TierStemEntityID` so a name cannot claim to be
+      an authority it is not; the tiered scenario, the graph round-trip probe, lessons, throughput, and lifecycle all
+      resolve at run time; `--lifecycle-seed` now takes the last FOUR positions and the binary composes the pair
+      (`docker/compose/lifecycle.yml`).
+- [x] 5.3 e2e stages in the core scenario: `validate-minted-authority` (the record's `id` is the stem plus six hex;
       the canary is minted under the observed pair) and `validate-pre-identity-bucket-refusal` (seed `platform` and
       `version` with no record; the boot refuses naming that cause and creates no record).
-- [ ] 5.4 `task schema:generate`; `git diff --exit-code schemas/ specs/`.
-- [ ] 5.5 Migration note: the federation-identity section of `docs/operations/migration-beta162-to-beta163.md`
+- [x] 5.4 `task schema:generate`; `git diff --exit-code schemas/ specs/`.
+- [x] 5.5 Migration note: the federation-identity section of `docs/operations/migration-beta162-to-beta163.md`
       (re-cut with this change; amend to what shipped).
 - [ ] 5.6 `docs/adr/104-unique-platform-authority.md` to Accepted on the owner's word; `docs/adr/README.md` if it
       indexes ADRs.
-- [ ] 5.7 Author `docs/proposals/gh1168-federation-identity-pins.md` (O-11) and keep it green.
+- [x] 5.7 Author `docs/proposals/gh1168-federation-identity-pins.md` (O-11) and keep it green.
 
 ## 6. Gates and landing
 

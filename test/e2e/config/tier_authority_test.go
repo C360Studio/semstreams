@@ -22,15 +22,17 @@ const composeFile = "docker/compose/tiered.yml"
 // --config argument, and that config's platform.org / platform.id — and
 // requires the table to equal what it finds.
 //
-// It exists because the alternative is a fixture predicting a value the
-// deployment owns. Every hardcoded entity ID in the tiered scenarios is built
-// on TierAuthority; if an operator renames a tier's platform.id, this unit
-// test fails in a second instead of the tier failing with "entity not found"
-// after ninety.
+// It pins the STEM, not the authority: since ADR-104 the running deployment
+// mints platform.id plus an entropy suffix, and fixtures read that pair from
+// semstreams_config/platform_identity (EffectiveAuthority). This test is what
+// keeps the stem honest, so that observation's cross-check — "the stack I am
+// driving is the configuration I named" — means something. If an operator
+// renames a tier's platform.id, this unit test fails in a second instead of the
+// tier failing with "entity not found" after ninety.
 func TestTierAuthorityMatchesShippedConfigs(t *testing.T) {
 	profileConfig := composeProfileConfigs(t)
 
-	for variant, want := range tierAuthority {
+	for variant, want := range tierAuthorityStem {
 		t.Run(variant, func(t *testing.T) {
 			configPath, ok := profileConfig[variant]
 			if !ok {
@@ -49,7 +51,7 @@ func TestTierAuthorityMatchesShippedConfigs(t *testing.T) {
 // TestCoreAuthorityMatchesShippedConfig is TestTierAuthorityMatchesShippedConfigs
 // for the core stack, whose compose document declares no profiles: it reads the
 // --config argument out of docker/compose/e2e.yml directly and requires
-// CoreAuthority to equal that config's platform.org.platform.id.
+// CoreAuthorityStem to equal that config's platform.org.platform.id.
 func TestCoreAuthorityMatchesShippedConfig(t *testing.T) {
 	const coreComposeFile = "docker/compose/e2e.yml"
 	data, err := os.ReadFile(filepath.Join(repoRoot, coreComposeFile))
@@ -61,8 +63,8 @@ func TestCoreAuthorityMatchesShippedConfig(t *testing.T) {
 		t.Fatalf("no --config argument found in %s; the regex or the compose shape changed", coreComposeFile)
 	}
 	org, id := platformIdentity(t, filepath.Join(repoRoot, match[1]))
-	if got := org + "." + id; got != CoreAuthority {
-		t.Errorf("core boots %s with platform %q, but CoreAuthority says %q", match[1], got, CoreAuthority)
+	if got := org + "." + id; got != CoreAuthorityStem {
+		t.Errorf("core boots %s with platform %q, but CoreAuthorityStem says %q", match[1], got, CoreAuthorityStem)
 	}
 }
 
@@ -74,18 +76,20 @@ func TestTierAuthorityRejectsUnknownVariant(t *testing.T) {
 			t.Fatal("TierAuthority returned for an unregistered variant instead of panicking")
 		}
 	}()
-	_ = TierAuthority("no-such-variant")
+	_ = TierAuthorityStem("no-such-variant")
 }
 
-// TestTierEntityIDComposesUnderTheTierAuthority pins the composition helper.
-func TestTierEntityIDComposesUnderTheTierAuthority(t *testing.T) {
-	got := TierEntityID(VariantStructural, "sensor.environmental.temperature.temp-sensor-001")
+// TestTierStemEntityIDComposesUnderTheTierStem pins the composition helper. It
+// composes under the DECLARED stem and is for shape assertions only; an ID the
+// running stack would recognise carries the minted suffix.
+func TestTierStemEntityIDComposesUnderTheTierStem(t *testing.T) {
+	got := TierStemEntityID(VariantStructural, "sensor.environmental.temperature.temp-sensor-001")
 	want := "c360.semstreams-e2e-structural.sensor.environmental.temperature.temp-sensor-001"
 	if got != want {
-		t.Errorf("TierEntityID = %q, want %q", got, want)
+		t.Errorf("TierStemEntityID = %q, want %q", got, want)
 	}
 	if parts := strings.Split(got, "."); len(parts) != 6 {
-		t.Errorf("TierEntityID produced %d positions, want the canonical 6: %q", len(parts), got)
+		t.Errorf("TierStemEntityID produced %d positions, want the canonical 6: %q", len(parts), got)
 	}
 }
 

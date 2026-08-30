@@ -275,6 +275,24 @@ name literal.
 | content hash | lessons (UUIDv5 over content incl. loop IDs), web observations (sha256-16 url), ADR-076 digests | iff identical content; loop IDs inside lesson content make cross-deployment lesson collisions vanish once platforms differ; web observations of the same URL collide by design | a foreign `org.platform` never collides with local | for imports: first-write-wins drops the second authorship — the import lane MUST reject a candidate whose ID already exists locally under a different `Triple.Source` (owner item O-4) |
 | conventional name | model endpoints (`claude-sonnet`), semsource slugs, boid ids | likely | only within one authority | framework name-instanced families are deployment-scoped and MUST NOT be exported; products namespace by `system` |
 
+> **Correction appended 2026-08-30 (#1168 item 3, ADR-104).** The "After the authority rule" column claims *a
+> foreign `org.platform` never collides with local*. That claim is narrower than it reads, in two ways.
+>
+> 1. **It rested on a premise nothing checked.** It holds only when the two pairs actually DIFFER, and at the time
+>    this was written nothing made a deployment's pair unique — configuration load validated shape, subject-safety
+>    and a byte budget, never distinctness. The realistic failure was never two organizations coincidentally
+>    picking one name; it was N deployments provisioned from one cloned template, all declaring the same
+>    `platform.id`, at which point "foreign" and "local" are the same pair and every family in this table collides
+>    exactly as the "sharing `org.platform`" column says. ADR-104 supplies the missing premise: `platform.id`
+>    receives a framework-minted entropy suffix on a deployment's first boot, recorded once in
+>    `semstreams_config/platform_identity`.
+> 2. **It is silent about identities derived FROM an import.** The claim covers an imported entity's own
+>    identifier, which arrives whole and unchanged. It says nothing about a LOCAL entity a framework builder mints
+>    from a fragment of a foreign origin — where the local authority is combined with a foreign token, so two
+>    distinct foreign origins sharing that token still produce one local identifier. That defect is tracked
+>    separately as **#1192**; nothing in this table's "After the authority rule" column addresses it.
+
+
 ### C.5 `platform.id` / `instance_id` precedence
 
 Today `instance_id` silently wins (`config/config.go:772-778`; copied into semdev, semteams, semboids, semmem,

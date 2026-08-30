@@ -24,8 +24,15 @@ type Scenario struct {
 	udpAddr     string
 	metrics     *client.MetricsClient
 	profile     *client.ProfileClient
+	nats        *client.NATSValidationClient
 	config      *Config
 }
+
+// throughputVariant is the tier compose profile `task e2e:throughput` brings
+// up. Setup reads the deployment authority for THIS variant, so the name must
+// equal the profile the taskfile actually starts —
+// TestTierEntityMatchesTheProfileTheTaskBringsUp pins that.
+const throughputVariant = config.VariantStatistical
 
 // Config holds configuration for the throughput scenario.
 type Config struct {
@@ -59,6 +66,15 @@ type Config struct {
 	// Query SLA thresholds (0 = disabled, no assertion)
 	MaxQueryP99Ms     float64 `json:"max_query_p99_ms"`
 	MaxQueryErrorRate float64 `json:"max_query_error_rate"`
+
+	// NATSURL is where the running stack records the authority it mints under.
+	NATSURL string `json:"nats_url"`
+
+	// Authority is `org.platform` as the running stack RECORDS it, read from
+	// semstreams_config/platform_identity during Setup. It is not configuration:
+	// nothing may set it, because predicting it from a config file has been
+	// wrong by the minted entropy suffix since ADR-104.
+	Authority string `json:"-"`
 }
 
 // DefaultConfig returns sensible defaults for throughput testing.
@@ -87,6 +103,9 @@ func NewScenario(metricsURL, udpAddr string, cfg *Config) *Scenario {
 	}
 	if metricsURL == "" {
 		metricsURL = config.DefaultEndpoints.Metrics
+	}
+	if cfg.NATSURL == "" {
+		cfg.NATSURL = config.DefaultEndpoints.NATS
 	}
 
 	return &Scenario{
@@ -122,6 +141,21 @@ func (s *Scenario) Setup(ctx context.Context) error {
 	if err := s.metrics.Health(ctx); err != nil {
 		return fmt.Errorf("metrics endpoint not healthy: %w", err)
 	}
+
+	// Read the authority the deployment mints under. Every fixture entity ID
+	// this scenario queries is composed from it, and since ADR-104 it is the
+	// shipped config's platform.id plus a minted entropy suffix — unknowable
+	// without asking the stack.
+	natsClient, err := client.NewNATSValidationClient(ctx, s.config.NATSURL)
+	if err != nil {
+		return fmt.Errorf("NATS validation client is required to read the deployment authority: %w", err)
+	}
+	s.nats = natsClient
+	authority, err := config.EffectiveTierAuthority(ctx, natsClient, throughputVariant)
+	if err != nil {
+		return err
+	}
+	s.config.Authority = authority
 
 	return nil
 }
@@ -445,7 +479,14 @@ func (s *Scenario) captureFinalProfiles(ctx context.Context, result *scenarios.R
 }
 
 // Teardown cleans up after the scenario.
-func (s *Scenario) Teardown(_ context.Context) error {
+func (s *Scenario) Teardown(ctx context.Context) error {
+	if s.nats != nil {
+		err := s.nats.Close(ctx)
+		s.nats = nil
+		if err != nil {
+			return fmt.Errorf("close NATS validation client: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -617,7 +658,7 @@ func (s *Scenario) waitForProcessing(ctx context.Context, baseline *client.Metri
 // query, which caused "not found" errors when the query load queried entities
 // that hadn't been ingested yet.
 func (s *Scenario) waitForEntities(ctx context.Context) error {
-	entities := knownEntityIDs()
+	entities := knownEntityIDs(s.config.Authority)
 	if s.config.UniqueEntities > 0 {
 		// Synthetic entities have platform-dependent IDs, so probe via
 		// prefix query instead of exact entity lookups.

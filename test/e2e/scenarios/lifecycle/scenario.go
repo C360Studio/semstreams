@@ -44,15 +44,23 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/test/e2e/client"
+	e2econfig "github.com/c360studio/semstreams/test/e2e/config"
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
 	"github.com/gorilla/websocket"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// MissionEntityID is the identifier seeded by the e2e binary via
-// `--lifecycle-seed`. Matches docker/compose/lifecycle.yml and
-// cmd/e2e-semstreams's --lifecycle-seed flag.
-const MissionEntityID = "c360.semstreams-lifecycle.gcs.lifecycle.mission.m001"
+// MissionSuffix is the last four canonical positions the e2e binary seeds via
+// `--lifecycle-seed`. Matches docker/compose/lifecycle.yml. The binary composes
+// the authority itself from its own platform.org / platform.id, so the flag
+// carries no pair to get wrong — since ADR-104 that pair includes an entropy
+// suffix minted at first boot and is not knowable from the shipped config.
+const MissionSuffix = "gcs.lifecycle.mission.m001"
+
+// lifecycleAuthorityStem is the authority configs/lifecycle-flow.json declares.
+// Setup reads the effective pair from the running stack and uses this only to
+// assert it is driving the configuration it expects.
+const lifecycleAuthorityStem = "c360.semstreams-lifecycle"
 
 const lifecycleNATSURL = "nats://localhost:34222"
 
@@ -103,6 +111,10 @@ type Scenario struct {
 	description string
 	config      *Config
 	httpClient  *http.Client
+
+	// missionEntityID is the seeded mission under the authority the deployment
+	// RECORDS; Setup reads it rather than composing it from a config file.
+	missionEntityID string
 }
 
 // NewScenario constructs the scenario with the supplied client +
@@ -127,9 +139,25 @@ func (s *Scenario) Name() string { return s.name }
 // Description returns the scenario description.
 func (s *Scenario) Description() string { return s.description }
 
-// Setup is a no-op — the e2e binary seeds the mission via its
-// --lifecycle-seed flag at container start.
-func (s *Scenario) Setup(_ context.Context) error { return nil }
+// Setup reads the authority the running deployment mints under and composes
+// the seeded mission's identifier under it. The e2e binary seeds the mission
+// via its --lifecycle-seed flag at container start, composing the same pair
+// from its own configuration; this is the observation of that value rather than
+// a second prediction of it (ADR-104).
+func (s *Scenario) Setup(ctx context.Context) error {
+	validation, err := client.NewNATSValidationClient(ctx, lifecycleNATSURL)
+	if err != nil {
+		return fmt.Errorf("open NATS to read the deployment authority: %w", err)
+	}
+	defer func() { _ = validation.Close(ctx) }()
+
+	authority, err := e2econfig.EffectiveAuthority(ctx, validation, lifecycleAuthorityStem)
+	if err != nil {
+		return err
+	}
+	s.missionEntityID = authority + "." + MissionSuffix
+	return nil
+}
 
 // Teardown is a no-op — docker compose handles container/volume teardown.
 func (s *Scenario) Teardown(_ context.Context) error { return nil }
@@ -201,12 +229,12 @@ func (s *Scenario) stageListInstances(ctx context.Context, result *scenarios.Res
 		return err
 	}
 	for _, inst := range instances {
-		if inst["entity_id"] == MissionEntityID {
+		if inst["entity_id"] == s.missionEntityID {
 			result.Details["seeded_instance"] = inst
 			return nil
 		}
 	}
-	return fmt.Errorf("seeded mission %q not in instance list (got %d)", MissionEntityID, len(instances))
+	return fmt.Errorf("seeded mission %q not in instance list (got %d)", s.missionEntityID, len(instances))
 }
 
 // stageGetInstance verifies GET /workflows/mission/{id} returns the
@@ -219,8 +247,8 @@ func (s *Scenario) stageGetInstance(ctx context.Context, _ *scenarios.Result) er
 	if state.Phase != "planning" {
 		return fmt.Errorf("expected initial phase=planning, got %q", state.Phase)
 	}
-	if state.EntityID != MissionEntityID {
-		return fmt.Errorf("expected entity_id=%q, got %q", MissionEntityID, state.EntityID)
+	if state.EntityID != s.missionEntityID {
+		return fmt.Errorf("expected entity_id=%q, got %q", s.missionEntityID, state.EntityID)
 	}
 	return nil
 }
@@ -229,7 +257,7 @@ func (s *Scenario) stageGetInstance(ctx context.Context, _ *scenarios.Result) er
 // patch and verifies it lands.
 func (s *Scenario) stageOperatorPatch(ctx context.Context, _ *scenarios.Result) error {
 	body, _ := json.Marshal(map[string]any{"owner_org_id": "test-org-patch"})
-	if err := s.postJSON(ctx, "/lifecycle-gateway/workflows/mission/"+MissionEntityID+"/state", body); err != nil {
+	if err := s.postJSON(ctx, "/lifecycle-gateway/workflows/mission/"+s.missionEntityID+"/state", body); err != nil {
 		return err
 	}
 	state, err := s.getMissionState(ctx)
@@ -274,7 +302,7 @@ func (s *Scenario) stageRuleTransition(ctx context.Context, result *scenarios.Re
 // via the operator endpoint, proving the human-driven path.
 func (s *Scenario) stageOperatorTransition(ctx context.Context, _ *scenarios.Result) error {
 	body, _ := json.Marshal(map[string]any{"phase": "completed", "note": "scenario operator transition"})
-	if err := s.postJSON(ctx, "/lifecycle-gateway/workflows/mission/"+MissionEntityID+"/transition", body); err != nil {
+	if err := s.postJSON(ctx, "/lifecycle-gateway/workflows/mission/"+s.missionEntityID+"/transition", body); err != nil {
 		return err
 	}
 	state, err := s.getMissionState(ctx)
@@ -293,7 +321,7 @@ func (s *Scenario) stageOperatorTransition(ctx context.Context, _ *scenarios.Res
 // bounded operator window; it does not depend on KV revision retention.
 func (s *Scenario) stageHistory(ctx context.Context, result *scenarios.Result) error {
 	var events []historyEvent
-	if err := s.getJSON(ctx, "/lifecycle-gateway/workflows/mission/"+MissionEntityID+"/history", &events); err != nil {
+	if err := s.getJSON(ctx, "/lifecycle-gateway/workflows/mission/"+s.missionEntityID+"/history", &events); err != nil {
 		return err
 	}
 	result.Details["history_event_count"] = len(events)
@@ -354,8 +382,8 @@ func (s *Scenario) stageWebSocket(ctx context.Context, result *scenarios.Result)
 	if err := conn.ReadJSON(&bootstrap); err != nil {
 		return fmt.Errorf("ws read bootstrap: %w", err)
 	}
-	if bootstrap["entity_id"] != MissionEntityID {
-		return fmt.Errorf("ws bootstrap entity=%v, want %q", bootstrap["entity_id"], MissionEntityID)
+	if bootstrap["entity_id"] != s.missionEntityID {
+		return fmt.Errorf("ws bootstrap entity=%v, want %q", bootstrap["entity_id"], s.missionEntityID)
 	}
 	result.Details["ws_bootstrap"] = bootstrap
 
@@ -376,10 +404,10 @@ func (s *Scenario) stageWebSocket(ctx context.Context, result *scenarios.Result)
 	// B is a later valid authority write through the production operator seam.
 	const patchedNote = "scenario ws patch after unrelated poison"
 	body, _ := json.Marshal(map[string]any{"note": patchedNote})
-	if err := s.postJSON(ctx, "/lifecycle-gateway/workflows/mission/"+MissionEntityID+"/state", body); err != nil {
+	if err := s.postJSON(ctx, "/lifecycle-gateway/workflows/mission/"+s.missionEntityID+"/state", body); err != nil {
 		return fmt.Errorf("operator patch after nonmatching poison: %w", err)
 	}
-	bEntry, err := authority.Get(ctx, MissionEntityID)
+	bEntry, err := authority.Get(ctx, s.missionEntityID)
 	if err != nil {
 		return fmt.Errorf("read back valid B after patch: %w", err)
 	}
@@ -413,7 +441,7 @@ func (s *Scenario) stageWebSocket(ctx context.Context, result *scenarios.Result)
 	}
 	foundMission := false
 	for _, instance := range instances {
-		if instance["entity_id"] == MissionEntityID {
+		if instance["entity_id"] == s.missionEntityID {
 			foundMission = true
 			break
 		}
@@ -441,8 +469,8 @@ func (s *Scenario) stageWebSocket(ctx context.Context, result *scenarios.Result)
 	if err := newConn.ReadJSON(&newBootstrap); err != nil {
 		return fmt.Errorf("new ws bootstrap after poison: %w", err)
 	}
-	if newBootstrap["entity_id"] != MissionEntityID {
-		return fmt.Errorf("new ws bootstrap entity=%v, want %q", newBootstrap["entity_id"], MissionEntityID)
+	if newBootstrap["entity_id"] != s.missionEntityID {
+		return fmt.Errorf("new ws bootstrap entity=%v, want %q", newBootstrap["entity_id"], s.missionEntityID)
 	}
 	result.Details["ws_bootstrap_after_poison"] = newBootstrap
 	return nil
@@ -543,7 +571,7 @@ func (s *Scenario) postJSON(ctx context.Context, path string, body []byte) error
 
 func (s *Scenario) getMissionState(ctx context.Context) (*missionState, error) {
 	var state missionState
-	if err := s.getJSON(ctx, "/lifecycle-gateway/workflows/mission/"+MissionEntityID, &state); err != nil {
+	if err := s.getJSON(ctx, "/lifecycle-gateway/workflows/mission/"+s.missionEntityID, &state); err != nil {
 		return nil, err
 	}
 	return &state, nil

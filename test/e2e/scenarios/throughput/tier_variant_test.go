@@ -16,13 +16,14 @@ const throughputTaskfile = "../../../../taskfiles/e2e/throughput.yml"
 // composeProfile matches the `--profile <name>` argument of a compose command.
 var composeProfile = regexp.MustCompile(`--profile\s+([a-z0-9-]+)`)
 
-// TestTierEntityMatchesTheProfileTheTaskBringsUp turns tierEntity's variant
-// from a prediction into an observation. The scenario has no --variant flag
-// and no runtime way to ask the deployment who it is, so tierEntity names the
-// tier statically; this test requires that name to equal the compose profile
-// every task in throughput.yml actually brings up. Point the task at a
-// different profile and the deployment authority changes under the fixtures —
-// which surfaces as "entity not found" mid-run rather than as a compile error.
+// TestTierEntityMatchesTheProfileTheTaskBringsUp pins the one prediction the
+// throughput scenario still makes. Setup READS the deployment authority from
+// the running stack (ADR-104), but it has to say which tier's stem it expects,
+// and the scenario has no --variant flag; throughputVariant names it
+// statically. This test requires that name to equal the compose profile every
+// task in throughput.yml actually brings up. Point the task at a different
+// profile and Setup fails with "the stack under test is not the configuration
+// this scenario names" — loud, but at run time; this fails in a second.
 func TestTierEntityMatchesTheProfileTheTaskBringsUp(t *testing.T) {
 	body, err := os.ReadFile(throughputTaskfile)
 	if err != nil {
@@ -48,12 +49,15 @@ func TestTierEntityMatchesTheProfileTheTaskBringsUp(t *testing.T) {
 		t.Fatalf("%s brings up %v; tierEntity can only be right about one", throughputTaskfile, profiles)
 	}
 
-	// Assert through tierEntity itself, not against the constant it happens to
-	// name: a test that compares config.VariantStatistical to the taskfile
-	// passes even when tierEntity is changed to mint under a different tier.
-	want := config.TierAuthority(profiles[0]) + ".sensor.environmental.temperature.temp-sensor-001"
-	if got := tierEntity("sensor.environmental.temperature.temp-sensor-001"); got != want {
-		t.Errorf("throughput brings up the %q profile, so its fixtures must be %q; tierEntity produced %q",
-			profiles[0], want, got)
+	// Assert through the value Setup actually resolves against, not against a
+	// literal that happens to match today.
+	if throughputVariant != profiles[0] {
+		t.Errorf("throughput brings up the %q profile, but Setup reads the deployment authority for %q",
+			profiles[0], throughputVariant)
+	}
+	// The stem the observation cross-checks against must still be the one that
+	// profile boots; TestTierAuthorityMatchesShippedConfigs owns the rest.
+	if stem := config.TierAuthorityStem(throughputVariant); stem == "" {
+		t.Errorf("no authority stem registered for %q", throughputVariant)
 	}
 }

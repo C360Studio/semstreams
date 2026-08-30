@@ -8,7 +8,7 @@ import (
 )
 
 func TestValidateCompoundPredicateCoverage(t *testing.T) {
-	known := config.TierEntityID(config.VariantStructural, "sensor.environmental.temperature.temp-sensor-001")
+	known := config.TierStemEntityID(config.VariantStructural, "sensor.environmental.temperature.temp-sensor-001")
 	t.Run("non-empty intersection", func(t *testing.T) {
 		require.NoError(t, validateCompoundPredicateCoverage(10, 3, []string{known, "other"}, known))
 	})

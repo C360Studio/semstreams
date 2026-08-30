@@ -79,6 +79,13 @@ tasks:
         done
         [ "$matched" = "true" ] || fail "heartbeat totals did not match runtime component health within 10s"
         echo "[OK] Readiness and heartbeat report $healthy/$total healthy components"
+      # ADR-104: the deployment minted an entropy suffix onto platform.id at
+      # first boot and recorded it as {org, stem, id}. Every fixture in this
+      # tree now READS that record instead of predicting the pair from the
+      # shipped config, so the record's presence and shape is itself a stage.
+      - echo "[E2E] validate-minted-authority - the deployment minted and recorded its own authority..."
+      - cd cmd/e2e && ./e2e --scenario core-minted-authority
+      - echo "[OK] platform_identity records {org, stem, id} and the effective pair carries the minted suffix"
       - echo "[E2E] Running core tests on the production binary (health + dataflow)..."
       - cd cmd/e2e && ./e2e --scenario all
       - |
@@ -202,11 +209,55 @@ tasks:
         fi
         echo "[OK] Early SIGTERM canceled blocked NATS boot, exited 1, and fenced service startup"
 
+      # validate-pre-identity-bucket-refusal (ADR-104): a configuration bucket
+      # written before identity minting holds `platform` and `version` and no
+      # `platform_identity`. Booting into it must REFUSE, naming that cause, and
+      # must mint nothing and create nothing — minting there would durably
+      # record an authority the deployment's own guard then rejects for the
+      # wrong reason, and ADR-102 d7 forbids the rewrite that would repair it.
+      - docker compose -f docker/compose/e2e.yml down -v --timeout 15
+      - echo "[E2E] validate-pre-identity-bucket-refusal - booting into a bucket that predates identity minting..."
+      - defer: docker compose -f docker/compose/e2e.yml down -v --timeout 15
+      - docker compose -f docker/compose/e2e.yml up -d --wait nats
+      - cd cmd/e2e && ./e2e --scenario core-pre-identity-seed
+      - defer: docker compose -f docker/compose/e2e.yml down -v --timeout 15
+      - docker compose -f docker/compose/e2e.yml up -d --no-deps semstreams
+      - |
+        fail_pre_identity() {
+          echo "[FAIL] $1"
+          docker logs semstreams-e2e-app 2>&1 || true
+          exit 1
+        }
+
+        attempt=0
+        exited=false
+        while [ "$attempt" -lt 100 ]; do
+          running=$(docker inspect semstreams-e2e-app 2>/dev/null | jq -r '.[0].State.Running') || running=unknown
+          if [ "$running" = "false" ]; then
+            exited=true
+            break
+          fi
+          attempt=$((attempt + 1))
+          sleep 0.2
+        done
+        [ "$exited" = "true" ] || fail_pre_identity "application did not exit within 20s of booting a pre-identity bucket"
+
+        exit_code=$(docker inspect semstreams-e2e-app | jq -er '.[0].State.ExitCode') \
+          || fail_pre_identity "application exit code unavailable"
+        [ "$exit_code" -ne 0 ] || fail_pre_identity "application booted a pre-identity bucket instead of refusing it"
+
+        docker logs semstreams-e2e-app 2>&1 | grep -F "predates framework-minted platform identity" >/dev/null \
+          || fail_pre_identity "the refusal did not name the pre-identity bucket as the cause"
+
+        (cd cmd/e2e && ./e2e --scenario core-pre-identity-assert) \
+          || fail_pre_identity "the refused boot left a platform_identity record behind"
+        echo "[OK] A pre-identity bucket refuses LOUD, exits nonzero, and creates no identity record"
+      - docker compose -f docker/compose/e2e.yml down -v --timeout 15
+
       # Phase 2 (ADR-103): the graph round-trip probe births a synthetic type
       # (test.fixture.v1) that only cmd/e2e-semstreams registers, so after the
       # production app's shutdown checks it runs against the e2e-target twin.
       - echo "[E2E] Phase 2 - graph round-trip probe against the e2e-target binary..."
-      - docker compose -f docker/compose/e2e.yml down -v --timeout 15
       - defer: docker compose -f docker/compose/e2e.yml --profile fixtures down -v --timeout 15
       - docker compose -f docker/compose/e2e.yml --profile fixtures up -d --wait --build nats semstreams-fixtures
       - echo "[OK] e2e-target services are healthy"

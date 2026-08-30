@@ -428,35 +428,37 @@ func buildPayloadRegistry(cfg *config.Config) (*payloadregistry.Registry, error)
 	return reg, nil
 }
 
-// seedMission Creates a mission Participant at the given entity ID
-// in the planning phase. Used by the lifecycle e2e tier's startup
-// flag so the gateway has a known instance to serve before the
-// scenario runs. Already-exists is treated as a no-op so the binary
-// is idempotent across restarts in the e2e fixture.
+// seedMission Creates a mission Participant in the planning phase under THIS
+// deployment's authority. Used by the lifecycle e2e tier's startup flag so the
+// gateway has a known instance to serve before the scenario runs.
+// Already-exists is treated as a no-op so the binary is idempotent across
+// restarts in the e2e fixture.
 //
-// The seed's authority pair MUST equal this deployment's own
-// platform.org/platform.id. Since ADR-102 the mission-command processor
-// stamps positions 1-2 from deps.Platform and never from the wire, so a
-// seed carrying a different pair creates an entity no command can ever
-// reach: the tier then fails 5s later as "rule did not transition", which
-// names the symptom and hides the cause. Reject it at boot instead.
-func seedMission(ctx context.Context, mgr *lifecycle.Manager, platform types.PlatformMeta, entityID string) error {
-	parsed, err := semtypes.ParseEntityID(entityID)
-	if err != nil {
-		return fmt.Errorf("--lifecycle-seed %q is not a canonical entity ID: %w", entityID, err)
-	}
-	if parsed.Org != platform.Org || parsed.Platform != platform.Platform {
+// The flag carries the last FOUR canonical positions —
+// system.domain.type.instance — and this function composes positions 1-2 from
+// deps.Platform. It used to take a whole entity ID and reject a pair that
+// disagreed, which was the right guard for the wrong shape: since ADR-104 the
+// effective platform.id carries an entropy suffix minted at first boot, so a
+// compose file cannot spell the pair at all. Composing here means nothing
+// predicts a value the binary already holds. The mission-command processor
+// stamps positions 1-2 from deps.Platform and never from the wire, so an entity
+// seeded under any other pair is one no command could ever reach.
+func seedMission(ctx context.Context, mgr *lifecycle.Manager, platform types.PlatformMeta, seedSuffix string) error {
+	if strings.Count(seedSuffix, ".") != 3 {
 		return fmt.Errorf(
-			"--lifecycle-seed %q claims authority %s.%s but this deployment's authority is %s.%s "+
-				"(platform.org/platform.id): the mission-command processor stamps its own authority, "+
-				"so nothing would ever command the seeded entity",
-			entityID, parsed.Org, parsed.Platform, platform.Org, platform.Platform)
+			"--lifecycle-seed %q must be the last four canonical positions "+
+				"(system.domain.type.instance); this deployment composes the authority %s.%s itself",
+			seedSuffix, platform.Org, platform.Platform)
+	}
+	entityID := platform.Org + "." + platform.Platform + "." + seedSuffix
+	if _, err := semtypes.ParseEntityID(entityID); err != nil {
+		return fmt.Errorf("--lifecycle-seed %q composes %q, which is not a canonical entity ID: %w", seedSuffix, entityID, err)
 	}
 	state := &mission.State{
 		EntityIDField: entityID,
 		PhaseField:    mission.PhasePlanning,
 	}
-	err = mgr.Create(ctx, state)
+	err := mgr.Create(ctx, state)
 	if err == nil {
 		slog.Info("seeded mission", "entity_id", entityID, "phase", mission.PhasePlanning)
 		return nil

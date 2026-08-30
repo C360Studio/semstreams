@@ -12,8 +12,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/c360studio/semstreams/test/e2e/config"
 )
 
 // QueryLoadResult holds aggregate results from the query load phase.
@@ -46,39 +44,41 @@ type querySpec struct {
 	Query string
 }
 
-// tierEntity composes an entity ID under the deployment authority of the tier
-// the throughput scenario runs against. `task e2e:throughput` brings up the
-// STATISTICAL compose profile (docker/compose/tiered.yml), so every entity the
-// example processors mint carries configs/statistical.json's platform.org /
-// platform.id in positions 1-2 (ADR-102 d2).
-func tierEntity(suffix string) string {
-	return config.TierEntityID(config.VariantStatistical, suffix)
+// tierEntity composes an entity ID under the authority the deployment ACTUALLY
+// mints under. `task e2e:throughput` brings up the STATISTICAL compose profile
+// (docker/compose/tiered.yml), so positions 1-2 come from
+// configs/statistical.json's platform.org / platform.id (ADR-102 d2) — plus the
+// entropy suffix the framework mints onto platform.id at first boot (ADR-104).
+// The authority is therefore READ from the running stack, never composed from
+// the shipped configuration; the caller supplies what it observed.
+func tierEntity(authority, suffix string) string {
+	return authority + "." + suffix
 }
 
 // knownEntityIDs returns entity IDs known to exist in the statistical testdata.
 // Entity IDs are built by iot_sensor as: {org}.{platform}.sensor.environmental.{type}.{device_id}
 // where {type} comes from the "type" field in sensors.jsonl (e.g., "combustible_gas", not "gas").
-func knownEntityIDs() []string {
+func knownEntityIDs(authority string) []string {
 	return []string{
-		tierEntity("sensor.environmental.temperature.temp-sensor-001"),
-		tierEntity("sensor.environmental.temperature.temp-sensor-002"),
-		tierEntity("sensor.environmental.humidity.humid-sensor-001"),
-		tierEntity("sensor.environmental.pressure.pressure-sensor-001"),
-		tierEntity("sensor.environmental.power.power-sensor-001"),
-		tierEntity("sensor.environmental.vibration.vibration-sensor-001"),
-		tierEntity("sensor.environmental.flow.flow-sensor-001"),
-		tierEntity("sensor.environmental.combustible_gas.gas-sensor-001"),
-		tierEntity("sensor.environmental.illumination.light-sensor-001"),
-		tierEntity("sensor.environmental.level.level-sensor-001"),
+		tierEntity(authority, "sensor.environmental.temperature.temp-sensor-001"),
+		tierEntity(authority, "sensor.environmental.temperature.temp-sensor-002"),
+		tierEntity(authority, "sensor.environmental.humidity.humid-sensor-001"),
+		tierEntity(authority, "sensor.environmental.pressure.pressure-sensor-001"),
+		tierEntity(authority, "sensor.environmental.power.power-sensor-001"),
+		tierEntity(authority, "sensor.environmental.vibration.vibration-sensor-001"),
+		tierEntity(authority, "sensor.environmental.flow.flow-sensor-001"),
+		tierEntity(authority, "sensor.environmental.combustible_gas.gas-sensor-001"),
+		tierEntity(authority, "sensor.environmental.illumination.light-sensor-001"),
+		tierEntity(authority, "sensor.environmental.level.level-sensor-001"),
 	}
 }
 
 // buildQueryPool returns a weighted list of query specs to randomly sample from.
 // Weights: entity 30%, prefix 20%, spatial 20%, predicate 20%, temporal 10%.
-func buildQueryPool() []querySpec {
+func buildQueryPool(authority string) []querySpec {
 	pool := make([]querySpec, 0, 100)
 
-	entities := knownEntityIDs()
+	entities := knownEntityIDs(authority)
 
 	// Entity queries (30 entries = 30%)
 	for i := range 30 {
@@ -92,7 +92,6 @@ func buildQueryPool() []querySpec {
 	}
 
 	// Prefix queries (20 entries = 20%)
-	authority := config.TierAuthority(config.VariantStatistical)
 	prefixes := []string{
 		authority,
 		authority + ".environmental",
@@ -179,7 +178,7 @@ type queryObservation struct {
 
 // runQueryLoad fires concurrent GraphQL queries for the configured duration.
 func runQueryLoad(ctx context.Context, cfg *Config) (*QueryLoadResult, error) {
-	pool := buildQueryPool()
+	pool := buildQueryPool(cfg.Authority)
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
 	var (

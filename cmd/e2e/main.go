@@ -360,15 +360,30 @@ func createScenario(
 		wsClient = client.NewWebSocketClient(wsURL)
 		return scenarios.NewCoreDataflowScenario(edgeClient, wsClient, flags.udpEndpoint, nil)
 	case "core-graph-roundtrip", "graph-roundtrip":
-		// The core stack runs configs/protocol-flow.json; its platform.org /
-		// platform.id ARE the authority the graph accepts (ADR-102 d5), so the
-		// canary is minted under them. Change the config and this changes with it.
+		// The core stack runs configs/protocol-flow.json. Its platform.org /
+		// platform.id are the STEM of the authority the graph accepts (ADR-102
+		// d5); the pair itself carries the entropy suffix the framework minted
+		// at first boot (ADR-104), so the probe reads it from
+		// semstreams_config/platform_identity and uses this value to check it is
+		// driving the configuration it was pointed at.
 		return scenarios.NewGraphRoundTripScenario(
 			config.DefaultEndpoints.NATS,
 			flags.baseURL,
 			strings.TrimRight(flags.baseURL, "/")+"/graph-gateway/graphql",
-			config.CoreAuthority,
+			config.CoreAuthorityStem,
 		)
+	case "core-minted-authority", "minted-authority":
+		// ADR-104: the deployment minted an entropy suffix onto platform.id at
+		// first boot and recorded it. Everything else in the e2e tree now READS
+		// that record; this stage is what proves the record is there and shaped
+		// the way the cross-repo contract says.
+		return scenarios.NewMintedAuthorityScenario(config.DefaultEndpoints.NATS, config.CoreAuthorityStem)
+	case "core-pre-identity-seed":
+		return scenarios.NewPreIdentityBucketScenario(
+			config.DefaultEndpoints.NATS, "seed", config.CoreAuthorityStem)
+	case "core-pre-identity-assert":
+		return scenarios.NewPreIdentityBucketScenario(
+			config.DefaultEndpoints.NATS, "assert", config.CoreAuthorityStem)
 	case "core-slow-consumer", "slow-consumer":
 		return scenarios.NewSlowConsumerAttributionScenario(scenarios.SlowConsumerAttributionConfig{
 			AppContainer: "semstreams-e2e-slow-consumer-app",
