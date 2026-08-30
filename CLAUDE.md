@@ -49,7 +49,8 @@ Events → Graphable Interface → Knowledge Graph → Queries
 - A bounded question that needs the strongest read — a design fork the architect framed, a review finding the
   developer disputes, an owner-docket question — goes to `semstreams-judge`: it answers over collected evidence with a
   recommendation, the strongest case against, and what remains unproven (≤20 tool calls, read-only). It never
-  enumerates (explorer) and never rules (owner); it is the one role a session may spawn on Fable. A judge answer is
+  enumerates (explorer) and never rules (owner); it is the one role pinned to Fable — the pin lives in
+  `.claude/agents/semstreams-judge.md`, so a spawn never passes a model. A judge answer is
   never posted as the ruling comment and never removes `status:needs-decision` — only the owner's own words do.
 - Spawning these project role agents is the DEFAULT execution path for nontrivial and spec-based work — no
   user permission needed. (Only massively-parallel Workflow orchestration is opt-in; that restriction does not apply
