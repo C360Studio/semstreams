@@ -42,11 +42,20 @@ Events → Graphable Interface → Knowledge Graph → Queries
   the touched surface; binding rulings and approval stay with the owner.
 - Nontrivial SemStreams backend implementation uses `semstreams-developer`.
 - Every nontrivial change is reviewed by `semstreams-reviewer` before integration.
-- Spawning these three project role agents is the DEFAULT execution path for nontrivial and spec-based work — no
+- Enumeration — the raw material of a surface inventory: declarations, implementers, callers, every spelling of a
+  fact, adjacent specs/ADRs/issues — uses `semstreams-explorer` (cheap model, enumerate-only, writes
+  `openspec/changes/<id>/inventory.md` with every search it ran). The architect may start from its file (owner
+  ruling A, 2026-08-30, #1180); the reviewer's independent re-derivation is the check on its blind spots.
+- A bounded question that needs the strongest read — a design fork the architect framed, a review finding the
+  developer disputes, an owner-docket question — goes to `semstreams-judge`: it answers over collected evidence with a
+  recommendation, the strongest case against, and what remains unproven (≤20 tool calls, read-only). It never
+  enumerates (explorer) and never rules (owner); it is the one role a session may spawn on Fable. A judge answer is
+  never posted as the ruling comment and never removes `status:needs-decision` — only the owner's own words do.
+- Spawning these project role agents is the DEFAULT execution path for nontrivial and spec-based work — no
   user permission needed. (Only massively-parallel Workflow orchestration is opt-in; that restriction does not apply
   to role agents. There is no "don't spawn agents unless asked" rule in this repo.)
-- Generic Go agents are only an isolated idiom, concurrency, or runtime second pass; they do not replace any of the
-  three roles.
+- Generic Go agents are only an isolated idiom, concurrency, or runtime second pass; they do not replace any of these
+  roles.
 - The technical writer owns durable documentation and conservative OpenSpec task truth. When a platform has no mapped
   technical-writer profile, the owner/root session materializes reviewed handoffs and reconciles task truth directly;
   developer and reviewer roles do not absorb that authority.
@@ -61,48 +70,27 @@ Events → Graphable Interface → Knowledge Graph → Queries
 
 ## Shared work protocol (Claude and Codex)
 
-State that both agents must see lives in the repository's tools — never in a prose document or either agent's private
-memory. Each question has one home, and each home is a `gh` or `task` query.
+The canonical protocol — where each kind of shared state lives, the start/take/land/close/tag rituals, worktree
+hygiene — is **`.agents/protocol.md`**. Read it before taking, landing, or closing work; the `pickup` and `handoff`
+rituals read it. Three gates never become a pointer:
 
-| Question | Home | Rule |
-|---|---|---|
-| What is wanted, what kind, is it decided | GitHub issue + labels (`type:` / `area:` / `class:` / `status:` / `horizon:`) | `status:needs-decision` is the owner's docket; a ruling is posted as an issue comment and the label removed. `status:blocked` names its blocker in a comment. |
-| What gates the next tag | GitHub milestone named for the intended version | Membership is the gate: in or out; an unruled item is out. `horizon:pre-v1` means before v1.0.0, not before the next tag. |
-| An epic | A tracking issue labeled `type:epic` whose body carries a task list of `#n` children | GitHub renders the progress; there is no separate epic document. |
-| Who has claimed what | A **draft PR** opened at the start of the work, `Closes #n` in its body; the branch prefix names the agent (`claude/…`, `codex/…`) | No draft PR, no claim. Design-phase work claims the same way — the OpenSpec proposal is its first commit. A stop-point goes in the PR description. |
-| Target state and task truth | The OpenSpec change inside that PR; `task openspec:queue` reads its holds | The archive (`openspec archive <id>` + spec sync) is the landing PR's last commit, reviewed with the code; the ruleset-enforced merge is the CI-green proof. No task may assert a post-merge fact ("CI green", "merge-ready") — such a task strands the change. |
-| Why | An ADR, or the owner's ruling comment on the issue | — |
+- **Claim:** a draft PR with `Closes #n`, opened before the work, on an agent-prefixed branch in its own worktree
+  (`git worktree add ../semstreams-wt/<branch> -b <branch> origin/main`). No draft PR, no claim.
+- **Merge:** CI green with no known unfixed flake in a required job; the archive/spec sync is the last content
+  commit, reviewed with the code; `implemented-by: <persona>` in the PR body; squash merge closes the issue.
+- **Close:** no issue closes without the owner's explicit `CONFIRM-CLOSE`, visible in the issue or PR, naming the
+  issues it closes and covering only those. A bare "approved", or approval of adjacent work, is never a close (owner
+  ruling, 2026-08-29).
 
-Rituals:
+## Repository ownership boundary (HARD RULE)
 
-- **Start:** `gh issue list --milestone <m> --state open` · `gh pr list` (drafts are claims — skip them) ·
-  `task openspec:queue` · `gh run list --branch main --limit 3` · `gh issue list --label status:needs-decision`.
-- **Take work:** an unclaimed milestone issue → dedicated worktree on an agent-prefixed branch → push → draft PR with
-  `Closes #n` → then work. One claimed PR owns one worktree. When multiple agents share a host, the primary checkout is
-  discovery-only; no agent commits from it. Immediately before every commit and push, verify that the worktree's
-  current branch is the draft PR head; a mismatch stops the operation.
-- **Worktree hygiene:** the claim's worktree lives at a durable sibling path — `git worktree add ../semstreams-wt/<branch>
-  -b <branch> origin/main` — never under `/private/tmp`, which a reboot purges (22 dead entries were pruned on
-  2026-08-25); `git worktree remove` it when the PR merges. Heavy local gates (the full integration suite, an e2e tier)
-  run one agent at a time on a shared host: worktrees fix the git collision, not the CPU one (#736). CI is the arbiter;
-  a local red under contention is not a finding.
-- **Land:** implementation review → the owner-run cross-agent round where the owner asks for it → fixes and re-review →
-  archive as the final content commit → narrow reviewer check of the archive/spec sync → undraft → CI green with
-  **no known unfixed flake in a required job** (a fresh green over a known flake is rerun-to-green: fix it, or file it
-  and obtain an explicit owner waiver recorded as a PR comment) → squash merge closes the issue. A correction after
-  archive re-enters reconciliation and final review; no later content commit bypasses the archive/spec-sync check.
-  State `implemented-by: <persona>` in the PR body; Codex uses `Sol`.
-- **Close:** no issue closes without the owner's explicit `CONFIRM-CLOSE` visible in the issue or PR. A chat-only signal
-  is not shared durable state and does not authorize a `Closes #n` merge. The signal MUST name the issues it closes and
-  covers only those. An approval of adjacent work — a PR, a review round, a design, a waiver — never widens into a
-  close, and a bare "approved" is never read as `CONFIRM-CLOSE` (owner ruling, 2026-08-29: "stick with the confirm
-  close requirement so we can all ensure that an 'approved' does not drift into too wide a condition"). A PR carrying
-  `Closes #a` and `Closes #b` needs the confirm for both, named. Transcribing the owner's own words into the issue or
-  PR is recording; inferring the gate from an adjacent approval is not, and is the failure this rule exists to stop.
-- **Tag:** milestone at 100% → candidate selection per `openspec/specs/release-candidate-proof/spec.md`. The
-  milestone never names the candidate SHA.
+SemStreams agents mutate only the SemStreams repository. Sister repositories are read-only inventory sources: agents
+may inspect them to measure downstream impact, but must not create branches, edit files, commit, push, open or modify
+pull requests or issues, comment, label, tag, release, or otherwise change their state.
 
-There is no program baton document; `docs/proposals/*-program.md` files are retired history.
+When a SemStreams change breaks a downstream adopter, record the exact impact and migration instructions in a
+SemStreams-owned migration document. The downstream repository owner implements and validates that migration in its
+own repository. The completed one-time SemDev #952 migration is not precedent for future cross-repository writes.
 
 ## The adopter seam rule (house rule)
 
@@ -332,93 +320,25 @@ for the full case study.
 
 ## Architectural Identity (Not an Event Bus)
 
-SemStreams is NOT a simple event bus or pub/sub framework. It is a knowledge graph engine where the communication model is a consequence of the data model.
-
-### The KV Twofer
-
-Every NATS KV bucket gives you two core interfaces from one write:
-
-- **State**: `kv.Get(key)` — current value, right now
-- **Events**: `kv.Watch(pattern)` — fires on every change (fan-out to all watchers)
-- **History when configured**: a bounded number of retained per-key revisions
-
-`ENTITY_STATES` has history 1. It is current authority, not an audit or recovery
-ledger. Declared watchers rehydrate current matching values and then observe live
-changes. State-reactive components may watch; periodic components may read current state
-on their cycle. See [KV Twofer](docs/concepts/02-kv-twofer.md).
-
-### Facts vs Requests
-
-| Communication type | Primitive | Restart behavior |
-|---|---|---|
-| Fact/current state | KV Watch | Hydrates current matching inputs; the responsible component repairs/redrives when needed |
-| Work request | JetStream Stream | Unacked work redelivers; acked work does not |
-
-Use `/kv-or-stream` for the full 4-test decision heuristic. See [Streams vs KV Watches](docs/concepts/03-streams-vs-kv-watches.md).
-
-### Inference Tiers
-
-| Tier | Method | Requires |
-|------|--------|----------|
-| 0 | Explicit triples + rules only | Nothing extra |
-| 1 | + BM25 statistical embeddings | Text content (pure Go) |
-| 2 | + Neural semantic embeddings | Text + external embedding service |
-
-Tiers only affect entities with text content. Telemetry-only entities cluster via explicit relationships regardless of tier. See [Real-Time Inference](docs/concepts/00-real-time-inference.md).
+SemStreams is a knowledge-graph engine whose communication model is a consequence of its data model. Every KV bucket
+is a twofer — `Get` is state, `Watch` is events; `ENTITY_STATES` has history 1 and is current authority, not an audit
+or recovery ledger. Facts and current state travel by KV Watch (restart hydrates current values); work requests travel
+by JetStream stream (unacked work redelivers) — `/kv-or-stream` is the 4-test heuristic. Inference tiers 0/1/2 affect
+only entities with text content. Read `docs/concepts/02-kv-twofer.md`, `03-streams-vs-kv-watches.md`, and
+`00-real-time-inference.md` before designing a communication path.
 
 ## Orchestration Boundaries
 
-Two layers: **Rule Engine** (conditions + actions + iteration caps) and **Components** (execute work). There is no separate workflow engine — no DSL, no state-machine runtime, no separate event bus; `processor/reactive/` was retired (2026-03-12). Multi-step patterns are expressed as coordinated rule sets firing components, with per-action `MaxIterations` providing iteration caps and entity triples + KV buckets + ObjectStore providing durable state.
-
-For workflow-shaped patterns (named instance with lifecycle, restart hydration,
-operator visibility), components compose the **Lifecycle harness** substrate
-(`pkg/lifecycle`, ADR-049). Apps declare state structs implementing `Participant`;
-the framework provides KV-backed `Manager`, rule integration, and an operator
-gateway API for current state and operator-writable patches. The harness is
-**substrate convention, not a workflow engine**: apps own work logic, state
-schema, phase transitions, repair, and audit design. `ENTITY_STATES` history 1
-cannot reconstruct lifecycle history. **Lifecycle participation is a property of
-the ENTITY, not the COMPONENT or REQUEST**: short-lived handlers can read/write
-participant entities; long-lived participants implement `Participant` and use
-`Manager`.
-
-For bounded-concurrency parallel work inside components, compose **BoundedDispatcher** (`pkg/dispatch`, ADR-048) — a KV-twofer-aware bounded worker pool wrapping `pkg/worker.Pool`. NOT for at-the-rule-layer fan-out (use rules' `for_each` for that).
-
-| Pattern | Use |
-|---------|-----|
-| A completes → B starts (no retry) | Single rule, one action |
-| A → B → C → D (no loop) | Rule chain (one rule per transition) |
-| A → if X then B else C | One rule, action-level `when` clauses (ADR-041) |
-| A → B → A → B... (max N times) | Rule chain with per-action `MaxIterations` cap |
-| Fan-out + fan-in synchronization | Fan-out rule (`for_each`) + counter-based join (`.length` / `.triples` / `length_eq`) |
-| Named instance with lifecycle | Lifecycle `Participant` over `ENTITY_STATES` — ADR-049 |
-| Bounded parallel work inside a component | BoundedDispatcher — ADR-048 |
-| Execute LLM call, graph query, file I/O, etc. | Component |
-
-**Key rules**: Rules trigger; components execute. Physical storage responsibility is explicit.
-Domain and Lifecycle `Participant` current state lives in `ENTITY_STATES` under
-graph-ingest's authority. Operational results use component-specific KV, events use
-JetStream streams, and bulky payloads use ObjectStore via `ContentStorable` refs.
-
-**Engine gaps file as engine work, not app-side state plumbing.** semspec's retired `workflow/reactive/` (7,264 LOC) is the cautionary tale on the engine-shape axis; semspec's `workflow/` package (~7,840 LOC of convention hand-rolled because the framework didn't provide one) is the cautionary tale on the convention-shape axis — both are migration blockers when carried per-consumer. The Lifecycle harness exists specifically to retire the next-instance of the second pattern (cross-consumer convention reinvention). If a rule-engine, harness, or substrate primitive is missing, propose adding it; don't carve out a parallel path.
-
-Use `/orchestration-check` for the decision framework. See
-[Orchestration Layers](docs/concepts/14-orchestration-layers.md) for the pattern
-catalog, [Phased Agentic Chains](docs/concepts/25-phased-agentic-chains.md) for
-multi-step agent work, [ADR-049](docs/adr/049-lifecycle-harness-prime-schema-over-entity-states.md)
-for Lifecycle participants, and
-[ADR-048](docs/adr/048-bounded-dispatcher-and-triples-substrate.md) for bounded
-concurrency.
-
-### Rules don't carry payloads
-
-Rules orchestrate by passing **references** (loop IDs, entity IDs, storage refs), never content. Bulky output from an agent lives in its durable stores — `COMPLETE_{loopID}` in AGENT_LOOPS KV, the `agent.complete.*` JetStream stream, ObjectStore via `ContentStorable`. Downstream agents retrieve on demand via tools like `read_loop_result(loop_id, max_bytes, offset)`.
-
-This matters for two reasons: (1) stuffing content into rule payloads silently truncates or explodes small-model context windows, and (2) rules can't make quality judgments over unstructured text — that's coordinator work. If a rule condition needs to branch on the semantic content of an agent's output, trigger a coordinator; the coordinator's terminal tool emits a structured triple that a subsequent rule can match on deterministically.
-
-The **ops role** runs parallel to the coordinator as the observation/learning layer: it watches completed loops and graph telemetry, emitting `ops.diagnosis.*` findings via `emit_diagnosis` for human review (Phase 1); Phase 2 adds write tools via config-only enablement.
-
-See [ADR-028](docs/adr/028-orchestration-architecture.md) for the full rule-skeleton + coordinator + ops architecture.
+Two layers only: the **Rule Engine** (conditions + actions + per-action `MaxIterations`) triggers; **components**
+execute. There is no workflow engine, DSL, state-machine runtime, or separate event bus (`processor/reactive/` was
+retired 2026-03-12). Workflow-shaped patterns compose the Lifecycle harness (`pkg/lifecycle`, ADR-049 — participation
+is a property of the ENTITY, not the component); bounded parallel work inside a component composes BoundedDispatcher
+(`pkg/dispatch`, ADR-048); rules pass **references, never payloads** (ADR-028) — content lives in AGENT_LOOPS KV, the
+`agent.complete.*` stream, or ObjectStore, and a rule that must branch on semantic content triggers a coordinator
+instead. Domain and Lifecycle `Participant` current state lives in `ENTITY_STATES` under graph-ingest's authority.
+Engine gaps file as engine work, never app-side plumbing. The pattern catalog and decision framework live in
+`docs/concepts/14-orchestration-layers.md`, `docs/concepts/25-phased-agentic-chains.md`, and `/orchestration-check`;
+read them before adding orchestration logic.
 
 ## Payload Registry
 

@@ -17,7 +17,9 @@ not replace this review.
 2. Read `openspec/project.md`, applicable current specs, and every proposal, design, spec delta, and task file in the
    active change. Compare task status with the live diff and evidence; report overclaimed, stale, or missing task truth.
 3. Read the complete diff, then its callers, callees, registrations, binaries, state owners, storage builders, and
-   public query consumers. Review the blast radius, not only changed lines.
+   public query consumers. Review the blast radius, not only changed lines. Callers and implementers come from
+   `gopls references` / `gopls implementation`, one call each; read ranges (`sed -n a,bp`), not whole files, unless
+   the whole file is the subject.
 4. Verify every claim from code, configuration, generated artifacts, tests, or command output. Do not launder prior
    reviewer or agent assertions.
 5. Try to refute every candidate finding. Downgrade an unconfirmed concern to a question and state what evidence is
@@ -53,7 +55,7 @@ not replace this review.
 
 ## Architecture review modes
 
-Before either architecture review, verify the caller or technical writer materialized the complete handoff as an
+Before either architecture review, verify the caller, technical writer, or explorer materialized the complete handoff as an
 exact, line-addressable artifact with a recorded repository baseline and content hash. Preserve and verify the
 inventory checkpoint identity; require the same identity for the complete design before pre-owner review. Review that
 exact artifact, not a summary or direct-message reconstruction.
@@ -64,7 +66,12 @@ Review the problem-only inventory before any target state, options, recommendati
 prompted mechanism, proposed symbol, issue claim, prior design, and briefing assertion as a hypothesis, not evidence.
 
 1. Read only the problem boundary and evidence baseline first. Independently enumerate the repository surface before
-   reading the inventory's conclusions.
+   reading the inventory's conclusions — structural questions (implementers, callers, references, declarations) as
+   one `gopls` call each (`implementation`, `references`, `call_hierarchy`, `workspace_symbol`), string literals with
+   `git grep -n`. Never re-read whole files to confirm a pin: `task inventory:verify -- <file>` checks pins
+   mechanically; your job is what the pins do not cover — the owner, spelling, or consumer that is not in the file.
+   An inventory that started from a `semstreams-explorer` file says so; its recorded zero-hit searches are hypotheses
+   you refute or confirm with your own search, never evidence.
 2. Compare the independent enumeration with the submitted surface inventory, adjacent claims, adopter seam inventory,
    and searches used to close empty categories.
 3. For every proposed durable, communication, or runtime-coordination primitive, independently enumerate all owners in
@@ -102,8 +109,8 @@ until the owner explicitly accepts the reviewed design.
   flag any such claim asserted as fact.
 - Confirm code matches the active OpenSpec target, and the target is consistent with current specs and approved ADRs.
 - A proposal or design that introduces a new symbol, field, channel, resolver, or classifier without a cited
-  existing-surface inventory (architect contract, four categories) is a finding. Spot-check the inventory's greps
-  yourself on the seams the diff touches — an asserted inventory is a claim, not evidence.
+  existing-surface inventory (architect contract, four categories) is a finding. Spot-check the inventory's searches
+  (gopls and grep alike) yourself on the seams the diff touches — an asserted inventory is a claim, not evidence.
 - For everything the diff ADDS (exported or not — symbols, fields, channels, resolvers, classifiers, ports,
   subjects, buckets, config keys): run the owner-exists search yourself. An addition beside an existing owner of
   the same responsibility is a finding even when the design's inventory missed it; the fix is consolidation into

@@ -165,7 +165,7 @@ Rules of thumb:
 - **Facts → KV, requests → JetStream.** If you're reaching for NATSPort pub/sub, re-check
   `/kv-or-stream` — the write usually *is* the event.
 - **Bulky payloads never ride rules or messages** — store via `ContentStorable`/ObjectStore and pass
-  a ref (CLAUDE.md "Rules don't carry payloads").
+  a ref (ADR-028; `docs/concepts/14-orchestration-layers.md`).
 - Set `ResourceID()` so two components contending for the same socket/bucket/stream are caught at
   wiring time, and `IsExclusive()` truthfully.
 
