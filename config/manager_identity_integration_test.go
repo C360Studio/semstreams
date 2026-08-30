@@ -247,6 +247,39 @@ func TestPreCreatedIdentityRecordIsAdoptedUnsuffixed(t *testing.T) {
 	require.Equal(t, "field-ops-7", readIdentityRecord(t, ctx, manager).ID)
 }
 
+// TestBootWithOnlyAnIdentityRecordIsStillAFirstBoot pins the second half of
+// collision 2: the identity record is not configuration, so a bucket holding
+// nothing else is still an empty bucket for first-boot detection. Counting it
+// sends the boot down the subsequent-boot branch, where equal versions select
+// syncFromKV — which resets the in-memory service map before repopulating it
+// from a bucket that has nothing to repopulate it with. The deployment then
+// runs with no services AND never publishes its own.
+func TestBootWithOnlyAnIdentityRecordIsStillAFirstBoot(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := identityTestConfig("acme", "dep")
+	// Equal file and KV versions are what select syncFromKV on the
+	// subsequent-boot branch; getKVVersion reports "0.0.0" for a bucket with no
+	// version key.
+	cfg.Version = "0.0.0"
+	cfg.Services = types.ServiceConfigs{
+		"metrics": {Enabled: true, Config: json.RawMessage(`{"port": 9090}`)},
+	}
+	manager, err := NewConfigManager(cfg, tc.Client, nil)
+	require.NoError(t, err)
+	seedIdentityRecord(t, ctx, manager, platformIdentityRecord{Org: "acme", Stem: "dep", ID: "dep"})
+
+	require.NoError(t, manager.Start(ctx))
+	defer manager.Stop(5 * time.Second)
+
+	require.Contains(t, manager.GetConfig().Get().Services, "metrics",
+		"a first boot must keep the services its file declared")
+	_, err = manager.kvStore.Get(ctx, "services.metrics")
+	require.NoError(t, err, "a first boot must publish its file configuration to the bucket")
+}
+
 // TestPreIdentityBucketRefusesStartWithoutMinting pins the third branch and the
 // fourth collision the architect revision round found: a configuration bucket
 // written before identity minting must be refused NAMING THAT CAUSE, and the

@@ -63,19 +63,28 @@ in `docs/proposals/gh1168-federation-identity-pins.md`; inventory
       `case "platform"` arm so the KV `platform` key is a published mirror the running configuration never adopts;
       `PushToKV` keeps writing it. Neither `PushToKV` nor `syncFromKV` writes or applies `platform_identity`.
 
-## 4. Forced omissions — one per new guard (commit GREEN first; restore by `cp` + `shasum`)
+## 4. Forced omissions — one per new guard (commit GREEN first; restore by `cp` + `md5`)
 
-- [ ] 4.1 M4 `establishPlatformIdentity`: use `Put` instead of `Create` →
-      `TestConfigManagerConcurrentFirstBootConvergesOnOneIdentity` MUST fail.
-- [ ] 4.2 M5 adopt: skip the `SafeConfig.Mutate` so the file's `platform.id` stays effective →
-      `TestConfigManagerAdoptsPersistedPlatformIdentity` MUST fail.
-- [ ] 4.3 M11 pre-identity branch: fall through to the mint instead of refusing →
-      `TestPreIdentityBucketRefusesStartWithoutMinting` MUST fail.
-- [ ] 4.4 M12 first-boot detection: count every key including `platform_identity` →
-      `TestConfigManagerFirstBootMintsPlatformIdentity` MUST fail on the pushed configuration.
-- [ ] 4.5 M13 `updateConfig`: restore the `case "platform"` arm → `TestKVPlatformKeyIsAMirrorNotASource` MUST fail.
-- [ ] 4.6 M14 `validateAuthorityPair`: drop the seven-byte reserve →
-      `TestConfigRejectsPairThatOnlyFitsUnsuffixed` MUST fail.
+All six run at `eb83b5b0`, each mutated alone, `[applied]` printed between mutating and testing, restored by `cp`
+with a matching `md5 -q`. Verbatim failure lines below.
+
+- [x] 4.1 M4 `mintPlatformIdentity`: `Create` → `Put` → `TestConfigManagerConcurrentFirstBootConvergesOnOneIdentity`
+      failed: `expected: "dep-f900fa" actual: "dep-952e5e"` — "two co-processes must converge on one authority".
+- [x] 4.2 M5 `adoptPlatformIdentity`: skip `applyEffectivePlatformID` so the file's `platform.id` stays effective →
+      `TestConfigManagerAdoptsPersistedPlatformIdentity/file_declares_the_stem` failed:
+      `expected: "dep-7f3a9c" actual: "dep"`.
+- [x] 4.3 M11 pre-identity branch made unreachable, so such a bucket falls through to the mint →
+      `TestPreIdentityBucketRefusesStartWithoutMinting` failed: "An error is expected but got nil".
+- [x] 4.4 M12 first-boot detection counts the identity record (`configKeys > 0` → `len(keys) > 0` on the adopt
+      branch) → `TestBootWithOnlyAnIdentityRecordIsStillAFirstBoot` failed:
+      `types.ServiceConfigs{} does not contain "metrics"` — the exact `syncFromKV` service-map wipe premise P7
+      predicted. The first attempt at M12 mutated the key-partition loop instead and did NOT fail, because on a
+      genuine first boot the record does not exist yet; the guard lives on the adopt return, and that test was
+      written for it.
+- [x] 4.5 M13 `updateConfig`: restore the `case "platform"` arm → `TestKVPlatformKeyIsAMirrorNotASource` failed:
+      `expected: "dep-6e923f" actual: "other"` — an external write moved the running authority.
+- [x] 4.6 M14 `maxDeclarableAuthorityPairBytes`: drop the seven-byte reserve →
+      `TestConfigRejectsPairThatOnlyFitsUnsuffixed` failed: "An error is expected but got nil".
 
 ## 5. Sweep — spec, docs, e2e, configs, sisters' notes
 
