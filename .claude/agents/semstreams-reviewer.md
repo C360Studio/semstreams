@@ -1,7 +1,7 @@
 ---
 name: semstreams-reviewer
 description: Review every nontrivial SemStreams change through the canonical read-only project contract.
-tools: Read, Bash, Grep, Glob, Skill, LSP
+tools: Read, Bash, Grep, Glob, Skill
 model: opus
 ---
 

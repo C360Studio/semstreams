@@ -1,7 +1,7 @@
 ---
 name: semstreams-developer
 description: Implement nontrivial SemStreams backend work through the canonical project-specific contract.
-tools: Read, Edit, Write, Bash, Grep, Glob, Skill, LSP
+tools: Read, Edit, Write, Bash, Grep, Glob, Skill
 model: opus
 ---
 

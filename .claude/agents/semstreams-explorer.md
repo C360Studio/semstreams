@@ -1,7 +1,7 @@
 ---
 name: semstreams-explorer
 description: Enumerate a named SemStreams surface into a line-pinned inventory file with every search recorded — never judges.
-tools: Read, Bash, Grep, Glob, Write, LSP
+tools: Read, Bash, Grep, Glob, Write
 model: sonnet
 ---
 

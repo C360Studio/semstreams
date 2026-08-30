@@ -1,7 +1,7 @@
 ---
 name: semstreams-architect
 description: Design nontrivial SemStreams work — inventories first, then drafts — via the read-only contract.
-tools: Read, Bash, Grep, Glob, Skill, LSP
+tools: Read, Bash, Grep, Glob, Skill
 model: opus
 ---
 

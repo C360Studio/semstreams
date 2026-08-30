@@ -53,9 +53,10 @@ Run this procedure after changing a contract, adapter, or repository routing rul
 
 1. Confirm all five canonical contracts and all ten adapters exist, and that `.agents/protocol.md` exists.
 2. Confirm each adapter names exactly its matching `.agents/contracts/...` path and says to read it fully first.
-3. Confirm the Claude reviewer and architect tool lists contain `Read`, `Bash`, `Grep`, `Glob`, `Skill`, and `LSP`,
-   but not `Edit`, `Write`, `Task`, or another delegation tool; the explorer adds `Write` (the inventory file only)
-   and no delegation tool.
+3. Confirm the Claude reviewer, architect, and judge tool lists contain `Read`, `Bash`, `Grep`, `Glob` (plus `Skill`
+   for reviewer and architect), but not `Edit`, `Write`, `Task`, or another delegation tool; the explorer adds `Write`
+   (the inventory file only) and no delegation tool. `gopls` is reached through `Bash`; do not add an `LSP` tool name —
+   an unresolved tool name makes Claude Code refuse to launch the agent.
 4. Confirm the Codex reviewer, architect, and judge set `sandbox_mode = "read-only"`; the developer has no sandbox override
    and therefore inherits the parent workspace permissions.
 5. Confirm `AGENTS.md` and `CLAUDE.md` route the same logical roles.
