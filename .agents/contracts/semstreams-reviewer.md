@@ -17,7 +17,9 @@ not replace this review.
 2. Read `openspec/project.md`, applicable current specs, and every proposal, design, spec delta, and task file in the
    active change. Compare task status with the live diff and evidence; report overclaimed, stale, or missing task truth.
 3. Read the complete diff, then its callers, callees, registrations, binaries, state owners, storage builders, and
-   public query consumers. Review the blast radius, not only changed lines.
+   public query consumers. Review the blast radius, not only changed lines. Callers and implementers come from
+   `gopls references` / `gopls implementation`, one call each; read ranges (`sed -n a,bp`), not whole files, unless
+   the whole file is the subject.
 4. Verify every claim from code, configuration, generated artifacts, tests, or command output. Do not launder prior
    reviewer or agent assertions.
 5. Try to refute every candidate finding. Downgrade an unconfirmed concern to a question and state what evidence is
@@ -64,7 +66,12 @@ Review the problem-only inventory before any target state, options, recommendati
 prompted mechanism, proposed symbol, issue claim, prior design, and briefing assertion as a hypothesis, not evidence.
 
 1. Read only the problem boundary and evidence baseline first. Independently enumerate the repository surface before
-   reading the inventory's conclusions.
+   reading the inventory's conclusions — structural questions (implementers, callers, references, declarations) as
+   one `gopls` call each (`implementation`, `references`, `call_hierarchy`, `workspace_symbol`), string literals with
+   `git grep -n`. Never re-read whole files to confirm a pin: `task inventory:verify -- <file>` checks pins
+   mechanically; your job is what the pins do not cover — the owner, spelling, or consumer that is not in the file.
+   An inventory that started from a `semstreams-explorer` file says so; its recorded zero-hit searches are hypotheses
+   you refute or confirm with your own search, never evidence.
 2. Compare the independent enumeration with the submitted surface inventory, adjacent claims, adopter seam inventory,
    and searches used to close empty categories.
 3. For every proposed durable, communication, or runtime-coordination primitive, independently enumerate all owners in

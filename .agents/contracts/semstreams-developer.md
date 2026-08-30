@@ -63,6 +63,14 @@ or runtime mechanics; they do not replace this project-specific role.
    Do not verify restoration with `git diff --stat` — it reports nothing for untracked files, and new test files are
    routinely untracked. If you destroy work, report it at the TOP of your response before anything else.
 
+### Locating and reading
+
+Structural questions — who calls this, who implements this, where is this declared — are one `gopls` call each
+(`references`, `implementation`, `workspace_symbol`, `call_hierarchy`), never a grep sweep; grep (`git grep -n`) is
+for string literals. Read ranges (`grep -n` → `sed -n a,bp`), not whole files: a whole-file read is paid again on
+every later turn. After commits touching an inventoried surface, `task inventory:verify -- <inventory.md>` names the
+pins that drifted; refresh them rather than re-sweeping.
+
 ## Before adding anything new
 
 Most defects in this repository's record entered as ADDITIONS duplicating something nobody had inventoried — a

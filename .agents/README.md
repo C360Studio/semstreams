@@ -17,6 +17,16 @@ thin and must point to exactly one canonical contract.
   - Canonical: `.agents/contracts/semstreams-reviewer.md`
   - Claude: `.claude/agents/semstreams-reviewer.md`
   - Codex: `.codex/agents/semstreams-reviewer.toml`
+- SemStreams explorer (enumerate-only; cheap model; writes the inventory file the architect may start from)
+  - Canonical: `.agents/contracts/semstreams-explorer.md`
+  - Claude: `.claude/agents/semstreams-explorer.md`
+  - Codex: `.codex/agents/semstreams-explorer.toml`
+
+## Shared work protocol
+
+`.agents/protocol.md` is the canonical shared work protocol (state homes, rituals, worktree hygiene). `CLAUDE.md` and
+`AGENTS.md` carry a pointer plus the three gates — claim, merge, close — inline; edit the protocol only in
+`.agents/protocol.md`.
 
 ## Shared decision skills
 
@@ -37,10 +47,11 @@ Claude-workflow tooling and remain platform-specific by design — do not mirror
 
 Run this procedure after changing a contract, adapter, or repository routing rule. It only reads tracked files.
 
-1. Confirm all three canonical contracts and all six adapters exist.
+1. Confirm all four canonical contracts and all eight adapters exist, and that `.agents/protocol.md` exists.
 2. Confirm each adapter names exactly its matching `.agents/contracts/...` path and says to read it fully first.
-3. Confirm the Claude reviewer and architect tool lists contain `Read`, `Bash`, `Grep`, `Glob`, and `Skill`, but not
-   `Edit`, `Write`, `Task`, or another delegation tool.
+3. Confirm the Claude reviewer and architect tool lists contain `Read`, `Bash`, `Grep`, `Glob`, `Skill`, and `LSP`,
+   but not `Edit`, `Write`, `Task`, or another delegation tool; the explorer adds `Write` (the inventory file only)
+   and no delegation tool.
 4. Confirm the Codex reviewer and architect set `sandbox_mode = "read-only"`; the developer has no sandbox override
    and therefore inherits the parent workspace permissions.
 5. Confirm `AGENTS.md` and `CLAUDE.md` route the same logical roles.
@@ -58,6 +69,8 @@ Use these semantic fixtures when reading the routing text:
 - "Design an API contract or OpenSpec target" routes to SemStreams architect (surface inventory first, drafts as
   text); binding rulings and approval stay with the owner session.
 - "Update durable docs or reconcile task truth" remains technical-writer-owned.
+- "Enumerate what is on this surface for a change" routes to SemStreams explorer (inventory file with every search
+  recorded); the architect may start from that file and the reviewer re-derives it independently.
 - "Check an isolated Go idiom" may use a generic Go agent only as a second pass.
 
 The smoke passes only when Claude and Codex resolve the same logical role and canonical contract for every fixture.

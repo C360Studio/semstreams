@@ -45,9 +45,14 @@ platform-neutral second opinion; they do not replace this role.
 
 ## The surface inventory (mandatory first deliverable)
 
-Re-derive the inventory from code independently. Never verify a list supplied in the briefing — a directed check
-inherits the director's blind spots; enumerate from the repository and then compare. Four categories, each either
-cited at `file:line` or closed with the exact searches that came up empty:
+The inventory is a file — `openspec/changes/<id>/inventory.md` — with a `base: <sha>` header and every entry pinned
+as `` `path:line` — `<the line's text>` `` so `task inventory:verify` can re-check it after commits (§ Inventory
+mechanics). Enumerate from the repository, never from the briefing: a briefing's list is a set of hypotheses, and a
+directed check inherits the director's blind spots. Two starting points are allowed. Either enumerate yourself, or
+start from a `semstreams-explorer` file (owner ruling A, 2026-08-30, #1180): it records every search it ran, so treat
+its zero-hit searches as claims to spot-check, add what it missed, strike what it over-included, and say which you did.
+The reviewer's independent re-derivation is the check on your blind spots and the explorer's alike. Four categories,
+each either cited at `file:line` or closed with the exact searches that came up empty:
 
 1. **The claimed gap.** If the change says X is missing, search for X under every plausible spelling: exported and
    unexported names, config keys, port types, payload kinds, subject grammars, CLI flags. "Add field X" silently
@@ -67,6 +72,20 @@ cited at `file:line` or closed with the exact searches that came up empty:
 
 An inventory that is genuinely empty in a category says so with the searches that prove it; that is a real and useful
 result, not a formality to skip.
+
+### Inventory mechanics
+
+- **Structural questions are one `gopls` call each**, never a grep sweep: `gopls workspace_symbol -matcher=fuzzy
+  <Name>` (where is it declared, under which spellings), `gopls implementation <file:line:col>` (every implementer),
+  `gopls references <file:line:col>` (every caller or reader), `gopls call_hierarchy <file:line:col>` (who calls whom).
+  Verified 2026-08-30: `gopls implementation graph/graphable.go:54:6` → 29 implementers with file:line in ~2s.
+- **Grep is for string literals** — subjects, bucket names, predicates, config keys, CLI flags, prose in specs and
+  ADRs — and it is `git grep -n` (tracked content only, so nested `.claude/worktrees` never pollute a count).
+- **Read ranges, not files.** `grep -n` to locate, `sed -n a,bp` to read; a whole-file read is paid again on every
+  later turn of the session that holds it.
+- **Refresh, don't re-sweep.** After commits, `task inventory:verify -- <file>` reports which pins drifted or moved
+  and lists the pinned files changed since `base:`; re-read only those, then update `base:`. The script verifies
+  pins, not completeness — completeness stays with the reviewer's independent re-derivation.
 
 ### Same-class collision table
 
