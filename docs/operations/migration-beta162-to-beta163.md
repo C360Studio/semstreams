@@ -735,57 +735,69 @@ Products that do not compose the bundled example processors are unaffected: no f
 `org_id` or `platform` config key. `cmd/e2e-semstreams/mission` already took its authority from `deps.Platform` and
 refuses a wire value that disagrees, so it needed no change.
 
-## Federation identity (ADR-104, #1168) — run identities are digests and carried; `platform.id` is unique by default
+## Unique platform authority (ADR-104, #1168) — `platform.id` gains a framework-minted suffix on first boot
 
-> **Design stage (2026-08-30):** this section describes the target state on draft PR #1178, pending independent
-> design review and the owner's rulings O-1..O-8 on #1168. Amend to what ships.
+> **Design stage (2026-08-30):** this section describes the target state on draft PR #1178, pending owner
+> acceptance on #1168. Amend to what ships. Scope was cut to this on 2026-08-30: run identity is **#1192**, the
+> import-lane collision gate is **#1194**, the anchor-append bug is **#1193**, the environment surface is **#1186**,
+> and the three zero-caller deletions are **#1187**. None of those changes anything in this section.
 
 ### What changes on the wire
 
-- Every run entity is now `org.platform.chain.agent.execution.<64 hex>`. The value is carried on `TaskMessage.run_entity_id`,
-  `LoopEntity.run_entity_id`, the four loop events' `run_entity_id`, tool metadata `agent.run_entity_id`, and the
-  loop's `agent.run.entity-id` triple. `run_id` still names the root loop's bare identifier and its `AGENT_LOOPS`
-  record. **Do not compose the run entity from `run_id` and your pair; read it.**
-- `platform.id` becomes `<your id>-<6 hex>` on your deployment's first boot against fresh storage unless your config
-  declares `"unique": true` in the `platform` block. Every entity you mint carries the suffixed value; the boot log
-  `Platform identity configured` prints it; `semstreams_config/platform_identity` records it.
-- The authority-pair budget is 168 bytes (`len(org)+len(id)`, suffix included).
+- `platform.id` becomes `<your id>-<6 hex>` on your deployment's first boot against fresh storage. Every entity you
+  mint carries the suffixed value; the boot log line `Platform identity configured` prints it; the record
+  `semstreams_config/platform_identity` — exactly `{"org": …, "stem": …, "id": …}` — is where it durably lives.
+- The suffix is minted once, with an atomic `Create`, and adopted by every later boot and by every co-process
+  sharing that configuration bucket. ADR-102 decision 7 forbids rewriting it.
+- **There is no configuration key that disables it.** The opt-out is operational — see obligation 2.
+- The declarable authority pair loses seven bytes of headroom: configuration load now bounds
+  `len(platform.org) + len(platform.id) + 7` against the 170-byte family budget, so the suffix a deployment will
+  mint cannot push it over the entity-ID bound after the fact.
+- The KV `platform` key is now a **published mirror only**. It is still written for the UI; the running configuration
+  never adopts it back.
 
 ### The obligations
 
-1. **Delete every re-derivation.** semteams: `cmd/semteams/tools/{emitdevviatestplan/executor.go:354, emitautoresearchbaseline/executor.go:169,
-   emitautoresearchmeasurement/executor.go:282, emitchange/executor.go:165}` read `ToolCall.Metadata[agentic.MetadataKeyRunEntityID]`
-   (already stamped beside `MetadataKeyRunID`); `cmd/semteams/runanchor/runanchor.go:41` drops its fallback — when only
-   `run_id` is present there is no run entity to reach; `cmd/semteams/commands/implementspec/command.go:212-217`
-   accepts a run entity ID (its `isChainExecutionEntityID` shape check at `:322` remains valid) and stops composing
-   one from `msg.RunID`. `agentic.ChainExecutionEntityID` and `TryChainExecutionEntityID` no longer exist — the
-   compile error is the notice.
-2. **`agentrun.NewMilestoneSubscriber(mgr, logger)`** — semteams `cmd/semteams/main.go:939` drops the
-   `NewNATSLoopTripleReader` and the org/platform arguments; the ancestry-walk fallback is gone because every loop in
-   a run carries its run entity at spawn.
-3. **`agentrun.Mint(ctx, mgr, org, platform, originEntityID)`** — semdev's conformance fixture
-   `test/conformance/testdata/g2fixture/bad.go:33` drops the loop-id argument.
-4. **Decide `platform.unique` per config.** Adopters whose e2e or fixtures hardcode the pair (semteams 4 configs,
-   semspec/semspec-ui 13/11/11, semdragon 3, semdev 2, semmem 3, semboids, semsage, semconnect) either declare
-   `unique: true` for those fixtures or read the effective pair from `semstreams_config/platform_identity` as this
-   repo's e2e now does. semmachina composes `platform.id` per world in Go; each world's id is suffixed on its own
-   first boot unless its `ssconfig.Config.Platform.Unique` is set.
-5. **semsource:** `entityid.MaxOrgLen`'s arithmetic (`entityid.go:82-97`) assumes a 9-byte platform; the suffix
-   adds 7 bytes. Re-derive the org bound from `semtypes.MaxAuthorityPairBytes()` (168) rather than a local constant.
-6. **Environment overrides.** `STREAMKIT_PLATFORM_ID`, `STREAMKIT_PLATFORM_TYPE`, `STREAMKIT_PLATFORM_REGION` and
-   `STREAMKIT_NATS_{URLS,USERNAME,PASSWORD,TOKEN}` are gone (a dead pivot's residue). `SEMSTREAMS_NATS_URLS`,
-   `SEMSTREAMS_CONFIG`, `SEMSTREAMS_LOG_LEVEL` are unchanged. Credential overrides have no environment path; put them
-   in the configuration document.
-7. **Removed with no replacement:** `message.FederationMeta`, `DefaultFederationMeta`, `NewFederationMeta{,WithTime}`,
-   `message.GetPlatform`, `message.GetUID`, `message.WithFederation{,AndTime}` (never serialized; no sister called
-   them — semdragon's own research notes measured the same); `pkg/types.EntityID.DeploymentPrefix()`;
-   `config.MinimalConfig`.
+1. **Provision fresh NATS storage.** A configuration bucket written before this change holds `platform`/`version`
+   keys and no `platform_identity` record. Start **refuses** such a bucket by design, naming that cause, and mints
+   and creates nothing — see "Doing nothing" below. This is the pre-v1 posture (ADR-102 d7): no migration, no alias,
+   no rewrite.
+2. **If a deployment must keep an unsuffixed identifier, pre-create its identity record** before first boot. One
+   line, per deployment, impossible to clone through a configuration template:
+
+   ```bash
+   nats kv put semstreams_config platform_identity \
+     '{"org":"acme","stem":"field-ops-7","id":"field-ops-7"}'
+   ```
+
+   The adopt branch takes it and validates the identifier under the same segment grammar and authority-pair bound as
+   a configured value. Use this for a deployment whose identifier is already globally unique — it is the framework's
+   replacement for the `platform.unique` knob the owner deleted on 2026-08-30, precisely because a boolean living in
+   the cloned document recreates the footgun the mint exists to close.
+3. **Stop predicting the pair; read it.** Any fixture, e2e helper, seed file, dashboard, or tool that composes an
+   entity ID by concatenating a configuration file's `platform.org`/`platform.id` will compose under `dep` while the
+   deployment is `dep-7f3a9c`, and the graph boundary will refuse the write `foreign_authority`. Read
+   `semstreams_config/platform_identity` (or pre-create it per obligation 2). Known holders: semteams (4 configs),
+   semspec and semspec-ui-* (13/11/11), semdragon (3), semdev (2), semmem (3), semboids, semsage, semconnect.
+4. **semmachina** composes `platform.id` per world in Go; each world's identifier is suffixed on its own first boot.
+   Pre-create the record for a world that must stay unsuffixed.
+5. **semsource:** `entityid.MaxOrgLen`'s arithmetic (`entityid.go:82-97`) assumes a 9-byte platform. Re-derive the
+   org bound from `semtypes.MaxAuthorityPairBytes()` minus the seven reserved suffix bytes rather than a local
+   constant.
+6. **Non-Go carriers.** Rule packs, compose files, TypeScript fixtures, and vendored OpenAPI documents that spell an
+   `org.platform` prefix as a literal are outside every Go census and break the same way as obligation 3. Grep your
+   repository for your own `platform.id` value, not for a Go symbol.
 
 ### Doing nothing
 
-- A re-derivation site does not compile (`ChainExecutionEntityID` gone) — LOUD.
-- A `TaskMessage` with `run_id` and no `run_entity_id` fails validation at submission — LOUD, typed.
-- A fixture predicting the pair from a config file mints under `dep` while the deployment is `dep-7f3a9c`; the
-  boundary refuses it `foreign_authority` — LOUD at the first write, silent in the fixture's own eyes: read the pair.
-- A second import lane fed the same peer entity as a first one is refused `import_collision` — LOUD, metered
-  `mutation_rejections{reason="authority_collision"}`; declare one lane per peer.
+- A configuration bucket carried over from before this change **refuses Start, LOUD**, naming the pre-identity
+  bucket as the cause and instructing fresh storage — and it creates no record, so the refusal is repeatable rather
+  than a wedge. This is the one upgrade path, and it is deliberately not silent.
+- A fixture predicting the pair from a configuration file mints under `dep` while the deployment is `dep-7f3a9c`;
+  the graph boundary refuses it `foreign_authority` — LOUD at the first write, silent in the fixture's own eyes.
+  Read the pair.
+- An authority pair that fits the 170-byte budget only while unsuffixed now fails **configuration load**, before any
+  record is created — LOUD, and repairable by shortening the identifier.
+- An external writer that puts a `platform` key into the shared bucket no longer changes the running deployment's
+  authority. If you relied on that as a runtime override, it is gone; identity is established at Start and nothing
+  moves it afterwards.
