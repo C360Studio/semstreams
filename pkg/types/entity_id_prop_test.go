@@ -10,10 +10,34 @@ import (
 // Property-based contract tests for the entity-ID grammar (rapid spike).
 // Each property encodes a stated spec invariant, cited by requirement, and its
 // generator is written from the spec grammar, never from the implementation.
-// The existing FuzzParseEntityIDRoundTrip throws arbitrary strings at the
-// reject path; these generate from the accept grammar, so the two are
-// complementary: fuzz explores rejection densely, properties explore
-// acceptance densely.
+//
+// The division of labor across the three suites over this grammar — none of
+// them subsumes another, and deleting any one opens a hole:
+//
+//   - These properties own the ACCEPT path. They generate from the spec
+//     grammar, so they assert that everything canonical is accepted, parsed
+//     into its named position, and re-serialized byte-identically. They say
+//     nothing about what must be REJECTED: nothing outside the grammar is
+//     ever generated.
+//   - The hand-written tables (TestValidateEntityIDContract,
+//     TestValidateEntityIDPrefix, TestEntityIDFailurePrecedence) own
+//     CLASSIFIED rejection — that a specific malformed input is refused, with
+//     a specific code, reason, and precedence. Nothing else in the package
+//     asserts that any input is refused at all.
+//   - FuzzParseEntityIDRoundTrip owns ORACLE SELF-CONSISTENCY: validation is
+//     deterministic, Validate and Parse agree, and an accepted key round-trips
+//     through Key(). Read it — it never asserts that anything is rejected, so
+//     it cannot see an accept-path widening that stays self-consistent.
+//
+// Measured 2026-08-31, because the earlier wording here claimed the fuzz
+// target "explores rejection densely" and that is false: relaxing the
+// first-byte rule to admit a leading '_' widens the accept path while
+// preserving the Key() round-trip, and it survives 5.2M fuzz executions over
+// 30s AND all three properties. Only the tables catch it. (The narrower
+// seven-part arity widening does die in the fuzz target — but only because a
+// seven-part accept also breaks round-trip, which is the oracle doing its own
+// job, not rejection coverage.) The tables are load-bearing; do not delete
+// them on the theory that fuzz or properties cover them.
 
 // entityIDSegment generates one canonical segment from the spec grammar: first
 // byte alphanumeric, remaining bytes alphanumeric, '_', or '-'. Length is
@@ -115,7 +139,19 @@ func TestPropEntityIDPatternMatch(t *testing.T) {
 			return
 		}
 		position := rapid.SampledFrom(literalPositions).Draw(t, "substitutedPosition")
-		substitute := entityIDSegment.Draw(t, "substitute")
+		// Half the draws are NEAR misses. An independent draw from the ~62^n
+		// segment space is a foreign literal by brute distance, so it cannot
+		// distinguish "compares bytes" from "compares case-insensitively" —
+		// and the spec forbids case-folding by name (entity-id-contract: MUST
+		// NOT trim, case-fold, Unicode-normalize, escape, encode, replace).
+		// Measured: an EqualFold mutation of MatchEntityIDPattern survived the
+		// independent draw at the default budget on six fresh seeds, and needed
+		// 285 tests at 200x the budget to die by luck.
+		substitute := rapid.OneOf(
+			entityIDSegment,
+			rapid.Just(strings.ToUpper(segments[position])),
+			rapid.Just(strings.ToLower(segments[position])),
+		).Draw(t, "substitute")
 		if substitute == segments[position] {
 			return
 		}
