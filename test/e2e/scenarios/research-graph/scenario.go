@@ -135,12 +135,18 @@ type Config struct {
 	CompleteTimeout time.Duration `json:"complete_timeout"`
 
 	// PlatformOrg / PlatformID are the authority STEM configs/research-graph-e2e.json
-	// declares. DefaultConfig seeds them from that file; Setup then REPLACES
-	// PlatformID with the identifier the running deployment records in
-	// semstreams_config/platform_identity, which carries the entropy suffix
-	// minted onto platform.id at first boot (ADR-104). Until Setup runs they
-	// are the cross-check — "the stack I am driving is the configuration I
-	// name" — and never an entity ID's positions 1-2.
+	// declares, and they stay that way: Setup PRESERVES the declaration and
+	// never writes the observed value back here. Their whole job is the
+	// cross-check — "the stack I am driving is the configuration I name" —
+	// which EffectiveAuthority performs against the identifier the running
+	// deployment records in semstreams_config/platform_identity, carrying the
+	// entropy suffix minted onto platform.id at first boot (ADR-104).
+	//
+	// These are NEVER an entity ID's positions 1-2. The observed authority
+	// lives in the scenario's authorityOrg / authorityPlatform fields; keeping
+	// the two apart is what lets the cross-check mean anything, since a
+	// declaration overwritten with the observed value can no longer disagree
+	// with it.
 	PlatformOrg string `json:"platform_org"`
 	PlatformID  string `json:"platform_id"`
 }
@@ -154,8 +160,9 @@ func DefaultConfig() *Config {
 		ChainKickoffTimeout: 30 * time.Second,
 		CompleteTimeout:     60 * time.Second,
 		PlatformOrg:         "c360",
-		// configs/research-graph-e2e.json platform.id — the STEM. Setup swaps in
-		// the minted identifier the deployment records; see the field comment.
+		// configs/research-graph-e2e.json platform.id — the STEM, and it stays
+		// the stem. Setup cross-checks it against the deployment's minted
+		// identifier and stores that separately; see the field comment.
 		PlatformID: "research-graph-e2e",
 	}
 }
