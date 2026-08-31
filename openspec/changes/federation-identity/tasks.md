@@ -60,6 +60,15 @@ in `docs/proposals/gh1168-federation-identity-pins.md`; inventory
       `TestConfigRejectsOversizedAuthorityPair`, `TestConfigRejectsPairThatOnlyFitsUnsuffixed`,
       `TestEffectivePairIsBoundedWithoutTheDeclarationReserve`, `TestMaximumDeclarablePairMintsAndStarts`;
       mutation checks M14 and M15.
+- [x] 3.5 `config/manager.go`, `graph/`, `natsclient/`, `processor/rule/`: the Codex re-review's three findings —
+      the acquired handles stay LOCAL through every Start step that can refuse and reach the struct only via
+      `publishBucket` at the end, so a refused Start leaves `PushToKV`/`PutComponentToKV`/`DeleteComponentFromKV`
+      returning `errBucketNotAcquired` and the foreign bucket byte-for-byte unchanged (B6); the shared bucket gains
+      a `framework-bucket-catalog` descriptor — operational, open-write, History 5, a NEW strict no-lifecycle
+      retention kind that verifies and refuses instead of reconciling — and BOTH creators (`config.Manager`,
+      `processor/rule.ConfigManager`) resolve it, so the retention guarantee no longer depends on who created the
+      bucket first (B7); `Start` rejects a nil context before touching state or NATS, where it previously panicked
+      inside JetStream (B8). Mutation checks M20, M21, M22.
 - [x] 3.4 `config/manager.go`: the Codex round's four code findings — bucket acquisition moved out of the
       constructor into `Start(ctx)` (B4: no invented root, `natsClient` retained instead of a context, and
       `errBucketNotAcquired` for any bucket-dependent method called before Start); `acquireBucket` refuses a bucket
@@ -73,8 +82,9 @@ in `docs/proposals/gh1168-federation-identity-pins.md`; inventory
       read and branching adopt / mint+`Create` / refuse-pre-identity-bucket per the design §3 table; return the
       first-boot answer from that same read, counting keys other than `platform_identity`. Mint is `crypto/rand`
       3 bytes → 6 lowercase hex. `ErrKVKeyExists` re-reads and adopts. The effective identifier is applied through
-      `SafeConfig.Mutate`, which re-validates the pair. Every KV operation uses the Start context
-      (`manager.go:73`'s constructor root is untouched and stays recorded debt).
+      `SafeConfig.Mutate`, which re-validates the pair. Every KV operation uses the Start context — the constructor
+      creates no context and performs no I/O at all (3.4/B4 moved acquisition into `Start(ctx)`; the earlier text
+      here still recorded it as untouched debt, which contradicted 3.4, the code, and conformance — Codex MEDIUM).
 - [x] 3.3 `config/manager.go`: delete `hasKVConfig` (its only caller is replaced by 3.2) and delete `updateConfig`'s
       `case "platform"` arm so the KV `platform` key is a published mirror the running configuration never adopts;
       `PushToKV` keeps writing it. Neither `PushToKV` nor `syncFromKV` writes or applies `platform_identity`.
@@ -106,6 +116,13 @@ with a matching `md5 -q`. Verbatim failure lines below.
       for the suffix"). Re-pointed from `maxDeclarableAuthorityPairBytes` after the review round moved the reserve to
       the declaration boundary; the reviewer's note that M14 also reds `TestConfigRejectsOversizedAuthorityPair` is
       the stronger signal and is recorded here.
+- [x] 4.11 M20 `Start`: publish the handles at acquisition instead of after establishment →
+      `TestRefusedStartDisarmsEveryExportedWriter` failed — `PushToKV` returned nil after a refused Start.
+- [x] 4.12 M21 `Start`: drop the nil-context guard → `TestStartRejectsNilContextWithoutSideEffects` failed with the
+      panic Codex named, `jetstream.(*jetStream).wrapContextWithoutDeadline`.
+- [x] 4.13 M22 `processor/rule`: acquire the shared bucket with its own `CreateKeyValueBucket` instead of the
+      descriptor → `TestSharedConfigBucketResolvesThroughOneDescriptor` failed naming
+      `processor/rule/kv_config_integration.go:581`.
 - [x] 4.8 M16 `acquireBucket`: skip `AssertNoLifecycleRetention` → `TestEvictingConfigBucketRefusesStart` failed on
       both TTL and MaxBytes ("An error is expected but got nil") and
       `TestIdentityUnderAnEvictingBucketNeverRemints` failed `expected: "dep-31a043" actual: "dep-7fbc40"` — the
@@ -152,9 +169,9 @@ with a matching `md5 -q`. Verbatim failure lines below.
       `go test ./test/contract/...`; `task entity-id:audit`; `task schema:generate && git diff --exit-code schemas/ specs/`;
       `openspec validate federation-identity --strict --no-interactive`; `go mod tidy -diff`;
       `bash scripts/inventory-verify.sh docs/proposals/gh1168-federation-identity-pins.md`.
-- [x] 6.2 Covering e2e tiers, one at a time on an idle host, results verbatim. Re-run at `ede202e4` after the Codex
+- [ ] 6.2 Covering e2e tiers, one at a time on an idle host, results verbatim. Re-run at `ede202e4` after the Codex
       round changed the config manager's acquisition; the `e09df6f2` run is superseded.
-- [x] 6.2a `task e2e:core` EXIT=0 — `[OK] platform_identity records {org, stem, id} and the effective pair carries
+- [ ] 6.2a `task e2e:core` EXIT=0 — `[OK] platform_identity records {org, stem, id} and the effective pair carries
       the minted suffix`; `[OK] A pre-identity bucket refuses LOUD, exits nonzero, and creates no identity record`.
       The stack now also passes the bucket-policy check and the environment claim on every boot.
 - [x] 6.2b `task e2e:lifecycle` EXIT=0.

@@ -66,7 +66,7 @@ func TestKVCatalog_EveryRowValidates(t *testing.T) {
 		assert.False(t, seen[spec.Name], "catalog row %q must be declared exactly once", spec.Name)
 		seen[spec.Name] = true
 	}
-	assert.Len(t, seen, 19, "the catalog carries the 19 retained framework-guaranteed buckets")
+	assert.Len(t, seen, 20, "the catalog carries the 20 retained framework-guaranteed buckets")
 }
 
 // TestKVCatalog_DeclaredPolicies pins the architect-census policy decisions
@@ -95,8 +95,28 @@ func TestKVCatalog_DeclaredPolicies(t *testing.T) {
 
 	// GRAPH_STATUS keeps its readiness replay depth.
 	assert.Equal(t, uint8(3), spec(BucketGraphStatus).History)
-	// Every catalog bucket is owner-only and no-lifecycle.
+
+	// The shared runtime configuration bucket is catalogued for its RETENTION
+	// guarantee rather than for write-ownership: two subsystems write it by
+	// design (config.Manager, processor/rule.ConfigManager), and declaring it
+	// owner-only would add it to the derived generic-write guard set and change
+	// rule behaviour. Its retention is STRICT — verify and refuse, never
+	// reconcile — because the platform identity it holds is create-once and a
+	// silent TTL strip would conceal that the identity may already have expired
+	// (ADR-104; ADR-102 d7).
+	sharedConfig := spec(BucketSemStreamsConfig)
+	assert.Equal(t, natsclient.WriteOpen, sharedConfig.Write)
+	assert.Equal(t, natsclient.RetentionNoLifecycleStrict, sharedConfig.Retention.Kind)
+	assert.Equal(t, uint8(5), sharedConfig.History)
+	assert.Equal(t, natsclient.ClassOperational, sharedConfig.Class)
+
+	// EVERY OTHER catalog bucket is owner-only and no-lifecycle. The exception
+	// is named, not widened: a second write-open row, or a row that quietly
+	// swaps to the strict kind, still trips this.
 	for _, s := range KVCatalog() {
+		if s.Name == BucketSemStreamsConfig {
+			continue
+		}
 		assert.Equal(t, natsclient.WriteOwnerOnly, s.Write, "%s must be owner-only", s.Name)
 		assert.Equal(t, natsclient.RetentionNoLifecycle, s.Retention.Kind,
 			"%s must declare no lifecycle retention", s.Name)

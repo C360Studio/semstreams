@@ -53,4 +53,6 @@ fires after the two have already collided inside one graph. A first-boot persist
 
 ## Capabilities touched
 
-`entity-id-contract` (MODIFIED ×1, ADDED ×1), `component-runtime-config` (MODIFIED ×1, ADDED ×1).
+`entity-id-contract` (MODIFIED ×1, ADDED ×1), `component-runtime-config` (MODIFIED ×1, ADDED ×1),
+`framework-bucket-catalog` (ADDED ×1 — the shared configuration bucket now carries a framework retention guarantee,
+so the catalog owns its descriptor).

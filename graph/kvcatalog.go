@@ -100,6 +100,31 @@ func KVCatalog() []natsclient.BucketSpec {
 	// account resource, and no retention needed to hold that line.
 	storageReport.History = 10
 
+	// The shared runtime configuration bucket is in the catalog for its
+	// RETENTION guarantee, not for write-ownership: ADR-104 made it the home of
+	// the create-once platform identity record, and an evicted identity is
+	// reminted as a second authority ADR-102 d7 forbids ever reconciling. Two
+	// subsystems write it by design — config.Manager and processor/rule's
+	// ConfigManager — so Write is open; declaring it owner-only would put it in
+	// the rule update_kv guard set and change behaviour this change does not own.
+	//
+	// Its retention kind is STRICT no-lifecycle: verify and refuse, never
+	// reconcile. Stripping a TTL here would be silent repair of a bucket whose
+	// identity may ALREADY have expired, which is the remint ADR-104 exists to
+	// prevent. History 5 preserves the configuration-versioning depth this
+	// bucket has always carried.
+	semstreamsConfig := natsclient.BucketSpec{
+		Name:        BucketSemStreamsConfig,
+		Owner:       "config (runtime configuration) + processor/rule (rules.*)",
+		Description: "SemStreams runtime configuration",
+		Class:       natsclient.ClassOperational,
+		Retention:   natsclient.RetentionPolicy{Kind: natsclient.RetentionNoLifecycleStrict},
+		Write:       natsclient.WriteOpen,
+		Posture:     natsclient.PostureOwnerCreates,
+		History:     5,
+		Replicas:    1,
+	}
+
 	return []natsclient.BucketSpec{
 		// Authoritative domain state + graph-ingest's operational tiers.
 		entityStates,
@@ -138,6 +163,7 @@ func KVCatalog() []natsclient.BucketSpec {
 		// Framework operational plane.
 		graphStatus,
 		storageReport,
+		semstreamsConfig,
 	}
 }
 

@@ -65,12 +65,19 @@ alias, no parallel path; sisters handle their own migration.
    it. A configuration that declares the minted identifier is refused with guidance naming the stem, decided by
    comparison against the recorded value rather than by inspecting the string's shape.
 
-6. **A bucket that can evict the identity is refused before anything is minted.** Acquisition returns an existing
-   bucket unchanged and never reconciles its policy, and this package is not the bucket's only creator, so the
-   policy in force may be one the framework never chose. A create-once identity under a TTL or a binding size cap
-   expires, and the next boot mints a *second* authority that decision 7 of ADR-102 forbids ever reconciling. Start
-   therefore reads the live policy and fails, naming the offending value, before minting or creating anything. The
-   bucket is acquired under the lifecycle context, never one a constructor invented.
+6. **A bucket that can evict the identity is refused before anything is minted, and the guarantee lives in the
+   catalog.** The shared configuration bucket now carries a framework RETENTION guarantee, which is what the
+   `framework-bucket-catalog` contract says puts a bucket in its descriptor table. It is catalogued as operational,
+   open-write (two subsystems write it by design), History 5, with a **strict** no-lifecycle retention kind:
+   acquisition verifies that no TTL and no binding size cap is in force and fails closed, and does NOT reconcile the
+   policy in place.
+
+   Strict rather than the existing reconciling kind because repair is the wrong answer here: stripping a TTL fixes
+   the policy while saying nothing about the keys it already deleted, so a create-once identity may be gone and the
+   next boot would mint a *second* authority that decision 7 of ADR-102 forbids ever reconciling. Both writers of the
+   bucket — the config manager and the rule ConfigManager — resolve that one descriptor, so the guarantee no longer
+   depends on which of them creates it first. The bucket is acquired under the lifecycle context, never one a
+   constructor invented.
 
 7. **At most one `platform.environment` may establish against one bucket.** The pair `(org, id, environment)` was
    compared only on the subsequent-boot branch, so two deployments that both found the bucket empty — one `prod`,
@@ -97,8 +104,14 @@ alias, no parallel path; sisters handle their own migration.
   `platform.environment` can no longer both start against one bucket; the second is refused. This carries the
   environment distinction after #1188 retires the gh#459 config-key guard, which is the only place it lived before —
   and it holds on the first-boot branch, where that guard never ran.
-- The shared configuration bucket is acquired inside `Start(ctx)`. A caller that used a bucket-dependent method
-  before Start now receives a named error instead of operating on a bucket the constructor had opened behind it.
+- The shared configuration bucket is acquired inside `Start(ctx)`, which also rejects a nil context. A caller that
+  used a bucket-dependent method before Start now receives a named error instead of operating on a bucket the
+  constructor had opened behind it.
+- **A Start that fails leaves no writer armed.** The acquired handles reach the exported write methods only when
+  Start completes; every refusal — retention, foreign identity, pre-identity bucket, lost environment claim,
+  watchers — leaves `PushToKV` and the component writers returning the not-acquired error. A caller that wrote
+  through the manager after a failed Start was, until this change, overwriting a bucket the framework had just
+  refused as another platform's.
 - #1188 namespaces this bucket by the pre-mint `(org, stem)` and retires the gh#459 guard; the mechanism above is
   correct without that guard, because the adopt branch performs its own comparison.
 

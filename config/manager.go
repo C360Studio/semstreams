@@ -14,8 +14,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/types"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -72,7 +74,12 @@ type Manager struct {
 // configBucketName is the fixed, global name of the shared configuration
 // bucket. Every sem* app pointed at one NATS server shares it, which is why the
 // deployment's identity has to be recorded IN it rather than assumed about it.
-const configBucketName = "semstreams_config"
+//
+// The name is the catalog's, not this package's: since ADR-104 the framework
+// guarantees this bucket's retention, which is what puts it in the
+// framework-bucket-catalog descriptor table. A local literal would fork the
+// name from the descriptor that governs it, and a contract test rejects one.
+const configBucketName = graph.BucketSemStreamsConfig
 
 // platformIdentityKVKey is the key in the shared configuration bucket holding
 // the deployment's durable platform identity (ADR-104).
@@ -140,38 +147,36 @@ var errBucketNotAcquired = errors.New(
 // acquireBucket obtains the shared configuration bucket under the CALLER's
 // context and refuses a policy that could silently delete what this package
 // mints into it.
-func (cm *Manager) acquireBucket(ctx context.Context) error {
-	kv, err := cm.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      configBucketName,
-		Description: "SemStreams runtime configuration",
-		History:     5, // Keep last 5 versions
-	})
+func (cm *Manager) acquireBucket(ctx context.Context) (jetstream.KeyValue, *natsclient.KVStore, error) {
+	// Through the catalog's owner seam, not a direct create. The descriptor —
+	// not this function — declares History 5 and the strict no-lifecycle
+	// retention that refuses an evicting policy rather than repairing one,
+	// because the identity such a policy could already have deleted is
+	// create-once (ADR-104; ADR-102 decision 7). The other writer of this
+	// bucket, processor/rule's ConfigManager, resolves the same descriptor, so
+	// the guarantee no longer depends on which of them creates it first.
+	kv, err := graph.EnsureCatalogBucket(ctx, cm.natsClient, configBucketName)
 	if err != nil {
-		return fmt.Errorf("create/get KV bucket: %w", err)
+		return nil, nil, fmt.Errorf("acquire config bucket %q: %w", configBucketName, err)
 	}
-	kvStore := cm.natsClient.NewKVStore(kv)
+	return kv, cm.natsClient.NewKVStore(kv), nil
+}
 
-	// CreateKeyValueBucket returns an EXISTING bucket unchanged — it neither
-	// reconciles nor validates its policy — and this bucket has a second
-	// creator (processor/rule's ConfigManager, for its rules.* keys), so the
-	// policy in force may be one nothing here chose. platform_identity is
-	// create-once correctness state: under a TTL or a size cap it expires, the
-	// next boot sees an empty bucket, and the deployment mints a SECOND
-	// authority that ADR-102 decision 7 forbids ever reconciling. Validate what
-	// exists rather than trusting who created it, and refuse before minting.
-	if err := kvStore.AssertNoLifecycleRetention(ctx, configBucketName); err != nil {
-		return fmt.Errorf(
-			"config bucket %q carries an eviction policy, so the durable platform identity it holds could be deleted and reminted (ADR-102 decision 7 forbids the second authority that would create): %w. "+
-				"Provision this bucket with no TTL and no MaxBytes, or point this deployment at storage where it can",
-			configBucketName, err,
-		)
-	}
-
+// publishBucket makes the acquired handles visible to the EXPORTED writers.
+//
+// It runs once, at the very end of a successful Start, and that placement is
+// the contract: until it runs, PushToKV, PutComponentToKV and
+// DeleteComponentFromKV all return errBucketNotAcquired. A Start that refused —
+// a foreign identity, a pre-identity bucket, a lost environment claim, a
+// malformed record, a watcher that would not open — therefore leaves no armed
+// writer behind. Publishing at acquisition instead let a caller overwrite the
+// very bucket Start had just refused as another platform's, which is the
+// detached running mode component-runtime-config says does not exist.
+func (cm *Manager) publishBucket(kv jetstream.KeyValue, kvStore *natsclient.KVStore) {
 	cm.bucketMu.Lock()
 	cm.kv = kv
 	cm.kvStore = kvStore
 	cm.bucketMu.Unlock()
-	return nil
 }
 
 // store returns the acquired KVStore, or errBucketNotAcquired before Start.
@@ -273,12 +278,27 @@ func (cm *Manager) OnChange(pattern string) <-chan Update {
 
 // Start begins watching for configuration changes
 func (cm *Manager) Start(ctx context.Context) error {
+	// Reject a nil context BEFORE any state is mutated or NATS is touched.
+	// Moving bucket acquisition here made Start this package's exported
+	// context-taking boundary, and the hard rule says such a boundary rejects
+	// nil when it can return an error. It is not a theoretical rule here: nil
+	// reaches JetStream's wrapContextWithoutDeadline, which calls Deadline() on
+	// the nil interface and panics — after shutdownCh had already been replaced.
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "ConfigManager", "Start", "context cannot be nil")
+	}
+
 	// Initialize shutdown channel
 	cm.shutdownCh = make(chan struct{})
 
 	// Acquire the shared configuration bucket under THIS context, and refuse a
 	// policy that could evict the identity established below.
-	if err := cm.acquireBucket(ctx); err != nil {
+	//
+	// The handles stay LOCAL through every step of Start that can refuse. They
+	// reach the struct — and with it the exported writers — only at the end,
+	// through publishBucket.
+	kvHandle, kvStore, err := cm.acquireBucket(ctx)
+	if err != nil {
 		return err
 	}
 
@@ -286,7 +306,7 @@ func (cm *Manager) Start(ctx context.Context) error {
 	// watchers, or writes (ADR-104). The same single read of the bucket's keys
 	// answers first-boot detection, so there is no second probe to disagree
 	// with it.
-	hasConfig, err := cm.establishPlatformIdentity(ctx)
+	hasConfig, err := cm.establishPlatformIdentity(ctx, kvStore)
 	if err != nil {
 		return err
 	}
@@ -294,7 +314,7 @@ func (cm *Manager) Start(ctx context.Context) error {
 	if !hasConfig {
 		// First boot: push file config to KV for UI
 		cm.logger.Info("First boot detected, pushing config to KV")
-		if err := cm.PushToKV(ctx); err != nil {
+		if err := cm.pushToKV(ctx, kvStore); err != nil {
 			cm.logger.Error("Failed to push initial config to KV", "error", err)
 			// Continue anyway - UI won't have initial state but app can run
 		}
@@ -311,7 +331,7 @@ func (cm *Manager) Start(ctx context.Context) error {
 		// org/id on either side) fall through to the existing behavior —
 		// they're indistinguishable, and per-platform bucket namespacing is
 		// the complete fix for that case.
-		if kvIdentity, found := cm.kvPlatformIdentity(ctx); found {
+		if kvIdentity, found := cm.kvPlatformIdentity(ctx, kvHandle); found {
 			localIdentity := cm.config.Get().Platform
 			if platformHasIdentity(localIdentity) && platformHasIdentity(kvIdentity) &&
 				platformIdentityTuple(localIdentity) != platformIdentityTuple(kvIdentity) {
@@ -333,11 +353,11 @@ func (cm *Manager) Start(ctx context.Context) error {
 
 		// Subsequent boot: compare versions to decide sync direction
 		fileVersion := cm.config.Get().Version
-		kvVersion, err := cm.getKVVersion(ctx)
+		kvVersion, err := cm.getKVVersion(ctx, kvHandle)
 		if err != nil {
 			cm.logger.Warn("Failed to get KV version, syncing from KV", "error", err)
 			// Fall back to syncing from KV if we can't get version
-			if err := cm.syncFromKV(ctx); err != nil {
+			if err := cm.syncFromKV(ctx, kvHandle); err != nil {
 				cm.logger.Warn("Failed to sync from KV on startup", "error", err)
 			}
 		} else {
@@ -349,7 +369,7 @@ func (cm *Manager) Start(ctx context.Context) error {
 					"kv_version", kvVersion,
 					"error", err)
 				// Fall back to syncing from KV on version comparison error
-				if err := cm.syncFromKV(ctx); err != nil {
+				if err := cm.syncFromKV(ctx, kvHandle); err != nil {
 					cm.logger.Warn("Failed to sync from KV on startup", "error", err)
 				}
 			} else if cmp > 0 {
@@ -357,7 +377,7 @@ func (cm *Manager) Start(ctx context.Context) error {
 				cm.logger.Info("File version is newer than KV, updating KV",
 					"file_version", fileVersion,
 					"kv_version", kvVersion)
-				if err := cm.PushToKV(ctx); err != nil {
+				if err := cm.pushToKV(ctx, kvStore); err != nil {
 					cm.logger.Error("Failed to update KV with newer config", "error", err)
 				}
 			} else if cmp < 0 {
@@ -366,14 +386,14 @@ func (cm *Manager) Start(ctx context.Context) error {
 					"file_version", fileVersion,
 					"kv_version", kvVersion,
 					"hint", "bump file version to update KV")
-				if err := cm.syncFromKV(ctx); err != nil {
+				if err := cm.syncFromKV(ctx, kvHandle); err != nil {
 					cm.logger.Warn("Failed to sync from KV on startup", "error", err)
 				}
 			} else {
 				// Versions equal: sync from KV (UI may have made changes)
 				cm.logger.Debug("File and KV versions match, syncing from KV",
 					"version", fileVersion)
-				if err := cm.syncFromKV(ctx); err != nil {
+				if err := cm.syncFromKV(ctx, kvHandle); err != nil {
 					cm.logger.Warn("Failed to sync from KV on startup", "error", err)
 				}
 			}
@@ -388,11 +408,6 @@ func (cm *Manager) Start(ctx context.Context) error {
 		"platform",       // Single key
 		"nats",           // Single key
 		"model_registry", // Single key
-	}
-
-	kvHandle, err := cm.bucket()
-	if err != nil {
-		return err
 	}
 
 	// Create watchers with cleanup on error
@@ -425,6 +440,11 @@ func (cm *Manager) Start(ctx context.Context) error {
 		cleanup()
 		return fmt.Errorf("failed to create any watchers")
 	}
+
+	// Every step that can refuse has now passed. Publishing the handles here,
+	// and only here, is what makes errBucketNotAcquired truthful for a Start
+	// that was attempted and refused — not merely for one never called.
+	cm.publishBucket(kvHandle, kvStore)
 
 	// Process updates from all watchers in background
 	for _, watcher := range cm.watchers {
@@ -832,6 +852,12 @@ func (cm *Manager) PushToKV(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	return cm.pushToKV(ctx, kvStore)
+}
+
+// pushToKV is PushToKV over an explicit handle, so Start can publish
+// configuration while the handles are still private.
+func (cm *Manager) pushToKV(ctx context.Context, kvStore *natsclient.KVStore) error {
 	cfg := cm.config.Get()
 
 	// Push version first
@@ -973,11 +999,7 @@ func (cm *Manager) notifySubscribers(path string) {
 // created it look like a subsequent boot: it would skip the initial PushToKV,
 // and syncFromKV would then reset the in-memory service map from a bucket that
 // holds nothing to repopulate it with.
-func (cm *Manager) establishPlatformIdentity(ctx context.Context) (bool, error) {
-	kvStore, err := cm.store()
-	if err != nil {
-		return false, err
-	}
+func (cm *Manager) establishPlatformIdentity(ctx context.Context, kvStore *natsclient.KVStore) (bool, error) {
 	keys, err := kvStore.Keys(ctx)
 	if err != nil {
 		// Fail closed: a bucket that cannot be read is a bucket that must not
@@ -1001,10 +1023,10 @@ func (cm *Manager) establishPlatformIdentity(ctx context.Context) (bool, error) 
 
 	switch {
 	case recordPresent:
-		if err := cm.claimEnvironment(ctx); err != nil {
+		if err := cm.claimEnvironment(ctx, kvStore); err != nil {
 			return false, err
 		}
-		return configKeys > 0, cm.adoptPlatformIdentity(ctx)
+		return configKeys > 0, cm.adoptPlatformIdentity(ctx, kvStore)
 	case configKeys > 0:
 		declared := cm.config.Get().Platform
 		return false, fmt.Errorf(
@@ -1023,10 +1045,10 @@ func (cm *Manager) establishPlatformIdentity(ctx context.Context) (bool, error) 
 		// Guard BEFORE the record, so a crash between the two leaves a safe
 		// state: the same environment proceeds to mint, a second one is
 		// refused.
-		if err := cm.claimEnvironment(ctx); err != nil {
+		if err := cm.claimEnvironment(ctx, kvStore); err != nil {
 			return false, err
 		}
-		return false, cm.mintPlatformIdentity(ctx)
+		return false, cm.mintPlatformIdentity(ctx, kvStore)
 	}
 }
 
@@ -1046,11 +1068,7 @@ func (cm *Manager) establishPlatformIdentity(ctx context.Context) (bool, error) 
 // the record: the `{org, stem, id}` shape is a cross-repo read contract and
 // stays exactly that. This guard is also what carries the environment
 // distinction after #1188 retires the gh#459 config-key guard.
-func (cm *Manager) claimEnvironment(ctx context.Context) error {
-	kvStore, err := cm.store()
-	if err != nil {
-		return err
-	}
+func (cm *Manager) claimEnvironment(ctx context.Context, kvStore *natsclient.KVStore) error {
 	declared := cm.config.Get().Platform.Environment
 	claim, err := json.Marshal(declared)
 	if err != nil {
@@ -1102,11 +1120,7 @@ func summarizeKeys(keys []string) string {
 // records it once. Create, not Put: two co-processes booting against one bucket
 // must converge on ONE authority, and ADR-102 decision 7 forbids the rewrite
 // that would repair a split one. The loser of the race adopts the winner's.
-func (cm *Manager) mintPlatformIdentity(ctx context.Context) error {
-	kvStore, err := cm.store()
-	if err != nil {
-		return err
-	}
+func (cm *Manager) mintPlatformIdentity(ctx context.Context, kvStore *natsclient.KVStore) error {
 	declared := cm.config.Get().Platform
 	if declared.Org == "" || declared.ID == "" {
 		// There is no authority to suffix. Config.Validate requires both, so
@@ -1140,7 +1154,7 @@ func (cm *Manager) mintPlatformIdentity(ctx context.Context) error {
 	}
 	if _, err := kvStore.Create(ctx, platformIdentityKVKey, data); err != nil {
 		if errors.Is(err, natsclient.ErrKVKeyExists) {
-			return cm.adoptPlatformIdentity(ctx)
+			return cm.adoptPlatformIdentity(ctx, kvStore)
 		}
 		return fmt.Errorf("create platform identity record: %w", err)
 	}
@@ -1162,11 +1176,7 @@ func mintIdentitySuffix() (string, error) {
 // adoptPlatformIdentity takes the recorded identifier as this process's
 // effective platform.id. The comparison is its own — it does not depend on the
 // gh#459 guard reading the KV `platform` config key, which #1188 retires.
-func (cm *Manager) adoptPlatformIdentity(ctx context.Context) error {
-	kvStore, err := cm.store()
-	if err != nil {
-		return err
-	}
+func (cm *Manager) adoptPlatformIdentity(ctx context.Context, kvStore *natsclient.KVStore) error {
 	entry, err := kvStore.Get(ctx, platformIdentityKVKey)
 	if err != nil {
 		return fmt.Errorf("read platform identity record %q: %w", platformIdentityKVKey, err)
@@ -1245,14 +1255,8 @@ func (cm *Manager) applyEffectivePlatformID(id string) error {
 }
 
 // getKVVersion retrieves the version from KV bucket
-func (cm *Manager) getKVVersion(ctx context.Context) (string, error) {
+func (cm *Manager) getKVVersion(ctx context.Context, kvHandle jetstream.KeyValue) (string, error) {
 	// Try to get version from KV
-	kvHandle, err := cm.bucket()
-	if err != nil {
-		// Unreachable in practice — Start acquires before arbitration — but a
-		// plausible "0.0.0" here would be a version this never read.
-		return "", err
-	}
 	entry, err := kvHandle.Get(ctx, "version")
 	if err != nil {
 		// Version key doesn't exist (old config format)
@@ -1273,11 +1277,7 @@ func (cm *Manager) getKVVersion(ctx context.Context) (string, error) {
 // key. Returns found=false when the key is absent or unparseable (an old config
 // format, or a bucket written before platform identity was populated), in which
 // case the caller must not treat the bucket as identity-mismatched.
-func (cm *Manager) kvPlatformIdentity(ctx context.Context) (PlatformConfig, bool) {
-	kvHandle, err := cm.bucket()
-	if err != nil {
-		return PlatformConfig{}, false
-	}
+func (cm *Manager) kvPlatformIdentity(ctx context.Context, kvHandle jetstream.KeyValue) (PlatformConfig, bool) {
 	entry, err := kvHandle.Get(ctx, "platform")
 	if err != nil {
 		return PlatformConfig{}, false
@@ -1312,11 +1312,7 @@ func platformIdentityTuple(p PlatformConfig) string {
 }
 
 // syncFromKV loads all configuration from KV and applies it
-func (cm *Manager) syncFromKV(ctx context.Context) error {
-	kvHandle, err := cm.bucket()
-	if err != nil {
-		return err
-	}
+func (cm *Manager) syncFromKV(ctx context.Context, kvHandle jetstream.KeyValue) error {
 	// List all keys
 	keys, err := kvHandle.Keys(ctx)
 	if err != nil {

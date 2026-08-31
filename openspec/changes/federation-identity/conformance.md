@@ -78,6 +78,23 @@ possible causes and lists the keys it found (`summarizeKeys`); the remedy it pri
 | **B5** knobless contract selected before the owner ruled | NOT A CODE CHANGE — snapshot race. The owner's confirmation landed on #1168 at 01:41Z, five minutes before the Codex comment at 01:46Z. The coordinating session answers it on the PR; ADR-104 stays Proposed until the owner accepts it (task 5.6, still open) | — |
 | **MEDIUM** task truth carries pre-fix and placeholder claims | FIXED. 1.1 no longer claims `implemented-by` was set at implementation and points at 6.6 for later body changes; 3.1 rewritten to the shipped two-boundary contract and its four tests | `openspec/changes/federation-identity/tasks.md` 1.1, 3.1 |
 
+## Codex re-review, 2026-08-31 — per-finding disposition
+
+| Finding | Disposition | `file:line` |
+|---|---|---|
+| **B6** a failed Start left every exported KV writer armed | FIXED. Reproduced first — after a refused foreign-identity Start, `PushToKV` returned nil. The handles now stay local through every Start step that can refuse and reach the struct only through `publishBucket`, called immediately before Start returns success; that placement covers the watcher-open failure too, not just identity. `errBucketNotAcquired` is now truthful for "attempted and refused", which is the case that mattered | `config/manager.go` `acquireBucket`, `publishBucket`, `Start`; private `pushToKV`/`syncFromKV`/`getKVVersion`/`kvPlatformIdentity` variants that take an explicit handle; `TestRefusedStartDisarmsEveryExportedWriter`; mutation check M20 |
+| **B7** the retention guarantee bypassed the framework bucket catalog | FIXED. Reproduced mechanically: adding the descriptor row made the EXISTING literal contract test bite, naming both direct creators (`config/manager.go:76`, `processor/rule/kv_config_integration.go:574`) — the omission had passed only because no row existed. `semstreams_config` is now a catalog descriptor (operational, open-write because two subsystems write it, History 5) and both creators resolve it. Its retention kind is a NEW `RetentionNoLifecycleStrict`: the generic seam reconciles, which ADR-104 forbids here, so the descriptor grammar was extended rather than the rule bent | `graph/constants.go` `BucketSemStreamsConfig`; `graph/kvcatalog.go` `semstreamsConfig`; `natsclient/kvspec.go` `RetentionNoLifecycleStrict`; `config/manager.go` `acquireBucket`; `processor/rule/kv_config_integration.go` `ensureKVStore`; `TestSharedConfigBucketResolvesThroughOneDescriptor`; mutation check M22 |
+| **B8** Start did not reject a nil context | FIXED. Reproduced first — the panic Codex named, in `jetstream.(*jetStream).wrapContextWithoutDeadline`, after `shutdownCh` had already been replaced. The guard is the house shape (`processor/rule/kv_config_integration.go:91-94`) and sits above every mutation and every NATS touch | `config/manager.go` `Start`; `TestStartRejectsNilContextWithoutSideEffects`; mutation check M21 |
+| **MEDIUM** task 3.2 still recorded the constructor root as untouched debt | FIXED — rewritten to the shipped Start-context behaviour, and it now names why the old text was wrong | `openspec/changes/federation-identity/tasks.md` 3.2 |
+
+### Why `processor/rule` is in scope (it was explicitly out for MEDIUM-2)
+
+The earlier round's disposition — validate what exists rather than touching the other creator — was right for the
+question it answered (whose bucket policy is in force). B7 asks a different question: which descriptor governs the
+bucket. The catalog contract's answer is "exactly one", and a second creator spelling its own
+`jetstream.KeyValueConfig` forks the policy no matter who validates afterwards. The change to `processor/rule` is
+the acquisition seam only; its behaviour, retry classification, and handle publication are untouched.
+
 ### Constructor-then-use callers (B4 enumeration)
 
 | Caller | Uses the bucket before Start? |

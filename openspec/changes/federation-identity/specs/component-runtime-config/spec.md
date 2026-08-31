@@ -15,13 +15,23 @@ Config Manager persistence, version arbitration, watchers, reads, writes, and sh
 unchanged after successful Start. If the shared configuration bucket contains a foreign platform identity, Start SHALL
 fail before arbitration, watchers, writes, or dependent construction; detached running mode SHALL NOT exist.
 
+Start SHALL reject a nil context before mutating any state or contacting NATS. It is an exported, error-returning,
+context-taking boundary, and a nil context reaches the JetStream client as a panic rather than a classified error.
+
 Start SHALL acquire the shared configuration bucket under the context passed to Start; no constructor, factory, or
-other non-lifecycle boundary SHALL perform that acquisition or invent a context for it. Having acquired it, Start
-SHALL read the bucket's live retention policy and SHALL fail, naming the offending value, if that policy can delete
-keys — a nonzero TTL or a binding size cap. Acquisition returns an existing bucket unchanged and this package is not
-the bucket's only creator, so the policy in force may be one it never chose; a create-once identity under an evicting
-policy expires and is reminted as a second authority, which ADR-102 decision 7 forbids ever reconciling. Nothing
-SHALL be minted or created before that check passes.
+other non-lifecycle boundary SHALL perform that acquisition or invent a context for it. Acquisition SHALL resolve the
+bucket through its `framework-bucket-catalog` descriptor rather than a locally spelled bucket configuration, so the
+policy is the one the catalog declares whichever writer creates it first. That descriptor's strict retention refuses
+a bucket whose policy can delete keys — a nonzero TTL or a binding size cap — naming the offending value, and never
+repairs it in place: a create-once identity under an evicting policy expires and is reminted as a second authority,
+which ADR-102 decision 7 forbids ever reconciling. Nothing SHALL be minted or created before that check passes.
+
+The acquired handles SHALL NOT become usable by the exported write methods until Start has completed successfully.
+Every Start that returns an error — a refused retention policy, a foreign identity, a pre-identity bucket, a lost
+environment claim, a malformed record, or a failure to open watchers — SHALL leave `PushToKV`,
+`PutComponentToKV` and `DeleteComponentFromKV` returning the not-acquired lifecycle error. Publishing the handles
+at acquisition instead would let a caller overwrite the very bucket Start had just refused as another platform's,
+which is the detached running mode this requirement says does not exist.
 
 Before arbitration, Start SHALL establish the deployment's platform identity from the bucket's `platform_identity`
 record, deciding from a single pre-mint read of the bucket's keys and under the context passed to Start:
@@ -125,6 +135,22 @@ configuration — it remains a published mirror only — and version arbitration
 - **AND** the deployment never mints a second authority for itself across restarts
 - **AND** the tests that verify this are `TestEvictingConfigBucketRefusesStart` and
   `TestIdentityUnderAnEvictingBucketNeverRemints`
+
+#### Scenario: A refused Start leaves no writer armed
+
+- **GIVEN** a configuration bucket a foreign deployment established
+- **WHEN** Config Manager starts against it and Start refuses the foreign identity
+- **THEN** `PushToKV`, `PutComponentToKV` and `DeleteComponentFromKV` each return the not-acquired lifecycle error
+- **AND** the bucket's contents are unchanged, key for key and value for value
+- **AND** the test that verifies this is `TestRefusedStartDisarmsEveryExportedWriter`
+
+#### Scenario: Start rejects a nil context without side effects
+
+- **GIVEN** a constructed Config Manager
+- **WHEN** Start is called with a nil context
+- **THEN** it returns an invalid-configuration error rather than panicking
+- **AND** no shutdown channel is replaced, no bucket is created, and no handle is acquired
+- **AND** the test that verifies this is `TestStartRejectsNilContextWithoutSideEffects`
 
 #### Scenario: A KV platform write never changes the running authority
 

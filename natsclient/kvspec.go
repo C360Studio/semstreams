@@ -89,6 +89,19 @@ const (
 	// RetentionBoundedTTL: the declared TTL IS the contract. Acquisition
 	// converges MaxAge TO the declared TTL — preserved, never stripped.
 	RetentionBoundedTTL RetentionKind = "bounded-ttl"
+	// RetentionNoLifecycleStrict is RetentionNoLifecycle with the repair
+	// removed: acquisition VERIFIES that no TTL or binding MaxBytes is in force
+	// and fails closed if one is, never stripping it in place.
+	//
+	// The distinction is not fussiness. Stripping a TTL repairs the POLICY
+	// while saying nothing about the keys it already deleted, and for
+	// create-once state that is the worse outcome: the shared configuration
+	// bucket's platform identity may already have expired, so a silent repair
+	// hands the next boot an empty bucket to mint a SECOND authority into —
+	// exactly the remint ADR-104 exists to prevent, and one ADR-102 decision 7
+	// forbids ever reconciling. Refusing makes the operator provision storage
+	// the identity can actually survive in.
+	RetentionNoLifecycleStrict RetentionKind = "no-lifecycle-strict"
 	// RetentionUnmanaged means acquisition does not reconcile retention. No
 	// current graph catalog descriptor uses this kind.
 	RetentionUnmanaged RetentionKind = "unmanaged"
@@ -175,7 +188,7 @@ func (s BucketSpec) Validate() error {
 			"KVSpec", "Validate", "validate framework bucket spec")
 	}
 	switch s.Retention.Kind {
-	case RetentionNoLifecycle, RetentionUnmanaged:
+	case RetentionNoLifecycle, RetentionNoLifecycleStrict, RetentionUnmanaged:
 		if s.Retention.TTL != 0 {
 			return errs.WrapInvalid(
 				fmt.Errorf("bucket spec %q declares retention kind %q with a TTL (%s); TTL is a bounded-ttl parameter",
@@ -267,6 +280,14 @@ func EnsureFrameworkBucket(ctx context.Context, c *Client, spec BucketSpec) (jet
 	case RetentionNoLifecycle:
 		if rerr := ReconcileNoLifecycleRetention(ctx, js, spec.Name, logger); rerr != nil {
 			return nil, rerr
+		}
+	case RetentionNoLifecycleStrict:
+		// Verify only. A bucket carrying an eviction policy is refused, not
+		// repaired: the state this kind protects is create-once, so a policy
+		// that could delete it may already have done so.
+		if rerr := c.NewKVStore(bucket).AssertNoLifecycleRetention(ctx, spec.Name); rerr != nil {
+			return nil, errs.WrapInvalid(rerr, "KVSpec", "EnsureFrameworkBucket",
+				fmt.Sprintf("bucket %q carries an eviction policy that this descriptor refuses rather than repairs; provision it with no TTL and no MaxBytes", spec.Name))
 		}
 	case RetentionBoundedTTL:
 		if rerr := reconcileBoundedTTL(ctx, js, spec.Name, spec.Retention.TTL, logger); rerr != nil {

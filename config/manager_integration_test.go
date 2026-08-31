@@ -644,11 +644,15 @@ type configBucketSnapshotEntry struct {
 
 func snapshotConfigBucket(t *testing.T, ctx context.Context, manager *Manager) map[string]configBucketSnapshotEntry {
 	t.Helper()
-	keys, err := manager.kv.Keys(ctx)
+	// Independent of the manager's lifecycle: this helper is called on a
+	// manager whose Start was REFUSED, which since Codex B6 leaves its own
+	// handles unpublished on purpose.
+	kv := directBucket(t, ctx, manager)
+	keys, err := kv.Keys(ctx)
 	require.NoError(t, err)
 	snapshot := make(map[string]configBucketSnapshotEntry, len(keys))
 	for _, key := range keys {
-		entry, err := manager.kv.Get(ctx, key)
+		entry, err := kv.Get(ctx, key)
 		require.NoError(t, err)
 		snapshot[key] = configBucketSnapshotEntry{Revision: entry.Revision(), Value: string(entry.Value())}
 	}

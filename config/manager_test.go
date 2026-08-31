@@ -156,7 +156,7 @@ func TestConfigManager_KVUpdates(t *testing.T) {
 	// The bucket is acquired by Start (the constructor performs no I/O since
 	// the context hard-rule fix), so a test that writes through the manager
 	// before Start acquires it explicitly — the same production path Start uses.
-	require.NoError(t, cm.acquireBucket(ctx))
+	acquireAndPublish(t, ctx, cm)
 	// Push initial config to KV before starting watcher
 	err = cm.PushToKV(ctx)
 	require.NoError(t, err)
@@ -258,7 +258,7 @@ func TestConfigManager_PushToKV(t *testing.T) {
 	// The bucket is acquired by Start (the constructor performs no I/O since
 	// the context hard-rule fix); this test drives PushToKV alone, so it
 	// acquires through the same production path Start uses.
-	require.NoError(t, cm.acquireBucket(ctx))
+	acquireAndPublish(t, ctx, cm)
 
 	// Push config to KV
 	err = cm.PushToKV(ctx)
@@ -367,7 +367,7 @@ func TestConfigManager_ModelRegistryKVUpdate(t *testing.T) {
 	// The bucket is acquired by Start (the constructor performs no I/O since
 	// the context hard-rule fix), so a test that writes through the manager
 	// before Start acquires it explicitly — the same production path Start uses.
-	require.NoError(t, cm.acquireBucket(ctx))
+	acquireAndPublish(t, ctx, cm)
 	err = cm.PushToKV(ctx)
 	require.NoError(t, err)
 	// A bucket that already holds configuration must also hold its identity
@@ -468,7 +468,7 @@ func TestConfigManager_WatchModelRegistry(t *testing.T) {
 	// The bucket is acquired by Start (the constructor performs no I/O since
 	// the context hard-rule fix), so a test that writes through the manager
 	// before Start acquires it explicitly — the same production path Start uses.
-	require.NoError(t, cm.acquireBucket(ctx))
+	acquireAndPublish(t, ctx, cm)
 	require.NoError(t, cm.PushToKV(ctx))
 	// A bucket that already holds configuration must also hold its identity
 	// record, or Start refuses it as predating identity minting (ADR-104).

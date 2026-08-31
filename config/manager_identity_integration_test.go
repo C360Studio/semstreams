@@ -20,6 +20,18 @@ import (
 	"github.com/c360studio/semstreams/types"
 )
 
+// acquireAndPublish gives a manager a live bucket without running Start, for
+// tests that drive an exported writer directly. Start itself publishes only
+// after every step that can refuse has passed (Codex B6), so a test that wants
+// an armed writer says so explicitly rather than relying on acquisition
+// arming it.
+func acquireAndPublish(t *testing.T, ctx context.Context, manager *Manager) {
+	t.Helper()
+	kv, kvStore, err := manager.acquireBucket(ctx)
+	require.NoError(t, err)
+	manager.publishBucket(kv, kvStore)
+}
+
 // mustBucket returns a started manager's acquired KV handle.
 func mustBucket(t *testing.T, manager *Manager) jetstream.KeyValue {
 	t.Helper()
@@ -73,13 +85,22 @@ func readIdentityRecord(t *testing.T, ctx context.Context, manager *Manager) pla
 // test that seeds the bucket BEFORE Start opens it itself.
 func directKVStore(t *testing.T, ctx context.Context, manager *Manager) *natsclient.KVStore {
 	t.Helper()
+	return manager.natsClient.NewKVStore(directBucket(t, ctx, manager))
+}
+
+// directBucket is directKVStore's raw handle. A test that inspects the bucket
+// after a REFUSED Start must use this: since Codex B6 the manager publishes its
+// own handles only on success, so reading through the manager would (rightly)
+// report errBucketNotAcquired.
+func directBucket(t *testing.T, ctx context.Context, manager *Manager) jetstream.KeyValue {
+	t.Helper()
 	kv, err := manager.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
 		Bucket:      configBucketName,
 		Description: "SemStreams runtime configuration",
 		History:     5,
 	})
 	require.NoError(t, err)
-	return manager.natsClient.NewKVStore(kv)
+	return kv
 }
 
 func seedIdentityRecord(t *testing.T, ctx context.Context, manager *Manager, record platformIdentityRecord) {
@@ -348,7 +369,9 @@ func TestPreIdentityBucketRefusesStartWithoutMinting(t *testing.T) {
 	require.ErrorContains(t, err, "platform, version")
 	require.ErrorContains(t, err, "processor/rule")
 
-	_, getErr := mustStore(t, manager).Get(ctx, platformIdentityKVKey)
+	// Read independently: the refused Start left the manager's own writers
+	// disarmed, which is the point of the B6 fix.
+	_, getErr := directKVStore(t, ctx, manager).Get(ctx, platformIdentityKVKey)
 	require.ErrorIs(t, getErr, natsclient.ErrKVKeyNotFound,
 		"a refused pre-identity bucket must be left with no identity record")
 	require.Equal(t, "dep", manager.GetConfig().Get().Platform.ID,
@@ -630,4 +653,86 @@ func TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance(t *testing.T) {
 	require.ErrorContains(t, err, "declare the stem")
 	require.ErrorContains(t, err, "dep")
 	require.ErrorContains(t, err, minted)
+}
+
+// TestStartRejectsNilContextWithoutSideEffects pins the repository hard rule at
+// the boundary the B4 fix created: Start became this package's exported,
+// error-returning, context-taking seam, so it must REJECT a nil context rather
+// than carry it into NATS. Today it panics inside JetStream's
+// wrapContextWithoutDeadline, which calls Deadline() on the nil interface —
+// a panic is not a classified error, and it happens after shutdownCh was
+// already replaced.
+func TestStartRejectsNilContextWithoutSideEffects(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
+	manager := newIdentityManager(t, tc, "acme", "dep")
+
+	//nolint:staticcheck // SA1012 is the point: this asserts the guard exists.
+	err := manager.Start(nil)
+	require.Error(t, err, "an exported context-taking boundary must reject nil, not panic")
+	require.ErrorContains(t, err, "context")
+
+	require.Nil(t, manager.shutdownCh, "a rejected Start must not have replaced the shutdown channel")
+	_, storeErr := manager.store()
+	require.ErrorIs(t, storeErr, errBucketNotAcquired, "a rejected Start must not have acquired a bucket")
+
+	ctx := context.Background()
+	_, bucketErr := tc.Client.GetKeyValueBucket(ctx, configBucketName)
+	require.Error(t, bucketErr, "a rejected Start must not have created the configuration bucket")
+}
+
+// bucketEntries reads every key and value in a bucket, so a test can prove a
+// refused Start left it byte-for-byte unchanged.
+func bucketEntries(t *testing.T, ctx context.Context, tc *natsclient.TestClient) map[string]string {
+	t.Helper()
+	bucket, err := tc.Client.GetKeyValueBucket(ctx, configBucketName)
+	require.NoError(t, err)
+	keys, err := bucket.Keys(ctx)
+	if err != nil {
+		require.ErrorIs(t, err, jetstream.ErrNoKeysFound)
+		return map[string]string{}
+	}
+	entries := make(map[string]string, len(keys))
+	for _, key := range keys {
+		entry, err := bucket.Get(ctx, key)
+		require.NoError(t, err)
+		entries[key] = string(entry.Value())
+	}
+	return entries
+}
+
+// TestRefusedStartDisarmsEveryExportedWriter is the Codex B6 reproduction.
+//
+// acquireBucket published cm.kv/cm.kvStore before establishPlatformIdentity
+// ran, so ANY identity refusal — a foreign org or stem, a pre-identity bucket,
+// a malformed record, a lost environment claim — returned with the handles
+// still set. store() only nil-checks, so PushToKV, PutComponentToKV and
+// DeleteComponentFromKV all kept working: a caller could overwrite the very
+// bucket Start had just refused as belonging to another platform. The spec says
+// foreign identity fails BEFORE writes and that detached running mode does not
+// exist; this is detached running mode.
+func TestRefusedStartDisarmsEveryExportedWriter(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// A foreign deployment owns this bucket.
+	foreign := newIdentityManager(t, tc, "foreignorg", "foreign-app")
+	require.NoError(t, foreign.Start(ctx))
+	require.NoError(t, foreign.Stop(5*time.Second))
+	before := bucketEntries(t, ctx, tc)
+	require.NotEmpty(t, before)
+
+	local := newIdentityManager(t, tc, "acme", "dep")
+	require.Error(t, local.Start(ctx), "a foreign bucket must refuse Start")
+
+	require.ErrorIs(t, local.PushToKV(ctx), errBucketNotAcquired,
+		"a refused Start must leave PushToKV disarmed")
+	require.ErrorIs(t, local.PutComponentToKV(ctx, "intruder", types.ComponentConfig{
+		Type: "input", Name: "udp", Enabled: true,
+	}), errBucketNotAcquired, "a refused Start must leave component writes disarmed")
+	require.ErrorIs(t, local.DeleteComponentFromKV(ctx, "intruder"), errBucketNotAcquired,
+		"a refused Start must leave component deletes disarmed")
+
+	require.Equal(t, before, bucketEntries(t, ctx, tc),
+		"a refused Start must leave the foreign bucket byte-for-byte unchanged")
 }
