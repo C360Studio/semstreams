@@ -151,8 +151,10 @@ with a matching `md5 -q`. Verbatim failure lines below.
       `read semstreams_config/platform_identity: ... bucket not found` when no record exists, and exits 1 with
       `recorded id "streamkit-pure" is not the stem "streamkit-pure" plus a suffix` against a hand-seeded unsuffixed
       record.
-- [ ] 6.3 Implementation review by `semstreams-reviewer`; dispositions in `conformance.md`, including the per-ruling
-      conformance table (owner cut → `file:line`).
+- [x] 6.3 Implementation review by `semstreams-reviewer`: CHANGES REQUESTED at `211bda7f` (2 HIGH, 4 MEDIUM, 2 NIT),
+      fix round at `ecf58a27`, narrow re-review verified both HIGHs CLOSED by measurement, residuals closed at
+      `a1432904`. Review of record: PR #1178 comment 2026-08-30; dispositions in `conformance.md` incl. the
+      per-ruling conformance table.
 - [ ] 6.4 Owner-run cross-agent round where asked.
 - [ ] 6.5 `openspec archive federation-identity` + spec sync as the final content commit; narrow reviewer check.
 - [ ] 6.6 Undraft; PR body carries `implemented-by`, the per-sister list, the value that changes on the wire
