@@ -68,7 +68,7 @@ alias, no parallel path; sisters handle their own migration.
 6. **A bucket that can evict the identity is refused before anything is minted, and the guarantee lives in the
    catalog.** The shared configuration bucket now carries a framework RETENTION guarantee, which is what the
    `framework-bucket-catalog` contract says puts a bucket in its descriptor table. It is catalogued as operational,
-   open-write (two subsystems write it by design), History 5, with a **strict** no-lifecycle retention kind:
+   **owner-only**, History 5, with a **strict** no-lifecycle retention kind:
    acquisition verifies that no TTL and no binding size cap is in force and fails closed, and does NOT reconcile the
    policy in place.
 
@@ -76,7 +76,13 @@ alias, no parallel path; sisters handle their own migration.
    the policy while saying nothing about the keys it already deleted, so a create-once identity may be gone and the
    next boot would mint a *second* authority that decision 7 of ADR-102 forbids ever reconciling. Both writers of the
    bucket — the config manager and the rule ConfigManager — resolve that one descriptor, so the guarantee no longer
-   depends on which of them creates it first. The bucket is acquired under the lifecycle context, never one a
+   depends on which of them creates it first.
+
+   Owner-only is about who may NOT write, not who may. A generic rule `update_kv` into `platform_identity` plain-Puts
+   over the create-once record, and a boot ADOPTS a recorded identifier after checking only its segment grammar and
+   byte budget — so a rule pack could move the authority every entity is minted under, or, with a mismatched value,
+   prevent the deployment from booting again. The ownership predicate is consulted by nothing but the two `update_kv`
+   guards, so declaring it costs the legitimate writers nothing. The bucket is acquired under the lifecycle context, never one a
    constructor invented.
 
 7. **At most one `platform.environment` may establish against one bucket.** The pair `(org, id, environment)` was

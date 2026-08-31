@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/nats-io/nats.go/jetstream"
@@ -55,6 +56,48 @@ func (w *natsKVWriter) getStore(ctx context.Context, bucketName string) (*natscl
 		return store, nil
 	}
 
+	// The bucket name arrives from a rule pack AFTER variable substitution, so
+	// this is the one acquisition site in the tree that can resolve to any name
+	// at all — including a catalogued one, whose storage policy the framework
+	// guarantees. Spelling a local jetstream.KeyValueConfig for such a name
+	// forks that policy from the descriptor that owns it, which is the
+	// split-owner shape framework-bucket-catalog exists to remove.
+	bucket, err := w.acquireBucket(ctx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+
+	store := w.natsClient.NewKVStore(bucket)
+	if _, err := w.stores.Set(bucketName, store); err != nil {
+		w.logger.Debug("Failed to cache KV store", "bucket", bucketName, "error", err)
+	}
+	return store, nil
+}
+
+// acquireBucket binds one bucket for the generic update_kv writer, resolving a
+// catalogued name through its descriptor and anything else the way this writer
+// always has.
+//
+// An owner-only catalogued name is refused outright rather than acquired: the
+// action-level guard (executeUpdateKV) already rejects it, and this is the belt
+// to that guard's suspenders — an acquisition path that cannot be reached by a
+// legitimate write should not silently provision the bucket either.
+func (w *natsKVWriter) acquireBucket(ctx context.Context, bucketName string) (jetstream.KeyValue, error) {
+	if _, catalogued := gtypes.SpecFor(bucketName); catalogued {
+		if gtypes.IsFrameworkOwnedBucket(bucketName) {
+			return nil, fmt.Errorf(
+				"update_kv cannot acquire framework-owned bucket %q (owned by %s); use graph mutation APIs",
+				bucketName, gtypes.OwnerOf(bucketName))
+		}
+		// Descriptor-derived: History, replicas and retention come from the one
+		// catalog row, whichever component reaches the bucket first.
+		bucket, err := gtypes.EnsureCatalogBucket(ctx, w.natsClient, bucketName)
+		if err != nil {
+			return nil, fmt.Errorf("acquire catalogued bucket %s: %w", bucketName, err)
+		}
+		return bucket, nil
+	}
+
 	// Producer creates the bucket. CreateKeyValueBucket is idempotent —
 	// returns the existing bucket if it already exists.
 	bucket, err := w.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
@@ -65,12 +108,7 @@ func (w *natsKVWriter) getStore(ctx context.Context, bucketName string) (*natscl
 	if err != nil {
 		return nil, fmt.Errorf("get or create bucket %s: %w", bucketName, err)
 	}
-
-	store := w.natsClient.NewKVStore(bucket)
-	if _, err := w.stores.Set(bucketName, store); err != nil {
-		w.logger.Debug("Failed to cache KV store", "bucket", bucketName, "error", err)
-	}
-	return store, nil
+	return bucket, nil
 }
 
 func (w *natsKVWriter) UpdateJSON(ctx context.Context, bucket, key string, updateFn func(current map[string]any) error) error {

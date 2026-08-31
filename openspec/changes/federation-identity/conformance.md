@@ -87,6 +87,37 @@ possible causes and lists the keys it found (`summarizeKeys`); the remedy it pri
 | **B8** Start did not reject a nil context | FIXED. Reproduced first — the panic Codex named, in `jetstream.(*jetStream).wrapContextWithoutDeadline`, after `shutdownCh` had already been replaced. The guard is the house shape (`processor/rule/kv_config_integration.go:91-94`) and sits above every mutation and every NATS touch | `config/manager.go` `Start`; `TestStartRejectsNilContextWithoutSideEffects`; mutation check M21 |
 | **MEDIUM** task 3.2 still recorded the constructor root as untouched debt | FIXED — rewritten to the shipped Start-context behaviour, and it now names why the old text was wrong | `openspec/changes/federation-identity/tasks.md` 3.2 |
 
+## Third narrow re-review, 2026-08-31 — per-finding disposition
+
+| Finding | Disposition | `file:line` |
+|---|---|---|
+| **HIGH** `WriteOpen` left the identity record writable by a generic rule action | FIXED by flipping the descriptor to `WriteOwnerOnly`. Reproduced first at BOTH guards and BOTH keys: `ValidateDefinition` and `executeUpdateKV` each returned nil for `semstreams_config/platform_identity` and `/platform_identity_guard`. My earlier stated cost — "would change rule behaviour" — was **wrong, and I verified that myself rather than accepting it**: `IsFrameworkOwnedBucket` has exactly two callers, both `update_kv` guards (`processor/rule/actions.go:2188`, `processor/rule/config_validation.go:369`); neither `config.Manager` nor `processor/rule.ConfigManager` consults it, so their own writes cannot be affected. The only shipped `update_kv` bucket literal anywhere in `configs/`, `test/` or `docker/` is `RESEARCH_EVIDENCE`, which is not catalogued and stays admitted | `graph/kvcatalog.go` `semstreamsConfig`; `TestUpdateKV_RejectsSharedConfigBucket_AtLoad`, `…_AtRuntime`, `TestUpdateKV_StillAdmitsResearchEvidence`; mutation check M23 |
+| **MEDIUM** a third acquisition path invisible to both guards | FIXED. `natsKVWriter.getStore` bound whatever bucket a rule pack resolved to, with its own config, refuting the new SHALL. It now refuses a catalogued owner-only name outright and resolves any other catalogued name through `graph.EnsureCatalogBucket`; non-catalogued names keep the previous behaviour, so `RESEARCH_EVIDENCE` is untouched. The contract test's enumeration is now DERIVED by scanning production packages rather than hand-listing two files — and the derived scan found `kv_writer.go` by itself, which is the reproduction | `processor/rule/kv_writer.go` `acquireBucket`; `test/contract/shared_config_bucket_acquisition_contract_test.go`; mutation check M24 |
+| **NIT** the strict-retention refusal was re-wrapped as transient | FIXED. A permanent invalid-configuration state told a retry loop to keep trying; the wrap now preserves `errs.IsInvalid` and only classifies genuine acquisition faults as transient | `processor/rule/kv_config_integration.go` `ensureKVStore` |
+| **cosmetic** section 3 of `tasks.md` read 3.1, 3.5, 3.4, 3.2, 3.3 | FIXED — reordered | `openspec/changes/federation-identity/tasks.md` |
+
+### Decision record: `WriteOwnerOnly` over key-level refusal (owner veto possible)
+
+Two shapes close the forgery hole:
+
+1. **Chosen — flip the descriptor to `WriteOwnerOnly`.** Closes it through the guard predicate that already exists,
+   at both load and runtime, with no new code path. It states what is true: every legitimate write to this bucket
+   goes through a ConfigManager, and neither consults the predicate. Cost measured at zero (above).
+2. **Alternative — keep `WriteOpen` and refuse the two identity keys specifically.** Preserves the "two subsystems
+   write it, so it is open" reading, but adds a key-level guard the framework does not have today, protects only the
+   keys someone remembered to name, and leaves the rest of a bucket holding correctness state generically writable.
+
+Shape 1 is recorded here rather than assumed: if the owner prefers 2, it is a contained change to the descriptor row
+plus a new key-level predicate, and the tests above pin the behaviour either way.
+
+### A detector that was satisfied by dead code (recorded because it nearly passed)
+
+M24's first attempt did **not** red. The contract scan asked whether `kv_writer.go` REFERENCES a catalog seam, and
+commenting the branch out with `&& false` left the reference in place. A structural check of that shape passes on
+bypassed code. The behavioural guard `TestKVWriterRefusesCatalogedOwnerOnlyBucket` was added for exactly this: it
+builds the writer with a nil NATS client, so any path that reaches acquisition panics and only a refusal-before-bind
+can pass. The re-run of M24 reds it. The structural scan is kept as the backstop that found the omission originally.
+
 ### Why `processor/rule` is in scope (it was explicitly out for MEDIUM-2)
 
 The earlier round's disposition — validate what exists rather than touching the other creator — was right for the

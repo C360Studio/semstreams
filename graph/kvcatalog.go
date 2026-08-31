@@ -100,13 +100,27 @@ func KVCatalog() []natsclient.BucketSpec {
 	// account resource, and no retention needed to hold that line.
 	storageReport.History = 10
 
-	// The shared runtime configuration bucket is in the catalog for its
-	// RETENTION guarantee, not for write-ownership: ADR-104 made it the home of
-	// the create-once platform identity record, and an evicted identity is
-	// reminted as a second authority ADR-102 d7 forbids ever reconciling. Two
-	// subsystems write it by design — config.Manager and processor/rule's
-	// ConfigManager — so Write is open; declaring it owner-only would put it in
-	// the rule update_kv guard set and change behaviour this change does not own.
+	// The shared runtime configuration bucket entered the catalog for its
+	// RETENTION guarantee — ADR-104 made it the home of the create-once
+	// platform identity record, and an evicted identity is reminted as a second
+	// authority ADR-102 d7 forbids ever reconciling — and it is OWNER-ONLY for
+	// the same reason one level up.
+	//
+	// Owner-only is not about who may write the bucket: two ConfigManagers
+	// legitimately do, and neither consults this policy (IsFrameworkOwnedBucket
+	// has exactly two callers, both rule update_kv guards). It is about who may
+	// NOT. A generic update_kv into platform_identity plain-Puts over the
+	// create-once record: a forged id whose org and stem match is ADOPTED on the
+	// next boot, because adoption validates grammar and byte budget and nothing
+	// else, so a rule pack could move the authority every entity is minted
+	// under; a forged id that does not match bricks the boot permanently. A
+	// write into platform_identity_guard reopens the concurrent-first-boot race
+	// that key exists to decide. Owner-only closes both through the guard
+	// predicate that already exists.
+	//
+	// The "two writers" the Owner string names are the two ConfigManagers, which
+	// is what a rejection message should tell an operator who legitimately
+	// writes here — not an invitation for a third.
 	//
 	// Its retention kind is STRICT no-lifecycle: verify and refuse, never
 	// reconcile. Stripping a TTL here would be silent repair of a bucket whose
@@ -115,11 +129,11 @@ func KVCatalog() []natsclient.BucketSpec {
 	// bucket has always carried.
 	semstreamsConfig := natsclient.BucketSpec{
 		Name:        BucketSemStreamsConfig,
-		Owner:       "config (runtime configuration) + processor/rule (rules.*)",
+		Owner:       "config.Manager (configuration keys) and processor/rule.ConfigManager (rules.*)",
 		Description: "SemStreams runtime configuration",
 		Class:       natsclient.ClassOperational,
 		Retention:   natsclient.RetentionPolicy{Kind: natsclient.RetentionNoLifecycleStrict},
-		Write:       natsclient.WriteOpen,
+		Write:       natsclient.WriteOwnerOnly,
 		Posture:     natsclient.PostureOwnerCreates,
 		History:     5,
 		Replicas:    1,

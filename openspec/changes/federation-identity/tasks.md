@@ -60,23 +60,6 @@ in `docs/proposals/gh1168-federation-identity-pins.md`; inventory
       `TestConfigRejectsOversizedAuthorityPair`, `TestConfigRejectsPairThatOnlyFitsUnsuffixed`,
       `TestEffectivePairIsBoundedWithoutTheDeclarationReserve`, `TestMaximumDeclarablePairMintsAndStarts`;
       mutation checks M14 and M15.
-- [x] 3.5 `config/manager.go`, `graph/`, `natsclient/`, `processor/rule/`: the Codex re-review's three findings —
-      the acquired handles stay LOCAL through every Start step that can refuse and reach the struct only via
-      `publishBucket` at the end, so a refused Start leaves `PushToKV`/`PutComponentToKV`/`DeleteComponentFromKV`
-      returning `errBucketNotAcquired` and the foreign bucket byte-for-byte unchanged (B6); the shared bucket gains
-      a `framework-bucket-catalog` descriptor — operational, open-write, History 5, a NEW strict no-lifecycle
-      retention kind that verifies and refuses instead of reconciling — and BOTH creators (`config.Manager`,
-      `processor/rule.ConfigManager`) resolve it, so the retention guarantee no longer depends on who created the
-      bucket first (B7); `Start` rejects a nil context before touching state or NATS, where it previously panicked
-      inside JetStream (B8). Mutation checks M20, M21, M22.
-- [x] 3.4 `config/manager.go`: the Codex round's four code findings — bucket acquisition moved out of the
-      constructor into `Start(ctx)` (B4: no invented root, `natsClient` retained instead of a context, and
-      `errBucketNotAcquired` for any bucket-dependent method called before Start); `acquireBucket` refuses a bucket
-      whose live policy can evict the identity, through the existing `KVStore.AssertNoLifecycleRetention` rather
-      than a second spelling of that rule (B1); `claimEnvironment` claims the bucket for one `platform.environment`
-      by atomic create, before the record, so the Create/adopt race cannot let two environments both publish (B2);
-      the adopt comparison accepts the record's STEM only, and a file holding the minted identifier is refused with
-      guidance derived from the stored value, never from grammar (B3). Mutation checks M16, M17, M18.
 - [x] 3.2 `config/manager.go`: add `platformIdentityRecord{Org, Stem, ID}` and the `platform_identity` key
       constant; add `establishPlatformIdentity(ctx)` called first in `Start(ctx)`, taking ONE `kvStore.Keys(ctx)`
       read and branching adopt / mint+`Create` / refuse-pre-identity-bucket per the design §3 table; return the
@@ -88,6 +71,31 @@ in `docs/proposals/gh1168-federation-identity-pins.md`; inventory
 - [x] 3.3 `config/manager.go`: delete `hasKVConfig` (its only caller is replaced by 3.2) and delete `updateConfig`'s
       `case "platform"` arm so the KV `platform` key is a published mirror the running configuration never adopts;
       `PushToKV` keeps writing it. Neither `PushToKV` nor `syncFromKV` writes or applies `platform_identity`.
+
+- [x] 3.4 `config/manager.go`: the Codex round's four code findings — bucket acquisition moved out of the
+      constructor into `Start(ctx)` (B4: no invented root, `natsClient` retained instead of a context, and
+      `errBucketNotAcquired` for any bucket-dependent method called before Start); `acquireBucket` refuses a bucket
+      whose live policy can evict the identity, through the existing `KVStore.AssertNoLifecycleRetention` rather
+      than a second spelling of that rule (B1); `claimEnvironment` claims the bucket for one `platform.environment`
+      by atomic create, before the record, so the Create/adopt race cannot let two environments both publish (B2);
+      the adopt comparison accepts the record's STEM only, and a file holding the minted identifier is refused with
+      guidance derived from the stored value, never from grammar (B3). Mutation checks M16, M17, M18.
+- [x] 3.5 `config/manager.go`, `graph/`, `natsclient/`, `processor/rule/`: the Codex re-review's three findings —
+      the acquired handles stay LOCAL through every Start step that can refuse and reach the struct only via
+      `publishBucket` at the end, so a refused Start leaves `PushToKV`/`PutComponentToKV`/`DeleteComponentFromKV`
+      returning `errBucketNotAcquired` and the foreign bucket byte-for-byte unchanged (B6); the shared bucket gains
+      a `framework-bucket-catalog` descriptor — operational, open-write, History 5, a NEW strict no-lifecycle
+      retention kind that verifies and refuses instead of reconciling — and BOTH creators (`config.Manager`,
+      `processor/rule.ConfigManager`) resolve it, so the retention guarantee no longer depends on who created the
+      bucket first (B7); `Start` rejects a nil context before touching state or NATS, where it previously panicked
+      inside JetStream (B8). Mutation checks M20, M21, M22.
+- [x] 3.6 `graph/kvcatalog.go`, `processor/rule/`: the third re-review's findings — the shared bucket's descriptor
+      flips to `WriteOwnerOnly`, which closes a generic `update_kv` forging `platform_identity` (adopted next boot
+      after grammar/budget validation only) or overwriting `platform_identity_guard` (reopening B2), through the
+      guard predicate that already exists; `natsKVWriter.acquireBucket` refuses a catalogued owner-only name and
+      resolves any other catalogued name through the descriptor, closing the third acquisition path, with
+      non-catalogued names (`RESEARCH_EVIDENCE`, the only shipped `update_kv` target) unchanged; the strict-retention
+      refusal keeps its invalid classification through the rule ConfigManager's wrap. Mutation checks M23, M24.
 
 ## 4. Forced omissions — one per new guard (commit GREEN first; restore by `cp` + `md5`)
 
@@ -116,6 +124,14 @@ with a matching `md5 -q`. Verbatim failure lines below.
       for the suffix"). Re-pointed from `maxDeclarableAuthorityPairBytes` after the review round moved the reserve to
       the declaration boundary; the reviewer's note that M14 also reds `TestConfigRejectsOversizedAuthorityPair` is
       the stronger signal and is recorded here.
+- [x] 4.14 M23 `graph/kvcatalog.go`: flip the shared bucket's row back to `WriteOpen` →
+      `TestUpdateKV_RejectsSharedConfigBucket_AtLoad` and `…_AtRuntime` both failed for both keys
+      ("must reject update_kv into semstreams_config/platform_identity, got nil").
+- [x] 4.15 M24 `natsKVWriter.acquireBucket`: bypass the catalogued branch → the BEHAVIOURAL guard
+      `TestKVWriterRefusesCatalogedOwnerOnlyBucket` failed with a nil-client panic, proving no refusal happened
+      before acquisition. **The first M24 attempt did not red**: the contract scan checks that the file REFERENCES a
+      catalog seam, and `&& false` leaves the reference in place, so a structural check passes on bypassed code. The
+      behavioural test exists because of that miss; the scan is kept as the backstop that found the omission.
 - [x] 4.11 M20 `Start`: publish the handles at acquisition instead of after establishment →
       `TestRefusedStartDisarmsEveryExportedWriter` failed — `PushToKV` returned nil after a refused Start.
 - [x] 4.12 M21 `Start`: drop the nil-context guard → `TestStartRejectsNilContextWithoutSideEffects` failed with the
