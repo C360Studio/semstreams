@@ -46,8 +46,10 @@ func TestFrameworkOwnedBuckets_IncludesOperationalBuckets(t *testing.T) {
 // TestFrameworkOwnedBuckets_NoEmbeddingsCache pins the EMBEDDINGS_CACHE
 // deletion (reopen-framework-owned-bucket-guards): the dead
 // created-but-never-read-or-written surface is gone from the owned set, so the
-// retention sweep guards FrameworkOwnedBuckets() with NO exceptions — no
-// framework bucket may exist solely to carry a guard exemption.
+// retention sweep guards FrameworkOwnedBuckets() with no bucket existing
+// solely to carry a guard exemption. One owned bucket sits outside the sweep
+// by design: a strict-retention row (semstreams_config, ADR-104) is verified
+// at every acquisition instead of reconciled by this backstop.
 func TestFrameworkOwnedBuckets_NoEmbeddingsCache(t *testing.T) {
 	t.Parallel()
 	if contains(FrameworkOwnedBuckets(), "EMBEDDINGS_CACHE") {

@@ -105,8 +105,10 @@ func TestUpdateKV_RejectsSharedConfigBucket_AtRuntime(t *testing.T) {
 // GOVERNS: getStore refuses a catalogued owner-only name before it can create
 // or bind anything, which is the belt to executeUpdateKV's suspenders.
 //
-// The nil NATS client is the assertion: reaching it would panic, so a passing
-// test proves the refusal happened before any acquisition was attempted.
+// The nil NATS client makes bypassed code observable: reaching acquisition
+// returns a nil-client error that does NOT name the framework-owned bucket, so
+// the message assertion below is what proves the refusal came first. Relaxing
+// it to a bare err != nil would let bypassed code pass — keep the message check.
 func TestKVWriterRefusesCatalogedOwnerOnlyBucket(t *testing.T) {
 	t.Parallel()
 	writer := newMockKVWriterNATS()
