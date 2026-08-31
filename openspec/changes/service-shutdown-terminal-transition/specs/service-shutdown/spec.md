@@ -3,11 +3,11 @@
 ### Requirement: Terminal StopAll success deregisters every service; failure retains them for retry
 
 A `Manager.StopAll` pass that aggregates no error MUST deregister every service before returning, so that a
-subsequent StopAll visits nothing and returns nil. A pass that aggregates any genuine error MUST retain every
-registration — including services whose Stop completed cleanly during that failed pass — so that a retry re-visits
-all of them and each answers under its idempotent-Stop contract. Deregistration is the terminal transition of
-coordinated shutdown: it is reached only by terminal success, never by a failed pass, because a failed pass keeps
-the authority it needs to retry.
+subsequent StopAll visits nothing and returns nil. A pass that aggregates ANY genuine error MUST retain every
+registration — whether that error came from a service Stop or from the manager's own teardown, and including
+services whose Stop completed cleanly during that failed pass — so that a retry re-visits all of them and each
+answers under its idempotent-Stop contract. Deregistration is reached by a `StopAll` pass only when that pass
+aggregates nothing: a failed pass keeps the authority it needs to retry.
 
 #### Scenario: A clean pass deregisters every service
 
@@ -15,13 +15,24 @@ the authority it needs to retry.
 - **WHEN** `Manager.StopAll` runs again
 - **THEN** it visits no service
 - **AND** it returns nil
+- **AND** `Manager.GetAllServices` returns empty and `Manager.GetService` reports each former service not-found
 
 #### Scenario: A failed pass retains every registration for retry
 
-- **GIVEN** a `Manager.StopAll` pass that aggregated a genuine Stop error
+- **GIVEN** a `Manager.StopAll` pass that aggregated any genuine error — a service Stop failure, or a failure of
+  the manager's own teardown (its `BaseService.Stop`, health publisher, runtime listeners, or startup metrics
+  server), which reach the same aggregate
 - **WHEN** `Manager.StopAll` runs again
 - **THEN** every service registered before the failed pass is visited again
 - **AND** a service whose Stop already completed during the failed pass answers as clean success
+
+#### Scenario: A pass whose only failure is the manager's own teardown still retains
+
+- **GIVEN** a `Manager.StopAll` pass in which every registered service stopped cleanly
+- **AND** the manager's own teardown contributed a genuine error to the aggregate
+- **WHEN** the pass returns
+- **THEN** it returns non-nil
+- **AND** every service registration is retained
 
 ## MODIFIED Requirements
 
@@ -38,7 +49,7 @@ once; concurrent Stop is not a supported contract. StopAll MUST NOT invent a rep
 - **GIVEN** a service whose Stop completed earlier in the same StopAll pass, or during an earlier pass that
   aggregated an error and therefore retained its registration
 - **WHEN** StopAll visits it
-- **THEN** it answers as success — nil or `ErrAlreadyStopped` — without repeating teardown
+- **THEN** it answers as success — nil or `service.ErrAlreadyStopped` — without repeating teardown
 
 #### Scenario: Stopping is not predicted completion
 
@@ -76,7 +87,7 @@ once; concurrent Stop is not a supported contract. StopAll MUST NOT invent a rep
 ### Requirement: A framework service Stop is idempotent on repeated invocation
 
 `Stop(ctx)` MUST reject nil before inspecting state or acting. After Stop completed, another Stop MUST return
-success — nil or `ErrAlreadyStopped` — and MUST NOT repeat teardown. The contract MUST NOT promise concurrent
+success — nil or `service.ErrAlreadyStopped` — and MUST NOT repeat teardown. The contract MUST NOT promise concurrent
 executor election, later rejoin of a successfully running generation, or replay of a prior Stop error. Stop context
 bounds shutdown phases and never becomes runtime authority or a detached cleanup root.
 
@@ -84,7 +95,7 @@ bounds shutdown phases and never becomes runtime authority or a detached cleanup
 
 - **GIVEN** a framework service completed Stop, clean or failed
 - **WHEN** Stop is called again with a valid context
-- **THEN** it returns success — nil or `ErrAlreadyStopped` — and performs no teardown side effect
+- **THEN** it returns success — nil or `service.ErrAlreadyStopped` — and performs no teardown side effect
 
 #### Scenario: Concurrent Stop is outside the contract
 
@@ -106,7 +117,7 @@ bounds shutdown phases and never becomes runtime authority or a detached cleanup
 
 #### Scenario: A repeated Stop answered with the already-stopped sentinel is success
 
-- **GIVEN** a service that answers a post-completion Stop with `ErrAlreadyStopped` rather than nil
+- **GIVEN** a service that answers a post-completion Stop with `service.ErrAlreadyStopped` rather than nil
 - **WHEN** `Manager.StopAll` visits it
 - **THEN** `StopAll` treats the sentinel as success
 - **AND** it does not aggregate the sentinel as a shutdown error
