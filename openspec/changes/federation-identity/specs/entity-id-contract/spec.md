@@ -10,10 +10,11 @@ the longest — naming the binding family in the error. The seven reserved bytes
 pair that fits only unsuffixed from being durably recorded and then refused forever, which ADR-102 decision 7 makes
 unrepairable. A declared pair may therefore be at most 163 bytes.
 
-The reserve MUST apply only where a pair is DECLARED. An effective pair — a minted identifier, an adopted identity
-record's, or the running configuration's — already carries whatever suffix it will ever carry and MUST be bounded at
-the full 170-byte budget; reserving the same seven bytes against it as well would refuse, after Start, a declaration
-that had already passed load. Every declaration boundary MUST apply the same 163-byte bound and every effective-pair
+The reserve MUST apply only where a pair is DECLARED, and a configuration MUST declare the stem — never a minted
+identifier — so that one field carries one kind of value. An effective pair — a minted identifier, an adopted
+identity record's, or the running configuration's — already carries whatever suffix it will ever carry and MUST be
+bounded at the full 170-byte budget; reserving the same seven bytes against it as well would refuse, after Start, a
+declaration that had already passed load. Every declaration boundary MUST apply the same 163-byte bound and every effective-pair
 boundary the same 170-byte bound, so no path can admit a pair another path rejects. The budget MUST be derived from
 the framework's own family table, never configured by the operator.
 Framework constructors MUST keep fail-closed canonical validation as the second layer. This amends ADR-076 decision

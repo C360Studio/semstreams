@@ -787,11 +787,23 @@ refuses a wire value that disagrees, so it needed no change.
    org bound from `semtypes.MaxAuthorityPairBytes()` minus the seven reserved suffix bytes — 163 — rather than a
    local constant. That is the bound on what a config may DECLARE, which is what `MaxOrgLen` governs; an identifier
    already carrying the minted suffix is bounded at 170.
-6. **Start now validates the whole effective configuration.** Establishing the platform identity applies it through
+6. **Provision the configuration bucket with no TTL and no size cap.** `semstreams_config` now holds create-once
+   identity state, so Start reads the bucket's live policy and refuses to boot into one that can delete keys, naming
+   the offending value. Acquisition returns an existing bucket unchanged, and the bucket has more than one creator,
+   so this is checked rather than assumed — whoever created it, an evicting policy means the identity would expire
+   and the next boot would mint a second authority ADR-102 d7 forbids reconciling.
+7. **One environment per configuration bucket.** Two deployments sharing `platform.org` and `platform.id` but
+   differing in `platform.environment` can no longer both start against one bucket: the second is refused, naming
+   both environments. Give each environment its own NATS storage. (Before this, the environment was compared only on
+   the subsequent-boot branch, so two first boots raced and both published.)
+8. **Declare the STEM in `platform.id`, never the minted identifier.** If you copy the effective value out of
+   `semstreams_config/platform_identity` back into your configuration file, Start refuses and tells you which stem
+   to write instead. The framework composes the effective value; the file names what it was composed from.
+9. **Start now validates the whole effective configuration.** Establishing the platform identity applies it through
    the config manager's serialized mutation, which re-validates the entire document. A defect anywhere in your
    configuration that previously surfaced later — undeclared stream bounds, a bad TLS path — now fails Start. The
    error leads with that finding and names the identity step second; it is not an identity failure.
-7. **Non-Go carriers.** Rule packs, compose files, TypeScript fixtures, and vendored OpenAPI documents that spell an
+10. **Non-Go carriers.** Rule packs, compose files, TypeScript fixtures, and vendored OpenAPI documents that spell an
    `org.platform` prefix as a literal are outside every Go census and break the same way as obligation 3. Grep your
    repository for your own `platform.id` value, not for a Go symbol.
 
@@ -810,6 +822,12 @@ refuses a wire value that disagrees, so it needed no change.
   Read the pair.
 - An authority pair that fits the 170-byte budget only while unsuffixed now fails **configuration load**, before any
   record is created — LOUD, and repairable by shortening the identifier.
+- A bucket carrying a TTL or a size cap **refuses Start, LOUD**, naming the policy value. Nothing is minted, so the
+  refusal is repeatable. Before this check the identity simply expired and the next boot minted a different
+  authority — silent, and unrepairable once two authorities existed.
+- A second `platform.environment` against the same bucket **refuses Start, LOUD**, naming both environments.
+- A configuration file that declares the minted identifier instead of the stem **refuses Start, LOUD**, naming the
+  stem to declare.
 - An external writer that puts a `platform` key into the shared bucket no longer changes the running deployment's
   authority. If you relied on that as a runtime override, it is gone; identity is established at Start and nothing
   moves it afterwards.

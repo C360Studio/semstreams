@@ -559,7 +559,8 @@ func putConfigValue(t *testing.T, ctx context.Context, manager *Manager, key str
 	t.Helper()
 	data, err := json.Marshal(value)
 	require.NoError(t, err)
-	_, err = manager.kvStore.Put(ctx, key, data)
+	// Seeding happens BEFORE Start, which is where the bucket is acquired now.
+	_, err = directKVStore(t, ctx, manager).Put(ctx, key, data)
 	require.NoError(t, err)
 }
 

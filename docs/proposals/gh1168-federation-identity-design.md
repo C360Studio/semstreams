@@ -89,9 +89,14 @@ ways*. **Identity is not config.**
 `Manager.Start(ctx)` calls `establishPlatformIdentity(ctx)` **first** — before the gh#459 guard, before version
 arbitration, before any watcher or write — taking **one** `Keys(ctx)` read that also answers first-boot detection:
 
+Before any of it, `Start` acquires the bucket under its own context (never one a constructor invented) and refuses a
+bucket whose live policy can delete keys — a TTL or a binding size cap — because a create-once identity that can
+expire is a second authority waiting to be minted, and d7 forbids reconciling one. Then it claims the bucket for this
+deployment's `platform.environment` with an atomic create, so two environments can never both establish.
+
 | Bucket state (from the one read) | Action |
 |---|---|
-| `platform_identity` present | **adopt**: read the record, refuse Start unless its `org` equals the file's and the file's `platform.id` equals the record's `stem` or its `id`, validate the adopted `id` as a configuration value would be, then make it the effective `platform.id` |
+| `platform_identity` present | **adopt**: read the record, refuse Start unless its `org` equals the file's and the file's `platform.id` equals the record's `stem`, validate the adopted `id` as a configuration value would be, then make it the effective `platform.id`. Configuration declares the stem and only the stem; a file holding the minted identifier is refused with guidance |
 | absent, **no other key** | **genuine first boot**: mint `-` + 6 lowercase hex from `crypto/rand`, `Create` the record; on `ErrKVKeyExists` (a co-process won the race) re-read and adopt |
 | absent, **other keys present** | **refuse Start** naming *that* cause and the fresh-storage instruction. **Mint nothing. `Create` nothing.** |
 

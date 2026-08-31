@@ -36,7 +36,7 @@ alias, no parallel path; sisters handle their own migration.
    mirror: still published for the UI, never applied back over the running authority.
 
 3. **Identity is established before arbitration, from one read, in three branches.** The record present → adopt it
-   (refusing unless the record's `org` matches and the file's `platform.id` equals the record's `stem` or its `id`).
+   (refusing unless the record's `org` matches and the file's `platform.id` equals the record's `stem`).
    The record absent and the bucket otherwise empty → mint and `Create`. The record absent and other keys present →
    **refuse Start naming that cause, minting nothing and creating nothing**: such a bucket predates identity minting,
    and minting into it would durably record an authority the deployment's own guard then rejects for the wrong
@@ -58,6 +58,28 @@ alias, no parallel path; sisters handle their own migration.
    bytes twice and refuses, at Start, a declaration that had already passed load. Declarations ≤ 163, effective
    pairs ≤ 170; no path admits what another rejects, because no path sees both kinds.
 
+   **Configuration declares the stem, and only the stem.** That is what makes the previous sentence true: while the
+   `platform.id` field admitted either a stem or a minted identifier, one field carried both kinds and the boundary
+   contradicted itself — at the legal edge a 163-byte stem mints to a 170-byte identifier, so writing that
+   identifier back into the file was refused at load and could never reach the adopt branch that claimed to accept
+   it. A configuration that declares the minted identifier is refused with guidance naming the stem, decided by
+   comparison against the recorded value rather than by inspecting the string's shape.
+
+6. **A bucket that can evict the identity is refused before anything is minted.** Acquisition returns an existing
+   bucket unchanged and never reconciles its policy, and this package is not the bucket's only creator, so the
+   policy in force may be one the framework never chose. A create-once identity under a TTL or a binding size cap
+   expires, and the next boot mints a *second* authority that decision 7 of ADR-102 forbids ever reconciling. Start
+   therefore reads the live policy and fails, naming the offending value, before minting or creating anything. The
+   bucket is acquired under the lifecycle context, never one a constructor invented.
+
+7. **At most one `platform.environment` may establish against one bucket.** The pair `(org, id, environment)` was
+   compared only on the subsequent-boot branch, so two deployments that both found the bucket empty — one `prod`,
+   one `dev` — each took the first-boot branch and published configuration over the other's. An internal guard key,
+   claimed by atomic create before the identity record, decides it with the same primitive that decides the record;
+   a mismatch refuses Start naming both environments. The guard is **not** a field of the record: `{org, stem, id}`
+   is a cross-repo read contract and does not change. Claiming before the record means a failure between the two
+   leaves a state a same-environment boot completes and a different-environment boot is refused.
+
 ## Consequences
 
 - BREAKING, in the beta.163 wave: every deployment's `platform.id` gains a suffix on its next boot against fresh
@@ -68,6 +90,15 @@ alias, no parallel path; sisters handle their own migration.
   `semstreams_config/platform_identity` instead — the framework observes; nobody computes.
 - The declarable authority pair loses 7 bytes of headroom: 163 rather than 170. The bound on an effective pair is
   unchanged at 170.
+- **A configuration bucket carrying a TTL or a size cap no longer boots.** That is a behaviour change for any
+  deployment whose bucket was provisioned with one — deliberately, because such a bucket cannot hold a create-once
+  identity. Provision it with no TTL and no MaxBytes.
+- **A bucket serves one environment.** Two deployments sharing `org` and `platform.id` but differing in
+  `platform.environment` can no longer both start against one bucket; the second is refused. This carries the
+  environment distinction after #1188 retires the gh#459 config-key guard, which is the only place it lived before —
+  and it holds on the first-boot branch, where that guard never ran.
+- The shared configuration bucket is acquired inside `Start(ctx)`. A caller that used a bucket-dependent method
+  before Start now receives a named error instead of operating on a bucket the constructor had opened behind it.
 - #1188 namespaces this bucket by the pre-mint `(org, stem)` and retires the gh#459 guard; the mechanism above is
   correct without that guard, because the adopt branch performs its own comparison.
 
@@ -84,8 +115,9 @@ alias, no parallel path; sisters handle their own migration.
 
 ## Cross-repo contract
 
-A sister conforms when: its composition root passes `deps.Platform` unchanged; its configuration files accept the
-minted suffix, or it pre-creates `platform_identity` for a deployment that must stay unsuffixed; and its fixtures,
+A sister conforms when: its composition root passes `deps.Platform` unchanged; its configuration files declare the
+STEM and accept the minted suffix, or it pre-creates `platform_identity` for a deployment that must stay unsuffixed;
+its configuration bucket carries no TTL and no size cap; one environment per bucket; and its fixtures,
 e2e and tooling read the effective pair from `semstreams_config/platform_identity` rather than predicting it from a
 configuration file. The record's shape is normative in the `component-runtime-config` capability spec: exactly the
 three fields `org`, `stem`, `id`.

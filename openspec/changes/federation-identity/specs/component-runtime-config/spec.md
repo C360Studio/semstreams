@@ -15,21 +15,38 @@ Config Manager persistence, version arbitration, watchers, reads, writes, and sh
 unchanged after successful Start. If the shared configuration bucket contains a foreign platform identity, Start SHALL
 fail before arbitration, watchers, writes, or dependent construction; detached running mode SHALL NOT exist.
 
+Start SHALL acquire the shared configuration bucket under the context passed to Start; no constructor, factory, or
+other non-lifecycle boundary SHALL perform that acquisition or invent a context for it. Having acquired it, Start
+SHALL read the bucket's live retention policy and SHALL fail, naming the offending value, if that policy can delete
+keys — a nonzero TTL or a binding size cap. Acquisition returns an existing bucket unchanged and this package is not
+the bucket's only creator, so the policy in force may be one it never chose; a create-once identity under an evicting
+policy expires and is reminted as a second authority, which ADR-102 decision 7 forbids ever reconciling. Nothing
+SHALL be minted or created before that check passes.
+
 Before arbitration, Start SHALL establish the deployment's platform identity from the bucket's `platform_identity`
 record, deciding from a single pre-mint read of the bucket's keys and under the context passed to Start:
 
 - the record is present — Start SHALL adopt its identifier as the effective `platform.id`, and SHALL fail unless the
   record's organization equals the configuration's `platform.org` and the configuration's `platform.id` equals the
-  record's stem or its identifier. An adopted identifier SHALL be validated under the same segment grammar and
-  authority-pair bound as a configured one;
+  record's stem. Configuration declares the STEM and only the stem: the minted identifier is not a declarable value,
+  and a configuration declaring it SHALL be refused with guidance naming the stem to declare instead — decided by
+  comparison against the recorded identifier, never by inspecting the value's grammar. An adopted identifier SHALL be
+  validated under the same segment grammar and authority-pair bound as a configured one;
 - the record is absent and the bucket holds no other key — Start SHALL mint the entropy suffix, write the record with
   an atomic `Create`, and adopt the result; if that `Create` conflicts with a concurrent process, Start SHALL re-read
   the record and adopt the winner's identifier rather than its own;
 - the record is absent and the bucket holds other keys — Start SHALL fail, naming that the bucket predates identity
   minting and instructing fresh storage. It SHALL mint nothing and SHALL create nothing.
 
+Before creating or adopting the record, Start SHALL claim the bucket for this deployment's `platform.environment`
+with an atomic create of an internal guard key, and SHALL fail — naming both environments — when the bucket was
+already claimed by a different one. At most one environment may establish against one configuration bucket. The claim
+SHALL precede the record so that a failure between the two leaves a state a same-environment boot completes and a
+different-environment boot is refused. The guard is internal: it is NOT a field of the record, whose shape is a
+cross-repo read contract.
+
 The record SHALL carry exactly the fields `org`, `stem`, and `id`. First-boot detection SHALL ignore the
-`platform_identity` key, so a boot that has just created it is still a first boot. The identity guard SHALL compare
+`platform_identity` key and the environment guard key, so a boot that has just created either is still a first boot. The identity guard SHALL compare
 the effective identifier. Configuration synchronization SHALL NOT apply the KV `platform` key to the running
 configuration — it remains a published mirror only — and version arbitration SHALL never write, overwrite, or apply
 `platform_identity`.
@@ -76,10 +93,12 @@ configuration — it remains a published mirror only — and version arbitration
 - **GIVEN** `platform_identity` records organization `acme`, stem `dep`, and identifier `dep-7f3a9c`
 - **WHEN** a process whose file declares `platform.id` `dep` starts, and concurrently a second process with the same file starts
 - **THEN** both adopt `dep-7f3a9c` and neither creates a second record — the loser of the atomic Create reads the winner's
-- **AND** a file declaring `platform.id` `dep-7f3a9c` is also adopted, while a file declaring `other`, or one
-  declaring a different `platform.org`, returns the identity mismatch
-- **AND** the tests that verify this are `TestConfigManagerAdoptsPersistedPlatformIdentity` and
-  `TestConfigManagerConcurrentFirstBootConvergesOnOneIdentity`
+- **AND** a file declaring `other`, or one declaring a different `platform.org`, returns the identity mismatch
+- **AND** a file declaring `platform.id` `dep-7f3a9c` — the minted identifier rather than the stem — is refused with
+  guidance to declare `dep`
+- **AND** the tests that verify this are `TestConfigManagerAdoptsPersistedPlatformIdentity`,
+  `TestConfigManagerConcurrentFirstBootConvergesOnOneIdentity` and
+  `TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance`
 
 #### Scenario: A bucket that predates identity minting refuses without minting
 
@@ -88,6 +107,24 @@ configuration — it remains a published mirror only — and version arbitration
 - **THEN** Start fails naming the pre-identity bucket as the cause and instructing fresh storage
 - **AND** no `platform_identity` key exists in the bucket afterwards and no suffix was minted
 - **AND** the test that verifies this is `TestPreIdentityBucketRefusesStartWithoutMinting`
+
+#### Scenario: A second environment cannot establish against the same bucket
+
+- **GIVEN** an empty configuration bucket
+- **WHEN** two deployments declaring the same `platform.org` and `platform.id` but `platform.environment` `prod` and
+  `dev` start concurrently
+- **THEN** exactly one Start succeeds and the other fails naming both environments
+- **AND** the refused deployment publishes no configuration
+- **AND** the test that verifies this is `TestConcurrentFirstBootRefusesASecondEnvironment`
+
+#### Scenario: A bucket whose policy can evict the identity is refused before minting
+
+- **GIVEN** a configuration bucket created by another writer with a TTL, or with a binding size cap
+- **WHEN** Config Manager starts
+- **THEN** Start fails naming the bucket and the offending policy value, and creates no `platform_identity` record
+- **AND** the deployment never mints a second authority for itself across restarts
+- **AND** the tests that verify this are `TestEvictingConfigBucketRefusesStart` and
+  `TestIdentityUnderAnEvictingBucketNeverRemints`
 
 #### Scenario: A KV platform write never changes the running authority
 

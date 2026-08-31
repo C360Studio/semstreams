@@ -146,18 +146,26 @@ func BucketRetention(ctx context.Context, bucket jetstream.KeyValue) (maxAge tim
 	return info.Config.MaxAge, info.Config.MaxBytes, nil
 }
 
-// ErrGraphBucketRetention is returned by CheckNoLifecycleRetention when a live
-// graph bucket carries a lifecycle-eviction config. Sentinel so a boot path can
-// classify it (fail-closed) distinctly from a transient status error.
-var ErrGraphBucketRetention = errors.New("live graph bucket has lifecycle retention (ADR-068 D1: forbidden)")
+// ErrGraphBucketRetention is returned by CheckNoLifecycleRetention when a
+// bucket holding state that must not be evicted carries a lifecycle-eviction
+// config. Sentinel so a boot path can classify it (fail-closed) distinctly from
+// a transient status error.
+//
+// Two callers, one mechanical rule and two reasons for it: the live graph
+// bucket (ADR-068 D1 — eviction is reachability-blind) and the shared
+// configuration bucket that holds the create-once platform identity (ADR-102
+// decision 7 — an expired identity is reminted as a second authority that can
+// never be reconciled). The exported name predates the second caller.
+var ErrGraphBucketRetention = errors.New("bucket has lifecycle retention, which is forbidden for state that must not be evicted")
 
-// CheckNoLifecycleRetention is the pure D1 guardrail: it errors if a bucket's
+// CheckNoLifecycleRetention is the pure guardrail: it errors if a bucket's
 // retention config is binding. maxAge > 0 (a TTL) is always a violation. maxBytes
-// > 0 is a violation too — a size cap on the live graph evicts by size, which is
-// reachability-blind; a deployment that genuinely wants a non-binding crash
-// backstop should size it far above steady state and treat hitting it as an
-// alert, not configure it here. Pure + no I/O so it is unit-testable; the boot
-// path pairs it with BucketRetention.
+// > 0 is a violation too — a size cap evicts by size, which is blind to whether
+// the key it drops was reachable or was the deployment's own identity; a
+// deployment that genuinely wants a non-binding crash backstop should size it far
+// above steady state and treat hitting it as an alert, not configure it here.
+// Pure + no I/O so it is unit-testable; the boot path pairs it with
+// BucketRetention.
 func CheckNoLifecycleRetention(name string, maxAge time.Duration, maxBytes int64) error {
 	if maxAge > 0 {
 		return fmt.Errorf("%w: bucket %q has TTL/MaxAge %s", ErrGraphBucketRetention, name, maxAge)
@@ -169,10 +177,11 @@ func CheckNoLifecycleRetention(name string, maxAge time.Duration, maxBytes int64
 }
 
 // AssertNoLifecycleRetention reads this bucket's retention config and returns
-// ErrGraphBucketRetention if it is binding — the boot-time D1 guardrail for a
-// live graph bucket (ADR-068). A retention config here means some process won
-// the get-or-create race with a TTL/size cap; fail-closed rather than silently
-// expire graph state.
+// ErrGraphBucketRetention if it is binding — the boot-time guardrail for a live
+// graph bucket (ADR-068 D1) and for the shared configuration bucket that holds
+// the create-once platform identity (ADR-102 d7). A retention config here means
+// some process won the get-or-create race with a TTL/size cap; fail-closed
+// rather than silently expire state that cannot be regenerated.
 func (kv *KVStore) AssertNoLifecycleRetention(ctx context.Context, name string) error {
 	maxAge, maxBytes, err := BucketRetention(ctx, kv.bucket)
 	if err != nil {

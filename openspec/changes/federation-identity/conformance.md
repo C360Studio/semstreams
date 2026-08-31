@@ -67,6 +67,25 @@ rules-seeded fresh bucket therefore makes a genuine first boot take the third br
 possible causes and lists the keys it found (`summarizeKeys`); the remedy it prints is correct for both.
 `TestPreIdentityBucketRefusesStartWithoutMinting` asserts both the `processor/rule` mention and the key list.
 
+## Codex owner round, 2026-08-31 — per-finding disposition
+
+| Finding | Disposition | `file:line` |
+|---|---|---|
+| **B1** durable identity can expire and remint under an inherited bucket policy | FIXED. Reproduced first — `TestIdentityUnderAnEvictingBucketNeverRemints` failed `expected "dep-a9dee1", actual "dep-534e17"`, both boots nil, Codex's exact shape. `acquireBucket` now reads the live policy and refuses a TTL or a binding size cap before anything is minted, through the EXISTING owner of that rule (`KVStore.AssertNoLifecycleRetention`) rather than a second spelling of it. Validating what exists — not who created it — is also what covers `processor/rule` having created the bucket first, so that package is untouched | `config/manager.go` `acquireBucket`; `natsclient/kv.go` `AssertNoLifecycleRetention`; tests `TestEvictingConfigBucketRefusesStart`, `TestIdentityUnderAnEvictingBucketNeverRemints`; mutation check M16 |
+| **B2** concurrent first boot bypasses the environment guard; both apps publish | FIXED. Reproduced first — `TestConcurrentFirstBootRefusesASecondEnvironment` failed `expected: 1 actual: 2` with both errors nil, matching Codex's 10/10. `claimEnvironment` claims the bucket for one `platform.environment` by atomic `Create` on an internal key, BEFORE the record, so a failure between the two leaves a state a same-environment boot completes; a mismatch refuses naming both. The record's `{org, stem, id}` shape is unchanged — the guard is not a field of it | `config/manager.go` `claimEnvironment`, `platformEnvironmentGuardKey`; mutation check M17 |
+| **B3** the load boundary rejects a full identifier the adopt contract accepts | FIXED by removing the contradiction rather than detecting a minted value by grammar: configuration declares the STEM, and only the stem. The full-identifier arm is gone from the adopt comparison, the spec scenario, and the adopt test's cases; a file holding the minted identifier is refused with guidance derived from the STORED value. ADR-104's "no path sees both kinds" is now true because the field admits one kind | `config/manager.go` `adoptPlatformIdentity`; `TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance`; mutation check M18 |
+| **B4** constructor invents a root context for I/O | FIXED as removal work, not inherited debt. `NewConfigManager` performs no I/O and retains the `*natsclient.Client`, never a context; `Start(ctx)` acquires the bucket, validates its policy, claims the environment, and establishes identity under that exact context. Bucket-dependent methods called before Start return `errBucketNotAcquired` rather than dereferencing nil | `config/manager.go` `NewConfigManager`, `acquireBucket`, `store`, `bucket`, `errBucketNotAcquired` |
+| **B5** knobless contract selected before the owner ruled | NOT A CODE CHANGE — snapshot race. The owner's confirmation landed on #1168 at 01:41Z, five minutes before the Codex comment at 01:46Z. The coordinating session answers it on the PR; ADR-104 stays Proposed until the owner accepts it (task 5.6, still open) | — |
+| **MEDIUM** task truth carries pre-fix and placeholder claims | FIXED. 1.1 no longer claims `implemented-by` was set at implementation and points at 6.6 for later body changes; 3.1 rewritten to the shipped two-boundary contract and its four tests | `openspec/changes/federation-identity/tasks.md` 1.1, 3.1 |
+
+### Constructor-then-use callers (B4 enumeration)
+
+| Caller | Uses the bucket before Start? |
+|---|---|
+| `internal/bootstrapobservability/bootstrap.go` `StartConfigManager` — the only production caller | No. Constructs, calls `Start(ctx)` immediately, then `GetConfig()`, which reads in-memory state only |
+| `processor/rule.NewConfigManager(nil, configMgr, logger)` (`cmd/semstreams/main.go`, `cmd/e2e-semstreams/main.go`) | No. It retains `configMgr` and, per its own field comment, no longer uses it; it acquires its own bucket |
+| in-package tests that seed the bucket before Start | Yes, deliberately. They now open the bucket themselves (`directKVStore`) or call `acquireBucket(ctx)` — the same production path Start uses — instead of reaching into a handle the constructor had opened behind them |
+
 ## Test fixtures changed because the refusal is the feature
 
 Every fixture that fabricated an "already configured" bucket without an identity record now seeds one; that refusal

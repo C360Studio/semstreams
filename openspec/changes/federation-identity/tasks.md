@@ -17,8 +17,10 @@ in `docs/proposals/gh1168-federation-identity-pins.md`; inventory
 ## 1. Claim
 
 - [x] 1.1 Worktree `../semstreams-wt/claude/gh1168-federation-identity`, branch `claude/gh1168-federation-identity`;
-      draft PR #1178 `Closes #1168`; `implemented-by: <persona>` set at implementation. The proposal was the first
-      commit; the inventory, the design, and this re-cut followed.
+      draft PR #1178 `Closes #1168`. The proposal was the first commit; the inventory, the design, and this re-cut
+      followed. `implemented-by: opus (developer rounds); fable (coordination, review-closure commits)` is in the PR
+      body as of the Codex round — the earlier text here claimed that before it was true (Codex MEDIUM); 6.6 owns
+      any later body change.
 - [x] 1.2 Re-cut the change package to the owner's Case B scope: design, proposal, tasks, the two surviving spec
       deltas (the `graph-ingest` delta left with #1192/#1194), ADR-104, the migration section, and the pins file.
 
@@ -48,10 +50,24 @@ in `docs/proposals/gh1168-federation-identity-pins.md`; inventory
 
 ## 3. Contract — `config`
 
-- [x] 3.1 `config/config.go`: `validateAuthorityPair` reserves the seven bytes of the minted suffix
-      (`mintedSuffixBytes`) against `semtypes.MaxAuthorityPairBytes()` and names the reserve in the error. One rule
-      for the document's pair, an adopted record's, and the effective pair — no second spelling, no caller-supplied
-      budget.
+- [x] 3.1 `config/config.go`: TWO boundaries, one budget source. `validateDeclaredAuthorityPair` reserves the seven
+      bytes of the minted suffix (`mintedSuffixBytes`) against `semtypes.MaxAuthorityPairBytes()` — 163 — and runs
+      at `Loader.Load`/`LoadFromBytes`, ungated, because no production loader enables validation.
+      `validateAuthorityPair` bounds an EFFECTIVE pair (minted, adopted, or running) at the full 170 and is what the
+      mint, the adopt, and `Config.Validate` call. The reserve is a fact about a declaration, not about a pair;
+      applying it to both kinds refused at Start a declaration that had passed load (review HIGH-1, reproduced by
+      `TestMaximumDeclarablePairMintsAndStarts` before the fix). Tests:
+      `TestConfigRejectsOversizedAuthorityPair`, `TestConfigRejectsPairThatOnlyFitsUnsuffixed`,
+      `TestEffectivePairIsBoundedWithoutTheDeclarationReserve`, `TestMaximumDeclarablePairMintsAndStarts`;
+      mutation checks M14 and M15.
+- [x] 3.4 `config/manager.go`: the Codex round's four code findings — bucket acquisition moved out of the
+      constructor into `Start(ctx)` (B4: no invented root, `natsClient` retained instead of a context, and
+      `errBucketNotAcquired` for any bucket-dependent method called before Start); `acquireBucket` refuses a bucket
+      whose live policy can evict the identity, through the existing `KVStore.AssertNoLifecycleRetention` rather
+      than a second spelling of that rule (B1); `claimEnvironment` claims the bucket for one `platform.environment`
+      by atomic create, before the record, so the Create/adopt race cannot let two environments both publish (B2);
+      the adopt comparison accepts the record's STEM only, and a file holding the minted identifier is refused with
+      guidance derived from the stored value, never from grammar (B3). Mutation checks M16, M17, M18.
 - [x] 3.2 `config/manager.go`: add `platformIdentityRecord{Org, Stem, ID}` and the `platform_identity` key
       constant; add `establishPlatformIdentity(ctx)` called first in `Start(ctx)`, taking ONE `kvStore.Keys(ctx)`
       read and branching adopt / mint+`Create` / refuse-pre-identity-bucket per the design §3 table; return the
@@ -90,6 +106,16 @@ with a matching `md5 -q`. Verbatim failure lines below.
       for the suffix"). Re-pointed from `maxDeclarableAuthorityPairBytes` after the review round moved the reserve to
       the declaration boundary; the reviewer's note that M14 also reds `TestConfigRejectsOversizedAuthorityPair` is
       the stronger signal and is recorded here.
+- [x] 4.8 M16 `acquireBucket`: skip `AssertNoLifecycleRetention` → `TestEvictingConfigBucketRefusesStart` failed on
+      both TTL and MaxBytes ("An error is expected but got nil") and
+      `TestIdentityUnderAnEvictingBucketNeverRemints` failed `expected: "dep-31a043" actual: "dep-7fbc40"` — the
+      remint Codex measured, reproduced here.
+- [x] 4.9 M17 `claimEnvironment`: never refuse a mismatched environment →
+      `TestConcurrentFirstBootRefusesASecondEnvironment` failed `expected: 1 actual: 2` with both errors nil.
+- [x] 4.10 M18 adopt: accept the minted identifier as a declarable value again →
+      `TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance` and
+      `TestConfigManagerAdoptsPersistedPlatformIdentity/file_declares_the_minted_identifier` both failed
+      ("An error is expected but got nil").
 - [x] 4.7 M15 `validateAuthorityPair`: reserve the suffix on the EFFECTIVE pair too — the HIGH-1 defect itself →
       `TestMaximumDeclarablePairMintsAndStarts` failed ("a pair at the declarable budget must boot") and
       `TestEffectivePairIsBoundedWithoutTheDeclarationReserve` failed ("a minted pair at exactly the family-table
@@ -121,17 +147,17 @@ with a matching `md5 -q`. Verbatim failure lines below.
       `go test ./test/contract/...`; `task entity-id:audit`; `task schema:generate && git diff --exit-code schemas/ specs/`;
       `openspec validate federation-identity --strict --no-interactive`; `go mod tidy -diff`;
       `bash scripts/inventory-verify.sh docs/proposals/gh1168-federation-identity-pins.md`.
-- [x] 6.2 Covering e2e tiers, one at a time on an idle host, results verbatim. Re-run at `e09df6f2`, AFTER the
-      review round's fixes, because they touched `config` and `test/e2e/scenarios`.
-- [x] 6.2a `task e2e:core` EXIT=0 — `[OK] platform_identity records {org, stem, id} and the effective pair carries
+- [ ] 6.2 Covering e2e tiers, one at a time on an idle host, results verbatim. The `e09df6f2` run is superseded:
+      the Codex round's fixes changed the config manager's acquisition, so the tiers are re-run below.
+- [ ] 6.2a `task e2e:core` EXIT=0 — `[OK] platform_identity records {org, stem, id} and the effective pair carries
       the minted suffix`; `[OK] A pre-identity bucket refuses LOUD, exits nonzero, and creates no identity record`.
       The second stage passing also proves `client.IsKVKeyNotFound` matches: the assert half returns success only
       through that branch.
-- [x] 6.2b `task e2e:lifecycle` EXIT=0 — all eight stages, so the four-position `--lifecycle-seed` and the observed
+- [ ] 6.2b `task e2e:lifecycle` EXIT=0 — all eight stages, so the four-position `--lifecycle-seed` and the observed
       pair agree.
-- [x] 6.2c `task e2e:structural` EXIT=0 — `entity_count:127 validation_errors:0`, minted pair observed in-run as
+- [ ] 6.2c `task e2e:structural` EXIT=0 — `entity_count:127 validation_errors:0`, minted pair observed in-run as
       `c360.semstreams-e2e-structural-fd1546`.
-- [x] 6.2d `task e2e:lessons` EXIT=0 — `Scenario completed successfully … assertions_run=3`, minted pair
+- [ ] 6.2d `task e2e:lessons` EXIT=0 — `Scenario completed successfully … assertions_run=3`, minted pair
       `c360.streamkit-pure-7d99d3`.
 - [~] 6.2e `task e2e:throughput` EXIT=0 twice (`c360.semstreams-statistical-16d370`, then
       `-abca74`) — but BOTH runs printed
@@ -145,7 +171,7 @@ with a matching `md5 -q`. Verbatim failure lines below.
       come from the same e2e config helper structural exercised), `agentic`, `ops`, `crud-tools`, `research-graph`,
       `deep-research`, `slow-consumer`, `openai-responses` — none has a touched path beyond the e2e config helper.
       `statistical` was originally excluded on the same reasoning but has since RUN green — see 6.2g.
-- [x] 6.2g `task e2e:statistical` EXIT=0 — run to settle 6.2e: `entities_missing:0`, `entity_count:125`,
+- [ ] 6.2g `task e2e:statistical` EXIT=0 — run to settle 6.2e: `entities_missing:0`, `entity_count:125`,
       `validation_errors:0` under `c360.semstreams-statistical-a4d38e`.
 - [x] 6.2h Stage mutation check (not vacuous): `./e2e --scenario core-minted-authority` exits 1 with
       `read semstreams_config/platform_identity: ... bucket not found` when no record exists, and exits 1 with
