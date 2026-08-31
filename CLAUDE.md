@@ -82,9 +82,10 @@ rituals read it. Three gates never become a pointer:
   (`git worktree add ../semstreams-wt/<branch> -b <branch> origin/main`). No draft PR, no claim.
 - **Merge:** CI green with no known unfixed flake in a required job; the archive/spec sync is the last content
   commit, reviewed with the code; `implemented-by: <persona>` in the PR body; squash merge closes the issue.
-- **Close:** no issue closes without the owner's explicit `CONFIRM-CLOSE`, visible in the issue or PR, naming the
-  issues it closes and covering only those. A bare "approved", or approval of adjacent work, is never a close (owner
-  ruling, 2026-08-29).
+- **Close:** the squash-merge of a PR that declared `Closes #n` at review time closes the issue — the merge is the
+  authorization; no separate confirm (owner ruling, 2026-08-31, superseding 2026-08-29 — recorded on #1198). A close
+  with no merged PR behind it still takes the owner's word on the issue; a bare "approved", or approval of adjacent
+  work, never closes anything.
 
 ## Repository ownership boundary (HARD RULE)
 
