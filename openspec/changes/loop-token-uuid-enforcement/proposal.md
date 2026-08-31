@@ -25,8 +25,8 @@ token (`agentrun.go:290`). The #1148 origin-mismatch refusal stays as the loud b
 The ruling named ONE violating mint. Enumeration found the same fact at three sites — the second dispatch spelling
 is trivially in scope; **graph-research's `rg_` mint extends the ruling's named list** and is included in the
 recommendation below because it is the same family (AGENT_LOOPS record, `agentic-loop.agent.execution.<instance>`
-entity), the same 32-bit math, and its exclusion would put a carve-out sentence in the spec contract. Confirm or
-cut at design review; the task is separable (tasks §3.4).
+entity), the same 32-bit math, and its exclusion would put a carve-out sentence in the spec contract. RULED (owner,
+2026-08-31): "q1 - everyone who mints a loop uses uuid" — A1 confirmed, graph-research in scope.
 
 ## What changes
 
@@ -63,9 +63,9 @@ cut at design review; the task is separable (tasks §3.4).
 - #1212 (suffix-index loop/run collision) — permanent under this ruling, its own issue, not absorbed.
 - #1194 — the import lane inherits the `internal/looptoken` check for the loop-execution family when it lands;
   named here as coordination, not implemented.
-- #1174 — **recommendation: drop `Closes #1174` from PR #1210.** The re-scoped Mint edit adds a precondition and
-  does not touch the mismatch error text (`agentrun.go:316-318`); #1174's acceptance is a policy ruling (may a
-  framework error carry a foreign identity?) this change no longer makes. Recommend, not rule.
+- #1174 — RULED (owner, 2026-08-31): "q2 drop it unless we are fixing it" — this scope does not fix it (the
+  Mint edit adds a precondition and never touches the mismatch error text, `agentrun.go:316-318`);
+  `Closes #1174` dropped from PR #1210. #1174 stays open on its own.
 - `related_loops` lineage references — reads of existing loops, not mints. `parent_loop_id` is NOT excluded:
   round-2 H1 measured the write path composing it through the PANICKING `LoopExecutionEntityID`
   (`agentic/loop_execution_entity.go:130`, reached from a NATS consumer callback) — the earlier premise that
@@ -76,7 +76,7 @@ cut at design review; the task is separable (tasks §3.4).
 
 - **A0 — do nothing:** keeps a silent 32-bit conversation-merge bug and an unvalidated client mint lane. Rejected.
 - **A1 (recommended) — enforce at every framework mint + every accepting seam** (this proposal).
-- **A2 — dispatch-only, carve research out:** leaves a live 32-bit surface whose own comment concedes the odds,
+- **A2 (rejected by the Q1 ruling) — dispatch-only, carve research out:** leaves a live 32-bit surface whose own comment concedes the odds,
   and puts a permanent exception clause in the spec contract. Cheaper by one generator line; costs a carve-out.
 - **A3 — framed-digest re-key:** the superseded package; ruled out 2026-08-31.
 

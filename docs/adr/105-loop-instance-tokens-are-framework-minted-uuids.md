@@ -2,7 +2,8 @@
 
 ## Status
 
-**Proposed (2026-08-31)** — pending independent design review and owner acceptance on #1192. Implements the owner
+**Proposed (2026-08-31)** — pending final owner acceptance on #1192; scope ruled 2026-08-31 ("everyone who
+mints a loop uses uuid" — graph-research included, A1). Implements the owner
 ruling of 2026-08-31 (#1192): "enforce UUID at the mint seams"; supersedes the unmerged framed-digest ADR-105
 draft (PR #1210 history, `b0e92253`). ADR-104's budget figures (170 effective / 163 declared) stand unamended.
 Mechanics live in `entity-id-contract` and `graph-ingest`.
