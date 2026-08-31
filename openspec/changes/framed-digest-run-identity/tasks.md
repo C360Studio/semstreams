@@ -51,14 +51,23 @@ deviations from a binding ruling are BLOCKING at any severity.
       `(f FrameworkIdentityFamily) DerivedEntityID(org, platform, digestDomain string, frames ...string) (string, error)`
       — length-framed SHA-256 (frames byte-identical to `writeFramedString`), refuses an empty frame, truncates the
       hex digest to `f.InstanceBytes`, refuses `InstanceBytes` 0 or >64 (N5). Update the `MaxAuthorityPairBytes`
-      doc comment (168; agent-run binds). Rename `entity_domain_authority.go` → `entity_domain.go` (#1171, absorbed
-      because this change edits the package). Do NOT touch `DeploymentPrefix` (#1187).
+      doc comment (168; agent-run binds). Update the stale family comments at
+      `framework_identity_families.go:22-24` (agent-run becomes a fixed-suffix chain-execution family) and `:36`
+      (rule-trigger stops being the longest fixed suffix) (round-1 N1). `DerivedEntityID` produces its final
+      identifier through `f.EntityID(org, platform, instance)` — the established `ruleTriggerEntityID` shape
+      (`processor/rule/graph_event_identity.go:33`) — so the family's fail-closed segment validation applies to
+      every derived identity (round-1 N2). Do NOT touch `DeploymentPrefix` (#1187); the
+      `entity_domain_authority.go` rename stays #1171's own work (round-1 B1).
 - [ ] 3.2 `agentic/agentrun/agentrun.go`: `Mint(ctx, mgr, org, platform, originEntityID string)` mints through
       `AgentRunIdentityFamily().DerivedEntityID(org, platform, "semstreams.agent.run.v1", originEntityID)`; the
       stored-origin check keeps its classification and names neither identity; rewrite the Mint doc comment (the
       "is #1168" pointer and the instance-token description are stale). Delete `RunID()`, `runIDFromChainEntityID`,
       `ResolveRun`, `LoopTripleReader`, `maxAncestryHops`, `nats_reader.go`. Milestone subscriber keeps the wire
-      fast path only: `NewMilestoneSubscriber(mgr, logger)`, `NewMilestoneSubscriberWithRunStateReader(runs, logger)`.
+      fast path only: `NewMilestoneSubscriber(mgr, logger)`, `NewMilestoneSubscriberWithRunStateReader(runs, logger)`;
+      `resolveRunForEvent` treats an event without `RunEntityID` as "not in a run" (a defined answer under the
+      both-or-neither rule, not a degrade) and makes its KV Get-error path a declared degrade — logged, never
+      conflated with "not in a run" (#1197; round-1 D2). The retained stored-origin comparison is documented as
+      defense in depth: with the digest a mismatch is structurally unreachable absent a hash collision (round-1 N3).
 - [ ] 3.3 `agentic/entity_ids.go`: delete `ChainExecutionEntityID` and `TryChainExecutionEntityID`.
       `agentic/tools.go:396-400`: delete the recompute instruction from `MetadataKeyRunID`'s doc.
 - [ ] 3.4 Wire: add `TaskMessage.RunEntityID`, `LoopEntity.RunEntityID`, `UserMessage.RunEntityID`
@@ -89,15 +98,25 @@ deviations from a binding ruling are BLOCKING at any severity.
       MUST fail.
 - [ ] 4.5 M11 (wiring, not primitive): delete the `task.RunEntityID` assignment in `actions.go` →
       `TestRunScopeNewOnLocalLoopStampsAnchorAndOrigin` MUST fail.
+- [ ] 4.6 E2E falsifiability (round-1 D7): before its first green, run the `validate-run-identity` stage against
+      main (the behavior absent) and record the RED verbatim; the stage reports the count of assertions it
+      executed, and a zero-assertion green is a failure.
 
 ## 5. Sweep — spec, docs, e2e, sisters' note
 
 - [ ] 5.1 Doc-comment sweep: `vocabulary/agentic/predicates.go` `LoopRunEntityID` example
       (`…execution.<runID>` → `…execution.<64-hex digest>`); `git grep -n "ChainExecutionEntityID"` over docs/
-      comments and fix every survivor.
+      comments and fix every survivor. Numeric budget sweep (round-1 M1): `git grep -nE '\b(170|163|156)\b'` over
+      `docs/adr/`, `docs/operations/`, `config/`, `pkg/types/` and fix every budget survivor — ADR-104 decision 3
+      and ADR-102:106 are amended by ADR-105 and must say so; `docs/operations/migration-beta162-to-beta163.md`
+      (`:429`, `:754-756`, `:787`, `:836`) reconciles to 168/161; `config/config.go:816`, `config/manager.go:1200`
+      and stale test prose update. Tool-surface correction (round-1 M2): `processor/agentic-tools/loop_result.go:72`
+      parameter description and `:164-180` doc comment — "the full 6-part entity ID also works" becomes false for
+      run entities (the strip yields the 64-hex digest); correct both to name the loop family only.
 - [ ] 5.2 e2e: `run_scope=new` rule + `validate-run-identity` stage in the agentic scenario (the run entity is a
       64-hex-instance chain entity carrying `agent.run.origin-entity-id`; the loop's `agent.run.entity-id` equals
-      it verbatim).
+      it verbatim). The stage also asserts the suffix index (round-1 D6): `graph.query.bySuffix` resolves the run
+      under its 64-hex instance and the loop under its UUID — the loop/run suffix collision this change removes.
 - [ ] 5.3 `task schema:generate`; `git diff --exit-code schemas/ specs/` (the OpenAPI `run_entity_id` fields
       regenerate; vendored-contract holders' re-sync obligation goes in the migration note).
 - [ ] 5.4 `test/compat/semteams/agentrun_terminal_compat_test.go` composes through
@@ -105,8 +124,9 @@ deviations from a binding ruling are BLOCKING at any severity.
 - [ ] 5.5 Append the migration-note section (skeleton in this change's design record) to
       `docs/operations/migration-beta162-to-beta163.md`; pin the sister SHAs read during the one bounded pass;
       record that semteams `01b` has NO substitute until #1193 lands.
-- [ ] 5.6 Confirm the O-5 alert-path defect from the #1168 docket is filed; if absent, flag on #1192 — do not fix
-      here.
+- [ ] 5.6 The alert-path framing defect flagged on #1168 (`alertInstance`'s 12-byte raw timestamp frame sits
+      outside the string-frame grammar) has NO filed issue and no stable O-number in the surviving record
+      (measured 2026-08-31; round-1 D4): file it as its own issue and link it from #1192 — do not fix here.
 
 ## 6. Gates and landing
 
@@ -118,5 +138,6 @@ deviations from a binding ruling are BLOCKING at any severity.
 - [ ] 6.3 Implementation review by `semstreams-reviewer`; dispositions recorded in `conformance.md`.
 - [ ] 6.4 Archive + spec sync as the LAST content commit, reviewed with the code (this is what lands the
       `:1063-1065` deferral replacement in `openspec/specs/graph-ingest/spec.md`).
-- [ ] 6.5 Undraft; PR body carries `implemented-by:`, `Closes #1192`, the wire-value before/after list, and — if
+- [ ] 6.5 Undraft; PR body carries `implemented-by:`, `Closes #1192` and `Closes #1174` (the mismatch-error rewrite in 3.2 is #1174's fix), the wire-value
+      before/after list, and — if
       any round withdraws a claim a commit asserted — an authored squash body via `--body-file`.

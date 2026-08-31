@@ -25,7 +25,12 @@ conflict and neither identity. The run entity ID MUST be carried — as `RunEnti
 the loop's `AGENT_LOOPS` record, the four loop events, tool metadata `agent.run_entity_id`, and the loop's
 `agent.run.entity-id` triple — and MUST NOT be recomputed by any consumer; `RunID` keeps naming the root loop's
 bare identifier and its `AGENT_LOOPS` record. A `TaskMessage` carrying `RunID` without `RunEntityID` MUST fail
-validation.
+validation. That both-or-neither rule makes the carried value total: a loop record or terminal event without
+`RunEntityID` means the loop is not in a run — a defined answer a subscriber acts on without fallback resolution —
+while a storage read error on the carried-value fast path is a declared degrade, logged and never conflated with
+"not in a run". The stored-origin comparison below is defense in depth: distinct origins produce distinct
+digests, so a mismatch is structurally unreachable absent a hash collision, and the refusal is that case's
+declared detector.
 
 **No framework write reaches a foreign firing entity.** The run-anchor pair (`agent.loop.run`,
 `agent.run.entity-id`) and the `rule.task.spawned` back-reference MUST be written on the firing entity only when it

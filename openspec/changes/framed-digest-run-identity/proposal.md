@@ -9,7 +9,9 @@ explicitly leaves this half undecided. Milestone `v1.0.0-beta.163` (owner ruling
 
 Adjacent and NOT in this change: the import-lane collision gate → **#1194** (which owns the DEFERRED paragraph at
 `openspec/specs/graph-ingest/spec.md:934-948` — the issue body's citation of those lines predates materialization;
-the Case A deferral this change lands is the `:1063-1065` sentence, replaced by the spec delta below); the
+the Case A deferral this change lands is the `:1063-1065` sentence, replaced by the spec delta below — and #1194
+inherits a SPEC CORRECTION with the paragraph: it instructs "whoever lands #1168 MUST delete it", and #1168 closed
+2026-08-31 without the O-4 rejection, so the pointer is stale until #1194 rewrites it); the
 `run_scope=new` anchor-append bug → **#1193**; the zero-caller deletions → **#1187**; the environment surface →
 **#1186**; the five-type `EntityID()` recompute → **#1154** (its RUN half is absorbed here, the rest sequenced
 after).
@@ -38,7 +40,7 @@ Two measured facts on `main@ae35f296` (`inventory.md`):
   `FrameworkIdentityFamily.DerivedEntityID(org, platform, digestDomain, frames...)` — the length-framing is
   byte-identical to the existing `writeFramedString`/`writeRuleTriggerFrame` pair, and the rule-trigger derivation
   consolidates onto it with unchanged digest bytes (pinned by the existing trigger tests). The alert path keeps its
-  private writer (its 12-byte raw timestamp frame is outside the string-frame grammar; O-4 disposition on #1168).
+  private writer (its 12-byte raw timestamp frame is outside the string-frame grammar; disposition on #1168 — the framing defect itself is unfiled; task 5.6 files it).
   `DerivedEntityID` truncates the digest to the family's `InstanceBytes` and refuses a family declaring 0 or >64
   (revision finding N5 — `web-observation` declares 16). **New exported `pkg/types` surface — flagged for owner
   design review; drafting is not approval.**
@@ -61,6 +63,12 @@ Two measured facts on `main@ae35f296` (`inventory.md`):
   so `MaxAuthorityPairBytes()` tightens 170 → **168** and the declared pair bound tightens 163 → **161**
   (mechanical: `config/config.go:818` derives it). `agent.run.origin-entity-id` gains its first readers as the one
   run→loop pointer.
+- The loop/run suffix-index collision ends as a query-visible side effect: today the loop
+  `…agentic-loop.agent.execution.<uuid>` and its run `…chain.agent.execution.<uuid>` write identical
+  `ENTITY_SUFFIX_INDEX` keys (`processor/graph-ingest/component.go:2776-2812` — same instance, same `execution`
+  type token), so `graph.query.bySuffix` on a loop UUID is last-write-wins nondeterministic and removing either
+  entity deletes the other's index entry; distinct instances end both defects. E2e asserts both resolutions
+  (task 5.2; round-1 D6).
 - The corpus audit gains `derived_family_composed`: production Go composing positions 3–5 of a derived family
   outside the family table's file is a finding.
 
@@ -69,7 +77,7 @@ Two measured facts on `main@ae35f296` (`inventory.md`):
 - No knobs, no compatibility shims, no dual paths, no legacy reader: pre-v1 one-time break under ADR-102 d7, fresh
   storage only (owner constraint, 2026-08-31).
 - The import-lane admission fact (#1194), the anchor-append bug (#1193), the #1187 deletions, the #1186 surface.
-- The graph alert path: `NewAlertEvent` and `alertInstance` are unchanged (O-5/O-4 dispositions on #1168).
+- The graph alert path: `NewAlertEvent` and `alertInstance` are unchanged (disposition on #1168; the alert framing defect files separately — task 5.6).
 - Editing sister repositories; impacts land in `docs/operations/migration-beta162-to-beta163.md` (READ-ONLY rule).
 
 ## Adopter seam inventory (for what this change adds)
@@ -85,10 +93,15 @@ Answered as a component/config author outside this repo who has never opened `ag
   and three of the four carrier classes fail SILENTLY (a rule-pack composed subject resolves to a non-existent
   entity; a TS slice returns a 64-hex digest where a loop UUID was expected). This is why the migration note's
   obligation table exists and why dispatch's reject-on-`RunID`-without-`RunEntityID` is loud by design. In-repo,
-  the recompute is impossible at compile time (the builders are gone) and the audit catches a reintroduction.
+  the recompute is impossible at compile time (the builders are gone) and the audit catches a reintroduction —
+  with ONE measured exception where meaning, not compilation, changes: `read_loop_result`'s `normalizeLoopID`
+  (`processor/agentic-tools/loop_result.go:181-186`) strips any full entity ID to its final segment, and its
+  parameter doc (`:72`) promises "the full 6-part entity ID also works"; a run entity passed there stops
+  resolving the loop and fails not-found naming the wrong cause. The affordance loss is accepted and the doc
+  corrected — no new knob (task 5.1; round-1 M2).
 - **Where do they find out?** Compile error (deleted symbols, changed arity) > typed validation error (dispatch
   names the missing field) > audit finding > migration note. The silent class lives only OUTSIDE the compiler's
-  reach (rule packs, TS) — exactly what the migration note's obligation 6 covers, and the residual finding this
+  reach (rule packs, TS) — exactly what the migration note's obligation 12 (`docs/operations/migration-beta162-to-beta163.md:849`) covers, and the residual finding this
   design accepts and records rather than closes (a non-Go carrier has no loud path; #1197 rules this a
   migration-note obligation, never a design gate).
 - **What SHOULD they have to know?** Nothing — and after this change, nothing is what remains for the read path:

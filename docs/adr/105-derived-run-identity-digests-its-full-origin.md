@@ -4,7 +4,8 @@
 
 **Proposed (2026-08-31)** — pending independent design review and owner acceptance on #1192. Amends ADR-102
 (decision 5's consequence "the run derives from the loop's instance") and ADR-053 (D1 `RunID()` from the entity
-key; D8's derivation of `RunEntityID`) by reference; completes the half ADR-104's scope note routed to #1192.
+key; D8's derivation of `RunEntityID`) and ADR-104 (decision 3's 170-byte effective / 163-byte declared budget
+figures — now 168/161 with the agent-run family binding) by reference; completes the half ADR-104's scope note routed to #1192.
 Supersedes nothing in full. Mechanics live in `entity-id-contract` and `graph-ingest`.
 
 ## Context

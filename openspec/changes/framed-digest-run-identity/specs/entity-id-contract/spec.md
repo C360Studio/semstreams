@@ -52,14 +52,18 @@ A framework builder that mints an entity from another entity MUST derive the ins
 SHA-256 of a length-framed byte sequence over a versioned digest domain and that origin's full canonical
 identifier, truncated to the family's declared `InstanceBytes`, composed through
 `pkg/types.FrameworkIdentityFamily.DerivedEntityID(org, platform, digestDomain, frames...)` under the deployment's
-own authority — the one home for framed-digest derivation. `DerivedEntityID` MUST refuse an empty frame and MUST
+own authority — the one home for framed-digest derivation. `DerivedEntityID` MUST produce its final identifier
+through the family's `EntityID` composition, so the fail-closed segment validation applies to every derived
+identity. `DerivedEntityID` MUST refuse an empty frame and MUST
 refuse a family whose `InstanceBytes` is 0 or greater than 64, so a family with a shorter fixed instance truncates
 deterministically rather than failing or composing an invalid identity. The agent-run family
 (`chain.agent.execution`, 64-byte instance, digest domain `semstreams.agent.run.v1`) MUST be a member of the family
 table, and `agentrun.Mint(ctx, mgr, org, platform, originEntityID)` MUST be its only minter. No exported builder
 MAY compose a derived family's identity from a fragment of its origin; the corpus audit MUST report
 `derived_family_composed` for any production Go format builder, constructor, or prefix constant whose positions 3–5
-equal a derived family outside the family table's own file. A consumer of a derived identity MUST read it from
+equal a derived family outside the family table's own file; a declared wildcard match pattern — a constant whose
+instance position is a wildcard, used for subscription or lifecycle registration matching — composes no identity
+and MUST NOT be reported. A consumer of a derived identity MUST read it from
 where the framework carried it (the run entity, `agent.run.entity-id`, `RunEntityID` on the wire, tool metadata)
 and MUST NOT recompute it.
 

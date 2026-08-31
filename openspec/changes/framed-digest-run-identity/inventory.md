@@ -34,6 +34,8 @@ base: ae35f296d6660f1d5987d53f4f4b2c8dde1caa9d
 - `processor/rule/actions.go:1918` — `		if _, mintErr := agentrun.Mint(ctx, e.lifecycle,`
 - `agentic/web_observation_entity.go:234` — `	sum := sha256.Sum256([]byte(canonicalURL))`
 - `test/compat/semteams/agentrun_terminal_compat_test.go:44` — `			LoopID: "loop-success", TaskID: "task-success", RunEntityID: agentic.ChainExecutionEntityID("semteams", "test", "missing-success"),`
+- `processor/agentic-tools/loop_result.go:72` — `						"description": "Loop ID. Use $entity.instance in rule templates (bare UUID); the full 6-part entity ID also works.",`
+- `processor/agentic-tools/loop_result.go:181` — `func normalizeLoopID(loopID string) string {`
 - `openspec/specs/graph-ingest/spec.md:1065` — `stored run is this caller's. Making the identity collision-free is out of scope here and is #1168.`
 - `openspec/specs/entity-id-contract/spec.md:517` — `family — `256 − 86 = 170` bytes while the rule trigger family (`rules.graph.trigger.` + 64 hex + two separators) is`
 
@@ -72,9 +74,14 @@ base: ae35f296d6660f1d5987d53f4f4b2c8dde1caa9d
 - `git grep -n "writeFramedString|FramedString|writeRuleTriggerFrame"` → exactly two framed-digest homes
   (graph/events.go alert, processor/rule trigger) + web-observation's unframed sha256-16. Same-class collision
   set for the proposed `DerivedEntityID` home; consolidation target is trigger (byte-identical frames), alert
-  stays private (12-byte raw timestamp frame; O-4 disposition, filed defect).
+  stays private (12-byte raw timestamp frame; disposition on #1168; the framing defect is UNFILED as of 2026-08-31 — task 5.6 files it).
+- Instance-slicing reader sweep outside the census spellings (round-1 M2) → ONE production decomposer:
+  `processor/agentic-tools/loop_result.go:181-186` (`normalizeLoopID` strips a full entity ID to its final
+  segment; the `:72` tool description promises the full 6-part ID works). Every other production
+  `ParseEntityID` consumer reads positions by name; rule packs, e2e configs, governance and capabilities carry
+  zero run-identity spellings (reviewer round 1 — empty searches recorded on PR #1210).
 - Sister pass (read-only, one bounded pass, 2026-08-31): semteams `configs/rules/agent-run/
   01b-handoff-marker-redispatch.json:34` (literal composed subject, OLD segment order), `ui/src/lib/stores/
-  runStatus.svelte.ts:52,171` + `ui/src/lib/utils/runHealth.ts:136,151-154` (`RUN_INFIX` slicing the bare id),
+  runStatus.svelte.ts:52,171` + `ui/src/lib/utils/runHealth.ts:136,152-155` (`RUN_INFIX` slicing the bare id; re-measured 2026-08-31 — supersedes both the revision comment's `:153-154` and this file's earlier `:151-154`),
   `semdev/internal/intake/admission/resolver.go:116,352,357` (prefix composed as a string) — all confirmed, all
   still on pre-#1119 `agent.chain.execution` order. Sizes the migration note; gates nothing (#1197 rule).
