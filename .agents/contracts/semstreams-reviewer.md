@@ -105,6 +105,11 @@ until the owner explicitly accepts the reviewed design.
   a published layer is a finding, not hygiene.
 - **Re-gate grown exported surface.** Diff the change's actual new exports against the set its shape review named;
   any excess re-enters the gate before merge.
+- **A reworded requirement heading strands its citations.** OpenSpec cannot rename a requirement — rewording is
+  REMOVE + ADD — so a delta that removes or rewords a `### Requirement:` heading silently invalidates every
+  `// spec:` annotation quoting the old text. On any such delta, grep `// spec:` for the removed heading and
+  require the citations updated in the same change; otherwise the breakage surfaces later as a dangling-citation
+  finding against an author who did not cause it.
 - **Reject artifact-free evidence.** A gate/measurement claim with no in-tree or CI artifact is recorded UNVERIFIED;
   flag any such claim asserted as fact.
 - Confirm code matches the active OpenSpec target, and the target is consistent with current specs and approved ADRs.
