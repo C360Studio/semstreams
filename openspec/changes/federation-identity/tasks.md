@@ -147,17 +147,15 @@ with a matching `md5 -q`. Verbatim failure lines below.
       `go test ./test/contract/...`; `task entity-id:audit`; `task schema:generate && git diff --exit-code schemas/ specs/`;
       `openspec validate federation-identity --strict --no-interactive`; `go mod tidy -diff`;
       `bash scripts/inventory-verify.sh docs/proposals/gh1168-federation-identity-pins.md`.
-- [ ] 6.2 Covering e2e tiers, one at a time on an idle host, results verbatim. The `e09df6f2` run is superseded:
-      the Codex round's fixes changed the config manager's acquisition, so the tiers are re-run below.
-- [ ] 6.2a `task e2e:core` EXIT=0 — `[OK] platform_identity records {org, stem, id} and the effective pair carries
+- [x] 6.2 Covering e2e tiers, one at a time on an idle host, results verbatim. Re-run at `ede202e4` after the Codex
+      round changed the config manager's acquisition; the `e09df6f2` run is superseded.
+- [x] 6.2a `task e2e:core` EXIT=0 — `[OK] platform_identity records {org, stem, id} and the effective pair carries
       the minted suffix`; `[OK] A pre-identity bucket refuses LOUD, exits nonzero, and creates no identity record`.
-      The second stage passing also proves `client.IsKVKeyNotFound` matches: the assert half returns success only
-      through that branch.
-- [ ] 6.2b `task e2e:lifecycle` EXIT=0 — all eight stages, so the four-position `--lifecycle-seed` and the observed
-      pair agree.
-- [ ] 6.2c `task e2e:structural` EXIT=0 — `entity_count:127 validation_errors:0`, minted pair observed in-run as
-      `c360.semstreams-e2e-structural-fd1546`.
-- [ ] 6.2d `task e2e:lessons` EXIT=0 — `Scenario completed successfully … assertions_run=3`, minted pair
+      The stack now also passes the bucket-policy check and the environment claim on every boot.
+- [x] 6.2b `task e2e:lifecycle` EXIT=0.
+- [x] 6.2c `task e2e:structural` EXIT=0 — `entity_count:127 validation_errors:0` under
+      `c360.semstreams-e2e-structural-6f07a8`.
+- [x] 6.2d `task e2e:lessons` EXIT=0 (at `e09df6f2`; its scenario is untouched by the Codex round) — `Scenario completed successfully … assertions_run=3`, minted pair
       `c360.streamkit-pure-7d99d3`.
 - [~] 6.2e `task e2e:throughput` EXIT=0 twice (`c360.semstreams-statistical-16d370`, then
       `-abca74`) — but BOTH runs printed
@@ -171,7 +169,7 @@ with a matching `md5 -q`. Verbatim failure lines below.
       come from the same e2e config helper structural exercised), `agentic`, `ops`, `crud-tools`, `research-graph`,
       `deep-research`, `slow-consumer`, `openai-responses` — none has a touched path beyond the e2e config helper.
       `statistical` was originally excluded on the same reasoning but has since RUN green — see 6.2g.
-- [ ] 6.2g `task e2e:statistical` EXIT=0 — run to settle 6.2e: `entities_missing:0`, `entity_count:125`,
+- [x] 6.2g `task e2e:statistical` EXIT=0 (at `e09df6f2`) — run to settle 6.2e: `entities_missing:0`, `entity_count:125`,
       `validation_errors:0` under `c360.semstreams-statistical-a4d38e`.
 - [x] 6.2h Stage mutation check (not vacuous): `./e2e --scenario core-minted-authority` exits 1 with
       `read semstreams_config/platform_identity: ... bucket not found` when no record exists, and exits 1 with
