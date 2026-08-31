@@ -138,18 +138,19 @@ with a matching `md5 -q`. Verbatim failure lines below.
       `skipping query load (timeout: 5/10 entities not queryable)`, so its query phase measured nothing. **Not an
       authority defect, and not introduced here:** `knownEntityIDs`' fixture list is byte-identical to
       `origin/main` (diffed), and the same stack under `task e2e:statistical` reports `entities_missing:0` with
-      `entity_count:125` under the observed pair `c360.semstreams-statistical-a4d38e`. Recorded as a pre-existing
-      coverage gap in that scenario for the owner to place; this change's identity path is covered by 6.2c and the
-      statistical run.
+      `entity_count:125` under the observed pair `c360.semstreams-statistical-a4d38e`. Filed as **#1195** (the skip must not
+      be reachable through exit 0, plus the underlying 5/10 readiness timeout); placement is the owner's. This
+      change's identity path is covered by 6.2c and the statistical run.
+- [x] 6.2f Excluded with reason: `semantic` (same ingest path as structural; its identity literals
+      come from the same e2e config helper structural exercised), `agentic`, `ops`, `crud-tools`, `research-graph`,
+      `deep-research`, `slow-consumer`, `openai-responses` — none has a touched path beyond the e2e config helper.
+      `statistical` was originally excluded on the same reasoning but has since RUN green — see 6.2g.
 - [x] 6.2g `task e2e:statistical` EXIT=0 — run to settle 6.2e: `entities_missing:0`, `entity_count:125`,
       `validation_errors:0` under `c360.semstreams-statistical-a4d38e`.
-- [x] 6.2e Stage mutation check (not vacuous): `./e2e --scenario core-minted-authority` exits 1 with
+- [x] 6.2h Stage mutation check (not vacuous): `./e2e --scenario core-minted-authority` exits 1 with
       `read semstreams_config/platform_identity: ... bucket not found` when no record exists, and exits 1 with
       `recorded id "streamkit-pure" is not the stem "streamkit-pure" plus a suffix` against a hand-seeded unsuffixed
       record.
-- [x] 6.2f Excluded with reason: `statistical`, `semantic` (same ingest path as structural; their identity literals
-      come from the same e2e config helper structural exercised), `agentic`, `ops`, `crud-tools`, `research-graph`,
-      `deep-research`, `slow-consumer`, `openai-responses` — none has a touched path beyond the e2e config helper.
 - [ ] 6.3 Implementation review by `semstreams-reviewer`; dispositions in `conformance.md`, including the per-ruling
       conformance table (owner cut → `file:line`).
 - [ ] 6.4 Owner-run cross-agent round where asked.

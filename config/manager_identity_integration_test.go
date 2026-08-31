@@ -400,7 +400,8 @@ func TestMaximumDeclarablePairMintsAndStarts(t *testing.T) {
 	defer manager.Stop(5 * time.Second)
 
 	effective := manager.GetConfig().Get().Platform.ID
-	require.Equal(t, id+"-"+effective[len(id)+1:], effective)
+	require.Regexp(t, suffixedID, effective)
+	require.Equal(t, id, effective[:len(effective)-7], "the declared id must survive as the stem")
 	require.LessOrEqual(t, len(org)+len(effective), semtypes.MaxAuthorityPairBytes(),
 		"the effective pair must fit the family-table budget")
 	require.Equal(t, effective, readIdentityRecord(t, ctx, manager).ID)

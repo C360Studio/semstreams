@@ -100,8 +100,8 @@ configuration — it remains a published mirror only — and version arbitration
 
 ### Requirement: The authority pair is bounded against the value that will be minted
 
-Configuration load SHALL bound the authority pair against the identifier that will actually be minted from it, not
-against the identifier the document declares: the seven bytes of the entropy suffix are reserved at load, as
+Configuration load SHALL bound the authority pair against the identifier that will actually be minted from it —
+the declared pair plus the seven-byte entropy suffix, reserved at load as
 `entity-id-contract` specifies. Start SHALL bound the effective pair — minted or adopted — against the full
 family-table budget, WITHOUT the declaration reserve, because that pair already carries the suffix; reserving twice
 would refuse at Start a pair that passed load. Together these make a pair that passes load and then cannot carry a
