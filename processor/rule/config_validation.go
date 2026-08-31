@@ -368,8 +368,8 @@ func validateActionLists(def Definition) error {
 			}
 			if a.Type == ActionTypeUpdateKV && !strings.Contains(a.Bucket, "$") && gtypes.IsFrameworkOwnedBucket(a.Bucket) {
 				return errs.WrapInvalid(
-					fmt.Errorf("rule %s %s[%d] update_kv cannot write framework-owned graph bucket %q (owned by %s); use graph mutation APIs",
-						def.ID, label, i, a.Bucket, gtypes.OwnerOf(a.Bucket)),
+					fmt.Errorf("rule %s %s[%d] update_kv cannot write %s",
+						def.ID, label, i, gtypes.FrameworkOwnedWriteRefusal(a.Bucket)),
 					"RuleProcessor", "ValidateDefinition", "validate update_kv bucket ownership")
 			}
 			if a.MaxIterations != nil && *a.MaxIterations < 0 {

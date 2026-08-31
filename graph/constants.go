@@ -56,12 +56,19 @@ const (
 	// closes (framework-owned-bucket-guards F2, #715). It is correctness-critical
 	// no-eviction state, so the retention sweep covers it.
 	BucketGraphIngestAppliedSeq = "GRAPH_INGEST_APPLIED_SEQ"
-	// BucketSemStreamsConfig is the shared runtime configuration bucket. It is
-	// in the catalog because the framework guarantees its RETENTION, not its
+	// BucketSemStreamsConfig is the shared runtime configuration bucket. It is in
+	// the catalog because the framework guarantees BOTH its retention and its
 	// write-ownership: since ADR-104 it holds the create-once platform identity
-	// record, which must never be evicted, while two subsystems legitimately
-	// write it (config.Manager for the configuration keys, processor/rule's
-	// ConfigManager for rules.*).
+	// record, which must never be evicted and must never be forged.
+	//
+	// Two subsystems legitimately write it — config.Manager for the
+	// configuration keys, processor/rule's ConfigManager for rules.* — and it is
+	// still owner-only, because ownership is about who may NOT write. A generic
+	// rule update_kv is refused for every key in the bucket, at load validation,
+	// action runtime, and writer acquisition (owner ruling 2026-08-31, #1168
+	// comment 5479005060; an earlier revision of this comment called it
+	// catalogued for retention and not write-ownership, which the ruling
+	// supersedes).
 	BucketSemStreamsConfig = "semstreams_config"
 
 	// BucketGraphStatus is the ADR-083 readiness distribution bucket. Producers

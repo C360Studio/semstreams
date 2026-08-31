@@ -32,7 +32,9 @@ reconciling.
 - **GIVEN** the config manager and the rule ConfigManager, either of which may create the bucket first
 - **WHEN** each acquires `semstreams_config`
 - **THEN** both resolve it through the catalog descriptor rather than their own bucket configuration
-- **AND** the test that verifies this is `TestSharedConfigBucketResolvesThroughOneDescriptor`
+- **AND** the tests that verify this are `TestCatalogBucketNamesAreNeverAcquiredDirectly` (no file naming a
+  catalogued bucket makes a direct acquisition call, checked per call), `TestCatalogResolvingOwnersUseTheSeam` (both
+  owners still resolve the descriptor) and `TestGenericKVWritersConsultTheCatalog`
 
 #### Scenario: a generic rule write into the shared configuration bucket is refused
 

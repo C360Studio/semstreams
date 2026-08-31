@@ -83,7 +83,7 @@ possible causes and lists the keys it found (`summarizeKeys`); the remedy it pri
 | Finding | Disposition | `file:line` |
 |---|---|---|
 | **B6** a failed Start left every exported KV writer armed | FIXED. Reproduced first — after a refused foreign-identity Start, `PushToKV` returned nil. The handles now stay local through every Start step that can refuse and reach the struct only through `publishBucket`, called immediately before Start returns success; that placement covers the watcher-open failure too, not just identity. `errBucketNotAcquired` is now truthful for "attempted and refused", which is the case that mattered | `config/manager.go` `acquireBucket`, `publishBucket`, `Start`; private `pushToKV`/`syncFromKV`/`getKVVersion`/`kvPlatformIdentity` variants that take an explicit handle; `TestRefusedStartDisarmsEveryExportedWriter`; mutation check M20 |
-| **B7** the retention guarantee bypassed the framework bucket catalog | FIXED. Reproduced mechanically: adding the descriptor row made the EXISTING literal contract test bite, naming both direct creators (`config/manager.go:76`, `processor/rule/kv_config_integration.go:574`) — the omission had passed only because no row existed. `semstreams_config` is now a catalog descriptor (operational, open-write because two subsystems write it, History 5) and both creators resolve it. Its retention kind is a NEW `RetentionNoLifecycleStrict`: the generic seam reconciles, which ADR-104 forbids here, so the descriptor grammar was extended rather than the rule bent | `graph/constants.go` `BucketSemStreamsConfig`; `graph/kvcatalog.go` `semstreamsConfig`; `natsclient/kvspec.go` `RetentionNoLifecycleStrict`; `config/manager.go` `acquireBucket`; `processor/rule/kv_config_integration.go` `ensureKVStore`; `TestSharedConfigBucketResolvesThroughOneDescriptor`; mutation check M22 |
+| **B7** the retention guarantee bypassed the framework bucket catalog | FIXED. Reproduced mechanically: adding the descriptor row made the EXISTING literal contract test bite, naming both direct creators (`config/manager.go:76`, `processor/rule/kv_config_integration.go:574`) — the omission had passed only because no row existed. `semstreams_config` is now a catalog descriptor (operational, History 5; write policy settled later in the round — see the ruling table) and both creators resolve it. Its retention kind is a NEW `RetentionNoLifecycleStrict`: the generic seam reconciles, which ADR-104 forbids here, so the descriptor grammar was extended rather than the rule bent | `graph/constants.go` `BucketSemStreamsConfig`; `graph/kvcatalog.go` `semstreamsConfig`; `natsclient/kvspec.go` `RetentionNoLifecycleStrict`; `config/manager.go` `acquireBucket`; `processor/rule/kv_config_integration.go` `ensureKVStore`; `TestCatalogBucketNamesAreNeverAcquiredDirectly`; mutation check M22 |
 | **B8** Start did not reject a nil context | FIXED. Reproduced first — the panic Codex named, in `jetstream.(*jetStream).wrapContextWithoutDeadline`, after `shutdownCh` had already been replaced. The guard is the house shape (`processor/rule/kv_config_integration.go:91-94`) and sits above every mutation and every NATS touch | `config/manager.go` `Start`; `TestStartRejectsNilContextWithoutSideEffects`; mutation check M21 |
 | **MEDIUM** task 3.2 still recorded the constructor root as untouched debt | FIXED — rewritten to the shipped Start-context behaviour, and it now names why the old text was wrong | `openspec/changes/federation-identity/tasks.md` 3.2 |
 
@@ -96,7 +96,26 @@ possible causes and lists the keys it found (`summarizeKeys`); the remedy it pri
 | **NIT** the strict-retention refusal was re-wrapped as transient | FIXED. A permanent invalid-configuration state told a retry loop to keep trying; the wrap now preserves `errs.IsInvalid` and only classifies genuine acquisition faults as transient | `processor/rule/kv_config_integration.go` `ensureKVStore` |
 | **cosmetic** section 3 of `tasks.md` read 3.1, 3.5, 3.4, 3.2, 3.3 | FIXED — reordered | `openspec/changes/federation-identity/tasks.md` |
 
-### Decision record: `WriteOwnerOnly` over key-level refusal (owner veto possible)
+### Owner ruling: `WriteOwnerOnly` (2026-08-31)
+
+> concur with option 1
+
+#1168 comment 5479005060, transcribed verbatim. The fork — bucket-wide owner-only versus write-open with a
+key-level refusal for the identity pair — was put to the owner by the Codex re-review at `768a5333`, with the
+measured brief: zero in-tree rule packs write `semstreams_config`; the shipped `update_kv` consumer
+`RESEARCH_EVIDENCE` is uncatalogued and untouched; neither ConfigManager consults the write predicate.
+
+**Ruled contract:** the `semstreams_config` catalog descriptor is `WriteOwnerOnly`, and the rule engine's generic
+`update_kv` refuses **every key** in the bucket — at load validation, at action runtime, and at writer acquisition.
+Configuration changes go through the config manager/API; a rule pack that needs to influence configuration is an
+engine-gap conversation, not a raw KV write.
+
+The implementation already on the branch is what was ruled, so no code changed for the ruling; it propagated into
+ADR-104 decision 6, `graph/constants.go`, the catalog census test, the migration note, and the record below. The
+option-2 alternative is retained beneath as superseded history, not deleted — a reader who wonders why the bucket is
+not key-scoped should find the answer, not a gap.
+
+### Decision record: `WriteOwnerOnly` over key-level refusal (SUPERSEDED BY THE RULING ABOVE — retained as history)
 
 Two shapes close the forgery hole:
 
@@ -107,8 +126,19 @@ Two shapes close the forgery hole:
    write it, so it is open" reading, but adds a key-level guard the framework does not have today, protects only the
    keys someone remembered to name, and leaves the rest of a bucket holding correctness state generically writable.
 
-Shape 1 is recorded here rather than assumed: if the owner prefers 2, it is a contained change to the descriptor row
-plus a new key-level predicate, and the tests above pin the behaviour either way.
+Shape 1 was recorded here rather than assumed, and the owner ruled it on 2026-08-31. Shape 2 stands as the
+alternative that was weighed, not as an open option.
+
+## Fifth re-review, 2026-08-31 — per-finding disposition
+
+| Finding | Disposition | `file:line` |
+|---|---|---|
+| **BLOCKING-1** bucket-wide owner-only was an unruled contract decision | RULED, not fixed — see the ruling above. No code changed: the owner concurred with the implemented option. The prose that still described the withdrawn open-write shape was swept in the same commit | `openspec/changes/federation-identity/conformance.md` ruling table; `docs/adr/104-unique-platform-authority.md` decision 6; `graph/constants.go`; `graph/kvcatalog_test.go`; `docs/operations/migration-beta162-to-beta163.md` |
+| **BLOCKING-2** `EnsureFrameworkBucket` panicked on a nil context | FIXED. Reproduced first, with a CONNECTED client — that is what makes it reachable, and an unconnected one would have short-circuited on `ErrNotConnected` and proved nothing: the panic landed in `jetstream.(*jetStream).wrapContextWithoutDeadline`, the same class B8 fixed one layer up. This change extended the seam (it now owns the strict-retention arm and both catalog acquisitions reach it), so it is removal work, not inheritable debt. Guard is first, above the client check. **`graph.EnsureCatalogBucket` needs no guard of its own — verified, not assumed: it does an in-memory `SpecFor` lookup and delegates, touching neither ctx nor NATS** | `natsclient/kvspec.go` `EnsureFrameworkBucket`; `TestIntegration_EnsureFrameworkBucket_RejectsNilContext`; mutation check M25 |
+| **MEDIUM-1** all three refusals gave a false graph-specific remedy | FIXED. `semstreams_config` is operational configuration and no graph API can perform the intended write, so an operator following "use graph mutation APIs" finds nothing that helps. The wording now has ONE home, `graph.FrameworkOwnedWriteRefusal`, deriving the remedy from the descriptor's class — graph APIs for authoritative/derived state, the declared owner for operational — so a new catalog row gets the right remedy without anyone remembering. Three hand-copied sentences are what drifted in the first place | `graph/kvcatalog.go` `FrameworkOwnedWriteRefusal`; `processor/rule/{actions.go,config_validation.go,kv_writer.go}`; `assertSharedConfigRefusal` pins that the shared-config refusal never says "graph" |
+| **MEDIUM-2** the acquisition contract test did not test its claimed invariant | FIXED, both defects. The scan now covers every production file rather than only those making direct calls, so the two catalog-resolving owners are in the scanned set; and the check is PER ACQUISITION CALL — a file naming a catalogued bucket must have zero direct calls even when it also calls a seam elsewhere. The whole-file exemption was the same blindness recorded for M24's first attempt, and it had returned in a different shape. A positive assertion covers the vacuous case the structural check cannot: an owner that silently stopped acquiring would otherwise pass both | `test/contract/shared_config_bucket_acquisition_contract_test.go`; mutation check M26 |
+| **MEDIUM-3** final artifacts still described the withdrawn open-write state | FIXED across all four sites, plus the exclusion list in task 6.2f that still named `deep-research` while 6.2i recorded it running. The withdrawn option is marked superseded rather than deleted | `graph/constants.go`; `graph/kvcatalog_test.go`; `conformance.md`; `tasks.md` 3.5, 6.2f |
+| **MEDIUM-2 (citations)** the spec delta and tasks cited a test that does not exist | FIXED — both now name the real enforcing tests | `openspec/changes/federation-identity/specs/framework-bucket-catalog/spec.md`; `tasks.md` |
 
 ### A detector that was satisfied by dead code (recorded because it nearly passed)
 

@@ -2186,8 +2186,7 @@ func (e *ActionExecutor) executeUpdateKV(ctx context.Context, action Action, ec 
 	key := ec.SubstituteVariables(ctx, action.Key)
 	payload := substitutePayloadVariablesContext(ctx, action.Payload, ec)
 	if gtypes.IsFrameworkOwnedBucket(bucket) {
-		return fmt.Errorf("update_kv cannot write framework-owned graph bucket %q (owned by %s); use graph mutation APIs",
-			bucket, gtypes.OwnerOf(bucket))
+		return fmt.Errorf("update_kv cannot write %s", gtypes.FrameworkOwnedWriteRefusal(bucket))
 	}
 
 	if e.logger != nil {

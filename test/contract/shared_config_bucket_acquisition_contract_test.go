@@ -14,86 +14,108 @@ import (
 	"github.com/c360studio/semstreams/graph"
 )
 
-// acquisitionAPIs are the two client calls that bind a KV bucket.
+// acquisitionAPIs are the two client calls that bind a KV bucket directly,
+// bypassing any descriptor.
 var acquisitionAPIs = map[string]bool{
 	"CreateKeyValueBucket": true,
 	"GetKeyValueBucket":    true,
 }
 
-// catalogSeams are the descriptor-derived acquisition entry points. A file that
-// uses one is resolving policy from the catalog rather than spelling its own.
+// catalogSeams are the descriptor-derived acquisition entry points.
 var catalogSeams = map[string]bool{
-	"EnsureCatalogBucket":    true,
-	"OpenCatalogReader":      true,
-	"SpecFor":                true,
-	"IsFrameworkOwnedBucket": true,
+	"EnsureCatalogBucket": true,
+	"OpenCatalogReader":   true,
 }
 
-// TestCatalogBucketsAreAcquiredThroughTheirDescriptor derives the acquirer set
-// instead of naming it. Every production Go file that binds a KV bucket is
-// found by scanning, and a file that NAMES a catalogued bucket must resolve it
-// through the catalog seam rather than its own jetstream.KeyValueConfig.
+// catalogResolvingOwners are the production sites that MUST resolve the shared
+// configuration bucket through its descriptor. Naming them is a POSITIVE
+// assertion — it can only under-claim, and under-claiming is caught by
+// TestCatalogBucketNamesAreNeverAcquiredDirectly, which needs no list at all.
+// Without it, an owner that silently stopped using the seam would leave both
+// checks vacuous: it would name a catalog bucket, make no direct call, and pass.
+var catalogResolvingOwners = []string{
+	"config/manager.go",
+	"processor/rule/kv_config_integration.go",
+}
+
+// TestCatalogBucketNamesAreNeverAcquiredDirectly is the structural half of the
+// framework-bucket-catalog acquisition contract, checked PER CALL.
 //
-// The sibling literal scan (TestNoCatalogBucketLiteralsOutsideTheCatalog) stops
-// the bucket NAME forking. This stops the POLICY forking, which a file
-// referencing graph.Bucket* with its own config would still do — the shared
-// configuration bucket's retention guarantee would then hold only for whichever
-// creator won the race.
-//
-// Deriving the set is the point: the hand-written two-file list this replaced
-// could not see a third acquisition path, and one existed
-// (processor/rule/kv_writer.go, found in review). A new acquirer anywhere in
-// production is now scanned automatically.
-func TestCatalogBucketsAreAcquiredThroughTheirDescriptor(t *testing.T) {
+// A file that names a catalogued bucket must contain zero direct
+// Create/GetKeyValueBucket calls — even if it also calls a catalog seam
+// elsewhere. The earlier version exempted the whole FILE once it saw any seam
+// reference, which is the same file-level blindness that let a bypassed branch
+// pass M24: a direct call added beside an existing catalog call read as
+// compliant. Per-call is the only granularity that means anything here.
+func TestCatalogBucketNamesAreNeverAcquiredDirectly(t *testing.T) {
 	root := repoRootForKVCatalogScan(t)
-	catalogued := make(map[string]bool)
-	for _, spec := range graph.KVCatalog() {
-		catalogued[spec.Name] = true
-	}
+	names := catalogConstantNames(t, root)
 
 	var violations []string
-	for _, file := range productionBucketAcquirers(t, root) {
-		if !file.namesCatalogBucket(catalogued) || file.usesCatalogSeam {
+	for _, file := range productionGoFiles(t, root) {
+		named := file.namedCatalogConstants(names)
+		if len(named) == 0 || len(file.directAcquisitionLines) == 0 {
 			continue
 		}
-		for _, line := range file.acquisitionLines {
+		for _, line := range file.directAcquisitionLines {
 			violations = append(violations, fmt.Sprintf(
-				"%s:%d names a catalogued bucket and acquires it directly; use graph.EnsureCatalogBucket",
-				file.rel, line))
+				"%s:%d acquires a KV bucket directly while naming catalogued bucket(s) %v; use graph.EnsureCatalogBucket",
+				file.rel, line, named))
 		}
 	}
 	if len(violations) > 0 {
-		t.Fatalf("catalogued buckets must be acquired through their descriptor:\n  %s",
+		t.Fatalf("a catalogued bucket must be acquired through its descriptor:\n  %s",
 			strings.Join(violations, "\n  "))
 	}
 }
 
-// TestGenericKVWritersConsultTheCatalog covers the acquisition path the
-// name-based check above cannot see: the rule engine's update_kv writer binds
-// whatever bucket a rule pack supplies AFTER variable substitution, so it names
-// nothing statically and can resolve to a catalogued bucket at runtime.
+// TestCatalogResolvingOwnersUseTheSeam is the positive half. The structural
+// check above passes vacuously for a file that stops acquiring altogether, so
+// the two owners of the shared configuration bucket are asserted to still
+// resolve it through the descriptor.
+func TestCatalogResolvingOwnersUseTheSeam(t *testing.T) {
+	root := repoRootForKVCatalogScan(t)
+	byPath := make(map[string]goFile)
+	for _, file := range productionGoFiles(t, root) {
+		byPath[file.rel] = file
+	}
+
+	for _, rel := range catalogResolvingOwners {
+		file, ok := byPath[rel]
+		if !ok {
+			t.Fatalf("%s is named as a catalog-resolving owner but was not scanned", rel)
+		}
+		if !file.usesCatalogSeam {
+			t.Errorf("%s must resolve its bucket through graph.EnsureCatalogBucket", rel)
+		}
+	}
+}
+
+// TestGenericKVWritersConsultTheCatalog covers the acquisition path neither
+// check above can see: the rule engine's update_kv writer binds whatever bucket
+// a rule pack resolves to at runtime, so it names nothing statically.
 //
 // Scope is deliberate. Sixteen other production files acquire
-// component-configured bucket names, and requiring every one of them to consult
-// the catalog is a repo-wide contract this capability does not own. What is
-// specific here is the GENERIC write surface: a bucket name that arrives from an
-// operator-authored rule pack rather than from a composition root. Every
-// bucket-acquiring file in processor/rule is therefore required to consult the
-// catalog — derived by scanning that package, so a second generic writer added
-// beside this one trips the test rather than slipping past a hand-written list.
+// component-configured bucket names, and requiring every one to consult the
+// catalog is a repo-wide contract this capability does not own. What is specific
+// here is the GENERIC write surface: a bucket name arriving from an
+// operator-authored rule pack rather than a composition root. Every
+// bucket-acquiring file in processor/rule must therefore consult the catalog,
+// derived by scanning that package. The BEHAVIOURAL guard for the same property
+// is TestKVWriterRefusesCatalogedOwnerOnlyBucket in processor/rule, which is
+// what bites when the branch is bypassed rather than deleted.
 func TestGenericKVWritersConsultTheCatalog(t *testing.T) {
 	root := repoRootForKVCatalogScan(t)
 
 	var checked, violations []string
-	for _, file := range productionBucketAcquirers(t, root) {
-		if !strings.HasPrefix(file.rel, "processor/rule/") {
+	for _, file := range productionGoFiles(t, root) {
+		if !strings.HasPrefix(file.rel, "processor/rule/") || len(file.directAcquisitionLines) == 0 {
 			continue
 		}
 		checked = append(checked, file.rel)
-		if !file.usesCatalogSeam {
+		if !file.consultsCatalog {
 			violations = append(violations, fmt.Sprintf(
-				"%s acquires a KV bucket for a rule-supplied name without consulting the catalog; "+
-					"a catalogued bucket must resolve through graph.EnsureCatalogBucket", file.rel))
+				"%s acquires a KV bucket for a rule-supplied name without consulting the catalog", file.rel))
 		}
 	}
 	if len(checked) == 0 {
@@ -105,37 +127,83 @@ func TestGenericKVWritersConsultTheCatalog(t *testing.T) {
 	}
 }
 
-// bucketAcquirer is one production file that binds KV buckets.
-type bucketAcquirer struct {
-	rel              string
-	identifiers      map[string]bool
-	stringLiterals   map[string]bool
-	acquisitionLines []int
-	usesCatalogSeam  bool
+// goFile is one scanned production file.
+type goFile struct {
+	rel                    string
+	selectors              map[string]bool
+	stringLiterals         map[string]bool
+	directAcquisitionLines []int
+	usesCatalogSeam        bool
+	consultsCatalog        bool
 }
 
-// namesCatalogBucket reports whether the file references a catalogued bucket by
-// its graph.Bucket* constant or as a bare literal.
-func (f bucketAcquirer) namesCatalogBucket(catalogued map[string]bool) bool {
+// namedCatalogConstants returns the catalogued bucket names this file spells,
+// by graph constant reference or bare literal.
+func (f goFile) namedCatalogConstants(names map[string]string) []string {
+	var named []string
+	for ident := range f.selectors {
+		if value, ok := names[ident]; ok {
+			named = append(named, value)
+		}
+	}
 	for literal := range f.stringLiterals {
-		if catalogued[literal] {
-			return true
+		for _, value := range names {
+			if literal == value {
+				named = append(named, literal)
+			}
 		}
 	}
-	for ident := range f.identifiers {
-		if strings.HasPrefix(ident, "Bucket") {
-			return true
-		}
-	}
-	return false
+	return named
 }
 
-// productionBucketAcquirers scans the repository for non-test production files
-// that bind a KV bucket. natsclient is excluded: it IS the acquisition
-// mechanism, and graph owns the catalog itself.
-func productionBucketAcquirers(t *testing.T, root string) []bucketAcquirer {
+// catalogConstantNames maps each graph.Bucket* constant IDENTIFIER to its value,
+// for the constants whose value is in the catalog. Parsed from the declaration
+// rather than guessed from a name prefix, so an unrelated Bucket-prefixed
+// selector cannot false-positive.
+func catalogConstantNames(t *testing.T, root string) map[string]string {
 	t.Helper()
-	var found []bucketAcquirer
+	catalogued := make(map[string]bool)
+	for _, spec := range graph.KVCatalog() {
+		catalogued[spec.Name] = true
+	}
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, filepath.Join(root, "graph/constants.go"), nil, 0)
+	if err != nil {
+		t.Fatalf("parse graph/constants.go: %v", err)
+	}
+	names := make(map[string]string)
+	ast.Inspect(file, func(node ast.Node) bool {
+		spec, ok := node.(*ast.ValueSpec)
+		if !ok {
+			return true
+		}
+		for i, ident := range spec.Names {
+			if i >= len(spec.Values) {
+				continue
+			}
+			lit, ok := spec.Values[i].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				continue
+			}
+			value, uerr := strconv.Unquote(lit.Value)
+			if uerr == nil && catalogued[value] {
+				names[ident.Name] = value
+			}
+		}
+		return true
+	})
+	if len(names) == 0 {
+		t.Fatal("no catalogued bucket constants resolved — the scan would vacuously pass")
+	}
+	return names
+}
+
+// productionGoFiles scans every non-test production Go file. natsclient IS the
+// acquisition mechanism and graph owns the catalog, so both are excluded.
+func productionGoFiles(t *testing.T, root string) []goFile {
+	t.Helper()
+	var found []goFile
 	fset := token.NewFileSet()
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -158,49 +226,46 @@ func productionBucketAcquirers(t *testing.T, root string) []bucketAcquirer {
 		if strings.HasPrefix(rel, "natsclient/") || strings.HasPrefix(rel, "graph/") {
 			return nil
 		}
-		file, perr := parser.ParseFile(fset, path, nil, 0)
+		parsed, perr := parser.ParseFile(fset, path, nil, 0)
 		if perr != nil {
 			return fmt.Errorf("parse %s: %w", rel, perr)
 		}
-		acquirer := bucketAcquirer{
-			rel:            rel,
-			identifiers:    map[string]bool{},
-			stringLiterals: map[string]bool{},
-		}
-		ast.Inspect(file, func(node ast.Node) bool {
+		file := goFile{rel: rel, selectors: map[string]bool{}, stringLiterals: map[string]bool{}}
+		ast.Inspect(parsed, func(node ast.Node) bool {
 			switch n := node.(type) {
 			case *ast.BasicLit:
 				if n.Kind == token.STRING {
 					if unquoted, uerr := strconv.Unquote(n.Value); uerr == nil {
-						acquirer.stringLiterals[unquoted] = true
+						file.stringLiterals[unquoted] = true
 					}
 				}
 			case *ast.SelectorExpr:
-				acquirer.identifiers[n.Sel.Name] = true
+				file.selectors[n.Sel.Name] = true
 			case *ast.CallExpr:
 				selector, ok := n.Fun.(*ast.SelectorExpr)
 				if !ok {
 					return true
 				}
-				if acquisitionAPIs[selector.Sel.Name] {
-					acquirer.acquisitionLines = append(acquirer.acquisitionLines, fset.Position(n.Pos()).Line)
-				}
-				if catalogSeams[selector.Sel.Name] {
-					acquirer.usesCatalogSeam = true
+				switch {
+				case acquisitionAPIs[selector.Sel.Name]:
+					file.directAcquisitionLines = append(file.directAcquisitionLines, fset.Position(n.Pos()).Line)
+				case catalogSeams[selector.Sel.Name]:
+					file.usesCatalogSeam = true
+					file.consultsCatalog = true
+				case selector.Sel.Name == "SpecFor" || selector.Sel.Name == "IsFrameworkOwnedBucket":
+					file.consultsCatalog = true
 				}
 			}
 			return true
 		})
-		if len(acquirer.acquisitionLines) > 0 {
-			found = append(found, acquirer)
-		}
+		found = append(found, file)
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("scan for bucket acquirers: %v", err)
+		t.Fatalf("scan production files: %v", err)
 	}
 	if len(found) == 0 {
-		t.Fatal("no bucket acquirer found — the scan would vacuously pass")
+		t.Fatal("no production file scanned — the checks would vacuously pass")
 	}
 	return found
 }

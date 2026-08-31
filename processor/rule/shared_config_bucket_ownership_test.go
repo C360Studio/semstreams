@@ -60,10 +60,30 @@ func TestUpdateKV_RejectsSharedConfigBucket_AtLoad(t *testing.T) {
 				t.Fatalf("ValidateDefinition must reject update_kv into %s/%s, got nil",
 					sharedConfigBucketLiteral, key)
 			}
-			if !strings.Contains(err.Error(), "framework-owned") {
-				t.Errorf("error must name the framework-owned bucket, got: %v", err)
-			}
+			assertSharedConfigRefusal(t, err)
 		})
+	}
+}
+
+// assertSharedConfigRefusal pins BOTH halves of the refusal wording: it names
+// the framework-owned bucket, and it does NOT offer a graph remedy.
+//
+// The graph half is the load-bearing one. All three refusals used to say
+// "framework-owned graph bucket … use graph mutation APIs", which for a bucket
+// holding operational configuration names a remedy that cannot perform the
+// intended write — an operator following it finds no API that helps. The
+// assertion exists so graph-only wording cannot come back through any of the
+// three sites.
+func assertSharedConfigRefusal(t *testing.T, err error) {
+	t.Helper()
+	if !strings.Contains(err.Error(), "framework-owned") {
+		t.Errorf("error must name the framework-owned bucket, got: %v", err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "graph") {
+		t.Errorf("the shared configuration bucket is not graph state; the refusal must not offer a graph remedy: %v", err)
+	}
+	if !strings.Contains(err.Error(), "ConfigManager") {
+		t.Errorf("the refusal must name the owner that legitimately writes it, got: %v", err)
 	}
 }
 
@@ -89,9 +109,7 @@ func TestUpdateKV_RejectsSharedConfigBucket_AtRuntime(t *testing.T) {
 				t.Fatalf("executeUpdateKV must reject a write into %s/%s, got nil",
 					sharedConfigBucketLiteral, key)
 			}
-			if !strings.Contains(err.Error(), "framework-owned") {
-				t.Errorf("error must name the framework-owned bucket, got: %v", err)
-			}
+			assertSharedConfigRefusal(t, err)
 		})
 	}
 }
@@ -118,9 +136,7 @@ func TestKVWriterRefusesCatalogedOwnerOnlyBucket(t *testing.T) {
 		t.Fatalf("acquireBucket must refuse the catalogued owner-only bucket %s, got nil",
 			sharedConfigBucketLiteral)
 	}
-	if !strings.Contains(err.Error(), "framework-owned") {
-		t.Errorf("the refusal must name the framework-owned bucket, got: %v", err)
-	}
+	assertSharedConfigRefusal(t, err)
 }
 
 // TestUpdateKV_StillAdmitsResearchEvidence pins the one shipped update_kv

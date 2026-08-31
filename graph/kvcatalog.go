@@ -287,3 +287,27 @@ func OpenCatalogReader(ctx context.Context, client *natsclient.Client, name stri
 	}
 	return &catalogReader{CatalogReader: bucket}, nil
 }
+
+// FrameworkOwnedWriteRefusal explains why a generic KV writer may not write a
+// catalogued bucket, and where the write does belong. It is the ONE home for
+// that wording: the rule engine refuses at three points — load validation,
+// action runtime, and writer acquisition — and three hand-copied sentences
+// drift, as they did when all three told an operator to use "graph mutation
+// APIs" for a bucket holding operational configuration no graph API can write.
+//
+// The remedy is derived from the descriptor's class rather than a hand list, so
+// a new catalog row gets the right one without anybody remembering to add it.
+func FrameworkOwnedWriteRefusal(bucket string) string {
+	spec, ok := SpecFor(bucket)
+	if !ok {
+		return fmt.Sprintf("bucket %q is not in the framework KV catalog", bucket)
+	}
+	remedy := fmt.Sprintf("its writes belong to %s", spec.Owner)
+	switch spec.Class {
+	case natsclient.ClassAuthoritative, natsclient.ClassDerived:
+		remedy = "use the graph mutation APIs"
+	case natsclient.ClassOperational, natsclient.ClassDiagnostic:
+		// The owner string names the API boundary directly.
+	}
+	return fmt.Sprintf("framework-owned bucket %q (owned by %s); %s", bucket, spec.Owner, remedy)
+}

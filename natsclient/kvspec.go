@@ -237,6 +237,15 @@ func kvConfigFor(spec BucketSpec) jetstream.KeyValueConfig {
 // post-boot-cutoff class: a dynamic component add/edit re-acquires its buckets
 // through this seam and reconciles them right there.
 func EnsureFrameworkBucket(ctx context.Context, c *Client, spec BucketSpec) (jetstream.KeyValue, error) {
+	// Nil context first, before client state or any NATS access. This boundary
+	// is exported, error-returning and context-taking, so the hard rule applies;
+	// and the consequence is not theoretical — nil reaches JetStream's
+	// wrapContextWithoutDeadline, which calls Deadline() on the nil interface
+	// and panics where a classified error belongs.
+	if ctx == nil {
+		return nil, errs.WrapInvalid(errors.New("nil context"),
+			"KVSpec", "EnsureFrameworkBucket", "acquire framework bucket")
+	}
 	if c == nil {
 		return nil, errs.WrapInvalid(errors.New("nil NATS client"),
 			"KVSpec", "EnsureFrameworkBucket", "acquire framework bucket")

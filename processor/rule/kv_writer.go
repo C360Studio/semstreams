@@ -85,9 +85,7 @@ func (w *natsKVWriter) getStore(ctx context.Context, bucketName string) (*natscl
 func (w *natsKVWriter) acquireBucket(ctx context.Context, bucketName string) (jetstream.KeyValue, error) {
 	if _, catalogued := gtypes.SpecFor(bucketName); catalogued {
 		if gtypes.IsFrameworkOwnedBucket(bucketName) {
-			return nil, fmt.Errorf(
-				"update_kv cannot acquire framework-owned bucket %q (owned by %s); use graph mutation APIs",
-				bucketName, gtypes.OwnerOf(bucketName))
+			return nil, fmt.Errorf("update_kv cannot acquire %s", gtypes.FrameworkOwnedWriteRefusal(bucketName))
 		}
 		// Descriptor-derived: History, replicas and retention come from the one
 		// catalog row, whichever component reaches the bucket first.

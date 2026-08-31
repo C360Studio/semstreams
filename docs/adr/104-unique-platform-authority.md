@@ -81,8 +81,14 @@ alias, no parallel path; sisters handle their own migration.
    Owner-only is about who may NOT write, not who may. A generic rule `update_kv` into `platform_identity` plain-Puts
    over the create-once record, and a boot ADOPTS a recorded identifier after checking only its segment grammar and
    byte budget — so a rule pack could move the authority every entity is minted under, or, with a mismatched value,
-   prevent the deployment from booting again. The ownership predicate is consulted by nothing but the two `update_kv`
-   guards, so declaring it costs the legitimate writers nothing. The bucket is acquired under the lifecycle context, never one a
+   prevent the deployment from booting again. The ownership predicate is consulted by nothing but the `update_kv`
+   guards, so declaring it costs the legitimate writers nothing.
+
+   **Owner-ruled 2026-08-31** ("concur with option 1", #1168 comment 5479005060), over the alternative of keeping the
+   bucket write-open with a key-level refusal for the identity pair: once identity correctness state shares a bucket,
+   letting a generic rule writer onto the rest of the configuration plane is the wrong boundary, and the existing
+   predicate closes the whole class without a remembered-key list. Configuration changes go through the config
+   manager/API; a rule pack that needs to influence configuration is an engine-gap conversation, not a raw KV write. The bucket is acquired under the lifecycle context, never one a
    constructor invented.
 
 7. **At most one `platform.environment` may establish against one bucket.** The pair `(org, id, environment)` was

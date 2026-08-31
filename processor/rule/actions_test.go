@@ -3004,7 +3004,15 @@ func TestAction_UpdateKV_RejectsFrameworkGraphBucketAfterSubstitution(t *testing
 
 	err := executor.executeUpdateKV(context.Background(), action, ctx)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "framework-owned graph bucket")
+	// The noun is generic — the catalog holds operational buckets too, and
+	// calling every one of them a "graph bucket" is what produced a remedy no
+	// API could satisfy for the configuration bucket. What must survive for a
+	// GRAPH bucket is the graph remedy, which is derived from the descriptor's
+	// class rather than hardcoded at this call site.
+	assert.Contains(t, err.Error(), "framework-owned bucket")
+	assert.Contains(t, err.Error(), gtypes.BucketEntityStates)
+	assert.Contains(t, err.Error(), "graph-ingest", "the refusal must name the declared owner")
+	assert.Contains(t, err.Error(), "graph mutation APIs", "an authoritative graph bucket keeps the graph remedy")
 }
 
 func TestAction_UpdateKV_MissingKey(t *testing.T) {

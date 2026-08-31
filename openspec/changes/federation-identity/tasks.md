@@ -84,15 +84,26 @@ in `docs/proposals/gh1168-federation-identity-pins.md`; inventory
       the acquired handles stay LOCAL through every Start step that can refuse and reach the struct only via
       `publishBucket` at the end, so a refused Start leaves `PushToKV`/`PutComponentToKV`/`DeleteComponentFromKV`
       returning `errBucketNotAcquired` and the foreign bucket byte-for-byte unchanged (B6); the shared bucket gains
-      a `framework-bucket-catalog` descriptor — operational, open-write, History 5, a NEW strict no-lifecycle
+      a `framework-bucket-catalog` descriptor — operational, History 5, a NEW strict no-lifecycle
       retention kind that verifies and refuses instead of reconciling — and BOTH creators (`config.Manager`,
       `processor/rule.ConfigManager`) resolve it, so the retention guarantee no longer depends on who created the
       bucket first (B7); `Start` rejects a nil context before touching state or NATS, where it previously panicked
       inside JetStream (B8). Mutation checks M20, M21, M22.
+- [x] 3.7 `natsclient/kvspec.go`, `graph/kvcatalog.go`, `processor/rule/`, `test/contract/`: the fifth re-review's
+      code findings — `EnsureFrameworkBucket` rejects a nil context above the client check (this change extended
+      that seam, so the gap is removal work; `graph.EnsureCatalogBucket` needs no guard of its own, verified: it
+      does an in-memory `SpecFor` lookup and delegates without touching ctx or NATS); the three `update_kv`
+      refusals stop offering a graph remedy for an operational bucket and share ONE wording home,
+      `graph.FrameworkOwnedWriteRefusal`, which derives the remedy from the descriptor's class; the acquisition
+      contract test is rebuilt PER CALL over every production file, with a positive assertion for the two
+      catalog-resolving owners. Mutation checks M25, M26.
 - [x] 3.6 `graph/kvcatalog.go`, `processor/rule/`: the third re-review's findings — the shared bucket's descriptor
       flips to `WriteOwnerOnly`, which closes a generic `update_kv` forging `platform_identity` (adopted next boot
       after grammar/budget validation only) or overwriting `platform_identity_guard` (reopening B2), through the
-      guard predicate that already exists; `natsKVWriter.acquireBucket` refuses a catalogued owner-only name and
+      guard predicate that already exists. **Owner-ruled 2026-08-31** ("concur with option 1", #1168 comment
+      5479005060) after the Codex round raised it as an unruled contract fork; the implementation was what was
+      ruled, so the ruling changed no code — only the prose that still described the withdrawn open-write
+      shape; `natsKVWriter.acquireBucket` refuses a catalogued owner-only name and
       resolves any other catalogued name through the descriptor, closing the third acquisition path, with
       non-catalogued names (`RESEARCH_EVIDENCE`, the only shipped `update_kv` target) unchanged; the strict-retention
       refusal keeps its invalid classification through the rule ConfigManager's wrap. Mutation checks M23, M24.
@@ -124,6 +135,13 @@ with a matching `md5 -q`. Verbatim failure lines below.
       for the suffix"). Re-pointed from `maxDeclarableAuthorityPairBytes` after the review round moved the reserve to
       the declaration boundary; the reviewer's note that M14 also reds `TestConfigRejectsOversizedAuthorityPair` is
       the stronger signal and is recorded here.
+- [x] 4.16 M25 `natsclient/kvspec.go`: drop `EnsureFrameworkBucket`'s nil-context guard → the boundary test failed
+      with the panic Codex named, `jetstream.(*jetStream).wrapContextWithoutDeadline`. The test uses a CONNECTED
+      client deliberately: an unconnected one short-circuits on `ErrNotConnected` and would prove nothing.
+- [x] 4.17 M26 `config/manager.go`: add a direct `CreateKeyValueBucket` BESIDE the existing catalog call →
+      `TestCatalogBucketNamesAreNeverAcquiredDirectly` failed naming `config/manager.go:163`. This is Codex's exact
+      defect (b): the previous whole-file `usesCatalogSeam` exemption passed this, the same file-level blindness
+      already recorded for M24's first attempt, returning in a different shape.
 - [x] 4.14 M23 `graph/kvcatalog.go`: flip the shared bucket's row back to `WriteOpen` →
       `TestUpdateKV_RejectsSharedConfigBucket_AtLoad` and `…_AtRuntime` both failed for both keys
       ("must reject update_kv into semstreams_config/platform_identity, got nil").
@@ -137,8 +155,10 @@ with a matching `md5 -q`. Verbatim failure lines below.
 - [x] 4.12 M21 `Start`: drop the nil-context guard → `TestStartRejectsNilContextWithoutSideEffects` failed with the
       panic Codex named, `jetstream.(*jetStream).wrapContextWithoutDeadline`.
 - [x] 4.13 M22 `processor/rule`: acquire the shared bucket with its own `CreateKeyValueBucket` instead of the
-      descriptor → `TestSharedConfigBucketResolvesThroughOneDescriptor` failed naming
-      `processor/rule/kv_config_integration.go:581`.
+      descriptor → the acquisition contract test failed naming `processor/rule/kv_config_integration.go:581`. (That
+      test was later rebuilt per acquisition call and renamed; the enforcing tests are now
+      `TestCatalogBucketNamesAreNeverAcquiredDirectly`, `TestCatalogResolvingOwnersUseTheSeam` and
+      `TestGenericKVWritersConsultTheCatalog`.)
 - [x] 4.8 M16 `acquireBucket`: skip `AssertNoLifecycleRetention` → `TestEvictingConfigBucketRefusesStart` failed on
       both TTL and MaxBytes ("An error is expected but got nil") and
       `TestIdentityUnderAnEvictingBucketNeverRemints` failed `expected: "dep-31a043" actual: "dep-7fbc40"` — the
@@ -212,8 +232,9 @@ with a matching `md5 -q`. Verbatim failure lines below.
       change's identity path is covered by 6.2c and the statistical run.
 - [x] 6.2f Excluded with reason: `semantic` (same ingest path as structural; its identity literals
       come from the same e2e config helper structural exercised), `agentic`, `ops`, `crud-tools`, `research-graph`,
-      `deep-research`, `slow-consumer`, `openai-responses` — none has a touched path beyond the e2e config helper.
-      `statistical` was originally excluded on the same reasoning but has since RUN green — see 6.2g.
+      `slow-consumer`, `openai-responses` — none has a touched path beyond the e2e config helper.
+      `statistical` and `deep-research` were originally excluded on the same reasoning and have since RUN green —
+      see 6.2g and 6.2i. An exclusion list that still names a tier the evidence says ran is a list nobody can trust.
 - [x] 6.2g `task e2e:statistical` EXIT=0 (at `e09df6f2`) — run to settle 6.2e: `entities_missing:0`, `entity_count:125`,
       `validation_errors:0` under `c360.semstreams-statistical-a4d38e`.
 - [x] 6.2h Stage mutation check (not vacuous): `./e2e --scenario core-minted-authority` exits 1 with

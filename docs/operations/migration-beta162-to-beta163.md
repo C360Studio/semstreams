@@ -801,15 +801,22 @@ refuses a wire value that disagrees, so it needed no change.
 8. **Declare the STEM in `platform.id`, never the minted identifier.** If you copy the effective value out of
    `semstreams_config/platform_identity` back into your configuration file, Start refuses and tells you which stem
    to write instead. The framework composes the effective value; the file names what it was composed from.
-9. **A failed `config.Manager.Start` leaves its writers disabled.** If your composition root calls `PushToKV`,
+9. **A rule pack may not write `semstreams_config` at all.** The shared configuration bucket is owner-only in the
+   framework bucket catalog, so a rule `update_kv` action targeting it — any key, named literally or resolved from a
+   variable at runtime — is refused at load validation, at action runtime, and at writer acquisition. This is ruled
+   contract, not an implementation choice: owner ruling 2026-08-31 (#1168 comment 5479005060, "concur with option
+   1"), taken over the alternative of refusing only the identity keys. Configuration changes go through the config
+   manager/API; a rule pack that needs to influence configuration is an engine-gap conversation, not a raw KV write.
+   No shipped rule pack in this repository targets that bucket, so nothing here changes; check your own packs.
+10. **A failed `config.Manager.Start` leaves its writers disabled.** If your composition root calls `PushToKV`,
    `PutComponentToKV` or `DeleteComponentFromKV` after a Start that returned an error, they now return a
    not-acquired lifecycle error instead of writing. Before this they silently operated on a bucket Start had just
    refused. Treat a Start error as fatal to that manager, which is what the composition roots already do.
-10. **Start now validates the whole effective configuration.** Establishing the platform identity applies it through
+11. **Start now validates the whole effective configuration.** Establishing the platform identity applies it through
    the config manager's serialized mutation, which re-validates the entire document. A defect anywhere in your
    configuration that previously surfaced later — undeclared stream bounds, a bad TLS path — now fails Start. The
    error leads with that finding and names the identity step second; it is not an identity failure.
-11. **Non-Go carriers.** Rule packs, compose files, TypeScript fixtures, and vendored OpenAPI documents that spell an
+12. **Non-Go carriers.** Rule packs, compose files, TypeScript fixtures, and vendored OpenAPI documents that spell an
    `org.platform` prefix as a literal are outside every Go census and break the same way as obligation 3. Grep your
    repository for your own `platform.id` value, not for a Go symbol.
 
