@@ -99,6 +99,14 @@ type Scenario struct {
 	embeddingSearchResponder *natsclient.Subscription
 	researchSeedEntityID     string
 
+	// authorityOrg / authorityPlatform are positions 1-2 of every entity ID this
+	// scenario composes, observed from the running deployment in Setup. They are
+	// deliberately NOT written back onto Config: Config carries what the scenario
+	// DECLARED, and EffectiveAuthority cross-checks the declaration against the
+	// stack. Collapsing the two erases the distinction this scenario exists to draw.
+	authorityOrg      string
+	authorityPlatform string
+
 	// controlledSeedEntityID is ControlledSeedSuffix under the authority the
 	// running deployment RECORDS. Empty until Setup observes it.
 	controlledSeedEntityID string
@@ -196,10 +204,10 @@ func (s *Scenario) Setup(ctx context.Context) error {
 	if authErr != nil {
 		return errors.Join(authErr, natsClient.Close(ctx))
 	}
-	s.config.PlatformOrg, s.config.PlatformID, _ = strings.Cut(authority, ".")
+	s.authorityOrg, s.authorityPlatform, _ = strings.Cut(authority, ".")
 	s.controlledSeedEntityID = authority + "." + ControlledSeedSuffix
 	s.researchSeedEntityID = researchGraphSeedEntityID(
-		s.config.PlatformOrg, s.config.PlatformID, fmt.Sprintf("%x", time.Now().UnixNano()))
+		s.authorityOrg, s.authorityPlatform, fmt.Sprintf("%x", time.Now().UnixNano()))
 	if s.config.FixtureMode == FixtureModeExecute {
 		s.researchSeedEntityID = s.controlledSeedEntityID
 	}
@@ -493,7 +501,7 @@ func (s *Scenario) waitForSearchResultStamp(ctx context.Context, result *scenari
 	if !ok || loopID == "" {
 		return fmt.Errorf("research_loop_id not set (waitForResearchPipelineLoop didn't populate it)")
 	}
-	loopEntityID, err := agentic.TryLoopExecutionEntityID(s.config.PlatformOrg, s.config.PlatformID, loopID)
+	loopEntityID, err := agentic.TryLoopExecutionEntityID(s.authorityOrg, s.authorityPlatform, loopID)
 	if err != nil {
 		return fmt.Errorf("construct loop entity ID for %s: %w", loopID, err)
 	}
