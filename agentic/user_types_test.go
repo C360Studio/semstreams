@@ -888,3 +888,114 @@ func TestTaskMessage_MaxIterations_JSONRoundTrip(t *testing.T) {
 func intPtr(v int) *int {
 	return &v
 }
+
+// canonicalLoopToken is a framework-shaped loop instance token: the exact form
+// ADR-105 requires on the wire — 36 bytes, lowercase, hyphenated.
+const canonicalLoopToken = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+
+// nonCanonicalLoopTokens enumerates the shapes a loop token can arrive in that
+// are NOT the contract. The three parse-but-non-canonical forms matter as much
+// as the obvious garbage: uuid.Parse accepts uppercase, braced, and urn:uuid
+// spellings, so a validator that only parses would admit three extra spellings
+// of the same identity and let a token miss its own KV key.
+func nonCanonicalLoopTokens() map[string]string {
+	return map[string]string{
+		"truncated dispatch mint": "loop_ab12cd34",
+		"truncated research mint": "rg_ab12cd34",
+		"hand-authored name":      "workflow-7",
+		"e2e harness shape":       "e2e-parent-1",
+		"uppercase":               "7C9E6679-7425-40DE-944B-E07FC1F90AE7",
+		"braced":                  "{" + canonicalLoopToken + "}",
+		"urn form":                "urn:uuid:" + canonicalLoopToken,
+		"unhyphenated":            "7c9e6679742540de944be07fc1f90ae7",
+	}
+}
+
+// TestTaskMessageRefusesNonUUIDLoopID pins the loop-token contract (ADR-105,
+// #1192) at TaskMessage.Validate — the one gate both the rule engine (publish
+// side) and agentic-loop intake (consume side) already run, so refusing here
+// means no client-authored token reaches loop state or the graph write path.
+//
+// Empty stays valid: an unset LoopID is the ordinary case for a fresh task, and
+// the framework mints the token downstream. The framework observes; the caller
+// never predicts.
+func TestTaskMessageRefusesNonUUIDLoopID(t *testing.T) {
+	t.Parallel()
+
+	base := func() TaskMessage {
+		return TaskMessage{TaskID: "task-1", Role: "general", Model: "fast", Prompt: "p"}
+	}
+
+	t.Run("empty loop_id is valid", func(t *testing.T) {
+		t.Parallel()
+		assert.NoError(t, base().Validate())
+	})
+
+	t.Run("canonical loop_id is valid", func(t *testing.T) {
+		t.Parallel()
+		task := base()
+		task.LoopID = canonicalLoopToken
+		assert.NoError(t, task.Validate())
+	})
+
+	for name, token := range nonCanonicalLoopTokens() {
+		t.Run("refuses "+name, func(t *testing.T) {
+			t.Parallel()
+			task := base()
+			task.LoopID = token
+			err := task.Validate()
+			require.Error(t, err, "a non-canonical loop token must be refused, not adopted")
+			assert.Contains(t, err.Error(), "loop_id",
+				"the refusal must name the offending field so a client knows what to fix")
+		})
+	}
+}
+
+// TestTaskMessageRefusesNonCanonicalLoopTokenFields covers the sibling loop
+// tokens a task carries. Each is a loop instance token in its own right and each
+// reaches the graph write path: parent_loop_id composes through the PANICKING
+// LoopExecutionEntityID builder, and run_id / in_reply_to (the gh#256 resume
+// anchors) are client-set and stamped raw into triples with a silent half-write
+// when the derivation fails. Validating them here is what closes that class.
+func TestTaskMessageRefusesNonCanonicalLoopTokenFields(t *testing.T) {
+	t.Parallel()
+
+	base := func() TaskMessage {
+		return TaskMessage{TaskID: "task-1", Role: "general", Model: "fast", Prompt: "p"}
+	}
+
+	fields := map[string]struct {
+		set  func(*TaskMessage, string)
+		json string
+	}{
+		"parent_loop_id": {set: func(t *TaskMessage, v string) { t.ParentLoopID = v }, json: "parent_loop_id"},
+		"in_reply_to":    {set: func(t *TaskMessage, v string) { t.InReplyTo = v }, json: "in_reply_to"},
+		"run_id":         {set: func(t *TaskMessage, v string) { t.RunID = v }, json: "run_id"},
+	}
+
+	for name, field := range fields {
+		t.Run(name+" empty is valid", func(t *testing.T) {
+			t.Parallel()
+			assert.NoError(t, base().Validate())
+		})
+
+		t.Run(name+" canonical is valid", func(t *testing.T) {
+			t.Parallel()
+			task := base()
+			field.set(&task, canonicalLoopToken)
+			assert.NoError(t, task.Validate())
+		})
+
+		for shape, token := range nonCanonicalLoopTokens() {
+			t.Run(name+" refuses "+shape, func(t *testing.T) {
+				t.Parallel()
+				task := base()
+				field.set(&task, token)
+				err := task.Validate()
+				require.Error(t, err, "%s=%q must be refused", field.json, token)
+				assert.Contains(t, err.Error(), field.json,
+					"the refusal must name the offending field, not just the contract")
+			})
+		}
+	}
+}

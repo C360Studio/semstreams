@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/pkg/errs"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
 )
 
@@ -1027,5 +1028,73 @@ func TestLoopManager_GetRunID(t *testing.T) {
 
 	if got := manager.GetRunID("no-such-loop"); got != "" {
 		t.Errorf("GetRunID(unknown) = %q, want \"\" (no error, no panic)", got)
+	}
+}
+
+// TestCreateLoopWithIDRefusesNonUUIDToken is the defense-in-depth half of the
+// loop-token contract (ADR-105, #1192). TaskMessage.Validate is the gate for
+// everything arriving over the wire; this is the gate for a composed binary
+// calling the LoopManager directly. The refusal must land BEFORE any state is
+// registered, because the overwrite at the end of CreateLoopWithID is exactly
+// what makes a colliding token silently merge two conversations.
+func TestCreateLoopWithIDRefusesNonUUIDToken(t *testing.T) {
+	t.Parallel()
+
+	tokens := map[string]string{
+		"truncated dispatch mint": "loop_ab12cd34",
+		"truncated research mint": "rg_ab12cd34",
+		"hand-authored name":      "workflow-7",
+		"uppercase":               "7C9E6679-7425-40DE-944B-E07FC1F90AE7",
+		"urn form":                "urn:uuid:7c9e6679-7425-40de-944b-e07fc1f90ae7",
+		"empty":                   "",
+	}
+
+	for name, token := range tokens {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			manager := agenticloop.NewLoopManager()
+
+			loopID, err := manager.CreateLoopWithID(token, "task-001", "general", "model")
+			if err == nil {
+				t.Fatalf("CreateLoopWithID(%q) error = nil, want a refusal", token)
+			}
+			if !errs.IsInvalid(err) {
+				t.Errorf("CreateLoopWithID(%q) error = %v, want a classified invalid error", token, err)
+			}
+			if loopID != "" {
+				t.Errorf("CreateLoopWithID(%q) returned loop ID %q, want empty on refusal", token, loopID)
+			}
+			if _, getErr := manager.GetLoop(token); getErr == nil {
+				t.Errorf("CreateLoopWithID(%q) registered loop state despite refusing", token)
+			}
+			if cm := manager.GetContextManager(token); cm != nil {
+				t.Errorf("CreateLoopWithID(%q) created a context manager despite refusing", token)
+			}
+			if _, active := manager.HasActiveLoopForTask("task-001"); active {
+				t.Errorf("CreateLoopWithID(%q) left an active loop for the task", token)
+			}
+		})
+	}
+}
+
+// TestCreateLoopWithIDAcceptsCanonicalUUID is the positive half: the refusal
+// must not have narrowed the contract past what GenerateLoopID itself mints.
+func TestCreateLoopWithIDAcceptsCanonicalUUID(t *testing.T) {
+	t.Parallel()
+	manager := agenticloop.NewLoopManager()
+
+	token := manager.GenerateLoopID()
+	loopID, err := manager.CreateLoopWithID(token, "task-002", "general", "model")
+	if err != nil {
+		t.Fatalf("CreateLoopWithID(%q) error = %v", token, err)
+	}
+	if loopID != token {
+		t.Errorf("CreateLoopWithID returned %q, want the supplied token %q", loopID, token)
+	}
+	if _, err := manager.GetLoop(token); err != nil {
+		t.Errorf("GetLoop after accepted CreateLoopWithID: %v", err)
+	}
+	if manager.GetContextManager(token) == nil {
+		t.Error("accepted CreateLoopWithID did not create a context manager")
 	}
 }
