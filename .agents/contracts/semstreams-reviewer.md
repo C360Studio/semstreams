@@ -237,6 +237,14 @@ until the owner explicitly accepts the reviewed design.
 - Tests drive production constructors, registries, codecs, NATS handlers, and wire envelopes rather than only helpers.
 - Network listeners use ephemeral ports. Tests mutating global state such as `slog.SetDefault` are not parallel.
 - Wall-clock assertions have a rationale and realistic tolerance; concurrent tests use explicit synchronization.
+- A new parse/decode/validate surface without a fuzz target and seed corpus is a finding; check the harness asserts
+  an invariant, not examples replayed through `f.Add`.
+- A property-based test is reviewed against its citation, not the diff: require the
+  `// spec: <capability>/<requirement>` annotation, read the cited clause, and confirm the property states it. A
+  property that mirrors the implementation's branching or recomputes the expected value with the same algorithm is
+  the test-that-reconstructs finding at property scale; a dangling citation is itself a finding. Verify the
+  generator reaches every boundary the clause names — a bound the generator cannot hit is unguarded (the survived
+  mutation on PR #1213).
 - Breaking changes have relevant e2e evidence before the commit lands, including the full ingest-to-query path.
 - Paid or prolonged operations use validated monitors plus active polling of authoritative state every 30-60 seconds.
 

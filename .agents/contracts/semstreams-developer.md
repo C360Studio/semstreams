@@ -250,6 +250,17 @@ PRs fell into the four classes below.
 
 - Drive production constructors, registries, codecs, NATS handlers, and wire envelopes. Helper-only tests do not prove
   the assembled system.
+- Any new exported surface that parses, decodes, or validates external bytes or strings — subjects, keys, entity
+  IDs, payload envelopes, config — ships with a native `Fuzz*` target and a seed corpus covering each accepted
+  grammar class, asserting an invariant (never panics; round-trips; rejection is a typed error), following the
+  in-tree pattern (`FuzzParseEntityIDRoundTrip`, `FuzzKVValidatorsNeverPanic`). Seed corpora run in plain `go test`.
+- A property-based test encodes an invariant the design STATED, never one inferred from the implementation. Write
+  the generator from the input grammar and the property from the cited spec clause; annotate the test
+  `// spec: <capability>/<requirement>` so the citation is greppable and mechanically checkable. A property whose
+  expected value is recomputed by the implementation's own algorithm is the reconstructs shape — it cannot fail.
+  The generator must provably reach every boundary the cited clause names: a wide range that merely strides a
+  bound catches an off-by-one only probabilistically (measured on PR #1213 — a `>=` mutation at the 256-byte
+  entity-ID bound survived 100 uniform draws; a boundary-hugging `OneOf` killed it after 0 tests).
 - Use ephemeral ports, explicit synchronization, and no `t.Parallel()` around process-global state such as
   `slog.SetDefault`. Explain wall-clock assertions and give them realistic tolerance.
 - Run focused unit tests, `task lint`, `go test -race ./...`, schema generation/no-drift, contract tests, and relevant
