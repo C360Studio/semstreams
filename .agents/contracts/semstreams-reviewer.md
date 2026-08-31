@@ -237,10 +237,12 @@ until the owner explicitly accepts the reviewed design.
 - Tests drive production constructors, registries, codecs, NATS handlers, and wire envelopes rather than only helpers.
 - Network listeners use ephemeral ports. Tests mutating global state such as `slog.SetDefault` are not parallel.
 - Wall-clock assertions have a rationale and realistic tolerance; concurrent tests use explicit synchronization.
-- A new parse/decode/validate surface without a fuzz target and seed corpus is a finding; check the harness asserts
-  an invariant, not examples replayed through `f.Add`.
+- A new **exported** parse/decode/validate surface without a fuzz target and seed corpus is a finding; check the
+  harness asserts an invariant, not a table of expected outputs replayed through `f.Add`.
 - A property-based test is reviewed against its citation, not the diff: require the
-  `// spec: <capability>/<requirement>` annotation, read the cited clause, and confirm the property states it. A
+  `// spec: <capability> / <requirement heading>` annotation, read the cited clause, and confirm the property
+  states it — resolving the citation against `openspec/specs/<capability>/spec.md` OR the active change's delta
+  under `openspec/changes/<id>/specs/`, since an in-flight requirement lives only in the delta. A
   property that mirrors the implementation's branching or recomputes the expected value with the same algorithm is
   the test-that-reconstructs finding at property scale; a dangling citation is itself a finding. Verify the
   generator reaches every boundary the clause names — a bound the generator cannot hit is unguarded (the survived

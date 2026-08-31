@@ -183,9 +183,9 @@ terminal event was silently dropped. No amount of caller care fixes a prediction
   input grammar, a round-trip codec, a monotonic revision, or a state machine, state its invariants — properties
   that hold for EVERY input or action sequence, not examples — and cite each to the current-spec requirement,
   scenario THEN clause, or the spec delta that adds it. An invariant with no spec home is a design finding: add
-  the requirement or drop the claim. These stated invariants are what the developer encodes as property and fuzz
-  harnesses; a property authored later by reading the implementation reconstructs it and proves nothing, so the
-  design is the only honest source.
+  the requirement or drop the claim. These stated invariants are the only admissible source when the developer
+  writes a property or fuzz harness; a property authored later by reading the implementation reconstructs it and
+  proves nothing.
 - ADRs record genuine decisions — irreversible choices and cross-repo contracts, the why. Mechanics live in the
   capability's spec. Do not draft "how it works" as an ADR.
 - Respect the pre-v1 fresh-state policy: breaking identity/index adoption starts downstreams on
