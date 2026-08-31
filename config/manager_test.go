@@ -59,6 +59,11 @@ func TestConfigManager_Subscriptions(t *testing.T) {
 	// Create a test config
 	cfg := &Config{
 		Version: "1.0.0",
+		Platform: PlatformConfig{
+			Org:  "c360",
+			ID:   "test-platform",
+			Type: "test",
+		},
 		Services: types.ServiceConfigs{
 			"metrics": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"port": 9090}`)},
 		},
@@ -148,9 +153,16 @@ func TestConfigManager_KVUpdates(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// The bucket is acquired by Start (the constructor performs no I/O since
+	// the context hard-rule fix), so a test that writes through the manager
+	// before Start acquires it explicitly — the same production path Start uses.
+	acquireAndPublish(t, ctx, cm)
 	// Push initial config to KV before starting watcher
 	err = cm.PushToKV(ctx)
 	require.NoError(t, err)
+	// A bucket that already holds configuration must also hold its identity
+	// record, or Start refuses it as predating identity minting (ADR-104).
+	seedDeclaredIdentity(t, ctx, cm)
 
 	// Start Manager
 	// This will detect existing KV and sync from it
@@ -243,19 +255,24 @@ func TestConfigManager_PushToKV(t *testing.T) {
 
 	ctx := context.Background()
 
+	// The bucket is acquired by Start (the constructor performs no I/O since
+	// the context hard-rule fix); this test drives PushToKV alone, so it
+	// acquires through the same production path Start uses.
+	acquireAndPublish(t, ctx, cm)
+
 	// Push config to KV
 	err = cm.PushToKV(ctx)
 	require.NoError(t, err)
 
 	// Verify services were pushed
-	entry, err := cm.kv.Get(ctx, "services.metrics")
+	entry, err := mustBucket(t, cm).Get(ctx, "services.metrics")
 	require.NoError(t, err)
 	var metricsConfig types.ServiceConfig
 	err = json.Unmarshal(entry.Value(), &metricsConfig)
 	require.NoError(t, err)
 	assert.True(t, metricsConfig.Enabled)
 
-	entry, err = cm.kv.Get(ctx, "services.discovery")
+	entry, err = mustBucket(t, cm).Get(ctx, "services.discovery")
 	require.NoError(t, err)
 	var discoveryConfig types.ServiceConfig
 	err = json.Unmarshal(entry.Value(), &discoveryConfig)
@@ -269,7 +286,7 @@ func TestConfigManager_PushToKV(t *testing.T) {
 	assert.Equal(t, float64(8080), discoveryInnerConfig["port"])
 
 	// Verify components were pushed
-	entry, err = cm.kv.Get(ctx, "components.udp-sensor")
+	entry, err = mustBucket(t, cm).Get(ctx, "components.udp-sensor")
 	require.NoError(t, err)
 
 	var compConfig types.ComponentConfig
@@ -280,7 +297,7 @@ func TestConfigManager_PushToKV(t *testing.T) {
 	assert.True(t, compConfig.Enabled)
 
 	// Verify platform was pushed
-	entry, err = cm.kv.Get(ctx, "platform")
+	entry, err = mustBucket(t, cm).Get(ctx, "platform")
 	require.NoError(t, err)
 
 	var platformConfig PlatformConfig
@@ -290,7 +307,7 @@ func TestConfigManager_PushToKV(t *testing.T) {
 	assert.Equal(t, "test-id", platformConfig.ID)
 
 	// Verify model registry was pushed
-	entry, err = cm.kv.Get(ctx, "model_registry")
+	entry, err = mustBucket(t, cm).Get(ctx, "model_registry")
 	require.NoError(t, err)
 
 	var registry model.Registry
@@ -347,8 +364,15 @@ func TestConfigManager_ModelRegistryKVUpdate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// The bucket is acquired by Start (the constructor performs no I/O since
+	// the context hard-rule fix), so a test that writes through the manager
+	// before Start acquires it explicitly — the same production path Start uses.
+	acquireAndPublish(t, ctx, cm)
 	err = cm.PushToKV(ctx)
 	require.NoError(t, err)
+	// A bucket that already holds configuration must also hold its identity
+	// record, or Start refuses it as predating identity minting (ADR-104).
+	seedDeclaredIdentity(t, ctx, cm)
 
 	err = cm.Start(ctx)
 	require.NoError(t, err)
@@ -441,7 +465,14 @@ func TestConfigManager_WatchModelRegistry(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// The bucket is acquired by Start (the constructor performs no I/O since
+	// the context hard-rule fix), so a test that writes through the manager
+	// before Start acquires it explicitly — the same production path Start uses.
+	acquireAndPublish(t, ctx, cm)
 	require.NoError(t, cm.PushToKV(ctx))
+	// A bucket that already holds configuration must also hold its identity
+	// record, or Start refuses it as predating identity minting (ADR-104).
+	seedDeclaredIdentity(t, ctx, cm)
 	require.NoError(t, cm.Start(ctx))
 	defer cm.Stop(5 * time.Second)
 

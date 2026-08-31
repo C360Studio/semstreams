@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/projection"
 	"github.com/c360studio/semstreams/test/e2e/client"
+	e2econfig "github.com/c360studio/semstreams/test/e2e/config"
 	"github.com/c360studio/semstreams/vocabulary"
 )
 
@@ -50,15 +51,15 @@ type GraphRoundTripProbe struct {
 	graphqlURL string
 	httpClient *http.Client
 	timeout    time.Duration
-	// authority is positions 1-2 of the canary this probe mints — the DEPLOYMENT
-	// it is driving, spelled `org.platform`. Since ADR-102 d5 the graph refuses
-	// any subject outside its own authority, so a canary carrying anything but
-	// the running stack's `platform.org`.`platform.id` is rejected at the
-	// boundary rather than written. The caller states which stack it is probing;
-	// it is the one fact the probe cannot observe from the outside. For the
-	// three tiers the value comes from config.TierAuthority, which owns the
-	// mapping and re-derives it from the compose profiles (#1149).
-	authority string
+	// declaredAuthority is the `org.platform` the stack's SHIPPED CONFIGURATION
+	// declares — the stem, not the pair. Since ADR-102 d5 the graph refuses any
+	// subject outside its own authority, and since ADR-104 that authority is the
+	// declared id plus a framework-minted entropy suffix, so the probe READS the
+	// effective pair from semstreams_config/platform_identity at Run and uses
+	// this value only to assert it is driving the stack it thinks it is. It is
+	// no longer a fact the probe cannot observe from the outside — the whole
+	// point of recording it was to stop everyone predicting it.
+	declaredAuthority string
 }
 
 // NewGraphRoundTripProbe builds the shared graph canary used by core and every
@@ -66,15 +67,15 @@ type GraphRoundTripProbe struct {
 func NewGraphRoundTripProbe(
 	nats *client.NATSValidationClient,
 	msgLogger *client.MessageLoggerClient,
-	graphqlURL, authority string,
+	graphqlURL, declaredAuthority string,
 ) *GraphRoundTripProbe {
 	return &GraphRoundTripProbe{
-		nats:       nats,
-		msgLogger:  msgLogger,
-		graphqlURL: strings.TrimRight(graphqlURL, "/"),
-		httpClient: &http.Client{Timeout: 3 * time.Second},
-		timeout:    graphRoundTripTimeout,
-		authority:  authority,
+		nats:              nats,
+		msgLogger:         msgLogger,
+		graphqlURL:        strings.TrimRight(graphqlURL, "/"),
+		httpClient:        &http.Client{Timeout: 3 * time.Second},
+		timeout:           graphRoundTripTimeout,
+		declaredAuthority: declaredAuthority,
 	}
 }
 
@@ -94,11 +95,18 @@ func (p *GraphRoundTripProbe) Run(ctx context.Context, result *Result) error {
 	// with the running stack's config is refused by the graph boundary, which is
 	// the intended behaviour — so state the disagreement here rather than let it
 	// surface as an opaque "invalid entity ID contract input".
-	if p.authority == "" {
-		return fmt.Errorf("graph round-trip probe requires the deployment authority " +
+	if p.declaredAuthority == "" {
+		return fmt.Errorf("graph round-trip probe requires the configuration's declared authority " +
 			"(org.platform of the stack under test); a canary minted under any other pair is refused")
 	}
-	entityID := p.authority + ".graph.core.canary." + rootTrace.TraceID[:12]
+	// Read the pair the stack actually mints under. It is the declared id plus
+	// the entropy suffix minted at first boot (ADR-104), and reading it also
+	// asserts this probe is driving the configuration it was pointed at.
+	authority, err := e2econfig.EffectiveAuthority(runCtx, p.nats, p.declaredAuthority)
+	if err != nil {
+		return err
+	}
+	entityID := authority + ".graph.core.canary." + rootTrace.TraceID[:12]
 	before := "graph-canary-before-" + rootTrace.TraceID
 	after := "graph-canary-after-" + rootTrace.TraceID
 	requestPrefix := "graph-canary-" + rootTrace.TraceID

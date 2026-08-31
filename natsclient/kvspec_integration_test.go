@@ -250,3 +250,34 @@ func TestIntegration_EnsureFrameworkBucket_CleanCreateIsQuiet(t *testing.T) {
 	assert.False(t, rec.warnContainingAll("KVSPEC_CLEAN_CREATE"),
 		"a clean create must not WARN — nothing was reconciled")
 }
+
+// TestIntegration_EnsureFrameworkBucket_RejectsNilContext pins the repository
+// hard rule on the owner seam itself.
+//
+// This function is exported, error-returning and context-taking, and this
+// change extended it — it now owns the strict-retention behaviour and is reached
+// by both new catalog acquisitions — so a pre-existing gap here is removal work,
+// not inheritable debt. It validated the client and the spec but never the
+// context, and a CONNECTED client is what makes that reachable: nil flows into
+// CreateKeyValueBucket, JetStream calls Deadline() on the nil interface, and the
+// caller gets a panic where a classified error belongs. That is the same panic
+// class config.Manager.Start was fixed for one layer up.
+//
+// The connected client is the assertion. With an unconnected one the call would
+// short-circuit on ErrNotConnected and never reach the panic, so this test would
+// pass while proving nothing.
+func TestIntegration_EnsureFrameworkBucket_RejectsNilContext(t *testing.T) {
+	ctx := context.Background()
+	tc := NewTestClient(t, WithKV())
+	spec := fixtureSpec("KVSPEC_NIL_CONTEXT")
+
+	//nolint:staticcheck // SA1012 is the point: this asserts the guard exists.
+	_, err := EnsureFrameworkBucket(nil, tc.Client, spec)
+	require.Error(t, err, "an exported context-taking boundary must reject nil, not panic")
+	assert.True(t, errs.IsInvalid(err), "a nil context is invalid input, not a transient fault")
+	assert.Contains(t, err.Error(), "context")
+
+	// No side effects: the refusal happens before any NATS access.
+	_, getErr := tc.Client.GetKeyValueBucket(ctx, spec.Name)
+	require.Error(t, getErr, "a rejected acquisition must not have created the bucket")
+}

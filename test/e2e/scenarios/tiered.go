@@ -60,6 +60,14 @@ type TieredScenario struct {
 
 	// Cached variant detection (set once, reused across stages)
 	detectedVariant *variantInfo
+
+	// effectiveAuthority is `org.platform` as the running stack RECORDS it —
+	// read once per run from semstreams_config/platform_identity, never
+	// predicted from a configuration file. Since ADR-104 the framework mints an
+	// entropy suffix onto platform.id at first boot, so a fixture composed from
+	// the shipped config is right about nothing and reports "entity not found"
+	// several stages later.
+	effectiveAuthority string
 }
 
 // TieredConfig contains configuration for tiered E2E tests
@@ -418,14 +426,16 @@ func (s *TieredScenario) executeGraphRoundTrip(ctx context.Context, result *Resu
 	}
 	// The canary is minted under the DEPLOYMENT's authority, resolved the same
 	// way every other tiered fixture resolves it (#1149) — one home, and it
-	// handles the auto-detected-variant case a config field could not.
+	// handles the auto-detected-variant case a config field could not. The
+	// probe is handed the tier's DECLARED stem and reads the effective pair
+	// itself (ADR-104), so core and every tier observe it the same way.
 	variant := s.effectiveVariant(result)
 	if variant == "" {
 		return fmt.Errorf("graph-roundtrip: tier variant is unresolved, so the deployment " +
 			"authority the canary must be minted under is unknown")
 	}
 	probe := NewGraphRoundTripProbe(s.natsClient, s.msgLogger, s.config.GraphQLURL,
-		config.TierAuthority(variant))
+		config.TierAuthorityStem(variant))
 	return probe.Run(ctx, result)
 }
 
@@ -534,6 +544,18 @@ func (s *TieredScenario) Execute(ctx context.Context) (*Result, error) {
 		result.Details["detected_embedding_provider"] = info.embeddingProvider
 	}
 	result.Metrics["variant"] = variant
+
+	// Observe the authority this deployment mints under before any stage
+	// composes an entity ID from it.
+	authority, err := config.EffectiveTierAuthority(ctx, s.natsClient, variant)
+	if err != nil {
+		result.Error = fmt.Sprintf("resolve the deployment authority: %v", err)
+		result.EndTime = time.Now()
+		result.Duration = result.EndTime.Sub(result.StartTime)
+		return result, nil
+	}
+	s.effectiveAuthority = authority
+	result.Details["effective_authority"] = authority
 
 	stages := s.getStagesForVariant(variant)
 	if !s.executeStages(ctx, result, stages) {

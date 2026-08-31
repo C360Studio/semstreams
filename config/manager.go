@@ -2,17 +2,22 @@ package config
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/types"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -25,9 +30,18 @@ type Update struct {
 
 // Manager provides centralized configuration management with channel-based updates
 type Manager struct {
-	config      *SafeConfig              // Current configuration
-	kv          jetstream.KeyValue       // NATS KV bucket for config
-	kvStore     *natsclient.KVStore      // KVStore abstraction for safe operations
+	config *SafeConfig // Current configuration
+
+	// natsClient is retained so the shared configuration bucket is acquired
+	// under Start's context rather than one the constructor invented. The
+	// Manager retains the CLIENT, never a context (repository hard rule).
+	natsClient *natsclient.Client
+
+	// bucketMu guards kv/kvStore, which are nil until Start acquires them.
+	bucketMu sync.RWMutex
+	kv       jetstream.KeyValue  // NATS KV bucket for config
+	kvStore  *natsclient.KVStore // KVStore abstraction for safe operations
+
 	watchers    []jetstream.KeyWatcher   // Watchers for specific patterns
 	subscribers map[string][]chan Update // Pattern -> channels
 	mu          sync.RWMutex             // Protects subscribers map
@@ -57,6 +71,46 @@ type Manager struct {
 	engineHighWaterRev atomic.Uint64
 }
 
+// configBucketName is the fixed, global name of the shared configuration
+// bucket. Every sem* app pointed at one NATS server shares it, which is why the
+// deployment's identity has to be recorded IN it rather than assumed about it.
+//
+// The name is the catalog's, not this package's: since ADR-104 the framework
+// guarantees this bucket's retention, which is what puts it in the
+// framework-bucket-catalog descriptor table. A local literal would fork the
+// name from the descriptor that governs it, and a contract test rejects one.
+const configBucketName = graph.BucketSemStreamsConfig
+
+// platformIdentityKVKey is the key in the shared configuration bucket holding
+// the deployment's durable platform identity (ADR-104).
+//
+// It is NOT configuration. It is created once with an atomic Create, never
+// written by PushToKV, never applied by syncFromKV or updateConfig, never
+// watched, and never counted as configuration by first-boot detection.
+const platformIdentityKVKey = "platform_identity"
+
+// platformEnvironmentGuardKey records which platform.environment established
+// this configuration bucket. It is INTERNAL: nothing outside this package reads
+// it, and it is deliberately not a field of platformIdentityRecord, whose
+// `{org, stem, id}` shape is a cross-repo read contract. Like the identity
+// record it is never pushed, never applied, never watched, and never counted as
+// configuration.
+const platformEnvironmentGuardKey = "platform_identity_guard"
+
+// platformIdentityRecord says which platform authority a configuration bucket
+// belongs to. Its shape is a cross-repo contract (ADR-104): adopters without Go
+// bindings read this record to learn the pair the deployment actually mints
+// under, so it carries exactly these three fields.
+type platformIdentityRecord struct {
+	// Org is the deployment's platform.org, which minting never changes.
+	Org string `json:"org"`
+	// Stem is the platform.id the configuration document declared.
+	Stem string `json:"stem"`
+	// ID is the effective platform.id — the stem plus the minted entropy
+	// suffix, or the stem itself when an operator pre-created the record.
+	ID string `json:"id"`
+}
+
 // NewConfigManager creates a new configuration manager
 func NewConfigManager(cfg *Config, natsClient *natsclient.Client, logger *slog.Logger) (*Manager, error) {
 	if cfg == nil {
@@ -69,27 +123,80 @@ func NewConfigManager(cfg *Config, natsClient *natsclient.Client, logger *slog.L
 		logger = slog.Default()
 	}
 
-	// Create or get KV bucket for config
-	ctx := context.Background()
-	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      "semstreams_config",
-		Description: "SemStreams runtime configuration",
-		History:     5, // Keep last 5 versions
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create/get KV bucket: %w", err)
-	}
-
-	// Create KVStore for safe operations
-	kvStore := natsClient.NewKVStore(kv)
-
+	// No I/O here, and no context. The shared configuration bucket is acquired
+	// in Start(ctx), under the caller's lifecycle context: this constructor used
+	// to invent a context.Background() root for CreateKeyValueBucket, which the
+	// repository hard rule forbids and which left the caller's cancellation
+	// unable to bound the acquisition. It became removal work rather than
+	// inherited debt the moment this package made that bucket the home of
+	// create-once identity state.
 	return &Manager{
 		config:      NewSafeConfig(cfg),
-		kv:          kv,
-		kvStore:     kvStore,
+		natsClient:  natsClient,
 		subscribers: make(map[string][]chan Update),
 		logger:      logger,
 	}, nil
+}
+
+// errBucketNotAcquired is returned by any bucket-dependent method called before
+// Start. Fail closed and say why: before Start the Manager has no bucket, and a
+// nil-dereference panic would say nothing at all.
+var errBucketNotAcquired = errors.New(
+	"config manager has no configuration bucket yet: it is acquired by Start(ctx), which must run first")
+
+// acquireBucket obtains the shared configuration bucket under the CALLER's
+// context and refuses a policy that could silently delete what this package
+// mints into it.
+func (cm *Manager) acquireBucket(ctx context.Context) (jetstream.KeyValue, *natsclient.KVStore, error) {
+	// Through the catalog's owner seam, not a direct create. The descriptor —
+	// not this function — declares History 5 and the strict no-lifecycle
+	// retention that refuses an evicting policy rather than repairing one,
+	// because the identity such a policy could already have deleted is
+	// create-once (ADR-104; ADR-102 decision 7). The other writer of this
+	// bucket, processor/rule's ConfigManager, resolves the same descriptor, so
+	// the guarantee no longer depends on which of them creates it first.
+	kv, err := graph.EnsureCatalogBucket(ctx, cm.natsClient, configBucketName)
+	if err != nil {
+		return nil, nil, fmt.Errorf("acquire config bucket %q: %w", configBucketName, err)
+	}
+	return kv, cm.natsClient.NewKVStore(kv), nil
+}
+
+// publishBucket makes the acquired handles visible to the EXPORTED writers.
+//
+// It runs once, at the very end of a successful Start, and that placement is
+// the contract: until it runs, PushToKV, PutComponentToKV and
+// DeleteComponentFromKV all return errBucketNotAcquired. A Start that refused —
+// a foreign identity, a pre-identity bucket, a lost environment claim, a
+// malformed record, a watcher that would not open — therefore leaves no armed
+// writer behind. Publishing at acquisition instead let a caller overwrite the
+// very bucket Start had just refused as another platform's, which is the
+// detached running mode component-runtime-config says does not exist.
+func (cm *Manager) publishBucket(kv jetstream.KeyValue, kvStore *natsclient.KVStore) {
+	cm.bucketMu.Lock()
+	cm.kv = kv
+	cm.kvStore = kvStore
+	cm.bucketMu.Unlock()
+}
+
+// store returns the acquired KVStore, or errBucketNotAcquired before Start.
+func (cm *Manager) store() (*natsclient.KVStore, error) {
+	cm.bucketMu.RLock()
+	defer cm.bucketMu.RUnlock()
+	if cm.kvStore == nil {
+		return nil, errBucketNotAcquired
+	}
+	return cm.kvStore, nil
+}
+
+// bucket returns the acquired KV handle, or errBucketNotAcquired before Start.
+func (cm *Manager) bucket() (jetstream.KeyValue, error) {
+	cm.bucketMu.RLock()
+	defer cm.bucketMu.RUnlock()
+	if cm.kv == nil {
+		return nil, errBucketNotAcquired
+	}
+	return cm.kv, nil
 }
 
 // GetConfig returns the current configuration
@@ -171,21 +278,43 @@ func (cm *Manager) OnChange(pattern string) <-chan Update {
 
 // Start begins watching for configuration changes
 func (cm *Manager) Start(ctx context.Context) error {
+	// Reject a nil context BEFORE any state is mutated or NATS is touched.
+	// Moving bucket acquisition here made Start this package's exported
+	// context-taking boundary, and the hard rule says such a boundary rejects
+	// nil when it can return an error. It is not a theoretical rule here: nil
+	// reaches JetStream's wrapContextWithoutDeadline, which calls Deadline() on
+	// the nil interface and panics — after shutdownCh had already been replaced.
+	if ctx == nil {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "ConfigManager", "Start", "context cannot be nil")
+	}
+
 	// Initialize shutdown channel
 	cm.shutdownCh = make(chan struct{})
 
-	// Determine if this is first boot or subsequent boot
-	hasConfig, err := cm.hasKVConfig(ctx)
+	// Acquire the shared configuration bucket under THIS context, and refuse a
+	// policy that could evict the identity established below.
+	//
+	// The handles stay LOCAL through every step of Start that can refuse. They
+	// reach the struct — and with it the exported writers — only at the end,
+	// through publishBucket.
+	kvHandle, kvStore, err := cm.acquireBucket(ctx)
 	if err != nil {
-		cm.logger.Warn("Failed to check KV config existence", "error", err)
-		// Assume first boot on error
-		hasConfig = false
+		return err
+	}
+
+	// Establish this deployment's platform identity BEFORE arbitration,
+	// watchers, or writes (ADR-104). The same single read of the bucket's keys
+	// answers first-boot detection, so there is no second probe to disagree
+	// with it.
+	hasConfig, err := cm.establishPlatformIdentity(ctx, kvStore)
+	if err != nil {
+		return err
 	}
 
 	if !hasConfig {
 		// First boot: push file config to KV for UI
 		cm.logger.Info("First boot detected, pushing config to KV")
-		if err := cm.PushToKV(ctx); err != nil {
+		if err := cm.pushToKV(ctx, kvStore); err != nil {
 			cm.logger.Error("Failed to push initial config to KV", "error", err)
 			// Continue anyway - UI won't have initial state but app can run
 		}
@@ -202,10 +331,10 @@ func (cm *Manager) Start(ctx context.Context) error {
 		// org/id on either side) fall through to the existing behavior —
 		// they're indistinguishable, and per-platform bucket namespacing is
 		// the complete fix for that case.
-		if kvIdentity, found := cm.kvPlatformIdentity(ctx); found {
+		if kvIdentity, found := cm.kvPlatformIdentity(ctx, kvHandle); found {
 			localIdentity := cm.config.Get().Platform
 			if platformHasIdentity(localIdentity) && platformHasIdentity(kvIdentity) &&
-				platformIdentityKey(localIdentity) != platformIdentityKey(kvIdentity) {
+				platformIdentityTuple(localIdentity) != platformIdentityTuple(kvIdentity) {
 				return fmt.Errorf(
 					"config bucket platform identity mismatch: "+
 						"local org=%q platform=%q environment=%q, "+
@@ -217,18 +346,18 @@ func (cm *Manager) Start(ctx context.Context) error {
 					kvIdentity.Org,
 					kvIdentity.ID,
 					kvIdentity.Environment,
-					"semstreams_config",
+					configBucketName,
 				)
 			}
 		}
 
 		// Subsequent boot: compare versions to decide sync direction
 		fileVersion := cm.config.Get().Version
-		kvVersion, err := cm.getKVVersion(ctx)
+		kvVersion, err := cm.getKVVersion(ctx, kvHandle)
 		if err != nil {
 			cm.logger.Warn("Failed to get KV version, syncing from KV", "error", err)
 			// Fall back to syncing from KV if we can't get version
-			if err := cm.syncFromKV(ctx); err != nil {
+			if err := cm.syncFromKV(ctx, kvHandle); err != nil {
 				cm.logger.Warn("Failed to sync from KV on startup", "error", err)
 			}
 		} else {
@@ -240,7 +369,7 @@ func (cm *Manager) Start(ctx context.Context) error {
 					"kv_version", kvVersion,
 					"error", err)
 				// Fall back to syncing from KV on version comparison error
-				if err := cm.syncFromKV(ctx); err != nil {
+				if err := cm.syncFromKV(ctx, kvHandle); err != nil {
 					cm.logger.Warn("Failed to sync from KV on startup", "error", err)
 				}
 			} else if cmp > 0 {
@@ -248,7 +377,7 @@ func (cm *Manager) Start(ctx context.Context) error {
 				cm.logger.Info("File version is newer than KV, updating KV",
 					"file_version", fileVersion,
 					"kv_version", kvVersion)
-				if err := cm.PushToKV(ctx); err != nil {
+				if err := cm.pushToKV(ctx, kvStore); err != nil {
 					cm.logger.Error("Failed to update KV with newer config", "error", err)
 				}
 			} else if cmp < 0 {
@@ -257,14 +386,14 @@ func (cm *Manager) Start(ctx context.Context) error {
 					"file_version", fileVersion,
 					"kv_version", kvVersion,
 					"hint", "bump file version to update KV")
-				if err := cm.syncFromKV(ctx); err != nil {
+				if err := cm.syncFromKV(ctx, kvHandle); err != nil {
 					cm.logger.Warn("Failed to sync from KV on startup", "error", err)
 				}
 			} else {
 				// Versions equal: sync from KV (UI may have made changes)
 				cm.logger.Debug("File and KV versions match, syncing from KV",
 					"version", fileVersion)
-				if err := cm.syncFromKV(ctx); err != nil {
+				if err := cm.syncFromKV(ctx, kvHandle); err != nil {
 					cm.logger.Warn("Failed to sync from KV on startup", "error", err)
 				}
 			}
@@ -296,7 +425,7 @@ func (cm *Manager) Start(ctx context.Context) error {
 
 	for _, pattern := range patterns {
 		// Use UpdatesOnly since we've already synced existing values
-		watcher, err := cm.kv.Watch(ctx, pattern, jetstream.UpdatesOnly())
+		watcher, err := kvHandle.Watch(ctx, pattern, jetstream.UpdatesOnly())
 		if err != nil {
 			// Ignore errors for patterns that don't exist yet
 			// They'll be picked up when keys are created
@@ -311,6 +440,11 @@ func (cm *Manager) Start(ctx context.Context) error {
 		cleanup()
 		return fmt.Errorf("failed to create any watchers")
 	}
+
+	// Every step that can refuse has now passed. Publishing the handles here,
+	// and only here, is what makes errBucketNotAcquired truthful for a Start
+	// that was attempted and refused — not merely for one never called.
+	cm.publishBucket(kvHandle, kvStore)
 
 	// Process updates from all watchers in background
 	for _, watcher := range cm.watchers {
@@ -564,11 +698,13 @@ func (cm *Manager) updateConfig(key string, value []byte) error {
 				currentConfig.Components[componentName] = compConfig
 			}
 
-		case "platform":
-			// Update platform config (already validated above)
-			if err := json.Unmarshal(value, &currentConfig.Platform); err != nil {
-				return fmt.Errorf("parse platform config: %w", err)
-			}
+		// The KV `platform` key is a PUBLISHED MIRROR, never a source. It is
+		// pushed for readers (the UI) and deliberately has no case here:
+		// applying it would unmarshal a foreign or stale block — platform.ID
+		// included — straight over the authority every identity this process
+		// mints is composed from, after Start established it (ADR-104).
+		// Unknown keys fall through to the default and change nothing, while
+		// subscribers are still notified.
 
 		case "nats":
 			// Update NATS config (already validated above)
@@ -625,8 +761,12 @@ func sanitizeNATSKey(key string) string {
 // Its watcher event either reapplies the idempotent delete or skips a redundant
 // reapply after a later Manager write, while still notifying observers.
 func (cm *Manager) DeleteComponentFromKV(ctx context.Context, name string) error {
+	kvStore, err := cm.store()
+	if err != nil {
+		return err
+	}
 	key := fmt.Sprintf("components.%s", sanitizeNATSKey(name))
-	if err := cm.kvStore.Delete(ctx, key); err != nil {
+	if err := kvStore.Delete(ctx, key); err != nil {
 		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
 			// Already gone from KV; ensure it is also gone from in-memory config.
 			if aerr := cm.updateConfig(key, nil); aerr != nil {
@@ -683,11 +823,15 @@ func (cm *Manager) bumpEngineHighWater(rev uint64) {
 // untouched.
 func (cm *Manager) PutComponentToKV(ctx context.Context, name string, compConfig types.ComponentConfig) error {
 	key := fmt.Sprintf("components.%s", sanitizeNATSKey(name))
+	kvStore, err := cm.store()
+	if err != nil {
+		return err
+	}
 	data, err := json.Marshal(compConfig)
 	if err != nil {
 		return fmt.Errorf("marshal component %s: %w", name, err)
 	}
-	rev, err := cm.kvStore.Put(ctx, key, data)
+	rev, err := kvStore.Put(ctx, key, data)
 	if err != nil {
 		return fmt.Errorf("put component %s to KV: %w", name, err)
 	}
@@ -704,6 +848,16 @@ func (cm *Manager) PutComponentToKV(ctx context.Context, name string, compConfig
 // PushToKV pushes the current configuration to NATS KV
 // This is useful for initial setup or config synchronization
 func (cm *Manager) PushToKV(ctx context.Context) error {
+	kvStore, err := cm.store()
+	if err != nil {
+		return err
+	}
+	return cm.pushToKV(ctx, kvStore)
+}
+
+// pushToKV is PushToKV over an explicit handle, so Start can publish
+// configuration while the handles are still private.
+func (cm *Manager) pushToKV(ctx context.Context, kvStore *natsclient.KVStore) error {
 	cfg := cm.config.Get()
 
 	// Push version first
@@ -714,7 +868,7 @@ func (cm *Manager) PushToKV(ctx context.Context) error {
 			return fmt.Errorf("marshal version: %w", err)
 		}
 		cm.logger.Debug("Pushing version to KV", "version", cfg.Version)
-		rev, err := cm.kvStore.Put(ctx, "version", data)
+		rev, err := kvStore.Put(ctx, "version", data)
 		if err != nil {
 			return fmt.Errorf("push version: %w", err)
 		}
@@ -732,7 +886,7 @@ func (cm *Manager) PushToKV(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("marshal service %s: %w", name, err)
 		}
-		rev, err := cm.kvStore.Put(ctx, key, data)
+		rev, err := kvStore.Put(ctx, key, data)
 		if err != nil {
 			return fmt.Errorf("push service %s: %w", name, err)
 		}
@@ -746,7 +900,7 @@ func (cm *Manager) PushToKV(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("marshal component %s: %w", name, err)
 		}
-		rev, err := cm.kvStore.Put(ctx, key, data)
+		rev, err := kvStore.Put(ctx, key, data)
 		if err != nil {
 			return fmt.Errorf("push component %s: %w", name, err)
 		}
@@ -755,7 +909,7 @@ func (cm *Manager) PushToKV(ctx context.Context) error {
 
 	// Platform
 	if data, err := json.Marshal(cfg.Platform); err == nil && len(data) > 2 { // > 2 to skip empty {}
-		rev, err := cm.kvStore.Put(ctx, "platform", data)
+		rev, err := kvStore.Put(ctx, "platform", data)
 		if err != nil {
 			return fmt.Errorf("push platform: %w", err)
 		}
@@ -764,7 +918,7 @@ func (cm *Manager) PushToKV(ctx context.Context) error {
 
 	// NATS
 	if data, err := json.Marshal(cfg.NATS); err == nil && len(data) > 2 {
-		rev, err := cm.kvStore.Put(ctx, "nats", data)
+		rev, err := kvStore.Put(ctx, "nats", data)
 		if err != nil {
 			return fmt.Errorf("push nats: %w", err)
 		}
@@ -774,7 +928,7 @@ func (cm *Manager) PushToKV(ctx context.Context) error {
 	// Model Registry
 	if cfg.ModelRegistry != nil {
 		if data, err := json.Marshal(cfg.ModelRegistry); err == nil && len(data) > 2 {
-			rev, err := cm.kvStore.Put(ctx, "model_registry", data)
+			rev, err := kvStore.Put(ctx, "model_registry", data)
 			if err != nil {
 				return fmt.Errorf("push model_registry: %w", err)
 			}
@@ -828,22 +982,282 @@ func (cm *Manager) notifySubscribers(path string) {
 	}
 }
 
-// hasKVConfig checks if the KV bucket has any configuration
-func (cm *Manager) hasKVConfig(ctx context.Context) (bool, error) {
-	// Check for any keys in the bucket by listing with limit 1
-	keys, err := cm.kv.Keys(ctx)
+// establishPlatformIdentity establishes the deployment's effective platform.id
+// from the bucket's identity record, before arbitration, watchers, or writes,
+// and answers first-boot detection from the SAME single read (ADR-104).
+//
+// Three branches, one read:
+//
+//	record present           adopt it, refusing a foreign org or a file whose
+//	                         platform.id is not the record's stem
+//	record absent, no other  a genuine first boot: mint the suffix and Create
+//	record absent, others    the bucket predates identity minting: refuse,
+//	                         minting nothing and creating nothing
+//
+// It returns whether the bucket already holds CONFIGURATION — every key except
+// the identity record. Counting the record would make a boot that has just
+// created it look like a subsequent boot: it would skip the initial PushToKV,
+// and syncFromKV would then reset the in-memory service map from a bucket that
+// holds nothing to repopulate it with.
+func (cm *Manager) establishPlatformIdentity(ctx context.Context, kvStore *natsclient.KVStore) (bool, error) {
+	keys, err := kvStore.Keys(ctx)
 	if err != nil {
-		return false, fmt.Errorf("list KV keys: %w", err)
+		// Fail closed: a bucket that cannot be read is a bucket that must not
+		// be minted into. Guessing "first boot" here would Create a second
+		// authority for a deployment that already has one.
+		return false, fmt.Errorf("read config bucket %q to establish platform identity: %w", configBucketName, err)
 	}
 
-	// If we have any keys, we have config
-	return len(keys) > 0, nil
+	recordPresent := false
+	configKeys := 0
+	for _, key := range keys {
+		switch key {
+		case platformIdentityKVKey:
+			recordPresent = true
+		case platformEnvironmentGuardKey:
+			// Framework-internal, like the record: never configuration.
+		default:
+			configKeys++
+		}
+	}
+
+	switch {
+	case recordPresent:
+		if err := cm.claimEnvironment(ctx, kvStore); err != nil {
+			return false, err
+		}
+		return configKeys > 0, cm.adoptPlatformIdentity(ctx, kvStore)
+	case configKeys > 0:
+		declared := cm.config.Get().Platform
+		return false, fmt.Errorf(
+			"config bucket %q holds %d configuration key(s) (%s) but no %q record, so nothing was minted and nothing was written. "+
+				"Either it predates framework-minted platform identity (ADR-104), or another writer created it first — "+
+				"%q is a fixed global name and this package is not its only writer: processor/rule's ConfigManager "+
+				"creates the same bucket for its rules.* keys, and two ConfigManager instances coexist against it by design. "+
+				"Both cases have the same remedy: provision fresh NATS storage for this deployment — ADR-102 decision 7 "+
+				"forbids rewriting a minted authority — or, to adopt the pair this configuration declares, pre-create %q as "+
+				"{\"org\":%q,\"stem\":%q,\"id\":%q}",
+			configBucketName, configKeys, summarizeKeys(keys), platformIdentityKVKey,
+			configBucketName,
+			platformIdentityKVKey, declared.Org, declared.ID, declared.ID,
+		)
+	default:
+		// Guard BEFORE the record, so a crash between the two leaves a safe
+		// state: the same environment proceeds to mint, a second one is
+		// refused.
+		if err := cm.claimEnvironment(ctx, kvStore); err != nil {
+			return false, err
+		}
+		return false, cm.mintPlatformIdentity(ctx, kvStore)
+	}
+}
+
+// claimEnvironment enforces the invariant that at most ONE environment may
+// establish against one configuration bucket.
+//
+// The gh#459 guard compares (org, id, environment) — but only on the
+// subsequent-boot branch. When two managers find the bucket empty, the winner
+// Creates the identity record and the loser adopts it through ErrKeyExists, and
+// BOTH then take the first-boot branch, where that guard never runs: two
+// deployments with the same org and stem but different environments each
+// published their configuration over the other's. Measured 10/10 against real
+// NATS (Codex owner round, 2026-08-31).
+//
+// The claim is an atomic Create on an internal key, so it is decided by the
+// same primitive as the identity record and cannot be raced. It is NOT part of
+// the record: the `{org, stem, id}` shape is a cross-repo read contract and
+// stays exactly that. This guard is also what carries the environment
+// distinction after #1188 retires the gh#459 config-key guard.
+func (cm *Manager) claimEnvironment(ctx context.Context, kvStore *natsclient.KVStore) error {
+	declared := cm.config.Get().Platform.Environment
+	claim, err := json.Marshal(declared)
+	if err != nil {
+		return fmt.Errorf("marshal environment claim: %w", err)
+	}
+
+	if _, err := kvStore.Create(ctx, platformEnvironmentGuardKey, claim); err == nil {
+		return nil
+	} else if !errors.Is(err, natsclient.ErrKVKeyExists) {
+		return fmt.Errorf("claim environment for config bucket %q: %w", configBucketName, err)
+	}
+
+	entry, err := kvStore.Get(ctx, platformEnvironmentGuardKey)
+	if err != nil {
+		return fmt.Errorf("read the environment claim on config bucket %q: %w", configBucketName, err)
+	}
+	var established string
+	if err := json.Unmarshal(entry.Value, &established); err != nil {
+		return fmt.Errorf("parse the environment claim %q on config bucket %q: %w", platformEnvironmentGuardKey, configBucketName, err)
+	}
+	if established != declared {
+		return fmt.Errorf(
+			"config bucket %q was established by platform.environment %q and this deployment declares %q: "+
+				"one bucket serves one environment, and two would publish configuration over each other. "+
+				"Point this deployment at its own NATS storage — or, if this is the only deployment, "+
+				"platform.environment was changed after this bucket was established; the framework binds "+
+				"the environment at first boot and never re-decides it (ADR-102 d7)",
+			configBucketName, established, declared,
+		)
+	}
+	return nil
+}
+
+// summarizeKeys renders at most a handful of bucket keys so the refusal above
+// says WHICH keys were found. "3 configuration keys" sends an operator to go
+// looking; "rules.foo, platform, version" tells them which writer got there
+// first, which is the difference between the two causes the message names.
+func summarizeKeys(keys []string) string {
+	const shown = 5
+	sorted := append([]string(nil), keys...)
+	sort.Strings(sorted)
+	if len(sorted) <= shown {
+		return strings.Join(sorted, ", ")
+	}
+	return strings.Join(sorted[:shown], ", ") + fmt.Sprintf(", and %d more", len(sorted)-shown)
+}
+
+// mintPlatformIdentity mints the entropy suffix on a genuine first boot and
+// records it once. Create, not Put: two co-processes booting against one bucket
+// must converge on ONE authority, and ADR-102 decision 7 forbids the rewrite
+// that would repair a split one. The loser of the race adopts the winner's.
+func (cm *Manager) mintPlatformIdentity(ctx context.Context, kvStore *natsclient.KVStore) error {
+	declared := cm.config.Get().Platform
+	if declared.Org == "" || declared.ID == "" {
+		// There is no authority to suffix. Config.Validate requires both, so
+		// this is an unvalidated configuration reaching Start; minting a
+		// half-empty pair would durably record an authority no identity can be
+		// composed under.
+		return fmt.Errorf(
+			"cannot mint platform identity: platform.org=%q platform.id=%q — both are required (ADR-102) and the configuration reaching Start was never validated",
+			declared.Org, declared.ID,
+		)
+	}
+	suffix, mintErr := mintIdentitySuffix()
+	if mintErr != nil {
+		return fmt.Errorf("mint platform identity suffix: %w", mintErr)
+	}
+	record := platformIdentityRecord{Org: declared.Org, Stem: declared.ID, ID: declared.ID + "-" + suffix}
+
+	// Bound the EFFECTIVE value before it becomes durable, against the
+	// family-table budget and not the declarable one — the suffix is already on
+	// it. Load reserved these seven bytes at the declaration boundary, so a pair
+	// that loaded cannot fail here; this is what makes "no record is ever
+	// created that a later boot rejects" a local property of this function
+	// rather than an argument about a distant check.
+	if err := validateAuthorityPair(record.Org, record.ID); err != nil {
+		return fmt.Errorf("minted platform identity %q is not a usable authority: %w", record.ID, err)
+	}
+
+	data, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("marshal platform identity record: %w", err)
+	}
+	if _, err := kvStore.Create(ctx, platformIdentityKVKey, data); err != nil {
+		if errors.Is(err, natsclient.ErrKVKeyExists) {
+			return cm.adoptPlatformIdentity(ctx, kvStore)
+		}
+		return fmt.Errorf("create platform identity record: %w", err)
+	}
+
+	cm.logger.Info("Minted platform identity",
+		"org", record.Org, "stem", record.Stem, "platform", record.ID)
+	return cm.applyEffectivePlatformID(record.ID)
+}
+
+// mintIdentitySuffix returns the six lowercase hex bytes of the entropy suffix.
+func mintIdentitySuffix() (string, error) {
+	raw := make([]byte, mintedSuffixBytes/2)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("read entropy: %w", err)
+	}
+	return hex.EncodeToString(raw), nil
+}
+
+// adoptPlatformIdentity takes the recorded identifier as this process's
+// effective platform.id. The comparison is its own — it does not depend on the
+// gh#459 guard reading the KV `platform` config key, which #1188 retires.
+func (cm *Manager) adoptPlatformIdentity(ctx context.Context, kvStore *natsclient.KVStore) error {
+	entry, err := kvStore.Get(ctx, platformIdentityKVKey)
+	if err != nil {
+		return fmt.Errorf("read platform identity record %q: %w", platformIdentityKVKey, err)
+	}
+	var record platformIdentityRecord
+	if err := json.Unmarshal(entry.Value, &record); err != nil {
+		return fmt.Errorf("parse platform identity record %q: %w", platformIdentityKVKey, err)
+	}
+	if record.Org == "" || record.Stem == "" || record.ID == "" {
+		return fmt.Errorf(
+			"platform identity record %q is incomplete (org=%q stem=%q id=%q): every field is required; provision fresh NATS storage",
+			platformIdentityKVKey, record.Org, record.Stem, record.ID,
+		)
+	}
+
+	declared := cm.config.Get().Platform
+	if record.Org != declared.Org || declared.ID != record.Stem {
+		// Configuration declares the STEM — one kind of value, so the load
+		// boundary's seven-byte reserve is never applied to something that
+		// already carries the suffix. The full identifier is not a declarable
+		// value: at the legal boundary a 163-byte stem mints to a 170-byte
+		// identifier, which load would refuse before this code ever ran.
+		//
+		// When the file happens to hold exactly the identifier this bucket
+		// recorded, say so. That is a comparison against a STORED value, not
+		// grammar detection — ADR-104 forbids deciding "already minted" by
+		// inspecting the shape of a string, and this decides nothing from the
+		// shape.
+		if record.Org == declared.Org && declared.ID == record.ID {
+			return fmt.Errorf(
+				"config bucket %q records platform identity %q, minted from stem %q, and this configuration declares the minted identifier: "+
+					"declare the stem %q, not the minted identifier %q — the framework composes the effective value and records it here",
+				configBucketName, record.ID, record.Stem, record.Stem, record.ID,
+			)
+		}
+		return fmt.Errorf(
+			"config bucket platform identity mismatch: "+
+				"local org=%q platform=%q, "+
+				"recorded org=%q stem=%q id=%q: "+
+				"shared bucket %q belongs to another platform",
+			declared.Org, declared.ID, record.Org, record.Stem, record.ID, configBucketName,
+		)
+	}
+
+	// An adopted identifier is bounded and grammar-checked exactly as an
+	// effective configured pair is: the record is operator-writable (it is the
+	// knobless opt-out), so it is never trusted further than a configuration
+	// value. The declarable reserve does not apply — nothing is minted onto an
+	// adopted identifier.
+	if err := validateAuthorityPair(record.Org, record.ID); err != nil {
+		return fmt.Errorf("recorded platform identity %q/%q is not a usable authority: %w", record.Org, record.ID, err)
+	}
+
+	cm.logger.Info("Adopted platform identity",
+		"org", record.Org, "stem", record.Stem, "platform", record.ID)
+	return cm.applyEffectivePlatformID(record.ID)
+}
+
+// applyEffectivePlatformID makes the established identifier the authority every
+// identity this process mints is composed under.
+//
+// Mutate re-validates the WHOLE configuration, which is how the effective pair
+// gets bounded — and also means an unrelated defect anywhere in the document
+// now surfaces at Start rather than wherever it used to. That finding leads the
+// error: reading "apply effective platform identity: … streams: ordinary stream
+// bounds are not declared" as an identity failure costs a reader the real
+// cause, so the identity step names itself last.
+func (cm *Manager) applyEffectivePlatformID(id string) error {
+	if err := cm.config.Mutate(func(current *Config) error {
+		current.Platform.ID = id
+		return nil
+	}); err != nil {
+		return fmt.Errorf("%w (found while applying the established platform identity %q; Start validates the whole effective configuration)", err, id)
+	}
+	return nil
 }
 
 // getKVVersion retrieves the version from KV bucket
-func (cm *Manager) getKVVersion(ctx context.Context) (string, error) {
+func (cm *Manager) getKVVersion(ctx context.Context, kvHandle jetstream.KeyValue) (string, error) {
 	// Try to get version from KV
-	entry, err := cm.kv.Get(ctx, "version")
+	entry, err := kvHandle.Get(ctx, "version")
 	if err != nil {
 		// Version key doesn't exist (old config format)
 		return "0.0.0", nil
@@ -863,8 +1277,8 @@ func (cm *Manager) getKVVersion(ctx context.Context) (string, error) {
 // key. Returns found=false when the key is absent or unparseable (an old config
 // format, or a bucket written before platform identity was populated), in which
 // case the caller must not treat the bucket as identity-mismatched.
-func (cm *Manager) kvPlatformIdentity(ctx context.Context) (PlatformConfig, bool) {
-	entry, err := cm.kv.Get(ctx, "platform")
+func (cm *Manager) kvPlatformIdentity(ctx context.Context, kvHandle jetstream.KeyValue) (PlatformConfig, bool) {
+	entry, err := kvHandle.Get(ctx, "platform")
 	if err != nil {
 		return PlatformConfig{}, false
 	}
@@ -883,20 +1297,24 @@ func platformHasIdentity(p PlatformConfig) bool {
 	return p.Org != "" || p.ID != ""
 }
 
-// platformIdentityKey is the identity tuple used to compare two platform
+// platformIdentityTuple is the identity tuple used to compare two platform
 // configs for the cross-app config-bleed guard (gh#459). Environment is
 // included so two instances of the same org+id but different environments
 // (prod vs dev) sharing one NATS are also treated as distinct. A NUL
 // separator (illegal in every segment) is used so the join is unambiguous —
 // {org:"a",id:"b.c"} and {org:"a.b",id:"c"} must not collide.
-func platformIdentityKey(p PlatformConfig) string {
+//
+// Named "tuple", not "key": it is a comparison value, and platformIdentityKVKey
+// beside it is a KV address. Two symbols one letter apart meaning different
+// things is how the wrong one gets called.
+func platformIdentityTuple(p PlatformConfig) string {
 	return p.Org + "\x00" + p.ID + "\x00" + p.Environment
 }
 
 // syncFromKV loads all configuration from KV and applies it
-func (cm *Manager) syncFromKV(ctx context.Context) error {
+func (cm *Manager) syncFromKV(ctx context.Context, kvHandle jetstream.KeyValue) error {
 	// List all keys
-	keys, err := cm.kv.Keys(ctx)
+	keys, err := kvHandle.Keys(ctx)
 	if err != nil {
 		return fmt.Errorf("list KV keys: %w", err)
 	}
@@ -922,7 +1340,7 @@ func (cm *Manager) syncFromKV(ctx context.Context) error {
 		}
 
 		// Get the value
-		entry, err := cm.kv.Get(ctx, key)
+		entry, err := kvHandle.Get(ctx, key)
 		if err != nil {
 			cm.logger.Warn("Failed to get KV entry during sync",
 				"key", key,

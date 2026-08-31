@@ -100,6 +100,45 @@ func KVCatalog() []natsclient.BucketSpec {
 	// account resource, and no retention needed to hold that line.
 	storageReport.History = 10
 
+	// The shared runtime configuration bucket entered the catalog for its
+	// RETENTION guarantee — ADR-104 made it the home of the create-once
+	// platform identity record, and an evicted identity is reminted as a second
+	// authority ADR-102 d7 forbids ever reconciling — and it is OWNER-ONLY for
+	// the same reason one level up.
+	//
+	// Owner-only is not about who may write the bucket: two ConfigManagers
+	// legitimately do, and neither consults this policy (IsFrameworkOwnedBucket
+	// has exactly two callers, both rule update_kv guards). It is about who may
+	// NOT. A generic update_kv into platform_identity plain-Puts over the
+	// create-once record: a forged id whose org and stem match is ADOPTED on the
+	// next boot, because adoption validates grammar and byte budget and nothing
+	// else, so a rule pack could move the authority every entity is minted
+	// under; a forged id that does not match bricks the boot permanently. A
+	// write into platform_identity_guard reopens the concurrent-first-boot race
+	// that key exists to decide. Owner-only closes both through the guard
+	// predicate that already exists.
+	//
+	// The "two writers" the Owner string names are the two ConfigManagers, which
+	// is what a rejection message should tell an operator who legitimately
+	// writes here — not an invitation for a third.
+	//
+	// Its retention kind is STRICT no-lifecycle: verify and refuse, never
+	// reconcile. Stripping a TTL here would be silent repair of a bucket whose
+	// identity may ALREADY have expired, which is the remint ADR-104 exists to
+	// prevent. History 5 preserves the configuration-versioning depth this
+	// bucket has always carried.
+	semstreamsConfig := natsclient.BucketSpec{
+		Name:        BucketSemStreamsConfig,
+		Owner:       "config.Manager (configuration keys) and processor/rule.ConfigManager (rules.*)",
+		Description: "SemStreams runtime configuration",
+		Class:       natsclient.ClassOperational,
+		Retention:   natsclient.RetentionPolicy{Kind: natsclient.RetentionNoLifecycleStrict},
+		Write:       natsclient.WriteOwnerOnly,
+		Posture:     natsclient.PostureOwnerCreates,
+		History:     5,
+		Replicas:    1,
+	}
+
 	return []natsclient.BucketSpec{
 		// Authoritative domain state + graph-ingest's operational tiers.
 		entityStates,
@@ -138,6 +177,7 @@ func KVCatalog() []natsclient.BucketSpec {
 		// Framework operational plane.
 		graphStatus,
 		storageReport,
+		semstreamsConfig,
 	}
 }
 
@@ -246,4 +286,28 @@ func OpenCatalogReader(ctx context.Context, client *natsclient.Client, name stri
 		return nil, err
 	}
 	return &catalogReader{CatalogReader: bucket}, nil
+}
+
+// FrameworkOwnedWriteRefusal explains why a generic KV writer may not write a
+// catalogued bucket, and where the write does belong. It is the ONE home for
+// that wording: the rule engine refuses at three points — load validation,
+// action runtime, and writer acquisition — and three hand-copied sentences
+// drift, as they did when all three told an operator to use "graph mutation
+// APIs" for a bucket holding operational configuration no graph API can write.
+//
+// The remedy is derived from the descriptor's class rather than a hand list, so
+// a new catalog row gets the right one without anybody remembering to add it.
+func FrameworkOwnedWriteRefusal(bucket string) string {
+	spec, ok := SpecFor(bucket)
+	if !ok {
+		return fmt.Sprintf("bucket %q is not in the framework KV catalog", bucket)
+	}
+	remedy := fmt.Sprintf("its writes belong to %s", spec.Owner)
+	switch spec.Class {
+	case natsclient.ClassAuthoritative, natsclient.ClassDerived:
+		remedy = "use the graph mutation APIs"
+	case natsclient.ClassOperational, natsclient.ClassDiagnostic:
+		// The owner string names the API boundary directly.
+	}
+	return fmt.Sprintf("framework-owned bucket %q (owned by %s); %s", bucket, spec.Owner, remedy)
 }

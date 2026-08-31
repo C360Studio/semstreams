@@ -9,11 +9,16 @@ import (
 	"testing"
 )
 
+// testAuthority stands in for a pair the running stack recorded: a declared
+// stem plus the entropy suffix the framework mints at first boot (ADR-104).
+// These tests assert query SHAPE, so any well-formed pair serves.
+const testAuthority = "c360.semstreams-statistical-a1b2c3"
+
 func TestBuildQueryPoolEntityQueriesSelectExactEntity(t *testing.T) {
 	t.Parallel()
 
 	found := 0
-	for _, query := range buildQueryPool() {
+	for _, query := range buildQueryPool(testAuthority) {
 		if query.Name != "entity" {
 			continue
 		}
@@ -32,7 +37,7 @@ func TestBuildQueryPoolPrefixQueriesSelectEntityPage(t *testing.T) {
 	t.Parallel()
 
 	found := 0
-	for _, query := range buildQueryPool() {
+	for _, query := range buildQueryPool(testAuthority) {
 		if query.Name != "prefix" {
 			continue
 		}
@@ -50,7 +55,7 @@ func TestBuildQueryPoolPrefixQueriesSelectEntityPage(t *testing.T) {
 func TestProbeEntitiesSelectsExactEntity(t *testing.T) {
 	t.Parallel()
 
-	entityID := tierEntity("sensor.environmental.temperature.temp-sensor-001")
+	entityID := tierEntity(testAuthority, "sensor.environmental.temperature.temp-sensor-001")
 	var observedQuery string
 	httpClient := &http.Client{Transport: probeTransport(func(r *http.Request) (*http.Response, error) {
 		var request struct {
@@ -77,7 +82,7 @@ func TestProbeEntitiesSelectsExactEntity(t *testing.T) {
 func TestProbeEntitiesRequiresCompleteExactEntityEvidence(t *testing.T) {
 	t.Parallel()
 
-	entityID := tierEntity("sensor.environmental.temperature.temp-sensor-001")
+	entityID := tierEntity(testAuthority, "sensor.environmental.temperature.temp-sensor-001")
 	tests := map[string]string{
 		"null exact result":       `{"data":{"entity":null}}`,
 		"missing nested entity":   `{"data":{"entity":{"entity":null,"kvRevision":1}}}`,
@@ -104,7 +109,7 @@ func TestProbeEntitiesRequiresCompleteExactEntityEvidence(t *testing.T) {
 func TestProbeEntitiesWithoutConfigReportsAllMissing(t *testing.T) {
 	t.Parallel()
 
-	entityIDs := []string{tierEntity("sensor.environmental.temperature.temp-sensor-001")}
+	entityIDs := []string{tierEntity(testAuthority, "sensor.environmental.temperature.temp-sensor-001")}
 	missing := (&Scenario{}).probeEntities(context.Background(), http.DefaultClient, entityIDs)
 	if len(missing) != 1 || missing[0] != entityIDs[0] {
 		t.Fatalf("missing = %v, want %v", missing, entityIDs)

@@ -41,5 +41,8 @@ func TestStartValidatedConfigManagerPropagatesForeignPlatformIdentityMismatch(t 
 	require.Nil(t, effective)
 	require.ErrorContains(t, err, "start config manager: config bucket platform identity mismatch")
 	require.ErrorContains(t, err, `local org="local" platform="candidate"`)
-	require.ErrorContains(t, err, `stored org="foreign" platform="existing"`)
+	// Since ADR-104 the mismatch is decided against the durable
+	// platform_identity record the foreign boot minted, not against the mutable
+	// `platform` config key.
+	require.ErrorContains(t, err, `recorded org="foreign" stem="existing"`)
 }

@@ -10,7 +10,7 @@ import (
 func TestHasExactEntityDigestLabelRequiresLabelOnMeasuredFixture(t *testing.T) {
 	t.Parallel()
 
-	entityID := config.TierEntityID(config.VariantSemantic, "document.content.operations.doc-ops-001")
+	entityID := config.TierStemEntityID(config.VariantSemantic, "document.content.operations.doc-ops-001")
 	const title = "Forklift Operation Manual"
 
 	tests := []struct {
@@ -30,7 +30,7 @@ func TestHasExactEntityDigestLabelRequiresLabelOnMeasuredFixture(t *testing.T) {
 		{
 			name: "title on a different row cannot replace ID join",
 			body: `{"entity_digests":[{"id":"` +
-				config.TierEntityID(config.VariantSemantic, "document.content.operations.other") +
+				config.TierStemEntityID(config.VariantSemantic, "document.content.operations.other") +
 				`","label":"` + title + `"}]}`,
 		},
 	}

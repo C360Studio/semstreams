@@ -259,7 +259,13 @@ func TestComponentManagerBootFindingsHonourExplicitStreams(t *testing.T) {
 	manager, err := bootComponentManager(t, testClient, registry, config.ComponentConfigs{
 		"pub": processorInstance("core-publisher"),
 		"sub": processorInstance("stream-consumer"),
-	}, config.StreamConfigs{"BOOT": {Subjects: []string{"boot.>"}}})
+	}, config.StreamConfigs{"BOOT": {
+		Subjects: []string{"boot.>"},
+		// Bounds declared because Start now validates the effective
+		// configuration when it applies the established platform identity
+		// (ADR-104); the finding under test is stream_requirement, not bounds.
+		MaxAge: "24h", MaxBytes: 1 << 20, Discard: "old",
+	}})
 	if err != nil {
 		t.Fatalf("boot: %v", err)
 	}

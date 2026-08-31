@@ -16,7 +16,10 @@ import (
 // different platform.id values, and every example processor mints positions
 // 1-2 from the composition root's platform.org / platform.id and nothing else
 // (ADR-102 d2) — so an ID assembled from a literal is right in at most one
-// tier and reports "entity not found" in the others.
+// tier and reports "entity not found" in the others. Since ADR-104 a literal is
+// right in NO tier: the framework mints an entropy suffix onto platform.id at
+// first boot, so the pair is observed from the running stack rather than read
+// out of the shipped configuration.
 //
 // It fails rather than guessing: a wrong authority does not surface here, it
 // surfaces stages later as a missing entity, which is precisely the silent
@@ -26,7 +29,14 @@ func (s *TieredScenario) tierMinter(result *Result) (func(suffix string) string,
 	if variant == "" {
 		return nil, fmt.Errorf("tier variant is unresolved, so the deployment authority every fixture entity ID is minted under is unknown; pass --variant or let Execute detect it before this stage")
 	}
-	return func(suffix string) string { return config.TierEntityID(variant, suffix) }, nil
+	// Execute observes the authority once per run and caches it. An empty value
+	// here means a stage is running outside Execute, and guessing the pair from
+	// the shipped config would be wrong by exactly the minted suffix (ADR-104).
+	if s.effectiveAuthority == "" {
+		return nil, fmt.Errorf("the deployment authority has not been read from semstreams_config/platform_identity, so no fixture entity ID can be minted; Execute reads it before any stage runs")
+	}
+	authority := s.effectiveAuthority
+	return func(suffix string) string { return authority + "." + suffix }, nil
 }
 
 // Entity validation functions for tiered E2E tests

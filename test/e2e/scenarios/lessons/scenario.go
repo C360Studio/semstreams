@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -26,13 +27,15 @@ import (
 	"github.com/c360studio/semstreams/vocabulary/builtins"
 )
 
-// evidenceEntityID is minted under the CORE stack's own authority — the lessons
-// tier boots docker/compose/e2e.yml, the same composition the core tier does —
-// composed from e2econfig.CoreAuthority rather than restated. A hardcoded copy
-// is a second home for a value one place owns, and the graph refuses any pair
-// but the deployment's (ADR-102 d5), so drift here is a refused create three
-// stages later rather than a compile error (review MEDIUM-5).
-var evidenceEntityID = e2econfig.CoreAuthority + ".test.fixture.evidence.product-lesson"
+// evidenceEntityIDFor mints the evidence entity under the authority the
+// scenario's config carries. The lessons tier boots docker/compose/e2e.yml, the
+// same composition the core tier does; Setup replaces the declared stem with
+// the pair the deployment RECORDS (ADR-104), so nothing here predicts it. The
+// graph refuses any pair but the deployment's (ADR-102 d5), which is why the
+// value has exactly one home — config.Org / config.Platform.
+func evidenceEntityIDFor(cfg *config) string {
+	return cfg.Org + "." + cfg.Platform + ".test.fixture.evidence.product-lesson"
+}
 
 const (
 	evidenceContractName    = "e2e.lessons.evidence"
@@ -58,16 +61,22 @@ type config struct {
 }
 
 func defaultConfig() *config {
+	// The declared stem of the core stack this tier boots, from the one place
+	// that owns it. Setup replaces Platform with the identifier the deployment
+	// RECORDS, which carries the entropy suffix minted at first boot (ADR-104);
+	// until then these values are the cross-check, not the authority.
+	org, platform, _ := strings.Cut(e2econfig.CoreAuthorityStem, ".")
 	return &config{
 		NATSURL:          e2econfig.DefaultEndpoints.NATS,
-		Org:              "c360",
-		Platform:         "streamkit-pure",
+		Org:              org,
+		Platform:         platform,
 		OperationTimeout: e2econfig.DefaultTestConfig.Timeout,
 	}
 }
 
 type validationClient interface {
 	Client() *natsclient.Client
+	GetKV(ctx context.Context, bucket, key string) ([]byte, error)
 	Close(context.Context) error
 }
 
@@ -105,8 +114,12 @@ type Scenario struct {
 
 	trackedIDs []string
 
+	// evidence is the evidence entity ID under the OBSERVED authority; Setup
+	// fills it once the deployment has been asked which pair it mints under.
+	evidence string
+
 	openNATS func(context.Context, string) (validationClient, error)
-	compose  func(*natsclient.Client, time.Duration) (scenarioClients, error)
+	compose  func(*natsclient.Client, time.Duration, string) (scenarioClients, error)
 }
 
 // NewScenario constructs the standalone direct-product lesson scenario over
@@ -140,7 +153,20 @@ func (s *Scenario) Setup(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("open validation NATS client: %w", err)
 	}
-	clients, composeErr := s.compose(owner.Client(), s.config.OperationTimeout)
+	// Ask the deployment which authority it mints under before composing a
+	// single entity ID from it. The declared stem is only the cross-check:
+	// since ADR-104 the effective platform.id carries a minted entropy suffix.
+	authority, authErr := e2econfig.EffectiveAuthority(ctx, owner, s.config.Org+"."+s.config.Platform)
+	if authErr != nil {
+		closeErr := owner.Close(ctx)
+		return errors.Join(authErr, closeErr)
+	}
+	org, platform, _ := strings.Cut(authority, ".")
+	s.config.Org, s.config.Platform = org, platform
+	s.fixture = newProductLessonFixture(s.config)
+	s.evidence = evidenceEntityIDFor(s.config)
+
+	clients, composeErr := s.compose(owner.Client(), s.config.OperationTimeout, s.evidence)
 	if composeErr != nil {
 		closeErr := owner.Close(ctx)
 		return errors.Join(fmt.Errorf("compose lesson clients: %w", composeErr), closeErr)
@@ -150,7 +176,7 @@ func (s *Scenario) Setup(ctx context.Context) error {
 	return nil
 }
 
-func composeScenarioClients(raw *natsclient.Client, timeout time.Duration) (scenarioClients, error) {
+func composeScenarioClients(raw *natsclient.Client, timeout time.Duration, evidenceID string) (scenarioClients, error) {
 	// Match both production composition roots: projection contracts validate
 	// semantic declarations explicitly, so first-party vocabulary registration
 	// must precede local mutation-client construction.
@@ -159,7 +185,7 @@ func composeScenarioClients(raw *natsclient.Client, timeout time.Duration) (scen
 		NATS: raw,
 		Contracts: []projection.Contract{
 			agentictools.LessonProjectionContract(),
-			evidenceContract(),
+			evidenceContract(evidenceID),
 		},
 		Timeout: timeout,
 	})
@@ -240,19 +266,19 @@ func runStages(ctx context.Context, result *scenarios.Result, stages []stage) (s
 }
 
 func (s *Scenario) createAndProveProposed(ctx context.Context) error {
-	s.track(evidenceEntityID)
-	receipt, err := s.clients.mutations.Create(ctx, evidenceCreateMutation())
+	s.track(s.evidence)
+	receipt, err := s.clients.mutations.Create(ctx, evidenceCreateMutation(s.evidence))
 	if err != nil {
 		return fmt.Errorf("create evidence fixture: %w", err)
 	}
 	if receipt.Commit != projection.CommitVerified {
 		return fmt.Errorf("evidence create commit = %q, want %q", receipt.Commit, projection.CommitVerified)
 	}
-	evidence, err := s.clients.mutations.ReadAuthoritative(ctx, evidenceEntityID)
+	evidence, err := s.clients.mutations.ReadAuthoritative(ctx, s.evidence)
 	if err != nil {
 		return fmt.Errorf("read evidence authority: %w", err)
 	}
-	if err := requireEvidenceAuthority(evidence); err != nil {
+	if err := requireEvidenceAuthority(evidence, s.evidence); err != nil {
 		return err
 	}
 
@@ -375,19 +401,19 @@ func (s *Scenario) Teardown(ctx context.Context) error {
 	return owner.Close(ctx)
 }
 
-func evidenceContract() projection.Contract {
+func evidenceContract(evidenceID string) projection.Contract {
 	return projection.Contract{
 		Name:            evidenceContractName,
 		MessageType:     message.Type{Domain: "test", Category: "fixture", Version: "v1"},
-		EntityPattern:   evidenceEntityID,
+		EntityPattern:   evidenceID,
 		BirthPredicates: []string{vocabulary.DCTermsTitle},
 		IndexingProfile: "control",
 	}
 }
 
-func evidenceCreateMutation() projection.CreateMutation {
+func evidenceCreateMutation(evidenceID string) projection.CreateMutation {
 	triple := message.Triple{
-		Subject: evidenceEntityID, Predicate: vocabulary.DCTermsTitle,
+		Subject: evidenceID, Predicate: vocabulary.DCTermsTitle,
 		Object: "product lesson E2E evidence", Source: fixtureSource,
 		Context: evidenceCreateRequestID, Timestamp: fixtureTimestamp,
 		Confidence: 1,
@@ -395,7 +421,7 @@ func evidenceCreateMutation() projection.CreateMutation {
 	return projection.CreateMutation{
 		Contract: evidenceContractName,
 		Entity: &graph.EntityState{
-			ID: evidenceEntityID, MessageType: message.Type{Domain: "test", Category: "fixture", Version: "v1"},
+			ID: evidenceID, MessageType: message.Type{Domain: "test", Category: "fixture", Version: "v1"},
 			Version: 1, UpdatedAt: fixtureTimestamp,
 		},
 		Triples: []message.Triple{triple},
@@ -419,7 +445,7 @@ func newProductLessonFixture(config *config) productLessonFixture {
 		{agvocab.LessonSummary, "Scope retention sweeps to entity-owned buckets."},
 		{agvocab.LessonDetail, "Entity-owned retention prevents unrelated state from being swept together."},
 		{agvocab.LessonInjectionForm, lessonInjectionForm},
-		{agvocab.LessonEvidence, evidenceEntityID},
+		{agvocab.LessonEvidence, evidenceEntityIDFor(config)},
 		{agvocab.LessonAppliesTo, lessonScopeKey},
 	}
 	triples := make([]message.Triple, 0, len(objects))
@@ -436,15 +462,15 @@ func newProductLessonFixture(config *config) productLessonFixture {
 	}
 }
 
-func requireEvidenceAuthority(exact *graph.ExactEntity) error {
-	want := evidenceCreateMutation()
+func requireEvidenceAuthority(exact *graph.ExactEntity, evidenceID string) error {
+	want := evidenceCreateMutation(evidenceID)
 	if exact == nil || exact.Entity == nil {
 		return errors.New("evidence authority is empty")
 	}
 	if exact.KVRevision == 0 {
 		return errors.New("evidence authority has zero KV revision")
 	}
-	if exact.Entity.ID != evidenceEntityID || exact.Entity.MessageType != want.Entity.MessageType ||
+	if exact.Entity.ID != evidenceID || exact.Entity.MessageType != want.Entity.MessageType ||
 		exact.Entity.Version != 1 || !exact.Entity.UpdatedAt.Equal(fixtureTimestamp) {
 		return fmt.Errorf("evidence envelope = %+v, want fixed test.fixture.v1 envelope", exact.Entity)
 	}

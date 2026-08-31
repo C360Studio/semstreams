@@ -52,10 +52,15 @@ func LongestFrameworkIdentityFamily() FrameworkIdentityFamily {
 	return longest
 }
 
-// MaxAuthorityPairBytes is the configuration-load budget for
+// MaxAuthorityPairBytes is the family-table budget for
 // len(platform.org)+len(platform.id): the canonical bound minus the longest
 // fixed family suffix, so every framework identity fits under every admitted
 // authority. 170 bytes while the rule trigger family binds.
+//
+// It bounds the EFFECTIVE pair. Configuration load bounds the DECLARED pair
+// more tightly, reserving the entropy suffix the framework mints onto
+// platform.id at first boot (ADR-104); that reserve lives with the mint, in
+// package config, because this table knows nothing about it.
 func MaxAuthorityPairBytes() int {
 	return MaxEntityIDBytes - LongestFrameworkIdentityFamily().FixedBytes()
 }

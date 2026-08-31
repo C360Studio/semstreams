@@ -78,7 +78,7 @@ func TestProductLessonFixtureHasAcceptedIdentityAndCompleteTuples(t *testing.T) 
 		"agent.lesson.summary":        "Scope retention sweeps to entity-owned buckets.",
 		"agent.lesson.detail":         "Entity-owned retention prevents unrelated state from being swept together.",
 		"agent.lesson.injection-form": "Scope retention sweeps to entity-owned buckets.",
-		"agent.lesson.evidence":       evidenceEntityID,
+		"agent.lesson.evidence":       evidenceEntityIDFor(defaultConfig()),
 		"agent.lesson.applies-to":     "tag:product-lesson-e2e",
 	}
 	for _, triple := range fixture.triples {
@@ -102,21 +102,22 @@ func TestProductLessonFixtureHasAcceptedIdentityAndCompleteTuples(t *testing.T) 
 }
 
 func TestEvidenceContractAndFixtureAreExact(t *testing.T) {
-	contract := evidenceContract()
+	evidenceID := evidenceEntityIDFor(defaultConfig())
+	contract := evidenceContract(evidenceID)
 	if contract.Name != "e2e.lessons.evidence" || contract.MessageType.Key() != "test.fixture.v1" ||
-		contract.EntityPattern != evidenceEntityID || contract.IndexingProfile != "control" {
+		contract.EntityPattern != evidenceID || contract.IndexingProfile != "control" {
 		t.Fatalf("evidence contract = %+v", contract)
 	}
 	if !reflect.DeepEqual(contract.BirthPredicates, []string{vocabulary.DCTermsTitle}) || len(contract.Groups) != 0 {
 		t.Fatalf("evidence predicates/groups = %v/%v", contract.BirthPredicates, contract.Groups)
 	}
-	mutation := evidenceCreateMutation()
-	if mutation.Entity.ID != evidenceEntityID || mutation.Entity.MessageType.Key() != "test.fixture.v1" ||
+	mutation := evidenceCreateMutation(evidenceID)
+	if mutation.Entity.ID != evidenceID || mutation.Entity.MessageType.Key() != "test.fixture.v1" ||
 		mutation.Entity.Version != 1 || !mutation.Entity.UpdatedAt.Equal(fixtureTimestamp) {
 		t.Fatalf("evidence entity = %+v", mutation.Entity)
 	}
 	if err := requireExactTriples(mutation.Triples, []message.Triple{{
-		Subject: evidenceEntityID, Predicate: vocabulary.DCTermsTitle,
+		Subject: evidenceID, Predicate: vocabulary.DCTermsTitle,
 		Object: "product lesson E2E evidence", Source: fixtureSource,
 		Context: evidenceCreateRequestID, Timestamp: fixtureTimestamp, Confidence: 1,
 	}}); err != nil {
@@ -124,8 +125,8 @@ func TestEvidenceContractAndFixtureAreExact(t *testing.T) {
 	}
 	exact := &graph.ExactEntity{Entity: mutation.Entity.Clone(), KVRevision: 1}
 	exact.Entity.Triples = append([]message.Triple(nil), mutation.Triples...)
-	exact.Entity.Triples = append(exact.Entity.Triples, canonicalProfileTriple(evidenceEntityID, vocabulary.IndexingProfileControl))
-	if err := requireEvidenceAuthority(exact); err != nil {
+	exact.Entity.Triples = append(exact.Entity.Triples, canonicalProfileTriple(evidenceID, vocabulary.IndexingProfileControl))
+	if err := requireEvidenceAuthority(exact, evidenceID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -209,7 +210,7 @@ func TestAuthorityComparatorsRequireOneCanonicalIndexingProfileStamp(t *testing.
 			exact.Entity.Triples[len(exact.Entity.Triples)-1].Source = "caller"
 		}},
 		{name: "wrong subject", mutate: func(exact *graph.ExactEntity) {
-			exact.Entity.Triples[len(exact.Entity.Triples)-1].Subject = evidenceEntityID
+			exact.Entity.Triples[len(exact.Entity.Triples)-1].Subject = evidenceEntityIDFor(defaultConfig())
 		}},
 		{name: "confidence", mutate: func(exact *graph.ExactEntity) {
 			exact.Entity.Triples[len(exact.Entity.Triples)-1].Confidence = 0.5
@@ -286,7 +287,7 @@ func TestSetupUsesOneNATSOwnerAndTeardownClosesItOnce(t *testing.T) {
 		return owner, nil
 	}
 	composeCalls := 0
-	s.compose = func(got *natsclient.Client, _ time.Duration) (scenarioClients, error) {
+	s.compose = func(got *natsclient.Client, _ time.Duration, _ string) (scenarioClients, error) {
 		composeCalls++
 		if got != raw {
 			t.Fatalf("compose client = %p, want sole owner client %p", got, raw)
@@ -325,7 +326,7 @@ func TestComposeScenarioClientsRegistersBuiltinsBeforeContractValidation(t *test
 	}
 
 	raw := &natsclient.Client{}
-	first, err := composeScenarioClients(raw, time.Second)
+	first, err := composeScenarioClients(raw, time.Second, evidenceEntityIDFor(defaultConfig()))
 	if err != nil {
 		t.Fatalf("first composition: %v", err)
 	}
@@ -345,7 +346,7 @@ func TestComposeScenarioClientsRegistersBuiltinsBeforeContractValidation(t *test
 	if err := lessonContract.Validate(); err != nil {
 		t.Fatalf("lesson contract after composition: %v", err)
 	}
-	if _, err := composeScenarioClients(raw, time.Second); err != nil {
+	if _, err := composeScenarioClients(raw, time.Second, evidenceEntityIDFor(defaultConfig())); err != nil {
 		t.Fatalf("idempotent second composition: %v", err)
 	}
 }
@@ -369,7 +370,7 @@ func TestSetupRollbackJoinsCompositionAndCloseErrors(t *testing.T) {
 	owner := &fakeValidationClient{client: &natsclient.Client{}, closeErr: closeErr}
 	s := NewScenario()
 	s.openNATS = func(context.Context, string) (validationClient, error) { return owner, nil }
-	s.compose = func(*natsclient.Client, time.Duration) (scenarioClients, error) {
+	s.compose = func(*natsclient.Client, time.Duration, string) (scenarioClients, error) {
 		return scenarioClients{}, composeErr
 	}
 	err := s.Setup(t.Context())
@@ -487,9 +488,20 @@ type fakeValidationClient struct {
 	client     *natsclient.Client
 	closeCalls int
 	closeErr   error
+	// identity is what the fake deployment records at
+	// semstreams_config/platform_identity; empty means the stem is adopted
+	// unsuffixed, which is the operator-provisioned form.
+	identity string
 }
 
 func (c *fakeValidationClient) Client() *natsclient.Client { return c.client }
+func (c *fakeValidationClient) GetKV(_ context.Context, _, _ string) ([]byte, error) {
+	if c.identity != "" {
+		return []byte(c.identity), nil
+	}
+	cfg := defaultConfig()
+	return []byte(`{"org":"` + cfg.Org + `","stem":"` + cfg.Platform + `","id":"` + cfg.Platform + `"}`), nil
+}
 func (c *fakeValidationClient) Close(context.Context) error {
 	c.closeCalls++
 	return c.closeErr

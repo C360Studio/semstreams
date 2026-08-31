@@ -66,7 +66,7 @@ func TestKVCatalog_EveryRowValidates(t *testing.T) {
 		assert.False(t, seen[spec.Name], "catalog row %q must be declared exactly once", spec.Name)
 		seen[spec.Name] = true
 	}
-	assert.Len(t, seen, 19, "the catalog carries the 19 retained framework-guaranteed buckets")
+	assert.Len(t, seen, 20, "the catalog carries the 20 retained framework-guaranteed buckets")
 }
 
 // TestKVCatalog_DeclaredPolicies pins the architect-census policy decisions
@@ -95,9 +95,35 @@ func TestKVCatalog_DeclaredPolicies(t *testing.T) {
 
 	// GRAPH_STATUS keeps its readiness replay depth.
 	assert.Equal(t, uint8(3), spec(BucketGraphStatus).History)
-	// Every catalog bucket is owner-only and no-lifecycle.
+
+	// The shared runtime configuration bucket is catalogued for BOTH guarantees.
+	// Owner-only by owner ruling 2026-08-31 (#1168 comment 5479005060): once
+	// identity correctness state shares a bucket, letting a generic rule writer
+	// onto the rest of the configuration plane is the wrong boundary, and the
+	// existing owner predicate closes the whole class without a remembered-key
+	// list. Its retention is STRICT — verify and refuse, never reconcile —
+	// because the platform identity it holds is create-once and a silent TTL
+	// strip would conceal that the identity may already have expired (ADR-104;
+	// ADR-102 d7).
+	sharedConfig := spec(BucketSemStreamsConfig)
+	assert.Equal(t, natsclient.RetentionNoLifecycleStrict, sharedConfig.Retention.Kind)
+	assert.Equal(t, uint8(5), sharedConfig.History)
+	assert.Equal(t, natsclient.ClassOperational, sharedConfig.Class)
+
+	// EVERY catalog bucket is owner-only, this one included: a generic update_kv
+	// into platform_identity would plain-Put over create-once state that the
+	// next boot ADOPTS after checking only grammar and byte budget.
 	for _, s := range KVCatalog() {
 		assert.Equal(t, natsclient.WriteOwnerOnly, s.Write, "%s must be owner-only", s.Name)
+	}
+
+	// Retention: no-lifecycle everywhere, with the shared configuration bucket
+	// the ONE strict row (verify and refuse rather than reconcile). The
+	// exception is named, not widened — a second strict row still trips this.
+	for _, s := range KVCatalog() {
+		if s.Name == BucketSemStreamsConfig {
+			continue
+		}
 		assert.Equal(t, natsclient.RetentionNoLifecycle, s.Retention.Kind,
 			"%s must declare no lifecycle retention", s.Name)
 	}
@@ -132,7 +158,7 @@ func TestFrameworkOwnedBuckets_DerivesFromWritePolicy(t *testing.T) {
 // TestFrameworkOwnedBuckets_ProductionView pins the production derived view.
 func TestFrameworkOwnedBuckets_ProductionView(t *testing.T) {
 	owned := FrameworkOwnedBuckets()
-	assert.Len(t, owned, 19)
+	assert.Len(t, owned, 20)
 	for _, name := range []string{
 		BucketEntityStates, BucketPredicateIndex, BucketIncomingIndex, BucketOutgoingIndex,
 		BucketAliasIndex, BucketNameIndex, BucketEntitySuffixIndex, BucketSpatialIndex,
@@ -140,6 +166,11 @@ func TestFrameworkOwnedBuckets_ProductionView(t *testing.T) {
 		BucketEmbeddingIndex, BucketEmbeddingDedup, BucketCommunityIndex,
 		BucketCommunitySummaries, BucketAnomalyIndex,
 		BucketGraphIngestAppliedSeq, BucketToolCallOutcomes, BucketGraphStatus, BucketStorageReport,
+		// The shared configuration bucket joined the guard set with ADR-104: a
+		// generic update_kv into platform_identity forges an authority the next
+		// boot adopts, and one into platform_identity_guard reopens the
+		// concurrent-first-boot race.
+		BucketSemStreamsConfig,
 	} {
 		assert.True(t, IsFrameworkOwnedBucket(name), "%s must be framework-owned", name)
 	}

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/config"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
@@ -570,12 +571,25 @@ func (rcm *ConfigManager) ensureKVStore(ctx context.Context) (*natsclient.KVStor
 
 	// Remote acquisition is retryable. Publish only the successful handle;
 	// concurrent creators converge on the one authoritative bucket.
-	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      "semstreams_config",
-		Description: "SemStreams runtime configuration",
-		History:     5,
-	})
+	//
+	// Through the catalog's owner seam rather than a direct create: this bucket
+	// carries a framework RETENTION guarantee (ADR-104 put the create-once
+	// platform identity record in it), and the framework-bucket-catalog
+	// contract says one descriptor governs every such bucket. Two creators
+	// spelling their own configs is the split-owner shape that catalog exists
+	// to remove — whichever of them wins the race, the policy is the same one.
+	kv, err := graph.EnsureCatalogBucket(ctx, natsClient, graph.BucketSemStreamsConfig)
 	if err != nil {
+		// Preserve the classification. Acquisition can fail two ways with
+		// opposite operator meanings: a transient NATS problem worth retrying,
+		// and the descriptor's strict-retention refusal — a permanent,
+		// invalid-configuration state (this bucket carries a TTL or a size cap
+		// and must be reprovisioned). Re-wrapping the refusal as transient
+		// would tell a retry loop to keep trying something that can never
+		// succeed.
+		if errs.IsInvalid(err) {
+			return nil, errs.WrapInvalid(err, "ConfigManager", "ensureKVStore", "acquire the shared configuration bucket")
+		}
 		return nil, errs.WrapTransient(err, "ConfigManager", "ensureKVStore", "create/get KV bucket")
 	}
 	created := natsClient.NewKVStore(kv)
