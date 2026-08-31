@@ -205,18 +205,22 @@ with a matching `md5 -q`. Verbatim failure lines below.
       `go test ./test/contract/...`; `task entity-id:audit`; `task schema:generate && git diff --exit-code schemas/ specs/`;
       `openspec validate federation-identity --strict --no-interactive`; `go mod tidy -diff`;
       `bash scripts/inventory-verify.sh docs/proposals/gh1168-federation-identity-pins.md`.
-- [x] 6.2 Covering e2e tiers, one at a time on an idle host, results verbatim. Re-run at `88fdacfc` after the third
-      re-review flipped the shared bucket to owner-only and moved the rule engine's own acquisition; the
-      `4de29306`, `ede202e4` and `e09df6f2` runs are superseded.
+- [x] 6.2 Covering e2e tiers, one at a time on an idle host, results verbatim. The rule-engine tiers were re-run at
+      `2d5b14b8` after the fifth re-review changed all three `update_kv` refusal messages; `core` and `lifecycle`
+      stand from `88fdacfc`, whose boot path this round did not touch. Earlier runs are superseded.
 - [x] 6.2a `task e2e:core` EXIT=0 — `[OK] platform_identity records {org, stem, id} and the effective pair carries
       the minted suffix`; `[OK] A pre-identity bucket refuses LOUD, exits nonzero, and creates no identity record`.
       The stack now also passes the bucket-policy check and the environment claim on every boot.
 - [x] 6.2b `task e2e:lifecycle` EXIT=0.
 - [x] 6.2c `task e2e:structural` EXIT=0 — `entity_count:127 validation_errors:0 rules_firings_count:6` under
-      `c360.semstreams-e2e-structural-f37843`. Rules still fire after the ownership flip and the writer's new
-      acquisition branch. Re-run for the re-review because `processor/rule`'s own bucket
+      `c360.semstreams-e2e-structural-f37843`; re-run at `2d5b14b8` after the refusal-wording change, same
+      `entity_count:127 validation_errors:0 rules_firings_count:6`. Rules still fire after the ownership flip, the
+      writer's new acquisition branch, and the shared refusal wording. Re-run for the re-review because `processor/rule`'s own bucket
       acquisition moved to the catalog descriptor, and this is the tier that exercises it.
-- [x] 6.2i `task e2e:deep-research` EXIT=0 — `evidence_entries:2`. This is the tier that exercises
+- [x] 6.2i `task e2e:deep-research` EXIT=0 — `evidence_entries:2` at `88fdacfc`, and `evidence_entries:3` on the
+      re-run at `2d5b14b8` after the refusal-wording change. The count varies with the mock LLM's fan-out; what the
+      assertion needs is that it stays non-zero, because the failure mode of an over-eager guard is a write silently
+      ceasing. This is the tier that exercises
       `RESEARCH_EVIDENCE`, the ONE shipped `update_kv` target: it proves the ownership flip did not narrow a guard
       onto a legitimate consumer, and that the writer's non-catalogued acquisition path is unchanged. A positive
       evidence count rather than a bare green exit, because the risk here is a write silently ceasing.
