@@ -105,6 +105,11 @@ until the owner explicitly accepts the reviewed design.
   a published layer is a finding, not hygiene.
 - **Re-gate grown exported surface.** Diff the change's actual new exports against the set its shape review named;
   any excess re-enters the gate before merge.
+- **A reworded requirement heading strands its citations.** OpenSpec cannot rename a requirement — rewording is
+  REMOVE + ADD — so a delta that removes or rewords a `### Requirement:` heading silently invalidates every
+  `// spec:` annotation quoting the old text. On any such delta, grep `// spec:` for the removed heading and
+  require the citations updated in the same change; otherwise the breakage surfaces later as a dangling-citation
+  finding against an author who did not cause it.
 - **Reject artifact-free evidence.** A gate/measurement claim with no in-tree or CI artifact is recorded UNVERIFIED;
   flag any such claim asserted as fact.
 - Confirm code matches the active OpenSpec target, and the target is consistent with current specs and approved ADRs.
@@ -237,6 +242,16 @@ until the owner explicitly accepts the reviewed design.
 - Tests drive production constructors, registries, codecs, NATS handlers, and wire envelopes rather than only helpers.
 - Network listeners use ephemeral ports. Tests mutating global state such as `slog.SetDefault` are not parallel.
 - Wall-clock assertions have a rationale and realistic tolerance; concurrent tests use explicit synchronization.
+- A new **exported** parse/decode/validate surface without a fuzz target and seed corpus is a finding; check the
+  harness asserts an invariant, not a table of expected outputs replayed through `f.Add`.
+- A property-based test is reviewed against its citation, not the diff: require the
+  `// spec: <capability> / <requirement heading>` annotation, read the cited clause, and confirm the property
+  states it — resolving the citation against `openspec/specs/<capability>/spec.md` OR the active change's delta
+  under `openspec/changes/<id>/specs/`, since an in-flight requirement lives only in the delta. A
+  property that mirrors the implementation's branching or recomputes the expected value with the same algorithm is
+  the test-that-reconstructs finding at property scale; a dangling citation is itself a finding. Verify the
+  generator reaches every boundary the clause names — a bound the generator cannot hit is unguarded (the survived
+  mutation on PR #1213).
 - Breaking changes have relevant e2e evidence before the commit lands, including the full ingest-to-query path.
 - Paid or prolonged operations use validated monitors plus active polling of authoritative state every 30-60 seconds.
 
