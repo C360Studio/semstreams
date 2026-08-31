@@ -49,9 +49,9 @@ package this replaces survives in PR history at `b0e92253`. Deviations from the 
       `sendResponse` on the response subject, each naming `reply_to`.
 - [ ] 3.4 `agentic/agentrun/agentrun.go`: refuse non-canonical `rootLoopID` (classified invalid, unexported
       sentinel per the #1148 pattern at `:233-239`) before `:290`; doc comment: the token contract + the
-      origin-mismatch backstop; mismatch error text UNTOUCHED (#1174 stays its own issue unless owner says else).
+      origin-mismatch backstop; mismatch error text UNTOUCHED (#1174 stays its own issue — ruled 2026-08-31).
 - [ ] 3.5 `frameworkcapabilities/graphresearch/executor.go`: default generator → `uuid.NewString()`; DELETE
-      `WithResearchGraphIDGenerator` (`executor.go:102-110`, zero consumers — its only caller,
+      `WithResearchGraphIDGenerator` (`executor.go:102-110`, zero production consumers — its only caller,
       `executor_test.go:68`, reads the KV key back instead) and `loopIDPrefix` (`:39`).
 - [ ] 3.6 Fixture/harness sweep by SEAM-CALLER ENUMERATION, not string patterns (round-2 B1/M2/M3):
       `git grep -n 'agentic.TaskMessage{' -- '*.go'` → four non-test sites — the two production builders
@@ -70,7 +70,8 @@ package this replaces survives in PR history at `b0e92253`. Deviations from the 
 
 - [ ] 4.1 Revert `http.go:306` to `"loop_" + uuid[:8]` → `TestNewConversationMintsCanonicalUUID` MUST fail.
 - [ ] 4.2 Revert `component.go:884` the same way → the channel-path case of the same test MUST fail.
-- [ ] 4.3 Delete the `loop_id` check in `TaskMessage.Validate` → `TestNonUUIDLoopIDIsTerminatedAtIntake` MUST fail.
+- [ ] 4.3 Delete the `loop_id` check in `TaskMessage.Validate` → `TestTaskMessageRefusesNonUUIDLoopID` AND
+      `TestNonUUIDLoopIDIsTerminatedAtIntake` MUST fail.
 - [ ] 4.4 Delete the looptoken call in `CreateLoopWithID` → `TestCreateLoopWithIDRefusesNonUUIDToken` MUST fail.
 - [ ] 4.5 Delete Mint's check → `TestMint_NonUUIDRootLoopIDIsRefused` MUST fail.
 - [ ] 4.6 Delete the HTTP-path continuation check → `TestNonUUIDReplyToHTTPGetsSynchronousError` MUST fail.

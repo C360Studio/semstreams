@@ -45,7 +45,7 @@ ruled instead that the collision only exists for non-UUID tokens, and the framew
   likewise (`rg_xxxxxxxx` → full UUID), and a client-supplied non-UUID loop token (`reply_to`, `loop_id`,
   `parent_loop_id`, `in_reply_to`, `run_id`) is refused — a typed error at dispatch (synchronous on HTTP,
   response-subject on the channel path), a classified terminated delivery at stream intake.
-  `graphresearch.WithResearchGraphIDGenerator` (zero consumers) is deleted. Pre-v1 fresh state
+  `graphresearch.WithResearchGraphIDGenerator` (zero production consumers) is deleted. Pre-v1 fresh state
   (ADR-102 d7): no alias, no dual format, no legacy reader.
 - Sisters are unaffected in code: the bounded 2026-08-31 pass found zero sites authoring loop tokens or branching
   on their shape — the contract for adopters is "echo, never author."

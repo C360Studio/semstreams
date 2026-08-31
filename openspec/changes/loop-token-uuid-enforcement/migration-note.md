@@ -7,7 +7,7 @@
 - A submission whose `reply_to`, `loop_id`, `parent_loop_id`, `in_reply_to`, or `run_id` is not a canonical
   UUID is refused: a typed error response naming the field at dispatch (synchronous on HTTP; via the response
   subject on the channel path), a classified terminated delivery at the task-stream intake.
-- Deleted Go surface: `graphresearch.WithResearchGraphIDGenerator` (zero consumers measured; the one sister hit
+- Deleted Go surface: `graphresearch.WithResearchGraphIDGenerator` (zero production consumers measured; the one sister hit
   is a comment).
 - Pre-v1 fresh storage (ADR-102 d7): no legacy tokens exist after redeploy; nothing resolves an old-shape ID.
 

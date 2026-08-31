@@ -32,7 +32,7 @@ entity), the same 32-bit math, and its exclusion would put a carve-out sentence 
 
 - **BREAKING (wire shape, not Go surface):** dispatch loop IDs become full canonical UUIDs (`loop_xxxxxxxx` →
   36-char UUID) at `http.go:306` and `component.go:884`; research loop IDs likewise (`rg_xxxxxxxx` → UUID), and the
-  zero-consumer `WithResearchGraphIDGenerator` option is DELETED (round-2 H2: the spec forbids an adopter-facing
+  zero-production-consumer `WithResearchGraphIDGenerator` option is DELETED (round-2 H2: the spec forbids an adopter-facing
   mint knob; its only caller anywhere is this repo's own test, sisters comment-only) — the one exported-surface
   deletion in this change. No other exported signature changes.
 - **Refusal at every accepting seam, one validation home:** a new module-internal `internal/looptoken` predicate
@@ -118,4 +118,4 @@ Answered as a client/component author outside this repo who has never opened the
 
 - Codex may proceed on #1146/#1155 (owner's word on #1192); remaining contact is one refusal inside Mint.
 - **Breaking ⇒ e2e gate:** `task e2e:agentic` (dispatch→loop shape) AND `task e2e:research-graph` (rg_ retirement)
-  green before the breaking commit lands. If A2 is chosen instead, the research tier drops from the gate.
+  green before the breaking commit lands.

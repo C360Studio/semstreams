@@ -77,8 +77,8 @@ base: ae35f296d6660f1d5987d53f4f4b2c8dde1caa9d
 - #1212 — the loop/run `ENTITY_SUFFIX_INDEX` collision is PERMANENT under this ruling (run instance == loop
   UUID); adjacent, not absorbed.
 - #1194 — the import lane inherits the token check for the loop-execution family when it lands; coordination only.
-- #1174 — Mint's mismatch error text (`agentrun.go:316-318`) is NOT touched by this scope; recommendation: drop
-  `Closes #1174` (see proposal).
+- #1174 — Mint's mismatch error text (`agentrun.go:316-318`) is NOT touched by this scope; RULED 2026-08-31:
+  `Closes #1174` dropped (the ruling record is below and in the proposal).
 - #1146/#1155 (Codex) — recorded hold reason gone (nothing re-keyed); remaining contact = one added refusal
   inside Mint.
 - ADR-104 (Accepted) — budget figures 170/163 stand unamended; `openspec/specs/entity-id-contract/spec.md:517`
