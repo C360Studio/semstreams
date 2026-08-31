@@ -31,19 +31,26 @@ cut at design review; the task is separable (tasks §3.4).
 ## What changes
 
 - **BREAKING (wire shape, not Go surface):** dispatch loop IDs become full canonical UUIDs (`loop_xxxxxxxx` →
-  36-char UUID) at `http.go:306` and `component.go:884`; research loop IDs likewise (`rg_xxxxxxxx` → UUID), with
-  the generator-output observed at use (`executor.go:251`) so `WithResearchGraphIDGenerator` injections cannot
-  bypass the contract. No exported signature changes anywhere.
+  36-char UUID) at `http.go:306` and `component.go:884`; research loop IDs likewise (`rg_xxxxxxxx` → UUID), and the
+  zero-consumer `WithResearchGraphIDGenerator` option is DELETED (round-2 H2: the spec forbids an adopter-facing
+  mint knob; its only caller anywhere is this repo's own test, sisters comment-only) — the one exported-surface
+  deletion in this change. No other exported signature changes.
 - **Refusal at every accepting seam, one validation home:** a new module-internal `internal/looptoken` predicate
   (canonical RFC 4122 text form — 36 bytes, lowercase, hyphenated; form, not version bits). Enforced at:
-  - `agentic.TaskMessage.Validate` — a present, non-canonical `loop_id` is invalid. This makes the rule engine
+  - `agentic.TaskMessage.Validate` — a present, non-canonical loop-token field — `loop_id`, `parent_loop_id`,
+    `in_reply_to`, or `run_id` — is invalid (round-2 B2: the gh#256 resume anchors are client-set loop tokens,
+    and `agentic/loop_execution_entity.go:136-145` stamps them into triples with a silent half-write on
+    `agent.run.entity-id`; validating upstream closes the class). This makes the rule engine
     refuse at publish (`actions.go:1885`) and loop intake refuse with the existing loud lane — intake-rejection
     metric + `TerminateDelivery` (`component.go:1174-1179,1300`) — a classified refusal, never a counted skip (#1197).
   - `LoopManager.CreateLoopWithID` (`state.go:142`) — defense in depth for composed binaries; classified invalid.
   - `agentrun.Mint` (`agentrun.go:281`) — refuses a non-UUID firing-loop instance before building the run entity
     ID; the existing spawn-without-run degrade (`actions.go:1920-1929`) applies and stays logged.
-  - dispatch intake (`http.go:298`, `component.go:876`) — a non-canonical `reply_to` gets a SYNCHRONOUS typed
-    error response naming the field, instead of "Task submitted" followed by an async TERM the client never sees.
+  - dispatch intake (`http.go:298`, `component.go:876`) — a non-canonical continuation token gets a typed error
+    response naming the field (synchronous on the HTTP path; on the response subject on the channel path), instead
+    of "Task submitted" followed by an async TERM the client never sees. The check runs on the RESOLVED token
+    after the auto-continue branch and before the mint, so one check covers `reply_to` and auto-continue
+    (round-2 M4).
 - **BREAKING:** client-supplied non-UUID loop tokens are refused (pre-v1, fresh state — no legacy tokens exist to
   grandfather; ADR-102 d7, no alias, no dual path).
 - Doc/prose sweep: `loop_xyz789` examples, `rg_` prose, `predicates.go:61` comment, research-graph README,
@@ -59,8 +66,10 @@ cut at design review; the task is separable (tasks §3.4).
 - #1174 — **recommendation: drop `Closes #1174` from PR #1210.** The re-scoped Mint edit adds a precondition and
   does not touch the mismatch error text (`agentrun.go:316-318`); #1174's acceptance is a policy ruling (may a
   framework error carry a foreign identity?) this change no longer makes. Recommend, not rule.
-- `ParentLoopID` / `related_loops` lineage references — reads of existing loops, not mints; the graph write path
-  already fail-closes on malformed IDs (`TryLoopExecutionEntityID` charset checks). Considered, excluded.
+- `related_loops` lineage references — reads of existing loops, not mints. `parent_loop_id` is NOT excluded:
+  round-2 H1 measured the write path composing it through the PANICKING `LoopExecutionEntityID`
+  (`agentic/loop_execution_entity.go:130`, reached from a NATS consumer callback) — the earlier premise that
+  `Try…` fail-closes there was false — so it joins the validated fields instead.
 - The `state.go:154` overwrite-on-existing-ID behavior itself (the continuation lane depends on it); out of scope.
 
 ## Options considered
@@ -78,8 +87,10 @@ Answered as a client/component author outside this repo who has never opened the
 - **What must they know?** ONE fact: a loop ID is an opaque token you receive and echo — never author. (Before:
   they could author one and it worked, silently joining the 32-bit plane.)
 - **What happens if they do nothing?** A client echoing framework-minted IDs: nothing changes but the shape.
-  A client authoring tokens: a synchronous error naming `reply_to` at dispatch; a stream producer pre-filling
-  `loop_id` gets a classified intake rejection (metric + TERM) instead of today's silent adoption of its token.
+  A client authoring tokens: a typed error naming `reply_to` at dispatch (synchronous on HTTP, response-subject
+  on the channel path); a stream producer pre-filling `loop_id`, `parent_loop_id`, `in_reply_to`, or `run_id`
+  gets a classified intake rejection (metric + TERM) instead of today's silent adoption — or, for the gh#256
+  anchors, a silent triple half-write.
 - **Where do they find out?** Typed synchronous error response (dispatch) > classified intake rejection metric +
   terminal delivery (stream lane) > migration note. Nothing lands at "log-only" or "nowhere"; the swallowed
   HandleTask error path (`component.go:1188-1191`) is exactly why the check sits in Validate, upstream of it.
@@ -93,7 +104,7 @@ Answered as a client/component author outside this repo who has never opened the
 | P1 | All loop mint paths are framework-owned; rule engine sets no LoopID | `actions.go:1713`, `state.go:137-139` |
 | P2 | Exactly three non-UUID mint spellings exist | `http.go:306`, `component.go:884`, `executor.go:145` |
 | P3 | A dispatch collision merges conversations silently | `state.go:154` overwrite; no existence check |
-| P4 | No accepting seam validates a pre-filled token | `handlers.go:834`, `state.go:142`, `agentrun.go:290`, `user_types.go:357` |
+| P4 | No accepting seam validates a pre-filled token; the gh#256 anchors are stamped raw with a silent half-write | `handlers.go:834`, `state.go:142`, `agentrun.go:290`, `user_types.go:357`, `loop_execution_entity.go:136-145` |
 | P5 | A HandleTask error is ACKed silently; the loud lane is preflight | `component.go:1188-1191` vs `:1174-1179` |
 | P6 | No shipped config mints runs or authors loop IDs | `git grep run_scope -- configs/` empty; `02-collect-evidence.json:27` is an ADR-028 reference |
 | P7 | No sister authors or shape-parses loop tokens | sister pass, `inventory.md` §Searches |

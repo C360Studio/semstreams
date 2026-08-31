@@ -27,8 +27,11 @@ ruled instead that the collision only exists for non-UUID tokens, and the framew
 1. **A loop instance token is a framework-minted v4 UUID**, carried in canonical RFC 4122 text form (36 bytes,
    lowercase, hyphenated). No component, config, client, tool, or injected generator authors one.
 2. **Enforcement lives at the mint seams**, not in a registry or family-table mechanism: task validation
-   (`TaskMessage.Validate`, enforced at rule-engine publish and loop intake), `LoopManager.CreateLoopWithID`,
-   `agentrun.Mint`, dispatch's `reply_to` intake, and the research pipeline's generator-output check. One
+   (`TaskMessage.Validate` — every loop-token field the task carries: `loop_id`, `parent_loop_id`,
+   `in_reply_to`, `run_id` — enforced at rule-engine publish and loop intake), `LoopManager.CreateLoopWithID`,
+   `agentrun.Mint`, and dispatch's continuation intake (synchronous on the HTTP path, via the response subject on
+   the channel path, validating the resolved token). The research pipeline's injectable generator option is
+   deleted rather than validated. One
    module-internal predicate (`internal/looptoken`); zero adopter-facing surface. Seams validate form, not
    version bits; minting is v4. The import lane (#1194) inherits the same check for the loop-execution family.
 3. **No digest re-key.** The run entity's instance remains the root loop's UUID; `ResolveRun`, `RunID`, the
@@ -38,8 +41,10 @@ ruled instead that the collision only exists for non-UUID tokens, and the framew
 ## Consequences
 
 - BREAKING, in the beta.163 wave: dispatch loop IDs change shape (`loop_xxxxxxxx` → full UUID), research loop IDs
-  likewise (`rg_xxxxxxxx` → full UUID), and a client-supplied non-UUID `reply_to`/`loop_id` is refused —
-  synchronously at dispatch, with a classified terminated delivery at stream intake. Pre-v1 fresh state
+  likewise (`rg_xxxxxxxx` → full UUID), and a client-supplied non-UUID loop token (`reply_to`, `loop_id`,
+  `parent_loop_id`, `in_reply_to`, `run_id`) is refused — a typed error at dispatch (synchronous on HTTP,
+  response-subject on the channel path), a classified terminated delivery at stream intake.
+  `graphresearch.WithResearchGraphIDGenerator` (zero consumers) is deleted. Pre-v1 fresh state
   (ADR-102 d7): no alias, no dual format, no legacy reader.
 - Sisters are unaffected in code: the bounded 2026-08-31 pass found zero sites authoring loop tokens or branching
   on their shape — the contract for adopters is "echo, never author."

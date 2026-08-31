@@ -32,6 +32,16 @@ base: ae35f296d6660f1d5987d53f4f4b2c8dde1caa9d
 - `processor/rule/actions.go:1918` — `		if _, mintErr := agentrun.Mint(ctx, e.lifecycle,`
 - `configs/rules/deep-research/02-collect-evidence.json:27` — `        "loop_id": "$entity.id",`
 - `processor/agentic-tools/loop_result.go:181` — `func normalizeLoopID(loopID string) string {`
+- `processor/agentic-dispatch/component.go:841` — `		RunID:     msg.RunID,`
+- `processor/agentic-dispatch/http.go:45` — `	RunID     string `json:"run_id,omitempty"``
+- `agentic/loop_execution_entity.go:130` — `		parentEntityID := LoopExecutionEntityID(e.Org, e.Platform, e.Task.ParentLoopID)`
+- `agentic/loop_execution_entity.go:137` — `		triples = append(triples, triple(agvocab.LoopRun, e.Task.RunID))`
+- `agentic/loop_execution_entity.go:138` — `		if runEntityID, err := TryChainExecutionEntityID(e.Org, e.Platform, e.Task.RunID); err == nil {`
+- `agentic/loop_execution_entity.go:144` — `		replyEntityID := LoopExecutionEntityID(e.Org, e.Platform, e.Task.InReplyTo)`
+- `test/e2e/scenarios/agentic/scenario.go:482` — `		LoopID:      fmt.Sprintf("e2e-loop-%d", now.UnixNano()),`
+- `test/e2e/scenarios/research-graph/scenario.go:380` — `	parentLoopID := fmt.Sprintf("e2e-parent-%d", time.Now().UnixNano())`
+- `test/e2e/scenarios/ops/scenario.go:367` — `			loopID:   "seed-loop-001",`
+- `frameworkcapabilities/graphresearch/executor_test.go:68` — `		WithResearchGraphIDGenerator(func() string { return "rg_test001" }),`
 
 ## Adjacent claims
 
@@ -39,8 +49,9 @@ base: ae35f296d6660f1d5987d53f4f4b2c8dde1caa9d
   twin `component.go:884` (both `"loop_" + uuid[:8]`, 32 bits), and graph-research `executor.go:39,145`
   (`"rg_" + id[:8]`; its `:140-142` comment concedes the odds; its KV `ErrKVKeyExists` catch at `:324` does not
   cover the loop-execution graph entity or the suffix index, #1212's class). `executor.go:104`
-  (`WithResearchGraphIDGenerator`) is an exported generator knob — an injected generator bypasses any mint-side
-  fix, so validation must observe the OUTPUT at the use site (`:251`).
+  (`WithResearchGraphIDGenerator`) is an exported generator knob whose only caller anywhere is this repo's own
+  `executor_test.go:68` (sisters: comment-only hit) — round-2 H2 dispositions it as DELETED rather than
+  output-validated (the spec forbids an adopter-facing mint knob).
 - Compliant mints: `GenerateLoopID` (`state.go:137`, `:138` = `uuid.NewString()`); the reserve path fills empty
   LoopID via the same call (`component.go:1314-1315`); the rule engine sets NO LoopID at all (`actions.go:1713`,
   fields `:1714-1721`), so rule-spawned loops always get a fresh framework UUID.
@@ -78,13 +89,24 @@ base: ae35f296d6660f1d5987d53f4f4b2c8dde1caa9d
   UUID).
 - Superseded framed-digest package (`b0e92253`, this directory + `docs/adr/105-*.md` draft) — replaced by this
   change; design record survives in PR #1210 history.
+- Round-2 census closure (reviewer, 2026-08-31, full record on PR #1210): the gh#256 resume anchors `run_id` and
+  `in_reply_to` are CLIENT-SET loop tokens (`component.go:841-842` — "Both omitempty and client-set";
+  `http.go:45-46`) stamped raw into triples at `loop_execution_entity.go:137` with a SILENT half-write at `:138`
+  (no else on the `Try` failure); `parent_loop_id` composes through the PANICKING builder at `:130` from a NATS
+  consumer callback — all three join `TaskMessage.Validate`. Two e2e harnesses mint non-UUID tokens
+  (`agentic/scenario.go:482` `e2e-loop-%d`; `research-graph/scenario.go:380` `e2e-parent-%d`) — the BREAKING
+  gates themselves would go red; the ops harness seeds `seed-loop-001/2/3` via direct PutKV
+  (`ops/scenario.go:367`). All swept by seam-caller enumeration (tasks 3.6).
+- OWNER RULINGS 2026-08-31 (chat, transcribed on #1192): "q1 - everyone who mints a loop uses uuid" — A1
+  confirmed, graph-research IN scope; "q2 drop it unless we are fixing it" — `Closes #1174` DROPPED (this scope
+  does not touch the mismatch error text; #1174 stays open on its own).
 
 ## The consumer at birth
 
 No new exported symbol, port, subject, bucket, or config field. The one new code home, `internal/looptoken`
-(module-internal, invisible to adopters), is consumed at birth by five seams: `agentic.TaskMessage.Validate`,
-`LoopManager.CreateLoopWithID`, `agentrun.Mint`, graph-research's generator-output check, dispatch's `reply_to`
-check. Same-class collision table: not triggered — no new durable, communication, or runtime-coordination
+(module-internal, invisible to adopters), is consumed at birth by four seams: `agentic.TaskMessage.Validate`
+(every loop-token field: `loop_id`, `parent_loop_id`, `in_reply_to`, `run_id`), `LoopManager.CreateLoopWithID`,
+`agentrun.Mint`, and dispatch's resolved-continuation check; graph-research's generator option is deleted. Same-class collision table: not triggered — no new durable, communication, or runtime-coordination
 primitive is proposed (a validation predicate owns no state, no channel, no coordination).
 
 ## Searches
@@ -111,3 +133,8 @@ primitive is proposed (a validation predicate owns no state, no channel, no coor
   `configs/personas/fragments/researcher-research-synthesize/00-identity.md:40`). semsource: zero hits
   (near-matches were `org_1` literals). semdev: reads `loop_id` opaquely from tool calls (`internal/tools/*`).
   Sizes the migration note at "no action required"; gates nothing.
+- Round-2 seam enumeration: `git grep -n 'agentic.TaskMessage{' -- '*.go'` → four non-test sites (two production
+  builders + the two e2e harness mints pinned above). Reviewer empty searches recorded on PR #1210: no other
+  UUID-validation owner in-tree; no production branch on loop-token shape; NATS KV key charset admits hyphenated
+  36-byte tokens (`natsclient/kv_key_contract.go:248-264`); entity-ID segment charset admits a canonical UUID;
+  the pre-v1 fresh-state claim for `reply_to` continuity HOLDS (migration doc `:728`, `:763`).

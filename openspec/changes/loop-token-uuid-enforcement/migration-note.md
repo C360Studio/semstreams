@@ -4,8 +4,11 @@
 
 - New loop IDs are canonical 36-byte UUIDs; the `loop_xxxxxxxx` (dispatch) and `rg_xxxxxxxx` (research) shapes
   are retired. Run entity IDs, `run_id`, `ResolveRun`, and the gh#256 echo contract are UNCHANGED.
-- A submission whose `reply_to` or `loop_id` is not a canonical UUID is refused: synchronously at dispatch
-  (error response naming the field), with a classified terminated delivery at the task-stream intake.
+- A submission whose `reply_to`, `loop_id`, `parent_loop_id`, `in_reply_to`, or `run_id` is not a canonical
+  UUID is refused: a typed error response naming the field at dispatch (synchronous on HTTP; via the response
+  subject on the channel path), a classified terminated delivery at the task-stream intake.
+- Deleted Go surface: `graphresearch.WithResearchGraphIDGenerator` (zero consumers measured; the one sister hit
+  is a comment).
 - Pre-v1 fresh storage (ADR-102 d7): no legacy tokens exist after redeploy; nothing resolves an old-shape ID.
 
 ### The obligations (per-sister; measured read-only 2026-08-31 — no production code changes required)
