@@ -805,3 +805,130 @@ func TestOpenAIServer_RoleToolCall_ToolNotAdvertisedFallsThrough(t *testing.T) {
 		t.Errorf("unexpected tool calls injected: %+v", resp.Choices[0].Message.ToolCalls)
 	}
 }
+
+// TestOpenAIServer_ObserveEntityIDSuffix verifies the mock resolves the
+// placeholder from the entity ID the REQUEST carries. Positions 1-2 of a
+// deployment's entity IDs carry an entropy suffix minted at first boot
+// (ADR-104), so a scripted fixture cannot spell one; it observes instead.
+func TestOpenAIServer_ObserveEntityIDSuffix(t *testing.T) {
+	server := NewOpenAIServer().WithRoleResponses([]RoleResponse{{
+		Marker:                "synthesis stage",
+		Content:               `{"evidence_refs":["` + ObservedEntityIDPlaceholder + `"]}`,
+		ObserveEntityIDSuffix: "seed.research.document.controlled",
+	}})
+	if err := server.Start(":0"); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Stop()
+
+	req := ChatCompletionRequest{
+		Model: "mock",
+		Messages: []ChatMessage{
+			{Role: "system", Content: "You are the synthesis stage of a graph-search pipeline."},
+			// The degraded-retrieval line embeds the same ID as "seed=<id>",
+			// ahead of the Evidence block. A whitespace-delimited scan returns
+			// the "seed=" prefix with it, and quote-back then rejects the ref.
+			{Role: "user", Content: "Retrieval degraded: yes (predicate_walk seed=c360.rg-e2e-9f3a71.seed.research.document.controlled via graph.query.relationships: timeout)\n" +
+				"Evidence:\n  [0] c360.rg-e2e-9f3a71.seed.research.document.controlled (tier=0 src=walk_seeds.entity_state)\n"},
+		},
+	}
+	resp := makeRequest(t, server.URL()+"/v1/chat/completions", req)
+	want := `{"evidence_refs":["c360.rg-e2e-9f3a71.seed.research.document.controlled"]}`
+	if got := resp.Choices[0].Message.Content; got != want {
+		t.Errorf("content = %q, want %q", got, want)
+	}
+}
+
+// TestFindEntityIDBySuffix_CanonicalGrammar pins that a candidate must be a
+// SIX-position canonical entity ID, not merely a dotted run ending in the
+// wanted suffix. Codex review finding 1 on PR #1221: the previous pattern
+// stopped at the suffix with no terminal boundary and no position bound, so it
+// truncated a longer trailing segment into a WRONG id and accepted dotted runs
+// of any length. A wrong ref is worse than a missing one — quote-back accepts
+// it and the fixture silently asserts against an entity that is not the seed.
+func TestFindEntityIDBySuffix_CanonicalGrammar(t *testing.T) {
+	const suffix = "seed.research.document.controlled"
+	const canonical = "c360.rg-e2e-9f3a71." + suffix
+
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "canonical six positions is found",
+			content: "Evidence:\n  [0] " + canonical + " (tier=0 src=walk_seeds.entity_state)\n",
+			want:    canonical,
+		},
+		{
+			name: "trailing segment characters are not truncated into a match",
+			// The ID ends "controlled-extra", a different instance. Matching
+			// through "controlled" would return an entity that is not in the
+			// prompt at all.
+			content: "Evidence:\n  [0] c360.rg-e2e-9f3a71." + suffix + "-extra (tier=0)\n",
+			want:    "",
+		},
+		{
+			name:    "five positions is refused",
+			content: "Evidence:\n  [0] rg-e2e-9f3a71." + suffix + " (tier=0)\n",
+			want:    "",
+		},
+		{
+			name:    "seven positions is refused",
+			content: "Evidence:\n  [0] extra.c360.rg-e2e-9f3a71." + suffix + " (tier=0)\n",
+			want:    "",
+		},
+		{
+			name: "a non-canonical candidate does not shadow the canonical one",
+			// First-match-wins: an over-long run appears BEFORE the real
+			// evidence, exactly the ordering Codex named.
+			content: "Retrieval degraded: yes (predicate_walk extra.c360.rg-e2e-9f3a71." + suffix + " via graph.query.relationships: timeout)\n" +
+				"Evidence:\n  [0] " + canonical + " (tier=0)\n",
+			want: canonical,
+		},
+		{
+			name:    "embedded seed= prefix is stripped, not returned with the ID",
+			content: "Retrieval degraded: yes (predicate_walk seed=" + canonical + " via graph.query.relationships: timeout)\n",
+			want:    canonical,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := findEntityIDBySuffix(
+				[]ChatMessage{{Role: "user", Content: tt.content}}, suffix)
+			if got != tt.want {
+				t.Errorf("findEntityIDBySuffix() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestOpenAIServer_ObserveEntityIDSuffix_MissLeavesPlaceholder pins the
+// fail-loud half: when the request carries no matching entity ID the mock
+// leaves the placeholder verbatim rather than inventing an ID, so the
+// scenario fails on the artifact that depended on it.
+func TestOpenAIServer_ObserveEntityIDSuffix_MissLeavesPlaceholder(t *testing.T) {
+	server := NewOpenAIServer().WithRoleResponses([]RoleResponse{{
+		Marker:                "synthesis stage",
+		Content:               `{"evidence_refs":["` + ObservedEntityIDPlaceholder + `"]}`,
+		ObserveEntityIDSuffix: "seed.research.document.controlled",
+	}})
+	if err := server.Start(":0"); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Stop()
+
+	req := ChatCompletionRequest{
+		Model: "mock",
+		Messages: []ChatMessage{
+			{Role: "system", Content: "You are the synthesis stage of a graph-search pipeline."},
+			{Role: "user", Content: "Evidence:\n  (none)\n"},
+		},
+	}
+	resp := makeRequest(t, server.URL()+"/v1/chat/completions", req)
+	got := resp.Choices[0].Message.Content
+	if !strings.Contains(got, ObservedEntityIDPlaceholder) {
+		t.Errorf("content = %q, want the unresolved placeholder %q", got, ObservedEntityIDPlaceholder)
+	}
+}

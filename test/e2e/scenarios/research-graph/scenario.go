@@ -43,6 +43,7 @@ import (
 	"github.com/c360studio/semstreams/pkg/fusion"
 	graphembedding "github.com/c360studio/semstreams/processor/graph-embedding"
 	"github.com/c360studio/semstreams/test/e2e/client"
+	e2econfig "github.com/c360studio/semstreams/test/e2e/config"
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
 )
 
@@ -52,17 +53,25 @@ const (
 	researchGraphSeedSimilarity    = 0.95
 	walkSeedsEntityStateSource     = "walk_seeds.entity_state"
 
-	// ControlledSeedEntityID is the stable entity whose exact evidence
-	// identity proves the execute fixture traversed the production graph
-	// query and fusion path. The direct fixture intentionally keeps its
-	// run-scoped entity identity.
+	// ControlledSeedSuffix is the last four canonical positions of the stable
+	// entity whose exact evidence identity proves the execute fixture traversed
+	// the production graph query and fusion path. The direct fixture
+	// intentionally keeps its run-scoped entity identity.
 	//
-	// Positions 1-2 are the DEPLOYMENT's own authority — configs/research-graph-e2e.json's
-	// platform.org / platform.id. Since ADR-102 d5 the graph refuses every other
-	// pair, so the retired short form `c360.rg-e2e.…` is now rejected at the
-	// boundary rather than seeded; it must track DefaultConfig's PlatformOrg /
-	// PlatformID, which is what researchGraphSeedEntityID composes from.
-	ControlledSeedEntityID = "c360.research-graph-e2e.seed.research.document.controlled"
+	// It is a suffix and not a whole entity ID because positions 1-2 are the
+	// DEPLOYMENT's own authority, and since ADR-104 that pair carries an entropy
+	// suffix minted onto platform.id at first boot. Nothing outside the running
+	// stack can spell it; Setup reads it from semstreams_config/platform_identity
+	// and composes the whole ID once, into Scenario.controlledSeedEntityID.
+	ControlledSeedSuffix = "seed.research.document.controlled"
+
+	// ControlledSeedSynthesis is the synthesis prose the execute fixture's mock
+	// LLM returns verbatim. The scenario asserts the terminal SearchResult
+	// carries exactly this text: research-graph-synthesize APPENDS a
+	// degradation note when the model's evidence_refs quote-back fails and
+	// falls back to echoing evidence, so equality here is what keeps the
+	// execute assertions from passing through that fallback unnoticed.
+	ControlledSeedSynthesis = "The controlled graph entity records drone hover anomaly evidence."
 )
 
 // FixtureMode selects one of the two isolated research-graph E2E routes.
@@ -90,6 +99,18 @@ type Scenario struct {
 	embeddingSearchResponder *natsclient.Subscription
 	researchSeedEntityID     string
 
+	// authorityOrg / authorityPlatform are positions 1-2 of every entity ID this
+	// scenario composes, observed from the running deployment in Setup. They are
+	// deliberately NOT written back onto Config: Config carries what the scenario
+	// DECLARED, and EffectiveAuthority cross-checks the declaration against the
+	// stack. Collapsing the two erases the distinction this scenario exists to draw.
+	authorityOrg      string
+	authorityPlatform string
+
+	// controlledSeedEntityID is ControlledSeedSuffix under the authority the
+	// running deployment RECORDS. Empty until Setup observes it.
+	controlledSeedEntityID string
+
 	config *Config
 }
 
@@ -113,10 +134,19 @@ type Config struct {
 	// graph-ingest write latency. Default 60s.
 	CompleteTimeout time.Duration `json:"complete_timeout"`
 
-	// Platform identity must match configs/research-graph-e2e.json
-	// platform block — used to construct LoopExecutionEntityID for
-	// triple lookup. Hardcoded here rather than read from the config
-	// to keep the scenario self-contained.
+	// PlatformOrg / PlatformID are the authority STEM configs/research-graph-e2e.json
+	// declares, and they stay that way: Setup PRESERVES the declaration and
+	// never writes the observed value back here. Their whole job is the
+	// cross-check — "the stack I am driving is the configuration I name" —
+	// which EffectiveAuthority performs against the identifier the running
+	// deployment records in semstreams_config/platform_identity, carrying the
+	// entropy suffix minted onto platform.id at first boot (ADR-104).
+	//
+	// These are NEVER an entity ID's positions 1-2. The observed authority
+	// lives in the scenario's authorityOrg / authorityPlatform fields; keeping
+	// the two apart is what lets the cross-check mean anything, since a
+	// declaration overwritten with the observed value can no longer disagree
+	// with it.
 	PlatformOrg string `json:"platform_org"`
 	PlatformID  string `json:"platform_id"`
 }
@@ -130,9 +160,9 @@ func DefaultConfig() *Config {
 		ChainKickoffTimeout: 30 * time.Second,
 		CompleteTimeout:     60 * time.Second,
 		PlatformOrg:         "c360",
-		// configs/research-graph-e2e.json platform.id. platform.instance_id was
-		// removed (ADR-102, ruled O-2), so platform.id IS the authority the binary
-		// mints loop executions under; this must equal it or nothing is ever found.
+		// configs/research-graph-e2e.json platform.id — the STEM, and it stays
+		// the stem. Setup cross-checks it against the deployment's minted
+		// identifier and stores that separately; see the field comment.
 		PlatformID: "research-graph-e2e",
 	}
 }
@@ -171,10 +201,22 @@ func (s *Scenario) Setup(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create NATS client: %w", err)
 	}
+	// Ask the deployment which authority it mints under before composing a
+	// single entity ID from it (ADR-104). Both the seed this scenario creates
+	// through the canonical mutation and the loop entity it later reads are
+	// refused or missed under any other pair, and the declared stem stopped
+	// being that pair when the framework started minting an entropy suffix.
+	authority, authErr := e2econfig.EffectiveAuthority(
+		ctx, natsClient, s.config.PlatformOrg+"."+s.config.PlatformID)
+	if authErr != nil {
+		return errors.Join(authErr, natsClient.Close(ctx))
+	}
+	s.authorityOrg, s.authorityPlatform, _ = strings.Cut(authority, ".")
+	s.controlledSeedEntityID = authority + "." + ControlledSeedSuffix
 	s.researchSeedEntityID = researchGraphSeedEntityID(
-		s.config.PlatformOrg, s.config.PlatformID, fmt.Sprintf("%x", time.Now().UnixNano()))
+		s.authorityOrg, s.authorityPlatform, fmt.Sprintf("%x", time.Now().UnixNano()))
 	if s.config.FixtureMode == FixtureModeExecute {
-		s.researchSeedEntityID = ControlledSeedEntityID
+		s.researchSeedEntityID = s.controlledSeedEntityID
 	}
 	responder, err := natsClient.Client().SubscribeForRequests(
 		ctx,
@@ -466,7 +508,7 @@ func (s *Scenario) waitForSearchResultStamp(ctx context.Context, result *scenari
 	if !ok || loopID == "" {
 		return fmt.Errorf("research_loop_id not set (waitForResearchPipelineLoop didn't populate it)")
 	}
-	loopEntityID, err := agentic.TryLoopExecutionEntityID(s.config.PlatformOrg, s.config.PlatformID, loopID)
+	loopEntityID, err := agentic.TryLoopExecutionEntityID(s.authorityOrg, s.authorityPlatform, loopID)
 	if err != nil {
 		return fmt.Errorf("construct loop entity ID for %s: %w", loopID, err)
 	}
@@ -658,7 +700,8 @@ func (s *Scenario) verifyExecuteBranchArtifacts(ctx context.Context, result *sce
 		return fmt.Errorf("read search result: %w", err)
 	}
 
-	if err := validateExecuteBranchArtifacts(execution, assessment, searchResult); err != nil {
+	if err := validateExecuteBranchArtifacts(
+		execution, assessment, searchResult, s.controlledSeedEntityID); err != nil {
 		return err
 	}
 	if execution.Degraded {
@@ -675,7 +718,7 @@ func (s *Scenario) verifyExecuteBranchArtifacts(ctx context.Context, result *sce
 		result.Details["assessment_degraded_reason"] = assessment.DegradedReason
 		result.Metrics["assessment_degraded"] = 1
 	}
-	result.Details["execute_evidence_entity_id"] = ControlledSeedEntityID
+	result.Details["execute_evidence_entity_id"] = s.controlledSeedEntityID
 	result.Details["execute_evidence_source"] = walkSeedsEntityStateSource
 	result.Metrics["execute_evidence_count"] = len(execution.Evidence)
 	result.Metrics["execute_subquery_count"] = execution.SubQueryCount
@@ -706,16 +749,20 @@ func validateExecuteBranchArtifacts(
 	execution research.ExecutionOutput,
 	assessment research.AssessmentOutput,
 	searchResult research.SearchResult,
+	controlledEntityID string,
 ) error {
+	if controlledEntityID == "" {
+		return errors.New("controlled seed entity ID is unresolved; Setup did not observe the deployment authority")
+	}
 	if execution.Action != research.ActionWalkSeeds {
 		return fmt.Errorf("execution action = %q, want %q", execution.Action, research.ActionWalkSeeds)
 	}
 	if execution.SubQueryCount <= 0 {
 		return fmt.Errorf("execution subquery count = %d, want > 0", execution.SubQueryCount)
 	}
-	controlled := fusionEvidence(execution.Evidence, ControlledSeedEntityID)
+	controlled := fusionEvidence(execution.Evidence, controlledEntityID)
 	if controlled == nil {
-		return fmt.Errorf("controlled entity %s absent from execution evidence", ControlledSeedEntityID)
+		return fmt.Errorf("controlled entity %s absent from execution evidence", controlledEntityID)
 	}
 	if controlled.Tier != "0" || controlled.Source != walkSeedsEntityStateSource {
 		return fmt.Errorf("controlled evidence provenance = tier %q source %q, want tier 0 source %q",
@@ -728,14 +775,20 @@ func validateExecuteBranchArtifacts(
 		return fmt.Errorf("assessment evidence count = %d, execution evidence count = %d",
 			assessment.EvidenceCount, len(execution.Evidence))
 	}
-	if strings.TrimSpace(searchResult.Synthesis) == "" {
-		return errors.New("search result synthesis is empty")
+	// Exactly the fixture's prose, not merely non-empty: when the synthesizer's
+	// evidence_refs fail quote-back the component keeps the prose but appends a
+	// degradation note and echoes evidence instead, which would let every
+	// assertion below pass through a path the fixture never scripted.
+	if searchResult.Synthesis != ControlledSeedSynthesis {
+		return fmt.Errorf(
+			"search result synthesis is %q, want the fixture's verbatim %q — a longer value means research-graph-synthesize fell back after evidence_refs quote-back failed",
+			searchResult.Synthesis, ControlledSeedSynthesis)
 	}
 	if searchResult.DecompTrace == nil || searchResult.DecompTrace.RouterAction != research.ActionWalkSeeds {
 		return errors.New("search result decomp trace does not identify walk_seeds")
 	}
-	if fusionEvidence(searchResult.Evidence, ControlledSeedEntityID) == nil {
-		return fmt.Errorf("controlled entity %s absent from synthesis evidence", ControlledSeedEntityID)
+	if fusionEvidence(searchResult.Evidence, controlledEntityID) == nil {
+		return fmt.Errorf("controlled entity %s absent from synthesis evidence", controlledEntityID)
 	}
 	for _, synthesizedEvidence := range searchResult.Evidence {
 		matched := false

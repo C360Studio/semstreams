@@ -416,11 +416,17 @@ func applyResearchGraphExecutePreset(server *mock.OpenAIServer) {
 }`,
 			},
 			{
+				// evidence_refs must quote back an entity ID that appears
+				// EXACTLY in the input evidence, and since ADR-104 the pair in
+				// positions 1-2 is minted at the deployment's first boot — the
+				// mock cannot know it. It reads the ID off the prompt instead;
+				// see mock.RoleResponse.ObserveEntityIDSuffix.
 				Marker: researchsynthesize.SystemPromptMarker,
 				Content: fmt.Sprintf(`{
-  "synthesis": "The controlled graph entity records drone hover anomaly evidence.",
+  "synthesis": %q,
   "evidence_refs": [%q]
-}`, researchgraph.ControlledSeedEntityID),
+}`, researchgraph.ControlledSeedSynthesis, mock.ObservedEntityIDPlaceholder),
+				ObserveEntityIDSuffix: researchgraph.ControlledSeedSuffix,
 			},
 		}).
 		WithRoleToolCallSequence([]mock.RoleToolCall{

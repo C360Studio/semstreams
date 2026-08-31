@@ -17,16 +17,32 @@ import (
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/test/e2e/client"
+	e2econfig "github.com/c360studio/semstreams/test/e2e/config"
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+// agenticAuthorityStem is the authority configs/agentic.json DECLARES — the
+// config docker/compose/agentic.yml boots. It is the STEM, not the authority:
+// since ADR-104 the deployment mints an entropy suffix onto platform.id at
+// first boot, so the pair it actually mints entities under is knowable only by
+// reading semstreams_config/platform_identity from the running stack. Setup
+// does that; this const is only the cross-check that the stack under test is
+// the configuration this scenario names.
+const agenticAuthorityStem = "c360.semstreams-agentic"
+
 // Scenario validates the agentic components (loop, model, tools) work together.
 type Scenario struct {
 	name        string
 	description string
+
+	// authorityOrg / authorityPlatform are positions 1-2 of every entity ID
+	// this scenario composes, OBSERVED from the running deployment in Setup.
+	// Empty until Setup resolves them; nothing composes an ID before then.
+	authorityOrg      string
+	authorityPlatform string
 
 	// Client URLs (clients created during Setup)
 	natsURL string
@@ -115,6 +131,17 @@ func (s *Scenario) Setup(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to create NATS client: %w", err)
 	}
+
+	// Ask the deployment which authority it mints under before composing a
+	// single entity ID from it (ADR-104). A scenario that predicts the pair
+	// from the shipped config has been wrong since the framework started
+	// minting an entropy suffix onto platform.id, and wrong in the way that
+	// surfaces four stages later as "entity not found".
+	authority, authErr := e2econfig.EffectiveAuthority(ctx, natsClient, agenticAuthorityStem)
+	if authErr != nil {
+		return errors.Join(authErr, natsClient.Close(ctx))
+	}
+	s.authorityOrg, s.authorityPlatform, _ = strings.Cut(authority, ".")
 	s.nats = natsClient
 
 	// Create metrics client
@@ -778,11 +805,14 @@ func (s *Scenario) verifyGraphTriples(ctx context.Context, result *scenarios.Res
 		return fmt.Errorf("loop_id not found in result details")
 	}
 
-	// The deployment authority is configs/agentic.json's platform.org / platform.id.
-	// platform.instance_id was removed (ADR-102, ruled O-2), so there is no longer a
-	// precedence rule to mirror here: platform.id IS the authority the binary mints under.
-	const org = "c360"
-	const platform = "semstreams-agentic"
+	// Positions 1-2 come from Setup's read of semstreams_config/platform_identity,
+	// never from the shipped config: the effective platform.id carries the entropy
+	// suffix this deployment minted at first boot (ADR-104).
+	org, platform := s.authorityOrg, s.authorityPlatform
+	if org == "" || platform == "" {
+		return fmt.Errorf("deployment authority is unresolved; Setup did not read %s/%s",
+			e2econfig.PlatformIdentityBucket, e2econfig.PlatformIdentityKey)
+	}
 
 	// --- Verify loop execution entity ---
 	// Graph writes happen after the completion metric is incremented, so the entity

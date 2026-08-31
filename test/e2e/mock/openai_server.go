@@ -5,13 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/c360studio/semstreams/pkg/types"
 )
 
 // ChatCompletionRequest matches OpenAI API request format.
@@ -127,7 +131,28 @@ type RoleResponse struct {
 	Marker string
 	// Content is the completion body returned when Marker matches.
 	Content string
+	// ObserveEntityIDSuffix makes this response OBSERVE an entity ID in the
+	// request instead of predicting one. When non-empty, the mock scans the
+	// matched request's system+user content for the first token ending in
+	// "." + ObserveEntityIDSuffix and substitutes it for every
+	// ObservedEntityIDPlaceholder occurrence in Content.
+	//
+	// No fixture outside a running deployment can spell an entity ID's first
+	// two positions: ADR-104 mints an entropy suffix onto platform.id at first
+	// boot, so org.platform is knowable only from the running stack. A scripted
+	// response that quotes a whole entity ID is predicting a value it does not
+	// hold, and the components that validate quote-back silently degrade rather
+	// than fail when it is wrong.
+	//
+	// When the request carries no such token the placeholder is left verbatim
+	// and the miss is logged — the mock never invents an ID, so the scenario
+	// fails on the artifact that depended on it.
+	ObserveEntityIDSuffix string
 }
+
+// ObservedEntityIDPlaceholder is the token a RoleResponse.Content puts where an
+// entity ID belongs when RoleResponse.ObserveEntityIDSuffix is set.
+const ObservedEntityIDPlaceholder = "{{observed_entity_id}}"
 
 // RoleToolCall pairs a prompt-content marker with a tool call the mock
 // should emit instead of completion content. Matching runs against
@@ -769,9 +794,64 @@ func firstRoleMatch(resps []RoleResponse, messages []ChatMessage) (string, bool)
 				continue
 			}
 			if strings.Contains(msg.Content, r.Marker) {
-				return r.Content, true
+				return resolveObservedEntityID(r, messages), true
 			}
 		}
 	}
 	return "", false
+}
+
+// resolveObservedEntityID substitutes the entity ID the request actually
+// carries for the placeholder in a matched response body. See
+// RoleResponse.ObserveEntityIDSuffix for why a fixture must not spell one.
+func resolveObservedEntityID(r RoleResponse, messages []ChatMessage) string {
+	if r.ObserveEntityIDSuffix == "" || !strings.Contains(r.Content, ObservedEntityIDPlaceholder) {
+		return r.Content
+	}
+	observed := findEntityIDBySuffix(messages, r.ObserveEntityIDSuffix)
+	if observed == "" {
+		log.Printf("mock openai: no entity ID ending in %q appears in the request; leaving %s unresolved",
+			"."+r.ObserveEntityIDSuffix, ObservedEntityIDPlaceholder)
+		return r.Content
+	}
+	return strings.ReplaceAll(r.Content, ObservedEntityIDPlaceholder, observed)
+}
+
+// dottedCandidatePattern matches a MAXIMAL dot-joined run of entity-ID
+// segments. It deliberately does not encode the position count or the wanted
+// suffix: both are decided after extraction, because a pattern that stops at
+// the suffix cannot tell "...document.controlled" from the truncation of
+// "...document.controlled-extra", and RE2 has no lookahead to assert the
+// boundary. Extract the whole run, then judge it.
+var dottedCandidatePattern = regexp.MustCompile(
+	`[A-Za-z0-9][A-Za-z0-9_-]*(?:\.[A-Za-z0-9][A-Za-z0-9_-]*)*`,
+)
+
+// findEntityIDBySuffix returns the first CANONICAL entity ID in the system+user
+// content that ends in "."+suffix. Empty when the request carries none.
+//
+// Candidates are found by the dotted-run grammar rather than by whitespace:
+// prompts embed IDs inside other text — a degraded-retrieval reason renders
+// "predicate_walk seed=<id> via ..." — and a whitespace-delimited token there
+// carries a "seed=" prefix that quote-back validation then rejects.
+//
+// Each candidate must then satisfy BOTH halves, and neither is redundant:
+// types.IsValidEntityID pins the six-position canonical grammar (so a five- or
+// eight-position dotted run is refused rather than fed to quote-back), and the
+// suffix check pins that it is the ID the fixture asked for. Validation is
+// delegated to pkg/types rather than re-spelled here — a copy of the grammar in
+// this package is a second spelling that drifts from the contract it cites.
+func findEntityIDBySuffix(messages []ChatMessage, suffix string) string {
+	want := "." + suffix
+	for _, msg := range messages {
+		if msg.Role != "system" && msg.Role != "user" {
+			continue
+		}
+		for _, candidate := range dottedCandidatePattern.FindAllString(msg.Content, -1) {
+			if strings.HasSuffix(candidate, want) && types.IsValidEntityID(candidate) {
+				return candidate
+			}
+		}
+	}
+	return ""
 }
