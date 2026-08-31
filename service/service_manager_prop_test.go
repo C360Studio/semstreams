@@ -239,12 +239,11 @@ func TestPropStopAllShutdownContract(t *testing.T) {
 					}
 				}
 
-				// SPIKE FINDING (sequence register→stopAll→stopAll): a fully
-				// clean pass clears the manager registry (stopAll tail), so a
-				// later StopAll visits nothing and returns nil, while a failed
-				// pass retains every registration for retry. No service-shutdown
-				// requirement states this terminal transition; the model mirrors
-				// the observed behavior so the walk can continue past it.
+				// spec: service-shutdown / Terminal StopAll success deregisters every service; failure retains them for retry
+				// A clean pass deregisters every service, so a later StopAll
+				// visits nothing; a failed pass retains every registration for
+				// retry. Found by this machine on register→stopAll→stopAll
+				// (#1214) and stated as a requirement rather than inferred.
 				if len(expectFailing) == 0 {
 					order = nil
 				}
