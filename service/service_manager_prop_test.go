@@ -239,23 +239,25 @@ func TestPropStopAllShutdownContract(t *testing.T) {
 					}
 				}
 
-				// SPIKE FINDING (sequence register→stopAll→stopAll): a fully
-				// clean pass clears the manager registry (stopAll tail), so a
-				// later StopAll visits nothing and returns nil, while a failed
-				// pass retains every registration for retry. No service-shutdown
-				// requirement states this terminal transition; the model mirrors
-				// the observed behavior so the walk can continue past it.
+				// spec: service-shutdown / Terminal StopAll success deregisters every service; failure retains them for retry
+				// A clean pass deregisters every service, so a later StopAll
+				// visits nothing; a failed pass retains every registration for
+				// retry. Found by this machine on register→stopAll→stopAll
+				// (#1214) and stated as a requirement rather than inferred.
 				if len(expectFailing) == 0 {
 					order = nil
 				}
 			},
 			"": func(t *rapid.T) {
+				// spec: service-shutdown / Terminal StopAll success deregisters every service; failure retains them for retry
 				// Global invariant, checked after EVERY action: the manager's
 				// own registry membership matches the model's. This is what
 				// makes the walk a state machine rather than a randomized
 				// sequence — it observes the MANAGER, so a registry-lifetime
 				// defect fails here, at the action that caused it, naming the
-				// registry.
+				// registry. This is the ASSERTION that enforces the cited
+				// requirement; the model update in stopAll's postcondition
+				// carries the same citation because it encodes the same clause.
 				//
 				// The predecessor of this block asserted teardowns <= 1 over
 				// the spy's own counters. That was unfalsifiable: teardowns++
