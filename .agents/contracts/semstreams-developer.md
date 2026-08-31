@@ -154,6 +154,14 @@ PRs fell into the four classes below.
   holds at execution time in this PR; filing the gap is recording, not satisfying.
 - **Remedies get the original's scrutiny.** Fix commits for review findings are new code with less design time
   than what they replace — remedies are where new blockers enter. Re-run the adversarial pass on your own fixes.
+- **A skip, drop, or degrade is a declared event, never a private choice.** Where a path
+  deliberately continues past a failure — a tolerated push failure, a fallback, a dropped
+  element, a partial result — it emits a log line AND a metric naming what was skipped and why
+  continuing is safe, or it refuses loudly; write the decision at the site. Route by ADR-098:
+  substrate → log+metric; agent execution → graph conditions, never a parallel channel. Write
+  the test that observes the signal and mutation-check it like a refusal (skip the emit → the
+  test MUST fail). This is what turns the next session's two mystery bugs into two error
+  messages.
 
 ## Storage and retention contracts
 
