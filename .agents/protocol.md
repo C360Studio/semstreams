@@ -34,13 +34,16 @@ Rituals:
   and obtain an explicit owner waiver recorded as a PR comment) → squash merge closes the issue. A correction after
   archive re-enters reconciliation and final review; no later content commit bypasses the archive/spec-sync check.
   State `implemented-by: <persona>` in the PR body; Codex uses `Sol`.
-- **Close:** no issue closes without the owner's explicit `CONFIRM-CLOSE` visible in the issue or PR. A chat-only signal
-  is not shared durable state and does not authorize a `Closes #n` merge. The signal MUST name the issues it closes and
-  covers only those. An approval of adjacent work — a PR, a review round, a design, a waiver — never widens into a
-  close, and a bare "approved" is never read as `CONFIRM-CLOSE` (owner ruling, 2026-08-29: "stick with the confirm
-  close requirement so we can all ensure that an 'approved' does not drift into too wide a condition"). A PR carrying
-  `Closes #a` and `Closes #b` needs the confirm for both, named. Transcribing the owner's own words into the issue or
-  PR is recording; inferring the gate from an adjacent approval is not, and is the failure this rule exists to stop.
+- **Close:** the squash-merge of a PR that declared `Closes #n` in its body at review time closes the issue — the
+  merge IS the authorization; no separate confirm is required (owner ruling, 2026-08-31, recorded on #1198,
+  superseding 2026-08-29: "if an issue is tied to a PR (which it should be) and we follow the PR process there is
+  really no reason to need me to CONFIRM-CLOSE"). The declaration must predate the review rounds that cover it:
+  adding `Closes #n` to a PR after its reviews ran re-enters review, because the reviews must have covered the claim
+  the merge authorizes. What survives from 2026-08-29, the half that caught real drift: a close with NO merged PR
+  behind it — duplicate, stale, fixed-elsewhere — takes the owner's word on the issue itself; an approval of
+  adjacent work — a PR, a review round, a design, a waiver — never widens into a close; and a bare "approved" closes
+  nothing. Transcribing the owner's own words is recording; inferring a close from an adjacent approval is the
+  failure the surviving half exists to stop.
 - **Tag:** milestone at 100% → candidate selection per `openspec/specs/release-candidate-proof/spec.md`. The
   milestone never names the candidate SHA.
 
