@@ -121,12 +121,28 @@ with a matching `md5 -q`. Verbatim failure lines below.
       `go test ./test/contract/...`; `task entity-id:audit`; `task schema:generate && git diff --exit-code schemas/ specs/`;
       `openspec validate federation-identity --strict --no-interactive`; `go mod tidy -diff`;
       `bash scripts/inventory-verify.sh docs/proposals/gh1168-federation-identity-pins.md`.
-- [ ] 6.2 Covering e2e tiers, one at a time on an idle host, results verbatim. Re-run after the review round's
-      fixes, because they touched `config` and `test/e2e/scenarios`.
-- [ ] 6.2a `task e2e:core` — both Case B stages.
-- [ ] 6.2b `task e2e:lifecycle` — the four-position seed and the observed pair.
-- [ ] 6.2c `task e2e:structural` — ingest regression under a minted pair.
-- [ ] 6.2d `task e2e:lessons` and `task e2e:throughput` — owed because 5.2 changed their scenario files.
+- [x] 6.2 Covering e2e tiers, one at a time on an idle host, results verbatim. Re-run at `e09df6f2`, AFTER the
+      review round's fixes, because they touched `config` and `test/e2e/scenarios`.
+- [x] 6.2a `task e2e:core` EXIT=0 — `[OK] platform_identity records {org, stem, id} and the effective pair carries
+      the minted suffix`; `[OK] A pre-identity bucket refuses LOUD, exits nonzero, and creates no identity record`.
+      The second stage passing also proves `client.IsKVKeyNotFound` matches: the assert half returns success only
+      through that branch.
+- [x] 6.2b `task e2e:lifecycle` EXIT=0 — all eight stages, so the four-position `--lifecycle-seed` and the observed
+      pair agree.
+- [x] 6.2c `task e2e:structural` EXIT=0 — `entity_count:127 validation_errors:0`, minted pair observed in-run as
+      `c360.semstreams-e2e-structural-fd1546`.
+- [x] 6.2d `task e2e:lessons` EXIT=0 — `Scenario completed successfully … assertions_run=3`, minted pair
+      `c360.streamkit-pure-7d99d3`.
+- [~] 6.2e `task e2e:throughput` EXIT=0 twice (`c360.semstreams-statistical-16d370`, then
+      `-abca74`) — but BOTH runs printed
+      `skipping query load (timeout: 5/10 entities not queryable)`, so its query phase measured nothing. **Not an
+      authority defect, and not introduced here:** `knownEntityIDs`' fixture list is byte-identical to
+      `origin/main` (diffed), and the same stack under `task e2e:statistical` reports `entities_missing:0` with
+      `entity_count:125` under the observed pair `c360.semstreams-statistical-a4d38e`. Recorded as a pre-existing
+      coverage gap in that scenario for the owner to place; this change's identity path is covered by 6.2c and the
+      statistical run.
+- [x] 6.2g `task e2e:statistical` EXIT=0 — run to settle 6.2e: `entities_missing:0`, `entity_count:125`,
+      `validation_errors:0` under `c360.semstreams-statistical-a4d38e`.
 - [x] 6.2e Stage mutation check (not vacuous): `./e2e --scenario core-minted-authority` exits 1 with
       `read semstreams_config/platform_identity: ... bucket not found` when no record exists, and exits 1 with
       `recorded id "streamkit-pure" is not the stem "streamkit-pure" plus a suffix` against a hand-seeded unsuffixed
