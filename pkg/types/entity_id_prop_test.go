@@ -64,7 +64,14 @@ func TestPropEntityIDRoundTrip(t *testing.T) {
 // spec: entity-id-contract / Every entity ID has one canonical six-segment ASCII form
 func TestPropEntityIDByteBound(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		total := rapid.IntRange(11, MaxEntityIDBytes+64).Draw(t, "totalBytes")
+		// Half the draws hug the spec boundary: rapid biases toward the
+		// GENERATOR's range endpoints, not domain boundaries it cannot know,
+		// so a wide range alone catches an off-by-one at 256 only
+		// probabilistically (measured: a `>=` mutation survived 100 cases).
+		total := rapid.OneOf(
+			rapid.IntRange(11, MaxEntityIDBytes+64),
+			rapid.IntRange(MaxEntityIDBytes-1, MaxEntityIDBytes+1),
+		).Draw(t, "totalBytes")
 		id := "a.a.a.a.a." + strings.Repeat("x", total-10)
 		err := ValidateEntityID(id)
 		if total <= MaxEntityIDBytes && err != nil {

@@ -1,0 +1,32 @@
+# 2026/08/31 14:01:09.482957 [TestPropStopAllShutdownContract] [rapid] draw action: "register"
+# 2026/08/31 14:01:09.482958 [TestPropStopAllShutdownContract] [rapid] draw repeatStyle: <nil>
+# 2026/08/31 14:01:09.482959 [TestPropStopAllShutdownContract] [rapid] draw action: "armStopFailure"
+# 2026/08/31 14:01:09.482960 [TestPropStopAllShutdownContract] [rapid] draw failing: "svc01"
+# 2026/08/31 14:01:09.482960 [TestPropStopAllShutdownContract] [rapid] draw action: "register"
+# 2026/08/31 14:01:09.482961 [TestPropStopAllShutdownContract] [rapid] draw repeatStyle: &errors.errorString{s:"service already stopped"}
+# 2026/08/31 14:01:09.482965 [TestPropStopAllShutdownContract] [rapid] draw action: "stopAll"
+# 2026/08/31 14:01:09.482969 [TestPropStopAllShutdownContract] [rapid] draw action: "stopAll"
+# 2026/08/31 14:01:09.482972 [TestPropStopAllShutdownContract] clean shutdown returned stop errors: failed to stop service svc02: service already stopped
+# 
+v0.4.8#17501945153182709523
+0x1084210842108
+0x0
+0x1
+0x0
+0x0
+0x1084210842108
+0x0
+0x0
+0x0
+0x0
+0x1084210842108
+0x0
+0x1
+0x0
+0x1
+0x1084210842108
+0x38e38e38e38e4
+0x2
+0x1084210842108
+0x38e38e38e38e4
+0x2
