@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/c360studio/semstreams/pkg/types"
 )
 
 // ChatCompletionRequest matches OpenAI API request format.
@@ -815,26 +817,40 @@ func resolveObservedEntityID(r RoleResponse, messages []ChatMessage) string {
 	return strings.ReplaceAll(r.Content, ObservedEntityIDPlaceholder, observed)
 }
 
-// findEntityIDBySuffix returns the first entity ID in the system+user content
-// that ends in "."+suffix. Empty when the request carries none.
+// dottedCandidatePattern matches a MAXIMAL dot-joined run of entity-ID
+// segments. It deliberately does not encode the position count or the wanted
+// suffix: both are decided after extraction, because a pattern that stops at
+// the suffix cannot tell "...document.controlled" from the truncation of
+// "...document.controlled-extra", and RE2 has no lookahead to assert the
+// boundary. Extract the whole run, then judge it.
+var dottedCandidatePattern = regexp.MustCompile(
+	`[A-Za-z0-9][A-Za-z0-9_-]*(?:\.[A-Za-z0-9][A-Za-z0-9_-]*)*`,
+)
+
+// findEntityIDBySuffix returns the first CANONICAL entity ID in the system+user
+// content that ends in "."+suffix. Empty when the request carries none.
 //
-// The match is bounded by the entity-ID grammar (dot-joined
-// [A-Za-z0-9][A-Za-z0-9_-]* segments, pkg/types.EntityIDLiteralPattern) rather
-// than by whitespace: prompts embed IDs inside other text — a degraded-retrieval
-// reason renders "predicate_walk seed=<id> via ..." — and a whitespace-delimited
-// token there carries a "seed=" prefix that quote-back validation then rejects.
+// Candidates are found by the dotted-run grammar rather than by whitespace:
+// prompts embed IDs inside other text — a degraded-retrieval reason renders
+// "predicate_walk seed=<id> via ..." — and a whitespace-delimited token there
+// carries a "seed=" prefix that quote-back validation then rejects.
+//
+// Each candidate must then satisfy BOTH halves, and neither is redundant:
+// types.IsValidEntityID pins the six-position canonical grammar (so a five- or
+// eight-position dotted run is refused rather than fed to quote-back), and the
+// suffix check pins that it is the ID the fixture asked for. Validation is
+// delegated to pkg/types rather than re-spelled here — a copy of the grammar in
+// this package is a second spelling that drifts from the contract it cites.
 func findEntityIDBySuffix(messages []ChatMessage, suffix string) string {
-	pattern, err := regexp.Compile(`(?:[A-Za-z0-9][A-Za-z0-9_-]*\.)+` + regexp.QuoteMeta(suffix))
-	if err != nil {
-		log.Printf("mock openai: entity-ID suffix %q is not usable in a pattern: %v", suffix, err)
-		return ""
-	}
+	want := "." + suffix
 	for _, msg := range messages {
 		if msg.Role != "system" && msg.Role != "user" {
 			continue
 		}
-		if found := pattern.FindString(msg.Content); found != "" {
-			return found
+		for _, candidate := range dottedCandidatePattern.FindAllString(msg.Content, -1) {
+			if strings.HasSuffix(candidate, want) && types.IsValidEntityID(candidate) {
+				return candidate
+			}
 		}
 	}
 	return ""
