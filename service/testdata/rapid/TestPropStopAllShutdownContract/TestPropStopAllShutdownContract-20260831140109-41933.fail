@@ -1,0 +1,58 @@
+# CURATED SEED — committed deliberately. See testdata/rapid/README.md.
+#
+# WHAT IT GUARDS: the shortest sequence rapid found that distinguishes
+# "ErrAlreadyStopped is clean success" from "ErrAlreadyStopped is a failure" —
+# register svc01, arm a genuine failure on it, register svc02 with an
+# ErrAlreadyStopped repeat style, then StopAll twice. The failed first pass
+# retains the registry; the retry must return nil.
+#
+# PROVENANCE (measured 2026-08-31): this was recorded while the
+# ErrAlreadyStopped filter at service_manager.go:888 was MUTATED AWAY
+# (`if stopErr != nil {`). It is a mutation-kill witness, not a defect that was
+# ever present on main. Replaying it against that mutation still reproduces the
+# original message below after 0 tests.
+#
+# "[rapid] fail file ... is no longer valid" UNDER -v ON GREEN CODE IS EXPECTED,
+# NOT A REGRESSION. t.Repeat records a stream that ends where the failure was,
+# so a passing run cannot consume it to the end. The stream is also positional:
+# adding or renaming an action changes SampledFrom(actionKeys) cardinality and
+# silently re-decodes these bytes into a DIFFERENT sequence.
+#
+# Because of that erosion, the coverage does not live here. It lives in
+# TestStopAllRetryAfterFailedPassTreatsAlreadyStoppedAsClean
+# (service/service_manager_prop_test.go), which names the sequence explicitly.
+# This file is retained as the provenance record of how it was found.
+#
+# Original recorded output:
+# 2026/08/31 14:01:09.482957 [TestPropStopAllShutdownContract] [rapid] draw action: "register"
+# 2026/08/31 14:01:09.482958 [TestPropStopAllShutdownContract] [rapid] draw repeatStyle: <nil>
+# 2026/08/31 14:01:09.482959 [TestPropStopAllShutdownContract] [rapid] draw action: "armStopFailure"
+# 2026/08/31 14:01:09.482960 [TestPropStopAllShutdownContract] [rapid] draw failing: "svc01"
+# 2026/08/31 14:01:09.482960 [TestPropStopAllShutdownContract] [rapid] draw action: "register"
+# 2026/08/31 14:01:09.482961 [TestPropStopAllShutdownContract] [rapid] draw repeatStyle: &errors.errorString{s:"service already stopped"}
+# 2026/08/31 14:01:09.482965 [TestPropStopAllShutdownContract] [rapid] draw action: "stopAll"
+# 2026/08/31 14:01:09.482969 [TestPropStopAllShutdownContract] [rapid] draw action: "stopAll"
+# 2026/08/31 14:01:09.482972 [TestPropStopAllShutdownContract] clean shutdown returned stop errors: failed to stop service svc02: service already stopped
+# 
+v0.4.8#17501945153182709523
+0x1084210842108
+0x0
+0x1
+0x0
+0x0
+0x1084210842108
+0x0
+0x0
+0x0
+0x0
+0x1084210842108
+0x0
+0x1
+0x0
+0x1
+0x1084210842108
+0x38e38e38e38e4
+0x2
+0x1084210842108
+0x38e38e38e38e4
+0x2
