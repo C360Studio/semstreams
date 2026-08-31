@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -127,7 +128,28 @@ type RoleResponse struct {
 	Marker string
 	// Content is the completion body returned when Marker matches.
 	Content string
+	// ObserveEntityIDSuffix makes this response OBSERVE an entity ID in the
+	// request instead of predicting one. When non-empty, the mock scans the
+	// matched request's system+user content for the first token ending in
+	// "." + ObserveEntityIDSuffix and substitutes it for every
+	// ObservedEntityIDPlaceholder occurrence in Content.
+	//
+	// No fixture outside a running deployment can spell an entity ID's first
+	// two positions: ADR-104 mints an entropy suffix onto platform.id at first
+	// boot, so org.platform is knowable only from the running stack. A scripted
+	// response that quotes a whole entity ID is predicting a value it does not
+	// hold, and the components that validate quote-back silently degrade rather
+	// than fail when it is wrong.
+	//
+	// When the request carries no such token the placeholder is left verbatim
+	// and the miss is logged — the mock never invents an ID, so the scenario
+	// fails on the artifact that depended on it.
+	ObserveEntityIDSuffix string
 }
+
+// ObservedEntityIDPlaceholder is the token a RoleResponse.Content puts where an
+// entity ID belongs when RoleResponse.ObserveEntityIDSuffix is set.
+const ObservedEntityIDPlaceholder = "{{observed_entity_id}}"
 
 // RoleToolCall pairs a prompt-content marker with a tool call the mock
 // should emit instead of completion content. Matching runs against
@@ -769,9 +791,44 @@ func firstRoleMatch(resps []RoleResponse, messages []ChatMessage) (string, bool)
 				continue
 			}
 			if strings.Contains(msg.Content, r.Marker) {
-				return r.Content, true
+				return resolveObservedEntityID(r, messages), true
 			}
 		}
 	}
 	return "", false
+}
+
+// resolveObservedEntityID substitutes the entity ID the request actually
+// carries for the placeholder in a matched response body. See
+// RoleResponse.ObserveEntityIDSuffix for why a fixture must not spell one.
+func resolveObservedEntityID(r RoleResponse, messages []ChatMessage) string {
+	if r.ObserveEntityIDSuffix == "" || !strings.Contains(r.Content, ObservedEntityIDPlaceholder) {
+		return r.Content
+	}
+	observed := findEntityIDBySuffix(messages, r.ObserveEntityIDSuffix)
+	if observed == "" {
+		log.Printf("mock openai: no entity ID ending in %q appears in the request; leaving %s unresolved",
+			"."+r.ObserveEntityIDSuffix, ObservedEntityIDPlaceholder)
+		return r.Content
+	}
+	return strings.ReplaceAll(r.Content, ObservedEntityIDPlaceholder, observed)
+}
+
+// findEntityIDBySuffix returns the first whitespace-delimited token in the
+// system+user content that ends in "."+suffix, with surrounding punctuation
+// trimmed. Empty when the request carries none.
+func findEntityIDBySuffix(messages []ChatMessage, suffix string) string {
+	want := "." + suffix
+	for _, msg := range messages {
+		if msg.Role != "system" && msg.Role != "user" {
+			continue
+		}
+		for _, field := range strings.Fields(msg.Content) {
+			token := strings.Trim(field, `"',;:()[]{}`)
+			if strings.HasSuffix(token, want) && len(token) > len(want) {
+				return token
+			}
+		}
+	}
+	return ""
 }

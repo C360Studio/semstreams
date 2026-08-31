@@ -805,3 +805,61 @@ func TestOpenAIServer_RoleToolCall_ToolNotAdvertisedFallsThrough(t *testing.T) {
 		t.Errorf("unexpected tool calls injected: %+v", resp.Choices[0].Message.ToolCalls)
 	}
 }
+
+// TestOpenAIServer_ObserveEntityIDSuffix verifies the mock resolves the
+// placeholder from the entity ID the REQUEST carries. Positions 1-2 of a
+// deployment's entity IDs carry an entropy suffix minted at first boot
+// (ADR-104), so a scripted fixture cannot spell one; it observes instead.
+func TestOpenAIServer_ObserveEntityIDSuffix(t *testing.T) {
+	server := NewOpenAIServer().WithRoleResponses([]RoleResponse{{
+		Marker:                "synthesis stage",
+		Content:               `{"evidence_refs":["` + ObservedEntityIDPlaceholder + `"]}`,
+		ObserveEntityIDSuffix: "seed.research.document.controlled",
+	}})
+	if err := server.Start(":0"); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Stop()
+
+	req := ChatCompletionRequest{
+		Model: "mock",
+		Messages: []ChatMessage{
+			{Role: "system", Content: "You are the synthesis stage of a graph-search pipeline."},
+			{Role: "user", Content: "Evidence:\n  [0] c360.rg-e2e-9f3a71.seed.research.document.controlled (tier=0 src=walk_seeds.entity_state)\n"},
+		},
+	}
+	resp := makeRequest(t, server.URL()+"/v1/chat/completions", req)
+	want := `{"evidence_refs":["c360.rg-e2e-9f3a71.seed.research.document.controlled"]}`
+	if got := resp.Choices[0].Message.Content; got != want {
+		t.Errorf("content = %q, want %q", got, want)
+	}
+}
+
+// TestOpenAIServer_ObserveEntityIDSuffix_MissLeavesPlaceholder pins the
+// fail-loud half: when the request carries no matching entity ID the mock
+// leaves the placeholder verbatim rather than inventing an ID, so the
+// scenario fails on the artifact that depended on it.
+func TestOpenAIServer_ObserveEntityIDSuffix_MissLeavesPlaceholder(t *testing.T) {
+	server := NewOpenAIServer().WithRoleResponses([]RoleResponse{{
+		Marker:                "synthesis stage",
+		Content:               `{"evidence_refs":["` + ObservedEntityIDPlaceholder + `"]}`,
+		ObserveEntityIDSuffix: "seed.research.document.controlled",
+	}})
+	if err := server.Start(":0"); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Stop()
+
+	req := ChatCompletionRequest{
+		Model: "mock",
+		Messages: []ChatMessage{
+			{Role: "system", Content: "You are the synthesis stage of a graph-search pipeline."},
+			{Role: "user", Content: "Evidence:\n  (none)\n"},
+		},
+	}
+	resp := makeRequest(t, server.URL()+"/v1/chat/completions", req)
+	got := resp.Choices[0].Message.Content
+	if !strings.Contains(got, ObservedEntityIDPlaceholder) {
+		t.Errorf("content = %q, want the unresolved placeholder %q", got, ObservedEntityIDPlaceholder)
+	}
+}

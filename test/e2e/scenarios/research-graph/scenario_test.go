@@ -24,9 +24,20 @@ func TestNewScenarioSelectsExplicitFixtureMode(t *testing.T) {
 	require.Equal(t, "research-graph-execute", execute.Name())
 }
 
+// testControlledSeedEntityID composes the controlled seed under the DECLARED
+// stem. The running deployment mints a suffix onto platform.id (ADR-104), so
+// the scenario observes its authority in Setup; these unit tests exercise the
+// validator, which takes the composed ID as an argument and therefore does not
+// care which authority produced it.
+func testControlledSeedEntityID() string {
+	cfg := DefaultConfig()
+	return cfg.PlatformOrg + "." + cfg.PlatformID + "." + ControlledSeedSuffix
+}
+
 func TestValidateExecuteBranchArtifactsAcceptsControlledEvidence(t *testing.T) {
+	controlled := testControlledSeedEntityID()
 	evidence := fusion.Evidence{
-		EntityID: ControlledSeedEntityID,
+		EntityID: controlled,
 		Tier:     "0",
 		Source:   walkSeedsEntityStateSource,
 	}
@@ -42,7 +53,7 @@ func TestValidateExecuteBranchArtifactsAcceptsControlledEvidence(t *testing.T) {
 		EvidenceCount: 1,
 	}
 	searchResult := research.SearchResult{
-		Synthesis: "Controlled seed evidence supports the answer.",
+		Synthesis: ControlledSeedSynthesis,
 		Evidence:  []fusion.Evidence{evidence},
 		DecompTrace: &research.DecompTrace{
 			RouterAction: research.ActionWalkSeeds,
@@ -50,12 +61,13 @@ func TestValidateExecuteBranchArtifactsAcceptsControlledEvidence(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, validateExecuteBranchArtifacts(execution, assessment, searchResult))
+	require.NoError(t, validateExecuteBranchArtifacts(execution, assessment, searchResult, controlled))
 }
 
 func TestValidateExecuteBranchArtifactsAcceptsPartialFanoutWithControlledEvidence(t *testing.T) {
+	controlled := testControlledSeedEntityID()
 	evidence := fusion.Evidence{
-		EntityID: ControlledSeedEntityID,
+		EntityID: controlled,
 		Tier:     "0",
 		Source:   walkSeedsEntityStateSource,
 	}
@@ -75,7 +87,7 @@ func TestValidateExecuteBranchArtifactsAcceptsPartialFanoutWithControlledEvidenc
 		DegradedReason: "optional predicate walk unavailable",
 	}
 	searchResult := research.SearchResult{
-		Synthesis: "Controlled seed evidence supports the answer.",
+		Synthesis: ControlledSeedSynthesis,
 		Evidence:  []fusion.Evidence{evidence},
 		DecompTrace: &research.DecompTrace{
 			RouterAction: research.ActionWalkSeeds,
@@ -83,14 +95,15 @@ func TestValidateExecuteBranchArtifactsAcceptsPartialFanoutWithControlledEvidenc
 		},
 	}
 
-	require.NoError(t, validateExecuteBranchArtifacts(execution, assessment, searchResult))
+	require.NoError(t, validateExecuteBranchArtifacts(execution, assessment, searchResult, controlled))
 }
 
 func TestValidateExecuteBranchArtifactsRejectsUnattributedSynthesisEvidence(t *testing.T) {
+	controlled := testControlledSeedEntityID()
 	execution := research.ExecutionOutput{
 		Topic:         researchGraphTopic,
 		Action:        research.ActionWalkSeeds,
-		Evidence:      []fusion.Evidence{{EntityID: ControlledSeedEntityID, Tier: "0", Source: walkSeedsEntityStateSource}},
+		Evidence:      []fusion.Evidence{{EntityID: controlled, Tier: "0", Source: walkSeedsEntityStateSource}},
 		SubQueryCount: 1,
 	}
 	assessment := research.AssessmentOutput{
@@ -99,9 +112,9 @@ func TestValidateExecuteBranchArtifactsRejectsUnattributedSynthesisEvidence(t *t
 		EvidenceCount: 1,
 	}
 	searchResult := research.SearchResult{
-		Synthesis: "Fabricated evidence should fail attribution.",
+		Synthesis: ControlledSeedSynthesis,
 		Evidence: []fusion.Evidence{
-			{EntityID: ControlledSeedEntityID, Tier: "0", Source: walkSeedsEntityStateSource},
+			{EntityID: controlled, Tier: "0", Source: walkSeedsEntityStateSource},
 			{EntityID: "c360.research-graph-e2e.seed.research.document.fabricated", Tier: "0", Source: walkSeedsEntityStateSource},
 		},
 		DecompTrace: &research.DecompTrace{
@@ -111,8 +124,59 @@ func TestValidateExecuteBranchArtifactsRejectsUnattributedSynthesisEvidence(t *t
 	}
 
 	require.ErrorContains(t,
-		validateExecuteBranchArtifacts(execution, assessment, searchResult),
+		validateExecuteBranchArtifacts(execution, assessment, searchResult, controlled),
 		"not present in execution evidence",
+	)
+}
+
+// TestValidateExecuteBranchArtifactsRejectsUnresolvedAuthority pins the
+// fail-closed half of the ADR-104 observation: with no observed authority the
+// validator refuses instead of comparing against an empty entity ID, which
+// every evidence item would fail to match for the wrong reason.
+func TestValidateExecuteBranchArtifactsRejectsUnresolvedAuthority(t *testing.T) {
+	require.ErrorContains(t,
+		validateExecuteBranchArtifacts(
+			research.ExecutionOutput{}, research.AssessmentOutput{}, research.SearchResult{}, ""),
+		"Setup did not observe the deployment authority",
+	)
+}
+
+// TestValidateExecuteBranchArtifactsRejectsQuoteBackFallbackSynthesis pins the
+// assertion that keeps the execute fixture from passing through
+// research-graph-synthesize's degraded path: when the model's evidence_refs
+// fail quote-back the component still returns the controlled evidence, but it
+// appends a note to the synthesis. Only the verbatim fixture prose passes.
+func TestValidateExecuteBranchArtifactsRejectsQuoteBackFallbackSynthesis(t *testing.T) {
+	controlled := testControlledSeedEntityID()
+	evidence := fusion.Evidence{
+		EntityID: controlled,
+		Tier:     "0",
+		Source:   walkSeedsEntityStateSource,
+	}
+	execution := research.ExecutionOutput{
+		Topic:         researchGraphTopic,
+		Action:        research.ActionWalkSeeds,
+		Evidence:      []fusion.Evidence{evidence},
+		SubQueryCount: 1,
+	}
+	assessment := research.AssessmentOutput{
+		Topic:         researchGraphTopic,
+		Sufficient:    true,
+		EvidenceCount: 1,
+	}
+	searchResult := research.SearchResult{
+		Synthesis: ControlledSeedSynthesis +
+			"\n\n[note: synthesizer emitted no quote-back refs; chain echoed top evidence]",
+		Evidence: []fusion.Evidence{evidence},
+		DecompTrace: &research.DecompTrace{
+			RouterAction: research.ActionWalkSeeds,
+			SeedEntities: []string{"0"},
+		},
+	}
+
+	require.ErrorContains(t,
+		validateExecuteBranchArtifacts(execution, assessment, searchResult, controlled),
+		"quote-back failed",
 	)
 }
 
