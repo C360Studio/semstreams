@@ -2,7 +2,7 @@
 
 ## Status
 
-**Proposed (2026-08-30)** — pending owner acceptance on #1168. Amends ADR-102 (decision 7's "pre-v1 or never" now
+**Accepted (2026-08-31)** — owner endgame instruction on PR #1178 ("we can archive and push; once ci green we can merge"); every decision individually ruled on #1168 (scope cut + knobless 2026-08-30; "concur with option 1" comment 5479005060). Amends ADR-102 (decision 7's "pre-v1 or never" now
 applies to a value the *framework* mints, not only one the operator wrote) by reference. Supersedes nothing.
 Mechanics live in the `entity-id-contract` and `component-runtime-config` capability specs.
 

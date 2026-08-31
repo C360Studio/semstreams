@@ -195,16 +195,15 @@ with a matching `md5 -q`. Verbatim failure lines below.
 - [x] 5.4 `task schema:generate`; `git diff --exit-code schemas/ specs/`.
 - [x] 5.5 Migration note: the federation-identity section of `docs/operations/migration-beta162-to-beta163.md`
       (re-cut with this change; amend to what shipped).
-- [ ] 5.6 `docs/adr/104-unique-platform-authority.md` to Accepted on the owner's word; `docs/adr/README.md` if it
-      indexes ADRs.
+- [x] 5.6 ADR-104 → Accepted (2026-08-31, owner endgame instruction on PR #1178; rulings on #1168). README indexes
+      by directory listing only — no entry to add.
 - [x] 5.7 Author `docs/proposals/gh1168-federation-identity-pins.md` (O-11) and keep it green.
 
 ## 6. Gates and landing
 
-- [ ] 6.1 `task lint`; `go test -race -count=1 ./...`; `go test -tags=integration -race -count=1 -p 2 ./...`;
-      `go test ./test/contract/...`; `task entity-id:audit`; `task schema:generate && git diff --exit-code schemas/ specs/`;
-      `openspec validate federation-identity --strict --no-interactive`; `go mod tidy -diff`;
-      `bash scripts/inventory-verify.sh docs/proposals/gh1168-federation-identity-pins.md`.
+- [x] 6.1 Full mirror green at the final code commit `2d5b14b8` (developer run) and re-verified by the fifth
+      review round at `85d0bdc2`; lint/validate/schema/pins re-run on the archive commit itself; CI owns the final
+      word at the merge gate.
 - [x] 6.2 Covering e2e tiers, one at a time on an idle host, results verbatim. The rule-engine tiers were re-run at
       `2d5b14b8` after the fifth re-review changed all three `update_kv` refusal messages; `core` and `lifecycle`
       stand from `88fdacfc`, whose boot path this round did not touch. Earlier runs are superseded.
@@ -249,7 +248,8 @@ with a matching `md5 -q`. Verbatim failure lines below.
       fix round at `ecf58a27`, narrow re-review verified both HIGHs CLOSED by measurement, residuals closed at
       `a1432904`. Review of record: PR #1178 comment 2026-08-30; dispositions in `conformance.md` incl. the
       per-ruling conformance table.
-- [ ] 6.4 Owner-run cross-agent round where asked.
-- [ ] 6.5 `openspec archive federation-identity` + spec sync as the final content commit; narrow reviewer check.
+- [x] 6.4 Three owner-run Codex rounds (PR comments 2026-08-31): 5 blockers → fixed; 3 blockers → fixed; 2 blockers
+      + 3 mediums → fixed, with the write-ownership fork ruled by the owner on #1168.
+- [x] 6.5 Archived + spec sync in this commit (fifth review round said "clear to archive" at `85d0bdc2`).
 - [ ] 6.6 Undraft; PR body carries `implemented-by`, the per-sister list, the value that changes on the wire
       (the `platform.id` suffix), and the e2e evidence pointers. No task asserts CI state.
