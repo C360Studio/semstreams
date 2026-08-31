@@ -276,6 +276,12 @@ until the owner explicitly accepts the reviewed design.
   claim is removed.
 - Review fix commits as adversarially as the original diff — remedies are where new blockers
   enter.
+- **A silent skip, drop, or degrade is a finding at any severity.** Any path that continues
+  past a failure, takes a fallback, drops an element, or runs with less than was asked either
+  refuses loudly or emits BOTH a log line and a metric naming what was skipped and why
+  continuing is safe — with the choice stated at the site. Route by ADR-098: substrate paths
+  signal via log+metric; agent-execution paths via graph conditions. An emitted signal no test
+  observes is the same finding — an unobserved signal rots.
 
 ## Coverage review
 
