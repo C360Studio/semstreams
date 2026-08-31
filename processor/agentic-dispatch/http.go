@@ -301,9 +301,28 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 		loopID = c.loopTracker.GetActiveLoop(msg.UserID, msg.ChannelID)
 	}
 
-	// Create new loop if needed
+	// Validate the RESOLVED continuation token, after auto-continue resolution
+	// and before the mint, so one check covers both the client's reply_to and an
+	// auto-continued value. The client hears about it here, synchronously, in the
+	// response it is already waiting on — rather than "Task submitted" followed by
+	// an async TERM it never sees (ADR-105, #1192).
+	if err := c.refuseNonCanonicalContinuation(loopID); err != nil {
+		return agentic.UserResponse{
+			ResponseID:  uuid.New().String(),
+			ChannelType: msg.ChannelType,
+			ChannelID:   msg.ChannelID,
+			UserID:      msg.UserID,
+			Type:        agentic.ResponseTypeError,
+			Content:     err.Error(),
+			Timestamp:   time.Now(),
+		}
+	}
+
+	// Create new loop if needed. The token is framework-minted and full: a
+	// truncated one carried 32 bits, and a collision merged two conversations
+	// silently (ADR-105, #1192).
 	if loopID == "" {
-		loopID = "loop_" + uuid.New().String()[:8]
+		loopID = uuid.New().String()
 	}
 
 	taskID := uuid.New().String()

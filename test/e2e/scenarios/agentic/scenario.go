@@ -20,6 +20,7 @@ import (
 	e2econfig "github.com/c360studio/semstreams/test/e2e/config"
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -506,7 +507,9 @@ func (s *Scenario) injectTask(ctx context.Context, result *scenarios.Result) err
 func newTestTask(now time.Time) agentic.TaskMessage {
 	taskID := fmt.Sprintf("e2e-agentic-%d", now.UnixNano())
 	return agentic.TaskMessage{
-		LoopID:      fmt.Sprintf("e2e-loop-%d", now.UnixNano()),
+		// A loop instance token is a framework-minted canonical UUID (ADR-105,
+		// #1192); a harness that authors one is refused at intake.
+		LoopID:      uuid.NewString(),
 		TaskID:      taskID,
 		Role:        "general",
 		Model:       "mock",

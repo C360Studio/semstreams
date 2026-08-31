@@ -52,6 +52,12 @@ func tryModelEndpointEntityID(org, platform, endpointName string) (string, error
 // Example: LoopExecutionEntityID("c360", "ops", "abc123")
 // Returns: "c360.ops.agentic-loop.agent.execution.abc123"
 //
+// This function owns the COMPOSITION of the ID, not the form of the loopID
+// segment. That form — a framework-minted canonical UUID — is owned by
+// internal/looptoken and decided at the seams that accept a token
+// (TaskMessage.Validate, LoopManager.CreateLoopWithID, agentrun.Mint, dispatch
+// intake). See ADR-105.
+//
 // Panics if any input part is empty or contains a dot. Suitable for
 // boot-time and post-completion paths where invalid input represents
 // a programming error that should fail loud (operator config check at

@@ -96,7 +96,9 @@ func repoRoot(t *testing.T) string {
 // documentation-vs-reality failure earlier.
 func TestExampleFanOutPack_EndToEnd_DynamicCount(t *testing.T) {
 	const (
-		coordinatorEntityID = "acme.research.agentic-loop.agent.execution.coord-1"
+		// A loop instance token is a framework-minted canonical UUID (ADR-105,
+		// #1192); publish_agent validates the substituted task before publishing.
+		coordinatorEntityID = "acme.research.agentic-loop.agent.execution.7fa1c0e2-8b3d-4c56-9e07-1a2b3c4d5e6f"
 		n                   = 5 // dynamic via #149 .length; cover N>3 specifically since the original pack pinned 3
 	)
 

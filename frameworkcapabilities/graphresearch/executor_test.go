@@ -478,9 +478,11 @@ func TestResearchLoopIDIsCanonicalUUID(t *testing.T) {
 	writer := &fakeResearchKVWriter{}
 	e := newTestExecutor(writer)
 
+	// The calling (parent) loop's token is itself framework-minted.
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:        "call-uuid",
 		Name:      ResearchGraphToolName,
+		LoopID:    uuid.NewString(),
 		Arguments: map[string]any{"topic": "drone hover anomalies"},
 	})
 	if err != nil {
@@ -528,6 +530,7 @@ func TestResearchLoopIDIsCanonicalUUID(t *testing.T) {
 	if _, err := newTestExecutor(second).Execute(context.Background(), agentic.ToolCall{
 		ID:        "call-uuid-2",
 		Name:      ResearchGraphToolName,
+		LoopID:    uuid.NewString(),
 		Arguments: map[string]any{"topic": "drone hover anomalies"},
 	}); err != nil {
 		t.Fatalf("second execute: %v", err)

@@ -13,6 +13,7 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
+	"github.com/c360studio/semstreams/internal/looptoken"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
@@ -855,6 +856,21 @@ func (c *Component) buildTaskMessage(ctx context.Context, msg agentic.UserMessag
 	return task
 }
 
+// refuseNonCanonicalContinuation reports why a resolved continuation token
+// cannot be used, or nil when it can. Both submission paths call it on the
+// RESOLVED token — after auto-continue resolution, before the mint — so one
+// check covers a client-supplied reply_to and an auto-continued value alike.
+//
+// An empty token is not a refusal: it is the signal to mint a new loop.
+func (c *Component) refuseNonCanonicalContinuation(loopID string) error {
+	if loopID == "" || looptoken.Valid(loopID) {
+		return nil
+	}
+	return fmt.Errorf(
+		"reply_to %q is not a loop ID this framework minted: a loop ID is an opaque token you receive "+
+			"and echo back verbatim, never one you author", loopID)
+}
+
 // handleTaskSubmission creates a new agent task
 func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMessage) {
 	// Check submit permission
@@ -879,9 +895,27 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		loopID = c.loopTracker.GetActiveLoop(msg.UserID, msg.ChannelID)
 	}
 
-	// Create new loop if needed
+	// Same resolved-token check as the HTTP path (ADR-105, #1192). This path has
+	// no synchronous return, so its answer goes out on the response subject —
+	// same refusal, same named field, different delivery.
+	if err := c.refuseNonCanonicalContinuation(loopID); err != nil {
+		c.sendResponse(ctx, agentic.UserResponse{
+			ResponseID:  uuid.New().String(),
+			ChannelType: msg.ChannelType,
+			ChannelID:   msg.ChannelID,
+			UserID:      msg.UserID,
+			Type:        agentic.ResponseTypeError,
+			Content:     err.Error(),
+			Timestamp:   time.Now(),
+		})
+		return
+	}
+
+	// Create new loop if needed. The token is framework-minted and full: a
+	// truncated one carried 32 bits, and a collision merged two conversations
+	// silently (ADR-105, #1192).
 	if loopID == "" {
-		loopID = "loop_" + uuid.New().String()[:8]
+		loopID = uuid.New().String()
 	}
 
 	taskID := uuid.New().String()

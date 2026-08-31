@@ -232,7 +232,7 @@ func BuildKickoffTriples(loopEntityID, topic, loopID, parentLoopID, parentRole s
 // R6 (continuation) fires on PredicateResearchSearchResultComplete and
 // publishes back to the parent loop with resultRef as the payload_ref
 // (per ADR-028: rules carry references, not content). resultRef is
-// the AGENT_LOOPS key (e.g., "search_result.complete.rg_abc12345").
+// the AGENT_LOOPS key (e.g., "search_result.complete.<loopID>").
 func BuildSearchResultCompleteTriples(loopEntityID, resultRef string, ts time.Time) []message.Triple {
 	stamp := formatStamp(ts)
 	return []message.Triple{

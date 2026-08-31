@@ -79,7 +79,9 @@ func TestHandleSpawnIdentityFailure_GraphStatePoisonFailsLoopPerEntity(t *testin
 	t.Parallel()
 
 	handler := NewMessageHandler(DefaultConfig())
-	const loopID = "loop-poison"
+	// A loop instance token is framework-minted (ADR-105, #1192), so the fixture
+	// asks the loop manager for one rather than authoring a readable name.
+	loopID := handler.loopManager.GenerateLoopID()
 	if _, err := handler.loopManager.CreateLoopWithID(loopID, "task-poison", "researcher", "model"); err != nil {
 		t.Fatalf("CreateLoopWithID() error = %v", err)
 	}
@@ -147,7 +149,7 @@ func TestHandleSpawnIdentityFailure_OperationalErrorUsesBusinessFailurePath(t *t
 	t.Parallel()
 
 	loopManager := NewLoopManager()
-	const loopID = "loop-operational"
+	loopID := loopManager.GenerateLoopID()
 	if _, err := loopManager.CreateLoopWithID(loopID, "task-operational", "researcher", "model"); err != nil {
 		t.Fatalf("CreateLoopWithID() error = %v", err)
 	}
@@ -213,12 +215,17 @@ func TestGraphStatePoisonFailsLoopWhileIntakeContinues(t *testing.T) {
 	}
 	defer c.Stop(context.Background())
 
+	// Both loops carry framework-minted tokens (ADR-105, #1192): these tasks go
+	// out through the production BaseMessage envelope, which validates them.
+	poisonedLoopID := c.handler.loopManager.GenerateLoopID()
+	healthyLoopID := c.handler.loopManager.GenerateLoopID()
+
 	poison := errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired,
 		&graph.StateContractError{Reason: graph.GraphStateReasonNoncanonicalEntityID})
 	var lineageWrites atomic.Int32
 	c.testLineageWriteHook = func(_ context.Context, loopID string, _ map[string]any) error {
 		lineageWrites.Add(1)
-		if loopID == "loop-poisoned" {
+		if loopID == poisonedLoopID {
 			return poison
 		}
 		return nil
@@ -247,14 +254,14 @@ func TestGraphStatePoisonFailsLoopWhileIntakeContinues(t *testing.T) {
 	// Task 1: touches the poisoned entity. The loop fails terminally with
 	// the typed error; the delivery is ACKed per the loop-failure
 	// convention (never held in flight, never Term'd as producer fault).
-	first := consumeTask("loop-poisoned", "task-poisoned-entity")
+	first := consumeTask(poisonedLoopID, "task-poisoned-entity")
 	if !first.acked.Load() || first.naked.Load() || first.terminated.Load() {
 		t.Fatalf("poisoned-loop delivery ack state: ack=%v nak=%v term=%v, want ACK only",
 			first.acked.Load(), first.naked.Load(), first.terminated.Load())
 	}
-	failed, err := c.handler.GetLoop("loop-poisoned")
+	failed, err := c.handler.GetLoop(poisonedLoopID)
 	if err != nil {
-		t.Fatalf("GetLoop(loop-poisoned) error = %v", err)
+		t.Fatalf("GetLoop(%s) error = %v", poisonedLoopID, err)
 	}
 	if failed.State != agentic.LoopStateFailed || failed.Outcome != agentic.OutcomeFailed {
 		t.Fatalf("poisoned loop state=%q outcome=%q, want terminal failure", failed.State, failed.Outcome)
@@ -265,14 +272,14 @@ func TestGraphStatePoisonFailsLoopWhileIntakeContinues(t *testing.T) {
 
 	// Task 2: a different loop over a different entity processes normally —
 	// task intake was never wedged by the first loop's poison.
-	second := consumeTask("loop-healthy", "task-healthy-entity")
+	second := consumeTask(healthyLoopID, "task-healthy-entity")
 	if !second.acked.Load() || second.naked.Load() || second.terminated.Load() {
 		t.Fatalf("healthy-loop delivery ack state: ack=%v nak=%v term=%v, want ACK only",
 			second.acked.Load(), second.naked.Load(), second.terminated.Load())
 	}
-	healthy, err := c.handler.GetLoop("loop-healthy")
+	healthy, err := c.handler.GetLoop(healthyLoopID)
 	if err != nil {
-		t.Fatalf("GetLoop(loop-healthy) error = %v", err)
+		t.Fatalf("GetLoop(%s) error = %v", healthyLoopID, err)
 	}
 	if healthy.State == agentic.LoopStateFailed {
 		t.Fatalf("healthy loop state = %q, want non-failed active state", healthy.State)

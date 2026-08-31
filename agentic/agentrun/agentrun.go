@@ -13,7 +13,8 @@
 //   - MilestoneSubscriber — subscribes to terminal loop events, pre-resolves the
 //     run, and fans out to product-registered MilestoneHandlers (D6)
 //
-// Import discipline: this package imports agentic + pkg/lifecycle only.
+// Import discipline: this package imports agentic + pkg/lifecycle only, plus the
+// module-internal internal/looptoken predicate its own token check calls.
 // pkg/lifecycle MUST NOT import agentic/agentrun — verify with go mod graph.
 package agentrun
 
@@ -31,6 +32,7 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/internal/agentterminal"
 	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
+	"github.com/c360studio/semstreams/internal/looptoken"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
@@ -235,6 +237,8 @@ var (
 		"origin entity ID is required: a run with no recorded origin cannot be told apart from another deployment's run at the same instance")
 	errOriginEntityIDMismatch = errors.New(
 		"the run at this entity ID was minted from a different origin")
+	errRootLoopIDNotCanonical = errors.New(
+		"root loop ID is not a framework-minted loop token: a loop instance token is a canonical UUID (36 bytes, lowercase, hyphenated)")
 )
 
 // Mint creates (or retrieves if already exists) an AgentRun for the given
@@ -247,6 +251,14 @@ var (
 // execution the run was minted from; it is stamped as the birth predicate
 // agent.run.origin-entity-id, which is the run->loop pointer that survives when
 // the origin is a foreign-authority import the framework must not write to.
+//
+// rootLoopID must be a framework-minted loop token — a canonical UUID (ADR-105,
+// #1192). The run entity ID derives from the loop's instance segment alone, so
+// the token contract is what makes an accidental shared instance a
+// collision-math impossibility; the origin comparison below remains the loud
+// backstop for a COPIED or replayed token, which no amount of entropy prevents.
+// The refusal lands before the entity ID is constructed and before any store
+// call, so a refused mint touches nothing.
 //
 // originEntityID is REQUIRED. The run entity ID derives from rootLoopID alone,
 // so two loops that a peer and this deployment happen to name the same INSTANCE
@@ -286,6 +298,11 @@ func Mint(
 	if originEntityID == "" {
 		return nil, semerrs.WrapInvalid(errOriginEntityIDRequired,
 			"agentrun", "Mint", "validate origin entity ID")
+	}
+	if !looptoken.Valid(rootLoopID) {
+		return nil, semerrs.WrapInvalid(
+			fmt.Errorf("%w: got %q", errRootLoopIDNotCanonical, rootLoopID),
+			"agentrun", "Mint", "validate root loop token")
 	}
 	entityID, err := agentic.TryChainExecutionEntityID(org, platform, rootLoopID)
 	if err != nil {

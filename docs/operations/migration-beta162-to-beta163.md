@@ -844,3 +844,55 @@ refuses a wire value that disagrees, so it needed no change.
 - An external writer that puts a `platform` key into the shared bucket no longer changes the running deployment's
   authority. If you relied on that as a runtime override, it is gone; identity is established at Start and nothing
   moves it afterwards.
+
+## Loop tokens become full UUIDs (ADR-105, #1192) — enforced at the mint seams; no re-key
+
+> **Design stage (2026-08-31):** this section describes the target state on draft PR #1210, pending owner
+> acceptance on #1192. Amend to what ships.
+
+### What changes on the wire
+
+- New loop IDs are canonical 36-byte UUIDs. The `loop_xxxxxxxx` (dispatch) and `rg_xxxxxxxx` (research) shapes are
+  retired: both truncated a v4 UUID to 8 hex characters — 32 bits, where the birthday bound reaches ~1% collision
+  probability at ~9,300 loops and 50% at ~77,000 — and a dispatch collision was SILENT, because
+  `CreateLoopWithID` overwrites the colliding record and context manager, merging two conversations.
+- Run entity IDs, `run_id`, `ResolveRun`, and the gh#256 echo contract are **UNCHANGED**. The run's instance stays
+  the root loop's UUID; nothing is re-keyed.
+- A submission whose `reply_to`, `loop_id`, `parent_loop_id`, `in_reply_to`, or `run_id` is not a canonical UUID is
+  refused: a typed error response naming the field at dispatch — synchronous on the HTTP submit path, published to
+  the response subject on the channel path — and a classified terminated delivery, counted on the
+  intake-rejection metric, at the agentic-loop task-stream intake. Before this, a client-authored token was adopted
+  silently, or reached the graph write path where the parent/reply stamping composes through a panicking entity-ID
+  builder.
+- Canonical means canonical: 36 bytes, lowercase, hyphenated. The uppercase, braced (`{…}`), and `urn:uuid:`
+  spellings parse as UUIDs and are refused, because four spellings of one identity means a token that misses its
+  own KV key and its own entity ID.
+- Deleted Go surface: `graphresearch.WithResearchGraphIDGenerator` (zero production consumers measured; the one
+  sister hit is a comment). It is deleted rather than validated — the contract admits no adopter-facing mint knob.
+  No other exported signature changes.
+- Pre-v1 fresh storage (ADR-102 d7): no legacy tokens exist after redeploy, and nothing resolves an old-shape ID.
+  No alias, no dual format, no legacy reader.
+
+### The obligations (per-sister; measured read-only 2026-08-31 — no production code changes required)
+
+| Repo | SHA read | Finding | Instruction |
+|---|---|---|---|
+| semteams | `8a70b7e76e25` | Zero shape reliance in production. Shape appears only in comments and worked examples: `ui/src/lib/stores/taskRefs.svelte.ts:3`, `ui/src/lib/services/messageLoggerApi.ts:60`, `configs/personas/fragments/researcher-research-synthesize/00-identity.md:40`, and the manual probe commands in `ui/Taskfile.yml:1705,1721,1722,1741,1742` (`loop_70876992`) | Update comments/examples at leisure. The probe commands take a loop ID as an argument — pass the UUID the API returns; nothing in them parses the shape |
+| semsource | `4093d3ce4213` | Zero hits (the near-matches are `org_1` namespace literals) | None |
+| semdev | `ca3956af2ed8` | Reads `loop_id` opaquely from tool calls (`internal/tools/*`) | None |
+
+### Downstream action
+
+**Echo, never author.** A loop token is a value the framework handed you. Keep passing `reply_to` / `loop_id`
+verbatim; delete any test fixture that fabricates a non-UUID loop token and submits it — it will now be refused.
+
+### Doing nothing
+
+- A client that echoes framework-minted IDs sees nothing change but the shape of the string.
+- A client that **authors** a continuation token gets a typed error naming `reply_to` in the response it is already
+  waiting on — instead of "Task submitted" followed by an async TERM it never sees.
+- A stream producer that pre-fills `loop_id`, `parent_loop_id`, `in_reply_to`, or `run_id` gets a classified intake
+  rejection — metric plus terminated delivery — instead of today's silent adoption, or a silent half-written triple.
+- An operator dashboard that told research-pipeline loops apart by the `rg_` prefix loses that affordance. The
+  loop's `role` field and the `research.*` predicates carry the distinction; the e2e scenario now discriminates on
+  the `research.request.received.<loopID>` trigger key rather than the token's shape.

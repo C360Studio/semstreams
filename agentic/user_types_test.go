@@ -442,7 +442,7 @@ func TestTaskMessage_Validate(t *testing.T) {
 		{
 			name: "valid task message with loop_id",
 			task: TaskMessage{
-				LoopID: "loop-abc",
+				LoopID: canonicalLoopToken,
 				TaskID: "task-123",
 				Role:   "developer",
 				Model:  "gpt-4",

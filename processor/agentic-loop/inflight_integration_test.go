@@ -18,6 +18,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
+	"github.com/google/uuid"
 )
 
 // inflightTestComponent starts a loop bound to taskSubject under the given
@@ -91,7 +92,9 @@ func publishTaskBurst(t *testing.T, natsClient *natsclient.Client, subject, loop
 	t.Helper()
 	for i := range n {
 		publishTaskMessage(t, natsClient, subject, &agentic.TaskMessage{
-			LoopID: fmt.Sprintf("%s_%d", loopPrefix, i),
+			// The loop token is framework-minted (ADR-105, #1192); the prefix
+			// stays on the task ID, which is what identifies this burst.
+			LoopID: uuid.NewString(),
 			TaskID: fmt.Sprintf("%s_task_%d", loopPrefix, i),
 			Role:   "general",
 			Model:  "test-model",

@@ -79,9 +79,12 @@ func loadResearchGraphRules(t *testing.T) (r0, r1, r2, r3, r4, r6 Definition) {
 }
 
 const (
-	testLoopID       = "rg_smoketest"
+	// Loop instance tokens are framework-minted canonical UUIDs (ADR-105, #1192):
+	// the retired "rg_"/"loop_" shapes truncated a v4 UUID to 32 bits, and the
+	// R6 continuation validates the substituted task before publishing it.
+	testLoopID       = "8b2e5f31-9c04-4d67-a1f8-2b3c4d5e6f70"
 	testTopic        = "drone hover anomalies"
-	testParentLoopID = "loop_parent01"
+	testParentLoopID = "9c3f6a42-ad15-4e78-b209-3c4d5e6f7081"
 	testParentRole   = "general"
 )
 

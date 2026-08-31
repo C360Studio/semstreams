@@ -9,39 +9,35 @@ base: ae35f296d6660f1d5987d53f4f4b2c8dde1caa9d
 
 ## Design premises
 
-- `processor/agentic-dispatch/http.go:306` — `		loopID = "loop_" + uuid.New().String()[:8]`
-- `processor/agentic-dispatch/component.go:884` — `		loopID = "loop_" + uuid.New().String()[:8]`
-- `frameworkcapabilities/graphresearch/executor.go:39` — `const loopIDPrefix = "rg_"`
-- `frameworkcapabilities/graphresearch/executor.go:145` — `			return loopIDPrefix + id[:8]`
-- `frameworkcapabilities/graphresearch/executor.go:251` — `	loopID := e.newLoopID()`
-- `frameworkcapabilities/graphresearch/executor.go:104` — `func WithResearchGraphIDGenerator(gen func() string) ResearchGraphOption {`
-- `processor/agentic-loop/state.go:137` — `func (m *LoopManager) GenerateLoopID() string {`
-- `processor/agentic-loop/state.go:130` — `	loopID := m.GenerateLoopID()`
-- `processor/agentic-loop/state.go:142` — `func (m *LoopManager) CreateLoopWithID(loopID, taskID, role, model string, maxIterations ...int) (string, error) {`
-- `processor/agentic-loop/state.go:154` — `	m.loops[loopID] = &entity`
+- `processor/agentic-dispatch/http.go:325` — `		loopID = uuid.New().String()`
+- `processor/agentic-dispatch/component.go:918` — `		loopID = uuid.New().String()`
+- `frameworkcapabilities/graphresearch/executor.go:231` — `	loopID := uuid.NewString()`
+- `processor/agentic-loop/state.go:138` — `func (m *LoopManager) GenerateLoopID() string {`
+- `processor/agentic-loop/state.go:131` — `	loopID := m.GenerateLoopID()`
+- `processor/agentic-loop/state.go:151` — `func (m *LoopManager) CreateLoopWithID(loopID, taskID, role, model string, maxIterations ...int) (string, error) {`
+- `processor/agentic-loop/state.go:170` — `	m.loops[loopID] = &entity`
 - `processor/agentic-loop/handlers.go:834` — `		loopID, err = h.loopManager.CreateLoopWithID(task.LoopID, task.TaskID, task.Role, task.Model, effectiveMaxIterations)`
 - `processor/agentic-loop/component.go:1314` — `	if task.LoopID == "" {`
 - `processor/agentic-loop/component.go:1300` — `	if err := task.Validate(); err != nil {`
-- `agentic/user_types.go:357` — `func (t TaskMessage) Validate() error {`
-- `agentic/user_types.go:37` — `	ReplyTo          string            `json:"reply_to,omitempty"`           // loop_id if continuing`
+- `agentic/user_types.go:358` — `func (t TaskMessage) Validate() error {`
+- `agentic/user_types.go:38` — `	ReplyTo          string            `json:"reply_to,omitempty"`           // loop_id if continuing`
 - `processor/agentic-dispatch/http.go:298` — `	if msg.ReplyTo != "" {`
-- `processor/agentic-dispatch/component.go:876` — `	if msg.ReplyTo != "" {`
+- `processor/agentic-dispatch/component.go:892` — `	if msg.ReplyTo != "" {`
 - `processor/rule/actions.go:1713` — `	task := agentic.TaskMessage{`
 - `processor/rule/actions.go:1885` — `	if err := task.Validate(); err != nil {`
-- `agentic/agentrun/agentrun.go:281` — `func Mint(`
+- `agentic/agentrun/agentrun.go:293` — `func Mint(`
 - `processor/rule/actions.go:1918` — `		if _, mintErr := agentrun.Mint(ctx, e.lifecycle,`
 - `configs/rules/deep-research/02-collect-evidence.json:27` — `        "loop_id": "$entity.id",`
 - `processor/agentic-tools/loop_result.go:181` — `func normalizeLoopID(loopID string) string {`
-- `processor/agentic-dispatch/component.go:841` — `		RunID:     msg.RunID,`
+- `processor/agentic-dispatch/component.go:842` — `		RunID:     msg.RunID,`
 - `processor/agentic-dispatch/http.go:45` — `	RunID     string `json:"run_id,omitempty"``
 - `agentic/loop_execution_entity.go:130` — `		parentEntityID := LoopExecutionEntityID(e.Org, e.Platform, e.Task.ParentLoopID)`
 - `agentic/loop_execution_entity.go:137` — `		triples = append(triples, triple(agvocab.LoopRun, e.Task.RunID))`
 - `agentic/loop_execution_entity.go:138` — `		if runEntityID, err := TryChainExecutionEntityID(e.Org, e.Platform, e.Task.RunID); err == nil {`
 - `agentic/loop_execution_entity.go:144` — `		replyEntityID := LoopExecutionEntityID(e.Org, e.Platform, e.Task.InReplyTo)`
-- `test/e2e/scenarios/agentic/scenario.go:482` — `		LoopID:      fmt.Sprintf("e2e-loop-%d", now.UnixNano()),`
-- `test/e2e/scenarios/research-graph/scenario.go:380` — `	parentLoopID := fmt.Sprintf("e2e-parent-%d", time.Now().UnixNano())`
-- `test/e2e/scenarios/ops/scenario.go:367` — `			loopID:   "seed-loop-001",`
-- `frameworkcapabilities/graphresearch/executor_test.go:68` — `		WithResearchGraphIDGenerator(func() string { return "rg_test001" }),`
+- `test/e2e/scenarios/agentic/scenario.go:485` — `		LoopID:      uuid.NewString(),`
+- `test/e2e/scenarios/research-graph/scenario.go:383` — `	parentLoopID := uuid.NewString()`
+- `test/e2e/scenarios/ops/scenario.go:378` — `			loopID:   seedLoop1Token,`
 
 ## Adjacent claims
 
@@ -97,6 +93,14 @@ base: ae35f296d6660f1d5987d53f4f4b2c8dde1caa9d
   (`agentic/scenario.go:482` `e2e-loop-%d`; `research-graph/scenario.go:380` `e2e-parent-%d`) — the BREAKING
   gates themselves would go red; the ops harness seeds `seed-loop-001/2/3` via direct PutKV
   (`ops/scenario.go:367`). All swept by seam-caller enumeration (tasks 3.6).
+- PIN REFRESH (implementation, PR #1210): the pins above are re-read at the branch HEAD, not at `base:` — the
+  script's designed refresh. Nine moved by line only. Six now carry the line that REPLACED the premise: the two
+  dispatch mints and the research mint are `uuid` calls, and the three harness mints are framework-minted tokens.
+  Four premises have NO surviving line because this change deletes them outright, so they leave the pin list and are
+  recorded here instead: `frameworkcapabilities/graphresearch/executor.go:39` (`const loopIDPrefix = "rg_"`), `:145`
+  (`return loopIDPrefix + id[:8]`), `:104` (`func WithResearchGraphIDGenerator`), and its only caller anywhere,
+  `executor_test.go:68`. The base-state text of every one of them is in this file's history at `0e04f279` and in
+  `proposal.md`'s premise table, which is explicitly base-relative.
 - OWNER RULINGS 2026-08-31 (chat, transcribed on #1192): "q1 - everyone who mints a loop uses uuid" — A1
   confirmed, graph-research IN scope; "q2 drop it unless we are fixing it" — `Closes #1174` DROPPED (this scope
   does not touch the mismatch error text; #1174 stays open on its own).

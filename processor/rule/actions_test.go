@@ -2092,7 +2092,7 @@ func TestAction_PublishAgent_ParentLoopIDFromLoopEntity(t *testing.T) {
 	}
 
 	// Trigger entity is a loop execution — parent linkage should appear.
-	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agentic-loop", "agent", "execution", "loop-research-abc")
+	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agentic-loop", "agent", "execution", fixtureResearchLoopToken)
 	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: loopEntityID}))
 	require.Len(t, mock.published, 1)
 
@@ -2100,7 +2100,7 @@ func TestAction_PublishAgent_ParentLoopIDFromLoopEntity(t *testing.T) {
 	require.NoError(t, err)
 	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
 	require.True(t, ok)
-	assert.Equal(t, "loop-research-abc", task.ParentLoopID,
+	assert.Equal(t, fixtureResearchLoopToken, task.ParentLoopID,
 		"ParentLoopID should be set to the trigger loop's UUID when the entity matches LoopExecutionEntityID shape")
 }
 
@@ -3518,15 +3518,15 @@ func TestAction_PublishAgent_RunIDInheritedFromLoopEntity(t *testing.T) {
 		Prompt:  "investigate the problem",
 	}
 
-	// Build an entity state that carries agent.loop.run = "root-loop-uuid".
-	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agentic-loop", "agent", "execution", "loop-abc")
+	// Build an entity state that carries agent.loop.run = the root run token.
+	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agentic-loop", "agent", "execution", fixtureFiringLoopToken)
 	entity := &gtypes.EntityState{
 		ID: loopEntityID,
 		Triples: []message.Triple{
 			{
 				Subject:   loopEntityID,
 				Predicate: "agent.loop.run",
-				Object:    "root-loop-uuid",
+				Object:    fixtureRootRunToken,
 			},
 		},
 	}
@@ -3541,10 +3541,10 @@ func TestAction_PublishAgent_RunIDInheritedFromLoopEntity(t *testing.T) {
 	require.NoError(t, err)
 	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
 	require.True(t, ok)
-	assert.Equal(t, "root-loop-uuid", task.RunID,
+	assert.Equal(t, fixtureRootRunToken, task.RunID,
 		"RunID must be inherited from the firing loop entity's agent.loop.run triple (ADR-053 D7)")
 	// ParentLoopID is also inherited independently (existing behaviour preserved).
-	assert.Equal(t, "loop-abc", task.ParentLoopID,
+	assert.Equal(t, fixtureFiringLoopToken, task.ParentLoopID,
 		"ParentLoopID must still be inherited from the loop entity ID shape")
 }
 
@@ -3566,7 +3566,7 @@ func TestAction_PublishAgent_RunIDNotInheritedWhenMissing(t *testing.T) {
 	}
 
 	// Loop entity without agent.loop.run triple.
-	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agentic-loop", "agent", "execution", "loop-xyz")
+	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agentic-loop", "agent", "execution", fixtureNoRunLoopToken)
 	entity := &gtypes.EntityState{
 		ID: loopEntityID,
 		Triples: []message.Triple{
@@ -3612,7 +3612,7 @@ func TestAction_PublishAgent_RunIDInheritedFromNonLoopEntityTriple(t *testing.T)
 	entity := &gtypes.EntityState{
 		ID: chainEntityID,
 		Triples: []message.Triple{
-			{Subject: chainEntityID, Predicate: "agent.loop.run", Object: "root-loop-uuid"},
+			{Subject: chainEntityID, Predicate: "agent.loop.run", Object: fixtureRootRunToken},
 		},
 	}
 
@@ -3627,7 +3627,7 @@ func TestAction_PublishAgent_RunIDInheritedFromNonLoopEntityTriple(t *testing.T)
 	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
 	require.True(t, ok)
 	// RunID IS inherited: triple-driven, not loop-shape-gated.
-	assert.Equal(t, "root-loop-uuid", task.RunID,
+	assert.Equal(t, fixtureRootRunToken, task.RunID,
 		"RunID must be inherited from agent.loop.run triple on any entity type")
 	// ParentLoopID stays empty: chain entity doesn't match agentic-loop.execution shape.
 	assert.Empty(t, task.ParentLoopID,
@@ -3669,7 +3669,7 @@ func TestAction_PublishAgent_RunScopeNew_MintsRunAndStampsAgentRun(t *testing.T)
 	executor.SetLifecycleManager(mgr)
 
 	// Trigger entity is a loop-execution entity — the firing coordinator loop.
-	firingLoopID := "coordinator-loop-uuid"
+	firingLoopID := fixtureCoordinatorLoopToken
 	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agentic-loop", "agent", "execution", firingLoopID)
 
 	action := Action{
@@ -3797,7 +3797,7 @@ func TestAction_PublishAgent_RunScopeNew_NoLifecycleManagerFallsBackToInherit(t 
 	// No SetLifecycleManager call — lifecycle is nil.
 	executor := NewActionExecutorComplete(nil, nil, pub, nil, testExecutorPlatform())
 
-	firingLoopID := "coordinator-loop-uuid"
+	firingLoopID := fixtureCoordinatorLoopToken
 	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agentic-loop", "agent", "execution", firingLoopID)
 
 	action := Action{
@@ -3832,7 +3832,7 @@ func TestAction_PublishAgent_RunScopeNone_SuppressesRunID(t *testing.T) {
 	pub := &mockPublisher{}
 	executor := NewActionExecutorFull(nil, nil, pub, testExecutorPlatform())
 
-	firingLoopID := "coordinator-loop-uuid"
+	firingLoopID := fixtureCoordinatorLoopToken
 	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agentic-loop", "agent", "execution", firingLoopID)
 
 	// Entity has an agent.loop.run triple — but run_scope:none suppresses it.
@@ -3879,7 +3879,7 @@ func TestAction_PublishAgent_RunScopeNew_MintsRunSuccessfully(t *testing.T) {
 		component.PlatformMeta{Org: "acme", Platform: "ops"})
 	executor.SetLifecycleManager(mgr)
 
-	firingLoopID := "coord-fresh-mint"
+	firingLoopID := fixtureFreshMintLoopToken
 	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agentic-loop", "agent", "execution", firingLoopID)
 
 	action := Action{
@@ -4006,7 +4006,7 @@ func TestAction_PublishAgent_CarriesNoChannelFields(t *testing.T) {
 
 	// A loop-entity trigger: the richest spawn shape, carrying ancestry and a
 	// run anchor. Even here no channel field rides along.
-	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agentic-loop", "agent", "execution", "loop-root-abc")
+	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agentic-loop", "agent", "execution", fixtureRootLoopToken)
 	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: loopEntityID}))
 	require.Len(t, mock.published, 1)
 
@@ -4018,5 +4018,20 @@ func TestAction_PublishAgent_CarriesNoChannelFields(t *testing.T) {
 	assert.Empty(t, task.ChannelType, "a rule-spawned task must carry no channel type")
 	assert.Empty(t, task.ChannelID, "a rule-spawned task must carry no channel id")
 	assert.Empty(t, task.UserID, "a rule-spawned task must carry no user id")
-	assert.Equal(t, "loop-root-abc", task.ParentLoopID, "ancestry, not routing, is what the spawn carries")
+	assert.Equal(t, fixtureRootLoopToken, task.ParentLoopID, "ancestry, not routing, is what the spawn carries")
 }
+
+// Loop instance tokens are framework-minted canonical UUIDs (ADR-105, #1192).
+// The publish_agent cases below run the substituted task through
+// TaskMessage.Validate before publishing, which refuses any other shape, so the
+// fixtures standing in for a loop token are canonical ones. The names carry the
+// role the old readable literals carried.
+const (
+	fixtureFiringLoopToken      = "0e1c2b3a-4d5e-4f60-8a71-9b2c3d4e5f60" // was "loop-abc"
+	fixtureNoRunLoopToken       = "1f2d3c4b-5e6f-4071-8b82-ac3d4e5f6071" // was "loop-xyz"
+	fixtureRootRunToken         = "2a3b4c5d-6e7f-4082-9c93-bd4e5f607182" // was "root-loop-uuid"
+	fixtureCoordinatorLoopToken = "3b4c5d6e-7f80-4193-8da4-ce5f60718293" // was "coordinator-loop-uuid"
+	fixtureFreshMintLoopToken   = "4c5d6e7f-8091-42a4-9eb5-df60718293a4" // was "coord-fresh-mint"
+	fixtureResearchLoopToken    = "5d6e7f80-91a2-43b5-8fc6-e0718293a4b5" // was "loop-research-abc"
+	fixtureRootLoopToken        = "6e7f8091-a2b3-44c6-90d7-f18293a4b5c6" // was "loop-root-abc"
+)

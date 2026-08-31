@@ -66,12 +66,15 @@ func TestTaskMessage_InReplyTo_OmittedWhenEmpty(t *testing.T) {
 func TestTaskMessage_InReplyTo_ProductionWire(t *testing.T) {
 	t.Parallel()
 	task := &agentic.TaskMessage{
-		TaskID:    "task-wire-001",
-		Role:      "coordinator",
-		Model:     "model-a",
-		Prompt:    "resume the paused run",
-		RunID:     "paused-run-uuid",
-		InReplyTo: "asking-loop-uuid",
+		TaskID: "task-wire-001",
+		Role:   "coordinator",
+		Model:  "model-a",
+		Prompt: "resume the paused run",
+		// Both anchors are loop instance tokens, so both are framework-minted
+		// canonical UUIDs (ADR-105, #1192). The BaseMessage envelope validates
+		// the payload on the way out, which is the path under test.
+		RunID:     wirePausedRunToken,
+		InReplyTo: wireAskingLoopToken,
 	}
 	envelope := message.NewBaseMessage(task.Schema(), task, "agentic-dispatch-test")
 	data, err := json.Marshal(envelope)
@@ -83,9 +86,16 @@ func TestTaskMessage_InReplyTo_ProductionWire(t *testing.T) {
 
 	got, ok := decoded.Payload().(*agentic.TaskMessage)
 	require.True(t, ok, "decoded payload is not *agentic.TaskMessage")
-	assert.Equal(t, "asking-loop-uuid", got.InReplyTo)
-	assert.Equal(t, "paused-run-uuid", got.RunID)
+	assert.Equal(t, wireAskingLoopToken, got.InReplyTo)
+	assert.Equal(t, wirePausedRunToken, got.RunID)
 }
+
+// Loop instance tokens carried through the production wire path are canonical
+// UUIDs (ADR-105, #1192).
+const (
+	wireAskingLoopToken = "a1b2c3d4-e5f6-4708-9a1b-2c3d4e5f6071"
+	wirePausedRunToken  = "b2c3d4e5-f607-4819-8b2c-3d4e5f607182"
+)
 
 // --- UserMessage.RunID + InReplyTo (dispatch-inbound shape) ---
 

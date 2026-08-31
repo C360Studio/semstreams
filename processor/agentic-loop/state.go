@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/internal/looptoken"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/google/uuid"
@@ -138,8 +139,23 @@ func (m *LoopManager) GenerateLoopID() string {
 	return uuid.NewString()
 }
 
-// CreateLoopWithID creates a new loop entity with a specific ID
+// CreateLoopWithID creates a new loop entity with a specific ID.
+//
+// The supplied ID must be a framework-minted loop token — a canonical UUID
+// (ADR-105, #1192). TaskMessage.Validate is the gate for everything arriving
+// over the wire; this refusal is the gate for a composed binary calling the
+// LoopManager directly, and it lands before any state is registered because the
+// map write below OVERWRITES an existing record and its context manager. That
+// overwrite is what made a colliding 32-bit token merge two conversations
+// silently, and it is why the shape check cannot live downstream of it.
 func (m *LoopManager) CreateLoopWithID(loopID, taskID, role, model string, maxIterations ...int) (string, error) {
+	if !looptoken.Valid(loopID) {
+		return "", errs.WrapInvalid(
+			fmt.Errorf("loop id %q is not a framework-minted loop token: a loop instance token is a canonical UUID "+
+				"(36 bytes, lowercase, hyphenated) minted by the framework", loopID),
+			"agentic-loop", "CreateLoopWithID", "validate loop token")
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

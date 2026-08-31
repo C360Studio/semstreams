@@ -54,7 +54,7 @@ are stamped by the `research_graph` tool itself (in
 | `02-route-decision-dispatch.json` | R2 | `research.route.complete` becomes present | conditional publish to one of: synthesize_answer (synthesize_directly), nl_classify (retighten — with stage-marker clear), execute_subqueries (walk_seeds or decompose) |
 | `03-execute-assesses.json` | R3 | `research.execute.complete` becomes present | publish to `component.assess_sufficiency.<loopID>` |
 | `04-assess-dispatch.json` | R4 | `research.assess.complete` becomes present | conditional publish to one of: execute_subqueries (refine, with stage-marker clear — bounded), synthesize_answer (sufficient OR iteration cap) |
-| `05-continuation.json` | R6 | `research.search_result.complete` becomes present | publish_agent back to parent loop's role with `read_loop_result(loop_id=<rg_…>)` prompt |
+| `05-continuation.json` | R6 | `research.search_result.complete` becomes present | publish_agent back to parent loop's role with `read_loop_result(loop_id=<loopID>)` prompt |
 
 R5 in the ADR is the **synthesis component's terminal write itself**
 — there's no separate rule, the synthesize component stamps
