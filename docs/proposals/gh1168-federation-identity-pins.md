@@ -16,15 +16,15 @@ deletes the first two and rewrites the third, so pinning them now would pin hist
 in `openspec/changes/federation-identity/conformance.md` and design §3. The pins below are the premises that are
 still live: the facts this change DEPENDS on and did not itself author.
 
-base: 656bf5c8c2e4adf52284f1f8ae6ba9ec99eb9bec
+base: ede202e4d24a5614ebe8f96c8addd493cfd57d65
 
 ## Design premises
 
 - `pkg/types/framework_identity_families.go:65` — `	return MaxEntityIDBytes - LongestFrameworkIdentityFamily().FixedBytes()`
 - `config/config.go:818` — `	return semtypes.MaxAuthorityPairBytes() - mintedSuffixBytes`
-- `config/manager.go:211` — `	hasConfig, err := cm.establishPlatformIdentity(ctx)`
-- `config/manager.go:1126` — `		current.Services = make(types.ServiceConfigs)`
-- `natsclient/kv.go:209` — `			return 0, ErrKVKeyExists`
+- `config/manager.go:289` — `	hasConfig, err := cm.establishPlatformIdentity(ctx)`
+- `config/manager.go:1329` — `		current.Services = make(types.ServiceConfigs)`
+- `natsclient/kv.go:218` — `			return 0, ErrKVKeyExists`
 
 ## Adjacent claims
 
