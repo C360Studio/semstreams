@@ -39,8 +39,9 @@ Premises measured on `main@48b127ce`: `service/service_manager.go:925-932` (the 
 
 ## 5. Review and land
 
-- [ ] 5.1 `semstreams-reviewer` round; dispositions recorded on the PR.
-- [ ] 5.2 Archive + spec sync as the LAST content commit, reviewed with the delta.
+- [x] 5.1 `semstreams-reviewer` round (APPROVE, 3 MEDIUM + 3 NIT); all six addressed in `af84ed3c`,
+      dispositions on the PR; three findings filed as #1218 / #1219 / #1220.
+- [x] 5.2 Archive + spec sync as the LAST content commit, reviewed with the delta.
 - [ ] 5.3 Undraft; PR body carries `implemented-by:` and `Closes #1214`.
 
 ## Deliberately not done
