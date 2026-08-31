@@ -422,6 +422,13 @@ func (l *Loader) Load() (*Config, error) {
 	// Apply environment overrides
 	l.applyEnvOverrides(cfg)
 
+	// The declared-pair reserve runs on EVERY load, not only a validated one:
+	// it is the one boundary that knows this pair is a declaration, and a
+	// binary that skipped it would mint a pair it can never carry (ADR-104).
+	if err := validateDeclaredAuthorityPair(cfg.Platform.Org, cfg.Platform.ID); err != nil {
+		return nil, err
+	}
+
 	// Validate if enabled
 	if l.validation {
 		if err := l.validate(cfg); err != nil {
@@ -450,6 +457,11 @@ func (l *Loader) LoadFromBytes(data []byte) (*Config, error) {
 
 	// Apply environment overrides
 	l.applyEnvOverrides(cfg)
+
+	// See Load: the declared-pair reserve is not optional.
+	if err := validateDeclaredAuthorityPair(cfg.Platform.Org, cfg.Platform.ID); err != nil {
+		return nil, err
+	}
 
 	// Validate if enabled
 	if l.validation {
@@ -793,33 +805,61 @@ func (c *Config) GetPlatform() string {
 // never boot again.
 const mintedSuffixBytes = len("-") + 6
 
-// maxDeclarableAuthorityPairBytes is the budget for a pair as anyone declares
-// or records it: the family-table budget less the suffix the framework will
-// mint onto platform.id.
+// maxDeclarableAuthorityPairBytes is the budget for a pair as DECLARED — in a
+// configuration document, before the framework mints anything onto it. It is
+// the family-table budget less the entropy suffix that will be minted onto
+// platform.id.
+//
+// It is deliberately NOT the bound on an effective pair. The reserve is a fact
+// about a declaration, not about a pair: an effective pair already carries the
+// suffix, so bounding it here too would reserve the same seven bytes twice and
+// refuse every declaration in (156, 163] at Start after it had passed load.
 func maxDeclarableAuthorityPairBytes() int {
 	return semtypes.MaxAuthorityPairBytes() - mintedSuffixBytes
 }
 
-// validateAuthorityPair bounds platform.org + platform.id so every framework
-// identity family fits under the canonical 256-byte entity-ID bound (ADR-102
-// amends ADR-076 d2; ruled O-14) once the ADR-104 entropy suffix is minted onto
-// platform.id. The budget is derived from the framework's own family table,
-// never configured by the operator, and the second check is by observation
-// rather than arithmetic: the binding family's identity is composed under the
-// pair and must validate, which also refuses an org or id that is not one
-// canonical entity-ID segment.
+// validateDeclaredAuthorityPair bounds platform.org + platform.id as the
+// configuration document declares them, reserving the seven bytes of the
+// ADR-104 entropy suffix that will be minted onto platform.id at first boot.
 //
-// It is the ONE rule for every authority pair the framework accepts — the
-// configuration document's, an adopted platform_identity record's, and the
-// effective pair after minting — so no path can admit a pair another path
-// rejects.
+// It runs at the load boundary — the one place that sees a pair which is
+// certainly a declaration — and nowhere else. Reserving at load is what stops a
+// pair that fits only unsuffixed from being durably recorded and then refused
+// forever, which ADR-102 decision 7 makes unrepairable.
+func validateDeclaredAuthorityPair(org, id string) error {
+	pair := len(org) + len(id)
+	if pair <= maxDeclarableAuthorityPairBytes() {
+		return nil
+	}
+	binding := semtypes.LongestFrameworkIdentityFamily()
+	return fmt.Errorf(
+		"platform.org + platform.id is %d bytes; a declared authority pair may not exceed %d bytes — the %d-byte budget the %s identity family (%d fixed bytes) leaves under the %d-byte entity-ID bound, less the %d bytes of the entropy suffix the framework mints onto platform.id on first boot (ADR-104)",
+		pair, maxDeclarableAuthorityPairBytes(), semtypes.MaxAuthorityPairBytes(),
+		binding.Name, binding.FixedBytes(), semtypes.MaxEntityIDBytes, mintedSuffixBytes,
+	)
+}
+
+// validateAuthorityPair bounds an EFFECTIVE platform.org + platform.id so every
+// framework identity family fits under the canonical 256-byte entity-ID bound
+// (ADR-102 amends ADR-076 d2; ruled O-14). The budget is derived from the
+// framework's own family table, never configured by the operator, and the
+// second check is by observation rather than arithmetic: the binding family's
+// identity is composed under the pair and must validate, which also refuses an
+// org or id that is not one canonical entity-ID segment.
+//
+// Effective means "the pair this deployment actually mints under": the minted
+// identifier, an adopted platform_identity record's, or the running
+// configuration's. Those already carry whatever suffix they will ever carry, so
+// this bound is the family-table budget with NO reserve —
+// validateDeclaredAuthorityPair owns the reserve, at the load boundary. Every
+// effective-pair site shares this one rule, so none of them can admit a pair
+// another rejects.
 func validateAuthorityPair(org, id string) error {
 	binding := semtypes.LongestFrameworkIdentityFamily()
-	if pair := len(org) + len(id); pair > maxDeclarableAuthorityPairBytes() {
+	if pair := len(org) + len(id); pair > semtypes.MaxAuthorityPairBytes() {
 		return fmt.Errorf(
-			"platform.org + platform.id is %d bytes; the authority pair may not exceed %d bytes — the %d-byte budget the %s identity family (%d fixed bytes) leaves under the %d-byte entity-ID bound, less the %d bytes of the entropy suffix the framework mints onto platform.id on first boot (ADR-104)",
-			pair, maxDeclarableAuthorityPairBytes(), semtypes.MaxAuthorityPairBytes(),
-			binding.Name, binding.FixedBytes(), semtypes.MaxEntityIDBytes, mintedSuffixBytes,
+			"platform.org + platform.id is %d bytes; the authority pair may not exceed %d bytes so that the %s identity family (%d fixed bytes) fits the %d-byte entity-ID bound",
+			pair, semtypes.MaxAuthorityPairBytes(), binding.Name, binding.FixedBytes(), semtypes.MaxEntityIDBytes,
 		)
 	}
 	if _, err := binding.EntityID(org, id, strings.Repeat("0", binding.InstanceBytes)); err != nil {

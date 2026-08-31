@@ -8,9 +8,14 @@ family — `256 − 86 = 170` bytes while the rule trigger family (`rules.graph.
 the longest — naming the binding family in the error. The seven reserved bytes are the suffix
 `component-runtime-config` mints onto `platform.id` (`-` plus six hex bytes); reserving them at load is what stops a
 pair that fits only unsuffixed from being durably recorded and then refused forever, which ADR-102 decision 7 makes
-unrepairable. The same bound MUST apply to every authority pair the framework accepts — the configuration document's,
-an adopted identity record's, and the effective pair after minting — so no path can admit a pair another path
-rejects. The budget MUST be derived from the framework's own family table, never configured by the operator.
+unrepairable. A declared pair may therefore be at most 163 bytes.
+
+The reserve MUST apply only where a pair is DECLARED. An effective pair — a minted identifier, an adopted identity
+record's, or the running configuration's — already carries whatever suffix it will ever carry and MUST be bounded at
+the full 170-byte budget; reserving the same seven bytes against it as well would refuse, after Start, a declaration
+that had already passed load. Every declaration boundary MUST apply the same 163-byte bound and every effective-pair
+boundary the same 170-byte bound, so no path can admit a pair another path rejects. The budget MUST be derived from
+the framework's own family table, never configured by the operator.
 Framework constructors MUST keep fail-closed canonical validation as the second layer. This amends ADR-076 decision
 2: framework identities are bounded, not fixed-length.
 
@@ -29,6 +34,14 @@ Framework constructors MUST keep fail-closed canonical validation as the second 
 - **WHEN** configuration load runs
 - **THEN** the load fails and no identity record is created
 - **AND** the test that verifies this is `TestConfigRejectsPairThatOnlyFitsUnsuffixed`
+
+#### Scenario: a pair at the declarable budget boots
+
+- **GIVEN** a configuration whose `platform.org` and `platform.id` total exactly 163 bytes
+- **WHEN** the deployment loads that configuration and starts against an empty bucket
+- **THEN** the load succeeds, the entropy suffix is minted, the effective pair is 170 bytes, and Start succeeds
+- **AND** the tests that verify this are `TestMaximumDeclarablePairMintsAndStarts` and
+  `TestEffectivePairIsBoundedWithoutTheDeclarationReserve`
 
 ## ADDED Requirements
 

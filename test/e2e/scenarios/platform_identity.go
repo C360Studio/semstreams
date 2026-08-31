@@ -12,14 +12,6 @@ import (
 	e2econfig "github.com/c360studio/semstreams/test/e2e/config"
 )
 
-const (
-	// platformIdentityBucket is the shared configuration bucket.
-	platformIdentityBucket = "semstreams_config"
-	// platformIdentityKey is where a deployment durably records the authority
-	// it mints under (ADR-104).
-	platformIdentityKey = "platform_identity"
-)
-
 // mintedSuffix matches the entropy suffix the framework mints onto platform.id:
 // a separator and exactly six lowercase hex bytes.
 var mintedSuffix = regexp.MustCompile(`^-[0-9a-f]{6}$`)
@@ -74,9 +66,9 @@ func (s *MintedAuthorityScenario) Execute(ctx context.Context) (*Result, error) 
 		return result, nil
 	}
 
-	raw, err := s.nats.GetKV(ctx, platformIdentityBucket, platformIdentityKey)
+	raw, err := s.nats.GetKV(ctx, e2econfig.PlatformIdentityBucket, e2econfig.PlatformIdentityKey)
 	if err != nil {
-		return fail(fmt.Errorf("read %s/%s: %w", platformIdentityBucket, platformIdentityKey, err))
+		return fail(fmt.Errorf("read %s/%s: %w", e2econfig.PlatformIdentityBucket, e2econfig.PlatformIdentityKey, err))
 	}
 
 	// Exactly three fields — the record's shape is a cross-repo contract.
@@ -203,31 +195,58 @@ func (s *PreIdentityBucketScenario) Execute(ctx context.Context) (*Result, error
 		if err != nil {
 			return finish(err)
 		}
-		if err := s.nats.PutKV(ctx, platformIdentityBucket, "platform", platform); err != nil {
+		if err := s.nats.PutKV(ctx, e2econfig.PlatformIdentityBucket, "platform", platform); err != nil {
 			return finish(fmt.Errorf("seed the platform key: %w", err))
 		}
 		version, err := json.Marshal("1.0.0")
 		if err != nil {
 			return finish(err)
 		}
-		if err := s.nats.PutKV(ctx, platformIdentityBucket, "version", version); err != nil {
+		if err := s.nats.PutKV(ctx, e2econfig.PlatformIdentityBucket, "version", version); err != nil {
 			return finish(fmt.Errorf("seed the version key: %w", err))
 		}
-		if _, err := s.nats.GetKV(ctx, platformIdentityBucket, platformIdentityKey); err == nil {
-			return finish(errors.New("the seeded bucket already holds a platform_identity record; it does not predate identity minting"))
+		if err := s.requireNoIdentityRecord(ctx,
+			"the seeded bucket already holds a platform_identity record; it does not predate identity minting"); err != nil {
+			return finish(err)
 		}
 		result.Details["seeded"] = []string{"platform", "version"}
 		return finish(nil)
 
 	case "assert":
-		if _, err := s.nats.GetKV(ctx, platformIdentityBucket, platformIdentityKey); err == nil {
-			return finish(errors.New("a refused pre-identity boot created a platform_identity record; it must mint nothing and create nothing"))
+		if err := s.requireNoIdentityRecord(ctx,
+			"a refused pre-identity boot created a platform_identity record; it must mint nothing and create nothing"); err != nil {
+			return finish(err)
 		}
 		result.Details["platform_identity_absent"] = true
 		return finish(nil)
 
 	default:
 		return finish(fmt.Errorf("unknown mode %q, want seed or assert", s.mode))
+	}
+}
+
+// requireNoIdentityRecord asserts that the identity record is ABSENT, and says
+// so only on the one error that means absent.
+//
+// A bare `err != nil` here reports GREEN for a missing bucket, an unreachable
+// server, a JetStream fault, or a closed client — every way the read can fail
+// without proving anything about the key. That is the fail-open shape a
+// negative assertion is most prone to, and it would make this stage pass while
+// measuring nothing. The seed half writes `platform` before probing, so the
+// bucket exists by then: key-not-found is the only benign outcome on either
+// half.
+func (s *PreIdentityBucketScenario) requireNoIdentityRecord(ctx context.Context, presentMsg string) error {
+	_, err := s.nats.GetKV(ctx, e2econfig.PlatformIdentityBucket, e2econfig.PlatformIdentityKey)
+	switch {
+	case err == nil:
+		return errors.New(presentMsg)
+	case client.IsKVKeyNotFound(err):
+		return nil
+	default:
+		return fmt.Errorf(
+			"cannot prove %s/%s is absent: the read failed for a reason other than key-not-found: %w",
+			e2econfig.PlatformIdentityBucket, e2econfig.PlatformIdentityKey, err,
+		)
 	}
 }
 

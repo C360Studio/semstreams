@@ -48,8 +48,15 @@ alias, no parallel path; sisters handle their own migration.
    threat model says gets cloned, so a cloned opt-out recreates the footgun the mint exists to close (owner ruling,
    2026-08-30).
 
-5. **The authority-pair budget reserves the suffix.** Configuration load bounds `len(org) + len(id) + 7` against the
-   family-table budget, so a pair that fits only unsuffixed cannot be durably minted and then rejected forever.
+5. **The authority-pair budget reserves the suffix — at the declaration boundary, and only there.** Configuration
+   load bounds `len(org) + len(id) + 7` against the family-table budget, so a pair that fits only unsuffixed cannot
+   be durably minted and then rejected forever. A declared pair may therefore be at most **163** bytes.
+
+   The reserve is a fact about a *declaration*, not about a pair. An **effective** pair — the minted identifier, an
+   adopted record's, or the running configuration's — already carries whatever suffix it will ever carry and is
+   bounded at the full family-table budget of **170**. Applying the reserve to both kinds reserves the same seven
+   bytes twice and refuses, at Start, a declaration that had already passed load. Declarations ≤ 163, effective
+   pairs ≤ 170; no path admits what another rejects, because no path sees both kinds.
 
 ## Consequences
 
@@ -59,7 +66,8 @@ alias, no parallel path; sisters handle their own migration.
   the pre-identity bucket and instructs fresh storage. It is repeatable, not a wedge.
 - Adopter fixtures and e2e stop predicting the pair from a configuration file and read
   `semstreams_config/platform_identity` instead — the framework observes; nobody computes.
-- The declarable authority pair loses 7 bytes of headroom (163 rather than 170), uniformly.
+- The declarable authority pair loses 7 bytes of headroom: 163 rather than 170. The bound on an effective pair is
+  unchanged at 170.
 - #1188 namespaces this bucket by the pre-mint `(org, stem)` and retires the gh#459 guard; the mechanism above is
   correct without that guard, because the adopt branch performs its own comparison.
 

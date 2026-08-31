@@ -750,9 +750,11 @@ refuses a wire value that disagrees, so it needed no change.
 - The suffix is minted once, with an atomic `Create`, and adopted by every later boot and by every co-process
   sharing that configuration bucket. ADR-102 decision 7 forbids rewriting it.
 - **There is no configuration key that disables it.** The opt-out is operational — see obligation 2.
-- The declarable authority pair loses seven bytes of headroom: configuration load now bounds
-  `len(platform.org) + len(platform.id) + 7` against the 170-byte family budget, so the suffix a deployment will
-  mint cannot push it over the entity-ID bound after the fact.
+- The **declarable** authority pair loses seven bytes of headroom: configuration load now bounds
+  `len(platform.org) + len(platform.id) + 7` against the 170-byte family budget, so a declared pair may be at most
+  **163** bytes and the suffix a deployment will mint cannot push it over the entity-ID bound after the fact. The
+  bound on an **effective** pair — what the deployment actually mints under, suffix included — is unchanged at 170;
+  the reserve applies where a pair is declared and nowhere else.
 - The KV `platform` key is now a **published mirror only**. It is still written for the UI; the running configuration
   never adopts it back.
 
@@ -782,9 +784,14 @@ refuses a wire value that disagrees, so it needed no change.
 4. **semmachina** composes `platform.id` per world in Go; each world's identifier is suffixed on its own first boot.
    Pre-create the record for a world that must stay unsuffixed.
 5. **semsource:** `entityid.MaxOrgLen`'s arithmetic (`entityid.go:82-97`) assumes a 9-byte platform. Re-derive the
-   org bound from `semtypes.MaxAuthorityPairBytes()` minus the seven reserved suffix bytes rather than a local
-   constant.
-6. **Non-Go carriers.** Rule packs, compose files, TypeScript fixtures, and vendored OpenAPI documents that spell an
+   org bound from `semtypes.MaxAuthorityPairBytes()` minus the seven reserved suffix bytes — 163 — rather than a
+   local constant. That is the bound on what a config may DECLARE, which is what `MaxOrgLen` governs; an identifier
+   already carrying the minted suffix is bounded at 170.
+6. **Start now validates the whole effective configuration.** Establishing the platform identity applies it through
+   the config manager's serialized mutation, which re-validates the entire document. A defect anywhere in your
+   configuration that previously surfaced later — undeclared stream bounds, a bad TLS path — now fails Start. The
+   error leads with that finding and names the identity step second; it is not an identity failure.
+7. **Non-Go carriers.** Rule packs, compose files, TypeScript fixtures, and vendored OpenAPI documents that spell an
    `org.platform` prefix as a literal are outside every Go census and break the same way as obligation 3. Grep your
    repository for your own `platform.id` value, not for a Go symbol.
 
@@ -793,6 +800,11 @@ refuses a wire value that disagrees, so it needed no change.
 - A configuration bucket carried over from before this change **refuses Start, LOUD**, naming the pre-identity
   bucket as the cause and instructing fresh storage — and it creates no record, so the refusal is repeatable rather
   than a wedge. This is the one upgrade path, and it is deliberately not silent.
+- The same refusal fires when **another writer created the bucket first**. `semstreams_config` is a fixed global
+  name and the config manager is not its only writer: a rule processor's own ConfigManager creates it for its
+  `rules.*` keys. On a shared NATS server, another sem* app's rules can therefore make your genuinely-first boot
+  refuse. The message names both possibilities and lists the keys it found; the remedy is the same for both —
+  fresh storage per deployment, or pre-create the identity record.
 - A fixture predicting the pair from a configuration file mints under `dep` while the deployment is `dep-7f3a9c`;
   the graph boundary refuses it `foreign_authority` — LOUD at the first write, silent in the fixture's own eyes.
   Read the pair.

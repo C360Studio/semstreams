@@ -4,6 +4,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -135,6 +136,17 @@ func (c *NATSValidationClient) GetKV(ctx context.Context, bucket, key string) ([
 		return nil, fmt.Errorf("failed to read key %s/%s: %w", bucket, key, err)
 	}
 	return entry.Value(), nil
+}
+
+// IsKVKeyNotFound reports whether err is exactly "that key is absent" — not a
+// missing bucket, an unreachable server, or a closed client.
+//
+// GetKV wraps its causes with %w, so the distinction survives; without it an
+// assertion of the form "reading this key must fail" reports GREEN for every
+// infrastructure failure, which is the fail-open shape a negative assertion is
+// most prone to.
+func IsKVKeyNotFound(err error) bool {
+	return errors.Is(err, jetstream.ErrKeyNotFound)
 }
 
 // PutKV writes a key-value entry to the named bucket, creating the

@@ -102,10 +102,12 @@ configuration — it remains a published mirror only — and version arbitration
 
 Configuration load SHALL bound the authority pair against the identifier that will actually be minted from it, not
 against the identifier the document declares: the seven bytes of the entropy suffix are reserved at load, as
-`entity-id-contract` specifies. Start SHALL apply that same bound to the effective pair after minting or adoption, so
-a pair that passes load and then cannot carry a framework identity is impossible. The framework SHALL NOT probe,
-roll back, or delete an identity record to discover the bound — ADR-102 decision 7 forbids rewriting a minted
-authority, so the only safe order is to refuse before the `Create`.
+`entity-id-contract` specifies. Start SHALL bound the effective pair — minted or adopted — against the full
+family-table budget, WITHOUT the declaration reserve, because that pair already carries the suffix; reserving twice
+would refuse at Start a pair that passed load. Together these make a pair that passes load and then cannot carry a
+framework identity impossible. The framework SHALL NOT probe, roll back, or delete an identity record to discover
+the bound — ADR-102 decision 7 forbids rewriting a minted authority, so the only safe order is to refuse before the
+`Create`.
 
 #### Scenario: a pair that only fits unsuffixed does not boot
 
@@ -114,3 +116,10 @@ authority, so the only safe order is to refuse before the `Create`.
 - **WHEN** the deployment boots against an empty bucket
 - **THEN** configuration load fails, Start is never reached, and no `platform_identity` record is created
 - **AND** the test that verifies this is `TestConfigRejectsPairThatOnlyFitsUnsuffixed`
+
+#### Scenario: a pair at the declarable budget mints and starts
+
+- **GIVEN** a configuration whose `platform.org` and `platform.id` total exactly the declarable budget
+- **WHEN** the deployment starts against an empty bucket
+- **THEN** the suffix is minted, the effective pair equals the family-table budget, and Start succeeds
+- **AND** the test that verifies this is `TestMaximumDeclarablePairMintsAndStarts`

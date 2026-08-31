@@ -62,13 +62,15 @@ func TierStemEntityID(variant, suffix string) string {
 }
 
 const (
-	// platformIdentityBucket is the shared configuration bucket every sem* app
+	// PlatformIdentityBucket is the shared configuration bucket every sem* app
 	// on one NATS server uses.
-	platformIdentityBucket = "semstreams_config"
-	// platformIdentityKey holds the deployment's durable platform identity.
+	PlatformIdentityBucket = "semstreams_config"
+	// PlatformIdentityKey holds the deployment's durable platform identity.
 	// Reading it is the ADR-104 cross-repo contract: an adopter observes the
 	// pair a deployment mints under instead of predicting it from a config file.
-	platformIdentityKey = "platform_identity"
+	// Exported so the scenarios that assert on the record name it from here
+	// rather than keeping a second copy of a cross-repo contract's address.
+	PlatformIdentityKey = "platform_identity"
 )
 
 // AuthorityReader reads one KV value from the running stack.
@@ -78,7 +80,7 @@ type AuthorityReader interface {
 	GetKV(ctx context.Context, bucket, key string) ([]byte, error)
 }
 
-// platformIdentity is the record's shape, normative in the
+// platformIdentityRecord is the record's shape, normative in the
 // component-runtime-config capability spec.
 type platformIdentityRecord struct {
 	Org  string `json:"org"`
@@ -105,21 +107,21 @@ func EffectiveAuthority(ctx context.Context, reader AuthorityReader, declaredSte
 		return "", fmt.Errorf("e2e config: declared authority %q is not org.platform", declaredStem)
 	}
 
-	raw, err := reader.GetKV(ctx, platformIdentityBucket, platformIdentityKey)
+	raw, err := reader.GetKV(ctx, PlatformIdentityBucket, PlatformIdentityKey)
 	if err != nil {
 		return "", fmt.Errorf(
 			"e2e config: read %s/%s, where the deployment records the authority it mints under (ADR-104): %w",
-			platformIdentityBucket, platformIdentityKey, err,
+			PlatformIdentityBucket, PlatformIdentityKey, err,
 		)
 	}
 	var record platformIdentityRecord
 	if err := json.Unmarshal(raw, &record); err != nil {
-		return "", fmt.Errorf("e2e config: parse %s/%s: %w", platformIdentityBucket, platformIdentityKey, err)
+		return "", fmt.Errorf("e2e config: parse %s/%s: %w", PlatformIdentityBucket, PlatformIdentityKey, err)
 	}
 	if record.Org == "" || record.ID == "" {
 		return "", fmt.Errorf(
 			"e2e config: %s/%s is incomplete (org=%q stem=%q id=%q)",
-			platformIdentityBucket, platformIdentityKey, record.Org, record.Stem, record.ID,
+			PlatformIdentityBucket, PlatformIdentityKey, record.Org, record.Stem, record.ID,
 		)
 	}
 	if record.Org != org || record.Stem != stem {

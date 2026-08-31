@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -235,7 +236,7 @@ func (cm *Manager) Start(ctx context.Context) error {
 		if kvIdentity, found := cm.kvPlatformIdentity(ctx); found {
 			localIdentity := cm.config.Get().Platform
 			if platformHasIdentity(localIdentity) && platformHasIdentity(kvIdentity) &&
-				platformIdentityKey(localIdentity) != platformIdentityKey(kvIdentity) {
+				platformIdentityTuple(localIdentity) != platformIdentityTuple(kvIdentity) {
 				return fmt.Errorf(
 					"config bucket platform identity mismatch: "+
 						"local org=%q platform=%q environment=%q, "+
@@ -902,15 +903,34 @@ func (cm *Manager) establishPlatformIdentity(ctx context.Context) (bool, error) 
 	case configKeys > 0:
 		declared := cm.config.Get().Platform
 		return false, fmt.Errorf(
-			"config bucket %q holds %d configuration key(s) but no %q record: it predates framework-minted platform identity (ADR-104), so nothing was minted and nothing was written. "+
-				"Provision fresh NATS storage for this deployment — ADR-102 decision 7 forbids rewriting a minted authority — "+
-				"or, to adopt the pair this configuration declares, pre-create %q as {\"org\":%q,\"stem\":%q,\"id\":%q}",
-			configBucketName, configKeys, platformIdentityKVKey,
+			"config bucket %q holds %d configuration key(s) (%s) but no %q record, so nothing was minted and nothing was written. "+
+				"Either it predates framework-minted platform identity (ADR-104), or another writer created it first — "+
+				"%q is a fixed global name and this package is not its only writer: processor/rule's ConfigManager "+
+				"creates the same bucket for its rules.* keys, and two ConfigManager instances coexist against it by design. "+
+				"Both cases have the same remedy: provision fresh NATS storage for this deployment — ADR-102 decision 7 "+
+				"forbids rewriting a minted authority — or, to adopt the pair this configuration declares, pre-create %q as "+
+				"{\"org\":%q,\"stem\":%q,\"id\":%q}",
+			configBucketName, configKeys, summarizeKeys(keys), platformIdentityKVKey,
+			configBucketName,
 			platformIdentityKVKey, declared.Org, declared.ID, declared.ID,
 		)
 	default:
 		return false, cm.mintPlatformIdentity(ctx)
 	}
+}
+
+// summarizeKeys renders at most a handful of bucket keys so the refusal above
+// says WHICH keys were found. "3 configuration keys" sends an operator to go
+// looking; "rules.foo, platform, version" tells them which writer got there
+// first, which is the difference between the two causes the message names.
+func summarizeKeys(keys []string) string {
+	const shown = 5
+	sorted := append([]string(nil), keys...)
+	sort.Strings(sorted)
+	if len(sorted) <= shown {
+		return strings.Join(sorted, ", ")
+	}
+	return strings.Join(sorted[:shown], ", ") + fmt.Sprintf(", and %d more", len(sorted)-shown)
 }
 
 // mintPlatformIdentity mints the entropy suffix on a genuine first boot and
@@ -935,10 +955,12 @@ func (cm *Manager) mintPlatformIdentity(ctx context.Context) error {
 	}
 	record := platformIdentityRecord{Org: declared.Org, Stem: declared.ID, ID: declared.ID + "-" + suffix}
 
-	// Bound the value actually being minted before it becomes durable.
-	// Configuration load already reserves these bytes, so this cannot refuse a
-	// pair that loaded; it is what makes "no record is ever created that a
-	// later boot rejects" a local property rather than a distant argument.
+	// Bound the EFFECTIVE value before it becomes durable, against the
+	// family-table budget and not the declarable one — the suffix is already on
+	// it. Load reserved these seven bytes at the declaration boundary, so a pair
+	// that loaded cannot fail here; this is what makes "no record is ever
+	// created that a later boot rejects" a local property of this function
+	// rather than an argument about a distant check.
 	if err := validateAuthorityPair(record.Org, record.ID); err != nil {
 		return fmt.Errorf("minted platform identity %q is not a usable authority: %w", record.ID, err)
 	}
@@ -998,9 +1020,11 @@ func (cm *Manager) adoptPlatformIdentity(ctx context.Context) error {
 		)
 	}
 
-	// An adopted identifier is bounded and grammar-checked exactly as a
-	// configured one is: the record is operator-writable (it is the knobless
-	// opt-out), so it is never trusted further than a configuration value.
+	// An adopted identifier is bounded and grammar-checked exactly as an
+	// effective configured pair is: the record is operator-writable (it is the
+	// knobless opt-out), so it is never trusted further than a configuration
+	// value. The declarable reserve does not apply — nothing is minted onto an
+	// adopted identifier.
 	if err := validateAuthorityPair(record.Org, record.ID); err != nil {
 		return fmt.Errorf("recorded platform identity %q/%q is not a usable authority: %w", record.Org, record.ID, err)
 	}
@@ -1011,15 +1035,20 @@ func (cm *Manager) adoptPlatformIdentity(ctx context.Context) error {
 }
 
 // applyEffectivePlatformID makes the established identifier the authority every
-// identity this process mints is composed under. Mutate re-validates the whole
-// configuration, so the effective pair passes the same bound as the declared
-// one rather than a weaker one.
+// identity this process mints is composed under.
+//
+// Mutate re-validates the WHOLE configuration, which is how the effective pair
+// gets bounded — and also means an unrelated defect anywhere in the document
+// now surfaces at Start rather than wherever it used to. That finding leads the
+// error: reading "apply effective platform identity: … streams: ordinary stream
+// bounds are not declared" as an identity failure costs a reader the real
+// cause, so the identity step names itself last.
 func (cm *Manager) applyEffectivePlatformID(id string) error {
 	if err := cm.config.Mutate(func(current *Config) error {
 		current.Platform.ID = id
 		return nil
 	}); err != nil {
-		return fmt.Errorf("apply effective platform identity %q: %w", id, err)
+		return fmt.Errorf("%w (found while applying the established platform identity %q; Start validates the whole effective configuration)", err, id)
 	}
 	return nil
 }
@@ -1067,13 +1096,17 @@ func platformHasIdentity(p PlatformConfig) bool {
 	return p.Org != "" || p.ID != ""
 }
 
-// platformIdentityKey is the identity tuple used to compare two platform
+// platformIdentityTuple is the identity tuple used to compare two platform
 // configs for the cross-app config-bleed guard (gh#459). Environment is
 // included so two instances of the same org+id but different environments
 // (prod vs dev) sharing one NATS are also treated as distinct. A NUL
 // separator (illegal in every segment) is used so the join is unambiguous —
 // {org:"a",id:"b.c"} and {org:"a.b",id:"c"} must not collide.
-func platformIdentityKey(p PlatformConfig) string {
+//
+// Named "tuple", not "key": it is a comparison value, and platformIdentityKVKey
+// beside it is a KV address. Two symbols one letter apart meaning different
+// things is how the wrong one gets called.
+func platformIdentityTuple(p PlatformConfig) string {
 	return p.Org + "\x00" + p.ID + "\x00" + p.Environment
 }
 

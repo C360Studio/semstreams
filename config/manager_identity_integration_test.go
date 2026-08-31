@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/c360studio/semstreams/natsclient"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/types"
 )
 
@@ -298,8 +300,12 @@ func TestPreIdentityBucketRefusesStartWithoutMinting(t *testing.T) {
 
 	err := manager.Start(ctx)
 	require.Error(t, err)
-	require.ErrorContains(t, err, "predates")
+	require.ErrorContains(t, err, "predates framework-minted platform identity")
 	require.ErrorContains(t, err, platformIdentityKVKey)
+	// The refusal names WHICH keys it found, so an operator can tell the two
+	// causes apart — a carried-over bucket from a second writer's fresh one.
+	require.ErrorContains(t, err, "platform, version")
+	require.ErrorContains(t, err, "processor/rule")
 
 	_, getErr := manager.kvStore.Get(ctx, platformIdentityKVKey)
 	require.ErrorIs(t, getErr, natsclient.ErrKVKeyNotFound,
@@ -368,4 +374,34 @@ func TestKVPlatformKeyIsAMirrorNotASource(t *testing.T) {
 	require.Equal(t, minted, manager.GetConfig().Get().Platform.ID,
 		"a KV platform write must not move the running authority")
 	require.Equal(t, "acme", manager.GetConfig().Get().Platform.Org)
+}
+
+// TestMaximumDeclarablePairMintsAndStarts is the invariant HIGH-1 refuted: a
+// declared pair at exactly the declarable budget must LOAD, MINT, and START.
+// The 7-byte reserve is a fact about a DECLARATION, so bounding the effective
+// pair — which already carries the suffix — against the declarable budget
+// reserves it twice and hard-fails Start for every pair in (156, 163].
+func TestMaximumDeclarablePairMintsAndStarts(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	declarable := maxDeclarableAuthorityPairBytes()
+	org := strings.Repeat("o", 60)
+	id := strings.Repeat("p", declarable-len(org))
+	require.Equal(t, declarable, len(org)+len(id), "the fixture must sit exactly on the declarable budget")
+
+	// It loads.
+	require.NoError(t, writeAndLoadAuthorityPair(t, org, id))
+
+	// It mints and starts.
+	manager := newIdentityManager(t, tc, org, id)
+	require.NoError(t, manager.Start(ctx), "a pair at the declarable budget must boot")
+	defer manager.Stop(5 * time.Second)
+
+	effective := manager.GetConfig().Get().Platform.ID
+	require.Equal(t, id+"-"+effective[len(id)+1:], effective)
+	require.LessOrEqual(t, len(org)+len(effective), semtypes.MaxAuthorityPairBytes(),
+		"the effective pair must fit the family-table budget")
+	require.Equal(t, effective, readIdentityRecord(t, ctx, manager).ID)
 }

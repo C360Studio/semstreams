@@ -34,12 +34,38 @@ deviation, it is a defect. Measured at `cb88762d` unless noted.
 | Call | Why | Where |
 |---|---|---|
 | The adopt branch also compares the record's `org` | The revision (§2.8) states the mint must be correct **without** the gh#459 guard, which #1188 retires. That guard is the only thing that compared `org`; without an org comparison in adopt, two apps sharing a stem under different orgs would adopt each other's identity once it goes | `config/manager.go` `adoptPlatformIdentity`; scenario and `TestConfigManagerAdoptsPersistedPlatformIdentity/file_declares_another_organization` |
-| The suffix reserve applies to **every** pair the framework accepts, not only the document's | `Config.Validate` is shared by load, `SafeConfig.Mutate`, and `ValidateEffectiveConfig`, and the type carries no marker for "already established". One uniform rule cannot admit a pair another path rejects; the cost is 7 bytes of headroom (163 declarable rather than 170), stated in the spec, the ADR, and the migration note | `config/config.go` `validateAuthorityPair` |
+| ~~The suffix reserve applies to **every** pair the framework accepts~~ → **the declaration boundary only** | **WITHDRAWN — this was HIGH-1, and the first implementation was wrong.** `Config.Validate` is shared by load, `SafeConfig.Mutate` and `ValidateEffectiveConfig`, so reserving inside it double-counted: a declared pair of 157–163 bytes loaded and then hard-failed Start. Measured, not argued — `TestMaximumDeclarablePairMintsAndStarts` reproduced it before the fix. The reserve is a fact about a *declaration*: `validateDeclaredAuthorityPair` enforces 163 at `Loader.Load`/`LoadFromBytes` (ungated, like `rejectRemovedPlatformFields`, because the binary's `loadConfig` never enables loader validation), and `validateAuthorityPair` bounds every effective pair at 170. Uniform per KIND; no path sees both kinds | `config/config.go` `validateDeclaredAuthorityPair` / `validateAuthorityPair` / `Load` / `LoadFromBytes` |
 | `mintPlatformIdentity` validates the composed pair **before** `Create` | The revision rejected a pre-`Create` *probe* (a KV read) and a rollback (a `Delete`, which d7 forbids). This is neither: it is arithmetic on the value about to be written, and it makes "no record is created that a later boot rejects" a local property instead of an argument about a distant load check. It cannot false-refuse, because load already reserved the bytes | `config/manager.go` `mintPlatformIdentity` |
 | A failed bucket read now fails Start instead of assuming first boot | The old `hasKVConfig` tolerated a read error by assuming first boot. Under minting that assumption **creates a second authority** for a deployment that already has one | `config/manager.go` `establishPlatformIdentity` |
 | Minting refuses an empty `platform.org`/`platform.id` by name | `Config.Validate` requires both, so this is an unvalidated configuration reaching Start (library consumers can do it). Without the explicit refusal it surfaced as a family-composition error about `"-9ef4a0"` | `config/manager.go` `mintPlatformIdentity` |
 | `TierAuthority`/`CoreAuthority`/`TierEntityID` renamed to `…Stem` | They now return the declared stem, not the authority. A name that says "authority" while returning a stem is the same prediction footgun one level up | `test/e2e/config/tier_authority.go` |
 | `--lifecycle-seed` takes the last four positions | A compose file can no longer spell the pair at all. The old whole-ID form plus a mismatch guard was the right guard for the wrong shape | `cmd/e2e-semstreams/main.go` `seedMission`; `docker/compose/lifecycle.yml` |
+
+## Can anything change the platform pair after establishment? (asked in the fix round)
+
+No. Enumerated rather than asserted — every writer of a live `*Config`'s platform block:
+
+| Writer | Reach |
+|---|---|
+| `SafeConfig.Update` (`config/config.go:95`) | **zero production callers**; tests only |
+| `SafeConfig.Mutate` → `config/manager.go:553` (`updateConfig`) | the KV apply path. Its switch has arms for `services`, `components`, `nats`, `model_registry` only; the `platform` arm is deleted and unknown keys return `errNoConfigChange`. `TestKVPlatformKeyIsAMirrorNotASource` pins it; mutation check M13 reds it |
+| `SafeConfig.Mutate` → `config/manager.go` `applyEffectivePlatformID` | the establishment itself, once, before watchers or writes |
+| `SafeConfig.Mutate` → `config/manager.go` `syncFromKV` | resets `Services` only |
+| `Loader.applyEnvOverrides` (`config/config.go:748`, `STREAMKIT_PLATFORM_ID`) | runs at LOAD, on a declaration, before Start — never after establishment. Leaves with #1186 |
+| the HTTP/API config surface | `PutComponentToKV` / `DeleteComponentFromKV`, both keyed `components.*` |
+
+So the ADR-102 d7 obligation ("never rewrite a minted authority") needs no additional refusal: after
+`establishPlatformIdentity` returns, there is no path to the pair. If one is ever added it must refuse rather than
+apply, and this table is the enumeration it has to re-open.
+
+## Second writer to the configuration bucket (MEDIUM-2)
+
+`semstreams_config` has a fixed global name and this package is not its only creator:
+`processor/rule/kv_config_integration.go:574` creates the same bucket for `rules.*`, and
+`cmd/semstreams/main.go:733-736` documents two ConfigManager instances coexisting against it by design. A
+rules-seeded fresh bucket therefore makes a genuine first boot take the third branch. The refusal now names both
+possible causes and lists the keys it found (`summarizeKeys`); the remedy it prints is correct for both.
+`TestPreIdentityBucketRefusesStartWithoutMinting` asserts both the `processor/rule` mention and the key list.
 
 ## Test fixtures changed because the refusal is the feature
 

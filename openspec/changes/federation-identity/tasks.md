@@ -83,8 +83,17 @@ with a matching `md5 -q`. Verbatim failure lines below.
       written for it.
 - [x] 4.5 M13 `updateConfig`: restore the `case "platform"` arm → `TestKVPlatformKeyIsAMirrorNotASource` failed:
       `expected: "dep-6e923f" actual: "other"` — an external write moved the running authority.
-- [x] 4.6 M14 `maxDeclarableAuthorityPairBytes`: drop the seven-byte reserve →
-      `TestConfigRejectsPairThatOnlyFitsUnsuffixed` failed: "An error is expected but got nil".
+- [x] 4.6 M14 `validateDeclaredAuthorityPair`: drop the seven-byte reserve (bound at 170 instead of 163) → THREE
+      tests failed, all "An error is expected but got nil":
+      `TestConfigRejectsPairThatOnlyFitsUnsuffixed`, `TestConfigRejectsOversizedAuthorityPair` ("164 bytes must not
+      load"), and `TestEffectivePairIsBoundedWithoutTheDeclarationReserve` ("the same pair DECLARED leaves no room
+      for the suffix"). Re-pointed from `maxDeclarableAuthorityPairBytes` after the review round moved the reserve to
+      the declaration boundary; the reviewer's note that M14 also reds `TestConfigRejectsOversizedAuthorityPair` is
+      the stronger signal and is recorded here.
+- [x] 4.7 M15 `validateAuthorityPair`: reserve the suffix on the EFFECTIVE pair too — the HIGH-1 defect itself →
+      `TestMaximumDeclarablePairMintsAndStarts` failed ("a pair at the declarable budget must boot") and
+      `TestEffectivePairIsBoundedWithoutTheDeclarationReserve` failed ("a minted pair at exactly the family-table
+      budget is legal"). This is the regression guard for the double-count.
 
 ## 5. Sweep — spec, docs, e2e, configs, sisters' notes
 
@@ -112,20 +121,19 @@ with a matching `md5 -q`. Verbatim failure lines below.
       `go test ./test/contract/...`; `task entity-id:audit`; `task schema:generate && git diff --exit-code schemas/ specs/`;
       `openspec validate federation-identity --strict --no-interactive`; `go mod tidy -diff`;
       `bash scripts/inventory-verify.sh docs/proposals/gh1168-federation-identity-pins.md`.
-- [x] 6.2 Covering e2e tiers, one at a time on an idle host, results verbatim:
-      `task e2e:core` EXIT=0 — `[OK] platform_identity records {org, stem, id} and the effective pair carries the
-      minted suffix` and `[OK] A pre-identity bucket refuses LOUD, exits nonzero, and creates no identity record`;
-      `task e2e:lifecycle` EXIT=0 — all eight stages, so the four-position seed and the observed pair agree;
-      `task e2e:structural` EXIT=0 — `entity_count:127 validation_errors:0` under the minted pair.
-      Stage mutation check: `./e2e --scenario core-minted-authority` exits 1 with
+- [ ] 6.2 Covering e2e tiers, one at a time on an idle host, results verbatim. Re-run after the review round's
+      fixes, because they touched `config` and `test/e2e/scenarios`.
+- [ ] 6.2a `task e2e:core` — both Case B stages.
+- [ ] 6.2b `task e2e:lifecycle` — the four-position seed and the observed pair.
+- [ ] 6.2c `task e2e:structural` — ingest regression under a minted pair.
+- [ ] 6.2d `task e2e:lessons` and `task e2e:throughput` — owed because 5.2 changed their scenario files.
+- [x] 6.2e Stage mutation check (not vacuous): `./e2e --scenario core-minted-authority` exits 1 with
       `read semstreams_config/platform_identity: ... bucket not found` when no record exists, and exits 1 with
       `recorded id "streamkit-pure" is not the stem "streamkit-pure" plus a suffix` against a hand-seeded unsuffixed
-      record — the stage is not vacuous.
-      Excluded with reason: `statistical`, `semantic` (same ingest path as structural; their identity literals come
-      from the same e2e config helper structural exercised), `agentic`, `ops`, `lessons`, `crud-tools`,
-      `research-graph`, `deep-research`, `slow-consumer`, `throughput`, `openai-responses`. `lessons` and
-      `throughput` had scenario files changed in 5.2 and are owed a run before merge — pause seam for the reviewer
-      round.
+      record.
+- [x] 6.2f Excluded with reason: `statistical`, `semantic` (same ingest path as structural; their identity literals
+      come from the same e2e config helper structural exercised), `agentic`, `ops`, `crud-tools`, `research-graph`,
+      `deep-research`, `slow-consumer`, `openai-responses` — none has a touched path beyond the e2e config helper.
 - [ ] 6.3 Implementation review by `semstreams-reviewer`; dispositions in `conformance.md`, including the per-ruling
       conformance table (owner cut → `file:line`).
 - [ ] 6.4 Owner-run cross-agent round where asked.

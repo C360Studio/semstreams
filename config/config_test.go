@@ -389,7 +389,9 @@ func TestLoader_ExampleConfig(t *testing.T) {
 }
 
 // writeAndLoadAuthorityPair loads a minimal configuration declaring the given
-// authority pair through the production loader with validation enabled.
+// authority pair through the production loader with validation enabled. This is
+// the DECLARATION boundary — the one place that knows the pair it is looking at
+// has not yet had the ADR-104 entropy suffix minted onto it.
 func writeAndLoadAuthorityPair(t *testing.T, org, id string) error {
 	t.Helper()
 	configFile := filepath.Join(t.TempDir(), "config.json")
@@ -402,12 +404,16 @@ func writeAndLoadAuthorityPair(t *testing.T, org, id string) error {
 }
 
 // TestConfigRejectsOversizedAuthorityPair pins the configuration-load bound on
-// the authority pair (ADR-102 amends ADR-076 d2, O-14): len(org)+len(id) may
-// not exceed the budget derived from the longest fixed-suffix framework family
-// — 170 bytes while the rule trigger family binds — LESS the seven bytes of the
-// entropy suffix the framework mints onto platform.id (ADR-104), so 163 bytes
-// is the declarable pair. The error names the family, the budget, and the
+// a DECLARED authority pair (ADR-102 amends ADR-076 d2, O-14): len(org)+len(id)
+// may not exceed the budget derived from the longest fixed-suffix framework
+// family — 170 bytes while the rule trigger family binds — LESS the seven bytes
+// of the entropy suffix the framework mints onto platform.id (ADR-104), so 163
+// bytes is the declarable pair. The error names the family, the budget, and the
 // measured pair.
+//
+// The reserve lives HERE and nowhere else. An effective pair — minted, adopted,
+// or running — is bounded at 170 by validateAuthorityPair, because the suffix
+// is already on it; see TestEffectivePairIsBoundedWithoutTheDeclarationReserve.
 func TestConfigRejectsOversizedAuthorityPair(t *testing.T) {
 	org := strings.Repeat("o", 82)
 	require.NoError(t, writeAndLoadAuthorityPair(t, org, strings.Repeat("p", 81)),
@@ -437,6 +443,31 @@ func TestConfigRejectsPairThatOnlyFitsUnsuffixed(t *testing.T) {
 	require.Error(t, err, "a pair that only fits unsuffixed must not load")
 	assert.Contains(t, err.Error(), "suffix",
 		"the refusal must name the minted suffix as the reason the pair does not fit")
+}
+
+// TestEffectivePairIsBoundedWithoutTheDeclarationReserve pins the other half of
+// the split the declaration reserve requires: an EFFECTIVE pair already carries
+// whatever suffix it will ever carry, so bounding it at the declarable budget
+// would reserve the same seven bytes twice and refuse every declaration in
+// (156, 163] after it had already passed load.
+//
+// The pair here is what a 163-byte declaration becomes once minted: 170 bytes,
+// exactly the family-table budget, and legal.
+func TestEffectivePairIsBoundedWithoutTheDeclarationReserve(t *testing.T) {
+	org := strings.Repeat("o", 60)
+	declared := strings.Repeat("p", maxDeclarableAuthorityPairBytes()-len(org))
+	effective := declared + "-a1b2c3"
+	require.Equal(t, semtypes.MaxAuthorityPairBytes(), len(org)+len(effective))
+
+	require.NoError(t, validateAuthorityPair(org, effective),
+		"a minted pair at exactly the family-table budget is legal")
+	require.Error(t, validateDeclaredAuthorityPair(org, effective),
+		"the same pair DECLARED leaves no room for the suffix and must not load")
+	require.NoError(t, validateDeclaredAuthorityPair(org, declared),
+		"the declaration it was minted from must load")
+
+	require.Error(t, validateAuthorityPair(org, effective+"x"),
+		"one byte past the family-table budget is refused on the effective path too")
 }
 
 // TestConfigRejectsRemovedInstanceID pins O-2: `platform.instance_id` left
