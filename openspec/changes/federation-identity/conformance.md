@@ -95,3 +95,14 @@ is the change, not a regression. `config/manager_test.go`, `config/manager_integ
 comments: the gh#459 regression test now asserts the refusal that comes from the identity record one branch earlier,
 and `service/component_manager_boot_findings_integration_test.go` declares stream bounds because Start now validates
 the effective configuration when it applies the established identity.
+
+## Second narrow re-review (2026-08-31, `42628d4a` → `bfeecdcb`) — dispositions
+
+All four Codex blockers verified CLOSED by measurement (M16/M17/M18 spot-checked via overlay; MaxBytes class
+confirmed covered; crash windows and the legacy `{record, no guard}` bucket probed — retroactive claim, safe).
+Three MEDIUMs, closed at `c5527927`+: (1) task 2.2 rewritten to the shipped stem-only contract; (2) the guard-key
+first-boot exclusion was unguarded — the test now seeds `{guard, record}` and mutation M19 pins it; (3) the
+cross-environment refusal and migration obligation 7 now name the single-deployment rename cause. Accepted, not a
+finding: `ErrGraphBucketRetention` keeps its name (renaming an exported sentinel costs adopters more than the
+comment mismatch). Reset-slip incident independently verified: both coordination commits ancestors of head,
+all five closures present.

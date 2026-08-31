@@ -116,6 +116,11 @@ with a matching `md5 -q`. Verbatim failure lines below.
       `TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance` and
       `TestConfigManagerAdoptsPersistedPlatformIdentity/file_declares_the_minted_identifier` both failed
       ("An error is expected but got nil").
+- [x] 4.11 M19 key partition: remove the `platformEnvironmentGuardKey` exclusion (found unguarded by the second
+      narrow re-review — the whole integration suite stayed green without it) → with the first-boot test seeding
+      `{guard, record}`, `TestBootWithOnlyAnIdentityRecordIsStillAFirstBoot` failed
+      `types.ServiceConfigs{} does not contain "metrics"` — the P7 service-map wipe, same class M12 pins for the
+      record key.
 - [x] 4.7 M15 `validateAuthorityPair`: reserve the suffix on the EFFECTIVE pair too — the HIGH-1 defect itself →
       `TestMaximumDeclarablePairMintsAndStarts` failed ("a pair at the declarable budget must boot") and
       `TestEffectivePairIsBoundedWithoutTheDeclarationReserve` failed ("a minted pair at exactly the family-table
