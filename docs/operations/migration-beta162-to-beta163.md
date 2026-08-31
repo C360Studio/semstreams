@@ -794,8 +794,10 @@ refuses a wire value that disagrees, so it needed no change.
    and the next boot would mint a second authority ADR-102 d7 forbids reconciling.
 7. **One environment per configuration bucket.** Two deployments sharing `platform.org` and `platform.id` but
    differing in `platform.environment` can no longer both start against one bucket: the second is refused, naming
-   both environments. Give each environment its own NATS storage. (Before this, the environment was compared only on
-   the subsequent-boot branch, so two first boots raced and both published.)
+   both environments. Give each environment its own NATS storage. The same refusal fires when a single deployment
+   RENAMES `platform.environment` against its established bucket — the environment is bound at first boot and is
+   never re-decided (ADR-102 d7); a deliberate environment change is a fresh-storage move. (Before this, the
+   environment was compared only on the subsequent-boot branch, so two first boots raced and both published.)
 8. **Declare the STEM in `platform.id`, never the minted identifier.** If you copy the effective value out of
    `semstreams_config/platform_identity` back into your configuration file, Start refuses and tells you which stem
    to write instead. The framework composes the effective value; the file names what it was composed from.

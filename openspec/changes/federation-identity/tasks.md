@@ -33,9 +33,9 @@ in `docs/proposals/gh1168-federation-identity-pins.md`; inventory
       `TestConfigManagerFirstBootMintsPlatformIdentity` (record carries exactly `org`/`stem`/`id`; `id` is the stem
       plus `-` plus six lowercase hex; the effective `platform.id` is that value; the pushed `platform` key carries
       it; the boot is still treated as a first boot),
-      `TestConfigManagerAdoptsPersistedPlatformIdentity` (a file declaring the stem, and a file declaring the full
-      identifier, both adopt; a file declaring another `platform.id`, and one declaring another `platform.org`, both
-      refuse),
+      `TestConfigManagerAdoptsPersistedPlatformIdentity` (a file declaring the stem adopts; a file declaring another
+      `platform.id`, another `platform.org`, or the minted identifier itself all refuse — the last with stem
+      guidance, `TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance`),
       `TestConfigManagerConcurrentFirstBootConvergesOnOneIdentity` (two managers, one bucket, started concurrently:
       one record, one identifier, both effective configs equal),
       `TestFirstBootMintsDistinctSuffixesPerDeployment` (two buckets, two suffixes),

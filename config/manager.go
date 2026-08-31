@@ -1075,7 +1075,9 @@ func (cm *Manager) claimEnvironment(ctx context.Context) error {
 		return fmt.Errorf(
 			"config bucket %q was established by platform.environment %q and this deployment declares %q: "+
 				"one bucket serves one environment, and two would publish configuration over each other. "+
-				"Point this deployment at its own NATS storage",
+				"Point this deployment at its own NATS storage — or, if this is the only deployment, "+
+				"platform.environment was changed after this bucket was established; the framework binds "+
+				"the environment at first boot and never re-decides it (ADR-102 d7)",
 			configBucketName, established, declared,
 		)
 	}

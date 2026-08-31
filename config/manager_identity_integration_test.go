@@ -289,7 +289,10 @@ func TestPreCreatedIdentityRecordIsAdoptedUnsuffixed(t *testing.T) {
 // sends the boot down the subsequent-boot branch, where equal versions select
 // syncFromKV — which resets the in-memory service map before repopulating it
 // from a bucket that has nothing to repopulate it with. The deployment then
-// runs with no services AND never publishes its own.
+// runs with no services AND never publishes its own. The environment guard
+// key is framework-internal for the same reason and seeded here too: a boot
+// that claimed and minted but failed its config push leaves exactly
+// {guard, record}, and that bucket must still read as a first boot.
 func TestBootWithOnlyAnIdentityRecordIsStillAFirstBoot(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
 	ctx, cancel := context.WithCancel(context.Background())
@@ -306,6 +309,10 @@ func TestBootWithOnlyAnIdentityRecordIsStillAFirstBoot(t *testing.T) {
 	manager, err := NewConfigManager(cfg, tc.Client, nil)
 	require.NoError(t, err)
 	seedIdentityRecord(t, ctx, manager, platformIdentityRecord{Org: "acme", Stem: "dep", ID: "dep"})
+	guardVal, err := json.Marshal(cfg.Platform.Environment)
+	require.NoError(t, err)
+	_, err = directKVStore(t, ctx, manager).Create(ctx, platformEnvironmentGuardKey, guardVal)
+	require.NoError(t, err)
 
 	require.NoError(t, manager.Start(ctx))
 	defer manager.Stop(5 * time.Second)
