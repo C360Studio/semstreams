@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -814,20 +815,26 @@ func resolveObservedEntityID(r RoleResponse, messages []ChatMessage) string {
 	return strings.ReplaceAll(r.Content, ObservedEntityIDPlaceholder, observed)
 }
 
-// findEntityIDBySuffix returns the first whitespace-delimited token in the
-// system+user content that ends in "."+suffix, with surrounding punctuation
-// trimmed. Empty when the request carries none.
+// findEntityIDBySuffix returns the first entity ID in the system+user content
+// that ends in "."+suffix. Empty when the request carries none.
+//
+// The match is bounded by the entity-ID grammar (dot-joined
+// [A-Za-z0-9][A-Za-z0-9_-]* segments, pkg/types.EntityIDLiteralPattern) rather
+// than by whitespace: prompts embed IDs inside other text — a degraded-retrieval
+// reason renders "predicate_walk seed=<id> via ..." — and a whitespace-delimited
+// token there carries a "seed=" prefix that quote-back validation then rejects.
 func findEntityIDBySuffix(messages []ChatMessage, suffix string) string {
-	want := "." + suffix
+	pattern, err := regexp.Compile(`(?:[A-Za-z0-9][A-Za-z0-9_-]*\.)+` + regexp.QuoteMeta(suffix))
+	if err != nil {
+		log.Printf("mock openai: entity-ID suffix %q is not usable in a pattern: %v", suffix, err)
+		return ""
+	}
 	for _, msg := range messages {
 		if msg.Role != "system" && msg.Role != "user" {
 			continue
 		}
-		for _, field := range strings.Fields(msg.Content) {
-			token := strings.Trim(field, `"',;:()[]{}`)
-			if strings.HasSuffix(token, want) && len(token) > len(want) {
-				return token
-			}
+		if found := pattern.FindString(msg.Content); found != "" {
+			return found
 		}
 	}
 	return ""

@@ -825,7 +825,11 @@ func TestOpenAIServer_ObserveEntityIDSuffix(t *testing.T) {
 		Model: "mock",
 		Messages: []ChatMessage{
 			{Role: "system", Content: "You are the synthesis stage of a graph-search pipeline."},
-			{Role: "user", Content: "Evidence:\n  [0] c360.rg-e2e-9f3a71.seed.research.document.controlled (tier=0 src=walk_seeds.entity_state)\n"},
+			// The degraded-retrieval line embeds the same ID as "seed=<id>",
+			// ahead of the Evidence block. A whitespace-delimited scan returns
+			// the "seed=" prefix with it, and quote-back then rejects the ref.
+			{Role: "user", Content: "Retrieval degraded: yes (predicate_walk seed=c360.rg-e2e-9f3a71.seed.research.document.controlled via graph.query.relationships: timeout)\n" +
+				"Evidence:\n  [0] c360.rg-e2e-9f3a71.seed.research.document.controlled (tier=0 src=walk_seeds.entity_state)\n"},
 		},
 	}
 	resp := makeRequest(t, server.URL()+"/v1/chat/completions", req)
