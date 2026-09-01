@@ -53,12 +53,22 @@ func newLoopTokenUserMessage() agentic.UserMessage {
 // requireCanonicalUUID asserts the exact wire form ADR-105 requires: 36 bytes,
 // lowercase, hyphenated, and equal to its own canonical re-rendering — so an
 // uppercase, braced, or urn spelling of the same identity fails here too.
+//
+// It also asserts version 4. looptoken.Valid deliberately ignores the version
+// bits (a seam validating what it received has no business asserting how a peer
+// minted it), so a MINT test is the only correct home for that distinction —
+// without it a canonical non-v4 UUID would satisfy the spec's "framework-minted
+// v4 UUID" clause. Every caller below passes a framework-MINTED token, never an
+// echoed one.
 func requireCanonicalUUID(t *testing.T, token, what string) {
 	t.Helper()
 	require.Len(t, token, 36, "%s must be a 36-byte canonical UUID, got %q", what, token)
 	parsed, err := uuid.Parse(token)
 	require.NoError(t, err, "%s = %q must parse as a UUID", what, token)
 	require.Equal(t, parsed.String(), token, "%s = %q must be in canonical form", what, token)
+	require.Equal(t, uuid.Version(4), parsed.Version(),
+		"%s = %q must be a version 4 UUID — the spec requires framework mints be v4, and looptoken.Valid "+
+			"does not check version bits", what, token)
 	require.NotContains(t, token, "_", "%s must carry no mint prefix", what)
 }
 

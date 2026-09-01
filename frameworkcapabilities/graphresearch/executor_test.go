@@ -503,6 +503,11 @@ func TestResearchLoopIDIsCanonicalUUID(t *testing.T) {
 	if parsed.String() != minted {
 		t.Errorf("minted loop ID %q is not in canonical form (want %q)", minted, parsed.String())
 	}
+	// looptoken.Valid ignores the version bits by design, so this mint site is
+	// the only place the spec's "framework-minted v4 UUID" clause can be pinned.
+	if parsed.Version() != uuid.Version(4) {
+		t.Errorf("minted loop ID %q is version %d, want a version 4 UUID", minted, parsed.Version())
+	}
 	if strings.HasPrefix(minted, "rg_") {
 		t.Errorf("minted loop ID %q still carries the retired rg_ prefix", minted)
 	}

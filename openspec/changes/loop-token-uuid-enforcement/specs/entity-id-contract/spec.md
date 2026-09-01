@@ -6,22 +6,40 @@ Every loop-execution instance token — dispatch conversations, rule-spawned loo
 research-pipeline loops alike — MUST be minted by the framework as a version 4 UUID and carried in canonical RFC
 4122 text form: 36 bytes, lowercase hexadecimal, hyphenated. No component, config, client, or tool call MAY author
 a loop instance token, and no adopter-facing knob MAY configure or relax the contract; the validation predicate
-MUST live module-internal with no exported surface. Every framework seam that accepts a pre-supplied loop token
-MUST refuse a non-canonical one with a classified invalid error — a declared refusal, counted where an intake
-counter exists, never a silent skip or truncated fallback: `TaskMessage.Validate` MUST refuse a task
-carrying ANY loop-token field — `loop_id`, `parent_loop_id`, `in_reply_to`, or `run_id` — that is present and
-non-canonical (enforced by the rule engine before publishing and by agentic-loop intake, which terminates delivery
-and counts the intake rejection), so no client-authored token reaches the graph write path, whose parent and
-reply stamping composes through the panicking entity-ID builder; `LoopManager.CreateLoopWithID` MUST refuse
-before registering any loop state; dispatch MUST refuse EVERY client-authored loop token on an inbound
-submission — the resolved continuation token, `run_id`, and `in_reply_to` alike — with a typed error response
-naming the offending field, synchronous on the HTTP submit path and published to the response subject on the
-channel path, validating after auto-continue resolution and BEFORE minting, before the loop is tracked, and
-before the loop-started metric is recorded, so that a refused submission leaves neither a tracked loop nor a
-moved active-loops gauge, and so both the client's `reply_to` and an auto-continued value pass one check;
-`agentrun.Mint` MUST refuse a non-canonical firing-loop
-instance (its scenario lives in the graph-ingest capability, which owns Mint's refusal behavior). Seam validation
-checks canonical form, not the version bits; minting is v4.
+MUST live module-internal with no exported surface.
+
+**Enforcement is FORM, not provenance — and the difference is load-bearing.** The framework validates that a
+supplied token is a canonical UUID. It does not, and with a form predicate cannot, detect who minted it: a client
+that authors a fresh canonical UUID and supplies it as `reply_to` is ACCEPTED. "Author no token" is therefore the
+contract asked of adopters, not a property any seam verifies. Two consequences a reader MUST NOT infer away.
+First, possession of a loop token confers control of that loop to any holder, so a multi-tenant deployment MUST
+NOT rely on loop tokens for isolation until attach-seam authorization lands (#1227) — the gap is authorization at
+the seam that ATTACHES to a loop, not provenance at the seam that MINTS one, and perfect mint-provenance would
+close none of it. Second, the backstop against adopting a token this deployment did not mint is `agentrun.Mint`'s
+origin-entity-ID mismatch refusal, not the form predicate.
+
+Exactly four seams enforce the form refusal, each with a classified invalid error — a declared refusal, counted
+where an intake counter exists, never a silent skip or truncated fallback:
+
+- `TaskMessage.Validate` MUST refuse a task carrying ANY loop-token field — `loop_id`, `parent_loop_id`,
+  `in_reply_to`, or `run_id` — that is present and non-canonical (enforced by the rule engine before publishing,
+  and by agentic-loop intake, which terminates delivery and counts the intake rejection), so no NON-CANONICAL
+  token reaches the graph write path, whose parent and reply stamping composes through the panicking entity-ID
+  builder.
+- `LoopManager.CreateLoopWithID` MUST refuse before registering any loop state.
+- Dispatch MUST refuse a non-canonical resolved continuation token, `run_id`, or `in_reply_to` on an inbound
+  submission, with a typed error response naming the offending field — synchronous on the HTTP submit path,
+  published to the response subject on the channel path — validating after auto-continue resolution and BEFORE
+  minting, before the loop is tracked, and before the loop-started metric is recorded, so that a refused
+  submission leaves neither a tracked loop nor a moved active-loops gauge, and so both the client's `reply_to`
+  and an auto-continued value pass one check.
+- `agentrun.Mint` MUST refuse a non-canonical firing-loop instance (its scenario lives in the graph-ingest
+  capability, which owns Mint's refusal behavior).
+
+Other payloads carrying a loop token — `UserSignal`, `ApprovalResponse`, and any control or query request whose
+census is not yet taken — validate only non-emptiness and are OUTSIDE this requirement; extending the refusal to
+them is #1228. Seam validation checks canonical form, not the version bits; that a framework mint is v4 is
+asserted at the mint sites, not at the accepting seams.
 
 #### Scenario: a new conversation mints a full canonical UUID on every dispatch intake path
 
@@ -61,6 +79,14 @@ checks canonical form, not the version bits; minting is v4.
   being left without an answer, and no loop is tracked
 - **AND** the tests that verify this are `TestNonUUIDRunIDHTTPGetsSynchronousError` and
   `TestNonUUIDInReplyToChannelGetsErrorResponse`
+
+#### Scenario: a canonical token is accepted on its form alone, whoever authored it
+
+- **GIVEN** a client submitting a message whose `reply_to` is a canonical UUID that this framework never minted
+- **WHEN** dispatch handles it
+- **THEN** it is ACCEPTED and continues that loop token — form is the whole check, and provenance is not verified
+  at any seam
+- **AND** the test that verifies this is `TestCanonicalReplyToContinuesTheLoop`
 
 #### Scenario: a task carrying any non-canonical loop-token field is refused
 

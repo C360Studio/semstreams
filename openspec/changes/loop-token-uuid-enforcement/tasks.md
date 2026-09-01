@@ -229,19 +229,42 @@ package this replaces survives in PR history at `b0e92253`. Deviations from the 
       (`component.go:1204-1210`) short-circuits true for a `cancel_any` user with no tracker hit, so the
       nil-check at `commands.go:86-97` is the load-bearing guard and no test names it — owner's call whether
       that is filed.
-- [x] 6.4 Archive + spec sync as the LAST content commit, reviewed with the code. SPEC-DELTA GAP CAUGHT AT
-      ARCHIVE TIME, before the first archive was committed: the `entity-id-contract` delta still described the
-      PRE-FIX dispatch seam — "dispatch MUST refuse a non-canonical continuation token" — and its only dispatch
-      scenario covered `reply_to`. The `run_id`/`in_reply_to` coverage in the delta sat at the
-      `TaskMessage.Validate` layer, so the synced spec would have landed as current truth describing the exact
-      narrowness the §6.3 BLOCKING finding fixed, and the two round-3 tests would have had no scenario. The
-      first archive was reverted (specs restored, archive dir removed), the delta widened, and the archive
-      re-run. Requirement text now states dispatch refuses EVERY client-authored loop token — resolved
-      continuation token, `run_id`, `in_reply_to` — before minting, before the loop is tracked, and before the
-      loop-started metric is recorded. New scenario "a client-authored run_id or in_reply_to is refused at
-      dispatch, before any state is recorded" cites both tests. Scenario values were corrected against the test
-      bodies rather than written from the prose: the fixture is `run-42` (not `paused-run-uuid`) and the
-      assertion is on the active-loops gauge (not a started counter). `--strict` valid after both edits.
+- [x] 6.3a Codex cross-agent round — CHANGES REQUESTED, owner ruled all of it on #1192 (2026-09-01 ruling
+      comment). The archive was RE-ENTERED rather than appended to: `git revert --no-commit` of the archive
+      commit, corrections applied to the CHANGE artifacts, then `openspec archive` re-run as the final content
+      commit — so history reads archive → revert+corrections → archive and no post-archive content escapes
+      review. Dispositions:
+      (e) **B1 form vs. provenance — NARROW THE TEXT, KEEP THE CODE.** `internal/looptoken.Valid` is a FORM
+      predicate; a client-authored fresh canonical UUID is accepted, as `TestCanonicalReplyToContinuesTheLoop`
+      positively asserts. NOT a regression — on base `0681492e` dispatch took `msg.ReplyTo` with no validation
+      at all — the text simply overclaimed. The delta now states enforcement is form, not provenance, carries the
+      #1227 carve-out, and gained a scenario pinning the accepted-on-form-alone behavior so the limitation is
+      tested rather than merely admitted. The `run_id`/`in_reply_to` widening from §6.3(a) STANDS untouched;
+      what was withdrawn is only the implication that the seam detects authorship.
+      (f) **B2 "every accepting seam" — NARROW TO THE FOUR ENFORCED.** Re-verified independently, not taken from
+      the review: `git grep -n 'looptoken\.Valid' -- '*.go' ':!*_test.go'` returns exactly four production
+      callers — `agentic/user_types.go:423` (`TaskMessage.Validate`),
+      `processor/agentic-dispatch/component.go:894`, `processor/agentic-loop/state.go:152`
+      (`CreateLoopWithID`), `agentic/agentrun/agentrun.go:302` (`Mint`) — and zero test callers. Confirmed the
+      uncovered carriers by reading their validators: `UserSignal.Validate` (`agentic/user_types.go:124`) and
+      `ApprovalResponse.Validate` (`agentic/approval.go:123`) check non-emptiness only. Remaining census is
+      **#1228**; the spec now says so instead of asserting every seam.
+      (g) **ADR-105 Proposed → Accepted** with ruling provenance (#1192 comments `5481478395`, `5481998272`,
+      `5494522256`, plus the 2026-09-01 ruling), and the no-re-key rationale's "the framework mints every token"
+      premise annotated as NOT enforced — the enforced backstop is `agentrun.Mint`'s origin-entity-ID mismatch
+      refusal at `agentic/agentrun/agentrun.go:332` (the #1148 check), verified in source.
+      (h) **#1227 carve-out, owner-ordered and prominent** — its own section directly under ADR-105's Status, a
+      blockquote at the head of the migration-note section, and a paragraph in the spec requirement. Multi-user
+      is a SUPPORTED pre-v1 configuration, so multi-tenant deployments MUST NOT rely on loop tokens for
+      isolation until #1227 lands. The stale "Design stage (2026-08-31) … Amend to what ships" block is deleted.
+      (i) **MEDIUM v4 assertion.** `looptoken.Valid` ignores version bits by design, so the mint sites are the
+      only correct home. Asserted in the shared dispatch helper `requireCanonicalUUID` (all three call sites pass
+      framework-MINTED tokens, checked) and in `TestResearchLoopIDIsCanonicalUUID`. Mutation-checked below.
+- [x] 6.3b Forced omission for (i), since a new assertion that cannot fail is worthless: replace each mint with a
+      canonical NON-v4 UUID (`uuid.NewSHA1`, a v5 in canonical form — it passes every pre-existing length, parse,
+      round-trip, and prefix check) → the v4 assertions MUST be what fails. Results recorded in the handoff;
+      restored by `cp` + `shasum -a 256` with matching digests.
+- [ ] 6.4 Archive + spec sync as the LAST content commit, reviewed with the code.
 - [ ] 6.5 Undraft; PR body: `implemented-by:`, `Closes #1192` (the #1174 declaration is dropped — ruled 2026-08-31), before/after token
       shapes; if
       any round withdrew a claim a commit asserted, author the squash body via `--body-file`.

@@ -1057,14 +1057,12 @@ executor holding no pair cannot establish that any entity is local, so every fir
 framework write to it is skipped, counted and logged. A decision that answers "local" for an unknown authority
 retires the guard rather than tightening it.
 
-`agentrun.Mint` MUST refuse a firing-loop instance token that is not in canonical UUID form before constructing
-the run's entity ID, MUST refuse an empty origin, and on an already-exists result MUST compare the STORED
+`agentrun.Mint` MUST refuse an empty origin, and on an already-exists result MUST compare the STORED
 `agent.run.origin-entity-id` with the requested one and refuse a mismatch with a classified error, using the record
 that path already fetches. The run entity ID derives from the loop's instance segment alone, so two loops that
-different deployments name with the same instance derive one local run ID; the loop-token UUID contract
-(entity-id-contract) makes an accidental shared instance a collision-math impossibility, and the origin comparison
-remains the loud backstop for a copied or replayed token. A stored run carrying no origin is refused, not adopted
-— an empty value cannot establish that the stored run is this caller's.
+different deployments name with the same instance derive one local run ID; the refusal converts a silent alias into a
+loud failure. A stored run carrying no origin is refused, not adopted — an empty value cannot establish that the
+stored run is this caller's. Making the identity collision-free is out of scope here and is #1168.
 
 **No framework write reaches a foreign firing entity.** The run-anchor pair (`agent.loop.run`,
 `agent.run.entity-id`) and the `rule.task.spawned` back-reference MUST be written on the firing entity only when it
@@ -1138,9 +1136,9 @@ skipped.
 
 #### Scenario: two origins at one instance segment get a refusal, not each other's run
 
-- **GIVEN** a deployment `acme`/`ops` and two imported loops with distinct authorities and the same canonical UUID
-  instance segment — `peerone.dep1.agentic-loop.agent.execution.7c9e6679-7425-40de-944b-e07fc1f90ae7` and
-  `peertwo.dep9.agentic-loop.agent.execution.7c9e6679-7425-40de-944b-e07fc1f90ae7`
+- **GIVEN** a deployment `acme`/`ops` and two imported loops with distinct authorities and the same instance
+  segment — `peerone.dep1.agentic-loop.agent.execution.a1b2c3d4` and
+  `peertwo.dep9.agentic-loop.agent.execution.a1b2c3d4`
 - **WHEN** a run is minted from the first and then from the second
 - **THEN** the first mint succeeds carrying its own origin, and the second is REFUSED with a classified invalid error
   rather than returning the first origin's run
@@ -1148,14 +1146,4 @@ skipped.
 - **AND** an empty requested origin, and a stored run carrying no origin, are refused the same way
 - **AND** the tests that verify this are `TestMint_TwoOriginsAtOneInstanceAreRefusedNotAliased`,
   `TestMint_RefusesEmptyOrigin` and `TestMint_LegacyOriginlessStoredRunIsRefused`
-
-#### Scenario: a non-UUID firing-loop instance is refused before the run entity is built
-
-- **GIVEN** a firing loop entity whose instance segment is `workflow-7`
-- **WHEN** `agentrun.Mint` is called with that instance as the root loop ID
-- **THEN** it returns a classified invalid error naming the loop-token contract, before any entity ID is
-  constructed and before any store call
-- **AND** the dispatch degrades as it does for any Mint failure: the task spawns without a run association and the
-  failure is logged as an error
-- **AND** the test that verifies this is `TestMint_NonUUIDRootLoopIDIsRefused`
 

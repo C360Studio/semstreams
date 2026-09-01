@@ -2,11 +2,29 @@
 
 ## Status
 
-**Proposed (2026-08-31)** — pending final owner acceptance on #1192; scope ruled 2026-08-31 ("everyone who
-mints a loop uses uuid" — graph-research included, A1). Implements the owner
-ruling of 2026-08-31 (#1192): "enforce UUID at the mint seams"; supersedes the unmerged framed-digest ADR-105
-draft (PR #1210 history, `b0e92253`). ADR-104's budget figures (170 effective / 163 declared) stand unamended.
-Mechanics live in `entity-id-contract` and `graph-ingest`.
+**Accepted (2026-09-01)** — owner rulings on #1192: comments `5481478395`, `5481998272`, `5494522256`, and the
+2026-09-01 ruling comment closing the Codex review of PR #1210 (form-vs-provenance narrowed, seam census narrowed
+to four, ADR accepted). Scope ruled 2026-08-31 ("everyone who mints a loop uses uuid" — graph-research included,
+A1); implements "enforce UUID at the mint seams"; supersedes the unmerged framed-digest ADR-105 draft (PR #1210
+history, `b0e92253`). ADR-104's budget figures (170 effective / 163 declared) stand unamended. Mechanics live in
+`entity-id-contract` and `graph-ingest`.
+
+## Carve-out: a loop token is NOT an authorization token
+
+**A loop instance token confers control of its loop to any holder, and this ADR does not change that.** Enforcement
+here is canonical FORM, not provenance — `internal/looptoken.Valid` cannot tell a framework mint from a fresh UUID
+a client authored, and a client that supplies one is accepted. More importantly, provenance is the wrong axis:
+a second party echoing another user's framework-minted token *verbatim* honors "echo, never author" to the letter
+and still takes over the loop's tracker entry, redirects its completion routing, and overwrites its in-flight
+context. Perfect mint-provenance would close none of that; the missing control is authorization at the seam that
+ATTACHES to a loop, filed as **#1227**.
+
+Multi-user IS a supported pre-v1 configuration — `Permissions.SubmitTask` is a per-user list that accepts `"*"`.
+Therefore: **multi-tenant deployments MUST NOT rely on loop tokens for isolation until #1227 lands.** The token's
+only protection today is UUID unguessability (2^122), which is a mitigation, not a contract — the token is
+returned to clients on every response and keys the AGENT_LOOPS record, the loop-execution entity, and the run
+instance, so it appears on surfaces a second party may legitimately read. Seams outside the four enforced ones
+(`UserSignal`, `ApprovalResponse`, uncensused control requests) accept non-canonical tokens today: **#1228**.
 
 ## Context
 
@@ -23,10 +41,19 @@ Cross-authority: two imported loops sharing an instance token collapse to one lo
 mint a loud refusal. The framed-digest design would have re-keyed the run entity so such runs coexist; the owner
 ruled instead that the collision only exists for non-UUID tokens, and the framework mints every token.
 
+**Annotation (2026-09-01, Codex review B1).** That last premise — "the framework mints every token" — is the
+contract asked of adopters, NOT a property this design enforces: enforcement is FORM only, so a client-authored
+canonical UUID is accepted. The no-re-key rationale does not rest on it. What the rationale actually rests on is
+collision math over the 122-bit space plus a loud backstop for a token this deployment did not mint, and that
+backstop is enforced: `agentrun.Mint` compares the STORED `agent.run.origin-entity-id` against the requested one
+on the already-exists path and refuses a mismatch with a classified error (`agentic/agentrun/agentrun.go:332`,
+the #1148 check).
+
 ## Decision
 
 1. **A loop instance token is a framework-minted v4 UUID**, carried in canonical RFC 4122 text form (36 bytes,
-   lowercase, hyphenated). No component, config, client, tool, or injected generator authors one.
+   lowercase, hyphenated). No component, config, client, tool, or injected generator authors one — stated as the
+   contract asked of adopters, which the framework does not verify; enforcement is form only (see the carve-out).
 2. **Enforcement lives at the mint seams**, not in a registry or family-table mechanism: task validation
    (`TaskMessage.Validate` — every loop-token field the task carries: `loop_id`, `parent_loop_id`,
    `in_reply_to`, `run_id` — enforced at rule-engine publish and loop intake), `LoopManager.CreateLoopWithID`,

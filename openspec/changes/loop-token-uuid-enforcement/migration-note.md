@@ -6,7 +6,16 @@
   are retired. Run entity IDs, `run_id`, `ResolveRun`, and the gh#256 echo contract are UNCHANGED.
 - A submission whose `reply_to`, `loop_id`, `parent_loop_id`, `in_reply_to`, or `run_id` is not a canonical
   UUID is refused: a typed error response naming the field at dispatch (synchronous on HTTP; via the response
-  subject on the channel path), a classified terminated delivery at the task-stream intake.
+  subject on the channel path), a classified terminated delivery at the task-stream intake. Four seams enforce
+  it — `TaskMessage.Validate`, dispatch submission, `LoopManager.CreateLoopWithID`, `agentrun.Mint`. Other
+  carriers (`UserSignal`, `ApprovalResponse`, uncensused control requests) still accept a non-canonical token:
+  **#1228**.
+
+> **A loop token is NOT an authorization token.** Enforcement is canonical FORM, not provenance — a
+> client-authored fresh UUID is accepted. And provenance is the wrong axis: a second party echoing another user's
+> token *verbatim* honors "echo, never author" and still takes over the loop's tracker entry, completion routing,
+> and in-flight context (#1227). Multi-user is a supported pre-v1 configuration, so **multi-tenant deployments
+> MUST NOT rely on loop tokens for isolation until #1227 lands.**
 - Deleted Go surface: `graphresearch.WithResearchGraphIDGenerator` (zero production consumers measured; the one sister hit
   is a comment).
 - Pre-v1 fresh storage (ADR-102 d7): no legacy tokens exist after redeploy; nothing resolves an old-shape ID.

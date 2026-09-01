@@ -847,8 +847,15 @@ refuses a wire value that disagrees, so it needed no change.
 
 ## Loop tokens become full UUIDs (ADR-105, #1192) — enforced at the mint seams; no re-key
 
-> **Design stage (2026-08-31):** this section describes the target state on draft PR #1210, pending owner
-> acceptance on #1192. Amend to what ships.
+> **A loop token is NOT an authorization token — read this before enabling multi-user.** Enforcement is canonical
+> FORM, not provenance: the framework cannot tell its own mint from a fresh UUID a client authored, and a client
+> that supplies one is accepted. Provenance is also the wrong axis — a second party echoing another user's
+> framework-minted token *verbatim* honors "echo, never author" exactly and still takes over the loop's tracker
+> entry, redirects its completion routing, and overwrites its in-flight context (#1227, attach-seam
+> authorization). Multi-user is a supported pre-v1 configuration (`Permissions.SubmitTask` is a per-user list
+> accepting `"*"`), so: **multi-tenant deployments MUST NOT rely on loop tokens for isolation until #1227 lands.**
+> The token's only protection today is UUID unguessability (2^122) — a mitigation, not a contract, since the token
+> is returned on every response and keys the AGENT_LOOPS record, the loop-execution entity, and the run instance.
 
 ### What changes on the wire
 
@@ -861,9 +868,11 @@ refuses a wire value that disagrees, so it needed no change.
 - A submission whose `reply_to`, `loop_id`, `parent_loop_id`, `in_reply_to`, or `run_id` is not a canonical UUID is
   refused: a typed error response naming the field at dispatch — synchronous on the HTTP submit path, published to
   the response subject on the channel path — and a classified terminated delivery, counted on the
-  intake-rejection metric, at the agentic-loop task-stream intake. Before this, a client-authored token was adopted
+  intake-rejection metric, at the agentic-loop task-stream intake. Before this, a non-canonical token was adopted
   silently, or reached the graph write path where the parent/reply stamping composes through a panicking entity-ID
-  builder.
+  builder. Four seams enforce this — `TaskMessage.Validate`, dispatch submission, `LoopManager.CreateLoopWithID`,
+  and `agentrun.Mint`. Other loop-token carriers — `UserSignal`, `ApprovalResponse`, and control requests not yet
+  censused — still accept a non-canonical token; that is **#1228**, not part of this wave.
 - Canonical means canonical: 36 bytes, lowercase, hyphenated. The uppercase, braced (`{…}`), and `urn:uuid:`
   spellings parse as UUIDs and are refused, because four spellings of one identity means a token that misses its
   own KV key and its own entity ID.
@@ -889,8 +898,8 @@ verbatim; delete any test fixture that fabricates a non-UUID loop token and subm
 ### Doing nothing
 
 - A client that echoes framework-minted IDs sees nothing change but the shape of the string.
-- A client that **authors** a continuation token gets a typed error naming `reply_to` in the response it is already
-  waiting on — instead of "Task submitted" followed by an async TERM it never sees.
+- A client that authors a **non-canonical** continuation token gets a typed error naming `reply_to` in the response
+  it is already waiting on — instead of "Task submitted" followed by an async TERM it never sees.
 - A stream producer that pre-fills `loop_id`, `parent_loop_id`, `in_reply_to`, or `run_id` gets a classified intake
   rejection — metric plus terminated delivery — instead of today's silent adoption, or a silent half-written triple.
 - A peer deployment that has not adopted ADR-105 still mints `loop_xxxxxxxx`-shaped tokens, and a loop imported from
