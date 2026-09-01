@@ -58,8 +58,9 @@ the two `state.go` edits are reviewed together rather than re-derived.
 - [x] 5.1 `agentic.UserSignal.Validate` (`agentic/user_types.go:124-141`)
 - [x] 5.2 `agentic.ApprovalResponse.Validate` (`agentic/approval.go:122`)
 - [x] 5.3 `agentic.ApprovalPendingEvent.Validate` (`agentic/approval.go:66`)
-- [ ] 5.4 `agenticdispatch.SignalMessage.Validate` needs no fix — the type is RETIRED in section 10. Do not
-      add validation to a type being deleted; verify section 10 landed instead
+- [ ] 5.4 `agenticdispatch.SignalMessage.Validate` needs no fix — the type is RETIRED by task **9.3**. Do not
+      add validation to a type being deleted; verify 9.3 landed instead. (This task previously said "section 10";
+      section 10 is *Gates*. Corrected 2026-09-01 — the pointer was wrong, not the intent.)
 - [x] 5.5 Retire the fixtures that encode a retired token shape as VALID, starting with
       `agentic/user_types_test.go:143-154`, and sweep for others
 
