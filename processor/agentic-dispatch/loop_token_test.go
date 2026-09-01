@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -29,8 +30,11 @@ func newLoopTokenTestComponent() (*Component, *captureSink) {
 		modelRegistry: newTestRegistry(),
 		logger:        logger,
 		loopTracker:   NewLoopTrackerWithLogger(logger),
-		metrics:       getMetrics(nil),
-		natsClient:    &natsclient.Client{},
+		// Per-test registry, not the process-global one: these tests assert that a
+		// refused submission leaves the started-loops gauge alone, which is only
+		// readable when no other test shares the instrument.
+		metrics:    getMetrics(metric.NewMetricsRegistry()),
+		natsClient: &natsclient.Client{},
 	}
 	c.sendResponseFn = sink.add
 	return c, sink
@@ -183,4 +187,77 @@ func TestCanonicalReplyToContinuesTheLoop(t *testing.T) {
 	require.Len(t, loops, 1)
 	assert.Equal(t, existing, loops[0].LoopID,
 		"a canonical reply_to must continue that loop, not mint a new one")
+}
+
+// TestNonUUIDRunIDHTTPGetsSynchronousError: run_id is a loop token the CLIENT
+// authors (HTTPMessageRequest.RunID, gh#256 resume anchor), so it reaches the
+// published task without ever passing through the continuation branch. Refusing
+// it at the same seam is what keeps the submission from tracking a loop and
+// counting a start for a task that TaskMessage.Validate will later reject inside
+// marshal — where the HTTP path can only answer "please try again".
+func TestNonUUIDRunIDHTTPGetsSynchronousError(t *testing.T) {
+	t.Parallel()
+	c, _ := newLoopTokenTestComponent()
+	startedBefore := getGaugeValue(t, c.metrics.activeLoops)
+
+	msg := newLoopTokenUserMessage()
+	msg.RunID = "run-42"
+
+	resp := c.processTaskSubmissionSync(context.Background(), msg)
+
+	assert.Equal(t, agentic.ResponseTypeError, resp.Type,
+		"an authored run_id must be answered with an error, not an acknowledgement")
+	assert.Contains(t, strings.ToLower(resp.Content), "run_id",
+		"the error must name the field the client got wrong, not read as a generic failure")
+	assert.Empty(t, c.loopTracker.GetAllLoops(),
+		"a refused submission must not track a loop — the loop it names never exists")
+	assert.Equal(t, startedBefore, getGaugeValue(t, c.metrics.activeLoops),
+		"a refused submission must not count a started loop")
+}
+
+// TestNonUUIDInReplyToChannelGetsErrorResponse: in_reply_to is the second
+// client-authored loop token, and the channel path is the one with no
+// synchronous return — before this refusal it logged the marshal error and
+// returned, leaving the submitter with no answer at all.
+func TestNonUUIDInReplyToChannelGetsErrorResponse(t *testing.T) {
+	t.Parallel()
+	c, sink := newLoopTokenTestComponent()
+	startedBefore := getGaugeValue(t, c.metrics.activeLoops)
+
+	msg := newLoopTokenUserMessage()
+	msg.InReplyTo = "workflow-7"
+
+	c.handleTaskSubmission(context.Background(), msg)
+
+	responses := sink.all()
+	require.Len(t, responses, 1, "exactly one response must be published for a refused submission")
+	assert.Equal(t, agentic.ResponseTypeError, responses[0].Type)
+	assert.Contains(t, strings.ToLower(responses[0].Content), "in_reply_to",
+		"the error must name the field the client got wrong, not read as a generic failure")
+	assert.Empty(t, c.loopTracker.GetAllLoops(),
+		"a refused submission must not track a loop — the loop it names never exists")
+	assert.Equal(t, startedBefore, getGaugeValue(t, c.metrics.activeLoops),
+		"a refused submission must not count a started loop")
+}
+
+// TestCanonicalResumeAnchorsAreAccepted is the positive control on the two
+// refusals above: the seam rejects the shape, not the gh#256 resume feature. A
+// reply carrying framework-minted anchors still mints its loop and gets tracked.
+func TestCanonicalResumeAnchorsAreAccepted(t *testing.T) {
+	t.Parallel()
+	c, _ := newLoopTokenTestComponent()
+
+	msg := newLoopTokenUserMessage()
+	msg.RunID = uuid.NewString()
+	msg.InReplyTo = uuid.NewString()
+
+	resp := c.processTaskSubmissionSync(context.Background(), msg)
+
+	assert.NotContains(t, strings.ToLower(resp.Content), "run_id",
+		"an echoed framework-minted run_id must not be refused")
+	assert.NotContains(t, strings.ToLower(resp.Content), "in_reply_to",
+		"an echoed framework-minted in_reply_to must not be refused")
+	loops := c.loopTracker.GetAllLoops()
+	require.Len(t, loops, 1, "an accepted submission must still mint and track its loop")
+	requireCanonicalUUID(t, loops[0].LoopID, "minted loop_id")
 }

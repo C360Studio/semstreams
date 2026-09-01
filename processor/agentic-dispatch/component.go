@@ -856,19 +856,49 @@ func (c *Component) buildTaskMessage(ctx context.Context, msg agentic.UserMessag
 	return task
 }
 
-// refuseNonCanonicalContinuation reports why a resolved continuation token
-// cannot be used, or nil when it can. Both submission paths call it on the
-// RESOLVED token — after auto-continue resolution, before the mint — so one
-// check covers a client-supplied reply_to and an auto-continued value alike.
+// refuseNonCanonicalLoopTokens reports why an inbound submission cannot be
+// accepted, or nil when it can. It covers every loop token a submission can
+// carry into the published task (ADR-105, #1192):
 //
-// An empty token is not a refusal: it is the signal to mint a new loop.
-func (c *Component) refuseNonCanonicalContinuation(loopID string) error {
-	if loopID == "" || looptoken.Valid(loopID) {
-		return nil
+//   - the RESOLVED continuation token, passed as loopID — checked after
+//     auto-continue resolution and before the mint, so one check covers a
+//     client-supplied reply_to and an auto-continued value alike;
+//   - RunID and InReplyTo, the gh#256 resume anchors, which the client authors
+//     and buildTaskMessage copies verbatim — they never pass through the
+//     continuation branch, so the resolved-token check alone let them through.
+//
+// The field names are the client's own: reply_to, run_id, and in_reply_to are
+// what an HTTP submitter sent and what a channel submitter must correct.
+//
+// Both submission paths call this BEFORE loopTracker.Track and
+// recordLoopStarted. TaskMessage.Validate refuses the same tokens one layer
+// lower and stays as defense-in-depth for every other producer, but discovering
+// it there is too late twice over: the loop is already tracked and counted, and
+// the failure surfaces as a marshal error — an unanswered bare return on the
+// channel path, "please try again" on the HTTP path, neither naming a field.
+// Same classification as the rule-engine lane, which validates before it
+// publishes (processor/rule/actions.go publishAgentOnce): invalid, never
+// retryable.
+//
+// An empty token is not a refusal: an unset continuation is the signal to mint
+// a new loop, and unset resume anchors are the ordinary submission.
+func (c *Component) refuseNonCanonicalLoopTokens(msg agentic.UserMessage, loopID string) error {
+	for _, token := range []struct {
+		field string
+		value string
+	}{
+		{"reply_to", loopID},
+		{"run_id", msg.RunID},
+		{"in_reply_to", msg.InReplyTo},
+	} {
+		if token.value == "" || looptoken.Valid(token.value) {
+			continue
+		}
+		return fmt.Errorf(
+			"%s %q is not a loop ID this framework minted: a loop ID is an opaque token you receive "+
+				"and echo back verbatim, never one you author", token.field, token.value)
 	}
-	return fmt.Errorf(
-		"reply_to %q is not a loop ID this framework minted: a loop ID is an opaque token you receive "+
-			"and echo back verbatim, never one you author", loopID)
+	return nil
 }
 
 // handleTaskSubmission creates a new agent task
@@ -895,10 +925,10 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		loopID = c.loopTracker.GetActiveLoop(msg.UserID, msg.ChannelID)
 	}
 
-	// Same resolved-token check as the HTTP path (ADR-105, #1192). This path has
+	// Same loop-token check as the HTTP path (ADR-105, #1192). This path has
 	// no synchronous return, so its answer goes out on the response subject —
 	// same refusal, same named field, different delivery.
-	if err := c.refuseNonCanonicalContinuation(loopID); err != nil {
+	if err := c.refuseNonCanonicalLoopTokens(msg, loopID); err != nil {
 		c.sendResponse(ctx, agentic.UserResponse{
 			ResponseID:  uuid.New().String(),
 			ChannelType: msg.ChannelType,
