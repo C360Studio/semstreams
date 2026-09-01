@@ -45,7 +45,7 @@ type LoopStore interface {
 	// read_loop_result tool uses (see
 	// processor/agentic-tools/loop_result.go completeKeyPrefix). Lets
 	// the R6 continuation rule's spawned parent agent fetch the
-	// SearchResult via read_loop_result(loop_id=<rg_xxx>) without a
+	// SearchResult via read_loop_result(loop_id=<loopID>) without a
 	// new tool. The duplicate-write cost is one extra KV put per
 	// chain; the alternative (custom read_research_result tool) is
 	// Phase 2 scope.

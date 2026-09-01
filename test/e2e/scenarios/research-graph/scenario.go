@@ -827,7 +827,7 @@ func fusionEvidence(evidence []fusion.Evidence, entityID string) *fusion.Evidenc
 
 // verifySearchResultEnvelope confirms synthesize_answer wrote the
 // SearchResult envelope at the read_loop_result-readable key
-// (COMPLETE_<rg_loopID>). Without this write, R6's continuation
+// (COMPLETE_<loopID>). Without this write, R6's continuation
 // publish_agent fires but the parent's read_loop_result returns
 // key-not-found — a known degraded path documented in
 // processor/research-graph-synthesize/handler.go's PutLoopCompletion

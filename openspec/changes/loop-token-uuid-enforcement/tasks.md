@@ -116,8 +116,9 @@ package this replaces survives in PR history at `b0e92253`. Deviations from the 
       until this round) — `docs/advanced/08-agentic-components.md:458,515,528` (`loop_xyz789`),
       `docs/basics/07-agentic-quickstart.md`, `docs/concepts/13-agentic-systems.md`,
       `docs/operations/11-llm-routing-and-model-selection.md`, `configs/rules/research-graph/README.md:57` +
-      `05-continuation.json:5` (`rg_…`), `agentic/doc.go`, `processor/agentic-loop/doc.go`,
-      `agentic/research/predicates.go:61`, `frameworkcapabilities/graphresearch/executor.go:34-38`,
+      `05-continuation.json:5` (`rg_…`), `agentic/doc.go`, `processor/agentic-loop/doc.go` (PARTIAL until
+      round 4 — see 5.1b), `agentic/research/predicates.go:61`,
+      `frameworkcapabilities/graphresearch/executor.go:34-38`,
       `processor/agentic-loop/trajectory_observability_test.go:215` (stated the retired overwrite expectation as
       live; round-2 M5); §6.3 additions — `agentic/README.md:93,114,117`,
       `processor/agentic-loop/README.md:192,234,243,258,285,336,348` (including
@@ -126,16 +127,49 @@ package this replaces survives in PR history at `b0e92253`. Deviations from the 
       `docs/concepts/15-payload-registry.md:28,391,408,421` (`abc123`/`abc`), and
       `docs/operations/17-tool-call-governance.md:75,76,101` (`abc-123`/`parent-uuid`, contradicting its own
       `$message.loop_id` = "the loop's bare UUID" table row at `:295`).
-- [x] 5.1a Sweep method and its residue, so the tick above is checkable: `git grep -ohE '(loop|rg)_[A-Za-z0-9-]+'
-      -- '*.md' | sort -u` enumerates every distinct token, then each non-vocabulary token is resolved to
-      `file:line`. Remaining hits are DELIBERATE, not survivors: this change's own artifacts (`spec.md:42,52`
+- [x] 5.1b §6.3 re-review HIGH (NEW-1) — the blind spot moved one level in rather than closing. Round 2's method
+      excluded package READMEs; round 3's method (`-- '*.md'`) CANNOT SEE GO DOC COMMENTS, so
+      `processor/agentic-loop/doc.go:89` survived while its README twin at `README.md:192` — the same
+      `UserSignal` worked example — was fixed. HIGH not MEDIUM because `UserSignal` is NOT in the
+      `validateLoopTokens` set: an adopter copying it is not refused, the signal just never matches a loop.
+      Canonicalized `doc.go:89` (same UUID as its README twin, so the pair cannot drift again). Two more found
+      by the widened method, one of them NOT on the reviewer's list:
+      `test/e2e/scenarios/research-graph/scenario.go:830` (`COMPLETE_<rg_loopID>` → `COMPLETE_<loopID>`) and
+      `processor/research-graph-synthesize/handler.go:48` — a PRODUCTION godoc describing the live read as
+      `read_loop_result(loop_id=<rg_xxx>)`, now `<loopID>`. Non-test Go is empty under the widened method
+      (verified after the edits).
+- [x] 5.1a Sweep method and its residue, so the tick above is checkable. METHOD (round 4, widened from
+      `-- '*.md'` after NEW-1 proved that scope cannot see Go doc comments):
+      `git grep -noE '(loop|rg)_[A-Za-z0-9-]+' -- '*.md' '*.go'`, then filter and resolve **per TOKEN, not per
+      line**, and check the residue against the vocabulary list. Two method traps, both hit and both fixed here:
+      (i) a line-based `grep -v` exclusion DROPS a line that carries vocabulary AND a survivor — that is exactly
+      what hid `research-graph-synthesize/handler.go:48` (`read_loop_result` + `loop_id` on the same line as
+      `<rg_xxx>`), so the filter runs on the extracted token via `-o`; (ii) a clean result is a broken filter
+      until proven otherwise — the pattern is sanity-checked against a known-positive first
+      (`git grep -cE … -- processor/agentic-loop/doc.go` = 4, cross-checked against `grep -cE` = 4).
+      Remaining hits are DELIBERATE, not survivors: this change's own artifacts (`spec.md:42,52`
       use `loop_ab12cd34` as the REFUSED example; `proposal.md`/`inventory.md` describe the retired shapes);
       `docs/operations/migration-beta162-to-beta163.md:880` (reports the shape as it exists in a SISTER repo —
       rewriting it would falsify the inventory); `docs/operations/migration-beta41-to-beta42.md:54` and
       `docs/adr/048-*.md:337` (frozen history: the shape WAS the truth at those versions);
       `configs/rules/example-fan-out/README.md:56` (`investigator_loop_A/B/C` is a prose label in a flow
-      diagram, not a token literal); `openspec/changes/archive/…/conformance.md:649` (`platform_absent`, a
-      grep false positive).
+      diagram, not a token literal); `openspec/changes/archive/…/conformance.md:649` (`platform_absent`) and
+      `migration-beta162-to-beta163.md:881` (`org_1`), both grep false positives; and `loop_xxxxxxxx` /
+      `rg_xxxxxxxx` in `docs/adr/105-*.md:44,45` and `migration-beta162-to-beta163.md:855,896`, which NAME the
+      retired shapes and must keep saying so.
+- [x] 5.1c `*_test.go` residue is governed by task 3.6's ruled method — seam-caller enumeration, NOT string
+      patterns — and is left deliberately. Two families: (a) REFUSED-INPUT fixtures that must keep the retired
+      shape or they stop testing the refusal — `loop_ab12cd34` / `rg_ab12cd34` in `agentrun_test.go`,
+      `user_types_test.go`, `state_test.go`, `loop_token_test.go`; (b) opaque KV keys and pass-through values
+      that never reach a validating seam — `http_activity_test.go` (`loop_x/bad/ok/k`, watcher poison/decode
+      paths), `intent_classifier_test.go` (`loop_abc`, `loop_abc12345`, `loop_xyz` — LLM output parsing),
+      `http_loops_test.go` (`loop_abc123`), `graphresearch/executor_test.go` (`parent_loop_42`,
+      `parent_loop_7` — descriptive names, not mint-shape mimics), `research-graph-classify` /
+      `research-graph-llmwrap` (`rg_test001`, `rg_x` — trigger-key subjects), `agentic-model`,
+      `processor/rule/triple_*_substitution_test.go` (`loop_a/b/c`), and `entity_ids_test.go`
+      (`loop_42` — the deliberate "loop ID with underscores" grammar case for the form-AGNOSTIC composition
+      function). The mechanical proof that (b) reaches no seam: every seam refuses this exact shape and the full
+      suite is GREEN — a fixture that traversed one would fail.
 - [x] 5.2 `task schema:generate`; `git diff --exit-code schemas/ specs/` — no wire-shape fields change; any drift
       is a finding to explain, not commit blindly.
 - [x] 5.3 Migration-note append (`docs/operations/migration-beta162-to-beta163.md`) from this change's
@@ -167,10 +201,18 @@ package this replaces survives in PR history at `b0e92253`. Deviations from the 
       and FIXED, tasks 2.4a / 3.3a / 4.10 / 4.11 above; (b) MEDIUM "the doc sweep missed the package READMEs and
       5.1 overclaims" — ACCEPTED and FIXED, task 5.1 rewritten to name the file set actually swept plus 5.1a
       naming the method and the deliberate residue; (c) MEDIUM #3 cross-deployment peer import — RULED IN SCOPE
-      by the owner 2026-09-01 and landed as the one migration-note line, task 5.3a. Commit `95205b65`'s subject ("retire the loop_ / rg_ token
-      shapes from package docs and opaque fixtures") is TRUE at the branch tip once (b) landed — it overclaimed
-      at that commit, and this round makes it hold rather than withdrawing it, so no squash-body correction is
-      owed on that claim. Re-review of the fixes still owed before this ticks.
+      by the owner 2026-09-01 and landed as the one migration-note line, task 5.3a; (d) re-review HIGH (NEW-1)
+      `processor/agentic-loop/doc.go:89` — ACCEPTED and FIXED, task 5.1b, together with two further survivors the
+      widened method found, one of them NOT on the reviewer's list
+      (`research-graph-synthesize/handler.go:48`).
+      SQUASH-BODY STATUS, corrected: the round-3 answer recorded here ("no correction owed, the claim is true at
+      the tip") was WRONG as measured at `9d1d79fd` — `doc.go:89` is precisely a package doc carrying the shape
+      commit `95205b65`'s subject claims to have retired, so the "package docs" half was FALSE and 5.1's tick
+      listing that file was an overclaim. As of 5.1b it IS true: non-test Go carries zero survivors under the
+      widened method, and the "opaque fixtures" half was independently measured clean (no token literals under
+      `configs/`, `*.json`, `*.yaml`). The subject therefore needs no qualifying language in the squash body —
+      but it became true in THIS round, not the previous one. Re-review of the fixes still owed before this
+      ticks.
 - [ ] 6.4 Archive + spec sync as the LAST content commit, reviewed with the code.
 - [ ] 6.5 Undraft; PR body: `implemented-by:`, `Closes #1192` (the #1174 declaration is dropped — ruled 2026-08-31), before/after token
       shapes; if
