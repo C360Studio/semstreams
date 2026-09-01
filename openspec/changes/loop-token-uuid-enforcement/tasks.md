@@ -262,8 +262,16 @@ package this replaces survives in PR history at `b0e92253`. Deviations from the 
       framework-MINTED tokens, checked) and in `TestResearchLoopIDIsCanonicalUUID`. Mutation-checked below.
 - [x] 6.3b Forced omission for (i), since a new assertion that cannot fail is worthless: replace each mint with a
       canonical NON-v4 UUID (`uuid.NewSHA1`, a v5 in canonical form — it passes every pre-existing length, parse,
-      round-trip, and prefix check) → the v4 assertions MUST be what fails. Results recorded in the handoff;
-      restored by `cp` + `shasum -a 256` with matching digests.
+      round-trip, and prefix check) → the v4 assertions MUST be what fails. KILLED, and field-discriminating:
+      the mutants really were canonical (`1826d139-bc21-567d-bb65-ecb8773794c7`,
+      `dc3ea0b2-6e4a-53df-86c7-f4a8eb764549`, `b2f8672f-ff0b-5c8a-976e-4e6004278559`,
+      `2359767d-8f7a-5e52-8ff3-6212e89dc645` — note the `5` at position 15), so length, parse, canonical
+      round-trip and no-prefix all PASSED and only the version assertion fired:
+      `TestNewConversationMintsCanonicalUUID` failed on both subtests,
+      `TestCanonicalResumeAnchorsAreAccepted` on the minted token, and
+      `TestResearchLoopIDIsCanonicalUUID` with `minted loop ID … is version 5, want a version 4 UUID`.
+      Restored by `cp` + `shasum -a 256`; all three digests matched
+      (`c46a9cd3…4bb6`, `9c740da9…f9a0`, `b89c38d0…1c8a`).
 - [ ] 6.4 Archive + spec sync as the LAST content commit, reviewed with the code.
 - [ ] 6.5 Undraft; PR body: `implemented-by:`, `Closes #1192` (the #1174 declaration is dropped — ruled 2026-08-31), before/after token
       shapes; if
