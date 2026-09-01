@@ -272,7 +272,16 @@ package this replaces survives in PR history at `b0e92253`. Deviations from the 
       `TestResearchLoopIDIsCanonicalUUID` with `minted loop ID … is version 5, want a version 4 UUID`.
       Restored by `cp` + `shasum -a 256`; all three digests matched
       (`c46a9cd3…4bb6`, `9c740da9…f9a0`, `b89c38d0…1c8a`).
-- [ ] 6.4 Archive + spec sync as the LAST content commit, reviewed with the code.
+- [x] 6.4 Archive + spec sync as the LAST content commit, reviewed with the code. RE-ENTERED, not appended to
+      (owner ruling 2026-09-01): the first archive (`7431d036`) published text the Codex round then found
+      overclaimed, so it was reverted with `git revert --no-commit`, the corrections applied to the CHANGE
+      artifacts and committed for review, and `openspec archive` re-run here. History reads archive →
+      revert+corrections → evidence → archive, and no post-archive content escapes review. Verified in the
+      SYNCED spec after the re-run: `openspec/specs/entity-id-contract/spec.md` carries "Enforcement is FORM,
+      not provenance" (`:659`), "no NON-CANONICAL token reaches the graph write path" (`:674` — the line the
+      review flagged as claiming "no client-authored token"), the four-seam enumeration (`:669`), and the
+      #1227 / #1228 pointers; zero hits remain for "EVERY client-authored", "Every framework seam that
+      accepts", or "client-authored token reaches".
 - [ ] 6.5 Undraft; PR body: `implemented-by:`, `Closes #1192` (the #1174 declaration is dropped — ruled 2026-08-31), before/after token
       shapes; if
       any round withdrew a claim a commit asserted, author the squash body via `--body-file`.
