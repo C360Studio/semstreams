@@ -29,6 +29,11 @@ type routerMetrics struct {
 	// HTTP /loops/{id}/approval endpoint by decision and outcome.
 	loopApprovalsSubmitted *prometheus.CounterVec
 
+	// Loop admission metrics — every request naming an existing loop that
+	// the one admission gate refused, by the seam it arrived on and the
+	// single mapped refusal reason (loopAdmissionMetricReason).
+	loopAdmissionRefusals *prometheus.CounterVec
+
 	// SSE metrics
 	sseConnectionsActive prometheus.Gauge
 	sseEventsTotal       *prometheus.CounterVec
@@ -161,6 +166,14 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 			Help:      "Total number of approval responses submitted via HTTP, labelled by decision and submission outcome (status: success/error)",
 		}, []string{"decision", "status"}),
 
+		// Loop admission metrics
+		loopAdmissionRefusals: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "router",
+			Name:      "loop_admission_refusals_total",
+			Help:      "Requests naming an existing loop refused by the admission gate, by seam and reason (form_malformed, existence_absent, existence_unreadable, existence_conflict, state_terminal, ownership_not_owner, ownership_not_permitted)",
+		}, []string{"seam", "reason"}),
+
 		// SSE metrics
 		sseConnectionsActive: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: "semstreams",
@@ -247,6 +260,7 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 		_ = registry.RegisterHistogramVec("router", "http_request_duration_seconds", m.httpRequestDuration)
 		_ = registry.RegisterCounterVec("router", "loop_signals_sent_total", m.loopSignalsSent)
 		_ = registry.RegisterCounterVec("router", "loop_approvals_submitted_total", m.loopApprovalsSubmitted)
+		_ = registry.RegisterCounterVec("router", "loop_admission_refusals_total", m.loopAdmissionRefusals)
 		_ = registry.RegisterGauge("router", "sse_connections_active", m.sseConnectionsActive)
 		_ = registry.RegisterCounterVec("router", "sse_events_total", m.sseEventsTotal)
 		_ = registry.RegisterCounterVec("router", "sse_errors_total", m.sseErrorsTotal)
@@ -270,6 +284,7 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 		_ = prometheus.DefaultRegisterer.Register(m.httpRequestDuration)
 		_ = prometheus.DefaultRegisterer.Register(m.loopSignalsSent)
 		_ = prometheus.DefaultRegisterer.Register(m.loopApprovalsSubmitted)
+		_ = prometheus.DefaultRegisterer.Register(m.loopAdmissionRefusals)
 		_ = prometheus.DefaultRegisterer.Register(m.sseConnectionsActive)
 		_ = prometheus.DefaultRegisterer.Register(m.sseEventsTotal)
 		_ = prometheus.DefaultRegisterer.Register(m.sseErrorsTotal)
@@ -356,6 +371,15 @@ func (m *routerMetrics) recordLoopApproval(decision string, success bool) {
 		status = "success"
 	}
 	m.loopApprovalsSubmitted.WithLabelValues(decision, status).Inc()
+}
+
+// recordLoopAdmissionRefusal counts one refusal by the loop admission gate.
+// Both labels are closed sets: seam is a fixed token naming where the request
+// arrived, reason is one of the mapped refusal reasons. Called from exactly one
+// place (Component.recordLoopAdmissionRefusal), which is what keeps "counted
+// exactly once per refusal" a property of the code.
+func (m *routerMetrics) recordLoopAdmissionRefusal(seam, reason string) {
+	m.loopAdmissionRefusals.WithLabelValues(seam, reason).Inc()
 }
 
 // recordSSEConnect increments the active SSE connections gauge.
