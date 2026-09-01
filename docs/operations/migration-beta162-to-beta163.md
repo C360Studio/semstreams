@@ -893,6 +893,10 @@ verbatim; delete any test fixture that fabricates a non-UUID loop token and subm
   waiting on — instead of "Task submitted" followed by an async TERM it never sees.
 - A stream producer that pre-fills `loop_id`, `parent_loop_id`, `in_reply_to`, or `run_id` gets a classified intake
   rejection — metric plus terminated delivery — instead of today's silent adoption, or a silent half-written triple.
+- A peer deployment that has not adopted ADR-105 still mints `loop_xxxxxxxx`-shaped tokens, and a loop imported from
+  it is refused by `task.Validate()` (`processor/rule/actions.go:1885`), so `publish_agent` publishes nothing for
+  that loop — it fails loudly (`Failed to execute action` at ERROR plus
+  `actionFailuresTotal{action_type="publish_agent"}`), not silently, so upgrade peers before importing from them.
 - An operator dashboard that told research-pipeline loops apart by the `rg_` prefix loses that affordance. The
   loop's `role` field and the `research.*` predicates carry the distinction; the e2e scenario now discriminates on
   the `research.request.received.<loopID>` trigger key rather than the token's shape.

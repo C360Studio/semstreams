@@ -25,7 +25,7 @@ The payload registry solves this with a type-discriminated envelope pattern:
     "version": "v1"
   },
   "payload": {
-    "loop_id": "abc123",
+    "loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
     "prompt": "Review this code"
   }
 }
@@ -388,7 +388,7 @@ The type envelope only appears once the payload is wrapped in a `BaseMessage` â€
 shows just its own fields:
 
 ```go
-msg := &agentic.TaskMessage{LoopID: "abc", Prompt: "test"}
+msg := &agentic.TaskMessage{LoopID: "7c9e6679-7425-40de-944b-e07fc1f90ae7", Prompt: "test"}
 base := message.NewBaseMessage(msg.Schema(), msg, "debug")
 data, _ := json.MarshalIndent(base, "", "  ")
 fmt.Println(string(data))
@@ -405,7 +405,7 @@ Expected:
     "version": "v1"
   },
   "payload": {
-    "loop_id": "abc",
+    "loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
     "prompt": "test"
   },
   "meta": {"created_at": ..., "received_at": ..., "source": "debug"}
@@ -418,7 +418,7 @@ Go through a `Decoder` bound to a real registry â€” `BaseMessage{}` constructed 
 fails fast:
 
 ```go
-jsonData := []byte(`{"id":"1","type":{"domain":"agentic","category":"task","version":"v1"},"payload":{"loop_id":"abc"},"meta":{}}`)
+jsonData := []byte(`{"id":"1","type":{"domain":"agentic","category":"task","version":"v1"},"payload":{"loop_id":"7c9e6679-7425-40de-944b-e07fc1f90ae7"},"meta":{}}`)
 
 decoded, err := payloadbuiltins.NewTestDecoder(t).Decode(jsonData)
 if err != nil {

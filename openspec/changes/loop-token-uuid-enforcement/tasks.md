@@ -25,6 +25,15 @@ package this replaces survives in PR history at `b0e92253`. Deviations from the 
       `TestNonUUIDReplyToHTTPGetsSynchronousError` (inline error response naming `reply_to`, no task published),
       and `TestNonUUIDReplyToChannelGetsErrorResponse` (error published to the response subject — the channel
       path answers async via `sendResponse`; round-2 H3).
+- [x] 2.4a §6.3 BLOCKING finding — the resolved-token check missed the two CLIENT-AUTHORED loop tokens.
+      `TestNonUUIDRunIDHTTPGetsSynchronousError` and `TestNonUUIDInReplyToChannelGetsErrorResponse` each assert
+      three things: the typed `ResponseTypeError` NAMES the field, no loop is tracked, and the started-loops
+      gauge does not move. `TestCanonicalResumeAnchorsAreAccepted` is the positive control (the seam rejects the
+      shape, not the gh#256 resume feature). Observed failing first, verbatim: HTTP =
+      `"failed to create task. please try again." does not contain "run_id"` + `Should be empty, but was [...]` +
+      gauge `expected: 0 / actual: 1`; channel = `"[]" should have 1 item(s), but has 0` (a bare return, no
+      response at all). The loop-token test component moved to a per-test `metric.NewMetricsRegistry()` so the
+      gauge is readable.
 - [x] 2.5 `agentic/agentrun/agentrun_test.go`: `TestMint_NonUUIDRootLoopIDIsRefused` (classified invalid, before
       any store call); existing origin tests updated to canonical-UUID instances.
 - [x] 2.6 `frameworkcapabilities/graphresearch`: `TestResearchLoopIDIsCanonicalUUID` — reads the AGENT_LOOPS
@@ -47,6 +56,17 @@ package this replaces survives in PR history at `b0e92253`. Deviations from the 
       continuation token after the auto-continue branch and before the mint — one check covers `reply_to` and
       auto-continue (round-2 M4); the HTTP path answers with an inline error response, the channel path via
       `sendResponse` on the response subject, each naming `reply_to`.
+- [x] 3.3a §6.3 BLOCKING fix: `refuseNonCanonicalContinuation(loopID)` → `refuseNonCanonicalLoopTokens(msg,
+      loopID)` (`processor/agentic-dispatch/component.go`), called from both submission paths BEFORE
+      `loopTracker.Track` and `recordLoopStarted`. The resolved continuation token was only one of the three
+      loop tokens a submission carries: `RunID` and `InReplyTo` are client-authored (`http.go`
+      `HTTPMessageRequest`) and copied verbatim by `buildTaskMessage`, so they never passed through the
+      continuation branch. A non-canonical value cleared the gate and failed one layer lower inside
+      `BaseMessage.MarshalJSON` → `TaskMessage.Validate` — after the loop was tracked and counted: an orphaned
+      `LoopInfo` and an incremented gauge for a loop that never exists, which auto-continue then resolves to.
+      The error names the client's own field (`reply_to`, `run_id`, `in_reply_to`) and classifies as invalid,
+      not retryable — the rule-engine lane's classification (`processor/rule/actions.go` `publishAgentOnce`
+      validates before it publishes). `TaskMessage.Validate` stays as defense-in-depth for every other producer.
 - [x] 3.4 `agentic/agentrun/agentrun.go`: refuse non-canonical `rootLoopID` (classified invalid, unexported
       sentinel per the #1148 pattern at `:233-239`) before `:290`; doc comment: the token contract + the
       origin-mismatch backstop; mismatch error text UNTOUCHED (#1174 stays its own issue — ruled 2026-08-31).
@@ -79,19 +99,56 @@ package this replaces survives in PR history at `b0e92253`. Deviations from the 
 - [x] 4.8 Delete the sibling-field checks in `TaskMessage.Validate` →
       `TestTaskMessageRefusesNonCanonicalLoopTokenFields` MUST fail.
 - [x] 4.9 Revert the graphresearch generator → `TestResearchLoopIDIsCanonicalUUID` MUST fail.
+- [x] 4.10 Delete the `{"run_id", msg.RunID}` row from `refuseNonCanonicalLoopTokens` →
+      `TestNonUUIDRunIDHTTPGetsSynchronousError` MUST fail. KILLED: all three assertions fired — content
+      `"failed to create task. please try again." does not contain "run_id"`, tracker non-empty, gauge
+      `expected: 0 / actual: 1`. Restored by `cp` + `shasum -a 256` (sums matched,
+      `c46a9cd3041c1367e1b7d6a8726299ab6c16d68dbf5ba73dcd97517b894e4bb6`).
+- [x] 4.11 Delete the `{"in_reply_to", msg.InReplyTo}` row →
+      `TestNonUUIDInReplyToChannelGetsErrorResponse` MUST fail. KILLED: `"[]" should have 1 item(s), but has 0`
+      — the channel path returns bare with no response. Restored by `cp` + `shasum -a 256` (sums matched, same
+      digest).
 
 ## 5. Sweep
 
-- [x] 5.1 Prose: `docs/advanced/08-agentic-components.md:458,515,528` (`loop_xyz789`),
-      `configs/rules/research-graph/README.md:57` + `05-continuation.json:5` descriptions (`rg_…`),
-      `agentic/research/predicates.go:61`, `executor.go:34-38` comment;
-      `processor/agentic-loop/trajectory_observability_test.go:215` (states the retired overwrite expectation as
-      live; round-2 M5); `git grep -n '"loop_\|rg_'` over docs/,
-      configs/, specs/ and fix every shape survivor.
+- [x] 5.1 Prose sweep. SWEPT FILE SET (the §6.3 MEDIUM finding: the first pass was scoped to `docs/`,
+      `configs/`, `specs/`, which structurally excluded package READMEs and `.agents/`, so the tick overclaimed
+      until this round) — `docs/advanced/08-agentic-components.md:458,515,528` (`loop_xyz789`),
+      `docs/basics/07-agentic-quickstart.md`, `docs/concepts/13-agentic-systems.md`,
+      `docs/operations/11-llm-routing-and-model-selection.md`, `configs/rules/research-graph/README.md:57` +
+      `05-continuation.json:5` (`rg_…`), `agentic/doc.go`, `processor/agentic-loop/doc.go`,
+      `agentic/research/predicates.go:61`, `frameworkcapabilities/graphresearch/executor.go:34-38`,
+      `processor/agentic-loop/trajectory_observability_test.go:215` (stated the retired overwrite expectation as
+      live; round-2 M5); §6.3 additions — `agentic/README.md:93,114,117`,
+      `processor/agentic-loop/README.md:192,234,243,258,285,336,348` (including
+      `"loop_id": "optional-custom-id"`, which the contract now REFUSES — replaced, and the block gained the
+      omit-or-echo rule), `.agents/skills/entity-or-bucket/SKILL.md:83` (`COMPLETE_rg_abc123`),
+      `docs/concepts/15-payload-registry.md:28,391,408,421` (`abc123`/`abc`), and
+      `docs/operations/17-tool-call-governance.md:75,76,101` (`abc-123`/`parent-uuid`, contradicting its own
+      `$message.loop_id` = "the loop's bare UUID" table row at `:295`).
+- [x] 5.1a Sweep method and its residue, so the tick above is checkable: `git grep -ohE '(loop|rg)_[A-Za-z0-9-]+'
+      -- '*.md' | sort -u` enumerates every distinct token, then each non-vocabulary token is resolved to
+      `file:line`. Remaining hits are DELIBERATE, not survivors: this change's own artifacts (`spec.md:42,52`
+      use `loop_ab12cd34` as the REFUSED example; `proposal.md`/`inventory.md` describe the retired shapes);
+      `docs/operations/migration-beta162-to-beta163.md:880` (reports the shape as it exists in a SISTER repo —
+      rewriting it would falsify the inventory); `docs/operations/migration-beta41-to-beta42.md:54` and
+      `docs/adr/048-*.md:337` (frozen history: the shape WAS the truth at those versions);
+      `configs/rules/example-fan-out/README.md:56` (`investigator_loop_A/B/C` is a prose label in a flow
+      diagram, not a token literal); `openspec/changes/archive/…/conformance.md:649` (`platform_absent`, a
+      grep false positive).
 - [x] 5.2 `task schema:generate`; `git diff --exit-code schemas/ specs/` — no wire-shape fields change; any drift
       is a finding to explain, not commit blindly.
 - [x] 5.3 Migration-note append (`docs/operations/migration-beta162-to-beta163.md`) from this change's
       `migration-note.md`; pin the sister SHAs read in the bounded pass.
+- [x] 5.3a RULED (owner, 2026-09-01, on the reviewer's §6.3 MEDIUM #3): the cross-deployment peer-import case is
+      IN SCOPE for #1192 and lands as one migration-note line — not a follow-up issue, not an unstated
+      assumption. Added to the §"Doing nothing" bullets of
+      `docs/operations/migration-beta162-to-beta163.md` and to this change's `migration-note.md`: a peer that has
+      not adopted ADR-105 still mints `loop_xxxxxxxx`, an imported loop is refused by `task.Validate()`, and
+      `publish_agent` publishes nothing for it — loudly (`Failed to execute action` at ERROR plus
+      `actionFailuresTotal{action_type="publish_agent"}`, `stateful_evaluator.go:439-449`), so upgrade peers
+      before importing. No code change. NOTE: the ruling cited `actions.go:1886`; the `task.Validate()` call is
+      at `actions.go:1885` (`:1886` is the `errs.WrapInvalid` return), and the note cites the measured line.
 
 ## 6. Gates and landing
 
@@ -105,7 +162,15 @@ package this replaces survives in PR history at `b0e92253`. Deviations from the 
       Gate was blocked until `0681492e` (#1221 / #1217) restored both tiers on main — that blocker was NOT this
       change; the tiers failed identically on main and on this branch. NOTE: `assertions_run` is structurally 0
       for both tiers (#1222), so it is not a measured-anything signal; the per-stage metrics above are.
-- [ ] 6.3 Implementation review by `semstreams-reviewer`; dispositions recorded.
+- [ ] 6.3 Implementation review by `semstreams-reviewer`; dispositions recorded. Round applied on this branch —
+      dispositions: (a) BLOCKING "the dispatch refusal covers only the resolved continuation token" — ACCEPTED
+      and FIXED, tasks 2.4a / 3.3a / 4.10 / 4.11 above; (b) MEDIUM "the doc sweep missed the package READMEs and
+      5.1 overclaims" — ACCEPTED and FIXED, task 5.1 rewritten to name the file set actually swept plus 5.1a
+      naming the method and the deliberate residue; (c) MEDIUM #3 cross-deployment peer import — RULED IN SCOPE
+      by the owner 2026-09-01 and landed as the one migration-note line, task 5.3a. Commit `95205b65`'s subject ("retire the loop_ / rg_ token
+      shapes from package docs and opaque fixtures") is TRUE at the branch tip once (b) landed — it overclaimed
+      at that commit, and this round makes it hold rather than withdrawing it, so no squash-body correction is
+      owed on that claim. Re-review of the fixes still owed before this ticks.
 - [ ] 6.4 Archive + spec sync as the LAST content commit, reviewed with the code.
 - [ ] 6.5 Undraft; PR body: `implemented-by:`, `Closes #1192` (the #1174 declaration is dropped — ruled 2026-08-31), before/after token
       shapes; if

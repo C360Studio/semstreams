@@ -23,3 +23,8 @@
 
 Echo, never author: a loop token is a value the framework handed you. Continue passing `reply_to`/`loop_id`
 verbatim; delete any test fixture that fabricates a non-UUID loop token and submits it — it will now be refused.
+
+Upgrade peers before importing from them: a peer deployment that has not adopted ADR-105 still mints
+`loop_xxxxxxxx`-shaped tokens, and a loop imported from it is refused by `task.Validate()`
+(`processor/rule/actions.go:1885`), so `publish_agent` publishes nothing for that loop — loudly (`Failed to
+execute action` at ERROR plus `actionFailuresTotal{action_type="publish_agent"}`), never silently.

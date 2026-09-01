@@ -72,8 +72,8 @@ payload — both approve-action (top-level) and publish-action (nested
 
 ```json
 {
-  "loop_id": "abc-123",
-  "parent_loop_id": "parent-uuid",
+  "loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "parent_loop_id": "ee72d8e2-5796-4936-861f-68c673cf1a5a",
   "call_id": "call-001",
   "tool_name": "bash",
   "command": "ls /tmp",
@@ -98,7 +98,7 @@ The loop accepts two payload shapes for the verdict:
 {
   "decision": "approved",
   "call_id": "call-001",
-  "loop_id": "abc-123",
+  "loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
   "rule_id": "allow-readonly-tools",
   "reason": "tool is read-only",
   "entity_id": "...",
