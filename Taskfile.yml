@@ -108,6 +108,16 @@ tasks:
     cmds:
       - bash scripts/inventory-verify_fixture_test.sh
 
+  spec:properties:
+    desc: Verify every `// spec:` property citation still resolves to a real requirement heading
+    cmds:
+      - scripts/spec-properties.sh {{.CLI_ARGS}}
+
+  spec:properties:test:
+    desc: Verify the spec-properties checker catches the citation states it claims to
+    cmds:
+      - bash scripts/spec-properties_fixture_test.sh
+
   predicate:test-audit:
     desc: Audit predicate candidates in Go tests and structured testdata with exact negative classifications
     cmds:
