@@ -648,3 +648,108 @@ per-deployment by construction and cannot be cloned through a template.
 - **THEN** its effective `platform` position is exactly `field-ops-7` and no suffix is minted
 - **AND** the test that verifies this is `TestPreCreatedIdentityRecordIsAdoptedUnsuffixed`
 
+### Requirement: A loop instance token is a framework-minted UUID
+
+Every loop-execution instance token — dispatch conversations, rule-spawned loops, subagent loops, and
+research-pipeline loops alike — MUST be minted by the framework as a version 4 UUID and carried in canonical RFC
+4122 text form: 36 bytes, lowercase hexadecimal, hyphenated. No component, config, client, or tool call MAY author
+a loop instance token, and no adopter-facing knob MAY configure or relax the contract; the validation predicate
+MUST live module-internal with no exported surface.
+
+**Enforcement is FORM, not provenance — and the difference is load-bearing.** The framework validates that a
+supplied token is a canonical UUID. It does not, and with a form predicate cannot, detect who minted it: a client
+that authors a fresh canonical UUID and supplies it as `reply_to` is ACCEPTED. "Author no token" is therefore the
+contract asked of adopters, not a property any seam verifies. Two consequences a reader MUST NOT infer away.
+First, possession of a loop token confers control of that loop to any holder, so a multi-tenant deployment MUST
+NOT rely on loop tokens for isolation until attach-seam authorization lands (#1227) — the gap is authorization at
+the seam that ATTACHES to a loop, not provenance at the seam that MINTS one, and perfect mint-provenance would
+close none of it. Second, the backstop against adopting a token this deployment did not mint is `agentrun.Mint`'s
+origin-entity-ID mismatch refusal, not the form predicate.
+
+Exactly four seams enforce the form refusal, each with a classified invalid error — a declared refusal, counted
+where an intake counter exists, never a silent skip or truncated fallback:
+
+- `TaskMessage.Validate` MUST refuse a task carrying ANY loop-token field — `loop_id`, `parent_loop_id`,
+  `in_reply_to`, or `run_id` — that is present and non-canonical (enforced by the rule engine before publishing,
+  and by agentic-loop intake, which terminates delivery and counts the intake rejection), so no NON-CANONICAL
+  token reaches the graph write path, whose parent and reply stamping composes through the panicking entity-ID
+  builder.
+- `LoopManager.CreateLoopWithID` MUST refuse before registering any loop state.
+- Dispatch MUST refuse a non-canonical resolved continuation token, `run_id`, or `in_reply_to` on an inbound
+  submission, with a typed error response naming the offending field — synchronous on the HTTP submit path,
+  published to the response subject on the channel path — validating after auto-continue resolution and BEFORE
+  minting, before the loop is tracked, and before the loop-started metric is recorded, so that a refused
+  submission leaves neither a tracked loop nor a moved active-loops gauge, and so both the client's `reply_to`
+  and an auto-continued value pass one check.
+- `agentrun.Mint` MUST refuse a non-canonical firing-loop instance (its scenario lives in the graph-ingest
+  capability, which owns Mint's refusal behavior).
+
+Other payloads carrying a loop token — `UserSignal`, `ApprovalResponse`, and any control or query request whose
+census is not yet taken — validate only non-emptiness and are OUTSIDE this requirement; extending the refusal to
+them is #1228. Seam validation checks canonical form, not the version bits; that a framework mint is v4 is
+asserted at the mint sites, not at the accepting seams.
+
+#### Scenario: a new conversation mints a full canonical UUID on every dispatch intake path
+
+- **GIVEN** a running agentic-dispatch component
+- **WHEN** a user message with no `reply_to` arrives via the HTTP submit path, and another via the channel path
+- **THEN** each minted `loop_id` is a canonical 36-byte lowercase hyphenated UUID, with no prefix and no truncation
+- **AND** the test that verifies this is `TestNewConversationMintsCanonicalUUID`
+
+#### Scenario: a pre-filled non-UUID loop token is refused at loop intake, loudly
+
+- **GIVEN** a decoded task message whose `loop_id` is `workflow-7`
+- **WHEN** agentic-loop intake validates it
+- **THEN** the delivery is terminated with a classified invalid error, the intake-rejection counter increments,
+  and no loop state or context manager exists for the token
+- **AND** a direct `CreateLoopWithID` call with the same token is refused before any state is registered
+- **AND** the tests that verify this are `TestNonUUIDLoopIDIsTerminatedAtIntake` and
+  `TestCreateLoopWithIDRefusesNonUUIDToken`
+
+#### Scenario: a non-canonical reply_to fails at the client boundary on both intake paths
+
+- **GIVEN** a client submitting a message whose `reply_to` is `loop_ab12cd34`
+- **WHEN** dispatch handles it on the HTTP submit path
+- **THEN** the client receives a synchronous error response naming `reply_to`, and no task is published
+- **AND WHEN** the same message arrives on the channel path
+- **THEN** an error response naming `reply_to` is published to the response subject, and no task is published
+- **AND** the tests that verify this are `TestNonUUIDReplyToHTTPGetsSynchronousError` and
+  `TestNonUUIDReplyToChannelGetsErrorResponse`
+
+#### Scenario: a client-authored run_id or in_reply_to is refused at dispatch, before any state is recorded
+
+- **GIVEN** a client submitting a message whose `reply_to` is absent but whose `run_id` is `run-42`
+- **WHEN** dispatch handles it on the HTTP submit path
+- **THEN** the client receives a synchronous error response naming `run_id`, no task is published, no loop is
+  tracked, and the active-loops gauge does not move
+- **AND WHEN** a message whose `in_reply_to` is non-canonical arrives on the channel path
+- **THEN** an error response naming `in_reply_to` is published to the response subject rather than the submitter
+  being left without an answer, and no loop is tracked
+- **AND** the tests that verify this are `TestNonUUIDRunIDHTTPGetsSynchronousError` and
+  `TestNonUUIDInReplyToChannelGetsErrorResponse`
+
+#### Scenario: a canonical token is accepted on its form alone, whoever authored it
+
+- **GIVEN** a client submitting a message whose `reply_to` is a canonical UUID that this framework never minted
+- **WHEN** dispatch handles it
+- **THEN** it is ACCEPTED and continues that loop token — form is the whole check, and provenance is not verified
+  at any seam
+- **AND** the test that verifies this is `TestCanonicalReplyToContinuesTheLoop`
+
+#### Scenario: a task carrying any non-canonical loop-token field is refused
+
+- **GIVEN** three decoded tasks: one whose `in_reply_to` is `workflow-7`, one whose `run_id` is `loop_ab12cd34`,
+  one whose `parent_loop_id` is `e2e-parent-1`
+- **WHEN** `TaskMessage.Validate` runs on each
+- **THEN** each is refused with an error naming the offending field, and no loop state, triple, or run
+  association is created for any of them
+- **AND** the test that verifies this is `TestTaskMessageRefusesNonCanonicalLoopTokenFields`
+
+#### Scenario: the research pipeline mints canonical UUIDs
+
+- **GIVEN** the `research_graph` tool
+- **WHEN** it creates a research-pipeline loop
+- **THEN** the loop token is a canonical UUID (no `rg_` prefix), in the AGENT_LOOPS key, the trigger key, and the
+  loop-execution entity instance alike — the generator-injection option is deleted, so no path can author one
+- **AND** the test that verifies this is `TestResearchLoopIDIsCanonicalUUID`
+

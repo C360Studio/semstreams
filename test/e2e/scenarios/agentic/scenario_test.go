@@ -67,11 +67,16 @@ func TestSumSnapshotMetric(t *testing.T) {
 	}
 }
 
+// pagedLoopToken is the loop these trajectory pages belong to. A loop instance
+// token is a framework-minted canonical UUID (ADR-105, #1192), so the fixture is
+// one — no in-tree fixture spells a loop token a way the contract refuses.
+const pagedLoopToken = "c3d4e5f6-0718-4920-9c3d-4e5f60718293"
+
 func TestSummarizeTrajectoryPagesUsesReferenceOnlyFactsAcrossPages(t *testing.T) {
 	pages := []agentic.TrajectoryPage{
 		{
 			SchemaVersion: agentic.TrajectorySchemaV1,
-			LoopID:        "loop-1",
+			LoopID:        pagedLoopToken,
 			Coverage:      "observed",
 			ObservedTotals: agentic.TrajectoryObservedTotals{
 				Facts: 1, TokensIn: 7, ElapsedMS: 10,
@@ -83,7 +88,7 @@ func TestSummarizeTrajectoryPagesUsesReferenceOnlyFactsAcrossPages(t *testing.T)
 		},
 		{
 			SchemaVersion: agentic.TrajectorySchemaV1,
-			LoopID:        "loop-1",
+			LoopID:        pagedLoopToken,
 			Coverage:      "observed",
 			ObservedTotals: agentic.TrajectoryObservedTotals{
 				Facts: 2, TokensOut: 5, ElapsedMS: 20,
@@ -111,7 +116,7 @@ func TestSummarizeTrajectoryPagesUsesReferenceOnlyFactsAcrossPages(t *testing.T)
 func TestSummarizeTrajectoryPagesRejectsDishonestTerminalTruth(t *testing.T) {
 	_, err := summarizeTrajectoryPages([]agentic.TrajectoryPage{{
 		SchemaVersion:    agentic.TrajectorySchemaV1,
-		LoopID:           "loop-1",
+		LoopID:           pagedLoopToken,
 		Coverage:         "observed",
 		TerminalObserved: true,
 		Facts:            []agentic.TrajectoryFactV1{{Kind: agentic.TrajectoryKindModelCompleted}},

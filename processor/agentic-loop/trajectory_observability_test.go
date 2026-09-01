@@ -212,9 +212,11 @@ func (b *orphanUnwindBucket) ListKeysFiltered(ctx context.Context, _ ...string) 
 // expires. If that goroutine can still reach the fan-out afterwards, it
 // re-inserts the loop's marker AFTER the loop's only release point has run:
 // the marker then leaks for the process lifetime, and a later loop reusing
-// the same loop ID (deterministic product-supplied IDs — CreateLoopWithID
-// overwrites rather than rejects) inherits an `incomplete` that is not its
-// own, breaking "absent on every other loop".
+// the same loop ID inherits an `incomplete` that is not its own, breaking
+// "absent on every other loop". Reuse is still reachable: a product cannot
+// author a token any more (ADR-105 — CreateLoopWithID rejects a non-canonical
+// one), but the continuation lane re-enters an existing framework-minted token
+// and CreateLoopWithID overwrites on it by design.
 //
 // The loss itself is not lost by suppressing the orphan: the budget branch
 // already reported it synchronously, in time to reach the terminal write,

@@ -27,7 +27,10 @@ func TestPreflightDecodedTaskLineageIdentitySemantics(t *testing.T) {
 		wantSameID  bool
 	}{
 		{
-			name: "caller supplied identity is preserved", loopID: "caller-loop",
+			// A caller-supplied identity is a framework-minted token the caller
+			// received and echoed (ADR-105, #1192) — preflight must preserve it
+			// rather than reserving a second one.
+			name: "caller supplied identity is preserved", loopID: uuid.NewString(),
 			metadata:    map[string]any{agentic.MetadataKeyRelatedLoops: map[string]any{"researcher": "upstream"}},
 			wantLineage: true, wantSameID: true,
 		},

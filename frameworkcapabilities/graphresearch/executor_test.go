@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/payloadregistry"
+	"github.com/google/uuid"
 )
 
 // fakeResearchKVWriter records the two writes the research_graph tool
@@ -65,7 +66,6 @@ func newTestExecutor(writer *fakeResearchKVWriter) *ResearchGraphExecutor {
 		WithResearchGraphClock(func() time.Time {
 			return time.Date(2026, 5, 22, 12, 0, 0, 0, time.UTC)
 		}),
-		WithResearchGraphIDGenerator(func() string { return "rg_test001" }),
 	)
 }
 
@@ -133,14 +133,17 @@ func TestResearchGraphExecutor_HappyPath_ToolResult(t *testing.T) {
 	if !writer.triggerCalled {
 		t.Fatalf("expected PutResearchTrigger to be called")
 	}
-	if res.Metadata["loop_id"] != "rg_test001" {
-		t.Errorf("metadata loop_id = %v, want rg_test001", res.Metadata["loop_id"])
+	// The loop ID is framework-minted (ADR-105), so the test reads it back from
+	// the KV key the tool just wrote rather than injecting a known one — there is
+	// no generator seam to inject through, by design.
+	if res.Metadata["loop_id"] != writer.loopEntityKey {
+		t.Errorf("metadata loop_id = %v, want the minted key %q", res.Metadata["loop_id"], writer.loopEntityKey)
 	}
 	if res.Metadata["parent_loop_id"] != "parent_loop_42" {
 		t.Errorf("metadata parent_loop_id = %v, want parent_loop_42", res.Metadata["parent_loop_id"])
 	}
-	if !strings.Contains(res.Content, "rg_test001") {
-		t.Errorf("Content missing loop_id: %q", res.Content)
+	if !strings.Contains(res.Content, writer.loopEntityKey) {
+		t.Errorf("Content missing loop_id %q: %q", writer.loopEntityKey, res.Content)
 	}
 }
 
@@ -155,11 +158,8 @@ func TestResearchGraphExecutor_HappyPath_WriteOrdering(t *testing.T) {
 	if len(writer.writeOrder) != 2 || writer.writeOrder[0] != "loop_entity" || writer.writeOrder[1] != "trigger" {
 		t.Errorf("write order = %v, want [loop_entity, trigger]", writer.writeOrder)
 	}
-	if writer.loopEntityKey != "rg_test001" {
-		t.Errorf("loop entity key = %q, want %q", writer.loopEntityKey, "rg_test001")
-	}
-	if writer.triggerKey != "rg_test001" {
-		t.Errorf("trigger key (loop_id) = %q, want %q", writer.triggerKey, "rg_test001")
+	if writer.triggerKey != writer.loopEntityKey {
+		t.Errorf("trigger key = %q, want the loop entity key %q", writer.triggerKey, writer.loopEntityKey)
 	}
 }
 
@@ -466,4 +466,81 @@ func newResearchDecoder(t *testing.T) *message.Decoder {
 		t.Fatalf("register graph research payloads: %v", err)
 	}
 	return message.NewDecoder(registry)
+}
+
+// TestResearchLoopIDIsCanonicalUUID pins the research pipeline's mint to the
+// loop-token contract (ADR-105, #1192). It used to mint "rg_" + uuid[:8] — 32
+// bits, whose own comment conceded the odds — and offered an injectable
+// generator that could author any shape at all. Both are gone: the test reads
+// the token back from the AGENT_LOOPS key the tool wrote, because there is no
+// longer any way to inject one.
+func TestResearchLoopIDIsCanonicalUUID(t *testing.T) {
+	writer := &fakeResearchKVWriter{}
+	e := newTestExecutor(writer)
+
+	// The calling (parent) loop's token is itself framework-minted.
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID:        "call-uuid",
+		Name:      ResearchGraphToolName,
+		LoopID:    uuid.NewString(),
+		Arguments: map[string]any{"topic": "drone hover anomalies"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("result error: %q", res.Error)
+	}
+
+	minted := writer.loopEntityKey
+	if len(minted) != 36 {
+		t.Fatalf("minted loop ID %q is %d bytes, want a 36-byte canonical UUID", minted, len(minted))
+	}
+	parsed, err := uuid.Parse(minted)
+	if err != nil {
+		t.Fatalf("minted loop ID %q does not parse as a UUID: %v", minted, err)
+	}
+	if parsed.String() != minted {
+		t.Errorf("minted loop ID %q is not in canonical form (want %q)", minted, parsed.String())
+	}
+	// looptoken.Valid ignores the version bits by design, so this mint site is
+	// the only place the spec's "framework-minted v4 UUID" clause can be pinned.
+	if parsed.Version() != uuid.Version(4) {
+		t.Errorf("minted loop ID %q is version %d, want a version 4 UUID", minted, parsed.Version())
+	}
+	if strings.HasPrefix(minted, "rg_") {
+		t.Errorf("minted loop ID %q still carries the retired rg_ prefix", minted)
+	}
+
+	// Every place the tool publishes the token carries the same canonical value:
+	// the AGENT_LOOPS record key, the trigger key R0 fires on, and the result the
+	// model reads back.
+	if writer.triggerKey != minted {
+		t.Errorf("trigger key = %q, want the minted loop ID %q", writer.triggerKey, minted)
+	}
+	if res.Metadata["loop_id"] != minted {
+		t.Errorf("metadata loop_id = %v, want the minted loop ID %q", res.Metadata["loop_id"], minted)
+	}
+
+	var loopEntity agentic.LoopEntity
+	if err := json.Unmarshal(writer.loopEntityValue, &loopEntity); err != nil {
+		t.Fatalf("unmarshal loop entity: %v", err)
+	}
+	if loopEntity.ID != minted {
+		t.Errorf("loop entity ID = %q, want the minted loop ID %q", loopEntity.ID, minted)
+	}
+
+	// Two mints in a row must not collide — the whole point of retiring 32 bits.
+	second := &fakeResearchKVWriter{}
+	if _, err := newTestExecutor(second).Execute(context.Background(), agentic.ToolCall{
+		ID:        "call-uuid-2",
+		Name:      ResearchGraphToolName,
+		LoopID:    uuid.NewString(),
+		Arguments: map[string]any{"topic": "drone hover anomalies"},
+	}); err != nil {
+		t.Fatalf("second execute: %v", err)
+	}
+	if second.loopEntityKey == minted {
+		t.Errorf("two mints produced the same loop ID %q", minted)
+	}
 }

@@ -90,7 +90,7 @@ choose a terminal retry count.
 ```go
 request := agentic.AgentRequest{
     RequestID: "req_001",
-    LoopID:    "loop_123",
+    LoopID:    "7c9e6679-7425-40de-944b-e07fc1f90ae7",
     Role:      "general",
     Model:     "gpt-4",
     Messages: []agentic.ChatMessage{
@@ -110,11 +110,13 @@ if err := request.Validate(); err != nil {
 ### Managing Loop State
 
 ```go
+// The loop ID is a framework-minted canonical UUID, never an authored token
+// (ADR-105) — agentic-loop mints it; callers echo it.
 // Create with default max iterations (20)
-entity := agentic.NewLoopEntity("loop_123", "task_456", "general", "gpt-4")
+entity := agentic.NewLoopEntity("7c9e6679-7425-40de-944b-e07fc1f90ae7", "task_456", "general", "gpt-4")
 
 // Or with custom max iterations
-entity := agentic.NewLoopEntity("loop_123", "task_456", "general", "gpt-4", 50)
+entity := agentic.NewLoopEntity("7c9e6679-7425-40de-944b-e07fc1f90ae7", "task_456", "general", "gpt-4", 50)
 
 // State transitions
 entity.TransitionTo(agentic.LoopStatePlanning)

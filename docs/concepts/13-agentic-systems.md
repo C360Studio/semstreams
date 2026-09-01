@@ -226,7 +226,7 @@ A trajectory captures the complete execution path of an agentic loop:
 │                         Trajectory                                   │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
-│  Loop ID: loop_123                                                   │
+│  Loop ID: <loop-uuid>                                                │
 │  Started: 10:30:00    Ended: 10:31:45    Outcome: complete          │
 │                                                                      │
 │  ┌─────────────────────────────────────────────────────────────┐    │
@@ -396,9 +396,9 @@ Agent loops are stored in NATS KV (`AGENT_LOOPS`) as queryable entities:
 
 ```text
 ┌─────────────────────────────────────────────┐
-│ Key: loop_123                               │
+│ Key: <loop-uuid>                            │
 ├─────────────────────────────────────────────┤
-│ id             = "loop_123"                 │
+│ id             = "<loop-uuid>"              │
 │ task_id        = "task_456"                 │
 │ state          = "executing"                │
 │ role           = "general"                  │
@@ -415,9 +415,9 @@ On completion, an enriched state is also written to `COMPLETE_{loopID}`:
 
 ```text
 ┌─────────────────────────────────────────────┐
-│ Key: COMPLETE_loop_123                      │
+│ Key: COMPLETE_<loop-uuid>                   │
 ├─────────────────────────────────────────────┤
-│ loop_id     = "loop_123"                    │
+│ loop_id     = "<loop-uuid>"                 │
 │ task_id     = "task_456"                    │
 │ outcome     = "success"                     │
 │ role        = "architect"                   │
@@ -436,9 +436,9 @@ Trajectories are stored in NATS KV (`AGENT_TRAJECTORIES`) on loop completion:
 
 ```text
 ┌─────────────────────────────────────────────┐
-│ Key: loop_123                               │
+│ Key: <loop-uuid>                            │
 ├─────────────────────────────────────────────┤
-│ loop_id        = "loop_123"                 │
+│ loop_id        = "<loop-uuid>"              │
 │ start_time     = "2024-01-15T10:30:00Z"     │
 │ end_time       = "2024-01-15T10:31:45Z"     │
 │ outcome        = "complete"                 │

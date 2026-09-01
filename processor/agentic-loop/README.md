@@ -189,7 +189,7 @@ The loop accepts control signals via the `agent.signal.*` input port.
 {
   "signal_id": "sig_abc123",
   "type": "cancel",
-  "loop_id": "loop_456",
+  "loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
   "user_id": "user_789",
   "channel_type": "cli",
   "channel_id": "session_001",
@@ -231,7 +231,7 @@ Published to `agent.context.compaction.*`:
 ```json
 {
   "type": "compaction_starting",
-  "loop_id": "loop_123",
+  "loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
   "iteration": 5,
   "utilization": 0.65
 }
@@ -240,7 +240,7 @@ Published to `agent.context.compaction.*`:
 ```json
 {
   "type": "compaction_complete",
-  "loop_id": "loop_123",
+  "loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
   "iteration": 5,
   "tokens_saved": 2500,
   "summary": "Discussed authentication implementation..."
@@ -255,7 +255,7 @@ Stores `LoopEntity` as JSON:
 
 ```json
 {
-  "id": "loop_123",
+  "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
   "task_id": "task_456",
   "state": "executing",
   "role": "general",
@@ -282,7 +282,7 @@ Written when a loop completes, for rules engine consumption:
 
 ```json
 {
-  "loop_id": "loop_123",
+  "loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
   "task_id": "task_456",
   "outcome": "success",
   "role": "architect",
@@ -333,7 +333,7 @@ Store.
 
 ```json
 {
-  "loop_id": "optional-custom-id",
+  "loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
   "task_id": "task_123",
   "role": "general",
   "model": "gpt-4",
@@ -341,11 +341,16 @@ Store.
 }
 ```
 
+`loop_id` is optional — omit it and the loop mints one. It is never a value you
+author: a present token must be a canonical UUID the framework already minted
+and this message is echoing back, and any other spelling is refused at intake
+(ADR-105). The same holds for `parent_loop_id`, `run_id`, and `in_reply_to`.
+
 ### Completion Event (Output)
 
 ```json
 {
-  "loop_id": "loop_123",
+  "loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
   "task_id": "task_456",
   "outcome": "success",
   "role": "architect",

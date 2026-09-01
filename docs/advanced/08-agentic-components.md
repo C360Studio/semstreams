@@ -455,7 +455,7 @@ Sent from agentic-loop to agentic-model:
 ```json
 {
   "id": "req_abc123",
-  "loop_id": "loop_xyz789",
+  "loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
   "model": "gpt-4",
   "messages": [
     {"role": "system", "content": "You are a helpful assistant."},
@@ -512,7 +512,7 @@ Sent from agentic-loop to agentic-tools:
 ```json
 {
   "id": "call_001",
-  "loop_id": "loop_xyz789",
+  "loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
   "name": "read_file",
   "arguments": "{\"path\": \"main.go\"}"
 }
@@ -525,7 +525,7 @@ Sent from agentic-tools to agentic-loop:
 ```json
 {
   "call_id": "call_001",
-  "loop_id": "loop_xyz789",
+  "loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
   "content": "package main\n\nimport \"fmt\"\n\nfunc main() {\n    fmt.Println(\"Hello\")\n}",
   "error": ""
 }
@@ -734,7 +734,7 @@ Query observed facts through graph-gateway GraphQL. This is the sole public traj
 
 ```graphql
 query {
-  trajectory(loopId: "loop_xyz789", limit: 64) {
+  trajectory(loopId: "7c9e6679-7425-40de-944b-e07fc1f90ae7", limit: 64) {
     coverage
     terminal_observed
     observed_totals { facts tokens_in tokens_out elapsed_ms }
@@ -777,7 +777,7 @@ When a loop fails:
 1. **Check loop entity state**:
 
    ```bash
-   nats kv get AGENT_LOOPS loop_xyz789
+   nats kv get AGENT_LOOPS 7c9e6679-7425-40de-944b-e07fc1f90ae7
    ```
 
 2. **Review observed facts through the GraphQL query above**. Follow `next_cursor` until absent when the diagnosis

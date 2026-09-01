@@ -257,11 +257,11 @@ about entities not in the input.
 
 ```text
 System: <use the actual prompt from processor/agentic-dispatch/intent_classifier.go:78-90>
-User: can you cancel loop_abc123?
+User: can you cancel 7c9e6679-7425-40de-944b-e07fc1f90ae7?
 ```
 
 **Pass criteria:** Returns `{"type": "signal", "signal_type": "cancel",
-"loop_id": "loop_abc123", "confidence": >0.8}`. Output is parseable
+"loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7", "confidence": >0.8}`. Output is parseable
 JSON. No prose preamble.
 
 #### Probe — Anomaly review

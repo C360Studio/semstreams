@@ -219,7 +219,7 @@ func applyOpsPreset(server *mock.OpenAIServer) {
 			ToolName: "emit_diagnosis",
 			Args: map[string]any{
 				"finding":        "Elevated failure rate in test-agent role loops",
-				"recommendation": "Inspect network errors in seed-loop-003; consider rate-limit backoff",
+				"recommendation": "Inspect network errors in the failed seed loop; consider rate-limit backoff",
 				"confidence":     0.85,
 				"evidence":       []string{opsscenario.SeedLoop3ID},
 				"observed_role":  "probe",
@@ -231,7 +231,7 @@ func applyOpsPreset(server *mock.OpenAIServer) {
 			ToolName: "emit_diagnosis",
 			Args: map[string]any{
 				"finding":        "Moderate token burn on test-agent loops despite short iterations",
-				"recommendation": "Review prompt length for seed-loop-001 and seed-loop-002",
+				"recommendation": "Review prompt length for the two successful seed loops",
 				"confidence":     0.72,
 				"evidence":       []string{opsscenario.SeedLoop1ID},
 				"observed_role":  "test-agent",

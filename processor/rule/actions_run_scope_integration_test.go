@@ -46,13 +46,16 @@ const (
 	runScopeOrg      = "acme"
 	runScopePlatform = "dep1"
 
-	// runScopeImportedLoopID is a PEER deployment's own loop execution, of the
+	// runScopeImportedLoop is a PEER deployment's own loop execution, of the
 	// one family run_scope=new admits. Any other entity would take the
-	// warn-and-inherit fallback and prove nothing about authority.
-	runScopeImportedLoop = "foreign.dep9.agentic-loop.agent.execution.import1"
-	runScopeImportedUUID = "import1"
+	// warn-and-inherit fallback and prove nothing about authority. Its instance
+	// segment is a canonical UUID because that is what a loop instance token is
+	// (ADR-105, #1192) — publish_agent validates the substituted task, and Mint
+	// refuses a non-canonical firing-loop instance.
+	runScopeImportedLoop = "foreign.dep9.agentic-loop.agent.execution." + runScopeImportedUUID
+	runScopeImportedUUID = "d7e8f901-2a3b-4c4d-8e5f-60718293a4b5"
 
-	runScopeLocalUUID = "local1"
+	runScopeLocalUUID = "e8f90123-3b4c-4d5e-9f60-718293a4b5c6"
 )
 
 // recordingTripleMutator captures every AddTriple subject and forwards to the
@@ -260,7 +263,7 @@ func TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite(t *testing.T) 
 	// The run is minted under THIS deployment's authority, keyed by the firing
 	// loop's bare id — never under foreign.dep9.
 	runEntityID := agentic.ChainExecutionEntityID(runScopeOrg, runScopePlatform, runScopeImportedUUID)
-	assert.Equal(t, "acme.dep1.chain.agent.execution.import1", runEntityID)
+	assert.Equal(t, "acme.dep1.chain.agent.execution."+runScopeImportedUUID, runEntityID)
 
 	runTriples := h.storedTriples(t, runEntityID)
 	origin, ok := objectFor(runTriples, agvocab.RunOriginEntityID)

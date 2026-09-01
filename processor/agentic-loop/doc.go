@@ -86,7 +86,7 @@
 //	signal := agentic.UserSignal{
 //	    SignalID:    "sig_abc123",
 //	    Type:        "cancel",  // cancel, pause, resume, approve, reject, feedback, retry
-//	    LoopID:      "loop_456",
+//	    LoopID:      "7c9e6679-7425-40de-944b-e07fc1f90ae7",
 //	    UserID:      "user_789",
 //	    ChannelType: "cli",
 //	    ChannelID:   "session_001",
@@ -242,7 +242,7 @@
 // **AGENT_LOOPS bucket**: Stores LoopEntity as JSON, keyed by loop ID
 //
 //	{
-//	    "id": "loop_123",
+//	    "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
 //	    "task_id": "task_456",
 //	    "state": "executing",
 //	    "role": "general",
@@ -259,7 +259,7 @@
 // **COMPLETE_{loopID}**: Written when a loop completes, for rules engine consumption
 //
 //	{
-//	    "loop_id": "loop_123",
+//	    "loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
 //	    "task_id": "task_456",
 //	    "outcome": "success",
 //	    "role": "architect",

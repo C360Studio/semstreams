@@ -301,9 +301,30 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 		loopID = c.loopTracker.GetActiveLoop(msg.UserID, msg.ChannelID)
 	}
 
-	// Create new loop if needed
+	// Validate every loop token this submission carries — the RESOLVED
+	// continuation token (after auto-continue resolution, before the mint) and the
+	// client-authored run_id / in_reply_to resume anchors. The client hears about
+	// it here, synchronously, in the response it is already waiting on, naming the
+	// field — rather than "Task submitted" followed by an async TERM it never
+	// sees, or a marshal-time "please try again" that names nothing (ADR-105,
+	// #1192).
+	if err := c.refuseNonCanonicalLoopTokens(msg, loopID); err != nil {
+		return agentic.UserResponse{
+			ResponseID:  uuid.New().String(),
+			ChannelType: msg.ChannelType,
+			ChannelID:   msg.ChannelID,
+			UserID:      msg.UserID,
+			Type:        agentic.ResponseTypeError,
+			Content:     err.Error(),
+			Timestamp:   time.Now(),
+		}
+	}
+
+	// Create new loop if needed. The token is framework-minted and full: a
+	// truncated one carried 32 bits, and a collision merged two conversations
+	// silently (ADR-105, #1192).
 	if loopID == "" {
-		loopID = "loop_" + uuid.New().String()[:8]
+		loopID = uuid.New().String()
 	}
 
 	taskID := uuid.New().String()

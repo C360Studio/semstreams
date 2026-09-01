@@ -58,7 +58,8 @@ const (
 	PredicateLoopRole = "agent.loop.role"
 
 	// PredicateResearchLoopID stamps the raw research-pipeline loop ID
-	// (e.g. "rg_abc12345") on the loop entity as a dedicated triple
+	// (a framework-minted canonical UUID — ADR-105) on the loop entity
+	// as a dedicated triple
 	// so R0-R6 rules can substitute it into NATS publish subjects via
 	// `$entity.triple.research.loop.id`. The 6-part loop-execution
 	// entity ID has the loop ID as its last segment, but the

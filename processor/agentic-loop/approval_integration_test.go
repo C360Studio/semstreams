@@ -20,6 +20,7 @@ import (
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
+	"github.com/google/uuid"
 )
 
 type approvalFlowExecutor struct{ calls atomic.Int32 }
@@ -54,7 +55,8 @@ func (e *approvalFlowExecutor) ListTools() []agentic.ToolDefinition {
 func TestIntegration_ApprovalFlow_Approve(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
-	const loopID = "loop_approval_approve"
+	// A loop instance token is a framework-minted canonical UUID (ADR-105, #1192).
+	loopID := uuid.NewString()
 	const callID = "call_approval_approve"
 
 	config := agenticloop.Config{
@@ -323,7 +325,7 @@ func TestIntegration_ApprovalFlow_Approve(t *testing.T) {
 func TestIntegration_ApprovalTimeoutSweeper_PublishesWireResponse(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
-	const loopID = "loop_approval_timeout_wire"
+	loopID := uuid.NewString()
 	const callID = "call_approval_timeout_wire"
 
 	// Very short approval timeout so the sweeper fires quickly.

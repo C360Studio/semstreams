@@ -191,6 +191,16 @@ func (m *mockLifecycleManager) Create(_ context.Context, initial lifecycle.Parti
 	return nil
 }
 
+// Loop instance tokens are framework-minted canonical UUIDs (ADR-105, #1192),
+// so every fixture instance these Mint tests pass is one — a hand-authored
+// instance is now refused at the Mint precondition, which would mask the origin
+// behaviour each test is actually about.
+const (
+	alreadyMintedInstance = "3f2b7c18-91a4-4f0e-8b2d-6c5a0e7d1f34"
+	noOriginInstance      = "b6a4d0c2-5e18-4a7b-9f31-2d8c47e6b501"
+	originlessInstance    = "d41f8a90-6c23-4b5e-8a17-93f0c2e5b8d7"
+)
+
 // --- D4: Mint idempotence ---
 
 // TestMint_Idempotent_ErrAlreadyExistsFallsBackToGet verifies that when
@@ -209,8 +219,8 @@ func TestMint_Idempotent_ErrAlreadyExistsFallsBackToGet(t *testing.T) {
 
 	mock := newMockLifecycleManager()
 	// Pre-seed the run to simulate a prior mint.
-	runEntityID := "acme.ops.chain.agent.execution.run-already-exists"
-	originEntityID := "acme.ops.agentic-loop.agent.execution.run-already-exists"
+	runEntityID := "acme.ops.chain.agent.execution." + alreadyMintedInstance
+	originEntityID := "acme.ops.agentic-loop.agent.execution." + alreadyMintedInstance
 	existing := &agentrun.AgentRun{
 		EntityIDField:  runEntityID,
 		PhaseField:     "dispatched",
@@ -220,7 +230,7 @@ func TestMint_Idempotent_ErrAlreadyExistsFallsBackToGet(t *testing.T) {
 
 	// Mint with the same ID — Create returns ErrAlreadyExists.
 	// Mint must fall back to Get and return the existing run.
-	result, err := agentrun.Mint(ctx, mock, "acme", "ops", "run-already-exists", originEntityID)
+	result, err := agentrun.Mint(ctx, mock, "acme", "ops", alreadyMintedInstance, originEntityID)
 	require.NoError(t, err, "Mint must not error on ErrAlreadyExists — idempotent path")
 	require.NotNil(t, result)
 	assert.Equal(t, runEntityID, result.EntityID(),
@@ -230,7 +240,7 @@ func TestMint_Idempotent_ErrAlreadyExistsFallsBackToGet(t *testing.T) {
 
 	runID, ok := result.RunID()
 	require.True(t, ok)
-	assert.Equal(t, "run-already-exists", runID,
+	assert.Equal(t, alreadyMintedInstance, runID,
 		"idempotent Mint must return the correct bare RunID")
 }
 
@@ -250,7 +260,7 @@ func TestMint_TwoOriginsAtOneInstanceAreRefusedNotAliased(t *testing.T) {
 	ctx := context.Background()
 
 	mock := newMockLifecycleManager()
-	const sharedInstance = "a1b2c3d4"
+	const sharedInstance = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
 	firstOrigin := "peerone.dep1.agentic-loop.agent.execution." + sharedInstance
 	secondOrigin := "peertwo.dep9.agentic-loop.agent.execution." + sharedInstance
 
@@ -281,12 +291,12 @@ func TestMint_RefusesEmptyOrigin(t *testing.T) {
 	ctx := context.Background()
 
 	mock := newMockLifecycleManager()
-	run, err := agentrun.Mint(ctx, mock, "acme", "ops", "no-origin", "")
+	run, err := agentrun.Mint(ctx, mock, "acme", "ops", noOriginInstance, "")
 	require.Error(t, err)
 	assert.Nil(t, run)
 	assert.True(t, errs.IsInvalid(err))
 
-	_, getErr := mock.Get(ctx, agentrun.WorkflowName, "acme.ops.chain.agent.execution.no-origin")
+	_, getErr := mock.Get(ctx, agentrun.WorkflowName, "acme.ops.chain.agent.execution."+noOriginInstance)
 	assert.ErrorIs(t, getErr, lifecycle.ErrEntityNotFound,
 		"a refused mint must not have created anything")
 }
@@ -303,15 +313,50 @@ func TestMint_LegacyOriginlessStoredRunIsRefused(t *testing.T) {
 
 	mock := newMockLifecycleManager()
 	mock.seed(&agentrun.AgentRun{
-		EntityIDField: "acme.ops.chain.agent.execution.legacy",
+		EntityIDField: "acme.ops.chain.agent.execution." + originlessInstance,
 		PhaseField:    "dispatched",
 	})
 
-	run, err := agentrun.Mint(ctx, mock, "acme", "ops", "legacy",
-		"acme.ops.agentic-loop.agent.execution.legacy")
+	run, err := agentrun.Mint(ctx, mock, "acme", "ops", originlessInstance,
+		"acme.ops.agentic-loop.agent.execution."+originlessInstance)
 	require.Error(t, err, "an origin-less stored run is refused, not adopted")
 	assert.Nil(t, run)
 	assert.True(t, errs.IsInvalid(err))
+}
+
+// TestMint_NonUUIDRootLoopIDIsRefused pins the loop-token contract (ADR-105,
+// #1192) at Mint. The run entity ID derives from the firing loop's instance
+// segment alone, so the UUID contract is what makes an accidental shared
+// instance collision-math impossible; a hand-authored instance reopens exactly
+// the aliasing #1148 made loud. The refusal lands before the entity ID is
+// constructed and before any store call — a refused mint touches nothing.
+func TestMint_NonUUIDRootLoopIDIsRefused(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tokens := map[string]string{
+		"hand-authored name":      "workflow-7",
+		"truncated dispatch mint": "loop_ab12cd34",
+		"truncated research mint": "rg_ab12cd34",
+		"uppercase":               "7C9E6679-7425-40DE-944B-E07FC1F90AE7",
+		"urn form":                "urn:uuid:7c9e6679-7425-40de-944b-e07fc1f90ae7",
+	}
+
+	for name, token := range tokens {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			mock := newMockLifecycleManager()
+
+			run, err := agentrun.Mint(ctx, mock, "acme", "ops", token,
+				"acme.ops.agentic-loop.agent.execution."+token)
+
+			require.Error(t, err, "Mint(%q) must refuse a non-canonical firing-loop instance", token)
+			assert.Nil(t, run)
+			assert.True(t, errs.IsInvalid(err),
+				"the refusal is a classified invalid — a caller must not retry it as transient")
+			assert.Empty(t, mock.runs, "a refused mint must not have reached the store")
+		})
+	}
 }
 
 // TestMint_EntityIDShape verifies the entity ID format produced by Mint.

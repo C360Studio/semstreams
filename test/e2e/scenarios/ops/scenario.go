@@ -52,13 +52,24 @@ const loopsBucket = "AGENT_LOOPS"
 // entityStatesBucket is the ENTITY_STATES KV bucket — the graph HTTP endpoint reads from this.
 const entityStatesBucket = "ENTITY_STATES"
 
+// seedLoop1Token / 2 / 3 are the loop instance tokens this scenario seeds. A
+// loop instance token is a framework-minted canonical UUID (ADR-105, #1192), and
+// these seeds go into AGENT_LOOPS through a direct PutKV that bypasses every
+// minting seam — so they carry the contract's shape deliberately, rather than
+// leaving in-tree state that contradicts it.
+const (
+	seedLoop1Token = "aa0b1c2d-3e4f-4506-9718-2a3b4c5d6e7f"
+	seedLoop2Token = "bb1c2d3e-4f50-4617-8829-3b4c5d6e7f80"
+	seedLoop3Token = "cc2d3e4f-5061-4728-9930-4c5d6e7f8091"
+)
+
 // seedLoop1ID / seedLoop2ID / seedLoop3ID are the synthetic loop entity IDs
 // seeded by this scenario. They are exported so the mock preset can reference
 // them in its canned emit_diagnosis evidence fields.
 const (
-	SeedLoop1ID = "c360.ops.test.loops.loop.seed-loop-001"
-	SeedLoop2ID = "c360.ops.test.loops.loop.seed-loop-002"
-	SeedLoop3ID = "c360.ops.test.loops.loop.seed-loop-003"
+	SeedLoop1ID = "c360.ops.test.loops.loop." + seedLoop1Token
+	SeedLoop2ID = "c360.ops.test.loops.loop." + seedLoop2Token
+	SeedLoop3ID = "c360.ops.test.loops.loop." + seedLoop3Token
 )
 
 // Lesson round-trip constants (ADR-080 §5). These are the single source of truth
@@ -364,19 +375,19 @@ func (s *Scenario) seedSyntheticLoops(ctx context.Context, result *scenarios.Res
 
 	seeds := []loopSeed{
 		{
-			loopID:   "seed-loop-001",
+			loopID:   seedLoop1Token,
 			entityID: SeedLoop1ID,
 			role:     "test-agent",
 			outcome:  agentic.OutcomeSuccess,
 		},
 		{
-			loopID:   "seed-loop-002",
+			loopID:   seedLoop2Token,
 			entityID: SeedLoop2ID,
 			role:     "test-agent",
 			outcome:  agentic.OutcomeSuccess,
 		},
 		{
-			loopID:   "seed-loop-003",
+			loopID:   seedLoop3Token,
 			entityID: SeedLoop3ID,
 			role:     "probe",
 			outcome:  agentic.OutcomeFailed,

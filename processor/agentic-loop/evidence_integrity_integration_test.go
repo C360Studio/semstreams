@@ -161,7 +161,7 @@ func TestTerminalStampCarriesObservedAuditLoss_Integration(t *testing.T) {
 		collector.subscribe(t, ctx, tc.Client)
 
 		c := newStampTestComponent(t, tc.Client, DefaultConfig())
-		loopID, err := c.handler.loopManager.CreateLoopWithID("loop-failed-audit", "task", "role", "model")
+		loopID, err := c.handler.loopManager.CreateLoopWithID(c.handler.loopManager.GenerateLoopID(), "task", "role", "model")
 		require.NoError(t, err)
 		_, err = c.handler.trajectoryManager.startTrajectory(loopID)
 		require.NoError(t, err)
@@ -188,7 +188,7 @@ func TestTerminalStampCarriesObservedAuditLoss_Integration(t *testing.T) {
 
 		c := newStampTestComponent(t, tc.Client, DefaultConfig())
 		c.natsClient = tc.Client
-		loopID, err := c.handler.loopManager.CreateLoopWithID("loop-cancelled-audit", "task", "role", "model")
+		loopID, err := c.handler.loopManager.CreateLoopWithID(c.handler.loopManager.GenerateLoopID(), "task", "role", "model")
 		require.NoError(t, err)
 		_, err = c.handler.trajectoryManager.startTrajectory(loopID)
 		require.NoError(t, err)

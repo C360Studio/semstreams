@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/c360studio/semstreams/internal/looptoken"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/types"
 )
@@ -380,9 +381,50 @@ func (t TaskMessage) Validate() error {
 			return err
 		}
 	}
+	if err := t.validateLoopTokens(); err != nil {
+		return err
+	}
 	if raw, ok := t.Metadata[MetadataKeyRelatedLoops]; ok {
 		if err := validateRelatedLoopsMetadata(raw); err != nil {
 			return fmt.Errorf("metadata %q: %w", MetadataKeyRelatedLoops, err)
+		}
+	}
+	return nil
+}
+
+// validateLoopTokens refuses any loop instance token this task carries that the
+// framework did not mint (ADR-105, #1192). Every one of these four fields is a
+// loop token, and every one reaches the graph write path: ParentLoopID composes
+// through the PANICKING LoopExecutionEntityID builder, and RunID / InReplyTo —
+// the gh#256 resume anchors, both client-set — are stamped raw into triples with
+// a silent half-write when their derivation fails.
+//
+// Validate is the refusal's one home because it is the gate both sides already
+// run: the rule engine before publishing, and agentic-loop intake on the way in,
+// where a rejection is loud (intake-rejection metric + TerminateDelivery). A
+// failure discovered later inside HandleTask is logged and ACKed with no metric.
+//
+// Empty is valid throughout: an unset token is the ordinary case, and the
+// framework mints it downstream. The caller's only verb is echo.
+func (t TaskMessage) validateLoopTokens() error {
+	tokens := []struct {
+		field string
+		value string
+	}{
+		{"loop_id", t.LoopID},
+		{"parent_loop_id", t.ParentLoopID},
+		{"in_reply_to", t.InReplyTo},
+		{"run_id", t.RunID},
+	}
+	for _, token := range tokens {
+		if token.value == "" {
+			continue
+		}
+		if !looptoken.Valid(token.value) {
+			return fmt.Errorf(
+				"%s %q is not a framework-minted loop token: a loop instance token is a canonical UUID "+
+					"(36 bytes, lowercase, hyphenated) the framework mints and the client echoes",
+				token.field, token.value)
 		}
 	}
 	return nil

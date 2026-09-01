@@ -31,13 +31,6 @@ const ResearchGraphToolName = "research_graph"
 // config in lockstep — a renaming requires touching both.
 const researchTriggerKeyPrefix = "research.request.received."
 
-// loopIDPrefix is the prefix the research_graph tool uses when
-// minting new loop IDs. Mirrors the agentic-dispatch convention
-// (loop_<uuid8>) but uses `rg_` so research-pipeline loops are
-// distinguishable at a glance in operator dashboards without
-// parsing the LoopEntity.Role field.
-const loopIDPrefix = "rg_"
-
 // ResearchKVWriter is the narrow KV surface this executor consumes.
 // Production satisfies it with a natsclient.KVStore scoped to the
 // AGENT_LOOPS bucket; tests substitute an in-memory recorder so
@@ -81,7 +74,6 @@ type ResearchGraphExecutor struct {
 	platform  component.PlatformMeta
 	logger    *slog.Logger
 	now       func() time.Time
-	newLoopID func() string
 }
 
 // ResearchGraphOption configures a ResearchGraphExecutor at
@@ -95,16 +87,6 @@ func WithResearchGraphClock(now func() time.Time) ResearchGraphOption {
 	return func(e *ResearchGraphExecutor) {
 		if now != nil {
 			e.now = now
-		}
-	}
-}
-
-// WithResearchGraphIDGenerator overrides the loop-ID generator.
-// nil-safe; tests use it for deterministic IDs.
-func WithResearchGraphIDGenerator(gen func() string) ResearchGraphOption {
-	return func(e *ResearchGraphExecutor) {
-		if gen != nil {
-			e.newLoopID = gen
 		}
 	}
 }
@@ -127,23 +109,16 @@ func WithResearchGraphTriplePublisher(pub llmwrap.TriplePublisher) ResearchGraph
 
 // NewResearchGraphExecutor constructs the executor. kv must be
 // non-nil — without it the tool can't seed the chain. Logger
-// defaults to slog.Default(); clock and ID generator default to
-// time.Now / uuid-based.
+// defaults to slog.Default(); the clock defaults to time.Now.
+//
+// There is no ID-generator option. The loop token is minted here, in full, and
+// nothing can substitute one (ADR-105, #1192).
 func NewResearchGraphExecutor(kv ResearchKVWriter, platform component.PlatformMeta, opts ...ResearchGraphOption) *ResearchGraphExecutor {
 	e := &ResearchGraphExecutor{
 		kv:       kv,
 		platform: platform,
 		logger:   slog.Default(),
 		now:      time.Now,
-		newLoopID: func() string {
-			// Use uuid v4 truncated to 8 chars. Mirrors the
-			// agentic-dispatch convention. Collision odds at 8 hex
-			// chars (~4 billion possibilities) are operator-tolerable
-			// for the research-loop volume Phase 1 will see, and the
-			// CreateLoopEntity ErrKVKeyExists path catches a clash.
-			id := uuid.New().String()
-			return loopIDPrefix + id[:8]
-		},
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -248,7 +223,12 @@ func (e *ResearchGraphExecutor) researchGraph(ctx context.Context, call agentic.
 		}, nil
 	}
 
-	loopID := e.newLoopID()
+	// A framework-minted loop token: a full canonical UUID, no prefix, no
+	// truncation. The retired "rg_" + uuid[:8] shape carried 32 bits — its own
+	// comment conceded the odds — and the CreateLoopEntity ErrKVKeyExists catch
+	// it relied on covers neither the loop-execution graph entity nor the suffix
+	// index (ADR-105, #1192). Operator glanceability moved to LoopEntity.Role.
+	loopID := uuid.NewString()
 
 	// Resolve defaults onto the persisted intent so downstream
 	// components (R0's publishees in PR 6 onward) read the same

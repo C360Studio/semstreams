@@ -15,10 +15,10 @@
 //
 //  1. verify-components — all 5 research-graph-* + agentic-* + rule processor healthy
 //  2. inject-parent-task — publish a TaskMessage with the research_graph trigger marker
-//  3. wait-for-research-pipeline-loop — poll AGENT_LOOPS for an rg_* entity (chain kickoff)
+//  3. wait-for-research-pipeline-loop — poll AGENT_LOOPS for the research trigger key (chain kickoff)
 //  4. wait-for-search-result-stamp — poll the loop entity for research.search_result.complete
 //  5. verify-orchestration-triples — assert kickoff + per-stage completion triples land
-//  6. verify-search-result-envelope — assert the SearchResult landed at COMPLETE_<rg_loopID>
+//  6. verify-search-result-envelope — assert the SearchResult landed at COMPLETE_<loopID>
 //  7. verify-r6-continuation — confirm a continuation agent.task fired back to the parent role
 //
 // Any stage failure short-circuits with a clear diagnostic. Per-stage
@@ -45,6 +45,7 @@ import (
 	"github.com/c360studio/semstreams/test/e2e/client"
 	e2econfig "github.com/c360studio/semstreams/test/e2e/config"
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
+	"github.com/google/uuid"
 )
 
 const (
@@ -419,7 +420,9 @@ func (s *Scenario) injectParentTask(ctx context.Context, result *scenarios.Resul
 	result.Details["research_seed_entity_id"] = seeded.Entity.ID
 	result.Details["research_seed_entity_revision"] = seeded.KVRevision
 
-	parentLoopID := fmt.Sprintf("e2e-parent-%d", time.Now().UnixNano())
+	// A loop instance token is a framework-minted canonical UUID (ADR-105,
+	// #1192); a harness that authors one is refused before the task is published.
+	parentLoopID := uuid.NewString()
 	task := agentic.TaskMessage{
 		LoopID: parentLoopID,
 		TaskID: fmt.Sprintf("e2e-rg-task-%d", time.Now().UnixNano()),
@@ -430,7 +433,7 @@ func (s *Scenario) injectParentTask(ctx context.Context, result *scenarios.Resul
 		// (applyResearchGraphPreset in test/e2e/mock/cmd/main.go).
 		// Any drift between this prompt and the marker breaks the
 		// scenario at wait-for-research-pipeline-loop with a clean
-		// "no rg_* loop appeared" diagnostic — the marker is the
+		// "no research trigger key appeared" diagnostic — the marker is the
 		// load-bearing seam between this scenario and the mock.
 		Prompt: "Investigate the research topic via research_graph — emit a single research_graph tool call with topic=\"drone hover anomalies\" and hints={domain:robotics}.",
 		// Metadata["role"] propagates through CacheMetadata →
@@ -469,11 +472,19 @@ func (s *Scenario) injectParentTask(ctx context.Context, result *scenarios.Resul
 	return nil
 }
 
-// waitForResearchPipelineLoop polls AGENT_LOOPS for an entry keyed
-// `rg_<8-hex-chars>` to appear — that's the research-pipeline LoopEntity
-// the research_graph tool writes at chain kickoff. Once we have the
-// loop ID, downstream stages can construct the 6-part loop-execution
-// entity ID to look up orchestration triples.
+// researchTriggerKeyPrefix is the AGENT_LOOPS key the research_graph tool
+// writes to announce a new research-pipeline loop: research.request.received.<loopID>.
+// It is the discriminator this scenario identifies the loop by, because the loop
+// ID itself is now an opaque framework-minted UUID (ADR-105, #1192) — it carries
+// no prefix, and every other loop in the bucket is keyed the same way. The tool
+// writes the LoopEntity BEFORE this trigger, so the bare <loopID> key is already
+// in place when this key is observed.
+const researchTriggerKeyPrefix = "research.request.received."
+
+// waitForResearchPipelineLoop polls AGENT_LOOPS for the research trigger key the
+// research_graph tool writes at chain kickoff and reads the pipeline loop ID out
+// of it. Once we have the loop ID, downstream stages can construct the 6-part
+// loop-execution entity ID to look up orchestration triples.
 func (s *Scenario) waitForResearchPipelineLoop(ctx context.Context, result *scenarios.Result) error {
 	deadline := time.Now().Add(s.config.ChainKickoffTimeout)
 	for time.Now().Before(deadline) {
@@ -487,15 +498,15 @@ func (s *Scenario) waitForResearchPipelineLoop(ctx context.Context, result *scen
 			continue
 		}
 		for _, k := range keys {
-			if strings.HasPrefix(k, "rg_") && !strings.Contains(k, ".") {
-				// Bare `rg_<id>` key (not `research.request.received.rg_<id>`
-				// or `classify.complete.rg_<id>`) is the LoopEntity.
-				result.Details["research_loop_id"] = k
-				return nil
+			loopID, ok := strings.CutPrefix(k, researchTriggerKeyPrefix)
+			if !ok || loopID == "" {
+				continue
 			}
+			result.Details["research_loop_id"] = loopID
+			return nil
 		}
 	}
-	return fmt.Errorf("no rg_* loop entity appeared in AGENT_LOOPS within %v — parent agent's research_graph tool may not have fired (check mock LLM marker match)", s.config.ChainKickoffTimeout)
+	return fmt.Errorf("no %s<loop> trigger key appeared in AGENT_LOOPS within %v — parent agent's research_graph tool may not have fired (check mock LLM marker match)", researchTriggerKeyPrefix, s.config.ChainKickoffTimeout)
 }
 
 // waitForSearchResultStamp polls the research-pipeline loop entity in
@@ -816,7 +827,7 @@ func fusionEvidence(evidence []fusion.Evidence, entityID string) *fusion.Evidenc
 
 // verifySearchResultEnvelope confirms synthesize_answer wrote the
 // SearchResult envelope at the read_loop_result-readable key
-// (COMPLETE_<rg_loopID>). Without this write, R6's continuation
+// (COMPLETE_<loopID>). Without this write, R6's continuation
 // publish_agent fires but the parent's read_loop_result returns
 // key-not-found — a known degraded path documented in
 // processor/research-graph-synthesize/handler.go's PutLoopCompletion

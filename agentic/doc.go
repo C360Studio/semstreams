@@ -41,7 +41,7 @@
 //
 //	request := agentic.AgentRequest{
 //	    RequestID: "req_001",
-//	    LoopID:    "loop_123",
+//	    LoopID:    "7c9e6679-7425-40de-944b-e07fc1f90ae7",
 //	    Role:      "general",  // or "architect", "editor"
 //	    Model:     "gpt-4",
 //	    Messages: []agentic.ChatMessage{
@@ -111,7 +111,7 @@
 //
 // Create and manage loop entities:
 //
-//	entity := agentic.NewLoopEntity("loop_123", "task_456", "general", "gpt-4")
+//	entity := agentic.NewLoopEntity("7c9e6679-7425-40de-944b-e07fc1f90ae7", "task_456", "general", "gpt-4")
 //
 //	// State transitions
 //	entity.TransitionTo(agentic.LoopStatePlanning)
@@ -184,7 +184,7 @@
 //
 //	fact := agentic.TrajectoryFactV1{
 //	    SchemaVersion:   agentic.TrajectorySchemaV1,
-//	    LoopDigest:      agentic.TrajectoryLoopDigest("loop_123"),
+//	    LoopDigest:      agentic.TrajectoryLoopDigest("7c9e6679-7425-40de-944b-e07fc1f90ae7"),
 //	    AttemptID:       "attempt1",
 //	    AttemptOrdinal:  1,
 //	    Kind:            agentic.TrajectoryKindModelCompleted,

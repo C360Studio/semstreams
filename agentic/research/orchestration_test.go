@@ -16,7 +16,14 @@ var fixedTime = time.Date(2026, 6, 2, 18, 30, 45, 123456789, time.UTC)
 
 const fixedTimeRFC = "2026-06-02T18:30:45.123456789Z"
 
-const testLoopEntityID = "acme.ops.agentic-loop.agent.execution.rg_abc12345"
+// A loop instance token is a framework-minted canonical UUID (ADR-105, #1192).
+// These builders take the token opaquely, but a fixture spelling it a way the
+// contract refuses reads as if the retired "rg_" shape were still live.
+const (
+	testLoopToken       = "f0a1b2c3-d4e5-4f60-8718-293a4b5c6d7e"
+	testParentLoopToken = "0b1c2d3e-4f50-4617-8829-3a4b5c6d7e8f"
+	testLoopEntityID    = "acme.ops.agentic-loop.agent.execution." + testLoopToken
+)
 
 // assertSharedSubject is the cross-cutting atomicity assertion: every
 // builder must return triples that all share one Subject so graph-ingest's
@@ -123,8 +130,8 @@ func TestBuildKickoffTriples_HappyPath(t *testing.T) {
 	triples := BuildKickoffTriples(
 		testLoopEntityID,
 		"drone hover anomalies",
-		"rg_abc12345",
-		"loop_parent001",
+		testLoopToken,
+		testParentLoopToken,
 		"general",
 		4000,
 		5,
@@ -141,8 +148,8 @@ func TestBuildKickoffTriples_HappyPath(t *testing.T) {
 	assert.Equal(t, PipelineRole, got[PredicateLoopRole])
 	assert.Equal(t, "true", got[PredicateResearchRequested])
 	assert.Equal(t, "drone hover anomalies", got[PredicateResearchTopic])
-	assert.Equal(t, "rg_abc12345", got[PredicateResearchLoopID])
-	assert.Equal(t, "loop_parent001", got[PredicateResearchParentLoop])
+	assert.Equal(t, testLoopToken, got[PredicateResearchLoopID])
+	assert.Equal(t, testParentLoopToken, got[PredicateResearchParentLoop])
 	assert.Equal(t, "general", got[PredicateResearchParentRole])
 	assert.Equal(t, "4000", got[PredicateResearchBudgetTokens])
 	assert.Equal(t, "5", got[PredicateResearchMaxIterations])
@@ -159,7 +166,7 @@ func TestBuildKickoffTriples_OmitsParentTriplesWhenEmpty(t *testing.T) {
 	triples := BuildKickoffTriples(
 		testLoopEntityID,
 		"drone hover anomalies",
-		"rg_abc12345",
+		testLoopToken,
 		"", // parentLoopID empty
 		"", // parentRole empty
 		4000,
@@ -182,15 +189,15 @@ func TestBuildKickoffTriples_OmitsParentTriplesWhenEmpty(t *testing.T) {
 // onto the tool call's Metadata.
 func TestBuildKickoffTriples_PartialParentOmissions(t *testing.T) {
 	t.Run("parent_loop_only", func(t *testing.T) {
-		triples := BuildKickoffTriples(testLoopEntityID, "topic", "rg_x", "loop_p", "", 4000, 5, fixedTime)
+		triples := BuildKickoffTriples(testLoopEntityID, "topic", testLoopToken, testParentLoopToken, "", 4000, 5, fixedTime)
 		require.Len(t, triples, 7)
 		got := byPredicate(triples)
-		assert.Equal(t, "loop_p", got[PredicateResearchParentLoop])
+		assert.Equal(t, testParentLoopToken, got[PredicateResearchParentLoop])
 		_, hasRole := got[PredicateResearchParentRole]
 		assert.False(t, hasRole)
 	})
 	t.Run("parent_role_only", func(t *testing.T) {
-		triples := BuildKickoffTriples(testLoopEntityID, "topic", "rg_x", "", "general", 4000, 5, fixedTime)
+		triples := BuildKickoffTriples(testLoopEntityID, "topic", testLoopToken, "", "general", 4000, 5, fixedTime)
 		require.Len(t, triples, 7)
 		got := byPredicate(triples)
 		assert.Equal(t, "general", got[PredicateResearchParentRole])
@@ -202,12 +209,12 @@ func TestBuildKickoffTriples_PartialParentOmissions(t *testing.T) {
 func TestBuildSearchResultCompleteTriples(t *testing.T) {
 	triples := BuildSearchResultCompleteTriples(
 		testLoopEntityID,
-		"search_result.complete.rg_abc12345",
+		"search_result.complete."+testLoopToken,
 		fixedTime,
 	)
 	require.Len(t, triples, 2)
 	assertSharedSubject(t, triples)
 	got := byPredicate(triples)
 	assert.Equal(t, fixedTimeRFC, got[PredicateResearchSearchResultComplete])
-	assert.Equal(t, "search_result.complete.rg_abc12345", got[PredicateResearchSearchResultRef])
+	assert.Equal(t, "search_result.complete."+testLoopToken, got[PredicateResearchSearchResultRef])
 }

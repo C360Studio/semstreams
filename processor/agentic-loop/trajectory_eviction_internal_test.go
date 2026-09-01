@@ -36,7 +36,7 @@ func TestTerminalPathsEvictActiveTrajectory(t *testing.T) {
 
 	t.Run("failed result", func(t *testing.T) {
 		handler := NewMessageHandler(DefaultConfig())
-		loopID, err := handler.loopManager.CreateLoopWithID("failed-loop", "task", "role", "model")
+		loopID, err := handler.loopManager.CreateLoopWithID(handler.loopManager.GenerateLoopID(), "task", "role", "model")
 		require.NoError(t, err)
 		_, err = handler.trajectoryManager.startTrajectory(loopID)
 		require.NoError(t, err)
@@ -54,7 +54,7 @@ func TestTerminalPathsEvictActiveTrajectory(t *testing.T) {
 		config := DefaultConfig()
 		config.Ports.Outputs = withoutPort(config.Ports.Outputs, "agent.complete")
 		handler := NewMessageHandler(config)
-		loopID, err := handler.loopManager.CreateLoopWithID("cancelled-loop", "task", "role", "model")
+		loopID, err := handler.loopManager.CreateLoopWithID(handler.loopManager.GenerateLoopID(), "task", "role", "model")
 		require.NoError(t, err)
 		_, err = handler.trajectoryManager.startTrajectory(loopID)
 		require.NoError(t, err)
@@ -93,7 +93,7 @@ func TestHandleTaskRollbackEvictsActiveTrajectory(t *testing.T) {
 func TestTimedOutToolResultEvictsActiveTrajectory(t *testing.T) {
 	config := DefaultConfig()
 	handler := NewMessageHandler(config)
-	loopID, err := handler.loopManager.CreateLoopWithID("timed-out-tool-loop", "task", "role", "model")
+	loopID, err := handler.loopManager.CreateLoopWithID(handler.loopManager.GenerateLoopID(), "task", "role", "model")
 	require.NoError(t, err)
 	_, err = handler.trajectoryManager.startTrajectory(loopID)
 	require.NoError(t, err)
@@ -201,7 +201,7 @@ func TestTerminalPathsReleaseObservedAuditLoss(t *testing.T) {
 
 	t.Run("failed result", func(t *testing.T) {
 		handler := NewMessageHandler(DefaultConfig())
-		loopID, err := handler.loopManager.CreateLoopWithID("failed-loop-audit", "task", "role", "model")
+		loopID, err := handler.loopManager.CreateLoopWithID(handler.loopManager.GenerateLoopID(), "task", "role", "model")
 		require.NoError(t, err)
 		_, err = handler.trajectoryManager.startTrajectory(loopID)
 		require.NoError(t, err)
@@ -220,7 +220,7 @@ func TestTerminalPathsReleaseObservedAuditLoss(t *testing.T) {
 		config := DefaultConfig()
 		config.Ports.Outputs = withoutPort(config.Ports.Outputs, "agent.complete")
 		handler := NewMessageHandler(config)
-		loopID, err := handler.loopManager.CreateLoopWithID("cancelled-loop-audit", "task", "role", "model")
+		loopID, err := handler.loopManager.CreateLoopWithID(handler.loopManager.GenerateLoopID(), "task", "role", "model")
 		require.NoError(t, err)
 		_, err = handler.trajectoryManager.startTrajectory(loopID)
 		require.NoError(t, err)

@@ -21,6 +21,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
+	"github.com/google/uuid"
 )
 
 var (
@@ -89,7 +90,9 @@ func TestExistingIncompatibleTrajectoryBucketDisablesAuditAndDegradesHealth(t *t
 	require.False(t, health.Healthy)
 	require.Equal(t, "degraded", health.Status)
 	require.Contains(t, strings.ToLower(health.LastError), "wipe")
-	const loopID = "loop_incompatible_trajectory_bucket"
+	// Loop instance tokens are framework-minted canonical UUIDs (ADR-105, #1192);
+	// these tasks travel the production BaseMessage wire, which validates them.
+	loopID := uuid.NewString()
 	publishTaskMessage(t, natsClient, "agent.task.test", &agentic.TaskMessage{
 		LoopID: loopID, TaskID: "task_incompatible_trajectory_bucket",
 		Role: "general", Model: "test-model", Prompt: "continue useful work",
@@ -173,6 +176,10 @@ func publishToolResultMessage(t *testing.T, natsClient *natsclient.Client, subje
 }
 
 // TestIntegration_LoopFullCycle tests a complete loop: task → model request → complete
+// fullCycleLoopID is the loop this test's request assertion matches on. A loop
+// instance token is a framework-minted canonical UUID (ADR-105, #1192).
+var fullCycleLoopID = uuid.NewString()
+
 func TestIntegration_LoopFullCycle(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
@@ -262,7 +269,7 @@ func TestIntegration_LoopFullCycle(t *testing.T) {
 
 	// Publish a task
 	task := &agentic.TaskMessage{
-		LoopID: "loop_001",
+		LoopID: fullCycleLoopID,
 		TaskID: "task_001",
 		Role:   "general",
 		Model:  "test-model",
@@ -277,7 +284,7 @@ func TestIntegration_LoopFullCycle(t *testing.T) {
 	assert.Greater(t, len(receivedRequests), 0, "Should publish model request")
 	if len(receivedRequests) > 0 {
 		req := receivedRequests[0]
-		assert.Equal(t, "loop_001", req.LoopID)
+		assert.Equal(t, fullCycleLoopID, req.LoopID)
 		assert.Equal(t, "general", req.Role)
 	}
 	requestMu.Unlock()
@@ -403,7 +410,7 @@ func TestIntegration_LoopWithToolCalls(t *testing.T) {
 
 	// Publish task
 	task := &agentic.TaskMessage{
-		LoopID: "loop_tool_001",
+		LoopID: uuid.NewString(),
 		TaskID: "task_tool_001",
 		Role:   "general",
 		Model:  "test-model",
@@ -560,7 +567,7 @@ func TestIntegration_LoopMaxIterations(t *testing.T) {
 
 	// Publish task
 	task := &agentic.TaskMessage{
-		LoopID: "loop_max_iter",
+		LoopID: uuid.NewString(),
 		TaskID: "task_max_iter",
 		Role:   "general",
 		Model:  "test-model",
@@ -666,7 +673,7 @@ func TestIntegration_LoopStatePersistence(t *testing.T) {
 	require.NoError(t, err)
 
 	// Publish task
-	loopID := "loop_persist_" + time.Now().Format("150405")
+	loopID := uuid.NewString()
 	watcher, err := kv.Watch(ctx, loopID, jetstream.UpdatesOnly())
 	require.NoError(t, err)
 	defer watcher.Stop()
@@ -777,7 +784,7 @@ func TestIntegration_LoopTrajectoryCapture(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Publish task
-	loopID := "loop_traj_" + time.Now().Format("150405")
+	loopID := uuid.NewString()
 	task := &agentic.TaskMessage{
 		LoopID: loopID,
 		TaskID: "task_trajectory",

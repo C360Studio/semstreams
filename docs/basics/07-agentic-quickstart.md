@@ -203,7 +203,7 @@ The agentic loop uses a fluid state machine:
 nats kv watch AGENT_LOOPS
 
 # Get a specific loop
-nats kv get AGENT_LOOPS loop_abc123
+nats kv get AGENT_LOOPS 7c9e6679-7425-40de-944b-e07fc1f90ae7
 
 # Internal operators can watch append-only fact keys. Keys contain a loop digest,
 # not the raw loop ID, and the bucket has history 1 with no TTL.
@@ -215,7 +215,7 @@ and durable evidence references; it never returns evidence bodies:
 
 ```graphql
 query {
-  trajectory(loopId: "loop_abc123", limit: 64) {
+  trajectory(loopId: "7c9e6679-7425-40de-944b-e07fc1f90ae7", limit: 64) {
     coverage
     terminal_observed
     observed_totals { facts tokens_in tokens_out }
@@ -246,7 +246,7 @@ When running with `service-manager` enabled:
 curl http://localhost:8080/api/agent/loops
 
 # Get loop details
-curl http://localhost:8080/api/agent/loops/loop_abc123
+curl http://localhost:8080/api/agent/loops/7c9e6679-7425-40de-944b-e07fc1f90ae7
 ```
 
 ### Via Metrics

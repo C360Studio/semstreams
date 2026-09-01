@@ -18,6 +18,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
+	"github.com/google/uuid"
 )
 
 // publishSignalMessage publishes a UserSignal wrapped in a BaseMessage envelope.
@@ -117,9 +118,11 @@ func TestIntegration_CancelMidExecution_NoOrphanToolCalls(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	// Submit a task.
+	// Submit a task. A loop instance token is a framework-minted canonical UUID
+	// (ADR-105, #1192), and this task travels the production wire.
+	cancelOrphanLoopID := uuid.NewString()
 	task := &agentic.TaskMessage{
-		LoopID: "loop_cancel_orphan",
+		LoopID: cancelOrphanLoopID,
 		TaskID: "task_cancel_orphan",
 		Role:   "general",
 		Model:  "test-model",
@@ -167,7 +170,7 @@ func TestIntegration_CancelMidExecution_NoOrphanToolCalls(t *testing.T) {
 	signal := &agentic.UserSignal{
 		SignalID:    "sig-cancel-1",
 		Type:        agentic.SignalCancel,
-		LoopID:      "loop_cancel_orphan",
+		LoopID:      cancelOrphanLoopID,
 		UserID:      "test-user",
 		ChannelType: "test",
 		ChannelID:   "session-1",
@@ -182,7 +185,7 @@ func TestIntegration_CancelMidExecution_NoOrphanToolCalls(t *testing.T) {
 	kv, err := natsClient.GetKeyValueBucket(ctx, "AGENT_LOOPS")
 	require.NoError(t, err)
 
-	entry, err := kv.Get(ctx, "loop_cancel_orphan")
+	entry, err := kv.Get(ctx, cancelOrphanLoopID)
 	require.NoError(t, err, "loop entity should be persisted to KV")
 
 	var entity agentic.LoopEntity

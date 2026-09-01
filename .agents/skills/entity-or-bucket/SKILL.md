@@ -80,7 +80,7 @@ under active review.
 processor declares `KVWatchPort{Bucket: ENTITY_STATES}` (`processor/rule/config.go:225`)
 and its evaluator is typed on `*graph.EntityState` (`processor/rule/interfaces.go:50`).
 The watch pattern must satisfy `ValidateEntityIDPattern`, so a key like
-`COMPLETE_rg_abc123` cannot be expressed as a watch pattern.
+`COMPLETE_7c9e6679-7425-40de-944b-e07fc1f90ae7` cannot be expressed as a watch pattern.
 
 Three things are commonly assumed to be the obstacle and are NOT:
 
