@@ -97,8 +97,14 @@ package this replaces survives in PR history at `b0e92253`. Deviations from the 
 
 - [x] 6.1 `task lint`; `go test -race -count=1 ./...`; `go test -tags=integration -race -count=1 -p 2 ./...`;
       `go test ./test/contract/...`; `openspec validate loop-token-uuid-enforcement --strict`. Push only green.
-- [ ] 6.2 **BREAKING gate:** `task e2e:agentic` AND `task e2e:research-graph` green on the branch before the
-      breaking commit lands. Results verbatim.
+- [x] 6.2 **BREAKING gate:** `task e2e:agentic` AND `task e2e:research-graph` green on the branch before the
+      breaking commit lands. Results verbatim. DONE 2026-08-31 on this branch rebased onto `0681492e`:
+      `e2e:agentic` 1 "Scenario completed successfully" / 0 failures, duration=45.130s,
+      `graph_loop_triples:10 graph_model_triples:6 verify-graph-triples_duration_ms:4`;
+      `e2e:research-graph` 2 successes (direct + execute) / 0 failures, 1.047s and 1.039s.
+      Gate was blocked until `0681492e` (#1221 / #1217) restored both tiers on main — that blocker was NOT this
+      change; the tiers failed identically on main and on this branch. NOTE: `assertions_run` is structurally 0
+      for both tiers (#1222), so it is not a measured-anything signal; the per-stage metrics above are.
 - [ ] 6.3 Implementation review by `semstreams-reviewer`; dispositions recorded.
 - [ ] 6.4 Archive + spec sync as the LAST content commit, reviewed with the code.
 - [ ] 6.5 Undraft; PR body: `implemented-by:`, `Closes #1192` (the #1174 declaration is dropped — ruled 2026-08-31), before/after token
