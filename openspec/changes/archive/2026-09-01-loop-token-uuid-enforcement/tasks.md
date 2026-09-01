@@ -229,7 +229,19 @@ package this replaces survives in PR history at `b0e92253`. Deviations from the 
       (`component.go:1204-1210`) short-circuits true for a `cancel_any` user with no tracker hit, so the
       nil-check at `commands.go:86-97` is the load-bearing guard and no test names it — owner's call whether
       that is filed.
-- [ ] 6.4 Archive + spec sync as the LAST content commit, reviewed with the code.
+- [x] 6.4 Archive + spec sync as the LAST content commit, reviewed with the code. SPEC-DELTA GAP CAUGHT AT
+      ARCHIVE TIME, before the first archive was committed: the `entity-id-contract` delta still described the
+      PRE-FIX dispatch seam — "dispatch MUST refuse a non-canonical continuation token" — and its only dispatch
+      scenario covered `reply_to`. The `run_id`/`in_reply_to` coverage in the delta sat at the
+      `TaskMessage.Validate` layer, so the synced spec would have landed as current truth describing the exact
+      narrowness the §6.3 BLOCKING finding fixed, and the two round-3 tests would have had no scenario. The
+      first archive was reverted (specs restored, archive dir removed), the delta widened, and the archive
+      re-run. Requirement text now states dispatch refuses EVERY client-authored loop token — resolved
+      continuation token, `run_id`, `in_reply_to` — before minting, before the loop is tracked, and before the
+      loop-started metric is recorded. New scenario "a client-authored run_id or in_reply_to is refused at
+      dispatch, before any state is recorded" cites both tests. Scenario values were corrected against the test
+      bodies rather than written from the prose: the fixture is `run-42` (not `paused-run-uuid`) and the
+      assertion is on the active-loops gauge (not a started counter). `--strict` valid after both edits.
 - [ ] 6.5 Undraft; PR body: `implemented-by:`, `Closes #1192` (the #1174 declaration is dropped — ruled 2026-08-31), before/after token
       shapes; if
       any round withdrew a claim a commit asserted, author the squash body via `--body-file`.

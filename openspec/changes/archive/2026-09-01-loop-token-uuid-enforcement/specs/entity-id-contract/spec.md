@@ -13,10 +13,13 @@ carrying ANY loop-token field — `loop_id`, `parent_loop_id`, `in_reply_to`, or
 non-canonical (enforced by the rule engine before publishing and by agentic-loop intake, which terminates delivery
 and counts the intake rejection), so no client-authored token reaches the graph write path, whose parent and
 reply stamping composes through the panicking entity-ID builder; `LoopManager.CreateLoopWithID` MUST refuse
-before registering any loop state; dispatch MUST refuse a non-canonical continuation token with a typed error
-response naming the field — synchronous on the HTTP submit path, published to the response subject on the channel
-path — validating the RESOLVED token after auto-continue resolution and before minting, so both the client's
-`reply_to` and an auto-continued value pass one check; `agentrun.Mint` MUST refuse a non-canonical firing-loop
+before registering any loop state; dispatch MUST refuse EVERY client-authored loop token on an inbound
+submission — the resolved continuation token, `run_id`, and `in_reply_to` alike — with a typed error response
+naming the offending field, synchronous on the HTTP submit path and published to the response subject on the
+channel path, validating after auto-continue resolution and BEFORE minting, before the loop is tracked, and
+before the loop-started metric is recorded, so that a refused submission leaves neither a tracked loop nor a
+moved active-loops gauge, and so both the client's `reply_to` and an auto-continued value pass one check;
+`agentrun.Mint` MUST refuse a non-canonical firing-loop
 instance (its scenario lives in the graph-ingest capability, which owns Mint's refusal behavior). Seam validation
 checks canonical form, not the version bits; minting is v4.
 
@@ -46,6 +49,18 @@ checks canonical form, not the version bits; minting is v4.
 - **THEN** an error response naming `reply_to` is published to the response subject, and no task is published
 - **AND** the tests that verify this are `TestNonUUIDReplyToHTTPGetsSynchronousError` and
   `TestNonUUIDReplyToChannelGetsErrorResponse`
+
+#### Scenario: a client-authored run_id or in_reply_to is refused at dispatch, before any state is recorded
+
+- **GIVEN** a client submitting a message whose `reply_to` is absent but whose `run_id` is `run-42`
+- **WHEN** dispatch handles it on the HTTP submit path
+- **THEN** the client receives a synchronous error response naming `run_id`, no task is published, no loop is
+  tracked, and the active-loops gauge does not move
+- **AND WHEN** a message whose `in_reply_to` is non-canonical arrives on the channel path
+- **THEN** an error response naming `in_reply_to` is published to the response subject rather than the submitter
+  being left without an answer, and no loop is tracked
+- **AND** the tests that verify this are `TestNonUUIDRunIDHTTPGetsSynchronousError` and
+  `TestNonUUIDInReplyToChannelGetsErrorResponse`
 
 #### Scenario: a task carrying any non-canonical loop-token field is refused
 
