@@ -1,5 +1,17 @@
 # Change: Loop instance tokens are framework-minted UUIDs, enforced at the mint seams
 
+> **Correction, 2026-09-01 — read the spec, not this file, for what shipped.** This proposal describes
+> enforcement as provenance ("a loop ID is an opaque token you receive and echo — never author"; "A client
+> authoring tokens: a typed error naming `reply_to` at dispatch"; "the only client verb left is echo"). The Codex
+> review of PR #1210 established that the implementation enforces canonical **form** only: `internal/looptoken.Valid`
+> is a syntax predicate, so a client-authored *canonical* UUID is accepted, and `TestCanonicalReplyToContinuesTheLoop`
+> asserts exactly that. The owner ruled the contract text be narrowed to the form guarantee the code enforces
+> rather than the code be extended to provenance. The body below is left as the design-time record of what was
+> proposed; it is NOT a description of what shipped. Current truth is
+> `openspec/specs/entity-id-contract/spec.md` ("Enforcement is FORM, not provenance"), and ADR-105's
+> carve-out — a loop token confers control to any holder, and provenance is the wrong axis for that gap, which
+> is tracked as #1227. The seam census here is likewise narrowed to four enforced seams; the rest is #1228.
+
 **Supersedes the framed-digest package** (this directory's content at `b0e92253`) under the owner ruling
 2026-08-31, transcribed on #1192: "D1: enforce UUID at the mint seams" — NO digest re-key. D2/D3/D4 of the old
 docket are OBE; the budget stays 170 effective / 163 declared (ADR-104 unamended); no new exported surface;
