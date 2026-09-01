@@ -196,7 +196,7 @@ package this replaces survives in PR history at `b0e92253`. Deviations from the 
       Gate was blocked until `0681492e` (#1221 / #1217) restored both tiers on main — that blocker was NOT this
       change; the tiers failed identically on main and on this branch. NOTE: `assertions_run` is structurally 0
       for both tiers (#1222), so it is not a measured-anything signal; the per-stage metrics above are.
-- [ ] 6.3 Implementation review by `semstreams-reviewer`; dispositions recorded. Round applied on this branch —
+- [x] 6.3 Implementation review by `semstreams-reviewer`; dispositions recorded. Round applied on this branch —
       dispositions: (a) BLOCKING "the dispatch refusal covers only the resolved continuation token" — ACCEPTED
       and FIXED, tasks 2.4a / 3.3a / 4.10 / 4.11 above; (b) MEDIUM "the doc sweep missed the package READMEs and
       5.1 overclaims" — ACCEPTED and FIXED, task 5.1 rewritten to name the file set actually swept plus 5.1a
@@ -211,8 +211,24 @@ package this replaces survives in PR history at `b0e92253`. Deviations from the 
       listing that file was an overclaim. As of 5.1b it IS true: non-test Go carries zero survivors under the
       widened method, and the "opaque fixtures" half was independently measured clean (no token literals under
       `configs/`, `*.json`, `*.yaml`). The subject therefore needs no qualifying language in the squash body —
-      but it became true in THIS round, not the previous one. Re-review of the fixes still owed before this
-      ticks.
+      but it became true in THIS round, not the previous one.
+      RE-REVIEW ROUND COMPLETE. `semstreams-reviewer` re-reviewed `bc311c38`..`9d1d79fd`: (a) CLOSED — it
+      independently derived the hole class and could not construct a client-authored non-canonical token
+      reaching a published `TaskMessage`, a tracker entry, a signal subject, or any graph/KV write, and it
+      supplied the step the developer's argument had skipped — `loop_tracker.go:153` `t.loops[info.LoopID] =
+      info` is the ONLY map insertion, which is what makes "three `Track` call sites" a complete enumeration;
+      (b) narrowed to NEW-1, since fixed; (c) CLOSED; forced-omission evidence ACCEPTED as field-discriminating
+      and placement-proving; per-test `metric.NewMetricsRegistry()` under `t.Parallel()` ACCEPTED as sound.
+      Round 4 (`4ef355d5`) delta verified by the owner session rather than a further reviewer round: the diff is
+      comment-only in `*.go` (every changed line a comment) plus this file, and an independent PER-TOKEN sweep
+      of non-test Go — vocabulary filtered by token, not by line, which is the defect that hid
+      `handler.go:48` — returns zero example instance tokens. A further full reviewer round over comment-only
+      changes was judged low-yield; that judgment is the session's, not a reviewer sign-off.
+      Two findings recorded rather than fixed here: the non-token `Validate` silent drop is FILED as #1225
+      (pre-existing; net new reachability from this change is zero), and `canUserControlLoop`
+      (`component.go:1204-1210`) short-circuits true for a `cancel_any` user with no tracker hit, so the
+      nil-check at `commands.go:86-97` is the load-bearing guard and no test names it — owner's call whether
+      that is filed.
 - [ ] 6.4 Archive + spec sync as the LAST content commit, reviewed with the code.
 - [ ] 6.5 Undraft; PR body: `implemented-by:`, `Closes #1192` (the #1174 declaration is dropped — ruled 2026-08-31), before/after token
       shapes; if

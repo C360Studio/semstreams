@@ -9,8 +9,8 @@ base: ae35f296d6660f1d5987d53f4f4b2c8dde1caa9d
 
 ## Design premises
 
-- `processor/agentic-dispatch/http.go:325` — `		loopID = uuid.New().String()`
-- `processor/agentic-dispatch/component.go:918` — `		loopID = uuid.New().String()`
+- `processor/agentic-dispatch/http.go:327` — `		loopID = uuid.New().String()`
+- `processor/agentic-dispatch/component.go:948` — `		loopID = uuid.New().String()`
 - `frameworkcapabilities/graphresearch/executor.go:231` — `	loopID := uuid.NewString()`
 - `processor/agentic-loop/state.go:138` — `func (m *LoopManager) GenerateLoopID() string {`
 - `processor/agentic-loop/state.go:131` — `	loopID := m.GenerateLoopID()`
@@ -22,7 +22,7 @@ base: ae35f296d6660f1d5987d53f4f4b2c8dde1caa9d
 - `agentic/user_types.go:358` — `func (t TaskMessage) Validate() error {`
 - `agentic/user_types.go:38` — `	ReplyTo          string            `json:"reply_to,omitempty"`           // loop_id if continuing`
 - `processor/agentic-dispatch/http.go:298` — `	if msg.ReplyTo != "" {`
-- `processor/agentic-dispatch/component.go:892` — `	if msg.ReplyTo != "" {`
+- `processor/agentic-dispatch/component.go:922` — `	if msg.ReplyTo != "" {`
 - `processor/rule/actions.go:1713` — `	task := agentic.TaskMessage{`
 - `processor/rule/actions.go:1885` — `	if err := task.Validate(); err != nil {`
 - `agentic/agentrun/agentrun.go:293` — `func Mint(`
@@ -35,8 +35,8 @@ base: ae35f296d6660f1d5987d53f4f4b2c8dde1caa9d
 - `agentic/loop_execution_entity.go:137` — `		triples = append(triples, triple(agvocab.LoopRun, e.Task.RunID))`
 - `agentic/loop_execution_entity.go:138` — `		if runEntityID, err := TryChainExecutionEntityID(e.Org, e.Platform, e.Task.RunID); err == nil {`
 - `agentic/loop_execution_entity.go:144` — `		replyEntityID := LoopExecutionEntityID(e.Org, e.Platform, e.Task.InReplyTo)`
-- `test/e2e/scenarios/agentic/scenario.go:485` — `		LoopID:      uuid.NewString(),`
-- `test/e2e/scenarios/research-graph/scenario.go:383` — `	parentLoopID := uuid.NewString()`
+- `test/e2e/scenarios/agentic/scenario.go:512` — `		LoopID:      uuid.NewString(),`
+- `test/e2e/scenarios/research-graph/scenario.go:425` — `	parentLoopID := uuid.NewString()`
 - `test/e2e/scenarios/ops/scenario.go:378` — `			loopID:   seedLoop1Token,`
 
 ## Adjacent claims
