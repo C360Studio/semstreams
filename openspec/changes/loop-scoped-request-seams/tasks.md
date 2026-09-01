@@ -26,16 +26,16 @@ the two `state.go` edits are reviewed together rather than re-derived.
 
 ## 3. The admission gate
 
-- [ ] 3.1 Add `processor/agentic-dispatch/loop_admission.go`: one entry point, the refusal codes, the single
+- [x] 3.1 Add `processor/agentic-dispatch/loop_admission.go`: one entry point, the refusal codes, the single
       metric-reason mapper, and the single named log constant — mirroring
       `processor/graph-ingest/authority_gate.go` element for element
-- [ ] 3.2 Add the refusal `CounterVec` to `routerMetrics` (seam, reason labels) and register it in the `router`
+- [x] 3.2 Add the refusal `CounterVec` to `routerMetrics` (seam, reason labels) and register it in the `router`
       subsystem alongside the existing series
-- [ ] 3.3 Adopt `errs.ClassifiedCodeDetail` for every refusal the gate returns; `processor/agentic-dispatch`
+- [x] 3.3 Adopt `errs.ClassifiedCodeDetail` for every refusal the gate returns; `processor/agentic-dispatch`
       currently has zero classified errors
-- [ ] 3.4 Implement the merged lookup: `getSnapshot` ∪ `loadPersistedLoop`, reconciled by `mergeRouteField`,
+- [x] 3.4 Implement the merged lookup: `getSnapshot` ∪ `loadPersistedLoop`, reconciled by `mergeRouteField`,
       absence distinguished by `isLoopRecordAbsent`, bucket observed via the declared KV read port
-- [ ] 3.5 Unit-test the ordering invariants I1–I3 directly: malformed-and-absent refuses as malformed;
+- [x] 3.5 Unit-test the ordering invariants I1–I3 directly: malformed-and-absent refuses as malformed;
       absent-and-unowned refuses as absent; one counter increment per refusal
 
 ## 4. Adopt the gate at every seam
@@ -55,12 +55,12 @@ the two `state.go` edits are reviewed together rather than re-derived.
 
 ## 5. Form enforcement at the remaining carriers (#1228)
 
-- [ ] 5.1 `agentic.UserSignal.Validate` (`agentic/user_types.go:124-141`)
-- [ ] 5.2 `agentic.ApprovalResponse.Validate` (`agentic/approval.go:122`)
-- [ ] 5.3 `agentic.ApprovalPendingEvent.Validate` (`agentic/approval.go:66`)
+- [x] 5.1 `agentic.UserSignal.Validate` (`agentic/user_types.go:124-141`)
+- [x] 5.2 `agentic.ApprovalResponse.Validate` (`agentic/approval.go:122`)
+- [x] 5.3 `agentic.ApprovalPendingEvent.Validate` (`agentic/approval.go:66`)
 - [ ] 5.4 `agenticdispatch.SignalMessage.Validate` needs no fix — the type is RETIRED in section 10. Do not
       add validation to a type being deleted; verify section 10 landed instead
-- [ ] 5.5 Retire the fixtures that encode a retired token shape as VALID, starting with
+- [x] 5.5 Retire the fixtures that encode a retired token shape as VALID, starting with
       `agentic/user_types_test.go:143-154`, and sweep for others
 
 ## 6. The create-vs-exists fence (#1227)
