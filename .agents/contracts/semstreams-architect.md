@@ -52,7 +52,7 @@ mechanics). Enumerate from the repository, never from the briefing: a briefing's
 directed check inherits the director's blind spots. Two starting points are allowed. Either enumerate yourself, or
 start from a `semstreams-explorer` file (owner ruling A, 2026-08-30, #1180): it records every search it ran, so treat
 its zero-hit searches as claims to spot-check, add what it missed, strike what it over-included, and say which you did.
-The reviewer's independent re-derivation is the check on your blind spots and the explorer's alike. Four categories,
+The reviewer's independent re-derivation is the check on your blind spots and the explorer's alike. Five categories,
 each either cited at `file:line` or closed with the exact searches that came up empty:
 
 1. **The claimed gap.** If the change says X is missing, search for X under every plausible spelling: exported and
@@ -70,6 +70,17 @@ each either cited at `file:line` or closed with the exact searches that came up 
 4. **The consumer at birth.** For every new exported symbol, port, subject, bucket, or config field the design
    introduces: name its present consumer. Zero present consumers removes it from the design — "for observability"
    and "for future use" are the phantom-surface shape.
+5. **The problem shape.** Categories 1–4 all scope to *the fact being modeled*. A pattern is not a fact — it is a
+   problem shape — so no question above reaches it, and that is structural, not carelessness. Independently of the
+   fact, name the shape of what this design does: admit-or-refuse at a seam, create-vs-exists, read-through over a
+   cache, classified refusal plus observed signal, authority delegation, bounded dispatch. Then search for the
+   closest existing instance of that shape **on any plane**, including planes modeling a completely unrelated fact,
+   cite it at `file:line`, and state either that this design adopts it or why it does not. A design can enumerate
+   every spelling of its fact, pass `INVENTORY PASS`, and still reinvent a solved shape: `processor/graph-ingest/
+   authority_gate.go:38-59` already implements admit-or-refuse with the structural check first, an explicit
+   carve-out, a classified refusal carrying `Code` and `Detail`, and one metric home — and three separate issues
+   reported those elements missing on the agentic plane because the gate attaches to a different fact
+   (`docs/contributing/07-pattern-adoption.md`).
 
 An inventory that is genuinely empty in a category says so with the searches that prove it; that is a real and useful
 result, not a formality to skip.

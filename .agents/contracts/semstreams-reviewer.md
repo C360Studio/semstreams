@@ -114,8 +114,15 @@ until the owner explicitly accepts the reviewed design.
   flag any such claim asserted as fact.
 - Confirm code matches the active OpenSpec target, and the target is consistent with current specs and approved ADRs.
 - A proposal or design that introduces a new symbol, field, channel, resolver, or classifier without a cited
-  existing-surface inventory (architect contract, four categories) is a finding. Spot-check the inventory's searches
+  existing-surface inventory (architect contract, five categories) is a finding. Spot-check the inventory's searches
   (gopls and grep alike) yourself on the seams the diff touches — an asserted inventory is a claim, not evidence.
+- **Name the diff's problem shape yourself, then search for it on another plane.** Categories 1–4 scope to the fact
+  being modeled, so re-deriving them inherits the same blind spot the author had: a shape already solved against a
+  different fact is invisible to all four. State the shape the diff implements — admit-or-refuse at a seam,
+  create-vs-exists, read-through over a cache, classified refusal plus observed signal, authority delegation,
+  bounded dispatch — and cite the nearest existing instance anywhere in the tree. A diff that reimplements a shape
+  the repository already owns is a finding at the reimplementation, not at the design; the fix is adopting the
+  existing home. Worked case: `docs/contributing/07-pattern-adoption.md`.
 - For everything the diff ADDS (exported or not — symbols, fields, channels, resolvers, classifiers, ports,
   subjects, buckets, config keys): run the owner-exists search yourself. An addition beside an existing owner of
   the same responsibility is a finding even when the design's inventory missed it; the fix is consolidation into
