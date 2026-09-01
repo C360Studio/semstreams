@@ -4,10 +4,12 @@
 
 - [ ] 1.1 Inventory every seam accepting a request that names an existing loop, line-pinned, per-seam
       check matrix {form, existence, ownership, classified refusal, observed signal}
-- [ ] 1.2 Answer: does the dispatch `LoopTracker` rehydrate from durable state on restart? Read PR #1159's
+- [x] 1.2 Answer: does the dispatch `LoopTracker` rehydrate from durable state on restart? Read PR #1159's
       branch, not only `main`
-- [ ] 1.3 Answer: does legitimate continuation preserve conversation context, given `CreateLoopWithID`
+- [x] 1.3 Answer: does legitimate continuation preserve conversation context, given `CreateLoopWithID`
       replaces the context manager?
+
+**1.2 / 1.3 answered — both NO. See `findings-decisive-questions.md`.**
 
 ## 2. Design read
 
