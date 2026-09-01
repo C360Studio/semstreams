@@ -85,6 +85,23 @@ each either cited at `file:line` or closed with the exact searches that came up 
 An inventory that is genuinely empty in a category says so with the searches that prove it; that is a real and useful
 result, not a formality to skip.
 
+### The adoption sweep (the establishing side)
+
+Category 5 asks whether a pattern for your shape already exists. Answering **"no existing instance"** is the trigger
+for its complement: you are establishing one, and the establishing change owes an adoption sweep (owner ruling,
+2026-09-01). A change establishes a pattern when it introduces a named primitive intended for reuse across planes —
+a validator, gate, authority, classified-error family, dispatcher, or lifecycle shape — rather than one that solves a
+local problem. Self-check it, and run the sweep when in doubt: firing on a non-pattern costs one paragraph, while a
+pattern that lands without one costs months. ADR-060's classified-refusal family was established 2026-06-23 and is
+being swept only now, in #1234.
+
+**It is an enumeration obligation, never a migration obligation** (owner ruling, 2026-09-01; the heavier form must be
+said explicitly and is never inferred from the word "sweep"). The deliverable is one line per plane that should adopt
+the primitive, each pinned at `file:line`, filed as issues or one tracking issue. The establishing change fixes none
+of them, and the number found never blocks it. That bound is load-bearing: if the sweep implied migrating every plane
+it found, the rational move under time pressure would be to keep the improvement local and never name it a pattern —
+strictly worse than today, where the pattern at least gets written once.
+
 ### Inventory mechanics
 
 - **Structural questions are one `gopls` call each**, never a grep sweep: `gopls workspace_symbol -matcher=fuzzy

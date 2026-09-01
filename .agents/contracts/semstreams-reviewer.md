@@ -123,6 +123,13 @@ until the owner explicitly accepts the reviewed design.
   bounded dispatch — and cite the nearest existing instance anywhere in the tree. A diff that reimplements a shape
   the repository already owns is a finding at the reimplementation, not at the design; the fix is adopting the
   existing home. Worked case: `docs/contributing/07-pattern-adoption.md`.
+- **A diff that ESTABLISHES a reusable primitive without an adoption enumeration is a finding.** The complement to the
+  check above, one for each direction of the same miss. When the diff introduces a named primitive intended for reuse
+  across planes — validator, gate, authority, classified-error family, dispatcher, lifecycle shape — and category 5
+  answered "no existing instance", the PR owes one line per plane that should adopt it, pinned at
+  `file:line`. Enumeration only: never require the diff to migrate any plane it names, and never hold it on the count
+  found. Requiring migration would make establishing a good pattern costlier than leaving the improvement local and
+  unnamed, which is worse than the state this rule replaces.
 - For everything the diff ADDS (exported or not — symbols, fields, channels, resolvers, classifiers, ports,
   subjects, buckets, config keys): run the owner-exists search yourself. An addition beside an existing owner of
   the same responsibility is a finding even when the design's inventory missed it; the fix is consolidation into

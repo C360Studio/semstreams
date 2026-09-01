@@ -103,6 +103,42 @@ The search is deliberately *not* keyed on the fact. Searching for "loop token"
 finds nothing on the graph plane; searching for "what refuses a malformed
 candidate at a boundary" finds `authority_gate.go` immediately.
 
+## The establishing side: the adoption sweep
+
+Category 5 covers the **consuming** direction — *does a pattern for my shape
+already exist?* It does nothing at the moment a pattern **lands**, which is
+earlier and cheaper. Both directions were needed to catch the loop-plane gap:
+the pattern landed in August with no sweep, and the September design that should
+have adopted it never asked the question.
+
+So a pattern-establishing commit owes an adoption sweep (owner ruling,
+2026-09-01).
+
+**The trigger is category 5's own answer.** Writing `"no existing instance"`
+*is* the statement that you are establishing one. No separate judgment call is
+required. A change establishes a pattern when it introduces a named primitive
+intended for reuse across planes — a validator, gate, authority,
+classified-error family, dispatcher, or lifecycle shape — rather than solving a
+local problem. Run it when in doubt: firing on a non-pattern costs one
+paragraph, and a pattern that lands without one costs months.
+
+**It is an enumeration obligation, never a migration obligation.** The
+deliverable is one line per plane that should adopt the primitive, each pinned
+at `file:line`, filed as issues or one tracking issue. The establishing change
+fixes none of them, and the number found never blocks it.
+
+That bound is the load-bearing part, not a convenience. If the sweep implied
+migrating every plane it found, the rational move for an author under time
+pressure would be to keep the improvement local and never name it a pattern —
+strictly worse than the state this rule replaces, where the pattern at least
+gets written once. The heavier form must be stated explicitly by the owner; it
+is never inferred from the word "sweep".
+
+The retroactive instance is #1234: the `errs` classified-refusal family was
+established 2026-06-23 (ADR-060, #336) with no sweep, and the enumeration is
+being performed now across the intake-seam packages — two and a half months
+late.
+
 ## A usable proxy for where this drift sits
 
 `errs.Classified*` adoption is countable per package and is a first proxy for
