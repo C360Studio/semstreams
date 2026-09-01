@@ -20,6 +20,12 @@ func approvalRegistry(t *testing.T) *payloadregistry.Registry {
 	return payloadregistry.NewWithSubset(t, agentic.RegisterPayloads)
 }
 
+// approvalFixtureLoopID is a canonical framework-minted loop token. Every
+// approval fixture below carries one: since #1228 both approval payloads refuse
+// a non-canonical loop_id, so a fixture spelling approvalFixtureLoopID would be asserting a
+// shape the framework no longer accepts (ADR-105).
+const approvalFixtureLoopID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+
 func TestApprovalPendingEvent_Validate(t *testing.T) {
 	t.Parallel()
 
@@ -31,7 +37,7 @@ func TestApprovalPendingEvent_Validate(t *testing.T) {
 		{
 			name: "complete event passes",
 			event: agentic.ApprovalPendingEvent{
-				LoopID:      "loop-001",
+				LoopID:      approvalFixtureLoopID,
 				CallID:      "call-001",
 				ToolName:    "delete_rule",
 				Reason:      "approval_required: Tool 'delete_rule' requires human approval",
@@ -49,7 +55,7 @@ func TestApprovalPendingEvent_Validate(t *testing.T) {
 		{
 			name: "missing call_id fails",
 			event: agentic.ApprovalPendingEvent{
-				LoopID:   "loop-001",
+				LoopID:   approvalFixtureLoopID,
 				ToolName: "delete_rule",
 			},
 			wantErr: "call_id required",
@@ -57,7 +63,7 @@ func TestApprovalPendingEvent_Validate(t *testing.T) {
 		{
 			name: "missing tool_name fails",
 			event: agentic.ApprovalPendingEvent{
-				LoopID: "loop-001",
+				LoopID: approvalFixtureLoopID,
 				CallID: "call-001",
 			},
 			wantErr: "tool_name required",
@@ -92,7 +98,7 @@ func TestApprovalResponse_Validate(t *testing.T) {
 		{
 			name: "approve with approver passes",
 			response: agentic.ApprovalResponse{
-				LoopID:     "loop-001",
+				LoopID:     approvalFixtureLoopID,
 				CallID:     "call-001",
 				Decision:   agentic.ApprovalDecisionApprove,
 				ApprovedBy: "alice@example.com",
@@ -102,7 +108,7 @@ func TestApprovalResponse_Validate(t *testing.T) {
 		{
 			name: "reject without approver passes",
 			response: agentic.ApprovalResponse{
-				LoopID:    "loop-001",
+				LoopID:    approvalFixtureLoopID,
 				CallID:    "call-001",
 				Decision:  agentic.ApprovalDecisionReject,
 				Reason:    "policy violation",
@@ -112,7 +118,7 @@ func TestApprovalResponse_Validate(t *testing.T) {
 		{
 			name: "modify with approver and arguments passes",
 			response: agentic.ApprovalResponse{
-				LoopID:            "loop-001",
+				LoopID:            approvalFixtureLoopID,
 				CallID:            "call-001",
 				Decision:          agentic.ApprovalDecisionModify,
 				ApprovedBy:        "alice@example.com",
@@ -123,7 +129,7 @@ func TestApprovalResponse_Validate(t *testing.T) {
 		{
 			name: "approve without approver fails",
 			response: agentic.ApprovalResponse{
-				LoopID:   "loop-001",
+				LoopID:   approvalFixtureLoopID,
 				CallID:   "call-001",
 				Decision: agentic.ApprovalDecisionApprove,
 			},
@@ -132,7 +138,7 @@ func TestApprovalResponse_Validate(t *testing.T) {
 		{
 			name: "modify without approver fails",
 			response: agentic.ApprovalResponse{
-				LoopID:   "loop-001",
+				LoopID:   approvalFixtureLoopID,
 				CallID:   "call-001",
 				Decision: agentic.ApprovalDecisionModify,
 			},
@@ -141,7 +147,7 @@ func TestApprovalResponse_Validate(t *testing.T) {
 		{
 			name: "unknown decision fails",
 			response: agentic.ApprovalResponse{
-				LoopID:   "loop-001",
+				LoopID:   approvalFixtureLoopID,
 				CallID:   "call-001",
 				Decision: "abstain",
 			},
@@ -158,7 +164,7 @@ func TestApprovalResponse_Validate(t *testing.T) {
 		{
 			name: "missing call_id fails",
 			response: agentic.ApprovalResponse{
-				LoopID:   "loop-001",
+				LoopID:   approvalFixtureLoopID,
 				Decision: agentic.ApprovalDecisionReject,
 			},
 			wantErr: "call_id required",
@@ -186,7 +192,7 @@ func TestApprovalPendingEvent_BaseMessageRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	original := &agentic.ApprovalPendingEvent{
-		LoopID:      "loop-001",
+		LoopID:      approvalFixtureLoopID,
 		CallID:      "call-001",
 		ToolName:    "delete_rule",
 		Arguments:   map[string]any{"rule_id": "rule-42"},
@@ -229,7 +235,7 @@ func TestApprovalResponse_BaseMessageRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	original := &agentic.ApprovalResponse{
-		LoopID:            "loop-001",
+		LoopID:            approvalFixtureLoopID,
 		CallID:            "call-001",
 		Decision:          agentic.ApprovalDecisionModify,
 		ModifiedArguments: map[string]any{"path": "/tmp/safe"},
@@ -284,5 +290,134 @@ func TestApprovalResponse_BaseMessageRoundTrip(t *testing.T) {
 	}
 	if _, err := dec.Decode(re); err != nil {
 		t.Fatalf("re-Decode: %v", err)
+	}
+}
+
+// spec: entity-id-contract / A loop instance token is a framework-minted UUID
+// Scenario: every remaining loop-token carrier refuses a non-canonical token.
+func TestApprovalPendingEventRefusesNonCanonicalLoopID(t *testing.T) {
+	t.Parallel()
+
+	event := agentic.ApprovalPendingEvent{
+		LoopID:      "loop_ab12cd34",
+		CallID:      "call-001",
+		ToolName:    "delete_rule",
+		RequestedAt: time.Now(),
+	}
+
+	err := event.Validate()
+	if err == nil {
+		t.Fatal("Validate: want a refusal for a non-canonical loop_id, got nil")
+	}
+	if !strings.Contains(err.Error(), "loop_id") {
+		t.Errorf("refusal must name the offending field, got %q", err)
+	}
+	if !strings.Contains(err.Error(), "loop_ab12cd34") {
+		t.Errorf("refusal must quote the offending value, got %q", err)
+	}
+
+	// The refusal reaches the wire boundary too: a malformed token cannot be
+	// published, not merely cannot be constructed.
+	if _, marshalErr := message.NewBaseMessage(event.Schema(), &event, "approval-test").MarshalJSON(); marshalErr == nil {
+		t.Fatal("MarshalJSON: want a refusal for a non-canonical loop_id, got nil")
+	}
+}
+
+// spec: entity-id-contract / A loop instance token is a framework-minted UUID
+// Scenario: every remaining loop-token carrier refuses a non-canonical token.
+func TestApprovalResponseRefusesNonCanonicalLoopID(t *testing.T) {
+	t.Parallel()
+
+	response := agentic.ApprovalResponse{
+		LoopID:     "loop_ab12cd34",
+		CallID:     "call-001",
+		Decision:   agentic.ApprovalDecisionApprove,
+		ApprovedBy: "alice@example.com",
+		DecidedAt:  time.Now(),
+	}
+
+	err := response.Validate()
+	if err == nil {
+		t.Fatal("Validate: want a refusal for a non-canonical loop_id, got nil")
+	}
+	if !strings.Contains(err.Error(), "loop_id") {
+		t.Errorf("refusal must name the offending field, got %q", err)
+	}
+
+	if _, marshalErr := message.NewBaseMessage(response.Schema(), &response, "approval-test").MarshalJSON(); marshalErr == nil {
+		t.Fatal("MarshalJSON: want a refusal for a non-canonical loop_id, got nil")
+	}
+}
+
+// spec: entity-id-contract / A loop instance token is a framework-minted UUID
+// Scenario: every remaining loop-token carrier refuses a non-canonical token —
+// "no payload type carrying a loop token remains whose validation accepts every
+// input".
+//
+// The table IS the census the requirement closes, and it is deliberately not a
+// reflective sweep over every registered payload with a loop_id field. The
+// framework-published loop events (loop-created, loop-completed, loop-failed,
+// loop-cancelled) and the execution trace payloads carry a token the FRAMEWORK
+// authored on a stream it published; they are recorded carve-outs in the
+// agentic-dispatch spec, not omissions. A new carrier of a CALLER-supplied loop
+// token joins this table.
+//
+// One census member is out of reach from this package: agenticdispatch's own
+// control-signal message, whose Validate returned nil unconditionally. It is
+// RETIRED rather than validated (loop-scoped-request-seams task 9.3) — a
+// carrier with no reader is deleted — and agenticdispatch imports this package,
+// so the check cannot live here. Until that task lands, the census is closed
+// here and open there.
+func TestNoLoopTokenCarrierAcceptsEveryInput(t *testing.T) {
+	t.Parallel()
+
+	const nonCanonical = "loop_ab12cd34"
+
+	carriers := []struct {
+		name    string
+		payload message.Payload
+	}{
+		{
+			name: "TaskMessage",
+			payload: &agentic.TaskMessage{
+				LoopID: nonCanonical, TaskID: "task-1", Role: "general",
+				Model: "test-model", Prompt: "hello",
+			},
+		},
+		{
+			name: "UserSignal",
+			payload: &agentic.UserSignal{
+				SignalID: "sig-1", Type: agentic.SignalCancel,
+				LoopID: nonCanonical, UserID: "user-1", Timestamp: time.Now(),
+			},
+		},
+		{
+			name: "ApprovalPendingEvent",
+			payload: &agentic.ApprovalPendingEvent{
+				LoopID: nonCanonical, CallID: "call-1", ToolName: "delete_rule",
+				RequestedAt: time.Now(),
+			},
+		},
+		{
+			name: "ApprovalResponse",
+			payload: &agentic.ApprovalResponse{
+				LoopID: nonCanonical, CallID: "call-1",
+				Decision: agentic.ApprovalDecisionApprove, ApprovedBy: "alice",
+				DecidedAt: time.Now(),
+			},
+		},
+	}
+
+	for _, carrier := range carriers {
+		t.Run(carrier.name, func(t *testing.T) {
+			t.Parallel()
+			err := carrier.payload.Validate()
+			if err == nil {
+				t.Fatalf("%s.Validate accepted a non-canonical loop token", carrier.name)
+			}
+			if !strings.Contains(err.Error(), nonCanonical) {
+				t.Errorf("%s refusal must quote the offending token, got %q", carrier.name, err)
+			}
+		})
 	}
 }
